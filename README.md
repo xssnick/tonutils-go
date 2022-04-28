@@ -24,7 +24,9 @@ You can connect like that:
 // initialize new client
 client := liteclient.NewClient()
 // connect to lite server, can be connected to multiple servers in the same time
-err := client.Connect(context.Background(), "65.21.74.140:46427", "JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
+err := client.Connect(context.Background(), 
+	"65.21.74.140:46427", 
+	"JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
 if err != nil {
     panic(err)
 }
@@ -59,6 +61,7 @@ addr := address.MustParseAddr("kQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0inM"
 // run get method `mult` of contract with int arguments 7 and 8
 res, err := api.RunGetMethod(context.Background(), block, addr, "mult", 7, 8)
 if err != nil {
+	// if contract exit code != 0 it will be treated as an error too
     panic(err)
 }
 
