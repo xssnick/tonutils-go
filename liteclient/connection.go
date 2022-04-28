@@ -353,7 +353,13 @@ func (c *Client) queryADNL(w io.Writer, cryptor cipher.Stream, qid, payload []by
 	binary.LittleEndian.PutUint32(data, uint32(ADNLQuery))
 
 	data = append(data, qid...)
-	data = append(data, byte(len(payload)))
+	if len(payload) >= 0xFE {
+		ln := make([]byte, 4)
+		binary.LittleEndian.PutUint32(data, uint32(len(payload)<<8)|0xFE)
+		data = append(data, ln...)
+	} else {
+		data = append(data, byte(len(payload)))
+	}
 	data = append(data, payload...)
 
 	left := len(data) % 4
@@ -365,11 +371,21 @@ func (c *Client) queryADNL(w io.Writer, cryptor cipher.Stream, qid, payload []by
 }
 
 func (c *Client) queryLiteServer(w io.Writer, cryptor cipher.Stream, qid []byte, typeID int32, payload []byte) error {
-	data := make([]byte, 9)
+	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
-	data[4] = byte(len(payload) + 4)
-	binary.LittleEndian.PutUint32(data[5:], uint32(typeID))
 
+	if len(payload) >= 0xFE {
+		ln := make([]byte, 4)
+		binary.LittleEndian.PutUint32(data, uint32((len(payload)+4)<<8)|0xFE)
+		data = append(data, ln...)
+	} else {
+		data = append(data, byte(len(payload)+4))
+	}
+
+	typData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(typData, uint32(typeID))
+
+	data = append(data, typData...)
 	data = append(data, payload...)
 
 	left := len(data) % 4
