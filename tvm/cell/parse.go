@@ -15,13 +15,13 @@ func dynInt(data []byte) int {
 	return int(binary.BigEndian.Uint64(tmp))
 }
 
-func FromBOC(data []byte) (Cell, error) {
+func FromBOC(data []byte) (*Cell, error) {
 	cells, err := fromBOCMultiRoot(data)
 	if err != nil {
-		return Cell{}, err
+		return nil, err
 	}
 
-	return cells[0], nil
+	return &cells[0], nil
 }
 
 func fromBOCMultiRoot(data []byte) ([]Cell, error) {

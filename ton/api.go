@@ -3,7 +3,6 @@ package ton
 import (
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -78,7 +77,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		}
 		params = reversed
 
-		var ref = cell.BeginCell().EndCell()
+		var refNext = cell.BeginCell().EndCell()
 
 		for i := len(params) - 1; i >= 0; i-- {
 			switch v := params[i].(type) {
@@ -98,46 +97,37 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 				}
 
 				if i == len(params)-1 {
-					builder.MustStoreUInt(1, 8).MustStoreUInt(val, 64)
-				} else {
-					cr := cell.BeginCell().MustStoreUInt(1, 8).MustStoreUInt(val, 64)
-					ref = cr.MustStoreRef(ref).EndCell()
+					refNext = cell.BeginCell().MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext).EndCell()
+					break
 				}
+				builder.MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext)
 			case *big.Int:
 				if i == len(params)-1 {
-					builder.MustStoreUInt(2, 8).MustStoreBigInt(v, 256)
-				} else {
-					cr := cell.BeginCell().MustStoreUInt(2, 8).MustStoreBigInt(v, 256)
-					ref = cr.MustStoreRef(ref).EndCell()
+					refNext = cell.BeginCell().MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext).EndCell()
+					break
 				}
-				// TODO: cell and slice args
-			/*case *cell.Cell:
+				builder.MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext)
+			case *cell.Cell:
 				if i == len(params)-1 {
-					builder.MustStoreUInt(3, 8).MustStoreRef(v)
-				} else {
-					cr := cell.BeginCell().MustStoreUInt(3, 8).MustStoreRef(v)
-					ref = cr.MustStoreRef(ref).EndCell()
+					refNext = cell.BeginCell().MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v).EndCell()
+					break
 				}
-			case []byte:
-				sCell := cell.BeginCell()
-				if err = sCell.StoreSlice(v, 8*len(v)); err != nil {
-					return nil, err
-				}
+				builder.MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v)
+			/*case []byte:
+			sCell := cell.BeginCell()
+			if err := sCell.StoreSlice(v, 8*len(v)); err != nil {
+				return nil, err
+			}
 
-				if i == len(params)-1 {
-					builder.MustStoreUInt(4, 8).MustStoreRef(sCell.EndCell())
-				} else {
-					cr := cell.BeginCell().MustStoreUInt(4, 8).MustStoreRef(sCell.EndCell())
-					ref = cr.MustStoreRef(ref).EndCell()
-				}*/
+			if i == len(params)-1 {
+				refNext = cell.BeginCell().MustStoreUInt(4, 8).MustStoreRef(refNext).MustStoreRef(sCell.EndCell()).EndCell()
+				break
+			}
+			builder.MustStoreUInt(4, 8).MustStoreRef(refNext).MustStoreRef(sCell.EndCell())*/
 			default:
 				// TODO: auto convert if possible
 				return nil, errors.New("currently only int, uints and *big.Int allowed as params currently")
 			}
-		}
-
-		if ref != nil {
-			builder.MustStoreRef(ref)
 		}
 	}
 
@@ -242,17 +232,13 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 					return nil, err
 				}
 
-				sz, payload, err := ref.RestBits()
+				c, err := ref.ToCell()
 				if err != nil {
 					return nil, err
 				}
 
-				result = append(result, cell.BeginCell().MustStoreSlice(payload, sz).EndCell())
+				result = append(result, c)
 			case 4: // slice
-				szz, bb, _ := loader.RestBits()
-				println(szz, hex.EncodeToString(bb))
-
-				// cell
 				ref, err := loader.LoadRef()
 				if err != nil {
 					return nil, err

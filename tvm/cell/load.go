@@ -144,3 +144,24 @@ func (c *LoadCell) RestBits() (int, []byte, error) {
 	data, err := c.LoadSlice(left)
 	return left, data, err
 }
+
+func (c *LoadCell) ToCell() (*Cell, error) {
+	left := c.bitsSz - c.loadedSz
+	data, err := c.LoadSlice(left)
+
+	var refs []*Cell
+	for _, ref := range c.refs {
+		cc, err := ref.ToCell()
+		if err != nil {
+			return nil, err
+		}
+
+		refs = append(refs, cc)
+	}
+
+	return &Cell{
+		bitsSz: left,
+		data:   data,
+		refs:   refs,
+	}, err
+}

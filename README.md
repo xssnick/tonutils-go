@@ -76,7 +76,8 @@ println(val)
 ```
 
 ### Features to implement
-* Support cell and slice as arguments for run get method
+* Support cell and slice as arguments for run get method (cell support done)
+* More tests
 * Get account state method
 * Send external query method
 * Cell dictionaries support
