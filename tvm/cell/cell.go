@@ -1,5 +1,10 @@
 package cell
 
+import (
+	"encoding/hex"
+	"strings"
+)
+
 type Cell struct {
 	bitsSz int
 	index  int
@@ -23,4 +28,17 @@ func (c *Cell) BeginParse() *LoadCell {
 		data:     data,
 		refs:     refs,
 	}
+}
+
+func (c *Cell) Dump() string {
+	return c.dump(0)
+}
+
+func (c *Cell) dump(deep int) string {
+	str := "\n" + strings.Repeat("  ", deep) + "[" + hex.EncodeToString(c.data) + "]" + " -> {"
+	for _, ref := range c.refs {
+		str += ref.dump(deep+1) + ", "
+	}
+
+	return str + "\n" + strings.Repeat("  ", deep) + "}"
 }
