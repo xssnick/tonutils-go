@@ -9,10 +9,10 @@ import (
 	"math/big"
 
 	"github.com/howeyc/crc16"
-	"github.com/xssnick/tonutils/address"
-	"github.com/xssnick/tonutils/liteclient"
-	"github.com/xssnick/tonutils/liteclient/tlb"
-	"github.com/xssnick/tonutils/tvm/cell"
+	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/liteclient/tlb"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 var _GetMasterchainInfo int32 = -1984567762
