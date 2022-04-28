@@ -15,6 +15,8 @@ You can get list of public lite servers from official TON configs:
 * Mainnet - https://newton-blockchain.github.io/global.config.json
 * Testnet - https://newton-blockchain.github.io/testnet-global.config.json
 
+from liteservers section, you need to convert int to ip and take port and key.
+
 Or you can run your own full node, see TON docs.
 
 You can connect like that:
@@ -54,7 +56,7 @@ if err != nil {
 // contract address
 addr := address.MustParseAddr("kQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0inM")
 
-// run get method `mult` of contract kQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0inM with int arguments 7 and 8
+// run get method `mult` of contract with int arguments 7 and 8
 res, err := api.RunGetMethod(context.Background(), block, addr, "mult", 7, 8)
 if err != nil {
     panic(err)
@@ -77,3 +79,4 @@ println(val)
 * Cell dictionaries support
 * MustLoad methods
 * Event subscriptions
+* Parse global config json
