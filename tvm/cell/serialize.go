@@ -11,6 +11,7 @@ var ErrTooBigValue = errors.New("too big value")
 var ErrSmallSlice = errors.New("too small slice for this size")
 var ErrTooBigSize = errors.New("too big size")
 var ErrTooMuchRefs = errors.New("too much refs")
+var ErNotFit1024 = errors.New("cell data size should fit into 1024 bits")
 var ErrNoMoreRefs = errors.New("no more refs exists")
 
 var magic = []byte{0xB5, 0xEE, 0x9C, 0x72}

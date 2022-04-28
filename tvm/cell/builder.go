@@ -146,6 +146,10 @@ func (b *Builder) StoreSlice(bytes []byte, sz int) error {
 		return ErrSmallSlice
 	}
 
+	if b.bitsSz+sz >= 1024 {
+		return ErNotFit1024
+	}
+
 	leftSz := sz
 	unusedBits := 8 - (b.bitsSz % 8)
 
