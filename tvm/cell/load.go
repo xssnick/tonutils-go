@@ -87,24 +87,26 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 	}
 
 	leftSz := sz
-	unusedBits := 8 - (c.loadedSz % 8)
+	var unusedBits = 0
+	if l := c.loadedSz % 8; l > 0 && c.loadedSz > 0 {
+		unusedBits = 8 - (c.loadedSz % 8)
+	}
 
 	var loadedData []byte
 
 	oneMoreLeft, oneMoreRight := 0, 0
-	if unusedBits < 8 {
+	if unusedBits > 0 && sz > unusedBits {
 		oneMoreLeft = 1
 	}
-
-	if sz%8 != 0 && sz < 8 {
+	if (sz-unusedBits)%8 != 0 {
 		oneMoreRight = 1
 	}
 
-	ln := sz/8 + oneMoreLeft
+	ln := (sz-unusedBits)/8 + oneMoreLeft + oneMoreRight
 
 	for i := oneMoreLeft; i < ln+oneMoreRight; i++ {
 		var b byte
-		if unusedBits < 8 {
+		if unusedBits > 0 {
 			b = c.data[i-1] << byte(8-unusedBits)
 			if i < ln {
 				b += c.data[i] >> unusedBits
@@ -128,8 +130,8 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 		leftSz -= 8
 	}
 
-	usedBytes := sz / 8
-	if unusedBits > 0 && unusedBits <= sz%8 {
+	usedBytes := (sz - unusedBits) / 8
+	if (sz-unusedBits)%8 > 0 && sz > unusedBits && unusedBits > 0 {
 		usedBytes++
 	}
 	c.data = c.data[usedBytes:]
