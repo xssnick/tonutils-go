@@ -188,5 +188,18 @@ func TestCellReadSmall(t *testing.T) {
 		t.Fatal("not 0")
 		return
 	}
+}
 
+func TestCellReadEmpty(t *testing.T) {
+	c := BeginCell().EndCell().BeginParse()
+	sz, _, err := c.RestBits()
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	if sz != 0 {
+		t.Fatal("not 0")
+		return
+	}
 }

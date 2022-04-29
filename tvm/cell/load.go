@@ -86,6 +86,10 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 		return nil, ErrNotEnoughData
 	}
 
+	if sz <= 0 {
+		return []byte{}, nil
+	}
+
 	leftSz := sz
 	var unusedBits = 0
 	if l := c.loadedSz % 8; l > 0 && c.loadedSz > 0 {
