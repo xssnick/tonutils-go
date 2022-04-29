@@ -3,6 +3,7 @@ package cell
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"testing"
 )
 
@@ -149,4 +150,43 @@ func TestCell25(t *testing.T) {
 		t.Fatal("slices not eq:\n" + hex.EncodeToString(bs) + "\n" + hex.EncodeToString(res))
 		return
 	}
+}
+
+func TestCellReadSmall(t *testing.T) {
+	c := BeginCell()
+
+	bs := []byte{0xFF, 0x00, 0x00}
+
+	err := c.StoreSlice(bs, 24)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	lc := c.EndCell().BeginParse()
+
+	for i := 0; i < 8; i++ {
+		res, err := lc.LoadUInt(1)
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+
+		if res != 1 {
+			t.Fatal("not eq " + fmt.Sprint(i*2))
+			return
+		}
+	}
+
+	res, err := lc.LoadUInt(1)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	if res != 0 {
+		t.Fatal("not 0")
+		return
+	}
+
 }

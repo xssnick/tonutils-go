@@ -132,8 +132,13 @@ func (c *Cell) serialize() []byte {
 		c.data[len(c.data)-1] += 1 << (unusedBits - 1)
 	}
 
-	// calc size in octets
-	ln := c.bitsSz / 4
+	ceilBytes := c.bitsSz / 8
+	if c.bitsSz%8 != 0 {
+		ceilBytes++
+	}
+
+	// calc size
+	ln := ceilBytes + c.bitsSz/8
 
 	data := append([]byte{byte(len(c.refs)), byte(ln)}, c.data...)
 	for _, ref := range c.refs {

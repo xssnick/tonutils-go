@@ -67,14 +67,6 @@ func main() {
 			}
 
 			fmt.Printf("RESP CELL %d bits, hex(%s)\n", sz, hex.EncodeToString(payload))
-
-			val, err := res.BeginParse().LoadUInt(64)
-			if err != nil {
-				log.Fatalln("parse cell err:", err.Error())
-				return
-			}
-
-			fmt.Printf("parsed result: %d", val)
 		case *big.Int:
 			fmt.Println("RESP BIG INT", res.Uint64())
 		case uint64:
