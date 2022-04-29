@@ -100,3 +100,53 @@ func TestCell(t *testing.T) {
 		return
 	}
 }
+
+func TestCell24(t *testing.T) {
+	c := BeginCell()
+
+	bs := []byte{11, 22, 33}
+
+	err := c.StoreSlice(bs, 24)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	lc := c.EndCell().BeginParse()
+
+	res, err := lc.LoadSlice(24)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	if !bytes.Equal(bs, res) {
+		t.Fatal("slices not eq:\n" + hex.EncodeToString(bs) + "\n" + hex.EncodeToString(res))
+		return
+	}
+}
+
+func TestCell25(t *testing.T) {
+	c := BeginCell()
+
+	bs := []byte{11, 22, 33, 0x80}
+
+	err := c.StoreSlice(bs, 25)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	lc := c.EndCell().BeginParse()
+
+	res, err := lc.LoadSlice(25)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	if !bytes.Equal(bs, res) {
+		t.Fatal("slices not eq:\n" + hex.EncodeToString(bs) + "\n" + hex.EncodeToString(res))
+		return
+	}
+}

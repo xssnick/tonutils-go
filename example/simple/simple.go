@@ -50,5 +50,5 @@ func main() {
 		return
 	}
 
-	fmt.Printf("parsed result: %d", val)
+	fmt.Printf("parsed result: %d\n", val)
 }
