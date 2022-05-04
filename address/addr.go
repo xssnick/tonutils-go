@@ -3,8 +3,8 @@ package address
 import (
 	"encoding/base64"
 	"encoding/binary"
-
-	"github.com/howeyc/crc16"
+	"errors"
+	"github.com/sigurn/crc16"
 )
 
 type Address struct {
@@ -37,9 +37,8 @@ func ParseAddr(addr string) (*Address, error) {
 	}
 
 	checksum := data[len(data)-2:]
-	if crc16.ChecksumCCITTFalse(data[:len(data)-2]) != binary.LittleEndian.Uint16(checksum) {
-		// TODO: correct crc
-		//	return nil, errors.New("invalid address")
+	if crc16.Checksum(data[:len(data)-2], crc16.MakeTable(crc16.CRC16_XMODEM)) != binary.BigEndian.Uint16(checksum) {
+		return nil, errors.New("invalid address")
 	}
 
 	return a, nil
