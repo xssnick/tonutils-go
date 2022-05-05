@@ -239,16 +239,29 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 
 				result = append(result, c)
 			case 4: // slice
+				begin, err := loader.LoadUInt(10)
+				if err != nil {
+					return nil, err
+				}
+				end, err := loader.LoadUInt(10)
+				if err != nil {
+					return nil, err
+				}
 				ref, err := loader.LoadRef()
 				if err != nil {
 					return nil, err
 				}
-
-				sz, payload, err := ref.RestBits()
+				//Seek to begin
+				_, err = ref.LoadSlice(int(begin))
 				if err != nil {
 					return nil, err
 				}
 
+				sz := int(end - begin)
+				payload, err := ref.LoadSlice(sz)
+				if err != nil {
+					return nil, err
+				}
 				// represent slice as cell, to parse it easier
 				result = append(result, cell.BeginCell().MustStoreSlice(payload, sz).EndCell())
 			default:
