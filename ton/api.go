@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/howeyc/crc16"
+	"github.com/sigurn/crc16"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/liteclient/tlb"
@@ -64,7 +64,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 
 	// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/smc-envelope/SmartContract.h#L75
 	mName := make([]byte, 8)
-	crc := uint64(crc16.Checksum([]byte(method), crc16.CCITTFalseTable)) | 0x10000
+	crc := uint64(crc16.Checksum([]byte(method), crc16.MakeTable(crc16.CRC16_XMODEM))) | 0x10000
 	binary.LittleEndian.PutUint64(mName, crc)
 	data = append(data, mName...)
 
