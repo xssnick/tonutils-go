@@ -78,6 +78,7 @@ func ParseAddr(addr string) (*Address, error) {
 	a := NewAddressFromBytes(data[:len(data)-2])
 	return a, nil
 }
+
 func (a *Address) Checksum() uint16 {
 	return crc16.Checksum(a.prepareChecksumData(), crc16.MakeTable(crc16.CRC16_XMODEM))
 }
