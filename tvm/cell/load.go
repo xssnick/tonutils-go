@@ -119,6 +119,9 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 			}
 		} else {
 			b = c.data[i]
+			if unusedBits > 0 {
+				b <<= byte(8 - unusedBits)
+			}
 		}
 
 		if leftSz == 0 {
@@ -167,12 +170,17 @@ func (c *LoadCell) LoadAddr() (*address.Address, error) {
 		return nil, errors.New("currently anycast addr is not supported")
 	}
 
-	data, err := c.LoadSlice(264)
+	workchain, err := c.LoadSlice(8)
 	if err != nil {
 		return nil, err
 	}
 
-	return address.NewAddressFromBytes(data), nil
+	data, err := c.LoadSlice(256)
+	if err != nil {
+		return nil, err
+	}
+
+	return address.NewAddress(0, workchain[0], data), nil
 }
 
 func (c *LoadCell) RestBits() (int, []byte, error) {
