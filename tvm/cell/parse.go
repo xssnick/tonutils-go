@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tvm/boc"
 	"hash/crc32"
 )
 
@@ -31,32 +32,31 @@ func fromBOCMultiRoot(data []byte) ([]Cell, error) {
 
 	r := newReader(data)
 
-	if !bytes.Equal(r.MustReadBytes(4), magic) {
+	if !bytes.Equal(r.MustReadBytes(4), boc.Magic) {
 		return nil, errors.New("invalid boc magic header")
 	}
 
-	flags := r.MustReadByte()
+	flags, cellNumSizeBytes := boc.ParseFlags(r.MustReadByte()) //has_idx:(## 1) has_crc32c:(## 1)  has_cache_bits:(## 1) flags:(## 2) { flags = 0 } size:(## 3) { size <= 4 }
+	dataSizeBytes := int(r.MustReadByte())                      //off_bytes:(## 8) { off_bytes <= 8 }
 
-	cellNumSizeBytes := int(flags & 0b111)
-	dataSizeBytes := int(r.MustReadByte())
+	cellsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) //cells:(##(size * 8))
+	rootsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) //roots:(##(size * 8)) { roots >= 1 }
 
-	cellsNum := dynInt(r.MustReadBytes(cellNumSizeBytes))
-	rootsNum := int(r.MustReadByte())
+	// complete BOCs - ??? (absent:(##(size * 8)) { roots + absent <= cells })
+	_ = r.MustReadBytes(cellNumSizeBytes)
 
-	// complete BOCs - ???
-	_ = r.MustReadByte()
-
-	dataLen := dynInt(r.MustReadBytes(dataSizeBytes))
+	dataLen := dynInt(r.MustReadBytes(dataSizeBytes)) //tot_cells_size:(##(off_bytes * 8))
 
 	// with checksum
-	if flags&0b01000000 != 0 {
+	if flags.HasCrc32c {
 		crc := crc32.Checksum(data[:len(data)-4], crc32.MakeTable(crc32.Castagnoli))
 		if binary.LittleEndian.Uint32(data[len(data)-4:]) != crc {
 			return nil, errors.New("checksum not matches")
 		}
 	}
 
-	rootIndex := r.MustReadByte()
+	rootList := r.MustReadBytes(rootsNum * cellNumSizeBytes) //root_list:(roots * ##(size * 8))
+	rootIndex := dynInt(rootList[0:cellNumSizeBytes])
 	if rootIndex != 0 {
 		return nil, fmt.Errorf("first root index should be 0, but it is %d", rootIndex)
 	}
