@@ -1,6 +1,8 @@
 package cell
 
 import (
+	"errors"
+	"github.com/xssnick/tonutils-go/address"
 	"math/big"
 )
 
@@ -117,6 +119,9 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 			}
 		} else {
 			b = c.data[i]
+			if unusedBits > 0 {
+				b <<= byte(8 - unusedBits)
+			}
 		}
 
 		if leftSz == 0 {
@@ -143,6 +148,39 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 	c.loadedSz += sz
 
 	return loadedData, nil
+}
+
+func (c *LoadCell) LoadAddr() (*address.Address, error) {
+	typ, err := c.LoadUInt(2)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: support of all types of addresses, currently only std supported, skipping 3 bits
+	if typ != 2 {
+		return nil, errors.New("not supported type of address, currently only std supported")
+	}
+
+	isAnycast, err := c.LoadUInt(1)
+	if err != nil {
+		return nil, err
+	}
+
+	if isAnycast == 1 {
+		return nil, errors.New("currently anycast addr is not supported")
+	}
+
+	workchain, err := c.LoadSlice(8)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := c.LoadSlice(256)
+	if err != nil {
+		return nil, err
+	}
+
+	return address.NewAddress(0, workchain[0], data), nil
 }
 
 func (c *LoadCell) RestBits() (int, []byte, error) {

@@ -20,13 +20,13 @@ type AddressFlags struct {
 	testnet    bool
 }
 
-func NewAddressFromBytes(bytes []byte) *Address {
+func NewAddress(flags byte, workchain byte, data []byte) *Address {
 	// TODO: all types of addrs
 	// TODO: flags parse
 	return &Address{
-		flags:     ParseFlags(bytes[0]),
-		workchain: bytes[1],
-		data:      bytes[2:],
+		flags:     ParseFlags(flags),
+		workchain: workchain,
+		data:      data,
 	}
 }
 
@@ -75,9 +75,10 @@ func ParseAddr(addr string) (*Address, error) {
 		return nil, errors.New("invalid address")
 	}
 
-	a := NewAddressFromBytes(data[:len(data)-2])
+	a := NewAddress(data[0], data[1], data[2:len(data)-2])
 	return a, nil
 }
+
 func (a *Address) Checksum() uint16 {
 	return crc16.Checksum(a.prepareChecksumData(), crc16.MakeTable(crc16.CRC16_XMODEM))
 }

@@ -155,7 +155,7 @@ func TestCell25(t *testing.T) {
 func TestCellReadSmall(t *testing.T) {
 	c := BeginCell()
 
-	bs := []byte{0xFF, 0x00, 0x00}
+	bs := []byte{0b10101010, 0x00, 0x00}
 
 	err := c.StoreSlice(bs, 24)
 	if err != nil {
@@ -172,7 +172,7 @@ func TestCellReadSmall(t *testing.T) {
 			return
 		}
 
-		if res != 1 {
+		if (res != 1 && i%2 == 0) || (res != 0 && i%2 == 1) {
 			t.Fatal("not eq " + fmt.Sprint(i*2))
 			return
 		}

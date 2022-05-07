@@ -2,7 +2,6 @@ package cell
 
 import (
 	"encoding/hex"
-	"github.com/xssnick/tonutils-go/address"
 	"strings"
 )
 
@@ -31,33 +30,18 @@ func (c *Cell) BeginParse() *LoadCell {
 	}
 }
 
-func (c *Cell) ParseAddr() (*address.Address, error) {
-	loader := c.BeginParse()
-
-	//TODO ??? skipping 3 bits as in tonweb - why?
-	_, err := loader.LoadUInt(3)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := loader.LoadSlice(264)
-	if err != nil {
-		return nil, err
-	}
-
-	a := address.NewAddressFromBytes(data)
-	return a, nil
-}
-
 func (c *Cell) Dump() string {
 	return c.dump(0)
 }
 
 func (c *Cell) dump(deep int) string {
-	str := "\n" + strings.Repeat("  ", deep) + "[" + hex.EncodeToString(c.data) + "]" + " -> {"
-	for _, ref := range c.refs {
-		str += ref.dump(deep+1) + ", "
+	str := strings.Repeat("  ", deep) + "[" + hex.EncodeToString(c.data) + "]" + " -> {"
+	if len(c.refs) > 0 {
+		for _, ref := range c.refs {
+			str += "\n" + ref.dump(deep+1) + ", " + "\n"
+		}
+		str += strings.Repeat("  ", deep)
 	}
 
-	return str + "\n" + strings.Repeat("  ", deep) + "}"
+	return str + "}"
 }

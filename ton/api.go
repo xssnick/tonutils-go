@@ -247,11 +247,15 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 				if err != nil {
 					return nil, err
 				}
+
+				// TODO: load ref ids
+
 				ref, err := loader.LoadRef()
 				if err != nil {
 					return nil, err
 				}
-				//Seek to begin
+
+				// seek to begin
 				_, err = ref.LoadSlice(int(begin))
 				if err != nil {
 					return nil, err
@@ -262,6 +266,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 				if err != nil {
 					return nil, err
 				}
+
 				// represent slice as cell, to parse it easier
 				result = append(result, cell.BeginCell().MustStoreSlice(payload, sz).EndCell())
 			default:
