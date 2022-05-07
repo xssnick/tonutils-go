@@ -3,6 +3,7 @@ package cell
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/xssnick/tonutils-go/tvm/boc"
 	"hash/crc32"
 	"hash/crc64"
 )
@@ -13,8 +14,6 @@ var ErrTooBigSize = errors.New("too big size")
 var ErrTooMuchRefs = errors.New("too much refs")
 var ErNotFit1024 = errors.New("cell data size should fit into 1024 bits")
 var ErrNoMoreRefs = errors.New("no more refs exists")
-
-var magic = []byte{0xB5, 0xEE, 0x9C, 0x72}
 
 func (c *Cell) ToBOC() []byte {
 	return c.ToBOCWithFlags(true)
@@ -74,7 +73,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 
 	var data []byte
 
-	data = append(data, magic...)
+	data = append(data, boc.Magic...)
 	data = append(data, flags)
 
 	// bytes needed to store size
