@@ -96,19 +96,19 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 					val = uint64(x)
 				}
 
-				if i == len(params)-1 {
+				if i == len(params)-1 && len(params) > 1 {
 					refNext = cell.BeginCell().MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext).EndCell()
 					break
 				}
 				builder.MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext)
 			case *big.Int:
-				if i == len(params)-1 {
+				if i == len(params)-1 && len(params) > 1 {
 					refNext = cell.BeginCell().MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext).EndCell()
 					break
 				}
 				builder.MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext)
 			case *cell.Cell:
-				if i == len(params)-1 {
+				if i == len(params)-1 && len(params) > 1 {
 					refNext = cell.BeginCell().MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v).EndCell()
 					break
 				}
