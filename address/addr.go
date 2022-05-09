@@ -37,6 +37,10 @@ func (a *Address) String() string {
 	return base64.RawURLEncoding.EncodeToString(address[:])
 }
 
+func (a *Address) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("%q", a.String())), nil
+}
+
 func MustParseAddr(addr string) *Address {
 	a, err := ParseAddr(addr)
 	if err != nil {
