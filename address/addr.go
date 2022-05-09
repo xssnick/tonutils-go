@@ -70,6 +70,10 @@ func ParseAddr(addr string) (*Address, error) {
 		return nil, err
 	}
 
+	if len(data) != 36 {
+		return nil, errors.New("incorrect address data")
+	}
+
 	checksum := data[len(data)-2:]
 	if crc16.Checksum(data[:len(data)-2], crc16.MakeTable(crc16.CRC16_XMODEM)) != binary.BigEndian.Uint16(checksum) {
 		return nil, errors.New("invalid address")
