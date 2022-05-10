@@ -107,11 +107,19 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 }
 
 func calcCells(cell *Cell) int {
-	num := 1
+	m := map[uint64]*Cell{}
+	// calc unique cells
+	uniqCells(m, cell)
+
+	return len(m)
+}
+
+func uniqCells(m map[uint64]*Cell, cell *Cell) {
+	m[cell.hash()] = cell
+
 	for _, ref := range cell.refs {
-		num += calcCells(ref)
+		uniqCells(m, ref)
 	}
-	return num
 }
 
 func (c *Cell) hash() uint64 {

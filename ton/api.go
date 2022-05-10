@@ -14,12 +14,12 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-var _GetMasterchainInfo int32 = -1984567762
-var _RunContractGetMethod int32 = 1556504018
+const _GetMasterchainInfo int32 = -1984567762
+const _RunContractGetMethod int32 = 1556504018
 
-var LSError int32 = -1146494648
+const LSError int32 = -1146494648
 
-var _RunQueryResult int32 = -1550163605
+const _RunQueryResult int32 = -1550163605
 
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
@@ -115,20 +115,30 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 					break
 				}
 				refNext = cell.BeginCell().MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v).EndCell()
-			/*case []byte:
-			sCell := cell.BeginCell()
-			if err := sCell.StoreSlice(v, 8*len(v)); err != nil {
-				return nil, err
-			}
+			case []byte:
+				ln := 8 * len(v)
 
-			if i == len(params)-1 {
-				refNext = cell.BeginCell().MustStoreUInt(4, 8).MustStoreRef(refNext).MustStoreRef(sCell.EndCell()).EndCell()
-				break
-			}
-			builder.MustStoreUInt(4, 8).MustStoreRef(refNext).MustStoreRef(sCell.EndCell())*/
+				sCell := cell.BeginCell()
+				if err := sCell.StoreSlice(v, ln); err != nil {
+					return nil, err
+				}
+
+				if i == 0 {
+					builder.MustStoreUInt(4, 8).
+						MustStoreUInt(0, 10).
+						MustStoreUInt(uint64(ln), 10).
+						MustStoreUInt(0, 6).
+						MustStoreRef(refNext).MustStoreRef(sCell.EndCell())
+					break
+				}
+				refNext = cell.BeginCell().MustStoreUInt(4, 8).
+					MustStoreUInt(0, 10).
+					MustStoreUInt(uint64(ln), 10).
+					MustStoreUInt(0, 6).
+					MustStoreRef(refNext).MustStoreRef(sCell.EndCell()).EndCell()
 			default:
 				// TODO: auto convert if possible
-				return nil, errors.New("currently only int, uints, *cell.Cell, and *big.Int allowed as params currently")
+				return nil, errors.New("only ints, uints, *big.Int, *cell.Cell, and []byte allowed as contract args")
 			}
 		}
 	}

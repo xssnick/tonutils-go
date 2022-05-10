@@ -349,8 +349,11 @@ func (c *Client) ping(w io.Writer, cryptor cipher.Stream, qid uint64) error {
 }
 
 func (c *Client) queryADNL(w io.Writer, cryptor cipher.Stream, qid, payload []byte) error {
+	// bypass compiler negative check
+	t := ADNLQuery
+
 	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, uint32(ADNLQuery))
+	binary.LittleEndian.PutUint32(data, uint32(t))
 
 	data = append(data, qid...)
 	if len(payload) >= 0xFE {
