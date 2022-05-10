@@ -6,25 +6,13 @@ import (
 	"fmt"
 )
 
-var TCPPing int32 = 1292381082
-var TCPPong int32 = -597034237
+const TCPPing int32 = 1292381082
+const TCPPong int32 = -597034237
 
-var LSError int32 = -1146494648
+const ADNLQuery int32 = -1265895046
+const ADNLQueryResponse int32 = 262964246
 
-var RunQueryResult int32 = -1550163605
-
-var AccountStateResp int32 = 1887029073
-
-var GetMasterchainInfo int32 = -1984567762
-var MasterchainInfoResp int32 = -2055001983
-
-var TimeResp int32 = -380436467
-var VersionResp int32 = 1510248933
-
-var ADNLQuery int32 = -1265895046
-var ADNLQueryResponse int32 = 262964246
-
-var LiteServerQuery int32 = 2039219935
+const LiteServerQuery int32 = 2039219935
 
 func (c *Client) parseServerResp(data []byte) (typ int32, queryID string, payload []byte, err error) {
 	if len(data) <= 4 {
