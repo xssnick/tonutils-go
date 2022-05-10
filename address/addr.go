@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
 	"github.com/sigurn/crc16"
 	"github.com/xssnick/tonutils-go/utils"
 )
@@ -50,7 +51,7 @@ func MustParseAddr(addr string) *Address {
 }
 
 func (a *Address) FlagsToByte() (flags byte) {
-	//TODO check this magic...
+	// TODO check this magic...
 	flags = 0b00010001
 	if a.flags.bounceable {
 		utils.SetBit(&flags, 6)

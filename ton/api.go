@@ -96,23 +96,23 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 					val = uint64(x)
 				}
 
-				if i == len(params)-1 {
-					refNext = cell.BeginCell().MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext).EndCell()
+				if i == 0 {
+					builder.MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext)
 					break
 				}
-				builder.MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext)
+				refNext = cell.BeginCell().MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext).EndCell()
 			case *big.Int:
-				if i == len(params)-1 {
-					refNext = cell.BeginCell().MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext).EndCell()
+				if i == 0 {
+					builder.MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext)
 					break
 				}
-				builder.MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext)
+				refNext = cell.BeginCell().MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext).EndCell()
 			case *cell.Cell:
-				if i == len(params)-1 {
-					refNext = cell.BeginCell().MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v).EndCell()
+				if i == 0 {
+					builder.MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v)
 					break
 				}
-				builder.MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v)
+				refNext = cell.BeginCell().MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v).EndCell()
 			/*case []byte:
 			sCell := cell.BeginCell()
 			if err := sCell.StoreSlice(v, 8*len(v)); err != nil {
@@ -126,7 +126,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 			builder.MustStoreUInt(4, 8).MustStoreRef(refNext).MustStoreRef(sCell.EndCell())*/
 			default:
 				// TODO: auto convert if possible
-				return nil, errors.New("currently only int, uints and *big.Int allowed as params currently")
+				return nil, errors.New("currently only int, uints, *cell.Cell, and *big.Int allowed as params currently")
 			}
 		}
 	}

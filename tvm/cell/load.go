@@ -2,8 +2,9 @@ package cell
 
 import (
 	"errors"
-	"github.com/xssnick/tonutils-go/address"
 	"math/big"
+
+	"github.com/xssnick/tonutils-go/address"
 )
 
 type LoadCell struct {
