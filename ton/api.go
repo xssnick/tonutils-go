@@ -94,6 +94,8 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 					val = uint64(x)
 				case uint8:
 					val = uint64(x)
+				case uint64:
+					val = x
 				}
 
 				if i == 0 {
