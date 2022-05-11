@@ -1,7 +1,6 @@
 package liteclient
 
 import (
-	"bufio"
 	"context"
 	"crypto/cipher"
 	"crypto/ed25519"
@@ -13,12 +12,24 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
 	"net"
 	"sync/atomic"
 	"time"
 )
+
+type connection struct {
+	addr      string
+	serverKey string
+
+	connResult chan error
+
+	conn   net.Conn
+	rCrypt cipher.Stream
+	wCrypt cipher.Stream
+
+	client *Client
+}
 
 func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 	sKey, err := base64.StdEncoding.DecodeString(serverKey)
@@ -32,184 +43,60 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 		return err
 	}
 
+	cn := &connection{
+		addr:       addr,
+		serverKey:  serverKey,
+		connResult: make(chan error, 1),
+		client:     c,
+	}
+
 	// get timeout if exists
 	till, ok := ctx.Deadline()
 	if !ok {
 		till = time.Now().Add(60 * time.Second)
-
-		// if no timeout passed, we still set it to 60 sec, to not hang forever
-		timeoutCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-
-		ctx = timeoutCtx
 	}
 
-	conn, err := net.DialTimeout("tcp", addr, till.Sub(time.Now()))
+	cn.conn, err = net.DialTimeout("tcp", addr, till.Sub(time.Now()))
 	if err != nil {
 		return err
 	}
 
 	// we need 160 random bytes from which we will construct encryption keys for packets
-	dd := make([]byte, 160)
-	if _, err := io.ReadFull(rand.Reader, dd); err != nil {
+	rnd := make([]byte, 160)
+	if _, err := io.ReadFull(rand.Reader, rnd); err != nil {
 		return err
 	}
-
-	r := bufio.NewReader(conn)
 
 	// build ciphers for incoming packets and for outgoing
-	rCrypt, err := newCipherCtr(dd[:32], dd[64:80])
+	cn.rCrypt, err = newCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
 		return err
 	}
-	wCrypt, err := newCipherCtr(dd[32:64], dd[80:96])
-	if err != nil {
-		return err
-	}
-
-	hs, err := c.handshake(dd, privateKey, sKey)
+	cn.wCrypt, err = newCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
 		return err
 	}
 
-	// send handshake packet to establish connection
-	_, err = conn.Write(hs)
+	err = cn.handshake(rnd, privateKey, sKey)
 	if err != nil {
 		return err
 	}
 
-	connEvent := make(chan error, 1)
+	connResult := make(chan error, 1)
 
-	var initialized bool
-
-	go func() {
-		// listen for incoming packets
-		for {
-			var sz uint32
-			sz, err = c.readSize(r, rCrypt)
-			if err != nil {
-				break
-			}
-
-			// should at least have nonce (its 32 bytes) and something else
-			if sz <= 32 {
-				err = errors.New("too small size of packet")
-				break
-			}
-
-			var data []byte
-			data, err = c.readData(r, rCrypt, sz)
-			if err != nil {
-				break
-			}
-
-			checksum := data[len(data)-32:]
-			data = data[:len(data)-32]
-
-			err = c.validatePacket(data, checksum)
-			if err != nil {
-				break
-			}
-
-			// skip nonce
-			data = data[32:]
-
-			// response for handshake is empty packet, it means that connection established
-			if len(data) == 0 {
-				if !initialized {
-					initialized = true
-					connEvent <- nil
-				}
-				continue
-			}
-
-			var typeID int32
-			var queryID string
-			var payload []byte
-
-			typeID, queryID, payload, err = c.parseServerResp(data)
-			if err != nil {
-				break
-			}
-
-			c.mx.RLock()
-			ch := c.activeReqs[queryID]
-			c.mx.RUnlock()
-
-			if ch != nil {
-				ch.RespChan <- &LiteResponse{
-					TypeID: typeID,
-					Data:   payload,
-				}
-			} else {
-				// handle system
-			}
-		}
-
-		if initialized {
-			// deactivate connection
-			atomic.AddInt32(&c.activeConnections, -1)
-		}
-
-		connEvent <- err
-		_ = conn.Close()
-	}()
+	go cn.listen(connResult)
 
 	select {
-	case err = <-connEvent:
+	case err = <-connResult:
 		if err != nil {
 			return err
 		}
 
 		// start pings
-		go func() {
-			for {
-				time.Sleep(5 * time.Second)
-
-				n, err := rand.Int(rand.Reader, new(big.Int).SetUint64(0xFFFFFFFFFFFFFF))
-				if err != nil {
-					log.Println("rand err", err)
-					continue
-				}
-
-				err = c.ping(conn, wCrypt, n.Uint64())
-				if err != nil {
-					log.Println("ping err", err)
-					continue
-				}
-			}
-		}()
+		go cn.startPings(5 * time.Second)
 
 		// now we are ready to accept requests
-		go func() {
-			for {
-				var req *LiteRequest
-
-				select {
-				case req = <-c.requester:
-					if req == nil {
-						// handle graceful shutdown
-						return
-					}
-				case <-connEvent:
-					// on this stage it can be only connection issue
-					return
-				}
-
-				err := c.queryLiteServer(conn, wCrypt, req.QueryID, req.TypeID, req.Data)
-				if err != nil {
-					// TODO: put request back to pool to pickup by next connection
-
-					req.RespChan <- &LiteResponse{
-						err: err,
-					}
-
-					// err can happen only because of network error, anyway close it for some case
-					_ = conn.Close()
-					return
-				}
-			}
-		}()
+		go cn.serve(connResult)
 
 		atomic.AddInt32(&c.activeConnections, 1)
 		return nil
@@ -218,15 +105,149 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 	}
 }
 
-func (c *Client) readSize(reader io.Reader, cryptor cipher.Stream) (uint32, error) {
+func (cn *connection) listen(connResult chan<- error) {
+	var initialized bool
+
+	var err error
+	// listen for incoming packets
+	for {
+		var sz uint32
+		sz, err = cn.readSize()
+		if err != nil {
+			break
+		}
+
+		// should at least have nonce (its 32 bytes) and something else
+		if sz <= 32 {
+			err = errors.New("too small size of packet")
+			break
+		}
+
+		var data []byte
+		data, err = cn.readData(sz)
+		if err != nil {
+			break
+		}
+
+		checksum := data[len(data)-32:]
+		data = data[:len(data)-32]
+
+		err = validatePacket(data, checksum)
+		if err != nil {
+			break
+		}
+
+		// skip nonce
+		data = data[32:]
+
+		// response for handshake is empty packet, it means that connection established
+		if len(data) == 0 {
+			if !initialized {
+				initialized = true
+				connResult <- nil
+			}
+			continue
+		}
+
+		var typeID int32
+		var queryID string
+		var payload []byte
+
+		typeID, queryID, payload, err = parseServerResp(data)
+		if err != nil {
+			break
+		}
+
+		cn.client.mx.RLock()
+		ch := cn.client.activeReqs[queryID]
+		cn.client.mx.RUnlock()
+
+		if ch != nil {
+			ch.RespChan <- &LiteResponse{
+				TypeID: typeID,
+				Data:   payload,
+			}
+		}
+	}
+
+	// force close in case of error
+	_ = cn.conn.Close()
+
+	connResult <- err
+
+	if initialized {
+		// deactivate connection
+		atomic.AddInt32(&cn.client.activeConnections, -1)
+
+		cn.client.mx.RLock()
+		dis := cn.client.onDisconnect
+		cn.client.mx.RUnlock()
+
+		if dis != nil {
+			go dis(cn.addr, cn.serverKey)
+		}
+	}
+}
+
+func (cn *connection) serve(connResult <-chan error) {
+	for {
+		var req *LiteRequest
+
+		select {
+		case req = <-cn.client.requester:
+			if req == nil {
+				// handle graceful shutdown
+				return
+			}
+		case <-connResult:
+			// on this stage it can be only connection issue
+			return
+		}
+
+		err := cn.queryLiteServer(req.QueryID, req.TypeID, req.Data)
+		if err != nil {
+			req.RespChan <- &LiteResponse{
+				err: err,
+			}
+
+			// force close in case of error
+			_ = cn.conn.Close()
+
+			return
+		}
+	}
+}
+
+func (cn *connection) startPings(every time.Duration) {
+	for {
+		select {
+		case <-time.After(every):
+		}
+
+		n, err := rand.Int(rand.Reader, new(big.Int).SetUint64(0xFFFFFFFFFFFFFF))
+		if err != nil {
+			continue
+		}
+
+		err = cn.ping(n.Uint64())
+		if err != nil {
+			// force close in case of error
+			_ = cn.conn.Close()
+
+			break
+		}
+	}
+}
+
+func (cn *connection) readSize() (uint32, error) {
 	size := make([]byte, 4)
-	_, err := reader.Read(size)
+	_, err := cn.conn.Read(size)
 	if err != nil {
 		return 0, err
 	}
 
 	// decrypt packet
-	cryptor.XORKeyStream(size, size)
+	cn.rCrypt.XORKeyStream(size, size)
 
 	sz := binary.LittleEndian.Uint32(size)
 
@@ -237,20 +258,20 @@ func (c *Client) readSize(reader io.Reader, cryptor cipher.Stream) (uint32, erro
 	return sz, nil
 }
 
-func (c *Client) readData(reader io.Reader, cryptor cipher.Stream, sz uint32) ([]byte, error) {
+func (cn *connection) readData(sz uint32) ([]byte, error) {
 	var result []byte
 
 	// read exact number of bytes requested, blocking operation
 	left := int(sz)
 	for left > 0 {
 		data := make([]byte, left)
-		n, err := reader.Read(data)
+		n, err := cn.conn.Read(data)
 		if err != nil {
 			return nil, err
 		}
 
 		data = data[:n]
-		cryptor.XORKeyStream(data, data)
+		cn.rCrypt.XORKeyStream(data, data)
 		result = append(result, data...)
 
 		left -= n
@@ -259,7 +280,7 @@ func (c *Client) readData(reader io.Reader, cryptor cipher.Stream, sz uint32) ([
 	return result, nil
 }
 
-func (c *Client) send(w io.Writer, cryptor cipher.Stream, data []byte) error {
+func (cn *connection) send(data []byte) error {
 	buf := make([]byte, 4)
 
 	// ADNL packet should have nonce
@@ -279,11 +300,11 @@ func (c *Client) send(w io.Writer, cryptor cipher.Stream, data []byte) error {
 	buf = append(buf, checksum...)
 
 	// encrypt data
-	cryptor.XORKeyStream(buf, buf)
+	cn.wCrypt.XORKeyStream(buf, buf)
 
 	// write all
 	for len(buf) > 0 {
-		n, err := w.Write(buf)
+		n, err := cn.conn.Write(buf)
 		if err != nil {
 			return err
 		}
@@ -294,7 +315,7 @@ func (c *Client) send(w io.Writer, cryptor cipher.Stream, data []byte) error {
 	return nil
 }
 
-func (c *Client) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) ([]byte, error) {
+func (cn *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) error {
 	hash := sha256.New()
 	hash.Write(data)
 	checksum := hash.Sum(nil)
@@ -303,12 +324,12 @@ func (c *Client) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed2
 
 	kid, err := keyID(serverKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	key, err := sharedKey(ourKey, serverKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	k := []byte{
@@ -325,7 +346,7 @@ func (c *Client) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed2
 
 	ctr, err := newCipherCtr(k, iv)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// encrypt data
@@ -337,18 +358,24 @@ func (c *Client) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed2
 	res = append(res, checksum...)
 	res = append(res, data...)
 
-	return res, nil
+	// send handshake packet to establish connection
+	_, err = cn.conn.Write(res)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (c *Client) ping(w io.Writer, cryptor cipher.Stream, qid uint64) error {
+func (cn *connection) ping(qid uint64) error {
 	data := make([]byte, 12)
 	binary.LittleEndian.PutUint32(data, uint32(TCPPing))
 	binary.LittleEndian.PutUint64(data[4:], qid)
 
-	return c.send(w, cryptor, data)
+	return cn.send(data)
 }
 
-func (c *Client) queryADNL(w io.Writer, cryptor cipher.Stream, qid, payload []byte) error {
+func (cn *connection) queryADNL(qid, payload []byte) error {
 	// bypass compiler negative check
 	t := ADNLQuery
 
@@ -370,10 +397,10 @@ func (c *Client) queryADNL(w io.Writer, cryptor cipher.Stream, qid, payload []by
 		data = append(data, make([]byte, 4-left)...)
 	}
 
-	return c.send(w, cryptor, data)
+	return cn.send(data)
 }
 
-func (c *Client) queryLiteServer(w io.Writer, cryptor cipher.Stream, qid []byte, typeID int32, payload []byte) error {
+func (cn *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) error {
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
 
@@ -396,5 +423,31 @@ func (c *Client) queryLiteServer(w io.Writer, cryptor cipher.Stream, qid []byte,
 		data = append(data, make([]byte, 4-left)...)
 	}
 
-	return c.queryADNL(w, cryptor, qid, data)
+	return cn.queryADNL(qid, data)
+}
+
+func (c *Client) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {
+	var tries int
+
+	var cb OnDisconnectCallback
+	cb = func(addr, key string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+		defer cancel()
+
+		err := c.Connect(ctx, addr, key)
+		if err != nil {
+			if tries < maxTries {
+				time.Sleep(waitBeforeReconnect)
+				tries++
+
+				cb(addr, key)
+			}
+
+			return
+		}
+
+		tries = 0
+	}
+
+	return cb
 }
