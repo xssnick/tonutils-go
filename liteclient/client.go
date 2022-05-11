@@ -7,7 +7,10 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 )
+
+type OnDisconnectCallback func(addr, key string)
 
 type LiteResponse struct {
 	TypeID int32
@@ -29,15 +32,21 @@ type Client struct {
 	requester chan *LiteRequest
 
 	activeConnections int32
+	onDisconnect      func(addr, key string)
 }
 
 var ErrNoActiveConnections = errors.New("no active connections")
 
 func NewClient() *Client {
-	return &Client{
+	c := &Client{
 		activeReqs: map[string]*LiteRequest{},
 		requester:  make(chan *LiteRequest),
 	}
+
+	// default reconnect policy
+	c.SetOnDisconnect(c.DefaultReconnect(3*time.Second, 3))
+
+	return c
 }
 
 func (c *Client) Do(ctx context.Context, typeID int32, payload []byte) (*LiteResponse, error) {
@@ -90,4 +99,10 @@ func (c *Client) Do(ctx context.Context, typeID int32, payload []byte) (*LiteRes
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (c *Client) SetOnDisconnect(cb OnDisconnectCallback) {
+	c.mx.Lock()
+	c.onDisconnect = cb
+	c.mx.Unlock()
 }

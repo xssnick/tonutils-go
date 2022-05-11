@@ -60,7 +60,7 @@ func newCipherCtr(key, iv []byte) (cipher.Stream, error) {
 	return cipher.NewCTR(c, iv), nil
 }
 
-func (c *Client) validatePacket(data []byte, recvChecksum []byte) error {
+func validatePacket(data []byte, recvChecksum []byte) error {
 	if len(data) < 32 {
 		return errors.New("too small packet")
 	}

@@ -14,7 +14,7 @@ const ADNLQueryResponse int32 = 262964246
 
 const LiteServerQuery int32 = 2039219935
 
-func (c *Client) parseServerResp(data []byte) (typ int32, queryID string, payload []byte, err error) {
+func parseServerResp(data []byte) (typ int32, queryID string, payload []byte, err error) {
 	if len(data) <= 4 {
 		err = fmt.Errorf("too short adnl packet: %d", len(data))
 		return

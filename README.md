@@ -75,9 +75,19 @@ if err != nil {
 println(val)
 ```
 
+### Custom reconnect policy
+By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds before each.
+
+But you can use your own reconnection logic, this library support callbacks, in this case OnDisconnect callback can be used, you can set it like this:
+```golang
+client.SetOnDisconnect(func(addr, serverKey string) {
+	// ... do something
+})
+```
+
 ### Features to implement
-* ✅ ~~Support cell and slice as arguments for run get method~~
-* Reconnect
+* ✅ Support cell and slice as arguments for run get method
+* ✅ Reconnect on failure
 * More tests
 * Get account state method
 * Send external query method
