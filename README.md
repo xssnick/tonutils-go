@@ -74,7 +74,22 @@ if err != nil {
 // prints 56
 println(val)
 ```
+### Account info
+You can get full account information including balance, stored data and even code using GetAccount method, example:
+```golang
+// TON Foundation account
+res, err := api.GetAccount(context.Background(), b, address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"))
+if err != nil {
+    log.Fatalln("run get method err:", err.Error())
+    return
+}
 
+// Balance: 66559946.09 TON
+fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
+// Data: [0000003829a9a31772c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff]
+fmt.Printf("Data: %s", res.Data.Dump())
+```
+You can find full working example at `example/account-state/main.go`
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds before each.
 
@@ -88,8 +103,7 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 ### Features to implement
 * ✅ Support cell and slice as arguments for run get method
 * ✅ Reconnect on failure
-* More tests
-* Get account state method
+* ✅ Get account state method
 * Send external query method
 * Cell dictionaries support
 * MustLoad methods

@@ -58,7 +58,7 @@ func fromBOCMultiRoot(data []byte) ([]Cell, error) {
 	rootList := r.MustReadBytes(rootsNum * cellNumSizeBytes) //root_list:(roots * ##(size * 8))
 	rootIndex := dynInt(rootList[0:cellNumSizeBytes])
 	if rootIndex != 0 {
-		return nil, fmt.Errorf("first root index should be 0, but it is %d", rootIndex)
+		// return nil, fmt.Errorf("first root index should be 0, but it is %d", rootIndex)
 	}
 
 	payload, err := r.ReadBytes(dataLen)

@@ -35,13 +35,14 @@ func (c *Cell) Dump() string {
 }
 
 func (c *Cell) dump(deep int) string {
-	str := strings.Repeat("  ", deep) + "[" + hex.EncodeToString(c.data) + "]" + " -> {"
+	str := strings.Repeat("  ", deep) + "[" + hex.EncodeToString(c.data) + "]"
 	if len(c.refs) > 0 {
+		str += " -> {"
 		for _, ref := range c.refs {
 			str += "\n" + ref.dump(deep+1) + ", " + "\n"
 		}
 		str += strings.Repeat("  ", deep)
+		return str + "}"
 	}
-
-	return str + "}"
+	return str
 }

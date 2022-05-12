@@ -84,6 +84,20 @@ func (c *LoadCell) LoadBigInt(sz int) (*big.Int, error) {
 	return new(big.Int).SetBytes(b), nil
 }
 
+func (c *LoadCell) LoadVarUInt(sz int) (*big.Int, error) {
+	ln, err := c.LoadUInt(big.NewInt(int64(sz - 1)).BitLen())
+	if err != nil {
+		return nil, err
+	}
+
+	value, err := c.LoadBigInt(int(ln * 8))
+	if err != nil {
+		return nil, err
+	}
+
+	return value, nil
+}
+
 func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 	if c.bitsSz-c.loadedSz < sz {
 		return nil, ErrNotEnoughData
