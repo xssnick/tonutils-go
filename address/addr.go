@@ -53,7 +53,7 @@ func MustParseAddr(addr string) *Address {
 func (a *Address) FlagsToByte() (flags byte) {
 	// TODO check this magic...
 	flags = 0b00010001
-	if a.flags.bounceable {
+	if !a.flags.bounceable {
 		utils.SetBit(&flags, 6)
 	}
 	if a.flags.testnet {
@@ -64,7 +64,7 @@ func (a *Address) FlagsToByte() (flags byte) {
 
 func ParseFlags(data byte) AddressFlags {
 	return AddressFlags{
-		bounceable: utils.HasBit(data, 6),
+		bounceable: !utils.HasBit(data, 6),
 		testnet:    utils.HasBit(data, 7),
 	}
 }
