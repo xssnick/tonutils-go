@@ -90,8 +90,25 @@ fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
 fmt.Printf("Data: %s", res.Data.Dump())
 ```
 You can find full working example at `example/account-state/main.go`
+
+### Send external message
+Using messages you can interact with contracts to modify state, for example it can be used to intercat with wallet and send transactions to others.
+
+You can send message to contract like that:
+```golang
+data := cell.BeginCell().
+    MustStoreUInt(777, 64).
+    EndCell()
+
+err = api.SendExternalMessage(context.Background(), address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ"), data)
+if err != nil {
+    log.Printf("send err: %s", err.Error())
+    return
+}
+```
+You can find full working example at `example/external-message/main.go` Wallet-like case is implemented there, but without signature.
 ### Custom reconnect policy
-By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds before each.
+By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
 
 But you can use your own reconnection logic, this library support callbacks, in this case OnDisconnect callback can be used, you can set it like this:
 ```golang
@@ -104,7 +121,8 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Support cell and slice as arguments for run get method
 * ✅ Reconnect on failure
 * ✅ Get account state method
-* Send external query method
+* ✅ Send external message
+* Deploy contract method
 * Cell dictionaries support
 * MustLoad methods
 * Event subscriptions

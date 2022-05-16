@@ -389,7 +389,9 @@ func TestMustParseAddr(t *testing.T) {
 
 func TestNewAddressFromBytes(t *testing.T) {
 	type args struct {
-		bytes []byte
+		flags     byte
+		workchain byte
+		data      []byte
 	}
 	tests := []struct {
 		name string
@@ -400,7 +402,7 @@ func TestNewAddressFromBytes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := NewAddressFromBytes(tt.args.bytes); !reflect.DeepEqual(got, tt.want) {
+			if got := NewAddress(tt.args.flags, tt.args.workchain, tt.args.data); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("NewAddressFromBytes() = %v, want %v", got, tt.want)
 			}
 		})

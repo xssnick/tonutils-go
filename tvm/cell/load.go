@@ -51,12 +51,19 @@ func (c *LoadCell) LoadBigCoins() (*big.Int, error) {
 	return value, nil
 }
 
+func (c *LoadCell) MustLoadUInt(sz int) uint64 {
+	res, err := c.LoadUInt(sz)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
 func (c *LoadCell) LoadUInt(sz int) (uint64, error) {
 	res, err := c.LoadBigInt(sz)
 	if err != nil {
 		return 0, err
 	}
-
 	return res.Uint64(), nil
 }
 

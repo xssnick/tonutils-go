@@ -57,6 +57,12 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		var state []byte
 		state, resp.Data = loadBytes(resp.Data)
 
+		if len(state) == 0 {
+			return &Account{
+				IsActive: false,
+			}, nil
+		}
+
 		cl, err := cell.FromBOC(state)
 		if err != nil {
 			return nil, err
@@ -89,7 +95,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		}
 
 		return &Account{
-			IsActive: false,
+			IsActive: true,
 			State:    &st,
 			Data:     contractDataCell,
 			Code:     contractCodeCell,

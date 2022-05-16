@@ -2,6 +2,8 @@ package cell
 
 import (
 	"math/big"
+
+	"github.com/xssnick/tonutils-go/address"
 )
 
 type Builder struct {
@@ -108,6 +110,44 @@ func (b *Builder) StoreBigInt(value *big.Int, sz int) error {
 	}
 
 	return b.StoreSlice(bytes, sz)
+}
+
+func (b *Builder) MustStoreAddr(addr *address.Address) *Builder {
+	err := b.StoreAddr(addr)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) StoreAddr(addr *address.Address) error {
+	if addr == nil {
+		return b.StoreUInt(0, 2)
+	}
+
+	// addr std
+	err := b.StoreUInt(0b10, 2)
+	if err != nil {
+		return err
+	}
+
+	// anycast
+	err = b.StoreUInt(0b0, 1)
+	if err != nil {
+		return err
+	}
+
+	err = b.StoreUInt(uint64(addr.Workchain()), 8)
+	if err != nil {
+		return err
+	}
+
+	err = b.StoreSlice(addr.Data(), 256)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (b *Builder) MustStoreRef(ref *Cell) *Builder {

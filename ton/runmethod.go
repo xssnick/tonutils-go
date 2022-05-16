@@ -109,12 +109,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 	req := builder.EndCell().ToBOCWithFlags(false)
 
 	// param
-	data = append(data, byte(len(req)))
-	data = append(data, req...)
-
-	if round := (len(req) + 1) % 4; round != 0 {
-		data = append(data, make([]byte, 4-round)...)
-	}
+	data = append(data, storableBytes(req)...)
 
 	resp, err := c.client.Do(ctx, _RunContractGetMethod, data)
 	if err != nil {
@@ -263,26 +258,4 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 	}
 
 	return nil, errors.New("unknown response type")
-}
-
-func loadBytes(data []byte) (loaded []byte, buffer []byte) {
-	offset := 1
-	ln := int(data[0])
-	if ln == 0xFE {
-		ln = int(binary.LittleEndian.Uint32(data)) >> 8
-		offset = 4
-	}
-
-	// bytes length should be dividable by 4, add additional offset to buffer if it is not
-	bufSz := ln
-	if add := ln % 4; add != 0 {
-		bufSz += 4 - add
-	}
-
-	// if its end, we don't need to align by 4
-	if offset+bufSz >= len(data) {
-		return data[offset : offset+ln], nil
-	}
-
-	return data[offset : offset+ln], data[offset+bufSz:]
 }
