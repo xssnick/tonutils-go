@@ -74,6 +74,28 @@ if err != nil {
 // prints 56
 println(val)
 ```
+
+#### Send external message
+Using messages you can interact with contracts to modify state, for example it can be used to intercat with wallet and send transactions to others.
+
+You can send message to contract like that:
+```golang
+// message body
+data := cell.BeginCell().
+    MustStoreUInt(777, 64).
+    EndCell()
+
+// contract address
+addr := address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ")
+
+// send external message, processing fees will be taken from contract
+err = api.SendExternalMessage(context.Background(), addr, data)
+if err != nil {
+    panic(err)
+}
+```
+You can find full working example at `example/external-message/main.go`
+
 ### Account info
 You can get full account information including balance, stored data and even code using GetAccount method, example:
 ```golang
@@ -91,22 +113,6 @@ fmt.Printf("Data: %s", res.Data.Dump())
 ```
 You can find full working example at `example/account-state/main.go`
 
-### Send external message
-Using messages you can interact with contracts to modify state, for example it can be used to intercat with wallet and send transactions to others.
-
-You can send message to contract like that:
-```golang
-data := cell.BeginCell().
-    MustStoreUInt(777, 64).
-    EndCell()
-
-err = api.SendExternalMessage(context.Background(), address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ"), data)
-if err != nil {
-    log.Printf("send err: %s", err.Error())
-    return
-}
-```
-You can find full working example at `example/external-message/main.go` Wallet-like case is implemented there, but without signature.
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
 
