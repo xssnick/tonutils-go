@@ -12,10 +12,12 @@ import (
 )
 
 type Account struct {
-	IsActive bool
-	State    *tlb.AccountState
-	Data     *cell.Cell
-	Code     *cell.Cell
+	IsActive   bool
+	State      *tlb.AccountState
+	Data       *cell.Cell
+	Code       *cell.Cell
+	LastTxLT   uint64
+	LastTxHash tlb.TxHash
 }
 
 func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*Account, error) {
@@ -34,6 +36,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 
 	switch resp.TypeID {
 	case _AccountState:
+
 		b := new(tlb.BlockInfo)
 		resp.Data, err = b.Load(resp.Data)
 		if err != nil {
@@ -63,43 +66,110 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			}, nil
 		}
 
-		cl, err := cell.FromBOC(state)
-		if err != nil {
-			return nil, err
+		acc := &Account{
+			IsActive: true,
 		}
 
-		loader := cl.BeginParse()
-
-		contractCode, err := loader.LoadRef()
+		cls, err := cell.FromBOCMultiRoot(proof)
 		if err != nil {
-			return nil, err
-		}
-		contractData, err := loader.LoadRef()
-		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse proof boc: %w", err)
 		}
 
-		contractCodeCell, err := contractCode.ToCell()
+		bp := cls[0].BeginParse()
+
+		// ShardStateUnsplit
+		ssu, err := bp.LoadRef()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to load ref ShardStateUnsplit: %w", err)
 		}
-		contractDataCell, err := contractData.ToCell()
+
+		// OutMsgQueueInfo
+		_, err = ssu.LoadRef()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to load ref OutMsgQueueInfo: %w", err)
 		}
+
+		// ShardAccounts
+		sAccounts, err := ssu.LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load ref ShardAccounts: %w", err)
+		}
+
+		exists, err := sAccounts.LoadBoolBit()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load acc exists bit: %w", err)
+		}
+
+		if exists {
+			// we load HashmapAug as a regular Hashmap, its ok for now,
+			// but we need to manualy exclude extra data which is DepthBalanceInfo from value
+			var m tlb.Hashmap
+			err = m.LoadFromCell(256, sAccounts.MustLoadRef())
+			if err != nil {
+				return nil, fmt.Errorf("failed to load acc hashmap: %w", err)
+			}
+
+			addrKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
+			val := m.Get(addrKey)
+			if val == nil {
+				return nil, errors.New("no addr info in proof hashmap")
+			}
+
+			loadVal := val.BeginParse()
+
+			// skip it
+			err = new(tlb.DepthBalanceInfo).LoadFromCell(loadVal)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load DepthBalanceInfo: %w", err)
+			}
+
+			acc.LastTxHash, err = loadVal.LoadSlice(256)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load LastTxHash: %w", err)
+			}
+
+			acc.LastTxLT, err = loadVal.LoadUInt(64)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load LastTxLT: %w", err)
+			}
+		}
+
+		stateCell, err := cell.FromBOC(state)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse state boc: %w", err)
+		}
+
+		loader := stateCell.BeginParse()
 
 		var st tlb.AccountState
 		err = st.LoadFromCell(loader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parsee account state: %w", err)
 		}
 
-		return &Account{
-			IsActive: true,
-			State:    &st,
-			Data:     contractDataCell,
-			Code:     contractCodeCell,
-		}, nil
+		if st.Status == tlb.AccountStatusActive {
+			contractCode, err := loader.LoadRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load contract code ref: %w", err)
+			}
+			contractData, err := loader.LoadRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load contract data ref: %w", err)
+			}
+
+			acc.Code, err = contractCode.ToCell()
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert code to cell: %w", err)
+			}
+			acc.Data, err = contractData.ToCell()
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert data to cell: %w", err)
+			}
+		}
+
+		acc.State = &st
+
+		return acc, nil
 	case _LSError:
 		return nil, fmt.Errorf("lite server error, code %d: %s", binary.LittleEndian.Uint32(resp.Data), string(resp.Data[5:]))
 	}

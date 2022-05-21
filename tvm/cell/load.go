@@ -2,6 +2,8 @@ package cell
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -17,6 +19,15 @@ type LoadCell struct {
 	refs []*LoadCell
 }
 
+func (c *LoadCell) MustLoadRef() *LoadCell {
+	r, err := c.LoadRef()
+	if err != nil {
+		panic(err)
+	}
+
+	return r
+}
+
 func (c *LoadCell) LoadRef() (*LoadCell, error) {
 	if len(c.refs) == 0 {
 		return nil, ErrNoMoreRefs
@@ -25,6 +36,10 @@ func (c *LoadCell) LoadRef() (*LoadCell, error) {
 	c.refs = c.refs[1:]
 
 	return ref, nil
+}
+
+func (c *LoadCell) RefsNum() int {
+	return len(c.refs)
 }
 
 func (c *LoadCell) LoadCoins() (uint64, error) {
@@ -67,6 +82,14 @@ func (c *LoadCell) LoadUInt(sz int) (uint64, error) {
 	return res.Uint64(), nil
 }
 
+func (c *LoadCell) LoadBoolBit() (bool, error) {
+	res, err := c.LoadBigInt(1)
+	if err != nil {
+		return false, err
+	}
+	return res.Uint64() == 1, nil
+}
+
 func (c *LoadCell) LoadBigInt(sz int) (*big.Int, error) {
 	if sz > 256 {
 		return nil, ErrTooBigValue
@@ -105,6 +128,14 @@ func (c *LoadCell) LoadVarUInt(sz int) (*big.Int, error) {
 	return value, nil
 }
 
+func (c *LoadCell) MustLoadSlice(sz int) []byte {
+	s, err := c.LoadSlice(sz)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 	if c.bitsSz-c.loadedSz < sz {
 		return nil, ErrNotEnoughData
@@ -132,7 +163,8 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 
 	ln := (sz-unusedBits)/8 + oneMoreLeft + oneMoreRight
 
-	for i := oneMoreLeft; i < ln+oneMoreRight; i++ {
+	i := oneMoreLeft
+	for leftSz > 0 {
 		var b byte
 		if oneMoreLeft > 0 {
 			b = c.data[i-1] << byte(8-unusedBits)
@@ -146,9 +178,7 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 			}
 		}
 
-		if leftSz == 0 {
-			break
-		} else if leftSz < 8 {
+		if leftSz < 8 {
 			b &= 0xFF << (8 - leftSz)
 			leftSz = 0
 			loadedData = append(loadedData, b)
@@ -158,7 +188,9 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 		if i < ln {
 			loadedData = append(loadedData, b)
 		}
+
 		leftSz -= 8
+		i++
 	}
 
 	usedBytes := (sz - unusedBits) / 8
@@ -178,31 +210,52 @@ func (c *LoadCell) LoadAddr() (*address.Address, error) {
 		return nil, err
 	}
 
-	// TODO: support of all types of addresses, currently only std supported, skipping 3 bits
-	if typ != 2 {
+	switch typ {
+	case 2:
+		isAnycast, err := c.LoadBoolBit()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load anycast bit: %w", err)
+		}
+
+		if isAnycast {
+			depthLen := int(math.Ceil(math.Log2(30)))
+
+			depth, err := c.LoadUInt(depthLen)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load depth: %w", err)
+			}
+
+			pfx, err := c.LoadSlice(int(depth))
+			if err != nil {
+				return nil, fmt.Errorf("failed to load prefix: %w", err)
+			}
+			_ = pfx
+
+			// TODO: save anycast
+		}
+
+		workchain, err := c.LoadUInt(8)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load workchain: %w", err)
+		}
+
+		data, err := c.LoadSlice(256)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load addr data: %w", err)
+		}
+
+		return address.NewAddress(0, byte(workchain), data), nil
+	case 0:
+		return &address.Address{}, nil
+	default:
+		// TODO: support of all types of addresses, currently only std supported, skipping 3 bits
 		return nil, errors.New("not supported type of address, currently only std supported")
 	}
 
-	isAnycast, err := c.LoadUInt(1)
-	if err != nil {
-		return nil, err
-	}
+}
 
-	if isAnycast == 1 {
-		return nil, errors.New("currently anycast addr is not supported")
-	}
-
-	workchain, err := c.LoadSlice(8)
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := c.LoadSlice(256)
-	if err != nil {
-		return nil, err
-	}
-
-	return address.NewAddress(0, workchain[0], data), nil
+func (c *LoadCell) BitsLeft() int {
+	return c.bitsSz - c.loadedSz
 }
 
 func (c *LoadCell) RestBits() (int, []byte, error) {
@@ -211,12 +264,42 @@ func (c *LoadCell) RestBits() (int, []byte, error) {
 	return left, data, err
 }
 
+func (c *LoadCell) MustToCell() *Cell {
+	cl, err := c.ToCell()
+	if err != nil {
+		panic(err)
+	}
+	return cl
+}
+
+func (c *LoadCell) Copy() *LoadCell {
+	// copy data
+	data := append([]byte{}, c.data...)
+
+	var refs []*LoadCell
+	for _, ref := range c.refs {
+		refs = append(refs, ref.Copy())
+	}
+
+	return &LoadCell{
+		bitsSz:   c.bitsSz,
+		loadedSz: c.loadedSz,
+		data:     data,
+		refs:     refs,
+	}
+}
+
 func (c *LoadCell) ToCell() (*Cell, error) {
-	left := c.bitsSz - c.loadedSz
-	data, err := c.LoadSlice(left)
+	cp := c.Copy()
+
+	left := cp.bitsSz - cp.loadedSz
+	data, err := cp.LoadSlice(left)
+	if err != nil {
+		return nil, err
+	}
 
 	var refs []*Cell
-	for _, ref := range c.refs {
+	for _, ref := range cp.refs {
 		cc, err := ref.ToCell()
 		if err != nil {
 			return nil, err
@@ -229,5 +312,5 @@ func (c *LoadCell) ToCell() (*Cell, error) {
 		bitsSz: left,
 		data:   data,
 		refs:   refs,
-	}, err
+	}, nil
 }

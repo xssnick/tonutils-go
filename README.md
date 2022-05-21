@@ -96,22 +96,46 @@ if err != nil {
 ```
 You can find full working example at `example/external-message/main.go`
 
-### Account info
-You can get full account information including balance, stored data and even code using GetAccount method, example:
+### Account info and transactions
+You can get full account information including balance, stored data and even code using GetAccount method. 
+You can also get account's transactions list with all details.
+
+Example:
 ```golang
 // TON Foundation account
-res, err := api.GetAccount(context.Background(), b, address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"))
+addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+
+account, err := api.GetAccount(context.Background(), b, addr)
 if err != nil {
-    log.Fatalln("run get method err:", err.Error())
+    log.Fatalln("get account err:", err.Error())
     return
 }
 
+// Balance: ACTIVE
+fmt.Printf("Status: %s\n", account.State.Status)
 // Balance: 66559946.09 TON
-fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
-// Data: [0000003829a9a31772c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff]
-fmt.Printf("Data: %s", res.Data.Dump())
+fmt.Printf("Balance: %s TON\n", account.State.Balance.TON())
+if account.Data != nil { // Can be nil if account is not active
+    // Data: [0000003829a9a31772c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff]
+    fmt.Printf("Data: %s\n", account.Data.Dump())
+}
+
+// load last 15 transactions
+list, err := api.ListTransactions(context.Background(), addr, 15, account.LastTxLT, account.LastTxHash)
+if err != nil {
+    log.Printf("send err: %s", err.Error())
+    return
+}
+
+// oldest = first in list
+for _, t := range list {
+    // Out: 620.9939549 TON, To [EQCtiv7PrMJImWiF2L5oJCgPnzp-VML2CAt5cbn1VsKAxLiE]
+    // In: 494.521721 TON, From EQB5lISMH8vLxXpqWph7ZutCS4tU4QdZtrUUpmtgDCsO73JR
+	// ....
+    fmt.Println(t.String())
+}
 ```
-You can find full working example at `example/account-state/main.go`
+You can find extended working example at `example/account-state/main.go`
 
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
@@ -128,8 +152,11 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Reconnect on failure
 * ✅ Get account state method
 * ✅ Send external message
-* Deploy contract method
-* Cell dictionaries support
+* ✅ Get transactions
+* Deploy contracts
+* Wallet operations
+* Payment processing
+* ✅ Cell dictionaries support
 * MustLoad methods
 * Event subscriptions
 * Parse global config json

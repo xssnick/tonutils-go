@@ -7,16 +7,23 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 )
 
-const _GetMasterchainInfo int32 = -1984567762
-const _RunContractGetMethod int32 = 1556504018
-const _GetAccountState int32 = 1804144165
-const _SendMessage int32 = 1762317442
+// requests
+const (
+	_GetMasterchainInfo   int32 = -1984567762
+	_RunContractGetMethod int32 = 1556504018
+	_GetAccountState      int32 = 1804144165
+	_SendMessage          int32 = 1762317442
+	_GetTransactions      int32 = 474015649
+)
 
-const _RunQueryResult int32 = -1550163605
-const _AccountState int32 = 1887029073
-const _SendMessageResult = 961602967
-
-const _LSError int32 = -1146494648
+// responses
+const (
+	_RunQueryResult    int32 = -1550163605
+	_AccountState      int32 = 1887029073
+	_SendMessageResult int32 = 961602967
+	_TransactionsList  int32 = 1864812043
+	_LSError           int32 = -1146494648
+)
 
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)

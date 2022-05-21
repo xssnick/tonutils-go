@@ -1,7 +1,9 @@
 package cell
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 )
 
@@ -31,18 +33,57 @@ func (c *Cell) BeginParse() *LoadCell {
 }
 
 func (c *Cell) Dump() string {
-	return c.dump(0)
+	return c.dump(0, false)
 }
 
-func (c *Cell) dump(deep int) string {
-	str := strings.Repeat("  ", deep) + "[" + hex.EncodeToString(c.data) + "]"
+func (c *Cell) DumpBits() string {
+	return c.dump(0, true)
+}
+
+func (c *Cell) dump(deep int, bin bool) string {
+	sz, data, _ := c.BeginParse().RestBits()
+
+	var val string
+	if bin {
+		for _, n := range data {
+			val += fmt.Sprintf("%08b", n)
+		}
+	} else {
+		val = hex.EncodeToString(data)
+	}
+
+	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
 	if len(c.refs) > 0 {
 		str += " -> {"
-		for _, ref := range c.refs {
-			str += "\n" + ref.dump(deep+1) + ", " + "\n"
+		for i, ref := range c.refs {
+			str += "\n" + ref.dump(deep+1, bin)
+			if i == len(c.refs)-1 {
+				str += "\n"
+			} else {
+				str += ","
+			}
 		}
 		str += strings.Repeat("  ", deep)
 		return str + "}"
 	}
 	return str
+}
+
+func (c *Cell) Hash() []byte {
+	hash := sha256.New()
+	hash.Write(c.data)
+	return hash.Sum(nil)
+
+	/*
+		writeFully(descriptors())
+		writeFully(augmentedBytes())
+		references.forEach { reference ->
+			val depth = reference.maxDepth
+			writeInt(depth)
+		}
+		references.forEach { reference ->
+			val hash = reference.hash()
+			writeFully(hash)
+		}
+	*/
 }

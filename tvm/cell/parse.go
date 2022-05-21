@@ -5,8 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/boc"
 	"hash/crc32"
+
+	"github.com/xssnick/tonutils-go/tvm/boc"
 )
 
 func dynInt(data []byte) int {
@@ -17,7 +18,7 @@ func dynInt(data []byte) int {
 }
 
 func FromBOC(data []byte) (*Cell, error) {
-	cells, err := fromBOCMultiRoot(data)
+	cells, err := FromBOCMultiRoot(data)
 	if err != nil {
 		return nil, err
 	}
@@ -25,7 +26,7 @@ func FromBOC(data []byte) (*Cell, error) {
 	return &cells[0], nil
 }
 
-func fromBOCMultiRoot(data []byte) ([]Cell, error) {
+func FromBOCMultiRoot(data []byte) ([]Cell, error) {
 	if len(data) < 10 {
 		return nil, errors.New("invalid boc")
 	}
@@ -36,16 +37,16 @@ func fromBOCMultiRoot(data []byte) ([]Cell, error) {
 		return nil, errors.New("invalid boc magic header")
 	}
 
-	flags, cellNumSizeBytes := boc.ParseFlags(r.MustReadByte()) //has_idx:(## 1) has_crc32c:(## 1)  has_cache_bits:(## 1) flags:(## 2) { flags = 0 } size:(## 3) { size <= 4 }
-	dataSizeBytes := int(r.MustReadByte())                      //off_bytes:(## 8) { off_bytes <= 8 }
+	flags, cellNumSizeBytes := boc.ParseFlags(r.MustReadByte()) // has_idx:(## 1) has_crc32c:(## 1)  has_cache_bits:(## 1) flags:(## 2) { flags = 0 } size:(## 3) { size <= 4 }
+	dataSizeBytes := int(r.MustReadByte())                      // off_bytes:(## 8) { off_bytes <= 8 }
 
-	cellsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) //cells:(##(size * 8))
-	rootsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) //roots:(##(size * 8)) { roots >= 1 }
+	cellsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) // cells:(##(size * 8))
+	rootsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) // roots:(##(size * 8)) { roots >= 1 }
 
 	// complete BOCs - ??? (absent:(##(size * 8)) { roots + absent <= cells })
 	_ = r.MustReadBytes(cellNumSizeBytes)
 
-	dataLen := dynInt(r.MustReadBytes(dataSizeBytes)) //tot_cells_size:(##(off_bytes * 8))
+	dataLen := dynInt(r.MustReadBytes(dataSizeBytes)) // tot_cells_size:(##(off_bytes * 8))
 
 	// with checksum
 	if flags.HasCrc32c {
@@ -55,7 +56,7 @@ func fromBOCMultiRoot(data []byte) ([]Cell, error) {
 		}
 	}
 
-	rootList := r.MustReadBytes(rootsNum * cellNumSizeBytes) //root_list:(roots * ##(size * 8))
+	rootList := r.MustReadBytes(rootsNum * cellNumSizeBytes) // root_list:(roots * ##(size * 8))
 	rootIndex := dynInt(rootList[0:cellNumSizeBytes])
 	if rootIndex != 0 {
 		// return nil, fmt.Errorf("first root index should be 0, but it is %d", rootIndex)
@@ -121,8 +122,8 @@ func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
 		if int(ln)%2 != 0 {
 			lenBytes := int(ln)/2 + 1
 
-			// find last bit of octet which indicates the end and cut it and next
-			for y := 0; y < 4; y++ {
+			// find last bit of byte which indicates the end and cut it and next
+			for y := 0; y < 8; y++ {
 				if (payload[lenBytes-1]>>y)&1 == 1 {
 					bitsSz += 3 - y
 					break

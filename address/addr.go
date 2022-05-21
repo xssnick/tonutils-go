@@ -32,6 +32,18 @@ func NewAddress(flags byte, workchain byte, data []byte) *Address {
 }
 
 func (a *Address) String() string {
+	var nonZero bool
+	for _, b := range a.data {
+		if b != 0 {
+			nonZero = true
+			break
+		}
+	}
+
+	if !nonZero {
+		return "EMPTY"
+	}
+
 	var address [36]byte
 	copy(address[0:34], a.prepareChecksumData())
 	binary.BigEndian.PutUint16(address[34:], crc16.Checksum(address[:34], crc16.MakeTable(crc16.CRC16_XMODEM)))
