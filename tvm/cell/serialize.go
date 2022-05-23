@@ -3,9 +3,10 @@ package cell
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/xssnick/tonutils-go/tvm/boc"
 	"hash/crc32"
 	"hash/crc64"
+
+	"github.com/xssnick/tonutils-go/tvm/boc"
 )
 
 var ErrTooBigValue = errors.New("too big value")
@@ -20,30 +21,8 @@ func (c *Cell) ToBOC() []byte {
 }
 
 func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
-	var index int
-	hashIndex := map[uint64]int{}
-	var orderCells []*Cell
-
 	// recursively go through cells, build hash index and store unique in slice
-	var indexCells func(cl *Cell)
-	indexCells = func(cl *Cell) {
-		h := cl.hash()
-
-		id, ok := hashIndex[h]
-		if !ok {
-			id = index
-			index++
-
-			hashIndex[h] = id
-			orderCells = append(orderCells, cl)
-		}
-		cl.index = id
-
-		for i := range cl.refs {
-			indexCells(cl.refs[i])
-		}
-	}
-	indexCells(c)
+	orderCells := c.doIndex()
 
 	var payload []byte
 	for i := 0; i < len(orderCells); i++ {
@@ -121,6 +100,35 @@ func uniqCells(m map[uint64]*Cell, cell *Cell) {
 	}
 }
 
+func (c *Cell) doIndex() []*Cell {
+	var index int
+	hashIndex := map[uint64]int{}
+	var orderCells []*Cell
+
+	// recursively go through cells, build hash index and store unique in slice
+	var indexCells func(cl *Cell)
+	indexCells = func(cl *Cell) {
+		h := cl.hash()
+
+		id, ok := hashIndex[h]
+		if !ok {
+			id = index
+			index++
+
+			hashIndex[h] = id
+			orderCells = append(orderCells, cl)
+		}
+		cl.index = id
+
+		for i := range cl.refs {
+			indexCells(cl.refs[i])
+		}
+	}
+	indexCells(c)
+
+	return orderCells
+}
+
 func (c *Cell) hash() uint64 {
 	var refsHashes = make([]byte, 8*len(c.refs)+len(c.data))
 	for _, ref := range c.refs {
@@ -133,12 +141,24 @@ func (c *Cell) hash() uint64 {
 }
 
 func (c *Cell) serialize() []byte {
+	// copy
+	payload := append([]byte{}, c.data...)
+
 	unusedBits := 8 - (c.bitsSz % 8)
 	if unusedBits != 8 {
 		// we need to set bit at the end if not whole byte was used
-		c.data[len(c.data)-1] += 1 << (unusedBits - 1)
+		payload[len(payload)-1] += 1 << (unusedBits - 1)
 	}
 
+	data := append(c.descriptors(), payload...)
+	for _, ref := range c.refs {
+		data = append(data, byte(ref.index))
+	}
+
+	return data
+}
+
+func (c *Cell) descriptors() []byte {
 	ceilBytes := c.bitsSz / 8
 	if c.bitsSz%8 != 0 {
 		ceilBytes++
@@ -147,12 +167,12 @@ func (c *Cell) serialize() []byte {
 	// calc size
 	ln := ceilBytes + c.bitsSz/8
 
-	data := append([]byte{byte(len(c.refs)), byte(ln)}, c.data...)
-	for _, ref := range c.refs {
-		data = append(data, byte(ref.index))
+	specBit := byte(0)
+	if c.special {
+		specBit = 8
 	}
 
-	return data
+	return []byte{byte(len(c.refs)) + specBit + c.level*32, byte(ln)}
 }
 
 func dynamicIntBytes(val uint64, sz int) []byte {

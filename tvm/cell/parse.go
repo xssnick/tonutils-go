@@ -91,6 +91,8 @@ func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
 		// len(self.refs) + self.is_special() * 8 + self.level() * 32
 		// TODO: levels and special support
 		refsNum := flags & 0b111
+		special := (flags & 0b1000) != 0
+		level := flags >> 5
 
 		ln, err := r.ReadByte()
 		if err != nil {
@@ -132,9 +134,11 @@ func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
 		}
 
 		cells[i] = Cell{
-			bitsSz: bitsSz,
-			data:   payload,
-			refs:   refs,
+			special: special,
+			bitsSz:  bitsSz,
+			level:   level,
+			data:    payload,
+			refs:    refs,
 		}
 
 		i++

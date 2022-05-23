@@ -8,46 +8,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-/*
-
-//  HashmapAug, hashmap with an extra value
-//   (augmentation) of type Y at every node
-//
-ahm_edge#_ {n:#} {X:Type} {Y:Type} {l:#} {m:#}
-  label:(HmLabel ~l n) {n = (~m) + l}
-  node:(HashmapAugNode m X Y) = HashmapAug n X Y;
-
-
-ahmn_leaf#_ {X:Type} {Y:Type} extra:Y value:X = HashmapAugNode 0 X Y;
-ahmn_fork#_ {n:#} {X:Type} {Y:Type} left:^(HashmapAug n X Y)
-  right:^(HashmapAug n X Y) extra:Y = HashmapAugNode (n + 1) X Y;
-
-ahme_empty$0 {n:#} {X:Type} {Y:Type} extra:Y
-          = HashmapAugE n X Y;
-ahme_root$1 {n:#} {X:Type} {Y:Type} root:^(HashmapAug n X Y)
-  extra:Y = HashmapAugE n X Y;
-
-hm_edge#_ {n:#} {X:Type} {l:#} {m:#} label:(HmLabel ~l n)
-          {n = (~m) + l} node:(HashmapNode m X) = Hashmap n X;
-
-hmn_leaf#_ {X:Type} value:X = HashmapNode 0 X;
-hmn_fork#_ {n:#} {X:Type} left:^(Hashmap n X)
-           right:^(Hashmap n X) = HashmapNode (n + 1) X;
-
-hml_short$0 {m:#} {n:#} len:(Unary ~n) {n <= m} s:(n * Bit) = HmLabel ~n m;
-hml_long$10 {m:#} n:(#<= m) s:(n * Bit) = HmLabel ~n m;
-hml_same$11 {m:#} v:Bit n:(#<= m) = HmLabel ~n m;
-
-
-unary_zero$0 = Unary ~0;
-unary_succ$1 {n:#} x:(Unary ~n) = Unary ~(n + 1);
-
-hme_empty$0 {n:#} {X:Type} = HashmapE n X;
-hme_root$1 {n:#} {X:Type} root:^(Hashmap n X) = HashmapE n X;
-
-_ (HashmapAugE 256 ShardAccount DepthBalanceInfo) = ShardAccounts;
-*/
-
 type Hashmap struct {
 	storage map[string]*cell.Cell
 }

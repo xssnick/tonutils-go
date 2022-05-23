@@ -8,9 +8,11 @@ import (
 )
 
 type Cell struct {
-	bitsSz int
-	index  int
-	data   []byte
+	special bool
+	level   byte
+	bitsSz  int
+	index   int
+	data    []byte
 
 	refs []*Cell
 }
@@ -70,20 +72,11 @@ func (c *Cell) dump(deep int, bin bool) string {
 }
 
 func (c *Cell) Hash() []byte {
+	c.doIndex()
+
 	hash := sha256.New()
-	hash.Write(c.data)
+	hash.Write(c.serialize())
 	return hash.Sum(nil)
 
-	/*
-		writeFully(descriptors())
-		writeFully(augmentedBytes())
-		references.forEach { reference ->
-			val depth = reference.maxDepth
-			writeInt(depth)
-		}
-		references.forEach { reference ->
-			val hash = reference.hash()
-			writeFully(hash)
-		}
-	*/
+	// TODO: same hash with tvm
 }
