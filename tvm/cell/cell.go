@@ -50,6 +50,9 @@ func (c *Cell) dump(deep int, bin bool) string {
 		for _, n := range data {
 			val += fmt.Sprintf("%08b", n)
 		}
+		if sz%8 != 0 {
+			val = val[:len(val)-(8-(sz%8))]
+		}
 	} else {
 		val = hex.EncodeToString(data)
 	}
@@ -72,11 +75,7 @@ func (c *Cell) dump(deep int, bin bool) string {
 }
 
 func (c *Cell) Hash() []byte {
-	c.doIndex()
-
 	hash := sha256.New()
-	hash.Write(c.serialize())
+	hash.Write(c.serialize(true))
 	return hash.Sum(nil)
-
-	// TODO: same hash with tvm
 }

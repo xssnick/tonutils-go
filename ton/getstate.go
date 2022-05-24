@@ -101,10 +101,14 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		}
 
 		if exists {
+			root, err := sAccounts.LoadRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load acc hashmap: %w", err)
+			}
+
 			// we load HashmapAug as a regular Hashmap, its ok for now,
 			// but we need to manualy exclude extra data which is DepthBalanceInfo from value
-			var m tlb.Hashmap
-			err = m.LoadFromCell(256, sAccounts.MustLoadRef())
+			m, err := root.LoadDict(256)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load acc hashmap: %w", err)
 			}

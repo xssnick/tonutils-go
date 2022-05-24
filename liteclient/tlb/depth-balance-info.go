@@ -1,9 +1,6 @@
 package tlb
 
 import (
-	"errors"
-	"math"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -13,10 +10,9 @@ type DepthBalanceInfo struct {
 }
 
 func (d *DepthBalanceInfo) LoadFromCell(loader *cell.LoadCell) error {
-	// depth_balance$_ split_depth:(#<= 30) balance:CurrencyCollection = DepthBalanceInfo;
-	depthLen := int(math.Ceil(math.Log2(30)))
 
-	depth, err := loader.LoadUInt(depthLen)
+	// depth_balance$_ split_depth:(#<= 30) balance:CurrencyCollection = DepthBalanceInfo;
+	depth, err := loader.LoadUInt(5)
 	if err != nil {
 		return err
 	}
@@ -32,7 +28,10 @@ func (d *DepthBalanceInfo) LoadFromCell(loader *cell.LoadCell) error {
 	}
 
 	if extraExists {
-		return errors.New("extra currently is not supported for DepthBalanceInfo")
+		_, err := loader.LoadDict(32)
+		if err != nil {
+			return err
+		}
 	}
 
 	d.Depth = uint32(depth)

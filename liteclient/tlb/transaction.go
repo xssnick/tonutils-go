@@ -98,8 +98,7 @@ func (t *Transaction) LoadFromCell(loader *cell.LoadCell) error {
 			return fmt.Errorf("failed to load out msgs container: %w", err)
 		}
 
-		var outs Hashmap
-		err = outs.LoadFromCell(15, hashRoot)
+		outs, err := hashRoot.LoadDict(15)
 		if err != nil {
 			return fmt.Errorf("failed to parse out msgs hashmap: %w", err)
 		}

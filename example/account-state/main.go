@@ -49,7 +49,7 @@ func main() {
 	lastLt := res.LastTxLT
 
 	fmt.Printf("\nTransactions:\n")
-	for { // get all transactions
+	for {
 		// last transaction has 0 prev lt
 		if lastLt == 0 {
 			break

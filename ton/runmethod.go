@@ -189,10 +189,27 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 				}
 
 				result = append(result, val)
-			case 2: // uint256
+			case 2: // uint256 (0x0200)
+				intTyp, err := loader.LoadUInt(8)
+				if err != nil {
+					return nil, err
+				}
+
+				if intTyp == 0xFF {
+					// TODO: its nan actually
+					result = append(result, new(big.Int))
+					break
+				}
+
+				below0 := intTyp > 0
+
 				val, err := loader.LoadBigInt(256)
 				if err != nil {
 					return nil, err
+				}
+
+				if below0 {
+					val = val.Mul(val, new(big.Int).SetInt64(-1))
 				}
 
 				result = append(result, val)

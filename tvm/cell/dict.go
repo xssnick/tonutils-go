@@ -1,40 +1,40 @@
-package tlb
+package cell
 
 import (
 	"bytes"
 	"encoding/hex"
 	"math"
-
-	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-type Hashmap struct {
-	storage map[string]*cell.Cell
+type Dictionary struct {
+	storage map[string]*Cell
 }
 
 type HashmapKV struct {
 	Key   string
-	Value *cell.Cell
+	Value *Cell
 }
 
-func (h *Hashmap) LoadFromCell(keySz int, loader *cell.LoadCell) error {
-	h.storage = map[string]*cell.Cell{}
-
-	err := h.mapInner(keySz, keySz, loader, cell.BeginCell())
-	if err != nil {
-		return err
+func (c *LoadCell) LoadDict(keySz int) (*Dictionary, error) {
+	d := Dictionary{
+		storage: map[string]*Cell{},
 	}
 
-	return nil
+	err := d.mapInner(keySz, keySz, c, BeginCell())
+	if err != nil {
+		return nil, err
+	}
+
+	return &d, nil
 }
 
-func (h *Hashmap) Get(key *cell.Cell) *cell.Cell {
-	return h.storage[hex.EncodeToString(key.Hash())]
+func (d *Dictionary) Get(key *Cell) *Cell {
+	return d.storage[hex.EncodeToString(key.Hash())]
 }
 
-func (h *Hashmap) All() []HashmapKV {
-	all := make([]HashmapKV, 0, len(h.storage))
-	for k, v := range h.storage {
+func (d *Dictionary) All() []HashmapKV {
+	all := make([]HashmapKV, 0, len(d.storage))
+	for k, v := range d.storage {
 		all = append(all, HashmapKV{
 			Key:   k,
 			Value: v,
@@ -44,7 +44,7 @@ func (h *Hashmap) All() []HashmapKV {
 	return all
 }
 
-func (h *Hashmap) mapInner(keySz, leftKeySz int, loader *cell.LoadCell, keyPrefix *cell.Builder) error {
+func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *LoadCell, keyPrefix *Builder) error {
 	var err error
 	var sz int
 
@@ -62,7 +62,7 @@ func (h *Hashmap) mapInner(keySz, leftKeySz int, loader *cell.LoadCell, keyPrefi
 		if err != nil {
 			return nil
 		}
-		err = h.mapInner(keySz, leftKeySz-(1+sz), left, keyPrefix.Copy().MustStoreUInt(0, 1))
+		err = d.mapInner(keySz, leftKeySz-(1+sz), left, keyPrefix.Copy().MustStoreUInt(0, 1))
 		if err != nil {
 			return err
 		}
@@ -72,7 +72,7 @@ func (h *Hashmap) mapInner(keySz, leftKeySz int, loader *cell.LoadCell, keyPrefi
 		if err != nil {
 			return err
 		}
-		err = h.mapInner(keySz, leftKeySz-(1+sz), right, keyPrefix.Copy().MustStoreUInt(1, 1))
+		err = d.mapInner(keySz, leftKeySz-(1+sz), right, keyPrefix.Copy().MustStoreUInt(1, 1))
 		if err != nil {
 			return err
 		}
@@ -81,12 +81,12 @@ func (h *Hashmap) mapInner(keySz, leftKeySz int, loader *cell.LoadCell, keyPrefi
 	}
 
 	// add node to map
-	h.storage[hex.EncodeToString(keyPrefix.EndCell().Hash())] = loader.MustToCell()
+	d.storage[hex.EncodeToString(keyPrefix.EndCell().Hash())] = loader.MustToCell()
 
 	return nil
 }
 
-func loadLabel(sz int, loader *cell.LoadCell, key *cell.Builder) (int, *cell.Builder, error) {
+func loadLabel(sz int, loader *LoadCell, key *Builder) (int, *Builder, error) {
 	first, err := loader.LoadUInt(1)
 	if err != nil {
 		return 0, nil, err

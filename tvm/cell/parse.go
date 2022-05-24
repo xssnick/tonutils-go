@@ -122,11 +122,9 @@ func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
 
 		// if not full byte
 		if int(ln)%2 != 0 {
-			lenBytes := int(ln)/2 + 1
-
 			// find last bit of byte which indicates the end and cut it and next
 			for y := 0; y < 8; y++ {
-				if (payload[lenBytes-1]>>y)&1 == 1 {
+				if (payload[len(payload)-1]>>y)&1 == 1 {
 					bitsSz += 3 - y
 					break
 				}

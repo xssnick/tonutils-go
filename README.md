@@ -123,6 +123,9 @@ if account.Data != nil { // Can be nil if account is not active
 // load last 15 transactions
 list, err := api.ListTransactions(context.Background(), addr, 15, account.LastTxLT, account.LastTxHash)
 if err != nil {
+    // In some cases you can get error:
+    // lite server error, code 4294966896: cannot compute block with specified transaction: lt not in db
+    // it means that current lite server not store older data, you can query one with full history
     log.Printf("send err: %s", err.Error())
     return
 }
@@ -130,12 +133,48 @@ if err != nil {
 // oldest = first in list
 for _, t := range list {
     // Out: 620.9939549 TON, To [EQCtiv7PrMJImWiF2L5oJCgPnzp-VML2CAt5cbn1VsKAxLiE]
-    // In: 494.521721 TON, From EQB5lISMH8vLxXpqWph7ZutCS4tU4QdZtrUUpmtgDCsO73JR
-	// ....
+    // In: 494.521721 TON, From EQB5lISMH8vLxXpqWph7ZutCS4tU4QdZtrUUpmtgDCsO73JR 
+    // ....
     fmt.Println(t.String())
 }
 ```
 You can find extended working example at `example/account-state/main.go`
+
+### Cells
+Work with cells is very similar to FunC cells:
+```golang
+builder := cell.BeginCell().MustStoreUInt(0b10, 2).
+    MustStoreUInt(0b00, 2). // src addr_none
+    MustStoreAddr(addr).    // dst addr
+    MustStoreCoins(0)       // import fee 0
+
+builder.MustStoreUInt(0b11, 2). // has state init as cell
+    MustStoreRef(cell.BeginCell().
+        MustStoreUInt(0b00, 2).                     // no split depth, no special
+        MustStoreUInt(1, 1).MustStoreRef(code).     // with code
+        MustStoreUInt(1, 1).MustStoreRef(initData). // with data
+        MustStoreUInt(0, 1).                        // no libs
+    EndCell()).
+    MustStoreUInt(0, 1). // slice data
+    MustStoreUInt(0, 1)  // 1 bit as body, cause its required
+
+result := builder.EndCell()
+
+// {bits_size}[{hex_data}]
+//  279[8800b18cc741b244e114685e1a9e9dc835bff5c157a32a38df49e87b71d0f0d29ba418] -> {
+//    5[30] -> {
+//      0[],
+//      8[01]
+//    }
+//  }
+
+fmt.Println(result.Dump())
+
+```
+There are 2 types of methods `Must` and regular, the difference is that in case of error `Must` will panic, 
+but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
+
+To debug cells you can use `Dump()` and `DumpBits()` methods of cell, they will return string with beautifully formatted cells and their refs tree
 
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.

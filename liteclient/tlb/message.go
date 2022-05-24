@@ -28,7 +28,7 @@ type InternalMessage struct {
 	SrcAddr         *address.Address
 	DstAddr         *address.Address
 	Amount          Grams
-	ExtraCurrencies *Hashmap
+	ExtraCurrencies *cell.Dictionary
 	IHRFee          Grams
 	FwdFee          Grams
 	CreatedLT       uint64
@@ -191,16 +191,14 @@ func (m *InternalMessage) LoadFromCell(loader *cell.LoadCell) error {
 		return fmt.Errorf("failed to load has extra currencies bit: %w", err)
 	}
 
-	var extra *Hashmap
+	var extra *cell.Dictionary
 	if hasExtraCurrencies {
-		extra = &Hashmap{}
-
 		root, err := loader.LoadRef()
 		if err != nil {
 			return fmt.Errorf("failed to load extra currencies ref: %w", err)
 		}
 
-		err = extra.LoadFromCell(32, root)
+		extra, err = root.LoadDict(32)
 		if err != nil {
 			return fmt.Errorf("failed to parse extra currencies hashmap: %w", err)
 		}

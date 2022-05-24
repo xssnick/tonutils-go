@@ -2,9 +2,9 @@ package cell
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"hash/crc32"
-	"hash/crc64"
 
 	"github.com/xssnick/tonutils-go/tvm/boc"
 )
@@ -27,7 +27,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	var payload []byte
 	for i := 0; i < len(orderCells); i++ {
 		// serialize each cell
-		payload = append(payload, orderCells[i].serialize()...)
+		payload = append(payload, orderCells[i].serialize(false)...)
 	}
 
 	// bytes needed to store len of payload
@@ -85,15 +85,15 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 }
 
 func calcCells(cell *Cell) int {
-	m := map[uint64]*Cell{}
+	m := map[string]*Cell{}
 	// calc unique cells
 	uniqCells(m, cell)
 
 	return len(m)
 }
 
-func uniqCells(m map[uint64]*Cell, cell *Cell) {
-	m[cell.hash()] = cell
+func uniqCells(m map[string]*Cell, cell *Cell) {
+	m[hex.EncodeToString(cell.Hash())] = cell
 
 	for _, ref := range cell.refs {
 		uniqCells(m, ref)
@@ -102,13 +102,13 @@ func uniqCells(m map[uint64]*Cell, cell *Cell) {
 
 func (c *Cell) doIndex() []*Cell {
 	var index int
-	hashIndex := map[uint64]int{}
+	hashIndex := map[string]int{}
 	var orderCells []*Cell
 
 	// recursively go through cells, build hash index and store unique in slice
 	var indexCells func(cl *Cell)
 	indexCells = func(cl *Cell) {
-		h := cl.hash()
+		h := hex.EncodeToString(cl.Hash())
 
 		id, ok := hashIndex[h]
 		if !ok {
@@ -129,18 +129,7 @@ func (c *Cell) doIndex() []*Cell {
 	return orderCells
 }
 
-func (c *Cell) hash() uint64 {
-	var refsHashes = make([]byte, 8*len(c.refs)+len(c.data))
-	for _, ref := range c.refs {
-		var hData = make([]byte, 8)
-		binary.BigEndian.PutUint64(hData, ref.hash())
-
-		refsHashes = append(refsHashes, hData...)
-	}
-	return crc64.Checksum(append(refsHashes, c.data...), crc64.MakeTable(crc64.ECMA))
-}
-
-func (c *Cell) serialize() []byte {
+func (c *Cell) serialize(isHash bool) []byte {
 	// copy
 	payload := append([]byte{}, c.data...)
 
@@ -151,11 +140,33 @@ func (c *Cell) serialize() []byte {
 	}
 
 	data := append(c.descriptors(), payload...)
-	for _, ref := range c.refs {
-		data = append(data, byte(ref.index))
+
+	if !isHash {
+		for _, ref := range c.refs {
+			data = append(data, byte(ref.index))
+		}
+	} else {
+		for _, ref := range c.refs {
+			data = append(data, make([]byte, 2)...)
+			binary.BigEndian.PutUint16(data[len(data)-2:], uint16(ref.maxDepth(0)))
+		}
+		for _, ref := range c.refs {
+			data = append(data, ref.Hash()...)
+		}
 	}
 
 	return data
+}
+
+// calc how deep is the cell (how long children tree)
+func (c *Cell) maxDepth(start int) int {
+	d := start
+	for _, cc := range c.refs {
+		if x := cc.maxDepth(start + 1); x > d {
+			d = x
+		}
+	}
+	return d
 }
 
 func (c *Cell) descriptors() []byte {

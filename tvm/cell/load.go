@@ -194,9 +194,10 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 	}
 
 	usedBytes := (sz - unusedBits) / 8
-	if (sz-unusedBits == 0) || ((sz-unusedBits)%8 > 0 && sz > unusedBits && unusedBits > 0) {
+	if sz >= unusedBits && unusedBits > 0 {
 		usedBytes++
 	}
+
 	c.data = c.data[usedBytes:]
 
 	c.loadedSz += sz

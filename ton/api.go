@@ -67,7 +67,7 @@ func storableBytes(buf []byte) []byte {
 	// store buf length
 	if len(buf) >= 0xFE {
 		ln := make([]byte, 4)
-		binary.LittleEndian.PutUint32(data, uint32(len(buf)<<8)|0xFE)
+		binary.LittleEndian.PutUint32(ln, uint32(len(buf)<<8)|0xFE)
 		data = append(data, ln...)
 	} else {
 		data = append(data, byte(len(buf)))
