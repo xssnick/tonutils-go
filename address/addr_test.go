@@ -17,11 +17,11 @@ func TestAddress_Checksum(t *testing.T) {
 		fields fields
 		want   uint16
 	}{
-		{"1", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, 11592},
-		{"2", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, 58659},
-		{"3", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, 28813},
-		{"4", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, 24233},
-		{"4", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, 54133},
+		{"1", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, 11592},
+		{"2", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, 58659},
+		{"3", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, 28813},
+		{"4", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, 24233},
+		{"4", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, 54133},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,8 +76,8 @@ func TestAddress_Dump(t *testing.T) {
 		fields fields
 		want   string
 	}{
-		{"1", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "human-readable address: EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I isBounceable: false, isTestnetOnly: false, data.len: 32"},
-		{"2", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "human-readable address: EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj isBounceable: false, isTestnetOnly: false, data.len: 32"},
+		{"1", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "human-readable address: EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I isBounceable: true, isTestnetOnly: false, data.len: 32"},
+		{"2", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "human-readable address: EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj isBounceable: true, isTestnetOnly: false, data.len: 32"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,14 +104,14 @@ func TestAddress_FlagsToByte(t *testing.T) {
 		fields    fields
 		wantFlags byte
 	}{
-		{"1", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b00010001)},
-		{"2", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b00010001)},
-		{"3", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b01010001)},
-		{"4", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b01010001)},
-		{"5", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b10010001)},
-		{"6", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b10010001)},
-		{"7", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b11010001)},
-		{"8", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b11010001)},
+		{"1", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b00010001)},
+		{"2", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b00010001)},
+		{"3", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b01010001)},
+		{"4", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b01010001)},
+		{"5", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b10010001)},
+		{"6", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b10010001)},
+		{"7", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0b11010001)},
+		{"8", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0b11010001)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -275,16 +275,16 @@ func TestAddress_String(t *testing.T) {
 		fields fields
 		want   string
 	}{
-		{"1", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I"},
-		{"2", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj"},
-		{"3", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "UQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nHCN"},
-		{"4", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "UQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULLjm"},
-		{"5", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "kQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nJbC"},
-		{"6", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "kQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULF6p"},
-		{"7", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "0QC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nMsH"},
-		{"8", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "0QCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULANs"},
-		{"9", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "0QG6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nEbb"},
-		{"10", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "0QGTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULI6w"},
+		{"1", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I"},
+		{"2", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj"},
+		{"3", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "UQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nHCN"},
+		{"4", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "UQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULLjm"},
+		{"5", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "kQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nJbC"},
+		{"6", fields{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "kQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULF6p"},
+		{"7", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "0QC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nMsH"},
+		{"8", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "0QCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULANs"},
+		{"9", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, "0QG6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nEbb"},
+		{"10", fields{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, "0QGTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULI6w"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -341,10 +341,10 @@ func TestAddress_prepareChecksumData(t *testing.T) {
 		fields fields
 		want   []byte
 	}{
-		{"1", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, []byte{17, 0, 186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}},
-		{"2", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, []byte{17, 0, 147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}},
-		{"3", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, []byte{81, 1, 186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}},
-		{"4", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, []byte{81, 1, 147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}},
+		{"1", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, []byte{17, 0, 186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}},
+		{"2", fields{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, []byte{17, 0, 147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}},
+		{"3", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, []byte{81, 1, 186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}},
+		{"4", fields{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, []byte{81, 1, 147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -366,16 +366,16 @@ func TestMustParseAddr(t *testing.T) {
 		args string
 		want *Address
 	}{
-		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"3", "UQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nHCN", &Address{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"4", "UQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULLjm", &Address{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"5", "kQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nJbC", &Address{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"6", "kQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULF6p", &Address{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"7", "0QC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nMsH", &Address{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"8", "0QCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULANs", &Address{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"9", "0QG6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nEbb", &Address{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"10", "0QGTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULI6w", &Address{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"3", "UQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nHCN", &Address{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"4", "UQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULLjm", &Address{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"5", "kQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nJbC", &Address{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"6", "kQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULF6p", &Address{flags: AddressFlags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"7", "0QC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nMsH", &Address{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"8", "0QCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULANs", &Address{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"9", "0QG6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nEbb", &Address{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"10", "0QGTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULI6w", &Address{flags: AddressFlags{bounceable: false, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -416,8 +416,8 @@ func TestParseAddr(t *testing.T) {
 		want    *Address
 		wantErr bool
 	}{
-		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, false},
-		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{flags: AddressFlags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, false},
+		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, false},
+		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{flags: AddressFlags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, false},
 		{"err 1", "AQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", nil, true},
 		{"err 2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUB", nil, true},
 	}
@@ -444,10 +444,10 @@ func TestParseFlags(t *testing.T) {
 		args args
 		want AddressFlags
 	}{
-		{"1", args{data: byte(0b00010001)}, AddressFlags{bounceable: false, testnet: false}},
-		{"2", args{data: byte(0b01010001)}, AddressFlags{bounceable: true, testnet: false}},
-		{"3", args{data: byte(0b10010001)}, AddressFlags{bounceable: false, testnet: true}},
-		{"4", args{data: byte(0b11010001)}, AddressFlags{bounceable: true, testnet: true}},
+		{"1", args{data: byte(0b00010001)}, AddressFlags{bounceable: true, testnet: false}},
+		{"2", args{data: byte(0b01010001)}, AddressFlags{bounceable: false, testnet: false}},
+		{"3", args{data: byte(0b10010001)}, AddressFlags{bounceable: true, testnet: true}},
+		{"4", args{data: byte(0b11010001)}, AddressFlags{bounceable: false, testnet: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

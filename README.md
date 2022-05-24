@@ -96,22 +96,85 @@ if err != nil {
 ```
 You can find full working example at `example/external-message/main.go`
 
-### Account info
-You can get full account information including balance, stored data and even code using GetAccount method, example:
+### Account info and transactions
+You can get full account information including balance, stored data and even code using GetAccount method. 
+You can also get account's transactions list with all details.
+
+Example:
 ```golang
 // TON Foundation account
-res, err := api.GetAccount(context.Background(), b, address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"))
+addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+
+account, err := api.GetAccount(context.Background(), b, addr)
 if err != nil {
-    log.Fatalln("run get method err:", err.Error())
+    log.Fatalln("get account err:", err.Error())
     return
 }
 
+// Balance: ACTIVE
+fmt.Printf("Status: %s\n", account.State.Status)
 // Balance: 66559946.09 TON
-fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
-// Data: [0000003829a9a31772c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff]
-fmt.Printf("Data: %s", res.Data.Dump())
+fmt.Printf("Balance: %s TON\n", account.State.Balance.TON())
+if account.Data != nil { // Can be nil if account is not active
+    // Data: [0000003829a9a31772c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff]
+    fmt.Printf("Data: %s\n", account.Data.Dump())
+}
+
+// load last 15 transactions
+list, err := api.ListTransactions(context.Background(), addr, 15, account.LastTxLT, account.LastTxHash)
+if err != nil {
+    // In some cases you can get error:
+    // lite server error, code 4294966896: cannot compute block with specified transaction: lt not in db
+    // it means that current lite server not store older data, you can query one with full history
+    log.Printf("send err: %s", err.Error())
+    return
+}
+
+// oldest = first in list
+for _, t := range list {
+    // Out: 620.9939549 TON, To [EQCtiv7PrMJImWiF2L5oJCgPnzp-VML2CAt5cbn1VsKAxLiE]
+    // In: 494.521721 TON, From EQB5lISMH8vLxXpqWph7ZutCS4tU4QdZtrUUpmtgDCsO73JR 
+    // ....
+    fmt.Println(t.String())
+}
 ```
-You can find full working example at `example/account-state/main.go`
+You can find extended working example at `example/account-state/main.go`
+
+### Cells
+Work with cells is very similar to FunC cells:
+```golang
+builder := cell.BeginCell().MustStoreUInt(0b10, 2).
+    MustStoreUInt(0b00, 2). // src addr_none
+    MustStoreAddr(addr).    // dst addr
+    MustStoreCoins(0)       // import fee 0
+
+builder.MustStoreUInt(0b11, 2). // has state init as cell
+    MustStoreRef(cell.BeginCell().
+        MustStoreUInt(0b00, 2).                     // no split depth, no special
+        MustStoreUInt(1, 1).MustStoreRef(code).     // with code
+        MustStoreUInt(1, 1).MustStoreRef(initData). // with data
+        MustStoreUInt(0, 1).                        // no libs
+    EndCell()).
+    MustStoreUInt(0, 1). // slice data
+    MustStoreUInt(0, 1)  // 1 bit as body, cause its required
+
+result := builder.EndCell()
+
+// {bits_size}[{hex_data}]
+//  279[8800b18cc741b244e114685e1a9e9dc835bff5c157a32a38df49e87b71d0f0d29ba418] -> {
+//    5[30] -> {
+//      0[],
+//      8[01]
+//    }
+//  }
+
+fmt.Println(result.Dump())
+
+```
+There are 2 types of methods `Must` and regular, the difference is that in case of error `Must` will panic, 
+but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
+
+To debug cells you can use `Dump()` and `DumpBits()` methods of cell, they will return string with beautifully formatted cells and their refs tree
 
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
@@ -128,8 +191,11 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Reconnect on failure
 * ✅ Get account state method
 * ✅ Send external message
-* Deploy contract method
-* Cell dictionaries support
+* ✅ Get transactions
+* Deploy contracts
+* Wallet operations
+* Payment processing
+* ✅ Cell dictionaries support
 * MustLoad methods
 * Event subscriptions
 * Parse global config json

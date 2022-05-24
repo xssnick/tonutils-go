@@ -1,13 +1,23 @@
 package tlb
 
 import (
+	"errors"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+type AccountStatus string
+
+const (
+	AccountStatusActive = "ACTIVE"
+	AccountStatusUninit = "UNINIT"
+	AccountStatusFrozen = "FROZEN"
+)
+
 type AccountStorage struct {
+	Status            AccountStatus
 	LastTransactionLT uint64
 	Balance           Grams
 }
@@ -33,12 +43,12 @@ type AccountState struct {
 }
 
 func (a *AccountState) LoadFromCell(loader *cell.LoadCell) error {
-	isAccount, err := loader.LoadUInt(1)
+	isAccount, err := loader.LoadBoolBit()
 	if err != nil {
 		return err
 	}
 
-	if isAccount == 0 {
+	if !isAccount {
 		return nil
 	}
 
@@ -133,6 +143,35 @@ func (s *AccountStorage) LoadFromCell(loader *cell.LoadCell) error {
 	coins, err := loader.LoadBigCoins()
 	if err != nil {
 		return err
+	}
+
+	extraExists, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	if extraExists {
+		return errors.New("extra currency info is not supported for AccountStorage")
+	}
+
+	isStatusActive, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	if isStatusActive {
+		s.Status = AccountStatusActive
+	} else {
+		isStatusFrozen, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+
+		if isStatusFrozen {
+			s.Status = AccountStatusFrozen
+		} else {
+			s.Status = AccountStatusUninit
+		}
 	}
 
 	s.LastTransactionLT = lastTransaction

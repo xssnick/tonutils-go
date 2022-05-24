@@ -30,12 +30,45 @@ func main() {
 		return
 	}
 
-	res, err := api.GetAccount(context.Background(), b, address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"))
+	addr := address.MustParseAddr("EQAoUyP1KBBRvTVAUxlAI_9mmSH05guWrNZ5PfmVFL7zs2b6")
+
+	res, err := api.GetAccount(context.Background(), b, addr)
 	if err != nil {
-		log.Fatalln("run get method err:", err.Error())
+		log.Fatalln("get account err:", err.Error())
 		return
 	}
 
+	fmt.Printf("Status: %s\n", res.State.Status)
 	fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
-	fmt.Printf("Data: %s", res.Data.Dump())
+	if res.Data != nil {
+		fmt.Printf("Data: %s\n", res.Data.Dump())
+	}
+
+	// take last tx info from account info
+	lastHash := res.LastTxHash
+	lastLt := res.LastTxLT
+
+	fmt.Printf("\nTransactions:\n")
+	for {
+		// last transaction has 0 prev lt
+		if lastLt == 0 {
+			break
+		}
+
+		// load transactions in batches with size 15
+		list, err := api.ListTransactions(context.Background(), addr, 15, lastLt, lastHash)
+		if err != nil {
+			log.Printf("send err: %s", err.Error())
+			return
+		}
+
+		// oldest = first in list
+		for _, t := range list {
+			fmt.Println(t.String())
+		}
+
+		// set previous info from the oldest transaction in list
+		lastHash = list[0].PrevTxHash
+		lastLt = list[0].PrevTxLT
+	}
 }

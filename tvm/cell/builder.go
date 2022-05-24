@@ -217,6 +217,21 @@ func (b *Builder) StoreSlice(bytes []byte, sz int) error {
 	return nil
 }
 
+func (b *Builder) BitsUsed() int {
+	return b.bitsSz
+}
+
+func (b *Builder) Copy() *Builder {
+	// copy data
+	data := append([]byte{}, b.data...)
+
+	return &Builder{
+		bitsSz: b.bitsSz,
+		data:   data,
+		refs:   b.refs,
+	}
+}
+
 func BeginCell() *Builder {
 	return &Builder{}
 }
