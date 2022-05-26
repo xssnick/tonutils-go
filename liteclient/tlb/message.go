@@ -1,6 +1,7 @@
 package tlb
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -19,6 +20,13 @@ const (
 type Message struct {
 	MsgType MsgType
 	msg     interface{}
+}
+
+type MessageJsonAlias Message
+
+type MessageJson struct {
+	*MessageJsonAlias
+	Msg interface{}
 }
 
 type InternalMessage struct {
@@ -369,4 +377,11 @@ func loadMsgTail(loader *cell.LoadCell) (*StateInit, *cell.Cell, error) {
 	}
 
 	return init, bodyCell, nil
+}
+
+func (m *Message) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&MessageJson{
+		MessageJsonAlias: (*MessageJsonAlias)(m),
+		Msg:              m.msg,
+	})
 }
