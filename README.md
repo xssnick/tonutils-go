@@ -12,8 +12,8 @@ You can find full usage examples in **example** directory
 
 ### Connection
 You can get list of public lite servers from official TON configs:
-* Mainnet - https://newton-blockchain.github.io/global.config.json
-* Testnet - https://newton-blockchain.github.io/testnet-global.config.json
+* Mainnet - https://ton-blockchain.github.io/global.config.json
+* Testnet - https://ton-blockchain.github.io/testnet-global.config.json
 
 from liteservers section, you need to convert int to ip and take port and key.
 
