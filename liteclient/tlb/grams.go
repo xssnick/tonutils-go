@@ -1,6 +1,7 @@
 package tlb
 
 import (
+	"fmt"
 	"math/big"
 )
 
@@ -17,4 +18,8 @@ func (g Grams) TON() string {
 
 func (g Grams) NanoTON() *big.Int {
 	return g.val
+}
+
+func (g Grams) MarshalJSON() ([]byte, error) {
+	return []byte(fmt.Sprintf("%d", g.val)), nil
 }
