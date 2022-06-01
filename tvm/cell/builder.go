@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"errors"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -65,6 +66,22 @@ func (b *Builder) MustStoreUInt(value uint64, sz int) *Builder {
 
 func (b *Builder) StoreUInt(value uint64, sz int) error {
 	return b.StoreBigInt(new(big.Int).SetUint64(value), sz)
+}
+
+func (b *Builder) MustStoreBoolBit(value bool) *Builder {
+	err := b.StoreBoolBit(value)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) StoreBoolBit(value bool) error {
+	var i uint64
+	if value {
+		i = 1
+	}
+	return b.StoreBigInt(new(big.Int).SetUint64(i), 1)
 }
 
 func (b *Builder) MustStoreBigInt(value *big.Int, sz int) *Builder {
@@ -159,8 +176,12 @@ func (b *Builder) MustStoreRef(ref *Cell) *Builder {
 }
 
 func (b *Builder) StoreRef(ref *Cell) error {
-	if len(b.refs) >= 4 {
+	if len(b.refs) > 4 {
 		return ErrTooMuchRefs
+	}
+
+	if ref == nil {
+		return errors.New("ref cannot be nil")
 	}
 
 	b.refs = append(b.refs, ref)
@@ -217,8 +238,43 @@ func (b *Builder) StoreSlice(bytes []byte, sz int) error {
 	return nil
 }
 
+func (b *Builder) MustStoreBuilder(builder *Builder) *Builder {
+	err := b.StoreBuilder(builder)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) StoreBuilder(builder *Builder) error {
+	if len(b.refs)+len(builder.refs) > 4 {
+		return ErrTooMuchRefs
+	}
+
+	if b.bitsSz+builder.bitsSz >= 1024 {
+		return ErrTooMuchRefs
+	}
+
+	b.refs = append(b.refs, builder.refs...)
+	b.MustStoreSlice(builder.data, builder.bitsSz)
+
+	return nil
+}
+
+func (b *Builder) RefsUsed() int {
+	return len(b.refs)
+}
+
 func (b *Builder) BitsUsed() int {
 	return b.bitsSz
+}
+
+func (b *Builder) BitsLeft() int {
+	return 1023 - b.bitsSz
+}
+
+func (b *Builder) RefsLeft() int {
+	return 4 - len(b.refs)
 }
 
 func (b *Builder) Copy() *Builder {

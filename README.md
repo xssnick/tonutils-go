@@ -34,6 +34,34 @@ if err != nil {
 // initialize ton api lite connection wrapper
 api := ton.NewAPIClient(client)
 ```
+### Wallet
+You can use existing wallet or generate new one using `wallet.NewSeed()`, wallet will be initialized on first sent message from it. This library will deploy and initialize wallet contract if it is not initialized yet. 
+
+You can also send any message to any contract using `w.Send` method, it accepts `tlb.InternalMessage` structure, you can dive into `w.Transfer` implementation and see how it works.
+
+Example of basic usage:
+```golang
+words := strings.Split("birth pattern ...", " ")
+
+w, err := wallet.FromSeed(api, words, wallet.V3)
+if err != nil {
+    panic(err)
+}
+
+balance, err := w.GetBalance(context.Background(), block)
+if err != nil {
+    panic(err)
+}
+
+if balance.NanoTON().Uint64() >= 3000000 {
+    addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+    err = w.Transfer(context.Background(), addr, new(tlb.Grams).MustFromTON("0.003"), "Hey bro, happy birthday!")
+    if err != nil {
+        panic(err)
+    }
+}
+```
+You can find full working example at `example/wallet/main.go`
 ### Interacting with contracts 
 Here are the description of features which allow us to trigger contract's methods
 
@@ -193,7 +221,7 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Send external message
 * ✅ Get transactions
 * Deploy contracts
-* Wallet operations
+* ✅ Wallet operations
 * Payment processing
 * ✅ Cell dictionaries support
 * MustLoad methods

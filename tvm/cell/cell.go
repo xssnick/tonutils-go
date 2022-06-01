@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -32,6 +33,25 @@ func (c *Cell) BeginParse() *LoadCell {
 		data:     data,
 		refs:     refs,
 	}
+}
+
+func (c *Cell) ToBuilder() *Builder {
+	// copy data
+	data := append([]byte{}, c.data...)
+
+	return &Builder{
+		bitsSz: c.bitsSz,
+		data:   data,
+		refs:   c.refs,
+	}
+}
+
+func (c *Cell) BitsSize() int {
+	return c.bitsSz
+}
+
+func (c *Cell) RefsNum() int {
+	return len(c.refs)
 }
 
 func (c *Cell) Dump() string {
@@ -78,4 +98,8 @@ func (c *Cell) Hash() []byte {
 	hash := sha256.New()
 	hash.Write(c.serialize(true))
 	return hash.Sum(nil)
+}
+
+func (c *Cell) Sign(key ed25519.PrivateKey) []byte {
+	return ed25519.Sign(key, c.Hash())
 }

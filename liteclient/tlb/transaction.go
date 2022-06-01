@@ -131,7 +131,7 @@ func (t *Transaction) LoadFromCell(loader *cell.LoadCell) error {
 }
 
 func (t *Transaction) Dump() string {
-	res := fmt.Sprintf("LT: %d\n\nInput:\nType %s\nFrom %s\nPayload:\n%s\n\nOutputs:\n", t.LT, t.In.MsgType, t.In.SenderAddr(), t.In.Payload().Dump())
+	res := fmt.Sprintf("LT: %d\n\nInput:\nType %s\nFrom %s\nPayload:\n%s\n\nOutputs:\n", t.LT, t.In.MsgType, t.In.Msg.SenderAddr(), t.In.Msg.Payload().Dump())
 	for _, m := range t.Out {
 		res += m.AsInternal().Dump()
 	}
@@ -142,7 +142,7 @@ func (t *Transaction) String() string {
 	var destinations []string
 	in, out := new(big.Int), new(big.Int)
 	for _, m := range t.Out {
-		destinations = append(destinations, m.DestAddr().String())
+		destinations = append(destinations, m.Msg.DestAddr().String())
 		if m.MsgType == MsgTypeInternal {
 			out.Add(out, m.AsInternal().Amount.NanoTON())
 		}
@@ -155,14 +155,15 @@ func (t *Transaction) String() string {
 	var build string
 
 	if in.Cmp(big.NewInt(0)) != 0 {
-		build += fmt.Sprintf("In: %s TON, From %s", Grams{in}.TON(), t.In.AsInternal().SrcAddr)
+		intTx := t.In.AsInternal()
+		build += fmt.Sprintf("In: %s TON, From %s, Comment: %s", new(Grams).FromNanoTON(in).TON(), intTx.SrcAddr, intTx.Comment())
 	}
 
 	if out.Cmp(big.NewInt(0)) != 0 {
 		if len(build) > 0 {
 			build += ", "
 		}
-		build += fmt.Sprintf("Out: %s TON, To %s", Grams{out}.TON(), destinations)
+		build += fmt.Sprintf("Out: %s TON, To %s", new(Grams).FromNanoTON(out).TON(), destinations)
 	}
 
 	return build

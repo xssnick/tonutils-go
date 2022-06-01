@@ -59,7 +59,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	data = append(data, sizeBytes)
 
 	// cells num
-	data = append(data, dynamicIntBytes(uint64(calcCells(c)), int(sizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(calcCells(c)), int(cellSizeBytes))...)
 
 	// roots num (only 1 supported for now)
 	data = append(data, 1)

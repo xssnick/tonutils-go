@@ -76,7 +76,7 @@ func storableBytes(buf []byte) []byte {
 	data = append(data, buf...)
 
 	// adjust actual length to fit % 4 = 0
-	if round := (len(buf) + 1) % 4; round != 0 {
+	if round := len(data) % 4; round != 0 {
 		data = append(data, make([]byte, 4-round)...)
 	}
 

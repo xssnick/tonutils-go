@@ -16,9 +16,15 @@ const (
 	MsgTypeExternalOut MsgType = "EXTERNAL_OUT"
 )
 
+type AnyMessage interface {
+	Payload() *cell.Cell
+	SenderAddr() *address.Address
+	DestAddr() *address.Address
+}
+
 type Message struct {
 	MsgType MsgType
-	msg     interface{}
+	Msg     AnyMessage
 }
 
 type InternalMessage struct {
@@ -27,10 +33,10 @@ type InternalMessage struct {
 	Bounced         bool
 	SrcAddr         *address.Address
 	DstAddr         *address.Address
-	Amount          Grams
+	Amount          *Grams
 	ExtraCurrencies *cell.Dictionary
-	IHRFee          Grams
-	FwdFee          Grams
+	IHRFee          *Grams
+	FwdFee          *Grams
 	CreatedLT       uint64
 	CreatedAt       uint32
 
@@ -38,18 +44,55 @@ type InternalMessage struct {
 	Body      *cell.Cell
 }
 
+func (m *InternalMessage) Payload() *cell.Cell {
+	return m.Body
+}
+
+func (m *InternalMessage) SenderAddr() *address.Address {
+	return m.SrcAddr
+}
+
+func (m *InternalMessage) DestAddr() *address.Address {
+	return m.DstAddr
+}
+
+func (m *InternalMessage) Comment() string {
+	if m.Body != nil {
+		l := m.Body.BeginParse()
+		if val, err := l.LoadUInt(32); err == nil && val == 0 {
+			b, err := l.LoadSlice(l.BitsLeft())
+			if err == nil {
+				return string(b)
+			}
+		}
+	}
+	return ""
+}
+
 type ExternalMessageIn struct {
 	SrcAddr   *address.Address
-	DestAddr  *address.Address
-	ImportFee Grams
+	DstAddr   *address.Address
+	ImportFee *Grams
 
 	StateInit *StateInit
 	Body      *cell.Cell
 }
 
+func (m *ExternalMessageIn) Payload() *cell.Cell {
+	return m.Body
+}
+
+func (m *ExternalMessageIn) SenderAddr() *address.Address {
+	return m.SrcAddr
+}
+
+func (m *ExternalMessageIn) DestAddr() *address.Address {
+	return m.DstAddr
+}
+
 type ExternalMessageOut struct {
 	SrcAddr   *address.Address
-	DestAddr  *address.Address
+	DstAddr   *address.Address
 	CreatedLT uint64
 	CreatedAt uint32
 
@@ -57,8 +100,22 @@ type ExternalMessageOut struct {
 	Body      *cell.Cell
 }
 
+func (m *ExternalMessageOut) Payload() *cell.Cell {
+	return m.Body
+}
+
+func (m *ExternalMessageOut) SenderAddr() *address.Address {
+	return m.SrcAddr
+}
+
+func (m *ExternalMessageOut) DestAddr() *address.Address {
+	return m.DstAddr
+}
+
 func (m *Message) LoadFromCell(loader *cell.LoadCell) error {
-	isExternal, err := loader.LoadBoolBit()
+	dup := loader.Copy()
+
+	isExternal, err := dup.LoadBoolBit()
 	if err != nil {
 		return fmt.Errorf("failed to load external flag: %w", err)
 	}
@@ -71,11 +128,11 @@ func (m *Message) LoadFromCell(loader *cell.LoadCell) error {
 			return fmt.Errorf("failed to parse internal message: %w", err)
 		}
 
-		m.msg = &intMsg
+		m.Msg = &intMsg
 		m.MsgType = MsgTypeInternal
 		return nil
 	case true:
-		isOut, err := loader.LoadBoolBit()
+		isOut, err := dup.LoadBoolBit()
 		if err != nil {
 			return fmt.Errorf("failed to load external in/out flag: %w", err)
 		}
@@ -88,7 +145,7 @@ func (m *Message) LoadFromCell(loader *cell.LoadCell) error {
 				return fmt.Errorf("failed to parse external out message: %w", err)
 			}
 
-			m.msg = &extMsg
+			m.Msg = &extMsg
 			m.MsgType = MsgTypeExternalOut
 			return nil
 		case false:
@@ -98,7 +155,7 @@ func (m *Message) LoadFromCell(loader *cell.LoadCell) error {
 				return fmt.Errorf("failed to parse external in message: %w", err)
 			}
 
-			m.msg = &extMsg
+			m.Msg = &extMsg
 			m.MsgType = MsgTypeExternalIn
 			return nil
 		}
@@ -107,55 +164,28 @@ func (m *Message) LoadFromCell(loader *cell.LoadCell) error {
 	return errors.New("unknown message type")
 }
 
-func (m *Message) SenderAddr() *address.Address {
-	switch m.MsgType {
-	case MsgTypeInternal:
-		return m.AsInternal().SrcAddr
-	case MsgTypeExternalIn:
-		return m.AsExternalIn().SrcAddr
-	case MsgTypeExternalOut:
-		return m.AsExternalOut().SrcAddr
-	}
-	return nil
-}
-
-func (m *Message) Payload() *cell.Cell {
-	switch m.MsgType {
-	case MsgTypeInternal:
-		return m.AsInternal().Body
-	case MsgTypeExternalIn:
-		return m.AsExternalIn().Body
-	case MsgTypeExternalOut:
-		return m.AsExternalOut().Body
-	}
-	return nil
-}
-
-func (m *Message) DestAddr() *address.Address {
-	switch m.MsgType {
-	case MsgTypeInternal:
-		return m.AsInternal().DstAddr
-	case MsgTypeExternalIn:
-		return m.AsExternalIn().DestAddr
-	case MsgTypeExternalOut:
-		return m.AsExternalOut().DestAddr
-	}
-	return nil
-}
-
 func (m *Message) AsInternal() *InternalMessage {
-	return m.msg.(*InternalMessage)
+	return m.Msg.(*InternalMessage)
 }
 
 func (m *Message) AsExternalIn() *ExternalMessageIn {
-	return m.msg.(*ExternalMessageIn)
+	return m.Msg.(*ExternalMessageIn)
 }
 
 func (m *Message) AsExternalOut() *ExternalMessageOut {
-	return m.msg.(*ExternalMessageOut)
+	return m.Msg.(*ExternalMessageOut)
 }
 
 func (m *InternalMessage) LoadFromCell(loader *cell.LoadCell) error {
+	ident, err := loader.LoadUInt(1)
+	if err != nil {
+		return fmt.Errorf("failed to load identificator bit: %w", err)
+	}
+
+	if ident != 0 {
+		return fmt.Errorf("its not internal message")
+	}
+
 	ihrDisabled, err := loader.LoadBoolBit()
 	if err != nil {
 		return fmt.Errorf("failed to load ihr disabled bit: %w", err)
@@ -235,10 +265,10 @@ func (m *InternalMessage) LoadFromCell(loader *cell.LoadCell) error {
 		Bounced:         bounced,
 		SrcAddr:         srcAddr,
 		DstAddr:         dstAddr,
-		Amount:          Grams{val: value},
+		Amount:          new(Grams).FromNanoTON(value),
 		ExtraCurrencies: extra,
-		IHRFee:          Grams{val: ihrFee},
-		FwdFee:          Grams{val: fwdFee},
+		IHRFee:          new(Grams).FromNanoTON(ihrFee),
+		FwdFee:          new(Grams).FromNanoTON(fwdFee),
 		CreatedLT:       createdLt,
 		CreatedAt:       uint32(createdAt),
 		StateInit:       init,
@@ -248,12 +278,78 @@ func (m *InternalMessage) LoadFromCell(loader *cell.LoadCell) error {
 	return nil
 }
 
+func (m *InternalMessage) ToCell() (*cell.Cell, error) {
+	b := cell.BeginCell()
+	b.MustStoreUInt(0, 1) // identification of int msg
+	b.MustStoreBoolBit(m.IHRDisabled)
+	b.MustStoreBoolBit(m.Bounce)
+	b.MustStoreBoolBit(m.Bounced)
+	b.MustStoreAddr(m.SrcAddr)
+	b.MustStoreAddr(m.DstAddr)
+	if m.Amount != nil {
+		b.MustStoreBigCoins(m.Amount.NanoTON())
+	} else {
+		b.MustStoreCoins(0)
+	}
+
+	if m.ExtraCurrencies != nil {
+		return nil, errors.New("extra currencies serialization is not supported yet")
+	}
+
+	if m.StateInit != nil {
+		return nil, errors.New("state init serialization is not supported yet")
+	}
+
+	b.MustStoreBoolBit(m.ExtraCurrencies != nil)
+
+	if m.IHRFee != nil {
+		b.MustStoreBigCoins(m.IHRFee.NanoTON())
+	} else {
+		b.MustStoreCoins(0)
+	}
+
+	if m.FwdFee != nil {
+		b.MustStoreBigCoins(m.FwdFee.NanoTON())
+	} else {
+		b.MustStoreCoins(0)
+	}
+
+	b.MustStoreUInt(m.CreatedLT, 64)
+	b.MustStoreUInt(uint64(m.CreatedAt), 32)
+	b.MustStoreBoolBit(m.StateInit != nil)
+
+	if m.Body != nil {
+		if b.BitsLeft() < m.Body.BitsSize() {
+			b.MustStoreBoolBit(true)
+			b.MustStoreRef(m.Body)
+		} else {
+			b.MustStoreBoolBit(false)
+			b.MustStoreBuilder(m.Body.ToBuilder())
+		}
+	} else {
+		// store 1 zero bit as body
+		b.MustStoreBoolBit(false)
+		b.MustStoreUInt(0, 1)
+	}
+
+	return b.EndCell(), nil
+}
+
 func (m *InternalMessage) Dump() string {
 	return fmt.Sprintf("Amount %s TON, Created at: %d, Created lt %d\nBounce: %t, Bounced %t, IHRDisabled %t\nSrcAddr: %s\nDstAddr: %s\nPayload: %s",
 		m.Amount.TON(), m.CreatedAt, m.CreatedLT, m.Bounce, m.Bounced, m.IHRDisabled, m.SrcAddr, m.DstAddr, m.Body.Dump())
 }
 
 func (m *ExternalMessageIn) LoadFromCell(loader *cell.LoadCell) error {
+	ident, err := loader.LoadUInt(2)
+	if err != nil {
+		return fmt.Errorf("failed to load identificator bit: %w", err)
+	}
+
+	if ident != 2 {
+		return fmt.Errorf("its not external in message")
+	}
+
 	srcAddr, err := loader.LoadAddr()
 	if err != nil {
 		return fmt.Errorf("failed to load src addr: %w", err)
@@ -276,8 +372,8 @@ func (m *ExternalMessageIn) LoadFromCell(loader *cell.LoadCell) error {
 
 	*m = ExternalMessageIn{
 		SrcAddr:   srcAddr,
-		DestAddr:  dstAddr,
-		ImportFee: Grams{ihrFee},
+		DstAddr:   dstAddr,
+		ImportFee: new(Grams).FromNanoTON(ihrFee),
 		StateInit: init,
 		Body:      body,
 	}
@@ -285,6 +381,15 @@ func (m *ExternalMessageIn) LoadFromCell(loader *cell.LoadCell) error {
 }
 
 func (m *ExternalMessageOut) LoadFromCell(loader *cell.LoadCell) error {
+	ident, err := loader.LoadUInt(2)
+	if err != nil {
+		return fmt.Errorf("failed to load identificator bit: %w", err)
+	}
+
+	if ident != 3 {
+		return fmt.Errorf("its not external out message")
+	}
+
 	srcAddr, err := loader.LoadAddr()
 	if err != nil {
 		return fmt.Errorf("failed to load src addr: %w", err)
@@ -312,7 +417,7 @@ func (m *ExternalMessageOut) LoadFromCell(loader *cell.LoadCell) error {
 
 	*m = ExternalMessageOut{
 		SrcAddr:   srcAddr,
-		DestAddr:  dstAddr,
+		DstAddr:   dstAddr,
 		CreatedLT: createdLt,
 		CreatedAt: uint32(createdAt),
 		StateInit: init,

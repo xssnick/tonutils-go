@@ -7,30 +7,44 @@ import (
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/liteclient/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 var ErrMessageNotAccepted = errors.New("message was not accepted by the contract")
 
 func (c *APIClient) SendExternalMessage(ctx context.Context, addr *address.Address, msg *cell.Cell) error {
-	return c.sendExternalMessage(ctx, addr, msg)
+	return c.SendExternalInitMessage(ctx, addr, msg, nil)
 }
 
-func (c *APIClient) sendExternalMessage(ctx context.Context, addr *address.Address, msg any) error {
+func (c *APIClient) SendExternalInitMessage(ctx context.Context, addr *address.Address, msg *cell.Cell, state *tlb.StateInit) error {
 	builder := cell.BeginCell().MustStoreUInt(0b10, 2).
 		MustStoreUInt(0b00, 2). // src addr_none
-		MustStoreAddr(addr). // dst addr
-		MustStoreCoins(0) // import fee 0
+		MustStoreAddr(addr).    // dst addr
+		MustStoreCoins(0)       // import fee 0
 
-	builder.MustStoreUInt(0, 1) // no state init
+	builder.MustStoreBoolBit(state != nil) // has state init
+	if state != nil {
+		stateCell, err := state.ToCell()
+		if err != nil {
+			return err
+		}
 
-	switch d := msg.(type) {
-	case []byte: // slice data
-		builder.MustStoreUInt(0, 1).MustStoreSlice(d, len(d)*8)
-	case *cell.Cell: // cell data
-		builder.MustStoreUInt(1, 1).MustStoreRef(d)
-	default:
-		return errors.New("unknown arg type")
+		if builder.BitsLeft()-2 < stateCell.BitsSize() || builder.RefsLeft()-2 < msg.RefsNum() {
+			builder.MustStoreBoolBit(true) // state as ref
+			builder.MustStoreRef(stateCell)
+		} else {
+			builder.MustStoreBoolBit(false) // state as slice
+			builder.MustStoreBuilder(stateCell.ToBuilder())
+		}
+	}
+
+	if builder.BitsLeft() < msg.BitsSize() || builder.RefsLeft() < msg.RefsNum() {
+		builder.MustStoreBoolBit(true) // body as ref
+		builder.MustStoreRef(msg)
+	} else {
+		builder.MustStoreBoolBit(false) // state as slice
+		builder.MustStoreBuilder(msg.ToBuilder())
 	}
 
 	req := builder.EndCell().ToBOCWithFlags(false)
@@ -42,7 +56,6 @@ func (c *APIClient) sendExternalMessage(ctx context.Context, addr *address.Addre
 
 	switch resp.TypeID {
 	case _SendMessageResult:
-		// TODO: mode
 		status := binary.LittleEndian.Uint32(resp.Data)
 
 		if status != 1 {
@@ -52,10 +65,6 @@ func (c *APIClient) sendExternalMessage(ctx context.Context, addr *address.Addre
 		return nil
 	case _LSError:
 		code := binary.LittleEndian.Uint32(resp.Data)
-		if code == 0 {
-			return ErrMessageNotAccepted
-		}
-
 		return fmt.Errorf("lite server error, code %d: %s", code, string(resp.Data[5:]))
 	}
 

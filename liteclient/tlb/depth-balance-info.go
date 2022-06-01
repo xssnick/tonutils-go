@@ -6,7 +6,7 @@ import (
 
 type DepthBalanceInfo struct {
 	Depth uint32
-	Coins Grams
+	Coins *Grams
 }
 
 func (d *DepthBalanceInfo) LoadFromCell(loader *cell.LoadCell) error {
@@ -35,7 +35,7 @@ func (d *DepthBalanceInfo) LoadFromCell(loader *cell.LoadCell) error {
 	}
 
 	d.Depth = uint32(depth)
-	d.Coins = Grams{val: grams}
+	d.Coins = new(Grams).FromNanoTON(grams)
 
 	return nil
 }
