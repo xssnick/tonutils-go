@@ -19,7 +19,7 @@ const (
 type AccountStorage struct {
 	Status            AccountStatus
 	LastTransactionLT uint64
-	Balance           Grams
+	Balance           *Grams
 }
 
 type StorageUsed struct {
@@ -175,7 +175,7 @@ func (s *AccountStorage) LoadFromCell(loader *cell.LoadCell) error {
 	}
 
 	s.LastTransactionLT = lastTransaction
-	s.Balance = Grams{coins}
+	s.Balance = new(Grams).FromNanoTON(coins)
 
 	return nil
 }

@@ -383,19 +383,7 @@ func (cn *connection) queryADNL(qid, payload []byte) error {
 	binary.LittleEndian.PutUint32(data, uint32(t))
 
 	data = append(data, qid...)
-	if len(payload) >= 0xFE {
-		ln := make([]byte, 4)
-		binary.LittleEndian.PutUint32(data, uint32(len(payload)<<8)|0xFE)
-		data = append(data, ln...)
-	} else {
-		data = append(data, byte(len(payload)))
-	}
-	data = append(data, payload...)
-
-	left := len(data) % 4
-	if left != 0 {
-		data = append(data, make([]byte, 4-left)...)
-	}
+	data = append(data, storableBytes(payload)...)
 
 	return cn.send(data)
 }
@@ -404,26 +392,34 @@ func (cn *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) 
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
 
-	if len(payload) >= 0xFE {
-		ln := make([]byte, 4)
-		binary.LittleEndian.PutUint32(data, uint32((len(payload)+4)<<8)|0xFE)
-		data = append(data, ln...)
-	} else {
-		data = append(data, byte(len(payload)+4))
-	}
-
 	typData := make([]byte, 4)
 	binary.LittleEndian.PutUint32(typData, uint32(typeID))
 
-	data = append(data, typData...)
-	data = append(data, payload...)
-
-	left := len(data) % 4
-	if left != 0 {
-		data = append(data, make([]byte, 4-left)...)
-	}
+	data = append(data, storableBytes(append(typData, payload...))...)
 
 	return cn.queryADNL(qid, data)
+}
+
+func storableBytes(buf []byte) []byte {
+	var data []byte
+
+	// store buf length
+	if len(buf) >= 0xFE {
+		ln := make([]byte, 4)
+		binary.LittleEndian.PutUint32(ln, uint32(len(buf)<<8)|0xFE)
+		data = append(data, ln...)
+	} else {
+		data = append(data, byte(len(buf)))
+	}
+
+	data = append(data, buf...)
+
+	// adjust actual length to fit % 4 = 0
+	if round := len(data) % 4; round != 0 {
+		data = append(data, make([]byte, 4-round)...)
+	}
+
+	return data
 }
 
 func (c *Client) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {
