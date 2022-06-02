@@ -77,7 +77,7 @@ func (c *Cell) dump(deep int, bin bool) string {
 		val = hex.EncodeToString(data)
 	}
 
-	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
+	str := strings.Repeat("  ", deep) + "{" + fmt.Sprint(deep) + "}" + fmt.Sprint(sz) + "[" + val + "]"
 	if len(c.refs) > 0 {
 		str += " -> {"
 		for i, ref := range c.refs {

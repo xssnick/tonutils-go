@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"hash/crc32"
+	"math"
 
 	"github.com/xssnick/tonutils-go/tvm/boc"
 )
@@ -22,7 +23,7 @@ func (c *Cell) ToBOC() []byte {
 
 func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	// recursively go through cells, build hash index and store unique in slice
-	orderCells := c.doIndex()
+	orderCells := flattenIndex([]*Cell{c})
 
 	var payload []byte
 	for i := 0; i < len(orderCells); i++ {
@@ -31,16 +32,12 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	}
 
 	// bytes needed to store len of payload
-	sizeBytes := byte(len(payload) / 256)
-	if sizeBytes == 0 || len(payload)%256 != 0 {
-		sizeBytes++
-	}
+	sizeBits := math.Log2(float64(len(payload)))
+	sizeBytes := byte(math.Ceil(sizeBits / 8))
 
 	// bytes needed to store num of cells
-	cellSizeBytes := byte(len(orderCells) / 256)
-	if len(orderCells)%256 != 0 {
-		cellSizeBytes++
-	}
+	cellSizeBits := math.Log2(float64(len(orderCells)))
+	cellSizeBytes := byte(math.Ceil(cellSizeBits / 8))
 
 	// has_idx 1bit, hash_crc32 1bit,  has_cache_bits 1bit, flags 2bit, size_bytes 3 bit
 	flags := byte(0b0_0_0_00_000)
@@ -100,38 +97,47 @@ func uniqCells(m map[string]*Cell, cell *Cell) {
 	}
 }
 
-func (c *Cell) doIndex() []*Cell {
-	var index int
+func flattenIndex(roots []*Cell) []*Cell {
+	var indexed []*Cell
+	var offset int
 	hashIndex := map[string]int{}
-	var orderCells []*Cell
 
-	// recursively go through cells, build hash index and store unique in slice
-	var indexCells func(cl *Cell)
-	indexCells = func(cl *Cell) {
-		h := hex.EncodeToString(cl.Hash())
+	var doIndex func([]*Cell) []*Cell
+	doIndex = func(cells []*Cell) []*Cell {
+		var next [][]*Cell
+		for _, c := range cells {
+			h := hex.EncodeToString(c.Hash())
 
-		id, ok := hashIndex[h]
-		if !ok {
-			id = index
-			index++
+			id, ok := hashIndex[h]
+			if !ok {
+				id = offset
+				offset++
 
-			hashIndex[h] = id
-			orderCells = append(orderCells, cl)
+				hashIndex[h] = id
+
+				indexed = append(indexed, c)
+				if len(c.refs) > 0 {
+					next = append(next, c.refs)
+				}
+			}
+			c.index = id
 		}
-		cl.index = id
 
-		for i := range cl.refs {
-			indexCells(cl.refs[i])
+		for _, n := range next {
+			doIndex(n)
 		}
+
+		// return ordered cells to write to boc
+		return indexed
 	}
-	indexCells(c)
+	doIndex(roots)
 
-	return orderCells
+	return indexed
 }
 
 func (c *Cell) serialize(isHash bool) []byte {
 	// copy
-	payload := append([]byte{}, c.data...)
+	payload := append([]byte{}, c.BeginParse().MustLoadSlice(c.bitsSz)...)
 
 	unusedBits := 8 - (c.bitsSz % 8)
 	if unusedBits != 8 {
