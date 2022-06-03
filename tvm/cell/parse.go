@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"hash/crc32"
 
-	"github.com/xssnick/tonutils-go/tvm/boc"
+	"github.com/xssnick/tonutils-go/utils"
 )
 
-func dynInt(data []byte) int {
-	tmp := make([]byte, 8)
-	copy(tmp[8-len(data):], data)
+var bocMagic = []byte{0xB5, 0xEE, 0x9C, 0x72}
 
-	return int(binary.BigEndian.Uint64(tmp))
+type bocFlags struct {
+	hasIndex     bool
+	HasCrc32c    bool
+	hasCacheBits bool
 }
 
 func FromBOC(data []byte) (*Cell, error) {
@@ -33,12 +34,12 @@ func FromBOCMultiRoot(data []byte) ([]Cell, error) {
 
 	r := newReader(data)
 
-	if !bytes.Equal(r.MustReadBytes(4), boc.Magic) {
+	if !bytes.Equal(r.MustReadBytes(4), bocMagic) {
 		return nil, errors.New("invalid boc magic header")
 	}
 
-	flags, cellNumSizeBytes := boc.ParseFlags(r.MustReadByte()) // has_idx:(## 1) has_crc32c:(## 1)  has_cache_bits:(## 1) flags:(## 2) { flags = 0 } size:(## 3) { size <= 4 }
-	dataSizeBytes := int(r.MustReadByte())                      // off_bytes:(## 8) { off_bytes <= 8 }
+	flags, cellNumSizeBytes := parseBOCFlags(r.MustReadByte()) // has_idx:(## 1) has_crc32c:(## 1)  has_cache_bits:(## 1) flags:(## 2) { flags = 0 } size:(## 3) { size <= 4 }
+	dataSizeBytes := int(r.MustReadByte())                     // off_bytes:(## 8) { off_bytes <= 8 }
 
 	cellsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) // cells:(##(size * 8))
 	rootsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) // roots:(##(size * 8)) { roots >= 1 }
@@ -67,7 +68,7 @@ func FromBOCMultiRoot(data []byte) ([]Cell, error) {
 		return nil, fmt.Errorf("failed to read paylooad, want %d, has %d", dataLen, r.LeftLen())
 	}
 
-	cll, err := parseCells(rootsNum, cellsNum, payload)
+	cll, err := parseCells(rootsNum, cellsNum, cellNumSizeBytes, payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse paylooad: %w", err)
 	}
@@ -75,7 +76,7 @@ func FromBOCMultiRoot(data []byte) ([]Cell, error) {
 	return cll, nil
 }
 
-func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
+func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte) ([]Cell, error) {
 	r := newReader(data)
 
 	cells := make([]Cell, cellsNum)
@@ -89,8 +90,7 @@ func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
 		}
 
 		// len(self.refs) + self.is_special() * 8 + self.level() * 32
-		// TODO: levels and special support
-		refsNum := flags & 0b111
+		refsNum := int(flags & 0b111)
 		special := (flags & 0b1000) != 0
 		level := flags >> 5
 
@@ -107,9 +107,14 @@ func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
 			return nil, errors.New("failed to parse cell payload, corrupted data")
 		}
 
-		refsIndex, err := r.ReadBytes(int(refsNum))
-		if err != nil {
-			return nil, errors.New("failed to parse cell references, corrupted data")
+		refsIndex := make([]int, 0, refsNum)
+		for y := 0; y < refsNum; y++ {
+			refIndex, err := r.ReadBytes(refSzBytes)
+			if err != nil {
+				return nil, errors.New("failed to parse cell references, corrupted data")
+			}
+
+			refsIndex = append(refsIndex, dynInt(refIndex))
 		}
 
 		refs := make([]*Cell, len(refsIndex))
@@ -156,4 +161,19 @@ func parseCells(rootsNum, cellsNum int, data []byte) ([]Cell, error) {
 	}
 
 	return roots, nil
+}
+
+func parseBOCFlags(data byte) (bocFlags, int) {
+	return bocFlags{
+		hasIndex:     utils.HasBit(data, 7),
+		HasCrc32c:    utils.HasBit(data, 6),
+		hasCacheBits: utils.HasBit(data, 5),
+	}, int(data & 0b00000111)
+}
+
+func dynInt(data []byte) int {
+	tmp := make([]byte, 8)
+	copy(tmp[8-len(data):], data)
+
+	return int(binary.BigEndian.Uint64(tmp))
 }
