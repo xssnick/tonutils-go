@@ -96,7 +96,7 @@ func (c *Cell) dump(deep int, bin bool) string {
 
 func (c *Cell) Hash() []byte {
 	hash := sha256.New()
-	hash.Write(c.serialize(true))
+	hash.Write(c.serialize(-1, true))
 	return hash.Sum(nil)
 }
 

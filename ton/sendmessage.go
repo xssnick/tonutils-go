@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/utils"
 )
 
 var ErrMessageNotAccepted = errors.New("message was not accepted by the contract")
@@ -49,7 +50,7 @@ func (c *APIClient) SendExternalInitMessage(ctx context.Context, addr *address.A
 
 	req := builder.EndCell().ToBOCWithFlags(false)
 
-	resp, err := c.client.Do(ctx, _SendMessage, storableBytes(req))
+	resp, err := c.client.Do(ctx, _SendMessage, utils.TLBytes(req))
 	if err != nil {
 		return err
 	}

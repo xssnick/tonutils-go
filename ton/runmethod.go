@@ -11,6 +11,7 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/utils"
 )
 
 func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error) {
@@ -109,7 +110,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 	req := builder.EndCell().ToBOCWithFlags(false)
 
 	// param
-	data = append(data, storableBytes(req)...)
+	data = append(data, utils.TLBytes(req)...)
 
 	resp, err := c.client.Do(ctx, _RunContractGetMethod, data)
 	if err != nil {

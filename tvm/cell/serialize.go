@@ -5,8 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"hash/crc32"
-
-	"github.com/xssnick/tonutils-go/tvm/boc"
+	"math"
 )
 
 var ErrTooBigValue = errors.New("too big value")
@@ -22,25 +21,21 @@ func (c *Cell) ToBOC() []byte {
 
 func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	// recursively go through cells, build hash index and store unique in slice
-	orderCells := c.doIndex()
+	orderCells := flattenIndex([]*Cell{c})
+
+	// bytes needed to store num of cells
+	cellSizeBits := math.Log2(float64(len(orderCells)))
+	cellSizeBytes := byte(math.Ceil(cellSizeBits / 8))
 
 	var payload []byte
 	for i := 0; i < len(orderCells); i++ {
 		// serialize each cell
-		payload = append(payload, orderCells[i].serialize(false)...)
+		payload = append(payload, orderCells[i].serialize(int(cellSizeBytes), false)...)
 	}
 
 	// bytes needed to store len of payload
-	sizeBytes := byte(len(payload) / 256)
-	if sizeBytes == 0 || len(payload)%256 != 0 {
-		sizeBytes++
-	}
-
-	// bytes needed to store num of cells
-	cellSizeBytes := byte(len(orderCells) / 256)
-	if len(orderCells)%256 != 0 {
-		cellSizeBytes++
-	}
+	sizeBits := math.Log2(float64(len(payload)))
+	sizeBytes := byte(math.Ceil(sizeBits / 8))
 
 	// has_idx 1bit, hash_crc32 1bit,  has_cache_bits 1bit, flags 2bit, size_bytes 3 bit
 	flags := byte(0b0_0_0_00_000)
@@ -52,7 +47,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 
 	var data []byte
 
-	data = append(data, boc.Magic...)
+	data = append(data, bocMagic...)
 	data = append(data, flags)
 
 	// bytes needed to store size
@@ -62,16 +57,16 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	data = append(data, dynamicIntBytes(uint64(calcCells(c)), int(cellSizeBytes))...)
 
 	// roots num (only 1 supported for now)
-	data = append(data, 1)
+	data = append(data, dynamicIntBytes(1, int(cellSizeBytes))...)
 
 	// complete BOCs = 0
-	data = append(data, 0)
+	data = append(data, dynamicIntBytes(0, int(cellSizeBytes))...)
 
 	// len of data
 	data = append(data, dynamicIntBytes(uint64(len(payload)), int(sizeBytes))...)
 
 	// root should have index 0
-	data = append(data, 0)
+	data = append(data, dynamicIntBytes(0, int(cellSizeBytes))...)
 	data = append(data, payload...)
 
 	if withCRC {
@@ -100,38 +95,47 @@ func uniqCells(m map[string]*Cell, cell *Cell) {
 	}
 }
 
-func (c *Cell) doIndex() []*Cell {
-	var index int
+func flattenIndex(roots []*Cell) []*Cell {
+	var indexed []*Cell
+	var offset int
 	hashIndex := map[string]int{}
-	var orderCells []*Cell
 
-	// recursively go through cells, build hash index and store unique in slice
-	var indexCells func(cl *Cell)
-	indexCells = func(cl *Cell) {
-		h := hex.EncodeToString(cl.Hash())
+	var doIndex func([]*Cell) []*Cell
+	doIndex = func(cells []*Cell) []*Cell {
+		var next [][]*Cell
+		for _, c := range cells {
+			h := hex.EncodeToString(c.Hash())
 
-		id, ok := hashIndex[h]
-		if !ok {
-			id = index
-			index++
+			id, ok := hashIndex[h]
+			if !ok {
+				id = offset
+				offset++
 
-			hashIndex[h] = id
-			orderCells = append(orderCells, cl)
+				hashIndex[h] = id
+
+				indexed = append(indexed, c)
+				if len(c.refs) > 0 {
+					next = append(next, c.refs)
+				}
+			}
+			c.index = id
 		}
-		cl.index = id
 
-		for i := range cl.refs {
-			indexCells(cl.refs[i])
+		for _, n := range next {
+			doIndex(n)
 		}
+
+		// return ordered cells to write to boc
+		return indexed
 	}
-	indexCells(c)
+	doIndex(roots)
 
-	return orderCells
+	return indexed
 }
 
-func (c *Cell) serialize(isHash bool) []byte {
+func (c *Cell) serialize(refIndexSzBytes int, isHash bool) []byte {
 	// copy
-	payload := append([]byte{}, c.data...)
+	payload := append([]byte{}, c.BeginParse().MustLoadSlice(c.bitsSz)...)
 
 	unusedBits := 8 - (c.bitsSz % 8)
 	if unusedBits != 8 {
@@ -143,7 +147,7 @@ func (c *Cell) serialize(isHash bool) []byte {
 
 	if !isHash {
 		for _, ref := range c.refs {
-			data = append(data, byte(ref.index))
+			data = append(data, dynamicIntBytes(uint64(ref.index), refIndexSzBytes)...)
 		}
 	} else {
 		for _, ref := range c.refs {
