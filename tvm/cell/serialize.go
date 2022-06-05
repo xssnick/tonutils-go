@@ -24,7 +24,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	orderCells := flattenIndex([]*Cell{c})
 
 	// bytes needed to store num of cells
-	cellSizeBits := math.Log2(float64(len(orderCells)))
+	cellSizeBits := math.Log2(float64(len(orderCells))) + 1
 	cellSizeBytes := byte(math.Ceil(cellSizeBits / 8))
 
 	var payload []byte
@@ -34,7 +34,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	}
 
 	// bytes needed to store len of payload
-	sizeBits := math.Log2(float64(len(payload)))
+	sizeBits := math.Log2(float64(len(payload))) + 1
 	sizeBytes := byte(math.Ceil(sizeBits / 8))
 
 	// has_idx 1bit, hash_crc32 1bit,  has_cache_bits 1bit, flags 2bit, size_bytes 3 bit
