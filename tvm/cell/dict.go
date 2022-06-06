@@ -8,6 +8,7 @@ import (
 
 type Dictionary struct {
 	storage map[string]*Cell
+	keySz   int
 }
 
 type HashmapKV struct {
@@ -18,6 +19,7 @@ type HashmapKV struct {
 func (c *LoadCell) LoadDict(keySz int) (*Dictionary, error) {
 	d := Dictionary{
 		storage: map[string]*Cell{},
+		keySz:   keySz,
 	}
 
 	err := d.mapInner(keySz, keySz, c, BeginCell())
@@ -29,7 +31,12 @@ func (c *LoadCell) LoadDict(keySz int) (*Dictionary, error) {
 }
 
 func (d *Dictionary) Get(key *Cell) *Cell {
-	return d.storage[hex.EncodeToString(key.Hash())]
+	data, err := key.BeginParse().LoadSlice(d.keySz)
+	if err != nil {
+		return nil
+	}
+
+	return d.storage[hex.EncodeToString(data)]
 }
 
 func (d *Dictionary) All() []HashmapKV {
@@ -81,7 +88,7 @@ func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *LoadCell, keyPrefix 
 	}
 
 	// add node to map
-	d.storage[hex.EncodeToString(keyPrefix.EndCell().Hash())] = loader.MustToCell()
+	d.storage[hex.EncodeToString(keyPrefix.EndCell().BeginParse().MustLoadSlice(keySz))] = loader.MustToCell()
 
 	return nil
 }

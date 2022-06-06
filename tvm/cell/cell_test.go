@@ -3,6 +3,7 @@ package cell
 import (
 	"bytes"
 	"encoding/hex"
+	"math/big"
 	"testing"
 )
 
@@ -15,6 +16,8 @@ func TestCell_Hash(t *testing.T) {
 	b, _ := hex.DecodeString("bb2509fe3cff8f1faae19213774d218c018f9616cd397850c8ad9038db84eaa9")
 
 	if !bytes.Equal(cc.Hash(), b) {
+		t.Log(hex.EncodeToString(cc.Hash()))
+		t.Log(hex.EncodeToString(b))
 		t.Fatal("hash diff")
 	}
 }
@@ -31,6 +34,22 @@ func TestBOC(t *testing.T) {
 	boc := c.ToBOCWithFlags(false)
 
 	if str != hex.EncodeToString(boc) {
+		t.Log(str)
+		t.Log(hex.EncodeToString(boc))
+		t.Fatal("boc not same")
+	}
+}
+
+func TestSmallBOC(t *testing.T) {
+	str := "b5ee9c72010101010002000000"
+
+	c := BeginCell().EndCell()
+
+	boc := c.ToBOCWithFlags(false)
+
+	if str != hex.EncodeToString(boc) {
+		t.Log(str)
+		t.Log(hex.EncodeToString(boc))
 		t.Fatal("boc not same")
 	}
 }
@@ -48,5 +67,25 @@ func TestBOCWithCRC(t *testing.T) {
 
 	if str != hex.EncodeToString(boc) {
 		t.Fatal("boc not same")
+	}
+}
+
+func TestCell_Hash1(t *testing.T) {
+	emptyHash, _ := new(big.Int).SetString("68134197439415885698044414435951397869210496020759160419881882418413283430343", 10)
+
+	if !bytes.Equal(BeginCell().EndCell().Hash(), emptyHash.Bytes()) {
+		t.Fatal("empty cell hash incorrect")
+		return
+	}
+
+	refRef57bitsHash, _ := new(big.Int).SetString("111217512120054409408353636830563617100690868120902564345366655075146083288188", 10)
+
+	if !bytes.Equal(BeginCell().MustStoreUInt(7, 5).MustStoreRef(
+		BeginCell().MustStoreRef(
+			BeginCell().MustStoreUInt(777777888, 57).EndCell(),
+		).EndCell(),
+	).EndCell().Hash(), refRef57bitsHash.Bytes()) {
+		t.Fatal("refRef57bits cell hash incorrect")
+		return
 	}
 }
