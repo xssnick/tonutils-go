@@ -38,10 +38,13 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Status: %s\n", res.State.Status)
-	fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
-	if res.Data != nil {
-		fmt.Printf("Data: %s\n", res.Data.Dump())
+	fmt.Printf("Is active: %v\n", res.IsActive)
+	if res.IsActive {
+		fmt.Printf("Status: %s\n", res.State.Status)
+		fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
+		if res.Data != nil {
+			fmt.Printf("Data: %s\n", res.Data.Dump())
+		}
 	}
 
 	// take last tx info from account info
