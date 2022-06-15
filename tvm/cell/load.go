@@ -26,7 +26,6 @@ func (c *LoadCell) MustLoadRef() *LoadCell {
 	if err != nil {
 		panic(err)
 	}
-
 	return r
 }
 
@@ -40,8 +39,43 @@ func (c *LoadCell) LoadRef() (*LoadCell, error) {
 	return ref, nil
 }
 
+func (c *LoadCell) MustLoadMaybeRef() *LoadCell {
+	r, err := c.LoadMaybeRef()
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
+func (c *LoadCell) LoadMaybeRef() (*LoadCell, error) {
+	has, err := c.LoadBoolBit()
+	if err != nil {
+		return nil, err
+	}
+
+	if !has {
+		return nil, nil
+	}
+
+	if len(c.refs) == 0 {
+		return nil, ErrNoMoreRefs
+	}
+	ref := c.refs[0]
+	c.refs = c.refs[1:]
+
+	return ref, nil
+}
+
 func (c *LoadCell) RefsNum() int {
 	return len(c.refs)
+}
+
+func (c *LoadCell) MustLoadCoins() uint64 {
+	r, err := c.LoadCoins()
+	if err != nil {
+		panic(err)
+	}
+	return r
 }
 
 func (c *LoadCell) LoadCoins() (uint64, error) {
@@ -49,8 +83,15 @@ func (c *LoadCell) LoadCoins() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-
 	return value.Uint64(), nil
+}
+
+func (c *LoadCell) MustLoadBigCoins() *big.Int {
+	r, err := c.LoadBigCoins()
+	if err != nil {
+		panic(err)
+	}
+	return r
 }
 
 func (c *LoadCell) LoadBigCoins() (*big.Int, error) {
@@ -84,12 +125,28 @@ func (c *LoadCell) LoadUInt(sz int) (uint64, error) {
 	return res.Uint64(), nil
 }
 
+func (c *LoadCell) MustLoadBoolBit() bool {
+	r, err := c.LoadBoolBit()
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
 func (c *LoadCell) LoadBoolBit() (bool, error) {
 	res, err := c.LoadBigInt(1)
 	if err != nil {
 		return false, err
 	}
 	return res.Uint64() == 1, nil
+}
+
+func (c *LoadCell) MustLoadBigInt(sz int) *big.Int {
+	r, err := c.LoadBigInt(sz)
+	if err != nil {
+		panic(err)
+	}
+	return r
 }
 
 func (c *LoadCell) LoadBigInt(sz int) (*big.Int, error) {

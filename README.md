@@ -1,4 +1,6 @@
 # tonutils-go
+![Coverage](https://img.shields.io/badge/Coverage-45.3%25-yellow)
+
 Golang library for interacting with TON blockchain.
 
 This library is native golang implementation of ADNL and lite protocol. It works like connection pool and can be connected to multiple lite servers in the same time, balancing is done on lib side.
@@ -224,6 +226,6 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Wallet operations
 * Payment processing
 * ✅ Cell dictionaries support
-* MustLoad methods
+* ✅ MustLoad methods
 * Event subscriptions
 * Parse global config json
