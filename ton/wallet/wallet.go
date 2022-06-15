@@ -144,3 +144,31 @@ func (w *Wallet) Transfer(ctx context.Context, to *address.Address, amount *tlb.
 		Body:        body,
 	})
 }
+
+func (w *Wallet) DeployContract(ctx context.Context, amount *tlb.Grams, body, code, data *cell.Cell) (*address.Address, error) {
+	state := &tlb.StateInit{
+		Data: data,
+		Code: code,
+	}
+
+	stateCell, err := state.ToCell()
+	if err != nil {
+		return nil, err
+	}
+
+	addr := address.NewAddress(0, 0, stateCell.Hash())
+
+	err = w.Send(ctx, 1, &tlb.InternalMessage{
+		IHRDisabled: true,
+		Bounce:      false,
+		DstAddr:     addr,
+		Amount:      amount,
+		Body:        body,
+		StateInit:   state,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return addr, nil
+}

@@ -3,7 +3,10 @@ package tlb
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
+	"strconv"
+	"strings"
 )
 
 type Grams big.Int
@@ -33,19 +36,78 @@ func (g *Grams) MustFromTON(val string) *Grams {
 	return v
 }
 
+func MustFromTON(val string) *Grams {
+	v, err := new(Grams).FromTON(val)
+	if err != nil {
+		panic(err)
+		return nil
+	}
+	return v
+}
+
+func FromTON(val string) (*Grams, error) {
+	return new(Grams).FromTON(val)
+}
+
+func FromNanoTON(val *big.Int) *Grams {
+	return new(Grams).FromNanoTON(val)
+}
+
+func FromNanoTONU(val uint64) *Grams {
+	return new(Grams).FromNanoTON(new(big.Int).SetUint64(val))
+}
+
 func (g *Grams) FromTON(val string) (*Grams, error) {
-	f, ok := new(big.Float).SetString(val)
-	if !ok {
-		return nil, errors.New("invalid string")
+	errInvalid := errors.New("invalid string")
+
+	s := strings.SplitN(val, ".", 2)
+
+	if len(s) == 0 {
+		return nil, errInvalid
 	}
 
-	f = f.Mul(f, new(big.Float).SetUint64(1000000000))
-	i, _ := f.Int(new(big.Int))
+	hi, ok := new(big.Int).SetString(s[0], 10)
+	if !ok {
+		return nil, errInvalid
+	}
 
-	*g = Grams(*i)
+	hi = hi.Mul(hi, new(big.Int).SetUint64(1000000000))
+
+	if len(s) == 2 {
+		loStr := s[1]
+		// lo can have max 9 digits for ton
+		if len(loStr) > 9 {
+			loStr = loStr[:9]
+		}
+
+		leadZeroes := 0
+		for _, sym := range loStr {
+			if sym != '0' {
+				break
+			}
+			leadZeroes++
+		}
+
+		lo, err := strconv.ParseUint(loStr, 10, 64)
+		if err != nil {
+			return nil, errInvalid
+		}
+
+		// log10 of 1 == 0, log10 of 10 = 1, so we need offset
+		digits := int(math.Ceil(math.Log10(float64(lo + 1))))
+		lo *= uint64(math.Pow10((9 - leadZeroes) - digits))
+
+		hi = hi.Add(hi, new(big.Int).SetUint64(lo))
+	}
+
+	*g = Grams(*hi)
 	return g, nil
 }
 
 func (g *Grams) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%q", g.TON())), nil
+	return []byte(fmt.Sprintf("%s", g.NanoTON().String())), nil
+}
+
+func (g *Grams) String() string {
+	return g.TON()
 }

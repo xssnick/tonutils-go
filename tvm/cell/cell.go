@@ -28,10 +28,11 @@ func (c *Cell) BeginParse() *LoadCell {
 	}
 
 	return &LoadCell{
-		bitsSz:   c.bitsSz,
-		loadedSz: 0,
-		data:     data,
-		refs:     refs,
+		special: c.special,
+		level:   c.level,
+		bitsSz:  c.bitsSz,
+		data:    data,
+		refs:    refs,
 	}
 }
 
