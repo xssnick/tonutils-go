@@ -7,6 +7,8 @@ This library is native golang implementation of ADNL and lite protocol. It works
 
 Its concurrent safe and can be used from multiple goroutines.
 
+If you have any questions or suggestions you can join our Telegram chat https://t.me/tonutils
+
 **This library is under active development**, so more cool features will come soon! Also, if you have some idea of useful functionality, just open issue with description or even pull request! 
 
 ## How to use
