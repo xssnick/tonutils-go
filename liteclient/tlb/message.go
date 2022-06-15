@@ -296,10 +296,6 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 		return nil, errors.New("extra currencies serialization is not supported yet")
 	}
 
-	if m.StateInit != nil {
-		return nil, errors.New("state init serialization is not supported yet")
-	}
-
 	b.MustStoreBoolBit(m.ExtraCurrencies != nil)
 
 	if m.IHRFee != nil {
@@ -317,6 +313,15 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	b.MustStoreUInt(m.CreatedLT, 64)
 	b.MustStoreUInt(uint64(m.CreatedAt), 32)
 	b.MustStoreBoolBit(m.StateInit != nil)
+	if m.StateInit != nil {
+		stateCell, err := m.StateInit.ToCell()
+		if err != nil {
+			return nil, err
+		}
+
+		b.MustStoreBoolBit(true)
+		b.MustStoreRef(stateCell)
+	}
 
 	if m.Body != nil {
 		if b.BitsLeft() < m.Body.BitsSize() {

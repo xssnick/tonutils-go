@@ -117,8 +117,21 @@ func flattenIndex(roots []*Cell) []*Cell {
 				if len(c.refs) > 0 {
 					next = append(next, c.refs)
 				}
+			} else { // if we already have such cell, we need to move it forward in order.
+				// move to end
+				indexed = append(indexed, indexed[id])
+
+				// remove from old position
+				indexed = append(indexed[:id], indexed[id+1:]...)
+
+				// reindex
+				for i, ci := range indexed {
+					// TODO: optimize
+					th := hex.EncodeToString(ci.Hash())
+
+					hashIndex[th] = i
+				}
 			}
-			c.index = id
 		}
 
 		for _, n := range next {
@@ -129,6 +142,19 @@ func flattenIndex(roots []*Cell) []*Cell {
 		return indexed
 	}
 	doIndex(roots)
+
+	// we need to do it this way because we can have same cells but 2 diff object pointers
+	var indexSetter func(node *Cell)
+	indexSetter = func(node *Cell) {
+		node.index = hashIndex[hex.EncodeToString(node.Hash())]
+		for _, ref := range node.refs {
+			indexSetter(ref)
+		}
+	}
+
+	for _, root := range roots {
+		indexSetter(root)
+	}
 
 	return indexed
 }

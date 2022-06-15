@@ -41,7 +41,7 @@ func (a *Address) String() string {
 	}
 
 	if !nonZero {
-		return "EMPTY"
+		return "NONE"
 	}
 
 	var address [36]byte

@@ -167,6 +167,31 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 	return nil
 }
 
+func (b *Builder) MustStoreMaybeRef(ref *Cell) *Builder {
+	err := b.StoreMaybeRef(ref)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) StoreMaybeRef(ref *Cell) error {
+	if ref == nil {
+		return b.StoreUInt(0, 1)
+	}
+
+	// we need early checks to do 2 stores atomically
+	if len(b.refs) > 4 {
+		return ErrTooMuchRefs
+	}
+	if b.bitsSz+1 >= 1024 {
+		return ErNotFit1024
+	}
+
+	b.MustStoreUInt(1, 1).MustStoreRef(ref)
+	return nil
+}
+
 func (b *Builder) MustStoreRef(ref *Cell) *Builder {
 	err := b.StoreRef(ref)
 	if err != nil {

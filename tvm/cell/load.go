@@ -10,6 +10,8 @@ import (
 )
 
 type LoadCell struct {
+	special  bool
+	level    byte
 	bitsSz   int
 	loadedSz int
 	data     []byte
@@ -205,6 +207,14 @@ func (c *LoadCell) LoadSlice(sz int) ([]byte, error) {
 	return loadedData, nil
 }
 
+func (c *LoadCell) MustLoadAddr() *address.Address {
+	a, err := c.LoadAddr()
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
 func (c *LoadCell) LoadAddr() (*address.Address, error) {
 	typ, err := c.LoadUInt(2)
 	if err != nil {
@@ -310,8 +320,10 @@ func (c *LoadCell) ToCell() (*Cell, error) {
 	}
 
 	return &Cell{
-		bitsSz: left,
-		data:   data,
-		refs:   refs,
+		special: c.special,
+		level:   c.level,
+		bitsSz:  left,
+		data:    data,
+		refs:    refs,
 	}, nil
 }
