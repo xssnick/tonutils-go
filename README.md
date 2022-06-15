@@ -226,6 +226,6 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Wallet operations
 * Payment processing
 * ✅ Cell dictionaries support
-* MustLoad methods
+* ✅ MustLoad methods
 * Event subscriptions
 * Parse global config json
