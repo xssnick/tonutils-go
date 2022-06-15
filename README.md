@@ -220,7 +220,7 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Get account state method
 * ✅ Send external message
 * ✅ Get transactions
-* Deploy contracts
+* ✅ Deploy contracts
 * ✅ Wallet operations
 * Payment processing
 * ✅ Cell dictionaries support
