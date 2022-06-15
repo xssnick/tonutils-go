@@ -239,7 +239,8 @@ func (b *Builder) StoreSlice(bytes []byte, sz int) error {
 	leftSz := sz
 	unusedBits := 8 - (b.bitsSz % 8)
 
-	for i := range bytes {
+	offset := 0
+	for leftSz > 0 {
 		bits := 8
 		if leftSz < 8 {
 			bits = leftSz
@@ -248,14 +249,17 @@ func (b *Builder) StoreSlice(bytes []byte, sz int) error {
 
 		// if previous byte was not filled, we need to move bits to fill it
 		if unusedBits != 8 {
-			b.data[len(b.data)-1] += bytes[i] >> (8 - unusedBits)
+			b.data[len(b.data)-1] += bytes[offset] >> (8 - unusedBits)
 			if bits > unusedBits {
-				b.data = append(b.data, bytes[i]<<unusedBits)
+				b.data = append(b.data, bytes[offset]<<unusedBits)
 			}
+			offset++
 			continue
 		}
 
-		b.data = append(b.data, bytes[i])
+		// clear unused part of byte if needed
+		b.data = append(b.data, bytes[offset]&(0xFF<<(8-bits)))
+		offset++
 	}
 
 	b.bitsSz += sz

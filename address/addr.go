@@ -11,12 +11,12 @@ import (
 )
 
 type Address struct {
-	flags     AddressFlags
+	flags     flags
 	workchain byte
 	data      []byte
 }
 
-type AddressFlags struct {
+type flags struct {
 	bounceable bool
 	testnet    bool
 }
@@ -25,22 +25,24 @@ func NewAddress(flags byte, workchain byte, data []byte) *Address {
 	// TODO: all types of addrs
 	// TODO: flags parse
 	return &Address{
-		flags:     ParseFlags(flags),
+		flags:     parseFlags(flags),
 		workchain: workchain,
 		data:      data,
 	}
 }
 
-func (a *Address) String() string {
-	var nonZero bool
+func (a *Address) IsAddrNone() bool {
 	for _, b := range a.data {
 		if b != 0 {
-			nonZero = true
-			break
+			return false
 		}
 	}
 
-	if !nonZero {
+	return true
+}
+
+func (a *Address) String() string {
+	if a.IsAddrNone() {
 		return "NONE"
 	}
 
@@ -74,8 +76,8 @@ func (a *Address) FlagsToByte() (flags byte) {
 	return flags
 }
 
-func ParseFlags(data byte) AddressFlags {
-	return AddressFlags{
+func parseFlags(data byte) flags {
+	return flags{
 		bounceable: !utils.HasBit(data, 6),
 		testnet:    utils.HasBit(data, 7),
 	}
