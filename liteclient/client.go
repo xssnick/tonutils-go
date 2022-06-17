@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,13 +27,13 @@ type LiteRequest struct {
 }
 
 type Client struct {
-	activeReqs map[string]*LiteRequest
-	mx         sync.RWMutex
+	activeReqs  map[string]*LiteRequest
+	activeNodes []*node
+	reqMx       sync.RWMutex
+	nodesMx     sync.RWMutex
 
-	requester chan *LiteRequest
-
-	activeConnections int32
-	onDisconnect      func(addr, key string)
+	onDisconnect     func(addr, key string)
+	roundRobinOffset uint64
 }
 
 var ErrNoActiveConnections = errors.New("no active connections")
@@ -40,7 +41,6 @@ var ErrNoActiveConnections = errors.New("no active connections")
 func NewClient() *Client {
 	c := &Client{
 		activeReqs: map[string]*LiteRequest{},
-		requester:  make(chan *LiteRequest),
 	}
 
 	// default reconnect policy
@@ -50,10 +50,6 @@ func NewClient() *Client {
 }
 
 func (c *Client) Do(ctx context.Context, typeID int32, payload []byte) (*LiteResponse, error) {
-	if c.activeConnections == 0 {
-		return nil, ErrNoActiveConnections
-	}
-
 	id := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, id); err != nil {
 		return nil, err
@@ -71,21 +67,19 @@ func (c *Client) Do(ctx context.Context, typeID int32, payload []byte) (*LiteRes
 
 	hexID := hex.EncodeToString(id)
 
-	c.mx.Lock()
+	c.reqMx.Lock()
 	c.activeReqs[hexID] = req
-	c.mx.Unlock()
+	c.reqMx.Unlock()
 
 	defer func() {
-		c.mx.Lock()
+		c.reqMx.Lock()
 		delete(c.activeReqs, hexID)
-		c.mx.Unlock()
+		c.reqMx.Unlock()
 	}()
 
-	// add request to queue
-	select {
-	case c.requester <- req:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	err := c.queryWithBalancer(req)
+	if err != nil {
+		return nil, err
 	}
 
 	// wait response
@@ -101,8 +95,34 @@ func (c *Client) Do(ctx context.Context, typeID int32, payload []byte) (*LiteRes
 	}
 }
 
+func (c *Client) queryWithBalancer(req *LiteRequest) error {
+	nodeOffset := atomic.AddUint64(&c.roundRobinOffset, 1)
+
+	var firstNode *node
+	for {
+		c.nodesMx.RLock()
+		reqNode := c.activeNodes[nodeOffset%uint64(len(c.activeNodes))]
+		c.nodesMx.RUnlock()
+
+		if firstNode == nil {
+			firstNode = reqNode
+		} else if reqNode == firstNode {
+			// all nodes were tried, nothing works
+			return ErrNoActiveConnections
+		}
+
+		err := reqNode.queryLiteServer(req.QueryID, req.TypeID, req.Data)
+		if err != nil {
+			nodeOffset++
+			continue
+		}
+
+		return nil
+	}
+}
+
 func (c *Client) SetOnDisconnect(cb OnDisconnectCallback) {
-	c.mx.Lock()
+	c.reqMx.Lock()
 	c.onDisconnect = cb
-	c.mx.Unlock()
+	c.reqMx.Unlock()
 }

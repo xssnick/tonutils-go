@@ -3,6 +3,7 @@ package ton
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 
 	"github.com/xssnick/tonutils-go/liteclient"
 )
@@ -27,6 +28,15 @@ const (
 
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
+}
+
+type ContractExecError struct {
+	Code uint32
+}
+
+type LSError struct {
+	Code uint32
+	Text string
 }
 
 type APIClient struct {
@@ -59,4 +69,26 @@ func loadBytes(data []byte) (loaded []byte, buffer []byte) {
 	}
 
 	return data[offset : offset+ln], data[offset+bufSz:]
+}
+
+func (e LSError) Error() string {
+	return fmt.Sprintf("lite server error, code %d: %s", e.Code, e.Text)
+}
+
+func (e LSError) Is(err error) bool {
+	if le, ok := err.(LSError); ok && le.Code == e.Code {
+		return true
+	}
+	return false
+}
+
+func (e ContractExecError) Error() string {
+	return fmt.Sprintf("contract exit code: %d", e.Code)
+}
+
+func (e ContractExecError) Is(err error) bool {
+	if le, ok := err.(ContractExecError); ok && le.Code == e.Code {
+		return true
+	}
+	return false
 }
