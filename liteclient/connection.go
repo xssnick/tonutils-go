@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/xssnick/tonutils-go/utils"
@@ -28,6 +29,7 @@ type node struct {
 	conn   net.Conn
 	rCrypt cipher.Stream
 	wCrypt cipher.Stream
+	wLock  sync.Mutex
 
 	reqs chan *LiteRequest
 
@@ -280,6 +282,9 @@ func (n *node) send(data []byte) error {
 	checksum := hash.Sum(nil)
 
 	buf = append(buf, checksum...)
+
+	n.wLock.Lock()
+	defer n.wLock.Unlock()
 
 	// encrypt data
 	n.wCrypt.XORKeyStream(buf, buf)
