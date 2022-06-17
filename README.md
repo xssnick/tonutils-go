@@ -1,9 +1,13 @@
 # tonutils-go
+![Coverage](https://img.shields.io/badge/Coverage-54.6%25-yellow)
+
 Golang library for interacting with TON blockchain.
 
 This library is native golang implementation of ADNL and lite protocol. It works like connection pool and can be connected to multiple lite servers in the same time, balancing is done on lib side.
 
 Its concurrent safe and can be used from multiple goroutines.
+
+If you have any questions or suggestions you can join our Telegram chat https://t.me/tonutils
 
 **This library is under active development**, so more cool features will come soon! Also, if you have some idea of useful functionality, just open issue with description or even pull request! 
 
@@ -12,8 +16,8 @@ You can find full usage examples in **example** directory
 
 ### Connection
 You can get list of public lite servers from official TON configs:
-* Mainnet - https://newton-blockchain.github.io/global.config.json
-* Testnet - https://newton-blockchain.github.io/testnet-global.config.json
+* Mainnet - https://ton-blockchain.github.io/global.config.json
+* Testnet - https://ton-blockchain.github.io/testnet-global.config.json
 
 from liteservers section, you need to convert int to ip and take port and key.
 
@@ -220,10 +224,10 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Get account state method
 * ✅ Send external message
 * ✅ Get transactions
-* Deploy contracts
+* ✅ Deploy contracts
 * ✅ Wallet operations
 * Payment processing
 * ✅ Cell dictionaries support
-* MustLoad methods
+* ✅ MustLoad methods
 * Event subscriptions
 * Parse global config json
