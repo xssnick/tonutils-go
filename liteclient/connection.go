@@ -14,13 +14,12 @@ import (
 	"io"
 	"math/big"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/tonutils-go/utils"
 )
 
-type connection struct {
+type node struct {
 	addr      string
 	serverKey string
 
@@ -29,6 +28,8 @@ type connection struct {
 	conn   net.Conn
 	rCrypt cipher.Stream
 	wCrypt cipher.Stream
+
+	reqs chan *LiteRequest
 
 	client *Client
 }
@@ -45,10 +46,11 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 		return err
 	}
 
-	cn := &connection{
+	n := &node{
 		addr:       addr,
 		serverKey:  serverKey,
 		connResult: make(chan error, 1),
+		reqs:       make(chan *LiteRequest),
 		client:     c,
 	}
 
@@ -58,7 +60,7 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 		till = time.Now().Add(60 * time.Second)
 	}
 
-	cn.conn, err = net.DialTimeout("tcp", addr, till.Sub(time.Now()))
+	n.conn, err = net.DialTimeout("tcp", addr, till.Sub(time.Now()))
 	if err != nil {
 		return err
 	}
@@ -70,23 +72,23 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 	}
 
 	// build ciphers for incoming packets and for outgoing
-	cn.rCrypt, err = newCipherCtr(rnd[:32], rnd[64:80])
+	n.rCrypt, err = newCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
 		return err
 	}
-	cn.wCrypt, err = newCipherCtr(rnd[32:64], rnd[80:96])
+	n.wCrypt, err = newCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
 		return err
 	}
 
-	err = cn.handshake(rnd, privateKey, sKey)
+	err = n.handshake(rnd, privateKey, sKey)
 	if err != nil {
 		return err
 	}
 
 	connResult := make(chan error, 1)
 
-	go cn.listen(connResult)
+	go n.listen(connResult)
 
 	select {
 	case err = <-connResult:
@@ -94,27 +96,26 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 			return err
 		}
 
-		// start pings
-		go cn.startPings(5 * time.Second)
+		go n.startPings(5 * time.Second)
 
-		// now we are ready to accept requests
-		go cn.serve(connResult)
+		c.nodesMx.Lock()
+		c.activeNodes = append(c.activeNodes, n)
+		c.nodesMx.Unlock()
 
-		atomic.AddInt32(&c.activeConnections, 1)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (cn *connection) listen(connResult chan<- error) {
+func (n *node) listen(connResult chan<- error) {
 	var initialized bool
 
 	var err error
 	// listen for incoming packets
 	for {
 		var sz uint32
-		sz, err = cn.readSize()
+		sz, err = n.readSize()
 		if err != nil {
 			break
 		}
@@ -126,7 +127,7 @@ func (cn *connection) listen(connResult chan<- error) {
 		}
 
 		var data []byte
-		data, err = cn.readData(sz)
+		data, err = n.readData(sz)
 		if err != nil {
 			break
 		}
@@ -160,9 +161,9 @@ func (cn *connection) listen(connResult chan<- error) {
 			break
 		}
 
-		cn.client.mx.RLock()
-		ch := cn.client.activeReqs[queryID]
-		cn.client.mx.RUnlock()
+		n.client.reqMx.RLock()
+		ch := n.client.activeReqs[queryID]
+		n.client.reqMx.RUnlock()
 
 		if ch != nil {
 			ch.RespChan <- &LiteResponse{
@@ -173,83 +174,62 @@ func (cn *connection) listen(connResult chan<- error) {
 	}
 
 	// force close in case of error
-	_ = cn.conn.Close()
+	_ = n.conn.Close()
 
 	connResult <- err
 
 	if initialized {
 		// deactivate connection
-		atomic.AddInt32(&cn.client.activeConnections, -1)
+		n.client.nodesMx.Lock()
+		for i := range n.client.activeNodes {
+			if n.client.activeNodes[i] == n {
+				// remove from list
+				n.client.activeNodes = append(n.client.activeNodes[:i], n.client.activeNodes[i+1:]...)
+				break
+			}
+		}
+		n.client.nodesMx.Unlock()
 
-		cn.client.mx.RLock()
-		dis := cn.client.onDisconnect
-		cn.client.mx.RUnlock()
+		n.client.reqMx.RLock()
+		dis := n.client.onDisconnect
+		n.client.reqMx.RUnlock()
 
 		if dis != nil {
-			go dis(cn.addr, cn.serverKey)
+			go dis(n.addr, n.serverKey)
 		}
 	}
 }
 
-func (cn *connection) serve(connResult <-chan error) {
-	for {
-		var req *LiteRequest
-
-		select {
-		case req = <-cn.client.requester:
-			if req == nil {
-				// handle graceful shutdown
-				return
-			}
-		case <-connResult:
-			// on this stage it can be only connection issue
-			return
-		}
-
-		err := cn.queryLiteServer(req.QueryID, req.TypeID, req.Data)
-		if err != nil {
-			req.RespChan <- &LiteResponse{
-				err: err,
-			}
-
-			// force close in case of error
-			_ = cn.conn.Close()
-
-			return
-		}
-	}
-}
-
-func (cn *connection) startPings(every time.Duration) {
+func (n *node) startPings(every time.Duration) {
 	for {
 		select {
 		case <-time.After(every):
 		}
 
-		n, err := rand.Int(rand.Reader, new(big.Int).SetUint64(0xFFFFFFFFFFFFFF))
+		num, err := rand.Int(rand.Reader, new(big.Int).SetUint64(0xFFFFFFFFFFFFFF))
 		if err != nil {
 			continue
 		}
 
-		err = cn.ping(n.Uint64())
+		err = n.ping(num.Uint64())
 		if err != nil {
 			// force close in case of error
-			_ = cn.conn.Close()
+			_ = n.conn.Close()
 
 			break
 		}
 	}
 }
 
-func (cn *connection) readSize() (uint32, error) {
+func (n *node) readSize() (uint32, error) {
 	size := make([]byte, 4)
-	_, err := cn.conn.Read(size)
+	_, err := n.conn.Read(size)
 	if err != nil {
 		return 0, err
 	}
 
 	// decrypt packet
-	cn.rCrypt.XORKeyStream(size, size)
+	n.rCrypt.XORKeyStream(size, size)
 
 	sz := binary.LittleEndian.Uint32(size)
 
@@ -260,29 +240,29 @@ func (cn *connection) readSize() (uint32, error) {
 	return sz, nil
 }
 
-func (cn *connection) readData(sz uint32) ([]byte, error) {
+func (n *node) readData(sz uint32) ([]byte, error) {
 	var result []byte
 
 	// read exact number of bytes requested, blocking operation
 	left := int(sz)
 	for left > 0 {
 		data := make([]byte, left)
-		n, err := cn.conn.Read(data)
+		num, err := n.conn.Read(data)
 		if err != nil {
 			return nil, err
 		}
 
-		data = data[:n]
-		cn.rCrypt.XORKeyStream(data, data)
+		data = data[:num]
+		n.rCrypt.XORKeyStream(data, data)
 		result = append(result, data...)
 
-		left -= n
+		left -= num
 	}
 
 	return result, nil
 }
 
-func (cn *connection) send(data []byte) error {
+func (n *node) send(data []byte) error {
 	buf := make([]byte, 4)
 
 	// ADNL packet should have nonce
@@ -302,11 +282,11 @@ func (cn *connection) send(data []byte) error {
 	buf = append(buf, checksum...)
 
 	// encrypt data
-	cn.wCrypt.XORKeyStream(buf, buf)
+	n.wCrypt.XORKeyStream(buf, buf)
 
 	// write all
 	for len(buf) > 0 {
-		n, err := cn.conn.Write(buf)
+		n, err := n.conn.Write(buf)
 		if err != nil {
 			return err
 		}
@@ -317,7 +297,7 @@ func (cn *connection) send(data []byte) error {
 	return nil
 }
 
-func (cn *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) error {
+func (n *node) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) error {
 	hash := sha256.New()
 	hash.Write(data)
 	checksum := hash.Sum(nil)
@@ -361,7 +341,7 @@ func (cn *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKe
 	res = append(res, data...)
 
 	// send handshake packet to establish connection
-	_, err = cn.conn.Write(res)
+	_, err = n.conn.Write(res)
 	if err != nil {
 		return err
 	}
@@ -369,15 +349,15 @@ func (cn *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKe
 	return nil
 }
 
-func (cn *connection) ping(qid uint64) error {
+func (n *node) ping(qid uint64) error {
 	data := make([]byte, 12)
 	binary.LittleEndian.PutUint32(data, uint32(TCPPing))
 	binary.LittleEndian.PutUint64(data[4:], qid)
 
-	return cn.send(data)
+	return n.send(data)
 }
 
-func (cn *connection) queryADNL(qid, payload []byte) error {
+func (n *node) queryADNL(qid, payload []byte) error {
 	// bypass compiler negative check
 	t := ADNLQuery
 
@@ -387,10 +367,10 @@ func (cn *connection) queryADNL(qid, payload []byte) error {
 	data = append(data, qid...)
 	data = append(data, utils.TLBytes(payload)...)
 
-	return cn.send(data)
+	return n.send(data)
 }
 
-func (cn *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) error {
+func (n *node) queryLiteServer(qid []byte, typeID int32, payload []byte) error {
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
 
@@ -399,7 +379,7 @@ func (cn *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) 
 
 	data = append(data, utils.TLBytes(append(typData, payload...))...)
 
-	return cn.queryADNL(qid, data)
+	return n.queryADNL(qid, data)
 }
 
 func (c *Client) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {

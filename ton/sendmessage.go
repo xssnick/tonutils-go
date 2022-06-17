@@ -65,8 +65,10 @@ func (c *APIClient) SendExternalInitMessage(ctx context.Context, addr *address.A
 
 		return nil
 	case _LSError:
-		code := binary.LittleEndian.Uint32(resp.Data)
-		return fmt.Errorf("lite server error, code %d: %s", code, string(resp.Data[5:]))
+		return LSError{
+			Code: binary.LittleEndian.Uint32(resp.Data),
+			Text: string(resp.Data[4:]),
+		}
 	}
 
 	return errors.New("unknown response type")

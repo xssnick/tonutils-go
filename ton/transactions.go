@@ -83,7 +83,10 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 			return nil, ErrMessageNotAccepted
 		}
 
-		return nil, fmt.Errorf("lite server error, code %d: %s", code, string(resp.Data[5:]))
+		return nil, LSError{
+			Code: binary.LittleEndian.Uint32(resp.Data),
+			Text: string(resp.Data[4:]),
+		}
 	}
 
 	return nil, errors.New("unknown response type")

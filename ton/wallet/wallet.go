@@ -80,9 +80,8 @@ func (w *Wallet) Send(ctx context.Context, mode byte, message *tlb.InternalMessa
 		var seq uint64
 		resp, err := w.api.RunGetMethod(ctx, block, w.addr, "seqno")
 		if err != nil {
-			// TODO: make it better
-			// not initialized
-			if err.Error() != "contract exit code: 4294967040" {
+			// 4294967040 = not initialized, we deploy it in this case
+			if cErr, ok := err.(ton.ContractExecError); !ok || cErr.Code != 4294967040 {
 				return fmt.Errorf("failed to get seqno: %w", err)
 			}
 

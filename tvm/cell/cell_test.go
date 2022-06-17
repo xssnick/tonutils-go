@@ -2,12 +2,13 @@ package cell
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/hex"
 	"math/big"
 	"testing"
 )
 
-func TestCell_Hash(t *testing.T) {
+func TestCell_HashSign(t *testing.T) {
 	cc1 := BeginCell().MustStoreUInt(111, 63).EndCell()
 	cc2 := BeginCell().MustStoreUInt(772227, 63).MustStoreRef(cc1).EndCell()
 	cc3 := BeginCell().MustStoreUInt(333, 63).MustStoreRef(cc2).EndCell()
@@ -19,6 +20,11 @@ func TestCell_Hash(t *testing.T) {
 		t.Log(hex.EncodeToString(cc.Hash()))
 		t.Log(hex.EncodeToString(b))
 		t.Fatal("hash diff")
+	}
+
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	if !ed25519.Verify(pub, cc.Hash(), cc.Sign(priv)) {
+		t.Fatal("sign not match")
 	}
 }
 
