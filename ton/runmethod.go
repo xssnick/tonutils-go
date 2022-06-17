@@ -139,11 +139,13 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		// TODO: check proofs mode
 
 		exitCode := binary.LittleEndian.Uint32(resp.Data)
-		resp.Data = resp.Data[4:]
-
 		if exitCode != 0 {
-			return nil, fmt.Errorf("contract exit code: %d", exitCode)
+			return nil, ContractExecError{
+				exitCode,
+			}
 		}
+
+		resp.Data = resp.Data[4:]
 
 		var state []byte
 		state, resp.Data = loadBytes(resp.Data)
@@ -272,7 +274,10 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 
 		return reversed, nil
 	case _LSError:
-		return nil, fmt.Errorf("lite server error, code %d: %s", binary.LittleEndian.Uint32(resp.Data), string(resp.Data[5:]))
+		return nil, LSError{
+			Code: binary.LittleEndian.Uint32(resp.Data),
+			Text: string(resp.Data[4:]),
+		}
 	}
 
 	return nil, errors.New("unknown response type")

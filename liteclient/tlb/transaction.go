@@ -156,7 +156,7 @@ func (t *Transaction) String() string {
 
 	if in.Cmp(big.NewInt(0)) != 0 {
 		intTx := t.In.AsInternal()
-		build += fmt.Sprintf("In: %s TON, From %s, Comment: %s", new(Grams).FromNanoTON(in).TON(), intTx.SrcAddr, intTx.Comment())
+		build += fmt.Sprintf("LT: %d, In: %s TON, From %s, Comment: %s", t.LT, new(Grams).FromNanoTON(in).TON(), intTx.SrcAddr, intTx.Comment())
 	}
 
 	if out.Cmp(big.NewInt(0)) != 0 {
