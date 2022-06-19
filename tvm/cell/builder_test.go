@@ -203,3 +203,40 @@ func TestCellReadEmpty(t *testing.T) {
 		return
 	}
 }
+
+func TestBuilder_MustStoreUInt(t *testing.T) {
+	val := BeginCell().MustStoreUInt(516783, 23).EndCell().BeginParse().MustLoadUInt(23)
+	if val != 516783 {
+		t.Fatal("incorrect", val)
+	}
+
+	val = BeginCell().MustStoreUInt(2, 64).EndCell().BeginParse().MustLoadUInt(64)
+	if val != 2 {
+		t.Fatal("incorrect2", val)
+	}
+
+	val = BeginCell().MustStoreUInt(0xFFFFFF, 24).EndCell().BeginParse().MustLoadUInt(24)
+	if val != 0xFFFFFF {
+		t.Fatal("incorrect3", val)
+	}
+
+	val = BeginCell().MustStoreUInt(0xFFFFFF, 24).EndCell().BeginParse().MustLoadUInt(20)
+	if val != 0xFFFFF {
+		t.Fatal("incorrect4", val)
+	}
+
+	val = BeginCell().MustStoreUInt(2, 2).EndCell().BeginParse().MustLoadUInt(2)
+	if val != 2 {
+		t.Fatal("incorrect5", val)
+	}
+
+	val = BeginCell().MustStoreUInt(1, 1).EndCell().BeginParse().MustLoadUInt(1)
+	if val != 1 {
+		t.Fatal("incorrect6", val)
+	}
+
+	val = BeginCell().MustStoreUInt(123456789, 70).EndCell().BeginParse().MustLoadUInt(70)
+	if val != 123456789 {
+		t.Fatal("incorrect6", val)
+	}
+}

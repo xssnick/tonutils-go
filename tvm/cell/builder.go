@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"encoding/binary"
 	"errors"
 	"math/big"
 
@@ -65,7 +66,15 @@ func (b *Builder) MustStoreUInt(value uint64, sz int) *Builder {
 }
 
 func (b *Builder) StoreUInt(value uint64, sz int) error {
-	return b.StoreBigInt(new(big.Int).SetUint64(value), sz)
+	if sz > 64 {
+		return b.StoreBigInt(new(big.Int).SetUint64(value), sz)
+	}
+
+	value <<= 64 - sz
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, value)
+
+	return b.StoreSlice(buf, sz)
 }
 
 func (b *Builder) MustStoreBoolBit(value bool) *Builder {
