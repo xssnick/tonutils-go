@@ -12,10 +12,30 @@ import (
 type Grams big.Int
 
 func (g Grams) TON() string {
-	f := new(big.Float).SetInt((*big.Int)(&g))
-	t := new(big.Float).Quo(f, new(big.Float).SetUint64(1000000000))
+	a := (*big.Int)(&g).String()
 
-	return t.String()
+	if a == "0" {
+		// process 0 faster and simpler
+		return a
+	}
+
+	splitter := len(a) - 9
+	if splitter <= 0 {
+		a = "0." + strings.Repeat("0", 9-len(a)) + a
+	} else {
+		// set . between lo and hi
+		a = a[:splitter] + "." + a[splitter:]
+	}
+
+	// cut last zeroes
+	for i := len(a) - 1; i >= 0; i-- {
+		if a[i] != '0' && a[i] != '.' {
+			a = a[:i+1]
+			break
+		}
+	}
+
+	return a
 }
 
 func (g Grams) NanoTON() *big.Int {

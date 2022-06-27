@@ -10,11 +10,13 @@ import (
 
 // requests
 const (
-	_GetMasterchainInfo   int32 = -1984567762
-	_RunContractGetMethod int32 = 1556504018
-	_GetAccountState      int32 = 1804144165
-	_SendMessage          int32 = 1762317442
-	_GetTransactions      int32 = 474015649
+	_GetMasterchainInfo    int32 = -1984567762
+	_RunContractGetMethod  int32 = 1556504018
+	_GetAccountState       int32 = 1804144165
+	_SendMessage           int32 = 1762317442
+	_GetTransactions       int32 = 474015649
+	_GetBlock              int32 = 1668796173
+	_ListBlockTransactions int32 = -1375942694
 )
 
 // responses
@@ -23,7 +25,12 @@ const (
 	_AccountState      int32 = 1887029073
 	_SendMessageResult int32 = 961602967
 	_TransactionsList  int32 = 1864812043
-	_LSError           int32 = -1146494648
+	_BlockData         int32 = -1519063700
+	_BlockTransactions int32 = -1114854101
+
+	_BoolTrue  int32 = -1720552011
+	_BoolFalse int32 = -1132882121
+	_LSError   int32 = -1146494648
 )
 
 type LiteClient interface {

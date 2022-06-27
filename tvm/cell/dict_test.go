@@ -47,7 +47,7 @@ func TestLoadCell_LoadDict(t *testing.T) {
 		return
 	}
 
-	if all[0].Key != hex.EncodeToString(addr.Data()) {
+	if hex.EncodeToString(all[0].Key.BeginParse().MustLoadSlice(256)) != hex.EncodeToString(addr.Data()) {
 		t.Fatal("key in all not correct")
 		return
 	}
