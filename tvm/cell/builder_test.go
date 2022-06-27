@@ -237,6 +237,11 @@ func TestBuilder_MustStoreUInt(t *testing.T) {
 
 	val = BeginCell().MustStoreUInt(123456789, 70).EndCell().BeginParse().MustLoadUInt(70)
 	if val != 123456789 {
-		t.Fatal("incorrect6", val)
+		t.Fatal("incorrect7", val)
+	}
+
+	val = BeginCell().MustStoreUInt(0xFFFFFFFFFFFFFFFF, 60).EndCell().BeginParse().MustLoadUInt(60)
+	if val != 0xFFFFFFFFFFFFFFF {
+		t.Fatal("incorrect8", val)
 	}
 }

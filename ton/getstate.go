@@ -78,43 +78,20 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		bp := cls[0].BeginParse()
 
 		// ShardStateUnsplit
-		ssu, err := bp.LoadRef()
+		ssuRef, err := bp.LoadRef()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load ref ShardStateUnsplit: %w", err)
 		}
 
-		// OutMsgQueueInfo
-		_, err = ssu.LoadRef()
+		var shardState tlb.ShardState
+		err = tlb.LoadFromCell(&shardState, ssuRef)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load ref OutMsgQueueInfo: %w", err)
+			return nil, fmt.Errorf("failed to load ref ShardState: %w", err)
 		}
 
-		// ShardAccounts
-		sAccounts, err := ssu.LoadRef()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load ref ShardAccounts: %w", err)
-		}
-
-		exists, err := sAccounts.LoadBoolBit()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load acc exists bit: %w", err)
-		}
-
-		if exists {
-			root, err := sAccounts.LoadRef()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load acc hashmap: %w", err)
-			}
-
-			// we load HashmapAug as a regular Hashmap, its ok for now,
-			// but we need to manualy exclude extra data which is DepthBalanceInfo from value
-			m, err := root.LoadDict(256)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load acc hashmap: %w", err)
-			}
-
+		if shardState.Accounts.ShardAccounts != nil {
 			addrKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
-			val := m.Get(addrKey)
+			val := shardState.Accounts.ShardAccounts.Get(addrKey)
 			if val == nil {
 				return nil, errors.New("no addr info in proof hashmap")
 			}
