@@ -6,9 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
 
 	"github.com/xssnick/tonutils-go/utils"
 )
+
+const hashSize = 32
+const depthSize = 2
 
 var bocMagic = []byte{0xB5, 0xEE, 0x9C, 0x72}
 
@@ -24,10 +28,10 @@ func FromBOC(data []byte) (*Cell, error) {
 		return nil, err
 	}
 
-	return &cells[0], nil
+	return cells[0], nil
 }
 
-func FromBOCMultiRoot(data []byte) ([]Cell, error) {
+func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 	if len(data) < 10 {
 		return nil, errors.New("invalid boc")
 	}
@@ -61,58 +65,101 @@ func FromBOCMultiRoot(data []byte) ([]Cell, error) {
 	rootIndex := dynInt(rootList[0:cellNumSizeBytes])
 	_ = rootIndex
 
+	if flags.hasCacheBits && !flags.hasIndex {
+		return nil, fmt.Errorf("cache flag cant be set without index flag")
+	}
+
+	var index []int
+	if flags.hasIndex {
+		index = make([]int, 0, cellsNum)
+		idxData, err := r.ReadBytes(cellsNum * dataSizeBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read custom index, err: %v", err)
+		}
+		n := 0
+		for i := 0; i < cellsNum; i++ {
+			off := i * dataSizeBytes
+			val := dynInt(idxData[off : off+dataSizeBytes])
+			if flags.hasCacheBits {
+				// TODO: check caches
+				if val%2 == 1 {
+					n++
+				}
+				val /= 2
+			}
+			index = append(index, val)
+		}
+	}
+
 	payload, err := r.ReadBytes(dataLen)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read paylooad, want %d, has %d", dataLen, r.LeftLen())
 	}
 
-	cll, err := parseCells(rootsNum, cellsNum, cellNumSizeBytes, payload)
+	cll, err := parseCells(rootsNum, cellsNum, cellNumSizeBytes, payload, index)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse paylooad: %w", err)
+		return nil, fmt.Errorf("failed to parse payload: %w", err)
 	}
 
 	return cll, nil
 }
 
-func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte) ([]Cell, error) {
-	r := newReader(data)
-
+func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([]*Cell, error) {
 	cells := make([]Cell, cellsNum)
 	referred := make([]bool, cellsNum)
 
-	i := 0
-	for i < cellsNum {
-		flags, err := r.ReadByte()
-		if err != nil {
-			return nil, errors.New("failed to parse cell refs num, corrupted data")
+	// index = nil
+	offset := 0
+	for i := 0; i < cellsNum; i++ {
+		if len(data)-offset < 2 {
+			return nil, errors.New("failed to parse cell header, corrupted data")
+		}
+
+		if index != nil {
+			// if we have index, then set offset from it, it stores end of each cell
+			offset = 0
+			if i > 0 {
+				offset = index[i-1]
+			}
 		}
 
 		// len(self.refs) + self.is_special() * 8 + self.level() * 32
+		flags := data[offset]
 		refsNum := int(flags & 0b111)
 		special := (flags & 0b1000) != 0
-		level := flags >> 5
+		withHashes := (flags & 0b10000) != 0
+		levelMask := flags >> 5
 
-		ln, err := r.ReadByte()
-		if err != nil {
-			return nil, errors.New("failed to parse cell length, corrupted data")
-		}
-
+		ln := data[offset+1]
 		// round to 1 byte, len in octets
 		oneMore := ln % 2
+		sz := int(ln/2 + oneMore)
 
-		payload, err := r.ReadBytes(int(ln/2 + oneMore))
-		if err != nil {
+		offset += 2
+		if len(data)-offset < sz {
 			return nil, errors.New("failed to parse cell payload, corrupted data")
+		}
+
+		if withHashes {
+			maskBits := int(math.Ceil(math.Log2(float64(levelMask) + 1)))
+			hashesNum := maskBits + 1
+
+			offset += hashesNum*hashSize + hashesNum*depthSize
+			// TODO: check depth and hashes
+		}
+
+		payload := data[offset : offset+sz]
+
+		offset += sz
+		if len(data)-offset < refsNum*refSzBytes {
+			return nil, errors.New("failed to parse cell refs, corrupted data")
 		}
 
 		refsIndex := make([]int, 0, refsNum)
 		for y := 0; y < refsNum; y++ {
-			refIndex, err := r.ReadBytes(refSzBytes)
-			if err != nil {
-				return nil, errors.New("failed to parse cell references, corrupted data")
-			}
-
+			refIndex := data[offset : offset+refSzBytes]
 			refsIndex = append(refsIndex, dynInt(refIndex))
+			offset += refSzBytes
 		}
 
 		refs := make([]*Cell, len(refsIndex))
@@ -134,23 +181,19 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte) ([]Cell, error)
 			}
 		}
 
-		cells[i] = Cell{
-			special: special,
-			bitsSz:  bitsSz,
-			level:   level,
-			data:    payload,
-			refs:    refs,
-		}
-
-		i++
+		cells[i].special = special
+		cells[i].bitsSz = bitsSz
+		cells[i].level = levelMask
+		cells[i].data = payload
+		cells[i].refs = refs
 	}
 
-	var roots []Cell
+	var roots []*Cell
 
 	// get cells which are not referenced by another, its root cells
 	for y, isRef := range referred {
 		if !isRef {
-			roots = append(roots, cells[y])
+			roots = append(roots, &cells[y])
 		}
 	}
 

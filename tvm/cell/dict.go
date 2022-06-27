@@ -7,18 +7,18 @@ import (
 )
 
 type Dictionary struct {
-	storage map[string]*Cell
+	storage map[string]*HashmapKV
 	keySz   int
 }
 
 type HashmapKV struct {
-	Key   string
+	Key   *Cell
 	Value *Cell
 }
 
 func (c *LoadCell) LoadDict(keySz int) (*Dictionary, error) {
 	d := Dictionary{
-		storage: map[string]*Cell{},
+		storage: map[string]*HashmapKV{},
 		keySz:   keySz,
 	}
 
@@ -36,16 +36,18 @@ func (d *Dictionary) Get(key *Cell) *Cell {
 		return nil
 	}
 
-	return d.storage[hex.EncodeToString(data)]
+	v := d.storage[hex.EncodeToString(data)]
+	if v == nil {
+		return nil
+	}
+
+	return v.Value
 }
 
-func (d *Dictionary) All() []HashmapKV {
-	all := make([]HashmapKV, 0, len(d.storage))
-	for k, v := range d.storage {
-		all = append(all, HashmapKV{
-			Key:   k,
-			Value: v,
-		})
+func (d *Dictionary) All() []*HashmapKV {
+	all := make([]*HashmapKV, 0, len(d.storage))
+	for _, v := range d.storage {
+		all = append(all, v)
 	}
 
 	return all
@@ -87,8 +89,12 @@ func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *LoadCell, keyPrefix 
 		return nil
 	}
 
+	keyCell := keyPrefix.EndCell()
 	// add node to map
-	d.storage[hex.EncodeToString(keyPrefix.EndCell().BeginParse().MustLoadSlice(keySz))] = loader.MustToCell()
+	d.storage[hex.EncodeToString(keyCell.BeginParse().MustLoadSlice(keySz))] = &HashmapKV{
+		Key:   keyCell,
+		Value: loader.MustToCell(),
+	}
 
 	return nil
 }

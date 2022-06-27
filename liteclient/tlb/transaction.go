@@ -10,6 +10,12 @@ import (
 
 type TxHash []byte
 
+type TransactionID struct {
+	LT        uint64
+	Hash      []byte
+	AccountID []byte
+}
+
 type Transaction struct {
 	LT         uint64
 	PrevTxLT   uint64
