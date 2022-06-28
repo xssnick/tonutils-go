@@ -208,6 +208,34 @@ but regular will just return error, so use `Must` only when you are sure that yo
 
 To debug cells you can use `Dump()` and `DumpBits()` methods of cell, they will return string with beautifully formatted cells and their refs tree
 
+### TLB Loader
+You can also load cells to structures, similar to JSON, using tags. 
+You can find more details in comment-description of `tlb.LoadFromCell` method
+
+Example:
+```golang
+type ShardState struct {
+    _               Magic      `tlb:"#9023afe2"`
+    GlobalID        int32      `tlb:"## 32"`
+    ShardIdent      ShardIdent `tlb:"."`
+    Seqno           uint32     `tlb:"## 32"`
+    OutMsgQueueInfo *cell.Cell `tlb:"^"`
+    Accounts        struct {
+        ShardAccounts *cell.Dictionary `tlb:"maybe ^dict 256"`
+    } `tlb:"^"`
+}
+
+type ShardIdent struct {
+    PrefixBits  int8   `tlb:"## 6"`
+    WorkchainID int32  `tlb:"## 32"`
+    ShardPrefix uint64 `tlb:"## 64"`
+}
+
+var state ShardState
+if err = tlb.LoadFromCell(&state, cl.BeginParse()); err != nil {
+    panic(err)
+}
+```
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
 
