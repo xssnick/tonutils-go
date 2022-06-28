@@ -98,6 +98,10 @@ func (c *Client) Do(ctx context.Context, typeID int32, payload []byte) (*LiteRes
 func (c *Client) queryWithBalancer(req *LiteRequest) error {
 	nodeOffset := atomic.AddUint64(&c.roundRobinOffset, 1)
 
+	if len(c.activeNodes) == 0 {
+		return ErrNoActiveConnections
+	}
+
 	var firstNode *node
 	for {
 		c.nodesMx.RLock()

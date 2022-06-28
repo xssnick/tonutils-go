@@ -22,6 +22,7 @@ type manualLoader interface {
 // [^]dict N - loads dictionary with key size N
 // bits N - loads bit slice N len to []byte
 // bool - loads 1 bit boolean
+// addr - loads ton address
 // maybe - reads 1 bit, and loads rest if its 1, can be used in combination with others only
 // Some tags can be combined, for example "maybe ^dict 256", "maybe ^"
 // Magic can be used to load first bits and check struct type, in tag can be specified magic number itself, in [#]HEX or [$]BIN format
@@ -82,6 +83,14 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 				rv.Field(i).Set(reflect.ValueOf(x))
 				continue
 			}
+		} else if settings[0] == "addr" {
+			x, err := loader.LoadAddr()
+			if err != nil {
+				return fmt.Errorf("failed to load address, err: %w", err)
+			}
+
+			rv.Field(i).Set(reflect.ValueOf(x))
+			continue
 		} else if settings[0] == "bool" {
 			x, err := loader.LoadBoolBit()
 			if err != nil {
