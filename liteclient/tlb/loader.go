@@ -19,11 +19,12 @@ type manualLoader interface {
 // ## N - means integer with N bits, if size <= 64 it loads to uint of any size, if > 64 it loads to *big.Int
 // ^ - loads ref and calls recursively, if field type is *cell.Cell, it loads without parsing
 // . - calls recursively to continue load from current loader (inner struct)
-// [^]dict N - loads dictionary with key size N
+// [^]dict N [-> array [^]] - loads dictionary with key size N, transformation '->' can be applied to convert dict to array, example: 'dict 256 -> array ^' will give you array of deserialized refs (^) of values
 // bits N - loads bit slice N len to []byte
 // bool - loads 1 bit boolean
 // addr - loads ton address
 // maybe - reads 1 bit, and loads rest if its 1, can be used in combination with others only
+// either X Y - reads 1 bit, if its 0 - loads X, if 1 - loads Y
 // Some tags can be combined, for example "maybe ^dict 256", "maybe ^"
 // Magic can be used to load first bits and check struct type, in tag can be specified magic number itself, in [#]HEX or [$]BIN format
 // Example:
@@ -55,6 +56,22 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 				continue
 			}
 			settings = settings[1:]
+		}
+
+		if settings[0] == "either" {
+			if len(settings) < 3 {
+				panic("either tag should have 2 args")
+			}
+			isSecond, err := loader.LoadBoolBit()
+			if err != nil {
+				return fmt.Errorf("failed to load maybe for %s, err: %w", field.Name, err)
+			}
+
+			if !isSecond {
+				settings = []string{settings[1]}
+			} else {
+				settings = []string{settings[2]}
+			}
 		}
 
 		// bits
@@ -113,23 +130,20 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 
 			rv.Field(i).Set(reflect.ValueOf(x))
 			continue
-		} else if settings[0] == "." {
-			nVal, err := structLoad(field, loader)
-			if err != nil {
-				return err
-			}
+		} else if settings[0] == "^" || settings[0] == "." {
+			next := loader
 
-			rv.Field(i).Set(nVal)
-			continue
-		} else if settings[0] == "^" {
-			ref, err := loader.LoadRef()
-			if err != nil {
-				return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
+			if settings[0] == "^" {
+				ref, err := loader.LoadRef()
+				if err != nil {
+					return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
+				}
+				next = ref
 			}
 
 			switch field.Type {
 			case reflect.TypeOf(&cell.Cell{}):
-				c, err := ref.ToCell()
+				c, err := next.ToCell()
 				if err != nil {
 					return fmt.Errorf("failed to convert ref to cell for %s, err: %w", field.Name, err)
 				}
@@ -137,7 +151,7 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 				rv.Field(i).Set(reflect.ValueOf(c))
 				continue
 			default:
-				nVal, err := structLoad(field, ref)
+				nVal, err := structLoad(field.Type, next)
 				if err != nil {
 					return err
 				}
@@ -175,7 +189,7 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 				return fmt.Errorf("magic is not correct")
 			}
 			continue
-		} else if (settings[0] == "dict" || settings[0] == "^dict") && field.Type == reflect.TypeOf(&cell.Dictionary{}) {
+		} else if settings[0] == "dict" || settings[0] == "^dict" {
 			sz, err := strconv.Atoi(settings[1])
 			if err != nil {
 				panic(fmt.Sprintf("cannot deserialize field '%s' as dict, bad size '%s'", field.Name, settings[1]))
@@ -194,6 +208,43 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 				return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
 			}
 
+			if len(settings) >= 4 {
+				// transformation
+				if settings[2] == "->" {
+					isRef := false
+					if len(settings) >= 5 {
+						if settings[4] == "^" {
+							isRef = true
+						}
+					}
+
+					switch settings[3] {
+					case "array":
+						arr := rv.Field(i)
+						for _, kv := range dict.All() {
+							ld := kv.Value.BeginParse()
+							if isRef {
+								ld, err = ld.LoadRef()
+								if err != nil {
+									return fmt.Errorf("failed to load ref in dict transform: %w", err)
+								}
+							}
+
+							nVal, err := structLoad(field.Type.Elem(), ld)
+							if err != nil {
+								return fmt.Errorf("failed to load struct in dict transform: %w", err)
+							}
+
+							arr = reflect.Append(arr, nVal)
+						}
+						rv.Field(i).Set(arr)
+						continue
+					default:
+						panic("transformation to this type is not supported")
+					}
+				}
+			}
+
 			rv.Field(i).Set(reflect.ValueOf(dict))
 			continue
 		}
@@ -204,27 +255,28 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 	return nil
 }
 
-func structLoad(field reflect.StructField, loader *cell.LoadCell) (reflect.Value, error) {
-	newTyp := field.Type
+func structLoad(field reflect.Type, loader *cell.LoadCell) (reflect.Value, error) {
+	newTyp := field
 	if newTyp.Kind() == reflect.Ptr {
 		newTyp = newTyp.Elem()
 	}
 
 	nVal := reflect.New(newTyp)
 	inf := nVal.Interface()
+
 	if ld, ok := inf.(manualLoader); ok {
 		err := ld.LoadFromCell(loader)
 		if err != nil {
-			return reflect.Value{}, fmt.Errorf("failed to load from cell for %s, using manual loader, err: %w", field.Name, err)
+			return reflect.Value{}, fmt.Errorf("failed to load from cell for %s, using manual loader, err: %w", field.Name(), err)
 		}
 	} else {
 		err := LoadFromCell(nVal.Interface(), loader)
 		if err != nil {
-			return reflect.Value{}, fmt.Errorf("failed to load from cell for %s, err: %w", field.Name, err)
+			return reflect.Value{}, fmt.Errorf("failed to load from cell for %s, err: %w", field.Name(), err)
 		}
 	}
 
-	if field.Type.Kind() != reflect.Ptr {
+	if field.Kind() != reflect.Ptr {
 		nVal = nVal.Elem()
 	}
 
