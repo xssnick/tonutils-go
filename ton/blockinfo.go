@@ -63,10 +63,23 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tl
 	return nil, errors.New("unknown response type")
 }
 
-func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockInfo) ([]*tlb.TransactionID, bool, error) {
+func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockInfo, count uint32, after ...*tlb.TransactionID) ([]*tlb.TransactionID, bool, error) {
 	req := append(block.Serialize(), make([]byte, 8)...)
-	binary.LittleEndian.PutUint32(req[len(req)-8:], 0b111)
-	binary.LittleEndian.PutUint32(req[len(req)-4:], 100)
+
+	mode := uint32(0b111)
+	if after != nil {
+		mode |= 1 << 7
+	}
+
+	binary.LittleEndian.PutUint32(req[len(req)-8:], mode)
+	binary.LittleEndian.PutUint32(req[len(req)-4:], count)
+	if after != nil {
+		req = append(req, after[0].AccountID...)
+
+		ltBts := make([]byte, 8)
+		binary.LittleEndian.PutUint64(ltBts, after[0].LT)
+		req = append(req, ltBts...)
+	}
 
 	resp, err := c.client.Do(ctx, _ListBlockTransactions, req)
 	if err != nil {
