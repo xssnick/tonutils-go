@@ -7,6 +7,8 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 type Grams big.Int
@@ -47,37 +49,25 @@ func (g *Grams) FromNanoTON(val *big.Int) *Grams {
 	return g
 }
 
-func (g *Grams) MustFromTON(val string) *Grams {
-	v, err := g.FromTON(val)
-	if err != nil {
-		panic(err)
-		return nil
-	}
-	return v
-}
-
 func MustFromTON(val string) *Grams {
-	v, err := new(Grams).FromTON(val)
+	v, err := FromTON(val)
 	if err != nil {
 		panic(err)
 		return nil
 	}
 	return v
-}
-
-func FromTON(val string) (*Grams, error) {
-	return new(Grams).FromTON(val)
 }
 
 func FromNanoTON(val *big.Int) *Grams {
-	return new(Grams).FromNanoTON(val)
+	g := Grams(*val)
+	return &g
 }
 
 func FromNanoTONU(val uint64) *Grams {
-	return new(Grams).FromNanoTON(new(big.Int).SetUint64(val))
+	return FromNanoTON(new(big.Int).SetUint64(val))
 }
 
-func (g *Grams) FromTON(val string) (*Grams, error) {
+func FromTON(val string) (*Grams, error) {
 	errInvalid := errors.New("invalid string")
 
 	s := strings.SplitN(val, ".", 2)
@@ -120,8 +110,17 @@ func (g *Grams) FromTON(val string) (*Grams, error) {
 		hi = hi.Add(hi, new(big.Int).SetUint64(lo))
 	}
 
-	*g = Grams(*hi)
-	return g, nil
+	g := Grams(*hi)
+	return &g, nil
+}
+
+func (g *Grams) LoadFromCell(loader *cell.LoadCell) error {
+	coins, err := loader.LoadBigCoins()
+	if err != nil {
+		return err
+	}
+	*g = *(*Grams)(coins)
+	return nil
 }
 
 func (g *Grams) MarshalJSON() ([]byte, error) {

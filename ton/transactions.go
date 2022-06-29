@@ -11,7 +11,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash tlb.TxHash) ([]*tlb.Transaction, error) {
+func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, num)
 
@@ -68,7 +68,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 			loader := txCell.BeginParse()
 
 			var tx tlb.Transaction
-			err = tx.LoadFromCell(loader)
+			err = tlb.LoadFromCell(&tx, loader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
 			}

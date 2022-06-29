@@ -17,7 +17,7 @@ type Account struct {
 	Data       *cell.Cell
 	Code       *cell.Cell
 	LastTxLT   uint64
-	LastTxHash tlb.TxHash
+	LastTxHash []byte
 }
 
 func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*Account, error) {
@@ -99,7 +99,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			loadVal := val.BeginParse()
 
 			// skip it
-			err = new(tlb.DepthBalanceInfo).LoadFromCell(loadVal)
+			err = tlb.LoadFromCell(new(tlb.DepthBalanceInfo), loadVal)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load DepthBalanceInfo: %w", err)
 			}

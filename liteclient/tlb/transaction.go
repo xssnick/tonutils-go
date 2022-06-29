@@ -1,14 +1,11 @@
 package tlb
 
 import (
-	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
-
-type TxHash []byte
 
 type TransactionID struct {
 	LT        uint64
@@ -17,128 +14,27 @@ type TransactionID struct {
 }
 
 type Transaction struct {
-	LT         uint64
-	PrevTxLT   uint64
-	PrevTxHash TxHash
-	In         *Message
-	Out        []*Message
-}
-
-func (t *Transaction) LoadFromCell(loader *cell.LoadCell) error {
-	magic, err := loader.LoadUInt(4)
-	if err != nil {
-		return fmt.Errorf("failed to load magic bits: %w", err)
-	}
-
-	if magic != 0b0111 {
-		return errors.New("not a transaction")
-	}
-
-	_, err = loader.LoadSlice(256)
-	if err != nil {
-		return fmt.Errorf("failed to load addr data: %w", err)
-	}
-
-	lt, err := loader.LoadUInt(64)
-	if err != nil {
-		return fmt.Errorf("failed to load lt: %w", err)
-	}
-
-	prevTxHash, err := loader.LoadSlice(256)
-	if err != nil {
-		return fmt.Errorf("failed to load prev tx hash: %w", err)
-	}
-
-	prevTxLT, err := loader.LoadUInt(64)
-	if err != nil {
-		return fmt.Errorf("failed to load prev tx lt: %w", err)
-	}
-
-	now, err := loader.LoadUInt(32)
-	if err != nil {
-		return fmt.Errorf("failed to load now: %w", err)
-	}
-	_ = now
-
-	outMsgCnt, err := loader.LoadUInt(15)
-	if err != nil {
-		return fmt.Errorf("failed to load out msgs num: %w", err)
-	}
-	_ = outMsgCnt
-
-	// TODO: load additional info, acc statuses
-
-	existsInfo, err := loader.LoadRef()
-	if err != nil {
-		return fmt.Errorf("failed to load exists info ref: %w", err)
-	}
-
-	hasInMsg, err := existsInfo.LoadBoolBit()
-	if err != nil {
-		return fmt.Errorf("failed to load has in msg bit: %w", err)
-	}
-
-	var inMsg *Message
-	if hasInMsg {
-		msg, err := existsInfo.LoadRef()
-		if err != nil {
-			return fmt.Errorf("failed to load in msg ref: %w", err)
-		}
-
-		inMsg = new(Message)
-		err = inMsg.LoadFromCell(msg)
-		if err != nil {
-			return fmt.Errorf("failed to parse in msg: %w", err)
-		}
-	}
-
-	hasOutMsgs, err := existsInfo.LoadBoolBit()
-	if err != nil {
-		return fmt.Errorf("failed to load has out msg bit: %w", err)
-	}
-
-	var outMsgs []*Message
-	if hasOutMsgs {
-		hashRoot, err := existsInfo.LoadRef()
-		if err != nil {
-			return fmt.Errorf("failed to load out msgs container: %w", err)
-		}
-
-		outs, err := hashRoot.LoadDict(15)
-		if err != nil {
-			return fmt.Errorf("failed to parse out msgs hashmap: %w", err)
-		}
-
-		for _, kv := range outs.All() {
-			ref, err := kv.Value.BeginParse().LoadRef()
-			if err != nil {
-				return fmt.Errorf("failed to parse out msg ref: %w", err)
-			}
-
-			msg := new(Message)
-			err = msg.LoadFromCell(ref)
-			if err != nil {
-				return fmt.Errorf("failed to parse out msg: %w", err)
-			}
-
-			outMsgs = append(outMsgs, msg)
-		}
-	}
-
-	*t = Transaction{
-		LT:         lt,
-		PrevTxLT:   prevTxLT,
-		PrevTxHash: prevTxHash,
-		In:         inMsg,
-		Out:        outMsgs,
-	}
-
-	return nil
+	_           Magic         `tlb:"$0111"`
+	AccountAddr []byte        `tlb:"bits 256"`
+	LT          uint64        `tlb:"## 64"`
+	PrevTxHash  []byte        `tlb:"bits 256"`
+	PrevTxLT    uint64        `tlb:"## 64"`
+	Now         uint32        `tlb:"## 32"`
+	OutMsgCount uint16        `tlb:"## 15"`
+	OrigStatus  AccountStatus `tlb:"."`
+	EndStatus   AccountStatus `tlb:"."`
+	IO          struct {
+		In  *Message   `tlb:"maybe ^"`
+		Out []*Message `tlb:"maybe ^dict 15 -> array ^"`
+	} `tlb:"^"`
+	TotalFees   CurrencyCollection `tlb:"."`
+	StateUpdate *cell.Cell         `tlb:"^"`
+	Description *cell.Cell         `tlb:"^"`
 }
 
 func (t *Transaction) Dump() string {
-	res := fmt.Sprintf("LT: %d\n\nInput:\nType %s\nFrom %s\nPayload:\n%s\n\nOutputs:\n", t.LT, t.In.MsgType, t.In.Msg.SenderAddr(), t.In.Msg.Payload().Dump())
-	for _, m := range t.Out {
+	res := fmt.Sprintf("LT: %d\n\nInput:\nType %s\nFrom %s\nPayload:\n%s\n\nOutputs:\n", t.LT, t.IO.In.MsgType, t.IO.In.Msg.SenderAddr(), t.IO.In.Msg.Payload().Dump())
+	for _, m := range t.IO.Out {
 		res += m.AsInternal().Dump()
 	}
 	return res
@@ -147,29 +43,29 @@ func (t *Transaction) Dump() string {
 func (t *Transaction) String() string {
 	var destinations []string
 	in, out := new(big.Int), new(big.Int)
-	for _, m := range t.Out {
+	for _, m := range t.IO.Out {
 		destinations = append(destinations, m.Msg.DestAddr().String())
 		if m.MsgType == MsgTypeInternal {
 			out.Add(out, m.AsInternal().Amount.NanoTON())
 		}
 	}
 
-	if t.In.MsgType == MsgTypeInternal {
-		in = t.In.AsInternal().Amount.NanoTON()
+	if t.IO.In.MsgType == MsgTypeInternal {
+		in = t.IO.In.AsInternal().Amount.NanoTON()
 	}
 
 	var build string
 
 	if in.Cmp(big.NewInt(0)) != 0 {
-		intTx := t.In.AsInternal()
-		build += fmt.Sprintf("LT: %d, In: %s TON, From %s, Comment: %s", t.LT, new(Grams).FromNanoTON(in).TON(), intTx.SrcAddr, intTx.Comment())
+		intTx := t.IO.In.AsInternal()
+		build += fmt.Sprintf("LT: %d, In: %s TON, From %s, Comment: %s", t.LT, FromNanoTON(in).TON(), intTx.SrcAddr, intTx.Comment())
 	}
 
 	if out.Cmp(big.NewInt(0)) != 0 {
 		if len(build) > 0 {
 			build += ", "
 		}
-		build += fmt.Sprintf("Out: %s TON, To %s", new(Grams).FromNanoTON(out).TON(), destinations)
+		build += fmt.Sprintf("Out: %s TON, To %s", FromNanoTON(out).TON(), destinations)
 	}
 
 	return build
