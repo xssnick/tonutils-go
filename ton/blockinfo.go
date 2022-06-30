@@ -25,6 +25,37 @@ func (c *APIClient) GetBlockInfo(ctx context.Context) (*tlb.BlockInfo, error) {
 	return block, nil
 }
 
+func (c *APIClient) LookupBlock(ctx context.Context, workchain uint32, shard uint64, seqno uint32) (*tlb.BlockInfo, error) {
+	data := make([]byte, 20)
+	binary.LittleEndian.PutUint32(data, 1)
+	binary.LittleEndian.PutUint32(data[4:], workchain)
+	binary.LittleEndian.PutUint64(data[8:], shard)
+	binary.LittleEndian.PutUint32(data[16:], seqno)
+
+	resp, err := c.client.Do(ctx, _LookupBlock, data)
+	if err != nil {
+		return nil, err
+	}
+
+	switch resp.TypeID {
+	case _BlockHeader:
+		b := new(tlb.BlockInfo)
+		resp.Data, err = b.Load(resp.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		return b, nil
+	case _LSError:
+		return nil, LSError{
+			Code: binary.LittleEndian.Uint32(resp.Data),
+			Text: string(resp.Data[4:]),
+		}
+	}
+
+	return nil, errors.New("unknown response type")
+}
+
 func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tlb.Block, error) {
 	resp, err := c.client.Do(ctx, _GetBlock, block.Serialize())
 	if err != nil {
