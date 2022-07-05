@@ -79,3 +79,7 @@ type Block struct {
 	StateUpdate StateUpdate `tlb:"^"`
 	Extra       *BlockExtra `tlb:"^"`
 }
+
+type AllShardsInfo struct {
+	ShardHashes *cell.Dictionary `tlb:"maybe ^dict 32"`
+}
