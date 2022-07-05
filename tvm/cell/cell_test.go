@@ -107,21 +107,3 @@ func TestCell_InsaneBOC(t *testing.T) {
 	}
 	_ = c
 }
-
-/*
-func TestCell_TokenMetadata(t *testing.T) {
-	// b5ee9c72c1010301003d0000052a
-	// 0103 00c0 01
-	// 0143 a019208def46f5a1d4f9dce66ab309f4a851305f166f91ef79d923ef58e34f9a2090 02
-	// 0022 0054657374204465736372697074696f6e
-
-	data, _ := hex.DecodeString("b5ee9c72c1010301003d0000052a010300c0010143a019208def46f5a1d4f9dce66ab309f4a851305f166f91ef79d923ef58e34f9a20900200220054657374204465736372697074696f6efdaf0088")
-	c, err := FromBOC(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = c
-
-	println(c.Dump())
-}
-*/

@@ -30,7 +30,7 @@ func main() {
 		return
 	}
 
-	addr := address.MustParseAddr("EQDEGeK4o7bNgazTln27r0RC4YcOmerzIni3gUpsyqxfgMWk")
+	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
 	res, err := api.GetAccount(context.Background(), b, addr)
 	if err != nil {
