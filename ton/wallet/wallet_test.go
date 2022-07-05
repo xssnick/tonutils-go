@@ -22,7 +22,7 @@ type MockAPI struct {
 	runGetMethod            func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error)
 }
 
-func (m MockAPI) GetBlockInfo(ctx context.Context) (*tlb.BlockInfo, error) {
+func (m MockAPI) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
 	return m.getBlockInfo(ctx)
 }
 

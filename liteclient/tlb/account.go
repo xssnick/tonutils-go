@@ -11,10 +11,21 @@ import (
 type AccountStatus string
 
 const (
-	AccountStatusActive = "ACTIVE"
-	AccountStatusUninit = "UNINIT"
-	AccountStatusFrozen = "FROZEN"
+	AccountStatusActive   = "ACTIVE"
+	AccountStatusUninit   = "UNINIT"
+	AccountStatusFrozen   = "FROZEN"
+	AccountStatusNonExist = "NON_EXIST"
 )
+
+type CurrencyCollection struct {
+	Coins           *Grams           `tlb:"."`
+	ExtraCurrencies *cell.Dictionary `tlb:"maybe ^dict 32"`
+}
+
+type DepthBalanceInfo struct {
+	Depth      uint32             `tlb:"## 5"`
+	Currencies CurrencyCollection `tlb:"."`
+}
 
 type AccountStorage struct {
 	Status            AccountStatus
@@ -40,6 +51,26 @@ type AccountState struct {
 	StorageInfo StorageInfo
 
 	AccountStorage
+}
+
+func (g *AccountStatus) LoadFromCell(loader *cell.LoadCell) error {
+	state, err := loader.LoadUInt(2)
+	if err != nil {
+		return err
+	}
+
+	switch state {
+	case 0b11:
+		*g = AccountStatusNonExist
+	case 0b10:
+		*g = AccountStatusActive
+	case 0b01:
+		*g = AccountStatusFrozen
+	case 0b00:
+		*g = AccountStatusUninit
+	}
+
+	return nil
 }
 
 func (a *AccountState) LoadFromCell(loader *cell.LoadCell) error {
@@ -175,7 +206,7 @@ func (s *AccountStorage) LoadFromCell(loader *cell.LoadCell) error {
 	}
 
 	s.LastTransactionLT = lastTransaction
-	s.Balance = new(Grams).FromNanoTON(coins)
+	s.Balance = FromNanoTON(coins)
 
 	return nil
 }

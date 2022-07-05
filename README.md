@@ -1,5 +1,5 @@
 # tonutils-go
-![Coverage](https://img.shields.io/badge/Coverage-56.0%25-yellow)
+![Coverage](https://img.shields.io/badge/Coverage-64.4%25-yellow)
 
 Golang library for interacting with TON blockchain.
 
@@ -59,7 +59,7 @@ if err != nil {
 
 if balance.NanoTON().Uint64() >= 3000000 {
     addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
-    err = w.Transfer(context.Background(), addr, new(tlb.Grams).MustFromTON("0.003"), "Hey bro, happy birthday!")
+    err = w.Transfer(context.Background(), addr, tlb.MustFromTON("0.003"), "Hey bro, happy birthday!")
     if err != nil {
         panic(err)
     }
@@ -82,7 +82,7 @@ We can trigger it and get result this way:
 // api = initialized ton.APIClient, see Connection in readme
 
 // we need fresh block info to run get methods
-block, err := api.GetBlockInfo(context.Background())
+block, err := api.GetMasterchainInfo(context.Background())
 if err != nil {
     panic(err)
 }

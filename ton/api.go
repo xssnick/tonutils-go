@@ -15,8 +15,11 @@ const (
 	_GetAccountState       int32 = 1804144165
 	_SendMessage           int32 = 1762317442
 	_GetTransactions       int32 = 474015649
+	_GetOneTransaction     int32 = -737205014
 	_GetBlock              int32 = 1668796173
+	_GetAllShardsInfo      int32 = 1960050027
 	_ListBlockTransactions int32 = -1375942694
+	_LookupBlock           int32 = -87492834
 )
 
 // responses
@@ -25,8 +28,11 @@ const (
 	_AccountState      int32 = 1887029073
 	_SendMessageResult int32 = 961602967
 	_TransactionsList  int32 = 1864812043
+	_TransactionInfo   int32 = 249490759
 	_BlockData         int32 = -1519063700
 	_BlockTransactions int32 = -1114854101
+	_BlockHeader       int32 = 1965916697
+	_AllShardsInfo     int32 = 160425773
 
 	_BoolTrue  int32 = -1720552011
 	_BoolFalse int32 = -1132882121
