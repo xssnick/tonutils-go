@@ -19,7 +19,7 @@ const (
 
 type CurrencyCollection struct {
 	Coins           *Grams           `tlb:"."`
-	ExtraCurrencies *cell.Dictionary `tlb:"maybe ^dict 32"`
+	ExtraCurrencies *cell.Dictionary `tlb:"dict 32"`
 }
 
 type DepthBalanceInfo struct {

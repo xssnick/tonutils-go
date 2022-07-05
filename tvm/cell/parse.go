@@ -158,13 +158,19 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 		refsIndex := make([]int, 0, refsNum)
 		for y := 0; y < refsNum; y++ {
 			refIndex := data[offset : offset+refSzBytes]
+
 			refsIndex = append(refsIndex, dynInt(refIndex))
 			offset += refSzBytes
 		}
 
 		refs := make([]*Cell, len(refsIndex))
 		for y, id := range refsIndex {
+			if i == id {
+				return nil, errors.New("recursive reference of cells")
+			}
+
 			refs[y] = &cells[id]
+
 			referred[id] = true
 		}
 

@@ -35,7 +35,7 @@ type InternalMessage struct {
 	SrcAddr         *address.Address `tlb:"addr"`
 	DstAddr         *address.Address `tlb:"addr"`
 	Amount          *Grams           `tlb:"."`
-	ExtraCurrencies *cell.Dictionary `tlb:"maybe ^dict 32"`
+	ExtraCurrencies *cell.Dictionary `tlb:"dict 32"`
 	IHRFee          *Grams           `tlb:"."`
 	FwdFee          *Grams           `tlb:"."`
 	CreatedLT       uint64           `tlb:"## 64"`

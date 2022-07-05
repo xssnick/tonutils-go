@@ -58,8 +58,8 @@ type StateUpdate struct {
 type McBlockExtra struct {
 	_           Magic            `tlb:"#cca5"`
 	KeyBlock    uint8            `tlb:"## 1"`
-	ShardHashes *cell.Dictionary `tlb:"maybe ^dict 32"`
-	ShardFees   *cell.Dictionary `tlb:"maybe ^dict 96"`
+	ShardHashes *cell.Dictionary `tlb:"dict 32"`
+	ShardFees   *cell.Dictionary `tlb:"dict 96"`
 }
 
 type BlockExtra struct {
@@ -81,5 +81,5 @@ type Block struct {
 }
 
 type AllShardsInfo struct {
-	ShardHashes *cell.Dictionary `tlb:"maybe ^dict 32"`
+	ShardHashes *cell.Dictionary `tlb:"dict 32"`
 }
