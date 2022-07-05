@@ -82,7 +82,7 @@ We can trigger it and get result this way:
 // api = initialized ton.APIClient, see Connection in readme
 
 // we need fresh block info to run get methods
-block, err := api.GetBlockInfo(context.Background())
+block, err := api.GetMasterchainInfo(context.Background())
 if err != nil {
     panic(err)
 }

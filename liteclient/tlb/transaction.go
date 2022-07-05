@@ -58,7 +58,11 @@ func (t *Transaction) String() string {
 
 	if in.Cmp(big.NewInt(0)) != 0 {
 		intTx := t.IO.In.AsInternal()
-		build += fmt.Sprintf("LT: %d, In: %s TON, From %s, Comment: %s", t.LT, FromNanoTON(in).TON(), intTx.SrcAddr, intTx.Comment())
+		build += fmt.Sprintf("LT: %d, In: %s TON, From %s", t.LT, FromNanoTON(in).TON(), intTx.SrcAddr)
+		comment := intTx.Comment()
+		if comment != "" {
+			build += ", Comment: " + comment
+		}
 	}
 
 	if out.Cmp(big.NewInt(0)) != 0 {

@@ -10,7 +10,9 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func (c *APIClient) GetBlockInfo(ctx context.Context) (*tlb.BlockInfo, error) {
+var ErrBlockNotFound = errors.New("block not found")
+
+func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
 	resp, err := c.client.Do(ctx, _GetMasterchainInfo, nil)
 	if err != nil {
 		return nil, err
@@ -25,10 +27,15 @@ func (c *APIClient) GetBlockInfo(ctx context.Context) (*tlb.BlockInfo, error) {
 	return block, nil
 }
 
-func (c *APIClient) LookupBlock(ctx context.Context, workchain uint32, shard uint64, seqno uint32) (*tlb.BlockInfo, error) {
+// GetBlockInfo DEPRECATED and will be removed soon, please use GetMasterchainInfo
+func (c *APIClient) GetBlockInfo(ctx context.Context) (*tlb.BlockInfo, error) {
+	return c.GetMasterchainInfo(ctx)
+}
+
+func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard uint64, seqno uint32) (*tlb.BlockInfo, error) {
 	data := make([]byte, 20)
 	binary.LittleEndian.PutUint32(data, 1)
-	binary.LittleEndian.PutUint32(data[4:], workchain)
+	binary.LittleEndian.PutUint32(data[4:], uint32(workchain))
 	binary.LittleEndian.PutUint64(data[8:], shard)
 	binary.LittleEndian.PutUint32(data[16:], seqno)
 
@@ -47,10 +54,17 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain uint32, shard uin
 
 		return b, nil
 	case _LSError:
-		return nil, LSError{
+		lsErr := LSError{
 			Code: binary.LittleEndian.Uint32(resp.Data),
 			Text: string(resp.Data[4:]),
 		}
+
+		// 651 = block not found code
+		if lsErr.Code == 651 {
+			return nil, ErrBlockNotFound
+		}
+
+		return nil, lsErr
 	}
 
 	return nil, errors.New("unknown response type")
@@ -98,13 +112,13 @@ func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockIn
 	req := append(block.Serialize(), make([]byte, 8)...)
 
 	mode := uint32(0b111)
-	if after != nil {
+	if after != nil && after[0] != nil {
 		mode |= 1 << 7
 	}
 
 	binary.LittleEndian.PutUint32(req[len(req)-8:], mode)
 	binary.LittleEndian.PutUint32(req[len(req)-4:], count)
-	if after != nil {
+	if len(after) > 0 && after[0] != nil {
 		req = append(req, after[0].AccountID...)
 
 		ltBts := make([]byte, 8)
@@ -172,4 +186,73 @@ func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockIn
 	}
 
 	return nil, false, errors.New("unknown response type")
+}
+
+func (c *APIClient) GetBlockShardsInfo(ctx context.Context, block *tlb.BlockInfo) ([]*tlb.BlockInfo, error) {
+	resp, err := c.client.Do(ctx, _GetAllShardsInfo, block.Serialize())
+	if err != nil {
+		return nil, err
+	}
+
+	switch resp.TypeID {
+	case _AllShardsInfo:
+		b := new(tlb.BlockInfo)
+		resp.Data, err = b.Load(resp.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		var proof []byte
+		proof, resp.Data = loadBytes(resp.Data)
+		_ = proof
+
+		var data []byte
+		data, resp.Data = loadBytes(resp.Data)
+
+		c, err := cell.FromBOC(data)
+		if err != nil {
+			return nil, err
+		}
+
+		var inf tlb.AllShardsInfo
+		err = tlb.LoadFromCell(&inf, c.BeginParse())
+		if err != nil {
+			return nil, err
+		}
+
+		var shards []*tlb.BlockInfo
+
+		for _, kv := range inf.ShardHashes.All() {
+			var binTree tlb.BinTree
+			err = binTree.LoadFromCell(kv.Value.BeginParse().MustLoadRef())
+			if err != nil {
+				return nil, fmt.Errorf("load BinTree err: %w", err)
+			}
+
+			for _, bk := range binTree.All() {
+				var bData tlb.ShardDesc
+				if err = tlb.LoadFromCell(&bData, bk.Value.BeginParse()); err != nil {
+					return nil, fmt.Errorf("load ShardDesc err: %w", err)
+				}
+
+				// TODO: its only 9223372036854775808 shard now, need to parse ids from somewhere
+				shards = append(shards, &tlb.BlockInfo{
+					Workchain: 0,
+					Shard:     9223372036854775808,
+					SeqNo:     bData.SeqNo,
+					RootHash:  bData.RootHash,
+					FileHash:  bData.FileHash,
+				})
+			}
+		}
+
+		return shards, nil
+	case _LSError:
+		return nil, LSError{
+			Code: binary.LittleEndian.Uint32(resp.Data),
+			Text: string(resp.Data[4:]),
+		}
+	}
+
+	return nil, errors.New("unknown response type")
 }

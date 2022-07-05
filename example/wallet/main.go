@@ -35,7 +35,7 @@ func main() {
 
 	log.Println("wallet address:", w.Address())
 
-	block, err := api.GetBlockInfo(context.Background())
+	block, err := api.GetMasterchainInfo(context.Background())
 	if err != nil {
 		log.Fatalln("get block err:", err.Error())
 		return

@@ -21,7 +21,7 @@ const (
 )
 
 type TonAPI interface {
-	GetBlockInfo(ctx context.Context) (*tlb.BlockInfo, error)
+	GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
 	GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*ton.Account, error)
 	SendExternalMessage(ctx context.Context, addr *address.Address, msg *cell.Cell) error
 	SendExternalInitMessage(ctx context.Context, addr *address.Address, msg *cell.Cell, state *tlb.StateInit) error
@@ -72,7 +72,7 @@ func (w *Wallet) Send(ctx context.Context, mode byte, message *tlb.InternalMessa
 
 	switch w.ver {
 	case V3:
-		block, err := w.api.GetBlockInfo(ctx)
+		block, err := w.api.GetMasterchainInfo(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to get block: %w", err)
 		}
