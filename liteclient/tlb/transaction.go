@@ -25,7 +25,7 @@ type Transaction struct {
 	EndStatus   AccountStatus `tlb:"."`
 	IO          struct {
 		In  *Message   `tlb:"maybe ^"`
-		Out []*Message `tlb:"maybe ^dict 15 -> array ^"`
+		Out []*Message `tlb:"dict 15 -> array ^"`
 	} `tlb:"^"`
 	TotalFees   CurrencyCollection `tlb:"."`
 	StateUpdate *cell.Cell         `tlb:"^"`

@@ -25,7 +25,7 @@ type manualLoader interface {
 // addr - loads ton address
 // maybe - reads 1 bit, and loads rest if its 1, can be used in combination with others only
 // either X Y - reads 1 bit, if its 0 - loads X, if 1 - loads Y
-// Some tags can be combined, for example "maybe ^dict 256", "maybe ^"
+// Some tags can be combined, for example "dict 256", "maybe ^"
 // Magic can be used to load first bits and check struct type, in tag can be specified magic number itself, in [#]HEX or [$]BIN format
 // Example:
 // _ Magic `tlb:"#deadbeef"
@@ -189,21 +189,13 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 				return fmt.Errorf("magic is not correct")
 			}
 			continue
-		} else if settings[0] == "dict" || settings[0] == "^dict" {
+		} else if settings[0] == "dict" {
 			sz, err := strconv.Atoi(settings[1])
 			if err != nil {
 				panic(fmt.Sprintf("cannot deserialize field '%s' as dict, bad size '%s'", field.Name, settings[1]))
 			}
 
-			cl := loader
-			if settings[0][0] == '^' {
-				cl, err = loader.LoadRef()
-				if err != nil {
-					return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
-				}
-			}
-
-			dict, err := cl.LoadDict(sz)
+			dict, err := loader.LoadDict(sz)
 			if err != nil {
 				return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
 			}

@@ -3,6 +3,7 @@ package cell
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"math"
 )
 
@@ -17,17 +18,31 @@ type HashmapKV struct {
 }
 
 func (c *LoadCell) LoadDict(keySz int) (*Dictionary, error) {
-	d := Dictionary{
+	d := &Dictionary{
 		storage: map[string]*HashmapKV{},
 		keySz:   keySz,
 	}
 
-	err := d.mapInner(keySz, keySz, c, BeginCell())
+	has, err := c.LoadBoolBit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load maybe for dict, err: %w", err)
+	}
+
+	if !has {
+		return d, nil
+	}
+
+	cl, err := c.LoadRef()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load ref for dict, err: %w", err)
+	}
+
+	err = d.mapInner(keySz, keySz, cl, BeginCell())
 	if err != nil {
 		return nil, err
 	}
 
-	return &d, nil
+	return d, nil
 }
 
 func (d *Dictionary) Get(key *Cell) *Cell {
