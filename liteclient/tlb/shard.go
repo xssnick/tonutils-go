@@ -11,7 +11,7 @@ type ShardState struct {
 	Seqno           uint32     `tlb:"## 32"`
 	OutMsgQueueInfo *cell.Cell `tlb:"^"`
 	Accounts        struct {
-		ShardAccounts *cell.Dictionary `tlb:"maybe ^dict 256"`
+		ShardAccounts *cell.Dictionary `tlb:"dict 256"`
 	} `tlb:"^"`
 }
 

@@ -16,7 +16,7 @@ type StateInit struct {
 	TickTock *TickTock        `tlb:"maybe ^"`
 	Data     *cell.Cell       `tlb:"maybe ^"`
 	Code     *cell.Cell       `tlb:"maybe ^"`
-	Lib      *cell.Dictionary `tlb:"maybe ^dict 256"`
+	Lib      *cell.Dictionary `tlb:"dict 256"`
 }
 
 func (m *StateInit) ToCell() (*cell.Cell, error) {
