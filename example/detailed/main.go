@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	client := liteclient.NewClient()
+	client := liteclient.NewConnectionPool()
 
 	servers := map[string]string{
 		"65.21.74.140:46427": "JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=",
@@ -24,7 +24,7 @@ func main() {
 	// we can connect to any number of servers, load balancing is done inside library
 	for addr, key := range servers {
 		// connect to testnet lite server
-		err := client.Connect(context.Background(), addr, key)
+		err := client.AddConnection(context.Background(), addr, key)
 		if err != nil {
 			log.Fatalln("connection err: ", err.Error())
 			return

@@ -2,7 +2,6 @@ package cell
 
 import (
 	"encoding/binary"
-	"errors"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -44,12 +43,16 @@ func (b *Builder) StoreBigCoins(value *big.Int) error {
 		return ErrTooBigValue
 	}
 
+	if b.bitsSz+4+(ln*8) >= 1024 {
+		return ErrNotFit1023
+	}
+
 	err := b.StoreUInt(uint64(ln), 4)
 	if err != nil {
 		return err
 	}
 
-	err = b.StoreBigInt(value, ln*8)
+	err = b.StoreBigUInt(value, ln*8)
 	if err != nil {
 		return err
 	}
@@ -67,7 +70,7 @@ func (b *Builder) MustStoreUInt(value uint64, sz int) *Builder {
 
 func (b *Builder) StoreUInt(value uint64, sz int) error {
 	if sz > 64 {
-		return b.StoreBigInt(new(big.Int).SetUint64(value), sz)
+		return b.StoreBigUInt(new(big.Int).SetUint64(value), sz)
 	}
 
 	value <<= 64 - sz
@@ -75,6 +78,18 @@ func (b *Builder) StoreUInt(value uint64, sz int) error {
 	binary.BigEndian.PutUint64(buf, value)
 
 	return b.StoreSlice(buf, sz)
+}
+
+func (b *Builder) MustStoreInt(value int64, sz int) *Builder {
+	err := b.StoreInt(value, sz)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) StoreInt(value int64, sz int) error {
+	return b.StoreBigInt(new(big.Int).SetInt64(value), sz)
 }
 
 func (b *Builder) MustStoreBoolBit(value bool) *Builder {
@@ -90,24 +105,28 @@ func (b *Builder) StoreBoolBit(value bool) error {
 	if value {
 		i = 1
 	}
-	return b.StoreBigInt(new(big.Int).SetUint64(i), 1)
+	return b.StoreBigUInt(new(big.Int).SetUint64(i), 1)
 }
 
-func (b *Builder) MustStoreBigInt(value *big.Int, sz int) *Builder {
-	err := b.StoreBigInt(value, sz)
+func (b *Builder) MustStoreBigUInt(value *big.Int, sz int) *Builder {
+	err := b.StoreBigUInt(value, sz)
 	if err != nil {
 		panic(err)
 	}
 	return b
 }
 
-func (b *Builder) StoreBigInt(value *big.Int, sz int) error {
+func (b *Builder) StoreBigUInt(value *big.Int, sz int) error {
 	if value.BitLen() > 256 {
-		panic(ErrTooBigValue.Error())
+		return ErrTooBigValue
+	}
+
+	if value.Sign() == -1 {
+		return ErrNegative
 	}
 
 	if sz > 256 {
-		panic(ErrTooBigSize.Error())
+		return ErrTooBigSize
 	}
 
 	bytes := value.Bytes()
@@ -138,6 +157,40 @@ func (b *Builder) StoreBigInt(value *big.Int, sz int) error {
 	return b.StoreSlice(bytes, sz)
 }
 
+func (b *Builder) MustStoreBigInt(value *big.Int, sz int) *Builder {
+	err := b.StoreBigInt(value, sz)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) StoreBigInt(value *big.Int, sz int) error {
+	if value.BitLen() > 256 {
+		return ErrTooBigValue
+	}
+
+	if sz > 256 {
+		return ErrTooBigSize
+	}
+
+	one := big.NewInt(1)
+
+	if value.Sign() == -1 {
+		// get max value of given sz
+		i := new(big.Int).Lsh(one, uint(sz+1))
+		i = i.Sub(i, one)
+		i = i.Rsh(i, 1)
+
+		// 11111111 is -1, so we need to add 1 to our negative value first,
+		// because we already have -1 in 'i'
+		value = value.Add(value, one)
+		value = value.Add(value, i)
+	}
+
+	return b.StoreBigUInt(value, sz)
+}
+
 func (b *Builder) MustStoreAddr(addr *address.Address) *Builder {
 	err := b.StoreAddr(addr)
 	if err != nil {
@@ -148,7 +201,14 @@ func (b *Builder) MustStoreAddr(addr *address.Address) *Builder {
 
 func (b *Builder) StoreAddr(addr *address.Address) error {
 	if addr == nil {
+		if b.bitsSz+2 >= 1024 {
+			return ErrNotFit1023
+		}
 		return b.StoreUInt(0, 2)
+	}
+
+	if b.bitsSz+2+1+8+256 >= 1024 {
+		return ErrNotFit1023
 	}
 
 	// addr std
@@ -194,7 +254,7 @@ func (b *Builder) StoreMaybeRef(ref *Cell) error {
 		return ErrTooMuchRefs
 	}
 	if b.bitsSz+1 >= 1024 {
-		return ErNotFit1024
+		return ErrNotFit1023
 	}
 
 	b.MustStoreUInt(1, 1).MustStoreRef(ref)
@@ -210,12 +270,12 @@ func (b *Builder) MustStoreRef(ref *Cell) *Builder {
 }
 
 func (b *Builder) StoreRef(ref *Cell) error {
-	if len(b.refs) > 4 {
+	if len(b.refs) >= 4 {
 		return ErrTooMuchRefs
 	}
 
 	if ref == nil {
-		return errors.New("ref cannot be nil")
+		return ErrRefCannotBeNil
 	}
 
 	b.refs = append(b.refs, ref)
@@ -242,7 +302,7 @@ func (b *Builder) StoreSlice(bytes []byte, sz int) error {
 	}
 
 	if b.bitsSz+sz >= 1024 {
-		return ErNotFit1024
+		return ErrNotFit1023
 	}
 
 	leftSz := sz
@@ -290,7 +350,7 @@ func (b *Builder) StoreBuilder(builder *Builder) error {
 	}
 
 	if b.bitsSz+builder.bitsSz >= 1024 {
-		return ErrTooMuchRefs
+		return ErrNotFit1023
 	}
 
 	b.refs = append(b.refs, builder.refs...)

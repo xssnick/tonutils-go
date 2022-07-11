@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"testing"
 )
+
+var data1024, _ = hex.DecodeString("0000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000003")
 
 func TestCell(t *testing.T) {
 	c := BeginCell()
@@ -243,5 +246,130 @@ func TestBuilder_MustStoreUInt(t *testing.T) {
 	val = BeginCell().MustStoreUInt(0xFFFFFFFFFFFFFFFF, 60).EndCell().BeginParse().MustLoadUInt(60)
 	if val != 0xFFFFFFFFFFFFFFF {
 		t.Fatal("incorrect8", val)
+	}
+}
+
+func TestBuilder_StoreBigInt(t *testing.T) {
+	c := BeginCell()
+
+	err := c.StoreBigInt(new(big.Int), 300)
+	if err != ErrTooBigSize {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	err = c.StoreBigInt(new(big.Int).Lsh(big.NewInt(1), 257), 256)
+	if err != ErrTooBigValue {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	c.MustStoreBigInt(new(big.Int).SetInt64(-3), 256)
+
+	data := hex.EncodeToString(c.EndCell().BeginParse().MustLoadSlice(256))
+	if data != "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd" {
+		t.Fatal("value incorrect, its:", data)
+	}
+}
+
+func TestBuilder_StoreBigUInt(t *testing.T) {
+	c := BeginCell()
+
+	err := c.StoreBigUInt(new(big.Int), 300)
+	if err != ErrTooBigSize {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	err = c.StoreBigUInt(new(big.Int).Lsh(big.NewInt(1), 257), 256)
+	if err != ErrTooBigValue {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	err = c.StoreBigUInt(big.NewInt(-1), 256)
+	if err != ErrNegative {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	c.MustStoreBigUInt(new(big.Int).SetInt64(3), 256)
+
+	data := hex.EncodeToString(c.EndCell().BeginParse().MustLoadSlice(256))
+	if data != "0000000000000000000000000000000000000000000000000000000000000003" {
+		t.Fatal("value incorrect, its:", data)
+	}
+}
+
+func TestBuilder_StoreSlice(t *testing.T) {
+	c := BeginCell()
+
+	err := c.StoreSlice([]byte{}, 1023)
+	if err != ErrSmallSlice {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	err = c.StoreSlice(data1024, 1024)
+	if err != ErrNotFit1023 {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	err = c.StoreSlice(data1024, 1023)
+	if err != nil {
+		t.Fatal("err incorrect, its:", err)
+	}
+}
+
+func TestBuilder_StoreRef(t *testing.T) {
+	c := BeginCell()
+
+	err := c.StoreRef(nil)
+	if err != ErrRefCannotBeNil {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	for i := 0; i < 4; i++ {
+		err = c.StoreRef(BeginCell().EndCell())
+		if err != nil {
+			t.Fatal("err incorrect, its:", err)
+		}
+	}
+
+	err = c.StoreRef(BeginCell().EndCell())
+	if err != ErrTooMuchRefs {
+		t.Fatal("err incorrect, its:", err)
+	}
+}
+
+func TestBuilder_StoreBuilder(t *testing.T) {
+	c := BeginCell().MustStoreSlice(data1024, 1015).MustStoreRef(BeginCell().EndCell())
+	b1 := BeginCell().MustStoreSlice([]byte{0xAA, 0xBB}, 16).MustStoreRef(BeginCell().EndCell())
+	b2 := BeginCell().MustStoreSlice([]byte{0xAA}, 8).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell())
+	b3 := BeginCell().MustStoreSlice([]byte{0xAA}, 8).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell())
+
+	err := c.StoreBuilder(b1)
+	if err != ErrNotFit1023 {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	err = c.StoreBuilder(b2)
+	if err != ErrTooMuchRefs {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	err = c.StoreBuilder(b3)
+	if err != nil {
+		t.Fatal("err incorrect, its:", err)
+	}
+
+	if val := c.RefsLeft(); val != 0 {
+		t.Fatal("refs left incorrect, its:", val)
+	}
+
+	if val := c.BitsLeft(); val != 0 {
+		t.Fatal("bits left incorrect, its:", val)
+	}
+
+	if val := c.BitsUsed(); val != 1023 {
+		t.Fatal("bits used incorrect, its:", val)
+	}
+
+	if val := c.RefsUsed(); val != 4 {
+		t.Fatal("refs used incorrect, its:", val)
 	}
 }

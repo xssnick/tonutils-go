@@ -1,4 +1,4 @@
-package utils
+package tl
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 
 func TestTLBytes(t *testing.T) {
 	buf := []byte{0xFF, 0xAA, 0xCC}
-	if !bytes.Equal(append([]byte{3}, buf...), TLBytes(buf)) {
+	if !bytes.Equal(append([]byte{3}, buf...), ToBytes(buf)) {
 		t.Fatal("not equal small")
 		return
 	}
@@ -18,7 +18,7 @@ func TestTLBytes(t *testing.T) {
 	}
 
 	// corner case + round to 4
-	if !bytes.Equal(append([]byte{0xFE, 0xFE, 0x00, 0x00}, append(buf, 0x00, 0x00)...), TLBytes(buf)) {
+	if !bytes.Equal(append([]byte{0xFE, 0xFE, 0x00, 0x00}, append(buf, 0x00, 0x00)...), ToBytes(buf)) {
 		t.Fatal("not equal middle")
 		return
 	}
@@ -28,7 +28,7 @@ func TestTLBytes(t *testing.T) {
 		buf = append(buf, byte(i%256))
 	}
 
-	if !bytes.Equal(append([]byte{0xFE, 0xC1, 0x04, 0x00}, append(buf, 0x00, 0x00, 0x00)...), TLBytes(buf)) {
+	if !bytes.Equal(append([]byte{0xFE, 0xC1, 0x04, 0x00}, append(buf, 0x00, 0x00, 0x00)...), ToBytes(buf)) {
 		t.Fatal("not equal big")
 		return
 	}

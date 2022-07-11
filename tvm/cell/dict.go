@@ -17,7 +17,7 @@ type HashmapKV struct {
 	Value *Cell
 }
 
-func (c *LoadCell) LoadDict(keySz int) (*Dictionary, error) {
+func (c *Slice) LoadDict(keySz int) (*Dictionary, error) {
 	d := &Dictionary{
 		storage: map[string]*HashmapKV{},
 		keySz:   keySz,
@@ -68,7 +68,7 @@ func (d *Dictionary) All() []*HashmapKV {
 	return all
 }
 
-func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *LoadCell, keyPrefix *Builder) error {
+func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *Slice, keyPrefix *Builder) error {
 	var err error
 	var sz int
 
@@ -114,7 +114,7 @@ func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *LoadCell, keyPrefix 
 	return nil
 }
 
-func loadLabel(sz int, loader *LoadCell, key *Builder) (int, *Builder, error) {
+func loadLabel(sz int, loader *Slice, key *Builder) (int, *Builder, error) {
 	first, err := loader.LoadUInt(1)
 	if err != nil {
 		return 0, nil, err

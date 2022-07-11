@@ -6,6 +6,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -40,10 +41,10 @@ Or you can at least add some coins to contract address
 */
 
 func main() {
-	client := liteclient.NewClient()
+	client := liteclient.NewConnectionPool()
 
 	// connect to testnet lite server
-	err := client.Connect(context.Background(), "65.21.74.140:46427", "JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
+	err := client.AddConnection(context.Background(), "65.21.74.140:46427", "JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
@@ -76,7 +77,10 @@ func main() {
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 
-	err = api.SendExternalMessage(context.Background(), address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ"), data)
+	err = api.SendExternalMessage(context.Background(), &tlb.ExternalMessage{
+		DstAddr: address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ"),
+		Body:    data,
+	})
 	if err != nil {
 		// FYI: it can fail if not enough balance on contract
 		log.Printf("send err: %s", err.Error())

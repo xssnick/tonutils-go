@@ -12,7 +12,7 @@ import (
 type Magic struct{}
 
 type manualLoader interface {
-	LoadFromCell(loader *cell.LoadCell) error
+	LoadFromCell(loader *cell.Slice) error
 }
 
 // LoadFromCell automatically parses cell based on struct tags
@@ -30,7 +30,7 @@ type manualLoader interface {
 // Example:
 // _ Magic `tlb:"#deadbeef"
 // _ Magic `tlb:"$1101"
-func LoadFromCell(v any, loader *cell.LoadCell) error {
+func LoadFromCell(v any, loader *cell.Slice) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("v should be a pointer and not nil")
@@ -84,9 +84,18 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 
 			switch {
 			case num <= 64:
-				x, err := loader.LoadUInt(num)
-				if err != nil {
-					return fmt.Errorf("failed to load uint %d, err: %w", num, err)
+				var x any
+				switch field.Type.Kind() {
+				case reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8, reflect.Int:
+					x, err = loader.LoadInt(num)
+					if err != nil {
+						return fmt.Errorf("failed to load int %d, err: %w", num, err)
+					}
+				default:
+					x, err = loader.LoadUInt(num)
+					if err != nil {
+						return fmt.Errorf("failed to load uint %d, err: %w", num, err)
+					}
 				}
 
 				rv.Field(i).Set(reflect.ValueOf(x).Convert(field.Type))
@@ -247,7 +256,7 @@ func LoadFromCell(v any, loader *cell.LoadCell) error {
 	return nil
 }
 
-func structLoad(field reflect.Type, loader *cell.LoadCell) (reflect.Value, error) {
+func structLoad(field reflect.Type, loader *cell.Slice) (reflect.Value, error) {
 	newTyp := field
 	if newTyp.Kind() == reflect.Ptr {
 		newTyp = newTyp.Elem()

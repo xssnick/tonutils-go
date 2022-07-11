@@ -34,10 +34,10 @@ type InternalMessage struct {
 	Bounced         bool             `tlb:"bool"`
 	SrcAddr         *address.Address `tlb:"addr"`
 	DstAddr         *address.Address `tlb:"addr"`
-	Amount          *Grams           `tlb:"."`
+	Amount          Coins            `tlb:"."`
 	ExtraCurrencies *cell.Dictionary `tlb:"dict 32"`
-	IHRFee          *Grams           `tlb:"."`
-	FwdFee          *Grams           `tlb:"."`
+	IHRFee          Coins            `tlb:"."`
+	FwdFee          Coins            `tlb:"."`
 	CreatedLT       uint64           `tlb:"## 64"`
 	CreatedAt       uint32           `tlb:"## 32"`
 
@@ -45,11 +45,11 @@ type InternalMessage struct {
 	Body      *cell.Cell `tlb:"either . ^"`
 }
 
-type ExternalMessageIn struct {
+type ExternalMessage struct {
 	_         Magic            `tlb:"$10"`
 	SrcAddr   *address.Address `tlb:"addr"`
 	DstAddr   *address.Address `tlb:"addr"`
-	ImportFee *Grams           `tlb:"."`
+	ImportFee Coins            `tlb:"."`
 
 	StateInit *StateInit `tlb:"maybe either . ^"`
 	Body      *cell.Cell `tlb:"either . ^"`
@@ -91,15 +91,15 @@ func (m *InternalMessage) Comment() string {
 	return ""
 }
 
-func (m *ExternalMessageIn) Payload() *cell.Cell {
+func (m *ExternalMessage) Payload() *cell.Cell {
 	return m.Body
 }
 
-func (m *ExternalMessageIn) SenderAddr() *address.Address {
+func (m *ExternalMessage) SenderAddr() *address.Address {
 	return m.SrcAddr
 }
 
-func (m *ExternalMessageIn) DestAddr() *address.Address {
+func (m *ExternalMessage) DestAddr() *address.Address {
 	return m.DstAddr
 }
 
@@ -115,7 +115,7 @@ func (m *ExternalMessageOut) DestAddr() *address.Address {
 	return m.DstAddr
 }
 
-func (m *Message) LoadFromCell(loader *cell.LoadCell) error {
+func (m *Message) LoadFromCell(loader *cell.Slice) error {
 	dup := loader.Copy()
 
 	isExternal, err := dup.LoadBoolBit()
@@ -152,7 +152,7 @@ func (m *Message) LoadFromCell(loader *cell.LoadCell) error {
 			m.MsgType = MsgTypeExternalOut
 			return nil
 		case false:
-			var extMsg ExternalMessageIn
+			var extMsg ExternalMessage
 			err = LoadFromCell(&extMsg, loader)
 			if err != nil {
 				return fmt.Errorf("failed to parse external in message: %w", err)
@@ -171,8 +171,8 @@ func (m *Message) AsInternal() *InternalMessage {
 	return m.Msg.(*InternalMessage)
 }
 
-func (m *Message) AsExternalIn() *ExternalMessageIn {
-	return m.Msg.(*ExternalMessageIn)
+func (m *Message) AsExternalIn() *ExternalMessage {
+	return m.Msg.(*ExternalMessage)
 }
 
 func (m *Message) AsExternalOut() *ExternalMessageOut {
@@ -187,11 +187,7 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	b.MustStoreBoolBit(m.Bounced)
 	b.MustStoreAddr(m.SrcAddr)
 	b.MustStoreAddr(m.DstAddr)
-	if m.Amount != nil {
-		b.MustStoreBigCoins(m.Amount.NanoTON())
-	} else {
-		b.MustStoreCoins(0)
-	}
+	b.MustStoreBigCoins(m.Amount.NanoTON())
 
 	if m.ExtraCurrencies != nil {
 		return nil, errors.New("extra currencies serialization is not supported yet")
@@ -199,17 +195,8 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 
 	b.MustStoreBoolBit(m.ExtraCurrencies != nil)
 
-	if m.IHRFee != nil {
-		b.MustStoreBigCoins(m.IHRFee.NanoTON())
-	} else {
-		b.MustStoreCoins(0)
-	}
-
-	if m.FwdFee != nil {
-		b.MustStoreBigCoins(m.FwdFee.NanoTON())
-	} else {
-		b.MustStoreCoins(0)
-	}
+	b.MustStoreBigCoins(m.IHRFee.NanoTON())
+	b.MustStoreBigCoins(m.FwdFee.NanoTON())
 
 	b.MustStoreUInt(m.CreatedLT, 64)
 	b.MustStoreUInt(uint64(m.CreatedAt), 32)
@@ -244,4 +231,37 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 func (m *InternalMessage) Dump() string {
 	return fmt.Sprintf("Amount %s TON, Created at: %d, Created lt %d\nBounce: %t, Bounced %t, IHRDisabled %t\nSrcAddr: %s\nDstAddr: %s\nPayload: %s",
 		m.Amount.TON(), m.CreatedAt, m.CreatedLT, m.Bounce, m.Bounced, m.IHRDisabled, m.SrcAddr, m.DstAddr, m.Body.Dump())
+}
+
+func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
+	builder := cell.BeginCell().MustStoreUInt(0b10, 2).
+		MustStoreAddr(m.SrcAddr).
+		MustStoreAddr(m.DstAddr).
+		MustStoreBigCoins(m.ImportFee.NanoTON())
+
+	builder.MustStoreBoolBit(m.StateInit != nil) // has state init
+	if m.StateInit != nil {
+		stateCell, err := m.StateInit.ToCell()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize state init: %w", err)
+		}
+
+		if builder.BitsLeft()-2 < stateCell.BitsSize() || builder.RefsLeft()-2 < m.Body.RefsNum() {
+			builder.MustStoreBoolBit(true) // state as ref
+			builder.MustStoreRef(stateCell)
+		} else {
+			builder.MustStoreBoolBit(false) // state as slice
+			builder.MustStoreBuilder(stateCell.ToBuilder())
+		}
+	}
+
+	if builder.BitsLeft() < m.Body.BitsSize() || builder.RefsLeft() < m.Body.RefsNum() {
+		builder.MustStoreBoolBit(true) // body as ref
+		builder.MustStoreRef(m.Body)
+	} else {
+		builder.MustStoreBoolBit(false) // body as slice
+		builder.MustStoreBuilder(m.Body.ToBuilder())
+	}
+
+	return builder.EndCell(), nil
 }

@@ -11,32 +11,34 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math/big"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/xssnick/tonutils-go/utils"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
-type node struct {
+type connection struct {
+	id        uint32
 	addr      string
 	serverKey string
 
 	connResult chan error
 
-	conn   net.Conn
+	tcp    net.Conn
 	rCrypt cipher.Stream
 	wCrypt cipher.Stream
 	wLock  sync.Mutex
 
 	reqs chan *LiteRequest
 
-	client *Client
+	pool *ConnectionPool
 }
 
-func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
+func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string) error {
 	sKey, err := base64.StdEncoding.DecodeString(serverKey)
 	if err != nil {
 		return err
@@ -48,12 +50,13 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 		return err
 	}
 
-	n := &node{
+	conn := &connection{
 		addr:       addr,
 		serverKey:  serverKey,
 		connResult: make(chan error, 1),
 		reqs:       make(chan *LiteRequest),
-		client:     c,
+		pool:       c,
+		id:         crc32.ChecksumIEEE([]byte(serverKey)),
 	}
 
 	// get timeout if exists
@@ -62,7 +65,7 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 		till = time.Now().Add(60 * time.Second)
 	}
 
-	n.conn, err = net.DialTimeout("tcp", addr, till.Sub(time.Now()))
+	conn.tcp, err = net.DialTimeout("tcp", addr, till.Sub(time.Now()))
 	if err != nil {
 		return err
 	}
@@ -74,23 +77,26 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 	}
 
 	// build ciphers for incoming packets and for outgoing
-	n.rCrypt, err = newCipherCtr(rnd[:32], rnd[64:80])
+	conn.rCrypt, err = newCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
 		return err
 	}
-	n.wCrypt, err = newCipherCtr(rnd[32:64], rnd[80:96])
+	conn.wCrypt, err = newCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
 		return err
 	}
 
-	err = n.handshake(rnd, privateKey, sKey)
+	err = conn.handshake(rnd, privateKey, sKey)
 	if err != nil {
 		return err
 	}
 
 	connResult := make(chan error, 1)
 
-	go n.listen(connResult)
+	// we are waiting for handshake response and after
+	// connection established sending signal to connResult
+	// and listen goroutine stays working after it to serve responses
+	go conn.listen(connResult)
 
 	select {
 	case err = <-connResult:
@@ -98,10 +104,10 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 			return err
 		}
 
-		go n.startPings(5 * time.Second)
+		go conn.startPings(5 * time.Second)
 
 		c.nodesMx.Lock()
-		c.activeNodes = append(c.activeNodes, n)
+		c.activeNodes = append(c.activeNodes, conn)
 		c.nodesMx.Unlock()
 
 		return nil
@@ -110,7 +116,7 @@ func (c *Client) Connect(ctx context.Context, addr, serverKey string) error {
 	}
 }
 
-func (n *node) listen(connResult chan<- error) {
+func (n *connection) listen(connResult chan<- error) {
 	var initialized bool
 
 	var err error
@@ -163,9 +169,9 @@ func (n *node) listen(connResult chan<- error) {
 			break
 		}
 
-		n.client.reqMx.RLock()
-		ch := n.client.activeReqs[queryID]
-		n.client.reqMx.RUnlock()
+		n.pool.reqMx.RLock()
+		ch := n.pool.activeReqs[queryID]
+		n.pool.reqMx.RUnlock()
 
 		if ch != nil {
 			ch.RespChan <- &LiteResponse{
@@ -176,25 +182,25 @@ func (n *node) listen(connResult chan<- error) {
 	}
 
 	// force close in case of error
-	_ = n.conn.Close()
+	_ = n.tcp.Close()
 
 	connResult <- err
 
 	if initialized {
 		// deactivate connection
-		n.client.nodesMx.Lock()
-		for i := range n.client.activeNodes {
-			if n.client.activeNodes[i] == n {
+		n.pool.nodesMx.Lock()
+		for i := range n.pool.activeNodes {
+			if n.pool.activeNodes[i] == n {
 				// remove from list
-				n.client.activeNodes = append(n.client.activeNodes[:i], n.client.activeNodes[i+1:]...)
+				n.pool.activeNodes = append(n.pool.activeNodes[:i], n.pool.activeNodes[i+1:]...)
 				break
 			}
 		}
-		n.client.nodesMx.Unlock()
+		n.pool.nodesMx.Unlock()
 
-		n.client.reqMx.RLock()
-		dis := n.client.onDisconnect
-		n.client.reqMx.RUnlock()
+		n.pool.reqMx.RLock()
+		dis := n.pool.onDisconnect
+		n.pool.reqMx.RUnlock()
 
 		if dis != nil {
 			go dis(n.addr, n.serverKey)
@@ -202,7 +208,7 @@ func (n *node) listen(connResult chan<- error) {
 	}
 }
 
-func (n *node) startPings(every time.Duration) {
+func (n *connection) startPings(every time.Duration) {
 	for {
 		select {
 		case <-time.After(every):
@@ -216,16 +222,16 @@ func (n *node) startPings(every time.Duration) {
 		err = n.ping(num.Uint64())
 		if err != nil {
 			// force close in case of error
-			_ = n.conn.Close()
+			_ = n.tcp.Close()
 
 			break
 		}
 	}
 }
 
-func (n *node) readSize() (uint32, error) {
+func (n *connection) readSize() (uint32, error) {
 	size := make([]byte, 4)
-	_, err := n.conn.Read(size)
+	_, err := n.tcp.Read(size)
 	if err != nil {
 		return 0, err
 	}
@@ -242,14 +248,14 @@ func (n *node) readSize() (uint32, error) {
 	return sz, nil
 }
 
-func (n *node) readData(sz uint32) ([]byte, error) {
+func (n *connection) readData(sz uint32) ([]byte, error) {
 	var result []byte
 
 	// read exact number of bytes requested, blocking operation
 	left := int(sz)
 	for left > 0 {
 		data := make([]byte, left)
-		num, err := n.conn.Read(data)
+		num, err := n.tcp.Read(data)
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +270,7 @@ func (n *node) readData(sz uint32) ([]byte, error) {
 	return result, nil
 }
 
-func (n *node) send(data []byte) error {
+func (n *connection) send(data []byte) error {
 	buf := make([]byte, 4)
 
 	// ADNL packet should have nonce
@@ -291,7 +297,7 @@ func (n *node) send(data []byte) error {
 
 	// write all
 	for len(buf) > 0 {
-		n, err := n.conn.Write(buf)
+		n, err := n.tcp.Write(buf)
 		if err != nil {
 			return err
 		}
@@ -302,7 +308,7 @@ func (n *node) send(data []byte) error {
 	return nil
 }
 
-func (n *node) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) error {
+func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) error {
 	hash := sha256.New()
 	hash.Write(data)
 	checksum := hash.Sum(nil)
@@ -346,7 +352,7 @@ func (n *node) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed255
 	res = append(res, data...)
 
 	// send handshake packet to establish connection
-	_, err = n.conn.Write(res)
+	_, err = n.tcp.Write(res)
 	if err != nil {
 		return err
 	}
@@ -354,7 +360,7 @@ func (n *node) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey ed255
 	return nil
 }
 
-func (n *node) ping(qid uint64) error {
+func (n *connection) ping(qid uint64) error {
 	data := make([]byte, 12)
 	binary.LittleEndian.PutUint32(data, uint32(TCPPing))
 	binary.LittleEndian.PutUint64(data[4:], qid)
@@ -362,7 +368,7 @@ func (n *node) ping(qid uint64) error {
 	return n.send(data)
 }
 
-func (n *node) queryADNL(qid, payload []byte) error {
+func (n *connection) queryADNL(qid, payload []byte) error {
 	// bypass compiler negative check
 	t := ADNLQuery
 
@@ -370,24 +376,24 @@ func (n *node) queryADNL(qid, payload []byte) error {
 	binary.LittleEndian.PutUint32(data, uint32(t))
 
 	data = append(data, qid...)
-	data = append(data, utils.TLBytes(payload)...)
+	data = append(data, tl.ToBytes(payload)...)
 
 	return n.send(data)
 }
 
-func (n *node) queryLiteServer(qid []byte, typeID int32, payload []byte) error {
+func (n *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) error {
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
 
 	typData := make([]byte, 4)
 	binary.LittleEndian.PutUint32(typData, uint32(typeID))
 
-	data = append(data, utils.TLBytes(append(typData, payload...))...)
+	data = append(data, tl.ToBytes(append(typData, payload...))...)
 
 	return n.queryADNL(qid, data)
 }
 
-func (c *Client) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {
+func (c *ConnectionPool) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {
 	var tries int
 
 	var cb OnDisconnectCallback
@@ -395,7 +401,7 @@ func (c *Client) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries in
 		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 		defer cancel()
 
-		err := c.Connect(ctx, addr, key)
+		err := c.AddConnection(ctx, addr, key)
 		if err != nil {
 			if tries < maxTries {
 				time.Sleep(waitBeforeReconnect)
