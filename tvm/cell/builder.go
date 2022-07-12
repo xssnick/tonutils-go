@@ -236,12 +236,20 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 	return nil
 }
 
+func (b *Builder) MustStoreDict(ref *Cell) *Builder {
+	return b.MustStoreMaybeRef(ref)
+}
+
 func (b *Builder) MustStoreMaybeRef(ref *Cell) *Builder {
 	err := b.StoreMaybeRef(ref)
 	if err != nil {
 		panic(err)
 	}
 	return b
+}
+
+func (b *Builder) StoreDict(ref *Cell) error {
+	return b.StoreMaybeRef(ref)
 }
 
 func (b *Builder) StoreMaybeRef(ref *Cell) error {
@@ -292,6 +300,14 @@ func (b *Builder) MustStoreSlice(bytes []byte, sz int) *Builder {
 }
 
 func (b *Builder) StoreSlice(bytes []byte, sz int) error {
+	if sz < 0 {
+		//	return errors.New("sz should be >= 0")
+	}
+
+	if sz == 0 {
+		return nil
+	}
+
 	oneMore := 0
 	if sz%8 > 0 {
 		oneMore = 1

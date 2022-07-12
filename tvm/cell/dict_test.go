@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 
@@ -17,41 +18,92 @@ func TestLoadCell_LoadDict(t *testing.T) {
 
 	ld := c.BeginParse()
 	ld.MustLoadRef()
+	ld = ld.MustLoadRef()
 
-	dict, err := ld.MustLoadRef().LoadDict(256)
+	for i := 0; i < 2; i++ {
+		dict, err := ld.LoadDict(256)
+		if err != nil {
+			t.Fatal(err, i)
+			return
+		}
+
+		addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+		data := dict.Get(BeginCell().MustStoreSlice(addr.Data(), 256).EndCell())
+		if data == nil {
+			t.Fatal("not in dict", i)
+			return
+		}
+
+		data = dict.Get(BeginCell().MustStoreSlice(addr.Data(), 32).EndCell())
+		if data != nil {
+			t.Fatal("in dict", i)
+			return
+		}
+
+		addr2 := address.MustParseAddr("kQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0inM")
+		data = dict.Get(BeginCell().MustStoreSlice(addr2.Data(), 256).EndCell())
+		if data != nil {
+			t.Fatal("in dict", i)
+			return
+		}
+
+		all := dict.All()
+		if len(all) != 1 {
+			t.Fatal("keys num != 1", i)
+			return
+		}
+
+		if hex.EncodeToString(all[0].Key.BeginParse().MustLoadSlice(256)) != hex.EncodeToString(addr.Data()) {
+			t.Fatal("key in all not correct", i)
+			return
+		}
+
+		// rebuild
+		c, err = dict.ToCell()
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+
+		ld = BeginCell().MustStoreDict(c).EndCell().BeginParse()
+	}
+}
+
+func TestDictionary_ToCell(t *testing.T) {
+	d := NewDict(32)
+
+	for u := 0; u < 300; u++ {
+		for x, i := range []uint64{2, 3, 1, 88, 1273, 2211} {
+			val := BeginCell().MustStoreUInt(16+uint64(x), 32).EndCell()
+
+			key := BeginCell().MustStoreUInt(i+uint64(u*10000), 32).EndCell()
+			err := d.Set(key, val)
+			if err != nil {
+				t.Fatal("set err:", err)
+				return
+			}
+		}
+	}
+
+	c, err := d.ToCell()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("cell err:", err)
 		return
 	}
 
-	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
-	data := dict.Get(BeginCell().MustStoreSlice(addr.Data(), 256).EndCell())
-	if data == nil {
-		t.Fatal("not in dict")
+	d2, err := c.BeginParse().ToDict(32)
+	if err != nil {
+		t.Fatal("load err:", err)
 		return
 	}
 
-	data = dict.Get(BeginCell().MustStoreSlice(addr.Data(), 32).EndCell())
-	if data != nil {
-		t.Fatal("in dict")
+	c2, err := d2.ToCell()
+	if err != nil {
+		t.Fatal("to cell err:", err)
 		return
 	}
 
-	addr2 := address.MustParseAddr("kQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0inM")
-	data = dict.Get(BeginCell().MustStoreSlice(addr2.Data(), 256).EndCell())
-	if data != nil {
-		t.Fatal("in dict")
-		return
-	}
-
-	all := dict.All()
-	if len(all) != 1 {
-		t.Fatal("keys num != 1")
-		return
-	}
-
-	if hex.EncodeToString(all[0].Key.BeginParse().MustLoadSlice(256)) != hex.EncodeToString(addr.Data()) {
-		t.Fatal("key in all not correct")
-		return
+	if !bytes.Equal(c2.Hash(), c.Hash()) {
+		t.Fatal("repack not match")
 	}
 }
