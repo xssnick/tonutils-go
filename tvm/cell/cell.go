@@ -18,16 +18,16 @@ type Cell struct {
 	refs []*Cell
 }
 
-func (c *Cell) BeginParse() *LoadCell {
+func (c *Cell) BeginParse() *Slice {
 	// copy data
 	data := append([]byte{}, c.data...)
 
-	refs := make([]*LoadCell, len(c.refs))
+	refs := make([]*Slice, len(c.refs))
 	for i, ref := range c.refs {
 		refs[i] = ref.BeginParse()
 	}
 
-	return &LoadCell{
+	return &Slice{
 		special: c.special,
 		level:   c.level,
 		bitsSz:  c.bitsSz,
@@ -75,7 +75,11 @@ func (c *Cell) dump(deep int, bin bool) string {
 			val = val[:len(val)-(8-(sz%8))]
 		}
 	} else {
-		val = hex.EncodeToString(data)
+		val = strings.ToUpper(hex.EncodeToString(data))
+		if sz%8 <= 4 && sz%8 > 0 {
+			// fift hex
+			val = val[:len(val)-1] + "_"
+		}
 	}
 
 	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"

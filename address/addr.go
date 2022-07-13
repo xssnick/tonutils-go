@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/sigurn/crc16"
-	"github.com/xssnick/tonutils-go/utils"
 )
 
 type Address struct {
@@ -68,18 +67,18 @@ func (a *Address) FlagsToByte() (flags byte) {
 	// TODO check this magic...
 	flags = 0b00010001
 	if !a.flags.bounceable {
-		utils.SetBit(&flags, 6)
+		setBit(&flags, 6)
 	}
 	if a.flags.testnet {
-		utils.SetBit(&flags, 7)
+		setBit(&flags, 7)
 	}
 	return flags
 }
 
 func parseFlags(data byte) flags {
 	return flags{
-		bounceable: !utils.HasBit(data, 6),
-		testnet:    utils.HasBit(data, 7),
+		bounceable: !hasBit(data, 6),
+		testnet:    hasBit(data, 7),
 	}
 }
 

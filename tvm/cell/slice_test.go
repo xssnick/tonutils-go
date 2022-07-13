@@ -100,3 +100,17 @@ func TestLoadCell_Loaders(t *testing.T) {
 		return
 	}
 }
+
+func TestSlice_LoadBigInt(t *testing.T) {
+	v := BeginCell().MustStoreInt(-5, 5).EndCell().BeginParse().MustLoadInt(5)
+	if v != -5 {
+		t.Fatal("i not -5", v)
+		return
+	}
+
+	v = BeginCell().MustStoreInt(-53276879, 256).EndCell().BeginParse().MustLoadInt(256)
+	if v != -53276879 {
+		t.Fatal("i not -53276879", v)
+		return
+	}
+}

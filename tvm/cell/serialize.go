@@ -9,10 +9,12 @@ import (
 )
 
 var ErrTooBigValue = errors.New("too big value")
+var ErrNegative = errors.New("value should be non negative")
+var ErrRefCannotBeNil = errors.New("ref cannot be nil")
 var ErrSmallSlice = errors.New("too small slice for this size")
-var ErrTooBigSize = errors.New("too big size")
+var ErrTooBigSize = errors.New("too big size of ")
 var ErrTooMuchRefs = errors.New("too much refs")
-var ErNotFit1024 = errors.New("cell data size should fit into 1024 bits")
+var ErrNotFit1023 = errors.New("cell data size should fit into 1023 bits")
 var ErrNoMoreRefs = errors.New("no more refs exists")
 
 func (c *Cell) ToBOC() []byte {

@@ -13,7 +13,7 @@ type manualLoad struct {
 	Val string
 }
 
-func (m *manualLoad) LoadFromCell(loader *cell.LoadCell) error {
+func (m *manualLoad) LoadFromCell(loader *cell.Slice) error {
 	m.Val = string(uint8(loader.MustLoadUInt(8)))
 	return nil
 }
@@ -21,6 +21,7 @@ func (m *manualLoad) LoadFromCell(loader *cell.LoadCell) error {
 type testInner struct {
 	_      Magic    `tlb:"$1011"`
 	Val    int64    `tlb:"## 34"`
+	Val2   uint64   `tlb:"## 12"`
 	BigVal *big.Int `tlb:"## 176"`
 	// Dict   *cell.Dictionary `tlb:"dict 32"`
 	C      *cell.Cell       `tlb:"^"`
@@ -30,25 +31,28 @@ type testInner struct {
 }
 
 type testTLB struct {
-	_           Magic      `tlb:"#ffaa"`
-	Val         uint32     `tlb:"## 32"`
-	Inside      testInner  `tlb:"^"`
-	Inside2     *testInner `tlb:"^"`
-	InsideMaybe *testInner `tlb:"maybe ^"`
-	Part        testInner  `tlb:"."`
-	Bits        []byte     `tlb:"bits 20"`
+	_                 Magic      `tlb:"#ffaa"`
+	Val               uint32     `tlb:"## 32"`
+	Inside            testInner  `tlb:"^"`
+	Inside2           *testInner `tlb:"^"`
+	InsideMaybe       *testInner `tlb:"maybe ^"`
+	Part              testInner  `tlb:"."`
+	InsideMaybeEither *testInner `tlb:"maybe either ^ ."`
+	Bits              []byte     `tlb:"bits 20"`
 }
 
 func TestLoadFromCell(t *testing.T) {
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).
-		MustStoreUInt(0xFFAA, 34).
+		MustStoreInt(-7172, 34).
+		MustStoreUInt(0xCCA, 12).
 		MustStoreUInt(7126382921832, 176).MustStoreRef(cell.BeginCell().EndCell()).
 		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8)
 
 	a := cell.BeginCell().MustStoreUInt(0xFFAA, 16).
-		MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).MustStoreBuilder(ref).MustStoreSlice([]byte{0xFF, 0xFF, 0xAA}, 20).EndCell().BeginParse()
+		MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).
+		MustStoreBuilder(ref).MustStoreMaybeRef(ref.EndCell()).MustStoreBoolBit(false).MustStoreSlice([]byte{0xFF, 0xFF, 0xAA}, 20).EndCell().BeginParse()
 
 	x := testTLB{}
 	err := LoadFromCell(&x, a)
@@ -69,6 +73,10 @@ func TestLoadFromCell(t *testing.T) {
 	}
 
 	if x.Part.BigVal.Uint64() != 7126382921832 {
+		t.Fatal("uint part 7126382921832 not eq")
+	}
+
+	if x.InsideMaybeEither.BigVal.Uint64() != 7126382921832 {
 		t.Fatal("uint part 7126382921832 not eq")
 	}
 

@@ -9,12 +9,15 @@ import (
 
 	"github.com/sigurn/crc16"
 	"github.com/xssnick/tonutils-go/address"
-	"github.com/xssnick/tonutils-go/liteclient/tlb"
+	"github.com/xssnick/tonutils-go/tl"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/utils"
 )
 
-func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error) {
+type MethodResponse struct {
+}
+
+func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error) {
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, 0b00000100)
 
@@ -45,11 +48,9 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 
 		for i := len(params) - 1; i >= 0; i-- {
 			switch v := params[i].(type) {
-			case uint64, uint32, uint16, uint8, uint, int:
+			case uint64, uint32, uint16, uint8, uint:
 				var val uint64
 				switch x := params[i].(type) {
-				case int:
-					val = uint64(x)
 				case uint:
 					val = uint64(x)
 				case uint32:
@@ -67,6 +68,26 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 					break
 				}
 				refNext = cell.BeginCell().MustStoreUInt(1, 8).MustStoreUInt(val, 64).MustStoreRef(refNext).EndCell()
+			case int64, int32, int16, int8, int:
+				var val int64
+				switch x := params[i].(type) {
+				case int:
+					val = int64(x)
+				case int32:
+					val = int64(x)
+				case int16:
+					val = int64(x)
+				case int8:
+					val = int64(x)
+				case int64:
+					val = x
+				}
+
+				if i == 0 {
+					builder.MustStoreUInt(1, 8).MustStoreInt(val, 64).MustStoreRef(refNext)
+					break
+				}
+				refNext = cell.BeginCell().MustStoreUInt(1, 8).MustStoreInt(val, 64).MustStoreRef(refNext).EndCell()
 			case *big.Int:
 				if i == 0 {
 					builder.MustStoreUInt(2, 8).MustStoreBigInt(v, 256).MustStoreRef(refNext)
@@ -79,30 +100,28 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 					break
 				}
 				refNext = cell.BeginCell().MustStoreUInt(3, 8).MustStoreRef(refNext).MustStoreRef(v).EndCell()
-			case []byte:
-				ln := 8 * len(v)
-
-				sCell := cell.BeginCell()
-				if err := sCell.StoreSlice(v, ln); err != nil {
-					return nil, err
+			case *cell.Slice:
+				sCell, err := v.ToCell()
+				if err != nil {
+					return nil, fmt.Errorf("failed to convert slice arg to cell: %w", err)
 				}
 
 				if i == 0 {
 					builder.MustStoreUInt(4, 8).
 						MustStoreUInt(0, 10).
-						MustStoreUInt(uint64(ln), 10).
+						MustStoreUInt(uint64(sCell.BitsSize()), 10).
 						MustStoreUInt(0, 6).
-						MustStoreRef(refNext).MustStoreRef(sCell.EndCell())
+						MustStoreRef(refNext).MustStoreRef(sCell)
 					break
 				}
 				refNext = cell.BeginCell().MustStoreUInt(4, 8).
 					MustStoreUInt(0, 10).
-					MustStoreUInt(uint64(ln), 10).
+					MustStoreUInt(uint64(sCell.BitsSize()), 10).
 					MustStoreUInt(0, 6).
-					MustStoreRef(refNext).MustStoreRef(sCell.EndCell()).EndCell()
+					MustStoreRef(refNext).MustStoreRef(sCell).EndCell()
 			default:
 				// TODO: auto convert if possible
-				return nil, errors.New("only integers, uints, *big.Int, *cell.Cell, and []byte allowed as contract args")
+				return nil, errors.New("only integers, uints, *big.Int, *cell.Cell, and *cell.Slice allowed as contract args")
 			}
 		}
 	}
@@ -110,7 +129,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 	req := builder.EndCell().ToBOCWithFlags(false)
 
 	// param
-	data = append(data, utils.TLBytes(req)...)
+	data = append(data, tl.ToBytes(req)...)
 
 	resp, err := c.client.Do(ctx, _RunContractGetMethod, data)
 	if err != nil {
@@ -144,7 +163,6 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 				exitCode,
 			}
 		}
-
 		resp.Data = resp.Data[4:]
 
 		var state []byte

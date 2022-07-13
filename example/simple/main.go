@@ -12,10 +12,10 @@ import (
 )
 
 func main() {
-	client := liteclient.NewClient()
+	client := liteclient.NewConnectionPool()
 
 	// connect to testnet lite server
-	err := client.Connect(context.Background(), "65.21.74.140:46427", "JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
+	err := client.AddConnection(context.Background(), "65.21.74.140:46427", "JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
