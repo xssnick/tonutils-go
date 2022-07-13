@@ -15,10 +15,12 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tl"
+	"golang.org/x/sync/errgroup"
 )
 
 type connection struct {
@@ -36,6 +38,50 @@ type connection struct {
 	reqs chan *LiteRequest
 
 	pool *ConnectionPool
+}
+
+func (c *ConnectionPool) AddConnetionsFromConfig(ctx context.Context, config GlobalConfig) error {
+	g, ctx := errgroup.WithContext(ctx)
+	success := 0
+
+	for _, ls := range config.Liteservers {
+		ip := intToIP4(ls.IP)
+		conStr := fmt.Sprintf("%s:%d", ip, ls.Port)
+		ls := ls
+
+		g.Go(func() error {
+			err := c.AddConnection(ctx, conStr, ls.ID.Key)
+			if err == nil {
+				success++
+			}
+			return err
+		})
+	}
+	err := g.Wait()
+
+	if success == 0 {
+		if err != nil {
+			return err
+		} else {
+			return ErrNoConnections
+		}
+	}
+
+	return nil
+}
+
+func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, configUrl string) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", configUrl, nil)
+	if err != nil {
+		return err
+	}
+
+	config, err := GetConfigFromUrl(configUrl, nil, req)
+	if err != nil {
+		return err
+	}
+
+	return c.AddConnetionsFromConfig(ctx, config)
 }
 
 func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string) error {
