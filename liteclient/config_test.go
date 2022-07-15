@@ -1,6 +1,7 @@
 package liteclient
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,7 +16,7 @@ func TestGetConfigFromUrl(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    GlobalConfig
+		want    *GlobalConfig
 		wantErr bool
 	}{
 		{
@@ -33,7 +34,7 @@ func TestGetConfigFromUrl(t *testing.T) {
 					}]
 				}`,
 			},
-			want: GlobalConfig{
+			want: &GlobalConfig{
 				Liteservers: []LiteserverConfig{
 					{
 						IP:   1,
@@ -62,16 +63,15 @@ func TestGetConfigFromUrl(t *testing.T) {
 					}]
 				}`,
 			},
-			want:    GlobalConfig{},
+			want:    nil,
 			wantErr: true,
 		},
-		// TODO: Add test cases.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := getMockClient(tt.args.response)
 			defer server.Close()
-			got, err := GetConfigFromUrl(server.URL, server.Client(), nil)
+			got, err := GetConfigFromUrl(context.Background(), server.URL)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetConfigFromUrl() error = %v, wantErr %v", err, tt.wantErr)
 				return

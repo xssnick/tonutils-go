@@ -1,6 +1,7 @@
 package liteclient
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,33 +12,26 @@ var (
 	ErrNoConnections = errors.New("no connections established")
 )
 
-type HttpClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
-
-func GetConfigFromUrl(url string, httpClient *http.Client, req *http.Request) (GlobalConfig, error) {
-	if req == nil {
-		var err error
-		req, err = http.NewRequest("GET", url, nil)
-		if err != nil {
-			return GlobalConfig{}, err
-		}
+func GetConfigFromUrl(ctx context.Context, url string) (*GlobalConfig, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
 	}
 
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
+	req = req.WithContext(ctx)
+
+	httpClient := http.DefaultClient
 
 	res, err := httpClient.Do(req)
 	if err != nil {
-		return GlobalConfig{}, err
+		return nil, err
 	}
 
 	defer res.Body.Close()
 
-	config := GlobalConfig{}
-	if err := json.NewDecoder(res.Body).Decode(&config); err != nil {
-		return GlobalConfig{}, err
+	config := &GlobalConfig{}
+	if err := json.NewDecoder(res.Body).Decode(config); err != nil {
+		return nil, err
 	}
 
 	return config, nil

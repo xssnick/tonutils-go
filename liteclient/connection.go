@@ -15,8 +15,8 @@ import (
 	"io"
 	"math/big"
 	"net"
-	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tl"
@@ -40,9 +40,9 @@ type connection struct {
 	pool *ConnectionPool
 }
 
-func (c *ConnectionPool) AddConnetionsFromConfig(ctx context.Context, config GlobalConfig) error {
+func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *GlobalConfig) error {
 	g, ctx := errgroup.WithContext(ctx)
-	success := 0
+	success := int32(0)
 
 	for _, ls := range config.Liteservers {
 		ip := intToIP4(ls.IP)
@@ -52,36 +52,31 @@ func (c *ConnectionPool) AddConnetionsFromConfig(ctx context.Context, config Glo
 		g.Go(func() error {
 			err := c.AddConnection(ctx, conStr, ls.ID.Key)
 			if err == nil {
-				success++
+				atomic.AddInt32(&success, 1)
 			}
 			return err
 		})
 	}
-	err := g.Wait()
 
+	err := g.Wait()
 	if success == 0 {
 		if err != nil {
 			return err
-		} else {
-			return ErrNoConnections
 		}
+
+		return ErrNoConnections
 	}
 
 	return nil
 }
 
 func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, configUrl string) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", configUrl, nil)
+	config, err := GetConfigFromUrl(ctx, configUrl)
 	if err != nil {
 		return err
 	}
 
-	config, err := GetConfigFromUrl(configUrl, nil, req)
-	if err != nil {
-		return err
-	}
-
-	return c.AddConnetionsFromConfig(ctx, config)
+	return c.AddConnectionsFromConfig(ctx, config)
 }
 
 func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string) error {
