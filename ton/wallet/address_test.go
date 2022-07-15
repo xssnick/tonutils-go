@@ -8,7 +8,7 @@ import (
 func TestAddressFromPubKey(t *testing.T) {
 	pkey, _ := hex.DecodeString("dcc39550bb494f4b493e7efe1aa18ea31470f33a2553c568cb74a17ed56790c1")
 
-	a, err := AddressFromPubKey(pkey, V3)
+	a, err := AddressFromPubKey(pkey, V3, DefaultSubwallet)
 	if err != nil {
 		t.Fatal(err)
 	}

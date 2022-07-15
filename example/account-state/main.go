@@ -11,10 +11,10 @@ import (
 )
 
 func main() {
-	client := liteclient.NewClient()
+	client := liteclient.NewConnectionPool()
 
 	// connect to mainnet lite server
-	err := client.Connect(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
@@ -23,8 +23,11 @@ func main() {
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
 
+	// if we want to route all requests to the same node, we can use it
+	ctx := client.StickyContext(context.Background())
+
 	// we need fresh block info to run get methods
-	b, err := api.GetMasterchainInfo(context.Background())
+	b, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
 		log.Fatalln("get block err:", err.Error())
 		return
@@ -32,7 +35,7 @@ func main() {
 
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
-	res, err := api.GetAccount(context.Background(), b, addr)
+	res, err := api.GetAccount(ctx, b, addr)
 	if err != nil {
 		log.Fatalln("get account err:", err.Error())
 		return
@@ -59,7 +62,7 @@ func main() {
 		}
 
 		// load transactions in batches with size 15
-		list, err := api.ListTransactions(context.Background(), addr, 15, lastLt, lastHash)
+		list, err := api.ListTransactions(ctx, addr, 15, lastLt, lastHash)
 		if err != nil {
 			log.Printf("send err: %s", err.Error())
 			return
