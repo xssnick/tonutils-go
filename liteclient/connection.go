@@ -16,9 +16,11 @@ import (
 	"math/big"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tl"
+	"golang.org/x/sync/errgroup"
 )
 
 type connection struct {
@@ -36,6 +38,45 @@ type connection struct {
 	reqs chan *LiteRequest
 
 	pool *ConnectionPool
+}
+
+func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *GlobalConfig) error {
+	g, ctx := errgroup.WithContext(ctx)
+	success := int32(0)
+
+	for _, ls := range config.Liteservers {
+		ip := intToIP4(ls.IP)
+		conStr := fmt.Sprintf("%s:%d", ip, ls.Port)
+		ls := ls
+
+		g.Go(func() error {
+			err := c.AddConnection(ctx, conStr, ls.ID.Key)
+			if err == nil {
+				atomic.AddInt32(&success, 1)
+			}
+			return err
+		})
+	}
+
+	err := g.Wait()
+	if success == 0 {
+		if err != nil {
+			return err
+		}
+
+		return ErrNoConnections
+	}
+
+	return nil
+}
+
+func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, configUrl string) error {
+	config, err := GetConfigFromUrl(ctx, configUrl)
+	if err != nil {
+		return err
+	}
+
+	return c.AddConnectionsFromConfig(ctx, config)
 }
 
 func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string) error {

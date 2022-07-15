@@ -25,17 +25,15 @@ Or you can run your own full node, see TON docs.
 
 You can connect like that:
 ```golang
-// initialize new client
+configUrl := "https://ton-blockchain.github.io/testnet-global.config.json"
+ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+defer cancel()
+
 client := liteclient.NewConnectionPool()
-// connect to lite server, can be connected to multiple servers in the same time
-err := client.AddConnection(context.Background(), 
-	"65.21.74.140:46427", 
-	"JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
+err := client.AddConnectionsFromConfigUrl(ctx, configUrl)
 if err != nil {
     panic(err)
 }
-
-// initialize ton api lite connection wrapper
 api := ton.NewAPIClient(client)
 ```
 ### Wallet
