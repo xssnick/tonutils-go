@@ -32,7 +32,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	var payload []byte
 	for i := 0; i < len(orderCells); i++ {
 		// serialize each cell
-		payload = append(payload, orderCells[i].serialize(int(cellSizeBytes), false)...)
+		payload = append(payload, orderCells[i].serialize(uint(cellSizeBytes), false)...)
 	}
 
 	// bytes needed to store len of payload
@@ -56,19 +56,19 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	data = append(data, sizeBytes)
 
 	// cells num
-	data = append(data, dynamicIntBytes(uint64(calcCells(c)), int(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(calcCells(c)), uint(cellSizeBytes))...)
 
 	// roots num (only 1 supported for now)
-	data = append(data, dynamicIntBytes(1, int(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(1, uint(cellSizeBytes))...)
 
 	// complete BOCs = 0
-	data = append(data, dynamicIntBytes(0, int(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(0, uint(cellSizeBytes))...)
 
 	// len of data
-	data = append(data, dynamicIntBytes(uint64(len(payload)), int(sizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(len(payload)), uint(sizeBytes))...)
 
 	// root should have index 0
-	data = append(data, dynamicIntBytes(0, int(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(0, uint(cellSizeBytes))...)
 	data = append(data, payload...)
 
 	if withCRC {
@@ -161,7 +161,7 @@ func flattenIndex(roots []*Cell) []*Cell {
 	return indexed
 }
 
-func (c *Cell) serialize(refIndexSzBytes int, isHash bool) []byte {
+func (c *Cell) serialize(refIndexSzBytes uint, isHash bool) []byte {
 	// copy
 	payload := append([]byte{}, c.BeginParse().MustLoadSlice(c.bitsSz)...)
 
@@ -218,7 +218,7 @@ func (c *Cell) descriptors() []byte {
 	return []byte{byte(len(c.refs)) + specBit + c.level*32, byte(ln)}
 }
 
-func dynamicIntBytes(val uint64, sz int) []byte {
+func dynamicIntBytes(val uint64, sz uint) []byte {
 	data := make([]byte, 8)
 	binary.BigEndian.PutUint64(data, val)
 

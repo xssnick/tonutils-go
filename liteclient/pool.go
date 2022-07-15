@@ -47,7 +47,7 @@ func NewConnectionPool() *ConnectionPool {
 	}
 
 	// default reconnect policy
-	c.SetOnDisconnect(c.DefaultReconnect(3*time.Second, 3))
+	c.SetOnDisconnect(c.DefaultReconnect(3*time.Second, -1))
 
 	return c
 }
@@ -115,6 +115,10 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 		}
 	}
 
+	// additional timeout to not stuck forever with background context
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// wait for response
 	select {
 	case resp := <-ch:
@@ -125,6 +129,8 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 		return resp, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-timeoutCtx.Done():
+		return nil, errors.New("liteserver request timeout")
 	}
 }
 

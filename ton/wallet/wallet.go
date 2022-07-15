@@ -165,25 +165,49 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message) error {
 	return nil
 }
 
+// TransferNoBounce - can be used to transfer TON to not yet initialized contract/wallet
+func (w *Wallet) TransferNoBounce(ctx context.Context, to *address.Address, amount tlb.Coins, comment string) error {
+	return w.transfer(ctx, to, amount, comment, false)
+}
+
+// Transfer - safe transfer, in case of error on smart contract side, you will get coins back,
+// cannot be used to transfer TON to not yet initialized contract/wallet
 func (w *Wallet) Transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string) error {
+	return w.transfer(ctx, to, amount, comment, true)
+}
+
+func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool) error {
 	var body *cell.Cell
 	if comment != "" {
 		// comment ident
-		c := cell.BeginCell().MustStoreUInt(0, 32)
+		root := cell.BeginCell().MustStoreUInt(0, 32)
 
 		data := []byte(comment)
-		if err := c.StoreSlice(data, len(data)*8); err != nil {
-			return fmt.Errorf("failed to encode comment: %w", err)
+
+		var f func(space int) *cell.Builder
+		f = func(space int) *cell.Builder {
+			if len(data) < space {
+				space = len(data)
+			}
+
+			c := cell.BeginCell().MustStoreSlice(data, uint(space)*8)
+			data = data[space:]
+
+			if len(data) > 0 {
+				c.MustStoreRef(f(127).EndCell())
+			}
+
+			return c
 		}
 
-		body = c.EndCell()
+		body = root.MustStoreBuilder(f(127 - 4)).EndCell()
 	}
 
 	return w.Send(ctx, &Message{
 		Mode: 1,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
-			Bounce:      true,
+			Bounce:      bounce,
 			DstAddr:     to,
 			Amount:      amount,
 			Body:        body,

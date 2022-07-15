@@ -76,7 +76,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 
 		// bits
 		if settings[0] == "##" {
-			num, err := strconv.Atoi(settings[1])
+			num, err := strconv.ParseUint(settings[1], 10, 64)
 			if err != nil {
 				// we panic, because its developer's issue, need to fix tag
 				panic("corrupted num bits in ## tag")
@@ -87,12 +87,12 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				var x any
 				switch field.Type.Kind() {
 				case reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8, reflect.Int:
-					x, err = loader.LoadInt(num)
+					x, err = loader.LoadInt(uint(num))
 					if err != nil {
 						return fmt.Errorf("failed to load int %d, err: %w", num, err)
 					}
 				default:
-					x, err = loader.LoadUInt(num)
+					x, err = loader.LoadUInt(uint(num))
 					if err != nil {
 						return fmt.Errorf("failed to load uint %d, err: %w", num, err)
 					}
@@ -101,7 +101,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				rv.Field(i).Set(reflect.ValueOf(x).Convert(field.Type))
 				continue
 			case num <= 256:
-				x, err := loader.LoadBigInt(num)
+				x, err := loader.LoadBigInt(uint(num))
 				if err != nil {
 					return fmt.Errorf("failed to load bigint %d, err: %w", num, err)
 				}
@@ -132,7 +132,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				panic("corrupted num bits in bits tag")
 			}
 
-			x, err := loader.LoadSlice(num)
+			x, err := loader.LoadSlice(uint(num))
 			if err != nil {
 				return fmt.Errorf("failed to load uint %d, err: %w", num, err)
 			}
@@ -189,7 +189,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				panic("corrupted magic value in tag")
 			}
 
-			ldMagic, err := loader.LoadUInt(sz)
+			ldMagic, err := loader.LoadUInt(uint(sz))
 			if err != nil {
 				return fmt.Errorf("failed to load magic: %w", err)
 			}
@@ -199,12 +199,12 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 			}
 			continue
 		} else if settings[0] == "dict" {
-			sz, err := strconv.Atoi(settings[1])
+			sz, err := strconv.ParseUint(settings[1], 10, 64)
 			if err != nil {
 				panic(fmt.Sprintf("cannot deserialize field '%s' as dict, bad size '%s'", field.Name, settings[1]))
 			}
 
-			dict, err := loader.LoadDict(sz)
+			dict, err := loader.LoadDict(uint(sz))
 			if err != nil {
 				return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
 			}

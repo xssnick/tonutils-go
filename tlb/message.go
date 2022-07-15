@@ -82,10 +82,24 @@ func (m *InternalMessage) Comment() string {
 	if m.Body != nil {
 		l := m.Body.BeginParse()
 		if val, err := l.LoadUInt(32); err == nil && val == 0 {
-			b, err := l.LoadSlice(l.BitsLeft())
-			if err == nil {
-				return string(b)
+			var str []byte
+
+			ref := l
+			for ref != nil {
+				b, err := ref.LoadSlice(ref.BitsLeft())
+				if err != nil {
+					return ""
+				}
+				str = append(str, b...)
+
+				if ref.RefsNum() == 1 {
+					ref = ref.MustLoadRef()
+					continue
+				}
+				ref = nil
 			}
+
+			return string(str)
 		}
 	}
 	return ""

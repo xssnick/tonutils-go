@@ -145,7 +145,7 @@ func TestWallet_Send(t *testing.T) {
 					return []interface{}{"aa"}, nil
 				}
 
-				return []interface{}{uint64(3)}, nil
+				return []interface{}{int64(3)}, nil
 			}
 
 			m.sendExternalMessage = func(ctx context.Context, msg *tlb.ExternalMessage) error {

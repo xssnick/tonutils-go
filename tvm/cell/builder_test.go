@@ -338,16 +338,16 @@ func TestBuilder_StoreRef(t *testing.T) {
 
 func TestBuilder_StoreBuilder(t *testing.T) {
 	c := BeginCell().MustStoreSlice(data1024, 1015).MustStoreRef(BeginCell().EndCell())
-	b1 := BeginCell().MustStoreSlice([]byte{0xAA, 0xBB}, 16).MustStoreRef(BeginCell().EndCell())
-	b2 := BeginCell().MustStoreSlice([]byte{0xAA}, 8).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell())
+	b1bad := BeginCell().MustStoreSlice([]byte{0xAA, 0xBB}, 16).MustStoreRef(BeginCell().EndCell())
+	b2bad := BeginCell().MustStoreSlice([]byte{0xAA}, 8).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell())
 	b3 := BeginCell().MustStoreSlice([]byte{0xAA}, 8).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell()).MustStoreRef(BeginCell().EndCell())
 
-	err := c.StoreBuilder(b1)
+	err := c.StoreBuilder(b1bad)
 	if err != ErrNotFit1023 {
 		t.Fatal("err incorrect, its:", err)
 	}
 
-	err = c.StoreBuilder(b2)
+	err = c.StoreBuilder(b2bad)
 	if err != ErrTooMuchRefs {
 		t.Fatal("err incorrect, its:", err)
 	}

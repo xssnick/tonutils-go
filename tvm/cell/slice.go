@@ -12,8 +12,8 @@ import (
 type Slice struct {
 	special  bool
 	level    byte
-	bitsSz   int
-	loadedSz int
+	bitsSz   uint
+	loadedSz uint
 	data     []byte
 
 	// store it as slice of pointers to make indexing logic cleaner on parse,
@@ -101,7 +101,7 @@ func (c *Slice) LoadBigCoins() (*big.Int, error) {
 		return nil, err
 	}
 
-	value, err := c.LoadBigUInt(int(ln * 8))
+	value, err := c.LoadBigUInt(uint(ln) * 8)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func (c *Slice) LoadBigCoins() (*big.Int, error) {
 	return value, nil
 }
 
-func (c *Slice) MustLoadUInt(sz int) uint64 {
+func (c *Slice) MustLoadUInt(sz uint) uint64 {
 	res, err := c.LoadUInt(sz)
 	if err != nil {
 		panic(err)
@@ -117,7 +117,7 @@ func (c *Slice) MustLoadUInt(sz int) uint64 {
 	return res
 }
 
-func (c *Slice) LoadUInt(sz int) (uint64, error) {
+func (c *Slice) LoadUInt(sz uint) (uint64, error) {
 	res, err := c.LoadBigUInt(sz)
 	if err != nil {
 		return 0, err
@@ -125,7 +125,7 @@ func (c *Slice) LoadUInt(sz int) (uint64, error) {
 	return res.Uint64(), nil
 }
 
-func (c *Slice) MustLoadInt(sz int) int64 {
+func (c *Slice) MustLoadInt(sz uint) int64 {
 	res, err := c.LoadInt(sz)
 	if err != nil {
 		panic(err)
@@ -133,7 +133,7 @@ func (c *Slice) MustLoadInt(sz int) int64 {
 	return res
 }
 
-func (c *Slice) LoadInt(sz int) (int64, error) {
+func (c *Slice) LoadInt(sz uint) (int64, error) {
 	res, err := c.LoadBigInt(sz)
 	if err != nil {
 		return 0, err
@@ -157,7 +157,7 @@ func (c *Slice) LoadBoolBit() (bool, error) {
 	return res.Uint64() == 1, nil
 }
 
-func (c *Slice) MustLoadBigUInt(sz int) *big.Int {
+func (c *Slice) MustLoadBigUInt(sz uint) *big.Int {
 	r, err := c.LoadBigUInt(sz)
 	if err != nil {
 		panic(err)
@@ -165,7 +165,7 @@ func (c *Slice) MustLoadBigUInt(sz int) *big.Int {
 	return r
 }
 
-func (c *Slice) LoadBigUInt(sz int) (*big.Int, error) {
+func (c *Slice) LoadBigUInt(sz uint) (*big.Int, error) {
 	if sz > 256 {
 		return nil, ErrTooBigValue
 	}
@@ -189,7 +189,7 @@ func (c *Slice) LoadBigUInt(sz int) (*big.Int, error) {
 	return new(big.Int).SetBytes(b), nil
 }
 
-func (c *Slice) LoadBigInt(sz int) (*big.Int, error) {
+func (c *Slice) LoadBigInt(sz uint) (*big.Int, error) {
 	u, err := c.LoadBigUInt(sz)
 	if err != nil {
 		return nil, err
@@ -202,9 +202,8 @@ func (c *Slice) LoadBigInt(sz int) (*big.Int, error) {
 
 	if isNegative {
 		// get max value of given sz
-		i := new(big.Int).Lsh(one, uint(sz+1))
+		i := new(big.Int).Lsh(one, uint(sz))
 		i = i.Sub(i, one)
-		i = i.Rsh(i, 1)
 
 		val := u.Sub(u, i)
 
@@ -216,13 +215,13 @@ func (c *Slice) LoadBigInt(sz int) (*big.Int, error) {
 	return u, nil
 }
 
-func (c *Slice) LoadVarUInt(sz int) (*big.Int, error) {
-	ln, err := c.LoadUInt(big.NewInt(int64(sz - 1)).BitLen())
+func (c *Slice) LoadVarUInt(sz uint) (*big.Int, error) {
+	ln, err := c.LoadUInt(uint(big.NewInt(int64(sz - 1)).BitLen()))
 	if err != nil {
 		return nil, err
 	}
 
-	value, err := c.LoadBigUInt(int(ln * 8))
+	value, err := c.LoadBigUInt(uint(ln * 8))
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +229,7 @@ func (c *Slice) LoadVarUInt(sz int) (*big.Int, error) {
 	return value, nil
 }
 
-func (c *Slice) MustLoadSlice(sz int) []byte {
+func (c *Slice) MustLoadSlice(sz uint) []byte {
 	s, err := c.LoadSlice(sz)
 	if err != nil {
 		panic(err)
@@ -238,7 +237,7 @@ func (c *Slice) MustLoadSlice(sz int) []byte {
 	return s
 }
 
-func (c *Slice) LoadSlice(sz int) ([]byte, error) {
+func (c *Slice) LoadSlice(sz uint) ([]byte, error) {
 	if c.bitsSz-c.loadedSz < sz {
 		return nil, ErrNotEnoughData
 	}
@@ -248,14 +247,14 @@ func (c *Slice) LoadSlice(sz int) ([]byte, error) {
 	}
 
 	leftSz := sz
-	var unusedBits = 0
+	var unusedBits = uint(0)
 	if l := c.loadedSz % 8; l > 0 && c.loadedSz > 0 {
 		unusedBits = 8 - (c.loadedSz % 8)
 	}
 
 	var loadedData []byte
 
-	oneMoreLeft, oneMoreRight := 0, 0
+	var oneMoreLeft, oneMoreRight uint
 	if unusedBits > 0 && sz > unusedBits {
 		oneMoreLeft = 1
 	}
@@ -295,12 +294,14 @@ func (c *Slice) LoadSlice(sz int) ([]byte, error) {
 		i++
 	}
 
-	usedBytes := (sz - unusedBits) / 8
-	if sz >= unusedBits && unusedBits > 0 {
-		usedBytes++
-	}
+	if sz >= unusedBits {
+		usedBytes := (sz - unusedBits) / 8
+		if unusedBits > 0 {
+			usedBytes++
+		}
 
-	c.data = c.data[usedBytes:]
+		c.data = c.data[usedBytes:]
+	}
 
 	c.loadedSz += sz
 
@@ -329,14 +330,14 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 		}
 
 		if isAnycast {
-			depthLen := int(math.Ceil(math.Log2(30)))
+			depthLen := uint(math.Ceil(math.Log2(30)))
 
 			depth, err := c.LoadUInt(depthLen)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load depth: %w", err)
 			}
 
-			pfx, err := c.LoadSlice(int(depth))
+			pfx, err := c.LoadSlice(uint(depth))
 			if err != nil {
 				return nil, fmt.Errorf("failed to load prefix: %w", err)
 			}
@@ -365,11 +366,11 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 
 }
 
-func (c *Slice) BitsLeft() int {
+func (c *Slice) BitsLeft() uint {
 	return c.bitsSz - c.loadedSz
 }
 
-func (c *Slice) RestBits() (int, []byte, error) {
+func (c *Slice) RestBits() (uint, []byte, error) {
 	left := c.bitsSz - c.loadedSz
 	data, err := c.LoadSlice(left)
 	return left, data, err

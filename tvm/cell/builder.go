@@ -8,7 +8,7 @@ import (
 )
 
 type Builder struct {
-	bitsSz int
+	bitsSz uint
 	data   []byte
 
 	// store it as slice of pointers to make indexing logic cleaner on parse,
@@ -38,7 +38,7 @@ func (b *Builder) MustStoreBigCoins(value *big.Int) *Builder {
 
 func (b *Builder) StoreBigCoins(value *big.Int) error {
 	// varInt 16 https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/block/block-parse.cpp#L319
-	ln := (value.BitLen() + 7) >> 3
+	ln := uint((value.BitLen() + 7) >> 3)
 	if ln >= 16 {
 		return ErrTooBigValue
 	}
@@ -60,7 +60,7 @@ func (b *Builder) StoreBigCoins(value *big.Int) error {
 	return nil
 }
 
-func (b *Builder) MustStoreUInt(value uint64, sz int) *Builder {
+func (b *Builder) MustStoreUInt(value uint64, sz uint) *Builder {
 	err := b.StoreUInt(value, sz)
 	if err != nil {
 		panic(err)
@@ -68,7 +68,7 @@ func (b *Builder) MustStoreUInt(value uint64, sz int) *Builder {
 	return b
 }
 
-func (b *Builder) StoreUInt(value uint64, sz int) error {
+func (b *Builder) StoreUInt(value uint64, sz uint) error {
 	if sz > 64 {
 		return b.StoreBigUInt(new(big.Int).SetUint64(value), sz)
 	}
@@ -80,7 +80,7 @@ func (b *Builder) StoreUInt(value uint64, sz int) error {
 	return b.StoreSlice(buf, sz)
 }
 
-func (b *Builder) MustStoreInt(value int64, sz int) *Builder {
+func (b *Builder) MustStoreInt(value int64, sz uint) *Builder {
 	err := b.StoreInt(value, sz)
 	if err != nil {
 		panic(err)
@@ -88,7 +88,7 @@ func (b *Builder) MustStoreInt(value int64, sz int) *Builder {
 	return b
 }
 
-func (b *Builder) StoreInt(value int64, sz int) error {
+func (b *Builder) StoreInt(value int64, sz uint) error {
 	return b.StoreBigInt(new(big.Int).SetInt64(value), sz)
 }
 
@@ -108,7 +108,7 @@ func (b *Builder) StoreBoolBit(value bool) error {
 	return b.StoreBigUInt(new(big.Int).SetUint64(i), 1)
 }
 
-func (b *Builder) MustStoreBigUInt(value *big.Int, sz int) *Builder {
+func (b *Builder) MustStoreBigUInt(value *big.Int, sz uint) *Builder {
 	err := b.StoreBigUInt(value, sz)
 	if err != nil {
 		panic(err)
@@ -116,7 +116,7 @@ func (b *Builder) MustStoreBigUInt(value *big.Int, sz int) *Builder {
 	return b
 }
 
-func (b *Builder) StoreBigUInt(value *big.Int, sz int) error {
+func (b *Builder) StoreBigUInt(value *big.Int, sz uint) error {
 	if value.BitLen() > 256 {
 		return ErrTooBigValue
 	}
@@ -129,13 +129,17 @@ func (b *Builder) StoreBigUInt(value *big.Int, sz int) error {
 		return ErrTooBigSize
 	}
 
+	return b.storeBig(value, sz)
+}
+
+func (b *Builder) storeBig(value *big.Int, sz uint) error {
 	bytes := value.Bytes()
 
 	partByte := 0
 	if sz%8 != 0 {
 		partByte = 1
 	}
-	bytesToUse := (sz / 8) + partByte
+	bytesToUse := (int(sz) / 8) + partByte
 
 	if len(bytes) < bytesToUse {
 		// add zero bits to fit requested size
@@ -157,7 +161,7 @@ func (b *Builder) StoreBigUInt(value *big.Int, sz int) error {
 	return b.StoreSlice(bytes, sz)
 }
 
-func (b *Builder) MustStoreBigInt(value *big.Int, sz int) *Builder {
+func (b *Builder) MustStoreBigInt(value *big.Int, sz uint) *Builder {
 	err := b.StoreBigInt(value, sz)
 	if err != nil {
 		panic(err)
@@ -165,12 +169,12 @@ func (b *Builder) MustStoreBigInt(value *big.Int, sz int) *Builder {
 	return b
 }
 
-func (b *Builder) StoreBigInt(value *big.Int, sz int) error {
+func (b *Builder) StoreBigInt(value *big.Int, sz uint) error {
 	if value.BitLen() > 256 {
 		return ErrTooBigValue
 	}
 
-	if sz > 256 {
+	if sz > 257 {
 		return ErrTooBigSize
 	}
 
@@ -178,9 +182,8 @@ func (b *Builder) StoreBigInt(value *big.Int, sz int) error {
 
 	if value.Sign() == -1 {
 		// get max value of given sz
-		i := new(big.Int).Lsh(one, uint(sz+1))
-		i = i.Sub(i, one)
-		i = i.Rsh(i, 1)
+		i := new(big.Int).Lsh(one, uint(sz)) // 100000000
+		i = i.Sub(i, one)                    // 11111111
 
 		// 11111111 is -1, so we need to add 1 to our negative value first,
 		// because we already have -1 in 'i'
@@ -188,7 +191,7 @@ func (b *Builder) StoreBigInt(value *big.Int, sz int) error {
 		value = value.Add(value, i)
 	}
 
-	return b.StoreBigUInt(value, sz)
+	return b.storeBig(value, sz)
 }
 
 func (b *Builder) MustStoreAddr(addr *address.Address) *Builder {
@@ -236,8 +239,12 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 	return nil
 }
 
-func (b *Builder) MustStoreDict(ref *Cell) *Builder {
-	return b.MustStoreMaybeRef(ref)
+func (b *Builder) MustStoreDict(dict *Dictionary) *Builder {
+	err := b.StoreDict(dict)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 func (b *Builder) MustStoreMaybeRef(ref *Cell) *Builder {
@@ -248,8 +255,12 @@ func (b *Builder) MustStoreMaybeRef(ref *Cell) *Builder {
 	return b
 }
 
-func (b *Builder) StoreDict(ref *Cell) error {
-	return b.StoreMaybeRef(ref)
+func (b *Builder) StoreDict(dict *Dictionary) error {
+	c, err := dict.ToCell()
+	if err != nil {
+		return err
+	}
+	return b.StoreMaybeRef(c)
 }
 
 func (b *Builder) StoreMaybeRef(ref *Cell) error {
@@ -258,7 +269,7 @@ func (b *Builder) StoreMaybeRef(ref *Cell) error {
 	}
 
 	// we need early checks to do 2 stores atomically
-	if len(b.refs) > 4 {
+	if len(b.refs) >= 4 {
 		return ErrTooMuchRefs
 	}
 	if b.bitsSz+1 >= 1024 {
@@ -291,7 +302,7 @@ func (b *Builder) StoreRef(ref *Cell) error {
 	return nil
 }
 
-func (b *Builder) MustStoreSlice(bytes []byte, sz int) *Builder {
+func (b *Builder) MustStoreSlice(bytes []byte, sz uint) *Builder {
 	err := b.StoreSlice(bytes, sz)
 	if err != nil {
 		panic(err)
@@ -299,21 +310,17 @@ func (b *Builder) MustStoreSlice(bytes []byte, sz int) *Builder {
 	return b
 }
 
-func (b *Builder) StoreSlice(bytes []byte, sz int) error {
-	if sz < 0 {
-		//	return errors.New("sz should be >= 0")
-	}
-
+func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	if sz == 0 {
 		return nil
 	}
 
-	oneMore := 0
+	oneMore := uint(0)
 	if sz%8 > 0 {
 		oneMore = 1
 	}
 
-	if len(bytes) < sz/8+oneMore {
+	if uint(len(bytes)) < sz/8+oneMore {
 		return ErrSmallSlice
 	}
 
@@ -326,7 +333,7 @@ func (b *Builder) StoreSlice(bytes []byte, sz int) error {
 
 	offset := 0
 	for leftSz > 0 {
-		bits := 8
+		bits := uint(8)
 		if leftSz < 8 {
 			bits = leftSz
 		}
@@ -379,16 +386,16 @@ func (b *Builder) RefsUsed() int {
 	return len(b.refs)
 }
 
-func (b *Builder) BitsUsed() int {
+func (b *Builder) BitsUsed() uint {
 	return b.bitsSz
 }
 
-func (b *Builder) BitsLeft() int {
+func (b *Builder) BitsLeft() uint {
 	return 1023 - b.bitsSz
 }
 
-func (b *Builder) RefsLeft() int {
-	return 4 - len(b.refs)
+func (b *Builder) RefsLeft() uint {
+	return 4 - uint(len(b.refs))
 }
 
 func (b *Builder) Copy() *Builder {

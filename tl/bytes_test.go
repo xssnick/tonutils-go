@@ -6,9 +6,15 @@ import (
 )
 
 func TestTLBytes(t *testing.T) {
-	buf := []byte{0xFF, 0xAA, 0xCC}
-	if !bytes.Equal(append([]byte{3}, buf...), ToBytes(buf)) {
+	buf := []byte{0xFF, 0xAA}
+	if !bytes.Equal(append([]byte{2}, append(buf, 0)...), ToBytes(buf)) {
 		t.Fatal("not equal small")
+		return
+	}
+
+	buf = []byte{0xFF, 0xAA, 0xCC}
+	if !bytes.Equal(append([]byte{3}, buf...), ToBytes(buf)) {
+		t.Fatal("not equal small 2")
 		return
 	}
 

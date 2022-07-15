@@ -11,7 +11,7 @@ import (
 type Cell struct {
 	special bool
 	level   byte
-	bitsSz  int
+	bitsSz  uint
 	index   int
 	data    []byte
 
@@ -47,12 +47,12 @@ func (c *Cell) ToBuilder() *Builder {
 	}
 }
 
-func (c *Cell) BitsSize() int {
+func (c *Cell) BitsSize() uint {
 	return c.bitsSz
 }
 
-func (c *Cell) RefsNum() int {
-	return len(c.refs)
+func (c *Cell) RefsNum() uint {
+	return uint(len(c.refs))
 }
 
 func (c *Cell) Dump() string {
@@ -72,7 +72,7 @@ func (c *Cell) dump(deep int, bin bool) string {
 			val += fmt.Sprintf("%08b", n)
 		}
 		if sz%8 != 0 {
-			val = val[:len(val)-(8-(sz%8))]
+			val = val[:uint(len(val))-(8-(sz%8))]
 		}
 	} else {
 		val = strings.ToUpper(hex.EncodeToString(data))
@@ -101,7 +101,7 @@ func (c *Cell) dump(deep int, bin bool) string {
 
 func (c *Cell) Hash() []byte {
 	hash := sha256.New()
-	hash.Write(c.serialize(-1, true))
+	hash.Write(c.serialize(0, true))
 	return hash.Sum(nil)
 }
 

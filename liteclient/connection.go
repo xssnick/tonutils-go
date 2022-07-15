@@ -398,21 +398,18 @@ func (c *ConnectionPool) DefaultReconnect(waitBeforeReconnect time.Duration, max
 
 	var cb OnDisconnectCallback
 	cb = func(addr, key string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
-		defer cancel()
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+			err := c.AddConnection(ctx, addr, key)
+			cancel()
 
-		err := c.AddConnection(ctx, addr, key)
-		if err != nil {
-			if tries < maxTries {
-				time.Sleep(waitBeforeReconnect)
+			if err != nil && (tries < maxTries || maxTries == -1) {
 				tries++
-
-				cb(addr, key)
+				time.Sleep(waitBeforeReconnect)
+				continue
 			}
-
-			return
+			break
 		}
-
 		tries = 0
 	}
 

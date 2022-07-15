@@ -38,13 +38,13 @@ func main() {
 		return
 	}
 
-	collectionAddr, err := res[2].(*cell.Cell).BeginParse().LoadAddr()
+	collectionAddr, err := res[2].(*cell.Slice).LoadAddr()
 	if err != nil {
 		log.Fatalln("addr err:", err.Error())
 		return
 	}
 
-	ownerAddr, err := res[3].(*cell.Cell).BeginParse().LoadAddr()
+	ownerAddr, err := res[3].(*cell.Slice).LoadAddr()
 	if err != nil {
 		log.Fatalln("addr err:", err.Error())
 		return

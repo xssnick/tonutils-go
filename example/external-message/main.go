@@ -43,8 +43,8 @@ Or you can at least add some coins to contract address
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	// connect to testnet lite server
-	err := client.AddConnection(context.Background(), "65.21.74.140:46427", "JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
+	// connect to mainnet lite server
+	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
@@ -61,24 +61,24 @@ func main() {
 	}
 
 	// call method to get seqno of contract
-	res, err := api.RunGetMethod(context.Background(), block, address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ"), "get_total")
+	res, err := api.RunGetMethod(context.Background(), block, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "get_total")
 	if err != nil {
 		log.Fatalln("run get method err:", err.Error())
 		return
 	}
 
-	seqno := res[0].(uint64)
-	total := res[1].(uint64)
+	seqno := res[0].(int64)
+	total := res[1].(int64)
 
 	log.Printf("Current seqno = %d and total = %d", seqno, total)
 
 	data := cell.BeginCell().
-		MustStoreUInt(seqno, 64).
+		MustStoreInt(seqno, 64).
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 
 	err = api.SendExternalMessage(context.Background(), &tlb.ExternalMessage{
-		DstAddr: address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ"),
+		DstAddr: address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"),
 		Body:    data,
 	})
 	if err != nil {

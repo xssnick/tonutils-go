@@ -41,11 +41,11 @@ func (s *SpecRegular) BuildRegularMessage(ctx context.Context, isInitialized boo
 			return nil, fmt.Errorf("get seqno err: %w", err)
 		}
 
-		var ok bool
-		seq, ok = resp[0].(uint64)
+		iSeq, ok := resp[0].(int64)
 		if !ok {
 			return nil, fmt.Errorf("seqno is not an integer")
 		}
+		seq = uint64(iSeq)
 	}
 
 	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).

@@ -29,7 +29,7 @@ func main() {
 
 	w, err := wallet.FromSeed(api, words, wallet.V3)
 	if err != nil {
-		log.Fatalln("FromPrivateKey err:", err.Error())
+		log.Fatalln("FromSeed err:", err.Error())
 		return
 	}
 
@@ -37,7 +37,7 @@ func main() {
 
 	block, err := api.GetMasterchainInfo(context.Background())
 	if err != nil {
-		log.Fatalln("get block err:", err.Error())
+		log.Fatalln("GetMasterchainInfo err:", err.Error())
 		return
 	}
 

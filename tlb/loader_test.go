@@ -19,22 +19,21 @@ func (m *manualLoad) LoadFromCell(loader *cell.Slice) error {
 }
 
 type testInner struct {
-	_      Magic    `tlb:"$1011"`
-	Val    int64    `tlb:"## 34"`
-	Val2   uint64   `tlb:"## 12"`
-	BigVal *big.Int `tlb:"## 176"`
-	// Dict   *cell.Dictionary `tlb:"dict 32"`
-	C      *cell.Cell       `tlb:"^"`
-	B      bool             `tlb:"bool"`
-	Addr   *address.Address `tlb:"addr"`
-	Manual manualLoad       `tlb:"."`
+	_             Magic            `tlb:"$1011"`
+	Val           int64            `tlb:"## 34"`
+	Val2          uint64           `tlb:"## 12"`
+	BigVal        *big.Int         `tlb:"## 176"`
+	B             bool             `tlb:"bool"`
+	Addr          *address.Address `tlb:"addr"`
+	Manual        manualLoad       `tlb:"."`
+	Dict          *cell.Dictionary `tlb:"dict 256"`
+	DictTransform []*manualLoad    `tlb:"dict 32 -> array"`
 }
 
 type testTLB struct {
 	_                 Magic      `tlb:"#ffaa"`
 	Val               uint32     `tlb:"## 32"`
 	Inside            testInner  `tlb:"^"`
-	Inside2           *testInner `tlb:"^"`
 	InsideMaybe       *testInner `tlb:"maybe ^"`
 	Part              testInner  `tlb:"."`
 	InsideMaybeEither *testInner `tlb:"maybe either ^ ."`
@@ -43,19 +42,36 @@ type testTLB struct {
 
 func TestLoadFromCell(t *testing.T) {
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	dKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
+	dVal := cell.BeginCell().MustStoreAddr(addr).EndCell()
+	ldVal := cell.BeginCell().MustStoreUInt(uint64('M'), 8).EndCell()
+
+	d := cell.NewDict(256)
+	err := d.Set(dKey, dVal)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d2 := cell.NewDict(32)
+	for i := 0; i < 200; i++ {
+		err = d2.Set(cell.BeginCell().MustStoreInt(int64(i), 32).EndCell(), ldVal)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).
 		MustStoreInt(-7172, 34).
 		MustStoreUInt(0xCCA, 12).
-		MustStoreUInt(7126382921832, 176).MustStoreRef(cell.BeginCell().EndCell()).
-		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8)
+		MustStoreUInt(7126382921832, 176).
+		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8).MustStoreDict(d).MustStoreDict(d2)
 
 	a := cell.BeginCell().MustStoreUInt(0xFFAA, 16).
-		MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).
+		MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).
 		MustStoreBuilder(ref).MustStoreMaybeRef(ref.EndCell()).MustStoreBoolBit(false).MustStoreSlice([]byte{0xFF, 0xFF, 0xAA}, 20).EndCell().BeginParse()
 
 	x := testTLB{}
-	err := LoadFromCell(&x, a)
+	err = LoadFromCell(&x, a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +84,7 @@ func TestLoadFromCell(t *testing.T) {
 		t.Fatal("maybe not nil")
 	}
 
-	if x.Inside2.BigVal.Uint64() != 7126382921832 {
+	if x.Inside.BigVal.Uint64() != 7126382921832 {
 		t.Fatal("uint 7126382921832 not eq")
 	}
 
@@ -94,5 +110,19 @@ func TestLoadFromCell(t *testing.T) {
 
 	if x.Part.Manual.Val != "x" {
 		t.Fatal("manual not eq")
+	}
+
+	if !bytes.Equal(x.Part.Dict.Get(dKey).Hash(), dVal.Hash()) {
+		t.Fatal("dict val not eq")
+	}
+
+	if len(x.Part.DictTransform) != 200 {
+		t.Fatal("dict transform len not 200")
+	}
+
+	for _, m := range x.Part.DictTransform {
+		if m.Val != "M" {
+			t.Fatal("dict transform values corrupted")
+		}
 	}
 }

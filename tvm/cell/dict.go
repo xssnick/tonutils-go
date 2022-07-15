@@ -10,7 +10,7 @@ import (
 
 type Dictionary struct {
 	storage map[string]*HashmapKV
-	keySz   int
+	keySz   uint
 }
 
 type HashmapKV struct {
@@ -18,14 +18,14 @@ type HashmapKV struct {
 	Value *Cell
 }
 
-func NewDict(keySz int) *Dictionary {
+func NewDict(keySz uint) *Dictionary {
 	return &Dictionary{
 		storage: map[string]*HashmapKV{},
 		keySz:   keySz,
 	}
 }
 
-func (c *Slice) ToDict(keySz int) (*Dictionary, error) {
+func (c *Slice) ToDict(keySz uint) (*Dictionary, error) {
 	d := &Dictionary{
 		storage: map[string]*HashmapKV{},
 		keySz:   keySz,
@@ -39,7 +39,7 @@ func (c *Slice) ToDict(keySz int) (*Dictionary, error) {
 	return d, nil
 }
 
-func (c *Slice) LoadDict(keySz int) (*Dictionary, error) {
+func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
 	cl, err := c.LoadMaybeRef()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load ref for dict, err: %w", err)
@@ -95,9 +95,9 @@ func (d *Dictionary) All() []*HashmapKV {
 	return all
 }
 
-func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *Slice, keyPrefix *Builder) error {
+func (d *Dictionary) mapInner(keySz, leftKeySz uint, loader *Slice, keyPrefix *Builder) error {
 	var err error
-	var sz int
+	var sz uint
 
 	sz, keyPrefix, err = loadLabel(leftKeySz, loader, keyPrefix)
 	if err != nil {
@@ -141,7 +141,7 @@ func (d *Dictionary) mapInner(keySz, leftKeySz int, loader *Slice, keyPrefix *Bu
 	return nil
 }
 
-func loadLabel(sz int, loader *Slice, key *Builder) (int, *Builder, error) {
+func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 	first, err := loader.LoadUInt(1)
 	if err != nil {
 		return 0, nil, err
@@ -150,7 +150,7 @@ func loadLabel(sz int, loader *Slice, key *Builder) (int, *Builder, error) {
 	// hml_short$0
 	if first == 0 {
 		// Unary, while 1, add to ln
-		ln := 0
+		ln := uint(0)
 		for {
 			bit, err := loader.LoadUInt(1)
 			if err != nil {
@@ -184,25 +184,25 @@ func loadLabel(sz int, loader *Slice, key *Builder) (int, *Builder, error) {
 
 	// hml_long$10
 	if second == 0 {
-		bitsLen := int(math.Ceil(math.Log2(float64(sz + 1))))
+		bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
 
 		ln, err := loader.LoadUInt(bitsLen)
 		if err != nil {
 			return 0, nil, err
 		}
 
-		keyBits, err := loader.LoadSlice(int(ln))
+		keyBits, err := loader.LoadSlice(uint(ln))
 		if err != nil {
 			return 0, nil, err
 		}
 
 		// add bits to key
-		err = key.StoreSlice(keyBits, int(ln))
+		err = key.StoreSlice(keyBits, uint(ln))
 		if err != nil {
 			return 0, nil, err
 		}
 
-		return int(ln), key, nil
+		return uint(ln), key, nil
 	}
 
 	// hml_same$11
@@ -211,7 +211,7 @@ func loadLabel(sz int, loader *Slice, key *Builder) (int, *Builder, error) {
 		return 0, nil, err
 	}
 
-	bitsLen := int(math.Ceil(math.Log2(float64(sz + 1))))
+	bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
 
 	ln, err := loader.LoadUInt(bitsLen)
 	if err != nil {
@@ -227,15 +227,15 @@ func loadLabel(sz int, loader *Slice, key *Builder) (int, *Builder, error) {
 		toStore = bytes.Repeat([]byte{0x00}, 1+(int(ln)/8))
 	}
 
-	err = key.StoreSlice(toStore, int(ln))
+	err = key.StoreSlice(toStore, uint(ln))
 	if err != nil {
 		return 0, nil, err
 	}
 
-	return int(ln), key, nil
+	return uint(ln), key, nil
 }
 
-func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOffset int) error {
+func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOffset uint) error {
 	// TODO: use all types of labels to optimize
 
 	// short unary 0
@@ -253,7 +253,7 @@ func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOff
 		return err
 	}
 
-	bitsLen := int(math.Ceil(math.Log2(float64((d.keySz - committedOffset) + 1))))
+	bitsLen := uint(math.Ceil(math.Log2(float64((d.keySz - committedOffset) + 1))))
 
 	partSz := uint64(bitOffset - committedOffset)
 
@@ -263,12 +263,20 @@ func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOff
 	}
 
 	bits := getBits(data, committedOffset, bitOffset)
-	err = b.StoreSlice(bits, int(partSz))
+	err = b.StoreSlice(bits, uint(partSz))
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func (d *Dictionary) MustToCell() *Cell {
+	c, err := d.ToCell()
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 func (d *Dictionary) ToCell() (*Cell, error) {
@@ -285,8 +293,8 @@ func (d *Dictionary) ToCell() (*Cell, error) {
 		})
 	}
 
-	var dive func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous int) (*Cell, error)
-	dive = func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous int) (*Cell, error) {
+	var dive func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous uint) (*Cell, error)
+	dive = func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous uint) (*Cell, error) {
 		if bitOffset == d.keySz {
 			if len(kvs) > 0 {
 				// return nil, errors.New("not single key in a leaf")
@@ -376,7 +384,7 @@ func (d *Dictionary) ToCell() (*Cell, error) {
 	return dict, nil
 }
 
-func getBits(data []byte, from, to int) []byte {
+func getBits(data []byte, from, to uint) []byte {
 	var res []byte
 	var offset int
 
