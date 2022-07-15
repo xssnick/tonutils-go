@@ -7,15 +7,15 @@ import (
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
-	"github.com/xssnick/tonutils-go/liteclient/tlb"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 )
 
 func main() {
-	client := liteclient.NewClient()
+	client := liteclient.NewConnectionPool()
 
 	// connect to mainnet lite server
-	err := client.Connect(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return

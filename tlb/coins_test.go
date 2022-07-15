@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestGrams_FromTON(t *testing.T) {
+func TestCoins_FromTON(t *testing.T) {
 	g := MustFromTON("0").NanoTON().Uint64()
 	if g != 0 {
 		t.Fatalf("0 wrong: %d", g)
@@ -56,7 +56,7 @@ func TestGrams_FromTON(t *testing.T) {
 	}
 }
 
-func TestGrams_TON(t *testing.T) {
+func TestCoins_TON(t *testing.T) {
 	g := MustFromTON("0.090000001")
 	if g.TON() != "0.090000001" {
 		t.Fatalf("0.090000001 wrong: %s", g.TON())

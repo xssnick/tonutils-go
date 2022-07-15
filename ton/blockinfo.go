@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/liteclient/tlb"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -27,16 +27,11 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, err
 	return block, nil
 }
 
-// GetBlockInfo DEPRECATED and will be removed soon, please use GetMasterchainInfo
-func (c *APIClient) GetBlockInfo(ctx context.Context) (*tlb.BlockInfo, error) {
-	return c.GetMasterchainInfo(ctx)
-}
-
-func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard uint64, seqno uint32) (*tlb.BlockInfo, error) {
+func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*tlb.BlockInfo, error) {
 	data := make([]byte, 20)
 	binary.LittleEndian.PutUint32(data, 1)
 	binary.LittleEndian.PutUint32(data[4:], uint32(workchain))
-	binary.LittleEndian.PutUint64(data[8:], shard)
+	binary.LittleEndian.PutUint64(data[8:], uint64(shard))
 	binary.LittleEndian.PutUint32(data[16:], seqno)
 
 	resp, err := c.client.Do(ctx, _LookupBlock, data)
@@ -235,10 +230,10 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, block *tlb.BlockInfo
 					return nil, fmt.Errorf("load ShardDesc err: %w", err)
 				}
 
-				// TODO: its only 9223372036854775808 shard now, need to parse ids from somewhere
+				// TODO: its only -9223372036854775808 shard now, need to parse ids from somewhere
 				shards = append(shards, &tlb.BlockInfo{
 					Workchain: 0,
-					Shard:     9223372036854775808,
+					Shard:     -9223372036854775808,
 					SeqNo:     bData.SeqNo,
 					RootHash:  bData.RootHash,
 					FileHash:  bData.FileHash,
