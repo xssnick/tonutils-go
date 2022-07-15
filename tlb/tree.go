@@ -11,10 +11,10 @@ type BinTree struct {
 	storage map[string]*cell.HashmapKV
 }
 
-func (b *BinTree) LoadFromCell(loader *cell.LoadCell) error {
+func (b *BinTree) LoadFromCell(loader *cell.Slice) error {
 	b.storage = map[string]*cell.HashmapKV{}
-	var jumper func(next *cell.LoadCell, key *cell.Builder) error
-	jumper = func(next *cell.LoadCell, key *cell.Builder) error {
+	var jumper func(next *cell.Slice, key *cell.Builder) error
+	jumper = func(next *cell.Slice, key *cell.Builder) error {
 		typ, err := next.LoadUInt(1)
 		if err != nil {
 			return fmt.Errorf("failed to load type flag: %w", err)

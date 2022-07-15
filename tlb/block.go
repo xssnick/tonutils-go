@@ -9,7 +9,7 @@ import (
 
 type BlockInfo struct {
 	Workchain int32
-	Shard     uint64
+	Shard     int64
 	SeqNo     uint32
 	RootHash  []byte
 	FileHash  []byte
@@ -23,7 +23,7 @@ func (b *BlockInfo) Load(data []byte) ([]byte, error) {
 	b.Workchain = int32(binary.LittleEndian.Uint32(data))
 	data = data[4:]
 
-	b.Shard = binary.LittleEndian.Uint64(data)
+	b.Shard = int64(binary.LittleEndian.Uint64(data))
 	data = data[8:]
 
 	b.SeqNo = binary.LittleEndian.Uint32(data)
@@ -41,7 +41,7 @@ func (b *BlockInfo) Load(data []byte) ([]byte, error) {
 func (b *BlockInfo) Serialize() []byte {
 	data := make([]byte, 16)
 	binary.LittleEndian.PutUint32(data, uint32(b.Workchain))
-	binary.LittleEndian.PutUint64(data[4:], b.Shard)
+	binary.LittleEndian.PutUint64(data[4:], uint64(b.Shard))
 	binary.LittleEndian.PutUint32(data[12:], b.SeqNo)
 
 	data = append(data, b.RootHash...)

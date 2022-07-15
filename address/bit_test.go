@@ -1,4 +1,4 @@
-package utils
+package address
 
 import "testing"
 
@@ -15,7 +15,7 @@ func TestClearBit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ClearBit(tt.args.n, tt.args.pos)
+			clearBit(tt.args.n, tt.args.pos)
 		})
 	}
 }
@@ -42,7 +42,7 @@ func TestHasBit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := HasBit(tt.args.n, tt.args.pos); got != tt.want {
+			if got := hasBit(tt.args.n, tt.args.pos); got != tt.want {
 				t.Errorf("HasBit() = %v, want %v", got, tt.want)
 			}
 		})
@@ -62,7 +62,7 @@ func TestSetBit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			SetBit(tt.args.n, tt.args.pos)
+			setBit(tt.args.n, tt.args.pos)
 		})
 	}
 }

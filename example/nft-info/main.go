@@ -12,10 +12,10 @@ import (
 )
 
 func main() {
-	client := liteclient.NewClient()
+	client := liteclient.NewConnectionPool()
 
 	// connect to mainnet lite server
-	err := client.Connect(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
@@ -38,13 +38,13 @@ func main() {
 		return
 	}
 
-	collectionAddr, err := res[2].(*cell.Cell).BeginParse().LoadAddr()
+	collectionAddr, err := res[2].(*cell.Slice).LoadAddr()
 	if err != nil {
 		log.Fatalln("addr err:", err.Error())
 		return
 	}
 
-	ownerAddr, err := res[3].(*cell.Cell).BeginParse().LoadAddr()
+	ownerAddr, err := res[3].(*cell.Slice).LoadAddr()
 	if err != nil {
 		log.Fatalln("addr err:", err.Error())
 		return

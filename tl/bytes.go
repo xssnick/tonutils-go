@@ -1,10 +1,10 @@
-package utils
+package tl
 
 import (
 	"encoding/binary"
 )
 
-func TLBytes(buf []byte) []byte {
+func ToBytes(buf []byte) []byte {
 	var data []byte
 
 	// store buf length
