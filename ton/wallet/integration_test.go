@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"math/rand"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +32,7 @@ func Test_WalletTransfer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	seed := strings.Split(os.Getenv("TU_TEST_SEED"), " ")
+	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
 	w, err := FromSeed(api, seed, V3)
 	if err != nil {
 		t.Fatal("FromSeed err:", err.Error())
