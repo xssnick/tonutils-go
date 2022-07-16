@@ -8,20 +8,26 @@ This library is native golang implementation of ADNL and lite protocol. It works
 
 It is concurrent safe and can be used from multiple goroutines under high workloads.
 
-If you love this library and want to support its development you can donate any amount of coins to this ton address:
-`EQCehwsGFPLHWgyr5KUMBIGbL11tlMFsQtsjsfBQEi-omiGo` 
+If you love this library and want to support its development you can donate any amount of coins to this ton address ☺️
+`EQBx6tZZWa2Tbv6BvgcvegoOQxkRrVaBVwBOoW85nbP37_Go`
 
 ### How to use
 - [Connection](#Connection)
-- [Wallet and transfer](#Wallet and transfer)
-- [Account and transactions](#Account info and transactions)
-- [Interacting with contracts](#Interacting with contracts)
-  - [Using get methods](#Using GET methods)
-  - [Send external message](#Send external message)
+- [Wallet](#Wallet)
+  - [Transfer](#Wallet)
+  - [Balance](#Wallet)
+- [Accounts](#Account-info-and-transactions)
+  - [List transactions](#Account-info-and-transactions)
+- [Contracts](#Contracts)
+  - [Use get methods](#Using-GET-methods)
+  - [Send external message](#Send-external-message)
 - [Cells](#Cells)
-  - [TLB Loader](#TLB Loader)
-- [Custom reconnect policy](#Custom reconnect policy)
-- [Features to implement](#Features to implement)
+  - [Create](#Cells)
+  - [Parse](#Cells)
+  - [TLB Loader](#TLB-Loader)
+- [Custom reconnect policy](#Custom-reconnect-policy)
+- [Features to implement](#Features-to-implement)
+
 
 You can find usage examples in **[example](https://github.com/xssnick/tonutils-go/tree/master/example)** directory
 
@@ -47,7 +53,7 @@ if err != nil {
 }
 api := ton.NewAPIClient(client)
 ```
-### Wallet and transfer
+### Wallet
 You can use existing wallet or generate new one using `wallet.NewSeed()`, wallet will be initialized on first sent message from it. This library will deploy and initialize wallet contract if it is not initialized yet. 
 
 You can also send any message to any contract using `w.Send` method, it accepts `tlb.InternalMessage` structure, you can dive into `w.Transfer` implementation and see how it works.
@@ -75,7 +81,7 @@ if balance.NanoTON().Uint64() >= 3000000 {
 }
 ```
 You can find full working example at `example/wallet/main.go`
-### Interacting with contracts 
+### Contracts 
 Here are the description of features which allow us to trigger contract's methods
 
 #### Using GET methods
@@ -276,6 +282,7 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * Payment channels
 * DNS
 * Merkle proofs
+
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue
