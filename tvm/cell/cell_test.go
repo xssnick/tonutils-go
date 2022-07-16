@@ -106,4 +106,17 @@ func TestCell_InsaneBOC(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = c
+
+	// TODO: implement serialize with index
+}
+
+func TestCell_Dump(t *testing.T) {
+	c := BeginCell().MustStoreInt(-2, 20).EndCell()
+	if c.Dump() != "20[FFFFE_]" {
+		t.Fatal("wrong dump", c.Dump())
+	}
+
+	if c.DumpBits() != "20[11111111111111111110]" {
+		t.Fatal("wrong dump", c.DumpBits())
+	}
 }

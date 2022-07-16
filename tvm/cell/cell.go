@@ -11,23 +11,23 @@ import (
 type Cell struct {
 	special bool
 	level   byte
-	bitsSz  int
+	bitsSz  uint
 	index   int
 	data    []byte
 
 	refs []*Cell
 }
 
-func (c *Cell) BeginParse() *LoadCell {
+func (c *Cell) BeginParse() *Slice {
 	// copy data
 	data := append([]byte{}, c.data...)
 
-	refs := make([]*LoadCell, len(c.refs))
+	refs := make([]*Slice, len(c.refs))
 	for i, ref := range c.refs {
 		refs[i] = ref.BeginParse()
 	}
 
-	return &LoadCell{
+	return &Slice{
 		special: c.special,
 		level:   c.level,
 		bitsSz:  c.bitsSz,
@@ -47,12 +47,12 @@ func (c *Cell) ToBuilder() *Builder {
 	}
 }
 
-func (c *Cell) BitsSize() int {
+func (c *Cell) BitsSize() uint {
 	return c.bitsSz
 }
 
-func (c *Cell) RefsNum() int {
-	return len(c.refs)
+func (c *Cell) RefsNum() uint {
+	return uint(len(c.refs))
 }
 
 func (c *Cell) Dump() string {
@@ -72,10 +72,14 @@ func (c *Cell) dump(deep int, bin bool) string {
 			val += fmt.Sprintf("%08b", n)
 		}
 		if sz%8 != 0 {
-			val = val[:len(val)-(8-(sz%8))]
+			val = val[:uint(len(val))-(8-(sz%8))]
 		}
 	} else {
-		val = hex.EncodeToString(data)
+		val = strings.ToUpper(hex.EncodeToString(data))
+		if sz%8 <= 4 && sz%8 > 0 {
+			// fift hex
+			val = val[:len(val)-1] + "_"
+		}
 	}
 
 	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
@@ -97,7 +101,7 @@ func (c *Cell) dump(deep int, bin bool) string {
 
 func (c *Cell) Hash() []byte {
 	hash := sha256.New()
-	hash.Write(c.serialize(-1, true))
+	hash.Write(c.serialize(0, true))
 	return hash.Sum(nil)
 }
 

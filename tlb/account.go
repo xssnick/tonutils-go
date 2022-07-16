@@ -17,8 +17,17 @@ const (
 	AccountStatusNonExist = "NON_EXIST"
 )
 
+type Account struct {
+	IsActive   bool
+	State      *AccountState
+	Data       *cell.Cell
+	Code       *cell.Cell
+	LastTxLT   uint64
+	LastTxHash []byte
+}
+
 type CurrencyCollection struct {
-	Coins           *Grams           `tlb:"."`
+	Coins           Coins            `tlb:"."`
 	ExtraCurrencies *cell.Dictionary `tlb:"dict 32"`
 }
 
@@ -30,7 +39,7 @@ type DepthBalanceInfo struct {
 type AccountStorage struct {
 	Status            AccountStatus
 	LastTransactionLT uint64
-	Balance           *Grams
+	Balance           Coins
 }
 
 type StorageUsed struct {
@@ -53,7 +62,7 @@ type AccountState struct {
 	AccountStorage
 }
 
-func (g *AccountStatus) LoadFromCell(loader *cell.LoadCell) error {
+func (g *AccountStatus) LoadFromCell(loader *cell.Slice) error {
 	state, err := loader.LoadUInt(2)
 	if err != nil {
 		return err
@@ -73,7 +82,7 @@ func (g *AccountStatus) LoadFromCell(loader *cell.LoadCell) error {
 	return nil
 }
 
-func (a *AccountState) LoadFromCell(loader *cell.LoadCell) error {
+func (a *AccountState) LoadFromCell(loader *cell.Slice) error {
 	isAccount, err := loader.LoadBoolBit()
 	if err != nil {
 		return err
@@ -110,7 +119,7 @@ func (a *AccountState) LoadFromCell(loader *cell.LoadCell) error {
 	return nil
 }
 
-func (s *StorageUsed) LoadFromCell(loader *cell.LoadCell) error {
+func (s *StorageUsed) LoadFromCell(loader *cell.Slice) error {
 	cells, err := loader.LoadVarUInt(7)
 	if err != nil {
 		return err
@@ -133,7 +142,7 @@ func (s *StorageUsed) LoadFromCell(loader *cell.LoadCell) error {
 	return nil
 }
 
-func (s *StorageInfo) LoadFromCell(loader *cell.LoadCell) error {
+func (s *StorageInfo) LoadFromCell(loader *cell.Slice) error {
 	var used StorageUsed
 	err := used.LoadFromCell(loader)
 	if err != nil {
@@ -165,7 +174,7 @@ func (s *StorageInfo) LoadFromCell(loader *cell.LoadCell) error {
 	return nil
 }
 
-func (s *AccountStorage) LoadFromCell(loader *cell.LoadCell) error {
+func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 	lastTransaction, err := loader.LoadUInt(64)
 	if err != nil {
 		return err

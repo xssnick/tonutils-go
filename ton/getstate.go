@@ -7,20 +7,11 @@ import (
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/address"
-	"github.com/xssnick/tonutils-go/liteclient/tlb"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-type Account struct {
-	IsActive   bool
-	State      *tlb.AccountState
-	Data       *cell.Cell
-	Code       *cell.Cell
-	LastTxLT   uint64
-	LastTxHash []byte
-}
-
-func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*Account, error) {
+func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error) {
 	data := block.Serialize()
 
 	chain := make([]byte, 4)
@@ -61,12 +52,12 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		state, resp.Data = loadBytes(resp.Data)
 
 		if len(state) == 0 {
-			return &Account{
+			return &tlb.Account{
 				IsActive: false,
 			}, nil
 		}
 
-		acc := &Account{
+		acc := &tlb.Account{
 			IsActive: true,
 		}
 
@@ -152,10 +143,12 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 
 		return acc, nil
 	case _LSError:
-		return nil, LSError{
-			Code: binary.LittleEndian.Uint32(resp.Data),
-			Text: string(resp.Data[4:]),
+		var lsErr LSError
+		resp.Data, err = lsErr.Load(resp.Data)
+		if err != nil {
+			return nil, err
 		}
+		return nil, lsErr
 	}
 
 	return nil, errors.New("unknown response type")
