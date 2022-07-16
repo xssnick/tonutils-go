@@ -143,10 +143,12 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 
 		return acc, nil
 	case _LSError:
-		return nil, LSError{
-			Code: binary.LittleEndian.Uint32(resp.Data),
-			Text: string(resp.Data[4:]),
+		var lsErr LSError
+		resp.Data, err = lsErr.Load(resp.Data)
+		if err != nil {
+			return nil, err
 		}
+		return nil, lsErr
 	}
 
 	return nil, errors.New("unknown response type")

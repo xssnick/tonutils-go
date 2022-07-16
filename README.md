@@ -8,15 +8,29 @@ This library is native golang implementation of ADNL and lite protocol. It works
 
 It is concurrent safe and can be used from multiple goroutines under high workloads.
 
-### How to use
-You can find full usage examples in **example** directory
+If you love this library and want to support its development you can donate any amount of coins to this ton address:
+`EQCehwsGFPLHWgyr5KUMBIGbL11tlMFsQtsjsfBQEi-omiGo` 
 
-If you still have any questions, or you need any help, you can join our **Telegram group https://t.me/tonutils**
+### How to use
+- [Connection](#Connection)
+- [Wallet and transfer](#Wallet and transfer)
+- [Account and transactions](#Account info and transactions)
+- [Interacting with contracts](#Interacting with contracts)
+  - [Using get methods](#Using GET methods)
+  - [Send external message](#Send external message)
+- [Cells](#Cells)
+  - [TLB Loader](#TLB Loader)
+- [Custom reconnect policy](#Custom reconnect policy)
+- [Features to implement](#Features to implement)
+
+You can find usage examples in **[example](https://github.com/xssnick/tonutils-go/tree/master/example)** directory
+
+You also can join our **[Telegram group](https://t.me/tonutils)** and ask any questions :)
 
 ### Connection
 You can get list of public lite servers from official TON configs:
-* Mainnet - https://ton-blockchain.github.io/global.config.json
-* Testnet - https://ton-blockchain.github.io/testnet-global.config.json
+* Mainnet - `https://ton-blockchain.github.io/global.config.json`
+* Testnet - `https://ton-blockchain.github.io/testnet-global.config.json`
 
 from liteservers section, you need to convert int to ip and take port and key.
 
@@ -33,7 +47,7 @@ if err != nil {
 }
 api := ton.NewAPIClient(client)
 ```
-### Wallet
+### Wallet and transfer
 You can use existing wallet or generate new one using `wallet.NewSeed()`, wallet will be initialized on first sent message from it. This library will deploy and initialize wallet contract if it is not initialized yet. 
 
 You can also send any message to any contract using `w.Send` method, it accepts `tlb.InternalMessage` structure, you can dive into `w.Transfer` implementation and see how it works.
@@ -196,7 +210,13 @@ result := builder.EndCell()
 //  }
 
 fmt.Println(result.Dump())
+```
 
+Load from cell:
+```golang
+slice := someCell.BeginParse()
+wc := slice.MustLoadUInt(8)
+data := slice.MustLoadSlice(256)
 ```
 There are 2 types of methods `Must` and regular, the difference is that in case of error `Must` will panic, 
 but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
@@ -253,7 +273,9 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ MustLoad methods
 * ✅ Parse global config json
 * Event subscriptions
-
+* Payment channels
+* DNS
+* Merkle proofs
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue

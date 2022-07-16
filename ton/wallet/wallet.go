@@ -145,7 +145,7 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message) error {
 	var msg *cell.Cell
 	switch w.ver {
 	case V3, V4R2:
-		msg, err = w.spec.(RegularBuilder).BuildRegularMessage(ctx, initialized, block, messages)
+		msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, initialized, block, messages)
 		if err != nil {
 			return fmt.Errorf("build message err: %w", err)
 		}

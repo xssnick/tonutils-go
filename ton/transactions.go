@@ -78,15 +78,17 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 
 		return res, nil
 	case _LSError:
-		code := binary.LittleEndian.Uint32(resp.Data)
-		if code == 0 {
+		var lsErr LSError
+		resp.Data, err = lsErr.Load(resp.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		if lsErr.Code == 0 {
 			return nil, ErrMessageNotAccepted
 		}
 
-		return nil, LSError{
-			Code: binary.LittleEndian.Uint32(resp.Data),
-			Text: string(resp.Data[4:]),
-		}
+		return nil, lsErr
 	}
 
 	return nil, errors.New("unknown response type")
@@ -145,15 +147,17 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *tlb.BlockInfo, ad
 
 		return &tx, nil
 	case _LSError:
-		code := binary.LittleEndian.Uint32(resp.Data)
-		if code == 0 {
+		var lsErr LSError
+		resp.Data, err = lsErr.Load(resp.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		if lsErr.Code == 0 {
 			return nil, ErrMessageNotAccepted
 		}
 
-		return nil, LSError{
-			Code: binary.LittleEndian.Uint32(resp.Data),
-			Text: string(resp.Data[4:]),
-		}
+		return nil, lsErr
 	}
 
 	return nil, errors.New("unknown response type")

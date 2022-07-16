@@ -196,6 +196,13 @@ func TestWallet_Send(t *testing.T) {
 					return nil
 				}
 
+				if ver == V4R2 {
+					if p.MustLoadUInt(8) != 0 {
+						t.Fatal("op incorrect")
+						return nil
+					}
+				}
+
 				if p.MustLoadUInt(8) != uint64(128) {
 					t.Fatal("mode incorrect")
 					return nil
@@ -204,7 +211,13 @@ func TestWallet_Send(t *testing.T) {
 				intMsgRef, _ := intMsg.ToCell()
 				payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
 					MustStoreUInt(uint64(0xFFFFFFFF), 32).
-					MustStoreUInt(seq, 32).MustStoreUInt(uint64(128), 8).MustStoreRef(intMsgRef)
+					MustStoreUInt(seq, 32)
+
+				if ver == V4R2 {
+					payload.MustStoreUInt(0, 8)
+				}
+
+				payload.MustStoreUInt(uint64(128), 8).MustStoreRef(intMsgRef)
 
 				if !bytes.Equal(p.MustLoadRef().MustToCell().Hash(), intMsgRef.Hash()) {
 					t.Fatal("int msg incorrect")

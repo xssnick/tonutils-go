@@ -33,10 +33,12 @@ func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMe
 
 		return nil
 	case _LSError:
-		return LSError{
-			Code: binary.LittleEndian.Uint32(resp.Data),
-			Text: string(resp.Data[4:]),
+		var lsErr LSError
+		resp.Data, err = lsErr.Load(resp.Data)
+		if err != nil {
+			return err
 		}
+		return lsErr
 	}
 
 	return errors.New("unknown response type")

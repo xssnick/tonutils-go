@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/xssnick/tonutils-go/tl"
-	"golang.org/x/sync/errgroup"
 )
 
 type connection struct {
@@ -41,33 +40,43 @@ type connection struct {
 }
 
 func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *GlobalConfig) error {
-	g, ctx := errgroup.WithContext(ctx)
-	success := int32(0)
+	if len(config.Liteservers) == 0 {
+		return ErrNoConnections
+	}
+
+	fails := int32(0)
+	result := make(chan error, len(config.Liteservers))
+
+	timeout := 3 * time.Second
+	if dl, ok := ctx.Deadline(); ok {
+		timeout = dl.Sub(time.Now())
+	}
 
 	for _, ls := range config.Liteservers {
 		ip := intToIP4(ls.IP)
 		conStr := fmt.Sprintf("%s:%d", ip, ls.Port)
 		ls := ls
 
-		g.Go(func() error {
+		go func() {
+			// we need personal context for each call, because it gets cancelled on failure of one
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
 			err := c.AddConnection(ctx, conStr, ls.ID.Key)
 			if err == nil {
-				atomic.AddInt32(&success, 1)
+				result <- nil
+				return
 			}
-			return err
-		})
+
+			// if everything failed
+			if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers) {
+				result <- err
+			}
+		}()
 	}
 
-	err := g.Wait()
-	if success == 0 {
-		if err != nil {
-			return err
-		}
-
-		return ErrNoConnections
-	}
-
-	return nil
+	// return on first success connection
+	return <-result
 }
 
 func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, configUrl string) error {
