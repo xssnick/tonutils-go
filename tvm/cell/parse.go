@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
-
-	"github.com/xssnick/tonutils-go/utils"
 )
 
 const hashSize = 32
@@ -130,6 +128,10 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 		withHashes := (flags & 0b10000) != 0
 		levelMask := flags >> 5
 
+		if refsNum > 4 {
+			return nil, errors.New("too many refs in cell")
+		}
+
 		ln := data[offset+1]
 		// round to 1 byte, len in octets
 		oneMore := ln % 2
@@ -168,18 +170,24 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 			if i == id {
 				return nil, errors.New("recursive reference of cells")
 			}
+			if id < i && index == nil { // compatibility with c++ implementation
+				return nil, errors.New("reference to index which is behind parent cell")
+			}
+			if id >= len(cells) {
+				return nil, errors.New("invalid index, out of scope")
+			}
 
 			refs[y] = &cells[id]
 
 			referred[id] = true
 		}
 
-		bitsSz := int(ln) * 4
+		bitsSz := uint(int(ln) * 4)
 
 		// if not full byte
 		if int(ln)%2 != 0 {
 			// find last bit of byte which indicates the end and cut it and next
-			for y := 0; y < 8; y++ {
+			for y := uint(0); y < 8; y++ {
 				if (payload[len(payload)-1]>>y)&1 == 1 {
 					bitsSz += 3 - y
 					break
@@ -212,9 +220,9 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 
 func parseBOCFlags(data byte) (bocFlags, int) {
 	return bocFlags{
-		hasIndex:     utils.HasBit(data, 7),
-		HasCrc32c:    utils.HasBit(data, 6),
-		hasCacheBits: utils.HasBit(data, 5),
+		hasIndex:     data&(1<<7) > 0,
+		HasCrc32c:    data&(1<<6) > 0,
+		hasCacheBits: data&(1<<5) > 0,
 	}, int(data & 0b00000111)
 }
 

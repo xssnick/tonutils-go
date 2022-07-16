@@ -1,23 +1,42 @@
 # tonutils-go
-![Coverage](https://img.shields.io/badge/Coverage-64.6%25-yellow)
+[![Based on TON][ton-svg]][ton]
+![Coverage](https://img.shields.io/badge/Coverage-71.5%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
-This library is native golang implementation of ADNL and lite protocol. It works like connection pool and can be connected to multiple lite servers in the same time, balancing is done on lib side.
+This library is native golang implementation of ADNL and lite protocol. It works as connection pool and can be connected to multiple lite servers in the same time, balancing is done on lib side.
 
-Its concurrent safe and can be used from multiple goroutines.
+It is concurrent safe and can be used from multiple goroutines under high workloads.
 
-If you have any questions or suggestions you can join our Telegram chat https://t.me/tonutils
+If you love this library and want to support its development you can donate any amount of coins to this ton address ☺️
+`EQBx6tZZWa2Tbv6BvgcvegoOQxkRrVaBVwBOoW85nbP37_Go`
 
-**This library is under active development**, so more cool features will come soon! Also, if you have some idea of useful functionality, just open issue with description or even pull request! 
+### How to use
+- [Connection](#Connection)
+- [Wallet](#Wallet)
+  - [Transfer](#Wallet)
+  - [Balance](#Wallet)
+- [Accounts](#Account-info-and-transactions)
+  - [List transactions](#Account-info-and-transactions)
+- [Contracts](#Contracts)
+  - [Use get methods](#Using-GET-methods)
+  - [Send external message](#Send-external-message)
+- [Cells](#Cells)
+  - [Create](#Cells)
+  - [Parse](#Cells)
+  - [TLB Loader](#TLB-Loader)
+- [Custom reconnect policy](#Custom-reconnect-policy)
+- [Features to implement](#Features-to-implement)
 
-## How to use
-You can find full usage examples in **example** directory
+
+You can find usage examples in **[example](https://github.com/xssnick/tonutils-go/tree/master/example)** directory
+
+You also can join our **[Telegram group](https://t.me/tonutils)** and ask any questions :)
 
 ### Connection
 You can get list of public lite servers from official TON configs:
-* Mainnet - https://ton-blockchain.github.io/global.config.json
-* Testnet - https://ton-blockchain.github.io/testnet-global.config.json
+* Mainnet - `https://ton-blockchain.github.io/global.config.json`
+* Testnet - `https://ton-blockchain.github.io/testnet-global.config.json`
 
 from liteservers section, you need to convert int to ip and take port and key.
 
@@ -25,17 +44,13 @@ Or you can run your own full node, see TON docs.
 
 You can connect like that:
 ```golang
-// initialize new client
-client := liteclient.NewClient()
-// connect to lite server, can be connected to multiple servers in the same time
-err := client.Connect(context.Background(), 
-	"65.21.74.140:46427", 
-	"JhXt7H1dZTgxQTIyGiYV4f9VUARuDxFl/1kVBjLSMB8=")
+client := liteclient.NewConnectionPool()
+
+configUrl := "https://ton-blockchain.github.io/testnet-global.config.json"
+err := client.AddConnectionsFromConfigUrl(context.Background(), configUrl)
 if err != nil {
     panic(err)
 }
-
-// initialize ton api lite connection wrapper
 api := ton.NewAPIClient(client)
 ```
 ### Wallet
@@ -66,7 +81,7 @@ if balance.NanoTON().Uint64() >= 3000000 {
 }
 ```
 You can find full working example at `example/wallet/main.go`
-### Interacting with contracts 
+### Contracts 
 Here are the description of features which allow us to trigger contract's methods
 
 #### Using GET methods
@@ -201,7 +216,13 @@ result := builder.EndCell()
 //  }
 
 fmt.Println(result.Dump())
+```
 
+Load from cell:
+```golang
+slice := someCell.BeginParse()
+wc := slice.MustLoadUInt(8)
+data := slice.MustLoadSlice(256)
 ```
 There are 2 types of methods `Must` and regular, the difference is that in case of error `Must` will panic, 
 but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
@@ -254,8 +275,16 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Get transactions
 * ✅ Deploy contracts
 * ✅ Wallet operations
-* Payment processing
 * ✅ Cell dictionaries support
 * ✅ MustLoad methods
+* ✅ Parse global config json
 * Event subscriptions
-* Parse global config json
+* Payment channels
+* DNS
+* Merkle proofs
+
+
+<!-- Badges -->
+[ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue
+[ton]: https://ton.org
+[tg-chat]: https://t.me/tonutils
