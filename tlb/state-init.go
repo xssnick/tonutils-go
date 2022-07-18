@@ -14,8 +14,8 @@ type TickTock struct {
 type StateInit struct {
 	Depth    uint64           `tlb:"maybe ## 5"`
 	TickTock *TickTock        `tlb:"maybe ^"`
-	Data     *cell.Cell       `tlb:"maybe ^"`
 	Code     *cell.Cell       `tlb:"maybe ^"`
+	Data     *cell.Cell       `tlb:"maybe ^"`
 	Lib      *cell.Dictionary `tlb:"dict 256"`
 }
 
