@@ -1,6 +1,6 @@
 # tonutils-go
 [![Based on TON][ton-svg]][ton]
-![Coverage](https://img.shields.io/badge/Coverage-71.5%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-71.7%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
@@ -31,7 +31,7 @@ If you love this library and want to support its development you can donate any 
 
 You can find usage examples in **[example](https://github.com/xssnick/tonutils-go/tree/master/example)** directory
 
-You also can join our **[Telegram group](https://t.me/tonutils)** and ask any questions :)
+You can also join our **[Telegram group](https://t.me/tonutils)** and ask any questions :)
 
 ### Connection
 You can get list of public lite servers from official TON configs:
@@ -54,7 +54,7 @@ if err != nil {
 api := ton.NewAPIClient(client)
 ```
 ### Wallet
-You can use existing wallet or generate new one using `wallet.NewSeed()`, wallet will be initialized on first sent message from it. This library will deploy and initialize wallet contract if it is not initialized yet. 
+You can use existing wallet or generate new one using `wallet.NewSeed()`, wallet will be initialized by the first message sent from it. This library will deploy and initialize wallet contract if it is not initialized yet. 
 
 You can also send any message to any contract using `w.Send` method, it accepts `tlb.InternalMessage` structure, you can dive into `w.Transfer` implementation and see how it works.
 
@@ -82,7 +82,7 @@ if balance.NanoTON().Uint64() >= 3000000 {
 ```
 You can find full working example at `example/wallet/main.go`
 ### Contracts 
-Here are the description of features which allow us to trigger contract's methods
+Here is the description of features which allow us to trigger contract's methods
 
 #### Using GET methods
 Let's imagine that we have contract with method
@@ -123,7 +123,7 @@ println(val)
 ```
 
 #### Send external message
-Using messages you can interact with contracts to modify state, for example it can be used to intercat with wallet and send transactions to others.
+Using messages, you can interact with contracts to modify state. For example, it can be used to interact with wallet and send transactions to others.
 
 You can send message to contract like that:
 ```golang
@@ -145,7 +145,7 @@ You can find full working example at `example/external-message/main.go`
 
 ### Account info and transactions
 You can get full account information including balance, stored data and even code using GetAccount method. 
-You can also get account's transactions list with all details.
+You can also get account's list of transactions with all details.
 
 Example:
 ```golang
@@ -172,7 +172,7 @@ list, err := api.ListTransactions(context.Background(), addr, 15, account.LastTx
 if err != nil {
     // In some cases you can get error:
     // lite server error, code 4294966896: cannot compute block with specified transaction: lt not in db
-    // it means that current lite server not store older data, you can query one with full history
+    // it means that current lite server does not store older data, you can query one with full history
     log.Printf("send err: %s", err.Error())
     return
 }
@@ -224,7 +224,7 @@ slice := someCell.BeginParse()
 wc := slice.MustLoadUInt(8)
 data := slice.MustLoadSlice(256)
 ```
-There are 2 types of methods `Must` and regular, the difference is that in case of error `Must` will panic, 
+There are 2 types of methods `Must` and regular. The difference is that in case of error, `Must` will panic, 
 but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
 
 To debug cells you can use `Dump()` and `DumpBits()` methods of cell, they will return string with beautifully formatted cells and their refs tree
@@ -268,7 +268,7 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 ```
 
 ### Features to implement
-* ✅ Support cell and slice as arguments for run get method
+* ✅ Support cell and slice as arguments to run get method
 * ✅ Reconnect on failure
 * ✅ Get account state method
 * ✅ Send external message
