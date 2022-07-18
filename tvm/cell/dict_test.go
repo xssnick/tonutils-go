@@ -20,7 +20,7 @@ func TestLoadCell_LoadDict(t *testing.T) {
 	ld.MustLoadRef()
 	ld = ld.MustLoadRef()
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		dict, err := ld.LoadDict(256)
 		if err != nil {
 			t.Fatal(err, i)
@@ -98,5 +98,21 @@ func TestDictionary_ToCell(t *testing.T) {
 
 	if !bytes.Equal(c2.Hash(), c.Hash()) {
 		t.Fatal("repack not match")
+	}
+}
+
+func TestLoadCell_EmptyDict(t *testing.T) {
+	d := NewDict(256)
+	c := BeginCell().MustStoreDict(d).EndCell()
+
+	s := c.BeginParse().MustLoadMaybeRef()
+	if s != nil {
+		t.Fatal("dict format incorrect")
+	}
+
+	d2 := c.BeginParse().MustLoadDict(256)
+
+	if len(d2.All()) != 0 {
+		t.Fatal("dict len incorrect")
 	}
 }

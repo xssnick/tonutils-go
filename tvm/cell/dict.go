@@ -39,6 +39,14 @@ func (c *Slice) ToDict(keySz uint) (*Dictionary, error) {
 	return d, nil
 }
 
+func (c *Slice) MustLoadDict(keySz uint) *Dictionary {
+	ld, err := c.LoadDict(keySz)
+	if err != nil {
+		panic(err)
+	}
+	return ld
+}
+
 func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
 	cl, err := c.LoadMaybeRef()
 	if err != nil {
@@ -280,6 +288,10 @@ func (d *Dictionary) MustToCell() *Cell {
 }
 
 func (d *Dictionary) ToCell() (*Cell, error) {
+	if len(d.storage) == 0 {
+		return nil, nil
+	}
+
 	type kvData struct {
 		data  []byte
 		value *Cell
@@ -296,8 +308,8 @@ func (d *Dictionary) ToCell() (*Cell, error) {
 	var dive func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous uint) (*Cell, error)
 	dive = func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous uint) (*Cell, error) {
 		if bitOffset == d.keySz {
-			if len(kvs) > 0 {
-				// return nil, errors.New("not single key in a leaf")
+			if len(kvs) > 1 {
+				return nil, errors.New("not single key in a leaf")
 			}
 
 			b := BeginCell()
