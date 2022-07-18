@@ -12,10 +12,10 @@ type TickTock struct {
 }
 
 type StateInit struct {
-	Depth    *uint64          `tlb:"maybe ## 5"`
+	Depth    uint64           `tlb:"maybe ## 5"`
 	TickTock *TickTock        `tlb:"maybe ^"`
-	Data     *cell.Cell       `tlb:"maybe ^"`
 	Code     *cell.Cell       `tlb:"maybe ^"`
+	Data     *cell.Cell       `tlb:"maybe ^"`
 	Lib      *cell.Dictionary `tlb:"dict 256"`
 }
 
@@ -27,7 +27,7 @@ func (m *StateInit) ToCell() (*cell.Cell, error) {
 		return nil, errors.New("lib serialization is currently not supported")
 	}
 
-	if m.Depth != nil {
+	if m.Depth != 0 {
 		return nil, errors.New("depth serialization is currently not supported")
 	}
 
