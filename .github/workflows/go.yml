@@ -7,7 +7,6 @@ on:
     branches: [ "master" ]
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
@@ -48,15 +47,15 @@ jobs:
         files: README.md
 
     - name: Commit changes
-      if: steps.verify-changed-files.outputs.files_changed == 'true'
+      if: steps.verify-changed-files.outputs.files_changed == 'true' && github.ref != 'refs/heads/master'
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add README.md
-        git commit -m "chore: Updated coverage badge."
+        git commit -m "Updated coverage badge."
 
     - name: Push changes
-      if: steps.verify-changed-files.outputs.files_changed == 'true'
+      if: steps.verify-changed-files.outputs.files_changed == 'true' && github.ref != 'refs/heads/master'
       uses: ad-m/github-push-action@master
       with:
         github_token: ${{ github.token }}
