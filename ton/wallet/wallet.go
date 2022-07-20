@@ -215,10 +215,10 @@ func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.C
 	})
 }
 
-func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, body, code, data *cell.Cell) (*address.Address, error) {
+func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell) (*address.Address, error) {
 	state := &tlb.StateInit{
-		Data: data,
-		Code: code,
+		Data: contractData,
+		Code: contractCode,
 	}
 
 	stateCell, err := state.ToCell()
@@ -235,7 +235,7 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, body, cod
 			Bounce:      false,
 			DstAddr:     addr,
 			Amount:      amount,
-			Body:        body,
+			Body:        msgBody,
 			StateInit:   state,
 		},
 	}); err != nil {

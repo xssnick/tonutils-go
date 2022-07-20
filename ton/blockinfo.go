@@ -223,6 +223,11 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, block *tlb.BlockInfo
 		var shards []*tlb.BlockInfo
 
 		for _, kv := range inf.ShardHashes.All() {
+			workchain, err := kv.Key.BeginParse().LoadInt(32)
+			if err != nil {
+				return nil, fmt.Errorf("load workchain err: %w", err)
+			}
+
 			var binTree tlb.BinTree
 			err = binTree.LoadFromCell(kv.Value.BeginParse().MustLoadRef())
 			if err != nil {
@@ -230,18 +235,17 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, block *tlb.BlockInfo
 			}
 
 			for _, bk := range binTree.All() {
-				var bData tlb.ShardDesc
-				if err = tlb.LoadFromCell(&bData, bk.Value.BeginParse()); err != nil {
+				var shardDesc tlb.ShardDesc
+				if err = tlb.LoadFromCell(&shardDesc, bk.Value.BeginParse()); err != nil {
 					return nil, fmt.Errorf("load ShardDesc err: %w", err)
 				}
 
-				// TODO: its only -9223372036854775808 shard now, need to parse ids from somewhere
 				shards = append(shards, &tlb.BlockInfo{
-					Workchain: 0,
-					Shard:     -9223372036854775808,
-					SeqNo:     bData.SeqNo,
-					RootHash:  bData.RootHash,
-					FileHash:  bData.FileHash,
+					Workchain: int32(workchain),
+					Shard:     shardDesc.NextValidatorShard,
+					SeqNo:     shardDesc.SeqNo,
+					RootHash:  shardDesc.RootHash,
+					FileHash:  shardDesc.FileHash,
 				})
 			}
 		}

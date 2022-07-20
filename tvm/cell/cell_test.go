@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"math/big"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/address"
 )
 
 func TestCell_HashSign(t *testing.T) {
@@ -118,5 +120,30 @@ func TestCell_Dump(t *testing.T) {
 
 	if c.DumpBits() != "20[11111111111111111110]" {
 		t.Fatal("wrong dump", c.DumpBits())
+	}
+}
+
+func TestVarAddr(t *testing.T) {
+	for addrType, str := range map[address.AddrType]string{
+		address.NoneAddress: "b5ee9c724101010100030000012094418655",
+		address.ExtAddress:  "b5ee9c7241010101000800000b440020406090ae44ae4e",
+		address.VarAddress:  "b5ee9c7241010101002900004dd0b000000008012198f3daf0bc973c6958c1e9fc9c65b8ae4e3766a3e89db6e22bae3854ab2b6b5ae33cbe",
+		address.StdAddress:  "b5ee9c7241010101002400004389bdc849a2c0204060fdc849a2c0204060fdc849a2c0204060fdc849a2c0204060f01fbc1974",
+	} {
+		data, _ := hex.DecodeString(str)
+
+		c, err := FromBOC(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		a := c.BeginParse().MustLoadAddr()
+		if a.Type() != addrType {
+			t.Fatal(addrType, a.Type(), "not correct addr type")
+		}
+
+		if hex.EncodeToString(BeginCell().MustStoreAddr(a).EndCell().ToBOC()) != str {
+			t.Fatal(addrType, "diff boc")
+		}
 	}
 }

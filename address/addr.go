@@ -9,9 +9,20 @@ import (
 	"github.com/sigurn/crc16"
 )
 
+type AddrType int
+
+const (
+	NoneAddress AddrType = 0
+	ExtAddress  AddrType = 1
+	StdAddress  AddrType = 2
+	VarAddress  AddrType = 3
+)
+
 type Address struct {
 	flags     flags
-	workchain byte
+	addrType  AddrType
+	workchain int32
+	bitsLen   uint
 	data      []byte
 }
 
@@ -21,34 +32,70 @@ type flags struct {
 }
 
 func NewAddress(flags byte, workchain byte, data []byte) *Address {
-	// TODO: all types of addrs
-	// TODO: flags parse
 	return &Address{
 		flags:     parseFlags(flags),
-		workchain: workchain,
+		addrType:  StdAddress,
+		workchain: int32(workchain),
+		bitsLen:   256,
 		data:      data,
 	}
 }
 
-func (a *Address) IsAddrNone() bool {
-	for _, b := range a.data {
-		if b != 0 {
-			return false
-		}
+func NewAddressVar(flags byte, workchain int32, bitsLen uint, data []byte) *Address {
+	return &Address{
+		flags:     parseFlags(flags),
+		addrType:  VarAddress,
+		workchain: workchain,
+		bitsLen:   bitsLen,
+		data:      data,
 	}
+}
 
-	return true
+func NewAddressExt(flags byte, bitsLen uint, data []byte) *Address {
+	return &Address{
+		flags:     parseFlags(flags),
+		addrType:  ExtAddress,
+		workchain: 0,
+		bitsLen:   bitsLen,
+		data:      data,
+	}
+}
+
+func NewAddressNone() *Address {
+	return &Address{
+		addrType: NoneAddress,
+	}
+}
+
+func (a *Address) IsAddrNone() bool {
+	return a.addrType == NoneAddress
+}
+
+func (a *Address) Type() AddrType {
+	return a.addrType
+}
+
+func (a *Address) BitsLen() uint {
+	return a.bitsLen
 }
 
 func (a *Address) String() string {
-	if a.IsAddrNone() {
+	switch a.addrType {
+	case NoneAddress:
 		return "NONE"
+	case StdAddress:
+		var address [36]byte
+		copy(address[0:34], a.prepareChecksumData())
+		binary.BigEndian.PutUint16(address[34:], crc16.Checksum(address[:34], crc16.MakeTable(crc16.CRC16_XMODEM)))
+		return base64.RawURLEncoding.EncodeToString(address[:])
+	case ExtAddress:
+		// TODO support readable serialization
+		return "EXT_ADDRESS"
+	case VarAddress:
+		return "VAR_ADDRESS"
+	default:
+		return "NOT_SUPPORTED"
 	}
-
-	var address [36]byte
-	copy(address[0:34], a.prepareChecksumData())
-	binary.BigEndian.PutUint16(address[34:], crc16.Checksum(address[:34], crc16.MakeTable(crc16.CRC16_XMODEM)))
-	return base64.RawURLEncoding.EncodeToString(address[:])
 }
 
 func (a *Address) MarshalJSON() ([]byte, error) {
@@ -83,7 +130,7 @@ func parseFlags(data byte) flags {
 }
 
 func ParseAddr(addr string) (*Address, error) {
-	data, err := base64.URLEncoding.DecodeString(addr)
+	data, err := base64.RawURLEncoding.DecodeString(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +155,7 @@ func (a *Address) Checksum() uint16 {
 func (a *Address) prepareChecksumData() []byte {
 	var data [34]byte
 	data[0] = a.FlagsToByte()
-	data[1] = a.workchain
+	data[1] = byte(a.workchain)
 	copy(data[2:34], a.data)
 	return data[:]
 }
@@ -133,7 +180,7 @@ func (a *Address) IsTestnetOnly() bool {
 	return a.flags.testnet
 }
 
-func (a *Address) Workchain() byte {
+func (a *Address) Workchain() int32 {
 	return a.workchain
 }
 
