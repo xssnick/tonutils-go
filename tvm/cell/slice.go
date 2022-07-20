@@ -323,6 +323,20 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 	}
 
 	switch typ {
+	case 0:
+		return address.NewAddressNone(), nil
+	case 1:
+		ln, err := c.LoadUInt(9)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load len: %w", err)
+		}
+
+		data, err := c.LoadSlice(uint(ln))
+		if err != nil {
+			return nil, fmt.Errorf("failed to load addr data: %w", err)
+		}
+
+		return address.NewAddressExt(0, uint(ln), data), nil
 	case 2:
 		isAnycast, err := c.LoadBoolBit()
 		if err != nil {
@@ -357,8 +371,45 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 		}
 
 		return address.NewAddress(0, byte(workchain), data), nil
-	case 0:
-		return &address.Address{}, nil
+	case 3:
+		isAnycast, err := c.LoadBoolBit()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load anycast bit: %w", err)
+		}
+
+		if isAnycast {
+			depthLen := uint(math.Ceil(math.Log2(30)))
+
+			depth, err := c.LoadUInt(depthLen)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load depth: %w", err)
+			}
+
+			pfx, err := c.LoadSlice(uint(depth))
+			if err != nil {
+				return nil, fmt.Errorf("failed to load prefix: %w", err)
+			}
+			_ = pfx
+
+			// TODO: save anycast
+		}
+
+		ln, err := c.LoadUInt(9)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load len: %w", err)
+		}
+
+		workchain, err := c.LoadInt(32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load workchain: %w", err)
+		}
+
+		data, err := c.LoadSlice(uint(ln))
+		if err != nil {
+			return nil, fmt.Errorf("failed to load addr data: %w", err)
+		}
+
+		return address.NewAddressVar(0, int32(workchain), uint(ln), data), nil
 	default:
 		// TODO: support of all types of addresses, currently only std supported, skipping 3 bits
 		return nil, errors.New("not supported type of address, currently only std supported")
