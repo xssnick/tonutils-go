@@ -9,7 +9,7 @@ import (
 func TestAddress_Checksum(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -40,7 +40,7 @@ func TestAddress_Checksum(t *testing.T) {
 func TestAddress_Data(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -68,7 +68,7 @@ func TestAddress_Data(t *testing.T) {
 func TestAddress_Dump(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -83,7 +83,9 @@ func TestAddress_Dump(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a := &Address{
 				flags:     tt.fields.flags,
+				addrType:  StdAddress,
 				workchain: tt.fields.workchain,
+				bitsLen:   256,
 				data:      tt.fields.data,
 			}
 			if got := a.Dump(); got != tt.want {
@@ -96,7 +98,7 @@ func TestAddress_Dump(t *testing.T) {
 func TestAddress_flagsToByte(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -130,7 +132,7 @@ func TestAddress_flagsToByte(t *testing.T) {
 func TestAddress_IsBounceable(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -164,7 +166,7 @@ func TestAddress_IsBounceable(t *testing.T) {
 func TestAddress_IsTestnetOnly(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -198,7 +200,7 @@ func TestAddress_IsTestnetOnly(t *testing.T) {
 func TestAddress_SetBounce(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	type args struct {
@@ -232,7 +234,7 @@ func TestAddress_SetBounce(t *testing.T) {
 func TestAddress_SetTestnetOnly(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	type args struct {
@@ -267,7 +269,7 @@ func TestAddress_SetTestnetOnly(t *testing.T) {
 func TestAddress_String(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -290,7 +292,9 @@ func TestAddress_String(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a := &Address{
 				flags:     tt.fields.flags,
+				addrType:  StdAddress,
 				workchain: tt.fields.workchain,
+				bitsLen:   256,
 				data:      tt.fields.data,
 			}
 			if got := a.String(); got != tt.want {
@@ -303,18 +307,18 @@ func TestAddress_String(t *testing.T) {
 func TestAddress_Workchain(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
 		name   string
 		fields fields
-		want   byte
+		want   int32
 	}{
-		{"1", fields{flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(0)},
-		{"2", fields{flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(0)},
-		{"3", fields{flags: flags{bounceable: true, testnet: false}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, byte(1)},
-		{"4", fields{flags: flags{bounceable: true, testnet: false}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, byte(1)},
+		{"1", fields{flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, int32(0)},
+		{"2", fields{flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, int32(0)},
+		{"3", fields{flags: flags{bounceable: true, testnet: false}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, int32(1)},
+		{"4", fields{flags: flags{bounceable: true, testnet: false}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, int32(1)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -333,7 +337,7 @@ func TestAddress_Workchain(t *testing.T) {
 func TestAddress_prepareChecksumData(t *testing.T) {
 	type fields struct {
 		flags     flags
-		workchain byte
+		workchain int32
 		data      []byte
 	}
 	tests := []struct {
@@ -366,16 +370,16 @@ func TestMustParseAddr(t *testing.T) {
 		args string
 		want *Address
 	}{
-		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"3", "UQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nHCN", &Address{flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"4", "UQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULLjm", &Address{flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"5", "kQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nJbC", &Address{flags: flags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"6", "kQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULF6p", &Address{flags: flags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"7", "0QC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nMsH", &Address{flags: flags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"8", "0QCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULANs", &Address{flags: flags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
-		{"9", "0QG6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nEbb", &Address{flags: flags{bounceable: false, testnet: true}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
-		{"10", "0QGTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULI6w", &Address{flags: flags{bounceable: false, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"3", "UQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nHCN", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"4", "UQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULLjm", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: false, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"5", "kQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nJbC", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"6", "kQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULF6p", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"7", "0QC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nMsH", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: false, testnet: true}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"8", "0QCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULANs", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: false, testnet: true}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
+		{"9", "0QG6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nEbb", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: false, testnet: true}, workchain: 1, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}},
+		{"10", "0QGTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULI6w", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: false, testnet: true}, workchain: 1, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -416,8 +420,8 @@ func TestParseAddr(t *testing.T) {
 		want    *Address
 		wantErr bool
 	}{
-		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, false},
-		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, false},
+		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, false},
+		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, false},
 		{"err 1", "AQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", nil, true},
 		{"err 2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUB", nil, true},
 	}

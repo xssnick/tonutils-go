@@ -36,7 +36,7 @@ type ShardDesc struct {
 	NXCCUpdated        bool   `tlb:"bool"`
 	Flags              uint8  `tlb:"## 3"`
 	NextCatchainSeqNo  uint32 `tlb:"## 32"`
-	NextValidatorShard uint64 `tlb:"## 64"`
+	NextValidatorShard int64  `tlb:"## 64"`
 	MinRefMcSeqNo      uint32 `tlb:"## 32"`
 	GenUTime           uint32 `tlb:"## 32"`
 }

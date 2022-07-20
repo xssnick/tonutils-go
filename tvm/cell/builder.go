@@ -203,40 +203,100 @@ func (b *Builder) MustStoreAddr(addr *address.Address) *Builder {
 }
 
 func (b *Builder) StoreAddr(addr *address.Address) error {
-	if addr == nil {
+	if addr == nil || addr.IsAddrNone() {
 		if b.bitsSz+2 >= 1024 {
 			return ErrNotFit1023
 		}
 		return b.StoreUInt(0, 2)
 	}
 
-	if b.bitsSz+2+1+8+256 >= 1024 {
-		return ErrNotFit1023
+	switch addr.Type() {
+	case address.ExtAddress:
+		if b.bitsSz+2+9+addr.BitsLen() >= 1024 {
+			return ErrNotFit1023
+		}
+
+		// addr ext
+		err := b.StoreUInt(0b01, 2)
+		if err != nil {
+			return err
+		}
+
+		err = b.StoreUInt(uint64(addr.BitsLen()), 9)
+		if err != nil {
+			return err
+		}
+
+		err = b.StoreSlice(addr.Data(), addr.BitsLen())
+		if err != nil {
+			return err
+		}
+
+		return nil
+	case address.StdAddress:
+		if b.bitsSz+2+1+8+256 >= 1024 {
+			return ErrNotFit1023
+		}
+
+		// addr std
+		err := b.StoreUInt(0b10, 2)
+		if err != nil {
+			return err
+		}
+
+		// anycast
+		err = b.StoreUInt(0b0, 1)
+		if err != nil {
+			return err
+		}
+
+		err = b.StoreUInt(uint64(addr.Workchain()), 8)
+		if err != nil {
+			return err
+		}
+
+		err = b.StoreSlice(addr.Data(), 256)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	case address.VarAddress:
+		if b.bitsSz+2+1+9+32+addr.BitsLen() >= 1024 {
+			return ErrNotFit1023
+		}
+
+		// addr var
+		err := b.StoreUInt(0b11, 2)
+		if err != nil {
+			return err
+		}
+
+		// anycast
+		err = b.StoreUInt(0b0, 1)
+		if err != nil {
+			return err
+		}
+
+		err = b.StoreUInt(uint64(addr.BitsLen()), 9)
+		if err != nil {
+			return err
+		}
+
+		err = b.StoreInt(int64(addr.Workchain()), 32)
+		if err != nil {
+			return err
+		}
+
+		err = b.StoreSlice(addr.Data(), addr.BitsLen())
+		if err != nil {
+			return err
+		}
+
+		return nil
 	}
 
-	// addr std
-	err := b.StoreUInt(0b10, 2)
-	if err != nil {
-		return err
-	}
-
-	// anycast
-	err = b.StoreUInt(0b0, 1)
-	if err != nil {
-		return err
-	}
-
-	err = b.StoreUInt(uint64(addr.Workchain()), 8)
-	if err != nil {
-		return err
-	}
-
-	err = b.StoreSlice(addr.Data(), 256)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return ErrAddressTypeNotSupported
 }
 
 func (b *Builder) MustStoreDict(dict *Dictionary) *Builder {

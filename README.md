@@ -1,6 +1,6 @@
 # tonutils-go
 [![Based on TON][ton-svg]][ton]
-![Coverage](https://img.shields.io/badge/Coverage-72.4%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-71.2%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
