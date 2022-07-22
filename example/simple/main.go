@@ -38,7 +38,7 @@ func main() {
 		}
 	*/
 
-	res, err := api.RunGetMethod(context.Background(), b, address.MustParseAddr("kQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0inM"), "mult", 7, 7)
+	res, err := api.RunGetMethod(context.Background(), b, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "mult", 7, 7)
 	if err != nil {
 		log.Fatalln("run get method err:", err.Error())
 		return
