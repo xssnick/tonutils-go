@@ -133,14 +133,14 @@ func Test_Account(t *testing.T) {
 	lastLt := res.LastTxLT
 
 	fmt.Printf("\nTransactions:\n")
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 2; i++ {
 		// last transaction has 0 prev lt
 		if lastLt == 0 {
 			break
 		}
 
-		// load transactions in batches with size 15
-		list, err := api.ListTransactions(ctx, addr, 15, lastLt, lastHash)
+		// load transactions in batches with size 5
+		list, err := api.ListTransactions(ctx, addr, 5, lastLt, lastHash)
 		if err != nil {
 			t.Fatal("send err:", err.Error())
 			return
