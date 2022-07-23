@@ -79,6 +79,8 @@ func (a *Address) BitsLen() uint {
 	return a.bitsLen
 }
 
+var crcTable = crc16.MakeTable(crc16.CRC16_XMODEM)
+
 func (a *Address) String() string {
 	switch a.addrType {
 	case NoneAddress:
@@ -86,7 +88,7 @@ func (a *Address) String() string {
 	case StdAddress:
 		var address [36]byte
 		copy(address[0:34], a.prepareChecksumData())
-		binary.BigEndian.PutUint16(address[34:], crc16.Checksum(address[:34], crc16.MakeTable(crc16.CRC16_XMODEM)))
+		binary.BigEndian.PutUint16(address[34:], crc16.Checksum(address[:34], crcTable))
 		return base64.RawURLEncoding.EncodeToString(address[:])
 	case ExtAddress:
 		// TODO support readable serialization
@@ -95,6 +97,28 @@ func (a *Address) String() string {
 		return "VAR_ADDRESS"
 	default:
 		return "NOT_SUPPORTED"
+	}
+}
+
+func (a *Address) StringToBytes(dst []byte, addr []byte) {
+	switch a.addrType {
+	case NoneAddress:
+		copy(dst, []byte("NONE"))
+		return
+	case StdAddress:
+		copy(addr[0:34], a.prepareChecksumData())
+		binary.BigEndian.PutUint16(addr[34:], crc16.Checksum(addr[:34], crcTable))
+		base64.RawURLEncoding.Encode(dst, addr[:])
+		return
+	case ExtAddress:
+		copy(dst, []byte("EXT_ADDRESS"))
+		return
+	case VarAddress:
+		copy(dst, []byte("VAR_ADDRESS"))
+		return
+	default:
+		copy(dst, []byte("NOT_SUPPORTED"))
+		return
 	}
 }
 
