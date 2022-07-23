@@ -86,4 +86,14 @@ func TestCoins_TON(t *testing.T) {
 	if g.TON() != "0.2" {
 		t.Fatalf("0.2 wrong: %s", g.TON())
 	}
+
+	g = MustFromTON("300")
+	if g.TON() != "300" {
+		t.Fatalf("300 wrong: %s", g.TON())
+	}
+
+	g = MustFromTON("50")
+	if g.TON() != "50" {
+		t.Fatalf("50 wrong: %s", g.TON())
+	}
 }

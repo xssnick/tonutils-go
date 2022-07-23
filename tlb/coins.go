@@ -36,7 +36,11 @@ func (g Coins) TON() string {
 
 	// cut last zeroes
 	for i := len(a) - 1; i >= 0; i-- {
-		if a[i] != '0' && a[i] != '.' {
+		if a[i] == '.' {
+			a = a[:i]
+			break
+		}
+		if a[i] != '0' {
 			a = a[:i+1]
 			break
 		}
