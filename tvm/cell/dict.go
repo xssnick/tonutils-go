@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 )
 
 type Dictionary struct {
@@ -61,6 +62,10 @@ func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
 	}
 
 	return cl.ToDict(keySz)
+}
+
+func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
+	return d.Set(BeginCell().MustStoreBigInt(key, d.keySz).EndCell(), value)
 }
 
 func (d *Dictionary) Set(key, value *Cell) error {

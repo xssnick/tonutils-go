@@ -1,10 +1,13 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"math/rand"
+	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -14,16 +17,19 @@ import (
 type Version int
 
 const (
-	V3         Version = 3
-	V4R2       Version = 42
-	HighloadV2 Version = 102
+	V3           Version = 3
+	V4R2         Version = 42
+	HighloadV2R2 Version = 122
 )
 
+var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
+
 type TonAPI interface {
-	GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
+	CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
 	GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error)
+	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 }
 
 type Message struct {
@@ -72,6 +78,10 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Walle
 		case V4R2:
 			w.spec = &SpecV4R2{regular}
 		}
+	case HighloadV2R2:
+		w.spec = &SpecHighloadV2R2{
+			wallet: w,
+		}
 	default:
 		return nil, errors.New("cannot init spec: unknown version")
 	}
@@ -81,6 +91,10 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Walle
 
 func (w *Wallet) Address() *address.Address {
 	return w.addr
+}
+
+func (w *Wallet) PrivateKey() ed25519.PrivateKey {
+	return w.key
 }
 
 func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
@@ -115,14 +129,14 @@ func (w *Wallet) GetSpec() any {
 	return w.spec
 }
 
-func (w *Wallet) Send(ctx context.Context, message *Message) error {
-	return w.SendMany(ctx, []*Message{message})
+func (w *Wallet) Send(ctx context.Context, message *Message, waitConfirmation ...bool) error {
+	return w.SendMany(ctx, []*Message{message}, waitConfirmation...)
 }
 
-func (w *Wallet) SendMany(ctx context.Context, messages []*Message) error {
+func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) error {
 	var stateInit *tlb.StateInit
 
-	block, err := w.api.GetMasterchainInfo(ctx)
+	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get block: %w", err)
 	}
@@ -149,6 +163,11 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message) error {
 		if err != nil {
 			return fmt.Errorf("build message err: %w", err)
 		}
+	case HighloadV2R2:
+		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, rand.Uint64(), messages)
+		if err != nil {
+			return fmt.Errorf("build highload message err: %w", err)
+		}
 	default:
 		return fmt.Errorf("send is not yet supported for wallet with this version")
 	}
@@ -162,45 +181,122 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message) error {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
+	if len(waitConfirmation) > 0 && waitConfirmation[0] {
+		return w.waitConfirmation(ctx, block, acc, stateInit, msg)
+	}
+
 	return nil
 }
 
+func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, stateInit *tlb.StateInit, msg *cell.Cell) error {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		// fallback timeout to not stuck forever with background context
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 180*time.Second)
+		defer cancel()
+	}
+	till, _ := ctx.Deadline()
+
+	for time.Now().Before(till) {
+		time.Sleep(1 * time.Second)
+		blockNew, err := w.api.CurrentMasterchainInfo(ctx)
+		if err != nil {
+			continue
+		}
+
+		if blockNew.SeqNo == block.SeqNo {
+			continue
+		}
+
+		accNew, err := w.api.GetAccount(ctx, block, w.addr)
+		if err != nil {
+			continue
+		}
+		block = blockNew
+
+		if accNew.LastTxLT == acc.LastTxLT {
+			continue
+		}
+
+		lastLt, lastHash := accNew.LastTxLT, accNew.LastTxHash
+
+		// it is possible that > 5 new not related transactions will happen, and we should not lose our scan offset,
+		// to prevent this we will scan till we reach last seen offset.
+		for time.Now().Before(till) {
+			// we try to get last 5 transactions, and check if we have our new there.
+			txList, err := w.api.ListTransactions(ctx, w.addr, 5, lastLt, lastHash)
+			if err != nil {
+				continue
+			}
+
+			sawLastTx := false
+			for i, transaction := range txList {
+				if i == 0 {
+					// get previous of the oldest tx, in case if we need to scan deeper
+					lastLt, lastHash = txList[0].PrevTxLT, txList[0].PrevTxHash
+				}
+
+				if !sawLastTx && transaction.PrevTxLT == acc.LastTxLT &&
+					bytes.Equal(transaction.PrevTxHash, acc.LastTxHash) {
+					sawLastTx = true
+				}
+
+				if transaction.IO.In != nil && transaction.IO.In.MsgType == tlb.MsgTypeExternalIn {
+					ext := transaction.IO.In.AsExternalIn()
+					if stateInit != nil {
+						if ext.StateInit == nil {
+							continue
+						}
+
+						if !bytes.Equal(stateInit.Data.Hash(), ext.StateInit.Data.Hash()) {
+							continue
+						}
+
+						if !bytes.Equal(stateInit.Code.Hash(), ext.StateInit.Code.Hash()) {
+							continue
+						}
+					}
+
+					if !bytes.Equal(ext.Body.Hash(), msg.Hash()) {
+						continue
+					}
+
+					return nil
+				}
+			}
+
+			if sawLastTx {
+				break
+			}
+		}
+		acc = accNew
+	}
+
+	return ErrTxWasNotConfirmed
+}
+
 // TransferNoBounce - can be used to transfer TON to not yet initialized contract/wallet
-func (w *Wallet) TransferNoBounce(ctx context.Context, to *address.Address, amount tlb.Coins, comment string) error {
-	return w.transfer(ctx, to, amount, comment, false)
+func (w *Wallet) TransferNoBounce(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, waitConfirmation ...bool) error {
+	return w.transfer(ctx, to, amount, comment, false, waitConfirmation...)
 }
 
 // Transfer - safe transfer, in case of error on smart contract side, you will get coins back,
 // cannot be used to transfer TON to not yet initialized contract/wallet
-func (w *Wallet) Transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string) error {
-	return w.transfer(ctx, to, amount, comment, true)
+func (w *Wallet) Transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, waitConfirmation ...bool) error {
+	return w.transfer(ctx, to, amount, comment, true, waitConfirmation...)
 }
 
-func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool) error {
+func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool, waitConfirmation ...bool) error {
 	var body *cell.Cell
 	if comment != "" {
 		// comment ident
 		root := cell.BeginCell().MustStoreUInt(0, 32)
 
-		data := []byte(comment)
-
-		var f func(space int) *cell.Builder
-		f = func(space int) *cell.Builder {
-			if len(data) < space {
-				space = len(data)
-			}
-
-			c := cell.BeginCell().MustStoreSlice(data, uint(space)*8)
-			data = data[space:]
-
-			if len(data) > 0 {
-				c.MustStoreRef(f(127).EndCell())
-			}
-
-			return c
+		if err := root.StoreStringSnake(comment); err != nil {
+			return fmt.Errorf("failed to build comment: %w", err)
 		}
 
-		body = root.MustStoreBuilder(f(127 - 4)).EndCell()
+		body = root.EndCell()
 	}
 
 	return w.Send(ctx, &Message{
@@ -212,10 +308,10 @@ func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.C
 			Amount:      amount,
 			Body:        body,
 		},
-	})
+	}, waitConfirmation...)
 }
 
-func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell) (*address.Address, error) {
+func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell, waitConfirmation ...bool) (*address.Address, error) {
 	state := &tlb.StateInit{
 		Data: contractData,
 		Code: contractCode,
@@ -238,7 +334,7 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 			Body:        msgBody,
 			StateInit:   state,
 		},
-	}); err != nil {
+	}, waitConfirmation...); err != nil {
 		return nil, err
 	}
 

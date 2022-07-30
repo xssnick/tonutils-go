@@ -11,9 +11,10 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
+// ListTransactions - returns list of transactions before (including) passed lt and hash, the oldest one is first in result slice
+func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
 	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, num)
+	binary.LittleEndian.PutUint32(data, limit)
 
 	chain := make([]byte, 4)
 	binary.LittleEndian.PutUint32(chain, uint32(addr.Workchain()))

@@ -414,7 +414,39 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 		// TODO: support of all types of addresses, currently only std supported, skipping 3 bits
 		return nil, errors.New("not supported type of address, currently only std supported")
 	}
+}
 
+func (c *Slice) MustLoadStringSnake() string {
+	a, err := c.LoadStringSnake()
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
+func (c *Slice) LoadStringSnake() (string, error) {
+	var str []byte
+
+	ref := c
+	for ref != nil {
+		b, err := ref.LoadSlice(ref.BitsLeft())
+		if err != nil {
+			return "", err
+		}
+		str = append(str, b...)
+
+		if ref.RefsNum() > 1 {
+			return "", fmt.Errorf("more than one ref, it is not snake string")
+		}
+
+		if ref.RefsNum() == 1 {
+			ref = ref.MustLoadRef()
+			continue
+		}
+		ref = nil
+	}
+
+	return string(str), nil
 }
 
 func (c *Slice) BitsLeft() uint {

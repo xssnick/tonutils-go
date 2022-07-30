@@ -35,9 +35,9 @@ func main() {
 
 	log.Println("wallet address:", w.Address())
 
-	block, err := api.GetMasterchainInfo(context.Background())
+	block, err := api.CurrentMasterchainInfo(context.Background())
 	if err != nil {
-		log.Fatalln("GetMasterchainInfo err:", err.Error())
+		log.Fatalln("CurrentMasterchainInfo err:", err.Error())
 		return
 	}
 
@@ -49,9 +49,25 @@ func main() {
 
 	if balance.NanoTON().Uint64() >= 3000000 {
 		addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
-		err = w.Transfer(context.Background(), addr, tlb.MustFromTON("0.003"), "Hey bro, happy birthday!")
+
+		log.Println("sending transaction and waiting for confirmation...")
+
+		err = w.Transfer(context.Background(), addr, tlb.MustFromTON("0.003"),
+			"Hello from tonutils-go!", true)
 		if err != nil {
 			log.Fatalln("Transfer err:", err.Error())
+			return
+		}
+
+		block, err = api.CurrentMasterchainInfo(context.Background())
+		if err != nil {
+			log.Fatalln("CurrentMasterchainInfo err:", err.Error())
+			return
+		}
+
+		balance, err = w.GetBalance(context.Background(), block)
+		if err != nil {
+			log.Fatalln("GetBalance err:", err.Error())
 			return
 		}
 

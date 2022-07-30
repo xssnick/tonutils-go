@@ -29,7 +29,7 @@ var api = func() *ton.APIClient {
 }()
 
 func Test_WalletTransfer(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
@@ -41,9 +41,9 @@ func Test_WalletTransfer(t *testing.T) {
 
 	log.Println("test wallet address:", w.Address())
 
-	block, err := api.GetMasterchainInfo(ctx)
+	block, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		t.Fatal("GetMasterchainInfo err:", err.Error())
+		t.Fatal("CurrentMasterchainInfo err:", err.Error())
 		return
 	}
 
@@ -56,63 +56,15 @@ func Test_WalletTransfer(t *testing.T) {
 	comment := randString(150)
 	addr := address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8")
 	if balance.NanoTON().Uint64() >= 3000000 {
-		err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment)
+		err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
 		if err != nil {
 			t.Fatal("Transfer err:", err.Error())
 			return
 		}
 	} else {
-		t.Fatal("net enough balance")
+		t.Fatal("not enough balance")
 		return
 	}
-
-	try, maxTries := 0, 15
-	for try < maxTries {
-		try++
-
-		log.Println(try, "tx sent, waiting for confirmation...")
-		time.Sleep(3 * time.Second)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		block, err = api.GetMasterchainInfo(ctx)
-		if err != nil {
-			t.Fatal("GetMasterchainInfo err:", err.Error())
-			return
-		}
-
-		acc, err := api.GetAccount(ctx, block, addr)
-		if err != nil {
-			t.Fatal("get account err:", err.Error())
-			return
-		}
-
-		txl, err := api.ListTransactions(ctx, addr, 3, acc.LastTxLT, acc.LastTxHash)
-		if err != nil {
-			t.Fatal("ListTransactions err:", err.Error())
-			return
-		}
-
-		cancel()
-
-		for _, tx := range txl {
-			if tx.IO.In.MsgType == tlb.MsgTypeInternal {
-				intTx := tx.IO.In.AsInternal()
-
-				if intTx.Comment() != comment {
-					continue
-				}
-
-				if intTx.Amount.NanoTON().Uint64() != 3000000 {
-					t.Fatal("amount not match", intTx.Amount.NanoTON().Uint64(), 3000000)
-				}
-
-				return
-			}
-		}
-
-	}
-
-	t.Fatal("transaction not confirmed!")
 }
 
 func randString(n int) string {

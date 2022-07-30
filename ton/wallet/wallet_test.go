@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -18,9 +19,10 @@ type MockAPI struct {
 	getAccount          func(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
 	sendExternalMessage func(ctx context.Context, msg *tlb.ExternalMessage) error
 	runGetMethod        func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error)
+	listTransactions    func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 }
 
-func (m MockAPI) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
+func (m MockAPI) CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
 	return m.getBlockInfo(ctx)
 }
 
@@ -34,6 +36,10 @@ func (m MockAPI) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessa
 
 func (m MockAPI) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error) {
 	return m.runGetMethod(ctx, blockInfo, addr, method, params...)
+}
+
+func (m MockAPI) ListTransactions(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
+	return m.listTransactions(ctx, addr, limit, lt, txHash)
 }
 
 func TestWallet_Send(t *testing.T) {
@@ -68,8 +74,12 @@ func TestWallet_Send(t *testing.T) {
 		Body:        cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
 	}
 
-	for _, ver := range []Version{V3, V4R2} {
+	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
 		for _, flow := range []int{OK, BlockErr, AccountErr, SeqnoNotInt, RunErr, UnsupportedVer, SendErr, SendWithInit1, SendWithInit2, TooMuchMessages} {
+			if ver == HighloadV2R2 && (flow == SeqnoNotInt || flow == RunErr) {
+				continue
+			}
+
 			w, err := FromPrivateKey(m, pkey, ver)
 			if err != nil {
 				t.Fatal(err)
@@ -181,55 +191,63 @@ func TestWallet_Send(t *testing.T) {
 					return nil
 				}
 
-				if p.MustLoadUInt(32) != 0xFFFFFFFF {
-					t.Fatal("expire incorrect")
-					return nil
-				}
-
-				seq := uint64(3)
-				if flow == SendWithInit1 || flow == SendWithInit2 {
-					seq = 0
-				}
-
-				if p.MustLoadUInt(32) != seq {
-					t.Fatal("seqno incorrect")
-					return nil
-				}
-
-				if ver == V4R2 {
-					if p.MustLoadUInt(8) != 0 {
-						t.Fatal("op incorrect")
+				if ver != HighloadV2R2 {
+					if p.MustLoadUInt(32) != 0xFFFFFFFF {
+						t.Fatal("expire incorrect")
 						return nil
 					}
-				}
 
-				if p.MustLoadUInt(8) != uint64(128) {
-					t.Fatal("mode incorrect")
-					return nil
-				}
+					seq := uint64(3)
+					if flow == SendWithInit1 || flow == SendWithInit2 {
+						seq = 0
+					}
 
-				intMsgRef, _ := intMsg.ToCell()
-				payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
-					MustStoreUInt(uint64(0xFFFFFFFF), 32).
-					MustStoreUInt(seq, 32)
+					if p.MustLoadUInt(32) != seq {
+						t.Fatal("seqno incorrect")
+						return nil
+					}
 
-				if ver == V4R2 {
-					payload.MustStoreUInt(0, 8)
-				}
+					if ver == V4R2 {
+						if p.MustLoadUInt(8) != 0 {
+							t.Fatal("op incorrect")
+							return nil
+						}
+					}
 
-				payload.MustStoreUInt(uint64(128), 8).MustStoreRef(intMsgRef)
+					if p.MustLoadUInt(8) != uint64(128) {
+						t.Fatal("mode incorrect")
+						return nil
+					}
 
-				if !bytes.Equal(p.MustLoadRef().MustToCell().Hash(), intMsgRef.Hash()) {
-					t.Fatal("int msg incorrect")
-					return nil
-				}
+					intMsgRef, _ := intMsg.ToCell()
+					payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
+						MustStoreUInt(uint64(0xFFFFFFFF), 32).
+						MustStoreUInt(seq, 32)
 
-				if !ed25519.Verify(w.key.Public().(ed25519.PublicKey), payload.EndCell().Hash(), sign) {
-					t.Fatal("sign incorrect")
-					return nil
+					if ver == V4R2 {
+						payload.MustStoreUInt(0, 8)
+					}
+
+					payload.MustStoreUInt(uint64(128), 8).MustStoreRef(intMsgRef)
+
+					if !bytes.Equal(p.MustLoadRef().MustToCell().Hash(), intMsgRef.Hash()) {
+						t.Fatal("int msg incorrect")
+						return nil
+					}
+
+					if !ed25519.Verify(w.key.Public().(ed25519.PublicKey), payload.EndCell().Hash(), sign) {
+						t.Fatal("sign incorrect")
+						return nil
+					}
+				} else {
+
 				}
 
 				return nil
+			}
+
+			m.listTransactions = func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
+				return []*tlb.Transaction{}, nil
 			}
 
 			msg := &Message{
@@ -237,8 +255,18 @@ func TestWallet_Send(t *testing.T) {
 				InternalMessage: intMsg,
 			}
 
+			max := 4
+			if ver == HighloadV2R2 {
+				max = 254
+			}
+
 			if flow == TooMuchMessages {
-				err = w.SendMany(context.Background(), []*Message{msg, msg, msg, msg, msg})
+				var msgs []*Message
+				for mi := 0; mi < max+1; mi++ {
+					msgs = append(msgs, msg)
+				}
+
+				err = w.SendMany(context.Background(), msgs)
 			} else {
 				err = w.Send(context.Background(), msg)
 			}
@@ -253,7 +281,7 @@ func TestWallet_Send(t *testing.T) {
 						continue
 					}
 				case TooMuchMessages:
-					if strings.EqualFold(err.Error(), "build message err: for this type of wallet max 4 messages can be sent in the same time") {
+					if strings.EqualFold(err.Error(), "build message err: for this type of wallet max "+fmt.Sprint(max)+" messages can be sent in the same time") {
 						continue
 					}
 				case BlockErr, AccountErr, RunErr, SendErr:
