@@ -22,6 +22,10 @@ const (
 	HighloadV2R2 Version = 122
 )
 
+// defining some funcs this way to mock for tests
+var randUint32 = rand.Uint32
+var timeNow = time.Now
+
 var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
 
 type TonAPI interface {
@@ -164,9 +168,9 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirma
 			return fmt.Errorf("build message err: %w", err)
 		}
 	case HighloadV2R2:
-		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, rand.Uint64(), messages)
+		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, randUint32(), messages)
 		if err != nil {
-			return fmt.Errorf("build highload message err: %w", err)
+			return fmt.Errorf("build message err: %w", err)
 		}
 	default:
 		return fmt.Errorf("send is not yet supported for wallet with this version")

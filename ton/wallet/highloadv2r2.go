@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -16,7 +17,7 @@ type SpecHighloadV2R2 struct {
 	wallet *Wallet
 }
 
-func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, queryID uint64, messages []*Message) (*cell.Cell, error) {
+func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, queryID uint32, messages []*Message) (*cell.Cell, error) {
 	if len(messages) > 254 {
 		return nil, errors.New("for this type of wallet max 254 messages can be sent in the same time")
 	}
@@ -39,8 +40,9 @@ func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, queryID uint64, messa
 		}
 	}
 
+	boundedID := uint64(timeNow().Add(60*5*time.Second).Unix()<<32) + uint64(queryID)
 	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).
-		MustStoreUInt(queryID, 64).
+		MustStoreUInt(boundedID, 64).
 		MustStoreDict(dict)
 
 	sign := payload.EndCell().Sign(s.wallet.key)

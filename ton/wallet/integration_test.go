@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"strings"
@@ -29,41 +30,45 @@ var api = func() *ton.APIClient {
 }()
 
 func Test_WalletTransfer(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
 	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
-	w, err := FromSeed(api, seed, V3)
-	if err != nil {
-		t.Fatal("FromSeed err:", err.Error())
-		return
-	}
+	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
+		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
 
-	log.Println("test wallet address:", w.Address())
+			w, err := FromSeed(api, seed, ver)
+			if err != nil {
+				t.Fatal("FromSeed err:", err.Error())
+				return
+			}
 
-	block, err := api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		t.Fatal("CurrentMasterchainInfo err:", err.Error())
-		return
-	}
+			log.Println(ver, "-> test wallet address:", w.Address())
 
-	balance, err := w.GetBalance(ctx, block)
-	if err != nil {
-		t.Fatal("GetBalance err:", err.Error())
-		return
-	}
+			block, err := api.CurrentMasterchainInfo(ctx)
+			if err != nil {
+				t.Fatal("CurrentMasterchainInfo err:", err.Error())
+				return
+			}
 
-	comment := randString(150)
-	addr := address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8")
-	if balance.NanoTON().Uint64() >= 3000000 {
-		err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
-		if err != nil {
-			t.Fatal("Transfer err:", err.Error())
-			return
-		}
-	} else {
-		t.Fatal("not enough balance")
-		return
+			balance, err := w.GetBalance(ctx, block)
+			if err != nil {
+				t.Fatal("GetBalance err:", err.Error())
+				return
+			}
+
+			comment := randString(150)
+			addr := address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8")
+			if balance.NanoTON().Uint64() >= 3000000 {
+				err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
+				if err != nil {
+					t.Fatal("Transfer err:", err.Error())
+					return
+				}
+			} else {
+				t.Fatal("not enough balance")
+				return
+			}
+		})
 	}
 }
 

@@ -59,6 +59,7 @@ func main() {
 			return
 		}
 
+		// update chain info
 		block, err = api.CurrentMasterchainInfo(context.Background())
 		if err != nil {
 			log.Fatalln("CurrentMasterchainInfo err:", err.Error())
