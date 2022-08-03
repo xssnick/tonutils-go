@@ -14,15 +14,15 @@ If you love this library and want to support its development you can donate any 
 ### How to use
 - [Connection](#Connection)
 - [Wallet](#Wallet)
-  - Create
+  - [Create](#Wallet)
   - [Transfer](#Wallet)
   - [Balance](#Wallet)
 - [Accounts](#Account-info-and-transactions)
   - [List transactions](#Account-info-and-transactions)
-- [NFT]()
-  - Details
-  - Mint
-  - Transfer
+- [NFT](#NFT)
+  - [Details](#NFT)
+  - [Mint](#NFT)
+  - [Transfer](#NFT)
 - [Contracts](#Contracts)
   - [Use get methods](#Using-GET-methods)
   - [Send external message](#Send-external-message)
@@ -198,6 +198,56 @@ for _, t := range list {
 }
 ```
 You can find extended working example at `example/account-state/main.go`
+
+### NFT
+You can mint, transfer, and get NFT information using `nft.ItemClient` and `nft.CollectionClient`, like that:
+```golang
+api := ton.NewAPIClient(client)
+
+nftAddr := address.MustParseAddr("EQDuPc-3EoqH72Gd6M45vmFsktQ8AzqaN14mweJhCjxg0d_b")
+item := nft.NewItemClient(api, nftAddr)
+
+nftData, err := item.GetNFTData(context.Background())
+if err != nil {
+    panic(err)
+}
+
+// get info about our nft's collection
+collection := nft.NewCollectionClient(api, nftData.CollectionAddress)
+collectionData, err := collection.GetCollectionData(context.Background())
+if err != nil {
+    panic(err)
+}
+
+fmt.Println("Collection addr      :", nftData.CollectionAddress.String())
+fmt.Println("    content          :", collectionData.Content.(*nft.ContentOffchain).URI)
+fmt.Println("    owner            :", collectionData.OwnerAddress.String())
+fmt.Println("    minted items num :", collectionData.NextItemIndex)
+fmt.Println()
+fmt.Println("NFT addr         :", nftAddr.String())
+fmt.Println("    initialized  :", nftData.Initialized)
+fmt.Println("    owner        :", nftData.OwnerAddress.String())
+fmt.Println("    index        :", nftData.Index)
+
+if nftData.Initialized {
+    // convert content to cell, we need it to get full url
+    nftContentCell, err := nftData.Content.ContentCell()
+    if err != nil {
+        panic(err)
+    }
+
+    // get full nft's content url using collection method that will merge base url with nft's data
+    nftContent, err := collection.GetNFTContent(context.Background(), nftData.Index, nftContentCell)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println("    part content :", nftData.Content.(*nft.ContentOffchain).URI)
+    fmt.Println("    full content :", nftContent.(*nft.ContentOffchain).URI)
+} else {
+    fmt.Println("    empty content")
+}
+```
+You can find full examples at `example/nft-info/main.go` and `example/nft-mint/main.go`
 
 ### Cells
 Work with cells is very similar to FunC cells:
