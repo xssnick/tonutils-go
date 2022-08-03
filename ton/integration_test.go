@@ -53,6 +53,22 @@ func Test_CurrentChainInfo(t *testing.T) {
 	}
 }
 
+func TestAPIClient_GetBlockData(t *testing.T) {
+	b, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	_, err = api.GetBlockData(context.Background(), b)
+	if err != nil {
+		t.Fatal("GetBlockData err:", err.Error())
+		return
+	}
+
+	// TODO: data check
+}
+
 func Test_RunMethod(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
