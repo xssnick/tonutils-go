@@ -15,7 +15,6 @@ type SpecRegular struct {
 	wallet *Wallet
 
 	// TTL of the messages that were sent from this wallet.
-	// Applicable to non highload wallets only
 	// In normal cases it is not needed, as I know it can only
 	// expire transaction if it not confirms too long.
 	// use SetMessagesTTL if you want to change.

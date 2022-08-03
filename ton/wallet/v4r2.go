@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -37,7 +38,7 @@ func (s *SpecV4R2) BuildMessage(ctx context.Context, isInitialized bool, block *
 	}
 
 	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).
-		MustStoreUInt(uint64(s.messagesTTL), 32).
+		MustStoreUInt(uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()), 32).
 		MustStoreUInt(seq, 32).
 		MustStoreInt(0, 8) // op
 

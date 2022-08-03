@@ -5,8 +5,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tlb"
 )
 
 // requests
@@ -55,6 +58,10 @@ type LSError struct {
 
 type APIClient struct {
 	client LiteClient
+
+	curMasterUpdateTime time.Time
+	curMasterLock       sync.RWMutex
+	curMaster           *tlb.BlockInfo
 }
 
 func NewAPIClient(client LiteClient) *APIClient {

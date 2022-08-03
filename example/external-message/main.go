@@ -54,7 +54,7 @@ func main() {
 	api := ton.NewAPIClient(client)
 
 	// we need fresh block info to run get methods
-	block, err := api.GetMasterchainInfo(context.Background())
+	block, err := api.CurrentMasterchainInfo(context.Background())
 	if err != nil {
 		log.Fatalln("get block err:", err.Error())
 		return

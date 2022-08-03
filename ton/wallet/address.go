@@ -48,7 +48,14 @@ func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb
 			MustStoreUInt(0, 32). // seqno
 			MustStoreUInt(uint64(subWallet), 32).
 			MustStoreSlice(pubKey, 256).
-			MustStoreUInt(0, 1). // empty dict of plugins
+			MustStoreDict(nil). // empty dict of plugins
+			EndCell()
+	case HighloadV2R2:
+		data = cell.BeginCell().
+			MustStoreUInt(uint64(subWallet), 32).
+			MustStoreUInt(0, 64). // last cleaned
+			MustStoreSlice(pubKey, 256).
+			MustStoreDict(nil). // old queries
 			EndCell()
 	default:
 		return nil, errors.New("wallet version is not supported")
@@ -68,6 +75,8 @@ func getCode(ver Version) (*cell.Cell, error) {
 		codeHex = _V3CodeHex
 	case V4R2:
 		codeHex = _V4R2CodeHex
+	case HighloadV2R2:
+		codeHex = _HighloadV2R2CodeHex
 	default:
 		return nil, errors.New("cannot get code: unknown version")
 	}
