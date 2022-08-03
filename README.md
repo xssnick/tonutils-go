@@ -153,7 +153,7 @@ You can find full working example at `example/external-message/main.go`
 Contracts can be deployed using wallet's method `DeployContract`, 
 you should pass 3 cells there: contract code, contract initial data, message body.
 
-You can find example in tests, for example [here]()
+You can find example in tests, for example [here](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/integration_test.go#L116)
 
 ### Account info and transactions
 You can get full account information including balance, stored data and even code using GetAccount method. 
@@ -321,7 +321,7 @@ if err = tlb.LoadFromCell(&state, cl.BeginParse()); err != nil {
 ```
 
 #### TLB Serialize
-Its also possible to serialize structures back to cells using `tlb.ToCell`, see [NFT client implementation]() for example.
+Its also possible to serialize structures back to cells using `tlb.ToCell`, see [build NFT mint message](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/collection.go#L189) for example.
 
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
