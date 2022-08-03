@@ -2,10 +2,12 @@ package tlb
 
 import (
 	"fmt"
+	"math/big"
 	"reflect"
 	"strconv"
 	"strings"
 
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -13,6 +15,10 @@ type Magic struct{}
 
 type manualLoader interface {
 	LoadFromCell(loader *cell.Slice) error
+}
+
+type manualStore interface {
+	ToCell() (*cell.Cell, error)
 }
 
 // LoadFromCell automatically parses cell based on struct tags
@@ -40,6 +46,9 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		tag := strings.TrimSpace(field.Tag.Get("tlb"))
+		if tag == "-" {
+			continue
+		}
 		settings := strings.Split(tag, " ")
 
 		if len(settings) == 0 {
@@ -256,6 +265,182 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 	return nil
 }
 
+func ToCell(v any) (*cell.Cell, error) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return nil, fmt.Errorf("v should not be nil")
+		}
+		rv = rv.Elem()
+	}
+
+	builder := cell.BeginCell()
+
+	for i := 0; i < rv.NumField(); i++ {
+		field := rv.Type().Field(i)
+		fieldVal := rv.Field(i)
+		tag := strings.TrimSpace(field.Tag.Get("tlb"))
+		if tag == "-" {
+			continue
+		}
+		settings := strings.Split(tag, " ")
+
+		if len(settings) == 0 {
+			continue
+		}
+
+		if settings[0] == "maybe" {
+			if field.Type.Kind() == reflect.Pointer && fieldVal.IsNil() {
+				if err := builder.StoreBoolBit(false); err != nil {
+					return nil, fmt.Errorf("cannot store maybe bit: %w", err)
+				}
+				continue
+			}
+
+			if err := builder.StoreBoolBit(true); err != nil {
+				return nil, fmt.Errorf("cannot store maybe bit: %w", err)
+			}
+			settings = settings[1:]
+		}
+
+		if settings[0] == "either" {
+			if len(settings) < 3 {
+				panic("either tag should have 2 args")
+			}
+
+			// currently, if one of the options is ref - we choose it
+			second := strings.HasPrefix(settings[2], "^")
+			if err := builder.StoreBoolBit(second); err != nil {
+				return nil, fmt.Errorf("cannot store maybe bit: %w", err)
+			}
+
+			if second {
+				settings = []string{settings[2]}
+			} else {
+				settings = []string{settings[1]}
+			}
+		}
+
+		if settings[0] == "##" {
+			num, err := strconv.ParseUint(settings[1], 10, 64)
+			if err != nil {
+				// we panic, because its developer's issue, need to fix tag
+				panic("corrupted num bits in ## tag")
+			}
+
+			switch {
+			case num <= 64:
+				switch field.Type.Kind() {
+				case reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8, reflect.Int:
+					err = builder.StoreInt(fieldVal.Int(), uint(num))
+					if err != nil {
+						return nil, fmt.Errorf("failed to store int %d, err: %w", num, err)
+					}
+				default:
+					err = builder.StoreUInt(fieldVal.Uint(), uint(num))
+					if err != nil {
+						return nil, fmt.Errorf("failed to store uint %d, err: %w", num, err)
+					}
+				}
+				continue
+			case num <= 256:
+				err := builder.StoreBigInt(fieldVal.Interface().(*big.Int), uint(num))
+				if err != nil {
+					return nil, fmt.Errorf("failed to store bigint %d, err: %w", num, err)
+				}
+				continue
+			}
+		} else if settings[0] == "addr" {
+			err := builder.StoreAddr(fieldVal.Interface().(*address.Address))
+			if err != nil {
+				return nil, fmt.Errorf("failed to store address, err: %w", err)
+			}
+			continue
+		} else if settings[0] == "bool" {
+			err := builder.StoreBoolBit(fieldVal.Bool())
+			if err != nil {
+				return nil, fmt.Errorf("failed to store bool, err: %w", err)
+			}
+			continue
+		} else if settings[0] == "bits" {
+			num, err := strconv.Atoi(settings[1])
+			if err != nil {
+				// we panic, because its developer's issue, need to fix tag
+				panic("corrupted num bits in bits tag")
+			}
+
+			err = builder.StoreSlice(fieldVal.Bytes(), uint(num))
+			if err != nil {
+				return nil, fmt.Errorf("failed to store bits %d, err: %w", num, err)
+			}
+			continue
+		} else if settings[0] == "^" || settings[0] == "." {
+			var err error
+			var c *cell.Cell
+
+			switch field.Type {
+			case reflect.TypeOf(&cell.Cell{}):
+				c = fieldVal.Interface().(*cell.Cell)
+			default:
+				c, err = structStore(fieldVal, field.Type.Name())
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			if settings[0] == "^" {
+				err = builder.StoreRef(c)
+				if err != nil {
+					return nil, fmt.Errorf("failed to store cell to ref for %s, err: %w", field.Name, err)
+				}
+				continue
+			}
+
+			err = builder.StoreBuilder(c.ToBuilder())
+			if err != nil {
+				return nil, fmt.Errorf("failed to store cell to builder for %s, err: %w", field.Name, err)
+			}
+			continue
+		} else if field.Type == reflect.TypeOf(Magic{}) {
+			var sz, base int
+			if strings.HasPrefix(settings[0], "#") {
+				base = 16
+				sz = (len(settings[0]) - 1) * 4
+			} else if strings.HasPrefix(settings[0], "$") {
+				base = 2
+				sz = len(settings[0]) - 1
+			} else {
+				panic("unknown magic value type in tag")
+			}
+
+			if sz > 64 {
+				panic("too big magic value type in tag")
+			}
+
+			magic, err := strconv.ParseInt(settings[0][1:], base, 64)
+			if err != nil {
+				panic("corrupted magic value in tag")
+			}
+
+			err = builder.StoreUInt(uint64(magic), uint(sz))
+			if err != nil {
+				return nil, fmt.Errorf("failed to store magic: %w", err)
+			}
+			continue
+		} else if settings[0] == "dict" {
+			err := builder.StoreDict(fieldVal.Interface().(*cell.Dictionary))
+			if err != nil {
+				return nil, fmt.Errorf("failed to store dict for %s, err: %w", field.Name, err)
+			}
+			continue
+		}
+
+		panic(fmt.Sprintf("cannot serialize field '%s' as tag '%s', use manual serialization", field.Name, tag))
+	}
+
+	return builder.EndCell(), nil
+}
+
 func structLoad(field reflect.Type, loader *cell.Slice) (reflect.Value, error) {
 	newTyp := field
 	if newTyp.Kind() == reflect.Ptr {
@@ -282,4 +467,22 @@ func structLoad(field reflect.Type, loader *cell.Slice) (reflect.Value, error) {
 	}
 
 	return nVal, nil
+}
+
+func structStore(field reflect.Value, name string) (*cell.Cell, error) {
+	inf := field.Interface()
+
+	if ld, ok := inf.(manualStore); ok {
+		c, err := ld.ToCell()
+		if err != nil {
+			return nil, fmt.Errorf("failed to store to cell for %s, using manual storer, err: %w", name, err)
+		}
+		return c, nil
+	}
+
+	c, err := ToCell(inf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store to cell for %s, err: %w", name, err)
+	}
+	return c, nil
 }

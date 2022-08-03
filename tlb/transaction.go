@@ -30,6 +30,9 @@ type Transaction struct {
 	TotalFees   CurrencyCollection `tlb:"."`
 	StateUpdate *cell.Cell         `tlb:"^"`
 	Description *cell.Cell         `tlb:"^"`
+
+	// not in scheme, but will be filled based on request data for flexibility
+	Hash []byte `tlb:"-"`
 }
 
 func (t *Transaction) Dump() string {

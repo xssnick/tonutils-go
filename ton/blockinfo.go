@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -12,6 +13,50 @@ import (
 
 var ErrBlockNotFound = errors.New("block not found")
 
+// CurrentMasterchainInfo - cached version of GetMasterchainInfo to not do it in parallel many times
+func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error) {
+	c.curMasterLock.RLock()
+	master := c.curMaster
+	tm := c.curMasterUpdateTime
+	c.curMasterLock.RUnlock()
+
+	if master == nil || tm.Before(time.Now().Add(3*time.Second)) {
+		c.curMasterLock.Lock()
+		defer c.curMasterLock.Unlock()
+
+		// update values to latest in case update happen between previous check
+		master = c.curMaster
+		tm = c.curMasterUpdateTime
+
+		// second check to avoid concurrent update
+		if master == nil || tm.Before(time.Now().Add(3*time.Second)) {
+			master, err = c.GetMasterchainInfo(ctx)
+			if err != nil {
+				return nil, err
+			}
+
+			for {
+				// we should check if block is already accessible due to interesting LS behavior, if not - we will wait for it.
+				_, err := c.LookupBlock(ctx, master.Workchain, master.Shard, master.SeqNo)
+				if err != nil {
+					if err == ErrBlockNotFound {
+						time.Sleep(200 * time.Millisecond)
+						continue
+					}
+					return nil, err
+				}
+				break
+			}
+
+			c.curMasterUpdateTime = time.Now()
+			c.curMaster = master
+		}
+	}
+
+	return master, nil
+}
+
+// GetMasterchainInfo - gets the latest state of master chain
 func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
 	resp, err := c.client.Do(ctx, _GetMasterchainInfo, nil)
 	if err != nil {
@@ -27,6 +72,7 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, err
 	return block, nil
 }
 
+// LookupBlock - find block information by seqno, shard and chain
 func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*tlb.BlockInfo, error) {
 	data := make([]byte, 20)
 	binary.LittleEndian.PutUint32(data, 1)
@@ -66,6 +112,7 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int6
 	return nil, errors.New("unknown response type")
 }
 
+// GetBlockData - get block detailed information
 func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tlb.Block, error) {
 	resp, err := c.client.Do(ctx, _GetBlock, block.Serialize())
 	if err != nil {
@@ -106,6 +153,7 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tl
 	return nil, errors.New("unknown response type")
 }
 
+// GetBlockTransactions - list of block transactions
 func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockInfo, count uint32, after ...*tlb.TransactionID) ([]*tlb.TransactionID, bool, error) {
 	req := append(block.Serialize(), make([]byte, 8)...)
 
@@ -188,8 +236,9 @@ func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockIn
 	return nil, false, errors.New("unknown response type")
 }
 
-func (c *APIClient) GetBlockShardsInfo(ctx context.Context, block *tlb.BlockInfo) ([]*tlb.BlockInfo, error) {
-	resp, err := c.client.Do(ctx, _GetAllShardsInfo, block.Serialize())
+// GetBlockShardsInfo - gets the information about workchains and its shards at given masterchain state
+func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInfo) ([]*tlb.BlockInfo, error) {
+	resp, err := c.client.Do(ctx, _GetAllShardsInfo, master.Serialize())
 	if err != nil {
 		return nil, err
 	}

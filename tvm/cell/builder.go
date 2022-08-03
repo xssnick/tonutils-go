@@ -299,6 +299,64 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 	return ErrAddressTypeNotSupported
 }
 
+func (b *Builder) MustStoreStringSnake(str string) *Builder {
+	err := b.StoreStringSnake(str)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) MustStoreBinarySnake(data []byte) *Builder {
+	err := b.StoreBinarySnake(data)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) StoreStringSnake(str string) error {
+	return b.StoreBinarySnake([]byte(str))
+}
+
+func (b *Builder) StoreBinarySnake(data []byte) error {
+	var f func(space int) (*Builder, error)
+	f = func(space int) (*Builder, error) {
+		if len(data) < space {
+			space = len(data)
+		}
+
+		c := BeginCell()
+		err := c.StoreSlice(data, uint(space)*8)
+		if err != nil {
+			return nil, err
+		}
+
+		data = data[space:]
+
+		if len(data) > 0 {
+			ref, err := f(127)
+			if err != nil {
+				return nil, err
+			}
+
+			err = c.StoreRef(ref.EndCell())
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return c, nil
+	}
+
+	snake, err := f(127 - 4)
+	if err != nil {
+		return err
+	}
+
+	return b.StoreBuilder(snake)
+}
+
 func (b *Builder) MustStoreDict(dict *Dictionary) *Builder {
 	err := b.StoreDict(dict)
 	if err != nil {
@@ -316,6 +374,10 @@ func (b *Builder) MustStoreMaybeRef(ref *Cell) *Builder {
 }
 
 func (b *Builder) StoreDict(dict *Dictionary) error {
+	if dict == nil {
+		return b.StoreMaybeRef(nil)
+	}
+
 	c, err := dict.ToCell()
 	if err != nil {
 		return err

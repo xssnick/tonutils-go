@@ -114,3 +114,17 @@ func TestSlice_LoadBigInt(t *testing.T) {
 		return
 	}
 }
+
+func TestSlice_Snake(t *testing.T) {
+	str := "big brown cherry-pick going to hunt your pussy 😃😃😄😇🤪🤪🙁😤😨🖕💅👏☝️👍👃👃👨‍👩‍👩🧑👨‍"
+	v := BeginCell().MustStoreStringSnake(str).EndCell().BeginParse()
+
+	ldStr, err := v.LoadStringSnake()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if str != ldStr {
+		t.Fatal("str not eq", str, ldStr)
+	}
+}

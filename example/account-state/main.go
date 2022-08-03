@@ -27,7 +27,7 @@ func main() {
 	ctx := client.StickyContext(context.Background())
 
 	// we need fresh block info to run get methods
-	b, err := api.GetMasterchainInfo(ctx)
+	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		log.Fatalln("get block err:", err.Error())
 		return

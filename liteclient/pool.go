@@ -115,9 +115,13 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 		}
 	}
 
-	// additional timeout to not stuck forever with background context
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	_, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		// fallback timeout to not stuck forever with background context
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+	}
 
 	// wait for response
 	select {
@@ -128,9 +132,10 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 
 		return resp, nil
 	case <-ctx.Done():
+		if !hasDeadline {
+			return nil, errors.New("liteserver request timeout")
+		}
 		return nil, ctx.Err()
-	case <-timeoutCtx.Done():
-		return nil, errors.New("liteserver request timeout")
 	}
 }
 

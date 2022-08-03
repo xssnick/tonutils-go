@@ -2,6 +2,7 @@ package cell
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"testing"
 
@@ -114,5 +115,33 @@ func TestLoadCell_EmptyDict(t *testing.T) {
 
 	if len(d2.All()) != 0 {
 		t.Fatal("dict len incorrect")
+	}
+}
+
+func TestLoadCell_LoadDictEdgeCase(t *testing.T) {
+	boc, _ := base64.StdEncoding.DecodeString("te6cckEBEwEAVwACASABAgIC2QMEAgm3///wYBESAgEgBQYCAWIODwIBIAcIAgHODQ0CAdQNDQIBIAkKAgEgCxACASAQDAABWAIBIA0NAAEgAgEgEBAAAdQAAUgAAfwAAdwXk+eF")
+	c, err := FromBOC(boc)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	dict, err := c.BeginParse().ToDict(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	should := map[int64]bool{
+		0: true,
+		1: true, 9: true, 10: true, 12: true,
+		14: true, 15: true, 16: true,
+		17: true, 32: true, 34: true,
+		36: true, -1001: true, -1000: true,
+	}
+
+	for i, kv := range dict.All() {
+		if !should[kv.Key.BeginParse().MustLoadInt(32)] {
+			t.Fatal(i, "bad key")
+		}
 	}
 }

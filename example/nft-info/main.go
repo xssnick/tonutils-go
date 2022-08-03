@@ -3,12 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
-	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/ton/nft"
 )
 
 func main() {
@@ -17,40 +16,52 @@ func main() {
 	// connect to mainnet lite server
 	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
 	if err != nil {
-		log.Fatalln("connection err: ", err.Error())
-		return
+		panic(err)
 	}
 
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
 
-	// we need fresh block info to run get methods
-	b, err := api.GetMasterchainInfo(context.Background())
+	nftAddr := address.MustParseAddr("EQDuPc-3EoqH72Gd6M45vmFsktQ8AzqaN14mweJhCjxg0d_b")
+	item := nft.NewItemClient(api, nftAddr)
+
+	nftData, err := item.GetNFTData(context.Background())
 	if err != nil {
-		log.Fatalln("get block err:", err.Error())
-		return
+		panic(err)
 	}
 
-	// call method to get data from nft address
-	res, err := api.RunGetMethod(context.Background(), b, address.MustParseAddr("EQAMo8TmviyZpBLLJMDDwYDhFsdyj26XoAM4_mNyMtfxuT6O"), "get_nft_data")
+	// get info about our nft's collection
+	collection := nft.NewCollectionClient(api, nftData.CollectionAddress)
+	collectionData, err := collection.GetCollectionData(context.Background())
 	if err != nil {
-		log.Fatalln("run get method err:", err.Error())
-		return
+		panic(err)
 	}
 
-	collectionAddr, err := res[2].(*cell.Slice).LoadAddr()
-	if err != nil {
-		log.Fatalln("addr err:", err.Error())
-		return
-	}
+	fmt.Println("Collection addr      :", nftData.CollectionAddress.String())
+	fmt.Println("    content          :", collectionData.Content.(*nft.ContentOffchain).URI)
+	fmt.Println("    owner            :", collectionData.OwnerAddress.String())
+	fmt.Println("    minted items num :", collectionData.NextItemIndex)
+	fmt.Println()
+	fmt.Println("NFT addr         :", nftAddr.String())
+	fmt.Println("    initialized  :", nftData.Initialized)
+	fmt.Println("    owner        :", nftData.OwnerAddress.String())
+	fmt.Println("    index        :", nftData.Index)
 
-	ownerAddr, err := res[3].(*cell.Slice).LoadAddr()
-	if err != nil {
-		log.Fatalln("addr err:", err.Error())
-		return
-	}
+	if nftData.Initialized {
+		// convert content to cell, we need it to get full url
+		nftContentCell, err := nftData.Content.ContentCell()
+		if err != nil {
+			panic(err)
+		}
 
-	fmt.Println("NFT collection: ", collectionAddr.String())
-	fmt.Println("NFT owner: ", ownerAddr.String())
-	fmt.Println("Content:", res[4].(*cell.Cell).Dump())
+		// get full nft's content url using collection method that will merge base url with nft's data
+		nftContent, err := collection.GetNFTContent(context.Background(), nftData.Index, nftContentCell)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("    part content :", nftData.Content.(*nft.ContentOffchain).URI)
+		fmt.Println("    full content :", nftContent.(*nft.ContentOffchain).URI)
+	} else {
+		fmt.Println("    empty content")
+	}
 }
