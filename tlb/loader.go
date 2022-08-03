@@ -46,6 +46,9 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		tag := strings.TrimSpace(field.Tag.Get("tlb"))
+		if tag == "-" {
+			continue
+		}
 		settings := strings.Split(tag, " ")
 
 		if len(settings) == 0 {
@@ -277,6 +280,9 @@ func ToCell(v any) (*cell.Cell, error) {
 		field := rv.Type().Field(i)
 		fieldVal := rv.Field(i)
 		tag := strings.TrimSpace(field.Tag.Get("tlb"))
+		if tag == "-" {
+			continue
+		}
 		settings := strings.Split(tag, " ")
 
 		if len(settings) == 0 {

@@ -14,17 +14,23 @@ If you love this library and want to support its development you can donate any 
 ### How to use
 - [Connection](#Connection)
 - [Wallet](#Wallet)
+  - Create
   - [Transfer](#Wallet)
   - [Balance](#Wallet)
 - [Accounts](#Account-info-and-transactions)
   - [List transactions](#Account-info-and-transactions)
+- [NFT]()
+  - Details
+  - Mint
+  - Transfer
 - [Contracts](#Contracts)
   - [Use get methods](#Using-GET-methods)
   - [Send external message](#Send-external-message)
+  - [Deploy](#Deploy)
 - [Cells](#Cells)
   - [Create](#Cells)
   - [Parse](#Cells)
-  - [TLB Loader](#TLB-Loader)
+  - [TLB Loader/Serializer](#TLB-Loader)
 - [Custom reconnect policy](#Custom-reconnect-policy)
 - [Features to implement](#Features-to-implement)
 
@@ -143,6 +149,12 @@ if err != nil {
 ```
 You can find full working example at `example/external-message/main.go`
 
+#### Deploy
+Contracts can be deployed using wallet's method `DeployContract`, 
+you should pass 3 cells there: contract code, contract initial data, message body.
+
+You can find example in tests, for example [here]()
+
 ### Account info and transactions
 You can get full account information including balance, stored data and even code using GetAccount method. 
 You can also get account's list of transactions with all details.
@@ -257,6 +269,10 @@ if err = tlb.LoadFromCell(&state, cl.BeginParse()); err != nil {
     panic(err)
 }
 ```
+
+#### TLB Serialize
+Its also possible to serialize structures back to cells using `tlb.ToCell`, see [NFT client implementation]() for example.
+
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
 

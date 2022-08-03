@@ -133,6 +133,10 @@ func (g *Coins) LoadFromCell(loader *cell.Slice) error {
 	return nil
 }
 
+func (g Coins) ToCell() (*cell.Cell, error) {
+	return cell.BeginCell().MustStoreBigCoins(g.NanoTON()).EndCell(), nil
+}
+
 func (g Coins) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf("%q", g.NanoTON().String())), nil
 }

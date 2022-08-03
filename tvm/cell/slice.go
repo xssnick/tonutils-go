@@ -424,19 +424,35 @@ func (c *Slice) MustLoadStringSnake() string {
 	return a
 }
 
+func (c *Slice) MustLoadBinarySnake() []byte {
+	a, err := c.LoadBinarySnake()
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
 func (c *Slice) LoadStringSnake() (string, error) {
-	var str []byte
+	a, err := c.LoadBinarySnake()
+	if err != nil {
+		return "", err
+	}
+	return string(a), nil
+}
+
+func (c *Slice) LoadBinarySnake() ([]byte, error) {
+	var data []byte
 
 	ref := c
 	for ref != nil {
 		b, err := ref.LoadSlice(ref.BitsLeft())
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		str = append(str, b...)
+		data = append(data, b...)
 
 		if ref.RefsNum() > 1 {
-			return "", fmt.Errorf("more than one ref, it is not snake string")
+			return nil, fmt.Errorf("more than one ref, it is not snake string")
 		}
 
 		if ref.RefsNum() == 1 {
@@ -446,7 +462,7 @@ func (c *Slice) LoadStringSnake() (string, error) {
 		ref = nil
 	}
 
-	return string(str), nil
+	return data, nil
 }
 
 func (c *Slice) BitsLeft() uint {

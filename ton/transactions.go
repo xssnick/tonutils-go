@@ -73,6 +73,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 			if err != nil {
 				return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
 			}
+			tx.Hash = txCell.Hash()
 
 			res = append(res, &tx)
 		}
@@ -145,6 +146,7 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *tlb.BlockInfo, ad
 		if err != nil {
 			return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
 		}
+		tx.Hash = txCell.Hash()
 
 		return &tx, nil
 	case _LSError:

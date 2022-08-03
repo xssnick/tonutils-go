@@ -70,10 +70,10 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Walle
 	}
 
 	switch version {
-	case V3, V4R2:
+	case V3, V4R2, HighloadV2R2:
 		regular := SpecRegular{
 			wallet:      w,
-			messagesTTL: 0xFFFFFFFF, // no expire
+			messagesTTL: 60 * 3, // default ttl 3 min
 		}
 
 		switch version {
@@ -81,10 +81,8 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Walle
 			w.spec = &SpecV3{regular}
 		case V4R2:
 			w.spec = &SpecV4R2{regular}
-		}
-	case HighloadV2R2:
-		w.spec = &SpecHighloadV2R2{
-			wallet: w,
+		case HighloadV2R2:
+			w.spec = &SpecHighloadV2R2{regular}
 		}
 	default:
 		return nil, errors.New("cannot init spec: unknown version")
@@ -343,4 +341,17 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	}
 
 	return addr, nil
+}
+
+func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
+	return &Message{
+		Mode: 1,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      true,
+			DstAddr:     to,
+			Amount:      amount,
+			Body:        payload,
+		},
+	}
 }

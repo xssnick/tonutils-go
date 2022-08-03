@@ -27,14 +27,15 @@ type testTransform struct {
 }
 
 type testInner struct {
-	_      Magic            `tlb:"$1011"`
-	Val    int64            `tlb:"## 34"`
-	Val2   uint64           `tlb:"## 12"`
-	BigVal *big.Int         `tlb:"## 176"`
-	B      bool             `tlb:"bool"`
-	Addr   *address.Address `tlb:"addr"`
-	Manual manualLoad       `tlb:"."`
-	Dict   *cell.Dictionary `tlb:"dict 256"`
+	_        Magic            `tlb:"$1011"`
+	Val      int64            `tlb:"## 34"`
+	Val2     uint64           `tlb:"## 12"`
+	ValCoins Coins            `tlb:"."`
+	BigVal   *big.Int         `tlb:"## 176"`
+	B        bool             `tlb:"bool"`
+	Addr     *address.Address `tlb:"addr"`
+	Manual   manualLoad       `tlb:"."`
+	Dict     *cell.Dictionary `tlb:"dict 256"`
 }
 
 type testTLB struct {
@@ -61,6 +62,7 @@ func TestLoadFromCell(t *testing.T) {
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).
 		MustStoreInt(-7172, 34).
 		MustStoreUInt(0xCCA, 12).
+		MustStoreCoins(700000).
 		MustStoreUInt(7126382921832, 176).
 		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8).MustStoreDict(d)
 
@@ -86,6 +88,10 @@ func TestLoadFromCell(t *testing.T) {
 
 		if x.Inside.BigVal.Uint64() != 7126382921832 {
 			t.Fatal("uint 7126382921832 not eq")
+		}
+
+		if x.Inside.ValCoins.NanoTON().Uint64() != 700000 {
+			t.Fatal("coins 700000 not eq")
 		}
 
 		if x.Part.BigVal.Uint64() != 7126382921832 {

@@ -35,6 +35,19 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInf
 				return nil, err
 			}
 
+			for {
+				// we should check if block is already accessible due to interesting LS behavior, if not - we will wait for it.
+				_, err := c.LookupBlock(ctx, master.Workchain, master.Shard, master.SeqNo)
+				if err != nil {
+					if err == ErrBlockNotFound {
+						time.Sleep(200 * time.Millisecond)
+						continue
+					}
+					return nil, err
+				}
+				break
+			}
+
 			c.curMasterUpdateTime = time.Now()
 			c.curMaster = master
 		}

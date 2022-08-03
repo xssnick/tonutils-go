@@ -307,9 +307,19 @@ func (b *Builder) MustStoreStringSnake(str string) *Builder {
 	return b
 }
 
-func (b *Builder) StoreStringSnake(str string) error {
-	data := []byte(str)
+func (b *Builder) MustStoreBinarySnake(data []byte) *Builder {
+	err := b.StoreBinarySnake(data)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
 
+func (b *Builder) StoreStringSnake(str string) error {
+	return b.StoreBinarySnake([]byte(str))
+}
+
+func (b *Builder) StoreBinarySnake(data []byte) error {
 	var f func(space int) (*Builder, error)
 	f = func(space int) (*Builder, error) {
 		if len(data) < space {

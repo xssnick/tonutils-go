@@ -303,7 +303,9 @@ func checkV4R2(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Int
 		t.Fatal("subwallet id incorrect")
 	}
 
-	if p.MustLoadUInt(32) != 0xFFFFFFFF {
+	exp := uint64(timeNow().Add(60 * 3 * time.Second).UTC().Unix())
+
+	if p.MustLoadUInt(32) != exp {
 		t.Fatal("expire incorrect")
 	}
 
@@ -326,7 +328,7 @@ func checkV4R2(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Int
 
 	intMsgRef, _ := intMsg.ToCell()
 	payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
-		MustStoreUInt(uint64(0xFFFFFFFF), 32).
+		MustStoreUInt(exp, 32).
 		MustStoreUInt(seq, 32)
 
 	payload.MustStoreUInt(0, 8)
@@ -349,7 +351,9 @@ func checkV3(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Inter
 		t.Fatal("subwallet id incorrect")
 	}
 
-	if p.MustLoadUInt(32) != 0xFFFFFFFF {
+	exp := uint64(timeNow().Add(60 * 3 * time.Second).UTC().Unix())
+
+	if p.MustLoadUInt(32) != exp {
 		t.Fatal("expire incorrect")
 	}
 
@@ -368,7 +372,7 @@ func checkV3(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Inter
 
 	intMsgRef, _ := intMsg.ToCell()
 	payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
-		MustStoreUInt(uint64(0xFFFFFFFF), 32).
+		MustStoreUInt(exp, 32).
 		MustStoreUInt(seq, 32)
 
 	payload.MustStoreUInt(uint64(128), 8).MustStoreRef(intMsgRef)
@@ -389,7 +393,8 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 		t.Fatal("subwallet id incorrect")
 	}
 
-	qid := uint64(timeNow().Add(60*5*time.Second).Unix()<<32) + uint64(randUint32())
+	exp := uint64(timeNow().Add(60 * 3 * time.Second).UTC().Unix())
+	qid := (exp << 32) + uint64(randUint32())
 
 	if p.MustLoadUInt(64) != qid {
 		t.Fatal("query id is incorrect")
