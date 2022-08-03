@@ -32,11 +32,32 @@ var testContractAddr = func() *address.Address {
 	return address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky")
 }()
 
+func Test_CurrentChainInfo(t *testing.T) {
+	b, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+
+	cached, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block 2 err:", err.Error())
+		return
+	}
+
+	if cached.SeqNo != b.SeqNo {
+		t.Fatal("not eq")
+	}
+}
+
 func Test_RunMethod(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	b, err := api.GetMasterchainInfo(ctx)
+	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		t.Fatal("get block err:", err.Error())
 		return

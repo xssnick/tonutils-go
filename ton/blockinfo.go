@@ -20,7 +20,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInf
 	tm := c.curMasterUpdateTime
 	c.curMasterLock.RUnlock()
 
-	if master == nil || tm.Before(time.Now().Add(3*time.Second)) {
+	if master == nil || time.Now().After(tm.Add(3*time.Second)) {
 		c.curMasterLock.Lock()
 		defer c.curMasterLock.Unlock()
 
@@ -29,7 +29,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInf
 		tm = c.curMasterUpdateTime
 
 		// second check to avoid concurrent update
-		if master == nil || tm.Before(time.Now().Add(3*time.Second)) {
+		if master == nil || time.Now().After(tm.Add(3*time.Second)) {
 			master, err = c.GetMasterchainInfo(ctx)
 			if err != nil {
 				return nil, err
