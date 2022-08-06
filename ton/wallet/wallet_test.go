@@ -303,7 +303,7 @@ func checkV4R2(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Int
 		t.Fatal("subwallet id incorrect")
 	}
 
-	exp := uint64(timeNow().Add(60 * 3 * time.Second).UTC().Unix())
+	exp := uint64(timeNow().Add(60 * 60 * 24 * time.Second).UTC().Unix())
 
 	if p.MustLoadUInt(32) != exp {
 		t.Fatal("expire incorrect")
@@ -351,7 +351,7 @@ func checkV3(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Inter
 		t.Fatal("subwallet id incorrect")
 	}
 
-	exp := uint64(timeNow().Add(60 * 3 * time.Second).UTC().Unix())
+	exp := uint64(timeNow().Add(60 * 60 * 24 * time.Second).UTC().Unix())
 
 	if p.MustLoadUInt(32) != exp {
 		t.Fatal("expire incorrect")
@@ -393,7 +393,7 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 		t.Fatal("subwallet id incorrect")
 	}
 
-	exp := uint64(timeNow().Add(60 * 3 * time.Second).UTC().Unix())
+	exp := uint64(timeNow().Add(60 * 60 * 24 * time.Second).UTC().Unix())
 	qid := (exp << 32) + uint64(randUint32())
 
 	if p.MustLoadUInt(64) != qid {
