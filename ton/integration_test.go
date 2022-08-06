@@ -29,7 +29,7 @@ var api = func() *APIClient {
 }()
 
 var testContractAddr = func() *address.Address {
-	return address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky")
+	return address.MustParseAddr("EQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTzpK4")
 }()
 
 func Test_CurrentChainInfo(t *testing.T) {
@@ -89,12 +89,12 @@ func Test_RunMethod(t *testing.T) {
 	}
 
 	if !bytes.Equal(res[0].(*cell.Slice).MustToCell().Hash(), c1.MustToCell().Hash()) {
-		t.Fatal("1st arg not eeq return 1st value")
+		t.Fatal("1st arg not eq return 1st value")
 	}
 
 	cmp2 := cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(c2).EndCell()
 	if !bytes.Equal(res[1].(*cell.Cell).Hash(), cmp2.Hash()) {
-		t.Fatal("1st arg not eeq return 1st value")
+		t.Fatal("1st arg not eq return 1st value")
 	}
 }
 

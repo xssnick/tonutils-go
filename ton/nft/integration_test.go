@@ -33,7 +33,7 @@ var api = func() *ton.APIClient {
 
 func Test_NftMintTransfer(t *testing.T) {
 	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	w, err := wallet.FromSeed(api, seed, wallet.HighloadV2R2)
