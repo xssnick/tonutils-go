@@ -33,7 +33,7 @@ func Test_WalletTransfer(t *testing.T) {
 	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
 	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
 		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
 
 			w, err := FromSeed(api, seed, ver)

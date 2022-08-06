@@ -80,7 +80,7 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Walle
 func getSpec(w *Wallet) (any, error) {
 	regular := SpecRegular{
 		wallet:      w,
-		messagesTTL: 60 * 60 * 24, // default ttl 24 hours, potential problems with confirmation by nodes discovered with lower
+		messagesTTL: 60 * 3, // default ttl 3 min
 	}
 
 	switch w.ver {
