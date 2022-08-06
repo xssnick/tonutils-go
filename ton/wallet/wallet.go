@@ -69,26 +69,30 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Walle
 		subwallet: DefaultSubwallet,
 	}
 
-	switch version {
-	case V3, V4R2, HighloadV2R2:
-		regular := SpecRegular{
-			wallet:      w,
-			messagesTTL: 60 * 3, // default ttl 3 min
-		}
-
-		switch version {
-		case V3:
-			w.spec = &SpecV3{regular}
-		case V4R2:
-			w.spec = &SpecV4R2{regular}
-		case HighloadV2R2:
-			w.spec = &SpecHighloadV2R2{regular}
-		}
-	default:
-		return nil, errors.New("cannot init spec: unknown version")
+	w.spec, err = getSpec(w)
+	if err != nil {
+		return nil, err
 	}
 
 	return w, nil
+}
+
+func getSpec(w *Wallet) (any, error) {
+	regular := SpecRegular{
+		wallet:      w,
+		messagesTTL: 60 * 3, // default ttl 3 min
+	}
+
+	switch w.ver {
+	case V3:
+		return &SpecV3{regular}, nil
+	case V4R2:
+		return &SpecV4R2{regular}, nil
+	case HighloadV2R2:
+		return &SpecHighloadV2R2{regular}, nil
+	}
+
+	return nil, errors.New("cannot init spec: unknown version")
 }
 
 func (w *Wallet) Address() *address.Address {
@@ -105,13 +109,20 @@ func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
 		return nil, err
 	}
 
-	return &Wallet{
+	sub := &Wallet{
 		api:       w.api,
 		key:       w.key,
 		addr:      addr,
 		ver:       w.ver,
 		subwallet: subwallet,
-	}, nil
+	}
+
+	sub.spec, err = getSpec(sub)
+	if err != nil {
+		return nil, err
+	}
+
+	return sub, nil
 }
 
 func (w *Wallet) GetBalance(ctx context.Context, block *tlb.BlockInfo) (tlb.Coins, error) {
