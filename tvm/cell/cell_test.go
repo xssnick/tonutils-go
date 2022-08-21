@@ -3,7 +3,9 @@ package cell
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
+	"log"
 	"math/big"
 	"testing"
 
@@ -46,6 +48,113 @@ func TestBOC(t *testing.T) {
 		t.Log(hex.EncodeToString(boc))
 		t.Fatal("boc not same")
 	}
+}
+
+func TestBOCWithDecode(t *testing.T) {
+	str := "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"
+	data, _ := base64.StdEncoding.DecodeString(str)
+
+	c, err := FromBOC(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boc := c.ToBOCWithFlags(false)
+
+	decodedNew, err := FromBOC(boc)
+	if err != nil {
+		t.Fatal("boc not parsed")
+	}
+
+	if !bytes.Equal(decodedNew.Hash(), c.Hash()) {
+		t.Log(str)
+		t.Log(hex.EncodeToString(boc))
+		t.Fatal("boc not same")
+	}
+}
+
+/*
+┌────┐     ┌────┐
+│ 3  │ ◀── │ 1  │
+└────┘     └────┘
+  │          │
+  │          │
+  ▼          ▼
+┌────┐     ┌────┐     ┌────┐
+│ 13 │     │ 2  │ ──▶ │ 11 │
+└────┘     └────┘     └────┘
+             │
+             │
+             ▼
+           ┌────┐
+           │ 10 │
+           └────┘
+             │
+             │
+             ▼
+           ┌────┐
+           │ 12 │
+           └────┘
+Flatten target - BF 1 2 3 10 11 13 12
+*/
+func TestBocFlatten(t *testing.T) {
+	cell1 := BeginCell()
+	cell1.StoreUInt(1, 8)
+
+	cell2 := BeginCell()
+	cell2.StoreUInt(2, 8)
+
+	cell3 := BeginCell()
+	cell3.StoreUInt(3, 8)
+
+	cell10 := BeginCell()
+	cell10.StoreUInt(10, 8)
+
+	cell11 := BeginCell()
+	cell11.StoreUInt(11, 8)
+
+	cell13 := BeginCell()
+	cell13.StoreUInt(13, 8)
+
+	cell12 := BeginCell()
+	cell12.StoreUInt(12, 8)
+
+	cell20 := BeginCell()
+	cell20.StoreUInt(20, 8)
+
+	cell12.StoreRef(cell20.EndCell())
+
+	cell10.StoreRef(cell12.EndCell())
+	// cell10.StoreRef(cell20.EndCell())
+
+	cell2.StoreRef(cell10.EndCell())
+	cell2.StoreRef(cell11.EndCell())
+
+	cell3.StoreRef(cell13.EndCell())
+
+	cell1.StoreRef(cell2.EndCell())
+	cell1.StoreRef(cell3.EndCell())
+	cell1.StoreRef(cell20.EndCell())
+
+	// bocRes := cell1.EndCell().ToBOC()
+
+	index := flattenIndex([]*Cell{cell1.EndCell()})
+	// topInex := topologicalSort([]*Cell{cell1.EndCell()})
+	// res := ""
+	for _, c := range index {
+		log.Println("index", c.index, c.BeginParse().MustLoadUInt(8))
+	}
+	log.Println("=====================")
+	// for _, c := range topInex {
+	// 	log.Println("topix", c.index, c.BeginParse().MustLoadUInt(8))
+	// }
+
+	// parsed, err := FromBOC(bocRes)
+	// if err != nil {
+	// 	t.Fail()
+	// }
+
+	// log.Println("parsed", parsed)
 }
 
 func TestSmallBOC(t *testing.T) {

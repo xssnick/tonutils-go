@@ -121,6 +121,8 @@ func flattenIndex(roots []*Cell) []*Cell {
 					next = append(next, c.refs)
 				}
 			} else { // if we already have such cell, we need to move it forward in order.
+				next = append(next, c.refs)
+
 				// move to end
 				indexed = append(indexed, indexed[id])
 
