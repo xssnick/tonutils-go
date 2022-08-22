@@ -2,6 +2,7 @@ package tlb
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -40,6 +41,11 @@ type AccountStorage struct {
 	Status            AccountStatus
 	LastTransactionLT uint64
 	Balance           Coins
+
+	// has value when active
+	StateInit *StateInit
+	// has value when frozen
+	StateHash []byte
 }
 
 type StorageUsed struct {
@@ -177,17 +183,17 @@ func (s *StorageInfo) LoadFromCell(loader *cell.Slice) error {
 func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 	lastTransaction, err := loader.LoadUInt(64)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load last tx lt: %w", err)
 	}
 
 	coins, err := loader.LoadBigCoins()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load coins balance: %w", err)
 	}
 
 	extraExists, err := loader.LoadBoolBit()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load extra exists bit: %w", err)
 	}
 
 	if extraExists {
@@ -196,19 +202,30 @@ func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 
 	isStatusActive, err := loader.LoadBoolBit()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load active bit: %w", err)
 	}
 
 	if isStatusActive {
 		s.Status = AccountStatusActive
+		var stInit StateInit
+		err = LoadFromCell(&stInit, loader)
+		if err != nil {
+			return fmt.Errorf("failed to load state init: %w", err)
+		}
+		s.StateInit = &stInit
 	} else {
 		isStatusFrozen, err := loader.LoadBoolBit()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to load frozen bit: %w", err)
 		}
 
 		if isStatusFrozen {
 			s.Status = AccountStatusFrozen
+			stateHash, err := loader.LoadSlice(256)
+			if err != nil {
+				return fmt.Errorf("failed to load frozen state hash: %w", err)
+			}
+			s.StateHash = stateHash
 		} else {
 			s.Status = AccountStatusUninit
 		}
