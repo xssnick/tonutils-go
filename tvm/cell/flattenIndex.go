@@ -6,7 +6,7 @@ func flattenIndex(src []*Cell) []*Cell {
 	pending := src
 	allCells := map[string]*Cell{}
 	notPermCells := map[string]struct{}{}
-	sorted := []string{}
+	var sorted []string
 
 	for len(pending) > 0 {
 		cells := append([]*Cell{}, pending...)
@@ -60,7 +60,7 @@ func flattenIndex(src []*Cell) []*Cell {
 		indexes[sorted[i]] = i
 	}
 
-	result := []*Cell{}
+	var result []*Cell
 	for _, ent := range sorted {
 		rrr := allCells[ent]
 		rrr.index = indexes[string(rrr.Hash())]

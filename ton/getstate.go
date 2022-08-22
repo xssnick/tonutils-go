@@ -111,32 +111,15 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			return nil, fmt.Errorf("failed to parse state boc: %w", err)
 		}
 
-		loader := stateCell.BeginParse()
-
 		var st tlb.AccountState
-		err = st.LoadFromCell(loader)
+		err = st.LoadFromCell(stateCell.BeginParse())
 		if err != nil {
-			return nil, fmt.Errorf("failed to parsee account state: %w", err)
+			return nil, fmt.Errorf("failed to load account state: %w", err)
 		}
 
 		if st.Status == tlb.AccountStatusActive {
-			contractCode, err := loader.LoadRef()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load contract code ref: %w", err)
-			}
-			contractData, err := loader.LoadRef()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load contract data ref: %w", err)
-			}
-
-			acc.Code, err = contractCode.ToCell()
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert code to cell: %w", err)
-			}
-			acc.Data, err = contractData.ToCell()
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert data to cell: %w", err)
-			}
+			acc.Code = st.StateInit.Code
+			acc.Data = st.StateInit.Data
 		}
 
 		acc.State = &st
