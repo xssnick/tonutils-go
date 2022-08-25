@@ -148,17 +148,17 @@ func (w *Wallet) Send(ctx context.Context, message *Message, waitConfirmation ..
 	return w.SendMany(ctx, []*Message{message}, waitConfirmation...)
 }
 
-func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) error {
+func (w *Wallet) buildMessageForMany(ctx context.Context, messages []*Message) (*tlb.BlockInfo, *tlb.Account, *tlb.ExternalMessage, error) {
 	var stateInit *tlb.StateInit
 
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get block: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get block: %w", err)
 	}
 
 	acc, err := w.api.GetAccount(ctx, block, w.addr)
 	if err != nil {
-		return fmt.Errorf("failed to get account state: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
 	initialized := true
@@ -167,7 +167,7 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirma
 
 		stateInit, err = GetStateInit(w.key.Public().(ed25519.PublicKey), w.ver, w.subwallet)
 		if err != nil {
-			return fmt.Errorf("failed to get state init: %w", err)
+			return nil, nil, nil, fmt.Errorf("failed to get state init: %w", err)
 		}
 	}
 
@@ -176,34 +176,63 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirma
 	case V3, V4R2:
 		msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, initialized, block, messages)
 		if err != nil {
-			return fmt.Errorf("build message err: %w", err)
+			return nil, nil, nil, fmt.Errorf("build message err: %w", err)
 		}
 	case HighloadV2R2:
 		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, randUint32(), messages)
 		if err != nil {
-			return fmt.Errorf("build message err: %w", err)
+			return nil, nil, nil, fmt.Errorf("build message err: %w", err)
 		}
 	default:
-		return fmt.Errorf("send is not yet supported for wallet with this version")
+		return nil, nil, nil, fmt.Errorf("send is not yet supported for wallet with this version")
 	}
 
-	err = w.api.SendExternalMessage(ctx, &tlb.ExternalMessage{
+	return block, acc, &tlb.ExternalMessage{
 		DstAddr:   w.addr,
 		StateInit: stateInit,
 		Body:      msg,
-	})
+	}, nil
+}
+
+func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (*tlb.ExternalMessage, error) {
+	_, _, ext, err := w.buildMessageForMany(ctx, messages)
+	return ext, err
+}
+
+func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) error {
+	block, acc, ext, err := w.buildMessageForMany(ctx, messages)
+	if err != nil {
+		return err
+	}
+
+	err = w.api.SendExternalMessage(ctx, ext)
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
 	if len(waitConfirmation) > 0 && waitConfirmation[0] {
-		return w.waitConfirmation(ctx, block, acc, stateInit, msg)
+		_, err := w.waitConfirmation(ctx, block, acc, ext.StateInit, ext.Body)
+		return err
 	}
 
 	return nil
 }
 
-func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, stateInit *tlb.StateInit, msg *cell.Cell) error {
+func (w *Wallet) SendManyWaitTxHash(ctx context.Context, messages []*Message) ([]byte, error) {
+	block, acc, ext, err := w.buildMessageForMany(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+
+	err = w.api.SendExternalMessage(ctx, ext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send message: %w", err)
+	}
+
+	return w.waitConfirmation(ctx, block, acc, ext.StateInit, ext.Body)
+}
+
+func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, stateInit *tlb.StateInit, msg *cell.Cell) ([]byte, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -276,7 +305,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc
 						continue
 					}
 
-					return nil
+					return transaction.Hash, nil
 				}
 			}
 
@@ -287,7 +316,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc
 		acc = accNew
 	}
 
-	return ErrTxWasNotConfirmed
+	return nil, ErrTxWasNotConfirmed
 }
 
 // TransferNoBounce - can be used to transfer TON to not yet initialized contract/wallet
