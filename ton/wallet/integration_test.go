@@ -3,9 +3,10 @@ package wallet
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log"
+	"math/big"
 	"math/rand"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 var api = func() *ton.APIClient {
@@ -77,50 +79,62 @@ func Test_WalletTransfer(t *testing.T) {
 	}
 }
 
-func Test_WalletFindTransactionByMsgHash(t *testing.T) {
+func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	seed := strings.Split(_mainnetSeed, " ")
 
+	// init wallet
 	w, err := FromSeed(api, seed, HighloadV2R2)
 	if err != nil {
 		t.Fatal("FromSeed err:", err.Error())
 	}
-
 	t.Logf("wallet address: %s", w.Address().String())
 
-	testCases := []struct {
-		MsgHash string
-		TxHash  string
-	}{
-		// https://ton.page/tx/2DID+ck8iTkaPKttwrYKl//v/gkoa2taclFK22rEvy0=
-		{
-			MsgHash: "dmEFTmFAZZxWUfPWnd2wan8r/nym7J0vJnWO2Bvp2M0=",
-			TxHash:  "2DID+ck8iTkaPKttwrYKl//v/gkoa2taclFK22rEvy0=",
-		},
-		// https://ton.page/tx/BI4HyAa+z5LENhiKCI/6BNqUKSFxUlY7GSie/Oq9XsA=
-		{
-			MsgHash: "lqKW0iTyhcZ77pPDD4owkVfw2qNdxbh+QQt4YwoJz8c=",
-			TxHash:  "BI4HyAa+z5LENhiKCI/6BNqUKSFxUlY7GSie/Oq9XsA=",
-		},
+	// set comment
+	root := cell.BeginCell().MustStoreUInt(0, 32)
+	if err := root.StoreStringSnake(".. .. . .... .. .. . .. ."); err != nil {
+		t.Fatal(fmt.Errorf("failed to build comment: %w", err))
+	}
+	body := root.EndCell()
+
+	// prepare external message
+	msg := SimpleMessage(
+		address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8"),
+		tlb.FromNanoTON(big.NewInt(31337)),
+		body,
+	)
+	ext, err := w.BuildMessageForMany(context.Background(), []*Message{msg})
+	if err != nil {
+		t.Fatal("BuildMessageForMany err:", err.Error())
 	}
 
-	for _, test := range testCases {
-		msgHash, err := base64.StdEncoding.DecodeString(test.MsgHash)
-		if err != nil {
-			t.Fatal("msg hash base64 decode err:", err.Error())
-		}
+	// SendManyWaitTxHash: send external message, wait for confirm and return tx hash
+	block, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal(fmt.Errorf("failed to get block: %w", err))
+	}
+	acc, err := api.GetAccount(context.Background(), block, w.addr)
+	if err != nil {
+		t.Fatal(fmt.Errorf("failed to get account state: %w", err))
+	}
 
-		tx, err := w.FindTransactionByInMsgHash(context.Background(), msgHash)
-		if err != nil {
-			t.Fatal("cannot find tx:", err.Error())
-		}
+	err = api.SendExternalMessage(context.Background(), ext)
+	if err != nil {
+		t.Fatal(fmt.Errorf("failed to send message: %w", err))
+	}
 
-		txHash, err := base64.StdEncoding.DecodeString(test.TxHash)
-		if err != nil {
-			t.Fatal("tx hash base64 decode err:", err.Error())
-		}
-		if !bytes.Equal(tx.Hash, txHash) {
-			t.Fatal("FindTransactionByMsgHash returned wrong tx")
-		}
+	txHash, err := w.waitConfirmation(context.Background(), block, acc, ext.StateInit, ext.Body)
+	if err != nil {
+		t.Fatal(fmt.Errorf("failed to send message: %w", err))
+	}
+	t.Logf("sent tx hash: %s", hex.EncodeToString(txHash))
+
+	// find tx hash and compare returned hashes
+	tx, err := w.FindTransactionByInMsgHash(context.Background(), ext.Body.Hash())
+	if err != nil {
+		t.Fatal("cannot find tx:", err.Error())
+	}
+	if !bytes.Equal(tx.Hash, txHash) {
+		t.Fatal("FindTransactionByMsgHash returned wrong tx")
 	}
 }
 
