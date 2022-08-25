@@ -61,7 +61,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 
 		txList, err := cell.FromBOCMultiRoot(txData)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parrse cell from transaction bytes: %w", err)
+			return nil, fmt.Errorf("failed to parse cell from transaction bytes: %w", err)
 		}
 
 		res := make([]*tlb.Transaction, 0, len(txList))

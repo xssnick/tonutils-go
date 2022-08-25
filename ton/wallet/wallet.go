@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -355,8 +356,8 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	return addr, nil
 }
 
-// FindTransactionByMsgHash returns transaction in wallet account with In message hash equal to msgHash.
-func (w *Wallet) FindTransactionByMsgHash(ctx context.Context, msgHash []byte) (*tlb.Transaction, error) {
+// FindTransactionByInMsgHash returns transaction in wallet account with incoming message hash equal to msgHash.
+func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte) (*tlb.Transaction, error) {
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
@@ -375,7 +376,10 @@ func (w *Wallet) FindTransactionByMsgHash(ctx context.Context, msgHash []byte) (
 			return nil, ErrTxWasNotFound
 		}
 
-		txList, err := w.api.ListTransactions(ctx, w.addr, 5, lastLt, lastHash)
+		txList, err := w.api.ListTransactions(ctx, w.addr, 15, lastLt, lastHash)
+		if err != nil && strings.Contains(err.Error(), "cannot compute block with specified transaction: lt not in db") {
+			return nil, fmt.Errorf("archive node is needed: %w", ErrTxWasNotFound)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("cannot list transactions: %w", err)
 		}

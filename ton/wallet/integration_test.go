@@ -109,7 +109,7 @@ func Test_WalletFindTransactionByMsgHash(t *testing.T) {
 			t.Fatal("msg hash base64 decode err:", err.Error())
 		}
 
-		tx, err := w.FindTransactionByMsgHash(context.Background(), msgHash)
+		tx, err := w.FindTransactionByInMsgHash(context.Background(), msgHash)
 		if err != nil {
 			t.Fatal("cannot find tx:", err.Error())
 		}
