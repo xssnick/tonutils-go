@@ -27,6 +27,7 @@ var randUint32 = rand.Uint32
 var timeNow = time.Now
 
 var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
+var ErrTxWasNotFound = errors.New("requested transaction is not found")
 
 type TonAPI interface {
 	CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
@@ -352,6 +353,49 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	}
 
 	return addr, nil
+}
+
+// FindTransactionByMsgHash returns transaction in wallet account with In message hash equal to msgHash.
+func (w *Wallet) FindTransactionByMsgHash(ctx context.Context, msgHash []byte) (*tlb.Transaction, error) {
+	block, err := w.api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
+	}
+
+	acc, err := w.api.GetAccount(ctx, block, w.addr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get account: %w", err)
+	}
+	if !acc.IsActive { // no tx is made from this account
+		return nil, fmt.Errorf("account is inactive: %w", ErrTxWasNotFound)
+	}
+
+	for lastLt, lastHash := acc.LastTxLT, acc.LastTxHash; ; {
+		if lastLt == 0 { // no older transactions
+			return nil, ErrTxWasNotFound
+		}
+
+		txList, err := w.api.ListTransactions(ctx, w.addr, 5, lastLt, lastHash)
+		if err != nil {
+			return nil, fmt.Errorf("cannot list transactions: %w", err)
+		}
+
+		for i, transaction := range txList {
+			if i == 0 {
+				// get previous of the oldest tx, in case if we need to scan deeper
+				lastLt, lastHash = txList[0].PrevTxLT, txList[0].PrevTxHash
+			}
+
+			if transaction.IO.In == nil {
+				continue
+			}
+			if !bytes.Equal(transaction.IO.In.Msg.Payload().Hash(), msgHash) {
+				continue
+			}
+
+			return transaction, nil
+		}
+	}
 }
 
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
