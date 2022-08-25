@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ed25519"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"golang.org/x/crypto/ed25519"
 )
 
 type MockAPI struct {

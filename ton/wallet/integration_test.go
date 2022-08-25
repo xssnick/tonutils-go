@@ -1,7 +1,9 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"math/rand"
@@ -29,8 +31,11 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
+var _mainnetSeed = "burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog"
+
 func Test_WalletTransfer(t *testing.T) {
-	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
+	seed := strings.Split(_mainnetSeed, " ")
+
 	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
 		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -69,6 +74,53 @@ func Test_WalletTransfer(t *testing.T) {
 				return
 			}
 		})
+	}
+}
+
+func Test_WalletFindTransactionByMsgHash(t *testing.T) {
+	seed := strings.Split(_mainnetSeed, " ")
+
+	w, err := FromSeed(api, seed, HighloadV2R2)
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+	}
+
+	t.Logf("wallet address: %s", w.Address().String())
+
+	testCases := []struct {
+		MsgHash string
+		TxHash  string
+	}{
+		// https://ton.page/tx/2DID+ck8iTkaPKttwrYKl//v/gkoa2taclFK22rEvy0=
+		{
+			MsgHash: "dmEFTmFAZZxWUfPWnd2wan8r/nym7J0vJnWO2Bvp2M0=",
+			TxHash:  "2DID+ck8iTkaPKttwrYKl//v/gkoa2taclFK22rEvy0=",
+		},
+		// https://ton.page/tx/BI4HyAa+z5LENhiKCI/6BNqUKSFxUlY7GSie/Oq9XsA=
+		{
+			MsgHash: "lqKW0iTyhcZ77pPDD4owkVfw2qNdxbh+QQt4YwoJz8c=",
+			TxHash:  "BI4HyAa+z5LENhiKCI/6BNqUKSFxUlY7GSie/Oq9XsA=",
+		},
+	}
+
+	for _, test := range testCases {
+		msgHash, err := base64.StdEncoding.DecodeString(test.MsgHash)
+		if err != nil {
+			t.Fatal("msg hash base64 decode err:", err.Error())
+		}
+
+		tx, err := w.FindTransactionByMsgHash(context.Background(), msgHash)
+		if err != nil {
+			t.Fatal("cannot find tx:", err.Error())
+		}
+
+		txHash, err := base64.StdEncoding.DecodeString(test.TxHash)
+		if err != nil {
+			t.Fatal("tx hash base64 decode err:", err.Error())
+		}
+		if !bytes.Equal(tx.Hash, txHash) {
+			t.Fatal("FindTransactionByMsgHash returned wrong tx")
+		}
 	}
 }
 
