@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math/rand"
@@ -13,6 +14,7 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 var api = func() *ton.APIClient {
@@ -29,8 +31,11 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
+var _mainnetSeed = "burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog"
+
 func Test_WalletTransfer(t *testing.T) {
-	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
+	seed := strings.Split(_mainnetSeed, " ")
+
 	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
 		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -70,6 +75,42 @@ func Test_WalletTransfer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
+	seed := strings.Split(_mainnetSeed, " ")
+
+	// init wallet
+	w, err := FromSeed(api, seed, HighloadV2R2)
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+	}
+	t.Logf("wallet address: %s", w.Address().String())
+
+	// set comment
+	root := cell.BeginCell().MustStoreUInt(0, 32)
+	if err := root.StoreStringSnake(".. .. . .... .. .. . .. ."); err != nil {
+		t.Fatal(fmt.Errorf("failed to build comment: %w", err))
+	}
+	body := root.EndCell()
+
+	// prepare simple transfer
+	msg := SimpleMessage(
+		address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8"),
+		tlb.MustFromTON("0.0031337"),
+		body,
+	)
+
+	// the waitConfirmation flag is optional
+	inMsgHash, err := w.SendManyGetInMsgHash(context.Background(), []*Message{msg}, true)
+	t.Logf("internal message hash: %s", hex.EncodeToString(inMsgHash))
+
+	// find tx hash
+	tx, err := w.FindTransactionByInMsgHash(context.Background(), inMsgHash)
+	if err != nil {
+		t.Fatal("cannot find tx:", err.Error())
+	}
+	t.Logf("sent message hash: %s", hex.EncodeToString(tx.Hash))
 }
 
 func randString(n int) string {
