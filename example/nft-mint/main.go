@@ -26,7 +26,7 @@ func main() {
 	api := ton.NewAPIClient(client)
 	w := getWallet(api)
 
-	collectionAddr := address.MustParseAddr("Your collection addr")
+	collectionAddr := address.MustParseAddr("EQCSrRIKVEBaRd8aQfsOaNq3C4FVZGY5Oka55A5oFMVEs0lY")
 	collection := nft.NewCollectionClient(api, collectionAddr)
 
 	collectionData, err := collection.GetCollectionData(context.Background())
