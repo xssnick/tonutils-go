@@ -195,40 +195,47 @@ func (w *Wallet) Send(ctx context.Context, message *Message, waitConfirmation ..
 }
 
 func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) error {
-	_, err := w.sendMany(ctx, messages, waitConfirmation...)
+	_, _, err := w.sendMany(ctx, messages, waitConfirmation...)
 	return err
 }
 
-func (w *Wallet) SendManyWaitTxHash(ctx context.Context, messages []*Message) ([]byte, error) {
-	return w.sendMany(ctx, messages, true)
+// SendManyGetInMsgHash returns hash of external incoming message payload.
+func (w *Wallet) SendManyGetInMsgHash(ctx context.Context, messages []*Message, waitConfirmation ...bool) ([]byte, error) {
+	_, inMsgHash, err := w.sendMany(ctx, messages, waitConfirmation...)
+	return inMsgHash, err
 }
 
-func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) ([]byte, error) {
+// SendManyWaitTxHash always waits for tx block confirmation and returns found tx hash in block.
+func (w *Wallet) SendManyWaitTxHash(ctx context.Context, messages []*Message) ([]byte, error) {
+	txHash, _, err := w.sendMany(ctx, messages, true)
+	return txHash, err
+}
+
+func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (txHash []byte, inMsgHash []byte, err error) {
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block: %w", err)
+		return nil, nil, fmt.Errorf("failed to get block: %w", err)
 	}
 
 	acc, err := w.api.GetAccount(ctx, block, w.addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get account state: %w", err)
+		return nil, nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
 	ext, err := w.BuildMessageForMany(ctx, messages)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	inMsgHash = ext.Body.Hash()
 
-	err = w.api.SendExternalMessage(ctx, ext)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send message: %w", err)
+	if err = w.api.SendExternalMessage(ctx, ext); err != nil {
+		return nil, nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
 	if len(waitConfirmation) > 0 && waitConfirmation[0] {
-		return w.waitConfirmation(ctx, block, acc, ext.StateInit, ext.Body)
+		txHash, err = w.waitConfirmation(ctx, block, acc, ext.StateInit, ext.Body)
 	}
-
-	return nil, nil
+	return txHash, inMsgHash, err
 }
 
 func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, stateInit *tlb.StateInit, msg *cell.Cell) ([]byte, error) {

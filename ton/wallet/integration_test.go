@@ -1,12 +1,10 @@
 package wallet
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
 	"log"
-	"math/big"
 	"math/rand"
 	"strings"
 	"testing"
@@ -96,46 +94,23 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	}
 	body := root.EndCell()
 
-	// prepare external message
+	// prepare simple transfer
 	msg := SimpleMessage(
 		address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8"),
-		tlb.FromNanoTON(big.NewInt(31337)),
+		tlb.MustFromTON("0.0031337"),
 		body,
 	)
-	ext, err := w.BuildMessageForMany(context.Background(), []*Message{msg})
-	if err != nil {
-		t.Fatal("BuildMessageForMany err:", err.Error())
-	}
 
-	// SendManyWaitTxHash: send external message, wait for confirm and return tx hash
-	block, err := api.CurrentMasterchainInfo(context.Background())
-	if err != nil {
-		t.Fatal(fmt.Errorf("failed to get block: %w", err))
-	}
-	acc, err := api.GetAccount(context.Background(), block, w.addr)
-	if err != nil {
-		t.Fatal(fmt.Errorf("failed to get account state: %w", err))
-	}
+	// the waitConfirmation flag is optional
+	inMsgHash, err := w.SendManyGetInMsgHash(context.Background(), []*Message{msg}, true)
+	t.Logf("internal message hash: %s", hex.EncodeToString(inMsgHash))
 
-	err = api.SendExternalMessage(context.Background(), ext)
-	if err != nil {
-		t.Fatal(fmt.Errorf("failed to send message: %w", err))
-	}
-
-	txHash, err := w.waitConfirmation(context.Background(), block, acc, ext.StateInit, ext.Body)
-	if err != nil {
-		t.Fatal(fmt.Errorf("failed to send message: %w", err))
-	}
-	t.Logf("sent tx hash: %s", hex.EncodeToString(txHash))
-
-	// find tx hash and compare returned hashes
-	tx, err := w.FindTransactionByInMsgHash(context.Background(), ext.Body.Hash())
+	// find tx hash
+	tx, err := w.FindTransactionByInMsgHash(context.Background(), inMsgHash)
 	if err != nil {
 		t.Fatal("cannot find tx:", err.Error())
 	}
-	if !bytes.Equal(tx.Hash, txHash) {
-		t.Fatal("FindTransactionByMsgHash returned wrong tx")
-	}
+	t.Logf("sent message hash: %s", hex.EncodeToString(tx.Hash))
 }
 
 func randString(n int) string {
