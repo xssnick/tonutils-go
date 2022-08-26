@@ -153,7 +153,7 @@ You can find full working example at `example/external-message/main.go`
 Contracts can be deployed using wallet's method `DeployContract`, 
 you should pass 3 cells there: contract code, contract initial data, message body.
 
-You can find example in tests, for example [here](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/integration_test.go#L116)
+You can find example [here](https://github.com/xssnick/tonutils-go/blob/master/example/deploy-nft-collection/main.go)
 
 ### Account info and transactions
 You can get full account information including balance, stored data and even code using GetAccount method. 
