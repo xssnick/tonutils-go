@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -27,6 +28,7 @@ var randUint32 = rand.Uint32
 var timeNow = time.Now
 
 var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
+var ErrTxWasNotFound = errors.New("requested transaction is not found")
 
 type TonAPI interface {
 	CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
@@ -142,21 +144,17 @@ func (w *Wallet) GetSpec() any {
 	return w.spec
 }
 
-func (w *Wallet) Send(ctx context.Context, message *Message, waitConfirmation ...bool) error {
-	return w.SendMany(ctx, []*Message{message}, waitConfirmation...)
-}
-
-func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) error {
+func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (*tlb.ExternalMessage, error) {
 	var stateInit *tlb.StateInit
 
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get block: %w", err)
+		return nil, fmt.Errorf("failed to get block: %w", err)
 	}
 
 	acc, err := w.api.GetAccount(ctx, block, w.addr)
 	if err != nil {
-		return fmt.Errorf("failed to get account state: %w", err)
+		return nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
 	initialized := true
@@ -165,7 +163,7 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirma
 
 		stateInit, err = GetStateInit(w.key.Public().(ed25519.PublicKey), w.ver, w.subwallet)
 		if err != nil {
-			return fmt.Errorf("failed to get state init: %w", err)
+			return nil, fmt.Errorf("failed to get state init: %w", err)
 		}
 	}
 
@@ -174,34 +172,73 @@ func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirma
 	case V3, V4R2:
 		msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, initialized, block, messages)
 		if err != nil {
-			return fmt.Errorf("build message err: %w", err)
+			return nil, fmt.Errorf("build message err: %w", err)
 		}
 	case HighloadV2R2:
 		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, randUint32(), messages)
 		if err != nil {
-			return fmt.Errorf("build message err: %w", err)
+			return nil, fmt.Errorf("build message err: %w", err)
 		}
 	default:
-		return fmt.Errorf("send is not yet supported for wallet with this version")
+		return nil, fmt.Errorf("send is not yet supported for wallet with this version")
 	}
 
-	err = w.api.SendExternalMessage(ctx, &tlb.ExternalMessage{
+	return &tlb.ExternalMessage{
 		DstAddr:   w.addr,
 		StateInit: stateInit,
 		Body:      msg,
-	})
+	}, nil
+}
+
+func (w *Wallet) Send(ctx context.Context, message *Message, waitConfirmation ...bool) error {
+	return w.SendMany(ctx, []*Message{message}, waitConfirmation...)
+}
+
+func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) error {
+	_, _, err := w.sendMany(ctx, messages, waitConfirmation...)
+	return err
+}
+
+// SendManyGetInMsgHash returns hash of external incoming message payload.
+func (w *Wallet) SendManyGetInMsgHash(ctx context.Context, messages []*Message, waitConfirmation ...bool) ([]byte, error) {
+	_, inMsgHash, err := w.sendMany(ctx, messages, waitConfirmation...)
+	return inMsgHash, err
+}
+
+// SendManyWaitTxHash always waits for tx block confirmation and returns found tx hash in block.
+func (w *Wallet) SendManyWaitTxHash(ctx context.Context, messages []*Message) ([]byte, error) {
+	txHash, _, err := w.sendMany(ctx, messages, true)
+	return txHash, err
+}
+
+func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (txHash []byte, inMsgHash []byte, err error) {
+	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to send message: %w", err)
+		return nil, nil, fmt.Errorf("failed to get block: %w", err)
+	}
+
+	acc, err := w.api.GetAccount(ctx, block, w.addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get account state: %w", err)
+	}
+
+	ext, err := w.BuildMessageForMany(ctx, messages)
+	if err != nil {
+		return nil, nil, err
+	}
+	inMsgHash = ext.Body.Hash()
+
+	if err = w.api.SendExternalMessage(ctx, ext); err != nil {
+		return nil, nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
 	if len(waitConfirmation) > 0 && waitConfirmation[0] {
-		return w.waitConfirmation(ctx, block, acc, stateInit, msg)
+		txHash, err = w.waitConfirmation(ctx, block, acc, ext.StateInit, ext.Body)
 	}
-
-	return nil
+	return txHash, inMsgHash, err
 }
 
-func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, stateInit *tlb.StateInit, msg *cell.Cell) error {
+func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, stateInit *tlb.StateInit, msg *cell.Cell) ([]byte, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -274,7 +311,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc
 						continue
 					}
 
-					return nil
+					return transaction.Hash, nil
 				}
 			}
 
@@ -285,7 +322,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc
 		acc = accNew
 	}
 
-	return ErrTxWasNotConfirmed
+	return nil, ErrTxWasNotConfirmed
 }
 
 // TransferNoBounce - can be used to transfer TON to not yet initialized contract/wallet
@@ -352,6 +389,52 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	}
 
 	return addr, nil
+}
+
+// FindTransactionByInMsgHash returns transaction in wallet account with incoming message hash equal to msgHash.
+func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte) (*tlb.Transaction, error) {
+	block, err := w.api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
+	}
+
+	acc, err := w.api.GetAccount(ctx, block, w.addr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get account: %w", err)
+	}
+	if !acc.IsActive { // no tx is made from this account
+		return nil, fmt.Errorf("account is inactive: %w", ErrTxWasNotFound)
+	}
+
+	for lastLt, lastHash := acc.LastTxLT, acc.LastTxHash; ; {
+		if lastLt == 0 { // no older transactions
+			return nil, ErrTxWasNotFound
+		}
+
+		txList, err := w.api.ListTransactions(ctx, w.addr, 15, lastLt, lastHash)
+		if err != nil && strings.Contains(err.Error(), "cannot compute block with specified transaction: lt not in db") {
+			return nil, fmt.Errorf("archive node is needed: %w", ErrTxWasNotFound)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("cannot list transactions: %w", err)
+		}
+
+		for i, transaction := range txList {
+			if i == 0 {
+				// get previous of the oldest tx, in case if we need to scan deeper
+				lastLt, lastHash = txList[0].PrevTxLT, txList[0].PrevTxHash
+			}
+
+			if transaction.IO.In == nil {
+				continue
+			}
+			if !bytes.Equal(transaction.IO.In.Msg.Payload().Hash(), msgHash) {
+				continue
+			}
+
+			return transaction, nil
+		}
+	}
 }
 
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
