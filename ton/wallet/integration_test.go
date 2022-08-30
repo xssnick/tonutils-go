@@ -113,6 +113,41 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	t.Logf("sent message hash: %s", hex.EncodeToString(tx.Hash))
 }
 
+func TestWallet_DeployContract(t *testing.T) {
+	seed := strings.Split(_mainnetSeed, " ")
+
+	// init wallet
+	w, err := FromSeed(api, seed, HighloadV2R2)
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+	}
+	t.Logf("wallet address: %s", w.Address().String())
+
+	codeBytes, _ := hex.DecodeString("b5ee9c72410104010020000114ff00f4a413f4bcf2c80b010203844003020009a1b63c43510007a0000061d2421bb1")
+	code, _ := cell.FromBOC(codeBytes)
+
+	addr, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell(), true)
+	if err != nil {
+		t.Fatal("deploy err:", err)
+	}
+	t.Logf("contract address: %s", addr.String())
+
+	block, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal("CurrentMasterchainInfo err:", err.Error())
+		return
+	}
+
+	res, err := api.RunGetMethod(context.Background(), block, addr, "dappka", 5, 10)
+	if err != nil {
+		t.Fatal("run err:", err)
+	}
+
+	if res[0].(int64) != 5 || res[1].(int64) != 50 {
+		t.Fatal("result err:", res[0].(int64), res[1].(int64))
+	}
+}
+
 func randString(n int) string {
 	var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" +
 		"абвгдежзиклмнопрстиквфыйцэюяАБВГДЕЖЗИЙКЛМНОПРСТИЮЯЗФЫУю!№%:,.!;(!)_+" +

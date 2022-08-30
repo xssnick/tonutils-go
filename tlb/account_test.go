@@ -47,3 +47,10 @@ func TestAccountState_LoadFromCell(t *testing.T) {
 		return
 	}
 }
+
+func Test_MethodNameHash(t *testing.T) {
+	hash := MethodNameHash("seqno")
+	if hash != 85143 {
+		t.Fatal("bad name hash:", hash)
+	}
+}

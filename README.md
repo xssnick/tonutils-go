@@ -23,6 +23,11 @@ If you love this library and want to support its development you can donate any 
   - [Details](#NFT)
   - [Mint](https://github.com/xssnick/tonutils-go/blob/master/example/nft-mint/main.go#L42)
   - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/integration_test.go#L89)
+- [Jettons](#Jettons)
+  - [Details](#Jettons)
+  - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/integration_test.go#L89)
+- [DNS](#DNS)
+  - [Resolve](#DNS)
 - [Contracts](#Contracts)
   - [Use get methods](#Using-GET-methods)
   - [Send external message](#Send-external-message)
@@ -249,6 +254,50 @@ if nftData.Initialized {
 ```
 You can find full examples at `example/nft-info/main.go` and `example/nft-mint/main.go`
 
+### Jettons
+You can get information about jetton, get jetton wallet and its balance, transfer jettons, and burn them using `jetton.Client` like that:
+```golang
+// jetton contract address
+contract := address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO")
+master := jetton.NewJettonMasterClient(api, contract)
+
+// get information about jetton
+data, err := master.GetJettonData(context.Background())
+if err != nil {
+    log.Fatal(err)
+}
+
+log.Println("total supply:", data.TotalSupply.Uint64())
+
+// get jetton wallet for account
+ownerAddr := address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA")
+jettonWallet, err := master.GetJettonWallet(context.Background(), ownerAddr)
+if err != nil {
+    log.Fatal(err)
+}
+
+jettonBalance, err := jettonWallet.GetBalance(context.Background())
+if err != nil {
+    log.Fatal(err)
+}
+log.Println("balance:", jettonBalance.String())
+```
+You can find full example, which also contains transfer, at `example/jettons/main.go`
+
+### DNS
+You can get information about domains, get connected wallet and any other records, transfer domain, edit and do any other nft compatible operations using `dns.Client` like that:
+```golang
+resolver := dns.NewDNSClient(api, dns.RootContractAddr(api))
+
+domain, err := resolver.Resolve(context.Background(), "alice.ton")
+if err != nil {
+    panic(err)
+}
+
+log.Println("domain points to wallet address:", domain.GetWalletRecord())
+```
+You can find full example at `example/dns/main.go`
+
 ### Cells
 Work with cells is very similar to FunC cells:
 ```golang
@@ -346,8 +395,9 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Parse global config json
 * Event subscriptions
 * Payment channels
-* DNS
+* ✅ DNS
 * Merkle proofs
+* ✅ Jettons
 
 
 <!-- Badges -->

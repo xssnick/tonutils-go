@@ -5,21 +5,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-
-	"github.com/sigurn/crc16"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
-
-func methodNameHash(name string) []byte {
-	// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/smc-envelope/SmartContract.h#L75
-	mName := make([]byte, 8)
-	crc := uint64(crc16.Checksum([]byte(name), crc16.MakeTable(crc16.CRC16_XMODEM))) | 0x10000
-	binary.LittleEndian.PutUint64(mName, crc)
-	return mName
-}
 
 func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error) {
 	data := make([]byte, 4)
@@ -32,7 +22,10 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 
 	data = append(data, chain...)
 	data = append(data, addr.Data()...)
-	data = append(data, methodNameHash(method)...)
+
+	mName := make([]byte, 8)
+	binary.LittleEndian.PutUint64(mName, tlb.MethodNameHash(method))
+	data = append(data, mName...)
 
 	var stack tlb.Stack
 	for i := len(params) - 1; i >= 0; i-- {
@@ -75,7 +68,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		// TODO: check proofs mode
 
 		exitCode := binary.LittleEndian.Uint32(resp.Data)
-		if exitCode != 0 {
+		if exitCode > 1 {
 			return nil, ContractExecError{
 				exitCode,
 			}

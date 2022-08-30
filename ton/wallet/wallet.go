@@ -233,12 +233,16 @@ func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirma
 	}
 
 	if len(waitConfirmation) > 0 && waitConfirmation[0] {
-		txHash, err = w.waitConfirmation(ctx, block, acc, ext.StateInit, ext.Body)
+		txHash, err = w.waitConfirmation(ctx, block, acc, ext)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
-	return txHash, inMsgHash, err
+
+	return txHash, inMsgHash, nil
 }
 
-func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, stateInit *tlb.StateInit, msg *cell.Cell) ([]byte, error) {
+func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, ext *tlb.ExternalMessage) ([]byte, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -265,6 +269,11 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc
 		block = blockNew
 
 		if accNew.LastTxLT == acc.LastTxLT {
+			// if not in block, maybe LS lost our message, send it again
+			if err = w.api.SendExternalMessage(ctx, ext); err != nil {
+				continue
+			}
+
 			continue
 		}
 
@@ -292,22 +301,22 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc
 				}
 
 				if transaction.IO.In != nil && transaction.IO.In.MsgType == tlb.MsgTypeExternalIn {
-					ext := transaction.IO.In.AsExternalIn()
-					if stateInit != nil {
-						if ext.StateInit == nil {
+					extIn := transaction.IO.In.AsExternalIn()
+					if ext.StateInit != nil {
+						if extIn.StateInit == nil {
 							continue
 						}
 
-						if !bytes.Equal(stateInit.Data.Hash(), ext.StateInit.Data.Hash()) {
+						if !bytes.Equal(ext.StateInit.Data.Hash(), extIn.StateInit.Data.Hash()) {
 							continue
 						}
 
-						if !bytes.Equal(stateInit.Code.Hash(), ext.StateInit.Code.Hash()) {
+						if !bytes.Equal(ext.StateInit.Code.Hash(), extIn.StateInit.Code.Hash()) {
 							continue
 						}
 					}
 
-					if !bytes.Equal(ext.Body.Hash(), msg.Hash()) {
+					if !bytes.Equal(extIn.Body.Hash(), ext.Body.Hash()) {
 						continue
 					}
 
