@@ -35,7 +35,7 @@ func NewAddress(flags byte, workchain byte, data []byte) *Address {
 	return &Address{
 		flags:     parseFlags(flags),
 		addrType:  StdAddress,
-		workchain: int32(workchain),
+		workchain: int32(int8(workchain)),
 		bitsLen:   256,
 		data:      data,
 	}

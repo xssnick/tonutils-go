@@ -3,18 +3,23 @@ package nft
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"math/rand"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
+
+type TonApi interface {
+	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
+	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error)
+}
 
 type ItemMintPayload struct {
 	_         tlb.Magic  `tlb:"#00000001"`
 	QueryID   uint64     `tlb:"## 64"`
-	Index     uint64     `tlb:"## 64"`
+	Index     *big.Int   `tlb:"## 64"`
 	TonAmount tlb.Coins  `tlb:"."`
 	Content   *cell.Cell `tlb:"^"`
 }
@@ -26,7 +31,7 @@ type CollectionChangeOwner struct {
 }
 
 type CollectionData struct {
-	NextItemIndex uint64
+	NextItemIndex *big.Int
 	Content       ContentAny
 	OwnerAddress  *address.Address
 }
@@ -39,17 +44,17 @@ type CollectionRoyaltyParams struct {
 
 type CollectionClient struct {
 	addr *address.Address
-	api  *ton.APIClient
+	api  TonApi
 }
 
-func NewCollectionClient(api *ton.APIClient, collectionAddr *address.Address) *CollectionClient {
+func NewCollectionClient(api TonApi, collectionAddr *address.Address) *CollectionClient {
 	return &CollectionClient{
 		addr: collectionAddr,
 		api:  api,
 	}
 }
 
-func (c *CollectionClient) GetNFTAddressByIndex(ctx context.Context, index uint64) (*address.Address, error) {
+func (c *CollectionClient) GetNFTAddressByIndex(ctx context.Context, index *big.Int) (*address.Address, error) {
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
@@ -111,7 +116,7 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 	}, nil
 }
 
-func (c *CollectionClient) GetNFTContent(ctx context.Context, index uint64, individualNFTContent *cell.Cell) (ContentAny, error) {
+func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, individualNFTContent *cell.Cell) (ContentAny, error) {
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
@@ -146,9 +151,13 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
 	}
 
-	nextIndex, ok := res[0].(int64)
+	nextIndex, ok := res[0].(*big.Int)
 	if !ok {
-		return nil, fmt.Errorf("nextIndex is not int64")
+		nextIndexI, ok := res[0].(int64)
+		if !ok {
+			return nil, fmt.Errorf("nextIndex is not int")
+		}
+		nextIndex = big.NewInt(nextIndexI)
 	}
 
 	content, ok := res[1].(*cell.Cell)
@@ -172,13 +181,13 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 	}
 
 	return &CollectionData{
-		NextItemIndex: uint64(nextIndex),
+		NextItemIndex: nextIndex,
 		Content:       cnt,
 		OwnerAddress:  addr,
 	}, nil
 }
 
-func (c *CollectionClient) BuildMintPayload(index uint64, owner *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
+func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
 	con, err := content.ContentCell()
 	if err != nil {
 		return nil, err
@@ -199,7 +208,7 @@ func (c *CollectionClient) BuildMintPayload(index uint64, owner *address.Address
 	return body, nil
 }
 
-func (c *CollectionClient) BuildMintEditablePayload(index uint64, owner, editor *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
+func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, editor *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
 	con, err := content.ContentCell()
 	if err != nil {
 		return nil, err

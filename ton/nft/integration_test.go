@@ -69,8 +69,9 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("GetNFTAddressByIndex err:", err.Error())
 	}
 
+	itemURI := fmt.Sprint(collectionData.NextItemIndex) + "/" + fmt.Sprint(collectionData.NextItemIndex) + ".json"
 	mintData, err := collection.BuildMintPayload(collectionData.NextItemIndex, w.Address(), tlb.MustFromTON("0.01"), &ContentOffchain{
-		URI: fmt.Sprint(collectionData.NextItemIndex) + "/" + fmt.Sprint(collectionData.NextItemIndex) + ".json",
+		URI: itemURI,
 	})
 	if err != nil {
 		t.Fatal("BuildMintPayload err:", err.Error())
@@ -106,7 +107,36 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
 
+	contentCell, err := newData.Content.ContentCell()
+	if err != nil {
+		t.Fatal("contentCell err:", err.Error())
+	}
+
+	fullContent, err := collection.GetNFTContent(context.Background(), collectionData.NextItemIndex, contentCell)
+	if err != nil {
+		t.Fatal("GetNFTData err:", err.Error())
+	}
+
+	if fullContent.(*ContentOffchain).URI != "https://yandex.ru/crigne/"+itemURI {
+		t.Fatal("full content incorrect")
+	}
+
+	roy, err := collection.RoyaltyParams(context.Background())
+	if err != nil {
+		t.Fatal("RoyaltyParams err:", err.Error())
+	}
+
+	if roy.Address.String() != "EQBYIB9xax6l7ibZhofm5BfiILbz2rH2PMNrSSShSwC5NvaU" {
+		t.Fatal("royalty addr invalid")
+	}
+
+	if roy.Base != 0 || roy.Factor != 0 {
+		t.Fatal("royalty invalid")
+	}
+
 	fmt.Println("Owner:", newData.OwnerAddress.String())
+	fmt.Println("Full content:", fullContent.(*ContentOffchain).URI)
+	fmt.Println("Royalty:", roy.Address.String(), roy.Base, "/", roy.Factor)
 
 	if newData.OwnerAddress.String() != newAddr.String() {
 		t.Fatal("nft owner not updated")

@@ -3,11 +3,11 @@ package nft
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"math/rand"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -23,7 +23,7 @@ type TransferPayload struct {
 
 type ItemData struct {
 	Initialized       bool
-	Index             uint64
+	Index             *big.Int
 	CollectionAddress *address.Address
 	OwnerAddress      *address.Address
 	Content           ContentAny
@@ -31,10 +31,10 @@ type ItemData struct {
 
 type ItemClient struct {
 	addr *address.Address
-	api  *ton.APIClient
+	api  TonApi
 }
 
-func NewItemClient(api *ton.APIClient, nftAddr *address.Address) *ItemClient {
+func NewItemClient(api TonApi, nftAddr *address.Address) *ItemClient {
 	return &ItemClient{
 		addr: nftAddr,
 		api:  api,
@@ -57,9 +57,13 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 		return nil, fmt.Errorf("init is not int64")
 	}
 
-	index, ok := res[1].(int64)
+	index, ok := res[1].(*big.Int)
 	if !ok {
-		return nil, fmt.Errorf("index is not int64")
+		indexI, ok := res[1].(int64)
+		if !ok {
+			return nil, fmt.Errorf("index is not int64")
+		}
+		index = big.NewInt(indexI)
 	}
 
 	collectionRes, ok := res[2].(*cell.Slice)
@@ -104,7 +108,7 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 
 	return &ItemData{
 		Initialized:       init != 0,
-		Index:             uint64(index),
+		Index:             index,
 		CollectionAddress: collectionAddr,
 		OwnerAddress:      ownerAddr,
 		Content:           cnt,
