@@ -25,7 +25,7 @@ If you love this library and want to support its development you can donate any 
   - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/integration_test.go#L89)
 - [Jettons](#Jettons)
   - [Details](#Jettons)
-  - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/integration_test.go#L89)
+  - [Transfer](hhttps://github.com/xssnick/tonutils-go/blob/master/example/jettons/main.go#L56)
 - [DNS](#DNS)
   - [Resolve](#DNS)
 - [Contracts](#Contracts)
