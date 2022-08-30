@@ -277,7 +277,7 @@ func (a *Account) HasGetMethod(name string) bool {
 		return false
 	}
 
-	if dict.GetIntKey(big.NewInt(hash)) != nil {
+	if dict.GetByIntKey(big.NewInt(hash)) != nil {
 		return true
 	}
 	return false

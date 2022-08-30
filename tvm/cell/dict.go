@@ -85,7 +85,7 @@ func (d *Dictionary) Set(key, value *Cell) error {
 	return nil
 }
 
-func (d *Dictionary) GetIntKey(key *big.Int) *Cell {
+func (d *Dictionary) GetByIntKey(key *big.Int) *Cell {
 	return d.Get(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
 }
 
