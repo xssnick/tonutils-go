@@ -27,15 +27,16 @@ type testTransform struct {
 }
 
 type testInner struct {
-	_        Magic            `tlb:"$1011"`
-	Val      int64            `tlb:"## 34"`
-	Val2     uint64           `tlb:"## 12"`
-	ValCoins Coins            `tlb:"."`
-	BigVal   *big.Int         `tlb:"## 176"`
-	B        bool             `tlb:"bool"`
-	Addr     *address.Address `tlb:"addr"`
-	Manual   manualLoad       `tlb:"."`
-	Dict     *cell.Dictionary `tlb:"dict 256"`
+	_           Magic            `tlb:"$1011"`
+	Val         int64            `tlb:"## 34"`
+	Val2        uint64           `tlb:"## 12"`
+	ValCoins    Coins            `tlb:"."`
+	SmallBigVal *big.Int         `tlb:"## 10"`
+	BigVal      *big.Int         `tlb:"## 176"`
+	B           bool             `tlb:"bool"`
+	Addr        *address.Address `tlb:"addr"`
+	Manual      manualLoad       `tlb:"."`
+	Dict        *cell.Dictionary `tlb:"dict 256"`
 }
 
 type testTLB struct {
@@ -63,6 +64,7 @@ func TestLoadFromCell(t *testing.T) {
 		MustStoreInt(-7172, 34).
 		MustStoreUInt(0xCCA, 12).
 		MustStoreCoins(700000).
+		MustStoreUInt(5, 10).
 		MustStoreUInt(7126382921832, 176).
 		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8).MustStoreDict(d)
 
@@ -84,6 +86,10 @@ func TestLoadFromCell(t *testing.T) {
 
 		if x.InsideMaybe != nil {
 			t.Fatal("maybe not nil")
+		}
+
+		if x.Inside.SmallBigVal.Uint64() != 5 {
+			t.Fatal("uint 5 not eq")
 		}
 
 		if x.Inside.BigVal.Uint64() != 7126382921832 {

@@ -7,7 +7,6 @@ import (
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -21,7 +20,7 @@ type ItemEditableClient struct {
 	*ItemClient
 }
 
-func NewItemEditableClient(api *ton.APIClient, nftAddr *address.Address) *ItemEditableClient {
+func NewItemEditableClient(api TonApi, nftAddr *address.Address) *ItemEditableClient {
 	return &ItemEditableClient{
 		ItemClient: NewItemClient(api, nftAddr),
 	}

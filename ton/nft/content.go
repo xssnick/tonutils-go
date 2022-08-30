@@ -3,7 +3,6 @@ package nft
 import (
 	"crypto/sha256"
 	"fmt"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -47,13 +46,30 @@ func ContentFromCell(c *cell.Cell) (ContentAny, error) {
 			return nil, fmt.Errorf("failed to load dict onchain data: %w", err)
 		}
 
-		return &ContentOnchain{
+		uri := string(getOnchainVal(dict, "uri"))
+
+		on := ContentOnchain{
 			Name:        string(getOnchainVal(dict, "name")),
 			Description: string(getOnchainVal(dict, "description")),
 			Image:       string(getOnchainVal(dict, "image")),
 			ImageData:   getOnchainVal(dict, "image_data"),
 			attributes:  dict,
-		}, err
+		}
+
+		var content ContentAny
+
+		if uri != "" {
+			content = &ContentSemichain{
+				ContentOffchain: ContentOffchain{
+					URI: uri,
+				},
+				ContentOnchain: on,
+			}
+		} else {
+			content = &on
+		}
+
+		return content, nil
 	case 0x01:
 		str, err := s.LoadStringSnake()
 		if err != nil {
@@ -89,11 +105,11 @@ func getOnchainVal(dict *cell.Dictionary, key string) []byte {
 
 		switch typ {
 		case 0x01:
-			data, _ := v.LoadBinarySnake()
-			return data
-		default:
 			// TODO: add support for chunked
 			return nil
+		default:
+			data, _ := v.LoadBinarySnake()
+			return data
 		}
 	}
 
@@ -144,6 +160,30 @@ func (c *ContentSemichain) ContentCell() (*cell.Cell, error) {
 	}
 
 	return c.ContentOnchain.ContentCell()
+}
+
+func (c *ContentOnchain) SetAttribute(name, value string) error {
+	return c.SetAttributeBinary(name, []byte(value))
+}
+
+func (c *ContentOnchain) SetAttributeBinary(name string, value []byte) error {
+	if c.attributes == nil {
+		c.attributes = cell.NewDict(256)
+	}
+
+	err := setOnchainVal(c.attributes, name, value)
+	if err != nil {
+		return fmt.Errorf("failed to set attribute: %w", err)
+	}
+	return nil
+}
+
+func (c *ContentOnchain) GetAttribute(name string) string {
+	return string(c.GetAttributeBinary(name))
+}
+
+func (c *ContentOnchain) GetAttributeBinary(name string) []byte {
+	return getOnchainVal(c.attributes, name)
 }
 
 func (c *ContentOnchain) ContentCell() (*cell.Cell, error) {

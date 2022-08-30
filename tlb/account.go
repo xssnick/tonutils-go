@@ -1,8 +1,10 @@
 package tlb
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"github.com/sigurn/crc16"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -235,4 +237,53 @@ func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 	s.Balance = FromNanoTON(coins)
 
 	return nil
+}
+
+func (a *Account) HasGetMethod(name string) bool {
+	if a.Code == nil {
+		return false
+	}
+
+	var hash int64
+	switch name {
+	// reserved names cannot be used for get methods
+	case "recv_internal", "main", "recv_external", "run_ticktock":
+		return false
+	default:
+		hash = int64(MethodNameHash(name))
+	}
+
+	code := a.Code.BeginParse()
+	hdr, err := code.LoadSlice(56)
+	if err != nil {
+		return false
+	}
+
+	// header contains methods dictionary
+	// SETCP0
+	// 19 DICTPUSHCONST
+	// DICTIGETJMPZ
+	if !bytes.Equal(hdr, []byte{0xFF, 0x00, 0xF4, 0xA4, 0x13, 0xF4, 0xBC}) {
+		return false
+	}
+
+	ref, err := code.LoadRef()
+	if err != nil {
+		return false
+	}
+
+	dict, err := ref.ToDict(19)
+	if err != nil {
+		return false
+	}
+
+	if dict.GetIntKey(big.NewInt(hash)) != nil {
+		return true
+	}
+	return false
+}
+
+func MethodNameHash(name string) uint64 {
+	// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/smc-envelope/SmartContract.h#L75
+	return uint64(crc16.Checksum([]byte(name), crc16.MakeTable(crc16.CRC16_XMODEM))) | 0x10000
 }

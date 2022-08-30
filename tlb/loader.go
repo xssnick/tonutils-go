@@ -101,9 +101,16 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 						return fmt.Errorf("failed to load int %d, err: %w", num, err)
 					}
 				default:
-					x, err = loader.LoadUInt(uint(num))
-					if err != nil {
-						return fmt.Errorf("failed to load uint %d, err: %w", num, err)
+					if field.Type == reflect.TypeOf(&big.Int{}) {
+						x, err = loader.LoadBigInt(uint(num))
+						if err != nil {
+							return fmt.Errorf("failed to load bigint %d, err: %w", num, err)
+						}
+					} else {
+						x, err = loader.LoadUInt(uint(num))
+						if err != nil {
+							return fmt.Errorf("failed to load uint %d, err: %w", num, err)
+						}
 					}
 				}
 
@@ -337,6 +344,14 @@ func ToCell(v any) (*cell.Cell, error) {
 						return nil, fmt.Errorf("failed to store int %d, err: %w", num, err)
 					}
 				default:
+					if field.Type == reflect.TypeOf(&big.Int{}) {
+						err = builder.StoreBigInt(fieldVal.Interface().(*big.Int), uint(num))
+						if err != nil {
+							return nil, fmt.Errorf("failed to store bigint %d, err: %w", num, err)
+						}
+						continue
+					}
+
 					err = builder.StoreUInt(fieldVal.Uint(), uint(num))
 					if err != nil {
 						return nil, fmt.Errorf("failed to store uint %d, err: %w", num, err)

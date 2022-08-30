@@ -43,6 +43,10 @@ const (
 	_LSError   int32 = -1146494648
 )
 
+const (
+	ErrCodeContractNotInitialized = 4294967040
+)
+
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
 }
@@ -115,8 +119,67 @@ func (e *LSError) Load(data []byte) ([]byte, error) {
 	return data, nil
 }
 
+/*
+   0 - standard successful execution exit code
+   1 - alternative successful execution exit code
+   2 - stack underflow. Last op-code consume more elements than there are on stacks. 1
+   3 - stack overflow. More values have been stored on a stack than allowed by this version of TVM
+   4 - integer overflow. Integer does not fit into −2256 ≤ x < 2256 or a division by zero has occurred
+   5 - integer out of expected range.
+   6 - Invalid opcode. Instruction in unknown to current TVM version
+   7 - Type check error. An argument to a primitive is of incorrect value type. 1
+   8 - Cell overflow. Writing to builder is not possible since after operation there would be more than 1023 bits or 4 references.
+   9 - Cell underflow. Read from slice primitive tried to read more bits or references than there are.
+   10 - Dictionary error. Error during manipulation with dictionary (hashmaps).
+   13 - Out of gas error. Thrown by TVM when the remaining gas becomes negative.
+   32 - Action list is invalid. Set during action phase if c5 register after execution contains unparsable object.
+   32 (the same as prev) - Method id not found. Returned by tonlib during attempt to execute non-existed get method.
+   34 - Action is invalid or not supported. Set during action phase if current action can not be applied.
+   37 - Not enough TONs. Message sends too much TON (or there is no enough TONs after deducting fees).
+   38 - Not enough extra-currencies.
+*/
+
 func (e ContractExecError) Error() string {
-	return fmt.Sprintf("contract exit code: %d", e.Code)
+	var name string
+	switch e.Code {
+	case 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 32, 34, 37, 38, ErrCodeContractNotInitialized:
+		name += " ("
+		switch e.Code {
+		case 2:
+			name += "stack underflow. Last op-code consume more elements than there are on stacks"
+		case 3:
+			name += "stack overflow. More values have been stored on a stack than allowed by this version of TVM"
+		case 4:
+			name += "integer overflow. Integer does not fit into −2256 ≤ x < 2256 or a division by zero has occurred"
+		case 5:
+			name += "integer out of expected range"
+		case 6:
+			name += "invalid opcode. Instruction in unknown to current TVM version"
+		case 7:
+			name += "type check error. An argument to a primitive is of incorrect value type"
+		case 8:
+			name += "cell overflow. Writing to builder is not possible since after operation there would be more than 1023 bits or 4 references"
+		case 9:
+			name += "cell underflow. Read from slice primitive tried to read more bits or references than there are"
+		case 10:
+			name += "dictionary error. Error during manipulation with dictionary (hashmaps)"
+		case 13:
+			name += "out of gas error. Thrown by TVM when the remaining gas becomes negative"
+		case 32:
+			name += "action list is invalid. Set during action phase if c5 register after execution contains unparsable object"
+		case 34:
+			name += "action is invalid or not supported. Set during action phase if current action can not be applied"
+		case 37:
+			name += "not enough TONs. Message sends too much TON (or there is no enough TONs after deducting fees)"
+		case 38:
+			name += "not enough extra-currencies"
+		case ErrCodeContractNotInitialized:
+			name += "contract is not initialized"
+		}
+		name += ")"
+	}
+
+	return fmt.Sprintf("contract exit code: %d%s", e.Code, name)
 }
 
 func (e ContractExecError) Is(err error) bool {

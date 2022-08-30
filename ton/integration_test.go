@@ -154,6 +154,10 @@ func Test_Account(t *testing.T) {
 		return
 	}
 
+	if res.HasGetMethod("run_ticktock") {
+		t.Fatal("has ticktock as get method")
+	}
+
 	fmt.Printf("Is active: %v\n", res.IsActive)
 	if res.IsActive {
 		fmt.Printf("Status: %s\n", res.State.Status)
@@ -191,6 +195,40 @@ func Test_Account(t *testing.T) {
 		// set previous info from the oldest transaction in list
 		lastHash = list[0].PrevTxHash
 		lastLt = list[0].PrevTxLT
+	}
+}
+
+func Test_AccountHasMethod(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	b, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	addr := address.MustParseAddr("EQCW0cn9TQuZ3tW_Tche1HIGGa7apwFsi7v3YtmYC6FoIzLr")
+	res, err := api.GetAccount(ctx, b, addr)
+	if err != nil {
+		t.Fatal("get account err:", err.Error())
+		return
+	}
+
+	if !res.HasGetMethod("get_nft_data") {
+		t.Fatal("nft not has get_nft_data")
+	}
+
+	if res.HasGetMethod("seqno") {
+		t.Fatal("nft has seqno")
+	}
+
+	if res.HasGetMethod("recv_internal") {
+		t.Fatal("has recv_internal as get method")
+	}
+
+	if res.HasGetMethod("recv_external") {
+		t.Fatal("has recv_external as get method")
 	}
 }
 

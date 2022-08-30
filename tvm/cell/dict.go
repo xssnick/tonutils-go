@@ -85,6 +85,10 @@ func (d *Dictionary) Set(key, value *Cell) error {
 	return nil
 }
 
+func (d *Dictionary) GetIntKey(key *big.Int) *Cell {
+	return d.Get(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
+}
+
 func (d *Dictionary) Get(key *Cell) *Cell {
 	data, err := key.BeginParse().LoadSlice(d.keySz)
 	if err != nil {
