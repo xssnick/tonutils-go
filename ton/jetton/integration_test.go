@@ -2,7 +2,6 @@ package jetton
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -38,9 +37,6 @@ func TestJettonMasterClient_GetJettonData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dd, _ := json.Marshal(data)
-	log.Println(string(dd))
-
 	if data.AdminAddr.String() != "EQDIhshKpDtDt-uTawnlGIq-cNijBgB7jyYprczoAOXTWLwf" {
 		t.Fatal("admin addr diff")
 	}
@@ -57,7 +53,7 @@ func TestJettonMasterClient_GetJettonData(t *testing.T) {
 func TestJettonMasterClient_GetWalletAddress(t *testing.T) {
 	cli := NewJettonMasterClient(api, address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"))
 
-	data, err := cli.GetWallet(context.Background(), address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"))
+	data, err := cli.GetJettonWallet(context.Background(), address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +77,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 
 	w := getWallet(api)
 
-	tokenWallet, err := cli.GetWallet(context.Background(), w.Address())
+	tokenWallet, err := cli.GetJettonWallet(context.Background(), w.Address())
 	if err != nil {
 		t.Fatal(err)
 	}

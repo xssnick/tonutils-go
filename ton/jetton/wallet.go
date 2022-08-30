@@ -31,7 +31,7 @@ type BurnPayload struct {
 }
 
 type WalletClient struct {
-	master *MasterClient
+	master *Client
 	addr   *address.Address
 }
 

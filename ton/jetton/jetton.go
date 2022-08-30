@@ -31,19 +31,19 @@ type Data struct {
 	WalletCode  *cell.Cell
 }
 
-type MasterClient struct {
+type Client struct {
 	addr *address.Address
 	api  TonApi
 }
 
-func NewJettonMasterClient(api TonApi, masterContractAddr *address.Address) *MasterClient {
-	return &MasterClient{
+func NewJettonMasterClient(api TonApi, masterContractAddr *address.Address) *Client {
+	return &Client{
 		addr: masterContractAddr,
 		api:  api,
 	}
 }
 
-func (c *MasterClient) GetWallet(ctx context.Context, ownerAddr *address.Address) (*WalletClient, error) {
+func (c *Client) GetJettonWallet(ctx context.Context, ownerAddr *address.Address) (*WalletClient, error) {
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
@@ -71,7 +71,7 @@ func (c *MasterClient) GetWallet(ctx context.Context, ownerAddr *address.Address
 	}, nil
 }
 
-func (c *MasterClient) GetJettonData(ctx context.Context) (*Data, error) {
+func (c *Client) GetJettonData(ctx context.Context) (*Data, error) {
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
