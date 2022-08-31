@@ -18,17 +18,28 @@ import (
 type Version int
 
 const (
+	V1R1         Version = 11
+	V1R2         Version = 12
+	V1R3         Version = 13
+	V2R1         Version = 21
+	V2R2         Version = 22
+	V3R1         Version = 31
 	V3           Version = 3
+	V4R1         Version = 41
 	V4R2         Version = 42
 	HighloadV2R2 Version = 122
+	Lockup       Version = 200
 )
 
 // defining some funcs this way to mock for tests
 var randUint32 = rand.Uint32
 var timeNow = time.Now
 
-var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
-var ErrTxWasNotFound = errors.New("requested transaction is not found")
+var (
+	ErrUnsupportedWalletVersion = errors.New("wallet version is not supported")
+	ErrTxWasNotConfirmed        = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
+	ErrTxWasNotFound            = errors.New("requested transaction is not found")
+)
 
 type TonAPI interface {
 	CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
@@ -55,6 +66,50 @@ type Wallet struct {
 
 	// Stores a pointer to implementation of the version related functionality
 	spec any
+}
+
+func GetWalletVersion(ctx context.Context, api TonAPI, addr *address.Address) (Version, error) {
+	master, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	account, err := api.GetAccount(ctx, master, addr)
+	if err != nil {
+		return 0, err
+	}
+	if !account.IsActive || account.State.Status != tlb.AccountStatusActive {
+		return 0, errors.New("account is not active")
+	}
+
+	boc := account.Code.ToBOC()
+
+	switch {
+	case bytes.Equal(boc, _V3CodeBOC):
+		return V3, nil
+	case bytes.Equal(boc, _V4R1CodeBOC):
+		return V4R1, nil
+	case bytes.Equal(boc, _V4R2CodeBOC):
+		return V4R2, nil
+	case bytes.Equal(boc, _HighloadV2R2CodeBOC):
+		return HighloadV2R2, nil
+	case bytes.Equal(boc, _V1R1CodeBOC):
+		return V1R1, nil
+	case bytes.Equal(boc, _V1R2CodeBOC):
+		return V1R2, nil
+	case bytes.Equal(boc, _V1R3CodeBOC):
+		return V1R3, nil
+	case bytes.Equal(boc, _V2R1CodeBOC):
+		return V2R1, nil
+	case bytes.Equal(boc, _V2R2CodeBOC):
+		return V2R2, nil
+	case bytes.Equal(boc, _V3R1CodeBOC):
+		return V3R1, nil
+	case bytes.Equal(boc, _LockupCodeBOC):
+		return Lockup, nil
+	default:
+		return 0, ErrUnsupportedWalletVersion
+	}
 }
 
 func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Wallet, error) {
@@ -94,7 +149,7 @@ func getSpec(w *Wallet) (any, error) {
 		return &SpecHighloadV2R2{regular}, nil
 	}
 
-	return nil, errors.New("cannot init spec: unknown version")
+	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
 }
 
 func (w *Wallet) Address() *address.Address {
@@ -180,7 +235,7 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("send is not yet supported for wallet with this version")
+		return nil, fmt.Errorf("send is not yet supported: %w", ErrUnsupportedWalletVersion)
 	}
 
 	return &tlb.ExternalMessage{

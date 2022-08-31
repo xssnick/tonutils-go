@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -10,8 +11,29 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+// https://github.com/toncenter/tonweb/blob/master/src/contract/wallet/WalletSources.md#v3-wallet
+const _V3R1CodeHex = "B5EE9C724101010100620000C0FF0020DD2082014C97BA9730ED44D0D70B1FE0A4F2608308D71820D31FD31FD31FF82313BBF263ED44D0D31FD31FD3FFD15132BAF2A15144BAF2A204F901541055F910F2A3F8009320D74A96D307D402FB00E8D101A4C8CB1FCB1FCBFFC9ED543FBE6EE0"
+
 // https://github.com/toncenter/tonweb/blob/master/src/contract/wallet/WalletSources.md#revision-2-2
 const _V3CodeHex = "B5EE9C724101010100710000DEFF0020DD2082014C97BA218201339CBAB19F71B0ED44D0D31FD31F31D70BFFE304E0A4F2608308D71820D31FD31FD31FF82313BBF263ED44D0D31FD31FD3FFD15132BAF2A15144BAF2A204F901541055F910F2A3F8009320D74A96D307D402FB00E8D101A4C8CB1FCB1FCBFFC9ED5410BD6DAD"
+
+var (
+	_V3R1CodeBOC []byte
+	_V3CodeBOC   []byte
+)
+
+func init() {
+	var err error
+
+	_V3R1CodeBOC, err = hex.DecodeString(_V3R1CodeHex)
+	if err != nil {
+		panic(err)
+	}
+	_V3CodeBOC, err = hex.DecodeString(_V3CodeHex)
+	if err != nil {
+		panic(err)
+	}
+}
 
 type SpecV3 struct {
 	SpecRegular
