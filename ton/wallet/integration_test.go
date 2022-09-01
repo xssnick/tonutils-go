@@ -56,11 +56,23 @@ func TestGetWalletVersion(t *testing.T) {
 		}, {
 			Addr:    address.MustParseAddr("EQAkbIA32zna94YX1Oii371zF-CHOPHB8DLIJa1QBcdNNGmq"),
 			Version: V4R2,
+		}, {
+			Addr:    address.MustParseAddr("EQBREtZ3r9bEuFSCWYtqx5KbJBDRPdSSCG3wzJvQDXcvXagl"),
+			Version: Unknown,
 		},
 	}
 
+	master, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	for _, test := range testCases {
-		v, err := GetWalletVersion(ctx, api, test.Addr)
+		account, err := api.GetAccount(ctx, master, test.Addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := GetWalletVersion(account)
 		if err != nil {
 			t.Fatalf("%s: %s", test.Addr, err)
 		}

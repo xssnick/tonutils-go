@@ -25,18 +25,20 @@ const (
 	V2R1         Version = 21
 	V2R2         Version = 22
 	V3R1         Version = 31
-	V3           Version = 3
+	V3R2         Version = 32
+	V3                   = V3R2
 	V4R1         Version = 41
 	V4R2         Version = 42
 	HighloadV2R2 Version = 122
 	Lockup       Version = 200
+	Unknown      Version = 0
 )
 
 var (
 	walletCodeHex = map[Version]string{
 		V1R1: _V1R1CodeHex, V1R2: _V1R2CodeHex, V1R3: _V1R3CodeHex,
 		V2R1: _V2R1CodeHex, V2R2: _V2R2CodeHex,
-		V3: _V3CodeHex, V3R1: _V3R1CodeHex,
+		V3R1: _V3R1CodeHex, V3R2: _V3R2CodeHex,
 		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
 		HighloadV2R2: _HighloadV2R2CodeHex,
 		Lockup:       _LockupCodeHex,

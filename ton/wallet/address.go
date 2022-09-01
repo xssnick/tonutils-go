@@ -2,7 +2,6 @@ package wallet
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -30,16 +29,7 @@ func AddressFromPubKey(key ed25519.PublicKey, ver Version, subwallet uint32) (*a
 	return addr, nil
 }
 
-func GetWalletVersion(ctx context.Context, api TonAPI, addr *address.Address) (Version, error) {
-	master, err := api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	account, err := api.GetAccount(ctx, master, addr)
-	if err != nil {
-		return 0, err
-	}
+func GetWalletVersion(account *tlb.Account) (Version, error) {
 	if !account.IsActive || account.State.Status != tlb.AccountStatusActive {
 		return 0, errors.New("account is not active")
 	}
@@ -54,7 +44,7 @@ func GetWalletVersion(ctx context.Context, api TonAPI, addr *address.Address) (V
 		}
 	}
 
-	return 0, ErrUnsupportedWalletVersion
+	return Unknown, nil
 }
 
 func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb.StateInit, error) {
