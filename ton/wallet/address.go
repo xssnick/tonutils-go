@@ -3,7 +3,6 @@ package wallet
 import (
 	"bytes"
 	"crypto/ed25519"
-	"errors"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -29,9 +28,9 @@ func AddressFromPubKey(key ed25519.PublicKey, ver Version, subwallet uint32) (*a
 	return addr, nil
 }
 
-func GetWalletVersion(account *tlb.Account) (Version, error) {
+func GetWalletVersion(account *tlb.Account) Version {
 	if !account.IsActive || account.State.Status != tlb.AccountStatusActive {
-		return 0, errors.New("account is not active")
+		return Unknown
 	}
 
 	for v := range walletCodeHex {
@@ -40,11 +39,11 @@ func GetWalletVersion(account *tlb.Account) (Version, error) {
 			continue
 		}
 		if bytes.Equal(account.Code.Hash(), code.Hash()) {
-			return v, nil
+			return v
 		}
 	}
 
-	return Unknown, nil
+	return Unknown
 }
 
 func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb.StateInit, error) {

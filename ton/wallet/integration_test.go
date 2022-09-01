@@ -72,11 +72,7 @@ func TestGetWalletVersion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		v, err := GetWalletVersion(account)
-		if err != nil {
-			t.Fatalf("%s: %s", test.Addr, err)
-		}
-		if v != test.Version {
+		if v := GetWalletVersion(account); v != test.Version {
 			t.Fatalf("%s: expected: %d, got: %d", test.Addr.String(), test.Version, v)
 		}
 	}
