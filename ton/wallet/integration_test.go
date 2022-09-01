@@ -33,7 +33,52 @@ var api = func() *ton.APIClient {
 
 var _mainnetSeed = "burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog"
 
-func Test_WalletTransfer(t *testing.T) {
+func TestGetWalletVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var testCases = []struct {
+		Addr    *address.Address
+		Version Version
+	}{
+		{
+			Addr:    address.MustParseAddr("EQCetCJb1W-oAqQtiiWuAa1JibQ0LHnFytgJWtTvX5La_ZON"),
+			Version: V3,
+		}, {
+			Addr:    address.MustParseAddr("EQBfAN7LfaUYgXZNw5Wc7GBgkEX2yhuJ5ka95J1JJwXXf4a8"),
+			Version: V3,
+		}, {
+			Addr:    address.MustParseAddr("EQA5Fa4g4JfeQoA41N6mJx0MvH75i30dV1CXKoOijFa-XnmZ"),
+			Version: V4R2,
+		}, {
+			Addr:    address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8"),
+			Version: V4R1,
+		}, {
+			Addr:    address.MustParseAddr("EQAkbIA32zna94YX1Oii371zF-CHOPHB8DLIJa1QBcdNNGmq"),
+			Version: V4R2,
+		}, {
+			Addr:    address.MustParseAddr("EQBREtZ3r9bEuFSCWYtqx5KbJBDRPdSSCG3wzJvQDXcvXagl"),
+			Version: Unknown,
+		},
+	}
+
+	master, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range testCases {
+		account, err := api.GetAccount(ctx, master, test.Addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v := GetWalletVersion(account); v != test.Version {
+			t.Fatalf("%s: expected: %d, got: %d", test.Addr.String(), test.Version, v)
+		}
+	}
+}
+
+func TestWallet_Transfer(t *testing.T) {
 	seed := strings.Split(_mainnetSeed, " ")
 
 	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
@@ -77,7 +122,7 @@ func Test_WalletTransfer(t *testing.T) {
 	}
 }
 
-func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
+func TestWallet_FindTransactionByInMsgHash(t *testing.T) {
 	seed := strings.Split(_mainnetSeed, " ")
 
 	// init wallet
