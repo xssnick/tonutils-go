@@ -33,9 +33,13 @@ const (
 )
 
 var (
-	walletVersions = []Version{V3, V4R2, HighloadV2R2, V4R1, V1R1, V1R2, V1R3, V2R1, V2R2, V3R1, Lockup}
-	walletCodeHex  = []string{
-		_V3CodeHex, _V4R2CodeHex, _HighloadV2R2CodeHex, _V4R1CodeHex, _V1R1CodeHex, _V1R2CodeHex, _V1R3CodeHex, _V2R1CodeHex, _V2R2CodeHex, _V3R1CodeHex, _LockupCodeHex,
+	walletCodeHex = map[Version]string{
+		V1R1: _V1R1CodeHex, V1R2: _V1R2CodeHex, V1R3: _V1R3CodeHex,
+		V2R1: _V2R1CodeHex, V2R2: _V2R2CodeHex,
+		V3: _V3CodeHex, V3R1: _V3R1CodeHex,
+		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
+		HighloadV2R2: _HighloadV2R2CodeHex,
+		Lockup:       _LockupCodeHex,
 	}
 	walletCodeBOC = map[Version][]byte{}
 	walletCode    = map[Version]*cell.Cell{}
@@ -44,12 +48,12 @@ var (
 func init() {
 	var err error
 
-	for i, v := range walletVersions {
-		walletCodeBOC[v], err = hex.DecodeString(walletCodeHex[i])
+	for ver, codeHex := range walletCodeHex {
+		walletCodeBOC[ver], err = hex.DecodeString(codeHex)
 		if err != nil {
 			panic(err)
 		}
-		walletCode[v], err = cell.FromBOC(walletCodeBOC[v])
+		walletCode[ver], err = cell.FromBOC(walletCodeBOC[ver])
 		if err != nil {
 			panic(err)
 		}

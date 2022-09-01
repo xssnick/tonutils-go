@@ -44,7 +44,7 @@ func GetWalletVersion(ctx context.Context, api TonAPI, addr *address.Address) (V
 		return 0, errors.New("account is not active")
 	}
 
-	for _, v := range walletVersions {
+	for v := range walletCodeHex {
 		code, ok := walletCode[v]
 		if !ok {
 			continue
