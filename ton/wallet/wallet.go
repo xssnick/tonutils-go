@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -30,6 +31,30 @@ const (
 	HighloadV2R2 Version = 122
 	Lockup       Version = 200
 )
+
+var (
+	walletVersions = []Version{V3, V4R2, HighloadV2R2, V4R1, V1R1, V1R2, V1R3, V2R1, V2R2, V3R1, Lockup}
+	walletCodeHex  = []string{
+		_V3CodeHex, _V4R2CodeHex, _HighloadV2R2CodeHex, _V4R1CodeHex, _V1R1CodeHex, _V1R2CodeHex, _V1R3CodeHex, _V2R1CodeHex, _V2R2CodeHex, _V3R1CodeHex, _LockupCodeHex,
+	}
+	walletCodeBOC = map[Version][]byte{}
+	walletCode    = map[Version]*cell.Cell{}
+)
+
+func init() {
+	var err error
+
+	for i, v := range walletVersions {
+		walletCodeBOC[v], err = hex.DecodeString(walletCodeHex[i])
+		if err != nil {
+			panic(err)
+		}
+		walletCode[v], err = cell.FromBOC(walletCodeBOC[v])
+		if err != nil {
+			panic(err)
+		}
+	}
+}
 
 // defining some funcs this way to mock for tests
 var randUint32 = rand.Uint32
@@ -66,50 +91,6 @@ type Wallet struct {
 
 	// Stores a pointer to implementation of the version related functionality
 	spec any
-}
-
-func GetWalletVersion(ctx context.Context, api TonAPI, addr *address.Address) (Version, error) {
-	master, err := api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	account, err := api.GetAccount(ctx, master, addr)
-	if err != nil {
-		return 0, err
-	}
-	if !account.IsActive || account.State.Status != tlb.AccountStatusActive {
-		return 0, errors.New("account is not active")
-	}
-
-	boc := account.Code.ToBOC()
-
-	switch {
-	case bytes.Equal(boc, _V3CodeBOC):
-		return V3, nil
-	case bytes.Equal(boc, _V4R1CodeBOC):
-		return V4R1, nil
-	case bytes.Equal(boc, _V4R2CodeBOC):
-		return V4R2, nil
-	case bytes.Equal(boc, _HighloadV2R2CodeBOC):
-		return HighloadV2R2, nil
-	case bytes.Equal(boc, _V1R1CodeBOC):
-		return V1R1, nil
-	case bytes.Equal(boc, _V1R2CodeBOC):
-		return V1R2, nil
-	case bytes.Equal(boc, _V1R3CodeBOC):
-		return V1R3, nil
-	case bytes.Equal(boc, _V2R1CodeBOC):
-		return V2R1, nil
-	case bytes.Equal(boc, _V2R2CodeBOC):
-		return V2R2, nil
-	case bytes.Equal(boc, _V3R1CodeBOC):
-		return V3R1, nil
-	case bytes.Equal(boc, _LockupCodeBOC):
-		return Lockup, nil
-	default:
-		return 0, ErrUnsupportedWalletVersion
-	}
 }
 
 func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Wallet, error) {

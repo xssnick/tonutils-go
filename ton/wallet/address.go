@@ -1,7 +1,10 @@
 package wallet
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -27,10 +30,37 @@ func AddressFromPubKey(key ed25519.PublicKey, ver Version, subwallet uint32) (*a
 	return addr, nil
 }
 
-func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb.StateInit, error) {
-	code, err := getCode(ver)
+func GetWalletVersion(ctx context.Context, api TonAPI, addr *address.Address) (Version, error) {
+	master, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		return nil, err
+		return 0, err
+	}
+
+	account, err := api.GetAccount(ctx, master, addr)
+	if err != nil {
+		return 0, err
+	}
+	if !account.IsActive || account.State.Status != tlb.AccountStatusActive {
+		return 0, errors.New("account is not active")
+	}
+
+	for _, v := range walletVersions {
+		code, ok := walletCode[v]
+		if !ok {
+			continue
+		}
+		if bytes.Equal(account.Code.Hash(), code.Hash()) {
+			return v, nil
+		}
+	}
+
+	return 0, ErrUnsupportedWalletVersion
+}
+
+func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb.StateInit, error) {
+	code, ok := walletCode[ver]
+	if !ok {
+		return nil, fmt.Errorf("cannot get code: %w", ErrUnsupportedWalletVersion)
 	}
 
 	var data *cell.Cell
@@ -63,26 +93,4 @@ func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb
 		Data: data,
 		Code: code,
 	}, nil
-}
-
-func getCode(ver Version) (*cell.Cell, error) {
-	var boc []byte
-
-	switch ver {
-	case V3:
-		boc = _V3CodeBOC
-	case V4R2:
-		boc = _V4R2CodeBOC
-	case HighloadV2R2:
-		boc = _HighloadV2R2CodeBOC
-	default:
-		return nil, fmt.Errorf("cannot get code: %w", ErrUnsupportedWalletVersion)
-	}
-
-	code, err := cell.FromBOC(boc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert code boc to cell: %w", err)
-	}
-
-	return code, nil
 }
