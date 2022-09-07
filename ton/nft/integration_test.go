@@ -31,6 +31,81 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
+func TestCollectionClient_ParseRawData(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	c := NewCollectionClient(api, address.MustParseAddr("EQDjHv8O22eveLRmrgyZhy32Bfb3Db5LBXIi0jDy7Z95qcwJ"))
+
+	data, err := c.ParseAccountData(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := ContentFromCell(data.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	params := new(CollectionRoyaltyParams)
+	if err := tlb.LoadFromCell(params, data.RoyaltyParams.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("raw data: %+v", data)
+	t.Logf("content: %+v", content)
+	t.Logf("params: %+v", params)
+}
+
+func getTransactionOnce(ctx context.Context, addr *address.Address, lt uint64, txHash []byte) (tx *tlb.Transaction, err error) {
+	transactions, err := api.ListTransactions(ctx, addr, 1, lt, txHash)
+	if err != nil {
+		return nil, err
+	}
+	if len(transactions) == 0 {
+		return nil, fmt.Errorf("no transactions")
+	}
+	return transactions[0], nil
+}
+
+func getTransaction(ctx context.Context, addr *address.Address, lt uint64, txHash []byte) (tx *tlb.Transaction, err error) {
+	for i := 0; i < 10; i++ {
+		tx, err = getTransactionOnce(ctx, addr, lt, txHash)
+		if err != nil {
+			continue
+		}
+		return
+	}
+	return nil, err
+}
+
+func TestParseItemMintPayload(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	collection := address.MustParseAddr("EQDjHv8O22eveLRmrgyZhy32Bfb3Db5LBXIi0jDy7Z95qcwJ")
+
+	hash, err := hex.DecodeString("A8DB3F09A7274FD11F8A7DF5AE6171F19E43AB1E205BC374327A27F9223626A8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := getTransaction(ctx, collection, 30796329000003, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := ParseItemMintPayload(tx.IO.In.Msg.Payload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("payload: %+v", payload)
+
+	owner, editor, content, err := ParseItemMintPayloadContent(payload.Content)
+	t.Logf("content: %+v", content)
+	t.Logf("owner: %s", owner)
+	t.Logf("editor: %s", editor)
+}
+
 func Test_NftMintTransfer(t *testing.T) {
 	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
