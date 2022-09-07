@@ -3,6 +3,7 @@ package nft
 import (
 	"crypto/sha256"
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -29,6 +30,10 @@ type ContentSemichain struct {
 
 func ContentFromCell(c *cell.Cell) (ContentAny, error) {
 	s := c.BeginParse()
+	return ContentFromSlice(s)
+}
+
+func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
 	if s.BitsLeft() < 8 {
 		return nil, nil
 	}
