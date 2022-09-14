@@ -12,17 +12,8 @@ import (
 )
 
 type TonApi interface {
-	GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
 	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
 	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error)
-}
-
-type CollectionRawData struct {
-	OwnerAddress  *address.Address `tlb:"addr"`
-	NextItemIndex *big.Int         `tlb:"## 64"`
-	Content       *cell.Cell       `tlb:"^"`
-	ItemCode      *cell.Cell       `tlb:"^"`
-	RoyaltyParams *cell.Cell       `tlb:"^"`
 }
 
 type ItemMintPayload struct {
@@ -61,32 +52,6 @@ func NewCollectionClient(api TonApi, collectionAddr *address.Address) *Collectio
 		addr: collectionAddr,
 		api:  api,
 	}
-}
-
-func (c *CollectionClient) ParseAccountData(ctx context.Context) (*CollectionRawData, error) {
-	b, err := c.api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
-	}
-	return c.ParseAccountDataAtBlock(ctx, b)
-}
-
-func (c *CollectionClient) ParseAccountDataAtBlock(ctx context.Context, block *tlb.BlockInfo) (*CollectionRawData, error) {
-	raw := new(CollectionRawData)
-
-	a, err := c.api.GetAccount(ctx, block, c.addr)
-	if err != nil {
-		return nil, err
-	}
-	if !a.IsActive || a.State.Status != tlb.AccountStatusActive {
-		return nil, fmt.Errorf("account is not active")
-	}
-
-	if err := tlb.LoadFromCell(raw, a.Data.BeginParse()); err != nil {
-		return nil, fmt.Errorf("load from cell: %w", err)
-	}
-
-	return raw, nil
 }
 
 func (c *CollectionClient) GetNFTAddressByIndex(ctx context.Context, index *big.Int) (*address.Address, error) {
@@ -276,7 +241,7 @@ func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, edito
 	return body, nil
 }
 
-func ParseItemMintPayload(payload *cell.Cell) (*ItemMintPayload, error) {
+func ParseMintPayload(payload *cell.Cell) (*ItemMintPayload, error) {
 	ret := new(ItemMintPayload)
 
 	if err := tlb.LoadFromCell(ret, payload.BeginParse()); err != nil {
@@ -286,7 +251,7 @@ func ParseItemMintPayload(payload *cell.Cell) (*ItemMintPayload, error) {
 	return ret, nil
 }
 
-func ParseItemMintPayloadContent(payloadContent *cell.Cell) (owner, editor *address.Address, content ContentAny, err error) {
+func ParseMintPayloadContent(payloadContent *cell.Cell) (owner, editor *address.Address, content ContentAny, err error) {
 	s := payloadContent.BeginParse()
 
 	owner, err = s.LoadAddr()

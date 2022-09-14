@@ -24,38 +24,13 @@ var api = func() *ton.APIClient {
 	defer cancel()
 
 	err := client.AddConnection(ctx, "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	// err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=") // archive liteserver
 	if err != nil {
 		panic(err)
 	}
 
 	return ton.NewAPIClient(client)
 }()
-
-func TestCollectionClient_ParseRawData(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	c := NewCollectionClient(api, address.MustParseAddr("EQDjHv8O22eveLRmrgyZhy32Bfb3Db5LBXIi0jDy7Z95qcwJ"))
-
-	data, err := c.ParseAccountData(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	content, err := ContentFromCell(data.Content)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	params := new(CollectionRoyaltyParams)
-	if err := tlb.LoadFromCell(params, data.RoyaltyParams.BeginParse()); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Logf("raw data: %+v", data)
-	t.Logf("content: %+v", content)
-	t.Logf("params: %+v", params)
-}
 
 func getTransactionOnce(ctx context.Context, addr *address.Address, lt uint64, txHash []byte) (tx *tlb.Transaction, err error) {
 	transactions, err := api.ListTransactions(ctx, addr, 1, lt, txHash)
@@ -79,7 +54,7 @@ func getTransaction(ctx context.Context, addr *address.Address, lt uint64, txHas
 	return nil, err
 }
 
-func TestParseItemMintPayload(t *testing.T) {
+func TestParseMintPayload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -94,13 +69,13 @@ func TestParseItemMintPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	payload, err := ParseItemMintPayload(tx.IO.In.Msg.Payload())
+	payload, err := ParseMintPayload(tx.IO.In.Msg.Payload())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("payload: %+v", payload)
 
-	owner, editor, content, err := ParseItemMintPayloadContent(payload.Content)
+	owner, editor, content, err := ParseMintPayloadContent(payload.Content)
 	t.Logf("content: %+v", content)
 	t.Logf("owner: %s", owner)
 	t.Logf("editor: %s", editor)
