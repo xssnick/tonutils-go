@@ -34,6 +34,22 @@ const (
 	Unknown      Version = 0
 )
 
+func (v Version) String() string {
+	if v == Unknown {
+		return "unknown"
+	}
+	if v/10 > 0 && v/10 < 10 {
+		return fmt.Sprintf("V%dR%d", v/10, v%10)
+	}
+	if v/100 == 1 {
+		return fmt.Sprintf("highload V%dR%d", v/100/10, v%10)
+	}
+	if v/100 == 2 {
+		return fmt.Sprintf("lockup")
+	}
+	return fmt.Sprintf("%d", v)
+}
+
 var (
 	walletCodeHex = map[Version]string{
 		V1R1: _V1R1CodeHex, V1R2: _V1R2CodeHex, V1R3: _V1R3CodeHex,
