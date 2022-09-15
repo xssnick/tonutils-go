@@ -116,13 +116,18 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 	}, nil
 }
 
-func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, individualNFTContent *cell.Cell) (ContentAny, error) {
+func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, individualNFTContent ContentAny) (ContentAny, error) {
+	con, err := toNftContent(individualNFTContent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
+	}
+
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
 
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_content", index, individualNFTContent)
+	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_content", index, con)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_content method: %w", err)
 	}
@@ -188,17 +193,9 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 }
 
 func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Address, amountForward tlb.Coins, content ContentAny) (_ *cell.Cell, err error) {
-	var con *cell.Cell
-	if off, ok := content.(*ContentOffchain); ok {
-		// https://github.com/ton-blockchain/TIPs/issues/64
-		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
-		// so, we make compatibility
-		con = cell.BeginCell().MustStoreStringSnake(off.URI).EndCell()
-	} else {
-		con, err = content.ContentCell()
-		if err != nil {
-			return nil, err
-		}
+	con, err := toNftContent(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
 	}
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).EndCell()
@@ -217,17 +214,9 @@ func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Addre
 }
 
 func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, editor *address.Address, amountForward tlb.Coins, content ContentAny) (_ *cell.Cell, err error) {
-	var con *cell.Cell
-	if off, ok := content.(*ContentOffchain); ok {
-		// https://github.com/ton-blockchain/TIPs/issues/64
-		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
-		// so, we make compatibility
-		con = cell.BeginCell().MustStoreStringSnake(off.URI).EndCell()
-	} else {
-		con, err = content.ContentCell()
-		if err != nil {
-			return nil, err
-		}
+	con, err := toNftContent(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
 	}
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).MustStoreAddr(editor).EndCell()
@@ -243,4 +232,14 @@ func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, edito
 	}
 
 	return body, nil
+}
+
+func toNftContent(content ContentAny) (*cell.Cell, error) {
+	if off, ok := content.(*ContentOffchain); ok {
+		// https://github.com/ton-blockchain/TIPs/issues/64
+		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
+		// so, we make compatibility
+		return cell.BeginCell().MustStoreStringSnake(off.URI).EndCell(), nil
+	}
+	return content.ContentCell()
 }

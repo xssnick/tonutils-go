@@ -57,7 +57,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("not enough balance", w.Address(), balance.TON())
 	}
 
-	collectionAddr := address.MustParseAddr("EQDjHv8O22eveLRmrgyZhy32Bfb3Db5LBXIi0jDy7Z95qcwJ")
+	collectionAddr := address.MustParseAddr("EQB3I8ovJPNimYtPZCAbrFf9Xob6wQ1flJUsxP-eMaT5zAQl")
 	collection := NewCollectionClient(api, collectionAddr)
 	collectionData, err := collection.GetCollectionData(context.Background())
 	if err != nil {
@@ -107,18 +107,13 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
 
-	contentCell, err := newData.Content.ContentCell()
-	if err != nil {
-		t.Fatal("contentCell err:", err.Error())
-	}
-
-	fullContent, err := collection.GetNFTContent(context.Background(), collectionData.NextItemIndex, contentCell)
+	fullContent, err := collection.GetNFTContent(context.Background(), collectionData.NextItemIndex, newData.Content)
 	if err != nil {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
 
-	if fullContent.(*ContentOffchain).URI != "https://yandex.ru/crigne/"+itemURI {
-		t.Fatal("full content incorrect")
+	if fullContent.(*ContentOffchain).URI != "https://tonutils.com/items/"+itemURI {
+		t.Fatal("full content incorrect", fullContent.(*ContentOffchain).URI)
 	}
 
 	roy, err := collection.RoyaltyParams(context.Background())
