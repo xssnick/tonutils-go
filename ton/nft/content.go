@@ -97,7 +97,11 @@ func getOnchainVal(dict *cell.Dictionary, key string) []byte {
 
 	val := dict.Get(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell())
 	if val != nil {
-		v := val.BeginParse()
+		v, err := val.BeginParse().LoadRef()
+		if err != nil {
+			return nil
+		}
+
 		typ, err := v.LoadUInt(8)
 		if err != nil {
 			return nil
