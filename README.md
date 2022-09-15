@@ -1,4 +1,7 @@
 # tonutils-go
+
+<img align="right" width="425px" src="https://github.com/xssnick/props/blob/master/logoimg.png?raw=true">
+
 [![Based on TON][ton-svg]][ton]
 ![Coverage](https://img.shields.io/badge/Coverage-71.3%25-brightgreen)
 
@@ -7,6 +10,8 @@ Golang library for interacting with TON blockchain.
 This library is native golang implementation of ADNL and lite protocol. It works as connection pool and can be connected to multiple lite servers in the same time, balancing is done on lib side.
 
 It is concurrent safe and can be used from multiple goroutines under high workloads.
+
+------
 
 If you love this library and want to support its development you can donate any amount of coins to this ton address ☺️
 `EQBx6tZZWa2Tbv6BvgcvegoOQxkRrVaBVwBOoW85nbP37_Go`
