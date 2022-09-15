@@ -187,10 +187,18 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 	}, nil
 }
 
-func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
-	con, err := content.ContentCell()
-	if err != nil {
-		return nil, err
+func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Address, amountForward tlb.Coins, content ContentAny) (_ *cell.Cell, err error) {
+	var con *cell.Cell
+	if off, ok := content.(*ContentOffchain); ok {
+		// https://github.com/ton-blockchain/TIPs/issues/64
+		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
+		// so, we make compatibility
+		con = cell.BeginCell().MustStoreStringSnake(off.URI).EndCell()
+	} else {
+		con, err = content.ContentCell()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).EndCell()
@@ -208,10 +216,18 @@ func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Addre
 	return body, nil
 }
 
-func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, editor *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
-	con, err := content.ContentCell()
-	if err != nil {
-		return nil, err
+func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, editor *address.Address, amountForward tlb.Coins, content ContentAny) (_ *cell.Cell, err error) {
+	var con *cell.Cell
+	if off, ok := content.(*ContentOffchain); ok {
+		// https://github.com/ton-blockchain/TIPs/issues/64
+		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
+		// so, we make compatibility
+		con = cell.BeginCell().MustStoreStringSnake(off.URI).EndCell()
+	} else {
+		con, err = content.ContentCell()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).MustStoreAddr(editor).EndCell()

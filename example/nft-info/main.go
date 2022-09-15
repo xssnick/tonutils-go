@@ -22,7 +22,7 @@ func main() {
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
 
-	nftAddr := address.MustParseAddr("EQCAY8CLtjqrZVAn9pVpaXyKCPsyg5nkDkAlq76IWzsX67xs")
+	nftAddr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
 	item := nft.NewItemClient(api, nftAddr)
 
 	nftData, err := item.GetNFTData(context.Background())

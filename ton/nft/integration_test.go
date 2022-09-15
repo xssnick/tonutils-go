@@ -146,13 +146,15 @@ func Test_NftMintTransfer(t *testing.T) {
 func deployCollection(w *wallet.Wallet) {
 	roy := cell.BeginCell().MustStoreUInt(0, 16).MustStoreUInt(0, 16).MustStoreAddr(w.Address()).EndCell()
 
-	main := ContentOffchain{URI: "https://yandex.ru"}
+	main := ContentOffchain{URI: "https://tonutils.com/main.json"}
 	mainCell, _ := main.ContentCell()
 
-	common := ContentOffchain{URI: "https://yandex.ru/crigne/"}
-	commonCell, _ := common.ContentCell()
+	// https://github.com/ton-blockchain/TIPs/issues/64
+	// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
+	// so, we make compatibility
+	commonContentCell := cell.BeginCell().MustStoreStringSnake("https://tonutils.com/items/").EndCell()
 
-	cc := cell.BeginCell().MustStoreRef(mainCell).MustStoreRef(commonCell).EndCell()
+	cc := cell.BeginCell().MustStoreRef(mainCell).MustStoreRef(commonContentCell).EndCell()
 	dd := cell.BeginCell().MustStoreAddr(w.Address()).MustStoreUInt(0, 64).MustStoreRef(cc).MustStoreRef(getItemCode()).MustStoreRef(roy).EndCell()
 
 	fff, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.05"), cell.BeginCell().EndCell(), getContractCode(),
