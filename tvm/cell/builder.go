@@ -2,9 +2,8 @@ package cell
 
 import (
 	"encoding/binary"
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/address"
+	"math/big"
 )
 
 type Builder struct {
@@ -437,43 +436,49 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 		return nil
 	}
 
-	oneMore := uint(0)
-	if sz%8 > 0 {
-		oneMore = 1
-	}
-
-	if uint(len(bytes)) < sz/8+oneMore {
-		return ErrSmallSlice
-	}
-
 	if b.bitsSz+sz >= 1024 {
 		return ErrNotFit1023
 	}
 
-	leftSz := sz
-	unusedBits := 8 - (b.bitsSz % 8)
+	if uint(len(bytes)*8) < sz {
+		return ErrSmallSlice
+	}
 
-	offset := 0
-	for leftSz > 0 {
-		bits := uint(8)
-		if leftSz < 8 {
-			bits = leftSz
-		}
-		leftSz -= bits
+	dataOffset := b.bitsSz / 8
+	dataByteOffset := b.bitsSz % 8
 
-		// if previous byte was not filled, we need to move bits to fill it
-		if unusedBits != 8 {
-			b.data[len(b.data)-1] += bytes[offset] >> (8 - unusedBits)
-			if bits > unusedBits {
-				b.data = append(b.data, bytes[offset]<<unusedBits)
+	bytesNeeded := sz / 8
+	if sz%8 > 0 {
+		bytesNeeded++
+	}
+
+	b.data = append(b.data, bytes[:bytesNeeded]...)
+
+	szLastBits := sz % 8
+	if szLastBits == 0 {
+		szLastBits = 8
+	}
+	lastUsedBits := dataByteOffset + szLastBits
+
+	if dataByteOffset != 0 {
+		// shift slice left to fill unused bits of existing byte
+		b.data[dataOffset] |= b.data[dataOffset+1] >> dataByteOffset
+		for i := dataOffset + 1; i < uint(len(b.data)); i++ {
+			if i > dataOffset+1 {
+				b.data[i-1] |= b.data[i] >> dataByteOffset
 			}
-			offset++
-			continue
+			b.data[i] <<= 8 - dataByteOffset
 		}
 
-		// clear unused part of byte if needed
-		b.data = append(b.data, bytes[offset]&(0xFF<<(8-bits)))
-		offset++
+		// cut empty last byte if needed
+		if lastUsedBits <= 8 {
+			b.data = b.data[:len(b.data)-1]
+		}
+	}
+
+	// clear last unused bits
+	if lastUsedBits%8 != 0 {
+		b.data[len(b.data)-1] &= uint8(0xFF) << (8 - (lastUsedBits % 8))
 	}
 
 	b.bitsSz += sz
