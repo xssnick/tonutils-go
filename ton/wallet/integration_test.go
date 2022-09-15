@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ var api = func() *ton.APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := client.AddConnection(ctx, "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -31,10 +32,10 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
-var _mainnetSeed = "burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog"
+var _seed = os.Getenv("WALLET_SEED")
 
 func Test_WalletTransfer(t *testing.T) {
-	seed := strings.Split(_mainnetSeed, " ")
+	seed := strings.Split(_seed, " ")
 
 	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
 		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
@@ -62,7 +63,7 @@ func Test_WalletTransfer(t *testing.T) {
 			}
 
 			comment := randString(150)
-			addr := address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8")
+			addr := address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE")
 			if balance.NanoTON().Uint64() >= 3000000 {
 				err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
 				if err != nil {
@@ -78,7 +79,7 @@ func Test_WalletTransfer(t *testing.T) {
 }
 
 func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
-	seed := strings.Split(_mainnetSeed, " ")
+	seed := strings.Split(_seed, " ")
 
 	// init wallet
 	w, err := FromSeed(api, seed, HighloadV2R2)
@@ -96,7 +97,7 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 
 	// prepare simple transfer
 	msg := SimpleMessage(
-		address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8"),
+		address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE"),
 		tlb.MustFromTON("0.0031337"),
 		body,
 	)
@@ -114,7 +115,7 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 }
 
 func TestWallet_DeployContract(t *testing.T) {
-	seed := strings.Split(_mainnetSeed, " ")
+	seed := strings.Split(_seed, " ")
 
 	// init wallet
 	w, err := FromSeed(api, seed, HighloadV2R2)
