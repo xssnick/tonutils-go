@@ -20,7 +20,7 @@ var api = func() *APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := client.AddConnection(ctx, "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -98,7 +98,7 @@ func Test_RunMethod(t *testing.T) {
 	}
 }
 
-func Test_ExternalMessage(t *testing.T) {
+func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net - > than change config to test-net.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -199,8 +199,11 @@ func Test_Account(t *testing.T) {
 }
 
 func Test_AccountHasMethod(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	connectionPool := liteclient.NewConnectionPool()
+
+	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	ctx := connectionPool.StickyContext(_ctx)
 
 	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
