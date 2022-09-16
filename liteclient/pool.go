@@ -62,6 +62,10 @@ func NewConnectionPool() *ConnectionPool {
 //
 // In case if sticky node goes down, default balancer will be used as fallback
 func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
+	if ctx.Value(_StickyCtxKey) != nil {
+		return ctx
+	}
+
 	var id uint32
 
 	c.nodesMx.RLock()

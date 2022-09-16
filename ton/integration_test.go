@@ -321,3 +321,25 @@ func Test_BlockScan(t *testing.T) {
 		}
 	}
 }
+
+func TestAPIClient_WaitNextBlock(t *testing.T) {
+	c, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal("get curr block err:", err.Error())
+	}
+
+	n, err := api.WaitNextMasterBlock(context.Background(), c)
+	if err != nil {
+		t.Fatal("wait block err:", err.Error())
+	}
+
+	if n.SeqNo != c.SeqNo+1 {
+		t.Fatal("seqno incorrect")
+	}
+
+	c.Workchain = 7
+	n, err = api.WaitNextMasterBlock(context.Background(), c)
+	if err == nil {
+		t.Fatal("it works with not master")
+	}
+}

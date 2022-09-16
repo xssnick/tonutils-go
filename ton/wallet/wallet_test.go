@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"strings"
 	"testing"
@@ -25,6 +26,16 @@ type MockAPI struct {
 	listTransactions    func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 
 	extMsgSent *tlb.ExternalMessage
+}
+
+func (m MockAPI) Client() ton.LiteClient {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m MockAPI) WaitNextMasterBlock(ctx context.Context, master *tlb.BlockInfo) (*tlb.BlockInfo, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (m MockAPI) CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
