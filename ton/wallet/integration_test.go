@@ -151,6 +151,51 @@ func TestWallet_DeployContract(t *testing.T) {
 	}
 }
 
+func TestGetWalletVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var testCases = []struct {
+		Addr    *address.Address
+		Version Version
+	}{
+		{
+			Addr:    address.MustParseAddr("EQCetCJb1W-oAqQtiiWuAa1JibQ0LHnFytgJWtTvX5La_ZON"),
+			Version: V3,
+		}, {
+			Addr:    address.MustParseAddr("EQBfAN7LfaUYgXZNw5Wc7GBgkEX2yhuJ5ka95J1JJwXXf4a8"),
+			Version: V3,
+		}, {
+			Addr:    address.MustParseAddr("EQA5Fa4g4JfeQoA41N6mJx0MvH75i30dV1CXKoOijFa-XnmZ"),
+			Version: V4R2,
+		}, {
+			Addr:    address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8"),
+			Version: V4R1,
+		}, {
+			Addr:    address.MustParseAddr("EQAkbIA32zna94YX1Oii371zF-CHOPHB8DLIJa1QBcdNNGmq"),
+			Version: V4R2,
+		}, {
+			Addr:    address.MustParseAddr("EQBREtZ3r9bEuFSCWYtqx5KbJBDRPdSSCG3wzJvQDXcvXagl"),
+			Version: Unknown,
+		},
+	}
+
+	master, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range testCases {
+		account, err := api.GetAccount(ctx, master, test.Addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v := GetWalletVersion(account); v != test.Version {
+			t.Fatalf("%s: expected: %d, got: %d", test.Addr.String(), test.Version, v)
+		}
+	}
+}
+
 func randString(n int) string {
 	var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" +
 		"абвгдежзиклмнопрстиквфыйцэюяАБВГДЕЖЗИЙКЛМНОПРСТИЮЯЗФЫУю!№%:,.!;(!)_+" +

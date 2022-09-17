@@ -280,7 +280,7 @@ func TestWallet_Send(t *testing.T) {
 			if err != nil {
 				switch flow {
 				case UnsupportedVer:
-					if strings.EqualFold(err.Error(), "send is not yet supported for wallet with this version") {
+					if errors.Is(err, ErrUnsupportedWalletVersion) {
 						continue
 					}
 				case SeqnoNotInt:
