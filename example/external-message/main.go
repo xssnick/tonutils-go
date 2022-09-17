@@ -67,13 +67,13 @@ func main() {
 		return
 	}
 
-	seqno := res[0].(int64)
-	total := res[1].(int64)
+	seqno := res.MustInt(0)
+	total := res.MustInt(1)
 
 	log.Printf("Current seqno = %d and total = %d", seqno, total)
 
 	data := cell.BeginCell().
-		MustStoreInt(seqno, 64).
+		MustStoreBigInt(seqno, 64).
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 

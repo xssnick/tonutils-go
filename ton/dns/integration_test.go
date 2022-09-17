@@ -24,14 +24,18 @@ var api = func() *ton.APIClient {
 
 func TestDNSClient_Resolve(t *testing.T) {
 	cli := NewDNSClient(api, RootContractAddr(api))
-	d, err := cli.Resolve(context.Background(), "alice.ton")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	d, err := cli.Resolve(ctx, "alice.ton")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	wal := d.GetWalletRecord()
 
-	iData, err := d.GetNFTData(context.Background())
+	iData, err := d.GetNFTData(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

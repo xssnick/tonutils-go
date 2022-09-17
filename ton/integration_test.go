@@ -20,7 +20,7 @@ var api = func() *APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := client.AddConnection(ctx, "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -88,19 +88,22 @@ func Test_RunMethod(t *testing.T) {
 		return
 	}
 
-	if !bytes.Equal(res[0].(*cell.Slice).MustToCell().Hash(), c1.MustToCell().Hash()) {
+	fmt.Println(res.result)
+	if !bytes.Equal(res.MustSlice(0).MustToCell().Hash(), c1.MustToCell().Hash()) {
 		t.Fatal("1st arg not eq return 1st value")
 	}
 
 	cmp2 := cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(c2).EndCell()
-	if !bytes.Equal(res[1].(*cell.Cell).Hash(), cmp2.Hash()) {
+	if !bytes.Equal(res.MustCell(1).Hash(), cmp2.Hash()) {
 		t.Fatal("1st arg not eq return 1st value")
 	}
 }
 
-func Test_ExternalMessage(t *testing.T) {
+func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net - > than change config to test-net.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+
+	ctx = api.client.StickyContext(ctx)
 
 	b, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
@@ -114,11 +117,11 @@ func Test_ExternalMessage(t *testing.T) {
 		return
 	}
 
-	seqno := res[0].(int64)
-	total := res[1].(int64)
+	seqno := res.MustInt(0)
+	total := res.MustInt(1)
 
 	data := cell.BeginCell().
-		MustStoreInt(seqno, 64).
+		MustStoreBigInt(seqno, 64).
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 
@@ -199,8 +202,11 @@ func Test_Account(t *testing.T) {
 }
 
 func Test_AccountHasMethod(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	connectionPool := liteclient.NewConnectionPool()
+
+	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	ctx := connectionPool.StickyContext(_ctx)
 
 	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
@@ -319,5 +325,27 @@ func Test_BlockScan(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+func TestAPIClient_WaitNextBlock(t *testing.T) {
+	c, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal("get curr block err:", err.Error())
+	}
+
+	n, err := api.WaitNextMasterBlock(context.Background(), c)
+	if err != nil {
+		t.Fatal("wait block err:", err.Error())
+	}
+
+	if n.SeqNo != c.SeqNo+1 {
+		t.Fatal("seqno incorrect")
+	}
+
+	c.Workchain = 7
+	n, err = api.WaitNextMasterBlock(context.Background(), c)
+	if err == nil {
+		t.Fatal("it works with not master")
 	}
 }

@@ -13,24 +13,24 @@ func TestNewSeedWithPassword(t *testing.T) {
 
 	_, err = FromSeedWithPassword(nil, seed, "1234", V3)
 	if err == nil {
-		t.Fatal("should be invalid")
+		t.Fatal("should be invalid 1", seed)
 	}
 
 	_, err = FromSeedWithPassword(nil, seed, "", V3)
 	if err == nil {
-		t.Fatal("should be invalid")
+		t.Fatal("should be invalid 2", seed)
 	}
 
 	_, err = FromSeedWithPassword(nil, []string{"birth", "core"}, "", V3)
 	if err == nil {
-		t.Fatal("should be invalid")
+		t.Fatal("should be invalid 3")
 	}
 
 	seed = NewSeed()
 	seed[7] = "wat"
 	_, err = FromSeedWithPassword(nil, seed, "", V3)
 	if err == nil {
-		t.Fatal("should be invalid")
+		t.Fatal("should be invalid 4", seed)
 	}
 
 	seedNoPass := NewSeed()
@@ -42,6 +42,6 @@ func TestNewSeedWithPassword(t *testing.T) {
 
 	_, err = FromSeedWithPassword(nil, seedNoPass, "123", V3)
 	if err == nil {
-		t.Fatal("should be invalid")
+		t.Fatal("should be invalid 5", seedNoPass)
 	}
 }
