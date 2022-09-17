@@ -12,8 +12,8 @@ import (
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	// connect to mainnet lite server
-	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	// connect to mainnet lite servers
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
@@ -28,11 +28,15 @@ func main() {
 		return
 	}
 
+	// bound all requests to single lite server for consistency,
+	// if it will go down, another lite server will be used
+	ctx := api.Client().StickyContext(context.Background())
+
 	for {
 		log.Printf("scanning %d master block...\n", master.SeqNo)
 
 		// getting information about other work-chains and shards of master block
-		shards, err := api.GetBlockShardsInfo(context.Background(), master)
+		shards, err := api.GetBlockShardsInfo(ctx, master)
 		if err != nil {
 			log.Fatalln("get shards err:", err.Error())
 			return
@@ -50,7 +54,7 @@ func main() {
 
 			// load all transactions in batches with 100 transactions in each while exists
 			for more {
-				fetchedIDs, more, err = api.GetBlockTransactions(context.Background(), shard, 100, after)
+				fetchedIDs, more, err = api.GetBlockTransactions(ctx, shard, 100, after)
 				if err != nil {
 					log.Fatalln("get tx ids err:", err.Error())
 					return
@@ -63,7 +67,7 @@ func main() {
 
 				for _, id := range fetchedIDs {
 					// get full transaction by id
-					tx, err := api.GetTransaction(context.Background(), shard, address.NewAddress(0, 0, id.AccountID), id.LT)
+					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, 0, id.AccountID), id.LT)
 					if err != nil {
 						log.Fatalln("get tx data err:", err.Error())
 						return
@@ -81,7 +85,7 @@ func main() {
 			log.Printf("no transactions in %d block\n", master.SeqNo)
 		}
 
-		master, err = api.WaitNextMasterBlock(context.Background(), master)
+		master, err = api.WaitNextMasterBlock(ctx, master)
 		if err != nil {
 			log.Fatalln("wait next master err:", err.Error())
 		}

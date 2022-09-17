@@ -76,6 +76,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 	cli := NewJettonMasterClient(api, address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"))
 
 	w := getWallet(api)
+	log.Println("test wallet:", w.Address().String())
 
 	tokenWallet, err := cli.GetJettonWallet(context.Background(), w.Address())
 	if err != nil {

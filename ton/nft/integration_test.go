@@ -60,7 +60,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("not enough balance", w.Address(), balance.TON())
 	}
 
-	collectionAddr := address.MustParseAddr("EQBlSOUK_X9s4h5hdo4adrYJlSKxYX4MHsHEjUCp8qTV098Z") // address = deployCollection(w) w.seed = (fiction ... rather)
+	collectionAddr := address.MustParseAddr("EQBTObWUuWTb5ECnLI4x6a3szzstmMDOcc5Kdo-CpbUY9Y5K") // address = deployCollection(w) w.seed = (fiction ... rather)
 	collection := NewCollectionClient(api, collectionAddr)
 	collectionData, err := collection.GetCollectionData(context.Background())
 	if err != nil {

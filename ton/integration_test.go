@@ -103,6 +103,8 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
+	ctx = api.client.StickyContext(ctx)
+
 	b, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
 		t.Fatal("get block err:", err.Error())

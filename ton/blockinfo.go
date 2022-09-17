@@ -312,8 +312,6 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInf
 
 // WaitNextMasterBlock - wait for the next block of master chain
 func (c *APIClient) waitMasterBlock(ctx context.Context, seqno uint32) error {
-	ctx = c.client.StickyContext(ctx)
-
 	var timeout = 10 * time.Second
 
 	deadline, ok := ctx.Deadline()
@@ -340,6 +338,8 @@ func (c *APIClient) WaitNextMasterBlock(ctx context.Context, master *tlb.BlockIn
 	if master.Workchain != -1 {
 		return nil, errors.New("not a master block passed")
 	}
+
+	ctx = c.client.StickyContext(ctx)
 
 	err := c.waitMasterBlock(ctx, master.SeqNo+1)
 	if err != nil {
