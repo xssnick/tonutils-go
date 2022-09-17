@@ -88,12 +88,13 @@ func Test_RunMethod(t *testing.T) {
 		return
 	}
 
-	if !bytes.Equal(res[0].(*cell.Slice).MustToCell().Hash(), c1.MustToCell().Hash()) {
+	fmt.Println(res.result)
+	if !bytes.Equal(res.MustSlice(0).MustToCell().Hash(), c1.MustToCell().Hash()) {
 		t.Fatal("1st arg not eq return 1st value")
 	}
 
 	cmp2 := cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(c2).EndCell()
-	if !bytes.Equal(res[1].(*cell.Cell).Hash(), cmp2.Hash()) {
+	if !bytes.Equal(res.MustCell(1).Hash(), cmp2.Hash()) {
 		t.Fatal("1st arg not eq return 1st value")
 	}
 }
@@ -114,11 +115,11 @@ func Test_ExternalMessage(t *testing.T) {
 		return
 	}
 
-	seqno := res[0].(int64)
-	total := res[1].(int64)
+	seqno := res.MustInt(0)
+	total := res.MustInt(1)
 
 	data := cell.BeginCell().
-		MustStoreInt(seqno, 64).
+		MustStoreBigInt(seqno, 64).
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 

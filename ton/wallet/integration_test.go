@@ -143,8 +143,8 @@ func TestWallet_DeployContract(t *testing.T) {
 		t.Fatal("run err:", err)
 	}
 
-	if res[0].(int64) != 5 || res[1].(int64) != 50 {
-		t.Fatal("result err:", res[0].(int64), res[1].(int64))
+	if res.MustInt(0).Uint64() != 5 || res.MustInt(1).Uint64() != 50 {
+		t.Fatal("result err:", res.MustInt(0).Uint64(), res.MustInt(1).Uint64())
 	}
 }
 

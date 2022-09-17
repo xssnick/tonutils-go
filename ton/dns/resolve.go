@@ -20,7 +20,7 @@ const _CategoryADNLSite = 0xad01
 
 type TonApi interface {
 	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error)
+	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
 
 type Domain struct {
@@ -74,22 +74,22 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 		return nil, fmt.Errorf("failed to run dnsresolve method: %w", err)
 	}
 
-	bits, ok := res[0].(int64)
-	if !ok {
-		return nil, fmt.Errorf("bits is not int64")
+	bits, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("bits get err: %w", err)
 	}
 
-	if bits%8 != 0 {
+	if bits.Uint64()%8 != 0 {
 		return nil, fmt.Errorf("resolved bits is not mod 8")
 	}
-	bytesResolved := int(bits / 8)
+	bytesResolved := int(bits.Uint64() / 8)
 
-	data, ok := res[1].(*cell.Cell)
-	if !ok {
-		if res[1] == nil {
+	data, err := res.Cell(1)
+	if err != nil {
+		if yes, _ := res.IsNil(1); yes {
 			return nil, ErrNoSuchRecord
 		}
-		return nil, fmt.Errorf("data is not cell")
+		return nil, fmt.Errorf("data get err: %w", err)
 	}
 
 	s := data.BeginParse()

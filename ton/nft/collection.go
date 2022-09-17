@@ -3,6 +3,7 @@ package nft
 import (
 	"context"
 	"fmt"
+	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"math/rand"
 
@@ -13,7 +14,7 @@ import (
 
 type TonApi interface {
 	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error)
+	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
 
 type ItemMintPayload struct {
@@ -65,9 +66,9 @@ func (c *CollectionClient) GetNFTAddressByIndex(ctx context.Context, index *big.
 		return nil, fmt.Errorf("failed to run get_nft_address_by_index method: %w", err)
 	}
 
-	x, ok := res[0].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("result is not slice")
+	x, err := res.Slice(0)
+	if err != nil {
+		return nil, fmt.Errorf("result get err: %w", err)
 	}
 
 	addr, err := x.LoadAddr()
@@ -89,19 +90,19 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 		return nil, fmt.Errorf("failed to run royalty_params method: %w", err)
 	}
 
-	factor, ok := res[0].(int64)
-	if !ok {
-		return nil, fmt.Errorf("factor is not int64")
+	factor, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("factor get err: %w", err)
 	}
 
-	base, ok := res[0].(int64)
-	if !ok {
-		return nil, fmt.Errorf("base is not int64")
+	base, err := res.Int(1)
+	if err != nil {
+		return nil, fmt.Errorf("base get err: %w", err)
 	}
 
-	addrSlice, ok := res[2].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("addrSlice is not slice")
+	addrSlice, err := res.Slice(2)
+	if err != nil {
+		return nil, fmt.Errorf("addr slice get err: %w", err)
 	}
 
 	addr, err := addrSlice.LoadAddr()
@@ -110,8 +111,8 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 	}
 
 	return &CollectionRoyaltyParams{
-		Factor:  uint16(factor),
-		Base:    uint16(base),
+		Factor:  uint16(factor.Uint64()),
+		Base:    uint16(base.Uint64()),
 		Address: addr,
 	}, nil
 }
@@ -132,9 +133,9 @@ func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, in
 		return nil, fmt.Errorf("failed to run get_nft_content method: %w", err)
 	}
 
-	x, ok := res[0].(*cell.Cell)
-	if !ok {
-		return nil, fmt.Errorf("result is not cell")
+	x, err := res.Cell(0)
+	if err != nil {
+		return nil, fmt.Errorf("result get err: %w", err)
 	}
 
 	cnt, err := ContentFromCell(x)
@@ -156,23 +157,19 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
 	}
 
-	nextIndex, ok := res[0].(*big.Int)
-	if !ok {
-		nextIndexI, ok := res[0].(int64)
-		if !ok {
-			return nil, fmt.Errorf("nextIndex is not int")
-		}
-		nextIndex = big.NewInt(nextIndexI)
+	nextIndex, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("next index get err: %w", err)
 	}
 
-	content, ok := res[1].(*cell.Cell)
-	if !ok {
-		return nil, fmt.Errorf("content is not cell")
+	content, err := res.Cell(1)
+	if err != nil {
+		return nil, fmt.Errorf("content get err: %w", err)
 	}
 
-	ownerRes, ok := res[2].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("ownerRes is not slice")
+	ownerRes, err := res.Slice(2)
+	if err != nil {
+		return nil, fmt.Errorf("owner get err: %w", err)
 	}
 
 	addr, err := ownerRes.LoadAddr()

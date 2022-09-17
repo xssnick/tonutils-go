@@ -22,7 +22,7 @@ type MockAPI struct {
 	getBlockInfo        func(ctx context.Context) (*tlb.BlockInfo, error)
 	getAccount          func(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
 	sendExternalMessage func(ctx context.Context, msg *tlb.ExternalMessage) error
-	runGetMethod        func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error)
+	runGetMethod        func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	listTransactions    func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 
 	extMsgSent *tlb.ExternalMessage
@@ -50,7 +50,7 @@ func (m MockAPI) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessa
 	return m.sendExternalMessage(ctx, msg)
 }
 
-func (m MockAPI) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error) {
+func (m MockAPI) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
 	return m.runGetMethod(ctx, blockInfo, addr, method, params...)
 }
 
@@ -158,7 +158,7 @@ func TestWallet_Send(t *testing.T) {
 				return a, nil
 			}
 
-			m.runGetMethod = func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error) {
+			m.runGetMethod = func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
 				if flow == RunErr {
 					return nil, errTest
 				}
@@ -184,10 +184,10 @@ func TestWallet_Send(t *testing.T) {
 				}
 
 				if flow == SeqnoNotInt {
-					return []interface{}{"aa"}, nil
+					return ton.NewExecutionResult([]any{"aaa"}), nil
 				}
 
-				return []interface{}{int64(3)}, nil
+				return ton.NewExecutionResult([]any{big.NewInt(3)}), nil
 			}
 
 			m.sendExternalMessage = func(ctx context.Context, msg *tlb.ExternalMessage) error {
@@ -284,7 +284,7 @@ func TestWallet_Send(t *testing.T) {
 						continue
 					}
 				case SeqnoNotInt:
-					if strings.EqualFold(err.Error(), "build message err: seqno is not an integer") {
+					if strings.EqualFold(err.Error(), "build message err: failed to parse seqno: incorrect result type") {
 						continue
 					}
 				case TooMuchMessages:

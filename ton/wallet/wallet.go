@@ -36,7 +36,7 @@ type TonAPI interface {
 	CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
 	GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error)
+	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	WaitNextMasterBlock(ctx context.Context, master *tlb.BlockInfo) (*tlb.BlockInfo, error)
 }
