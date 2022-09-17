@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/address"
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
@@ -23,7 +24,7 @@ var api = func() *ton.APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := client.AddConnection(ctx, "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -31,8 +32,10 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
+var _seed = os.Getenv("WALLET_SEED")
+
 func Test_NftMintTransfer(t *testing.T) {
-	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
+	seed := strings.Split(_seed, " ")
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -57,7 +60,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("not enough balance", w.Address(), balance.TON())
 	}
 
-	collectionAddr := address.MustParseAddr("EQB3I8ovJPNimYtPZCAbrFf9Xob6wQ1flJUsxP-eMaT5zAQl")
+	collectionAddr := address.MustParseAddr("EQBlSOUK_X9s4h5hdo4adrYJlSKxYX4MHsHEjUCp8qTV098Z") // address = deployCollection(w) w.seed = (fiction ... rather)
 	collection := NewCollectionClient(api, collectionAddr)
 	collectionData, err := collection.GetCollectionData(context.Background())
 	if err != nil {
@@ -87,7 +90,7 @@ func Test_NftMintTransfer(t *testing.T) {
 
 	fmt.Println("Minted NFT:", nftAddr.String(), 0)
 
-	newAddr := address.MustParseAddr("EQBcFfrBJrAGWdE8Xf4ILD8YdSCD5tGS7R5RuVc6asZyBjid")
+	newAddr := address.MustParseAddr("EQB9ElEc88x6kOZytvUp0_18U-W1V-lBdvPcZ-BXdBWVrmeA") // address wallet with other seed = ("together ... lounge")
 	nft := NewItemClient(api, nftAddr)
 	transferData, err := nft.BuildTransferPayload(newAddr, tlb.MustFromTON("0.01"), nil)
 	if err != nil {
@@ -121,7 +124,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("RoyaltyParams err:", err.Error())
 	}
 
-	if roy.Address.String() != "EQBYIB9xax6l7ibZhofm5BfiILbz2rH2PMNrSSShSwC5NvaU" {
+	if roy.Address.String() != "EQCyMa4xOmcr6H0OWbcYtwOTsf6YUSW3KuGj010WgWBVQhoJ" { // address which get paid for nft. Wallet.seed = (fiction ... rather)
 		t.Fatal("royalty addr invalid")
 	}
 
