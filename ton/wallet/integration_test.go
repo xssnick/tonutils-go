@@ -32,6 +32,20 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
+var apiMain = func() *ton.APIClient {
+	client := liteclient.NewConnectionPool()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	if err != nil {
+		panic(err)
+	}
+
+	return ton.NewAPIClient(client)
+}()
+
 var _seed = os.Getenv("WALLET_SEED")
 
 func Test_WalletTransfer(t *testing.T) {
@@ -107,7 +121,7 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	t.Logf("internal message hash: %s", hex.EncodeToString(inMsgHash))
 
 	// find tx hash
-	tx, err := w.FindTransactionByInMsgHash(context.Background(), inMsgHash)
+	tx, err := w.FindTransactionByInMsgHash(context.Background(), inMsgHash, 30)
 	if err != nil {
 		t.Fatal("cannot find tx:", err.Error())
 	}
@@ -180,13 +194,14 @@ func TestGetWalletVersion(t *testing.T) {
 		},
 	}
 
-	master, err := api.CurrentMasterchainInfo(ctx)
+	ctx = apiMain.Client().StickyContext(ctx)
+	master, err := apiMain.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, test := range testCases {
-		account, err := api.GetAccount(ctx, master, test.Addr)
+		account, err := apiMain.GetAccount(ctx, master, test.Addr)
 		if err != nil {
 			t.Fatal(err)
 		}

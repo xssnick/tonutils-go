@@ -443,7 +443,12 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 }
 
 // FindTransactionByInMsgHash returns transaction in wallet account with incoming message hash equal to msgHash.
-func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte) (*tlb.Transaction, error) {
+func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
+	limit := 60
+	if len(maxTxNumToScan) > 0 {
+		limit = maxTxNumToScan[0]
+	}
+
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
@@ -457,6 +462,7 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte)
 		return nil, fmt.Errorf("account is inactive: %w", ErrTxWasNotFound)
 	}
 
+	scanned := 0
 	for lastLt, lastHash := acc.LastTxLT, acc.LastTxHash; ; {
 		if lastLt == 0 { // no older transactions
 			return nil, ErrTxWasNotFound
@@ -484,6 +490,12 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte)
 			}
 
 			return transaction, nil
+		}
+
+		scanned += 15
+
+		if scanned >= limit {
+			return nil, fmt.Errorf("scan limit of %d transactions was reached, %d transactions was checked and hash was not found", limit, scanned)
 		}
 	}
 }
