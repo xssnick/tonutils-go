@@ -7,7 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func TestInternalMessage_ToCell(t *testing.T) {
+func TestInternalMessage_ToCell(t *testing.T) { // need to deploy contract on test-net - > than change config to test-net.
 	src := address.MustParseAddr("EQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTzpK4")
 	dst := address.MustParseAddr("EQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0pJG")
 	amount := MustFromTON("10.5489292")

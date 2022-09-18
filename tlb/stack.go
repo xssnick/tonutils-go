@@ -74,7 +74,14 @@ func (s *Stack) ToCell() (*cell.Cell, error) {
 		b := cell.BeginCell()
 		b.MustStoreRef(next.EndCell())
 
-		switch v := unwrap[i].value.(type) {
+		val := unwrap[i].value
+		if vl, ok := val.(*big.Int); ok {
+			if vl.BitLen() < 64 {
+				val = vl.Int64()
+			}
+		}
+
+		switch v := val.(type) {
 		case nil:
 			b.MustStoreUInt(0x00, 8)
 		case int, int8, int16, int32, int64, uint8, uint16, uint32:
@@ -146,129 +153,171 @@ func (s *Stack) LoadFromCell(loader *cell.Slice) error {
 			return fmt.Errorf("failed to load stack next ref, err: %w", err)
 		}
 
-		typ, err := next.LoadUInt(8)
+		val, err := s.parseValue(next)
 		if err != nil {
-			return fmt.Errorf("failed to load stack value type, err: %w", err)
+			return fmt.Errorf("failed to parse stack value, err: %w", err)
 		}
 
-		switch typ {
-		case 0x00:
-			s.Push(nil)
-		case 0x01:
-			val, err := next.LoadInt(64)
-			if err != nil {
-				return fmt.Errorf("failed to load tiny int stack value, err: %w", err)
-			}
-			s.Push(val)
-		case 0x02:
-			subTyp, err := next.LoadUInt(8)
-			if err != nil {
-				return fmt.Errorf("failed to load stack value sub type, err: %w", err)
-			}
-
-			switch subTyp {
-			case 0xFF:
-				s.Push(StackNaN{})
-			default:
-				bInt, err := next.LoadBigUInt(256)
-				if err != nil {
-					return fmt.Errorf("failed to load stack value big int, err: %w", err)
-				}
-
-				// 1st bit of int257 indicates sign, it is loaded in type
-				if subTyp > 0 {
-					bInt.Mul(bInt, big.NewInt(-1))
-				}
-
-				s.Push(bInt)
-			}
-		case 0x03:
-			val, err := next.LoadRef()
-			if err != nil {
-				return fmt.Errorf("failed to load cell stack value, err: %w", err)
-			}
-			s.Push(val.MustToCell())
-		case 0x04:
-			start, err := next.LoadUInt(10)
-			if err != nil {
-				return fmt.Errorf("failed to load slice stack value's start, err: %w", err)
-			}
-			end, err := next.LoadUInt(10)
-			if err != nil {
-				return fmt.Errorf("failed to load slice stack value's end, err: %w", err)
-			}
-			if start > end {
-				return fmt.Errorf("start index > end index")
-			}
-
-			startRef, err := next.LoadUInt(3)
-			if err != nil {
-				return fmt.Errorf("failed to load slice stack value's start ref, err: %w", err)
-			}
-			endRef, err := next.LoadUInt(3)
-			if err != nil {
-				return fmt.Errorf("failed to load slice stack value's end ref, err: %w", err)
-			}
-			if startRef > endRef {
-				return fmt.Errorf("start ref index > end ref index")
-			}
-
-			val, err := next.LoadRef()
-			if err != nil {
-				return fmt.Errorf("failed to load cell stack value, err: %w", err)
-			}
-
-			cl := cell.BeginCell()
-
-			if start > 0 {
-				_, err = val.LoadSlice(uint(start))
-				if err != nil {
-					return fmt.Errorf("load prefix err: %w", err)
-				}
-			}
-
-			if end > 0 {
-				sz := uint(end - start)
-				data, err := val.LoadSlice(sz)
-				if err != nil {
-					return fmt.Errorf("load prefix err: %w", err)
-				}
-
-				err = cl.StoreSlice(data, sz)
-				if err != nil {
-					return fmt.Errorf("store slice err: %w", err)
-				}
-			}
-
-			for x := uint64(0); x < startRef; x++ {
-				_, err := val.LoadRef()
-				if err != nil {
-					return fmt.Errorf("failed to load slice stack value's ref, err: %w", err)
-				}
-			}
-
-			for x := uint64(0); x < endRef-startRef; x++ {
-				sliceRef, err := val.LoadRef()
-				if err != nil {
-					return fmt.Errorf("failed to load slice stack value's ref, err: %w", err)
-				}
-
-				err = cl.StoreRef(sliceRef.MustToCell())
-				if err != nil {
-					return fmt.Errorf("failed to store slice stack value's ref, err: %w", err)
-				}
-			}
-			s.Push(cl.EndCell().BeginParse())
-		case 0x05:
-			val, err := next.LoadRef()
-			if err != nil {
-				return fmt.Errorf("failed to load cell stack value, err: %w", err)
-			}
-			s.Push(val.MustToCell().ToBuilder())
-		}
+		s.Push(val)
 
 		next = ref
 	}
 
 	return nil
+}
+
+func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
+	typ, err := slice.LoadUInt(8)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load stack value type, err: %w", err)
+	}
+
+	switch typ {
+	case 0x00:
+		return nil, nil
+	case 0x01:
+		val, err := slice.LoadBigInt(64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load tiny int stack value, err: %w", err)
+		}
+		return val, nil
+	case 0x02:
+		subTyp, err := slice.LoadUInt(8)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load stack value sub type, err: %w", err)
+		}
+
+		switch subTyp {
+		case 0xFF:
+			return StackNaN{}, nil
+		default:
+			bInt, err := slice.LoadBigUInt(256)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load stack value big int, err: %w", err)
+			}
+
+			// 1st bit of int257 indicates sign, it is loaded in type
+			if subTyp > 0 {
+				bInt.Mul(bInt, big.NewInt(-1))
+			}
+
+			return bInt, nil
+		}
+	case 0x03:
+		val, err := slice.LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load cell stack value, err: %w", err)
+		}
+		return val.MustToCell(), nil
+	case 0x04:
+		start, err := slice.LoadUInt(10)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load slice stack value's start, err: %w", err)
+		}
+		end, err := slice.LoadUInt(10)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load slice stack value's end, err: %w", err)
+		}
+		if start > end {
+			return nil, fmt.Errorf("start index > end index")
+		}
+
+		startRef, err := slice.LoadUInt(3)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load slice stack value's start ref, err: %w", err)
+		}
+		endRef, err := slice.LoadUInt(3)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load slice stack value's end ref, err: %w", err)
+		}
+		if startRef > endRef {
+			return nil, fmt.Errorf("start ref index > end ref index")
+		}
+
+		val, err := slice.LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load cell stack value, err: %w", err)
+		}
+
+		cl := cell.BeginCell()
+
+		if start > 0 {
+			_, err = val.LoadSlice(uint(start))
+			if err != nil {
+				return nil, fmt.Errorf("load prefix err: %w", err)
+			}
+		}
+
+		if end > 0 {
+			sz := uint(end - start)
+			data, err := val.LoadSlice(sz)
+			if err != nil {
+				return nil, fmt.Errorf("load prefix err: %w", err)
+			}
+
+			err = cl.StoreSlice(data, sz)
+			if err != nil {
+				return nil, fmt.Errorf("store slice err: %w", err)
+			}
+		}
+
+		for x := uint64(0); x < startRef; x++ {
+			_, err := val.LoadRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load slice stack value's ref, err: %w", err)
+			}
+		}
+
+		for x := uint64(0); x < endRef-startRef; x++ {
+			sliceRef, err := val.LoadRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load slice stack value's ref, err: %w", err)
+			}
+
+			err = cl.StoreRef(sliceRef.MustToCell())
+			if err != nil {
+				return nil, fmt.Errorf("failed to store slice stack value's ref, err: %w", err)
+			}
+		}
+		return cl.EndCell().BeginParse(), nil
+	case 0x05:
+		val, err := slice.LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load cell stack value, err: %w", err)
+		}
+		return val.MustToCell().ToBuilder(), nil
+	case 0x07:
+		ln, err := slice.LoadUInt(16)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load tuple stack value's len, err: %w", err)
+		}
+
+		var tuple []any
+		for i := 0; i < int(ln); i++ {
+			var next *cell.Slice
+			if i < int(ln)-1 {
+				next, err = slice.LoadRef()
+				if err != nil {
+					return nil, fmt.Errorf("failed to load tuple's %d next element, err: %w", i, err)
+				}
+			}
+
+			ref, err := slice.LoadRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load tuple's %d value, err: %w", i, err)
+			}
+
+			val, err := s.parseValue(ref)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse tuple's %d value, err: %w", i, err)
+			}
+			tuple = append(tuple, val)
+
+			slice = next
+		}
+
+		return tuple, nil
+	}
+
+	return nil, errors.New("unknown value type")
 }

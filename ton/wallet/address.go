@@ -1,9 +1,8 @@
 package wallet
 
 import (
+	"bytes"
 	"crypto/ed25519"
-	"encoding/hex"
-	"errors"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -29,10 +28,28 @@ func AddressFromPubKey(key ed25519.PublicKey, ver Version, subwallet uint32) (*a
 	return addr, nil
 }
 
+func GetWalletVersion(account *tlb.Account) Version {
+	if !account.IsActive || account.State.Status != tlb.AccountStatusActive {
+		return Unknown
+	}
+
+	for v := range walletCodeHex {
+		code, ok := walletCode[v]
+		if !ok {
+			continue
+		}
+		if bytes.Equal(account.Code.Hash(), code.Hash()) {
+			return v
+		}
+	}
+
+	return Unknown
+}
+
 func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb.StateInit, error) {
-	code, err := getCode(ver)
-	if err != nil {
-		return nil, err
+	code, ok := walletCode[ver]
+	if !ok {
+		return nil, fmt.Errorf("cannot get code: %w", ErrUnsupportedWalletVersion)
 	}
 
 	var data *cell.Cell
@@ -58,38 +75,11 @@ func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb
 			MustStoreDict(nil). // old queries
 			EndCell()
 	default:
-		return nil, errors.New("wallet version is not supported")
+		return nil, ErrUnsupportedWalletVersion
 	}
 
 	return &tlb.StateInit{
 		Data: data,
 		Code: code,
 	}, nil
-}
-
-func getCode(ver Version) (*cell.Cell, error) {
-	var codeHex string
-
-	switch ver {
-	case V3:
-		codeHex = _V3CodeHex
-	case V4R2:
-		codeHex = _V4R2CodeHex
-	case HighloadV2R2:
-		codeHex = _HighloadV2R2CodeHex
-	default:
-		return nil, errors.New("cannot get code: unknown version")
-	}
-
-	boc, err := hex.DecodeString(codeHex)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode code hex: %w", err)
-	}
-
-	code, err := cell.FromBOC(boc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert code boc to cell: %w", err)
-	}
-
-	return code, nil
 }

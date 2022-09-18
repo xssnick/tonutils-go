@@ -37,9 +37,9 @@ func (c *ItemEditableClient) GetEditor(ctx context.Context) (*address.Address, e
 		return nil, fmt.Errorf("failed to run get_editor method: %w", err)
 	}
 
-	x, ok := res[0].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("result is not slice")
+	x, err := res.Slice(0)
+	if err != nil {
+		return nil, fmt.Errorf("result is not slice, err: %w", err)
 	}
 
 	addr, err := x.LoadAddr()

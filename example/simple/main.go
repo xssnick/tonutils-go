@@ -8,7 +8,6 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
-	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 func main() {
@@ -44,7 +43,7 @@ func main() {
 		return
 	}
 
-	val, err := res[0].(*cell.Cell).BeginParse().LoadUInt(64)
+	val, err := res.MustCell(0).BeginParse().LoadUInt(64)
 	if err != nil {
 		println("ERR", err.Error())
 		return

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
+	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"math/big"
@@ -12,7 +13,7 @@ import (
 
 type TonApi interface {
 	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error)
+	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
 
 type MintPayload struct {
@@ -55,9 +56,9 @@ func (c *Client) GetJettonWallet(ctx context.Context, ownerAddr *address.Address
 		return nil, fmt.Errorf("failed to run get_wallet_address method: %w", err)
 	}
 
-	x, ok := res[0].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("result is not slice")
+	x, err := res.Slice(0)
+	if err != nil {
+		return nil, err
 	}
 
 	addr, err := x.LoadAddr()
@@ -82,33 +83,28 @@ func (c *Client) GetJettonData(ctx context.Context) (*Data, error) {
 		return nil, fmt.Errorf("failed to run get_jetton_data method: %w", err)
 	}
 
-	supply, ok := res[0].(*big.Int)
-	if !ok {
-		supplyI, ok := res[0].(int64)
-		if !ok {
-			return nil, fmt.Errorf("supply is not integer")
-		}
-		supply = big.NewInt(supplyI)
+	supply, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("supply get err: %w", err)
 	}
 
-	mintable, ok := res[1].(int64)
-	if !ok {
-		return nil, fmt.Errorf("mintable is not integer")
+	mintable, err := res.Int(1)
+	if err != nil {
+		return nil, fmt.Errorf("mintable get err: %w", err)
 	}
 
-	adminAddr, ok := res[2].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("adminAddr is not slice")
+	adminAddr, err := res.Slice(2)
+	if err != nil {
+		return nil, fmt.Errorf("admin addr get err: %w", err)
 	}
-
 	addr, err := adminAddr.LoadAddr()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load address from adminAddr slice: %w", err)
 	}
 
-	contentCell, ok := res[3].(*cell.Cell)
-	if !ok {
-		return nil, fmt.Errorf("contentCell is not cell")
+	contentCell, err := res.Cell(3)
+	if err != nil {
+		return nil, fmt.Errorf("content cell get err: %w", err)
 	}
 
 	content, err := nft.ContentFromCell(contentCell)
@@ -116,14 +112,14 @@ func (c *Client) GetJettonData(ctx context.Context) (*Data, error) {
 		return nil, fmt.Errorf("failed to load content from contentCell: %w", err)
 	}
 
-	walletCode, ok := res[4].(*cell.Cell)
-	if !ok {
-		return nil, fmt.Errorf("walletCode is not cell")
+	walletCode, err := res.Cell(4)
+	if err != nil {
+		return nil, fmt.Errorf("wallet code get err: %w", err)
 	}
 
 	return &Data{
 		TotalSupply: supply,
-		Mintable:    mintable != 0,
+		Mintable:    mintable.Cmp(big.NewInt(0)) != 0,
 		AdminAddr:   addr,
 		Content:     content,
 		WalletCode:  walletCode,
