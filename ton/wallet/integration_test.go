@@ -53,7 +53,8 @@ func Test_WalletTransfer(t *testing.T) {
 
 	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
 		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			ctx := api.Client().StickyContext(context.Background())
+			ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 			defer cancel()
 
 			w, err := FromSeed(api, seed, ver)
@@ -166,7 +167,7 @@ func TestWallet_DeployContract(t *testing.T) {
 }
 
 func TestGetWalletVersion(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var testCases = []struct {

@@ -52,8 +52,9 @@ func TestJettonMasterClient_GetJettonData(t *testing.T) {
 
 func TestJettonMasterClient_GetWalletAddress(t *testing.T) {
 	cli := NewJettonMasterClient(api, address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"))
+	ctx := api.Client().StickyContext(context.Background())
 
-	data, err := cli.GetJettonWallet(context.Background(), address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"))
+	data, err := cli.GetJettonWallet(ctx, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +63,7 @@ func TestJettonMasterClient_GetWalletAddress(t *testing.T) {
 		t.Fatal("owner diff")
 	}
 
-	b, err := data.GetBalance(context.Background())
+	b, err := data.GetBalance(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,15 +76,17 @@ func TestJettonMasterClient_GetWalletAddress(t *testing.T) {
 func TestJettonMasterClient_Transfer(t *testing.T) {
 	cli := NewJettonMasterClient(api, address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"))
 
+	ctx := api.Client().StickyContext(context.Background())
+
 	w := getWallet(api)
 	log.Println("test wallet:", w.Address().String())
 
-	tokenWallet, err := cli.GetJettonWallet(context.Background(), w.Address())
+	tokenWallet, err := cli.GetJettonWallet(ctx, w.Address())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	b, err := tokenWallet.GetBalance(context.Background())
+	b, err := tokenWallet.GetBalance(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +104,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 
 	msg := wallet.SimpleMessage(tokenWallet.Address(), tlb.MustFromTON("0.05"), transferPayload)
 
-	err = w.Send(context.Background(), msg, true)
+	err = w.Send(ctx, msg, true)
 	if err != nil {
 		panic(err)
 	}
@@ -114,12 +117,12 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 
 	msg = wallet.SimpleMessage(tokenWallet.Address(), tlb.MustFromTON("0.05"), burnPayload)
 
-	err = w.Send(context.Background(), msg, true)
+	err = w.Send(ctx, msg, true)
 	if err != nil {
 		panic(err)
 	}
 
-	b2, err := tokenWallet.GetBalance(context.Background())
+	b2, err := tokenWallet.GetBalance(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
