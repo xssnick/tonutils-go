@@ -52,7 +52,9 @@ jobs:
       if: steps.verify-changed-files.outputs.files_changed == 'true' && github.ref != 'refs/heads/master'
       run: |
         git add README.md
-        git commit -m "Updated coverage badge."
+        git config --global user.email "coverage@tonutils.com"
+        git config --global user.name "Coverage"
+        git commit -m "Updated coverage badge"
 
     - name: Push changes
       if: steps.verify-changed-files.outputs.files_changed == 'true' && github.ref != 'refs/heads/master'
