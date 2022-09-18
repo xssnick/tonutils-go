@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/ton"
 	"math/rand"
 	"strings"
 	"time"
@@ -18,24 +20,67 @@ import (
 type Version int
 
 const (
-	V3           Version = 3
+	V1R1         Version = 11
+	V1R2         Version = 12
+	V1R3         Version = 13
+	V2R1         Version = 21
+	V2R2         Version = 22
+	V3R1         Version = 31
+	V3R2         Version = 32
+	V3                   = V3R2
+	V4R1         Version = 41
 	V4R2         Version = 42
 	HighloadV2R2 Version = 122
+	Lockup       Version = 200
+	Unknown      Version = 0
 )
+
+var (
+	walletCodeHex = map[Version]string{
+		V1R1: _V1R1CodeHex, V1R2: _V1R2CodeHex, V1R3: _V1R3CodeHex,
+		V2R1: _V2R1CodeHex, V2R2: _V2R2CodeHex,
+		V3R1: _V3R1CodeHex, V3R2: _V3R2CodeHex,
+		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
+		HighloadV2R2: _HighloadV2R2CodeHex,
+		Lockup:       _LockupCodeHex,
+	}
+	walletCodeBOC = map[Version][]byte{}
+	walletCode    = map[Version]*cell.Cell{}
+)
+
+func init() {
+	var err error
+
+	for ver, codeHex := range walletCodeHex {
+		walletCodeBOC[ver], err = hex.DecodeString(codeHex)
+		if err != nil {
+			panic(err)
+		}
+		walletCode[ver], err = cell.FromBOC(walletCodeBOC[ver])
+		if err != nil {
+			panic(err)
+		}
+	}
+}
 
 // defining some funcs this way to mock for tests
 var randUint32 = rand.Uint32
 var timeNow = time.Now
 
-var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
-var ErrTxWasNotFound = errors.New("requested transaction is not found")
+var (
+	ErrUnsupportedWalletVersion = errors.New("wallet version is not supported")
+	ErrTxWasNotConfirmed        = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
+	ErrTxWasNotFound            = errors.New("requested transaction is not found")
+)
 
 type TonAPI interface {
+	Client() ton.LiteClient
 	CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
 	GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) ([]interface{}, error)
+	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
+	WaitNextMasterBlock(ctx context.Context, master *tlb.BlockInfo) (*tlb.BlockInfo, error)
 }
 
 type Message struct {
@@ -94,7 +139,7 @@ func getSpec(w *Wallet) (any, error) {
 		return &SpecHighloadV2R2{regular}, nil
 	}
 
-	return nil, errors.New("cannot init spec: unknown version")
+	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
 }
 
 func (w *Wallet) Address() *address.Address {
@@ -180,7 +225,7 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("send is not yet supported for wallet with this version")
+		return nil, fmt.Errorf("send is not yet supported: %w", ErrUnsupportedWalletVersion)
 	}
 
 	return &tlb.ExternalMessage{
@@ -251,18 +296,15 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc
 	}
 	till, _ := ctx.Deadline()
 
+	ctx = w.api.Client().StickyContext(ctx)
+
 	for time.Now().Before(till) {
-		time.Sleep(1 * time.Second)
-		blockNew, err := w.api.CurrentMasterchainInfo(ctx)
+		blockNew, err := w.api.WaitNextMasterBlock(ctx, block)
 		if err != nil {
 			continue
 		}
 
-		if blockNew.SeqNo == block.SeqNo {
-			continue
-		}
-
-		accNew, err := w.api.GetAccount(ctx, block, w.addr)
+		accNew, err := w.api.GetAccount(ctx, blockNew, w.addr)
 		if err != nil {
 			continue
 		}
@@ -401,7 +443,12 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 }
 
 // FindTransactionByInMsgHash returns transaction in wallet account with incoming message hash equal to msgHash.
-func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte) (*tlb.Transaction, error) {
+func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
+	limit := 60
+	if len(maxTxNumToScan) > 0 {
+		limit = maxTxNumToScan[0]
+	}
+
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
@@ -415,6 +462,7 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte)
 		return nil, fmt.Errorf("account is inactive: %w", ErrTxWasNotFound)
 	}
 
+	scanned := 0
 	for lastLt, lastHash := acc.LastTxLT, acc.LastTxHash; ; {
 		if lastLt == 0 { // no older transactions
 			return nil, ErrTxWasNotFound
@@ -442,6 +490,12 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte)
 			}
 
 			return transaction, nil
+		}
+
+		scanned += 15
+
+		if scanned >= limit {
+			return nil, fmt.Errorf("scan limit of %d transactions was reached, %d transactions was checked and hash was not found", limit, scanned)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	mRand "math/rand"
 	"sync"
@@ -62,6 +63,10 @@ func NewConnectionPool() *ConnectionPool {
 //
 // In case if sticky node goes down, default balancer will be used as fallback
 func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
+	if ctx.Value(_StickyCtxKey) != nil {
+		return ctx
+	}
+
 	var id uint32
 
 	c.nodesMx.RLock()
@@ -77,7 +82,9 @@ func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
 // Do - builds and executes request to liteserver
 func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (*LiteResponse, error) {
 	id := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, id); err != nil {
+
+	_, err := io.ReadFull(rand.Reader, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -103,13 +110,14 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 		c.reqMx.Unlock()
 	}()
 
+	var host string
 	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
-		err := c.querySticky(nodeID, req)
+		host, err = c.querySticky(nodeID, req)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		err := c.queryWithBalancer(req)
+		host, err = c.queryWithBalancer(req)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +127,7 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 	if !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
 
@@ -133,19 +141,20 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 		return resp, nil
 	case <-ctx.Done():
 		if !hasDeadline {
-			return nil, errors.New("liteserver request timeout")
+			return nil, fmt.Errorf("liteserver request timeout, node %s", host)
 		}
-		return nil, ctx.Err()
+		return nil, fmt.Errorf("deadline exceeded, node %s, err: %w", host, ctx.Err())
 	}
 }
 
-func (c *ConnectionPool) querySticky(id uint32, req *LiteRequest) error {
+func (c *ConnectionPool) querySticky(id uint32, req *LiteRequest) (string, error) {
 	c.nodesMx.RLock()
 	for _, node := range c.activeNodes {
 		if node.id == id {
-			err := node.queryLiteServer(req.QueryID, req.TypeID, req.Data)
+			host, err := node.queryLiteServer(req.QueryID, req.TypeID, req.Data)
 			if err == nil {
-				return nil
+				c.nodesMx.RUnlock()
+				return host, nil
 			}
 			break
 		}
@@ -156,7 +165,7 @@ func (c *ConnectionPool) querySticky(id uint32, req *LiteRequest) error {
 	return c.queryWithBalancer(req)
 }
 
-func (c *ConnectionPool) queryWithBalancer(req *LiteRequest) error {
+func (c *ConnectionPool) queryWithBalancer(req *LiteRequest) (string, error) {
 	nodeOffset := atomic.AddUint64(&c.roundRobinOffset, 1)
 
 	var firstNode *connection
@@ -164,7 +173,7 @@ func (c *ConnectionPool) queryWithBalancer(req *LiteRequest) error {
 		c.nodesMx.RLock()
 		if len(c.activeNodes) == 0 {
 			c.nodesMx.RUnlock()
-			return ErrNoActiveConnections
+			return "", ErrNoActiveConnections
 		}
 		reqNode := c.activeNodes[nodeOffset%uint64(len(c.activeNodes))]
 		c.nodesMx.RUnlock()
@@ -173,16 +182,16 @@ func (c *ConnectionPool) queryWithBalancer(req *LiteRequest) error {
 			firstNode = reqNode
 		} else if reqNode == firstNode {
 			// all nodes were tried, nothing works
-			return ErrNoActiveConnections
+			return "", ErrNoActiveConnections
 		}
 
-		err := reqNode.queryLiteServer(req.QueryID, req.TypeID, req.Data)
+		host, err := reqNode.queryLiteServer(req.QueryID, req.TypeID, req.Data)
 		if err != nil {
 			nodeOffset++
 			continue
 		}
 
-		return nil
+		return host, nil
 	}
 }
 

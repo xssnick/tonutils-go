@@ -52,23 +52,19 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
 	}
 
-	init, ok := res[0].(int64)
-	if !ok {
-		return nil, fmt.Errorf("init is not int64")
+	init, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("err get init value: %w", err)
 	}
 
-	index, ok := res[1].(*big.Int)
-	if !ok {
-		indexI, ok := res[1].(int64)
-		if !ok {
-			return nil, fmt.Errorf("index is not int64")
-		}
-		index = big.NewInt(indexI)
+	index, err := res.Int(1)
+	if err != nil {
+		return nil, fmt.Errorf("err get index value: %w", err)
 	}
 
-	collectionRes, ok := res[2].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("collectionRes is not slice")
+	collectionRes, err := res.Slice(2)
+	if err != nil {
+		return nil, fmt.Errorf("err get collection slice value: %w", err)
 	}
 
 	collectionAddr, err := collectionRes.LoadAddr()
@@ -78,10 +74,15 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 
 	var ownerAddr *address.Address
 
-	if res[3] != nil {
-		ownerRes, ok := res[3].(*cell.Slice)
-		if !ok {
-			return nil, fmt.Errorf("ownerRes is not slice")
+	nilOwner, err := res.IsNil(3)
+	if err != nil {
+		return nil, fmt.Errorf("err check for nil owner slice value: %w", err)
+	}
+
+	if !nilOwner {
+		ownerRes, err := res.Slice(3)
+		if err != nil {
+			return nil, fmt.Errorf("err get owner slice value: %w", err)
 		}
 
 		ownerAddr, err = ownerRes.LoadAddr()
@@ -94,10 +95,15 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 
 	var cnt ContentAny
 
-	if res[4] != nil {
-		content, ok := res[4].(*cell.Cell)
-		if !ok {
-			return nil, fmt.Errorf("content is not cell")
+	nilContent, err := res.IsNil(4)
+	if err != nil {
+		return nil, fmt.Errorf("err check for nil content cell value: %w", err)
+	}
+
+	if !nilContent {
+		content, err := res.Cell(4)
+		if err != nil {
+			return nil, fmt.Errorf("err get content cell value: %w", err)
 		}
 
 		cnt, err = ContentFromCell(content)
@@ -107,7 +113,7 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 	}
 
 	return &ItemData{
-		Initialized:       init != 0,
+		Initialized:       init.Cmp(big.NewInt(0)) != 0,
 		Index:             index,
 		CollectionAddress: collectionAddr,
 		OwnerAddress:      ownerAddr,

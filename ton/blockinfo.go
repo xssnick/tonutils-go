@@ -5,13 +5,17 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"time"
-
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"time"
 )
 
 var ErrBlockNotFound = errors.New("block not found")
+var ErrNoNewBlocks = errors.New("no new blocks in a given timeout or in 10 seconds")
+
+func (c *APIClient) Client() LiteClient {
+	return c.client
+}
 
 // CurrentMasterchainInfo - cached version of GetMasterchainInfo to not do it in parallel many times
 func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error) {
@@ -30,22 +34,16 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInf
 
 		// second check to avoid concurrent update
 		if master == nil || time.Now().After(tm.Add(3*time.Second)) {
+			ctx = c.client.StickyContext(ctx)
+
 			master, err = c.GetMasterchainInfo(ctx)
 			if err != nil {
 				return nil, err
 			}
 
-			for {
-				// we should check if block is already accessible due to interesting LS behavior, if not - we will wait for it.
-				_, err := c.LookupBlock(ctx, master.Workchain, master.Shard, master.SeqNo)
-				if err != nil {
-					if err == ErrBlockNotFound {
-						time.Sleep(200 * time.Millisecond)
-						continue
-					}
-					return nil, err
-				}
-				break
+			err = c.waitMasterBlock(ctx, master.SeqNo)
+			if err != nil {
+				return nil, err
 			}
 
 			c.curMasterUpdateTime = time.Now()
@@ -310,4 +308,52 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInf
 	}
 
 	return nil, errors.New("unknown response type")
+}
+
+// WaitNextMasterBlock - wait for the next block of master chain
+func (c *APIClient) waitMasterBlock(ctx context.Context, seqno uint32) error {
+	var timeout = 10 * time.Second
+
+	deadline, ok := ctx.Deadline()
+	if ok {
+		t := deadline.Sub(time.Now())
+		if t < timeout {
+			timeout = t
+		}
+	}
+
+	req := make([]byte, 8)
+	binary.LittleEndian.PutUint32(req, seqno)
+	binary.LittleEndian.PutUint32(req[4:], uint32(timeout/time.Millisecond))
+
+	_, err := c.client.Do(ctx, _WaitMasterchainSeqno, req)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *APIClient) WaitNextMasterBlock(ctx context.Context, master *tlb.BlockInfo) (*tlb.BlockInfo, error) {
+	if master.Workchain != -1 {
+		return nil, errors.New("not a master block passed")
+	}
+
+	ctx = c.client.StickyContext(ctx)
+
+	err := c.waitMasterBlock(ctx, master.SeqNo+1)
+	if err != nil {
+		return nil, err
+	}
+
+	m, err := c.GetMasterchainInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if master.SeqNo == m.SeqNo {
+		return nil, ErrNoNewBlocks
+	}
+
+	return m, nil
 }
