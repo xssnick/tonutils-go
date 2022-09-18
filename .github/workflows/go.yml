@@ -31,6 +31,8 @@ jobs:
           ${{ runner.os }}-2go-
 
     - name: Run Test
+      env:
+        WALLET_SEED: ${{ secrets.WALLET_SEED }}
       run: |
         go test -v $(go list ./... | grep -v /example/) -covermode=count -coverprofile=coverage.out
         go tool cover -func=coverage.out -o=coverage.out
@@ -49,8 +51,6 @@ jobs:
     - name: Commit changes
       if: steps.verify-changed-files.outputs.files_changed == 'true' && github.ref != 'refs/heads/master'
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
         git add README.md
         git commit -m "Updated coverage badge."
 
