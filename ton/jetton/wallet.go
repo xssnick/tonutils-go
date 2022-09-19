@@ -3,11 +3,12 @@ package jetton
 import (
 	"context"
 	"fmt"
+	"math/rand"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"math/rand"
 )
 
 type TransferPayload struct {
@@ -43,7 +44,10 @@ func (c *WalletClient) GetBalance(ctx context.Context) (tlb.Coins, error) {
 	if err != nil {
 		return tlb.Coins{}, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.GetBalanceAtBlock(ctx, b)
+}
 
+func (c *WalletClient) GetBalanceAtBlock(ctx context.Context, b *tlb.BlockInfo) (tlb.Coins, error) {
 	res, err := c.master.api.RunGetMethod(ctx, b, c.addr, "get_wallet_data")
 	if err != nil {
 		if cErr, ok := err.(ton.ContractExecError); ok && cErr.Code == ton.ErrCodeContractNotInitialized {
