@@ -14,6 +14,20 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+var apiTestNet = func() *APIClient {
+	client := liteclient.NewConnectionPool()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
+	if err != nil {
+		panic(err)
+	}
+
+	return NewAPIClient(client)
+}()
+
 var api = func() *APIClient {
 	client := liteclient.NewConnectionPool()
 
@@ -30,6 +44,10 @@ var api = func() *APIClient {
 
 var testContractAddr = func() *address.Address {
 	return address.MustParseAddr("EQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTzpK4")
+}()
+
+var testContractAddrTestNet = func() *address.Address {
+	return address.MustParseAddr("EQAOp1zuKuX4zY6L9rEdSLam7J3gogIHhfRu_gH70u2MQnmd")
 }()
 
 func Test_CurrentChainInfo(t *testing.T) {
@@ -102,13 +120,13 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	b, err := api.GetMasterchainInfo(ctx)
+	b, err := apiTestNet.GetMasterchainInfo(ctx)
 	if err != nil {
 		t.Fatal("get block err:", err.Error())
 		return
 	}
 
-	res, err := api.RunGetMethod(ctx, b, testContractAddr, "get_total")
+	res, err := apiTestNet.RunGetMethod(ctx, b, testContractAddrTestNet, "get_total")
 	if err != nil {
 		t.Fatal("run get method err:", err.Error())
 		return
@@ -122,8 +140,8 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 
-	err = api.SendExternalMessage(ctx, &tlb.ExternalMessage{
-		DstAddr: testContractAddr,
+	err = apiTestNet.SendExternalMessage(ctx, &tlb.ExternalMessage{
+		DstAddr: testContractAddrTestNet,
 		Body:    data,
 	})
 	if err != nil {
