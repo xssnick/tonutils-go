@@ -7,7 +7,6 @@ import (
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"math/big"
 	"math/rand"
 )
 
@@ -53,13 +52,9 @@ func (c *WalletClient) GetBalance(ctx context.Context) (tlb.Coins, error) {
 		return tlb.Coins{}, fmt.Errorf("failed to run get_wallet_data method: %w", err)
 	}
 
-	balance, ok := res[0].(*big.Int)
-	if !ok {
-		balanceI, ok := res[0].(int64)
-		if !ok {
-			return tlb.Coins{}, fmt.Errorf("balance is not integer")
-		}
-		balance = big.NewInt(balanceI)
+	balance, err := res.Int(0)
+	if err != nil {
+		return tlb.Coins{}, fmt.Errorf("failed to parse balance: %w", err)
 	}
 
 	return tlb.FromNanoTON(balance), nil

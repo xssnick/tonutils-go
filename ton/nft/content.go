@@ -2,6 +2,7 @@ package nft
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -35,7 +36,10 @@ func ContentFromCell(c *cell.Cell) (ContentAny, error) {
 
 func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
 	if s.BitsLeft() < 8 {
-		return nil, nil
+		if s.RefsNum() == 0 {
+			return nil, errors.New("invalid content")
+		}
+		s = s.MustLoadRef()
 	}
 
 	typ, err := s.LoadUInt(8)
@@ -83,7 +87,7 @@ func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
 
 		return &ContentOffchain{
 			URI: str,
-		}, err
+		}, nil
 	default:
 		str, err := s.LoadStringSnake()
 		if err != nil {
@@ -92,7 +96,7 @@ func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
 
 		return &ContentOffchain{
 			URI: string(t) + str,
-		}, err
+		}, nil
 	}
 }
 
@@ -102,7 +106,11 @@ func getOnchainVal(dict *cell.Dictionary, key string) []byte {
 
 	val := dict.Get(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell())
 	if val != nil {
-		v := val.BeginParse()
+		v, err := val.BeginParse().LoadRef()
+		if err != nil {
+			return nil
+		}
+
 		typ, err := v.LoadUInt(8)
 		if err != nil {
 			return nil
@@ -130,7 +138,7 @@ func setOnchainVal(dict *cell.Dictionary, key string, val []byte) error {
 		return err
 	}
 
-	err := dict.Set(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell(), v.EndCell())
+	err := dict.Set(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell(), cell.BeginCell().MustStoreRef(v.EndCell()).EndCell())
 	if err != nil {
 		return err
 	}
@@ -139,10 +147,7 @@ func setOnchainVal(dict *cell.Dictionary, key string, val []byte) error {
 }
 
 func (c *ContentOffchain) ContentCell() (*cell.Cell, error) {
-	// https://github.com/ton-blockchain/TIPs/issues/64
-	// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
-	// so we make compatibility
-	return cell.BeginCell().MustStoreStringSnake(c.URI).EndCell(), nil
+	return cell.BeginCell().MustStoreUInt(0x01, 8).MustStoreStringSnake(c.URI).EndCell(), nil
 }
 
 func (c *ContentSemichain) ContentCell() (*cell.Cell, error) {

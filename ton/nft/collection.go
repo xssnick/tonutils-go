@@ -8,12 +8,13 @@ import (
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
+	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 type TonApi interface {
 	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error)
+	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
 
 type ItemMintPayload struct {
@@ -68,9 +69,9 @@ func (c *CollectionClient) GetNFTAddressByIndexAtBlock(ctx context.Context, b *t
 		return nil, fmt.Errorf("failed to run get_nft_address_by_index method: %w", err)
 	}
 
-	x, ok := res[0].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("result is not slice")
+	x, err := res.Slice(0)
+	if err != nil {
+		return nil, fmt.Errorf("result get err: %w", err)
 	}
 
 	addr, err := x.LoadAddr()
@@ -95,19 +96,19 @@ func (c *CollectionClient) RoyaltyParamsAtBlock(ctx context.Context, b *tlb.Bloc
 		return nil, fmt.Errorf("failed to run royalty_params method: %w", err)
 	}
 
-	factor, ok := res[0].(int64)
-	if !ok {
-		return nil, fmt.Errorf("factor is not int64")
+	factor, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("factor get err: %w", err)
 	}
 
-	base, ok := res[0].(int64)
-	if !ok {
-		return nil, fmt.Errorf("base is not int64")
+	base, err := res.Int(1)
+	if err != nil {
+		return nil, fmt.Errorf("base get err: %w", err)
 	}
 
-	addrSlice, ok := res[2].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("addrSlice is not slice")
+	addrSlice, err := res.Slice(2)
+	if err != nil {
+		return nil, fmt.Errorf("addr slice get err: %w", err)
 	}
 
 	addr, err := addrSlice.LoadAddr()
@@ -116,8 +117,8 @@ func (c *CollectionClient) RoyaltyParamsAtBlock(ctx context.Context, b *tlb.Bloc
 	}
 
 	return &CollectionRoyaltyParams{
-		Factor:  uint16(factor),
-		Base:    uint16(base),
+		Factor:  uint16(factor.Uint64()),
+		Base:    uint16(base.Uint64()),
 		Address: addr,
 	}, nil
 }
@@ -131,14 +132,19 @@ func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, in
 }
 
 func (c *CollectionClient) GetNFTContentAtBlock(ctx context.Context, b *tlb.BlockInfo, index *big.Int, individualNFTContent *cell.Cell) (ContentAny, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_content", index, individualNFTContent)
+	con, err := toNftContent(individualNFTContent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
+	}
+
+	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_content", index, con)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_content method: %w", err)
 	}
 
-	x, ok := res[0].(*cell.Cell)
-	if !ok {
-		return nil, fmt.Errorf("result is not cell")
+	x, err := res.Cell(0)
+	if err != nil {
+		return nil, fmt.Errorf("result get err: %w", err)
 	}
 
 	cnt, err := ContentFromCell(x)
@@ -163,23 +169,19 @@ func (c *CollectionClient) GetCollectionDataAtBlock(ctx context.Context, b *tlb.
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
 	}
 
-	nextIndex, ok := res[0].(*big.Int)
-	if !ok {
-		nextIndexI, ok := res[0].(int64)
-		if !ok {
-			return nil, fmt.Errorf("nextIndex is not int")
-		}
-		nextIndex = big.NewInt(nextIndexI)
+	nextIndex, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("next index get err: %w", err)
 	}
 
-	content, ok := res[1].(*cell.Cell)
-	if !ok {
-		return nil, fmt.Errorf("content is not cell")
+	content, err := res.Cell(1)
+	if err != nil {
+		return nil, fmt.Errorf("content get err: %w", err)
 	}
 
-	ownerRes, ok := res[2].(*cell.Slice)
-	if !ok {
-		return nil, fmt.Errorf("ownerRes is not slice")
+	ownerRes, err := res.Slice(2)
+	if err != nil {
+		return nil, fmt.Errorf("owner get err: %w", err)
 	}
 
 	addr, err := ownerRes.LoadAddr()
@@ -199,10 +201,10 @@ func (c *CollectionClient) GetCollectionDataAtBlock(ctx context.Context, b *tlb.
 	}, nil
 }
 
-func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
-	con, err := content.ContentCell()
+func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Address, amountForward tlb.Coins, content ContentAny) (_ *cell.Cell, err error) {
+	con, err := toNftContent(content)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
 	}
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).EndCell()
@@ -220,10 +222,10 @@ func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Addre
 	return body, nil
 }
 
-func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, editor *address.Address, amountForward tlb.Coins, content ContentAny) (*cell.Cell, error) {
-	con, err := content.ContentCell()
+func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, editor *address.Address, amountForward tlb.Coins, content ContentAny) (_ *cell.Cell, err error) {
+	con, err := toNftContent(content)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
 	}
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).MustStoreAddr(editor).EndCell()
@@ -241,38 +243,12 @@ func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, edito
 	return body, nil
 }
 
-func ParseMintPayload(payload *cell.Cell) (*ItemMintPayload, error) {
-	ret := new(ItemMintPayload)
-
-	if err := tlb.LoadFromCell(ret, payload.BeginParse()); err != nil {
-		return nil, err
+func toNftContent(content ContentAny) (*cell.Cell, error) {
+	if off, ok := content.(*ContentOffchain); ok {
+		// https://github.com/ton-blockchain/TIPs/issues/64
+		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
+		// so, we make compatibility
+		return cell.BeginCell().MustStoreStringSnake(off.URI).EndCell(), nil
 	}
-
-	return ret, nil
-}
-
-func ParseMintPayloadContent(payloadContent *cell.Cell) (owner, editor *address.Address, content ContentAny, err error) {
-	s := payloadContent.BeginParse()
-
-	owner, err = s.LoadAddr()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	contentSlice, err := s.LoadRef()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	content, err = ContentFromSlice(contentSlice)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	editor, err = s.LoadAddr()
-	if err != nil {
-		editor = nil
-	}
-
-	return owner, editor, content, nil
+	return content.ContentCell()
 }

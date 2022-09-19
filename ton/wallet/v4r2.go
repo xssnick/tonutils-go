@@ -33,11 +33,11 @@ func (s *SpecV4R2) BuildMessage(ctx context.Context, isInitialized bool, block *
 			return nil, fmt.Errorf("get seqno err: %w", err)
 		}
 
-		iSeq, ok := resp[0].(int64)
-		if !ok {
-			return nil, fmt.Errorf("seqno is not an integer")
+		iSeq, err := resp.Int(0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse seqno: %w", err)
 		}
-		seq = uint64(iSeq)
+		seq = iSeq.Uint64()
 	}
 
 	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).
