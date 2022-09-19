@@ -9,9 +9,21 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"math/big"
 )
 
-func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) ([]interface{}, error) {
+var ErrIncorrectResultType = errors.New("incorrect result type")
+var ErrResultIndexOutOfRange = errors.New("result index is out of range")
+
+type ExecutionResult struct {
+	result []any
+}
+
+func NewExecutionResult(data []any) *ExecutionResult {
+	return &ExecutionResult{data}
+}
+
+func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ExecutionResult, error) {
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, 0b00000100)
 
@@ -92,17 +104,14 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		var result []any
 
 		for resStack.Depth() > 0 {
-			v, _ := resStack.Pop()
+			v, err := resStack.Pop()
+			if err != nil {
+				return nil, err
+			}
 			result = append(result, v)
 		}
 
-		// it comes in reverse order from lite server, reverse it back
-		reversed := make([]any, len(result))
-		for i := 0; i < len(result); i++ {
-			reversed[(len(result)-1)-i] = result[i]
-		}
-
-		return result, nil
+		return NewExecutionResult(result), nil
 	case _LSError:
 		var lsErr LSError
 		resp.Data, err = lsErr.Load(resp.Data)
@@ -113,4 +122,124 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 	}
 
 	return nil, errors.New("unknown response type")
+}
+
+func (r ExecutionResult) AsTuple() []any {
+	return r.result
+}
+
+func (r ExecutionResult) Int(index uint) (*big.Int, error) {
+	if uint(len(r.result)) <= index {
+		return nil, ErrResultIndexOutOfRange
+	}
+
+	val, ok := r.result[index].(*big.Int)
+	if !ok {
+		return nil, ErrIncorrectResultType
+	}
+	return val, nil
+}
+
+func (r ExecutionResult) Cell(index uint) (*cell.Cell, error) {
+	if uint(len(r.result)) <= index {
+		return nil, ErrResultIndexOutOfRange
+	}
+
+	val, ok := r.result[index].(*cell.Cell)
+	if !ok {
+		return nil, ErrIncorrectResultType
+	}
+	return val, nil
+}
+
+func (r ExecutionResult) Slice(index uint) (*cell.Slice, error) {
+	if uint(len(r.result)) <= index {
+		return nil, ErrResultIndexOutOfRange
+	}
+
+	val, ok := r.result[index].(*cell.Slice)
+	if !ok {
+		return nil, ErrIncorrectResultType
+	}
+	return val, nil
+}
+
+func (r ExecutionResult) Builder(index uint) (*cell.Builder, error) {
+	if uint(len(r.result)) <= index {
+		return nil, ErrResultIndexOutOfRange
+	}
+
+	val, ok := r.result[index].(*cell.Builder)
+	if !ok {
+		return nil, ErrIncorrectResultType
+	}
+	return val, nil
+}
+
+func (r ExecutionResult) IsNil(index uint) (bool, error) {
+	if uint(len(r.result)) <= index {
+		return false, ErrResultIndexOutOfRange
+	}
+
+	return r.result[index] == nil, nil
+}
+
+func (r ExecutionResult) Tuple(index uint) ([]any, error) {
+	if uint(len(r.result)) <= index {
+		return nil, ErrResultIndexOutOfRange
+	}
+
+	val, ok := r.result[index].([]any)
+	if !ok {
+		return nil, ErrIncorrectResultType
+	}
+	return val, nil
+}
+
+func (r ExecutionResult) MustCell(index uint) *cell.Cell {
+	res, err := r.Cell(index)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
+func (r ExecutionResult) MustSlice(index uint) *cell.Slice {
+	res, err := r.Slice(index)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
+func (r ExecutionResult) MustBuilder(index uint) *cell.Builder {
+	res, err := r.Builder(index)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
+func (r ExecutionResult) MustInt(index uint) *big.Int {
+	res, err := r.Int(index)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
+func (r ExecutionResult) MustTuple(index uint) []any {
+	res, err := r.Tuple(index)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
+func (r ExecutionResult) MustIsNil(index uint) bool {
+	res, err := r.IsNil(index)
+	if err != nil {
+		panic(err)
+	}
+	return res
 }

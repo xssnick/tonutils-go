@@ -32,6 +32,20 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
+var apiMain = func() *ton.APIClient {
+	client := liteclient.NewConnectionPool()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	if err != nil {
+		panic(err)
+	}
+
+	return ton.NewAPIClient(client)
+}()
+
 var _seed = os.Getenv("WALLET_SEED")
 
 func Test_WalletTransfer(t *testing.T) {
@@ -39,7 +53,8 @@ func Test_WalletTransfer(t *testing.T) {
 
 	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
 		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			ctx := api.Client().StickyContext(context.Background())
+			ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 			defer cancel()
 
 			w, err := FromSeed(api, seed, ver)
@@ -107,7 +122,7 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	t.Logf("internal message hash: %s", hex.EncodeToString(inMsgHash))
 
 	// find tx hash
-	tx, err := w.FindTransactionByInMsgHash(context.Background(), inMsgHash)
+	tx, err := w.FindTransactionByInMsgHash(context.Background(), inMsgHash, 30)
 	if err != nil {
 		t.Fatal("cannot find tx:", err.Error())
 	}
@@ -116,6 +131,8 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 
 func TestWallet_DeployContract(t *testing.T) {
 	seed := strings.Split(_seed, " ")
+
+	ctx := api.Client().StickyContext(context.Background())
 
 	// init wallet
 	w, err := FromSeed(api, seed, HighloadV2R2)
@@ -127,25 +144,71 @@ func TestWallet_DeployContract(t *testing.T) {
 	codeBytes, _ := hex.DecodeString("b5ee9c72410104010020000114ff00f4a413f4bcf2c80b010203844003020009a1b63c43510007a0000061d2421bb1")
 	code, _ := cell.FromBOC(codeBytes)
 
-	addr, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell(), true)
+	addr, err := w.DeployContract(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell(), true)
 	if err != nil {
 		t.Fatal("deploy err:", err)
 	}
 	t.Logf("contract address: %s", addr.String())
 
-	block, err := api.CurrentMasterchainInfo(context.Background())
+	block, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		t.Fatal("CurrentMasterchainInfo err:", err.Error())
 		return
 	}
 
-	res, err := api.RunGetMethod(context.Background(), block, addr, "dappka", 5, 10)
+	res, err := api.RunGetMethod(ctx, block, addr, "dappka", 5, 10)
 	if err != nil {
 		t.Fatal("run err:", err)
 	}
 
-	if res[0].(int64) != 5 || res[1].(int64) != 50 {
-		t.Fatal("result err:", res[0].(int64), res[1].(int64))
+	if res.MustInt(0).Uint64() != 5 || res.MustInt(1).Uint64() != 50 {
+		t.Fatal("result err:", res.MustInt(0).Uint64(), res.MustInt(1).Uint64())
+	}
+}
+
+func TestGetWalletVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var testCases = []struct {
+		Addr    *address.Address
+		Version Version
+	}{
+		{
+			Addr:    address.MustParseAddr("EQCetCJb1W-oAqQtiiWuAa1JibQ0LHnFytgJWtTvX5La_ZON"),
+			Version: V3,
+		}, {
+			Addr:    address.MustParseAddr("EQBfAN7LfaUYgXZNw5Wc7GBgkEX2yhuJ5ka95J1JJwXXf4a8"),
+			Version: V3,
+		}, {
+			Addr:    address.MustParseAddr("EQA5Fa4g4JfeQoA41N6mJx0MvH75i30dV1CXKoOijFa-XnmZ"),
+			Version: V4R2,
+		}, {
+			Addr:    address.MustParseAddr("EQAaQOzG_vqjGo71ZJNiBdU1SRenbqhEzG8vfpZwubzyB0T8"),
+			Version: V4R1,
+		}, {
+			Addr:    address.MustParseAddr("EQAkbIA32zna94YX1Oii371zF-CHOPHB8DLIJa1QBcdNNGmq"),
+			Version: V4R2,
+		}, {
+			Addr:    address.MustParseAddr("EQBREtZ3r9bEuFSCWYtqx5KbJBDRPdSSCG3wzJvQDXcvXagl"),
+			Version: Unknown,
+		},
+	}
+
+	ctx = apiMain.Client().StickyContext(ctx)
+	master, err := apiMain.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range testCases {
+		account, err := apiMain.GetAccount(ctx, master, test.Addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v := GetWalletVersion(account); v != test.Version {
+			t.Fatalf("%s: expected: %d, got: %d", test.Addr.String(), test.Version, v)
+		}
 	}
 }
 

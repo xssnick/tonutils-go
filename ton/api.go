@@ -5,11 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sync"
-	"time"
-
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
+	"sync"
+	"time"
 )
 
 // requests
@@ -24,6 +23,7 @@ const (
 	_GetAllShardsInfo      int32 = 1960050027
 	_ListBlockTransactions int32 = -1375942694
 	_LookupBlock           int32 = -87492834
+	_WaitMasterchainSeqno  int32 = -1159022446
 )
 
 // responses
@@ -49,6 +49,7 @@ const (
 
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
+	StickyContext(ctx context.Context) context.Context
 }
 
 type ContractExecError struct {
