@@ -46,7 +46,10 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.GetNFTDataAtBlock(ctx, b)
+}
 
+func (c *ItemClient) GetNFTDataAtBlock(ctx context.Context, b *tlb.BlockInfo) (*ItemData, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
