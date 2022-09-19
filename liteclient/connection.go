@@ -431,7 +431,7 @@ func (n *connection) queryADNL(qid, payload []byte) error {
 	return n.send(data)
 }
 
-func (n *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) error {
+func (n *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) (string, error) {
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
 
@@ -440,7 +440,7 @@ func (n *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) e
 
 	data = append(data, tl.ToBytes(append(typData, payload...))...)
 
-	return n.queryADNL(qid, data)
+	return n.addr, n.queryADNL(qid, data)
 }
 
 func (c *ConnectionPool) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {

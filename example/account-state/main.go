@@ -33,7 +33,7 @@ func main() {
 		return
 	}
 
-	addr := address.MustParseAddr("EQBPKiOuQu8QEGQk4hIb8o_r7JWdf-sn1OrQt1PFAD5fnvhc")
+	addr := address.MustParseAddr("EQCVRJ-RqeZWcDqgTzzcxUIrChFYs0SyKGUvye9kGOuEWndQ")
 
 	res, err := api.GetAccount(ctx, b, addr)
 	if err != nil {
