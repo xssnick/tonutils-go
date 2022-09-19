@@ -123,7 +123,7 @@ func (c *CollectionClient) RoyaltyParamsAtBlock(ctx context.Context, b *tlb.Bloc
 	}, nil
 }
 
-func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, individualNFTContent *cell.Cell) (ContentAny, error) {
+func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, individualNFTContent ContentAny) (ContentAny, error) {
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
@@ -131,7 +131,7 @@ func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, in
 	return c.GetNFTContentAtBlock(ctx, b, index, individualNFTContent)
 }
 
-func (c *CollectionClient) GetNFTContentAtBlock(ctx context.Context, b *tlb.BlockInfo, index *big.Int, individualNFTContent *cell.Cell) (ContentAny, error) {
+func (c *CollectionClient) GetNFTContentAtBlock(ctx context.Context, b *tlb.BlockInfo, index *big.Int, individualNFTContent ContentAny) (ContentAny, error) {
 	con, err := toNftContent(individualNFTContent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
