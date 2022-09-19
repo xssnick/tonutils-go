@@ -15,7 +15,7 @@ func TestStack_ToCell(t *testing.T) {
 	s.Push(StackNaN{})
 	s.Push(cell.BeginCell().MustStoreUInt(0xBB, 8).MustStoreRef(ref))
 	s.Push(cell.BeginCell().MustStoreUInt(0xCC, 8).MustStoreRef(ref).EndCell())
-	s.Push(uint64(777))
+	s.Push(uint64(18446744073709551615))
 	s.Push(int64(555))
 	s.Push(cell.BeginCell().MustStoreUInt(0x55, 8).MustStoreRef(ref).EndCell().BeginParse())
 
@@ -55,7 +55,7 @@ func TestStack_ToCell(t *testing.T) {
 	if err != nil {
 		t.Fatal("pop 1 err", err)
 	}
-	if v.(int64) != 555 {
+	if v.(*big.Int).Uint64() != 555 {
 		t.Fatal("tiny val err", err)
 	}
 
@@ -63,7 +63,7 @@ func TestStack_ToCell(t *testing.T) {
 	if err != nil {
 		t.Fatal("pop 1 err", err)
 	}
-	if v.(*big.Int).Uint64() != 777 {
+	if v.(*big.Int).Uint64() != 18446744073709551615 {
 		t.Fatal("big val err", err)
 	}
 }

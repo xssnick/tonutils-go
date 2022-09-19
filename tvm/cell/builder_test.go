@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"math/rand"
 	"testing"
 )
 
@@ -371,5 +372,55 @@ func TestBuilder_StoreBuilder(t *testing.T) {
 
 	if val := c.RefsUsed(); val != 4 {
 		t.Fatal("refs used incorrect, its:", val)
+	}
+}
+
+func TestSliceFuzz(t *testing.T) {
+	arr1 := make([]byte, 128)
+	arr2 := make([]byte, 128)
+
+	for i := 0; i < 500000; i++ {
+		sz1 := uint(rand.Uint64() % 512)
+		sz2 := uint(rand.Uint64() % 512)
+		rand.Read(arr1)
+		rand.Read(arr2)
+
+		c := BeginCell()
+
+		if err := c.StoreSlice(arr1, sz1); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := c.StoreSlice(arr2, sz2); err != nil {
+			t.Fatal(err)
+		}
+
+		s := c.EndCell().BeginParse()
+		data1 := s.MustLoadSlice(sz1)
+		data2 := s.MustLoadSlice(sz2)
+
+		oneMore := uint(0)
+		if sz1%8 != 0 {
+			oneMore = 1
+		}
+		cut1 := arr1[:sz1/8+oneMore]
+		if oneMore > 0 {
+			cut1[len(cut1)-1] &= 0xFF << (8 - (sz1 % 8))
+		}
+		if !bytes.Equal(data1, cut1) {
+			t.Fatal("data1 not eq after load")
+		}
+
+		oneMore = uint(0)
+		if sz2%8 != 0 {
+			oneMore = 1
+		}
+		cut2 := arr2[:sz2/8+oneMore]
+		if oneMore > 0 {
+			cut2[len(cut2)-1] &= 0xFF << (8 - (sz2 % 8))
+		}
+		if !bytes.Equal(data2, cut2) {
+			t.Fatal("data2 not eq after load")
+		}
 	}
 }

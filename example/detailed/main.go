@@ -48,7 +48,7 @@ func main() {
 		}
 	*/
 
-	res, err := api.RunGetMethod(context.Background(), b, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "mult", 7, uint64(8))
+	res, err := api.RunGetMethod(context.Background(), b, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "mult", 7, 8)
 	if err != nil {
 		log.Fatalln("run get method err:", err.Error())
 		return
@@ -57,7 +57,7 @@ func main() {
 	// response can contain multiple results
 	// for such case, for example: (int, int) get2ints()
 
-	for _, c := range res {
+	for _, c := range res.AsTuple() {
 		switch res := c.(type) {
 		case *cell.Cell:
 			sz, payload, err := res.BeginParse().RestBits()
@@ -76,9 +76,7 @@ func main() {
 
 			fmt.Printf("RESP SLICE %d bits, hex(%s)\n", sz, hex.EncodeToString(payload))
 		case *big.Int:
-			fmt.Println("RESP BIG INT", res.Uint64())
-		case uint64:
-			fmt.Println("RESP UINT", res)
+			fmt.Println("RESP INT", res.Uint64())
 		}
 	}
 }

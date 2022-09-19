@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/address"
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
@@ -23,7 +24,7 @@ var api = func() *ton.APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := client.AddConnection(ctx, "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -31,8 +32,10 @@ var api = func() *ton.APIClient {
 	return ton.NewAPIClient(client)
 }()
 
+var _seed = os.Getenv("WALLET_SEED")
+
 func Test_NftMintTransfer(t *testing.T) {
-	seed := strings.Split("burger letter already sleep chimney mix regular sunset tired empower candy candy area organ mix caution area caution candy uncover empower burger room dog", " ")
+	seed := strings.Split(_seed, " ")
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -57,7 +60,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("not enough balance", w.Address(), balance.TON())
 	}
 
-	collectionAddr := address.MustParseAddr("EQDjHv8O22eveLRmrgyZhy32Bfb3Db5LBXIi0jDy7Z95qcwJ")
+	collectionAddr := address.MustParseAddr("EQBTObWUuWTb5ECnLI4x6a3szzstmMDOcc5Kdo-CpbUY9Y5K") // address = deployCollection(w) w.seed = (fiction ... rather)
 	collection := NewCollectionClient(api, collectionAddr)
 	collectionData, err := collection.GetCollectionData(context.Background())
 	if err != nil {
@@ -87,7 +90,7 @@ func Test_NftMintTransfer(t *testing.T) {
 
 	fmt.Println("Minted NFT:", nftAddr.String(), 0)
 
-	newAddr := address.MustParseAddr("EQBcFfrBJrAGWdE8Xf4ILD8YdSCD5tGS7R5RuVc6asZyBjid")
+	newAddr := address.MustParseAddr("EQB9ElEc88x6kOZytvUp0_18U-W1V-lBdvPcZ-BXdBWVrmeA") // address wallet with other seed = ("together ... lounge")
 	nft := NewItemClient(api, nftAddr)
 	transferData, err := nft.BuildTransferPayload(newAddr, tlb.MustFromTON("0.01"), nil)
 	if err != nil {
@@ -107,18 +110,13 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
 
-	contentCell, err := newData.Content.ContentCell()
-	if err != nil {
-		t.Fatal("contentCell err:", err.Error())
-	}
-
-	fullContent, err := collection.GetNFTContent(context.Background(), collectionData.NextItemIndex, contentCell)
+	fullContent, err := collection.GetNFTContent(context.Background(), collectionData.NextItemIndex, newData.Content)
 	if err != nil {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
 
-	if fullContent.(*ContentOffchain).URI != "https://yandex.ru/crigne/"+itemURI {
-		t.Fatal("full content incorrect")
+	if fullContent.(*ContentOffchain).URI != "https://tonutils.com/items/"+itemURI {
+		t.Fatal("full content incorrect", fullContent.(*ContentOffchain).URI)
 	}
 
 	roy, err := collection.RoyaltyParams(context.Background())
@@ -126,7 +124,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("RoyaltyParams err:", err.Error())
 	}
 
-	if roy.Address.String() != "EQBYIB9xax6l7ibZhofm5BfiILbz2rH2PMNrSSShSwC5NvaU" {
+	if roy.Address.String() != "EQCyMa4xOmcr6H0OWbcYtwOTsf6YUSW3KuGj010WgWBVQhoJ" { // address which get paid for nft. Wallet.seed = (fiction ... rather)
 		t.Fatal("royalty addr invalid")
 	}
 
@@ -146,13 +144,15 @@ func Test_NftMintTransfer(t *testing.T) {
 func deployCollection(w *wallet.Wallet) {
 	roy := cell.BeginCell().MustStoreUInt(0, 16).MustStoreUInt(0, 16).MustStoreAddr(w.Address()).EndCell()
 
-	main := ContentOffchain{URI: "https://yandex.ru"}
+	main := ContentOffchain{URI: "https://tonutils.com/main.json"}
 	mainCell, _ := main.ContentCell()
 
-	common := ContentOffchain{URI: "https://yandex.ru/crigne/"}
-	commonCell, _ := common.ContentCell()
+	// https://github.com/ton-blockchain/TIPs/issues/64
+	// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
+	// so, we make compatibility
+	commonContentCell := cell.BeginCell().MustStoreStringSnake("https://tonutils.com/items/").EndCell()
 
-	cc := cell.BeginCell().MustStoreRef(mainCell).MustStoreRef(commonCell).EndCell()
+	cc := cell.BeginCell().MustStoreRef(mainCell).MustStoreRef(commonContentCell).EndCell()
 	dd := cell.BeginCell().MustStoreAddr(w.Address()).MustStoreUInt(0, 64).MustStoreRef(cc).MustStoreRef(getItemCode()).MustStoreRef(roy).EndCell()
 
 	fff, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.05"), cell.BeginCell().EndCell(), getContractCode(),

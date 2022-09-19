@@ -22,7 +22,7 @@ func main() {
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
 
-	nftAddr := address.MustParseAddr("EQCAY8CLtjqrZVAn9pVpaXyKCPsyg5nkDkAlq76IWzsX67xs")
+	nftAddr := address.MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
 	item := nft.NewItemClient(api, nftAddr)
 
 	nftData, err := item.GetNFTData(context.Background())
@@ -48,14 +48,8 @@ func main() {
 	fmt.Println("    index        :", nftData.Index)
 
 	if nftData.Initialized {
-		// convert content to cell, we need it to get full url
-		nftContentCell, err := nftData.Content.ContentCell()
-		if err != nil {
-			panic(err)
-		}
-
 		// get full nft's content url using collection method that will merge base url with nft's data
-		nftContent, err := collection.GetNFTContent(context.Background(), nftData.Index, nftContentCell)
+		nftContent, err := collection.GetNFTContent(context.Background(), nftData.Index, nftData.Content)
 		if err != nil {
 			panic(err)
 		}
