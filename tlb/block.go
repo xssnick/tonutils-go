@@ -63,6 +63,7 @@ type McBlockExtra struct {
 }
 
 type BlockExtra struct {
+	_                  Magic         `tlb:"#4a33f6fd"`
 	InMsgDesc          *cell.Cell    `tlb:"^"`
 	OutMsgDesc         *cell.Cell    `tlb:"^"`
 	ShardAccountBlocks *cell.Cell    `tlb:"^"`
