@@ -155,7 +155,7 @@ func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {
 
 	if infoPart.NotMaster {
 		var masterRef ExtBlkRef
-		l, err := loader.LoadRef() // skip master_ref:not_master?^BlkMasterInfo
+		l, err := loader.LoadRef()
 		if err != nil {
 			return err
 		}
