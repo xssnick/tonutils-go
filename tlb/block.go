@@ -226,7 +226,7 @@ func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) 
 	return &res, nil
 }
 
-func convertShardIdent(si ShardIdent) (workchain int32, shard uint64) {
+func ConvertShardIdentToShard(si ShardIdent) (workchain int32, shard uint64) {
 	shard = si.ShardPrefix
 	pow2 := uint64(1) << (63 - si.PrefixBits)
 	shard |= pow2
@@ -256,7 +256,7 @@ func bitsNegate64(x uint64) uint64 {
 
 func (h *BlockHeader) GetParentBlocks() ([]*BlockInfo, error) {
 	var parents []*BlockInfo
-	workchain, shard := convertShardIdent(h.Shard)
+	workchain, shard := ConvertShardIdentToShard(h.Shard)
 
 	if !h.AfterMerge && !h.AfterSplit {
 		return []*BlockInfo{{
