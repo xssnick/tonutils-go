@@ -16,7 +16,8 @@ type ShardState struct {
 }
 
 type ShardIdent struct {
-	PrefixBits  int8   `tlb:"## 6"`
+	_           Magic  `tlb:"$00"`
+	PrefixBits  int8   `tlb:"## 6"` // #<= 60
 	WorkchainID int32  `tlb:"## 32"`
 	ShardPrefix uint64 `tlb:"## 64"`
 }
