@@ -288,9 +288,9 @@ func (h *BlockHeader) GetParentBlocks() ([]*BlockInfo, error) {
 	})
 	parents = append(parents, &BlockInfo{
 		Workchain: workchain,
-		SeqNo:     h.PrevRef.Prev1.SeqNo,
-		RootHash:  h.PrevRef.Prev1.RootHash,
-		FileHash:  h.PrevRef.Prev1.FileHash,
+		SeqNo:     h.PrevRef.Prev2.SeqNo,
+		RootHash:  h.PrevRef.Prev2.RootHash,
+		FileHash:  h.PrevRef.Prev2.FileHash,
 		Shard:     int64(shardChild(shard, false)),
 	})
 	return parents, nil
