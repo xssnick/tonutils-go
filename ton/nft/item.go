@@ -49,7 +49,7 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_data")
 	if err != nil {
-		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
+		return nil, fmt.Errorf("failed to run get_nft_data method: %w", err)
 	}
 
 	init, err := res.Int(0)
@@ -121,15 +121,23 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 	}, nil
 }
 
-func (c *ItemClient) BuildTransferPayload(newOwner *address.Address, amountForward tlb.Coins, payloadForward *cell.Cell) (*cell.Cell, error) {
+func (c *ItemClient) BuildTransferPayload(newOwner *address.Address, amountForward tlb.Coins, payloadForward *cell.Cell, responseTo ...*address.Address) (*cell.Cell, error) {
 	if payloadForward == nil {
 		payloadForward = cell.BeginCell().EndCell()
+	}
+
+	respTo := newOwner
+	if len(responseTo) == 1 {
+		respTo = responseTo[0]
+	} else if len(responseTo) > 1 {
+		// to protect from misunderstanding
+		panic("only 1 response destination is allowed")
 	}
 
 	body, err := tlb.ToCell(TransferPayload{
 		QueryID:             rand.Uint64(),
 		NewOwner:            newOwner,
-		ResponseDestination: newOwner,
+		ResponseDestination: respTo,
 		CustomPayload:       nil,
 		ForwardAmount:       amountForward,
 		ForwardPayload:      payloadForward,

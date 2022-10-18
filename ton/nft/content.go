@@ -183,6 +183,22 @@ func (c *ContentOnchain) SetAttributeBinary(name string, value []byte) error {
 	return nil
 }
 
+func (c *ContentOnchain) SetAttributeCell(key string, cl *cell.Cell) error {
+	if c.attributes == nil {
+		c.attributes = cell.NewDict(256)
+	}
+
+	h := sha256.New()
+	h.Write([]byte(key))
+
+	err := c.attributes.Set(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell(), cell.BeginCell().MustStoreRef(cl).EndCell())
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *ContentOnchain) GetAttribute(name string) string {
 	return string(c.GetAttributeBinary(name))
 }
