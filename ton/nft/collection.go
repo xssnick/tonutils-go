@@ -3,9 +3,10 @@ package nft
 import (
 	"context"
 	"fmt"
-	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"math/rand"
+
+	"github.com/xssnick/tonutils-go/ton"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -60,7 +61,10 @@ func (c *CollectionClient) GetNFTAddressByIndex(ctx context.Context, index *big.
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.GetNFTAddressByIndexAtBlock(ctx, index, b)
+}
 
+func (c *CollectionClient) GetNFTAddressByIndexAtBlock(ctx context.Context, index *big.Int, b *tlb.BlockInfo) (*address.Address, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_address_by_index", index)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_address_by_index method: %w", err)
@@ -84,7 +88,10 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.RoyaltyParamsAtBlock(ctx, b)
+}
 
+func (c *CollectionClient) RoyaltyParamsAtBlock(ctx context.Context, b *tlb.BlockInfo) (*CollectionRoyaltyParams, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "royalty_params")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run royalty_params method: %w", err)
@@ -118,14 +125,17 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 }
 
 func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, individualNFTContent ContentAny) (ContentAny, error) {
-	con, err := toNftContent(individualNFTContent)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
-	}
-
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
+	}
+	return c.GetNFTContentAtBlock(ctx, index, individualNFTContent, b)
+}
+
+func (c *CollectionClient) GetNFTContentAtBlock(ctx context.Context, index *big.Int, individualNFTContent ContentAny, b *tlb.BlockInfo) (ContentAny, error) {
+	con, err := toNftContent(individualNFTContent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
 	}
 
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_content", index, con)
@@ -151,7 +161,10 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.GetCollectionDataAtBlock(ctx, b)
+}
 
+func (c *CollectionClient) GetCollectionDataAtBlock(ctx context.Context, b *tlb.BlockInfo) (*CollectionData, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_collection_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
