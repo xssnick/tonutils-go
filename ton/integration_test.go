@@ -125,7 +125,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-  ctx = apiTestNet.client.StickyContext(ctx)
+	ctx = apiTestNet.client.StickyContext(ctx)
 
 	b, err := apiTestNet.GetMasterchainInfo(ctx)
 	if err != nil {
@@ -374,6 +374,17 @@ func TestAPIClient_WaitNextBlock(t *testing.T) {
 	if err == nil {
 		t.Fatal("it works with not master")
 	}
+}
+
+func Test_GetTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	utime, err := api.GetTime(ctx)
+	if err != nil {
+		t.Fatal("get time err:", err.Error())
+	}
+	log.Println("current node utime: ", time.Unix(int64(utime), 0))
 }
 
 func Test_GetConfigParamsAll(t *testing.T) {
