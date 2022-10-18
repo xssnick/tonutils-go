@@ -84,8 +84,22 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 
 	_, err = api.GetBlockData(ctx, b)
 	if err != nil {
-		t.Fatal("GetBlockData err:", err.Error())
+		t.Fatal("Get master block data err:", err.Error())
 		return
+	}
+
+	shards, err := api.GetBlockShardsInfo(ctx, b)
+	if err != nil {
+		log.Fatalln("get shards err:", err.Error())
+		return
+	}
+
+	for _, shard := range shards {
+		_, err = api.GetBlockData(ctx, shard)
+		if err != nil {
+			t.Fatal("Get shard block data err:", err.Error())
+			return
+		}
 	}
 
 	// TODO: data check
