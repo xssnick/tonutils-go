@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -29,7 +30,10 @@ type ContentSemichain struct {
 }
 
 func ContentFromCell(c *cell.Cell) (ContentAny, error) {
-	s := c.BeginParse()
+	return ContentFromSlice(c.BeginParse())
+}
+
+func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
 	if s.BitsLeft() < 8 {
 		if s.RefsNum() == 0 {
 			return nil, errors.New("invalid content")
@@ -180,6 +184,22 @@ func (c *ContentOnchain) SetAttributeBinary(name string, value []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to set attribute: %w", err)
 	}
+	return nil
+}
+
+func (c *ContentOnchain) SetAttributeCell(key string, cl *cell.Cell) error {
+	if c.attributes == nil {
+		c.attributes = cell.NewDict(256)
+	}
+
+	h := sha256.New()
+	h.Write([]byte(key))
+
+	err := c.attributes.Set(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell(), cell.BeginCell().MustStoreRef(cl).EndCell())
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 

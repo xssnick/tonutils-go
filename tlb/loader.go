@@ -211,7 +211,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 			}
 
 			if ldMagic != uint64(magic) {
-				return fmt.Errorf("magic is not correct")
+				return fmt.Errorf("magic is not correct for %s, want %x, got %x", rv.Type().String(), magic, ldMagic)
 			}
 			continue
 		} else if settings[0] == "dict" {

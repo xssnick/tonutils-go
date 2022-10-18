@@ -3,12 +3,13 @@ package jetton
 import (
 	"context"
 	"fmt"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"math/big"
 )
 
 type TonApi interface {
@@ -49,7 +50,10 @@ func (c *Client) GetJettonWallet(ctx context.Context, ownerAddr *address.Address
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.GetJettonWalletAtBlock(ctx, ownerAddr, b)
+}
 
+func (c *Client) GetJettonWalletAtBlock(ctx context.Context, ownerAddr *address.Address, b *tlb.BlockInfo) (*WalletClient, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_wallet_address",
 		cell.BeginCell().MustStoreAddr(ownerAddr).EndCell().BeginParse())
 	if err != nil {
@@ -77,7 +81,10 @@ func (c *Client) GetJettonData(ctx context.Context) (*Data, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.GetJettonDataAtBlock(ctx, b)
+}
 
+func (c *Client) GetJettonDataAtBlock(ctx context.Context, b *tlb.BlockInfo) (*Data, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_jetton_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_jetton_data method: %w", err)

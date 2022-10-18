@@ -84,8 +84,27 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 
 	_, err = api.GetBlockData(ctx, b)
 	if err != nil {
-		t.Fatal("GetBlockData err:", err.Error())
+		t.Fatal("Get master block data err:", err.Error())
 		return
+	}
+
+	shards, err := api.GetBlockShardsInfo(ctx, b)
+	if err != nil {
+		log.Fatalln("get shards err:", err.Error())
+		return
+	}
+
+	for _, shard := range shards {
+		data, err := api.GetBlockData(ctx, shard)
+		if err != nil {
+			t.Fatal("Get shard block data err:", err.Error())
+			return
+		}
+		_, err = data.BlockInfo.GetParentBlocks()
+		if err != nil {
+			t.Fatal("Get block parents err:", err.Error())
+			return
+		}
 	}
 
 	// TODO: data check
@@ -125,7 +144,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-  ctx = apiTestNet.client.StickyContext(ctx)
+	ctx = apiTestNet.client.StickyContext(ctx)
 
 	b, err := apiTestNet.GetMasterchainInfo(ctx)
 	if err != nil {
@@ -373,5 +392,64 @@ func TestAPIClient_WaitNextBlock(t *testing.T) {
 	n, err = api.WaitNextMasterBlock(ctx, c)
 	if err == nil {
 		t.Fatal("it works with not master")
+	}
+}
+
+func Test_GetTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	utime, err := api.GetTime(ctx)
+	if err != nil {
+		t.Fatal("get time err:", err.Error())
+	}
+	log.Println("current node utime: ", time.Unix(int64(utime), 0))
+}
+
+func Test_GetConfigParamsAll(t *testing.T) {
+	ctx := api.client.StickyContext(context.Background())
+
+	b, err := api.GetMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block 2 err:", err.Error())
+		return
+	}
+
+	conf, err := api.GetBlockchainConfig(ctx, b)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	if len(conf.All()) < 20 {
+		t.Fatal("bad config response, too short")
+	}
+
+	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
+		t.Fatal("bad config response for 8 param")
+	}
+}
+
+func Test_GetConfigParams8(t *testing.T) {
+	ctx := api.client.StickyContext(context.Background())
+
+	b, err := api.GetMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block 2 err:", err.Error())
+		return
+	}
+
+	conf, err := api.GetBlockchainConfig(ctx, b, 8)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	if len(conf.All()) != 1 {
+		t.Fatal("bad config response, bad length")
+	}
+
+	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
+		t.Fatal("bad config response for 8 param")
 	}
 }

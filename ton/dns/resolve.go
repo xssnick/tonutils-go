@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"strings"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"strings"
 )
 
 var ErrNoSuchRecord = fmt.Errorf("no such dns record")
@@ -46,23 +47,26 @@ func NewDNSClient(api TonApi, root *address.Address) *Client {
 }
 
 func (c *Client) Resolve(ctx context.Context, domain string) (*Domain, error) {
-	chain := strings.Split(domain, ".")
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 { // reverse array
-		chain[i], chain[j] = chain[j], chain[i]
-	}
-	return c.resolve(ctx, c.root, strings.Join(chain, "\x00")+"\x00")
-}
-
-func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, chain string) (*Domain, error) {
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.ResolveAtBlock(ctx, domain, b)
+}
 
+func (c *Client) ResolveAtBlock(ctx context.Context, domain string, b *tlb.BlockInfo) (*Domain, error) {
+	chain := strings.Split(domain, ".")
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 { // reverse array
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return c.resolve(ctx, c.root, strings.Join(chain, "\x00")+"\x00", b)
+}
+
+func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, chain string, b *tlb.BlockInfo) (*Domain, error) {
 	name := []byte(chain)
 	nameCell := cell.BeginCell()
 
-	if err = nameCell.StoreSlice(name, uint(len(name)*8)); err != nil {
+	if err := nameCell.StoreSlice(name, uint(len(name)*8)); err != nil {
 		return nil, fmt.Errorf("failed to pack domain name: %w", err)
 	}
 
@@ -110,7 +114,7 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 			return nil, fmt.Errorf("failed to load next root: %w", err)
 		}
 
-		return c.resolve(ctx, nextRoot, chain[bytesResolved:])
+		return c.resolve(ctx, nextRoot, chain[bytesResolved:], b)
 	}
 
 	records, err := s.ToDict(256)

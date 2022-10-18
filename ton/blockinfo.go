@@ -3,6 +3,7 @@ package ton
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -128,6 +129,7 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tl
 		var payload []byte
 		payload, resp.Data = loadBytes(resp.Data)
 
+		println(hex.EncodeToString(payload))
 		cl, err := cell.FromBOC(payload)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse block boc: %w", err)
