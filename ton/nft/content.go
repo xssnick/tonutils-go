@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -29,7 +30,10 @@ type ContentSemichain struct {
 }
 
 func ContentFromCell(c *cell.Cell) (ContentAny, error) {
-	s := c.BeginParse()
+	return ContentFromSlice(c.BeginParse())
+}
+
+func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
 	if s.BitsLeft() < 8 {
 		if s.RefsNum() == 0 {
 			return nil, errors.New("invalid content")

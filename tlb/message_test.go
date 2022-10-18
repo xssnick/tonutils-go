@@ -8,9 +8,9 @@ import (
 )
 
 func TestInternalMessage_ToCell(t *testing.T) { // need to deploy contract on test-net - > than change config to test-net.
-	src := address.MustParseAddr("EQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTzpK4")
-	dst := address.MustParseAddr("EQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0pJG")
-	amount := MustFromTON("10.5489292")
+	src := address.MustParseAddr("EQAOp1zuKuX4zY6L9rEdSLam7J3gogIHhfRu_gH70u2MQnmd") // new address from test net
+	dst := address.MustParseAddr("EQA_B407fiLIlE5VYZCaI2rki0in6kLyjdhhwitvZNfpe7eY") // new address from test net
+	amount := MustFromTON("0.05")
 
 	intMsg := InternalMessage{
 		IHRDisabled: false,

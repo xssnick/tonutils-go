@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/xssnick/tonutils-go/address"
 	"log"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xssnick/tonutils-go/address"
 
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
