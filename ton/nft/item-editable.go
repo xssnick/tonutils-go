@@ -31,7 +31,10 @@ func (c *ItemEditableClient) GetEditor(ctx context.Context) (*address.Address, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
+	return c.GetEditorAtBlock(ctx, b)
+}
 
+func (c *ItemEditableClient) GetEditorAtBlock(ctx context.Context, b *tlb.BlockInfo) (*address.Address, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_editor")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_editor method: %w", err)

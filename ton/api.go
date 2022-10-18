@@ -25,6 +25,8 @@ const (
 	_LookupBlock           int32 = -87492834
 	_WaitMasterchainSeqno  int32 = -1159022446
 	_GetTime               int32 = 380459572
+	_GetConfigParams       int32 = 705764377
+	_GetConfigAll          int32 = -1860491593
 )
 
 // responses
@@ -39,6 +41,7 @@ const (
 	_BlockHeader       int32 = 1965916697
 	_AllShardsInfo     int32 = 160425773
 	_CurrentTime       int32 = -380436467
+	_ConfigParams      int32 = -1367660753
 
 	_BoolTrue  int32 = -1720552011
 	_BoolFalse int32 = -1132882121

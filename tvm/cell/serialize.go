@@ -2,7 +2,6 @@ package cell
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"hash/crc32"
 	"math"
@@ -57,7 +56,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	data = append(data, sizeBytes)
 
 	// cells num
-	data = append(data, dynamicIntBytes(uint64(calcCells(c)), uint(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(len(orderCells)), uint(cellSizeBytes))...)
 
 	// roots num (only 1 supported for now)
 	data = append(data, dynamicIntBytes(1, uint(cellSizeBytes))...)
@@ -80,22 +79,6 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	}
 
 	return data
-}
-
-func calcCells(cell *Cell) int {
-	m := map[string]*Cell{}
-	// calc unique cells
-	uniqCells(m, cell)
-
-	return len(m)
-}
-
-func uniqCells(m map[string]*Cell, cell *Cell) {
-	m[hex.EncodeToString(cell.Hash())] = cell
-
-	for _, ref := range cell.refs {
-		uniqCells(m, ref)
-	}
 }
 
 func (c *Cell) serialize(refIndexSzBytes uint, isHash bool) []byte {

@@ -88,11 +88,13 @@ func getContractData(collectionOwnerAddr, royaltyAddr *address.Address) *cell.Ce
 		MustStoreAddr(royaltyAddr).
 		EndCell()
 
-	collectionContent := nft.ContentOffchain{URI: "https://tonutils.com"}
+	// collection data
+	collectionContent := nft.ContentOffchain{URI: "https://tonutils.com/collection.json"}
 	collectionContentCell, _ := collectionContent.ContentCell()
 
-	commonContent := nft.ContentOffchain{URI: "https://tonutils.com/nft/"}
-	commonContentCell, _ := commonContent.ContentCell()
+	// prefix for NFTs data
+	uri := "https://tonutils.com/nft/"
+	commonContentCell := cell.BeginCell().MustStoreStringSnake(uri).EndCell()
 
 	contentRef := cell.BeginCell().
 		MustStoreRef(collectionContentCell).

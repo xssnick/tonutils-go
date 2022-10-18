@@ -7,10 +7,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/ton"
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/xssnick/tonutils-go/ton"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -34,6 +35,22 @@ const (
 	Lockup       Version = 200
 	Unknown      Version = 0
 )
+
+func (v Version) String() string {
+	if v == Unknown {
+		return "unknown"
+	}
+	if v/10 > 0 && v/10 < 10 {
+		return fmt.Sprintf("V%dR%d", v/10, v%10)
+	}
+	if v/100 == 1 {
+		return fmt.Sprintf("highload V%dR%d", v/100/10, v%10)
+	}
+	if v/100 == 2 {
+		return fmt.Sprintf("lockup")
+	}
+	return fmt.Sprintf("%d", v)
+}
 
 var (
 	walletCodeHex = map[Version]string{
