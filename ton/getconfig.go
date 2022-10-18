@@ -70,7 +70,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInf
 			return nil, err
 		}
 
-		var state tlb.ShardState
+		var state tlb.ShardStateUnsplit
 		err = tlb.LoadFromCell(&state, ref)
 		if err != nil {
 			return nil, err

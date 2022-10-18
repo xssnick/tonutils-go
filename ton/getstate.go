@@ -74,7 +74,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			return nil, fmt.Errorf("failed to load ref ShardStateUnsplit: %w", err)
 		}
 
-		var shardState tlb.ShardState
+		var shardState tlb.ShardStateUnsplit
 		err = tlb.LoadFromCell(&shardState, ssuRef)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load ref ShardState: %w", err)

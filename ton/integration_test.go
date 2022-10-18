@@ -95,9 +95,14 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 	}
 
 	for _, shard := range shards {
-		_, err = api.GetBlockData(ctx, shard)
+		data, err := api.GetBlockData(ctx, shard)
 		if err != nil {
 			t.Fatal("Get shard block data err:", err.Error())
+			return
+		}
+		_, err = data.BlockInfo.GetParentBlocks()
+		if err != nil {
+			t.Fatal("Get block parents err:", err.Error())
 			return
 		}
 	}
