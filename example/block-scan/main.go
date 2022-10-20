@@ -55,9 +55,13 @@ func main() {
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
 
-	// we are looking for split on 3673639 and merge on 3673699 master chain blocks
-	var masterShard, masterStartSeqNo uint64 = 0x8000000000000000, 3673632
-	master, err := api.LookupBlock(context.Background(), -1, int64(masterShard), uint32(masterStartSeqNo))
+	// we are looking for splits and merges in the following blocks:
+	// split: (-1,8000000000000000,4230382)
+	// merge: (-1,8000000000000000,4230442)
+	// split: (-1,8000000000000000,4230629)
+	// merge: (-1,8000000000000000,4230689)
+	var masterShard, masterStartSeqNo, masterEndSeqNo uint64 = 0x8000000000000000, 4230350, 4230700
+	master, err := api.LookupBlock(context.Background(), -1, int64(masterShard), uint32(masterStartSeqNo-1))
 	if err != nil {
 		log.Fatalln("lookup master block err: ", err.Error())
 		return
@@ -81,7 +85,7 @@ func main() {
 		shardLastSeqno[getShardID(shard)] = shard.SeqNo
 	}
 
-	for seqNo := uint32(masterStartSeqNo + 1); seqNo < 3674000; seqNo++ {
+	for seqNo := uint32(masterStartSeqNo); seqNo < uint32(masterEndSeqNo); seqNo++ {
 		master, err = api.LookupBlock(context.Background(), -1, int64(masterShard), seqNo)
 		if err != nil {
 			log.Fatalln("wait next master err:", err.Error())
