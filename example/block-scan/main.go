@@ -46,24 +46,19 @@ func getNotSeenShards(ctx context.Context, api *ton.APIClient, shard *tlb.BlockI
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	// connect to testnet archive node
-	if err := client.AddConnection(context.Background(), "65.108.141.177:17439", "0MIADpLH4VQn+INHfm0FxGiuZZAA8JfTujRqQugkkA8="); err != nil {
-		log.Fatalln("add connection err: ", err.Error())
+	// connect to mainnet lite servers
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+	if err != nil {
+		log.Fatalln("connection err: ", err.Error())
 		return
 	}
 
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
 
-	// we are looking for splits and merges in the following blocks:
-	// split: (-1,8000000000000000,4230382)
-	// merge: (-1,8000000000000000,4230442)
-	// split: (-1,8000000000000000,4230629)
-	// merge: (-1,8000000000000000,4230689)
-	var masterShard, masterStartSeqNo, masterEndSeqNo uint64 = 0x8000000000000000, 4230350, 4230700
-	master, err := api.LookupBlock(context.Background(), -1, int64(masterShard), uint32(masterStartSeqNo-1))
+	master, err := api.GetMasterchainInfo(context.Background())
 	if err != nil {
-		log.Fatalln("lookup master block err: ", err.Error())
+		log.Fatalln("get masterchain info err: ", err.Error())
 		return
 	}
 
@@ -85,12 +80,7 @@ func main() {
 		shardLastSeqno[getShardID(shard)] = shard.SeqNo
 	}
 
-	for seqNo := uint32(masterStartSeqNo); seqNo < uint32(masterEndSeqNo); seqNo++ {
-		master, err = api.LookupBlock(context.Background(), -1, int64(masterShard), seqNo)
-		if err != nil {
-			log.Fatalln("wait next master err:", err.Error())
-		}
-
+	for {
 		log.Printf("scanning %d master block...\n", master.SeqNo)
 
 		// getting information about other work-chains and shards of master block
@@ -154,6 +144,11 @@ func main() {
 
 		if len(txList) == 0 {
 			log.Printf("no transactions in %d block\n", master.SeqNo)
+		}
+
+		master, err = api.WaitNextMasterBlock(ctx, master)
+		if err != nil {
+			log.Fatalln("wait next master err:", err.Error())
 		}
 	}
 }
