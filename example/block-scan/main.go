@@ -3,13 +3,45 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
-	"log"
-	"time"
 )
+
+// func to get storage map key
+func getShardID(shard *tlb.BlockInfo) string {
+	return fmt.Sprintf("%d|%d", shard.Workchain, shard.Shard)
+}
+
+func getNotSeenShards(ctx context.Context, api *ton.APIClient, shard *tlb.BlockInfo, shardLastSeqno map[string]uint32) (ret []*tlb.BlockInfo, err error) {
+	if no, ok := shardLastSeqno[getShardID(shard)]; ok && no == shard.SeqNo {
+		return nil, nil
+	}
+
+	b, err := api.GetBlockData(ctx, shard)
+	if err != nil {
+		return nil, fmt.Errorf("get block data: %w", err)
+	}
+
+	parents, err := b.BlockInfo.GetParentBlocks()
+	if err != nil {
+		return nil, fmt.Errorf("get parent blocks (%d:%x:%d): %w", shard.Workchain, uint64(shard.Shard), shard.Shard, err)
+	}
+
+	for _, parent := range parents {
+		ext, err := getNotSeenShards(ctx, api, parent, shardLastSeqno)
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, ext...)
+	}
+
+	ret = append(ret, shard)
+	return ret, nil
+}
 
 func main() {
 	client := liteclient.NewConnectionPool()
@@ -26,7 +58,7 @@ func main() {
 
 	master, err := api.GetMasterchainInfo(context.Background())
 	if err != nil {
-		log.Fatalln("get block err:", err.Error())
+		log.Fatalln("get masterchain info err: ", err.Error())
 		return
 	}
 
@@ -37,11 +69,22 @@ func main() {
 	// storage for last seen shard seqno
 	shardLastSeqno := map[string]uint32{}
 
+	// getting information about other work-chains and shards of first master block
+	// to init storage of last seen shard seq numbers
+	firstShards, err := api.GetBlockShardsInfo(ctx, master)
+	if err != nil {
+		log.Fatalln("get shards err:", err.Error())
+		return
+	}
+	for _, shard := range firstShards {
+		shardLastSeqno[getShardID(shard)] = shard.SeqNo
+	}
+
 	for {
 		log.Printf("scanning %d master block...\n", master.SeqNo)
 
 		// getting information about other work-chains and shards of master block
-		shards, err := api.GetBlockShardsInfo(ctx, master)
+		currentShards, err := api.GetBlockShardsInfo(ctx, master)
 		if err != nil {
 			log.Fatalln("get shards err:", err.Error())
 			return
@@ -49,35 +92,22 @@ func main() {
 
 		// shards in master block may have holes, e.g. shard seqno 2756461, then 2756463, and no 2756462 in master chain
 		// thus we need to scan a bit back in case of discovering a hole, till last seen, to fill the misses.
-		var ext []*tlb.BlockInfo
-		for _, shard := range shards {
-			id := fmt.Sprintf("%d|%d", shard.Workchain, shard.Shard)
-			have, ok := shardLastSeqno[id]
-			if ok && have < shard.SeqNo-1 {
-				// find every shard from first missed till previous of new shard, and add them to scan list
-				for x := have + 1; x < shard.SeqNo; x++ {
-					for {
-						missed, err := api.LookupBlock(ctx, shard.Workchain, shard.Shard, x)
-						if err != nil {
-							log.Printf("lookupBlock old shards %d %d %d err: %v", shard.Workchain, shard.Shard, x, err.Error())
-							time.Sleep(1 * time.Second)
-							continue
-						}
-						log.Printf("discovered missed shard from chain %d %d %d", shard.Workchain, shard.Shard, x)
-						ext = append(ext, missed)
-						break
-					}
-				}
+		var newShards []*tlb.BlockInfo
+		for _, shard := range currentShards {
+			notSeen, err := getNotSeenShards(ctx, api, shard, shardLastSeqno)
+			if err != nil {
+				log.Fatalln("get not seen shards err:", err.Error())
+				return
 			}
-			shardLastSeqno[id] = shard.SeqNo
+			shardLastSeqno[getShardID(shard)] = shard.SeqNo
+			newShards = append(newShards, notSeen...)
 		}
-		shards = append(shards, ext...)
 
 		var txList []*tlb.Transaction
 
 		// for each shard block getting transactions
-		for _, shard := range shards {
-			log.Printf("scanning block %d of shard %d...", shard.SeqNo, shard.Shard)
+		for _, shard := range newShards {
+			log.Printf("scanning block %d of shard %x...", shard.SeqNo, uint64(shard.Shard))
 
 			var fetchedIDs []*tlb.TransactionID
 			var after *tlb.TransactionID
