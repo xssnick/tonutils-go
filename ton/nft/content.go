@@ -2,7 +2,6 @@ package nft
 
 import (
 	"crypto/sha256"
-	"errors"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -36,7 +35,7 @@ func ContentFromCell(c *cell.Cell) (ContentAny, error) {
 func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
 	if s.BitsLeft() < 8 {
 		if s.RefsNum() == 0 {
-			return nil, errors.New("invalid content")
+			return &ContentOffchain{}, nil
 		}
 		s = s.MustLoadRef()
 	}
