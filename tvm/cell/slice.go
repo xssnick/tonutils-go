@@ -167,9 +167,13 @@ func (c *Slice) MustLoadBigUInt(sz uint) *big.Int {
 
 func (c *Slice) LoadBigUInt(sz uint) (*big.Int, error) {
 	if sz > 256 {
-		return nil, ErrTooBigValue
+		return nil, ErrTooBigSize
 	}
 
+	return c.loadBigNumber(sz)
+}
+
+func (c *Slice) loadBigNumber(sz uint) (*big.Int, error) {
 	b, err := c.LoadSlice(sz)
 	if err != nil {
 		return nil, err
@@ -190,7 +194,11 @@ func (c *Slice) LoadBigUInt(sz uint) (*big.Int, error) {
 }
 
 func (c *Slice) LoadBigInt(sz uint) (*big.Int, error) {
-	u, err := c.LoadBigUInt(sz)
+	if sz > 257 {
+		return nil, ErrTooBigSize
+	}
+
+	u, err := c.loadBigNumber(sz)
 	if err != nil {
 		return nil, err
 	}
