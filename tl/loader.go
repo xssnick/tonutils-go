@@ -532,7 +532,7 @@ func Register(typ any, tl string) uint32 {
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, id)
 
-	println("TL Registered:", hex.EncodeToString(b), tl)
+	// println("TL Registered:", hex.EncodeToString(b), tl)
 	return id
 }
 

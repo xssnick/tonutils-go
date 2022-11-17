@@ -104,6 +104,8 @@ func (a *ADNL) Close() {
 	}
 }
 
+var Logger = log.Println
+
 func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 	if a.conn != nil {
 		return fmt.Errorf("already connected")
@@ -131,8 +133,6 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 		return err
 	}
 
-	// waiter := make(chan error, 1)
-
 	go func() {
 		defer func() {
 			a.conn = nil
@@ -145,7 +145,7 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 			buf := make([]byte, 4096)
 			n, err := a.conn.Read(buf)
 			if err != nil {
-				log.Println("failed to read data", err)
+				Logger("failed to read data", err)
 				return
 			}
 
@@ -159,32 +159,32 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 			if bytes.Equal(id, rootID) { // message in root connection
 				dec, err := a.decodePacket(buf)
 				if err != nil {
-					log.Println("failed to decode packet", err)
+					Logger("failed to decode packet", err)
 					return
 				}
 
 				packet, err = a.parsePacket(dec)
 				if err != nil {
-					log.Println("failed to parse packet", err)
+					Logger("failed to parse packet", err)
 					return
 				}
 			} else { // message in channel
 				keyID := hex.EncodeToString(id)
 				ch = a.channels[keyID]
 				if ch == nil {
-					log.Println("unknown receiver id", keyID)
+					Logger("unknown receiver id", keyID)
 					continue
 				}
 
 				dec, err := ch.decodePacket(buf)
 				if err != nil {
-					log.Println("failed to decode packet", err)
+					Logger("failed to decode packet", err)
 					return
 				}
 
 				packet, err = a.parsePacket(dec)
 				if err != nil {
-					log.Println("failed to parse packet", err)
+					Logger("failed to parse packet", err)
 					return
 				}
 			}
@@ -287,7 +287,7 @@ func (a *ADNL) processAnswer(id string, query any) {
 			res <- query
 		}
 	} else {
-		log.Println("unknown response with id", id, a.addr, reflect.TypeOf(query).String())
+		Logger("unknown response with id", id, a.addr, reflect.TypeOf(query).String())
 	}
 }
 

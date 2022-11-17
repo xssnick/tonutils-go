@@ -195,7 +195,6 @@ func (c *Client) findValue(ctx context.Context, node *adnl.ADNL, id []byte, chec
 			conn, keyID, err := c.addNode(cc, n)
 			cancel()
 			if err != nil {
-				println("cant add", err.Error())
 				continue
 			}
 
@@ -208,8 +207,6 @@ func (c *Client) findValue(ctx context.Context, node *adnl.ADNL, id []byte, chec
 
 			val, err = c.findValue(ctx, conn, id, checked)
 			if err != nil {
-				println("cant find", err.Error())
-
 				// failed to find value, we will try next node
 				continue
 			}
