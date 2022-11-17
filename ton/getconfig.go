@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"math/big"
@@ -53,11 +54,17 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInf
 		}
 
 		var shardProof []byte
-		shardProof, resp.Data = loadBytes(resp.Data)
+		shardProof, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 		_ = shardProof
 
 		var configProof []byte
-		configProof, resp.Data = loadBytes(resp.Data)
+		configProof, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 		_ = configProof
 
 		c, err := cell.FromBOC(configProof)

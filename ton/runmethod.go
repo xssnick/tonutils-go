@@ -88,7 +88,10 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		resp.Data = resp.Data[4:]
 
 		var state []byte
-		state, resp.Data = loadBytes(resp.Data)
+		state, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 
 		cl, err := cell.FromBOC(state)
 		if err != nil {

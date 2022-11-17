@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tl"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -41,15 +42,24 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		}
 
 		var shardProof []byte
-		shardProof, resp.Data = loadBytes(resp.Data)
+		shardProof, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 		_ = shardProof
 
 		var proof []byte
-		proof, resp.Data = loadBytes(resp.Data)
+		proof, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 		_ = proof
 
 		var state []byte
-		state, resp.Data = loadBytes(resp.Data)
+		state, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 
 		if len(state) == 0 {
 			return &tlb.Account{

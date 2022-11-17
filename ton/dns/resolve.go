@@ -22,6 +22,7 @@ const _CategoryADNLSite = 0xad01
 type TonApi interface {
 	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
 	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
+	GetBlockchainConfig(ctx context.Context, block *tlb.BlockInfo, onlyParams ...int32) (*ton.BlockchainConfig, error)
 }
 
 type Domain struct {
@@ -34,9 +35,29 @@ type Client struct {
 	api  TonApi
 }
 
-func RootContractAddr(api TonApi) *address.Address {
+func RootContractAddr(api TonApi) (*address.Address, error) {
+	b, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
+	}
+
+	cfg, err := api.GetBlockchainConfig(context.Background(), b, 4)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get root address from network config: %w", err)
+	}
+
+	data := cfg.Get(4)
+	if data == nil {
+		return nil, fmt.Errorf("failed to get root address from network config")
+	}
+
+	hash, err := data.BeginParse().LoadSlice(256)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get root address from network config 4, failed to load hash: %w", err)
+	}
+
 	// TODO: get from config
-	return address.MustParseAddr("Ef_BimcWrQ5pmAWfRqfeVHUCNV8XgsLqeAMBivKryXrghFW3")
+	return address.NewAddress(0, 255, hash), nil
 }
 
 func NewDNSClient(api TonApi, root *address.Address) *Client {
@@ -152,6 +173,35 @@ func (d *Domain) GetWalletRecord() *address.Address {
 	}
 
 	addr, err := p.LoadAddr()
+	if err != nil {
+		return nil
+	}
+
+	return addr
+}
+
+func (d *Domain) GetSiteRecord() []byte {
+	rec := d.GetRecord("site")
+	if rec == nil {
+		return nil
+	}
+	p := rec.BeginParse()
+
+	p, err := p.LoadRef()
+	if err != nil {
+		return nil
+	}
+
+	category, err := p.LoadUInt(16)
+	if err != nil {
+		return nil
+	}
+
+	if category != _CategoryADNLSite {
+		return nil
+	}
+	
+	addr, err := p.LoadSlice(256)
 	if err != nil {
 		return nil
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"sync"
 	"time"
@@ -80,28 +81,6 @@ func NewAPIClient(client LiteClient) *APIClient {
 	}
 }
 
-func loadBytes(data []byte) (loaded []byte, buffer []byte) {
-	offset := 1
-	ln := int(data[0])
-	if ln == 0xFE {
-		ln = int(binary.LittleEndian.Uint32(data)) >> 8
-		offset = 4
-	}
-
-	// bytes length should be dividable by 4, add additional offset to buffer if it is not
-	bufSz := ln
-	if add := ln % 4; add != 0 {
-		bufSz += 4 - add
-	}
-
-	// if its end, we don't need to align by 4
-	if offset+bufSz >= len(data) {
-		return data[offset : offset+ln], nil
-	}
-
-	return data[offset : offset+ln], data[offset+bufSz:]
-}
-
 func (e LSError) Error() string {
 	return fmt.Sprintf("lite server error, code %d: %s", e.Code, e.Text)
 }
@@ -119,7 +98,10 @@ func (e *LSError) Load(data []byte) ([]byte, error) {
 	}
 
 	e.Code = int32(binary.LittleEndian.Uint32(data))
-	txt, data := loadBytes(data[4:])
+	txt, data, err := tl.FromBytes(data[4:])
+	if err != nil {
+		return nil, err
+	}
 	e.Text = string(txt)
 
 	return data, nil
