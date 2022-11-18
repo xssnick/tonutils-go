@@ -9,7 +9,7 @@ type Encoder struct {
 	symbolSz uint32
 	relaxed  *discmath.MatrixGF256
 	symbols  []*Symbol
-	params   *params
+	params   *raptorParams
 }
 
 func (r *RaptorQ) CreateEncoder(data []byte) (*Encoder, error) {
@@ -20,7 +20,7 @@ func (r *RaptorQ) CreateEncoder(data []byte) (*Encoder, error) {
 
 	symbols := splitToSymbols(param._KPadded, r.symbolSz, data)
 
-	rx, err := param.solve(symbols)
+	rx, err := param.Solve(symbols)
 	if err != nil {
 		return nil, fmt.Errorf("failed to relax symbols: %w", err)
 	}

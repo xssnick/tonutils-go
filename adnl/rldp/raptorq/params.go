@@ -14,7 +14,7 @@ type encodingRow struct {
 	b1 uint32 // [0,P1)
 }
 
-type params struct {
+type raptorParams struct {
 	_K       uint32
 	_KPadded uint32
 	_J       uint32
@@ -28,7 +28,7 @@ type params struct {
 	_B       uint32
 }
 
-func (r *RaptorQ) calcParams(dataSize uint32) (*params, error) {
+func (r *RaptorQ) calcParams(dataSize uint32) (*raptorParams, error) {
 	if r.symbolSz == 0 {
 		return nil, fmt.Errorf("symbol size cannot be zero")
 	}
@@ -39,7 +39,7 @@ func (r *RaptorQ) calcParams(dataSize uint32) (*params, error) {
 		return nil, fmt.Errorf("failed to calc params: %w", err)
 	}
 
-	p := &params{
+	p := &raptorParams{
 		_K:       k,
 		_KPadded: raw.KPadded,
 		_J:       raw.J,
@@ -67,7 +67,7 @@ var degreeDistribution = []uint32{
 	1006157, 1008229, 1010129, 1011876, 1013490, 1014983, 1016370, 1017662, 1048576,
 }
 
-func (p *params) getDegree(v uint32) uint32 {
+func (p *raptorParams) getDegree(v uint32) uint32 {
 	for i, d := range degreeDistribution {
 		if v < d {
 			x := p._W - 2
@@ -80,7 +80,7 @@ func (p *params) getDegree(v uint32) uint32 {
 	panic("should be unreachable")
 }
 
-func (p *params) calcEncodingRow(x uint32) *encodingRow {
+func (p *raptorParams) calcEncodingRow(x uint32) *encodingRow {
 	ja := 53591 + p._J*997
 	if ja%2 == 0 {
 		ja++
@@ -113,7 +113,7 @@ func (p *params) calcEncodingRow(x uint32) *encodingRow {
 	}
 }
 
-func (p *params) hdpcMultiply(v *discmath2.MatrixGF256) *discmath2.MatrixGF256 {
+func (p *raptorParams) hdpcMultiply(v *discmath2.MatrixGF256) *discmath2.MatrixGF256 {
 	alpha := discmath2.OctExp(1)
 	for i := uint32(1); i < v.RowsNum(); i++ {
 		v.RowAddMul(i, v.GetRow(i-1), alpha)
@@ -137,7 +137,7 @@ func (r *encodingRow) Size() uint32 {
 	return r.d + r.d1
 }
 
-func (r *encodingRow) encode(p *params, f func(col uint32)) {
+func (r *encodingRow) encode(p *raptorParams, f func(col uint32)) {
 	f(r.b)
 	for j := uint32(1); j < r.d; j++ {
 		r.b = (r.b + r.a) % p._W
@@ -158,7 +158,7 @@ func (r *encodingRow) encode(p *params, f func(col uint32)) {
 	}
 }
 
-func (p *params) genSymbol(relaxed *discmath2.MatrixGF256, symbolSz, id uint32) []byte {
+func (p *raptorParams) genSymbol(relaxed *discmath2.MatrixGF256, symbolSz, id uint32) []byte {
 	m := discmath2.NewMatrixGF256(1, symbolSz)
 	p.calcEncodingRow(id).encode(p, func(col uint32) {
 		m.RowAdd(0, relaxed.GetRow(col))
