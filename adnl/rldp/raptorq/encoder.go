@@ -2,7 +2,7 @@ package raptorq
 
 import (
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient/adnl/rldp/raptorq/discmath"
+	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq/discmath"
 )
 
 type Encoder struct {

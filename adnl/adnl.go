@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"math/big"
@@ -122,8 +122,10 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 		timeout = till.Sub(time.Now())
 	}
 
+	a.mx.Lock()
 	a.addr = addr
 	a.conn, err = net.DialTimeout("udp", addr, timeout)
+	a.mx.Unlock()
 	if err != nil {
 		return err
 	}
@@ -135,7 +137,10 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 
 	go func() {
 		defer func() {
+			a.mx.Lock()
 			a.conn = nil
+			a.mx.Unlock()
+
 			if a.onDisconnect != nil {
 				a.onDisconnect(addr, a.serverPubKey)
 			}
@@ -352,10 +357,7 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 	defer a.mx.Unlock()
 
 	if a.conn == nil {
-		err = a.Connect(ctx, a.addr)
-		if err != nil {
-			return fmt.Errorf("reconnect failed: %w", err)
-		}
+		return fmt.Errorf("ADNL connection is not active")
 	}
 
 	if ch != nil && !ch.ready {
@@ -427,6 +429,8 @@ func (a *ADNL) send(ctx context.Context, buf []byte) error {
 	for len(buf) > 0 {
 		n, err := a.conn.Write(buf)
 		if err != nil {
+			// it should trigger disconnect handler in read routine
+			a.conn.Close()
 			return err
 		}
 

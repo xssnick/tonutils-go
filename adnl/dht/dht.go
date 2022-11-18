@@ -1,7 +1,7 @@
 package dht
 
 import (
-	"github.com/xssnick/tonutils-go/liteclient/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
 )
 

@@ -1,7 +1,7 @@
 package raptorq
 
 import (
-	"github.com/xssnick/tonutils-go/liteclient/adnl/rldp/raptorq/discmath"
+	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq/discmath"
 )
 
 type inactivateDecoder struct {

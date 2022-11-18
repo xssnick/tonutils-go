@@ -7,9 +7,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient/adnl"
-	"github.com/xssnick/tonutils-go/liteclient/adnl/address"
-	"github.com/xssnick/tonutils-go/liteclient/adnl/rldp"
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/ton/dns"
 	"io"
 	"net/http"
@@ -54,7 +54,7 @@ func NewTransport(dht DHT, resolver Resolver) *Transport {
 	return t
 }
 
-func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr string) (*rldp.RLDP, error) {
+func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (*rldp.RLDP, error) {
 	a, err := adnl.NewADNL(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
@@ -64,8 +64,19 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 		return nil, fmt.Errorf("failed to connect adnl for rldp connection %s, err: %w", addr, err)
 	}
 
-	r := rldp.NewRLDP(a)
+	r := rldp.NewRLDP(a, id)
+
+	// save rldp client to reuse for next requests
+	t.mx.Lock()
+	t.rldpClients[id] = r
+	t.mx.Unlock()
+
 	r.SetOnQuery(t.getRLDPQueryHandler(r))
+	r.SetOnDisconnect(func(id string) {
+		t.mx.Lock()
+		delete(t.rldpClients, id)
+		t.mx.Unlock()
+	})
 
 	return r, nil
 }
@@ -130,12 +141,8 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		for _, v := range addresses.Addresses {
 			addr := fmt.Sprintf("%s:%d", v.IP.String(), v.Port)
 			// find working rld node addr
-			rl, err = t.connectRLDP(request.Context(), pubKey, addr)
+			rl, err = t.connectRLDP(request.Context(), pubKey, addr, request.Host)
 			if err == nil {
-				// save rldp client to reuse for next requests
-				t.mx.Lock()
-				t.rldpClients[request.Host] = rl
-				t.mx.Unlock()
 				break
 			}
 

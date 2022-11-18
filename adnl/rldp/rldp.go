@@ -2,11 +2,12 @@ package rldp
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient/adnl"
-	"github.com/xssnick/tonutils-go/liteclient/adnl/rldp/raptorq"
+	adnl "github.com/xssnick/tonutils-go/adnl"
+	raptorq2 "github.com/xssnick/tonutils-go/adnl/rldp/raptorq"
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"reflect"
@@ -71,20 +72,24 @@ type RLDP struct {
 
 	recvStreams map[string]*decoderStream // TODO: cleanup old
 
-	onQuery func(query *Query) error
+	onQuery      func(query *Query) error
+	onDisconnect func(id string)
+
+	id string
 
 	mx sync.Mutex
 }
 
 type decoderStream struct {
-	decoder        *raptorq.Decoder
+	decoder        *raptorq2.Decoder
 	finishedAt     *time.Time
 	lastCompleteAt *time.Time
 	mx             sync.Mutex
 }
 
-func NewRLDP(a *adnl.ADNL) *RLDP {
+func NewRLDP(a *adnl.ADNL, id string) *RLDP {
 	r := &RLDP{
+		id:              id,
 		adnl:            a,
 		activeRequests:  map[string]chan any{},
 		activeTransfers: map[string]chan bool{},
@@ -92,11 +97,26 @@ func NewRLDP(a *adnl.ADNL) *RLDP {
 	}
 
 	a.SetCustomMessageHandler(r.handleMessage)
+	a.SetDisconnectHandler(r.handleADNLDisconnect)
+
 	return r
 }
 
 func (r *RLDP) SetOnQuery(handler func(query *Query) error) {
 	r.onQuery = handler
+}
+
+func (r *RLDP) SetOnDisconnect(handler func(id string)) {
+	r.onDisconnect = handler
+}
+
+func (r *RLDP) handleADNLDisconnect(addr string, key ed25519.PublicKey) {
+	r.adnl.Close()
+
+	disc := r.onDisconnect
+	if disc != nil {
+		disc(r.id)
+	}
 }
 
 func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
@@ -113,7 +133,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		r.mx.Unlock()
 
 		if stream == nil {
-			dec, err := raptorq.NewRaptorQ(uint32(fec.SymbolSize)).CreateDecoder(uint32(fec.DataSize))
+			dec, err := raptorq2.NewRaptorQ(uint32(fec.SymbolSize)).CreateDecoder(uint32(fec.DataSize))
 			if err != nil {
 				return fmt.Errorf("failed to init raptorq decoder: %w", err)
 			}
@@ -230,7 +250,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 }
 
 func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
-	enc, err := raptorq.NewRaptorQ(_SymbolSize).CreateEncoder(data)
+	enc, err := raptorq2.NewRaptorQ(_SymbolSize).CreateEncoder(data)
 	if err != nil {
 		return fmt.Errorf("failed to create raptorq object encoder: %w", err)
 	}

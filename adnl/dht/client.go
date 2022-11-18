@@ -6,8 +6,8 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient/adnl"
-	"github.com/xssnick/tonutils-go/liteclient/adnl/address"
+	adnl2 "github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
 	"sync"
@@ -17,7 +17,7 @@ import (
 const queryTimeout = 500 * time.Millisecond
 
 type Client struct {
-	knownNodes   map[string]*adnl.ADNL
+	knownNodes   map[string]*adnl2.ADNL
 	queryTimeout time.Duration
 	mx           sync.RWMutex
 }
@@ -29,7 +29,7 @@ type NodeInfo struct {
 
 func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) {
 	c := &Client{
-		knownNodes: map[string]*adnl.ADNL{},
+		knownNodes: map[string]*adnl2.ADNL{},
 	}
 
 	ch := make(chan bool, len(nodes))
@@ -86,8 +86,8 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 
 const _K = 7 // TODO: calculate and extend
 
-func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl.ADNL, id string, err error) {
-	pub, ok := node.ID.(adnl.PublicKeyED25519)
+func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl2.ADNL, id string, err error) {
+	pub, ok := node.ID.(adnl2.PublicKeyED25519)
 	if !ok {
 		return nil, "", fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
 	}
@@ -141,7 +141,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 		return nil, nil, fmt.Errorf("key should have 256 bits")
 	}
 
-	id, err := adnl.ToKeyID(Key{
+	id, err := adnl2.ToKeyID(Key{
 		ID:    key,
 		Name:  []byte("address"),
 		Index: 0,
@@ -167,7 +167,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 		return nil, nil, fmt.Errorf("failed to parse address list: %w", err)
 	}
 
-	keyID, ok := val.KeyDescription.ID.(adnl.PublicKeyED25519)
+	keyID, ok := val.KeyDescription.ID.(adnl2.PublicKeyED25519)
 	if !ok {
 		return nil, nil, fmt.Errorf("unsupported key type %s", reflect.TypeOf(val.KeyDescription.ID))
 	}
@@ -175,7 +175,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 	return &list, keyID.Key, nil
 }
 
-func (c *Client) findValue(ctx context.Context, node *adnl.ADNL, id []byte, checked map[string]bool) (val *Value, err error) {
+func (c *Client) findValue(ctx context.Context, node *adnl2.ADNL, id []byte, checked map[string]bool) (val *Value, err error) {
 	cc, cancel := context.WithTimeout(ctx, queryTimeout)
 
 	var res any
@@ -219,7 +219,7 @@ func (c *Client) findValue(ctx context.Context, node *adnl.ADNL, id []byte, chec
 		}
 		return nil, fmt.Errorf("value is not found using specified node, err: %w", err)
 	case ValueFoundResult:
-		pub, ok := r.Value.KeyDescription.ID.(adnl.PublicKeyED25519)
+		pub, ok := r.Value.KeyDescription.ID.(adnl2.PublicKeyED25519)
 		if !ok {
 			return nil, fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(r.Value.KeyDescription.ID).String())
 		}
@@ -229,7 +229,7 @@ func (c *Client) findValue(ctx context.Context, node *adnl.ADNL, id []byte, chec
 			return nil, fmt.Errorf("invalid dht key")
 		}
 
-		idKey, err := adnl.ToKeyID(k)
+		idKey, err := adnl2.ToKeyID(k)
 		if err != nil {
 			return nil, err
 		}
@@ -237,7 +237,7 @@ func (c *Client) findValue(ctx context.Context, node *adnl.ADNL, id []byte, chec
 			return nil, fmt.Errorf("unwanted key received")
 		}
 
-		idPub, err := adnl.ToKeyID(pub)
+		idPub, err := adnl2.ToKeyID(pub)
 		if err != nil {
 			return nil, err
 		}
@@ -280,8 +280,8 @@ func (c *Client) findValue(ctx context.Context, node *adnl.ADNL, id []byte, chec
 	return nil, fmt.Errorf("failed to find value, unexpected response type %s", reflect.TypeOf(res).String())
 }
 
-func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey) (*adnl.ADNL, error) {
-	a, err := adnl.NewADNL(key)
+func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey) (*adnl2.ADNL, error) {
+	a, err := adnl2.NewADNL(key)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +302,7 @@ func (c *Client) disconnectHandler(_ string, key ed25519.PublicKey) {
 	c.mx.Unlock()
 }
 
-func (c *Client) pickBestNode(key []byte) (*adnl.ADNL, error) {
+func (c *Client) pickBestNode(key []byte) (*adnl2.ADNL, error) {
 	if len(key) != 32 {
 		return nil, fmt.Errorf("key shuld be 256 bits")
 	}
