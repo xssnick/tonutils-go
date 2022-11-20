@@ -5,8 +5,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"github.com/sigurn/crc16"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
@@ -15,6 +19,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -127,14 +132,34 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 
 	// TODO: better cache, lock specific domain during resolve
 	if rl == nil {
-		domain, err := t.resolver.Resolve(request.Context(), request.Host)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve host %s, err: %w", request.Host, err)
+		var err error
+
+		var adnlID []byte
+		if strings.HasSuffix(request.Host, ".adnl") {
+			adnlID, err = parseADNLAddress(request.Host[:len(request.Host)-5])
+			if err != nil {
+				return nil, fmt.Errorf("failed to aprse adnl address %s, err: %w", request.Host, err)
+			}
+		} else {
+			var domain *dns.Domain
+			for i := 0; i < 3; i++ {
+				domain, err = t.resolver.Resolve(request.Context(), request.Host)
+				if err != nil {
+					time.Sleep(50 * time.Millisecond)
+					continue
+				}
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve host %s, err: %w", request.Host, err)
+			}
+
+			adnlID = domain.GetSiteRecord()
 		}
 
-		addresses, pubKey, err := t.dht.FindAddresses(request.Context(), domain.GetSiteRecord())
+		addresses, pubKey, err := t.dht.FindAddresses(request.Context(), adnlID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", request.Host, hex.EncodeToString(domain.GetSiteRecord()), err)
+			return nil, fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", request.Host, hex.EncodeToString(adnlID), err)
 		}
 
 		var triedAddresses []string
@@ -244,30 +269,78 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	var buf []byte
 	if httpResp.ContentLength > 0 {
 		buf = make([]byte, 0, httpResp.ContentLength)
-	}
 
-	seqno := int32(0)
-	for !res.NoPayload {
-		var part PayloadPart
-		err := rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
-			ID:           qid,
-			Seqno:        seqno,
-			MaxChunkSize: _ChunkSize,
-		}, &part)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query rldp response part: %w", err)
+		seqno := int32(0)
+		for !res.NoPayload {
+			var part PayloadPart
+			err = rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
+				ID:           qid,
+				Seqno:        seqno,
+				MaxChunkSize: _ChunkSize,
+			}, &part)
+			if err != nil {
+				return nil, fmt.Errorf("failed to query rldp response part %d: %w", seqno, err)
+			}
+
+			for _, tr := range part.Trailer {
+				httpResp.Trailer[tr.Name] = []string{tr.Value}
+			}
+
+			res.NoPayload = part.IsLast
+			buf = append(buf, part.Data...)
+			seqno++
 		}
-
-		for _, tr := range part.Trailer {
-			httpResp.Trailer[tr.Name] = []string{tr.Value}
-		}
-
-		res.NoPayload = part.IsLast
-		buf = append(buf, part.Data...)
-		seqno++
 	}
 
 	httpResp.Body = io.NopCloser(bytes.NewBuffer(buf))
 
 	return httpResp, nil
 }
+
+func parseADNLAddress(addr string) ([]byte, error) {
+	if len(addr) != 55 {
+		return nil, errors.New("wrong id length")
+	}
+
+	buf, err := base32.StdEncoding.DecodeString("F" + strings.ToUpper(addr))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode address: %w", err)
+	}
+
+	if buf[0] != 0x2d {
+		return nil, errors.New("invalid first byte")
+	}
+
+	hash := binary.BigEndian.Uint16(buf[33:])
+	calc := crc16.Checksum(buf[:33], crc16.MakeTable(crc16.CRC16_XMODEM))
+	if hash != calc {
+		return nil, errors.New("invalid address")
+	}
+
+	return buf[:32], nil
+}
+
+/*
+td::Result<Bits256> adnl_id_decode(td::Slice id) {
+  if (id.size() != 55) {
+    return td::Status::Error("Wrong length of adnl id");
+  }
+  td::uint8 buf[56];
+  buf[0] = 'f';
+  td::MutableSlice buf_slice(buf, 56);
+  buf_slice.substr(1).copy_from(id);
+  TRY_RESULT(decoded_str, td::base32_decode(buf_slice));
+  auto decoded = td::Slice(decoded_str);
+  if (decoded[0] != 0x2d) {
+    return td::Status::Error("Invalid first byte");
+  }
+  auto got_hash = (decoded.ubegin()[33] << 8) | decoded.ubegin()[34];
+  auto hash = td::crc16(decoded.substr(0, 33));
+  if (hash != got_hash) {
+    return td::Status::Error("Hash mismatch");
+  }
+  Bits256 res;
+  res.as_slice().copy_from(decoded.substr(1, 32));
+  return res;
+}
+*/

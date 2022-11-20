@@ -164,10 +164,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			return nil
 		}
 
-		if m.Seqno < 5 {
-			return nil
-		}
-
 		canTryDecode, err := stream.decoder.AddSymbol(uint32(m.Seqno), m.Data)
 		if err != nil {
 			return fmt.Errorf("failed to add raptorq symbol %d: %w", m.Seqno, err)
