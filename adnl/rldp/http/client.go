@@ -1,7 +1,6 @@
 package http
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -38,6 +37,46 @@ type Resolver interface {
 type payloadStream struct {
 	Data      []byte
 	StartTime time.Time
+}
+
+type dataReader struct {
+	finished bool
+	data     []byte
+	mx       sync.Mutex
+}
+
+func (d *dataReader) Read(p []byte) (n int, err error) {
+	d.mx.Lock()
+	defer d.mx.Unlock()
+
+	if d.finished && len(d.data) == 0 {
+		return -1, io.EOF
+	}
+
+	n = copy(p, d.data)
+	d.data = d.data[n:]
+	return n, nil
+}
+
+func (d *dataReader) Close() error {
+	d.mx.Lock()
+	defer d.mx.Unlock()
+
+	d.finished = true
+	d.data = nil
+	return nil
+}
+
+func (d *dataReader) pushData(data []byte, last bool) {
+	d.mx.Lock()
+	defer d.mx.Unlock()
+
+	if d.finished {
+		return
+	}
+
+	d.data = append(d.data, data...)
+	d.finished = last
 }
 
 type Transport struct {
@@ -157,10 +196,13 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 			adnlID = domain.GetSiteRecord()
 		}
 
+		tm := time.Now()
+		println("RESOLVING", request.Host)
 		addresses, pubKey, err := t.dht.FindAddresses(request.Context(), adnlID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", request.Host, hex.EncodeToString(adnlID), err)
 		}
+		println("RESOLVED", request.Host, time.Since(tm).String())
 
 		var triedAddresses []string
 		for _, v := range addresses.Addresses {
@@ -268,33 +310,42 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 
 	withPayload := !res.NoPayload && (httpResp.StatusCode < 300 || httpResp.StatusCode >= 400)
 
-	var buf []byte
-	if withPayload && httpResp.ContentLength > 0 && httpResp.ContentLength < (1<<22) {
-		buf = make([]byte, 0, httpResp.ContentLength)
+	var dr dataReader
+	httpResp.Body = &dr
+
+	if withPayload {
+		go func() {
+			if httpResp.ContentLength > 0 && httpResp.ContentLength < (1<<22) {
+				dr.data = make([]byte, 0, httpResp.ContentLength)
+			}
+
+			seqno := int32(0)
+			for withPayload {
+				var part PayloadPart
+				err = rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
+					ID:           qid,
+					Seqno:        seqno,
+					MaxChunkSize: _ChunkSize,
+				}, &part)
+				if err != nil {
+					_ = dr.Close()
+					return
+					// return nil, fmt.Errorf("failed to query rldp response part %d: %w", seqno, err)
+				}
+
+				for _, tr := range part.Trailer {
+					httpResp.Trailer[tr.Name] = []string{tr.Value}
+				}
+
+				withPayload = !part.IsLast
+				dr.pushData(part.Data, part.IsLast)
+
+				seqno++
+			}
+		}()
+	} else {
+		dr.pushData(nil, true)
 	}
-
-	seqno := int32(0)
-	for withPayload {
-		var part PayloadPart
-		err = rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
-			ID:           qid,
-			Seqno:        seqno,
-			MaxChunkSize: _ChunkSize,
-		}, &part)
-		if err != nil {
-			return nil, fmt.Errorf("failed to query rldp response part %d: %w", seqno, err)
-		}
-
-		for _, tr := range part.Trailer {
-			httpResp.Trailer[tr.Name] = []string{tr.Value}
-		}
-
-		withPayload = !part.IsLast
-		buf = append(buf, part.Data...)
-		seqno++
-	}
-
-	httpResp.Body = io.NopCloser(bytes.NewBuffer(buf))
 
 	return httpResp, nil
 }

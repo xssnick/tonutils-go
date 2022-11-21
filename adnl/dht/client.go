@@ -89,7 +89,7 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 	return c, nil
 }
 
-const _K = 14 // TODO: calculate and extend
+const _K = 12 // TODO: calculate and extend
 
 func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl.ADNL, id string, err error) {
 	pub, ok := node.ID.(adnl.PublicKeyED25519)
@@ -174,7 +174,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
-	const threads = 8
+	const threads = 16
 	result := make(chan *Value, threads)
 	var numInProgress int64
 	for i := 0; i < threads; i++ {
@@ -221,8 +221,10 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 							continue
 						}
 
+						// TODO: xor calc priority for faster search
 						// next nodes will have higher priority to query
-						plist.addNode(nodeID, node, priority+1)
+						if plist.addNode(nodeID, node, priority+1) {
+						}
 					}
 				}
 				atomic.AddInt64(&numInProgress, -1)
