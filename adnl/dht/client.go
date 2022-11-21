@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const queryTimeout = 3000 * time.Millisecond
+const queryTimeout = 2000 * time.Millisecond
 
 type Client struct {
 	knownNodes   map[string]*adnl.ADNL

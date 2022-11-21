@@ -266,30 +266,32 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 		}
 	}
 
+	withPayload := !res.NoPayload && (httpResp.StatusCode < 300 || httpResp.StatusCode >= 400)
+
 	var buf []byte
-	if httpResp.ContentLength > 0 {
+	if withPayload && httpResp.ContentLength > 0 && httpResp.ContentLength < (1<<22) {
 		buf = make([]byte, 0, httpResp.ContentLength)
+	}
 
-		seqno := int32(0)
-		for !res.NoPayload {
-			var part PayloadPart
-			err = rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
-				ID:           qid,
-				Seqno:        seqno,
-				MaxChunkSize: _ChunkSize,
-			}, &part)
-			if err != nil {
-				return nil, fmt.Errorf("failed to query rldp response part %d: %w", seqno, err)
-			}
-
-			for _, tr := range part.Trailer {
-				httpResp.Trailer[tr.Name] = []string{tr.Value}
-			}
-
-			res.NoPayload = part.IsLast
-			buf = append(buf, part.Data...)
-			seqno++
+	seqno := int32(0)
+	for withPayload {
+		var part PayloadPart
+		err = rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
+			ID:           qid,
+			Seqno:        seqno,
+			MaxChunkSize: _ChunkSize,
+		}, &part)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query rldp response part %d: %w", seqno, err)
 		}
+
+		for _, tr := range part.Trailer {
+			httpResp.Trailer[tr.Name] = []string{tr.Value}
+		}
+
+		withPayload = !part.IsLast
+		buf = append(buf, part.Data...)
+		seqno++
 	}
 
 	httpResp.Body = io.NopCloser(bytes.NewBuffer(buf))
@@ -319,28 +321,3 @@ func parseADNLAddress(addr string) ([]byte, error) {
 
 	return buf[:32], nil
 }
-
-/*
-td::Result<Bits256> adnl_id_decode(td::Slice id) {
-  if (id.size() != 55) {
-    return td::Status::Error("Wrong length of adnl id");
-  }
-  td::uint8 buf[56];
-  buf[0] = 'f';
-  td::MutableSlice buf_slice(buf, 56);
-  buf_slice.substr(1).copy_from(id);
-  TRY_RESULT(decoded_str, td::base32_decode(buf_slice));
-  auto decoded = td::Slice(decoded_str);
-  if (decoded[0] != 0x2d) {
-    return td::Status::Error("Invalid first byte");
-  }
-  auto got_hash = (decoded.ubegin()[33] << 8) | decoded.ubegin()[34];
-  auto hash = td::crc16(decoded.substr(0, 33));
-  if (hash != got_hash) {
-    return td::Status::Error("Hash mismatch");
-  }
-  Bits256 res;
-  res.as_slice().copy_from(decoded.substr(1, 32));
-  return res;
-}
-*/
