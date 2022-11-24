@@ -75,18 +75,16 @@ func (d *dataReader) pushData(data []byte, last bool) {
 		return
 	}
 
-	d.data = append(d.data, data...)
+	if data != nil {
+		d.data = append(d.data, data...)
+	}
+
 	d.finished = last
 }
 
-type rldpClients struct {
-	mx   sync.Mutex
-	list []*rldp.RLDP
-}
-
 type rldpInfo struct {
-	mx            sync.RWMutex
-	ActiveClients rldpClients
+	mx           sync.RWMutex
+	ActiveClient *rldp.RLDP
 
 	ID   ed25519.PublicKey
 	Addr string
@@ -117,6 +115,7 @@ func NewTransport(dht DHT, resolver Resolver) *Transport {
 }
 
 func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (*rldp.RLDP, error) {
+	println("CONNECT", addr, id)
 	a, err := adnl.NewADNL(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
@@ -145,41 +144,18 @@ func (t *Transport) removeRLDP(rl *rldp.RLDP, id string) {
 	t.mx.RUnlock()
 
 	if r != nil {
-		r.mx.Lock()
-		r.ActiveClients.remove(rl)
-		r.mx.Unlock()
+		r.destroyClient(rl)
 	}
 }
 
-func (r *rldpClients) remove(rl *rldp.RLDP) {
-	r.mx.Lock()
-	defer r.mx.Unlock()
+func (r *rldpInfo) destroyClient(rl *rldp.RLDP) {
+	rl.Close()
 
-	for i := range r.list {
-		if r.list[i] == rl {
-			r.list = append(r.list[:i], r.list[i+1:]...)
-			break
-		}
+	r.mx.Lock()
+	if r.ActiveClient == rl {
+		r.ActiveClient = nil
 	}
-}
-
-func (r *rldpClients) acquire() *rldp.RLDP {
-	r.mx.Lock()
-	defer r.mx.Unlock()
-
-	if len(r.list) == 0 {
-		return nil
-	}
-	x := r.list[0]
-	// r.list = r.list[1:]
-	return x
-}
-
-func (r *rldpClients) push(rl *rldp.RLDP) {
-	r.mx.Lock()
-	defer r.mx.Unlock()
-
-	r.list = append(r.list, rl)
+	r.mx.Unlock()
 }
 
 func (t *Transport) getRLDPQueryHandler(r *rldp.RLDP) func(query *rldp.Query) error {
@@ -222,9 +198,6 @@ func (t *Transport) getRLDPQueryHandler(r *rldp.RLDP) func(query *rldp.Query) er
 }
 
 func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err error) {
-	//t.mx2.Lock()
-	//defer t.mx2.Unlock()
-
 	qid := make([]byte, 32)
 	_, err = rand.Read(qid)
 	if err != nil {
@@ -241,19 +214,15 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 
 	var client *rldp.RLDP
 	rlInfo.mx.Lock()
-	// TODO: reuse old
-	// rlInfo.ActiveClient = nil
 
-	client = rlInfo.ActiveClients.acquire()
+	client = rlInfo.ActiveClient
 	if rlInfo.Resolved && client == nil {
-		// for each request open new rldp channel, it is the most stable way for now
-		// for udp it is fine since we don't have handshake
 		client, err = t.connectRLDP(request.Context(), rlInfo.ID, rlInfo.Addr, request.Host)
 		if err != nil {
 			// resolve again
 			rlInfo.Resolved = false
 		}
-		rlInfo.ActiveClients.push(client)
+		rlInfo.ActiveClient = client
 	}
 
 	if !rlInfo.Resolved {
@@ -262,7 +231,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 			rlInfo.mx.Unlock()
 			return nil, err
 		}
-		client = rlInfo.ActiveClients.acquire()
+		client = rlInfo.ActiveClient
 	}
 	rlInfo.mx.Unlock()
 
@@ -324,7 +293,6 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 	var res Response
 	err = client.DoQuery(request.Context(), _RLDPMaxAnswerSize, req, &res)
 	if err != nil {
-		//client.Close()
 		return nil, fmt.Errorf("failed to query http over rldp: %w", err)
 	}
 
@@ -347,15 +315,14 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 	if ln, ok := request.Header["Content-Length"]; ok && len(ln) > 0 {
 		httpResp.ContentLength, err = strconv.ParseInt(ln[0], 10, 64)
 		if err != nil {
-			//	client.Close()
 			return nil, fmt.Errorf("failed to parse content length: %w", err)
 		}
 	}
 
 	withPayload := !res.NoPayload && (httpResp.StatusCode < 300 || httpResp.StatusCode >= 400)
 
-	var dr dataReader
-	httpResp.Body = &dr
+	dr := &dataReader{}
+	httpResp.Body = dr
 
 	if withPayload {
 		go func() {
@@ -378,7 +345,6 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 					_ = dr.Close()
 					// client.Close()
 					return
-					// return nil, fmt.Errorf("failed to query rldp response part %d: %w", seqno, err)
 				}
 
 				for _, tr := range part.Trailer {
@@ -391,15 +357,17 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 				seqno++
 			}
 
-			//	rlInfo.mx.Lock()
-			//	rlInfo.ActiveClients.push(client)
-			//	rlInfo.mx.Unlock()
+			// client.Close()
+			//rlInfo.mx.Lock()
+			//rlInfo.ActiveClients.push(client)
+			//rlInfo.mx.Unlock()
 		}()
 	} else {
 		dr.pushData(nil, true)
-		//	rlInfo.mx.Lock()
-		//	rlInfo.ActiveClients.push(client)
-		//	rlInfo.mx.Unlock()
+		// client.Close()
+		//rlInfo.mx.Lock()
+		//rlInfo.ActiveClients.push(client)
+		//rlInfo.mx.Unlock()
 	}
 
 	return httpResp, nil
@@ -445,7 +413,7 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 			continue
 		}
 
-		info.ActiveClients.push(client)
+		info.ActiveClient = client
 
 		info.Resolved = true
 		info.ID = pubKey

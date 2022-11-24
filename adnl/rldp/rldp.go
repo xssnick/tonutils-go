@@ -25,7 +25,7 @@ func init() {
 }
 
 const _SymbolSize = 768
-const _PacketWaitTime = 25 * time.Millisecond
+const _PacketWaitTime = 15 * time.Millisecond
 
 type Query struct {
 	ID            []byte `tl:"int256"`
@@ -267,6 +267,7 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 	r.mx.Lock()
 	r.activeTransfers[id] = ch
 	r.mx.Unlock()
+
 	defer func() {
 		r.mx.Lock()
 		delete(r.activeTransfers, id)
@@ -285,8 +286,8 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 		default:
 		}
 
-		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()/2 {
-			x := symbolsSent - enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/2
+		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()/2 { //+enc.BaseSymbolsNum()/2
+			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/2)
 
 			select {
 			case <-ctx.Done():
@@ -299,10 +300,7 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 				// send additional FEC recovery parts until complete
 			}
 
-			var cc any
-			_, _ = tl.Parse(&cc, data, true)
-
-			println("snd", reflect.TypeOf(cc).String(), hex.EncodeToString(tid), symbolsSent)
+			println("snd", hex.EncodeToString(tid), symbolsSent)
 		}
 
 		p := MessagePart{
@@ -330,7 +328,7 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result tl.Serializable) error {
 	timeout, ok := ctx.Deadline()
 	if !ok {
-		timeout = time.Now().Add(15 * time.Second)
+		timeout = time.Now().Add(10 * time.Second)
 	}
 
 	qid := make([]byte, 32)
@@ -365,10 +363,15 @@ func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result t
 		return fmt.Errorf("failed to serialize query: %w", err)
 	}
 
-	err = r.sendMessageParts(ctx, data)
-	if err != nil {
-		return fmt.Errorf("failed to send query parts: %w", err)
-	}
+	sndCtx, cancel := context.WithDeadline(ctx, timeout)
+	defer cancel()
+
+	go func() {
+		err = r.sendMessageParts(sndCtx, data)
+		if err != nil {
+			res <- fmt.Errorf("failed to send query parts: %w", err)
+		}
+	}()
 
 	select {
 	case resp := <-res:

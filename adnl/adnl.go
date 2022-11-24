@@ -53,6 +53,7 @@ type ADNL struct {
 
 	seqno        uint64
 	confirmSeqno uint64
+	loss         uint64
 
 	serverPubKey ed25519.PublicKey
 
@@ -124,6 +125,7 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 
 	a.mx.Lock()
 	a.addr = addr
+
 	a.conn, err = net.DialTimeout("udp", addr, timeout)
 	a.mx.Unlock()
 	if err != nil {
@@ -153,6 +155,7 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 				Logger("failed to read data", err)
 				return
 			}
+			// println("READ", n)
 
 			buf = buf[:n]
 			id := buf[:32]
@@ -184,17 +187,27 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 				dec, err := ch.decodePacket(buf)
 				if err != nil {
 					Logger("failed to decode packet", err)
-					return
+					continue
 				}
+
+				// println("PK", hex.EncodeToString(dec))
 
 				packet, err = a.parsePacket(dec)
 				if err != nil {
 					Logger("failed to parse packet", err)
-					return
+					continue
 				}
 			}
 
-			a.confirmSeqno = uint64(*packet.Seqno)
+			seqno := uint64(*packet.Seqno)
+
+			if a.confirmSeqno+1 < seqno {
+				a.loss += seqno - (a.confirmSeqno + 1)
+			}
+
+			if seqno > a.confirmSeqno {
+				a.confirmSeqno = uint64(*packet.Seqno)
+			}
 
 			for i, message := range packet.Messages {
 				err = a.processMessage(message)
@@ -265,6 +278,7 @@ func (a *ADNL) processMessage(message any) error {
 			}
 		}
 	default:
+		panic(reflect.TypeOf(ms).String())
 		return fmt.Errorf("skipped unprocessable message of type %s", reflect.TypeOf(message).String())
 	}
 
