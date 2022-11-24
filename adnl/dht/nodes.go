@@ -2,38 +2,34 @@ package dht
 
 import (
 	"github.com/xssnick/tonutils-go/adnl"
+	"math/big"
 	"sync"
 )
 
 type nodePriority struct {
 	id       string
 	conn     *adnl.ADNL
-	priority int
+	priority *big.Int
 	next     *nodePriority
 }
 
 type priorityList struct {
+	maxLen    int
 	list      *nodePriority
 	usedNodes map[string]bool
 	mx        sync.Mutex
 }
 
-func newPriorityList(root map[string]*adnl.ADNL) *priorityList {
+func newPriorityList(maxLen int) *priorityList {
 	p := &priorityList{
+		maxLen:    maxLen,
 		usedNodes: map[string]bool{},
 	}
-	for id, node := range root {
-		p.list = &nodePriority{
-			id:       id,
-			conn:     node,
-			priority: 0,
-			next:     p.list,
-		}
-	}
+
 	return p
 }
 
-func (p *priorityList) addNode(id string, conn *adnl.ADNL, priority int) bool {
+func (p *priorityList) addNode(id string, conn *adnl.ADNL, priority *big.Int) bool {
 	item := &nodePriority{
 		id:       id,
 		conn:     conn,
@@ -55,8 +51,15 @@ func (p *priorityList) addNode(id string, conn *adnl.ADNL, priority int) bool {
 
 	var prev, cur *nodePriority
 	cur = p.list
+
+	i := 0
 	for cur != nil {
-		if item.priority >= cur.priority {
+		if i > p.maxLen {
+			return false
+		}
+		i++
+
+		if item.priority.Cmp(cur.priority) != 1 {
 			item.next = cur
 			if prev != nil {
 				prev.next = item
@@ -93,12 +96,12 @@ func (p *priorityList) addNode(id string, conn *adnl.ADNL, priority int) bool {
 	return true
 }
 
-func (p *priorityList) getNode() (*adnl.ADNL, int) {
+func (p *priorityList) getNode() (*adnl.ADNL, *big.Int) {
 	p.mx.Lock()
 	defer p.mx.Unlock()
 
 	if p.list == nil {
-		return nil, -1
+		return nil, nil
 	}
 
 	res := p.list

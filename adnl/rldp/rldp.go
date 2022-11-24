@@ -6,8 +6,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	adnl "github.com/xssnick/tonutils-go/adnl"
-	raptorq2 "github.com/xssnick/tonutils-go/adnl/rldp/raptorq"
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq"
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"reflect"
@@ -73,7 +73,7 @@ type RLDP struct {
 	recvStreams map[string]*decoderStream // TODO: cleanup old
 
 	onQuery      func(query *Query) error
-	onDisconnect func(id string)
+	onDisconnect func(r *RLDP, id string)
 
 	id string
 
@@ -81,7 +81,7 @@ type RLDP struct {
 }
 
 type decoderStream struct {
-	decoder        *raptorq2.Decoder
+	decoder        *raptorq.Decoder
 	finishedAt     *time.Time
 	lastCompleteAt *time.Time
 	mx             sync.Mutex
@@ -106,8 +106,12 @@ func (r *RLDP) SetOnQuery(handler func(query *Query) error) {
 	r.onQuery = handler
 }
 
-func (r *RLDP) SetOnDisconnect(handler func(id string)) {
+func (r *RLDP) SetOnDisconnect(handler func(r *RLDP, id string)) {
 	r.onDisconnect = handler
+}
+
+func (r *RLDP) Close() {
+	r.adnl.Close()
 }
 
 func (r *RLDP) handleADNLDisconnect(addr string, key ed25519.PublicKey) {
@@ -115,7 +119,7 @@ func (r *RLDP) handleADNLDisconnect(addr string, key ed25519.PublicKey) {
 
 	disc := r.onDisconnect
 	if disc != nil {
-		disc(r.id)
+		disc(r, r.id)
 	}
 }
 
@@ -133,7 +137,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		r.mx.Unlock()
 
 		if stream == nil {
-			dec, err := raptorq2.NewRaptorQ(uint32(fec.SymbolSize)).CreateDecoder(uint32(fec.DataSize))
+			dec, err := raptorq.NewRaptorQ(uint32(fec.SymbolSize)).CreateDecoder(uint32(fec.DataSize))
 			if err != nil {
 				return fmt.Errorf("failed to init raptorq decoder: %w", err)
 			}
@@ -246,7 +250,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 }
 
 func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
-	enc, err := raptorq2.NewRaptorQ(_SymbolSize).CreateEncoder(data)
+	enc, err := raptorq.NewRaptorQ(_SymbolSize).CreateEncoder(data)
 	if err != nil {
 		return fmt.Errorf("failed to create raptorq object encoder: %w", err)
 	}
@@ -269,7 +273,7 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 		r.mx.Unlock()
 	}()
 
-	i := uint32(0)
+	symbolsSent := uint32(0)
 	for {
 		select {
 		case <-ctx.Done():
@@ -281,9 +285,24 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 		default:
 		}
 
-		if i > enc.BaseSymbolsNum() {
-			// send additional FEC recovery parts until complete
-			time.Sleep(_PacketWaitTime)
+		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()/2 {
+			x := symbolsSent - enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/2
+
+			select {
+			case <-ctx.Done():
+				// too slow receiver, finish sending
+				return ctx.Err()
+			case <-ch:
+				// we got complete from receiver, finish sending
+				return nil
+			case <-time.After(time.Duration(x) * _PacketWaitTime):
+				// send additional FEC recovery parts until complete
+			}
+
+			var cc any
+			_, _ = tl.Parse(&cc, data, true)
+
+			println("snd", reflect.TypeOf(cc).String(), hex.EncodeToString(tid), symbolsSent)
 		}
 
 		p := MessagePart{
@@ -295,23 +314,23 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 			},
 			Part:      int32(0),
 			TotalSize: int64(len(data)),
-			Seqno:     int32(i),
-			Data:      enc.GenSymbol(i),
+			Seqno:     int32(symbolsSent),
+			Data:      enc.GenSymbol(symbolsSent),
 		}
 
 		err = r.adnl.SendCustomMessage(ctx, p)
 		if err != nil {
-			return fmt.Errorf("failed to send message part %d: %w", i, err)
+			return fmt.Errorf("failed to send message part %d: %w", symbolsSent, err)
 		}
 
-		i++
+		symbolsSent++
 	}
 }
 
 func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result tl.Serializable) error {
 	timeout, ok := ctx.Deadline()
 	if !ok {
-		timeout = time.Now().Add(30 * time.Second)
+		timeout = time.Now().Add(15 * time.Second)
 	}
 
 	qid := make([]byte, 32)

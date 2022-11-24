@@ -11,7 +11,9 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
+	"math/big"
 	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,20 +93,25 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 
 const _K = 12 // TODO: calculate and extend
 
-func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl.ADNL, id string, err error) {
+func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl.ADNL, id []byte, err error) {
 	pub, ok := node.ID.(adnl.PublicKeyED25519)
 	if !ok {
-		return nil, "", fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
+		return nil, nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
 	}
 
-	keyID := hex.EncodeToString(pub.Key)
+	kid, err := adnl.ToKeyID(pub)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	keyID := hex.EncodeToString(kid)
 
 	c.mx.RLock()
 	conn := c.knownNodes[keyID]
 	c.mx.RUnlock()
 
 	if conn != nil {
-		return conn, keyID, nil
+		return conn, kid, nil
 	}
 
 	// connect to first available address of node
@@ -125,10 +132,10 @@ func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl.ADNL, id stri
 	}
 
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to connect to node: %w", err)
+		return nil, nil, fmt.Errorf("failed to connect to node: %w", err)
 	}
 
-	return conn, keyID, nil
+	return conn, pub.Key, nil
 }
 
 func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error) {
@@ -167,14 +174,20 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 		return nil, keyErr
 	}
 
+	plist := newPriorityList(_K)
+
 	c.mx.RLock()
-	plist := newPriorityList(c.knownNodes)
+	for s, node := range c.knownNodes {
+		nodeID, _ := hex.DecodeString(s)
+		priority := new(big.Int).SetBytes(xor(id, nodeID))
+		plist.addNode(hex.EncodeToString(nodeID), node, priority)
+	}
 	c.mx.RUnlock()
 
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
-	const threads = 16
+	const threads = _K
 	result := make(chan *Value, threads)
 	var numInProgress int64
 	for i := 0; i < threads; i++ {
@@ -187,10 +200,11 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 				}
 
 				// we get most prioritized node, priority depends on depth
-				node, priority := plist.getNode()
+				node, _ := plist.getNode()
 				if node == nil {
 					if atomic.LoadInt64(&numInProgress) > 0 {
 						// something is pending
+						runtime.Gosched()
 						continue
 					}
 					result <- nil
@@ -214,17 +228,17 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 					for _, n := range v {
 						connectCtx, connectCancel := context.WithTimeout(threadCtx, queryTimeout)
 
-						var nodeID string
+						var nodeID []byte
 						node, nodeID, err = c.addNode(connectCtx, n)
 						connectCancel()
 						if err != nil {
 							continue
 						}
 
-						// TODO: xor calc priority for faster search
-						// next nodes will have higher priority to query
-						if plist.addNode(nodeID, node, priority+1) {
-						}
+						// priority depends on xor node id to key we are looking for. (smaller = higher)
+						priority := new(big.Int).SetBytes(xor(id, nodeID))
+
+						plist.addNode(hex.EncodeToString(nodeID), node, priority)
 					}
 				}
 				atomic.AddInt64(&numInProgress, -1)
@@ -376,4 +390,19 @@ func (c *Client) pickBestNode(key []byte) (*adnl.ADNL, error) {
 	}
 
 	return nil, fmt.Errorf("no dht nodes available")
+}
+
+func xor(a, b []byte) []byte {
+	if len(b) < len(a) {
+		a = a[:len(b)]
+	}
+
+	tmp := make([]byte, len(a))
+	n := copy(tmp, a)
+
+	for i := 0; i < n; i++ {
+		tmp[i] ^= b[i]
+	}
+
+	return tmp
 }

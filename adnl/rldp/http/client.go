@@ -79,13 +79,31 @@ func (d *dataReader) pushData(data []byte, last bool) {
 	d.finished = last
 }
 
+type rldpClients struct {
+	mx   sync.Mutex
+	list []*rldp.RLDP
+}
+
+type rldpInfo struct {
+	mx            sync.RWMutex
+	ActiveClients rldpClients
+
+	ID   ed25519.PublicKey
+	Addr string
+
+	Resolved bool
+}
+
 type Transport struct {
 	dht      DHT
 	resolver Resolver
 
-	rldpClients    map[string]*rldp.RLDP
+	rldpInfos map[string]*rldpInfo
+
 	activeRequests map[string]*payloadStream
 	mx             sync.RWMutex
+
+	mx2 sync.Mutex
 }
 
 func NewTransport(dht DHT, resolver Resolver) *Transport {
@@ -93,7 +111,7 @@ func NewTransport(dht DHT, resolver Resolver) *Transport {
 		dht:            dht,
 		resolver:       resolver,
 		activeRequests: map[string]*payloadStream{},
-		rldpClients:    map[string]*rldp.RLDP{},
+		rldpInfos:      map[string]*rldpInfo{},
 	}
 	return t
 }
@@ -111,18 +129,57 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 	r := rldp.NewRLDP(a, id)
 
 	// save rldp client to reuse for next requests
-	t.mx.Lock()
-	t.rldpClients[id] = r
-	t.mx.Unlock()
+	// t.mx.Lock()
+	// t.rldpClients[id] = r
+	// t.mx.Unlock()
 
 	r.SetOnQuery(t.getRLDPQueryHandler(r))
-	r.SetOnDisconnect(func(id string) {
-		t.mx.Lock()
-		delete(t.rldpClients, id)
-		t.mx.Unlock()
-	})
+	r.SetOnDisconnect(t.removeRLDP)
 
 	return r, nil
+}
+
+func (t *Transport) removeRLDP(rl *rldp.RLDP, id string) {
+	t.mx.RLock()
+	r := t.rldpInfos[id]
+	t.mx.RUnlock()
+
+	if r != nil {
+		r.mx.Lock()
+		r.ActiveClients.remove(rl)
+		r.mx.Unlock()
+	}
+}
+
+func (r *rldpClients) remove(rl *rldp.RLDP) {
+	r.mx.Lock()
+	defer r.mx.Unlock()
+
+	for i := range r.list {
+		if r.list[i] == rl {
+			r.list = append(r.list[:i], r.list[i+1:]...)
+			break
+		}
+	}
+}
+
+func (r *rldpClients) acquire() *rldp.RLDP {
+	r.mx.Lock()
+	defer r.mx.Unlock()
+
+	if len(r.list) == 0 {
+		return nil
+	}
+	x := r.list[0]
+	// r.list = r.list[1:]
+	return x
+}
+
+func (r *rldpClients) push(rl *rldp.RLDP) {
+	r.mx.Lock()
+	defer r.mx.Unlock()
+
+	r.list = append(r.list, rl)
 }
 
 func (t *Transport) getRLDPQueryHandler(r *rldp.RLDP) func(query *rldp.Query) error {
@@ -164,71 +221,54 @@ func (t *Transport) getRLDPQueryHandler(r *rldp.RLDP) func(query *rldp.Query) er
 	}
 }
 
-func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
-	t.mx.RLock()
-	rl := t.rldpClients[request.Host]
-	t.mx.RUnlock()
-
-	// TODO: better cache, lock specific domain during resolve
-	if rl == nil {
-		var err error
-
-		var adnlID []byte
-		if strings.HasSuffix(request.Host, ".adnl") {
-			adnlID, err = parseADNLAddress(request.Host[:len(request.Host)-5])
-			if err != nil {
-				return nil, fmt.Errorf("failed to aprse adnl address %s, err: %w", request.Host, err)
-			}
-		} else {
-			var domain *dns.Domain
-			for i := 0; i < 3; i++ {
-				domain, err = t.resolver.Resolve(request.Context(), request.Host)
-				if err != nil {
-					time.Sleep(50 * time.Millisecond)
-					continue
-				}
-				break
-			}
-			if err != nil {
-				return nil, fmt.Errorf("failed to resolve host %s, err: %w", request.Host, err)
-			}
-
-			adnlID = domain.GetSiteRecord()
-		}
-
-		tm := time.Now()
-		println("RESOLVING", request.Host)
-		addresses, pubKey, err := t.dht.FindAddresses(request.Context(), adnlID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", request.Host, hex.EncodeToString(adnlID), err)
-		}
-		println("RESOLVED", request.Host, time.Since(tm).String())
-
-		var triedAddresses []string
-		for _, v := range addresses.Addresses {
-			addr := fmt.Sprintf("%s:%d", v.IP.String(), v.Port)
-			// find working rld node addr
-			rl, err = t.connectRLDP(request.Context(), pubKey, addr, request.Host)
-			if err == nil {
-				break
-			}
-
-			triedAddresses = append(triedAddresses, addr)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to rldp servers %s of host %s, err: %w", triedAddresses, request.Host, err)
-		}
-	}
-
-	// TODO: async stream body for req and resp
-	if request.Body != nil {
-		defer request.Body.Close()
-	}
+func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err error) {
+	//t.mx2.Lock()
+	//defer t.mx2.Unlock()
 
 	qid := make([]byte, 32)
-	_, err := rand.Read(qid)
+	_, err = rand.Read(qid)
 	if err != nil {
 		return nil, err
+	}
+
+	t.mx.Lock()
+	rlInfo := t.rldpInfos[request.Host]
+	if rlInfo == nil {
+		rlInfo = &rldpInfo{}
+		t.rldpInfos[request.Host] = rlInfo
+	}
+	t.mx.Unlock()
+
+	var client *rldp.RLDP
+	rlInfo.mx.Lock()
+	// TODO: reuse old
+	// rlInfo.ActiveClient = nil
+
+	client = rlInfo.ActiveClients.acquire()
+	if rlInfo.Resolved && client == nil {
+		// for each request open new rldp channel, it is the most stable way for now
+		// for udp it is fine since we don't have handshake
+		client, err = t.connectRLDP(request.Context(), rlInfo.ID, rlInfo.Addr, request.Host)
+		if err != nil {
+			// resolve again
+			rlInfo.Resolved = false
+		}
+		rlInfo.ActiveClients.push(client)
+	}
+
+	if !rlInfo.Resolved {
+		err = t.resolveRLDP(request.Context(), rlInfo, request.Host)
+		if err != nil {
+			rlInfo.mx.Unlock()
+			return nil, err
+		}
+		client = rlInfo.ActiveClients.acquire()
+	}
+	rlInfo.mx.Unlock()
+
+	// TODO: async stream body for req
+	if request.Body != nil {
+		defer request.Body.Close()
 	}
 
 	req := Request{
@@ -273,17 +313,20 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 			StartTime: time.Now(),
 		}
 		t.mx.Unlock()
+
+		defer func() {
+			t.mx.Lock()
+			delete(t.activeRequests, hex.EncodeToString(qid))
+			t.mx.Unlock()
+		}()
 	}
 
 	var res Response
-	err = rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, req, &res)
+	err = client.DoQuery(request.Context(), _RLDPMaxAnswerSize, req, &res)
 	if err != nil {
+		//client.Close()
 		return nil, fmt.Errorf("failed to query http over rldp: %w", err)
 	}
-
-	t.mx.Lock()
-	delete(t.activeRequests, hex.EncodeToString(qid))
-	t.mx.Unlock()
 
 	httpResp := &http.Response{
 		Status:        res.Reason,
@@ -304,6 +347,7 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 	if ln, ok := request.Header["Content-Length"]; ok && len(ln) > 0 {
 		httpResp.ContentLength, err = strconv.ParseInt(ln[0], 10, 64)
 		if err != nil {
+			//	client.Close()
 			return nil, fmt.Errorf("failed to parse content length: %w", err)
 		}
 	}
@@ -321,14 +365,18 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 
 			seqno := int32(0)
 			for withPayload {
+				//httpResp.Write(os.Stdout)
+				// println("P PART", seqno, httpResp.StatusCode, httpResp.ContentLength)
+
 				var part PayloadPart
-				err = rl.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
+				err = client.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
 					ID:           qid,
 					Seqno:        seqno,
 					MaxChunkSize: _ChunkSize,
 				}, &part)
 				if err != nil {
 					_ = dr.Close()
+					// client.Close()
 					return
 					// return nil, fmt.Errorf("failed to query rldp response part %d: %w", seqno, err)
 				}
@@ -342,12 +390,73 @@ func (t *Transport) RoundTrip(request *http.Request) (*http.Response, error) {
 
 				seqno++
 			}
+
+			//	rlInfo.mx.Lock()
+			//	rlInfo.ActiveClients.push(client)
+			//	rlInfo.mx.Unlock()
 		}()
 	} else {
 		dr.pushData(nil, true)
+		//	rlInfo.mx.Lock()
+		//	rlInfo.ActiveClients.push(client)
+		//	rlInfo.mx.Unlock()
 	}
 
 	return httpResp, nil
+}
+
+func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string) (err error) {
+	var adnlID []byte
+	if strings.HasSuffix(host, ".adnl") {
+		adnlID, err = parseADNLAddress(host[:len(host)-5])
+		if err != nil {
+			return fmt.Errorf("failed to aprse adnl address %s, err: %w", host, err)
+		}
+	} else {
+		var domain *dns.Domain
+		for i := 0; i < 3; i++ {
+			domain, err = t.resolver.Resolve(ctx, host)
+			if err != nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to resolve host %s, err: %w", host, err)
+		}
+
+		adnlID = domain.GetSiteRecord()
+	}
+
+	addresses, pubKey, err := t.dht.FindAddresses(ctx, adnlID)
+	if err != nil {
+		return fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", host, hex.EncodeToString(adnlID), err)
+	}
+
+	var triedAddresses []string
+	for _, v := range addresses.Addresses {
+		addr := fmt.Sprintf("%s:%d", v.IP.String(), v.Port)
+
+		// find working rld node addr
+		client, err := t.connectRLDP(ctx, pubKey, addr, host)
+		if err != nil {
+			triedAddresses = append(triedAddresses, addr)
+			continue
+		}
+
+		info.ActiveClients.push(client)
+
+		info.Resolved = true
+		info.ID = pubKey
+		info.Addr = addr
+
+		break
+	}
+	if err != nil {
+		return fmt.Errorf("failed to connect to rldp servers %s of host %s, err: %w", triedAddresses, host, err)
+	}
+	return nil
 }
 
 func parseADNLAddress(addr string) ([]byte, error) {
