@@ -51,11 +51,15 @@ func FromBytes(data []byte) (loaded []byte, buffer []byte, err error) {
 		if len(data) < offset+ln {
 			return nil, nil, fmt.Errorf("failed to get payload with len %d, too short data", ln)
 		}
-		return data[offset : offset+ln], nil, nil
+		res := make([]byte, ln)
+		copy(res, data[offset:])
+		return res, nil, nil
 	}
 
 	if len(data) < bufSz {
 		return nil, nil, errors.New("failed to get payload, too short data")
 	}
-	return data[offset : offset+ln], data[bufSz:], nil
+	res := make([]byte, ln)
+	copy(res, data[offset:])
+	return res, data[bufSz:], nil
 }
