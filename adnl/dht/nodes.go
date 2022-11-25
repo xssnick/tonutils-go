@@ -1,14 +1,14 @@
 package dht
 
 import (
-	"github.com/xssnick/tonutils-go/adnl"
+	"encoding/hex"
 	"math/big"
 	"sync"
 )
 
 type nodePriority struct {
 	id       string
-	conn     *adnl.ADNL
+	node     *dhtNode
 	priority *big.Int
 	next     *nodePriority
 }
@@ -29,10 +29,12 @@ func newPriorityList(maxLen int) *priorityList {
 	return p
 }
 
-func (p *priorityList) addNode(id string, conn *adnl.ADNL, priority *big.Int) bool {
+func (p *priorityList) addNode(node *dhtNode, priority *big.Int) bool {
+	id := hex.EncodeToString(node.id)
+
 	item := &nodePriority{
 		id:       id,
-		conn:     conn,
+		node:     node,
 		priority: priority,
 	}
 
@@ -96,7 +98,7 @@ func (p *priorityList) addNode(id string, conn *adnl.ADNL, priority *big.Int) bo
 	return true
 }
 
-func (p *priorityList) getNode() (*adnl.ADNL, *big.Int) {
+func (p *priorityList) getNode() (*dhtNode, *big.Int) {
 	p.mx.Lock()
 	defer p.mx.Unlock()
 
@@ -109,5 +111,5 @@ func (p *priorityList) getNode() (*adnl.ADNL, *big.Int) {
 
 	p.usedNodes[res.id] = true
 
-	return res.conn, res.priority
+	return res.node, res.priority
 }

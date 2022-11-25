@@ -345,14 +345,17 @@ func (n *connection) send(data []byte) error {
 	// encrypt data
 	n.wCrypt.XORKeyStream(buf, buf)
 
+	// write timeout in case of stuck socket, to reconnect
+	n.tcp.SetWriteDeadline(time.Now().Add(7 * time.Second))
 	// write all
 	for len(buf) > 0 {
-		n, err := n.tcp.Write(buf)
+		num, err := n.tcp.Write(buf)
 		if err != nil {
+			n.tcp.Close()
 			return err
 		}
 
-		buf = buf[n:]
+		buf = buf[num:]
 	}
 
 	return nil

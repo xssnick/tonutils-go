@@ -10,7 +10,6 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
-	"log"
 	"math/big"
 	"reflect"
 	"runtime"
@@ -19,12 +18,20 @@ import (
 	"time"
 )
 
-const queryTimeout = 2000 * time.Millisecond
+const queryTimeout = 3000 * time.Millisecond
+
+type dhtNode struct {
+	id   []byte
+	adnl *adnl.ADNL
+	ping time.Duration // TODO: ping nodes
+}
 
 type Client struct {
-	knownNodes   map[string]*adnl.ADNL
-	queryTimeout time.Duration
-	mx           sync.RWMutex
+	activeNodes    map[string]*dhtNode
+	knownNodesInfo map[string]*Node
+	queryTimeout   time.Duration
+	mx             sync.RWMutex
+	minNodeMx      sync.Mutex
 }
 
 type NodeInfo struct {
@@ -32,11 +39,10 @@ type NodeInfo struct {
 	Key     ed25519.PublicKey
 }
 
-var Logger = log.Printf
-
 func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) {
 	c := &Client{
-		knownNodes: map[string]*adnl.ADNL{},
+		activeNodes:    map[string]*dhtNode{},
+		knownNodesInfo: map[string]*Node{},
 	}
 
 	ch := make(chan bool, len(nodes))
@@ -46,7 +52,7 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 			ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 			defer cancel()
 
-			conn, err := c.connect(ctx, node.Address, node.Key)
+			conn, err := c.connect(ctx, node.Address, node.Key, "")
 			if err != nil {
 				// failed to connect, we will try next addr
 				return
@@ -57,23 +63,12 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 			if err != nil {
 				return
 			}
+			conn.Close() // TODO: do it using 1 connection
 
-			verified := false
-			for _, udp := range res.AddrList.Addresses {
-				if fmt.Sprintf("%s:%d", udp.IP.String(), udp.Port) == node.Address {
-					verified = true
-					break
-				}
-			}
-
-			if !verified {
-				conn.Close()
+			_, err = c.addNode(ctx, &res)
+			if err != nil {
 				return
 			}
-
-			c.mx.Lock()
-			c.knownNodes[hex.EncodeToString(node.Key)] = conn
-			c.mx.Unlock()
 
 			ch <- true
 		}(node)
@@ -84,47 +79,64 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 	case <-time.After(connectTimeout):
 	}
 
-	if len(c.knownNodes) == 0 {
+	if len(c.activeNodes) == 0 {
 		return nil, fmt.Errorf("no available nodes in the given list %v", nodes)
 	}
 
 	return c, nil
 }
 
-const _K = 12 // TODO: calculate and extend
+const _K = 20 // TODO: calculate and extend
 
-func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl.ADNL, id []byte, err error) {
+func (c *Client) addNode(ctx context.Context, node *Node) (_ *dhtNode, err error) {
 	pub, ok := node.ID.(adnl.PublicKeyED25519)
 	if !ok {
-		return nil, nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
+		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
 	}
+
+	signature := node.Signature
+	node.Signature = nil
+	toVerify, err := tl.Serialize(node, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize node: %w", err)
+	}
+	if !ed25519.Verify(pub.Key, toVerify, signature) {
+		return nil, fmt.Errorf("bad signature for node: %s", hex.EncodeToString(pub.Key))
+	}
+	node.Signature = signature
 
 	kid, err := adnl.ToKeyID(pub)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	keyID := hex.EncodeToString(kid)
 
 	c.mx.RLock()
-	conn := c.knownNodes[keyID]
+	kNode := c.activeNodes[keyID]
 	c.mx.RUnlock()
 
-	if conn != nil {
-		return conn, kid, nil
+	if kNode != nil {
+		return kNode, nil
 	}
 
 	// connect to first available address of node
 	for _, udp := range node.AddrList.Addresses {
 		addr := udp.IP.String() + ":" + fmt.Sprint(udp.Port)
-		conn, err = c.connect(ctx, addr, pub.Key)
+		conn, err := c.connect(ctx, addr, pub.Key, keyID)
 		if err != nil {
 			// failed to connect, we will try next addr
 			continue
 		}
 
+		kNode = &dhtNode{
+			id:   kid,
+			adnl: conn,
+		}
+
 		c.mx.Lock()
-		c.knownNodes[keyID] = conn
+		c.knownNodesInfo[keyID] = node
+		c.activeNodes[keyID] = kNode
 		c.mx.Unlock()
 
 		// connected successfully
@@ -132,10 +144,10 @@ func (c *Client) addNode(ctx context.Context, node *Node) (_ *adnl.ADNL, id []by
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to node: %w", err)
+		return nil, fmt.Errorf("failed to connect to node: %w", err)
 	}
 
-	return conn, pub.Key, nil
+	return kNode, nil
 }
 
 func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error) {
@@ -174,13 +186,56 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 		return nil, keyErr
 	}
 
+	println("ACTIVE", len(c.activeNodes), len(c.knownNodesInfo))
+
+	c.minNodeMx.Lock()
+	if len(c.activeNodes) < _K {
+		connected := int64(_K)
+
+		tasks := make(chan *Node)
+
+		for i := 0; i < _K; i++ {
+			go func() {
+				for {
+					node := <-tasks
+					if node == nil {
+						return
+					}
+
+					connCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+					_, err := c.addNode(connCtx, node)
+					cancel()
+
+					if err == nil {
+						atomic.AddInt64(&connected, 1)
+					}
+				}
+			}()
+		}
+
+		for nID, info := range c.knownNodesInfo {
+			if _, ok := c.activeNodes[nID]; ok {
+				// skip already active
+				continue
+			}
+
+			if atomic.LoadInt64(&connected) > _K {
+				break
+			}
+
+			tasks <- info
+		}
+
+		close(tasks)
+	}
+	c.minNodeMx.Unlock()
+
 	plist := newPriorityList(_K)
 
 	c.mx.RLock()
-	for s, node := range c.knownNodes {
-		nodeID, _ := hex.DecodeString(s)
-		priority := new(big.Int).SetBytes(xor(id, nodeID))
-		plist.addNode(hex.EncodeToString(nodeID), node, priority)
+	for _, node := range c.activeNodes {
+		priority := new(big.Int).SetBytes(xor(id, node.id))
+		plist.addNode(node, priority)
 	}
 	c.mx.RUnlock()
 
@@ -228,17 +283,16 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 					for _, n := range v {
 						connectCtx, connectCancel := context.WithTimeout(threadCtx, queryTimeout)
 
-						var nodeID []byte
-						node, nodeID, err = c.addNode(connectCtx, n)
+						node, err = c.addNode(connectCtx, n)
 						connectCancel()
 						if err != nil {
 							continue
 						}
 
 						// priority depends on xor node id to key we are looking for. (smaller = higher)
-						priority := new(big.Int).SetBytes(xor(id, nodeID))
+						priority := new(big.Int).SetBytes(xor(id, node.id))
 
-						plist.addNode(hex.EncodeToString(nodeID), node, priority)
+						plist.addNode(node, priority)
 					}
 				}
 				atomic.AddInt64(&numInProgress, -1)
@@ -257,44 +311,23 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 	}
 }
 
-func (c *Client) FindValueRaw(ctx context.Context, node *adnl.ADNL, id []byte, K int32) (result any, err error) {
+func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K int32) (result any, err error) {
 	var res any
-	err = node.Query(ctx, FindValue{
+	err = node.adnl.Query(ctx, FindValue{
 		Key: id,
 		K:   K,
 	}, &res)
 	if err != nil {
+		c.mx.Lock()
+		delete(c.activeNodes, hex.EncodeToString(node.id))
+		c.mx.Unlock()
+
 		return nil, fmt.Errorf("failed to do query to dht node: %w", err)
 	}
 
 	switch r := res.(type) {
 	case ValueNotFoundResult:
-		var verified []*Node
-		for _, n := range r.Nodes.List {
-			pub, ok := n.ID.(adnl.PublicKeyED25519)
-			if !ok {
-				Logger("unsupported id type %s", reflect.TypeOf(n.ID).String())
-				continue
-			}
-
-			signature := n.Signature
-			n.Signature = nil
-
-			toVerify, err := tl.Serialize(n, true)
-			if err != nil {
-				Logger("failed to serialize node %s", reflect.TypeOf(n.ID).String())
-				continue
-			}
-			if !ed25519.Verify(pub.Key, toVerify, signature) {
-				Logger("bad signature for node %s", reflect.TypeOf(n.ID).String())
-				continue
-			}
-
-			n.Signature = signature
-			verified = append(verified, n)
-		}
-
-		return verified, nil
+		return r.Nodes.List, nil
 	case ValueFoundResult:
 		pub, ok := r.Value.KeyDescription.ID.(adnl.PublicKeyED25519)
 		if !ok {
@@ -357,7 +390,7 @@ func (c *Client) FindValueRaw(ctx context.Context, node *adnl.ADNL, id []byte, K
 	return nil, fmt.Errorf("failed to find value, unexpected response type %s", reflect.TypeOf(res).String())
 }
 
-func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey) (*adnl.ADNL, error) {
+func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey, id string) (*adnl.ADNL, error) {
 	a, err := adnl.NewADNL(key)
 	if err != nil {
 		return nil, err
@@ -368,28 +401,17 @@ func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey
 		return nil, err
 	}
 
-	a.SetDisconnectHandler(c.disconnectHandler)
+	a.SetDisconnectHandler(c.disconnectHandler(id))
 
 	return a, nil
 }
 
-func (c *Client) disconnectHandler(_ string, key ed25519.PublicKey) {
-	c.mx.Lock()
-	delete(c.knownNodes, hex.EncodeToString(key))
-	c.mx.Unlock()
-}
-
-func (c *Client) pickBestNode(key []byte) (*adnl.ADNL, error) {
-	if len(key) != 32 {
-		return nil, fmt.Errorf("key shuld be 256 bits")
+func (c *Client) disconnectHandler(id string) func(addr string, key ed25519.PublicKey) {
+	return func(addr string, key ed25519.PublicKey) {
+		c.mx.Lock()
+		delete(c.activeNodes, id)
+		c.mx.Unlock()
 	}
-
-	// TODO: kademia like dht routing, calc best node
-	for _, v := range c.knownNodes {
-		return v, nil
-	}
-
-	return nil, fmt.Errorf("no dht nodes available")
 }
 
 func xor(a, b []byte) []byte {

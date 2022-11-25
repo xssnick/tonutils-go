@@ -74,17 +74,14 @@ func (d *dataReader) pushData(data []byte, last bool) {
 	if d.finished {
 		return
 	}
-
-	if data != nil {
-		d.data = append(d.data, data...)
-	}
-
+	d.data = append(d.data, data...)
 	d.finished = last
 }
 
 type rldpInfo struct {
-	mx           sync.RWMutex
-	ActiveClient *rldp.RLDP
+	mx             sync.RWMutex
+	ActiveClient   *rldp.RLDP
+	ClientLastUsed time.Time
 
 	ID   ed25519.PublicKey
 	Addr string
@@ -115,7 +112,6 @@ func NewTransport(dht DHT, resolver Resolver) *Transport {
 }
 
 func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (*rldp.RLDP, error) {
-	println("CONNECT", addr, id)
 	a, err := adnl.NewADNL(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
@@ -125,26 +121,22 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 		return nil, fmt.Errorf("failed to connect adnl for rldp connection %s, err: %w", addr, err)
 	}
 
-	r := rldp.NewRLDP(a, id)
-
-	// save rldp client to reuse for next requests
-	// t.mx.Lock()
-	// t.rldpClients[id] = r
-	// t.mx.Unlock()
-
+	r := rldp.NewRLDP(a)
 	r.SetOnQuery(t.getRLDPQueryHandler(r))
-	r.SetOnDisconnect(t.removeRLDP)
+	r.SetOnDisconnect(t.removeRLDP(r, id))
 
 	return r, nil
 }
 
-func (t *Transport) removeRLDP(rl *rldp.RLDP, id string) {
-	t.mx.RLock()
-	r := t.rldpInfos[id]
-	t.mx.RUnlock()
+func (t *Transport) removeRLDP(rl *rldp.RLDP, id string) func() {
+	return func() {
+		t.mx.RLock()
+		r := t.rldpInfos[id]
+		t.mx.RUnlock()
 
-	if r != nil {
-		r.destroyClient(rl)
+		if r != nil {
+			r.destroyClient(rl)
+		}
 	}
 }
 
@@ -214,6 +206,13 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 
 	var client *rldp.RLDP
 	rlInfo.mx.Lock()
+	if rlInfo.ActiveClient != nil && rlInfo.ClientLastUsed.Add(10*time.Second).Before(time.Now()) {
+		// if last used more than 10 seconds ago,
+		// we have a chance of stuck udp socket,
+		// so we just reinit connection
+		rlInfo.ActiveClient.Close()
+		rlInfo.ActiveClient = nil
+	}
 
 	client = rlInfo.ActiveClient
 	if rlInfo.Resolved && client == nil {
@@ -223,6 +222,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 			rlInfo.Resolved = false
 		}
 		rlInfo.ActiveClient = client
+		rlInfo.ClientLastUsed = time.Now()
 	}
 
 	if !rlInfo.Resolved {
@@ -232,6 +232,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 			return nil, err
 		}
 		client = rlInfo.ActiveClient
+		rlInfo.ClientLastUsed = time.Now()
 	}
 	rlInfo.mx.Unlock()
 
@@ -296,6 +297,12 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 		return nil, fmt.Errorf("failed to query http over rldp: %w", err)
 	}
 
+	rlInfo.mx.Lock()
+	if rlInfo.ActiveClient == client {
+		rlInfo.ClientLastUsed = time.Now()
+	}
+	rlInfo.mx.Unlock()
+
 	httpResp := &http.Response{
 		Status:        res.Reason,
 		StatusCode:    int(res.StatusCode),
@@ -332,9 +339,6 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 
 			seqno := int32(0)
 			for withPayload {
-				//httpResp.Write(os.Stdout)
-				// println("P PART", seqno, httpResp.StatusCode, httpResp.ContentLength)
-
 				var part PayloadPart
 				err = client.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
 					ID:           qid,
@@ -343,7 +347,6 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 				}, &part)
 				if err != nil {
 					_ = dr.Close()
-					// client.Close()
 					return
 				}
 
@@ -355,19 +358,16 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 				dr.pushData(part.Data, part.IsLast)
 
 				seqno++
-			}
 
-			// client.Close()
-			//rlInfo.mx.Lock()
-			//rlInfo.ActiveClients.push(client)
-			//rlInfo.mx.Unlock()
+				rlInfo.mx.Lock()
+				if rlInfo.ActiveClient == client {
+					rlInfo.ClientLastUsed = time.Now()
+				}
+				rlInfo.mx.Unlock()
+			}
 		}()
 	} else {
 		dr.pushData(nil, true)
-		// client.Close()
-		//rlInfo.mx.Lock()
-		//rlInfo.ActiveClients.push(client)
-		//rlInfo.mx.Unlock()
 	}
 
 	return httpResp, nil

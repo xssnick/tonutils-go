@@ -73,9 +73,7 @@ type RLDP struct {
 	recvStreams map[string]*decoderStream // TODO: cleanup old
 
 	onQuery      func(query *Query) error
-	onDisconnect func(r *RLDP, id string)
-
-	id string
+	onDisconnect func()
 
 	mx sync.Mutex
 }
@@ -87,9 +85,8 @@ type decoderStream struct {
 	mx             sync.Mutex
 }
 
-func NewRLDP(a *adnl.ADNL, id string) *RLDP {
+func NewRLDP(a *adnl.ADNL) *RLDP {
 	r := &RLDP{
-		id:              id,
 		adnl:            a,
 		activeRequests:  map[string]chan any{},
 		activeTransfers: map[string]chan bool{},
@@ -106,7 +103,7 @@ func (r *RLDP) SetOnQuery(handler func(query *Query) error) {
 	r.onQuery = handler
 }
 
-func (r *RLDP) SetOnDisconnect(handler func(r *RLDP, id string)) {
+func (r *RLDP) SetOnDisconnect(handler func()) {
 	r.onDisconnect = handler
 }
 
@@ -119,7 +116,7 @@ func (r *RLDP) handleADNLDisconnect(addr string, key ed25519.PublicKey) {
 
 	disc := r.onDisconnect
 	if disc != nil {
-		disc(r, r.id)
+		disc()
 	}
 }
 
@@ -299,8 +296,6 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 			case <-time.After(time.Duration(x) * _PacketWaitTime):
 				// send additional FEC recovery parts until complete
 			}
-
-			println("snd", hex.EncodeToString(tid), symbolsSent)
 		}
 
 		p := MessagePart{
@@ -328,7 +323,7 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result tl.Serializable) error {
 	timeout, ok := ctx.Deadline()
 	if !ok {
-		timeout = time.Now().Add(10 * time.Second)
+		timeout = time.Now().Add(15 * time.Second)
 	}
 
 	qid := make([]byte, 32)
