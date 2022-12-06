@@ -11,6 +11,7 @@ import (
 )
 
 type Serializable interface{}
+type Raw []byte
 
 type TL interface {
 	Parse(data []byte) ([]byte, error)
@@ -31,6 +32,10 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 			return nil, fmt.Errorf("v should not be nil")
 		}
 		rv = rv.Elem()
+	}
+
+	if rv.Type() == reflect.TypeOf(Raw{}) {
+		return rv.Bytes(), nil
 	}
 
 	var buf []byte
@@ -532,7 +537,7 @@ func Register(typ any, tl string) uint32 {
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, id)
 
-	println("TL Registered:", hex.EncodeToString(b), tl)
+	// println("TL Registered:", hex.EncodeToString(b), tl)
 	return id
 }
 

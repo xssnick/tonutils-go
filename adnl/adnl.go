@@ -92,7 +92,6 @@ func NewADNL(key ed25519.PublicKey) (*ADNL, error) {
 		pendingChannels: map[string]*Channel{},
 		msgParts:        map[string]*partitionedMessage{},
 		activeQueries:   map[string]chan tl.Serializable{},
-		seqno:           1,
 	}
 
 	return a, nil
@@ -163,7 +162,6 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 
 			var packet *PacketContent
 			var ch *Channel
-
 			if bytes.Equal(id, rootID) { // message in root connection
 				dec, err := a.decodePacket(buf)
 				if err != nil {
@@ -520,7 +518,7 @@ func (c *Channel) setup(serverKey ed25519.PublicKey) (_ []byte, err error) {
 		return nil, err
 	}
 
-	// if serverKey < ouKey, swap keys. if same -> copy enc key
+	// if serverID < ourID, swap keys. if same -> copy enc key
 	if eq := new(big.Int).SetBytes(theirID).Cmp(new(big.Int).SetBytes(ourID)); eq == -1 {
 		c.encKey, c.decKey = c.decKey, c.encKey
 	} else if eq == 0 {
@@ -548,8 +546,6 @@ func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// packet, _ = hex.DecodeString("89cd42d10fbca231421d049551d70aab7d054940c40100007af98bb4c9b312d635b40fa2676c745afcd9bb427db5fe0bcf771c849c4d2ff007e6edc3286bcee26c663b0457e3c3a724d8b15167be2219f1d11794cf875d4401da26bc596d50ca070600000000000002000000000000000100000000000000ee3545630f929c57c748ab86412ee49bf158d9f2")
 
 	hash := sha256.New()
 	hash.Write(packetData)

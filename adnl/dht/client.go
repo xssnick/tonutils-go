@@ -86,7 +86,7 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 	return c, nil
 }
 
-const _K = 20 // TODO: calculate and extend
+const _K = 12 // TODO: calculate and extend
 
 func (c *Client) addNode(ctx context.Context, node *Node) (_ *dhtNode, err error) {
 	pub, ok := node.ID.(adnl.PublicKeyED25519)
@@ -185,8 +185,6 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 	if keyErr != nil {
 		return nil, keyErr
 	}
-
-	println("ACTIVE", len(c.activeNodes), len(c.knownNodesInfo))
 
 	c.minNodeMx.Lock()
 	if len(c.activeNodes) < _K {
@@ -312,11 +310,16 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 }
 
 func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K int32) (result any, err error) {
-	var res any
-	err = node.adnl.Query(ctx, FindValue{
+	val, err := tl.Serialize(FindValue{
 		Key: id,
 		K:   K,
-	}, &res)
+	}, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize dht value: %w", err)
+	}
+
+	var res any
+	err = node.adnl.Query(ctx, tl.Raw(val), &res)
 	if err != nil {
 		c.mx.Lock()
 		delete(c.activeNodes, hex.EncodeToString(node.id))
@@ -329,11 +332,6 @@ func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K i
 	case ValueNotFoundResult:
 		return r.Nodes.List, nil
 	case ValueFoundResult:
-		pub, ok := r.Value.KeyDescription.ID.(adnl.PublicKeyED25519)
-		if !ok {
-			return nil, fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(r.Value.KeyDescription.ID).String())
-		}
-
 		k := r.Value.KeyDescription.Key
 		if len(k.Name) == 0 || len(k.Name) > 127 || k.Index < 0 || k.Index > 15 { // TODO: move to better place when dht store ready
 			return nil, fmt.Errorf("invalid dht key")
@@ -347,7 +345,7 @@ func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K i
 			return nil, fmt.Errorf("unwanted key received")
 		}
 
-		idPub, err := adnl.ToKeyID(pub)
+		idPub, err := adnl.ToKeyID(r.Value.KeyDescription.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -360,6 +358,11 @@ func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K i
 		case UpdateRuleAnybody:
 			// no checks
 		case UpdateRuleSignature:
+			pub, ok := r.Value.KeyDescription.ID.(adnl.PublicKeyED25519)
+			if !ok {
+				return nil, fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(r.Value.KeyDescription.ID).String())
+			}
+
 			signature := r.Value.Signature
 			r.Value.Signature = nil
 			dataToCheck, err := tl.Serialize(r.Value, true)
@@ -369,19 +372,26 @@ func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K i
 			if !ed25519.Verify(pub.Key, dataToCheck, signature) {
 				return nil, fmt.Errorf("value's signature not match key")
 			}
+
+			// check key signature
+			signature = r.Value.KeyDescription.Signature
+			r.Value.KeyDescription.Signature = nil
+			dataToCheck, err = tl.Serialize(r.Value.KeyDescription, true)
+			if err != nil {
+				return nil, fmt.Errorf("failed to serialize key description: %w", err)
+			}
+			if !ed25519.Verify(pub.Key, dataToCheck, signature) {
+				return nil, fmt.Errorf("key description's signature not match key")
+			}
+
+		case UpdateRuleOverlayNodes:
+			// TODO: check sign
+			/*pub, ok := r.Value.Data
+			if !ok {
+				return nil, fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(r.Value.KeyDescription.ID).String())
+			}*/
 		default:
 			return nil, fmt.Errorf("update rule type %s is not supported yet", reflect.TypeOf(r.Value.KeyDescription.UpdateRule))
-		}
-
-		// check key signature
-		signature := r.Value.KeyDescription.Signature
-		r.Value.KeyDescription.Signature = nil
-		dataToCheck, err := tl.Serialize(r.Value.KeyDescription, true)
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize key description: %w", err)
-		}
-		if !ed25519.Verify(pub.Key, dataToCheck, signature) {
-			return nil, fmt.Errorf("key description's signature not match key")
 		}
 
 		return &r.Value, nil
@@ -424,6 +434,10 @@ func xor(a, b []byte) []byte {
 
 	for i := 0; i < n; i++ {
 		tmp[i] ^= b[i]
+	}
+
+	for i, j := 0, len(tmp)-1; i < j; i, j = i+1, j-1 { // reverse array
+		//	tmp[i], tmp[j] = tmp[j], tmp[i]
 	}
 
 	return tmp
