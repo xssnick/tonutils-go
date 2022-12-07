@@ -53,7 +53,7 @@ func (m *MatrixGF2) GetRow(row uint32) []uint8 {
 	return m.rows[row]
 }
 
-func (m *MatrixGF2) Mul(s *SparseMatrixGF2) *MatrixGF2 {
+func (m *MatrixGF2) Mul(s *MatrixGF256) *MatrixGF2 {
 	mg := NewMatrixGF2(s.RowsNum(), m.ColsNum())
 	s.Each(func(row, col uint32) {
 		mg.RowAdd(row, m.GetRow(col))

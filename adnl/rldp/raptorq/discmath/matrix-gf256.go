@@ -92,7 +92,7 @@ func (m *MatrixGF256) ApplyPermutation(permutation []uint32) *MatrixGF256 {
 	return res
 }
 
-func (m *MatrixGF256) MulSparse(s *SparseMatrixGF2) *MatrixGF256 {
+func (m *MatrixGF256) MulSparse(s *MatrixGF256) *MatrixGF256 {
 	mg := NewMatrixGF256(s.RowsNum(), m.ColsNum())
 	s.Each(func(row, col uint32) {
 		mg.RowAdd(row, m.GetRow(col))
@@ -126,4 +126,44 @@ func (m *MatrixGF256) String() string {
 		rows = append(rows, strings.Join(cols, " "))
 	}
 	return strings.Join(rows, "\n")
+}
+
+func (m *MatrixGF256) Each(f func(row, col uint32)) {
+	for i, r := range m.rows {
+		for j, num := range r.data {
+			if num != 0 {
+				f(uint32(i), uint32(j))
+			}
+		}
+	}
+}
+
+func (m *MatrixGF256) ToDense(rowFrom, colFrom, rowSize, colSize uint32) *MatrixGF2 {
+	mGF2 := NewMatrixGF2(rowSize, colSize)
+	m.Each(func(row, col uint32) {
+		if (row >= rowFrom && row < rowFrom+rowSize) &&
+			(col >= colFrom && col < colFrom+colSize) {
+			mGF2.Set(row-rowFrom, col-colFrom)
+		}
+	})
+	return mGF2
+}
+
+func (m *MatrixGF256) GetCols(col uint32) (cols []uint32) {
+	for i, v := range m.rows {
+		if v.data[col] == 1 {
+			cols = append(cols, uint32(i))
+		}
+	}
+	return cols
+}
+
+func (m *MatrixGF256) GetRows(row uint32) (rows []uint32) {
+	r := m.rows[row]
+	for i, v := range r.data {
+		if v == 1 {
+			rows = append(rows, uint32(i))
+		}
+	}
+	return rows
 }
