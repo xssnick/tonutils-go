@@ -3,10 +3,8 @@ package raptorq
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"math/rand"
 	"testing"
-	"time"
 )
 
 func Test_Encode(t *testing.T) {
@@ -102,12 +100,10 @@ func Test_EncodeDecodeFuzz(t *testing.T) {
 }
 
 func Benchmark_EncodeDecodeFuzz(b *testing.B) {
-	t := time.Now()
+	str := make([]byte, 4096)
+	rand.Read(str)
 	for n := 0; n < 100; n++ {
-		str := make([]byte, 4096)
-		rand.Read(str)
-
-		symSz := (1 + (rand.Uint32() % 10)) * 10
+		var symSz uint32 = 768
 		r := NewRaptorQ(symSz)
 		enc, err := r.CreateEncoder(str)
 		if err != nil {
@@ -142,5 +138,4 @@ func Benchmark_EncodeDecodeFuzz(b *testing.B) {
 			b.Fatal("initial data not eq decrypted")
 		}
 	}
-	fmt.Println(time.Since(t))
 }
