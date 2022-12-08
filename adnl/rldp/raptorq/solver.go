@@ -89,7 +89,7 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 	})
 	aUpper = aUpperMutCol
 
-	e := aUpper.ToDense(0, uSize, uSize, p._L-uSize)
+	e := aUpper.ToGF2(0, uSize, uSize, p._L-uSize)
 
 	c := discmath.NewMatrixGF256(aUpper.ColsNum(), d.ColsNum())
 	c.SetFrom(d.GetBlock(0, 0, uSize, d.ColsNum()), 0, 0)

@@ -138,7 +138,7 @@ func (m *MatrixGF256) Each(f func(row, col uint32)) {
 	}
 }
 
-func (m *MatrixGF256) ToDense(rowFrom, colFrom, rowSize, colSize uint32) *MatrixGF2 {
+func (m *MatrixGF256) ToGF2(rowFrom, colFrom, rowSize, colSize uint32) *MatrixGF2 {
 	mGF2 := NewMatrixGF2(rowSize, colSize)
 	m.Each(func(row, col uint32) {
 		if (row >= rowFrom && row < rowFrom+rowSize) &&
