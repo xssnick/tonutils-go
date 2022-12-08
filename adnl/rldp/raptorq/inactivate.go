@@ -5,7 +5,7 @@ import (
 )
 
 type inactivateDecoder struct {
-	l            *discmath.SparseMatrixGF2
+	l            *discmath.MatrixGF256
 	cols         uint32
 	rows         uint32
 	wasRow       []bool
@@ -22,7 +22,7 @@ type inactivateDecoder struct {
 	inactiveCols []uint32
 }
 
-func inactivateDecode(l *discmath.SparseMatrixGF2, pi uint32) (side uint32, pRows, pCols []uint32) {
+func inactivateDecode(l *discmath.MatrixGF256, pi uint32) (side uint32, pRows, pCols []uint32) {
 	cols := l.ColsNum() - pi
 	rows := l.RowsNum()
 
