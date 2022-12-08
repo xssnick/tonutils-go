@@ -98,3 +98,44 @@ func Test_EncodeDecodeFuzz(t *testing.T) {
 		}
 	}
 }
+
+func Benchmark_EncodeDecodeFuzz(b *testing.B) {
+	str := make([]byte, 4096)
+	rand.Read(str)
+	for n := 0; n < 100; n++ {
+		var symSz uint32 = 768
+		r := NewRaptorQ(symSz)
+		enc, err := r.CreateEncoder(str)
+		if err != nil {
+			panic(err)
+		}
+
+		dec, err := r.CreateDecoder(uint32(len(str)))
+		if err != nil {
+			panic(err)
+		}
+
+		_, err = dec.AddSymbol(2, enc.GenSymbol(2))
+		if err != nil {
+			b.Fatal("add 2 symbol err", err)
+		}
+
+		for i := uint32(0); i < enc.params._K; i++ {
+			sx := enc.GenSymbol(i + 10000)
+
+			_, err := dec.AddSymbol(i+10000, sx)
+			if err != nil {
+				b.Fatal("add symbol err", err)
+			}
+		}
+
+		_, data, err := dec.Decode()
+		if err != nil {
+			b.Fatal("decode err", err)
+		}
+
+		if !bytes.Equal(data, str) {
+			b.Fatal("initial data not eq decrypted")
+		}
+	}
+}

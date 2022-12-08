@@ -31,37 +31,37 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 		eRows = append(eRows, p.calcEncodingRow(symbol.ID))
 	}
 
-	aUpper := discmath.NewSparseMatrixGF2(p._S+uint32(len(eRows)), p._L)
+	aUpper := discmath.NewMatrixGF256(p._S+uint32(len(eRows)), p._L)
 
 	// LDPC 1
 	for i := uint32(0); i < p._B; i++ {
 		a := 1 + i/p._S
 
 		b := i % p._S
-		aUpper.Set(b, i)
+		aUpper.Set(b, i, 1)
+		b = (b + a) % p._S
+		aUpper.Set(b, i, 1)
 
 		b = (b + a) % p._S
-		aUpper.Set(b, i)
+		aUpper.Set(b, i, 1)
 
-		b = (b + a) % p._S
-		aUpper.Set(b, i)
 	}
 
 	// Ident
 	for i := uint32(0); i < p._S; i++ {
-		aUpper.Set(i, i+p._B)
+		aUpper.Set(i, i+p._B, 1)
 	}
 
 	// LDPC 2
 	for i := uint32(0); i < p._S; i++ {
-		aUpper.Set(i, (i%p._P)+p._W)
-		aUpper.Set(i, ((i+1)%p._P)+p._W)
+		aUpper.Set(i, (i%p._P)+p._W, 1)
+		aUpper.Set(i, ((i+1)%p._P)+p._W, 1)
 	}
 
 	// Encode
 	for ri, row := range eRows {
 		f := func(col uint32) {
-			aUpper.Set(uint32(ri)+p._S, col)
+			aUpper.Set(uint32(ri)+p._S, col, 1)
 		}
 		row.encode(p, f)
 	}
@@ -74,10 +74,22 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 
 	d = d.ApplyPermutation(rowPermutation)
 
-	aUpper = aUpper.ApplyRowsPermutation(rowPermutation)
-	aUpper = aUpper.ApplyColsPermutation(colPermutation)
+	rPermut := discmath.InversePermutation(rowPermutation)
+	cPermut := discmath.InversePermutation(colPermutation)
 
-	e := aUpper.ToDense(0, uSize, uSize, p._L-uSize)
+	aUpperMutRow := discmath.NewMatrixGF256(aUpper.RowsNum(), aUpper.ColsNum())
+	aUpper.Each(func(row, col uint32) {
+		aUpperMutRow.Set(rPermut[row], col, 1)
+	})
+	aUpper = aUpperMutRow
+	aUpperMutCol := discmath.NewMatrixGF256(aUpper.RowsNum(), aUpper.ColsNum())
+
+	aUpper.Each(func(row, col uint32) {
+		aUpperMutCol.Set(row, cPermut[col], 1)
+	})
+	aUpper = aUpperMutCol
+
+	e := aUpper.ToGF2(0, uSize, uSize, p._L-uSize)
 
 	c := discmath.NewMatrixGF256(aUpper.ColsNum(), d.ColsNum())
 	c.SetFrom(d.GetBlock(0, 0, uSize, d.ColsNum()), 0, 0)
