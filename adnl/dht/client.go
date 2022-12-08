@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"math/big"
+	"net"
 	"reflect"
 	"runtime"
 	"sync"
@@ -37,6 +41,38 @@ type Client struct {
 type NodeInfo struct {
 	Address string
 	Key     ed25519.PublicKey
+}
+
+func NewClientFromConfigUrl(ctx context.Context, cfgUrl string) (*Client, error) {
+	cfg, err := liteclient.GetConfigFromUrl(ctx, cfgUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	dl, ok := ctx.Deadline()
+	if !ok {
+		dl = time.Now().Add(10 * time.Second)
+	}
+
+	return NewClientFromConfig(dl.Sub(time.Now()), cfg)
+}
+
+func NewClientFromConfig(connectTimeout time.Duration, cfg *liteclient.GlobalConfig) (*Client, error) {
+	var nodes []NodeInfo
+	for _, node := range cfg.DHT.StaticNodes.Nodes {
+		ip := make(net.IP, 4)
+		ii := int32(node.AddrList.Addrs[0].IP)
+		binary.BigEndian.PutUint32(ip, uint32(ii))
+
+		pp, _ := base64.StdEncoding.DecodeString(node.ID.Key)
+
+		nodes = append(nodes, NodeInfo{
+			Address: ip.String() + ":" + fmt.Sprint(node.AddrList.Addrs[0].Port),
+			Key:     pp,
+		})
+	}
+
+	return NewClient(connectTimeout, nodes)
 }
 
 func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) {
@@ -434,10 +470,6 @@ func xor(a, b []byte) []byte {
 
 	for i := 0; i < n; i++ {
 		tmp[i] ^= b[i]
-	}
-
-	for i, j := 0, len(tmp)-1; i < j; i, j = i+1, j-1 { // reverse array
-		//	tmp[i], tmp[j] = tmp[j], tmp[i]
 	}
 
 	return tmp

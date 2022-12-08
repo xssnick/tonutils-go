@@ -121,7 +121,7 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 		return nil, fmt.Errorf("failed to connect adnl for rldp connection %s, err: %w", addr, err)
 	}
 
-	r := rldp.NewRLDP(a)
+	r := rldp.NewClient(a)
 	r.SetOnQuery(t.getRLDPQueryHandler(r))
 	r.SetOnDisconnect(t.removeRLDP(r, id))
 

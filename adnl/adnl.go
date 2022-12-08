@@ -154,7 +154,6 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 				Logger("failed to read data", err)
 				return
 			}
-			// println("READ", n)
 
 			buf = buf[:n]
 			id := buf[:32]
