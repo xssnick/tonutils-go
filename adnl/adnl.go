@@ -534,11 +534,23 @@ func (c *Channel) setup(serverKey ed25519.PublicKey) (_ []byte, err error) {
 }
 
 func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
+	rand1, err := randForPacket()
+	if err != nil {
+		return nil, err
+	}
+
+	rand2, err := randForPacket()
+	if err != nil {
+		return nil, err
+	}
+
 	confSeq := int64(c.adnl.confirmSeqno)
 	packet := &PacketContent{
+		Rand1:        rand1,
 		Messages:     msgs,
 		Seqno:        &seqno,
 		ConfirmSeqno: &confSeq,
+		Rand2:        rand2,
 	}
 
 	packetData, err := packet.Serialize()
@@ -578,7 +590,18 @@ func (a *ADNL) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 		ReinitDate: int32(a.reinitTime),
 	}
 
+	rand1, err := randForPacket()
+	if err != nil {
+		return nil, err
+	}
+
+	rand2, err := randForPacket()
+	if err != nil {
+		return nil, err
+	}
+
 	packet := &PacketContent{
+		Rand1:               rand1,
 		From:                &PublicKeyED25519{Key: a.pubKey},
 		Address:             addr,
 		Messages:            msgs,
@@ -587,6 +610,7 @@ func (a *ADNL) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 		ReinitDate:          &reinit,
 		DstReinitDate:       &dstReinit,
 		RecvAddrListVersion: &reinit,
+		Rand2:               rand2,
 	}
 
 	toSign, err := packet.Serialize()
