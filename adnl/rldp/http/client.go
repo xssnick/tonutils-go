@@ -121,7 +121,7 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 		return nil, fmt.Errorf("failed to connect adnl for rldp connection %s, err: %w", addr, err)
 	}
 
-	r := rldp.NewRLDP(a)
+	r := rldp.NewClient(a)
 	r.SetOnQuery(t.getRLDPQueryHandler(r))
 	r.SetOnDisconnect(t.removeRLDP(r, id))
 
@@ -332,11 +332,12 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 	httpResp.Body = dr
 
 	if withPayload {
-		go func() {
-			if httpResp.ContentLength > 0 && httpResp.ContentLength < (1<<22) {
-				dr.data = make([]byte, 0, httpResp.ContentLength)
-			}
+		if httpResp.ContentLength > 0 && httpResp.ContentLength < (1<<22) {
+			// TODO: enable later, possible bug
+			// dr.data = make([]byte, 0, httpResp.ContentLength)
+		}
 
+		go func() {
 			seqno := int32(0)
 			for withPayload {
 				var part PayloadPart

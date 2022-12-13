@@ -19,6 +19,7 @@ func init() {
 	tl.Register(UpdateRuleSignature{}, "dht.updateRule.signature = dht.UpdateRule")
 	tl.Register(UpdateRuleAnybody{}, "dht.updateRule.anybody = dht.UpdateRule")
 	tl.Register(UpdateRuleOverlayNodes{}, "dht.updateRule.overlayNodes = dht.UpdateRule")
+	tl.Register(Query{}, "dht.query node:dht.node = True")
 }
 
 type FindNode struct {
@@ -75,3 +76,7 @@ type NodesList struct {
 type UpdateRuleSignature struct{}
 type UpdateRuleAnybody struct{}
 type UpdateRuleOverlayNodes struct{}
+
+type Query struct {
+	Node *Node `tl:"struct"`
+}

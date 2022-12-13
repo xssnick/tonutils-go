@@ -11,19 +11,18 @@ type nodePriority struct {
 	node     *dhtNode
 	priority *big.Int
 	next     *nodePriority
+	used     bool
 }
 
 type priorityList struct {
-	maxLen    int
-	list      *nodePriority
-	usedNodes map[string]bool
-	mx        sync.Mutex
+	maxLen int
+	list   *nodePriority
+	mx     sync.Mutex
 }
 
 func newPriorityList(maxLen int) *priorityList {
 	p := &priorityList{
-		maxLen:    maxLen,
-		usedNodes: map[string]bool{},
+		maxLen: maxLen,
 	}
 
 	return p
@@ -41,11 +40,6 @@ func (p *priorityList) addNode(node *dhtNode, priority *big.Int) bool {
 	p.mx.Lock()
 	defer p.mx.Unlock()
 
-	if p.usedNodes[id] {
-		// we already processed this node
-		return false
-	}
-
 	if p.list == nil {
 		p.list = item
 		return true
@@ -60,6 +54,10 @@ func (p *priorityList) addNode(node *dhtNode, priority *big.Int) bool {
 			return false
 		}
 		i++
+
+		if cur.id == item.id {
+			return false
+		}
 
 		if item.priority.Cmp(cur.priority) != 1 {
 			item.next = cur
@@ -102,14 +100,15 @@ func (p *priorityList) getNode() (*dhtNode, *big.Int) {
 	p.mx.Lock()
 	defer p.mx.Unlock()
 
-	if p.list == nil {
-		return nil, nil
+	res := p.list
+	for res != nil && res.used {
+		res = res.next
 	}
 
-	res := p.list
-	p.list = p.list.next
-
-	p.usedNodes[res.id] = true
+	if res == nil {
+		return nil, nil
+	}
+	res.used = true
 
 	return res.node, res.priority
 }

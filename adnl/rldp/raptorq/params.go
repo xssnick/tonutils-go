@@ -2,7 +2,7 @@ package raptorq
 
 import (
 	"fmt"
-	discmath2 "github.com/xssnick/tonutils-go/adnl/rldp/raptorq/discmath"
+	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq/discmath"
 )
 
 type encodingRow struct {
@@ -113,15 +113,15 @@ func (p *raptorParams) calcEncodingRow(x uint32) *encodingRow {
 	}
 }
 
-func (p *raptorParams) hdpcMultiply(v *discmath2.MatrixGF256) *discmath2.MatrixGF256 {
-	alpha := discmath2.OctExp(1)
+func (p *raptorParams) hdpcMultiply(v *discmath.MatrixGF256) *discmath.MatrixGF256 {
+	alpha := discmath.OctExp(1)
 	for i := uint32(1); i < v.RowsNum(); i++ {
 		v.RowAddMul(i, v.GetRow(i-1), alpha)
 	}
 
-	u := discmath2.NewMatrixGF256(p._H, v.ColsNum())
+	u := discmath.NewMatrixGF256(p._H, v.ColsNum())
 	for i := uint32(0); i < p._H; i++ {
-		u.RowAddMul(i, v.GetRow(v.RowsNum()-1), discmath2.OctExp(i%255))
+		u.RowAddMul(i, v.GetRow(v.RowsNum()-1), discmath.OctExp(i%255))
 	}
 
 	for col := uint32(0); col+1 < v.RowsNum(); col++ {
@@ -158,8 +158,8 @@ func (r *encodingRow) encode(p *raptorParams, f func(col uint32)) {
 	}
 }
 
-func (p *raptorParams) genSymbol(relaxed *discmath2.MatrixGF256, symbolSz, id uint32) []byte {
-	m := discmath2.NewMatrixGF256(1, symbolSz)
+func (p *raptorParams) genSymbol(relaxed *discmath.MatrixGF256, symbolSz, id uint32) []byte {
+	m := discmath.NewMatrixGF256(1, symbolSz)
 	p.calcEncodingRow(id).encode(p, func(col uint32) {
 		m.RowAdd(0, relaxed.GetRow(col))
 	})

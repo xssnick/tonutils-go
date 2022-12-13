@@ -64,14 +64,9 @@ func (m *MatrixGF2) Mul(s *MatrixGF256) *MatrixGF2 {
 func (m *MatrixGF2) ToGF256() *MatrixGF256 {
 	mg := NewMatrixGF256(m.RowsNum(), m.ColsNum())
 	for i, v := range m.rows {
-		mg.rows[i] = GF256{v} // GF256FromGF2(v, ((m.ColsNum()+7)/8+3)/4*4)
+		mg.rows[i] = GF256{v}
 	}
 
-	/*
-		for (size_t i = 0; i < rows(); i++) {
-		      Simd::gf256_from_gf2(res.row(i).data(), row(i).data(), ((cols_ + 7) / 8 + 3) / 4 * 4);
-		    }
-	*/
 	return mg
 }
 
