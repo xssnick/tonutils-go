@@ -24,9 +24,20 @@ import (
 
 const queryTimeout = 3000 * time.Millisecond
 
+type ADNL interface {
+	Connect(ctx context.Context, addr string) (err error)
+	Query(ctx context.Context, req, result tl.Serializable) error
+	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
+	Close()
+}
+
+var newADNL = func(key ed25519.PublicKey) (ADNL, error) {
+	return adnl.NewADNL(key)
+}
+
 type dhtNode struct {
 	id   []byte
-	adnl *adnl.ADNL
+	adnl ADNL
 	ping time.Duration // TODO: ping nodes
 }
 
@@ -436,8 +447,8 @@ func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K i
 	return nil, fmt.Errorf("failed to find value, unexpected response type %s", reflect.TypeOf(res).String())
 }
 
-func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey, id string) (*adnl.ADNL, error) {
-	a, err := adnl.NewADNL(key)
+func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey, id string) (ADNL, error) {
+	a, err := newADNL(key)
 	if err != nil {
 		return nil, err
 	}

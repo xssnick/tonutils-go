@@ -106,6 +106,11 @@ func (a *ADNL) Close() {
 
 var Logger = log.Println
 
+// Dial - can be changed to websockets for example, this way can be used from browser if compiled to wasm
+var Dial = func(addr string, timeout time.Duration) (net.Conn, error) {
+	return net.DialTimeout("udp", addr, timeout)
+}
+
 func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 	if a.conn != nil {
 		return fmt.Errorf("already connected")
@@ -125,7 +130,7 @@ func (a *ADNL) Connect(ctx context.Context, addr string) (err error) {
 	a.mx.Lock()
 	a.addr = addr
 
-	a.conn, err = net.DialTimeout("udp", addr, timeout)
+	a.conn, err = Dial(addr, timeout)
 	a.mx.Unlock()
 	if err != nil {
 		return err
