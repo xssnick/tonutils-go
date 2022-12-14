@@ -19,7 +19,7 @@ type ADNL interface {
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
-	Close()
+	Close() error
 }
 
 type RLDP struct {
