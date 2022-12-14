@@ -49,7 +49,7 @@ type ADNL interface {
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
-	Close()
+	Close() error
 }
 
 var newADNL = func(key ed25519.PublicKey) (ADNL, error) {
