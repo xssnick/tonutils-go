@@ -13,6 +13,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
+	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/ton/dns"
 	"io"
 	"net/http"
@@ -32,6 +33,31 @@ type DHT interface {
 
 type Resolver interface {
 	Resolve(ctx context.Context, domain string) (*dns.Domain, error)
+}
+
+type RLDP interface {
+	Close()
+	DoQuery(ctx context.Context, maxAnswerSize int64, query, result tl.Serializable) error
+	SetOnQuery(handler func(query *rldp.Query) error)
+	SetOnDisconnect(handler func())
+	SendAnswer(ctx context.Context, maxAnswerSize int64, queryID []byte, answer tl.Serializable) error
+}
+
+type ADNL interface {
+	Connect(ctx context.Context, addr string) (err error)
+	Query(ctx context.Context, req, result tl.Serializable) error
+	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
+	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
+	SendCustomMessage(ctx context.Context, req tl.Serializable) error
+	Close()
+}
+
+var newADNL = func(key ed25519.PublicKey) (ADNL, error) {
+	return adnl.NewADNL(key)
+}
+
+var newRLDP = func(a ADNL) RLDP {
+	return rldp.NewClient(a)
 }
 
 type payloadStream struct {
@@ -80,7 +106,7 @@ func (d *dataReader) pushData(data []byte, last bool) {
 
 type rldpInfo struct {
 	mx             sync.RWMutex
-	ActiveClient   *rldp.RLDP
+	ActiveClient   RLDP
 	ClientLastUsed time.Time
 
 	ID   ed25519.PublicKey
@@ -111,8 +137,8 @@ func NewTransport(dht DHT, resolver Resolver) *Transport {
 	return t
 }
 
-func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (*rldp.RLDP, error) {
-	a, err := adnl.NewADNL(key)
+func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (RLDP, error) {
+	a, err := newADNL(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
 	}
@@ -121,14 +147,14 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 		return nil, fmt.Errorf("failed to connect adnl for rldp connection %s, err: %w", addr, err)
 	}
 
-	r := rldp.NewClient(a)
+	r := newRLDP(a)
 	r.SetOnQuery(t.getRLDPQueryHandler(r))
 	r.SetOnDisconnect(t.removeRLDP(r, id))
 
 	return r, nil
 }
 
-func (t *Transport) removeRLDP(rl *rldp.RLDP, id string) func() {
+func (t *Transport) removeRLDP(rl RLDP, id string) func() {
 	return func() {
 		t.mx.RLock()
 		r := t.rldpInfos[id]
@@ -140,7 +166,7 @@ func (t *Transport) removeRLDP(rl *rldp.RLDP, id string) func() {
 	}
 }
 
-func (r *rldpInfo) destroyClient(rl *rldp.RLDP) {
+func (r *rldpInfo) destroyClient(rl RLDP) {
 	rl.Close()
 
 	r.mx.Lock()
@@ -150,7 +176,7 @@ func (r *rldpInfo) destroyClient(rl *rldp.RLDP) {
 	r.mx.Unlock()
 }
 
-func (t *Transport) getRLDPQueryHandler(r *rldp.RLDP) func(query *rldp.Query) error {
+func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
 	return func(query *rldp.Query) error {
 		switch req := query.Data.(type) {
 		case GetNextPayloadPart:
@@ -204,7 +230,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 	}
 	t.mx.Unlock()
 
-	var client *rldp.RLDP
+	var client RLDP
 	rlInfo.mx.Lock()
 	if rlInfo.ActiveClient != nil && rlInfo.ClientLastUsed.Add(10*time.Second).Before(time.Now()) {
 		// if last used more than 10 seconds ago,
