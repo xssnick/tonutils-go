@@ -6,9 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="951eb919-851a-431f-b086-3309bb794329" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/adnl.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/adnl.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/adnl/dht/client1_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/dht/client1_test.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/adnl/dht/client_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/dht/client_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tl/loader.go" beforeDir="false" afterPath="$PROJECT_DIR$/tl/loader.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -68,7 +67,7 @@
       <recent name="C:\Users\alexb\go\src\tonutils-go\adnl\dht" />
     </key>
   </component>
-  <component name="RunManager" selected="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (2)">
+  <component name="RunManager" selected="Go Test.TestClient_FindValue/missing_address in github.com/xssnick/tonutils-go/adnl/dht">
     <configuration default="true" type="GoApplicationRunConfiguration" factoryName="Go Application">
       <module name="tonutils-go" />
       <working_directory value="$PROJECT_DIR$" />
@@ -91,18 +90,6 @@
       <method v="2" />
     </configuration>
     <configuration name="TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (2)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
-      <module name="tonutils-go" />
-      <working_directory value="$PROJECT_DIR$/adnl/dht" />
-      <root_directory value="$PROJECT_DIR$" />
-      <kind value="PACKAGE" />
-      <package value="github.com/xssnick/tonutils-go/adnl/dht" />
-      <directory value="$PROJECT_DIR$" />
-      <filePath value="$PROJECT_DIR$" />
-      <framework value="gotest" />
-      <pattern value="^\QTestClient_FindValue\E$" />
-      <method v="2" />
-    </configuration>
-    <configuration name="TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="tonutils-go" />
       <working_directory value="$PROJECT_DIR$/adnl/dht" />
       <root_directory value="$PROJECT_DIR$" />
@@ -138,6 +125,18 @@
       <pattern value="^\QTestClient_FindValue1\E$" />
       <method v="2" />
     </configuration>
+    <configuration name="TestClient_FindValue/missing_address in github.com/xssnick/tonutils-go/adnl/dht" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="tonutils-go" />
+      <working_directory value="$PROJECT_DIR$/adnl/dht" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="github.com/xssnick/tonutils-go/adnl/dht" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTestClient_FindValue\E$/^\Qmissing_address\E$" />
+      <method v="2" />
+    </configuration>
     <configuration default="true" type="GoTestRunConfiguration" factoryName="Go Test">
       <module name="tonutils-go" />
       <working_directory value="$PROJECT_DIR$" />
@@ -150,11 +149,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Go Test.TestClient_FindValue/missing_address in github.com/xssnick/tonutils-go/adnl/dht" />
         <item itemvalue="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (2)" />
         <item itemvalue="Go Test.TestClient_FindValue1 in github.com/xssnick/tonutils-go/adnl/dht (1)" />
         <item itemvalue="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (1)" />
         <item itemvalue="Go Test.TestClient_FindValue1 in github.com/xssnick/tonutils-go/adnl/dht" />
-        <item itemvalue="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht" />
       </list>
     </recent_temporary>
   </component>
