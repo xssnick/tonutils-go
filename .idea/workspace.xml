@@ -5,22 +5,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="951eb919-851a-431f-b086-3309bb794329" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/adnl/node/block.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/adnl/node/types.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/adnl/overlay/types.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/adnl/rldp/client.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/example/site-request/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/adnl/adnl.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/adnl.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/dht/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/dht/client.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/dht/dht.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/dht/dht.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/dht/nodes.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/dht/nodes.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/packet.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/packet.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/rldp/http/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/rldp/http/client.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/rldp/raptorq/discmath/matrix-gf2.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/rldp/raptorq/discmath/matrix-gf2.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/rldp/raptorq/params.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/rldp/raptorq/params.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/adnl/rldp/rldp.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/rldp/rldp.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/adnl/dht/client_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/adnl/dht/client_test.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tl/loader.go" beforeDir="false" afterPath="$PROJECT_DIR$/tl/loader.go" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -68,20 +55,20 @@
     "WebServerToolWindowFactoryState": "false",
     "go.import.settings.migrated": "true",
     "go.sdk.automatically.set": "true",
-    "last_opened_file_path": "C:/Users/alexb/go/src/tonutils-go/adnl",
+    "last_opened_file_path": "C:/Users/alexb/go/src/Tonutils-Proxy",
     "nodejs_package_manager_path": "npm"
   }
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
-      <recent name="C:\Users\alexb\go\src\tonutils-go\adnl" />
       <recent name="C:\Users\alexb\go\src\tonutils-go\adnl\dht" />
+      <recent name="C:\Users\alexb\go\src\tonutils-go\adnl" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
       <recent name="C:\Users\alexb\go\src\tonutils-go\adnl\dht" />
     </key>
   </component>
-  <component name="RunManager" selected="Go Test.TestClient_FindAddresses in github.com/xssnick/tonutils-go/adnl/dht">
+  <component name="RunManager" selected="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (2)">
     <configuration default="true" type="GoApplicationRunConfiguration" factoryName="Go Application">
       <module name="tonutils-go" />
       <working_directory value="$PROJECT_DIR$" />
@@ -91,43 +78,19 @@
       <filePath value="$PROJECT_DIR$" />
       <method v="2" />
     </configuration>
-    <configuration name="TestADNL_Connect in github.com/xssnick/tonutils-go/adnl" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
-      <module name="tonutils-go" />
-      <working_directory value="$PROJECT_DIR$/adnl" />
-      <root_directory value="$PROJECT_DIR$" />
-      <kind value="PACKAGE" />
-      <package value="github.com/xssnick/tonutils-go/adnl" />
-      <directory value="$PROJECT_DIR$" />
-      <filePath value="$PROJECT_DIR$" />
-      <framework value="gotest" />
-      <pattern value="^\QTestADNL_Connect\E$" />
-      <method v="2" />
-    </configuration>
-    <configuration name="TestClient_FindAddresses in github.com/xssnick/tonutils-go/adnl/dht (3)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
-      <module name="tonutils-go" />
-      <working_directory value="$PROJECT_DIR$/adnl/dht" />
-      <root_directory value="$PROJECT_DIR$" />
-      <kind value="PACKAGE" />
-      <package value="github.com/xssnick/tonutils-go/adnl/dht" />
-      <directory value="$PROJECT_DIR$" />
-      <filePath value="$PROJECT_DIR$" />
-      <framework value="gotest" />
-      <pattern value="^\QTestClient_FindAddresses\E$" />
-      <method v="2" />
-    </configuration>
-    <configuration name="TestClient_FindAddresses in github.com/xssnick/tonutils-go/adnl/dht" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
-      <module name="tonutils-go" />
-      <working_directory value="$PROJECT_DIR$/adnl/dht" />
-      <root_directory value="$PROJECT_DIR$" />
-      <kind value="PACKAGE" />
-      <package value="github.com/xssnick/tonutils-go/adnl/dht" />
-      <directory value="$PROJECT_DIR$" />
-      <filePath value="$PROJECT_DIR$" />
-      <framework value="gotest" />
-      <pattern value="^\QTestClient_FindAddresses\E$" />
-      <method v="2" />
-    </configuration>
     <configuration name="TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (1)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="tonutils-go" />
+      <working_directory value="$PROJECT_DIR$/adnl/dht" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="github.com/xssnick/tonutils-go/adnl/dht" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTestClient_FindValue\E$" />
+      <method v="2" />
+    </configuration>
+    <configuration name="TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (2)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
       <module name="tonutils-go" />
       <working_directory value="$PROJECT_DIR$/adnl/dht" />
       <root_directory value="$PROJECT_DIR$" />
@@ -151,6 +114,30 @@
       <pattern value="^\QTestClient_FindValue\E$" />
       <method v="2" />
     </configuration>
+    <configuration name="TestClient_FindValue1 in github.com/xssnick/tonutils-go/adnl/dht (1)" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="tonutils-go" />
+      <working_directory value="$PROJECT_DIR$/adnl/dht" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="github.com/xssnick/tonutils-go/adnl/dht" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTestClient_FindValue1\E$" />
+      <method v="2" />
+    </configuration>
+    <configuration name="TestClient_FindValue1 in github.com/xssnick/tonutils-go/adnl/dht" type="GoTestRunConfiguration" factoryName="Go Test" temporary="true" nameIsGenerated="true">
+      <module name="tonutils-go" />
+      <working_directory value="$PROJECT_DIR$/adnl/dht" />
+      <root_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="github.com/xssnick/tonutils-go/adnl/dht" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <framework value="gotest" />
+      <pattern value="^\QTestClient_FindValue1\E$" />
+      <method v="2" />
+    </configuration>
     <configuration default="true" type="GoTestRunConfiguration" factoryName="Go Test">
       <module name="tonutils-go" />
       <working_directory value="$PROJECT_DIR$" />
@@ -163,10 +150,10 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Go Test.TestClient_FindAddresses in github.com/xssnick/tonutils-go/adnl/dht" />
-        <item itemvalue="Go Test.TestADNL_Connect in github.com/xssnick/tonutils-go/adnl" />
-        <item itemvalue="Go Test.TestClient_FindAddresses in github.com/xssnick/tonutils-go/adnl/dht (3)" />
+        <item itemvalue="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (2)" />
+        <item itemvalue="Go Test.TestClient_FindValue1 in github.com/xssnick/tonutils-go/adnl/dht (1)" />
         <item itemvalue="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht (1)" />
+        <item itemvalue="Go Test.TestClient_FindValue1 in github.com/xssnick/tonutils-go/adnl/dht" />
         <item itemvalue="Go Test.TestClient_FindValue in github.com/xssnick/tonutils-go/adnl/dht" />
       </list>
     </recent_temporary>
@@ -186,7 +173,7 @@
                   <entry key="branch">
                     <value>
                       <list>
-                        <option value="origin/master" />
+                        <option value="udp-rldp-2" />
                       </list>
                     </value>
                   </entry>
@@ -200,6 +187,17 @@
   </component>
   <component name="VgoProject">
     <settings-migrated>true</settings-migrated>
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="DlvLineBreakpoint">
+          <url>file://$PROJECT_DIR$/adnl/dht/client_test.go</url>
+          <line>6</line>
+          <option name="timeStamp" value="1" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/tonutils_go$go_test_tonutils_go.out" NAME="go test tonutils-go Coverage Results" MODIFIED="1663588090899" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="GoCoverage" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" />

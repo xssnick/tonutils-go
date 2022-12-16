@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/address"
@@ -335,7 +336,15 @@ func (a *ADNL) sendCustomMessage(ctx context.Context, ch *Channel, req tl.Serial
 }
 
 func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
-	return a.query(ctx, nil, req, result)
+	err := a.query(ctx, nil, req, result)
+	fmt.Println("JSON:")
+	res, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(res))
+
+	return err
 }
 
 func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializable) error {
