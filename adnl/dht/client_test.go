@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
@@ -18,10 +19,8 @@ import (
 )
 
 type MockADNL struct {
-	connect              func(ctx context.Context, addr string) (err error)
-	query                func(ctx context.Context, req, result tl.Serializable) error
-	setDisconnectHandler func(handler func(addr string, key ed25519.PublicKey))
-	close                func() error
+	connect func(ctx context.Context, addr string) (err error)
+	query   func(ctx context.Context, req, result tl.Serializable) error
 }
 
 func (m MockADNL) Connect(ctx context.Context, addr string) (err error) {
@@ -39,13 +38,13 @@ func (m MockADNL) Close() error {
 	return nil
 }
 
-func newCorrectNode() (*Node, error) {
+func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	testNode := Node{
 		adnl.PublicKeyED25519{},
 		&address.List{
 			Addresses: []*address.UDP{
-				{net.IPv4(8, 8, 8, 8).To4(),
-					14348,
+				{net.IPv4(a, b, c, d).To4(),
+					port,
 				},
 			},
 			Version:    0,
@@ -131,7 +130,7 @@ func TestClient_FindValue(t *testing.T) {
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
 						case SignedAddressListQuery:
-							testNode, err := newCorrectNode()
+							testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
 							if err != nil {
 								t.Fatal("failed creating test node, err: ", err.Error())
 							}
@@ -140,12 +139,12 @@ func TestClient_FindValue(t *testing.T) {
 							var _req FindValue
 							_, err := tl.Parse(&_req, request, true)
 							if err != nil {
-								return err
+								t.Fatal(err)
 							}
 
 							addr, err := hex.DecodeString(test.addr)
 							if err != nil {
-								return err
+								t.Fatal(err)
 							}
 
 							k, err := adnl.ToKeyID(&Key{
@@ -154,7 +153,7 @@ func TestClient_FindValue(t *testing.T) {
 								Index: 0,
 							})
 							if err != nil {
-								return err
+								t.Fatal(err)
 							}
 
 							if bytes.Equal(k, _req.Key) {
@@ -167,12 +166,6 @@ func TestClient_FindValue(t *testing.T) {
 								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{nil}}))
 							}
 						}
-
-						return nil
-					},
-					setDisconnectHandler: func(handler func(addr string, key ed25519.PublicKey)) {
-					},
-					close: func() error {
 						return nil
 					},
 				}, nil
@@ -222,7 +215,7 @@ func TestClient_FindValue(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-
+			time.Sleep(2 * time.Second)
 			_, got := dhtCli.FindValue(context.Background(), &Key{
 				ID:    siteAddr,
 				Name:  []byte("address"),
@@ -233,4 +226,111 @@ func TestClient_FindValue(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClient_NewClientFromConfig(t *testing.T) {
+	cnf := &liteclient.GlobalConfig{
+		Type: "config.global",
+		DHT: liteclient.DHTConfig{
+			Type: "dht.config.global",
+			K:    6,
+			A:    3,
+			StaticNodes: liteclient.DHTNodes{
+				Type: "dht.node",
+				Nodes: []liteclient.DHTNode{
+					{
+						Type: "dht.node",
+						ID: liteclient.ServerID{
+							"pub.ed25519",
+							"C1uy64rfGxp10SPSqbsxWhbumy5SM0YbvljCudwpZeI="},
+						AddrList: liteclient.DHTAddressList{
+							"adnl.addressList",
+							[]liteclient.DHTAddress{
+								{
+									"adnl.address.udp",
+									-1185526007,
+									22096,
+								},
+							},
+							0,
+							0,
+							0,
+							0},
+						Version:   -1,
+						Signature: "L4N1+dzXLlkmT5iPnvsmsixzXU0L6kPKApqMdcrGP5d9ssMhn69SzHFK+yIzvG6zQ9oRb4TnqPBaKShjjj2OBg==",
+					},
+					{
+						Type: "dht.node",
+						ID: liteclient.ServerID{
+							"pub.ed25519",
+							"bn8klhFZgE2sfIDfvVI6m6+oVNi1nBRlnHoxKtR9WBU="},
+						AddrList: liteclient.DHTAddressList{
+							"adnl.addressList",
+							[]liteclient.DHTAddress{
+								{
+									"adnl.address.udp",
+									-1307380860,
+									15888,
+								},
+							},
+							0,
+							0,
+							0,
+							0},
+						Version:   -1,
+						Signature: "fQ5zAa6ot4pfFWzvuJOR8ijM5ELWndSDsRhFKstW1tqVSNfwAdOC7tDC8mc4vgTJ6fSYSWmhnXGK/+T5f6sDCw==",
+					},
+				},
+			},
+		},
+		Liteservers: nil,
+		Validator:   liteclient.ValidatorConfig{},
+	}
+
+	conNodeAddr := "178.18.243.132:15888"
+	conNode, err := newCorrectNode(178, 18, 243, 132, 15888)
+	if err != nil {
+		t.Fatal("failed creating test node, err: ", err.Error())
+	}
+	pub, ok := conNode.ID.(adnl.PublicKeyED25519)
+	if !ok {
+		t.Fatalf("unsupported id type %s", reflect.TypeOf(conNode.ID).String())
+	}
+	kId, err := adnl.ToKeyID(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID := hex.EncodeToString(kId)
+
+	t.Run("client from config check", func(t *testing.T) {
+		newADNL = func(key ed25519.PublicKey) (ADNL, error) {
+			return MockADNL{
+				connect: func(ctx context.Context, addr string) error {
+					if addr == conNodeAddr {
+						return nil
+					} else {
+						return errors.New("unconnected node")
+					}
+				},
+				query: func(ctx context.Context, req, result tl.Serializable) error {
+					switch req.(type) {
+					case SignedAddressListQuery:
+						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*conNode))
+					default:
+						return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(req).String())
+					}
+					return nil
+				},
+			}, nil
+		}
+		cli, err := NewClientFromConfig(10*time.Second, cnf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, ok := cli.activeNodes[keyID]
+		if !ok {
+			t.Errorf("connected node is not added")
+		}
+	})
 }
