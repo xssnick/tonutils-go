@@ -332,5 +332,10 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 		if !ok {
 			t.Errorf("connected node is not added")
 		}
+
+		_, ok = cli.knownNodesInfo[keyID]
+		if !ok {
+			t.Errorf("connected node is not added")
+		}
 	})
 }
