@@ -38,6 +38,64 @@ func (m MockADNL) Close() error {
 	return nil
 }
 
+var cnf = &liteclient.GlobalConfig{
+	Type: "config.global",
+	DHT: liteclient.DHTConfig{
+		Type: "dht.config.global",
+		K:    6,
+		A:    3,
+		StaticNodes: liteclient.DHTNodes{
+			Type: "dht.node",
+			Nodes: []liteclient.DHTNode{
+				{
+					Type: "dht.node",
+					ID: liteclient.ServerID{
+						"pub.ed25519",
+						"C1uy64rfGxp10SPSqbsxWhbumy5SM0YbvljCudwpZeI="},
+					AddrList: liteclient.DHTAddressList{
+						"adnl.addressList",
+						[]liteclient.DHTAddress{
+							{
+								"adnl.address.udp",
+								-1185526007,
+								22096,
+							},
+						},
+						0,
+						0,
+						0,
+						0},
+					Version:   -1,
+					Signature: "L4N1+dzXLlkmT5iPnvsmsixzXU0L6kPKApqMdcrGP5d9ssMhn69SzHFK+yIzvG6zQ9oRb4TnqPBaKShjjj2OBg==",
+				},
+				{
+					Type: "dht.node",
+					ID: liteclient.ServerID{
+						"pub.ed25519",
+						"bn8klhFZgE2sfIDfvVI6m6+oVNi1nBRlnHoxKtR9WBU="},
+					AddrList: liteclient.DHTAddressList{
+						"adnl.addressList",
+						[]liteclient.DHTAddress{
+							{
+								"adnl.address.udp",
+								-1307380860,
+								15888,
+							},
+						},
+						0,
+						0,
+						0,
+						0},
+					Version:   -1,
+					Signature: "fQ5zAa6ot4pfFWzvuJOR8ijM5ELWndSDsRhFKstW1tqVSNfwAdOC7tDC8mc4vgTJ6fSYSWmhnXGK/+T5f6sDCw==",
+				},
+			},
+		},
+	},
+	Liteservers: nil,
+	Validator:   liteclient.ValidatorConfig{},
+}
+
 func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	testNode := Node{
 		adnl.PublicKeyED25519{},
@@ -171,42 +229,7 @@ func TestClient_FindValue(t *testing.T) {
 				}, nil
 			}
 
-			dhtCli, err := NewClientFromConfig(10*time.Second, &liteclient.GlobalConfig{
-				Type: "config.global",
-				DHT: liteclient.DHTConfig{
-					Type: "dht.config.global",
-					K:    6,
-					A:    3,
-					StaticNodes: liteclient.DHTNodes{
-						Type: "dht.node",
-						Nodes: []liteclient.DHTNode{
-							{
-								Type: "dht.node",
-								ID: liteclient.ServerID{
-									"pub.ed25519",
-									"C1uy64rfGxp10SPSqbsxWhbumy5SM0YbvljCudwpZeI="},
-								AddrList: liteclient.DHTAddressList{
-									"adnl.addressList",
-									[]liteclient.DHTAddress{
-										{
-											"adnl.address.udp",
-											-1185526007,
-											22096,
-										},
-									},
-									0,
-									0,
-									0,
-									0},
-								Version:   -1,
-								Signature: "L4N1+dzXLlkmT5iPnvsmsixzXU0L6kPKApqMdcrGP5d9ssMhn69SzHFK+yIzvG6zQ9oRb4TnqPBaKShjjj2OBg==",
-							},
-						},
-					},
-				},
-				Liteservers: nil,
-				Validator:   liteclient.ValidatorConfig{},
-			})
+			dhtCli, err := NewClientFromConfig(10*time.Second, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -229,64 +252,6 @@ func TestClient_FindValue(t *testing.T) {
 }
 
 func TestClient_NewClientFromConfig(t *testing.T) {
-	cnf := &liteclient.GlobalConfig{
-		Type: "config.global",
-		DHT: liteclient.DHTConfig{
-			Type: "dht.config.global",
-			K:    6,
-			A:    3,
-			StaticNodes: liteclient.DHTNodes{
-				Type: "dht.node",
-				Nodes: []liteclient.DHTNode{
-					{
-						Type: "dht.node",
-						ID: liteclient.ServerID{
-							"pub.ed25519",
-							"C1uy64rfGxp10SPSqbsxWhbumy5SM0YbvljCudwpZeI="},
-						AddrList: liteclient.DHTAddressList{
-							"adnl.addressList",
-							[]liteclient.DHTAddress{
-								{
-									"adnl.address.udp",
-									-1185526007,
-									22096,
-								},
-							},
-							0,
-							0,
-							0,
-							0},
-						Version:   -1,
-						Signature: "L4N1+dzXLlkmT5iPnvsmsixzXU0L6kPKApqMdcrGP5d9ssMhn69SzHFK+yIzvG6zQ9oRb4TnqPBaKShjjj2OBg==",
-					},
-					{
-						Type: "dht.node",
-						ID: liteclient.ServerID{
-							"pub.ed25519",
-							"bn8klhFZgE2sfIDfvVI6m6+oVNi1nBRlnHoxKtR9WBU="},
-						AddrList: liteclient.DHTAddressList{
-							"adnl.addressList",
-							[]liteclient.DHTAddress{
-								{
-									"adnl.address.udp",
-									-1307380860,
-									15888,
-								},
-							},
-							0,
-							0,
-							0,
-							0},
-						Version:   -1,
-						Signature: "fQ5zAa6ot4pfFWzvuJOR8ijM5ELWndSDsRhFKstW1tqVSNfwAdOC7tDC8mc4vgTJ6fSYSWmhnXGK/+T5f6sDCw==",
-					},
-				},
-			},
-		},
-		Liteservers: nil,
-		Validator:   liteclient.ValidatorConfig{},
-	}
-
 	conNodeAddr := "178.18.243.132:15888"
 	conNode, err := newCorrectNode(178, 18, 243, 132, 15888)
 	if err != nil {
@@ -336,6 +301,79 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 		_, ok = cli.knownNodesInfo[keyID]
 		if !ok {
 			t.Errorf("connected node is not added")
+		}
+	})
+}
+
+func TestClient_FindAddressesUnit(t *testing.T) {
+	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
+	adnlAddr, err := hex.DecodeString(testAddr)
+	if err != nil {
+		t.Fatal("failed creating test value, err:", err)
+	}
+
+	value, err := correctValue(adnlAddr) //correct value if searching adnl "addr"
+	if err != nil {
+		t.Fatal("failed creating test value, err: ", err.Error())
+	}
+	pubId, err := base64.StdEncoding.DecodeString("kn0+cePOZRw/FyE005Fj9w5MeSFp4589Ugv62TiK1Mo=")
+	if err != nil {
+		t.Fatal("failed creating pId of test value, err:", err)
+	}
+	tPubIdRes := adnl.PublicKeyED25519{pubId}
+
+	newADNL = func(key ed25519.PublicKey) (ADNL, error) {
+		return MockADNL{
+			connect: func(ctx context.Context, addr string) (err error) {
+				return nil
+			},
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				switch request := req.(type) {
+				case SignedAddressListQuery:
+					testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
+					if err != nil {
+						t.Fatal("failed creating test node, err: ", err.Error())
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*testNode))
+				case tl.Raw:
+					var _req FindValue
+					_, err := tl.Parse(&_req, request, true)
+					if err != nil {
+						t.Fatal("failed to prepare test data, err", err)
+					}
+
+					k, err := adnl.ToKeyID(&Key{
+						ID:    adnlAddr,
+						Name:  []byte("address"),
+						Index: 0,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					if bytes.Equal(k, _req.Key) {
+						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*value))
+					} else {
+						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{nil}}))
+					}
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	cli, err := NewClientFromConfig(10*time.Second, cnf)
+	if err != nil {
+		t.Fatal("failed to prepare test client, err:", err)
+	}
+	time.Sleep(2 * time.Second)
+	t.Run("find addresses positive case", func(t *testing.T) {
+		_, pubKey, err := cli.FindAddresses(context.Background(), adnlAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(tPubIdRes.Key, pubKey) {
+			t.Fatal(err)
 		}
 	})
 }
