@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -376,4 +377,47 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestClient_FindAddressesIntegration(t *testing.T) {
+	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
+
+	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+	if err != nil {
+		t.Fatalf("cannot fetch network config, error: %s", err)
+	}
+
+	var nodes []NodeInfo
+	for _, node := range cfg.DHT.StaticNodes.Nodes {
+		ip := make(net.IP, 4)
+		ii := int32(node.AddrList.Addrs[0].IP)
+		binary.BigEndian.PutUint32(ip, uint32(ii))
+
+		pp, err := base64.StdEncoding.DecodeString(node.ID.Key)
+		if err != nil {
+			continue
+		}
+
+		nodes = append(nodes, NodeInfo{
+			Address: ip.String() + ":" + fmt.Sprint(node.AddrList.Addrs[0].Port),
+			Key:     pp,
+		})
+	}
+
+	dhtClient, err := NewClient(10*time.Second, nodes)
+	if err != nil {
+		t.Fatalf("failed to init DHT client: %s", err.Error())
+	}
+
+	time.Sleep(2 * time.Second)
+
+	siteAddr, err := hex.DecodeString(testAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = dhtClient.FindAddresses(context.Background(), siteAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
