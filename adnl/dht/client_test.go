@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
@@ -127,6 +126,57 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	}
 	sign := ed25519.Sign(tPrivKey, toVerify)
 	testNode.Signature = sign
+
+	return &testNode, nil
+}
+
+func newIncorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
+	testNode := Node{
+		adnl.PublicKeyED25519{},
+		&address.List{
+			Addresses: []*address.UDP{
+				{net.IPv4(a, b, c, d).To4(),
+					port,
+				},
+			},
+			Version:    0,
+			ReinitDate: 0,
+			Priority:   0,
+			ExpireAT:   0,
+		},
+		1671102718,
+		nil,
+	}
+	testNodeCorrupted := Node{
+		adnl.PublicKeyED25519{},
+		&address.List{
+			Addresses: []*address.UDP{
+				{net.IPv4(a^1, b^1, c^1, d^1).To4(),
+					port ^ 1,
+				},
+			},
+			Version:    0,
+			ReinitDate: 0,
+			Priority:   0,
+			ExpireAT:   0,
+		},
+		1671102718,
+		nil,
+	}
+
+	tPubKey, tPrivKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, err
+	}
+	testNode.ID = adnl.PublicKeyED25519{tPubKey}
+
+	toVerify, err := tl.Serialize(testNode, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize node: %w", err)
+	}
+
+	sign := ed25519.Sign(tPrivKey, toVerify)
+	testNodeCorrupted.Signature = sign
 
 	return &testNode, nil
 }
@@ -253,61 +303,123 @@ func TestClient_FindValue(t *testing.T) {
 }
 
 func TestClient_NewClientFromConfig(t *testing.T) {
-	conNodeAddr := "178.18.243.132:15888"
-	conNode, err := newCorrectNode(178, 18, 243, 132, 15888)
+	corNode1, err := newCorrectNode(178, 18, 243, 132, 15888)
 	if err != nil {
 		t.Fatal("failed creating test node, err: ", err.Error())
 	}
-	pub, ok := conNode.ID.(adnl.PublicKeyED25519)
+
+	pub1, ok := corNode1.ID.(adnl.PublicKeyED25519)
 	if !ok {
-		t.Fatalf("unsupported id type %s", reflect.TypeOf(conNode.ID).String())
+		t.Fatalf("unsupported id type %s", reflect.TypeOf(corNode1.ID).String())
 	}
-	kId, err := adnl.ToKeyID(pub)
+	kId1, err := adnl.ToKeyID(pub1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyID := hex.EncodeToString(kId)
+	keyID1 := hex.EncodeToString(kId1)
 
-	t.Run("client from config check", func(t *testing.T) {
-		newADNL = func(key ed25519.PublicKey) (ADNL, error) {
-			return MockADNL{
-				connect: func(ctx context.Context, addr string) error {
-					if addr == conNodeAddr {
+	corNode2, err := newCorrectNode(1, 2, 3, 4, 12345)
+	if err != nil {
+		t.Fatal("failed creating test node, err: ", err.Error())
+	}
+	pub2, ok := corNode2.ID.(adnl.PublicKeyED25519)
+	if !ok {
+		t.Fatalf("unsupported id type %s", reflect.TypeOf(corNode2.ID).String())
+	}
+	kId2, err := adnl.ToKeyID(pub2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID2 := hex.EncodeToString(kId2)
+
+	incorNode, err := newIncorrectNode(178, 18, 243, 132, 15888)
+	if err != nil {
+		t.Fatal("failed creating test node, err: ", err.Error())
+	}
+	pub3, ok := incorNode.ID.(adnl.PublicKeyED25519)
+	if !ok {
+		t.Fatalf("unsupported id type %s", reflect.TypeOf(corNode2.ID).String())
+	}
+	kId3, err := adnl.ToKeyID(pub3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID3 := hex.EncodeToString(kId3)
+
+	tests := []struct {
+		name          string
+		responseNode1 *Node
+		responseNode2 *Node
+		wantLenNodes  int
+		idToCheckAdd1 string
+		idToCheckAdd2 string
+		checkAdd1     bool
+		checkAdd2     bool
+	}{
+		{
+			"positive case (all nodes valid)", corNode1, corNode2, 2, keyID1, keyID2, true, true,
+		},
+		{
+			"negative case (one of two nodes with bad sign)", corNode1, incorNode, 1, keyID1, keyID3, true, false,
+		},
+	}
+
+	for _, test := range tests {
+		reqCount := 0
+		t.Run(test.name, func(t *testing.T) {
+			newADNL = func(key ed25519.PublicKey) (ADNL, error) {
+				return MockADNL{
+					connect: func(ctx context.Context, addr string) error {
 						return nil
-					} else {
-						return errors.New("unconnected node")
-					}
-				},
-				query: func(ctx context.Context, req, result tl.Serializable) error {
-					switch req.(type) {
-					case SignedAddressListQuery:
-						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*conNode))
-					default:
-						return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(req).String())
-					}
-					return nil
-				},
-			}, nil
-		}
-		cli, err := NewClientFromConfig(10*time.Second, cnf)
-		if err != nil {
-			t.Fatal(err)
-		}
+					},
+					query: func(ctx context.Context, req, result tl.Serializable) error {
+						switch req.(type) {
+						case SignedAddressListQuery:
+							if reqCount == 0 {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*test.responseNode1))
+								reqCount++
+							} else {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*test.responseNode2))
+							}
+						default:
+							return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(req).String())
+						}
+						return nil
+					},
+				}, nil
+			}
+			cli, err := NewClientFromConfig(10*time.Second, cnf)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-		_, ok := cli.activeNodes[keyID]
-		if !ok {
-			t.Errorf("connected node is not added to active nodes")
-		}
+			time.Sleep(2 * time.Second)
 
-		_, ok = cli.knownNodesInfo[keyID]
-		if !ok {
-			t.Errorf("connected node is not added to known nodes")
-		}
+			if len(cli.activeNodes) != test.wantLenNodes || len(cli.knownNodesInfo) != test.wantLenNodes {
+				t.Errorf("added more nodes (active'%d', known'%d') then expected(%d)", len(cli.activeNodes), len(cli.knownNodesInfo), test.wantLenNodes)
+			}
 
-		if len(cli.activeNodes) != 1 && len(cli.knownNodesInfo) != 1 {
-			t.Errorf("added more nodes then expected")
-		}
-	})
+			_, ok := cli.activeNodes[test.idToCheckAdd1]
+			if ok != test.checkAdd1 {
+				t.Errorf("connected node is not added to active nodes")
+			}
+			_, ok = cli.knownNodesInfo[test.idToCheckAdd1]
+			if ok != test.checkAdd1 {
+				t.Errorf("connected node is not added to known nodes")
+			}
+
+			_, ok = cli.activeNodes[test.idToCheckAdd2]
+			if ok != test.checkAdd2 {
+				t.Errorf("connected node is not added to active nodes")
+			}
+			_, ok = cli.knownNodesInfo[test.idToCheckAdd2]
+			if ok != test.checkAdd2 {
+				t.Errorf("connected node is not added to known nodes")
+			}
+
+		})
+	}
+
 }
 
 func TestClient_FindAddressesUnit(t *testing.T) {
