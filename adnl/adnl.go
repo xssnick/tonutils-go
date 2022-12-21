@@ -97,11 +97,15 @@ func NewADNL(key ed25519.PublicKey) (*ADNL, error) {
 	return a, nil
 }
 
-func (a *ADNL) Close() {
+func (a *ADNL) Close() error {
 	con := a.conn
 	if con != nil {
-		con.Close()
+		err := con.Close()
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 var Logger = log.Println

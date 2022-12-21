@@ -28,7 +28,7 @@ type ADNL interface {
 	Connect(ctx context.Context, addr string) (err error)
 	Query(ctx context.Context, req, result tl.Serializable) error
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
-	Close()
+	Close() error
 }
 
 var newADNL = func(key ed25519.PublicKey) (ADNL, error) {
