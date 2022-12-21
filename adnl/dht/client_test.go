@@ -469,66 +469,81 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed creating test value, err: ", err.Error())
 	}
+
+	valueToAddrList, err := correctValue(adnlAddr)
+	if err != nil {
+		t.Fatal("failed creating test value, err: ", err.Error())
+	}
+	var tAddrList address.List
+	_, err = tl.Parse(&tAddrList, valueToAddrList.Value.Data, true)
+	if err != nil {
+		t.Fatal("failed to parse test address list: ", err)
+	}
+
 	pubId, err := base64.StdEncoding.DecodeString("kn0+cePOZRw/FyE005Fj9w5MeSFp4589Ugv62TiK1Mo=")
 	if err != nil {
 		t.Fatal("failed creating pId of test value, err:", err)
 	}
 	tPubIdRes := adnl.PublicKeyED25519{pubId}
 
-	newADNL = func(key ed25519.PublicKey) (ADNL, error) {
-		return MockADNL{
-			connect: func(ctx context.Context, addr string) (err error) {
-				return nil
-			},
-			query: func(ctx context.Context, req, result tl.Serializable) error {
-				switch request := req.(type) {
-				case SignedAddressListQuery:
-					testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
-					if err != nil {
-						t.Fatal("failed creating test node, err: ", err.Error())
-					}
-					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*testNode))
-				case tl.Raw:
-					var _req FindValue
-					_, err := tl.Parse(&_req, request, true)
-					if err != nil {
-						t.Fatal("failed to prepare test data, err", err)
-					}
-
-					k, err := adnl.ToKeyID(&Key{
-						ID:    adnlAddr,
-						Name:  []byte("address"),
-						Index: 0,
-					})
-					if err != nil {
-						t.Fatal(err)
-					}
-
-					if bytes.Equal(k, _req.Key) {
-						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*value))
-					} else {
-						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{nil}}))
-					}
-				default:
-					return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(req).String())
-				}
-				return nil
-			},
-		}, nil
-	}
-
-	cli, err := NewClientFromConfig(10*time.Second, cnf)
-	if err != nil {
-		t.Fatal("failed to prepare test client, err:", err)
-	}
-	time.Sleep(2 * time.Second)
 	t.Run("find addresses positive case", func(t *testing.T) {
-		_, pubKey, err := cli.FindAddresses(context.Background(), adnlAddr)
+		newADNL = func(key ed25519.PublicKey) (ADNL, error) {
+			return MockADNL{
+				connect: func(ctx context.Context, addr string) (err error) {
+					return nil
+				},
+				query: func(ctx context.Context, req, result tl.Serializable) error {
+					switch request := req.(type) {
+					case SignedAddressListQuery:
+						testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
+						if err != nil {
+							t.Fatal("failed creating test node, err: ", err.Error())
+						}
+						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*testNode))
+					case tl.Raw:
+						var _req FindValue
+						_, err := tl.Parse(&_req, request, true)
+						if err != nil {
+							t.Fatal("failed to prepare test data, err", err)
+						}
+
+						k, err := adnl.ToKeyID(&Key{
+							ID:    adnlAddr,
+							Name:  []byte("address"),
+							Index: 0,
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+
+						if bytes.Equal(k, _req.Key) {
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*value))
+						} else {
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{nil}}))
+						}
+					default:
+						return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(req).String())
+					}
+					return nil
+				},
+			}, nil
+		}
+		cli, err := NewClientFromConfig(10*time.Second, cnf)
+		if err != nil {
+			t.Fatal("failed to prepare test client, err:", err)
+		}
+		time.Sleep(2 * time.Second)
+
+		addrList, pubKey, err := cli.FindAddresses(context.Background(), adnlAddr)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(tPubIdRes.Key, pubKey) {
-			t.Fatal(err)
+			t.Error("invalid pubKey received")
+		}
+
+		if !reflect.DeepEqual(&tAddrList, addrList) {
+			t.Error("invalid address list received")
 		}
 	})
 }
