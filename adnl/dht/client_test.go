@@ -221,6 +221,17 @@ func correctValue(tAdnlAddr []byte) (*ValueFoundResult, error) {
 }
 
 func TestClient_FindValue(t *testing.T) {
+	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	siteAddr, err := hex.DecodeString(existingValue)
+	if err != nil {
+		t.Fatal("failed to prepare test site address, err: ", err.Error())
+	}
+
+	tValue, err := correctValue(siteAddr)
+	if err != nil {
+		t.Fatal("failed to prepare test value, err:")
+	}
+
 	tests := []struct {
 		name, addr string
 		want       error
@@ -251,13 +262,8 @@ func TestClient_FindValue(t *testing.T) {
 								t.Fatal(err)
 							}
 
-							addr, err := hex.DecodeString(test.addr)
-							if err != nil {
-								t.Fatal(err)
-							}
-
 							k, err := adnl.ToKeyID(&Key{
-								ID:    addr,
+								ID:    siteAddr,
 								Name:  []byte("address"),
 								Index: 0,
 							})
@@ -266,11 +272,7 @@ func TestClient_FindValue(t *testing.T) {
 							}
 
 							if bytes.Equal(k, _req.Key) {
-								res, err := correctValue(addr) //correct value if searching adnl "addr"
-								if err != nil {
-									t.Fatal("failed creating test value, err: ", err.Error())
-								}
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*res))
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*tValue))
 							} else {
 								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{nil}}))
 							}
@@ -289,14 +291,24 @@ func TestClient_FindValue(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+
 			time.Sleep(2 * time.Second)
-			_, got := dhtCli.FindValue(context.Background(), &Key{
+
+			res, got := dhtCli.FindValue(context.Background(), &Key{
 				ID:    siteAddr,
 				Name:  []byte("address"),
 				Index: 0,
 			})
 			if got != test.want {
 				t.Errorf("got '%v', want '%v'", got, test.want)
+			}
+
+			if test.name == "existing address" {
+				tValue.Value.Signature = nil
+				tValue.Value.KeyDescription.Signature = nil
+				if !reflect.DeepEqual(res, &tValue.Value) {
+					t.Errorf("got bad data")
+				}
 			}
 		})
 	}
