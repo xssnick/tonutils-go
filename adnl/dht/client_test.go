@@ -401,20 +401,20 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 
 			_, ok := cli.activeNodes[test.idToCheckAdd1]
 			if ok != test.checkAdd1 {
-				t.Errorf("connected node is not added to active nodes")
+				t.Errorf("invalid active nodes addition")
 			}
 			_, ok = cli.knownNodesInfo[test.idToCheckAdd1]
 			if ok != test.checkAdd1 {
-				t.Errorf("connected node is not added to known nodes")
+				t.Errorf("invalid known nodes nodes addition")
 			}
 
 			_, ok = cli.activeNodes[test.idToCheckAdd2]
 			if ok != test.checkAdd2 {
-				t.Errorf("connected node is not added to active nodes")
+				t.Errorf("invalid active nodes addition")
 			}
 			_, ok = cli.knownNodesInfo[test.idToCheckAdd2]
 			if ok != test.checkAdd2 {
-				t.Errorf("connected node is not added to known nodes")
+				t.Errorf("invalid known nodes nodes addition")
 			}
 
 		})
@@ -473,6 +473,8 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 					} else {
 						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{nil}}))
 					}
+				default:
+					return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(req).String())
 				}
 				return nil
 			},
@@ -535,5 +537,133 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 	_, _, err = dhtClient.FindAddresses(context.Background(), siteAddr)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClient_FindValueRaw(t *testing.T) {
+	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	siteAddr, err := hex.DecodeString(existingValue)
+	if err != nil {
+		t.Fatal("failed to prepare test site address, err: ", err.Error())
+	}
+
+	var typeValue any
+	typeValue = &Value{}
+	var typeNode any
+	typeNode = []*Node{}
+
+	tValue, err := correctValue(siteAddr)
+	if err != nil {
+		t.Fatal("failed to prepare test value, err:")
+	}
+
+	var tNodesList []*Node
+	tNode, err := newCorrectNode(8, 8, 8, 8, 12345)
+	if err != nil {
+		t.Fatal("failed creating test node, err: ", err.Error())
+	}
+	tNodesList = append(tNodesList, tNode)
+
+	tests := []struct {
+		name, addr string
+		wantType   any
+	}{
+		{"existing address", "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174", typeValue},
+		{"missing address", "1537ee02d6d0a65185630084427a26eafdc11ad24566d835291a43b780701f0e", typeNode},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			newADNL = func(key ed25519.PublicKey) (ADNL, error) {
+				return MockADNL{
+					connect: func(ctx context.Context, addr string) error {
+						return nil
+					},
+					query: func(ctx context.Context, req, result tl.Serializable) error {
+						switch request := req.(type) {
+						case SignedAddressListQuery:
+							testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
+							if err != nil {
+								t.Fatal("failed creating test node, err: ", err.Error())
+							}
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*testNode))
+						case tl.Raw:
+							var _req FindValue
+							_, err := tl.Parse(&_req, request, true)
+							if err != nil {
+								t.Fatal("failed to prepare test data, err", err)
+							}
+
+							k, err := adnl.ToKeyID(&Key{
+								ID:    siteAddr,
+								Name:  []byte("address"),
+								Index: 0,
+							})
+							if err != nil {
+								t.Fatal(err)
+							}
+
+							if bytes.Equal(k, _req.Key) {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*tValue))
+							} else {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{tNodesList}}))
+							}
+						default:
+							return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
+						}
+						return nil
+					},
+				}, nil
+			}
+
+			cli, err := NewClientFromConfig(10*time.Second, cnf)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			time.Sleep(2 * time.Second)
+
+			var testNode *dhtNode
+			for _, val := range cli.activeNodes {
+				testNode = val
+			}
+
+			siteAddr, err := hex.DecodeString(test.addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			k := &Key{
+				ID:    siteAddr,
+				Name:  []byte("address"),
+				Index: 0,
+			}
+			testId, keyErr := adnl.ToKeyID(k)
+			if keyErr != nil {
+				t.Fatal("failed to prepare test id, err: ", keyErr)
+			}
+
+			res, err := cli.FindValueRaw(context.Background(), testNode, testId, 12)
+			if err != nil {
+				t.Fatal("failed execution findValueRaw, err: ", err)
+			}
+
+			if reflect.TypeOf(res) != reflect.TypeOf(test.wantType) {
+				t.Errorf("got type '%s', want '%s'", reflect.TypeOf(res).String(), reflect.TypeOf(test.wantType).String())
+			}
+
+			switch test.name {
+			case "existing address":
+				tValue.Value.Signature = nil
+				tValue.Value.KeyDescription.Signature = nil
+				if !reflect.DeepEqual(*res.(*Value), tValue.Value) {
+					t.Errorf("got bad data")
+				}
+			case "missing address":
+				if !reflect.DeepEqual(res.([]*Node)[0], tNodesList[0]) {
+					t.Errorf("got bad data")
+				}
+			default:
+				t.Fatal("test error: unsupported test name")
+			}
+		})
 	}
 }
