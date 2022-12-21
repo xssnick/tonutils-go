@@ -408,27 +408,51 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 			time.Sleep(2 * time.Second)
 
 			if len(cli.activeNodes) != test.wantLenNodes || len(cli.knownNodesInfo) != test.wantLenNodes {
-				t.Errorf("added more nodes (active'%d', known'%d') then expected(%d)", len(cli.activeNodes), len(cli.knownNodesInfo), test.wantLenNodes)
+				t.Errorf("added nodes count (active'%d', known'%d') but expected(%d)", len(cli.activeNodes), len(cli.knownNodesInfo), test.wantLenNodes)
 			}
 
-			_, ok := cli.activeNodes[test.idToCheckAdd1]
+			resDhtNode1, ok := cli.activeNodes[test.idToCheckAdd1]
 			if ok != test.checkAdd1 {
 				t.Errorf("invalid active nodes addition")
 			}
-			_, ok = cli.knownNodesInfo[test.idToCheckAdd1]
+			if hex.EncodeToString(resDhtNode1.id) != test.idToCheckAdd1 {
+				t.Errorf("bad data resived")
+			}
+
+			resNode1, ok := cli.knownNodesInfo[test.idToCheckAdd1]
 			if ok != test.checkAdd1 {
 				t.Errorf("invalid known nodes nodes addition")
 			}
-
-			_, ok = cli.activeNodes[test.idToCheckAdd2]
-			if ok != test.checkAdd2 {
-				t.Errorf("invalid active nodes addition")
-			}
-			_, ok = cli.knownNodesInfo[test.idToCheckAdd2]
-			if ok != test.checkAdd2 {
-				t.Errorf("invalid known nodes nodes addition")
+			if !reflect.DeepEqual(resNode1, test.responseNode1) {
+				t.Errorf("bad data resived")
 			}
 
+			if test.name == "negative case (one of two nodes with bad sign)" {
+				_, ok := cli.activeNodes[test.idToCheckAdd2]
+				if ok != test.checkAdd2 {
+					t.Errorf("invalid active nodes addition")
+				}
+				_, ok = cli.knownNodesInfo[test.idToCheckAdd2]
+				if ok != test.checkAdd2 {
+					t.Errorf("invalid known nodes nodes addition")
+				}
+			} else {
+				resDhtNode2, ok := cli.activeNodes[test.idToCheckAdd2]
+				if ok != test.checkAdd2 {
+					t.Errorf("invalid active nodes addition")
+				}
+				if hex.EncodeToString(resDhtNode2.id) != test.idToCheckAdd2 {
+					t.Errorf("bad data resived")
+				}
+
+				resNode2, ok := cli.knownNodesInfo[test.idToCheckAdd2]
+				if ok != test.checkAdd2 {
+					t.Errorf("invalid known nodes nodes addition")
+				}
+				if !reflect.DeepEqual(resNode2, test.responseNode2) {
+					t.Errorf("bad data resived")
+				}
+			}
 		})
 	}
 
