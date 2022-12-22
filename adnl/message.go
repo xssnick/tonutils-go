@@ -1,8 +1,12 @@
 package adnl
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
+	"sync"
+	"time"
 )
 
 func init() {
@@ -14,6 +18,19 @@ func init() {
 	tl.Register(MessageReinit{}, "adnl.message.reinit date:int = adnl.Message")
 	tl.Register(MessageCreateChannel{}, "adnl.message.createChannel key:int256 date:int = adnl.Message")
 	tl.Register(MessageConfirmChannel{}, "adnl.message.confirmChannel key:int256 peer_key:int256 date:int = adnl.Message")
+	tl.Register(MessagePing{}, "adnl.ping value:long = adnl.Pong")
+	tl.Register(MessagePong{}, "adnl.pong value:long = adnl.Pong")
+}
+
+const _MTU = 1024
+const _HugePacketMaxSz = _MTU*8 + 128
+
+type MessagePing struct {
+	Value int64 `tl:"long"`
+}
+
+type MessagePong struct {
+	Value int64 `tl:"long"`
 }
 
 type MessageCreateChannel struct {
@@ -39,7 +56,7 @@ type MessageNop struct{}
 
 type MessageQuery struct {
 	ID   []byte `tl:"int256"`
-	Data []byte `tl:"bytes"`
+	Data any    `tl:"bytes struct boxed"`
 }
 
 type MessageAnswer struct {
@@ -55,24 +72,36 @@ type MessagePart struct {
 }
 
 type partitionedMessage struct {
+	startedAt    time.Time
 	knownOffsets map[int32]bool
 	buf          []byte
 	gotLen       int32
+
+	mx sync.Mutex
 }
 
 func newPartitionedMessage(size int32) *partitionedMessage {
 	return &partitionedMessage{
+		startedAt:    time.Now(),
 		knownOffsets: map[int32]bool{},
 		buf:          make([]byte, size),
 	}
 }
 
 func (m *partitionedMessage) AddPart(offset int32, data []byte) (bool, error) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	if m.gotLen == int32(len(m.buf)) {
+		// already full, skip part processing and don't report as ready
+		return false, nil
+	}
+
 	if len(m.buf[offset:]) < len(data) {
 		return false, fmt.Errorf("part is bigger than defined message")
 	}
 	if m.knownOffsets[offset] {
-		return m.gotLen == int32(len(m.buf)), nil
+		return false, nil
 	}
 
 	copy(m.buf[offset:], data)
@@ -83,9 +112,46 @@ func (m *partitionedMessage) AddPart(offset int32, data []byte) (bool, error) {
 	return m.gotLen == int32(len(m.buf)), nil
 }
 
-func (m *partitionedMessage) Build() []byte {
+func (m *partitionedMessage) Build(msgHash []byte) ([]byte, error) {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
 	if m.gotLen != int32(len(m.buf)) {
-		return nil
+		return nil, fmt.Errorf("not full yet")
 	}
-	return m.buf
+
+	hash := sha256.New()
+	hash.Write(m.buf)
+	if !bytes.Equal(hash.Sum(nil), msgHash) {
+		return nil, fmt.Errorf("invalid message, hash not matches")
+	}
+
+	return m.buf, nil
+}
+
+func splitMessage(data []byte) []MessagePart {
+	h := sha256.New()
+	h.Write(data)
+	hash := h.Sum(nil)
+
+	x := len(data) / _MTU
+	if len(data)%_MTU != 0 {
+		x++
+	}
+
+	res := make([]MessagePart, 0, x)
+	for i := 0; i < x; i++ {
+		buf := data[i*_MTU:]
+		if len(buf) > _MTU {
+			buf = buf[:_MTU]
+		}
+
+		res = append(res, MessagePart{
+			Hash:      hash,
+			TotalSize: int32(len(data)),
+			Offset:    int32(i * _MTU),
+			Data:      buf,
+		})
+	}
+	return res
 }

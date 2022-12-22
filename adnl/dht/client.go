@@ -25,14 +25,13 @@ import (
 const queryTimeout = 3000 * time.Millisecond
 
 type ADNL interface {
-	Connect(ctx context.Context, addr string) (err error)
 	Query(ctx context.Context, req, result tl.Serializable) error
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	Close()
 }
 
-var newADNL = func(key ed25519.PublicKey) (ADNL, error) {
-	return adnl.NewADNL(key)
+var connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+	return adnl.Connect(ctx, addr, peerKey, ourKey)
 }
 
 type dhtNode struct {
@@ -448,12 +447,7 @@ func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K i
 }
 
 func (c *Client) connect(ctx context.Context, addr string, key ed25519.PublicKey, id string) (ADNL, error) {
-	a, err := newADNL(key)
-	if err != nil {
-		return nil, err
-	}
-
-	err = a.Connect(ctx, addr)
+	a, err := connect(ctx, addr, key, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -33,25 +33,25 @@ func TestDNSClient_Resolve(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
-	d, err := cli.Resolve(ctx, "andreypfau.ton")
+	d, err := cli.Resolve(ctx, "foundation.ton")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	wal := d.GetWalletRecord()
+	// wal := d.GetWalletRecord()
 
 	iData, err := d.GetNFTData(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if iData.OwnerAddress.String() != "EQAQ6MeBN9cP2cubLXZ-FYhNMZTxAK-5xA2ul-D8UGa4NLJ7" {
+	if iData.OwnerAddress.String() != "EQCdqXGvONLwOr3zCNX5FjapflorB6ZsOdcdfLrjsDLt3Fy9" {
 		t.Fatal("owner diff", iData.OwnerAddress.String())
 	}
 
-	if wal.String() != "EQA0i8-CdGnF_DhUHHf92R1ONH6sIA9vLZ_WLcCIhfBBXwtG" {
-		t.Fatal("wallet record diff", wal.String())
-	}
+	// if wal.String() != "EQA0i8-CdGnF_DhUHHf92R1ONH6sIA9vLZ_WLcCIhfBBXwtG" {
+	// 	t.Fatal("wallet record diff", wal.String())
+	// }
 }
 
 func TestDNSClient_ResolveSub(t *testing.T) {

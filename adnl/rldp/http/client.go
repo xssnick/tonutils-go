@@ -44,7 +44,6 @@ type RLDP interface {
 }
 
 type ADNL interface {
-	Connect(ctx context.Context, addr string) (err error)
 	Query(ctx context.Context, req, result tl.Serializable) error
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
@@ -52,8 +51,8 @@ type ADNL interface {
 	Close()
 }
 
-var newADNL = func(key ed25519.PublicKey) (ADNL, error) {
-	return adnl.NewADNL(key)
+var Connector = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+	return adnl.Connect(ctx, addr, peerKey, ourKey)
 }
 
 var newRLDP = func(a ADNL) RLDP {
@@ -138,13 +137,9 @@ func NewTransport(dht DHT, resolver Resolver) *Transport {
 }
 
 func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (RLDP, error) {
-	a, err := newADNL(key)
+	a, err := Connector(ctx, addr, key, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
-	}
-
-	if err = a.Connect(ctx, addr); err != nil {
-		return nil, fmt.Errorf("failed to connect adnl for rldp connection %s, err: %w", addr, err)
 	}
 
 	r := newRLDP(a)

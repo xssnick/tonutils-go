@@ -29,7 +29,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 	data = append(data, ltData...)
 
 	// hash
-	data = append(data, txHash[:]...)
+	data = append(data, txHash...)
 
 	resp, err := c.client.Do(ctx, _GetTransactions, data)
 	if err != nil {

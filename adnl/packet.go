@@ -232,17 +232,28 @@ func (p *PacketContent) Serialize() ([]byte, error) {
 		binary.LittleEndian.PutUint32(msgsNumBytes, uint32(len(p.Messages)))
 		data = append(data, msgsNumBytes...)
 
+		fullLen := 0
 		for i, msg := range p.Messages {
 			payload, err := tl.Serialize(msg, true)
 			if err != nil {
 				return nil, fmt.Errorf("failed to serialize %d message, err: %w", i, err)
 			}
+
+			fullLen += len(payload)
 			data = append(data, payload...)
+		}
+
+		if fullLen > _MTU+128 {
+			return nil, fmt.Errorf("payload bigger than MTU, sz %d", fullLen)
 		}
 	} else if len(p.Messages) == 1 {
 		payload, err := tl.Serialize(p.Messages[0], true)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize single message, err: %w", err)
+		}
+
+		if len(payload) > _MTU+128 {
+			return nil, fmt.Errorf("payload bigger than MTU, sz %d", len(payload))
 		}
 
 		data = append(data, payload...)
@@ -315,31 +326,21 @@ func (p *PacketContent) Serialize() ([]byte, error) {
 	return data, nil
 }
 
-func Flags(flags uint32) string {
-	m := map[uint32]string{
-		0x1:    "FROM",
-		0x2:    "FROM_SHORT",
-		0x4:    "ONE_MESSAGE",
-		0x8:    "MULT_MESSAGE",
-		0x10:   "ADDRESS",
-		0x20:   "PRIORITY_ADDRESS",
-		0x40:   "SEQNO",
-		0x80:   "CONFIRM_SEQNO",
-		0x100:  "RECV_ADDR_LIST_VER",
-		0x200:  "RECV_PRIORITY_ADDR_VER",
-		0x400:  "REINIT_DATE",
-		0x800:  "SIGNATURE",
-		0x1000: "PRIORITY",
-		0x1fff: "ALL",
-	}
-
-	txt := ""
-	for i, s := range m {
-		if flags&i != 0 {
-			txt += s + " "
-		}
-	}
-	return txt
+var _FlagsDBG = map[uint32]string{
+	0x1:    "FROM",
+	0x2:    "FROM_SHORT",
+	0x4:    "ONE_MESSAGE",
+	0x8:    "MULT_MESSAGE",
+	0x10:   "ADDRESS",
+	0x20:   "PRIORITY_ADDRESS",
+	0x40:   "SEQNO",
+	0x80:   "CONFIRM_SEQNO",
+	0x100:  "RECV_ADDR_LIST_VER",
+	0x200:  "RECV_PRIORITY_ADDR_VER",
+	0x400:  "REINIT_DATE",
+	0x800:  "SIGNATURE",
+	0x1000: "PRIORITY",
+	0x1fff: "ALL",
 }
 
 func randForPacket() ([]byte, error) {

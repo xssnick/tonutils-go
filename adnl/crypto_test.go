@@ -1,4 +1,4 @@
-package liteclient
+package adnl
 
 import (
 	"crypto/ed25519"
@@ -45,7 +45,7 @@ func Test_sharedKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sharedKey(tt.args.ourKey, tt.args.serverKey)
+			got, err := SharedKey(tt.args.ourKey, tt.args.serverKey)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("sharedKey() error = %v, wantErr %v", err, tt.wantErr)
 				return

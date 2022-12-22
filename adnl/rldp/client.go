@@ -28,7 +28,7 @@ type RLDP struct {
 	activeRequests  map[string]chan any
 	activeTransfers map[string]chan bool
 
-	recvStreams map[string]*decoderStream // TODO: cleanup old
+	recvStreams map[string]*decoderStream
 
 	onQuery      func(query *Query) error
 	onDisconnect func()
@@ -43,6 +43,7 @@ type decoderStream struct {
 	mx             sync.Mutex
 }
 
+const _MTU = 1 << 37
 const _SymbolSize = 768
 const _PacketWaitTime = 15 * time.Millisecond
 
@@ -73,8 +74,6 @@ func (r *RLDP) Close() {
 }
 
 func (r *RLDP) handleADNLDisconnect(addr string, key ed25519.PublicKey) {
-	r.adnl.Close()
-
 	disc := r.onDisconnect
 	if disc != nil {
 		disc()
@@ -95,6 +94,9 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		r.mx.Unlock()
 
 		if stream == nil {
+			if m.TotalSize > _MTU || m.TotalSize <= 0 {
+				return fmt.Errorf("bad rldp packet total size")
+			}
 			dec, err := raptorq.NewRaptorQ(uint32(fec.SymbolSize)).CreateDecoder(uint32(fec.DataSize))
 			if err != nil {
 				return fmt.Errorf("failed to init raptorq decoder: %w", err)
@@ -145,7 +147,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 				if len(r.recvStreams) > 100 {
 					for sID, s := range r.recvStreams {
 						// remove streams that was finished more than 30 sec ago.
-						if s.finishedAt.Add(30 * time.Second).Before(time.Now()) {
+						if s.finishedAt != nil && s.finishedAt.Add(30*time.Second).Before(time.Now()) {
 							delete(r.recvStreams, sID)
 						}
 					}
