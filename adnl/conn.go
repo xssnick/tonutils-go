@@ -2,13 +2,16 @@ package adnl
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
 type clientConn struct {
+	closed  bool
 	closer  chan bool
 	onClose func()
 	writer  func(p []byte, deadline time.Time) (err error)
+	mx      sync.Mutex
 }
 
 func newWriter(writer func(p []byte, deadline time.Time) (err error)) *clientConn {
@@ -32,11 +35,13 @@ func (c *clientConn) Write(b []byte, deadline time.Time) (n int, err error) {
 }
 
 func (c *clientConn) Close() error {
-	select {
-	case <-c.closer:
-		return nil
-	default:
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	if !c.closed {
+		c.closed = true
 		close(c.closer)
 	}
+
 	return nil
 }

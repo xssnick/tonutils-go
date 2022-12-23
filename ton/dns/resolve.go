@@ -26,7 +26,7 @@ type TonApi interface {
 }
 
 type Domain struct {
-	records *cell.Dictionary
+	Records *cell.Dictionary
 	*nft.ItemEditableClient
 }
 
@@ -144,7 +144,7 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 	}
 
 	return &Domain{
-		records:            records,
+		Records:            records,
 		ItemEditableClient: nft.NewItemEditableClient(c.api, contractAddr),
 	}, nil
 }
@@ -153,7 +153,7 @@ func (d *Domain) GetRecord(name string) *cell.Cell {
 	h := sha256.New()
 	h.Write([]byte(name))
 
-	return d.records.Get(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell())
+	return d.Records.Get(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell())
 }
 
 func (d *Domain) GetWalletRecord() *address.Address {
@@ -200,7 +200,7 @@ func (d *Domain) GetSiteRecord() []byte {
 	if category != _CategoryADNLSite {
 		return nil
 	}
-	
+
 	addr, err := p.LoadSlice(256)
 	if err != nil {
 		return nil

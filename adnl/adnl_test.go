@@ -3,6 +3,7 @@ package adnl
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
 	"testing"
 	"time"
@@ -27,24 +28,32 @@ func TestADNL_ClientServer(t *testing.T) {
 	gotSrvDiscon := make(chan any, 1)
 
 	s := NewServer(srvKey)
-	s.SetQueryHandler(func(client *ADNL, msg *MessageQuery) error {
-		switch m := msg.Data.(type) {
-		case MessagePing:
-			err = client.Answer(context.Background(), msg.ID, MessagePong{
-				Value: m.Value,
-			})
-			if err != nil {
-				t.Fatal(err)
+	s.SetConnectionHandler(func(client Client) error {
+		client.SetQueryHandler(func(msg *MessageQuery) error {
+			switch m := msg.Data.(type) {
+			case MessagePing:
+				if m.Value == 9999 {
+					client.Close()
+					return fmt.Errorf("handle mock err")
+				}
+
+				err = client.Answer(context.Background(), msg.ID, MessagePong{
+					Value: m.Value,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
+			return nil
+		})
+		client.SetCustomMessageHandler(func(msg *MessageCustom) error {
+			gotSrvCustom <- true
+			return client.SendCustomMessage(context.Background(), TestMsg{Data: make([]byte, 1280)})
+		})
+		client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
+			gotSrvDiscon <- true
+		})
 		return nil
-	})
-	s.SetCustomMessageHandler(func(client *ADNL, msg *MessageCustom) error {
-		gotSrvCustom <- true
-		return client.SendCustomMessage(context.Background(), TestMsg{Data: make([]byte, 1280)})
-	})
-	s.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
-		gotSrvDiscon <- true
 	})
 
 	go func() {
@@ -102,8 +111,27 @@ func TestADNL_ClientServer(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = cliBad.SendCustomMessage(context.Background(), &MessagePing{5555})
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		// should fail
+		err = cliBad.Query(ctx, &MessagePing{5555}, &res)
+		if err == nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("bad query", func(t *testing.T) {
+		cliBadQuery, err := Connect(context.Background(), "127.0.0.1:9055", srvPub, nil)
 		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		err = cliBadQuery.Query(ctx, &MessagePing{9999}, &res)
+		if err == nil {
 			t.Fatal(err)
 		}
 

@@ -33,7 +33,7 @@ type RLDP struct {
 	onQuery      func(query *Query) error
 	onDisconnect func()
 
-	mx sync.Mutex
+	mx sync.RWMutex
 }
 
 type decoderStream struct {
@@ -89,9 +89,9 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		}
 
 		id := hex.EncodeToString(m.TransferID)
-		r.mx.Lock()
+		r.mx.RLock()
 		stream := r.recvStreams[id]
-		r.mx.Unlock()
+		r.mx.RUnlock()
 
 		if stream == nil {
 			if m.TotalSize > _MTU || m.TotalSize <= 0 {
@@ -106,9 +106,20 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			}
 
 			r.mx.Lock()
-			r.recvStreams[id] = stream
+
+			// check again because of possible concurrency
+			if r.recvStreams[id] != nil {
+				stream = r.recvStreams[id]
+			} else {
+				r.recvStreams[id] = stream
+			}
 			r.mx.Unlock()
-		} else if stream.finishedAt != nil {
+		}
+
+		stream.mx.Lock()
+		defer stream.mx.Unlock()
+
+		if stream.finishedAt != nil {
 			if stream.lastCompleteAt == nil ||
 				stream.lastCompleteAt.Add(_PacketWaitTime).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
 				// got packet for a finished stream, let them know that it is completed, again
@@ -142,8 +153,10 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			// it may not be decoded due to unsolvable math system, it means we need more symbols
 			if decoded {
 				tm := time.Now()
+				stream.finishedAt = &tm
+				stream.decoder = nil
+
 				r.mx.Lock()
-				r.recvStreams[id] = &decoderStream{finishedAt: &tm}
 				if len(r.recvStreams) > 100 {
 					for sID, s := range r.recvStreams {
 						// remove streams that was finished more than 30 sec ago.
@@ -160,7 +173,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					return fmt.Errorf("failed to parse custom message: %w", err)
 				}
 
-				// TODO: add multiple parts support (check if applicable)
 				err = r.adnl.SendCustomMessage(context.Background(), Complete{
 					TransferID: m.TransferID,
 					Part:       m.Part,

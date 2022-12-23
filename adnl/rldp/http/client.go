@@ -60,47 +60,102 @@ var newRLDP = func(a ADNL) RLDP {
 }
 
 type payloadStream struct {
-	Data      []byte
-	StartTime time.Time
+	nextOffset int
+	Data       *dataStreamer
+	ValidTill  time.Time
 }
 
-type dataReader struct {
+type dataStreamer struct {
+	buf []byte
+
+	parts    chan []byte
+	closer   chan bool
 	finished bool
-	data     []byte
-	mx       sync.Mutex
+	closed   bool
+
+	readerLock sync.Mutex
+	writerLock sync.Mutex
+	closerLock sync.Mutex
 }
 
-func (d *dataReader) Read(p []byte) (n int, err error) {
-	d.mx.Lock()
-	defer d.mx.Unlock()
+func newDataStreamer() *dataStreamer {
+	return &dataStreamer{
+		parts:  make(chan []byte, 1),
+		closer: make(chan bool, 1),
+	}
+}
 
-	if d.finished && len(d.data) == 0 {
-		return -1, io.EOF
+func (d *dataStreamer) Read(p []byte) (n int, err error) {
+	d.readerLock.Lock()
+	defer d.readerLock.Unlock()
+
+	for {
+		if len(d.buf) == 0 {
+			select {
+			case d.buf = <-d.parts:
+				if d.buf == nil {
+					return n, io.EOF
+				}
+			case <-d.closer:
+				return n, io.ErrUnexpectedEOF
+			}
+		}
+
+		if n == len(p) {
+			return n, nil
+		}
+
+		copied := copy(p[n:], d.buf)
+		d.buf = d.buf[copied:]
+
+		n += copied
+	}
+}
+
+func (d *dataStreamer) Close() error {
+	d.closerLock.Lock()
+	defer d.closerLock.Unlock()
+
+	if !d.closed {
+		d.closed = true
+		close(d.closer)
 	}
 
-	n = copy(p, d.data)
-	d.data = d.data[n:]
-	return n, nil
-}
-
-func (d *dataReader) Close() error {
-	d.mx.Lock()
-	defer d.mx.Unlock()
-
-	d.finished = true
-	d.data = nil
 	return nil
 }
 
-func (d *dataReader) pushData(data []byte, last bool) {
-	d.mx.Lock()
-	defer d.mx.Unlock()
+func (d *dataStreamer) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	d.writerLock.Lock()
+	defer d.writerLock.Unlock()
 
 	if d.finished {
-		return
+		return 0, io.ErrClosedPipe
 	}
-	d.data = append(d.data, data...)
-	d.finished = last
+
+	tmp := make([]byte, len(data))
+	copy(tmp, data)
+
+	select {
+	case d.parts <- tmp:
+	case <-d.closer:
+		return 0, io.ErrClosedPipe
+	}
+
+	return len(data), nil
+}
+
+func (d *dataStreamer) Finish() {
+	d.writerLock.Lock()
+	defer d.writerLock.Unlock()
+
+	if !d.finished {
+		d.finished = true
+		close(d.parts)
+	}
 }
 
 type rldpInfo struct {
@@ -122,8 +177,6 @@ type Transport struct {
 
 	activeRequests map[string]*payloadStream
 	mx             sync.RWMutex
-
-	mx2 sync.Mutex
 }
 
 func NewTransport(dht DHT, resolver Resolver) *Transport {
@@ -175,30 +228,21 @@ func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
 	return func(query *rldp.Query) error {
 		switch req := query.Data.(type) {
 		case GetNextPayloadPart:
-			t.mx.Lock()
+			t.mx.RLock()
 			stream := t.activeRequests[hex.EncodeToString(req.ID)]
-			t.mx.Unlock()
+			t.mx.RUnlock()
 
 			if stream == nil {
 				return fmt.Errorf("unknown request id")
 			}
 
-			offset := int(req.Seqno * req.MaxChunkSize)
-			if offset >= len(stream.Data) {
-				return fmt.Errorf("too big offset for strea data size %d", offset)
-			}
-
-			till := len(stream.Data)
-			if offset+int(req.MaxChunkSize) < till {
-				till = offset + int(req.MaxChunkSize)
+			part, err := handleGetPart(req, stream)
+			if err != nil {
+				return fmt.Errorf("handle part err: %w", err)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err := r.SendAnswer(ctx, query.MaxAnswerSize, query.ID, PayloadPart{
-				Data:    stream.Data[offset:till],
-				Trailer: nil, // TODO: trailer
-				IsLast:  till == len(stream.Data),
-			})
+			err = r.SendAnswer(ctx, query.MaxAnswerSize, query.ID, part)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("failed to send answer: %w", err)
@@ -208,6 +252,29 @@ func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
 		}
 		return fmt.Errorf("unexpected query type %s", reflect.TypeOf(query.Data))
 	}
+}
+
+func handleGetPart(req GetNextPayloadPart, stream *payloadStream) (*PayloadPart, error) {
+	offset := int(req.Seqno * req.MaxChunkSize)
+	if offset != stream.nextOffset {
+		return nil, fmt.Errorf("incorrect offset %d, should be %d", offset, stream.nextOffset)
+	}
+
+	var last bool
+	data := make([]byte, req.MaxChunkSize)
+	n, err := stream.Data.Read(data)
+	if err != nil {
+		if err != io.EOF {
+			return nil, fmt.Errorf("failed to read chunk %d, err: %w", req.Seqno, err)
+		}
+		last = true
+	}
+
+	return &PayloadPart{
+		Data:    data[:n],
+		Trailer: nil, // TODO: trailer
+		IsLast:  last,
+	}, nil
 }
 
 func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err error) {
@@ -227,11 +294,13 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 
 	var client RLDP
 	rlInfo.mx.Lock()
-	if rlInfo.ActiveClient != nil && rlInfo.ClientLastUsed.Add(10*time.Second).Before(time.Now()) {
+	if rlInfo.ActiveClient != nil && rlInfo.ClientLastUsed.Add(15*time.Second).Before(time.Now()) {
 		// if last used more than 10 seconds ago,
 		// we have a chance of stuck udp socket,
 		// so we just reinit connection
-		rlInfo.ActiveClient.Close()
+		go rlInfo.ActiveClient.Close() // close async because of lock
+
+		// set it nil now to reassign
 		rlInfo.ActiveClient = nil
 	}
 
@@ -256,11 +325,6 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 		rlInfo.ClientLastUsed = time.Now()
 	}
 	rlInfo.mx.Unlock()
-
-	// TODO: async stream body for req
-	if request.Body != nil {
-		defer request.Body.Close()
-	}
 
 	req := Request{
 		ID:      qid,
@@ -292,16 +356,40 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 	}
 
 	if request.Body != nil {
-		// TODO: stream
-		data, err := io.ReadAll(request.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read request body: %w", err)
-		}
+		stream := newDataStreamer()
+
+		// chunked stream reader
+		go func() {
+			defer request.Body.Close()
+
+			var n int
+			for {
+				buf := make([]byte, 4096)
+				n, err = request.Body.Read(buf)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						_, err = stream.Write(buf[:n])
+						if err == nil {
+							stream.Finish()
+							break
+						}
+					}
+					_ = stream.Close()
+					break
+				}
+
+				_, err = stream.Write(buf[:n])
+				if err != nil {
+					_ = stream.Close()
+					break
+				}
+			}
+		}()
 
 		t.mx.Lock()
 		t.activeRequests[hex.EncodeToString(qid)] = &payloadStream{
-			Data:      data,
-			StartTime: time.Now(),
+			Data:      stream,
+			ValidTill: time.Now().Add(15 * time.Second),
 		}
 		t.mx.Unlock()
 
@@ -349,7 +437,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 
 	withPayload := !res.NoPayload && (httpResp.StatusCode < 300 || httpResp.StatusCode >= 400)
 
-	dr := &dataReader{}
+	dr := newDataStreamer()
 	httpResp.Body = dr
 
 	if withPayload {
@@ -377,7 +465,15 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 				}
 
 				withPayload = !part.IsLast
-				dr.pushData(part.Data, part.IsLast)
+				_, err = dr.Write(part.Data)
+				if err != nil {
+					_ = dr.Close()
+					return
+				}
+
+				if part.IsLast {
+					dr.Finish()
+				}
 
 				seqno++
 
@@ -389,7 +485,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 			}
 		}()
 	} else {
-		dr.pushData(nil, true)
+		dr.Finish()
 	}
 
 	return httpResp, nil
@@ -428,7 +524,7 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 	for _, v := range addresses.Addresses {
 		addr := fmt.Sprintf("%s:%d", v.IP.String(), v.Port)
 
-		// find working rld node addr
+		// find working rldp node addr
 		client, err := t.connectRLDP(ctx, pubKey, addr, host)
 		if err != nil {
 			triedAddresses = append(triedAddresses, addr)

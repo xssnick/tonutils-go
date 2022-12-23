@@ -1,42 +1,55 @@
 package adnl
 
 import (
+	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"sync"
 	"time"
 )
 
-type QueryServerHandler func(client *ADNL, msg *MessageQuery) error
-type CustomServerHandler func(client *ADNL, msg *MessageCustom) error
+type Client interface {
+	SetCustomMessageHandler(handler func(msg *MessageCustom) error)
+	SetQueryHandler(handler func(msg *MessageQuery) error)
+	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
+	SendCustomMessage(ctx context.Context, req tl.Serializable) error
+	Query(ctx context.Context, req, result tl.Serializable) error
+	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
+	RemoteAddr() string
+	Close()
+}
 
-type processor func(buf []byte) error
+type srvClient struct {
+	id     string
+	server *Server
+	client Client
+}
+
+type srvProcessor struct {
+	lastPacketAt time.Time
+	isChannel    bool
+	processor    func(buf []byte) error
+}
 
 type Server struct {
 	conn net.PacketConn
 
 	key        ed25519.PrivateKey
-	processors map[string]processor
-	clients    map[string]*ADNL
+	processors map[string]*srvProcessor
 
-	customMessageHandler CustomServerHandler
-	queryHandler         QueryServerHandler
-	disconnectHandler    DisconnectHandler
+	connHandler func(client Client) error
 
 	mx sync.RWMutex
-}
-
-type connection struct {
-	proc processor
-	addr string
 }
 
 func NewServer(key ed25519.PrivateKey) *Server {
 	return &Server{
 		key:        key,
-		processors: map[string]processor{},
+		processors: map[string]*srvProcessor{},
 	}
 }
 
@@ -50,6 +63,12 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 		return err
 	}
 
+	rootID, err := ToKeyID(PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
+	if err != nil {
+		return err
+	}
+
+	lastListCheck := time.Now()
 	for {
 		buf := make([]byte, 4096)
 		n, addr, err := s.conn.ReadFrom(buf)
@@ -67,62 +86,99 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 		id := buf[:32]
 		buf = buf[32:]
 
-		clientID := hex.EncodeToString(id)
-
-		s.mx.RLock()
-		proc := s.processors[clientID]
-		s.mx.RUnlock()
-
-		if proc == nil {
-			a, err := initADNL(s.key)
-			if err != nil {
-				Logger("failed to init adnl:", err)
+		var proc *srvProcessor
+		if bytes.Equal(rootID, id) {
+			if len(buf) < 32 {
+				// too small packet
 				continue
 			}
+			clientId := hex.EncodeToString(buf[:32])
 
-			a.addr = addr.String()
-			a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
-				return s.write(deadline, addr, p)
-			})
+			s.mx.RLock()
+			proc = s.processors[clientId]
+			s.mx.RUnlock()
 
-			a.SetQueryHandler(func(msg *MessageQuery) error {
-				return s.queryHandler(a, msg)
-			})
-			a.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
+			if proc == nil {
+				a := initADNL(s.key)
+				a.addr = addr.String()
+				a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
+					return s.write(deadline, addr, p)
+				})
+
+				a.SetChannelReadyHandler(func(ch *Channel) {
+					chID := hex.EncodeToString(ch.id)
+
+					s.mx.Lock()
+					s.processors[chID] = &srvProcessor{
+						isChannel: true,
+						processor: ch.process,
+					}
+					s.mx.Unlock()
+
+					cli := &srvClient{
+						id:     chID,
+						server: s,
+						client: ch.adnl,
+					}
+
+					// setup basic disconnect handler to auto-cleanup processors list
+					cli.SetDisconnectHandler(nil)
+
+					connHandler := s.connHandler
+					if connHandler != nil {
+						err = connHandler(cli)
+						if err != nil {
+							// close connection if connection handler reports an error
+							ch.adnl.Close()
+						}
+					}
+				})
+
+				cli := &srvClient{
+					id:     clientId,
+					server: s,
+					client: a,
+				}
+				cli.SetDisconnectHandler(nil)
+
+				// TODO: cleanup processors
+				proc = &srvProcessor{
+					isChannel: false,
+					processor: func(buf []byte) error {
+						err := a.process(buf)
+						if err != nil {
+							// consider err on initialization as critical and drop connection
+							a.Close()
+						}
+						return err
+					},
+				}
+
 				s.mx.Lock()
-				delete(s.processors, clientID)
-				if a.channel != nil {
-					delete(s.processors, hex.EncodeToString(a.channel.id))
-				}
+				s.processors[clientId] = proc
 				s.mx.Unlock()
-
-				if s.disconnectHandler != nil {
-					s.disconnectHandler(addr, key)
-				}
-			})
-			a.SetCustomMessageHandler(func(msg *MessageCustom) error {
-				if s.customMessageHandler != nil {
-					return s.customMessageHandler(a, msg)
-				}
-				return nil
-			})
-			a.SetChannelReadyHandler(func(ch *Channel) {
-				s.mx.Lock()
-				s.processors[hex.EncodeToString(ch.id)] = ch.process
-				s.mx.Unlock()
-			})
-
-			proc = func(buf []byte) error {
-				err := a.process(buf)
-				if err != nil {
-					// consider err on initialization as critical and drop connection
-					a.Close()
-				}
-				return err
 			}
+		} else {
+			s.mx.RLock()
+			proc = s.processors[hex.EncodeToString(id)]
+			s.mx.RUnlock()
+		}
 
+		if proc == nil {
+			Logger("unknown destination:", hex.EncodeToString(id))
+			continue
+		}
+
+		now := time.Now()
+		proc.lastPacketAt = now
+
+		if now.Sub(lastListCheck) > 5*time.Second {
 			s.mx.Lock()
-			s.processors[hex.EncodeToString(a.id)] = proc
+			for k, pr := range s.processors {
+				if now.Sub(pr.lastPacketAt) > 5*time.Minute {
+					delete(s.processors, k)
+				}
+			}
 			s.mx.Unlock()
 		}
 
@@ -133,7 +189,7 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 				}
 			}()
 
-			err = proc(buf)
+			err = proc.processor(buf)
 			if err != nil {
 				Logger("failed to process packet at server:", err)
 				return
@@ -142,16 +198,19 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 	}
 }
 
-func (s *Server) SetCustomMessageHandler(handler func(client *ADNL, msg *MessageCustom) error) {
-	s.customMessageHandler = handler
+func (s *Server) SetConnectionHandler(handler func(client Client) error) {
+	s.connHandler = handler
 }
 
-func (s *Server) SetQueryHandler(handler func(client *ADNL, msg *MessageQuery) error) {
-	s.queryHandler = handler
-}
+func (s *Server) Close() error {
+	s.mx.Lock()
+	defer s.mx.Unlock()
 
-func (s *Server) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
-	s.disconnectHandler = handler
+	if s.conn == nil {
+		return nil
+	}
+
+	return s.conn.Close()
 }
 
 func (s *Server) write(deadline time.Time, addr net.Addr, buf []byte) error {
@@ -169,4 +228,44 @@ func (s *Server) write(deadline time.Time, addr net.Addr, buf []byte) error {
 	}
 
 	return nil
+}
+
+func (s *srvClient) SetCustomMessageHandler(handler func(msg *MessageCustom) error) {
+	s.client.SetCustomMessageHandler(handler)
+}
+
+func (s *srvClient) SetQueryHandler(handler func(msg *MessageQuery) error) {
+	s.client.SetQueryHandler(handler)
+}
+
+func (s *srvClient) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
+	s.client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
+		s.server.mx.Lock()
+		delete(s.server.processors, s.id)
+		s.server.mx.Unlock()
+
+		if handler != nil {
+			handler(addr, key)
+		}
+	})
+}
+
+func (s *srvClient) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return s.client.SendCustomMessage(ctx, req)
+}
+
+func (s *srvClient) Query(ctx context.Context, req, result tl.Serializable) error {
+	return s.client.Query(ctx, req, result)
+}
+
+func (s *srvClient) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
+	return s.client.Answer(ctx, queryID, result)
+}
+
+func (s *srvClient) RemoteAddr() string {
+	return s.client.RemoteAddr()
+}
+
+func (s *srvClient) Close() {
+	s.client.Close()
 }

@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-var api = func() *ton.APIClient {
-	client := liteclient.NewConnectionPool()
+var client = liteclient.NewConnectionPool()
 
+var api = func() *ton.APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -32,6 +32,8 @@ func TestDNSClient_Resolve(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
+
+	ctx = client.StickyContext(ctx)
 
 	d, err := cli.Resolve(ctx, "foundation.ton")
 	if err != nil {

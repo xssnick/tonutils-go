@@ -24,10 +24,7 @@ func Connect(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey
 		}
 	}
 
-	a, err := initADNL(ourKey)
-	if err != nil {
-		return nil, err
-	}
+	a := initADNL(ourKey)
 	a.peerKey = peerKey
 
 	timeout := 30 * time.Second
@@ -75,6 +72,11 @@ func listenPacketsAsClient(a *ADNL, conn net.Conn) error {
 		a.Close()
 	}()
 
+	rootID, err := ToKeyID(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
+	if err != nil {
+		return err
+	}
+
 	for {
 		select {
 		case <-a.closer:
@@ -98,7 +100,7 @@ func listenPacketsAsClient(a *ADNL, conn net.Conn) error {
 				Logger("failed to decode packet in channel: ", err)
 				continue
 			}
-		} else if bytes.Equal(id, a.id) { // message in root connection
+		} else if bytes.Equal(id, rootID) { // message in root connection
 			err = a.process(buf)
 			if err != nil {
 				return fmt.Errorf("failed to decode packet: %w", err)

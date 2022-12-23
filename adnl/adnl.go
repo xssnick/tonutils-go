@@ -49,12 +49,12 @@ type ADNL struct {
 	ourKey     ed25519.PrivateKey
 	addr       string
 	closer     chan bool
+	closed     bool
 
 	channel *Channel
 
 	msgParts map[string]*partitionedMessage
 
-	id           []byte
 	seqno        uint64
 	confirmSeqno uint64
 	loss         uint64
@@ -75,28 +75,24 @@ type ADNL struct {
 
 var Logger = log.Println
 
-func initADNL(key ed25519.PrivateKey) (*ADNL, error) {
-	rootID, err := ToKeyID(PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)})
-	if err != nil {
-		return nil, err
-	}
-
+func initADNL(key ed25519.PrivateKey) *ADNL {
 	return &ADNL{
 		reinitTime: uint32(time.Now().Unix()),
 		ourKey:     key,
-		id:         rootID,
 		closer:     make(chan bool, 1),
 
 		msgParts:      map[string]*partitionedMessage{},
 		activeQueries: map[string]chan tl.Serializable{},
-	}, nil
+	}
 }
 
 func (a *ADNL) Close() {
-	select {
-	case <-a.closer:
-		return
-	default:
+	a.mx.Lock()
+	defer a.mx.Unlock()
+
+	if !a.closed {
+		a.closed = true
+
 		close(a.closer)
 
 		con := a.writer
@@ -321,6 +317,10 @@ func (a *ADNL) SetDisconnectHandler(handler func(addr string, key ed25519.Public
 
 func (a *ADNL) SetChannelReadyHandler(handler func(ch *Channel)) {
 	a.onChannel = handler
+}
+
+func (a *ADNL) RemoteAddr() string {
+	return a.addr
 }
 
 func (a *ADNL) processAnswer(id string, query any) {
