@@ -3,6 +3,8 @@ package adnl
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
 	"testing"
@@ -75,6 +77,7 @@ func TestADNL_ClientServer(t *testing.T) {
 
 	var res MessagePong
 	err = cli.Query(context.Background(), &MessagePing{7755}, &res)
+
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,4 +174,29 @@ func TestADNL_ClientServer(t *testing.T) {
 	if err == nil {
 		t.Fatal("conn should be closed")
 	}
+}
+
+func TestADNL_Connect(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adnl, err := Connect(context.Background(), "178.18.243.125:15888", pub, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var res any
+	forRow, err := hex.DecodeString("e191b161")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = adnl.Query(ctx, tl.Raw(forRow), &res)
+	if err != nil {
+		if !errors.Is(err, ctx.Err()) {
+			t.Fatal(err.Error())
+		}
+	}
+	adnl.Close()
 }
