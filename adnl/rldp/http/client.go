@@ -233,7 +233,7 @@ func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
 			t.mx.RUnlock()
 
 			if stream == nil {
-				return fmt.Errorf("unknown request id")
+				return fmt.Errorf("unknown request id %s", hex.EncodeToString(req.ID))
 			}
 
 			part, err := handleGetPart(req, stream)
@@ -324,6 +324,11 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 		client = rlInfo.ActiveClient
 		rlInfo.ClientLastUsed = time.Now()
 	}
+
+	if client == nil {
+		panic(fmt.Sprintln(rlInfo.Resolved))
+	}
+
 	rlInfo.mx.Unlock()
 
 	req := Request{
@@ -524,8 +529,9 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 	for _, v := range addresses.Addresses {
 		addr := fmt.Sprintf("%s:%d", v.IP.String(), v.Port)
 
+		var client RLDP
 		// find working rldp node addr
-		client, err := t.connectRLDP(ctx, pubKey, addr, host)
+		client, err = t.connectRLDP(ctx, pubKey, addr, host)
 		if err != nil {
 			triedAddresses = append(triedAddresses, addr)
 			continue

@@ -110,8 +110,9 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 
 					s.mx.Lock()
 					s.processors[chID] = &srvProcessor{
-						isChannel: true,
-						processor: ch.process,
+						isChannel:    true,
+						processor:    ch.process,
+						lastPacketAt: time.Now(),
 					}
 					s.mx.Unlock()
 
@@ -173,6 +174,7 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 		proc.lastPacketAt = now
 
 		if now.Sub(lastListCheck) > 5*time.Second {
+			lastListCheck = now
 			s.mx.Lock()
 			for k, pr := range s.processors {
 				if now.Sub(pr.lastPacketAt) > 5*time.Minute {
@@ -240,6 +242,7 @@ func (s *srvClient) SetQueryHandler(handler func(msg *MessageQuery) error) {
 
 func (s *srvClient) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
 	s.client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
+		println("KILL", s.id)
 		s.server.mx.Lock()
 		delete(s.server.processors, s.id)
 		s.server.mx.Unlock()

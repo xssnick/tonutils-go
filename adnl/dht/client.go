@@ -132,7 +132,7 @@ func NewClient(connectTimeout time.Duration, nodes []NodeInfo) (*Client, error) 
 	return c, nil
 }
 
-const _K = 12 // TODO: calculate and extend
+const _K = 10
 
 func (c *Client) addNode(ctx context.Context, node *Node) (_ *dhtNode, err error) {
 	pub, ok := node.ID.(adnl.PublicKeyED25519)
@@ -430,12 +430,12 @@ func (c *Client) FindValueRaw(ctx context.Context, node *dhtNode, id []byte, K i
 				return nil, fmt.Errorf("key description's signature not match key")
 			}
 
-		case UpdateRuleOverlayNodes:
-			// TODO: check sign
-			/*pub, ok := r.Value.Data
-			if !ok {
-				return nil, fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(r.Value.KeyDescription.ID).String())
-			}*/
+		// case UpdateRuleOverlayNodes:
+		// TODO: check sign
+		/*pub, ok := r.Value.Data
+		if !ok {
+			return nil, fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(r.Value.KeyDescription.ID).String())
+		}*/
 		default:
 			return nil, fmt.Errorf("update rule type %s is not supported yet", reflect.TypeOf(r.Value.KeyDescription.UpdateRule))
 		}
@@ -479,3 +479,23 @@ func xor(a, b []byte) []byte {
 
 	return tmp
 }
+
+/*
+td::uint32 DhtMemberImpl::distance(DhtKeyId key_id, td::uint32 max_value) {
+  if (!max_value) {
+    max_value = 2 * k_;
+  }
+  td::uint32 res = 0;
+  auto id_xor = key_id ^ key_;
+
+  for (td::uint32 bit = 0; bit < 256; bit++) {
+    if (id_xor.get_bit(bit)) {
+      res += buckets_[bit].active_cnt();
+      if (res >= max_value) {
+        return max_value;
+      }
+    }
+  }
+  return res;
+}
+*/

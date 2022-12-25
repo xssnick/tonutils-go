@@ -114,3 +114,47 @@ func Test_ClientServer(t *testing.T) {
 		}
 	})
 }
+
+func BenchmarkServer(b *testing.B) {
+	srvPub, srvKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	mx := http.NewServeMux()
+	mx.HandleFunc("/hello", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Write([]byte("hop hey 777"))
+	})
+
+	s := adnl.NewServer(srvKey)
+	HandleRequests(s, mx)
+
+	go func() {
+		if err = s.ListenAndServe("127.0.0.1:9056"); err != nil {
+			b.Fatal(err)
+		}
+	}()
+
+	for i := 0; i < b.N; i++ {
+		client := &http.Client{
+			Transport: NewTransport(&MockDHT{
+				ip:   "127.0.0.1",
+				port: 9056,
+				pub:  srvPub,
+			}, &MockResolver{}),
+		}
+
+		resp, err := client.Get("http://utils.ton/hello")
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		println(string(data))
+	}
+}

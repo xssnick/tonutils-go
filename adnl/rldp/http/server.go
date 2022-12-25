@@ -75,7 +75,7 @@ func HandleRequests(adnlServer ADNLServer, handler http.Handler) *Server {
 			select {
 			case <-s.closer:
 				return
-			default:
+			case <-time.After(5 * time.Second):
 			}
 
 			now := time.Now()
@@ -168,7 +168,7 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 			s.mx.RUnlock()
 
 			if stream == nil {
-				return fmt.Errorf("unknown request id")
+				return fmt.Errorf("unknown request id %s", hex.EncodeToString(req.ID))
 			}
 
 			part, err := handleGetPart(req, stream)
@@ -200,8 +200,6 @@ func (r *respWriter) Write(bytes []byte) (int, error) {
 	r.hasPayload = true
 
 	if err := r.flush(); err != nil {
-		println("FLERR", err)
-
 		return 0, err
 	}
 
@@ -233,6 +231,15 @@ func (r *respWriter) flush() error {
 			}
 		}
 
+		if r.hasPayload {
+			r.server.mx.Lock()
+			r.server.activeRequests[hex.EncodeToString(r.requestID)] = &payloadStream{
+				Data:      r.writer,
+				ValidTill: time.Now().Add(r.server.Timeout),
+			}
+			r.server.mx.Unlock()
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		err := r.client.SendAnswer(ctx, r.maxAnswerSz, r.queryID, Response{
 			Version:    "HTTP/1.1",
@@ -245,15 +252,6 @@ func (r *respWriter) flush() error {
 		if err != nil {
 			_ = r.writer.Close()
 			return fmt.Errorf("failed to send response for %s query: %w", hex.EncodeToString(r.queryID), err)
-		}
-
-		if r.hasPayload {
-			r.server.mx.Lock()
-			r.server.activeRequests[hex.EncodeToString(r.requestID)] = &payloadStream{
-				Data:      r.writer,
-				ValidTill: time.Now().Add(r.server.Timeout),
-			}
-			r.server.mx.Unlock()
 		}
 	}
 
