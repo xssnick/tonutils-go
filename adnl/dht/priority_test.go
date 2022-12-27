@@ -3,7 +3,6 @@ package dht
 import (
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/adnl"
-	"math/big"
 	"testing"
 )
 
@@ -59,34 +58,28 @@ func TestPriorityList_addNode(t *testing.T) {
 	node1 := dhtNode{
 		id:   kId1,
 		adnl: nil,
-		ping: 0,
 	}
-	priority1 := new(big.Int).SetBytes(xor(keyId, node1.id))
 
 	node2 := dhtNode{
 		id:   kId2,
 		adnl: nil,
-		ping: 0,
 	}
-	priority2 := new(big.Int).SetBytes(xor(keyId, node2.id))
 
 	node3 := dhtNode{
 		id:   kId3,
 		adnl: nil,
-		ping: 0,
 	}
-	priority3 := new(big.Int).SetBytes(xor(keyId, node3.id))
 
-	pList := newPriorityList(12)
-	ok := pList.addNode(&node1, priority1)
+	pList := newPriorityList(12, keyId)
+	ok := pList.addNode(&node1)
 	if !ok {
 		t.Fatal()
 	}
-	ok = pList.addNode(&node2, priority2)
+	ok = pList.addNode(&node2)
 	if !ok {
 		t.Fatal()
 	}
-	ok = pList.addNode(&node3, priority3)
+	ok = pList.addNode(&node3)
 	if !ok {
 		t.Fatal()
 	}

@@ -28,7 +28,9 @@ const _ChunkSize = 1 << 17
 const _RLDPMaxAnswerSize = 2*_ChunkSize + 1024
 
 type DHT interface {
+	StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) ([]byte, error)
 	FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error)
+	Close()
 }
 
 type Resolver interface {
@@ -233,7 +235,7 @@ func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
 			t.mx.RUnlock()
 
 			if stream == nil {
-				return fmt.Errorf("unknown request id")
+				return fmt.Errorf("unknown request id %s", hex.EncodeToString(req.ID))
 			}
 
 			part, err := handleGetPart(req, stream)
@@ -324,6 +326,11 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 		client = rlInfo.ActiveClient
 		rlInfo.ClientLastUsed = time.Now()
 	}
+
+	if client == nil {
+		panic(fmt.Sprintln(rlInfo.Resolved))
+	}
+
 	rlInfo.mx.Unlock()
 
 	req := Request{
@@ -494,7 +501,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string) (err error) {
 	var adnlID []byte
 	if strings.HasSuffix(host, ".adnl") {
-		adnlID, err = parseADNLAddress(host[:len(host)-5])
+		adnlID, err = ParseADNLAddress(host[:len(host)-5])
 		if err != nil {
 			return fmt.Errorf("failed to aprse adnl address %s, err: %w", host, err)
 		}
@@ -524,8 +531,9 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 	for _, v := range addresses.Addresses {
 		addr := fmt.Sprintf("%s:%d", v.IP.String(), v.Port)
 
+		var client RLDP
 		// find working rldp node addr
-		client, err := t.connectRLDP(ctx, pubKey, addr, host)
+		client, err = t.connectRLDP(ctx, pubKey, addr, host)
 		if err != nil {
 			triedAddresses = append(triedAddresses, addr)
 			continue
@@ -545,7 +553,9 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 	return nil
 }
 
-func parseADNLAddress(addr string) ([]byte, error) {
+var crc16table = crc16.MakeTable(crc16.CRC16_XMODEM)
+
+func ParseADNLAddress(addr string) ([]byte, error) {
 	if len(addr) != 55 {
 		return nil, errors.New("wrong id length")
 	}
@@ -560,10 +570,19 @@ func parseADNLAddress(addr string) ([]byte, error) {
 	}
 
 	hash := binary.BigEndian.Uint16(buf[33:])
-	calc := crc16.Checksum(buf[:33], crc16.MakeTable(crc16.CRC16_XMODEM))
+	calc := crc16.Checksum(buf[:33], crc16table)
 	if hash != calc {
 		return nil, errors.New("invalid address")
 	}
 
-	return buf[:32], nil
+	return buf[1:33], nil
+}
+
+func SerializeADNLAddress(addr []byte) (string, error) {
+	a := append([]byte{0x2d}, addr...)
+
+	crcBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(crcBytes, crc16.Checksum(a, crc16table))
+
+	return strings.ToLower(base32.StdEncoding.EncodeToString(append(a, crcBytes...))[1:]), nil
 }

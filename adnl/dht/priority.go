@@ -2,39 +2,40 @@ package dht
 
 import (
 	"encoding/hex"
-	"math/big"
 	"sync"
 )
 
 type nodePriority struct {
 	id       string
 	node     *dhtNode
-	priority *big.Int
+	priority int
 	next     *nodePriority
 	used     bool
 }
 
 type priorityList struct {
-	maxLen int
-	list   *nodePriority
-	mx     sync.Mutex
+	maxLen   int
+	targetId []byte
+	list     *nodePriority
+	mx       sync.Mutex
 }
 
-func newPriorityList(maxLen int) *priorityList {
+func newPriorityList(maxLen int, targetId []byte) *priorityList {
 	p := &priorityList{
-		maxLen: maxLen,
+		targetId: targetId,
+		maxLen:   maxLen,
 	}
 
 	return p
 }
 
-func (p *priorityList) addNode(node *dhtNode, priority *big.Int) bool {
+func (p *priorityList) addNode(node *dhtNode) bool {
 	id := hex.EncodeToString(node.id)
 
 	item := &nodePriority{
 		id:       id,
 		node:     node,
-		priority: priority,
+		priority: node.weight(p.targetId),
 	}
 
 	p.mx.Lock()
@@ -59,7 +60,7 @@ func (p *priorityList) addNode(node *dhtNode, priority *big.Int) bool {
 			return false
 		}
 
-		if item.priority.Cmp(cur.priority) != 1 {
+		if item.priority > cur.priority {
 			item.next = cur
 			if prev != nil {
 				prev.next = item
@@ -96,7 +97,7 @@ func (p *priorityList) addNode(node *dhtNode, priority *big.Int) bool {
 	return true
 }
 
-func (p *priorityList) getNode() (*dhtNode, *big.Int) {
+func (p *priorityList) getNode() (*dhtNode, int) {
 	p.mx.Lock()
 	defer p.mx.Unlock()
 
@@ -106,9 +107,21 @@ func (p *priorityList) getNode() (*dhtNode, *big.Int) {
 	}
 
 	if res == nil {
-		return nil, nil
+		return nil, 0
 	}
 	res.used = true
 
 	return res.node, res.priority
+}
+
+func (p *priorityList) markNotUsed(node *dhtNode) {
+	p.mx.Lock()
+	defer p.mx.Unlock()
+
+	id := hex.EncodeToString(node.id)
+
+	res := p.list
+	for res != nil && res.id == id {
+		res.used = false
+	}
 }

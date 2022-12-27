@@ -20,6 +20,10 @@ func init() {
 	tl.Register(UpdateRuleAnybody{}, "dht.updateRule.anybody = dht.UpdateRule")
 	tl.Register(UpdateRuleOverlayNodes{}, "dht.updateRule.overlayNodes = dht.UpdateRule")
 	tl.Register(Query{}, "dht.query node:dht.node = True")
+	tl.Register(Store{}, "dht.store value:dht.value = dht.Stored")
+	tl.Register(Stored{}, "dht.stored = dht.Stored")
+	tl.Register(Ping{}, "dht.ping random_id:long = dht.Pong")
+	tl.Register(Pong{}, "dht.pong random_id:long = dht.Pong")
 }
 
 type FindNode struct {
@@ -79,4 +83,18 @@ type UpdateRuleOverlayNodes struct{}
 
 type Query struct {
 	Node *Node `tl:"struct"`
+}
+
+type Store struct {
+	Value *Value `tl:"struct"`
+}
+
+type Stored struct{}
+
+type Ping struct {
+	ID int64 `tl:"long"`
+}
+
+type Pong struct {
+	ID int64 `tl:"long"`
 }
