@@ -242,7 +242,6 @@ func (s *srvClient) SetQueryHandler(handler func(msg *MessageQuery) error) {
 
 func (s *srvClient) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
 	s.client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
-		println("KILL", s.id)
 		s.server.mx.Lock()
 		delete(s.server.processors, s.id)
 		s.server.mx.Unlock()

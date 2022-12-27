@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
@@ -92,8 +91,13 @@ var cnf = &liteclient.GlobalConfig{
 }
 
 func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
-	testNode := Node{
-		adnl.PublicKeyED25519{},
+	tPubKey, tPrivKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	testNode := &Node{
+		adnl.PublicKeyED25519{Key: tPubKey},
 		&address.List{
 			Addresses: []*address.UDP{
 				{net.IPv4(a, b, c, d).To4(),
@@ -103,17 +107,11 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 			Version:    0,
 			ReinitDate: 0,
 			Priority:   0,
-			ExpireAT:   0,
+			ExpireAt:   0,
 		},
 		1671102718,
 		nil,
 	}
-
-	tPubKey, tPrivKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		return nil, err
-	}
-	testNode.ID = adnl.PublicKeyED25519{tPubKey}
 
 	toVerify, err := tl.Serialize(testNode, true)
 	if err != nil {
@@ -122,7 +120,7 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	sign := ed25519.Sign(tPrivKey, toVerify)
 	testNode.Signature = sign
 
-	return &testNode, nil
+	return testNode, nil
 }
 
 func newIncorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
@@ -137,7 +135,7 @@ func newIncorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error)
 			Version:    0,
 			ReinitDate: 0,
 			Priority:   0,
-			ExpireAT:   0,
+			ExpireAt:   0,
 		},
 		1671102718,
 		nil,
@@ -153,7 +151,7 @@ func newIncorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error)
 			Version:    0,
 			ReinitDate: 0,
 			Priority:   0,
-			ExpireAT:   0,
+			ExpireAt:   0,
 		},
 		1671102718,
 		nil,
@@ -241,6 +239,8 @@ func TestClient_FindValue(t *testing.T) {
 				return MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
+						case Ping:
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
 						case SignedAddressListQuery:
 							testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
 							if err != nil {
@@ -284,7 +284,7 @@ func TestClient_FindValue(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 
 			res, got := dhtCli.FindValue(context.Background(), &Key{
 				ID:    siteAddr,
@@ -313,9 +313,6 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	}
 
 	pub1, ok := corNode1.ID.(adnl.PublicKeyED25519)
-	if !ok {
-		t.Fatalf("unsupported id type %s", reflect.TypeOf(corNode1.ID).String())
-	}
 	kId1, err := adnl.ToKeyID(pub1)
 	if err != nil {
 		t.Fatal(err)
@@ -326,10 +323,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed creating test node, err: ", err.Error())
 	}
-	pub2, ok := corNode2.ID.(adnl.PublicKeyED25519)
-	if !ok {
-		t.Fatalf("unsupported id type %s", reflect.TypeOf(corNode2.ID).String())
-	}
+	pub2 := corNode2.ID.(adnl.PublicKeyED25519)
 	kId2, err := adnl.ToKeyID(pub2)
 	if err != nil {
 		t.Fatal(err)
@@ -374,7 +368,9 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 			connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
 				return MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
-						switch req.(type) {
+						switch request := req.(type) {
+						case Ping:
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
 						case SignedAddressListQuery:
 							if reqCount == 0 {
 								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*test.responseNode1))
@@ -394,7 +390,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 
 			if len(cli.activeNodes) != test.wantLenNodes || len(cli.knownNodesInfo) != test.wantLenNodes {
 				t.Errorf("added nodes count (active'%d', known'%d') but expected(%d)", len(cli.activeNodes), len(cli.knownNodesInfo), test.wantLenNodes)
@@ -404,7 +400,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 			if ok != test.checkAdd1 {
 				t.Errorf("invalid active nodes addition")
 			}
-			if hex.EncodeToString(resDhtNode1.id) != test.idToCheckAdd1 {
+			if ok && hex.EncodeToString(resDhtNode1.id) != test.idToCheckAdd1 {
 				t.Errorf("bad data resived")
 			}
 
@@ -430,7 +426,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 				if ok != test.checkAdd2 {
 					t.Errorf("invalid active nodes addition")
 				}
-				if hex.EncodeToString(resDhtNode2.id) != test.idToCheckAdd2 {
+				if ok && hex.EncodeToString(resDhtNode2.id) != test.idToCheckAdd2 {
 					t.Errorf("bad data resived")
 				}
 
@@ -480,6 +476,8 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
+					case Ping:
+						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
 					case SignedAddressListQuery:
 						testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
 						if err != nil {
@@ -518,7 +516,6 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 		if err != nil {
 			t.Fatal("failed to prepare test client, err:", err)
 		}
-		time.Sleep(2 * time.Second)
 
 		addrList, pubKey, err := cli.FindAddresses(context.Background(), adnlAddr)
 		if err != nil {
@@ -537,29 +534,10 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 func TestClient_FindAddressesIntegration(t *testing.T) {
 	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
 
-	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
-	if err != nil {
-		t.Fatalf("cannot fetch network config, error: %s", err)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 
-	var nodes []NodeInfo
-	for _, node := range cfg.DHT.StaticNodes.Nodes {
-		ip := make(net.IP, 4)
-		ii := int32(node.AddrList.Addrs[0].IP)
-		binary.BigEndian.PutUint32(ip, uint32(ii))
-
-		pp, err := base64.StdEncoding.DecodeString(node.ID.Key)
-		if err != nil {
-			continue
-		}
-
-		nodes = append(nodes, NodeInfo{
-			Address: ip.String() + ":" + fmt.Sprint(node.AddrList.Addrs[0].Port),
-			Key:     pp,
-		})
-	}
-
-	dhtClient, err := NewClient(10*time.Second, nodes)
+	dhtClient, err := NewClientFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -571,7 +549,7 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = dhtClient.FindAddresses(context.Background(), siteAddr)
+	_, _, err = dhtClient.FindAddresses(ctx, siteAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -614,6 +592,8 @@ func TestClient_FindValueRaw(t *testing.T) {
 				return MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
+						case Ping:
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
 						case SignedAddressListQuery:
 							testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
 							if err != nil {
@@ -675,7 +655,7 @@ func TestClient_FindValueRaw(t *testing.T) {
 				t.Fatal("failed to prepare test id, err: ", keyErr)
 			}
 
-			res, err := cli.FindValueRaw(context.Background(), testNode, testId, 12)
+			res, err := testNode.findValue(context.Background(), testId, 12)
 			if err != nil {
 				t.Fatal("failed execution findValueRaw, err: ", err)
 			}

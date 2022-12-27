@@ -20,5 +20,5 @@ type List struct {
 	Version    int32  `tl:"int"`
 	ReinitDate int32  `tl:"int"`
 	Priority   int32  `tl:"int"`
-	ExpireAT   int32  `tl:"int"`
+	ExpireAt   int32  `tl:"int"`
 }

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/adnl/dht"
@@ -12,13 +13,13 @@ import (
 )
 
 func Test_parseADNLAddress(t *testing.T) {
-	res, err := parseADNLAddress("ui52b4urpcoigi26kfwp7vt2cgs2b5ljudwigvra35nhvymdqvqlfsa")
+	res, err := ParseADNLAddress("ui52b4urpcoigi26kfwp7vt2cgs2b5ljudwigvra35nhvymdqvqlfsa")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if hex.EncodeToString(res) != "2d11dd07948bc4e4191af28b67feb3d08d2d07ab4d07641ab106fad3d70c1c2b" {
-		t.Fatal("incorrect result")
+	if hex.EncodeToString(res) != "11dd07948bc4e4191af28b67feb3d08d2d07ab4d07641ab106fad3d70c1c2b05" {
+		t.Fatal("incorrect result", hex.EncodeToString(res))
 	}
 }
 
@@ -63,4 +64,25 @@ func getDNSResolver() *dns.Client {
 	}
 
 	return dns.NewDNSClient(api, root)
+}
+
+func Test_parseSerializeADNLAddress(t *testing.T) {
+	val := make([]byte, 32)
+	val[7] = 0xDA
+
+	addr, err := SerializeADNLAddress(val)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrParsed, err := ParseADNLAddress(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(addrParsed, val) {
+		t.Log(hex.EncodeToString(addrParsed))
+		t.Log(hex.EncodeToString(val))
+		t.Fatal("incorrect addr")
+	}
 }

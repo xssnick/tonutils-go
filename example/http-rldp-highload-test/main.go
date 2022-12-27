@@ -3,13 +3,9 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	rldphttp "github.com/xssnick/tonutils-go/adnl/rldp/http"
-	"github.com/xssnick/tonutils-go/ton/dns"
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"io"
 	"net"
 	"net/http"
@@ -29,8 +25,13 @@ func main() {
 		_, _ = writer.Write([]byte("hello world"))
 	})
 
-	s := adnl.NewServer(srvKey)
-	rldphttp.HandleRequests(s, mx)
+	dht := &MockDHT{
+		ip:   "127.0.0.1",
+		port: 9056,
+		pub:  srvPub,
+	}
+
+	s := rldphttp.NewServer(srvKey, dht, mx)
 
 	go func() {
 		if err = s.ListenAndServe("127.0.0.1:9056"); err != nil {
@@ -44,14 +45,10 @@ func main() {
 	// 100 clients, parallel requests
 	for i := 0; i < numClients; i++ {
 		go func() {
-			// it uses fake DHT and resolver, but real adnl and rldp through network
+			// it uses fake DHT, but real adnl and rldp through network
 			client := &http.Client{
-				Transport: rldphttp.NewTransport(&MockDHT{
-					ip:   "127.0.0.1",
-					port: 9056,
-					pub:  srvPub,
-				}, &MockResolver{}),
-				Timeout: 300 * time.Millisecond,
+				Transport: rldphttp.NewTransport(dht, nil),
+				Timeout:   300 * time.Millisecond,
 			}
 
 			for {
@@ -87,31 +84,17 @@ func main() {
 	}
 }
 
-type MockResolver struct {
-}
-
-func (m MockResolver) Resolve(ctx context.Context, domain string) (*dns.Domain, error) {
-	records := cell.NewDict(256)
-	h := sha256.New()
-	h.Write([]byte("site"))
-
-	_ = records.Set(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell(),
-		cell.BeginCell().MustStoreRef(cell.BeginCell().
-			MustStoreUInt(0xad01, 16).
-			MustStoreUInt(0, 256).
-			EndCell()).EndCell())
-
-	return &dns.Domain{
-		Records: records,
-	}, nil
-
-}
-
 type MockDHT struct {
 	ip   string
 	port int
 	pub  ed25519.PublicKey
 }
+
+func (m *MockDHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *MockDHT) Close() {}
 
 func (m *MockDHT) FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error) {
 	return &address.List{
@@ -124,6 +107,6 @@ func (m *MockDHT) FindAddresses(ctx context.Context, key []byte) (*address.List,
 		Version:    0,
 		ReinitDate: 0,
 		Priority:   0,
-		ExpireAT:   int32(time.Now().Add(1 * time.Hour).Unix()),
+		ExpireAt:   int32(time.Now().Add(1 * time.Hour).Unix()),
 	}, m.pub, nil
 }
