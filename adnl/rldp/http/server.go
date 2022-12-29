@@ -377,7 +377,7 @@ func (r *respWriter) sendHeader(data string, hasPayload bool) error {
 	lines := strings.Split(data, "\r\n")
 	for i, line := range lines {
 		if i == 0 {
-			str := strings.Split(line, " ")
+			str := strings.SplitN(line, " ", 3)
 
 			if len(str) != 3 {
 				return fmt.Errorf("invalid first header line: %s", line)
