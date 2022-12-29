@@ -44,22 +44,29 @@ type packetWriter interface {
 }
 
 type ADNL struct {
-	reinitTime uint32
-	writer     packetWriter
-	ourKey     ed25519.PrivateKey
-	addr       string
-	closer     chan bool
-	closed     bool
+	writer packetWriter
+	ourKey ed25519.PrivateKey
+	addr   string
+	closer chan bool
+	closed bool
 
 	channel *Channel
 
 	msgParts map[string]*partitionedMessage
 
-	seqno        uint64
-	confirmSeqno uint64
-	loss         uint64
+	initTime int32
 
-	peerKey ed25519.PublicKey
+	reinitTime           int32
+	seqno                uint64
+	confirmSeqno         uint64
+	dstReinit            int32
+	recvAddrVer          int32
+	recvPriorityAddrVer  int32
+	ourAddrVerOnPeerSide int32
+	loss                 uint64
+
+	peerKey      ed25519.PublicKey
+	ourAddresses []*address.UDP
 
 	activeQueries map[string]chan tl.Serializable
 
@@ -77,7 +84,8 @@ var Logger = log.Println
 
 func initADNL(key ed25519.PrivateKey) *ADNL {
 	return &ADNL{
-		reinitTime: uint32(time.Now().Unix()),
+		initTime:   int32(time.Now().Unix()),
+		reinitTime: 0, //int32(time.Now().Unix()),
 		ourKey:     key,
 		closer:     make(chan bool, 1),
 
@@ -147,12 +155,30 @@ func (a *ADNL) processPacket(data []byte, ch *Channel) (err error) {
 	seqno := uint64(*packet.Seqno)
 	a.lastReceiveAt = time.Now()
 
+	if ch == nil && packet.From != nil {
+		a.peerKey = packet.From.Key
+	}
+
 	if a.confirmSeqno+1 < seqno {
 		a.loss += seqno - (a.confirmSeqno + 1)
 	}
 
 	if seqno > a.confirmSeqno {
 		a.confirmSeqno = uint64(*packet.Seqno)
+	}
+
+	if packet.ReinitDate != nil {
+		a.dstReinit = *packet.ReinitDate
+		a.reinitTime = a.dstReinit
+	}
+
+	if packet.RecvPriorityAddrListVersion != nil {
+		a.ourAddrVerOnPeerSide = *packet.RecvPriorityAddrListVersion
+	}
+
+	if packet.Address != nil {
+		// a.recvAddrVer = packet.Address.Version
+		a.recvPriorityAddrVer = packet.Address.Version
 	}
 	a.mx.Unlock()
 
@@ -451,7 +477,7 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 					Date:    a.channel.initDate,
 				}
 
-				buf, err = a.createPacket(int64(seqno), chMsg, req)
+				buf, err = a.createPacket(int64(seqno), true, chMsg, req)
 				if err != nil {
 					return fmt.Errorf("failed to create packet: %w", err)
 				}
@@ -480,7 +506,7 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 				Date: a.channel.initDate,
 			}
 
-			buf, err = a.createPacket(int64(seqno), chMsg, req)
+			buf, err = a.createPacket(int64(seqno), false, chMsg, req)
 			if err != nil {
 				return fmt.Errorf("failed to create packet: %w", err)
 			}
@@ -528,12 +554,6 @@ func (a *ADNL) decodePacket(packet []byte) ([]byte, error) {
 	checksum := packet[32:64]
 	data := packet[64:]
 
-	if a.peerKey == nil {
-		a.peerKey = pub
-	} else if !bytes.Equal(pub, a.peerKey) {
-		//	return nil, fmt.Errorf("invalid peer")
-	}
-
 	key, err := SharedKey(a.ourKey, pub)
 	if err != nil {
 		return nil, err
@@ -555,18 +575,21 @@ func (a *ADNL) decodePacket(packet []byte) ([]byte, error) {
 	return data, nil
 }
 
-func (a *ADNL) createPacket(seqno int64, msgs ...any) ([]byte, error) {
+func (a *ADNL) SetAddresses(addresses []*address.UDP) {
+	a.ourAddresses = addresses
+}
+
+func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, error) {
 	if a.peerKey == nil {
 		return nil, fmt.Errorf("unknown peer")
 	}
 
 	confSeq := int64(a.confirmSeqno)
-	reinit := int32(a.reinitTime)
-	dstReinit := int32(0)
-	addr := &address.List{
-		Version:    int32(a.reinitTime),
-		ReinitDate: int32(a.reinitTime),
-	}
+	reinit := a.reinitTime
+	dstReinit := a.dstReinit
+
+	// addrVer := a.recvAddrVer
+	priorityAddrVer := a.recvPriorityAddrVer
 
 	rand1, err := randForPacket()
 	if err != nil {
@@ -579,16 +602,32 @@ func (a *ADNL) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 	}
 
 	packet := &PacketContent{
-		Rand1:               rand1,
-		From:                &PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)},
-		Address:             addr,
-		Messages:            msgs,
-		Seqno:               &seqno,
-		ConfirmSeqno:        &confSeq,
-		ReinitDate:          &reinit,
-		DstReinitDate:       &dstReinit,
-		RecvAddrListVersion: &reinit,
-		Rand2:               rand2,
+		Rand1:         rand1,
+		Messages:      msgs,
+		Seqno:         &seqno,
+		ConfirmSeqno:  &confSeq,
+		ReinitDate:    &reinit,
+		DstReinitDate: &dstReinit,
+		// RecvAddrListVersion:         &addrVer,         // if version is less, peer will send us his address,
+		RecvPriorityAddrListVersion: &priorityAddrVer, // but we don't need it in current implementation
+		Rand2:                       rand2,
+	}
+
+	if !isResp {
+		packet.From = &PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
+	} else {
+		packet.FromIDShort, err = ToKeyID(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if a.ourAddrVerOnPeerSide != a.initTime {
+		packet.Address = &address.List{
+			Addresses:  a.ourAddresses,
+			Version:    a.initTime,
+			ReinitDate: a.initTime,
+		}
 	}
 
 	toSign, err := packet.Serialize()

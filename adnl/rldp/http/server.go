@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -27,12 +29,14 @@ type ADNLServer interface {
 type Server struct {
 	dht DHT
 
-	id             []byte
-	key            ed25519.PrivateKey
-	handler        http.Handler
-	rldpInfos      map[string]*rldpInfo
-	activeRequests map[string]*payloadStream
-	adnlServer     ADNLServer
+	initDate        int32
+	id              []byte
+	key             ed25519.PrivateKey
+	handler         http.Handler
+	rldpInfos       map[string]*rldpInfo
+	activeRequests  map[string]*payloadStream
+	adnlServer      ADNLServer
+	virtualListener *httpListener
 
 	closer chan bool
 	closed bool
@@ -49,15 +53,7 @@ type respWriter struct {
 	queryID     []byte
 	requestID   []byte
 
-	statusCode int
-
-	client  RLDP
-	headers http.Header
-
-	hasPayload bool
-	headerSent bool
-
-	mx sync.Mutex
+	client RLDP
 }
 
 var Logger = log.Println
@@ -68,14 +64,16 @@ var newServer = func(key ed25519.PrivateKey) ADNLServer {
 
 func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 	s := &Server{
-		key:            key,
-		dht:            dht,
-		handler:        handler,
-		adnlServer:     newServer(key),
-		rldpInfos:      map[string]*rldpInfo{},
-		activeRequests: map[string]*payloadStream{},
-		closer:         make(chan bool, 1),
-		Timeout:        30 * time.Second,
+		key:             key,
+		dht:             dht,
+		handler:         handler,
+		initDate:        int32(time.Now().Unix()),
+		adnlServer:      newServer(key),
+		rldpInfos:       map[string]*rldpInfo{},
+		activeRequests:  map[string]*payloadStream{},
+		closer:          make(chan bool, 1),
+		virtualListener: newVirtualHttpListener(),
+		Timeout:         30 * time.Second,
 	}
 
 	s.adnlServer.SetConnectionHandler(func(client adnl.Client) error {
@@ -143,8 +141,19 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 				wait = 5 * time.Second
 				continue
 			}
-			wait = 5 * time.Minute
+			wait = 3 * time.Minute
 		}
+	}()
+
+	// it will handle all http logic, like transfer encodings etc.
+	// we will put it into mock network connected to adnl wrapper
+	httpSrv := http.Server{
+		Handler: s.handler,
+	}
+
+	go func() {
+		err = httpSrv.Serve(s.virtualListener)
+		_ = s.Stop()
 	}()
 
 	if err := s.adnlServer.ListenAndServe(listenAddr); err != nil {
@@ -166,8 +175,9 @@ func (s *Server) updateDHT(ctx context.Context, addr net.IP, port uint16) error 
 				Port: int32(port),
 			},
 		},
-		Version: int32(time.Now().Unix()),
-	}, 45*time.Minute, s.key, 3)
+		Version:    s.initDate,
+		ReinitDate: s.initDate,
+	}, 10*time.Minute, s.key, 3)
 	if err != nil {
 		return err
 	}
@@ -188,6 +198,7 @@ func (s *Server) Stop() error {
 
 	if !s.closed {
 		close(s.closer)
+		s.virtualListener.Close()
 		s.dht.Close()
 		return s.adnlServer.Close()
 	}
@@ -220,15 +231,8 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				headers[header.Name] = append(headers[header.Name], header.Value)
 			}
 
-			w := &respWriter{
-				server:      s,
-				writer:      newDataStreamer(),
-				maxAnswerSz: query.MaxAnswerSize,
-				queryID:     query.ID,
-				requestID:   req.ID,
-				client:      client,
-				headers:     map[string][]string{},
-			}
+			reqBody := newDataStreamer()
+			reqBody.Finish()
 
 			httpReq := &http.Request{
 				Method:        req.Method,
@@ -237,20 +241,40 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				ProtoMajor:    1,
 				ProtoMinor:    1,
 				Header:        headers,
-				Body:          w.writer,
+				Body:          reqBody,
 				ContentLength: contentLen,
 				Host:          uri.Host,
 				RemoteAddr:    addr,
 				RequestURI:    uri.RequestURI(),
 			}
 
-			s.handler.ServeHTTP(w, httpReq)
+			virtualNetR := newDataStreamer()
+			// defer virtualNetR.Close()
 
-			err = w.flush()
-			if err != nil {
-				return fmt.Errorf("failed to flush response for `%s`: %w", uri, err)
+			virtualNetW := newDataStreamer()
+			// defer virtualNetW.Close()
+
+			w := &respWriter{
+				server:      s,
+				writer:      newDataStreamer(),
+				maxAnswerSz: query.MaxAnswerSize,
+				queryID:     query.ID,
+				requestID:   req.ID,
+				client:      client,
 			}
-			w.writer.Finish()
+
+			s.virtualListener.addConn(virtualNetR, virtualNetW)
+
+			err = httpReq.Write(virtualNetR)
+			if err != nil {
+				return fmt.Errorf("failed to write request to virtual net: %w", err)
+			}
+			virtualNetR.Finish()
+
+			err = w.forwardResponse(virtualNetW)
+			if err != nil {
+				return fmt.Errorf("failed to forward response to target: %w", err)
+			}
 		case GetNextPayloadPart:
 			s.mx.RLock()
 			stream := s.activeRequests[hex.EncodeToString(req.ID)]
@@ -271,77 +295,121 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 			if err != nil {
 				return fmt.Errorf("failed to send answer: %w", err)
 			}
+
+			if part.IsLast {
+				s.mx.Lock()
+				delete(s.activeRequests, hex.EncodeToString(req.ID))
+				s.mx.Unlock()
+				_ = stream.Data.Close()
+			}
 		}
 
 		return nil
 	}
 }
 
-func (r *respWriter) Header() http.Header {
-	return r.headers
-}
+func (r *respWriter) forwardResponse(source *dataStreamer) error {
+	var requestData []byte
+	var headerSent bool
 
-func (r *respWriter) Write(bytes []byte) (int, error) {
-	if len(bytes) == 0 {
-		return 0, nil
-	}
-
-	r.hasPayload = true
-
-	if err := r.flush(); err != nil {
-		return 0, err
-	}
-
-	return r.writer.Write(bytes)
-}
-
-func (r *respWriter) WriteHeader(statusCode int) {
-	r.statusCode = statusCode
-}
-
-func (r *respWriter) flush() error {
-	r.mx.Lock()
-	defer r.mx.Unlock()
-
-	if !r.headerSent {
-		r.headerSent = true
-
-		if r.statusCode <= 0 {
-			r.statusCode = 200
-		}
-
-		var headers []Header
-		for k, v := range r.headers {
-			for _, hdr := range v {
-				headers = append(headers, Header{
-					Name:  k,
-					Value: hdr,
-				})
-			}
-		}
-
-		if r.hasPayload {
-			r.server.mx.Lock()
-			r.server.activeRequests[hex.EncodeToString(r.requestID)] = &payloadStream{
-				Data:      r.writer,
-				ValidTill: time.Now().Add(r.server.Timeout),
-			}
-			r.server.mx.Unlock()
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := r.client.SendAnswer(ctx, r.maxAnswerSz, r.queryID, Response{
-			Version:    "HTTP/1.1",
-			StatusCode: int32(r.statusCode),
-			Reason:     http.StatusText(r.statusCode),
-			Headers:    headers,
-			NoPayload:  !r.hasPayload,
-		})
-		cancel()
+	var buf = make([]byte, 4096)
+	finished := false
+	for !finished {
+		n, err := source.Read(buf)
 		if err != nil {
-			_ = r.writer.Close()
-			return fmt.Errorf("failed to send response for %s query: %w", hex.EncodeToString(r.queryID), err)
+			if err != io.EOF {
+				r.writer.Close()
+				return fmt.Errorf("failed to read resp of virtual net: %w", err)
+			}
+			finished = true
 		}
+
+		res := buf[:n]
+
+		if !headerSent {
+			requestData = append(requestData, res...)
+			// find end of header
+			pos := bytes.Index(requestData, []byte("\r\n\r\n"))
+			if pos == -1 {
+				continue
+			}
+
+			headerSent = true
+			res = requestData[pos+4:]
+			requestData = requestData[:pos]
+			hasPayload := !finished || len(res) > 0
+
+			if hasPayload {
+				r.server.mx.Lock()
+				r.server.activeRequests[hex.EncodeToString(r.requestID)] = &payloadStream{
+					Data:      r.writer,
+					ValidTill: time.Now().Add(r.server.Timeout),
+				}
+				r.server.mx.Unlock()
+			}
+
+			err = r.sendHeader(string(requestData), hasPayload)
+			if err != nil {
+				r.writer.Close()
+				return fmt.Errorf("failed to send header: %w", err)
+			}
+
+			if len(res) == 0 {
+				continue
+			}
+		}
+
+		_, err = r.writer.Write(res)
+		if err != nil {
+			return fmt.Errorf("failed to writer resp to target stream: %w", err)
+		}
+	}
+	r.writer.Finish()
+
+	return nil
+}
+
+func (r *respWriter) sendHeader(data string, hasPayload bool) error {
+	resp := Response{
+		NoPayload: !hasPayload,
+	}
+
+	lines := strings.Split(data, "\r\n")
+	for i, line := range lines {
+		if i == 0 {
+			str := strings.Split(line, " ")
+
+			if len(str) != 3 {
+				return fmt.Errorf("invalid first header line: %s", line)
+			}
+
+			statusCode, err := strconv.Atoi(str[1])
+			if err != nil {
+				return fmt.Errorf("invalid status code")
+			}
+
+			resp.Version = str[0]
+			resp.StatusCode = int32(uint16(statusCode))
+			resp.Reason = str[2]
+			continue
+		}
+
+		str := strings.SplitN(line, ": ", 2)
+		if len(str) != 2 {
+			return fmt.Errorf("invalid header at %d line: %s", i, line)
+		}
+
+		resp.Headers = append(resp.Headers, Header{
+			Name:  str[0],
+			Value: str[1],
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	err := r.client.SendAnswer(ctx, r.maxAnswerSz, r.queryID, resp)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("failed to send response for %s query: %w", hex.EncodeToString(r.queryID), err)
 	}
 
 	return nil

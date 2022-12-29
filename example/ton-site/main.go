@@ -7,14 +7,15 @@ import (
 	"encoding/json"
 	"github.com/xssnick/tonutils-go/adnl/dht"
 	rldphttp "github.com/xssnick/tonutils-go/adnl/rldp/http"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
 )
 
 func handler(writer http.ResponseWriter, request *http.Request) {
-	_, _ = writer.Write([]byte("hello, " + request.URL.Query().Get("name")))
+	_, _ = writer.Write([]byte("Hello, " + request.URL.Query().Get("name") +
+		"\nThis TON site works natively using tonutils-go!"))
 }
 
 func main() {
@@ -46,7 +47,7 @@ func getPublicIP() string {
 	}
 	defer req.Body.Close()
 
-	body, err := ioutil.ReadAll(req.Body)
+	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		return err.Error()
 	}

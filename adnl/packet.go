@@ -114,6 +114,10 @@ func (a *ADNL) parsePacket(data []byte) (_ *PacketContent, err error) {
 			return nil, fmt.Errorf("failed to parse 'address', err: %w", err)
 		}
 		packet.Address = &list
+
+		// TODO: check
+		// ppp, _ := json.Marshal(packet.Address)
+		// println("GOT SIMPLE", string(ppp))
 	}
 
 	if flags&_FlagPriorityAddress != 0 {
@@ -199,6 +203,9 @@ func (p *PacketContent) Serialize() ([]byte, error) {
 	if p.From != nil {
 		flags |= _FlagFrom
 	}
+	if p.FromIDShort != nil {
+		flags |= _FlagFromShort
+	}
 	if p.Address != nil {
 		flags |= _FlagAddress
 	}
@@ -225,6 +232,10 @@ func (p *PacketContent) Serialize() ([]byte, error) {
 			return nil, fmt.Errorf("failed to serialize from key, err: %w", err)
 		}
 		data = append(data, payload...)
+	}
+
+	if p.FromIDShort != nil {
+		data = append(data, p.FromIDShort...)
 	}
 
 	if len(p.Messages) > 1 {

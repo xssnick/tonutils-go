@@ -6,8 +6,11 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,6 +61,27 @@ var RawListener = func(addr string) (net.PacketConn, error) {
 }
 
 func (s *Server) ListenAndServe(listenAddr string) (err error) {
+	adr := strings.Split(listenAddr, ":")
+	if len(adr) != 2 {
+		return fmt.Errorf("invalid listen address")
+	}
+
+	ip := net.ParseIP(adr[0]).To4()
+	if ip.Equal(net.IPv4zero) {
+		return fmt.Errorf("invalid listen ip")
+	}
+	port, err := strconv.ParseUint(adr[1], 10, 16)
+	if err != nil {
+		return fmt.Errorf("invalid listen port")
+	}
+
+	udpAddresses := []*address.UDP{
+		{
+			IP:   ip,
+			Port: int32(port),
+		},
+	}
+
 	s.conn, err = RawListener(listenAddr)
 	if err != nil {
 		return err
@@ -92,7 +116,8 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 				// too small packet
 				continue
 			}
-			clientId := hex.EncodeToString(buf[:32])
+
+			clientId := addr.String() // hex.EncodeToString(buf[:32])
 
 			s.mx.RLock()
 			proc = s.processors[clientId]
@@ -100,6 +125,7 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 
 			if proc == nil {
 				a := initADNL(s.key)
+				a.SetAddresses(udpAddresses)
 				a.addr = addr.String()
 				a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
 					return s.write(deadline, addr, p)
@@ -142,7 +168,6 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 				}
 				cli.SetDisconnectHandler(nil)
 
-				// TODO: cleanup processors
 				proc = &srvProcessor{
 					isChannel: false,
 					processor: func(buf []byte) error {
@@ -158,6 +183,8 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 				s.mx.Lock()
 				s.processors[clientId] = proc
 				s.mx.Unlock()
+			} else {
+				continue
 			}
 		} else {
 			s.mx.RLock()
@@ -184,7 +211,7 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 			s.mx.Unlock()
 		}
 
-		go func() {
+		func() {
 			defer func() {
 				if r := recover(); r != nil {
 					Logger("critical error while processing packet at server:", r)

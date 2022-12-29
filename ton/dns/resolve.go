@@ -208,3 +208,20 @@ func (d *Domain) GetSiteRecord() []byte {
 
 	return addr
 }
+
+func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell {
+	h := sha256.New()
+	h.Write([]byte(name))
+
+	return cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).MustStoreRef(value).EndCell()
+}
+
+func (d *Domain) BuildSetSiteRecordPayload(adnlAddress []byte) *cell.Cell {
+	record := cell.BeginCell().MustStoreUInt(_CategoryADNLSite, 16).MustStoreSlice(adnlAddress, 256).EndCell()
+	return d.BuildSetRecordPayload("site", record)
+}
+
+func (d *Domain) BuildSetWalletRecordPayload(addr *address.Address) *cell.Cell {
+	record := cell.BeginCell().MustStoreUInt(_CategoryContractAddr, 16).MustStoreAddr(addr).EndCell()
+	return d.BuildSetRecordPayload("wallet", record)
+}
