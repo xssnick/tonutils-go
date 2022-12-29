@@ -41,6 +41,7 @@ type srvProcessor struct {
 type Server struct {
 	conn net.PacketConn
 
+	addrList   address.List
 	key        ed25519.PrivateKey
 	processors map[string]*srvProcessor
 
@@ -60,6 +61,10 @@ var RawListener = func(addr string) (net.PacketConn, error) {
 	return net.ListenPacket("udp", addr)
 }
 
+func (s *Server) GetAddressList() address.List {
+	return s.addrList
+}
+
 func (s *Server) ListenAndServe(listenAddr string) (err error) {
 	adr := strings.Split(listenAddr, ":")
 	if len(adr) != 2 {
@@ -75,11 +80,18 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 		return fmt.Errorf("invalid listen port")
 	}
 
-	udpAddresses := []*address.UDP{
-		{
-			IP:   ip,
-			Port: int32(port),
+	tm := int32(time.Now().Unix())
+	s.addrList = address.List{
+		Addresses: []*address.UDP{
+			{
+				IP:   ip,
+				Port: int32(port),
+			},
 		},
+		Version:    tm,
+		ReinitDate: tm,
+		Priority:   0,
+		ExpireAt:   0,
 	}
 
 	s.conn, err = RawListener(listenAddr)
@@ -125,7 +137,7 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 
 			if proc == nil {
 				a := initADNL(s.key)
-				a.SetAddresses(udpAddresses)
+				a.SetAddresses(s.addrList)
 				a.addr = addr.String()
 				a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
 					return s.write(deadline, addr, p)

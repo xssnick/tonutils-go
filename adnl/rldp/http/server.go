@@ -11,7 +11,6 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 )
 
 type ADNLServer interface {
+	GetAddressList() address.List
 	ListenAndServe(listenAddr string) (err error)
 	Close() error
 	SetConnectionHandler(func(client adnl.Client) error)
@@ -87,20 +87,6 @@ func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 }
 
 func (s *Server) ListenAndServe(listenAddr string) error {
-	a := strings.Split(listenAddr, ":")
-	if len(a) != 2 {
-		return fmt.Errorf("invalid listen address")
-	}
-
-	ip := net.ParseIP(a[0]).To4()
-	if ip.Equal(net.IPv4zero) {
-		return fmt.Errorf("invalid listen ip")
-	}
-	port, err := strconv.ParseUint(a[1], 10, 16)
-	if err != nil {
-		return fmt.Errorf("invalid listen port")
-	}
-
 	go func() {
 		for {
 			select {
@@ -123,7 +109,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 	}()
 
 	go func() {
-		wait := time.Duration(0)
+		wait := 2 * time.Second
 		// refresh dht records
 		for {
 			select {
@@ -133,7 +119,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-			err := s.updateDHT(ctx, ip, uint16(port))
+			err := s.updateDHT(ctx)
 			cancel()
 
 			if err != nil {
@@ -152,7 +138,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 	}
 
 	go func() {
-		err = httpSrv.Serve(s.virtualListener)
+		_ = httpSrv.Serve(s.virtualListener)
 		_ = s.Stop()
 	}()
 
@@ -167,17 +153,10 @@ func (s *Server) Address() []byte {
 	return s.id
 }
 
-func (s *Server) updateDHT(ctx context.Context, addr net.IP, port uint16) error {
-	id, err := s.dht.StoreAddress(ctx, address.List{
-		Addresses: []*address.UDP{
-			{
-				IP:   addr,
-				Port: int32(port),
-			},
-		},
-		Version:    s.initDate,
-		ReinitDate: s.initDate,
-	}, 10*time.Minute, s.key, 3)
+func (s *Server) updateDHT(ctx context.Context) error {
+	addr := s.adnlServer.GetAddressList()
+
+	id, err := s.dht.StoreAddress(ctx, addr, 10*time.Minute, s.key, 3)
 	if err != nil {
 		return err
 	}
@@ -188,7 +167,7 @@ func (s *Server) updateDHT(ctx context.Context, addr net.IP, port uint16) error 
 		return err
 	}
 
-	Logger("DHT address record for ADNL site was updated successfully to", addr)
+	Logger("DHT address record for ADNL site was updated successfully to ", addr.Addresses[0].IP.String(), addr.Addresses[0].Port)
 	return nil
 }
 

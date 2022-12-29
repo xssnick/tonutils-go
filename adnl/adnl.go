@@ -54,8 +54,6 @@ type ADNL struct {
 
 	msgParts map[string]*partitionedMessage
 
-	initTime int32
-
 	reinitTime           int32
 	seqno                uint64
 	confirmSeqno         uint64
@@ -66,7 +64,7 @@ type ADNL struct {
 	loss                 uint64
 
 	peerKey      ed25519.PublicKey
-	ourAddresses []*address.UDP
+	ourAddresses address.List
 
 	activeQueries map[string]chan tl.Serializable
 
@@ -84,7 +82,10 @@ var Logger = log.Println
 
 func initADNL(key ed25519.PrivateKey) *ADNL {
 	return &ADNL{
-		initTime:   int32(time.Now().Unix()),
+		ourAddresses: address.List{
+			Version:    int32(time.Now().Unix()),
+			ReinitDate: int32(time.Now().Unix()),
+		},
 		reinitTime: 0, //int32(time.Now().Unix()),
 		ourKey:     key,
 		closer:     make(chan bool, 1),
@@ -168,8 +169,8 @@ func (a *ADNL) processPacket(data []byte, ch *Channel) (err error) {
 	}
 
 	if packet.ReinitDate != nil {
-		a.dstReinit = *packet.ReinitDate
-		a.reinitTime = a.dstReinit
+		//	a.dstReinit = *packet.ReinitDate
+		//	a.reinitTime = a.dstReinit
 	}
 
 	if packet.RecvPriorityAddrListVersion != nil {
@@ -575,8 +576,13 @@ func (a *ADNL) decodePacket(packet []byte) ([]byte, error) {
 	return data, nil
 }
 
-func (a *ADNL) SetAddresses(addresses []*address.UDP) {
-	a.ourAddresses = addresses
+func (a *ADNL) SetAddresses(list address.List) {
+	a.reinitTime = list.ReinitDate
+	a.ourAddresses = list
+}
+
+func (a *ADNL) GetAddressList() address.List {
+	return a.ourAddresses
 }
 
 func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, error) {
@@ -622,12 +628,8 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 		}
 	}
 
-	if a.ourAddrVerOnPeerSide != a.initTime {
-		packet.Address = &address.List{
-			Addresses:  a.ourAddresses,
-			Version:    a.initTime,
-			ReinitDate: a.initTime,
-		}
+	if a.ourAddrVerOnPeerSide != a.ourAddresses.Version {
+		packet.Address = &a.ourAddresses
 	}
 
 	toSign, err := packet.Serialize()
