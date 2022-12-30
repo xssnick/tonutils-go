@@ -1,7 +1,7 @@
 package http
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -31,14 +31,12 @@ type ADNLServer interface {
 type Server struct {
 	dht DHT
 
-	initDate        int32
-	id              []byte
-	key             ed25519.PrivateKey
-	handler         http.Handler
-	rldpInfos       map[string]*rldpInfo
-	activeRequests  map[string]*payloadStream
-	adnlServer      ADNLServer
-	virtualListener *httpListener
+	id             []byte
+	key            ed25519.PrivateKey
+	handler        http.Handler
+	rldpInfos      map[string]*rldpInfo
+	activeRequests map[string]*payloadStream
+	adnlServer     ADNLServer
 
 	closer chan bool
 	closed bool
@@ -47,15 +45,29 @@ type Server struct {
 	Timeout time.Duration
 }
 
-type respWriter struct {
+type writerBuff struct {
+	client RLDP
+
 	server *Server
-	writer *dataStreamer
+	stream *dataStreamer
+
+	resp *respWriter
+
+	headerSent bool
+	handled    bool
 
 	maxAnswerSz int64
-	queryID     []byte
-	requestID   []byte
+	queryId     []byte
+	requestId   []byte
+	transferId  []byte
 
-	client RLDP
+	mx sync.Mutex
+}
+
+type respWriter struct {
+	writer     *bufio.Writer
+	statusCode int
+	headers    http.Header
 }
 
 var Logger = log.Println
@@ -66,16 +78,14 @@ var newServer = func(key ed25519.PrivateKey) ADNLServer {
 
 func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 	s := &Server{
-		key:             key,
-		dht:             dht,
-		handler:         handler,
-		initDate:        int32(time.Now().Unix()),
-		adnlServer:      newServer(key),
-		rldpInfos:       map[string]*rldpInfo{},
-		activeRequests:  map[string]*payloadStream{},
-		closer:          make(chan bool, 1),
-		virtualListener: newVirtualHttpListener(),
-		Timeout:         30 * time.Second,
+		key:            key,
+		dht:            dht,
+		handler:        handler,
+		adnlServer:     newServer(key),
+		rldpInfos:      map[string]*rldpInfo{},
+		activeRequests: map[string]*payloadStream{},
+		closer:         make(chan bool, 1),
+		Timeout:        30 * time.Second,
 	}
 
 	s.adnlServer.SetConnectionHandler(func(client adnl.Client) error {
@@ -111,7 +121,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 	}()
 
 	go func() {
-		wait := 2 * time.Second
+		wait := 1 * time.Second
 		// refresh dht records
 		for {
 			select {
@@ -131,17 +141,6 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 			}
 			wait = 3 * time.Minute
 		}
-	}()
-
-	// it will handle all http logic, like transfer encodings etc.
-	// we will put it into mock network connected to adnl wrapper
-	httpSrv := http.Server{
-		Handler: s.handler,
-	}
-
-	go func() {
-		_ = httpSrv.Serve(s.virtualListener)
-		_ = s.Stop()
 	}()
 
 	if err := s.adnlServer.ListenAndServe(listenAddr); err != nil {
@@ -179,7 +178,6 @@ func (s *Server) Stop() error {
 
 	if !s.closed {
 		close(s.closer)
-		s.virtualListener.Close()
 		s.dht.Close()
 		return s.adnlServer.Close()
 	}
@@ -187,10 +185,10 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
+func (s *Server) handle(client RLDP, addr string) func(transferId []byte, msg *rldp.Query) error {
 	netAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort(addr))
 
-	return func(query *rldp.Query) error {
+	return func(transferId []byte, query *rldp.Query) error {
 		switch req := query.Data.(type) {
 		case Request:
 			uri, err := url.Parse(req.URL)
@@ -213,9 +211,6 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				}
 				headers[header.Name] = append(headers[header.Name], header.Value)
 			}
-			// force http server to close writer after request processing,
-			// it will allow us to detect the end of the data stream
-			headers["Connection"] = []string{"close"}
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
 			defer cancel()
@@ -242,42 +237,44 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				URL:           uri,
 				Proto:         req.Version,
 				ProtoMajor:    1,
-				ProtoMinor:    0,
+				ProtoMinor:    1,
 				Header:        headers,
 				Body:          reqBody,
 				ContentLength: contentLen,
 				Host:          uri.Host,
-				RemoteAddr:    addr,
+				RemoteAddr:    netAddr.IP.String(),
 				RequestURI:    uri.RequestURI(),
 			}
 
-			virtualNetR, virtualNetW := newDataStreamer(), newDataStreamer()
+			stream := newDataStreamer()
+
+			wb := &writerBuff{
+				client:      client,
+				server:      s,
+				stream:      stream,
+				maxAnswerSz: query.MaxAnswerSize,
+				queryId:     query.ID,
+				requestId:   req.ID,
+				transferId:  transferId,
+			}
 
 			w := &respWriter{
-				server:      s,
-				writer:      newDataStreamer(),
-				maxAnswerSz: query.MaxAnswerSize,
-				queryID:     query.ID,
-				requestID:   req.ID,
-				client:      client,
+				writer:  bufio.NewWriterSize(wb, 4096),
+				headers: map[string][]string{},
 			}
+			wb.resp = w
 
-			// add connection to fake net of http server
-			s.virtualListener.addConn(netAddr, virtualNetR, virtualNetW)
-			defer virtualNetR.Close()
-			defer virtualNetW.Close()
+			s.handler.ServeHTTP(w, httpReq)
+			wb.handled = true
+			// flush write buffer, to commit data
+			err = w.writer.Flush()
 
-			err = httpReq.Write(virtualNetR)
+			// if no data was committed - it will send empty response
+			err = wb.flush(nil)
 			if err != nil {
-				return fmt.Errorf("failed to write request to virtual net: %w", err)
+				return fmt.Errorf("failed to flush response for `%s`: %w", uri, err)
 			}
-			// mark the end of request for server by freeing reader, so it can start processing
-			virtualNetR.FlushReader()
-
-			err = w.forwardResponse(virtualNetW)
-			if err != nil {
-				return fmt.Errorf("failed to forward response to target: %w", err)
-			}
+			stream.Finish()
 		case GetNextPayloadPart:
 			s.mx.RLock()
 			stream := s.activeRequests[hex.EncodeToString(req.ID)]
@@ -293,7 +290,7 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
-			err = client.SendAnswer(ctx, query.MaxAnswerSize, query.ID, part)
+			err = client.SendAnswer(ctx, query.MaxAnswerSize, query.ID, transferId, part)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("failed to send answer: %w", err)
@@ -336,108 +333,86 @@ func (s *Server) fetchPayload(ctx context.Context, requestID []byte, client RLDP
 	return nil
 }
 
-func (r *respWriter) forwardResponse(source *dataStreamer) error {
-	var requestData []byte
-	var headerSent bool
-
-	var buf = make([]byte, 4096)
-	finished := false
-	for !finished {
-		n, err := source.Read(buf)
-		if err != nil {
-			if err != io.EOF {
-				r.writer.Close()
-				return fmt.Errorf("failed to read resp of virtual net: %w", err)
-			}
-			finished = true
-		}
-
-		res := buf[:n]
-
-		if !headerSent {
-			requestData = append(requestData, res...)
-			// find end of header
-			pos := bytes.Index(requestData, []byte("\r\n\r\n"))
-			if pos == -1 {
-				continue
-			}
-
-			headerSent = true
-			res = requestData[pos+4:]
-			requestData = requestData[:pos]
-			hasPayload := !finished || len(res) > 0
-
-			if hasPayload {
-				r.server.mx.Lock()
-				r.server.activeRequests[hex.EncodeToString(r.requestID)] = &payloadStream{
-					Data:      r.writer,
-					ValidTill: time.Now().Add(r.server.Timeout),
-				}
-				r.server.mx.Unlock()
-			}
-
-			err = r.sendHeader(string(requestData), hasPayload)
-			if err != nil {
-				r.writer.Close()
-				return fmt.Errorf("failed to send header: %w", err)
-			}
-
-			if len(res) == 0 {
-				continue
-			}
-		}
-
-		_, err = r.writer.Write(res)
-		if err != nil {
-			return fmt.Errorf("failed to writer resp to target stream: %w", err)
-		}
-	}
-	r.writer.Finish()
-
-	return nil
+func (r *respWriter) Header() http.Header {
+	return r.headers
 }
 
-func (r *respWriter) sendHeader(data string, hasPayload bool) error {
-	resp := Response{
-		NoPayload: !hasPayload,
+func (r *respWriter) Write(bytes []byte) (int, error) {
+	return r.writer.Write(bytes)
+}
+
+func (r *respWriter) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+}
+
+func (w *writerBuff) Write(bytes []byte) (n int, err error) {
+	if len(bytes) == 0 {
+		return 0, nil
 	}
 
-	lines := strings.Split(data, "\r\n")
-	for i, line := range lines {
-		if i == 0 {
-			str := strings.SplitN(line, " ", 3)
+	w.mx.Lock()
+	defer w.mx.Unlock()
 
-			if len(str) != 3 {
-				return fmt.Errorf("invalid first header line: %s", line)
-			}
+	if err := w.flush(bytes); err != nil {
+		return 0, err
+	}
 
-			statusCode, err := strconv.Atoi(str[1])
-			if err != nil {
-				return fmt.Errorf("invalid status code")
-			}
+	return w.stream.Write(bytes)
+}
 
-			resp.Version = str[0]
-			resp.StatusCode = int32(uint16(statusCode))
-			resp.Reason = str[2]
-			continue
+func (w *writerBuff) flush(payload []byte) error {
+	if w.headerSent {
+		return nil
+	}
+	w.headerSent = true
+
+	if w.handled {
+		// if it is first and last write - we can define content length
+		if !strings.Contains(strings.ToLower(w.resp.headers.Get("Transfer-Encoding")), "chunked") {
+			w.resp.headers.Set("Content-Length", fmt.Sprint(len(payload)))
 		}
-
-		str := strings.SplitN(line, ": ", 2)
-		if len(str) != 2 {
-			return fmt.Errorf("invalid header at %d line: %s", i, line)
+	} else {
+		if w.resp.headers.Get("Content-Length") == "" && w.resp.headers.Get("Transfer-Encoding") == "" {
+			// if it is not last write (flush inside handler), we use chunked transfer
+			w.resp.headers.Set("Transfer-Encoding", "chunked")
 		}
+	}
 
-		resp.Headers = append(resp.Headers, Header{
-			Name:  str[0],
-			Value: str[1],
-		})
+	if w.resp.statusCode <= 0 {
+		w.resp.statusCode = 200
+	}
+
+	var headers []Header
+	for k, v := range w.resp.headers {
+		for _, hdr := range v {
+			headers = append(headers, Header{
+				Name:  k,
+				Value: hdr,
+			})
+		}
+	}
+
+	if len(payload) > 0 {
+		w.server.mx.Lock()
+		w.server.activeRequests[hex.EncodeToString(w.requestId)] = &payloadStream{
+			Data:      w.stream,
+			ValidTill: time.Now().Add(w.server.Timeout),
+		}
+		w.server.mx.Unlock()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	err := r.client.SendAnswer(ctx, r.maxAnswerSz, r.queryID, resp)
+	err := w.client.SendAnswer(ctx, w.maxAnswerSz, w.queryId, w.transferId, Response{
+		Version:    "HTTP/1.1",
+		StatusCode: int32(w.resp.statusCode),
+		Reason:     http.StatusText(w.resp.statusCode),
+		Headers:    headers,
+		NoPayload:  len(payload) == 0,
+	})
 	cancel()
 	if err != nil {
-		return fmt.Errorf("failed to send response for %s query: %w", hex.EncodeToString(r.queryID), err)
+		_ = w.stream.Close()
+		return fmt.Errorf("failed to send response for %s query: %w", hex.EncodeToString(w.queryId), err)
 	}
 
 	return nil

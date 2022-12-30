@@ -8,8 +8,10 @@ import (
 
 type payloadStream struct {
 	nextOffset int
-	Data       *dataStreamer
+	Data       io.ReadCloser
 	ValidTill  time.Time
+
+	mx sync.Mutex
 }
 
 type dataStreamer struct {

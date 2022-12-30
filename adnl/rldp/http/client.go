@@ -37,9 +37,9 @@ type Resolver interface {
 type RLDP interface {
 	Close()
 	DoQuery(ctx context.Context, maxAnswerSize int64, query, result tl.Serializable) error
-	SetOnQuery(handler func(query *rldp.Query) error)
+	SetOnQuery(handler func(transferId []byte, query *rldp.Query) error)
 	SetOnDisconnect(handler func())
-	SendAnswer(ctx context.Context, maxAnswerSize int64, queryID []byte, answer tl.Serializable) error
+	SendAnswer(ctx context.Context, maxAnswerSize int64, queryId, transferId []byte, answer tl.Serializable) error
 }
 
 type ADNL interface {
@@ -124,8 +124,8 @@ func (r *rldpInfo) destroyClient(rl RLDP) {
 	r.mx.Unlock()
 }
 
-func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
-	return func(query *rldp.Query) error {
+func (t *Transport) getRLDPQueryHandler(r RLDP) func(transferId []byte, query *rldp.Query) error {
+	return func(transferId []byte, query *rldp.Query) error {
 		switch req := query.Data.(type) {
 		case GetNextPayloadPart:
 			t.mx.RLock()
@@ -142,10 +142,17 @@ func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err = r.SendAnswer(ctx, query.MaxAnswerSize, query.ID, part)
+			err = r.SendAnswer(ctx, query.MaxAnswerSize, query.ID, transferId, part)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("failed to send answer: %w", err)
+			}
+
+			if part.IsLast {
+				t.mx.Lock()
+				delete(t.activeRequests, hex.EncodeToString(req.ID))
+				t.mx.Unlock()
+				_ = stream.Data.Close()
 			}
 
 			return nil
@@ -155,9 +162,12 @@ func (t *Transport) getRLDPQueryHandler(r RLDP) func(query *rldp.Query) error {
 }
 
 func handleGetPart(req GetNextPayloadPart, stream *payloadStream) (*PayloadPart, error) {
+	stream.mx.Lock()
+	defer stream.mx.Unlock()
+
 	offset := int(req.Seqno * req.MaxChunkSize)
 	if offset != stream.nextOffset {
-		return nil, fmt.Errorf("incorrect offset %d, should be %d", offset, stream.nextOffset)
+		return nil, fmt.Errorf("failed to get part for stream %s, incorrect offset %d, should be %d", hex.EncodeToString(req.ID), offset, stream.nextOffset)
 	}
 
 	var last bool
@@ -169,6 +179,7 @@ func handleGetPart(req GetNextPayloadPart, stream *payloadStream) (*PayloadPart,
 		}
 		last = true
 	}
+	stream.nextOffset += n
 
 	return &PayloadPart{
 		Data:    data[:n],
