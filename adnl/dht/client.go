@@ -67,10 +67,6 @@ func NewClientFromConfigUrl(ctx context.Context, cfgUrl string) (*Client, error)
 func NewClientFromConfig(connectTimeout time.Duration, cfg *liteclient.GlobalConfig) (*Client, error) {
 	var nodes []*Node
 	for _, node := range cfg.DHT.StaticNodes.Nodes {
-		ip := make(net.IP, 4)
-		ii := int32(node.AddrList.Addrs[0].IP)
-		binary.BigEndian.PutUint32(ip, uint32(ii))
-
 		key, err := base64.StdEncoding.DecodeString(node.ID.Key)
 		if err != nil {
 			continue
@@ -96,6 +92,9 @@ func NewClientFromConfig(connectTimeout time.Duration, cfg *liteclient.GlobalCon
 		}
 
 		for _, addr := range node.AddrList.Addrs {
+			ip := make(net.IP, 4)
+			ii := int32(addr.IP)
+			binary.BigEndian.PutUint32(ip, uint32(ii))
 			n.AddrList.Addresses = append(n.AddrList.Addresses, &address.UDP{
 				IP:   ip,
 				Port: int32(addr.Port),
@@ -153,6 +152,7 @@ func (c *Client) Close() {
 	for _, v := range c.activeNodes {
 		toClose = append(toClose, v)
 	}
+	c.activeNodes = nil
 	c.mx.Unlock()
 
 	for _, node := range toClose {
@@ -262,19 +262,19 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 
 var ErrDHTValueIsNotFound = errors.New("value is not found")
 
-func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) ([]byte, error) {
+func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (uint, []byte, error) {
 	data, err := tl.Serialize(addresses, true)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	return c.Store(ctx, []byte("address"), 0, data, ttl, ownerKey, copies)
 }
 
-func (c *Client) Store(ctx context.Context, name []byte, index int32, value []byte, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (idKey []byte, err error) {
+func (c *Client) Store(ctx context.Context, name []byte, index int32, value []byte, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (copiesMade uint, idKey []byte, err error) {
 	id := adnl.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
 	idKey, err = adnl.ToKeyID(id)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	val := Value{
@@ -293,22 +293,24 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 
 	val.KeyDescription.Signature, err = signTL(val.KeyDescription, ownerKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to sign key description: %w", err)
+		return 0, nil, fmt.Errorf("failed to sign key description: %w", err)
 	}
 	val.Signature, err = signTL(val, ownerKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to sign value: %w", err)
+		return 0, nil, fmt.Errorf("failed to sign value: %w", err)
 	}
 
 	kid, err := adnl.ToKeyID(val.KeyDescription.Key)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	checked := map[string]bool{}
 
 	plist := c.buildPriorityList(kid)
-	for copies > 0 {
+
+	copiesLeft := copies
+	for copiesLeft > 0 {
 		node, _ := plist.getNode()
 		if node == nil {
 			break
@@ -364,10 +366,14 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 			continue
 		}
 
-		copies--
+		copiesLeft--
 	}
 
-	return idKey, nil
+	if copiesLeft == copies {
+		return 0, nil, fmt.Errorf("failed to store value: zero copies made")
+	}
+
+	return uint(copies - copiesLeft), idKey, nil
 }
 
 func signTL(obj tl.Serializable, key ed25519.PrivateKey) ([]byte, error) {
