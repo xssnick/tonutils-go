@@ -7,8 +7,9 @@ import (
 )
 
 type httpConn struct {
-	r *dataStreamer
-	w *dataStreamer
+	addr net.Addr
+	r    *dataStreamer
+	w    *dataStreamer
 }
 
 func (h *httpConn) Read(b []byte) (n int, err error) {
@@ -30,7 +31,7 @@ func (h *httpConn) LocalAddr() net.Addr {
 }
 
 func (h *httpConn) RemoteAddr() net.Addr {
-	return &net.UDPAddr{}
+	return h.addr
 }
 
 func (h *httpConn) SetDeadline(t time.Time) error {
@@ -38,6 +39,10 @@ func (h *httpConn) SetDeadline(t time.Time) error {
 }
 
 func (h *httpConn) SetReadDeadline(t time.Time) error {
+	if !t.IsZero() && t.Before(time.Now()) {
+		// force read to return inside http server reader routine
+		h.r.FlushReader()
+	}
 	return nil
 }
 
@@ -68,8 +73,10 @@ func (h *httpListener) Close() error {
 	return nil
 }
 
-func (h *httpListener) addConn(r, w *dataStreamer) {
-	h.connChan <- &httpConn{r: r, w: w}
+func (h *httpListener) addConn(addr net.Addr, r, w *dataStreamer) *httpConn {
+	conn := &httpConn{r: r, w: w, addr: addr}
+	h.connChan <- conn
+	return conn
 }
 
 func (h *httpListener) Addr() net.Addr {

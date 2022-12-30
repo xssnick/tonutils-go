@@ -4,12 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/base32"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/sigurn/crc16"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
@@ -59,105 +56,6 @@ var Connector = func(ctx context.Context, addr string, peerKey ed25519.PublicKey
 
 var newRLDP = func(a ADNL) RLDP {
 	return rldp.NewClient(a)
-}
-
-type payloadStream struct {
-	nextOffset int
-	Data       *dataStreamer
-	ValidTill  time.Time
-}
-
-type dataStreamer struct {
-	buf []byte
-
-	parts    chan []byte
-	closer   chan bool
-	finished bool
-	closed   bool
-
-	readerLock sync.Mutex
-	writerLock sync.Mutex
-	closerLock sync.Mutex
-}
-
-func newDataStreamer() *dataStreamer {
-	return &dataStreamer{
-		parts:  make(chan []byte, 1),
-		closer: make(chan bool, 1),
-	}
-}
-
-func (d *dataStreamer) Read(p []byte) (n int, err error) {
-	d.readerLock.Lock()
-	defer d.readerLock.Unlock()
-
-	for {
-		if len(d.buf) == 0 {
-			select {
-			case d.buf = <-d.parts:
-				if d.buf == nil {
-					return n, io.EOF
-				}
-			case <-d.closer:
-				return n, io.ErrUnexpectedEOF
-			}
-		}
-
-		if n == len(p) {
-			return n, nil
-		}
-
-		copied := copy(p[n:], d.buf)
-		d.buf = d.buf[copied:]
-
-		n += copied
-	}
-}
-
-func (d *dataStreamer) Close() error {
-	d.closerLock.Lock()
-	defer d.closerLock.Unlock()
-
-	if !d.closed {
-		d.closed = true
-		close(d.closer)
-	}
-
-	return nil
-}
-
-func (d *dataStreamer) Write(data []byte) (int, error) {
-	if len(data) == 0 {
-		return 0, nil
-	}
-
-	d.writerLock.Lock()
-	defer d.writerLock.Unlock()
-
-	if d.finished {
-		return 0, io.ErrClosedPipe
-	}
-
-	tmp := make([]byte, len(data))
-	copy(tmp, data)
-
-	select {
-	case d.parts <- tmp:
-	case <-d.closer:
-		return 0, io.ErrClosedPipe
-	}
-
-	return len(data), nil
-}
-
-func (d *dataStreamer) Finish() {
-	d.writerLock.Lock()
-	defer d.writerLock.Unlock()
-
-	if !d.finished {
-		d.finished = true
-		close(d.parts)
-	}
 }
 
 type rldpInfo struct {
@@ -551,38 +449,4 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 		return fmt.Errorf("failed to connect to rldp servers %s of host %s, err: %w", triedAddresses, host, err)
 	}
 	return nil
-}
-
-var crc16table = crc16.MakeTable(crc16.CRC16_XMODEM)
-
-func ParseADNLAddress(addr string) ([]byte, error) {
-	if len(addr) != 55 {
-		return nil, errors.New("wrong id length")
-	}
-
-	buf, err := base32.StdEncoding.DecodeString("F" + strings.ToUpper(addr))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode address: %w", err)
-	}
-
-	if buf[0] != 0x2d {
-		return nil, errors.New("invalid first byte")
-	}
-
-	hash := binary.BigEndian.Uint16(buf[33:])
-	calc := crc16.Checksum(buf[:33], crc16table)
-	if hash != calc {
-		return nil, errors.New("invalid address")
-	}
-
-	return buf[1:33], nil
-}
-
-func SerializeADNLAddress(addr []byte) (string, error) {
-	a := append([]byte{0x2d}, addr...)
-
-	crcBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(crcBytes, crc16.Checksum(a, crc16table))
-
-	return strings.ToLower(base32.StdEncoding.EncodeToString(append(a, crcBytes...))[1:]), nil
 }

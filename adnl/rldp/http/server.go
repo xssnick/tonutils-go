@@ -11,7 +11,9 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -186,6 +188,8 @@ func (s *Server) Stop() error {
 }
 
 func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
+	netAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort(addr))
+
 	return func(query *rldp.Query) error {
 		switch req := query.Data.(type) {
 		case Request:
@@ -209,16 +213,36 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				}
 				headers[header.Name] = append(headers[header.Name], header.Value)
 			}
+			// force http server to close writer after request processing,
+			// it will allow us to detect the end of the data stream
+			headers["Connection"] = []string{"close"}
+
+			ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
+			defer cancel()
 
 			reqBody := newDataStreamer()
-			reqBody.Finish()
+			if req.Method == "CONNECT" ||
+				len(headers["Content-Length"]) > 0 ||
+				len(headers["Transfer-Encoding"]) > 0 {
+				// request should have payload, fetch it in parallel and write to stream
+				go func() {
+					err = s.fetchPayload(ctx, req.ID, client, reqBody)
+					if err != nil {
+						reqBody.Close()
+						return
+					}
+					reqBody.Finish()
+				}()
+			} else {
+				reqBody.Finish()
+			}
 
 			httpReq := &http.Request{
 				Method:        req.Method,
 				URL:           uri,
 				Proto:         req.Version,
 				ProtoMajor:    1,
-				ProtoMinor:    1,
+				ProtoMinor:    0,
 				Header:        headers,
 				Body:          reqBody,
 				ContentLength: contentLen,
@@ -227,11 +251,7 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				RequestURI:    uri.RequestURI(),
 			}
 
-			virtualNetR := newDataStreamer()
-			// defer virtualNetR.Close()
-
-			virtualNetW := newDataStreamer()
-			// defer virtualNetW.Close()
+			virtualNetR, virtualNetW := newDataStreamer(), newDataStreamer()
 
 			w := &respWriter{
 				server:      s,
@@ -242,13 +262,17 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				client:      client,
 			}
 
-			s.virtualListener.addConn(virtualNetR, virtualNetW)
+			// add connection to fake net of http server
+			s.virtualListener.addConn(netAddr, virtualNetR, virtualNetW)
+			defer virtualNetR.Close()
+			defer virtualNetW.Close()
 
 			err = httpReq.Write(virtualNetR)
 			if err != nil {
 				return fmt.Errorf("failed to write request to virtual net: %w", err)
 			}
-			virtualNetR.Finish()
+			// mark the end of request for server by freeing reader, so it can start processing
+			virtualNetR.FlushReader()
 
 			err = w.forwardResponse(virtualNetW)
 			if err != nil {
@@ -285,6 +309,31 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 
 		return nil
 	}
+}
+
+func (s *Server) fetchPayload(ctx context.Context, requestID []byte, client RLDP, w io.Writer) error {
+	var seqno int32 = 0
+	last := false
+	for !last {
+		var part PayloadPart
+		err := client.DoQuery(ctx, _RLDPMaxAnswerSize, GetNextPayloadPart{
+			ID:           requestID,
+			Seqno:        seqno,
+			MaxChunkSize: _ChunkSize,
+		}, &part)
+		if err != nil {
+			return err
+		}
+
+		last = part.IsLast
+		_, err = w.Write(part.Data)
+		if err != nil {
+			return err
+		}
+
+		seqno++
+	}
+	return nil
 }
 
 func (r *respWriter) forwardResponse(source *dataStreamer) error {
