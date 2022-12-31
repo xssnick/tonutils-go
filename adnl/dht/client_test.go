@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
@@ -13,12 +15,14 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
 
 type MockADNL struct {
 	query func(ctx context.Context, req, result tl.Serializable) error
+	close func()
 }
 
 func (m MockADNL) Query(ctx context.Context, req, result tl.Serializable) error {
@@ -45,7 +49,7 @@ var cnf = &liteclient.GlobalConfig{
 					Type: "dht.node",
 					ID: liteclient.ServerID{
 						"pub.ed25519",
-						"C1uy64rfGxp10SPSqbsxWhbumy5SM0YbvljCudwpZeI="},
+						"6PGkPQSbyFp12esf1NqmDOaLoFA8i9+Mp5+cAx5wtTU="},
 					AddrList: liteclient.DHTAddressList{
 						"adnl.addressList",
 						[]liteclient.DHTAddress{
@@ -90,12 +94,18 @@ var cnf = &liteclient.GlobalConfig{
 	Validator:   liteclient.ValidatorConfig{},
 }
 
+func makeStrAddress(ip int32, port int) string {
+	_ip := make(net.IP, 4)
+	binary.BigEndian.PutUint32(_ip, uint32(ip))
+	return _ip.String() + ":" + strconv.Itoa(port)
+}
+
 func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	tPubKey, tPrivKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return nil, err
 	}
-
+	fmt.Println(hex.EncodeToString(tPubKey))
 	testNode := &Node{
 		adnl.PublicKeyED25519{Key: tPubKey},
 		&address.List{
@@ -119,7 +129,7 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	}
 	sign := ed25519.Sign(tPrivKey, toVerify)
 	testNode.Signature = sign
-
+	fmt.Println(hex.EncodeToString(sign))
 	return testNode, nil
 }
 
@@ -241,12 +251,6 @@ func TestClient_FindValue(t *testing.T) {
 						switch request := req.(type) {
 						case Ping:
 							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
-						case SignedAddressListQuery:
-							testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
-							if err != nil {
-								t.Fatal("failed creating test node, err: ", err.Error())
-							}
-							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*testNode))
 						case tl.Raw:
 							var _req FindValue
 							_, err := tl.Parse(&_req, request, true)
@@ -296,8 +300,6 @@ func TestClient_FindValue(t *testing.T) {
 			}
 
 			if test.name == "existing address" {
-				tValue.Value.Signature = nil
-				tValue.Value.KeyDescription.Signature = nil
 				if !reflect.DeepEqual(res, &tValue.Value) {
 					t.Errorf("got bad data")
 				}
@@ -307,76 +309,83 @@ func TestClient_FindValue(t *testing.T) {
 }
 
 func TestClient_NewClientFromConfig(t *testing.T) {
-	corNode1, err := newCorrectNode(178, 18, 243, 132, 15888)
+	byteKey1, err := base64.StdEncoding.DecodeString("6PGkPQSbyFp12esf1NqmDOaLoFA8i9+Mp5+cAx5wtTU=")
 	if err != nil {
-		t.Fatal("failed creating test node, err: ", err.Error())
+		t.Fatal("failed to decode test public key, err: ", err)
 	}
 
-	pub1, ok := corNode1.ID.(adnl.PublicKeyED25519)
-	kId1, err := adnl.ToKeyID(pub1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyID1 := hex.EncodeToString(kId1)
+	pubKey1 := ed25519.PublicKey(byteKey1)
+	adnlPubKey1 := adnl.PublicKeyED25519{pubKey1}
 
-	corNode2, err := newCorrectNode(1, 2, 3, 4, 12345)
+	tKeyId1, err := adnl.ToKeyID(adnlPubKey1)
 	if err != nil {
-		t.Fatal("failed creating test node, err: ", err.Error())
+		t.Fatal("failed to prepare test key id, err: ", err)
 	}
-	pub2 := corNode2.ID.(adnl.PublicKeyED25519)
-	kId2, err := adnl.ToKeyID(pub2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyID2 := hex.EncodeToString(kId2)
 
-	incorNode, err := newIncorrectNode(178, 18, 243, 132, 15888)
+	hexTKeyId1 := hex.EncodeToString(tKeyId1)
+
+	tAddr1 := makeStrAddress(-1185526007, 22096)
+
+	node1 := dhtNode{
+		id:        tKeyId1,
+		addr:      tAddr1,
+		serverKey: pubKey1,
+	}
+
+	byteKey2, err := base64.StdEncoding.DecodeString("bn8klhFZgE2sfIDfvVI6m6+oVNi1nBRlnHoxKtR9WBU=")
 	if err != nil {
-		t.Fatal("failed creating test node, err: ", err.Error())
+		t.Fatal("failed to decode test public key, err: ", err)
 	}
-	pub3, ok := incorNode.ID.(adnl.PublicKeyED25519)
-	if !ok {
-		t.Fatalf("unsupported id type %s", reflect.TypeOf(corNode2.ID).String())
-	}
-	kId3, err := adnl.ToKeyID(pub3)
+
+	pubKey2 := ed25519.PublicKey(byteKey2)
+	adnlPubKey2 := adnl.PublicKeyED25519{pubKey2}
+
+	tKeyId2, err := adnl.ToKeyID(adnlPubKey2)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("failed to prepare test key id, err: ", err)
 	}
-	keyID3 := hex.EncodeToString(kId3)
+
+	hexTKeyId2 := hex.EncodeToString(tKeyId2)
+
+	tAddr2 := makeStrAddress(-1307380860, 15888)
+
+	node2 := dhtNode{
+		id:        tKeyId2,
+		addr:      tAddr2,
+		serverKey: pubKey2,
+	}
 
 	tests := []struct {
-		name          string
-		responseNode1 *Node
-		responseNode2 *Node
-		wantLenNodes  int
-		idToCheckAdd1 string
-		idToCheckAdd2 string
-		checkAdd1     bool
-		checkAdd2     bool
+		name         string
+		tNode1       dhtNode
+		tNode2       dhtNode
+		wantLenNodes int
+		checkAdd1    bool
+		checkAdd2    bool
 	}{
 		{
-			"positive case (all nodes valid)", corNode1, corNode2, 2, keyID1, keyID2, true, true,
+			"positive case (all nodes valid)", node1, node2, 2, true, true,
 		},
 		{
-			"negative case (one of two nodes with bad sign)", corNode1, incorNode, 1, keyID1, keyID3, true, false,
+			"negative case (one of two nodes with bad sign)", node1, node2, 1, true, false,
 		},
 	}
 
 	for _, test := range tests {
-		reqCount := 0
 		t.Run(test.name, func(t *testing.T) {
 			connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
 				return MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
 						case Ping:
-							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
-						case SignedAddressListQuery:
-							if reqCount == 0 {
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*test.responseNode1))
-								reqCount++
-							} else {
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*test.responseNode2))
+							if test.name == "positive case (all nodes valid)" {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
+							} else if test.name == "negative case (one of two nodes with bad sign)" {
+								if addr == tAddr1 {
+									reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
+								} else if addr == tAddr2 {
+									return errors.New("node is not answering")
+								}
 							}
 						default:
 							return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(req).String())
@@ -396,51 +405,40 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 				t.Errorf("added nodes count (active'%d', known'%d') but expected(%d)", len(cli.activeNodes), len(cli.knownNodesInfo), test.wantLenNodes)
 			}
 
-			resDhtNode1, ok := cli.activeNodes[test.idToCheckAdd1]
-			if ok != test.checkAdd1 {
+			resDhtNode1, ok1 := cli.activeNodes[hexTKeyId1]
+			if ok1 != test.checkAdd1 {
 				t.Errorf("invalid active nodes addition")
 			}
-			if ok && hex.EncodeToString(resDhtNode1.id) != test.idToCheckAdd1 {
-				t.Errorf("bad data resived")
+			if ok1 {
+				if !bytes.Equal(resDhtNode1.id, test.tNode1.id) {
+					t.Errorf("invalid active node id")
+				}
+				if resDhtNode1.addr != test.tNode1.addr {
+					t.Errorf("invalid active node address")
+				}
+				if !resDhtNode1.serverKey.Equal(test.tNode1.serverKey) {
+					t.Errorf("invalid active node server key")
+				}
 			}
 
-			resNode1, ok := cli.knownNodesInfo[test.idToCheckAdd1]
-			if ok != test.checkAdd1 {
-				t.Errorf("invalid known nodes nodes addition")
-			}
-			if !reflect.DeepEqual(resNode1, test.responseNode1) {
-				t.Errorf("bad data resived")
+			resDhtNode2, ok2 := cli.activeNodes[hexTKeyId2]
+			if ok2 != test.checkAdd2 {
+				t.Errorf("invalid active nodes addition")
 			}
 
-			if test.name == "negative case (one of two nodes with bad sign)" {
-				_, ok := cli.activeNodes[test.idToCheckAdd2]
-				if ok != test.checkAdd2 {
-					t.Errorf("invalid active nodes addition")
+			if ok2 {
+				if !bytes.Equal(resDhtNode2.id, test.tNode2.id) {
+					t.Errorf("invalid active node id")
 				}
-				_, ok = cli.knownNodesInfo[test.idToCheckAdd2]
-				if ok != test.checkAdd2 {
-					t.Errorf("invalid known nodes nodes addition")
+				if resDhtNode2.addr != test.tNode2.addr {
+					t.Errorf("invalid active node address")
 				}
-			} else {
-				resDhtNode2, ok := cli.activeNodes[test.idToCheckAdd2]
-				if ok != test.checkAdd2 {
-					t.Errorf("invalid active nodes addition")
-				}
-				if ok && hex.EncodeToString(resDhtNode2.id) != test.idToCheckAdd2 {
-					t.Errorf("bad data resived")
-				}
-
-				resNode2, ok := cli.knownNodesInfo[test.idToCheckAdd2]
-				if ok != test.checkAdd2 {
-					t.Errorf("invalid known nodes nodes addition")
-				}
-				if !reflect.DeepEqual(resNode2, test.responseNode2) {
-					t.Errorf("bad data resived")
+				if !resDhtNode2.serverKey.Equal(test.tNode2.serverKey) {
+					t.Errorf("invalid active node server key")
 				}
 			}
 		})
 	}
-
 }
 
 func TestClient_FindAddressesUnit(t *testing.T) {
@@ -478,12 +476,6 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 					switch request := req.(type) {
 					case Ping:
 						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
-					case SignedAddressListQuery:
-						testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
-						if err != nil {
-							t.Fatal("failed creating test node, err: ", err.Error())
-						}
-						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*testNode))
 					case tl.Raw:
 						var _req FindValue
 						_, err := tl.Parse(&_req, request, true)
@@ -594,12 +586,6 @@ func TestClient_FindValueRaw(t *testing.T) {
 						switch request := req.(type) {
 						case Ping:
 							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
-						case SignedAddressListQuery:
-							testNode, err := newCorrectNode(1, 2, 3, 4, 12345)
-							if err != nil {
-								t.Fatal("failed creating test node, err: ", err.Error())
-							}
-							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*testNode))
 						case tl.Raw:
 							var _req FindValue
 							_, err := tl.Parse(&_req, request, true)
@@ -666,8 +652,6 @@ func TestClient_FindValueRaw(t *testing.T) {
 
 			switch test.name {
 			case "existing address":
-				tValue.Value.Signature = nil
-				tValue.Value.KeyDescription.Signature = nil
 				if !reflect.DeepEqual(*res.(*Value), tValue.Value) {
 					t.Errorf("got bad data")
 				}
@@ -680,4 +664,174 @@ func TestClient_FindValueRaw(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClient_Close(t *testing.T) {
+	connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				switch request := req.(type) {
+				case Ping:
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
+				default:
+					return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
+				}
+				return nil
+			},
+			close: func() {
+			},
+		}, nil
+	}
+
+	cli, err := NewClientFromConfig(10*time.Second, cnf)
+	if err != nil {
+		t.Fatal("failed to prepare test client, err: ", err)
+	}
+	t.Run("close client test", func(t *testing.T) {
+		cli.Close()
+		if cli.activeNodes != nil {
+			t.Error("found active nodes in client after 'Close' operation")
+		}
+		for _, node := range cli.activeNodes {
+			if node.closed != true {
+				t.Errorf("found connected node (id: %s) after 'Close' operation", hex.EncodeToString(node.id))
+			}
+		}
+
+	})
+}
+
+func TestClient_Store(t *testing.T) {
+	addrList := address.List{
+		Addresses: []*address.UDP{
+			{
+				net.IPv4(1, 1, 1, 1).To4(),
+				11111,
+			},
+			{
+				net.IPv4(2, 2, 2, 2).To4(),
+				22222,
+			},
+			{
+				net.IPv4(3, 3, 3, 3).To4(),
+				333333,
+			},
+		},
+		Version:    0,
+		ReinitDate: 0,
+		Priority:   0,
+		ExpireAt:   0,
+	}
+	tlAddrList, err := tl.Serialize(addrList, true)
+	if err != nil {
+		t.Fatal()
+	}
+
+	nameAddr := []byte("address")
+	var index int32 = 0
+
+	cliePubK, err := hex.DecodeString("93037f2613f6063869544caacac3eabbd7456e4d6e731478fccc961c137d1284")
+	if err != nil {
+		t.Fatal("failed to prepare test client pub key, err: ", err)
+	}
+
+	cliePrivK, err := hex.DecodeString("83590f541d37b783aa504049bab792696d12bbec3d23a954353300f816ca8b9693037f2613f6063869544caacac3eabbd7456e4d6e731478fccc961c137d1284")
+	if err != nil {
+		t.Fatal("failed to prepare test id, err: ", err)
+	}
+
+	_, err = adnl.ToKeyID(adnl.PublicKeyED25519{cliePubK})
+	if err != nil {
+		t.Fatal("failed to prepare test key id, err: ", err)
+	}
+
+	NodePKey, err := hex.DecodeString("135da090fa178b960de48655108b50b5ed3a09942f44a0a505c76cbd171d4ae9")
+	if err != nil {
+		t.Fatal("failed to prepare test id, err: ", err)
+	}
+
+	NodeSign, err := hex.DecodeString("f06b491e4cc26afd989e2409a1fb155d993567dde9a68b1603d35df6a390195b757f2aca3968a46493f5ee513f5f040c10b6e21b988f48e0781fe81aa9226d05")
+	if err != nil {
+		t.Fatal("failed to prepare test sign, err: ", err)
+	}
+	testNode := &Node{
+		adnl.PublicKeyED25519{Key: NodePKey},
+		&address.List{
+			Addresses: []*address.UDP{
+				{net.IPv4(6, 6, 6, 6).To4(),
+					65432,
+				},
+			},
+			Version:    0,
+			ReinitDate: 0,
+			Priority:   0,
+			ExpireAt:   0,
+		},
+		1671102718,
+		NodeSign,
+	}
+
+	t.Run("positive store case", func(t *testing.T) {
+		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+			return MockADNL{
+				query: func(ctx context.Context, req, result tl.Serializable) error {
+					switch request := req.(type) {
+					case Ping:
+						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
+					case tl.Raw:
+						var rowReq any
+						_, err := tl.Parse(&rowReq, request, true)
+						if err != nil {
+							t.Fatal("failed to parse test request, err: ", err)
+						}
+						switch rowReqType := rowReq.(type) {
+						case FindNode:
+							if addr == "185.86.79.9:22096" {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{testNode}}))
+							} else if addr == "" {
+
+							} else {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{nil}))
+							}
+						case Store:
+							if addr != "6.6.6.6:65432" && addr != "178.18.243.132:15888" {
+								t.Errorf("invalid node to store: check priority list")
+							}
+							sign := rowReqType.Value.Signature
+							rowReqType.Value.Signature = nil
+							dataToCheck, err := tl.Serialize(rowReqType.Value, true)
+							if err != nil {
+								t.Fatal("failed to serialize test value, err: ", err)
+							}
+							check := ed25519.Verify(rowReqType.Value.KeyDescription.ID.(adnl.PublicKeyED25519).Key, dataToCheck, sign)
+							if check != true {
+								t.Log("bad sign received!")
+								return fmt.Errorf("bad data (invalide sign)")
+							} else {
+								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+							}
+						}
+					default:
+						t.Fatalf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
+					}
+					return nil
+				},
+				close: func() {
+				},
+			}, nil
+		}
+
+		cli, err := NewClientFromConfig(10*time.Second, cnf)
+		if err != nil {
+			t.Fatal("failed to prepare test client, err: ", err)
+		}
+
+		count, _, err := cli.Store(context.Background(), nameAddr, index, tlAddrList, time.Hour, cliePrivK, 2)
+		if err != nil {
+			t.Errorf(err.Error())
+		}
+		if count != 2 {
+			t.Errorf("got '%d' copies count, want '2'", count)
+		}
+	})
 }

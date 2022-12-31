@@ -120,8 +120,12 @@ func (p *priorityList) markNotUsed(node *dhtNode) {
 
 	id := hex.EncodeToString(node.id)
 
-	res := p.list
-	for res != nil && res.id == id {
-		res.used = false
+	curNode := p.list
+	for curNode != nil {
+		if curNode.id == id {
+			curNode.used = false
+			break
+		}
+		curNode = curNode.next
 	}
 }
