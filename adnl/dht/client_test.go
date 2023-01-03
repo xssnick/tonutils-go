@@ -48,42 +48,34 @@ var cnf = &liteclient.GlobalConfig{
 				{
 					Type: "dht.node",
 					ID: liteclient.ServerID{
-						"pub.ed25519",
-						"6PGkPQSbyFp12esf1NqmDOaLoFA8i9+Mp5+cAx5wtTU="},
+						Type: "pub.ed25519",
+						Key:  "6PGkPQSbyFp12esf1NqmDOaLoFA8i9+Mp5+cAx5wtTU="},
 					AddrList: liteclient.DHTAddressList{
-						"adnl.addressList",
-						[]liteclient.DHTAddress{
+						Type: "adnl.addressList",
+						Addrs: []liteclient.DHTAddress{
 							{
 								"adnl.address.udp",
 								-1185526007,
 								22096,
 							},
-						},
-						0,
-						0,
-						0,
-						0},
+						}},
 					Version:   -1,
 					Signature: "L4N1+dzXLlkmT5iPnvsmsixzXU0L6kPKApqMdcrGP5d9ssMhn69SzHFK+yIzvG6zQ9oRb4TnqPBaKShjjj2OBg==",
 				},
 				{
 					Type: "dht.node",
 					ID: liteclient.ServerID{
-						"pub.ed25519",
-						"bn8klhFZgE2sfIDfvVI6m6+oVNi1nBRlnHoxKtR9WBU="},
+						Type: "pub.ed25519",
+						Key:  "bn8klhFZgE2sfIDfvVI6m6+oVNi1nBRlnHoxKtR9WBU="},
 					AddrList: liteclient.DHTAddressList{
-						"adnl.addressList",
-						[]liteclient.DHTAddress{
+						Type: "adnl.addressList",
+						Addrs: []liteclient.DHTAddress{
 							{
 								"adnl.address.udp",
 								-1307380860,
 								15888,
 							},
-						},
-						0,
-						0,
-						0,
-						0},
+						}},
 					Version:   -1,
 					Signature: "fQ5zAa6ot4pfFWzvuJOR8ijM5ELWndSDsRhFKstW1tqVSNfwAdOC7tDC8mc4vgTJ6fSYSWmhnXGK/+T5f6sDCw==",
 				},
@@ -318,7 +310,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	}
 
 	pubKey1 := ed25519.PublicKey(byteKey1)
-	adnlPubKey1 := adnl.PublicKeyED25519{pubKey1}
+	adnlPubKey1 := adnl.PublicKeyED25519{Key: pubKey1}
 
 	tKeyId1, err := adnl.ToKeyID(adnlPubKey1)
 	if err != nil {
@@ -341,7 +333,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	}
 
 	pubKey2 := ed25519.PublicKey(byteKey2)
-	adnlPubKey2 := adnl.PublicKeyED25519{pubKey2}
+	adnlPubKey2 := adnl.PublicKeyED25519{Key: pubKey2}
 
 	tKeyId2, err := adnl.ToKeyID(adnlPubKey2)
 	if err != nil {
@@ -697,7 +689,10 @@ func TestClient_Close(t *testing.T) {
 		}, nil
 	}
 
-	cli, err := NewClientFromConfig(10*time.Second, cnf)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cli, err := NewClientFromConfig(ctx, cnf)
 	if err != nil {
 		t.Fatal("failed to prepare test client, err: ", err)
 	}
@@ -835,7 +830,10 @@ func TestClient_Store(t *testing.T) {
 			}, nil
 		}
 
-		cli, err := NewClientFromConfig(10*time.Second, cnf)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		cli, err := NewClientFromConfig(ctx, cnf)
 		if err != nil {
 			t.Fatal("failed to prepare test client, err: ", err)
 		}

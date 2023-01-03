@@ -157,7 +157,7 @@ func (s *Server) Address() []byte {
 func (s *Server) updateDHT(ctx context.Context) error {
 	addr := s.adnlServer.GetAddressList()
 
-	id, err := s.dht.StoreAddress(ctx, addr, 10*time.Minute, s.key, 3)
+	_, id, err := s.dht.StoreAddress(ctx, addr, 10*time.Minute, s.key, 3)
 	if err != nil {
 		return err
 	}
