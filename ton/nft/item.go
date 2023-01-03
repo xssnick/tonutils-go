@@ -41,6 +41,10 @@ func NewItemClient(api TonApi, nftAddr *address.Address) *ItemClient {
 	}
 }
 
+func (c *ItemClient) GetNFTAddress() *address.Address {
+	return c.addr
+}
+
 func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 	b, err := c.api.CurrentMasterchainInfo(ctx)
 	if err != nil {

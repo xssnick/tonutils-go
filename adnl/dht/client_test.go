@@ -274,7 +274,10 @@ func TestClient_FindValue(t *testing.T) {
 				}, nil
 			}
 
-			dhtCli, err := NewClientFromConfig(10*time.Second, cnf)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			dhtCli, err := NewClientFromConfig(ctx, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -385,7 +388,11 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 					},
 				}, nil
 			}
-			cli, err := NewClientFromConfig(10*time.Second, cnf)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			cli, err := NewClientFromConfig(ctx, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -512,7 +519,11 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 				},
 			}, nil
 		}
-		cli, err := NewClientFromConfig(10*time.Second, cnf)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		cli, err := NewClientFromConfig(ctx, cnf)
 		if err != nil {
 			t.Fatal("failed to prepare test client, err:", err)
 		}
@@ -629,7 +640,10 @@ func TestClient_FindValueRaw(t *testing.T) {
 				}, nil
 			}
 
-			cli, err := NewClientFromConfig(10*time.Second, cnf)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			cli, err := NewClientFromConfig(ctx, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
