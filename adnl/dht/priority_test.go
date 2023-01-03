@@ -1,6 +1,7 @@
 package dht
 
 import (
+	"bytes"
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/adnl"
 	"testing"
@@ -96,5 +97,110 @@ func TestPriorityList_addNode(t *testing.T) {
 			}
 		}
 	})
+}
 
+func TestPriorityList_markNotUsed(t *testing.T) {
+	adnlAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	siteAddr, err := hex.DecodeString(adnlAddr)
+	if err != nil {
+		t.Fatal("failed to prepare test site address, err: ", err.Error())
+	}
+	k := Key{
+		ID:    siteAddr,
+		Name:  []byte("address"),
+		Index: 0,
+	}
+	keyId, err := adnl.ToKeyID(k)
+	if err != nil {
+		t.Fatal("failed to prepare test key id")
+	}
+
+	pubKey1 := "a87e430f621471f0b1ad8f9004d81909ec55cb3a6efbfc4da326ec5e004eecf5"
+	tPubKey1, err := hex.DecodeString(pubKey1)
+	if err != nil {
+		t.Fatal("failed to prepare test public key")
+	}
+
+	kId1, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey1})
+	if err != nil {
+		t.Fatal("failed to prepare test key ID")
+	}
+
+	pubKey2 := "3d496fbb1ed8d395e7b31969f9f33cce8530631d499ecec70c7c54ecdf1ca47e"
+	tPubKey2, err := hex.DecodeString(pubKey2)
+	if err != nil {
+		t.Fatal("failed to prepare test public key")
+	}
+
+	kId2, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey2})
+	if err != nil {
+		t.Fatal("failed to prepare test key ID")
+	}
+
+	pubKey3 := "d67fb87bb90d765ff09178cde04d8d8cca5f63146e0eb882ebddf53559c6716a"
+	tPubKey3, err := hex.DecodeString(pubKey3)
+	if err != nil {
+		t.Fatal("failed to prepare test public key")
+	}
+
+	kId3, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey3})
+	if err != nil {
+		t.Fatal("failed to prepare test key ID")
+	}
+
+	node1 := dhtNode{
+		id:   kId1,
+		adnl: nil,
+	}
+
+	node2 := dhtNode{
+		id:   kId2,
+		adnl: nil,
+	}
+
+	node3 := dhtNode{
+		id:   kId3,
+		adnl: nil,
+	}
+
+	pList := newPriorityList(12, keyId)
+	ok := pList.addNode(&node1)
+	if !ok {
+		t.Fatal()
+	}
+	ok = pList.addNode(&node2)
+	if !ok {
+		t.Fatal()
+	}
+	ok = pList.addNode(&node3)
+	if !ok {
+		t.Fatal()
+	}
+	curNode := pList.list
+	for curNode != nil {
+		if curNode.used {
+			t.Fatal("find used node before use for some reason")
+		}
+		curNode = curNode.next
+	}
+
+	usedNode, _ := pList.getNode()
+
+	t.Run("markNotUsed test", func(t *testing.T) {
+		pList.markNotUsed(usedNode)
+
+		curNode = pList.list
+		for curNode != nil {
+			if bytes.Equal(curNode.node.id, usedNode.id) {
+				if curNode.used != false {
+					t.Errorf("want 'false' use status, got '%v'", curNode.used)
+				}
+			} else {
+				if curNode.used == true {
+					t.Errorf("find used node for some reason")
+				}
+			}
+			curNode = curNode.next
+		}
+	})
 }
