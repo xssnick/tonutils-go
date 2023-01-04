@@ -30,7 +30,7 @@ func main() {
 	}
 
 	resolver := dns.NewDNSClient(api, root)
-	domain, err := resolver.Resolve(ctx, "searching.ton")
+	domain, err := resolver.Resolve(ctx, "utils.ton")
 	if err != nil {
 		panic(err)
 	}

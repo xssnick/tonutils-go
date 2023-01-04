@@ -112,7 +112,11 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 	data, err := res.Cell(1)
 	if err != nil {
 		if yes, _ := res.IsNil(1); yes {
-			return nil, ErrNoSuchRecord
+			// domain is not taken from auction, consider it as a valid domain but with no records
+			return &Domain{
+				Records:            cell.NewDict(256),
+				ItemEditableClient: nft.NewItemEditableClient(c.api, contractAddr),
+			}, nil
 		}
 		return nil, fmt.Errorf("data get err: %w", err)
 	}
