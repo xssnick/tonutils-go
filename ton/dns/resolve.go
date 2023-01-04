@@ -216,6 +216,7 @@ func (d *Domain) GetSiteRecord() []byte {
 
 func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell {
 	const OPChangeDNSRecord = 0x4eb1f0f9
+
 	h := sha256.New()
 	h.Write([]byte(name))
 

@@ -168,7 +168,7 @@ func (s *Server) updateDHT(ctx context.Context) error {
 		return err
 	}
 
-	Logger("DHT address record for ADNL site was updated successfully to ", addr.Addresses[0].IP.String(), addr.Addresses[0].Port)
+	Logger("DHT ADNL address record for TON Site was updated successfully to ", addr.Addresses[0].IP.String(), addr.Addresses[0].Port)
 	return nil
 }
 
