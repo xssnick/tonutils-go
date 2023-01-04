@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math/rand"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -214,10 +215,13 @@ func (d *Domain) GetSiteRecord() []byte {
 }
 
 func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell {
+	const OPChangeDNSRecord = 0x4eb1f0f9
 	h := sha256.New()
 	h.Write([]byte(name))
 
-	return cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).MustStoreRef(value).EndCell()
+	return cell.BeginCell().MustStoreUInt(OPChangeDNSRecord, 32).
+		MustStoreUInt(rand.Uint64(), 64).
+		MustStoreSlice(h.Sum(nil), 256).MustStoreRef(value).EndCell()
 }
 
 func (d *Domain) BuildSetSiteRecordPayload(adnlAddress []byte) *cell.Cell {

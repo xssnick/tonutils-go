@@ -25,6 +25,8 @@ var _SchemaByID = map[uint32]reflect.Type{}
 var _BoolTrue = tlCRC("boolTrue = Bool")
 var _BoolFalse = tlCRC("boolFalse = Bool")
 
+var Logger = func(a ...any) {}
+
 func Serialize(v Serializable, boxed bool) ([]byte, error) {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Pointer {
@@ -537,7 +539,7 @@ func Register(typ any, tl string) uint32 {
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, id)
 
-	println("TL Registered:", hex.EncodeToString(b), tl)
+	Logger("TL Registered:", hex.EncodeToString(b), tl)
 	return id
 }
 
