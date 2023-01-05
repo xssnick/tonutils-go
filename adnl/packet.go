@@ -40,7 +40,7 @@ func init() {
 
 var ErrTooShortData = errors.New("too short data")
 
-func (a *ADNL) parsePacket(data []byte) (_ *PacketContent, err error) {
+func parsePacket(data []byte) (_ *PacketContent, err error) {
 	var packet PacketContent
 
 	if len(data) < 4 {

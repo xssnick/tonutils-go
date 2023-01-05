@@ -236,10 +236,6 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 		rlInfo.ClientLastUsed = time.Now()
 	}
 
-	if client == nil {
-		panic(fmt.Sprintln(rlInfo.Resolved))
-	}
-
 	rlInfo.mx.Unlock()
 
 	req := Request{

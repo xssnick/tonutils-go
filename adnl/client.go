@@ -97,16 +97,29 @@ func listenPacketsAsClient(a *ADNL, conn net.Conn) error {
 		if bytes.Equal(id, a.channel.id) { // message in channel
 			err = a.channel.process(buf)
 			if err != nil {
-				Logger("failed to decode packet in channel: ", err)
+				Logger("failed to decode packet in channel:", err)
 				continue
 			}
 		} else if bytes.Equal(id, rootID) { // message in root connection
-			err = a.process(buf)
+			data, err := decodePacket(a.ourKey, buf)
 			if err != nil {
 				return fmt.Errorf("failed to decode packet: %w", err)
 			}
+
+			packet, err := parsePacket(data)
+			if err != nil {
+				Logger("failed to parse packet:", err)
+				continue
+			}
+
+			err = a.processPacket(packet, nil)
+			if err != nil {
+				Logger("failed to process packet:", err)
+				continue
+			}
 		} else {
-			Logger("got message from unknown channel id: ", hex.EncodeToString(id))
+			Logger("got message from unknown channel id:", hex.EncodeToString(id))
+			continue
 		}
 	}
 }

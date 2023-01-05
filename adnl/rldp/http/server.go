@@ -139,7 +139,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 				wait = 5 * time.Second
 				continue
 			}
-			wait = 3 * time.Minute
+			wait = 1 * time.Minute
 		}
 	}()
 
@@ -157,7 +157,7 @@ func (s *Server) Address() []byte {
 func (s *Server) updateDHT(ctx context.Context) error {
 	addr := s.adnlServer.GetAddressList()
 
-	_, id, err := s.dht.StoreAddress(ctx, addr, 10*time.Minute, s.key, 3)
+	_, id, err := s.dht.StoreAddress(ctx, addr, 15*time.Minute, s.key, 6)
 	if err != nil {
 		return err
 	}

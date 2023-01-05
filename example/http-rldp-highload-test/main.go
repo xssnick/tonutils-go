@@ -42,9 +42,9 @@ func main() {
 	}()
 
 	var x int64
-	numClients := 100
+	numClients := 150
 
-	// 100 clients, parallel requests
+	// 150 clients, parallel requests
 	for i := 0; i < numClients; i++ {
 		go func() {
 			// it uses fake DHT, but real adnl and rldp through network

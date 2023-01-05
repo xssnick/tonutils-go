@@ -81,12 +81,13 @@ type ADNL struct {
 var Logger = log.Println
 
 func initADNL(key ed25519.PrivateKey) *ADNL {
+	tm := int32(time.Now().Unix())
 	return &ADNL{
 		ourAddresses: address.List{
-			Version:    int32(time.Now().Unix()),
-			ReinitDate: int32(time.Now().Unix()),
+			Version:    tm,
+			ReinitDate: tm,
 		},
-		reinitTime: 0, //int32(time.Now().Unix()),
+		reinitTime: tm,
 		ourKey:     key,
 		closer:     make(chan bool, 1),
 
@@ -115,19 +116,6 @@ func (a *ADNL) Close() {
 	}
 }
 
-func (a *ADNL) process(buf []byte) error {
-	data, err := a.decodePacket(buf)
-	if err != nil {
-		return fmt.Errorf("failed to decode packet: %w", err)
-	}
-
-	err = a.processPacket(data, nil)
-	if err != nil {
-		return fmt.Errorf("failed to process packet: %w", err)
-	}
-	return nil
-}
-
 func (c *Channel) process(buf []byte) error {
 	if c.wantConfirm {
 		// we got message in channel, no more confirmations required
@@ -139,19 +127,19 @@ func (c *Channel) process(buf []byte) error {
 		return fmt.Errorf("failed to decode packet: %w", err)
 	}
 
-	err = c.adnl.processPacket(data, c)
+	packet, err := parsePacket(data)
+	if err != nil {
+		return fmt.Errorf("failed to parse packet: %w", err)
+	}
+
+	err = c.adnl.processPacket(packet, c)
 	if err != nil {
 		return fmt.Errorf("failed to process packet: %w", err)
 	}
 	return nil
 }
 
-func (a *ADNL) processPacket(data []byte, ch *Channel) (err error) {
-	packet, err := a.parsePacket(data)
-	if err != nil {
-		return fmt.Errorf("failed to parse packet: %w", err)
-	}
-
+func (a *ADNL) processPacket(packet *PacketContent, ch *Channel) (err error) {
 	a.mx.Lock()
 	seqno := uint64(*packet.Seqno)
 	a.lastReceiveAt = time.Now()
@@ -168,13 +156,20 @@ func (a *ADNL) processPacket(data []byte, ch *Channel) (err error) {
 		a.confirmSeqno = uint64(*packet.Seqno)
 	}
 
-	if packet.ReinitDate != nil {
-		//	a.dstReinit = *packet.ReinitDate
+	if packet.ReinitDate != nil && *packet.ReinitDate > a.dstReinit {
+		// a.dstReinit = *packet.ReinitDate
+		// a.seqno = 0
+		//	a.channel = nil
+		//	a.confirmSeqno = 0
 		//	a.reinitTime = a.dstReinit
 	}
 
 	if packet.RecvPriorityAddrListVersion != nil {
 		a.ourAddrVerOnPeerSide = *packet.RecvPriorityAddrListVersion
+	}
+
+	if packet.RecvAddrListVersion != nil {
+		a.ourAddrVerOnPeerSide = *packet.RecvAddrListVersion
 	}
 
 	if packet.Address != nil {
@@ -550,12 +545,12 @@ func (a *ADNL) send(ctx context.Context, buf []byte) error {
 	return nil
 }
 
-func (a *ADNL) decodePacket(packet []byte) ([]byte, error) {
+func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 	pub := packet[0:32]
 	checksum := packet[32:64]
 	data := packet[64:]
 
-	key, err := SharedKey(a.ourKey, pub)
+	key, err := SharedKey(key, pub)
 	if err != nil {
 		return nil, err
 	}
