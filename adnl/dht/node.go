@@ -87,6 +87,7 @@ func (n *dhtNode) changeState(state int) {
 	if n.currentState == state {
 		return
 	}
+	n.currentState = state
 
 	if state == _StateFail {
 		// in case of fail - close connection
@@ -121,7 +122,6 @@ func (n *dhtNode) changeState(state int) {
 		n.initialized = true
 	}
 
-	n.currentState = state
 	n.onStateChange(n, state)
 }
 
@@ -338,7 +338,6 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 
 	err := a.Query(ctx, req, res)
 	if err != nil {
-		// n.changeState(_StateFail)
 		return err
 	}
 

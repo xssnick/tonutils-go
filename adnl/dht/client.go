@@ -365,7 +365,7 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 		if err != nil {
 			continue
 		}
-
+		
 		copiesLeft--
 	}
 

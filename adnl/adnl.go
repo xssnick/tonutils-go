@@ -111,7 +111,8 @@ func (a *ADNL) Close() {
 		}
 
 		if a.onDisconnect != nil {
-			a.onDisconnect(a.addr, a.peerKey)
+			// do it async to not get accidental deadlock
+			go a.onDisconnect(a.addr, a.peerKey)
 		}
 	}
 }
