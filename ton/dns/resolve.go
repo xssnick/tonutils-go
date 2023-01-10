@@ -36,6 +36,8 @@ type Client struct {
 	api  TonApi
 }
 
+var randomizer = rand.Uint64
+
 func RootContractAddr(api TonApi) (*address.Address, error) {
 	b, err := api.CurrentMasterchainInfo(context.Background())
 	if err != nil {
@@ -221,12 +223,12 @@ func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell
 	h.Write([]byte(name))
 
 	return cell.BeginCell().MustStoreUInt(OPChangeDNSRecord, 32).
-		MustStoreUInt(rand.Uint64(), 64).
-		MustStoreSlice(h.Sum(nil), 256).MustStoreRef(value).EndCell()
+		MustStoreUInt(randomizer(), 64).
+		MustStoreSlice(h.Sum(nil), 256).MustStoreBuilder(value.ToBuilder()).EndCell()
 }
 
 func (d *Domain) BuildSetSiteRecordPayload(adnlAddress []byte) *cell.Cell {
-	record := cell.BeginCell().MustStoreUInt(_CategoryADNLSite, 16).MustStoreSlice(adnlAddress, 256).EndCell()
+	record := cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreUInt(_CategoryADNLSite, 16).MustStoreSlice(adnlAddress, 256).EndCell()).EndCell()
 	return d.BuildSetRecordPayload("site", record)
 }
 
