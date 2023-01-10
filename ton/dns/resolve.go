@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math/rand"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -112,7 +113,11 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 	data, err := res.Cell(1)
 	if err != nil {
 		if yes, _ := res.IsNil(1); yes {
-			return nil, ErrNoSuchRecord
+			// domain is not taken from auction, consider it as a valid domain but with no records
+			return &Domain{
+				Records:            cell.NewDict(256),
+				ItemEditableClient: nft.NewItemEditableClient(c.api, contractAddr),
+			}, nil
 		}
 		return nil, fmt.Errorf("data get err: %w", err)
 	}
@@ -207,4 +212,25 @@ func (d *Domain) GetSiteRecord() []byte {
 	}
 
 	return addr
+}
+
+func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell {
+	const OPChangeDNSRecord = 0x4eb1f0f9
+
+	h := sha256.New()
+	h.Write([]byte(name))
+
+	return cell.BeginCell().MustStoreUInt(OPChangeDNSRecord, 32).
+		MustStoreUInt(rand.Uint64(), 64).
+		MustStoreSlice(h.Sum(nil), 256).MustStoreRef(value).EndCell()
+}
+
+func (d *Domain) BuildSetSiteRecordPayload(adnlAddress []byte) *cell.Cell {
+	record := cell.BeginCell().MustStoreUInt(_CategoryADNLSite, 16).MustStoreSlice(adnlAddress, 256).EndCell()
+	return d.BuildSetRecordPayload("site", record)
+}
+
+func (d *Domain) BuildSetWalletRecordPayload(addr *address.Address) *cell.Cell {
+	record := cell.BeginCell().MustStoreUInt(_CategoryContractAddr, 16).MustStoreAddr(addr).EndCell()
+	return d.BuildSetRecordPayload("wallet", record)
 }

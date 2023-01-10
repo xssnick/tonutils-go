@@ -30,7 +30,7 @@ type RLDP struct {
 
 	recvStreams map[string]*decoderStream
 
-	onQuery      func(query *Query) error
+	onQuery      func(transferId []byte, query *Query) error
 	onDisconnect func()
 
 	mx sync.RWMutex
@@ -61,7 +61,7 @@ func NewClient(a ADNL) *RLDP {
 	return r
 }
 
-func (r *RLDP) SetOnQuery(handler func(query *Query) error) {
+func (r *RLDP) SetOnQuery(handler func(transferId []byte, query *Query) error) {
 	r.onQuery = handler
 }
 
@@ -94,6 +94,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		r.mx.RUnlock()
 
 		if stream == nil {
+			// TODO: limit unexpected transfer size to 1024 bytes
 			if m.TotalSize > _MTU || m.TotalSize <= 0 {
 				return fmt.Errorf("bad rldp packet total size")
 			}
@@ -185,8 +186,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 				case Query:
 					handler := r.onQuery
 					if handler != nil {
+						transferId := make([]byte, 32)
+						copy(transferId, m.TransferID)
+
 						go func() {
-							if err = handler(&rVal); err != nil {
+							if err = handler(transferId, &rVal); err != nil {
 								log.Println("failed to handle query: ", err)
 							}
 						}()
@@ -220,8 +224,14 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		r.mx.Unlock()
 
 		if t != nil {
-			t <- true
+			close(t)
 		}
+	case Confirm: // receiver has received some parts
+		// TODO: use confirmed seqno to limit sends
+		// id := hex.EncodeToString(m.TransferID)
+		// r.mx.RLock()
+		// t := r.activeTransfers[id]
+		// r.mx.RUnlock()
 	default:
 		return fmt.Errorf("unexpected message type %s", reflect.TypeOf(m).String())
 	}
@@ -229,19 +239,13 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 	return nil
 }
 
-func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
+func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte) error {
 	enc, err := raptorq.NewRaptorQ(_SymbolSize).CreateEncoder(data)
 	if err != nil {
 		return fmt.Errorf("failed to create raptorq object encoder: %w", err)
 	}
 
-	tid := make([]byte, 32)
-	_, err = rand.Read(tid)
-	if err != nil {
-		return err
-	}
-
-	id := hex.EncodeToString(tid)
+	id := hex.EncodeToString(transferId)
 
 	ch := make(chan bool, 1)
 	r.mx.Lock()
@@ -282,7 +286,7 @@ func (r *RLDP) sendMessageParts(ctx context.Context, data []byte) error {
 		}
 
 		p := MessagePart{
-			TransferID: tid,
+			TransferID: transferId,
 			FecType: FECRaptorQ{
 				DataSize:     int32(len(data)),
 				SymbolSize:   _SymbolSize,
@@ -344,8 +348,14 @@ func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result t
 	sndCtx, cancel := context.WithDeadline(ctx, timeout)
 	defer cancel()
 
+	transferId := make([]byte, 32)
+	_, err = rand.Read(transferId)
+	if err != nil {
+		return err
+	}
+
 	go func() {
-		err = r.sendMessageParts(sndCtx, data)
+		err = r.sendMessageParts(sndCtx, transferId, data)
 		if err != nil {
 			res <- fmt.Errorf("failed to send query parts: %w", err)
 		}
@@ -363,9 +373,9 @@ func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result t
 	}
 }
 
-func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize int64, queryID []byte, answer tl.Serializable) error {
+func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize int64, queryId, toTransferId []byte, answer tl.Serializable) error {
 	a := Answer{
-		ID:   queryID,
+		ID:   queryId,
 		Data: answer,
 	}
 
@@ -378,7 +388,22 @@ func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize int64, queryID []by
 		return fmt.Errorf("too big answer for that client, client wants no more than %d bytes", maxAnswerSize)
 	}
 
-	if err = r.sendMessageParts(ctx, data); err != nil {
+	transferId := make([]byte, 32)
+
+	if toTransferId != nil {
+		// if we have transfer to respond, invert it and use id
+		copy(transferId, toTransferId)
+		for i := range transferId {
+			transferId[i] ^= 0xFF
+		}
+	} else {
+		_, err = rand.Read(transferId)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err = r.sendMessageParts(ctx, transferId, data); err != nil {
 		return fmt.Errorf("failed to send partitioned answer: %w", err)
 	}
 	return nil

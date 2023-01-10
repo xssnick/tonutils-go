@@ -22,7 +22,9 @@ func main() {
 
 	mx := http.NewServeMux()
 	mx.HandleFunc("/hello", func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = writer.Write([]byte("hello world"))
+		//		writer.Header().Set("Transfer-Encoding", "chunked")
+		_, _ = writer.Write([]byte("abc"))
+		_, _ = writer.Write([]byte("2223"))
 	})
 
 	dht := &MockDHT{
@@ -40,15 +42,15 @@ func main() {
 	}()
 
 	var x int64
-	numClients := 100
+	numClients := 150
 
-	// 100 clients, parallel requests
+	// 150 clients, parallel requests
 	for i := 0; i < numClients; i++ {
 		go func() {
 			// it uses fake DHT, but real adnl and rldp through network
 			client := &http.Client{
 				Transport: rldphttp.NewTransport(dht, nil),
-				Timeout:   300 * time.Millisecond,
+				//Timeout:   300 * time.Millisecond,
 			}
 
 			for {
@@ -57,12 +59,13 @@ func main() {
 					continue
 				}
 
-				_, err = io.ReadAll(resp.Body)
+				dat, err := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				if err != nil {
 					println("err body", err.Error())
 					continue
 				}
+				_ = dat
 
 				atomic.AddInt64(&x, 1)
 			}
@@ -90,8 +93,8 @@ type MockDHT struct {
 	pub  ed25519.PublicKey
 }
 
-func (m *MockDHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) ([]byte, error) {
-	return nil, nil
+func (m *MockDHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (uint, []byte, error) {
+	return 0, nil, nil
 }
 
 func (m *MockDHT) Close() {}

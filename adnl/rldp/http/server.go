@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -8,9 +9,11 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,6 +22,7 @@ import (
 )
 
 type ADNLServer interface {
+	GetAddressList() address.List
 	ListenAndServe(listenAddr string) (err error)
 	Close() error
 	SetConnectionHandler(func(client adnl.Client) error)
@@ -41,23 +45,29 @@ type Server struct {
 	Timeout time.Duration
 }
 
-type respWriter struct {
+type writerBuff struct {
+	client RLDP
+
 	server *Server
-	writer *dataStreamer
+	stream *dataStreamer
+
+	resp *respWriter
+
+	headerSent bool
+	handled    bool
 
 	maxAnswerSz int64
-	queryID     []byte
-	requestID   []byte
-
-	statusCode int
-
-	client  RLDP
-	headers http.Header
-
-	hasPayload bool
-	headerSent bool
+	queryId     []byte
+	requestId   []byte
+	transferId  []byte
 
 	mx sync.Mutex
+}
+
+type respWriter struct {
+	writer     *bufio.Writer
+	statusCode int
+	headers    http.Header
 }
 
 var Logger = log.Println
@@ -89,20 +99,6 @@ func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 }
 
 func (s *Server) ListenAndServe(listenAddr string) error {
-	a := strings.Split(listenAddr, ":")
-	if len(a) != 2 {
-		return fmt.Errorf("invalid listen address")
-	}
-
-	ip := net.ParseIP(a[0]).To4()
-	if ip.Equal(net.IPv4zero) {
-		return fmt.Errorf("invalid listen ip")
-	}
-	port, err := strconv.ParseUint(a[1], 10, 16)
-	if err != nil {
-		return fmt.Errorf("invalid listen port")
-	}
-
 	go func() {
 		for {
 			select {
@@ -125,7 +121,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 	}()
 
 	go func() {
-		wait := time.Duration(0)
+		wait := 1 * time.Second
 		// refresh dht records
 		for {
 			select {
@@ -135,7 +131,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-			err := s.updateDHT(ctx, ip, uint16(port))
+			err := s.updateDHT(ctx)
 			cancel()
 
 			if err != nil {
@@ -143,7 +139,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 				wait = 5 * time.Second
 				continue
 			}
-			wait = 5 * time.Minute
+			wait = 1 * time.Minute
 		}
 	}()
 
@@ -158,16 +154,10 @@ func (s *Server) Address() []byte {
 	return s.id
 }
 
-func (s *Server) updateDHT(ctx context.Context, addr net.IP, port uint16) error {
-	id, err := s.dht.StoreAddress(ctx, address.List{
-		Addresses: []*address.UDP{
-			{
-				IP:   addr,
-				Port: int32(port),
-			},
-		},
-		Version: int32(time.Now().Unix()),
-	}, 45*time.Minute, s.key, 3)
+func (s *Server) updateDHT(ctx context.Context) error {
+	addr := s.adnlServer.GetAddressList()
+
+	_, id, err := s.dht.StoreAddress(ctx, addr, 15*time.Minute, s.key, 6)
 	if err != nil {
 		return err
 	}
@@ -178,7 +168,7 @@ func (s *Server) updateDHT(ctx context.Context, addr net.IP, port uint16) error 
 		return err
 	}
 
-	Logger("DHT address record for ADNL site was updated successfully to", addr)
+	Logger("DHT ADNL address record for TON Site was updated successfully to ", addr.Addresses[0].IP.String(), addr.Addresses[0].Port)
 	return nil
 }
 
@@ -195,8 +185,10 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
-	return func(query *rldp.Query) error {
+func (s *Server) handle(client RLDP, addr string) func(transferId []byte, msg *rldp.Query) error {
+	netAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort(addr))
+
+	return func(transferId []byte, query *rldp.Query) error {
 		switch req := query.Data.(type) {
 		case Request:
 			uri, err := url.Parse(req.URL)
@@ -220,14 +212,24 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				headers[header.Name] = append(headers[header.Name], header.Value)
 			}
 
-			w := &respWriter{
-				server:      s,
-				writer:      newDataStreamer(),
-				maxAnswerSz: query.MaxAnswerSize,
-				queryID:     query.ID,
-				requestID:   req.ID,
-				client:      client,
-				headers:     map[string][]string{},
+			ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
+			defer cancel()
+
+			reqBody := newDataStreamer()
+			if req.Method == "CONNECT" ||
+				len(headers["Content-Length"]) > 0 ||
+				len(headers["Transfer-Encoding"]) > 0 {
+				// request should have payload, fetch it in parallel and write to stream
+				go func() {
+					err = s.fetchPayload(ctx, req.ID, client, reqBody)
+					if err != nil {
+						reqBody.Close()
+						return
+					}
+					reqBody.Finish()
+				}()
+			} else {
+				reqBody.Finish()
 			}
 
 			httpReq := &http.Request{
@@ -237,20 +239,42 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 				ProtoMajor:    1,
 				ProtoMinor:    1,
 				Header:        headers,
-				Body:          w.writer,
+				Body:          reqBody,
 				ContentLength: contentLen,
 				Host:          uri.Host,
-				RemoteAddr:    addr,
+				RemoteAddr:    netAddr.IP.String(),
 				RequestURI:    uri.RequestURI(),
 			}
 
-			s.handler.ServeHTTP(w, httpReq)
+			stream := newDataStreamer()
 
-			err = w.flush()
+			wb := &writerBuff{
+				client:      client,
+				server:      s,
+				stream:      stream,
+				maxAnswerSz: query.MaxAnswerSize,
+				queryId:     query.ID,
+				requestId:   req.ID,
+				transferId:  transferId,
+			}
+
+			w := &respWriter{
+				writer:  bufio.NewWriterSize(wb, 4096),
+				headers: map[string][]string{},
+			}
+			wb.resp = w
+
+			s.handler.ServeHTTP(w, httpReq)
+			wb.handled = true
+			// flush write buffer, to commit data
+			err = w.writer.Flush()
+
+			// if no data was committed - it will send empty response
+			err = wb.flush(nil)
 			if err != nil {
 				return fmt.Errorf("failed to flush response for `%s`: %w", uri, err)
 			}
-			w.writer.Finish()
+			stream.Finish()
 		case GetNextPayloadPart:
 			s.mx.RLock()
 			stream := s.activeRequests[hex.EncodeToString(req.ID)]
@@ -266,10 +290,17 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
-			err = client.SendAnswer(ctx, query.MaxAnswerSize, query.ID, part)
+			err = client.SendAnswer(ctx, query.MaxAnswerSize, query.ID, transferId, part)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("failed to send answer: %w", err)
+			}
+
+			if part.IsLast {
+				s.mx.Lock()
+				delete(s.activeRequests, hex.EncodeToString(req.ID))
+				s.mx.Unlock()
+				_ = stream.Data.Close()
 			}
 		}
 
@@ -277,21 +308,36 @@ func (s *Server) handle(client RLDP, addr string) func(msg *rldp.Query) error {
 	}
 }
 
+func (s *Server) fetchPayload(ctx context.Context, requestID []byte, client RLDP, w io.Writer) error {
+	var seqno int32 = 0
+	last := false
+	for !last {
+		var part PayloadPart
+		err := client.DoQuery(ctx, _RLDPMaxAnswerSize, GetNextPayloadPart{
+			ID:           requestID,
+			Seqno:        seqno,
+			MaxChunkSize: _ChunkSize,
+		}, &part)
+		if err != nil {
+			return err
+		}
+
+		last = part.IsLast
+		_, err = w.Write(part.Data)
+		if err != nil {
+			return err
+		}
+
+		seqno++
+	}
+	return nil
+}
+
 func (r *respWriter) Header() http.Header {
 	return r.headers
 }
 
 func (r *respWriter) Write(bytes []byte) (int, error) {
-	if len(bytes) == 0 {
-		return 0, nil
-	}
-
-	r.hasPayload = true
-
-	if err := r.flush(); err != nil {
-		return 0, err
-	}
-
 	return r.writer.Write(bytes)
 }
 
@@ -299,49 +345,74 @@ func (r *respWriter) WriteHeader(statusCode int) {
 	r.statusCode = statusCode
 }
 
-func (r *respWriter) flush() error {
-	r.mx.Lock()
-	defer r.mx.Unlock()
+func (w *writerBuff) Write(bytes []byte) (n int, err error) {
+	if len(bytes) == 0 {
+		return 0, nil
+	}
 
-	if !r.headerSent {
-		r.headerSent = true
+	w.mx.Lock()
+	defer w.mx.Unlock()
 
-		if r.statusCode <= 0 {
-			r.statusCode = 200
+	if err := w.flush(bytes); err != nil {
+		return 0, err
+	}
+
+	return w.stream.Write(bytes)
+}
+
+func (w *writerBuff) flush(payload []byte) error {
+	if w.headerSent {
+		return nil
+	}
+	w.headerSent = true
+
+	if w.handled {
+		// if it is first and last write - we can define content length
+		if !strings.Contains(strings.ToLower(w.resp.headers.Get("Transfer-Encoding")), "chunked") {
+			w.resp.headers.Set("Content-Length", fmt.Sprint(len(payload)))
 		}
-
-		var headers []Header
-		for k, v := range r.headers {
-			for _, hdr := range v {
-				headers = append(headers, Header{
-					Name:  k,
-					Value: hdr,
-				})
-			}
+	} else {
+		if w.resp.headers.Get("Content-Length") == "" && w.resp.headers.Get("Transfer-Encoding") == "" {
+			// if it is not last write (flush inside handler), we use chunked transfer
+			w.resp.headers.Set("Transfer-Encoding", "chunked")
 		}
+	}
 
-		if r.hasPayload {
-			r.server.mx.Lock()
-			r.server.activeRequests[hex.EncodeToString(r.requestID)] = &payloadStream{
-				Data:      r.writer,
-				ValidTill: time.Now().Add(r.server.Timeout),
-			}
-			r.server.mx.Unlock()
-		}
+	if w.resp.statusCode <= 0 {
+		w.resp.statusCode = 200
+	}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		err := r.client.SendAnswer(ctx, r.maxAnswerSz, r.queryID, Response{
-			Version:    "HTTP/1.1",
-			StatusCode: int32(r.statusCode),
-			Reason:     http.StatusText(r.statusCode),
-			Headers:    headers,
-			NoPayload:  !r.hasPayload,
-		})
-		cancel()
-		if err != nil {
-			_ = r.writer.Close()
-			return fmt.Errorf("failed to send response for %s query: %w", hex.EncodeToString(r.queryID), err)
+	var headers []Header
+	for k, v := range w.resp.headers {
+		for _, hdr := range v {
+			headers = append(headers, Header{
+				Name:  k,
+				Value: hdr,
+			})
 		}
+	}
+
+	if len(payload) > 0 {
+		w.server.mx.Lock()
+		w.server.activeRequests[hex.EncodeToString(w.requestId)] = &payloadStream{
+			Data:      w.stream,
+			ValidTill: time.Now().Add(w.server.Timeout),
+		}
+		w.server.mx.Unlock()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	err := w.client.SendAnswer(ctx, w.maxAnswerSz, w.queryId, w.transferId, Response{
+		Version:    "HTTP/1.1",
+		StatusCode: int32(w.resp.statusCode),
+		Reason:     http.StatusText(w.resp.statusCode),
+		Headers:    headers,
+		NoPayload:  len(payload) == 0,
+	})
+	cancel()
+	if err != nil {
+		_ = w.stream.Close()
+		return fmt.Errorf("failed to send response for %s query: %w", hex.EncodeToString(w.queryId), err)
 	}
 
 	return nil

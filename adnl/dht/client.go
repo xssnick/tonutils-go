@@ -56,15 +56,15 @@ func NewClientFromConfigUrl(ctx context.Context, cfgUrl string) (*Client, error)
 		return nil, err
 	}
 
+	return NewClientFromConfig(ctx, cfg)
+}
+
+func NewClientFromConfig(ctx context.Context, cfg *liteclient.GlobalConfig) (*Client, error) {
 	dl, ok := ctx.Deadline()
 	if !ok {
 		dl = time.Now().Add(10 * time.Second)
 	}
 
-	return NewClientFromConfig(dl.Sub(time.Now()), cfg)
-}
-
-func NewClientFromConfig(connectTimeout time.Duration, cfg *liteclient.GlobalConfig) (*Client, error) {
 	var nodes []*Node
 	for _, node := range cfg.DHT.StaticNodes.Nodes {
 		key, err := base64.StdEncoding.DecodeString(node.ID.Key)
@@ -104,7 +104,7 @@ func NewClientFromConfig(connectTimeout time.Duration, cfg *liteclient.GlobalCon
 		nodes = append(nodes, n)
 	}
 
-	return NewClient(connectTimeout, nodes)
+	return NewClient(dl.Sub(time.Now()), nodes)
 }
 
 func NewClient(connectTimeout time.Duration, nodes []*Node) (*Client, error) {
@@ -365,7 +365,7 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 		if err != nil {
 			continue
 		}
-
+		
 		copiesLeft--
 	}
 

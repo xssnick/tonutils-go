@@ -129,12 +129,10 @@ func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 
 	ctr.XORKeyStream(packetData, packetData)
 
-	id, err := ToKeyID(PublicKeyAES{Key: c.encKey})
+	enc, err := ToKeyID(PublicKeyAES{Key: c.encKey})
 	if err != nil {
 		return nil, err
 	}
-
-	enc := id
 	enc = append(enc, checksum...)
 	enc = append(enc, packetData...)
 
