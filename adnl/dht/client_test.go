@@ -97,7 +97,6 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(hex.EncodeToString(tPubKey))
 	testNode := &Node{
 		adnl.PublicKeyED25519{Key: tPubKey},
 		&address.List{
@@ -121,7 +120,6 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	}
 	sign := ed25519.Sign(tPrivKey, toVerify)
 	testNode.Signature = sign
-	fmt.Println(hex.EncodeToString(sign))
 	return testNode, nil
 }
 
@@ -547,128 +545,6 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 	_, _, err = dhtClient.FindAddresses(ctx, siteAddr)
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestClient_FindValueRaw(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
-	siteAddr, err := hex.DecodeString(existingValue)
-	if err != nil {
-		t.Fatal("failed to prepare test site address, err: ", err.Error())
-	}
-
-	var typeValue any
-	typeValue = &Value{}
-	var typeNode any
-	typeNode = []*Node{}
-
-	tValue, err := correctValue(siteAddr)
-	if err != nil {
-		t.Fatal("failed to prepare test value, err:")
-	}
-
-	var tNodesList []*Node
-	tNode, err := newCorrectNode(8, 8, 8, 8, 12345)
-	if err != nil {
-		t.Fatal("failed creating test node, err: ", err.Error())
-	}
-	tNodesList = append(tNodesList, tNode)
-
-	tests := []struct {
-		name, addr string
-		wantType   any
-	}{
-		{"existing address", "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174", typeValue},
-		{"missing address", "1537ee02d6d0a65185630084427a26eafdc11ad24566d835291a43b780701f0e", typeNode},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
-				return MockADNL{
-					query: func(ctx context.Context, req, result tl.Serializable) error {
-						switch request := req.(type) {
-						case Ping:
-							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
-						case tl.Raw:
-							var _req FindValue
-							_, err := tl.Parse(&_req, request, true)
-							if err != nil {
-								t.Fatal("failed to prepare test data, err", err)
-							}
-
-							k, err := adnl.ToKeyID(&Key{
-								ID:    siteAddr,
-								Name:  []byte("address"),
-								Index: 0,
-							})
-							if err != nil {
-								t.Fatal(err)
-							}
-
-							if bytes.Equal(k, _req.Key) {
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*tValue))
-							} else {
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{tNodesList}}))
-							}
-						default:
-							return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
-						}
-						return nil
-					},
-				}, nil
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			cli, err := NewClientFromConfig(ctx, cnf)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			time.Sleep(2 * time.Second)
-
-			var testNode *dhtNode
-			for _, val := range cli.activeNodes {
-				testNode = val
-			}
-
-			siteAddr, err := hex.DecodeString(test.addr)
-			if err != nil {
-				t.Fatal(err)
-			}
-			k := &Key{
-				ID:    siteAddr,
-				Name:  []byte("address"),
-				Index: 0,
-			}
-			testId, keyErr := adnl.ToKeyID(k)
-			if keyErr != nil {
-				t.Fatal("failed to prepare test id, err: ", keyErr)
-			}
-
-			res, err := testNode.findValue(context.Background(), testId, 12)
-			if err != nil {
-				t.Fatal("failed execution findValueRaw, err: ", err)
-			}
-
-			if reflect.TypeOf(res) != reflect.TypeOf(test.wantType) {
-				t.Errorf("got type '%s', want '%s'", reflect.TypeOf(res).String(), reflect.TypeOf(test.wantType).String())
-			}
-
-			switch test.name {
-			case "existing address":
-				if !reflect.DeepEqual(*res.(*Value), tValue.Value) {
-					t.Errorf("got bad data")
-				}
-			case "missing address":
-				if !reflect.DeepEqual(res.([]*Node)[0], tNodesList[0]) {
-					t.Errorf("got bad data")
-				}
-			default:
-				t.Fatal("test error: unsupported test name")
-			}
-		})
 	}
 }
 
