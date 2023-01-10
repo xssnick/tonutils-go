@@ -16,13 +16,15 @@ import (
 	"time"
 )
 
+var connectOriginal = connect
+
 func newCorrectDhtNode(a byte, b byte, c byte, d byte, port string) (*dhtNode, error) {
 	tPubKey, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return nil, err
 	}
 
-	kId, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey})
+	kId, err := adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +518,10 @@ func TestNode_findValue(t *testing.T) {
 				}, nil
 			}
 
-			cli, err := NewClientFromConfig(10*time.Second, cnf)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			cli, err := NewClientFromConfig(ctx, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}

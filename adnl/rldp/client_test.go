@@ -207,7 +207,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 
 			cli := NewClient(tAdnl)
 			if test.tstSubName == "query case" {
-				cli.onQuery = func(query *Query) error {
+				cli.onQuery = func(transferId []byte, query *Query) error {
 					if !reflect.DeepEqual(query, tQuery) {
 						t.Fatal("got wrong query in handler")
 					}
@@ -263,8 +263,8 @@ func TestRLDP_handleMessage(t *testing.T) {
 				t.Errorf("got '%d' actiive transfers after handeling, want '0'", len(cli.activeTransfers))
 			}
 
-			if <-tChan != true {
-				t.Error("got 'false' in chan, want 'true'")
+			if <-tChan != false {
+				t.Error("got 'true' in chan, want 'false'")
 			}
 		})
 	}
@@ -355,7 +355,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 				v <- true
 			}
 		}()
-		err = cli.sendMessageParts(context.Background(), data)
+		err = cli.sendMessageParts(context.Background(), nil, data)
 		if err != nil {
 			t.Fatal("sendMessageParts execution failed, err: ", err)
 		}
@@ -364,7 +364,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 	t.Run("negative case (deadline exceeded)", func(t *testing.T) {
 		ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
 
-		err = cli.sendMessageParts(ctx, data)
+		err = cli.sendMessageParts(ctx, nil, data)
 		if !errors.Is(err, ctx.Err()) {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}
@@ -562,7 +562,7 @@ func TestRLDP_SendAnswer(t *testing.T) {
 				v <- true
 			}
 		}()
-		err := cli.SendAnswer(context.Background(), 100, tId, response)
+		err := cli.SendAnswer(context.Background(), 100, tId, nil, response)
 		if err != nil {
 			t.Fatal("SendAnswer execution failed, err: ", err)
 		}
@@ -576,7 +576,7 @@ func TestRLDP_SendAnswer(t *testing.T) {
 	t.Run("negative case (deadline exceeded)", func(t *testing.T) {
 		ctx, _ := context.WithTimeout(context.Background(), time.Second)
 
-		err := cli.SendAnswer(ctx, 100, tId, response)
+		err := cli.SendAnswer(ctx, 100, tId, nil, response)
 		if !strings.Contains(err.Error(), "context deadline exceeded") {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}

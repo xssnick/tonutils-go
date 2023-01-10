@@ -123,57 +123,6 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 	return testNode, nil
 }
 
-func newIncorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
-	testNode := Node{
-		adnl.PublicKeyED25519{},
-		&address.List{
-			Addresses: []*address.UDP{
-				{net.IPv4(a, b, c, d).To4(),
-					port,
-				},
-			},
-			Version:    0,
-			ReinitDate: 0,
-			Priority:   0,
-			ExpireAt:   0,
-		},
-		1671102718,
-		nil,
-	}
-	testNodeCorrupted := Node{
-		adnl.PublicKeyED25519{},
-		&address.List{
-			Addresses: []*address.UDP{
-				{net.IPv4(a^1, b^1, c^1, d^1).To4(),
-					port ^ 1,
-				},
-			},
-			Version:    0,
-			ReinitDate: 0,
-			Priority:   0,
-			ExpireAt:   0,
-		},
-		1671102718,
-		nil,
-	}
-
-	tPubKey, tPrivKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		return nil, err
-	}
-	testNode.ID = adnl.PublicKeyED25519{tPubKey}
-
-	toVerify, err := tl.Serialize(testNode, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize node: %w", err)
-	}
-
-	sign := ed25519.Sign(tPrivKey, toVerify)
-	testNodeCorrupted.Signature = sign
-
-	return &testNode, nil
-}
-
 func correctValue(tAdnlAddr []byte) (*ValueFoundResult, error) {
 	pubId, err := base64.StdEncoding.DecodeString("kn0+cePOZRw/FyE005Fj9w5MeSFp4589Ugv62TiK1Mo=")
 	if err != nil {
@@ -525,6 +474,9 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 }
 
 func TestClient_FindAddressesIntegration(t *testing.T) {
+	// restore after unit tests
+	connect = connectOriginal
+
 	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -713,6 +665,7 @@ func TestClient_Store(t *testing.T) {
 		if err != nil {
 			t.Fatal("failed to prepare test client, err: ", err)
 		}
+		time.Sleep(100 * time.Millisecond)
 
 		count, _, err := cli.Store(context.Background(), nameAddr, index, tlAddrList, time.Hour, cliePrivK, 2)
 		if err != nil {

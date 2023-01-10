@@ -127,6 +127,10 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if b.NanoTON().Uint64() == b2.NanoTON().Uint64() {
+		t.Fatal("balance was not changed after burn")
+	}
+
 	want := b.NanoTON().Uint64() - amt.NanoTON().Uint64()*2
 	got := b2.NanoTON().Uint64()
 	if want != got {

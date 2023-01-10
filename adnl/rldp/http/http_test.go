@@ -75,14 +75,14 @@ func Test_ClientServer(t *testing.T) {
 
 	dht := &MockDHT{
 		ip:   "127.0.0.1",
-		port: 9056,
+		port: 9076,
 		pub:  srvPub,
 	}
 
 	s := NewServer(srvKey, dht, mx)
 
 	go func() {
-		if err = s.ListenAndServe("127.0.0.1:9056"); err != nil {
+		if err = s.ListenAndServe("127.0.0.1:9076"); err != nil {
 			t.Fatal(err)
 		}
 	}()
@@ -134,14 +134,14 @@ func BenchmarkServer(b *testing.B) {
 
 	dht := &MockDHT{
 		ip:   "127.0.0.1",
-		port: 9056,
+		port: 9076,
 		pub:  srvPub,
 	}
 
 	s := NewServer(srvKey, dht, mx)
 
 	go func() {
-		if err = s.ListenAndServe("127.0.0.1:9056"); err != nil {
+		if err = s.ListenAndServe("127.0.0.1:9076"); err != nil {
 			b.Fatal(err)
 		}
 	}()

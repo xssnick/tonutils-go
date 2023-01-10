@@ -162,15 +162,18 @@ func (c *Client) Close() {
 
 func (c *Client) nodeStateHandler(id string) func(node *dhtNode, state int) {
 	return func(node *dhtNode, state int) {
+		c.mx.Lock()
+		defer c.mx.Unlock()
+
+		if c.activeNodes == nil {
+			return
+		}
+
 		switch state {
 		case _StateFail:
-			c.mx.Lock()
 			delete(c.activeNodes, id)
-			c.mx.Unlock()
 		case _StateThrottle, _StateActive: // TODO: handle throttle in a diff list
-			c.mx.Lock()
 			c.activeNodes[id] = node
-			c.mx.Unlock()
 		}
 	}
 }
@@ -365,7 +368,7 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 		if err != nil {
 			continue
 		}
-		
+
 		copiesLeft--
 	}
 
