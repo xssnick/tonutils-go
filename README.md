@@ -41,6 +41,10 @@ If you love this library and want to support its development you can donate any 
   - [Create](#Cells)
   - [Parse](#Cells)
   - [TLB Loader/Serializer](#TLB-Loader)
+- [Network](https://github.com/xssnick/tonutils-go/tree/master/adnl)
+  - [ADNL UDP](https://github.com/xssnick/tonutils-go/blob/master/adnl/adnl_test.go)
+  - [TON Site request](https://github.com/xssnick/tonutils-go/blob/master/example/site-request/main.go)
+  - [RLDP-HTTP Client-Server](https://github.com/xssnick/tonutils-go/blob/master/example/http-rldp-highload-test/main.go)
 - [Custom reconnect policy](#Custom-reconnect-policy)
 - [Features to implement](#Features-to-implement)
 
@@ -406,12 +410,16 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Cell dictionaries support
 * ✅ MustLoad methods
 * ✅ Parse global config json
-* Event subscriptions
-* Payment channels
-* ✅ DNS
-* Merkle proofs
 * ✅ Jettons
-
+* ✅ DNS
+* ✅ ADNL UDP Client/Server
+* ✅ RLDP Client/Server
+* ✅ TON Sites Client/Server
+* ✅ DHT Client
+* DHT Server
+* Payment channels
+* Merkle proofs
+* TON Storage
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue
