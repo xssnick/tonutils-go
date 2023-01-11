@@ -65,7 +65,6 @@ type testHeader struct {
 	Value string `tl:"string"`
 }
 
-// improve cover with stream.finishedAt != nil case
 func TestRLDP_handleMessage(t *testing.T) {
 	tId := make([]byte, 32)
 	_, err := rand.Read(tId)
@@ -239,6 +238,37 @@ func TestRLDP_handleMessage(t *testing.T) {
 		msgComplete := &adnl.MessageCustom{
 			Data: tComplete,
 		}
+
+		t.Run("message part case: got packet for a finished stream", func(t *testing.T) {
+			tAdnl := MockADNL{
+				setCustomMessageHandler: nil,
+				setDisconnectHandler:    nil,
+				sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+					r, ok := req.(Complete)
+					if !ok {
+						t.Fatalf("want 'Complete' type, got '%s'", reflect.TypeOf(req).String())
+					}
+					if !bytes.Equal(r.TransferID, tId) {
+						t.Error("wrong transfer id in 'Complete' message")
+					}
+					return nil
+				},
+				close: nil,
+			}
+			cli := NewClient(tAdnl)
+			err := cli.handleMessage(msgQuery)
+			if err != nil {
+				t.Fatal("failed to execute handleMessage func, err: ", err)
+			}
+			// emulate repeated msg receiving
+			err = cli.handleMessage(msgQuery)
+			if err != nil {
+				t.Fatal("failed to execute handleMessage func, err: ", err)
+			}
+			if cli.recvStreams[hex.EncodeToString(tId)].lastCompleteAt == nil {
+				t.Error("got lastCompleteAt == nil, want != nil")
+			}
+		})
 
 		t.Run("message complete case", func(t *testing.T) {
 			tAdnl := MockADNL{
