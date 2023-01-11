@@ -44,6 +44,7 @@ type srvProcessor struct {
 type Server struct {
 	conn net.PacketConn
 
+	dhtIP      net.IP
 	addrList   address.List
 	key        ed25519.PrivateKey
 	processors map[string]*srvProcessor
@@ -70,15 +71,22 @@ func (s *Server) GetAddressList() address.List {
 	return s.addrList
 }
 
+func (s *Server) SetExternalIP(ip net.IP) {
+	s.dhtIP = ip
+}
+
 func (s *Server) ListenAndServe(listenAddr string) (err error) {
 	adr := strings.Split(listenAddr, ":")
 	if len(adr) != 2 {
 		return fmt.Errorf("invalid listen address")
 	}
 
-	ip := net.ParseIP(adr[0]).To4()
+	ip := s.dhtIP
+	if ip == nil {
+		ip = net.ParseIP(adr[0]).To4()
+	}
 	if ip.Equal(net.IPv4zero) {
-		return fmt.Errorf("invalid listen ip")
+		return fmt.Errorf("invalid external ip")
 	}
 	port, err := strconv.ParseUint(adr[1], 10, 16)
 	if err != nil {

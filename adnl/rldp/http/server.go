@@ -26,6 +26,7 @@ type ADNLServer interface {
 	ListenAndServe(listenAddr string) (err error)
 	Close() error
 	SetConnectionHandler(func(client adnl.Client) error)
+	SetExternalIP(ip net.IP)
 }
 
 type Server struct {
@@ -96,6 +97,10 @@ func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 	s.id, _ = adnl.ToKeyID(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
 
 	return s
+}
+
+func (s *Server) SetExternalIP(ip net.IP) {
+	s.adnlServer.SetExternalIP(ip)
 }
 
 func (s *Server) ListenAndServe(listenAddr string) error {
