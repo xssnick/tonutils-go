@@ -83,8 +83,10 @@ func (s *Server) ListenAndServe(listenAddr string) (err error) {
 
 	ip := s.dhtIP
 	if ip == nil {
-		ip = net.ParseIP(adr[0]).To4()
+		ip = net.ParseIP(adr[0])
 	}
+	ip = ip.To4()
+
 	if ip.Equal(net.IPv4zero) {
 		return fmt.Errorf("invalid external ip")
 	}
