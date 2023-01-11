@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"sync"
 	"time"
@@ -55,6 +56,7 @@ const (
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
 	StickyContext(ctx context.Context) context.Context
+	StickyNodeID(ctx context.Context) uint32
 }
 
 type ContractExecError struct {
@@ -69,37 +71,21 @@ type LSError struct {
 type APIClient struct {
 	client LiteClient
 
-	curMasterUpdateTime time.Time
-	curMasterLock       sync.RWMutex
-	curMaster           *tlb.BlockInfo
+	curMasters     map[uint32]*masterInfo
+	curMastersLock sync.RWMutex
+}
+
+type masterInfo struct {
+	updatedAt time.Time
+	mx        sync.RWMutex
+	block     *tlb.BlockInfo
 }
 
 func NewAPIClient(client LiteClient) *APIClient {
 	return &APIClient{
-		client: client,
+		curMasters: map[uint32]*masterInfo{},
+		client:     client,
 	}
-}
-
-func loadBytes(data []byte) (loaded []byte, buffer []byte) {
-	offset := 1
-	ln := int(data[0])
-	if ln == 0xFE {
-		ln = int(binary.LittleEndian.Uint32(data)) >> 8
-		offset = 4
-	}
-
-	// bytes length should be dividable by 4, add additional offset to buffer if it is not
-	bufSz := ln
-	if add := ln % 4; add != 0 {
-		bufSz += 4 - add
-	}
-
-	// if its end, we don't need to align by 4
-	if offset+bufSz >= len(data) {
-		return data[offset : offset+ln], nil
-	}
-
-	return data[offset : offset+ln], data[offset+bufSz:]
 }
 
 func (e LSError) Error() string {
@@ -119,7 +105,10 @@ func (e *LSError) Load(data []byte) ([]byte, error) {
 	}
 
 	e.Code = int32(binary.LittleEndian.Uint32(data))
-	txt, data := loadBytes(data[4:])
+	txt, data, err := tl.FromBytes(data[4:])
+	if err != nil {
+		return nil, err
+	}
 	e.Text = string(txt)
 
 	return data, nil

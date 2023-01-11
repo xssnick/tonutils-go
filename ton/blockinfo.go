@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tl"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tlb"
@@ -20,39 +21,39 @@ func (c *APIClient) Client() LiteClient {
 
 // CurrentMasterchainInfo - cached version of GetMasterchainInfo to not do it in parallel many times
 func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error) {
-	c.curMasterLock.RLock()
-	master := c.curMaster
-	tm := c.curMasterUpdateTime
-	c.curMasterLock.RUnlock()
+	// if not sticky - id will be 0
+	nodeID := c.client.StickyNodeID(ctx)
 
-	if master == nil || time.Now().After(tm.Add(3*time.Second)) {
-		c.curMasterLock.Lock()
-		defer c.curMasterLock.Unlock()
+	c.curMastersLock.RLock()
+	master := c.curMasters[nodeID]
+	if master == nil {
+		master = &masterInfo{}
+		c.curMasters[nodeID] = master
+	}
+	c.curMastersLock.RUnlock()
 
-		// update values to latest in case update happen between previous check
-		master = c.curMaster
-		tm = c.curMasterUpdateTime
+	master.mx.Lock()
+	defer master.mx.Unlock()
 
-		// second check to avoid concurrent update
-		if master == nil || time.Now().After(tm.Add(3*time.Second)) {
-			ctx = c.client.StickyContext(ctx)
+	if time.Now().After(master.updatedAt.Add(5 * time.Second)) {
+		ctx = c.client.StickyContext(ctx)
 
-			master, err = c.GetMasterchainInfo(ctx)
-			if err != nil {
-				return nil, err
-			}
-
-			err = c.waitMasterBlock(ctx, master.SeqNo)
-			if err != nil {
-				return nil, err
-			}
-
-			c.curMasterUpdateTime = time.Now()
-			c.curMaster = master
+		var block *tlb.BlockInfo
+		block, err = c.GetMasterchainInfo(ctx)
+		if err != nil {
+			return nil, err
 		}
+
+		err = c.waitMasterBlock(ctx, block.SeqNo)
+		if err != nil {
+			return nil, err
+		}
+
+		master.updatedAt = time.Now()
+		master.block = block
 	}
 
-	return master, nil
+	return master.block, nil
 }
 
 // GetMasterchainInfo - gets the latest state of master chain
@@ -127,7 +128,10 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tl
 		}
 
 		var payload []byte
-		payload, resp.Data = loadBytes(resp.Data)
+		payload, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 
 		cl, err := cell.FromBOC(payload)
 		if err != nil {
@@ -219,7 +223,10 @@ func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockIn
 		}
 
 		var proof []byte
-		proof, resp.Data = loadBytes(resp.Data)
+		proof, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, false, err
+		}
 		_ = proof
 
 		return txList, incomplete, nil
@@ -251,11 +258,17 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInf
 		}
 
 		var proof []byte
-		proof, resp.Data = loadBytes(resp.Data)
+		proof, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 		_ = proof
 
 		var data []byte
-		data, resp.Data = loadBytes(resp.Data)
+		data, resp.Data, err = tl.FromBytes(resp.Data)
+		if err != nil {
+			return nil, err
+		}
 
 		c, err := cell.FromBOC(data)
 		if err != nil {

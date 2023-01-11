@@ -3,7 +3,7 @@
 <img align="right" width="425px" src="https://github.com/xssnick/props/blob/master/logoimg.png?raw=true">
 
 [![Based on TON][ton-svg]][ton]
-![Coverage](https://img.shields.io/badge/Coverage-70.5%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-70.6%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
@@ -69,6 +69,14 @@ if err != nil {
 }
 api := ton.NewAPIClient(client)
 ```
+
+Since `client` implements connection pool, it can be the chance that some block is not yet applied on one of the nodes, so it can lead to errors.
+If you want to bound all requests of operation to single node, use 
+```go
+ctx := client.StickyContext(context.Background())
+```
+And pass this context to methods.
+
 ### Wallet
 You can use existing wallet or generate new one using `wallet.NewSeed()`, wallet will be initialized by the first message sent from it. This library will deploy and initialize wallet contract if it is not initialized yet. 
 

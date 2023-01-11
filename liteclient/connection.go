@@ -1,6 +1,7 @@
 package liteclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/cipher"
 	"crypto/ed25519"
@@ -11,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl"
 	"hash/crc32"
 	"io"
 	"math/big"
@@ -127,11 +129,11 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 	}
 
 	// build ciphers for incoming packets and for outgoing
-	conn.rCrypt, err = newCipherCtr(rnd[:32], rnd[64:80])
+	conn.rCrypt, err = adnl.NewCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
 		return err
 	}
-	conn.wCrypt, err = newCipherCtr(rnd[32:64], rnd[80:96])
+	conn.wCrypt, err = adnl.NewCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
 		return err
 	}
@@ -345,14 +347,17 @@ func (n *connection) send(data []byte) error {
 	// encrypt data
 	n.wCrypt.XORKeyStream(buf, buf)
 
+	// write timeout in case of stuck socket, to reconnect
+	n.tcp.SetWriteDeadline(time.Now().Add(7 * time.Second))
 	// write all
 	for len(buf) > 0 {
-		n, err := n.tcp.Write(buf)
+		num, err := n.tcp.Write(buf)
 		if err != nil {
+			n.tcp.Close()
 			return err
 		}
 
-		buf = buf[n:]
+		buf = buf[num:]
 	}
 
 	return nil
@@ -365,12 +370,12 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 
 	pub := ourKey.Public().(ed25519.PublicKey)
 
-	kid, err := keyID(serverKey)
+	kid, err := adnl.ToKeyID(adnl.PublicKeyED25519{Key: serverKey})
 	if err != nil {
 		return err
 	}
 
-	key, err := sharedKey(ourKey, serverKey)
+	key, err := adnl.SharedKey(ourKey, serverKey)
 	if err != nil {
 		return err
 	}
@@ -387,7 +392,7 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 		key[24], key[25], key[26], key[27], key[28], key[29], key[30], key[31],
 	}
 
-	ctr, err := newCipherCtr(k, iv)
+	ctr, err := adnl.NewCipherCtr(k, iv)
 	if err != nil {
 		return err
 	}
@@ -464,4 +469,20 @@ func (c *ConnectionPool) DefaultReconnect(waitBeforeReconnect time.Duration, max
 	}
 
 	return cb
+}
+
+func validatePacket(data []byte, recvChecksum []byte) error {
+	if len(data) < 32 {
+		return errors.New("too small packet")
+	}
+
+	hash := sha256.New()
+	hash.Write(data)
+	checksum := hash.Sum(nil)
+
+	if !bytes.Equal(recvChecksum, checksum) {
+		return errors.New("checksum packet")
+	}
+
+	return nil
 }

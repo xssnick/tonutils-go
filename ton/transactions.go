@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tl"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -28,7 +29,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 	data = append(data, ltData...)
 
 	// hash
-	data = append(data, txHash[:]...)
+	data = append(data, txHash...)
 
 	resp, err := c.client.Do(ctx, _GetTransactions, data)
 	if err != nil {
@@ -54,7 +55,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 		}
 
 		var txData []byte
-		txData, resp.Data = loadBytes(resp.Data)
+		txData, resp.Data, err = tl.FromBytes(resp.Data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load transaction bytes: %w", err)
 		}
@@ -124,14 +125,14 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *tlb.BlockInfo, ad
 		}
 
 		var proof []byte
-		proof, resp.Data = loadBytes(resp.Data)
+		proof, resp.Data, err = tl.FromBytes(resp.Data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load proof bytes: %w", err)
 		}
 		_ = proof
 
 		var txData []byte
-		txData, resp.Data = loadBytes(resp.Data)
+		txData, resp.Data, err = tl.FromBytes(resp.Data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load transaction bytes: %w", err)
 		}
