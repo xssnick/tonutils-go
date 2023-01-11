@@ -56,6 +56,7 @@ const (
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
 	StickyContext(ctx context.Context) context.Context
+	StickyNodeID(ctx context.Context) uint32
 }
 
 type ContractExecError struct {
@@ -70,14 +71,20 @@ type LSError struct {
 type APIClient struct {
 	client LiteClient
 
-	curMasterUpdateTime time.Time
-	curMasterLock       sync.RWMutex
-	curMaster           *tlb.BlockInfo
+	curMasters     map[uint32]*masterInfo
+	curMastersLock sync.RWMutex
+}
+
+type masterInfo struct {
+	updatedAt time.Time
+	mx        sync.RWMutex
+	block     *tlb.BlockInfo
 }
 
 func NewAPIClient(client LiteClient) *APIClient {
 	return &APIClient{
-		client: client,
+		curMasters: map[uint32]*masterInfo{},
+		client:     client,
 	}
 }
 

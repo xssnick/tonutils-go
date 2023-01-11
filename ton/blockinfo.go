@@ -21,39 +21,39 @@ func (c *APIClient) Client() LiteClient {
 
 // CurrentMasterchainInfo - cached version of GetMasterchainInfo to not do it in parallel many times
 func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error) {
-	c.curMasterLock.RLock()
-	master := c.curMaster
-	tm := c.curMasterUpdateTime
-	c.curMasterLock.RUnlock()
+	// if not sticky - id will be 0
+	nodeID := c.client.StickyNodeID(ctx)
 
-	if master == nil || time.Now().After(tm.Add(3*time.Second)) {
-		c.curMasterLock.Lock()
-		defer c.curMasterLock.Unlock()
+	c.curMastersLock.RLock()
+	master := c.curMasters[nodeID]
+	if master == nil {
+		master = &masterInfo{}
+		c.curMasters[nodeID] = master
+	}
+	c.curMastersLock.RUnlock()
 
-		// update values to latest in case update happen between previous check
-		master = c.curMaster
-		tm = c.curMasterUpdateTime
+	master.mx.Lock()
+	defer master.mx.Unlock()
 
-		// second check to avoid concurrent update
-		if master == nil || time.Now().After(tm.Add(3*time.Second)) {
-			ctx = c.client.StickyContext(ctx)
+	if time.Now().After(master.updatedAt.Add(5 * time.Second)) {
+		ctx = c.client.StickyContext(ctx)
 
-			master, err = c.GetMasterchainInfo(ctx)
-			if err != nil {
-				return nil, err
-			}
-
-			err = c.waitMasterBlock(ctx, master.SeqNo)
-			if err != nil {
-				return nil, err
-			}
-
-			c.curMasterUpdateTime = time.Now()
-			c.curMaster = master
+		var block *tlb.BlockInfo
+		block, err = c.GetMasterchainInfo(ctx)
+		if err != nil {
+			return nil, err
 		}
+
+		err = c.waitMasterBlock(ctx, block.SeqNo)
+		if err != nil {
+			return nil, err
+		}
+
+		master.updatedAt = time.Now()
+		master.block = block
 	}
 
-	return master, nil
+	return master.block, nil
 }
 
 // GetMasterchainInfo - gets the latest state of master chain
