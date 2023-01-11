@@ -86,6 +86,7 @@ func Test_ClientServer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
+	time.Sleep(1 * time.Second)
 
 	client := &http.Client{
 		Transport: NewTransport(dht, &MockResolver{}),
@@ -145,6 +146,7 @@ func BenchmarkServer(b *testing.B) {
 			b.Fatal(err)
 		}
 	}()
+	time.Sleep(1 * time.Second)
 
 	for i := 0; i < b.N; i++ {
 		client := &http.Client{
