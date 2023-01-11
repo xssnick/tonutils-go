@@ -265,7 +265,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 
 var ErrDHTValueIsNotFound = errors.New("value is not found")
 
-func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (uint, []byte, error) {
+func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error) {
 	data, err := tl.Serialize(addresses, true)
 	if err != nil {
 		return 0, nil, err
@@ -273,7 +273,7 @@ func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl t
 	return c.Store(ctx, []byte("address"), 0, data, ttl, ownerKey, copies)
 }
 
-func (c *Client) Store(ctx context.Context, name []byte, index int32, value []byte, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (copiesMade uint, idKey []byte, err error) {
+func (c *Client) Store(ctx context.Context, name []byte, index int32, value []byte, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (copiesMade int, idKey []byte, err error) {
 	id := adnl.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
 	idKey, err = adnl.ToKeyID(id)
 	if err != nil {
@@ -376,7 +376,7 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 		return 0, nil, fmt.Errorf("failed to store value: zero copies made")
 	}
 
-	return uint(copies - copiesLeft), idKey, nil
+	return copies - copiesLeft, idKey, nil
 }
 
 func signTL(obj tl.Serializable, key ed25519.PrivateKey) ([]byte, error) {

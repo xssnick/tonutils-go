@@ -93,7 +93,7 @@ type MockDHT struct {
 	pub  ed25519.PublicKey
 }
 
-func (m *MockDHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (uint, []byte, error) {
+func (m *MockDHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error) {
 	return 0, nil, nil
 }
 

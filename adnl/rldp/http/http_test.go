@@ -31,7 +31,6 @@ func (m MockResolver) Resolve(ctx context.Context, domain string) (*dns.Domain, 
 	return &dns.Domain{
 		Records: records,
 	}, nil
-
 }
 
 type MockDHT struct {
@@ -40,8 +39,8 @@ type MockDHT struct {
 	pub  ed25519.PublicKey
 }
 
-func (m *MockDHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (uint, []byte, error) {
-	panic("implement me")
+func (m *MockDHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error) {
+	return copies, nil, nil
 }
 
 func (m *MockDHT) Close() {}
