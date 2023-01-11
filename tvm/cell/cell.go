@@ -83,6 +83,9 @@ func (c *Cell) dump(deep int, bin bool) string {
 	}
 
 	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
+	if c.special {
+		str += "*"
+	}
 	if len(c.refs) > 0 {
 		str += " -> {"
 		for i, ref := range c.refs {

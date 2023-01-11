@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math/rand"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -22,10 +23,11 @@ const _CategoryADNLSite = 0xad01
 type TonApi interface {
 	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
 	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
+	GetBlockchainConfig(ctx context.Context, block *tlb.BlockInfo, onlyParams ...int32) (*ton.BlockchainConfig, error)
 }
 
 type Domain struct {
-	records *cell.Dictionary
+	Records *cell.Dictionary
 	*nft.ItemEditableClient
 }
 
@@ -34,9 +36,31 @@ type Client struct {
 	api  TonApi
 }
 
-func RootContractAddr(api TonApi) *address.Address {
+var randomizer = rand.Uint64
+
+func RootContractAddr(api TonApi) (*address.Address, error) {
+	b, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
+	}
+
+	cfg, err := api.GetBlockchainConfig(context.Background(), b, 4)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get root address from network config: %w", err)
+	}
+
+	data := cfg.Get(4)
+	if data == nil {
+		return nil, fmt.Errorf("failed to get root address from network config")
+	}
+
+	hash, err := data.BeginParse().LoadSlice(256)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get root address from network config 4, failed to load hash: %w", err)
+	}
+
 	// TODO: get from config
-	return address.MustParseAddr("Ef_BimcWrQ5pmAWfRqfeVHUCNV8XgsLqeAMBivKryXrghFW3")
+	return address.NewAddress(0, 255, hash), nil
 }
 
 func NewDNSClient(api TonApi, root *address.Address) *Client {
@@ -91,7 +115,11 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 	data, err := res.Cell(1)
 	if err != nil {
 		if yes, _ := res.IsNil(1); yes {
-			return nil, ErrNoSuchRecord
+			// domain is not taken from auction, consider it as a valid domain but with no records
+			return &Domain{
+				Records:            cell.NewDict(256),
+				ItemEditableClient: nft.NewItemEditableClient(c.api, contractAddr),
+			}, nil
 		}
 		return nil, fmt.Errorf("data get err: %w", err)
 	}
@@ -123,7 +151,7 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 	}
 
 	return &Domain{
-		records:            records,
+		Records:            records,
 		ItemEditableClient: nft.NewItemEditableClient(c.api, contractAddr),
 	}, nil
 }
@@ -132,7 +160,7 @@ func (d *Domain) GetRecord(name string) *cell.Cell {
 	h := sha256.New()
 	h.Write([]byte(name))
 
-	return d.records.Get(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell())
+	return d.Records.Get(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell())
 }
 
 func (d *Domain) GetWalletRecord() *address.Address {
@@ -157,4 +185,54 @@ func (d *Domain) GetWalletRecord() *address.Address {
 	}
 
 	return addr
+}
+
+func (d *Domain) GetSiteRecord() []byte {
+	rec := d.GetRecord("site")
+	if rec == nil {
+		return nil
+	}
+	p := rec.BeginParse()
+
+	p, err := p.LoadRef()
+	if err != nil {
+		return nil
+	}
+
+	category, err := p.LoadUInt(16)
+	if err != nil {
+		return nil
+	}
+
+	if category != _CategoryADNLSite {
+		return nil
+	}
+
+	addr, err := p.LoadSlice(256)
+	if err != nil {
+		return nil
+	}
+
+	return addr
+}
+
+func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell {
+	const OPChangeDNSRecord = 0x4eb1f0f9
+
+	h := sha256.New()
+	h.Write([]byte(name))
+
+	return cell.BeginCell().MustStoreUInt(OPChangeDNSRecord, 32).
+		MustStoreUInt(randomizer(), 64).
+		MustStoreSlice(h.Sum(nil), 256).MustStoreBuilder(value.ToBuilder()).EndCell()
+}
+
+func (d *Domain) BuildSetSiteRecordPayload(adnlAddress []byte) *cell.Cell {
+	record := cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreUInt(_CategoryADNLSite, 16).MustStoreSlice(adnlAddress, 256).EndCell()).EndCell()
+	return d.BuildSetRecordPayload("site", record)
+}
+
+func (d *Domain) BuildSetWalletRecordPayload(addr *address.Address) *cell.Cell {
+	record := cell.BeginCell().MustStoreUInt(_CategoryContractAddr, 16).MustStoreAddr(addr).EndCell()
+	return d.BuildSetRecordPayload("wallet", record)
 }

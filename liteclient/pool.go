@@ -79,6 +79,11 @@ func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, _StickyCtxKey, id)
 }
 
+func (c *ConnectionPool) StickyNodeID(ctx context.Context) uint32 {
+	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
+	return nodeID
+}
+
 // Do - builds and executes request to liteserver
 func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (*LiteResponse, error) {
 	id := make([]byte, 32)
