@@ -140,6 +140,8 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 			cancel()
 
 			if err != nil {
+				Logger("DHT ADNL address record update failed: ", err, ". We will retry in 5 sec")
+
 				// on err, retry sooner
 				wait = 5 * time.Second
 				continue
@@ -162,7 +164,7 @@ func (s *Server) Address() []byte {
 func (s *Server) updateDHT(ctx context.Context) error {
 	addr := s.adnlServer.GetAddressList()
 
-	_, id, err := s.dht.StoreAddress(ctx, addr, 15*time.Minute, s.key, 6)
+	_, id, err := s.dht.StoreAddress(ctx, addr, 15*time.Minute, s.key, 5)
 	if err != nil {
 		return err
 	}
