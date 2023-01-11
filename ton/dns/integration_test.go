@@ -62,15 +62,17 @@ func TestDNSClient_ResolveSub(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	ctx := client.StickyContext(context.Background())
+
 	cli := NewDNSClient(api, root)
-	_, err = cli.Resolve(context.Background(), "aa.casino.ton")
+	_, err = cli.Resolve(ctx, "aa.casino.ton")
 	if err != nil {
 		if err != ErrNoSuchRecord {
 			t.Fatal(err)
 		}
 	}
 
-	_, err = cli.Resolve(context.Background(), "buchbahpih.ton")
+	_, err = cli.Resolve(ctx, "buchbahpih.ton")
 	if err != nil {
 		if err != ErrNoSuchRecord {
 			t.Fatal(err)
