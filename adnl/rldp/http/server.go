@@ -184,14 +184,10 @@ func (s *Server) Stop() error {
 	defer s.mx.Unlock()
 
 	if !s.closed {
+		s.closed = true
 		close(s.closer)
 		s.dht.Close()
-		err := s.adnlServer.Close()
-		if err != nil {
-			return err
-		}
-		s.closed = true
-		return nil
+		return s.adnlServer.Close()
 	}
 
 	return nil
