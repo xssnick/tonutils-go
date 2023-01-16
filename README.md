@@ -22,8 +22,11 @@ If you love this library and want to support its development you can donate any 
   - [Create](#Wallet)
   - [Transfer](#Wallet)
   - [Balance](#Wallet)
+  - [Transfer to many](https://github.com/xssnick/tonutils-go/blob/master/example/highload-wallet/main.go)
+  - [Send message to contract](https://github.com/xssnick/tonutils-go/blob/master/example/send-to-contract/main.go)
 - [Accounts](#Account-info-and-transactions)
   - [List transactions](#Account-info-and-transactions)
+  - [Get balance](https://github.com/xssnick/tonutils-go/blob/master/example/account-state/main.go)
 - [NFT](#NFT)
   - [Details](#NFT)
   - [Mint](https://github.com/xssnick/tonutils-go/blob/master/example/nft-mint/main.go#L42)
@@ -33,6 +36,8 @@ If you love this library and want to support its development you can donate any 
   - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/example/jettons/main.go#L56)
 - [DNS](#DNS)
   - [Resolve](#DNS)
+  - [Get records](#Records)
+  - [Set records](#Records)
 - [Contracts](#Contracts)
   - [Use get methods](#Using-GET-methods)
   - [Send external message](#Send-external-message)
@@ -41,6 +46,7 @@ If you love this library and want to support its development you can donate any 
   - [Create](#Cells)
   - [Parse](#Cells)
   - [TLB Loader/Serializer](#TLB-Loader)
+  - [BoC](#BoC)
 - [Network](https://github.com/xssnick/tonutils-go/tree/master/adnl)
   - [ADNL UDP](https://github.com/xssnick/tonutils-go/blob/master/adnl/adnl_test.go)
   - [TON Site request](https://github.com/xssnick/tonutils-go/blob/master/example/site-request/main.go)
@@ -315,6 +321,48 @@ log.Println("domain points to wallet address:", domain.GetWalletRecord())
 ```
 You can find full example at `example/dns/main.go`
 
+##### Records
+
+You could get any record of the domain using `domain.GetRecord("record name")` method, it will return cell that will contain data structure depends on record type. 
+Alternatively you can also use `domain.GetWalletRecord()` and `domain.GetSiteRecord()`, they will return already parsed data, like address for wallet, or slice of bytes with type for site.
+
+To set domain records you can use `domain.BuildSetRecordPayload("record name", dataCell)`, or predefined `BuildSetSiteRecordPayload(adnlAddress)`, `BuildSetWalletRecordPayload(walletAddress)`.
+It will generate body cell that you need to send to domain contract from the owner's wallet.
+
+Example:
+```golang
+// get root dns address from network config
+root, err := dns.RootContractAddr(api)
+if err != nil {
+    panic(err)
+}
+
+resolver := dns.NewDNSClient(api, root)
+domainInfo, err := resolver.Resolve(ctx, "utils.ton")
+if err != nil {
+    panic(err)
+}
+
+// prepare transaction payload cell which will change site address record
+body := domainInfo.BuildSetSiteRecordPayload(adnlAddr)
+
+// w = wallet.FromSeed("domain owner seed phrase")
+err = w.Send(context.Background(), &wallet.Message{
+  Mode: 1, // pay fees separately (from balance, not from amount)
+  InternalMessage: &tlb.InternalMessage{
+    Bounce:  true, // return amount in case of processing error
+    DstAddr: domainInfo.GetNFTAddress(), // destination is domain contract
+    Amount:  tlb.MustFromTON("0.03"),
+    Body:    body,
+  },
+}, true)
+if err != nil {
+    panic(err)
+}
+
+// done! now record of your site is changed!
+```
+
 ### Cells
 Work with cells is very similar to FunC cells:
 ```golang
@@ -356,6 +404,13 @@ There are 2 types of methods `Must` and regular. The difference is that in case 
 but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
 
 To debug cells you can use `Dump()` and `DumpBits()` methods of cell, they will return string with beautifully formatted cells and their refs tree
+##### BoC
+
+Sometimes it is needed to import or export cell, for example to transfer over the network, for this, Bag of Cells serialization format is exists.
+
+You can simply export cell using `ToBOC()` method of cell, and import it using `cell.FromBOC(bytes)`.
+
+[Example of use can be found in tests](https://github.com/xssnick/tonutils-go/blob/master/tvm/cell/cell_test.go#L76) or in [transfer-url-for-qr](https://github.com/xssnick/tonutils-go/blob/master/example/transfer-url-for-qr/main.go) example
 
 ### TLB Loader
 You can also load cells to structures, similar to JSON, using tags. 
