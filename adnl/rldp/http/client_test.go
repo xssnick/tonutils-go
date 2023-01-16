@@ -92,22 +92,6 @@ func (m MockRDLP) SendAnswer(ctx context.Context, maxAnswerSize int64, queryId, 
 	return m.sendAnswer(ctx, maxAnswerSize, queryId, transferId, answer)
 }
 
-//type MockDHT struct {
-//	storeAddress		func(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error)
-//	findAddresses 		func(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error)
-//	close				func()
-//}
-//
-//func (m MockADHT) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error){
-//	return 0, nil, nil
-//}
-//
-//func (m MockADHT) FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error){
-//	return nil, nil, nil
-//}
-//
-//func (m MockADHT) Close(){}
-
 func TestTransport_removeRLDP(t *testing.T) {
 	var Connector = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
 		return MockADNL{}, nil
