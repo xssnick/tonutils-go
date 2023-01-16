@@ -186,7 +186,12 @@ func (s *Server) Stop() error {
 	if !s.closed {
 		close(s.closer)
 		s.dht.Close()
-		return s.adnlServer.Close()
+		err := s.adnlServer.Close()
+		if err != nil {
+			return err
+		}
+		s.closed = true
+		return nil
 	}
 
 	return nil
