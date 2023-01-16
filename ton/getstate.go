@@ -78,21 +78,25 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 
 		bp := cls[0].BeginParse()
 
-		// ShardStateUnsplit
-		ssuRef, err := bp.LoadRef()
+		merkle, err := bp.LoadRef()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load ref ShardStateUnsplit: %w", err)
 		}
 
-		var shardState tlb.ShardStateUnsplit
-		err = tlb.LoadFromCell(&shardState, ssuRef)
+		_, err = merkle.LoadRef()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load ref ShardState: %w", err)
 		}
 
-		if shardState.Accounts.ShardAccounts != nil {
+		shardAccounts, err := merkle.LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load ref ShardState: %w", err)
+		}
+		shardAccountsDict, err := shardAccounts.LoadDict(256)
+
+		if shardAccountsDict != nil {
 			addrKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
-			val := shardState.Accounts.ShardAccounts.Get(addrKey)
+			val := shardAccountsDict.Get(addrKey)
 			if val == nil {
 				return nil, errors.New("no addr info in proof hashmap")
 			}
