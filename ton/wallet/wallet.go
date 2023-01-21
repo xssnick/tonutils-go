@@ -404,17 +404,24 @@ func (w *Wallet) Transfer(ctx context.Context, to *address.Address, amount tlb.C
 	return w.transfer(ctx, to, amount, comment, true, waitConfirmation...)
 }
 
-func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool, waitConfirmation ...bool) error {
+func CreateCommentCell(text string) (*cell.Cell, error) {
+	// comment ident
+	root := cell.BeginCell().MustStoreUInt(0, 32)
+
+	if err := root.StoreStringSnake(text); err != nil {
+		return nil, fmt.Errorf("failed to build comment: %w", err)
+	}
+
+	return root.EndCell(), nil
+}
+
+func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool, waitConfirmation ...bool) (err error) {
 	var body *cell.Cell
 	if comment != "" {
-		// comment ident
-		root := cell.BeginCell().MustStoreUInt(0, 32)
-
-		if err := root.StoreStringSnake(comment); err != nil {
-			return fmt.Errorf("failed to build comment: %w", err)
+		body, err = CreateCommentCell(comment)
+		if err != nil {
+			return err
 		}
-
-		body = root.EndCell()
 	}
 
 	return w.Send(ctx, &Message{
