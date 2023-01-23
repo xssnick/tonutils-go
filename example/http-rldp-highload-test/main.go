@@ -23,8 +23,8 @@ func main() {
 	mx := http.NewServeMux()
 	mx.HandleFunc("/hello", func(writer http.ResponseWriter, request *http.Request) {
 		//		writer.Header().Set("Transfer-Encoding", "chunked")
-		_, _ = writer.Write([]byte("abc"))
-		_, _ = writer.Write([]byte("2223"))
+		_, _ = writer.Write([]byte("ADNL ID: " + request.Header.Get("X-Adnl-Id")))
+		_, _ = writer.Write([]byte("\nADNL IP: " + request.Header.Get("X-Adnl-Ip")))
 	})
 
 	dht := &MockDHT{
