@@ -23,6 +23,7 @@ type Client interface {
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
 	RemoteAddr() string
+	GetID() []byte
 	Close()
 
 	processPacket(packet *PacketContent, ch *Channel) (err error)
@@ -337,6 +338,10 @@ func (s *srvClient) RemoteAddr() string {
 
 func (s *srvClient) Close() {
 	s.client.Close()
+}
+
+func (s *srvClient) GetID() []byte {
+	return s.client.GetID()
 }
 
 func (s *srvClient) processPacket(packet *PacketContent, ch *Channel) (err error) {
