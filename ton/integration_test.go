@@ -355,7 +355,7 @@ func Test_BlockScan(t *testing.T) {
 			for {
 				time.Sleep(3 * time.Second)
 
-				shards[i], err = api.LookupBlock(ctx, shard.Workchain, shard.Shard, shard.SeqNo+1)
+				shards[i], err = api.LookupBlock(ctx, shard.Workchain, shard.Shard, uint32(shard.SeqNo+1))
 				if err != nil {
 					if err == ErrBlockNotFound {
 						log.Printf("block %d of shard %d is not exists yet, waiting a bit longer...", shard.SeqNo+1, shard.Shard)

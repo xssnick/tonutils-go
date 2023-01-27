@@ -55,6 +55,7 @@ const (
 
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
+	DoRequest(ctx context.Context, payload tl.Serializable) (*liteclient.LiteResponse, error)
 	StickyContext(ctx context.Context) context.Context
 	StickyNodeID(ctx context.Context) uint32
 }

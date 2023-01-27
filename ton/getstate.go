@@ -2,7 +2,6 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
@@ -12,16 +11,28 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+func init() {
+	tl.Register(GetAccountState{}, "liteServer.getAccountState id:tonNode.blockIdExt account:liteServer.accountId = liteServer.AccountState")
+}
+
+type GetAccountState struct {
+	ID    *tlb.BlockInfo `tl:"struct"`
+	AccID *AccountID     `tl:"struct"`
+}
+
+type AccountID struct {
+	WorkChain int32  `tl:"int"`
+	ID        []byte `tl:"int256"`
+}
+
 func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error) {
-	data := block.Serialize()
-
-	chain := make([]byte, 4)
-	binary.LittleEndian.PutUint32(chain, uint32(addr.Workchain()))
-
-	data = append(data, chain...)
-	data = append(data, addr.Data()...)
-
-	resp, err := c.client.Do(ctx, _GetAccountState, data)
+	resp, err := c.client.DoRequest(ctx, GetAccountState{
+		ID: block,
+		AccID: &AccountID{
+			WorkChain: addr.Workchain(),
+			ID:        addr.Data(),
+		},
+	})
 	if err != nil {
 		return nil, err
 	}

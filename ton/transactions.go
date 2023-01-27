@@ -12,26 +12,35 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+func init() {
+	tl.Register(GetOneTransaction{}, "liteServer.getOneTransaction id:tonNode.blockIdExt account:liteServer.accountId lt:long = liteServer.TransactionInfo")
+	tl.Register(GetTransactions{}, "liteServer.getTransactions count:# account:liteServer.accountId lt:long hash:int256 = liteServer.TransactionList")
+}
+
+type GetOneTransaction struct {
+	ID    *tlb.BlockInfo `tl:"struct"`
+	AccID *AccountID     `tl:"struct"`
+	LT    int64          `tl:"long"`
+}
+
+type GetTransactions struct {
+	Limit  int32      `tl:"int"`
+	AccID  *AccountID `tl:"struct"`
+	LT     int64      `tl:"long"`
+	TxHash []byte     `tl:"int256"`
+}
+
 // ListTransactions - returns list of transactions before (including) passed lt and hash, the oldest one is first in result slice
 func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, limit)
-
-	chain := make([]byte, 4)
-	binary.LittleEndian.PutUint32(chain, uint32(addr.Workchain()))
-
-	data = append(data, chain...)
-	data = append(data, addr.Data()...)
-
-	ltData := make([]byte, 8)
-	binary.LittleEndian.PutUint64(ltData, lt)
-
-	data = append(data, ltData...)
-
-	// hash
-	data = append(data, txHash...)
-
-	resp, err := c.client.Do(ctx, _GetTransactions, data)
+	resp, err := c.client.DoRequest(ctx, GetTransactions{
+		Limit: int32(limit),
+		AccID: &AccountID{
+			WorkChain: addr.Workchain(),
+			ID:        addr.Data(),
+		},
+		LT:     int64(lt),
+		TxHash: txHash,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -98,20 +107,14 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 }
 
 func (c *APIClient) GetTransaction(ctx context.Context, block *tlb.BlockInfo, addr *address.Address, lt uint64) (*tlb.Transaction, error) {
-	data := block.Serialize()
-
-	chain := make([]byte, 4)
-	binary.LittleEndian.PutUint32(chain, uint32(addr.Workchain()))
-
-	data = append(data, chain...)
-	data = append(data, addr.Data()...)
-
-	ltData := make([]byte, 8)
-	binary.LittleEndian.PutUint64(ltData, lt)
-
-	data = append(data, ltData...)
-
-	resp, err := c.client.Do(ctx, _GetOneTransaction, data)
+	resp, err := c.client.DoRequest(ctx, GetOneTransaction{
+		ID: block,
+		AccID: &AccountID{
+			WorkChain: addr.Workchain(),
+			ID:        addr.Data(),
+		},
+		LT: int64(lt),
+	})
 	if err != nil {
 		return nil, err
 	}

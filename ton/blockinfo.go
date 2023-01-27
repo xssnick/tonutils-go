@@ -12,6 +12,49 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+func init() {
+	tl.Register(GetBlockData{}, "liteServer.getBlock id:tonNode.blockIdExt = liteServer.BlockData")
+	tl.Register(BlockTransactionsList{}, "liteServer.listBlockTransactions id:tonNode.blockIdExt mode:# count:# after:mode.7?liteServer.transactionId3 reverse_order:mode.6?true want_proof:mode.5?true = liteServer.BlockTransactions")
+	tl.Register(GetAllShardsInfo{}, "liteServer.getAllShardsInfo id:tonNode.blockIdExt = liteServer.AllShardsInfo")
+	tl.Register(GetMasterchainInf{}, "liteServer.getMasterchainInfo = liteServer.MasterchainInfo")
+	tl.Register(WaitMasterChainSeqno{}, "liteServer.waitMasterchainSeqno seqno:int timeout_ms:int = Object")
+	tl.Register(LookupBlock{}, "liteServer.lookupBlock mode:# id:tonNode.blockId lt:mode.1?long utime:mode.2?int = liteServer.BlockHeader")
+	tl.Register(BlockInfoShort{}, "tonNode.blockId workchain:int shard:long seqno:int = tonNode.BlockId")
+}
+
+type LookupBlock struct {
+	Mod int32           `tl:"int"`
+	ID  *BlockInfoShort `tl:"struct"`
+}
+
+type BlockInfoShort struct {
+	Workchain int32 `tl:"int"`
+	Shard     int64 `tl:"long"`
+	Seqno     int32 `tl:"int"`
+}
+
+type WaitMasterChainSeqno struct {
+	Seqno   int32 `tl:"int"`
+	TimeOut int32 `tl:"int"`
+}
+
+type GetAllShardsInfo struct {
+	ID *tlb.BlockInfo `tl:"struct"`
+}
+
+type GetMasterchainInf struct{}
+
+type BlockTransactionsList struct {
+	ID    *tlb.BlockInfo     `tl:"struct"`
+	Mode  int32              `tl:"int"`
+	Count int32              `tl:"int"`
+	After *tlb.TransactionID `tl:"struct"`
+}
+
+type GetBlockData struct {
+	ID *tlb.BlockInfo `tl:"struct"`
+}
+
 var ErrBlockNotFound = errors.New("block not found")
 var ErrNoNewBlocks = errors.New("no new blocks in a given timeout or in 10 seconds")
 
@@ -44,7 +87,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInf
 			return nil, err
 		}
 
-		err = c.waitMasterBlock(ctx, block.SeqNo)
+		err = c.waitMasterBlock(ctx, uint32(block.SeqNo))
 		if err != nil {
 			return nil, err
 		}
@@ -58,7 +101,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInf
 
 // GetMasterchainInfo - gets the latest state of master chain
 func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
-	resp, err := c.client.Do(ctx, _GetMasterchainInfo, nil)
+	resp, err := c.client.DoRequest(ctx, GetMasterchainInf{})
 	if err != nil {
 		return nil, err
 	}
@@ -74,13 +117,14 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, err
 
 // LookupBlock - find block information by seqno, shard and chain
 func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*tlb.BlockInfo, error) {
-	data := make([]byte, 20)
-	binary.LittleEndian.PutUint32(data, 1)
-	binary.LittleEndian.PutUint32(data[4:], uint32(workchain))
-	binary.LittleEndian.PutUint64(data[8:], uint64(shard))
-	binary.LittleEndian.PutUint32(data[16:], seqno)
-
-	resp, err := c.client.Do(ctx, _LookupBlock, data)
+	resp, err := c.client.DoRequest(ctx, LookupBlock{
+		Mod: 1,
+		ID: &BlockInfoShort{
+			Workchain: workchain,
+			Shard:     shard,
+			Seqno:     int32(seqno),
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +158,7 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int6
 
 // GetBlockData - get block detailed information
 func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tlb.Block, error) {
-	resp, err := c.client.Do(ctx, _GetBlock, block.Serialize())
+	resp, err := c.client.DoRequest(ctx, GetBlockData{ID: block})
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +288,7 @@ func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockIn
 
 // GetBlockShardsInfo - gets the information about workchains and its shards at given masterchain state
 func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInfo) ([]*tlb.BlockInfo, error) {
-	resp, err := c.client.Do(ctx, _GetAllShardsInfo, master.Serialize())
+	resp, err := c.client.DoRequest(ctx, GetAllShardsInfo{ID: master})
 	if err != nil {
 		return nil, err
 	}
@@ -304,7 +348,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInf
 				shards = append(shards, &tlb.BlockInfo{
 					Workchain: int32(workchain),
 					Shard:     shardDesc.NextValidatorShard,
-					SeqNo:     shardDesc.SeqNo,
+					SeqNo:     int32(shardDesc.SeqNo),
 					RootHash:  shardDesc.RootHash,
 					FileHash:  shardDesc.FileHash,
 				})
@@ -336,11 +380,10 @@ func (c *APIClient) waitMasterBlock(ctx context.Context, seqno uint32) error {
 		}
 	}
 
-	req := make([]byte, 8)
-	binary.LittleEndian.PutUint32(req, seqno)
-	binary.LittleEndian.PutUint32(req[4:], uint32(timeout/time.Millisecond))
-
-	_, err := c.client.Do(ctx, _WaitMasterchainSeqno, req)
+	_, err := c.client.DoRequest(ctx, WaitMasterChainSeqno{
+		Seqno:   int32(seqno),
+		TimeOut: int32(timeout / time.Millisecond),
+	})
 	if err != nil {
 		return err
 	}
@@ -355,7 +398,7 @@ func (c *APIClient) WaitNextMasterBlock(ctx context.Context, master *tlb.BlockIn
 
 	ctx = c.client.StickyContext(ctx)
 
-	err := c.waitMasterBlock(ctx, master.SeqNo+1)
+	err := c.waitMasterBlock(ctx, uint32(master.SeqNo+1))
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,14 @@ import (
 	"github.com/xssnick/tonutils-go/tlb"
 )
 
+func init() {
+	tl.Register(SendMessage{}, "liteServer.sendMessage body:bytes = liteServer.SendMsgStatus")
+}
+
+type SendMessage struct {
+	Body []byte `tl:"bytes"`
+}
+
 var ErrMessageNotAccepted = errors.New("message was not accepted by the contract")
 
 func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error {
@@ -18,7 +26,7 @@ func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMe
 		return fmt.Errorf("failed to serialize external message, err: %w", err)
 	}
 
-	resp, err := c.client.Do(ctx, _SendMessage, tl.ToBytes(req.ToBOCWithFlags(false)))
+	resp, err := c.client.DoRequest(ctx, SendMessage{Body: req.ToBOCWithFlags(false)})
 	if err != nil {
 		return err
 	}

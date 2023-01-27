@@ -17,7 +17,7 @@ func getShardID(shard *tlb.BlockInfo) string {
 }
 
 func getNotSeenShards(ctx context.Context, api *ton.APIClient, shard *tlb.BlockInfo, shardLastSeqno map[string]uint32) (ret []*tlb.BlockInfo, err error) {
-	if no, ok := shardLastSeqno[getShardID(shard)]; ok && no == shard.SeqNo {
+	if no, ok := shardLastSeqno[getShardID(shard)]; ok && no == uint32(shard.SeqNo) {
 		return nil, nil
 	}
 
@@ -77,7 +77,7 @@ func main() {
 		return
 	}
 	for _, shard := range firstShards {
-		shardLastSeqno[getShardID(shard)] = shard.SeqNo
+		shardLastSeqno[getShardID(shard)] = uint32(shard.SeqNo)
 	}
 
 	for {
@@ -99,7 +99,7 @@ func main() {
 				log.Fatalln("get not seen shards err:", err.Error())
 				return
 			}
-			shardLastSeqno[getShardID(shard)] = shard.SeqNo
+			shardLastSeqno[getShardID(shard)] = uint32(shard.SeqNo)
 			newShards = append(newShards, notSeen...)
 		}
 

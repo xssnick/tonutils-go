@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
-func (c *APIClient) GetTime(ctx context.Context) (uint32, error) {
+func init() {
+	tl.Register(GetTime{}, "liteServer.getTime = liteServer.CurrentTime")
+}
 
-	resp, err := c.client.Do(ctx, _GetTime, nil)
+type GetTime struct{}
+
+func (c *APIClient) GetTime(ctx context.Context) (uint32, error) {
+	resp, err := c.client.DoRequest(ctx, GetTime{})
 	if err != nil {
 		return 0, err
 	}

@@ -440,10 +440,7 @@ func (n *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) (
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
 
-	typData := make([]byte, 4)
-	binary.LittleEndian.PutUint32(typData, uint32(typeID))
-
-	data = append(data, tl.ToBytes(append(typData, payload...))...)
+	data = append(data, tl.ToBytes(payload)...)
 
 	return n.addr, n.queryADNL(qid, data)
 }
