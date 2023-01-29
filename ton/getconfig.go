@@ -2,7 +2,6 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -15,6 +14,14 @@ import (
 func init() {
 	tl.Register(GetConfigAll{}, "liteServer.getConfigAll mode:# id:tonNode.blockIdExt = liteServer.ConfigInfo")
 	tl.Register(GetConfigParams{}, "liteServer.getConfigParams mode:# id:tonNode.blockIdExt param_list:(vector int) = liteServer.ConfigInfo")
+	tl.Register(ConfigAll{}, "liteServer.configInfo mode:# id:tonNode.blockIdExt state_proof:bytes config_proof:bytes = liteServer.ConfigInfo")
+}
+
+type ConfigAll struct {
+	Mod         int            `tl:"int"`
+	ID          *tlb.BlockInfo `tl:"struct"`
+	StateProof  []byte         `tl:"bytes"`
+	ConfigProof []byte         `tl:"bytes"`
 }
 
 type GetConfigAll struct {
@@ -56,30 +63,13 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInf
 
 	switch resp.TypeID {
 	case _ConfigParams:
-		_ = binary.LittleEndian.Uint32(resp.Data)
-		resp.Data = resp.Data[4:]
-
-		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
+		config := new(ConfigAll)
+		_, err = tl.Parse(config, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse response to configAll, err: %w", err)
 		}
 
-		var shardProof []byte
-		shardProof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_ = shardProof
-
-		var configProof []byte
-		configProof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_ = configProof
-
-		c, err := cell.FromBOC(configProof)
+		c, err := cell.FromBOC(config.ConfigProof)
 		if err != nil {
 			return nil, err
 		}

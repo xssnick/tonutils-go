@@ -2,7 +2,6 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -12,10 +11,15 @@ import (
 
 func init() {
 	tl.Register(SendMessage{}, "liteServer.sendMessage body:bytes = liteServer.SendMsgStatus")
+	tl.Register(SendMessageStatus{}, "liteServer.sendMsgStatus status:int = liteServer.SendMsgStatus")
 }
 
 type SendMessage struct {
 	Body []byte `tl:"bytes"`
+}
+
+type SendMessageStatus struct {
+	Status int32 `tl:"int"`
 }
 
 var ErrMessageNotAccepted = errors.New("message was not accepted by the contract")
@@ -33,10 +37,14 @@ func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMe
 
 	switch resp.TypeID {
 	case _SendMessageResult:
-		status := binary.LittleEndian.Uint32(resp.Data)
+		msgStatus := new(SendMessageStatus)
+		_, err = tl.Parse(msgStatus, resp.Data, false)
+		if err != nil {
+			return fmt.Errorf("falied to parse response to sendMessageStatus, err: %w", err)
+		}
 
-		if status != 1 {
-			return fmt.Errorf("status: %d", status)
+		if msgStatus.Status != 1 {
+			return fmt.Errorf("status: %d", msgStatus.Status)
 		}
 
 		return nil

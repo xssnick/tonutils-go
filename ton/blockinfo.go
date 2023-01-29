@@ -20,6 +20,28 @@ func init() {
 	tl.Register(WaitMasterChainSeqno{}, "liteServer.waitMasterchainSeqno seqno:int timeout_ms:int = Object")
 	tl.Register(LookupBlock{}, "liteServer.lookupBlock mode:# id:tonNode.blockId lt:mode.1?long utime:mode.2?int = liteServer.BlockHeader")
 	tl.Register(BlockInfoShort{}, "tonNode.blockId workchain:int shard:long seqno:int = tonNode.BlockId")
+	tl.Register(BlockData{}, "liteServer.blockData id:tonNode.blockIdExt data:bytes = liteServer.BlockData")
+	tl.Register(BlockTransactions{}, "liteServer.blockTransactions id:tonNode.blockIdExt req_count:# incomplete:Bool ids:(vector liteServer.transactionId) proof:bytes = liteServer.BlockTransactions")
+	tl.Register(AllShardsInfo{}, "liteServer.allShardsInfo id:tonNode.blockIdExt proof:bytes data:bytes = liteServer.AllShardsInfo")
+}
+
+type AllShardsInfo struct {
+	ID    *tlb.BlockInfo `tl:"struct"`
+	Proof []byte         `tl:"bytes"`
+	Data  []byte         `tl:"bytes"`
+}
+
+type BlockTransactions struct {
+	ID             *tlb.BlockInfo      `tl:"struct"`
+	ReqCount       int32               `tl:"int"`
+	Incomplete     bool                `tl:"Bool"`
+	TransactionIds []tlb.TransactionID `tl:"vector struct"`
+	Proof          []byte              `tl:"bytes"`
+}
+
+type BlockData struct {
+	ID      *tlb.BlockInfo `tl:"struct"`
+	Payload []byte         `tl:"bytes"`
 }
 
 type LookupBlock struct {
@@ -107,9 +129,9 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, err
 	}
 
 	block := new(tlb.BlockInfo)
-	_, err = block.Load(resp.Data)
+	_, err = tl.Parse(block, resp.Data, false)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse response to blockInfo, err: %w", err)
 	}
 
 	return block, nil
@@ -132,9 +154,9 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int6
 	switch resp.TypeID {
 	case _BlockHeader:
 		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
+		_, err = tl.Parse(b, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse response to blockInfo, err: %w", err)
 		}
 
 		return b, nil
@@ -166,9 +188,9 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tl
 	switch resp.TypeID {
 	case _BlockData:
 		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
+		resp.Data, err = tl.Parse(b, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse response in BlockInfo, err: %w", err)
 		}
 
 		var payload []byte
@@ -295,26 +317,13 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInf
 
 	switch resp.TypeID {
 	case _AllShardsInfo:
-		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
+		shardsInfo := new(AllShardsInfo)
+		_, err := tl.Parse(shardsInfo, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse response to allShrdsInfo, err: %w", err)
 		}
 
-		var proof []byte
-		proof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_ = proof
-
-		var data []byte
-		data, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-
-		c, err := cell.FromBOC(data)
+		c, err := cell.FromBOC(shardsInfo.Data)
 		if err != nil {
 			return nil, err
 		}

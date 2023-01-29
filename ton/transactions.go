@@ -2,7 +2,6 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
@@ -15,6 +14,19 @@ import (
 func init() {
 	tl.Register(GetOneTransaction{}, "liteServer.getOneTransaction id:tonNode.blockIdExt account:liteServer.accountId lt:long = liteServer.TransactionInfo")
 	tl.Register(GetTransactions{}, "liteServer.getTransactions count:# account:liteServer.accountId lt:long hash:int256 = liteServer.TransactionList")
+	tl.Register(TransactionList{}, "liteServer.transactionList ids:(vector tonNode.blockIdExt) transactions:bytes = liteServer.TransactionList")
+	tl.Register(TransactionInfo{}, "liteServer.transactionInfo id:tonNode.blockIdExt proof:bytes transaction:bytes = liteServer.TransactionInfo")
+}
+
+type TransactionInfo struct {
+	ID          *tlb.BlockInfo `tl:"struct"`
+	Proof       []byte         `tl:"bytes"`
+	Transaction []byte         `tl:"bytes"`
+}
+
+type TransactionList struct {
+	IDs          []*tlb.BlockInfo `tl:"vector struct"`
+	Transactions []byte           `tl:"bytes"`
 }
 
 type GetOneTransaction struct {
@@ -51,25 +63,13 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 			return nil, errors.New("too short response")
 		}
 
-		vecLn := binary.LittleEndian.Uint32(resp.Data)
-		resp.Data = resp.Data[4:]
-
-		for i := 0; i < int(vecLn); i++ {
-			var block tlb.BlockInfo
-
-			resp.Data, err = block.Load(resp.Data)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load block from vector: %w", err)
-			}
-		}
-
-		var txData []byte
-		txData, resp.Data, err = tl.FromBytes(resp.Data)
+		txs := new(TransactionList)
+		_, err = tl.Parse(txs, resp.Data, false)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load transaction bytes: %w", err)
+			return nil, fmt.Errorf("failed to parse response to transactionList, err: %w", err)
 		}
 
-		txList, err := cell.FromBOCMultiRoot(txData)
+		txList, err := cell.FromBOCMultiRoot(txs.Transactions)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse cell from transaction bytes: %w", err)
 		}
@@ -121,26 +121,13 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *tlb.BlockInfo, ad
 
 	switch resp.TypeID {
 	case _TransactionInfo:
-		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
+		txInfo := new(TransactionInfo)
+		_, err = tl.Parse(txInfo, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse respons to TransactionInfo, err: %w", err)
 		}
 
-		var proof []byte
-		proof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load proof bytes: %w", err)
-		}
-		_ = proof
-
-		var txData []byte
-		txData, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load transaction bytes: %w", err)
-		}
-
-		txCell, err := cell.FromBOC(txData)
+		txCell, err := cell.FromBOC(txInfo.Transaction)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parrse cell from transaction bytes: %w", err)
 		}
