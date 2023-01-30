@@ -133,10 +133,10 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 
 		return acc, nil
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 		return nil, lsErr
 	}

@@ -161,10 +161,10 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int6
 
 		return b, nil
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 
 		// 651 = block not found code
@@ -211,10 +211,10 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tl
 
 		return &bData, nil
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 		return nil, lsErr
 	}
@@ -297,10 +297,10 @@ func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockIn
 
 		return txList, incomplete, nil
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 		return nil, false, lsErr
 	}
@@ -366,10 +366,10 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInf
 
 		return shards, nil
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 		return nil, lsErr
 	}

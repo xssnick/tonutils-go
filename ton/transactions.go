@@ -90,10 +90,10 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 
 		return res, nil
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 
 		if lsErr.Code == 0 {
@@ -141,10 +141,10 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *tlb.BlockInfo, ad
 
 		return &tx, nil
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 
 		if lsErr.Code == 0 {

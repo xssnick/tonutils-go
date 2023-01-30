@@ -38,10 +38,10 @@ func (c *APIClient) GetTime(ctx context.Context) (uint32, error) {
 		return uint32(time.Now), nil
 
 	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
+		lsErr := new(LSError)
+		_, err = tl.Parse(lsErr, resp.Data, false)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("failed to parse error, err: %w", err)
 		}
 		return 0, lsErr
 	}
