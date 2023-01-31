@@ -398,7 +398,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
-	const threads = 4
+	const threads = 16
 	result := make(chan *Value, threads)
 	var numNoTasks int64
 	for i := 0; i < threads; i++ {
