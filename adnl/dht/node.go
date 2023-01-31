@@ -91,7 +91,9 @@ func (n *dhtNode) changeState(state int) {
 
 	if state == _StateFail {
 		// in case of fail - close connection
-		n.adnl.Close()
+		if n.adnl != nil {
+			n.adnl.Close()
+		}
 		n.adnl = nil
 
 		// try to reconnect only if it was active before
