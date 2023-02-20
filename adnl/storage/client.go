@@ -28,9 +28,17 @@ type DHT interface {
 	Close()
 }
 
+type FileInfo struct {
+	Size            uint64
+	FromPiece       uint32
+	ToPiece         uint32
+	FromPieceOffset uint32
+	ToPieceOffset   uint32
+}
+
 type TorrentDownloader interface {
 	ListFiles() []string
-	GetFileOffsets(name string) (exist bool, size uint64, fromPiece uint32, toPiece uint32, fromPieceOffset uint32, toPieceOffset uint32)
+	GetFileOffsets(name string) *FileInfo
 	DownloadPiece(ctx context.Context, pieceIndex uint32) (_ []byte, err error)
 	Close()
 }
@@ -390,24 +398,24 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 	}
 }
 
-func (t *torrentDownloader) GetFileOffsets(name string) (exist bool, size uint64, fromPiece uint32, toPiece uint32, fromPieceOffset uint32, toPieceOffset uint32) {
+func (t *torrentDownloader) GetFileOffsets(name string) *FileInfo {
 	i, ok := t.filesIndex[name]
 	if !ok {
-		return
+		return nil
 	}
-	exist = true
+	info := &FileInfo{}
 
 	var end = t.header.DataIndex[i]
 	var start uint64 = 0
 	if i > 0 {
 		start = t.header.DataIndex[i-1]
 	}
-	fromPiece = uint32((t.info.HeaderSize + start) / uint64(t.info.PieceSize))
-	toPiece = uint32((t.info.HeaderSize + end) / uint64(t.info.PieceSize))
-	fromPieceOffset = uint32((t.info.HeaderSize + start) - uint64(fromPiece)*uint64(t.info.PieceSize))
-	toPieceOffset = uint32((t.info.HeaderSize + end) - uint64(toPiece)*uint64(t.info.PieceSize))
-	size = (uint64(toPiece-fromPiece)*uint64(t.info.PieceSize) + uint64(toPieceOffset)) - uint64(fromPieceOffset)
-	return
+	info.FromPiece = uint32((t.info.HeaderSize + start) / uint64(t.info.PieceSize))
+	info.ToPiece = uint32((t.info.HeaderSize + end) / uint64(t.info.PieceSize))
+	info.FromPieceOffset = uint32((t.info.HeaderSize + start) - uint64(info.FromPiece)*uint64(t.info.PieceSize))
+	info.ToPieceOffset = uint32((t.info.HeaderSize + end) - uint64(info.ToPiece)*uint64(t.info.PieceSize))
+	info.Size = (uint64(info.ToPiece-info.FromPiece)*uint64(t.info.PieceSize) + uint64(info.ToPieceOffset)) - uint64(info.FromPieceOffset)
+	return info
 }
 
 // DownloadPiece - downloads piece from one of available nodes.
