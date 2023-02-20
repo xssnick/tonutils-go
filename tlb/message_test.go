@@ -49,3 +49,77 @@ func TestInternalMessage_ToCell(t *testing.T) { // need to deploy contract on te
 		t.Fatal("not eq ton", intMsg.Amount.NanoTON(), intMsg2.Amount.NanoTON())
 	}
 }
+
+func TestMessage_LoadFromCell(t *testing.T) {
+	t.Run("internal msg case", func(t *testing.T) {
+		var msg Message
+		tIntMsg := &InternalMessage{
+			IHRDisabled: false,
+			Bounce:      true,
+			Bounced:     false,
+			SrcAddr:     nil,
+			DstAddr:     nil,
+			CreatedLT:   0,
+			CreatedAt:   0,
+			StateInit:   nil,
+			Body:        cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
+		}
+		_cell, err := tIntMsg.ToCell()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = msg.LoadFromCell(_cell.BeginParse())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg.MsgType != "INTERNAL" {
+			t.Errorf("wrong msg type, want INTERNAL, got %s", msg.MsgType)
+		}
+	})
+
+	t.Run("external in msg case", func(t *testing.T) {
+		var msg Message
+		tExMsg := &ExternalMessage{
+			SrcAddr:   nil,
+			DstAddr:   nil,
+			ImportFee: Coins{},
+			StateInit: nil,
+			Body:      cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
+		}
+		_cell, err := tExMsg.ToCell()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = msg.LoadFromCell(_cell.BeginParse())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg.MsgType != "EXTERNAL_IN" {
+			t.Errorf("wrong msg type, want EXTERNAL_IN, got %s", msg.MsgType)
+		}
+	})
+
+	t.Run("external out msg case", func(t *testing.T) {
+		var msg Message
+		tExMsg := &ExternalMessageOut{
+			SrcAddr:   nil,
+			DstAddr:   nil,
+			CreatedLT: 0,
+			CreatedAt: 0,
+			StateInit: nil,
+			Body:      cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
+		}
+		_cell, err := ToCell(tExMsg)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = msg.LoadFromCell(_cell.BeginParse())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg.MsgType != "EXTERNAL_OUT" {
+			t.Errorf("wrong msg type, want EXTERNAL_OUT, got %s", msg.MsgType)
+		}
+	})
+}

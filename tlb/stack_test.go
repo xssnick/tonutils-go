@@ -67,3 +67,15 @@ func TestStack_ToCell(t *testing.T) {
 		t.Fatal("big val err", err)
 	}
 }
+
+func TestStack_Depth(t *testing.T) {
+	stack := NewStack()
+	stack.Push(struct{}{})
+	stack.Push(struct{}{})
+	stack.Push(struct{}{})
+	stack.Push(struct{}{})
+	dep := stack.Depth()
+	if dep != 4 {
+		t.Errorf("bad stack depth")
+	}
+}
