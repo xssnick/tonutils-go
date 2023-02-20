@@ -40,6 +40,7 @@ type TorrentDownloader interface {
 	ListFiles() []string
 	GetFileOffsets(name string) *FileInfo
 	DownloadPiece(ctx context.Context, pieceIndex uint32) (_ []byte, err error)
+	SetDesiredMinNodesNum(num int)
 	Close()
 }
 
@@ -621,6 +622,10 @@ func (t *torrentDownloader) nodesController() {
 			_ = t.scale(t.desiredMinPeersNum - peersNum)
 		}
 	}
+}
+
+func (t *torrentDownloader) SetDesiredMinNodesNum(num int) {
+	t.desiredMinPeersNum = num
 }
 
 func (t *torrentDownloader) ListFiles() []string {
