@@ -278,6 +278,17 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 			}
 			buf = append(buf, tmp...)
 			return buf, nil
+		case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
+			var tmp []byte
+			if tags[0] == "int" {
+				tmp = make([]byte, 4)
+				binary.LittleEndian.PutUint32(tmp, uint32(value.Uint()))
+			} else {
+				tmp = make([]byte, 8)
+				binary.LittleEndian.PutUint64(tmp, value.Uint())
+			}
+			buf = append(buf, tmp...)
+			return buf, nil
 		case reflect.Slice:
 			switch value.Type().Elem().Kind() {
 			case reflect.Uint8:
@@ -460,6 +471,23 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 				data = data[8:]
 			}
 			value.SetInt(val)
+			return data, nil
+		case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
+			var val uint64
+			if tags[0] != "long" {
+				if len(data) < 4 {
+					return nil, fmt.Errorf("failed to parse int for %s, err: too short data", value.Type().String())
+				}
+				val = uint64(binary.LittleEndian.Uint32(data))
+				data = data[4:]
+			} else {
+				if len(data) < 8 {
+					return nil, fmt.Errorf("failed to parse long for %s, err: too short data", value.Type().String())
+				}
+				val = binary.LittleEndian.Uint64(data)
+				data = data[8:]
+			}
+			value.SetUint(val)
 			return data, nil
 		case reflect.Slice:
 			switch value.Type().Elem().Kind() {

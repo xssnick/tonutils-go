@@ -2,6 +2,7 @@ package liteclient
 
 import (
 	"context"
+	"github.com/xssnick/tonutils-go/tl"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func Test_Conn(t *testing.T) {
 		}
 
 		block := new(tlb.BlockInfo)
-		_, err = block.Load(resp.Data)
+		_, err = tl.Parse(block, resp.Data, false)
 		if err != nil {
 			t.Fatal("load err", err)
 		}

@@ -13,11 +13,13 @@ type TestInner struct {
 }
 
 type TestTL struct {
-	Simple int64      `tl:"int"`
-	In     *TestInner `tl:"struct boxed"`
-	InX    any        `tl:"struct boxed [in]"`
-	In2    []any      `tl:"vector struct boxed [in]"`
-	Data   [][]byte   `tl:"vector bytes"`
+	Simple        int64      `tl:"int"`
+	SimpleUint    uint       `tl:"int"`
+	SimpleUintBig uint64     `tl:"long"`
+	In            *TestInner `tl:"struct boxed"`
+	InX           any        `tl:"struct boxed [in]"`
+	In2           []any      `tl:"vector struct boxed [in]"`
+	Data          [][]byte   `tl:"vector bytes"`
 }
 
 func TestParse(t *testing.T) {
@@ -25,7 +27,7 @@ func TestParse(t *testing.T) {
 	Register(TestTL{}, "root 222")
 
 	data, _ := hex.DecodeString(
-		"391523a1" + "01000000" +
+		"391523a1" + "01000000" + "05000000" + "0900000000000000" +
 			"e323006f" + "0200000000000000" + "7777777777777777777777777777777777777777777777777777777777777777" +
 			"e323006f" + "0800000000000000" + "7177777777777777777777777777777777777777777777777777777777777777" +
 			"02000000" + "e323006f" + "0700000000000000" + "7777777777777777777777777777777777777777777777777777777777777777" + "e323006f" + "0800000000000000" + "7777777777777777777777777777777777777777777777777777777777777777" +

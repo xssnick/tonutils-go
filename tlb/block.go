@@ -1,8 +1,6 @@
 package tlb
 
 import (
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
 
@@ -16,43 +14,9 @@ func init() {
 type BlockInfo struct {
 	Workchain int32  `tl:"int"`
 	Shard     int64  `tl:"long"`
-	SeqNo     int32  `tl:"int"`
+	SeqNo     uint32 `tl:"int"`
 	RootHash  []byte `tl:"int256"`
 	FileHash  []byte `tl:"int256"`
-}
-
-func (b *BlockInfo) Load(data []byte) ([]byte, error) {
-	if len(data) < 32+32+4+8+4 {
-		return nil, errors.New("not enough length")
-	}
-
-	b.Workchain = int32(binary.LittleEndian.Uint32(data))
-	data = data[4:]
-
-	b.Shard = int64(binary.LittleEndian.Uint64(data))
-	data = data[8:]
-
-	b.SeqNo = int32(binary.LittleEndian.Uint32(data))
-	data = data[4:]
-
-	b.RootHash = data[:32]
-	data = data[32:]
-
-	b.FileHash = data[:32]
-	data = data[32:]
-
-	return data, nil
-}
-
-func (b *BlockInfo) Serialize() []byte {
-	data := make([]byte, 16)
-	binary.LittleEndian.PutUint32(data, uint32(b.Workchain))
-	binary.LittleEndian.PutUint64(data[4:], uint64(b.Shard))
-	binary.LittleEndian.PutUint32(data[12:], uint32(b.SeqNo))
-	data = append(data, b.RootHash...)
-	data = append(data, b.FileHash...)
-
-	return data
 }
 
 type StateUpdate struct {
@@ -265,7 +229,7 @@ func (h *BlockHeader) GetParentBlocks() ([]*BlockInfo, error) {
 	if !h.AfterMerge && !h.AfterSplit {
 		return []*BlockInfo{{
 			Workchain: workchain,
-			SeqNo:     int32(h.PrevRef.Prev1.SeqNo),
+			SeqNo:     h.PrevRef.Prev1.SeqNo,
 			RootHash:  h.PrevRef.Prev1.RootHash,
 			FileHash:  h.PrevRef.Prev1.FileHash,
 			Shard:     int64(shard),
@@ -273,7 +237,7 @@ func (h *BlockHeader) GetParentBlocks() ([]*BlockInfo, error) {
 	} else if !h.AfterMerge && h.AfterSplit {
 		return []*BlockInfo{{
 			Workchain: workchain,
-			SeqNo:     int32(h.PrevRef.Prev1.SeqNo),
+			SeqNo:     h.PrevRef.Prev1.SeqNo,
 			RootHash:  h.PrevRef.Prev1.RootHash,
 			FileHash:  h.PrevRef.Prev1.FileHash,
 			Shard:     int64(shardParent(shard)),
@@ -285,14 +249,14 @@ func (h *BlockHeader) GetParentBlocks() ([]*BlockInfo, error) {
 	}
 	parents = append(parents, &BlockInfo{
 		Workchain: workchain,
-		SeqNo:     int32(h.PrevRef.Prev1.SeqNo),
+		SeqNo:     h.PrevRef.Prev1.SeqNo,
 		RootHash:  h.PrevRef.Prev1.RootHash,
 		FileHash:  h.PrevRef.Prev1.FileHash,
 		Shard:     int64(shardChild(shard, true)),
 	})
 	parents = append(parents, &BlockInfo{
 		Workchain: workchain,
-		SeqNo:     int32(h.PrevRef.Prev2.SeqNo),
+		SeqNo:     h.PrevRef.Prev2.SeqNo,
 		RootHash:  h.PrevRef.Prev2.RootHash,
 		FileHash:  h.PrevRef.Prev2.FileHash,
 		Shard:     int64(shardChild(shard, false)),

@@ -224,7 +224,11 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *tlb.BlockInfo) (*tl
 
 // GetBlockTransactions - list of block transactions
 func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockInfo, count uint32, after ...*tlb.TransactionID) ([]*tlb.TransactionID, bool, error) {
-	req := append(block.Serialize(), make([]byte, 8)...)
+	blockData, err := tl.Serialize(block, false)
+	if err != nil {
+		return nil, false, err
+	}
+	req := append(blockData, make([]byte, 8)...)
 
 	mode := uint32(0b111)
 	if after != nil && after[0] != nil {
@@ -249,7 +253,7 @@ func (c *APIClient) GetBlockTransactions(ctx context.Context, block *tlb.BlockIn
 	switch resp.TypeID {
 	case _BlockTransactions:
 		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
+		resp.Data, err = tl.Parse(b, resp.Data, false)
 		if err != nil {
 			return nil, false, err
 		}
@@ -357,7 +361,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *tlb.BlockInf
 				shards = append(shards, &tlb.BlockInfo{
 					Workchain: int32(workchain),
 					Shard:     shardDesc.NextValidatorShard,
-					SeqNo:     int32(shardDesc.SeqNo),
+					SeqNo:     shardDesc.SeqNo,
 					RootHash:  shardDesc.RootHash,
 					FileHash:  shardDesc.FileHash,
 				})

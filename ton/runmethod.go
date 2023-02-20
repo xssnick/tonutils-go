@@ -24,10 +24,15 @@ func NewExecutionResult(data []any) *ExecutionResult {
 }
 
 func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ExecutionResult, error) {
+	blockData, err := tl.Serialize(blockInfo, false)
+	if err != nil {
+		return nil, err
+	}
+
 	data := make([]byte, 4)
 	binary.LittleEndian.PutUint32(data, 0b00000100)
 
-	data = append(data, blockInfo.Serialize()...)
+	data = append(data, blockData...)
 
 	chain := make([]byte, 4)
 	binary.LittleEndian.PutUint32(chain, uint32(addr.Workchain()))
@@ -66,13 +71,13 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		resp.Data = resp.Data[4:]
 
 		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
+		resp.Data, err = tl.Parse(b, resp.Data, false)
 		if err != nil {
 			return nil, err
 		}
 
 		shard := new(tlb.BlockInfo)
-		resp.Data, err = shard.Load(resp.Data)
+		resp.Data, err = tl.Parse(shard, resp.Data, false)
 		if err != nil {
 			return nil, err
 		}
