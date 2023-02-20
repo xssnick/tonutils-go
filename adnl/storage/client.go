@@ -30,7 +30,7 @@ type DHT interface {
 
 type TorrentDownloader interface {
 	ListFiles() []string
-	GetFileOffsets(name string) (exist bool, fromPiece uint32, toPiece uint32, fromPieceOffset uint32, toPieceOffset uint32)
+	GetFileOffsets(name string) (exist bool, size uint64, fromPiece uint32, toPiece uint32, fromPieceOffset uint32, toPieceOffset uint32)
 	DownloadPiece(ctx context.Context, pieceIndex uint32) (_ []byte, err error)
 	Close()
 }
@@ -390,7 +390,7 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 	}
 }
 
-func (t *torrentDownloader) GetFileOffsets(name string) (exist bool, fromPiece uint32, toPiece uint32, fromPieceOffset uint32, toPieceOffset uint32) {
+func (t *torrentDownloader) GetFileOffsets(name string) (exist bool, size uint64, fromPiece uint32, toPiece uint32, fromPieceOffset uint32, toPieceOffset uint32) {
 	i, ok := t.filesIndex[name]
 	if !ok {
 		return
@@ -406,6 +406,7 @@ func (t *torrentDownloader) GetFileOffsets(name string) (exist bool, fromPiece u
 	toPiece = uint32((t.info.HeaderSize + end) / uint64(t.info.PieceSize))
 	fromPieceOffset = uint32((t.info.HeaderSize + start) - uint64(fromPiece)*uint64(t.info.PieceSize))
 	toPieceOffset = uint32((t.info.HeaderSize + end) - uint64(toPiece)*uint64(t.info.PieceSize))
+	size = (uint64(toPiece-fromPiece)*uint64(t.info.PieceSize) + uint64(toPieceOffset)) - uint64(fromPieceOffset)
 	return
 }
 
