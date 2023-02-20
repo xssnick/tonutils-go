@@ -303,7 +303,8 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 	rl := overlay.CreateExtendedRLDP(rldp.NewClientV2(extADNL)).CreateOverlay(node.Overlay)
 
 	var sessionReady = make(chan int64, 1)
-	var setReady sync.Once
+	var ready bool
+	var readyMx sync.Mutex
 	rl.SetOnQuery(func(transferId []byte, query *rldp.Query) error {
 		ctx, cancel := context.WithTimeout(t.globalCtx, 500*time.Second)
 		defer cancel()
@@ -315,7 +316,8 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 				return err
 			}
 
-			setReady.Do(func() {
+			readyMx.Lock()
+			if !ready {
 				var status Ok
 				err = rl.DoQuery(ctx, 1<<25, &AddUpdate{
 					SessionID: q.SessionID,
@@ -329,14 +331,12 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 						},
 					},
 				}, &status)
-				if err != nil {
-					// we will try again on next ping
-					setReady = sync.Once{}
-					return
+				if err == nil { // if err - we will try again on next ping
+					ready = true
+					sessionReady <- q.SessionID
 				}
-
-				sessionReady <- q.SessionID
-			})
+			}
+			readyMx.Unlock()
 		case AddUpdate:
 			// do nothing with this info for now, just ok
 			err = rl.SendAnswer(ctx, query.MaxAnswerSize, query.ID, transferId, &Ok{})
