@@ -2,8 +2,6 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
@@ -11,6 +9,10 @@ import (
 	"sync"
 	"time"
 )
+
+func init() {
+	tl.Register(LSError{}, "liteServer.error code:int message:string = liteServer.Error")
+}
 
 // requests
 const (
@@ -55,6 +57,7 @@ const (
 
 type LiteClient interface {
 	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
+	DoRequest(ctx context.Context, payload tl.Serializable) (*liteclient.LiteResponse, error)
 	StickyContext(ctx context.Context) context.Context
 	StickyNodeID(ctx context.Context) uint32
 }
@@ -64,8 +67,8 @@ type ContractExecError struct {
 }
 
 type LSError struct {
-	Code int32
-	Text string
+	Code int32  `tl:"int"`
+	Text string `tl:"string"`
 }
 
 type APIClient struct {
@@ -97,21 +100,6 @@ func (e LSError) Is(err error) bool {
 		return true
 	}
 	return false
-}
-
-func (e *LSError) Load(data []byte) ([]byte, error) {
-	if len(data) < 4+1 {
-		return nil, errors.New("not enough length")
-	}
-
-	e.Code = int32(binary.LittleEndian.Uint32(data))
-	txt, data, err := tl.FromBytes(data[4:])
-	if err != nil {
-		return nil, err
-	}
-	e.Text = string(txt)
-
-	return data, nil
 }
 
 func (e ContractExecError) Error() string {

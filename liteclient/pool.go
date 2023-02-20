@@ -3,9 +3,11 @@ package liteclient
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tl"
 	"io"
 	mRand "math/rand"
 	"sync"
@@ -96,10 +98,83 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 	// buffered channel to not block listener
 	ch := make(chan *LiteResponse, 1)
 
+	typData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(typData, uint32(typeID))
+	payload = append(typData, payload...)
 	req := &LiteRequest{
 		TypeID:   typeID,
 		QueryID:  id,
 		Data:     payload,
+		RespChan: ch,
+	}
+
+	hexID := hex.EncodeToString(id)
+
+	c.reqMx.Lock()
+	c.activeReqs[hexID] = req
+	c.reqMx.Unlock()
+
+	defer func() {
+		c.reqMx.Lock()
+		delete(c.activeReqs, hexID)
+		c.reqMx.Unlock()
+	}()
+
+	var host string
+	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
+		host, err = c.querySticky(nodeID, req)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		host, err = c.queryWithBalancer(req)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	_, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		// fallback timeout to not stuck forever with background context
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+
+	// wait for response
+	select {
+	case resp := <-ch:
+		if resp.err != nil {
+			return nil, resp.err
+		}
+
+		return resp, nil
+	case <-ctx.Done():
+		if !hasDeadline {
+			return nil, fmt.Errorf("liteserver request timeout, node %s", host)
+		}
+		return nil, fmt.Errorf("deadline exceeded, node %s, err: %w", host, ctx.Err())
+	}
+}
+
+func (c *ConnectionPool) DoRequest(ctx context.Context, payload tl.Serializable) (*LiteResponse, error) {
+	id := make([]byte, 32)
+
+	_, err := io.ReadFull(rand.Reader, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// buffered channel to not block listener
+	ch := make(chan *LiteResponse, 1)
+
+	payloadSerialized, err := tl.Serialize(payload, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize payload, err: %w", err)
+	}
+	req := &LiteRequest{
+		QueryID:  id,
+		Data:     payloadSerialized,
 		RespChan: ch,
 	}
 

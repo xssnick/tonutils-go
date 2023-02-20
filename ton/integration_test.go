@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"reflect"
 	"testing"
 	"time"
 
@@ -355,7 +356,7 @@ func Test_BlockScan(t *testing.T) {
 			for {
 				time.Sleep(3 * time.Second)
 
-				shards[i], err = api.LookupBlock(ctx, shard.Workchain, shard.Shard, shard.SeqNo+1)
+				shards[i], err = api.LookupBlock(ctx, shard.Workchain, shard.Shard, uint32(shard.SeqNo+1))
 				if err != nil {
 					if err == ErrBlockNotFound {
 						log.Printf("block %d of shard %d is not exists yet, waiting a bit longer...", shard.SeqNo+1, shard.Shard)
@@ -451,5 +452,29 @@ func Test_GetConfigParams8(t *testing.T) {
 
 	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
 		t.Fatal("bad config response for 8 param")
+	}
+}
+
+func Test_LSErrorCase(t *testing.T) {
+	connectionPool := liteclient.NewConnectionPool()
+
+	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx := connectionPool.StickyContext(_ctx)
+
+	b, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+	b.RootHash[12] = b.RootHash[12] << 1
+
+	addr := address.MustParseAddr("EQCW0cn9TQuZ3tW_Tche1HIGGa7apwFsi7v3YtmYC6FoIzLr")
+	_, err = api.GetAccount(ctx, b, addr)
+	if err != nil {
+		_, ok := err.(*LSError)
+		if !ok {
+			t.Fatalf("not expected type of error, want *LSError, got '%s'", reflect.TypeOf(err).String())
+		}
 	}
 }
