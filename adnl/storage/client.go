@@ -532,7 +532,7 @@ func (t *torrentDownloader) scale(num int) error {
 			}
 			checkedNodes[id] = true
 
-			ctx, cancel := context.WithTimeout(t.globalCtx, 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.globalCtx, 7*time.Second)
 			stNode, err := t.connectToNode(ctx, adnlID, node, func() {
 				t.mx.Lock()
 				delete(t.activeNodes, id)
