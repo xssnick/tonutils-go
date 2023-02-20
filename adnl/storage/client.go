@@ -140,7 +140,7 @@ func (c *Client) CreateDownloader(ctx context.Context, bagId []byte, desiredMinP
 		knownNodes:         map[string]*overlay.Node{},
 		globalCtx:          globalCtx,
 		downloadCancel:     downloadCancel,
-		pieceQueue:         make(chan *pieceRequest, 10),
+		pieceQueue:         make(chan *pieceRequest, 50),
 		desiredMinPeersNum: desiredMinPeersNum,
 		threadsPerPeer:     threadsPerPeer,
 	}
@@ -252,7 +252,7 @@ func (s *storageNode) loop() {
 		var piece Piece
 		resp.err = func() error {
 			reqCtx, cancel := context.WithTimeout(req.ctx, 7*time.Second)
-			err := s.rldp.DoQuery(reqCtx, int64(s.torrent.info.PieceSize)*3, &GetPiece{req.index}, &piece)
+			err := s.rldp.DoQuery(reqCtx, 4096+int64(s.torrent.info.PieceSize)*3, &GetPiece{req.index}, &piece)
 			cancel()
 			if err != nil {
 				return fmt.Errorf("failed to query piece %d. err: %w", req.index, err)
