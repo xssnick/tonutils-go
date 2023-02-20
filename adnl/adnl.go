@@ -145,7 +145,7 @@ func (a *ADNL) processPacket(packet *PacketContent, ch *Channel) (err error) {
 	seqno := uint64(*packet.Seqno)
 	a.lastReceiveAt = time.Now()
 
-	if ch == nil && packet.From != nil {
+	if ch == nil && packet.From != nil && a.peerKey == nil {
 		a.peerKey = packet.From.Key
 	}
 
@@ -211,12 +211,12 @@ func (a *ADNL) processMessage(message any, ch *Channel) error {
 		defer a.mx.Unlock()
 
 		if a.channel != nil {
-			if !bytes.Equal(a.channel.peerKey, ms.Key) {
-				return fmt.Errorf("another channel is already initialized")
+			if bytes.Equal(a.channel.peerKey, ms.Key) {
+				// already initialized on our side, but client missed confirmation,
+				// channel is already known, so more confirmations will be sent in the next packets
+				return nil
 			}
-			// already initialized on our side, but client missed confirmation,
-			// channel is already known, so more confirmations will be sent in the next packets
-			return nil
+			// looks like channel was lost on the other side, we will reinit it
 		}
 
 		_, key, err := ed25519.GenerateKey(nil)
@@ -235,16 +235,13 @@ func (a *ADNL) processMessage(message any, ch *Channel) error {
 		if err != nil {
 			return fmt.Errorf("failed to setup channel: %w", err)
 		}
-
-		if a.channel == nil {
-			a.channel = newChan
-		}
+		a.channel = newChan
 	case MessageConfirmChannel:
 		a.mx.Lock()
 		defer a.mx.Unlock()
 
 		if a.channel == nil || !bytes.Equal(a.channel.key.Public().(ed25519.PublicKey), ms.PeerKey) {
-			return fmt.Errorf("confirmation for unknown channel")
+			return fmt.Errorf("confirmation for unknown channel %s", hex.EncodeToString(ms.PeerKey))
 		}
 
 		if a.channel.ready {

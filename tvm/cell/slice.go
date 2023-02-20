@@ -501,6 +501,8 @@ func (c *Slice) Copy() *Slice {
 	}
 
 	return &Slice{
+		special:  c.special,
+		level:    c.level,
 		bitsSz:   c.bitsSz,
 		loadedSz: c.loadedSz,
 		data:     data,

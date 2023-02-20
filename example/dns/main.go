@@ -36,7 +36,15 @@ func main() {
 	}
 
 	log.Println("wallet record:", domain.GetWalletRecord())
-	log.Println("site record:", hex.EncodeToString(domain.GetSiteRecord()))
+
+	siteRecord, inStorage := domain.GetSiteRecord()
+	if inStorage {
+		log.Println("site type: ton storage")
+		log.Println("bag id record:", hex.EncodeToString(siteRecord))
+	} else {
+		log.Println("site type: adnl backend")
+		log.Println("adnl record:", hex.EncodeToString(siteRecord))
+	}
 
 	nftData, err := domain.GetNFTData(ctx)
 	if err != nil {

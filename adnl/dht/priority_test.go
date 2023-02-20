@@ -187,7 +187,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 	usedNode, _ := pList.getNode()
 
 	t.Run("markNotUsed test", func(t *testing.T) {
-		pList.markNotUsed(usedNode)
+		pList.markUsed(usedNode, false)
 
 		curNode = pList.list
 		for curNode != nil {

@@ -32,7 +32,7 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	var payload []byte
 	for i := 0; i < len(orderCells); i++ {
 		// serialize each cell
-		payload = append(payload, orderCells[i].serialize(uint(cellSizeBytes), false)...)
+		payload = append(payload, orderCells[i].serialize(uint(cellSizeBytes))...)
 	}
 
 	// bytes needed to store len of payload
@@ -81,30 +81,43 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	return data
 }
 
-func (c *Cell) serialize(refIndexSzBytes uint, isHash bool) []byte {
-	// copy
-	payload := append([]byte{}, c.BeginParse().MustLoadSlice(c.bitsSz)...)
+func (c *Cell) serialize(refIndexSzBytes uint) []byte {
+	body := c.BeginParse().MustLoadSlice(c.bitsSz)
+
+	data := make([]byte, 2+len(body))
+	data[0], data[1] = c.descriptors(0)
+	copy(data[2:], body)
 
 	unusedBits := 8 - (c.bitsSz % 8)
 	if unusedBits != 8 {
 		// we need to set bit at the end if not whole byte was used
-		payload[len(payload)-1] += 1 << (unusedBits - 1)
+		data[2+len(body)-1] += 1 << (unusedBits - 1)
 	}
 
-	data := append(c.descriptors(), payload...)
+	for _, ref := range c.refs {
+		data = append(data, dynamicIntBytes(uint64(ref.index), refIndexSzBytes)...)
+	}
 
-	if !isHash {
-		for _, ref := range c.refs {
-			data = append(data, dynamicIntBytes(uint64(ref.index), refIndexSzBytes)...)
-		}
-	} else {
-		for _, ref := range c.refs {
-			data = append(data, make([]byte, 2)...)
-			binary.BigEndian.PutUint16(data[len(data)-2:], uint16(ref.maxDepth(0)))
-		}
-		for _, ref := range c.refs {
-			data = append(data, ref.Hash()...)
-		}
+	return data
+}
+
+func (c *Cell) serializeHash() []byte {
+	body := c.BeginParse().MustLoadSlice(c.bitsSz)
+
+	data := make([]byte, 2+len(body)+len(c.refs)*(2+32))
+	data[0], data[1] = c.descriptors(0)
+	copy(data[2:], body)
+	offset := 2 + len(body)
+
+	unusedBits := 8 - (c.bitsSz % 8)
+	if unusedBits != 8 {
+		// we need to set bit at the end if not whole byte was used
+		data[offset-1] += 1 << (unusedBits - 1)
+	}
+
+	for i, ref := range c.refs {
+		binary.BigEndian.PutUint16(data[offset+(2*i):], uint16(ref.maxDepth(0)))
+		copy(data[offset+(2*len(c.refs))+(32*i):], ref.Hash())
 	}
 
 	return data
@@ -121,7 +134,7 @@ func (c *Cell) maxDepth(start int) int {
 	return d
 }
 
-func (c *Cell) descriptors() []byte {
+func (c *Cell) descriptors(unwrapLevel byte) (byte, byte) {
 	ceilBytes := c.bitsSz / 8
 	if c.bitsSz%8 != 0 {
 		ceilBytes++
@@ -135,7 +148,14 @@ func (c *Cell) descriptors() []byte {
 		specBit = 8
 	}
 
-	return []byte{byte(len(c.refs)) + specBit + c.level*32, byte(ln)}
+	lvl := c.level
+	if lvl >= unwrapLevel {
+		lvl -= unwrapLevel
+	} else {
+		lvl = 0
+	}
+
+	return byte(len(c.refs)) + specBit + lvl*32, byte(ln)
 }
 
 func dynamicIntBytes(val uint64, sz uint) []byte {

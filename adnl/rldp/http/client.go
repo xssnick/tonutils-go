@@ -24,6 +24,8 @@ import (
 const _ChunkSize = 1 << 17
 const _RLDPMaxAnswerSize = 2*_ChunkSize + 1024
 
+var ErrSiteUsesStorage = fmt.Errorf("requested site is static and uses ton storage, you can files using storage.Downloader")
+
 type DHT interface {
 	StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error)
 	FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error)
@@ -404,11 +406,12 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 }
 
 func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string) (err error) {
-	var adnlID []byte
+	var id []byte
+	var inStorage bool
 	if strings.HasSuffix(host, ".adnl") {
-		adnlID, err = ParseADNLAddress(host[:len(host)-5])
+		id, err = ParseADNLAddress(host[:len(host)-5])
 		if err != nil {
-			return fmt.Errorf("failed to aprse adnl address %s, err: %w", host, err)
+			return fmt.Errorf("failed to parse adnl address %s, err: %w", host, err)
 		}
 	} else {
 		var domain *dns.Domain
@@ -424,12 +427,15 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 			return fmt.Errorf("failed to resolve host %s, err: %w", host, err)
 		}
 
-		adnlID = domain.GetSiteRecord()
+		id, inStorage = domain.GetSiteRecord()
+		if inStorage {
+			return ErrSiteUsesStorage
+		}
 	}
 
-	addresses, pubKey, err := t.dht.FindAddresses(ctx, adnlID)
+	addresses, pubKey, err := t.dht.FindAddresses(ctx, id)
 	if err != nil {
-		return fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", host, hex.EncodeToString(adnlID), err)
+		return fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", host, hex.EncodeToString(id), err)
 	}
 
 	var triedAddresses []string

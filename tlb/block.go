@@ -53,7 +53,7 @@ func (b *BlockInfo) Serialize() []byte {
 
 type StateUpdate struct {
 	Old ShardState `tlb:"^"`
-	New ShardState `tlb:"^"`
+	New *cell.Cell `tlb:"^"`
 }
 
 type McBlockExtra struct {

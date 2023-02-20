@@ -20,21 +20,47 @@ import (
 	"time"
 )
 
+type MockGateway struct {
+	reg func(addr string, key ed25519.PublicKey) (adnl.Peer, error)
+}
+
+func (m *MockGateway) RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	return m.reg(addr, key)
+}
+
 type MockADNL struct {
 	query func(ctx context.Context, req, result tl.Serializable) error
 	close func()
+}
+
+func (m MockADNL) SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error) {
+	return
+}
+
+func (m MockADNL) SetQueryHandler(handler func(msg *adnl.MessageQuery) error) {
+	return
+}
+
+func (m MockADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return nil
+
+}
+
+func (m MockADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
+	return nil
+}
+
+func (m MockADNL) RemoteAddr() string {
+	return ""
 }
 
 func (m MockADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	return m.query(ctx, req, result)
 }
 
-func (m MockADNL) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
-}
+func (m MockADNL) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {}
 
-func (m MockADNL) Close() {
-
-}
+func (m MockADNL) Close() {}
 
 var cnf = &liteclient.GlobalConfig{
 	Type: "config.global",
@@ -184,8 +210,9 @@ func TestClient_FindValue(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
-				return MockADNL{
+			gateway := &MockGateway{}
+			gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+				return &MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
 						case Ping:
@@ -220,7 +247,7 @@ func TestClient_FindValue(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			dhtCli, err := NewClientFromConfig(ctx, cnf)
+			dhtCli, err := NewClientFromConfig(ctx, gateway, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -232,7 +259,7 @@ func TestClient_FindValue(t *testing.T) {
 
 			time.Sleep(1 * time.Second)
 
-			res, got := dhtCli.FindValue(context.Background(), &Key{
+			res, _, got := dhtCli.FindValue(context.Background(), &Key{
 				ID:    siteAddr,
 				Name:  []byte("address"),
 				Index: 0,
@@ -315,7 +342,8 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+			gateway := &MockGateway{}
+			gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 				return MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
@@ -340,7 +368,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			cli, err := NewClientFromConfig(ctx, cnf)
+			cli, err := NewClientFromConfig(ctx, gateway, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -416,7 +444,8 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 	tPubIdRes := adnl.PublicKeyED25519{Key: pubId}
 
 	t.Run("find addresses positive case", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -454,7 +483,7 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		cli, err := NewClientFromConfig(ctx, cnf)
+		cli, err := NewClientFromConfig(ctx, gateway, cnf)
 		if err != nil {
 			t.Fatal("failed to prepare test client, err:", err)
 		}
@@ -474,15 +503,23 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 }
 
 func TestClient_FindAddressesIntegration(t *testing.T) {
-	// restore after unit tests
-	connect = connectOriginal
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
+	gateway, err := adnl.StartClientGateway(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// restore after unit tests
 	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -501,7 +538,8 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 }
 
 func TestClient_Close(t *testing.T) {
-	connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				switch request := req.(type) {
@@ -520,7 +558,7 @@ func TestClient_Close(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cli, err := NewClientFromConfig(ctx, cnf)
+	cli, err := NewClientFromConfig(ctx, gateway, cnf)
 	if err != nil {
 		t.Fatal("failed to prepare test client, err: ", err)
 	}
@@ -530,7 +568,7 @@ func TestClient_Close(t *testing.T) {
 			t.Error("found active nodes in client after 'Close' operation")
 		}
 		for _, node := range cli.activeNodes {
-			if node.closed != true {
+			if node.adnl != nil {
 				t.Errorf("found connected node (id: %s) after 'Close' operation", hex.EncodeToString(node.id))
 			}
 		}
@@ -609,7 +647,8 @@ func TestClient_Store(t *testing.T) {
 	}
 
 	t.Run("positive store case", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -661,7 +700,7 @@ func TestClient_Store(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		cli, err := NewClientFromConfig(ctx, cnf)
+		cli, err := NewClientFromConfig(ctx, gateway, cnf)
 		if err != nil {
 			t.Fatal("failed to prepare test client, err: ", err)
 		}

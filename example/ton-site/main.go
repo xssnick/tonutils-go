@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/dht"
 	rldphttp "github.com/xssnick/tonutils-go/adnl/rldp/http"
 	"io"
@@ -19,7 +20,17 @@ func handler(writer http.ResponseWriter, request *http.Request) {
 }
 
 func main() {
-	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/testnet-global.config.json")
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	gateway, err := adnl.StartClientGateway(priv)
+	if err != nil {
+		panic(err)
+	}
+
+	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), gateway, "https://ton-blockchain.github.io/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}

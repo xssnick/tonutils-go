@@ -23,7 +23,8 @@ type ADNL interface {
 }
 
 type RLDP struct {
-	adnl ADNL
+	adnl  ADNL
+	useV2 bool
 
 	activeRequests  map[string]chan any
 	activeTransfers map[string]chan bool
@@ -39,8 +40,15 @@ type RLDP struct {
 type decoderStream struct {
 	decoder        *raptorq.Decoder
 	finishedAt     *time.Time
-	lastCompleteAt *time.Time
-	mx             sync.Mutex
+	lastCompleteAt time.Time
+	lastMessageAt  time.Time
+	lastConfirmAt  time.Time
+
+	maxSeqno             int32
+	receivedNum          int32
+	receivedNumConfirmed int32
+
+	mx sync.Mutex
 }
 
 const _MTU = 1 << 37
@@ -59,6 +67,12 @@ func NewClient(a ADNL) *RLDP {
 	a.SetDisconnectHandler(r.handleADNLDisconnect)
 
 	return r
+}
+
+func NewClientV2(a ADNL) *RLDP {
+	c := NewClient(a)
+	c.useV2 = true
+	return c
 }
 
 func (r *RLDP) SetOnQuery(handler func(transferId []byte, query *Query) error) {
@@ -81,6 +95,23 @@ func (r *RLDP) handleADNLDisconnect(addr string, key ed25519.PublicKey) {
 }
 
 func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
+	isV2 := true
+	switch m := msg.Data.(type) {
+	case MessagePartV2:
+		msg.Data = MessagePart(m)
+	case CompleteV2:
+		msg.Data = Complete(m)
+	case ConfirmV2:
+		// TODO: use other params too
+		msg.Data = Confirm{
+			TransferID: m.TransferID,
+			Part:       m.Part,
+			Seqno:      m.MaxSeqno,
+		}
+	default:
+		isV2 = false
+	}
+
 	switch m := msg.Data.(type) {
 	case MessagePart:
 		fec, ok := m.FecType.(FECRaptorQ)
@@ -103,11 +134,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 				return fmt.Errorf("failed to init raptorq decoder: %w", err)
 			}
 			stream = &decoderStream{
-				decoder: dec,
+				decoder:       dec,
+				lastMessageAt: time.Now(),
 			}
 
 			r.mx.Lock()
-
 			// check again because of possible concurrency
 			if r.recvStreams[id] != nil {
 				stream = r.recvStreams[id]
@@ -121,20 +152,25 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		defer stream.mx.Unlock()
 
 		if stream.finishedAt != nil {
-			if stream.lastCompleteAt == nil ||
-				stream.lastCompleteAt.Add(_PacketWaitTime).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
-				// got packet for a finished stream, let them know that it is completed, again
-				err := r.adnl.SendCustomMessage(context.Background(), Complete{
+			if stream.lastCompleteAt.Add(_PacketWaitTime).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
+
+				var complete tl.Serializable = Complete{
 					TransferID: m.TransferID,
 					Part:       m.Part,
-				})
+				}
+
+				if isV2 {
+					complete = CompleteV2(complete.(Complete))
+				}
+
+				// got packet for a finished stream, let them know that it is completed, again
+				err := r.adnl.SendCustomMessage(context.Background(), complete)
 				if err != nil {
 					return fmt.Errorf("failed to send rldp complete message: %w", err)
 				}
 
-				tm := time.Now()
 				r.mx.Lock()
-				r.recvStreams[id].lastCompleteAt = &tm
+				r.recvStreams[id].lastCompleteAt = time.Now()
 				r.mx.Unlock()
 			}
 			return nil
@@ -145,6 +181,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			return fmt.Errorf("failed to add raptorq symbol %d: %w", m.Seqno, err)
 		}
 
+		tm := time.Now()
+		stream.lastMessageAt = tm
+		stream.receivedNum++
+
+		completed := false
 		if canTryDecode {
 			decoded, data, err := stream.decoder.Decode()
 			if err != nil {
@@ -153,15 +194,15 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 			// it may not be decoded due to unsolvable math system, it means we need more symbols
 			if decoded {
-				tm := time.Now()
 				stream.finishedAt = &tm
 				stream.decoder = nil
 
 				r.mx.Lock()
 				if len(r.recvStreams) > 100 {
 					for sID, s := range r.recvStreams {
-						// remove streams that was finished more than 30 sec ago.
-						if s.finishedAt != nil && s.finishedAt.Add(30*time.Second).Before(time.Now()) {
+						// remove streams that was finished more than 30 sec ago or when it was no messages for more than 60 seconds.
+						if s.lastMessageAt.Add(60*time.Second).Before(tm) ||
+							(s.finishedAt != nil && s.finishedAt.Add(30*time.Second).Before(tm)) {
 							delete(r.recvStreams, sID)
 						}
 					}
@@ -174,10 +215,16 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					return fmt.Errorf("failed to parse custom message: %w", err)
 				}
 
-				err = r.adnl.SendCustomMessage(context.Background(), Complete{
+				var complete tl.Serializable = Complete{
 					TransferID: m.TransferID,
 					Part:       m.Part,
-				})
+				}
+
+				if isV2 {
+					complete = CompleteV2(complete.(Complete))
+				}
+
+				err = r.adnl.SendCustomMessage(context.Background(), complete)
 				if err != nil {
 					return fmt.Errorf("failed to send rldp complete message: %w", err)
 				}
@@ -210,6 +257,38 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					}
 				default:
 					log.Println("skipping unwanted rldp message of type", reflect.TypeOf(res).String())
+				}
+				completed = true
+			}
+		}
+
+		if !completed && m.Seqno > stream.maxSeqno {
+			stream.maxSeqno = m.Seqno
+
+			// send confirm for each 10 packets or after 30 ms
+			if stream.lastConfirmAt.Add(30*time.Millisecond).Before(tm) ||
+				stream.receivedNumConfirmed+5 < stream.receivedNum {
+				var confirm tl.Serializable
+				if isV2 {
+					confirm = ConfirmV2{
+						TransferID:    m.TransferID,
+						Part:          m.Part,
+						MaxSeqno:      stream.maxSeqno,
+						ReceivedMask:  0x7FFFFFFF, // TODO
+						ReceivedCount: stream.receivedNum,
+					}
+				} else {
+					confirm = Confirm{
+						TransferID: m.TransferID,
+						Part:       m.Part,
+						Seqno:      stream.maxSeqno,
+					}
+				}
+				// we don't care in case of error, not so critical
+				err = r.adnl.SendCustomMessage(context.Background(), confirm)
+				if err == nil {
+					stream.receivedNumConfirmed = stream.receivedNum
+					stream.lastConfirmAt = tm
 				}
 			}
 		}
@@ -298,7 +377,12 @@ func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte) er
 			Data:      enc.GenSymbol(symbolsSent),
 		}
 
-		err = r.adnl.SendCustomMessage(ctx, p)
+		var msgPart tl.Serializable = p
+		if r.useV2 {
+			msgPart = MessagePartV2(p)
+		}
+
+		err = r.adnl.SendCustomMessage(ctx, msgPart)
 		if err != nil {
 			return fmt.Errorf("failed to send message part %d: %w", symbolsSent, err)
 		}

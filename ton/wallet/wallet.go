@@ -442,7 +442,7 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 		Code: contractCode,
 	}
 
-	stateCell, err := state.ToCell()
+	stateCell, err := tlb.ToCell(state)
 	if err != nil {
 		return nil, err
 	}

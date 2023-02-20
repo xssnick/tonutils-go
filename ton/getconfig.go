@@ -90,7 +90,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInf
 		result := &BlockchainConfig{data: map[int32]*cell.Cell{}}
 
 		if len(onlyParams) > 0 {
-			// we need it because lite server adds some unwanted keys
+			// we need it because lite server may add some unwanted keys
 			for _, param := range onlyParams {
 				res := state.McStateExtra.ConfigParams.Config.GetByIntKey(big.NewInt(int64(param)))
 				if res == nil {

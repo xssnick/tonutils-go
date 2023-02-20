@@ -265,7 +265,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to execute handleMessage func, err: ", err)
 			}
-			if cli.recvStreams[hex.EncodeToString(tId)].lastCompleteAt == nil {
+			if cli.recvStreams[hex.EncodeToString(tId)].lastCompleteAt.IsZero() {
 				t.Error("got lastCompleteAt == nil, want != nil")
 			}
 		})

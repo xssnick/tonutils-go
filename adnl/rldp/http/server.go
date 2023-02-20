@@ -21,9 +21,8 @@ import (
 	"time"
 )
 
-type ADNLServer interface {
+type ADNLGateway interface {
 	GetAddressList() address.List
-	ListenAndServe(listenAddr string) (err error)
 	Close() error
 	SetConnectionHandler(func(client adnl.Client) error)
 	SetExternalIP(ip net.IP)
@@ -37,7 +36,7 @@ type Server struct {
 	handler        http.Handler
 	rldpInfos      map[string]*rldpInfo
 	activeRequests map[string]*payloadStream
-	adnlServer     ADNLServer
+	adnlServer     ADNLGateway
 
 	closer chan bool
 	closed bool
@@ -73,8 +72,8 @@ type respWriter struct {
 
 var Logger = log.Println
 
-var newServer = func(key ed25519.PrivateKey) ADNLServer {
-	return adnl.NewServer(key)
+var newServer = func(key ed25519.PrivateKey, listenAddr string) (ADNLGateway, error) {
+	return adnl.StartServerGateway(key, listenAddr)
 }
 
 func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
@@ -82,20 +81,11 @@ func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 		key:            key,
 		dht:            dht,
 		handler:        handler,
-		adnlServer:     newServer(key),
 		rldpInfos:      map[string]*rldpInfo{},
 		activeRequests: map[string]*payloadStream{},
 		closer:         make(chan bool, 1),
 		Timeout:        30 * time.Second,
 	}
-
-	s.adnlServer.SetConnectionHandler(func(client adnl.Client) error {
-		rl := newRLDP(client)
-		rl.SetOnQuery(s.handle(rl, client.RemoteAddr()))
-		return nil
-	})
-	s.id, _ = adnl.ToKeyID(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
-
 	return s
 }
 
@@ -150,10 +140,24 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 		}
 	}()
 
-	if err := s.adnlServer.ListenAndServe(listenAddr); err != nil {
+	s.mx.Lock()
+	adnlServer, err := newServer(s.key, listenAddr)
+	if err != nil {
+		s.mx.Unlock()
 		_ = s.Stop()
 		return err
 	}
+
+	adnlServer.SetConnectionHandler(func(client adnl.Client) error {
+		rl := newRLDP(client)
+		rl.SetOnQuery(s.handle(rl, client.RemoteAddr()))
+		return nil
+	})
+	s.id, _ = adnl.ToKeyID(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
+	s.adnlServer = adnlServer
+	s.mx.Unlock()
+
+	<-s.closer
 	return nil
 }
 
@@ -179,7 +183,7 @@ func (s *Server) updateDHT(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) Stop() error {
+func (s *Server) Stop() (err error) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
@@ -187,10 +191,12 @@ func (s *Server) Stop() error {
 		s.closed = true
 		close(s.closer)
 		s.dht.Close()
-		return s.adnlServer.Close()
-	}
 
-	return nil
+		if s.adnlServer != nil {
+			err = s.adnlServer.Close()
+		}
+	}
+	return
 }
 
 func (s *Server) handle(client RLDP, addr string) func(transferId []byte, msg *rldp.Query) error {

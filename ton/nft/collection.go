@@ -245,6 +245,9 @@ func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, edito
 }
 
 func toNftContent(content ContentAny) (*cell.Cell, error) {
+	if content == nil {
+		return cell.BeginCell().EndCell(), nil
+	}
 	if off, ok := content.(*ContentOffchain); ok {
 		// https://github.com/ton-blockchain/TIPs/issues/64
 		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped
