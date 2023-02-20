@@ -18,19 +18,6 @@ import (
 	"unsafe"
 )
 
-type Client interface {
-	SetCustomMessageHandler(handler func(msg *MessageCustom) error)
-	SetQueryHandler(handler func(msg *MessageQuery) error)
-	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
-	SendCustomMessage(ctx context.Context, req tl.Serializable) error
-	Query(ctx context.Context, req, result tl.Serializable) error
-	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
-	RemoteAddr() string
-	Close()
-
-	processPacket(packet *PacketContent, ch *Channel) (err error)
-}
-
 type Peer interface {
 	SetCustomMessageHandler(handler func(msg *MessageCustom) error)
 	SetQueryHandler(handler func(msg *MessageQuery) error)
@@ -39,7 +26,13 @@ type Peer interface {
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
 	RemoteAddr() string
+	GetID() []byte
 	Close()
+}
+
+type adnlClient interface {
+	Peer
+	processPacket(packet *PacketContent, ch *Channel) (err error)
 }
 
 type peerConn struct {
@@ -47,7 +40,7 @@ type peerConn struct {
 	channelId string
 	clientId  string
 	server    *Gateway
-	client    Client
+	client    adnlClient
 }
 
 type srvProcessor struct {
@@ -65,7 +58,7 @@ type Gateway struct {
 	processors map[string]*srvProcessor
 	peers      map[string]*peerConn
 
-	connHandler func(client Client) error
+	connHandler func(client Peer) error
 
 	started bool
 	mx      sync.RWMutex
@@ -419,7 +412,7 @@ func (s *Gateway) RegisterClient(addr string, key ed25519.PublicKey) (Peer, erro
 	return s.registerClient(udpAddr, key, string(clientId))
 }
 
-func (s *Gateway) SetConnectionHandler(handler func(client Client) error) {
+func (s *Gateway) SetConnectionHandler(handler func(client Peer) error) {
 	s.connHandler = handler
 }
 
@@ -453,6 +446,10 @@ func (s *Gateway) write(deadline time.Time, addr net.Addr, buf []byte) error {
 	}
 
 	return nil
+}
+
+func (p *peerConn) GetID() []byte {
+	return p.client.GetID()
 }
 
 func (p *peerConn) SetCustomMessageHandler(handler func(msg *MessageCustom) error) {

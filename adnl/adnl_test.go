@@ -35,7 +35,7 @@ func TestADNL_ClientServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s.SetConnectionHandler(func(client Client) error {
+	s.SetConnectionHandler(func(client Peer) error {
 		client.SetQueryHandler(func(msg *MessageQuery) error {
 			switch m := msg.Data.(type) {
 			case MessagePing:

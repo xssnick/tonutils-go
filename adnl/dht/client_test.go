@@ -50,6 +50,10 @@ func (m MockADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializ
 	return nil
 }
 
+func (m MockADNL) GetID() []byte {
+	return nil
+}
+
 func (m MockADNL) RemoteAddr() string {
 	return ""
 }

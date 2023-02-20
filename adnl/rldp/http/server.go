@@ -24,7 +24,7 @@ import (
 type ADNLGateway interface {
 	GetAddressList() address.List
 	Close() error
-	SetConnectionHandler(func(client adnl.Client) error)
+	SetConnectionHandler(func(client adnl.Peer) error)
 	SetExternalIP(ip net.IP)
 }
 
@@ -148,9 +148,14 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 		return err
 	}
 
-	adnlServer.SetConnectionHandler(func(client adnl.Client) error {
+	adnlServer.SetConnectionHandler(func(client adnl.Peer) error {
+		adnlAddr, err := SerializeADNLAddress(client.GetID())
+		if err != nil {
+			return err
+		}
+
 		rl := newRLDP(client)
-		rl.SetOnQuery(s.handle(rl, client.RemoteAddr()))
+		rl.SetOnQuery(s.handle(rl, adnlAddr, client.RemoteAddr()))
 		return nil
 	})
 	s.id, _ = adnl.ToKeyID(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
@@ -199,7 +204,7 @@ func (s *Server) Stop() (err error) {
 	return
 }
 
-func (s *Server) handle(client RLDP, addr string) func(transferId []byte, msg *rldp.Query) error {
+func (s *Server) handle(client RLDP, adnlId, addr string) func(transferId []byte, msg *rldp.Query) error {
 	netAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort(addr))
 
 	return func(transferId []byte, query *rldp.Query) error {
@@ -225,6 +230,8 @@ func (s *Server) handle(client RLDP, addr string) func(transferId []byte, msg *r
 				}
 				headers[header.Name] = append(headers[header.Name], header.Value)
 			}
+			headers.Set("X-Adnl-Ip", netAddr.IP.String())
+			headers.Set("X-Adnl-Id", adnlId)
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.Timeout)
 			defer cancel()

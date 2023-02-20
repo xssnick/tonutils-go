@@ -578,6 +578,11 @@ func (a *ADNL) GetAddressList() address.List {
 	return a.ourAddresses
 }
 
+func (a *ADNL) GetID() []byte {
+	id, _ := ToKeyID(PublicKeyED25519{Key: a.peerKey})
+	return id
+}
+
 func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, error) {
 	if a.peerKey == nil {
 		return nil, fmt.Errorf("unknown peer")
