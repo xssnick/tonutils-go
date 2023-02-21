@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
+	"github.com/xssnick/tonutils-go/address"
 	"math/big"
 	"testing"
-
-	"github.com/xssnick/tonutils-go/address"
 )
 
 func TestCell_HashSign(t *testing.T) {
@@ -154,7 +153,8 @@ func BenchmarkHash(b *testing.B) {
 
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		c.Hash()
+		c.cachedHash = nil
+		_ = c.Hash()
 	}
 	b.StopTimer()
 }

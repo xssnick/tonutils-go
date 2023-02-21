@@ -18,7 +18,7 @@ type Slice struct {
 
 	// store it as slice of pointers to make indexing logic cleaner on parse,
 	// from outside it should always come as object to not have problems
-	refs []*Slice
+	refs []*Cell
 }
 
 func (c *Slice) MustLoadRef() *Slice {
@@ -36,7 +36,7 @@ func (c *Slice) LoadRef() (*Slice, error) {
 	ref := c.refs[0]
 	c.refs = c.refs[1:]
 
-	return ref, nil
+	return ref.BeginParse(), nil
 }
 
 func (c *Slice) MustLoadMaybeRef() *Slice {
@@ -63,7 +63,7 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 	ref := c.refs[0]
 	c.refs = c.refs[1:]
 
-	return ref, nil
+	return ref.BeginParse(), nil
 }
 
 func (c *Slice) RefsNum() int {
@@ -495,18 +495,13 @@ func (c *Slice) Copy() *Slice {
 	// copy data
 	data := append([]byte{}, c.data...)
 
-	var refs []*Slice
-	for _, ref := range c.refs {
-		refs = append(refs, ref.Copy())
-	}
-
 	return &Slice{
 		special:  c.special,
 		level:    c.level,
 		bitsSz:   c.bitsSz,
 		loadedSz: c.loadedSz,
 		data:     data,
-		refs:     refs,
+		refs:     c.refs,
 	}
 }
 
@@ -519,21 +514,11 @@ func (c *Slice) ToCell() (*Cell, error) {
 		return nil, err
 	}
 
-	var refs []*Cell
-	for _, ref := range cp.refs {
-		cc, err := ref.ToCell()
-		if err != nil {
-			return nil, err
-		}
-
-		refs = append(refs, cc)
-	}
-
 	return &Cell{
 		special: c.special,
 		level:   c.level,
 		bitsSz:  left,
 		data:    data,
-		refs:    refs,
+		refs:    c.refs,
 	}, nil
 }

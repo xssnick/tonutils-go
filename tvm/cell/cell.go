@@ -51,17 +51,12 @@ func (c *Cell) BeginParse() *Slice {
 	// copy data
 	data := append([]byte{}, c.data...)
 
-	refs := make([]*Slice, len(c.refs))
-	for i, ref := range c.refs {
-		refs[i] = ref.BeginParse()
-	}
-
 	return &Slice{
 		special: c.special,
 		level:   c.level,
 		bitsSz:  c.bitsSz,
 		data:    data,
-		refs:    refs,
+		refs:    c.refs,
 	}
 }
 
