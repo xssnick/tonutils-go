@@ -22,6 +22,8 @@ type ADNL interface {
 	Close()
 }
 
+var Logger = func(a ...any) {}
+
 type RLDP struct {
 	adnl  ADNL
 	useV2 bool
@@ -238,7 +240,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 						go func() {
 							if err = handler(transferId, &rVal); err != nil {
-								log.Println("failed to handle query: ", err)
+								Logger("failed to handle query: ", err)
 							}
 						}()
 					}

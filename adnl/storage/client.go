@@ -18,8 +18,11 @@ import (
 	"math"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+var Logger = func(a ...any) {}
 
 type DHT interface {
 	StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error)
@@ -151,7 +154,7 @@ func (c *Client) CreateDownloader(ctx context.Context, bagId []byte, desiredMinP
 	}()
 
 	// connect to first node
-	err = dow.scale(1)
+	err = dow.scale(ctx, 1)
 	if err != nil {
 		err = fmt.Errorf("failed to find storage nodes for this bag, err: %w", err)
 		return nil, err
@@ -165,7 +168,7 @@ func (c *Client) CreateDownloader(ctx context.Context, bagId []byte, desiredMinP
 		err = fmt.Errorf("too big header > 20 MB, looks dangerous")
 		return nil, err
 	}
-	go dow.nodesController()
+	go dow.scaleController()
 
 	hdrPieces := dow.info.HeaderSize / uint64(dow.info.PieceSize)
 	if dow.info.HeaderSize%uint64(dow.info.PieceSize) > 0 {
@@ -174,7 +177,7 @@ func (c *Client) CreateDownloader(ctx context.Context, bagId []byte, desiredMinP
 	}
 
 	dow.piecesNum = uint32(dow.info.FileSize / uint64(dow.info.PieceSize))
-	if dow.piecesNum%dow.info.PieceSize > 0 {
+	if dow.info.FileSize%uint64(dow.info.PieceSize) > 0 {
 		dow.piecesNum += 1
 	}
 
@@ -306,7 +309,7 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 	var ready bool
 	var readyMx sync.Mutex
 	rl.SetOnQuery(func(transferId []byte, query *rldp.Query) error {
-		ctx, cancel := context.WithTimeout(t.globalCtx, 500*time.Second)
+		ctx, cancel := context.WithTimeout(t.globalCtx, 30*time.Second)
 		defer cancel()
 
 		switch q := query.Data.(type) {
@@ -382,11 +385,34 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 		err = tlb.LoadFromCell(&info, cl.BeginParse())
 		if err != nil {
 			t.mx.Unlock()
+			ax.Close()
 			return nil, fmt.Errorf("invalid torrent info cell")
 		}
 		t.info = &info
 	}
 	t.mx.Unlock()
+
+	// query first piece to be sure node is ready for downloading
+	for {
+		Logger("TRY LOAD PIECE FROM", addrs.Addresses[0].IP.String())
+		qCtx, cancelC := context.WithTimeout(ctx, 7*time.Second)
+		var piece Piece
+		err = rl.DoQuery(qCtx, 4096+int64(t.info.PieceSize)*3, &GetPiece{0}, &piece)
+		cancelC()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				ax.Close()
+				return nil, fmt.Errorf("failed to query first peice, err: %w", err)
+			case <-time.After(1 * time.Second):
+			}
+			continue
+		}
+
+		Logger("GOT PIECE FROM", hex.EncodeToString(adnlID), addrs.Addresses[0].IP.String())
+
+		break
+	}
 
 	select {
 	case id := <-sessionReady:
@@ -501,16 +527,20 @@ func (t *torrentDownloader) checkProofBranch(proof *cell.Cell, data []byte, piec
 }
 
 // scale - add more nodes to pool, to increase load speed and capacity
-func (t *torrentDownloader) scale(num int) error {
+func (t *torrentDownloader) scale(ctx context.Context, num int) error {
 	if num == 0 {
 		return nil
 	}
 
 	var nodesDhtCont *dht.Continuation
 
+	connections := make(chan bool, num)
+
 	checkedNodes := map[string]bool{}
 	attempts := 2
 	for {
+		toCheck := make([]*overlay.Node, 0, len(t.knownNodes))
+		t.mx.RLock()
 		for _, node := range t.knownNodes {
 			adnlID, err := adnl.ToKeyID(node.ID)
 			if err != nil {
@@ -518,9 +548,8 @@ func (t *torrentDownloader) scale(num int) error {
 			}
 			id := hex.EncodeToString(adnlID)
 
-			t.mx.RLock()
 			isActive := t.activeNodes[id] != nil
-			t.mx.RUnlock()
+
 			// will not connect to already active node
 			if isActive {
 				continue
@@ -532,54 +561,105 @@ func (t *torrentDownloader) scale(num int) error {
 			}
 			checkedNodes[id] = true
 
-			ctx, cancel := context.WithTimeout(t.globalCtx, 7*time.Second)
-			stNode, err := t.connectToNode(ctx, adnlID, node, func() {
-				t.mx.Lock()
-				delete(t.activeNodes, id)
-				t.mx.Unlock()
-			})
-			if err != nil {
-				cancel()
-				continue
-			}
+			toCheck = append(toCheck, node)
+		}
+		t.mx.RUnlock()
 
-			var al overlay.NodesList
-			err = stNode.rldp.DoQuery(ctx, 1<<25, &overlay.GetRandomPeers{}, &al)
-			cancel()
-			if err != nil {
-				stNode.Close()
-				continue
-			}
-
-			for _, n := range al.List {
-				nodeId, err := adnl.ToKeyID(n.ID)
-				if err != nil {
-					continue
-				}
-				// add known nodes in case we will need them in future to scale
-				t.knownNodes[hex.EncodeToString(nodeId)] = &n
-			}
-
-			for i := 0; i < t.threadsPerPeer; i++ {
-				go stNode.loop()
-			}
+		nodesLeftToCheck := int64(len(toCheck))
+		scaleDone := make(chan bool, 1)
+		for _, node := range toCheck {
+			adnlID, _ := adnl.ToKeyID(node.ID)
+			id := hex.EncodeToString(adnlID)
 
 			t.mx.Lock()
-			t.activeNodes[id] = stNode
+			t.activeNodes[id] = nil // mark node in progress of connection
 			t.mx.Unlock()
 
-			num--
-			if num == 0 {
-				return nil
-			}
+			go func(node *overlay.Node) {
+				defer func() {
+					if atomic.AddInt64(&nodesLeftToCheck, -1) == 0 {
+						// all nodes checked
+						close(scaleDone)
+					}
+				}()
+
+				onFail := func() {
+					t.mx.Lock()
+					delete(t.activeNodes, id)
+					t.mx.Unlock()
+				}
+
+				scaleCtx, stopScale := context.WithTimeout(t.globalCtx, 60*time.Second)
+				defer stopScale()
+
+				Logger("CONNECTING TO PEER", hex.EncodeToString(adnlID))
+				stNode, err := t.connectToNode(scaleCtx, adnlID, node, onFail)
+				if err != nil {
+					onFail()
+					return
+				}
+
+				var al overlay.NodesList
+				err = stNode.rldp.DoQuery(scaleCtx, 1<<25, &overlay.GetRandomPeers{}, &al)
+				if err != nil {
+					stNode.Close()
+					return
+				}
+
+				for _, n := range al.List {
+					nodeId, err := adnl.ToKeyID(n.ID)
+					if err != nil {
+						continue
+					}
+					// add known nodes in case we will need them in future to scale
+					t.mx.Lock()
+					t.knownNodes[hex.EncodeToString(nodeId)] = &n
+					t.mx.Unlock()
+				}
+
+				for i := 0; i < t.threadsPerPeer; i++ {
+					go stNode.loop()
+				}
+
+				t.mx.Lock()
+				t.activeNodes[id] = stNode
+				t.mx.Unlock()
+
+				select {
+				case connections <- true:
+				default:
+					// already connected to enough nodes, no need to report more
+				}
+			}(node)
 		}
 
-		ctx, cancel := context.WithTimeout(t.globalCtx, 15*time.Second)
+		timer := time.After(40 * time.Second)
+	waiter:
+		for {
+			select {
+			case connected := <-connections:
+				if connected {
+					num--
+				}
+
+				if num <= 0 {
+					// we scaled enough
+					return nil
+				}
+			case <-scaleDone:
+				break waiter
+				// all connection attempts finished
+			case <-timer:
+				// timeout for connections, lets try to find more nodes
+				break waiter
+			}
+		}
 
 		var err error
 		var nodes *overlay.NodesList
 
-		nodes, nodesDhtCont, err = t.client.dht.FindOverlayNodes(ctx, t.bagId, nodesDhtCont)
+		ctxFind, cancel := context.WithTimeout(ctx, 15*time.Second)
+		nodes, nodesDhtCont, err = t.client.dht.FindOverlayNodes(ctxFind, t.bagId, nodesDhtCont)
 		cancel()
 		if err != nil {
 			attempts--
@@ -588,8 +668,8 @@ func (t *torrentDownloader) scale(num int) error {
 			}
 
 			select {
-			case <-t.globalCtx.Done():
-				return t.globalCtx.Err()
+			case <-ctx.Done():
+				return ctx.Err()
 			case <-time.After(1 * time.Second):
 				continue
 			}
@@ -606,12 +686,12 @@ func (t *torrentDownloader) scale(num int) error {
 	}
 }
 
-func (t *torrentDownloader) nodesController() {
+func (t *torrentDownloader) scaleController() {
 	for {
 		select {
 		case <-t.globalCtx.Done():
 			return
-		case <-time.After(1 * time.Second):
+		case <-time.After(2 * time.Second):
 		}
 
 		t.mx.RLock()
@@ -619,7 +699,7 @@ func (t *torrentDownloader) nodesController() {
 		t.mx.RUnlock()
 
 		if peersNum < t.desiredMinPeersNum {
-			_ = t.scale(t.desiredMinPeersNum - peersNum)
+			_ = t.scale(t.globalCtx, t.desiredMinPeersNum-peersNum)
 		}
 	}
 }
