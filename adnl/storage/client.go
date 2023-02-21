@@ -281,6 +281,8 @@ func (s *storageNode) loop() {
 			fails = 0
 			resp.data = piece.Data
 		} else {
+			Logger("[DOWNLOADER] LOAD PIECE FROM", s.rawAdnl.RemoteAddr(), "ERR:", resp.err.Error())
+
 			fails++
 		}
 		req.result <- resp
@@ -288,6 +290,16 @@ func (s *storageNode) loop() {
 		if fails > 3 {
 			// something wrong, close connection, we should reconnect after it
 			return
+		}
+
+		if resp.err != nil {
+			select {
+			case <-s.globalCtx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+				// TODO: take down all loops
+				// take loop down for some time, to allow other nodes to pickup piece
+			}
 		}
 	}
 }
@@ -394,7 +406,7 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 
 	// query first piece to be sure node is ready for downloading
 	for {
-		Logger("TRY LOAD PIECE FROM", addrs.Addresses[0].IP.String())
+		Logger("[SCALER] TRY LOAD PIECE FROM", addrs.Addresses[0].IP.String())
 		qCtx, cancelC := context.WithTimeout(ctx, 7*time.Second)
 		var piece Piece
 		err = rl.DoQuery(qCtx, 4096+int64(t.info.PieceSize)*3, &GetPiece{0}, &piece)
@@ -409,7 +421,7 @@ func (t *torrentDownloader) connectToNode(ctx context.Context, adnlID []byte, no
 			continue
 		}
 
-		Logger("GOT PIECE FROM", hex.EncodeToString(adnlID), addrs.Addresses[0].IP.String())
+		Logger("[SCALER] GOT PIECE FROM", addrs.Addresses[0].IP.String(), "CONNECTED!")
 
 		break
 	}
