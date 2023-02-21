@@ -645,25 +645,27 @@ func (t *torrentDownloader) scale(ctx context.Context, num int) error {
 			}(node)
 		}
 
-		timer := time.After(40 * time.Second)
-	waiter:
-		for {
-			select {
-			case connected := <-connections:
-				if connected {
-					num--
-				}
+		if len(toCheck) > 0 {
+			timer := time.After(40 * time.Second)
+		waiter:
+			for {
+				select {
+				case connected := <-connections:
+					if connected {
+						num--
+					}
 
-				if num <= 0 {
-					// we scaled enough
-					return nil
+					if num <= 0 {
+						// we scaled enough
+						return nil
+					}
+				case <-scaleDone:
+					break waiter
+					// all connection attempts finished
+				case <-timer:
+					// timeout for connections, lets try to find more nodes
+					break waiter
 				}
-			case <-scaleDone:
-				break waiter
-				// all connection attempts finished
-			case <-timer:
-				// timeout for connections, lets try to find more nodes
-				break waiter
 			}
 		}
 
