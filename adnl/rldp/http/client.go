@@ -356,15 +356,14 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 
 	if withPayload {
 		if httpResp.ContentLength > 0 && httpResp.ContentLength < (1<<22) {
-			// TODO: enable later, possible bug
-			// dr.data = make([]byte, 0, httpResp.ContentLength)
+			dr.buf = make([]byte, 0, httpResp.ContentLength)
 		}
 
 		go func() {
 			seqno := int32(0)
 			for withPayload {
 				var part PayloadPart
-				err = client.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
+				err := client.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
 					ID:           qid,
 					Seqno:        seqno,
 					MaxChunkSize: _ChunkSize,

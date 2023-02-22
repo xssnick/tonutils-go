@@ -96,17 +96,7 @@ func (c *Slice) MustLoadBigCoins() *big.Int {
 
 func (c *Slice) LoadBigCoins() (*big.Int, error) {
 	// varInt 16 https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/block/block-parse.cpp#L319
-	ln, err := c.LoadUInt(4)
-	if err != nil {
-		return nil, err
-	}
-
-	value, err := c.LoadBigUInt(uint(ln) * 8)
-	if err != nil {
-		return nil, err
-	}
-
-	return value, nil
+	return c.LoadVarUInt(16)
 }
 
 func (c *Slice) MustLoadUInt(sz uint) uint64 {
@@ -419,8 +409,7 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 
 		return address.NewAddressVar(0, int32(workchain), uint(ln), data), nil
 	default:
-		// TODO: support of all types of addresses, currently only std supported, skipping 3 bits
-		return nil, errors.New("not supported type of address, currently only std supported")
+		return nil, errors.New("not supported type of address")
 	}
 }
 
