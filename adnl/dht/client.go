@@ -42,8 +42,8 @@ type Client struct {
 
 	gateway Gateway
 
-	closer chan bool
-	closed bool
+	globalCtx       context.Context
+	globalCtxCancel func()
 }
 
 // Continuation allows to check value on the next nodes.
@@ -118,11 +118,13 @@ func NewClientFromConfig(ctx context.Context, gateway Gateway, cfg *liteclient.G
 }
 
 func NewClient(connectTimeout time.Duration, gateway Gateway, nodes []*Node) (*Client, error) {
+	globalCtx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		activeNodes:    map[string]*dhtNode{},
-		knownNodesInfo: map[string]*Node{},
-		closer:         make(chan bool, 1),
-		gateway:        gateway,
+		activeNodes:     map[string]*dhtNode{},
+		knownNodesInfo:  map[string]*Node{},
+		globalCtx:       globalCtx,
+		globalCtxCancel: cancel,
+		gateway:         gateway,
 	}
 
 	ch := make(chan bool, len(nodes))
@@ -151,6 +153,7 @@ func NewClient(connectTimeout time.Duration, gateway Gateway, nodes []*Node) (*C
 		return nil, fmt.Errorf("no available nodes in the given list %v", nodes)
 	}
 
+	go c.nodesPinger()
 	return c, nil
 }
 
@@ -165,6 +168,8 @@ func (c *Client) Close() {
 	}
 	c.activeNodes = nil
 	c.mx.Unlock()
+
+	c.globalCtxCancel()
 
 	for _, node := range toClose {
 		node.Close()
@@ -461,7 +466,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
-	const threads = 8
+	const threads = 12
 	result := make(chan *foundResult, threads)
 	var numNoTasks int64
 	for i := 0; i < threads; i++ {
@@ -517,14 +522,12 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 					wg := sync.WaitGroup{}
 					wg.Add(len(v))
 
+					connectCtx, connectCancel := context.WithTimeout(threadCtx, queryTimeout)
 					for _, n := range v {
 						go func(n *Node) {
 							defer wg.Done()
 
-							connectCtx, connectCancel := context.WithTimeout(threadCtx, queryTimeout)
-
 							newNode, err := c.addNode(connectCtx, n)
-							connectCancel()
 							if err != nil {
 								return
 							}
@@ -533,6 +536,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 						}(n)
 					}
 					wg.Wait()
+					connectCancel()
 				}
 			}
 		}()
@@ -547,6 +551,58 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 		}
 		cont.checkedNodes = append(cont.checkedNodes, val.node)
 		return val.value, cont, nil
+	}
+}
+
+func (c *Client) nodesPinger() {
+	for {
+		select {
+		case <-c.globalCtx.Done():
+			return
+		case <-time.After(1 * time.Second):
+		}
+
+		now := time.Now()
+		c.mx.RLock()
+		if len(c.activeNodes) == 0 {
+			c.mx.RUnlock()
+			continue
+		}
+
+		ch := make(chan *dhtNode, len(c.activeNodes)+1)
+		for _, node := range c.activeNodes {
+			// add check task for nodes that were not queried for > 8 seconds
+			if atomic.LoadInt64(&node.lastQueryAt)+8 < now.Unix() {
+				ch <- node
+			}
+		}
+		close(ch)
+		c.mx.RUnlock()
+
+		var wg sync.WaitGroup
+		wg.Add(4)
+		for i := 0; i < 4; i++ {
+			go func() {
+				defer wg.Done()
+				for {
+					var node *dhtNode
+					select {
+					case <-c.globalCtx.Done():
+						return
+					case node = <-ch:
+						if node == nil {
+							// everything is checked
+							return
+						}
+					}
+
+					ctx, cancel := context.WithTimeout(c.globalCtx, queryTimeout+500*time.Millisecond)
+					_ = node.checkPing(ctx) // we don't need the result, it will report new state to callback
+					cancel()
+				}
+			}()
+		}
+		wg.Wait()
 	}
 }
 

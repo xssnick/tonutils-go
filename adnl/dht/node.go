@@ -33,6 +33,8 @@ type dhtNode struct {
 	onStateChange func(node *dhtNode, state int)
 	currentState  int
 
+	lastQueryAt int64
+
 	mx sync.Mutex
 }
 
@@ -287,6 +289,7 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 	}
 
 	t := time.Now()
+	atomic.StoreInt64(&n.lastQueryAt, t.Unix())
 	err = a.Query(ctx, req, res)
 	if err != nil {
 		return err
@@ -306,12 +309,14 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 
 func (n *dhtNode) weight(id []byte) int {
 	w := leadingZeroBits(xor(id, n.id))
-	ping := time.Duration(atomic.LoadInt64(&n.ping))
-	weight := (w << 20) - int(ping/(time.Millisecond*5))
 	if n.currentState == _StateFail {
-		weight -= 1 << 16 // less priority for failed
+		w -= 3 // less priority for failed
+		if w < 0 {
+			w = 0
+		}
 	}
-	return weight
+	ping := time.Duration(atomic.LoadInt64(&n.ping))
+	return (1 << 30) + ((w << 20) - int(ping/(time.Millisecond*5)))
 }
 
 func xor(a, b []byte) []byte {
