@@ -789,9 +789,9 @@ func TestNode_weight(t *testing.T) {
 		testId   []byte
 		want     int
 	}{
-		{tNode1, []byte{0b00100100, 0b10100100, 0b00100101}, 2097152},
-		{tNode2, []byte{0b00100100, 0b10100100, 0b00100101}, 1048576 - 1<<16},
-		{tNode3, []byte{0b00100100, 0b10100100, 0b00100101}, 0},
+		{tNode1, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 2097152},
+		{tNode2, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 1048576 - 1<<20},
+		{tNode3, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 0},
 	}
 	for _, test := range tests {
 		t.Run("weight test", func(t *testing.T) {

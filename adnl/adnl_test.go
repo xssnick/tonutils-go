@@ -30,7 +30,8 @@ func TestADNL_ClientServer(t *testing.T) {
 	gotCliCustom2 := make(chan any, 1)
 	gotSrvDiscon := make(chan any, 1)
 
-	s, err := StartServerGateway(srvKey, "127.0.0.1:9055")
+	s := NewGateway(srvKey)
+	err = s.StartServer("127.0.0.1:9055")
 	if err != nil {
 		t.Fatal(err)
 	}

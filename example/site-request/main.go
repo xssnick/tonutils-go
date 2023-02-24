@@ -20,7 +20,8 @@ func main() {
 		panic(err)
 	}
 
-	gateway, err := adnl.StartClientGateway(clientKey)
+	gateway := adnl.NewGateway(clientKey)
+	err = gateway.StartClient()
 	if err != nil {
 		panic(err)
 	}

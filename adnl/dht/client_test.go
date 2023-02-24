@@ -512,7 +512,8 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gateway, err := adnl.StartClientGateway(priv)
+	gateway := adnl.NewGateway(priv)
+	err = gateway.StartClient()
 	if err != nil {
 		t.Fatal(err)
 	}
