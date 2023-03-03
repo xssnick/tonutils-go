@@ -52,16 +52,18 @@ func main() {
 
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
+	// bound requests to the same node
+	ctx := client.StickyContext(context.Background())
 
 	// we need fresh block info to run get methods
-	block, err := api.CurrentMasterchainInfo(context.Background())
+	block, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		log.Fatalln("get block err:", err.Error())
 		return
 	}
 
 	// call method to get seqno of contract
-	res, err := api.RunGetMethod(context.Background(), block, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "get_total")
+	res, err := api.RunGetMethod(ctx, block, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "get_total")
 	if err != nil {
 		log.Fatalln("run get method err:", err.Error())
 		return
@@ -77,7 +79,7 @@ func main() {
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 
-	err = api.SendExternalMessage(context.Background(), &tlb.ExternalMessage{
+	err = api.SendExternalMessage(ctx, &tlb.ExternalMessage{
 		DstAddr: address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"),
 		Body:    data,
 	})

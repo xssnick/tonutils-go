@@ -75,7 +75,7 @@ func (s *ShardState) LoadFromCell(loader *cell.Slice) error {
 	if err != nil {
 		return err
 	}
-  
+
 	switch tag {
 	case 0x5f327da5:
 		var left, right ShardStateUnsplit
@@ -105,8 +105,8 @@ func (s *ShardState) LoadFromCell(loader *cell.Slice) error {
 		}
 		s.Left = state
 	}
-  
-  return nil
+
+	return nil
 }
 
 func (p *ConfigParams) LoadFromCell(loader *cell.Slice) error {

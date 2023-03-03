@@ -18,7 +18,7 @@ func AddressFromPubKey(key ed25519.PublicKey, ver Version, subwallet uint32) (*a
 		return nil, fmt.Errorf("failed to get state: %w", err)
 	}
 
-	stateCell, err := state.ToCell()
+	stateCell, err := tlb.ToCell(state)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state cell: %w", err)
 	}

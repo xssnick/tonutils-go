@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
@@ -28,8 +29,8 @@ type ADNL interface {
 	Close()
 }
 
-var connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
-	return adnl.Connect(ctx, addr, peerKey, ourKey)
+type Gateway interface {
+	RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error)
 }
 
 type Client struct {
@@ -39,8 +40,17 @@ type Client struct {
 	mx             sync.RWMutex
 	minNodeMx      sync.Mutex
 
-	closer chan bool
-	closed bool
+	gateway Gateway
+
+	globalCtx       context.Context
+	globalCtxCancel func()
+}
+
+// Continuation allows to check value on the next nodes.
+// Suitable for overlays, different DHT nodes may contain different node addresses.
+// Can be used in case of everything is offline in single DHT node, to check another values.
+type Continuation struct {
+	checkedNodes []*dhtNode
 }
 
 type NodeInfo struct {
@@ -50,16 +60,16 @@ type NodeInfo struct {
 
 var Logger = func(v ...any) {}
 
-func NewClientFromConfigUrl(ctx context.Context, cfgUrl string) (*Client, error) {
+func NewClientFromConfigUrl(ctx context.Context, gateway Gateway, cfgUrl string) (*Client, error) {
 	cfg, err := liteclient.GetConfigFromUrl(ctx, cfgUrl)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewClientFromConfig(ctx, cfg)
+	return NewClientFromConfig(ctx, gateway, cfg)
 }
 
-func NewClientFromConfig(ctx context.Context, cfg *liteclient.GlobalConfig) (*Client, error) {
+func NewClientFromConfig(ctx context.Context, gateway Gateway, cfg *liteclient.GlobalConfig) (*Client, error) {
 	dl, ok := ctx.Deadline()
 	if !ok {
 		dl = time.Now().Add(10 * time.Second)
@@ -104,14 +114,17 @@ func NewClientFromConfig(ctx context.Context, cfg *liteclient.GlobalConfig) (*Cl
 		nodes = append(nodes, n)
 	}
 
-	return NewClient(dl.Sub(time.Now()), nodes)
+	return NewClient(dl.Sub(time.Now()), gateway, nodes)
 }
 
-func NewClient(connectTimeout time.Duration, nodes []*Node) (*Client, error) {
+func NewClient(connectTimeout time.Duration, gateway Gateway, nodes []*Node) (*Client, error) {
+	globalCtx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		activeNodes:    map[string]*dhtNode{},
-		knownNodesInfo: map[string]*Node{},
-		closer:         make(chan bool, 1),
+		activeNodes:     map[string]*dhtNode{},
+		knownNodesInfo:  map[string]*Node{},
+		globalCtx:       globalCtx,
+		globalCtxCancel: cancel,
+		gateway:         gateway,
 	}
 
 	ch := make(chan bool, len(nodes))
@@ -140,6 +153,7 @@ func NewClient(connectTimeout time.Duration, nodes []*Node) (*Client, error) {
 		return nil, fmt.Errorf("no available nodes in the given list %v", nodes)
 	}
 
+	go c.nodesPinger()
 	return c, nil
 }
 
@@ -154,6 +168,8 @@ func (c *Client) Close() {
 	}
 	c.activeNodes = nil
 	c.mx.Unlock()
+
+	c.globalCtxCancel()
 
 	for _, node := range toClose {
 		node.Close()
@@ -171,7 +187,7 @@ func (c *Client) nodeStateHandler(id string) func(node *dhtNode, state int) {
 
 		switch state {
 		case _StateFail:
-			delete(c.activeNodes, id)
+			// delete(c.activeNodes, id)
 		case _StateThrottle, _StateActive: // TODO: handle throttle in a diff list
 			c.activeNodes[id] = node
 		}
@@ -189,50 +205,88 @@ func (c *Client) addNode(ctx context.Context, node *Node) (_ *dhtNode, err error
 		return nil, err
 	}
 
-	signature := node.Signature
-	node.Signature = nil
-	toVerify, err := tl.Serialize(node, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize node: %w", err)
-	}
-	if !ed25519.Verify(pub.Key, toVerify, signature) {
-		return nil, fmt.Errorf("bad signature for node: %s", hex.EncodeToString(pub.Key))
-	}
-	node.Signature = signature
-
 	keyID := hex.EncodeToString(kid)
-
 	c.mx.RLock()
-	kNode := c.activeNodes[keyID]
+	kNode := c.knownNodesInfo[keyID]
+	aNode := c.activeNodes[keyID]
 	c.mx.RUnlock()
 
+	if aNode != nil {
+		// we already connected to this node, just return it
+		return aNode, nil
+	}
+
+	if len(node.AddrList.Addresses) == 0 {
+		return nil, fmt.Errorf("no addresses to connect to")
+	} else if len(node.AddrList.Addresses) > 8 {
+		// max 8 addresses to check
+		node.AddrList.Addresses = node.AddrList.Addresses[:8]
+	}
+
+	if kNode == nil {
+		c.mx.Lock()
+		// check again under lock to guarantee that only one connection will be made
+		if c.knownNodesInfo[keyID] == nil {
+			c.knownNodesInfo[keyID] = node
+		} else {
+			kNode = c.knownNodesInfo[keyID]
+		}
+		c.mx.Unlock()
+	}
+
 	if kNode != nil {
-		return kNode, nil
+		return nil, fmt.Errorf("node is known, but no active connection yet")
 	}
 
 	// connect to first available address of node
 	for _, udp := range node.AddrList.Addresses {
 		addr := udp.IP.String() + ":" + fmt.Sprint(udp.Port)
 
-		kNode, err = connectToNode(ctx, kid, addr, pub.Key, c.nodeStateHandler(keyID))
+		aNode, err = c.connectToNode(ctx, kid, addr, pub.Key, c.nodeStateHandler(keyID))
 		if err != nil {
 			// failed to connect, we will try next addr
 			continue
 		}
-
-		c.mx.Lock()
-		c.knownNodesInfo[keyID] = node
-		c.mx.Unlock()
-
 		// connected successfully
 		break
 	}
 
 	if err != nil {
+		c.mx.Lock()
+		// connection was unsuccessful, so we remove node from known, to be able to retry later
+		delete(c.knownNodesInfo, keyID)
+		c.mx.Unlock()
+
 		return nil, fmt.Errorf("failed to connect to node: %w", err)
 	}
 
-	return kNode, nil
+	return aNode, nil
+}
+
+func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
+	keyHash, err := adnl.ToKeyID(adnl.PublicKeyOverlay{
+		Key: overlayKey,
+	})
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get key for overlay: %w", err)
+	}
+
+	vv, cont, err := c.FindValue(ctx, &Key{
+		ID:    keyHash,
+		Name:  []byte("nodes"),
+		Index: 0,
+	}, continuation...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to find dht key for overlay: %w", err)
+	}
+
+	var nodes overlay.NodesList
+	_, err = tl.Parse(&nodes, vv.Data, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse dht data for overlay nodes: %w", err)
+	}
+	return &nodes, cont, nil
 }
 
 func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error) {
@@ -240,7 +294,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 		return nil, nil, fmt.Errorf("key should have 256 bits")
 	}
 
-	val, err := c.FindValue(ctx, &Key{
+	val, _, err := c.FindValue(ctx, &Key{
 		ID:    key,
 		Name:  []byte("address"),
 		Index: 0,
@@ -357,7 +411,7 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 			if hasBetter {
 				// push back as checked, to be able to use later for other copy
 				checked[strId] = true
-				plist.markNotUsed(node)
+				plist.markUsed(node, false)
 				continue
 			}
 		}
@@ -387,19 +441,33 @@ func signTL(obj tl.Serializable, key ed25519.PrivateKey) ([]byte, error) {
 	return ed25519.Sign(key, data), nil
 }
 
-func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
+type foundResult struct {
+	value *Value
+	node  *dhtNode
+}
+
+func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
 	id, keyErr := adnl.ToKeyID(key)
 	if keyErr != nil {
-		return nil, keyErr
+		return nil, nil, keyErr
 	}
 
 	plist := c.buildPriorityList(id)
 
+	cont := &Continuation{}
+	if len(continuation) > 0 && continuation[0] != nil {
+		cont = continuation[0]
+		for _, n := range cont.checkedNodes {
+			// mark nodes as used to not get a value from them again
+			plist.markUsed(n, true)
+		}
+	}
+
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
-	const threads = 16
-	result := make(chan *Value, threads)
+	const threads = 12
+	result := make(chan *foundResult, threads)
 	var numNoTasks int64
 	for i := 0; i < threads; i++ {
 		go func() {
@@ -444,19 +512,31 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 
 				switch v := val.(type) {
 				case *Value:
-					result <- v
+					result <- &foundResult{value: v, node: node}
 				case []*Node:
-					for _, n := range v {
-						connectCtx, connectCancel := context.WithTimeout(threadCtx, queryTimeout)
-
-						node, err = c.addNode(connectCtx, n)
-						connectCancel()
-						if err != nil {
-							continue
-						}
-
-						plist.addNode(node)
+					if len(v) > 12 {
+						// max 12 nodes to check
+						v = v[:12]
 					}
+
+					wg := sync.WaitGroup{}
+					wg.Add(len(v))
+
+					connectCtx, connectCancel := context.WithTimeout(threadCtx, queryTimeout)
+					for _, n := range v {
+						go func(n *Node) {
+							defer wg.Done()
+
+							newNode, err := c.addNode(connectCtx, n)
+							if err != nil {
+								return
+							}
+
+							plist.addNode(newNode)
+						}(n)
+					}
+					wg.Wait()
+					connectCancel()
 				}
 			}
 		}()
@@ -464,21 +544,98 @@ func (c *Client) FindValue(ctx context.Context, key *Key) (*Value, error) {
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	case val := <-result:
 		if val == nil {
-			return nil, ErrDHTValueIsNotFound
+			return nil, cont, ErrDHTValueIsNotFound
 		}
-		return val, nil
+		cont.checkedNodes = append(cont.checkedNodes, val.node)
+		return val.value, cont, nil
+	}
+}
+
+func (c *Client) nodesPinger() {
+	for {
+		select {
+		case <-c.globalCtx.Done():
+			return
+		case <-time.After(1 * time.Second):
+		}
+
+		now := time.Now()
+		c.mx.RLock()
+		if len(c.activeNodes) == 0 {
+			c.mx.RUnlock()
+			continue
+		}
+
+		ch := make(chan *dhtNode, len(c.activeNodes)+1)
+		for _, node := range c.activeNodes {
+			// add check task for nodes that were not queried for > 8 seconds
+			if atomic.LoadInt64(&node.lastQueryAt)+8 < now.Unix() {
+				ch <- node
+			}
+		}
+		close(ch)
+		c.mx.RUnlock()
+
+		var wg sync.WaitGroup
+		wg.Add(4)
+		for i := 0; i < 4; i++ {
+			go func() {
+				defer wg.Done()
+				for {
+					var node *dhtNode
+					select {
+					case <-c.globalCtx.Done():
+						return
+					case node = <-ch:
+						if node == nil {
+							// everything is checked
+							return
+						}
+					}
+
+					ctx, cancel := context.WithTimeout(c.globalCtx, queryTimeout+500*time.Millisecond)
+					_ = node.checkPing(ctx) // we don't need the result, it will report new state to callback
+					cancel()
+				}
+			}()
+		}
+		wg.Wait()
 	}
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
 	plist := newPriorityList(_K, id)
 
+	added := 0
 	c.mx.RLock()
+	// add fastest nodes first
 	for _, node := range c.activeNodes {
-		plist.addNode(node)
+		if node.currentState == _StateActive {
+			plist.addNode(node)
+			added++
+		}
+	}
+	// if we have not enough fast nodes, add slow
+	if added < 15 {
+		for _, node := range c.activeNodes {
+			if node.currentState == _StateThrottle {
+				plist.addNode(node)
+				added++
+			}
+		}
+	}
+	// if not enough active nodes, add failed, hope they will accept connection and become active
+	// they may be failed due to our connection problems
+	if added < 15 {
+		for _, node := range c.activeNodes {
+			if node.currentState == _StateFail {
+				plist.addNode(node)
+				added++
+			}
+		}
 	}
 	c.mx.RUnlock()
 

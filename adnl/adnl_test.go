@@ -27,10 +27,16 @@ func TestADNL_ClientServer(t *testing.T) {
 
 	gotSrvCustom := make(chan any, 1)
 	gotCliCustom := make(chan any, 1)
+	gotCliCustom2 := make(chan any, 1)
 	gotSrvDiscon := make(chan any, 1)
 
-	s := NewServer(srvKey)
-	s.SetConnectionHandler(func(client Client) error {
+	s := NewGateway(srvKey)
+	err = s.StartServer("127.0.0.1:9055")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.SetConnectionHandler(func(client Peer) error {
 		client.SetQueryHandler(func(msg *MessageQuery) error {
 			switch m := msg.Data.(type) {
 			case MessagePing:
@@ -57,12 +63,6 @@ func TestADNL_ClientServer(t *testing.T) {
 		})
 		return nil
 	})
-
-	go func() {
-		if err = s.ListenAndServe("127.0.0.1:9055"); err != nil {
-			t.Fatal(err)
-		}
-	}()
 
 	time.Sleep(1 * time.Second)
 
@@ -125,7 +125,12 @@ func TestADNL_ClientServer(t *testing.T) {
 	})
 
 	t.Run("bad query", func(t *testing.T) {
-		cliBadQuery, err := Connect(context.Background(), "127.0.0.1:9055", srvPub, nil)
+		_, rndOur, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		cliBadQuery, err := Connect(context.Background(), "127.0.0.1:9055", srvPub, rndOur)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,6 +164,37 @@ func TestADNL_ClientServer(t *testing.T) {
 
 		select {
 		case m := <-gotCliCustom:
+			if len(m.(TestMsg).Data) != 1280 {
+				t.Fatal("invalid custom from server")
+			}
+		case <-time.After(150 * time.Millisecond):
+			t.Fatal("custom not received from server")
+		}
+	})
+
+	t.Run("custom msg channel reinited", func(t *testing.T) {
+		cli, err = Connect(context.Background(), "127.0.0.1:9055", srvPub, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cli.SetCustomMessageHandler(func(msg *MessageCustom) error {
+			gotCliCustom2 <- msg.Data
+			return nil
+		})
+
+		err = cli.SendCustomMessage(context.Background(), TestMsg{Data: make([]byte, 4)})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		select {
+		case <-gotSrvCustom:
+		case <-time.After(150 * time.Millisecond):
+			t.Fatal("custom not received from client")
+		}
+
+		select {
+		case m := <-gotCliCustom2:
 			if len(m.(TestMsg).Data) != 1280 {
 				t.Fatal("invalid custom from server")
 			}

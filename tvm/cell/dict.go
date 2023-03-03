@@ -301,6 +301,9 @@ func (d *Dictionary) ToCell() (*Cell, error) {
 		return nil, nil
 	}
 
+	// TODO: make serialization logic same with c++
+	// TODO: add augmentation aggregation reading
+
 	type kvData struct {
 		data  []byte
 		value *Cell

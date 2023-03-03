@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/xssnick/tonutils-go/address"
-	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -19,11 +18,12 @@ var ErrNoSuchRecord = fmt.Errorf("no such dns record")
 const _CategoryNextResolver = 0xba93
 const _CategoryContractAddr = 0x9fd3
 const _CategoryADNLSite = 0xad01
+const _CategoryStorageSite = 0x7473
 
 type TonApi interface {
-	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
-	GetBlockchainConfig(ctx context.Context, block *tlb.BlockInfo, onlyParams ...int32) (*ton.BlockchainConfig, error)
+	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
+	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
+	GetBlockchainConfig(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
 }
 
 type Domain struct {
@@ -78,7 +78,7 @@ func (c *Client) Resolve(ctx context.Context, domain string) (*Domain, error) {
 	return c.ResolveAtBlock(ctx, domain, b)
 }
 
-func (c *Client) ResolveAtBlock(ctx context.Context, domain string, b *tlb.BlockInfo) (*Domain, error) {
+func (c *Client) ResolveAtBlock(ctx context.Context, domain string, b *ton.BlockIDExt) (*Domain, error) {
 	chain := strings.Split(domain, ".")
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 { // reverse array
 		chain[i], chain[j] = chain[j], chain[i]
@@ -86,7 +86,7 @@ func (c *Client) ResolveAtBlock(ctx context.Context, domain string, b *tlb.Block
 	return c.resolve(ctx, c.root, strings.Join(chain, "\x00")+"\x00", b)
 }
 
-func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, chain string, b *tlb.BlockInfo) (*Domain, error) {
+func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, chain string, b *ton.BlockIDExt) (*Domain, error) {
 	name := []byte(chain)
 	nameCell := cell.BeginCell()
 
@@ -187,33 +187,38 @@ func (d *Domain) GetWalletRecord() *address.Address {
 	return addr
 }
 
-func (d *Domain) GetSiteRecord() []byte {
+func (d *Domain) GetSiteRecord() (_ []byte, inStorage bool) {
 	rec := d.GetRecord("site")
 	if rec == nil {
-		return nil
+		return nil, false
 	}
 	p := rec.BeginParse()
 
 	p, err := p.LoadRef()
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	category, err := p.LoadUInt(16)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
-	if category != _CategoryADNLSite {
-		return nil
+	switch category {
+	case _CategoryStorageSite:
+		bagId, err := p.LoadSlice(256)
+		if err != nil {
+			return nil, true
+		}
+		return bagId, true
+	case _CategoryADNLSite:
+		addr, err := p.LoadSlice(256)
+		if err != nil {
+			return nil, false
+		}
+		return addr, false
 	}
-
-	addr, err := p.LoadSlice(256)
-	if err != nil {
-		return nil
-	}
-
-	return addr
+	return nil, false
 }
 
 func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell {
@@ -227,8 +232,13 @@ func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell
 		MustStoreSlice(h.Sum(nil), 256).MustStoreBuilder(value.ToBuilder()).EndCell()
 }
 
-func (d *Domain) BuildSetSiteRecordPayload(adnlAddress []byte) *cell.Cell {
-	record := cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreUInt(_CategoryADNLSite, 16).MustStoreSlice(adnlAddress, 256).EndCell()).EndCell()
+func (d *Domain) BuildSetSiteRecordPayload(addr []byte, isStorage bool) *cell.Cell {
+	var cat uint64 = _CategoryADNLSite
+	if isStorage {
+		cat = _CategoryStorageSite
+	}
+
+	record := cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreUInt(cat, 16).MustStoreSlice(addr, 256).EndCell()).EndCell()
 	return d.BuildSetRecordPayload("site", record)
 }
 

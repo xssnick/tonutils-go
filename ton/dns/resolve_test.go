@@ -37,7 +37,12 @@ func TestDomain_GetRecords(t *testing.T) {
 		Records: records,
 	}
 
-	if !bytes.Equal(domain.GetSiteRecord(), adnlAddr) {
+	addrRecord, inStorage := domain.GetSiteRecord()
+	if inStorage {
+		t.Fatal("should be not in storage")
+	}
+
+	if !bytes.Equal(addrRecord, adnlAddr) {
 		t.Fatal("incorrect site address")
 	}
 
@@ -60,8 +65,19 @@ func TestDomain_GetRecords(t *testing.T) {
 			MustStoreSlice(adnlAddr, 256).
 			EndCell()).EndCell()
 
-		if !bytes.Equal(domain.BuildSetSiteRecordPayload(adnlAddr).Hash(), site.Hash()) {
+		if !bytes.Equal(domain.BuildSetSiteRecordPayload(adnlAddr, false).Hash(), site.Hash()) {
 			t.Fatal("incorrect set site payload")
+		}
+
+		siteStorage := cell.BeginCell().MustStoreUInt(0x4eb1f0f9, 32).
+			MustStoreUInt(777, 64).
+			MustStoreSlice(h.Sum(nil), 256).MustStoreRef(cell.BeginCell().
+			MustStoreUInt(_CategoryStorageSite, 16).
+			MustStoreSlice(adnlAddr, 256).
+			EndCell()).EndCell()
+
+		if !bytes.Equal(domain.BuildSetSiteRecordPayload(adnlAddr, true).Hash(), siteStorage.Hash()) {
+			t.Fatal("incorrect set site storage payload")
 		}
 
 		h = sha256.New()

@@ -1,10 +1,8 @@
 package tlb
 
 import (
-	"bytes"
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"math/rand"
 	"testing"
 )
 
@@ -40,32 +38,4 @@ func TestBlockNotMaster(t *testing.T) {
 	}
 
 	println(len(parents))
-}
-
-func TestBlockInfo(t *testing.T) {
-	root := make([]byte, 32)
-	file := make([]byte, 32)
-
-	rand.Read(root)
-	rand.Read(file)
-
-	bi := BlockInfo{
-		Workchain: 77,
-		Shard:     -6672233,
-		SeqNo:     80000112,
-		RootHash:  root,
-		FileHash:  file,
-	}
-
-	data := bi.Serialize()
-
-	bi2 := BlockInfo{}
-	_, err := bi2.Load(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(bi2.Serialize(), data) {
-		t.Fatal("not same")
-	}
 }

@@ -83,12 +83,12 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		return err
 	}
 
-	c.ready = true
-
 	h := c.adnl.onChannel
 	if h != nil {
 		h(c)
 	}
+
+	c.ready = true
 
 	return nil
 }

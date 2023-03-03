@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/dht"
 	rldphttp "github.com/xssnick/tonutils-go/adnl/rldp/http"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -13,7 +15,18 @@ import (
 )
 
 func main() {
-	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+	_, clientKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	gateway := adnl.NewGateway(clientKey)
+	err = gateway.StartClient()
+	if err != nil {
+		panic(err)
+	}
+
+	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), gateway, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -22,7 +35,7 @@ func main() {
 		Transport: rldphttp.NewTransport(dhtClient, getDNSResolver()),
 	}
 
-	resp, err := client.Get("http://foundation.ton/")
+	resp, err := client.Get("http://utils.ton/")
 	if err != nil {
 		panic(err)
 	}

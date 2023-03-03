@@ -2,7 +2,6 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
@@ -11,63 +10,59 @@ import (
 	"math/big"
 )
 
+func init() {
+	tl.Register(GetConfigAll{}, "liteServer.getConfigAll mode:# id:tonNode.blockIdExt = liteServer.ConfigInfo")
+	tl.Register(GetConfigParams{}, "liteServer.getConfigParams mode:# id:tonNode.blockIdExt param_list:(vector int) = liteServer.ConfigInfo")
+	tl.Register(ConfigAll{}, "liteServer.configInfo mode:# id:tonNode.blockIdExt state_proof:bytes config_proof:bytes = liteServer.ConfigInfo")
+}
+
+type ConfigAll struct {
+	Mode        int         `tl:"int"`
+	ID          *BlockIDExt `tl:"struct"`
+	StateProof  []byte      `tl:"bytes"`
+	ConfigProof []byte      `tl:"bytes"`
+}
+
+type GetConfigAll struct {
+	Mode    int32       `tl:"int"`
+	BlockID *BlockIDExt `tl:"struct"`
+}
+
+type GetConfigParams struct {
+	Mode    int32       `tl:"int"`
+	BlockID *BlockIDExt `tl:"struct"`
+	Params  []int32     `tl:"vector int"`
+}
+
 type BlockchainConfig struct {
 	data map[int32]*cell.Cell
 }
 
-func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInfo, onlyParams ...int32) (*BlockchainConfig, error) {
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, 0) // mode
-
-	data = append(data, block.Serialize()...)
-
-	id := _GetConfigAll
-
+func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error) {
+	var resp tl.Serializable
+	var err error
 	if len(onlyParams) > 0 {
-		id = _GetConfigParams
-
-		ln := make([]byte, 4)
-		binary.LittleEndian.PutUint32(ln, uint32(len(onlyParams)))
-
-		data = append(data, ln...)
-		for _, p := range onlyParams {
-			param := make([]byte, 4)
-			binary.LittleEndian.PutUint32(param, uint32(p))
-			data = append(data, param...)
+		err = c.client.QueryLiteserver(ctx, GetConfigParams{
+			Mode:    0,
+			BlockID: block,
+			Params:  onlyParams,
+		}, &resp)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err = c.client.QueryLiteserver(ctx, GetConfigAll{
+			Mode:    0,
+			BlockID: block,
+		}, &resp)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	resp, err := c.client.Do(ctx, id, data)
-	if err != nil {
-		return nil, err
-	}
-
-	switch resp.TypeID {
-	case _ConfigParams:
-		_ = binary.LittleEndian.Uint32(resp.Data)
-		resp.Data = resp.Data[4:]
-
-		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-
-		var shardProof []byte
-		shardProof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_ = shardProof
-
-		var configProof []byte
-		configProof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_ = configProof
-
-		c, err := cell.FromBOC(configProof)
+	switch t := resp.(type) {
+	case ConfigAll:
+		c, err := cell.FromBOC(t.ConfigProof)
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +85,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInf
 		result := &BlockchainConfig{data: map[int32]*cell.Cell{}}
 
 		if len(onlyParams) > 0 {
-			// we need it because lite server adds some unwanted keys
+			// we need it because lite server may add some unwanted keys
 			for _, param := range onlyParams {
 				res := state.McStateExtra.ConfigParams.Config.GetByIntKey(big.NewInt(int64(param)))
 				if res == nil {
@@ -116,16 +111,10 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInf
 		}
 
 		return result, nil
-	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		return nil, lsErr
+	case LSError:
+		return nil, t
 	}
-
-	return nil, errors.New("unknown response type")
+	return nil, errUnexpectedResponse(resp)
 }
 
 // TODO: add methods to BlockchainConfig to easily get gas price and etc

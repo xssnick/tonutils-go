@@ -202,7 +202,7 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 		cells[i].refs = refs
 	}
 
-	var roots []*Cell
+	roots := make([]*Cell, 0, rootsNum)
 
 	// get cells which are not referenced by another, its root cells
 	for y, isRef := range referred {

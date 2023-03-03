@@ -23,6 +23,8 @@ func main() {
 	}
 
 	api := ton.NewAPIClient(client)
+	// bound all requests to single ton node
+	ctx := client.StickyContext(context.Background())
 
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
@@ -35,13 +37,13 @@ func main() {
 
 	log.Println("wallet address:", w.Address())
 
-	block, err := api.CurrentMasterchainInfo(context.Background())
+	block, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		log.Fatalln("CurrentMasterchainInfo err:", err.Error())
 		return
 	}
 
-	balance, err := w.GetBalance(context.Background(), block)
+	balance, err := w.GetBalance(ctx, block)
 	if err != nil {
 		log.Fatalln("GetBalance err:", err.Error())
 		return
@@ -52,7 +54,11 @@ func main() {
 
 		log.Println("sending transaction and waiting for confirmation...")
 
-		err = w.Transfer(context.Background(), addr, tlb.MustFromTON("0.003"),
+		// if destination wallet is not initialized you should use TransferNoBounce
+		// regular Transfer has bounce flag, and TONs may be returned.
+
+		// err = w.TransferNoBounce(ctx, addr, tlb.MustFromTON("0.003"),
+		err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"),
 			"Hello from tonutils-go!", true)
 		if err != nil {
 			log.Fatalln("Transfer err:", err.Error())
@@ -60,13 +66,13 @@ func main() {
 		}
 
 		// update chain info
-		block, err = api.CurrentMasterchainInfo(context.Background())
+		block, err = api.CurrentMasterchainInfo(ctx)
 		if err != nil {
 			log.Fatalln("CurrentMasterchainInfo err:", err.Error())
 			return
 		}
 
-		balance, err = w.GetBalance(context.Background(), block)
+		balance, err = w.GetBalance(ctx, block)
 		if err != nil {
 			log.Fatalln("GetBalance err:", err.Error())
 			return

@@ -200,7 +200,7 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	b.MustStoreUInt(uint64(m.CreatedAt), 32)
 	b.MustStoreBoolBit(m.StateInit != nil)
 	if m.StateInit != nil {
-		stateCell, err := m.StateInit.ToCell()
+		stateCell, err := ToCell(m.StateInit)
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +239,7 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 
 	builder.MustStoreBoolBit(m.StateInit != nil) // has state init
 	if m.StateInit != nil {
-		stateCell, err := m.StateInit.ToCell()
+		stateCell, err := ToCell(m.StateInit)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize state init: %w", err)
 		}

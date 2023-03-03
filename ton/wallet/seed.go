@@ -25,12 +25,6 @@ func NewSeed() []string {
 }
 
 func NewSeedWithPassword(password string) []string {
-	wordsArr := make([]string, 0, len(words))
-
-	for w := range words {
-		wordsArr = append(wordsArr, w)
-	}
-
 	for {
 		seed := make([]string, 24)
 		for i := 0; i < 24; i++ {
@@ -100,6 +94,14 @@ func FromSeedWithPassword(api TonAPI, seed []string, password string, version Ve
 
 	return FromPrivateKey(api, ed25519.NewKeyFromSeed(k), version)
 }
+
+var wordsArr = func() []string {
+	wa := make([]string, 0, len(words))
+	for w := range words {
+		wa = append(wa, w)
+	}
+	return wa
+}()
 
 var words = map[string]bool{
 	"abandon":  true,

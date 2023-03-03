@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -15,13 +16,24 @@ var Dial = func(addr string, timeout time.Duration) (net.Conn, error) {
 	return net.DialTimeout("udp", addr, timeout)
 }
 
+var ourDefaultKey ed25519.PrivateKey
+var defaultKeyMX sync.RWMutex
+
+// Connect is DEPRECATED use Gateway
 func Connect(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (_ *ADNL, err error) {
 	if ourKey == nil {
-		// new random key
-		_, ourKey, err = ed25519.GenerateKey(nil)
-		if err != nil {
-			return nil, err
+		// we generate key once and then use it for further connections
+		defaultKeyMX.Lock()
+		if ourDefaultKey == nil {
+			// new random key
+			_, ourDefaultKey, err = ed25519.GenerateKey(nil)
+			if err != nil {
+				defaultKeyMX.Unlock()
+				return nil, err
+			}
 		}
+		ourKey = ourDefaultKey
+		defaultKeyMX.Unlock()
 	}
 
 	a := initADNL(ourKey)

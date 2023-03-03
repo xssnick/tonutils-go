@@ -92,12 +92,12 @@ var (
 
 type TonAPI interface {
 	Client() ton.LiteClient
-	CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error)
-	GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
+	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
+	GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
-	WaitNextMasterBlock(ctx context.Context, master *tlb.BlockInfo) (*tlb.BlockInfo, error)
+	WaitNextMasterBlock(ctx context.Context, master *ton.BlockIDExt) (*ton.BlockIDExt, error)
 }
 
 type Message struct {
@@ -189,7 +189,7 @@ func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
 	return sub, nil
 }
 
-func (w *Wallet) GetBalance(ctx context.Context, block *tlb.BlockInfo) (tlb.Coins, error) {
+func (w *Wallet) GetBalance(ctx context.Context, block *ton.BlockIDExt) (tlb.Coins, error) {
 	acc, err := w.api.GetAccount(ctx, block, w.addr)
 	if err != nil {
 		return tlb.Coins{}, fmt.Errorf("failed to get account state: %w", err)
@@ -304,7 +304,7 @@ func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirma
 	return txHash, inMsgHash, nil
 }
 
-func (w *Wallet) waitConfirmation(ctx context.Context, block *tlb.BlockInfo, acc *tlb.Account, ext *tlb.ExternalMessage) ([]byte, error) {
+func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) ([]byte, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -442,7 +442,7 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 		Code: contractCode,
 	}
 
-	stateCell, err := state.ToCell()
+	stateCell, err := tlb.ToCell(state)
 	if err != nil {
 		return nil, err
 	}

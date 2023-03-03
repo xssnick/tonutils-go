@@ -14,8 +14,8 @@ import (
 )
 
 type TonApi interface {
-	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
+	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
+	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
 
 type ItemMintPayload struct {
@@ -64,7 +64,7 @@ func (c *CollectionClient) GetNFTAddressByIndex(ctx context.Context, index *big.
 	return c.GetNFTAddressByIndexAtBlock(ctx, index, b)
 }
 
-func (c *CollectionClient) GetNFTAddressByIndexAtBlock(ctx context.Context, index *big.Int, b *tlb.BlockInfo) (*address.Address, error) {
+func (c *CollectionClient) GetNFTAddressByIndexAtBlock(ctx context.Context, index *big.Int, b *ton.BlockIDExt) (*address.Address, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_address_by_index", index)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_address_by_index method: %w", err)
@@ -91,7 +91,7 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 	return c.RoyaltyParamsAtBlock(ctx, b)
 }
 
-func (c *CollectionClient) RoyaltyParamsAtBlock(ctx context.Context, b *tlb.BlockInfo) (*CollectionRoyaltyParams, error) {
+func (c *CollectionClient) RoyaltyParamsAtBlock(ctx context.Context, b *ton.BlockIDExt) (*CollectionRoyaltyParams, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "royalty_params")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run royalty_params method: %w", err)
@@ -132,7 +132,7 @@ func (c *CollectionClient) GetNFTContent(ctx context.Context, index *big.Int, in
 	return c.GetNFTContentAtBlock(ctx, index, individualNFTContent, b)
 }
 
-func (c *CollectionClient) GetNFTContentAtBlock(ctx context.Context, index *big.Int, individualNFTContent ContentAny, b *tlb.BlockInfo) (ContentAny, error) {
+func (c *CollectionClient) GetNFTContentAtBlock(ctx context.Context, index *big.Int, individualNFTContent ContentAny, b *ton.BlockIDExt) (ContentAny, error) {
 	con, err := toNftContent(individualNFTContent)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
@@ -164,7 +164,7 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 	return c.GetCollectionDataAtBlock(ctx, b)
 }
 
-func (c *CollectionClient) GetCollectionDataAtBlock(ctx context.Context, b *tlb.BlockInfo) (*CollectionData, error) {
+func (c *CollectionClient) GetCollectionDataAtBlock(ctx context.Context, b *ton.BlockIDExt) (*CollectionData, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_collection_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
@@ -245,6 +245,9 @@ func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, edito
 }
 
 func toNftContent(content ContentAny) (*cell.Cell, error) {
+	if content == nil {
+		return cell.BeginCell().EndCell(), nil
+	}
 	if off, ok := content.(*ContentOffchain); ok {
 		// https://github.com/ton-blockchain/TIPs/issues/64
 		// Standard says that prefix should be 0x01, but looks like it was misunderstanding in other implementations and 0x01 was dropped

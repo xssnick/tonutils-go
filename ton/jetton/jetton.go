@@ -13,8 +13,8 @@ import (
 )
 
 type TonApi interface {
-	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
+	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
+	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
 
 type MintPayload struct {
@@ -53,7 +53,7 @@ func (c *Client) GetJettonWallet(ctx context.Context, ownerAddr *address.Address
 	return c.GetJettonWalletAtBlock(ctx, ownerAddr, b)
 }
 
-func (c *Client) GetJettonWalletAtBlock(ctx context.Context, ownerAddr *address.Address, b *tlb.BlockInfo) (*WalletClient, error) {
+func (c *Client) GetJettonWalletAtBlock(ctx context.Context, ownerAddr *address.Address, b *ton.BlockIDExt) (*WalletClient, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_wallet_address",
 		cell.BeginCell().MustStoreAddr(ownerAddr).EndCell().BeginParse())
 	if err != nil {
@@ -84,7 +84,7 @@ func (c *Client) GetJettonData(ctx context.Context) (*Data, error) {
 	return c.GetJettonDataAtBlock(ctx, b)
 }
 
-func (c *Client) GetJettonDataAtBlock(ctx context.Context, b *tlb.BlockInfo) (*Data, error) {
+func (c *Client) GetJettonDataAtBlock(ctx context.Context, b *ton.BlockIDExt) (*Data, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_jetton_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_jetton_data method: %w", err)

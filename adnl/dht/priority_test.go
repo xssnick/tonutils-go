@@ -57,18 +57,21 @@ func TestPriorityList_addNode(t *testing.T) {
 	}
 
 	node1 := dhtNode{
-		id:   kId1,
-		adnl: nil,
+		id:           kId1,
+		adnl:         nil,
+		currentState: _StateActive,
 	}
 
 	node2 := dhtNode{
-		id:   kId2,
-		adnl: nil,
+		id:           kId2,
+		adnl:         nil,
+		currentState: _StateFail,
 	}
 
 	node3 := dhtNode{
-		id:   kId3,
-		adnl: nil,
+		id:           kId3,
+		adnl:         nil,
+		currentState: _StateActive,
 	}
 
 	pList := newPriorityList(12, keyId)
@@ -85,9 +88,9 @@ func TestPriorityList_addNode(t *testing.T) {
 		t.Fatal()
 	}
 	nodeOrder := make(map[string]uint8)
-	nodeOrder["f6b6a3b295993727f1853d94a6cc39fc5ae20b79e06d665e753562084f234c7e"] = 1
-	nodeOrder["c614d4796a11c74b16e9870bf4bbeda4f13a9e9c9f87087fe87300e22961b9db"] = 2
-	nodeOrder["0a76318cf057724469b6b0e55c997b42c7c7bb5d88f68b40ee3c0f0af3e8e6d5"] = 3
+	nodeOrder["f6b6a3b295993727f1853d94a6cc39fc5ae20b79e06d665e753562084f234c7e"] = 3
+	nodeOrder["c614d4796a11c74b16e9870bf4bbeda4f13a9e9c9f87087fe87300e22961b9db"] = 1
+	nodeOrder["0a76318cf057724469b6b0e55c997b42c7c7bb5d88f68b40ee3c0f0af3e8e6d5"] = 2
 
 	t.Run("nodes priority order", func(t *testing.T) {
 		for nodeNo := 1; nodeNo < 4; nodeNo++ {
@@ -187,7 +190,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 	usedNode, _ := pList.getNode()
 
 	t.Run("markNotUsed test", func(t *testing.T) {
-		pList.markNotUsed(usedNode)
+		pList.markUsed(usedNode, false)
 
 		curNode = pList.list
 		for curNode != nil {

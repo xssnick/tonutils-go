@@ -38,7 +38,12 @@ func main() {
 	}
 
 	fmt.Println("Collection addr      :", nftData.CollectionAddress.String())
-	fmt.Println("    content          :", collectionData.Content.(*nft.ContentOffchain).URI)
+	switch content := collectionData.Content.(type) {
+	case *nft.ContentOffchain:
+		fmt.Println("    content offchain :", content.URI)
+	case *nft.ContentOnchain:
+		fmt.Println("    content onchain  :", content.Name)
+	}
 	fmt.Println("    owner            :", collectionData.OwnerAddress.String())
 	fmt.Println("    minted items num :", collectionData.NextItemIndex)
 	fmt.Println()

@@ -21,12 +21,12 @@ import (
 	"time"
 )
 
-type ADNLServer interface {
+type ADNLGateway interface {
 	GetAddressList() address.List
-	ListenAndServe(listenAddr string) (err error)
 	Close() error
-	SetConnectionHandler(func(client adnl.Client) error)
+	SetConnectionHandler(func(client adnl.Peer) error)
 	SetExternalIP(ip net.IP)
+	StartServer(listenAddr string) error
 }
 
 type Server struct {
@@ -37,7 +37,8 @@ type Server struct {
 	handler        http.Handler
 	rldpInfos      map[string]*rldpInfo
 	activeRequests map[string]*payloadStream
-	adnlServer     ADNLServer
+	adnlServer     ADNLGateway
+	externalIp     net.IP
 
 	closer chan bool
 	closed bool
@@ -73,8 +74,8 @@ type respWriter struct {
 
 var Logger = log.Println
 
-var newServer = func(key ed25519.PrivateKey) ADNLServer {
-	return adnl.NewServer(key)
+var newServer = func(key ed25519.PrivateKey) ADNLGateway {
+	return adnl.NewGateway(key)
 }
 
 func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
@@ -82,25 +83,13 @@ func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 		key:            key,
 		dht:            dht,
 		handler:        handler,
-		adnlServer:     newServer(key),
 		rldpInfos:      map[string]*rldpInfo{},
 		activeRequests: map[string]*payloadStream{},
 		closer:         make(chan bool, 1),
 		Timeout:        30 * time.Second,
+		adnlServer:     newServer(key),
 	}
-
-	s.adnlServer.SetConnectionHandler(func(client adnl.Client) error {
-		adnlAddr, err := SerializeADNLAddress(client.GetID())
-		if err != nil {
-			return err
-		}
-
-		rl := newRLDP(client)
-		rl.SetOnQuery(s.handle(rl, adnlAddr, client.RemoteAddr()))
-		return nil
-	})
 	s.id, _ = adnl.ToKeyID(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
-
 	return s
 }
 
@@ -155,10 +144,24 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 		}
 	}()
 
-	if err := s.adnlServer.ListenAndServe(listenAddr); err != nil {
+	s.adnlServer.SetConnectionHandler(func(client adnl.Peer) error {
+		adnlAddr, err := SerializeADNLAddress(client.GetID())
+		if err != nil {
+			return err
+		}
+
+		rl := newRLDP(client)
+		rl.SetOnQuery(s.handle(rl, adnlAddr, client.RemoteAddr()))
+		return nil
+	})
+
+	err := s.adnlServer.StartServer(listenAddr)
+	if err != nil {
 		_ = s.Stop()
 		return err
 	}
+
+	<-s.closer
 	return nil
 }
 
@@ -184,7 +187,7 @@ func (s *Server) updateDHT(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) Stop() error {
+func (s *Server) Stop() (err error) {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
@@ -192,10 +195,12 @@ func (s *Server) Stop() error {
 		s.closed = true
 		close(s.closer)
 		s.dht.Close()
-		return s.adnlServer.Close()
-	}
 
-	return nil
+		if s.adnlServer != nil {
+			err = s.adnlServer.Close()
+		}
+	}
+	return
 }
 
 func (s *Server) handle(client RLDP, adnlId, addr string) func(transferId []byte, msg *rldp.Query) error {

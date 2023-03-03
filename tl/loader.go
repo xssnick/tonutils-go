@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"net"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -22,8 +23,8 @@ var _SchemaIDByTypeName = map[string]uint32{}
 var _SchemaIDByName = map[string]uint32{}
 var _SchemaByID = map[uint32]reflect.Type{}
 
-var _BoolTrue = tlCRC("boolTrue = Bool")
-var _BoolFalse = tlCRC("boolFalse = Bool")
+var BoolTrue = tlCRC("boolTrue = Bool")
+var BoolFalse = tlCRC("boolFalse = Bool")
 
 var Logger = func(a ...any) {}
 
@@ -38,6 +39,16 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 
 	if rv.Type() == reflect.TypeOf(Raw{}) {
 		return rv.Bytes(), nil
+	} else if rv.Type() == reflect.TypeOf([]Serializable{}) {
+		var data []byte
+		for i, sv := range rv.Interface().([]Serializable) {
+			itemData, err := Serialize(sv, boxed)
+			if err != nil {
+				return nil, fmt.Errorf("failed to serialize %d elem of slice: %w", i, err)
+			}
+			data = append(data, itemData...)
+		}
+		return data, nil
 	}
 
 	var buf []byte
@@ -60,6 +71,7 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 		return append(buf, data...), nil
 	}
 
+	var flags *uint32
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		fieldVal := rv.Field(i)
@@ -68,6 +80,32 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 			continue
 		}
 		settings := strings.Split(tag, " ")
+
+		if settings[0][0] == '?' {
+			if flags == nil {
+				panic("flag field should be defined before usage")
+			}
+
+			bit, err := strconv.Atoi(settings[0][1:])
+			if err != nil {
+				panic("invalid flag bit in tag, should be number")
+			}
+			if bit < 0 || bit > 31 {
+				panic("invalid flag bit in tag, should be > 0 && < 32")
+			}
+
+			if *flags&(1<<bit) == 0 {
+				// no flags for this field set
+				continue
+			}
+			settings = settings[1:]
+		}
+
+		if settings[0] == "flags" {
+			f := uint32(fieldVal.Uint())
+			flags = &f
+			settings = []string{"int"}
+		}
 
 		if settings[0] == "vector" {
 			settings = settings[1:]
@@ -107,15 +145,6 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 	}
 	src = src.Elem()
 
-	// if we have custom method, we use it
-	if t, ok := v.(TL); ok {
-		data, err = t.Parse(data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse %s using manual method: %w", src.Type().String(), err)
-		}
-		return data, nil
-	}
-
 	rv := src
 
 	if boxed {
@@ -126,7 +155,7 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 
 		sch, ok := _SchemaByID[dataID]
 		if !ok {
-			return nil, fmt.Errorf("schema for id %s is not found, during parsing of: %s", hex.EncodeToString(data[:4]), rv.Type().String())
+			return nil, fmt.Errorf("schema for id %s (%d) is not found, during parsing of: %s", hex.EncodeToString(data[:4]), int32(dataID), rv.Type().String())
 		}
 
 		if len(names) > 0 {
@@ -151,10 +180,20 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 		data = data[4:]
 	}
 
+	// if we have custom method, we use it
+	if t, ok := v.(TL); ok {
+		data, err = t.Parse(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse %s using manual method: %w", src.Type().String(), err)
+		}
+		return data, nil
+	}
+
 	if rv.Kind() == reflect.Interface {
 		panic("interfaces can be parsed only when boxing is enabled")
 	}
 
+	var flags *uint32
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		value := rv.Field(i)
@@ -164,6 +203,32 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 			continue
 		}
 		settings := strings.Split(tag, " ")
+
+		if settings[0][0] == '?' {
+			if flags == nil {
+				panic("flag field should be defined before usage")
+			}
+
+			bit, err := strconv.Atoi(settings[0][1:])
+			if err != nil {
+				panic("invalid flag bit in tag, should be number")
+			}
+			if bit < 0 || bit > 31 {
+				panic("invalid flag bit in tag, should be > 0 && < 32")
+			}
+
+			if *flags&(1<<bit) == 0 {
+				// no flags for this field set
+				continue
+			}
+			settings = settings[1:]
+		}
+
+		var isFlags bool
+		if settings[0] == "flags" {
+			isFlags = true
+			settings = []string{"int"}
+		}
 
 		if settings[0] == "vector" {
 			settings = settings[1:]
@@ -201,6 +266,11 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 			return nil, fmt.Errorf("failed to parse field %s, err: %w", field.Name, err)
 		}
 		rv.Field(i).Set(value)
+
+		if isFlags {
+			f := uint32(value.Uint())
+			flags = &f
+		}
 	}
 
 	// in case of interface
@@ -248,9 +318,9 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 		case reflect.Bool:
 			tmp := make([]byte, 4)
 			if value.Bool() {
-				binary.LittleEndian.PutUint32(tmp, _BoolTrue)
+				binary.LittleEndian.PutUint32(tmp, BoolTrue)
 			} else {
-				binary.LittleEndian.PutUint32(tmp, _BoolFalse)
+				binary.LittleEndian.PutUint32(tmp, BoolFalse)
 			}
 			buf = append(buf, tmp...)
 			return buf, nil
@@ -265,6 +335,17 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 			} else {
 				tmp = make([]byte, 8)
 				binary.LittleEndian.PutUint64(tmp, uint64(value.Int()))
+			}
+			buf = append(buf, tmp...)
+			return buf, nil
+		case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
+			var tmp []byte
+			if tags[0] == "int" {
+				tmp = make([]byte, 4)
+				binary.LittleEndian.PutUint32(tmp, uint32(value.Uint()))
+			} else {
+				tmp = make([]byte, 8)
+				binary.LittleEndian.PutUint64(tmp, value.Uint())
 			}
 			buf = append(buf, tmp...)
 			return buf, nil
@@ -383,9 +464,19 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 
 			v := value.Interface()
 
-			_, err = Parse(&v, val, isBoxed, allowed...)
+			val, err = Parse(&v, val, isBoxed, allowed...)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse struct from bytes for %s, err: %w", value.Type().String(), err)
+			}
+
+			if len(val) > 0 && value.Type().Kind() == reflect.Interface {
+				// it was prefix (e.g. overlay id), parse actual value
+				var v2 Serializable
+				val, err = Parse(&v2, val, isBoxed, allowed...)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse struct from bytes for %s, err: %w", value.Type().String(), err)
+				}
+				v = []Serializable{v, v2}
 			}
 
 			value.Set(reflect.ValueOf(v))
@@ -418,7 +509,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 			if len(data) < 4 {
 				return nil, fmt.Errorf("failed to parse int for %s, err: too short data", value.Type().String())
 			}
-			value.SetBool(binary.LittleEndian.Uint32(data) == _BoolTrue)
+			value.SetBool(binary.LittleEndian.Uint32(data) == BoolTrue)
 			data = data[4:]
 			return data, nil
 		}
@@ -440,6 +531,23 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 				data = data[8:]
 			}
 			value.SetInt(val)
+			return data, nil
+		case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
+			var val uint64
+			if tags[0] != "long" {
+				if len(data) < 4 {
+					return nil, fmt.Errorf("failed to parse int for %s, err: too short data", value.Type().String())
+				}
+				val = uint64(binary.LittleEndian.Uint32(data))
+				data = data[4:]
+			} else {
+				if len(data) < 8 {
+					return nil, fmt.Errorf("failed to parse long for %s, err: too short data", value.Type().String())
+				}
+				val = binary.LittleEndian.Uint64(data)
+				data = data[8:]
+			}
+			value.SetUint(val)
 			return data, nil
 		case reflect.Slice:
 			switch value.Type().Elem().Kind() {
@@ -467,7 +575,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 		}
 	case "struct":
 		newTyp := value.Type()
-		if newTyp.Kind() == reflect.Ptr {
+		if newTyp.Kind() == reflect.Pointer {
 			newTyp = newTyp.Elem()
 		}
 
@@ -513,7 +621,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 			}
 		}
 
-		if value.Type().Kind() != reflect.Ptr {
+		if value.Type().Kind() != reflect.Pointer {
 			nVal = nVal.Elem()
 		}
 
@@ -531,10 +639,21 @@ func Register(typ any, tl string) uint32 {
 	}
 
 	name := strings.SplitN(tl, " ", 2)[0]
-	id := tlCRC(tl)
+	nameParts := strings.SplitN(name, "#", 2)
+
+	var id uint32
+	if len(nameParts) > 1 {
+		b, err := hex.DecodeString(nameParts[1])
+		if err != nil {
+			panic("invalid predefined id for " + name + ": " + err.Error())
+		}
+		id = binary.BigEndian.Uint32(b)
+	} else {
+		id = tlCRC(tl)
+	}
 	_SchemaByID[id] = t
 	_SchemaIDByTypeName[t.String()] = id
-	_SchemaIDByName[name] = id
+	_SchemaIDByName[nameParts[0]] = id
 
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, id)
@@ -543,11 +662,13 @@ func Register(typ any, tl string) uint32 {
 	return id
 }
 
+var ieeeTable = crc32.MakeTable(crc32.IEEE)
+
 func tlCRC(schema string) uint32 {
 	schema = strings.ReplaceAll(schema, "(", "")
 	schema = strings.ReplaceAll(schema, ")", "")
 	data := []byte(schema)
-	crc := crc32.Checksum(data, crc32.MakeTable(crc32.IEEE))
+	crc := crc32.Checksum(data, ieeeTable)
 
 	return crc
 }

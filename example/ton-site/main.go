@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/dht"
 	rldphttp "github.com/xssnick/tonutils-go/adnl/rldp/http"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 )
@@ -19,7 +21,18 @@ func handler(writer http.ResponseWriter, request *http.Request) {
 }
 
 func main() {
-	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/testnet-global.config.json")
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	gateway := adnl.NewGateway(priv)
+	err = gateway.StartClient()
+	if err != nil {
+		panic(err)
+	}
+
+	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), gateway, "https://ton-blockchain.github.io/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -34,8 +47,9 @@ func main() {
 		panic(err)
 	}
 
-	log.Println("Starting server on", addr+".adnl")
-	if err = s.ListenAndServe(getPublicIP() + ":9056"); err != nil {
+	log.Println("Listening on", addr+".adnl")
+	s.SetExternalIP(net.ParseIP(getPublicIP()))
+	if err = s.ListenAndServe(":9056"); err != nil {
 		panic(err)
 	}
 }

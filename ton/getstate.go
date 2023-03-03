@@ -2,66 +2,53 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
-
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error) {
-	data := block.Serialize()
+func init() {
+	tl.Register(GetAccountState{}, "liteServer.getAccountState id:tonNode.blockIdExt account:liteServer.accountId = liteServer.AccountState")
+	tl.Register(AccountState{}, "liteServer.accountState id:tonNode.blockIdExt shardblk:tonNode.blockIdExt shard_proof:bytes proof:bytes state:bytes = liteServer.AccountState")
+}
 
-	chain := make([]byte, 4)
-	binary.LittleEndian.PutUint32(chain, uint32(addr.Workchain()))
+type AccountState struct {
+	ID         *BlockIDExt `tl:"struct"`
+	Shard      *BlockIDExt `tl:"struct"`
+	ShardProof []byte      `tl:"bytes"`
+	Proof      []byte      `tl:"bytes"`
+	State      []byte      `tl:"bytes"`
+}
 
-	data = append(data, chain...)
-	data = append(data, addr.Data()...)
+type GetAccountState struct {
+	ID      *BlockIDExt `tl:"struct"`
+	Account AccountID   `tl:"struct"`
+}
 
-	resp, err := c.client.Do(ctx, _GetAccountState, data)
+type AccountID struct {
+	Workchain int32  `tl:"int"`
+	ID        []byte `tl:"int256"`
+}
+
+func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, GetAccountState{
+		ID: block,
+		Account: AccountID{
+			Workchain: addr.Workchain(),
+			ID:        addr.Data(),
+		},
+	}, &resp)
 	if err != nil {
 		return nil, err
 	}
 
-	switch resp.TypeID {
-	case _AccountState:
-
-		b := new(tlb.BlockInfo)
-		resp.Data, err = b.Load(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-
-		shard := new(tlb.BlockInfo)
-		resp.Data, err = shard.Load(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-
-		var shardProof []byte
-		shardProof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_ = shardProof
-
-		var proof []byte
-		proof, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		_ = proof
-
-		var state []byte
-		state, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(state) == 0 {
+	switch t := resp.(type) {
+	case AccountState:
+		if len(t.State) == 0 {
 			return &tlb.Account{
 				IsActive: false,
 			}, nil
@@ -71,7 +58,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			IsActive: true,
 		}
 
-		cls, err := cell.FromBOCMultiRoot(proof)
+		cls, err := cell.FromBOCMultiRoot(t.Proof)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse proof boc: %w", err)
 		}
@@ -120,7 +107,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			}
 		}
 
-		stateCell, err := cell.FromBOC(state)
+		stateCell, err := cell.FromBOC(t.State)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse state boc: %w", err)
 		}
@@ -139,14 +126,8 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		acc.State = &st
 
 		return acc, nil
-	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-		return nil, lsErr
+	case LSError:
+		return nil, t
 	}
-
-	return nil, errors.New("unknown response type")
+	return nil, errUnexpectedResponse(resp)
 }
