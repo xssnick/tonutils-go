@@ -19,10 +19,10 @@ import (
 )
 
 type MockAPI struct {
-	getBlockInfo        func(ctx context.Context) (*tlb.BlockInfo, error)
-	getAccount          func(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error)
+	getBlockInfo        func(ctx context.Context) (*ton.BlockIDExt, error)
+	getAccount          func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	sendExternalMessage func(ctx context.Context, msg *tlb.ExternalMessage) error
-	runGetMethod        func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	runGetMethod        func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	listTransactions    func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 
 	extMsgSent *tlb.ExternalMessage
@@ -33,16 +33,16 @@ func (m MockAPI) Client() ton.LiteClient {
 	panic("implement me")
 }
 
-func (m MockAPI) WaitNextMasterBlock(ctx context.Context, master *tlb.BlockInfo) (*tlb.BlockInfo, error) {
+func (m MockAPI) WaitNextMasterBlock(ctx context.Context, master *ton.BlockIDExt) (*ton.BlockIDExt, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m MockAPI) CurrentMasterchainInfo(ctx context.Context) (*tlb.BlockInfo, error) {
+func (m MockAPI) CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error) {
 	return m.getBlockInfo(ctx)
 }
 
-func (m MockAPI) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error) {
+func (m MockAPI) GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error) {
 	return m.getAccount(ctx, block, addr)
 }
 
@@ -50,7 +50,7 @@ func (m MockAPI) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessa
 	return m.sendExternalMessage(ctx, msg)
 }
 
-func (m MockAPI) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
+func (m MockAPI) RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
 	return m.runGetMethod(ctx, blockInfo, addr, method, params...)
 }
 
@@ -121,18 +121,18 @@ func TestWallet_Send(t *testing.T) {
 				w.ver = 777
 			}
 
-			m.getBlockInfo = func(ctx context.Context) (*tlb.BlockInfo, error) {
+			m.getBlockInfo = func(ctx context.Context) (*ton.BlockIDExt, error) {
 				if flow == BlockErr {
 					return nil, errTest
 				}
 
-				return &tlb.BlockInfo{
+				return &ton.BlockIDExt{
 					SeqNo:     2,
 					Workchain: 333,
 				}, nil
 			}
 
-			m.getAccount = func(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error) {
+			m.getAccount = func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error) {
 				if flow == AccountErr {
 					return nil, errTest
 				}
@@ -158,7 +158,7 @@ func TestWallet_Send(t *testing.T) {
 				return a, nil
 			}
 
-			m.runGetMethod = func(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
+			m.runGetMethod = func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
 				if flow == RunErr {
 					return nil, errTest
 				}

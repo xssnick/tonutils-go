@@ -10,6 +10,7 @@ import (
 	rldphttp "github.com/xssnick/tonutils-go/adnl/rldp/http"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 )
@@ -46,8 +47,9 @@ func main() {
 		panic(err)
 	}
 
-	log.Println("Starting server on", addr+".adnl")
-	if err = s.ListenAndServe(getPublicIP() + ":9056"); err != nil {
+	log.Println("Listening on", addr+".adnl")
+	s.SetExternalIP(net.ParseIP(getPublicIP()))
+	if err = s.ListenAndServe(":9056"); err != nil {
 		panic(err)
 	}
 }

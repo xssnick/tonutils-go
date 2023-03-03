@@ -2,11 +2,11 @@ package liteclient
 
 import (
 	"context"
+	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
+	"github.com/xssnick/tonutils-go/ton"
 	"testing"
 	"time"
-
-	"github.com/xssnick/tonutils-go/tlb"
 )
 
 func Test_Conn(t *testing.T) {
@@ -21,19 +21,19 @@ func Test_Conn(t *testing.T) {
 	}
 
 	doReq := func(expErr error) {
-		resp, err := client.Do(ctx, -1984567762, nil)
+		var resp tl.Serializable
+		err := client.QueryLiteserver(ctx, ton.GetMasterchainInf{}, &resp)
 		if err != nil {
 			t.Fatal("do err", err)
 		}
 
-		block := new(tlb.BlockInfo)
-		_, err = tl.Parse(block, resp.Data, false)
-		if err != nil {
-			t.Fatal("load err", err)
-		}
-
-		if block.Workchain != -1 || block.Shard != -9223372036854775808 {
-			t.Fatal("data err", *block)
+		switch tb := resp.(type) {
+		case ton.MasterchainInfo:
+			if tb.Last.Workchain != -1 || tb.Last.Shard != -9223372036854775808 {
+				t.Fatal("data err", *tb.Last)
+			}
+		default:
+			t.Fatal("bad response", fmt.Sprint(tb))
 		}
 	}
 	doReq(nil)

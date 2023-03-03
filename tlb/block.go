@@ -2,15 +2,10 @@ package tlb
 
 import (
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func init() {
-	tl.Register(BlockInfo{}, "tonNode.blockIdExt workchain:int shard:long seqno:int root_hash:int256 file_hash:int256 = tonNode.BlockIdExt")
-}
-
+// Deprecated: use ton.BlockIDExt
 type BlockInfo struct {
 	Workchain int32  `tl:"int"`
 	Shard     int64  `tl:"long"`
@@ -41,6 +36,17 @@ type BlockExtra struct {
 	Custom             *McBlockExtra `tlb:"maybe ^"`
 }
 
+type ShardAccountBlocks struct {
+	Accounts *cell.Dictionary `tlb:"dict 256"`
+}
+
+type AccountBlock struct {
+	_            Magic            `tlb:"#5"`
+	Addr         []byte           `tlb:"bits 256"`
+	Transactions *cell.Dictionary `tlb:"dict 64"`
+	StateUpdate  *cell.Cell       `tlb:"^"`
+}
+
 type Block struct {
 	_           Magic       `tlb:"#11ef55aa"`
 	GlobalID    int32       `tlb:"## 32"`
@@ -54,7 +60,7 @@ type AllShardsInfo struct {
 	ShardHashes *cell.Dictionary `tlb:"dict 32"`
 }
 
-type BlockHeader struct { // BlockInfo from block.tlb
+type BlockHeader struct { // BlockIDExt from block.tlb
 	blockInfoPart
 	GenSoftware *GlobalVersion
 	MasterRef   *ExtBlkRef

@@ -2,14 +2,14 @@ package liteclient
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
 	"io"
 	mRand "math/rand"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,40 +19,48 @@ const _StickyCtxKey = "_ton_node_sticky"
 
 type OnDisconnectCallback func(addr, key string)
 
-type LiteResponse struct {
-	TypeID int32
-	Data   []byte
-	err    error
+type ADNLResponse struct {
+	Data tl.Serializable
+	Err  error
 }
 
-type LiteRequest struct {
-	TypeID   int32
+type ADNLRequest struct {
 	QueryID  []byte
-	Data     []byte
-	RespChan chan *LiteResponse
+	Data     any
+	RespChan chan *ADNLResponse
 }
 
 type ConnectionPool struct {
-	activeReqs  map[string]*LiteRequest
+	activeReqs  map[string]*ADNLRequest
 	activeNodes []*connection
 	reqMx       sync.RWMutex
 	nodesMx     sync.RWMutex
 
 	onDisconnect     func(addr, key string)
 	roundRobinOffset uint64
+
+	authKey ed25519.PrivateKey
 }
 
 var ErrNoActiveConnections = errors.New("no active connections")
 
+// NewConnectionPool - ordinary pool to query liteserver
 func NewConnectionPool() *ConnectionPool {
 	c := &ConnectionPool{
-		activeReqs: map[string]*LiteRequest{},
+		activeReqs: map[string]*ADNLRequest{},
 	}
 
 	// default reconnect policy
 	c.SetOnDisconnect(c.DefaultReconnect(3*time.Second, -1))
 
 	return c
+}
+
+// NewConnectionPoolWithAuth - will do TCP authorization after connection, can be used to communicate with storage-daemon
+func NewConnectionPoolWithAuth(key ed25519.PrivateKey) *ConnectionPool {
+	p := NewConnectionPool()
+	p.authKey = key
+	return p
 }
 
 // StickyContext - bounds all requests with this context to the same lite-server node, if possible.
@@ -86,37 +94,36 @@ func (c *ConnectionPool) StickyNodeID(ctx context.Context) uint32 {
 	return nodeID
 }
 
-// Do - builds and executes request to liteserver
-func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (*LiteResponse, error) {
-	id := make([]byte, 32)
+// QueryLiteserver - sends request to liteserver
+func (c *ConnectionPool) QueryLiteserver(ctx context.Context, request tl.Serializable, result tl.Serializable) error {
+	return c.QueryADNL(ctx, LiteServerQuery{Data: request}, result)
+}
 
+// QueryADNL - sends ADNL request to peer
+func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable, result tl.Serializable) error {
+	id := make([]byte, 32)
 	_, err := io.ReadFull(rand.Reader, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// buffered channel to not block listener
-	ch := make(chan *LiteResponse, 1)
-
-	typData := make([]byte, 4)
-	binary.LittleEndian.PutUint32(typData, uint32(typeID))
-	payload = append(typData, payload...)
-	req := &LiteRequest{
-		TypeID:   typeID,
+	ch := make(chan *ADNLResponse, 1)
+	req := &ADNLRequest{
 		QueryID:  id,
-		Data:     payload,
+		Data:     request,
 		RespChan: ch,
 	}
 
-	hexID := hex.EncodeToString(id)
+	strId := string(id)
 
 	c.reqMx.Lock()
-	c.activeReqs[hexID] = req
+	c.activeReqs[strId] = req
 	c.reqMx.Unlock()
 
 	defer func() {
 		c.reqMx.Lock()
-		delete(c.activeReqs, hexID)
+		delete(c.activeReqs, strId)
 		c.reqMx.Unlock()
 	}()
 
@@ -124,12 +131,12 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
 		host, err = c.querySticky(nodeID, req)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	} else {
 		host, err = c.queryWithBalancer(req)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -144,94 +151,25 @@ func (c *ConnectionPool) Do(ctx context.Context, typeID int32, payload []byte) (
 	// wait for response
 	select {
 	case resp := <-ch:
-		if resp.err != nil {
-			return nil, resp.err
+		if resp.Err != nil {
+			return resp.Err
 		}
 
-		return resp, nil
+		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp.Data))
+		return nil
 	case <-ctx.Done():
 		if !hasDeadline {
-			return nil, fmt.Errorf("liteserver request timeout, node %s", host)
+			return fmt.Errorf("adnl request timeout, node %s", host)
 		}
-		return nil, fmt.Errorf("deadline exceeded, node %s, err: %w", host, ctx.Err())
+		return fmt.Errorf("deadline exceeded, node %s, err: %w", host, ctx.Err())
 	}
 }
 
-func (c *ConnectionPool) DoRequest(ctx context.Context, payload tl.Serializable) (*LiteResponse, error) {
-	id := make([]byte, 32)
-
-	_, err := io.ReadFull(rand.Reader, id)
-	if err != nil {
-		return nil, err
-	}
-
-	// buffered channel to not block listener
-	ch := make(chan *LiteResponse, 1)
-
-	payloadSerialized, err := tl.Serialize(payload, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize payload, err: %w", err)
-	}
-	req := &LiteRequest{
-		QueryID:  id,
-		Data:     payloadSerialized,
-		RespChan: ch,
-	}
-
-	hexID := hex.EncodeToString(id)
-
-	c.reqMx.Lock()
-	c.activeReqs[hexID] = req
-	c.reqMx.Unlock()
-
-	defer func() {
-		c.reqMx.Lock()
-		delete(c.activeReqs, hexID)
-		c.reqMx.Unlock()
-	}()
-
-	var host string
-	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
-		host, err = c.querySticky(nodeID, req)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		host, err = c.queryWithBalancer(req)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	_, hasDeadline := ctx.Deadline()
-	if !hasDeadline {
-		// fallback timeout to not stuck forever with background context
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-	}
-
-	// wait for response
-	select {
-	case resp := <-ch:
-		if resp.err != nil {
-			return nil, resp.err
-		}
-
-		return resp, nil
-	case <-ctx.Done():
-		if !hasDeadline {
-			return nil, fmt.Errorf("liteserver request timeout, node %s", host)
-		}
-		return nil, fmt.Errorf("deadline exceeded, node %s, err: %w", host, ctx.Err())
-	}
-}
-
-func (c *ConnectionPool) querySticky(id uint32, req *LiteRequest) (string, error) {
+func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (string, error) {
 	c.nodesMx.RLock()
 	for _, node := range c.activeNodes {
 		if node.id == id {
-			host, err := node.queryLiteServer(req.QueryID, req.TypeID, req.Data)
+			host, err := node.queryAdnl(req.QueryID, req.Data)
 			if err == nil {
 				c.nodesMx.RUnlock()
 				return host, nil
@@ -245,7 +183,7 @@ func (c *ConnectionPool) querySticky(id uint32, req *LiteRequest) (string, error
 	return c.queryWithBalancer(req)
 }
 
-func (c *ConnectionPool) queryWithBalancer(req *LiteRequest) (string, error) {
+func (c *ConnectionPool) queryWithBalancer(req *ADNLRequest) (string, error) {
 	nodeOffset := atomic.AddUint64(&c.roundRobinOffset, 1)
 
 	var firstNode *connection
@@ -265,7 +203,7 @@ func (c *ConnectionPool) queryWithBalancer(req *LiteRequest) (string, error) {
 			return "", ErrNoActiveConnections
 		}
 
-		host, err := reqNode.queryLiteServer(req.QueryID, req.TypeID, req.Data)
+		host, err := reqNode.queryAdnl(req.QueryID, req.Data)
 		if err != nil {
 			nodeOffset++
 			continue

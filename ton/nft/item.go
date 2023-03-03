@@ -3,6 +3,7 @@ package nft
 import (
 	"context"
 	"fmt"
+	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"math/rand"
 
@@ -53,7 +54,7 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 	return c.GetNFTDataAtBlock(ctx, b)
 }
 
-func (c *ItemClient) GetNFTDataAtBlock(ctx context.Context, b *tlb.BlockInfo) (*ItemData, error) {
+func (c *ItemClient) GetNFTDataAtBlock(ctx context.Context, b *ton.BlockIDExt) (*ItemData, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_data method: %w", err)

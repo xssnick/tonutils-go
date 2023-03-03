@@ -2,8 +2,6 @@ package ton
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
@@ -15,36 +13,21 @@ func init() {
 type GetTime struct{}
 
 type CurrentTime struct {
-	Now int32 `tl:"int"`
+	Now uint32 `tl:"int"`
 }
 
 func (c *APIClient) GetTime(ctx context.Context) (uint32, error) {
-	resp, err := c.client.DoRequest(ctx, GetTime{})
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, GetTime{}, &resp)
 	if err != nil {
 		return 0, err
 	}
 
-	switch resp.TypeID {
-	case _CurrentTime:
-		if len(resp.Data) < 4 {
-			return 0, errors.New("not enough length")
-		}
-		time := new(CurrentTime)
-		_, err = tl.Parse(time, resp.Data, false)
-		if err != nil {
-			return 0, fmt.Errorf("failed to parse response to CurrentTime, err: %w", err)
-		}
-
-		return uint32(time.Now), nil
-
-	case _LSError:
-		lsErr := new(LSError)
-		_, err = tl.Parse(lsErr, resp.Data, false)
-		if err != nil {
-			return 0, fmt.Errorf("failed to parse error, err: %w", err)
-		}
-		return 0, lsErr
+	switch t := resp.(type) {
+	case CurrentTime:
+		return t.Now, nil
+	case LSError:
+		return 0, t
 	}
-
-	return 0, errors.New("unknown response type")
+	return 0, errUnexpectedResponse(resp)
 }

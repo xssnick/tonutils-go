@@ -283,7 +283,7 @@ func Test_AccountHasMethod(t *testing.T) {
 
 func Test_BlockScan(t *testing.T) {
 	ctx := api.client.StickyContext(context.Background())
-	var shards []*tlb.BlockInfo
+	var shards []*BlockIDExt
 	for {
 		// we need fresh block info to run get methods
 		master, err := api.GetMasterchainInfo(ctx)
@@ -313,13 +313,13 @@ func Test_BlockScan(t *testing.T) {
 		for _, shard := range shards {
 			log.Printf("scanning block %d of shard %d...", shard.SeqNo, shard.Shard)
 
-			var fetchedIDs []*tlb.TransactionID
-			var after *tlb.TransactionID
+			var fetchedIDs []TransactionShortInfo
+			var after *TransactionID3
 			var more = true
 
 			// load all transactions in batches with 100 transactions in each while exists
 			for more {
-				fetchedIDs, more, err = api.GetBlockTransactions(ctx, shard, 100, after)
+				fetchedIDs, more, err = api.GetBlockTransactionsV2(ctx, shard, 100, after)
 				if err != nil {
 					log.Fatalln("get tx ids err:", err.Error())
 					return
@@ -327,12 +327,12 @@ func Test_BlockScan(t *testing.T) {
 
 				if more {
 					// set load offset for next query (pagination)
-					after = fetchedIDs[len(fetchedIDs)-1]
+					after = fetchedIDs[len(fetchedIDs)-1].ID3()
 				}
 
 				for _, id := range fetchedIDs {
 					// get full transaction by id
-					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, 0, id.AccountID), id.LT)
+					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, 0, id.Account), id.LT)
 					if err != nil {
 						log.Fatalln("get tx data err:", err.Error())
 						return
@@ -472,9 +472,9 @@ func Test_LSErrorCase(t *testing.T) {
 	addr := address.MustParseAddr("EQCW0cn9TQuZ3tW_Tche1HIGGa7apwFsi7v3YtmYC6FoIzLr")
 	_, err = api.GetAccount(ctx, b, addr)
 	if err != nil {
-		_, ok := err.(*LSError)
+		_, ok := err.(LSError)
 		if !ok {
-			t.Fatalf("not expected type of error, want *LSError, got '%s'", reflect.TypeOf(err).String())
+			t.Fatalf("not expected type of error, want LSError, got '%s'", reflect.TypeOf(err).String())
 		}
 	}
 }

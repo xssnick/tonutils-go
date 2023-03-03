@@ -75,24 +75,29 @@ type Transport struct {
 	dht      DHT
 	resolver Resolver
 
+	adnlKey ed25519.PrivateKey
+
 	rldpInfos map[string]*rldpInfo
 
 	activeRequests map[string]*payloadStream
 	mx             sync.RWMutex
 }
 
-func NewTransport(dht DHT, resolver Resolver) *Transport {
+func NewTransport(dht DHT, resolver Resolver, adnlKey ...ed25519.PrivateKey) *Transport {
 	t := &Transport{
 		dht:            dht,
 		resolver:       resolver,
 		activeRequests: map[string]*payloadStream{},
 		rldpInfos:      map[string]*rldpInfo{},
 	}
+	if len(adnlKey) > 0 && adnlKey[0] != nil {
+		t.adnlKey = adnlKey[0]
+	}
 	return t
 }
 
 func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (RLDP, error) {
-	a, err := Connector(ctx, addr, key, nil)
+	a, err := Connector(ctx, addr, key, t.adnlKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
 	}

@@ -2,13 +2,12 @@ package wallet
 
 import (
 	"context"
-
-	"github.com/xssnick/tonutils-go/tlb"
+	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 type RegularBuilder interface {
-	BuildMessage(ctx context.Context, isInitialized bool, block *tlb.BlockInfo, messages []*Message) (*cell.Cell, error)
+	BuildMessage(ctx context.Context, isInitialized bool, block *ton.BlockIDExt, messages []*Message) (*cell.Cell, error)
 }
 
 type SpecRegular struct {

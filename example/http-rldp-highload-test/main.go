@@ -47,10 +47,10 @@ func main() {
 	// 150 clients, parallel requests
 	for i := 0; i < numClients; i++ {
 		go func() {
+			_, clientKey, _ := ed25519.GenerateKey(nil)
 			// it uses fake DHT, but real adnl and rldp through network
 			client := &http.Client{
-				Transport: rldphttp.NewTransport(dht, nil),
-				//Timeout:   300 * time.Millisecond,
+				Transport: rldphttp.NewTransport(dht, nil, clientKey),
 			}
 
 			for {

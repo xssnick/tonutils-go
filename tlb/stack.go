@@ -128,6 +128,7 @@ func (s *Stack) ToCell() (*cell.Cell, error) {
 			b.MustStoreUInt(0x05, 8)
 			b.MustStoreRef(v.EndCell())
 		default:
+			// TODO: store tuple 0x07
 			return nil, fmt.Errorf("unknown type at %d pos in stack", i)
 		}
 
@@ -167,6 +168,8 @@ func (s *Stack) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
+	ch := slice.MustToCell()
+
 	typ, err := slice.LoadUInt(8)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load stack value type, err: %w", err)
@@ -293,27 +296,52 @@ func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
 		}
 
 		var tuple []any
-		for i := 0; i < int(ln); i++ {
-			var next *cell.Slice
-			if i < int(ln)-1 {
-				next, err = slice.LoadRef()
+
+		if ln == 9 {
+			println(ch.Dump())
+		}
+
+		last2index := int(ln) - 2
+		if last2index < 0 {
+			last2index = 0
+		}
+
+		var dive func(i int, root *cell.Slice) error
+		dive = func(i int, root *cell.Slice) error {
+			if i == last2index {
+				// load first one
+				err = dive(i+1, root)
 				if err != nil {
-					return nil, fmt.Errorf("failed to load tuple's %d next element, err: %w", i, err)
+					return err
+				}
+			} else if i < last2index {
+				next, err := root.LoadRef()
+				if err != nil {
+					return fmt.Errorf("failed to load tuple's %d next element, err: %w", i, err)
+				}
+
+				err = dive(i+1, next)
+				if err != nil {
+					return err
 				}
 			}
 
-			ref, err := slice.LoadRef()
+			ref, err := root.LoadRef()
 			if err != nil {
-				return nil, fmt.Errorf("failed to load tuple's %d value, err: %w", i, err)
+				return fmt.Errorf("failed to load tuple's %d ref, err: %w", i, err)
 			}
 
 			val, err := s.parseValue(ref)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse tuple's %d value, err: %w", i, err)
+				return fmt.Errorf("failed to parse tuple's %d value, err: %w", i, err)
 			}
 			tuple = append(tuple, val)
 
-			slice = next
+			return nil
+		}
+		err = dive(0, slice)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load tuple, err: %w", err)
 		}
 
 		return tuple, nil

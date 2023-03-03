@@ -12,12 +12,12 @@ import (
 )
 
 // func to get storage map key
-func getShardID(shard *tlb.BlockInfo) string {
+func getShardID(shard *ton.BlockIDExt) string {
 	return fmt.Sprintf("%d|%d", shard.Workchain, shard.Shard)
 }
 
-func getNotSeenShards(ctx context.Context, api *ton.APIClient, shard *tlb.BlockInfo, shardLastSeqno map[string]uint32) (ret []*tlb.BlockInfo, err error) {
-	if no, ok := shardLastSeqno[getShardID(shard)]; ok && no == uint32(shard.SeqNo) {
+func getNotSeenShards(ctx context.Context, api *ton.APIClient, shard *ton.BlockIDExt, shardLastSeqno map[string]uint32) (ret []*ton.BlockIDExt, err error) {
+	if no, ok := shardLastSeqno[getShardID(shard)]; ok && no == shard.SeqNo {
 		return nil, nil
 	}
 
@@ -77,7 +77,7 @@ func main() {
 		return
 	}
 	for _, shard := range firstShards {
-		shardLastSeqno[getShardID(shard)] = uint32(shard.SeqNo)
+		shardLastSeqno[getShardID(shard)] = shard.SeqNo
 	}
 
 	for {
@@ -92,7 +92,7 @@ func main() {
 
 		// shards in master block may have holes, e.g. shard seqno 2756461, then 2756463, and no 2756462 in master chain
 		// thus we need to scan a bit back in case of discovering a hole, till last seen, to fill the misses.
-		var newShards []*tlb.BlockInfo
+		var newShards []*ton.BlockIDExt
 		for _, shard := range currentShards {
 			notSeen, err := getNotSeenShards(ctx, api, shard, shardLastSeqno)
 			if err != nil {
@@ -109,13 +109,13 @@ func main() {
 		for _, shard := range newShards {
 			log.Printf("scanning block %d of shard %x...", shard.SeqNo, uint64(shard.Shard))
 
-			var fetchedIDs []*tlb.TransactionID
-			var after *tlb.TransactionID
+			var fetchedIDs []ton.TransactionShortInfo
+			var after *ton.TransactionID3
 			var more = true
 
 			// load all transactions in batches with 100 transactions in each while exists
 			for more {
-				fetchedIDs, more, err = api.GetBlockTransactions(ctx, shard, 100, after)
+				fetchedIDs, more, err = api.GetBlockTransactionsV2(ctx, shard, 100, after)
 				if err != nil {
 					log.Fatalln("get tx ids err:", err.Error())
 					return
@@ -123,12 +123,12 @@ func main() {
 
 				if more {
 					// set load offset for next query (pagination)
-					after = fetchedIDs[len(fetchedIDs)-1]
+					after = fetchedIDs[len(fetchedIDs)-1].ID3()
 				}
 
 				for _, id := range fetchedIDs {
 					// get full transaction by id
-					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, 0, id.AccountID), id.LT)
+					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, 0, id.Account), id.LT)
 					if err != nil {
 						log.Fatalln("get tx data err:", err.Error())
 						return

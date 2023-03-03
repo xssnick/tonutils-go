@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/xssnick/tonutils-go/address"
-	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -22,9 +21,9 @@ const _CategoryADNLSite = 0xad01
 const _CategoryStorageSite = 0x7473
 
 type TonApi interface {
-	CurrentMasterchainInfo(ctx context.Context) (_ *tlb.BlockInfo, err error)
-	RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
-	GetBlockchainConfig(ctx context.Context, block *tlb.BlockInfo, onlyParams ...int32) (*ton.BlockchainConfig, error)
+	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
+	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
+	GetBlockchainConfig(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
 }
 
 type Domain struct {
@@ -79,7 +78,7 @@ func (c *Client) Resolve(ctx context.Context, domain string) (*Domain, error) {
 	return c.ResolveAtBlock(ctx, domain, b)
 }
 
-func (c *Client) ResolveAtBlock(ctx context.Context, domain string, b *tlb.BlockInfo) (*Domain, error) {
+func (c *Client) ResolveAtBlock(ctx context.Context, domain string, b *ton.BlockIDExt) (*Domain, error) {
 	chain := strings.Split(domain, ".")
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 { // reverse array
 		chain[i], chain[j] = chain[j], chain[i]
@@ -87,7 +86,7 @@ func (c *Client) ResolveAtBlock(ctx context.Context, domain string, b *tlb.Block
 	return c.resolve(ctx, c.root, strings.Join(chain, "\x00")+"\x00", b)
 }
 
-func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, chain string, b *tlb.BlockInfo) (*Domain, error) {
+func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, chain string, b *ton.BlockIDExt) (*Domain, error) {
 	name := []byte(chain)
 	nameCell := cell.BeginCell()
 

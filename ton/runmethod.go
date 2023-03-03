@@ -2,7 +2,6 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
@@ -15,35 +14,41 @@ import (
 var ErrIncorrectResultType = errors.New("incorrect result type")
 var ErrResultIndexOutOfRange = errors.New("result index is out of range")
 
+func init() {
+	tl.Register(RunSmcMethod{}, "liteServer.runSmcMethod mode:# id:tonNode.blockIdExt account:liteServer.accountId method_id:long params:bytes = liteServer.RunMethodResult")
+	tl.Register(RunMethodResult{}, "liteServer.runMethodResult mode:# id:tonNode.blockIdExt shardblk:tonNode.blockIdExt shard_proof:mode.0?bytes proof:mode.0?bytes state_proof:mode.1?bytes init_c7:mode.3?bytes lib_extras:mode.4?bytes exit_code:int result:mode.2?bytes = liteServer.RunMethodResult")
+}
+
 type ExecutionResult struct {
 	result []any
+}
+
+type RunSmcMethod struct {
+	Mode     uint32      `tl:"int"`
+	ID       *BlockIDExt `tl:"struct"`
+	Account  AccountID   `tl:"struct"`
+	MethodID uint64      `tl:"long"`
+	Params   []byte      `tl:"bytes"`
+}
+
+type RunMethodResult struct {
+	Mode       uint32      `tl:"flags"`
+	ID         *BlockIDExt `tl:"struct"`
+	ShardBlock *BlockIDExt `tl:"struct"`
+	ShardProof []byte      `tl:"?0 bytes"`
+	Proof      []byte      `tl:"?0 bytes"`
+	StateProof []byte      `tl:"?1 bytes"`
+	InitC7     []byte      `tl:"?3 bytes"`
+	LibExtras  []byte      `tl:"?4 bytes"`
+	ExitCode   int32       `tl:"int"`
+	Result     []byte      `tl:"?2 bytes"`
 }
 
 func NewExecutionResult(data []any) *ExecutionResult {
 	return &ExecutionResult{data}
 }
 
-func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, addr *address.Address, method string, params ...any) (*ExecutionResult, error) {
-	blockData, err := tl.Serialize(blockInfo, false)
-	if err != nil {
-		return nil, err
-	}
-
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, 0b00000100)
-
-	data = append(data, blockData...)
-
-	chain := make([]byte, 4)
-	binary.LittleEndian.PutUint32(chain, uint32(addr.Workchain()))
-
-	data = append(data, chain...)
-	data = append(data, addr.Data()...)
-
-	mName := make([]byte, 8)
-	binary.LittleEndian.PutUint64(mName, tlb.MethodNameHash(method))
-	data = append(data, mName...)
-
+func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...any) (*ExecutionResult, error) {
 	var stack tlb.Stack
 	for i := len(params) - 1; i >= 0; i-- {
 		// push args in reverse order
@@ -55,50 +60,30 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		return nil, fmt.Errorf("build stack err: %w", err)
 	}
 
-	// param
-	data = append(data, tl.ToBytes(req.ToBOCWithFlags(false))...)
-
-	resp, err := c.client.Do(ctx, _RunContractGetMethod, data)
+	var resp tl.Serializable
+	err = c.client.QueryLiteserver(ctx, &RunSmcMethod{
+		Mode: 1 << 2, // with result
+		ID:   blockInfo,
+		Account: AccountID{
+			Workchain: addr.Workchain(),
+			ID:        addr.Data(),
+		},
+		MethodID: tlb.MethodNameHash(method),
+		Params:   req.ToBOCWithFlags(false),
+	}, &resp)
 	if err != nil {
 		return nil, err
 	}
 
-	switch resp.TypeID {
-	case _RunQueryResult:
-		// TODO: mode
-		_ = binary.LittleEndian.Uint32(resp.Data)
-
-		resp.Data = resp.Data[4:]
-
-		b := new(tlb.BlockInfo)
-		resp.Data, err = tl.Parse(b, resp.Data, false)
-		if err != nil {
-			return nil, err
-		}
-
-		shard := new(tlb.BlockInfo)
-		resp.Data, err = tl.Parse(shard, resp.Data, false)
-		if err != nil {
-			return nil, err
-		}
-
-		// TODO: check proofs mode
-
-		exitCode := binary.LittleEndian.Uint32(resp.Data)
-		if exitCode > 1 {
+	switch t := resp.(type) {
+	case RunMethodResult:
+		if t.ExitCode != 0 && t.ExitCode != 1 {
 			return nil, ContractExecError{
-				exitCode,
+				t.ExitCode,
 			}
 		}
-		resp.Data = resp.Data[4:]
 
-		var state []byte
-		state, resp.Data, err = tl.FromBytes(resp.Data)
-		if err != nil {
-			return nil, err
-		}
-
-		cl, err := cell.FromBOC(state)
+		cl, err := cell.FromBOC(t.Result)
 		if err != nil {
 			return nil, err
 		}
@@ -120,16 +105,10 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *tlb.BlockInfo, 
 		}
 
 		return NewExecutionResult(result), nil
-	case _LSError:
-		lsErr := new(LSError)
-		_, err = tl.Parse(lsErr, resp.Data, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse error, err: %w", err)
-		}
-		return nil, lsErr
+	case LSError:
+		return nil, t
 	}
-
-	return nil, errors.New("unknown response type")
+	return nil, errUnexpectedResponse(resp)
 }
 
 func (r ExecutionResult) AsTuple() []any {

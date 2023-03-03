@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -18,58 +17,52 @@ func init() {
 }
 
 type ConfigAll struct {
-	Mod         int            `tl:"int"`
-	ID          *tlb.BlockInfo `tl:"struct"`
-	StateProof  []byte         `tl:"bytes"`
-	ConfigProof []byte         `tl:"bytes"`
+	Mode        int         `tl:"int"`
+	ID          *BlockIDExt `tl:"struct"`
+	StateProof  []byte      `tl:"bytes"`
+	ConfigProof []byte      `tl:"bytes"`
 }
 
 type GetConfigAll struct {
-	Mod     int32          `tl:"int"`
-	BlockID *tlb.BlockInfo `tl:"struct"`
+	Mode    int32       `tl:"int"`
+	BlockID *BlockIDExt `tl:"struct"`
 }
 
 type GetConfigParams struct {
-	Mod     int32          `tl:"int"`
-	BlockID *tlb.BlockInfo `tl:"struct"`
-	Params  []int32        `tl:"vector int"`
+	Mode    int32       `tl:"int"`
+	BlockID *BlockIDExt `tl:"struct"`
+	Params  []int32     `tl:"vector int"`
 }
 
 type BlockchainConfig struct {
 	data map[int32]*cell.Cell
 }
 
-func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInfo, onlyParams ...int32) (*BlockchainConfig, error) {
-	var resp *liteclient.LiteResponse
+func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error) {
+	var resp tl.Serializable
 	var err error
 	if len(onlyParams) > 0 {
-		resp, err = c.client.DoRequest(ctx, GetConfigParams{
-			Mod:     0,
+		err = c.client.QueryLiteserver(ctx, GetConfigParams{
+			Mode:    0,
 			BlockID: block,
 			Params:  onlyParams,
-		})
+		}, &resp)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		resp, err = c.client.DoRequest(ctx, GetConfigAll{
-			Mod:     0,
+		err = c.client.QueryLiteserver(ctx, GetConfigAll{
+			Mode:    0,
 			BlockID: block,
-		})
+		}, &resp)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	switch resp.TypeID {
-	case _ConfigParams:
-		config := new(ConfigAll)
-		_, err = tl.Parse(config, resp.Data, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse response to configAll, err: %w", err)
-		}
-
-		c, err := cell.FromBOC(config.ConfigProof)
+	switch t := resp.(type) {
+	case ConfigAll:
+		c, err := cell.FromBOC(t.ConfigProof)
 		if err != nil {
 			return nil, err
 		}
@@ -118,16 +111,10 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *tlb.BlockInf
 		}
 
 		return result, nil
-	case _LSError:
-		lsErr := new(LSError)
-		_, err = tl.Parse(lsErr, resp.Data, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse error, err: %w", err)
-		}
-		return nil, lsErr
+	case LSError:
+		return nil, t
 	}
-
-	return nil, errors.New("unknown response type")
+	return nil, errUnexpectedResponse(resp)
 }
 
 // TODO: add methods to BlockchainConfig to easily get gas price and etc

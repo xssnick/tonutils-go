@@ -3,9 +3,8 @@ package ton
 import (
 	"context"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
-	"github.com/xssnick/tonutils-go/tlb"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -14,56 +13,18 @@ func init() {
 	tl.Register(LSError{}, "liteServer.error code:int message:string = liteServer.Error")
 }
 
-// requests
 const (
-	_GetMasterchainInfo    int32 = -1984567762
-	_RunContractGetMethod  int32 = 1556504018
-	_GetAccountState       int32 = 1804144165
-	_SendMessage           int32 = 1762317442
-	_GetTransactions       int32 = 474015649
-	_GetOneTransaction     int32 = -737205014
-	_GetBlock              int32 = 1668796173
-	_GetAllShardsInfo      int32 = 1960050027
-	_ListBlockTransactions int32 = -1375942694
-	_LookupBlock           int32 = -87492834
-	_WaitMasterchainSeqno  int32 = -1159022446
-	_GetTime               int32 = 380459572
-	_GetConfigParams       int32 = 705764377
-	_GetConfigAll          int32 = -1860491593
-)
-
-// responses
-const (
-	_RunQueryResult    int32 = -1550163605
-	_AccountState      int32 = 1887029073
-	_SendMessageResult int32 = 961602967
-	_TransactionsList  int32 = 1864812043
-	_TransactionInfo   int32 = 249490759
-	_BlockData         int32 = -1519063700
-	_BlockTransactions int32 = -1114854101
-	_BlockHeader       int32 = 1965916697
-	_AllShardsInfo     int32 = 160425773
-	_CurrentTime       int32 = -380436467
-	_ConfigParams      int32 = -1367660753
-
-	_BoolTrue  int32 = -1720552011
-	_BoolFalse int32 = -1132882121
-	_LSError   int32 = -1146494648
-)
-
-const (
-	ErrCodeContractNotInitialized = 4294967040
+	ErrCodeContractNotInitialized = -256
 )
 
 type LiteClient interface {
-	Do(ctx context.Context, typeID int32, payload []byte) (*liteclient.LiteResponse, error)
-	DoRequest(ctx context.Context, payload tl.Serializable) (*liteclient.LiteResponse, error)
+	QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error
 	StickyContext(ctx context.Context) context.Context
 	StickyNodeID(ctx context.Context) uint32
 }
 
 type ContractExecError struct {
-	Code uint32
+	Code int32
 }
 
 type LSError struct {
@@ -81,7 +42,7 @@ type APIClient struct {
 type masterInfo struct {
 	updatedAt time.Time
 	mx        sync.RWMutex
-	block     *tlb.BlockInfo
+	block     *BlockIDExt
 }
 
 func NewAPIClient(client LiteClient) *APIClient {
@@ -150,4 +111,8 @@ func (e ContractExecError) Is(err error) bool {
 		return true
 	}
 	return false
+}
+
+func errUnexpectedResponse(resp tl.Serializable) error {
+	return fmt.Errorf("unexpected response received: %s", reflect.TypeOf(resp))
 }

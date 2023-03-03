@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"net"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -22,8 +23,8 @@ var _SchemaIDByTypeName = map[string]uint32{}
 var _SchemaIDByName = map[string]uint32{}
 var _SchemaByID = map[uint32]reflect.Type{}
 
-var _BoolTrue = tlCRC("boolTrue = Bool")
-var _BoolFalse = tlCRC("boolFalse = Bool")
+var BoolTrue = tlCRC("boolTrue = Bool")
+var BoolFalse = tlCRC("boolFalse = Bool")
 
 var Logger = func(a ...any) {}
 
@@ -70,6 +71,7 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 		return append(buf, data...), nil
 	}
 
+	var flags *uint32
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		fieldVal := rv.Field(i)
@@ -78,6 +80,32 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 			continue
 		}
 		settings := strings.Split(tag, " ")
+
+		if settings[0][0] == '?' {
+			if flags == nil {
+				panic("flag field should be defined before usage")
+			}
+
+			bit, err := strconv.Atoi(settings[0][1:])
+			if err != nil {
+				panic("invalid flag bit in tag, should be number")
+			}
+			if bit < 0 || bit > 31 {
+				panic("invalid flag bit in tag, should be > 0 && < 32")
+			}
+
+			if *flags&(1<<bit) == 0 {
+				// no flags for this field set
+				continue
+			}
+			settings = settings[1:]
+		}
+
+		if settings[0] == "flags" {
+			f := uint32(fieldVal.Uint())
+			flags = &f
+			settings = []string{"int"}
+		}
 
 		if settings[0] == "vector" {
 			settings = settings[1:]
@@ -127,7 +155,7 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 
 		sch, ok := _SchemaByID[dataID]
 		if !ok {
-			return nil, fmt.Errorf("schema for id %s is not found, during parsing of: %s", hex.EncodeToString(data[:4]), rv.Type().String())
+			return nil, fmt.Errorf("schema for id %s (%d) is not found, during parsing of: %s", hex.EncodeToString(data[:4]), int32(dataID), rv.Type().String())
 		}
 
 		if len(names) > 0 {
@@ -165,6 +193,7 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 		panic("interfaces can be parsed only when boxing is enabled")
 	}
 
+	var flags *uint32
 	for i := 0; i < rv.NumField(); i++ {
 		field := rv.Type().Field(i)
 		value := rv.Field(i)
@@ -174,6 +203,32 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 			continue
 		}
 		settings := strings.Split(tag, " ")
+
+		if settings[0][0] == '?' {
+			if flags == nil {
+				panic("flag field should be defined before usage")
+			}
+
+			bit, err := strconv.Atoi(settings[0][1:])
+			if err != nil {
+				panic("invalid flag bit in tag, should be number")
+			}
+			if bit < 0 || bit > 31 {
+				panic("invalid flag bit in tag, should be > 0 && < 32")
+			}
+
+			if *flags&(1<<bit) == 0 {
+				// no flags for this field set
+				continue
+			}
+			settings = settings[1:]
+		}
+
+		var isFlags bool
+		if settings[0] == "flags" {
+			isFlags = true
+			settings = []string{"int"}
+		}
 
 		if settings[0] == "vector" {
 			settings = settings[1:]
@@ -211,6 +266,11 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 			return nil, fmt.Errorf("failed to parse field %s, err: %w", field.Name, err)
 		}
 		rv.Field(i).Set(value)
+
+		if isFlags {
+			f := uint32(value.Uint())
+			flags = &f
+		}
 	}
 
 	// in case of interface
@@ -258,9 +318,9 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 		case reflect.Bool:
 			tmp := make([]byte, 4)
 			if value.Bool() {
-				binary.LittleEndian.PutUint32(tmp, _BoolTrue)
+				binary.LittleEndian.PutUint32(tmp, BoolTrue)
 			} else {
-				binary.LittleEndian.PutUint32(tmp, _BoolFalse)
+				binary.LittleEndian.PutUint32(tmp, BoolFalse)
 			}
 			buf = append(buf, tmp...)
 			return buf, nil
@@ -449,7 +509,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 			if len(data) < 4 {
 				return nil, fmt.Errorf("failed to parse int for %s, err: too short data", value.Type().String())
 			}
-			value.SetBool(binary.LittleEndian.Uint32(data) == _BoolTrue)
+			value.SetBool(binary.LittleEndian.Uint32(data) == BoolTrue)
 			data = data[4:]
 			return data, nil
 		}
@@ -515,7 +575,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 		}
 	case "struct":
 		newTyp := value.Type()
-		if newTyp.Kind() == reflect.Ptr {
+		if newTyp.Kind() == reflect.Pointer {
 			newTyp = newTyp.Elem()
 		}
 
@@ -561,7 +621,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 			}
 		}
 
-		if value.Type().Kind() != reflect.Ptr {
+		if value.Type().Kind() != reflect.Pointer {
 			nVal = nVal.Elem()
 		}
 

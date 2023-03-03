@@ -4,9 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
-
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -17,44 +16,39 @@ func init() {
 }
 
 type AccountState struct {
-	ID         *tlb.BlockInfo `tl:"struct"`
-	Shard      *tlb.BlockInfo `tl:"struct"`
-	ShardProof []byte         `tl:"bytes"`
-	Proof      []byte         `tl:"bytes"`
-	State      []byte         `tl:"bytes"`
+	ID         *BlockIDExt `tl:"struct"`
+	Shard      *BlockIDExt `tl:"struct"`
+	ShardProof []byte      `tl:"bytes"`
+	Proof      []byte      `tl:"bytes"`
+	State      []byte      `tl:"bytes"`
 }
 
 type GetAccountState struct {
-	ID    *tlb.BlockInfo `tl:"struct"`
-	AccID *AccountID     `tl:"struct"`
+	ID      *BlockIDExt `tl:"struct"`
+	Account AccountID   `tl:"struct"`
 }
 
 type AccountID struct {
-	WorkChain int32  `tl:"int"`
+	Workchain int32  `tl:"int"`
 	ID        []byte `tl:"int256"`
 }
 
-func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *address.Address) (*tlb.Account, error) {
-	resp, err := c.client.DoRequest(ctx, GetAccountState{
+func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, GetAccountState{
 		ID: block,
-		AccID: &AccountID{
-			WorkChain: addr.Workchain(),
+		Account: AccountID{
+			Workchain: addr.Workchain(),
 			ID:        addr.Data(),
 		},
-	})
+	}, &resp)
 	if err != nil {
 		return nil, err
 	}
 
-	switch resp.TypeID {
-	case _AccountState:
-		accState := new(AccountState)
-		_, err = tl.Parse(accState, resp.Data, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse response to AccountState, err: %w", err)
-		}
-
-		if len(accState.State) == 0 {
+	switch t := resp.(type) {
+	case AccountState:
+		if len(t.State) == 0 {
 			return &tlb.Account{
 				IsActive: false,
 			}, nil
@@ -64,7 +58,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			IsActive: true,
 		}
 
-		cls, err := cell.FromBOCMultiRoot(accState.Proof)
+		cls, err := cell.FromBOCMultiRoot(t.Proof)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse proof boc: %w", err)
 		}
@@ -113,7 +107,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 			}
 		}
 
-		stateCell, err := cell.FromBOC(accState.State)
+		stateCell, err := cell.FromBOC(t.State)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse state boc: %w", err)
 		}
@@ -132,14 +126,8 @@ func (c *APIClient) GetAccount(ctx context.Context, block *tlb.BlockInfo, addr *
 		acc.State = &st
 
 		return acc, nil
-	case _LSError:
-		lsErr := new(LSError)
-		_, err = tl.Parse(lsErr, resp.Data, false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse error, err: %w", err)
-		}
-		return nil, lsErr
+	case LSError:
+		return nil, t
 	}
-
-	return nil, errors.New("unknown response type")
+	return nil, errUnexpectedResponse(resp)
 }

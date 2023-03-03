@@ -30,32 +30,21 @@ func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMe
 		return fmt.Errorf("failed to serialize external message, err: %w", err)
 	}
 
-	resp, err := c.client.DoRequest(ctx, SendMessage{Body: req.ToBOCWithFlags(false)})
+	var resp tl.Serializable
+	err = c.client.QueryLiteserver(ctx, SendMessage{Body: req.ToBOCWithFlags(false)}, &resp)
 	if err != nil {
 		return err
 	}
 
-	switch resp.TypeID {
-	case _SendMessageResult:
-		msgStatus := new(SendMessageStatus)
-		_, err = tl.Parse(msgStatus, resp.Data, false)
-		if err != nil {
-			return fmt.Errorf("falied to parse response to sendMessageStatus, err: %w", err)
-		}
-
-		if msgStatus.Status != 1 {
-			return fmt.Errorf("status: %d", msgStatus.Status)
+	switch t := resp.(type) {
+	case SendMessageStatus:
+		if t.Status != 1 {
+			return fmt.Errorf("status: %d", t.Status)
 		}
 
 		return nil
-	case _LSError:
-		lsErr := new(LSError)
-		_, err = tl.Parse(lsErr, resp.Data, false)
-		if err != nil {
-			return fmt.Errorf("failed to parse error, err: %w", err)
-		}
-		return lsErr
+	case LSError:
+		return t
 	}
-
-	return errors.New("unknown response type")
+	return errUnexpectedResponse(resp)
 }

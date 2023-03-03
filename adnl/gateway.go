@@ -191,7 +191,7 @@ func (g *Gateway) listen(rootId []byte) {
 		buf := make([]byte, 4096)
 		n, addr, err := g.conn.ReadFrom(buf)
 		if err != nil {
-			Logger("failed to accept client:", err)
+			Logger("failed to read packet:", err)
 			continue
 		}
 

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/ton"
 	"time"
 
-	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -20,7 +20,7 @@ type SpecV4R2 struct {
 	SpecRegular
 }
 
-func (s *SpecV4R2) BuildMessage(ctx context.Context, isInitialized bool, block *tlb.BlockInfo, messages []*Message) (*cell.Cell, error) {
+func (s *SpecV4R2) BuildMessage(ctx context.Context, isInitialized bool, block *ton.BlockIDExt, messages []*Message) (*cell.Cell, error) {
 	if len(messages) > 4 {
 		return nil, errors.New("for this type of wallet max 4 messages can be sent in the same time")
 	}

@@ -35,7 +35,7 @@ func main() {
 		Transport: rldphttp.NewTransport(dhtClient, getDNSResolver()),
 	}
 
-	resp, err := client.Get("http://foundation.ton/")
+	resp, err := client.Get("http://utils.ton/")
 	if err != nil {
 		panic(err)
 	}
