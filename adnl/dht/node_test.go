@@ -16,8 +16,6 @@ import (
 	"time"
 )
 
-var connectOriginal = connect
-
 func newCorrectDhtNode(a byte, b byte, c byte, d byte, port string) (*dhtNode, error) {
 	tPubKey, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -36,11 +34,6 @@ func newCorrectDhtNode(a byte, b byte, c byte, d byte, port string) (*dhtNode, e
 		serverKey:     tPubKey,
 		onStateChange: func(node *dhtNode, state int) {},
 		currentState:  0,
-		initialized:   false,
-		closed:        false,
-		closer:        nil,
-		closerCtx:     nil,
-		mx:            sync.Mutex{},
 	}
 	return resDhtNode, nil
 }
@@ -57,7 +50,8 @@ func TestNode_connectToNode(t *testing.T) {
 	addr := corNode.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(corNode.AddrList.Addresses[0].Port)
 
 	t.Run("everything correct case", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -70,13 +64,17 @@ func TestNode_connectToNode(t *testing.T) {
 				},
 			}, nil
 		}
-		_, err := connectToNode(context.Background(), tKeyId, addr, corNode.ID.(adnl.PublicKeyED25519).Key, func(node *dhtNode, state int) {})
+		cli := Client{
+			gateway: gateway,
+		}
+		_, err = cli.connectToNode(context.Background(), tKeyId, addr, corNode.ID.(adnl.PublicKeyED25519).Key, func(node *dhtNode, state int) {})
 		if err != nil {
 			t.Fatal("failed to execute 'connectToNode' func, err: ", err)
 		}
 	})
 	t.Run("incorrect pong id", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -89,39 +87,12 @@ func TestNode_connectToNode(t *testing.T) {
 				},
 			}, nil
 		}
-		_, err := connectToNode(context.Background(), tKeyId, addr, corNode.ID.(adnl.PublicKeyED25519).Key, func(node *dhtNode, state int) {})
+		cli := Client{
+			gateway: gateway,
+		}
+		_, err = cli.connectToNode(context.Background(), tKeyId, addr, corNode.ID.(adnl.PublicKeyED25519).Key, func(node *dhtNode, state int) {})
 		if !strings.Contains(err.Error(), "wrong pong id") {
 			t.Errorf("got '%s', want 'wrong pong id'", err.Error())
-		}
-	})
-}
-
-func TestNode_Close(t *testing.T) {
-	tDhtNode, err := newCorrectDhtNode(1, 2, 3, 4, "1233")
-	if err != nil {
-		t.Fatal("failed to prepare test dht node, err: ", err)
-	}
-	tChan := make(chan bool)
-	tDhtNode.closer = tChan
-
-	t.Run("node state: closed - false; adnl - nil", func(t *testing.T) {
-		tDhtNode.Close()
-		if tDhtNode.closed != true {
-			t.Errorf("invalide node state got closed-'%t', want true", tDhtNode.closed)
-		}
-		if _, ok := <-tDhtNode.closer; ok != false {
-			t.Errorf("invalide node state got closed-'%t', want false", ok)
-		}
-	})
-
-	t.Run("node state: closed - true; adnl - nil", func(t *testing.T) {
-		tDhtNode.Close()
-		tDhtNode.closed = true
-		if tDhtNode.closed != true {
-			t.Errorf("invalide node state got closed-'%t', want true", tDhtNode.closed)
-		}
-		if _, ok := <-tDhtNode.closer; ok != false {
-			t.Errorf("invalide node state got closed-'%t', want false", ok)
 		}
 	})
 }
@@ -133,7 +104,8 @@ func TestNode_changeState(t *testing.T) {
 	}
 
 	t.Run("give state = 0, node not initialized", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -153,15 +125,16 @@ func TestNode_changeState(t *testing.T) {
 			t.Fatal("failed to execute 'changeState' func, err: ", err)
 		}
 		if tNode.adnl != nil {
-			t.Errorf("got not nil adnl after seting '_StateFail' whit uncconnected node")
+			t.Errorf("got not nil adnl after seting '_StateOffline' whit uncconnected node")
 		}
 		if tNode.currentState != 0 {
-			t.Errorf("got not '0' currentState after seting '_StateFail' whit uncconnected node")
+			t.Errorf("got not '0' currentState after seting '_StateOffline' whit uncconnected node")
 		}
 	})
 
 	t.Run("give state = 0, node initialized", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -185,23 +158,22 @@ func TestNode_changeState(t *testing.T) {
 				return nil
 			},
 		}
-		tNode.currentState = 1
-		tNode.initialized = true
-		tNode.closerCtx = context.Background()
+		tNode.currentState = _StateActive
+
 		tNode.changeState(0)
 		if err != nil {
 			t.Fatal("failed to execute 'changeState' func, err: ", err)
 		}
-		time.Sleep(time.Second)
-		if tNode.adnl == nil {
-			t.Errorf("got nil adnl in case of connected node")
+		if tNode.adnl != nil {
+			t.Errorf("got not nil adnl in case of disconnected node")
 		}
-		if tNode.currentState != 2 {
-			t.Errorf("got '%d' currentState in case of connected node want 2", tNode.currentState)
+		if tNode.currentState != 0 {
+			t.Errorf("got '%d' currentState in case of connected node want 0", tNode.currentState)
 		}
 	})
 	t.Run("give state = 0, node initialized but throttle", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -227,18 +199,15 @@ func TestNode_changeState(t *testing.T) {
 			},
 		}
 		tNode.currentState = 1
-		tNode.initialized = true
-		tNode.closerCtx = context.Background()
 		tNode.changeState(0)
 		if err != nil {
 			t.Fatal("failed to execute 'changeState' func, err: ", err)
 		}
-		time.Sleep(5 * time.Second)
-		if tNode.adnl == nil {
-			t.Errorf("got nil adnl in case of connected node")
+		if tNode.adnl != nil {
+			t.Errorf("got not nil adnl in case of disconnected node")
 		}
-		if tNode.currentState != 1 {
-			t.Errorf("got '%d' currentState in case of connected node want 2", tNode.currentState)
+		if tNode.currentState != 0 {
+			t.Errorf("got '%d' currentState in case of connected node want 0", tNode.currentState)
 		}
 	})
 }
@@ -274,7 +243,8 @@ func TestNode_findNodes(t *testing.T) {
 		t.Fatal("failed to prepare test node, err: ", err)
 	}
 	t.Run("good response", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -298,7 +268,7 @@ func TestNode_findNodes(t *testing.T) {
 			}, nil
 		}
 
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -313,7 +283,8 @@ func TestNode_findNodes(t *testing.T) {
 	})
 
 	t.Run("bad response", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -336,7 +307,7 @@ func TestNode_findNodes(t *testing.T) {
 				},
 			}, nil
 		}
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -376,7 +347,8 @@ func TestNode_storeValue(t *testing.T) {
 	}
 
 	t.Run("good response", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -400,7 +372,7 @@ func TestNode_storeValue(t *testing.T) {
 			}, nil
 		}
 
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -412,7 +384,8 @@ func TestNode_storeValue(t *testing.T) {
 	})
 
 	t.Run("bad response", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -435,7 +408,7 @@ func TestNode_storeValue(t *testing.T) {
 				},
 			}, nil
 		}
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -483,7 +456,8 @@ func TestNode_findValue(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+			gateway := &MockGateway{}
+			gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 				return MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
@@ -521,7 +495,7 @@ func TestNode_findValue(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			cli, err := NewClientFromConfig(ctx, cnf)
+			cli, err := NewClientFromConfig(ctx, gateway, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -628,7 +602,8 @@ func TestNode_checkPing(t *testing.T) {
 	}
 
 	t.Run("connected node", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -641,7 +616,7 @@ func TestNode_checkPing(t *testing.T) {
 				},
 			}, nil
 		}
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -655,7 +630,8 @@ func TestNode_checkPing(t *testing.T) {
 	})
 
 	t.Run("throttle node", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -669,7 +645,7 @@ func TestNode_checkPing(t *testing.T) {
 				},
 			}, nil
 		}
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -683,7 +659,8 @@ func TestNode_checkPing(t *testing.T) {
 	})
 
 	t.Run("disconnected node", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -696,7 +673,7 @@ func TestNode_checkPing(t *testing.T) {
 				},
 			}, nil
 		}
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -714,7 +691,8 @@ func TestNode_checkPing(t *testing.T) {
 	})
 
 	t.Run("wrong pong", func(t *testing.T) {
-		connect = func(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (ADNL, error) {
+		gateway := &MockGateway{}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -727,7 +705,7 @@ func TestNode_checkPing(t *testing.T) {
 				},
 			}, nil
 		}
-		tDhtNode.adnl, err = connect(context.Background(), tDhtNode.addr, tDhtNode.serverKey, nil)
+		tDhtNode.adnl, err = gateway.RegisterClient(tDhtNode.addr, tDhtNode.serverKey)
 		if err != nil {
 			t.Fatal("failed to prepare test adnl connection, err: ", err)
 		}
@@ -738,7 +716,7 @@ func TestNode_checkPing(t *testing.T) {
 			if strings.Contains(err.Error(), "wrong pong id") != true {
 				t.Fatal("failed to execute 'checkPing' func, err: ", err)
 			}
-			if tDhtNode.currentState != 0 {
+			if tDhtNode.currentState != _StateActive {
 				t.Errorf("got node state '%d', want 0(state fail))", tDhtNode.currentState)
 			}
 		}
@@ -751,7 +729,7 @@ func TestNode_weight(t *testing.T) {
 		t.Fatal("failed to prepare test public key, err: ", err)
 	}
 
-	kId, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey})
+	kId, err := adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -762,11 +740,7 @@ func TestNode_weight(t *testing.T) {
 		addr:          net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
 		serverKey:     tPubKey,
 		onStateChange: func(node *dhtNode, state int) {},
-		currentState:  0,
-		initialized:   false,
-		closed:        false,
-		closer:        nil,
-		closerCtx:     nil,
+		currentState:  _StateActive,
 		mx:            sync.Mutex{},
 	}
 
@@ -775,7 +749,7 @@ func TestNode_weight(t *testing.T) {
 		t.Fatal("failed to prepare test public key, err: ", err)
 	}
 
-	kId, err = adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey})
+	kId, err = adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -786,11 +760,7 @@ func TestNode_weight(t *testing.T) {
 		addr:          net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
 		serverKey:     tPubKey,
 		onStateChange: func(node *dhtNode, state int) {},
-		currentState:  0,
-		initialized:   false,
-		closed:        false,
-		closer:        nil,
-		closerCtx:     nil,
+		currentState:  _StateFail,
 		mx:            sync.Mutex{},
 	}
 
@@ -799,7 +769,7 @@ func TestNode_weight(t *testing.T) {
 		t.Fatal("failed to prepare test public key, err: ", err)
 	}
 
-	kId, err = adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey})
+	kId, err = adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -810,11 +780,7 @@ func TestNode_weight(t *testing.T) {
 		addr:          net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
 		serverKey:     tPubKey,
 		onStateChange: func(node *dhtNode, state int) {},
-		currentState:  0,
-		initialized:   false,
-		closed:        false,
-		closer:        nil,
-		closerCtx:     nil,
+		currentState:  _StateActive,
 		mx:            sync.Mutex{},
 	}
 
@@ -823,9 +789,9 @@ func TestNode_weight(t *testing.T) {
 		testId   []byte
 		want     int
 	}{
-		{tNode1, []byte{0b00100100, 0b10100100, 0b00100101}, 2097152},
-		{tNode2, []byte{0b00100100, 0b10100100, 0b00100101}, 1048576},
-		{tNode3, []byte{0b00100100, 0b10100100, 0b00100101}, 0},
+		{tNode1, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 2097152},
+		{tNode2, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 1048576 - 1<<20},
+		{tNode3, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 0},
 	}
 	for _, test := range tests {
 		t.Run("weight test", func(t *testing.T) {

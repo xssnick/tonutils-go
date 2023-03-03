@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -25,6 +26,8 @@ func main() {
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client)
 	w := getWallet(api)
+
+	log.Println("Deploy wallet:", w.Address().String())
 
 	collectionAddr := address.MustParseAddr("EQCSrRIKVEBaRd8aQfsOaNq3C4FVZGY5Oka55A5oFMVEs0lY")
 	collection := nft.NewCollectionClient(api, collectionAddr)
@@ -54,7 +57,7 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println("Minted NFT:", nftAddr.String(), 0)
+	fmt.Println("Minted NFT:", nftAddr.String())
 
 	newData, err := nft.NewItemClient(api, nftAddr).GetNFTData(context.Background())
 	if err != nil {

@@ -56,6 +56,10 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 		}
 
 		if settings[0] == "maybe" {
+			if field.Type.Kind() != reflect.Pointer && field.Type.Kind() != reflect.Interface {
+				return fmt.Errorf("maybe flag can only be applied to interface or pointer, field %s", field.Name)
+			}
+
 			has, err := loader.LoadBoolBit()
 			if err != nil {
 				return fmt.Errorf("failed to load maybe for %s, err: %w", field.Name, err)
@@ -297,7 +301,11 @@ func ToCell(v any) (*cell.Cell, error) {
 		}
 
 		if settings[0] == "maybe" {
-			if field.Type.Kind() == reflect.Pointer && fieldVal.IsNil() {
+			if field.Type.Kind() != reflect.Pointer && field.Type.Kind() != reflect.Interface {
+				return nil, fmt.Errorf("maybe flag can only be applied to interface or pointer, field %s", field.Name)
+			}
+
+			if fieldVal.IsNil() {
 				if err := builder.StoreBoolBit(false); err != nil {
 					return nil, fmt.Errorf("cannot store maybe bit: %w", err)
 				}

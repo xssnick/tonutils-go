@@ -95,6 +95,7 @@ func Test_WalletTransfer(t *testing.T) {
 
 func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	seed := strings.Split(_seed, " ")
+	ctx := api.Client().StickyContext(context.Background())
 
 	// init wallet
 	w, err := FromSeed(api, seed, HighloadV2R2)
@@ -118,11 +119,11 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	)
 
 	// the waitConfirmation flag is optional
-	inMsgHash, err := w.SendManyGetInMsgHash(context.Background(), []*Message{msg}, true)
+	inMsgHash, err := w.SendManyGetInMsgHash(ctx, []*Message{msg}, true)
 	t.Logf("internal message hash: %s", hex.EncodeToString(inMsgHash))
 
 	// find tx hash
-	tx, err := w.FindTransactionByInMsgHash(context.Background(), inMsgHash, 30)
+	tx, err := w.FindTransactionByInMsgHash(ctx, inMsgHash, 30)
 	if err != nil {
 		t.Fatal("cannot find tx:", err.Error())
 	}
@@ -131,7 +132,6 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 
 func TestWallet_DeployContract(t *testing.T) {
 	seed := strings.Split(_seed, " ")
-
 	ctx := api.Client().StickyContext(context.Background())
 
 	// init wallet

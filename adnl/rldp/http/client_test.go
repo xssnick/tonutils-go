@@ -38,14 +38,6 @@ type testHeader struct {
 	Value string `tl:"string"`
 }
 
-type testResponse struct {
-	Version    string       `tl:"string"`
-	StatusCode int32        `tl:"int"`
-	Reason     string       `tl:"string"`
-	Headers    []testHeader `tl:"vector struct"`
-	NoPayload  bool         `tl:"bool"`
-}
-
 type MockADNL struct {
 	query                   func(ctx context.Context, req, result tl.Serializable) error
 	setDisconnectHandler    func(handler func(addr string, key ed25519.PublicKey))
@@ -383,7 +375,19 @@ func Test_parseADNLAddress(t *testing.T) {
 func TestTransport_RoundTripIntegration(t *testing.T) {
 	Connector = originalConnector
 	newRLDP = originalNewRLDP
-	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gateway := adnl.NewGateway(priv)
+	err = gateway.StartClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), gateway, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatal(err)
 	}

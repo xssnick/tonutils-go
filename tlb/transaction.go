@@ -7,6 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+// Deprecated: use ton.TransactionShortInfo
 type TransactionID struct {
 	LT        uint64
 	Hash      []byte

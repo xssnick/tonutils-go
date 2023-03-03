@@ -3,13 +3,15 @@
 <img align="right" width="425px" src="https://github.com/xssnick/props/blob/master/logoimg.png?raw=true">
 
 [![Based on TON][ton-svg]][ton]
-![Coverage](https://img.shields.io/badge/Coverage-72.4%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-73.3%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
 This library is native golang implementation of ADNL and lite protocol. It works as connection pool and can be connected to multiple lite servers in the same time, balancing is done on lib side.
 
 It is concurrent safe and can be used from multiple goroutines under high workloads.
+
+All main TON protocols are implemented: ADNL, DHT, RLDP, Overlays, HTTP-RLDP, etc.
 
 ------
 
@@ -211,7 +213,7 @@ if account.Data != nil { // Can be nil if account is not active
 list, err := api.ListTransactions(context.Background(), addr, 15, account.LastTxLT, account.LastTxHash)
 if err != nil {
     // In some cases you can get error:
-    // lite server error, code 4294966896: cannot compute block with specified transaction: lt not in db
+    // lite server error, code XXX: cannot compute block with specified transaction: lt not in db
     // it means that current lite server does not store older data, you can query one with full history
     log.Printf("send err: %s", err.Error())
     return
@@ -471,10 +473,14 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ RLDP Client/Server
 * ✅ TON Sites Client/Server
 * ✅ DHT Client
+* ✅ Merkle proofs
+* ✅ TON Storage client
+* ✅ Overlays
+* ✅ TL Parser/Serializer
+* ✅ TL-B Parser/Serializer
 * DHT Server
 * Payment channels
-* Merkle proofs
-* TON Storage
+* Merkle proofs automatic validation
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue

@@ -114,7 +114,10 @@ func (p *priorityList) getNode() (*dhtNode, int) {
 	return res.node, res.priority
 }
 
-func (p *priorityList) markNotUsed(node *dhtNode) {
+func (p *priorityList) markUsed(node *dhtNode, used bool) {
+	// in case if we don't yet have it
+	p.addNode(node)
+
 	p.mx.Lock()
 	defer p.mx.Unlock()
 
@@ -123,7 +126,7 @@ func (p *priorityList) markNotUsed(node *dhtNode) {
 	curNode := p.list
 	for curNode != nil {
 		if curNode.id == id {
-			curNode.used = false
+			curNode.used = used
 			break
 		}
 		curNode = curNode.next

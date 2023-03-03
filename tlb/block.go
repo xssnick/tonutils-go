@@ -1,59 +1,22 @@
 package tlb
 
 import (
-	"encoding/binary"
-	"errors"
 	"fmt"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+// Deprecated: use ton.BlockIDExt
 type BlockInfo struct {
-	Workchain int32
-	Shard     int64
-	SeqNo     uint32
-	RootHash  []byte
-	FileHash  []byte
-}
-
-func (b *BlockInfo) Load(data []byte) ([]byte, error) {
-	if len(data) < 32+32+4+8+4 {
-		return nil, errors.New("not enough length")
-	}
-
-	b.Workchain = int32(binary.LittleEndian.Uint32(data))
-	data = data[4:]
-
-	b.Shard = int64(binary.LittleEndian.Uint64(data))
-	data = data[8:]
-
-	b.SeqNo = binary.LittleEndian.Uint32(data)
-	data = data[4:]
-
-	b.RootHash = data[:32]
-	data = data[32:]
-
-	b.FileHash = data[:32]
-	data = data[32:]
-
-	return data, nil
-}
-
-func (b *BlockInfo) Serialize() []byte {
-	data := make([]byte, 16)
-	binary.LittleEndian.PutUint32(data, uint32(b.Workchain))
-	binary.LittleEndian.PutUint64(data[4:], uint64(b.Shard))
-	binary.LittleEndian.PutUint32(data[12:], b.SeqNo)
-
-	data = append(data, b.RootHash...)
-	data = append(data, b.FileHash...)
-
-	return data
+	Workchain int32  `tl:"int"`
+	Shard     int64  `tl:"long"`
+	SeqNo     uint32 `tl:"int"`
+	RootHash  []byte `tl:"int256"`
+	FileHash  []byte `tl:"int256"`
 }
 
 type StateUpdate struct {
 	Old ShardState `tlb:"^"`
-	New ShardState `tlb:"^"`
+	New *cell.Cell `tlb:"^"`
 }
 
 type McBlockExtra struct {
@@ -73,6 +36,17 @@ type BlockExtra struct {
 	Custom             *McBlockExtra `tlb:"maybe ^"`
 }
 
+type ShardAccountBlocks struct {
+	Accounts *cell.Dictionary `tlb:"dict 256"`
+}
+
+type AccountBlock struct {
+	_            Magic            `tlb:"#5"`
+	Addr         []byte           `tlb:"bits 256"`
+	Transactions *cell.Dictionary `tlb:"dict 64"`
+	StateUpdate  *cell.Cell       `tlb:"^"`
+}
+
 type Block struct {
 	_           Magic       `tlb:"#11ef55aa"`
 	GlobalID    int32       `tlb:"## 32"`
@@ -86,7 +60,7 @@ type AllShardsInfo struct {
 	ShardHashes *cell.Dictionary `tlb:"dict 32"`
 }
 
-type BlockHeader struct { // BlockInfo from block.tlb
+type BlockHeader struct { // BlockIDExt from block.tlb
 	blockInfoPart
 	GenSoftware *GlobalVersion
 	MasterRef   *ExtBlkRef

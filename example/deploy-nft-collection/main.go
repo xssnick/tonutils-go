@@ -7,6 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"log"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -28,11 +29,13 @@ func main() {
 	api := ton.NewAPIClient(client)
 	w := getWallet(api)
 
+	log.Println("Deploy wallet:", w.Address().String())
+
 	msgBody := cell.BeginCell().EndCell()
 
 	fmt.Println("Deploying NFT collection contract to mainnet...")
 	addr, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.02"),
-		msgBody, getNFTCollectionCode(), getContractData(w.Address(), nil), true)
+		msgBody, getNFTCollectionCode(), getContractData(w.Address(), w.Address()), true)
 	if err != nil {
 		panic(err)
 	}
@@ -74,7 +77,7 @@ func getNFTItemCode() *cell.Cell {
 }
 
 func getContractData(collectionOwnerAddr, royaltyAddr *address.Address) *cell.Cell {
-	// storage scheme
+	// storage schema
 	// default#_ royalty_factor:uint16 royalty_base:uint16 royalty_address:MsgAddress = RoyaltyParams;
 	// storage#_ owner_address:MsgAddress next_item_index:uint64
 	//           ^[collection_content:^Cell common_content:^Cell]
@@ -83,8 +86,8 @@ func getContractData(collectionOwnerAddr, royaltyAddr *address.Address) *cell.Ce
 	//           = Storage;
 
 	royalty := cell.BeginCell().
-		MustStoreUInt(0, 16).
-		MustStoreUInt(0, 16).
+		MustStoreUInt(50, 16). // 5% royalty
+		MustStoreUInt(1000, 16).
 		MustStoreAddr(royaltyAddr).
 		EndCell()
 

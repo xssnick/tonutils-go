@@ -2,33 +2,32 @@ package ton
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
-func (c *APIClient) GetTime(ctx context.Context) (uint32, error) {
+func init() {
+	tl.Register(GetTime{}, "liteServer.getTime = liteServer.CurrentTime")
+	tl.Register(CurrentTime{}, "liteServer.currentTime now:int = liteServer.CurrentTime")
+}
 
-	resp, err := c.client.Do(ctx, _GetTime, nil)
+type GetTime struct{}
+
+type CurrentTime struct {
+	Now uint32 `tl:"int"`
+}
+
+func (c *APIClient) GetTime(ctx context.Context) (uint32, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, GetTime{}, &resp)
 	if err != nil {
 		return 0, err
 	}
 
-	switch resp.TypeID {
-	case _CurrentTime:
-		if len(resp.Data) < 4 {
-			return 0, errors.New("not enough length")
-		}
-		time := binary.LittleEndian.Uint32(resp.Data)
-		return time, nil
-
-	case _LSError:
-		var lsErr LSError
-		resp.Data, err = lsErr.Load(resp.Data)
-		if err != nil {
-			return 0, err
-		}
-		return 0, lsErr
+	switch t := resp.(type) {
+	case CurrentTime:
+		return t.Now, nil
+	case LSError:
+		return 0, t
 	}
-
-	return 0, errors.New("unknown response type")
+	return 0, errUnexpectedResponse(resp)
 }

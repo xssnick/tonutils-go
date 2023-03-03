@@ -24,6 +24,8 @@ import (
 const _ChunkSize = 1 << 17
 const _RLDPMaxAnswerSize = 2*_ChunkSize + 1024
 
+var ErrSiteUsesStorage = fmt.Errorf("requested site is static and uses ton storage, you can files using storage.Downloader")
+
 type DHT interface {
 	StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error)
 	FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error)
@@ -73,24 +75,29 @@ type Transport struct {
 	dht      DHT
 	resolver Resolver
 
+	adnlKey ed25519.PrivateKey
+
 	rldpInfos map[string]*rldpInfo
 
 	activeRequests map[string]*payloadStream
 	mx             sync.RWMutex
 }
 
-func NewTransport(dht DHT, resolver Resolver) *Transport {
+func NewTransport(dht DHT, resolver Resolver, adnlKey ...ed25519.PrivateKey) *Transport {
 	t := &Transport{
 		dht:            dht,
 		resolver:       resolver,
 		activeRequests: map[string]*payloadStream{},
 		rldpInfos:      map[string]*rldpInfo{},
 	}
+	if len(adnlKey) > 0 && adnlKey[0] != nil {
+		t.adnlKey = adnlKey[0]
+	}
 	return t
 }
 
 func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr, id string) (RLDP, error) {
-	a, err := Connector(ctx, addr, key, nil)
+	a, err := Connector(ctx, addr, key, t.adnlKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
 	}
@@ -354,15 +361,14 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 
 	if withPayload {
 		if httpResp.ContentLength > 0 && httpResp.ContentLength < (1<<22) {
-			// TODO: enable later, possible bug
-			// dr.data = make([]byte, 0, httpResp.ContentLength)
+			dr.buf = make([]byte, 0, httpResp.ContentLength)
 		}
 
 		go func() {
 			seqno := int32(0)
 			for withPayload {
 				var part PayloadPart
-				err = client.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
+				err := client.DoQuery(request.Context(), _RLDPMaxAnswerSize, GetNextPayloadPart{
 					ID:           qid,
 					Seqno:        seqno,
 					MaxChunkSize: _ChunkSize,
@@ -404,11 +410,12 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 }
 
 func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string) (err error) {
-	var adnlID []byte
+	var id []byte
+	var inStorage bool
 	if strings.HasSuffix(host, ".adnl") {
-		adnlID, err = ParseADNLAddress(host[:len(host)-5])
+		id, err = ParseADNLAddress(host[:len(host)-5])
 		if err != nil {
-			return fmt.Errorf("failed to aprse adnl address %s, err: %w", host, err)
+			return fmt.Errorf("failed to parse adnl address %s, err: %w", host, err)
 		}
 	} else {
 		var domain *dns.Domain
@@ -424,12 +431,15 @@ func (t *Transport) resolveRLDP(ctx context.Context, info *rldpInfo, host string
 			return fmt.Errorf("failed to resolve host %s, err: %w", host, err)
 		}
 
-		adnlID = domain.GetSiteRecord()
+		id, inStorage = domain.GetSiteRecord()
+		if inStorage {
+			return ErrSiteUsesStorage
+		}
 	}
 
-	addresses, pubKey, err := t.dht.FindAddresses(ctx, adnlID)
+	addresses, pubKey, err := t.dht.FindAddresses(ctx, id)
 	if err != nil {
-		return fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", host, hex.EncodeToString(adnlID), err)
+		return fmt.Errorf("failed to find address of %s (%s) in DHT, err: %w", host, hex.EncodeToString(id), err)
 	}
 
 	var triedAddresses []string

@@ -47,7 +47,7 @@ func (c *WalletClient) GetBalance(ctx context.Context) (tlb.Coins, error) {
 	return c.GetBalanceAtBlock(ctx, b)
 }
 
-func (c *WalletClient) GetBalanceAtBlock(ctx context.Context, b *tlb.BlockInfo) (tlb.Coins, error) {
+func (c *WalletClient) GetBalanceAtBlock(ctx context.Context, b *ton.BlockIDExt) (tlb.Coins, error) {
 	res, err := c.master.api.RunGetMethod(ctx, b, c.addr, "get_wallet_data")
 	if err != nil {
 		if cErr, ok := err.(ton.ContractExecError); ok && cErr.Code == ton.ErrCodeContractNotInitialized {

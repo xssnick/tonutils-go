@@ -15,8 +15,10 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"hash/crc32"
 	"io"
+	"log"
 	"math/big"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,7 +38,10 @@ type connection struct {
 	wCrypt cipher.Stream
 	wLock  sync.Mutex
 
-	reqs chan *LiteRequest
+	reqs chan *ADNLRequest
+
+	authed  bool
+	authEvt chan bool
 
 	pool *ConnectionPool
 }
@@ -90,23 +95,28 @@ func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, config
 	return c.AddConnectionsFromConfig(ctx, config)
 }
 
-func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string) error {
+func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string, clientKey ...ed25519.PrivateKey) error {
 	sKey, err := base64.StdEncoding.DecodeString(serverKey)
 	if err != nil {
 		return err
 	}
 
-	// generate new random client key
-	_, privateKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		return err
+	var privateKey ed25519.PrivateKey
+	if len(clientKey) == 0 || clientKey[0] == nil {
+		// generate new random client key
+		_, privateKey, err = ed25519.GenerateKey(nil)
+		if err != nil {
+			return err
+		}
+	} else {
+		privateKey = clientKey[0]
 	}
 
 	conn := &connection{
 		addr:       addr,
 		serverKey:  serverKey,
 		connResult: make(chan error, 1),
-		reqs:       make(chan *LiteRequest),
+		reqs:       make(chan *ADNLRequest),
 		pool:       c,
 		id:         crc32.ChecksumIEEE([]byte(serverKey)),
 	}
@@ -149,6 +159,21 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 	// connection established sending signal to connResult
 	// and listen goroutine stays working after it to serve responses
 	go conn.listen(connResult)
+
+	if c.authKey != nil {
+		conn.authEvt = make(chan bool, 1)
+		err = conn.authRequest()
+		if err != nil {
+			return fmt.Errorf("failed to send auth: %w", err)
+		}
+
+		select {
+		case <-conn.authEvt:
+			// auth completed
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 
 	select {
 	case err = <-connResult:
@@ -212,24 +237,39 @@ func (n *connection) listen(connResult chan<- error) {
 			continue
 		}
 
-		var typeID int32
-		var queryID string
-		var payload []byte
-
-		typeID, queryID, payload, err = parseServerResp(data)
+		var resp tl.Serializable
+		_, err = tl.Parse(&resp, data, true)
 		if err != nil {
+			log.Println("failed to parse message:", err.Error())
 			break
 		}
 
-		n.pool.reqMx.RLock()
-		ch := n.pool.activeReqs[queryID]
-		n.pool.reqMx.RUnlock()
-
-		if ch != nil {
-			ch.RespChan <- &LiteResponse{
-				TypeID: typeID,
-				Data:   payload,
+		switch t := resp.(type) {
+		case TCPPong:
+			// TODO: check ping
+		case TCPAuthenticationNonce:
+			if n.pool.authKey == nil {
+				log.Println("server wants authorization, but we dont have a key:", err.Error())
+				break
 			}
+
+			err = n.authSignComplete(t.Nonce)
+			if err != nil {
+				log.Println("failed to sign and send auth message:", err.Error())
+				break
+			}
+		case adnl.MessageAnswer:
+			n.pool.reqMx.RLock()
+			ch := n.pool.activeReqs[string(t.ID)]
+			n.pool.reqMx.RUnlock()
+
+			if ch != nil {
+				ch.RespChan <- &ADNLResponse{
+					Data: t.Data,
+				}
+			}
+		default:
+			log.Println("unknown ls msg:", reflect.TypeOf(t).String())
 		}
 	}
 
@@ -266,12 +306,12 @@ func (n *connection) startPings(every time.Duration) {
 		case <-time.After(every):
 		}
 
-		num, err := rand.Int(rand.Reader, new(big.Int).SetUint64(0xFFFFFFFFFFFFFF))
+		num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
 		if err != nil {
 			continue
 		}
 
-		err = n.ping(num.Uint64())
+		err = n.ping(num.Int64())
 		if err != nil {
 			// force close in case of error
 			_ = n.tcp.Close()
@@ -415,37 +455,24 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 	return nil
 }
 
-func (n *connection) ping(qid uint64) error {
-	data := make([]byte, 12)
-	binary.LittleEndian.PutUint32(data, uint32(TCPPing))
-	binary.LittleEndian.PutUint64(data[4:], qid)
+func (n *connection) ping(qid int64) error {
+	payload, err := tl.Serialize(TCPPing{qid}, true)
+	if err != nil {
+		return fmt.Errorf("failed to serialize request, err: %w", err)
+	}
 
-	return n.send(data)
+	return n.send(payload)
 }
 
-func (n *connection) queryADNL(qid, payload []byte) error {
-	// bypass compiler negative check
-	t := ADNLQuery
-
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, uint32(t))
-
-	data = append(data, qid...)
-	data = append(data, tl.ToBytes(payload)...)
-
-	return n.send(data)
-}
-
-func (n *connection) queryLiteServer(qid []byte, typeID int32, payload []byte) (string, error) {
-	data := make([]byte, 4)
-	binary.LittleEndian.PutUint32(data, uint32(LiteServerQuery))
-
-	typData := make([]byte, 4)
-	binary.LittleEndian.PutUint32(typData, uint32(typeID))
-
-	data = append(data, tl.ToBytes(append(typData, payload...))...)
-
-	return n.addr, n.queryADNL(qid, data)
+func (n *connection) queryAdnl(qid []byte, req tl.Serializable) (string, error) {
+	payload, err := tl.Serialize(adnl.MessageQuery{
+		ID:   qid,
+		Data: req,
+	}, true)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize request, err: %w", err)
+	}
+	return n.addr, n.send(payload)
 }
 
 func (c *ConnectionPool) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {

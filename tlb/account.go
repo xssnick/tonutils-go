@@ -70,6 +70,34 @@ type AccountState struct {
 	AccountStorage
 }
 
+func (g AccountStatus) ToCell() (*cell.Cell, error) {
+	res := cell.BeginCell()
+	switch string(g) {
+	case AccountStatusNonExist:
+		err := res.StoreInt(0b11, 2)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize account status: %w", err)
+		}
+	case AccountStatusActive:
+		err := res.StoreInt(0b10, 2)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize account status: %w", err)
+		}
+	case AccountStatusFrozen:
+		err := res.StoreInt(0b01, 2)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize account status: %w", err)
+		}
+	case AccountStatusUninit:
+		err := res.StoreInt(0b00, 2)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize account status: %w", err)
+		}
+	}
+
+	return res.EndCell(), nil
+}
+
 func (g *AccountStatus) LoadFromCell(loader *cell.Slice) error {
 	state, err := loader.LoadUInt(2)
 	if err != nil {

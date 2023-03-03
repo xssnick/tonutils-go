@@ -6,10 +6,12 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/tl"
 	"math/rand"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,46 +22,35 @@ const (
 )
 
 type dhtNode struct {
-	id   []byte
-	adnl ADNL
+	id     []byte
+	adnl   ADNL
+	client *Client
 
-	ping      time.Duration
+	ping      int64
 	addr      string
 	serverKey ed25519.PublicKey
 
 	onStateChange func(node *dhtNode, state int)
 	currentState  int
-	initialized   bool
 
-	closed    bool
-	closer    chan bool
-	closerCtx context.Context
+	lastQueryAt int64
 
 	mx sync.Mutex
 }
 
-func connectToNode(ctx context.Context, id []byte, addr string, serverKey ed25519.PublicKey, onStateChange func(node *dhtNode, state int)) (*dhtNode, error) {
+func (c *Client) connectToNode(ctx context.Context, id []byte, addr string, serverKey ed25519.PublicKey, onStateChange func(node *dhtNode, state int)) (*dhtNode, error) {
 	n := &dhtNode{
 		id:            id,
 		addr:          addr,
 		serverKey:     serverKey,
 		onStateChange: onStateChange,
-		closer:        make(chan bool, 1),
+		client:        c,
 	}
 
-	var cancel func()
-	n.closerCtx, cancel = context.WithCancel(context.Background())
-	go func() {
-		<-n.closer
-		cancel()
-	}()
-
-	if err := n.connect(ctx); err != nil {
-		n.Close()
-		return nil, err
+	err := n.checkPing(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ping node, err: %w", err)
 	}
-
-	go n.poll()
 
 	return n, nil
 }
@@ -67,13 +58,6 @@ func connectToNode(ctx context.Context, id []byte, addr string, serverKey ed2551
 func (n *dhtNode) Close() {
 	n.mx.Lock()
 	defer n.mx.Unlock()
-
-	if n.closed {
-		return
-	}
-
-	close(n.closer)
-	n.closed = true
 
 	if n.adnl != nil {
 		n.adnl.Close()
@@ -93,66 +77,31 @@ func (n *dhtNode) changeState(state int) {
 		// in case of fail - close connection
 		if n.adnl != nil {
 			n.adnl.Close()
+			n.adnl = nil
 		}
-		n.adnl = nil
-
-		// try to reconnect only if it was active before
-		if n.initialized {
-			go func() {
-				wait := 150 * time.Millisecond
-				for {
-					select {
-					case <-n.closer:
-						return
-					case <-time.After(wait):
-					}
-
-					ctx, cancel := context.WithTimeout(n.closerCtx, queryTimeout)
-					err := n.connect(ctx)
-					cancel()
-					if err == nil {
-						return
-					}
-
-					if wait *= 2; wait > 10*time.Second {
-						wait = 10 * time.Second
-					}
-				}
-			}()
-		}
-	} else {
-		n.initialized = true
 	}
 
 	n.onStateChange(n, state)
 }
 
-func (n *dhtNode) connect(ctx context.Context) error {
-	a, err := connect(n.closerCtx, n.addr, n.serverKey, nil)
-	if err != nil {
-		return err
+func (n *dhtNode) prepare() (ADNL, error) {
+	n.mx.Lock()
+	defer n.mx.Unlock()
+
+	if n.adnl != nil {
+		return n.adnl, nil
 	}
 
+	a, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
+	if err != nil {
+		return nil, err
+	}
 	a.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
 		n.changeState(_StateFail)
 	})
-
-	n.mx.Lock()
 	n.adnl = a
-	n.mx.Unlock()
 
-	err = n.checkPing(ctx)
-	if err != nil {
-		n.mx.Lock()
-		n.adnl = nil
-		n.mx.Unlock()
-
-		a.Close()
-
-		return fmt.Errorf("failed to ping node, err: %w", err)
-	}
-
-	return nil
+	return n.adnl, nil
 }
 
 func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*Node, err error) {
@@ -221,6 +170,12 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 
 	switch r := res.(type) {
 	case ValueNotFoundResult:
+		for _, node := range r.Nodes.List {
+			err = node.CheckSignature()
+			if err != nil {
+				return nil, fmt.Errorf("untrusted nodes list response: %s", err.Error())
+			}
+		}
 		return r.Nodes.List, nil
 	case ValueFoundResult:
 		if err = checkValue(id, &r.Value); err != nil {
@@ -287,12 +242,21 @@ func checkValue(id []byte, value *Value) error {
 			return fmt.Errorf("key description's signature not match key")
 		}
 
-	// case UpdateRuleOverlayNodes:
-	// TODO: check sign
-	/*pub, ok := r.Value.Data
-	if !ok {
-		return nil, fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(r.Value.KeyDescription.ID).String())
-	}*/
+	case UpdateRuleOverlayNodes:
+		var nodes overlay.NodesList
+
+		_, err = tl.Parse(&nodes, value.Data, true)
+		if err != nil {
+			return fmt.Errorf("unsupported data for overlay nodes rule, err: %s", err.Error())
+		}
+
+		for _, node := range nodes.List {
+			err = node.CheckSignature()
+			if err != nil {
+				return fmt.Errorf("untrusted overlay response: %s", err.Error())
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("update rule type %s is not supported yet", reflect.TypeOf(value.KeyDescription.UpdateRule))
 	}
@@ -304,8 +268,6 @@ func (n *dhtNode) checkPing(ctx context.Context) error {
 		ID: int64(rand.Uint64()),
 	}
 
-	t := time.Now()
-
 	var res Pong
 	err := n.query(ctx, ping, &res)
 	if err != nil {
@@ -314,13 +276,29 @@ func (n *dhtNode) checkPing(ctx context.Context) error {
 	}
 
 	if res.ID != ping.ID {
-		n.changeState(_StateFail)
 		return fmt.Errorf("wrong pong id")
 	}
-	n.ping = time.Since(t)
+
+	return nil
+}
+
+func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
+	a, err := n.prepare()
+	if err != nil {
+		return fmt.Errorf("failed to query dht node: %w", err)
+	}
+
+	t := time.Now()
+	atomic.StoreInt64(&n.lastQueryAt, t.Unix())
+	err = a.Query(ctx, req, res)
+	if err != nil {
+		return err
+	}
+	ping := time.Since(t)
+	atomic.StoreInt64(&n.ping, int64(ping))
 
 	switch {
-	case n.ping > queryTimeout/2:
+	case ping > queryTimeout/2:
 		n.changeState(_StateThrottle)
 	default:
 		n.changeState(_StateActive)
@@ -329,43 +307,16 @@ func (n *dhtNode) checkPing(ctx context.Context) error {
 	return nil
 }
 
-func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
-	n.mx.Lock()
-	a := n.adnl
-	n.mx.Unlock()
-
-	if a == nil {
-		return fmt.Errorf("adnl connection is not active")
-	}
-
-	err := a.Query(ctx, req, res)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (n *dhtNode) poll() {
-	for {
-		select {
-		case <-n.closer:
-			return
-		case <-time.After(5 * time.Second):
-		}
-
-		ctx, cancel := context.WithTimeout(n.closerCtx, queryTimeout)
-		err := n.checkPing(ctx)
-		cancel()
-		if err != nil {
-			continue
-		}
-	}
-}
-
 func (n *dhtNode) weight(id []byte) int {
 	w := leadingZeroBits(xor(id, n.id))
-	return (w << 20) + int(n.ping/(time.Millisecond*50))
+	if n.currentState == _StateFail {
+		w -= 3 // less priority for failed
+		if w < 0 {
+			w = 0
+		}
+	}
+	ping := time.Duration(atomic.LoadInt64(&n.ping))
+	return (1 << 30) + ((w << 20) - int(ping/(time.Millisecond*5)))
 }
 
 func xor(a, b []byte) []byte {

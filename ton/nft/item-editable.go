@@ -3,6 +3,7 @@ package nft
 import (
 	"context"
 	"fmt"
+	"github.com/xssnick/tonutils-go/ton"
 	"math/rand"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -34,7 +35,7 @@ func (c *ItemEditableClient) GetEditor(ctx context.Context) (*address.Address, e
 	return c.GetEditorAtBlock(ctx, b)
 }
 
-func (c *ItemEditableClient) GetEditorAtBlock(ctx context.Context, b *tlb.BlockInfo) (*address.Address, error) {
+func (c *ItemEditableClient) GetEditorAtBlock(ctx context.Context, b *ton.BlockIDExt) (*address.Address, error) {
 	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_editor")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_editor method: %w", err)
