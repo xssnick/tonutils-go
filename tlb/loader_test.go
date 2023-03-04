@@ -41,12 +41,14 @@ type testInner struct {
 
 type testTLB struct {
 	_                 Magic      `tlb:"#ffaa"`
-	Val               uint32     `tlb:"## 32"`
+	Val               uint16     `tlb:"## 16"`
+	MaybeVal          *uint32    `tlb:"maybe ## 32"`
 	Inside            testInner  `tlb:"^"`
 	InsideMaybe       *testInner `tlb:"maybe ^"`
 	Part              testInner  `tlb:"."`
 	InsideMaybeEither *testInner `tlb:"maybe either ^ ."`
 	Bits              []byte     `tlb:"bits 20"`
+	EndCell           *cell.Cell `tlb:"."`
 }
 
 func TestLoadFromCell(t *testing.T) {
@@ -69,8 +71,8 @@ func TestLoadFromCell(t *testing.T) {
 		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8).MustStoreDict(d)
 
 	a := cell.BeginCell().MustStoreUInt(0xFFAA, 16).
-		MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).
-		MustStoreBuilder(ref).MustStoreMaybeRef(ref.EndCell()).MustStoreBoolBit(false).MustStoreSlice([]byte{0xFF, 0xFF, 0xAA}, 20).EndCell()
+		MustStoreUInt(0xFFBF, 16).MustStoreBoolBit(true).MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).
+		MustStoreBuilder(ref).MustStoreMaybeRef(ref.EndCell()).MustStoreBoolBit(false).MustStoreSlice([]byte{0xFF, 0xFF, 0xAA}, 20).MustStoreUInt(1, 1).EndCell()
 
 	x := testTLB{}
 
@@ -80,7 +82,7 @@ func TestLoadFromCell(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if x.Val != 0xFFBFFFAA {
+		if x.Val != 0xFFBF {
 			t.Fatal("loaded val not eq")
 		}
 
@@ -126,6 +128,10 @@ func TestLoadFromCell(t *testing.T) {
 
 		if !bytes.Equal(x.Part.Dict.Get(dKey).Hash(), dVal.Hash()) {
 			t.Fatal("dict val not eq")
+		}
+
+		if x.EndCell.BitsSize() != 1 {
+			t.Fatal("cell val not eq")
 		}
 	}
 	hashA := a.Hash()

@@ -19,7 +19,8 @@ var Dial = func(addr string, timeout time.Duration) (net.Conn, error) {
 var ourDefaultKey ed25519.PrivateKey
 var defaultKeyMX sync.RWMutex
 
-// Connect is DEPRECATED use Gateway
+// Connect - connect to ADNL UDP Peer
+// Deprecated: Connect is DEPRECATED use Gateway
 func Connect(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey ed25519.PrivateKey) (_ *ADNL, err error) {
 	if ourKey == nil {
 		// we generate key once and then use it for further connections

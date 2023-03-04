@@ -44,8 +44,9 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 	rv = rv.Elem()
 
 	for i := 0; i < rv.NumField(); i++ {
-		field := rv.Type().Field(i)
-		tag := strings.TrimSpace(field.Tag.Get("tlb"))
+		structField := rv.Type().Field(i)
+		parseType := structField.Type
+		tag := strings.TrimSpace(structField.Tag.Get("tlb"))
 		if tag == "-" {
 			continue
 		}
@@ -56,13 +57,13 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 		}
 
 		if settings[0] == "maybe" {
-			if field.Type.Kind() != reflect.Pointer && field.Type.Kind() != reflect.Interface {
-				return fmt.Errorf("maybe flag can only be applied to interface or pointer, field %s", field.Name)
+			if parseType.Kind() != reflect.Pointer && parseType.Kind() != reflect.Interface && parseType.Kind() != reflect.Slice {
+				return fmt.Errorf("maybe flag can only be applied to interface or pointer, field %s", structField.Name)
 			}
 
 			has, err := loader.LoadBoolBit()
 			if err != nil {
-				return fmt.Errorf("failed to load maybe for %s, err: %w", field.Name, err)
+				return fmt.Errorf("failed to load maybe for %s, err: %w", structField.Name, err)
 			}
 
 			if !has {
@@ -71,19 +72,45 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 			settings = settings[1:]
 		}
 
+		if structField.Type.Kind() == reflect.Pointer && structField.Type.Elem().Kind() != reflect.Struct {
+			// to same process both pointers and types
+			parseType = parseType.Elem()
+		}
+
 		if settings[0] == "either" {
 			if len(settings) < 3 {
 				panic("either tag should have 2 args")
 			}
 			isSecond, err := loader.LoadBoolBit()
 			if err != nil {
-				return fmt.Errorf("failed to load maybe for %s, err: %w", field.Name, err)
+				return fmt.Errorf("failed to load maybe for %s, err: %w", structField.Name, err)
 			}
 
 			if !isSecond {
 				settings = []string{settings[1]}
 			} else {
 				settings = []string{settings[2]}
+			}
+		}
+
+		setVal := func(val reflect.Value) {
+			if structField.Type.Kind() == reflect.Pointer && val.Kind() != reflect.Pointer {
+				nw := reflect.New(val.Type())
+
+				if val.Type() != parseType {
+					val = val.Convert(parseType)
+				}
+
+				nw.Elem().Set(val)
+				val = nw
+			} else if structField.Type.Kind() != reflect.Pointer && val.Kind() == reflect.Pointer {
+				val = val.Elem()
+			}
+
+			if structField.Type == val.Type() {
+				rv.Field(i).Set(val)
+			} else {
+				rv.Field(i).Set(val.Convert(structField.Type))
 			}
 		}
 
@@ -98,27 +125,51 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 			switch {
 			case num <= 64:
 				var x any
-				switch field.Type.Kind() {
+				switch parseType.Kind() {
 				case reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8, reflect.Int:
 					x, err = loader.LoadInt(uint(num))
 					if err != nil {
 						return fmt.Errorf("failed to load int %d, err: %w", num, err)
 					}
+
+					switch parseType.Kind() {
+					case reflect.Int32:
+						x = int32(x.(int64))
+					case reflect.Int16:
+						x = int16(x.(int64))
+					case reflect.Int8:
+						x = int8(x.(int64))
+					case reflect.Int:
+						x = int(x.(int64))
+					}
+				case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
+					x, err = loader.LoadUInt(uint(num))
+					if err != nil {
+						return fmt.Errorf("failed to load uint %d, err: %w", num, err)
+					}
+
+					switch parseType.Kind() {
+					case reflect.Uint32:
+						x = uint32(x.(uint64))
+					case reflect.Uint16:
+						x = uint16(x.(uint64))
+					case reflect.Uint8:
+						x = uint8(x.(uint64))
+					case reflect.Uint:
+						x = uint(x.(uint64))
+					}
 				default:
-					if field.Type == reflect.TypeOf(&big.Int{}) {
+					if parseType == reflect.TypeOf(&big.Int{}) {
 						x, err = loader.LoadBigInt(uint(num))
 						if err != nil {
 							return fmt.Errorf("failed to load bigint %d, err: %w", num, err)
 						}
 					} else {
-						x, err = loader.LoadUInt(uint(num))
-						if err != nil {
-							return fmt.Errorf("failed to load uint %d, err: %w", num, err)
-						}
+						panic("unexpected field type for tag ## - " + parseType.String())
 					}
 				}
 
-				rv.Field(i).Set(reflect.ValueOf(x).Convert(field.Type))
+				setVal(reflect.ValueOf(x))
 				continue
 			case num <= 256:
 				x, err := loader.LoadBigInt(uint(num))
@@ -126,7 +177,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 					return fmt.Errorf("failed to load bigint %d, err: %w", num, err)
 				}
 
-				rv.Field(i).Set(reflect.ValueOf(x))
+				setVal(reflect.ValueOf(x))
 				continue
 			}
 		} else if settings[0] == "addr" {
@@ -135,7 +186,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				return fmt.Errorf("failed to load address, err: %w", err)
 			}
 
-			rv.Field(i).Set(reflect.ValueOf(x))
+			setVal(reflect.ValueOf(x))
 			continue
 		} else if settings[0] == "bool" {
 			x, err := loader.LoadBoolBit()
@@ -143,7 +194,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				return fmt.Errorf("failed to load bool, err: %w", err)
 			}
 
-			rv.Field(i).Set(reflect.ValueOf(x))
+			setVal(reflect.ValueOf(x))
 			continue
 		} else if settings[0] == "bits" {
 			num, err := strconv.Atoi(settings[1])
@@ -157,7 +208,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				return fmt.Errorf("failed to load uint %d, err: %w", num, err)
 			}
 
-			rv.Field(i).Set(reflect.ValueOf(x))
+			setVal(reflect.ValueOf(x))
 			continue
 		} else if settings[0] == "^" || settings[0] == "." {
 			next := loader
@@ -165,30 +216,30 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 			if settings[0] == "^" {
 				ref, err := loader.LoadRef()
 				if err != nil {
-					return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
+					return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
 				}
 				next = ref
 			}
 
-			switch field.Type {
+			switch parseType {
 			case reflect.TypeOf(&cell.Cell{}):
 				c, err := next.ToCell()
 				if err != nil {
-					return fmt.Errorf("failed to convert ref to cell for %s, err: %w", field.Name, err)
+					return fmt.Errorf("failed to convert ref to cell for %s, err: %w", structField.Name, err)
 				}
 
-				rv.Field(i).Set(reflect.ValueOf(c))
+				setVal(reflect.ValueOf(c))
 				continue
 			default:
-				nVal, err := structLoad(field.Type, next)
+				nVal, err := structLoad(structField.Type, next)
 				if err != nil {
 					return err
 				}
 
-				rv.Field(i).Set(nVal)
+				setVal(nVal)
 				continue
 			}
-		} else if field.Type == reflect.TypeOf(Magic{}) {
+		} else if parseType == reflect.TypeOf(Magic{}) {
 			var sz, base int
 			if strings.HasPrefix(settings[0], "#") {
 				base = 16
@@ -221,12 +272,12 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 		} else if settings[0] == "dict" {
 			sz, err := strconv.ParseUint(settings[1], 10, 64)
 			if err != nil {
-				panic(fmt.Sprintf("cannot deserialize field '%s' as dict, bad size '%s'", field.Name, settings[1]))
+				panic(fmt.Sprintf("cannot deserialize field '%s' as dict, bad size '%s'", structField.Name, settings[1]))
 			}
 
 			dict, err := loader.LoadDict(uint(sz))
 			if err != nil {
-				return fmt.Errorf("failed to load ref for %s, err: %w", field.Name, err)
+				return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
 			}
 
 			if len(settings) >= 4 {
@@ -251,26 +302,25 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 								}
 							}
 
-							nVal, err := structLoad(field.Type.Elem(), ld)
+							nVal, err := structLoad(parseType.Elem(), ld)
 							if err != nil {
 								return fmt.Errorf("failed to load struct in dict transform: %w", err)
 							}
 
 							arr = reflect.Append(arr, nVal)
 						}
-						rv.Field(i).Set(arr)
+						setVal(arr)
 						continue
 					default:
 						panic("transformation to this type is not supported")
 					}
 				}
 			}
-
-			rv.Field(i).Set(reflect.ValueOf(dict))
+			setVal(reflect.ValueOf(dict))
 			continue
 		}
 
-		panic(fmt.Sprintf("cannot deserialize field '%s' as tag '%s'", field.Name, tag))
+		panic(fmt.Sprintf("cannot deserialize field '%s' as tag '%s'", structField.Name, tag))
 	}
 
 	return nil
@@ -288,9 +338,10 @@ func ToCell(v any) (*cell.Cell, error) {
 	builder := cell.BeginCell()
 
 	for i := 0; i < rv.NumField(); i++ {
-		field := rv.Type().Field(i)
+		structField := rv.Type().Field(i)
+		parseType := structField.Type
 		fieldVal := rv.Field(i)
-		tag := strings.TrimSpace(field.Tag.Get("tlb"))
+		tag := strings.TrimSpace(structField.Tag.Get("tlb"))
 		if tag == "-" {
 			continue
 		}
@@ -301,8 +352,8 @@ func ToCell(v any) (*cell.Cell, error) {
 		}
 
 		if settings[0] == "maybe" {
-			if field.Type.Kind() != reflect.Pointer && field.Type.Kind() != reflect.Interface {
-				return nil, fmt.Errorf("maybe flag can only be applied to interface or pointer, field %s", field.Name)
+			if structField.Type.Kind() != reflect.Pointer && structField.Type.Kind() != reflect.Interface && structField.Type.Kind() != reflect.Slice {
+				return nil, fmt.Errorf("maybe flag can only be applied to interface or pointer, field %s", structField.Name)
 			}
 
 			if fieldVal.IsNil() {
@@ -336,6 +387,12 @@ func ToCell(v any) (*cell.Cell, error) {
 			}
 		}
 
+		if structField.Type.Kind() == reflect.Pointer && structField.Type.Elem().Kind() != reflect.Struct {
+			// to same process both pointers and types
+			parseType = parseType.Elem()
+			fieldVal = fieldVal.Elem()
+		}
+
 		if settings[0] == "##" {
 			num, err := strconv.ParseUint(settings[1], 10, 64)
 			if err != nil {
@@ -345,24 +402,26 @@ func ToCell(v any) (*cell.Cell, error) {
 
 			switch {
 			case num <= 64:
-				switch field.Type.Kind() {
+				switch parseType.Kind() {
 				case reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8, reflect.Int:
 					err = builder.StoreInt(fieldVal.Int(), uint(num))
 					if err != nil {
 						return nil, fmt.Errorf("failed to store int %d, err: %w", num, err)
 					}
+				case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
+					err = builder.StoreUInt(fieldVal.Uint(), uint(num))
+					if err != nil {
+						return nil, fmt.Errorf("failed to store int %d, err: %w", num, err)
+					}
 				default:
-					if field.Type == reflect.TypeOf(&big.Int{}) {
+					if parseType == reflect.TypeOf(&big.Int{}) {
 						err = builder.StoreBigInt(fieldVal.Interface().(*big.Int), uint(num))
 						if err != nil {
 							return nil, fmt.Errorf("failed to store bigint %d, err: %w", num, err)
 						}
 						continue
-					}
-
-					err = builder.StoreUInt(fieldVal.Uint(), uint(num))
-					if err != nil {
-						return nil, fmt.Errorf("failed to store uint %d, err: %w", num, err)
+					} else {
+						panic("unexpected field type for tag ## - " + parseType.String())
 					}
 				}
 				continue
@@ -401,11 +460,11 @@ func ToCell(v any) (*cell.Cell, error) {
 			var err error
 			var c *cell.Cell
 
-			switch field.Type {
+			switch parseType {
 			case reflect.TypeOf(&cell.Cell{}):
 				c = fieldVal.Interface().(*cell.Cell)
 			default:
-				c, err = structStore(fieldVal, field.Type.Name())
+				c, err = structStore(fieldVal, structField.Type.Name())
 				if err != nil {
 					return nil, err
 				}
@@ -414,17 +473,17 @@ func ToCell(v any) (*cell.Cell, error) {
 			if settings[0] == "^" {
 				err = builder.StoreRef(c)
 				if err != nil {
-					return nil, fmt.Errorf("failed to store cell to ref for %s, err: %w", field.Name, err)
+					return nil, fmt.Errorf("failed to store cell to ref for %s, err: %w", structField.Name, err)
 				}
 				continue
 			}
 
 			err = builder.StoreBuilder(c.ToBuilder())
 			if err != nil {
-				return nil, fmt.Errorf("failed to store cell to builder for %s, err: %w", field.Name, err)
+				return nil, fmt.Errorf("failed to store cell to builder for %s, err: %w", structField.Name, err)
 			}
 			continue
-		} else if field.Type == reflect.TypeOf(Magic{}) {
+		} else if parseType == reflect.TypeOf(Magic{}) {
 			var sz, base int
 			if strings.HasPrefix(settings[0], "#") {
 				base = 16
@@ -453,12 +512,12 @@ func ToCell(v any) (*cell.Cell, error) {
 		} else if settings[0] == "dict" {
 			err := builder.StoreDict(fieldVal.Interface().(*cell.Dictionary))
 			if err != nil {
-				return nil, fmt.Errorf("failed to store dict for %s, err: %w", field.Name, err)
+				return nil, fmt.Errorf("failed to store dict for %s, err: %w", structField.Name, err)
 			}
 			continue
 		}
 
-		panic(fmt.Sprintf("cannot serialize field '%s' as tag '%s', use manual serialization", field.Name, tag))
+		panic(fmt.Sprintf("cannot serialize field '%s' as tag '%s', use manual serialization", structField.Name, tag))
 	}
 
 	return builder.EndCell(), nil
