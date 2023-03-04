@@ -218,9 +218,7 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 			b.MustStoreBuilder(m.Body.ToBuilder())
 		}
 	} else {
-		// store 1 zero bit as body
 		b.MustStoreBoolBit(false)
-		b.MustStoreUInt(0, 1)
 	}
 
 	return b.EndCell(), nil
