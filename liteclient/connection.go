@@ -362,6 +362,21 @@ func (n *connection) readData(sz uint32) ([]byte, error) {
 	return result, nil
 }
 
+type NetworkErr struct {
+	error
+}
+
+func (e NetworkErr) Is(err error) bool {
+	if _, ok := err.(NetworkErr); ok {
+		return true
+	}
+	return false
+}
+
+func (e NetworkErr) Unwrap() error {
+	return e.error
+}
+
 func (n *connection) send(data []byte) error {
 	buf := make([]byte, 4)
 
@@ -394,7 +409,7 @@ func (n *connection) send(data []byte) error {
 		num, err := n.tcp.Write(buf)
 		if err != nil {
 			n.tcp.Close()
-			return err
+			return NetworkErr{err}
 		}
 
 		buf = buf[num:]

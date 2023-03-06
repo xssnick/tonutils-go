@@ -9,6 +9,10 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+type smallStruct struct {
+	Sz uint32 `tlb:"## 8"`
+}
+
 type manualLoad struct {
 	Val string
 }
@@ -37,6 +41,7 @@ type testInner struct {
 	Addr        *address.Address `tlb:"addr"`
 	Manual      manualLoad       `tlb:"."`
 	Dict        *cell.Dictionary `tlb:"dict 256"`
+	StructMaybe *smallStruct     `tlb:"maybe ^"`
 }
 
 type testTLB struct {
@@ -62,13 +67,16 @@ func TestLoadFromCell(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	mRef := cell.BeginCell().MustStoreUInt('y', 8).EndCell()
+
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).
 		MustStoreInt(-7172, 34).
 		MustStoreUInt(0xCCA, 12).
 		MustStoreCoins(700000).
 		MustStoreUInt(5, 10).
 		MustStoreUInt(7126382921832, 176).
-		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8).MustStoreDict(d)
+		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8).MustStoreDict(d).
+		MustStoreMaybeRef(mRef)
 
 	a := cell.BeginCell().MustStoreUInt(0xFFAA, 16).
 		MustStoreUInt(0xFFBF, 16).MustStoreBoolBit(true).MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).

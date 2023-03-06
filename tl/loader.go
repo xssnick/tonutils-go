@@ -302,10 +302,14 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 			switch value.Type().Elem().Kind() {
 			case reflect.Uint8:
 				if tags[0] == "int256" {
-					if len(value.Bytes()) != 32 {
+					bytes := value.Bytes()
+					if len(bytes) == 0 {
+						// consider it as 0
+						bytes = make([]byte, 32)
+					} else if len(bytes) != 32 {
 						return nil, fmt.Errorf("not 32 bytes for int256 value")
 					}
-					buf = append(buf, value.Bytes()...)
+					buf = append(buf, bytes...)
 				} else {
 					buf = append(buf, ToBytes(value.Bytes())...)
 				}
