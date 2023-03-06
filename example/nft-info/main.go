@@ -30,36 +30,47 @@ func main() {
 		panic(err)
 	}
 
-	// get info about our nft's collection
-	collection := nft.NewCollectionClient(api, nftData.CollectionAddress)
-	collectionData, err := collection.GetCollectionData(context.Background())
-	if err != nil {
-		panic(err)
-	}
+	var nftContent nft.ContentAny
+	if nftData.CollectionAddress.Type() != address.NoneAddress {
+		// get info about our nft's collection
+		collection := nft.NewCollectionClient(api, nftData.CollectionAddress)
+		collectionData, err := collection.GetCollectionData(context.Background())
+		if err != nil {
+			panic(err)
+		}
 
-	fmt.Println("Collection addr      :", nftData.CollectionAddress.String())
-	switch content := collectionData.Content.(type) {
-	case *nft.ContentOffchain:
-		fmt.Println("    content offchain :", content.URI)
-	case *nft.ContentOnchain:
-		fmt.Println("    content onchain  :", content.Name)
+		fmt.Println("Collection addr      :", nftData.CollectionAddress.String())
+		switch content := collectionData.Content.(type) {
+		case *nft.ContentOffchain:
+			fmt.Println("    content offchain :", content.URI)
+		case *nft.ContentOnchain:
+			fmt.Println("    content onchain  :", content.Name)
+		}
+		fmt.Println("    owner            :", collectionData.OwnerAddress.String())
+		fmt.Println("    minted items num :", collectionData.NextItemIndex)
+		fmt.Println()
+
+		// get full nft's content url using collection method that will merge base url with nft's data
+		nftContent, err = collection.GetNFTContent(context.Background(), nftData.Index, nftData.Content)
+		if err != nil {
+			panic(err)
+		}
 	}
-	fmt.Println("    owner            :", collectionData.OwnerAddress.String())
-	fmt.Println("    minted items num :", collectionData.NextItemIndex)
-	fmt.Println()
 	fmt.Println("NFT addr         :", nftAddr.String())
 	fmt.Println("    initialized  :", nftData.Initialized)
 	fmt.Println("    owner        :", nftData.OwnerAddress.String())
 	fmt.Println("    index        :", nftData.Index)
 
 	if nftData.Initialized {
-		// get full nft's content url using collection method that will merge base url with nft's data
-		nftContent, err := collection.GetNFTContent(context.Background(), nftData.Index, nftData.Content)
-		if err != nil {
-			panic(err)
+		switch content := nftData.Content.(type) {
+		case *nft.ContentOffchain:
+			fmt.Println("    content :", content.URI)
+			if nftContent != nil {
+				fmt.Println("    full content :", nftContent.(*nft.ContentOffchain).URI)
+			}
+		case *nft.ContentOnchain:
+			fmt.Println("    content name :", content.Name)
 		}
-		fmt.Println("    part content :", nftData.Content.(*nft.ContentOffchain).URI)
-		fmt.Println("    full content :", nftContent.(*nft.ContentOffchain).URI)
 	} else {
 		fmt.Println("    empty content")
 	}
