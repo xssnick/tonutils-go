@@ -205,6 +205,9 @@ func (c *ConnectionPool) queryWithBalancer(req *ADNLRequest) (string, error) {
 
 		host, err := reqNode.queryAdnl(req.QueryID, req.Data)
 		if err != nil {
+			if !errors.Is(err, NetworkErr{}) {
+				return "", err
+			}
 			nodeOffset++
 			continue
 		}
