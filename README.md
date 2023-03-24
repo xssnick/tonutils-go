@@ -144,12 +144,12 @@ addr := address.MustParseAddr("kQB3P0cDOtkFDdxB77YX-F2DGkrIszmZkmyauMnsP1gg0inM"
 // run get method `mult` of contract with int arguments 7 and 8
 res, err := api.RunGetMethod(context.Background(), block, addr, "mult", 7, 8)
 if err != nil {
-	// if contract exit code != 0 it will be treated as an error too
+    // if contract exit code != 0 it will be treated as an error too
     panic(err)
 }
 
 // we are sure that return value is 1 cell, we can directly cast it and parse
-val, err := res[0].(*cell.Cell).BeginParse().LoadUInt(64)
+val, err := res.MustCell(0).BeginParse().LoadUInt(64)
 if err != nil {
     panic(err)
 }
