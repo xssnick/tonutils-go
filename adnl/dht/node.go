@@ -5,14 +5,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/adnl/overlay"
-	"github.com/xssnick/tonutils-go/tl"
 	"math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 const (
@@ -308,6 +309,9 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 }
 
 func (n *dhtNode) weight(id []byte) int {
+	n.mx.Lock()
+	defer n.mx.Unlock()
+
 	w := leadingZeroBits(xor(id, n.id))
 	if n.currentState == _StateFail {
 		w -= 3 // less priority for failed
