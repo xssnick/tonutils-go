@@ -85,6 +85,12 @@ func (n *dhtNode) changeState(state int) {
 	n.onStateChange(n, state)
 }
 
+func (n *dhtNode) getState() int {
+	n.mx.Lock()
+	defer n.mx.Unlock()
+	return n.currentState
+}
+
 func (n *dhtNode) prepare() (ADNL, error) {
 	n.mx.Lock()
 	defer n.mx.Unlock()

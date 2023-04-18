@@ -8,17 +8,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/adnl/address"
-	"github.com/xssnick/tonutils-go/adnl/overlay"
-	"github.com/xssnick/tonutils-go/liteclient"
-	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 const queryTimeout = 3000 * time.Millisecond
@@ -613,7 +614,7 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	c.mx.RLock()
 	// add fastest nodes first
 	for _, node := range c.activeNodes {
-		if node.currentState == _StateActive {
+		if node.getState() == _StateActive {
 			plist.addNode(node)
 			added++
 		}
@@ -621,7 +622,7 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	// if we have not enough fast nodes, add slow
 	if added < 15 {
 		for _, node := range c.activeNodes {
-			if node.currentState == _StateThrottle {
+			if node.getState() == _StateThrottle {
 				plist.addNode(node)
 				added++
 			}
@@ -631,7 +632,7 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	// they may be failed due to our connection problems
 	if added < 15 {
 		for _, node := range c.activeNodes {
-			if node.currentState == _StateFail {
+			if node.getState() == _StateFail {
 				plist.addNode(node)
 				added++
 			}
