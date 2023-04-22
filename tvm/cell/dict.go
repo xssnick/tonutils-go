@@ -271,33 +271,21 @@ func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOff
 	shortLength := 1 + 1 + 2*partSz
 	sameLength := 2 + 1 + bitsLen
 
-	var err error
 	if sameLength < longLen && sameLength < shortLength {
 		cmpInt := new(big.Int).SetBytes(dataBits)
 		if cmpInt.Cmp(big.NewInt(0)) == 0 { // compare with all zeroes
-			err = d.storeSame(b, partSz, bitsLen, 0)
+			return d.storeSame(b, partSz, bitsLen, 0)
 		} else if cmpInt.Cmp(new(big.Int).Sub(new(big.Int).
 			Lsh(big.NewInt(1), uint(bitsLen)+1),
 			big.NewInt(1))) == 0 { // compare with all ones
-			err = d.storeSame(b, partSz, bitsLen, 1)
-		}
-
-		if err != nil {
-			return err
+			return d.storeSame(b, partSz, bitsLen, 1)
 		}
 	}
 
 	if shortLength <= longLen {
-		err = d.storeShort(b, partSz, dataBits)
-	} else {
-		err = d.storeLong(b, partSz, bitsLen, dataBits)
+		return d.storeShort(b, partSz, dataBits)
 	}
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return d.storeLong(b, partSz, bitsLen, dataBits)
 }
 
 func (d *Dictionary) storeShort(b *Builder, partSz uint64, bits []byte) error {

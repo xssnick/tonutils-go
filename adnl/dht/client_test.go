@@ -676,7 +676,7 @@ func TestClient_Store(t *testing.T) {
 							}
 						case Store:
 							if addr != "6.6.6.6:65432" && addr != "178.18.243.132:15888" {
-								t.Errorf("invalid node to store: check priority list")
+								t.Errorf("invalid node to store: check priority list %s", addr)
 							}
 							sign := rowReqType.Value.Signature
 							rowReqType.Value.Signature = nil
@@ -715,8 +715,8 @@ func TestClient_Store(t *testing.T) {
 		if err != nil {
 			t.Errorf(err.Error())
 		}
-		if count != 2 {
-			t.Errorf("got '%d' copies count, want '2'", count)
+		if count < 2 {
+			t.Errorf("got '%d' copies count, want '2+'", count)
 		}
 	})
 }

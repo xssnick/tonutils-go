@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -102,7 +101,6 @@ func (n *dhtNode) prepare() (ADNL, error) {
 
 	a, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
 	if err != nil {
-		println("CANT REG CONN", hex.EncodeToString(n.id), err.Error())
 		return nil, err
 	}
 	a.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {

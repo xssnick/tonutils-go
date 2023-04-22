@@ -7,6 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/address"
 	rldphttp "github.com/xssnick/tonutils-go/adnl/rldp/http"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"runtime"
@@ -62,7 +63,7 @@ func main() {
 				dat, err := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				if err != nil {
-					println("err body", err.Error())
+					log.Println("err body", err.Error())
 					continue
 				}
 				_ = dat
