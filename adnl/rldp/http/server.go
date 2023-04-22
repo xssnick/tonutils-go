@@ -129,7 +129,7 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 			case <-time.After(wait):
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 			err := s.updateDHT(ctx)
 			cancel()
 
@@ -172,8 +172,10 @@ func (s *Server) Address() []byte {
 func (s *Server) updateDHT(ctx context.Context) error {
 	addr := s.adnlServer.GetAddressList()
 
-	_, id, err := s.dht.StoreAddress(ctx, addr, 15*time.Minute, s.key, 5)
-	if err != nil {
+	ctxStore, cancel := context.WithTimeout(ctx, 80*time.Second)
+	stored, id, err := s.dht.StoreAddress(ctxStore, addr, 15*time.Minute, s.key, 5)
+	cancel()
+	if err != nil && stored == 0 {
 		return err
 	}
 
@@ -183,7 +185,8 @@ func (s *Server) updateDHT(ctx context.Context) error {
 		return err
 	}
 
-	Logger("DHT ADNL address record for TON Site was updated successfully to ", addr.Addresses[0].IP.String(), addr.Addresses[0].Port)
+	Logger("DHT ADNL address record for TON Site was refreshed successfully on", stored,
+		"nodes to ip", addr.Addresses[0].IP.String(), "with port", addr.Addresses[0].Port)
 	return nil
 }
 

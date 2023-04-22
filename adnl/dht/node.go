@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -69,11 +70,6 @@ func (n *dhtNode) changeState(state int) {
 	n.mx.Lock()
 	defer n.mx.Unlock()
 
-	if n.currentState == state {
-		return
-	}
-	n.currentState = state
-
 	if state == _StateFail {
 		// in case of fail - close connection
 		if n.adnl != nil {
@@ -81,6 +77,11 @@ func (n *dhtNode) changeState(state int) {
 			n.adnl = nil
 		}
 	}
+
+	if n.currentState == state {
+		return
+	}
+	n.currentState = state
 
 	n.onStateChange(n, state)
 }
@@ -101,6 +102,7 @@ func (n *dhtNode) prepare() (ADNL, error) {
 
 	a, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
 	if err != nil {
+		println("CANT REG CONN", hex.EncodeToString(n.id), err.Error())
 		return nil, err
 	}
 	a.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
@@ -292,7 +294,7 @@ func (n *dhtNode) checkPing(ctx context.Context) error {
 func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 	a, err := n.prepare()
 	if err != nil {
-		return fmt.Errorf("failed to query dht node: %w", err)
+		return fmt.Errorf("failed to prepare dht node: %w", err)
 	}
 
 	t := time.Now()
@@ -305,7 +307,7 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 	atomic.StoreInt64(&n.ping, int64(ping))
 
 	switch {
-	case ping > queryTimeout/2:
+	case ping > queryTimeout/3:
 		n.changeState(_StateThrottle)
 	default:
 		n.changeState(_StateActive)
