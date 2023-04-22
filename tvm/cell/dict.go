@@ -376,8 +376,8 @@ func (d *Dictionary) ToCell() (*Cell, error) {
 		})
 	}
 
-	var dive func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous uint) (*Cell, error)
-	dive = func(kvs []*kvData, committedOffset, bitOffset, streakSame, streakPrefix, previous uint) (*Cell, error) {
+	var dive func(kvs []*kvData, committedOffset, bitOffset, previous uint) (*Cell, error)
+	dive = func(kvs []*kvData, committedOffset, bitOffset, previous uint) (*Cell, error) {
 		if bitOffset == d.keySz {
 			if len(kvs) > 1 {
 				return nil, errors.New("not single key in a leaf")
@@ -422,44 +422,27 @@ func (d *Dictionary) ToCell() (*Cell, error) {
 			// we consider here also bit which branch indicates
 			committedOffset = bitOffset + 1
 
-			streakSame = 0
-			streakPrefix = 0
-
-			branch0, err := dive(zeroes, committedOffset, bitOffset+1, streakSame, streakPrefix, 0)
+			branch0, err := dive(zeroes, committedOffset, bitOffset+1, 0)
 			if err != nil {
 				return nil, fmt.Errorf("failed to build branch 0, err: %w", err)
 			}
 
-			branch1, err := dive(ones, committedOffset, bitOffset+1, streakSame, streakPrefix, 1)
+			branch1, err := dive(ones, committedOffset, bitOffset+1, 1)
 			if err != nil {
 				return nil, fmt.Errorf("failed to build branch 1, err: %w", err)
 			}
 
 			return b.MustStoreRef(branch0).MustStoreRef(branch1).EndCell(), nil
 		} else if len(zeroes) > 0 {
-			streakPrefix++
-			if previous == 0 {
-				streakSame++
-			} else {
-				streakSame = 1
-			}
-
-			return dive(zeroes, committedOffset, bitOffset+1, streakSame, streakPrefix, 0)
+			return dive(zeroes, committedOffset, bitOffset+1, 0)
 		} else if len(ones) > 0 {
-			streakPrefix++
-			if previous == 1 {
-				streakSame++
-			} else {
-				streakSame = 1
-			}
-
-			return dive(ones, committedOffset, bitOffset+1, streakSame, streakPrefix, 1)
+			return dive(ones, committedOffset, bitOffset+1, 1)
 		}
 
 		return nil, errors.New("empty branch")
 	}
 
-	dict, err := dive(root, 0, 0, 0, 0, 0)
+	dict, err := dive(root, 0, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dict cell, err: %w", err)
 	}
