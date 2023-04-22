@@ -366,12 +366,14 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 
 	plist := c.buildPriorityList(kid)
 
+	stores := 0
 	copiesLeft := copies
 	for copiesLeft > 0 {
 		node, _ := plist.getNode()
 		if node == nil {
 			break
 		}
+		stores++
 
 		strId := hex.EncodeToString(node.id)
 
@@ -427,6 +429,9 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 	}
 
 	if copiesLeft == copies {
+		// DEBUG
+		Logger("0 DHT copies stored: store attempts %d, active len %d", stores, len(c.activeNodes))
+
 		return 0, nil, fmt.Errorf("failed to store value: zero copies made")
 	}
 
@@ -580,8 +585,8 @@ func (c *Client) nodesPinger() {
 		c.mx.RUnlock()
 
 		var wg sync.WaitGroup
-		wg.Add(4)
-		for i := 0; i < 4; i++ {
+		wg.Add(8)
+		for i := 0; i < 8; i++ {
 			go func() {
 				defer wg.Done()
 				for {

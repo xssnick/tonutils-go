@@ -253,10 +253,10 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 }
 
 func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOffset uint) error {
-	// TODO: use all types of labels to optimize
+	partSz := uint64(bitOffset - committedOffset)
 
 	// short unary 0
-	if bitOffset-committedOffset == 0 {
+	if partSz == 0 {
 		err := b.StoreUInt(0, 2)
 		if err != nil {
 			return err
@@ -264,27 +264,99 @@ func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOff
 		return nil
 	}
 
+	bitsLen := uint64(math.Ceil(math.Log2(float64((d.keySz - committedOffset) + 1))))
+	dataBits := getBits(data, committedOffset, bitOffset)
+
+	longLen := 2 + bitsLen + partSz
+	shortLength := 1 + 1 + 2*partSz
+	sameLength := 2 + 1 + bitsLen
+
+	var err error
+	if sameLength < longLen && sameLength < shortLength {
+		cmpInt := new(big.Int).SetBytes(dataBits)
+		if cmpInt.Cmp(big.NewInt(0)) == 0 { // compare with all zeroes
+			err = d.storeSame(b, partSz, bitsLen, 0)
+		} else if cmpInt.Cmp(new(big.Int).Sub(new(big.Int).
+			Lsh(big.NewInt(1), uint(bitsLen)+1),
+			big.NewInt(1))) == 0 { // compare with all ones
+			err = d.storeSame(b, partSz, bitsLen, 1)
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	if shortLength <= longLen {
+		err = d.storeShort(b, partSz, dataBits)
+	} else {
+		err = d.storeLong(b, partSz, bitsLen, dataBits)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Dictionary) storeShort(b *Builder, partSz uint64, bits []byte) error {
+	// magic
+	err := b.StoreUInt(0b0, 1)
+	if err != nil {
+		return err
+	}
+
+	all1s := uint64(1<<(partSz+1) - 1)
+	err = b.StoreUInt(all1s<<1, uint(partSz+1)) // all 1s and last 0
+	if err != nil {
+		return err
+	}
+
+	err = b.StoreSlice(bits, uint(partSz))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Dictionary) storeSame(b *Builder, partSz, bitsLen uint64, bit uint64) error {
+	// magic
+	err := b.StoreUInt(0b11, 2)
+	if err != nil {
+		return err
+	}
+
+	// bit type
+	err = b.StoreUInt(bit, 1)
+	if err != nil {
+		return err
+	}
+
+	err = b.StoreUInt(partSz, uint(bitsLen))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Dictionary) storeLong(b *Builder, partSz, bitsLen uint64, bits []byte) error {
 	// magic
 	err := b.StoreUInt(0b10, 2)
 	if err != nil {
 		return err
 	}
 
-	bitsLen := uint(math.Ceil(math.Log2(float64((d.keySz - committedOffset) + 1))))
-
-	partSz := uint64(bitOffset - committedOffset)
-
-	err = b.StoreUInt(partSz, bitsLen)
+	err = b.StoreUInt(partSz, uint(bitsLen))
 	if err != nil {
 		return err
 	}
 
-	bits := getBits(data, committedOffset, bitOffset)
 	err = b.StoreSlice(bits, uint(partSz))
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -301,7 +373,6 @@ func (d *Dictionary) ToCell() (*Cell, error) {
 		return nil, nil
 	}
 
-	// TODO: make serialization logic same with c++
 	// TODO: add augmentation aggregation reading
 
 	type kvData struct {

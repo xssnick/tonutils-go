@@ -23,8 +23,12 @@ type AnyMessage interface {
 }
 
 type Message struct {
-	MsgType MsgType
-	Msg     AnyMessage
+	MsgType MsgType    `tlb:"-"`
+	Msg     AnyMessage `tlb:"."`
+}
+
+type MessagesList struct {
+	List *cell.Dictionary
 }
 
 type InternalMessage struct {
@@ -187,11 +191,7 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	b.MustStoreAddr(m.DstAddr)
 	b.MustStoreBigCoins(m.Amount.NanoTON())
 
-	if m.ExtraCurrencies != nil {
-		return nil, errors.New("extra currencies serialization is not supported yet")
-	}
-
-	b.MustStoreBoolBit(m.ExtraCurrencies != nil)
+	b.MustStoreDict(m.ExtraCurrencies)
 
 	b.MustStoreBigCoins(m.IHRFee.NanoTON())
 	b.MustStoreBigCoins(m.FwdFee.NanoTON())
@@ -262,4 +262,40 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 	}
 
 	return builder.EndCell(), nil
+}
+
+func (m *MessagesList) LoadFromCell(loader *cell.Slice) error {
+	dict, err := loader.ToDict(15)
+	if err != nil {
+		return err
+	}
+	m.List = dict
+	return nil
+}
+
+func (m *MessagesList) ToCell() (*cell.Cell, error) {
+	return m.List.ToCell()
+}
+
+func (m *MessagesList) ToSlice() ([]Message, error) {
+	if m.List == nil {
+		return nil, nil
+	}
+
+	var list []Message
+	for i, kv := range m.List.All() {
+		var msg Message
+		s := kv.Value.BeginParse()
+		ms, err := s.LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load ref of message %d: %w", i, err)
+		}
+
+		err = msg.LoadFromCell(ms)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse message %d: %w", i, err)
+		}
+		list = append(list, msg)
+	}
+	return list, nil
 }
