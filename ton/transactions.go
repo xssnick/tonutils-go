@@ -116,7 +116,6 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 		}
 
 		tx.Hash = txCell.Hash()
-		tx.Cell = txCell
 		return &tx, nil
 	case LSError:
 		if t.Code == 0 {

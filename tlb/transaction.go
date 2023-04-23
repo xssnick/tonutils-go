@@ -220,8 +220,7 @@ type Transaction struct {
 	Description TransactionDescription `tlb:"^"`
 
 	// not in scheme, but will be filled based on request data for flexibility
-	Hash []byte     `tlb:"-"`
-	Cell *cell.Cell `tlb:"-"`
+	Hash []byte `tlb:"-"`
 }
 
 func (t *Transaction) Dump() string {
