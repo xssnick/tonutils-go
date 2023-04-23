@@ -331,6 +331,10 @@ func (a *ADNL) SetQueryHandler(handler func(msg *MessageQuery) error) {
 	a.queryHandler = handler
 }
 
+func (a *ADNL) GetQueryHandler() func(msg *MessageQuery) error {
+	return a.queryHandler
+}
+
 func (a *ADNL) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
 	a.onDisconnect = handler
 }

@@ -46,6 +46,18 @@ type MockADNL struct {
 	close                   func()
 }
 
+func (m MockADNL) GetQueryHandler() func(msg *adnl.MessageQuery) error {
+	return nil
+}
+
+func (m MockADNL) SetQueryHandler(handler func(msg *adnl.MessageQuery) error) {
+	return
+}
+
+func (m MockADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
+	return nil
+}
+
 func (m MockADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	return m.query(ctx, req, result)
 }
@@ -299,7 +311,7 @@ func TestTransport_RoundTripUnit(t *testing.T) {
 			nil
 	}
 
-	newRLDP = func(a ADNL) RLDP {
+	newRLDP = func(a ADNL, is2 bool) RLDP {
 		return &MockRDLP{
 			close: func() {
 			},
@@ -331,7 +343,7 @@ func TestTransport_RoundTripUnit(t *testing.T) {
 		t.Fatal("failed to prepare test adnl connection, err: ", err)
 	}
 
-	tRldpCli := newRLDP(tAdnlConn)
+	tRldpCli := newRLDP(tAdnlConn, false)
 	tTransport := NewTransport(&MockDHT{}, MockResolver{})
 
 	req, err := http.NewRequest(http.MethodGet, "http://foundation.ton/", nil)

@@ -25,6 +25,7 @@ type Peer interface {
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
+	GetQueryHandler() func(msg *MessageQuery) error
 	RemoteAddr() string
 	GetID() []byte
 	Close()
@@ -466,6 +467,10 @@ func (p *peerConn) SetDisconnectHandler(handler func(addr string, key ed25519.Pu
 
 func (p *peerConn) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
 	return p.client.SendCustomMessage(ctx, req)
+}
+
+func (p *peerConn) GetQueryHandler() func(msg *MessageQuery) error {
+	return p.client.GetQueryHandler()
 }
 
 func (p *peerConn) Query(ctx context.Context, req, result tl.Serializable) error {

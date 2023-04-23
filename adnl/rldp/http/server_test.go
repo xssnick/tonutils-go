@@ -51,7 +51,6 @@ func TestServer_fetchPayload(t *testing.T) {
 	if !bytes.Equal(<-w.parts, []byte("test")) {
 		t.Error("invalid data in data stream parts")
 	}
-
 }
 
 func TestServer_Stop(t *testing.T) {

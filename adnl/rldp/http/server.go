@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -150,7 +151,25 @@ func (s *Server) ListenAndServe(listenAddr string) error {
 			return err
 		}
 
-		rl := newRLDP(client)
+		previousHandler := client.GetQueryHandler()
+		client.SetQueryHandler(func(query *adnl.MessageQuery) error {
+			switch query.Data.(type) {
+			case GetCapabilities:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err := client.Answer(ctx, query.ID, &Capabilities{Value: CapabilityRLDP2})
+				cancel()
+				if err != nil {
+					return fmt.Errorf("failed to send capabilities answer: %w", err)
+				}
+				return nil
+			}
+			if previousHandler != nil {
+				return previousHandler(query)
+			}
+			return fmt.Errorf("unexpected query type %s", reflect.TypeOf(query.Data))
+		})
+
+		rl := newRLDP(client, false) // server supports both v2 and v1 by default
 		rl.SetOnQuery(s.handle(rl, adnlAddr, client.RemoteAddr()))
 		return nil
 	})
@@ -326,7 +345,6 @@ func (s *Server) handle(client RLDP, adnlId, addr string) func(transferId []byte
 				_ = stream.Data.Close()
 			}
 		}
-
 		return nil
 	}
 }
