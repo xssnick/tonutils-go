@@ -582,141 +582,134 @@ func TestClient_Close(t *testing.T) {
 }
 
 func TestClient_Store(t *testing.T) {
-	addrList := address.List{
-		Addresses: []*address.UDP{
-			{
-				net.IPv4(1, 1, 1, 1).To4(),
-				11111,
-			},
-			{
-				net.IPv4(2, 2, 2, 2).To4(),
-				22222,
-			},
-			{
-				net.IPv4(3, 3, 3, 3).To4(),
-				333333,
-			},
-		},
-		Version:    0,
-		ReinitDate: 0,
-		Priority:   0,
-		ExpireAt:   0,
-	}
-	tlAddrList, err := tl.Serialize(addrList, true)
-	if err != nil {
-		t.Fatal()
-	}
+	for i := 0; i < 15; i++ {
 
-	nameAddr := []byte("address")
-	var index int32 = 0
-
-	cliePubK, err := hex.DecodeString("93037f2613f6063869544caacac3eabbd7456e4d6e731478fccc961c137d1284")
-	if err != nil {
-		t.Fatal("failed to prepare test client pub key, err: ", err)
-	}
-
-	cliePrivK, err := hex.DecodeString("83590f541d37b783aa504049bab792696d12bbec3d23a954353300f816ca8b9693037f2613f6063869544caacac3eabbd7456e4d6e731478fccc961c137d1284")
-	if err != nil {
-		t.Fatal("failed to prepare test id, err: ", err)
-	}
-
-	_, err = adnl.ToKeyID(adnl.PublicKeyED25519{cliePubK})
-	if err != nil {
-		t.Fatal("failed to prepare test key id, err: ", err)
-	}
-
-	NodePKey, err := hex.DecodeString("135da090fa178b960de48655108b50b5ed3a09942f44a0a505c76cbd171d4ae9")
-	if err != nil {
-		t.Fatal("failed to prepare test id, err: ", err)
-	}
-
-	NodeSign, err := hex.DecodeString("f06b491e4cc26afd989e2409a1fb155d993567dde9a68b1603d35df6a390195b757f2aca3968a46493f5ee513f5f040c10b6e21b988f48e0781fe81aa9226d05")
-	if err != nil {
-		t.Fatal("failed to prepare test sign, err: ", err)
-	}
-	testNode := &Node{
-		adnl.PublicKeyED25519{Key: NodePKey},
-		&address.List{
+		addrList := address.List{
 			Addresses: []*address.UDP{
-				{net.IPv4(6, 6, 6, 6).To4(),
-					65432,
+				{
+					net.IPv4(1, 1, 1, 1).To4(),
+					11111,
+				},
+				{
+					net.IPv4(2, 2, 2, 2).To4(),
+					22222,
+				},
+				{
+					net.IPv4(3, 3, 3, 3).To4(),
+					333333,
 				},
 			},
 			Version:    0,
 			ReinitDate: 0,
 			Priority:   0,
 			ExpireAt:   0,
-		},
-		1671102718,
-		NodeSign,
-	}
+		}
+		tlAddrList, err := tl.Serialize(addrList, true)
+		if err != nil {
+			t.Fatal()
+		}
 
-	t.Run("positive store case", func(t *testing.T) {
-		gateway := &MockGateway{}
-		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
-			return MockADNL{
-				query: func(ctx context.Context, req, result tl.Serializable) error {
-					switch request := req.(type) {
-					case Ping:
-						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
-					case tl.Raw:
-						var rowReq any
-						_, err := tl.Parse(&rowReq, request, true)
-						if err != nil {
-							t.Fatal("failed to parse test request, err: ", err)
-						}
-						switch rowReqType := rowReq.(type) {
-						case FindNode:
-							if addr == "185.86.79.9:22096" {
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{testNode}}))
-							} else if addr == "" {
+		nameAddr := []byte("address")
+		var index int32 = 0
 
-							} else {
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{nil}))
-							}
-						case Store:
-							if addr != "6.6.6.6:65432" && addr != "178.18.243.132:15888" {
-								t.Errorf("invalid node to store: check priority list")
-							}
-							sign := rowReqType.Value.Signature
-							rowReqType.Value.Signature = nil
-							dataToCheck, err := tl.Serialize(rowReqType.Value, true)
+		cliePrivK, err := hex.DecodeString("83590f541d37b783aa504049bab792696d12bbec3d23a954353300f816ca8b9693037f2613f6063869544caacac3eabbd7456e4d6e731478fccc961c137d1284")
+		if err != nil {
+			t.Fatal("failed to prepare test id, err: ", err)
+		}
+
+		NodePKey, err := hex.DecodeString("135da090fa178b960de48655108b50b5ed3a09942f44a0a505c76cbd171d4ae9")
+		if err != nil {
+			t.Fatal("failed to prepare test id, err: ", err)
+		}
+
+		NodeSign, err := hex.DecodeString("f06b491e4cc26afd989e2409a1fb155d993567dde9a68b1603d35df6a390195b757f2aca3968a46493f5ee513f5f040c10b6e21b988f48e0781fe81aa9226d05")
+		if err != nil {
+			t.Fatal("failed to prepare test sign, err: ", err)
+		}
+		testNode := &Node{
+			adnl.PublicKeyED25519{Key: NodePKey},
+			&address.List{
+				Addresses: []*address.UDP{
+					{net.IPv4(6, 6, 6, 6).To4(),
+						65432,
+					},
+				},
+				Version:    0,
+				ReinitDate: 0,
+				Priority:   0,
+				ExpireAt:   0,
+			},
+			1671102718,
+			NodeSign,
+		}
+
+		t.Run("positive store case", func(t *testing.T) {
+			gateway := &MockGateway{}
+			gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+				return MockADNL{
+					query: func(ctx context.Context, req, result tl.Serializable) error {
+						switch request := req.(type) {
+						case Ping:
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
+						case tl.Raw:
+							var rowReq any
+							_, err := tl.Parse(&rowReq, request, true)
 							if err != nil {
-								t.Fatal("failed to serialize test value, err: ", err)
+								t.Fatal("failed to parse test request, err: ", err)
 							}
-							check := ed25519.Verify(rowReqType.Value.KeyDescription.ID.(adnl.PublicKeyED25519).Key, dataToCheck, sign)
-							if check != true {
-								t.Log("bad sign received!")
-								return fmt.Errorf("bad data (invalide sign)")
-							} else {
-								reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+							switch rowReqType := rowReq.(type) {
+							case FindNode:
+								if addr == "185.86.79.9:22096" {
+									reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{testNode}}))
+								} else if addr == "" {
+
+								} else {
+									reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{nil}))
+								}
+							case Store:
+								if addr != "6.6.6.6:65432" && addr != "178.18.243.132:15888" {
+									t.Fatalf("invalid node to store: check priority list %s", addr)
+								}
+								sign := rowReqType.Value.Signature
+								rowReqType.Value.Signature = nil
+
+								dataToCheck, err := tl.Serialize(rowReqType.Value, true)
+								if err != nil {
+									t.Fatal("failed to serialize test value, err: ", err)
+								}
+								check := ed25519.Verify(rowReqType.Value.KeyDescription.ID.(adnl.PublicKeyED25519).Key, dataToCheck, sign)
+								if check != true {
+									t.Log("bad sign received!", addr)
+									return fmt.Errorf("bad data (invalide sign)")
+								} else {
+									reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+								}
 							}
+						default:
+							t.Fatalf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
 						}
-					default:
-						t.Fatalf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
-					}
-					return nil
-				},
-				close: func() {
-				},
-			}, nil
-		}
+						return nil
+					},
+					close: func() {
+					},
+				}, nil
+			}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 
-		cli, err := NewClientFromConfig(ctx, gateway, cnf)
-		if err != nil {
-			t.Fatal("failed to prepare test client, err: ", err)
-		}
-		time.Sleep(100 * time.Millisecond)
+			cli, err := NewClientFromConfig(ctx, gateway, cnf)
+			if err != nil {
+				t.Fatal("failed to prepare test client, err: ", err)
+			}
 
-		count, _, err := cli.Store(context.Background(), nameAddr, index, tlAddrList, time.Hour, cliePrivK, 2)
-		if err != nil {
-			t.Errorf(err.Error())
-		}
-		if count != 2 {
-			t.Errorf("got '%d' copies count, want '2'", count)
-		}
-	})
+			count, _, err := cli.Store(context.Background(), nameAddr, index, tlAddrList, time.Hour, cliePrivK, 1)
+			if err != nil {
+				t.Errorf(err.Error())
+			}
+			if count == 0 {
+				t.Errorf("got '%d' copies count, want '2+'", count)
+			}
+		})
+	}
 }

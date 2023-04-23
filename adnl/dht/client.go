@@ -8,20 +8,21 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/adnl/address"
-	"github.com/xssnick/tonutils-go/adnl/overlay"
-	"github.com/xssnick/tonutils-go/liteclient"
-	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
-const queryTimeout = 3000 * time.Millisecond
+const queryTimeout = 5000 * time.Millisecond
 
 type ADNL interface {
 	Query(ctx context.Context, req, result tl.Serializable) error
@@ -327,7 +328,7 @@ func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl t
 	return c.Store(ctx, []byte("address"), 0, data, ttl, ownerKey, copies)
 }
 
-func (c *Client) Store(ctx context.Context, name []byte, index int32, value []byte, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (copiesMade int, idKey []byte, err error) {
+func (c *Client) Store(ctx context.Context, name []byte, index int32, value []byte, ttl time.Duration, ownerKey ed25519.PrivateKey, atLeastCopies int) (copiesMade int, idKey []byte, err error) {
 	id := adnl.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
 	idKey, err = adnl.ToKeyID(id)
 	if err != nil {
@@ -362,75 +363,101 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 		return 0, nil, err
 	}
 
+	var checkedMx sync.RWMutex
 	checked := map[string]bool{}
 
 	plist := c.buildPriorityList(kid)
 
-	copiesLeft := copies
-	for copiesLeft > 0 {
-		node, _ := plist.getNode()
-		if node == nil {
-			break
-		}
-
-		strId := hex.EncodeToString(node.id)
-
-		if !checked[strId] {
-			nodes, err := node.findNodes(ctx, kid, _K)
-			if err != nil {
-				continue
-			}
-
-			hasBetter := false
-			currentPriority := leadingZeroBits(xor(kid, node.id))
-			for _, n := range nodes {
-				nid, err := adnl.ToKeyID(n.ID)
-				if err != nil {
-					continue
+	var wg sync.WaitGroup
+	wg.Add(atLeastCopies + 1)
+	copiesLeft := int64(atLeastCopies)
+	storeCtx, cancelStoreCtx := context.WithCancel(ctx)
+	for i := 0; i < atLeastCopies+1; i++ {
+		go func() {
+			defer wg.Done()
+			for atomic.LoadInt64(&copiesLeft) > 0 {
+				node, _ := plist.getNode()
+				if node == nil {
+					break
 				}
 
-				if checked[hex.EncodeToString(nid)] {
-					continue
-				}
+				strId := hex.EncodeToString(node.id)
+				checkedMx.RLock()
+				isChecked := checked[strId]
+				checkedMx.RUnlock()
 
-				priority := leadingZeroBits(xor(kid, nid))
-				if priority > currentPriority {
-					addCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-					dNode, err := c.addNode(addCtx, n)
-					cancel()
+				if !isChecked {
+					nodes, err := node.findNodes(storeCtx, kid, _K)
 					if err != nil {
 						continue
 					}
 
-					if plist.addNode(dNode) {
-						hasBetter = true
+					hasBetter := false
+					currentPriority := leadingZeroBits(xor(kid, node.id))
+					for _, n := range nodes {
+						var nid []byte
+						nid, err = adnl.ToKeyID(n.ID)
+						if err != nil {
+							continue
+						}
+
+						checkedMx.RLock()
+						isNChecked := checked[hex.EncodeToString(nid)]
+						checkedMx.RUnlock()
+
+						if isNChecked {
+							continue
+						}
+
+						priority := leadingZeroBits(xor(kid, nid))
+						if priority > currentPriority {
+							addCtx, cancel := context.WithTimeout(storeCtx, queryTimeout)
+							dNode, err := c.addNode(addCtx, n)
+							cancel()
+							if err != nil {
+								continue
+							}
+
+							if plist.addNode(dNode) {
+								hasBetter = true
+							}
+						}
+					}
+
+					if hasBetter {
+						// push back as checked, to be able to use later for other copy
+						checkedMx.Lock()
+						if !checked[strId] {
+							checked[strId] = true
+							plist.markUsed(node, false)
+						}
+						checkedMx.Unlock()
+						continue
 					}
 				}
+
+				storeCallCtx, cancel := context.WithTimeout(storeCtx, queryTimeout)
+				err := node.storeValue(storeCallCtx, kid, &val)
+				cancel()
+				if err != nil {
+					continue
+				}
+
+				if atomic.AddInt64(&copiesLeft, -1) == 0 {
+					cancelStoreCtx()
+					break
+				}
 			}
-
-			if hasBetter {
-				// push back as checked, to be able to use later for other copy
-				checked[strId] = true
-				plist.markUsed(node, false)
-				continue
-			}
-		}
-
-		storeCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-		err = node.storeValue(storeCtx, kid, &val)
-		cancel()
-		if err != nil {
-			continue
-		}
-
-		copiesLeft--
+		}()
 	}
+	wg.Wait()
+	cancelStoreCtx()
 
-	if copiesLeft == copies {
+	if copiesLeft == int64(atLeastCopies) {
 		return 0, nil, fmt.Errorf("failed to store value: zero copies made")
 	}
 
-	return copies - copiesLeft, idKey, nil
+	return atLeastCopies - int(copiesLeft), idKey, nil
 }
 
 func signTL(obj tl.Serializable, key ed25519.PrivateKey) ([]byte, error) {
@@ -580,8 +607,8 @@ func (c *Client) nodesPinger() {
 		c.mx.RUnlock()
 
 		var wg sync.WaitGroup
-		wg.Add(4)
-		for i := 0; i < 4; i++ {
+		wg.Add(8)
+		for i := 0; i < 8; i++ {
 			go func() {
 				defer wg.Done()
 				for {
@@ -596,7 +623,7 @@ func (c *Client) nodesPinger() {
 						}
 					}
 
-					ctx, cancel := context.WithTimeout(c.globalCtx, queryTimeout+500*time.Millisecond)
+					ctx, cancel := context.WithTimeout(c.globalCtx, queryTimeout)
 					_ = node.checkPing(ctx) // we don't need the result, it will report new state to callback
 					cancel()
 				}
@@ -613,7 +640,7 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	c.mx.RLock()
 	// add fastest nodes first
 	for _, node := range c.activeNodes {
-		if node.currentState == _StateActive {
+		if node.getState() == _StateActive {
 			plist.addNode(node)
 			added++
 		}
@@ -621,7 +648,7 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	// if we have not enough fast nodes, add slow
 	if added < 15 {
 		for _, node := range c.activeNodes {
-			if node.currentState == _StateThrottle {
+			if node.getState() == _StateThrottle {
 				plist.addNode(node)
 				added++
 			}
@@ -631,7 +658,7 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	// they may be failed due to our connection problems
 	if added < 15 {
 		for _, node := range c.activeNodes {
-			if node.currentState == _StateFail {
+			if node.getState() == _StateFail {
 				plist.addNode(node)
 				added++
 			}

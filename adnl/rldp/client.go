@@ -268,8 +268,8 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			stream.maxSeqno = m.Seqno
 
 			// send confirm for each 10 packets or after 30 ms
-			if stream.lastConfirmAt.Add(30*time.Millisecond).Before(tm) ||
-				stream.receivedNumConfirmed+5 < stream.receivedNum {
+			if stream.lastConfirmAt.Add(10*time.Millisecond).Before(tm) ||
+				stream.receivedNumConfirmed+0 < stream.receivedNum {
 				var confirm tl.Serializable
 				if isV2 {
 					confirm = ConfirmV2{

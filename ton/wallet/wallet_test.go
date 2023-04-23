@@ -260,8 +260,8 @@ func TestWallet_Send(t *testing.T) {
 							PrevTxHash: nil,
 							PrevTxLT:   0,
 							IO: struct {
-								In  *tlb.Message   `tlb:"maybe ^"`
-								Out []*tlb.Message `tlb:"dict 15 -> array ^"`
+								In  *tlb.Message      `tlb:"maybe ^"`
+								Out *tlb.MessagesList `tlb:"maybe ^"`
 							}{
 								In: &tlb.Message{
 									MsgType: tlb.MsgTypeExternalIn,

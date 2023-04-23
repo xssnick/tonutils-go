@@ -227,6 +227,14 @@ func (c *Slice) LoadVarUInt(sz uint) (*big.Int, error) {
 	return value, nil
 }
 
+func (c *Slice) MustLoadVarUInt(sz uint) *big.Int {
+	s, err := c.LoadVarUInt(sz)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 func (c *Slice) MustLoadSlice(sz uint) []byte {
 	s, err := c.LoadSlice(sz)
 	if err != nil {
@@ -237,7 +245,7 @@ func (c *Slice) MustLoadSlice(sz uint) []byte {
 
 func (c *Slice) LoadSlice(sz uint) ([]byte, error) {
 	if c.bitsSz-c.loadedSz < sz {
-		return nil, ErrNotEnoughData
+		return nil, ErrNotEnoughData(int(c.bitsSz-c.loadedSz), int(sz))
 	}
 
 	if sz <= 0 {

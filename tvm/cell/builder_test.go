@@ -337,6 +337,15 @@ func TestBuilder_StoreRef(t *testing.T) {
 	}
 }
 
+func TestBuilder_VarUint(t *testing.T) {
+	for i := uint(3); i <= 18; i++ {
+		c := BeginCell().MustStoreVarUInt(777, i).EndCell()
+		if c.BeginParse().MustLoadVarUInt(i).Uint64() != 777 {
+			t.Fatal("var uint not eq")
+		}
+	}
+}
+
 func TestBuilder_StoreBuilder(t *testing.T) {
 	c := BeginCell().MustStoreSlice(data1024, 1015).MustStoreRef(BeginCell().EndCell())
 	b1bad := BeginCell().MustStoreSlice([]byte{0xAA, 0xBB}, 16).MustStoreRef(BeginCell().EndCell())

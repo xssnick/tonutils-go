@@ -37,26 +37,50 @@ func (b *Builder) MustStoreBigCoins(value *big.Int) *Builder {
 
 func (b *Builder) StoreBigCoins(value *big.Int) error {
 	// varInt 16 https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/block/block-parse.cpp#L319
-	ln := uint((value.BitLen() + 7) >> 3)
-	if ln >= 16 {
+	return b.StoreBigVarUInt(value, 16)
+}
+
+func (b *Builder) StoreVarUInt(val uint64, sz uint) error {
+	return b.StoreBigVarUInt(big.NewInt(0).SetUint64(val), sz)
+}
+
+func (b *Builder) StoreBigVarUInt(val *big.Int, sz uint) error {
+	ln := uint((val.BitLen() + 7) >> 3) // bytes required for value
+	if ln >= sz {
 		return ErrTooBigValue
 	}
 
-	if b.bitsSz+4+(ln*8) >= 1024 {
+	szLen := uint(big.NewInt(int64(sz - 1)).BitLen())
+	if b.bitsSz+szLen+(ln*8) >= 1024 {
 		return ErrNotFit1023
 	}
 
-	err := b.StoreUInt(uint64(ln), 4)
+	err := b.StoreUInt(uint64(ln), szLen)
 	if err != nil {
 		return err
 	}
 
-	err = b.StoreBigUInt(value, ln*8)
+	err = b.StoreBigUInt(val, ln*8)
 	if err != nil {
 		return err
 	}
-
 	return nil
+}
+
+func (b *Builder) MustStoreBigVarUInt(val *big.Int, sz uint) *Builder {
+	err := b.StoreBigVarUInt(val, sz)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (b *Builder) MustStoreVarUInt(val uint64, sz uint) *Builder {
+	err := b.StoreVarUInt(val, sz)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 func (b *Builder) MustStoreUInt(value uint64, sz uint) *Builder {
