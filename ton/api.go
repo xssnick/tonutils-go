@@ -3,7 +3,9 @@ package ton
 import (
 	"context"
 	"fmt"
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
+	"github.com/xssnick/tonutils-go/tlb"
 	"reflect"
 	"sync"
 	"time"
@@ -32,8 +34,24 @@ type LSError struct {
 	Text string `tl:"string"`
 }
 
+type APIClientWaiter interface {
+	GetTime(ctx context.Context) (uint32, error)
+	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
+	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
+	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
+	GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) ([]*BlockIDExt, error)
+	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error)
+	GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
+	GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error)
+	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
+	RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ExecutionResult, error)
+	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
+	GetTransaction(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
+}
+
 type APIClient struct {
 	client LiteClient
+	parent *APIClient
 
 	curMasters     map[uint32]*masterInfo
 	curMastersLock sync.RWMutex
@@ -49,6 +67,13 @@ func NewAPIClient(client LiteClient) *APIClient {
 	return &APIClient{
 		curMasters: map[uint32]*masterInfo{},
 		client:     client,
+	}
+}
+
+func (c *APIClient) WaitForBlock(seqno uint32) APIClientWaiter {
+	return &APIClient{
+		parent: c,
+		client: &waiterClient{original: c.client, seqno: seqno},
 	}
 }
 
@@ -114,5 +139,5 @@ func (e ContractExecError) Is(err error) bool {
 }
 
 func errUnexpectedResponse(resp tl.Serializable) error {
-	return fmt.Errorf("unexpected response received: %s", reflect.TypeOf(resp))
+	return fmt.Errorf("unexpected response received: %v", reflect.TypeOf(resp))
 }

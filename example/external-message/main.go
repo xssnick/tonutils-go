@@ -63,7 +63,7 @@ func main() {
 	}
 
 	// call method to get seqno of contract
-	res, err := api.RunGetMethod(ctx, block, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "get_total")
+	res, err := api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "get_total")
 	if err != nil {
 		log.Fatalln("run get method err:", err.Error())
 		return

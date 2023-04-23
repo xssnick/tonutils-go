@@ -28,7 +28,7 @@ func (s *SpecV4R2) BuildMessage(ctx context.Context, isInitialized bool, block *
 	var seq uint64
 
 	if isInitialized {
-		resp, err := s.wallet.api.RunGetMethod(ctx, block, s.wallet.addr, "seqno")
+		resp, err := s.wallet.api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, s.wallet.addr, "seqno")
 		if err != nil {
 			return nil, fmt.Errorf("get seqno err: %w", err)
 		}
