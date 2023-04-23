@@ -13,6 +13,7 @@ import (
 )
 
 type TonApi interface {
+	WaitForBlock(seqno uint32) ton.APIClientWaiter
 	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
@@ -54,7 +55,7 @@ func (c *Client) GetJettonWallet(ctx context.Context, ownerAddr *address.Address
 }
 
 func (c *Client) GetJettonWalletAtBlock(ctx context.Context, ownerAddr *address.Address, b *ton.BlockIDExt) (*WalletClient, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_wallet_address",
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_wallet_address",
 		cell.BeginCell().MustStoreAddr(ownerAddr).EndCell().BeginParse())
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_wallet_address method: %w", err)
@@ -85,7 +86,7 @@ func (c *Client) GetJettonData(ctx context.Context) (*Data, error) {
 }
 
 func (c *Client) GetJettonDataAtBlock(ctx context.Context, b *ton.BlockIDExt) (*Data, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_jetton_data")
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_jetton_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_jetton_data method: %w", err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"log"
@@ -29,7 +30,7 @@ func main() {
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
 
-	w, err := wallet.FromSeed(api, words, wallet.V3)
+	w, err := wallet.FromSeed(api, words, wallet.V3R2)
 	if err != nil {
 		log.Fatalln("FromSeed err:", err.Error())
 		return
@@ -52,7 +53,7 @@ func main() {
 	if balance.NanoTON().Uint64() >= 3000000 {
 		// create transaction body cell, depends on what contract needs, just random example here
 		body := cell.BeginCell().
-			MustStoreUInt(0x123abc55, 32). // op code
+			MustStoreUInt(0x123abc55, 32).    // op code
 			MustStoreUInt(rand.Uint64(), 64). // query id
 			// payload:
 			MustStoreAddr(address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO")).
@@ -64,7 +65,7 @@ func main() {
 
 		log.Println("sending transaction and waiting for confirmation...")
 
-		err = w.Send(context.Background(), &wallet.Message{
+		tx, err := w.SendWaitTransaction(context.Background(), &wallet.Message{
 			Mode: 1, // pay fees separately (from balance, not from amount)
 			InternalMessage: &tlb.InternalMessage{
 				Bounce:  true, // return amount in case of processing error
@@ -72,12 +73,13 @@ func main() {
 				Amount:  tlb.MustFromTON("0.03"),
 				Body:    body,
 			},
-		}, true)
+		})
 		if err != nil {
 			log.Fatalln("Send err:", err.Error())
 			return
 		}
 
+		log.Println("transaction sent, hash:", base64.StdEncoding.EncodeToString(tx.Hash))
 		return
 	}
 

@@ -21,6 +21,7 @@ const _CategoryADNLSite = 0xad01
 const _CategoryStorageSite = 0x7473
 
 type TonApi interface {
+	WaitForBlock(seqno uint32) ton.APIClientWaiter
 	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 	GetBlockchainConfig(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
@@ -94,7 +95,7 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 		return nil, fmt.Errorf("failed to pack domain name: %w", err)
 	}
 
-	res, err := c.api.RunGetMethod(ctx, b, contractAddr, "dnsresolve", nameCell.EndCell().BeginParse(), 0)
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, contractAddr, "dnsresolve", nameCell.EndCell().BeginParse(), 0)
 	if err != nil {
 		if cErr, ok := err.(ton.ContractExecError); ok && cErr.Code == ton.ErrCodeContractNotInitialized {
 			return nil, ErrNoSuchRecord

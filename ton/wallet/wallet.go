@@ -91,6 +91,7 @@ var (
 )
 
 type TonAPI interface {
+	WaitForBlock(seqno uint32) ton.APIClientWaiter
 	Client() ton.LiteClient
 	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
 	GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
@@ -190,7 +191,7 @@ func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
 }
 
 func (w *Wallet) GetBalance(ctx context.Context, block *ton.BlockIDExt) (tlb.Coins, error) {
-	acc, err := w.api.GetAccount(ctx, block, w.addr)
+	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
 	if err != nil {
 		return tlb.Coins{}, fmt.Errorf("failed to get account state: %w", err)
 	}
@@ -214,7 +215,7 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 		return nil, fmt.Errorf("failed to get block: %w", err)
 	}
 
-	acc, err := w.api.GetAccount(ctx, block, w.addr)
+	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account state: %w", err)
 	}
@@ -269,17 +270,28 @@ func (w *Wallet) SendManyGetInMsgHash(ctx context.Context, messages []*Message, 
 
 // SendManyWaitTxHash always waits for tx block confirmation and returns found tx hash in block.
 func (w *Wallet) SendManyWaitTxHash(ctx context.Context, messages []*Message) ([]byte, error) {
-	txHash, _, err := w.sendMany(ctx, messages, true)
-	return txHash, err
+	tx, _, err := w.sendMany(ctx, messages, true)
+	return tx.Hash, err
 }
 
-func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (txHash []byte, inMsgHash []byte, err error) {
+// SendManyWaitTransaction always waits for tx block confirmation and returns found tx.
+func (w *Wallet) SendManyWaitTransaction(ctx context.Context, messages []*Message) (*tlb.Transaction, error) {
+	tx, _, err := w.sendMany(ctx, messages, true)
+	return tx, err
+}
+
+// SendWaitTransaction always waits for tx block confirmation and returns found tx.
+func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tlb.Transaction, error) {
+	return w.SendManyWaitTransaction(ctx, []*Message{message})
+}
+
+func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (tx *tlb.Transaction, inMsgHash []byte, err error) {
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get block: %w", err)
 	}
 
-	acc, err := w.api.GetAccount(ctx, block, w.addr)
+	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get account state: %w", err)
 	}
@@ -295,16 +307,16 @@ func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirma
 	}
 
 	if len(waitConfirmation) > 0 && waitConfirmation[0] {
-		txHash, err = w.waitConfirmation(ctx, block, acc, ext)
+		tx, err = w.waitConfirmation(ctx, block, acc, ext)
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 
-	return txHash, inMsgHash, nil
+	return tx, inMsgHash, nil
 }
 
-func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) ([]byte, error) {
+func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) (*tlb.Transaction, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -321,7 +333,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 			continue
 		}
 
-		accNew, err := w.api.GetAccount(ctx, blockNew, w.addr)
+		accNew, err := w.api.WaitForBlock(blockNew.SeqNo).GetAccount(ctx, blockNew, w.addr)
 		if err != nil {
 			continue
 		}
@@ -379,7 +391,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 						continue
 					}
 
-					return transaction.Hash, nil
+					return transaction, nil
 				}
 			}
 
@@ -478,7 +490,7 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte,
 		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
 	}
 
-	acc, err := w.api.GetAccount(ctx, block, w.addr)
+	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get account: %w", err)
 	}

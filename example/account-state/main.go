@@ -35,7 +35,9 @@ func main() {
 
 	addr := address.MustParseAddr("EQCVRJ-RqeZWcDqgTzzcxUIrChFYs0SyKGUvye9kGOuEWndQ")
 
-	res, err := api.GetAccount(ctx, b, addr)
+	// we use WaitForBlock to make sure block is ready,
+	// it is optional but escapes us from liteserver block not ready errors
+	res, err := api.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
 	if err != nil {
 		log.Fatalln("get account err:", err.Error())
 		return

@@ -28,6 +28,16 @@ type MockAPI struct {
 	extMsgSent *tlb.ExternalMessage
 }
 
+func (m MockAPI) WaitForBlock(seqno uint32) ton.APIClientWaiter {
+	return &WaiterMock{
+		MGetMasterchainInfo:  m.getBlockInfo,
+		MGetAccount:          m.getAccount,
+		MSendExternalMessage: m.sendExternalMessage,
+		MRunGetMethod:        m.runGetMethod,
+		MListTransactions:    m.listTransactions,
+	}
+}
+
 func (m MockAPI) Client() ton.LiteClient {
 	//TODO implement me
 	panic("implement me")
@@ -434,4 +444,67 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 	if !ed25519.Verify(w.key.Public().(ed25519.PublicKey), payload.EndCell().Hash(), sign) {
 		t.Fatal("sign incorrect")
 	}
+}
+
+type WaiterMock struct {
+	MGetTime                func(ctx context.Context) (uint32, error)
+	MLookupBlock            func(ctx context.Context, workchain int32, shard int64, seqno uint32) (*ton.BlockIDExt, error)
+	MGetBlockData           func(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error)
+	MGetBlockTransactionsV2 func(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error)
+	MGetBlockShardsInfo     func(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error)
+	MGetBlockchainConfig    func(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
+	MGetMasterchainInfo     func(ctx context.Context) (*ton.BlockIDExt, error)
+	MGetAccount             func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
+	MSendExternalMessage    func(ctx context.Context, msg *tlb.ExternalMessage) error
+	MRunGetMethod           func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	MListTransactions       func(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
+	MGetTransaction         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
+}
+
+func (w WaiterMock) GetTime(ctx context.Context) (uint32, error) {
+	return w.MGetTime(ctx)
+}
+
+func (w WaiterMock) LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*ton.BlockIDExt, error) {
+	return w.MLookupBlock(ctx, workchain, shard, seqno)
+}
+
+func (w WaiterMock) GetBlockData(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error) {
+	return w.MGetBlockData(ctx, block)
+}
+
+func (w WaiterMock) GetBlockTransactionsV2(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error) {
+	return w.MGetBlockTransactionsV2(ctx, block, count, after...)
+}
+
+func (w WaiterMock) GetBlockShardsInfo(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error) {
+	return w.MGetBlockShardsInfo(ctx, master)
+}
+
+func (w WaiterMock) GetBlockchainConfig(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error) {
+	return w.MGetBlockchainConfig(ctx, block, onlyParams...)
+}
+
+func (w WaiterMock) GetMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error) {
+	return w.MGetMasterchainInfo(ctx)
+}
+
+func (w WaiterMock) GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error) {
+	return w.MGetAccount(ctx, block, addr)
+}
+
+func (w WaiterMock) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error {
+	return w.MSendExternalMessage(ctx, msg)
+}
+
+func (w WaiterMock) RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
+	return w.MRunGetMethod(ctx, blockInfo, addr, method, params...)
+}
+
+func (w WaiterMock) ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
+	return w.MListTransactions(ctx, addr, num, lt, txHash)
+}
+
+func (w WaiterMock) GetTransaction(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error) {
+	return w.MGetTransaction(ctx, block, addr, lt)
 }

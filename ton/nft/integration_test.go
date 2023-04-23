@@ -40,6 +40,8 @@ func Test_NftMintTransfer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
+	ctx = api.Client().StickyContext(ctx)
+
 	w, err := wallet.FromSeed(api, seed, wallet.HighloadV2R2)
 	if err != nil {
 		t.Fatal("FromSeed err:", err.Error())
@@ -63,12 +65,12 @@ func Test_NftMintTransfer(t *testing.T) {
 
 	collectionAddr := address.MustParseAddr("EQBTObWUuWTb5ECnLI4x6a3szzstmMDOcc5Kdo-CpbUY9Y5K") // address = deployCollection(w) w.seed = (fiction ... rather)
 	collection := NewCollectionClient(api, collectionAddr)
-	collectionData, err := collection.GetCollectionData(context.Background())
+	collectionData, err := collection.GetCollectionData(ctx)
 	if err != nil {
 		panic(err)
 	}
 
-	nftAddr, err := collection.GetNFTAddressByIndex(context.Background(), collectionData.NextItemIndex)
+	nftAddr, err := collection.GetNFTAddressByIndex(ctx, collectionData.NextItemIndex)
 	if err != nil {
 		t.Fatal("GetNFTAddressByIndex err:", err.Error())
 	}
@@ -84,7 +86,7 @@ func Test_NftMintTransfer(t *testing.T) {
 	fmt.Println("Minting NFT...")
 	mint := wallet.SimpleMessage(collectionAddr, tlb.MustFromTON("0.025"), mintData)
 
-	err = w.Send(context.Background(), mint, true)
+	err = w.Send(ctx, mint, true)
 	if err != nil {
 		t.Fatal("Send err:", err.Error())
 	}
@@ -106,12 +108,12 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("Send err:", err.Error())
 	}
 
-	newData, err := nft.GetNFTData(context.Background())
+	newData, err := nft.GetNFTData(ctx)
 	if err != nil {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
 
-	fullContent, err := collection.GetNFTContent(context.Background(), collectionData.NextItemIndex, newData.Content)
+	fullContent, err := collection.GetNFTContent(ctx, collectionData.NextItemIndex, newData.Content)
 	if err != nil {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
@@ -120,7 +122,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("full content incorrect", fullContent.(*ContentOffchain).URI)
 	}
 
-	roy, err := collection.RoyaltyParams(context.Background())
+	roy, err := collection.RoyaltyParams(ctx)
 	if err != nil {
 		t.Fatal("RoyaltyParams err:", err.Error())
 	}

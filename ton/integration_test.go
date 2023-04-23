@@ -83,13 +83,13 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 		return
 	}
 
-	_, err = api.GetBlockData(ctx, b)
+	_, err = api.WaitForBlock(b.SeqNo).GetBlockData(ctx, b)
 	if err != nil {
 		t.Fatal("Get master block data err:", err.Error())
 		return
 	}
 
-	shards, err := api.GetBlockShardsInfo(ctx, b)
+	shards, err := api.WaitForBlock(b.SeqNo).GetBlockShardsInfo(ctx, b)
 	if err != nil {
 		log.Fatalln("get shards err:", err.Error())
 		return
@@ -124,7 +124,7 @@ func Test_RunMethod(t *testing.T) {
 	c1 := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
 	c2 := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 
-	res, err := api.RunGetMethod(ctx, b, testContractAddr, "clltst2", c1, c2)
+	res, err := api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, testContractAddr, "clltst2", c1, c2)
 	if err != nil {
 		t.Fatal("run get method err:", err.Error())
 		return
@@ -153,7 +153,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 		return
 	}
 
-	res, err := apiTestNet.RunGetMethod(ctx, b, testContractAddrTestNet, "get_total")
+	res, err := apiTestNet.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, testContractAddrTestNet, "get_total")
 	if err != nil {
 		t.Fatal("run get method err:", err.Error())
 		return
@@ -194,7 +194,7 @@ func Test_Account(t *testing.T) {
 	}
 
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
-	res, err := api.GetAccount(ctx, b, addr)
+	res, err := api.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
 	if err != nil {
 		t.Fatal("get account err:", err.Error())
 		return
@@ -258,7 +258,7 @@ func Test_AccountHasMethod(t *testing.T) {
 	}
 
 	addr := address.MustParseAddr("EQCW0cn9TQuZ3tW_Tche1HIGGa7apwFsi7v3YtmYC6FoIzLr")
-	res, err := api.GetAccount(ctx, b, addr)
+	res, err := api.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
 	if err != nil {
 		t.Fatal("get account err:", err.Error())
 		return
@@ -292,7 +292,7 @@ func Test_BlockScan(t *testing.T) {
 			return
 		}
 
-		shards, err = api.GetBlockShardsInfo(ctx, master)
+		shards, err = api.WaitForBlock(master.SeqNo).GetBlockShardsInfo(ctx, master)
 		if err != nil {
 			log.Fatalln("get shards err:", err.Error())
 			return
@@ -356,7 +356,7 @@ func Test_BlockScan(t *testing.T) {
 			for {
 				time.Sleep(3 * time.Second)
 
-				shards[i], err = api.LookupBlock(ctx, shard.Workchain, shard.Shard, uint32(shard.SeqNo+1))
+				shards[i], err = api.LookupBlock(ctx, shard.Workchain, shard.Shard, shard.SeqNo+1)
 				if err != nil {
 					if err == ErrBlockNotFound {
 						log.Printf("block %d of shard %d is not exists yet, waiting a bit longer...", shard.SeqNo+1, shard.Shard)
@@ -416,7 +416,7 @@ func Test_GetConfigParamsAll(t *testing.T) {
 		return
 	}
 
-	conf, err := api.GetBlockchainConfig(ctx, b)
+	conf, err := api.WaitForBlock(b.SeqNo).GetBlockchainConfig(ctx, b)
 	if err != nil {
 		t.Fatal("get block err:", err.Error())
 		return
@@ -440,7 +440,7 @@ func Test_GetConfigParams8(t *testing.T) {
 		return
 	}
 
-	conf, err := api.GetBlockchainConfig(ctx, b, 8)
+	conf, err := api.WaitForBlock(b.SeqNo).GetBlockchainConfig(ctx, b, 8)
 	if err != nil {
 		t.Fatal("get block err:", err.Error())
 		return
