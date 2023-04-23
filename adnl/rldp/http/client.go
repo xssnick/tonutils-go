@@ -49,6 +49,9 @@ type ADNL interface {
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
+	SetQueryHandler(handler func(msg *adnl.MessageQuery) error)
+	GetQueryHandler() func(msg *adnl.MessageQuery) error
+	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
 	Close()
 }
 
@@ -56,7 +59,10 @@ var Connector = func(ctx context.Context, addr string, peerKey ed25519.PublicKey
 	return adnl.Connect(ctx, addr, peerKey, ourKey)
 }
 
-var newRLDP = func(a ADNL) RLDP {
+var newRLDP = func(a ADNL, v2 bool) RLDP {
+	if v2 {
+		return rldp.NewClientV2(a)
+	}
 	return rldp.NewClient(a)
 }
 
@@ -102,7 +108,35 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 		return nil, fmt.Errorf("failed to init adnl for rldp connection %s, err: %w", addr, err)
 	}
 
-	r := newRLDP(a)
+	rCap := GetCapabilities{
+		Capabilities: CapabilityRLDP2,
+	}
+
+	var caps Capabilities
+	err = a.Query(ctx, rCap, &caps)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query http caps: %w", err)
+	}
+
+	previousHandler := a.GetQueryHandler()
+	a.SetQueryHandler(func(query *adnl.MessageQuery) error {
+		switch query.Data.(type) {
+		case GetCapabilities:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := a.Answer(ctx, query.ID, &Capabilities{Value: CapabilityRLDP2})
+			cancel()
+			if err != nil {
+				return fmt.Errorf("failed to send capabilities answer: %w", err)
+			}
+			return nil
+		}
+		if previousHandler != nil {
+			return previousHandler(query)
+		}
+		return fmt.Errorf("unexpected query type %s", reflect.TypeOf(query.Data))
+	})
+
+	r := newRLDP(a, caps.Value&CapabilityRLDP2 != 0)
 	r.SetOnQuery(t.getRLDPQueryHandler(r))
 	r.SetOnDisconnect(t.removeRLDP(r, id))
 
@@ -161,7 +195,6 @@ func (t *Transport) getRLDPQueryHandler(r RLDP) func(transferId []byte, query *r
 				t.mx.Unlock()
 				_ = stream.Data.Close()
 			}
-
 			return nil
 		}
 		return fmt.Errorf("unexpected query type %s", reflect.TypeOf(query.Data))
