@@ -7,6 +7,8 @@ func init() {
 	tl.Register(Response{}, "http.response http_version:string status_code:int reason:string headers:(vector http.header) no_payload:Bool = http.Response")
 	tl.Register(GetNextPayloadPart{}, "http.getNextPayloadPart id:int256 seqno:int max_chunk_size:int = http.PayloadPart")
 	tl.Register(PayloadPart{}, "http.payloadPart data:bytes trailer:(vector http.header) last:Bool = http.PayloadPart")
+	tl.Register(GetCapabilities{}, "http.proxy.getCapabilities capabilities:long = http.proxy.Capabilities")
+	tl.Register(Capabilities{}, "http.proxy.capabilities capabilities:long = http.proxy.Capabilities")
 }
 
 type Request struct {
@@ -41,3 +43,13 @@ type Header struct {
 	Name  string `tl:"string"`
 	Value string `tl:"string"`
 }
+
+type GetCapabilities struct {
+	Capabilities int64 `tl:"long"`
+}
+
+type Capabilities struct {
+	Value int64 `tl:"long"`
+}
+
+const CapabilityRLDP2 int64 = 1
