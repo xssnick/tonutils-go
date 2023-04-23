@@ -114,8 +114,9 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 		if err != nil {
 			return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
 		}
-		tx.Hash = txCell.Hash()
 
+		tx.Hash = txCell.Hash()
+		tx.Cell = txCell
 		return &tx, nil
 	case LSError:
 		if t.Code == 0 {

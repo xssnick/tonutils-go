@@ -168,8 +168,6 @@ func (s *Stack) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
-	ch := slice.MustToCell()
-
 	typ, err := slice.LoadUInt(8)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load stack value type, err: %w", err)
@@ -296,10 +294,6 @@ func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
 		}
 
 		var tuple []any
-
-		if ln == 9 {
-			println(ch.Dump())
-		}
 
 		last2index := int(ln) - 2
 		if last2index < 0 {

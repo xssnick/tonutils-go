@@ -36,7 +36,7 @@ type manualStore interface {
 // Example:
 // _ Magic `tlb:"#deadbeef"
 // _ Magic `tlb:"$1101"
-func LoadFromCell(v any, loader *cell.Slice) error {
+func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("v should be a pointer and not nil")
@@ -205,7 +205,7 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 
 			x, err := loader.LoadSlice(uint(num))
 			if err != nil {
-				return fmt.Errorf("failed to load uint %d, err: %w", num, err)
+				return fmt.Errorf("failed to load bits %d for field %s, err: %w", num, structField.Name, err)
 			}
 
 			setVal(reflect.ValueOf(x))
@@ -240,6 +240,11 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 				continue
 			}
 		} else if parseType == reflect.TypeOf(Magic{}) {
+			if len(skipMagic) > 0 && skipMagic[0] {
+				// it can be skipped if parsed before in parent type, to determine child type
+				continue
+			}
+
 			var sz, base int
 			if strings.HasPrefix(settings[0], "#") {
 				base = 16
@@ -318,6 +323,22 @@ func LoadFromCell(v any, loader *cell.Slice) error {
 			}
 			setVal(reflect.ValueOf(dict))
 			continue
+		} else if settings[0] == "var" {
+			if settings[1] == "uint" {
+				sz, err := strconv.Atoi(settings[2])
+				if err != nil {
+					panic(err.Error())
+				}
+
+				res, err := loader.LoadVarUInt(uint(sz))
+				if err != nil {
+					return fmt.Errorf("failed to load var uint: %w", err)
+				}
+				setVal(reflect.ValueOf(res))
+				continue
+			} else {
+				panic("var of type " + settings[1] + " is not supported")
+			}
 		}
 
 		panic(fmt.Sprintf("cannot deserialize field '%s' as tag '%s'", structField.Name, tag))
@@ -515,9 +536,24 @@ func ToCell(v any) (*cell.Cell, error) {
 				return nil, fmt.Errorf("failed to store dict for %s, err: %w", structField.Name, err)
 			}
 			continue
+		} else if settings[0] == "var" {
+			if settings[1] == "uint" {
+				sz, err := strconv.Atoi(settings[2])
+				if err != nil {
+					panic(err.Error())
+				}
+
+				err = builder.StoreBigVarUInt(fieldVal.Interface().(*big.Int), uint(sz))
+				if err != nil {
+					return nil, fmt.Errorf("failed to store var uint: %w", err)
+				}
+				continue
+			} else {
+				panic("var of type " + settings[1] + " is not supported")
+			}
 		}
 
-		panic(fmt.Sprintf("cannot serialize field '%s' as tag '%s', use manual serialization", structField.Name, tag))
+		panic(fmt.Sprintf("cannot serialize field '%s' as tag '%s' of struct '%s', use manual serialization", structField.Name, tag, rv.Type().String()))
 	}
 
 	return builder.EndCell(), nil

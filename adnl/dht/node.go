@@ -5,14 +5,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/adnl/overlay"
-	"github.com/xssnick/tonutils-go/tl"
 	"math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 const (
@@ -68,11 +69,6 @@ func (n *dhtNode) changeState(state int) {
 	n.mx.Lock()
 	defer n.mx.Unlock()
 
-	if n.currentState == state {
-		return
-	}
-	n.currentState = state
-
 	if state == _StateFail {
 		// in case of fail - close connection
 		if n.adnl != nil {
@@ -81,7 +77,18 @@ func (n *dhtNode) changeState(state int) {
 		}
 	}
 
+	if n.currentState == state {
+		return
+	}
+	n.currentState = state
+
 	n.onStateChange(n, state)
+}
+
+func (n *dhtNode) getState() int {
+	n.mx.Lock()
+	defer n.mx.Unlock()
+	return n.currentState
 }
 
 func (n *dhtNode) prepare() (ADNL, error) {
@@ -219,10 +226,12 @@ func checkValue(id []byte, value *Value) error {
 			return fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(value.KeyDescription.ID).String())
 		}
 
+		// we need it to safely check data without touching original fields
+		valueCopy := *value
+		valueCopy.Signature = nil
+
 		signature := value.Signature
-		value.Signature = nil
-		dataToCheck, err := tl.Serialize(value, true)
-		value.Signature = signature
+		dataToCheck, err := tl.Serialize(valueCopy, true)
 		if err != nil {
 			return fmt.Errorf("failed to serialize value: %w", err)
 		}
@@ -232,9 +241,8 @@ func checkValue(id []byte, value *Value) error {
 
 		// check key signature
 		signature = value.KeyDescription.Signature
-		value.KeyDescription.Signature = nil
-		dataToCheck, err = tl.Serialize(value.KeyDescription, true)
-		value.KeyDescription.Signature = signature
+		valueCopy.KeyDescription.Signature = nil
+		dataToCheck, err = tl.Serialize(valueCopy.KeyDescription, true)
 		if err != nil {
 			return fmt.Errorf("failed to serialize key description: %w", err)
 		}
@@ -285,7 +293,7 @@ func (n *dhtNode) checkPing(ctx context.Context) error {
 func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 	a, err := n.prepare()
 	if err != nil {
-		return fmt.Errorf("failed to query dht node: %w", err)
+		return fmt.Errorf("failed to prepare dht node: %w", err)
 	}
 
 	t := time.Now()
@@ -298,7 +306,7 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 	atomic.StoreInt64(&n.ping, int64(ping))
 
 	switch {
-	case ping > queryTimeout/2:
+	case ping > queryTimeout/3:
 		n.changeState(_StateThrottle)
 	default:
 		n.changeState(_StateActive)
@@ -308,6 +316,9 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 }
 
 func (n *dhtNode) weight(id []byte) int {
+	n.mx.Lock()
+	defer n.mx.Unlock()
+
 	w := leadingZeroBits(xor(id, n.id))
 	if n.currentState == _StateFail {
 		w -= 3 // less priority for failed

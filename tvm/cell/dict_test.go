@@ -64,13 +64,13 @@ func TestLoadCell_LoadDict(t *testing.T) {
 }
 
 func TestDictionary_ToCell(t *testing.T) {
-	d := NewDict(32)
+	d := NewDict(47)
 
 	for u := 0; u < 150; u++ {
 		for x, i := range []uint64{2, 3, 1, 88, 1273, 2211} {
 			val := BeginCell().MustStoreUInt(16+uint64(x), 32).EndCell()
 
-			key := BeginCell().MustStoreUInt(i+uint64(u*10000), 32).EndCell()
+			key := BeginCell().MustStoreUInt(i+uint64(u*10000), 47).EndCell()
 			err := d.Set(key, val)
 			if err != nil {
 				t.Fatal("set err:", err)
@@ -85,7 +85,7 @@ func TestDictionary_ToCell(t *testing.T) {
 		return
 	}
 
-	d2, err := c.BeginParse().ToDict(32)
+	d2, err := c.BeginParse().ToDict(47)
 	if err != nil {
 		t.Fatal("load err:", err)
 		return

@@ -53,6 +53,7 @@ type testTLB struct {
 	Part              testInner  `tlb:"."`
 	InsideMaybeEither *testInner `tlb:"maybe either ^ ."`
 	Bits              []byte     `tlb:"bits 20"`
+	Var               *big.Int   `tlb:"var uint 3"`
 	EndCell           *cell.Cell `tlb:"."`
 }
 
@@ -80,7 +81,9 @@ func TestLoadFromCell(t *testing.T) {
 
 	a := cell.BeginCell().MustStoreUInt(0xFFAA, 16).
 		MustStoreUInt(0xFFBF, 16).MustStoreBoolBit(true).MustStoreUInt(0xFFBFFFAA, 32).MustStoreRef(ref.EndCell()).MustStoreMaybeRef(nil).
-		MustStoreBuilder(ref).MustStoreMaybeRef(ref.EndCell()).MustStoreBoolBit(false).MustStoreSlice([]byte{0xFF, 0xFF, 0xAA}, 20).MustStoreUInt(1, 1).EndCell()
+		MustStoreBuilder(ref).MustStoreMaybeRef(ref.EndCell()).MustStoreBoolBit(false).
+		MustStoreSlice([]byte{0xFF, 0xFF, 0xAA}, 20).MustStoreVarUInt(999, 3).
+		MustStoreUInt(1, 1).EndCell()
 
 	x := testTLB{}
 
@@ -136,6 +139,10 @@ func TestLoadFromCell(t *testing.T) {
 
 		if !bytes.Equal(x.Part.Dict.Get(dKey).Hash(), dVal.Hash()) {
 			t.Fatal("dict val not eq")
+		}
+
+		if x.Var.Uint64() != 999 {
+			t.Fatal("var not eq")
 		}
 
 		if x.EndCell.BitsSize() != 1 {

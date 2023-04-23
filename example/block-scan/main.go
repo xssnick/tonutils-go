@@ -3,12 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
+	"log"
 )
 
 // func to get storage map key
@@ -99,7 +98,7 @@ func main() {
 				log.Fatalln("get not seen shards err:", err.Error())
 				return
 			}
-			shardLastSeqno[getShardID(shard)] = uint32(shard.SeqNo)
+			shardLastSeqno[getShardID(shard)] = shard.SeqNo
 			newShards = append(newShards, notSeen...)
 		}
 

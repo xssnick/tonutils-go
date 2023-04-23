@@ -14,6 +14,193 @@ type TransactionID struct {
 	AccountID []byte
 }
 
+type AccStatusChangeType string
+
+const (
+	AccStatusChangeUnchanged AccStatusChangeType = "UNCHANGED"
+	AccStatusChangeFrozen    AccStatusChangeType = "FROZEN"
+	AccStatusChangeDeleted   AccStatusChangeType = "DELETED"
+)
+
+type AccStatusChange struct {
+	Type AccStatusChangeType
+}
+
+type StoragePhase struct {
+	StorageFeesCollected Coins           `tlb:"."`
+	StorageFeesDue       *Coins          `tlb:"maybe ."`
+	StatusChange         AccStatusChange `tlb:"."`
+}
+
+type CreditPhase struct {
+	DueFeesCollected *Coins             `tlb:"maybe ."`
+	Credit           CurrencyCollection `tlb:"."`
+}
+
+type ComputeSkipReasonType string
+
+const (
+	ComputeSkipReasonNoState   ComputeSkipReasonType = "NO_STATE"
+	ComputeSkipReasonBadState  ComputeSkipReasonType = "BAD_STATE"
+	ComputeSkipReasonNoGas     ComputeSkipReasonType = "NO_GAS"
+	ComputeSkipReasonSuspended ComputeSkipReasonType = "SUSPENDED"
+)
+
+type ComputeSkipReason struct {
+	Type ComputeSkipReasonType
+}
+
+type ComputePhaseSkipped struct {
+	_      Magic             `tlb:"$0"`
+	Reason ComputeSkipReason `tlb:"."`
+}
+
+type ComputePhaseVM struct {
+	_                Magic `tlb:"$1"`
+	Success          bool  `tlb:"bool"`
+	MsgStateUsed     bool  `tlb:"bool"`
+	AccountActivated bool  `tlb:"bool"`
+	GasFees          Coins `tlb:"."`
+	Details          struct {
+		GasUsed          *big.Int `tlb:"var uint 7"`
+		GasLimit         *big.Int `tlb:"var uint 7"`
+		GasCredit        *big.Int `tlb:"maybe var uint 3"`
+		Mode             int8     `tlb:"## 8"`
+		ExitCode         int32    `tlb:"## 32"`
+		ExitArg          *int32   `tlb:"maybe ## 32"`
+		VMSteps          uint32   `tlb:"## 32"`
+		VMInitStateHash  []byte   `tlb:"bits 256"`
+		VMFinalStateHash []byte   `tlb:"bits 256"`
+	} `tlb:"^"`
+}
+
+type ComputePhase struct {
+	Phase any `tlb:"."`
+}
+
+type BouncePhase struct {
+	Phase any `tlb:"."`
+}
+
+type BouncePhaseNegFunds struct {
+	_ Magic `tlb:"$00"`
+}
+
+type BouncePhaseNoFunds struct {
+	_          Magic            `tlb:"$01"`
+	MsgSize    StorageUsedShort `tlb:"."`
+	ReqFwdFees Coins            `tlb:"."`
+}
+
+type BouncePhaseOk struct {
+	_       Magic            `tlb:"$1"`
+	MsgSize StorageUsedShort `tlb:"."`
+	MsgFees Coins            `tlb:"."`
+	FwdFees Coins            `tlb:"."`
+}
+
+type StorageUsedShort struct {
+	Cells *big.Int `tlb:"var uint 7"`
+	Bits  *big.Int `tlb:"var uint 7"`
+}
+
+type ActionPhase struct {
+	Success         bool             `tlb:"bool"`
+	Valid           bool             `tlb:"bool"`
+	NoFunds         bool             `tlb:"bool"`
+	StatusChange    AccStatusChange  `tlb:"."`
+	TotalFwdFees    *Coins           `tlb:"maybe ."`
+	TotalActionFees *Coins           `tlb:"maybe ."`
+	ResultCode      int32            `tlb:"## 32"`
+	ResultArg       *int32           `tlb:"maybe ## 32"`
+	TotalActions    uint16           `tlb:"## 16"`
+	SpecActions     uint16           `tlb:"## 16"`
+	SkippedActions  uint16           `tlb:"## 16"`
+	MessagesCreated uint16           `tlb:"## 16"`
+	ActionListHash  []byte           `tlb:"bits 256"`
+	TotalMsgSize    StorageUsedShort `tlb:"."`
+}
+
+type TransactionDescriptionOrdinary struct {
+	_            Magic         `tlb:"$0000"`
+	CreditFirst  bool          `tlb:"bool"`
+	StoragePhase *StoragePhase `tlb:"maybe ."`
+	CreditPhase  *CreditPhase  `tlb:"maybe ."`
+	ComputePhase ComputePhase  `tlb:"."`
+	ActionPhase  *ActionPhase  `tlb:"maybe ^"`
+	Aborted      bool          `tlb:"bool"`
+	BouncePhase  *BouncePhase  `tlb:"maybe ."`
+	Destroyed    bool          `tlb:"bool"`
+}
+
+type TransactionDescriptionStorage struct {
+	_            Magic        `tlb:"$0001"`
+	StoragePhase StoragePhase `tlb:"."`
+}
+
+type TransactionDescriptionTickTock struct {
+	_            Magic        `tlb:"$001"`
+	IsTock       bool         `tlb:"bool"`
+	StoragePhase StoragePhase `tlb:"."`
+	ComputePhase ComputePhase `tlb:"."`
+	ActionPhase  *ActionPhase `tlb:"maybe ^"`
+	Aborted      bool         `tlb:"bool"`
+	Destroyed    bool         `tlb:"bool"`
+}
+
+type SplitMergeInfo struct {
+	CurShardPfxLen uint8  `tlb:"## 6"`
+	AccSplitDepth  uint8  `tlb:"## 6"`
+	ThisAddr       []byte `tlb:"bits 256"`
+	SiblingAddr    []byte `tlb:"bits 256"`
+}
+
+type TransactionDescriptionSplitPrepare struct {
+	_            Magic          `tlb:"$0100"`
+	SplitInfo    SplitMergeInfo `tlb:"."`
+	StoragePhase *StoragePhase  `tlb:"maybe ."`
+	ComputePhase ComputePhase   `tlb:"."`
+	ActionPhase  *ActionPhase   `tlb:"maybe ^"`
+	Aborted      bool           `tlb:"bool"`
+	Destroyed    bool           `tlb:"bool"`
+}
+
+type TransactionDescriptionSplitInstall struct {
+	_                  Magic          `tlb:"$0101"`
+	SplitInfo          SplitMergeInfo `tlb:"."`
+	PrepareTransaction *Transaction   `tlb:"^"`
+	Installed          bool           `tlb:"bool"`
+}
+
+type TransactionDescriptionMergePrepare struct {
+	_            Magic          `tlb:"$0110"`
+	SplitInfo    SplitMergeInfo `tlb:"."`
+	StoragePhase StoragePhase   `tlb:"."`
+	Aborted      bool           `tlb:"bool"`
+}
+
+type TransactionDescriptionMergeInstall struct {
+	_                  Magic          `tlb:"$0111"`
+	SplitInfo          SplitMergeInfo `tlb:"."`
+	PrepareTransaction *Transaction   `tlb:"^"`
+	StoragePhase       *StoragePhase  `tlb:"maybe ."`
+	CreditPhase        *CreditPhase   `tlb:"maybe ."`
+	ComputePhase       ComputePhase   `tlb:"."`
+	ActionPhase        *ActionPhase   `tlb:"maybe ^"`
+	Aborted            bool           `tlb:"bool"`
+	Destroyed          bool           `tlb:"bool"`
+}
+
+type TransactionDescription struct {
+	Description any `tlb:"."`
+}
+
+type HashUpdate struct {
+	_       Magic  `tlb:"#72"`
+	OldHash []byte `tlb:"bits 256"`
+	NewHash []byte `tlb:"bits 256"`
+}
+
 type Transaction struct {
 	_           Magic         `tlb:"$0111"`
 	AccountAddr []byte        `tlb:"bits 256"`
@@ -25,21 +212,29 @@ type Transaction struct {
 	OrigStatus  AccountStatus `tlb:"."`
 	EndStatus   AccountStatus `tlb:"."`
 	IO          struct {
-		In  *Message   `tlb:"maybe ^"`
-		Out []*Message `tlb:"dict 15 -> array ^"`
+		In  *Message      `tlb:"maybe ^"`
+		Out *MessagesList `tlb:"maybe ^"`
 	} `tlb:"^"`
-	TotalFees   CurrencyCollection `tlb:"."`
-	StateUpdate *cell.Cell         `tlb:"^"`
-	Description *cell.Cell         `tlb:"^"`
+	TotalFees   CurrencyCollection     `tlb:"."`
+	StateUpdate HashUpdate             `tlb:"^"` // of Account
+	Description TransactionDescription `tlb:"^"`
 
 	// not in scheme, but will be filled based on request data for flexibility
-	Hash []byte `tlb:"-"`
+	Hash []byte     `tlb:"-"`
+	Cell *cell.Cell `tlb:"-"`
 }
 
 func (t *Transaction) Dump() string {
 	res := fmt.Sprintf("LT: %d\n\nInput:\nType %s\nFrom %s\nPayload:\n%s\n\nOutputs:\n", t.LT, t.IO.In.MsgType, t.IO.In.Msg.SenderAddr(), t.IO.In.Msg.Payload().Dump())
-	for _, m := range t.IO.Out {
-		res += m.AsInternal().Dump()
+	if t.IO.Out != nil {
+		list, err := t.IO.Out.ToSlice()
+		if err != nil {
+			return res + "\nOUT MESSAGES NOT PARSED DUE TO ERR: " + err.Error()
+		}
+
+		for _, m := range list {
+			res += m.AsInternal().Dump()
+		}
 	}
 	return res
 }
@@ -47,10 +242,18 @@ func (t *Transaction) Dump() string {
 func (t *Transaction) String() string {
 	var destinations []string
 	in, out := new(big.Int), new(big.Int)
-	for _, m := range t.IO.Out {
-		destinations = append(destinations, m.Msg.DestAddr().String())
-		if m.MsgType == MsgTypeInternal {
-			out.Add(out, m.AsInternal().Amount.NanoTON())
+
+	if t.IO.Out != nil {
+		listOut, err := t.IO.Out.ToSlice()
+		if err != nil {
+			return "\nOUT MESSAGES NOT PARSED DUE TO ERR: " + err.Error()
+		}
+
+		for _, m := range listOut {
+			destinations = append(destinations, m.Msg.DestAddr().String())
+			if m.MsgType == MsgTypeInternal {
+				out.Add(out, m.AsInternal().Amount.NanoTON())
+			}
 		}
 	}
 
@@ -79,4 +282,238 @@ func (t *Transaction) String() string {
 	}
 
 	return build
+}
+
+func (a *AccStatusChange) LoadFromCell(loader *cell.Slice) error {
+	isChanged, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	if isChanged {
+		isDeleted, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+
+		if isDeleted {
+			a.Type = AccStatusChangeDeleted
+			return nil
+		}
+
+		a.Type = AccStatusChangeFrozen
+		return nil
+	}
+
+	a.Type = AccStatusChangeUnchanged
+	return nil
+}
+
+func (a AccStatusChange) ToCell() (*cell.Cell, error) {
+	switch a.Type {
+	case AccStatusChangeUnchanged:
+		return cell.BeginCell().MustStoreUInt(0b0, 1).EndCell(), nil
+	case AccStatusChangeFrozen:
+		return cell.BeginCell().MustStoreUInt(0b01, 2).EndCell(), nil
+	case AccStatusChangeDeleted:
+		return cell.BeginCell().MustStoreUInt(0b11, 2).EndCell(), nil
+	}
+	return nil, fmt.Errorf("unknown state change type %s", a.Type)
+}
+
+func (c *ComputeSkipReason) LoadFromCell(loader *cell.Slice) error {
+	pfx, err := loader.LoadUInt(2)
+	if err != nil {
+		return err
+	}
+
+	switch pfx {
+	case 0b00:
+		c.Type = ComputeSkipReasonNoState
+		return nil
+	case 0b01:
+		c.Type = ComputeSkipReasonBadState
+		return nil
+	case 0b10:
+		c.Type = ComputeSkipReasonNoGas
+		return nil
+	case 0b11:
+		isNotSuspended, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+
+		if !isNotSuspended {
+			c.Type = ComputeSkipReasonSuspended
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown compute skip reason")
+}
+
+func (c ComputeSkipReason) ToCell() (*cell.Cell, error) {
+	switch c.Type {
+	case ComputeSkipReasonNoState:
+		return cell.BeginCell().MustStoreUInt(0b00, 2).EndCell(), nil
+	case ComputeSkipReasonBadState:
+		return cell.BeginCell().MustStoreUInt(0b01, 2).EndCell(), nil
+	case ComputeSkipReasonNoGas:
+		return cell.BeginCell().MustStoreUInt(0b10, 2).EndCell(), nil
+	case ComputeSkipReasonSuspended:
+		return cell.BeginCell().MustStoreUInt(0b110, 3).EndCell(), nil
+	}
+	return nil, fmt.Errorf("unknown compute skip reason %s", c.Type)
+}
+
+func (c *ComputePhase) LoadFromCell(loader *cell.Slice) error {
+	isNotSkipped, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	if isNotSkipped {
+		var phase ComputePhaseVM
+		err = LoadFromCell(&phase, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse ComputePhaseVM: %w", err)
+		}
+		c.Phase = phase
+		return nil
+	}
+
+	var phase ComputePhaseSkipped
+	err = LoadFromCell(&phase, loader, true)
+	if err != nil {
+		return fmt.Errorf("failed to parse ComputePhaseSkipped: %w", err)
+	}
+	c.Phase = phase
+	return nil
+}
+
+func (b *BouncePhase) LoadFromCell(loader *cell.Slice) error {
+	isOk, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	if isOk {
+		var phase BouncePhaseOk
+		err = LoadFromCell(&phase, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse BouncePhaseOk: %w", err)
+		}
+		b.Phase = phase
+		return nil
+	}
+
+	isNoFunds, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	if isNoFunds {
+		var phase BouncePhaseNoFunds
+		err = LoadFromCell(&phase, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse BouncePhaseNoFunds: %w", err)
+		}
+		b.Phase = phase
+		return nil
+	}
+
+	var phase BouncePhaseNegFunds
+	err = LoadFromCell(&phase, loader, true)
+	if err != nil {
+		return fmt.Errorf("failed to parse BouncePhaseNegFunds: %w", err)
+	}
+	b.Phase = phase
+	return nil
+}
+
+func (t *TransactionDescription) LoadFromCell(loader *cell.Slice) error {
+	pfx, err := loader.LoadUInt(3)
+	if err != nil {
+		return err
+	}
+
+	switch pfx {
+	case 0b000:
+		isStorage, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+
+		if isStorage {
+			var desc TransactionDescriptionStorage
+			err = LoadFromCell(&desc, loader, true)
+			if err != nil {
+				return fmt.Errorf("failed to parse TransactionDescriptionStorage: %w", err)
+			}
+			t.Description = desc
+			return nil
+		}
+
+		var desc TransactionDescriptionOrdinary
+		err = LoadFromCell(&desc, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse TransactionDescriptionOrdinary: %w", err)
+		}
+		t.Description = desc
+		return nil
+	case 0b001:
+		var desc TransactionDescriptionTickTock
+		err = LoadFromCell(&desc, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse TransactionDescriptionTickTock: %w", err)
+		}
+		t.Description = desc
+		return nil
+	case 0b010:
+		isInstall, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+
+		if isInstall {
+			var desc TransactionDescriptionSplitInstall
+			err = LoadFromCell(&desc, loader, true)
+			if err != nil {
+				return fmt.Errorf("failed to parse TransactionDescriptionSplitInstall: %w", err)
+			}
+			t.Description = desc
+			return nil
+		}
+
+		var desc TransactionDescriptionSplitPrepare
+		err = LoadFromCell(&desc, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse TransactionDescriptionSplitPrepare: %w", err)
+		}
+		t.Description = desc
+		return nil
+	case 0b011:
+		isInstall, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+
+		if isInstall {
+			var desc TransactionDescriptionMergeInstall
+			err = LoadFromCell(&desc, loader, true)
+			if err != nil {
+				return fmt.Errorf("failed to parse TransactionDescriptionMergeInstall: %w", err)
+			}
+			t.Description = desc
+			return nil
+		}
+
+		var desc TransactionDescriptionMergePrepare
+		err = LoadFromCell(&desc, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse TransactionDescriptionMergePrepare: %w", err)
+		}
+		t.Description = desc
+		return nil
+	}
+	return fmt.Errorf("unknown transaction description type")
 }
