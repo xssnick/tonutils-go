@@ -258,65 +258,65 @@ func (w *Wallet) Send(ctx context.Context, message *Message, waitConfirmation ..
 }
 
 func (w *Wallet) SendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) error {
-	_, _, err := w.sendMany(ctx, messages, waitConfirmation...)
+	_, _, _, err := w.sendMany(ctx, messages, waitConfirmation...)
 	return err
 }
 
 // SendManyGetInMsgHash returns hash of external incoming message payload.
 func (w *Wallet) SendManyGetInMsgHash(ctx context.Context, messages []*Message, waitConfirmation ...bool) ([]byte, error) {
-	_, inMsgHash, err := w.sendMany(ctx, messages, waitConfirmation...)
+	_, _, inMsgHash, err := w.sendMany(ctx, messages, waitConfirmation...)
 	return inMsgHash, err
 }
 
 // SendManyWaitTxHash always waits for tx block confirmation and returns found tx hash in block.
 func (w *Wallet) SendManyWaitTxHash(ctx context.Context, messages []*Message) ([]byte, error) {
-	tx, _, err := w.sendMany(ctx, messages, true)
+	tx, _, _, err := w.sendMany(ctx, messages, true)
 	return tx.Hash, err
 }
 
 // SendManyWaitTransaction always waits for tx block confirmation and returns found tx.
-func (w *Wallet) SendManyWaitTransaction(ctx context.Context, messages []*Message) (*tlb.Transaction, error) {
-	tx, _, err := w.sendMany(ctx, messages, true)
-	return tx, err
+func (w *Wallet) SendManyWaitTransaction(ctx context.Context, messages []*Message) (*tlb.Transaction, *ton.BlockIDExt, error) {
+	tx, block, _, err := w.sendMany(ctx, messages, true)
+	return tx, block, err
 }
 
 // SendWaitTransaction always waits for tx block confirmation and returns found tx.
-func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tlb.Transaction, error) {
+func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tlb.Transaction, *ton.BlockIDExt, error) {
 	return w.SendManyWaitTransaction(ctx, []*Message{message})
 }
 
-func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (tx *tlb.Transaction, inMsgHash []byte, err error) {
-	block, err := w.api.CurrentMasterchainInfo(ctx)
+func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (tx *tlb.Transaction, block *ton.BlockIDExt, inMsgHash []byte, err error) {
+	block, err = w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get block: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get block: %w", err)
 	}
 
 	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get account state: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
 	ext, err := w.BuildMessageForMany(ctx, messages)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	inMsgHash = ext.Body.Hash()
 
 	if err = w.api.SendExternalMessage(ctx, ext); err != nil {
-		return nil, nil, fmt.Errorf("failed to send message: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
 	if len(waitConfirmation) > 0 && waitConfirmation[0] {
-		tx, err = w.waitConfirmation(ctx, block, acc, ext)
+		tx, block, err = w.waitConfirmation(ctx, block, acc, ext)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
-	return tx, inMsgHash, nil
+	return tx, block, inMsgHash, nil
 }
 
-func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) (*tlb.Transaction, error) {
+func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -354,7 +354,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 		// to prevent this we will scan till we reach last seen offset.
 		for time.Now().Before(till) {
 			// we try to get last 5 transactions, and check if we have our new there.
-			txList, err := w.api.ListTransactions(ctx, w.addr, 5, lastLt, lastHash)
+			txList, err := w.api.WaitForBlock(block.SeqNo).ListTransactions(ctx, w.addr, 5, lastLt, lastHash)
 			if err != nil {
 				continue
 			}
@@ -391,7 +391,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 						continue
 					}
 
-					return transaction, nil
+					return transaction, block, nil
 				}
 			}
 
@@ -402,7 +402,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 		acc = accNew
 	}
 
-	return nil, ErrTxWasNotConfirmed
+	return nil, nil, ErrTxWasNotConfirmed
 }
 
 // TransferNoBounce - can be used to transfer TON to not yet initialized contract/wallet

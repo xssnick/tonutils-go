@@ -53,7 +53,7 @@ func main() {
 	if balance.NanoTON().Uint64() >= 3000000 {
 		// create transaction body cell, depends on what contract needs, just random example here
 		body := cell.BeginCell().
-			MustStoreUInt(0x123abc55, 32).    // op code
+			MustStoreUInt(0x123abc55, 32). // op code
 			MustStoreUInt(rand.Uint64(), 64). // query id
 			// payload:
 			MustStoreAddr(address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO")).
@@ -65,7 +65,7 @@ func main() {
 
 		log.Println("sending transaction and waiting for confirmation...")
 
-		tx, err := w.SendWaitTransaction(context.Background(), &wallet.Message{
+		tx, block, err := w.SendWaitTransaction(context.Background(), &wallet.Message{
 			Mode: 1, // pay fees separately (from balance, not from amount)
 			InternalMessage: &tlb.InternalMessage{
 				Bounce:  true, // return amount in case of processing error
@@ -79,7 +79,16 @@ func main() {
 			return
 		}
 
-		log.Println("transaction sent, hash:", base64.StdEncoding.EncodeToString(tx.Hash))
+		log.Println("transaction sent, confirmed at block, hash:", base64.StdEncoding.EncodeToString(tx.Hash))
+
+		balance, err = w.GetBalance(context.Background(), block)
+		if err != nil {
+			log.Fatalln("GetBalance err:", err.Error())
+			return
+		}
+
+		log.Println("balance left:", balance.TON())
+
 		return
 	}
 

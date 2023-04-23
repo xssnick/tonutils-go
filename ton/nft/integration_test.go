@@ -103,17 +103,17 @@ func Test_NftMintTransfer(t *testing.T) {
 	fmt.Println("Transferring NFT...")
 	transfer := wallet.SimpleMessage(nftAddr, tlb.MustFromTON("0.065"), transferData)
 
-	err = w.Send(context.Background(), transfer, true)
+	_, block, err = w.SendWaitTransaction(context.Background(), transfer)
 	if err != nil {
 		t.Fatal("Send err:", err.Error())
 	}
 
-	newData, err := nft.GetNFTData(ctx)
+	newData, err := nft.GetNFTDataAtBlock(ctx, block)
 	if err != nil {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
 
-	fullContent, err := collection.GetNFTContent(ctx, collectionData.NextItemIndex, newData.Content)
+	fullContent, err := collection.GetNFTContentAtBlock(ctx, collectionData.NextItemIndex, newData.Content, block)
 	if err != nil {
 		t.Fatal("GetNFTData err:", err.Error())
 	}
@@ -122,7 +122,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("full content incorrect", fullContent.(*ContentOffchain).URI)
 	}
 
-	roy, err := collection.RoyaltyParams(ctx)
+	roy, err := collection.RoyaltyParamsAtBlock(ctx, block)
 	if err != nil {
 		t.Fatal("RoyaltyParams err:", err.Error())
 	}
