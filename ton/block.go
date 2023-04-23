@@ -146,6 +146,11 @@ func (c *APIClient) Client() LiteClient {
 
 // CurrentMasterchainInfo - cached version of GetMasterchainInfo to not do it in parallel many times
 func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, err error) {
+	if c.parent != nil {
+		// this method should be called at top level, to share curMasters and lock.
+		return c.parent.CurrentMasterchainInfo(ctx)
+	}
+
 	// if not sticky - id will be 0
 	nodeID := c.client.StickyNodeID(ctx)
 
@@ -419,7 +424,13 @@ func (c *APIClient) waitMasterBlock(ctx context.Context, seqno uint32) (*BlockID
 	return nil, errUnexpectedResponse(resp)
 }
 
+// Deprecated: use APIClient.WaitForBlock as method prefix
 func (c *APIClient) WaitNextMasterBlock(ctx context.Context, master *BlockIDExt) (*BlockIDExt, error) {
+	if c.parent != nil {
+		// this method should be called at top level, because wrapper already have this logic.
+		return c.parent.WaitNextMasterBlock(ctx, master)
+	}
+
 	if master.Workchain != -1 {
 		return nil, errors.New("not a master block passed")
 	}

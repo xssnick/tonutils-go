@@ -14,6 +14,7 @@ import (
 )
 
 type TonApi interface {
+	WaitForBlock(seqno uint32) ton.APIClientWaiter
 	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
@@ -65,7 +66,7 @@ func (c *CollectionClient) GetNFTAddressByIndex(ctx context.Context, index *big.
 }
 
 func (c *CollectionClient) GetNFTAddressByIndexAtBlock(ctx context.Context, index *big.Int, b *ton.BlockIDExt) (*address.Address, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_address_by_index", index)
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_nft_address_by_index", index)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_address_by_index method: %w", err)
 	}
@@ -92,7 +93,7 @@ func (c *CollectionClient) RoyaltyParams(ctx context.Context) (*CollectionRoyalt
 }
 
 func (c *CollectionClient) RoyaltyParamsAtBlock(ctx context.Context, b *ton.BlockIDExt) (*CollectionRoyaltyParams, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "royalty_params")
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "royalty_params")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run royalty_params method: %w", err)
 	}
@@ -138,7 +139,7 @@ func (c *CollectionClient) GetNFTContentAtBlock(ctx context.Context, index *big.
 		return nil, fmt.Errorf("failed to convert nft content to cell: %w", err)
 	}
 
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_content", index, con)
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_nft_content", index, con)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_content method: %w", err)
 	}
@@ -165,7 +166,7 @@ func (c *CollectionClient) GetCollectionData(ctx context.Context) (*CollectionDa
 }
 
 func (c *CollectionClient) GetCollectionDataAtBlock(ctx context.Context, b *ton.BlockIDExt) (*CollectionData, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_collection_data")
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_collection_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_collection_data method: %w", err)
 	}

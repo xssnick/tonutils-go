@@ -117,12 +117,12 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 
 	msg = wallet.SimpleMessage(tokenWallet.Address(), tlb.MustFromTON("0.05"), burnPayload)
 
-	err = w.Send(ctx, msg, true)
+	_, block, err := w.SendWaitTransaction(ctx, msg)
 	if err != nil {
 		panic(err)
 	}
 
-	b2, err := tokenWallet.GetBalance(ctx)
+	b2, err := tokenWallet.GetBalanceAtBlock(ctx, block)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -114,7 +114,7 @@ func main() {
 
 			// load all transactions in batches with 100 transactions in each while exists
 			for more {
-				fetchedIDs, more, err = api.GetBlockTransactionsV2(ctx, shard, 100, after)
+				fetchedIDs, more, err = api.WaitForBlock(master.SeqNo).GetBlockTransactionsV2(ctx, shard, 100, after)
 				if err != nil {
 					log.Fatalln("get tx ids err:", err.Error())
 					return
@@ -145,9 +145,10 @@ func main() {
 			log.Printf("no transactions in %d block\n", master.SeqNo)
 		}
 
-		master, err = api.WaitNextMasterBlock(ctx, master)
+		master, err = api.WaitForBlock(master.SeqNo + 1).GetMasterchainInfo(ctx)
 		if err != nil {
-			log.Fatalln("wait next master err:", err.Error())
+			log.Fatalln("get masterchain info err: ", err.Error())
+			return
 		}
 	}
 }

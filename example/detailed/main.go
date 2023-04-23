@@ -48,7 +48,8 @@ func main() {
 		}
 	*/
 
-	res, err := api.RunGetMethod(context.Background(), b, address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "mult", 7, 8)
+	res, err := api.WaitForBlock(b.SeqNo).RunGetMethod(context.Background(), b,
+		address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"), "mult", 7, 8)
 	if err != nil {
 		log.Fatalln("run get method err:", err.Error())
 		return
