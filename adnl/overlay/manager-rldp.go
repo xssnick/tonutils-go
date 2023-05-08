@@ -24,6 +24,7 @@ type RLDPWrapper struct {
 
 	rootQueryHandler      func(transferId []byte, query *rldp.Query) error
 	rootDisconnectHandler func()
+	unknownOverlayHandler func(transferId []byte, query *rldp.Query) error
 
 	RLDP
 }
@@ -43,18 +44,25 @@ func (r *RLDPWrapper) SetOnQuery(handler func(transferId []byte, query *rldp.Que
 	r.rootQueryHandler = handler
 }
 
+func (r *RLDPWrapper) SetOnUnknownOverlayQuery(handler func(transferId []byte, query *rldp.Query) error) {
+	r.unknownOverlayHandler = handler
+}
+
 func (r *RLDPWrapper) SetOnDisconnect(handler func()) {
 	r.rootDisconnectHandler = handler
 }
 
 func (r *RLDPWrapper) queryHandler(transferId []byte, query *rldp.Query) error {
-	obj, over := unwrapQuery(query.Data)
+	obj, over := UnwrapQuery(query.Data)
 	if over != nil {
 		id := hex.EncodeToString(over)
 		r.mx.RLock()
 		o := r.overlays[id]
 		r.mx.RUnlock()
 		if o == nil {
+			if h := r.unknownOverlayHandler; h != nil {
+				return h(transferId, query)
+			}
 			return fmt.Errorf("got query for unregistered overlay with id: %s", id)
 		}
 

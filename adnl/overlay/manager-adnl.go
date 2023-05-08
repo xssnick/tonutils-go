@@ -37,6 +37,7 @@ type ADNLWrapper struct {
 	rootQueryHandler      func(msg *adnl.MessageQuery) error
 	rootDisconnectHandler func(addr string, key ed25519.PublicKey)
 	rootCustomHandler     func(msg *adnl.MessageCustom) error
+	unknownOverlayHandler func(msg *adnl.MessageQuery) error
 
 	ADNL
 }
@@ -65,14 +66,21 @@ func (a *ADNLWrapper) SetCustomMessageHandler(handler func(msg *adnl.MessageCust
 	a.rootCustomHandler = handler
 }
 
+func (a *ADNLWrapper) SetOnUnknownOverlayQuery(handler func(query *adnl.MessageQuery) error) {
+	a.unknownOverlayHandler = handler
+}
+
 func (a *ADNLWrapper) queryHandler(msg *adnl.MessageQuery) error {
-	obj, over := unwrapQuery(msg.Data)
+	obj, over := UnwrapQuery(msg.Data)
 	if over != nil {
 		id := hex.EncodeToString(over)
 		a.mx.RLock()
 		o := a.overlays[id]
 		a.mx.RUnlock()
 		if o == nil {
+			if h := a.unknownOverlayHandler; h != nil {
+				return h(msg)
+			}
 			return fmt.Errorf("got query for unregistered overlay with id: %s", id)
 		}
 
@@ -113,7 +121,7 @@ func (a *ADNLWrapper) disconnectHandler(addr string, key ed25519.PublicKey) {
 }
 
 func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
-	obj, over := unwrapMessage(msg.Data)
+	obj, over := UnwrapMessage(msg.Data)
 	if over != nil {
 		id := hex.EncodeToString(over)
 		a.mx.RLock()

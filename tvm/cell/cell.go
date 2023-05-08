@@ -2,28 +2,33 @@ package cell
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 const (
-	_OrdinaryType    = 0x00
-	_PrunedType      = 0x01
-	_LibraryType     = 0x02
-	_MerkleProofType = 0x03
-	_UnknownType     = 0xFF
+	_OrdinaryType     = 0x00
+	_PrunedType       = 0x01
+	_LibraryType      = 0x02
+	_MerkleProofType  = 0x03
+	_MerkleUpdateType = 0x04
+	_UnknownType      = 0xFF
 )
 
-type Cell struct {
-	special bool
-	level   byte
-	bitsSz  uint
-	index   int
-	data    []byte
+const maxDepth = 1024
 
-	cachedHash []byte
+type Cell struct {
+	special   bool
+	levelMask LevelMask
+	bitsSz    uint
+	index     int
+	data      []byte
+
+	hashes      []byte
+	depthLevels []uint16
 
 	refs []*Cell
 }
@@ -38,12 +43,13 @@ func (c *Cell) copy() *Cell {
 	}
 
 	return &Cell{
-		special:    c.special,
-		level:      c.level,
-		bitsSz:     c.bitsSz,
-		data:       data,
-		cachedHash: c.cachedHash,
-		refs:       refs,
+		special:     c.special,
+		levelMask:   c.levelMask,
+		bitsSz:      c.bitsSz,
+		data:        data,
+		hashes:      c.hashes,
+		depthLevels: c.depthLevels,
+		refs:        refs,
 	}
 }
 
@@ -52,11 +58,11 @@ func (c *Cell) BeginParse() *Slice {
 	data := append([]byte{}, c.data...)
 
 	return &Slice{
-		special: c.special,
-		level:   c.level,
-		bitsSz:  c.bitsSz,
-		data:    data,
-		refs:    c.refs,
+		special:   c.special,
+		levelMask: c.levelMask,
+		bitsSz:    c.bitsSz,
+		data:      data,
+		refs:      c.refs,
 	}
 }
 
@@ -79,15 +85,25 @@ func (c *Cell) RefsNum() uint {
 	return uint(len(c.refs))
 }
 
-func (c *Cell) Dump() string {
-	return c.dump(0, false)
+func (c *Cell) Dump(limitLength ...int) string {
+	var lim = (1024 << 20) * 16
+	if len(limitLength) > 0 {
+		// 16 MB default lim
+		lim = limitLength[0]
+	}
+	return c.dump(0, false, lim)
 }
 
-func (c *Cell) DumpBits() string {
-	return c.dump(0, true)
+func (c *Cell) DumpBits(limitLength ...int) string {
+	var lim = (1024 << 20) * 16
+	if len(limitLength) > 0 {
+		// 16 MB default lim
+		lim = limitLength[0]
+	}
+	return c.dump(0, true, lim)
 }
 
-func (c *Cell) dump(deep int, bin bool) string {
+func (c *Cell) dump(deep int, bin bool, limitLength int) string {
 	sz, data, _ := c.BeginParse().RestBits()
 
 	var val string
@@ -107,8 +123,8 @@ func (c *Cell) dump(deep int, bin bool) string {
 	}
 
 	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
-	if c.level > 0 {
-		str += fmt.Sprintf("{%d}", c.level)
+	if c.levelMask.getLevel() > 0 {
+		str += fmt.Sprintf("{%d}", c.levelMask.getLevel())
 	}
 	if c.special {
 		str += "*"
@@ -116,26 +132,31 @@ func (c *Cell) dump(deep int, bin bool) string {
 	if len(c.refs) > 0 {
 		str += " -> {"
 		for i, ref := range c.refs {
-			str += "\n" + ref.dump(deep+1, bin)
+			str += "\n" + ref.dump(deep+1, bin, limitLength)
 			if i == len(c.refs)-1 {
 				str += "\n"
 			} else {
 				str += ","
 			}
+
+			if len(str) > limitLength {
+				break
+			}
 		}
-		str += strings.Repeat("  ", deep)
-		return str + "}"
+		str += strings.Repeat("  ", deep) + "}"
 	}
+
+	if len(str) > limitLength {
+		str = str[:limitLength]
+	}
+
 	return str
 }
 
+const _DataCellMaxLevel = 3
+
 func (c *Cell) Hash() []byte {
-	if c.cachedHash == nil {
-		hash := sha256.New()
-		hash.Write(c.serializeHash())
-		c.cachedHash = hash.Sum(nil)
-	}
-	return c.cachedHash
+	return c.getHash(_DataCellMaxLevel)
 }
 
 func (c *Cell) Sign(key ed25519.PrivateKey) []byte {
@@ -151,10 +172,6 @@ func (c *Cell) getType() int {
 	}
 
 	switch c.data[0] {
-	case _MerkleProofType:
-		if c.RefsNum() == 1 && c.BitsSize() == 280 {
-			return _MerkleProofType
-		}
 	case _PrunedType:
 		if c.BitsSize() >= 288 {
 			lvl := uint(c.data[1])
@@ -162,10 +179,41 @@ func (c *Cell) getType() int {
 				return _PrunedType
 			}
 		}
+	case _MerkleProofType:
+		if c.RefsNum() == 1 && c.BitsSize() == 280 {
+			return _MerkleProofType
+		}
+	case _MerkleUpdateType:
+		if c.RefsNum() == 2 && c.BitsSize() == 552 {
+			return _MerkleUpdateType
+		}
 	case _LibraryType:
 		if c.BitsSize() == 8+256 {
 			return _LibraryType
 		}
 	}
 	return _UnknownType
+}
+
+func (c *Cell) UnmarshalJSON(bytes []byte) error {
+	if len(bytes) < 2 || bytes[0] != '"' || bytes[len(bytes)-1] != '"' {
+		return fmt.Errorf("invalid data")
+	}
+	bytes = bytes[1 : len(bytes)-1]
+
+	data, err := base64.StdEncoding.DecodeString(string(bytes))
+	if err != nil {
+		return err
+	}
+
+	cl, err := FromBOC(data)
+	if err != nil {
+		return err
+	}
+	*c = *cl
+	return nil
+}
+
+func (c *Cell) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.Quote(base64.StdEncoding.EncodeToString(c.ToBOC()))), nil
 }

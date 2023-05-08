@@ -43,6 +43,14 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 	}
 	rv = rv.Elem()
 
+	if ld, ok := v.(manualLoader); ok {
+		err := ld.LoadFromCell(loader)
+		if err != nil {
+			return fmt.Errorf("failed to load from cell for %s, using manual loader, err: %w", rv.Type().Name(), err)
+		}
+		return nil
+	}
+
 	for i := 0; i < rv.NumField(); i++ {
 		structField := rv.Type().Field(i)
 		parseType := structField.Type
@@ -356,6 +364,14 @@ func ToCell(v any) (*cell.Cell, error) {
 		rv = rv.Elem()
 	}
 
+	if ld, ok := v.(manualStore); ok {
+		c, err := ld.ToCell()
+		if err != nil {
+			return nil, fmt.Errorf("failed to store to cell for %s, using manual storer, err: %w", reflect.TypeOf(v).PkgPath(), err)
+		}
+		return c, nil
+	}
+
 	builder := cell.BeginCell()
 
 	for i := 0; i < rv.NumField(); i++ {
@@ -483,7 +499,11 @@ func ToCell(v any) (*cell.Cell, error) {
 
 			switch parseType {
 			case reflect.TypeOf(&cell.Cell{}):
-				c = fieldVal.Interface().(*cell.Cell)
+				if fieldVal.IsNil() {
+					c = cell.BeginCell().EndCell()
+				} else {
+					c = fieldVal.Interface().(*cell.Cell)
+				}
 			default:
 				c, err = structStore(fieldVal, structField.Type.Name())
 				if err != nil {
@@ -566,18 +586,10 @@ func structLoad(field reflect.Type, loader *cell.Slice) (reflect.Value, error) {
 	}
 
 	nVal := reflect.New(newTyp)
-	inf := nVal.Interface()
 
-	if ld, ok := inf.(manualLoader); ok {
-		err := ld.LoadFromCell(loader)
-		if err != nil {
-			return reflect.Value{}, fmt.Errorf("failed to load from cell for %s, using manual loader, err: %w", field.Name(), err)
-		}
-	} else {
-		err := LoadFromCell(nVal.Interface(), loader)
-		if err != nil {
-			return reflect.Value{}, fmt.Errorf("failed to load from cell for %s, err: %w", field.Name(), err)
-		}
+	err := LoadFromCell(nVal.Interface(), loader)
+	if err != nil {
+		return reflect.Value{}, fmt.Errorf("failed to load from cell for %s, err: %w", field.Name(), err)
 	}
 
 	if field.Kind() != reflect.Ptr {
@@ -589,14 +601,6 @@ func structLoad(field reflect.Type, loader *cell.Slice) (reflect.Value, error) {
 
 func structStore(field reflect.Value, name string) (*cell.Cell, error) {
 	inf := field.Interface()
-
-	if ld, ok := inf.(manualStore); ok {
-		c, err := ld.ToCell()
-		if err != nil {
-			return nil, fmt.Errorf("failed to store to cell for %s, using manual storer, err: %w", name, err)
-		}
-		return c, nil
-	}
 
 	c, err := ToCell(inf)
 	if err != nil {

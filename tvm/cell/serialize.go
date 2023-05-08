@@ -85,7 +85,7 @@ func (c *Cell) serialize(refIndexSzBytes uint) []byte {
 	body := c.BeginParse().MustLoadSlice(c.bitsSz)
 
 	data := make([]byte, 2+len(body))
-	data[0], data[1] = c.descriptors(0)
+	data[0], data[1] = c.descriptors(c.levelMask)
 	copy(data[2:], body)
 
 	unusedBits := 8 - (c.bitsSz % 8)
@@ -101,61 +101,19 @@ func (c *Cell) serialize(refIndexSzBytes uint) []byte {
 	return data
 }
 
-func (c *Cell) serializeHash() []byte {
-	body := c.BeginParse().MustLoadSlice(c.bitsSz)
-
-	data := make([]byte, 2+len(body)+len(c.refs)*(2+32))
-	data[0], data[1] = c.descriptors(0)
-	copy(data[2:], body)
-	offset := 2 + len(body)
-
-	unusedBits := 8 - (c.bitsSz % 8)
-	if unusedBits != 8 {
-		// we need to set bit at the end if not whole byte was used
-		data[offset-1] += 1 << (unusedBits - 1)
-	}
-
-	for i, ref := range c.refs {
-		binary.BigEndian.PutUint16(data[offset+(2*i):], uint16(ref.maxDepth(0)))
-		copy(data[offset+(2*len(c.refs))+(32*i):], ref.Hash())
-	}
-
-	return data
-}
-
-// calc how deep is the cell (how long children tree)
-func (c *Cell) maxDepth(start int) int {
-	d := start
-	for _, cc := range c.refs {
-		if x := cc.maxDepth(start + 1); x > d {
-			d = x
-		}
-	}
-	return d
-}
-
-func (c *Cell) descriptors(unwrapLevel byte) (byte, byte) {
-	ceilBytes := c.bitsSz / 8
-	if c.bitsSz%8 != 0 {
-		ceilBytes++
-	}
-
+func (c *Cell) descriptors(lvl LevelMask) (byte, byte) {
 	// calc size
-	ln := ceilBytes + c.bitsSz/8
+	ln := (c.bitsSz / 8) * 2
+	if c.bitsSz%8 != 0 {
+		ln++
+	}
 
 	specBit := byte(0)
 	if c.special {
 		specBit = 8
 	}
 
-	lvl := c.level
-	if lvl >= unwrapLevel {
-		lvl -= unwrapLevel
-	} else {
-		lvl = 0
-	}
-
-	return byte(len(c.refs)) + specBit + lvl*32, byte(ln)
+	return byte(len(c.refs)) + specBit + lvl.mask*32, byte(ln)
 }
 
 func dynamicIntBytes(val uint64, sz uint) []byte {

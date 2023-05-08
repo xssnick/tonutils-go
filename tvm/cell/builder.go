@@ -565,12 +565,9 @@ func BeginCell() *Builder {
 }
 
 func (b *Builder) EndCell() *Cell {
-	// copy data
-	data := append([]byte{}, b.data...)
-
 	return &Cell{
 		bitsSz: b.bitsSz,
-		data:   data,
+		data:   append([]byte{}, b.data...), // copy data
 		refs:   b.refs,
 	}
 }
