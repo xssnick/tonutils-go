@@ -18,12 +18,19 @@ type TonApi interface {
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }
 
+type MintPayloadMasterMsg struct {
+	Opcode       uint32     `tlb:"## 32"`
+	QueryID      uint64     `tlb:"## 64"`
+	JettonAmount tlb.Coins  `tlb:"."`
+	RestData     *cell.Cell `tlb:"."`
+}
+
 type MintPayload struct {
-	_         tlb.Magic  `tlb:"#00000001"`
-	QueryID   uint64     `tlb:"## 64"`
-	Index     uint64     `tlb:"## 64"`
-	TonAmount tlb.Coins  `tlb:"."`
-	Content   *cell.Cell `tlb:"^"`
+	_         tlb.Magic            `tlb:"#00000015"`
+	QueryID   uint64               `tlb:"## 64"`
+	ToAddress *address.Address     `tlb:"addr"`
+	Amount    tlb.Coins            `tlb:"."`
+	MasterMsg MintPayloadMasterMsg `tlb:"^"`
 }
 
 type Data struct {

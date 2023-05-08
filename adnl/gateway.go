@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
@@ -268,7 +267,6 @@ func (g *Gateway) listen(rootId []byte) {
 		g.mx.RUnlock()
 
 		if proc == nil {
-			Logger("unknown destination:", hex.EncodeToString(id))
 			continue
 		}
 
@@ -349,7 +347,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
 		currentAddr := *(*net.Addr)(atomic.LoadPointer(&peer.addr))
 		return g.write(deadline, currentAddr, p)
-	})
+	}, a.Close)
 	peer.client = a
 
 	g.peers[id] = peer

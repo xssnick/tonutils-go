@@ -73,6 +73,15 @@ func TestJettonMasterClient_GetWalletAddress(t *testing.T) {
 	}
 }
 
+func TestJettonMasterClient_Mint(t *testing.T) {
+	tt, err := tlb.ToCell(MintPayload{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	println(tt.Dump())
+}
+
 func TestJettonMasterClient_Transfer(t *testing.T) {
 	cli := NewJettonMasterClient(api, address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"))
 

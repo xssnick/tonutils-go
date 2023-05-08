@@ -13,6 +13,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 )
@@ -154,7 +155,7 @@ func (a *ADNL) processPacket(packet *PacketContent, ch *Channel) (err error) {
 	}
 
 	if seqno > a.confirmSeqno {
-		a.confirmSeqno = uint64(*packet.Seqno)
+		a.confirmSeqno = seqno
 	}
 
 	if packet.ReinitDate != nil && *packet.ReinitDate > a.dstReinit {
@@ -536,8 +537,11 @@ func (a *ADNL) send(ctx context.Context, buf []byte) error {
 
 	n, err := a.writer.Write(buf, dl)
 	if err != nil {
-		// it should trigger disconnect handler in read routine
-		a.writer.Close()
+		// not close on io timeout because it can be triggered by network overload
+		if !strings.Contains(err.Error(), "i/o timeout") {
+			// it should trigger disconnect handler in read routine
+			a.writer.Close()
+		}
 		return err
 	}
 	if n != len(buf) {

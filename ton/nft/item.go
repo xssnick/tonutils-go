@@ -55,7 +55,7 @@ func (c *ItemClient) GetNFTData(ctx context.Context) (*ItemData, error) {
 }
 
 func (c *ItemClient) GetNFTDataAtBlock(ctx context.Context, b *ton.BlockIDExt) (*ItemData, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_nft_data")
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_nft_data")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_nft_data method: %w", err)
 	}

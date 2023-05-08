@@ -40,6 +40,8 @@ type FileInfo struct {
 }
 
 type TorrentDownloader interface {
+	GetDescription() string
+	GetDirName() string
 	ListFiles() []string
 	GetFileOffsets(name string) *FileInfo
 	DownloadPiece(ctx context.Context, pieceIndex uint32) (_ []byte, err error)
@@ -127,14 +129,16 @@ type storageNode struct {
 //              description:Text = TorrentInfo;
 
 type TorrentInfo struct {
-	PieceSize  uint32 `tlb:"## 32"`
-	FileSize   uint64 `tlb:"## 64"`
-	RootHash   []byte `tlb:"bits 256"`
-	HeaderSize uint64 `tlb:"## 64"`
-	HeaderHash []byte `tlb:"bits 256"`
+	PieceSize   uint32   `tlb:"## 32"`
+	FileSize    uint64   `tlb:"## 64"`
+	RootHash    []byte   `tlb:"bits 256"`
+	HeaderSize  uint64   `tlb:"## 64"`
+	HeaderHash  []byte   `tlb:"bits 256"`
+	Description tlb.Text `tlb:"."`
 }
 
-func (c *Client) CreateDownloader(ctx context.Context, bagId []byte, desiredMinPeersNum, threadsPerPeer int) (_ TorrentDownloader, err error) {
+func (c *Client) CreateDownloader(ctx context.Context, bagId []byte, desiredMinPeersNum, threadsPerPeer int, attempts ...int) (_ TorrentDownloader, err error) {
+
 	globalCtx, downloadCancel := context.WithCancel(context.Background())
 	var dow = &torrentDownloader{
 		client:             c,
@@ -154,7 +158,7 @@ func (c *Client) CreateDownloader(ctx context.Context, bagId []byte, desiredMinP
 	}()
 
 	// connect to first node
-	err = dow.scale(ctx, 1)
+	err = dow.scale(ctx, 1, 2)
 	if err != nil {
 		err = fmt.Errorf("failed to find storage nodes for this bag, err: %w", err)
 		return nil, err
@@ -273,6 +277,7 @@ func (s *storageNode) loop() {
 
 			err = s.torrent.checkProofBranch(proof, piece.Data, uint32(req.index))
 			if err != nil {
+				time.Sleep(50 * time.Millisecond)
 				return fmt.Errorf("proof branch check of piece %d failed: %w", req.index, err)
 			}
 			return nil
@@ -539,7 +544,7 @@ func (t *torrentDownloader) checkProofBranch(proof *cell.Cell, data []byte, piec
 }
 
 // scale - add more nodes to pool, to increase load speed and capacity
-func (t *torrentDownloader) scale(ctx context.Context, num int) error {
+func (t *torrentDownloader) scale(ctx context.Context, num, attempts int) error {
 	if num == 0 {
 		return nil
 	}
@@ -549,7 +554,6 @@ func (t *torrentDownloader) scale(ctx context.Context, num int) error {
 	connections := make(chan bool, num)
 
 	checkedNodes := map[string]bool{}
-	attempts := 2
 	for {
 		toCheck := make([]*overlay.Node, 0, len(t.knownNodes))
 		t.mx.RLock()
@@ -713,7 +717,7 @@ func (t *torrentDownloader) scaleController() {
 		t.mx.RUnlock()
 
 		if peersNum < t.desiredMinPeersNum {
-			_ = t.scale(t.globalCtx, t.desiredMinPeersNum-peersNum)
+			_ = t.scale(t.globalCtx, t.desiredMinPeersNum-peersNum, 3)
 		}
 	}
 }
@@ -732,4 +736,12 @@ func (t *torrentDownloader) ListFiles() []string {
 
 func (t *torrentDownloader) Close() {
 	t.downloadCancel()
+}
+
+func (t *torrentDownloader) GetDirName() string {
+	return string(t.header.DirName)
+}
+
+func (t *torrentDownloader) GetDescription() string {
+	return t.info.Description.Value
 }

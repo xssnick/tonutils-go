@@ -14,10 +14,11 @@ type clientConn struct {
 	mx      sync.Mutex
 }
 
-func newWriter(writer func(p []byte, deadline time.Time) (err error)) *clientConn {
+func newWriter(writer func(p []byte, deadline time.Time) (err error), close func()) *clientConn {
 	return &clientConn{
-		closer: make(chan bool, 1),
-		writer: writer,
+		onClose: close,
+		closer:  make(chan bool, 1),
+		writer:  writer,
 	}
 }
 
@@ -41,6 +42,9 @@ func (c *clientConn) Close() error {
 	if !c.closed {
 		c.closed = true
 		close(c.closer)
+		if h := c.onClose; h != nil {
+			go h() // to not lock
+		}
 	}
 
 	return nil
