@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
+	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
@@ -47,7 +49,6 @@ func (m MockADNL) SetQueryHandler(handler func(msg *adnl.MessageQuery) error) {
 
 func (m MockADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
 	return nil
-
 }
 
 func (m MockADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
@@ -585,7 +586,7 @@ func TestClient_Close(t *testing.T) {
 	})
 }
 
-func TestClient_Store(t *testing.T) {
+func TestClient_StoreAddress(t *testing.T) {
 	for i := 0; i < 15; i++ {
 
 		addrList := address.List{
@@ -608,13 +609,6 @@ func TestClient_Store(t *testing.T) {
 			Priority:   0,
 			ExpireAt:   0,
 		}
-		tlAddrList, err := tl.Serialize(addrList, true)
-		if err != nil {
-			t.Fatal()
-		}
-
-		nameAddr := []byte("address")
-		var index int32 = 0
 
 		cliePrivK, err := hex.DecodeString("83590f541d37b783aa504049bab792696d12bbec3d23a954353300f816ca8b9693037f2613f6063869544caacac3eabbd7456e4d6e731478fccc961c137d1284")
 		if err != nil {
@@ -707,7 +701,7 @@ func TestClient_Store(t *testing.T) {
 				t.Fatal("failed to prepare test client, err: ", err)
 			}
 
-			count, _, err := cli.Store(context.Background(), nameAddr, index, tlAddrList, time.Hour, cliePrivK, 1)
+			count, _, err := cli.StoreAddress(context.Background(), addrList, time.Hour, cliePrivK, 1)
 			if err != nil {
 				t.Errorf(err.Error())
 			}
@@ -715,5 +709,128 @@ func TestClient_Store(t *testing.T) {
 				t.Errorf("got '%d' copies count, want '2+'", count)
 			}
 		})
+	}
+}
+
+func TestClient_StoreOverlayNodesIntegration(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gateway := adnl.NewGateway(priv)
+	err = gateway.StartClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	if err != nil {
+		t.Fatalf("failed to init DHT client: %s", err.Error())
+	}
+
+	time.Sleep(2 * time.Second)
+
+	id := make([]byte, 32)
+	rand.Read(id)
+
+	node, err := overlay.NewNode(id, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = dhtClient.StoreOverlayNodes(ctx, id, &overlay.NodesList{
+		List: []overlay.Node{*node},
+	}, 5*time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, _, err := dhtClient.FindOverlayNodes(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	println("NUM", len(list.List))
+
+	if len(list.List) > 1 {
+		t.Fatal("list len")
+	}
+
+	if !bytes.Equal(list.List[0].ID.(adnl.PublicKeyED25519).Key, pub) {
+		t.Fatal("key not eq")
+	}
+}
+
+func TestClient_StoreAddressIntegration(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gateway := adnl.NewGateway(priv)
+	err = gateway.StartClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	if err != nil {
+		t.Fatalf("failed to init DHT client: %s", err.Error())
+	}
+
+	time.Sleep(2 * time.Second)
+
+	id := make([]byte, 32)
+	rand.Read(id)
+
+	pub, key, _ := ed25519.GenerateKey(nil)
+
+	addrList := address.List{
+		Addresses: []*address.UDP{
+			{
+				net.IPv4(1, 1, 1, 1).To4(),
+				11111,
+			},
+			{
+				net.IPv4(2, 2, 2, 2).To4(),
+				22222,
+			},
+			{
+				net.IPv4(3, 3, 3, 3).To4(),
+				333333,
+			},
+		},
+		Version:    0,
+		ReinitDate: 0,
+		Priority:   0,
+		ExpireAt:   0,
+	}
+
+	_, _, err = dhtClient.StoreAddress(ctx, addrList, 5*time.Minute, key, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kid, err := adnl.ToKeyID(adnl.PublicKeyED25519{
+		Key: pub,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, _, err := dhtClient.FindAddresses(ctx, kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(res.Addresses) != 3 {
+		t.Fatal("addr len not 3")
 	}
 }

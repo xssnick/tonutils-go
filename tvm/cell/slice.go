@@ -10,11 +10,11 @@ import (
 )
 
 type Slice struct {
-	special  bool
-	level    byte
-	bitsSz   uint
-	loadedSz uint
-	data     []byte
+	special   bool
+	levelMask LevelMask
+	bitsSz    uint
+	loadedSz  uint
+	data      []byte
 
 	// store it as slice of pointers to make indexing logic cleaner on parse,
 	// from outside it should always come as object to not have problems
@@ -493,12 +493,12 @@ func (c *Slice) Copy() *Slice {
 	data := append([]byte{}, c.data...)
 
 	return &Slice{
-		special:  c.special,
-		level:    c.level,
-		bitsSz:   c.bitsSz,
-		loadedSz: c.loadedSz,
-		data:     data,
-		refs:     c.refs,
+		special:   c.special,
+		levelMask: c.levelMask,
+		bitsSz:    c.bitsSz,
+		loadedSz:  c.loadedSz,
+		data:      data,
+		refs:      c.refs,
 	}
 }
 
@@ -512,10 +512,10 @@ func (c *Slice) ToCell() (*Cell, error) {
 	}
 
 	return &Cell{
-		special: c.special,
-		level:   c.level,
-		bitsSz:  left,
-		data:    data,
-		refs:    c.refs,
+		special:   c.special,
+		levelMask: c.levelMask,
+		bitsSz:    left,
+		data:      data,
+		refs:      c.refs,
 	}, nil
 }

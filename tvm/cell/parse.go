@@ -126,7 +126,7 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 		refsNum := int(flags & 0b111)
 		special := (flags & 0b1000) != 0
 		withHashes := (flags & 0b10000) != 0
-		levelMask := flags >> 5
+		levelMask := LevelMask{flags >> 5}
 
 		if refsNum > 4 {
 			return nil, errors.New("too many refs in cell")
@@ -143,7 +143,7 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 		}
 
 		if withHashes {
-			maskBits := int(math.Ceil(math.Log2(float64(levelMask) + 1)))
+			maskBits := int(math.Ceil(math.Log2(float64(levelMask.mask) + 1)))
 			hashesNum := maskBits + 1
 
 			offset += hashesNum*hashSize + hashesNum*depthSize
@@ -197,7 +197,7 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 
 		cells[i].special = special
 		cells[i].bitsSz = bitsSz
-		cells[i].level = levelMask
+		cells[i].levelMask = levelMask
 		cells[i].data = payload
 		cells[i].refs = refs
 	}

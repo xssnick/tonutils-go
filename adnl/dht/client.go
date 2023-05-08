@@ -325,11 +325,33 @@ func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl t
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.Store(ctx, []byte("address"), 0, data, ttl, ownerKey, copies)
+
+	id := adnl.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
+	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey, copies)
 }
 
-func (c *Client) Store(ctx context.Context, name []byte, index int32, value []byte, ttl time.Duration, ownerKey ed25519.PrivateKey, atLeastCopies int) (copiesMade int, idKey []byte, err error) {
-	id := adnl.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
+func (c *Client) StoreOverlayNodes(ctx context.Context, overlayKey []byte, nodes *overlay.NodesList, ttl time.Duration, copies int) (int, []byte, error) {
+	if len(nodes.List) == 0 {
+		return 0, nil, fmt.Errorf("0 nodes in list")
+	}
+
+	for _, node := range nodes.List {
+		err := node.CheckSignature()
+		if err != nil {
+			return 0, nil, fmt.Errorf("untrusted overlay node in list: %w", err)
+		}
+	}
+
+	data, err := tl.Serialize(nodes, true)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	id := adnl.PublicKeyOverlay{Key: overlayKey}
+	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil, copies)
+}
+
+func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, value []byte, rule any, ttl time.Duration, ownerKey ed25519.PrivateKey, atLeastCopies int) (copiesMade int, idKey []byte, err error) {
 	idKey, err = adnl.ToKeyID(id)
 	if err != nil {
 		return 0, nil, err
@@ -343,19 +365,22 @@ func (c *Client) Store(ctx context.Context, name []byte, index int32, value []by
 				Index: index,
 			},
 			ID:         id,
-			UpdateRule: UpdateRuleSignature{},
+			UpdateRule: rule,
 		},
 		Data: value,
 		TTL:  int32(time.Now().Add(ttl).Unix()),
 	}
 
-	val.KeyDescription.Signature, err = signTL(val.KeyDescription, ownerKey)
-	if err != nil {
-		return 0, nil, fmt.Errorf("failed to sign key description: %w", err)
-	}
-	val.Signature, err = signTL(val, ownerKey)
-	if err != nil {
-		return 0, nil, fmt.Errorf("failed to sign value: %w", err)
+	switch rule.(type) {
+	case UpdateRuleSignature:
+		val.KeyDescription.Signature, err = signTL(val.KeyDescription, ownerKey)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to sign key description: %w", err)
+		}
+		val.Signature, err = signTL(val, ownerKey)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to sign value: %w", err)
+		}
 	}
 
 	kid, err := adnl.ToKeyID(val.KeyDescription.Key)

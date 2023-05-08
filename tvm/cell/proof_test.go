@@ -41,9 +41,8 @@ func TestProofOfProofCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	println(prf.Dump())
 
-	hash2, _ := hex.DecodeString("D3B8077755C605D944CC4C57E1D38B723885EAA1699319A3DCADF018B31B558F")
+	hash2, _ := hex.DecodeString("27FCB2CCEEF7159510BB08F96E037F910A38C1723D08B1FEFBBA43D73E660E3D")
 	err = CheckProof(prf, hash2)
 	if err != nil {
 		t.Fatal(err)

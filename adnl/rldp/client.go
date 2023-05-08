@@ -55,7 +55,7 @@ type decoderStream struct {
 
 const _MTU = 1 << 37
 const _SymbolSize = 768
-const _PacketWaitTime = 15 * time.Millisecond
+const _PacketWaitTime = 5 * time.Millisecond
 
 func NewClient(a ADNL) *RLDP {
 	r := &RLDP{
@@ -154,7 +154,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		defer stream.mx.Unlock()
 
 		if stream.finishedAt != nil {
-			if stream.lastCompleteAt.Add(_PacketWaitTime).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
+			if stream.lastCompleteAt.Add(2 * time.Millisecond).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
 
 				var complete tl.Serializable = Complete{
 					TransferID: m.TransferID,
@@ -268,7 +268,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			stream.maxSeqno = m.Seqno
 
 			// send confirm for each 10 packets or after 30 ms
-			if stream.lastConfirmAt.Add(10*time.Millisecond).Before(tm) ||
+			if stream.lastConfirmAt.Add(20*time.Millisecond).Before(tm) ||
 				stream.receivedNumConfirmed+0 < stream.receivedNum {
 				var confirm tl.Serializable
 				if isV2 {
@@ -351,8 +351,8 @@ func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte) er
 		default:
 		}
 
-		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()/2 { //+enc.BaseSymbolsNum()/2
-			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/2)
+		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()*2 { //+enc.BaseSymbolsNum()/2
+			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()*2)
 
 			select {
 			case <-ctx.Done():

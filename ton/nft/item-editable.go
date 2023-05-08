@@ -36,7 +36,7 @@ func (c *ItemEditableClient) GetEditor(ctx context.Context) (*address.Address, e
 }
 
 func (c *ItemEditableClient) GetEditorAtBlock(ctx context.Context, b *ton.BlockIDExt) (*address.Address, error) {
-	res, err := c.api.RunGetMethod(ctx, b, c.addr, "get_editor")
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_editor")
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_editor method: %w", err)
 	}
@@ -55,9 +55,17 @@ func (c *ItemEditableClient) GetEditorAtBlock(ctx context.Context, b *ton.BlockI
 }
 
 func (c *ItemEditableClient) BuildEditPayload(content ContentAny) (*cell.Cell, error) {
-	con, err := content.ContentCell()
-	if err != nil {
-		return nil, err
+	var con *cell.Cell
+	switch cnt := content.(type) {
+	case *ContentOffchain:
+		// we have exception for offchain, it is without prefix
+		con = cell.BeginCell().MustStoreStringSnake(cnt.URI).EndCell()
+	default:
+		var err error
+		con, err = content.ContentCell()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	body, err := tlb.ToCell(ItemEditPayload{

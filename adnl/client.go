@@ -69,7 +69,7 @@ func Connect(ctx context.Context, addr string, peerKey ed25519.PublicKey, ourKey
 		}
 
 		return nil
-	})
+	}, a.Close)
 
 	go func() {
 		if err = listenPacketsAsClient(a, conn); err != nil {

@@ -299,3 +299,22 @@ func (n *Node) Sign(key ed25519.PrivateKey) error {
 
 	return nil
 }
+
+func NewNode(overlay []byte, key ed25519.PrivateKey) (*Node, error) {
+	keyHash, err := adnl.ToKeyID(adnl.PublicKeyOverlay{
+		Key: overlay,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	oNode := Node{
+		ID:      adnl.PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)},
+		Overlay: keyHash,
+		Version: int32(time.Now().Unix()),
+	}
+	if err := oNode.Sign(key); err != nil {
+		return nil, err
+	}
+	return &oNode, nil
+}

@@ -131,6 +131,39 @@ func (t *TorrentHeader) Parse(data []byte) (_ []byte, err error) {
 }
 
 func (t *TorrentHeader) Serialize() ([]byte, error) {
-	//TODO implement me
-	return nil, fmt.Errorf("not implemented")
+	data := make([]byte, 20)
+	binary.LittleEndian.PutUint32(data[0:], t.FilesCount)
+	binary.LittleEndian.PutUint64(data[4:], t.TotalNameSize)
+	binary.LittleEndian.PutUint64(data[12:], t.TotalDataSize)
+
+	fecData, err := tl.Serialize(t.FEC, true)
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, fecData...)
+
+	if t.DirNameSize != uint32(len(t.DirName)) {
+		return nil, fmt.Errorf("incorrect dir name size")
+	}
+
+	dataDirNameSz := make([]byte, 4)
+	binary.LittleEndian.PutUint32(dataDirNameSz, t.DirNameSize)
+	data = append(data, dataDirNameSz...)
+	data = append(data, t.DirName...)
+
+	for _, ni := range t.NameIndex {
+		iData := make([]byte, 8)
+		binary.LittleEndian.PutUint64(iData, ni)
+		data = append(data, iData...)
+	}
+
+	for _, ni := range t.DataIndex {
+		iData := make([]byte, 8)
+		binary.LittleEndian.PutUint64(iData, ni)
+		data = append(data, iData...)
+	}
+	data = append(data, t.Names...)
+	data = append(data, t.Data...)
+
+	return data, nil
 }
