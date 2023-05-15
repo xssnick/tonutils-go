@@ -210,7 +210,7 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	}
 
 	if m.Body != nil {
-		if b.BitsLeft() < m.Body.BitsSize() {
+		if int(b.BitsLeft())-1 < int(m.Body.BitsSize()) {
 			b.MustStoreBoolBit(true)
 			b.MustStoreRef(m.Body)
 		} else {
@@ -242,7 +242,7 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 			return nil, fmt.Errorf("failed to serialize state init: %w", err)
 		}
 
-		if builder.BitsLeft()-2 < stateCell.BitsSize() || builder.RefsLeft()-2 < m.Body.RefsNum() {
+		if int(builder.BitsLeft())-2 < int(stateCell.BitsSize()) || int(builder.RefsLeft())-2 < int(m.Body.RefsNum()) {
 			builder.MustStoreBoolBit(true) // state as ref
 			builder.MustStoreRef(stateCell)
 		} else {
@@ -251,7 +251,7 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 		}
 	}
 
-	if builder.BitsLeft() < m.Body.BitsSize() || builder.RefsLeft() < m.Body.RefsNum() {
+	if int(builder.BitsLeft())-1 < int(m.Body.BitsSize()) || builder.RefsLeft() < m.Body.RefsNum() {
 		builder.MustStoreBoolBit(true) // body as ref
 		builder.MustStoreRef(m.Body)
 	} else {
