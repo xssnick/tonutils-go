@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 )
 
@@ -31,6 +32,20 @@ func GetConfigFromUrl(ctx context.Context, url string) (*GlobalConfig, error) {
 
 	config := &GlobalConfig{}
 	if err := json.NewDecoder(res.Body).Decode(config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func GetConfigFromFile(filepath string) (*GlobalConfig, error) {
+	config := &GlobalConfig{}
+
+	configData, err := os.ReadFile(filepath)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(configData, config); err != nil {
 		return nil, err
 	}
 
