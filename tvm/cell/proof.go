@@ -10,7 +10,7 @@ import (
 type cellHash = []byte
 
 func (c *Cell) CreateProof(forHashes [][]byte) (*Cell, error) {
-	proofBody := c.copy() // TODO: optimize
+	proofBody := c.copy()
 	hasParts, err := proofBody.toProof(forHashes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
@@ -159,7 +159,7 @@ func (c *Cell) getHash(level int) []byte {
 	}
 
 	// lazy hash calc
-	if c.hashes == nil {
+	if len(c.hashes) <= hashIndex*32 {
 		c.calculateHashes()
 	}
 
@@ -273,7 +273,7 @@ func (c *Cell) getDepth(level int) uint16 {
 	}
 
 	// lazy hash calc
-	if c.hashes == nil {
+	if len(c.depthLevels) <= hashIndex {
 		c.calculateHashes()
 	}
 

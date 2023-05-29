@@ -16,6 +16,7 @@ import (
 )
 
 type ADNL interface {
+	GetID() []byte
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
@@ -75,6 +76,10 @@ func NewClientV2(a ADNL) *RLDP {
 	c := NewClient(a)
 	c.useV2 = true
 	return c
+}
+
+func (r *RLDP) GetADNL() ADNL {
+	return r.adnl
 }
 
 func (r *RLDP) SetOnQuery(handler func(transferId []byte, query *Query) error) {
