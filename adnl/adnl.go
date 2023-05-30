@@ -397,23 +397,26 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 	a.activeQueries[reqID] = res
 	a.mx.Unlock()
 
-	if err = a.sendRequestMaySplit(ctx, ch, q); err != nil {
-		a.mx.Lock()
-		delete(a.activeQueries, reqID)
-		a.mx.Unlock()
+	for {
+		if err = a.sendRequestMaySplit(ctx, ch, q); err != nil {
+			a.mx.Lock()
+			delete(a.activeQueries, reqID)
+			a.mx.Unlock()
 
-		return fmt.Errorf("request failed: %w", err)
-	}
-
-	select {
-	case resp := <-res:
-		if err, ok := resp.(error); ok {
-			return err
+			return fmt.Errorf("request failed: %w", err)
 		}
-		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp))
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("deadline exceeded, addr %s %s, err: %w", a.addr, hex.EncodeToString(a.peerKey), ctx.Err())
+
+		select {
+		case resp := <-res:
+			if err, ok := resp.(error); ok {
+				return err
+			}
+			reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp))
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("deadline exceeded, addr %s %s, err: %w", a.addr, hex.EncodeToString(a.peerKey), ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
 
