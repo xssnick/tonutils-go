@@ -21,8 +21,8 @@ type ShardStateUnsplit struct {
 	Accounts        struct {
 		ShardAccounts *cell.Dictionary `tlb:"dict 256"`
 	} `tlb:"^"`
-	Stats        *cell.Cell    `tlb:"^"`
-	McStateExtra *McStateExtra `tlb:"maybe ^"`
+	Stats        *cell.Cell `tlb:"^"`
+	McStateExtra *cell.Cell `tlb:"maybe ^"`
 }
 
 type McStateExtra struct {
@@ -148,8 +148,9 @@ func (s *ShardState) LoadFromCell(loader *cell.Slice) error {
 		s.Right = &right
 	case 0x9023afe2:
 		var state ShardStateUnsplit
-		err = LoadFromCell(&state, loader)
+		err = LoadFromCell(&state, preloader, true)
 		if err != nil {
+			fmt.Println("ShardStateUnsplit error", err.Error())
 			return err
 		}
 		s.Left = state
