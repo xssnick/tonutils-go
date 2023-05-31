@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"math/big"
 )
 
 func init() {
@@ -82,12 +83,18 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 			return nil, errors.New("no mc extra state found, something went wrong")
 		}
 
+		var stateExtra tlb.McStateExtra
+		err = tlb.LoadFromCell(&stateExtra, state.McStateExtra.BeginParse())
+		if err != nil {
+			return nil, fmt.Errorf("load masterchain state extra: %w", err)
+		}
+
 		result := &BlockchainConfig{data: map[int32]*cell.Cell{}}
 
 		if len(onlyParams) > 0 {
 			// we need it because lite server may add some unwanted keys
 			for _, param := range onlyParams {
-				res := state.McStateExtra.ConfigParams.Config.GetByIntKey(big.NewInt(int64(param)))
+				res := stateExtra.ConfigParams.Config.GetByIntKey(big.NewInt(int64(param)))
 				if res == nil {
 					return nil, fmt.Errorf("config param %d not found", param)
 				}
@@ -100,7 +107,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 				result.data[param] = v.MustToCell()
 			}
 		} else {
-			for _, kv := range state.McStateExtra.ConfigParams.Config.All() {
+			for _, kv := range stateExtra.ConfigParams.Config.All() {
 				v, err := kv.Value.BeginParse().LoadRef()
 				if err != nil {
 					return nil, fmt.Errorf("failed to load config param %d, err: %w", kv.Key.BeginParse().MustLoadInt(32), err)
