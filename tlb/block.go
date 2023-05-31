@@ -2,6 +2,7 @@ package tlb
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -52,7 +53,7 @@ type Block struct {
 	GlobalID    int32       `tlb:"## 32"`
 	BlockInfo   BlockHeader `tlb:"^"`
 	ValueFlow   *cell.Cell  `tlb:"^"`
-	StateUpdate StateUpdate `tlb:"^"`
+	StateUpdate *cell.Cell  `tlb:"^"`
 	Extra       *BlockExtra `tlb:"^"`
 }
 
