@@ -2,6 +2,7 @@ package tlb
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -49,24 +50,72 @@ type ShardIdent struct {
 	ShardPrefix uint64 `tlb:"## 64"`
 }
 
+type FutureSplitMergeNone struct {
+	_ Magic `tlb:"$00"`
+}
+
+type FutureSplit struct {
+	_          Magic  `tlb:"$10"`
+	SplitUtime uint32 `tlb:"## 32"`
+	Interval   uint32 `tlb:"## 32"`
+}
+
+type FutureMerge struct {
+	_          Magic  `tlb:"$11"`
+	MergeUtime uint32 `tlb:"## 32"`
+	Interval   uint32 `tlb:"## 32"`
+}
+
+type FutureSplitMerge struct {
+	FSM any `tlb:"."`
+}
+
 type ShardDesc struct {
-	_                  Magic  `tlb:"#a"`
-	SeqNo              uint32 `tlb:"## 32"`
-	RegMcSeqno         uint32 `tlb:"## 32"`
-	StartLT            uint64 `tlb:"## 64"`
-	EndLT              uint64 `tlb:"## 64"`
-	RootHash           []byte `tlb:"bits 256"`
-	FileHash           []byte `tlb:"bits 256"`
-	BeforeSplit        bool   `tlb:"bool"`
-	BeforeMerge        bool   `tlb:"bool"`
-	WantSplit          bool   `tlb:"bool"`
-	WantMerge          bool   `tlb:"bool"`
-	NXCCUpdated        bool   `tlb:"bool"`
-	Flags              uint8  `tlb:"## 3"`
-	NextCatchainSeqNo  uint32 `tlb:"## 32"`
-	NextValidatorShard int64  `tlb:"## 64"`
-	MinRefMcSeqNo      uint32 `tlb:"## 32"`
-	GenUTime           uint32 `tlb:"## 32"`
+	_                  Magic            `tlb:"#a"`
+	SeqNo              uint32           `tlb:"## 32"`
+	RegMcSeqno         uint32           `tlb:"## 32"`
+	StartLT            uint64           `tlb:"## 64"`
+	EndLT              uint64           `tlb:"## 64"`
+	RootHash           []byte           `tlb:"bits 256"`
+	FileHash           []byte           `tlb:"bits 256"`
+	BeforeSplit        bool             `tlb:"bool"`
+	BeforeMerge        bool             `tlb:"bool"`
+	WantSplit          bool             `tlb:"bool"`
+	WantMerge          bool             `tlb:"bool"`
+	NXCCUpdated        bool             `tlb:"bool"`
+	Flags              uint8            `tlb:"## 3"`
+	NextCatchainSeqNo  uint32           `tlb:"## 32"`
+	NextValidatorShard int64            `tlb:"## 64"`
+	MinRefMcSeqNo      uint32           `tlb:"## 32"`
+	GenUTime           uint32           `tlb:"## 32"`
+	SplitMergeAt       FutureSplitMerge `tlb:"."`
+	Currencies         struct {
+		FeesCollected CurrencyCollection `tlb:"."`
+		FundsCreated  CurrencyCollection `tlb:"."`
+	} `tlb:"^"`
+}
+
+type ShardDescB struct {
+	_                  Magic              `tlb:"#b"`
+	SeqNo              uint32             `tlb:"## 32"`
+	RegMcSeqno         uint32             `tlb:"## 32"`
+	StartLT            uint64             `tlb:"## 64"`
+	EndLT              uint64             `tlb:"## 64"`
+	RootHash           []byte             `tlb:"bits 256"`
+	FileHash           []byte             `tlb:"bits 256"`
+	BeforeSplit        bool               `tlb:"bool"`
+	BeforeMerge        bool               `tlb:"bool"`
+	WantSplit          bool               `tlb:"bool"`
+	WantMerge          bool               `tlb:"bool"`
+	NXCCUpdated        bool               `tlb:"bool"`
+	Flags              uint8              `tlb:"## 3"`
+	NextCatchainSeqNo  uint32             `tlb:"## 32"`
+	NextValidatorShard int64              `tlb:"## 64"`
+	MinRefMcSeqNo      uint32             `tlb:"## 32"`
+	GenUTime           uint32             `tlb:"## 32"`
+	SplitMergeAt       FutureSplitMerge   `tlb:"."`
+	FeesCollected      CurrencyCollection `tlb:"."`
+	FundsCreated       CurrencyCollection `tlb:"."`
 }
 
 func (s *ShardState) LoadFromCell(loader *cell.Slice) error {
@@ -127,6 +176,41 @@ func (p *ConfigParams) LoadFromCell(loader *cell.Slice) error {
 
 	p.ConfigAddr = address.NewAddress(0, 255, addrBits)
 	p.Config = dict
+
+	return nil
+}
+
+func (s *FutureSplitMerge) LoadFromCell(loader *cell.Slice) error {
+	isNotEmpty, err := loader.LoadBoolBit()
+	if err != nil {
+		return fmt.Errorf("load bool bit is fsm none: %w", err)
+	}
+
+	if !isNotEmpty {
+		s.FSM = FutureSplitMergeNone{}
+		return nil
+	}
+
+	isMerge, err := loader.LoadBoolBit()
+	if err != nil {
+		return fmt.Errorf("load bool bit is fsm merge: %w", err)
+	}
+
+	if !isMerge {
+		var split FutureSplit
+		err = LoadFromCell(&split, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse FutureSplit: %w", err)
+		}
+		s.FSM = split
+	} else {
+		var merge FutureMerge
+		err = LoadFromCell(&merge, loader, true)
+		if err != nil {
+			return fmt.Errorf("failed to parse FutureMerge: %w", err)
+		}
+		s.FSM = merge
+	}
 
 	return nil
 }
