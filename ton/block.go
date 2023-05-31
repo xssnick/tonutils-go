@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
 	"time"
+
+	"github.com/xssnick/tonutils-go/tl"
 
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -359,18 +360,41 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 			}
 
 			for _, bk := range binTree.All() {
-				var shardDesc tlb.ShardDesc
-				if err = tlb.LoadFromCell(&shardDesc, bk.Value.BeginParse()); err != nil {
-					return nil, fmt.Errorf("load ShardDesc err: %w", err)
+				loader := bk.Value.BeginParse()
+
+				ab, err := loader.LoadUInt(4)
+				if err != nil {
+					return nil, fmt.Errorf("load ShardDesc magic err: %w", err)
 				}
 
-				shards = append(shards, &BlockIDExt{
-					Workchain: int32(workchain),
-					Shard:     shardDesc.NextValidatorShard,
-					SeqNo:     shardDesc.SeqNo,
-					RootHash:  shardDesc.RootHash,
-					FileHash:  shardDesc.FileHash,
-				})
+				switch ab {
+				case 0xa:
+					var shardDesc tlb.ShardDesc
+					if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
+						return nil, fmt.Errorf("load ShardDesc err: %w", err)
+					}
+					shards = append(shards, &BlockIDExt{
+						Workchain: int32(workchain),
+						Shard:     shardDesc.NextValidatorShard,
+						SeqNo:     shardDesc.SeqNo,
+						RootHash:  shardDesc.RootHash,
+						FileHash:  shardDesc.FileHash,
+					})
+				case 0xb:
+					var shardDesc tlb.ShardDescB
+					if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
+						return nil, fmt.Errorf("load ShardDescB err: %w", err)
+					}
+					shards = append(shards, &BlockIDExt{
+						Workchain: int32(workchain),
+						Shard:     shardDesc.NextValidatorShard,
+						SeqNo:     shardDesc.SeqNo,
+						RootHash:  shardDesc.RootHash,
+						FileHash:  shardDesc.FileHash,
+					})
+				default:
+					return nil, fmt.Errorf("wrong ShardDesc magic: %x", ab)
+				}
 			}
 		}
 

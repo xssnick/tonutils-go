@@ -111,6 +111,59 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 	// TODO: data check
 }
 
+func TestAPIClient_GetOldBlockData(t *testing.T) {
+	client := liteclient.NewConnectionPool()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
+	if err != nil {
+		panic(err)
+	}
+
+	api := NewAPIClient(client)
+
+	b, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	b, err = api.LookupBlock(ctx, b.Workchain, b.Shard, 3)
+	if err != nil {
+		t.Fatal("lookup err:", err.Error())
+		return
+	}
+
+	shards, err := api.GetBlockShardsInfo(ctx, b)
+	if err != nil {
+		log.Fatalln("get shards err:", err.Error())
+		return
+	}
+
+	for _, shard := range shards {
+		data, err := api.GetBlockData(ctx, shard)
+		if err != nil {
+			t.Fatal("Get shard block data err:", err.Error())
+			return
+		}
+		_, err = data.BlockInfo.GetParentBlocks()
+		if err != nil {
+			t.Fatal("Get block parents err:", err.Error())
+			return
+		}
+	}
+
+	_, err = api.GetBlockData(ctx, b)
+	if err != nil {
+		t.Fatal("Get master block data err:", err.Error())
+		return
+	}
+
+	// TODO: data check
+}
+
 func Test_RunMethod(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
