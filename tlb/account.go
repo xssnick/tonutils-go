@@ -2,10 +2,10 @@ package tlb
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"github.com/sigurn/crc16"
 	"math/big"
+
+	"github.com/sigurn/crc16"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -43,6 +43,7 @@ type AccountStorage struct {
 	Status            AccountStatus
 	LastTransactionLT uint64
 	Balance           Coins
+	ExtraCurrencies   *cell.Dictionary `tlb:"dict 32"`
 
 	// has value when active
 	StateInit *StateInit
@@ -221,13 +222,9 @@ func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 		return fmt.Errorf("failed to load coins balance: %w", err)
 	}
 
-	extraExists, err := loader.LoadBoolBit()
+	s.ExtraCurrencies, err = loader.LoadDict(32)
 	if err != nil {
-		return fmt.Errorf("failed to load extra exists bit: %w", err)
-	}
-
-	if extraExists {
-		return errors.New("extra currency info is not supported for AccountStorage")
+		return fmt.Errorf("failed to load extra currencies: %w", err)
 	}
 
 	isStatusActive, err := loader.LoadBoolBit()

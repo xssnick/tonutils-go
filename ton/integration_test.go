@@ -531,3 +531,33 @@ func Test_LSErrorCase(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
+	client := liteclient.NewConnectionPool()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err := client.AddConnection(context.Background(), "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mainnetAPI := NewAPIClient(client)
+
+	shard := uint64(0xa000000000000000)
+
+	b, err := mainnetAPI.LookupBlock(ctx, 0, int64(shard), 3328952)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := mainnetAPI.GetAccount(ctx, b, address.MustParseAddr("EQCYv992KVNNCKZHSLLJgM2GGzsgL0UgWP24BCQBaAdqSE2I"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if a.State.ExtraCurrencies == nil {
+		t.Fatal("expected extra currencies dict")
+	}
+}
