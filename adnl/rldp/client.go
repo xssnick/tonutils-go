@@ -159,7 +159,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		defer stream.mx.Unlock()
 
 		if stream.finishedAt != nil {
-			if stream.lastCompleteAt.Add(2 * time.Millisecond).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
+			if stream.lastCompleteAt.Add(5 * time.Millisecond).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
 
 				var complete tl.Serializable = Complete{
 					TransferID: m.TransferID,
@@ -356,8 +356,8 @@ func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte) er
 		default:
 		}
 
-		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()*2 { //+enc.BaseSymbolsNum()/2
-			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()*2)
+		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()/2 { //+enc.BaseSymbolsNum()/2
+			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/2)
 
 			select {
 			case <-ctx.Done():

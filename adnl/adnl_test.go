@@ -236,3 +236,92 @@ func TestADNL_Connect(t *testing.T) {
 	}
 	adnl.Close()
 }
+
+func TestADNL_ClientServerStartStop(t *testing.T) {
+	_, aPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bPub, bPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewGateway(aPriv)
+	err = a.StartServer("127.0.0.1:9055")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetConnectionHandler(connHandler)
+
+	b := NewGateway(bPriv)
+	err = b.StartServer("127.0.0.1:9065")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetConnectionHandler(connHandler)
+
+	p, err := a.RegisterClient("127.0.0.1:9065", bPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var res MessagePong
+	err = p.Query(ctx, &MessagePing{7755}, &res)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Value != 7755 {
+		t.Fatal("value not eq")
+	}
+
+	_ = b.Close()
+	b = NewGateway(bPriv)
+	err = b.StartServer("127.0.0.1:9065")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.SetConnectionHandler(connHandler)
+
+	p.Close()
+	p, err = a.RegisterClient("127.0.0.1:9065", bPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = p.Query(ctx, &MessagePing{1111}, &res)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func connHandler(client Peer) error {
+	client.SetQueryHandler(func(msg *MessageQuery) error {
+		switch m := msg.Data.(type) {
+		case MessagePing:
+			if m.Value == 9999 {
+				client.Close()
+				return fmt.Errorf("handle mock err")
+			}
+
+			err := client.Answer(context.Background(), msg.ID, MessagePong{
+				Value: m.Value,
+			})
+			if err != nil {
+				panic(err)
+			}
+		}
+		return nil
+	})
+	client.SetCustomMessageHandler(func(msg *MessageCustom) error {
+		return client.SendCustomMessage(context.Background(), TestMsg{Data: make([]byte, 1280)})
+	})
+	client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
+	})
+	return nil
+}

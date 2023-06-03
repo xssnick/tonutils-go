@@ -98,9 +98,9 @@ func initADNL(key ed25519.PrivateKey) *ADNL {
 }
 
 func (a *ADNL) Close() {
-	a.mx.Lock()
-	defer a.mx.Unlock()
+	trigger := false
 
+	a.mx.Lock()
 	if !a.closed {
 		a.closed = true
 
@@ -111,10 +111,13 @@ func (a *ADNL) Close() {
 			con.Close()
 		}
 
-		if a.onDisconnect != nil {
-			// do it async to not get accidental deadlock
-			go a.onDisconnect(a.addr, a.peerKey)
-		}
+		trigger = true
+	}
+	a.mx.Unlock()
+
+	disc := a.onDisconnect
+	if trigger && disc != nil {
+		disc(a.addr, a.peerKey)
 	}
 }
 
