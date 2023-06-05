@@ -448,6 +448,11 @@ func (g *Gateway) write(deadline time.Time, addr net.Addr, buf []byte) error {
 	return nil
 }
 
+func (g *Gateway) GetID() []byte {
+	id, _ := ToKeyID(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
+	return id
+}
+
 func (p *peerConn) GetID() []byte {
 	return p.client.GetID()
 }
