@@ -163,6 +163,11 @@ func (a *ADNL) processPacket(packet *PacketContent, ch *Channel) (err error) {
 	}
 
 	if packet.ReinitDate != nil && *packet.ReinitDate > a.dstReinit {
+		// reset their seqno even if it is lower,
+		// because other side could lose counter
+		a.confirmSeqno = seqno
+		a.loss = 0
+
 		// a.dstReinit = *packet.ReinitDate
 		// a.seqno = 0
 		//	a.channel = nil
