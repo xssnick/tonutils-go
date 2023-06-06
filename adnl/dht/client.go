@@ -140,7 +140,7 @@ func NewClient(connectTimeout time.Duration, gateway Gateway, nodes []*Node) (*C
 			ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 			defer cancel()
 
-			_, err := c.addNode(ctx, node)
+			_, err := c.addNode(ctx, node, false)
 			if err != nil {
 				Logger("failed to add DHT node", node.AddrList.Addresses[0].IP.String(), node.AddrList.Addresses[0].Port, " from config, err:", err.Error())
 				return
@@ -200,7 +200,7 @@ func (c *Client) nodeStateHandler(id string) func(node *dhtNode, state int) {
 	}
 }
 
-func (c *Client) addNode(ctx context.Context, node *Node) (_ *dhtNode, err error) {
+func (c *Client) addNode(ctx context.Context, node *Node, waitConnection bool) (_ *dhtNode, err error) {
 	pub, ok := node.ID.(adnl.PublicKeyED25519)
 	if !ok {
 		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
@@ -241,16 +241,22 @@ func (c *Client) addNode(ctx context.Context, node *Node) (_ *dhtNode, err error
 		c.mx.Unlock()
 	}
 
-	for {
-		if kNode.mx.TryLock() {
-			break
-		}
+	if waitConnection {
+		for {
+			if kNode.mx.TryLock() {
+				break
+			}
 
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-			runtime.Gosched()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				runtime.Gosched()
+			}
+		}
+	} else {
+		if !kNode.mx.TryLock() {
+			return nil, fmt.Errorf("connection already in progress")
 		}
 	}
 
@@ -416,6 +422,7 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 
 	var checkedMx sync.RWMutex
 	checked := map[string]bool{}
+	triedToAdd := map[string]bool{}
 
 	plist := c.buildPriorityList(kid)
 
@@ -462,8 +469,15 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 
 						priority := leadingZeroBits(xor(kid, nid))
 						if priority > currentPriority {
+							checkedMx.Lock()
+							tried := triedToAdd[hex.EncodeToString(nid)]
+							if !tried {
+								triedToAdd[hex.EncodeToString(nid)] = true
+							}
+							checkedMx.Unlock()
+
 							addCtx, cancel := context.WithTimeout(storeCtx, queryTimeout)
-							dNode, err := c.addNode(addCtx, n)
+							dNode, err := c.addNode(addCtx, n, !tried)
 							cancel()
 							if err != nil {
 								continue
@@ -544,6 +558,9 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
+	var checkedMx sync.RWMutex
+	triedToAdd := map[string]bool{}
+
 	const threads = 12
 	result := make(chan *foundResult, threads)
 	var numNoTasks int64
@@ -605,7 +622,19 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 						go func(n *Node) {
 							defer wg.Done()
 
-							newNode, err := c.addNode(connectCtx, n)
+							nid, err := adnl.ToKeyID(n.ID)
+							if err != nil {
+								return
+							}
+
+							checkedMx.Lock()
+							tried := triedToAdd[hex.EncodeToString(nid)]
+							if !tried {
+								triedToAdd[hex.EncodeToString(nid)] = true
+							}
+							checkedMx.Unlock()
+
+							newNode, err := c.addNode(connectCtx, n, !tried)
 							if err != nil {
 								return
 							}
