@@ -558,6 +558,119 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
+	result := make(chan *foundResult)
+
+	checked := map[string]bool{}
+	checkedMx := sync.Mutex{}
+	go func() {
+		wg := sync.WaitGroup{}
+		for {
+			n, _ := plist.getNode()
+			if n == nil {
+				break
+			}
+
+			wg.Add(1)
+			go func() {
+				c.searchVal(threadCtx, n, id, result, checked, &checkedMx)
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+
+		select {
+		case <-threadCtx.Done():
+		case result <- nil:
+		}
+	}()
+
+	select {
+	case val := <-result:
+		if val == nil {
+			return nil, cont, ErrDHTValueIsNotFound
+		}
+		cont.checkedNodes = append(cont.checkedNodes, val.node)
+		return val.value, cont, nil
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+}
+
+func (c *Client) searchVal(ctx context.Context, n *dhtNode, id []byte, result chan<- *foundResult, checked map[string]bool, mx *sync.Mutex) {
+	val, err := n.findValue(ctx, id, _K)
+	if err != nil {
+		return
+	}
+
+	switch v := val.(type) {
+	case *Value:
+		select {
+		case <-ctx.Done():
+		case result <- &foundResult{value: v, node: n}:
+		}
+		return
+	case []*Node:
+		if len(v) > 16 {
+			// max 16 nodes to check
+			v = v[:16]
+		}
+
+		wg := sync.WaitGroup{}
+		wg.Add(len(v))
+
+		for _, node := range v {
+			nid, keyErr := adnl.ToKeyID(node.ID)
+			if keyErr != nil {
+				wg.Done()
+				continue
+			}
+
+			mx.Lock()
+			if checked[string(nid)] {
+				mx.Unlock()
+				wg.Done()
+				continue
+			}
+			checked[string(nid)] = true
+			mx.Unlock()
+
+			go func(node *Node) {
+				defer wg.Done()
+
+				connectCtx, connectCancel := context.WithTimeout(ctx, 40*time.Second)
+				newNode, err := c.addNode(connectCtx, node, true)
+				connectCancel()
+				if err != nil {
+					return
+				}
+
+				c.searchVal(ctx, newNode, id, result, checked, mx)
+			}(node)
+		}
+		wg.Wait()
+	}
+}
+
+func (c *Client) FindValueOld(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
+	id, keyErr := adnl.ToKeyID(key)
+	if keyErr != nil {
+		return nil, nil, keyErr
+	}
+
+	plist := c.buildPriorityList(id)
+
+	cont := &Continuation{}
+	if len(continuation) > 0 && continuation[0] != nil {
+		cont = continuation[0]
+		for _, n := range cont.checkedNodes {
+			// mark nodes as used to not get a value from them again
+			plist.markUsed(n, true)
+		}
+	}
+
+	threadCtx, stopThreads := context.WithCancel(ctx)
+	defer stopThreads()
+
 	var checkedMx sync.RWMutex
 	triedToAdd := map[string]bool{}
 
