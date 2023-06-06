@@ -34,9 +34,14 @@ type Gateway interface {
 	RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error)
 }
 
+type knownNode struct {
+	node *Node
+	mx   sync.Mutex
+}
+
 type Client struct {
 	activeNodes    map[string]*dhtNode
-	knownNodesInfo map[string]*Node
+	knownNodesInfo map[string]*knownNode
 	queryTimeout   time.Duration
 	mx             sync.RWMutex
 	minNodeMx      sync.Mutex
@@ -122,7 +127,7 @@ func NewClient(connectTimeout time.Duration, gateway Gateway, nodes []*Node) (*C
 	globalCtx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		activeNodes:     map[string]*dhtNode{},
-		knownNodesInfo:  map[string]*Node{},
+		knownNodesInfo:  map[string]*knownNode{},
 		globalCtx:       globalCtx,
 		globalCtxCancel: cancel,
 		gateway:         gateway,
@@ -228,15 +233,36 @@ func (c *Client) addNode(ctx context.Context, node *Node) (_ *dhtNode, err error
 		c.mx.Lock()
 		// check again under lock to guarantee that only one connection will be made
 		if c.knownNodesInfo[keyID] == nil {
-			c.knownNodesInfo[keyID] = node
+			kNode = &knownNode{node: node}
+			c.knownNodesInfo[keyID] = kNode
 		} else {
 			kNode = c.knownNodesInfo[keyID]
 		}
 		c.mx.Unlock()
 	}
 
-	if kNode != nil {
-		return nil, fmt.Errorf("node is known, but no active connection yet")
+	for {
+		if kNode.mx.TryLock() {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			runtime.Gosched()
+		}
+	}
+
+	defer kNode.mx.Unlock()
+
+	c.mx.RLock()
+	aNode = c.activeNodes[keyID]
+	c.mx.RUnlock()
+
+	if aNode != nil {
+		// we already connected to this node, just return it
+		return aNode, nil
 	}
 
 	// connect to first available address of node
@@ -566,9 +592,9 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 				case *Value:
 					result <- &foundResult{value: v, node: node}
 				case []*Node:
-					if len(v) > 12 {
-						// max 12 nodes to check
-						v = v[:12]
+					if len(v) > 24 {
+						// max 24 nodes to check
+						v = v[:24]
 					}
 
 					wg := sync.WaitGroup{}

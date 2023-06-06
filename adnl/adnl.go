@@ -370,7 +370,7 @@ func (a *ADNL) processAnswer(id string, query any) {
 			res <- query
 		}
 	} else {
-		Logger("unknown response with id", id, a.addr, reflect.TypeOf(query).String())
+		// Logger("unknown response with id", id, a.addr, reflect.TypeOf(query).String())
 	}
 }
 
