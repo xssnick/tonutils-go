@@ -570,6 +570,10 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 				break
 			}
 
+			checkedMx.Lock()
+			checked[string(n.id)] = true
+			checkedMx.Unlock()
+
 			wg.Add(1)
 			go func() {
 				c.searchVal(threadCtx, n, id, result, checked, &checkedMx)
@@ -597,7 +601,9 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 }
 
 func (c *Client) searchVal(ctx context.Context, n *dhtNode, id []byte, result chan<- *foundResult, checked map[string]bool, mx *sync.Mutex) {
-	val, err := n.findValue(ctx, id, _K)
+	findCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+	val, err := n.findValue(findCtx, id, _K)
+	cancel()
 	if err != nil {
 		return
 	}
@@ -637,7 +643,7 @@ func (c *Client) searchVal(ctx context.Context, n *dhtNode, id []byte, result ch
 			go func(node *Node) {
 				defer wg.Done()
 
-				connectCtx, connectCancel := context.WithTimeout(ctx, 40*time.Second)
+				connectCtx, connectCancel := context.WithTimeout(ctx, queryTimeout)
 				newNode, err := c.addNode(connectCtx, node, true)
 				connectCancel()
 				if err != nil {
@@ -827,7 +833,7 @@ func (c *Client) nodesPinger() {
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
-	plist := newPriorityList(_K, id)
+	plist := newPriorityList(_K*3, id)
 
 	added := 0
 	c.mx.RLock()

@@ -424,7 +424,7 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 			return nil
 		case <-ctx.Done():
 			return fmt.Errorf("deadline exceeded, addr %s %s, err: %w", a.addr, hex.EncodeToString(a.peerKey), ctx.Err())
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }
