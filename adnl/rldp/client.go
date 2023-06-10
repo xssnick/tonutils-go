@@ -16,6 +16,7 @@ import (
 )
 
 type ADNL interface {
+	RemoteAddr() string
 	GetID() []byte
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
