@@ -48,12 +48,10 @@ func (c *Client) connectToNode(ctx context.Context, id []byte, addr string, serv
 		client:        c,
 	}
 
-	n.changeState(_StateThrottle)
-
-	/*err := n.checkPing(ctx)
+	err := n.checkPing(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ping node, err: %w", err)
-	}*/
+	}
 
 	return n, nil
 }

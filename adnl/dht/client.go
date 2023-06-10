@@ -538,7 +538,7 @@ type foundResult struct {
 	node  *dhtNode
 }
 
-func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
+func (c *Client) FindValueAggressive(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
 	id, keyErr := adnl.ToKeyID(key)
 	if keyErr != nil {
 		return nil, nil, keyErr
@@ -657,7 +657,7 @@ func (c *Client) searchVal(ctx context.Context, n *dhtNode, id []byte, result ch
 	}
 }
 
-func (c *Client) FindValueOld(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
+func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
 	id, keyErr := adnl.ToKeyID(key)
 	if keyErr != nil {
 		return nil, nil, keyErr
@@ -680,7 +680,7 @@ func (c *Client) FindValueOld(ctx context.Context, key *Key, continuation ...*Co
 	var checkedMx sync.RWMutex
 	triedToAdd := map[string]bool{}
 
-	const threads = 12
+	const threads = 8
 	result := make(chan *foundResult, threads)
 	var numNoTasks int64
 	for i := 0; i < threads; i++ {
@@ -866,4 +866,79 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	c.mx.RUnlock()
 
 	return plist
+}
+
+func TstsNodesFind(c *Client) {
+	var n *Node
+	for s := range c.activeNodes {
+		n = c.knownNodesInfo[s].node
+		println(n.AddrList.Addresses[0].IP.String())
+		break
+	}
+
+	hg, _ := hex.DecodeString("7906710747daaad26b08df75dcfb695b44d9d0a5657ba91aeb04de97d11dba6b")
+	nodes, _, err := c.FindOverlayNodes(context.Background(), hg, nil)
+	if err != nil {
+		println("OVER ERR")
+	} else {
+		println(nodes.List)
+	}
+
+	/*	kkk, _ := hex.DecodeString("14bbe0fe397b143b7bb6f259de2ee2f4d0196dfd1b34486d6ec550ba0cf1ecc1")
+		list, _, err := c.FindAddresses(context.Background(), kkk)
+		if err != nil {
+			println("FIND ERR")
+		} else {
+			println(list.Addresses)
+		}*/
+
+	err = search(1, n, c)
+	panic(err)
+}
+
+func search(i int, n *Node, c *Client) error {
+	addr := n.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(n.AddrList.Addresses[0].Port)
+
+	println("search", i, addr)
+
+	pub, _ := n.ID.(adnl.PublicKeyED25519)
+	kid, _ := adnl.ToKeyID(pub)
+
+	kk, _ := hex.DecodeString("14bbe0fe397b143b7bb6f259de2ee2f4d0196dfd1b34486d6ec550ba0cf1ecc1")
+	key, _ := adnl.ToKeyID(&Key{
+		ID:    kk,
+		Name:  []byte("address"),
+		Index: 0,
+	})
+
+	node := &dhtNode{
+		id:        kid,
+		addr:      addr,
+		serverKey: pub.Key,
+		onStateChange: func(node *dhtNode, state int) {
+		},
+		client: c,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
+	val, err := node.findValue(ctx, key, _K)
+	cancel()
+	if err != nil {
+		return err
+	}
+	println("O", i, reflect.ValueOf(val).String())
+
+	switch t := val.(type) {
+	case []*Node:
+		for _, n2 := range t {
+			if search(i+1, n2, c) == nil {
+				return nil
+			} else {
+				println("fail", n2.AddrList.Addresses[0].IP.String())
+			}
+		}
+	default:
+		println("OK!")
+	}
+	return nil
 }
