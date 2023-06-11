@@ -1,7 +1,6 @@
 package dht
 
 import (
-	"encoding/hex"
 	"sync"
 )
 
@@ -25,12 +24,11 @@ func newPriorityList(maxLen int, targetId []byte) *priorityList {
 		targetId: targetId,
 		maxLen:   maxLen,
 	}
-
 	return p
 }
 
 func (p *priorityList) addNode(node *dhtNode) bool {
-	id := hex.EncodeToString(node.id)
+	id := node.id()
 
 	item := &nodePriority{
 		id:       id,
@@ -121,7 +119,7 @@ func (p *priorityList) markUsed(node *dhtNode, used bool) {
 	p.mx.Lock()
 	defer p.mx.Unlock()
 
-	id := hex.EncodeToString(node.id)
+	id := node.id()
 
 	curNode := p.list
 	for curNode != nil {

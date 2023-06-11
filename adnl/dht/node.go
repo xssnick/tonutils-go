@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
-	"math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -23,92 +23,29 @@ const (
 )
 
 type dhtNode struct {
-	id     []byte
-	adnl   ADNL
+	adnlId []byte
 	client *Client
 
 	ping      int64
 	addr      string
 	serverKey ed25519.PublicKey
 
-	onStateChange func(node *dhtNode, state int)
-	currentState  int
+	currentState int
 
-	lastQueryAt int64
+	lastQueryAt  int64
+	inFlyQueries int32
 
 	mx sync.Mutex
 }
 
-func (c *Client) connectToNode(ctx context.Context, id []byte, addr string, serverKey ed25519.PublicKey, onStateChange func(node *dhtNode, state int)) (*dhtNode, error) {
+func (c *Client) connectToNode(id []byte, addr string, serverKey ed25519.PublicKey) *dhtNode {
 	n := &dhtNode{
-		id:            id,
-		addr:          addr,
-		serverKey:     serverKey,
-		onStateChange: onStateChange,
-		client:        c,
+		adnlId:    id,
+		addr:      addr,
+		serverKey: serverKey,
+		client:    c,
 	}
-
-	err := n.checkPing(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ping node, err: %w", err)
-	}
-
-	return n, nil
-}
-
-func (n *dhtNode) Close() {
-	n.mx.Lock()
-	defer n.mx.Unlock()
-
-	if n.adnl != nil {
-		n.adnl.Close()
-	}
-}
-
-func (n *dhtNode) changeState(state int) {
-	n.mx.Lock()
-	defer n.mx.Unlock()
-
-	if state == _StateFail {
-		// in case of fail - close connection
-		if n.adnl != nil {
-			n.adnl.Close()
-			n.adnl = nil
-		}
-	}
-
-	if n.currentState == state {
-		return
-	}
-	n.currentState = state
-
-	n.onStateChange(n, state)
-}
-
-func (n *dhtNode) getState() int {
-	n.mx.Lock()
-	defer n.mx.Unlock()
-	return n.currentState
-}
-
-func (n *dhtNode) prepare() (ADNL, error) {
-	n.mx.Lock()
-	defer n.mx.Unlock()
-
-	if n.adnl != nil {
-		return n.adnl, nil
-	}
-
-	a, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
-	if err != nil {
-		return nil, err
-	}
-	a.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
-		n.changeState(_StateFail)
-	})
-	n.adnl = a
-
-	return n.adnl, nil
+	return n
 }
 
 func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*Node, err error) {
@@ -271,35 +208,29 @@ func checkValue(id []byte, value *Value) error {
 	return nil
 }
 
-func (n *dhtNode) checkPing(ctx context.Context) error {
-	ping := Ping{
-		ID: int64(rand.Uint64()),
-	}
+func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
+	atomic.AddInt32(&n.inFlyQueries, 1)
 
-	var res Pong
-	err := n.query(ctx, ping, &res)
+	a, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
 	if err != nil {
-		n.changeState(_StateFail)
+		atomic.AddInt32(&n.inFlyQueries, -1)
+		n.currentState = _StateFail
 		return err
 	}
 
-	if res.ID != ping.ID {
-		return fmt.Errorf("wrong pong id")
-	}
-
-	return nil
-}
-
-func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
-	a, err := n.prepare()
-	if err != nil {
-		return fmt.Errorf("failed to prepare dht node: %w", err)
-	}
+	defer func() {
+		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.currentState == _StateFail {
+			a.Close()
+		}
+	}()
 
 	t := time.Now()
 	atomic.StoreInt64(&n.lastQueryAt, t.Unix())
 	err = a.Query(ctx, req, res)
 	if err != nil {
+		if ctx.Err() == nil || time.Since(t) > 3*time.Second {
+			n.currentState = _StateFail
+		}
 		return err
 	}
 	ping := time.Since(t)
@@ -307,19 +238,23 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 
 	switch {
 	case ping > queryTimeout/3:
-		n.changeState(_StateThrottle)
+		n.currentState = _StateThrottle
 	default:
-		n.changeState(_StateActive)
+		n.currentState = _StateActive
 	}
 
 	return nil
+}
+
+func (n *dhtNode) id() string {
+	return hex.EncodeToString(n.adnlId)
 }
 
 func (n *dhtNode) weight(id []byte) int {
 	n.mx.Lock()
 	defer n.mx.Unlock()
 
-	w := leadingZeroBits(xor(id, n.id))
+	w := leadingZeroBits(xor(id, n.adnlId))
 	if n.currentState == _StateFail {
 		w -= 3 // less priority for failed
 		if w < 0 {

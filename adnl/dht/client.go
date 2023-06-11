@@ -31,20 +31,13 @@ type ADNL interface {
 }
 
 type Gateway interface {
+	Close() error
 	RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error)
 }
 
-type knownNode struct {
-	node *Node
-	mx   sync.Mutex
-}
-
 type Client struct {
-	activeNodes    map[string]*dhtNode
-	knownNodesInfo map[string]*knownNode
-	queryTimeout   time.Duration
-	mx             sync.RWMutex
-	minNodeMx      sync.Mutex
+	knownNodes map[string]*dhtNode
+	mx         sync.RWMutex
 
 	gateway Gateway
 
@@ -72,15 +65,10 @@ func NewClientFromConfigUrl(ctx context.Context, gateway Gateway, cfgUrl string)
 		return nil, err
 	}
 
-	return NewClientFromConfig(ctx, gateway, cfg)
+	return NewClientFromConfig(gateway, cfg)
 }
 
-func NewClientFromConfig(ctx context.Context, gateway Gateway, cfg *liteclient.GlobalConfig) (*Client, error) {
-	dl, ok := ctx.Deadline()
-	if !ok {
-		dl = time.Now().Add(10 * time.Second)
-	}
-
+func NewClientFromConfig(gateway Gateway, cfg *liteclient.GlobalConfig) (*Client, error) {
 	var nodes []*Node
 	for _, node := range cfg.DHT.StaticNodes.Nodes {
 		key, err := base64.StdEncoding.DecodeString(node.ID.Key)
@@ -120,46 +108,29 @@ func NewClientFromConfig(ctx context.Context, gateway Gateway, cfg *liteclient.G
 		nodes = append(nodes, n)
 	}
 
-	return NewClient(dl.Sub(time.Now()), gateway, nodes)
+	return NewClient(gateway, nodes)
 }
 
-func NewClient(connectTimeout time.Duration, gateway Gateway, nodes []*Node) (*Client, error) {
+func NewClient(gateway Gateway, nodes []*Node) (*Client, error) {
 	globalCtx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		activeNodes:     map[string]*dhtNode{},
-		knownNodesInfo:  map[string]*knownNode{},
+		knownNodes:      map[string]*dhtNode{},
 		globalCtx:       globalCtx,
 		globalCtxCancel: cancel,
 		gateway:         gateway,
 	}
 
-	ch := make(chan bool, len(nodes))
-
 	for _, node := range nodes {
-		go func(node *Node) {
-			ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-			defer cancel()
-
-			_, err := c.addNode(ctx, node, false)
-			if err != nil {
-				Logger("failed to add DHT node", node.AddrList.Addresses[0].IP.String(), node.AddrList.Addresses[0].Port, " from config, err:", err.Error())
-				return
-			}
-
-			ch <- true
-		}(node)
+		_, err := c.addNode(node)
+		if err != nil {
+			Logger("failed to add DHT node", node.AddrList.Addresses[0].IP.String(), node.AddrList.Addresses[0].Port, " from config, err:", err.Error())
+			continue
+		}
 	}
 
-	select {
-	case <-ch:
-	case <-time.After(connectTimeout):
+	if len(c.knownNodes) == 0 {
+		return nil, errors.New("0 nodes was added")
 	}
-
-	if len(c.activeNodes) == 0 {
-		return nil, fmt.Errorf("no available nodes in the given list %v", nodes)
-	}
-
-	// go c.nodesPinger()
 	return c, nil
 }
 
@@ -167,40 +138,10 @@ const _K = 10
 
 func (c *Client) Close() {
 	c.globalCtxCancel()
-	
-	c.mx.Lock()
-	var toClose []*dhtNode
-	// doing this way to not get deadlock with nodeStateHandler
-	for _, v := range c.activeNodes {
-		toClose = append(toClose, v)
-	}
-	c.activeNodes = nil
-	c.mx.Unlock()
-
-	for _, node := range toClose {
-		node.Close()
-	}
+	_ = c.gateway.Close()
 }
 
-func (c *Client) nodeStateHandler(id string) func(node *dhtNode, state int) {
-	return func(node *dhtNode, state int) {
-		c.mx.Lock()
-		defer c.mx.Unlock()
-
-		if c.activeNodes == nil {
-			return
-		}
-
-		switch state {
-		case _StateFail:
-			// delete(c.activeNodes, id)
-		case _StateThrottle, _StateActive: // TODO: handle throttle in a diff list
-			c.activeNodes[id] = node
-		}
-	}
-}
-
-func (c *Client) addNode(ctx context.Context, node *Node, waitConnection bool) (_ *dhtNode, err error) {
+func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 	pub, ok := node.ID.(adnl.PublicKeyED25519)
 	if !ok {
 		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
@@ -210,16 +151,14 @@ func (c *Client) addNode(ctx context.Context, node *Node, waitConnection bool) (
 	if err != nil {
 		return nil, err
 	}
-
 	keyID := hex.EncodeToString(kid)
-	c.mx.RLock()
-	kNode := c.knownNodesInfo[keyID]
-	aNode := c.activeNodes[keyID]
-	c.mx.RUnlock()
 
-	if aNode != nil {
-		// we already connected to this node, just return it
-		return aNode, nil
+	c.mx.Lock()
+	defer c.mx.Unlock()
+
+	kNode := c.knownNodes[keyID]
+	if kNode != nil {
+		return kNode, nil
 	}
 
 	if len(node.AddrList.Addresses) == 0 {
@@ -229,71 +168,13 @@ func (c *Client) addNode(ctx context.Context, node *Node, waitConnection bool) (
 		node.AddrList.Addresses = node.AddrList.Addresses[:8]
 	}
 
-	if kNode == nil {
-		c.mx.Lock()
-		// check again under lock to guarantee that only one connection will be made
-		if c.knownNodesInfo[keyID] == nil {
-			kNode = &knownNode{node: node}
-			c.knownNodesInfo[keyID] = kNode
-		} else {
-			kNode = c.knownNodesInfo[keyID]
-		}
-		c.mx.Unlock()
-	}
+	// TODO: maybe use other addresses too
+	addr := node.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(node.AddrList.Addresses[0].Port)
 
-	if waitConnection {
-		for {
-			if kNode.mx.TryLock() {
-				break
-			}
+	kNode = c.connectToNode(kid, addr, pub.Key)
+	c.knownNodes[keyID] = kNode
 
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-				runtime.Gosched()
-			}
-		}
-	} else {
-		if !kNode.mx.TryLock() {
-			return nil, fmt.Errorf("connection already in progress")
-		}
-	}
-
-	defer kNode.mx.Unlock()
-
-	c.mx.RLock()
-	aNode = c.activeNodes[keyID]
-	c.mx.RUnlock()
-
-	if aNode != nil {
-		// we already connected to this node, just return it
-		return aNode, nil
-	}
-
-	// connect to first available address of node
-	for _, udp := range node.AddrList.Addresses {
-		addr := udp.IP.String() + ":" + fmt.Sprint(udp.Port)
-
-		aNode, err = c.connectToNode(ctx, kid, addr, pub.Key, c.nodeStateHandler(keyID))
-		if err != nil {
-			// failed to connect, we will try next addr
-			continue
-		}
-		// connected successfully
-		break
-	}
-
-	if err != nil {
-		c.mx.Lock()
-		// connection was unsuccessful, so we remove node from known, to be able to retry later
-		delete(c.knownNodesInfo, keyID)
-		c.mx.Unlock()
-
-		return nil, fmt.Errorf("failed to connect to node: %w", err)
-	}
-
-	return aNode, nil
+	return kNode, nil
 }
 
 func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
@@ -422,7 +303,6 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 
 	var checkedMx sync.RWMutex
 	checked := map[string]bool{}
-	triedToAdd := map[string]bool{}
 
 	plist := c.buildPriorityList(kid)
 
@@ -439,7 +319,7 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 					break
 				}
 
-				strId := hex.EncodeToString(node.id)
+				strId := node.id()
 				checkedMx.RLock()
 				isChecked := checked[strId]
 				checkedMx.RUnlock()
@@ -451,7 +331,7 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 					}
 
 					hasBetter := false
-					currentPriority := leadingZeroBits(xor(kid, node.id))
+					currentPriority := leadingZeroBits(xor(kid, node.adnlId))
 					for _, n := range nodes {
 						var nid []byte
 						nid, err = adnl.ToKeyID(n.ID)
@@ -469,16 +349,7 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 
 						priority := leadingZeroBits(xor(kid, nid))
 						if priority > currentPriority {
-							checkedMx.Lock()
-							tried := triedToAdd[hex.EncodeToString(nid)]
-							if !tried {
-								triedToAdd[hex.EncodeToString(nid)] = true
-							}
-							checkedMx.Unlock()
-
-							addCtx, cancel := context.WithTimeout(storeCtx, queryTimeout)
-							dNode, err := c.addNode(addCtx, n, !tried)
-							cancel()
+							dNode, err := c.addNode(n)
 							if err != nil {
 								continue
 							}
@@ -538,125 +409,6 @@ type foundResult struct {
 	node  *dhtNode
 }
 
-func (c *Client) FindValueAggressive(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
-	id, keyErr := adnl.ToKeyID(key)
-	if keyErr != nil {
-		return nil, nil, keyErr
-	}
-
-	plist := c.buildPriorityList(id)
-
-	cont := &Continuation{}
-	if len(continuation) > 0 && continuation[0] != nil {
-		cont = continuation[0]
-		for _, n := range cont.checkedNodes {
-			// mark nodes as used to not get a value from them again
-			plist.markUsed(n, true)
-		}
-	}
-
-	threadCtx, stopThreads := context.WithCancel(ctx)
-	defer stopThreads()
-
-	result := make(chan *foundResult)
-
-	checked := map[string]bool{}
-	checkedMx := sync.Mutex{}
-	go func() {
-		wg := sync.WaitGroup{}
-		for {
-			n, _ := plist.getNode()
-			if n == nil {
-				break
-			}
-
-			checkedMx.Lock()
-			checked[string(n.id)] = true
-			checkedMx.Unlock()
-
-			wg.Add(1)
-			go func() {
-				c.searchVal(threadCtx, n, id, result, checked, &checkedMx)
-				wg.Done()
-			}()
-		}
-		wg.Wait()
-
-		select {
-		case <-threadCtx.Done():
-		case result <- nil:
-		}
-	}()
-
-	select {
-	case val := <-result:
-		if val == nil {
-			return nil, cont, ErrDHTValueIsNotFound
-		}
-		cont.checkedNodes = append(cont.checkedNodes, val.node)
-		return val.value, cont, nil
-	case <-ctx.Done():
-		return nil, nil, ctx.Err()
-	}
-}
-
-func (c *Client) searchVal(ctx context.Context, n *dhtNode, id []byte, result chan<- *foundResult, checked map[string]bool, mx *sync.Mutex) {
-	findCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-	val, err := n.findValue(findCtx, id, _K)
-	cancel()
-	if err != nil {
-		return
-	}
-
-	switch v := val.(type) {
-	case *Value:
-		select {
-		case <-ctx.Done():
-		case result <- &foundResult{value: v, node: n}:
-		}
-		return
-	case []*Node:
-		if len(v) > 16 {
-			// max 16 nodes to check
-			v = v[:16]
-		}
-
-		wg := sync.WaitGroup{}
-		wg.Add(len(v))
-
-		for _, node := range v {
-			nid, keyErr := adnl.ToKeyID(node.ID)
-			if keyErr != nil {
-				wg.Done()
-				continue
-			}
-
-			mx.Lock()
-			if checked[string(nid)] {
-				mx.Unlock()
-				wg.Done()
-				continue
-			}
-			checked[string(nid)] = true
-			mx.Unlock()
-
-			go func(node *Node) {
-				defer wg.Done()
-
-				connectCtx, connectCancel := context.WithTimeout(ctx, queryTimeout)
-				newNode, err := c.addNode(connectCtx, node, true)
-				connectCancel()
-				if err != nil {
-					return
-				}
-
-				c.searchVal(ctx, newNode, id, result, checked, mx)
-			}(node)
-		}
-		wg.Wait()
-	}
-}
-
 func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
 	id, keyErr := adnl.ToKeyID(key)
 	if keyErr != nil {
@@ -676,9 +428,6 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
-
-	var checkedMx sync.RWMutex
-	triedToAdd := map[string]bool{}
 
 	const threads = 8
 	result := make(chan *foundResult, threads)
@@ -729,40 +478,18 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 					result <- &foundResult{value: v, node: node}
 				case []*Node:
 					if len(v) > 24 {
-						// max 24 nodes to check
+						// max 24 nodes to add
 						v = v[:24]
 					}
 
-					wg := sync.WaitGroup{}
-					wg.Add(len(v))
-
-					connectCtx, connectCancel := context.WithTimeout(threadCtx, queryTimeout)
 					for _, n := range v {
-						go func(n *Node) {
-							defer wg.Done()
+						newNode, err := c.addNode(n)
+						if err != nil {
+							continue
+						}
 
-							nid, err := adnl.ToKeyID(n.ID)
-							if err != nil {
-								return
-							}
-
-							checkedMx.Lock()
-							tried := triedToAdd[hex.EncodeToString(nid)]
-							if !tried {
-								triedToAdd[hex.EncodeToString(nid)] = true
-							}
-							checkedMx.Unlock()
-
-							newNode, err := c.addNode(connectCtx, n, !tried)
-							if err != nil {
-								return
-							}
-
-							plist.addNode(newNode)
-						}(n)
+						plist.addNode(newNode)
 					}
-					wg.Wait()
-					connectCancel()
 				}
 			}
 		}()
@@ -780,76 +507,25 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	}
 }
 
-func (c *Client) nodesPinger() {
-	for {
-		select {
-		case <-c.globalCtx.Done():
-			return
-		case <-time.After(1 * time.Second):
-		}
-
-		println("[DHT] Pinger cycle", time.Now().String())
-
-		now := time.Now()
-		c.mx.RLock()
-		if len(c.activeNodes) == 0 {
-			c.mx.RUnlock()
-			continue
-		}
-
-		ch := make(chan *dhtNode, len(c.activeNodes)+1)
-		for _, node := range c.activeNodes {
-			// add check task for nodes that were not queried for > 8 seconds
-			if atomic.LoadInt64(&node.lastQueryAt)+8 < now.Unix() {
-				ch <- node
-			}
-		}
-		close(ch)
-		c.mx.RUnlock()
-
-		var wg sync.WaitGroup
-		wg.Add(8)
-		for i := 0; i < 8; i++ {
-			go func() {
-				defer wg.Done()
-				for {
-					var node *dhtNode
-					select {
-					case <-c.globalCtx.Done():
-						return
-					case node = <-ch:
-						if node == nil {
-							// everything is checked
-							return
-						}
-					}
-
-					ctx, cancel := context.WithTimeout(c.globalCtx, queryTimeout)
-					_ = node.checkPing(ctx) // we don't need the result, it will report new state to callback
-					cancel()
-				}
-			}()
-		}
-		wg.Wait()
-	}
-}
-
 func (c *Client) buildPriorityList(id []byte) *priorityList {
 	plist := newPriorityList(_K*3, id)
 
 	added := 0
+
 	c.mx.RLock()
+	defer c.mx.RUnlock()
+
 	// add fastest nodes first
-	for _, node := range c.activeNodes {
-		if node.getState() == _StateActive {
+	for _, node := range c.knownNodes {
+		if node.currentState == _StateActive {
 			plist.addNode(node)
 			added++
 		}
 	}
 	// if we have not enough fast nodes, add slow
 	if added < 15 {
-		for _, node := range c.activeNodes {
-			if node.getState() == _StateThrottle {
+		for _, node := range c.knownNodes {
+			if node.currentState == _StateThrottle {
 				plist.addNode(node)
 				added++
 			}
@@ -858,89 +534,13 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	// if not enough active nodes, add failed, hope they will accept connection and become active
 	// they may be failed due to our connection problems
 	if added < 15 {
-		for _, node := range c.activeNodes {
-			if node.getState() == _StateFail {
+		for _, node := range c.knownNodes {
+			if node.currentState == _StateFail {
 				plist.addNode(node)
 				added++
 			}
 		}
 	}
-	c.mx.RUnlock()
 
 	return plist
-}
-
-func TstsNodesFind(c *Client) {
-	var n *Node
-	for s := range c.activeNodes {
-		n = c.knownNodesInfo[s].node
-		println(n.AddrList.Addresses[0].IP.String())
-		break
-	}
-
-	hg, _ := hex.DecodeString("7906710747daaad26b08df75dcfb695b44d9d0a5657ba91aeb04de97d11dba6b")
-	nodes, _, err := c.FindOverlayNodes(context.Background(), hg, nil)
-	if err != nil {
-		println("OVER ERR")
-	} else {
-		println(nodes.List)
-	}
-
-	/*	kkk, _ := hex.DecodeString("14bbe0fe397b143b7bb6f259de2ee2f4d0196dfd1b34486d6ec550ba0cf1ecc1")
-		list, _, err := c.FindAddresses(context.Background(), kkk)
-		if err != nil {
-			println("FIND ERR")
-		} else {
-			println(list.Addresses)
-		}*/
-
-	err = search(1, n, c)
-	panic(err)
-}
-
-func search(i int, n *Node, c *Client) error {
-	addr := n.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(n.AddrList.Addresses[0].Port)
-
-	println("search", i, addr)
-
-	pub, _ := n.ID.(adnl.PublicKeyED25519)
-	kid, _ := adnl.ToKeyID(pub)
-
-	kk, _ := hex.DecodeString("14bbe0fe397b143b7bb6f259de2ee2f4d0196dfd1b34486d6ec550ba0cf1ecc1")
-	key, _ := adnl.ToKeyID(&Key{
-		ID:    kk,
-		Name:  []byte("address"),
-		Index: 0,
-	})
-
-	node := &dhtNode{
-		id:        kid,
-		addr:      addr,
-		serverKey: pub.Key,
-		onStateChange: func(node *dhtNode, state int) {
-		},
-		client: c,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5000*time.Millisecond)
-	val, err := node.findValue(ctx, key, _K)
-	cancel()
-	if err != nil {
-		return err
-	}
-	println("O", i, reflect.ValueOf(val).String())
-
-	switch t := val.(type) {
-	case []*Node:
-		for _, n2 := range t {
-			if search(i+1, n2, c) == nil {
-				return nil
-			} else {
-				println("fail", n2.AddrList.Addresses[0].IP.String())
-			}
-		}
-	default:
-		println("OK!")
-	}
-	return nil
 }
