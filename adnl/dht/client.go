@@ -159,13 +159,15 @@ func NewClient(connectTimeout time.Duration, gateway Gateway, nodes []*Node) (*C
 		return nil, fmt.Errorf("no available nodes in the given list %v", nodes)
 	}
 
-	go c.nodesPinger()
+	// go c.nodesPinger()
 	return c, nil
 }
 
 const _K = 10
 
 func (c *Client) Close() {
+	c.globalCtxCancel()
+	
 	c.mx.Lock()
 	var toClose []*dhtNode
 	// doing this way to not get deadlock with nodeStateHandler
@@ -174,8 +176,6 @@ func (c *Client) Close() {
 	}
 	c.activeNodes = nil
 	c.mx.Unlock()
-
-	c.globalCtxCancel()
 
 	for _, node := range toClose {
 		node.Close()
@@ -787,6 +787,8 @@ func (c *Client) nodesPinger() {
 			return
 		case <-time.After(1 * time.Second):
 		}
+
+		println("[DHT] Pinger cycle", time.Now().String())
 
 		now := time.Now()
 		c.mx.RLock()
