@@ -113,7 +113,7 @@ func (c *Cell) descriptors(lvl LevelMask) (byte, byte) {
 		specBit = 8
 	}
 
-	return byte(len(c.refs)) + specBit + lvl.mask*32, byte(ln)
+	return byte(len(c.refs)) + specBit + lvl.Mask*32, byte(ln)
 }
 
 func dynamicIntBytes(val uint64, sz uint) []byte {

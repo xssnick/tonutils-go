@@ -143,7 +143,7 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 		}
 
 		if withHashes {
-			maskBits := int(math.Ceil(math.Log2(float64(levelMask.mask) + 1)))
+			maskBits := int(math.Ceil(math.Log2(float64(levelMask.Mask) + 1)))
 			hashesNum := maskBits + 1
 
 			offset += hashesNum*hashSize + hashesNum*depthSize

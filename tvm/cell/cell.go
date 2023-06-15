@@ -85,6 +85,22 @@ func (c *Cell) RefsNum() uint {
 	return uint(len(c.refs))
 }
 
+func (c *Cell) MustPeekRef(i int) *Cell {
+	return c.refs[i]
+}
+
+func (c *Cell) UnsafeModify(levelMask LevelMask, special bool) {
+	c.special = special
+	c.levelMask = levelMask
+}
+
+func (c *Cell) PeekRef(i int) (*Cell, error) {
+	if i > len(c.refs) {
+		return nil, ErrNoMoreRefs
+	}
+	return c.refs[i], nil
+}
+
 func (c *Cell) Dump(limitLength ...int) string {
 	var lim = (1024 << 20) * 16
 	if len(limitLength) > 0 {
@@ -123,8 +139,8 @@ func (c *Cell) dump(deep int, bin bool, limitLength int) string {
 	}
 
 	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
-	if c.levelMask.getLevel() > 0 {
-		str += fmt.Sprintf("{%d}", c.levelMask.getLevel())
+	if c.levelMask.GetLevel() > 0 {
+		str += fmt.Sprintf("{%d}", c.levelMask.GetLevel())
 	}
 	if c.special {
 		str += "*"
