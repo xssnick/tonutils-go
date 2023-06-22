@@ -45,6 +45,8 @@ type RLDP interface {
 }
 
 type ADNL interface {
+	GetID() []byte
+	RemoteAddr() string
 	Query(ctx context.Context, req, result tl.Serializable) error
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)

@@ -46,6 +46,16 @@ type MockADNL struct {
 	close                   func()
 }
 
+func (m MockADNL) GetID() []byte {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m MockADNL) RemoteAddr() string {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m MockADNL) GetQueryHandler() func(msg *adnl.MessageQuery) error {
 	return nil
 }
