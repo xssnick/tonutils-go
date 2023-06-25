@@ -29,7 +29,7 @@ func NewSeedWithPassword(password string) []string {
 		seed := make([]string, 24)
 		for i := 0; i < 24; i++ {
 			for {
-				x, err := rand.Int(rand.Reader, big.NewInt(int64(len(seed))))
+				x, err := rand.Int(rand.Reader, big.NewInt(int64(len(words))))
 				if err != nil {
 					continue
 				}
