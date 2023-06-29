@@ -95,7 +95,17 @@ func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, config
 	return c.AddConnectionsFromConfig(ctx, config)
 }
 
+var ErrStopped = errors.New("connection pool is closed")
+
 func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string, clientKey ...ed25519.PrivateKey) error {
+	select {
+	case <-c.globalCtx.Done():
+		return ErrStopped
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	sKey, err := base64.StdEncoding.DecodeString(serverKey)
 	if err != nil {
 		return err
@@ -170,12 +180,16 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		select {
 		case <-conn.authEvt:
 			// auth completed
+		case <-c.globalCtx.Done():
+			return ErrStopped
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 
 	select {
+	case <-c.globalCtx.Done():
+		return ErrStopped
 	case err = <-connResult:
 		if err != nil {
 			return err
@@ -290,12 +304,17 @@ func (n *connection) listen(connResult chan<- error) {
 		}
 		n.pool.nodesMx.Unlock()
 
-		n.pool.reqMx.RLock()
-		dis := n.pool.onDisconnect
-		n.pool.reqMx.RUnlock()
+		select {
+		case <-n.pool.globalCtx.Done():
+			return
+		default:
+			n.pool.reqMx.RLock()
+			dis := n.pool.onDisconnect
+			n.pool.reqMx.RUnlock()
 
-		if dis != nil {
-			go dis(n.addr, n.serverKey)
+			if dis != nil {
+				go dis(n.addr, n.serverKey)
+			}
 		}
 	}
 }
@@ -303,6 +322,8 @@ func (n *connection) listen(connResult chan<- error) {
 func (n *connection) startPings(every time.Duration) {
 	for {
 		select {
+		case <-n.pool.globalCtx.Done():
+			return
 		case <-time.After(every):
 		}
 
