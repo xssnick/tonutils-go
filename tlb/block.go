@@ -1,6 +1,7 @@
 package tlb
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -44,7 +45,7 @@ type ShardAccountBlocks struct {
 type AccountBlock struct {
 	_            Magic            `tlb:"#5"`
 	Addr         []byte           `tlb:"bits 256"`
-	Transactions *cell.Dictionary `tlb:"dict 64"`
+	Transactions *cell.Dictionary `tlb:"dict inline 64"`
 	StateUpdate  *cell.Cell       `tlb:"^"`
 }
 
@@ -109,6 +110,11 @@ type GlobalVersion struct {
 type BlkPrevInfo struct {
 	Prev1 ExtBlkRef
 	Prev2 *ExtBlkRef
+}
+
+func (h *BlockInfo) Equals(h2 *BlockInfo) bool {
+	return h.Shard == h2.Shard && h.SeqNo == h2.SeqNo && h.Workchain == h2.Workchain &&
+		bytes.Equal(h.FileHash, h2.FileHash) && bytes.Equal(h.RootHash, h2.RootHash)
 }
 
 func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {

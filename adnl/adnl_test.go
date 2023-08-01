@@ -31,7 +31,7 @@ func TestADNL_ClientServer(t *testing.T) {
 	gotSrvDiscon := make(chan any, 1)
 
 	s := NewGateway(srvKey)
-	err = s.StartServer("127.0.0.1:9055")
+	err = s.StartServer("127.0.0.1:9155")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestADNL_ClientServer(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	cli, err := Connect(context.Background(), "127.0.0.1:9055", srvPub, nil)
+	cli, err := Connect(context.Background(), "127.0.0.1:9155", srvPub, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestADNL_ClientServer(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cliBad, err := Connect(context.Background(), "127.0.0.1:9055", rndPub, nil)
+		cliBad, err := Connect(context.Background(), "127.0.0.1:9155", rndPub, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestADNL_ClientServer(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		cliBadQuery, err := Connect(context.Background(), "127.0.0.1:9055", srvPub, rndOur)
+		cliBadQuery, err := Connect(context.Background(), "127.0.0.1:9155", srvPub, rndOur)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,7 +173,7 @@ func TestADNL_ClientServer(t *testing.T) {
 	})
 
 	t.Run("custom msg channel reinited", func(t *testing.T) {
-		cli, err = Connect(context.Background(), "127.0.0.1:9055", srvPub, nil)
+		cli, err = Connect(context.Background(), "127.0.0.1:9155", srvPub, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

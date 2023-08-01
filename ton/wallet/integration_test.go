@@ -21,7 +21,7 @@ import (
 var api = func() *ton.APIClient {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
@@ -35,7 +35,7 @@ var api = func() *ton.APIClient {
 var apiMain = func() *ton.APIClient {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
@@ -51,8 +51,11 @@ var _seed = os.Getenv("WALLET_SEED")
 func Test_WalletTransfer(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 
-	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
+	for _, v := range []Version{V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified} {
+		ver := v
 		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
+			t.Parallel()
+
 			ctx := api.Client().StickyContext(context.Background())
 			ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 			defer cancel()

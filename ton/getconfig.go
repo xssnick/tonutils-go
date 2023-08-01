@@ -63,20 +63,19 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 
 	switch t := resp.(type) {
 	case ConfigAll:
-		c, err := cell.FromBOC(t.ConfigProof)
+		cfgProof, err := cell.FromBOC(t.ConfigProof)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse config proof boc: %w", err)
 		}
 
-		ref, err := c.BeginParse().LoadRef()
+		stateProof, err := cell.FromBOC(t.StateProof)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse state proof boc: %w", err)
 		}
 
-		var state tlb.ShardStateUnsplit
-		err = tlb.LoadFromCell(&state, ref)
+		state, err := CheckBlockShardStateProof([]*cell.Cell{cfgProof, stateProof}, block.RootHash)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("incorrect proof: %w", err)
 		}
 
 		if state.McStateExtra == nil {

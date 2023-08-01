@@ -21,33 +21,39 @@ import (
 type Version int
 
 const (
-	V1R1         Version = 11
-	V1R2         Version = 12
-	V1R3         Version = 13
-	V2R1         Version = 21
-	V2R2         Version = 22
-	V3R1         Version = 31
-	V3R2         Version = 32
-	V3                   = V3R2
-	V4R1         Version = 41
-	V4R2         Version = 42
-	HighloadV2R2 Version = 122
-	Lockup       Version = 200
-	Unknown      Version = 0
+	V1R1               Version = 11
+	V1R2               Version = 12
+	V1R3               Version = 13
+	V2R1               Version = 21
+	V2R2               Version = 22
+	V3R1               Version = 31
+	V3R2               Version = 32
+	V3                         = V3R2
+	V4R1               Version = 41
+	V4R2               Version = 42
+	HighloadV2R2       Version = 122
+	HighloadV2Verified Version = 123
+	Lockup             Version = 200
+	Unknown            Version = 0
 )
 
 func (v Version) String() string {
 	if v == Unknown {
 		return "unknown"
 	}
-	if v/10 > 0 && v/10 < 10 {
-		return fmt.Sprintf("V%dR%d", v/10, v%10)
+
+	switch v {
+	case HighloadV2R2:
+		return fmt.Sprintf("highload V2R2")
+	case HighloadV2Verified:
+		return fmt.Sprintf("highload V2R2 verified")
 	}
-	if v/100 == 1 {
-		return fmt.Sprintf("highload V%dR%d", v/100/10, v%10)
-	}
+
 	if v/100 == 2 {
 		return fmt.Sprintf("lockup")
+	}
+	if v/10 > 0 && v/10 < 10 {
+		return fmt.Sprintf("V%dR%d", v/10, v%10)
 	}
 	return fmt.Sprintf("%d", v)
 }
@@ -58,8 +64,8 @@ var (
 		V2R1: _V2R1CodeHex, V2R2: _V2R2CodeHex,
 		V3R1: _V3R1CodeHex, V3R2: _V3R2CodeHex,
 		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
-		HighloadV2R2: _HighloadV2R2CodeHex,
-		Lockup:       _LockupCodeHex,
+		HighloadV2R2: _HighloadV2R2CodeHex, HighloadV2Verified: _HighloadV2VerifiedCodeHex,
+		Lockup: _LockupCodeHex,
 	}
 	walletCodeBOC = map[Version][]byte{}
 	walletCode    = map[Version]*cell.Cell{}
@@ -149,11 +155,11 @@ func getSpec(w *Wallet) (any, error) {
 	}
 
 	switch w.ver {
-	case V3:
+	case V3R1, V3R2:
 		return &SpecV3{regular}, nil
-	case V4R2:
+	case V4R1, V4R2:
 		return &SpecV4R2{regular}, nil
-	case HighloadV2R2:
+	case HighloadV2R2, HighloadV2Verified:
 		return &SpecHighloadV2R2{regular}, nil
 	}
 
@@ -207,7 +213,16 @@ func (w *Wallet) GetSpec() any {
 	return w.spec
 }
 
+func (w *Wallet) BuildExternalMessage(ctx context.Context, message *Message) (*tlb.ExternalMessage, error) {
+	return w.BuildExternalMessageForMany(ctx, []*Message{message})
+}
+
+// Deprecated: use BuildExternalMessageForMany
 func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (*tlb.ExternalMessage, error) {
+	return w.BuildExternalMessageForMany(ctx, messages)
+}
+
+func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Message) (*tlb.ExternalMessage, error) {
 	var stateInit *tlb.StateInit
 
 	block, err := w.api.CurrentMasterchainInfo(ctx)
@@ -232,12 +247,12 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 
 	var msg *cell.Cell
 	switch w.ver {
-	case V3, V4R2:
+	case V3R2, V3R1, V4R2, V4R1:
 		msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, initialized, block, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
-	case HighloadV2R2:
+	case HighloadV2R2, HighloadV2Verified:
 		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, randUint32(), messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
@@ -250,6 +265,27 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 		DstAddr:   w.addr,
 		StateInit: stateInit,
 		Body:      msg,
+	}, nil
+}
+
+func (w *Wallet) BuildTransfer(to *address.Address, amount tlb.Coins, bounce bool, comment string) (_ *Message, err error) {
+	var body *cell.Cell
+	if comment != "" {
+		body, err = CreateCommentCell(comment)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      bounce,
+			DstAddr:     to,
+			Amount:      amount,
+			Body:        body,
+		},
 	}, nil
 }
 
@@ -296,7 +332,7 @@ func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirma
 		return nil, nil, nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
-	ext, err := w.BuildMessageForMany(ctx, messages)
+	ext, err := w.BuildExternalMessageForMany(ctx, messages)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -428,24 +464,11 @@ func CreateCommentCell(text string) (*cell.Cell, error) {
 }
 
 func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool, waitConfirmation ...bool) (err error) {
-	var body *cell.Cell
-	if comment != "" {
-		body, err = CreateCommentCell(comment)
-		if err != nil {
-			return err
-		}
+	transfer, err := w.BuildTransfer(to, amount, bounce, comment)
+	if err != nil {
+		return err
 	}
-
-	return w.Send(ctx, &Message{
-		Mode: 1,
-		InternalMessage: &tlb.InternalMessage{
-			IHRDisabled: true,
-			Bounce:      bounce,
-			DstAddr:     to,
-			Amount:      amount,
-			Body:        body,
-		},
-	}, waitConfirmation...)
+	return w.Send(ctx, transfer, waitConfirmation...)
 }
 
 func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell, waitConfirmation ...bool) (*address.Address, error) {

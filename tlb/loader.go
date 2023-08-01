@@ -37,6 +37,14 @@ type manualStore interface {
 // _ Magic `tlb:"#deadbeef"
 // _ Magic `tlb:"$1101"
 func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
+	return loadFromCell(v, loader, false, len(skipMagic) > 0 && skipMagic[0])
+}
+
+func LoadFromCellAsProof(v any, loader *cell.Slice, skipMagic ...bool) error {
+	return loadFromCell(v, loader, true, len(skipMagic) > 0 && skipMagic[0])
+}
+
+func loadFromCell(v any, loader *cell.Slice, skipProofBranches, skipMagic bool) error {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("v should be a pointer and not nil")
@@ -137,7 +145,7 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 				case reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8, reflect.Int:
 					x, err = loader.LoadInt(uint(num))
 					if err != nil {
-						return fmt.Errorf("failed to load int %d, err: %w", num, err)
+						return fmt.Errorf("failed to load %s int %d, err: %w", structField.Name, num, err)
 					}
 
 					switch parseType.Kind() {
@@ -153,7 +161,7 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 				case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
 					x, err = loader.LoadUInt(uint(num))
 					if err != nil {
-						return fmt.Errorf("failed to load uint %d, err: %w", num, err)
+						return fmt.Errorf("failed to load %s uint %d, err: %w", structField.Name, num, err)
 					}
 
 					switch parseType.Kind() {
@@ -222,11 +230,16 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 			next := loader
 
 			if settings[0] == "^" {
-				ref, err := loader.LoadRef()
+				ref, err := loader.LoadRefCell()
 				if err != nil {
 					return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
 				}
-				next = ref
+
+				if skipProofBranches && ref.GetType() == cell.PrunedCellType {
+					continue
+				}
+
+				next = ref.BeginParse()
 			}
 
 			switch parseType {
@@ -248,7 +261,7 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 				continue
 			}
 		} else if parseType == reflect.TypeOf(Magic{}) {
-			if len(skipMagic) > 0 && skipMagic[0] {
+			if skipMagic {
 				// it can be skipped if parsed before in parent type, to determine child type
 				continue
 			}
@@ -283,14 +296,28 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 			}
 			continue
 		} else if settings[0] == "dict" {
+			inline := false
+			if settings[1] == "inline" {
+				settings = settings[1:]
+				inline = true
+			}
+
 			sz, err := strconv.ParseUint(settings[1], 10, 64)
 			if err != nil {
 				panic(fmt.Sprintf("cannot deserialize field '%s' as dict, bad size '%s'", structField.Name, settings[1]))
 			}
 
-			dict, err := loader.LoadDict(uint(sz))
-			if err != nil {
-				return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
+			var dict *cell.Dictionary
+			if inline {
+				dict, err = loader.ToDict(uint(sz))
+				if err != nil {
+					return fmt.Errorf("failed to load dict for %s, err: %w", structField.Name, err)
+				}
+			} else {
+				dict, err = loader.LoadDict(uint(sz))
+				if err != nil {
+					return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
+				}
 			}
 
 			if len(settings) >= 4 {

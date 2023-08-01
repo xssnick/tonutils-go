@@ -55,6 +55,7 @@ type APIClient struct {
 
 	curMasters     map[uint32]*masterInfo
 	curMastersLock sync.RWMutex
+	skipProofCheck bool
 }
 
 type masterInfo struct {
@@ -68,6 +69,10 @@ func NewAPIClient(client LiteClient) *APIClient {
 		curMasters: map[uint32]*masterInfo{},
 		client:     client,
 	}
+}
+
+func (c *APIClient) SetSkipProofCheck(skip bool) {
+	c.skipProofCheck = skip
 }
 
 func (c *APIClient) WaitForBlock(seqno uint32) APIClientWaiter {

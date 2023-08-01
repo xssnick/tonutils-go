@@ -39,6 +39,12 @@ type DepthBalanceInfo struct {
 	Currencies CurrencyCollection `tlb:"."`
 }
 
+type ShardAccount struct {
+	Account       *cell.Cell `tlb:"^"`
+	LastTransHash []byte     `tlb:"bits 256"`
+	LastTransLT   uint64     `tlb:"## 64"`
+}
+
 type AccountStorage struct {
 	Status            AccountStatus
 	LastTransactionLT uint64

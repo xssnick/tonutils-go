@@ -18,7 +18,7 @@ import (
 var apiTestNet = func() *APIClient {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
@@ -32,7 +32,7 @@ var apiTestNet = func() *APIClient {
 var api = func() *APIClient {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
@@ -114,7 +114,7 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 func TestAPIClient_GetOldBlockData(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
@@ -165,7 +165,7 @@ func TestAPIClient_GetOldBlockData(t *testing.T) {
 }
 
 func Test_RunMethod(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	b, err := api.CurrentMasterchainInfo(ctx)
@@ -195,7 +195,7 @@ func Test_RunMethod(t *testing.T) {
 }
 
 func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net - > than change config to test-net.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	ctx = apiTestNet.client.StickyContext(ctx)
@@ -236,7 +236,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 }
 
 func Test_Account(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ctx = api.client.StickyContext(ctx)
 
@@ -266,6 +266,68 @@ func Test_Account(t *testing.T) {
 		}
 	} else {
 		t.Fatal("TF account not active")
+	}
+
+	// take last tx info from account info
+	lastHash := res.LastTxHash
+	lastLt := res.LastTxLT
+
+	fmt.Printf("\nTransactions:\n")
+	for i := 0; i < 2; i++ {
+		// last transaction has 0 prev lt
+		if lastLt == 0 {
+			break
+		}
+
+		// load transactions in batches with size 5
+		list, err := api.ListTransactions(ctx, addr, 5, lastLt, lastHash)
+		if err != nil {
+			t.Fatal("send err:", err.Error())
+			return
+		}
+
+		// oldest = first in list
+		for _, t := range list {
+			fmt.Println(t.String())
+		}
+
+		// set previous info from the oldest transaction in list
+		lastHash = list[0].PrevTxHash
+		lastLt = list[0].PrevTxLT
+	}
+}
+
+func Test_AccountMaster(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx = api.client.StickyContext(ctx)
+
+	b, err := api.GetMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	addr := address.MustParseAddr("Ef9VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVbxn")
+	res, err := api.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
+	if err != nil {
+		t.Fatal("get account err:", err.Error())
+		return
+	}
+
+	if !res.HasGetMethod("list_proposals") {
+		t.Fatal("has no list_proposals as get method")
+	}
+
+	fmt.Printf("Is active: %v\n", res.IsActive)
+	if res.IsActive {
+		fmt.Printf("Status: %s\n", res.State.Status)
+		fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
+		if res.Data == nil {
+			t.Fatal("data null")
+		}
+	} else {
+		t.Fatal("account not active")
 	}
 
 	// take last tx info from account info
@@ -450,7 +512,7 @@ func TestAPIClient_WaitNextBlock(t *testing.T) {
 }
 
 func Test_GetTime(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	utime, err := api.GetTime(ctx)
@@ -535,7 +597,7 @@ func Test_LSErrorCase(t *testing.T) {
 func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnection(context.Background(), "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
@@ -552,12 +614,22 @@ func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a, err := mainnetAPI.GetAccount(ctx, b, address.MustParseAddr("EQCYv992KVNNCKZHSLLJgM2GGzsgL0UgWP24BCQBaAdqSE2I"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Run("with proof", func(t *testing.T) {
+		_, err := mainnetAPI.GetAccount(ctx, b, address.MustParseAddr("EQCYv992KVNNCKZHSLLJgM2GGzsgL0UgWP24BCQBaAdqSE2I"))
+		if err != ErrNoProof {
+			t.Fatal(err)
+		}
+	})
 
-	if a.State.ExtraCurrencies == nil {
-		t.Fatal("expected extra currencies dict")
-	}
+	t.Run("without proof", func(t *testing.T) {
+		mainnetAPI.SetSkipProofCheck(true)
+		a, err := mainnetAPI.GetAccount(ctx, b, address.MustParseAddr("EQCYv992KVNNCKZHSLLJgM2GGzsgL0UgWP24BCQBaAdqSE2I"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if a.State.ExtraCurrencies == nil {
+			t.Fatal("expected extra currencies dict")
+		}
+	})
 }

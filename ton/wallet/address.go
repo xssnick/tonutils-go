@@ -54,20 +54,20 @@ func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb
 
 	var data *cell.Cell
 	switch ver {
-	case V3:
+	case V3R1, V3R2:
 		data = cell.BeginCell().
 			MustStoreUInt(0, 32).                 // seqno
 			MustStoreUInt(uint64(subWallet), 32). // sub wallet
 			MustStoreSlice(pubKey, 256).
 			EndCell()
-	case V4R2:
+	case V4R1, V4R2:
 		data = cell.BeginCell().
 			MustStoreUInt(0, 32). // seqno
 			MustStoreUInt(uint64(subWallet), 32).
 			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
-	case HighloadV2R2:
+	case HighloadV2R2, HighloadV2Verified:
 		data = cell.BeginCell().
 			MustStoreUInt(uint64(subWallet), 32).
 			MustStoreUInt(0, 64). // last cleaned

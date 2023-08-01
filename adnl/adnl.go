@@ -117,8 +117,7 @@ func (a *ADNL) Close() {
 
 	disc := a.onDisconnect
 	if trigger && disc != nil {
-		// TODO: check where lock is possible, refactor and remove goroutine here
-		go disc(a.addr, a.peerKey)
+		disc(a.addr, a.peerKey)
 	}
 }
 

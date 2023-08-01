@@ -18,6 +18,8 @@ const (
 	VarAddress  AddrType = 3
 )
 
+const MasterchainID int32 = -1
+
 type Address struct {
 	flags     flags
 	addrType  AddrType

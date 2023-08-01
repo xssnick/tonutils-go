@@ -41,7 +41,8 @@ type GetTransactions struct {
 	TxHash []byte     `tl:"int256"`
 }
 
-// ListTransactions - returns list of transactions before (including) passed lt and hash, the oldest one is first in result slice
+// ListTransactions - [THIS METHOD HAS NO PROOF CHECK, you can use GetTransaction to verify]
+// returns list of transactions before (including) passed lt and hash, the oldest one is first in result slice
 func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, GetTransactions{
@@ -106,7 +107,7 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 	case TransactionInfo:
 		txCell, err := cell.FromBOC(t.Transaction)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parrse cell from transaction bytes: %w", err)
+			return nil, fmt.Errorf("failed to parse cell from transaction bytes: %w", err)
 		}
 
 		var tx tlb.Transaction
@@ -114,8 +115,30 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 		if err != nil {
 			return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
 		}
-
 		tx.Hash = txCell.Hash()
+
+		if !c.skipProofCheck {
+			txProof, err := cell.FromBOC(t.Proof)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse proof: %w", err)
+			}
+
+			blockProof, err := CheckBlockProof(txProof, block.RootHash)
+			if err != nil {
+				return nil, fmt.Errorf("failed to check proof: %w", err)
+			}
+
+			var shardAccounts tlb.ShardAccountBlocks
+			err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse())
+			if err != nil {
+				return nil, fmt.Errorf("failed to load shard accounts from proof: %w", err)
+			}
+
+			if err = CheckTransactionProof(tx.Hash, tx.LT, tx.AccountAddr, &shardAccounts); err != nil {
+				return nil, fmt.Errorf("incorrect tx proof: %w", err)
+			}
+		}
+
 		return &tx, nil
 	case LSError:
 		if t.Code == 0 {

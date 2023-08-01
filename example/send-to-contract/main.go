@@ -53,7 +53,7 @@ func main() {
 	if balance.NanoTON().Uint64() >= 3000000 {
 		// create transaction body cell, depends on what contract needs, just random example here
 		body := cell.BeginCell().
-			MustStoreUInt(0x123abc55, 32). // op code
+			MustStoreUInt(0x123abc55, 32).    // op code
 			MustStoreUInt(rand.Uint64(), 64). // query id
 			// payload:
 			MustStoreAddr(address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO")).
@@ -62,6 +62,22 @@ func main() {
 					MustStoreBigCoins(tlb.MustFromTON("1.521").NanoTON()).
 					EndCell(),
 			).EndCell()
+
+		/*
+			// alternative, more high level way to serialize cell; see tlb.LoadFromCell method for doc
+			type ContractRequest struct {
+				_        tlb.Magic        `tlb:"#123abc55"`
+				QueryID  uint64           `tlb:"## 64"`
+				Addr     *address.Address `tlb:"addr"`
+				RefMoney tlb.Coins        `tlb:"^"`
+			}
+
+			body, err := tlb.ToCell(ContractRequest{
+				QueryID:  rand.Uint64(),
+				Addr:     address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"),
+				RefMoney: tlb.MustFromTON("1.521"),
+			})
+		*/
 
 		log.Println("sending transaction and waiting for confirmation...")
 

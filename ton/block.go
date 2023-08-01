@@ -1,7 +1,9 @@
 package ton
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -105,8 +107,8 @@ type ListBlockTransactions struct {
 	Mode         uint32          `tl:"flags"`
 	Count        uint32          `tl:"int"`
 	After        *TransactionID3 `tl:"?7 struct"`
-	ReverseOrder *True           `tl:"?6 struct boxed"`
-	WantProof    *True           `tl:"?5 struct boxed"`
+	ReverseOrder *True           `tl:"?6 struct"`
+	WantProof    *True           `tl:"?5 struct"`
 }
 
 type TransactionShortInfo struct {
@@ -197,6 +199,7 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
 
 	switch t := resp.(type) {
 	case MasterchainInfo:
+
 		return t.Last, nil
 	case LSError:
 		return nil, t
@@ -247,6 +250,10 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 			return nil, fmt.Errorf("failed to parse block boc: %w", err)
 		}
 
+		if !bytes.Equal(cl.Hash(), block.RootHash) {
+			return nil, fmt.Errorf("incorrect block")
+		}
+
 		var bData tlb.Block
 		if err = tlb.LoadFromCell(&bData, cl.BeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to parse block data: %w", err)
@@ -293,12 +300,18 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 		withAfter = 1
 	}
 
+	mode := 0b111 | (withAfter << 7)
+	if !c.skipProofCheck {
+		mode |= 1 << 5
+	}
+
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, ListBlockTransactions{
-		Mode:  0b111 | (withAfter << 7),
-		ID:    block,
-		Count: count,
-		After: afterTx,
+		Mode:      mode,
+		ID:        block,
+		Count:     count,
+		After:     afterTx,
+		WantProof: &True{},
 	}, &resp)
 	if err != nil {
 		return nil, false, err
@@ -306,11 +319,37 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 
 	switch t := resp.(type) {
 	case BlockTransactions:
+		var shardAccounts tlb.ShardAccountBlocks
+
+		if !c.skipProofCheck {
+			proof, err := cell.FromBOC(t.Proof)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to parse proof boc: %w", err)
+			}
+
+			blockProof, err := CheckBlockProof(proof, block.RootHash)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to check block proof: %w", err)
+			}
+
+			err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse())
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to load shard accounts from proof: %w", err)
+			}
+		}
+
 		txIds := make([]TransactionShortInfo, 0, len(t.TransactionIds))
 		for _, id := range t.TransactionIds {
 			if id.LT == 0 || id.Hash == nil || id.Account == nil {
 				return nil, false, fmt.Errorf("invalid ls response, fields are nil")
 			}
+
+			if !c.skipProofCheck {
+				if err = CheckTransactionProof(id.Hash, id.LT, id.Account, &shardAccounts); err != nil {
+					return nil, false, fmt.Errorf("incorrect tx %s proof: %w", hex.EncodeToString(id.Hash), err)
+				}
+			}
+
 			txIds = append(txIds, TransactionShortInfo{
 				Account: id.Account,
 				LT:      id.LT,
@@ -334,75 +373,116 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 
 	switch t := resp.(type) {
 	case AllShardsInfo:
-		c, err := cell.FromBOC(t.Data)
+		shardsInfo, err := cell.FromBOC(t.Data)
 		if err != nil {
 			return nil, err
 		}
 
 		var inf tlb.AllShardsInfo
-		err = tlb.LoadFromCell(&inf, c.BeginParse())
+		err = tlb.LoadFromCell(&inf, shardsInfo.BeginParse())
 		if err != nil {
 			return nil, err
 		}
 
-		var shards []*BlockIDExt
-
-		for _, kv := range inf.ShardHashes.All() {
-			workchain, err := kv.Key.BeginParse().LoadInt(32)
+		if !c.skipProofCheck {
+			proof, err := cell.FromBOCMultiRoot(t.Proof)
 			if err != nil {
-				return nil, fmt.Errorf("load workchain err: %w", err)
+				return nil, fmt.Errorf("failed to parse proof boc: %w", err)
 			}
 
-			var binTree tlb.BinTree
-			err = binTree.LoadFromCell(kv.Value.BeginParse().MustLoadRef())
+			shardState, err := CheckBlockShardStateProof(proof, master.RootHash)
 			if err != nil {
-				return nil, fmt.Errorf("load BinTree err: %w", err)
+				return nil, fmt.Errorf("failed to check proof: %w", err)
 			}
 
-			for _, bk := range binTree.All() {
-				loader := bk.Value.BeginParse()
+			mcShort := shardState.McStateExtra.BeginParse()
+			if v, err := mcShort.LoadUInt(16); err != nil || v != 0xcc26 {
+				return nil, fmt.Errorf("invalic mc extra in proof")
+			}
 
-				ab, err := loader.LoadUInt(4)
-				if err != nil {
-					return nil, fmt.Errorf("load ShardDesc magic err: %w", err)
-				}
+			dictProof, err := mcShort.LoadMaybeRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load dict proof: %w", err)
+			}
 
-				switch ab {
-				case 0xa:
-					var shardDesc tlb.ShardDesc
-					if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
-						return nil, fmt.Errorf("load ShardDesc err: %w", err)
-					}
-					shards = append(shards, &BlockIDExt{
-						Workchain: int32(workchain),
-						Shard:     shardDesc.NextValidatorShard,
-						SeqNo:     shardDesc.SeqNo,
-						RootHash:  shardDesc.RootHash,
-						FileHash:  shardDesc.FileHash,
-					})
-				case 0xb:
-					var shardDesc tlb.ShardDescB
-					if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
-						return nil, fmt.Errorf("load ShardDescB err: %w", err)
-					}
-					shards = append(shards, &BlockIDExt{
-						Workchain: int32(workchain),
-						Shard:     shardDesc.NextValidatorShard,
-						SeqNo:     shardDesc.SeqNo,
-						RootHash:  shardDesc.RootHash,
-						FileHash:  shardDesc.FileHash,
-					})
-				default:
-					return nil, fmt.Errorf("wrong ShardDesc magic: %x", ab)
-				}
+			if dictProof == nil && inf.ShardHashes.Size() == 0 {
+				return []*BlockIDExt{}, nil
+			}
+
+			if (dictProof == nil) != (inf.ShardHashes.Size() == 0) ||
+				!bytes.Equal(dictProof.MustToCell().Hash(0), shardsInfo.MustPeekRef(0).Hash()) {
+				return nil, fmt.Errorf("incorrect proof")
 			}
 		}
 
-		return shards, nil
+		return LoadShardsFromHashes(inf.ShardHashes)
 	case LSError:
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
+}
+
+func LoadShardsFromHashes(shardHashes *cell.Dictionary) (shards []*BlockIDExt, err error) {
+	if shardHashes == nil {
+		return []*BlockIDExt{}, nil
+	}
+
+	for _, kv := range shardHashes.All() {
+		workchain, err := kv.Key.BeginParse().LoadInt(32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load workchain: %w", err)
+		}
+
+		binTreeRef, err := kv.Value.BeginParse().LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load bin tree ref: %w", err)
+		}
+
+		var binTree tlb.BinTree
+		err = binTree.LoadFromCell(binTreeRef)
+		if err != nil {
+			return nil, fmt.Errorf("load BinTree err: %w", err)
+		}
+
+		for _, bk := range binTree.All() {
+			loader := bk.Value.BeginParse()
+
+			ab, err := loader.LoadUInt(4)
+			if err != nil {
+				return nil, fmt.Errorf("load ShardDesc magic err: %w", err)
+			}
+
+			switch ab {
+			case 0xa:
+				var shardDesc tlb.ShardDesc
+				if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
+					return nil, fmt.Errorf("load ShardDesc err: %w", err)
+				}
+				shards = append(shards, &BlockIDExt{
+					Workchain: int32(workchain),
+					Shard:     shardDesc.NextValidatorShard,
+					SeqNo:     shardDesc.SeqNo,
+					RootHash:  shardDesc.RootHash,
+					FileHash:  shardDesc.FileHash,
+				})
+			case 0xb:
+				var shardDesc tlb.ShardDescB
+				if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
+					return nil, fmt.Errorf("load ShardDescB err: %w", err)
+				}
+				shards = append(shards, &BlockIDExt{
+					Workchain: int32(workchain),
+					Shard:     shardDesc.NextValidatorShard,
+					SeqNo:     shardDesc.SeqNo,
+					RootHash:  shardDesc.RootHash,
+					FileHash:  shardDesc.FileHash,
+				})
+			default:
+				return nil, fmt.Errorf("wrong ShardDesc magic: %x", ab)
+			}
+		}
+	}
+	return
 }
 
 // WaitNextMasterBlock - wait for the next block of master chain
