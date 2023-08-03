@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
 	"hash/crc32"
 	"io"
 	"log"
@@ -23,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
@@ -84,6 +84,15 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 
 	// return on first success connection
 	return <-result
+}
+
+func (c *ConnectionPool) AddConnectionsFromConfigFile(configPath string) error {
+	config, err := GetConfigFromFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	return c.AddConnectionsFromConfig(context.Background(), config)
 }
 
 func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, configUrl string) error {
