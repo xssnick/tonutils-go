@@ -18,9 +18,10 @@ const _HighloadV2VerifiedCodeHex = "b5ee9c724101090100e5000114ff00f4a413f4bcf2c8
 
 type SpecHighloadV2R2 struct {
 	SpecRegular
+	SpecQuery
 }
 
-func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, queryID uint32, messages []*Message) (*cell.Cell, error) {
+func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, messages []*Message) (*cell.Cell, error) {
 	if len(messages) > 254 {
 		return nil, errors.New("for this type of wallet max 254 messages can be sent in the same time")
 	}
@@ -43,7 +44,15 @@ func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, queryID uint32, messa
 		}
 	}
 
-	boundedID := uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()<<32) + uint64(queryID)
+	var ttl, queryID uint32
+	if s.customQueryIDFetcher != nil {
+		ttl, queryID = s.customQueryIDFetcher()
+	} else {
+		queryID = randUint32()
+		ttl = uint32(timeNow().Add(time.Duration(s.messagesTTL) * time.Second).UTC().Unix())
+	}
+
+	boundedID := (uint64(ttl) << 32) + uint64(queryID)
 	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).
 		MustStoreUInt(boundedID, 64).
 		MustStoreDict(dict)

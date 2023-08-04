@@ -156,11 +156,11 @@ func getSpec(w *Wallet) (any, error) {
 
 	switch w.ver {
 	case V3R1, V3R2:
-		return &SpecV3{regular}, nil
+		return &SpecV3{regular, SpecSeqno{}}, nil
 	case V4R1, V4R2:
-		return &SpecV4R2{regular}, nil
+		return &SpecV4R2{regular, SpecSeqno{}}, nil
 	case HighloadV2R2, HighloadV2Verified:
-		return &SpecHighloadV2R2{regular}, nil
+		return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
 	}
 
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
@@ -253,7 +253,7 @@ func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Me
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
 	case HighloadV2R2, HighloadV2Verified:
-		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, randUint32(), messages)
+		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
@@ -485,7 +485,7 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	addr := address.NewAddress(0, 0, stateCell.Hash())
 
 	if err = w.Send(ctx, &Message{
-		Mode: 1,
+		Mode: 1 + 2,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      false,
@@ -561,7 +561,7 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte,
 
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
 	return &Message{
-		Mode: 1,
+		Mode: 1 + 2,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      true,

@@ -23,8 +23,8 @@ var _SchemaIDByTypeName = map[string]uint32{}
 var _SchemaIDByName = map[string]uint32{}
 var _SchemaByID = map[uint32]reflect.Type{}
 
-var BoolTrue = tlCRC("boolTrue = Bool")
-var BoolFalse = tlCRC("boolFalse = Bool")
+var BoolTrue = CRC("boolTrue = Bool")
+var BoolFalse = CRC("boolFalse = Bool")
 
 var Logger = func(a ...any) {}
 
@@ -653,7 +653,7 @@ func Register(typ any, tl string) uint32 {
 		}
 		id = binary.BigEndian.Uint32(b)
 	} else {
-		id = tlCRC(tl)
+		id = CRC(tl)
 	}
 	_SchemaByID[id] = t
 	_SchemaIDByTypeName[t.String()] = id
@@ -668,7 +668,7 @@ func Register(typ any, tl string) uint32 {
 
 var ieeeTable = crc32.MakeTable(crc32.IEEE)
 
-func tlCRC(schema string) uint32 {
+func CRC(schema string) uint32 {
 	schema = strings.ReplaceAll(schema, "(", "")
 	schema = strings.ReplaceAll(schema, ")", "")
 	data := []byte(schema)

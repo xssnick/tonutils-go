@@ -53,46 +53,57 @@ func Test_WalletTransfer(t *testing.T) {
 
 	for _, v := range []Version{V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified} {
 		ver := v
-		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
-			t.Parallel()
+		for _, isSubwallet := range []bool{false, true} {
+			isSubwallet := isSubwallet
+			t.Run("send for wallet ver "+fmt.Sprint(ver)+" subwallet "+fmt.Sprint(isSubwallet), func(t *testing.T) {
+				t.Parallel()
 
-			ctx := api.Client().StickyContext(context.Background())
-			ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-			defer cancel()
+				ctx := api.Client().StickyContext(context.Background())
+				ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+				defer cancel()
 
-			w, err := FromSeed(api, seed, ver)
-			if err != nil {
-				t.Fatal("FromSeed err:", err.Error())
-				return
-			}
-
-			log.Println(ver, "-> test wallet address:", w.Address())
-
-			block, err := api.CurrentMasterchainInfo(ctx)
-			if err != nil {
-				t.Fatal("CurrentMasterchainInfo err:", err.Error())
-				return
-			}
-
-			balance, err := w.GetBalance(ctx, block)
-			if err != nil {
-				t.Fatal("GetBalance err:", err.Error())
-				return
-			}
-
-			comment := randString(150)
-			addr := address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE")
-			if balance.NanoTON().Uint64() >= 3000000 {
-				err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
+				w, err := FromSeed(api, seed, ver)
 				if err != nil {
-					t.Fatal("Transfer err:", err.Error())
+					t.Fatal("FromSeed err:", err.Error())
 					return
 				}
-			} else {
-				t.Fatal("not enough balance")
-				return
-			}
-		})
+
+				if isSubwallet {
+					w, err = w.GetSubwallet(1)
+					if err != nil {
+						t.Fatal("GetSubwallet err:", err.Error())
+						return
+					}
+				}
+
+				log.Println(ver, "-> test wallet address:", w.Address(), isSubwallet)
+
+				block, err := api.CurrentMasterchainInfo(ctx)
+				if err != nil {
+					t.Fatal("CurrentMasterchainInfo err:", err.Error())
+					return
+				}
+
+				balance, err := w.GetBalance(ctx, block)
+				if err != nil {
+					t.Fatal("GetBalance err:", err.Error())
+					return
+				}
+
+				comment := randString(150)
+				addr := address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE")
+				if balance.NanoTON().Uint64() >= 3000000 {
+					err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
+					if err != nil {
+						t.Fatal("Transfer err:", err.Error())
+						return
+					}
+				} else {
+					t.Fatal("not enough balance")
+					return
+				}
+			})
+		}
 	}
 }
 
