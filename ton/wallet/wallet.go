@@ -3,10 +3,15 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha512"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl"
 	"math/rand"
 	"strings"
 	"time"
@@ -289,6 +294,32 @@ func (w *Wallet) BuildTransfer(to *address.Address, amount tlb.Coins, bounce boo
 	}, nil
 }
 
+func (w *Wallet) BuildTransferEncrypted(ctx context.Context, to *address.Address, amount tlb.Coins, bounce bool, comment string) (_ *Message, err error) {
+	var body *cell.Cell
+	if comment != "" {
+		key, err := GetPublicKey(ctx, w.api, to)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get destination contract (wallet) public key")
+		}
+
+		body, err = CreateEncryptedCommentCell(comment, w.Address(), w.key, key)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      bounce,
+			DstAddr:     to,
+			Amount:      amount,
+			Body:        body,
+		},
+	}, nil
+}
+
 func (w *Wallet) Send(ctx context.Context, message *Message, waitConfirmation ...bool) error {
 	return w.SendMany(ctx, []*Message{message}, waitConfirmation...)
 }
@@ -452,11 +483,135 @@ func (w *Wallet) Transfer(ctx context.Context, to *address.Address, amount tlb.C
 	return w.transfer(ctx, to, amount, comment, true, waitConfirmation...)
 }
 
+// TransferWithEncryptedComment - same as Transfer but encrypts comment, throws error if target contract (address) has no get_public_key method.
+func (w *Wallet) TransferWithEncryptedComment(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, waitConfirmation ...bool) error {
+	transfer, err := w.BuildTransferEncrypted(ctx, to, amount, true, comment)
+	if err != nil {
+		return err
+	}
+	return w.Send(ctx, transfer, waitConfirmation...)
+}
+
 func CreateCommentCell(text string) (*cell.Cell, error) {
 	// comment ident
 	root := cell.BeginCell().MustStoreUInt(0, 32)
 
 	if err := root.StoreStringSnake(text); err != nil {
+		return nil, fmt.Errorf("failed to build comment: %w", err)
+	}
+
+	return root.EndCell(), nil
+}
+
+const EncryptedCommentOpcode = 0x2167da4b
+
+func DecryptCommentCell(commentCell *cell.Cell, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) ([]byte, error) {
+	slc := commentCell.BeginParse()
+	op, err := slc.LoadUInt(32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load op code: %w", err)
+	}
+
+	if op != EncryptedCommentOpcode {
+		return nil, fmt.Errorf("opcode not match encrypted comment")
+	}
+
+	xorKey, err := slc.LoadSlice(256)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load xor key: %w", err)
+	}
+	for i := 0; i < 32; i++ {
+		xorKey[i] ^= theirKey[i]
+	}
+
+	if !bytes.Equal(xorKey, ourKey.Public().(ed25519.PublicKey)) {
+		return nil, fmt.Errorf("message was encrypted not for the given keys")
+	}
+
+	msgKey, err := slc.LoadSlice(128)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load xor key: %w", err)
+	}
+
+	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute shared key: %w", err)
+	}
+
+	h := hmac.New(sha512.New, sharedKey)
+	h.Write(msgKey)
+	x := h.Sum(nil)
+
+	data, err := slc.LoadBinarySnake()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load snake encrypted data: %w", err)
+	}
+
+	if len(data) < 32 || len(data)%16 != 0 {
+		return nil, fmt.Errorf("invalid data")
+	}
+
+	c, err := aes.NewCipher(x[:32])
+	if err != nil {
+		return nil, err
+	}
+	enc := cipher.NewCBCDecrypter(c, x[32:48])
+	enc.CryptBlocks(data, data)
+
+	if data[0] > 31 {
+		return nil, fmt.Errorf("invalid prefix size")
+	}
+	return data[data[0]:], nil
+}
+
+func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) (*cell.Cell, error) {
+	// encrypted comment op code
+	root := cell.BeginCell().MustStoreUInt(EncryptedCommentOpcode, 32)
+
+	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute shared key: %w", err)
+	}
+
+	data := []byte(text)
+
+	pfx := make([]byte, 16+(16-(len(data)%16)))
+	pfx[0] = byte(len(pfx))
+	if _, err = rand.Read(pfx[1:]); err != nil {
+		return nil, fmt.Errorf("rand gen err: %w", err)
+	}
+	data = append(pfx, data...)
+
+	h := hmac.New(sha512.New, []byte(senderAddr.String()))
+	h.Write(data)
+	msgKey := h.Sum(nil)[:16]
+
+	/*	msgKey := make([]byte, 16)
+		if _, err = rand.Read(msgKey); err != nil {
+			return nil, fmt.Errorf("rand gen err: %w", err)
+		}*/
+
+	h = hmac.New(sha512.New, sharedKey)
+	h.Write(msgKey)
+	x := h.Sum(nil)
+
+	c, err := aes.NewCipher(x[:32])
+	if err != nil {
+		return nil, err
+	}
+
+	enc := cipher.NewCBCEncrypter(c, x[32:48])
+	enc.CryptBlocks(data, data)
+
+	xorKey := ourKey.Public().(ed25519.PublicKey)
+	for i := 0; i < 32; i++ {
+		xorKey[i] ^= theirKey[i]
+	}
+
+	root.MustStoreSlice(xorKey, 256)
+	root.MustStoreSlice(msgKey, 128)
+
+	if err := root.StoreBinarySnake(data); err != nil {
 		return nil, fmt.Errorf("failed to build comment: %w", err)
 	}
 

@@ -250,7 +250,7 @@ func TestClient_FindValue(t *testing.T) {
 								t.Fatal(err)
 							}
 
-							k, err := adnl.ToKeyID(&Key{
+							k, err := tl.Hash(&Key{
 								ID:    siteAddr,
 								Name:  []byte("address"),
 								Index: 0,
@@ -309,7 +309,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	pubKey1 := ed25519.PublicKey(byteKey1)
 	adnlPubKey1 := adnl.PublicKeyED25519{Key: pubKey1}
 
-	tKeyId1, err := adnl.ToKeyID(adnlPubKey1)
+	tKeyId1, err := tl.Hash(adnlPubKey1)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -332,7 +332,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	pubKey2 := ed25519.PublicKey(byteKey2)
 	adnlPubKey2 := adnl.PublicKeyED25519{Key: pubKey2}
 
-	tKeyId2, err := adnl.ToKeyID(adnlPubKey2)
+	tKeyId2, err := tl.Hash(adnlPubKey2)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -476,7 +476,7 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 							t.Fatal("failed to prepare test data, err", err)
 						}
 
-						k, err := adnl.ToKeyID(&Key{
+						k, err := tl.Hash(&Key{
 							ID:    adnlAddr,
 							Name:  []byte("address"),
 							Index: 0,
@@ -535,7 +535,7 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -718,7 +718,7 @@ func TestClient_StoreOverlayNodesIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -766,10 +766,10 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -807,7 +807,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kid, err := adnl.ToKeyID(adnl.PublicKeyED25519{
+	kid, err := tl.Hash(adnl.PublicKeyED25519{
 		Key: pub,
 	})
 	if err != nil {

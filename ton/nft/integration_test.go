@@ -60,7 +60,7 @@ func Test_NftMintTransfer(t *testing.T) {
 	}
 
 	if balance.NanoTON().Uint64() < 3000000 {
-		t.Fatal("not enough balance", w.Address(), balance.TON())
+		t.Fatal("not enough balance", w.Address(), balance.String())
 	}
 
 	collectionAddr := address.MustParseAddr("EQBTObWUuWTb5ECnLI4x6a3szzstmMDOcc5Kdo-CpbUY9Y5K") // address = deployCollection(w) w.seed = (fiction ... rather)

@@ -28,7 +28,7 @@ type Message struct {
 }
 
 type MessagesList struct {
-	List *cell.Dictionary
+	List *cell.Dictionary `tlb:"dict inline 15"`
 }
 
 type InternalMessage struct {
@@ -231,7 +231,7 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 
 func (m *InternalMessage) Dump() string {
 	return fmt.Sprintf("Amount %s TON, Created at: %d, Created lt %d\nBounce: %t, Bounced %t, IHRDisabled %t\nSrcAddr: %s\nDstAddr: %s\nPayload: %s",
-		m.Amount.TON(), m.CreatedAt, m.CreatedLT, m.Bounce, m.Bounced, m.IHRDisabled, m.SrcAddr, m.DstAddr, m.Body.Dump())
+		m.Amount.String(), m.CreatedAt, m.CreatedLT, m.Bounce, m.Bounced, m.IHRDisabled, m.SrcAddr, m.DstAddr, m.Body.Dump())
 }
 
 func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
@@ -265,19 +265,6 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 	}
 
 	return builder.EndCell(), nil
-}
-
-func (m *MessagesList) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.ToDict(15)
-	if err != nil {
-		return err
-	}
-	m.List = dict
-	return nil
-}
-
-func (m *MessagesList) ToCell() (*cell.Cell, error) {
-	return m.List.ToCell()
 }
 
 func (m *MessagesList) ToSlice() ([]Message, error) {

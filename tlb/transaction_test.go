@@ -38,3 +38,18 @@ func TestTransaction_Dump(t *testing.T) {
 	tx.Hash = txCell.Hash()
 	tx.Dump()
 }
+
+func TestTransaction_NoAction(t *testing.T) {
+	txData, _ := hex.DecodeString("b5ee9c724102060100013e0003af719dd9de25ac93578116413f89610061cf28f52daf1581373bd8671f7abddfd640000244d94d3f309d7cfcadc8e05ebbd460c2c420020d8e3bfd336da4b1c2d0b53f79127093409090000244d94d3f30164d081fd0001408020105008272d38ee1e2b7328b24e8e3836bb288aa9c96218b9a81e7a8fd290e1a4ccf0a65da9be924ff9d7f16b238a76ae47db9d2f56769c1b0c1ccb0fa95522820318401090101a00301ab680122f3d92b6fb36afc55adb8e4e8ef8e2101e4b488d540f31b1826eb15e121b92b000677677896b24d5e045904fe258401873ca3d4b6bc5604dcef619c7deaf77f590404061ed7e60000489b29a7e610c9a103fac00400687362d09c0000244d94d3f303601062ad47c00800731f1286645e6ced11b52e9a2c07cab0d6ea42390b5b969fd204a0e031294cd0001104084049a0187a12026ec7dc45")
+	txCell, err := cell.FromBOC(txData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slc := txCell.BeginParse()
+	var tx Transaction
+	err = LoadFromCell(&tx, slc)
+	if err != nil {
+		t.Fatal(err)
+	}
+}

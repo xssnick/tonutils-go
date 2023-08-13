@@ -97,7 +97,7 @@ func (c *Cell) UnsafeModify(levelMask LevelMask, special bool) {
 }
 
 func (c *Cell) PeekRef(i int) (*Cell, error) {
-	if i > len(c.refs) {
+	if i >= len(c.refs) {
 		return nil, ErrNoMoreRefs
 	}
 	return c.refs[i], nil

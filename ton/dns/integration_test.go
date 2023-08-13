@@ -14,7 +14,7 @@ var api = func() *ton.APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}

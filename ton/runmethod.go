@@ -61,7 +61,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 	}
 
 	mode := uint32(1 << 2)
-	if !c.skipProofCheck {
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
 		mode |= (1 << 1) | (1 << 0)
 	}
 
@@ -93,7 +93,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			return nil, err
 		}
 
-		if !c.skipProofCheck {
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
 			proof, err := cell.FromBOCMultiRoot(t.Proof)
 			if err != nil {
 				return nil, err
@@ -101,7 +101,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 
 			var shardProof []*cell.Cell
 			var shardHash []byte
-			if !c.skipProofCheck && addr.Workchain() != address.MasterchainID {
+			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
 				if len(t.ShardProof) == 0 {
 					return nil, fmt.Errorf("liteserver has no proof for this account in a given block, request newer block or disable proof checks")
 				}
@@ -118,7 +118,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 				shardHash = t.ShardBlock.RootHash
 			}
 
-			shardAcc, balanceInfo, err := CheckAccountStateProof(addr, blockInfo, proof, shardProof, shardHash, c.skipProofCheck)
+			shardAcc, balanceInfo, err := CheckAccountStateProof(addr, blockInfo, proof, shardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
 			if err != nil {
 				return nil, fmt.Errorf("failed to check acc state proof: %w", err)
 			}

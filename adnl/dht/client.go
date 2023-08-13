@@ -147,7 +147,7 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
 	}
 
-	kid, err := adnl.ToKeyID(pub)
+	kid, err := tl.Hash(pub)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 }
 
 func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
-	keyHash, err := adnl.ToKeyID(adnl.PublicKeyOverlay{
+	keyHash, err := tl.Hash(adnl.PublicKeyOverlay{
 		Key: overlayKey,
 	})
 
@@ -265,7 +265,7 @@ func (c *Client) StoreOverlayNodes(ctx context.Context, overlayKey []byte, nodes
 }
 
 func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, value []byte, rule any, ttl time.Duration, ownerKey ed25519.PrivateKey, atLeastCopies int) (copiesMade int, idKey []byte, err error) {
-	idKey, err = adnl.ToKeyID(id)
+	idKey, err = tl.Hash(id)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -296,7 +296,7 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 		}
 	}
 
-	kid, err := adnl.ToKeyID(val.KeyDescription.Key)
+	kid, err := tl.Hash(val.KeyDescription.Key)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -334,7 +334,7 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 					currentPriority := leadingZeroBits(xor(kid, node.adnlId))
 					for _, n := range nodes {
 						var nid []byte
-						nid, err = adnl.ToKeyID(n.ID)
+						nid, err = tl.Hash(n.ID)
 						if err != nil {
 							continue
 						}
@@ -410,7 +410,7 @@ type foundResult struct {
 }
 
 func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
-	id, keyErr := adnl.ToKeyID(key)
+	id, keyErr := tl.Hash(key)
 	if keyErr != nil {
 		return nil, nil, keyErr
 	}

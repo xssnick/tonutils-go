@@ -455,7 +455,7 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 
 	pub := ourKey.Public().(ed25519.PublicKey)
 
-	kid, err := adnl.ToKeyID(adnl.PublicKeyED25519{Key: serverKey})
+	kid, err := tl.Hash(adnl.PublicKeyED25519{Key: serverKey})
 	if err != nil {
 		return err
 	}

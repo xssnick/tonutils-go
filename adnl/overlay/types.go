@@ -156,20 +156,20 @@ type BroadcastFEC struct {
 }
 
 func (t *BroadcastFEC) CalcID() ([]byte, error) {
-	typeId, err := adnl.ToKeyID(t.FEC)
+	typeId, err := tl.Hash(t.FEC)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute fec type id: %w", err)
 	}
 
 	var src = make([]byte, 32)
 	if t.Flags&_BroadcastFlagAnySender == 0 {
-		src, err = adnl.ToKeyID(t.Source)
+		src, err = tl.Hash(t.Source)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute source key id: %w", err)
 		}
 	}
 
-	broadcastHash, err := adnl.ToKeyID(&BroadcastFECID{
+	broadcastHash, err := tl.Hash(&BroadcastFECID{
 		Source:   src,
 		Type:     typeId,
 		DataHash: t.DataHash,
@@ -253,7 +253,7 @@ func (n *Node) CheckSignature() error {
 		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(n.ID).String())
 	}
 
-	id, err := adnl.ToKeyID(n.ID)
+	id, err := tl.Hash(n.ID)
 	if err != nil {
 		return fmt.Errorf("failed to calc id: %w", err)
 	}
@@ -282,7 +282,7 @@ func (n *Node) Sign(key ed25519.PrivateKey) error {
 		return fmt.Errorf("incorrect private key")
 	}
 
-	id, err := adnl.ToKeyID(n.ID)
+	id, err := tl.Hash(n.ID)
 	if err != nil {
 		return fmt.Errorf("failed to calc id: %w", err)
 	}
@@ -301,7 +301,7 @@ func (n *Node) Sign(key ed25519.PrivateKey) error {
 }
 
 func NewNode(overlay []byte, key ed25519.PrivateKey) (*Node, error) {
-	keyHash, err := adnl.ToKeyID(adnl.PublicKeyOverlay{
+	keyHash, err := tl.Hash(adnl.PublicKeyOverlay{
 		Key: overlay,
 	})
 	if err != nil {

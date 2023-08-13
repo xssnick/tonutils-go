@@ -3,19 +3,25 @@ package tlb
 import (
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
-	"strconv"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 type Coins struct {
-	val *big.Int
+	decimals int
+	val      *big.Int
 }
 
+var ZeroCoins = MustFromTON("0")
+
+// Deprecated: use String
 func (g Coins) TON() string {
+	return g.String()
+}
+
+func (g Coins) String() string {
 	if g.val == nil {
 		return "0"
 	}
@@ -26,9 +32,9 @@ func (g Coins) TON() string {
 		return a
 	}
 
-	splitter := len(a) - 9
+	splitter := len(a) - g.decimals
 	if splitter <= 0 {
-		a = "0." + strings.Repeat("0", 9-len(a)) + a
+		a = "0." + strings.Repeat("0", g.decimals-len(a)) + a
 	} else {
 		// set . between lo and hi
 		a = a[:splitter] + "." + a[splitter:]
@@ -49,11 +55,24 @@ func (g Coins) TON() string {
 	return a
 }
 
+// Deprecated: use Nano
 func (g Coins) NanoTON() *big.Int {
+	return g.Nano()
+}
+
+func (g Coins) Nano() *big.Int {
 	if g.val == nil {
 		return big.NewInt(0)
 	}
 	return g.val
+}
+
+func MustFromDecimal(val string, decimals int) Coins {
+	v, err := FromDecimal(val, decimals)
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func MustFromTON(val string) Coins {
@@ -64,19 +83,47 @@ func MustFromTON(val string) Coins {
 	return v
 }
 
+func MustFromNano(val *big.Int, decimals int) Coins {
+	v, err := FromNano(val, decimals)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func FromNano(val *big.Int, decimals int) (Coins, error) {
+	if uint((val.BitLen()+7)>>3) >= 16 {
+		return Coins{}, fmt.Errorf("too big number for coins")
+	}
+
+	return Coins{
+		decimals: decimals,
+		val:      new(big.Int).Set(val),
+	}, nil
+}
+
 func FromNanoTON(val *big.Int) Coins {
 	return Coins{
-		val: new(big.Int).Set(val),
+		decimals: 9,
+		val:      new(big.Int).Set(val),
 	}
 }
 
 func FromNanoTONU(val uint64) Coins {
 	return Coins{
-		val: new(big.Int).SetUint64(val),
+		decimals: 9,
+		val:      new(big.Int).SetUint64(val),
 	}
 }
 
 func FromTON(val string) (Coins, error) {
+	return FromDecimal(val, 9)
+}
+
+func FromDecimal(val string, decimals int) (Coins, error) {
+	if decimals < 0 || decimals >= 128 {
+		return Coins{}, fmt.Errorf("invalid decmals")
+	}
 	errInvalid := errors.New("invalid string")
 
 	s := strings.SplitN(val, ".", 2)
@@ -90,13 +137,13 @@ func FromTON(val string) (Coins, error) {
 		return Coins{}, errInvalid
 	}
 
-	hi = hi.Mul(hi, new(big.Int).SetUint64(1000000000))
+	hi = hi.Mul(hi, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
 
 	if len(s) == 2 {
 		loStr := s[1]
-		// lo can have max 9 digits for ton
-		if len(loStr) > 9 {
-			loStr = loStr[:9]
+		// lo can have max {decimals} digits
+		if len(loStr) > decimals {
+			loStr = loStr[:decimals]
 		}
 
 		leadZeroes := 0
@@ -107,20 +154,24 @@ func FromTON(val string) (Coins, error) {
 			leadZeroes++
 		}
 
-		lo, err := strconv.ParseUint(loStr, 10, 64)
-		if err != nil {
+		lo, ok := new(big.Int).SetString(loStr, 10)
+		if !ok {
 			return Coins{}, errInvalid
 		}
 
-		// log10 of 1 == 0, log10 of 10 = 1, so we need offset
-		digits := int(math.Ceil(math.Log10(float64(lo + 1))))
-		lo *= uint64(math.Pow10((9 - leadZeroes) - digits))
+		digits := len(lo.String()) // =_=
+		lo = lo.Mul(lo, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64((decimals-leadZeroes)-digits)), nil))
 
-		hi = hi.Add(hi, new(big.Int).SetUint64(lo))
+		hi = hi.Add(hi, lo)
+	}
+
+	if uint((hi.BitLen()+7)>>3) >= 16 {
+		return Coins{}, fmt.Errorf("too big number for coins")
 	}
 
 	return Coins{
-		val: hi,
+		decimals: decimals,
+		val:      hi,
 	}, nil
 }
 
@@ -134,13 +185,9 @@ func (g *Coins) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (g Coins) ToCell() (*cell.Cell, error) {
-	return cell.BeginCell().MustStoreBigCoins(g.NanoTON()).EndCell(), nil
+	return cell.BeginCell().MustStoreBigCoins(g.Nano()).EndCell(), nil
 }
 
 func (g Coins) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%q", g.NanoTON().String())), nil
-}
-
-func (g Coins) String() string {
-	return g.TON()
+	return []byte(fmt.Sprintf("%q", g.Nano().String())), nil
 }

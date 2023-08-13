@@ -2,12 +2,10 @@ package ton
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/tl"
-	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -20,8 +18,8 @@ func init() {
 type ConfigAll struct {
 	Mode        int         `tl:"int"`
 	ID          *BlockIDExt `tl:"struct"`
-	StateProof  []byte      `tl:"bytes"`
-	ConfigProof []byte      `tl:"bytes"`
+	StateProof  *cell.Cell  `tl:"cell"`
+	ConfigProof *cell.Cell  `tl:"cell"`
 }
 
 type GetConfigAll struct {
@@ -63,29 +61,9 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 
 	switch t := resp.(type) {
 	case ConfigAll:
-		cfgProof, err := cell.FromBOC(t.ConfigProof)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse config proof boc: %w", err)
-		}
-
-		stateProof, err := cell.FromBOC(t.StateProof)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse state proof boc: %w", err)
-		}
-
-		state, err := CheckBlockShardStateProof([]*cell.Cell{cfgProof, stateProof}, block.RootHash)
+		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{t.ConfigProof, t.StateProof})
 		if err != nil {
 			return nil, fmt.Errorf("incorrect proof: %w", err)
-		}
-
-		if state.McStateExtra == nil {
-			return nil, errors.New("no mc extra state found, something went wrong")
-		}
-
-		var stateExtra tlb.McStateExtra
-		err = tlb.LoadFromCell(&stateExtra, state.McStateExtra.BeginParse())
-		if err != nil {
-			return nil, fmt.Errorf("load masterchain state extra: %w", err)
 		}
 
 		result := &BlockchainConfig{data: map[int32]*cell.Cell{}}
@@ -93,7 +71,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 		if len(onlyParams) > 0 {
 			// we need it because lite server may add some unwanted keys
 			for _, param := range onlyParams {
-				res := stateExtra.ConfigParams.Config.GetByIntKey(big.NewInt(int64(param)))
+				res := stateExtra.ConfigParams.Config.Params.GetByIntKey(big.NewInt(int64(param)))
 				if res == nil {
 					return nil, fmt.Errorf("config param %d not found", param)
 				}
@@ -106,7 +84,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 				result.data[param] = v.MustToCell()
 			}
 		} else {
-			for _, kv := range stateExtra.ConfigParams.Config.All() {
+			for _, kv := range stateExtra.ConfigParams.Config.Params.All() {
 				v, err := kv.Value.BeginParse().LoadRef()
 				if err != nil {
 					return nil, fmt.Errorf("failed to load config param %d, err: %w", kv.Key.BeginParse().MustLoadInt(32), err)

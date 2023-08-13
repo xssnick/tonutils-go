@@ -22,8 +22,16 @@ func (c *Cell) ToBOC() []byte {
 }
 
 func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
+	return ToBOCWithFlags([]*Cell{c}, withCRC)
+}
+
+func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
+	if len(roots) == 0 {
+		return nil
+	}
+
 	// recursively go through cells, build hash index and store unique in slice
-	orderCells := flattenIndex([]*Cell{c})
+	orderCells := flattenIndex(roots)
 
 	// bytes needed to store num of cells
 	cellSizeBits := math.Log2(float64(len(orderCells)) + 1)
@@ -58,8 +66,8 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	// cells num
 	data = append(data, dynamicIntBytes(uint64(len(orderCells)), uint(cellSizeBytes))...)
 
-	// roots num (only 1 supported for now)
-	data = append(data, dynamicIntBytes(1, uint(cellSizeBytes))...)
+	// roots num
+	data = append(data, dynamicIntBytes(uint64(len(roots)), uint(cellSizeBytes))...)
 
 	// complete BOCs = 0
 	data = append(data, dynamicIntBytes(0, uint(cellSizeBytes))...)
@@ -67,8 +75,10 @@ func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
 	// len of data
 	data = append(data, dynamicIntBytes(uint64(len(payload)), uint(sizeBytes))...)
 
-	// root should have index 0
-	data = append(data, dynamicIntBytes(0, uint(cellSizeBytes))...)
+	// root index
+	for _, r := range roots {
+		data = append(data, dynamicIntBytes(uint64(r.index), uint(cellSizeBytes))...)
+	}
 	data = append(data, payload...)
 
 	if withCRC {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/tl"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ func TestPriorityList_addNode(t *testing.T) {
 		Name:  []byte("address"),
 		Index: 0,
 	}
-	keyId, err := adnl.ToKeyID(k)
+	keyId, err := tl.Hash(k)
 	if err != nil {
 		t.Fatal("failed to prepare test key id")
 	}
@@ -29,7 +30,7 @@ func TestPriorityList_addNode(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId1, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey1})
+	kId1, err := tl.Hash(adnl.PublicKeyED25519{tPubKey1})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -40,7 +41,7 @@ func TestPriorityList_addNode(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId2, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey2})
+	kId2, err := tl.Hash(adnl.PublicKeyED25519{tPubKey2})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -51,7 +52,7 @@ func TestPriorityList_addNode(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId3, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey3})
+	kId3, err := tl.Hash(adnl.PublicKeyED25519{tPubKey3})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -110,7 +111,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		Name:  []byte("address"),
 		Index: 0,
 	}
-	keyId, err := adnl.ToKeyID(k)
+	keyId, err := tl.Hash(k)
 	if err != nil {
 		t.Fatal("failed to prepare test key id")
 	}
@@ -121,7 +122,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId1, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey1})
+	kId1, err := tl.Hash(adnl.PublicKeyED25519{tPubKey1})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -132,7 +133,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId2, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey2})
+	kId2, err := tl.Hash(adnl.PublicKeyED25519{tPubKey2})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -143,7 +144,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId3, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey3})
+	kId3, err := tl.Hash(adnl.PublicKeyED25519{tPubKey3})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}

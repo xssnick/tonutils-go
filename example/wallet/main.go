@@ -78,10 +78,10 @@ func main() {
 			return
 		}
 
-		log.Println("transaction sent, balance left:", balance.TON())
+		log.Println("transaction sent, balance left:", balance.String())
 
 		return
 	}
 
-	log.Println("not enough balance:", balance.TON())
+	log.Println("not enough balance:", balance.String())
 }

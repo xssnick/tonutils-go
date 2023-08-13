@@ -18,9 +18,14 @@ func TestShardState_LoadFromCell(t *testing.T) {
 		{"blockType1 (tag 0x5f327da5)", tag1, true},
 		//{"blockType2 (tag 0x9023afe2)", tag2, false},
 	}
+
+	type testStruct struct {
+		State any `tlb:"[ShardStateUnsplit,ShardStateSplit]"`
+	}
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var testShard ShardState
+			var testShard testStruct
 			var tBuilder cell.Builder
 			err := tBuilder.StoreUInt(uint64(test.tag), 32)
 			if err != nil {
@@ -46,13 +51,13 @@ func TestShardState_LoadFromCell(t *testing.T) {
 				}
 			}
 
-			err = testShard.LoadFromCell(tBuilder.EndCell().BeginParse())
+			err = LoadFromCell(&testShard, tBuilder.EndCell().BeginParse())
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			if (testShard.Right != nil) != test.leftAndRightRef {
-				t.Errorf("right reference is not found")
+			if testShard.State.(ShardStateSplit).Left.Seqno != 24374596 {
+				t.Fatal("incorrect result")
 			}
 		})
 	}

@@ -46,7 +46,7 @@ func main() {
 	fmt.Printf("Is active: %v\n", res.IsActive)
 	if res.IsActive {
 		fmt.Printf("Status: %s\n", res.State.Status)
-		fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
+		fmt.Printf("Balance: %s TON\n", res.State.Balance.String())
 		if res.Data != nil {
 			fmt.Printf("Data: %s\n", res.Data.Dump())
 		}

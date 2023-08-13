@@ -1,75 +1,47 @@
 package cell
 
-import "log"
+import (
+	"sort"
+)
 
 func flattenIndex(src []*Cell) []*Cell {
 	pending := src
 	allCells := map[string]*Cell{}
-	notPermCells := map[string]struct{}{}
-	var sorted []string
 
+	idx := 0
+	var cells []*Cell
 	for len(pending) > 0 {
-		cells := append([]*Cell{}, pending...)
-		pending = []*Cell{}
+		var next []*Cell
+		for _, p := range pending {
+			hash := string(p.Hash())
+			if ps, ok := allCells[hash]; ok {
+				// move cell forward in boc, because behind reference is not allowed
+				ps.index, p.index = idx, idx
+				idx++
 
-		for _, cell := range cells {
-			hash := string(cell.Hash())
-			if _, ok := allCells[hash]; ok {
+				// we also need to move refs
+				next = append(next, p.refs...)
 				continue
 			}
 
-			notPermCells[hash] = struct{}{}
-			allCells[hash] = cell
+			p.index = idx
+			idx++
 
-			pending = append(pending, cell.refs...)
+			allCells[hash] = p
+			cells = append(cells, p)
+
+			next = append(next, p.refs...)
 		}
+		pending = next
 	}
 
-	tempMark := map[string]bool{}
-	var visit func(hash string)
-	visit = func(hash string) {
-		if _, ok := notPermCells[hash]; !ok {
-			return
-		}
+	sort.Slice(cells, func(i, j int) bool {
+		return cells[i].index < cells[j].index
+	})
 
-		if tempMark[hash] {
-			log.Println("Unknown branch, hash exists")
-			return
-		}
-
-		tempMark[hash] = true
-
-		for _, c := range allCells[hash].refs {
-			visit(string(c.Hash()))
-		}
-
-		sorted = append([]string{hash}, sorted...)
-		delete(tempMark, hash)
-		delete(notPermCells, hash)
+	for i, cell := range cells {
+		// remove possible gaps
+		cell.index = i
 	}
-
-	for len(notPermCells) > 0 {
-		for k := range notPermCells {
-			visit(k)
-			break
-		}
-	}
-
-	indexes := map[string]int{}
-	for i := 0; i < len(sorted); i++ {
-		indexes[sorted[i]] = i
-	}
-
-	var result []*Cell
-	for _, ent := range sorted {
-		rrr := allCells[ent]
-		rrr.index = indexes[string(rrr.Hash())]
-
-		for _, ref := range rrr.refs {
-			ref.index = indexes[string(ref.Hash())]
-		}
-		result = append(result, rrr)
-	}
-
-	return result
+	return cells
 }

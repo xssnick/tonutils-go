@@ -16,11 +16,11 @@ func init() {
 }
 
 type AccountState struct {
-	ID         *BlockIDExt `tl:"struct"`
-	Shard      *BlockIDExt `tl:"struct"`
-	ShardProof []byte      `tl:"bytes"`
-	Proof      []byte      `tl:"bytes"`
-	State      []byte      `tl:"bytes"`
+	ID         *BlockIDExt  `tl:"struct"`
+	Shard      *BlockIDExt  `tl:"struct"`
+	ShardProof []*cell.Cell `tl:"cell optional 2"`
+	Proof      []*cell.Cell `tl:"cell optional 2"`
+	State      *cell.Cell   `tl:"cell optional"`
 }
 
 type GetAccountState struct {
@@ -52,31 +52,24 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			return nil, fmt.Errorf("response with incorrect master block")
 		}
 
-		if len(t.State) == 0 {
+		if t.State == nil {
 			return &tlb.Account{
 				IsActive: false,
 			}, nil
+		}
+
+		if t.Proof == nil {
+			return nil, fmt.Errorf("no proof")
 		}
 
 		acc := &tlb.Account{
 			IsActive: true,
 		}
 
-		proof, err := cell.FromBOCMultiRoot(t.Proof)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse proof boc: %w", err)
-		}
-
-		var shardProof []*cell.Cell
 		var shardHash []byte
-		if !c.skipProofCheck && addr.Workchain() != address.MasterchainID {
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
 			if len(t.ShardProof) == 0 {
 				return nil, ErrNoProof
-			}
-
-			shardProof, err = cell.FromBOCMultiRoot(t.ShardProof)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse shard proof boc: %w", err)
 			}
 
 			if t.Shard == nil || len(t.Shard.RootHash) != 32 {
@@ -86,22 +79,17 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			shardHash = t.Shard.RootHash
 		}
 
-		shardAcc, balanceInfo, err := CheckAccountStateProof(addr, block, proof, shardProof, shardHash, c.skipProofCheck)
+		shardAcc, balanceInfo, err := CheckAccountStateProof(addr, block, t.Proof, t.ShardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check acc state proof: %w", err)
 		}
 
-		stateCell, err := cell.FromBOC(t.State)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse state boc: %w", err)
-		}
-
-		if !bytes.Equal(shardAcc.Account.Hash(0), stateCell.Hash()) {
+		if !bytes.Equal(shardAcc.Account.Hash(0), t.State.Hash()) {
 			return nil, fmt.Errorf("proof hash not match state account hash")
 		}
 
 		var st tlb.AccountState
-		if err = st.LoadFromCell(stateCell.BeginParse()); err != nil {
+		if err = st.LoadFromCell(t.State.BeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to load account state: %w", err)
 		}
 

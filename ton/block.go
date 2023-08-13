@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tl"
@@ -33,6 +34,55 @@ func init() {
 	tl.Register(True{}, "true = True")
 	tl.Register(TransactionID3{}, "liteServer.transactionId3 account:int256 lt:long = liteServer.TransactionId3")
 	tl.Register(TransactionID{}, "liteServer.transactionId mode:# account:mode.0?int256 lt:mode.1?long hash:mode.2?int256 = liteServer.TransactionId")
+
+	tl.Register(GetBlockProof{}, "liteServer.getBlockProof mode:# known_block:tonNode.blockIdExt target_block:mode.0?tonNode.blockIdExt = liteServer.PartialBlockProof")
+	tl.Register(PartialBlockProof{}, "liteServer.partialBlockProof complete:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt steps:(vector liteServer.BlockLink) = liteServer.PartialBlockProof")
+	tl.Register(BlockLinkBackward{}, "liteServer.blockLinkBack to_key_block:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt dest_proof:bytes proof:bytes state_proof:bytes = liteServer.BlockLink")
+	tl.Register(BlockLinkForward{}, "liteServer.blockLinkForward to_key_block:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt dest_proof:bytes config_proof:bytes signatures:liteServer.SignatureSet = liteServer.BlockLink")
+	tl.Register(SignatureSet{}, "liteServer.signatureSet validator_set_hash:int catchain_seqno:int signatures:(vector liteServer.signature) = liteServer.SignatureSet")
+	tl.Register(Signature{}, "liteServer.signature node_id_short:int256 signature:bytes = liteServer.Signature")
+	tl.Register(BlockID{}, "ton.blockId root_cell_hash:int256 file_hash:int256 = ton.BlockId")
+}
+
+type BlockID struct {
+	RootHash []byte `tl:"int256"`
+	FileHash []byte `tl:"int256"`
+}
+
+type PartialBlockProof struct {
+	Complete bool        `tl:"bool"`
+	From     *BlockIDExt `tl:"struct"`
+	To       *BlockIDExt `tl:"struct"`
+	Steps    []any       `tl:"vector struct boxed [liteServer.blockLinkForward, liteServer.blockLinkBack]"`
+}
+
+type BlockLinkBackward struct {
+	ToKeyBlock bool        `tl:"bool"`
+	From       *BlockIDExt `tl:"struct"`
+	To         *BlockIDExt `tl:"struct"`
+	DestProof  []byte      `tl:"bytes"`
+	Proof      []byte      `tl:"bytes"`
+	StateProof []byte      `tl:"bytes"`
+}
+
+type BlockLinkForward struct {
+	ToKeyBlock   bool          `tl:"bool"`
+	From         *BlockIDExt   `tl:"struct"`
+	To           *BlockIDExt   `tl:"struct"`
+	DestProof    []byte        `tl:"bytes"`
+	ConfigProof  []byte        `tl:"bytes"`
+	SignatureSet *SignatureSet `tl:"struct boxed"`
+}
+
+type SignatureSet struct {
+	ValidatorSetHash int32       `tl:"int"`
+	CatchainSeqno    int32       `tl:"int"`
+	Signatures       []Signature `tl:"vector struct"`
+}
+
+type Signature struct {
+	NodeIDShort []byte `tl:"int256"`
+	Signature   []byte `tl:"bytes"`
 }
 
 type Object struct{}
@@ -62,7 +112,7 @@ type ZeroStateIDExt struct {
 type AllShardsInfo struct {
 	ID    *BlockIDExt `tl:"struct"`
 	Proof []byte      `tl:"bytes"`
-	Data  []byte      `tl:"bytes"`
+	Data  *cell.Cell  `tl:"cell"`
 }
 
 type BlockTransactions struct {
@@ -75,7 +125,7 @@ type BlockTransactions struct {
 
 type BlockData struct {
 	ID      *BlockIDExt `tl:"struct"`
-	Payload []byte      `tl:"bytes"`
+	Payload *cell.Cell  `tl:"cell"`
 }
 
 type LookupBlock struct {
@@ -115,6 +165,12 @@ type TransactionShortInfo struct {
 	Account []byte
 	LT      uint64
 	Hash    []byte
+}
+
+type GetBlockProof struct {
+	Mode        uint32      `tl:"flags"`
+	KnownBlock  *BlockIDExt `tl:"struct"`
+	TargetBlock *BlockIDExt `tl:"?0 struct"`
 }
 
 func (t *TransactionShortInfo) ID3() *TransactionID3 {
@@ -199,7 +255,27 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
 
 	switch t := resp.(type) {
 	case MasterchainInfo:
+		if c.proofCheckPolicy == ProofCheckPolicySecure {
+			c.trustedLock.Lock()
+			defer c.trustedLock.Unlock()
 
+			if c.trustedBlock == nil {
+				if c.trustedBlock == nil {
+					// we have no block to trust, so trust first block we get
+					c.trustedBlock = t.Last.Copy()
+					log.Println("[WARNING] trusted block was not set on initialization, so first block we got was considered as trusted. " +
+						"For better security you should use SetTrustedBlock(block) method and pass there init block from config on start")
+				}
+			} else {
+				if err := c.VerifyProofChain(ctx, c.trustedBlock, t.Last); err != nil {
+					return nil, fmt.Errorf("failed to verify proof chain: %w", err)
+				}
+
+				if t.Last.SeqNo > c.trustedBlock.SeqNo {
+					c.trustedBlock = t.Last.Copy()
+				}
+			}
+		}
 		return t.Last, nil
 	case LSError:
 		return nil, t
@@ -245,17 +321,12 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 
 	switch t := resp.(type) {
 	case BlockData:
-		cl, err := cell.FromBOC(t.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse block boc: %w", err)
-		}
-
-		if !bytes.Equal(cl.Hash(), block.RootHash) {
+		if !bytes.Equal(t.Payload.Hash(), block.RootHash) {
 			return nil, fmt.Errorf("incorrect block")
 		}
 
 		var bData tlb.Block
-		if err = tlb.LoadFromCell(&bData, cl.BeginParse()); err != nil {
+		if err = tlb.LoadFromCell(&bData, t.Payload.BeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to parse block data: %w", err)
 		}
 		return &bData, nil
@@ -263,32 +334,6 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
-}
-
-// GetBlockTransactions - list of block transactions
-// Deprecated: Will be removed in the next release, use GetBlockTransactionsV2
-func (c *APIClient) GetBlockTransactions(ctx context.Context, block *BlockIDExt, count uint32, after ...*tlb.TransactionID) ([]*tlb.TransactionID, bool, error) {
-	var id3 *TransactionID3
-	if len(after) > 0 && after[0] != nil {
-		id3 = &TransactionID3{
-			Account: after[0].AccountID,
-			LT:      after[0].LT,
-		}
-	}
-
-	list, more, err := c.GetBlockTransactionsV2(ctx, block, count, id3)
-	if err != nil {
-		return nil, false, err
-	}
-	oldList := make([]*tlb.TransactionID, 0, len(list))
-	for _, item := range list {
-		oldList = append(oldList, &tlb.TransactionID{
-			LT:        item.LT,
-			Hash:      item.Hash,
-			AccountID: item.Account,
-		})
-	}
-	return oldList, more, nil
 }
 
 // GetBlockTransactionsV2 - list of block transactions
@@ -301,7 +346,7 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 	}
 
 	mode := 0b111 | (withAfter << 7)
-	if !c.skipProofCheck {
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
 		mode |= 1 << 5
 	}
 
@@ -321,7 +366,7 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 	case BlockTransactions:
 		var shardAccounts tlb.ShardAccountBlocks
 
-		if !c.skipProofCheck {
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
 			proof, err := cell.FromBOC(t.Proof)
 			if err != nil {
 				return nil, false, fmt.Errorf("failed to parse proof boc: %w", err)
@@ -344,7 +389,7 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 				return nil, false, fmt.Errorf("invalid ls response, fields are nil")
 			}
 
-			if !c.skipProofCheck {
+			if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
 				if err = CheckTransactionProof(id.Hash, id.LT, id.Account, &shardAccounts); err != nil {
 					return nil, false, fmt.Errorf("incorrect tx %s proof: %w", hex.EncodeToString(id.Hash), err)
 				}
@@ -373,18 +418,13 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 
 	switch t := resp.(type) {
 	case AllShardsInfo:
-		shardsInfo, err := cell.FromBOC(t.Data)
-		if err != nil {
-			return nil, err
-		}
-
 		var inf tlb.AllShardsInfo
-		err = tlb.LoadFromCell(&inf, shardsInfo.BeginParse())
+		err = tlb.LoadFromCell(&inf, t.Data.BeginParse())
 		if err != nil {
 			return nil, err
 		}
 
-		if !c.skipProofCheck {
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
 			proof, err := cell.FromBOCMultiRoot(t.Proof)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse proof boc: %w", err)
@@ -410,7 +450,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 			}
 
 			if (dictProof == nil) != (inf.ShardHashes.Size() == 0) ||
-				!bytes.Equal(dictProof.MustToCell().Hash(0), shardsInfo.MustPeekRef(0).Hash()) {
+				!bytes.Equal(dictProof.MustToCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
 				return nil, fmt.Errorf("incorrect proof")
 			}
 		}
@@ -547,4 +587,25 @@ func (c *APIClient) WaitNextMasterBlock(ctx context.Context, master *BlockIDExt)
 	}
 
 	return m, nil
+}
+
+// GetBlockProof - gets proof chain for the block
+func (c *APIClient) GetBlockProof(ctx context.Context, known, target *BlockIDExt) (*PartialBlockProof, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, GetBlockProof{
+		Mode:        1,
+		KnownBlock:  known,
+		TargetBlock: target,
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case PartialBlockProof:
+		return &t, nil
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
 }

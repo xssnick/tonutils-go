@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
+	"github.com/xssnick/tonutils-go/tl"
 	"io"
 	"log"
 	"net"
@@ -90,7 +91,7 @@ func NewServer(key ed25519.PrivateKey, dht DHT, handler http.Handler) *Server {
 		Timeout:        30 * time.Second,
 		adnlServer:     newServer(key),
 	}
-	s.id, _ = adnl.ToKeyID(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
+	s.id, _ = tl.Hash(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
 	return s
 }
 

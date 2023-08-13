@@ -22,7 +22,7 @@ func newCorrectDhtNode(a byte, b byte, c byte, d byte, port string) (*dhtNode, e
 		return nil, err
 	}
 
-	kId, err := adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
+	kId, err := tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func TestNode_findNodes(t *testing.T) {
 	}
 	pubKeyAdnl := adnl.PublicKeyED25519{Key: pubKey}
 
-	idKey, err := adnl.ToKeyID(pubKeyAdnl)
+	idKey, err := tl.Hash(pubKeyAdnl)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -55,7 +55,7 @@ func TestNode_findNodes(t *testing.T) {
 		[]byte("lol"),
 		0,
 	}
-	kId, err := adnl.ToKeyID(tKey)
+	kId, err := tl.Hash(tKey)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -162,7 +162,7 @@ func TestNode_storeValue(t *testing.T) {
 
 	val := valFound.Value
 
-	kId, err := adnl.ToKeyID(val.KeyDescription.Key)
+	kId, err := tl.Hash(val.KeyDescription.Key)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -290,7 +290,7 @@ func TestNode_findValue(t *testing.T) {
 								t.Fatal("failed to prepare test data, err", err)
 							}
 
-							k, err := adnl.ToKeyID(&Key{
+							k, err := tl.Hash(&Key{
 								ID:    siteAddr,
 								Name:  []byte("address"),
 								Index: 0,
@@ -333,7 +333,7 @@ func TestNode_findValue(t *testing.T) {
 				Name:  []byte("address"),
 				Index: 0,
 			}
-			testId, keyErr := adnl.ToKeyID(k)
+			testId, keyErr := tl.Hash(k)
 			if keyErr != nil {
 				t.Fatal("failed to prepare test id, err: ", keyErr)
 			}
@@ -377,7 +377,7 @@ func TestNode_checkValue(t *testing.T) {
 
 	val := valFound.Value
 
-	kId, err := adnl.ToKeyID(val.KeyDescription.Key)
+	kId, err := tl.Hash(val.KeyDescription.Key)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -418,7 +418,7 @@ func TestNode_weight(t *testing.T) {
 		t.Fatal("failed to prepare test public key, err: ", err)
 	}
 
-	kId, err := adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
+	kId, err := tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -436,7 +436,7 @@ func TestNode_weight(t *testing.T) {
 		t.Fatal("failed to prepare test public key, err: ", err)
 	}
 
-	kId, err = adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
+	kId, err = tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -454,7 +454,7 @@ func TestNode_weight(t *testing.T) {
 		t.Fatal("failed to prepare test public key, err: ", err)
 	}
 
-	kId, err = adnl.ToKeyID(adnl.PublicKeyED25519{Key: tPubKey})
+	kId, err = tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}

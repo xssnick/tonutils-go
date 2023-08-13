@@ -103,10 +103,10 @@ func main() {
 			return
 		}
 
-		log.Println("balance left:", balance.TON())
+		log.Println("balance left:", balance.String())
 
 		return
 	}
 
-	log.Println("not enough balance:", balance.TON())
+	log.Println("not enough balance:", balance.String())
 }

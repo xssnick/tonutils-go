@@ -14,7 +14,7 @@ func main() {
 	client := liteclient.NewConnectionPool()
 
 	// connect to testnet lite server
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}

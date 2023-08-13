@@ -178,7 +178,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	partDataHasher.Write(t.Data)
 	partDataHash := partDataHasher.Sum(nil)
 
-	partHash, err := adnl.ToKeyID(&BroadcastFECPartID{
+	partHash, err := tl.Hash(&BroadcastFECPartID{
 		BroadcastHash: broadcastHash,
 		DataHash:      partDataHash,
 		Seqno:         t.Seqno,
@@ -214,7 +214,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			return fmt.Errorf("incorrect data size")
 		}
 
-		srcId, err := adnl.ToKeyID(t.Source)
+		srcId, err := tl.Hash(t.Source)
 		if err != nil {
 			return fmt.Errorf("source key id serialize failed: %w", err)
 		}
@@ -242,7 +242,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 					issuedBy = cert.IssuedBy
 				}
 
-				issuerId, err = adnl.ToKeyID(issuedBy)
+				issuerId, err = tl.Hash(issuedBy)
 				if err != nil {
 					return fmt.Errorf("issuer key id serialize failed: %w", err)
 				}

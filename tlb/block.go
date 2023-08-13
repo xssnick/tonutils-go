@@ -17,15 +17,21 @@ type BlockInfo struct {
 }
 
 type StateUpdate struct {
-	Old ShardState `tlb:"^"`
+	Old any        `tlb:"^ [ShardStateUnsplit,ShardStateSplit]"`
 	New *cell.Cell `tlb:"^"`
 }
 
 type McBlockExtra struct {
 	_           Magic            `tlb:"#cca5"`
-	KeyBlock    uint8            `tlb:"## 1"`
+	KeyBlock    bool             `tlb:"bool"`
 	ShardHashes *cell.Dictionary `tlb:"dict 32"`
 	ShardFees   *cell.Dictionary `tlb:"dict 96"`
+	Details     struct {
+		PrevBlockSignatures *cell.Dictionary `tlb:"dict 16"`
+		RecoverCreateMsg    *cell.Cell       `tlb:"maybe ^"`
+		MintMsg             *cell.Cell       `tlb:"maybe ^"`
+	} `tlb:"^"`
+	ConfigParams *ConfigParams `tlb:"?KeyBlock ."`
 }
 
 type BlockExtra struct {
@@ -115,6 +121,21 @@ type BlkPrevInfo struct {
 func (h *BlockInfo) Equals(h2 *BlockInfo) bool {
 	return h.Shard == h2.Shard && h.SeqNo == h2.SeqNo && h.Workchain == h2.Workchain &&
 		bytes.Equal(h.FileHash, h2.FileHash) && bytes.Equal(h.RootHash, h2.RootHash)
+}
+
+func (h *BlockInfo) Copy() *BlockInfo {
+	root := make([]byte, len(h.RootHash))
+	file := make([]byte, len(h.FileHash))
+	copy(root, h.RootHash)
+	copy(file, h.FileHash)
+
+	return &BlockInfo{
+		Workchain: h.Workchain,
+		Shard:     h.Shard,
+		SeqNo:     h.SeqNo,
+		RootHash:  root,
+		FileHash:  file,
+	}
 }
 
 func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {

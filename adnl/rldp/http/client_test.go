@@ -409,7 +409,7 @@ func TestTransport_RoundTripIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), gateway, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := dht.NewClientFromConfigUrl(context.Background(), gateway, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +434,7 @@ func getDNSResolver() *dns.Client {
 	client := liteclient.NewConnectionPool()
 
 	// connect to testnet lite server
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}

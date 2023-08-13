@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"reflect"
@@ -15,6 +16,14 @@ func init() {
 	tl.Register(LSError{}, "liteServer.error code:int message:string = liteServer.Error")
 }
 
+type ProofCheckPolicy int
+
+const (
+	ProofCheckPolicyUnsafe ProofCheckPolicy = iota
+	ProofCheckPolicyFastWithoutMasterBlockChecks
+	ProofCheckPolicySecure
+)
+
 const (
 	ErrCodeContractNotInitialized = -256
 )
@@ -22,6 +31,7 @@ const (
 type LiteClient interface {
 	QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error
 	StickyContext(ctx context.Context) context.Context
+	StickyContextNextNode(ctx context.Context) (context.Context, error)
 	StickyNodeID(ctx context.Context) uint32
 }
 
@@ -47,15 +57,19 @@ type APIClientWaiter interface {
 	RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	GetTransaction(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
+	GetBlockProof(ctx context.Context, known, target *BlockIDExt) (*PartialBlockProof, error)
 }
 
 type APIClient struct {
 	client LiteClient
 	parent *APIClient
 
-	curMasters     map[uint32]*masterInfo
-	curMastersLock sync.RWMutex
-	skipProofCheck bool
+	trustedBlock     *BlockIDExt
+	curMasters       map[uint32]*masterInfo
+	curMastersLock   sync.RWMutex
+	proofCheckPolicy ProofCheckPolicy
+
+	trustedLock sync.RWMutex
 }
 
 type masterInfo struct {
@@ -64,15 +78,26 @@ type masterInfo struct {
 	block     *BlockIDExt
 }
 
-func NewAPIClient(client LiteClient) *APIClient {
+func NewAPIClient(client LiteClient, proofCheckPolicy ...ProofCheckPolicy) *APIClient {
+	policy := ProofCheckPolicyFastWithoutMasterBlockChecks
+	if len(proofCheckPolicy) > 0 {
+		policy = proofCheckPolicy[0]
+	}
+
 	return &APIClient{
-		curMasters: map[uint32]*masterInfo{},
-		client:     client,
+		curMasters:       map[uint32]*masterInfo{},
+		client:           client,
+		proofCheckPolicy: policy,
 	}
 }
 
-func (c *APIClient) SetSkipProofCheck(skip bool) {
-	c.skipProofCheck = skip
+func (c *APIClient) SetTrustedBlock(block *BlockIDExt) {
+	c.trustedBlock = block.Copy()
+}
+
+func (c *APIClient) SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig) {
+	b := BlockIDExt(cfg.Validator.InitBlock)
+	c.trustedBlock = &b
 }
 
 func (c *APIClient) WaitForBlock(seqno uint32) APIClientWaiter {

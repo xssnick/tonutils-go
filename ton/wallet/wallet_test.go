@@ -3,6 +3,7 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/ton"
@@ -10,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/crypto/ed25519"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -461,6 +460,11 @@ type WaiterMock struct {
 	MGetTransaction         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 }
 
+func (w WaiterMock) GetBlockProof(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (w WaiterMock) GetTime(ctx context.Context) (uint32, error) {
 	return w.MGetTime(ctx)
 }
@@ -507,4 +511,35 @@ func (w WaiterMock) ListTransactions(ctx context.Context, addr *address.Address,
 
 func (w WaiterMock) GetTransaction(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error) {
 	return w.MGetTransaction(ctx, block, addr, lt)
+}
+
+func TestCreateEncryptedCommentCell(t *testing.T) {
+	pub1, priv1, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	pub2, priv2, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	msg := randString(200)
+
+	c, err := CreateEncryptedCommentCell(msg, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"), priv1, pub2)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	data, err := DecryptCommentCell(c, priv2, pub1)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	if string(data) != msg {
+		t.Fatal("incorrect result")
+	}
 }

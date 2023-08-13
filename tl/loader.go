@@ -1,9 +1,11 @@
 package tl
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 	"hash/crc32"
 	"net"
 	"reflect"
@@ -288,6 +290,40 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 		case reflect.String:
 			return ToBytes([]byte(value.String())), nil
 		}
+	case "cell":
+		optional := len(tags) > 1 && tags[1] == "optional"
+		if optional {
+			tags = tags[1:]
+		}
+
+		var num int
+		if len(tags) > 1 {
+			num, err = strconv.Atoi(tags[1])
+			if err != nil || num <= 0 {
+				panic("cells num tag should be positive integer")
+			}
+		}
+
+		if value.IsNil() || (value.Kind() == reflect.Slice && value.Len() == 0) {
+			if optional {
+				return ToBytes(nil), nil
+			}
+			return nil, fmt.Errorf("nil cell is not allowed in field %s", value.Type().String())
+		}
+
+		if value.Type() == cellType {
+			if num > 0 {
+				panic("field type should be cell slice to use cells num tag")
+			}
+			return ToBytes(value.Interface().(*cell.Cell).ToBOCWithFlags(false)), nil
+		} else if value.Type() == cellArrType {
+			cells := value.Interface().([]*cell.Cell)
+			if num > 0 && num != len(cells) {
+				return nil, fmt.Errorf("incorrect cells len in field %s", value.Type().String())
+			}
+			return ToBytes(cell.ToBOCWithFlags(cells, false)), nil
+		}
+		panic("for cell tag only *cell.Cell is supported")
 	case "int256", "bytes":
 		if tags[0] == "bytes" && len(tags) > 1 && tags[1] == "struct" {
 			res, err := Serialize(value.Interface(), len(tags) > 2 && tags[2] == "boxed")
@@ -433,6 +469,9 @@ func splitAllowed(leftTags []string) []string {
 	return list
 }
 
+var cellType = reflect.TypeOf(&cell.Cell{})
+var cellArrType = reflect.TypeOf([]*cell.Cell{})
+
 func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err error) {
 	switch tags[0] {
 	case "string":
@@ -446,6 +485,55 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 			value.SetString(string(val))
 			return data, nil
 		}
+	case "cell":
+		optional := len(tags) > 1 && tags[1] == "optional"
+		if optional {
+			tags = tags[1:]
+		}
+
+		var num int
+		if len(tags) > 1 {
+			num, err = strconv.Atoi(tags[1])
+			if err != nil || num <= 0 {
+				panic("cells num tag should be positive integer")
+			}
+		}
+
+		var val []byte
+		val, data, err = FromBytes(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse bytes for %s, err: %w", value.Type().String(), err)
+		}
+
+		var cells []*cell.Cell
+		if len(val) > 0 {
+			cells, err = cell.FromBOCMultiRoot(val)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse boc from bytes for %s, err: %w", value.Type().String(), err)
+			}
+		}
+
+		if len(cells) == 0 {
+			if optional {
+				return data, nil
+			}
+			return nil, fmt.Errorf("nil cell is not allowed in field %s", value.Type().String())
+		}
+
+		if value.Type() == cellType {
+			if num > 0 {
+				panic("field type should be cell slice to use cells num tag")
+			}
+			value.Set(reflect.ValueOf(cells[0]))
+			return data, nil
+		} else if value.Type() == cellArrType {
+			if num > 0 && num != len(cells) {
+				return nil, fmt.Errorf("incorrect cells len in field %s", value.Type().String())
+			}
+			value.Set(reflect.ValueOf(cells))
+			return data, nil
+		}
+		panic("for cell tag only *cell.Cell and []*cell.Cell are supported")
 	case "int256", "bytes":
 		var val []byte
 
@@ -565,15 +653,19 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 					return nil, fmt.Errorf("failed to parse %s for %s, err: too short data", tags[0], value.Type().String())
 				}
 
-				var val []byte
-				val, data = data[:sz], data[sz:]
+				val := data[:sz]
+				data = data[sz:]
 
 				if value.Type() == reflect.TypeOf(net.IP{}) {
-					val[0], val[1], val[2], val[3] = val[3], val[2], val[1], val[0]
+					ip := make([]byte, 4)
+					copy(ip, val)
+
+					ip[0], ip[1], ip[2], ip[3] = ip[3], ip[2], ip[1], ip[0]
+					value.SetBytes(ip)
+					return data, nil
 				}
 
 				value.SetBytes(val)
-
 				return data, nil
 			}
 		}
@@ -671,8 +763,16 @@ var ieeeTable = crc32.MakeTable(crc32.IEEE)
 func CRC(schema string) uint32 {
 	schema = strings.ReplaceAll(schema, "(", "")
 	schema = strings.ReplaceAll(schema, ")", "")
-	data := []byte(schema)
-	crc := crc32.Checksum(data, ieeeTable)
+	return crc32.Checksum([]byte(schema), ieeeTable)
+}
 
-	return crc
+func Hash(key any) ([]byte, error) {
+	data, err := Serialize(key, true)
+	if err != nil {
+		return nil, fmt.Errorf("key serialize err: %w", err)
+	}
+
+	hash := sha256.New()
+	hash.Write(data)
+	return hash.Sum(nil), nil
 }

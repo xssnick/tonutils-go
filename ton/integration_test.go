@@ -35,12 +35,19 @@ var api = func() *APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	cfg, err := liteclient.GetConfigFromUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}
 
-	return NewAPIClient(client)
+	err = client.AddConnectionsFromConfig(ctx, cfg)
+	if err != nil {
+		panic(err)
+	}
+
+	a := NewAPIClient(client, ProofCheckPolicySecure)
+	// a.SetTrustedBlockFromConfig(cfg)
+	return a
 }()
 
 var testContractAddr = func() *address.Address {
@@ -195,7 +202,7 @@ func Test_RunMethod(t *testing.T) {
 }
 
 func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net - > than change config to test-net.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	ctx = apiTestNet.client.StickyContext(ctx)
@@ -260,7 +267,7 @@ func Test_Account(t *testing.T) {
 	fmt.Printf("Is active: %v\n", res.IsActive)
 	if res.IsActive {
 		fmt.Printf("Status: %s\n", res.State.Status)
-		fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
+		fmt.Printf("Balance: %s TON\n", res.State.Balance.String())
 		if res.Data != nil {
 			fmt.Printf("Data: %s\n", res.Data.Dump())
 		}
@@ -322,7 +329,7 @@ func Test_AccountMaster(t *testing.T) {
 	fmt.Printf("Is active: %v\n", res.IsActive)
 	if res.IsActive {
 		fmt.Printf("Status: %s\n", res.State.Status)
-		fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
+		fmt.Printf("Balance: %s TON\n", res.State.Balance.String())
 		if res.Data == nil {
 			t.Fatal("data null")
 		}
@@ -622,7 +629,8 @@ func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 	})
 
 	t.Run("without proof", func(t *testing.T) {
-		mainnetAPI.SetSkipProofCheck(true)
+		mainnetAPI := NewAPIClient(client, ProofCheckPolicyUnsafe)
+
 		a, err := mainnetAPI.GetAccount(ctx, b, address.MustParseAddr("EQCYv992KVNNCKZHSLLJgM2GGzsgL0UgWP24BCQBaAdqSE2I"))
 		if err != nil {
 			t.Fatal(err)
@@ -632,4 +640,81 @@ func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 			t.Fatal("expected extra currencies dict")
 		}
 	})
+}
+
+func TestAPIClient_GetBlockProofForward(t *testing.T) {
+	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton.org/global.config.json")
+	if err != nil {
+		t.Fatal("get cfg err:", err.Error())
+		return
+	}
+
+	ctx := api.client.StickyContext(context.Background())
+
+	initBlock := BlockIDExt(cfg.Validator.InitBlock)
+	known := &initBlock
+
+	stm := time.Now()
+
+	for _, dir := range []string{"backward", "forward"} {
+		b, err := api.CurrentMasterchainInfo(ctx)
+		if err != nil {
+			t.Fatal("get block err:", err.Error())
+			return
+		}
+
+		if dir == "backward" {
+			known, b = b, known
+		}
+
+		t.Run("Block proof "+dir, func(t *testing.T) {
+			if err = api.VerifyProofChain(ctx, known, b); err != nil {
+				t.Fatal("failed to verify chain:", err.Error())
+				return
+			}
+			log.Println("DONE!", time.Since(stm))
+		})
+	}
+}
+
+func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
+	_ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ctx := api.client.StickyContext(_ctx)
+
+	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+
+	b, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	acc, err := api.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
+	if err != nil {
+		t.Fatal("get acc err:", err.Error())
+		return
+	}
+	initLT := acc.LastTxLT - 600000000000
+	log.Println(initLT)
+	lastLT := initLT
+
+	ctx, cancel = context.WithTimeout(context.Background(), 7*time.Second)
+	defer cancel()
+
+	ch := make(chan *tlb.Transaction)
+	go api.SubscribeOnTransactions(ctx, addr, lastLT, ch)
+
+	for tx := range ch {
+		if lastLT > tx.LT {
+			t.Fatal("incorrect tx order")
+		}
+		lastLT = tx.LT
+
+		println(tx.Now, tx.String())
+	}
+
+	if lastLT == initLT {
+		t.Fatal("no transactions")
+	}
 }

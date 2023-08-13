@@ -137,7 +137,7 @@ func checkValue(id []byte, value *Value) error {
 		return fmt.Errorf("invalid dht key")
 	}
 
-	idKey, err := adnl.ToKeyID(k)
+	idKey, err := tl.Hash(k)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func checkValue(id []byte, value *Value) error {
 		return fmt.Errorf("unwanted key received")
 	}
 
-	idPub, err := adnl.ToKeyID(value.KeyDescription.ID)
+	idPub, err := tl.Hash(value.KeyDescription.ID)
 	if err != nil {
 		return err
 	}

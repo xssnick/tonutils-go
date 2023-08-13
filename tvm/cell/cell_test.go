@@ -63,7 +63,10 @@ func TestCell_ToBOCWithFlags(t *testing.T) {
 			}
 
 			boc := c.ToBOCWithFlags(false)
-			newParsed, _ := FromBOC(boc)
+			newParsed, err := FromBOC(boc)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if !bytes.Equal(c.Hash(), newParsed.Hash()) {
 				t.Log(tt.cellHex)

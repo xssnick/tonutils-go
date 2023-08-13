@@ -45,21 +45,35 @@ func getNotSeenShards(ctx context.Context, api *ton.APIClient, shard *ton.BlockI
 func main() {
 	client := liteclient.NewConnectionPool()
 
+	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton.org/global.config.json")
+	if err != nil {
+		log.Fatalln("get config err: ", err.Error())
+		return
+	}
+
 	// connect to mainnet lite servers
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+	err = client.AddConnectionsFromConfig(context.Background(), cfg)
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
 	}
 
-	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client)
+	// initialize ton api lite connection wrapper with full proof checks
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicySecure)
+	api.SetTrustedBlockFromConfig(cfg)
+
+	log.Println("checking proofs since config init block, it may take near a minute...")
 
 	master, err := api.GetMasterchainInfo(context.Background())
 	if err != nil {
 		log.Fatalln("get masterchain info err: ", err.Error())
 		return
 	}
+
+	// TIP: you could save and store last trusted master block (master variable data)
+	// for faster initialization later using api.SetTrustedBlock
+
+	log.Println("master proofs chain successfully verified, all data is now safe and trusted!")
 
 	// bound all requests to single lite server for consistency,
 	// if it will go down, another lite server will be used
@@ -101,12 +115,13 @@ func main() {
 			shardLastSeqno[getShardID(shard)] = shard.SeqNo
 			newShards = append(newShards, notSeen...)
 		}
+		newShards = append(newShards, master)
 
 		var txList []*tlb.Transaction
 
 		// for each shard block getting transactions
 		for _, shard := range newShards {
-			log.Printf("scanning block %d of shard %x...", shard.SeqNo, uint64(shard.Shard))
+			log.Printf("scanning block %d of shard %x in workchain %d...", shard.SeqNo, uint64(shard.Shard), shard.Workchain)
 
 			var fetchedIDs []ton.TransactionShortInfo
 			var after *ton.TransactionID3
@@ -127,7 +142,7 @@ func main() {
 
 				for _, id := range fetchedIDs {
 					// get full transaction by id
-					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, 0, id.Account), id.LT)
+					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, byte(shard.Workchain), id.Account), id.LT)
 					if err != nil {
 						log.Fatalln("get tx data err:", err.Error())
 						return

@@ -1,11 +1,17 @@
 package tlb
 
 import (
-	"fmt"
-
-	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
+
+func init() {
+	Register(FutureSplit{})
+	Register(FutureMerge{})
+	Register(FutureSplitMergeNone{})
+
+	Register(ShardStateSplit{})
+	Register(ShardStateUnsplit{})
+}
 
 type ShardStateUnsplit struct {
 	_               Magic      `tlb:"#9023afe2"`
@@ -33,14 +39,64 @@ type McStateExtra struct {
 	GlobalBalance CurrencyCollection `tlb:"."`
 }
 
-type ConfigParams struct {
-	ConfigAddr *address.Address
-	Config     *cell.Dictionary
+/*
+flags:(## 16) { flags <= 1 }
+     validator_info:ValidatorInfo
+     prev_blocks:OldMcBlocksInfo
+     after_key_block:Bool
+     last_key_block:(Maybe ExtBlkRef)
+     block_create_stats:(flags . 0)?BlockCreateStats
+
+validator_info$_
+  validator_list_hash_short:uint32
+  catchain_seqno:uint32
+  nx_cc_updated:Bool
+= ValidatorInfo;
+
+ext_blk_ref$_ end_lt:uint64
+  seq_no:uint32 root_hash:bits256 file_hash:bits256
+  = ExtBlkRef;
+
+_ key:Bool max_end_lt:uint64 = KeyMaxLt;
+_ key:Bool blk_ref:ExtBlkRef = KeyExtBlkRef;
+
+*/
+
+type KeyExtBlkRef struct {
+	IsKey  bool      `tlb:"bool"`
+	BlkRef ExtBlkRef `tlb:"."`
 }
 
-type ShardState struct {
-	Left  ShardStateUnsplit
-	Right *ShardStateUnsplit
+type KeyMaxLt struct {
+	IsKey    bool   `tlb:"bool"`
+	MaxEndLT uint64 `tlb:"## 64"`
+}
+
+type ValidatorInfo struct {
+	ValidatorListHashShort uint32 `tlb:"## 32"`
+	CatchainSeqno          uint32 `tlb:"## 32"`
+	NextCCUpdated          bool   `tlb:"bool"`
+}
+
+type McStateExtraBlockInfo struct {
+	Flags            uint16           `tlb:"## 16"`
+	ValidatorInfo    ValidatorInfo    `tlb:"."`
+	PrevBlocks       *cell.Dictionary `tlb:"dict 32"`
+	LastKeyBlock     *ExtBlkRef       `tlb:"maybe ."`
+	BlockCreateStats *cell.Cell       `tlb:"."`
+}
+
+type ConfigParams struct {
+	ConfigAddr []byte `tlb:"bits 256"`
+	Config     struct {
+		Params *cell.Dictionary `tlb:"dict inline 32"`
+	} `tlb:"^"`
+}
+
+type ShardStateSplit struct {
+	_     Magic             `tlb:"#5f327da5"`
+	Left  ShardStateUnsplit `tlb:"^"`
+	Right ShardStateUnsplit `tlb:"^"`
 }
 
 type ShardIdent struct {
@@ -51,7 +107,7 @@ type ShardIdent struct {
 }
 
 type FutureSplitMergeNone struct {
-	_ Magic `tlb:"$00"`
+	_ Magic `tlb:"$0"`
 }
 
 type FutureSplit struct {
@@ -66,29 +122,25 @@ type FutureMerge struct {
 	Interval   uint32 `tlb:"## 32"`
 }
 
-type FutureSplitMerge struct {
-	FSM any `tlb:"."`
-}
-
 type ShardDesc struct {
-	_                  Magic            `tlb:"#a"`
-	SeqNo              uint32           `tlb:"## 32"`
-	RegMcSeqno         uint32           `tlb:"## 32"`
-	StartLT            uint64           `tlb:"## 64"`
-	EndLT              uint64           `tlb:"## 64"`
-	RootHash           []byte           `tlb:"bits 256"`
-	FileHash           []byte           `tlb:"bits 256"`
-	BeforeSplit        bool             `tlb:"bool"`
-	BeforeMerge        bool             `tlb:"bool"`
-	WantSplit          bool             `tlb:"bool"`
-	WantMerge          bool             `tlb:"bool"`
-	NXCCUpdated        bool             `tlb:"bool"`
-	Flags              uint8            `tlb:"## 3"`
-	NextCatchainSeqNo  uint32           `tlb:"## 32"`
-	NextValidatorShard int64            `tlb:"## 64"`
-	MinRefMcSeqNo      uint32           `tlb:"## 32"`
-	GenUTime           uint32           `tlb:"## 32"`
-	SplitMergeAt       FutureSplitMerge `tlb:"."`
+	_                  Magic  `tlb:"#a"`
+	SeqNo              uint32 `tlb:"## 32"`
+	RegMcSeqno         uint32 `tlb:"## 32"`
+	StartLT            uint64 `tlb:"## 64"`
+	EndLT              uint64 `tlb:"## 64"`
+	RootHash           []byte `tlb:"bits 256"`
+	FileHash           []byte `tlb:"bits 256"`
+	BeforeSplit        bool   `tlb:"bool"`
+	BeforeMerge        bool   `tlb:"bool"`
+	WantSplit          bool   `tlb:"bool"`
+	WantMerge          bool   `tlb:"bool"`
+	NXCCUpdated        bool   `tlb:"bool"`
+	Flags              uint8  `tlb:"## 3"`
+	NextCatchainSeqNo  uint32 `tlb:"## 32"`
+	NextValidatorShard int64  `tlb:"## 64"`
+	MinRefMcSeqNo      uint32 `tlb:"## 32"`
+	GenUTime           uint32 `tlb:"## 32"`
+	SplitMergeAt       any    `tlb:"[FutureMerge,FutureSplit,FutureSplitMergeNone]"`
 	Currencies         struct {
 		FeesCollected CurrencyCollection `tlb:"."`
 		FundsCreated  CurrencyCollection `tlb:"."`
@@ -113,105 +165,7 @@ type ShardDescB struct {
 	NextValidatorShard int64              `tlb:"## 64"`
 	MinRefMcSeqNo      uint32             `tlb:"## 32"`
 	GenUTime           uint32             `tlb:"## 32"`
-	SplitMergeAt       FutureSplitMerge   `tlb:"."`
+	SplitMergeAt       any                `tlb:"[FutureMerge,FutureSplit,FutureSplitMergeNone]"`
 	FeesCollected      CurrencyCollection `tlb:"."`
 	FundsCreated       CurrencyCollection `tlb:"."`
-}
-
-func (s *ShardState) LoadFromCell(loader *cell.Slice) error {
-	preloader := loader.Copy()
-	tag, err := preloader.LoadUInt(32)
-	if err != nil {
-		return err
-	}
-
-	switch tag {
-	case 0x5f327da5:
-		var left, right ShardStateUnsplit
-		leftRef, err := loader.LoadRef()
-		if err != nil {
-			return err
-		}
-		rightRef, err := loader.LoadRef()
-		if err != nil {
-			return err
-		}
-		err = LoadFromCell(&left, leftRef)
-		if err != nil {
-			return err
-		}
-		err = LoadFromCell(&right, rightRef)
-		if err != nil {
-			return err
-		}
-		s.Left = left
-		s.Right = &right
-	case 0x9023afe2:
-		var state ShardStateUnsplit
-		err = LoadFromCell(&state, preloader, true)
-		if err != nil {
-			fmt.Println("ShardStateUnsplit error", err.Error())
-			return err
-		}
-		s.Left = state
-	}
-
-	return nil
-}
-
-func (p *ConfigParams) LoadFromCell(loader *cell.Slice) error {
-	addrBits, err := loader.LoadSlice(256)
-	if err != nil {
-		return fmt.Errorf("failed to load bits of config addr: %w", err)
-	}
-
-	dictRef, err := loader.LoadRef()
-	if err != nil {
-		return fmt.Errorf("failed to load config dict ref: %w", err)
-	}
-
-	dict, err := dictRef.ToDict(32)
-	if err != nil {
-		return fmt.Errorf("failed to load config dict: %w", err)
-	}
-
-	p.ConfigAddr = address.NewAddress(0, 255, addrBits)
-	p.Config = dict
-
-	return nil
-}
-
-func (s *FutureSplitMerge) LoadFromCell(loader *cell.Slice) error {
-	isNotEmpty, err := loader.LoadBoolBit()
-	if err != nil {
-		return fmt.Errorf("load bool bit is fsm none: %w", err)
-	}
-
-	if !isNotEmpty {
-		s.FSM = FutureSplitMergeNone{}
-		return nil
-	}
-
-	isMerge, err := loader.LoadBoolBit()
-	if err != nil {
-		return fmt.Errorf("load bool bit is fsm merge: %w", err)
-	}
-
-	if !isMerge {
-		var split FutureSplit
-		err = LoadFromCell(&split, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse FutureSplit: %w", err)
-		}
-		s.FSM = split
-	} else {
-		var merge FutureMerge
-		err = LoadFromCell(&merge, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse FutureMerge: %w", err)
-		}
-		s.FSM = merge
-	}
-
-	return nil
 }

@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -38,7 +39,7 @@ var apiMain = func() *ton.APIClient {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -180,6 +181,23 @@ func TestWallet_DeployContract(t *testing.T) {
 	}
 }
 
+func TestWallet_TransferEncrypted(t *testing.T) {
+	seed := strings.Split(_seed, " ")
+	ctx := api.Client().StickyContext(context.Background())
+
+	// init wallet
+	w, err := FromSeed(api, seed, HighloadV2R2)
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+	}
+	t.Logf("wallet address: %s", w.Address().String())
+
+	err = w.TransferWithEncryptedComment(ctx, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"), tlb.MustFromTON("0.005"), "привет:"+randString(30), true)
+	if err != nil {
+		t.Fatal("transfer err:", err)
+	}
+}
+
 func TestGetWalletVersion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -223,6 +241,19 @@ func TestGetWalletVersion(t *testing.T) {
 		if v := GetWalletVersion(account); v != test.Version {
 			t.Fatalf("%s: expected: %d, got: %d", test.Addr.String(), test.Version, v)
 		}
+	}
+}
+
+func TestWallet_GetPublicKey(t *testing.T) {
+	pub, err := GetPublicKey(context.Background(), apiMain, address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"))
+	if err != nil {
+		t.Fatal(err.Error())
+		return
+	}
+
+	key, _ := hex.DecodeString("72c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff")
+	if !bytes.Equal(pub, key) {
+		t.Fatal("wrong key: " + hex.EncodeToString(pub))
 	}
 }
 

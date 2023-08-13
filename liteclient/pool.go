@@ -16,6 +16,7 @@ import (
 )
 
 const _StickyCtxKey = "_ton_node_sticky"
+const _StickyCtxUsedNodesKey = "_ton_used_nodes_sticky"
 
 type OnDisconnectCallback func(addr, key string)
 
@@ -91,6 +92,30 @@ func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
 	c.nodesMx.RUnlock()
 
 	return context.WithValue(ctx, _StickyCtxKey, id)
+}
+
+func (c *ConnectionPool) StickyContextNextNode(ctx context.Context) (context.Context, error) {
+	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
+	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
+	if nodeID > 0 {
+		usedNodes = append(usedNodes, nodeID)
+	}
+
+	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
+iter:
+	for _, node := range c.activeNodes {
+		for _, usedNode := range usedNodes {
+			if usedNode == node.id {
+				continue iter
+			}
+		}
+
+		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, node.id), _StickyCtxUsedNodesKey, usedNodes), nil
+	}
+
+	return ctx, fmt.Errorf("no more active nodes left")
 }
 
 func (c *ConnectionPool) StickyContextWithNodeID(ctx context.Context, nodeId uint32) context.Context {
