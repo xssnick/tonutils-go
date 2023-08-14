@@ -478,9 +478,10 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Overlays
 * ✅ TL Parser/Serializer
 * ✅ TL-B Parser/Serializer
+* ✅ Payment channels
+* ✅ Liteserver proofs automatic validation
 * DHT Server
-* Payment channels
-* Merkle proofs automatic validation
+* TVM
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue

@@ -62,6 +62,10 @@ func (c *Client) GetAsyncChannel(ctx context.Context, addr *address.Address, ver
 		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
 
+	if !acc.IsActive {
+		return nil, fmt.Errorf("channel account is not active")
+	}
+
 	if verify {
 		codeBoC, _ := hex.DecodeString(AsyncPaymentChannelCodeBoC)
 		code, _ := cell.FromBOC(codeBoC)
