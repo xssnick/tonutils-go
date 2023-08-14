@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"strings"
@@ -462,6 +463,16 @@ type WaiterMock struct {
 	MWithRetry              func() ton.APIClientWrapped
 	MCurrentMasterchainInfo func(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	MGetBlockProof          func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
+}
+
+func (w WaiterMock) SetTrustedBlock(block *ton.BlockIDExt) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (w WaiterMock) SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction) {

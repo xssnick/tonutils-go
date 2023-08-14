@@ -249,23 +249,24 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
 	switch t := resp.(type) {
 	case MasterchainInfo:
 		if c.proofCheckPolicy == ProofCheckPolicySecure {
-			c.trustedLock.Lock()
-			defer c.trustedLock.Unlock()
+			root := c.root()
+			root.trustedLock.Lock()
+			defer root.trustedLock.Unlock()
 
-			if c.trustedBlock == nil {
-				if c.trustedBlock == nil {
+			if root.trustedBlock == nil {
+				if root.trustedBlock == nil {
 					// we have no block to trust, so trust first block we get
-					c.trustedBlock = t.Last.Copy()
+					root.trustedBlock = t.Last.Copy()
 					log.Println("[WARNING] trusted block was not set on initialization, so first block we got was considered as trusted. " +
 						"For better security you should use SetTrustedBlock(block) method and pass there init block from config on start")
 				}
 			} else {
-				if err := c.VerifyProofChain(ctx, c.trustedBlock, t.Last); err != nil {
+				if err := c.VerifyProofChain(ctx, root.trustedBlock, t.Last); err != nil {
 					return nil, fmt.Errorf("failed to verify proof chain: %w", err)
 				}
 
-				if t.Last.SeqNo > c.trustedBlock.SeqNo {
-					c.trustedBlock = t.Last.Copy()
+				if t.Last.SeqNo > root.trustedBlock.SeqNo {
+					root.trustedBlock = t.Last.Copy()
 				}
 			}
 		}

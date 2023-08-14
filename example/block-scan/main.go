@@ -15,7 +15,7 @@ func getShardID(shard *ton.BlockIDExt) string {
 	return fmt.Sprintf("%d|%d", shard.Workchain, shard.Shard)
 }
 
-func getNotSeenShards(ctx context.Context, api *ton.APIClient, shard *ton.BlockIDExt, shardLastSeqno map[string]uint32) (ret []*ton.BlockIDExt, err error) {
+func getNotSeenShards(ctx context.Context, api ton.APIClientWrapped, shard *ton.BlockIDExt, shardLastSeqno map[string]uint32) (ret []*ton.BlockIDExt, err error) {
 	if no, ok := shardLastSeqno[getShardID(shard)]; ok && no == shard.SeqNo {
 		return nil, nil
 	}
@@ -59,7 +59,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicySecure)
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicySecure).WithRetry()
 	api.SetTrustedBlockFromConfig(cfg)
 
 	log.Println("checking proofs since config init block, it may take near a minute...")

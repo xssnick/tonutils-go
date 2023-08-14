@@ -67,6 +67,8 @@ type APIClientWrapped interface {
 	VerifyProofChain(ctx context.Context, from, to *BlockIDExt) error
 	WaitForBlock(seqno uint32) APIClientWrapped
 	WithRetry() APIClientWrapped
+	SetTrustedBlock(block *BlockIDExt)
+	SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig)
 }
 
 type APIClient struct {
@@ -102,7 +104,7 @@ func NewAPIClient(client LiteClient, proofCheckPolicy ...ProofCheckPolicy) *APIC
 
 // SetTrustedBlock - set starting point to verify master block proofs chain
 func (c *APIClient) SetTrustedBlock(block *BlockIDExt) {
-	c.trustedBlock = block.Copy()
+	c.root().trustedBlock = block.Copy()
 }
 
 // SetTrustedBlockFromConfig - same as SetTrustedBlock but takes init block from config
@@ -114,8 +116,9 @@ func (c *APIClient) SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig) {
 // WaitForBlock - waits for the given master block seqno will be available on the requested node
 func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 	return &APIClient{
-		parent: c,
-		client: &waiterClient{original: c.client, seqno: seqno},
+		parent:           c,
+		client:           &waiterClient{original: c.client, seqno: seqno},
+		proofCheckPolicy: c.proofCheckPolicy,
 	}
 }
 
@@ -123,8 +126,9 @@ func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 // when error code 651 or -400 is received
 func (c *APIClient) WithRetry() APIClientWrapped {
 	return &APIClient{
-		parent: c,
-		client: &retryClient{original: c.client},
+		parent:           c,
+		client:           &retryClient{original: c.client},
+		proofCheckPolicy: c.proofCheckPolicy,
 	}
 }
 

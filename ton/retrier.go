@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
+	"reflect"
 	"strings"
 )
 
@@ -13,12 +14,18 @@ type retryClient struct {
 
 func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error {
 	for {
+		println("TRY", reflect.ValueOf(payload).Type().String())
 		err := w.original.QueryLiteserver(ctx, payload, result)
+
 		if err != nil {
+			println("ERR", err)
+
 			if lsErr, ok := err.(LSError); ok && (lsErr.Code == 651 || lsErr.Code == -400) ||
 				strings.HasPrefix(err.Error(), "adnl request timeout, node") { // block not applied error
 				// try next node
 				origErr := err
+				println("RETRY", err)
+
 				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil {
 					return fmt.Errorf("retryable error received, but failed to try with next node, "+
 						"looks like all active nodes was already tried, original error: %w", origErr)
