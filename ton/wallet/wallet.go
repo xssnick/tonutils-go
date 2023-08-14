@@ -394,7 +394,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 	ctx = w.api.Client().StickyContext(ctx)
 
 	for time.Now().Before(till) {
-		blockNew, err := w.api.CurrentMasterchainInfo(ctx)
+		blockNew, err := w.api.WaitForBlock(block.SeqNo + 1).CurrentMasterchainInfo(ctx)
 		if err != nil {
 			continue
 		}
