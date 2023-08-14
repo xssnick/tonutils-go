@@ -59,7 +59,7 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("GetBalance err:", err.Error())
 	}
 
-	if balance.NanoTON().Uint64() < 3000000 {
+	if balance.Nano().Uint64() < 3000000 {
 		t.Fatal("not enough balance", w.Address(), balance.String())
 	}
 

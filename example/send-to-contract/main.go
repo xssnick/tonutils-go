@@ -50,16 +50,16 @@ func main() {
 		return
 	}
 
-	if balance.NanoTON().Uint64() >= 3000000 {
+	if balance.Nano().Uint64() >= 3000000 {
 		// create transaction body cell, depends on what contract needs, just random example here
 		body := cell.BeginCell().
-			MustStoreUInt(0x123abc55, 32).    // op code
+			MustStoreUInt(0x123abc55, 32). // op code
 			MustStoreUInt(rand.Uint64(), 64). // query id
 			// payload:
 			MustStoreAddr(address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO")).
 			MustStoreRef(
 				cell.BeginCell().
-					MustStoreBigCoins(tlb.MustFromTON("1.521").NanoTON()).
+					MustStoreBigCoins(tlb.MustFromTON("1.521").Nano()).
 					EndCell(),
 			).EndCell()
 

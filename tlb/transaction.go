@@ -262,7 +262,7 @@ func (t *Transaction) String() string {
 		for _, m := range listOut {
 			destinations = append(destinations, m.Msg.DestAddr().String())
 			if m.MsgType == MsgTypeInternal {
-				out.Add(out, m.AsInternal().Amount.NanoTON())
+				out.Add(out, m.AsInternal().Amount.Nano())
 			}
 		}
 	}
@@ -276,7 +276,7 @@ func (t *Transaction) String() string {
 	}
 	if t.IO.In != nil {
 		if t.IO.In.MsgType == MsgTypeInternal {
-			in = t.IO.In.AsInternal().Amount.NanoTON()
+			in = t.IO.In.AsInternal().Amount.Nano()
 		}
 
 		if in.Cmp(big.NewInt(0)) != 0 {

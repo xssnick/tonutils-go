@@ -18,5 +18,5 @@ func main() {
 	// for example you can make QR code from it and scan using TonKeeper,
 	// and this transaction will be executed by the wallet
 	fmt.Printf("ton://transfer/%s?bin=%s&amount=%s", addr.String(),
-		base64.URLEncoding.EncodeToString(body.ToBOC()), tlb.MustFromTON("0.55").NanoTON().String())
+		base64.URLEncoding.EncodeToString(body.ToBOC()), tlb.MustFromTON("0.55").Nano().String())
 }

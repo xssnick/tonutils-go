@@ -93,7 +93,7 @@ func Test_WalletTransfer(t *testing.T) {
 
 				comment := randString(150)
 				addr := address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE")
-				if balance.NanoTON().Uint64() >= 3000000 {
+				if balance.Nano().Uint64() >= 3000000 {
 					err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
 					if err != nil {
 						t.Fatal("Transfer err:", err.Error())

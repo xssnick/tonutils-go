@@ -189,12 +189,12 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	b.MustStoreBoolBit(m.Bounced)
 	b.MustStoreAddr(m.SrcAddr)
 	b.MustStoreAddr(m.DstAddr)
-	b.MustStoreBigCoins(m.Amount.NanoTON())
+	b.MustStoreBigCoins(m.Amount.Nano())
 
 	b.MustStoreDict(m.ExtraCurrencies)
 
-	b.MustStoreBigCoins(m.IHRFee.NanoTON())
-	b.MustStoreBigCoins(m.FwdFee.NanoTON())
+	b.MustStoreBigCoins(m.IHRFee.Nano())
+	b.MustStoreBigCoins(m.FwdFee.Nano())
 
 	b.MustStoreUInt(m.CreatedLT, 64)
 	b.MustStoreUInt(uint64(m.CreatedAt), 32)
@@ -238,7 +238,7 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 	builder := cell.BeginCell().MustStoreUInt(0b10, 2).
 		MustStoreAddr(m.SrcAddr).
 		MustStoreAddr(m.DstAddr).
-		MustStoreBigCoins(m.ImportFee.NanoTON())
+		MustStoreBigCoins(m.ImportFee.Nano())
 
 	builder.MustStoreBoolBit(m.StateInit != nil) // has state init
 	if m.StateInit != nil {

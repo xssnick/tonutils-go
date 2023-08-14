@@ -149,7 +149,7 @@ func TestLoadFromCell(t *testing.T) {
 			t.Fatal("uint 7126382921832 not eq")
 		}
 
-		if x.Inside.ValCoins.NanoTON().Uint64() != 700000 {
+		if x.Inside.ValCoins.Nano().Uint64() != 700000 {
 			t.Fatal("coins 700000 not eq")
 		}
 

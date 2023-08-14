@@ -56,7 +56,7 @@ func main() {
 		"EQBLS8WneoKVGrwq2MO786J6ruQNiv62NXr8Ko_l5Ttondoc": "0.003",
 	}
 
-	if balance.NanoTON().Uint64() >= 3000000 {
+	if balance.Nano().Uint64() >= 3000000 {
 		// create comment cell to send in body of each message
 		comment, err := wallet.CreateCommentCell("Hello from tonutils-go!")
 		if err != nil {

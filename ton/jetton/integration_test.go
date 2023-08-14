@@ -140,7 +140,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 		t.Fatal("balance was not changed after burn")
 	}
 
-	want := b.Uint64() - amt.NanoTON().Uint64()*2
+	want := b.Uint64() - amt.Nano().Uint64()*2
 	got := b2.Uint64()
 	if want != got {
 		t.Fatal("balance not expected, want ", want, "got", got)

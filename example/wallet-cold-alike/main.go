@@ -48,7 +48,7 @@ func main() {
 		return
 	}
 
-	if balance.NanoTON().Uint64() >= 3000000 {
+	if balance.Nano().Uint64() >= 3000000 {
 		addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
 		log.Println("sending transaction and waiting for confirmation...")

@@ -108,7 +108,7 @@ if err != nil {
     panic(err)
 }
 
-if balance.NanoTON().Uint64() >= 3000000 {
+if balance.Nano().Uint64() >= 3000000 {
     addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
     err = w.Transfer(context.Background(), addr, tlb.MustFromTON("0.003"), "Hey bro, happy birthday!")
     if err != nil {

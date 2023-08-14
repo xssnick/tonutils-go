@@ -82,7 +82,7 @@ func TestClient_DeployAsyncChannel(t *testing.T) {
 		t.Fatal("channel status incorrect")
 	}
 
-	if ch.Storage.BalanceA.NanoTON().Cmp(tlb.MustFromTON("0.005").NanoTON()) != 0 {
+	if ch.Storage.BalanceA.Nano().Cmp(tlb.MustFromTON("0.005").Nano()) != 0 {
 		t.Fatal("balance incorrect")
 	}
 

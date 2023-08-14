@@ -93,7 +93,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			return nil, fmt.Errorf("failed to load account state: %w", err)
 		}
 
-		if st.Balance.NanoTON().Cmp(balanceInfo.Currencies.Coins.NanoTON()) != 0 {
+		if st.Balance.Nano().Cmp(balanceInfo.Currencies.Coins.Nano()) != 0 {
 			return nil, fmt.Errorf("proof balance not match state balance")
 		}
 
