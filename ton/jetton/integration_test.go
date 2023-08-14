@@ -68,7 +68,7 @@ func TestJettonMasterClient_GetWalletAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if b.String() != "22686.666348532" {
+	if tlb.MustFromNano(b, 9).String() != "22686.666348532" {
 		t.Fatal("balance diff:", b.String())
 	}
 }
