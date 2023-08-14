@@ -10,7 +10,7 @@ import (
 
 var client = liteclient.NewConnectionPool()
 
-var api = func() *ton.APIClient {
+var api = func() ton.APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -19,7 +19,7 @@ var api = func() *ton.APIClient {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
 func TestDNSClient_Resolve(t *testing.T) {

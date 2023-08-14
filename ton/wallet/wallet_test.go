@@ -27,7 +27,7 @@ type MockAPI struct {
 	extMsgSent *tlb.ExternalMessage
 }
 
-func (m MockAPI) WaitForBlock(seqno uint32) ton.APIClientWaiter {
+func (m MockAPI) WaitForBlock(seqno uint32) ton.APIClientWrapped {
 	return &WaiterMock{
 		MGetMasterchainInfo:  m.getBlockInfo,
 		MGetAccount:          m.getAccount,
@@ -458,11 +458,42 @@ type WaiterMock struct {
 	MRunGetMethod           func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	MListTransactions       func(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	MGetTransaction         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
+	MWaitForBlock           func(seqno uint32) ton.APIClientWrapped
+	MWithRetry              func() ton.APIClientWrapped
+	MCurrentMasterchainInfo func(ctx context.Context) (_ *ton.BlockIDExt, err error)
+	MGetBlockProof          func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
+}
+
+func (w WaiterMock) SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) VerifyProofChain(ctx context.Context, from, to *ton.BlockIDExt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) Client() ton.LiteClient {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error) {
+	return w.MCurrentMasterchainInfo(ctx)
+}
+
+func (w WaiterMock) WaitForBlock(seqno uint32) ton.APIClientWrapped {
+	return w.MWaitForBlock(seqno)
+}
+
+func (w WaiterMock) WithRetry() ton.APIClientWrapped {
+	return w.MWithRetry()
 }
 
 func (w WaiterMock) GetBlockProof(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error) {
-	//TODO implement me
-	panic("implement me")
+	return w.MGetBlockProof(ctx, known, target)
+
 }
 
 func (w WaiterMock) GetTime(ctx context.Context) (uint32, error) {

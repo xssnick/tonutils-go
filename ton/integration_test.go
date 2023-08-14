@@ -29,7 +29,7 @@ var apiTestNet = func() *APIClient {
 	return NewAPIClient(client)
 }()
 
-var api = func() *APIClient {
+var api = func() APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -45,7 +45,7 @@ var api = func() *APIClient {
 		panic(err)
 	}
 
-	a := NewAPIClient(client, ProofCheckPolicySecure)
+	a := NewAPIClient(client, ProofCheckPolicySecure).WithRetry()
 	// a.SetTrustedBlockFromConfig(cfg)
 	return a
 }()
@@ -59,7 +59,7 @@ var testContractAddrTestNet = func() *address.Address {
 }()
 
 func Test_CurrentChainInfo(t *testing.T) {
-	ctx := api.client.StickyContext(context.Background())
+	ctx := api.Client().StickyContext(context.Background())
 
 	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
@@ -82,7 +82,7 @@ func Test_CurrentChainInfo(t *testing.T) {
 }
 
 func TestAPIClient_GetBlockData(t *testing.T) {
-	ctx := api.client.StickyContext(context.Background())
+	ctx := api.Client().StickyContext(context.Background())
 
 	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
@@ -245,7 +245,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 func Test_Account(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ctx = api.client.StickyContext(ctx)
+	ctx = api.Client().StickyContext(ctx)
 
 	b, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
@@ -307,7 +307,7 @@ func Test_Account(t *testing.T) {
 func Test_AccountMaster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ctx = api.client.StickyContext(ctx)
+	ctx = api.Client().StickyContext(ctx)
 
 	b, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
@@ -404,7 +404,7 @@ func Test_AccountHasMethod(t *testing.T) {
 }
 
 func Test_BlockScan(t *testing.T) {
-	ctx := api.client.StickyContext(context.Background())
+	ctx := api.Client().StickyContext(context.Background())
 	var shards []*BlockIDExt
 	for {
 		// we need fresh block info to run get methods
@@ -494,30 +494,6 @@ func Test_BlockScan(t *testing.T) {
 	}
 }
 
-func TestAPIClient_WaitNextBlock(t *testing.T) {
-	ctx := api.client.StickyContext(context.Background())
-
-	c, err := api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		t.Fatal("get curr block err:", err.Error())
-	}
-
-	n, err := api.WaitNextMasterBlock(ctx, c)
-	if err != nil {
-		t.Fatal("wait block err:", err.Error())
-	}
-
-	if n.SeqNo != c.SeqNo+1 {
-		t.Fatal("seqno incorrect")
-	}
-
-	c.Workchain = 7
-	n, err = api.WaitNextMasterBlock(ctx, c)
-	if err == nil {
-		t.Fatal("it works with not master")
-	}
-}
-
 func Test_GetTime(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -530,7 +506,7 @@ func Test_GetTime(t *testing.T) {
 }
 
 func Test_GetConfigParamsAll(t *testing.T) {
-	ctx := api.client.StickyContext(context.Background())
+	ctx := api.Client().StickyContext(context.Background())
 
 	b, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
@@ -554,7 +530,7 @@ func Test_GetConfigParamsAll(t *testing.T) {
 }
 
 func Test_GetConfigParams8(t *testing.T) {
-	ctx := api.client.StickyContext(context.Background())
+	ctx := api.Client().StickyContext(context.Background())
 
 	b, err := api.GetMasterchainInfo(ctx)
 	if err != nil {
@@ -649,7 +625,7 @@ func TestAPIClient_GetBlockProofForward(t *testing.T) {
 		return
 	}
 
-	ctx := api.client.StickyContext(context.Background())
+	ctx := api.Client().StickyContext(context.Background())
 
 	initBlock := BlockIDExt(cfg.Validator.InitBlock)
 	known := &initBlock
@@ -680,7 +656,7 @@ func TestAPIClient_GetBlockProofForward(t *testing.T) {
 func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 	_ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	ctx := api.client.StickyContext(_ctx)
+	ctx := api.Client().StickyContext(_ctx)
 
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 

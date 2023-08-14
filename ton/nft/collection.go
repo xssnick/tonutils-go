@@ -14,7 +14,7 @@ import (
 )
 
 type TonApi interface {
-	WaitForBlock(seqno uint32) ton.APIClientWaiter
+	WaitForBlock(seqno uint32) ton.APIClientWrapped
 	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 }

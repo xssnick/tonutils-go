@@ -102,14 +102,13 @@ var (
 )
 
 type TonAPI interface {
-	WaitForBlock(seqno uint32) ton.APIClientWaiter
+	WaitForBlock(seqno uint32) ton.APIClientWrapped
 	Client() ton.LiteClient
 	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
 	GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
-	WaitNextMasterBlock(ctx context.Context, master *ton.BlockIDExt) (*ton.BlockIDExt, error)
 }
 
 type Message struct {
@@ -395,7 +394,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 	ctx = w.api.Client().StickyContext(ctx)
 
 	for time.Now().Before(till) {
-		blockNew, err := w.api.WaitNextMasterBlock(ctx, block)
+		blockNew, err := w.api.CurrentMasterchainInfo(ctx)
 		if err != nil {
 			continue
 		}

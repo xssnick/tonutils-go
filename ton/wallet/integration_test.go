@@ -19,7 +19,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-var api = func() *ton.APIClient {
+var api = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -30,10 +30,10 @@ var api = func() *ton.APIClient {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
-var apiMain = func() *ton.APIClient {
+var apiMain = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -44,7 +44,7 @@ var apiMain = func() *ton.APIClient {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
 var _seed = os.Getenv("WALLET_SEED")

@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var api = func() *ton.APIClient {
+var api = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -26,7 +26,7 @@ var api = func() *ton.APIClient {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
 func TestJettonMasterClient_GetJettonData(t *testing.T) {
@@ -147,7 +147,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 	}
 }
 
-func getWallet(api *ton.APIClient) *wallet.Wallet {
+func getWallet(api ton.APIClientWrapped) *wallet.Wallet {
 	words := strings.Split("cement secret mad fatal tip credit thank year toddler arrange good version melt truth embark debris execute answer please narrow fiber school achieve client", " ")
 	w, err := wallet.FromSeed(api, words, wallet.V3)
 	if err != nil {

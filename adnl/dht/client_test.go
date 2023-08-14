@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -14,7 +15,6 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
-	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
@@ -735,7 +735,7 @@ func TestClient_StoreOverlayNodesIntegration(t *testing.T) {
 
 	_, _, err = dhtClient.StoreOverlayNodes(ctx, id, &overlay.NodesList{
 		List: []overlay.Node{*node},
-	}, 5*time.Minute, 1)
+	}, 5*time.Minute, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

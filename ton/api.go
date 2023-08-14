@@ -44,7 +44,11 @@ type LSError struct {
 	Text string `tl:"string"`
 }
 
-type APIClientWaiter interface {
+// Deprecated: use APIClientWrapped
+type APIClientWaiter = APIClientWrapped
+
+type APIClientWrapped interface {
+	Client() LiteClient
 	GetTime(ctx context.Context) (uint32, error)
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
@@ -58,6 +62,11 @@ type APIClientWaiter interface {
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	GetTransaction(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 	GetBlockProof(ctx context.Context, known, target *BlockIDExt) (*PartialBlockProof, error)
+	CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, err error)
+	SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction)
+	VerifyProofChain(ctx context.Context, from, to *BlockIDExt) error
+	WaitForBlock(seqno uint32) APIClientWrapped
+	WithRetry() APIClientWrapped
 }
 
 type APIClient struct {
@@ -91,20 +100,39 @@ func NewAPIClient(client LiteClient, proofCheckPolicy ...ProofCheckPolicy) *APIC
 	}
 }
 
+// SetTrustedBlock - set starting point to verify master block proofs chain
 func (c *APIClient) SetTrustedBlock(block *BlockIDExt) {
 	c.trustedBlock = block.Copy()
 }
 
+// SetTrustedBlockFromConfig - same as SetTrustedBlock but takes init block from config
 func (c *APIClient) SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig) {
 	b := BlockIDExt(cfg.Validator.InitBlock)
-	c.trustedBlock = &b
+	c.SetTrustedBlock(&b)
 }
 
-func (c *APIClient) WaitForBlock(seqno uint32) APIClientWaiter {
+// WaitForBlock - waits for the given master block seqno will be available on the requested node
+func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 	return &APIClient{
 		parent: c,
 		client: &waiterClient{original: c.client, seqno: seqno},
 	}
+}
+
+// WithRetry - automatically retires request to another available liteserver
+// when error code 651 or -400 is received
+func (c *APIClient) WithRetry() APIClientWrapped {
+	return &APIClient{
+		parent: c,
+		client: &retryClient{original: c.client},
+	}
+}
+
+func (c *APIClient) root() *APIClient {
+	if c.parent != nil {
+		return c.parent.root()
+	}
+	return c
 }
 
 func (e LSError) Error() string {

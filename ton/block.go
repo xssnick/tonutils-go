@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tl"
@@ -205,21 +206,18 @@ func (c *APIClient) Client() LiteClient {
 
 // CurrentMasterchainInfo - cached version of GetMasterchainInfo to not do it in parallel many times
 func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, err error) {
-	if c.parent != nil {
-		// this method should be called at top level, to share curMasters and lock.
-		return c.parent.CurrentMasterchainInfo(ctx)
-	}
+	root := c.root() // this method should use root level props, to share curMasters and lock.
 
 	// if not sticky - id will be 0
 	nodeID := c.client.StickyNodeID(ctx)
 
-	c.curMastersLock.RLock()
-	master := c.curMasters[nodeID]
+	root.curMastersLock.RLock()
+	master := root.curMasters[nodeID]
 	if master == nil {
 		master = &masterInfo{}
-		c.curMasters[nodeID] = master
+		root.curMasters[nodeID] = master
 	}
-	c.curMastersLock.RUnlock()
+	root.curMastersLock.RUnlock()
 
 	master.mx.Lock()
 	defer master.mx.Unlock()
@@ -230,12 +228,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, 
 		var block *BlockIDExt
 		block, err = c.GetMasterchainInfo(ctx)
 		if err != nil {
-			return nil, err
-		}
-
-		block, err = c.waitMasterBlock(ctx, block.SeqNo)
-		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get masterchain info error (%s): %w", reflect.TypeOf(c.client).String(), err)
 		}
 
 		master.updatedAt = time.Now()
@@ -523,70 +516,6 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary) (shards []*BlockIDExt, e
 		}
 	}
 	return
-}
-
-// WaitNextMasterBlock - wait for the next block of master chain
-func (c *APIClient) waitMasterBlock(ctx context.Context, seqno uint32) (*BlockIDExt, error) {
-	var timeout = 10 * time.Second
-
-	deadline, ok := ctx.Deadline()
-	if ok {
-		t := deadline.Sub(time.Now())
-		if t < timeout {
-			timeout = t
-		}
-	}
-
-	prefix, err := tl.Serialize(WaitMasterchainSeqno{
-		Seqno:   int32(seqno),
-		Timeout: int32(timeout / time.Millisecond),
-	}, true)
-	if err != nil {
-		return nil, err
-	}
-
-	suffix, err := tl.Serialize(GetMasterchainInf{}, true)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp tl.Serializable
-	err = c.client.QueryLiteserver(ctx, tl.Raw(append(prefix, suffix...)), &resp)
-	if err != nil {
-		return nil, err
-	}
-
-	switch t := resp.(type) {
-	case MasterchainInfo:
-		return t.Last, nil
-	case LSError:
-		if t.Code == 652 {
-			return nil, ErrNoNewBlocks
-		}
-		return nil, t
-	}
-	return nil, errUnexpectedResponse(resp)
-}
-
-// Deprecated: use APIClient.WaitForBlock as method prefix
-func (c *APIClient) WaitNextMasterBlock(ctx context.Context, master *BlockIDExt) (*BlockIDExt, error) {
-	if c.parent != nil {
-		// this method should be called at top level, because wrapper already have this logic.
-		return c.parent.WaitNextMasterBlock(ctx, master)
-	}
-
-	if master.Workchain != -1 {
-		return nil, errors.New("not a master block passed")
-	}
-
-	ctx = c.client.StickyContext(ctx)
-
-	m, err := c.waitMasterBlock(ctx, master.SeqNo+1)
-	if err != nil {
-		return nil, err
-	}
-
-	return m, nil
 }
 
 // GetBlockProof - gets proof chain for the block
