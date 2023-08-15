@@ -2,8 +2,10 @@ package ton
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
+	"os"
 	"strings"
 )
 
@@ -35,6 +37,9 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 
 		if tmp, ok := result.(*tl.Serializable); ok && tmp != nil {
 			if lsErr, ok := (*tmp).(LSError); ok && (lsErr.Code == 651 || lsErr.Code == 652 || lsErr.Code == -400) {
+				println("RETRY", tries, lsErr.Code)
+				json.NewEncoder(os.Stdout).Encode(payload)
+
 				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil { // try next node
 					// no more nodes left, return as it is
 					return nil

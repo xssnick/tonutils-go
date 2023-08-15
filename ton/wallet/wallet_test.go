@@ -460,7 +460,7 @@ type WaiterMock struct {
 	MListTransactions       func(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	MGetTransaction         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 	MWaitForBlock           func(seqno uint32) ton.APIClientWrapped
-	MWithRetry              func() ton.APIClientWrapped
+	MWithRetry              func(x ...int) ton.APIClientWrapped
 	MCurrentMasterchainInfo func(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	MGetBlockProof          func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
 }
@@ -498,8 +498,8 @@ func (w WaiterMock) WaitForBlock(seqno uint32) ton.APIClientWrapped {
 	return w.MWaitForBlock(seqno)
 }
 
-func (w WaiterMock) WithRetry() ton.APIClientWrapped {
-	return w.MWithRetry()
+func (w WaiterMock) WithRetry(x ...int) ton.APIClientWrapped {
+	return w.MWithRetry(x...)
 }
 
 func (w WaiterMock) GetBlockProof(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error) {
