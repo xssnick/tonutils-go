@@ -68,12 +68,12 @@ func TestClient_DeployAsyncChannel(t *testing.T) {
 		t.Fatal(fmt.Errorf("failed to build deploy channel params: %w", err))
 	}
 
-	channelAddr, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.02"), body, code, data, true)
+	channelAddr, _, block, err := w.DeployContractWaitTransaction(context.Background(), tlb.MustFromTON("0.02"), body, code, data)
 	if err != nil {
 		t.Fatal(fmt.Errorf("failed to deploy channel: %w", err))
 	}
 
-	ch, err := client.GetAsyncChannel(context.Background(), channelAddr, true)
+	ch, err := client.GetAsyncChannel(context.Background(), block, channelAddr, true)
 	if err != nil {
 		t.Fatal(fmt.Errorf("failed to get channel: %w", err))
 	}

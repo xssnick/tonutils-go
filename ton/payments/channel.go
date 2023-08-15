@@ -51,12 +51,7 @@ func NewPaymentChannelClient(api TonApi) *Client {
 	}
 }
 
-func (c *Client) GetAsyncChannel(ctx context.Context, addr *address.Address, verify bool) (*AsyncChannel, error) {
-	block, err := c.api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get block: %w", err)
-	}
-
+func (c *Client) GetAsyncChannel(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, verify bool) (*AsyncChannel, error) {
 	acc, err := c.api.GetAccount(ctx, block, addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account: %w", err)

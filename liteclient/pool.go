@@ -183,7 +183,6 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 			return err
 		}
 	}
-	println("QWITH", host)
 
 	_, hasDeadline := ctx.Deadline()
 	if !hasDeadline {

@@ -625,6 +625,37 @@ func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.C
 	return w.Send(ctx, transfer, waitConfirmation...)
 }
 
+func (w *Wallet) DeployContractWaitTransaction(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell) (*address.Address, *tlb.Transaction, *ton.BlockIDExt, error) {
+	state := &tlb.StateInit{
+		Data: contractData,
+		Code: contractCode,
+	}
+
+	stateCell, err := tlb.ToCell(state)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	addr := address.NewAddress(0, 0, stateCell.Hash())
+
+	tx, block, err := w.SendWaitTransaction(ctx, &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      false,
+			DstAddr:     addr,
+			Amount:      amount,
+			Body:        msgBody,
+			StateInit:   state,
+		},
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return addr, tx, block, nil
+}
+
+// Deprecated: use DeployContractWaitTransaction
 func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell, waitConfirmation ...bool) (*address.Address, error) {
 	state := &tlb.StateInit{
 		Data: contractData,

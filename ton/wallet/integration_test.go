@@ -159,17 +159,11 @@ func TestWallet_DeployContract(t *testing.T) {
 	codeBytes, _ := hex.DecodeString("b5ee9c72410104010020000114ff00f4a413f4bcf2c80b010203844003020009a1b63c43510007a0000061d2421bb1")
 	code, _ := cell.FromBOC(codeBytes)
 
-	addr, err := w.DeployContract(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell(), true)
+	addr, _, block, err := w.DeployContractWaitTransaction(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell())
 	if err != nil {
 		t.Fatal("deploy err:", err)
 	}
 	t.Logf("contract address: %s", addr.String())
-
-	block, err := api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		t.Fatal("CurrentMasterchainInfo err:", err.Error())
-		return
-	}
 
 	res, err := api.RunGetMethod(ctx, block, addr, "dappka", 5, 10)
 	if err != nil {
