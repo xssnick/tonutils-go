@@ -66,7 +66,7 @@ type APIClientWrapped interface {
 	SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction)
 	VerifyProofChain(ctx context.Context, from, to *BlockIDExt) error
 	WaitForBlock(seqno uint32) APIClientWrapped
-	WithRetry() APIClientWrapped
+	WithRetry(maxRetries ...int) APIClientWrapped
 	SetTrustedBlock(block *BlockIDExt)
 	SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig)
 }
@@ -123,11 +123,16 @@ func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 }
 
 // WithRetry - automatically retires request to another available liteserver
-// when error code 651 or -400 is received
-func (c *APIClient) WithRetry() APIClientWrapped {
+// when adnl timeout, or error code 651 or -400 is received.
+// If maxTries > 0, limits additional attempts to this number.
+func (c *APIClient) WithRetry(maxTries ...int) APIClientWrapped {
+	tries := 0
+	if len(maxTries) > 0 {
+		tries = maxTries[0]
+	}
 	return &APIClient{
 		parent:           c,
-		client:           &retryClient{original: c.client},
+		client:           &retryClient{original: c.client, maxRetries: tries},
 		proofCheckPolicy: c.proofCheckPolicy,
 	}
 }

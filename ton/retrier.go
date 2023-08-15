@@ -4,36 +4,45 @@ import (
 	"context"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
-	"reflect"
 	"strings"
 )
 
 type retryClient struct {
-	original LiteClient
+	maxRetries int
+	original   LiteClient
 }
 
 func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error {
+	tries := w.maxRetries
 	for {
-		println("TRY", reflect.ValueOf(payload).Type().String())
 		err := w.original.QueryLiteserver(ctx, payload, result)
+		if w.maxRetries > 0 && tries == w.maxRetries {
+			return err
+		}
+		tries++
 
 		if err != nil {
-			println("ERR", err)
-
-			if lsErr, ok := err.(LSError); ok && (lsErr.Code == 651 || lsErr.Code == -400) ||
-				strings.HasPrefix(err.Error(), "adnl request timeout, node") { // block not applied error
+			if strings.HasPrefix(err.Error(), "adnl request timeout, node") {
 				// try next node
-				origErr := err
-				println("RETRY", err)
-
 				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil {
-					return fmt.Errorf("retryable error received, but failed to try with next node, "+
-						"looks like all active nodes was already tried, original error: %w", origErr)
+					return fmt.Errorf("timeout error received, but failed to try with next node, "+
+						"looks like all active nodes was already tried, original error: %w", err)
+				}
+				continue
+			}
+			return err
+		}
+
+		if tmp, ok := result.(*tl.Serializable); ok && tmp != nil {
+			if lsErr, ok := (*tmp).(LSError); ok && (lsErr.Code == 651 || lsErr.Code == 652 || lsErr.Code == -400) {
+				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil { // try next node
+					// no more nodes left, return as it is
+					return nil
 				}
 				continue
 			}
 		}
-		return err
+		return nil
 	}
 }
 
