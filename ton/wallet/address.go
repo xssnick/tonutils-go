@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"fmt"
 
@@ -54,20 +55,20 @@ func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb
 
 	var data *cell.Cell
 	switch ver {
-	case V3:
+	case V3R1, V3R2:
 		data = cell.BeginCell().
 			MustStoreUInt(0, 32).                 // seqno
 			MustStoreUInt(uint64(subWallet), 32). // sub wallet
 			MustStoreSlice(pubKey, 256).
 			EndCell()
-	case V4R2:
+	case V4R1, V4R2:
 		data = cell.BeginCell().
 			MustStoreUInt(0, 32). // seqno
 			MustStoreUInt(uint64(subWallet), 32).
 			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
-	case HighloadV2R2:
+	case HighloadV2R2, HighloadV2Verified:
 		data = cell.BeginCell().
 			MustStoreUInt(uint64(subWallet), 32).
 			MustStoreUInt(0, 64). // last cleaned
@@ -82,4 +83,27 @@ func GetStateInit(pubKey ed25519.PublicKey, ver Version, subWallet uint32) (*tlb
 		Data: data,
 		Code: code,
 	}, nil
+}
+
+func GetPublicKey(ctx context.Context, api TonAPI, addr *address.Address) (ed25519.PublicKey, error) {
+	master, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current master block: %w", err)
+	}
+
+	res, err := api.WaitForBlock(master.SeqNo).RunGetMethod(ctx, master, addr, "get_public_key")
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute get_public_key contract method: %w", err)
+	}
+
+	key, err := res.Int(0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse get_public_key execution result: %w", err)
+	}
+
+	b := key.Bytes()
+	pubKey := make([]byte, 32)
+	copy(pubKey[32-len(b):], b)
+
+	return pubKey, nil
 }

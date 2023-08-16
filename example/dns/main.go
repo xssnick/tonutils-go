@@ -14,14 +14,14 @@ func main() {
 	client := liteclient.NewConnectionPool()
 
 	// connect to testnet lite server
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}
 
 	ctx := client.StickyContext(context.Background())
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client).WithRetry()
 
 	// get root dns address from network config
 	root, err := dns.RootContractAddr(api)

@@ -2,12 +2,11 @@ package ton
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
-	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"math/big"
+
+	"github.com/xssnick/tonutils-go/tl"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 func init() {
@@ -19,8 +18,8 @@ func init() {
 type ConfigAll struct {
 	Mode        int         `tl:"int"`
 	ID          *BlockIDExt `tl:"struct"`
-	StateProof  []byte      `tl:"bytes"`
-	ConfigProof []byte      `tl:"bytes"`
+	StateProof  *cell.Cell  `tl:"cell"`
+	ConfigProof *cell.Cell  `tl:"cell"`
 }
 
 type GetConfigAll struct {
@@ -62,24 +61,9 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 
 	switch t := resp.(type) {
 	case ConfigAll:
-		c, err := cell.FromBOC(t.ConfigProof)
+		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{t.ConfigProof, t.StateProof})
 		if err != nil {
-			return nil, err
-		}
-
-		ref, err := c.BeginParse().LoadRef()
-		if err != nil {
-			return nil, err
-		}
-
-		var state tlb.ShardStateUnsplit
-		err = tlb.LoadFromCell(&state, ref)
-		if err != nil {
-			return nil, err
-		}
-
-		if state.McStateExtra == nil {
-			return nil, errors.New("no mc extra state found, something went wrong")
+			return nil, fmt.Errorf("incorrect proof: %w", err)
 		}
 
 		result := &BlockchainConfig{data: map[int32]*cell.Cell{}}
@@ -87,7 +71,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 		if len(onlyParams) > 0 {
 			// we need it because lite server may add some unwanted keys
 			for _, param := range onlyParams {
-				res := state.McStateExtra.ConfigParams.Config.GetByIntKey(big.NewInt(int64(param)))
+				res := stateExtra.ConfigParams.Config.Params.GetByIntKey(big.NewInt(int64(param)))
 				if res == nil {
 					return nil, fmt.Errorf("config param %d not found", param)
 				}
@@ -100,7 +84,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 				result.data[param] = v.MustToCell()
 			}
 		} else {
-			for _, kv := range state.McStateExtra.ConfigParams.Config.All() {
+			for _, kv := range stateExtra.ConfigParams.Config.Params.All() {
 				v, err := kv.Value.BeginParse().LoadRef()
 				if err != nil {
 					return nil, fmt.Errorf("failed to load config param %d, err: %w", kv.Key.BeginParse().MustLoadInt(32), err)

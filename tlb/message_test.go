@@ -47,8 +47,8 @@ func TestInternalMessage_ToCell(t *testing.T) { // need to deploy contract on te
 		t.Fatal("not eq dst")
 	}
 
-	if intMsg.Amount.NanoTON().Uint64() != intMsg2.Amount.NanoTON().Uint64() {
-		t.Fatal("not eq ton", intMsg.Amount.NanoTON(), intMsg2.Amount.NanoTON())
+	if intMsg.Amount.Nano().Uint64() != intMsg2.Amount.Nano().Uint64() {
+		t.Fatal("not eq ton", intMsg.Amount.Nano(), intMsg2.Amount.Nano())
 	}
 }
 

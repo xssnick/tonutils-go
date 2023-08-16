@@ -12,7 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
 	"hash/crc32"
 	"io"
 	"log"
@@ -23,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
@@ -86,6 +86,15 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 	return <-result
 }
 
+func (c *ConnectionPool) AddConnectionsFromConfigFile(configPath string) error {
+	config, err := GetConfigFromFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	return c.AddConnectionsFromConfig(context.Background(), config)
+}
+
 func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, configUrl string) error {
 	config, err := GetConfigFromUrl(ctx, configUrl)
 	if err != nil {
@@ -95,7 +104,17 @@ func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, config
 	return c.AddConnectionsFromConfig(ctx, config)
 }
 
+var ErrStopped = errors.New("connection pool is closed")
+
 func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string, clientKey ...ed25519.PrivateKey) error {
+	select {
+	case <-c.globalCtx.Done():
+		return ErrStopped
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	sKey, err := base64.StdEncoding.DecodeString(serverKey)
 	if err != nil {
 		return err
@@ -170,12 +189,16 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		select {
 		case <-conn.authEvt:
 			// auth completed
+		case <-c.globalCtx.Done():
+			return ErrStopped
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 
 	select {
+	case <-c.globalCtx.Done():
+		return ErrStopped
 	case err = <-connResult:
 		if err != nil {
 			return err
@@ -290,12 +313,17 @@ func (n *connection) listen(connResult chan<- error) {
 		}
 		n.pool.nodesMx.Unlock()
 
-		n.pool.reqMx.RLock()
-		dis := n.pool.onDisconnect
-		n.pool.reqMx.RUnlock()
+		select {
+		case <-n.pool.globalCtx.Done():
+			return
+		default:
+			n.pool.reqMx.RLock()
+			dis := n.pool.onDisconnect
+			n.pool.reqMx.RUnlock()
 
-		if dis != nil {
-			go dis(n.addr, n.serverKey)
+			if dis != nil {
+				go dis(n.addr, n.serverKey)
+			}
 		}
 	}
 }
@@ -303,6 +331,8 @@ func (n *connection) listen(connResult chan<- error) {
 func (n *connection) startPings(every time.Duration) {
 	for {
 		select {
+		case <-n.pool.globalCtx.Done():
+			return
 		case <-time.After(every):
 		}
 
@@ -425,7 +455,7 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 
 	pub := ourKey.Public().(ed25519.PublicKey)
 
-	kid, err := adnl.ToKeyID(adnl.PublicKeyED25519{Key: serverKey})
+	kid, err := tl.Hash(adnl.PublicKeyED25519{Key: serverKey})
 	if err != nil {
 		return err
 	}

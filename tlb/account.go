@@ -2,10 +2,10 @@ package tlb
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"github.com/sigurn/crc16"
 	"math/big"
+
+	"github.com/sigurn/crc16"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -39,10 +39,17 @@ type DepthBalanceInfo struct {
 	Currencies CurrencyCollection `tlb:"."`
 }
 
+type ShardAccount struct {
+	Account       *cell.Cell `tlb:"^"`
+	LastTransHash []byte     `tlb:"bits 256"`
+	LastTransLT   uint64     `tlb:"## 64"`
+}
+
 type AccountStorage struct {
 	Status            AccountStatus
 	LastTransactionLT uint64
 	Balance           Coins
+	ExtraCurrencies   *cell.Dictionary `tlb:"dict 32"`
 
 	// has value when active
 	StateInit *StateInit
@@ -51,15 +58,15 @@ type AccountStorage struct {
 }
 
 type StorageUsed struct {
-	BitsUsed        uint64
-	CellsUsed       uint64
-	PublicCellsUsed uint64
+	BitsUsed        *big.Int `tlb:"var uint 7"`
+	CellsUsed       *big.Int `tlb:"var uint 7"`
+	PublicCellsUsed *big.Int `tlb:"var uint 7"`
 }
 
 type StorageInfo struct {
-	StorageUsed StorageUsed
-	LastPaid    uint32
-	DuePayment  *big.Int
+	StorageUsed StorageUsed `tlb:"."`
+	LastPaid    uint32      `tlb:"## 32"`
+	DuePayment  *Coins      `tlb:"maybe ."`
 }
 
 type AccountState struct {
@@ -134,13 +141,13 @@ func (a *AccountState) LoadFromCell(loader *cell.Slice) error {
 	}
 
 	var info StorageInfo
-	err = info.LoadFromCell(loader)
+	err = LoadFromCell(&info, loader)
 	if err != nil {
 		return err
 	}
 
 	var store AccountStorage
-	err = store.LoadFromCell(loader)
+	err = LoadFromCell(&store, loader)
 	if err != nil {
 		return err
 	}
@@ -151,61 +158,6 @@ func (a *AccountState) LoadFromCell(loader *cell.Slice) error {
 		StorageInfo:    info,
 		AccountStorage: store,
 	}
-
-	return nil
-}
-
-func (s *StorageUsed) LoadFromCell(loader *cell.Slice) error {
-	cells, err := loader.LoadVarUInt(7)
-	if err != nil {
-		return err
-	}
-
-	bits, err := loader.LoadVarUInt(7)
-	if err != nil {
-		return err
-	}
-
-	pubCells, err := loader.LoadVarUInt(7)
-	if err != nil {
-		return err
-	}
-
-	s.CellsUsed = cells.Uint64()
-	s.BitsUsed = bits.Uint64()
-	s.PublicCellsUsed = pubCells.Uint64()
-
-	return nil
-}
-
-func (s *StorageInfo) LoadFromCell(loader *cell.Slice) error {
-	var used StorageUsed
-	err := used.LoadFromCell(loader)
-	if err != nil {
-		return err
-	}
-
-	lastPaid, err := loader.LoadUInt(32)
-	if err != nil {
-		return err
-	}
-
-	isDuePayment, err := loader.LoadUInt(1)
-	if err != nil {
-		return err
-	}
-
-	var duePayment *big.Int
-	if isDuePayment == 1 {
-		duePayment, err = loader.LoadBigCoins()
-		if err != nil {
-			return err
-		}
-	}
-
-	s.StorageUsed = used
-	s.DuePayment = duePayment
-	s.LastPaid = uint32(lastPaid)
 
 	return nil
 }
@@ -221,13 +173,9 @@ func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 		return fmt.Errorf("failed to load coins balance: %w", err)
 	}
 
-	extraExists, err := loader.LoadBoolBit()
+	s.ExtraCurrencies, err = loader.LoadDict(32)
 	if err != nil {
-		return fmt.Errorf("failed to load extra exists bit: %w", err)
-	}
-
-	if extraExists {
-		return errors.New("extra currency info is not supported for AccountStorage")
+		return fmt.Errorf("failed to load extra currencies: %w", err)
 	}
 
 	isStatusActive, err := loader.LoadBoolBit()

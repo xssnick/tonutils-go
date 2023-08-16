@@ -4,8 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"fmt"
 	"github.com/oasisprotocol/curve25519-voi/curve"
 	ed25519crv "github.com/oasisprotocol/curve25519-voi/primitives/ed25519"
 	"github.com/oasisprotocol/curve25519-voi/primitives/x25519"
@@ -65,15 +63,5 @@ func NewCipherCtr(key, iv []byte) (cipher.Stream, error) {
 	return cipher.NewCTR(c, iv), nil
 }
 
-func ToKeyID(key any) ([]byte, error) {
-	data, err := tl.Serialize(key, true)
-	if err != nil {
-		return nil, fmt.Errorf("key serialize err: %w", err)
-	}
-
-	hash := sha256.New()
-	hash.Write(data)
-	s := hash.Sum(nil)
-
-	return s, nil
-}
+// Deprecated: use tl.Hash
+var ToKeyID = tl.Hash

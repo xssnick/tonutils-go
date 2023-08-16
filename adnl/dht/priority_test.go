@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/tl"
 	"testing"
 )
 
@@ -18,7 +19,7 @@ func TestPriorityList_addNode(t *testing.T) {
 		Name:  []byte("address"),
 		Index: 0,
 	}
-	keyId, err := adnl.ToKeyID(k)
+	keyId, err := tl.Hash(k)
 	if err != nil {
 		t.Fatal("failed to prepare test key id")
 	}
@@ -29,7 +30,7 @@ func TestPriorityList_addNode(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId1, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey1})
+	kId1, err := tl.Hash(adnl.PublicKeyED25519{tPubKey1})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -40,7 +41,7 @@ func TestPriorityList_addNode(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId2, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey2})
+	kId2, err := tl.Hash(adnl.PublicKeyED25519{tPubKey2})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -51,26 +52,23 @@ func TestPriorityList_addNode(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId3, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey3})
+	kId3, err := tl.Hash(adnl.PublicKeyED25519{tPubKey3})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
 
 	node1 := dhtNode{
-		id:           kId1,
-		adnl:         nil,
+		adnlId:       kId1,
 		currentState: _StateActive,
 	}
 
 	node2 := dhtNode{
-		id:           kId2,
-		adnl:         nil,
+		adnlId:       kId2,
 		currentState: _StateFail,
 	}
 
 	node3 := dhtNode{
-		id:           kId3,
-		adnl:         nil,
+		adnlId:       kId3,
 		currentState: _StateActive,
 	}
 
@@ -95,8 +93,8 @@ func TestPriorityList_addNode(t *testing.T) {
 	t.Run("nodes priority order", func(t *testing.T) {
 		for nodeNo := 1; nodeNo < 4; nodeNo++ {
 			node, _ := pList.getNode()
-			if nodeOrder[hex.EncodeToString(node.id)] != uint8(nodeNo) {
-				t.Errorf("want node index '%d', got '%d'", nodeOrder[hex.EncodeToString(node.id)], uint8(nodeNo))
+			if nodeOrder[node.id()] != uint8(nodeNo) {
+				t.Errorf("want node index '%d', got '%d'", nodeOrder[node.id()], uint8(nodeNo))
 			}
 		}
 	})
@@ -113,7 +111,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		Name:  []byte("address"),
 		Index: 0,
 	}
-	keyId, err := adnl.ToKeyID(k)
+	keyId, err := tl.Hash(k)
 	if err != nil {
 		t.Fatal("failed to prepare test key id")
 	}
@@ -124,7 +122,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId1, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey1})
+	kId1, err := tl.Hash(adnl.PublicKeyED25519{tPubKey1})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -135,7 +133,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId2, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey2})
+	kId2, err := tl.Hash(adnl.PublicKeyED25519{tPubKey2})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
@@ -146,24 +144,21 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 		t.Fatal("failed to prepare test public key")
 	}
 
-	kId3, err := adnl.ToKeyID(adnl.PublicKeyED25519{tPubKey3})
+	kId3, err := tl.Hash(adnl.PublicKeyED25519{tPubKey3})
 	if err != nil {
 		t.Fatal("failed to prepare test key ID")
 	}
 
 	node1 := dhtNode{
-		id:   kId1,
-		adnl: nil,
+		adnlId: kId1,
 	}
 
 	node2 := dhtNode{
-		id:   kId2,
-		adnl: nil,
+		adnlId: kId2,
 	}
 
 	node3 := dhtNode{
-		id:   kId3,
-		adnl: nil,
+		adnlId: kId3,
 	}
 
 	pList := newPriorityList(12, keyId)
@@ -194,7 +189,7 @@ func TestPriorityList_markNotUsed(t *testing.T) {
 
 		curNode = pList.list
 		for curNode != nil {
-			if bytes.Equal(curNode.node.id, usedNode.id) {
+			if bytes.Equal(curNode.node.adnlId, usedNode.adnlId) {
 				if curNode.used != false {
 					t.Errorf("want 'false' use status, got '%v'", curNode.used)
 				}

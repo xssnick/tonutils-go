@@ -3,10 +3,15 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha512"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl"
 	"math/rand"
 	"strings"
 	"time"
@@ -21,33 +26,39 @@ import (
 type Version int
 
 const (
-	V1R1         Version = 11
-	V1R2         Version = 12
-	V1R3         Version = 13
-	V2R1         Version = 21
-	V2R2         Version = 22
-	V3R1         Version = 31
-	V3R2         Version = 32
-	V3                   = V3R2
-	V4R1         Version = 41
-	V4R2         Version = 42
-	HighloadV2R2 Version = 122
-	Lockup       Version = 200
-	Unknown      Version = 0
+	V1R1               Version = 11
+	V1R2               Version = 12
+	V1R3               Version = 13
+	V2R1               Version = 21
+	V2R2               Version = 22
+	V3R1               Version = 31
+	V3R2               Version = 32
+	V3                         = V3R2
+	V4R1               Version = 41
+	V4R2               Version = 42
+	HighloadV2R2       Version = 122
+	HighloadV2Verified Version = 123
+	Lockup             Version = 200
+	Unknown            Version = 0
 )
 
 func (v Version) String() string {
 	if v == Unknown {
 		return "unknown"
 	}
-	if v/10 > 0 && v/10 < 10 {
-		return fmt.Sprintf("V%dR%d", v/10, v%10)
+
+	switch v {
+	case HighloadV2R2:
+		return fmt.Sprintf("highload V2R2")
+	case HighloadV2Verified:
+		return fmt.Sprintf("highload V2R2 verified")
 	}
-	if v/100 == 1 {
-		return fmt.Sprintf("highload V%dR%d", v/100/10, v%10)
-	}
+
 	if v/100 == 2 {
 		return fmt.Sprintf("lockup")
+	}
+	if v/10 > 0 && v/10 < 10 {
+		return fmt.Sprintf("V%dR%d", v/10, v%10)
 	}
 	return fmt.Sprintf("%d", v)
 }
@@ -58,8 +69,8 @@ var (
 		V2R1: _V2R1CodeHex, V2R2: _V2R2CodeHex,
 		V3R1: _V3R1CodeHex, V3R2: _V3R2CodeHex,
 		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
-		HighloadV2R2: _HighloadV2R2CodeHex,
-		Lockup:       _LockupCodeHex,
+		HighloadV2R2: _HighloadV2R2CodeHex, HighloadV2Verified: _HighloadV2VerifiedCodeHex,
+		Lockup: _LockupCodeHex,
 	}
 	walletCodeBOC = map[Version][]byte{}
 	walletCode    = map[Version]*cell.Cell{}
@@ -91,14 +102,13 @@ var (
 )
 
 type TonAPI interface {
-	WaitForBlock(seqno uint32) ton.APIClientWaiter
+	WaitForBlock(seqno uint32) ton.APIClientWrapped
 	Client() ton.LiteClient
 	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
 	GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
-	WaitNextMasterBlock(ctx context.Context, master *ton.BlockIDExt) (*ton.BlockIDExt, error)
 }
 
 type Message struct {
@@ -149,12 +159,12 @@ func getSpec(w *Wallet) (any, error) {
 	}
 
 	switch w.ver {
-	case V3:
-		return &SpecV3{regular}, nil
-	case V4R2:
-		return &SpecV4R2{regular}, nil
-	case HighloadV2R2:
-		return &SpecHighloadV2R2{regular}, nil
+	case V3R1, V3R2:
+		return &SpecV3{regular, SpecSeqno{}}, nil
+	case V4R1, V4R2:
+		return &SpecV4R2{regular, SpecSeqno{}}, nil
+	case HighloadV2R2, HighloadV2Verified:
+		return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
 	}
 
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
@@ -207,7 +217,16 @@ func (w *Wallet) GetSpec() any {
 	return w.spec
 }
 
+func (w *Wallet) BuildExternalMessage(ctx context.Context, message *Message) (*tlb.ExternalMessage, error) {
+	return w.BuildExternalMessageForMany(ctx, []*Message{message})
+}
+
+// Deprecated: use BuildExternalMessageForMany
 func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (*tlb.ExternalMessage, error) {
+	return w.BuildExternalMessageForMany(ctx, messages)
+}
+
+func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Message) (*tlb.ExternalMessage, error) {
 	var stateInit *tlb.StateInit
 
 	block, err := w.api.CurrentMasterchainInfo(ctx)
@@ -232,13 +251,13 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 
 	var msg *cell.Cell
 	switch w.ver {
-	case V3, V4R2:
+	case V3R2, V3R1, V4R2, V4R1:
 		msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, initialized, block, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
-	case HighloadV2R2:
-		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, randUint32(), messages)
+	case HighloadV2R2, HighloadV2Verified:
+		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
@@ -250,6 +269,53 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 		DstAddr:   w.addr,
 		StateInit: stateInit,
 		Body:      msg,
+	}, nil
+}
+
+func (w *Wallet) BuildTransfer(to *address.Address, amount tlb.Coins, bounce bool, comment string) (_ *Message, err error) {
+	var body *cell.Cell
+	if comment != "" {
+		body, err = CreateCommentCell(comment)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      bounce,
+			DstAddr:     to,
+			Amount:      amount,
+			Body:        body,
+		},
+	}, nil
+}
+
+func (w *Wallet) BuildTransferEncrypted(ctx context.Context, to *address.Address, amount tlb.Coins, bounce bool, comment string) (_ *Message, err error) {
+	var body *cell.Cell
+	if comment != "" {
+		key, err := GetPublicKey(ctx, w.api, to)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get destination contract (wallet) public key")
+		}
+
+		body, err = CreateEncryptedCommentCell(comment, w.Address(), w.key, key)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      bounce,
+			DstAddr:     to,
+			Amount:      amount,
+			Body:        body,
+		},
 	}, nil
 }
 
@@ -296,7 +362,7 @@ func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirma
 		return nil, nil, nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
-	ext, err := w.BuildMessageForMany(ctx, messages)
+	ext, err := w.BuildExternalMessageForMany(ctx, messages)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -328,7 +394,7 @@ func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, ac
 	ctx = w.api.Client().StickyContext(ctx)
 
 	for time.Now().Before(till) {
-		blockNew, err := w.api.WaitNextMasterBlock(ctx, block)
+		blockNew, err := w.api.WaitForBlock(block.SeqNo + 1).GetMasterchainInfo(ctx)
 		if err != nil {
 			continue
 		}
@@ -416,6 +482,15 @@ func (w *Wallet) Transfer(ctx context.Context, to *address.Address, amount tlb.C
 	return w.transfer(ctx, to, amount, comment, true, waitConfirmation...)
 }
 
+// TransferWithEncryptedComment - same as Transfer but encrypts comment, throws error if target contract (address) has no get_public_key method.
+func (w *Wallet) TransferWithEncryptedComment(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, waitConfirmation ...bool) error {
+	transfer, err := w.BuildTransferEncrypted(ctx, to, amount, true, comment)
+	if err != nil {
+		return err
+	}
+	return w.Send(ctx, transfer, waitConfirmation...)
+}
+
 func CreateCommentCell(text string) (*cell.Cell, error) {
 	// comment ident
 	root := cell.BeginCell().MustStoreUInt(0, 32)
@@ -427,27 +502,162 @@ func CreateCommentCell(text string) (*cell.Cell, error) {
 	return root.EndCell(), nil
 }
 
-func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool, waitConfirmation ...bool) (err error) {
-	var body *cell.Cell
-	if comment != "" {
-		body, err = CreateCommentCell(comment)
-		if err != nil {
-			return err
-		}
+const EncryptedCommentOpcode = 0x2167da4b
+
+func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) ([]byte, error) {
+	slc := commentCell.BeginParse()
+	op, err := slc.LoadUInt(32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load op code: %w", err)
 	}
 
-	return w.Send(ctx, &Message{
-		Mode: 1,
-		InternalMessage: &tlb.InternalMessage{
-			IHRDisabled: true,
-			Bounce:      bounce,
-			DstAddr:     to,
-			Amount:      amount,
-			Body:        body,
-		},
-	}, waitConfirmation...)
+	if op != EncryptedCommentOpcode {
+		return nil, fmt.Errorf("opcode not match encrypted comment")
+	}
+
+	xorKey, err := slc.LoadSlice(256)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load xor key: %w", err)
+	}
+	for i := 0; i < 32; i++ {
+		xorKey[i] ^= theirKey[i]
+	}
+
+	if !bytes.Equal(xorKey, ourKey.Public().(ed25519.PublicKey)) {
+		return nil, fmt.Errorf("message was encrypted not for the given keys")
+	}
+
+	msgKey, err := slc.LoadSlice(128)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load xor key: %w", err)
+	}
+
+	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute shared key: %w", err)
+	}
+
+	h := hmac.New(sha512.New, sharedKey)
+	h.Write(msgKey)
+	x := h.Sum(nil)
+
+	data, err := slc.LoadBinarySnake()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load snake encrypted data: %w", err)
+	}
+
+	if len(data) < 32 || len(data)%16 != 0 {
+		return nil, fmt.Errorf("invalid data")
+	}
+
+	c, err := aes.NewCipher(x[:32])
+	if err != nil {
+		return nil, err
+	}
+	enc := cipher.NewCBCDecrypter(c, x[32:48])
+	enc.CryptBlocks(data, data)
+
+	if data[0] > 31 {
+		return nil, fmt.Errorf("invalid prefix size")
+	}
+
+	h = hmac.New(sha512.New, []byte(sender.String()))
+	h.Write(data)
+	if !bytes.Equal(msgKey, h.Sum(nil)[:16]) {
+		return nil, fmt.Errorf("incorrect msg key")
+	}
+
+	return data[data[0]:], nil
 }
 
+func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) (*cell.Cell, error) {
+	// encrypted comment op code
+	root := cell.BeginCell().MustStoreUInt(EncryptedCommentOpcode, 32)
+
+	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute shared key: %w", err)
+	}
+
+	data := []byte(text)
+
+	pfx := make([]byte, 16+(16-(len(data)%16)))
+	pfx[0] = byte(len(pfx))
+	if _, err = rand.Read(pfx[1:]); err != nil {
+		return nil, fmt.Errorf("rand gen err: %w", err)
+	}
+	data = append(pfx, data...)
+
+	h := hmac.New(sha512.New, []byte(senderAddr.String()))
+	h.Write(data)
+	msgKey := h.Sum(nil)[:16]
+
+	h = hmac.New(sha512.New, sharedKey)
+	h.Write(msgKey)
+	x := h.Sum(nil)
+
+	c, err := aes.NewCipher(x[:32])
+	if err != nil {
+		return nil, err
+	}
+
+	enc := cipher.NewCBCEncrypter(c, x[32:48])
+	enc.CryptBlocks(data, data)
+
+	xorKey := ourKey.Public().(ed25519.PublicKey)
+	for i := 0; i < 32; i++ {
+		xorKey[i] ^= theirKey[i]
+	}
+
+	root.MustStoreSlice(xorKey, 256)
+	root.MustStoreSlice(msgKey, 128)
+
+	if err := root.StoreBinarySnake(data); err != nil {
+		return nil, fmt.Errorf("failed to build comment: %w", err)
+	}
+
+	return root.EndCell(), nil
+}
+
+func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.Coins, comment string, bounce bool, waitConfirmation ...bool) (err error) {
+	transfer, err := w.BuildTransfer(to, amount, bounce, comment)
+	if err != nil {
+		return err
+	}
+	return w.Send(ctx, transfer, waitConfirmation...)
+}
+
+func (w *Wallet) DeployContractWaitTransaction(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell) (*address.Address, *tlb.Transaction, *ton.BlockIDExt, error) {
+	state := &tlb.StateInit{
+		Data: contractData,
+		Code: contractCode,
+	}
+
+	stateCell, err := tlb.ToCell(state)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	addr := address.NewAddress(0, 0, stateCell.Hash())
+
+	tx, block, err := w.SendWaitTransaction(ctx, &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      false,
+			DstAddr:     addr,
+			Amount:      amount,
+			Body:        msgBody,
+			StateInit:   state,
+		},
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return addr, tx, block, nil
+}
+
+// Deprecated: use DeployContractWaitTransaction
 func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell, waitConfirmation ...bool) (*address.Address, error) {
 	state := &tlb.StateInit{
 		Data: contractData,
@@ -462,7 +672,7 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	addr := address.NewAddress(0, 0, stateCell.Hash())
 
 	if err = w.Send(ctx, &Message{
-		Mode: 1,
+		Mode: 1 + 2,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      false,
@@ -538,7 +748,7 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte,
 
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
 	return &Message{
-		Mode: 1,
+		Mode: 1 + 2,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      true,

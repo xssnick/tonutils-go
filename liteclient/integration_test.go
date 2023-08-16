@@ -4,10 +4,29 @@ import (
 	"context"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
-	"github.com/xssnick/tonutils-go/ton"
+	"github.com/xssnick/tonutils-go/tlb"
 	"testing"
 	"time"
 )
+
+func init() {
+	tl.Register(MasterchainInfo{}, "liteServer.masterchainInfo last:tonNode.blockIdExt state_root_hash:int256 init:tonNode.zeroStateIdExt = liteServer.MasterchainInfo")
+	tl.Register(GetMasterchainInf{}, "liteServer.getMasterchainInfo = liteServer.MasterchainInfo")
+}
+
+type GetMasterchainInf struct{}
+
+type BlockIDExt = tlb.BlockInfo
+type MasterchainInfo struct {
+	Last          *BlockIDExt     `tl:"struct"`
+	StateRootHash []byte          `tl:"int256"`
+	Init          *ZeroStateIDExt `tl:"struct"`
+}
+type ZeroStateIDExt struct {
+	Workchain int32  `tl:"int"`
+	RootHash  []byte `tl:"int256"`
+	FileHash  []byte `tl:"int256"`
+}
 
 func Test_Conn(t *testing.T) {
 	client := NewConnectionPool()
@@ -15,23 +34,20 @@ func Test_Conn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatal("add connections err", err)
 	}
 
 	doReq := func(expErr error) {
 		var resp tl.Serializable
-		err := client.QueryLiteserver(ctx, ton.GetMasterchainInf{}, &resp)
+		err := client.QueryLiteserver(ctx, GetMasterchainInf{}, &resp)
 		if err != nil {
 			t.Fatal("do err", err)
 		}
 
 		switch tb := resp.(type) {
-		case ton.MasterchainInfo:
-			if tb.Last.Workchain != -1 || tb.Last.Shard != -9223372036854775808 {
-				t.Fatal("data err", *tb.Last)
-			}
+		case MasterchainInfo:
 		default:
 			t.Fatal("bad response", fmt.Sprint(tb))
 		}
@@ -56,23 +72,20 @@ func Test_ConnSticky(t *testing.T) {
 	defer cancel()
 	ctx = client.StickyContext(ctx)
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatal("add connections err", err)
 	}
 
 	doReq := func(expErr error) {
 		var resp tl.Serializable
-		err := client.QueryLiteserver(ctx, ton.GetMasterchainInf{}, &resp)
+		err := client.QueryLiteserver(ctx, GetMasterchainInf{}, &resp)
 		if err != nil {
 			t.Fatal("do err", err)
 		}
 
 		switch tb := resp.(type) {
-		case ton.MasterchainInfo:
-			if tb.Last.Workchain != -1 || tb.Last.Shard != -9223372036854775808 {
-				t.Fatal("data err", *tb.Last)
-			}
+		case MasterchainInfo:
 		default:
 			t.Fatal("bad response", fmt.Sprint(tb))
 		}

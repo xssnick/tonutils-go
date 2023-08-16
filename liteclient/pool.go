@@ -16,6 +16,7 @@ import (
 )
 
 const _StickyCtxKey = "_ton_node_sticky"
+const _StickyCtxUsedNodesKey = "_ton_used_nodes_sticky"
 
 type OnDisconnectCallback func(addr, key string)
 
@@ -40,6 +41,9 @@ type ConnectionPool struct {
 	roundRobinOffset uint64
 
 	authKey ed25519.PrivateKey
+
+	globalCtx context.Context
+	stop      func()
 }
 
 var ErrNoActiveConnections = errors.New("no active connections")
@@ -52,6 +56,7 @@ func NewConnectionPool() *ConnectionPool {
 
 	// default reconnect policy
 	c.SetOnDisconnect(c.DefaultReconnect(3*time.Second, -1))
+	c.globalCtx, c.stop = context.WithCancel(context.Background())
 
 	return c
 }
@@ -89,9 +94,48 @@ func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, _StickyCtxKey, id)
 }
 
+func (c *ConnectionPool) StickyContextNextNode(ctx context.Context) (context.Context, error) {
+	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
+	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
+	if nodeID > 0 {
+		usedNodes = append(usedNodes, nodeID)
+	}
+
+	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
+iter:
+	for _, node := range c.activeNodes {
+		for _, usedNode := range usedNodes {
+			if usedNode == node.id {
+				continue iter
+			}
+		}
+
+		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, node.id), _StickyCtxUsedNodesKey, usedNodes), nil
+	}
+
+	return ctx, fmt.Errorf("no more active nodes left")
+}
+
+func (c *ConnectionPool) StickyContextWithNodeID(ctx context.Context, nodeId uint32) context.Context {
+	return context.WithValue(ctx, _StickyCtxKey, nodeId)
+}
+
 func (c *ConnectionPool) StickyNodeID(ctx context.Context) uint32 {
 	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
 	return nodeID
+}
+
+func (c *ConnectionPool) Stop() {
+	c.stop()
+
+	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
+	for _, node := range c.activeNodes {
+		_ = node.tcp.Close()
+	}
 }
 
 // QueryLiteserver - sends request to liteserver

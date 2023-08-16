@@ -18,6 +18,7 @@ const _V3R2CodeHex = "B5EE9C724101010100710000DEFF0020DD2082014C97BA218201339CBA
 
 type SpecV3 struct {
 	SpecRegular
+	SpecSeqno
 }
 
 func (s *SpecV3) BuildMessage(ctx context.Context, isInitialized bool, block *ton.BlockIDExt, messages []*Message) (*cell.Cell, error) {
@@ -27,17 +28,21 @@ func (s *SpecV3) BuildMessage(ctx context.Context, isInitialized bool, block *to
 
 	var seq uint64
 
-	if isInitialized {
-		resp, err := s.wallet.api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, s.wallet.addr, "seqno")
-		if err != nil {
-			return nil, fmt.Errorf("get seqno err: %w", err)
-		}
+	if s.customSeqnoFetcher != nil {
+		seq = uint64(s.customSeqnoFetcher())
+	} else {
+		if isInitialized {
+			resp, err := s.wallet.api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, s.wallet.addr, "seqno")
+			if err != nil {
+				return nil, fmt.Errorf("get seqno err: %w", err)
+			}
 
-		iSeq, err := resp.Int(0)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse seqno: %w", err)
+			iSeq, err := resp.Int(0)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse seqno: %w", err)
+			}
+			seq = iSeq.Uint64()
 		}
-		seq = iSeq.Uint64()
 	}
 
 	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).

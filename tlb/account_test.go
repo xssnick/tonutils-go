@@ -40,8 +40,8 @@ func TestAccountState_LoadFromCell(t *testing.T) {
 		return
 	}
 
-	if as.Balance.NanoTON().Uint64() != 31011747 {
-		t.Fatal("balance not eq", as.Balance.NanoTON().String())
+	if as.Balance.Nano().Uint64() != 31011747 {
+		t.Fatal("balance not eq", as.Balance.Nano().String())
 		return
 	}
 

@@ -1,11 +1,16 @@
 package ton
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
+	"log"
+	"reflect"
 	"time"
+
+	"github.com/xssnick/tonutils-go/tl"
 
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -30,6 +35,55 @@ func init() {
 	tl.Register(True{}, "true = True")
 	tl.Register(TransactionID3{}, "liteServer.transactionId3 account:int256 lt:long = liteServer.TransactionId3")
 	tl.Register(TransactionID{}, "liteServer.transactionId mode:# account:mode.0?int256 lt:mode.1?long hash:mode.2?int256 = liteServer.TransactionId")
+
+	tl.Register(GetBlockProof{}, "liteServer.getBlockProof mode:# known_block:tonNode.blockIdExt target_block:mode.0?tonNode.blockIdExt = liteServer.PartialBlockProof")
+	tl.Register(PartialBlockProof{}, "liteServer.partialBlockProof complete:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt steps:(vector liteServer.BlockLink) = liteServer.PartialBlockProof")
+	tl.Register(BlockLinkBackward{}, "liteServer.blockLinkBack to_key_block:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt dest_proof:bytes proof:bytes state_proof:bytes = liteServer.BlockLink")
+	tl.Register(BlockLinkForward{}, "liteServer.blockLinkForward to_key_block:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt dest_proof:bytes config_proof:bytes signatures:liteServer.SignatureSet = liteServer.BlockLink")
+	tl.Register(SignatureSet{}, "liteServer.signatureSet validator_set_hash:int catchain_seqno:int signatures:(vector liteServer.signature) = liteServer.SignatureSet")
+	tl.Register(Signature{}, "liteServer.signature node_id_short:int256 signature:bytes = liteServer.Signature")
+	tl.Register(BlockID{}, "ton.blockId root_cell_hash:int256 file_hash:int256 = ton.BlockId")
+}
+
+type BlockID struct {
+	RootHash []byte `tl:"int256"`
+	FileHash []byte `tl:"int256"`
+}
+
+type PartialBlockProof struct {
+	Complete bool        `tl:"bool"`
+	From     *BlockIDExt `tl:"struct"`
+	To       *BlockIDExt `tl:"struct"`
+	Steps    []any       `tl:"vector struct boxed [liteServer.blockLinkForward, liteServer.blockLinkBack]"`
+}
+
+type BlockLinkBackward struct {
+	ToKeyBlock bool        `tl:"bool"`
+	From       *BlockIDExt `tl:"struct"`
+	To         *BlockIDExt `tl:"struct"`
+	DestProof  []byte      `tl:"bytes"`
+	Proof      []byte      `tl:"bytes"`
+	StateProof []byte      `tl:"bytes"`
+}
+
+type BlockLinkForward struct {
+	ToKeyBlock   bool          `tl:"bool"`
+	From         *BlockIDExt   `tl:"struct"`
+	To           *BlockIDExt   `tl:"struct"`
+	DestProof    []byte        `tl:"bytes"`
+	ConfigProof  []byte        `tl:"bytes"`
+	SignatureSet *SignatureSet `tl:"struct boxed"`
+}
+
+type SignatureSet struct {
+	ValidatorSetHash int32       `tl:"int"`
+	CatchainSeqno    int32       `tl:"int"`
+	Signatures       []Signature `tl:"vector struct"`
+}
+
+type Signature struct {
+	NodeIDShort []byte `tl:"int256"`
+	Signature   []byte `tl:"bytes"`
 }
 
 type Object struct{}
@@ -59,7 +113,7 @@ type ZeroStateIDExt struct {
 type AllShardsInfo struct {
 	ID    *BlockIDExt `tl:"struct"`
 	Proof []byte      `tl:"bytes"`
-	Data  []byte      `tl:"bytes"`
+	Data  *cell.Cell  `tl:"cell"`
 }
 
 type BlockTransactions struct {
@@ -72,7 +126,7 @@ type BlockTransactions struct {
 
 type BlockData struct {
 	ID      *BlockIDExt `tl:"struct"`
-	Payload []byte      `tl:"bytes"`
+	Payload *cell.Cell  `tl:"cell"`
 }
 
 type LookupBlock struct {
@@ -104,14 +158,20 @@ type ListBlockTransactions struct {
 	Mode         uint32          `tl:"flags"`
 	Count        uint32          `tl:"int"`
 	After        *TransactionID3 `tl:"?7 struct"`
-	ReverseOrder *True           `tl:"?6 struct boxed"`
-	WantProof    *True           `tl:"?5 struct boxed"`
+	ReverseOrder *True           `tl:"?6 struct"`
+	WantProof    *True           `tl:"?5 struct"`
 }
 
 type TransactionShortInfo struct {
 	Account []byte
 	LT      uint64
 	Hash    []byte
+}
+
+type GetBlockProof struct {
+	Mode        uint32      `tl:"flags"`
+	KnownBlock  *BlockIDExt `tl:"struct"`
+	TargetBlock *BlockIDExt `tl:"?0 struct"`
 }
 
 func (t *TransactionShortInfo) ID3() *TransactionID3 {
@@ -146,21 +206,18 @@ func (c *APIClient) Client() LiteClient {
 
 // CurrentMasterchainInfo - cached version of GetMasterchainInfo to not do it in parallel many times
 func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, err error) {
-	if c.parent != nil {
-		// this method should be called at top level, to share curMasters and lock.
-		return c.parent.CurrentMasterchainInfo(ctx)
-	}
+	root := c.root() // this method should use root level props, to share curMasters and lock.
 
 	// if not sticky - id will be 0
 	nodeID := c.client.StickyNodeID(ctx)
 
-	c.curMastersLock.RLock()
-	master := c.curMasters[nodeID]
+	root.curMastersLock.RLock()
+	master := root.curMasters[nodeID]
 	if master == nil {
 		master = &masterInfo{}
-		c.curMasters[nodeID] = master
+		root.curMasters[nodeID] = master
 	}
-	c.curMastersLock.RUnlock()
+	root.curMastersLock.RUnlock()
 
 	master.mx.Lock()
 	defer master.mx.Unlock()
@@ -171,12 +228,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, 
 		var block *BlockIDExt
 		block, err = c.GetMasterchainInfo(ctx)
 		if err != nil {
-			return nil, err
-		}
-
-		block, err = c.waitMasterBlock(ctx, block.SeqNo)
-		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get masterchain info error (%s): %w", reflect.TypeOf(c.client).String(), err)
 		}
 
 		master.updatedAt = time.Now()
@@ -196,6 +248,28 @@ func (c *APIClient) GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
 
 	switch t := resp.(type) {
 	case MasterchainInfo:
+		if c.proofCheckPolicy == ProofCheckPolicySecure {
+			root := c.root()
+			root.trustedLock.Lock()
+			defer root.trustedLock.Unlock()
+
+			if root.trustedBlock == nil {
+				if root.trustedBlock == nil {
+					// we have no block to trust, so trust first block we get
+					root.trustedBlock = t.Last.Copy()
+					log.Println("[WARNING] trusted block was not set on initialization, so first block we got was considered as trusted. " +
+						"For better security you should use SetTrustedBlock(block) method and pass there init block from config on start")
+				}
+			} else {
+				if err := c.VerifyProofChain(ctx, root.trustedBlock, t.Last); err != nil {
+					return nil, fmt.Errorf("failed to verify proof chain: %w", err)
+				}
+
+				if t.Last.SeqNo > root.trustedBlock.SeqNo {
+					root.trustedBlock = t.Last.Copy()
+				}
+			}
+		}
 		return t.Last, nil
 	case LSError:
 		return nil, t
@@ -241,13 +315,12 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 
 	switch t := resp.(type) {
 	case BlockData:
-		cl, err := cell.FromBOC(t.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse block boc: %w", err)
+		if !bytes.Equal(t.Payload.Hash(), block.RootHash) {
+			return nil, fmt.Errorf("incorrect block")
 		}
 
 		var bData tlb.Block
-		if err = tlb.LoadFromCell(&bData, cl.BeginParse()); err != nil {
+		if err = tlb.LoadFromCell(&bData, t.Payload.BeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to parse block data: %w", err)
 		}
 		return &bData, nil
@@ -255,32 +328,6 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
-}
-
-// GetBlockTransactions - list of block transactions
-// Deprecated: Will be removed in the next release, use GetBlockTransactionsV2
-func (c *APIClient) GetBlockTransactions(ctx context.Context, block *BlockIDExt, count uint32, after ...*tlb.TransactionID) ([]*tlb.TransactionID, bool, error) {
-	var id3 *TransactionID3
-	if len(after) > 0 && after[0] != nil {
-		id3 = &TransactionID3{
-			Account: after[0].AccountID,
-			LT:      after[0].LT,
-		}
-	}
-
-	list, more, err := c.GetBlockTransactionsV2(ctx, block, count, id3)
-	if err != nil {
-		return nil, false, err
-	}
-	oldList := make([]*tlb.TransactionID, 0, len(list))
-	for _, item := range list {
-		oldList = append(oldList, &tlb.TransactionID{
-			LT:        item.LT,
-			Hash:      item.Hash,
-			AccountID: item.Account,
-		})
-	}
-	return oldList, more, nil
 }
 
 // GetBlockTransactionsV2 - list of block transactions
@@ -292,12 +339,18 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 		withAfter = 1
 	}
 
+	mode := 0b111 | (withAfter << 7)
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+		mode |= 1 << 5
+	}
+
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, ListBlockTransactions{
-		Mode:  0b111 | (withAfter << 7),
-		ID:    block,
-		Count: count,
-		After: afterTx,
+		Mode:      mode,
+		ID:        block,
+		Count:     count,
+		After:     afterTx,
+		WantProof: &True{},
 	}, &resp)
 	if err != nil {
 		return nil, false, err
@@ -305,11 +358,37 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 
 	switch t := resp.(type) {
 	case BlockTransactions:
+		var shardAccounts tlb.ShardAccountBlocks
+
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			proof, err := cell.FromBOC(t.Proof)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to parse proof boc: %w", err)
+			}
+
+			blockProof, err := CheckBlockProof(proof, block.RootHash)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to check block proof: %w", err)
+			}
+
+			err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse())
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to load shard accounts from proof: %w", err)
+			}
+		}
+
 		txIds := make([]TransactionShortInfo, 0, len(t.TransactionIds))
 		for _, id := range t.TransactionIds {
 			if id.LT == 0 || id.Hash == nil || id.Account == nil {
 				return nil, false, fmt.Errorf("invalid ls response, fields are nil")
 			}
+
+			if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+				if err = CheckTransactionProof(id.Hash, id.LT, id.Account, &shardAccounts); err != nil {
+					return nil, false, fmt.Errorf("incorrect tx %s proof: %w", hex.EncodeToString(id.Hash), err)
+				}
+			}
+
 			txIds = append(txIds, TransactionShortInfo{
 				Account: id.Account,
 				LT:      id.LT,
@@ -333,37 +412,86 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 
 	switch t := resp.(type) {
 	case AllShardsInfo:
-		c, err := cell.FromBOC(t.Data)
-		if err != nil {
-			return nil, err
-		}
-
 		var inf tlb.AllShardsInfo
-		err = tlb.LoadFromCell(&inf, c.BeginParse())
+		err = tlb.LoadFromCell(&inf, t.Data.BeginParse())
 		if err != nil {
 			return nil, err
 		}
 
-		var shards []*BlockIDExt
-
-		for _, kv := range inf.ShardHashes.All() {
-			workchain, err := kv.Key.BeginParse().LoadInt(32)
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			proof, err := cell.FromBOCMultiRoot(t.Proof)
 			if err != nil {
-				return nil, fmt.Errorf("load workchain err: %w", err)
+				return nil, fmt.Errorf("failed to parse proof boc: %w", err)
 			}
 
-			var binTree tlb.BinTree
-			err = binTree.LoadFromCell(kv.Value.BeginParse().MustLoadRef())
+			shardState, err := CheckBlockShardStateProof(proof, master.RootHash)
 			if err != nil {
-				return nil, fmt.Errorf("load BinTree err: %w", err)
+				return nil, fmt.Errorf("failed to check proof: %w", err)
 			}
 
-			for _, bk := range binTree.All() {
+			mcShort := shardState.McStateExtra.BeginParse()
+			if v, err := mcShort.LoadUInt(16); err != nil || v != 0xcc26 {
+				return nil, fmt.Errorf("invalic mc extra in proof")
+			}
+
+			dictProof, err := mcShort.LoadMaybeRef()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load dict proof: %w", err)
+			}
+
+			if dictProof == nil && inf.ShardHashes.Size() == 0 {
+				return []*BlockIDExt{}, nil
+			}
+
+			if (dictProof == nil) != (inf.ShardHashes.Size() == 0) ||
+				!bytes.Equal(dictProof.MustToCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
+				return nil, fmt.Errorf("incorrect proof")
+			}
+		}
+
+		return LoadShardsFromHashes(inf.ShardHashes)
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
+}
+
+func LoadShardsFromHashes(shardHashes *cell.Dictionary) (shards []*BlockIDExt, err error) {
+	if shardHashes == nil {
+		return []*BlockIDExt{}, nil
+	}
+
+	for _, kv := range shardHashes.All() {
+		workchain, err := kv.Key.BeginParse().LoadInt(32)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load workchain: %w", err)
+		}
+
+		binTreeRef, err := kv.Value.BeginParse().LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load bin tree ref: %w", err)
+		}
+
+		var binTree tlb.BinTree
+		err = binTree.LoadFromCell(binTreeRef)
+		if err != nil {
+			return nil, fmt.Errorf("load BinTree err: %w", err)
+		}
+
+		for _, bk := range binTree.All() {
+			loader := bk.Value.BeginParse()
+
+			ab, err := loader.LoadUInt(4)
+			if err != nil {
+				return nil, fmt.Errorf("load ShardDesc magic err: %w", err)
+			}
+
+			switch ab {
+			case 0xa:
 				var shardDesc tlb.ShardDesc
-				if err = tlb.LoadFromCell(&shardDesc, bk.Value.BeginParse()); err != nil {
+				if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
 					return nil, fmt.Errorf("load ShardDesc err: %w", err)
 				}
-
 				shards = append(shards, &BlockIDExt{
 					Workchain: int32(workchain),
 					Shard:     shardDesc.NextValidatorShard,
@@ -371,76 +499,43 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 					RootHash:  shardDesc.RootHash,
 					FileHash:  shardDesc.FileHash,
 				})
+			case 0xb:
+				var shardDesc tlb.ShardDescB
+				if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
+					return nil, fmt.Errorf("load ShardDescB err: %w", err)
+				}
+				shards = append(shards, &BlockIDExt{
+					Workchain: int32(workchain),
+					Shard:     shardDesc.NextValidatorShard,
+					SeqNo:     shardDesc.SeqNo,
+					RootHash:  shardDesc.RootHash,
+					FileHash:  shardDesc.FileHash,
+				})
+			default:
+				return nil, fmt.Errorf("wrong ShardDesc magic: %x", ab)
 			}
 		}
-
-		return shards, nil
-	case LSError:
-		return nil, t
 	}
-	return nil, errUnexpectedResponse(resp)
+	return
 }
 
-// WaitNextMasterBlock - wait for the next block of master chain
-func (c *APIClient) waitMasterBlock(ctx context.Context, seqno uint32) (*BlockIDExt, error) {
-	var timeout = 10 * time.Second
-
-	deadline, ok := ctx.Deadline()
-	if ok {
-		t := deadline.Sub(time.Now())
-		if t < timeout {
-			timeout = t
-		}
-	}
-
-	prefix, err := tl.Serialize(WaitMasterchainSeqno{
-		Seqno:   int32(seqno),
-		Timeout: int32(timeout / time.Millisecond),
-	}, true)
-	if err != nil {
-		return nil, err
-	}
-
-	suffix, err := tl.Serialize(GetMasterchainInf{}, true)
-	if err != nil {
-		return nil, err
-	}
-
+// GetBlockProof - gets proof chain for the block
+func (c *APIClient) GetBlockProof(ctx context.Context, known, target *BlockIDExt) (*PartialBlockProof, error) {
 	var resp tl.Serializable
-	err = c.client.QueryLiteserver(ctx, tl.Raw(append(prefix, suffix...)), &resp)
+	err := c.client.QueryLiteserver(ctx, GetBlockProof{
+		Mode:        1,
+		KnownBlock:  known,
+		TargetBlock: target,
+	}, &resp)
 	if err != nil {
 		return nil, err
 	}
 
 	switch t := resp.(type) {
-	case MasterchainInfo:
-		return t.Last, nil
+	case PartialBlockProof:
+		return &t, nil
 	case LSError:
-		if t.Code == 652 {
-			return nil, ErrNoNewBlocks
-		}
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
-}
-
-// Deprecated: use APIClient.WaitForBlock as method prefix
-func (c *APIClient) WaitNextMasterBlock(ctx context.Context, master *BlockIDExt) (*BlockIDExt, error) {
-	if c.parent != nil {
-		// this method should be called at top level, because wrapper already have this logic.
-		return c.parent.WaitNextMasterBlock(ctx, master)
-	}
-
-	if master.Workchain != -1 {
-		return nil, errors.New("not a master block passed")
-	}
-
-	ctx = c.client.StickyContext(ctx)
-
-	m, err := c.waitMasterBlock(ctx, master.SeqNo+1)
-	if err != nil {
-		return nil, err
-	}
-
-	return m, nil
 }

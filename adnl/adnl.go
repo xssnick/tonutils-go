@@ -98,9 +98,9 @@ func initADNL(key ed25519.PrivateKey) *ADNL {
 }
 
 func (a *ADNL) Close() {
-	a.mx.Lock()
-	defer a.mx.Unlock()
+	trigger := false
 
+	a.mx.Lock()
 	if !a.closed {
 		a.closed = true
 
@@ -111,10 +111,13 @@ func (a *ADNL) Close() {
 			con.Close()
 		}
 
-		if a.onDisconnect != nil {
-			// do it async to not get accidental deadlock
-			go a.onDisconnect(a.addr, a.peerKey)
-		}
+		trigger = true
+	}
+	a.mx.Unlock()
+
+	disc := a.onDisconnect
+	if trigger && disc != nil {
+		disc(a.addr, a.peerKey)
 	}
 }
 
@@ -159,6 +162,11 @@ func (a *ADNL) processPacket(packet *PacketContent, ch *Channel) (err error) {
 	}
 
 	if packet.ReinitDate != nil && *packet.ReinitDate > a.dstReinit {
+		// reset their seqno even if it is lower,
+		// because other side could lose counter
+		a.confirmSeqno = seqno
+		a.loss = 0
+
 		// a.dstReinit = *packet.ReinitDate
 		// a.seqno = 0
 		//	a.channel = nil
@@ -361,7 +369,7 @@ func (a *ADNL) processAnswer(id string, query any) {
 			res <- query
 		}
 	} else {
-		Logger("unknown response with id", id, a.addr, reflect.TypeOf(query).String())
+		// Logger("unknown response with id", id, a.addr, reflect.TypeOf(query).String())
 	}
 }
 
@@ -397,23 +405,26 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 	a.activeQueries[reqID] = res
 	a.mx.Unlock()
 
-	if err = a.sendRequestMaySplit(ctx, ch, q); err != nil {
-		a.mx.Lock()
-		delete(a.activeQueries, reqID)
-		a.mx.Unlock()
+	for {
+		if err = a.sendRequestMaySplit(ctx, ch, q); err != nil {
+			a.mx.Lock()
+			delete(a.activeQueries, reqID)
+			a.mx.Unlock()
 
-		return fmt.Errorf("request failed: %w", err)
-	}
-
-	select {
-	case resp := <-res:
-		if err, ok := resp.(error); ok {
-			return err
+			return fmt.Errorf("request failed: %w", err)
 		}
-		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp))
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("deadline exceeded, addr %s %s, err: %w", a.addr, hex.EncodeToString(a.peerKey), ctx.Err())
+
+		select {
+		case resp := <-res:
+			if err, ok := resp.(error); ok {
+				return err
+			}
+			reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp))
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("deadline exceeded, addr %s %s, err: %w", a.addr, hex.EncodeToString(a.peerKey), ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 }
 

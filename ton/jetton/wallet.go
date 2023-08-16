@@ -3,6 +3,7 @@ package jetton
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"math/rand"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -39,29 +40,29 @@ func (c *WalletClient) Address() *address.Address {
 	return c.addr
 }
 
-func (c *WalletClient) GetBalance(ctx context.Context) (tlb.Coins, error) {
+func (c *WalletClient) GetBalance(ctx context.Context) (*big.Int, error) {
 	b, err := c.master.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
-		return tlb.Coins{}, fmt.Errorf("failed to get masterchain info: %w", err)
+		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
 	return c.GetBalanceAtBlock(ctx, b)
 }
 
-func (c *WalletClient) GetBalanceAtBlock(ctx context.Context, b *ton.BlockIDExt) (tlb.Coins, error) {
+func (c *WalletClient) GetBalanceAtBlock(ctx context.Context, b *ton.BlockIDExt) (*big.Int, error) {
 	res, err := c.master.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_wallet_data")
 	if err != nil {
 		if cErr, ok := err.(ton.ContractExecError); ok && cErr.Code == ton.ErrCodeContractNotInitialized {
-			return tlb.Coins{}, nil
+			return big.NewInt(0), nil
 		}
-		return tlb.Coins{}, fmt.Errorf("failed to run get_wallet_data method: %w", err)
+		return nil, fmt.Errorf("failed to run get_wallet_data method: %w", err)
 	}
 
 	balance, err := res.Int(0)
 	if err != nil {
-		return tlb.Coins{}, fmt.Errorf("failed to parse balance: %w", err)
+		return nil, fmt.Errorf("failed to parse balance: %w", err)
 	}
 
-	return tlb.FromNanoTON(balance), nil
+	return balance, nil
 }
 
 func (c *WalletClient) BuildTransferPayload(to *address.Address, amountCoins, amountForwardTON tlb.Coins, payloadForward *cell.Cell) (*cell.Cell, error) {

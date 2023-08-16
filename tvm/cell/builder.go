@@ -372,7 +372,7 @@ func (b *Builder) StoreBinarySnake(data []byte) error {
 		return c, nil
 	}
 
-	snake, err := f(127 - 4)
+	snake, err := f(int(b.BitsLeft() / 8))
 	if err != nil {
 		return err
 	}

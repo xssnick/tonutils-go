@@ -3,15 +3,15 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/crypto/ed25519"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -28,7 +28,7 @@ type MockAPI struct {
 	extMsgSent *tlb.ExternalMessage
 }
 
-func (m MockAPI) WaitForBlock(seqno uint32) ton.APIClientWaiter {
+func (m MockAPI) WaitForBlock(seqno uint32) ton.APIClientWrapped {
 	return &WaiterMock{
 		MGetMasterchainInfo:  m.getBlockInfo,
 		MGetAccount:          m.getAccount,
@@ -459,6 +459,52 @@ type WaiterMock struct {
 	MRunGetMethod           func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	MListTransactions       func(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	MGetTransaction         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
+	MWaitForBlock           func(seqno uint32) ton.APIClientWrapped
+	MWithRetry              func(x ...int) ton.APIClientWrapped
+	MCurrentMasterchainInfo func(ctx context.Context) (_ *ton.BlockIDExt, err error)
+	MGetBlockProof          func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
+}
+
+func (w WaiterMock) SetTrustedBlock(block *ton.BlockIDExt) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) VerifyProofChain(ctx context.Context, from, to *ton.BlockIDExt) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) Client() ton.LiteClient {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error) {
+	return w.MCurrentMasterchainInfo(ctx)
+}
+
+func (w WaiterMock) WaitForBlock(seqno uint32) ton.APIClientWrapped {
+	return w.MWaitForBlock(seqno)
+}
+
+func (w WaiterMock) WithRetry(x ...int) ton.APIClientWrapped {
+	return w.MWithRetry(x...)
+}
+
+func (w WaiterMock) GetBlockProof(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error) {
+	return w.MGetBlockProof(ctx, known, target)
+
 }
 
 func (w WaiterMock) GetTime(ctx context.Context) (uint32, error) {
@@ -507,4 +553,42 @@ func (w WaiterMock) ListTransactions(ctx context.Context, addr *address.Address,
 
 func (w WaiterMock) GetTransaction(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error) {
 	return w.MGetTransaction(ctx, block, addr, lt)
+}
+
+func TestCreateEncryptedCommentCell(t *testing.T) {
+	pub1, priv1, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	pub2, priv2, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	msg := randString(200)
+	sender := address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA")
+
+	c, err := CreateEncryptedCommentCell(msg, sender, priv1, pub2)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	data, err := DecryptCommentCell(c, address.MustParseAddr("EQDnYZIpTwo9RN_84KZX3qIkLVIUJSo8d1yz1vMlKAp2uRtK"), priv2, pub1)
+	if err == nil || err.Error() != "incorrect msg key" {
+		t.Fatal("should be error incorrect msg key, but it is:", err)
+		return
+	}
+
+	data, err = DecryptCommentCell(c, sender, priv2, pub1)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+
+	if string(data) != msg {
+		t.Fatal("incorrect result")
+	}
 }

@@ -63,7 +63,7 @@ You can also join our **[Telegram group](https://t.me/tonutils)** and ask any qu
 
 ### Connection
 You can get list of public lite servers from official TON configs:
-* Mainnet - `https://ton-blockchain.github.io/global.config.json`
+* Mainnet - `https://ton.org/global.config.json`
 * Testnet - `https://ton-blockchain.github.io/testnet-global.config.json`
 
 from liteservers section, you need to convert int to ip and take port and key.
@@ -108,7 +108,7 @@ if err != nil {
     panic(err)
 }
 
-if balance.NanoTON().Uint64() >= 3000000 {
+if balance.Nano().Uint64() >= 3000000 {
     addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
     err = w.Transfer(context.Background(), addr, tlb.MustFromTON("0.003"), "Hey bro, happy birthday!")
     if err != nil {
@@ -203,7 +203,7 @@ if err != nil {
 // Balance: ACTIVE
 fmt.Printf("Status: %s\n", account.State.Status)
 // Balance: 66559946.09 TON
-fmt.Printf("Balance: %s TON\n", account.State.Balance.TON())
+fmt.Printf("Balance: %s TON\n", account.State.Balance.String())
 if account.Data != nil { // Can be nil if account is not active
     // Data: [0000003829a9a31772c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff]
     fmt.Printf("Data: %s\n", account.Data.Dump())
@@ -478,9 +478,10 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Overlays
 * ✅ TL Parser/Serializer
 * ✅ TL-B Parser/Serializer
+* ✅ Payment channels
+* ✅ Liteserver proofs automatic validation
 * DHT Server
-* Payment channels
-* Merkle proofs automatic validation
+* TVM
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue

@@ -23,7 +23,7 @@ func main() {
 		return
 	}
 
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
@@ -56,7 +56,7 @@ func main() {
 		"EQBLS8WneoKVGrwq2MO786J6ruQNiv62NXr8Ko_l5Ttondoc": "0.003",
 	}
 
-	if balance.NanoTON().Uint64() >= 3000000 {
+	if balance.Nano().Uint64() >= 3000000 {
 		// create comment cell to send in body of each message
 		comment, err := wallet.CreateCommentCell("Hello from tonutils-go!")
 		if err != nil {
@@ -92,5 +92,5 @@ func main() {
 		return
 	}
 
-	log.Println("not enough balance:", balance.TON())
+	log.Println("not enough balance:", balance.String())
 }

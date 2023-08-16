@@ -30,13 +30,21 @@ func (c *Slice) MustLoadRef() *Slice {
 }
 
 func (c *Slice) LoadRef() (*Slice, error) {
+	ref, err := c.LoadRefCell()
+	if err != nil {
+		return nil, err
+	}
+	return ref.BeginParse(), nil
+}
+
+func (c *Slice) LoadRefCell() (*Cell, error) {
 	if len(c.refs) == 0 {
 		return nil, ErrNoMoreRefs
 	}
 	ref := c.refs[0]
 	c.refs = c.refs[1:]
 
-	return ref.BeginParse(), nil
+	return ref, nil
 }
 
 func (c *Slice) MustLoadMaybeRef() *Slice {
