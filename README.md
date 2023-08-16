@@ -21,21 +21,24 @@ If you love this library and want to support its development you can donate any 
 ### How to use
 - [Connection](#Connection)
 - [Wallet](#Wallet)
+  - [Example](https://github.com/xssnick/tonutils-go/blob/master/example/wallet/main.go)
   - [Create](#Wallet)
   - [Transfer](#Wallet)
   - [Balance](#Wallet)
   - [Transfer to many](https://github.com/xssnick/tonutils-go/blob/master/example/highload-wallet/main.go)
   - [Send message to contract](https://github.com/xssnick/tonutils-go/blob/master/example/send-to-contract/main.go)
+  - [Build transaction and send from other place](https://github.com/xssnick/tonutils-go/blob/master/example/wallet-cold-alike/main.go#L61)
 - [Accounts](#Account-info-and-transactions)
   - [List transactions](#Account-info-and-transactions)
   - [Get balance](https://github.com/xssnick/tonutils-go/blob/master/example/account-state/main.go)
+  - [Subscribe on transactions](https://github.com/xssnick/tonutils-go/blob/master/example/accept-payments/main.go)
 - [NFT](#NFT)
   - [Details](#NFT)
   - [Mint](https://github.com/xssnick/tonutils-go/blob/master/example/nft-mint/main.go#L42)
   - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/integration_test.go#L89)
 - [Jettons](#Jettons)
   - [Details](#Jettons)
-  - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/example/jettons/main.go#L56)
+  - [Transfer](https://github.com/xssnick/tonutils-go/blob/master/example/jetton-transfer/main.go)
 - [DNS](#DNS)
   - [Resolve](#DNS)
   - [Get records](#Records)
@@ -80,6 +83,7 @@ if err != nil {
     panic(err)
 }
 api := ton.NewAPIClient(client)
+api = api.WithRetry() // if you want automatic retries with failover to another node
 ```
 
 Since `client` implements connection pool, it can be the chance that some block is not yet applied on one of the nodes, so it can lead to errors.
