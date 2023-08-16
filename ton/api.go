@@ -20,7 +20,7 @@ type ProofCheckPolicy int
 
 const (
 	ProofCheckPolicyUnsafe ProofCheckPolicy = iota
-	ProofCheckPolicyFastWithoutMasterBlockChecks
+	ProofCheckPolicyFast                    // Without master block checks
 	ProofCheckPolicySecure
 )
 
@@ -90,7 +90,7 @@ type masterInfo struct {
 }
 
 func NewAPIClient(client LiteClient, proofCheckPolicy ...ProofCheckPolicy) *APIClient {
-	policy := ProofCheckPolicyFastWithoutMasterBlockChecks
+	policy := ProofCheckPolicyFast
 	if len(proofCheckPolicy) > 0 {
 		policy = proofCheckPolicy[0]
 	}

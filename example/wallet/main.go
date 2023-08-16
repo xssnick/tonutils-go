@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"log"
 	"strings"
 
@@ -15,14 +16,24 @@ import (
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	// connect to mainnet lite server
-	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	// get config
+	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton.org/global.config.json")
+	if err != nil {
+		log.Fatalln("get config err: ", err.Error())
+		return
+	}
+
+	// connect to mainnet lite servers
+	err = client.AddConnectionsFromConfig(context.Background(), cfg)
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
 	}
 
-	api := ton.NewAPIClient(client)
+	// api client with full proof checks
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicySecure).WithRetry()
+	api.SetTrustedBlockFromConfig(cfg)
+
 	// bound all requests to single ton node
 	ctx := client.StickyContext(context.Background())
 
@@ -37,11 +48,13 @@ func main() {
 
 	log.Println("wallet address:", w.Address())
 
-	block, err := api.CurrentMasterchainInfo(ctx)
+	log.Println("fetching and checking proofs since config init block, it may take near a minute...")
+	block, err := api.CurrentMasterchainInfo(context.Background())
 	if err != nil {
-		log.Fatalln("CurrentMasterchainInfo err:", err.Error())
+		log.Fatalln("get masterchain info err: ", err.Error())
 		return
 	}
+	log.Println("master proof checks are completed successfully, now communication is 100% safe!")
 
 	balance, err := w.GetBalance(ctx, block)
 	if err != nil {
@@ -54,21 +67,19 @@ func main() {
 
 		log.Println("sending transaction and waiting for confirmation...")
 
-		// if destination wallet is not initialized you should use TransferNoBounce
-		// regular Transfer has bounce flag, and TONs may be returned.
+		// if destination wallet is not initialized (or you don't care)
+		// you should set bounce to true to not get money back
+		bounce := false
 
-		// err = w.TransferNoBounce(ctx, addr, tlb.MustFromTON("0.003"),
-		err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"),
-			"Hello from tonutils-go!", true)
+		transfer, err := w.BuildTransfer(addr, tlb.MustFromTON("0.003"), bounce, "Hello from tonutils-go!")
 		if err != nil {
 			log.Fatalln("Transfer err:", err.Error())
 			return
 		}
 
-		// update chain info
-		block, err = api.CurrentMasterchainInfo(ctx)
+		tx, block, err := w.SendWaitTransaction(ctx, transfer)
 		if err != nil {
-			log.Fatalln("CurrentMasterchainInfo err:", err.Error())
+			log.Fatalln("SendWaitTransaction err:", err.Error())
 			return
 		}
 
@@ -78,7 +89,8 @@ func main() {
 			return
 		}
 
-		log.Println("transaction sent, balance left:", balance.String())
+		log.Printf("transaction confirmed at block %d, hash: %s balance left: %s", block.SeqNo,
+			base64.StdEncoding.EncodeToString(tx.Hash), balance.String())
 
 		return
 	}

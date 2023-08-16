@@ -26,7 +26,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client).WithRetry()
 	w := getWallet(api)
 
 	log.Println("Deploy wallet:", w.Address().String())
@@ -43,7 +43,7 @@ func main() {
 	fmt.Println("Deployed contract addr:", addr.String())
 }
 
-func getWallet(api *ton.APIClient) *wallet.Wallet {
+func getWallet(api ton.APIClientWrapped) *wallet.Wallet {
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
 	w, err := wallet.FromSeed(api, words, wallet.V3)
 	if err != nil {

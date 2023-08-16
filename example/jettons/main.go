@@ -24,7 +24,7 @@ func main() {
 	ctx := client.StickyContext(context.Background())
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client).WithRetry()
 
 	tokenContract := address.MustParseAddr("EQBCFwW8uFUh-amdRmNY9NyeDEaeDYXd9ggJGsicpqVcHq7B")
 	master := jetton.NewJettonMasterClient(api, tokenContract)

@@ -25,7 +25,7 @@ func main() {
 		return
 	}
 
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client).WithRetry()
 
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
@@ -53,7 +53,7 @@ func main() {
 	if balance.Nano().Uint64() >= 3000000 {
 		// create transaction body cell, depends on what contract needs, just random example here
 		body := cell.BeginCell().
-			MustStoreUInt(0x123abc55, 32). // op code
+			MustStoreUInt(0x123abc55, 32).    // op code
 			MustStoreUInt(rand.Uint64(), 64). // query id
 			// payload:
 			MustStoreAddr(address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO")).

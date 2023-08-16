@@ -504,7 +504,7 @@ func CreateCommentCell(text string) (*cell.Cell, error) {
 
 const EncryptedCommentOpcode = 0x2167da4b
 
-func DecryptCommentCell(commentCell *cell.Cell, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) ([]byte, error) {
+func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) ([]byte, error) {
 	slc := commentCell.BeginParse()
 	op, err := slc.LoadUInt(32)
 	if err != nil {
@@ -560,6 +560,13 @@ func DecryptCommentCell(commentCell *cell.Cell, ourKey ed25519.PrivateKey, their
 	if data[0] > 31 {
 		return nil, fmt.Errorf("invalid prefix size")
 	}
+
+	h = hmac.New(sha512.New, []byte(sender.String()))
+	h.Write(data)
+	if !bytes.Equal(msgKey, h.Sum(nil)[:16]) {
+		return nil, fmt.Errorf("incorrect msg key")
+	}
+
 	return data[data[0]:], nil
 }
 
@@ -584,11 +591,6 @@ func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey
 	h := hmac.New(sha512.New, []byte(senderAddr.String()))
 	h.Write(data)
 	msgKey := h.Sum(nil)[:16]
-
-	/*	msgKey := make([]byte, 16)
-		if _, err = rand.Read(msgKey); err != nil {
-			return nil, fmt.Errorf("rand gen err: %w", err)
-		}*/
 
 	h = hmac.New(sha512.New, sharedKey)
 	h.Write(msgKey)

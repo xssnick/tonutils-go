@@ -32,7 +32,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client).WithRetry()
 
 	// we need fresh block info to run get methods
 	b, err := api.CurrentMasterchainInfo(context.Background())

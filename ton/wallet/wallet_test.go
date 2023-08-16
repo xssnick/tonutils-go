@@ -568,14 +568,21 @@ func TestCreateEncryptedCommentCell(t *testing.T) {
 	}
 
 	msg := randString(200)
+	sender := address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA")
 
-	c, err := CreateEncryptedCommentCell(msg, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"), priv1, pub2)
+	c, err := CreateEncryptedCommentCell(msg, sender, priv1, pub2)
 	if err != nil {
 		t.Fatal(err)
 		return
 	}
 
-	data, err := DecryptCommentCell(c, priv2, pub1)
+	data, err := DecryptCommentCell(c, address.MustParseAddr("EQDnYZIpTwo9RN_84KZX3qIkLVIUJSo8d1yz1vMlKAp2uRtK"), priv2, pub1)
+	if err == nil || err.Error() != "incorrect msg key" {
+		t.Fatal("should be error incorrect msg key, but it is:", err)
+		return
+	}
+
+	data, err = DecryptCommentCell(c, sender, priv2, pub1)
 	if err != nil {
 		t.Fatal(err)
 		return

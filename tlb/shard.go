@@ -39,29 +39,6 @@ type McStateExtra struct {
 	GlobalBalance CurrencyCollection `tlb:"."`
 }
 
-/*
-flags:(## 16) { flags <= 1 }
-     validator_info:ValidatorInfo
-     prev_blocks:OldMcBlocksInfo
-     after_key_block:Bool
-     last_key_block:(Maybe ExtBlkRef)
-     block_create_stats:(flags . 0)?BlockCreateStats
-
-validator_info$_
-  validator_list_hash_short:uint32
-  catchain_seqno:uint32
-  nx_cc_updated:Bool
-= ValidatorInfo;
-
-ext_blk_ref$_ end_lt:uint64
-  seq_no:uint32 root_hash:bits256 file_hash:bits256
-  = ExtBlkRef;
-
-_ key:Bool max_end_lt:uint64 = KeyMaxLt;
-_ key:Bool blk_ref:ExtBlkRef = KeyExtBlkRef;
-
-*/
-
 type KeyExtBlkRef struct {
 	IsKey  bool      `tlb:"bool"`
 	BlkRef ExtBlkRef `tlb:"."`
