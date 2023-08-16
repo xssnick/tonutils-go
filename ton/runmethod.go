@@ -60,9 +60,14 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 		return nil, fmt.Errorf("build stack err: %w", err)
 	}
 
+	mode := uint32(1 << 2)
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+		mode |= (1 << 1) | (1 << 0)
+	}
+
 	var resp tl.Serializable
 	err = c.client.QueryLiteserver(ctx, &RunSmcMethod{
-		Mode: 1 << 2, // with result
+		Mode: mode,
 		ID:   blockInfo,
 		Account: AccountID{
 			Workchain: addr.Workchain(),
@@ -83,13 +88,56 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			}
 		}
 
-		cl, err := cell.FromBOC(t.Result)
+		resCell, err := cell.FromBOC(t.Result)
 		if err != nil {
 			return nil, err
 		}
 
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			proof, err := cell.FromBOCMultiRoot(t.Proof)
+			if err != nil {
+				return nil, err
+			}
+
+			var shardProof []*cell.Cell
+			var shardHash []byte
+			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
+				if len(t.ShardProof) == 0 {
+					return nil, fmt.Errorf("liteserver has no proof for this account in a given block, request newer block or disable proof checks")
+				}
+
+				shardProof, err = cell.FromBOCMultiRoot(t.ShardProof)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse shard proof boc: %w", err)
+				}
+
+				if t.ShardBlock == nil || len(t.ShardBlock.RootHash) != 32 {
+					return nil, fmt.Errorf("shard block not passed")
+				}
+
+				shardHash = t.ShardBlock.RootHash
+			}
+
+			shardAcc, balanceInfo, err := CheckAccountStateProof(addr, blockInfo, proof, shardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			if err != nil {
+				return nil, fmt.Errorf("failed to check acc state proof: %w", err)
+			}
+			_, _ = shardAcc, balanceInfo
+
+			stateProofCell, err := cell.FromBOC(t.StateProof)
+			if err != nil {
+				return nil, err
+			}
+
+			_, err = cell.UnwrapProof(stateProofCell, shardAcc.Account.Hash(0))
+			if err != nil {
+				return nil, fmt.Errorf("failed to match state proof to state hash: %w", err)
+			}
+			// TODO: when tvm implementation ready - execute code and compare result
+		}
+
 		var resStack tlb.Stack
-		err = resStack.LoadFromCell(cl.BeginParse())
+		err = resStack.LoadFromCell(resCell.BeginParse())
 		if err != nil {
 			return nil, err
 		}

@@ -15,10 +15,10 @@ import (
 	"time"
 )
 
-var api = func() *ton.APIClient {
+var api = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
@@ -26,7 +26,7 @@ var api = func() *ton.APIClient {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
 func TestJettonMasterClient_GetJettonData(t *testing.T) {
@@ -68,7 +68,7 @@ func TestJettonMasterClient_GetWalletAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if b.String() != "22686.666348532" {
+	if tlb.MustFromNano(b, 9).String() != "22686.666348532" {
 		t.Fatal("balance diff:", b.String())
 	}
 }
@@ -136,18 +136,18 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if b.NanoTON().Uint64() == b2.NanoTON().Uint64() {
+	if b.Uint64() == b2.Uint64() {
 		t.Fatal("balance was not changed after burn")
 	}
 
-	want := b.NanoTON().Uint64() - amt.NanoTON().Uint64()*2
-	got := b2.NanoTON().Uint64()
+	want := b.Uint64() - amt.Nano().Uint64()*2
+	got := b2.Uint64()
 	if want != got {
 		t.Fatal("balance not expected, want ", want, "got", got)
 	}
 }
 
-func getWallet(api *ton.APIClient) *wallet.Wallet {
+func getWallet(api ton.APIClientWrapped) *wallet.Wallet {
 	words := strings.Split("cement secret mad fatal tip credit thank year toddler arrange good version melt truth embark debris execute answer please narrow fiber school achieve client", " ")
 	w, err := wallet.FromSeed(api, words, wallet.V3)
 	if err != nil {

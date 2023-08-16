@@ -3,15 +3,26 @@ package tlb
 import (
 	"fmt"
 	"math/big"
+	"reflect"
+	"strings"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-// Deprecated: use ton.TransactionShortInfo
-type TransactionID struct {
-	LT        uint64
-	Hash      []byte
-	AccountID []byte
+func init() {
+	Register(TransactionDescriptionOrdinary{})
+	Register(TransactionDescriptionTickTock{})
+	Register(TransactionDescriptionStorage{})
+	Register(TransactionDescriptionMergeInstall{})
+	Register(TransactionDescriptionMergePrepare{})
+	Register(TransactionDescriptionSplitInstall{})
+	Register(TransactionDescriptionSplitPrepare{})
+
+	Register(ComputePhaseVM{})
+	Register(ComputePhaseSkipped{})
+	Register(BouncePhaseNegFunds{})
+	Register(BouncePhaseOk{})
+	Register(BouncePhaseNoFunds{})
 }
 
 type AccStatusChangeType string
@@ -75,11 +86,11 @@ type ComputePhaseVM struct {
 }
 
 type ComputePhase struct {
-	Phase any `tlb:"."`
+	Phase any `tlb:"[ComputePhaseVM,ComputePhaseSkipped]"`
 }
 
 type BouncePhase struct {
-	Phase any `tlb:"."`
+	Phase any `tlb:"[BouncePhaseOk,BouncePhaseNegFunds,BouncePhaseNoFunds]"`
 }
 
 type BouncePhaseNegFunds struct {
@@ -192,7 +203,7 @@ type TransactionDescriptionMergeInstall struct {
 }
 
 type TransactionDescription struct {
-	Description any `tlb:"."`
+	Description any `tlb:"[TransactionDescriptionOrdinary,TransactionDescriptionStorage,TransactionDescriptionTickTock,TransactionDescriptionSplitPrepare,TransactionDescriptionSplitInstall,TransactionDescriptionMergePrepare,TransactionDescriptionMergeInstall]"`
 }
 
 type HashUpdate struct {
@@ -251,21 +262,26 @@ func (t *Transaction) String() string {
 		for _, m := range listOut {
 			destinations = append(destinations, m.Msg.DestAddr().String())
 			if m.MsgType == MsgTypeInternal {
-				out.Add(out, m.AsInternal().Amount.NanoTON())
+				out.Add(out, m.AsInternal().Amount.Nano())
 			}
 		}
 	}
 
 	var build string
 
+	switch t.Description.Description.(type) {
+	default:
+		return "[" + strings.ReplaceAll(reflect.TypeOf(t.Description.Description).Name(), "TransactionDescription", "") + "]"
+	case TransactionDescriptionOrdinary:
+	}
 	if t.IO.In != nil {
 		if t.IO.In.MsgType == MsgTypeInternal {
-			in = t.IO.In.AsInternal().Amount.NanoTON()
+			in = t.IO.In.AsInternal().Amount.Nano()
 		}
 
 		if in.Cmp(big.NewInt(0)) != 0 {
 			intTx := t.IO.In.AsInternal()
-			build += fmt.Sprintf("LT: %d, In: %s TON, From %s", t.LT, FromNanoTON(in).TON(), intTx.SrcAddr)
+			build += fmt.Sprintf("LT: %d, In: %s TON, From %s", t.LT, FromNanoTON(in).String(), intTx.SrcAddr)
 			comment := intTx.Comment()
 			if comment != "" {
 				build += ", Comment: " + comment
@@ -277,7 +293,7 @@ func (t *Transaction) String() string {
 		if len(build) > 0 {
 			build += ", "
 		}
-		build += fmt.Sprintf("Out: %s TON, To %s", FromNanoTON(out).TON(), destinations)
+		build += fmt.Sprintf("Out: %s TON, To %s", FromNanoTON(out).String(), destinations)
 	}
 
 	return build
@@ -362,157 +378,4 @@ func (c ComputeSkipReason) ToCell() (*cell.Cell, error) {
 		return cell.BeginCell().MustStoreUInt(0b110, 3).EndCell(), nil
 	}
 	return nil, fmt.Errorf("unknown compute skip reason %s", c.Type)
-}
-
-func (c *ComputePhase) LoadFromCell(loader *cell.Slice) error {
-	isNotSkipped, err := loader.LoadBoolBit()
-	if err != nil {
-		return err
-	}
-
-	if isNotSkipped {
-		var phase ComputePhaseVM
-		err = LoadFromCell(&phase, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse ComputePhaseVM: %w", err)
-		}
-		c.Phase = phase
-		return nil
-	}
-
-	var phase ComputePhaseSkipped
-	err = LoadFromCell(&phase, loader, true)
-	if err != nil {
-		return fmt.Errorf("failed to parse ComputePhaseSkipped: %w", err)
-	}
-	c.Phase = phase
-	return nil
-}
-
-func (b *BouncePhase) LoadFromCell(loader *cell.Slice) error {
-	isOk, err := loader.LoadBoolBit()
-	if err != nil {
-		return err
-	}
-
-	if isOk {
-		var phase BouncePhaseOk
-		err = LoadFromCell(&phase, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse BouncePhaseOk: %w", err)
-		}
-		b.Phase = phase
-		return nil
-	}
-
-	isNoFunds, err := loader.LoadBoolBit()
-	if err != nil {
-		return err
-	}
-
-	if isNoFunds {
-		var phase BouncePhaseNoFunds
-		err = LoadFromCell(&phase, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse BouncePhaseNoFunds: %w", err)
-		}
-		b.Phase = phase
-		return nil
-	}
-
-	var phase BouncePhaseNegFunds
-	err = LoadFromCell(&phase, loader, true)
-	if err != nil {
-		return fmt.Errorf("failed to parse BouncePhaseNegFunds: %w", err)
-	}
-	b.Phase = phase
-	return nil
-}
-
-func (t *TransactionDescription) LoadFromCell(loader *cell.Slice) error {
-	pfx, err := loader.LoadUInt(3)
-	if err != nil {
-		return err
-	}
-
-	switch pfx {
-	case 0b000:
-		isStorage, err := loader.LoadBoolBit()
-		if err != nil {
-			return err
-		}
-
-		if isStorage {
-			var desc TransactionDescriptionStorage
-			err = LoadFromCell(&desc, loader, true)
-			if err != nil {
-				return fmt.Errorf("failed to parse TransactionDescriptionStorage: %w", err)
-			}
-			t.Description = desc
-			return nil
-		}
-
-		var desc TransactionDescriptionOrdinary
-		err = LoadFromCell(&desc, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse TransactionDescriptionOrdinary: %w", err)
-		}
-		t.Description = desc
-		return nil
-	case 0b001:
-		var desc TransactionDescriptionTickTock
-		err = LoadFromCell(&desc, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse TransactionDescriptionTickTock: %w", err)
-		}
-		t.Description = desc
-		return nil
-	case 0b010:
-		isInstall, err := loader.LoadBoolBit()
-		if err != nil {
-			return err
-		}
-
-		if isInstall {
-			var desc TransactionDescriptionSplitInstall
-			err = LoadFromCell(&desc, loader, true)
-			if err != nil {
-				return fmt.Errorf("failed to parse TransactionDescriptionSplitInstall: %w", err)
-			}
-			t.Description = desc
-			return nil
-		}
-
-		var desc TransactionDescriptionSplitPrepare
-		err = LoadFromCell(&desc, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse TransactionDescriptionSplitPrepare: %w", err)
-		}
-		t.Description = desc
-		return nil
-	case 0b011:
-		isInstall, err := loader.LoadBoolBit()
-		if err != nil {
-			return err
-		}
-
-		if isInstall {
-			var desc TransactionDescriptionMergeInstall
-			err = LoadFromCell(&desc, loader, true)
-			if err != nil {
-				return fmt.Errorf("failed to parse TransactionDescriptionMergeInstall: %w", err)
-			}
-			t.Description = desc
-			return nil
-		}
-
-		var desc TransactionDescriptionMergePrepare
-		err = LoadFromCell(&desc, loader, true)
-		if err != nil {
-			return fmt.Errorf("failed to parse TransactionDescriptionMergePrepare: %w", err)
-		}
-		t.Description = desc
-		return nil
-	}
-	return fmt.Errorf("unknown transaction description type")
 }

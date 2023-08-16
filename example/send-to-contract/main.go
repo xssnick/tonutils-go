@@ -25,7 +25,7 @@ func main() {
 		return
 	}
 
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client).WithRetry()
 
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
@@ -50,18 +50,34 @@ func main() {
 		return
 	}
 
-	if balance.NanoTON().Uint64() >= 3000000 {
+	if balance.Nano().Uint64() >= 3000000 {
 		// create transaction body cell, depends on what contract needs, just random example here
 		body := cell.BeginCell().
-			MustStoreUInt(0x123abc55, 32). // op code
+			MustStoreUInt(0x123abc55, 32).    // op code
 			MustStoreUInt(rand.Uint64(), 64). // query id
 			// payload:
 			MustStoreAddr(address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO")).
 			MustStoreRef(
 				cell.BeginCell().
-					MustStoreBigCoins(tlb.MustFromTON("1.521").NanoTON()).
+					MustStoreBigCoins(tlb.MustFromTON("1.521").Nano()).
 					EndCell(),
 			).EndCell()
+
+		/*
+			// alternative, more high level way to serialize cell; see tlb.LoadFromCell method for doc
+			type ContractRequest struct {
+				_        tlb.Magic        `tlb:"#123abc55"`
+				QueryID  uint64           `tlb:"## 64"`
+				Addr     *address.Address `tlb:"addr"`
+				RefMoney tlb.Coins        `tlb:"^"`
+			}
+
+			body, err := tlb.ToCell(ContractRequest{
+				QueryID:  rand.Uint64(),
+				Addr:     address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"),
+				RefMoney: tlb.MustFromTON("1.521"),
+			})
+		*/
 
 		log.Println("sending transaction and waiting for confirmation...")
 
@@ -87,10 +103,10 @@ func main() {
 			return
 		}
 
-		log.Println("balance left:", balance.TON())
+		log.Println("balance left:", balance.String())
 
 		return
 	}
 
-	log.Println("not enough balance:", balance.TON())
+	log.Println("not enough balance:", balance.String())
 }

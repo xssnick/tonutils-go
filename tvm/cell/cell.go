@@ -9,13 +9,15 @@ import (
 	"strings"
 )
 
+type Type uint8
+
 const (
-	_OrdinaryType     = 0x00
-	_PrunedType       = 0x01
-	_LibraryType      = 0x02
-	_MerkleProofType  = 0x03
-	_MerkleUpdateType = 0x04
-	_UnknownType      = 0xFF
+	OrdinaryCellType     Type = 0x00
+	PrunedCellType       Type = 0x01
+	LibraryCellType      Type = 0x02
+	MerkleProofCellType  Type = 0x03
+	MerkleUpdateCellType Type = 0x04
+	UnknownCellType      Type = 0xFF
 )
 
 const maxDepth = 1024
@@ -85,6 +87,22 @@ func (c *Cell) RefsNum() uint {
 	return uint(len(c.refs))
 }
 
+func (c *Cell) MustPeekRef(i int) *Cell {
+	return c.refs[i]
+}
+
+func (c *Cell) UnsafeModify(levelMask LevelMask, special bool) {
+	c.special = special
+	c.levelMask = levelMask
+}
+
+func (c *Cell) PeekRef(i int) (*Cell, error) {
+	if i >= len(c.refs) {
+		return nil, ErrNoMoreRefs
+	}
+	return c.refs[i], nil
+}
+
 func (c *Cell) Dump(limitLength ...int) string {
 	var lim = (1024 << 20) * 16
 	if len(limitLength) > 0 {
@@ -123,8 +141,8 @@ func (c *Cell) dump(deep int, bin bool, limitLength int) string {
 	}
 
 	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
-	if c.levelMask.getLevel() > 0 {
-		str += fmt.Sprintf("{%d}", c.levelMask.getLevel())
+	if c.levelMask.GetLevel() > 0 {
+		str += fmt.Sprintf("{%d}", c.levelMask.GetLevel())
 	}
 	if c.special {
 		str += "*"
@@ -155,7 +173,10 @@ func (c *Cell) dump(deep int, bin bool, limitLength int) string {
 
 const _DataCellMaxLevel = 3
 
-func (c *Cell) Hash() []byte {
+func (c *Cell) Hash(level ...int) []byte {
+	if len(level) > 0 {
+		return c.getHash(level[0])
+	}
 	return c.getHash(_DataCellMaxLevel)
 }
 
@@ -163,36 +184,37 @@ func (c *Cell) Sign(key ed25519.PrivateKey) []byte {
 	return ed25519.Sign(key, c.Hash())
 }
 
-func (c *Cell) getType() int {
+func (c *Cell) GetType() Type {
 	if !c.special {
-		return _OrdinaryType
+		return OrdinaryCellType
 	}
 	if c.BitsSize() < 8 {
-		return _UnknownType
+		return UnknownCellType
 	}
 
-	switch c.data[0] {
-	case _PrunedType:
+	switch Type(c.data[0]) {
+	case PrunedCellType:
 		if c.BitsSize() >= 288 {
-			lvl := uint(c.data[1])
-			if lvl > 0 && lvl <= 3 && c.BitsSize() >= 16+(256+16)*lvl {
-				return _PrunedType
+			msk := LevelMask{c.data[1]}
+			lvl := msk.GetLevel()
+			if lvl > 0 && lvl <= 3 && c.BitsSize() >= 16+(256+16)*(uint(msk.Apply(lvl-1).getHashIndex()+1)) {
+				return PrunedCellType
 			}
 		}
-	case _MerkleProofType:
+	case MerkleProofCellType:
 		if c.RefsNum() == 1 && c.BitsSize() == 280 {
-			return _MerkleProofType
+			return MerkleProofCellType
 		}
-	case _MerkleUpdateType:
+	case MerkleUpdateCellType:
 		if c.RefsNum() == 2 && c.BitsSize() == 552 {
-			return _MerkleUpdateType
+			return MerkleUpdateCellType
 		}
-	case _LibraryType:
+	case LibraryCellType:
 		if c.BitsSize() == 8+256 {
-			return _LibraryType
+			return LibraryCellType
 		}
 	}
-	return _UnknownType
+	return UnknownCellType
 }
 
 func (c *Cell) UnmarshalJSON(bytes []byte) error {

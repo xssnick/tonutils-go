@@ -28,7 +28,7 @@ type Message struct {
 }
 
 type MessagesList struct {
-	List *cell.Dictionary
+	List *cell.Dictionary `tlb:"dict inline 15"`
 }
 
 type InternalMessage struct {
@@ -189,12 +189,12 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	b.MustStoreBoolBit(m.Bounced)
 	b.MustStoreAddr(m.SrcAddr)
 	b.MustStoreAddr(m.DstAddr)
-	b.MustStoreBigCoins(m.Amount.NanoTON())
+	b.MustStoreBigCoins(m.Amount.Nano())
 
 	b.MustStoreDict(m.ExtraCurrencies)
 
-	b.MustStoreBigCoins(m.IHRFee.NanoTON())
-	b.MustStoreBigCoins(m.FwdFee.NanoTON())
+	b.MustStoreBigCoins(m.IHRFee.Nano())
+	b.MustStoreBigCoins(m.FwdFee.Nano())
 
 	b.MustStoreUInt(m.CreatedLT, 64)
 	b.MustStoreUInt(uint64(m.CreatedAt), 32)
@@ -231,14 +231,14 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 
 func (m *InternalMessage) Dump() string {
 	return fmt.Sprintf("Amount %s TON, Created at: %d, Created lt %d\nBounce: %t, Bounced %t, IHRDisabled %t\nSrcAddr: %s\nDstAddr: %s\nPayload: %s",
-		m.Amount.TON(), m.CreatedAt, m.CreatedLT, m.Bounce, m.Bounced, m.IHRDisabled, m.SrcAddr, m.DstAddr, m.Body.Dump())
+		m.Amount.String(), m.CreatedAt, m.CreatedLT, m.Bounce, m.Bounced, m.IHRDisabled, m.SrcAddr, m.DstAddr, m.Body.Dump())
 }
 
 func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 	builder := cell.BeginCell().MustStoreUInt(0b10, 2).
 		MustStoreAddr(m.SrcAddr).
 		MustStoreAddr(m.DstAddr).
-		MustStoreBigCoins(m.ImportFee.NanoTON())
+		MustStoreBigCoins(m.ImportFee.Nano())
 
 	builder.MustStoreBoolBit(m.StateInit != nil) // has state init
 	if m.StateInit != nil {
@@ -265,19 +265,6 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 	}
 
 	return builder.EndCell(), nil
-}
-
-func (m *MessagesList) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.ToDict(15)
-	if err != nil {
-		return err
-	}
-	m.List = dict
-	return nil
-}
-
-func (m *MessagesList) ToCell() (*cell.Cell, error) {
-	return m.List.ToCell()
 }
 
 func (m *MessagesList) ToSlice() ([]Message, error) {

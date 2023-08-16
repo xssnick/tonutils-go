@@ -10,6 +10,7 @@ import (
 )
 
 type RLDP interface {
+	GetADNL() rldp.ADNL
 	Close()
 	DoQuery(ctx context.Context, maxAnswerSize int64, query, result tl.Serializable) error
 	SetOnQuery(handler func(transferId []byte, query *rldp.Query) error)

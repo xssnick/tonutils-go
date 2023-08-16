@@ -1,8 +1,8 @@
 package ton
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
@@ -16,11 +16,11 @@ func init() {
 }
 
 type AccountState struct {
-	ID         *BlockIDExt `tl:"struct"`
-	Shard      *BlockIDExt `tl:"struct"`
-	ShardProof []byte      `tl:"bytes"`
-	Proof      []byte      `tl:"bytes"`
-	State      []byte      `tl:"bytes"`
+	ID         *BlockIDExt  `tl:"struct"`
+	Shard      *BlockIDExt  `tl:"struct"`
+	ShardProof []*cell.Cell `tl:"cell optional 2"`
+	Proof      []*cell.Cell `tl:"cell optional 2"`
+	State      *cell.Cell   `tl:"cell optional"`
 }
 
 type GetAccountState struct {
@@ -48,75 +48,57 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 
 	switch t := resp.(type) {
 	case AccountState:
-		if len(t.State) == 0 {
+		if !t.ID.Equals(block) {
+			return nil, fmt.Errorf("response with incorrect master block")
+		}
+
+		if t.State == nil {
 			return &tlb.Account{
 				IsActive: false,
 			}, nil
+		}
+
+		if t.Proof == nil {
+			return nil, fmt.Errorf("no proof")
 		}
 
 		acc := &tlb.Account{
 			IsActive: true,
 		}
 
-		cls, err := cell.FromBOCMultiRoot(t.Proof)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse proof boc: %w", err)
-		}
-
-		bp := cls[0].BeginParse()
-
-		merkle, err := bp.LoadRef()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load ref ShardStateUnsplit: %w", err)
-		}
-
-		_, err = merkle.LoadRef()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load ref ShardState: %w", err)
-		}
-
-		shardAccounts, err := merkle.LoadRef()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load ref ShardState: %w", err)
-		}
-		shardAccountsDict, err := shardAccounts.LoadDict(256)
-
-		if shardAccountsDict != nil {
-			addrKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
-			val := shardAccountsDict.Get(addrKey)
-			if val == nil {
-				return nil, errors.New("no addr info in proof hashmap")
+		var shardHash []byte
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
+			if len(t.ShardProof) == 0 {
+				return nil, ErrNoProof
 			}
 
-			loadVal := val.BeginParse()
-
-			// skip it
-			err = tlb.LoadFromCell(new(tlb.DepthBalanceInfo), loadVal)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load DepthBalanceInfo: %w", err)
+			if t.Shard == nil || len(t.Shard.RootHash) != 32 {
+				return nil, fmt.Errorf("shard block not passed")
 			}
 
-			acc.LastTxHash, err = loadVal.LoadSlice(256)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load LastTxHash: %w", err)
-			}
-
-			acc.LastTxLT, err = loadVal.LoadUInt(64)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load LastTxLT: %w", err)
-			}
+			shardHash = t.Shard.RootHash
 		}
 
-		stateCell, err := cell.FromBOC(t.State)
+		shardAcc, balanceInfo, err := CheckAccountStateProof(addr, block, t.Proof, t.ShardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse state boc: %w", err)
+			return nil, fmt.Errorf("failed to check acc state proof: %w", err)
+		}
+
+		if !bytes.Equal(shardAcc.Account.Hash(0), t.State.Hash()) {
+			return nil, fmt.Errorf("proof hash not match state account hash")
 		}
 
 		var st tlb.AccountState
-		err = st.LoadFromCell(stateCell.BeginParse())
-		if err != nil {
+		if err = st.LoadFromCell(t.State.BeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to load account state: %w", err)
 		}
+
+		if st.Balance.Nano().Cmp(balanceInfo.Currencies.Coins.Nano()) != 0 {
+			return nil, fmt.Errorf("proof balance not match state balance")
+		}
+
+		acc.LastTxHash = shardAcc.LastTransHash
+		acc.LastTxLT = shardAcc.LastTransLT
 
 		if st.Status == tlb.AccountStatusActive {
 			acc.Code = st.StateInit.Code

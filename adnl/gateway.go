@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
@@ -191,6 +192,12 @@ func (g *Gateway) listen(rootId []byte) {
 		buf := make([]byte, 4096)
 		n, addr, err := g.conn.ReadFrom(buf)
 		if err != nil {
+			select {
+			case <-g.globalCtx.Done():
+				return
+			default:
+			}
+
 			Logger("failed to read packet:", err)
 			continue
 		}
@@ -267,6 +274,7 @@ func (g *Gateway) listen(rootId []byte) {
 		g.mx.RUnlock()
 
 		if proc == nil {
+			Logger("no processor for ADNL packet from", hex.EncodeToString(id))
 			continue
 		}
 
@@ -410,6 +418,8 @@ func (g *Gateway) Close() error {
 	g.mx.Lock()
 	defer g.mx.Unlock()
 
+	g.globalCtxCancel()
+
 	if g.conn == nil {
 		return nil
 	}
@@ -436,6 +446,11 @@ func (g *Gateway) write(deadline time.Time, addr net.Addr, buf []byte) error {
 	}
 
 	return nil
+}
+
+func (g *Gateway) GetID() []byte {
+	id, _ := ToKeyID(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
+	return id
 }
 
 func (p *peerConn) GetID() []byte {

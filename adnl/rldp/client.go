@@ -16,6 +16,8 @@ import (
 )
 
 type ADNL interface {
+	RemoteAddr() string
+	GetID() []byte
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
@@ -75,6 +77,10 @@ func NewClientV2(a ADNL) *RLDP {
 	c := NewClient(a)
 	c.useV2 = true
 	return c
+}
+
+func (r *RLDP) GetADNL() ADNL {
+	return r.adnl
 }
 
 func (r *RLDP) SetOnQuery(handler func(transferId []byte, query *Query) error) {
@@ -154,7 +160,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		defer stream.mx.Unlock()
 
 		if stream.finishedAt != nil {
-			if stream.lastCompleteAt.Add(2 * time.Millisecond).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
+			if stream.lastCompleteAt.Add(5 * time.Millisecond).Before(time.Now()) { // we not send completions too often, to not get socket buffer overflow
 
 				var complete tl.Serializable = Complete{
 					TransferID: m.TransferID,
@@ -351,8 +357,8 @@ func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte) er
 		default:
 		}
 
-		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()*2 { //+enc.BaseSymbolsNum()/2
-			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()*2)
+		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()/2 { //+enc.BaseSymbolsNum()/2
+			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/2)
 
 			select {
 			case <-ctx.Done():

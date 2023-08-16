@@ -2,7 +2,9 @@ package tlb
 
 import (
 	"bytes"
+	"encoding/json"
 	"math/big"
+	"os"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -26,8 +28,23 @@ func (m manualLoad) ToCell() (*cell.Cell, error) {
 	return cell.BeginCell().MustStoreUInt(uint64(m.Val[0]), 8).EndCell(), nil
 }
 
-type testTransform struct {
-	DictTransform []*manualLoad `tlb:"dict 32 -> array"`
+type StructA struct {
+	_   Magic `tlb:"$10"`
+	Val int8  `tlb:"## 3"`
+}
+
+type StructB struct {
+	_   Magic  `tlb:"#00AACC"`
+	Val uint16 `tlb:"## 16"`
+}
+
+type StructC struct {
+	_   Magic `tlb:"#00BBCC"`
+	Val bool  `tlb:"bool"`
+}
+
+type testAny struct {
+	StructAny any `tlb:"^ [StructA,StructB]"`
 }
 
 type testInner struct {
@@ -55,6 +72,29 @@ type testTLB struct {
 	Bits              []byte     `tlb:"bits 20"`
 	Var               *big.Int   `tlb:"var uint 3"`
 	EndCell           *cell.Cell `tlb:"."`
+}
+
+func TestLoadAnyRegistered(t *testing.T) {
+	Register(StructA{})
+	Register(StructC{})
+
+	v := testAny{
+		StructAny: StructA{
+			Val: 2,
+		},
+	}
+
+	c, err := ToCell(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var v2 testAny
+	err = LoadFromCell(&v2, c.BeginParse())
+	if err != nil {
+		t.Fatal(err)
+	}
+	json.NewEncoder(os.Stdout).Encode(v2)
 }
 
 func TestLoadFromCell(t *testing.T) {
@@ -109,7 +149,7 @@ func TestLoadFromCell(t *testing.T) {
 			t.Fatal("uint 7126382921832 not eq")
 		}
 
-		if x.Inside.ValCoins.NanoTON().Uint64() != 700000 {
+		if x.Inside.ValCoins.Nano().Uint64() != 700000 {
 			t.Fatal("coins 700000 not eq")
 		}
 
@@ -161,35 +201,5 @@ func TestLoadFromCell(t *testing.T) {
 
 	if !bytes.Equal(hashA, hashB) {
 		t.Fatal("cell hashes not same after From to")
-	}
-}
-
-func TestLoadFromCellTransform(t *testing.T) {
-	ldVal := cell.BeginCell().MustStoreUInt(uint64('M'), 8).EndCell()
-
-	d2 := cell.NewDict(32)
-	for i := 0; i < 200; i++ {
-		err := d2.Set(cell.BeginCell().MustStoreInt(int64(i), 32).EndCell(), ldVal)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	a := cell.BeginCell().MustStoreDict(d2).EndCell().BeginParse()
-
-	x := testTransform{}
-	err := LoadFromCell(&x, a)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(x.DictTransform) != 200 {
-		t.Fatal("dict transform len not 200")
-	}
-
-	for _, m := range x.DictTransform {
-		if m.Val != "M" {
-			t.Fatal("dict transform values corrupted")
-		}
 	}
 }

@@ -19,7 +19,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-var api = func() *ton.APIClient {
+var api = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -30,7 +30,7 @@ var api = func() *ton.APIClient {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
 var _seed = os.Getenv("WALLET_SEED")
@@ -59,8 +59,8 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("GetBalance err:", err.Error())
 	}
 
-	if balance.NanoTON().Uint64() < 3000000 {
-		t.Fatal("not enough balance", w.Address(), balance.TON())
+	if balance.Nano().Uint64() < 3000000 {
+		t.Fatal("not enough balance", w.Address(), balance.String())
 	}
 
 	collectionAddr := address.MustParseAddr("EQBTObWUuWTb5ECnLI4x6a3szzstmMDOcc5Kdo-CpbUY9Y5K") // address = deployCollection(w) w.seed = (fiction ... rather)

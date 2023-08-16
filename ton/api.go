@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"reflect"
@@ -15,6 +16,14 @@ func init() {
 	tl.Register(LSError{}, "liteServer.error code:int message:string = liteServer.Error")
 }
 
+type ProofCheckPolicy int
+
+const (
+	ProofCheckPolicyUnsafe ProofCheckPolicy = iota
+	ProofCheckPolicyFast                    // Without master block checks
+	ProofCheckPolicySecure
+)
+
 const (
 	ErrCodeContractNotInitialized = -256
 )
@@ -22,6 +31,7 @@ const (
 type LiteClient interface {
 	QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error
 	StickyContext(ctx context.Context) context.Context
+	StickyContextNextNode(ctx context.Context) (context.Context, error)
 	StickyNodeID(ctx context.Context) uint32
 }
 
@@ -34,7 +44,11 @@ type LSError struct {
 	Text string `tl:"string"`
 }
 
-type APIClientWaiter interface {
+// Deprecated: use APIClientWrapped
+type APIClientWaiter = APIClientWrapped
+
+type APIClientWrapped interface {
+	Client() LiteClient
 	GetTime(ctx context.Context) (uint32, error)
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
@@ -47,14 +61,26 @@ type APIClientWaiter interface {
 	RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	GetTransaction(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
+	GetBlockProof(ctx context.Context, known, target *BlockIDExt) (*PartialBlockProof, error)
+	CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, err error)
+	SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction)
+	VerifyProofChain(ctx context.Context, from, to *BlockIDExt) error
+	WaitForBlock(seqno uint32) APIClientWrapped
+	WithRetry(maxRetries ...int) APIClientWrapped
+	SetTrustedBlock(block *BlockIDExt)
+	SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig)
 }
 
 type APIClient struct {
 	client LiteClient
 	parent *APIClient
 
-	curMasters     map[uint32]*masterInfo
-	curMastersLock sync.RWMutex
+	trustedBlock     *BlockIDExt
+	curMasters       map[uint32]*masterInfo
+	curMastersLock   sync.RWMutex
+	proofCheckPolicy ProofCheckPolicy
+
+	trustedLock sync.RWMutex
 }
 
 type masterInfo struct {
@@ -63,18 +89,59 @@ type masterInfo struct {
 	block     *BlockIDExt
 }
 
-func NewAPIClient(client LiteClient) *APIClient {
+func NewAPIClient(client LiteClient, proofCheckPolicy ...ProofCheckPolicy) *APIClient {
+	policy := ProofCheckPolicyFast
+	if len(proofCheckPolicy) > 0 {
+		policy = proofCheckPolicy[0]
+	}
+
 	return &APIClient{
-		curMasters: map[uint32]*masterInfo{},
-		client:     client,
+		curMasters:       map[uint32]*masterInfo{},
+		client:           client,
+		proofCheckPolicy: policy,
 	}
 }
 
-func (c *APIClient) WaitForBlock(seqno uint32) APIClientWaiter {
+// SetTrustedBlock - set starting point to verify master block proofs chain
+func (c *APIClient) SetTrustedBlock(block *BlockIDExt) {
+	c.root().trustedBlock = block.Copy()
+}
+
+// SetTrustedBlockFromConfig - same as SetTrustedBlock but takes init block from config
+func (c *APIClient) SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig) {
+	b := BlockIDExt(cfg.Validator.InitBlock)
+	c.SetTrustedBlock(&b)
+}
+
+// WaitForBlock - waits for the given master block seqno will be available on the requested node
+func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 	return &APIClient{
-		parent: c,
-		client: &waiterClient{original: c.client, seqno: seqno},
+		parent:           c,
+		client:           &waiterClient{original: c.client, seqno: seqno},
+		proofCheckPolicy: c.proofCheckPolicy,
 	}
+}
+
+// WithRetry - automatically retires request to another available liteserver
+// when adnl timeout, or error code 651 or -400 is received.
+// If maxTries > 0, limits additional attempts to this number.
+func (c *APIClient) WithRetry(maxTries ...int) APIClientWrapped {
+	tries := 0
+	if len(maxTries) > 0 {
+		tries = maxTries[0]
+	}
+	return &APIClient{
+		parent:           c,
+		client:           &retryClient{original: c.client, maxRetries: tries},
+		proofCheckPolicy: c.proofCheckPolicy,
+	}
+}
+
+func (c *APIClient) root() *APIClient {
+	if c.parent != nil {
+		return c.parent.root()
+	}
+	return c
 }
 
 func (e LSError) Error() string {

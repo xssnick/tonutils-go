@@ -1,10 +1,17 @@
 package tlb
 
 import (
-	"fmt"
-	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
+
+func init() {
+	Register(FutureSplit{})
+	Register(FutureMerge{})
+	Register(FutureSplitMergeNone{})
+
+	Register(ShardStateSplit{})
+	Register(ShardStateUnsplit{})
+}
 
 type ShardStateUnsplit struct {
 	_               Magic      `tlb:"#9023afe2"`
@@ -20,8 +27,8 @@ type ShardStateUnsplit struct {
 	Accounts        struct {
 		ShardAccounts *cell.Dictionary `tlb:"dict 256"`
 	} `tlb:"^"`
-	Stats        *cell.Cell    `tlb:"^"`
-	McStateExtra *McStateExtra `tlb:"maybe ^"`
+	Stats        *cell.Cell `tlb:"^"`
+	McStateExtra *cell.Cell `tlb:"maybe ^"`
 }
 
 type McStateExtra struct {
@@ -32,14 +39,41 @@ type McStateExtra struct {
 	GlobalBalance CurrencyCollection `tlb:"."`
 }
 
-type ConfigParams struct {
-	ConfigAddr *address.Address
-	Config     *cell.Dictionary
+type KeyExtBlkRef struct {
+	IsKey  bool      `tlb:"bool"`
+	BlkRef ExtBlkRef `tlb:"."`
 }
 
-type ShardState struct {
-	Left  ShardStateUnsplit
-	Right *ShardStateUnsplit
+type KeyMaxLt struct {
+	IsKey    bool   `tlb:"bool"`
+	MaxEndLT uint64 `tlb:"## 64"`
+}
+
+type ValidatorInfo struct {
+	ValidatorListHashShort uint32 `tlb:"## 32"`
+	CatchainSeqno          uint32 `tlb:"## 32"`
+	NextCCUpdated          bool   `tlb:"bool"`
+}
+
+type McStateExtraBlockInfo struct {
+	Flags            uint16           `tlb:"## 16"`
+	ValidatorInfo    ValidatorInfo    `tlb:"."`
+	PrevBlocks       *cell.Dictionary `tlb:"dict 32"`
+	LastKeyBlock     *ExtBlkRef       `tlb:"maybe ."`
+	BlockCreateStats *cell.Cell       `tlb:"."`
+}
+
+type ConfigParams struct {
+	ConfigAddr []byte `tlb:"bits 256"`
+	Config     struct {
+		Params *cell.Dictionary `tlb:"dict inline 32"`
+	} `tlb:"^"`
+}
+
+type ShardStateSplit struct {
+	_     Magic             `tlb:"#5f327da5"`
+	Left  ShardStateUnsplit `tlb:"^"`
+	Right ShardStateUnsplit `tlb:"^"`
 }
 
 type ShardIdent struct {
@@ -47,6 +81,22 @@ type ShardIdent struct {
 	PrefixBits  int8   `tlb:"## 6"` // #<= 60
 	WorkchainID int32  `tlb:"## 32"`
 	ShardPrefix uint64 `tlb:"## 64"`
+}
+
+type FutureSplitMergeNone struct {
+	_ Magic `tlb:"$0"`
+}
+
+type FutureSplit struct {
+	_          Magic  `tlb:"$10"`
+	SplitUtime uint32 `tlb:"## 32"`
+	Interval   uint32 `tlb:"## 32"`
+}
+
+type FutureMerge struct {
+	_          Magic  `tlb:"$11"`
+	MergeUtime uint32 `tlb:"## 32"`
+	Interval   uint32 `tlb:"## 32"`
 }
 
 type ShardDesc struct {
@@ -67,66 +117,32 @@ type ShardDesc struct {
 	NextValidatorShard int64  `tlb:"## 64"`
 	MinRefMcSeqNo      uint32 `tlb:"## 32"`
 	GenUTime           uint32 `tlb:"## 32"`
+	SplitMergeAt       any    `tlb:"[FutureMerge,FutureSplit,FutureSplitMergeNone]"`
+	Currencies         struct {
+		FeesCollected CurrencyCollection `tlb:"."`
+		FundsCreated  CurrencyCollection `tlb:"."`
+	} `tlb:"^"`
 }
 
-func (s *ShardState) LoadFromCell(loader *cell.Slice) error {
-	preloader := loader.Copy()
-	tag, err := preloader.LoadUInt(32)
-	if err != nil {
-		return err
-	}
-
-	switch tag {
-	case 0x5f327da5:
-		var left, right ShardStateUnsplit
-		leftRef, err := loader.LoadRef()
-		if err != nil {
-			return err
-		}
-		rightRef, err := loader.LoadRef()
-		if err != nil {
-			return err
-		}
-		err = LoadFromCell(&left, leftRef)
-		if err != nil {
-			return err
-		}
-		err = LoadFromCell(&right, rightRef)
-		if err != nil {
-			return err
-		}
-		s.Left = left
-		s.Right = &right
-	case 0x9023afe2:
-		var state ShardStateUnsplit
-		err = LoadFromCell(&state, loader)
-		if err != nil {
-			return err
-		}
-		s.Left = state
-	}
-
-	return nil
-}
-
-func (p *ConfigParams) LoadFromCell(loader *cell.Slice) error {
-	addrBits, err := loader.LoadSlice(256)
-	if err != nil {
-		return fmt.Errorf("failed to load bits of config addr: %w", err)
-	}
-
-	dictRef, err := loader.LoadRef()
-	if err != nil {
-		return fmt.Errorf("failed to load config dict ref: %w", err)
-	}
-
-	dict, err := dictRef.ToDict(32)
-	if err != nil {
-		return fmt.Errorf("failed to load config dict: %w", err)
-	}
-
-	p.ConfigAddr = address.NewAddress(0, 255, addrBits)
-	p.Config = dict
-
-	return nil
+type ShardDescB struct {
+	_                  Magic              `tlb:"#b"`
+	SeqNo              uint32             `tlb:"## 32"`
+	RegMcSeqno         uint32             `tlb:"## 32"`
+	StartLT            uint64             `tlb:"## 64"`
+	EndLT              uint64             `tlb:"## 64"`
+	RootHash           []byte             `tlb:"bits 256"`
+	FileHash           []byte             `tlb:"bits 256"`
+	BeforeSplit        bool               `tlb:"bool"`
+	BeforeMerge        bool               `tlb:"bool"`
+	WantSplit          bool               `tlb:"bool"`
+	WantMerge          bool               `tlb:"bool"`
+	NXCCUpdated        bool               `tlb:"bool"`
+	Flags              uint8              `tlb:"## 3"`
+	NextCatchainSeqNo  uint32             `tlb:"## 32"`
+	NextValidatorShard int64              `tlb:"## 64"`
+	MinRefMcSeqNo      uint32             `tlb:"## 32"`
+	GenUTime           uint32             `tlb:"## 32"`
+	SplitMergeAt       any                `tlb:"[FutureMerge,FutureSplit,FutureSplitMergeNone]"`
+	FeesCollected      CurrencyCollection `tlb:"."`
+	FundsCreated       CurrencyCollection `tlb:"."`
 }

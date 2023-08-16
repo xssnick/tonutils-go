@@ -12,6 +12,7 @@ import (
 type Dictionary struct {
 	storage map[string]*HashmapKV
 	keySz   uint
+	hash    []byte
 }
 
 type HashmapKV struct {
@@ -101,6 +102,13 @@ func (d *Dictionary) Get(key *Cell) *Cell {
 	}
 
 	return v.Value
+}
+
+func (d *Dictionary) Size() int {
+	if d == nil {
+		return 0
+	}
+	return len(d.storage)
 }
 
 func (d *Dictionary) All() []*HashmapKV {

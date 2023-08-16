@@ -10,16 +10,16 @@ import (
 
 var client = liteclient.NewConnectionPool()
 
-var api = func() *ton.APIClient {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+var api = func() ton.APIClientWrapped {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
 func TestDNSClient_Resolve(t *testing.T) {

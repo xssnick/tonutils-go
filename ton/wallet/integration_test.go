@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -18,10 +19,10 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-var api = func() *ton.APIClient {
+var api = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
@@ -29,21 +30,21 @@ var api = func() *ton.APIClient {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
-var apiMain = func() *ton.APIClient {
+var apiMain = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client)
+	return ton.NewAPIClient(client).WithRetry()
 }()
 
 var _seed = os.Getenv("WALLET_SEED")
@@ -51,45 +52,59 @@ var _seed = os.Getenv("WALLET_SEED")
 func Test_WalletTransfer(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 
-	for _, ver := range []Version{V3, V4R2, HighloadV2R2} {
-		t.Run("send for wallet ver "+fmt.Sprint(ver), func(t *testing.T) {
-			ctx := api.Client().StickyContext(context.Background())
-			ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-			defer cancel()
+	for _, v := range []Version{V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified} {
+		ver := v
+		for _, isSubwallet := range []bool{false, true} {
+			isSubwallet := isSubwallet
+			t.Run("send for wallet ver "+fmt.Sprint(ver)+" subwallet "+fmt.Sprint(isSubwallet), func(t *testing.T) {
+				t.Parallel()
 
-			w, err := FromSeed(api, seed, ver)
-			if err != nil {
-				t.Fatal("FromSeed err:", err.Error())
-				return
-			}
+				ctx := api.Client().StickyContext(context.Background())
+				ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+				defer cancel()
 
-			log.Println(ver, "-> test wallet address:", w.Address())
-
-			block, err := api.CurrentMasterchainInfo(ctx)
-			if err != nil {
-				t.Fatal("CurrentMasterchainInfo err:", err.Error())
-				return
-			}
-
-			balance, err := w.GetBalance(ctx, block)
-			if err != nil {
-				t.Fatal("GetBalance err:", err.Error())
-				return
-			}
-
-			comment := randString(150)
-			addr := address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE")
-			if balance.NanoTON().Uint64() >= 3000000 {
-				err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
+				w, err := FromSeed(api, seed, ver)
 				if err != nil {
-					t.Fatal("Transfer err:", err.Error())
+					t.Fatal("FromSeed err:", err.Error())
 					return
 				}
-			} else {
-				t.Fatal("not enough balance")
-				return
-			}
-		})
+
+				if isSubwallet {
+					w, err = w.GetSubwallet(1)
+					if err != nil {
+						t.Fatal("GetSubwallet err:", err.Error())
+						return
+					}
+				}
+
+				log.Println(ver, "-> test wallet address:", w.Address(), isSubwallet)
+
+				block, err := api.CurrentMasterchainInfo(ctx)
+				if err != nil {
+					t.Fatal("CurrentMasterchainInfo err:", err.Error())
+					return
+				}
+
+				balance, err := w.GetBalance(ctx, block)
+				if err != nil {
+					t.Fatal("GetBalance err:", err.Error())
+					return
+				}
+
+				comment := randString(150)
+				addr := address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE")
+				if balance.Nano().Uint64() >= 3000000 {
+					err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
+					if err != nil {
+						t.Fatal("Transfer err:", err.Error())
+						return
+					}
+				} else {
+					t.Fatal("not enough balance")
+					return
+				}
+			})
+		}
 	}
 }
 
@@ -144,17 +159,11 @@ func TestWallet_DeployContract(t *testing.T) {
 	codeBytes, _ := hex.DecodeString("b5ee9c72410104010020000114ff00f4a413f4bcf2c80b010203844003020009a1b63c43510007a0000061d2421bb1")
 	code, _ := cell.FromBOC(codeBytes)
 
-	addr, err := w.DeployContract(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell(), true)
+	addr, _, block, err := w.DeployContractWaitTransaction(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell())
 	if err != nil {
 		t.Fatal("deploy err:", err)
 	}
 	t.Logf("contract address: %s", addr.String())
-
-	block, err := api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		t.Fatal("CurrentMasterchainInfo err:", err.Error())
-		return
-	}
 
 	res, err := api.RunGetMethod(ctx, block, addr, "dappka", 5, 10)
 	if err != nil {
@@ -163,6 +172,23 @@ func TestWallet_DeployContract(t *testing.T) {
 
 	if res.MustInt(0).Uint64() != 5 || res.MustInt(1).Uint64() != 50 {
 		t.Fatal("result err:", res.MustInt(0).Uint64(), res.MustInt(1).Uint64())
+	}
+}
+
+func TestWallet_TransferEncrypted(t *testing.T) {
+	seed := strings.Split(_seed, " ")
+	ctx := api.Client().StickyContext(context.Background())
+
+	// init wallet
+	w, err := FromSeed(api, seed, HighloadV2R2)
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+	}
+	t.Logf("wallet address: %s", w.Address().String())
+
+	err = w.TransferWithEncryptedComment(ctx, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"), tlb.MustFromTON("0.005"), "привет:"+randString(30), true)
+	if err != nil {
+		t.Fatal("transfer err:", err)
 	}
 }
 
@@ -209,6 +235,19 @@ func TestGetWalletVersion(t *testing.T) {
 		if v := GetWalletVersion(account); v != test.Version {
 			t.Fatalf("%s: expected: %d, got: %d", test.Addr.String(), test.Version, v)
 		}
+	}
+}
+
+func TestWallet_GetPublicKey(t *testing.T) {
+	pub, err := GetPublicKey(context.Background(), apiMain, address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"))
+	if err != nil {
+		t.Fatal(err.Error())
+		return
+	}
+
+	key, _ := hex.DecodeString("72c9ed6b62a6e2eba14a93b90462e7a367777beb8a38fb15b9f33844d22ce2ff")
+	if !bytes.Equal(pub, key) {
+		t.Fatal("wrong key: " + hex.EncodeToString(pub))
 	}
 }
 

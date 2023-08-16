@@ -21,7 +21,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 
 	// if we want to route all requests to the same node, we can use it
 	ctx := client.StickyContext(context.Background())
@@ -33,7 +33,7 @@ func main() {
 		return
 	}
 
-	addr := address.MustParseAddr("EQCVRJ-RqeZWcDqgTzzcxUIrChFYs0SyKGUvye9kGOuEWndQ")
+	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
 	// we use WaitForBlock to make sure block is ready,
 	// it is optional but escapes us from liteserver block not ready errors
@@ -46,7 +46,7 @@ func main() {
 	fmt.Printf("Is active: %v\n", res.IsActive)
 	if res.IsActive {
 		fmt.Printf("Status: %s\n", res.State.Status)
-		fmt.Printf("Balance: %s TON\n", res.State.Balance.TON())
+		fmt.Printf("Balance: %s TON\n", res.State.Balance.String())
 		if res.Data != nil {
 			fmt.Printf("Data: %s\n", res.Data.Dump())
 		}

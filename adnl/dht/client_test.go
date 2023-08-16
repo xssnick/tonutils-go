@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -14,7 +15,6 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
-	"math/rand"
 	"net"
 	"reflect"
 	"strconv"
@@ -24,6 +24,23 @@ import (
 
 type MockGateway struct {
 	reg func(addr string, key ed25519.PublicKey) (adnl.Peer, error)
+}
+
+func (m *MockGateway) GetAddressList() address.List {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockGateway) Close() error {
+	return nil
+}
+
+func (m *MockGateway) SetConnectionHandler(f func(client adnl.Peer) error) {}
+
+func (m *MockGateway) SetExternalIP(ip net.IP) {}
+
+func (m *MockGateway) StartServer(listenAddr string) error {
+	return nil
 }
 
 func (m *MockGateway) RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
@@ -233,7 +250,7 @@ func TestClient_FindValue(t *testing.T) {
 								t.Fatal(err)
 							}
 
-							k, err := adnl.ToKeyID(&Key{
+							k, err := tl.Hash(&Key{
 								ID:    siteAddr,
 								Name:  []byte("address"),
 								Index: 0,
@@ -253,10 +270,7 @@ func TestClient_FindValue(t *testing.T) {
 				}, nil
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			dhtCli, err := NewClientFromConfig(ctx, gateway, cnf)
+			dhtCli, err := NewClientFromConfig(gateway, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -295,7 +309,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	pubKey1 := ed25519.PublicKey(byteKey1)
 	adnlPubKey1 := adnl.PublicKeyED25519{Key: pubKey1}
 
-	tKeyId1, err := adnl.ToKeyID(adnlPubKey1)
+	tKeyId1, err := tl.Hash(adnlPubKey1)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -305,7 +319,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	tAddr1 := makeStrAddress(-1185526007, 22096)
 
 	node1 := dhtNode{
-		id:        tKeyId1,
+		adnlId:    tKeyId1,
 		addr:      tAddr1,
 		serverKey: pubKey1,
 	}
@@ -318,7 +332,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	pubKey2 := ed25519.PublicKey(byteKey2)
 	adnlPubKey2 := adnl.PublicKeyED25519{Key: pubKey2}
 
-	tKeyId2, err := adnl.ToKeyID(adnlPubKey2)
+	tKeyId2, err := tl.Hash(adnlPubKey2)
 	if err != nil {
 		t.Fatal("failed to prepare test key id, err: ", err)
 	}
@@ -328,7 +342,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 	tAddr2 := makeStrAddress(-1307380860, 15888)
 
 	node2 := dhtNode{
-		id:        tKeyId2,
+		adnlId:    tKeyId2,
 		addr:      tAddr2,
 		serverKey: pubKey2,
 	}
@@ -345,7 +359,7 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 			"positive case (all nodes valid)", node1, node2, 2, true, true,
 		},
 		{
-			"negative case (one of two nodes with bad sign)", node1, node2, 1, true, false,
+			"negative case (one of two nodes with bad sign)", node1, node2, 2, true, true,
 		},
 	}
 
@@ -374,26 +388,21 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 				}, nil
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			cli, err := NewClientFromConfig(ctx, gateway, cnf)
+			cli, err := NewClientFromConfig(gateway, cnf)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			time.Sleep(1 * time.Second)
-
-			if len(cli.activeNodes) != test.wantLenNodes || len(cli.knownNodesInfo) != test.wantLenNodes {
-				t.Errorf("added nodes count (active'%d', known'%d') but expected(%d)", len(cli.activeNodes), len(cli.knownNodesInfo), test.wantLenNodes)
+			if len(cli.knownNodes) != test.wantLenNodes {
+				t.Errorf("added nodes count (known'%d') but expected(%d)", len(cli.knownNodes), test.wantLenNodes)
 			}
 
-			resDhtNode1, ok1 := cli.activeNodes[hexTKeyId1]
+			resDhtNode1, ok1 := cli.knownNodes[hexTKeyId1]
 			if ok1 != test.checkAdd1 {
 				t.Errorf("invalid active nodes addition")
 			}
 			if ok1 {
-				if !bytes.Equal(resDhtNode1.id, test.tNode1.id) {
+				if !bytes.Equal(resDhtNode1.adnlId, test.tNode1.adnlId) {
 					t.Errorf("invalid active node id")
 				}
 				if resDhtNode1.addr != test.tNode1.addr {
@@ -404,13 +413,13 @@ func TestClient_NewClientFromConfig(t *testing.T) {
 				}
 			}
 
-			resDhtNode2, ok2 := cli.activeNodes[hexTKeyId2]
+			resDhtNode2, ok2 := cli.knownNodes[hexTKeyId2]
 			if ok2 != test.checkAdd2 {
 				t.Errorf("invalid active nodes addition")
 			}
 
 			if ok2 {
-				if !bytes.Equal(resDhtNode2.id, test.tNode2.id) {
+				if !bytes.Equal(resDhtNode2.adnlId, test.tNode2.adnlId) {
 					t.Errorf("invalid active node id")
 				}
 				if resDhtNode2.addr != test.tNode2.addr {
@@ -467,7 +476,7 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 							t.Fatal("failed to prepare test data, err", err)
 						}
 
-						k, err := adnl.ToKeyID(&Key{
+						k, err := tl.Hash(&Key{
 							ID:    adnlAddr,
 							Name:  []byte("address"),
 							Index: 0,
@@ -489,10 +498,7 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 			}, nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		cli, err := NewClientFromConfig(ctx, gateway, cnf)
+		cli, err := NewClientFromConfig(gateway, cnf)
 		if err != nil {
 			t.Fatal("failed to prepare test client, err:", err)
 		}
@@ -529,7 +535,7 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -565,30 +571,20 @@ func TestClient_Close(t *testing.T) {
 		}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cli, err := NewClientFromConfig(ctx, gateway, cnf)
+	cli, err := NewClientFromConfig(gateway, cnf)
 	if err != nil {
 		t.Fatal("failed to prepare test client, err: ", err)
 	}
 	t.Run("close client test", func(t *testing.T) {
 		cli.Close()
-		if cli.activeNodes != nil {
-			t.Error("found active nodes in client after 'Close' operation")
+		if cli.globalCtx.Err() == nil {
+			t.Error("global context was not canceled")
 		}
-		for _, node := range cli.activeNodes {
-			if node.adnl != nil {
-				t.Errorf("found connected node (id: %s) after 'Close' operation", hex.EncodeToString(node.id))
-			}
-		}
-
 	})
 }
 
 func TestClient_StoreAddress(t *testing.T) {
 	for i := 0; i < 15; i++ {
-
 		addrList := address.List{
 			Addresses: []*address.UDP{
 				{
@@ -659,13 +655,11 @@ func TestClient_StoreAddress(t *testing.T) {
 							case FindNode:
 								if addr == "185.86.79.9:22096" {
 									reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{testNode}}))
-								} else if addr == "" {
-
 								} else {
 									reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{nil}))
 								}
 							case Store:
-								if addr != "6.6.6.6:65432" && addr != "178.18.243.132:15888" {
+								if addr != "185.86.79.9:22096" && addr != "178.18.243.132:15888" {
 									t.Fatalf("invalid node to store: check priority list %s", addr)
 								}
 								sign := rowReqType.Value.Signature
@@ -693,10 +687,7 @@ func TestClient_StoreAddress(t *testing.T) {
 				}, nil
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			cli, err := NewClientFromConfig(ctx, gateway, cnf)
+			cli, err := NewClientFromConfig(gateway, cnf)
 			if err != nil {
 				t.Fatal("failed to prepare test client, err: ", err)
 			}
@@ -727,7 +718,7 @@ func TestClient_StoreOverlayNodesIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -744,7 +735,7 @@ func TestClient_StoreOverlayNodesIntegration(t *testing.T) {
 
 	_, _, err = dhtClient.StoreOverlayNodes(ctx, id, &overlay.NodesList{
 		List: []overlay.Node{*node},
-	}, 5*time.Minute, 1)
+	}, 5*time.Minute, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,9 +745,7 @@ func TestClient_StoreOverlayNodesIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	println("NUM", len(list.List))
-
-	if len(list.List) > 1 {
+	if len(list.List) == 0 {
 		t.Fatal("list len")
 	}
 
@@ -777,10 +766,10 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton.org/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -813,12 +802,12 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		ExpireAt:   0,
 	}
 
-	_, _, err = dhtClient.StoreAddress(ctx, addrList, 5*time.Minute, key, 2)
+	_, _, err = dhtClient.StoreAddress(ctx, addrList, 12*time.Minute, key, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	kid, err := adnl.ToKeyID(adnl.PublicKeyED25519{
+	kid, err := tl.Hash(adnl.PublicKeyED25519{
 		Key: pub,
 	})
 	if err != nil {

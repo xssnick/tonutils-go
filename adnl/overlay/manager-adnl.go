@@ -27,6 +27,7 @@ type ADNL interface {
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
 	RemoteAddr() string
+	GetID() []byte
 	Close()
 }
 

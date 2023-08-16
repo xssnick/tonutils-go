@@ -79,10 +79,12 @@ func main() {
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 
-	err = api.SendExternalMessage(ctx, &tlb.ExternalMessage{
+	msg := &tlb.ExternalMessage{
 		DstAddr: address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"),
 		Body:    data,
-	})
+	}
+
+	err = api.SendExternalMessage(ctx, msg)
 	if err != nil {
 		// FYI: it can fail if not enough balance on contract
 		log.Printf("send err: %s", err.Error())

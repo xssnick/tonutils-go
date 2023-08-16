@@ -21,7 +21,7 @@ const _CategoryADNLSite = 0xad01
 const _CategoryStorageSite = 0x7473
 
 type TonApi interface {
-	WaitForBlock(seqno uint32) ton.APIClientWaiter
+	WaitForBlock(seqno uint32) ton.APIClientWrapped
 	CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...any) (*ton.ExecutionResult, error)
 	GetBlockchainConfig(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)

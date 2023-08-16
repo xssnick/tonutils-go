@@ -54,32 +54,16 @@ type ServerID struct {
 }
 
 type ValidatorConfig struct {
-	Type      string              `json:"@type"`
-	ZeroState ValidatorZeroState  `json:"zero_state"`
-	InitBlock ValidatorInitBlock  `json:"init_block"`
-	Hardforks []ValidatorHardfork `json:"hardforks"`
+	Type      string        `json:"@type"`
+	ZeroState ConfigBlock   `json:"zero_state"`
+	InitBlock ConfigBlock   `json:"init_block"`
+	Hardforks []ConfigBlock `json:"hardforks"`
 }
 
-type ValidatorZeroState struct {
-	Workchain int    `json:"workchain"`
+type ConfigBlock struct {
+	Workchain int32  `json:"workchain"`
 	Shard     int64  `json:"shard"`
-	Seqno     int    `json:"seqno"`
-	RootHash  string `json:"root_hash"`
-	FileHash  string `json:"file_hash"`
-}
-
-type ValidatorInitBlock struct {
-	RootHash  string `json:"root_hash"`
-	Seqno     int    `json:"seqno"`
-	FileHash  string `json:"file_hash"`
-	Workchain int    `json:"workchain"`
-	Shard     int64  `json:"shard"`
-}
-
-type ValidatorHardfork struct {
-	FileHash  string `json:"file_hash"`
-	Seqno     int    `json:"seqno"`
-	RootHash  string `json:"root_hash"`
-	Workchain int    `json:"workchain"`
-	Shard     int64  `json:"shard"`
+	SeqNo     uint32 `json:"seqno"`
+	RootHash  []byte `json:"root_hash"`
+	FileHash  []byte `json:"file_hash"`
 }
