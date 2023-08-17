@@ -2,10 +2,11 @@ package nft
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
-	"math/rand"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -142,8 +143,14 @@ func (c *ItemClient) BuildTransferPayload(newOwner *address.Address, amountForwa
 		panic("only 1 response destination is allowed")
 	}
 
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, err
+	}
+	rnd := binary.LittleEndian.Uint64(buf)
+
 	body, err := tlb.ToCell(TransferPayload{
-		QueryID:             rand.Uint64(),
+		QueryID:             rnd,
 		NewOwner:            newOwner,
 		ResponseDestination: respTo,
 		CustomPayload:       nil,

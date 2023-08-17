@@ -134,7 +134,7 @@ func (g *Gateway) StartServer(listenAddr string) (err error) {
 		return err
 	}
 
-	rootId, err := ToKeyID(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
+	rootId, err := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
 	if err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func (g *Gateway) StartClient() (err error) {
 		return err
 	}
 
-	rootId, err := ToKeyID(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
+	rootId, err := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
 	if err != nil {
 		return err
 	}
@@ -236,7 +236,7 @@ func (g *Gateway) listen(rootId []byte) {
 					continue
 				}
 
-				peerId, err = ToKeyID(PublicKeyED25519{Key: packet.From.Key})
+				peerId, err = tl.Hash(PublicKeyED25519{Key: packet.From.Key})
 				if err != nil {
 					// invalid packet
 					continue
@@ -402,7 +402,7 @@ func (g *Gateway) RegisterClient(addr string, key ed25519.PublicKey) (Peer, erro
 	}
 	udpAddr := net.UDPAddrFromAddrPort(pAddr)
 
-	clientId, err := ToKeyID(PublicKeyED25519{Key: key})
+	clientId, err := tl.Hash(PublicKeyED25519{Key: key})
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +449,7 @@ func (g *Gateway) write(deadline time.Time, addr net.Addr, buf []byte) error {
 }
 
 func (g *Gateway) GetID() []byte {
-	id, _ := ToKeyID(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
+	id, _ := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
 	return id
 }
 

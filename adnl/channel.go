@@ -61,12 +61,12 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		c.encKey[(len(c.decKey)-1)-i] = c.decKey[i]
 	}
 
-	theirID, err := ToKeyID(PublicKeyED25519{c.adnl.peerKey})
+	theirID, err := tl.Hash(PublicKeyED25519{c.adnl.peerKey})
 	if err != nil {
 		return err
 	}
 
-	ourID, err := ToKeyID(PublicKeyED25519{c.adnl.ourKey.Public().(ed25519.PublicKey)})
+	ourID, err := tl.Hash(PublicKeyED25519{c.adnl.ourKey.Public().(ed25519.PublicKey)})
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		c.encKey = c.decKey
 	}
 
-	c.id, err = ToKeyID(PublicKeyAES{Key: c.decKey})
+	c.id, err = tl.Hash(PublicKeyAES{Key: c.decKey})
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 
 	ctr.XORKeyStream(packetData, packetData)
 
-	enc, err := ToKeyID(PublicKeyAES{Key: c.encKey})
+	enc, err := tl.Hash(PublicKeyAES{Key: c.encKey})
 	if err != nil {
 		return nil, err
 	}

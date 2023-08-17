@@ -2,11 +2,11 @@ package cell
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"math"
 	"math/big"
-	"math/rand"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -174,7 +174,9 @@ func TestLoadCell_DictShuffle(t *testing.T) {
 	empty := BeginCell().EndCell()
 	mm := NewDict(64)
 	for i := 0; i < 500000; i++ {
-		mm.SetIntKey(big.NewInt(rand.Int63()), empty)
+		rnd := make([]byte, 8)
+		_, _ = rand.Read(rnd)
+		_ = mm.SetIntKey(new(big.Int).SetBytes(rnd), empty)
 	}
 	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
 

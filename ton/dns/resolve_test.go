@@ -2,10 +2,10 @@ package dns
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"math/rand"
 	"testing"
 )
 

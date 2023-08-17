@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"sync"
 	"time"
@@ -85,7 +86,7 @@ func listenPacketsAsClient(a *ADNL, conn net.Conn) error {
 		a.Close()
 	}()
 
-	rootID, err := ToKeyID(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
+	rootID, err := tl.Hash(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
 	if err != nil {
 		return err
 	}

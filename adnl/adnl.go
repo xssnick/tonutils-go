@@ -598,7 +598,7 @@ func (a *ADNL) GetAddressList() address.List {
 }
 
 func (a *ADNL) GetID() []byte {
-	id, _ := ToKeyID(PublicKeyED25519{Key: a.peerKey})
+	id, _ := tl.Hash(PublicKeyED25519{Key: a.peerKey})
 	return id
 }
 
@@ -639,7 +639,7 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	if !isResp {
 		packet.From = &PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
 	} else {
-		packet.FromIDShort, err = ToKeyID(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
+		packet.FromIDShort, err = tl.Hash(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
 		if err != nil {
 			return nil, err
 		}
@@ -675,7 +675,7 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 		return nil, err
 	}
 
-	enc, err := ToKeyID(PublicKeyED25519{Key: a.peerKey})
+	enc, err := tl.Hash(PublicKeyED25519{Key: a.peerKey})
 	if err != nil {
 		return nil, err
 	}

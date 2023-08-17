@@ -2,10 +2,10 @@ package cell
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"testing"
 )
 
@@ -389,8 +389,8 @@ func TestSliceFuzz(t *testing.T) {
 	arr2 := make([]byte, 128)
 
 	for i := 0; i < 500000; i++ {
-		sz1 := uint(rand.Uint64() % 512)
-		sz2 := uint(rand.Uint64() % 512)
+		sz1 := uint(int(arr1[0]*arr1[1]) % 512)
+		sz2 := uint(int(arr2[0]*arr2[1]) % 512)
 		rand.Read(arr1)
 		rand.Read(arr2)
 

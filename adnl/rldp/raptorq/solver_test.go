@@ -2,8 +2,9 @@ package raptorq
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
-	"math/rand"
 	"testing"
 )
 
@@ -58,11 +59,17 @@ func Test_EncodeDecode(t *testing.T) {
 }
 
 func Test_EncodeDecodeFuzz(t *testing.T) {
-	for n := 0; n < 100; n++ {
+	for n := 0; n < 1000; n++ {
 		str := make([]byte, 4096)
-		rand.Read(str)
+		_, _ = rand.Read(str)
 
-		symSz := (1 + (rand.Uint32() % 10)) * 10
+		buf := make([]byte, 4)
+		if _, err := rand.Read(buf); err != nil {
+			panic(err)
+		}
+		rnd := binary.LittleEndian.Uint32(buf)
+
+		symSz := (1 + (rnd % 10)) * 10
 		r := NewRaptorQ(symSz)
 		enc, err := r.CreateEncoder(str)
 		if err != nil {
