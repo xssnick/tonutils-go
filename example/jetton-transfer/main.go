@@ -50,21 +50,27 @@ func main() {
 	}
 	log.Println("our jetton balance:", tokenBalance.String())
 
-	amountTokens := tlb.MustFromDecimal("0.9", 9)
+	amountTokens := tlb.MustFromDecimal("0.1", 9)
 
-	// address of receiver's wallet (not token wallet, just usual)
-	to := address.MustParseAddr("EQAvyxX5g_GvynfNl_XVQReZ3rstK5bM2OYu9nvren1SRnuN")
-	transferPayload, err := tokenWallet.BuildTransferPayload(to, amountTokens, tlb.ZeroCoins, nil)
+	comment, err := wallet.CreateCommentCell("Hello from tonutils-go!")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	msg := wallet.SimpleMessage(tokenWallet.Address(), tlb.MustFromTON("0.06"), transferPayload)
+	// address of receiver's wallet (not token wallet, just usual)
+	to := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	transferPayload, err := tokenWallet.BuildTransferPayload(to, amountTokens, tlb.ZeroCoins, comment)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// your TON balance must be > 0.05 to send
+	msg := wallet.SimpleMessage(tokenWallet.Address(), tlb.MustFromTON("0.05"), transferPayload)
 
 	log.Println("sending transaction...")
 	tx, _, err := w.SendWaitTransaction(ctx, msg)
 	if err != nil {
 		panic(err)
 	}
-	log.Println("transaction confirmed:", base64.StdEncoding.EncodeToString(tx.Hash))
+	log.Println("transaction confirmed, hash:", base64.StdEncoding.EncodeToString(tx.Hash))
 }
