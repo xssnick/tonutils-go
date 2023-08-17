@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"math"
+	"math/big"
+	"math/rand"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -143,5 +146,57 @@ func TestLoadCell_LoadDictEdgeCase(t *testing.T) {
 		if !should[kv.Key.BeginParse().MustLoadInt(32)] {
 			t.Fatal(i, "bad key")
 		}
+	}
+}
+
+func TestLoadCell_DictAll(t *testing.T) {
+	empty := BeginCell().EndCell()
+	mm := NewDict(64)
+	mm.SetIntKey(big.NewInt(0), empty)
+	mm.SetIntKey(new(big.Int).SetUint64(math.MaxUint64), empty)
+	mm.SetIntKey(new(big.Int).SetUint64(math.MaxUint64-1), empty)
+	for i := 0; i < 100000; i++ {
+		mm.SetIntKey(big.NewInt(int64(i)), empty)
+	}
+	mm.SetIntKey(big.NewInt(255), empty)
+	mm.SetIntKey(big.NewInt(9223372036854775807), empty)
+	mm.SetIntKey(big.NewInt(9223372036854775806), empty)
+	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+
+	for _, kv := range mm.All() {
+		if hh.Get(kv.Key) == nil {
+			t.Fatal("invalid key", kv.Key.Dump())
+		}
+	}
+}
+
+func TestLoadCell_DictShuffle(t *testing.T) {
+	empty := BeginCell().EndCell()
+	mm := NewDict(64)
+	for i := 0; i < 500000; i++ {
+		mm.SetIntKey(big.NewInt(rand.Int63()), empty)
+	}
+	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+
+	for _, kv := range mm.All() {
+		if hh.Get(kv.Key) == nil {
+			t.Fatal("invalid key", kv.Key.Dump())
+		}
+	}
+
+	for _, kv := range hh.All() {
+		if mm.Get(kv.Key) == nil {
+			t.Fatal("invalid key 2", kv.Key.Dump())
+		}
+	}
+}
+
+func TestDict_CornerSame(t *testing.T) {
+	mm := NewDict(64)
+	mm.SetIntKey(big.NewInt(255), BeginCell().EndCell())
+	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+
+	if hh.GetByIntKey(big.NewInt(255)) == nil {
+		t.Fatal("invalid key")
 	}
 }

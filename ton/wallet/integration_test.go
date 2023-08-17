@@ -135,14 +135,14 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 
 	// the waitConfirmation flag is optional
 	inMsgHash, err := w.SendManyGetInMsgHash(ctx, []*Message{msg}, true)
-	t.Logf("internal message hash: %s", hex.EncodeToString(inMsgHash))
+	t.Logf("message hash: %s", hex.EncodeToString(inMsgHash))
 
 	// find tx hash
 	tx, err := w.FindTransactionByInMsgHash(ctx, inMsgHash, 30)
 	if err != nil {
 		t.Fatal("cannot find tx:", err.Error())
 	}
-	t.Logf("sent message hash: %s", hex.EncodeToString(tx.Hash))
+	t.Logf("tx hash: %s", hex.EncodeToString(tx.Hash))
 }
 
 func TestWallet_DeployContract(t *testing.T) {

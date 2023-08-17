@@ -9,10 +9,12 @@ import (
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"math/rand"
+	"os"
 	"strings"
 	"time"
 
@@ -367,6 +369,9 @@ func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirma
 		return nil, nil, nil, err
 	}
 	inMsgHash = ext.Body.Hash()
+	println("BD", ext.Body.Dump())
+	json.NewEncoder(os.Stdout).Encode(messages[0].InternalMessage)
+	println("------------")
 
 	if err = w.api.SendExternalMessage(ctx, ext); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to send message: %w", err)

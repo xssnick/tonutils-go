@@ -281,10 +281,15 @@ func (d *Dictionary) storeLabel(b *Builder, data []byte, committedOffset, bitOff
 
 	if sameLength < longLen && sameLength < shortLength {
 		cmpInt := new(big.Int).SetBytes(dataBits)
+		offset := partSz % 8
+		if offset != 0 {
+			cmpInt = cmpInt.Rsh(cmpInt, uint(8-offset))
+		}
+
 		if cmpInt.Cmp(big.NewInt(0)) == 0 { // compare with all zeroes
 			return d.storeSame(b, partSz, bitsLen, 0)
-		} else if cmpInt.Cmp(new(big.Int).Sub(new(big.Int).
-			Lsh(big.NewInt(1), uint(bitsLen)+1),
+		} else if cmpInt.BitLen() == int(partSz) && cmpInt.Cmp(new(big.Int).Sub(new(big.Int).
+			Lsh(big.NewInt(1), uint(partSz)),
 			big.NewInt(1))) == 0 { // compare with all ones
 			return d.storeSame(b, partSz, bitsLen, 1)
 		}
