@@ -556,39 +556,41 @@ func (w WaiterMock) GetTransaction(ctx context.Context, block *ton.BlockIDExt, a
 }
 
 func TestCreateEncryptedCommentCell(t *testing.T) {
-	pub1, priv1, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-	pub2, priv2, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
+	for i := 0; i < 100; i++ {
+		pub1, priv1, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+		pub2, priv2, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
 
-	msg := randString(200)
-	sender := address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA")
+		msg := randString(150 + i)
+		sender := address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA")
 
-	c, err := CreateEncryptedCommentCell(msg, sender, priv1, pub2)
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
+		c, err := CreateEncryptedCommentCell(msg, sender, priv1, pub2)
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
 
-	data, err := DecryptCommentCell(c, address.MustParseAddr("EQDnYZIpTwo9RN_84KZX3qIkLVIUJSo8d1yz1vMlKAp2uRtK"), priv2, pub1)
-	if err == nil || err.Error() != "incorrect msg key" {
-		t.Fatal("should be error incorrect msg key, but it is:", err)
-		return
-	}
+		data, err := DecryptCommentCell(c, address.MustParseAddr("EQDnYZIpTwo9RN_84KZX3qIkLVIUJSo8d1yz1vMlKAp2uRtK"), priv2, pub1)
+		if err == nil || err.Error() != "incorrect msg key" {
+			t.Fatal("should be error incorrect msg key, but it is:", err)
+			return
+		}
 
-	data, err = DecryptCommentCell(c, sender, priv2, pub1)
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
+		data, err = DecryptCommentCell(c, sender, priv2, pub1)
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
 
-	if string(data) != msg {
-		t.Fatal("incorrect result")
+		if string(data) != msg {
+			t.Fatal("incorrect result")
+		}
 	}
 }

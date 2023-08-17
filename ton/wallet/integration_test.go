@@ -3,10 +3,11 @@ package wallet
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -135,14 +136,14 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 
 	// the waitConfirmation flag is optional
 	inMsgHash, err := w.SendManyGetInMsgHash(ctx, []*Message{msg}, true)
-	t.Logf("internal message hash: %s", hex.EncodeToString(inMsgHash))
+	t.Logf("message hash: %s", hex.EncodeToString(inMsgHash))
 
 	// find tx hash
 	tx, err := w.FindTransactionByInMsgHash(ctx, inMsgHash, 30)
 	if err != nil {
 		t.Fatal("cannot find tx:", err.Error())
 	}
-	t.Logf("sent message hash: %s", hex.EncodeToString(tx.Hash))
+	t.Logf("tx hash: %s", hex.EncodeToString(tx.Hash))
 }
 
 func TestWallet_DeployContract(t *testing.T) {
@@ -159,7 +160,11 @@ func TestWallet_DeployContract(t *testing.T) {
 	codeBytes, _ := hex.DecodeString("b5ee9c72410104010020000114ff00f4a413f4bcf2c80b010203844003020009a1b63c43510007a0000061d2421bb1")
 	code, _ := cell.FromBOC(codeBytes)
 
-	addr, _, block, err := w.DeployContractWaitTransaction(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rand.Uint64(), 64).EndCell())
+	buf := make([]byte, 8)
+	_, _ = rand.Read(buf)
+	rnd := binary.LittleEndian.Uint64(buf)
+
+	addr, _, block, err := w.DeployContractWaitTransaction(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rnd, 64).EndCell())
 	if err != nil {
 		t.Fatal("deploy err:", err)
 	}
@@ -256,10 +261,13 @@ func randString(n int) string {
 		"абвгдежзиклмнопрстиквфыйцэюяАБВГДЕЖЗИЙКЛМНОПРСТИЮЯЗФЫУю!№%:,.!;(!)_+" +
 		"😱😨🍫💋💎😄🎉☠️🙈😁🙂📱😨😮🤮👿👏🤞🖕🤜👂👃👀")
 
-	rand.Seed(time.Now().UnixNano())
+	buf := make([]byte, 2)
+	_, _ = rand.Read(buf)
+	rnd := binary.LittleEndian.Uint16(buf)
+
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+		b[i] = letterRunes[int(rnd)%len(letterRunes)]
 	}
 	return string(b)
 }

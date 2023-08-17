@@ -23,6 +23,7 @@ type SendMessageStatus struct {
 }
 
 var ErrMessageNotAccepted = errors.New("message was not accepted by the contract")
+var ErrNoTransactionsWereFound = errors.New("no transactions were found")
 
 func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error {
 	req, err := msg.ToCell()

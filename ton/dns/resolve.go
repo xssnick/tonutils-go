@@ -2,9 +2,10 @@ package dns
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -37,7 +38,11 @@ type Client struct {
 	api  TonApi
 }
 
-var randomizer = rand.Uint64
+var randomizer = func() uint64 {
+	buf := make([]byte, 8)
+	_, _ = rand.Read(buf)
+	return binary.LittleEndian.Uint64(buf)
+}
 
 func RootContractAddr(api TonApi) (*address.Address, error) {
 	b, err := api.CurrentMasterchainInfo(context.Background())

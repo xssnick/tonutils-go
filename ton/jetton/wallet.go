@@ -2,9 +2,10 @@ package jetton
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"math/big"
-	"math/rand"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -70,8 +71,14 @@ func (c *WalletClient) BuildTransferPayload(to *address.Address, amountCoins, am
 		payloadForward = cell.BeginCell().EndCell()
 	}
 
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, err
+	}
+	rnd := binary.LittleEndian.Uint64(buf)
+
 	body, err := tlb.ToCell(TransferPayload{
-		QueryID:             rand.Uint64(),
+		QueryID:             rnd,
 		Amount:              amountCoins,
 		Destination:         to,
 		ResponseDestination: to,
@@ -87,8 +94,14 @@ func (c *WalletClient) BuildTransferPayload(to *address.Address, amountCoins, am
 }
 
 func (c *WalletClient) BuildBurnPayload(amountCoins tlb.Coins, notifyAddr *address.Address) (*cell.Cell, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, err
+	}
+	rnd := binary.LittleEndian.Uint64(buf)
+
 	body, err := tlb.ToCell(BurnPayload{
-		QueryID:             rand.Uint64(),
+		QueryID:             rnd,
 		Amount:              amountCoins,
 		ResponseDestination: notifyAddr,
 		CustomPayload:       nil,

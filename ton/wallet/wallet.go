@@ -7,12 +7,13 @@ import (
 	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha512"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -92,7 +93,12 @@ func init() {
 }
 
 // defining some funcs this way to mock for tests
-var randUint32 = rand.Uint32
+var randUint32 = func() uint32 {
+	buf := make([]byte, 4)
+	_, _ = rand.Read(buf)
+	return binary.LittleEndian.Uint32(buf)
+}
+
 var timeNow = time.Now
 
 var (
@@ -558,7 +564,7 @@ func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey 
 	enc.CryptBlocks(data, data)
 
 	if data[0] > 31 {
-		return nil, fmt.Errorf("invalid prefix size")
+		return nil, fmt.Errorf("invalid prefix size %d", data[0])
 	}
 
 	h = hmac.New(sha512.New, []byte(sender.String()))
@@ -581,7 +587,12 @@ func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey
 
 	data := []byte(text)
 
-	pfx := make([]byte, 16+(16-(len(data)%16)))
+	pfxSz := 16
+	if len(data)%16 != 0 {
+		pfxSz += 16 - (len(data) % 16)
+	}
+
+	pfx := make([]byte, pfxSz)
 	pfx[0] = byte(len(pfx))
 	if _, err = rand.Read(pfx[1:]); err != nil {
 		return nil, fmt.Errorf("rand gen err: %w", err)

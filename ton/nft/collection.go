@@ -2,9 +2,10 @@ package nft
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"math/big"
-	"math/rand"
 
 	"github.com/xssnick/tonutils-go/ton"
 
@@ -211,8 +212,14 @@ func (c *CollectionClient) BuildMintPayload(index *big.Int, owner *address.Addre
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).EndCell()
 
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, err
+	}
+	rnd := binary.LittleEndian.Uint64(buf)
+
 	body, err := tlb.ToCell(ItemMintPayload{
-		QueryID:   rand.Uint64(),
+		QueryID:   rnd,
 		Index:     index,
 		TonAmount: amountForward,
 		Content:   con,
@@ -232,8 +239,14 @@ func (c *CollectionClient) BuildMintEditablePayload(index *big.Int, owner, edito
 
 	con = cell.BeginCell().MustStoreAddr(owner).MustStoreRef(con).MustStoreAddr(editor).EndCell()
 
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, err
+	}
+	rnd := binary.LittleEndian.Uint64(buf)
+
 	body, err := tlb.ToCell(ItemMintPayload{
-		QueryID:   rand.Uint64(),
+		QueryID:   rnd,
 		Index:     index,
 		TonAmount: amountForward,
 		Content:   con,

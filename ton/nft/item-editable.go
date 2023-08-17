@@ -2,9 +2,10 @@ package nft
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"github.com/xssnick/tonutils-go/ton"
-	"math/rand"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -68,8 +69,14 @@ func (c *ItemEditableClient) BuildEditPayload(content ContentAny) (*cell.Cell, e
 		}
 	}
 
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return nil, err
+	}
+	rnd := binary.LittleEndian.Uint64(buf)
+
 	body, err := tlb.ToCell(ItemEditPayload{
-		QueryID: rand.Uint64(),
+		QueryID: rnd,
 		Content: con,
 	})
 	if err != nil {

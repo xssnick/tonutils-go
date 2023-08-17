@@ -1,9 +1,9 @@
 package tlb
 
 import (
+	"crypto/rand"
 	"fmt"
 	"math/big"
-	"math/rand"
 	"strings"
 	"testing"
 )
@@ -113,13 +113,19 @@ func TestCoins_Decimals(t *testing.T) {
 		t.Run("decimals "+fmt.Sprint(i), func(t *testing.T) {
 			for x := 0; x < 5000; x++ {
 				rnd := make([]byte, 64)
-				rand.Read(rnd)
+				_, _ = rand.Read(rnd)
 
 				lo := new(big.Int).Mod(new(big.Int).SetBytes(rnd), new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(i)), nil))
 				if i > 0 && strings.HasSuffix(lo.String(), "0") {
 					lo = lo.Add(lo, big.NewInt(1))
 				}
-				hi := big.NewInt(rand.Int63())
+
+				buf := make([]byte, 8)
+				if _, err := rand.Read(buf); err != nil {
+					panic(err)
+				}
+
+				hi := new(big.Int).SetBytes(buf)
 
 				amt := new(big.Int).Mul(hi, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(i)), nil))
 				amt = amt.Add(amt, lo)

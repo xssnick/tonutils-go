@@ -62,6 +62,10 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 
 	switch t := resp.(type) {
 	case TransactionList:
+		if len(t.Transactions) == 0 {
+			return nil, ErrNoTransactionsWereFound
+		}
+
 		txList, err := cell.FromBOCMultiRoot(t.Transactions)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse cell from transaction bytes: %w", err)
@@ -88,7 +92,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 		return res, nil
 	case LSError:
 		if t.Code == 0 {
-			return nil, ErrMessageNotAccepted
+			return nil, ErrNoTransactionsWereFound
 		}
 		return nil, t
 	}
