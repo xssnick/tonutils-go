@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -13,13 +14,12 @@ import (
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	// connect to mainnet lite server
-	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	// connect to mainnet lite servers
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return
 	}
-
 	// initialize ton api lite connection wrapper
 	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 
@@ -69,14 +69,17 @@ func main() {
 			log.Printf("send err: %s", err.Error())
 			return
 		}
-
-		// oldest = first in list
-		for _, t := range list {
-			fmt.Println(t.String())
-		}
-
 		// set previous info from the oldest transaction in list
 		lastHash = list[0].PrevTxHash
 		lastLt = list[0].PrevTxLT
+
+		// reverse list to show the newest first
+		sort.Slice(list, func(i, j int) bool {
+			return list[i].LT > list[j].LT
+		})
+
+		for _, t := range list {
+			fmt.Println(t.String())
+		}
 	}
 }

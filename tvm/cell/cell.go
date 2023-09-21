@@ -26,7 +26,6 @@ type Cell struct {
 	special   bool
 	levelMask LevelMask
 	bitsSz    uint
-	index     int
 	data      []byte
 
 	hashes      []byte
@@ -173,6 +172,8 @@ func (c *Cell) dump(deep int, bin bool, limitLength int) string {
 
 const _DataCellMaxLevel = 3
 
+// Hash - calculates a hash of cell recursively
+// Once calculated, it is cached and can be reused cheap.
 func (c *Cell) Hash(level ...int) []byte {
 	if len(level) > 0 {
 		return c.getHash(level[0])
@@ -182,6 +183,10 @@ func (c *Cell) Hash(level ...int) []byte {
 
 func (c *Cell) Sign(key ed25519.PrivateKey) []byte {
 	return ed25519.Sign(key, c.Hash())
+}
+
+func (c *Cell) Verify(key ed25519.PublicKey, signature []byte) bool {
+	return ed25519.Verify(key, c.Hash(), signature)
 }
 
 func (c *Cell) GetType() Type {

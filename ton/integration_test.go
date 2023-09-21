@@ -15,7 +15,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-var apiTestNet = func() *APIClient {
+var apiTestNet = func() APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -26,7 +26,7 @@ var apiTestNet = func() *APIClient {
 		panic(err)
 	}
 
-	return NewAPIClient(client)
+	return NewAPIClient(client, ProofCheckPolicySecure)
 }()
 
 var api = func() APIClientWrapped {
@@ -205,7 +205,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	ctx = apiTestNet.client.StickyContext(ctx)
+	ctx = apiTestNet.Client().StickyContext(ctx)
 
 	b, err := apiTestNet.GetMasterchainInfo(ctx)
 	if err != nil {

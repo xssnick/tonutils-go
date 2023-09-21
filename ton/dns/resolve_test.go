@@ -63,6 +63,7 @@ func TestDomain_GetRecords(t *testing.T) {
 			MustStoreSlice(h.Sum(nil), 256).MustStoreRef(cell.BeginCell().
 			MustStoreUInt(_CategoryADNLSite, 16).
 			MustStoreSlice(adnlAddr, 256).
+			MustStoreUInt(0, 8).
 			EndCell()).EndCell()
 
 		if !bytes.Equal(domain.BuildSetSiteRecordPayload(adnlAddr, false).Hash(), site.Hash()) {

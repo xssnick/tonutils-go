@@ -79,11 +79,24 @@ func (d *Dictionary) Set(key, value *Cell) error {
 		return fmt.Errorf("failed to set in dict, err: %w", err)
 	}
 
+	if value == nil {
+		delete(d.storage, hex.EncodeToString(data))
+		return nil
+	}
+
 	d.storage[hex.EncodeToString(data)] = &HashmapKV{
 		Key:   key,
 		Value: value,
 	}
 	return nil
+}
+
+func (d *Dictionary) Delete(key *Cell) error {
+	return d.Set(key, nil)
+}
+
+func (d *Dictionary) DeleteIntKey(key *big.Int) error {
+	return d.SetIntKey(key, nil)
 }
 
 func (d *Dictionary) GetByIntKey(key *big.Int) *Cell {

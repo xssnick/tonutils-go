@@ -31,16 +31,16 @@ func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
 	}
 
 	// recursively go through cells, build hash index and store unique in slice
-	orderCells := flattenIndex(roots)
+	sortedCells, index := flattenIndex(roots)
 
 	// bytes needed to store num of cells
-	cellSizeBits := math.Log2(float64(len(orderCells)) + 1)
+	cellSizeBits := math.Log2(float64(len(sortedCells)) + 1)
 	cellSizeBytes := byte(math.Ceil(cellSizeBits / 8))
 
 	var payload []byte
-	for i := 0; i < len(orderCells); i++ {
+	for i := 0; i < len(sortedCells); i++ {
 		// serialize each cell
-		payload = append(payload, orderCells[i].serialize(uint(cellSizeBytes))...)
+		payload = append(payload, sortedCells[i].cell.serialize(uint(cellSizeBytes), index)...)
 	}
 
 	// bytes needed to store len of payload
@@ -64,7 +64,7 @@ func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
 	data = append(data, sizeBytes)
 
 	// cells num
-	data = append(data, dynamicIntBytes(uint64(len(orderCells)), uint(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(len(sortedCells)), uint(cellSizeBytes))...)
 
 	// roots num
 	data = append(data, dynamicIntBytes(uint64(len(roots)), uint(cellSizeBytes))...)
@@ -77,7 +77,7 @@ func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
 
 	// root index
 	for _, r := range roots {
-		data = append(data, dynamicIntBytes(uint64(r.index), uint(cellSizeBytes))...)
+		data = append(data, dynamicIntBytes(index[string(r.Hash())].index, uint(cellSizeBytes))...)
 	}
 	data = append(data, payload...)
 
@@ -91,7 +91,7 @@ func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
 	return data
 }
 
-func (c *Cell) serialize(refIndexSzBytes uint) []byte {
+func (c *Cell) serialize(refIndexSzBytes uint, index map[string]*idxItem) []byte {
 	body := c.BeginParse().MustLoadSlice(c.bitsSz)
 
 	data := make([]byte, 2+len(body))
@@ -105,7 +105,7 @@ func (c *Cell) serialize(refIndexSzBytes uint) []byte {
 	}
 
 	for _, ref := range c.refs {
-		data = append(data, dynamicIntBytes(uint64(ref.index), refIndexSzBytes)...)
+		data = append(data, dynamicIntBytes(index[string(ref.Hash())].index, refIndexSzBytes)...)
 	}
 
 	return data

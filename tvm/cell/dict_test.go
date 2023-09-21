@@ -202,3 +202,21 @@ func TestDict_CornerSame(t *testing.T) {
 		t.Fatal("invalid key")
 	}
 }
+
+func TestDict_Delete(t *testing.T) {
+	mm := NewDict(64)
+	mm.SetIntKey(big.NewInt(255), BeginCell().EndCell())
+	mm.SetIntKey(big.NewInt(777), BeginCell().EndCell())
+	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+
+	hh.DeleteIntKey(big.NewInt(255))
+	hh2, _ := hh.MustToCell().BeginParse().ToDict(64)
+
+	if hh2.GetByIntKey(big.NewInt(255)) != nil {
+		t.Fatal("invalid key")
+	}
+
+	if hh2.GetByIntKey(big.NewInt(777)) == nil {
+		t.Fatal("invalid key")
+	}
+}
