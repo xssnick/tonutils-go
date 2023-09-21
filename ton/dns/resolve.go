@@ -239,13 +239,19 @@ func (d *Domain) BuildSetRecordPayload(name string, value *cell.Cell) *cell.Cell
 }
 
 func (d *Domain) BuildSetSiteRecordPayload(addr []byte, isStorage bool) *cell.Cell {
-	var cat uint64 = _CategoryADNLSite
+	var payload *cell.Cell
 	if isStorage {
-		cat = _CategoryStorageSite
+		payload = cell.BeginCell().MustStoreUInt(_CategoryStorageSite, 16).
+			MustStoreSlice(addr, 256).
+			EndCell()
+	} else {
+		payload = cell.BeginCell().MustStoreUInt(_CategoryADNLSite, 16).
+			MustStoreSlice(addr, 256).
+			MustStoreUInt(0, 8).
+			EndCell()
 	}
-
-	record := cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreUInt(cat, 16).MustStoreSlice(addr, 256).EndCell()).EndCell()
-	return d.BuildSetRecordPayload("site", record)
+	// https://github.com/ton-blockchain/TEPs/blob/master/text/0081-dns-standard.md#dns-records
+	return d.BuildSetRecordPayload("site", cell.BeginCell().MustStoreRef(payload).EndCell())
 }
 
 func (d *Domain) BuildSetWalletRecordPayload(addr *address.Address) *cell.Cell {

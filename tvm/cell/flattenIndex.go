@@ -4,44 +4,43 @@ import (
 	"sort"
 )
 
-func flattenIndex(src []*Cell) []*Cell {
-	pending := src
-	allCells := map[string]*Cell{}
+type idxItem struct {
+	index uint64
+	cell  *Cell
+}
 
-	idx := 0
-	var cells []*Cell
-	for len(pending) > 0 {
-		var next []*Cell
-		for _, p := range pending {
-			hash := string(p.Hash())
-			if ps, ok := allCells[hash]; ok {
-				// move cell forward in boc, because behind reference is not allowed
-				ps.index, p.index = idx, idx
-				idx++
+func flattenIndex(cells []*Cell) ([]*idxItem, map[string]*idxItem) {
+	index := map[string]*idxItem{}
 
-				// we also need to move refs
-				next = append(next, p.refs...)
-				continue
+	idx := uint64(0)
+	for len(cells) > 0 {
+		next := make([]*Cell, 0, len(cells)*4)
+		for _, p := range cells {
+			// move cell forward in boc, because behind reference is not allowed
+			index[string(p.Hash())] = &idxItem{
+				index: idx,
+				cell:  p,
 			}
-
-			p.index = idx
 			idx++
-
-			allCells[hash] = p
-			cells = append(cells, p)
 
 			next = append(next, p.refs...)
 		}
-		pending = next
+		cells = next
 	}
 
-	sort.Slice(cells, func(i, j int) bool {
-		return cells[i].index < cells[j].index
+	idxSlice := make([]*idxItem, 0, len(index))
+	for _, id := range index {
+		idxSlice = append(idxSlice, id)
+	}
+
+	sort.Slice(idxSlice, func(i, j int) bool {
+		return idxSlice[i].index < idxSlice[j].index
 	})
 
-	for i, cell := range cells {
-		// remove possible gaps
-		cell.index = i
+	for i, id := range idxSlice {
+		// remove gaps in indexes
+		id.index = uint64(i)
 	}
-	return cells
+
+	return idxSlice, index
 }

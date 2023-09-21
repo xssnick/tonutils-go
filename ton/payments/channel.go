@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -51,22 +50,25 @@ func NewPaymentChannelClient(api TonApi) *Client {
 	}
 }
 
+var ErrVerificationNotPassed = fmt.Errorf("verification not passed")
+
 func (c *Client) GetAsyncChannel(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, verify bool) (*AsyncChannel, error) {
 	acc, err := c.api.GetAccount(ctx, block, addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account: %w", err)
 	}
 
-	if !acc.IsActive {
+	if !acc.IsActive || !acc.State.IsValid || acc.State.Status != tlb.AccountStatusActive {
 		return nil, fmt.Errorf("channel account is not active")
 	}
 
-	if verify {
-		codeBoC, _ := hex.DecodeString(AsyncPaymentChannelCodeBoC)
-		code, _ := cell.FromBOC(codeBoC)
+	return c.ParseAsyncChannel(addr, acc.Code, acc.Data, verify)
+}
 
-		if !bytes.Equal(acc.Code.Hash(), code.Hash()) {
-			return nil, fmt.Errorf("incorrect code hash")
+func (c *Client) ParseAsyncChannel(addr *address.Address, code, data *cell.Cell, verify bool) (*AsyncChannel, error) {
+	if verify {
+		if !bytes.Equal(code.Hash(), AsyncPaymentChannelCodeHash) {
+			return nil, ErrVerificationNotPassed
 		}
 	}
 
@@ -76,9 +78,36 @@ func (c *Client) GetAsyncChannel(ctx context.Context, block *ton.BlockIDExt, add
 		Status: ChannelStatusUninitialized,
 	}
 
-	err = tlb.LoadFromCell(&ch.Storage, acc.Data.BeginParse())
+	err := tlb.LoadFromCell(&ch.Storage, data.BeginParse())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load storage: %w", err)
+	}
+
+	if verify {
+		storageData := AsyncChannelStorageData{
+			KeyA:          ch.Storage.KeyA,
+			KeyB:          ch.Storage.KeyB,
+			ChannelID:     ch.Storage.ChannelID,
+			ClosingConfig: ch.Storage.ClosingConfig,
+			Payments:      ch.Storage.Payments,
+		}
+
+		data, err = tlb.ToCell(storageData)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize storage data: %w", err)
+		}
+
+		si, err := tlb.ToCell(tlb.StateInit{
+			Code: AsyncPaymentChannelCode,
+			Data: data,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize state init: %w", err)
+		}
+
+		if !bytes.Equal(si.Hash(), ch.addr.Data()) {
+			return nil, ErrVerificationNotPassed
+		}
 	}
 
 	ch.Status = ch.Storage.calcState()
@@ -87,9 +116,6 @@ func (c *Client) GetAsyncChannel(ctx context.Context, block *ton.BlockIDExt, add
 }
 
 func (c *Client) GetDeployAsyncChannelParams(channelId ChannelID, isA bool, initialBalance tlb.Coins, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey, closingConfig ClosingConfig, paymentConfig PaymentConfig) (body, code, data *cell.Cell, err error) {
-	codeBoC, _ := hex.DecodeString(AsyncPaymentChannelCodeBoC)
-	code, _ = cell.FromBOC(codeBoC)
-
 	if len(channelId) != 16 {
 		return nil, nil, nil, fmt.Errorf("channelId len should be 16 bytes")
 	}
@@ -129,7 +155,11 @@ func (c *Client) GetDeployAsyncChannelParams(channelId ChannelID, isA bool, init
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to serialize message: %w", err)
 	}
-	return body, code, data, nil
+	return body, AsyncPaymentChannelCode, data, nil
+}
+
+func (c *AsyncChannel) Address() *address.Address {
+	return c.addr
 }
 
 // calcState - it repeats get_channel_state method of contract,

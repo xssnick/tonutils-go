@@ -26,7 +26,7 @@ func TestCell_HashSign(t *testing.T) {
 	}
 
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	if !ed25519.Verify(pub, cc.Hash(), cc.Sign(priv)) {
+	if !cc.Verify(pub, cc.Sign(priv)) {
 		t.Fatal("sign not match")
 	}
 }
@@ -237,5 +237,20 @@ func TestCell_ShardStateProof(t *testing.T) {
 	trueHash, _ := hex.DecodeString("BFAA5FC9B4588A4FD58B497E809570C75A01A369A1233817FF16C7360C1755BE")
 	if !bytes.Equal(c.Hash(0), trueHash) {
 		t.Fatal("wrong hash:", hex.EncodeToString(c.Hash(0)), "should be", hex.EncodeToString(trueHash))
+	}
+}
+
+func TestSameBocIndex(t *testing.T) {
+	r := BeginCell().MustStoreUInt(555, 32).EndCell()
+	c := BeginCell().MustStoreUInt(55, 64).MustStoreRef(r).MustStoreRef(r).MustStoreRef(r.copy()).EndCell()
+	println(hex.EncodeToString(c.ToBOC()))
+
+	c2, err := FromBOC(c.ToBOC())
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if !bytes.Equal(c.Hash(), c2.Hash()) {
+		t.Fatal("wrong hash")
 	}
 }
