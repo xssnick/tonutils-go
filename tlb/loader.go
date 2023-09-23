@@ -13,11 +13,11 @@ import (
 
 type Magic struct{}
 
-type manualLoader interface {
+type Unmarshaler interface {
 	LoadFromCell(loader *cell.Slice) error
 }
 
-type manualStore interface {
+type Marshaller interface {
 	ToCell() (*cell.Cell, error)
 }
 
@@ -53,7 +53,7 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 	}
 	rv = rv.Elem()
 
-	if ld, ok := v.(manualLoader); ok {
+	if ld, ok := v.(Unmarshaler); ok {
 		err := ld.LoadFromCell(slice)
 		if err != nil {
 			return fmt.Errorf("failed to load from cell for %s, using manual loader, err: %w", rv.Type().Name(), err)
@@ -392,7 +392,7 @@ func ToCell(v any) (*cell.Cell, error) {
 		rv = rv.Elem()
 	}
 
-	if ld, ok := v.(manualStore); ok {
+	if ld, ok := v.(Marshaller); ok {
 		c, err := ld.ToCell()
 		if err != nil {
 			return nil, fmt.Errorf("failed to store to cell for %s, using manual storer, err: %w", reflect.TypeOf(v).PkgPath(), err)

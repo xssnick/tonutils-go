@@ -153,6 +153,10 @@ func TestLoadFromCell(t *testing.T) {
 			t.Fatal("coins 700000 not eq")
 		}
 
+		if x.Inside.ValCoins.String() != "0.0007" {
+			t.Fatal("coins 700000 not eq, got " + x.Inside.ValCoins.String())
+		}
+
 		if x.Part.BigVal.Uint64() != 7126382921832 {
 			t.Fatal("uint part 7126382921832 not eq")
 		}
