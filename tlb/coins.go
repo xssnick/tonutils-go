@@ -180,6 +180,7 @@ func (g *Coins) LoadFromCell(loader *cell.Slice) error {
 	if err != nil {
 		return err
 	}
+	g.decimals = 9
 	g.val = coins
 	return nil
 }
