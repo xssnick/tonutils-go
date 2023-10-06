@@ -24,8 +24,8 @@ type GetLibraries struct {
 }
 
 type LibraryEntry struct {
-	Hash []byte `tl:"int256"`
-	Data []byte `tl:"bytes"`
+	Hash []byte     `tl:"int256"`
+	Data *cell.Cell `tl:"cell"`
 }
 
 type LibraryResult struct {
@@ -69,7 +69,7 @@ func (c *APIClient) GetLibraries(ctx context.Context, list ...[]byte) ([]*cell.C
 		libList := make([]*cell.Cell, 0)
 
 		for _, t := range t.Result {
-			libList = append(libList, cell.BeginCell().MustStoreBinarySnake(t.Data).EndCell())
+			libList = append(libList, t.Data)
 		}
 
 		return libList, err
