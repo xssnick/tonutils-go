@@ -694,3 +694,37 @@ func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 		t.Fatal("no transactions")
 	}
 }
+
+func TestAPIClient_GetLibraries(t *testing.T) {
+	_ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ctx := apiTestNet.Client().StickyContext(_ctx)
+
+	addr := address.MustParseAddr("EQBi-jwMXO2AlSdhun2Th8lDr2jgsijuqWdyyD-ec-K1SYY1")
+
+	b, err := apiTestNet.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	acc, err := apiTestNet.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
+	if err != nil {
+		t.Fatal("get acc err:", err.Error())
+		return
+	}
+
+	bSnake, err := acc.Code.BeginParse().LoadBinarySnake()
+	if err != nil {
+		t.Fatal("parse acc code err:", err.Error())
+		return
+	}
+
+	hashes := make([][]byte, 0)
+
+	hashes = append(hashes, bSnake[1:])
+
+	resp, err := apiTestNet.GetLibraries(ctx, hashes)
+
+	fmt.Println(resp, err)
+}

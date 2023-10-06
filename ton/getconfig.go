@@ -13,6 +13,20 @@ func init() {
 	tl.Register(GetConfigAll{}, "liteServer.getConfigAll mode:# id:tonNode.blockIdExt = liteServer.ConfigInfo")
 	tl.Register(GetConfigParams{}, "liteServer.getConfigParams mode:# id:tonNode.blockIdExt param_list:(vector int) = liteServer.ConfigInfo")
 	tl.Register(ConfigAll{}, "liteServer.configInfo mode:# id:tonNode.blockIdExt state_proof:bytes config_proof:bytes = liteServer.ConfigInfo")
+	tl.Register(GetLibraries{}, "liteServer.getLibraries library_list:(vector int256) = liteServer.LibraryResult")
+}
+
+type GetLibraries struct {
+	LibraryList [][]byte `tl:"vector int256"`
+}
+
+type LibraryEntry struct {
+	Hash []byte `tl:"int256"`
+	Data []byte `tl:"bytes"`
+}
+
+type LibraryResult struct {
+	Result []LibraryEntry `tl:"vector"`
 }
 
 type ConfigAll struct {
@@ -35,6 +49,28 @@ type GetConfigParams struct {
 
 type BlockchainConfig struct {
 	data map[int32]*cell.Cell
+}
+
+func (c *APIClient) GetLibraries(ctx context.Context, list [][]byte) (any, error) {
+	var (
+		resp tl.Serializable
+		err  error
+	)
+
+	fmt.Println(list)
+	if err = c.client.QueryLiteserver(ctx, GetLibraries{LibraryList: list}, &resp); err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case LibraryResult:
+
+		fmt.Println(t)
+	case LSError:
+		return nil, t
+	}
+
+	return nil, errUnexpectedResponse(resp)
 }
 
 func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error) {

@@ -14,6 +14,7 @@ import (
 
 func init() {
 	tl.Register(LSError{}, "liteServer.error code:int message:string = liteServer.Error")
+
 }
 
 type ProofCheckPolicy int
@@ -50,6 +51,7 @@ type APIClientWaiter = APIClientWrapped
 type APIClientWrapped interface {
 	Client() LiteClient
 	GetTime(ctx context.Context) (uint32, error)
+	GetLibraries(ctx context.Context, libraryHashes [][]byte) (any, error)
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
 	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
