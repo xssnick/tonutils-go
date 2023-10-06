@@ -721,10 +721,17 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 	}
 
 	hashes := make([][]byte, 0)
-
 	hashes = append(hashes, bSnake[1:])
 
-	resp, err := apiTestNet.GetLibraries(ctx, hashes)
+	resp, err := apiTestNet.GetLibraries(ctx, hashes...)
 
-	fmt.Println(resp, err)
+	if err != nil {
+		t.Fatal("get libraries err:", err.Error())
+		return
+	}
+
+	if len(resp) != 1 {
+		t.Fatal("incorrect resp get libraries length:", err.Error())
+		return
+	}
 }

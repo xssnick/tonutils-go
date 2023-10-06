@@ -7,6 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 	"reflect"
 	"sync"
 	"time"
@@ -51,7 +52,7 @@ type APIClientWaiter = APIClientWrapped
 type APIClientWrapped interface {
 	Client() LiteClient
 	GetTime(ctx context.Context) (uint32, error)
-	GetLibraries(ctx context.Context, libraryHashes [][]byte) (any, error)
+	GetLibraries(ctx context.Context, list ...[]byte) ([]*cell.Cell, error)
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
 	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
