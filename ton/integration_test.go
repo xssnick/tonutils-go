@@ -3,6 +3,7 @@ package ton
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"reflect"
@@ -692,5 +693,52 @@ func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 
 	if lastLT == initLT {
 		t.Fatal("no transactions")
+	}
+}
+
+func TestAPIClient_GetLibraries(t *testing.T) {
+	_ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ctx := apiTestNet.Client().StickyContext(_ctx)
+
+	addr := address.MustParseAddr("EQBi-jwMXO2AlSdhun2Th8lDr2jgsijuqWdyyD-ec-K1SYY1")
+
+	b, err := apiTestNet.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	acc, err := apiTestNet.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
+	if err != nil {
+		t.Fatal("get acc err:", err.Error())
+		return
+	}
+
+	bSnake, err := acc.Code.BeginParse().LoadBinarySnake()
+	if err != nil {
+		t.Fatal("parse acc code err:", err.Error())
+		return
+	}
+
+	resp, err := apiTestNet.GetLibraries(ctx, bSnake[1:], make([]byte, 32), bSnake[1:])
+	if err != nil {
+		t.Fatal("get libraries err:", err.Error())
+		return
+	}
+
+	if len(resp) != 3 {
+		t.Fatal("incorrect resp get libraries length:", len(resp))
+		return
+	}
+
+	if resp[0] == nil {
+		t.Fatal("first should be not empty")
+	}
+	if resp[1] != nil {
+		t.Fatal("second should be empty", hex.EncodeToString(resp[1].Hash()))
+	}
+	if resp[2] == nil {
+		t.Fatal("third should be not empty")
 	}
 }

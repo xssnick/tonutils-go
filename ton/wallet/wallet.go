@@ -176,8 +176,16 @@ func getSpec(w *Wallet) (any, error) {
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
 }
 
+// Address - returns old (bounce) version of wallet address
+// DEPRECATED: because of address reform, use WalletAddress,
+// it will return UQ format
 func (w *Wallet) Address() *address.Address {
 	return w.addr
+}
+
+// WalletAddress - returns new standard non bounce address
+func (w *Wallet) WalletAddress() *address.Address {
+	return w.addr.Bounce(false)
 }
 
 func (w *Wallet) PrivateKey() ed25519.PrivateKey {
@@ -307,7 +315,7 @@ func (w *Wallet) BuildTransferEncrypted(ctx context.Context, to *address.Address
 			return nil, fmt.Errorf("failed to get destination contract (wallet) public key")
 		}
 
-		body, err = CreateEncryptedCommentCell(comment, w.Address(), w.key, key)
+		body, err = CreateEncryptedCommentCell(comment, w.WalletAddress(), w.key, key)
 		if err != nil {
 			return nil, err
 		}

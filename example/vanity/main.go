@@ -50,8 +50,8 @@ func main() {
 						continue
 					}
 
-					if strings.HasSuffix(w.Address().String(), *suffix) {
-						log.Println("Address:", w.Address().String())
+					if strings.HasSuffix(w.WalletAddress().String(), *suffix) {
+						log.Println("Address:", w.WalletAddress().String())
 						log.Println("Private key:", hex.EncodeToString(pk.Seed()))
 						os.Exit(0)
 					}
@@ -70,8 +70,8 @@ func main() {
 					seed := wallet.NewSeed()
 					w, _ := wallet.FromSeed(nil, seed, wallet.V4R2)
 
-					if strings.HasSuffix(w.Address().String(), *suffix) {
-						log.Println("Address:", w.Address().String())
+					if strings.HasSuffix(w.WalletAddress().String(), *suffix) {
+						log.Println("Address:", w.WalletAddress().String())
 						log.Println("Seed phrase:", seed)
 						os.Exit(0)
 					}
