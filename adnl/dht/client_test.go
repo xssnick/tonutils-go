@@ -766,7 +766,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton.org/global.config.json")
