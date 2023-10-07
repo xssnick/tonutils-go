@@ -29,13 +29,13 @@ func main() {
 	api := ton.NewAPIClient(client).WithRetry()
 	w := getWallet(api)
 
-	log.Println("Deploy wallet:", w.Address().String())
+	log.Println("Deploy wallet:", w.WalletAddress().String())
 
 	msgBody := cell.BeginCell().EndCell()
 
 	fmt.Println("Deploying NFT collection contract to mainnet...")
 	addr, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.02"),
-		msgBody, getNFTCollectionCode(), getContractData(w.Address(), w.Address()), true)
+		msgBody, getNFTCollectionCode(), getContractData(w.WalletAddress(), w.WalletAddress()), true)
 	if err != nil {
 		panic(err)
 	}

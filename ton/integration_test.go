@@ -3,6 +3,7 @@ package ton
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"reflect"
@@ -720,18 +721,24 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 		return
 	}
 
-	hashes := make([][]byte, 0)
-	hashes = append(hashes, bSnake[1:])
-
-	resp, err := apiTestNet.GetLibraries(ctx, hashes...)
-
+	resp, err := apiTestNet.GetLibraries(ctx, bSnake[1:], make([]byte, 32), bSnake[1:])
 	if err != nil {
 		t.Fatal("get libraries err:", err.Error())
 		return
 	}
 
-	if len(resp) != 1 {
-		t.Fatal("incorrect resp get libraries length:", err.Error())
+	if len(resp) != 3 {
+		t.Fatal("incorrect resp get libraries length:", len(resp))
 		return
+	}
+
+	if resp[0] == nil {
+		t.Fatal("first should be not empty")
+	}
+	if resp[1] != nil {
+		t.Fatal("second should be empty", hex.EncodeToString(resp[1].Hash()))
+	}
+	if resp[2] == nil {
+		t.Fatal("third should be not empty")
 	}
 }

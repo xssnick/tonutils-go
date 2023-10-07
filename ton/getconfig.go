@@ -1,6 +1,7 @@
 package ton
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/big"
@@ -54,25 +55,31 @@ type BlockchainConfig struct {
 	data map[int32]*cell.Cell
 }
 
-func (c *APIClient) GetLibraries(ctx context.Context, list ...[]byte) ([]*cell.Cell, error) {
+func (c *APIClient) GetLibraries(ctx context.Context, hashes ...[]byte) ([]*cell.Cell, error) {
 	var (
 		resp tl.Serializable
 		err  error
 	)
 
-	if err = c.client.QueryLiteserver(ctx, GetLibraries{LibraryList: list}, &resp); err != nil {
+	if err = c.client.QueryLiteserver(ctx, GetLibraries{LibraryList: hashes}, &resp); err != nil {
 		return nil, err
 	}
 
 	switch t := resp.(type) {
 	case LibraryResult:
-		libList := make([]*cell.Cell, 0)
+		libList := make([]*cell.Cell, len(hashes))
 
-		for _, t := range t.Result {
-			libList = append(libList, t.Data)
+		for i := 0; i < len(hashes); i++ {
+			for _, e := range t.Result {
+				// we are calculating hash by ourselves
+				// to make sure that LS is not cheating
+				if bytes.Equal(hashes[i], e.Data.Hash()) {
+					libList[i] = e.Data
+				}
+			}
 		}
 
-		return libList, err
+		return libList, nil
 	case LSError:
 		return nil, t
 	}

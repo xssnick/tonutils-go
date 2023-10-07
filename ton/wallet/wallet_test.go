@@ -465,6 +465,11 @@ type WaiterMock struct {
 	MGetBlockProof          func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
 }
 
+func (w WaiterMock) GetLibraries(ctx context.Context, list ...[]byte) ([]*cell.Cell, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (w WaiterMock) SetTrustedBlock(block *ton.BlockIDExt) {
 	//TODO implement me
 	panic("implement me")

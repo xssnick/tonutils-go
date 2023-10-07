@@ -39,7 +39,7 @@ func main() {
 	token := jetton.NewJettonMasterClient(api, address.MustParseAddr("EQD0vdSA_NedR9uvbgN9EikRX-suesDxGeFg69XQMavfLqIw"))
 
 	// find our jetton wallet
-	tokenWallet, err := token.GetJettonWallet(ctx, w.Address())
+	tokenWallet, err := token.GetJettonWallet(ctx, w.WalletAddress())
 	if err != nil {
 		log.Fatal(err)
 	}

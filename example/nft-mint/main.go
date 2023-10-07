@@ -27,7 +27,7 @@ func main() {
 	api := ton.NewAPIClient(client)
 	w := getWallet(api)
 
-	log.Println("Deploy wallet:", w.Address().String())
+	log.Println("Deploy wallet:", w.WalletAddress().String())
 
 	collectionAddr := address.MustParseAddr("EQCSrRIKVEBaRd8aQfsOaNq3C4FVZGY5Oka55A5oFMVEs0lY")
 	collection := nft.NewCollectionClient(api, collectionAddr)
@@ -42,7 +42,7 @@ func main() {
 		panic(err)
 	}
 
-	mintData, err := collection.BuildMintPayload(collectionData.NextItemIndex, w.Address(), tlb.MustFromTON("0.01"), &nft.ContentOffchain{
+	mintData, err := collection.BuildMintPayload(collectionData.NextItemIndex, w.WalletAddress(), tlb.MustFromTON("0.01"), &nft.ContentOffchain{
 		URI: fmt.Sprint(collectionData.NextItemIndex) + ".json",
 	})
 	if err != nil {

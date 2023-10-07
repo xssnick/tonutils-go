@@ -34,7 +34,7 @@ func main() {
 		return
 	}
 
-	log.Println("wallet address:", w.Address())
+	log.Println("wallet address:", w.WalletAddress())
 
 	block, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {

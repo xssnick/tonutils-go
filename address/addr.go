@@ -194,8 +194,30 @@ func (a *Address) SetBounce(bouncable bool) {
 	a.flags.bounceable = bouncable
 }
 
+func (a *Address) Bounce(bounce bool) *Address {
+	x := a.Copy()
+	x.flags.bounceable = bounce
+	return x
+}
+
+func (a *Address) Testnet(testnet bool) *Address {
+	x := a.Copy()
+	x.flags.testnet = testnet
+	return x
+}
+
 func (a *Address) IsBounceable() bool {
 	return a.flags.bounceable
+}
+
+func (a *Address) Copy() *Address {
+	return &Address{
+		flags:     a.flags,
+		addrType:  a.addrType,
+		workchain: a.workchain,
+		bitsLen:   a.bitsLen,
+		data:      append(make([]byte, 0, len(a.data)), a.data...),
+	}
 }
 
 func (a *Address) SetTestnetOnly(testnetOnly bool) {
