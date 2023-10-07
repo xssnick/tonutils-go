@@ -46,7 +46,7 @@ func main() {
 		return
 	}
 
-	log.Println("wallet address:", w.Address())
+	log.Println("wallet address:", w.WalletAddress())
 
 	log.Println("fetching and checking proofs since config init block, it may take near a minute...")
 	block, err := api.CurrentMasterchainInfo(context.Background())
