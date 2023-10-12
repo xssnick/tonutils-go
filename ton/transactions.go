@@ -116,6 +116,10 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 
 	switch t := resp.(type) {
 	case TransactionInfo:
+		if len(t.Transaction) == 0 {
+			return nil, ErrNoTransactionsWereFound
+		}
+
 		if !t.ID.Equals(block) {
 			return nil, fmt.Errorf("incorrect block in response")
 		}
