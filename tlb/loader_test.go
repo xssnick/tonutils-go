@@ -207,3 +207,42 @@ func TestLoadFromCell(t *testing.T) {
 		t.Fatal("cell hashes not same after From to")
 	}
 }
+
+func TestLoadFromCell_MappedDict(t *testing.T) {
+	dict := cell.NewDict(3)
+
+	b := cell.BeginCell()
+
+	err := b.StoreBoolBit(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = dict.SetIntKey(big.NewInt(1), b.EndCell())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b = cell.BeginCell()
+	if err := b.StoreDict(dict); err != nil {
+		t.Fatal(err)
+	}
+
+	var ret struct {
+		Value map[string]bool `tlb:"dict 3 -> bool"`
+	}
+
+	err = LoadFromCell(&ret, b.EndCell().BeginParse())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	j, err := json.Marshal(ret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(j) != "{\"Value\":{\"1\":true}}" {
+		t.Fatal("wrong map json")
+	}
+}

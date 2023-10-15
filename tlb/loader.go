@@ -329,7 +329,41 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 				}
 			}
 
-			setVal(reflect.ValueOf(dict))
+			if len(settings) < 4 || settings[2] != "->" {
+				setVal(reflect.ValueOf(dict))
+				continue
+			}
+			if structField.Type.Kind() != reflect.Map {
+				return fmt.Errorf("can map dictionary only into the map")
+			}
+			if structField.Type.Key() != reflect.TypeOf("") {
+				return fmt.Errorf("can map dictionary only into the map with string key")
+			}
+
+			mappedDict := reflect.MakeMapWithSize(reflect.MapOf(structField.Type.Key(), structField.Type.Elem()), 0)
+			for _, kv := range dict.All() {
+				dictK, err := kv.Key.BeginParse().LoadBigUInt(uint(sz))
+				if err != nil {
+					return fmt.Errorf("failed to load dict key for %s: %w", structField.Name, err)
+				}
+
+				dictVT := reflect.StructOf([]reflect.StructField{{
+					Name: "Value",
+					Type: structField.Type.Elem(),
+					Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", strings.Join(settings[3:], " "))),
+				}})
+
+				dictV := reflect.New(dictVT).Interface()
+
+				err = loadFromCell(dictV, kv.Value.BeginParse(), skipProofBranches, false)
+				if err != nil {
+					return fmt.Errorf("failed to load dict value for %v: %w", structField.Name, err)
+				}
+
+				mappedDict.SetMapIndex(reflect.ValueOf(dictK.String()), reflect.ValueOf(dictV).Elem().Field(0))
+			}
+
+			setVal(mappedDict)
 			continue
 		} else if settings[0] == "var" {
 			if settings[1] == "uint" {
