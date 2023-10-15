@@ -9,8 +9,7 @@ var registered = map[string]reflect.Type{}
 
 var magicType = reflect.TypeOf(Magic{})
 
-func Register(typ any) {
-	t := reflect.TypeOf(typ)
+func register(name string, t reflect.Type) {
 	magic := t.Field(0)
 	if magic.Type != magicType {
 		panic("first field is not magic")
@@ -21,5 +20,15 @@ func Register(typ any) {
 		panic("invalid magic tag")
 	}
 
-	registered[t.Name()] = t
+	registered[name] = t
+}
+
+func RegisterWithName(name string, typ any) {
+	t := reflect.TypeOf(typ)
+	register(name, t)
+}
+
+func Register(typ any) {
+	t := reflect.TypeOf(typ)
+	register(t.Name(), t)
 }
