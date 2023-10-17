@@ -341,17 +341,17 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			}
 
 			mappedDict := reflect.MakeMapWithSize(reflect.MapOf(structField.Type.Key(), structField.Type.Elem()), 0)
+			dictVT := reflect.StructOf([]reflect.StructField{{
+				Name: "Value",
+				Type: structField.Type.Elem(),
+				Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", strings.Join(settings[3:], " "))),
+			}})
+
 			for _, kv := range dict.All() {
 				dictK, err := kv.Key.BeginParse().LoadBigUInt(uint(sz))
 				if err != nil {
 					return fmt.Errorf("failed to load dict key for %s: %w", structField.Name, err)
 				}
-
-				dictVT := reflect.StructOf([]reflect.StructField{{
-					Name: "Value",
-					Type: structField.Type.Elem(),
-					Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", strings.Join(settings[3:], " "))),
-				}})
 
 				dictV := reflect.New(dictVT).Interface()
 

@@ -50,9 +50,10 @@ type testAny struct {
 }
 
 type testDict struct {
-	Dict        *cell.Dictionary  `tlb:"dict 256"`
-	DictMapBool map[string]bool   `tlb:"dict 55 -> bool"`
-	DictMapUint map[string]uint64 `tlb:"dict 77 -> ## 43"`
+	Dict          *cell.Dictionary  `tlb:"dict 256"`
+	DictMapBool   map[string]bool   `tlb:"dict 55 -> bool"`
+	DictMapUint   map[string]uint64 `tlb:"dict 77 -> ## 43"`
+	DictMapStruct map[string]any    `tlb:"dict 128 -> ^ [StructA,StructC]"`
 }
 
 type testInner struct {
@@ -114,6 +115,9 @@ func mustParseInt(x string) *big.Int {
 }
 
 func TestLoadFromCell(t *testing.T) {
+	Register(StructA{})
+	Register(StructC{})
+
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 	dKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
 	dVal := cell.BeginCell().MustStoreAddr(addr).EndCell()
@@ -144,11 +148,23 @@ func TestLoadFromCell(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	dMapStructKV := map[string]any{"43": StructA{Val: 1}, "322": StructC{Val: true}}
+	dMapStruct := cell.NewDict(128)
+	for k, v := range dMapStructKV {
+		cl, _ := ToCell(v)
+		err := dMapStruct.Set(
+			cell.BeginCell().MustStoreBigInt(mustParseInt(k), 128).EndCell(),
+			cell.BeginCell().MustStoreRef(cl).EndCell())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	dictC := cell.BeginCell().
 		MustStoreDict(d).
 		MustStoreDict(dMapBool).
 		MustStoreDict(dMapInt).
+		MustStoreDict(dMapStruct).
 		EndCell()
 
 	mRef := cell.BeginCell().MustStoreUInt('y', 8).EndCell()
@@ -236,6 +252,9 @@ func TestLoadFromCell(t *testing.T) {
 		if !reflect.DeepEqual(x.Part.Dict.DictMapUint, dMapIntKV) {
 			t.Fatal("uint dict val not eq")
 		}
+		if !reflect.DeepEqual(x.Part.Dict.DictMapStruct, dMapStructKV) {
+			t.Fatal("struct dict val not eq")
+		}
 
 		if x.Var.Uint64() != 999 {
 			t.Fatal("var not eq")
@@ -270,7 +289,7 @@ func TestLoadFromCell_MappedDict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = dict.SetIntKey(big.NewInt(1), b.EndCell())
+	err = dict.SetIntKey(big.NewInt(1), cell.BeginCell().MustStoreRef(b.EndCell()).EndCell())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,10 +300,11 @@ func TestLoadFromCell_MappedDict(t *testing.T) {
 	}
 
 	var ret struct {
-		Value map[string]bool `tlb:"dict 3 -> bool"`
+		Value map[string]bool `tlb:"dict 3 -> ^ bool"`
 	}
 
-	err = LoadFromCell(&ret, b.EndCell().BeginParse())
+	x := b.EndCell()
+	err = LoadFromCell(&ret, x.BeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,5 +316,14 @@ func TestLoadFromCell_MappedDict(t *testing.T) {
 
 	if string(j) != "{\"Value\":{\"1\":true}}" {
 		t.Fatal("wrong map json")
+	}
+
+	cl, err := ToCell(ret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(cl.Hash(), x.Hash()) {
+		t.Fatal("wrong hash")
 	}
 }
