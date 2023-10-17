@@ -211,13 +211,13 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, 
 	// if not sticky - id will be 0
 	nodeID := c.client.StickyNodeID(ctx)
 
-	root.curMastersLock.RLock()
+	root.curMastersLock.Lock()
 	master := root.curMasters[nodeID]
 	if master == nil {
 		master = &masterInfo{}
 		root.curMasters[nodeID] = master
 	}
-	root.curMastersLock.RUnlock()
+	root.curMastersLock.Unlock()
 
 	master.mx.Lock()
 	defer master.mx.Unlock()
