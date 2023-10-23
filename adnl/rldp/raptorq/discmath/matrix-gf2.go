@@ -10,6 +10,8 @@ type MatrixGF2 struct {
 }
 
 func NewMatrixGF2(rows, cols uint32) *MatrixGF2 {
+	// defaultMetrics.store(rows, cols) // only for tests
+
 	data := make([][]uint8, rows)
 	for i := range data {
 		data[i] = make([]uint8, cols)

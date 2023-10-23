@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq/discmath"
 )
 
 func Test_Encode(t *testing.T) {
@@ -23,6 +25,8 @@ func Test_Encode(t *testing.T) {
 	if !bytes.Equal(sx, should) {
 		t.Fatal("encoded not eq, got", hex.EncodeToString(sx))
 	}
+
+	t.Log(discmath.GetMetrics())
 }
 
 func Test_EncodeDecode(t *testing.T) {
@@ -56,6 +60,8 @@ func Test_EncodeDecode(t *testing.T) {
 	if !bytes.Equal(data, str) {
 		t.Fatal("initial data not eq decrypted")
 	}
+
+	t.Log(discmath.GetMetrics())
 }
 
 func Test_EncodeDecodeFuzz(t *testing.T) {
@@ -104,6 +110,8 @@ func Test_EncodeDecodeFuzz(t *testing.T) {
 			t.Fatal("initial data not eq decrypted")
 		}
 	}
+
+	t.Log(discmath.GetMetrics())
 }
 
 func Benchmark_EncodeDecodeFuzz(b *testing.B) {
