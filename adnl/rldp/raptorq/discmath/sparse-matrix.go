@@ -101,8 +101,8 @@ func (s *SparseMatrixGF2) ApplyColsPermutation(permutation []uint32) *SparseMatr
 	return res
 }
 
-func (s *SparseMatrixGF2) ToDense(rowFrom, colFrom, rowSize, colSize uint32) *MatrixGF2 {
-	m := NewMatrixGF2(rowSize, colSize)
+func (s *SparseMatrixGF2) ToDense(rowFrom, colFrom, rowSize, colSize uint32) *PlainMatrixGF2 {
+	m := NewPlainMatrixGF2(rowSize, colSize)
 	s.Each(func(row, col uint32) {
 		if (row >= rowFrom && row < rowFrom+rowSize) &&
 			(col >= colFrom && col < colFrom+colSize) {
