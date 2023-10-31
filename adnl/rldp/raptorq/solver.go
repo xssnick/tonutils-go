@@ -105,8 +105,7 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 				break
 			}
 
-			what, fBitmask, lBitmask := e.GetRow(i)
-			e.RowAdd(row, what, fBitmask, lBitmask)
+			e.RowAdd(row, e.GetRow(i))
 			d.RowAdd(row, d.GetRow(i))
 		}
 	}

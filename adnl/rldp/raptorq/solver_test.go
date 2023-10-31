@@ -114,8 +114,9 @@ func Test_EncodeDecodeFuzz(t *testing.T) {
 	t.Log(discmath.GetMetrics())
 }
 
-// Benchmark_EncodeDecodeFuzz-12: MatrixGF2    	     907	   1329193 ns/op	  653478 B/op	    1806 allocs/op
-// Benchmark_EncodeDecodeFuzz-12: PlainMatrixGF2     1003	   1429374 ns/op	  652845 B/op	    1809 allocs/op
+// Benchmark_EncodeDecodeFuzz-12: MatrixGF2    	                 907	   1329193 ns/op	  653478 B/op	    1806 allocs/op
+// Benchmark_EncodeDecodeFuzz-12: PlainMatrixGF2                1003	   1429374 ns/op	  652845 B/op	    1809 allocs/op
+// Benchmark_EncodeDecodeFuzz-12: PlainOffsetMatrixGF2    	    1093	   1096029 ns/op	  653680 B/op	    1844 allocs/op
 func Benchmark_EncodeDecodeFuzz(b *testing.B) {
 	str := make([]byte, 4096)
 	rand.Read(str)
