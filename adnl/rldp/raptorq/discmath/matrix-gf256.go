@@ -138,8 +138,8 @@ func (m *MatrixGF256) Each(f func(row, col uint32)) {
 	}
 }
 
-func (m *MatrixGF256) ToGF2(rowFrom, colFrom, rowSize, colSize uint32) *PlainOffsetMatrixGF2 {
-	mGF2 := NewPlainOffsetMatrixGF2(rowSize, colSize)
+func (m *MatrixGF256) ToGF2(rowFrom, colFrom, rowSize, colSize uint32) *PlainMatrixGF2 {
+	mGF2 := NewPlainMatrixGF2(rowSize, colSize)
 	m.Each(func(row, col uint32) {
 		if (row >= rowFrom && row < rowFrom+rowSize) &&
 			(col >= colFrom && col < colFrom+colSize) {

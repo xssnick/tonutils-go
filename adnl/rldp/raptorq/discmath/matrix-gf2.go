@@ -2,7 +2,6 @@ package discmath
 
 import (
 	"fmt"
-	"math/bits"
 	"strings"
 )
 
@@ -11,8 +10,6 @@ type MatrixGF2 struct {
 }
 
 func NewMatrixGF2(rows, cols uint32) *MatrixGF2 {
-	// defaultMetrics.store(rows, cols) // only for tests
-
 	data := make([][]uint8, rows)
 	for i := range data {
 		data[i] = make([]uint8, cols)
@@ -85,33 +82,28 @@ func (m *MatrixGF2) String() string {
 	return strings.Join(rows, "\n")
 }
 
-// PlainMatrixGF2 is a matrix of GF2 elements
-// Data is stored in a byte array, each byte is contained 8 elements (bits)
+// elSize is a size of array's element in bits
+const elSize = 8
+
 type PlainMatrixGF2 struct {
 	rows, cols uint32
+	rowSize    uint32
 	data       []byte
 }
 
-const (
-	// elSize is a size of array's element in bits
-	elSize = 8
-	maxEl  = 1<<elSize - 1
-)
-
 func NewPlainMatrixGF2(rows, cols uint32) *PlainMatrixGF2 {
-	// defaultMetrics.store(rows, cols) // only for tests
-
-	matrixSize := rows * cols
-
-	dataSize := matrixSize / elSize
-	if matrixSize%elSize > 0 {
-		dataSize++
+	rowSize := cols / elSize
+	if cols%elSize > 0 {
+		rowSize++
 	}
 
+	data := make([]byte, rows*rowSize)
+
 	return &PlainMatrixGF2{
-		rows: rows,
-		cols: cols,
-		data: make([]byte, dataSize),
+		rows:    rows,
+		cols:    cols,
+		rowSize: rowSize,
+		data:    data,
 	}
 }
 
@@ -124,73 +116,30 @@ func (m *PlainMatrixGF2) ColsNum() uint32 {
 }
 
 func (m *PlainMatrixGF2) Get(row, col uint32) byte {
-	idx, bit := m.getIdx(row, col)
-
-	res := m.data[idx] & bit
-	if res > 0 {
-		return 1
-	}
-
-	return 0
+	return m.getElement(row, col)
 }
 
 func (m *PlainMatrixGF2) Set(row, col uint32) {
-	idx, bit := m.getIdx(row, col)
-	m.data[idx] |= bit
+	elIdx, colIdx := m.getElementPosition(row, col)
+	m.data[elIdx] |= 1 << colIdx
 }
 
 func (m *PlainMatrixGF2) Unset(row, col uint32) {
-	idx, bit := m.getIdx(row, col)
-	m.data[idx] &= ^bit
+	elIdx, colIdx := m.getElementPosition(row, col)
+	m.data[elIdx] &= ^(1 << colIdx)
 }
 
-// GetRow returns row data, bit mask for the first byte and bit mask for the last byte
-// Bitmask contains 1 for each bit that is part of the row
-func (m *PlainMatrixGF2) GetRow(row uint32) ([]byte, byte, byte) {
-	firstBitIdx := row * m.cols
-	firstElIdx := firstBitIdx / elSize
+func (m *PlainMatrixGF2) GetRow(row uint32) []byte {
+	firstElIdx, _ := m.getElementPosition(row, 0)
+	lastElIdx := firstElIdx + (m.cols-1)/elSize + 1
 
-	lastBitIdx := (row+1)*m.cols - 1
-	lastElIdx := lastBitIdx / elSize
-
-	firstBitmask := byte(maxEl - (1 << (firstBitIdx % elSize)) + 1)
-	lastBitmask := byte((1 << (lastBitIdx%elSize + 1)) - 1)
-
-	if firstElIdx == lastElIdx {
-		firstBitmask &= lastBitmask
-		lastBitmask = firstBitmask
-	}
-
-	if int(lastElIdx) == len(m.data) {
-		return m.data[firstElIdx:], firstBitmask, lastBitmask
-	}
-
-	return m.data[firstElIdx : lastElIdx+1], firstBitmask, lastBitmask
+	return m.data[firstElIdx:lastElIdx]
 }
 
-func (m *PlainMatrixGF2) RowAdd(row uint32, what []byte, firstBitmask, lastBitmask byte) {
-	col := uint32(0)
+func (m *PlainMatrixGF2) RowAdd(row uint32, what []byte) {
+	firstElIdx, _ := m.getElementPosition(row, 0)
 	for i, whatByte := range what {
-		// compute bitmask of "what" row for current byte
-		bitmask := byte(maxEl)
-		if i == 0 {
-			bitmask = firstBitmask
-		} else if i == len(what)-1 {
-			bitmask = lastBitmask
-		}
-
-		for j := bits.TrailingZeros8(bitmask); j < elSize-bits.LeadingZeros8(bitmask); j++ {
-			whatBit := (whatByte & (1 << j)) >> j
-			colBit := m.Get(row, col)
-
-			if whatBit != colBit {
-				m.Set(row, col)
-			} else {
-				m.Unset(row, col)
-			}
-
-			col++
-		}
+		m.data[firstElIdx+uint32(i)] ^= whatByte
 	}
 }
 
@@ -198,8 +147,8 @@ func (m *PlainMatrixGF2) Mul(s *MatrixGF256) *PlainMatrixGF2 {
 	mg := NewPlainMatrixGF2(s.RowsNum(), m.ColsNum())
 
 	s.Each(func(row, col uint32) {
-		rowData, firstBitmask, lastBitmask := m.GetRow(col)
-		mg.RowAdd(row, rowData, firstBitmask, lastBitmask)
+		mRow := m.GetRow(col)
+		mg.RowAdd(row, mRow)
 	})
 
 	return mg
@@ -217,119 +166,6 @@ func (m *PlainMatrixGF2) ToGF256() *MatrixGF256 {
 
 func (m *PlainMatrixGF2) String() string {
 	var rows []string
-	for i := uint32(0); i < m.rows; i++ {
-		var cols []string
-		for j := uint32(0); j < m.cols; j++ {
-			cols = append(cols, fmt.Sprintf("%02x", m.Get(i, j)))
-		}
-
-		rows = append(rows, strings.Join(cols, " "))
-	}
-
-	return strings.Join(rows, "\n")
-}
-
-// getRowUInt8 returns row data as array of uint8
-func (m *PlainMatrixGF2) getRowUInt8(row uint32) []uint8 {
-	rowUInt8 := make([]uint8, m.cols)
-	for i := uint32(0); i < m.cols; i++ {
-		rowUInt8[i] = m.Get(row, i)
-	}
-
-	return rowUInt8
-}
-
-// getIdx returns index in array of bytes and offset in this byte
-func (m *PlainMatrixGF2) getIdx(row, col uint32) (uint32, byte) {
-	idx := row*m.cols + col
-	bitIdx := byte(idx % elSize)
-
-	return idx / elSize, byte(1 << bitIdx)
-}
-
-type PlainOffsetMatrixGF2 struct {
-	rows, cols uint32
-	rowSize    uint32
-	data       []byte
-}
-
-func NewPlainOffsetMatrixGF2(rows, cols uint32) *PlainOffsetMatrixGF2 {
-	// defaultMetrics.store(rows, cols) // only for tests
-
-	rowSize := cols / elSize
-	if cols%elSize > 0 {
-		rowSize++
-	}
-
-	data := make([]byte, rows*rowSize)
-
-	return &PlainOffsetMatrixGF2{
-		rows:    rows,
-		cols:    cols,
-		rowSize: rowSize,
-		data:    data,
-	}
-}
-
-func (m *PlainOffsetMatrixGF2) RowsNum() uint32 {
-	return m.rows
-}
-
-func (m *PlainOffsetMatrixGF2) ColsNum() uint32 {
-	return m.cols
-}
-
-func (m *PlainOffsetMatrixGF2) Get(row, col uint32) byte {
-	return m.getElement(row, col)
-}
-
-func (m *PlainOffsetMatrixGF2) Set(row, col uint32) {
-	elIdx, colIdx := m.getElementPosition(row, col)
-	m.data[elIdx] |= 1 << colIdx
-}
-
-func (m *PlainOffsetMatrixGF2) Unset(row, col uint32) {
-	elIdx, colIdx := m.getElementPosition(row, col)
-	m.data[elIdx] &= ^(1 << colIdx)
-}
-
-func (m *PlainOffsetMatrixGF2) GetRow(row uint32) []byte {
-	firstElIdx, _ := m.getElementPosition(row, 0)
-	lastElIdx := firstElIdx + (m.cols-1)/elSize + 1
-
-	return m.data[firstElIdx:lastElIdx]
-}
-
-func (m *PlainOffsetMatrixGF2) RowAdd(row uint32, what []byte) {
-	firstElIdx, _ := m.getElementPosition(row, 0)
-	for i, whatByte := range what {
-		m.data[firstElIdx+uint32(i)] ^= whatByte
-	}
-}
-
-func (m *PlainOffsetMatrixGF2) Mul(s *MatrixGF256) *PlainOffsetMatrixGF2 {
-	mg := NewPlainOffsetMatrixGF2(s.RowsNum(), m.ColsNum())
-
-	s.Each(func(row, col uint32) {
-		mRow := m.GetRow(col)
-		mg.RowAdd(row, mRow)
-	})
-
-	return mg
-}
-
-func (m *PlainOffsetMatrixGF2) ToGF256() *MatrixGF256 {
-	mg := NewMatrixGF256(m.RowsNum(), m.ColsNum())
-
-	for i := uint32(0); i < m.rows; i++ {
-		mg.rows[i] = GF256{data: m.getRowUInt8(i)}
-	}
-
-	return mg
-}
-
-func (m *PlainOffsetMatrixGF2) String() string {
-	var rows []string
 	for row := uint32(0); row < m.rows; row++ {
 		var cols []string
 		for col := uint32(0); col < m.cols; col++ {
@@ -342,7 +178,7 @@ func (m *PlainOffsetMatrixGF2) String() string {
 	return strings.Join(rows, "\n")
 }
 
-func (m *PlainOffsetMatrixGF2) getRowUInt8(row uint32) []uint8 {
+func (m *PlainMatrixGF2) getRowUInt8(row uint32) []uint8 {
 	result := make([]uint8, m.cols)
 	for col := uint32(0); col < m.cols; col++ {
 		result[col] = m.getElement(row, col)
@@ -352,13 +188,13 @@ func (m *PlainOffsetMatrixGF2) getRowUInt8(row uint32) []uint8 {
 }
 
 // getElement returns element in matrix by row and col. Possible values: 0 or 1
-func (m *PlainOffsetMatrixGF2) getElement(row, col uint32) byte {
+func (m *PlainMatrixGF2) getElement(row, col uint32) byte {
 	elIdx, colIdx := m.getElementPosition(row, col)
 
 	return (m.data[elIdx] & (1 << colIdx)) >> colIdx
 }
 
 // getElementPosition returns index of element in array and offset in this element
-func (m *PlainOffsetMatrixGF2) getElementPosition(row, col uint32) (uint32, byte) {
+func (m *PlainMatrixGF2) getElementPosition(row, col uint32) (uint32, byte) {
 	return (row * m.rowSize) + col/elSize, byte(col % elSize)
 }
