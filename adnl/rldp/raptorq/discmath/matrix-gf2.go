@@ -249,7 +249,8 @@ func (m *PlainMatrixGF2) getIdx(row, col uint32) (uint32, byte) {
 
 type PlainOffsetMatrixGF2 struct {
 	rows, cols uint32
-	data       [][]byte
+	rowSize    uint32
+	data       []byte
 }
 
 func NewPlainOffsetMatrixGF2(rows, cols uint32) *PlainOffsetMatrixGF2 {
@@ -260,15 +261,13 @@ func NewPlainOffsetMatrixGF2(rows, cols uint32) *PlainOffsetMatrixGF2 {
 		rowSize++
 	}
 
-	data := make([][]byte, rows)
-	for i := range data {
-		data[i] = make([]byte, rowSize)
-	}
+	data := make([]byte, rows*rowSize)
 
 	return &PlainOffsetMatrixGF2{
-		rows: rows,
-		cols: cols,
-		data: data,
+		rows:    rows,
+		cols:    cols,
+		rowSize: rowSize,
+		data:    data,
 	}
 }
 
@@ -285,22 +284,26 @@ func (m *PlainOffsetMatrixGF2) Get(row, col uint32) byte {
 }
 
 func (m *PlainOffsetMatrixGF2) Set(row, col uint32) {
-	elIdx, colIdx := m.getColPosition(col)
-	m.data[row][elIdx] |= 1 << colIdx
+	elIdx, colIdx := m.getElementPosition(row, col)
+	m.data[elIdx] |= 1 << colIdx
 }
 
 func (m *PlainOffsetMatrixGF2) Unset(row, col uint32) {
-	elIdx, colIdx := m.getColPosition(col)
-	m.data[row][elIdx] &= ^(1 << colIdx)
+	elIdx, colIdx := m.getElementPosition(row, col)
+	m.data[elIdx] &= ^(1 << colIdx)
 }
 
 func (m *PlainOffsetMatrixGF2) GetRow(row uint32) []byte {
-	return m.data[row]
+	firstElIdx, _ := m.getElementPosition(row, 0)
+	lastElIdx := firstElIdx + (m.cols-1)/elSize + 1
+
+	return m.data[firstElIdx:lastElIdx]
 }
 
 func (m *PlainOffsetMatrixGF2) RowAdd(row uint32, what []byte) {
+	firstElIdx, _ := m.getElementPosition(row, 0)
 	for i, whatByte := range what {
-		m.data[row][i] ^= whatByte
+		m.data[firstElIdx+uint32(i)] ^= whatByte
 	}
 }
 
@@ -350,12 +353,12 @@ func (m *PlainOffsetMatrixGF2) getRowUInt8(row uint32) []uint8 {
 
 // getElement returns element in matrix by row and col. Possible values: 0 or 1
 func (m *PlainOffsetMatrixGF2) getElement(row, col uint32) byte {
-	elIdx, colIdx := m.getColPosition(col)
+	elIdx, colIdx := m.getElementPosition(row, col)
 
-	return (m.data[row][elIdx] & (1 << colIdx)) >> colIdx
+	return (m.data[elIdx] & (1 << colIdx)) >> colIdx
 }
 
-// getColPosition returns index of element in array and offset in this element
-func (m *PlainOffsetMatrixGF2) getColPosition(col uint32) (uint32, byte) {
-	return col / elSize, byte(col % elSize)
+// getElementPosition returns index of element in array and offset in this element
+func (m *PlainOffsetMatrixGF2) getElementPosition(row, col uint32) (uint32, byte) {
+	return (row * m.rowSize) + col/elSize, byte(col % elSize)
 }
