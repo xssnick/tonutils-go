@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net"
 	"reflect"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -431,10 +430,13 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 
 	const threads = 8
 	result := make(chan *foundResult, threads)
-	var numNoTasks int64
+
+	var numWaitingNextNode int
+	var foundValue bool
+	cond := sync.NewCond(&sync.Mutex{})
+
 	for i := 0; i < threads; i++ {
 		go func() {
-			noTasks := false
 			for {
 				select {
 				case <-threadCtx.Done():
@@ -442,27 +444,36 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 				default:
 				}
 
-				// we get most prioritized node, priority depends on depth
 				node, _ := plist.getNode()
 				if node == nil {
-					if !noTasks {
-						noTasks = true
-						atomic.AddInt64(&numNoTasks, 1)
+					cond.L.Lock()
+					numWaitingNextNode++
+
+					for {
+						if foundValue {
+							cond.L.Unlock()
+
+							return
+						}
+
+						if numWaitingNextNode == threads {
+							cond.L.Unlock()
+
+							result <- nil
+
+							return
+						}
+
+						node, _ = plist.getNode()
+						if node != nil {
+							break
+						}
+
+						cond.Wait()
 					}
 
-					if atomic.LoadInt64(&numNoTasks) < threads {
-						// something is pending
-						runtime.Gosched()
-						continue
-					}
-
-					result <- nil
-					return
-				}
-
-				if noTasks {
-					noTasks = false
-					atomic.AddInt64(&numNoTasks, -1)
+					numWaitingNextNode--
+					cond.L.Unlock()
 				}
 
 				findCtx, findCancel := context.WithTimeout(threadCtx, queryTimeout)
@@ -476,6 +487,12 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 				switch v := val.(type) {
 				case *Value:
 					result <- &foundResult{value: v, node: node}
+					cond.L.Lock()
+					foundValue = true
+					cond.Broadcast()
+					cond.L.Unlock()
+
+					return
 				case []*Node:
 					if len(v) > 24 {
 						// max 24 nodes to add
@@ -489,6 +506,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 						}
 
 						plist.addNode(newNode)
+						cond.Signal()
 					}
 				}
 			}
@@ -502,7 +520,9 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 		if val == nil {
 			return nil, cont, ErrDHTValueIsNotFound
 		}
+
 		cont.checkedNodes = append(cont.checkedNodes, val.node)
+
 		return val.value, cont, nil
 	}
 }
