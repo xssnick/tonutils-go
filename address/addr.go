@@ -128,6 +128,23 @@ func (a *Address) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf("%q", a.String())), nil
 }
 
+func (a *Address) UnmarshalJSON(data []byte) error {
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return fmt.Errorf("invalid data")
+	}
+
+	data = data[1 : len(data)-1]
+
+	addr, err := ParseAddr(string(data))
+	if err != nil {
+		return err
+	}
+
+	*a = *addr
+
+	return nil
+}
+
 func MustParseAddr(addr string) *Address {
 	a, err := ParseAddr(addr)
 	if err != nil {
