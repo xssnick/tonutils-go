@@ -1,6 +1,6 @@
 package discmath
 
-var _LogPreCalc = [...]uint8{0, 1, 25, 2, 50, 26, 198, 3, 223, 51, 238, 27, 104, 199, 75, 4, 100, 224, 14, 52, 141, 239,
+var _LogPreCalc = [...]uint8{0, 0, 1, 25, 2, 50, 26, 198, 3, 223, 51, 238, 27, 104, 199, 75, 4, 100, 224, 14, 52, 141, 239,
 	129, 28, 193, 105, 248, 200, 8, 76, 113, 5, 138, 101, 47, 225, 36, 15, 33, 53, 147, 142, 218, 240,
 	18, 130, 69, 29, 181, 194, 125, 106, 39, 249, 185, 201, 154, 9, 120, 77, 228, 114, 166, 6, 191, 139,
 	98, 102, 221, 48, 253, 226, 152, 37, 179, 16, 145, 34, 136, 54, 208, 148, 206, 143, 150, 219, 189, 241,
@@ -38,8 +38,22 @@ var _ExpPreCalc = [...]uint8{1, 2, 4, 8, 16, 32, 64, 128, 29, 58, 116, 232, 205,
 	122, 244, 245, 247, 243, 251, 235, 203, 139, 11, 22, 44, 88, 176, 125, 250, 233, 207, 131, 27, 54, 108,
 	216, 173, 71, 142}
 
-func OctLog(x uint8) uint8 {
-	return _LogPreCalc[x]
+var _MulPreCalc = calcOctMulTable()
+
+func calcOctMulTable() [256][256]uint8 {
+	var result [256][256]uint8
+
+	for i := 1; i < 256; i++ {
+		for j := 1; j < 256; j++ {
+			result[i][j] = OctMul(uint8(i), uint8(j))
+		}
+	}
+
+	return result
+}
+
+func OctAddMul(x, y uint8) uint8 {
+	return _MulPreCalc[x][y]
 }
 
 func OctExp(x uint32) uint8 {
@@ -47,29 +61,13 @@ func OctExp(x uint32) uint8 {
 }
 
 func OctInverse(x uint8) uint8 {
-	return OctExp(uint32(255 - OctLog(x-1)))
+	return OctExp(uint32(255 - _LogPreCalc[x]))
 }
 
-func OctDiv(x, y uint8) uint8 {
-	if x == 0 || y == 0 {
-		return x
-	}
-
-	return OctExp(uint32(OctLog(x-1)) - uint32(OctLog(y-1)+255))
-}
-
-func octMul(x, y uint8) uint8 {
+func OctMul(x, y uint8) uint8 {
 	if x == 0 || y == 0 {
 		return 0
 	}
 
-	return OctExp(uint32(OctLog(x-1)) + uint32(OctLog(y-1)))
-}
-
-func octAdd(x, y uint8) uint8 {
-	return x ^ y
-}
-
-func OctSub(x, y uint8) uint8 {
-	return octAdd(x, y)
+	return _ExpPreCalc[uint32(_LogPreCalc[x])+uint32(_LogPreCalc[y])]
 }

@@ -101,7 +101,6 @@ type TopupBalance struct {
 
 type CooperativeClose struct {
 	_          tlb.Magic `tlb:"#5577587e"`
-	IsA        bool      `tlb:"bool"`
 	SignatureA Signature `tlb:"^"`
 	SignatureB Signature `tlb:"^"`
 	Signed     struct {
