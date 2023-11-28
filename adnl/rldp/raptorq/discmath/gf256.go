@@ -17,13 +17,13 @@ func (g *GF256) Add(g2 *GF256) {
 
 func (g *GF256) Mul(x uint8) {
 	for i := 0; i < len(g.data); i++ {
-		g.data[i] = octMul(g.data[i], x)
+		g.data[i] = OctMul(g.data[i], x)
 	}
 }
 
 func (g *GF256) AddMul(g2 *GF256, x uint8) {
 	for i := 0; i < len(g.data); i++ {
-		g.data[i] = octAdd(g.data[i], octMul(x, g2.data[i]))
+		g.data[i] ^= OctAddMul(x, g2.data[i])
 	}
 }
 

@@ -109,7 +109,7 @@ func Test_EncodeDecodeFuzz(t *testing.T) {
 func Benchmark_EncodeDecodeFuzz(b *testing.B) {
 	str := make([]byte, 4096)
 	rand.Read(str)
-	for n := 0; n < 100; n++ {
+	for n := 0; n < 1000; n++ {
 		var symSz uint32 = 768
 		r := NewRaptorQ(symSz)
 		enc, err := r.CreateEncoder(str)
