@@ -106,10 +106,15 @@ func Test_EncodeDecodeFuzz(t *testing.T) {
 	}
 }
 
+// Benchmark_EncodeDecodeFuzz-12: MatrixGF2    	                 907	   1329193 ns/op	  653478 B/op	    1806 allocs/op
+// Benchmark_EncodeDecodeFuzz-12: PlainMatrixGF2                1082	   1114249 ns/op	  652923 B/op	    1810 allocs/op
 func Benchmark_EncodeDecodeFuzz(b *testing.B) {
 	str := make([]byte, 4096)
 	rand.Read(str)
-	for n := 0; n < 1000; n++ {
+
+	b.ReportAllocs()
+
+	for n := 0; n < b.N; n++ {
 		var symSz uint32 = 768
 		r := NewRaptorQ(symSz)
 		enc, err := r.CreateEncoder(str)
@@ -119,7 +124,7 @@ func Benchmark_EncodeDecodeFuzz(b *testing.B) {
 
 		dec, err := r.CreateDecoder(uint32(len(str)))
 		if err != nil {
-			panic(err)
+			b.Fatal("create decoder err", err)
 		}
 
 		_, err = dec.AddSymbol(2, enc.GenSymbol(2))
@@ -136,13 +141,9 @@ func Benchmark_EncodeDecodeFuzz(b *testing.B) {
 			}
 		}
 
-		_, data, err := dec.Decode()
+		_, _, err = dec.Decode()
 		if err != nil {
 			b.Fatal("decode err", err)
-		}
-
-		if !bytes.Equal(data, str) {
-			b.Fatal("initial data not eq decrypted")
 		}
 	}
 }

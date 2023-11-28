@@ -802,7 +802,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		ExpireAt:   0,
 	}
 
-	_, _, err = dhtClient.StoreAddress(ctx, addrList, 12*time.Minute, key, 2)
+	_, _, err = dhtClient.StoreAddress(ctx, addrList, 12*time.Minute, key, 3)
 	if err != nil {
 		t.Fatal(err)
 	}

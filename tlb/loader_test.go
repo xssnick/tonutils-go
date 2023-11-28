@@ -3,8 +3,10 @@ package tlb
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -12,7 +14,8 @@ import (
 )
 
 type smallStruct struct {
-	Sz uint32 `tlb:"## 8"`
+	Sz                 uint32           `tlb:"## 8"`
+	DictMapInlineInt32 map[string]int64 `tlb:"dict inline 5 -> ## 32"`
 }
 
 type manualLoad struct {
@@ -47,6 +50,13 @@ type testAny struct {
 	StructAny any `tlb:"^ [StructA,StructB]"`
 }
 
+type testDict struct {
+	Dict          *cell.Dictionary  `tlb:"dict 256"`
+	DictMapBool   map[string]bool   `tlb:"dict 55 -> bool"`
+	DictMapUint   map[string]uint64 `tlb:"dict 77 -> ## 43"`
+	DictMapStruct map[string]any    `tlb:"dict 128 -> ^ [StructA,StructC]"`
+}
+
 type testInner struct {
 	_           Magic            `tlb:"$1011"`
 	Val         int64            `tlb:"## 34"`
@@ -57,7 +67,7 @@ type testInner struct {
 	B           bool             `tlb:"bool"`
 	Addr        *address.Address `tlb:"addr"`
 	Manual      manualLoad       `tlb:"."`
-	Dict        *cell.Dictionary `tlb:"dict 256"`
+	Dict        testDict         `tlb:"^"`
 	StructMaybe *smallStruct     `tlb:"maybe ^"`
 }
 
@@ -68,7 +78,7 @@ type testTLB struct {
 	Inside            testInner  `tlb:"^"`
 	InsideMaybe       *testInner `tlb:"maybe ^"`
 	Part              testInner  `tlb:"."`
-	InsideMaybeEither *testInner `tlb:"maybe either ^ ."`
+	InsideMaybeEither *testInner `tlb:"maybe either leave 20,0 ^ ."`
 	Bits              []byte     `tlb:"bits 20"`
 	Var               *big.Int   `tlb:"var uint 3"`
 	EndCell           *cell.Cell `tlb:"."`
@@ -97,7 +107,18 @@ func TestLoadAnyRegistered(t *testing.T) {
 	json.NewEncoder(os.Stdout).Encode(v2)
 }
 
+func mustParseInt(x string) *big.Int {
+	ret, ok := new(big.Int).SetString(x, 10)
+	if !ok {
+		panic(fmt.Errorf("big int from '%s'", ret))
+	}
+	return ret
+}
+
 func TestLoadFromCell(t *testing.T) {
+	Register(StructA{})
+	Register(StructC{})
+
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 	dKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
 	dVal := cell.BeginCell().MustStoreAddr(addr).EndCell()
@@ -108,7 +129,60 @@ func TestLoadFromCell(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mRef := cell.BeginCell().MustStoreUInt('y', 8).EndCell()
+	dMapBoolKV := map[string]bool{"43": true, "76": false, "79": true}
+	dMapBool := cell.NewDict(55)
+	for k, v := range dMapBoolKV {
+		err := dMapBool.Set(
+			cell.BeginCell().MustStoreBigInt(mustParseInt(k), 55).EndCell(),
+			cell.BeginCell().MustStoreBoolBit(v).EndCell())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	dMapIntKV := map[string]uint64{"43": 43, "76": 75, "79": 79}
+	dMapInt := cell.NewDict(77)
+	for k, v := range dMapIntKV {
+		err := dMapInt.Set(
+			cell.BeginCell().MustStoreBigInt(mustParseInt(k), 77).EndCell(),
+			cell.BeginCell().MustStoreUInt(v, 43).EndCell())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	dMapStructKV := map[string]any{"43": StructA{Val: 1}, "322": StructC{Val: true}}
+	dMapStruct := cell.NewDict(128)
+	for k, v := range dMapStructKV {
+		cl, _ := ToCell(v)
+		err := dMapStruct.Set(
+			cell.BeginCell().MustStoreBigInt(mustParseInt(k), 128).EndCell(),
+			cell.BeginCell().MustStoreRef(cl).EndCell())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dMapIntInlKV := map[string]int64{"2": 43, "8": -75}
+	dMapInnerInlineInt := cell.NewDict(5)
+	for k, v := range dMapIntInlKV {
+		err := dMapInnerInlineInt.Set(
+			cell.BeginCell().MustStoreBigInt(mustParseInt(k), 5).EndCell(),
+			cell.BeginCell().MustStoreInt(v, 32).EndCell())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dictC := cell.BeginCell().
+		MustStoreDict(d).
+		MustStoreDict(dMapBool).
+		MustStoreDict(dMapInt).
+		MustStoreDict(dMapStruct).
+		EndCell()
+
+	mRef := cell.BeginCell().
+		MustStoreUInt('y', 8).
+		MustStoreBuilder(dMapInnerInlineInt.MustToCell().ToBuilder()).
+		EndCell()
 
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).
 		MustStoreInt(-7172, 34).
@@ -116,7 +190,10 @@ func TestLoadFromCell(t *testing.T) {
 		MustStoreCoins(700000).
 		MustStoreUInt(5, 10).
 		MustStoreUInt(7126382921832, 176).
-		MustStoreBoolBit(true).MustStoreAddr(addr).MustStoreUInt('x', 8).MustStoreDict(d).
+		MustStoreBoolBit(true).
+		MustStoreAddr(addr).
+		MustStoreUInt('x', 8).
+		MustStoreRef(dictC).
 		MustStoreMaybeRef(mRef)
 
 	a := cell.BeginCell().MustStoreUInt(0xFFAA, 16).
@@ -181,8 +258,20 @@ func TestLoadFromCell(t *testing.T) {
 			t.Fatal("manual not eq")
 		}
 
-		if !bytes.Equal(x.Part.Dict.Get(dKey).Hash(), dVal.Hash()) {
+		if !bytes.Equal(x.Part.Dict.Dict.Get(dKey).Hash(), dVal.Hash()) {
 			t.Fatal("dict val not eq")
+		}
+		if !reflect.DeepEqual(x.Part.Dict.DictMapBool, dMapBoolKV) {
+			t.Fatal("bool dict val not eq")
+		}
+		if !reflect.DeepEqual(x.Part.Dict.DictMapUint, dMapIntKV) {
+			t.Fatal("uint dict val not eq")
+		}
+		if !reflect.DeepEqual(x.Part.Dict.DictMapStruct, dMapStructKV) {
+			t.Fatal("struct dict val not eq")
+		}
+		if !reflect.DeepEqual(x.Part.StructMaybe.DictMapInlineInt32, dMapIntInlKV) {
+			t.Fatal("struct dict val not eq")
 		}
 
 		if x.Var.Uint64() != 999 {
@@ -205,5 +294,54 @@ func TestLoadFromCell(t *testing.T) {
 
 	if !bytes.Equal(hashA, hashB) {
 		t.Fatal("cell hashes not same after From to")
+	}
+}
+
+func TestLoadFromCell_MappedDict(t *testing.T) {
+	dict := cell.NewDict(3)
+
+	b := cell.BeginCell()
+
+	err := b.StoreBoolBit(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = dict.SetIntKey(big.NewInt(1), cell.BeginCell().MustStoreRef(b.EndCell()).EndCell())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b = cell.BeginCell()
+	if err := b.StoreDict(dict); err != nil {
+		t.Fatal(err)
+	}
+
+	var ret struct {
+		Value map[string]bool `tlb:"dict 3 -> ^ bool"`
+	}
+
+	x := b.EndCell()
+	err = LoadFromCell(&ret, x.BeginParse())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	j, err := json.Marshal(ret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(j) != "{\"Value\":{\"1\":true}}" {
+		t.Fatal("wrong map json")
+	}
+
+	cl, err := ToCell(ret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(cl.Hash(), x.Hash()) {
+		t.Fatal("wrong hash")
 	}
 }
