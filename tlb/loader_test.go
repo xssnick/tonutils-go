@@ -14,7 +14,8 @@ import (
 )
 
 type smallStruct struct {
-	Sz uint32 `tlb:"## 8"`
+	Sz                 uint32           `tlb:"## 8"`
+	DictMapInlineInt32 map[string]int64 `tlb:"dict inline 5 -> ## 32"`
 }
 
 type manualLoad struct {
@@ -77,7 +78,7 @@ type testTLB struct {
 	Inside            testInner  `tlb:"^"`
 	InsideMaybe       *testInner `tlb:"maybe ^"`
 	Part              testInner  `tlb:"."`
-	InsideMaybeEither *testInner `tlb:"maybe either ^ ."`
+	InsideMaybeEither *testInner `tlb:"maybe either leave 20,0 ^ ."`
 	Bits              []byte     `tlb:"bits 20"`
 	Var               *big.Int   `tlb:"var uint 3"`
 	EndCell           *cell.Cell `tlb:"."`
@@ -160,6 +161,17 @@ func TestLoadFromCell(t *testing.T) {
 		}
 	}
 
+	dMapIntInlKV := map[string]int64{"2": 43, "8": -75}
+	dMapInnerInlineInt := cell.NewDict(5)
+	for k, v := range dMapIntInlKV {
+		err := dMapInnerInlineInt.Set(
+			cell.BeginCell().MustStoreBigInt(mustParseInt(k), 5).EndCell(),
+			cell.BeginCell().MustStoreInt(v, 32).EndCell())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	dictC := cell.BeginCell().
 		MustStoreDict(d).
 		MustStoreDict(dMapBool).
@@ -167,7 +179,10 @@ func TestLoadFromCell(t *testing.T) {
 		MustStoreDict(dMapStruct).
 		EndCell()
 
-	mRef := cell.BeginCell().MustStoreUInt('y', 8).EndCell()
+	mRef := cell.BeginCell().
+		MustStoreUInt('y', 8).
+		MustStoreBuilder(dMapInnerInlineInt.MustToCell().ToBuilder()).
+		EndCell()
 
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).
 		MustStoreInt(-7172, 34).
@@ -253,6 +268,9 @@ func TestLoadFromCell(t *testing.T) {
 			t.Fatal("uint dict val not eq")
 		}
 		if !reflect.DeepEqual(x.Part.Dict.DictMapStruct, dMapStructKV) {
+			t.Fatal("struct dict val not eq")
+		}
+		if !reflect.DeepEqual(x.Part.StructMaybe.DictMapInlineInt32, dMapIntInlKV) {
 			t.Fatal("struct dict val not eq")
 		}
 

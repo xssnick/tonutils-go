@@ -348,7 +348,7 @@ func checkV4R2(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Int
 		t.Fatal("mode incorrect")
 	}
 
-	intMsgRef, _ := intMsg.ToCell()
+	intMsgRef, _ := tlb.ToCell(intMsg)
 	payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
 		MustStoreUInt(exp, 32).
 		MustStoreUInt(seq, 32)
@@ -392,7 +392,7 @@ func checkV3(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Inter
 		t.Fatal("mode incorrect")
 	}
 
-	intMsgRef, _ := intMsg.ToCell()
+	intMsgRef, _ := tlb.ToCell(intMsg)
 	payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
 		MustStoreUInt(exp, 32).
 		MustStoreUInt(seq, 32)
@@ -426,7 +426,7 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 		t.Fatal("dict incorrect")
 	}
 
-	intMsgRef, _ := intMsg.ToCell()
+	intMsgRef, _ := tlb.ToCell(intMsg)
 
 	dict := cell.NewDict(16)
 	err := dict.SetIntKey(big.NewInt(0), cell.BeginCell().
