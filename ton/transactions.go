@@ -250,18 +250,18 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			transactions = append(transactions, res...)
 			waitList = 0 * time.Second
 		}
-		lastProcessedLT = transactions[0].LT // mark last transaction as known to not trigger twice
-
-		// reverse slice to send in correct time order (from old to new)
-		for i, j := 0, len(transactions)-1; i < j; i, j = i+1, j-1 {
-			transactions[i], transactions[j] = transactions[j], transactions[i]
-		}
-
-		for _, tx := range transactions {
-			channel <- tx
-		}
-
 		if len(transactions) > 0 {
+			lastProcessedLT = transactions[0].LT // mark last transaction as known to not trigger twice
+
+			// reverse slice to send in correct time order (from old to new)
+			for i, j := 0, len(transactions)-1; i < j; i, j = i+1, j-1 {
+				transactions[i], transactions[j] = transactions[j], transactions[i]
+			}
+
+			for _, tx := range transactions {
+				channel <- tx
+			}
+
 			wait = 0 * time.Second
 		}
 	}
