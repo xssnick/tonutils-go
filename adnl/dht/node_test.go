@@ -477,13 +477,53 @@ func TestNode_weight(t *testing.T) {
 		{tNode3, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 0},
 	}
 	for _, test := range tests {
-		t.Run("weight test", func(t *testing.T) {
-			res := test.testNode.weight(test.testId)
+		t.Run("distance test", func(t *testing.T) {
+			res := test.testNode.distance(test.testId)
 			if res != test.want {
 				t.Errorf("got '%d', want '%d'", res, test.want)
 			}
 		})
 	}
+}
+
+func TestNode_weight2(t *testing.T) {
+	key, err := hex.DecodeString("75b9507dc58a931ea6e860d444987e82d8501e09191264c35b95f6952d8debe4")
+	if err != nil {
+		t.Fatal("failed to prepare test public key, err: ", err)
+	}
+
+	tPubKey, err := hex.DecodeString("75b9507dc58a931ea6e860d444987e82d8501e09191264c35b95f6956d8debe4")
+	if err != nil {
+		t.Fatal("failed to prepare test public key, err: ", err)
+	}
+
+	kId, err := tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
+	if err != nil {
+		t.Fatal("failed to prepare test key id, err: ", err)
+	}
+	tNode1 := &dhtNode{
+		adnlId:       kId,
+		ping:         100000,
+		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
+		serverKey:    tPubKey,
+		currentState: _StateActive,
+	}
+	tNode2 := &dhtNode{
+		adnlId:       kId,
+		ping:         5000000,
+		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
+		serverKey:    tPubKey,
+		currentState: _StateActive,
+	}
+	tNode3 := &dhtNode{
+		adnlId:       kId,
+		ping:         100000,
+		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
+		serverKey:    tPubKey,
+		currentState: _StateFail,
+	}
+
+	println(tNode1.distance(key), tNode2.distance(key), tNode3.distance(key))
 }
 
 func TestNode_xor(t *testing.T) {

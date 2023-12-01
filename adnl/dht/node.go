@@ -250,19 +250,19 @@ func (n *dhtNode) id() string {
 	return hex.EncodeToString(n.adnlId)
 }
 
-func (n *dhtNode) weight(id []byte) int {
+func (n *dhtNode) distance(id []byte) int {
 	n.mx.Lock()
 	defer n.mx.Unlock()
 
-	w := leadingZeroBits(xor(id, n.adnlId))
+	w := 256 - leadingZeroBits(xor(id, n.adnlId))
 	if n.currentState == _StateFail {
-		w -= 3 // less priority for failed
+		w += 16 // less priority for failed
 		if w < 0 {
 			w = 0
 		}
 	}
 	ping := time.Duration(atomic.LoadInt64(&n.ping))
-	return (1 << 30) + ((w << 20) - int(ping/(time.Millisecond*5)))
+	return (w << 20) + int(ping/(time.Millisecond*5))
 }
 
 func xor(a, b []byte) []byte {
