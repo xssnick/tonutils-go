@@ -554,6 +554,38 @@ func TestAddress_UnmarshalJSON(t *testing.T) {
 			want:    Address{},
 			wantErr: true,
 		},
+		{
+			name:    "none address",
+			address: "\"NONE\"",
+			want: Address{
+				addrType: NoneAddress,
+			},
+			wantErr: false,
+		},
+		{
+			name:    "ext address",
+			address: "\"EXT_ADDRESS\"",
+			want: Address{
+				flags:     flags{bounceable: true, testnet: false},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   0,
+				data:      nil,
+			},
+			wantErr: false,
+		},
+		{
+			name:    "var address",
+			address: "\"VAR_ADDRESS\"",
+			want: Address{
+				flags:     flags{bounceable: true, testnet: false},
+				addrType:  VarAddress,
+				workchain: 0,
+				bitsLen:   0,
+				data:      nil,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
