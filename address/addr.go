@@ -134,10 +134,27 @@ func (a *Address) UnmarshalJSON(data []byte) error {
 	}
 
 	data = data[1 : len(data)-1]
+	strData := string(data)
 
-	addr, err := ParseAddr(string(data))
-	if err != nil {
-		return err
+	var (
+		addr *Address
+		err  error
+	)
+
+	switch strData {
+	case "NONE":
+		addr = NewAddressNone()
+	case "EXT_ADDRESS":
+		addr = NewAddressExt(0, 0, nil)
+	case "VAR_ADDRESS":
+		addr = NewAddressVar(0, 0, 0, nil)
+	case "NOT_SUPPORTED":
+		return fmt.Errorf("not supported address")
+	default:
+		addr, err = ParseAddr(strData)
+		if err != nil {
+			return err
+		}
 	}
 
 	*a = *addr
