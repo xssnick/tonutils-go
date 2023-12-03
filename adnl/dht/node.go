@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"math/bits"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -16,11 +17,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
-const (
-	_StateFail = iota
-	_StateThrottle
-	_StateActive
-)
+const _MaxFailCount = 5
 
 type dhtNode struct {
 	adnlId []byte
@@ -31,11 +28,32 @@ type dhtNode struct {
 	serverKey ed25519.PublicKey
 
 	currentState int
+	badScore     int32
 
 	lastQueryAt  int64
 	inFlyQueries int32
 
 	mx sync.Mutex
+}
+
+type dhtNodeList []*dhtNode
+
+func (l dhtNodeList) Len() int {
+	return len(l)
+}
+
+func (l dhtNodeList) Swap(i, j int) {
+	l[i], l[j] = l[j], l[i]
+}
+
+func (l dhtNodeList) Less(i, j int) bool {
+	if l[i] == nil || l[j] == nil {
+		return false
+	}
+	if l[i].badScore != l[j].badScore {
+		return l[i].badScore < l[j].badScore
+	}
+	return l[i].ping < l[j].ping
 }
 
 func (c *Client) connectToNode(id []byte, addr string, serverKey ed25519.PublicKey) *dhtNode {
@@ -109,8 +127,10 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 	var res any
 	err = n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
+		n.updateStatus(false)
 		return nil, fmt.Errorf("failed to do query to dht node: %w", err)
 	}
+	n.updateStatus(true)
 
 	switch r := res.(type) {
 	case ValueNotFoundResult:
@@ -211,95 +231,60 @@ func checkValue(id []byte, value *Value) error {
 func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 	atomic.AddInt32(&n.inFlyQueries, 1)
 
-	a, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
+	peer, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
 	if err != nil {
 		atomic.AddInt32(&n.inFlyQueries, -1)
-		n.currentState = _StateFail
 		return err
 	}
 
 	defer func() {
-		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.currentState == _StateFail {
-			a.Close()
+		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.badScore > 0 {
+			peer.Close()
 		}
 	}()
 
 	t := time.Now()
 	atomic.StoreInt64(&n.lastQueryAt, t.Unix())
-	err = a.Query(ctx, req, res)
+	err = peer.Query(ctx, req, res)
 	if err != nil {
-		if ctx.Err() == nil || time.Since(t) > 3*time.Second {
-			n.currentState = _StateFail
-		}
 		return err
 	}
 	ping := time.Since(t)
 	atomic.StoreInt64(&n.ping, int64(ping))
 
-	switch {
-	case ping > queryTimeout/3:
-		n.currentState = _StateThrottle
-	default:
-		n.currentState = _StateActive
-	}
-
 	return nil
+}
+
+func (n *dhtNode) updateStatus(isGood bool) {
+	if isGood {
+		for {
+			badScore := atomic.LoadInt32(&n.badScore)
+			if badScore >= _MaxFailCount {
+				if !atomic.CompareAndSwapInt32(&n.badScore, badScore, badScore-1) {
+					continue
+				}
+				Logger("Make DHT peer {} feel good {}", n.id(), badScore-1)
+			}
+			break
+		}
+	} else {
+		badScore := atomic.LoadInt32(&n.badScore)
+		if badScore <= _MaxFailCount {
+			badScore = atomic.AddInt32(&n.badScore, 2)
+		}
+		Logger("Make DHT peer {} feel bad {}", n.id(), badScore)
+	}
 }
 
 func (n *dhtNode) id() string {
 	return hex.EncodeToString(n.adnlId)
 }
 
-func (n *dhtNode) weight(id []byte) int {
-	n.mx.Lock()
-	defer n.mx.Unlock()
-
-	w := leadingZeroBits(xor(id, n.adnlId))
-	if n.currentState == _StateFail {
-		w -= 3 // less priority for failed
-		if w < 0 {
-			w = 0
-		}
+func affinity(x, y []byte) uint {
+	var result = uint(0)
+	for i := 0; i < 32; i++ {
+		k := x[i] ^ y[i]
+		result += uint(bits.LeadingZeros8(k))
 	}
-	ping := time.Duration(atomic.LoadInt64(&n.ping))
-	return (1 << 30) + ((w << 20) - int(ping/(time.Millisecond*5)))
-}
-
-func xor(a, b []byte) []byte {
-	if len(b) < len(a) {
-		a = a[:len(b)]
-	}
-
-	tmp := make([]byte, len(a))
-	n := copy(tmp, a)
-
-	for i := 0; i < n; i++ {
-		tmp[i] ^= b[i]
-	}
-
-	return tmp
-}
-
-func leadingZeroBits(a []byte) int {
-	for i, b := range a {
-		switch {
-		case b&0b10000000 != 0:
-			return i*8 + 0
-		case b&0b1000000 != 0:
-			return i*8 + 1
-		case b&0b100000 != 0:
-			return i*8 + 2
-		case b&0b10000 != 0:
-			return i*8 + 3
-		case b&0b1000 != 0:
-			return i*8 + 4
-		case b&0b100 != 0:
-			return i*8 + 5
-		case b&0b10 != 0:
-			return i*8 + 6
-		case b&0b1 != 0:
-			return i*8 + 7
-		}
-	}
-	return len(a) * 8
+	return result
 }
