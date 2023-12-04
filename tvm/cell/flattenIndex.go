@@ -16,13 +16,18 @@ func flattenIndex(cells []*Cell) ([]*idxItem, map[string]*idxItem) {
 	for len(cells) > 0 {
 		next := make([]*Cell, 0, len(cells)*4)
 		for _, p := range cells {
+			hash := string(p.Hash())
+
+			if _, ok := index[hash]; ok {
+				continue
+			}
+
 			// move cell forward in boc, because behind reference is not allowed
-			index[string(p.Hash())] = &idxItem{
-				index: idx,
+			index[hash] = &idxItem{
 				cell:  p,
+				index: idx,
 			}
 			idx++
-
 			next = append(next, p.refs...)
 		}
 		cells = next
@@ -31,6 +36,26 @@ func flattenIndex(cells []*Cell) ([]*idxItem, map[string]*idxItem) {
 	idxSlice := make([]*idxItem, 0, len(index))
 	for _, id := range index {
 		idxSlice = append(idxSlice, id)
+	}
+
+	for verifyOrder := true; verifyOrder; {
+		verifyOrder = false
+
+		for _, id := range idxSlice {
+			for _, ref := range id.cell.refs {
+				idRef := index[string(ref.Hash())]
+
+				if idRef.index < id.index {
+					// if we found that ref index is behind parent,
+					// move ref index forward
+					idRef.index = idx
+					idx++
+
+					// we changed index, so we need to verify order again
+					verifyOrder = true
+				}
+			}
+		}
 	}
 
 	sort.Slice(idxSlice, func(i, j int) bool {
