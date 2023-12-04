@@ -440,7 +440,7 @@ func getDNSResolver() *dns.Client {
 	}
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client)
+	api := ton.NewAPIClient(client).WithRetry()
 
 	// get root dns address from network config
 	root, err := dns.RootContractAddr(api)

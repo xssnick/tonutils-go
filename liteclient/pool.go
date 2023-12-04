@@ -247,6 +247,11 @@ func (c *ConnectionPool) queryWithBalancer(req *ADNLRequest) (string, error) {
 			return "", ErrNoActiveConnections
 		}
 
+		if reqNode == nil {
+			// no active nodes in list
+			return "", ErrNoActiveConnections
+		}
+
 		host, err := reqNode.queryAdnl(req.QueryID, req.Data)
 		if err != nil {
 			if !errors.Is(err, NetworkErr{}) {
