@@ -482,15 +482,63 @@ func TestAddress_MarshalJSON(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "ext address",
-			address: NewAddressExt(0, 256, []byte{}),
-			want:    "\"EXT_ADDRESS\"",
+			name: "ext address",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      []byte{1, 2, 3},
+			},
+			want:    "\"EXT:1100000100010203\"",
 			wantErr: false,
 		},
 		{
-			name:    "var address",
-			address: NewAddressVar(0, 0, 256, []byte{}),
-			want:    "\"VAR_ADDRESS\"",
+			name: "ext address with empty data",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      nil,
+			},
+			want:    "\"EXT:1100000100\"",
+			wantErr: false,
+		},
+		{
+			name: "var address",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      []byte{4, 5, 6},
+			},
+			want:    "\"VAR:91ffffffff00000100040506\"",
+			wantErr: false,
+		},
+		{
+			name: "var address with empty data",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      nil,
+			},
+			want:    "\"VAR:91ffffffff00000100\"",
 			wantErr: false,
 		},
 		{
@@ -553,6 +601,74 @@ func TestAddress_UnmarshalJSON(t *testing.T) {
 			address: "\"AQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj\"",
 			want:    Address{},
 			wantErr: true,
+		},
+		{
+			name:    "none address",
+			address: "\"NONE\"",
+			want: Address{
+				addrType: NoneAddress,
+			},
+			wantErr: false,
+		},
+		{
+			name:    "ext address",
+			address: "\"EXT:1100000100010203\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      []byte{1, 2, 3},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "ext address with empty data",
+			address: "\"EXT:1100000100\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      []byte{},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "var address",
+			address: "\"VAR:91ffffffff00000100040506\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      []byte{4, 5, 6},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "var address with empty data",
+			address: "\"VAR:91ffffffff00000100\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      []byte{},
+			},
+			wantErr: false,
 		},
 	}
 
