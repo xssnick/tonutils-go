@@ -28,7 +28,7 @@ func TestInternalMessage_ToCell(t *testing.T) { // need to deploy contract on te
 		Body: cell.BeginCell().EndCell(),
 	}
 
-	c, err := intMsg.ToCell()
+	c, err := ToCell(intMsg)
 	if err != nil {
 		t.Fatal("to cell err", err)
 	}
@@ -90,7 +90,7 @@ func TestMessage_LoadFromCell(t *testing.T) {
 			StateInit:   nil,
 			Body:        cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
 		}
-		_cell, err := tIntMsg.ToCell()
+		_cell, err := ToCell(tIntMsg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +112,7 @@ func TestMessage_LoadFromCell(t *testing.T) {
 			StateInit: nil,
 			Body:      cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
 		}
-		_cell, err := tExMsg.ToCell()
+		_cell, err := ToCell(tExMsg)
 		if err != nil {
 			t.Fatal(err)
 		}

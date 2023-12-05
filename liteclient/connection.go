@@ -43,6 +43,9 @@ type connection struct {
 	authed  bool
 	authEvt chan bool
 
+	weight       int64
+	lastRespTime int64
+
 	pool *ConnectionPool
 }
 
@@ -138,6 +141,7 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		reqs:       make(chan *ADNLRequest),
 		pool:       c,
 		id:         crc32.ChecksumIEEE([]byte(serverKey)),
+		weight:     1000,
 	}
 
 	// get timeout if exists

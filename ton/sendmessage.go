@@ -26,7 +26,7 @@ var ErrMessageNotAccepted = errors.New("message was not accepted by the contract
 var ErrNoTransactionsWereFound = errors.New("no transactions were found")
 
 func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error {
-	req, err := msg.ToCell()
+	req, err := tlb.ToCell(msg)
 	if err != nil {
 		return fmt.Errorf("failed to serialize external message, err: %w", err)
 	}
