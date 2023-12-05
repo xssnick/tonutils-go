@@ -212,6 +212,10 @@ func TestBOCBomb(t *testing.T) {
 	if !bytes.Equal(c.Hash(), hash) {
 		t.Fatal("incorrect hash", hex.EncodeToString(c.Hash()), hex.EncodeToString(hash))
 	}
+
+	if len(c.ToBOCWithFlags(false)) != len(boc) {
+		t.Fatal("len", len(c.ToBOC()), len(boc))
+	}
 }
 
 func TestCell_TxWithMerkleBody(t *testing.T) {
