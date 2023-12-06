@@ -449,14 +449,14 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 			}
 		}
 
-		return LoadShardsFromHashes(inf.ShardHashes)
+		return LoadShardsFromHashes(inf.ShardHashes, false)
 	case LSError:
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
 }
 
-func LoadShardsFromHashes(shardHashes *cell.Dictionary) (shards []*BlockIDExt, err error) {
+func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards []*BlockIDExt, err error) {
 	if shardHashes == nil {
 		return []*BlockIDExt{}, nil
 	}
@@ -473,12 +473,17 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary) (shards []*BlockIDExt, e
 		}
 
 		var binTree tlb.BinTree
-		err = binTree.LoadFromCell(binTreeRef)
-		if err != nil {
+		if err = tlb.LoadFromCellAsProof(&binTree, binTreeRef); err != nil {
 			return nil, fmt.Errorf("load BinTree err: %w", err)
 		}
 
 		for _, bk := range binTree.All() {
+			if skipPruned && bk.Value.GetType() != cell.OrdinaryCellType {
+				// in case of split we have list with only needed shard,
+				// and pruned branch for others.
+				continue
+			}
+
 			loader := bk.Value.BeginParse()
 
 			ab, err := loader.LoadUInt(4)

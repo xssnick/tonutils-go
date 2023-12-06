@@ -68,7 +68,8 @@ func main() {
 		log.Println("sending transaction and waiting for confirmation...")
 
 		// if destination wallet is not initialized (or you don't care)
-		// you should set bounce to true to not get money back
+		// you should set bounce to false to not get money back.
+		// If bounce is true, money will be returned in case of not initialized destination wallet or smart-contract error
 		bounce := false
 
 		transfer, err := w.BuildTransfer(addr, tlb.MustFromTON("0.003"), bounce, "Hello from tonutils-go!")

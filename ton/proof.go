@@ -48,7 +48,7 @@ func CheckShardInMasterProof(master *BlockIDExt, shardProof []*cell.Cell, workch
 		return fmt.Errorf("failed to check proof for mc state extra: %w", err)
 	}
 
-	shards, err := LoadShardsFromHashes(stateExtra.ShardHashes)
+	shards, err := LoadShardsFromHashes(stateExtra.ShardHashes, true)
 	if err != nil {
 		return fmt.Errorf("failed to load shard hashes: %w", err)
 	}
