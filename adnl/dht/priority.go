@@ -7,7 +7,7 @@ import (
 type nodePriority struct {
 	id       string
 	node     *dhtNode
-	distance int
+	priority int
 	next     *nodePriority
 	used     bool
 }
@@ -33,7 +33,7 @@ func (p *priorityList) addNode(node *dhtNode) bool {
 	item := &nodePriority{
 		id:       id,
 		node:     node,
-		distance: node.distance(p.targetId),
+		priority: int(affinity(node.adnlId, p.targetId)) - int(node.badScore),
 	}
 
 	p.mx.Lock()
@@ -58,7 +58,7 @@ func (p *priorityList) addNode(node *dhtNode) bool {
 			return false
 		}
 
-		if item.distance < cur.distance {
+		if item.priority > cur.priority {
 			item.next = cur
 			if prev != nil {
 				prev.next = item
@@ -109,7 +109,7 @@ func (p *priorityList) getNode() (*dhtNode, int) {
 	}
 	res.used = true
 
-	return res.node, res.distance
+	return res.node, res.priority
 }
 
 func (p *priorityList) markUsed(node *dhtNode, used bool) {

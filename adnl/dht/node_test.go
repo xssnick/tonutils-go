@@ -11,7 +11,6 @@ import (
 	"net"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -320,6 +319,15 @@ func TestNode_findValue(t *testing.T) {
 			time.Sleep(2 * time.Second)
 
 			var testNode *dhtNode
+		loop:
+			for _, b := range cli.buckets {
+				for _, node := range b.getNodes() {
+					if node != nil {
+						testNode = node
+						break loop
+					}
+				}
+			}
 			for _, val := range cli.knownNodes {
 				testNode = val
 			}
@@ -410,197 +418,4 @@ func TestNode_checkValue(t *testing.T) {
 	//	t.Errorf("got unexcpected error '%s', want signature not match key", err.Error())
 	//}
 	//})
-}
-
-func TestNode_weight(t *testing.T) {
-	tPubKey, err := hex.DecodeString("75b9507dc58a931ea6e860d444987e82d8501e09191264c35b95f6956d8debe4")
-	if err != nil {
-		t.Fatal("failed to prepare test public key, err: ", err)
-	}
-
-	kId, err := tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
-	if err != nil {
-		t.Fatal("failed to prepare test key id, err: ", err)
-	}
-	tNode1 := &dhtNode{
-		adnlId:       kId,
-		ping:         0,
-		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
-		serverKey:    tPubKey,
-		currentState: _StateActive,
-		mx:           sync.Mutex{},
-	}
-
-	tPubKey, err = hex.DecodeString("4680cd40ea26311fe68a6ca0a3dd48aae19561b915ca870b2412d846ae8f53ae")
-	if err != nil {
-		t.Fatal("failed to prepare test public key, err: ", err)
-	}
-
-	kId, err = tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
-	if err != nil {
-		t.Fatal("failed to prepare test key id, err: ", err)
-	}
-	tNode2 := &dhtNode{
-		adnlId:       kId,
-		ping:         0,
-		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
-		serverKey:    tPubKey,
-		currentState: _StateFail,
-		mx:           sync.Mutex{},
-	}
-
-	tPubKey, err = hex.DecodeString("63c92be0faffbda7dcc32a4380a19c98a75a6d58b9aceadb02cc0bc0bfd6b7d3")
-	if err != nil {
-		t.Fatal("failed to prepare test public key, err: ", err)
-	}
-
-	kId, err = tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
-	if err != nil {
-		t.Fatal("failed to prepare test key id, err: ", err)
-	}
-	tNode3 := &dhtNode{
-		adnlId:       kId,
-		ping:         0,
-		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
-		serverKey:    tPubKey,
-		currentState: _StateActive,
-		mx:           sync.Mutex{},
-	}
-
-	tests := []struct {
-		testNode *dhtNode
-		testId   []byte
-		want     int
-	}{
-		{tNode1, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 2097152},
-		{tNode2, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 1048576 - 1<<20},
-		{tNode3, []byte{0b00100100, 0b10100100, 0b00100101}, 1<<30 + 0},
-	}
-	for _, test := range tests {
-		t.Run("distance test", func(t *testing.T) {
-			res := test.testNode.distance(test.testId)
-			if res != test.want {
-				t.Errorf("got '%d', want '%d'", res, test.want)
-			}
-		})
-	}
-}
-
-func TestNode_weight2(t *testing.T) {
-	key, err := hex.DecodeString("75b9507dc58a931ea6e860d444987e82d8501e09191264c35b95f6952d8debe4")
-	if err != nil {
-		t.Fatal("failed to prepare test public key, err: ", err)
-	}
-
-	tPubKey, err := hex.DecodeString("75b9507dc58a931ea6e860d444987e82d8501e09191264c35b95f6956d8debe4")
-	if err != nil {
-		t.Fatal("failed to prepare test public key, err: ", err)
-	}
-
-	kId, err := tl.Hash(adnl.PublicKeyED25519{Key: tPubKey})
-	if err != nil {
-		t.Fatal("failed to prepare test key id, err: ", err)
-	}
-	tNode1 := &dhtNode{
-		adnlId:       kId,
-		ping:         100000,
-		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
-		serverKey:    tPubKey,
-		currentState: _StateActive,
-	}
-	tNode2 := &dhtNode{
-		adnlId:       kId,
-		ping:         5000000,
-		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
-		serverKey:    tPubKey,
-		currentState: _StateActive,
-	}
-	tNode3 := &dhtNode{
-		adnlId:       kId,
-		ping:         100000,
-		addr:         net.IPv4(1, 2, 3, 4).To4().String() + ":" + "35465",
-		serverKey:    tPubKey,
-		currentState: _StateFail,
-	}
-
-	println(tNode1.distance(key), tNode2.distance(key), tNode3.distance(key))
-}
-
-func TestNode_xor(t *testing.T) {
-	tests := []struct {
-		give1 []byte
-		give2 []byte
-		want  []byte
-	}{
-		{
-			[]byte{0b10001111},
-			[]byte{0b10001111},
-			[]byte{0b00000000},
-		},
-		{
-			[]byte{0b00001111, 0b10001111},
-			[]byte{0b10001111},
-			[]byte{0b10000000},
-		},
-		{
-			[]byte{0b00001111, 0b10001110},
-			[]byte{0b10001111},
-			[]byte{0b10000000},
-		},
-		{
-			[]byte{0b00001111},
-			[]byte{0b10001111, 0b10001111},
-			[]byte{0b10000000},
-		},
-		{
-			[]byte{0b01101110},
-			[]byte{0b10001111, 0b10001111},
-			[]byte{0b11100001},
-		},
-		{
-			[]byte{0b00000000, 0b00000000, 0b00000000},
-			[]byte{0b10001111, 0b10001111, 0b10001111},
-			[]byte{0b10001111, 0b10001111, 0b10001111},
-		},
-		{
-			[]byte{0b00000000, 0b00000100, 0b00000000},
-			[]byte{0b00000000, 0b00000000, 0b00000000},
-			[]byte{0b00000000, 0b00000100, 0b00000000},
-		},
-	}
-	for _, test := range tests {
-		t.Run("xor test", func(t *testing.T) {
-			res := xor(test.give1, test.give2)
-			if bytes.Equal(res, test.want) != true {
-				t.Errorf("got '%b', want '%b'", res, test.want)
-			}
-		})
-	}
-}
-
-func TestNode_leadingZeroBits(t *testing.T) {
-	tests := []struct {
-		give []byte
-		want int
-	}{
-		{[]byte{0b10001111}, 0},
-		{[]byte{0b00001111}, 4},
-		{[]byte{0b01001111}, 1},
-		{[]byte{0b00000000}, 8},
-		{[]byte{0b00000001}, 7},
-		{[]byte{0b00000000, 0b00000000, 0b00000000}, 24},
-		{[]byte{0b00000000, 0b00000000, 0b00000001}, 23},
-		{[]byte{0b00000000, 0b10000000, 0b10000001}, 8},
-		{[]byte{0b00000111}, 5},
-		{[]byte{0b00011111}, 3},
-		{[]byte{0b00000011}, 6},
-	}
-	for _, test := range tests {
-		t.Run("leadingZeroBits test", func(t *testing.T) {
-			res := leadingZeroBits(test.give)
-			if res != test.want {
-				t.Errorf("got '%d', want '%d'", res, test.want)
-			}
-		})
-	}
 }

@@ -541,6 +541,11 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 }
 
 func (a *ADNL) send(ctx context.Context, buf []byte) error {
+	if err := ctx.Err(); err != nil {
+		// check if context is failed to not try to write
+		return err
+	}
+
 	dl, ok := ctx.Deadline()
 	if !ok {
 		dl = time.Now().Add(10 * time.Second)

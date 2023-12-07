@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -31,12 +30,14 @@ type ADNL interface {
 
 type Gateway interface {
 	Close() error
+	GetID() []byte
 	RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error)
 }
 
 type Client struct {
-	knownNodes map[string]*dhtNode
-	mx         sync.RWMutex
+	knownNodes map[string]*dhtNode // unused, nodes are stored in buckets
+	buckets    [256]*Bucket
+	mx         sync.RWMutex // unused, buckets has its own mutex
 
 	gateway Gateway
 
@@ -112,8 +113,15 @@ func NewClientFromConfig(gateway Gateway, cfg *liteclient.GlobalConfig) (*Client
 
 func NewClient(gateway Gateway, nodes []*Node) (*Client, error) {
 	globalCtx, cancel := context.WithCancel(context.Background())
+
+	buckets := [256]*Bucket{}
+	for i := 0; i < 256; i++ {
+		buckets[i] = newBucket(_K)
+	}
+
 	c := &Client{
 		knownNodes:      map[string]*dhtNode{},
+		buckets:         buckets,
 		globalCtx:       globalCtx,
 		globalCtxCancel: cancel,
 		gateway:         gateway,
@@ -127,13 +135,10 @@ func NewClient(gateway Gateway, nodes []*Node) (*Client, error) {
 		}
 	}
 
-	if len(c.knownNodes) == 0 {
-		return nil, errors.New("0 nodes was added")
-	}
 	return c, nil
 }
 
-const _K = 10
+const _K = 7
 
 func (c *Client) Close() {
 	c.globalCtxCancel()
@@ -150,15 +155,9 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 	if err != nil {
 		return nil, err
 	}
-	keyID := hex.EncodeToString(kid)
 
-	c.mx.Lock()
-	defer c.mx.Unlock()
-
-	kNode := c.knownNodes[keyID]
-	if kNode != nil {
-		return kNode, nil
-	}
+	affinity := affinity(kid, c.gateway.GetID())
+	bucket := c.buckets[affinity]
 
 	if len(node.AddrList.Addresses) == 0 {
 		return nil, fmt.Errorf("no addresses to connect to")
@@ -170,8 +169,8 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 	// TODO: maybe use other addresses too
 	addr := node.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(node.AddrList.Addresses[0].Port)
 
-	kNode = c.connectToNode(kid, addr, pub.Key)
-	c.knownNodes[keyID] = kNode
+	kNode := c.connectToNode(kid, addr, pub.Key)
+	bucket.addNode(kNode)
 
 	return kNode, nil
 }
@@ -232,17 +231,29 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 
 var ErrDHTValueIsNotFound = errors.New("value is not found")
 
-func (c *Client) StoreAddress(ctx context.Context, addresses address.List, ttl time.Duration, ownerKey ed25519.PrivateKey, copies int) (int, []byte, error) {
+func (c *Client) StoreAddress(
+	ctx context.Context,
+	addresses address.List,
+	ttl time.Duration,
+	ownerKey ed25519.PrivateKey,
+	replicas int,
+) (replicasMade int, idKey []byte, err error) {
 	data, err := tl.Serialize(addresses, true)
 	if err != nil {
 		return 0, nil, err
 	}
 
 	id := adnl.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
-	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey, copies)
+	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey, replicas)
 }
 
-func (c *Client) StoreOverlayNodes(ctx context.Context, overlayKey []byte, nodes *overlay.NodesList, ttl time.Duration, copies int) (int, []byte, error) {
+func (c *Client) StoreOverlayNodes(
+	ctx context.Context,
+	overlayKey []byte,
+	nodes *overlay.NodesList,
+	ttl time.Duration,
+	replicas int,
+) (replicasMade int, idKey []byte, err error) {
 	if len(nodes.List) == 0 {
 		return 0, nil, fmt.Errorf("0 nodes in list")
 	}
@@ -260,10 +271,20 @@ func (c *Client) StoreOverlayNodes(ctx context.Context, overlayKey []byte, nodes
 	}
 
 	id := adnl.PublicKeyOverlay{Key: overlayKey}
-	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil, copies)
+	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil, replicas)
 }
 
-func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, value []byte, rule any, ttl time.Duration, ownerKey ed25519.PrivateKey, atLeastCopies int) (copiesMade int, idKey []byte, err error) {
+func (c *Client) Store(
+	ctx context.Context,
+	id any,
+	name []byte,
+	index int32,
+	value []byte,
+	rule any,
+	ttl time.Duration,
+	ownerKey ed25519.PrivateKey,
+	_ int, // unused, TON Whitepaper 3.2.7 - Store queries must be sent to all nodes in the K-sized bucket
+) (_ int, idKey []byte, err error) {
 	idKey, err = tl.Hash(id)
 	if err != nil {
 		return 0, nil, err
@@ -295,104 +316,97 @@ func (c *Client) Store(ctx context.Context, id any, name []byte, index int32, va
 		}
 	}
 
-	kid, err := tl.Hash(val.KeyDescription.Key)
+	keyId, err := tl.Hash(val.KeyDescription.Key)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	var checkedMx sync.RWMutex
 	checked := map[string]bool{}
+	checkedMx := sync.RWMutex{}
+	plist := c.buildPriorityList(keyId)
 
-	plist := c.buildPriorityList(kid)
+	const activeQueries = 4
 
-	var wg sync.WaitGroup
-	wg.Add(atLeastCopies + 1)
-	copiesLeft := int64(atLeastCopies)
-	storeCtx, cancelStoreCtx := context.WithCancel(ctx)
-	for i := 0; i < atLeastCopies+1; i++ {
-		go func() {
-			defer wg.Done()
-			for atomic.LoadInt64(&copiesLeft) > 0 {
+	for {
+		currentLen := len(checked)
+		var wg sync.WaitGroup
+		wg.Add(activeQueries)
+		for i := 0; i < activeQueries; i++ {
+			go func() {
+				defer wg.Done()
 				node, _ := plist.getNode()
 				if node == nil {
-					break
+					return
 				}
-
-				strId := node.id()
+				nodeId := node.id()
 				checkedMx.RLock()
-				isChecked := checked[strId]
+				isChecked := checked[nodeId]
 				checkedMx.RUnlock()
-
-				if !isChecked {
-					nodes, err := node.findNodes(storeCtx, kid, _K)
-					if err != nil {
-						continue
-					}
-
-					hasBetter := false
-					currentPriority := leadingZeroBits(xor(kid, node.adnlId))
-					for _, n := range nodes {
-						var nid []byte
-						nid, err = tl.Hash(n.ID)
-						if err != nil {
-							continue
-						}
-
-						checkedMx.RLock()
-						isNChecked := checked[hex.EncodeToString(nid)]
-						checkedMx.RUnlock()
-
-						if isNChecked {
-							continue
-						}
-
-						priority := leadingZeroBits(xor(kid, nid))
-						if priority > currentPriority {
-							dNode, err := c.addNode(n)
-							if err != nil {
-								continue
-							}
-
-							if plist.addNode(dNode) {
-								hasBetter = true
-							}
-						}
-					}
-
-					if hasBetter {
-						// push back as checked, to be able to use later for other copy
-						checkedMx.Lock()
-						if !checked[strId] {
-							checked[strId] = true
-							plist.markUsed(node, false)
-						}
-						checkedMx.Unlock()
-						continue
-					}
+				if isChecked {
+					return
 				}
+				checkedMx.Lock()
+				checked[nodeId] = true
+				checkedMx.Unlock()
+				Logger("Search nodes", nodeId)
 
-				storeCallCtx, cancel := context.WithTimeout(storeCtx, queryTimeout)
-				err := node.storeValue(storeCallCtx, kid, &val)
+				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+				nodes, err := node.findNodes(storeCallCtx, keyId, _K)
 				cancel()
 				if err != nil {
-					continue
+					return
+				} else {
+					Logger("Adding nodes", len(nodes))
+					for _, n := range nodes {
+						if _, err = c.addNode(n); err != nil {
+							continue
+						}
+					}
 				}
+			}()
+		}
+		wg.Wait()
+		plist = c.buildPriorityList(keyId)
+		if len(checked) == currentLen {
+			Logger("S list stops growing:", len(checked))
+			break
+		} else {
+			Logger("K iteration ends. Current size:", len(checked))
+		}
+	}
 
-				if atomic.AddInt64(&copiesLeft, -1) == 0 {
-					cancelStoreCtx()
-					break
+	stored := int32(0)
+
+	for {
+		var wg sync.WaitGroup
+		wg.Add(activeQueries)
+		for i := 0; i < activeQueries; i++ {
+			go func() {
+				defer wg.Done()
+				for {
+					node, _ := plist.getNode()
+					if node == nil {
+						return
+					}
+					storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+					err := node.storeValue(storeCallCtx, keyId, &val)
+					cancel()
+					if err == nil {
+						Logger("Value stored on node", node.id(), "- affinity", affinity(keyId, node.adnlId))
+						atomic.AddInt32(&stored, 1)
+						return
+					}
+					Logger("Failed to store value on node", node.id(), "- affinity", affinity(keyId, node.adnlId), err.Error())
 				}
-			}
-		}()
-	}
-	wg.Wait()
-	cancelStoreCtx()
-
-	if copiesLeft == int64(atLeastCopies) {
-		return 0, nil, fmt.Errorf("failed to store value: zero copies made")
+			}()
+		}
+		wg.Wait()
+		if atomic.LoadInt32(&stored) >= _K {
+			break
+		}
 	}
 
-	return atLeastCopies - int(copiesLeft), idKey, nil
+	return int(stored), idKey, nil
 }
 
 func signTL(obj tl.Serializable, key ed25519.PrivateKey) ([]byte, error) {
@@ -428,7 +442,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
-	const threads = 8
+	const threads = 4
 	result := make(chan *foundResult, threads)
 
 	var numWaitingNextNode int
@@ -494,11 +508,6 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 
 					return
 				case []*Node:
-					if len(v) > 24 {
-						// max 24 nodes to add
-						v = v[:24]
-					}
-
 					for _, n := range v {
 						newNode, err := c.addNode(n)
 						if err != nil {
@@ -532,32 +541,34 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 
 	added := 0
 
-	c.mx.RLock()
-	defer c.mx.RUnlock()
-
-	// add fastest nodes first
-	for _, node := range c.knownNodes {
-		if node.currentState == _StateActive {
-			plist.addNode(node)
-			added++
-		}
-	}
-	// if we have not enough fast nodes, add slow
-	if added < 15 {
-		for _, node := range c.knownNodes {
-			if node.currentState == _StateThrottle {
-				plist.addNode(node)
-				added++
+loop:
+	for i := 255; i >= 0; i-- {
+		bucket := c.buckets[i]
+		knownNodes := bucket.getNodes()
+		for _, node := range knownNodes {
+			if node != nil && node.badScore == 0 {
+				if plist.addNode(node) {
+					added++
+				} else {
+					break loop
+				}
 			}
 		}
 	}
-	// if not enough active nodes, add failed, hope they will accept connection and become active
-	// they may be failed due to our connection problems
-	if added < 15 {
-		for _, node := range c.knownNodes {
-			if node.currentState == _StateFail {
-				plist.addNode(node)
-				added++
+
+	if added < _K {
+	loop2:
+		for i := 255; i >= 0; i-- {
+			bucket := c.buckets[i]
+			knownNodes := bucket.getNodes()
+			for _, node := range knownNodes {
+				if node != nil && node.badScore > 0 {
+					if plist.addNode(node) {
+						added++
+					} else {
+						break loop2
+					}
+				}
 			}
 		}
 	}
