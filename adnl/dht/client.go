@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -326,7 +325,7 @@ func (c *Client) Store(
 	checkedMx := sync.RWMutex{}
 	plist := c.buildPriorityList(keyId)
 
-	const activeQueries = 2
+	const activeQueries = 4
 
 	for {
 		currentLen := len(checked)
@@ -349,7 +348,7 @@ func (c *Client) Store(
 				checkedMx.Lock()
 				checked[nodeId] = true
 				checkedMx.Unlock()
-				fmt.Printf("Search nodes %s\n", nodeId)
+				Logger("Search nodes", nodeId)
 
 				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
 				nodes, err := node.findNodes(storeCallCtx, keyId, _K)
@@ -357,10 +356,9 @@ func (c *Client) Store(
 				if err != nil {
 					return
 				} else {
-					fmt.Printf("Adding nodes %d\n", len(nodes))
+					Logger("Adding nodes", len(nodes))
 					for _, n := range nodes {
-						_, err := c.addNode(n)
-						if err != nil {
+						if _, err = c.addNode(n); err != nil {
 							continue
 						}
 					}
@@ -370,10 +368,10 @@ func (c *Client) Store(
 		wg.Wait()
 		plist = c.buildPriorityList(keyId)
 		if len(checked) == currentLen {
-			fmt.Printf("S list stops growing: %d\n", len(checked))
+			Logger("S list stops growing:", len(checked))
 			break
 		} else {
-			fmt.Printf("K iteration ends. Current size: %d\n", len(checked))
+			Logger("K iteration ends. Current size:", len(checked))
 		}
 	}
 
@@ -394,12 +392,11 @@ func (c *Client) Store(
 					err := node.storeValue(storeCallCtx, keyId, &val)
 					cancel()
 					if err == nil {
-						fmt.Printf("Value stored on node %s - affinity %d\n", node.id(), affinity(keyId, node.adnlId))
+						Logger("Value stored on node", node.id(), "- affinity", affinity(keyId, node.adnlId))
 						atomic.AddInt32(&stored, 1)
 						return
-					} else {
-						fmt.Printf("Failed to store value on node %s - affinity %d - %s\n", node.id(), affinity(keyId, node.adnlId), err.Error())
 					}
+					Logger("Failed to store value on node", node.id(), "- affinity", affinity(keyId, node.adnlId), err.Error())
 				}
 			}()
 		}
@@ -408,8 +405,6 @@ func (c *Client) Store(
 			break
 		}
 	}
-
-	fmt.Println("Done.")
 
 	return int(stored), idKey, nil
 }
@@ -428,53 +423,117 @@ type foundResult struct {
 }
 
 func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
-	keyId, keyErr := tl.Hash(key)
+	id, keyErr := tl.Hash(key)
 	if keyErr != nil {
 		return nil, nil, keyErr
 	}
 
-	plist := c.buildPriorityList(keyId)
-	used := map[string]bool{}
+	plist := c.buildPriorityList(id)
 
-	for {
-		node, _ := plist.getNode()
-		if node == nil {
-			break
-		}
-
-		nodeId := node.id()
-
-		isUsed := used[nodeId]
-		if isUsed {
-			continue
-		}
-		used[nodeId] = true
-
-		findCtx, cancelFindCtx := context.WithTimeout(ctx, 10*time.Second)
-		value, err := node.findValue(findCtx, keyId, _K)
-		cancelFindCtx()
-		if err != nil {
-			fmt.Printf("Failed to find value on node %s - affinity %d - %s\n", node.id(), affinity(keyId, node.adnlId), err.Error())
-			continue
-		}
-
-		switch v := value.(type) {
-		case *Value:
-			fmt.Printf("Value %s found on node %s - affinity %d\n", hex.EncodeToString(keyId), node.id(), affinity(keyId, node.adnlId))
-			return value.(*Value), nil, nil
-		case []*Node:
-			for _, n := range v {
-				dNode, err := c.addNode(n)
-				if err != nil {
-					continue
-				}
-				plist.addNode(dNode)
-			}
-			plist = c.buildPriorityList(keyId)
+	cont := &Continuation{}
+	if len(continuation) > 0 && continuation[0] != nil {
+		cont = continuation[0]
+		for _, n := range cont.checkedNodes {
+			// mark nodes as used to not get a value from them again
+			plist.markUsed(n, true)
 		}
 	}
 
-	return nil, nil, ErrDHTValueIsNotFound
+	threadCtx, stopThreads := context.WithCancel(ctx)
+	defer stopThreads()
+
+	const threads = 4
+	result := make(chan *foundResult, threads)
+
+	var numWaitingNextNode int
+	var foundValue bool
+	cond := sync.NewCond(&sync.Mutex{})
+
+	for i := 0; i < threads; i++ {
+		go func() {
+			for {
+				select {
+				case <-threadCtx.Done():
+					return
+				default:
+				}
+
+				node, _ := plist.getNode()
+				if node == nil {
+					cond.L.Lock()
+					numWaitingNextNode++
+
+					for {
+						if foundValue {
+							cond.L.Unlock()
+
+							return
+						}
+
+						if numWaitingNextNode == threads {
+							cond.L.Unlock()
+
+							result <- nil
+
+							return
+						}
+
+						node, _ = plist.getNode()
+						if node != nil {
+							break
+						}
+
+						cond.Wait()
+					}
+
+					numWaitingNextNode--
+					cond.L.Unlock()
+				}
+
+				findCtx, findCancel := context.WithTimeout(threadCtx, queryTimeout)
+
+				val, err := node.findValue(findCtx, id, _K)
+				findCancel()
+				if err != nil {
+					continue
+				}
+
+				switch v := val.(type) {
+				case *Value:
+					result <- &foundResult{value: v, node: node}
+					cond.L.Lock()
+					foundValue = true
+					cond.Broadcast()
+					cond.L.Unlock()
+
+					return
+				case []*Node:
+					for _, n := range v {
+						newNode, err := c.addNode(n)
+						if err != nil {
+							continue
+						}
+
+						plist.addNode(newNode)
+						cond.Signal()
+					}
+				}
+			}
+		}()
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case val := <-result:
+		if val == nil {
+			return nil, cont, ErrDHTValueIsNotFound
+		}
+
+		cont.checkedNodes = append(cont.checkedNodes, val.node)
+
+		return val.value, cont, nil
+	}
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
