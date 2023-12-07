@@ -51,7 +51,7 @@ func main() {
 	if balance.Nano().Uint64() >= 3000000 {
 		addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
-		log.Println("sending transaction and waiting for confirmation...")
+		log.Println("sending transaction...")
 
 		// default message ttl is 3 minutes, it is time during which you can send it to blockchain
 		// if you need to set longer TTL, you could use this method
@@ -82,7 +82,7 @@ func main() {
 			return
 		}
 
-		log.Println("transaction sent")
+		log.Println("transaction sent, we are not waiting for confirmation")
 
 		return
 	}
