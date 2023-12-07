@@ -250,6 +250,10 @@ func (c *ConnectionPool) queryWithSmartBalancer(req *ADNLRequest) (*connection, 
 	}
 	c.nodesMx.RUnlock()
 
+	if reqNode == nil {
+		return nil, ErrNoActiveConnections
+	}
+
 	atomic.AddInt64(&reqNode.weight, -1)
 
 	_, err := reqNode.queryAdnl(req.QueryID, req.Data)
