@@ -124,10 +124,20 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 		return nil, fmt.Errorf("failed to serialize dht value: %w", err)
 	}
 
+	if err = ctx.Err(); err != nil {
+		// if context is canceled we are not trying to query
+		return nil, err
+	}
+
+	reportLimit := time.Now().Add(3 * time.Second)
+
 	var res any
 	err = n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
-		n.updateStatus(false)
+		if time.Now().After(reportLimit) {
+			// to not report good nodes, because of our short deadline
+			n.updateStatus(false)
+		}
 		return nil, fmt.Errorf("failed to do query to dht node: %w", err)
 	}
 	n.updateStatus(true)
