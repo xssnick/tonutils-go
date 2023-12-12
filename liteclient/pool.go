@@ -6,17 +6,23 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
 	"io"
 	mRand "math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 const _StickyCtxKey = "_ton_node_sticky"
 const _StickyCtxUsedNodesKey = "_ton_used_nodes_sticky"
+
+var (
+	ErrNoActiveConnections = errors.New("no active connections")
+	ErrADNLReqTimeout      = errors.New("adnl request timeout")
+)
 
 type OnDisconnectCallback func(addr, key string)
 
@@ -44,8 +50,6 @@ type ConnectionPool struct {
 	globalCtx context.Context
 	stop      func()
 }
-
-var ErrNoActiveConnections = errors.New("no active connections")
 
 // NewConnectionPool - ordinary pool to query liteserver
 func NewConnectionPool() *ConnectionPool {
@@ -208,8 +212,9 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 		}
 
 		if !hasDeadline {
-			return fmt.Errorf("adnl request timeout, node %s", node.addr)
+			return fmt.Errorf("%w, node %s", ErrADNLReqTimeout, node.addr)
 		}
+
 		return fmt.Errorf("deadline exceeded, node %s, err: %w", node.addr, ctx.Err())
 	}
 }
