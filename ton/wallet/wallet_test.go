@@ -6,12 +6,13 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient"
-	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/ton"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -461,6 +462,7 @@ type WaiterMock struct {
 	MGetTransaction         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 	MWaitForBlock           func(seqno uint32) ton.APIClientWrapped
 	MWithRetry              func(x ...int) ton.APIClientWrapped
+	MWithTimeout            func(timeout time.Duration) ton.APIClientWrapped
 	MCurrentMasterchainInfo func(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	MGetBlockProof          func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
 }
@@ -507,9 +509,12 @@ func (w WaiterMock) WithRetry(x ...int) ton.APIClientWrapped {
 	return w.MWithRetry(x...)
 }
 
+func (w WaiterMock) WithTimeout(timeout time.Duration) ton.APIClientWrapped {
+	return w.MWithTimeout(timeout)
+}
+
 func (w WaiterMock) GetBlockProof(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error) {
 	return w.MGetBlockProof(ctx, known, target)
-
 }
 
 func (w WaiterMock) GetTime(ctx context.Context) (uint32, error) {
