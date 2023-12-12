@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"reflect"
@@ -740,5 +741,14 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 	}
 	if resp[2] == nil {
 		t.Fatal("third should be not empty")
+	}
+}
+
+func TestAPIClient_WithRetry(t *testing.T) {
+	apiTimeout := api.WithTimeout(1 * time.Millisecond)
+
+	_, err := apiTimeout.CurrentMasterchainInfo(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("expected deadline exceeded error")
 	}
 }

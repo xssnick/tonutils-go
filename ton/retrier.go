@@ -2,9 +2,12 @@ package ton
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
 	"strings"
+
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 type retryClient struct {
@@ -22,14 +25,17 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 		tries++
 
 		if err != nil {
-			if strings.HasPrefix(err.Error(), "adnl request timeout, node") {
+			if errors.Is(err, liteclient.ErrADNLReqTimeout) {
 				// try next node
-				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil {
+				ctx, err = w.original.StickyContextNextNode(ctx)
+				if err != nil {
 					return fmt.Errorf("timeout error received, but failed to try with next node, "+
 						"looks like all active nodes was already tried, original error: %w", err)
 				}
+
 				continue
 			}
+
 			return err
 		}
 
