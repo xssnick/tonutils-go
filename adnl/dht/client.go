@@ -440,14 +440,17 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	}
 
 	threadCtx, stopThreads := context.WithCancel(ctx)
-	defer stopThreads()
 
-	const threads = 4
+	const threads = 6
 	result := make(chan *foundResult, threads)
 
 	var numWaitingNextNode int
-	var foundValue bool
 	cond := sync.NewCond(&sync.Mutex{})
+
+	defer func() {
+		stopThreads()
+		cond.Broadcast()
+	}()
 
 	for i := 0; i < threads; i++ {
 		go func() {
@@ -464,10 +467,11 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 					numWaitingNextNode++
 
 					for {
-						if foundValue {
+						select {
+						case <-threadCtx.Done():
 							cond.L.Unlock()
-
 							return
+						default:
 						}
 
 						if numWaitingNextNode == threads {
@@ -501,11 +505,6 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 				switch v := val.(type) {
 				case *Value:
 					result <- &foundResult{value: v, node: node}
-					cond.L.Lock()
-					foundValue = true
-					cond.Broadcast()
-					cond.L.Unlock()
-
 					return
 				case []*Node:
 					for _, n := range v {
