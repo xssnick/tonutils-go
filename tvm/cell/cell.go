@@ -181,6 +181,13 @@ func (c *Cell) Hash(level ...int) []byte {
 	return c.getHash(_DataCellMaxLevel)
 }
 
+func (c *Cell) Depth(level ...int) uint16 {
+	if len(level) > 0 {
+		return c.getDepth(level[0])
+	}
+	return c.getDepth(_DataCellMaxLevel)
+}
+
 func (c *Cell) Sign(key ed25519.PrivateKey) []byte {
 	return ed25519.Sign(key, c.Hash())
 }
