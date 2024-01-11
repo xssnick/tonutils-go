@@ -43,6 +43,7 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 			if lsErr, ok := (*tmp).(LSError); ok && (lsErr.Code == 651 ||
 				lsErr.Code == 652 ||
 				lsErr.Code == -400 ||
+				lsErr.Code == -503 ||
 				(lsErr.Code == 0 && strings.Contains(lsErr.Text, "Failed to get account state"))) {
 				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil { // try next node
 					// no more nodes left, return as it is
