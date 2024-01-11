@@ -203,8 +203,12 @@ func (a *ADNL) processMessage(message any, ch *Channel) error {
 	case MessagePong:
 		// TODO: record
 	case MessagePing:
-		err := a.sendRequest(context.Background(), ch, MessagePong{Value: ms.Value})
+		buf, err := a.buildRequest(ch, MessagePong{Value: ms.Value})
 		if err != nil {
+			return fmt.Errorf("failed to build pong request: %w", err)
+		}
+
+		if err = a.send(context.Background(), buf); err != nil {
 			return fmt.Errorf("failed to send pong: %w", err)
 		}
 	case MessageQuery:
@@ -378,11 +382,17 @@ func (a *ADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) error
 }
 
 func (a *ADNL) sendCustomMessage(ctx context.Context, ch *Channel, req tl.Serializable) error {
-	err := a.sendRequestMaySplit(ctx, ch, &MessageCustom{
+	packets, err := a.buildRequestMaySplit(ch, &MessageCustom{
 		Data: req,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to send custom message: %w", err)
+	}
+
+	for _, packet := range packets {
+		if err = a.send(ctx, packet); err != nil {
+			return fmt.Errorf("failed to send custom packet: %w", err)
+		}
 	}
 	return nil
 }
@@ -405,13 +415,20 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 	a.activeQueries[reqID] = res
 	a.mx.Unlock()
 
-	for {
-		if err = a.sendRequestMaySplit(ctx, ch, q); err != nil {
-			a.mx.Lock()
-			delete(a.activeQueries, reqID)
-			a.mx.Unlock()
+	packets, err := a.buildRequestMaySplit(ch, q)
+	if err != nil {
+		a.mx.Lock()
+		delete(a.activeQueries, reqID)
+		a.mx.Unlock()
 
-			return fmt.Errorf("request failed: %w", err)
+		return fmt.Errorf("request failed: %w", err)
+	}
+
+	for {
+		for i, packet := range packets {
+			if err = a.send(ctx, packet); err != nil {
+				return fmt.Errorf("failed to send query packet %d: %w", i, err)
+			}
 		}
 
 		select {
@@ -429,53 +446,66 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 }
 
 func (a *ADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
-	if err := a.sendRequestMaySplit(ctx, nil, &MessageAnswer{
+	packets, err := a.buildRequestMaySplit(nil, &MessageAnswer{
 		ID:   queryID,
 		Data: result,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("send answer  failed: %w", err)
+	}
+
+	for _, packet := range packets {
+		if err = a.send(ctx, packet); err != nil {
+			return fmt.Errorf("failed to send answer: %w", err)
+		}
 	}
 	return nil
 }
 
-func (a *ADNL) sendRequestMaySplit(ctx context.Context, ch *Channel, req tl.Serializable) (err error) {
+func (a *ADNL) buildRequestMaySplit(ch *Channel, req tl.Serializable) (packets [][]byte, err error) {
 	msg, err := tl.Serialize(req, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(msg) > _MTU {
 		parts := splitMessage(msg)
 		if len(parts) > 8 {
-			return fmt.Errorf("too big message, more than 8 parts")
+			return nil, fmt.Errorf("too big message, more than 8 parts")
 		}
 
+		packets = make([][]byte, 0, len(parts))
 		for i, part := range parts {
-			if err = a.sendRequest(ctx, ch, part); err != nil {
-				return fmt.Errorf("filed to send message part %d, err: %w", i, err)
+			buf, err := a.buildRequest(ch, part)
+			if err != nil {
+				return nil, fmt.Errorf("filed to build message part %d, err: %w", i, err)
 			}
+			packets = append(packets, buf)
 		}
-		return nil
+		return packets, nil
 	}
 
-	return a.sendRequest(ctx, ch, tl.Raw(msg))
+	buf, err := a.buildRequest(ch, tl.Raw(msg))
+	if err != nil {
+		return nil, fmt.Errorf("filed to build message, err: %w", err)
+	}
+	return [][]byte{buf}, nil
 }
 
-func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable) (err error) {
+func (a *ADNL) buildRequest(ch *Channel, req tl.Serializable) (buf []byte, err error) {
 	a.mx.Lock()
 	defer a.mx.Unlock()
 
 	if a.writer == nil {
-		return fmt.Errorf("ADNL connection is not active")
+		return nil, fmt.Errorf("ADNL connection is not active")
 	}
 
 	if ch != nil && !ch.ready {
-		return fmt.Errorf("channel is not ready yet")
+		return nil, fmt.Errorf("channel is not ready yet")
 	}
 
 	seqno := a.seqno + 1
 
-	var buf []byte
 	// if channel == nil, we will use root channel,
 	if ch == nil {
 		if a.channel != nil && a.channel.ready {
@@ -489,7 +519,7 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 
 				buf, err = a.createPacket(int64(seqno), true, chMsg, req)
 				if err != nil {
-					return fmt.Errorf("failed to create packet: %w", err)
+					return nil, fmt.Errorf("failed to create packet: %w", err)
 				}
 			} else {
 				// channel is active
@@ -500,7 +530,7 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 			if a.channel == nil {
 				_, key, err := ed25519.GenerateKey(nil)
 				if err != nil {
-					return err
+					return nil, err
 				}
 
 				a.channel = &Channel{
@@ -518,7 +548,7 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 
 			buf, err = a.createPacket(int64(seqno), false, chMsg, req)
 			if err != nil {
-				return fmt.Errorf("failed to create packet: %w", err)
+				return nil, fmt.Errorf("failed to create packet: %w", err)
 			}
 		}
 	}
@@ -526,18 +556,13 @@ func (a *ADNL) sendRequest(ctx context.Context, ch *Channel, req tl.Serializable
 	if ch != nil {
 		buf, err = ch.createPacket(int64(seqno), req)
 		if err != nil {
-			return fmt.Errorf("failed to create packet: %w", err)
+			return nil, fmt.Errorf("failed to create packet: %w", err)
 		}
-	}
-
-	err = a.send(ctx, buf)
-	if err != nil {
-		return fmt.Errorf("failed to send packet: %w", err)
 	}
 
 	a.seqno = seqno
 
-	return nil
+	return buf, nil
 }
 
 func (a *ADNL) send(ctx context.Context, buf []byte) error {

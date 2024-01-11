@@ -536,7 +536,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
-	plist := newPriorityList(_K*3, id)
+	plist := newPriorityList(64, id)
 
 	added := 0
 
