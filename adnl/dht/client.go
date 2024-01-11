@@ -20,7 +20,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
-const queryTimeout = 5000 * time.Millisecond
+const queryTimeout = 3000 * time.Millisecond
 
 type ADNL interface {
 	Query(ctx context.Context, req, result tl.Serializable) error
@@ -322,50 +322,51 @@ func (c *Client) Store(
 	}
 
 	checked := map[string]bool{}
-	checkedMx := sync.RWMutex{}
 	plist := c.buildPriorityList(keyId)
 
-	const activeQueries = 4
+	const activeQueries = 6
 
 	for {
 		currentLen := len(checked)
-		var wg sync.WaitGroup
-		wg.Add(activeQueries)
-		for i := 0; i < activeQueries; i++ {
-			go func() {
-				defer wg.Done()
+
+	chk:
+		for {
+			var wg sync.WaitGroup
+			for i := 0; i < activeQueries; i++ {
 				node, _ := plist.getNode()
 				if node == nil {
-					return
+					break chk
 				}
-				nodeId := node.id()
-				checkedMx.RLock()
-				isChecked := checked[nodeId]
-				checkedMx.RUnlock()
-				if isChecked {
-					return
-				}
-				checkedMx.Lock()
-				checked[nodeId] = true
-				checkedMx.Unlock()
-				Logger("Search nodes", nodeId)
 
-				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-				nodes, err := node.findNodes(storeCallCtx, keyId, _K)
-				cancel()
-				if err != nil {
-					return
-				} else {
-					Logger("Adding nodes", len(nodes))
-					for _, n := range nodes {
-						if _, err = c.addNode(n); err != nil {
-							continue
+				nodeId := node.id()
+				if checked[nodeId] {
+					continue
+				}
+				checked[nodeId] = true
+
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+
+					Logger("Search nodes", nodeId)
+
+					storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+					nodes, err := node.findNodes(storeCallCtx, keyId, _K)
+					cancel()
+					if err != nil {
+						return
+					} else {
+						Logger("Adding nodes", len(nodes))
+						for _, n := range nodes {
+							if _, err = c.addNode(n); err != nil {
+								continue
+							}
 						}
 					}
-				}
-			}()
+				}()
+			}
+			wg.Wait()
 		}
-		wg.Wait()
 		plist = c.buildPriorityList(keyId)
 		if len(checked) == currentLen {
 			Logger("S list stops growing:", len(checked))
@@ -378,32 +379,38 @@ func (c *Client) Store(
 	stored := int32(0)
 
 	for {
+		noMoreNodes := false
 		var wg sync.WaitGroup
-		wg.Add(activeQueries)
 		for i := 0; i < activeQueries; i++ {
+			node, aff := plist.getNode()
+			if node == nil {
+				noMoreNodes = true
+				break
+			}
+
+			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for {
-					node, _ := plist.getNode()
-					if node == nil {
-						return
-					}
-					storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-					err := node.storeValue(storeCallCtx, keyId, &val)
-					cancel()
-					if err == nil {
-						Logger("Value stored on node", node.id(), "- affinity", affinity(keyId, node.adnlId))
-						atomic.AddInt32(&stored, 1)
-						return
-					}
-					Logger("Failed to store value on node", node.id(), "- affinity", affinity(keyId, node.adnlId), err.Error())
+
+				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+				err := node.storeValue(storeCallCtx, keyId, &val)
+				cancel()
+				if err == nil {
+					Logger("Value stored on node", node.id(), "- affinity", aff)
+					atomic.AddInt32(&stored, 1)
+					return
 				}
+				Logger("Failed to store value on node", node.id(), "- affinity", aff, err.Error())
 			}()
 		}
 		wg.Wait()
-		if atomic.LoadInt32(&stored) >= _K {
+		if atomic.LoadInt32(&stored) >= _K || noMoreNodes {
 			break
 		}
+	}
+
+	if stored == 0 {
+		return 0, idKey, fmt.Errorf("no nodes found to store this key")
 	}
 
 	return int(stored), idKey, nil
@@ -536,11 +543,10 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
-	plist := newPriorityList(64, id)
+	plist := newPriorityList(_K*3, id)
 
 	added := 0
 
-loop:
 	for i := 255; i >= 0; i-- {
 		bucket := c.buckets[i]
 		knownNodes := bucket.getNodes()
@@ -548,15 +554,12 @@ loop:
 			if node != nil && node.badScore == 0 {
 				if plist.addNode(node) {
 					added++
-				} else {
-					break loop
 				}
 			}
 		}
 	}
 
 	if added < _K {
-	loop2:
 		for i := 255; i >= 0; i-- {
 			bucket := c.buckets[i]
 			knownNodes := bucket.getNodes()
@@ -564,8 +567,6 @@ loop:
 				if node != nil && node.badScore > 0 {
 					if plist.addNode(node) {
 						added++
-					} else {
-						break loop2
 					}
 				}
 			}
