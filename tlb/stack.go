@@ -320,6 +320,10 @@ func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
 				}
 			}
 
+			if root.RefsNum() == 0 {
+				return nil
+			}
+
 			ref, err := root.LoadRef()
 			if err != nil {
 				return fmt.Errorf("failed to load tuple's %d ref, err: %w", i, err)
