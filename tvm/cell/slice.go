@@ -478,6 +478,10 @@ func (c *Slice) LoadBinarySnake() ([]byte, error) {
 	return data, nil
 }
 
+func (c *Slice) IsSpecial() bool {
+	return c.special
+}
+
 func (c *Slice) BitsLeft() uint {
 	return c.bitsSz - c.loadedSz
 }
