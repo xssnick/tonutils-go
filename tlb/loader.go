@@ -766,6 +766,10 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 				return fmt.Errorf("failed to serialize inline dict to cell for %s, err: %w", structField.Name, err)
 			}
 
+			if dCell == nil {
+				return fmt.Errorf("inline dict in field %s cannot be empty", structField.Name)
+			}
+
 			if err = builder.StoreBuilder(dCell.ToBuilder()); err != nil {
 				return fmt.Errorf("failed to store inline dict for %s, err: %w", structField.Name, err)
 			}

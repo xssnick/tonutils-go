@@ -142,7 +142,7 @@ func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {
 	var infoPart blockInfoPart
 	err := LoadFromCell(&infoPart, loader)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load blockInfoPart: %w", err)
 	}
 	h.blockInfoPart = infoPart
 
@@ -150,7 +150,7 @@ func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {
 		var globalVer GlobalVersion
 		err = LoadFromCell(&globalVer, loader)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to load GlobalVersion: %w", err)
 		}
 		h.GenSoftware = &globalVer
 	}
@@ -163,29 +163,29 @@ func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {
 		}
 		err = LoadFromCell(&masterRef, l)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to load ExtBlkRef: %w", err)
 		}
 		h.MasterRef = &masterRef
 	}
 
 	l, err := loader.LoadRef()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load ref for after merge: %w", err)
 	}
 	prevRef, err := loadBlkPrevInfo(l, infoPart.AfterMerge)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to loadBlkPrevInfo for after merge: %w", err)
 	}
 	h.PrevRef = *prevRef
 
 	if infoPart.VertSeqnoIncr {
 		l, err := loader.LoadRef()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to load ref for vert incr: %w", err)
 		}
 		prevVertRef, err := loadBlkPrevInfo(l, false)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to loadBlkPrevInfo for prev vert ref: %w", err)
 		}
 		h.PrevVertRef = prevVertRef
 	}
@@ -194,6 +194,12 @@ func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {
 
 func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) {
 	var res BlkPrevInfo
+
+	if loader.IsSpecial() {
+		// TODO: rewrite BlockHeader to pure tlb loader
+		// if it is a proof we skip load
+		return &res, nil
+	}
 
 	if !afterMerge {
 		var blkRef ExtBlkRef
