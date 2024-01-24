@@ -33,6 +33,7 @@ func (c *Cell) CreateProof(forHashes [][]byte) (*Cell, error) {
 		data:      data,
 		refs:      []*Cell{proofBody},
 	}
+	proof.calculateHashes()
 
 	return proof, nil
 }
@@ -74,6 +75,7 @@ func (c *Cell) toProof(parts []cellHash) ([]cellHash, error) {
 		}
 	}
 
+	changed := false
 	if len(hasPartsRefs) > 0 && len(toPruneRefs) > 0 {
 		// contains some useful and unuseful refs, pune unuseful
 		for i, ref := range toPruneRefs {
@@ -92,13 +94,16 @@ func (c *Cell) toProof(parts []cellHash) ([]cellHash, error) {
 				binary.BigEndian.PutUint16(prunedData[2+((lvl+1)*32)+2*lvl:], ref.getDepth(lvl))
 			}
 
-			c.refs[toPruneIdx[i]] = &Cell{
+			rf := &Cell{
 				special:   true,
 				levelMask: LevelMask{ref.levelMask.Mask + 1},
 				bitsSz:    uint(len(prunedData) * 8),
 				data:      prunedData,
 			}
+			rf.calculateHashes()
+			c.refs[toPruneIdx[i]] = rf
 		}
+		changed = true
 	}
 
 	typ := c.GetType()
@@ -110,7 +115,13 @@ func (c *Cell) toProof(parts []cellHash) ([]cellHash, error) {
 			} else {
 				c.levelMask = ref.levelMask
 			}
+			changed = true
 		}
+	}
+
+	if changed {
+		c.hashes = c.hashes[:0]
+		c.calculateHashes()
 	}
 
 	return hasPartsRefs, nil
@@ -163,14 +174,10 @@ func (c *Cell) getHash(level int) []byte {
 		hashIndex = 0
 	}
 
-	// lazy hash calc
-	if len(c.hashes) <= hashIndex*32 {
-		c.calculateHashes()
-	}
-
 	return c.hashes[hashIndex*32 : (hashIndex+1)*32]
 }
 
+// calculateHashes - we are precalculating cell hashes during creation for safe read parallel access later
 func (c *Cell) calculateHashes() {
 	totalHashCount := c.levelMask.getHashIndex() + 1
 	c.hashes = make([]byte, 32*totalHashCount)
@@ -275,11 +282,6 @@ func (c *Cell) getDepth(level int) uint16 {
 			return binary.BigEndian.Uint16(c.data[off : off+2])
 		}
 		hashIndex = 0
-	}
-
-	// lazy hash calc
-	if len(c.depthLevels) <= hashIndex {
-		c.calculateHashes()
 	}
 
 	return c.depthLevels[hashIndex]

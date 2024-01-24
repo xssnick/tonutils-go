@@ -392,7 +392,7 @@ func (c *Client) Store(
 			go func() {
 				defer wg.Done()
 
-				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout*3)
 				err := node.storeValue(storeCallCtx, keyId, &val)
 				cancel()
 				if err == nil {
@@ -410,7 +410,7 @@ func (c *Client) Store(
 	}
 
 	if stored == 0 {
-		return 0, idKey, fmt.Errorf("no nodes found to store this key")
+		return 0, idKey, fmt.Errorf("no alive nodes found to store this key")
 	}
 
 	return int(stored), idKey, nil

@@ -204,6 +204,10 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 
 	roots := make([]*Cell, 0, rootsNum)
 
+	for i := len(cells) - 1; i >= 0; i-- {
+		cells[i].calculateHashes()
+	}
+
 	// get cells which are not referenced by another, its root cells
 	for y, isRef := range referred {
 		if !isRef {

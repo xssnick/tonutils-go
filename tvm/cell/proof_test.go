@@ -37,6 +37,7 @@ func TestProofOfProofCreate(t *testing.T) {
 	kk.MustLoadRef()
 	fn := kk.MustLoadRef().MustToCell()
 
+	// TODO: fix create proof
 	prf, err := cl.CreateProof([][]byte{fn.Hash()})
 	if err != nil {
 		t.Fatal(err)

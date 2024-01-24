@@ -71,8 +71,9 @@ func TestCornerMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	println(hex.EncodeToString(c.Hash()), hex.EncodeToString(c2.Hash()))
 	if !bytes.Equal(c.Hash(), c2.Hash()) {
-		t.Fatal("hash not match")
+		t.Fatal("hash not match", hex.EncodeToString(c.Hash()), hex.EncodeToString(c2.Hash()))
 	}
 }
 

@@ -351,6 +351,9 @@ func (w *Wallet) SendManyGetInMsgHash(ctx context.Context, messages []*Message, 
 // SendManyWaitTxHash always waits for tx block confirmation and returns found tx hash in block.
 func (w *Wallet) SendManyWaitTxHash(ctx context.Context, messages []*Message) ([]byte, error) {
 	tx, _, _, err := w.sendMany(ctx, messages, true)
+	if err != nil {
+		return nil, err
+	}
 	return tx.Hash, err
 }
 

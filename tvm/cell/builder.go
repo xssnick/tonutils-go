@@ -565,9 +565,11 @@ func BeginCell() *Builder {
 }
 
 func (b *Builder) EndCell() *Cell {
-	return &Cell{
+	c := &Cell{
 		bitsSz: b.bitsSz,
 		data:   append([]byte{}, b.data...), // copy data
 		refs:   b.refs,
 	}
+	c.calculateHashes()
+	return c
 }

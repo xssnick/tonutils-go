@@ -35,9 +35,6 @@ type Cell struct {
 }
 
 func (c *Cell) copy() *Cell {
-	// copy data
-	data := append([]byte{}, c.data...)
-
 	refs := make([]*Cell, len(c.refs))
 	for i, ref := range c.refs {
 		refs[i] = ref.copy()
@@ -47,9 +44,9 @@ func (c *Cell) copy() *Cell {
 		special:     c.special,
 		levelMask:   c.levelMask,
 		bitsSz:      c.bitsSz,
-		data:        data,
-		hashes:      c.hashes,
-		depthLevels: c.depthLevels,
+		data:        append([]byte{}, c.data...),
+		hashes:      append([]byte{}, c.hashes...),
+		depthLevels: append([]uint16{}, c.depthLevels...),
 		refs:        refs,
 	}
 }
@@ -176,9 +173,9 @@ const _DataCellMaxLevel = 3
 // Once calculated, it is cached and can be reused cheap.
 func (c *Cell) Hash(level ...int) []byte {
 	if len(level) > 0 {
-		return c.getHash(level[0])
+		return append([]byte{}, c.getHash(level[0])...)
 	}
-	return c.getHash(_DataCellMaxLevel)
+	return append([]byte{}, c.getHash(_DataCellMaxLevel)...)
 }
 
 func (c *Cell) Depth(level ...int) uint16 {
