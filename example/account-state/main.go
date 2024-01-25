@@ -33,20 +33,6 @@ func main() {
 		return
 	}
 
-	tx, err := api.GetTransaction(context.Background(), &ton.BlockIDExt{
-		Workchain: 0,
-		Shard:     -9223372036854775808,
-		SeqNo:     41191932,
-		RootHash:  []byte{29, 203, 55, 116, 247, 252, 187, 187, 48, 139, 153, 193, 252, 163, 116, 207, 230, 0, 127, 68, 185, 213, 9, 236, 116, 199, 12, 118, 171, 11, 234, 5},
-		FileHash:  []byte{250, 85, 139, 105, 94, 217, 189, 239, 205, 116, 107, 127, 111, 54, 87, 212, 198, 176, 212, 241, 20, 25, 59, 202, 177, 249, 185, 72, 86, 145, 7, 241},
-	}, address.MustParseAddr("EQDQUqZl5WPeGnOXmWJdZvMsIOTSKIQLVdGiMXve06T5woQ6"), 43848894000001)
-	if err != nil {
-		log.Fatalln("get ttxxx err:", err.Error())
-		return
-	}
-	println(tx.Dump())
-	panic("eee")
-
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
 	// we use WaitForBlock to make sure block is ready,

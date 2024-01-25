@@ -90,6 +90,8 @@ func (c *Cell) MustPeekRef(i int) *Cell {
 func (c *Cell) UnsafeModify(levelMask LevelMask, special bool) {
 	c.special = special
 	c.levelMask = levelMask
+	c.hashes = c.hashes[:0]
+	c.calculateHashes()
 }
 
 func (c *Cell) PeekRef(i int) (*Cell, error) {
