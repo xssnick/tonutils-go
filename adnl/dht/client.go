@@ -392,7 +392,7 @@ func (c *Client) Store(
 			go func() {
 				defer wg.Done()
 
-				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout*3)
+				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
 				err := node.storeValue(storeCallCtx, keyId, &val)
 				cancel()
 				if err == nil {

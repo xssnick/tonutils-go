@@ -295,6 +295,9 @@ func affinity(x, y []byte) uint {
 	for i := 0; i < 32; i++ {
 		k := x[i] ^ y[i]
 		result += uint(bits.LeadingZeros8(k))
+		if k != 0 {
+			break
+		}
 	}
 	return result
 }
