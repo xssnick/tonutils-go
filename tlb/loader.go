@@ -364,17 +364,20 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 				Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", strings.Join(settings[3:], " "))),
 			}})
 
-			for _, kv := range dict.All() {
-				dictK, err := kv.Key.BeginParse().LoadBigUInt(uint(sz))
+			values, err := dict.LoadAll()
+			if err != nil {
+				return fmt.Errorf("failed to load dict values for %v: %w", structField.Name, err)
+			}
+
+			for _, kv := range values {
+				dictK, err := kv.Key.LoadBigUInt(uint(sz))
 				if err != nil {
 					return fmt.Errorf("failed to load dict key for %s: %w", structField.Name, err)
 				}
 
 				dictV := reflect.New(dictVT).Interface()
-
-				err = loadFromCell(dictV, kv.Value.BeginParse(), skipProofBranches, false)
-				if err != nil {
-					return fmt.Errorf("failed to load dict value for %v: %w", structField.Name, err)
+				if err = loadFromCell(dictV, kv.Value, skipProofBranches, false); err != nil {
+					return fmt.Errorf("failed to parse dict value for %v: %w", structField.Name, err)
 				}
 
 				mappedDict.SetMapIndex(reflect.ValueOf(dictK.String()), reflect.ValueOf(dictV).Elem().Field(0))

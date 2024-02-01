@@ -573,3 +573,11 @@ func (b *Builder) EndCell() *Cell {
 	c.calculateHashes()
 	return c
 }
+
+func (b *Builder) ToSlice() *Slice {
+	return &Slice{
+		bitsSz: b.bitsSz,
+		data:   append([]byte{}, b.data...), // copy data,
+		refs:   b.refs,
+	}
+}

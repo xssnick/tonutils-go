@@ -11,7 +11,7 @@ type cellHash = []byte
 
 func (c *Cell) CreateProof(forHashes [][]byte) (*Cell, error) {
 	proofBody := c.copy()
-	hasParts, err := proofBody.toProof(forHashes)
+	hasParts, err := toProof(proofBody, forHashes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
 	}
@@ -38,7 +38,7 @@ func (c *Cell) CreateProof(forHashes [][]byte) (*Cell, error) {
 	return proof, nil
 }
 
-func (c *Cell) toProof(parts []cellHash) ([]cellHash, error) {
+func toProof(c *Cell, parts []cellHash) ([]cellHash, error) {
 	for _, part := range parts {
 		if bytes.Equal(c.Hash(), part) {
 			// for this cell we need a proof
@@ -53,7 +53,8 @@ func (c *Cell) toProof(parts []cellHash) ([]cellHash, error) {
 	var toPruneRefs = make([]*Cell, 0, len(c.refs))
 	var hasPartsRefs []cellHash
 	for i, ref := range c.refs {
-		hasParts, err := ref.toProof(parts)
+		ref = ref.copy()
+		hasParts, err := toProof(ref, parts)
 		if err != nil {
 			return nil, err
 		}
@@ -73,6 +74,7 @@ func (c *Cell) toProof(parts []cellHash) ([]cellHash, error) {
 			toPruneIdx[len(toPruneRefs)] = byte(i)
 			toPruneRefs = append(toPruneRefs, ref)
 		}
+		c.refs[i] = ref
 	}
 
 	changed := false
@@ -120,7 +122,6 @@ func (c *Cell) toProof(parts []cellHash) ([]cellHash, error) {
 	}
 
 	if changed {
-		c.hashes = c.hashes[:0]
 		c.calculateHashes()
 	}
 

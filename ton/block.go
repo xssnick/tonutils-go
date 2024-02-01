@@ -439,11 +439,11 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 				return nil, fmt.Errorf("failed to load dict proof: %w", err)
 			}
 
-			if dictProof == nil && inf.ShardHashes.Size() == 0 {
+			if dictProof == nil && inf.ShardHashes.IsEmpty() {
 				return []*BlockIDExt{}, nil
 			}
 
-			if (dictProof == nil) != (inf.ShardHashes.Size() == 0) ||
+			if (dictProof == nil) != inf.ShardHashes.IsEmpty() ||
 				!bytes.Equal(dictProof.MustToCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
 				return nil, fmt.Errorf("incorrect proof")
 			}
@@ -461,13 +461,18 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 		return []*BlockIDExt{}, nil
 	}
 
-	for _, kv := range shardHashes.All() {
-		workchain, err := kv.Key.BeginParse().LoadInt(32)
+	kvs, err := shardHashes.LoadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load shard hashes dict: %w", err)
+	}
+
+	for _, kv := range kvs {
+		workchain, err := kv.Key.LoadInt(32)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load workchain: %w", err)
 		}
 
-		binTreeRef, err := kv.Value.BeginParse().LoadRef()
+		binTreeRef, err := kv.Value.LoadRef()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load bin tree ref: %w", err)
 		}

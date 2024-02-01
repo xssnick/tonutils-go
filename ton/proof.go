@@ -370,9 +370,14 @@ func getMainValidators(block *BlockIDExt, catConfig tlb.CatchainConfig, validato
 		key  uint16
 	}
 
+	kvs, err := validatorsListDict.LoadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load validators list dict: %w", err)
+	}
+
 	var totalWeight uint64
-	var validatorsKeys = make([]validatorWithKey, validatorsListDict.Size())
-	for i, kv := range validatorsListDict.All() {
+	var validatorsKeys = make([]validatorWithKey, len(kvs))
+	for i, kv := range kvs {
 		var val tlb.ValidatorAddr
 		if err := tlb.LoadFromCell(&val, kv.Value.BeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to parse validator addr: %w", err)

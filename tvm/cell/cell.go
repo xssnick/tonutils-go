@@ -35,10 +35,11 @@ type Cell struct {
 }
 
 func (c *Cell) copy() *Cell {
-	refs := make([]*Cell, len(c.refs))
+	/*refs := make([]*Cell, len(c.refs))
 	for i, ref := range c.refs {
 		refs[i] = ref.copy()
-	}
+		// TODO: not copy whole tree
+	}*/
 
 	return &Cell{
 		special:     c.special,
@@ -47,7 +48,7 @@ func (c *Cell) copy() *Cell {
 		data:        append([]byte{}, c.data...),
 		hashes:      append([]byte{}, c.hashes...),
 		depthLevels: append([]uint16{}, c.depthLevels...),
-		refs:        refs,
+		refs:        append([]*Cell{}, c.refs...),
 	}
 }
 
@@ -90,7 +91,6 @@ func (c *Cell) MustPeekRef(i int) *Cell {
 func (c *Cell) UnsafeModify(levelMask LevelMask, special bool) {
 	c.special = special
 	c.levelMask = levelMask
-	c.hashes = c.hashes[:0]
 	c.calculateHashes()
 }
 

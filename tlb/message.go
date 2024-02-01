@@ -197,11 +197,15 @@ func (m *MessagesList) ToSlice() ([]Message, error) {
 		return nil, nil
 	}
 
+	kvs, err := m.List.LoadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load messages dict: %w", err)
+	}
+
 	var list []Message
-	for i, kv := range m.List.All() {
+	for i, kv := range kvs {
 		var msg Message
-		s := kv.Value.BeginParse()
-		ms, err := s.LoadRef()
+		ms, err := kv.Value.LoadRef()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load ref of message %d: %w", i, err)
 		}
