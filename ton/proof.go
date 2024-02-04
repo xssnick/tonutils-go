@@ -379,11 +379,11 @@ func getMainValidators(block *BlockIDExt, catConfig tlb.CatchainConfig, validato
 	var validatorsKeys = make([]validatorWithKey, len(kvs))
 	for i, kv := range kvs {
 		var val tlb.ValidatorAddr
-		if err := tlb.LoadFromCell(&val, kv.Value.BeginParse()); err != nil {
+		if err := tlb.LoadFromCell(&val, kv.Value); err != nil {
 			return nil, fmt.Errorf("failed to parse validator addr: %w", err)
 		}
 
-		key, err := kv.Key.BeginParse().LoadUInt(16)
+		key, err := kv.Key.LoadUInt(16)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse validator key: %w", err)
 		}

@@ -66,7 +66,7 @@ func (g Coins) Nano() *big.Int {
 	if g.val == nil {
 		return big.NewInt(0)
 	}
-	return g.val
+	return new(big.Int).Set(g.val)
 }
 
 func MustFromDecimal(val string, decimals int) Coins {
