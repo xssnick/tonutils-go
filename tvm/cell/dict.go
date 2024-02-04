@@ -348,6 +348,11 @@ func (d *Dictionary) mapInner(keySz, leftKeySz uint, loader *Slice, keyPrefix *B
 }
 
 func (d *Dictionary) findKey(branch *Cell, lookupKey *Cell) (*Slice, error) {
+	if branch == nil {
+		// empty dict
+		return nil, ErrNoSuchKeyInDict
+	}
+
 	lKey := lookupKey.BeginParse()
 
 	// until key size is not equals we go deeper
