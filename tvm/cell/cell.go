@@ -102,24 +102,24 @@ func (c *Cell) PeekRef(i int) (*Cell, error) {
 }
 
 func (c *Cell) Dump(limitLength ...int) string {
-	var lim = (1024 << 20) * 16
+	var lim = uint64(1024<<20) * 16
 	if len(limitLength) > 0 {
 		// 16 MB default lim
-		lim = limitLength[0]
+		lim = uint64(limitLength[0])
 	}
 	return c.dump(0, false, lim)
 }
 
 func (c *Cell) DumpBits(limitLength ...int) string {
-	var lim = (1024 << 20) * 16
+	var lim uint64 = (1024 << 20) * 16
 	if len(limitLength) > 0 {
 		// 16 MB default lim
-		lim = limitLength[0]
+		lim = uint64(limitLength[0])
 	}
 	return c.dump(0, true, lim)
 }
 
-func (c *Cell) dump(deep int, bin bool, limitLength int) string {
+func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
 	sz, data, _ := c.BeginParse().RestBits()
 
 	var val string
@@ -155,14 +155,14 @@ func (c *Cell) dump(deep int, bin bool, limitLength int) string {
 				str += ","
 			}
 
-			if len(str) > limitLength {
+			if uint64(len(str)) > limitLength {
 				break
 			}
 		}
 		str += strings.Repeat("  ", deep) + "}"
 	}
 
-	if len(str) > limitLength {
+	if uint64(len(str)) > limitLength {
 		str = str[:limitLength]
 	}
 

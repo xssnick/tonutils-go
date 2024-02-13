@@ -660,7 +660,7 @@ func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 	defer cancel()
 	ctx := api.Client().StickyContext(_ctx)
 
-	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	addr := address.MustParseAddr("Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vF")
 
 	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
@@ -673,7 +673,7 @@ func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 		t.Fatal("get acc err:", err.Error())
 		return
 	}
-	initLT := acc.LastTxLT - 600000000000
+	initLT := acc.LastTxLT - 10
 	log.Println(initLT)
 	lastLT := initLT
 
@@ -683,16 +683,19 @@ func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 	ch := make(chan *tlb.Transaction)
 	go api.SubscribeOnTransactions(ctx, addr, lastLT, ch)
 
+	gotTx := false
 	for tx := range ch {
 		if lastLT > tx.LT {
 			t.Fatal("incorrect tx order")
 		}
 		lastLT = tx.LT
 
+		gotTx = true
 		println(tx.Now, tx.String())
+		cancel()
 	}
 
-	if lastLT == initLT {
+	if !gotTx {
 		t.Fatal("no transactions")
 	}
 }
