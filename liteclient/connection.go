@@ -227,7 +227,7 @@ func (n *connection) listen(connResult chan<- error) {
 	// listen for incoming packets
 	for {
 		var sz uint32
-		sz, err = n.readSize()
+		sz, err = readSize(n.tcp, n.rCrypt)
 		if err != nil {
 			break
 		}
@@ -239,7 +239,7 @@ func (n *connection) listen(connResult chan<- error) {
 		}
 
 		var data []byte
-		data, err = n.readData(sz)
+		data, err = readData(n.tcp, n.rCrypt, sz)
 		if err != nil {
 			break
 		}
@@ -247,8 +247,7 @@ func (n *connection) listen(connResult chan<- error) {
 		checksum := data[len(data)-32:]
 		data = data[:len(data)-32]
 
-		err = validatePacket(data, checksum)
-		if err != nil {
+		if err = validatePacket(data, checksum); err != nil {
 			break
 		}
 
@@ -355,15 +354,15 @@ func (n *connection) startPings(every time.Duration) {
 	}
 }
 
-func (n *connection) readSize() (uint32, error) {
+func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
 	size := make([]byte, 4)
-	_, err := n.tcp.Read(size)
+	_, err := conn.Read(size)
 	if err != nil {
 		return 0, err
 	}
 
 	// decrypt packet
-	n.rCrypt.XORKeyStream(size, size)
+	crypt.XORKeyStream(size, size)
 
 	sz := binary.LittleEndian.Uint32(size)
 
@@ -374,23 +373,24 @@ func (n *connection) readSize() (uint32, error) {
 	return sz, nil
 }
 
-func (n *connection) readData(sz uint32) ([]byte, error) {
-	var result []byte
+func readData(conn net.Conn, crypt cipher.Stream, sz uint32) ([]byte, error) {
+	if sz > 8<<20 {
+		return nil, fmt.Errorf("too big packet")
+	}
+
+	var result = make([]byte, sz)
 
 	// read exact number of bytes requested, blocking operation
-	left := int(sz)
-	for left > 0 {
-		data := make([]byte, left)
-		num, err := n.tcp.Read(data)
+	read := 0
+	for read < cap(result) {
+		num, err := conn.Read(result[read:])
 		if err != nil {
 			return nil, err
 		}
 
-		data = data[:num]
-		n.rCrypt.XORKeyStream(data, data)
-		result = append(result, data...)
-
-		left -= num
+		data := result[read : read+num] // pointer
+		crypt.XORKeyStream(data, data)
+		read += num
 	}
 
 	return result, nil
@@ -411,17 +411,14 @@ func (e NetworkErr) Unwrap() error {
 	return e.error
 }
 
-func (n *connection) send(data []byte) error {
-	buf := make([]byte, 4)
-
-	// ADNL packet should have nonce
-	nonce := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return err
-	}
-
+func buildPacket(data []byte) ([]byte, error) {
+	buf := make([]byte, 4+32, 4+64+len(data))
 	binary.LittleEndian.PutUint32(buf, uint32(64+len(data)))
-	buf = append(buf, nonce...)
+
+	// nonce
+	if _, err := io.ReadFull(rand.Reader, buf[4:4+32]); err != nil {
+		return nil, err
+	}
 	buf = append(buf, data...)
 
 	hash := sha256.New()
@@ -429,26 +426,37 @@ func (n *connection) send(data []byte) error {
 	checksum := hash.Sum(nil)
 
 	buf = append(buf, checksum...)
+	return buf, nil
+}
+
+func (n *connection) send(data []byte) error {
+	buf, err := buildPacket(data)
+	if err != nil {
+		return err
+	}
 
 	n.wLock.Lock()
 	defer n.wLock.Unlock()
 
+	return writeEncrypt(n.tcp, n.wCrypt, buf)
+}
+
+func writeEncrypt(conn net.Conn, crypt cipher.Stream, buf []byte) error {
 	// encrypt data
-	n.wCrypt.XORKeyStream(buf, buf)
+	crypt.XORKeyStream(buf, buf)
 
 	// write timeout in case of stuck socket, to reconnect
-	n.tcp.SetWriteDeadline(time.Now().Add(7 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(7 * time.Second))
 	// write all
 	for len(buf) > 0 {
-		num, err := n.tcp.Write(buf)
+		num, err := conn.Write(buf)
 		if err != nil {
-			n.tcp.Close()
+			_ = conn.Close()
 			return NetworkErr{err}
 		}
 
 		buf = buf[num:]
 	}
-
 	return nil
 }
 

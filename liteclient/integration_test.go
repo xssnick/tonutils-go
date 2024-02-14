@@ -2,9 +2,13 @@ package liteclient
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -101,4 +105,62 @@ func Test_ConnSticky(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	doReq(nil)
+}
+
+func Test_ServerProxy(t *testing.T) {
+	client := NewConnectionPool()
+
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
+	if err != nil {
+		t.Fatal("add connections err", err)
+	}
+
+	pub, key, _ := ed25519.GenerateKey(nil)
+	s := NewServer(key)
+	s.SetMessageHandler(func(sc *ServerClient, msg tl.Serializable) error {
+		switch m := msg.(type) {
+		case adnl.MessageQuery:
+			switch q := m.Data.(type) {
+			case LiteServerQuery:
+				println("PROXYING QUERY:", reflect.TypeOf(q.Data).String())
+
+				var resp tl.Serializable
+				if err = client.QueryLiteserver(context.Background(), q.Data, &resp); err != nil {
+					return err
+				}
+
+				return sc.Send(adnl.MessageAnswer{ID: m.ID, Data: resp})
+			}
+		case TCPPing:
+			return sc.Send(TCPPong{RandomID: m.RandomID})
+		}
+
+		return fmt.Errorf("something unknown: %s", reflect.TypeOf(msg).String())
+	})
+	defer s.Close()
+
+	addr := "127.0.0.1:7657"
+	go func() {
+		if err := s.Listen(addr); err != nil {
+			t.Fatal("listen err:", err.Error())
+		}
+	}()
+	time.Sleep(300 * time.Millisecond)
+
+	clientProxy := NewConnectionPool()
+	if err := clientProxy.AddConnection(context.Background(), addr, base64.StdEncoding.EncodeToString(pub)); err != nil {
+		t.Fatal("add err:", err.Error())
+	}
+
+	var resp tl.Serializable
+	err = clientProxy.QueryLiteserver(context.Background(), GetMasterchainInf{}, &resp)
+	if err != nil {
+		t.Fatal("query err:", err.Error())
+	}
+
+	if resp.(MasterchainInfo).Last.SeqNo == 0 {
+		t.Fatal("seqno empty")
+	}
+
+	println("SEQNO:", resp.(MasterchainInfo).Last.SeqNo)
 }
