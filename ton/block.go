@@ -22,6 +22,7 @@ func init() {
 	tl.Register(ZeroStateIDExt{}, "tonNode.zeroStateIdExt workchain:int root_hash:int256 file_hash:int256 = tonNode.ZeroStateIdExt")
 	tl.Register(GetBlockData{}, "liteServer.getBlock id:tonNode.blockIdExt = liteServer.BlockData")
 	tl.Register(ListBlockTransactions{}, "liteServer.listBlockTransactions id:tonNode.blockIdExt mode:# count:# after:mode.7?liteServer.transactionId3 reverse_order:mode.6?true want_proof:mode.5?true = liteServer.BlockTransactions")
+	tl.Register(ListBlockTransactionsExt{}, "liteServer.listBlockTransactionsExt id:tonNode.blockIdExt mode:# count:# after:mode.7?liteServer.transactionId3 reverse_order:mode.6?true want_proof:mode.5?true = liteServer.BlockTransactionsExt")
 	tl.Register(GetAllShardsInfo{}, "liteServer.getAllShardsInfo id:tonNode.blockIdExt = liteServer.AllShardsInfo")
 	tl.Register(GetMasterchainInf{}, "liteServer.getMasterchainInfo = liteServer.MasterchainInfo")
 	tl.Register(WaitMasterchainSeqno{}, "liteServer.waitMasterchainSeqno seqno:int timeout_ms:int = Object")
@@ -30,11 +31,18 @@ func init() {
 	tl.Register(BlockData{}, "liteServer.blockData id:tonNode.blockIdExt data:bytes = liteServer.BlockData")
 	tl.Register(BlockHeader{}, "liteServer.blockHeader id:tonNode.blockIdExt mode:# header_proof:bytes = liteServer.BlockHeader")
 	tl.Register(BlockTransactions{}, "liteServer.blockTransactions id:tonNode.blockIdExt req_count:# incomplete:Bool ids:(vector liteServer.transactionId) proof:bytes = liteServer.BlockTransactions")
+	tl.Register(BlockTransactionsExt{}, "liteServer.blockTransactionsExt id:tonNode.blockIdExt req_count:# incomplete:Bool transactions:bytes proof:bytes = liteServer.BlockTransactionsExt")
 	tl.Register(AllShardsInfo{}, "liteServer.allShardsInfo id:tonNode.blockIdExt proof:bytes data:bytes = liteServer.AllShardsInfo")
+	tl.Register(ShardInfo{}, "liteServer.shardInfo id:tonNode.blockIdExt shardblk:tonNode.blockIdExt shard_proof:bytes shard_descr:bytes = liteServer.ShardInfo")
+	tl.Register(ShardBlockProof{}, "liteServer.shardBlockProof masterchain_id:tonNode.blockIdExt links:(vector liteServer.shardBlockLink) = liteServer.ShardBlockProof")
+	tl.Register(ShardBlockLink{}, "liteServer.shardBlockLink id:tonNode.blockIdExt proof:bytes = liteServer.ShardBlockLink")
 	tl.Register(Object{}, "object ? = Object")
 	tl.Register(True{}, "true = True")
 	tl.Register(TransactionID3{}, "liteServer.transactionId3 account:int256 lt:long = liteServer.TransactionId3")
 	tl.Register(TransactionID{}, "liteServer.transactionId mode:# account:mode.0?int256 lt:mode.1?long hash:mode.2?int256 = liteServer.TransactionId")
+
+	tl.Register(GetState{}, "liteServer.getState id:tonNode.blockIdExt = liteServer.BlockState")
+	tl.Register(BlockState{}, "liteServer.blockState id:tonNode.blockIdExt root_hash:int256 file_hash:int256 data:bytes = liteServer.BlockState")
 
 	tl.Register(GetBlockProof{}, "liteServer.getBlockProof mode:# known_block:tonNode.blockIdExt target_block:mode.0?tonNode.blockIdExt = liteServer.PartialBlockProof")
 	tl.Register(PartialBlockProof{}, "liteServer.partialBlockProof complete:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt steps:(vector liteServer.BlockLink) = liteServer.PartialBlockProof")
@@ -43,6 +51,49 @@ func init() {
 	tl.Register(SignatureSet{}, "liteServer.signatureSet validator_set_hash:int catchain_seqno:int signatures:(vector liteServer.signature) = liteServer.SignatureSet")
 	tl.Register(Signature{}, "liteServer.signature node_id_short:int256 signature:bytes = liteServer.Signature")
 	tl.Register(BlockID{}, "ton.blockId root_cell_hash:int256 file_hash:int256 = ton.BlockId")
+
+	tl.Register(GetVersion{}, "liteServer.getVersion = liteServer.Version")
+	tl.Register(Version{}, "liteServer.version mode:# version:int capabilities:long now:int = liteServer.Version")
+
+	tl.Register(GetShardBlockProof{}, "liteServer.getShardBlockProof id:tonNode.blockIdExt = liteServer.ShardBlockProof")
+	tl.Register(GetShardInfo{}, "liteServer.getShardInfo id:tonNode.blockIdExt workchain:int shard:long exact:Bool = liteServer.ShardInfo")
+	tl.Register(GetBlockHeader{}, "liteServer.getBlockHeader id:tonNode.blockIdExt mode:# = liteServer.BlockHeader")
+	tl.Register(GetMasterchainInfoExt{}, "liteServer.getMasterchainInfoExt mode:# = liteServer.MasterchainInfoExt")
+	tl.Register(MasterchainInfoExt{}, "liteServer.masterchainInfoExt mode:# version:int capabilities:long last:tonNode.blockIdExt last_utime:int now:int state_root_hash:int256 init:tonNode.zeroStateIdExt = liteServer.MasterchainInfoExt")
+}
+
+type GetVersion struct{}
+
+type Version struct {
+	Mode         uint32 `tl:"flags"`
+	Version      int32  `tl:"int"`
+	Capabilities int64  `tl:"long"`
+	Now          uint32 `tl:"int"`
+}
+
+type GetState struct {
+	ID       *BlockIDExt `tl:"struct"`
+	RootHash []byte      `tl:"int256"`
+	FileHash []byte      `tl:"int256"`
+	Data     *cell.Cell  `tl:"cell"`
+}
+
+type BlockState struct {
+	ID *BlockIDExt `tl:"struct"`
+}
+
+type GetShardBlockProof struct {
+	ID *BlockIDExt `tl:"struct"`
+}
+
+type ShardBlockProof struct {
+	MasterchainID *BlockIDExt      `tl:"struct"`
+	Links         []ShardBlockLink `tl:"vector struct"`
+}
+
+type ShardBlockLink struct {
+	ID    *BlockIDExt `tl:"struct"`
+	Proof []byte      `tl:"bytes"`
 }
 
 type BlockID struct {
@@ -98,6 +149,17 @@ type MasterchainInfo struct {
 	Init          *ZeroStateIDExt `tl:"struct"`
 }
 
+type MasterchainInfoExt struct {
+	Mode          uint32          `tl:"flags"`
+	Version       int32           `tl:"int"`
+	Capabilities  int64           `tl:"long"`
+	Last          *BlockIDExt     `tl:"struct"`
+	LastUTime     uint32          `tl:"int"`
+	Now           uint32          `tl:"int"`
+	StateRootHash []byte          `tl:"int256"`
+	Init          *ZeroStateIDExt `tl:"struct"`
+}
+
 type BlockHeader struct {
 	ID          *BlockIDExt `tl:"struct"`
 	Mode        uint32      `tl:"flags"`
@@ -116,12 +178,27 @@ type AllShardsInfo struct {
 	Data  *cell.Cell  `tl:"cell"`
 }
 
+type ShardInfo struct {
+	ID               *BlockIDExt  `tl:"struct"`
+	ShardBlock       *BlockIDExt  `tl:"struct"`
+	ShardProof       []*cell.Cell `tl:"cell optional 2"`
+	ShardDescription *cell.Cell   `tl:"bytes"`
+}
+
 type BlockTransactions struct {
 	ID             *BlockIDExt     `tl:"struct"`
 	ReqCount       int32           `tl:"int"`
 	Incomplete     bool            `tl:"bool"`
 	TransactionIds []TransactionID `tl:"vector struct"`
 	Proof          []byte          `tl:"bytes"`
+}
+
+type BlockTransactionsExt struct {
+	ID           *BlockIDExt `tl:"struct"`
+	ReqCount     int32       `tl:"int"`
+	Incomplete   bool        `tl:"bool"`
+	Transactions *cell.Cell  `tl:"cell"`
+	Proof        []byte      `tl:"bytes"`
 }
 
 type BlockData struct {
@@ -134,6 +211,11 @@ type LookupBlock struct {
 	ID    *BlockInfoShort `tl:"struct"`
 	LT    uint64          `tl:"?1 long"`
 	UTime uint32          `tl:"?2 int"`
+}
+
+type GetBlockHeader struct {
+	Mode uint32          `tl:"flags"`
+	ID   *BlockInfoShort `tl:"struct"`
 }
 
 type BlockInfoShort struct {
@@ -151,9 +233,29 @@ type GetAllShardsInfo struct {
 	ID *BlockIDExt `tl:"struct"`
 }
 
+type GetShardInfo struct {
+	ID        *BlockIDExt `tl:"struct"`
+	Workchain int32       `tl:"int"`
+	Shard     int64       `tl:"long"`
+	Exact     bool        `tl:"bool"`
+}
+
 type GetMasterchainInf struct{}
 
+type GetMasterchainInfoExt struct {
+	Mode uint32 `tl:"flags"`
+}
+
 type ListBlockTransactions struct {
+	ID           *BlockIDExt     `tl:"struct"`
+	Mode         uint32          `tl:"flags"`
+	Count        uint32          `tl:"int"`
+	After        *TransactionID3 `tl:"?7 struct"`
+	ReverseOrder *True           `tl:"?6 struct"`
+	WantProof    *True           `tl:"?5 struct"`
+}
+
+type ListBlockTransactionsExt struct {
 	ID           *BlockIDExt     `tl:"struct"`
 	Mode         uint32          `tl:"flags"`
 	Count        uint32          `tl:"int"`

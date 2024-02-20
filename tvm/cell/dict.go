@@ -32,6 +32,13 @@ func NewDict(keySz uint) *Dictionary {
 	}
 }
 
+func (c *Cell) AsDict(keySz uint) *Dictionary {
+	return &Dictionary{
+		keySz: keySz,
+		root:  c,
+	}
+}
+
 func (c *Slice) ToDict(keySz uint) (*Dictionary, error) {
 	root, err := c.ToCell()
 	if err != nil {
@@ -259,6 +266,16 @@ func (d *Dictionary) LoadValue(key *Cell) (*Slice, error) {
 	return d.findKey(d.root, key)
 }
 
+// ProofKey - searches key in the underline dict cell and returns its proof path
+//
+//	If key is not found ErrNoSuchKeyInDict will be returned
+func (d *Dictionary) ProofKey(key *Cell, skeleton *ProofSkeleton) error {
+	if key.BitsSize() != d.keySz {
+		return fmt.Errorf("incorrect key size")
+	}
+	return d.findKeyProof(d.root, key, skeleton)
+}
+
 // Deprecated: use LoadValue
 func (d *Dictionary) Get(key *Cell) *Cell {
 	slc, err := d.LoadValue(key)
@@ -390,6 +407,54 @@ func (d *Dictionary) findKey(branch *Cell, lookupKey *Cell) (*Slice, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+}
+
+func (d *Dictionary) findKeyProof(branch *Cell, lookupKey *Cell, at *ProofSkeleton) error {
+	if branch == nil {
+		// empty dict
+		return ErrNoSuchKeyInDict
+	}
+
+	sk := at
+	lKey := lookupKey.BeginParse()
+
+	// until key size is not equals we go deeper
+	for {
+		branchSlice := branch.BeginParse()
+		sz, keyPrefix, err := loadLabel(lKey.BitsLeft(), branchSlice, BeginCell())
+		if err != nil {
+			return err
+		}
+
+		loadedPfx, err := keyPrefix.ToSlice().LoadSlice(sz)
+		if err != nil {
+			return err
+		}
+
+		pfx, err := lKey.LoadSlice(sz)
+		if err != nil {
+			return err
+		}
+
+		if !bytes.Equal(loadedPfx, pfx) {
+			return ErrNoSuchKeyInDict
+		}
+
+		if lKey.BitsLeft() == 0 {
+			return nil
+		}
+
+		idx, err := lKey.LoadUInt(1)
+		if err != nil {
+			return err
+		}
+
+		branch, err = branch.PeekRef(int(idx))
+		if err != nil {
+			return err
+		}
+		sk = sk.ProofRef(int(idx))
 	}
 }
 

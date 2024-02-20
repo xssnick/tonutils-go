@@ -1,7 +1,7 @@
 package liteclient
 
 import (
-	"bytes"
+	"context"
 	"crypto/cipher"
 	"crypto/ed25519"
 	"fmt"
@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,29 +17,46 @@ import (
 var Logger = log.Println
 
 type Server struct {
-	key      ed25519.PrivateKey
+	keys     map[string]ed25519.PrivateKey
 	listener net.Listener
 
-	messageHandler func(client *ServerClient, msg tl.Serializable) error
+	messageHandler func(ctx context.Context, client *ServerClient, msg tl.Serializable) error
+	disconnectHook func(ctx context.Context, client *ServerClient)
 	connectHook    func(conn net.Conn) error
 }
 
 type ServerClient struct {
-	conn   net.Conn
-	wCrypt cipher.Stream
-	rCrypt cipher.Stream
+	conn      net.Conn
+	wCrypt    cipher.Stream
+	rCrypt    cipher.Stream
+	serverKey ed25519.PublicKey
 
+	ip string
 	mx sync.Mutex
 }
 
-func NewServer(key ed25519.PrivateKey) *Server {
+func NewServer(keys []ed25519.PrivateKey) *Server {
+	list := map[string]ed25519.PrivateKey{}
+	for _, k := range keys {
+		kid, err := tl.Hash(adnl.PublicKeyED25519{Key: k.Public().(ed25519.PublicKey)})
+		if err != nil {
+			panic(err.Error())
+		}
+
+		list[string(kid)] = k
+	}
+
 	return &Server{
-		key: key,
+		keys: list,
 	}
 }
 
-func (s *Server) SetMessageHandler(handler func(client *ServerClient, msg tl.Serializable) error) {
+func (s *Server) SetMessageHandler(handler func(ctx context.Context, client *ServerClient, msg tl.Serializable) error) {
 	s.messageHandler = handler
+}
+
+func (s *Server) SetDisconnectHook(hook func(ctx context.Context, client *ServerClient)) {
+	s.disconnectHook = hook
 }
 
 func (s *Server) SetConnectionHook(hook func(conn net.Conn) error) {
@@ -83,15 +101,22 @@ func (s *Server) Listen(addr string) error {
 			}
 		}
 
+		ipSplit := strings.Split(conn.RemoteAddr().String(), ":")
 		go s.serve(&ServerClient{
 			conn: conn,
+			ip:   ipSplit[len(ipSplit)-1],
 		})
 	}
 }
 
 func (s *Server) serve(client *ServerClient) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
 	defer func() {
+		stopClient()
 		_ = client.conn.Close()
+		if s.disconnectHook != nil {
+			s.disconnectHook(context.Background(), client)
+		}
 		Logger("["+client.conn.RemoteAddr().String()+"]", "connection was closed with a client")
 	}()
 
@@ -108,7 +133,7 @@ func (s *Server) serve(client *ServerClient) {
 			}
 			packet := buffer[:ln]
 
-			client.wCrypt, client.rCrypt, err = s.processHandshake(packet)
+			client.serverKey, client.wCrypt, client.rCrypt, err = s.processHandshake(packet)
 			if err != nil {
 				Logger("["+client.conn.RemoteAddr().String()+"]", "invalid handshake packet:", err.Error())
 				return
@@ -154,7 +179,7 @@ func (s *Server) serve(client *ServerClient) {
 
 		var msg tl.Serializable
 		if _, err = tl.Parse(&msg, data, true); err != nil {
-			Logger("failed to parse message:", err.Error())
+			Logger("failed to parse incoming message:", err.Error())
 			return
 		}
 
@@ -163,30 +188,26 @@ func (s *Server) serve(client *ServerClient) {
 			return
 		}
 
-		if err = s.messageHandler(client, msg); err != nil {
+		if err = s.messageHandler(clientCtx, client, msg); err != nil {
 			Logger("failed to handle message:", err.Error())
 			return
 		}
 	}
 }
 
-func (s *Server) processHandshake(packet []byte) (cipher.Stream, cipher.Stream, error) {
+func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stream, cipher.Stream, error) {
 	if len(packet) != 256 {
-		return nil, nil, fmt.Errorf("invalid packet len: %d", len(packet))
+		return nil, nil, nil, fmt.Errorf("invalid packet len: %d", len(packet))
 	}
 
-	kid, err := tl.Hash(adnl.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)})
+	serverKey := s.keys[string(packet[:32])]
+	if serverKey == nil {
+		return nil, nil, nil, fmt.Errorf("incorrect server key in packet")
+	}
+
+	key, err := adnl.SharedKey(serverKey, packet[32:64])
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to hash our key: %w", err)
-	}
-
-	if !bytes.Equal(kid, packet[:32]) {
-		return nil, nil, fmt.Errorf("incorrect server key in packet")
-	}
-
-	key, err := adnl.SharedKey(s.key, packet[32:64])
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to calc shared key: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to calc shared key: %w", err)
 	}
 
 	checksum := packet[64:96]
@@ -205,7 +226,7 @@ func (s *Server) processHandshake(packet []byte) (cipher.Stream, cipher.Stream, 
 
 	ctr, err := adnl.NewCipherCtr(k, iv)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to calc cipher for rnd: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to calc cipher for rnd: %w", err)
 	}
 
 	rnd := packet[96:]
@@ -215,14 +236,14 @@ func (s *Server) processHandshake(packet []byte) (cipher.Stream, cipher.Stream, 
 	// build ciphers for incoming packets and for outgoing
 	w, err := adnl.NewCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to calc cipher for w crypt: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to calc cipher for w crypt: %w", err)
 	}
 	r, err := adnl.NewCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to calc cipher for r crypt: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to calc cipher for r crypt: %w", err)
 	}
 
-	return w, r, nil
+	return serverKey.Public().(ed25519.PublicKey), w, r, nil
 }
 
 func (s *ServerClient) Send(msg tl.Serializable) error {
@@ -246,6 +267,10 @@ func (s *ServerClient) Close() {
 	_ = s.conn.Close()
 }
 
-func (s *ServerClient) Addr() net.Addr {
-	return s.conn.RemoteAddr()
+func (s *ServerClient) IP() string {
+	return s.ip
+}
+
+func (s *ServerClient) ServerKey() ed25519.PublicKey {
+	return s.serverKey
 }

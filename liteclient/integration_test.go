@@ -116,8 +116,8 @@ func Test_ServerProxy(t *testing.T) {
 	}
 
 	pub, key, _ := ed25519.GenerateKey(nil)
-	s := NewServer(key)
-	s.SetMessageHandler(func(sc *ServerClient, msg tl.Serializable) error {
+	s := NewServer([]ed25519.PrivateKey{key})
+	s.SetMessageHandler(func(ctx context.Context, sc *ServerClient, msg tl.Serializable) error {
 		switch m := msg.(type) {
 		case adnl.MessageQuery:
 			switch q := m.Data.(type) {

@@ -719,6 +719,8 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 		return
 	}
 
+	println(acc.Code.Dump())
+
 	bSnake, err := acc.Code.BeginParse().LoadBinarySnake()
 	if err != nil {
 		t.Fatal("parse acc code err:", err.Error())

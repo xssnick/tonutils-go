@@ -28,20 +28,20 @@ type RunSmcMethod struct {
 	ID       *BlockIDExt `tl:"struct"`
 	Account  AccountID   `tl:"struct"`
 	MethodID uint64      `tl:"long"`
-	Params   []byte      `tl:"bytes"`
+	Params   *cell.Cell  `tl:"cell"`
 }
 
 type RunMethodResult struct {
-	Mode       uint32      `tl:"flags"`
-	ID         *BlockIDExt `tl:"struct"`
-	ShardBlock *BlockIDExt `tl:"struct"`
-	ShardProof []byte      `tl:"?0 bytes"`
-	Proof      []byte      `tl:"?0 bytes"`
-	StateProof []byte      `tl:"?1 bytes"`
-	InitC7     []byte      `tl:"?3 bytes"`
-	LibExtras  []byte      `tl:"?4 bytes"`
-	ExitCode   int32       `tl:"int"`
-	Result     []byte      `tl:"?2 bytes"`
+	Mode       uint32       `tl:"flags"`
+	ID         *BlockIDExt  `tl:"struct"`
+	ShardBlock *BlockIDExt  `tl:"struct"`
+	ShardProof []*cell.Cell `tl:"?0 cell optional 2"`
+	Proof      []*cell.Cell `tl:"?0 cell optional 2"`
+	StateProof *cell.Cell   `tl:"?1 cell"`
+	InitC7     *cell.Cell   `tl:"?3 cell"`
+	LibExtras  *cell.Cell   `tl:"?4 cell optional"`
+	ExitCode   int32        `tl:"int"`
+	Result     *cell.Cell   `tl:"?2 cell"`
 }
 
 func NewExecutionResult(data []any) *ExecutionResult {
@@ -74,7 +74,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			ID:        addr.Data(),
 		},
 		MethodID: tlb.MethodNameHash(method),
-		Params:   req.ToBOCWithFlags(false),
+		Params:   req,
 	}, &resp)
 	if err != nil {
 		return nil, err
@@ -88,17 +88,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			}
 		}
 
-		resCell, err := cell.FromBOC(t.Result)
-		if err != nil {
-			return nil, err
-		}
-
 		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
-			proof, err := cell.FromBOCMultiRoot(t.Proof)
-			if err != nil {
-				return nil, err
-			}
-
 			var shardProof []*cell.Cell
 			var shardHash []byte
 			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
@@ -106,10 +96,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 					return nil, fmt.Errorf("liteserver has no proof for this account in a given block, request newer block or disable proof checks")
 				}
 
-				shardProof, err = cell.FromBOCMultiRoot(t.ShardProof)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse shard proof boc: %w", err)
-				}
+				shardProof = t.ShardProof
 
 				if t.ShardBlock == nil || len(t.ShardBlock.RootHash) != 32 {
 					return nil, fmt.Errorf("shard block not passed")
@@ -118,18 +105,12 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 				shardHash = t.ShardBlock.RootHash
 			}
 
-			shardAcc, balanceInfo, err := CheckAccountStateProof(addr, blockInfo, proof, shardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			shardAcc, _, err := CheckAccountStateProof(addr, blockInfo, t.Proof, shardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
 			if err != nil {
 				return nil, fmt.Errorf("failed to check acc state proof: %w", err)
 			}
-			_, _ = shardAcc, balanceInfo
 
-			stateProofCell, err := cell.FromBOC(t.StateProof)
-			if err != nil {
-				return nil, err
-			}
-
-			_, err = cell.UnwrapProof(stateProofCell, shardAcc.Account.Hash(0))
+			_, err = cell.UnwrapProof(t.StateProof, shardAcc.Account.Hash(0))
 			if err != nil {
 				return nil, fmt.Errorf("failed to match state proof to state hash: %w", err)
 			}
@@ -137,7 +118,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 		}
 
 		var resStack tlb.Stack
-		err = resStack.LoadFromCell(resCell.BeginParse())
+		err = resStack.LoadFromCell(t.Result.BeginParse())
 		if err != nil {
 			return nil, err
 		}
