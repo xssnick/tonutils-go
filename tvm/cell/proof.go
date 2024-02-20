@@ -11,7 +11,6 @@ type cellHash = []byte
 
 type ProofSkeleton struct {
 	branches [4]*ProofSkeleton
-	hasNext  bool
 }
 
 func CreateProofSkeleton() *ProofSkeleton {
@@ -21,9 +20,30 @@ func CreateProofSkeleton() *ProofSkeleton {
 func (s *ProofSkeleton) ProofRef(i int) *ProofSkeleton {
 	if s.branches[i] == nil {
 		s.branches[i] = &ProofSkeleton{}
-		s.hasNext = true
 	}
 	return s.branches[i]
+}
+
+func (s *ProofSkeleton) AttachAt(i int, sk *ProofSkeleton) {
+	s.branches[i] = sk
+}
+
+func (s *ProofSkeleton) Merge(sk *ProofSkeleton) {
+	for i, v := range sk.branches {
+		if v != nil {
+			if s.branches[i] == nil {
+				s.branches[i] = v
+			} else {
+				s.branches[i].Merge(v)
+			}
+		}
+	}
+}
+
+func (s *ProofSkeleton) Copy() *ProofSkeleton {
+	return &ProofSkeleton{
+		branches: s.branches,
+	}
 }
 
 func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
@@ -54,7 +74,15 @@ func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
 }
 
 func toProof(c *Cell, skeleton *ProofSkeleton) (*Cell, error) {
-	if !skeleton.hasNext {
+	isEmpty := true
+	for _, branch := range skeleton.branches {
+		if branch != nil {
+			isEmpty = false
+			break
+		}
+	}
+
+	if isEmpty {
 		return c, nil
 	}
 

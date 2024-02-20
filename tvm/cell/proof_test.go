@@ -144,17 +144,13 @@ func TestProofDictKey(t *testing.T) {
 	dHash := d.AsCell().Hash()
 
 	sk := CreateProofSkeleton()
-	err := d.ProofKey(BeginCell().MustStoreUInt(777, 64).EndCell(), sk)
+	_, _, err := d.LoadValueWithProof(BeginCell().MustStoreUInt(777, 64).EndCell(), sk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = d.ProofKey(BeginCell().MustStoreUInt(111, 64).EndCell(), sk)
+	_, _, err = d.LoadValueWithProof(BeginCell().MustStoreUInt(111, 64).EndCell(), sk)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	if !sk.hasNext {
-		t.Fatal("empty skeleton")
 	}
 
 	proof, err := d.AsCell().CreateProof(sk)
