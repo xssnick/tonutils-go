@@ -101,10 +101,14 @@ func (s *Server) Listen(addr string) error {
 			}
 		}
 
-		ipSplit := strings.Split(conn.RemoteAddr().String(), ":")
+		ip := conn.RemoteAddr().String()
+		ipSplit := strings.LastIndex(conn.RemoteAddr().String(), ":")
+		if ipSplit < 0 {
+			ipSplit = len(ip)
+		}
 		go s.serve(&ServerClient{
 			conn: conn,
-			ip:   ipSplit[len(ipSplit)-1],
+			ip:   ip[:ipSplit],
 		})
 	}
 }
