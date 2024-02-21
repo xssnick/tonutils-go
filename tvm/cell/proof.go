@@ -10,13 +10,15 @@ import (
 type cellHash = []byte
 
 type ProofSkeleton struct {
-	branches [4]*ProofSkeleton
+	recursive bool
+	branches  [4]*ProofSkeleton
 }
 
 func CreateProofSkeleton() *ProofSkeleton {
 	return &ProofSkeleton{}
 }
 
+// ProofRef - include ref with index i to proof
 func (s *ProofSkeleton) ProofRef(i int) *ProofSkeleton {
 	if s.branches[i] == nil {
 		s.branches[i] = &ProofSkeleton{}
@@ -24,25 +26,40 @@ func (s *ProofSkeleton) ProofRef(i int) *ProofSkeleton {
 	return s.branches[i]
 }
 
+// SetRecursive - include all underlying refs recursively in ordinary form to proof
+func (s *ProofSkeleton) SetRecursive() {
+	s.recursive = true
+}
+
+// AttachAt - attach skeleton chain at specific ref slot
 func (s *ProofSkeleton) AttachAt(i int, sk *ProofSkeleton) {
 	s.branches[i] = sk
 }
 
+// Merge - merge 2 proof chains in a single proof tree
 func (s *ProofSkeleton) Merge(sk *ProofSkeleton) {
 	for i, v := range sk.branches {
-		if v != nil {
-			if s.branches[i] == nil {
-				s.branches[i] = v
-			} else {
-				s.branches[i].Merge(v)
-			}
+		if v == nil {
+			continue
 		}
+
+		if s.branches[i] == nil {
+			s.branches[i] = v
+			continue
+		}
+
+		if v.recursive {
+			s.branches[i].SetRecursive()
+			continue
+		}
+		s.branches[i].Merge(v)
 	}
 }
 
 func (s *ProofSkeleton) Copy() *ProofSkeleton {
 	return &ProofSkeleton{
-		branches: s.branches,
+		recursive: s.recursive,
+		branches:  s.branches,
 	}
 }
 
@@ -74,15 +91,7 @@ func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
 }
 
 func toProof(c *Cell, skeleton *ProofSkeleton) (*Cell, error) {
-	isEmpty := true
-	for _, branch := range skeleton.branches {
-		if branch != nil {
-			isEmpty = false
-			break
-		}
-	}
-
-	if isEmpty {
+	if skeleton.recursive {
 		return c, nil
 	}
 

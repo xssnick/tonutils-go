@@ -173,9 +173,9 @@ type ZeroStateIDExt struct {
 }
 
 type AllShardsInfo struct {
-	ID    *BlockIDExt `tl:"struct"`
-	Proof []byte      `tl:"bytes"`
-	Data  *cell.Cell  `tl:"cell"`
+	ID    *BlockIDExt  `tl:"struct"`
+	Proof []*cell.Cell `tl:"cell 2"`
+	Data  *cell.Cell   `tl:"cell"`
 }
 
 type ShardInfo struct {
@@ -521,12 +521,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 		}
 
 		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
-			proof, err := cell.FromBOCMultiRoot(t.Proof)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse proof boc: %w", err)
-			}
-
-			shardState, err := CheckBlockShardStateProof(proof, master.RootHash)
+			shardState, err := CheckBlockShardStateProof(t.Proof, master.RootHash)
 			if err != nil {
 				return nil, fmt.Errorf("failed to check proof: %w", err)
 			}

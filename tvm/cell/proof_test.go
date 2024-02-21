@@ -139,19 +139,27 @@ func TestProofCreateLevel2(t *testing.T) {
 func TestProofDictKey(t *testing.T) {
 	d := NewDict(64)
 	for i := 0; i < 1000; i++ {
-		_ = d.SetIntKey(big.NewInt(int64(i)), BeginCell().MustStoreUInt(uint64(i*3), 128).EndCell())
+		_ = d.SetIntKey(big.NewInt(int64(i)), BeginCell().MustStoreRef(BeginCell().MustStoreRef(BeginCell().MustStoreUInt(uint64(i*3), 128).EndCell()).EndCell()).EndCell())
 	}
 	dHash := d.AsCell().Hash()
 
 	sk := CreateProofSkeleton()
-	_, _, err := d.LoadValueWithProof(BeginCell().MustStoreUInt(777, 64).EndCell(), sk)
+	_, leafProof, err := d.LoadValueWithProof(BeginCell().MustStoreUInt(777, 64).EndCell(), sk)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = d.LoadValueWithProof(BeginCell().MustStoreUInt(111, 64).EndCell(), sk)
+	leafProof.SetRecursive()
+
+	_, _, err = d.LoadValueWithProof(BeginCell().MustStoreUInt(333, 64).EndCell(), sk)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	_, leafProof, err = d.LoadValueWithProof(BeginCell().MustStoreUInt(111, 64).EndCell(), sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafProof.SetRecursive()
 
 	proof, err := d.AsCell().CreateProof(sk)
 	if err != nil {
@@ -168,15 +176,23 @@ func TestProofDictKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vl.MustLoadUInt(128) != 777*3 {
+	if vl.MustLoadRef().MustLoadRef().MustLoadUInt(128) != 777*3 {
 		t.Fatal("incorrect val 1")
+	}
+
+	vl3, err := dp.LoadValueByIntKey(big.NewInt(333))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !vl3.MustLoadRef().IsSpecial() {
+		t.Fatal("should be pruned")
 	}
 
 	vl2, err := dp.LoadValueByIntKey(big.NewInt(111))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if vl2.MustLoadUInt(128) != 111*3 {
+	if vl2.MustLoadRef().MustLoadRef().MustLoadUInt(128) != 111*3 {
 		t.Fatal("incorrect val 2")
 	}
 
