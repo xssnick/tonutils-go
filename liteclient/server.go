@@ -96,13 +96,15 @@ func (s *Server) Listen(addr string) error {
 			continue
 		}
 
+		var port uint64
 		ip := conn.RemoteAddr().String()
 		ipSplit := strings.LastIndex(conn.RemoteAddr().String(), ":")
 		if ipSplit < 0 {
 			ipSplit = len(ip)
+		} else {
+			port, _ = strconv.ParseUint(ip[ipSplit+1:], 10, 16)
 		}
 
-		port, _ := strconv.ParseUint(ip[ipSplit:], 10, 16)
 		sc := &ServerClient{
 			conn: conn,
 			ip:   ip[:ipSplit],

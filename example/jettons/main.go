@@ -10,13 +10,16 @@ import (
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"log"
 	"strconv"
+	"sync"
+	"time"
 )
 
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	// connect to testnet lite server
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
+	//err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
+	err := client.AddConnection(context.Background(), "185.86.79.9:4701", "G6cNAr6wXBBByWDzddEWP5xMFsAcp6y13fXA8Q7EJIM=")
+
 	if err != nil {
 		panic(err)
 	}
@@ -55,6 +58,24 @@ func main() {
 	tokenWallet, err := master.GetJettonWallet(ctx, address.MustParseAddr("EQCWdteEWa4D3xoqLNV0zk4GROoptpM1-p66hmyBpxjvbbnn"))
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	for {
+		tm := time.Now()
+		wg := sync.WaitGroup{}
+		wg.Add(1000)
+		for i := 0; i < 1000; i++ {
+			go func() {
+				defer wg.Done()
+				tokenWallet, err = master.GetJettonWallet(ctx, address.MustParseAddr("EQCWdteEWa4D3xoqLNV0zk4GROoptpM1-p66hmyBpxjvbbnn"))
+				if err != nil {
+					log.Fatal(err)
+				}
+			}()
+		}
+		wg.Wait()
+		println("took:", time.Since(tm).String())
+		time.Sleep(1 * time.Second)
 	}
 
 	tokenBalance, err := tokenWallet.GetBalance(ctx)
