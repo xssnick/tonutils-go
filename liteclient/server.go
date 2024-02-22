@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,8 +32,9 @@ type ServerClient struct {
 	rCrypt    cipher.Stream
 	serverKey ed25519.PublicKey
 
-	ip string
-	mx sync.Mutex
+	port uint16
+	ip   string
+	mx   sync.Mutex
 }
 
 func NewServer(keys []ed25519.PrivateKey) *Server {
@@ -100,9 +102,11 @@ func (s *Server) Listen(addr string) error {
 			ipSplit = len(ip)
 		}
 
+		port, _ := strconv.ParseUint(ip[ipSplit:], 10, 16)
 		sc := &ServerClient{
 			conn: conn,
 			ip:   ip[:ipSplit],
+			port: uint16(port),
 		}
 
 		if s.connectHook != nil {
@@ -276,6 +280,10 @@ func (s *ServerClient) Close() {
 
 func (s *ServerClient) IP() string {
 	return s.ip
+}
+
+func (s *ServerClient) Port() uint16 {
+	return s.port
 }
 
 func (s *ServerClient) ServerKey() ed25519.PublicKey {
