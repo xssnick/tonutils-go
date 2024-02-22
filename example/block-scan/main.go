@@ -52,8 +52,7 @@ func main() {
 	}
 
 	// connect to mainnet lite servers
-	//err = client.AddConnectionsFromConfig(context.Background(), cfg)
-	err = client.AddConnection(context.Background(), "127.0.0.1:7445", "CI94p7HEAjvqjsieQpa+/gYapFI/z+V5AyaSlxdkkQ4=")
+	err = client.AddConnectionsFromConfig(context.Background(), cfg)
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return

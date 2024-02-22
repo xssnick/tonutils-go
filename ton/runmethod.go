@@ -38,7 +38,7 @@ type RunMethodResult struct {
 	ShardProof []*cell.Cell `tl:"?0 cell optional 2"`
 	Proof      []*cell.Cell `tl:"?0 cell optional 2"`
 	StateProof *cell.Cell   `tl:"?1 cell"`
-	InitC7     *cell.Cell   `tl:"?3 cell"`
+	InitC7     *cell.Cell   `tl:"?3 cell optional"`
 	LibExtras  *cell.Cell   `tl:"?4 cell optional"`
 	ExitCode   int32        `tl:"int"`
 	Result     *cell.Cell   `tl:"?2 cell"`
