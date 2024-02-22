@@ -21,8 +21,8 @@ type Server struct {
 	listener net.Listener
 
 	messageHandler func(ctx context.Context, client *ServerClient, msg tl.Serializable) error
-	disconnectHook func(ctx context.Context, client *ServerClient)
-	connectHook    func(conn net.Conn) error
+	disconnectHook func(client *ServerClient)
+	connectHook    func(client *ServerClient) error
 }
 
 type ServerClient struct {
@@ -55,11 +55,11 @@ func (s *Server) SetMessageHandler(handler func(ctx context.Context, client *Ser
 	s.messageHandler = handler
 }
 
-func (s *Server) SetDisconnectHook(hook func(ctx context.Context, client *ServerClient)) {
+func (s *Server) SetDisconnectHook(hook func(client *ServerClient)) {
 	s.disconnectHook = hook
 }
 
-func (s *Server) SetConnectionHook(hook func(conn net.Conn) error) {
+func (s *Server) SetConnectionHook(hook func(client *ServerClient) error) {
 	s.connectHook = hook
 }
 
@@ -94,22 +94,25 @@ func (s *Server) Listen(addr string) error {
 			continue
 		}
 
-		if s.connectHook != nil {
-			if err = s.connectHook(conn); err != nil {
-				_ = conn.Close()
-				continue
-			}
-		}
-
 		ip := conn.RemoteAddr().String()
 		ipSplit := strings.LastIndex(conn.RemoteAddr().String(), ":")
 		if ipSplit < 0 {
 			ipSplit = len(ip)
 		}
-		go s.serve(&ServerClient{
+
+		sc := &ServerClient{
 			conn: conn,
 			ip:   ip[:ipSplit],
-		})
+		}
+
+		if s.connectHook != nil {
+			if err = s.connectHook(sc); err != nil {
+				_ = conn.Close()
+				continue
+			}
+		}
+
+		go s.serve(sc)
 	}
 }
 
@@ -119,7 +122,7 @@ func (s *Server) serve(client *ServerClient) {
 		stopClient()
 		_ = client.conn.Close()
 		if s.disconnectHook != nil {
-			s.disconnectHook(context.Background(), client)
+			s.disconnectHook(client)
 		}
 		Logger("["+client.conn.RemoteAddr().String()+"]", "connection was closed with a client")
 	}()
