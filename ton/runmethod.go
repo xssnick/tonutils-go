@@ -41,7 +41,7 @@ type RunMethodResult struct {
 	InitC7     *cell.Cell   `tl:"?3 cell optional"`
 	LibExtras  *cell.Cell   `tl:"?4 cell optional"`
 	ExitCode   int32        `tl:"int"`
-	Result     *cell.Cell   `tl:"?2 cell"`
+	Result     *cell.Cell   `tl:"?2 cell optional"`
 }
 
 func NewExecutionResult(data []any) *ExecutionResult {
@@ -115,6 +115,10 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 				return nil, fmt.Errorf("failed to match state proof to state hash: %w", err)
 			}
 			// TODO: when tvm implementation ready - execute code and compare result
+		}
+
+		if t.Result == nil {
+			return NewExecutionResult([]any{}), nil
 		}
 
 		var resStack tlb.Stack
