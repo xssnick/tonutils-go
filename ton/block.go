@@ -190,7 +190,7 @@ type BlockTransactions struct {
 	ReqCount       int32           `tl:"int"`
 	Incomplete     bool            `tl:"bool"`
 	TransactionIds []TransactionID `tl:"vector struct"`
-	Proof          []byte          `tl:"bytes"`
+	Proof          *cell.Cell      `tl:"cell optional"`
 }
 
 type BlockTransactionsExt struct {
@@ -463,18 +463,16 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 		var shardAccounts tlb.ShardAccountBlocks
 
 		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
-			proof, err := cell.FromBOC(t.Proof)
-			if err != nil {
-				return nil, false, fmt.Errorf("failed to parse proof boc: %w", err)
+			if t.Proof == nil {
+				return nil, false, fmt.Errorf("no proof passed by ls")
 			}
 
-			blockProof, err := CheckBlockProof(proof, block.RootHash)
+			blockProof, err := CheckBlockProof(t.Proof, block.RootHash)
 			if err != nil {
 				return nil, false, fmt.Errorf("failed to check block proof: %w", err)
 			}
 
-			err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse())
-			if err != nil {
+			if err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse()); err != nil {
 				return nil, false, fmt.Errorf("failed to load shard accounts from proof: %w", err)
 			}
 		}
