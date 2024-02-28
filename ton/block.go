@@ -203,7 +203,7 @@ type BlockTransactionsExt struct {
 
 type BlockData struct {
 	ID      *BlockIDExt `tl:"struct"`
-	Payload *cell.Cell  `tl:"cell"`
+	Payload []byte      `tl:"bytes"`
 }
 
 type LookupBlock struct {
@@ -417,12 +417,17 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 
 	switch t := resp.(type) {
 	case BlockData:
-		if !bytes.Equal(t.Payload.Hash(), block.RootHash) {
+		pl, err := cell.FromBOC(t.Payload)
+		if err != nil {
+			return nil, err
+		}
+
+		if !bytes.Equal(pl.Hash(), block.RootHash) {
 			return nil, fmt.Errorf("incorrect block")
 		}
 
 		var bData tlb.Block
-		if err = tlb.LoadFromCell(&bData, t.Payload.BeginParse()); err != nil {
+		if err = tlb.LoadFromCell(&bData, pl.BeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to parse block data: %w", err)
 		}
 		return &bData, nil
