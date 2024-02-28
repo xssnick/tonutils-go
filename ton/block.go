@@ -163,7 +163,7 @@ type MasterchainInfoExt struct {
 type BlockHeader struct {
 	ID          *BlockIDExt `tl:"struct"`
 	Mode        uint32      `tl:"flags"`
-	HeaderProof *cell.Cell  `tl:"cell"`
+	HeaderProof []byte      `tl:"bytes"`
 }
 
 type ZeroStateIDExt struct {
