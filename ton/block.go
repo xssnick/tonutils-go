@@ -214,8 +214,8 @@ type LookupBlock struct {
 }
 
 type GetBlockHeader struct {
-	Mode uint32          `tl:"flags"`
-	ID   *BlockInfoShort `tl:"struct"`
+	ID   *BlockIDExt `tl:"struct"`
+	Mode uint32      `tl:"flags"`
 }
 
 type BlockInfoShort struct {
