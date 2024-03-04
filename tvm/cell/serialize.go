@@ -21,26 +21,35 @@ func (c *Cell) ToBOC() []byte {
 	return c.ToBOCWithFlags(true)
 }
 
-func (c *Cell) ToBOCWithFlags(withCRC bool) []byte {
-	return ToBOCWithFlags([]*Cell{c}, withCRC)
+func (c *Cell) ToBOCWithFlags(flags ...bool) []byte {
+	return ToBOCWithFlags([]*Cell{c}, flags...)
 }
 
-func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
+// ToBOCWithFlags - flags are: first - withCRC, second - withIndex, third - withCache
+func ToBOCWithFlags(roots []*Cell, flags ...bool) []byte {
 	if len(roots) == 0 {
 		return nil
 	}
 
+	withCRC := len(flags) > 0 && flags[0]
+	withIndex := len(flags) > 1 && flags[1]
+	withCache := len(flags) > 2 && flags[2]
+	withTopHash := len(flags) > 3 && flags[3]
+	withIntHashes := len(flags) > 4 && flags[4]
+
 	// recursively go through cells, build hash index and store unique in slice
-	sortedCells, index := flattenIndex(roots)
+	sortedCells, index := flattenIndex(roots, withTopHash, withIntHashes)
 
 	// bytes needed to store num of cells
 	cellSizeBits := math.Log2(float64(len(sortedCells)) + 1)
 	cellSizeBytes := byte(math.Ceil(cellSizeBits / 8))
 
+	dynBuffer := make([]byte, 8)
 	var payload []byte
 	for i := 0; i < len(sortedCells); i++ {
 		// serialize each cell
-		payload = append(payload, sortedCells[i].cell.serialize(uint(cellSizeBytes), index)...)
+		payload = append(payload, sortedCells[i].cell.serialize(uint(cellSizeBytes), index, sortedCells[i].withHash, dynBuffer)...)
+		sortedCells[i].dataIndex = len(payload)
 	}
 
 	// bytes needed to store len of payload
@@ -48,36 +57,58 @@ func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
 	sizeBytes := byte(math.Ceil(sizeBits / 8))
 
 	// has_idx 1bit, hash_crc32 1bit,  has_cache_bits 1bit, flags 2bit, size_bytes 3 bit
-	flags := byte(0b0_0_0_00_000)
+	flagsByte := byte(0b0_0_0_00_000)
+	if withIndex {
+		flagsByte |= 0b1_0_0_00_000
+	}
 	if withCRC {
-		flags |= 0b0_1_0_00_000
+		flagsByte |= 0b0_1_0_00_000
+	}
+	if withCache {
+		flagsByte |= 0b0_0_1_00_000
 	}
 
-	flags |= cellSizeBytes
+	flagsByte |= cellSizeBytes
 
 	var data []byte
 
 	data = append(data, bocMagic...)
-	data = append(data, flags)
+	data = append(data, flagsByte)
 
 	// bytes needed to store size
 	data = append(data, sizeBytes)
 
 	// cells num
-	data = append(data, dynamicIntBytes(uint64(len(sortedCells)), uint(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(len(sortedCells)), uint(cellSizeBytes), dynBuffer)...)
 
 	// roots num
-	data = append(data, dynamicIntBytes(uint64(len(roots)), uint(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(len(roots)), uint(cellSizeBytes), dynBuffer)...)
 
 	// complete BOCs = 0
-	data = append(data, dynamicIntBytes(0, uint(cellSizeBytes))...)
+	data = append(data, dynamicIntBytes(0, uint(cellSizeBytes), dynBuffer)...)
 
 	// len of data
-	data = append(data, dynamicIntBytes(uint64(len(payload)), uint(sizeBytes))...)
+	data = append(data, dynamicIntBytes(uint64(len(payload)), uint(sizeBytes), dynBuffer)...)
 
 	// root index
 	for _, r := range roots {
-		data = append(data, dynamicIntBytes(index[string(r.Hash())].index, uint(cellSizeBytes))...)
+		data = append(data, dynamicIntBytes(index[string(r.Hash())].index, uint(cellSizeBytes), dynBuffer)...)
+	}
+
+	cached := 0
+	if withIndex {
+		for _, cell := range sortedCells {
+			idx := cell.dataIndex
+			if withCache {
+				idx *= 2
+				if cell.repeats > 0 {
+					// cache cells which has refs
+					idx++
+					cached++
+				}
+			}
+			data = append(data, dynamicIntBytes(uint64(idx), uint(sizeBytes), dynBuffer)...)
+		}
 	}
 	data = append(data, payload...)
 
@@ -91,21 +122,33 @@ func ToBOCWithFlags(roots []*Cell, withCRC bool) []byte {
 	return data
 }
 
-func (c *Cell) serialize(refIndexSzBytes uint, index map[string]*idxItem) []byte {
-	body := c.BeginParse().MustLoadSlice(c.bitsSz)
+func (c *Cell) serialize(refIndexSzBytes uint, index map[string]*idxItem, withHash bool, dynBuffer []byte) []byte {
+	body := c.data // optimization
+	if c.bitsSz%8 != 0 {
+		body = c.BeginParse().MustLoadSlice(c.bitsSz)
 
-	data := make([]byte, 2+len(body))
-	data[0], data[1] = c.descriptors(c.levelMask)
-	copy(data[2:], body)
-
-	unusedBits := 8 - (c.bitsSz % 8)
-	if unusedBits != 8 {
-		// we need to set bit at the end if not whole byte was used
-		data[2+len(body)-1] += 1 << (unusedBits - 1)
+		unusedBits := 8 - (c.bitsSz % 8)
+		// we need to set a bit at the end if not whole byte was used
+		body[len(body)-1] += 1 << (unusedBits - 1)
 	}
 
-	for _, ref := range c.refs {
-		data = append(data, dynamicIntBytes(index[string(ref.Hash())].index, refIndexSzBytes)...)
+	refsLn := len(c.refs) * int(refIndexSzBytes)
+	bufLn := 2 + len(body) + refsLn
+	// if withHash {
+	// bufLn += c.levelMask.getHashIndex() * (32 + 2)
+	//}
+
+	data := make([]byte, bufLn)
+	data[0], data[1] = c.descriptors(c.levelMask)
+	//if withHash {
+	// TODO: support hash serialization
+	// data[0] |= 16
+	//}
+	copy(data[2:], body)
+
+	refsOffset := bufLn - refsLn
+	for i, ref := range c.refs {
+		copy(data[refsOffset+i*int(refIndexSzBytes):], dynamicIntBytes(index[string(ref.Hash())].index, refIndexSzBytes, dynBuffer))
 	}
 
 	return data
@@ -126,9 +169,8 @@ func (c *Cell) descriptors(lvl LevelMask) (byte, byte) {
 	return byte(len(c.refs)) + specBit + lvl.Mask*32, byte(ln)
 }
 
-func dynamicIntBytes(val uint64, sz uint) []byte {
-	data := make([]byte, 8)
-	binary.BigEndian.PutUint64(data, val)
+func dynamicIntBytes(val uint64, sz uint, buffer []byte) []byte {
+	binary.BigEndian.PutUint64(buffer, val)
 
-	return data[8-sz:]
+	return buffer[8-sz:]
 }

@@ -73,7 +73,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 
 		res := make([]*tlb.Transaction, len(txList))
 
-		for i := len(txList) - 1; i >= 0; i-- {
+		for i := 0; i < len(txList); i++ {
 			loader := txList[i].BeginParse()
 
 			var tx tlb.Transaction

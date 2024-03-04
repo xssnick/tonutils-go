@@ -5,12 +5,17 @@ import (
 )
 
 type idxItem struct {
-	index uint64
-	cell  *Cell
+	index     uint64
+	dataIndex int
+	repeats   int
+	withHash  bool
+	cell      *Cell
 }
 
-func flattenIndex(cells []*Cell) ([]*idxItem, map[string]*idxItem) {
+func flattenIndex(cells []*Cell, withTopHash, withIntHashes bool) ([]*idxItem, map[string]*idxItem) {
 	index := map[string]*idxItem{}
+
+	// TODO: withIntHashes
 
 	idx := uint64(0)
 	for len(cells) > 0 {
@@ -18,18 +23,21 @@ func flattenIndex(cells []*Cell) ([]*idxItem, map[string]*idxItem) {
 		for _, p := range cells {
 			hash := string(p.Hash())
 
-			if _, ok := index[hash]; ok {
+			if v, ok := index[hash]; ok {
+				v.repeats++
 				continue
 			}
 
 			// move cell forward in boc, because behind reference is not allowed
 			index[hash] = &idxItem{
-				cell:  p,
-				index: idx,
+				cell:     p,
+				index:    idx,
+				withHash: withTopHash,
 			}
 			idx++
 			next = append(next, p.refs...)
 		}
+		withTopHash = false // only once, for roots
 		cells = next
 	}
 

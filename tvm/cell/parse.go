@@ -59,9 +59,10 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 		}
 	}
 
-	rootList := r.MustReadBytes(rootsNum * cellNumSizeBytes) // root_list:(roots * ##(size * 8))
-	rootIndex := dynInt(rootList[0:cellNumSizeBytes])
-	_ = rootIndex
+	rootsIndex := make([]int, rootsNum)
+	for i := 0; i < rootsNum; i++ {
+		rootsIndex[i] = dynInt(r.MustReadBytes(cellNumSizeBytes))
+	}
 
 	if flags.hasCacheBits && !flags.hasIndex {
 		return nil, fmt.Errorf("cache flag cant be set without index flag")
@@ -74,27 +75,28 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to read custom index, err: %v", err)
 		}
-		n := 0
+
 		for i := 0; i < cellsNum; i++ {
 			off := i * dataSizeBytes
 			val := dynInt(idxData[off : off+dataSizeBytes])
 			if flags.hasCacheBits {
-				// TODO: check caches
-				if val%2 == 1 {
-					n++
-				}
+				// we don't need a cache, cause our loader uses memory
 				val /= 2
 			}
 			index = append(index, val)
 		}
 	}
 
-	payload, err := r.ReadBytes(dataLen)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read paylooad, want %d, has %d", dataLen, r.LeftLen())
+	if cellsNum > dataLen/2 {
+		return nil, fmt.Errorf("cells num looks malicious: data len %d, cells %d", dataLen, cellsNum)
 	}
 
-	cll, err := parseCells(rootsNum, cellsNum, cellNumSizeBytes, payload, index)
+	payload, err := r.ReadBytes(dataLen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read payload, want %d, has %d", dataLen, r.LeftLen())
+	}
+
+	cll, err := parseCells(rootsIndex, cellsNum, cellNumSizeBytes, payload, index)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse payload: %w", err)
 	}
@@ -102,9 +104,12 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 	return cll, nil
 }
 
-func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([]*Cell, error) {
-	cells := make([]Cell, cellsNum)
-	referred := make([]bool, cellsNum)
+func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index []int) ([]*Cell, error) {
+	cells := make([]*Cell, cellsNum)
+	for i := 0; i < cellsNum; i++ {
+		// initialize them one by one for flexible gc and memory usage
+		cells[i] = &Cell{}
+	}
 
 	// index = nil
 	offset := 0
@@ -177,9 +182,7 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 				return nil, errors.New("invalid index, out of scope")
 			}
 
-			refs[y] = &cells[id]
-
-			referred[id] = true
+			refs[y] = cells[id]
 		}
 
 		bitsSz := uint(int(ln) * 4)
@@ -202,21 +205,14 @@ func parseCells(rootsNum, cellsNum, refSzBytes int, data []byte, index []int) ([
 		cells[i].refs = refs
 	}
 
-	roots := make([]*Cell, 0, rootsNum)
+	roots := make([]*Cell, len(rootsIndex))
 
 	for i := len(cells) - 1; i >= 0; i-- {
 		cells[i].calculateHashes()
 	}
 
-	// get cells which are not referenced by another, its root cells
-	for y, isRef := range referred {
-		if !isRef {
-			roots = append(roots, &cells[y])
-		}
-	}
-
-	if len(roots) != rootsNum {
-		return nil, errors.New("roots num not match actual num")
+	for i, idx := range rootsIndex {
+		roots[i] = cells[idx]
 	}
 
 	return roots, nil

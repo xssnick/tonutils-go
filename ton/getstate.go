@@ -64,6 +64,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			}, nil
 		}
 
+		println(len(t.ShardProof), len(t.Proof))
 		if t.Proof == nil {
 			return nil, fmt.Errorf("no proof")
 		}

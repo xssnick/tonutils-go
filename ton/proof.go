@@ -66,7 +66,7 @@ func CheckBlockShardStateProof(proof []*cell.Cell, blockRootHash []byte) (*tlb.S
 		return nil, fmt.Errorf("should have 2 roots")
 	}
 
-	block, err := CheckBlockProof(proof[1], blockRootHash)
+	block, err := CheckBlockProof(proof[0], blockRootHash)
 	if err != nil {
 		return nil, fmt.Errorf("incorrect block proof: %w", err)
 	}
@@ -76,7 +76,7 @@ func CheckBlockShardStateProof(proof []*cell.Cell, blockRootHash []byte) (*tlb.S
 		return nil, fmt.Errorf("failed to load state update ref: %w", err)
 	}
 
-	shardStateProofData, err := cell.UnwrapProof(proof[0], upd.Hash(0))
+	shardStateProofData, err := cell.UnwrapProof(proof[1], upd.Hash(0))
 	if err != nil {
 		return nil, fmt.Errorf("incorrect shard state proof: %w", err)
 	}

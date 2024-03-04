@@ -111,7 +111,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 
 	switch t := resp.(type) {
 	case ConfigAll:
-		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{t.ConfigProof, t.StateProof})
+		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{t.StateProof, t.ConfigProof})
 		if err != nil {
 			return nil, fmt.Errorf("incorrect proof: %w", err)
 		}
