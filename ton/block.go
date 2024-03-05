@@ -197,7 +197,7 @@ type BlockTransactionsExt struct {
 	ID           *BlockIDExt `tl:"struct"`
 	ReqCount     int32       `tl:"int"`
 	Incomplete   bool        `tl:"bool"`
-	Transactions *cell.Cell  `tl:"cell"`
+	Transactions *cell.Cell  `tl:"cell optional"`
 	Proof        []byte      `tl:"bytes"`
 }
 

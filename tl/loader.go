@@ -265,7 +265,7 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 
 		data, err = parseField(data, settings, &value)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse field %s, err: %w", field.Name, err)
+			return nil, fmt.Errorf("failed to parse field %s of %s, err: %w", field.Name, rv.Type().String(), err)
 		}
 		rv.Field(i).Set(value)
 
