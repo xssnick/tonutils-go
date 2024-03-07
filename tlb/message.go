@@ -181,6 +181,61 @@ func (m *Message) AsExternalOut() *ExternalMessageOut {
 	return m.Msg.(*ExternalMessageOut)
 }
 
+func (m *Message) ToCell() (*cell.Cell, error) {
+	switch m.MsgType {
+	case MsgTypeInternal:
+		return m.AsInternal().ToCell()
+	case MsgTypeExternalIn:
+		return m.AsExternalIn().ToCell()
+	case MsgTypeExternalOut:
+		return m.AsExternalOut().ToCell()
+	default:
+		return nil, errors.New("unknown message type")
+	}
+}
+
+func appendInitStateAndBody(b *cell.Builder, stateInit *StateInit, body *cell.Cell) error {
+	var err error
+	if b.BitsLeft() < 3 {
+		return fmt.Errorf("not enough storage to serialize state init and body")
+	}
+	b.MustStoreBoolBit(stateInit != nil)
+	if stateInit != nil {
+		stateCell, err := ToCell(stateInit)
+		if err != nil {
+			return fmt.Errorf("failed to serialize state init: %w", err)
+		}
+
+		if int(stateCell.BitsSize()) > int(b.BitsLeft())-2 || int(stateCell.RefsNum()) > int(b.RefsLeft())-1 {
+			b.MustStoreBoolBit(true) // state as ref
+			err = b.StoreRef(stateCell)
+		} else {
+			b.MustStoreBoolBit(false) // state as slice
+			err = b.StoreBuilder(stateCell.ToBuilder())
+		}
+		if err != nil {
+			return fmt.Errorf("failed to store message state init: %w", err)
+		}
+	}
+
+	if body != nil {
+		if int(body.BitsSize()) > int(b.BitsLeft())-1 || body.RefsNum() > b.RefsLeft() {
+			b.MustStoreBoolBit(true) // body as ref
+			err = b.StoreRef(body)
+		} else {
+			b.MustStoreBoolBit(false) // body as slice
+			err = b.StoreBuilder(body.ToBuilder())
+		}
+		if err != nil {
+			return fmt.Errorf("failed to store message body: %w", err)
+		}
+	} else {
+		b.MustStoreBoolBit(false)
+	}
+
+	return nil
+}
+
 func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 	b := cell.BeginCell()
 	b.MustStoreUInt(0, 1) // identification of int msg
@@ -198,32 +253,10 @@ func (m *InternalMessage) ToCell() (*cell.Cell, error) {
 
 	b.MustStoreUInt(m.CreatedLT, 64)
 	b.MustStoreUInt(uint64(m.CreatedAt), 32)
-	b.MustStoreBoolBit(m.StateInit != nil)
-	if m.StateInit != nil {
-		stateCell, err := ToCell(m.StateInit)
-		if err != nil {
-			return nil, err
-		}
 
-		if int(b.BitsLeft())-2 < int(stateCell.BitsSize()) || int(b.RefsLeft())-1 < int(m.Body.RefsNum()) {
-			b.MustStoreBoolBit(true)
-			b.MustStoreRef(stateCell)
-		} else {
-			b.MustStoreBoolBit(false)
-			b.MustStoreBuilder(stateCell.ToBuilder())
-		}
-	}
-
-	if m.Body != nil {
-		if int(b.BitsLeft())-1 < int(m.Body.BitsSize()) || b.RefsLeft() < m.Body.RefsNum() {
-			b.MustStoreBoolBit(true)
-			b.MustStoreRef(m.Body)
-		} else {
-			b.MustStoreBoolBit(false)
-			b.MustStoreBuilder(m.Body.ToBuilder())
-		}
-	} else {
-		b.MustStoreBoolBit(false)
+	err := appendInitStateAndBody(b, m.StateInit, m.Body)
+	if err != nil {
+		return nil, err
 	}
 
 	return b.EndCell(), nil
@@ -240,28 +273,24 @@ func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
 		MustStoreAddr(m.DstAddr).
 		MustStoreBigCoins(m.ImportFee.Nano())
 
-	builder.MustStoreBoolBit(m.StateInit != nil) // has state init
-	if m.StateInit != nil {
-		stateCell, err := ToCell(m.StateInit)
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize state init: %w", err)
-		}
-
-		if int(builder.BitsLeft())-2 < int(stateCell.BitsSize()) || int(builder.RefsLeft())-1 < int(m.Body.RefsNum()) {
-			builder.MustStoreBoolBit(true) // state as ref
-			builder.MustStoreRef(stateCell)
-		} else {
-			builder.MustStoreBoolBit(false) // state as slice
-			builder.MustStoreBuilder(stateCell.ToBuilder())
-		}
+	err := appendInitStateAndBody(builder, m.StateInit, m.Body)
+	if err != nil {
+		return nil, err
 	}
 
-	if int(builder.BitsLeft())-1 < int(m.Body.BitsSize()) || builder.RefsLeft() < m.Body.RefsNum() {
-		builder.MustStoreBoolBit(true) // body as ref
-		builder.MustStoreRef(m.Body)
-	} else {
-		builder.MustStoreBoolBit(false) // body as slice
-		builder.MustStoreBuilder(m.Body.ToBuilder())
+	return builder.EndCell(), nil
+}
+
+func (m *ExternalMessageOut) ToCell() (*cell.Cell, error) {
+	builder := cell.BeginCell().MustStoreUInt(0b11, 2).
+		MustStoreAddr(m.SrcAddr).
+		MustStoreAddr(m.DstAddr).
+		MustStoreUInt(m.CreatedLT, 64).
+		MustStoreUInt(uint64(m.CreatedAt), 32)
+
+	err := appendInitStateAndBody(builder, m.StateInit, m.Body)
+	if err != nil {
+		return nil, err
 	}
 
 	return builder.EndCell(), nil
