@@ -305,29 +305,35 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int6
 	return nil, errUnexpectedResponse(resp)
 }
 
-// GetBlockData - get block detailed information
-func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error) {
+// GetBlockDataEx - get block detailed information
+func (c *APIClient) GetBlockDataEx(ctx context.Context, block *BlockIDExt) (*tlb.Block, *cell.Cell, error) {
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, GetBlockData{ID: block}, &resp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	switch t := resp.(type) {
 	case BlockData:
 		if !bytes.Equal(t.Payload.Hash(), block.RootHash) {
-			return nil, fmt.Errorf("incorrect block")
+			return nil, nil, fmt.Errorf("incorrect block")
 		}
 
 		var bData tlb.Block
 		if err = tlb.LoadFromCell(&bData, t.Payload.BeginParse()); err != nil {
-			return nil, fmt.Errorf("failed to parse block data: %w", err)
+			return nil, nil, fmt.Errorf("failed to parse block data: %w", err)
 		}
-		return &bData, nil
+		return &bData, t.Payload, nil
 	case LSError:
-		return nil, t
+		return nil, nil, t
 	}
-	return nil, errUnexpectedResponse(resp)
+	return nil, nil, errUnexpectedResponse(resp)
+}
+
+// GetBlockData - get block detailed information
+func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error) {
+	blockData, _, err := c.GetBlockDataEx(ctx, block)
+	return blockData, err
 }
 
 // GetBlockTransactionsV2 - list of block transactions
