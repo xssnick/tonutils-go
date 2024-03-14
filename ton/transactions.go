@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"time"
 )
 
 func init() {
@@ -101,6 +101,11 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 }
 
 func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error) {
+	tx, _, err := c.GetTransactionEx(ctx, block, addr, lt)
+	return tx, err
+}
+
+func (c *APIClient) GetTransactionEx(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, *TransactionInfo, error) {
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, GetOneTransaction{
 		ID: block,
@@ -111,61 +116,67 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 		LT: int64(lt),
 	}, &resp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	switch t := resp.(type) {
 	case TransactionInfo:
 		if !t.ID.Equals(block) {
-			return nil, fmt.Errorf("incorrect block in response")
+			return nil, nil, fmt.Errorf("incorrect block in response")
 		}
-
-		txCell, err := cell.FromBOC(t.Transaction)
+		tx, err := t.ToTransaction(c.proofCheckPolicy, block.RootHash)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse cell from transaction bytes: %w", err)
+			return nil, nil, err
 		}
-
-		var tx tlb.Transaction
-		err = tlb.LoadFromCell(&tx, txCell.BeginParse())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
-		}
-		tx.Hash = txCell.Hash()
-
-		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
-			txProof, err := cell.FromBOC(t.Proof)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse proof: %w", err)
-			}
-
-			blockProof, err := CheckBlockProof(txProof, block.RootHash)
-			if err != nil {
-				return nil, fmt.Errorf("failed to check proof: %w", err)
-			}
-
-			if blockProof.Extra == nil || blockProof.Extra.ShardAccountBlocks == nil {
-				return nil, fmt.Errorf("block proof without shard accounts")
-			}
-
-			var shardAccounts tlb.ShardAccountBlocks
-			err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse())
-			if err != nil {
-				return nil, fmt.Errorf("failed to load shard accounts from proof: %w", err)
-			}
-
-			if err = CheckTransactionProof(tx.Hash, tx.LT, tx.AccountAddr, &shardAccounts); err != nil {
-				return nil, fmt.Errorf("incorrect tx proof: %w", err)
-			}
-		}
-
-		return &tx, nil
+		return tx, &t, nil
 	case LSError:
 		if t.Code == 0 {
-			return nil, ErrMessageNotAccepted
+			return nil, nil, ErrMessageNotAccepted
 		}
-		return nil, t
+		return nil, nil, t
 	}
-	return nil, errUnexpectedResponse(resp)
+	return nil, nil, errUnexpectedResponse(resp)
+}
+
+func (t *TransactionInfo) ToTransaction(proofCheckPolicy ProofCheckPolicy, blockRootHash []byte) (*tlb.Transaction, error) {
+	txCell, err := cell.FromBOC(t.Transaction)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse cell from transaction bytes: %w", err)
+	}
+
+	var tx tlb.Transaction
+	err = tlb.LoadFromCell(&tx, txCell.BeginParse())
+	if err != nil {
+		return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
+	}
+	tx.Hash = txCell.Hash()
+
+	if proofCheckPolicy != ProofCheckPolicyUnsafe {
+		txProof, err := cell.FromBOC(t.Proof)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse proof: %w", err)
+		}
+
+		blockProof, err := CheckBlockProof(txProof, blockRootHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check proof: %w", err)
+		}
+
+		if blockProof.Extra == nil || blockProof.Extra.ShardAccountBlocks == nil {
+			return nil, fmt.Errorf("block proof without shard accounts")
+		}
+
+		var shardAccounts tlb.ShardAccountBlocks
+		err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load shard accounts from proof: %w", err)
+		}
+
+		if err = CheckTransactionProof(tx.Hash, tx.LT, tx.AccountAddr, &shardAccounts); err != nil {
+			return nil, fmt.Errorf("incorrect tx proof: %w", err)
+		}
+	}
+	return &tx, nil
 }
 
 func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction) {
