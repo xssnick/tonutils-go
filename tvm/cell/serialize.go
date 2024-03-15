@@ -37,6 +37,10 @@ func ToBOCWithFlags(roots []*Cell, flags ...bool) []byte {
 	withTopHash := len(flags) > 3 && flags[3]
 	withIntHashes := len(flags) > 4 && flags[4]
 
+	if withTopHash || withIntHashes {
+		panic("hashes serialization is not yet supported")
+	}
+
 	// recursively go through cells, build hash index and store unique in slice
 	sortedCells, index := flattenIndex(roots, withTopHash, withIntHashes)
 

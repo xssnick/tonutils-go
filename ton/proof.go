@@ -126,7 +126,7 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 			return nil, nil, fmt.Errorf("incorrect block proof: %w", err)
 		}
 	} else {
-		shardStateProofData, err := stateProof[0].BeginParse().LoadRef()
+		shardStateProofData, err := stateProof[1].BeginParse().LoadRef()
 		if err != nil {
 			return nil, nil, fmt.Errorf("shard state proof should have ref: %w", err)
 		}
@@ -224,7 +224,7 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 		return fmt.Errorf("target block type not matches requested")
 	}
 
-	stateExtra, err := CheckShardMcStateExtraProof(from, []*cell.Cell{stateProof, proof})
+	stateExtra, err := CheckShardMcStateExtraProof(from, []*cell.Cell{proof, stateProof})
 	if err != nil {
 		return fmt.Errorf("failed to check proof for mc state extra: %w", err)
 	}

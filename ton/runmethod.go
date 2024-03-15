@@ -37,7 +37,7 @@ type RunMethodResult struct {
 	ShardBlock *BlockIDExt  `tl:"struct"`
 	ShardProof []*cell.Cell `tl:"?0 cell optional 2"`
 	Proof      []*cell.Cell `tl:"?0 cell optional 2"`
-	StateProof *cell.Cell   `tl:"?1 cell"`
+	StateProof *cell.Cell   `tl:"?1 cell optional"`
 	InitC7     *cell.Cell   `tl:"?3 cell optional"`
 	LibExtras  *cell.Cell   `tl:"?4 cell optional"`
 	ExitCode   int32        `tl:"int"`
@@ -89,6 +89,10 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 		}
 
 		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			if t.StateProof == nil {
+				return nil, fmt.Errorf("liteserver has no state proof for this account in a given block, request newer block or disable proof checks")
+			}
+
 			var shardProof []*cell.Cell
 			var shardHash []byte
 			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
@@ -114,7 +118,6 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			if err != nil {
 				return nil, fmt.Errorf("failed to match state proof to state hash: %w", err)
 			}
-			// TODO: when tvm implementation ready - execute code and compare result
 		}
 
 		if t.Result == nil {

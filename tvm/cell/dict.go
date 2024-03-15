@@ -126,7 +126,6 @@ func (d *Dictionary) Set(key, value *Cell) error {
 
 			vNew, err := pfx.LoadUInt(1)
 			if err != nil {
-				println("X", sz, bitsMatches, keyOffset)
 				return nil, fmt.Errorf("failed to load new key bit: %w", err)
 			}
 
@@ -147,7 +146,6 @@ func (d *Dictionary) Set(key, value *Cell) error {
 			refIdx := int(pfx.MustLoadUInt(1))
 			ref, err := branch.PeekRef(refIdx)
 			if err != nil {
-				println(d.root.Dump())
 				return nil, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
 			}
 

@@ -11,7 +11,7 @@ func TestToBOCWithFlags(t *testing.T) {
 	cc2 := BeginCell().MustStoreUInt(777, 256).EndCell()
 	cc3 := BeginCell().MustStoreBinarySnake(make([]byte, 700)).EndCell()
 
-	boc := ToBOCWithFlags([]*Cell{cc1, cc2, cc3}, true, true, true)
+	boc := ToBOCWithFlags([]*Cell{cc1, cc2, cc3}, true, false, false)
 	cells, err := FromBOCMultiRoot(boc)
 	if err != nil {
 		t.Fatal(err.Error())

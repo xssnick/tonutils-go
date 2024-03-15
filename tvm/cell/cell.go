@@ -35,12 +35,6 @@ type Cell struct {
 }
 
 func (c *Cell) copy() *Cell {
-	/*refs := make([]*Cell, len(c.refs))
-	for i, ref := range c.refs {
-		refs[i] = ref.copy()
-		// TODO: not copy whole tree
-	}*/
-
 	return &Cell{
 		special:     c.special,
 		levelMask:   c.levelMask,
@@ -111,7 +105,7 @@ func (c *Cell) Dump(limitLength ...int) string {
 }
 
 func (c *Cell) DumpBits(limitLength ...int) string {
-	var lim uint64 = (1024 << 20) * 16
+	var lim = uint64(1024<<20) * 16
 	if len(limitLength) > 0 {
 		// 16 MB default lim
 		lim = uint64(limitLength[0])

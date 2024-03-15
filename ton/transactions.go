@@ -87,7 +87,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 				return nil, fmt.Errorf("incorrect transaction hash, not matches prev tx hash")
 			}
 			txHash = tx.PrevTxHash
-			res[i] = &tx
+			res[(len(txList)-1)-i] = &tx
 		}
 		return res, nil
 	case LSError:
@@ -221,7 +221,6 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			case <-time.After(waitList):
 			}
 
-			// ctx = workerCtx
 			ctx, cancel = context.WithTimeout(workerCtx, 10*time.Second)
 			res, err := c.ListTransactions(ctx, addr, 10, lastLT, lastHash)
 			cancel()
@@ -254,6 +253,7 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			transactions = append(transactions, res...)
 			waitList = 0 * time.Second
 		}
+
 		if len(transactions) > 0 {
 			lastProcessedLT = transactions[0].LT // mark last transaction as known to not trigger twice
 

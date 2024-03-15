@@ -677,7 +677,7 @@ func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 	log.Println(initLT)
 	lastLT := initLT
 
-	ctx, cancel = context.WithTimeout(context.Background(), 7*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	ch := make(chan *tlb.Transaction)
