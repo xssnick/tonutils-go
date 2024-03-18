@@ -748,7 +748,7 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 func TestAPIClient_WithRetry(t *testing.T) {
 	apiTimeout := api.WithTimeout(1 * time.Millisecond)
 
-	_, err := apiTimeout.CurrentMasterchainInfo(context.Background())
+	_, err := apiTimeout.GetMasterchainInfo(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("expected deadline exceeded error but", err)
 	}
