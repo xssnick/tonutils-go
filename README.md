@@ -3,7 +3,7 @@
 <img align="right" width="425px" src="https://github.com/xssnick/props/blob/master/logoimg.png?raw=true">
 
 [![Based on TON][ton-svg]][ton]
-![Coverage](https://img.shields.io/badge/Coverage-74.3%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-73.3%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
@@ -52,6 +52,7 @@ If you love this library and want to support its development you can donate any 
   - [Parse](#Cells)
   - [TLB Loader/Serializer](#TLB-Loader)
   - [BoC](#BoC)
+  - [Proof creation](#Proofs)
 - [Network](https://github.com/xssnick/tonutils-go/tree/master/adnl)
   - [ADNL UDP](https://github.com/xssnick/tonutils-go/blob/master/adnl/adnl_test.go)
   - [TON Site request](https://github.com/xssnick/tonutils-go/blob/master/example/site-request/main.go)
@@ -418,6 +419,27 @@ You can simply export cell using `ToBOC()` method of cell, and import it using `
 
 [Example of use can be found in tests](https://github.com/xssnick/tonutils-go/blob/master/tvm/cell/cell_test.go#L76) or in [transfer-url-for-qr](https://github.com/xssnick/tonutils-go/blob/master/example/transfer-url-for-qr/main.go) example
 
+##### Proofs
+
+You can create proof from cell by constructing skeleton of references you want to keep, all other cells not presented in path will be pruned.
+```golang
+sk := cell.CreateProofSkeleton()
+sk.ProofRef(0).ProofRef(1)
+
+// Tips:
+//   you could also do SetRecursive() on needed ref to add all its child cells to proof
+//   you can merge 2 proof skeletons using Merge
+
+merkleProof, err := someCell.CreateProof(sk)
+if err != nil {
+    t.Fatal(err)
+}
+
+fmt.Println(merkleProof.Dump())
+```
+
+To check proof you could use `cell.CheckProof(merkleProof, hash)` method, or `cell.UnwrapProof(merkleProof, hash)` if you want to continue to read proof body.
+
 ### TLB Loader
 You can also load cells to structures, similar to JSON, using tags. 
 You can find more details in comment-description of `tlb.LoadFromCell` method
@@ -474,11 +496,11 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Jettons
 * ✅ DNS
 * ✅ ADNL UDP Client/Server
+* ✅ ADNL TCP Client/Server
 * ✅ RLDP Client/Server
 * ✅ TON Sites Client/Server
 * ✅ DHT Client
-* ✅ Merkle proofs
-* ✅ TON Storage client
+* ✅ Merkle proofs validation and creation
 * ✅ Overlays
 * ✅ TL Parser/Serializer
 * ✅ TL-B Parser/Serializer
