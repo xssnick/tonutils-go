@@ -28,7 +28,7 @@ func TestInternalMessage_ToCell(t *testing.T) { // need to deploy contract on te
 		Body: cell.BeginCell().EndCell(),
 	}
 
-	c, err := intMsg.ToCell()
+	c, err := ToCell(intMsg)
 	if err != nil {
 		t.Fatal("to cell err", err)
 	}
@@ -71,8 +71,9 @@ func TestCornerMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	println(hex.EncodeToString(c.Hash()), hex.EncodeToString(c2.Hash()))
 	if !bytes.Equal(c.Hash(), c2.Hash()) {
-		t.Fatal("hash not match")
+		t.Fatal("hash not match", hex.EncodeToString(c.Hash()), hex.EncodeToString(c2.Hash()))
 	}
 }
 
@@ -90,7 +91,7 @@ func TestMessage_LoadFromCell(t *testing.T) {
 			StateInit:   nil,
 			Body:        cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
 		}
-		_cell, err := tIntMsg.ToCell()
+		_cell, err := ToCell(tIntMsg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +113,7 @@ func TestMessage_LoadFromCell(t *testing.T) {
 			StateInit: nil,
 			Body:      cell.BeginCell().MustStoreUInt(777, 27).EndCell(),
 		}
-		_cell, err := tExMsg.ToCell()
+		_cell, err := ToCell(tExMsg)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -111,7 +111,7 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 
 	switch t := resp.(type) {
 	case ConfigAll:
-		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{t.ConfigProof, t.StateProof})
+		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{t.StateProof, t.ConfigProof})
 		if err != nil {
 			return nil, fmt.Errorf("incorrect proof: %w", err)
 		}
@@ -134,13 +134,18 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 				result.data[param] = v.MustToCell()
 			}
 		} else {
-			for _, kv := range stateExtra.ConfigParams.Config.Params.All() {
-				v, err := kv.Value.BeginParse().LoadRef()
+			kvs, err := stateExtra.ConfigParams.Config.Params.LoadAll()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load config params dict: %w", err)
+			}
+
+			for _, kv := range kvs {
+				v, err := kv.Value.LoadRef()
 				if err != nil {
-					return nil, fmt.Errorf("failed to load config param %d, err: %w", kv.Key.BeginParse().MustLoadInt(32), err)
+					return nil, fmt.Errorf("failed to load config param %d, err: %w", kv.Key.MustLoadInt(32), err)
 				}
 
-				result.data[int32(kv.Key.BeginParse().MustLoadInt(32))] = v.MustToCell()
+				result.data[int32(kv.Key.MustLoadInt(32))] = v.MustToCell()
 			}
 		}
 

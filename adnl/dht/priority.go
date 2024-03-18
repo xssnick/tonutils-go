@@ -33,7 +33,7 @@ func (p *priorityList) addNode(node *dhtNode) bool {
 	item := &nodePriority{
 		id:       id,
 		node:     node,
-		priority: node.weight(p.targetId),
+		priority: int(affinity(node.adnlId, p.targetId)) - int(node.badScore),
 	}
 
 	p.mx.Lock()

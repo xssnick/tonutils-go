@@ -3,14 +3,15 @@ package ton
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sync"
+	"time"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"reflect"
-	"sync"
-	"time"
 )
 
 func init() {
@@ -70,6 +71,7 @@ type APIClientWrapped interface {
 	VerifyProofChain(ctx context.Context, from, to *BlockIDExt) error
 	WaitForBlock(seqno uint32) APIClientWrapped
 	WithRetry(maxRetries ...int) APIClientWrapped
+	WithTimeout(timeout time.Duration) APIClientWrapped
 	SetTrustedBlock(block *BlockIDExt)
 	SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig)
 }
@@ -125,9 +127,15 @@ func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 	}
 }
 
-// WithRetry - automatically retires request to another available liteserver
-// when adnl timeout, or error code 651 or -400 is received.
-// If maxTries > 0, limits additional attempts to this number.
+// WithRetry
+// If maxTries = 0
+//
+//	Automatically retires request to another available liteserver
+//	when ADNL timeout, or error code 651 or -400 is received.
+//
+// If maxTries > 0
+//
+//	Limits additional attempts to this number.
 func (c *APIClient) WithRetry(maxTries ...int) APIClientWrapped {
 	tries := 0
 	if len(maxTries) > 0 {
@@ -136,6 +144,15 @@ func (c *APIClient) WithRetry(maxTries ...int) APIClientWrapped {
 	return &APIClient{
 		parent:           c,
 		client:           &retryClient{original: c.client, maxRetries: tries},
+		proofCheckPolicy: c.proofCheckPolicy,
+	}
+}
+
+// WithTimeout add timeout to each LiteServer request
+func (c *APIClient) WithTimeout(timeout time.Duration) APIClientWrapped {
+	return &APIClient{
+		parent:           c,
+		client:           &timeoutClient{original: c.client, timeout: timeout},
 		proofCheckPolicy: c.proofCheckPolicy,
 	}
 }

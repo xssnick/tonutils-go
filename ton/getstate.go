@@ -11,6 +11,7 @@ import (
 )
 
 func init() {
+	tl.Register(GetAccountStatePruned{}, "liteServer.getAccountStatePrunned id:tonNode.blockIdExt account:liteServer.accountId = liteServer.AccountState")
 	tl.Register(GetAccountState{}, "liteServer.getAccountState id:tonNode.blockIdExt account:liteServer.accountId = liteServer.AccountState")
 	tl.Register(AccountState{}, "liteServer.accountState id:tonNode.blockIdExt shardblk:tonNode.blockIdExt shard_proof:bytes proof:bytes state:bytes = liteServer.AccountState")
 }
@@ -21,6 +22,11 @@ type AccountState struct {
 	ShardProof []*cell.Cell `tl:"cell optional 2"`
 	Proof      []*cell.Cell `tl:"cell optional 2"`
 	State      *cell.Cell   `tl:"cell optional"`
+}
+
+type GetAccountStatePruned struct {
+	ID      *BlockIDExt `tl:"struct"`
+	Account AccountID   `tl:"struct"`
 }
 
 type GetAccountState struct {

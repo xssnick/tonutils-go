@@ -74,62 +74,8 @@ func (s *Stack) ToCell() (*cell.Cell, error) {
 		b := cell.BeginCell()
 		b.MustStoreRef(next.EndCell())
 
-		val := unwrap[i].value
-		if vl, ok := val.(*big.Int); ok {
-			if vl.BitLen() < 64 {
-				val = vl.Int64()
-			}
-		}
-
-		switch v := val.(type) {
-		case nil:
-			b.MustStoreUInt(0x00, 8)
-		case int, int8, int16, int32, int64, uint8, uint16, uint32:
-			b.MustStoreUInt(0x01, 8)
-
-			// cast to int64
-			val := reflect.ValueOf(v).Convert(reflect.TypeOf(int64(0))).Interface().(int64)
-			b.MustStoreInt(val, 64)
-		case uint, uint64, *big.Int:
-			// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/vm/stack.cpp#L739
-			b.MustStoreUInt(0x0200/2, 15)
-
-			var bi *big.Int
-			switch vv := v.(type) {
-			case uint64:
-				bi = new(big.Int).SetUint64(vv)
-			case uint:
-				bi = new(big.Int).SetUint64(uint64(vv))
-			case *big.Int:
-				bi = vv
-			}
-
-			b.MustStoreBigInt(bi, 257)
-		case StackNaN, *StackNaN:
-			b.MustStoreSlice([]byte{0x02, 0xFF}, 16)
-		case *cell.Cell:
-			b.MustStoreUInt(0x03, 8)
-			b.MustStoreRef(v)
-		case *cell.Slice:
-			b.MustStoreUInt(0x04, 8)
-
-			// start data offset
-			b.MustStoreUInt(0, 10)
-			// end data offset
-			b.MustStoreUInt(uint64(v.BitsLeft()), 10)
-
-			// start refs offset
-			b.MustStoreUInt(0, 3)
-			// end refs offset
-			b.MustStoreUInt(uint64(v.RefsNum()), 3)
-
-			b.MustStoreRef(v.MustToCell())
-		case *cell.Builder:
-			b.MustStoreUInt(0x05, 8)
-			b.MustStoreRef(v.EndCell())
-		default:
-			// TODO: store tuple 0x07
-			return nil, fmt.Errorf("unknown type at %d pos in stack", i)
+		if err := SerializeStackValue(b, unwrap[i].value); err != nil {
+			return nil, fmt.Errorf("faled to serialize %d stack element: %w", i, err)
 		}
 
 		next = b
@@ -154,7 +100,7 @@ func (s *Stack) LoadFromCell(loader *cell.Slice) error {
 			return fmt.Errorf("failed to load stack next ref, err: %w", err)
 		}
 
-		val, err := s.parseValue(next)
+		val, err := ParseStackValue(next)
 		if err != nil {
 			return fmt.Errorf("failed to parse stack value, err: %w", err)
 		}
@@ -167,7 +113,102 @@ func (s *Stack) LoadFromCell(loader *cell.Slice) error {
 	return nil
 }
 
-func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
+func SerializeStackValue(b *cell.Builder, val any) error {
+	if vl, ok := val.(*big.Int); ok {
+		if vl.BitLen() < 64 {
+			val = vl.Int64()
+		}
+	}
+
+	switch v := val.(type) {
+	case nil:
+		b.MustStoreUInt(0x00, 8)
+	case int, int8, int16, int32, int64, uint8, uint16, uint32:
+		b.MustStoreUInt(0x01, 8)
+
+		// cast to int64
+		vl := reflect.ValueOf(v).Convert(reflect.TypeOf(int64(0))).Interface().(int64)
+		b.MustStoreInt(vl, 64)
+	case uint, uint64, *big.Int:
+		// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/vm/stack.cpp#L739
+		b.MustStoreUInt(0x0200/2, 15)
+
+		var bi *big.Int
+		switch vv := v.(type) {
+		case uint64:
+			bi = new(big.Int).SetUint64(vv)
+		case uint:
+			bi = new(big.Int).SetUint64(uint64(vv))
+		case *big.Int:
+			bi = vv
+		}
+
+		b.MustStoreBigInt(bi, 257)
+	case StackNaN, *StackNaN:
+		b.MustStoreSlice([]byte{0x02, 0xFF}, 16)
+	case *cell.Cell:
+		b.MustStoreUInt(0x03, 8)
+		b.MustStoreRef(v)
+	case *cell.Slice:
+		b.MustStoreUInt(0x04, 8)
+
+		// start data offset
+		b.MustStoreUInt(0, 10)
+		// end data offset
+		b.MustStoreUInt(uint64(v.BitsLeft()), 10)
+
+		// start refs offset
+		b.MustStoreUInt(0, 3)
+		// end refs offset
+		b.MustStoreUInt(uint64(v.RefsNum()), 3)
+
+		b.MustStoreRef(v.MustToCell())
+	case *cell.Builder:
+		b.MustStoreUInt(0x05, 8)
+		b.MustStoreRef(v.EndCell())
+	case []any:
+		b.MustStoreUInt(0x07, 8)
+		b.MustStoreUInt(uint64(len(v)), 16)
+
+		var dive func(b *cell.Builder, i int) error
+		dive = func(b *cell.Builder, i int) error {
+			if i < 0 {
+				return nil
+			}
+
+			if i > 1 {
+				n := cell.BeginCell()
+				if err := dive(n, i-1); err != nil {
+					return err
+				}
+				b.MustStoreRef(n.EndCell())
+			} else if i == 1 {
+				n2 := cell.BeginCell()
+				if err := SerializeStackValue(n2, v[i-1]); err != nil {
+					return fmt.Errorf("faled to serialize tuple %d element: %w", i-1, err)
+				}
+				b.MustStoreRef(n2.EndCell())
+			}
+
+			n2 := cell.BeginCell()
+			if err := SerializeStackValue(n2, v[i]); err != nil {
+				return fmt.Errorf("faled to serialize tuple %d element: %w", i, err)
+			}
+			b.MustStoreRef(n2.EndCell())
+
+			return nil
+		}
+
+		if err := dive(b, len(v)-1); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown type")
+	}
+	return nil
+}
+
+func ParseStackValue(slice *cell.Slice) (any, error) {
 	typ, err := slice.LoadUInt(8)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load stack value type, err: %w", err)
@@ -329,7 +370,7 @@ func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
 				return fmt.Errorf("failed to load tuple's %d ref, err: %w", i, err)
 			}
 
-			val, err := s.parseValue(ref)
+			val, err := ParseStackValue(ref)
 			if err != nil {
 				return fmt.Errorf("failed to parse tuple's %d value, err: %w", i, err)
 			}
@@ -337,8 +378,8 @@ func (s *Stack) parseValue(slice *cell.Slice) (any, error) {
 
 			return nil
 		}
-		err = dive(0, slice)
-		if err != nil {
+
+		if err = dive(0, slice); err != nil {
 			return nil, fmt.Errorf("failed to load tuple, err: %w", err)
 		}
 

@@ -6,12 +6,13 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient"
-	"github.com/xssnick/tonutils-go/ton"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/ton"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -348,7 +349,7 @@ func checkV4R2(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Int
 		t.Fatal("mode incorrect")
 	}
 
-	intMsgRef, _ := intMsg.ToCell()
+	intMsgRef, _ := tlb.ToCell(intMsg)
 	payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
 		MustStoreUInt(exp, 32).
 		MustStoreUInt(seq, 32)
@@ -392,7 +393,7 @@ func checkV3(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Inter
 		t.Fatal("mode incorrect")
 	}
 
-	intMsgRef, _ := intMsg.ToCell()
+	intMsgRef, _ := tlb.ToCell(intMsg)
 	payload := cell.BeginCell().MustStoreUInt(DefaultSubwallet, 32).
 		MustStoreUInt(exp, 32).
 		MustStoreUInt(seq, 32)
@@ -426,7 +427,7 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 		t.Fatal("dict incorrect")
 	}
 
-	intMsgRef, _ := intMsg.ToCell()
+	intMsgRef, _ := tlb.ToCell(intMsg)
 
 	dict := cell.NewDict(16)
 	err := dict.SetIntKey(big.NewInt(0), cell.BeginCell().
@@ -461,6 +462,7 @@ type WaiterMock struct {
 	MGetTransaction         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 	MWaitForBlock           func(seqno uint32) ton.APIClientWrapped
 	MWithRetry              func(x ...int) ton.APIClientWrapped
+	MWithTimeout            func(timeout time.Duration) ton.APIClientWrapped
 	MCurrentMasterchainInfo func(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	MGetBlockProof          func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
 }
@@ -507,9 +509,12 @@ func (w WaiterMock) WithRetry(x ...int) ton.APIClientWrapped {
 	return w.MWithRetry(x...)
 }
 
+func (w WaiterMock) WithTimeout(timeout time.Duration) ton.APIClientWrapped {
+	return w.MWithTimeout(timeout)
+}
+
 func (w WaiterMock) GetBlockProof(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error) {
 	return w.MGetBlockProof(ctx, known, target)
-
 }
 
 func (w WaiterMock) GetTime(ctx context.Context) (uint32, error) {

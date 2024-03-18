@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"reflect"
@@ -676,7 +677,7 @@ func TestAPIClient_SubscribeOnTransactions(t *testing.T) {
 	log.Println(initLT)
 	lastLT := initLT
 
-	ctx, cancel = context.WithTimeout(context.Background(), 7*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	ch := make(chan *tlb.Transaction)
@@ -718,11 +719,9 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 		return
 	}
 
-	bSnake, err := acc.Code.BeginParse().LoadBinarySnake()
-	if err != nil {
-		t.Fatal("parse acc code err:", err.Error())
-		return
-	}
+	println(acc.Code.Dump())
+
+	bSnake := acc.Code.BeginParse().MustLoadBinarySnake()
 
 	resp, err := apiTestNet.GetLibraries(ctx, bSnake[1:], make([]byte, 32), bSnake[1:])
 	if err != nil {
@@ -743,5 +742,14 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 	}
 	if resp[2] == nil {
 		t.Fatal("third should be not empty")
+	}
+}
+
+func TestAPIClient_WithRetry(t *testing.T) {
+	apiTimeout := api.WithTimeout(1 * time.Millisecond)
+
+	_, err := apiTimeout.GetMasterchainInfo(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("expected deadline exceeded error but", err)
 	}
 }

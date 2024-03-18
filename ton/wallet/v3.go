@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"time"
 
@@ -50,7 +51,7 @@ func (s *SpecV3) BuildMessage(ctx context.Context, isInitialized bool, block *to
 		MustStoreUInt(seq, 32)
 
 	for i, message := range messages {
-		intMsg, err := message.InternalMessage.ToCell()
+		intMsg, err := tlb.ToCell(message.InternalMessage)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert internal message %d to cell: %w", i, err)
 		}

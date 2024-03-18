@@ -3,6 +3,7 @@ package address
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -93,10 +94,22 @@ func (a *Address) String() string {
 		binary.BigEndian.PutUint16(address[34:], crc16.Checksum(address[:34], crcTable))
 		return base64.RawURLEncoding.EncodeToString(address[:])
 	case ExtAddress:
-		// TODO support readable serialization
-		return "EXT_ADDRESS"
+		address := make([]byte, 1+4+len(a.data))
+
+		address[0] = a.FlagsToByte()
+		binary.BigEndian.PutUint32(address[1:], uint32(a.bitsLen))
+		copy(address[5:], a.data)
+
+		return fmt.Sprintf("EXT:%s", hex.EncodeToString(address))
 	case VarAddress:
-		return "VAR_ADDRESS"
+		address := make([]byte, 1+4+4+len(a.data))
+
+		address[0] = a.FlagsToByte()
+		binary.BigEndian.PutUint32(address[1:], uint32(a.workchain))
+		binary.BigEndian.PutUint32(address[5:], uint32(a.bitsLen))
+		copy(address[9:], a.data)
+
+		return fmt.Sprintf("VAR:%s", hex.EncodeToString(address))
 	default:
 		return "NOT_SUPPORTED"
 	}
@@ -126,6 +139,63 @@ func (a *Address) StringToBytes(dst []byte, addr []byte) {
 
 func (a *Address) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf("%q", a.String())), nil
+}
+
+func (a *Address) UnmarshalJSON(data []byte) error {
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return fmt.Errorf("invalid data")
+	}
+
+	data = data[1 : len(data)-1]
+	strData := string(data)
+
+	var (
+		addr *Address
+		err  error
+	)
+
+	if strData == "NONE" {
+		addr = NewAddressNone()
+	} else if strData == "NOT_SUPPORTED" {
+		return fmt.Errorf("not supported address")
+	} else if len(strData) >= 9 && strData[:4] == "EXT:" {
+		strData = strData[4:]
+
+		b, err := hex.DecodeString(strData)
+		if err != nil {
+			return err
+		}
+
+		addr = NewAddressExt(
+			b[0],
+			uint(binary.BigEndian.Uint32(b[1:5])),
+			b[5:],
+		)
+
+	} else if len(strData) >= 13 && strData[:4] == "VAR:" {
+		strData = strData[4:]
+
+		b, err := hex.DecodeString(strData)
+		if err != nil {
+			return err
+		}
+
+		addr = NewAddressVar(
+			b[0],
+			int32(binary.BigEndian.Uint32(b[1:5])),
+			uint(binary.BigEndian.Uint32(b[5:9])),
+			b[9:],
+		)
+	} else {
+		addr, err = ParseAddr(strData)
+		if err != nil {
+			return err
+		}
+	}
+
+	*a = *addr
+
+	return nil
 }
 
 func MustParseAddr(addr string) *Address {

@@ -461,3 +461,229 @@ func TestParseflags(t *testing.T) {
 		})
 	}
 }
+
+func TestAddress_MarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		address *Address
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "none",
+			address: NewAddressNone(),
+			want:    "\"NONE\"",
+			wantErr: false,
+		},
+		{
+			name:    "std address",
+			address: MustParseAddr("EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj"),
+			want:    "\"EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj\"",
+			wantErr: false,
+		},
+		{
+			name: "ext address",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      []byte{1, 2, 3},
+			},
+			want:    "\"EXT:1100000100010203\"",
+			wantErr: false,
+		},
+		{
+			name: "ext address with empty data",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      nil,
+			},
+			want:    "\"EXT:1100000100\"",
+			wantErr: false,
+		},
+		{
+			name: "var address",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      []byte{4, 5, 6},
+			},
+			want:    "\"VAR:91ffffffff00000100040506\"",
+			wantErr: false,
+		},
+		{
+			name: "var address with empty data",
+			address: &Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      nil,
+			},
+			want:    "\"VAR:91ffffffff00000100\"",
+			wantErr: false,
+		},
+		{
+			name:    "not supported type",
+			address: &Address{addrType: 5},
+			want:    "\"NOT_SUPPORTED\"",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.address.MarshalJSON()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("MarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			wantBytes := []byte(tt.want)
+			if !reflect.DeepEqual(got, wantBytes) {
+				t.Errorf("MarshalJSON() got = %v, want %v", string(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestAddress_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		address string
+		want    Address
+		wantErr bool
+	}{
+		{
+			name:    "invalid empty",
+			address: "",
+			want:    Address{},
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			address: "\"\"",
+			want:    Address{},
+			wantErr: true,
+		},
+		{
+			name:    "valid",
+			address: "\"EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I\"",
+			want: Address{
+				addrType:  StdAddress,
+				bitsLen:   256,
+				flags:     flags{bounceable: true, testnet: false},
+				workchain: 0,
+				data:      []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "invalid",
+			address: "\"AQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj\"",
+			want:    Address{},
+			wantErr: true,
+		},
+		{
+			name:    "none address",
+			address: "\"NONE\"",
+			want: Address{
+				addrType: NoneAddress,
+			},
+			wantErr: false,
+		},
+		{
+			name:    "ext address",
+			address: "\"EXT:1100000100010203\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      []byte{1, 2, 3},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "ext address with empty data",
+			address: "\"EXT:1100000100\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    false,
+				},
+				addrType:  ExtAddress,
+				workchain: 0,
+				bitsLen:   256,
+				data:      []byte{},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "var address",
+			address: "\"VAR:91ffffffff00000100040506\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      []byte{4, 5, 6},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "var address with empty data",
+			address: "\"VAR:91ffffffff00000100\"",
+			want: Address{
+				flags: flags{
+					bounceable: true,
+					testnet:    true,
+				},
+				addrType:  VarAddress,
+				workchain: -1,
+				bitsLen:   256,
+				data:      []byte{},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var a Address
+
+			err := a.UnmarshalJSON([]byte(tt.address))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if !reflect.DeepEqual(a, tt.want) {
+				t.Errorf("UnmarshalJSON() got = %v, want %v", a, tt.want)
+			}
+		})
+	}
+}

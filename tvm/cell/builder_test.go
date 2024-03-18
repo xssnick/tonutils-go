@@ -94,13 +94,8 @@ func TestCell(t *testing.T) {
 		return
 	}
 
-	amt, err := ref.LoadCoins()
-	if err != nil {
-		t.Fatal(err)
-		return
-	}
-
-	if amt != amount {
+	amt := ref.MustLoadBigCoins()
+	if amt.Uint64() != amount {
 		t.Fatal("coins ref not eq")
 		return
 	}

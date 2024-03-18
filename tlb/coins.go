@@ -9,6 +9,8 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+var errInvalid = errors.New("invalid string")
+
 type Coins struct {
 	decimals int
 	val      *big.Int
@@ -64,7 +66,7 @@ func (g Coins) Nano() *big.Int {
 	if g.val == nil {
 		return big.NewInt(0)
 	}
-	return g.val
+	return new(big.Int).Set(g.val)
 }
 
 func MustFromDecimal(val string, decimals int) Coins {
@@ -116,15 +118,26 @@ func FromNanoTONU(val uint64) Coins {
 	}
 }
 
+func FromNanoTONStr(val string) (Coins, error) {
+	v, ok := new(big.Int).SetString(val, 10)
+	if !ok {
+		return Coins{}, errInvalid
+	}
+
+	return Coins{
+		decimals: 9,
+		val:      v,
+	}, nil
+}
+
 func FromTON(val string) (Coins, error) {
 	return FromDecimal(val, 9)
 }
 
 func FromDecimal(val string, decimals int) (Coins, error) {
 	if decimals < 0 || decimals >= 128 {
-		return Coins{}, fmt.Errorf("invalid decmals")
+		return Coins{}, fmt.Errorf("invalid decimals")
 	}
-	errInvalid := errors.New("invalid string")
 
 	s := strings.SplitN(val, ".", 2)
 
@@ -191,4 +204,21 @@ func (g Coins) ToCell() (*cell.Cell, error) {
 
 func (g Coins) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf("%q", g.Nano().String())), nil
+}
+
+func (g *Coins) UnmarshalJSON(data []byte) error {
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return fmt.Errorf("invalid data")
+	}
+
+	data = data[1 : len(data)-1]
+
+	coins, err := FromNanoTONStr(string(data))
+	if err != nil {
+		return err
+	}
+
+	*g = coins
+
+	return nil
 }
