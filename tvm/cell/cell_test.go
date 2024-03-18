@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"github.com/xssnick/tonutils-go/address"
+	"log"
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -256,5 +258,22 @@ func TestSameBocIndex(t *testing.T) {
 
 	if !bytes.Equal(c.Hash(), c2.Hash()) {
 		t.Fatal("wrong hash")
+	}
+}
+
+func TestCellRecursive(t *testing.T) {
+	stateInit := "te6ccsECFgEAAwQAAAAABQAwAD0AQgDEAMsBAwE9AXYBewGAAa8BtAG/AcQByQHYAecCCAJ/AsYCATQCAQBRAAAAACmpoxf4lk0qBZddWkKNjjqmudjY6QDlccYne0gS9zCGDH3x2kABFP8A9KQT9LzyyAsDAgEgCQQE+PKDCNcYINMf0x/THwL4I7vyZO1E0NMf0x/T//QE0VFDuvKhUVG68qIF+QFUEGT5EPKj+AAkpMjLH1JAyx9SMMv/UhD0AMntVPgPAdMHIcAAn2xRkyDXSpbTB9QC+wDoMOAhwAHjACHAAuMAAcADkTDjDQOkyMsfEssfy/8IBwYFAAr0AMntVABsgQEI1xj6ANM/MFIkgQEI9Fnyp4IQZHN0cnB0gBjIywXLAlAFzxZQA/oCE8tqyx8Syz/Jc/sAAHCBAQjXGPoA0z/IVCBHgQEI9FHyp4IQbm90ZXB0gBjIywXLAlAGzxZQBPoCFMtqEssfyz/Jc/sAAgBu0gf6ANTUIvkABcjKBxXL/8nQd3SAGMjLBcsCIs8WUAX6AhTLaxLMzMlz+wDIQBSBAQj0UfKnAgIBSBMKAgEgDAsAWb0kK29qJoQICga5D6AhhHDUCAhHpJN9KZEM5pA+n/mDeBKAG3gQFImHFZ8xhAIBIA4NABG4yX7UTQ1wsfgCAVgSDwIBIBEQABmvHfaiaEAQa5DrhY/AABmtznaiaEAga5Drhf/AAD2ynftRNCBAUDXIfQEMALIygfL/8nQAYEBCPQKb6ExgAubQAdDTAyFxsJJfBOAi10nBIJJfBOAC0x8hghBwbHVnvSKCEGRzdHK9sJJfBeAD+kAwIPpEAcjKB8v/ydDtRNCBAUDXIfQEMFyBAQj0Cm+hMbOSXwfgBdM/yCWCEHBsdWe6kjgw4w0DghBkc3RyupJfBuMNFRQAilAEgQEI9Fkw7UTQgQFA1yDIAc8W9ADJ7VQBcrCOI4IQZHN0coMesXCAGFAFywVQA88WI/oCE8tqyx/LP8mAQPsAkl8D4gB4AfoA9AQw+CdvIjBQCqEhvvLgUIIQcGx1Z4MesXCAGFAEywUmzxZY+gIZ9ADLaRfLH1Jgyz8gyYBA+wAGdYbenA=="
+	stateInitBytes, err := base64.StdEncoding.DecodeString(stateInit)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = FromBOC(stateInitBytes)
+	if err == nil {
+		log.Fatal("must be err")
+	}
+
+	if !strings.HasSuffix(err.Error(), "recursive reference of cells") {
+		log.Fatal("incorrect err:", err.Error())
 	}
 }

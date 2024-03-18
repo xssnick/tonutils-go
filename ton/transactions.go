@@ -73,7 +73,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 
 		res := make([]*tlb.Transaction, len(txList))
 
-		for i := len(txList) - 1; i >= 0; i-- {
+		for i := 0; i < len(txList); i++ {
 			loader := txList[i].BeginParse()
 
 			var tx tlb.Transaction
@@ -87,7 +87,7 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 				return nil, fmt.Errorf("incorrect transaction hash, not matches prev tx hash")
 			}
 			txHash = tx.PrevTxHash
-			res[i] = &tx
+			res[(len(txList)-1)-i] = &tx
 		}
 		return res, nil
 	case LSError:
@@ -116,6 +116,10 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 
 	switch t := resp.(type) {
 	case TransactionInfo:
+		if len(t.Transaction) == 0 {
+			return nil, ErrNoTransactionsWereFound
+		}
+
 		if !t.ID.Equals(block) {
 			return nil, fmt.Errorf("incorrect block in response")
 		}
@@ -217,7 +221,6 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			case <-time.After(waitList):
 			}
 
-			// ctx = workerCtx
 			ctx, cancel = context.WithTimeout(workerCtx, 10*time.Second)
 			res, err := c.ListTransactions(ctx, addr, 10, lastLT, lastHash)
 			cancel()
@@ -250,6 +253,7 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			transactions = append(transactions, res...)
 			waitList = 0 * time.Second
 		}
+
 		if len(transactions) > 0 {
 			lastProcessedLT = transactions[0].LT // mark last transaction as known to not trigger twice
 

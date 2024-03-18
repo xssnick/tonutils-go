@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tlb"
 	"math/big"
 	"time"
 
@@ -29,7 +30,7 @@ func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, messages []*Message) 
 	dict := cell.NewDict(16)
 
 	for i, message := range messages {
-		msg, err := message.InternalMessage.ToCell()
+		msg, err := tlb.ToCell(message.InternalMessage)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
 		}

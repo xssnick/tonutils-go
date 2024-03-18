@@ -66,7 +66,7 @@ func CheckBlockShardStateProof(proof []*cell.Cell, blockRootHash []byte) (*tlb.S
 		return nil, fmt.Errorf("should have 2 roots")
 	}
 
-	block, err := CheckBlockProof(proof[1], blockRootHash)
+	block, err := CheckBlockProof(proof[0], blockRootHash)
 	if err != nil {
 		return nil, fmt.Errorf("incorrect block proof: %w", err)
 	}
@@ -76,7 +76,7 @@ func CheckBlockShardStateProof(proof []*cell.Cell, blockRootHash []byte) (*tlb.S
 		return nil, fmt.Errorf("failed to load state update ref: %w", err)
 	}
 
-	shardStateProofData, err := cell.UnwrapProof(proof[0], upd.Hash(0))
+	shardStateProofData, err := cell.UnwrapProof(proof[1], upd.Hash(0))
 	if err != nil {
 		return nil, fmt.Errorf("incorrect shard state proof: %w", err)
 	}
@@ -126,7 +126,7 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 			return nil, nil, fmt.Errorf("incorrect block proof: %w", err)
 		}
 	} else {
-		shardStateProofData, err := stateProof[0].BeginParse().LoadRef()
+		shardStateProofData, err := stateProof[1].BeginParse().LoadRef()
 		if err != nil {
 			return nil, nil, fmt.Errorf("shard state proof should have ref: %w", err)
 		}
@@ -224,7 +224,7 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 		return fmt.Errorf("target block type not matches requested")
 	}
 
-	stateExtra, err := CheckShardMcStateExtraProof(from, []*cell.Cell{stateProof, proof})
+	stateExtra, err := CheckShardMcStateExtraProof(from, []*cell.Cell{proof, stateProof})
 	if err != nil {
 		return fmt.Errorf("failed to check proof for mc state extra: %w", err)
 	}
@@ -370,15 +370,20 @@ func getMainValidators(block *BlockIDExt, catConfig tlb.CatchainConfig, validato
 		key  uint16
 	}
 
+	kvs, err := validatorsListDict.LoadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load validators list dict: %w", err)
+	}
+
 	var totalWeight uint64
-	var validatorsKeys = make([]validatorWithKey, validatorsListDict.Size())
-	for i, kv := range validatorsListDict.All() {
+	var validatorsKeys = make([]validatorWithKey, len(kvs))
+	for i, kv := range kvs {
 		var val tlb.ValidatorAddr
-		if err := tlb.LoadFromCell(&val, kv.Value.BeginParse()); err != nil {
+		if err := tlb.LoadFromCell(&val, kv.Value); err != nil {
 			return nil, fmt.Errorf("failed to parse validator addr: %w", err)
 		}
 
-		key, err := kv.Key.BeginParse().LoadUInt(16)
+		key, err := kv.Key.LoadUInt(16)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse validator key: %w", err)
 		}

@@ -6,23 +6,28 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
 	"io"
 	mRand "math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 const _StickyCtxKey = "_ton_node_sticky"
 const _StickyCtxUsedNodesKey = "_ton_used_nodes_sticky"
 
+var (
+	ErrNoActiveConnections = errors.New("no active connections")
+	ErrADNLReqTimeout      = errors.New("adnl request timeout")
+)
+
 type OnDisconnectCallback func(addr, key string)
 
 type ADNLResponse struct {
 	Data tl.Serializable
-	Err  error
 }
 
 type ADNLRequest struct {
@@ -45,8 +50,6 @@ type ConnectionPool struct {
 	globalCtx context.Context
 	stop      func()
 }
-
-var ErrNoActiveConnections = errors.New("no active connections")
 
 // NewConnectionPool - ordinary pool to query liteserver
 func NewConnectionPool() *ConnectionPool {
@@ -151,6 +154,14 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 		return err
 	}
 
+	_, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		// fallback timeout to not stuck forever with background context
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	}
+
 	// buffered channel to not block listener
 	ch := make(chan *ADNLResponse, 1)
 	req := &ADNLRequest{
@@ -171,52 +182,52 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 		c.reqMx.Unlock()
 	}()
 
-	var host string
+	tm := time.Now()
+
+	var node *connection
 	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
-		host, err = c.querySticky(nodeID, req)
+		node, err = c.querySticky(nodeID, req)
 		if err != nil {
 			return err
 		}
 	} else {
-		host, err = c.queryWithBalancer(req)
+		node, err = c.queryWithSmartBalancer(req)
 		if err != nil {
 			return err
 		}
-	}
-
-	_, hasDeadline := ctx.Deadline()
-	if !hasDeadline {
-		// fallback timeout to not stuck forever with background context
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
 	}
 
 	// wait for response
 	select {
 	case resp := <-ch:
-		if resp.Err != nil {
-			return resp.Err
-		}
+		atomic.AddInt64(&node.weight, 1)
+		atomic.StoreInt64(&node.lastRespTime, int64(time.Since(tm)))
 
 		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp.Data))
 		return nil
 	case <-ctx.Done():
-		if !hasDeadline {
-			return fmt.Errorf("adnl request timeout, node %s", host)
+		if time.Since(tm) < 200*time.Millisecond {
+			// consider it as too short timeout to punish node
+			atomic.AddInt64(&node.weight, 1)
 		}
-		return fmt.Errorf("deadline exceeded, node %s, err: %w", host, ctx.Err())
+
+		if !hasDeadline {
+			return fmt.Errorf("%w, node %s", ErrADNLReqTimeout, node.addr)
+		}
+
+		return fmt.Errorf("deadline exceeded, node %s, err: %w", node.addr, ctx.Err())
 	}
 }
 
-func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (string, error) {
+func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (*connection, error) {
 	c.nodesMx.RLock()
 	for _, node := range c.activeNodes {
 		if node.id == id {
-			host, err := node.queryAdnl(req.QueryID, req.Data)
+			atomic.AddInt64(&node.weight, -1)
+			_, err := node.queryAdnl(req.QueryID, req.Data)
 			if err == nil {
 				c.nodesMx.RUnlock()
-				return host, nil
+				return node, nil
 			}
 			break
 		}
@@ -224,45 +235,37 @@ func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (string, error
 	c.nodesMx.RUnlock()
 
 	// fallback if bounded node is not available
-	return c.queryWithBalancer(req)
+	return c.queryWithSmartBalancer(req)
 }
 
-func (c *ConnectionPool) queryWithBalancer(req *ADNLRequest) (string, error) {
-	nodeOffset := atomic.AddUint64(&c.roundRobinOffset, 1)
+func (c *ConnectionPool) queryWithSmartBalancer(req *ADNLRequest) (*connection, error) {
+	var reqNode *connection
 
-	var firstNode *connection
-	for {
-		c.nodesMx.RLock()
-		if len(c.activeNodes) == 0 {
-			c.nodesMx.RUnlock()
-			return "", ErrNoActiveConnections
-		}
-		reqNode := c.activeNodes[nodeOffset%uint64(len(c.activeNodes))]
-		c.nodesMx.RUnlock()
-
-		if firstNode == nil {
-			firstNode = reqNode
-		} else if reqNode == firstNode {
-			// all nodes were tried, nothing works
-			return "", ErrNoActiveConnections
-		}
-
+	c.nodesMx.RLock()
+	for _, node := range c.activeNodes {
 		if reqNode == nil {
-			// no active nodes in list
-			return "", ErrNoActiveConnections
-		}
-
-		host, err := reqNode.queryAdnl(req.QueryID, req.Data)
-		if err != nil {
-			if !errors.Is(err, NetworkErr{}) {
-				return "", err
-			}
-			nodeOffset++
+			reqNode = node
 			continue
 		}
 
-		return host, nil
+		nw, old := atomic.LoadInt64(&node.weight), atomic.LoadInt64(&reqNode.weight)
+		if nw > old || (nw == old && atomic.LoadInt64(&node.lastRespTime) < atomic.LoadInt64(&reqNode.lastRespTime)) {
+			reqNode = node
+		}
 	}
+	c.nodesMx.RUnlock()
+
+	if reqNode == nil {
+		return nil, ErrNoActiveConnections
+	}
+
+	atomic.AddInt64(&reqNode.weight, -1)
+
+	_, err := reqNode.queryAdnl(req.QueryID, req.Data)
+	if err != nil {
+		return nil, err
+	}
+	return reqNode, nil
 }
 
 func (c *ConnectionPool) SetOnDisconnect(cb OnDisconnectCallback) {

@@ -3,6 +3,7 @@ package raptorq
 import (
 	"errors"
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq/discmath"
 )
 
@@ -103,6 +104,7 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 			if row >= uSize {
 				break
 			}
+
 			e.RowAdd(row, e.GetRow(i))
 			d.RowAdd(row, d.GetRow(i))
 		}

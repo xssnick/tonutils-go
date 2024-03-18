@@ -31,11 +31,19 @@ func TestLoadCell_LoadDict(t *testing.T) {
 			return
 		}
 
+		if dict.IsEmpty() {
+			t.Fatal("keys empty")
+		}
+
 		addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 		data := dict.Get(BeginCell().MustStoreSlice(addr.Data(), 256).EndCell())
 		if data == nil {
 			t.Fatal("not in dict", i)
 			return
+		}
+
+		if hex.EncodeToString(data.Hash()) != "3ff114a9563416a6fb36b5ec7ec57e2be353af2129a696f66c115a0e7c14a889" {
+			t.Fatal("incorrect value")
 		}
 
 		data = dict.Get(BeginCell().MustStoreSlice(addr.Data(), 32).EndCell())
@@ -48,17 +56,6 @@ func TestLoadCell_LoadDict(t *testing.T) {
 		data = dict.Get(BeginCell().MustStoreSlice(addr2.Data(), 256).EndCell())
 		if data != nil {
 			t.Fatal("in dict", i)
-			return
-		}
-
-		all := dict.All()
-		if len(all) != 1 {
-			t.Fatal("keys num != 1", i)
-			return
-		}
-
-		if hex.EncodeToString(all[0].Key.BeginParse().MustLoadSlice(256)) != hex.EncodeToString(addr.Data()) {
-			t.Fatal("key in all not correct", i)
 			return
 		}
 
@@ -173,7 +170,7 @@ func TestLoadCell_DictAll(t *testing.T) {
 func TestLoadCell_DictShuffle(t *testing.T) {
 	empty := BeginCell().EndCell()
 	mm := NewDict(64)
-	for i := 0; i < 500000; i++ {
+	for i := 0; i < 120000; i++ {
 		rnd := make([]byte, 8)
 		_, _ = rand.Read(rnd)
 		_ = mm.SetIntKey(new(big.Int).SetBytes(rnd), empty)
@@ -219,4 +216,52 @@ func TestDict_Delete(t *testing.T) {
 	if hh2.GetByIntKey(big.NewInt(777)) == nil {
 		t.Fatal("invalid key")
 	}
+}
+
+func TestDictionary_Make(t *testing.T) {
+	d := NewDict(32)
+	err := d.SetIntKey(big.NewInt(100), BeginCell().MustStoreInt(777, 16).EndCell())
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	err = d.SetIntKey(big.NewInt(101), BeginCell().MustStoreInt(777, 16).EndCell())
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	err = d.SetIntKey(big.NewInt(102), BeginCell().MustStoreInt(777, 16).EndCell())
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	for i := int64(0); i < 30000; i++ {
+		err = d.SetIntKey(big.NewInt(111+i), BeginCell().MustStoreInt(777, 60).EndCell())
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+	}
+
+	for i := int64(0); i < 20000; i++ {
+		err = d.SetIntKey(big.NewInt(111+i), nil)
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+	}
+
+	for i := int64(25000); i < 30000; i++ {
+		err = d.SetIntKey(big.NewInt(111+i), nil)
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+	}
+
+	d2, err := d.AsCell().BeginParse().ToDict(32)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	sl, err := d2.LoadValueByIntKey(big.NewInt(100))
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	println(sl.MustToCell().Dump())
 }

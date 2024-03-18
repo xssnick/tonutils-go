@@ -514,6 +514,15 @@ func (c *Slice) Copy() *Slice {
 	}
 }
 
+func (c *Slice) ToBuilder() *Builder {
+	left := c.bitsSz - c.loadedSz
+	return &Builder{
+		bitsSz: left,
+		data:   c.Copy().MustLoadSlice(left),
+		refs:   c.refs,
+	}
+}
+
 func (c *Slice) ToCell() (*Cell, error) {
 	cp := c.Copy()
 
@@ -523,11 +532,13 @@ func (c *Slice) ToCell() (*Cell, error) {
 		return nil, err
 	}
 
-	return &Cell{
+	cl := &Cell{
 		special:   c.special,
 		levelMask: c.levelMask,
 		bitsSz:    left,
 		data:      data,
 		refs:      c.refs,
-	}, nil
+	}
+	cl.calculateHashes()
+	return cl, nil
 }

@@ -16,6 +16,12 @@ const (
 	MsgTypeExternalOut MsgType = "EXTERNAL_OUT"
 )
 
+func init() {
+	Register(ExternalMessage{})
+	Register(ExternalMessageOut{})
+	Register(InternalMessage{})
+}
+
 type AnyMessage interface {
 	Payload() *cell.Cell
 	SenderAddr() *address.Address
@@ -24,7 +30,7 @@ type AnyMessage interface {
 
 type Message struct {
 	MsgType MsgType    `tlb:"-"`
-	Msg     AnyMessage `tlb:"."`
+	Msg     AnyMessage `tlb:"[ExternalMessage,ExternalMessageOut,InternalMessage]"`
 }
 
 type MessagesList struct {
@@ -45,7 +51,7 @@ type InternalMessage struct {
 	CreatedLT       uint64           `tlb:"## 64"`
 	CreatedAt       uint32           `tlb:"## 32"`
 
-	StateInit *StateInit `tlb:"maybe either . ^"`
+	StateInit *StateInit `tlb:"maybe either leave 1,1 . ^"`
 	Body      *cell.Cell `tlb:"either . ^"`
 }
 
@@ -55,7 +61,7 @@ type ExternalMessage struct {
 	DstAddr   *address.Address `tlb:"addr"`
 	ImportFee Coins            `tlb:"."`
 
-	StateInit *StateInit `tlb:"maybe either . ^"`
+	StateInit *StateInit `tlb:"maybe either leave 1,1 . ^"`
 	Body      *cell.Cell `tlb:"either . ^"`
 }
 
@@ -66,7 +72,7 @@ type ExternalMessageOut struct {
 	CreatedLT uint64           `tlb:"## 64"`
 	CreatedAt uint32           `tlb:"## 32"`
 
-	StateInit *StateInit `tlb:"maybe either . ^"`
+	StateInit *StateInit `tlb:"maybe either leave 1,1 . ^"`
 	Body      *cell.Cell `tlb:"either . ^"`
 }
 
@@ -181,90 +187,9 @@ func (m *Message) AsExternalOut() *ExternalMessageOut {
 	return m.Msg.(*ExternalMessageOut)
 }
 
-func (m *InternalMessage) ToCell() (*cell.Cell, error) {
-	b := cell.BeginCell()
-	b.MustStoreUInt(0, 1) // identification of int msg
-	b.MustStoreBoolBit(m.IHRDisabled)
-	b.MustStoreBoolBit(m.Bounce)
-	b.MustStoreBoolBit(m.Bounced)
-	b.MustStoreAddr(m.SrcAddr)
-	b.MustStoreAddr(m.DstAddr)
-	b.MustStoreBigCoins(m.Amount.Nano())
-
-	b.MustStoreDict(m.ExtraCurrencies)
-
-	b.MustStoreBigCoins(m.IHRFee.Nano())
-	b.MustStoreBigCoins(m.FwdFee.Nano())
-
-	b.MustStoreUInt(m.CreatedLT, 64)
-	b.MustStoreUInt(uint64(m.CreatedAt), 32)
-	b.MustStoreBoolBit(m.StateInit != nil)
-	if m.StateInit != nil {
-		stateCell, err := ToCell(m.StateInit)
-		if err != nil {
-			return nil, err
-		}
-
-		if int(b.BitsLeft())-2 < int(stateCell.BitsSize()) || int(b.RefsLeft())-1 < int(m.Body.RefsNum()) {
-			b.MustStoreBoolBit(true)
-			b.MustStoreRef(stateCell)
-		} else {
-			b.MustStoreBoolBit(false)
-			b.MustStoreBuilder(stateCell.ToBuilder())
-		}
-	}
-
-	if m.Body != nil {
-		if int(b.BitsLeft())-1 < int(m.Body.BitsSize()) || b.RefsLeft() < m.Body.RefsNum() {
-			b.MustStoreBoolBit(true)
-			b.MustStoreRef(m.Body)
-		} else {
-			b.MustStoreBoolBit(false)
-			b.MustStoreBuilder(m.Body.ToBuilder())
-		}
-	} else {
-		b.MustStoreBoolBit(false)
-	}
-
-	return b.EndCell(), nil
-}
-
 func (m *InternalMessage) Dump() string {
 	return fmt.Sprintf("Amount %s TON, Created at: %d, Created lt %d\nBounce: %t, Bounced %t, IHRDisabled %t\nSrcAddr: %s\nDstAddr: %s\nPayload: %s",
 		m.Amount.String(), m.CreatedAt, m.CreatedLT, m.Bounce, m.Bounced, m.IHRDisabled, m.SrcAddr, m.DstAddr, m.Body.Dump())
-}
-
-func (m *ExternalMessage) ToCell() (*cell.Cell, error) {
-	builder := cell.BeginCell().MustStoreUInt(0b10, 2).
-		MustStoreAddr(m.SrcAddr).
-		MustStoreAddr(m.DstAddr).
-		MustStoreBigCoins(m.ImportFee.Nano())
-
-	builder.MustStoreBoolBit(m.StateInit != nil) // has state init
-	if m.StateInit != nil {
-		stateCell, err := ToCell(m.StateInit)
-		if err != nil {
-			return nil, fmt.Errorf("failed to serialize state init: %w", err)
-		}
-
-		if int(builder.BitsLeft())-2 < int(stateCell.BitsSize()) || int(builder.RefsLeft())-1 < int(m.Body.RefsNum()) {
-			builder.MustStoreBoolBit(true) // state as ref
-			builder.MustStoreRef(stateCell)
-		} else {
-			builder.MustStoreBoolBit(false) // state as slice
-			builder.MustStoreBuilder(stateCell.ToBuilder())
-		}
-	}
-
-	if int(builder.BitsLeft())-1 < int(m.Body.BitsSize()) || builder.RefsLeft() < m.Body.RefsNum() {
-		builder.MustStoreBoolBit(true) // body as ref
-		builder.MustStoreRef(m.Body)
-	} else {
-		builder.MustStoreBoolBit(false) // body as slice
-		builder.MustStoreBuilder(m.Body.ToBuilder())
-	}
-
-	return builder.EndCell(), nil
 }
 
 func (m *MessagesList) ToSlice() ([]Message, error) {
@@ -272,11 +197,15 @@ func (m *MessagesList) ToSlice() ([]Message, error) {
 		return nil, nil
 	}
 
+	kvs, err := m.List.LoadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load messages dict: %w", err)
+	}
+
 	var list []Message
-	for i, kv := range m.List.All() {
+	for i, kv := range kvs {
 		var msg Message
-		s := kv.Value.BeginParse()
-		ms, err := s.LoadRef()
+		ms, err := kv.Value.LoadRef()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load ref of message %d: %w", i, err)
 		}

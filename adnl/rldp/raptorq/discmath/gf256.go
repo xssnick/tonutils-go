@@ -10,21 +10,15 @@ type GF256 struct {
 }
 
 func (g *GF256) Add(g2 *GF256) {
-	for i := 0; i < len(g.data); i++ {
-		g.data[i] ^= g2.data[i]
-	}
+	OctVecAdd(g.data, g2.data)
 }
 
 func (g *GF256) Mul(x uint8) {
-	for i := 0; i < len(g.data); i++ {
-		g.data[i] = octMul(g.data[i], x)
-	}
+	OctVecMul(g.data, x)
 }
 
 func (g *GF256) AddMul(g2 *GF256, x uint8) {
-	for i := 0; i < len(g.data); i++ {
-		g.data[i] = octAdd(g.data[i], octMul(x, g2.data[i]))
-	}
+	OctVecMulAdd(g.data, g2.data, x)
 }
 
 func (g *GF256) Bytes() []byte {

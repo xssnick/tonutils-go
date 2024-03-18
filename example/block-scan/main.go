@@ -59,7 +59,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicySecure).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 	api.SetTrustedBlockFromConfig(cfg)
 
 	log.Println("checking proofs since config init block, it may take near a minute...")
@@ -160,7 +160,7 @@ func main() {
 			log.Printf("no transactions in %d block\n", master.SeqNo)
 		}
 
-		master, err = api.WaitForBlock(master.SeqNo + 1).GetMasterchainInfo(ctx)
+		master, err = api.WaitForBlock(master.SeqNo+1).LookupBlock(ctx, master.Workchain, master.Shard, master.SeqNo+1)
 		if err != nil {
 			log.Fatalln("get masterchain info err: ", err.Error())
 			return
