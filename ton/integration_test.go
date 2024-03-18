@@ -721,11 +721,7 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 
 	println(acc.Code.Dump())
 
-	bSnake, err := acc.Code.BeginParse().LoadBinarySnake()
-	if err != nil {
-		t.Fatal("parse acc code err:", err.Error())
-		return
-	}
+	bSnake := acc.Code.BeginParse().MustLoadBinarySnake()
 
 	resp, err := apiTestNet.GetLibraries(ctx, bSnake[1:], make([]byte, 32), bSnake[1:])
 	if err != nil {
@@ -754,6 +750,6 @@ func TestAPIClient_WithRetry(t *testing.T) {
 
 	_, err := apiTimeout.CurrentMasterchainInfo(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("expected deadline exceeded error")
+		t.Fatal("expected deadline exceeded error but", err)
 	}
 }
