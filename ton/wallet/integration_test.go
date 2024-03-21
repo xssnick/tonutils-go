@@ -170,7 +170,7 @@ func TestWallet_DeployContract(t *testing.T) {
 	}
 	t.Logf("contract address: %s", addr.String())
 
-	res, err := api.WaitForBlock(block.SeqNo+1).RunGetMethod(ctx, block, addr, "dappka", 5, 10)
+	res, err := api.WaitForBlock(block.SeqNo+5).RunGetMethod(ctx, block, addr, "dappka", 5, 10)
 	if err != nil {
 		t.Fatal("run err:", err)
 	}
