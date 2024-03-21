@@ -319,7 +319,7 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 		} else if value.Type() == cellArrType {
 			cells := value.Interface().([]*cell.Cell)
 			if num > 0 && num != len(cells) {
-				return nil, fmt.Errorf("incorrect cells len in field %s", value.Type().String())
+				return nil, fmt.Errorf("incorrect cells len %d in field %s", len(cells), value.Type().String())
 			}
 			return ToBytes(cell.ToBOCWithFlags(cells, false)), nil
 		}
@@ -528,7 +528,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 			return data, nil
 		} else if value.Type() == cellArrType {
 			if num > 0 && num != len(cells) {
-				return nil, fmt.Errorf("incorrect cells len in field %s", value.Type().String())
+				return nil, fmt.Errorf("incorrect cells len %d in field %s", len(cells), value.Type().String())
 			}
 			value.Set(reflect.ValueOf(cells))
 			return data, nil

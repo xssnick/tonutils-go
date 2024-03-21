@@ -42,6 +42,9 @@ func getNotSeenShards(ctx context.Context, api ton.APIClientWrapped, shard *ton.
 	return ret, nil
 }
 
+// FYI: You can find more advanced, optimized and parallelized block scanner in payment network implementation:
+// https://github.com/xssnick/ton-payment-network/blob/master/tonpayments/chain/block-scan.go
+
 func main() {
 	client := liteclient.NewConnectionPool()
 
