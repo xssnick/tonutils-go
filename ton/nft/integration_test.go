@@ -108,6 +108,12 @@ func Test_NftMintTransfer(t *testing.T) {
 		t.Fatal("Send err:", err.Error())
 	}
 
+	// wait next block to be sure everything updated
+	block, err = api.WaitForBlock(block.SeqNo + 3).GetMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("Wait master err:", err.Error())
+	}
+
 	newData, err := nft.GetNFTDataAtBlock(ctx, block)
 	if err != nil {
 		t.Fatal("GetNFTData err:", err.Error())

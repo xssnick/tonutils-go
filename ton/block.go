@@ -174,7 +174,7 @@ type ZeroStateIDExt struct {
 
 type AllShardsInfo struct {
 	ID    *BlockIDExt  `tl:"struct"`
-	Proof []*cell.Cell `tl:"cell 2"`
+	Proof []*cell.Cell `tl:"cell"`
 	Data  *cell.Cell   `tl:"cell"`
 }
 
@@ -524,28 +524,46 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 		}
 
 		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
-			shardState, err := CheckBlockShardStateProof(t.Proof, master.RootHash)
-			if err != nil {
-				return nil, fmt.Errorf("failed to check proof: %w", err)
+			if len(t.Proof) == 0 {
+				return nil, fmt.Errorf("empty proof")
 			}
 
-			mcShort := shardState.McStateExtra.BeginParse()
-			if v, err := mcShort.LoadUInt(16); err != nil || v != 0xcc26 {
-				return nil, fmt.Errorf("invalic mc extra in proof")
-			}
+			switch len(t.Proof) {
+			case 1:
+				blockProof, err := CheckBlockProof(t.Proof[0], master.RootHash)
+				if err != nil {
+					return nil, fmt.Errorf("failed to check proof: %w", err)
+				}
 
-			dictProof, err := mcShort.LoadMaybeRef()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load dict proof: %w", err)
-			}
+				if blockProof.Extra == nil || blockProof.Extra.Custom == nil || !bytes.Equal(blockProof.Extra.Custom.ShardHashes.AsCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
+					return nil, fmt.Errorf("incorrect proof")
+				}
+			case 2: // old LS compatibility
+				shardState, err := CheckBlockShardStateProof(t.Proof, master.RootHash)
+				if err != nil {
+					return nil, fmt.Errorf("failed to check proof: %w", err)
+				}
 
-			if dictProof == nil && inf.ShardHashes.IsEmpty() {
-				return []*BlockIDExt{}, nil
-			}
+				mcShort := shardState.McStateExtra.BeginParse()
+				if v, err := mcShort.LoadUInt(16); err != nil || v != 0xcc26 {
+					return nil, fmt.Errorf("invalic mc extra in proof")
+				}
 
-			if (dictProof == nil) != inf.ShardHashes.IsEmpty() ||
-				!bytes.Equal(dictProof.MustToCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
-				return nil, fmt.Errorf("incorrect proof")
+				dictProof, err := mcShort.LoadMaybeRef()
+				if err != nil {
+					return nil, fmt.Errorf("failed to load dict proof: %w", err)
+				}
+
+				if dictProof == nil && inf.ShardHashes.IsEmpty() {
+					return []*BlockIDExt{}, nil
+				}
+
+				if (dictProof == nil) != inf.ShardHashes.IsEmpty() ||
+					!bytes.Equal(dictProof.MustToCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
+					return nil, fmt.Errorf("incorrect proof")
+				}
+			default:
+				return nil, fmt.Errorf("incorrect proof roots num")
 			}
 		}
 

@@ -131,6 +131,12 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 		panic(err)
 	}
 
+	// wait next block to be sure everything updated
+	block, err = api.WaitForBlock(block.SeqNo + 3).GetMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("Wait master err:", err.Error())
+	}
+
 	b2, err := tokenWallet.GetBalanceAtBlock(ctx, block)
 	if err != nil {
 		t.Fatal(err)
