@@ -73,7 +73,7 @@ func TestClient_DeployAsyncChannel(t *testing.T) {
 		t.Fatal(fmt.Errorf("failed to deploy channel: %w", err))
 	}
 
-	block, err = client.api.WaitForBlock(block.SeqNo + 3).GetMasterchainInfo(context.Background())
+	block, err = client.api.WaitForBlock(block.SeqNo + 7).GetMasterchainInfo(context.Background())
 	if err != nil {
 		t.Fatal(fmt.Errorf("failed to wait block: %w", err))
 	}

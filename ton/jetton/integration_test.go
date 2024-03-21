@@ -132,7 +132,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 	}
 
 	// wait next block to be sure everything updated
-	block, err = api.WaitForBlock(block.SeqNo + 3).GetMasterchainInfo(ctx)
+	block, err = api.WaitForBlock(block.SeqNo + 7).GetMasterchainInfo(ctx)
 	if err != nil {
 		t.Fatal("Wait master err:", err.Error())
 	}
