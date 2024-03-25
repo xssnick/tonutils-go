@@ -139,7 +139,7 @@ func (d *Dictionary) Set(key, value *Cell) error {
 		if matches {
 			if pfx.BitsLeft() == 0 {
 				// label is same with our new key, we just need to change value
-				return d.storeLeaf(kPart.ToSlice(), val, keyOffset-bitsMatches)
+				return d.storeLeaf(kPart.ToSlice(), val, keyOffset)
 			}
 
 			// full label is matches part of our key, we need to go deeper
