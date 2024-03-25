@@ -59,7 +59,7 @@ func main() {
 
 	// address of receiver's wallet (not token wallet, just usual)
 	to := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
-	transferPayload, err := tokenWallet.BuildTransferPayload(to, amountTokens, tlb.ZeroCoins, comment)
+	transferPayload, err := tokenWallet.BuildTransferPayloadV2(to, to, amountTokens, tlb.ZeroCoins, comment, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

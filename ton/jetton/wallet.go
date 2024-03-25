@@ -66,7 +66,12 @@ func (c *WalletClient) GetBalanceAtBlock(ctx context.Context, b *ton.BlockIDExt)
 	return balance, nil
 }
 
+// Deprecated: use BuildTransferPayloadV2
 func (c *WalletClient) BuildTransferPayload(to *address.Address, amountCoins, amountForwardTON tlb.Coins, payloadForward *cell.Cell) (*cell.Cell, error) {
+	return c.BuildTransferPayloadV2(to, to, amountCoins, amountForwardTON, payloadForward, nil)
+}
+
+func (c *WalletClient) BuildTransferPayloadV2(to, responseTo *address.Address, amountCoins, amountForwardTON tlb.Coins, payloadForward, customPayload *cell.Cell) (*cell.Cell, error) {
 	if payloadForward == nil {
 		payloadForward = cell.BeginCell().EndCell()
 	}
@@ -81,8 +86,8 @@ func (c *WalletClient) BuildTransferPayload(to *address.Address, amountCoins, am
 		QueryID:             rnd,
 		Amount:              amountCoins,
 		Destination:         to,
-		ResponseDestination: to,
-		CustomPayload:       nil,
+		ResponseDestination: responseTo,
+		CustomPayload:       customPayload,
 		ForwardTONAmount:    amountForwardTON,
 		ForwardPayload:      payloadForward,
 	})

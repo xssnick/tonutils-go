@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/sigurn/crc16"
 )
@@ -206,6 +208,14 @@ func MustParseAddr(addr string) *Address {
 	return a
 }
 
+func MustParseRawAddr(addr string) *Address {
+	a, err := ParseRawAddr(addr)
+	if err != nil {
+		panic(err)
+	}
+	return a
+}
+
 func (a *Address) FlagsToByte() (flags byte) {
 	// TODO check this magic...
 	flags = 0b00010001
@@ -242,6 +252,28 @@ func ParseAddr(addr string) (*Address, error) {
 
 	a := NewAddress(data[0], data[1], data[2:len(data)-2])
 	return a, nil
+}
+
+func ParseRawAddr(addr string) (*Address, error) {
+	addrParts := strings.SplitN(addr, ":", 2)
+	if len(addrParts) != 2 {
+		return nil, fmt.Errorf("invalid address format")
+	}
+
+	data, err := hex.DecodeString(addrParts[1])
+	if err != nil {
+		return nil, err
+	}
+
+	if len(data) != 32 {
+		return nil, errors.New("incorrect address data length")
+	}
+
+	wc, err := strconv.ParseInt(addrParts[0], 10, 8)
+	if err != nil {
+		return nil, err
+	}
+	return NewAddress(0, byte(wc), data), nil
 }
 
 func (a *Address) Checksum() uint16 {

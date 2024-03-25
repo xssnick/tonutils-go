@@ -173,9 +173,9 @@ func TestLoadCell_DictShuffle(t *testing.T) {
 	for i := 0; i < 120000; i++ {
 		rnd := make([]byte, 8)
 		_, _ = rand.Read(rnd)
-		_ = mm.SetIntKey(new(big.Int).SetBytes(rnd), empty)
+		_ = mm.SetIntKey(new(big.Int).Mod(new(big.Int).SetBytes(rnd), big.NewInt(65000)), empty)
 	}
-	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+	hh, _ := mm.AsCell().BeginParse().ToDict(64)
 
 	for _, kv := range mm.All() {
 		if hh.Get(kv.Key) == nil {
@@ -264,4 +264,33 @@ func TestDictionary_Make(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 	println(sl.MustToCell().Dump())
+}
+
+func Test_ReplaceDict(t *testing.T) {
+	k := big.NewInt(1)
+	k2 := big.NewInt(2)
+	v := BeginCell().EndCell()
+
+	dict := NewDict(64)
+
+	if err := dict.SetIntKey(k, v); err != nil {
+		panic(err)
+	}
+	if err := dict.SetIntKey(k2, v); err != nil {
+		panic(err)
+	}
+
+	if err := dict.SetIntKey(k, v); err != nil {
+		panic(err)
+	}
+	if err := dict.SetIntKey(k2, v); err != nil {
+		panic(err)
+	}
+
+	if err := dict.SetIntKey(k, v); err != nil {
+		panic(err)
+	}
+	if err := dict.SetIntKey(k2, v); err != nil {
+		panic(err)
+	}
 }
