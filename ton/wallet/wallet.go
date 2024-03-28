@@ -13,9 +13,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
 	"strings"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
 
 	"github.com/xssnick/tonutils-go/ton"
 
@@ -118,8 +119,8 @@ type TonAPI interface {
 }
 
 type Message struct {
-	Mode            uint8
-	InternalMessage *tlb.InternalMessage
+	Mode            uint8                `tlb:"## 8"`
+	InternalMessage *tlb.InternalMessage `tlb:"."`
 }
 
 type Wallet struct {
@@ -171,6 +172,26 @@ func getSpec(w *Wallet) (any, error) {
 		return &SpecV4R2{regular, SpecSeqno{}}, nil
 	case HighloadV2R2, HighloadV2Verified:
 		return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
+	}
+
+	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
+}
+
+func getOfflineSpec(w *Wallet, accountSeqNo uint32) (any, error) {
+	seqNoFunc := func() uint32 { return accountSeqNo }
+	regular := SpecRegular{
+		wallet:      w,
+		messagesTTL: 60 * 3, // default ttl 3 min
+	}
+
+	switch w.ver {
+	case V3R1, V3R2:
+		return &SpecV3{regular, SpecSeqno{seqNoFunc}}, nil
+	case V4R1, V4R2:
+		return &SpecV4R2{regular, SpecSeqno{seqNoFunc}}, nil
+		// todo: can this be removed?
+		// case HighloadV2R2, HighloadV2Verified:
+		// 	return &SpecHighloadV2R2{SpecRegular{}, SpecQuery{}}, nil
 	}
 
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
@@ -275,6 +296,45 @@ func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Me
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
+	default:
+		return nil, fmt.Errorf("send is not yet supported: %w", ErrUnsupportedWalletVersion)
+	}
+
+	return &tlb.ExternalMessage{
+		DstAddr:   w.addr,
+		StateInit: stateInit,
+		Body:      msg,
+	}, nil
+}
+
+func (w *Wallet) BuildExternalMessageOffline(ctx context.Context, accountSeqNo uint32, initialized bool, message *Message) (*tlb.ExternalMessage, error) {
+	var stateInit *tlb.StateInit
+	var err error
+	if !initialized {
+		stateInit, err = GetStateInit(w.key.Public().(ed25519.PublicKey), w.ver, w.subwallet)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get state init: %w", err)
+		}
+	}
+
+	var msg *cell.Cell
+	spec, err := getOfflineSpec(w, accountSeqNo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get spec: %w", err)
+	}
+
+	switch w.ver {
+	case V3R2, V3R1, V4R2, V4R1:
+		msg, err = spec.(RegularBuilder).BuildMessage(ctx, initialized, nil, []*Message{message})
+		if err != nil {
+			return nil, fmt.Errorf("build message err: %w", err)
+		}
+	// todo: can this be removed?
+	// case HighloadV2R2, HighloadV2Verified:
+	// 	msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, messages)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("build message err: %w", err)
+	// 	}
 	default:
 		return nil, fmt.Errorf("send is not yet supported: %w", ErrUnsupportedWalletVersion)
 	}
