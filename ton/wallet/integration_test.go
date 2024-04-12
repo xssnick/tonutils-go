@@ -177,6 +177,17 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	inMsgHash, err := w.SendManyGetInMsgHash(ctx, []*Message{msg}, true)
 	t.Logf("message hash: %s", hex.EncodeToString(inMsgHash))
 
+	block, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// wait next block to be sure everything updated
+	block, err = api.WaitForBlock(block.SeqNo + 2).GetMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("wait master err:", err.Error())
+	}
+
 	// find tx hash
 	tx, err := w.FindTransactionByInMsgHash(ctx, inMsgHash, 30)
 	if err != nil {
