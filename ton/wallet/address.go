@@ -13,8 +13,8 @@ import (
 
 const DefaultSubwallet = 698983191
 
-func AddressFromPubKey(key ed25519.PublicKey, spec VersionConfig, subwallet uint32) (*address.Address, error) {
-	state, err := GetStateInit(key, spec, subwallet)
+func AddressFromPubKey(key ed25519.PublicKey, version VersionConfig, subwallet uint32) (*address.Address, error) {
+	state, err := GetStateInit(key, version, subwallet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state: %w", err)
 	}
@@ -47,9 +47,9 @@ func GetWalletVersion(account *tlb.Account) Version {
 	return Unknown
 }
 
-func GetStateInit(pubKey ed25519.PublicKey, spec VersionConfig, subWallet uint32) (*tlb.StateInit, error) {
+func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uint32) (*tlb.StateInit, error) {
 	var ver Version
-	switch v := spec.(type) {
+	switch v := version.(type) {
 	case Version:
 		ver = v
 		switch ver {
@@ -88,7 +88,7 @@ func GetStateInit(pubKey ed25519.PublicKey, spec VersionConfig, subWallet uint32
 			MustStoreDict(nil). // old queries
 			EndCell()
 	case HighloadV3:
-		timeout := spec.(ConfigHighloadV3).MessageTTL
+		timeout := version.(ConfigHighloadV3).MessageTTL
 		if timeout >= 1<<22 {
 			return nil, fmt.Errorf("too big timeout")
 		}
