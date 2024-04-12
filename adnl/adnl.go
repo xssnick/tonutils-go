@@ -352,6 +352,10 @@ func (a *ADNL) SetDisconnectHandler(handler func(addr string, key ed25519.Public
 	a.onDisconnect = handler
 }
 
+func (a *ADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
+	return a.onDisconnect
+}
+
 func (a *ADNL) SetChannelReadyHandler(handler func(ch *Channel)) {
 	a.onChannel = handler
 }

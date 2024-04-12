@@ -21,6 +21,7 @@ import (
 type Peer interface {
 	SetCustomMessageHandler(handler func(msg *MessageCustom) error)
 	SetQueryHandler(handler func(msg *MessageQuery) error)
+	GetDisconnectHandler() func(addr string, key ed25519.PublicKey)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	Query(ctx context.Context, req, result tl.Serializable) error
@@ -42,6 +43,10 @@ type peerConn struct {
 	clientId  string
 	server    *Gateway
 	client    adnlClient
+}
+
+func (p *peerConn) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
+	return p.client.GetDisconnectHandler()
 }
 
 type srvProcessor struct {

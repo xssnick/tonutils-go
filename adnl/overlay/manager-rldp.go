@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
@@ -36,7 +37,13 @@ func CreateExtendedRLDP(rldp RLDP) *RLDPWrapper {
 		overlays: map[string]*RLDPOverlayWrapper{},
 	}
 	w.RLDP.SetOnQuery(w.queryHandler)
-	w.RLDP.SetOnDisconnect(w.disconnectHandler)
+	prev := w.GetADNL().GetDisconnectHandler()
+	w.GetADNL().SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
+		if prev != nil {
+			prev(addr, key)
+		}
+		w.disconnectHandler(addr, key)
+	})
 
 	return w
 }
@@ -86,7 +93,7 @@ func (r *RLDPWrapper) queryHandler(transferId []byte, query *rldp.Query) error {
 	return h(transferId, query)
 }
 
-func (r *RLDPWrapper) disconnectHandler() {
+func (r *RLDPWrapper) disconnectHandler(addr string, key ed25519.PublicKey) {
 	var list []func()
 
 	r.mx.RLock()
