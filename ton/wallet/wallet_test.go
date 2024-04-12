@@ -194,6 +194,10 @@ func TestWallet_Send(t *testing.T) {
 					return nil, nil
 				}
 
+				if flow == SendWithInit1 || flow == SendWithInit2 {
+					return nil, ton.ContractExecError{Code: ton.ErrCodeContractNotInitialized}
+				}
+
 				if flow == SeqnoNotInt {
 					return ton.NewExecutionResult([]any{"aaa"}), nil
 				}
@@ -295,7 +299,7 @@ func TestWallet_Send(t *testing.T) {
 						continue
 					}
 				case SeqnoNotInt:
-					if strings.EqualFold(err.Error(), "build message err: failed to parse seqno: incorrect result type") {
+					if strings.EqualFold(err.Error(), "build message err: failed to fetch seqno: failed to parse seqno: incorrect result type") {
 						continue
 					}
 				case TooMuchMessages:
@@ -337,8 +341,8 @@ func checkV4R2(t *testing.T, p *cell.Slice, w *Wallet, flow int, intMsg *tlb.Int
 		seq = 0
 	}
 
-	if p.MustLoadUInt(32) != seq {
-		t.Fatal("seqno incorrect")
+	if ld := p.MustLoadUInt(32); ld != seq {
+		t.Fatal("seqno incorrect", ld, seq)
 	}
 
 	if p.MustLoadUInt(8) != 0 {

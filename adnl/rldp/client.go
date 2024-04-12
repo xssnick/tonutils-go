@@ -20,6 +20,7 @@ type ADNL interface {
 	GetID() []byte
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
+	GetDisconnectHandler() func(addr string, key ed25519.PublicKey)
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	Close()
 }
@@ -68,7 +69,6 @@ func NewClient(a ADNL) *RLDP {
 	}
 
 	a.SetCustomMessageHandler(r.handleMessage)
-	a.SetDisconnectHandler(r.handleADNLDisconnect)
 
 	return r
 }
@@ -87,19 +87,16 @@ func (r *RLDP) SetOnQuery(handler func(transferId []byte, query *Query) error) {
 	r.onQuery = handler
 }
 
+// Deprecated: use GetADNL().SetDisconnectHandler
+// WARNING: it overrides underlying adnl disconnect handler
 func (r *RLDP) SetOnDisconnect(handler func()) {
-	r.onDisconnect = handler
+	r.adnl.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
+		handler()
+	})
 }
 
 func (r *RLDP) Close() {
 	r.adnl.Close()
-}
-
-func (r *RLDP) handleADNLDisconnect(addr string, key ed25519.PublicKey) {
-	disc := r.onDisconnect
-	if disc != nil {
-		disc()
-	}
 }
 
 func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {

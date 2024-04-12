@@ -41,6 +41,10 @@ func (m MockADNL) RemoteAddr() string {
 	panic("implement me")
 }
 
+func (m MockADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
+	return nil
+}
+
 func (m MockADNL) SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error) {
 }
 

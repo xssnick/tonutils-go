@@ -17,7 +17,7 @@ func main() {
 	client := liteclient.NewConnectionPool()
 
 	// get config
-	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton.org/global.config.json")
+	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton.org/testnet-global.config.json")
 	if err != nil {
 		log.Fatalln("get config err: ", err.Error())
 		return
@@ -31,14 +31,14 @@ func main() {
 	}
 
 	// api client with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicySecure).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 	api.SetTrustedBlockFromConfig(cfg)
 
 	// bound all requests to single ton node
 	ctx := client.StickyContext(context.Background())
 
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
-	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
+	words := strings.Split("diet diet attack autumn expose honey skate lounge holiday opinion village priority major enroll romance famous motor pact hello rubber express warfare rose whisper", " ")
 
 	w, err := wallet.FromSeed(api, words, wallet.V4R2)
 	if err != nil {

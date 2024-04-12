@@ -59,11 +59,13 @@ func NewSeedWithPassword(password string) []string {
 	}
 }
 
-func FromSeed(api TonAPI, seed []string, version Version) (*Wallet, error) {
-	return FromSeedWithPassword(api, seed, "", version)
+type VersionConfig any
+
+func FromSeed(api TonAPI, seed []string, spec VersionConfig) (*Wallet, error) {
+	return FromSeedWithPassword(api, seed, "", spec)
 }
 
-func FromSeedWithPassword(api TonAPI, seed []string, password string, version Version) (*Wallet, error) {
+func FromSeedWithPassword(api TonAPI, seed []string, password string, spec VersionConfig) (*Wallet, error) {
 	// validate seed
 	if len(seed) < 12 {
 		return nil, fmt.Errorf("seed should have at least 12 words")
@@ -92,7 +94,7 @@ func FromSeedWithPassword(api TonAPI, seed []string, password string, version Ve
 
 	k := pbkdf2.Key(hash, []byte(_Salt), _Iterations, 32, sha512.New)
 
-	return FromPrivateKey(api, ed25519.NewKeyFromSeed(k), version)
+	return FromPrivateKey(api, ed25519.NewKeyFromSeed(k), spec)
 }
 
 var wordsArr = func() []string {

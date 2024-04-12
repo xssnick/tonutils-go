@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -50,10 +51,48 @@ var apiMain = func() ton.APIClientWrapped {
 
 var _seed = os.Getenv("WALLET_SEED")
 
+func Test_HighloadHeavyTransfer(t *testing.T) {
+	seed := strings.Split(_seed, " ")
+
+	w, err := FromSeed(api, seed, ConfigHighloadV3{
+		MessageTTL: 120,
+		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
+			tm := time.Now().Unix() - 30
+			return uint32(10000 + tm%(1<<23)), tm, nil
+		},
+	})
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+		return
+	}
+
+	t.Log("test wallet address:", w.WalletAddress())
+
+	var list []*Message
+	for i := 0; i < 300; i++ {
+		com, _ := CreateCommentCell(fmt.Sprint(i))
+		list = append(list, SimpleMessage(w.WalletAddress(), tlb.MustFromTON("0.001"), com))
+	}
+
+	tx, _, err := w.SendManyWaitTransaction(context.Background(), list)
+	if err != nil {
+		t.Fatal("Send err:", err.Error())
+		return
+	}
+
+	t.Log("TX", base64.StdEncoding.EncodeToString(tx.Hash))
+}
+
 func Test_WalletTransfer(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 
-	for _, v := range []Version{V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified} {
+	for _, v := range []VersionConfig{V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified, ConfigHighloadV3{
+		MessageTTL: 120,
+		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
+			tm := time.Now().Unix() - 30
+			return uint32(tm % (1 << 23)), tm, nil
+		},
+	}} {
 		ver := v
 		for _, isSubwallet := range []bool{false, true} {
 			isSubwallet := isSubwallet
@@ -78,7 +117,7 @@ func Test_WalletTransfer(t *testing.T) {
 					}
 				}
 
-				log.Println(ver, "-> test wallet address:", w.Address(), isSubwallet)
+				log.Println(ver, "-> test wallet address:", w.WalletAddress(), isSubwallet)
 
 				block, err := api.CurrentMasterchainInfo(ctx)
 				if err != nil {
@@ -128,7 +167,7 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	body := root.EndCell()
 
 	// prepare simple transfer
-	msg := SimpleMessage(
+	msg := SimpleMessageAutoBounce(
 		address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE"),
 		tlb.MustFromTON("0.0031337"),
 		body,

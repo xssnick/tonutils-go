@@ -46,6 +46,10 @@ type MockADNL struct {
 	close                   func()
 }
 
+func (m MockADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
+	return nil
+}
+
 func (m MockADNL) GetID() []byte {
 	//TODO implement me
 	panic("implement me")

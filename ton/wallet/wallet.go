@@ -39,6 +39,7 @@ const (
 	V4R2               Version = 42
 	HighloadV2R2       Version = 122
 	HighloadV2Verified Version = 123
+	HighloadV3         Version = 300
 	Lockup             Version = 200
 	Unknown            Version = 0
 )
@@ -71,7 +72,8 @@ var (
 		V3R1: _V3R1CodeHex, V3R2: _V3R2CodeHex,
 		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
 		HighloadV2R2: _HighloadV2R2CodeHex, HighloadV2Verified: _HighloadV2VerifiedCodeHex,
-		Lockup: _LockupCodeHex,
+		HighloadV3: _HighloadV3CodeHex,
+		Lockup:     _LockupCodeHex,
 	}
 	walletCodeBOC = map[Version][]byte{}
 	walletCode    = map[Version]*cell.Cell{}
@@ -126,7 +128,7 @@ type Wallet struct {
 	api  TonAPI
 	key  ed25519.PrivateKey
 	addr *address.Address
-	ver  Version
+	ver  VersionConfig
 
 	// Can be used to operate multiple wallets with the same key and version.
 	// use GetSubwallet if you need it.
@@ -136,7 +138,7 @@ type Wallet struct {
 	spec any
 }
 
-func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Wallet, error) {
+func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (*Wallet, error) {
 	addr, err := AddressFromPubKey(key.Public().(ed25519.PublicKey), version, DefaultSubwallet)
 	if err != nil {
 		return nil, err
@@ -159,18 +161,46 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version Version) (*Walle
 }
 
 func getSpec(w *Wallet) (any, error) {
-	regular := SpecRegular{
-		wallet:      w,
-		messagesTTL: 60 * 3, // default ttl 3 min
-	}
+	switch v := w.ver.(type) {
+	case Version:
+		regular := SpecRegular{
+			wallet:      w,
+			messagesTTL: 60 * 3, // default ttl 3 min
+		}
 
-	switch w.ver {
-	case V3R1, V3R2:
-		return &SpecV3{regular, SpecSeqno{}}, nil
-	case V4R1, V4R2:
-		return &SpecV4R2{regular, SpecSeqno{}}, nil
-	case HighloadV2R2, HighloadV2Verified:
-		return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
+		seqnoFetcher := func(ctx context.Context, subWallet uint32) (uint32, error) {
+			block, err := w.api.CurrentMasterchainInfo(ctx)
+			if err != nil {
+				return 0, fmt.Errorf("failed to get block: %w", err)
+			}
+
+			resp, err := w.api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, w.addr, "seqno")
+			if err != nil {
+				if cErr, ok := err.(ton.ContractExecError); ok && cErr.Code == ton.ErrCodeContractNotInitialized {
+					return 0, nil
+				}
+				return 0, fmt.Errorf("get seqno err: %w", err)
+			}
+
+			iSeq, err := resp.Int(0)
+			if err != nil {
+				return 0, fmt.Errorf("failed to parse seqno: %w", err)
+			}
+			return uint32(iSeq.Uint64()), nil
+		}
+
+		switch v {
+		case V3R1, V3R2:
+			return &SpecV3{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
+		case V4R1, V4R2:
+			return &SpecV4R2{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
+		case HighloadV2R2, HighloadV2Verified:
+			return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
+		case HighloadV3:
+			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
+		}
+	case ConfigHighloadV3:
+		return &SpecHighloadV3{wallet: w, config: v}, nil
 	}
 
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
@@ -241,8 +271,6 @@ func (w *Wallet) BuildMessageForMany(ctx context.Context, messages []*Message) (
 }
 
 func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Message) (*tlb.ExternalMessage, error) {
-	var stateInit *tlb.StateInit
-
 	block, err := w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block: %w", err)
@@ -253,10 +281,15 @@ func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Me
 		return nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
-	initialized := true
-	if !acc.IsActive || acc.State.Status != tlb.AccountStatusActive {
-		initialized = false
+	initialized := acc.IsActive && acc.State.Status == tlb.AccountStatusActive
+	return w.PrepareExternalMessageForMany(ctx, !initialized, messages)
+}
 
+// PrepareExternalMessageForMany - Prepares external message for wallet
+// can be used directly for offline signing but custom fetchers should be defined in this case
+func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateInit bool, messages []*Message) (_ *tlb.ExternalMessage, err error) {
+	var stateInit *tlb.StateInit
+	if withStateInit {
 		stateInit, err = GetStateInit(w.key.Public().(ed25519.PublicKey), w.ver, w.subwallet)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get state init: %w", err)
@@ -264,14 +297,26 @@ func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Me
 	}
 
 	var msg *cell.Cell
-	switch w.ver {
-	case V3R2, V3R1, V4R2, V4R1:
-		msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, initialized, block, messages)
-		if err != nil {
-			return nil, fmt.Errorf("build message err: %w", err)
+	switch v := w.ver.(type) {
+	case Version:
+		switch v {
+		case V3R2, V3R1, V4R2, V4R1:
+			msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, !withStateInit, nil, messages)
+			if err != nil {
+				return nil, fmt.Errorf("build message err: %w", err)
+			}
+		case HighloadV2R2, HighloadV2Verified:
+			msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, messages)
+			if err != nil {
+				return nil, fmt.Errorf("build message err: %w", err)
+			}
+		case HighloadV3:
+			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
+		default:
+			return nil, fmt.Errorf("send is not yet supported: %w", ErrUnsupportedWalletVersion)
 		}
-	case HighloadV2R2, HighloadV2Verified:
-		msg, err = w.spec.(*SpecHighloadV2R2).BuildMessage(ctx, messages)
+	case ConfigHighloadV3:
+		msg, err = w.spec.(*SpecHighloadV3).BuildMessage(ctx, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
@@ -774,6 +819,20 @@ func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *M
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      true,
+			DstAddr:     to,
+			Amount:      amount,
+			Body:        payload,
+		},
+	}
+}
+
+// SimpleMessageAutoBounce - will determine bounce flag from address
+func SimpleMessageAutoBounce(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
+	return &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      to.IsBounceable(),
 			DstAddr:     to,
 			Amount:      amount,
 			Body:        payload,
