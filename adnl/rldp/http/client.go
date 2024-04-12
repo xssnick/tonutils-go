@@ -49,6 +49,7 @@ type ADNL interface {
 	RemoteAddr() string
 	Query(ctx context.Context, req, result tl.Serializable) error
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
+	GetDisconnectHandler() func(addr string, key ed25519.PublicKey)
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	SetQueryHandler(handler func(msg *adnl.MessageQuery) error)

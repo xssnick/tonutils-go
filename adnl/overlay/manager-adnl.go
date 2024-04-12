@@ -23,6 +23,7 @@ type ADNL interface {
 	SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error)
 	SetQueryHandler(handler func(msg *adnl.MessageQuery) error)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
+	GetDisconnectHandler() func(addr string, key ed25519.PublicKey)
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
@@ -41,6 +42,10 @@ type ADNLWrapper struct {
 	unknownOverlayHandler func(msg *adnl.MessageQuery) error
 
 	ADNL
+}
+
+func (a *ADNLWrapper) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
+	return a.ADNL.GetDisconnectHandler()
 }
 
 func CreateExtendedADNL(adnl ADNL) *ADNLWrapper {

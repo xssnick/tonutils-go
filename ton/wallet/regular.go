@@ -7,7 +7,7 @@ import (
 )
 
 type RegularBuilder interface {
-	BuildMessage(ctx context.Context, isInitialized bool, block *ton.BlockIDExt, messages []*Message) (*cell.Cell, error)
+	BuildMessage(ctx context.Context, isInitialized bool, _ *ton.BlockIDExt, messages []*Message) (*cell.Cell, error)
 }
 
 type SpecRegular struct {
@@ -30,11 +30,18 @@ type SpecSeqno struct {
 	// You may use it to set seqno according to your own logic,
 	// for example for additional idempotency,
 	// if build message is not enough, or for additional security
-	customSeqnoFetcher func() uint32
+	seqnoFetcher func(ctx context.Context, subWallet uint32) (uint32, error)
 }
 
+// Deprecated: Use SetSeqnoFetcher
 func (s *SpecSeqno) SetCustomSeqnoFetcher(fetcher func() uint32) {
-	s.customSeqnoFetcher = fetcher
+	s.seqnoFetcher = func(ctx context.Context, subWallet uint32) (uint32, error) {
+		return fetcher(), nil
+	}
+}
+
+func (s *SpecSeqno) SetSeqnoFetcher(fetcher func(ctx context.Context, subWallet uint32) (uint32, error)) {
+	s.seqnoFetcher = fetcher
 }
 
 type SpecQuery struct {

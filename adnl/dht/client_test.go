@@ -53,6 +53,10 @@ type MockADNL struct {
 	close func()
 }
 
+func (m MockADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
+	return nil
+}
+
 func (m MockADNL) GetQueryHandler() func(msg *adnl.MessageQuery) error {
 	return nil
 }

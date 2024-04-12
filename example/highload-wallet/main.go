@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -16,11 +17,11 @@ import (
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	// connect to mainnet lite server
-	err := client.AddConnection(context.Background(), "135.181.140.212:13206", "K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=")
+	// connect to testnet lite server
+	configUrl := "https://ton-blockchain.github.io/testnet-global.config.json"
+	err := client.AddConnectionsFromConfigUrl(context.Background(), configUrl)
 	if err != nil {
-		log.Fatalln("connection err: ", err.Error())
-		return
+		panic(err)
 	}
 
 	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
@@ -29,7 +30,21 @@ func main() {
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
 
 	// initialize high-load wallet
-	w, err := wallet.FromSeed(api, words, wallet.HighloadV2R2)
+	w, err := wallet.FromSeed(api, words, wallet.ConfigHighloadV3{
+		MessageTTL: 60 * 5,
+		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
+			// Due to specific of externals emulation on liteserver,
+			// we need to take something less than or equals to block time, as message creation time,
+			// otherwise external message will be rejected, because time will be > than emulation time
+			// hope it will be fixed in the next LS versions
+			createdAt = time.Now().Unix() - 30
+
+			// example query id which will allow you to send 1 tx per second
+			// but you better to implement your own iterator in database, then you can send unlimited
+			// but make sure id is less than 1 << 23, when it is higher start from 0 again
+			return uint32(createdAt % (1 << 23)), createdAt, nil
+		},
+	})
 	if err != nil {
 		log.Fatalln("FromSeed err:", err.Error())
 		return
@@ -65,13 +80,14 @@ func main() {
 		}
 
 		var messages []*wallet.Message
-		// generate message for each destination, in single transaction can be sent up to 254 messages
+		// generate message for each destination, in single batch can be sent up to 65k messages (but consider messages size, external size limit is 64kb)
 		for addrStr, amtStr := range receivers {
+			addr := address.MustParseAddr(addrStr)
 			messages = append(messages, &wallet.Message{
-				Mode: 1, // pay fee separately
+				Mode: 1 + 2, // pay fee separately, ignore action errors
 				InternalMessage: &tlb.InternalMessage{
-					Bounce:  false, // force send, even to uninitialized wallets
-					DstAddr: address.MustParseAddr(addrStr),
+					Bounce:  addr.IsBounceable(),
+					DstAddr: addr,
 					Amount:  tlb.MustFromTON(amtStr),
 					Body:    comment,
 				},
@@ -88,7 +104,7 @@ func main() {
 		}
 
 		log.Println("transaction sent, hash:", base64.StdEncoding.EncodeToString(txHash))
-		log.Println("explorer link: https://tonscan.org/tx/" + base64.URLEncoding.EncodeToString(txHash))
+		log.Println("explorer link: https://testnet.tonscan.org/tx/" + base64.URLEncoding.EncodeToString(txHash))
 		return
 	}
 

@@ -22,33 +22,21 @@ type SpecV4R2 struct {
 	SpecSeqno
 }
 
-func (s *SpecV4R2) BuildMessage(ctx context.Context, isInitialized bool, block *ton.BlockIDExt, messages []*Message) (*cell.Cell, error) {
+func (s *SpecV4R2) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, messages []*Message) (_ *cell.Cell, err error) {
+	// TODO: remove block, now it is here for backwards compatibility
+
 	if len(messages) > 4 {
 		return nil, errors.New("for this type of wallet max 4 messages can be sent in the same time")
 	}
 
-	var seq uint64
-
-	if s.customSeqnoFetcher != nil {
-		seq = uint64(s.customSeqnoFetcher())
-	} else {
-		if isInitialized {
-			resp, err := s.wallet.api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, s.wallet.addr, "seqno")
-			if err != nil {
-				return nil, fmt.Errorf("get seqno err: %w", err)
-			}
-
-			iSeq, err := resp.Int(0)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse seqno: %w", err)
-			}
-			seq = iSeq.Uint64()
-		}
+	seq, err := s.seqnoFetcher(ctx, s.wallet.subwallet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch seqno: %w", err)
 	}
 
 	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).
 		MustStoreUInt(uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()), 32).
-		MustStoreUInt(seq, 32).
+		MustStoreUInt(uint64(seq), 32).
 		MustStoreInt(0, 8) // op
 
 	for i, message := range messages {

@@ -59,11 +59,13 @@ func NewSeedWithPassword(password string) []string {
 	}
 }
 
-func FromSeed(api TonAPI, seed []string, version Version) (*Wallet, error) {
+type VersionConfig any
+
+func FromSeed(api TonAPI, seed []string, version VersionConfig) (*Wallet, error) {
 	return FromSeedWithPassword(api, seed, "", version)
 }
 
-func FromSeedWithPassword(api TonAPI, seed []string, password string, version Version) (*Wallet, error) {
+func FromSeedWithPassword(api TonAPI, seed []string, password string, version VersionConfig) (*Wallet, error) {
 	// validate seed
 	if len(seed) < 12 {
 		return nil, fmt.Errorf("seed should have at least 12 words")
