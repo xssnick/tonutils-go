@@ -37,13 +37,7 @@ func CreateExtendedRLDP(rldp RLDP) *RLDPWrapper {
 		overlays: map[string]*RLDPOverlayWrapper{},
 	}
 	w.RLDP.SetOnQuery(w.queryHandler)
-	prev := w.GetADNL().GetDisconnectHandler()
-	w.GetADNL().SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
-		if prev != nil {
-			prev(addr, key)
-		}
-		w.disconnectHandler(addr, key)
-	})
+	w.GetADNL().SetDisconnectHandler(w.disconnectHandler)
 
 	return w
 }
