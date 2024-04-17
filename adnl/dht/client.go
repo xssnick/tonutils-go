@@ -554,7 +554,7 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 				continue
 			}
 
-			if node.badScore == 0 {
+			if atomic.LoadInt32(&node.badScore) == 0 {
 				plistGood.addNode(node)
 			} else {
 				plistBad.addNode(node)
@@ -563,7 +563,11 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	}
 
 	// add K not good nodes to retry them if they can be better
-	for node, _ := plistBad.getNode(); node != nil; {
+	for {
+		node, _ := plistBad.getNode()
+		if node == nil {
+			break
+		}
 		plistGood.addNode(node)
 	}
 
