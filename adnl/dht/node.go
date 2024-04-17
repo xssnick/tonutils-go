@@ -288,16 +288,9 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 
 func (n *dhtNode) updateStatus(isGood bool) {
 	if isGood {
-		for {
-			badScore := atomic.LoadInt32(&n.badScore)
-			if badScore > 0 {
-				if !atomic.CompareAndSwapInt32(&n.badScore, badScore, badScore-1) {
-					continue
-				}
-				Logger("Make DHT peer {} feel good {}", n.id(), badScore-1)
-			}
-			return
-		}
+		atomic.StoreInt32(&n.badScore, 0)
+		Logger("Make DHT peer {} feel good {}", n.id(), 0)
+		return
 	}
 
 	badScore := atomic.LoadInt32(&n.badScore)
