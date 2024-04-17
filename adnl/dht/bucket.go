@@ -23,7 +23,7 @@ func (b *Bucket) getNodes() dhtNodeList {
 	b.mx.RLock()
 	defer b.mx.RUnlock()
 
-	return b.nodes
+	return append(dhtNodeList{}, b.nodes...)
 }
 
 func (b *Bucket) getNode(id string) *dhtNode {
@@ -56,7 +56,7 @@ func (b *Bucket) addNode(node *dhtNode) {
 
 func (b *Bucket) sortAndFilter() {
 	sort.Sort(b.nodes)
-	if len(b.nodes) > int(b.k*2) {
-		b.nodes = b.nodes[:b.k*2]
+	if len(b.nodes) > int(b.k*5) {
+		b.nodes = b.nodes[:b.k*5]
 	}
 }

@@ -355,12 +355,12 @@ func (c *Client) Store(
 					cancel()
 					if err != nil {
 						return
-					} else {
-						Logger("Adding nodes", len(nodes))
-						for _, n := range nodes {
-							if _, err = c.addNode(n); err != nil {
-								continue
-							}
+					}
+
+					Logger("Adding nodes", len(nodes))
+					for _, n := range nodes {
+						if _, err = c.addNode(n); err != nil {
+							continue
 						}
 					}
 				}()

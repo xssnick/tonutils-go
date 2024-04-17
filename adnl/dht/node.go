@@ -17,7 +17,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
-const _MaxFailCount = 5
+const _MaxFailCount = 3
 
 type dhtNode struct {
 	adnlId []byte
@@ -89,6 +89,27 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 	return nil, fmt.Errorf("failed to find nodes, unexpected response type %s", reflect.TypeOf(res).String())
 }
 
+func (n *dhtNode) doPing(ctx context.Context) (err error) {
+	val, err := tl.Serialize(Ping{
+		ID: time.Now().Unix(),
+	}, true)
+	if err != nil {
+		return fmt.Errorf("failed to serialize dht ping query: %w", err)
+	}
+
+	var res any
+	err = n.query(ctx, tl.Raw(val), &res)
+	if err != nil {
+		return fmt.Errorf("failed to ping dht node: %w", err)
+	}
+
+	switch res.(type) {
+	case Pong:
+		return nil
+	}
+	return fmt.Errorf("failed to ping node, unexpected response type %s", reflect.TypeOf(res).String())
+}
+
 func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error {
 	if err := checkValue(id, value); err != nil {
 		return fmt.Errorf("corrupted value: %w", err)
@@ -124,23 +145,11 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 		return nil, fmt.Errorf("failed to serialize dht value: %w", err)
 	}
 
-	if err = ctx.Err(); err != nil {
-		// if context is canceled we are not trying to query
-		return nil, err
-	}
-
-	reportLimit := time.Now().Add(3 * time.Second)
-
 	var res any
 	err = n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
-		if time.Now().After(reportLimit) {
-			// to not report good nodes, because of our short deadline
-			n.updateStatus(false)
-		}
 		return nil, fmt.Errorf("failed to do query to dht node: %w", err)
 	}
-	n.updateStatus(true)
 
 	switch r := res.(type) {
 	case ValueNotFoundResult:
@@ -239,6 +248,11 @@ func checkValue(id []byte, value *Value) error {
 }
 
 func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
+	if err := ctx.Err(); err != nil {
+		// if context is canceled we are not trying to query
+		return err
+	}
+
 	atomic.AddInt32(&n.inFlyQueries, 1)
 
 	peer, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
@@ -248,19 +262,26 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 	}
 
 	defer func() {
-		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.badScore > 0 {
+		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.badScore > 1 {
 			peer.Close()
 		}
 	}()
 
 	t := time.Now()
+	reportLimit := t.Add(queryTimeout - 500*time.Millisecond)
 	atomic.StoreInt64(&n.lastQueryAt, t.Unix())
 	err = peer.Query(ctx, req, res)
 	if err != nil {
+		if time.Now().After(reportLimit) {
+			// to not report good nodes, because of our short deadline
+			n.updateStatus(false)
+		}
 		return err
 	}
 	ping := time.Since(t)
 	atomic.StoreInt64(&n.ping, int64(ping))
+
+	n.updateStatus(true)
 
 	return nil
 }
@@ -269,21 +290,21 @@ func (n *dhtNode) updateStatus(isGood bool) {
 	if isGood {
 		for {
 			badScore := atomic.LoadInt32(&n.badScore)
-			if badScore >= _MaxFailCount {
+			if badScore > 0 {
 				if !atomic.CompareAndSwapInt32(&n.badScore, badScore, badScore-1) {
 					continue
 				}
 				Logger("Make DHT peer {} feel good {}", n.id(), badScore-1)
 			}
-			break
+			return
 		}
-	} else {
-		badScore := atomic.LoadInt32(&n.badScore)
-		if badScore <= _MaxFailCount {
-			badScore = atomic.AddInt32(&n.badScore, 2)
-		}
-		Logger("Make DHT peer {} feel bad {}", n.id(), badScore)
 	}
+
+	badScore := atomic.LoadInt32(&n.badScore)
+	if badScore <= _MaxFailCount {
+		badScore = atomic.AddInt32(&n.badScore, 1)
+	}
+	Logger("Make DHT peer {} feel bad {}", n.id(), badScore)
 }
 
 func (n *dhtNode) id() string {
