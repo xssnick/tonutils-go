@@ -265,14 +265,8 @@ fmt.Println("    owner        :", nftData.OwnerAddress.String())
 fmt.Println("    index        :", nftData.Index)
 
 if nftData.Initialized {
-    // convert content to cell, we need it to get full url
-    nftContentCell, err := nftData.Content.ContentCell()
-    if err != nil {
-        panic(err)
-    }
-
     // get full nft's content url using collection method that will merge base url with nft's data
-    nftContent, err := collection.GetNFTContent(context.Background(), nftData.Index, nftContentCell)
+    nftContent, err := collection.GetNFTContent(context.Background(), nftData.Index, nftData.Content)
     if err != nil {
         panic(err)
     }
