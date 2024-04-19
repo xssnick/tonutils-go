@@ -28,7 +28,7 @@ type RunSmcMethod struct {
 	ID       *BlockIDExt `tl:"struct"`
 	Account  AccountID   `tl:"struct"`
 	MethodID uint64      `tl:"long"`
-	Params   *cell.Cell  `tl:"cell"`
+	Params   *cell.Cell  `tl:"cell optional"`
 }
 
 type RunMethodResult struct {
