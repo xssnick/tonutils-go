@@ -23,7 +23,7 @@ var apiTestNet = func() APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://tonutils.com/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -37,7 +37,7 @@ var api = func() APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cfg, err := liteclient.GetConfigFromUrl(ctx, "https://ton.org/global.config.json")
+	cfg, err := liteclient.GetConfigFromUrl(ctx, "https://tonutils.com/global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -621,7 +621,7 @@ func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 }
 
 func TestAPIClient_GetBlockProofForward(t *testing.T) {
-	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton.org/global.config.json")
+	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://tonutils.com/global.config.json")
 	if err != nil {
 		t.Fatal("get cfg err:", err.Error())
 		return
