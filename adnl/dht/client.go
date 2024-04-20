@@ -355,12 +355,12 @@ func (c *Client) Store(
 					cancel()
 					if err != nil {
 						return
-					} else {
-						Logger("Adding nodes", len(nodes))
-						for _, n := range nodes {
-							if _, err = c.addNode(n); err != nil {
-								continue
-							}
+					}
+
+					Logger("Adding nodes", len(nodes))
+					for _, n := range nodes {
+						if _, err = c.addNode(n); err != nil {
+							continue
 						}
 					}
 				}()
@@ -543,35 +543,33 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
-	plist := newPriorityList(_K*3, id)
-
-	added := 0
+	plistGood := newPriorityList(_K*3, id)
+	plistBad := newPriorityList(_K, id)
 
 	for i := 255; i >= 0; i-- {
 		bucket := c.buckets[i]
 		knownNodes := bucket.getNodes()
 		for _, node := range knownNodes {
-			if node != nil && node.badScore == 0 {
-				if plist.addNode(node) {
-					added++
-				}
+			if node == nil {
+				continue
+			}
+
+			if atomic.LoadInt32(&node.badScore) == 0 {
+				plistGood.addNode(node)
+			} else {
+				plistBad.addNode(node)
 			}
 		}
 	}
 
-	if added < _K {
-		for i := 255; i >= 0; i-- {
-			bucket := c.buckets[i]
-			knownNodes := bucket.getNodes()
-			for _, node := range knownNodes {
-				if node != nil && node.badScore > 0 {
-					if plist.addNode(node) {
-						added++
-					}
-				}
-			}
+	// add K not good nodes to retry them if they can be better
+	for {
+		node, _ := plistBad.getNode()
+		if node == nil {
+			break
 		}
+		plistGood.addNode(node)
 	}
 
-	return plist
+	return plistGood
 }
