@@ -16,7 +16,6 @@ import (
 
 func init() {
 	tl.Register(LSError{}, "liteServer.error code:int message:string = liteServer.Error")
-
 }
 
 type ProofCheckPolicy int
@@ -74,6 +73,8 @@ type APIClientWrapped interface {
 	WithTimeout(timeout time.Duration) APIClientWrapped
 	SetTrustedBlock(block *BlockIDExt)
 	SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig)
+	FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
+	FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
 }
 
 type APIClient struct {

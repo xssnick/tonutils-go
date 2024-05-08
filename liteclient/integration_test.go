@@ -69,6 +69,19 @@ func Test_Conn(t *testing.T) {
 	doReq(nil)
 }
 
+func Test_Offline(t *testing.T) {
+	client := NewOfflineClient()
+
+	doReq := func(expErr error) {
+		var resp tl.Serializable
+		err := client.QueryLiteserver(context.Background(), GetMasterchainInf{}, &resp)
+		if err != ErrOfflineMode {
+			t.Fatal("err", err)
+		}
+	}
+	doReq(nil)
+}
+
 func Test_ConnSticky(t *testing.T) {
 	client := NewConnectionPool()
 

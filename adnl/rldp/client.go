@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq"
@@ -124,7 +123,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			return fmt.Errorf("not supported fec type")
 		}
 
-		id := hex.EncodeToString(m.TransferID)
+		id := string(m.TransferID)
 		r.mx.RLock()
 		stream := r.recvStreams[id]
 		r.mx.RUnlock()
@@ -248,7 +247,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 						}()
 					}
 				case Answer:
-					qid := hex.EncodeToString(rVal.ID)
+					qid := string(rVal.ID)
 
 					r.mx.Lock()
 					req := r.activeRequests[qid]
@@ -298,7 +297,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			}
 		}
 	case Complete: // receiver has fully received transfer, close our stream
-		id := hex.EncodeToString(m.TransferID)
+		id := string(m.TransferID)
 
 		r.mx.Lock()
 		t := r.activeTransfers[id]
@@ -312,7 +311,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		}
 	case Confirm: // receiver has received some parts
 		// TODO: use confirmed seqno to limit sends
-		// id := hex.EncodeToString(m.TransferID)
+		// id := string(m.TransferID)
 		// r.mx.RLock()
 		// t := r.activeTransfers[id]
 		// r.mx.RUnlock()
@@ -329,7 +328,7 @@ func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte) er
 		return fmt.Errorf("failed to create raptorq object encoder: %w", err)
 	}
 
-	id := hex.EncodeToString(transferId)
+	id := string(transferId)
 
 	ch := make(chan bool, 1)
 	r.mx.Lock()
@@ -354,8 +353,10 @@ func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte) er
 		default:
 		}
 
-		if symbolsSent > enc.BaseSymbolsNum()+enc.BaseSymbolsNum()/2 { //+enc.BaseSymbolsNum()/2
-			x := symbolsSent - (enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/2)
+		fastSymbols := enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/5 // send 120% packets fast
+
+		if symbolsSent > fastSymbols {
+			x := (symbolsSent - fastSymbols) / 2
 
 			select {
 			case <-ctx.Done():
@@ -415,7 +416,7 @@ func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result t
 		Data:          query,
 	}
 
-	queryID := hex.EncodeToString(q.ID)
+	queryID := string(q.ID)
 
 	res := make(chan any, 2)
 

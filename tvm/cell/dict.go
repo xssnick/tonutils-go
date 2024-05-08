@@ -264,7 +264,8 @@ func (d *Dictionary) LoadValue(key *Cell) (*Slice, error) {
 
 // LoadValueWithProof - searches key in the underline dict cell, constructs proof path and returns leaf
 //
-//	If key is not found ErrNoSuchKeyInDict will be returned
+//	If key is not found ErrNoSuchKeyInDict will be returned,
+//	and path with proof of non-existing key will be attached to skeleton (if passed)
 func (d *Dictionary) LoadValueWithProof(key *Cell, skeleton *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
 	if key.BitsSize() != d.keySz {
 		return nil, nil, fmt.Errorf("incorrect key size")
@@ -392,6 +393,9 @@ func (d *Dictionary) findKey(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (
 		}
 
 		if !bytes.Equal(loadedPfx, pfx) {
+			if sk != nil {
+				at.Merge(root)
+			}
 			return nil, nil, ErrNoSuchKeyInDict
 		}
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq"
@@ -227,7 +226,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 					return nil
 				}
 			} else if test.tstSubName == "answer case" {
-				queryId := hex.EncodeToString(tQuery.ID)
+				queryId := string(tQuery.ID)
 				tChan := make(chan any, 2)
 				cli.activeRequests[queryId] = tChan
 			}
@@ -279,7 +278,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to execute handleMessage func, err: ", err)
 			}
-			if cli.recvStreams[hex.EncodeToString(tId)].lastCompleteAt.IsZero() {
+			if cli.recvStreams[string(tId)].lastCompleteAt.IsZero() {
 				t.Error("got lastCompleteAt == nil, want != nil")
 			}
 		})
@@ -296,7 +295,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			cli := NewClient(tAdnl)
 
 			tChan := make(chan bool, 1)
-			cli.activeTransfers[hex.EncodeToString(tId)] = tChan
+			cli.activeTransfers[string(tId)] = tChan
 
 			err := cli.handleMessage(msgComplete)
 			if err != nil {
