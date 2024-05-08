@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,8 @@ func init() {
 	tl.Register(TransactionList{}, "liteServer.transactionList ids:(vector tonNode.blockIdExt) transactions:bytes = liteServer.TransactionList")
 	tl.Register(TransactionInfo{}, "liteServer.transactionInfo id:tonNode.blockIdExt proof:bytes transaction:bytes = liteServer.TransactionInfo")
 }
+
+var ErrTxWasNotFound = errors.New("requested transaction is not found")
 
 type TransactionInfo struct {
 	ID          *BlockIDExt `tl:"struct"`
@@ -267,6 +270,86 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			}
 
 			wait = 0 * time.Second
+		}
+	}
+}
+
+// FindLastTransactionByInMsgHash returns last transaction in account where incoming message (payload) hash equal to msgHash.
+func (c *APIClient) FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
+	return c.findLastTransactionByHash(ctx, addr, false, msgHash, maxTxNumToScan...)
+}
+
+// FindLastTransactionByOutMsgHash returns last transaction in account where one of outgoing message (payload) hashes equal to msgHash.
+func (c *APIClient) FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
+	return c.findLastTransactionByHash(ctx, addr, true, msgHash, maxTxNumToScan...)
+}
+
+func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address.Address, isOut bool, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
+	limit := 60
+	if len(maxTxNumToScan) > 0 {
+		limit = maxTxNumToScan[0]
+	}
+
+	block, err := c.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
+	}
+
+	acc, err := c.WaitForBlock(block.SeqNo).GetAccount(ctx, block, addr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get account: %w", err)
+	}
+	if !acc.IsActive { // no tx is made from this account
+		return nil, fmt.Errorf("account is inactive: %w", ErrTxWasNotFound)
+	}
+
+	scanned := 0
+	for lastLt, lastHash := acc.LastTxLT, acc.LastTxHash; ; {
+		if lastLt == 0 { // no older transactions
+			return nil, ErrTxWasNotFound
+		}
+
+		txList, err := c.ListTransactions(ctx, addr, 15, lastLt, lastHash)
+		if err != nil {
+			if strings.Contains(err.Error(), "cannot compute block with specified transaction: lt not in db") {
+				return nil, fmt.Errorf("archive node is needed: %w", ErrTxWasNotFound)
+			}
+			return nil, fmt.Errorf("cannot list transactions: %w", err)
+		}
+
+		for i, transaction := range txList {
+			if i == 0 {
+				// get previous of the oldest tx, in case if we need to scan deeper
+				lastLt, lastHash = txList[0].PrevTxLT, txList[0].PrevTxHash
+			}
+
+			if isOut {
+				list, err := transaction.IO.Out.ToSlice()
+				if err != nil {
+					return nil, fmt.Errorf("cannot list out messages: %w", err)
+				}
+
+				for _, m := range list {
+					if bytes.Equal(m.Msg.Payload().Hash(), msgHash) {
+						return transaction, nil
+					}
+				}
+			} else {
+				if transaction.IO.In == nil {
+					continue
+				}
+				if !bytes.Equal(transaction.IO.In.Msg.Payload().Hash(), msgHash) {
+					continue
+				}
+			}
+
+			return transaction, nil
+		}
+
+		scanned += 15
+
+		if scanned >= limit {
+			return nil, fmt.Errorf("scan limit of %d transactions was reached, %d transactions was checked and hash was not found", limit, scanned)
 		}
 	}
 }

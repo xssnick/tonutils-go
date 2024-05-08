@@ -753,3 +753,74 @@ func TestAPIClient_WithRetry(t *testing.T) {
 		t.Fatal("expected deadline exceeded error but", err)
 	}
 }
+
+func TestAPIClient_FindLastTransactionByInMsgHash(t *testing.T) {
+	addr := address.MustParseAddr("Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vF")
+
+	block, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	acc, err := api.GetAccount(context.Background(), block, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := api.ListTransactions(context.Background(), addr, 20, acc.LastTxLT, acc.LastTxHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := list[len(list)-1]
+
+	// find tx hash
+	tx, err = api.FindLastTransactionByInMsgHash(context.Background(), addr, tx.IO.In.Msg.Payload().Hash(), 30)
+	if err != nil {
+		t.Fatal("cannot find tx:", err.Error())
+	}
+	t.Logf("tx hash: %s %s", hex.EncodeToString(tx.Hash), hex.EncodeToString(acc.LastTxHash))
+}
+
+func TestAPIClient_FindLastTransactionByOutMsgHash(t *testing.T) {
+	addr := address.MustParseAddr("UQCZ-7akCw_dvl_Q5xyriWqCXdWubIPbuN7aDQlzX45pa01R")
+
+	block, err := api.CurrentMasterchainInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	acc, err := api.GetAccount(context.Background(), block, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := api.ListTransactions(context.Background(), addr, 20, acc.LastTxLT, acc.LastTxHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hash []byte
+	for i := len(list) - 1; i >= 0; i-- {
+		ls, err := list[i].IO.Out.ToSlice()
+		if err != nil {
+			continue
+		}
+
+		if len(ls) == 0 {
+			continue
+		}
+		hash = ls[0].Msg.Payload().Hash()
+	}
+
+	if hash == nil {
+		t.Fatal("no outs")
+	}
+
+	// find tx hash
+	tx, err := api.FindLastTransactionByOutMsgHash(context.Background(), addr, hash, 30)
+	if err != nil {
+		t.Fatal("cannot find tx:", err.Error())
+	}
+	t.Logf("tx hash: %s %s", hex.EncodeToString(tx.Hash), hex.EncodeToString(acc.LastTxHash))
+}

@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
-	"strings"
 	"time"
 
 	"github.com/xssnick/tonutils-go/ton"
@@ -106,7 +105,8 @@ var timeNow = time.Now
 var (
 	ErrUnsupportedWalletVersion = errors.New("wallet version is not supported")
 	ErrTxWasNotConfirmed        = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
-	ErrTxWasNotFound            = errors.New("requested transaction is not found")
+	// Deprecated: use ton.ErrTxWasNotFound
+	ErrTxWasNotFound = errors.New("requested transaction is not found")
 )
 
 type TonAPI interface {
@@ -117,6 +117,8 @@ type TonAPI interface {
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
+	FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
+	FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
 }
 
 type Message struct {
@@ -755,62 +757,14 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	return addr, nil
 }
 
+// Deprecated: use ton.FindLastTransactionByInMsgHash
 // FindTransactionByInMsgHash returns transaction in wallet account with incoming message hash equal to msgHash.
 func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
-	limit := 60
-	if len(maxTxNumToScan) > 0 {
-		limit = maxTxNumToScan[0]
+	tx, err := w.api.FindLastTransactionByInMsgHash(ctx, w.addr, msgHash, maxTxNumToScan...)
+	if err != nil && errors.Is(err, ton.ErrTxWasNotFound) {
+		return nil, ErrTxWasNotFound
 	}
-
-	block, err := w.api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("cannot get masterchain info: %w", err)
-	}
-
-	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
-	if err != nil {
-		return nil, fmt.Errorf("cannot get account: %w", err)
-	}
-	if !acc.IsActive { // no tx is made from this account
-		return nil, fmt.Errorf("account is inactive: %w", ErrTxWasNotFound)
-	}
-
-	scanned := 0
-	for lastLt, lastHash := acc.LastTxLT, acc.LastTxHash; ; {
-		if lastLt == 0 { // no older transactions
-			return nil, ErrTxWasNotFound
-		}
-
-		txList, err := w.api.ListTransactions(ctx, w.addr, 15, lastLt, lastHash)
-		if err != nil && strings.Contains(err.Error(), "cannot compute block with specified transaction: lt not in db") {
-			return nil, fmt.Errorf("archive node is needed: %w", ErrTxWasNotFound)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("cannot list transactions: %w", err)
-		}
-
-		for i, transaction := range txList {
-			if i == 0 {
-				// get previous of the oldest tx, in case if we need to scan deeper
-				lastLt, lastHash = txList[0].PrevTxLT, txList[0].PrevTxHash
-			}
-
-			if transaction.IO.In == nil {
-				continue
-			}
-			if !bytes.Equal(transaction.IO.In.Msg.Payload().Hash(), msgHash) {
-				continue
-			}
-
-			return transaction, nil
-		}
-
-		scanned += 15
-
-		if scanned >= limit {
-			return nil, fmt.Errorf("scan limit of %d transactions was reached, %d transactions was checked and hash was not found", limit, scanned)
-		}
-	}
+	return tx, err
 }
 
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {

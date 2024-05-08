@@ -34,6 +34,15 @@ type Cell struct {
 	refs []*Cell
 }
 
+type RawUnsafeCell struct {
+	IsSpecial bool
+	LevelMask LevelMask
+	BitsSz    uint
+	Data      []byte
+
+	Refs []*Cell
+}
+
 func (c *Cell) copy() *Cell {
 	return &Cell{
 		special:     c.special,
@@ -68,6 +77,28 @@ func (c *Cell) ToBuilder() *Builder {
 		data:   data,
 		refs:   c.refs,
 	}
+}
+
+func (c *Cell) ToRawUnsafe() RawUnsafeCell {
+	return RawUnsafeCell{
+		IsSpecial: c.special,
+		LevelMask: c.levelMask,
+		BitsSz:    c.bitsSz,
+		Data:      c.data,
+		Refs:      c.refs,
+	}
+}
+
+func FromRawUnsafe(u RawUnsafeCell) *Cell {
+	c := &Cell{
+		special:   u.IsSpecial,
+		levelMask: u.LevelMask,
+		bitsSz:    u.BitsSz,
+		data:      u.Data,
+		refs:      u.Refs,
+	}
+	c.calculateHashes()
+	return c
 }
 
 func (c *Cell) BitsSize() uint {

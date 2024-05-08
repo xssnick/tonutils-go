@@ -97,7 +97,7 @@ func generateWallets(caseSensitive bool, suffix string, counter *uint64) {
 			binary.BigEndian.PutUint32(subwalletIDBytes, i)
 			getHashV3HashFromKey(hash, subwalletIDBytes, v3DataCell, v3StateInit, hashDst)
 
-			addr := address.NewAddress(0, 0, hashDst)
+			addr := address.NewAddress(0, 0, hashDst).Bounce(false)
 			addr.StringToBytes(addrTo, addrFrom)
 
 			if equalityFunc(suffix, string(addrTo[strCmpOffset:])) {

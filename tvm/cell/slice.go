@@ -37,6 +37,14 @@ func (c *Slice) LoadRef() (*Slice, error) {
 	return ref.BeginParse(), nil
 }
 
+func (c *Slice) PreloadRef() (*Slice, error) {
+	ref, err := c.PreloadRefCell()
+	if err != nil {
+		return nil, err
+	}
+	return ref.BeginParse(), nil
+}
+
 func (c *Slice) LoadRefCell() (*Cell, error) {
 	if len(c.refs) == 0 {
 		return nil, ErrNoMoreRefs
@@ -45,6 +53,13 @@ func (c *Slice) LoadRefCell() (*Cell, error) {
 	c.refs = c.refs[1:]
 
 	return ref, nil
+}
+
+func (c *Slice) PreloadRefCell() (*Cell, error) {
+	if len(c.refs) == 0 {
+		return nil, ErrNoMoreRefs
+	}
+	return c.refs[0], nil
 }
 
 func (c *Slice) MustLoadMaybeRef() *Slice {
@@ -115,8 +130,24 @@ func (c *Slice) MustLoadUInt(sz uint) uint64 {
 	return res
 }
 
+func (c *Slice) MustPreloadUInt(sz uint) uint64 {
+	res, err := c.PreloadUInt(sz)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
 func (c *Slice) LoadUInt(sz uint) (uint64, error) {
 	res, err := c.LoadBigUInt(sz)
+	if err != nil {
+		return 0, err
+	}
+	return res.Uint64(), nil
+}
+
+func (c *Slice) PreloadUInt(sz uint) (uint64, error) {
+	res, err := c.PreloadBigUInt(sz)
 	if err != nil {
 		return 0, err
 	}
@@ -163,6 +194,14 @@ func (c *Slice) MustLoadBigUInt(sz uint) *big.Int {
 	return r
 }
 
+func (c *Slice) MustPreloadBigUInt(sz uint) *big.Int {
+	r, err := c.PreloadBigUInt(sz)
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
 func (c *Slice) LoadBigUInt(sz uint) (*big.Int, error) {
 	if sz > 256 {
 		return nil, ErrTooBigSize
@@ -171,8 +210,36 @@ func (c *Slice) LoadBigUInt(sz uint) (*big.Int, error) {
 	return c.loadBigNumber(sz)
 }
 
+func (c *Slice) PreloadBigUInt(sz uint) (*big.Int, error) {
+	if sz > 256 {
+		return nil, ErrTooBigSize
+	}
+
+	return c.preloadBigNumber(sz)
+}
+
 func (c *Slice) loadBigNumber(sz uint) (*big.Int, error) {
 	b, err := c.LoadSlice(sz)
+	if err != nil {
+		return nil, err
+	}
+
+	// check is value is uses full bytes
+	if offset := sz % 8; offset > 0 {
+		// move bits to right side of bytes
+		for i := len(b) - 1; i >= 0; i-- {
+			b[i] >>= 8 - offset // get last bits
+			if i > 0 {
+				b[i] += b[i-1] << offset
+			}
+		}
+	}
+
+	return new(big.Int).SetBytes(b), nil
+}
+
+func (c *Slice) preloadBigNumber(sz uint) (*big.Int, error) {
+	b, err := c.PreloadSlice(sz)
 	if err != nil {
 		return nil, err
 	}
@@ -204,11 +271,11 @@ func (c *Slice) LoadBigInt(sz uint) (*big.Int, error) {
 	one := big.NewInt(1)
 
 	// check is last bit = 1
-	isNegative := new(big.Int).And(u, new(big.Int).Lsh(one, uint(sz-1))).Cmp(big.NewInt(0)) != 0
+	isNegative := new(big.Int).And(u, new(big.Int).Lsh(one, sz-1)).Cmp(big.NewInt(0)) != 0
 
 	if isNegative {
 		// get max value of given sz
-		i := new(big.Int).Lsh(one, uint(sz))
+		i := new(big.Int).Lsh(one, sz)
 		i = i.Sub(i, one)
 
 		val := u.Sub(u, i)
@@ -251,7 +318,23 @@ func (c *Slice) MustLoadSlice(sz uint) []byte {
 	return s
 }
 
+func (c *Slice) MustPreloadSlice(sz uint) []byte {
+	s, err := c.PreloadSlice(sz)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 func (c *Slice) LoadSlice(sz uint) ([]byte, error) {
+	return c.loadSlice(sz, false)
+}
+
+func (c *Slice) PreloadSlice(sz uint) ([]byte, error) {
+	return c.loadSlice(sz, true)
+}
+
+func (c *Slice) loadSlice(sz uint, preload bool) ([]byte, error) {
 	if c.bitsSz-c.loadedSz < sz {
 		return nil, ErrNotEnoughData(int(c.bitsSz-c.loadedSz), int(sz))
 	}
@@ -308,16 +391,17 @@ func (c *Slice) LoadSlice(sz uint) ([]byte, error) {
 		i++
 	}
 
-	if sz >= unusedBits {
-		usedBytes := (sz - unusedBits) / 8
-		if unusedBits > 0 {
-			usedBytes++
+	if !preload {
+		if sz >= unusedBits {
+			usedBytes := (sz - unusedBits) / 8
+			if unusedBits > 0 {
+				usedBytes++
+			}
+
+			c.data = c.data[usedBytes:]
 		}
-
-		c.data = c.data[usedBytes:]
+		c.loadedSz += sz
 	}
-
-	c.loadedSz += sz
 
 	return loadedData, nil
 }
@@ -518,7 +602,7 @@ func (c *Slice) ToBuilder() *Builder {
 	left := c.bitsSz - c.loadedSz
 	return &Builder{
 		bitsSz: left,
-		data:   c.Copy().MustLoadSlice(left),
+		data:   c.MustPreloadSlice(left),
 		refs:   c.refs,
 	}
 }
