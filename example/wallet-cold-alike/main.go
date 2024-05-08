@@ -13,6 +13,7 @@ import (
 )
 
 func main() {
+	// for completely offline mode you could use liteclient.NewOfflineClient() instead
 	client := liteclient.NewConnectionPool()
 
 	// connect to mainnet lite server

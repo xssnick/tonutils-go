@@ -235,7 +235,15 @@ type Transaction struct {
 }
 
 func (t *Transaction) Dump() string {
-	res := fmt.Sprintf("LT: %d\n\nInput:\nType %s\nFrom %s\nPayload:\n%s\n\nOutputs:\n", t.LT, t.IO.In.MsgType, t.IO.In.Msg.SenderAddr(), t.IO.In.Msg.Payload().Dump())
+	var in string
+	if t.IO.In != nil {
+		var pl = "EMPTY"
+		if p := t.IO.In.Msg.Payload(); p != nil {
+			pl = p.Dump()
+		}
+		in = fmt.Sprintf("\nInput:\nType %s\nFrom %s\nPayload:\n%s\n", t.IO.In.MsgType, t.IO.In.Msg.SenderAddr(), pl)
+	}
+	res := fmt.Sprintf("LT: %d\n%s\nOutputs:\n", t.LT, in)
 	if t.IO.Out != nil {
 		list, err := t.IO.Out.ToSlice()
 		if err != nil {
@@ -243,7 +251,14 @@ func (t *Transaction) Dump() string {
 		}
 
 		for _, m := range list {
-			res += m.AsInternal().Dump()
+			switch m.MsgType {
+			case MsgTypeInternal:
+				res += m.AsInternal().Dump()
+			case MsgTypeExternalOut:
+				res += "[EXT OUT] " + m.AsExternalOut().Body.Dump()
+			default:
+				res += "[UNKNOWN]"
+			}
 		}
 	}
 	return res

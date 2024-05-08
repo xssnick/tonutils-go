@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"math"
 	"math/big"
 	"testing"
@@ -204,7 +205,35 @@ func TestDict_Delete(t *testing.T) {
 	mm := NewDict(64)
 	mm.SetIntKey(big.NewInt(255), BeginCell().EndCell())
 	mm.SetIntKey(big.NewInt(777), BeginCell().EndCell())
-	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+	mm.SetIntKey(big.NewInt(333), BeginCell().EndCell())
+	mm.SetIntKey(big.NewInt(334), BeginCell().EndCell())
+	mm.SetIntKey(big.NewInt(331), BeginCell().EndCell())
+	mm.SetIntKey(big.NewInt(1000), BeginCell().EndCell())
+	mm.SetIntKey(big.NewInt(1001), BeginCell().EndCell())
+	hh, _ := mm.AsCell().BeginParse().ToDict(64)
+
+	kProof := BeginCell().MustStoreBigInt(big.NewInt(332), 64).EndCell()
+	sk := CreateProofSkeleton()
+	_, _, err := hh.LoadValueWithProof(kProof, sk)
+	if !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatal("no such key")
+	}
+	proof, err := hh.AsCell().CreateProof(sk)
+	if err != nil {
+		t.Fatal("failed to proof no key")
+	}
+
+	if _, err = hh.LoadValue(kProof); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatal("no key orig", err)
+	}
+
+	proof, err = UnwrapProof(proof, hh.AsCell().Hash())
+	if err != nil {
+		t.Fatal("bad proof hash", err)
+	}
+	if _, err = proof.AsDict(64).LoadValue(kProof); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatal("no no key proof", err)
+	}
 
 	hh.DeleteIntKey(big.NewInt(255))
 	hh2, _ := hh.MustToCell().BeginParse().ToDict(64)
