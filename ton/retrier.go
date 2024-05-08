@@ -35,6 +35,14 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 
 				continue
 			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				err := ctx.Err()
+				if err != nil {
+					return err
+				}
+				
+				continue
+			}
 
 			return err
 		}
