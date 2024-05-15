@@ -11,7 +11,16 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+// Default <= V4R2
 const DefaultSubwallet = 698983191
+
+// Unique Struct for Wallet V5R1
+type WalletId struct {
+	WalletVersion   uint8
+	NetworkGlobalId int32
+	WorkChain       int8
+	SubwalletNumber uint32
+}
 
 func AddressFromPubKey(key ed25519.PublicKey, version VersionConfig, subwallet uint32) (*address.Address, error) {
 	state, err := GetStateInit(key, version, subwallet)
@@ -78,6 +87,40 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 			MustStoreUInt(0, 32). // seqno
 			MustStoreUInt(uint64(subWallet), 32).
 			MustStoreSlice(pubKey, 256).
+			MustStoreDict(nil). // empty dict of plugins
+			EndCell()
+	case V5R1_Mainnet:
+		// Assuming walletId is initialized appropriately based on input parameters
+		walletId := WalletId{
+			WalletVersion:   0,    // Wallet V5R1 version is 0
+			NetworkGlobalId: -239, // TON Mainnet -239, Testnet -3
+			WorkChain:       0,    // Masterchain -1, Basechain 0
+			SubwalletNumber: 0,    // Subwallet number (you can adjust this as needed)
+		}
+		data = cell.BeginCell().
+			MustStoreInt(0, 33). // seqno
+			MustStoreInt(int64(walletId.NetworkGlobalId), 32).
+			MustStoreInt(int64(walletId.WorkChain), 8).
+			MustStoreUInt(uint64(walletId.WalletVersion), 8).
+			MustStoreUInt(uint64(walletId.SubwalletNumber), 32).
+			MustStoreSlice(pubKey, 32).
+			MustStoreDict(nil). // empty dict of plugins
+			EndCell()
+	case V5R1_Testnet:
+		// Assuming walletId is initialized appropriately based on input parameters
+		walletId := WalletId{
+			WalletVersion:   0,  // Wallet V5R1 version is 0
+			NetworkGlobalId: -3, // TON Mainnet -239, Testnet -3
+			WorkChain:       0,  // Masterchain -1, Basechain 0
+			SubwalletNumber: 0,  // Subwallet number (you can adjust this as needed)
+		}
+		data = cell.BeginCell().
+			MustStoreInt(0, 33). // seqno
+			MustStoreInt(int64(walletId.NetworkGlobalId), 32).
+			MustStoreInt(int64(walletId.WorkChain), 8).
+			MustStoreUInt(uint64(walletId.WalletVersion), 8).
+			MustStoreUInt(uint64(walletId.SubwalletNumber), 32).
+			MustStoreSlice(pubKey, 32).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
 	case HighloadV2R2, HighloadV2Verified:
