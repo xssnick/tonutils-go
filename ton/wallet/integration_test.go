@@ -183,7 +183,7 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	}
 
 	// wait next block to be sure everything updated
-	block, err = api.WaitForBlock(block.SeqNo + 2).GetMasterchainInfo(ctx)
+	block, err = api.WaitForBlock(block.SeqNo + 3).GetMasterchainInfo(ctx)
 	if err != nil {
 		t.Fatal("wait master err:", err.Error())
 	}
