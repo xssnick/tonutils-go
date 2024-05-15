@@ -578,6 +578,14 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 
 	asRef := false
 	if settings[0] == "^" {
+		if cellType == parseType {
+			// store cell as ref directly
+			if err := root.StoreRef(fieldVal.Interface().(*cell.Cell)); err != nil {
+				return fmt.Errorf("failed to store cell to ref for %s, err: %w", structField.Name, err)
+			}
+			return nil
+		}
+
 		asRef = true
 		settings = settings[1:]
 		builder = cell.BeginCell()
