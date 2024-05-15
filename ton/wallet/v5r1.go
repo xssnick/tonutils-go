@@ -24,6 +24,13 @@ type SpecV5R1 struct {
 	SpecSeqno
 }
 
+// Moved from WalletContractV5.ts
+const (
+	auth_extension       = 0x6578746e
+	auth_signed_external = 0x7369676e
+	auth_signed_internal = 0x73696e74
+)
+
 func (s *SpecV5R1) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, messages []*Message) (_ *cell.Cell, err error) {
 	// TODO: remove block, now it is here for backwards compatibility
 
@@ -36,22 +43,54 @@ func (s *SpecV5R1) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, 
 		return nil, fmt.Errorf("failed to fetch seqno: %w", err)
 	}
 
-	payload := cell.BeginCell().MustStoreUInt(uint64(s.wallet.subwallet), 32).
-		MustStoreUInt(uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()), 32).
-		MustStoreUInt(uint64(seq), 33).
-		MustStoreInt(0, 8) // op
+	// Start building the signing message
+	signingMessage := cell.BeginCell()
 
-	for i, message := range messages {
-		intMsg, err := tlb.ToCell(message.InternalMessage)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert internal message %d to cell: %w", i, err)
-		}
-
-		payload.MustStoreUInt(uint64(message.Mode), 8).MustStoreRef(intMsg)
+	// Determine the authentication type and opcode
+	authType := "external"
+	opCode := auth_signed_internal
+	if authType != "internal" {
+		opCode = auth_signed_external
 	}
 
+	// Store the opcode
+	// signingMessage = signingMessage.MustStoreUInt(uint64(opCode), 32)
+
+	// Handle seqno and timeout
+	signingMessage = signingMessage.MustStoreUInt(uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()), 32)
+
+	// Store seqno
+	signingMessage = signingMessage.MustStoreUInt(uint64(seq), 32)
+
+	// Store actions
+	// This need more complicated verification
+	signingMessage = signingMessage.MustStoreUInt(0, 1)
+
+	// Generate the payload
+	payload := cell.BeginCell().
+		MustStoreUInt(uint64(s.wallet.subwallet), 32).
+		MustStoreUInt(uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()), 32).
+		MustStoreUInt(uint64(seq), 32).
+		MustStoreInt(0, 8) // op
+
+	for _, message := range messages {
+		intMsg, err := tlb.ToCell(message.InternalMessage)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert internal message to cell: %w", err)
+		}
+
+		payload = payload.MustStoreUInt(uint64(message.Mode), 8).MustStoreRef(intMsg)
+	}
+
+	// Sign the payload
 	sign := payload.EndCell().Sign(s.wallet.key)
-	msg := cell.BeginCell().MustStoreSlice(sign, 512).MustStoreBuilder(payload).EndCell()
+
+	// Construct the final message
+	msg := cell.BeginCell().
+		MustStoreUInt(uint64(opCode), 32). // Here need the opcode? Or above
+		MustStoreSlice(sign, 512).
+		MustStoreBuilder(payload).
+		EndCell()
 
 	return msg, nil
 }
