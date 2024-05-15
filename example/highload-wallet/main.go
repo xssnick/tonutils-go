@@ -86,10 +86,11 @@ func main() {
 			messages = append(messages, &wallet.Message{
 				Mode: 1 + 2, // pay fee separately, ignore action errors
 				InternalMessage: &tlb.InternalMessage{
-					Bounce:  addr.IsBounceable(),
-					DstAddr: addr,
-					Amount:  tlb.MustFromTON(amtStr),
-					Body:    comment,
+					IHRDisabled: true, // disable hyper routing (currently not works in ton)
+					Bounce:      addr.IsBounceable(),
+					DstAddr:     addr,
+					Amount:      tlb.MustFromTON(amtStr),
+					Body:        comment,
 				},
 			})
 		}

@@ -74,6 +74,17 @@ func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
 	return cl.ToDict(keySz)
 }
 
+func (d *Dictionary) GetKeySize() uint {
+	return d.keySz
+}
+
+func (d *Dictionary) Copy() *Dictionary {
+	return &Dictionary{
+		keySz: d.keySz,
+		root:  d.root,
+	}
+}
+
 func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
 	return d.Set(BeginCell().MustStoreBigInt(key, d.keySz).EndCell(), value)
 }
