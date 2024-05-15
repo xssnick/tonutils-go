@@ -103,7 +103,7 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 			MustStoreInt(int64(walletId.WorkChain), 8).
 			MustStoreUInt(uint64(walletId.WalletVersion), 8).
 			MustStoreUInt(uint64(walletId.SubwalletNumber), 32).
-			MustStoreSlice(pubKey, 32).
+			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
 	case V5R1_Testnet:
@@ -120,7 +120,7 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 			MustStoreInt(int64(walletId.WorkChain), 8).
 			MustStoreUInt(uint64(walletId.WalletVersion), 8).
 			MustStoreUInt(uint64(walletId.SubwalletNumber), 32).
-			MustStoreSlice(pubKey, 32).
+			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
 	case HighloadV2R2, HighloadV2Verified:
