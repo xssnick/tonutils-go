@@ -73,7 +73,7 @@ var (
 		V2R1: _V2R1CodeHex, V2R2: _V2R2CodeHex,
 		V3R1: _V3R1CodeHex, V3R2: _V3R2CodeHex,
 		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
-		V5R1_Testnet: _V5R1TestCodeHex, V5R1_Mainnet: _V5R1MainCodeHex,
+		V5R1_Testnet: _V5R1CodeHex, V5R1_Mainnet: _V5R1CodeHex,
 		HighloadV2R2: _HighloadV2R2CodeHex, HighloadV2Verified: _HighloadV2VerifiedCodeHex,
 		HighloadV3: _HighloadV3CodeHex,
 		Lockup:     _LockupCodeHex,
@@ -200,10 +200,8 @@ func getSpec(w *Wallet) (any, error) {
 			return &SpecV3{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
 		case V4R1, V4R2:
 			return &SpecV4R2{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
-		case V5R1_Testnet:
-			return &SpecV5R1Test{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
-		case V5R1_Mainnet:
-			return &SpecV5R1Main{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
+		case V5R1_Testnet, V5R1_Mainnet:
+			return &SpecV5R1{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
 		case HighloadV2R2, HighloadV2Verified:
 			return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
 		case HighloadV3:
