@@ -200,13 +200,15 @@ func getSpec(w *Wallet) (any, error) {
 			return &SpecV3{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
 		case V4R1, V4R2:
 			return &SpecV4R2{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
-		case V5R1_Testnet, V5R1_Mainnet:
-			return &SpecV5R1{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
 		case HighloadV2R2, HighloadV2Verified:
 			return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
 		case HighloadV3:
 			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
+		case V5R1_Testnet, V5R1_Mainnet:
+			return nil, fmt.Errorf("use ConfigWalletV5 for WalletV5 spec")
 		}
+	case ConfigWalletV5:
+		return &SpecWalletV5{wallet: w, config: v}, nil
 	case ConfigHighloadV3:
 		return &SpecHighloadV3{wallet: w, config: v}, nil
 	}
@@ -308,7 +310,7 @@ func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateIni
 	switch v := w.ver.(type) {
 	case Version:
 		switch v {
-		case V3R2, V3R1, V4R2, V4R1, V5R1_Testnet, V5R1_Mainnet:
+		case V3R2, V3R1, V4R2, V4R1:
 			msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, !withStateInit, nil, messages)
 			if err != nil {
 				return nil, fmt.Errorf("build message err: %w", err)
@@ -325,6 +327,11 @@ func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateIni
 		}
 	case ConfigHighloadV3:
 		msg, err = w.spec.(*SpecHighloadV3).BuildMessage(ctx, messages)
+		if err != nil {
+			return nil, fmt.Errorf("build message err: %w", err)
+		}
+	case ConfigWalletV5:
+		msg, err = w.spec.(*SpecWalletV5).BuildMessage(ctx, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}

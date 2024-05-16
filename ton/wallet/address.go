@@ -67,6 +67,8 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 		}
 	case ConfigHighloadV3:
 		ver = HighloadV3
+	case ConfigWalletV5:
+		ver = V5R1_Testnet
 	}
 
 	code, ok := walletCode[ver]

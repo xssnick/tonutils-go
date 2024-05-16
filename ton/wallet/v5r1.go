@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
+	"math/big"
 
 	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/ton"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+)
+
+// Moved from WalletContractV5.ts
+const (
+	auth_extension       = 0x6578746e
+	auth_signed_external = 0x7369676e
+	auth_signed_internal = 0x73696e74
 )
 
 // Compiled from: https://github.com/tonkeeper/w5
@@ -19,80 +25,129 @@ import (
 // https://github.com/tonkeeper/tonkeeper-ton/commit/e8a7f3415e241daf4ac723f273fbc12776663c49#diff-c20d462b2e1ec616bbba2db39acc7a6c61edc3d5e768f5c2034a80169b1a56caR29
 const _V5R1CodeHex = "b5ee9c7241010101002300084202e4cf3b2f4c6d6a61ea0f2b5447d266785b26af3637db2deee6bcd1aa826f34120dcd8e11"
 
-type SpecV5R1 struct {
-	SpecRegular
-	SpecSeqno
+type ConfigWalletV5 struct {
+	// MessageTTL must be > 5 and less than 1<<22
+	MessageTTL uint32
+
+	// This function wil be used to get query id and creation time for the new message.
+	// ID can be iterator from your database, max id is 1<<23, when it is higher, start from 0 and repeat
+	// MessageBuilder should be defined if you want to send transactions
+	MessageBuilder func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error)
 }
 
-// Moved from WalletContractV5.ts
-const (
-	auth_extension       = 0x6578746e
-	auth_signed_external = 0x7369676e
-	auth_signed_internal = 0x73696e74
-)
+type SpecWalletV5 struct {
+	wallet *Wallet
 
-func (s *SpecV5R1) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, messages []*Message) (_ *cell.Cell, err error) {
-	// TODO: remove block, now it is here for backwards compatibility
+	config ConfigWalletV5
+}
+
+func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (_ *cell.Cell, err error) {
+	if s.config.MessageBuilder == nil {
+		return nil, errors.New("query fetcher is not defined in spec config")
+	}
+
+	if s.config.MessageTTL >= 1<<22 {
+		return nil, fmt.Errorf("too long ttl")
+	}
+
+	if s.config.MessageTTL <= 5 {
+		return nil, fmt.Errorf("too short ttl")
+	}
+
+	queryID, createdAt, err := s.config.MessageBuilder(ctx, s.wallet.subwallet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
+	}
+
+	if queryID >= 1<<23 {
+		return nil, fmt.Errorf("too big query id")
+	}
+
+	if createdAt <= 0 {
+		return nil, fmt.Errorf("created at should be positive")
+	}
+
+	var msg *Message
 
 	if len(messages) > 255 {
 		return nil, errors.New("for this type of wallet max 255 messages can be sent in the same time")
+	} else if len(messages) > 1 {
+		msg, err = s.packActions(uint64(queryID), messages)
+		if err != nil {
+			return nil, fmt.Errorf("failed to pack messages to cell: %w", err)
+		}
+	} else if len(messages) == 1 {
+		msg = messages[0]
+	} else {
+		return nil, errors.New("should have at least one message")
 	}
 
-	seq, err := s.seqnoFetcher(ctx, s.wallet.subwallet)
+	msgCell, err := tlb.ToCell(msg.InternalMessage)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch seqno: %w", err)
+		return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
 	}
 
-	// Start building the signing message
-	signingMessage := cell.BeginCell()
-
-	// Determine the authentication type and opcode
-	authType := "external"
-	opCode := auth_signed_internal
-	if authType != "internal" {
-		opCode = auth_signed_external
-	}
-
-	// Store the opcode
-	// signingMessage = signingMessage.MustStoreUInt(uint64(opCode), 32)
-
-	// Handle seqno and timeout
-	signingMessage = signingMessage.MustStoreUInt(uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()), 32)
-
-	// Store seqno
-	signingMessage = signingMessage.MustStoreUInt(uint64(seq), 32)
-
-	// Store actions
-	// This need more complicated verification
-	signingMessage = signingMessage.MustStoreUInt(0, 1)
-
-	// Generate the payload
 	payload := cell.BeginCell().
 		MustStoreUInt(uint64(s.wallet.subwallet), 32).
-		MustStoreUInt(uint64(timeNow().Add(time.Duration(s.messagesTTL)*time.Second).UTC().Unix()), 32).
-		MustStoreUInt(uint64(seq), 32).
-		MustStoreInt(0, 8) // op
-
-	for _, message := range messages {
-		intMsg, err := tlb.ToCell(message.InternalMessage)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert internal message to cell: %w", err)
-		}
-
-		payload = payload.MustStoreUInt(uint64(message.Mode), 8).MustStoreRef(intMsg)
-	}
-
-	// Sign the payload
-	sign := payload.EndCell().Sign(s.wallet.key)
-
-	// Construct the final message
-	msg := cell.BeginCell().
-		MustStoreUInt(uint64(opCode), 32). // Here need the opcode? Or above
-		MustStoreSlice(sign, 512).
-		MustStoreBuilder(payload).
+		MustStoreRef(msgCell).
+		MustStoreUInt(uint64(msg.Mode), 8).
+		MustStoreUInt(uint64(queryID), 23).
+		MustStoreUInt(uint64(createdAt), 64).
+		MustStoreUInt(uint64(s.config.MessageTTL), 22).
 		EndCell()
 
-	return msg, nil
+	return cell.BeginCell().
+		MustStoreSlice(payload.Sign(s.wallet.key), 512).
+		MustStoreRef(payload).EndCell(), nil
+}
+
+func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Message, error) {
+	if len(messages) > 253 {
+		rest, err := s.packActions(queryId, messages[253:])
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages[:253], rest)
+	}
+
+	var amt = big.NewInt(0)
+	var list = cell.BeginCell().EndCell()
+	for _, message := range messages {
+		amt = amt.Add(amt, message.InternalMessage.Amount.Nano())
+
+		outMsg, err := tlb.ToCell(message.InternalMessage)
+		if err != nil {
+			return nil, err
+		}
+
+		/*
+			out_list_empty$_ = OutList 0;
+			out_list$_ {n:#} prev:^(OutList n) action:OutAction
+			  = OutList (n + 1);
+			action_send_msg#0ec3c86d mode:(## 8)
+			  out_msg:^(MessageRelaxed Any) = OutAction;
+		*/
+		msg := cell.BeginCell().MustStoreUInt(auth_signed_internal, 32).
+			MustStoreUInt(uint64(message.Mode), 8).
+			MustStoreRef(outMsg)
+
+		list = cell.BeginCell().MustStoreRef(list).MustStoreBuilder(msg).EndCell()
+	}
+
+	return &Message{
+		Mode: 1 + 2,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      false,
+			DstAddr:     s.wallet.addr,
+			Amount:      tlb.FromNanoTON(amt),
+			Body: cell.BeginCell().
+				MustStoreUInt(auth_signed_external, 32).
+				MustStoreUInt(queryId, 64).
+				MustStoreRef(list).
+				EndCell(),
+		},
+	}, nil
 }
 
 // TODO: implement plugins
