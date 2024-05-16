@@ -38,7 +38,6 @@ type ConfigWalletV5 struct {
 
 type SpecWalletV5 struct {
 	wallet *Wallet
-
 	config ConfigWalletV5
 	SpecSeqno
 }
@@ -101,6 +100,7 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (_
 	}
 
 	payload := cell.BeginCell().
+		//MustStoreUInt(uint64(0), 8). // version
 		MustStoreUInt(uint64(s.wallet.subwallet), 32).
 		MustStoreUInt(uint64(timeNow().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32).
 		MustStoreUInt(uint64(seq), 32).
@@ -150,7 +150,7 @@ func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Messag
 			action_send_msg#0ec3c86d mode:(## 8)
 			  out_msg:^(MessageRelaxed Any) = OutAction;
 		*/
-		msg := cell.BeginCell().MustStoreUInt(auth_signed_internal, 32).
+		msg := cell.BeginCell().MustStoreUInt(0x0ec3c86d, 32).
 			MustStoreUInt(uint64(message.Mode), 8).
 			MustStoreRef(outMsg)
 
@@ -165,7 +165,7 @@ func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Messag
 			DstAddr:     s.wallet.addr,
 			Amount:      tlb.FromNanoTON(amt),
 			Body: cell.BeginCell().
-				MustStoreUInt(auth_signed_internal, 32).
+				MustStoreUInt(0xae42e5a4, 32). // auth_signed_internal maybe?
 				MustStoreUInt(queryId, 64).
 				MustStoreRef(list).
 				EndCell(),

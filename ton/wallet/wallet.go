@@ -208,7 +208,32 @@ func getSpec(w *Wallet) (any, error) {
 			return nil, fmt.Errorf("use ConfigWalletV5 for WalletV5 spec")
 		}
 	case ConfigWalletV5:
-		return &SpecWalletV5{wallet: w, config: v}, nil
+		seqnoFetcher := func(ctx context.Context, subWallet uint32) (uint32, error) {
+			block, err := w.api.CurrentMasterchainInfo(ctx)
+			if err != nil {
+				return 0, fmt.Errorf("failed to get block: %w", err)
+			}
+
+			resp, err := w.api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, w.addr, "seqno")
+			if err != nil {
+				if cErr, ok := err.(ton.ContractExecError); ok && cErr.Code == ton.ErrCodeContractNotInitialized {
+					return 0, nil
+				}
+				return 0, fmt.Errorf("get seqno err: %w", err)
+			}
+
+			iSeq, err := resp.Int(0)
+			if err != nil {
+				return 0, fmt.Errorf("failed to parse seqno: %w", err)
+			}
+			return uint32(iSeq.Uint64()), nil
+		}
+
+		return &SpecWalletV5{
+			wallet:    w,
+			config:    v,
+			SpecSeqno: SpecSeqno{seqnoFetcher: seqnoFetcher}, // Specify the field name for SpecSeqno
+		}, nil
 	case ConfigHighloadV3:
 		return &SpecHighloadV3{wallet: w, config: v}, nil
 	}
