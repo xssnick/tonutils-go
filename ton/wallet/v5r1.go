@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/xssnick/tonutils-go/tlb"
 
@@ -39,6 +40,7 @@ type SpecWalletV5 struct {
 	wallet *Wallet
 
 	config ConfigWalletV5
+	SpecSeqno
 }
 
 func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (_ *cell.Cell, err error) {
@@ -69,15 +71,21 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (_
 
 	var msg *Message
 
+	for i, msg := range messages {
+		fmt.Printf("Message %d: %v\n", i, msg)
+	}
+
 	if len(messages) > 255 {
-		return nil, errors.New("for this type of wallet max 255 messages can be sent in the same time")
-	} else if len(messages) > 1 {
-		msg, err = s.packActions(uint64(queryID), messages)
-		if err != nil {
-			return nil, fmt.Errorf("failed to pack messages to cell: %w", err)
+		return nil, errors.New("for this type of wallet max 255 messages can be sent at the same time")
+	} else if len(messages) > 0 { // Check if messages has at least one element
+		if len(messages) > 1 {
+			msg, err = s.packActions(uint64(queryID), messages)
+			if err != nil {
+				return nil, fmt.Errorf("failed to pack messages to cell: %w", err)
+			}
+		} else {
+			msg = messages[0]
 		}
-	} else if len(messages) == 1 {
-		msg = messages[0]
 	} else {
 		return nil, errors.New("should have at least one message")
 	}
@@ -87,18 +95,33 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (_
 		return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
 	}
 
+	seq, err := s.seqnoFetcher(ctx, s.wallet.subwallet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch seqno: %w", err)
+	}
+
 	payload := cell.BeginCell().
 		MustStoreUInt(uint64(s.wallet.subwallet), 32).
+		MustStoreUInt(uint64(timeNow().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32).
+		MustStoreUInt(uint64(seq), 32).
 		MustStoreRef(msgCell).
-		MustStoreUInt(uint64(msg.Mode), 8).
-		MustStoreUInt(uint64(queryID), 23).
-		MustStoreUInt(uint64(createdAt), 64).
-		MustStoreUInt(uint64(s.config.MessageTTL), 22).
 		EndCell()
 
-	return cell.BeginCell().
-		MustStoreSlice(payload.Sign(s.wallet.key), 512).
-		MustStoreRef(payload).EndCell(), nil
+	// Sign the payload
+	signature := payload.Sign(s.wallet.key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Construct the final signed payload
+	signedPayload := cell.BeginCell().
+		MustStoreUInt(auth_signed_external, 32).
+		MustStoreRef(payload).          // Store the payload
+		MustStoreSlice(signature, 512). // Store the signature
+		EndCell()
+
+	return signedPayload, nil
+
 }
 
 func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Message, error) {
@@ -142,7 +165,7 @@ func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Messag
 			DstAddr:     s.wallet.addr,
 			Amount:      tlb.FromNanoTON(amt),
 			Body: cell.BeginCell().
-				MustStoreUInt(auth_signed_external, 32).
+				MustStoreUInt(auth_signed_internal, 32).
 				MustStoreUInt(queryId, 64).
 				MustStoreRef(list).
 				EndCell(),
