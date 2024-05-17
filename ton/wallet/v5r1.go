@@ -8,32 +8,31 @@ import (
 	"time"
 
 	"github.com/xssnick/tonutils-go/tlb"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-// Moved from WalletContractV5.ts
-const (
-	auth_extension       = 0x6578746e
-	auth_signed_external = 0x7369676e
-	auth_signed_internal = 0x73696e74
-)
-
-// Compiled from: https://github.com/tonkeeper/w5
-// b5ee9c72410214010002b6000114ff00f4a413f4bcf2c80b0102012005020102f203011220d728239b4b3b74300401e6208308d722018308d723208020d721d34fd31fd31fed44d0d22020d34fd70bff08f9014098f910f2a35122baf2a15035baf2a2f823bbf264f800a4c8ca2001cf16c9ed54f80f20c7108e23d74c20d020c700dc8e15d72820761e436c20d71d06c712f265d74cd020c700e630ed558e82db3ce2110201480f060201200807001bbe5f0f6a2684080b8eb90fa021840201200c090201200b0a0019b45d1da89a10043ae43ae169f00015b592fda89a1ae14416c1700202760e0d0014a880ed44d0d70a20c2ff0018ab9ced44d08071d721d70bff02d8d020c702dc01d0d60301c713dc01d72c232bc3a3748ec701fa4030fa4401a4b2ed44d0810171d721f4058307f40edd21c7108e2430d74c20d020c700dc8e15d72820761e436c20d71d06c712f265d74cd020c700e630ed558e8330db3ce28e8b3120d72c239b4b73a431dde2111001f020d7498102b1b9dc208308d722018308d723208020d721d34fd31fd31fed44d0d22020d34fd70bff08f9014098f910dd5122baf2a15035baf2a2f823bbf264a4c8ca2001cf16c9ed54f80f20c7108e23d74c20d020c700dc8e15d72820761e436c20d71d06c712f265d74cd020c700e630ed558e82db3ce21102ca93d200018edcd72c20e206dcfc2091709901d72c22f577a52412e25210b18e3d30d72c21065dcad48e2fd200ed44d0d2205204983020c100f2aba3a48e1121c2fff2ab810150d721d70b00f2aaa4a3e2c8ca2058cf16c9ed5492f229e2e30dd74cd0e8d74c1312004220d020c700dc8e15d72820761e436c20d71d06c712f265d74cd020c700e630ed55008c01fa4001fa4421a4b2ed44d0810171d71821d70a2001f405069d3002c8ca0740148307f453f2a78e1133048307f45bf2a8206e02c10012b0f26ce2c85003cf1612f400c9ed549b4062a2
-
-// This one is in use by Tonkeeper at the moment
+// Verified V5 Contract from:
 // https://github.com/tonkeeper/tonkeeper-ton/commit/e8a7f3415e241daf4ac723f273fbc12776663c49#diff-c20d462b2e1ec616bbba2db39acc7a6c61edc3d5e768f5c2034a80169b1a56caR29
 const _V5R1CodeHex = "b5ee9c7241010101002300084202e4cf3b2f4c6d6a61ea0f2b5447d266785b26af3637db2deee6bcd1aa826f34120dcd8e11"
 
-type ConfigWalletV5 struct {
-	// MessageTTL must be > 5 and less than 1<<22
-	MessageTTL uint32
+// Constants
+const (
+	authSignedExternal  = 0x7369676e
+	authSignedInternal  = 0x73696e74
+	maxMessages         = 255
+	maxActionListLength = 10000 // Change later to correct one
+)
 
-	// This function wil be used to get query id and creation time for the new message.
-	// ID can be iterator from your database, max id is 1<<23, when it is higher, start from 0 and repeat
-	// MessageBuilder should be defined if you want to send transactions
-	MessageBuilder func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error)
+type KWalletId struct {
+	WalletVersion   uint8
+	NetworkGlobalId int32
+	WorkChain       int8
+	SubwalletNumber uint32
+}
+
+type ConfigWalletV5 struct {
+	MessageTTL     uint32
+	MessageBuilder func(ctx context.Context, subWalletID uint32) (id uint32, createdAt int64, err error)
 }
 
 type SpecWalletV5 struct {
@@ -42,80 +41,81 @@ type SpecWalletV5 struct {
 	SpecSeqno
 }
 
-func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (_ *cell.Cell, err error) {
+func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (*cell.Cell, error) {
+	// Define network
+	walletId := KWalletId{
+		WalletVersion:   0,
+		NetworkGlobalId: -3,
+		WorkChain:       0,
+		SubwalletNumber: 0,
+	}
 	if s.config.MessageBuilder == nil {
 		return nil, errors.New("query fetcher is not defined in spec config")
 	}
-
 	if s.config.MessageTTL >= 1<<22 {
 		return nil, fmt.Errorf("too long ttl")
 	}
-
 	if s.config.MessageTTL <= 5 {
 		return nil, fmt.Errorf("too short ttl")
 	}
 
-	queryID, createdAt, err := s.config.MessageBuilder(ctx, s.wallet.subwallet)
+	queryID, createdAt, err := s.config.MessageBuilder(ctx, walletId.SubwalletNumber)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
+		return nil, fmt.Errorf("failed to fetch query id: %w", err)
 	}
-
 	if queryID >= 1<<23 {
 		return nil, fmt.Errorf("too big query id")
 	}
-
 	if createdAt <= 0 {
 		return nil, fmt.Errorf("created at should be positive")
 	}
 
-	var msg *Message
-
-	for i, msg := range messages {
-		fmt.Printf("Message %d: %v\n", i, msg)
-	}
-
-	if len(messages) > 255 {
-		return nil, errors.New("for this type of wallet max 255 messages can be sent at the same time")
-	} else if len(messages) > 0 { // Check if messages has at least one element
-		if len(messages) > 1 {
-			msg, err = s.packActions(uint64(queryID), messages)
-			if err != nil {
-				return nil, fmt.Errorf("failed to pack messages to cell: %w", err)
-			}
-		} else {
-			msg = messages[0]
-		}
-	} else {
-		return nil, errors.New("should have at least one message")
-	}
-
-	msgCell, err := tlb.ToCell(msg.InternalMessage)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
-	}
-
-	seq, err := s.seqnoFetcher(ctx, s.wallet.subwallet)
+	seq, err := s.seqnoFetcher(ctx, walletId.SubwalletNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch seqno: %w", err)
 	}
 
-	walletId := WalletId{
-		WalletVersion:   0,  // Wallet V5R1 version is 0
-		NetworkGlobalId: -3, // TON Mainnet -239, Testnet -3
-		WorkChain:       0,  // Masterchain -1, Basechain 0
-		SubwalletNumber: 0,  // Subwallet number (you can adjust this as needed)
+	if len(messages) > maxMessages {
+		return nil, errors.New("for this type of wallet max 255 messages can be sent at the same time")
+	} else if len(messages) == 0 {
+		return nil, errors.New("should have at least one message")
 	}
 
+	var msg *Message
+	if len(messages) > 1 {
+		msg, err = s.packActions(uint64(seq), messages)
+		if err != nil {
+			return nil, fmt.Errorf("failed to pack messages: %w", err)
+		}
+	} else {
+		msg = messages[0]
+	}
+
+	msgCell, err := tlb.ToCell(msg.InternalMessage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert message to cell: %w", err)
+	}
+
+	// Construct the initial payload
 	payload := cell.BeginCell().
-		//MustStoreUInt(auth_signed_external, 32). // Ensure opcode alignment
 		MustStoreInt(int64(walletId.NetworkGlobalId), 32).
 		MustStoreInt(int64(walletId.WorkChain), 8).
 		MustStoreUInt(uint64(walletId.WalletVersion), 8).
-		MustStoreUInt(uint64(s.wallet.subwallet), 32).
+		MustStoreUInt(uint64(walletId.SubwalletNumber), 32).
 		MustStoreUInt(uint64(time.Now().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32).
-		MustStoreUInt(uint64(seq), 32).
+		MustStoreUInt(uint64(seq), 32). // Ensure sequence number is stored as 32 bits
 		MustStoreRef(msgCell).
 		EndCell()
+
+	// Log details about each part of the payload
+	fmt.Printf("NetworkGlobalId: %d (size: %d bits)\n", walletId.NetworkGlobalId, 32)
+	fmt.Printf("WorkChain: %d (size: %d bits)\n", walletId.WorkChain, 8)
+	fmt.Printf("WalletVersion: %d (size: %d bits)\n", walletId.WalletVersion, 8)
+	fmt.Printf("SubwalletNumber: %d (size: %d bits)\n", walletId.SubwalletNumber, 32)
+	fmt.Printf("TTL: %d (size: %d bits)\n", uint64(time.Now().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32)
+	fmt.Printf("Sequence Number: %d (size: %d bits)\n", uint64(seq), 32)
+	fmt.Printf("Query ID: %d (size: %d bits)\n", uint64(queryID), 64)
+	fmt.Printf("Payload size: %d bits\n", len(payload.ToBOC())*8)
 
 	// Sign the payload
 	signature := payload.Sign(s.wallet.key)
@@ -123,22 +123,28 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (_
 		return nil, err
 	}
 
+	// Log the signature
+	fmt.Printf("Signature: %x\n", signature)
+
 	// Construct the final signed payload
 	signedPayload := cell.BeginCell().
-		MustStoreUInt(auth_signed_external, 32). // Ensure opcode alignment
-		MustStoreRef(payload).                   // Store the payload
-		MustStoreSlice(signature, 512).          // Store the signature in a compatible format
+		MustStoreUInt(authSignedExternal, 32). // Ensure opcode alignment
+		MustStoreRef(payload).                 // Store the payload
+		MustStoreSlice(signature, 512).        // Store the signature in a compatible format
 		EndCell()
+
+	// Log the final payload
+	fmt.Printf("Final signed payload: %x\n", signedPayload.ToBOC())
 
 	return signedPayload, nil
 
 }
 
+// packActions method to pack multiple actions into a single message
 func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Message, error) {
-	// Functionality for handling messages exceeding 255 omitted for brevity
+	amt := big.NewInt(0)
+	listBuilder := cell.BeginCell().MustStoreUInt(0, 1)
 
-	var amt = big.NewInt(0)
-	var list = cell.BeginCell().EndCell()
 	for _, message := range messages {
 		amt = amt.Add(amt, message.InternalMessage.Amount.Nano())
 
@@ -147,39 +153,40 @@ func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Messag
 			return nil, err
 		}
 
-		// Placeholder for extended action with null data
-		extendedActionCell := cell.BeginCell().MustStoreUInt(0, 32) // Null data placeholder
-
-		/*
-			out_list_empty$_ = OutList 0;
-			out_list$_ {n:#} prev:^(OutList n) action:OutAction
-			= OutList (n + 1);
-			action_send_msg#0ec3c86d mode:(## 8)
-			out_msg:^(MessageRelaxed Any) = OutAction;
-		*/
-
-		msg := cell.BeginCell().MustStoreUInt(0x0ec3c86d, 32).
+		msg := cell.BeginCell().
+			MustStoreUInt(0x0ec3c86d, 32). // action_send_msg opcode
 			MustStoreUInt(uint64(message.Mode), 8).
 			MustStoreRef(outMsg).
-			MustStoreBuilder(extendedActionCell) // Include extended action placeholder
+			EndCell()
 
-		list = cell.BeginCell().MustStoreRef(list).MustStoreBuilder(msg).EndCell()
+		listBuilder.MustStoreRef(
+			cell.BeginCell().MustStoreRef(cell.BeginCell().EndCell()).MustStoreRef(msg).EndCell(),
+		)
 	}
 
-	return &Message{
+	list := listBuilder.EndCell()
+
+	// Validate the action list length
+	if len(list.ToBOC()) > maxActionListLength {
+		return nil, errors.New("action list too long")
+	}
+
+	internalMessageCell := cell.BeginCell().
+		MustStoreUInt(authSignedInternal, 32). // internal_signed opcode
+		MustStoreUInt(queryId, 64).
+		MustStoreRef(list).
+		EndCell()
+
+	message := &Message{
 		Mode: 1 + 2,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      false,
 			DstAddr:     s.wallet.addr,
 			Amount:      tlb.FromNanoTON(amt),
-			Body: cell.BeginCell().
-				MustStoreUInt(0xae42e5a4, 32). // auth_signed_internal maybe?
-				MustStoreUInt(queryId, 64).
-				MustStoreRef(list).
-				EndCell(),
+			Body:        internalMessageCell,
 		},
-	}, nil
-}
+	}
 
-// TODO: implement plugins
+	return message, nil
+}
