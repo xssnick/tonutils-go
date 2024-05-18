@@ -2,6 +2,7 @@ package tlb
 
 import (
 	"encoding/hex"
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"testing"
 )
@@ -58,6 +59,366 @@ func TestShardState_LoadFromCell(t *testing.T) {
 
 			if testShard.State.(ShardStateSplit).Left.Seqno != 24374596 {
 				t.Fatal("incorrect result")
+			}
+		})
+	}
+}
+
+func TestShardIdent_IsSibling(t *testing.T) {
+	type fields struct {
+		_           Magic
+		WorkchainID int32
+		ShardPrefix uint64
+	}
+	type args struct {
+		with ShardIdent
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+		{
+			name: "true",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0xC000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0x4000000000000000,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "same",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0x4000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0x4000000000000000,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "next",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0x6000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0x4000000000000000,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "diff wc",
+			fields: fields{
+				WorkchainID: -1,
+				ShardPrefix: 0xC000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0x4000000000000000,
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ShardIdent{
+				WorkchainID: tt.fields.WorkchainID,
+				ShardPrefix: tt.fields.ShardPrefix,
+			}
+			if got := s.IsSibling(tt.args.with); got != tt.want {
+				t.Errorf("IsSibling() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShardIdent_IsParent(t *testing.T) {
+	type fields struct {
+		_           Magic
+		WorkchainID int32
+		ShardPrefix uint64
+	}
+	type args struct {
+		with ShardIdent
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+		{
+			name: "parent",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0x8000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0xC000000000000000,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "child",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0xC000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0x8000000000000000,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "grand child",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0x8000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0xE000000000000000,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "diff wc",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0x8000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: -1,
+					ShardPrefix: 0xC000000000000000,
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ShardIdent{
+				WorkchainID: tt.fields.WorkchainID,
+				ShardPrefix: tt.fields.ShardPrefix,
+			}
+			if got := s.IsParent(tt.args.with); got != tt.want {
+				t.Errorf("IsParent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShardIdent_IsAncestor(t *testing.T) {
+	type fields struct {
+		_           Magic
+		WorkchainID int32
+		ShardPrefix uint64
+	}
+	type args struct {
+		with ShardIdent
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   bool
+	}{
+		{
+			name: "ancestor",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0x8000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: 0,
+					ShardPrefix: 0xE000000000000000,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "diff wc",
+			fields: fields{
+				WorkchainID: 0,
+				ShardPrefix: 0x8000000000000000,
+			},
+			args: args{
+				with: ShardIdent{
+					WorkchainID: -1,
+					ShardPrefix: 0xE000000000000000,
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ShardIdent{
+				WorkchainID: tt.fields.WorkchainID,
+				ShardPrefix: tt.fields.ShardPrefix,
+			}
+			if got := s.IsAncestor(tt.args.with); got != tt.want {
+				t.Errorf("IsAncestor() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShardIdent_GetShardID(t *testing.T) {
+	type fields struct {
+		ShardPrefix uint64
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   ShardID
+	}{
+		{
+			name: "ok",
+			fields: fields{
+				ShardPrefix: 0xE000000000000000,
+			},
+			want: 0xE000000000000000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ShardIdent{
+				ShardPrefix: tt.fields.ShardPrefix,
+			}
+			if got := s.GetShardID(); got != tt.want {
+				t.Errorf("GetShardID() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShardID_GetChild(t *testing.T) {
+	type args struct {
+		left bool
+	}
+	tests := []struct {
+		name string
+		s    ShardID
+		args args
+		want ShardID
+	}{
+		{
+			name: "ok",
+			s:    0xE000000000000000,
+			args: args{
+				true,
+			},
+			want: 0xD000000000000000,
+		},
+		{
+			name: "ok",
+			s:    0xE000000000000000,
+			args: args{
+				false,
+			},
+			want: 0xF000000000000000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.s.GetChild(tt.args.left); got != tt.want {
+				t.Errorf("GetChild() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShardID_ContainsAddress(t *testing.T) {
+	type args struct {
+		addr *address.Address
+	}
+	tests := []struct {
+		name string
+		s    ShardID
+		args args
+		want bool
+	}{
+		{
+			name: "ok",
+			s:    0xA000000000000000,
+			args: args{
+				address.MustParseAddr("EQCN6j4gO7D_9OBkWQy_BkW1peVqA0ikvcSgCd9yj1yxu7VD"),
+			},
+			want: true,
+		},
+		{
+			name: "ok 2",
+			s:    0x6000000000000000,
+			args: args{
+				address.MustParseAddr("EQBTmKoKwypDGJFXf9FNwNdKG9Ei5C9KdKd85_ALPLRJbIR1"),
+			},
+			want: true,
+		},
+		{
+			name: "ok 3",
+			s:    0x8000000000000000,
+			args: args{
+				address.MustParseAddr("EQBTmKoKwypDGJFXf9FNwNdKG9Ei5C9KdKd85_ALPLRJbIR1"),
+			},
+			want: true,
+		},
+		{
+			name: "ok 3",
+			s:    0x8000000000000000,
+			args: args{
+				address.MustParseAddr("EQCN6j4gO7D_9OBkWQy_BkW1peVqA0ikvcSgCd9yj1yxu7VD"),
+			},
+			want: true,
+		},
+		{
+			name: "no",
+			s:    0x6000000000000000,
+			args: args{
+				address.MustParseAddr("EQCN6j4gO7D_9OBkWQy_BkW1peVqA0ikvcSgCd9yj1yxu7VD"),
+			},
+			want: false,
+		},
+		{
+			name: "no 2",
+			s:    0xA000000000000000,
+			args: args{
+				address.MustParseAddr("EQBTmKoKwypDGJFXf9FNwNdKG9Ei5C9KdKd85_ALPLRJbIR1"),
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.s.ContainsAddress(tt.args.addr); got != tt.want {
+				t.Errorf("ContainsAddress() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -83,10 +83,40 @@ func Test_HighloadHeavyTransfer(t *testing.T) {
 	t.Log("TX", base64.StdEncoding.EncodeToString(tx.Hash))
 }
 
+func Test_V5HeavyTransfer(t *testing.T) {
+	seed := strings.Split(_seed, " ")
+
+	w, err := FromSeed(api, seed, ConfigV5R1{
+		NetworkGlobalID: MainnetGlobalID,
+	})
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+		return
+	}
+
+	t.Log("test wallet address:", w.WalletAddress())
+
+	var list []*Message
+	for i := 0; i < 255; i++ {
+		com, _ := CreateCommentCell(fmt.Sprint(i))
+		list = append(list, SimpleMessage(w.WalletAddress(), tlb.MustFromTON("0.001"), com))
+	}
+
+	tx, _, err := w.SendManyWaitTransaction(context.Background(), list)
+	if err != nil {
+		t.Fatal("Send err:", err.Error())
+		return
+	}
+
+	t.Log("TX", base64.StdEncoding.EncodeToString(tx.Hash))
+}
+
 func Test_WalletTransfer(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 
-	for _, v := range []VersionConfig{V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified, ConfigHighloadV3{
+	for _, v := range []VersionConfig{ConfigV5R1{
+		NetworkGlobalID: TestnetGlobalID,
+	}, V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified, ConfigHighloadV3{
 		MessageTTL: 120,
 		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
 			tm := time.Now().Unix() - 30
