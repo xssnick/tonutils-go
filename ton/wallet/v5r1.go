@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
-	"math/big"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -68,11 +67,8 @@ func packV5Actions(messages []*Message) (*cell.Builder, error) {
 		return nil, fmt.Errorf("max 255 messages allowed for v5")
 	}
 
-	var amt = big.NewInt(0)
 	var list = cell.BeginCell().EndCell()
 	for _, message := range messages {
-		amt = amt.Add(amt, message.InternalMessage.Amount.Nano())
-
 		outMsg, err := tlb.ToCell(message.InternalMessage)
 		if err != nil {
 			return nil, err
