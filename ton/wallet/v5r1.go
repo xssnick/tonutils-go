@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -41,6 +42,21 @@ type SpecWalletV5 struct {
 	SpecSeqno
 }
 
+func bufferToBigInt(buffer []byte) *big.Int {
+	return new(big.Int).SetBytes(buffer)
+}
+
+// Convert a byte buffer to a uint64
+func bufferToUint64(buffer []byte) uint64 {
+	if len(buffer) < 8 {
+		// If buffer is smaller than 8 bytes, pad with zeros
+		paddedBuffer := make([]byte, 8)
+		copy(paddedBuffer[8-len(buffer):], buffer)
+		return binary.BigEndian.Uint64(paddedBuffer)
+	}
+	return binary.BigEndian.Uint64(buffer[:8])
+}
+
 func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (*cell.Cell, error) {
 	// Define network
 	walletId := KWalletId{
@@ -49,6 +65,7 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (*
 		WorkChain:       0,
 		SubwalletNumber: 0,
 	}
+
 	if s.config.MessageBuilder == nil {
 		return nil, errors.New("query fetcher is not defined in spec config")
 	}
@@ -82,13 +99,9 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (*
 	}
 
 	var msg *Message
-	if len(messages) > 1 {
-		msg, err = s.packActions(uint64(seq), messages)
-		if err != nil {
-			return nil, fmt.Errorf("failed to pack messages: %w", err)
-		}
-	} else {
-		msg = messages[0]
+	msg, err = s.packActions(uint64(seq), messages)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack messages: %w", err)
 	}
 
 	msgCell, err := tlb.ToCell(msg.InternalMessage)
@@ -96,18 +109,17 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (*
 		return nil, fmt.Errorf("failed to convert message to cell: %w", err)
 	}
 
-	// Construct the initial payload
-	payload := cell.BeginCell().
+	walletIdCell := cell.BeginCell().
 		MustStoreInt(int64(walletId.NetworkGlobalId), 32).
 		MustStoreInt(int64(walletId.WorkChain), 8).
 		MustStoreUInt(uint64(walletId.WalletVersion), 8).
-		MustStoreUInt(uint64(walletId.SubwalletNumber), 32).
-		MustStoreUInt(uint64(time.Now().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32).
-		MustStoreUInt(uint64(seq), 32). // Ensure sequence number is stored as 32 bits
-		MustStoreRef(msgCell).
+		MustStoreUInt(uint64(walletId.SubwalletNumber), 32). // 0??? get_wallet_id 0xffffff11000000000000?
 		EndCell()
 
-	// Log details about each part of the payload
+	// Convert the cell to a byte buffer
+	buffer := walletIdCell.ToBOC()
+
+	// Log the signature
 	fmt.Printf("NetworkGlobalId: %d (size: %d bits)\n", walletId.NetworkGlobalId, 32)
 	fmt.Printf("WorkChain: %d (size: %d bits)\n", walletId.WorkChain, 8)
 	fmt.Printf("WalletVersion: %d (size: %d bits)\n", walletId.WalletVersion, 8)
@@ -115,33 +127,34 @@ func (s *SpecWalletV5) BuildMessage(ctx context.Context, messages []*Message) (*
 	fmt.Printf("TTL: %d (size: %d bits)\n", uint64(time.Now().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32)
 	fmt.Printf("Sequence Number: %d (size: %d bits)\n", uint64(seq), 32)
 	fmt.Printf("Query ID: %d (size: %d bits)\n", uint64(queryID), 64)
-	fmt.Printf("Payload size: %d bits\n", len(payload.ToBOC())*8)
+	//fmt.Printf("Signature: %x\n", signature)
+	//fmt.Printf("Payload size: %d bits\n", len(payload.ToBOC())*8)
+	//fmt.Printf("Signature size: %d bits\n", len(signature)*8)
 
-	// Sign the payload
-	signature := payload.Sign(s.wallet.key)
-	if err != nil {
-		return nil, err
-	}
-
-	// Log the signature
-	fmt.Printf("Signature: %x\n", signature)
+	signedPayloadTMP := cell.BeginCell().
+		MustStoreUInt(authSignedExternal, 32).     // Ensure opcode alignment
+		MustStoreUInt(bufferToUint64(buffer), 80). // Store the byte buffer directly as a bit slice
+		MustStoreUInt(uint64(time.Now().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32).
+		MustStoreUInt(uint64(seq), 32). // Ensure sequence number is stored as 32 bits
+		MustStoreRef(msgCell).
+		EndCell()
 
 	// Construct the final signed payload
 	signedPayload := cell.BeginCell().
-		MustStoreUInt(authSignedExternal, 32). // Ensure opcode alignment
-		MustStoreRef(payload).                 // Store the payload
-		MustStoreSlice(signature, 512).        // Store the signature in a compatible format
+		MustStoreUInt(authSignedExternal, 32).     // Ensure opcode alignment
+		MustStoreUInt(bufferToUint64(buffer), 80). // Store the byte buffer directly as a bit slice
+		MustStoreUInt(uint64(time.Now().Add(time.Duration(s.config.MessageTTL)*time.Second).UTC().Unix()), 32).
+		MustStoreUInt(uint64(seq), 32). // Ensure sequence number is stored as 32 bits
+		MustStoreRef(msgCell).
+		MustStoreSlice(signedPayloadTMP.Sign(s.wallet.key), 512). // need to sign the whole cell and add before the end
 		EndCell()
 
-	// Log the final payload
-	fmt.Printf("Final signed payload: %x\n", signedPayload.ToBOC())
-
 	return signedPayload, nil
-
 }
 
 // packActions method to pack multiple actions into a single message
 func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Message, error) {
+	fmt.Printf("I got called !!!")
 	amt := big.NewInt(0)
 	listBuilder := cell.BeginCell().MustStoreUInt(0, 1)
 
@@ -156,11 +169,11 @@ func (s *SpecWalletV5) packActions(queryId uint64, messages []*Message) (*Messag
 		msg := cell.BeginCell().
 			MustStoreUInt(0x0ec3c86d, 32). // action_send_msg opcode
 			MustStoreUInt(uint64(message.Mode), 8).
-			MustStoreRef(outMsg).
+			MustStoreRef(cell.BeginCell().MustStoreRef(outMsg).EndCell()).
 			EndCell()
 
 		listBuilder.MustStoreRef(
-			cell.BeginCell().MustStoreRef(cell.BeginCell().EndCell()).MustStoreRef(msg).EndCell(),
+			cell.BeginCell().MustStoreRef(msg).EndCell(),
 		)
 	}
 
