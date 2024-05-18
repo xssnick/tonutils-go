@@ -40,6 +40,13 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 				if err != nil {
 					return err
 				}
+
+				// try next node
+				ctx, err = w.original.StickyContextNextNode(ctx)
+				if err != nil {
+					return fmt.Errorf("timeout error received, but failed to try with next node, "+
+						"looks like all active nodes was already tried, original error: %w", err)
+				}
 				
 				continue
 			}
