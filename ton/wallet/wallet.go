@@ -149,11 +149,18 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (
 	}
 
 	w := &Wallet{
-		api:       api,
-		key:       key,
-		addr:      addr,
-		ver:       version,
-		subwallet: DefaultSubwallet,
+		api:  api,
+		key:  key,
+		addr: addr,
+		ver:  version,
+	}
+
+	// default subwallet depends on wallet type
+	switch version.(type) {
+	case ConfigV5R1:
+		w.subwallet = 0
+	default:
+		w.subwallet = DefaultSubwallet
 	}
 
 	w.spec, err = getSpec(w)
@@ -193,6 +200,14 @@ func getSpec(w *Wallet) (any, error) {
 			return uint32(iSeq.Uint64()), nil
 		}
 
+		switch x := w.ver.(type) {
+		case ConfigV5R1:
+			if x.NetworkGlobalID == 0 {
+				return nil, fmt.Errorf("NetworkGlobalID should be set in v5 config")
+			}
+			return &SpecV5R1{SpecRegular: regular, SpecSeqno: SpecSeqno{seqnoFetcher: seqnoFetcher}, config: x}, nil
+		}
+
 		switch v {
 		case V3R1, V3R2:
 			return &SpecV3{regular, SpecSeqno{seqnoFetcher: seqnoFetcher}}, nil
@@ -204,14 +219,6 @@ func getSpec(w *Wallet) (any, error) {
 			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
 		case V5R1:
 			return nil, fmt.Errorf("use ConfigV5R1 for v5 spec")
-		default:
-			switch x := w.ver.(type) {
-			case ConfigV5R1:
-				if x.NetworkGlobalID == 0 {
-					return nil, fmt.Errorf("NetworkGlobalID should be set in v5 config")
-				}
-				return &SpecV5R1{SpecRegular: regular, SpecSeqno: SpecSeqno{seqnoFetcher: seqnoFetcher}, config: x}, nil
-			}
 		}
 	case ConfigHighloadV3:
 		return &SpecHighloadV3{wallet: w, config: v}, nil
