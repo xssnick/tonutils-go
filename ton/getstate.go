@@ -40,11 +40,11 @@ type AccountID struct {
 }
 
 func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error) {
-	acc, _, err := c.GetAccountAndShardBlock(ctx, block, addr)
+	acc, _, err := c.GetAccountWithShardBlock(ctx, block, addr)
 	return acc, err
 }
 
-func (c *APIClient) GetAccountAndShardBlock(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, *BlockIDExt, error) {
+func (c *APIClient) GetAccountWithShardBlock(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, *BlockIDExt, error) {
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, GetAccountState{
 		ID: block,
