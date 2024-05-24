@@ -143,24 +143,25 @@ type Wallet struct {
 }
 
 func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (*Wallet, error) {
-	addr, err := AddressFromPubKey(key.Public().(ed25519.PublicKey), version, DefaultSubwallet)
+	var subwallet uint32 = DefaultSubwallet
+
+	// default subwallet depends on wallet type
+	switch version.(type) {
+	case ConfigV5R1:
+		subwallet = 0
+	}
+
+	addr, err := AddressFromPubKey(key.Public().(ed25519.PublicKey), version, subwallet)
 	if err != nil {
 		return nil, err
 	}
 
 	w := &Wallet{
-		api:  api,
-		key:  key,
-		addr: addr,
-		ver:  version,
-	}
-
-	// default subwallet depends on wallet type
-	switch version.(type) {
-	case ConfigV5R1:
-		w.subwallet = 0
-	default:
-		w.subwallet = DefaultSubwallet
+		api:       api,
+		key:       key,
+		addr:      addr,
+		ver:       version,
+		subwallet: subwallet,
 	}
 
 	w.spec, err = getSpec(w)
