@@ -40,6 +40,11 @@ type AccountID struct {
 }
 
 func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error) {
+	acc, _, err := c.GetAccountAndShardBlock(ctx, block, addr)
+	return acc, err
+}
+
+func (c *APIClient) GetAccountAndShardBlock(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, *BlockIDExt, error) {
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, GetAccountState{
 		ID: block,
@@ -49,23 +54,23 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 		},
 	}, &resp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	switch t := resp.(type) {
 	case AccountState:
 		if !t.ID.Equals(block) {
-			return nil, fmt.Errorf("response with incorrect master block")
+			return nil, nil, fmt.Errorf("response with incorrect master block")
 		}
 
 		if t.State == nil {
 			return &tlb.Account{
 				IsActive: false,
-			}, nil
+			}, nil, nil
 		}
 
 		if t.Proof == nil {
-			return nil, fmt.Errorf("no proof")
+			return nil, nil, fmt.Errorf("no proof")
 		}
 
 		acc := &tlb.Account{
@@ -75,11 +80,11 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 		var shardHash []byte
 		if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
 			if len(t.ShardProof) == 0 {
-				return nil, ErrNoProof
+				return nil, nil, ErrNoProof
 			}
 
 			if t.Shard == nil || len(t.Shard.RootHash) != 32 {
-				return nil, fmt.Errorf("shard block not passed")
+				return nil, nil, fmt.Errorf("shard block not passed")
 			}
 
 			shardHash = t.Shard.RootHash
@@ -87,20 +92,20 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 
 		shardAcc, balanceInfo, err := CheckAccountStateProof(addr, block, t.Proof, t.ShardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
 		if err != nil {
-			return nil, fmt.Errorf("failed to check acc state proof: %w", err)
+			return nil, nil, fmt.Errorf("failed to check acc state proof: %w", err)
 		}
 
 		if !bytes.Equal(shardAcc.Account.Hash(0), t.State.Hash()) {
-			return nil, fmt.Errorf("proof hash not match state account hash")
+			return nil, nil, fmt.Errorf("proof hash not match state account hash")
 		}
 
 		var st tlb.AccountState
 		if err = st.LoadFromCell(t.State.BeginParse()); err != nil {
-			return nil, fmt.Errorf("failed to load account state: %w", err)
+			return nil, nil, fmt.Errorf("failed to load account state: %w", err)
 		}
 
 		if st.Balance.Nano().Cmp(balanceInfo.Currencies.Coins.Nano()) != 0 {
-			return nil, fmt.Errorf("proof balance not match state balance")
+			return nil, nil, fmt.Errorf("proof balance not match state balance")
 		}
 
 		acc.LastTxHash = shardAcc.LastTransHash
@@ -113,9 +118,9 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 
 		acc.State = &st
 
-		return acc, nil
+		return acc, t.Shard, nil
 	case LSError:
-		return nil, t
+		return nil, nil, t
 	}
-	return nil, errUnexpectedResponse(resp)
+	return nil, nil, errUnexpectedResponse(resp)
 }
