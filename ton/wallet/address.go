@@ -55,6 +55,8 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 		switch ver {
 		case HighloadV3:
 			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
+		case V5R1:
+			return nil, fmt.Errorf("use ConfigV5R1 for v5 spec")
 		}
 	case ConfigHighloadV3:
 		ver = HighloadV3
