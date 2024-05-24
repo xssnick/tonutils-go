@@ -27,6 +27,7 @@ type Account struct {
 	Code       *cell.Cell
 	LastTxLT   uint64
 	LastTxHash []byte
+	ShardBlock *BlockInfo
 }
 
 type CurrencyCollection struct {

@@ -103,6 +103,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			return nil, fmt.Errorf("proof balance not match state balance")
 		}
 
+		acc.ShardBlock = t.Shard
 		acc.LastTxHash = shardAcc.LastTransHash
 		acc.LastTxLT = shardAcc.LastTransLT
 
