@@ -210,18 +210,14 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 	tm := time.Now()
 
 	var node *connection
+	nodeIDs, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
 	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
 		node, err = c.querySticky(nodeID, req)
 		if err != nil {
 			return err
 		}
-	} else if nodeIDs, ok := ctx.Value(_StickyCtxUsedNodesKey).([]uint32); ok && len(nodeIDs) > 0 {
-		node, err = c.queryExcludeSticky(nodeIDs, req)
-		if err != nil {
-			return err
-		}
 	} else {
-		node, err = c.queryWithSmartBalancer(req)
+		node, err = c.queryWithSmartBalancer(nodeIDs, req)
 		if err != nil {
 			return err
 		}
@@ -251,51 +247,36 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 
 func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (*connection, error) {
 	c.nodesMx.RLock()
-	defer c.nodesMx.RUnlock()
 
 	for _, node := range c.activeNodes {
 		if node.id == id {
 			atomic.AddInt64(&node.weight, -1)
 			_, err := node.queryAdnl(req.QueryID, req.Data)
 			if err == nil {
+				c.nodesMx.RUnlock()
 				return node, nil
 			}
 			break
 		}
 	}
+	c.nodesMx.RUnlock()
 
 	// fallback if bounded node is not available
-	return c.queryWithSmartBalancer(req)
+	return c.queryWithSmartBalancer(nil, req)
 }
 
-func (c *ConnectionPool) queryExcludeSticky(ids []uint32, req *ADNLRequest) (*connection, error) {
-	c.nodesMx.RLock()
-	defer c.nodesMx.RUnlock()
-
-iter:
-	for _, node := range c.activeNodes {
-		for _, id := range ids {
-			if node.id == id {
-				continue iter
-			}
-		}
-
-		atomic.AddInt64(&node.weight, -1)
-		_, err := node.queryAdnl(req.QueryID, req.Data)
-		if err == nil {
-			return node, nil
-		}
-	}
-
-	// fallback if another nodes are not available
-	return c.queryWithSmartBalancer(req)
-}
-
-func (c *ConnectionPool) queryWithSmartBalancer(req *ADNLRequest) (*connection, error) {
+func (c *ConnectionPool) queryWithSmartBalancer(excludeNodes []uint32, req *ADNLRequest) (*connection, error) {
 	var reqNode *connection
 
 	c.nodesMx.RLock()
+
+iter:
 	for _, node := range c.activeNodes {
+		for _, excludeNode := range excludeNodes {
+			if node.id == excludeNode {
+				continue iter
+			}
+		}
 		if reqNode == nil {
 			reqNode = node
 			continue
