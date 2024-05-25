@@ -124,7 +124,7 @@ iter:
 func (c *ConnectionPool) StickyContextExcludeNode(ctx context.Context) (context.Context, error) {
 	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
 	if nodeID == 0 {
-		return ctx, fmt.Errorf("no node for exclude")
+		return ctx, fmt.Errorf("no node to exclude")
 	}
 	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
 	usedNodes = append(usedNodes, nodeID)
