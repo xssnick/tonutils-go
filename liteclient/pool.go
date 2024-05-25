@@ -121,6 +121,31 @@ iter:
 	return ctx, fmt.Errorf("no more active nodes left")
 }
 
+func (c *ConnectionPool) StickyContextExcludeNode(ctx context.Context) (context.Context, error) {
+	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
+	if nodeID == 0 {
+		return ctx, fmt.Errorf("no node for exclude")
+	}
+	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
+	usedNodes = append(usedNodes, nodeID)
+
+	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
+iter:
+	for _, node := range c.activeNodes {
+		for _, usedNode := range usedNodes {
+			if usedNode == node.id {
+				continue iter
+			}
+		}
+
+		return context.WithValue(ctx, _StickyCtxUsedNodesKey, usedNodes), nil
+	}
+
+	return ctx, fmt.Errorf("no more active nodes left")
+}
+
 func (c *ConnectionPool) StickyContextWithNodeID(ctx context.Context, nodeId uint32) context.Context {
 	return context.WithValue(ctx, _StickyCtxKey, nodeId)
 }
@@ -190,6 +215,11 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 		if err != nil {
 			return err
 		}
+	} else if nodeIDs, ok := ctx.Value(_StickyCtxUsedNodesKey).([]uint32); ok && len(nodeIDs) > 0 {
+		node, err = c.queryExcludeSticky(nodeIDs, req)
+		if err != nil {
+			return err
+		}
 	} else {
 		node, err = c.queryWithSmartBalancer(req)
 		if err != nil {
@@ -221,20 +251,43 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 
 func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (*connection, error) {
 	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
 	for _, node := range c.activeNodes {
 		if node.id == id {
 			atomic.AddInt64(&node.weight, -1)
 			_, err := node.queryAdnl(req.QueryID, req.Data)
 			if err == nil {
-				c.nodesMx.RUnlock()
 				return node, nil
 			}
 			break
 		}
 	}
-	c.nodesMx.RUnlock()
 
 	// fallback if bounded node is not available
+	return c.queryWithSmartBalancer(req)
+}
+
+func (c *ConnectionPool) queryExcludeSticky(ids []uint32, req *ADNLRequest) (*connection, error) {
+	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
+iter:
+	for _, node := range c.activeNodes {
+		for _, id := range ids {
+			if node.id == id {
+				continue iter
+			}
+		}
+
+		atomic.AddInt64(&node.weight, -1)
+		_, err := node.queryAdnl(req.QueryID, req.Data)
+		if err == nil {
+			return node, nil
+		}
+	}
+
+	// fallback if another nodes are not available
 	return c.queryWithSmartBalancer(req)
 }
 
