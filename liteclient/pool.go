@@ -247,7 +247,6 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 
 func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (*connection, error) {
 	c.nodesMx.RLock()
-
 	for _, node := range c.activeNodes {
 		if node.id == id {
 			atomic.AddInt64(&node.weight, -1)
@@ -271,6 +270,7 @@ func (c *ConnectionPool) queryWithSmartBalancer(excludeNodes []uint32, req *ADNL
 	c.nodesMx.RLock()
 
 	if len(c.activeNodes) == 0 {
+		c.nodesMx.RUnlock()
 		return nil, ErrNoActiveConnections
 	}
 
