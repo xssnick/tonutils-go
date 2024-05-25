@@ -140,7 +140,7 @@ iter:
 			}
 		}
 
-		return c.StickyContextWithNodeID(ctx, node.id), nil
+		return context.WithValue(ctx, _StickyCtxUsedNodesKey, usedNodes), nil
 	}
 
 	return ctx, fmt.Errorf("no more active nodes left")
