@@ -25,7 +25,7 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 		tries++
 
 		if err != nil {
-			if !errors.Is(err, liteclient.ErrADNLReqTimeout) && !errors.Is(err, context.DeadlineExceeded){
+			if !errors.Is(err, liteclient.ErrADNLReqTimeout) && !errors.Is(err, context.DeadlineExceeded) {
 				return err
 			}
 
@@ -67,6 +67,10 @@ func (w *retryClient) StickyContext(ctx context.Context) context.Context {
 
 func (w *retryClient) StickyNodeID(ctx context.Context) uint32 {
 	return w.original.StickyNodeID(ctx)
+}
+
+func (w *retryClient) StickyContextExcludeNode(ctx context.Context) (context.Context, error) {
+	return w.original.StickyContextExcludeNode(ctx)
 }
 
 func (w *retryClient) StickyContextNextNode(ctx context.Context) (context.Context, error) {
