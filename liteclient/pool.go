@@ -81,7 +81,7 @@ func NewConnectionPoolWithAuth(key ed25519.PrivateKey) *ConnectionPool {
 //
 // In case if sticky node goes down, default balancer will be used as fallback
 func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
-	if ctx.Value(_StickyCtxKey) != nil {
+	if c.StickyNodeID(ctx) != 0 {
 		return ctx
 	}
 
@@ -94,11 +94,11 @@ func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
 	}
 	c.nodesMx.RUnlock()
 
-	return context.WithValue(ctx, _StickyCtxKey, id)
+	return stickyContextWithNodeID(ctx, id)
 }
 
 func (c *ConnectionPool) StickyContextNextNode(ctx context.Context) (context.Context, error) {
-	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
+	nodeID := c.StickyNodeID(ctx)
 	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
 	if nodeID > 0 {
 		usedNodes = append(usedNodes, nodeID)
@@ -115,38 +115,51 @@ iter:
 			}
 		}
 
-		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, node.id), _StickyCtxUsedNodesKey, usedNodes), nil
+		return context.WithValue(stickyContextWithNodeID(ctx, node.id), _StickyCtxUsedNodesKey, usedNodes), nil
 	}
 
 	return ctx, fmt.Errorf("no more active nodes left")
 }
 
 func (c *ConnectionPool) StickyContextExcludeNode(ctx context.Context) (context.Context, error) {
-	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
+	nodeID := c.StickyNodeID(ctx)
 	if nodeID == 0 {
 		return ctx, fmt.Errorf("no node to exclude")
 	}
+
 	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
 	usedNodes = append(usedNodes, nodeID)
 
 	c.nodesMx.RLock()
 	defer c.nodesMx.RUnlock()
 
-iter:
-	for _, node := range c.activeNodes {
-		for _, usedNode := range usedNodes {
-			if usedNode == node.id {
-				continue iter
-			}
-		}
-
-		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, 0), _StickyCtxUsedNodesKey, usedNodes), nil
+	if len(c.activeNodes) < len(usedNodes) {
+		return context.WithValue(stickyContextWithNodeID(ctx, 0), _StickyCtxUsedNodesKey, usedNodes), nil
 	}
 
 	return ctx, fmt.Errorf("no more active nodes left")
 }
 
 func (c *ConnectionPool) StickyContextWithNodeID(ctx context.Context, nodeId uint32) context.Context {
+	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
+	if len(usedNodes) == 0 {
+		return context.WithValue(ctx, _StickyCtxKey, nodeId)
+	}
+
+	nodes := make([]uint32, 0, len(usedNodes))
+	for _, node := range usedNodes {
+		if node != nodeId {
+			nodes = append(nodes, node)
+		}
+	}
+	if len(nodes) == len(usedNodes) {
+		return stickyContextWithNodeID(ctx, nodeId)
+	}
+
+	return context.WithValue(stickyContextWithNodeID(ctx, nodeId), _StickyCtxUsedNodesKey, usedNodes)
+}
+
+func stickyContextWithNodeID(ctx context.Context, nodeId uint32) context.Context {
 	return context.WithValue(ctx, _StickyCtxKey, nodeId)
 }
 
@@ -211,7 +224,7 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 
 	var node *connection
 	excludeNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
-	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
+	if nodeID := c.StickyNodeID(ctx); nodeID > 0 {
 		node, err = c.querySticky(nodeID, req)
 		if err != nil {
 			return err
