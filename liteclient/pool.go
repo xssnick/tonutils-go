@@ -270,6 +270,10 @@ func (c *ConnectionPool) queryWithSmartBalancer(excludeNodes []uint32, req *ADNL
 
 	c.nodesMx.RLock()
 
+	if len(c.activeNodes) == 0 {
+		return nil, ErrNoActiveConnections
+	}
+
 iter:
 	for _, node := range c.activeNodes {
 		for _, excludeNode := range excludeNodes {
@@ -290,7 +294,10 @@ iter:
 	c.nodesMx.RUnlock()
 
 	if reqNode == nil {
-		return nil, ErrNoActiveConnections
+		if len(excludeNodes) == 0 {
+			return nil, ErrNoActiveConnections
+		}
+		return c.queryWithSmartBalancer(nil, req)
 	}
 
 	atomic.AddInt64(&reqNode.weight, -1)
