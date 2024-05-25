@@ -210,14 +210,14 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 	tm := time.Now()
 
 	var node *connection
-	nodeIDs, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
+	excludeNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
 	if nodeID, ok := ctx.Value(_StickyCtxKey).(uint32); ok && nodeID > 0 {
 		node, err = c.querySticky(nodeID, req)
 		if err != nil {
 			return err
 		}
 	} else {
-		node, err = c.queryWithSmartBalancer(nodeIDs, req)
+		node, err = c.queryWithSmartBalancer(excludeNodes, req)
 		if err != nil {
 			return err
 		}
