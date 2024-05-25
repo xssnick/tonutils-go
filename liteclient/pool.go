@@ -217,7 +217,7 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 			return err
 		}
 	} else {
-		node, err = c.queryWithSmartBalancer(excludeNodes, req)
+		node, err = c.queryWithSmartBalancer(req, excludeNodes...)
 		if err != nil {
 			return err
 		}
@@ -261,10 +261,10 @@ func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (*connection, 
 	c.nodesMx.RUnlock()
 
 	// fallback if bounded node is not available
-	return c.queryWithSmartBalancer(nil, req)
+	return c.queryWithSmartBalancer(req)
 }
 
-func (c *ConnectionPool) queryWithSmartBalancer(excludeNodes []uint32, req *ADNLRequest) (*connection, error) {
+func (c *ConnectionPool) queryWithSmartBalancer(req *ADNLRequest, excludeNodes ...uint32) (*connection, error) {
 	var reqNode *connection
 
 	c.nodesMx.RLock()
@@ -294,10 +294,10 @@ iter:
 	c.nodesMx.RUnlock()
 
 	if reqNode == nil {
-		if len(excludeNodes) == 0 {
-			return nil, ErrNoActiveConnections
+		if len(excludeNodes) > 0 {
+			return c.queryWithSmartBalancer(req)
 		}
-		return c.queryWithSmartBalancer(nil, req)
+		return nil, ErrNoActiveConnections
 	}
 
 	atomic.AddInt64(&reqNode.weight, -1)
