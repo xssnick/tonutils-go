@@ -122,7 +122,7 @@ func (s *SpecHighloadV3) packActions(queryId uint64, messages []*Message) (*Mess
 	}
 
 	return &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      false,
