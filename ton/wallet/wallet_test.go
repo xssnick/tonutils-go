@@ -258,7 +258,7 @@ func TestWallet_Send(t *testing.T) {
 			}
 
 			msg := &Message{
-				Mode:            128,
+				Mode:            CarryAllRemainingBalance,
 				InternalMessage: intMsg,
 			}
 

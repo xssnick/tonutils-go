@@ -44,6 +44,14 @@ const (
 	Unknown            Version = 0
 )
 
+const (
+	CarryAllRemainingBalance       = 128
+	CarryAllRemainingIncomingValue = 64
+	DestroyAccountIfZero           = 32
+	IgnoreErrors                   = 2
+	PayGasSeparately               = 1
+)
+
 func (v Version) String() string {
 	if v == Unknown {
 		return "unknown"
@@ -367,7 +375,7 @@ func (w *Wallet) BuildTransfer(to *address.Address, amount tlb.Coins, bounce boo
 	}
 
 	return &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      bounce,
@@ -393,7 +401,7 @@ func (w *Wallet) BuildTransferEncrypted(ctx context.Context, to *address.Address
 	}
 
 	return &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      bounce,
@@ -734,7 +742,7 @@ func (w *Wallet) DeployContractWaitTransaction(ctx context.Context, amount tlb.C
 	addr := address.NewAddress(0, 0, stateCell.Hash())
 
 	tx, block, err := w.SendWaitTransaction(ctx, &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      false,
@@ -765,7 +773,7 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	addr := address.NewAddress(0, 0, stateCell.Hash())
 
 	if err = w.Send(ctx, &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      false,
@@ -793,7 +801,7 @@ func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte,
 
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
 	return &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      true,
@@ -807,7 +815,7 @@ func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *M
 // SimpleMessageAutoBounce - will determine bounce flag from address
 func SimpleMessageAutoBounce(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
 	return &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      to.IsBounceable(),
