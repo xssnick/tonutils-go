@@ -266,6 +266,52 @@ func TestWallet_DeployContract(t *testing.T) {
 	}
 }
 
+func TestWallet_DeployContractUsingHW3(t *testing.T) {
+	seed := strings.Split(_seed, " ")
+	ctx := api.Client().StickyContext(context.Background())
+
+	// init wallet
+	w, err := FromSeed(api, seed, ConfigHighloadV3{
+		MessageTTL: 120,
+		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
+			tm := time.Now().Unix() - 30
+			return uint32(10000 + tm%(1<<23)), tm, nil
+		},
+	})
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+	}
+	t.Logf("wallet address: %s", w.Address().String())
+
+	codeBytes, _ := hex.DecodeString("b5ee9c72410104010020000114ff00f4a413f4bcf2c80b010203844003020009a1b63c43510007a0000061d2421bb1")
+	code, _ := cell.FromBOC(codeBytes)
+
+	buf := make([]byte, 8)
+	_, _ = rand.Read(buf)
+	rnd := binary.LittleEndian.Uint64(buf)
+
+	addr, _, block, err := w.DeployContractWaitTransaction(ctx, tlb.MustFromTON("0.005"), cell.BeginCell().EndCell(), code, cell.BeginCell().MustStoreUInt(rnd, 64).EndCell())
+	if err != nil {
+		t.Fatal("deploy err:", err)
+	}
+	t.Logf("contract address: %s", addr.String())
+
+	// wait next block to be sure everything updated
+	block, err = api.WaitForBlock(block.SeqNo + 5).GetMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("wait master err:", err.Error())
+	}
+
+	res, err := api.WaitForBlock(block.SeqNo).RunGetMethod(ctx, block, addr, "dappka", 5, 10)
+	if err != nil {
+		t.Fatal("run err:", err)
+	}
+
+	if res.MustInt(0).Uint64() != 5 || res.MustInt(1).Uint64() != 50 {
+		t.Fatal("result err:", res.MustInt(0).Uint64(), res.MustInt(1).Uint64())
+	}
+}
+
 func TestWallet_TransferEncrypted(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())

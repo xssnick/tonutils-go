@@ -573,6 +573,10 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 		}
 
 		if isForward {
+			if len(part.Steps) > 3 {
+				//part.Steps = append(part.Steps[:2], part.Steps[len(part.Steps)-1])
+			}
+
 			for _, step := range part.Steps {
 				fwd, ok := step.(BlockLinkForward)
 				if !ok {
@@ -600,10 +604,11 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 					return fmt.Errorf("config proof boc parse err: %w", err)
 				}
 
-				err = CheckForwardBlockProof(fwd.From, fwd.To, fwd.ToKeyBlock, configProof, destProof, fwd.SignatureSet)
+				err = CheckForwardBlockProof(from, fwd.To, fwd.ToKeyBlock, configProof, destProof, fwd.SignatureSet)
 				if err != nil {
 					return fmt.Errorf("invalid forward block from %d to %d proof: %w", fwd.From.SeqNo, fwd.To.SeqNo, err)
 				}
+				from = fwd.To
 			}
 		} else {
 			for _, step := range part.Steps {
