@@ -27,6 +27,10 @@ func (c *timeoutClient) StickyNodeID(ctx context.Context) uint32 {
 	return c.original.StickyNodeID(ctx)
 }
 
+func (w *timeoutClient) StickyContextExcludeNode(ctx context.Context) (context.Context, error) {
+	return w.original.StickyContextExcludeNode(ctx)
+}
+
 func (c *timeoutClient) StickyContextNextNode(ctx context.Context) (context.Context, error) {
 	return c.original.StickyContextNextNode(ctx)
 }
