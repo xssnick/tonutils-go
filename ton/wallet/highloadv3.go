@@ -58,13 +58,13 @@ func (s *SpecHighloadV3) BuildMessage(ctx context.Context, messages []*Message) 
 
 	if len(messages) > 254*254 {
 		return nil, errors.New("for this type of wallet max 254*254 messages can be sent in the same time")
-	} else if len(messages) > 1 {
+	} else if len(messages) == 1 && messages[0].InternalMessage.StateInit == nil { // messages with state init must be packed because of external msg validation in contract
+		msg = messages[0]
+	} else if len(messages) > 0 {
 		msg, err = s.packActions(uint64(queryID), messages)
 		if err != nil {
 			return nil, fmt.Errorf("failed to pack messages to cell: %w", err)
 		}
-	} else if len(messages) == 1 {
-		msg = messages[0]
 	} else {
 		return nil, errors.New("should have at least one message")
 	}
@@ -88,13 +88,15 @@ func (s *SpecHighloadV3) BuildMessage(ctx context.Context, messages []*Message) 
 		MustStoreRef(payload).EndCell(), nil
 }
 
-func (s *SpecHighloadV3) packActions(queryId uint64, messages []*Message) (*Message, error) {
-	if len(messages) > 253 {
-		rest, err := s.packActions(queryId, messages[253:])
+func (s *SpecHighloadV3) packActions(queryId uint64, messages []*Message) (_ *Message, err error) {
+	const messagesPerPack = 253
+
+	if len(messages) > messagesPerPack {
+		rest, err := s.packActions(queryId, messages[messagesPerPack:])
 		if err != nil {
 			return nil, err
 		}
-		messages = append(messages[:253], rest)
+		messages = append(messages[:messagesPerPack], rest)
 	}
 
 	var amt = big.NewInt(0)
@@ -122,7 +124,7 @@ func (s *SpecHighloadV3) packActions(queryId uint64, messages []*Message) (*Mess
 	}
 
 	return &Message{
-		Mode: 1 + 2,
+		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
 			Bounce:      false,

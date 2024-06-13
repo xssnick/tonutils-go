@@ -28,10 +28,10 @@ func TestDomain_GetRecords(t *testing.T) {
 	h.Write([]byte("wallet"))
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 	records.Set(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell(),
-		cell.BeginCell().
+		cell.BeginCell().MustStoreRef(cell.BeginCell().
 			MustStoreUInt(_CategoryContractAddr, 16).
 			MustStoreAddr(addr).
-			EndCell())
+			EndCell()).EndCell())
 
 	domain := Domain{
 		Records: records,

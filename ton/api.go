@@ -34,6 +34,7 @@ type LiteClient interface {
 	QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error
 	StickyContext(ctx context.Context) context.Context
 	StickyContextNextNode(ctx context.Context) (context.Context, error)
+	StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error)
 	StickyNodeID(ctx context.Context) uint32
 }
 

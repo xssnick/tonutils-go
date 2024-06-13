@@ -22,6 +22,7 @@ const _StickyCtxUsedNodesKey = "_ton_used_nodes_sticky"
 var (
 	ErrNoActiveConnections = errors.New("no active connections")
 	ErrADNLReqTimeout      = errors.New("adnl request timeout")
+	ErrNoNodesLeft         = errors.New("no more active nodes left")
 )
 
 type OnDisconnectCallback func(addr, key string)
@@ -97,6 +98,7 @@ func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, _StickyCtxKey, id)
 }
 
+// StickyContextNextNode - select next node in the available list (pseudo random)
 func (c *ConnectionPool) StickyContextNextNode(ctx context.Context) (context.Context, error) {
 	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
 	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
@@ -118,7 +120,47 @@ iter:
 		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, node.id), _StickyCtxUsedNodesKey, usedNodes), nil
 	}
 
-	return ctx, fmt.Errorf("no more active nodes left")
+	return ctx, ErrNoNodesLeft
+}
+
+// StickyContextNextNodeBalanced - select next node based on its weight and availability
+func (c *ConnectionPool) StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error) {
+	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
+	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
+	if nodeID > 0 {
+		usedNodes = append(usedNodes, nodeID)
+	}
+
+	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
+	var reqNode *connection
+
+iter:
+	for _, node := range c.activeNodes {
+		for _, usedNode := range usedNodes {
+			if usedNode == node.id {
+				continue iter
+			}
+		}
+
+		if reqNode == nil {
+			reqNode = node
+			continue
+		}
+
+		// select best node on this moment
+		nw, old := atomic.LoadInt64(&node.weight), atomic.LoadInt64(&reqNode.weight)
+		if nw > old || (nw == old && atomic.LoadInt64(&node.lastRespTime) < atomic.LoadInt64(&reqNode.lastRespTime)) {
+			reqNode = node
+		}
+	}
+
+	if reqNode != nil {
+		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, reqNode.id), _StickyCtxUsedNodesKey, usedNodes), nil
+	}
+
+	return ctx, ErrNoNodesLeft
 }
 
 func (c *ConnectionPool) StickyContextWithNodeID(ctx context.Context, nodeId uint32) context.Context {

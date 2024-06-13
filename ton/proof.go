@@ -600,10 +600,11 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 					return fmt.Errorf("config proof boc parse err: %w", err)
 				}
 
-				err = CheckForwardBlockProof(fwd.From, fwd.To, fwd.ToKeyBlock, configProof, destProof, fwd.SignatureSet)
+				err = CheckForwardBlockProof(from, fwd.To, fwd.ToKeyBlock, configProof, destProof, fwd.SignatureSet)
 				if err != nil {
 					return fmt.Errorf("invalid forward block from %d to %d proof: %w", fwd.From.SeqNo, fwd.To.SeqNo, err)
 				}
+				from = fwd.To
 			}
 		} else {
 			for _, step := range part.Steps {

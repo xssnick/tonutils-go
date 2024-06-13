@@ -44,13 +44,18 @@ var randomizer = func() uint64 {
 	return binary.LittleEndian.Uint64(buf)
 }
 
+// Deprecated: use GetRootContractAddr
 func RootContractAddr(api TonApi) (*address.Address, error) {
-	b, err := api.CurrentMasterchainInfo(context.Background())
+	return GetRootContractAddr(context.Background(), api)
+}
+
+func GetRootContractAddr(ctx context.Context, api TonApi) (*address.Address, error) {
+	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
 	}
 
-	cfg, err := api.GetBlockchainConfig(context.Background(), b, 4)
+	cfg, err := api.GetBlockchainConfig(ctx, b, 4)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root address from network config: %w", err)
 	}
@@ -174,7 +179,11 @@ func (d *Domain) GetWalletRecord() *address.Address {
 	if rec == nil {
 		return nil
 	}
-	p := rec.BeginParse()
+
+	p, err := rec.BeginParse().LoadRef()
+	if err != nil {
+		return nil
+	}
 
 	category, err := p.LoadUInt(16)
 	if err != nil {
@@ -198,9 +207,8 @@ func (d *Domain) GetSiteRecord() (_ []byte, inStorage bool) {
 	if rec == nil {
 		return nil, false
 	}
-	p := rec.BeginParse()
 
-	p, err := p.LoadRef()
+	p, err := rec.BeginParse().LoadRef()
 	if err != nil {
 		return nil, false
 	}

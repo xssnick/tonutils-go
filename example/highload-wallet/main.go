@@ -84,7 +84,7 @@ func main() {
 		for addrStr, amtStr := range receivers {
 			addr := address.MustParseAddr(addrStr)
 			messages = append(messages, &wallet.Message{
-				Mode: 1 + 2, // pay fee separately, ignore action errors
+				Mode: wallet.PayGasSeparately + wallet.IgnoreErrors, // pay fee separately, ignore action errors
 				InternalMessage: &tlb.InternalMessage{
 					IHRDisabled: true, // disable hyper routing (currently not works in ton)
 					Bounce:      addr.IsBounceable(),

@@ -25,26 +25,23 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 		tries++
 
 		if err != nil {
-			if errors.Is(err, liteclient.ErrADNLReqTimeout) {
-				// try next node
-				ctx, err = w.original.StickyContextNextNode(ctx)
-				if err != nil {
-					return fmt.Errorf("timeout error received, but failed to try with next node, "+
-						"looks like all active nodes was already tried, original error: %w", err)
-				}
-
-				continue
-			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				err := ctx.Err()
-				if err != nil {
-					return err
-				}
-				
-				continue
+			if !errors.Is(err, liteclient.ErrADNLReqTimeout) && !errors.Is(err, context.DeadlineExceeded) {
+				return err
 			}
 
-			return err
+			err := ctx.Err()
+			if err != nil {
+				return err
+			}
+
+			// try next node
+			ctx, err = w.original.StickyContextNextNode(ctx)
+			if err != nil {
+				return fmt.Errorf("timeout error received, but failed to try with next node, "+
+					"looks like all active nodes was already tried, original error: %w", err)
+			}
+
+			continue
 		}
 
 		if tmp, ok := result.(*tl.Serializable); ok && tmp != nil {
@@ -74,4 +71,8 @@ func (w *retryClient) StickyNodeID(ctx context.Context) uint32 {
 
 func (w *retryClient) StickyContextNextNode(ctx context.Context) (context.Context, error) {
 	return w.original.StickyContextNextNode(ctx)
+}
+
+func (w *retryClient) StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error) {
+	return w.original.StickyContextNextNodeBalanced(ctx)
 }

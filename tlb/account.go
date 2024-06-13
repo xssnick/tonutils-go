@@ -58,8 +58,8 @@ type AccountStorage struct {
 }
 
 type StorageUsed struct {
-	BitsUsed        *big.Int `tlb:"var uint 7"`
 	CellsUsed       *big.Int `tlb:"var uint 7"`
+	BitsUsed        *big.Int `tlb:"var uint 7"`
 	PublicCellsUsed *big.Int `tlb:"var uint 7"`
 }
 

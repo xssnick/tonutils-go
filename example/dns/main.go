@@ -24,7 +24,7 @@ func main() {
 	api := ton.NewAPIClient(client).WithRetry()
 
 	// get root dns address from network config
-	root, err := dns.RootContractAddr(api)
+	root, err := dns.GetRootContractAddr(context.Background(), api)
 	if err != nil {
 		panic(err)
 	}

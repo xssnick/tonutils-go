@@ -420,7 +420,7 @@ func TestTransport_RoundTripIntegration(t *testing.T) {
 
 	transport := NewTransport(dhtClient, getDNSResolver())
 
-	req, err := http.NewRequest(http.MethodGet, "http://foundation.ton/", nil)
+	req, err := http.NewRequest(http.MethodGet, "http://utils.ton/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

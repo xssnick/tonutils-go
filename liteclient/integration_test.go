@@ -87,11 +87,15 @@ func Test_ConnSticky(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	ctx = client.StickyContext(ctx)
 
 	err := client.AddConnectionsFromConfigUrl(ctx, "https://tonutils.com/global.config.json")
 	if err != nil {
 		t.Fatal("add connections err", err)
+	}
+
+	ctx, err = client.StickyContextNextNodeBalanced(ctx)
+	if err != nil {
+		t.Fatal("next balanced err", err)
 	}
 
 	doReq := func(expErr error) {
