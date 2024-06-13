@@ -49,3 +49,7 @@ func (w *waiterClient) StickyNodeID(ctx context.Context) uint32 {
 func (w *waiterClient) StickyContextNextNode(ctx context.Context) (context.Context, error) {
 	return w.original.StickyContextNextNode(ctx)
 }
+
+func (w *waiterClient) StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error) {
+	return w.original.StickyContextNextNodeBalanced(ctx)
+}

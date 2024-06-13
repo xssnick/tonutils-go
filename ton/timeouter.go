@@ -30,3 +30,7 @@ func (c *timeoutClient) StickyNodeID(ctx context.Context) uint32 {
 func (c *timeoutClient) StickyContextNextNode(ctx context.Context) (context.Context, error) {
 	return c.original.StickyContextNextNode(ctx)
 }
+
+func (c *timeoutClient) StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error) {
+	return c.original.StickyContextNextNodeBalanced(ctx)
+}
