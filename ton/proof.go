@@ -573,10 +573,6 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 		}
 
 		if isForward {
-			if len(part.Steps) > 3 {
-				//part.Steps = append(part.Steps[:2], part.Steps[len(part.Steps)-1])
-			}
-
 			for _, step := range part.Steps {
 				fwd, ok := step.(BlockLinkForward)
 				if !ok {
