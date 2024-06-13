@@ -44,12 +44,12 @@ var randomizer = func() uint64 {
 	return binary.LittleEndian.Uint64(buf)
 }
 
-// Deprecated: use RootContractAddrV2
+// Deprecated: use GetRootContractAddr
 func RootContractAddr(api TonApi) (*address.Address, error) {
-	return RootContractAddrV2(context.Background(), api)
+	return GetRootContractAddr(context.Background(), api)
 }
 
-func RootContractAddrV2(ctx context.Context, api TonApi) (*address.Address, error) {
+func GetRootContractAddr(ctx context.Context, api TonApi) (*address.Address, error) {
 	b, err := api.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
