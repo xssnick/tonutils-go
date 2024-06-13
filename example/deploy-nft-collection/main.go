@@ -34,8 +34,8 @@ func main() {
 	msgBody := cell.BeginCell().EndCell()
 
 	fmt.Println("Deploying NFT collection contract to mainnet...")
-	addr, err := w.DeployContract(context.Background(), tlb.MustFromTON("0.02"),
-		msgBody, getNFTCollectionCode(), getContractData(w.WalletAddress(), w.WalletAddress()), true)
+	addr, _, _, err := w.DeployContractWaitTransaction(context.Background(), tlb.MustFromTON("0.02"),
+		msgBody, getNFTCollectionCode(), getContractData(w.WalletAddress(), w.WalletAddress()))
 	if err != nil {
 		panic(err)
 	}

@@ -82,7 +82,7 @@ func main() {
 		log.Println("sending transaction and waiting for confirmation...")
 
 		tx, block, err := w.SendWaitTransaction(context.Background(), &wallet.Message{
-			Mode: 1, // pay fees separately (from balance, not from amount)
+			Mode: wallet.PayGasSeparately, // pay fees separately (from balance, not from amount)
 			InternalMessage: &tlb.InternalMessage{
 				Bounce:  true, // return amount in case of processing error
 				DstAddr: address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N"),

@@ -536,7 +536,7 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 	}
 
 	// restore after unit tests
-	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
+	testAddr := "89bea091caf4273d38b0dc24944d8798e057abcfa6ac08d5e0b26284c5c0609a" // ADNL address of utils.ton
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

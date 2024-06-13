@@ -55,9 +55,13 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 		switch ver {
 		case HighloadV3:
 			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
+		case V5R1:
+			return nil, fmt.Errorf("use ConfigV5R1 for v5 spec")
 		}
 	case ConfigHighloadV3:
 		ver = HighloadV3
+	case ConfigV5R1:
+		ver = V5R1
 	}
 
 	code, ok := walletCode[ver]
@@ -76,6 +80,18 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 	case V4R1, V4R2:
 		data = cell.BeginCell().
 			MustStoreUInt(0, 32). // seqno
+			MustStoreUInt(uint64(subWallet), 32).
+			MustStoreSlice(pubKey, 256).
+			MustStoreDict(nil). // empty dict of plugins
+			EndCell()
+	case V5R1:
+		config := version.(ConfigV5R1)
+
+		data = cell.BeginCell().
+			MustStoreUInt(0, 33). // seqno
+			MustStoreInt(int64(config.NetworkGlobalID), 32).
+			MustStoreInt(int64(config.Workchain), 8).
+			MustStoreUInt(0, 8). // version of v5
 			MustStoreUInt(uint64(subWallet), 32).
 			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins

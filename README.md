@@ -3,7 +3,7 @@
 <img align="right" width="425px" src="https://github.com/xssnick/props/blob/master/logoimg.png?raw=true">
 
 [![Based on TON][ton-svg]][ton]
-![Coverage](https://img.shields.io/badge/Coverage-73.7%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-73.8%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 

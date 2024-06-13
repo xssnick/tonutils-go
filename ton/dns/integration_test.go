@@ -33,7 +33,7 @@ func TestDNSClient_Resolve(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
-	ctx = client.StickyContext(ctx)
+	ctx, _ = client.StickyContextNextNodeBalanced(ctx)
 
 	d, err := cli.Resolve(ctx, "foundation.ton")
 	if err != nil {

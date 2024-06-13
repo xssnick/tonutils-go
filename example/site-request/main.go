@@ -63,7 +63,7 @@ func getDNSResolver() *dns.Client {
 	api := ton.NewAPIClient(client)
 
 	// get root dns address from network config
-	root, err := dns.RootContractAddr(api)
+	root, err := dns.GetRootContractAddr(context.Background(), api)
 	if err != nil {
 		panic(err)
 	}
