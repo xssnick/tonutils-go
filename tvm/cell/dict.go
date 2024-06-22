@@ -232,16 +232,18 @@ func (d *Dictionary) Set(key, value *Cell) error {
 	}
 
 	var err error
+	var newRoot *Cell
 	if d.root == nil {
-		d.root, err = d.storeLeaf(key.BeginParse(), val, d.keySz)
+		newRoot, err = d.storeLeaf(key.BeginParse(), val, d.keySz)
 	} else {
-		d.root, err = dive(d.root, key.BeginParse(), d.keySz)
+		newRoot, err = dive(d.root, key.BeginParse(), d.keySz)
 	}
 
 	if err != nil {
 		return fmt.Errorf("failed to set value in dict, err: %w", err)
 	}
 
+	d.root = newRoot
 	return nil
 }
 
