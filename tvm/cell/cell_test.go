@@ -6,11 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/xssnick/tonutils-go/address"
 	"log"
 	"math/big"
 	"strings"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/address"
 )
 
 func TestCell_HashSign(t *testing.T) {

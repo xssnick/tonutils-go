@@ -232,17 +232,15 @@ func (d *Dictionary) Set(key, value *Cell) error {
 	}
 
 	var err error
-	var newRoot *Cell
 	if d.root == nil {
-		newRoot, err = d.storeLeaf(key.BeginParse(), val, d.keySz)
+		d.root, err = d.storeLeaf(key.BeginParse(), val, d.keySz)
 	} else {
-		newRoot, err = dive(d.root, key.BeginParse(), d.keySz)
+		d.root, err = dive(d.root, key.BeginParse(), d.keySz)
 	}
 
 	if err != nil {
 		return fmt.Errorf("failed to set value in dict, err: %w", err)
 	}
-	d.root = newRoot
 
 	return nil
 }
@@ -314,13 +312,15 @@ func (d *Dictionary) IsEmpty() bool {
 // Deprecated: use LoadAll, dict was reimplemented, so it will be parsed during this call, and it can return error now.
 func (d *Dictionary) All() []*HashmapKV {
 	list, _ := d.LoadAll()
-	var old []*HashmapKV
-	for _, kv := range list {
-		old = append(old, &HashmapKV{
-			Key:   kv.Key.MustToCell(),
-			Value: kv.Value.MustToCell(),
-		})
+
+	old := make([]*HashmapKV, len(list))
+	for i := 0; i < len(list); i++ {
+		old[i] = &HashmapKV{
+			Key:   list[i].Key.MustToCell(),
+			Value: list[i].Value.MustToCell(),
+		}
 	}
+
 	return old
 }
 

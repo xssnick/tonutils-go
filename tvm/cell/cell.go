@@ -286,10 +286,13 @@ func (c *Cell) UnmarshalJSON(bytes []byte) error {
 	}
 	bytes = bytes[1 : len(bytes)-1]
 
-	data, err := base64.StdEncoding.DecodeString(string(bytes))
+	data := make([]byte, base64.StdEncoding.DecodedLen(len(bytes)))
+
+	n, err := base64.StdEncoding.Decode(data, bytes)
 	if err != nil {
 		return err
 	}
+	data = data[:n]
 
 	cl, err := FromBOC(data)
 	if err != nil {
