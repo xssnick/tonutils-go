@@ -70,7 +70,7 @@ func main() {
 
 func getWallet(api *ton.APIClient) *wallet.Wallet {
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
-	w, err := wallet.FromSeed(api, words, wallet.V3)
+	w, err := wallet.FromSeed(api, words, wallet.V4R2)
 	if err != nil {
 		panic(err)
 	}
