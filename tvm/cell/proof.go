@@ -238,7 +238,6 @@ func (c *Cell) calculateHashes() {
 			dsc[0], dsc[1] = c.descriptors(c.levelMask.Apply(levelIndex))
 
 			hash := sha256.New()
-
 			hash.Write(dsc)
 
 			if hashIndex == hashIndexOffset {
@@ -253,7 +252,6 @@ func (c *Cell) calculateHashes() {
 					// we need to set bit at the end if not whole byte was used
 					data[len(data)-1] += 1 << (unusedBits - 1)
 				}
-
 				hash.Write(data)
 			} else {
 				if levelIndex == 0 || typ == PrunedCellType {
@@ -297,7 +295,6 @@ func (c *Cell) calculateHashes() {
 			}
 			off := hashIndex - hashIndexOffset
 			c.depthLevels[off] = depth
-
 			copy(c.hashes[off*32:(off+1)*32], hash.Sum(nil))
 		}()
 	}
