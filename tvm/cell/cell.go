@@ -147,51 +147,78 @@ func (c *Cell) DumpBits(limitLength ...int) string {
 func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
 	sz, data, _ := c.BeginParse().RestBits()
 
-	var val string
+	builder := strings.Builder{}
+
 	if bin {
 		for _, n := range data {
-			val += fmt.Sprintf("%08b", n)
+			builder.WriteString(fmt.Sprintf("%08b", n))
 		}
 		if sz%8 != 0 {
-			val = val[:uint(len(val))-(8-(sz%8))]
+			tmp := builder.String()
+			builder.Reset()
+			builder.WriteString(tmp[:uint(len(tmp))-(8-(sz%8))])
 		}
 	} else {
-		val = strings.ToUpper(hex.EncodeToString(data))
+		tmp := make([]byte, len(data)*2)
+		hex.Encode(tmp, data)
+		builder.WriteString(strings.ToUpper(string(tmp)))
+
 		if sz%8 <= 4 && sz%8 > 0 {
-			// fift hex
-			val = val[:len(val)-1] + "_"
+			tmp := builder.String()
+			builder.Reset()
+			builder.WriteString(tmp[:len(tmp)-1])
+			builder.WriteByte('_')
+
 		}
 	}
 
-	str := strings.Repeat("  ", deep) + fmt.Sprint(sz) + "[" + val + "]"
+	val := builder.String()
+	builder.Reset()
+	builder.WriteString(strings.Repeat("  ", deep))
+	builder.WriteString(strconv.FormatUint(uint64(sz), 10))
+	builder.WriteByte('[')
+	builder.WriteString(val)
+	builder.WriteByte(']')
+
 	if c.levelMask.GetLevel() > 0 {
-		str += fmt.Sprintf("{%d}", c.levelMask.GetLevel())
+		builder.WriteByte('{')
+		builder.WriteString(strconv.Itoa(c.levelMask.GetLevel()))
+		builder.WriteByte('}')
+
 	}
 	if c.special {
-		str += "*"
+		builder.WriteByte('*')
 	}
 	if len(c.refs) > 0 {
-		str += " -> {"
+
+		builder.WriteString(" -> {")
+
 		for i, ref := range c.refs {
-			str += "\n" + ref.dump(deep+1, bin, limitLength)
+
+			builder.WriteByte('\n')
+			builder.WriteString(ref.dump(deep+1, bin, limitLength))
+
 			if i == len(c.refs)-1 {
-				str += "\n"
+				builder.WriteByte('\n')
 			} else {
-				str += ","
+				builder.WriteByte(',')
 			}
 
-			if uint64(len(str)) > limitLength {
+			if uint64(builder.Len()) > limitLength {
 				break
 			}
 		}
-		str += strings.Repeat("  ", deep) + "}"
+		builder.WriteString(strings.Repeat("  ", deep))
+		builder.WriteByte('}')
 	}
 
-	if uint64(len(str)) > limitLength {
-		str = str[:limitLength]
+	if uint64(builder.Len()) > limitLength {
+		tmp := builder.String()
+		builder.Reset()
+		builder.WriteString(tmp[:limitLength])
 	}
 
-	return str
+	return builder.String()
 }
 
 const _DataCellMaxLevel = 3
@@ -259,10 +286,13 @@ func (c *Cell) UnmarshalJSON(bytes []byte) error {
 	}
 	bytes = bytes[1 : len(bytes)-1]
 
-	data, err := base64.StdEncoding.DecodeString(string(bytes))
+	data := make([]byte, base64.StdEncoding.DecodedLen(len(bytes)))
+
+	n, err := base64.StdEncoding.Decode(data, bytes)
 	if err != nil {
 		return err
 	}
+	data = data[:n]
 
 	cl, err := FromBOC(data)
 	if err != nil {
