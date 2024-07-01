@@ -237,9 +237,9 @@ func (c *Cell) calculateHashes() {
 			dsc := make([]byte, 2)
 			dsc[0], dsc[1] = c.descriptors(c.levelMask.Apply(levelIndex))
 
-			hashData := make([]byte, 0, 2+c.bitsSz+32+2+32)
+			hash := sha256.New()
 
-			hashData = append(hashData, dsc...)
+			hash.Write(dsc)
 
 			if hashIndex == hashIndexOffset {
 				if levelIndex != 0 && typ != PrunedCellType {
@@ -254,14 +254,14 @@ func (c *Cell) calculateHashes() {
 					data[len(data)-1] += 1 << (unusedBits - 1)
 				}
 
-				hashData = append(hashData, data...)
+				hash.Write(data)
 			} else {
 				if levelIndex == 0 || typ == PrunedCellType {
 					// should never happen
 					panic("pruned or 0")
 				}
 				off := hashIndex - hashIndexOffset - 1
-				hashData = append(hashData, c.hashes[off*32:(off+1)*32]...)
+				hash.Write(c.hashes[off*32 : (off+1)*32])
 			}
 
 			var depth uint16
@@ -275,7 +275,7 @@ func (c *Cell) calculateHashes() {
 
 				depthBytes := make([]byte, 2)
 				binary.BigEndian.PutUint16(depthBytes, childDepth)
-				hashData = append(hashData, depthBytes...)
+				hash.Write(depthBytes)
 
 				if childDepth > depth {
 					depth = childDepth
@@ -290,17 +290,15 @@ func (c *Cell) calculateHashes() {
 
 			for i := 0; i < len(c.refs); i++ {
 				if typ == MerkleProofCellType || typ == MerkleUpdateCellType {
-					hashData = append(hashData, c.refs[i].getHash(levelIndex+1)...)
+					hash.Write(c.refs[i].getHash(levelIndex + 1))
 				} else {
-					hashData = append(hashData, c.refs[i].getHash(levelIndex)...)
+					hash.Write(c.refs[i].getHash(levelIndex))
 				}
 			}
 			off := hashIndex - hashIndexOffset
 			c.depthLevels[off] = depth
 
-			hash := sha256.Sum256(hashData)
-
-			copy(c.hashes[off*32:(off+1)*32], hash[:])
+			copy(c.hashes[off*32:(off+1)*32], hash.Sum(nil))
 		}()
 	}
 }
