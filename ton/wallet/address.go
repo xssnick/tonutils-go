@@ -55,13 +55,17 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 		switch ver {
 		case HighloadV3:
 			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
-		case V5R1:
-			return nil, fmt.Errorf("use ConfigV5R1 for v5 spec")
+		case V5Beta:
+			return nil, fmt.Errorf("use ConfigV5Beta for v5b spec")
+		case V5Final:
+			return nil, fmt.Errorf("use ConfigV5Final for v5f spec")
 		}
 	case ConfigHighloadV3:
 		ver = HighloadV3
-	case ConfigV5R1:
-		ver = V5R1
+	case ConfigV5Beta:
+		ver = V5Beta
+	case ConfigV5Final:
+		ver = V5Final
 	}
 
 	code, ok := walletCode[ver]
@@ -84,8 +88,8 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
-	case V5R1:
-		config := version.(ConfigV5R1)
+	case V5Beta:
+		config := version.(ConfigV5Beta)
 
 		data = cell.BeginCell().
 			MustStoreUInt(0, 33). // seqno
@@ -93,6 +97,24 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 			MustStoreInt(int64(config.Workchain), 8).
 			MustStoreUInt(0, 8). // version of v5
 			MustStoreUInt(uint64(subWallet), 32).
+			MustStoreSlice(pubKey, 256).
+			MustStoreDict(nil). // empty dict of plugins
+			EndCell()
+	case V5Final:
+		config := version.(ConfigV5Final)
+
+		// Create WalletId instance
+		walletId := WalletId{
+			NetworkGlobalID: config.NetworkGlobalID,
+			WorkChain:       config.Workchain,
+			SubwalletNumber: subWallet,
+			walletVersion:   0,
+		}
+
+		data = cell.BeginCell().
+			MustStoreBoolBit(true).
+			MustStoreUInt(0, 32).                             // seqno
+			MustStoreUInt(uint64(walletId.Serialized()), 32). // serialize
 			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
