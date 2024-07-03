@@ -476,10 +476,10 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 		return 0, nil, err
 	}
 
+	bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
+
 	// hml_long$10
 	if second == 0 {
-		bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
-
 		ln, err := loader.LoadUInt(bitsLen)
 		if err != nil {
 			return 0, nil, err
@@ -504,8 +504,6 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-
-	bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
 
 	ln, err := loader.LoadUInt(bitsLen)
 	if err != nil {
