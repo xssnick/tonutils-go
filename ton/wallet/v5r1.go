@@ -13,21 +13,21 @@ import (
 )
 
 // https://github.com/tonkeeper/tonkeeper-ton/commit/e8a7f3415e241daf4ac723f273fbc12776663c49#diff-c20d462b2e1ec616bbba2db39acc7a6c61edc3d5e768f5c2034a80169b1a56caR29
-const _V5BetaCodeHex = "b5ee9c7241010101002300084202e4cf3b2f4c6d6a61ea0f2b5447d266785b26af3637db2deee6bcd1aa826f34120dcd8e11"
+const _V5R1CodeHex = "b5ee9c7241010101002300084202e4cf3b2f4c6d6a61ea0f2b5447d266785b26af3637db2deee6bcd1aa826f34120dcd8e11"
 
-type ConfigV5Beta struct {
+type ConfigV5R1 struct {
 	NetworkGlobalID int32
 	Workchain       int8
 }
 
-type SpecV5Beta struct {
+type SpecV5R1 struct {
 	SpecRegular
 	SpecSeqno
 
-	config ConfigV5Beta
+	config ConfigV5R1
 }
 
-func (s *SpecV5Beta) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, messages []*Message) (_ *cell.Cell, err error) {
+func (s *SpecV5R1) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, messages []*Message) (_ *cell.Cell, err error) {
 	// TODO: remove block, now it is here for backwards compatibility
 
 	if len(messages) > 255 {
@@ -39,7 +39,7 @@ func (s *SpecV5Beta) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt
 		return nil, fmt.Errorf("failed to fetch seqno: %w", err)
 	}
 
-	actions, err := packV5BetaActions(messages)
+	actions, err := packV5R1Actions(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build actions: %w", err)
 	}
@@ -60,7 +60,7 @@ func (s *SpecV5Beta) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt
 	return msg, nil
 }
 
-func packV5BetaActions(messages []*Message) (*cell.Builder, error) {
+func packV5R1Actions(messages []*Message) (*cell.Builder, error) {
 	if len(messages) > 255 {
 		return nil, fmt.Errorf("max 255 messages allowed for v5")
 	}
