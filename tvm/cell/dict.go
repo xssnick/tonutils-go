@@ -516,7 +516,7 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 		toStore = bytes.Repeat([]byte{0xFF}, 1+(int(ln)/8))
 	} else {
 		// N of zeroes
-		toStore = bytes.Repeat([]byte{0xFF}, 1+(int(ln)/8))
+		toStore = bytes.Repeat([]byte{0x00}, 1+(int(ln)/8))
 	}
 
 	err = key.StoreSlice(toStore, uint(ln))
