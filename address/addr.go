@@ -1,6 +1,7 @@
 package address
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -336,4 +337,8 @@ func (a *Address) Workchain() int32 {
 
 func (a *Address) Data() []byte {
 	return a.data
+}
+
+func (a *Address) Equals(b *Address) bool {
+	return a.workchain == b.workchain && bytes.Equal(a.data, b.data)
 }

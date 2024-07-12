@@ -1,6 +1,7 @@
 package tlb
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -290,17 +291,20 @@ func (t *Transaction) String() string {
 	case TransactionDescriptionOrdinary:
 	}
 	if t.IO.In != nil {
+		build += fmt.Sprintf("LT: %d", t.LT)
+
 		if t.IO.In.MsgType == MsgTypeInternal {
 			in = t.IO.In.AsInternal().Amount.Nano()
-		}
 
-		if in.Cmp(big.NewInt(0)) != 0 {
 			intTx := t.IO.In.AsInternal()
-			build += fmt.Sprintf("LT: %d, In: %s TON, From %s", t.LT, FromNanoTON(in).String(), intTx.SrcAddr)
+			build += fmt.Sprintf(", In: %s TON, From %s", FromNanoTON(in).String(), intTx.SrcAddr)
 			comment := intTx.Comment()
 			if comment != "" {
 				build += ", Comment: " + comment
 			}
+		} else if t.IO.In.MsgType == MsgTypeExternalIn {
+			exTx := t.IO.In.AsExternalIn()
+			build += ", ExternalIn, hash: " + hex.EncodeToString(exTx.Body.Hash())
 		}
 	}
 
