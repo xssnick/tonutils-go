@@ -86,9 +86,9 @@ func getContractData(collectionOwnerAddr, royaltyAddr *address.Address) *cell.Ce
 	//           = Storage;
 
 	royalty := cell.BeginCell().
-		MustStoreUInt(50, 16). // 5% royalty
-		MustStoreUInt(1000, 16).
-		MustStoreAddr(royaltyAddr).
+		MustStoreUInt(5, 16). // 5% royalty
+		MustStoreUInt(100, 16). // denominator
+		MustStoreAddr(royaltyAddr). // fee addr destination
 		EndCell()
 
 	// collection data
