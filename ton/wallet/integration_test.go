@@ -86,7 +86,7 @@ func Test_HighloadHeavyTransfer(t *testing.T) {
 func Test_V5HeavyTransfer(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 
-	w, err := FromSeed(api, seed, ConfigV5R1{
+	w, err := FromSeed(api, seed, ConfigV5R1Final{
 		NetworkGlobalID: MainnetGlobalID,
 	})
 	if err != nil {
@@ -114,7 +114,9 @@ func Test_V5HeavyTransfer(t *testing.T) {
 func Test_WalletTransfer(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 
-	for _, v := range []VersionConfig{ConfigV5R1{
+	for _, v := range []VersionConfig{ConfigV5R1Final{
+		NetworkGlobalID: TestnetGlobalID,
+	}, ConfigV5R1Beta{
 		NetworkGlobalID: TestnetGlobalID,
 	}, V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified, ConfigHighloadV3{
 		MessageTTL: 120,
@@ -164,9 +166,20 @@ func Test_WalletTransfer(t *testing.T) {
 				comment := randString(150)
 				addr := address.MustParseAddr("EQA8aJTl0jfFnUZBJjTeUxu9OcbsoPBp9UcHE9upyY_X35kE")
 				if balance.Nano().Uint64() >= 3000000 {
-					err = w.Transfer(ctx, addr, tlb.MustFromTON("0.003"), comment, true)
+					tr, err := w.BuildTransfer(addr, tlb.MustFromTON("0.003"), false, comment)
+					if err != nil {
+						t.Fatal("Build transfer err:", err.Error())
+						return
+					}
+
+					tx, _, err := w.SendManyWaitTransaction(ctx, []*Message{tr})
 					if err != nil {
 						t.Fatal("Transfer err:", err.Error())
+						return
+					}
+
+					if tx.OutMsgCount == 0 {
+						t.Fatal("Out msg is 0:", ver)
 						return
 					}
 				} else {

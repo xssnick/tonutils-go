@@ -4,30 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/tlb"
 	"time"
 
-	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 // https://github.com/tonkeeper/tonkeeper-ton/commit/e8a7f3415e241daf4ac723f273fbc12776663c49#diff-c20d462b2e1ec616bbba2db39acc7a6c61edc3d5e768f5c2034a80169b1a56caR29
-const _V5BetaCodeHex = "b5ee9c7241010101002300084202e4cf3b2f4c6d6a61ea0f2b5447d266785b26af3637db2deee6bcd1aa826f34120dcd8e11"
+const _V5R1BetaCodeHex = "b5ee9c7241010101002300084202e4cf3b2f4c6d6a61ea0f2b5447d266785b26af3637db2deee6bcd1aa826f34120dcd8e11"
 
-type ConfigV5Beta struct {
+type ConfigV5R1Beta struct {
 	NetworkGlobalID int32
 	Workchain       int8
 }
 
-type SpecV5Beta struct {
+type SpecV5R1Beta struct {
 	SpecRegular
 	SpecSeqno
 
-	config ConfigV5Beta
+	config ConfigV5R1Beta
 }
 
-func (s *SpecV5Beta) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, messages []*Message) (_ *cell.Cell, err error) {
+func (c ConfigV5R1Beta) String() string {
+	return "V5R1Beta"
+}
+
+func (s *SpecV5R1Beta) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt, messages []*Message) (_ *cell.Cell, err error) {
 	// TODO: remove block, now it is here for backwards compatibility
 
 	if len(messages) > 255 {
@@ -61,8 +65,8 @@ func (s *SpecV5Beta) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockIDExt
 }
 
 func packV5BetaActions(messages []*Message) (*cell.Builder, error) {
-	if len(messages) > 255 {
-		return nil, fmt.Errorf("max 255 messages allowed for v5")
+	if err := validateMessageFields(messages); err != nil {
+		return nil, err
 	}
 
 	var list = cell.BeginCell().EndCell()
@@ -79,9 +83,9 @@ func packV5BetaActions(messages []*Message) (*cell.Builder, error) {
 			action_send_msg#0ec3c86d mode:(## 8)
 			  out_msg:^(MessageRelaxed Any) = OutAction;
 		*/
-		msg := cell.BeginCell().MustStoreUInt(0x0ec3c86d, 32).
-			MustStoreUInt(uint64(message.Mode), 8).
-			MustStoreRef(outMsg)
+		msg := cell.BeginCell().MustStoreUInt(0x0ec3c86d, 32). // action_send_msg prefix
+									MustStoreUInt(uint64(message.Mode), 8). // mode
+									MustStoreRef(outMsg)                    // message reference
 
 		list = cell.BeginCell().MustStoreRef(list).MustStoreBuilder(msg).EndCell()
 	}
