@@ -73,7 +73,7 @@ func main() {
 			ti := tx.IO.In.AsInternal()
 			src := ti.SrcAddr
 
-			// verify that sender is our jetton wallet
+			// verify that event sender is our jetton wallet
 			if ti.SrcAddr.Equals(treasuryJettonWallet.Address()) {
 				var transfer jetton.TransferNotification
 				if err = tlb.LoadFromCell(&transfer, ti.Body.BeginParse()); err == nil {
