@@ -55,11 +55,15 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 		switch ver {
 		case HighloadV3:
 			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
+		case V5Beta:
+			return nil, fmt.Errorf("use ConfigV5Beta for V5 spec")
 		case V5R1:
-			return nil, fmt.Errorf("use ConfigV5R1 for v5 spec")
+			return nil, fmt.Errorf("use ConfigV5R1 for V5 spec")
 		}
 	case ConfigHighloadV3:
 		ver = HighloadV3
+	case ConfigV5Beta:
+		ver = V5Beta
 	case ConfigV5R1:
 		ver = V5R1
 	}
@@ -84,17 +88,35 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 			MustStoreSlice(pubKey, 256).
 			MustStoreDict(nil). // empty dict of plugins
 			EndCell()
+	case V5Beta:
+		config := version.(ConfigV5Beta)
+
+		data = cell.BeginCell().
+			MustStoreUInt(0, 33).                            // seqno
+			MustStoreInt(int64(config.NetworkGlobalID), 32). // network id
+			MustStoreInt(int64(config.Workchain), 8).        // workchain
+			MustStoreUInt(0, 8).                             // version of v5
+			MustStoreUInt(uint64(subWallet), 32).            // default 0
+			MustStoreSlice(pubKey, 256).
+			MustStoreDict(nil). // empty dict of plugins
+			EndCell()
 	case V5R1:
 		config := version.(ConfigV5R1)
 
+		// Create WalletId instance
+		walletId := WalletId{
+			NetworkGlobalID: config.NetworkGlobalID, // -3 Testnet, -239 Mainnet
+			WorkChain:       config.Workchain,
+			SubwalletNumber: uint16(subWallet),
+			WalletVersion:   0, // Wallet Version
+		}
+
 		data = cell.BeginCell().
-			MustStoreUInt(0, 33). // seqno
-			MustStoreInt(int64(config.NetworkGlobalID), 32).
-			MustStoreInt(int64(config.Workchain), 8).
-			MustStoreUInt(0, 8). // version of v5
-			MustStoreUInt(uint64(subWallet), 32).
-			MustStoreSlice(pubKey, 256).
-			MustStoreDict(nil). // empty dict of plugins
+			MustStoreBoolBit(true).                           // storeUint(1, 1) - boolean flag for context type
+			MustStoreUInt(0, 32).                             // Sequence number, hardcoded as 0
+			MustStoreUInt(uint64(walletId.Serialized()), 32). // Serializing WalletId into 32-bit integer
+			MustStoreSlice(pubKey, 256).                      // Storing the public key
+			MustStoreDict(nil).                               // Storing an empty plugins dictionary
 			EndCell()
 	case HighloadV2R2, HighloadV2Verified:
 		data = cell.BeginCell().

@@ -13,8 +13,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
 
 	"github.com/xssnick/tonutils-go/ton"
 
@@ -24,6 +25,10 @@ import (
 )
 
 type Version int
+
+// Network IDs
+const MainnetGlobalID = -239
+const TestnetGlobalID = -3
 
 const (
 	V1R1               Version = 11
@@ -36,7 +41,8 @@ const (
 	V3                         = V3R2
 	V4R1               Version = 41
 	V4R2               Version = 42
-	V5R1               Version = 51
+	V5Beta             Version = 51 // W5 Beta
+	V5R1               Version = 52 // W5 Final
 	HighloadV2R2       Version = 122
 	HighloadV2Verified Version = 123
 	HighloadV3         Version = 300
@@ -79,6 +85,7 @@ var (
 		V2R1: _V2R1CodeHex, V2R2: _V2R2CodeHex,
 		V3R1: _V3R1CodeHex, V3R2: _V3R2CodeHex,
 		V4R1: _V4R1CodeHex, V4R2: _V4R2CodeHex,
+		V5Beta:       _V5BetaCodeHex,
 		V5R1:         _V5R1CodeHex,
 		HighloadV2R2: _HighloadV2R2CodeHex, HighloadV2Verified: _HighloadV2VerifiedCodeHex,
 		HighloadV3: _HighloadV3CodeHex,
@@ -155,6 +162,7 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (
 
 	// default subwallet depends on wallet type
 	switch version.(type) {
+	case ConfigV5Beta:
 	case ConfigV5R1:
 		subwallet = 0
 	}
@@ -182,7 +190,7 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (
 
 func getSpec(w *Wallet) (any, error) {
 	switch v := w.ver.(type) {
-	case Version, ConfigV5R1:
+	case Version, ConfigV5Beta, ConfigV5R1:
 		regular := SpecRegular{
 			wallet:      w,
 			messagesTTL: 60 * 3, // default ttl 3 min
@@ -210,9 +218,14 @@ func getSpec(w *Wallet) (any, error) {
 		}
 
 		switch x := w.ver.(type) {
+		case ConfigV5Beta:
+			if x.NetworkGlobalID == 0 {
+				return nil, fmt.Errorf("NetworkGlobalID should be set in V5 config")
+			}
+			return &SpecV5Beta{SpecRegular: regular, SpecSeqno: SpecSeqno{seqnoFetcher: seqnoFetcher}, config: x}, nil
 		case ConfigV5R1:
 			if x.NetworkGlobalID == 0 {
-				return nil, fmt.Errorf("NetworkGlobalID should be set in v5 config")
+				return nil, fmt.Errorf("NetworkGlobalID should be set in V5 config")
 			}
 			return &SpecV5R1{SpecRegular: regular, SpecSeqno: SpecSeqno{seqnoFetcher: seqnoFetcher}, config: x}, nil
 		}
@@ -226,8 +239,10 @@ func getSpec(w *Wallet) (any, error) {
 			return &SpecHighloadV2R2{regular, SpecQuery{}}, nil
 		case HighloadV3:
 			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
+		case V5Beta:
+			return nil, fmt.Errorf("use ConfigV5Beta for V5 spec")
 		case V5R1:
-			return nil, fmt.Errorf("use ConfigV5R1 for v5 spec")
+			return nil, fmt.Errorf("use ConfigV5R1 for V5 spec")
 		}
 	case ConfigHighloadV3:
 		return &SpecHighloadV3{wallet: w, config: v}, nil
@@ -328,13 +343,16 @@ func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateIni
 
 	var msg *cell.Cell
 	switch v := w.ver.(type) {
-	case Version, ConfigV5R1:
+	case Version, ConfigV5Beta, ConfigV5R1:
+		if _, ok := v.(ConfigV5Beta); ok {
+			v = V5Beta
+		}
 		if _, ok := v.(ConfigV5R1); ok {
 			v = V5R1
 		}
 
 		switch v {
-		case V3R2, V3R1, V4R2, V4R1, V5R1:
+		case V3R2, V3R1, V4R2, V4R1, V5Beta, V5R1:
 			msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, !withStateInit, nil, messages)
 			if err != nil {
 				return nil, fmt.Errorf("build message err: %w", err)
