@@ -324,6 +324,10 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 			}
 
 			if isOut {
+				if transaction.IO.Out == nil {
+					continue
+				}
+
 				list, err := transaction.IO.Out.ToSlice()
 				if err != nil {
 					return nil, fmt.Errorf("cannot list out messages: %w", err)
