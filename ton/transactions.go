@@ -338,6 +338,8 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 						return transaction, nil
 					}
 				}
+
+				continue
 			} else {
 				if transaction.IO.In == nil {
 					continue
