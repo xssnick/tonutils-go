@@ -182,7 +182,7 @@ type ShardInfo struct {
 	ID               *BlockIDExt  `tl:"struct"`
 	ShardBlock       *BlockIDExt  `tl:"struct"`
 	ShardProof       []*cell.Cell `tl:"cell optional 2"`
-	ShardDescription *cell.Cell   `tl:"bytes"`
+	ShardDescription *cell.Cell   `tl:"cell optional"`
 }
 
 type BlockTransactions struct {
