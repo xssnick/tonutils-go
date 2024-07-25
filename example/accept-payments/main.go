@@ -6,6 +6,7 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
+	"github.com/xssnick/tonutils-go/ton/jetton"
 	"log"
 )
 
@@ -26,19 +27,17 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicySecure).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
 	api.SetTrustedBlockFromConfig(cfg)
 
-	log.Println("fetching and checking proofs since config init block, it may take near a minute...")
 	master, err := api.CurrentMasterchainInfo(context.Background()) // we fetch block just to trigger chain proof check
 	if err != nil {
 		log.Fatalln("get masterchain info err: ", err.Error())
 		return
 	}
-	log.Println("master proof checks are completed successfully, now communication is 100% safe!")
 
 	// address on which we are accepting payments
-	treasuryAddress := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	treasuryAddress := address.MustParseAddr("EQAYqo4u7VF0fa4DPAebk4g9lBytj2VFny7pzXR0trjtXQaO")
 
 	acc, err := api.GetAccount(context.Background(), master, treasuryAddress)
 	if err != nil {
@@ -58,10 +57,38 @@ func main() {
 
 	log.Println("waiting for transfers...")
 
+	// USDT master contract addr, but can be any jetton
+	usdt := jetton.NewJettonMasterClient(api, address.MustParseAddr("EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"))
+	// get our jetton wallet address
+	treasuryJettonWallet, err := usdt.GetJettonWalletAtBlock(context.Background(), treasuryAddress, master)
+	if err != nil {
+		log.Fatalln("get jetton wallet address err: ", err.Error())
+		return
+	}
+
 	// listen for new transactions from channel
 	for tx := range transactions {
-		// process transaction here
-		log.Println(tx.String())
+		// only internal messages can increase the balance
+		if tx.IO.In != nil && tx.IO.In.MsgType == tlb.MsgTypeInternal {
+			ti := tx.IO.In.AsInternal()
+			src := ti.SrcAddr
+
+			// verify that event sender is our jetton wallet
+			if ti.SrcAddr.Equals(treasuryJettonWallet.Address()) {
+				var transfer jetton.TransferNotification
+				if err = tlb.LoadFromCell(&transfer, ti.Body.BeginParse()); err == nil {
+					// convert decimals to 6 for USDT (it can be fetched from jetton details too), default is 9
+					amt := tlb.MustFromNano(transfer.Amount.Nano(), 6)
+
+					// reassign sender to real jetton sender instead of its jetton wallet contract
+					src = transfer.Sender
+					log.Println("received", amt.String(), "USDT from", src.String())
+				}
+			}
+
+			// show received ton amount
+			log.Println("received", ti.Amount.String(), "TON from", src.String())
+		}
 
 		// update last processed lt and save it in db
 		lastProcessedLT = tx.LT

@@ -242,8 +242,8 @@ func (d *Dictionary) Set(key, value *Cell) error {
 	if err != nil {
 		return fmt.Errorf("failed to set value in dict, err: %w", err)
 	}
-	d.root = newRoot
 
+	d.root = newRoot
 	return nil
 }
 
@@ -314,13 +314,15 @@ func (d *Dictionary) IsEmpty() bool {
 // Deprecated: use LoadAll, dict was reimplemented, so it will be parsed during this call, and it can return error now.
 func (d *Dictionary) All() []*HashmapKV {
 	list, _ := d.LoadAll()
-	var old []*HashmapKV
-	for _, kv := range list {
-		old = append(old, &HashmapKV{
-			Key:   kv.Key.MustToCell(),
-			Value: kv.Value.MustToCell(),
-		})
+
+	old := make([]*HashmapKV, len(list))
+	for i := 0; i < len(list); i++ {
+		old[i] = &HashmapKV{
+			Key:   list[i].Key.MustToCell(),
+			Value: list[i].Value.MustToCell(),
+		}
 	}
+
 	return old
 }
 
@@ -474,10 +476,10 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 		return 0, nil, err
 	}
 
+	bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
+
 	// hml_long$10
 	if second == 0 {
-		bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
-
 		ln, err := loader.LoadUInt(bitsLen)
 		if err != nil {
 			return 0, nil, err
@@ -502,8 +504,6 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-
-	bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
 
 	ln, err := loader.LoadUInt(bitsLen)
 	if err != nil {

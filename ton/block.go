@@ -182,7 +182,7 @@ type ShardInfo struct {
 	ID               *BlockIDExt  `tl:"struct"`
 	ShardBlock       *BlockIDExt  `tl:"struct"`
 	ShardProof       []*cell.Cell `tl:"cell optional 2"`
-	ShardDescription *cell.Cell   `tl:"bytes"`
+	ShardDescription *cell.Cell   `tl:"cell optional"`
 }
 
 type BlockTransactions struct {
@@ -194,11 +194,11 @@ type BlockTransactions struct {
 }
 
 type BlockTransactionsExt struct {
-	ID           *BlockIDExt `tl:"struct"`
-	ReqCount     int32       `tl:"int"`
-	Incomplete   bool        `tl:"bool"`
-	Transactions *cell.Cell  `tl:"cell optional"`
-	Proof        []byte      `tl:"bytes"`
+	ID           *BlockIDExt  `tl:"struct"`
+	ReqCount     int32        `tl:"int"`
+	Incomplete   bool         `tl:"bool"`
+	Transactions []*cell.Cell `tl:"cell optional"`
+	Proof        []byte       `tl:"bytes"`
 }
 
 type BlockData struct {

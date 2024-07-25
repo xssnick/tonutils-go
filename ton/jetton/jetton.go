@@ -2,6 +2,7 @@ package jetton
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -19,6 +20,8 @@ type TonApi interface {
 	SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction)
 }
 
+var ErrInvalidTransfer = errors.New("transfer is not verified")
+
 type MintPayloadMasterMsg struct {
 	Opcode       uint32     `tlb:"## 32"`
 	QueryID      uint64     `tlb:"## 64"`
@@ -32,6 +35,14 @@ type MintPayload struct {
 	ToAddress *address.Address     `tlb:"addr"`
 	Amount    tlb.Coins            `tlb:"."`
 	MasterMsg MintPayloadMasterMsg `tlb:"^"`
+}
+
+type TransferNotification struct {
+	_              tlb.Magic        `tlb:"#7362d09c"`
+	QueryID        uint64           `tlb:"## 64"`
+	Amount         tlb.Coins        `tlb:"."`
+	Sender         *address.Address `tlb:"addr"`
+	ForwardPayload *cell.Cell       `tlb:"either . ^"`
 }
 
 type Data struct {
