@@ -22,7 +22,7 @@ type SpecHighloadV2R2 struct {
 	SpecQuery
 }
 
-func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, messages []*Message) (*cell.Cell, error) {
+func (s *SpecHighloadV2R2) BuildMessage(ctx context.Context, messages []*Message) (*cell.Cell, error) {
 	if len(messages) > 254 {
 		return nil, errors.New("for this type of wallet max 254 messages can be sent in the same time")
 	}
@@ -47,7 +47,7 @@ func (s *SpecHighloadV2R2) BuildMessage(_ context.Context, messages []*Message) 
 
 	var ttl, queryID uint32
 	if s.customQueryIDFetcher != nil {
-		ttl, queryID = s.customQueryIDFetcher()
+		ttl, queryID = s.customQueryIDFetcher(ctx)
 	} else {
 		queryID = randUint32()
 		ttl = uint32(timeNow().Add(time.Duration(s.messagesTTL) * time.Second).UTC().Unix())

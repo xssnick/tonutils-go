@@ -54,9 +54,15 @@ type SpecQuery struct {
 	// Do not set ttl to high if you are sending many messages,
 	// unexpired executed messages will be cached in contract,
 	// and it may become too expensive to make transactions.
-	customQueryIDFetcher func() (ttl uint32, randPart uint32)
+	customQueryIDFetcher func(context.Context) (ttl uint32, randPart uint32)
 }
 
 func (s *SpecQuery) SetCustomQueryIDFetcher(fetcher func() (ttl uint32, randPart uint32)) {
+	s.SetCustomQueryIDFetcherWithContext(func(ctx context.Context) (ttl uint32, randPart uint32) {
+		return fetcher()
+	})
+}
+
+func (s *SpecQuery) SetCustomQueryIDFetcherWithContext(fetcher func(ctx context.Context) (ttl uint32, randPart uint32)) {
 	s.customQueryIDFetcher = fetcher
 }
