@@ -68,6 +68,8 @@ func (v Version) String() string {
 		return fmt.Sprintf("highload V2R2")
 	case HighloadV2Verified:
 		return fmt.Sprintf("highload V2R2 verified")
+	case HighloadV3:
+		return fmt.Sprintf("highload V3")
 	}
 
 	if v/100 == 2 {

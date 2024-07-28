@@ -47,7 +47,11 @@ func (s *SpecHighloadV2R2) BuildMessage(ctx context.Context, messages []*Message
 
 	var ttl, queryID uint32
 	if s.customQueryIDFetcher != nil {
-		ttl, queryID = s.customQueryIDFetcher(ctx)
+		var err error
+		ttl, queryID, err = s.customQueryIDFetcher(ctx, s.wallet.subwallet)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch queryID: %w", err)
+		}
 	} else {
 		queryID = randUint32()
 		ttl = uint32(timeNow().Add(time.Duration(s.messagesTTL) * time.Second).UTC().Unix())
