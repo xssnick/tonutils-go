@@ -43,7 +43,7 @@ func (s *SpecHighloadV3) BuildMessage(ctx context.Context, messages []*Message) 
 
 	queryID, createdAt, err := s.config.MessageBuilder(ctx, s.wallet.subwallet)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
+		return nil, fmt.Errorf("failed to fetch queryID: %w", err)
 	}
 
 	if queryID >= 1<<23 {
