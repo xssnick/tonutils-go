@@ -466,29 +466,13 @@ func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tl
 }
 
 // TransferWaitTransaction always waits for tx block confirmation and returns found tx.
-func (w *Wallet) TransferWaitTransaction(ctx context.Context, addr *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
-	var body *cell.Cell
-	var err error
-
-	if comment != "" {
-		body, err = CreateCommentCell(comment)
-		if err != nil {
-			return nil, nil, err
-		}
+func (w *Wallet) TransferWaitTransaction(ctx context.Context, to *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
+	transfer, err := w.BuildTransfer(to, amount, to.IsBounceable(), comment)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	msg := &Message{
-		Mode: PayGasSeparately + IgnoreErrors,
-		InternalMessage: &tlb.InternalMessage{
-			IHRDisabled: true,
-			Bounce:      addr.IsBounceable(),
-			DstAddr:     addr,
-			Amount:      amount,
-			Body:        body,
-		},
-	}
-
-	return w.SendManyWaitTransaction(ctx, []*Message{msg})
+	return w.SendManyWaitTransaction(ctx, []*Message{transfer})
 }
 
 func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (tx *tlb.Transaction, block *ton.BlockIDExt, inMsgHash []byte, err error) {
