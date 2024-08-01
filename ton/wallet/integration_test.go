@@ -342,7 +342,7 @@ func TestWallet_TransferEncrypted(t *testing.T) {
 	}
 }
 
-func TestWallet_BroadcastTransactionsAndWait(t *testing.T) {
+func TestWallet_TransferWaitTransaction(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())
 
@@ -353,7 +353,7 @@ func TestWallet_BroadcastTransactionsAndWait(t *testing.T) {
 	}
 	t.Logf("wallet address: %s", w.Address().String())
 
-	tx, block, err := w.BroadcastTransactionsAndWait(ctx, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"), tlb.MustFromTON("0.005"), "Hello from tonutils-go!")
+	tx, block, err := w.TransferWaitTransaction(ctx, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"), tlb.MustFromTON("0.005"), "Hello from tonutils-go!")
 	if err != nil {
 		t.Fatal("transfer err:", err)
 	}

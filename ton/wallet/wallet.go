@@ -465,8 +465,8 @@ func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tl
 	return w.SendManyWaitTransaction(ctx, []*Message{message})
 }
 
-// BroadcastTransactionsAndWait broadcasts the transaction and waits for confirmation, returning the transaction, block, and any errors.
-func (w *Wallet) BroadcastTransactionsAndWait(ctx context.Context, addr *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
+// TransferWaitTransaction always waits for tx block confirmation and returns found tx.
+func (w *Wallet) TransferWaitTransaction(ctx context.Context, addr *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
 	var body *cell.Cell
 	var err error
 
