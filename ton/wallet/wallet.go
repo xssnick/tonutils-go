@@ -466,7 +466,7 @@ func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tl
 }
 
 // BroadcastTransactionsAndWait broadcasts the transaction and waits for confirmation, returning the transaction, block, and any errors.
-func (w *Wallet) BroadcastTransactionsAndWait(ctx context.Context, addr *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
+func (w *Wallet) BroadcastTransactionsAndWait(ctx context.Context, addr *address.Address, amount tlb.Coins, bounce bool, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
 	var body *cell.Cell
 	var err error
 
@@ -481,7 +481,7 @@ func (w *Wallet) BroadcastTransactionsAndWait(ctx context.Context, addr *address
 		Mode: PayGasSeparately + IgnoreErrors,
 		InternalMessage: &tlb.InternalMessage{
 			IHRDisabled: true,
-			Bounce:      false,
+			Bounce:      bounce,
 			DstAddr:     addr,
 			Amount:      amount,
 			Body:        body,
