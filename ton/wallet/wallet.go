@@ -465,6 +465,32 @@ func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tl
 	return w.SendManyWaitTransaction(ctx, []*Message{message})
 }
 
+// BroadcastTransactionsAndWait broadcasts the transaction and waits for confirmation, returning the transaction, block, and any errors.
+func (w *Wallet) BroadcastTransactionsAndWait(ctx context.Context, addr *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
+	var body *cell.Cell
+	var err error
+
+	if comment != "" {
+		body, err = CreateCommentCell(comment)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	msg := &Message{
+		Mode: PayGasSeparately + IgnoreErrors,
+		InternalMessage: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      false,
+			DstAddr:     addr,
+			Amount:      amount,
+			Body:        body,
+		},
+	}
+
+	return w.SendManyWaitTransaction(ctx, []*Message{msg})
+}
+
 func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (tx *tlb.Transaction, block *ton.BlockIDExt, inMsgHash []byte, err error) {
 	block, err = w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {

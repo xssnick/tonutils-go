@@ -342,6 +342,26 @@ func TestWallet_TransferEncrypted(t *testing.T) {
 	}
 }
 
+func TestWallet_BroadcastTransactionsAndWait(t *testing.T) {
+	seed := strings.Split(_seed, " ")
+	ctx := api.Client().StickyContext(context.Background())
+
+	// init wallet
+	w, err := FromSeed(api, seed, HighloadV2R2)
+	if err != nil {
+		t.Fatal("FromSeed err:", err.Error())
+	}
+	t.Logf("wallet address: %s", w.Address().String())
+
+	tx, block, err := w.BroadcastTransactionsAndWait(ctx, address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA"), tlb.MustFromTON("0.005"), "Hello from tonutils-go!")
+	if err != nil {
+		t.Fatal("transfer err:", err)
+	}
+
+	t.Logf("Transaction: %v", tx)
+	t.Logf("Block: %v", block)
+}
+
 func TestGetWalletVersion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
