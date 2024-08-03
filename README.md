@@ -67,9 +67,10 @@ You can find usage examples in **[example](https://github.com/xssnick/tonutils-g
 You could also join our **[Telegram channel](https://t.me/tonutilsnews)** and **[group](https://t.me/tonutils)**, feel free ask any questions :)
 
 ### Connection
-You can get list of public lite servers from official TON configs:
-* Mainnet - `https://ton.org/global.config.json`
-* Testnet - `https://ton-blockchain.github.io/testnet-global.config.json`
+You can use liteservers from TON configs:
+* Mainnet public servers - `https://ton.org/global.config.json`
+* Testnet public servers - `https://ton-blockchain.github.io/testnet-global.config.json`
+* Mainnet servers by Tonutils - `https://tonutils.com/ls/free-mainnet-config.json`
 
 from liteservers section, you need to convert int to ip and take port and key.
 
