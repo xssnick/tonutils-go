@@ -222,3 +222,15 @@ func (g *Coins) UnmarshalJSON(data []byte) error {
 
 	return nil
 }
+
+func Compare(coins1 *Coins, coins2 *Coins) int {
+	if coins1.decimals != coins2.decimals {
+		panic("invalid comparsion")
+	}
+
+	return coins1.Nano().Cmp(coins2.Nano())
+}
+
+func Decimals(coins *Coins) int {
+	return coins.decimals
+}
