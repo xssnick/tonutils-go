@@ -7,7 +7,7 @@ import (
 
 type ConfigCustom interface {
 	StateIniter
-	getSpec(w *Wallet) RegularBuilder
+	GetSpec(w *Wallet) RegularBuilder
 }
 
 type StateIniter interface {

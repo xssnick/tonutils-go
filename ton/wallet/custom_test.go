@@ -44,7 +44,7 @@ func (c *configCustomV5R1) GetStateInit(pubKey ed25519.PublicKey, subWallet uint
 	}, nil
 }
 
-func (c *configCustomV5R1) getSpec(w *Wallet) RegularBuilder {
+func (c *configCustomV5R1) GetSpec(w *Wallet) RegularBuilder {
 	return &SpecV5R1Final{
 		SpecRegular: SpecRegular{
 			wallet:      w,
@@ -126,7 +126,7 @@ func (s *specCustomHighloadV3) BuildMessage(ctx context.Context, isInitialized b
 	return s.SpecHighloadV3.BuildMessage(ctx, messages)
 }
 
-func (c *configCustomHighloadV3) getSpec(w *Wallet) RegularBuilder {
+func (c *configCustomHighloadV3) GetSpec(w *Wallet) RegularBuilder {
 	return &specCustomHighloadV3{SpecHighloadV3: SpecHighloadV3{
 		wallet: w,
 		config: ConfigHighloadV3{

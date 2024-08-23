@@ -249,7 +249,7 @@ func getSpec(w *Wallet) (any, error) {
 	case ConfigHighloadV3:
 		return &SpecHighloadV3{wallet: w, config: v}, nil
 	case ConfigCustom:
-		return v.getSpec(w), nil
+		return v.GetSpec(w), nil
 	}
 
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
