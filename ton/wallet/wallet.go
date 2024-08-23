@@ -48,6 +48,7 @@ const (
 	HighloadV3         Version = 300
 	Lockup             Version = 200
 	Unknown            Version = 0
+	Custom             Version = 1
 )
 
 const (
