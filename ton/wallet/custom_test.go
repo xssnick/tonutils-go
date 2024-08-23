@@ -81,7 +81,7 @@ func TestConfigCustom_CmpV5SubWalletAddress(t *testing.T) {
 	}
 
 	if !wCustomSub.WalletAddress().Equals(wOrigSub.WalletAddress()) {
-		t.Error("orig and custom v5r1 wallet addresse mismatch")
+		t.Error("orig and custom v5r1 wallet address mismatch")
 	}
 }
 
@@ -175,7 +175,7 @@ func TestConfigCustom_V3BocTx(t *testing.T) {
 	wOrigSubExtMgsBocHex := hex.EncodeToString(wOrigSubExtMgsCell.ToBOCWithFlags(false))
 
 	if !wCustomSub.WalletAddress().Equals(wOrigSub.WalletAddress()) {
-		t.Error("orig and custom v5r1 wallet addresse mismatch")
+		t.Error("orig and custom HL3 wallet address mismatch")
 	}
 
 	if wCustomSubExtMgsBocHex != wOrigSubExtMgsBocHex {
