@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 package wallet
 
 import (
@@ -20,6 +23,8 @@ import (
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
+
+const emptyWalletSeedEnvFatalMsg = "WALLET_SEED not found in environment"
 
 var api = func() ton.APIClientWrapped {
 	client := liteclient.NewConnectionPool()
@@ -52,6 +57,9 @@ var apiMain = func() ton.APIClientWrapped {
 var _seed = os.Getenv("WALLET_SEED")
 
 func Test_HighloadHeavyTransfer(t *testing.T) {
+	if _seed == "" {
+		t.Fatal(emptyWalletSeedEnvFatalMsg)
+	}
 	seed := strings.Split(_seed, " ")
 
 	w, err := FromSeed(api, seed, ConfigHighloadV3{
@@ -84,6 +92,9 @@ func Test_HighloadHeavyTransfer(t *testing.T) {
 }
 
 func Test_V5HeavyTransfer(t *testing.T) {
+	if _seed == "" {
+		t.Fatal(emptyWalletSeedEnvFatalMsg)
+	}
 	seed := strings.Split(_seed, " ")
 
 	w, err := FromSeed(api, seed, ConfigV5R1Final{
@@ -112,6 +123,9 @@ func Test_V5HeavyTransfer(t *testing.T) {
 }
 
 func Test_WalletTransfer(t *testing.T) {
+	if _seed == "" {
+		t.Fatalf(emptyWalletSeedEnvFatalMsg)
+	}
 	seed := strings.Split(_seed, " ")
 
 	for _, v := range []VersionConfig{ConfigV5R1Final{
@@ -192,6 +206,9 @@ func Test_WalletTransfer(t *testing.T) {
 }
 
 func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
+	if _seed == "" {
+		t.Fatal(emptyWalletSeedEnvFatalMsg)
+	}
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())
 
@@ -240,6 +257,9 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 }
 
 func TestWallet_DeployContract(t *testing.T) {
+	if _seed == "" {
+		t.Fatal(emptyWalletSeedEnvFatalMsg)
+	}
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())
 
@@ -280,6 +300,9 @@ func TestWallet_DeployContract(t *testing.T) {
 }
 
 func TestWallet_DeployContractUsingHW3(t *testing.T) {
+	if _seed == "" {
+		t.Fatal(emptyWalletSeedEnvFatalMsg)
+	}
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())
 
@@ -326,6 +349,9 @@ func TestWallet_DeployContractUsingHW3(t *testing.T) {
 }
 
 func TestWallet_TransferEncrypted(t *testing.T) {
+	if _seed == "" {
+		t.Skip()
+	}
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())
 
