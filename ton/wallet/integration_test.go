@@ -350,7 +350,7 @@ func TestWallet_DeployContractUsingHW3(t *testing.T) {
 
 func TestWallet_TransferEncrypted(t *testing.T) {
 	if _seed == "" {
-		t.Skip()
+		t.Fatal(emptyWalletSeedEnvFatalMsg)
 	}
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())
