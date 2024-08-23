@@ -170,15 +170,15 @@ func TestConfigCustom_V3BocTx(t *testing.T) {
 		t.Fatalf("failed to get orig sub HL3 wallet, err: %s", err)
 	}
 
-	wOrigSubSubExtMgs, _ := wCustomSub.PrepareExternalMessageForMany(context.Background(), false, []*Message{SimpleMessage(wOrigSub.WalletAddress(), tlb.MustFromTON("0.5"), nil)})
-	wOrigSubSubExtMgsCell, _ := tlb.ToCell(wOrigSubSubExtMgs)
-	wOrigSubSubExtMgsBocHex := hex.EncodeToString(wOrigSubSubExtMgsCell.ToBOCWithFlags(false))
+	wOrigSubExtMgs, _ := wCustomSub.PrepareExternalMessageForMany(context.Background(), false, []*Message{SimpleMessage(wOrigSub.WalletAddress(), tlb.MustFromTON("0.5"), nil)})
+	wOrigSubExtMgsCell, _ := tlb.ToCell(wOrigSubExtMgs)
+	wOrigSubExtMgsBocHex := hex.EncodeToString(wOrigSubExtMgsCell.ToBOCWithFlags(false))
 
 	if !wCustomSub.WalletAddress().Equals(wOrigSub.WalletAddress()) {
 		t.Fatalf("orig and custom v5r1 wallet addresses mismatch")
 	}
 
-	if wCustomSubExtMgsBocHex != wOrigSubSubExtMgsBocHex {
+	if wCustomSubExtMgsBocHex != wOrigSubExtMgsBocHex {
 		t.Fatalf("orig and custom ext boc msg mismatch")
 	}
 }
