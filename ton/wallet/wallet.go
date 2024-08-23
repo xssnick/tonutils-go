@@ -293,6 +293,10 @@ func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
 	return sub, nil
 }
 
+func (w *Wallet) GetSubwalletID() uint32 {
+	return w.subwallet
+}
+
 func (w *Wallet) GetBalance(ctx context.Context, block *ton.BlockIDExt) (tlb.Coins, error) {
 	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
 	if err != nil {
