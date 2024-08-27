@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"testing"
 )
@@ -19,6 +18,25 @@ type configCustomV5R1 struct {
 func newConfigCustomV5R1(code *cell.Cell) ConfigCustom {
 	return &configCustomV5R1{code: code, ConfigV5R1Final: ConfigV5R1Final{
 		NetworkGlobalID: MainnetGlobalID,
+	}}
+}
+
+type customSpecV5R1 struct {
+	SpecV5R1Final
+}
+
+func (c *customSpecV5R1) BuildMessage(ctx context.Context, messages []*Message) (*cell.Cell, error) {
+	return c.SpecV5R1Final.BuildMessage(ctx, false, nil, messages)
+}
+
+func (c *configCustomV5R1) GetSpec(w *Wallet) MessageBuilder {
+	return &customSpecV5R1{SpecV5R1Final: SpecV5R1Final{
+		SpecRegular: SpecRegular{
+			wallet:      w,
+			messagesTTL: 60 * 3,
+		},
+		SpecSeqno: SpecSeqno{seqnoFetcher: nil},
+		config:    c.ConfigV5R1Final,
 	}}
 }
 
@@ -42,17 +60,6 @@ func (c *configCustomV5R1) GetStateInit(pubKey ed25519.PublicKey, subWallet uint
 		Data: data,
 		Code: c.code,
 	}, nil
-}
-
-func (c *configCustomV5R1) GetSpec(w *Wallet) RegularBuilder {
-	return &SpecV5R1Final{
-		SpecRegular: SpecRegular{
-			wallet:      w,
-			messagesTTL: 60 * 3,
-		},
-		SpecSeqno: SpecSeqno{seqnoFetcher: nil},
-		config:    c.ConfigV5R1Final,
-	}
 }
 
 func TestConfigCustom_CmpV5SubWalletAddress(t *testing.T) {
@@ -99,6 +106,10 @@ func newConfigCustomHighloadV3(code *cell.Cell) ConfigCustom {
 	}}
 }
 
+func (c *configCustomHighloadV3) GetSpec(w *Wallet) MessageBuilder {
+	return &SpecHighloadV3{wallet: w, config: c.ConfigHighloadV3}
+}
+
 func (c *configCustomHighloadV3) GetStateInit(pubKey ed25519.PublicKey, subWallet uint32) (*tlb.StateInit, error) {
 	timeout := c.MessageTTL
 	if timeout >= 1<<22 {
@@ -116,26 +127,6 @@ func (c *configCustomHighloadV3) GetStateInit(pubKey ed25519.PublicKey, subWalle
 		Data: data,
 		Code: c.code,
 	}, nil
-}
-
-type specCustomHighloadV3 struct {
-	SpecHighloadV3
-}
-
-func (s *specCustomHighloadV3) BuildMessage(ctx context.Context, isInitialized bool, _ *ton.BlockIDExt, messages []*Message) (*cell.Cell, error) {
-	return s.SpecHighloadV3.BuildMessage(ctx, messages)
-}
-
-func (c *configCustomHighloadV3) GetSpec(w *Wallet) RegularBuilder {
-	return &specCustomHighloadV3{SpecHighloadV3: SpecHighloadV3{
-		wallet: w,
-		config: ConfigHighloadV3{
-			MessageTTL: 60,
-			MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
-				return 1, 1733333333, nil
-			},
-		},
-	}}
 }
 
 func TestConfigCustom_V3BocTx(t *testing.T) {

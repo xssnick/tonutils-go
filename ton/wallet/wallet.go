@@ -381,7 +381,7 @@ func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateIni
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
 	case ConfigCustom:
-		msg, err = w.spec.(RegularBuilder).BuildMessage(ctx, !withStateInit, nil, messages)
+		msg, err = w.spec.(MessageBuilder).BuildMessage(ctx, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
