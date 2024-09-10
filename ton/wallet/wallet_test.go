@@ -602,7 +602,7 @@ func TestCreateEncryptedCommentCell(t *testing.T) {
 			return
 		}
 
-		msg := randString(150 + i)
+		msg := "Hello, world!!!"
 		sender := address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA")
 
 		c, err := CreateEncryptedCommentCell(msg, sender, priv1, pub2)

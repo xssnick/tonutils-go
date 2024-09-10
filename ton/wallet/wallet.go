@@ -248,6 +248,8 @@ func getSpec(w *Wallet) (any, error) {
 		}
 	case ConfigHighloadV3:
 		return &SpecHighloadV3{wallet: w, config: v}, nil
+	case ConfigCustom:
+		return v.GetSpec(w), nil
 	}
 
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
@@ -289,6 +291,10 @@ func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
 	}
 
 	return sub, nil
+}
+
+func (w *Wallet) GetSubwalletID() uint32 {
+	return w.subwallet
 }
 
 func (w *Wallet) GetBalance(ctx context.Context, block *ton.BlockIDExt) (tlb.Coins, error) {
@@ -371,6 +377,11 @@ func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateIni
 		}
 	case ConfigHighloadV3:
 		msg, err = w.spec.(*SpecHighloadV3).BuildMessage(ctx, messages)
+		if err != nil {
+			return nil, fmt.Errorf("build message err: %w", err)
+		}
+	case ConfigCustom:
+		msg, err = w.spec.(MessageBuilder).BuildMessage(ctx, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
