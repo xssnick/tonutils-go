@@ -16,11 +16,15 @@ type ContentOffchain struct {
 }
 
 type ContentOnchain struct {
-	Name        string
+	// Deprecated: use GetAttribute("name")
+	Name string
+	// Deprecated: use GetAttribute("description")
 	Description string
-	Image       string
-	ImageData   []byte
-	attributes  *cell.Dictionary
+	// Deprecated: use GetAttribute("image")
+	Image string
+	// Deprecated: use GetAttributeBinary("image_data")
+	ImageData  []byte
+	attributes *cell.Dictionary
 }
 
 type ContentSemichain struct {
