@@ -467,6 +467,16 @@ func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tl
 	return w.SendManyWaitTransaction(ctx, []*Message{message})
 }
 
+// TransferWaitTransaction always waits for tx block confirmation and returns found tx.
+func (w *Wallet) TransferWaitTransaction(ctx context.Context, to *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
+	transfer, err := w.BuildTransfer(to, amount, to.IsBounceable(), comment)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return w.SendManyWaitTransaction(ctx, []*Message{transfer})
+}
+
 func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (tx *tlb.Transaction, block *ton.BlockIDExt, inMsgHash []byte, err error) {
 	block, err = w.api.CurrentMasterchainInfo(ctx)
 	if err != nil {
