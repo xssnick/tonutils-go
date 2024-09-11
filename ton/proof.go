@@ -113,7 +113,7 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 	if !skipBlockCheck {
 		blockHash := block.RootHash
 		// we need shard proof only for not masterchain
-		if len(shardHash) > 0 {
+		if len(shardHash) > 0 && block.Workchain == address.MasterchainID {
 			if err := CheckShardInMasterProof(block, shardProof, addr.Workchain(), shardHash); err != nil {
 				return nil, nil, fmt.Errorf("shard proof is incorrect: %w", err)
 			}
