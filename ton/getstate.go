@@ -73,7 +73,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 		}
 
 		var shardHash []byte
-		if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID && !block.Equals(t.Shard) {
 			if len(t.ShardProof) == 0 {
 				return nil, ErrNoProof
 			}
