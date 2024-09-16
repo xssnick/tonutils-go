@@ -3,6 +3,7 @@ package ton
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
@@ -58,12 +59,6 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			return nil, fmt.Errorf("response with incorrect master block")
 		}
 
-		if t.State == nil {
-			return &tlb.Account{
-				IsActive: false,
-			}, nil
-		}
-
 		if t.Proof == nil {
 			return nil, fmt.Errorf("no proof")
 		}
@@ -87,8 +82,16 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 		}
 
 		shardAcc, balanceInfo, err := CheckAccountStateProof(addr, block, t.Proof, t.ShardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+		if errors.Is(err, ErrNoAddrInProof) && t.State == nil {
+			return &tlb.Account{
+				IsActive: false,
+			}, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to check acc state proof: %w", err)
+		}
+		if t.State == nil {
+			return nil, fmt.Errorf("state must be presented")
 		}
 
 		if !bytes.Equal(shardAcc.Account.Hash(0), t.State.Hash()) {
