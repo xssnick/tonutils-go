@@ -68,6 +68,8 @@ func (v Version) String() string {
 		return fmt.Sprintf("highload V2R2")
 	case HighloadV2Verified:
 		return fmt.Sprintf("highload V2R2 verified")
+	case HighloadV3:
+		return fmt.Sprintf("highload V3")
 	}
 
 	if v/100 == 2 {
@@ -121,9 +123,6 @@ var timeNow = time.Now
 
 var (
 	ErrUnsupportedWalletVersion = errors.New("wallet version is not supported")
-	ErrTxWasNotConfirmed        = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
-	// Deprecated: use ton.ErrTxWasNotFound
-	ErrTxWasNotFound = errors.New("requested transaction is not found")
 )
 
 type TonAPI interface {
@@ -132,6 +131,7 @@ type TonAPI interface {
 	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
 	GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
+	SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
 	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
@@ -246,6 +246,8 @@ func getSpec(w *Wallet) (any, error) {
 		}
 	case ConfigHighloadV3:
 		return &SpecHighloadV3{wallet: w, config: v}, nil
+	case ConfigCustom:
+		return v.GetSpec(w), nil
 	}
 
 	return nil, fmt.Errorf("cannot init spec: %w", ErrUnsupportedWalletVersion)
@@ -287,6 +289,10 @@ func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
 	}
 
 	return sub, nil
+}
+
+func (w *Wallet) GetSubwalletID() uint32 {
+	return w.subwallet
 }
 
 func (w *Wallet) GetBalance(ctx context.Context, block *ton.BlockIDExt) (tlb.Coins, error) {
@@ -369,6 +375,11 @@ func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateIni
 		}
 	case ConfigHighloadV3:
 		msg, err = w.spec.(*SpecHighloadV3).BuildMessage(ctx, messages)
+		if err != nil {
+			return nil, fmt.Errorf("build message err: %w", err)
+		}
+	case ConfigCustom:
+		msg, err = w.spec.(MessageBuilder).BuildMessage(ctx, messages)
 		if err != nil {
 			return nil, fmt.Errorf("build message err: %w", err)
 		}
@@ -465,124 +476,30 @@ func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tl
 	return w.SendManyWaitTransaction(ctx, []*Message{message})
 }
 
+// TransferWaitTransaction always waits for tx block confirmation and returns found tx.
+func (w *Wallet) TransferWaitTransaction(ctx context.Context, to *address.Address, amount tlb.Coins, comment string) (*tlb.Transaction, *ton.BlockIDExt, error) {
+	transfer, err := w.BuildTransfer(to, amount, to.IsBounceable(), comment)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return w.SendManyWaitTransaction(ctx, []*Message{transfer})
+}
+
 func (w *Wallet) sendMany(ctx context.Context, messages []*Message, waitConfirmation ...bool) (tx *tlb.Transaction, block *ton.BlockIDExt, inMsgHash []byte, err error) {
-	block, err = w.api.CurrentMasterchainInfo(ctx)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get block: %w", err)
-	}
-
-	acc, err := w.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, w.addr)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to get account state: %w", err)
-	}
-
 	ext, err := w.BuildExternalMessageForMany(ctx, messages)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	inMsgHash = ext.Body.Hash()
+
+	if len(waitConfirmation) > 0 && waitConfirmation[0] {
+		return w.api.SendExternalMessageWaitTransaction(ctx, ext)
+	}
 
 	if err = w.api.SendExternalMessage(ctx, ext); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to send message: %w", err)
 	}
-
-	if len(waitConfirmation) > 0 && waitConfirmation[0] {
-		tx, block, err = w.waitConfirmation(ctx, block, acc, ext)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	return tx, block, inMsgHash, nil
-}
-
-func (w *Wallet) waitConfirmation(ctx context.Context, block *ton.BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, error) {
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		// fallback timeout to not stuck forever with background context
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), 180*time.Second)
-		defer cancel()
-	}
-	till, _ := ctx.Deadline()
-
-	ctx = w.api.Client().StickyContext(ctx)
-
-	for time.Now().Before(till) {
-		blockNew, err := w.api.WaitForBlock(block.SeqNo + 1).GetMasterchainInfo(ctx)
-		if err != nil {
-			continue
-		}
-
-		accNew, err := w.api.WaitForBlock(blockNew.SeqNo).GetAccount(ctx, blockNew, w.addr)
-		if err != nil {
-			continue
-		}
-		block = blockNew
-
-		if accNew.LastTxLT == acc.LastTxLT {
-			// if not in block, maybe LS lost our message, send it again
-			if err = w.api.SendExternalMessage(ctx, ext); err != nil {
-				continue
-			}
-
-			continue
-		}
-
-		lastLt, lastHash := accNew.LastTxLT, accNew.LastTxHash
-
-		// it is possible that > 5 new not related transactions will happen, and we should not lose our scan offset,
-		// to prevent this we will scan till we reach last seen offset.
-		for time.Now().Before(till) {
-			// we try to get last 5 transactions, and check if we have our new there.
-			txList, err := w.api.WaitForBlock(block.SeqNo).ListTransactions(ctx, w.addr, 5, lastLt, lastHash)
-			if err != nil {
-				continue
-			}
-
-			sawLastTx := false
-			for i, transaction := range txList {
-				if i == 0 {
-					// get previous of the oldest tx, in case if we need to scan deeper
-					lastLt, lastHash = txList[0].PrevTxLT, txList[0].PrevTxHash
-				}
-
-				if !sawLastTx && transaction.PrevTxLT == acc.LastTxLT &&
-					bytes.Equal(transaction.PrevTxHash, acc.LastTxHash) {
-					sawLastTx = true
-				}
-
-				if transaction.IO.In != nil && transaction.IO.In.MsgType == tlb.MsgTypeExternalIn {
-					extIn := transaction.IO.In.AsExternalIn()
-					if ext.StateInit != nil {
-						if extIn.StateInit == nil {
-							continue
-						}
-
-						if !bytes.Equal(ext.StateInit.Data.Hash(), extIn.StateInit.Data.Hash()) {
-							continue
-						}
-
-						if !bytes.Equal(ext.StateInit.Code.Hash(), extIn.StateInit.Code.Hash()) {
-							continue
-						}
-					}
-
-					if !bytes.Equal(extIn.Body.Hash(), ext.Body.Hash()) {
-						continue
-					}
-
-					return transaction, block, nil
-				}
-			}
-
-			if sawLastTx {
-				break
-			}
-		}
-		acc = accNew
-	}
-
-	return nil, nil, ErrTxWasNotConfirmed
+	return nil, nil, ext.Body.Hash(), nil
 }
 
 // TransferNoBounce - can be used to transfer TON to not yet initialized contract/wallet
@@ -805,16 +722,6 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	}
 
 	return addr, nil
-}
-
-// Deprecated: use ton.FindLastTransactionByInMsgHash
-// FindTransactionByInMsgHash returns transaction in wallet account with incoming message hash equal to msgHash.
-func (w *Wallet) FindTransactionByInMsgHash(ctx context.Context, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
-	tx, err := w.api.FindLastTransactionByInMsgHash(ctx, w.addr, msgHash, maxTxNumToScan...)
-	if err != nil && errors.Is(err, ton.ErrTxWasNotFound) {
-		return nil, ErrTxWasNotFound
-	}
-	return tx, err
 }
 
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {

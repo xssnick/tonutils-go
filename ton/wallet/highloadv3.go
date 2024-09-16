@@ -43,7 +43,7 @@ func (s *SpecHighloadV3) BuildMessage(ctx context.Context, messages []*Message) 
 
 	queryID, createdAt, err := s.config.MessageBuilder(ctx, s.wallet.subwallet)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert msg to cell: %w", err)
+		return nil, fmt.Errorf("failed to fetch queryID: %w", err)
 	}
 
 	if queryID >= 1<<23 {
@@ -122,6 +122,10 @@ func (s *SpecHighloadV3) packActions(queryId uint64, messages []*Message) (_ *Me
 
 		list = cell.BeginCell().MustStoreRef(list).MustStoreBuilder(msg).EndCell()
 	}
+
+	// attach some coins for internal message processing gas fees
+	fees := new(big.Int).Add(new(big.Int).Mul(tlb.MustFromTON("0.007").Nano(), big.NewInt(int64(len(messages)))), tlb.MustFromTON("0.01").Nano())
+	amt = new(big.Int).Add(amt, fees)
 
 	return &Message{
 		Mode: PayGasSeparately + IgnoreErrors,

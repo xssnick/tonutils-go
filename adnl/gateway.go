@@ -279,7 +279,7 @@ func (g *Gateway) listen(rootId []byte) {
 		g.mx.RUnlock()
 
 		if proc == nil {
-			Logger("no processor for ADNL packet from", hex.EncodeToString(id))
+			Logger("no processor for ADNL packet from", addr.String(), hex.EncodeToString(id))
 			continue
 		}
 
@@ -384,18 +384,17 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 			closer:       ch.adnl.Close,
 		}
 		g.mx.Unlock()
-
-		if oldId == "" { // connection = first channel initialisation
-			connHandler := g.connHandler
-			if connHandler != nil {
-				err := connHandler(peer)
-				if err != nil {
-					// close connection if connection handler reports an error
-					ch.adnl.Close()
-				}
-			}
-		}
 	})
+
+	connHandler := g.connHandler
+	if connHandler != nil {
+		go func() {
+			if err := connHandler(peer); err != nil {
+				// close connection if connection handler reports an error
+				a.Close()
+			}
+		}()
+	}
 
 	return peer, nil
 }

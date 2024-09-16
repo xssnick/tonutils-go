@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
-
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -66,6 +65,8 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 		ver = V5R1Beta
 	case ConfigV5R1Final:
 		ver = V5R1Final
+	case ConfigCustom:
+		return v.GetStateInit(pubKey, subWallet)
 	}
 
 	code, ok := walletCode[ver]
