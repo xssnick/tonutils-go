@@ -20,13 +20,18 @@ import (
 )
 
 type MockAPI struct {
-	getBlockInfo        func(ctx context.Context) (*ton.BlockIDExt, error)
-	getAccount          func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
-	sendExternalMessage func(ctx context.Context, msg *tlb.ExternalMessage) error
-	runGetMethod        func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
-	listTransactions    func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
+	getBlockInfo            func(ctx context.Context) (*ton.BlockIDExt, error)
+	getAccount              func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
+	sendExternalMessage     func(ctx context.Context, msg *tlb.ExternalMessage) error
+	sendExternalMessageWait func(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
+	runGetMethod            func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	listTransactions        func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 
 	extMsgSent *tlb.ExternalMessage
+}
+
+func (m MockAPI) SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+	return m.sendExternalMessageWait(ctx, ext)
 }
 
 func (m MockAPI) FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
@@ -41,11 +46,12 @@ func (m MockAPI) FindLastTransactionByOutMsgHash(ctx context.Context, addr *addr
 
 func (m MockAPI) WaitForBlock(seqno uint32) ton.APIClientWrapped {
 	return &WaiterMock{
-		MGetMasterchainInfo:  m.getBlockInfo,
-		MGetAccount:          m.getAccount,
-		MSendExternalMessage: m.sendExternalMessage,
-		MRunGetMethod:        m.runGetMethod,
-		MListTransactions:    m.listTransactions,
+		MGetMasterchainInfo:                 m.getBlockInfo,
+		MGetAccount:                         m.getAccount,
+		MSendExternalMessage:                m.sendExternalMessage,
+		MRunGetMethod:                       m.runGetMethod,
+		MListTransactions:                   m.listTransactions,
+		MSendExternalMessageWaitTransaction: m.sendExternalMessageWait,
 	}
 }
 
@@ -255,6 +261,13 @@ func TestWallet_Send(t *testing.T) {
 					})
 				}
 				return nil
+			}
+
+			m.sendExternalMessageWait = func(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+				if err := m.sendExternalMessage(ctx, ext); err != nil {
+					return nil, nil, nil, err
+				}
+				return &tlb.Transaction{}, &ton.BlockIDExt{}, make([]byte, 32), nil
 			}
 
 			msg := &Message{

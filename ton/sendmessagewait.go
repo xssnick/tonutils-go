@@ -12,24 +12,24 @@ import (
 
 var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
 
-func (api *APIClient) SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error) {
-	block, err := api.CurrentMasterchainInfo(ctx)
+func (c *APIClient) SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error) {
+	block, err := c.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to get block: %w", err)
 	}
 
-	acc, err := api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, ext.DstAddr)
+	acc, err := c.WaitForBlock(block.SeqNo).GetAccount(ctx, block, ext.DstAddr)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to get account state: %w", err)
 	}
 
 	inMsgHash := ext.Body.Hash()
 
-	if err = api.SendExternalMessage(ctx, ext); err != nil {
+	if err = c.SendExternalMessage(ctx, ext); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
-	tx, block, err := api.waitConfirmation(ctx, block, acc, ext)
+	tx, block, err := c.waitConfirmation(ctx, block, acc, ext)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -37,7 +37,7 @@ func (api *APIClient) SendExternalMessageWaitTransaction(ctx context.Context, ex
 	return tx, block, inMsgHash, nil
 }
 
-func (api *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, error) {
+func (c *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -46,15 +46,15 @@ func (api *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, a
 	}
 	till, _ := ctx.Deadline()
 
-	ctx = api.Client().StickyContext(ctx)
+	ctx = c.Client().StickyContext(ctx)
 
 	for time.Now().Before(till) {
-		blockNew, err := api.WaitForBlock(block.SeqNo + 1).GetMasterchainInfo(ctx)
+		blockNew, err := c.WaitForBlock(block.SeqNo + 1).GetMasterchainInfo(ctx)
 		if err != nil {
 			continue
 		}
 
-		accNew, err := api.WaitForBlock(blockNew.SeqNo).GetAccount(ctx, blockNew, ext.DstAddr)
+		accNew, err := c.WaitForBlock(blockNew.SeqNo).GetAccount(ctx, blockNew, ext.DstAddr)
 		if err != nil {
 			continue
 		}
@@ -62,7 +62,7 @@ func (api *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, a
 
 		if accNew.LastTxLT == acc.LastTxLT {
 			// if not in block, maybe LS lost our message, send it again
-			if err = api.SendExternalMessage(ctx, ext); err != nil {
+			if err = c.SendExternalMessage(ctx, ext); err != nil {
 				continue
 			}
 
@@ -75,7 +75,7 @@ func (api *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, a
 		// to prevent this we will scan till we reach last seen offset.
 		for time.Now().Before(till) {
 			// we try to get last 5 transactions, and check if we have our new there.
-			txList, err := api.WaitForBlock(block.SeqNo).ListTransactions(ctx, ext.DstAddr, 5, lastLt, lastHash)
+			txList, err := c.WaitForBlock(block.SeqNo).ListTransactions(ctx, ext.DstAddr, 5, lastLt, lastHash)
 			if err != nil {
 				continue
 			}
