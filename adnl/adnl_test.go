@@ -40,7 +40,6 @@ func TestADNL_ClientServer(t *testing.T) {
 			case MessagePing:
 				if m.Value == 9999 {
 					client.Close()
-					println("DISCON")
 					return fmt.Errorf("handle mock err")
 				}
 

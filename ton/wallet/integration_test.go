@@ -1,6 +1,3 @@
-//go:build integration
-// +build integration
-
 package wallet
 
 import (
@@ -249,7 +246,7 @@ func Test_WalletFindTransactionByInMsgHash(t *testing.T) {
 	}
 
 	// find tx hash
-	tx, err := w.api.FindLastTransactionByInMsgHash(ctx, inMsgHash, 30)
+	tx, err := w.api.FindLastTransactionByInMsgHash(ctx, w.addr, inMsgHash, 30)
 	if err != nil {
 		t.Fatal("cannot find tx:", err.Error())
 	}
