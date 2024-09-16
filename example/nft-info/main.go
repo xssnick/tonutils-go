@@ -44,7 +44,7 @@ func main() {
 		case *nft.ContentOffchain:
 			fmt.Println("    content offchain :", content.URI)
 		case *nft.ContentOnchain:
-			fmt.Println("    content onchain  :", content.Name)
+			fmt.Println("    content onchain  :", content.GetAttribute("name"))
 		}
 		fmt.Println("    owner            :", collectionData.OwnerAddress.String())
 		fmt.Println("    minted items num :", collectionData.NextItemIndex)
@@ -69,7 +69,7 @@ func main() {
 				fmt.Println("    full content :", nftContent.(*nft.ContentOffchain).URI)
 			}
 		case *nft.ContentOnchain:
-			fmt.Println("    content name :", content.Name)
+			fmt.Println("    content name :", content.GetAttribute("name"))
 		}
 	} else {
 		fmt.Println("    empty content")

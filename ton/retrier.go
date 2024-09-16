@@ -16,10 +16,14 @@ type retryClient struct {
 }
 
 func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error {
-	tries := w.maxRetries
+	const maxRounds = 2
+
+	tries, rounds := 0, 0
+	ctxBackup := ctx
+
 	for {
 		err := w.original.QueryLiteserver(ctx, payload, result)
-		if w.maxRetries > 0 && tries == w.maxRetries {
+		if w.maxRetries > 0 && tries >= w.maxRetries {
 			return err
 		}
 		tries++
@@ -37,6 +41,13 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 			// try next node
 			ctx, err = w.original.StickyContextNextNode(ctx)
 			if err != nil {
+				rounds++
+				if rounds < maxRounds {
+					// try same nodes one more time
+					ctx = ctxBackup
+					continue
+				}
+
 				return fmt.Errorf("timeout error received, but failed to try with next node, "+
 					"looks like all active nodes was already tried, original error: %w", err)
 			}
@@ -50,7 +61,15 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 				lsErr.Code == -400 ||
 				lsErr.Code == -503 ||
 				(lsErr.Code == 0 && strings.Contains(lsErr.Text, "Failed to get account state"))) {
+
 				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil { // try next node
+					rounds++
+					if rounds < maxRounds {
+						// try same nodes one more time
+						ctx = ctxBackup
+						continue
+					}
+
 					// no more nodes left, return as it is
 					return nil
 				}

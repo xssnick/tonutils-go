@@ -4,7 +4,7 @@
 
 [![Based on TON][ton-svg]][ton]
 [![Telegram Channel][tgc-svg]][tg-channel]
-![Coverage](https://img.shields.io/badge/Coverage-73.8%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-73.5%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 

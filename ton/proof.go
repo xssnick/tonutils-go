@@ -23,6 +23,7 @@ func init() {
 }
 
 var ErrNoProof = fmt.Errorf("liteserver has no proof for this account in a given block, request newer block or disable proof checks")
+var ErrNoAddrInProof = errors.New("no addr info in proof hashmap")
 
 func CheckShardMcStateExtraProof(master *BlockIDExt, shardProof []*cell.Cell) (*tlb.McStateExtra, error) {
 	shardState, err := CheckBlockShardStateProof(shardProof, master.RootHash)
@@ -113,7 +114,7 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 	if !skipBlockCheck {
 		blockHash := block.RootHash
 		// we need shard proof only for not masterchain
-		if len(shardHash) > 0 {
+		if len(shardHash) > 0 && block.Workchain == address.MasterchainID {
 			if err := CheckShardInMasterProof(block, shardProof, addr.Workchain(), shardHash); err != nil {
 				return nil, nil, fmt.Errorf("shard proof is incorrect: %w", err)
 			}
@@ -145,7 +146,7 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 	addrKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
 	val := shardState.Accounts.ShardAccounts.Get(addrKey)
 	if val == nil {
-		return nil, nil, errors.New("no addr info in proof hashmap")
+		return nil, nil, ErrNoAddrInProof
 	}
 
 	loadVal := val.BeginParse()
