@@ -16,10 +16,10 @@ type retryClient struct {
 }
 
 func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error {
-	tries := w.maxRetries
+	tries := 0
 	for {
 		err := w.original.QueryLiteserver(ctx, payload, result)
-		if w.maxRetries > 0 && tries == w.maxRetries {
+		if w.maxRetries > 0 && tries >= w.maxRetries {
 			return err
 		}
 		tries++

@@ -112,7 +112,7 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 	}
 
 	rCap := GetCapabilities{
-		Capabilities: CapabilityRLDP2,
+		Capabilities: 0,
 	}
 
 	var caps Capabilities
@@ -126,7 +126,7 @@ func (t *Transport) connectRLDP(ctx context.Context, key ed25519.PublicKey, addr
 		switch query.Data.(type) {
 		case GetCapabilities:
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := a.Answer(ctx, query.ID, &Capabilities{Value: CapabilityRLDP2})
+			err := a.Answer(ctx, query.ID, &Capabilities{Value: 0})
 			cancel()
 			if err != nil {
 				return fmt.Errorf("failed to send capabilities answer: %w", err)
@@ -284,7 +284,7 @@ func (t *Transport) RoundTrip(request *http.Request) (_ *http.Response, err erro
 	req := Request{
 		ID:      qid,
 		Method:  request.Method,
-		URL:     request.URL.String(),
+		URL:     request.URL.RequestURI(),
 		Version: "HTTP/1.1",
 		Headers: []Header{
 			{

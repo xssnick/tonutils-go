@@ -95,9 +95,10 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 
 			var shardProof []*cell.Cell
 			var shardHash []byte
-			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID {
+			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID &&
+				blockInfo.Workchain == address.MasterchainID {
 				if len(t.ShardProof) == 0 {
-					return nil, fmt.Errorf("liteserver has no proof for this account in a given block, request newer block or disable proof checks")
+					return nil, ErrNoProof
 				}
 
 				shardProof = t.ShardProof

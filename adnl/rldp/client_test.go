@@ -377,8 +377,12 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 			}
 
 			decoded, receivData, err := tDecoder.Decode()
-			if err != nil || decoded != true {
+			if err != nil {
 				t.Fatal("failed to decode received test data, err: ", err)
+			}
+
+			if decoded != true {
+				return nil
 			}
 
 			if !bytes.Equal(data, receivData) {
@@ -479,8 +483,12 @@ func TestRLDP_DoQuery(t *testing.T) {
 			}
 
 			decoded, receivData, err := tDecoder.Decode()
-			if err != nil || decoded != true {
+			if err != nil {
 				t.Fatal("failed to decode received test data, err: ", err)
+			}
+
+			if decoded != true {
+				return nil
 			}
 
 			var checkReq Query
@@ -568,8 +576,12 @@ func TestRLDP_SendAnswer(t *testing.T) {
 			}
 
 			decoded, receivData, err := tDecoder.Decode()
-			if err != nil || decoded != true {
+			if err != nil {
 				t.Fatal("failed to decode received test data, err: ", err)
+			}
+
+			if decoded != true {
+				return nil
 			}
 
 			var checkAnswer Answer

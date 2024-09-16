@@ -3,6 +3,7 @@ package ton
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -204,7 +205,7 @@ func Test_RunMethod(t *testing.T) {
 }
 
 func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net - > than change config to test-net.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	ctx = apiTestNet.Client().StickyContext(ctx)
@@ -229,7 +230,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 		MustStoreUInt(1, 16). // add 1 to total
 		EndCell()
 
-	err = apiTestNet.SendExternalMessage(ctx, &tlb.ExternalMessage{
+	tx, block, _, err := apiTestNet.SendExternalMessageWaitTransaction(ctx, &tlb.ExternalMessage{
 		DstAddr: testContractAddrTestNet,
 		Body:    data,
 	})
@@ -239,9 +240,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 		return
 	}
 
-	// TODO: wait for update and check result
-
-	log.Printf("Current seqno = %d and total = %d", seqno, total)
+	log.Printf("Current seqno = %d and total = %d | block: %d tx: %d hash: %s", seqno, total, block.SeqNo, tx.LT, base64.URLEncoding.EncodeToString(tx.Hash))
 }
 
 func Test_Account(t *testing.T) {
@@ -601,8 +600,8 @@ func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 
 	t.Run("with proof", func(t *testing.T) {
 		_, err := mainnetAPI.GetAccount(ctx, b, address.MustParseAddr("EQCYv992KVNNCKZHSLLJgM2GGzsgL0UgWP24BCQBaAdqSE2I"))
-		if err != ErrNoProof {
-			t.Fatal(err)
+		if err != nil {
+			t.Fatal("no proof")
 		}
 	})
 
@@ -783,7 +782,7 @@ func TestAPIClient_FindLastTransactionByInMsgHash(t *testing.T) {
 }
 
 func TestAPIClient_FindLastTransactionByOutMsgHash(t *testing.T) {
-	addr := address.MustParseAddr("UQCZ-7akCw_dvl_Q5xyriWqCXdWubIPbuN7aDQlzX45pa01R")
+	addr := address.MustParseAddr("EQB3ncyBUTjZUA5EnFKR5_EnOMI9V1tTEAAPaiU71gc4TiUt")
 
 	block, err := api.CurrentMasterchainInfo(context.Background())
 	if err != nil {
@@ -802,6 +801,10 @@ func TestAPIClient_FindLastTransactionByOutMsgHash(t *testing.T) {
 
 	var hash []byte
 	for i := len(list) - 1; i >= 0; i-- {
+		if list[i].IO.Out == nil {
+			continue
+		}
+
 		ls, err := list[i].IO.Out.ToSlice()
 		if err != nil {
 			continue

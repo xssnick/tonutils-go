@@ -20,13 +20,18 @@ import (
 )
 
 type MockAPI struct {
-	getBlockInfo        func(ctx context.Context) (*ton.BlockIDExt, error)
-	getAccount          func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
-	sendExternalMessage func(ctx context.Context, msg *tlb.ExternalMessage) error
-	runGetMethod        func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
-	listTransactions    func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
+	getBlockInfo            func(ctx context.Context) (*ton.BlockIDExt, error)
+	getAccount              func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
+	sendExternalMessage     func(ctx context.Context, msg *tlb.ExternalMessage) error
+	sendExternalMessageWait func(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
+	runGetMethod            func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	listTransactions        func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 
 	extMsgSent *tlb.ExternalMessage
+}
+
+func (m MockAPI) SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+	return m.sendExternalMessageWait(ctx, ext)
 }
 
 func (m MockAPI) FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
@@ -41,11 +46,12 @@ func (m MockAPI) FindLastTransactionByOutMsgHash(ctx context.Context, addr *addr
 
 func (m MockAPI) WaitForBlock(seqno uint32) ton.APIClientWrapped {
 	return &WaiterMock{
-		MGetMasterchainInfo:  m.getBlockInfo,
-		MGetAccount:          m.getAccount,
-		MSendExternalMessage: m.sendExternalMessage,
-		MRunGetMethod:        m.runGetMethod,
-		MListTransactions:    m.listTransactions,
+		MGetMasterchainInfo:                 m.getBlockInfo,
+		MGetAccount:                         m.getAccount,
+		MSendExternalMessage:                m.sendExternalMessage,
+		MRunGetMethod:                       m.runGetMethod,
+		MListTransactions:                   m.listTransactions,
+		MSendExternalMessageWaitTransaction: m.sendExternalMessageWait,
 	}
 }
 
@@ -257,6 +263,13 @@ func TestWallet_Send(t *testing.T) {
 				return nil
 			}
 
+			m.sendExternalMessageWait = func(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+				if err := m.sendExternalMessage(ctx, ext); err != nil {
+					return nil, nil, nil, err
+				}
+				return &tlb.Transaction{}, &ton.BlockIDExt{}, make([]byte, 32), nil
+			}
+
 			msg := &Message{
 				Mode:            CarryAllRemainingBalance,
 				InternalMessage: intMsg,
@@ -462,25 +475,26 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 }
 
 type WaiterMock struct {
-	MGetTime                         func(ctx context.Context) (uint32, error)
-	MLookupBlock                     func(ctx context.Context, workchain int32, shard int64, seqno uint32) (*ton.BlockIDExt, error)
-	MGetBlockData                    func(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error)
-	MGetBlockTransactionsV2          func(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error)
-	MGetBlockShardsInfo              func(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error)
-	MGetBlockchainConfig             func(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
-	MGetMasterchainInfo              func(ctx context.Context) (*ton.BlockIDExt, error)
-	MGetAccount                      func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
-	MSendExternalMessage             func(ctx context.Context, msg *tlb.ExternalMessage) error
-	MRunGetMethod                    func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
-	MListTransactions                func(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
-	MGetTransaction                  func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
-	MWaitForBlock                    func(seqno uint32) ton.APIClientWrapped
-	MWithRetry                       func(x ...int) ton.APIClientWrapped
-	MWithTimeout                     func(timeout time.Duration) ton.APIClientWrapped
-	MCurrentMasterchainInfo          func(ctx context.Context) (_ *ton.BlockIDExt, err error)
-	MGetBlockProof                   func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
-	MFindLastTransactionByInMsgHash  func(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
-	MFindLastTransactionByOutMsgHash func(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
+	MGetTime                            func(ctx context.Context) (uint32, error)
+	MLookupBlock                        func(ctx context.Context, workchain int32, shard int64, seqno uint32) (*ton.BlockIDExt, error)
+	MGetBlockData                       func(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error)
+	MGetBlockTransactionsV2             func(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error)
+	MGetBlockShardsInfo                 func(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error)
+	MGetBlockchainConfig                func(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
+	MGetMasterchainInfo                 func(ctx context.Context) (*ton.BlockIDExt, error)
+	MGetAccount                         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
+	MSendExternalMessage                func(ctx context.Context, msg *tlb.ExternalMessage) error
+	MRunGetMethod                       func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	MListTransactions                   func(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
+	MGetTransaction                     func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
+	MWaitForBlock                       func(seqno uint32) ton.APIClientWrapped
+	MWithRetry                          func(x ...int) ton.APIClientWrapped
+	MWithTimeout                        func(timeout time.Duration) ton.APIClientWrapped
+	MCurrentMasterchainInfo             func(ctx context.Context) (_ *ton.BlockIDExt, err error)
+	MGetBlockProof                      func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
+	MFindLastTransactionByInMsgHash     func(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
+	MFindLastTransactionByOutMsgHash    func(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
+	MSendExternalMessageWaitTransaction func(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
 }
 
 func (w WaiterMock) FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
@@ -519,6 +533,10 @@ func (w WaiterMock) VerifyProofChain(ctx context.Context, from, to *ton.BlockIDE
 func (w WaiterMock) Client() ton.LiteClient {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (w WaiterMock) SendExternalMessageWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+	return w.MSendExternalMessageWaitTransaction(ctx, msg)
 }
 
 func (w WaiterMock) CurrentMasterchainInfo(ctx context.Context) (_ *ton.BlockIDExt, err error) {
@@ -602,7 +620,7 @@ func TestCreateEncryptedCommentCell(t *testing.T) {
 			return
 		}
 
-		msg := randString(150 + i)
+		msg := "Hello, world!!!"
 		sender := address.MustParseAddr("EQC9bWZd29foipyPOGWlVNVCQzpGAjvi1rGWF7EbNcSVClpA")
 
 		c, err := CreateEncryptedCommentCell(msg, sender, priv1, pub2)

@@ -1,6 +1,7 @@
 package tlb
 
 import (
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -15,4 +16,9 @@ type StateInit struct {
 	Code     *cell.Cell       `tlb:"maybe ^"`
 	Data     *cell.Cell       `tlb:"maybe ^"`
 	Lib      *cell.Dictionary `tlb:"dict 256"`
+}
+
+func (s StateInit) CalcAddress(workchain int) *address.Address {
+	c, _ := ToCell(s)
+	return address.NewAddress(0, byte(workchain), c.Hash())
 }
