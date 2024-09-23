@@ -348,7 +348,7 @@ func (a AccStatusChange) ToCell() (*cell.Cell, error) {
 	case AccStatusChangeUnchanged:
 		return cell.BeginCell().MustStoreUInt(0b0, 1).EndCell(), nil
 	case AccStatusChangeFrozen:
-		return cell.BeginCell().MustStoreUInt(0b01, 2).EndCell(), nil
+		return cell.BeginCell().MustStoreUInt(0b10, 2).EndCell(), nil
 	case AccStatusChangeDeleted:
 		return cell.BeginCell().MustStoreUInt(0b11, 2).EndCell(), nil
 	}
