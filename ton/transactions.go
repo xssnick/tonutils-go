@@ -226,7 +226,7 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			}
 
 			if lastLT == 0 {
-				// exhausted all transactins
+				// exhausted all transactions
 				break
 			}
 
