@@ -143,11 +143,14 @@ type Message struct {
 	InternalMessage *tlb.InternalMessage
 }
 
+type Signer func(context.Context, *cell.Cell) ([]byte, error)
+
 type Wallet struct {
-	api  TonAPI
-	key  ed25519.PrivateKey
-	addr *address.Address
-	ver  VersionConfig
+	api    TonAPI
+	key    ed25519.PrivateKey
+	pubKey ed25519.PublicKey
+	addr   *address.Address
+	ver    VersionConfig
 
 	// Can be used to operate multiple wallets with the same key and version.
 	// use GetSubwallet if you need it.
@@ -155,9 +158,35 @@ type Wallet struct {
 
 	// Stores a pointer to implementation of the version related functionality
 	spec any
+
+	signer Signer
 }
 
+type walletOption func(*Wallet)
+
 func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (*Wallet, error) {
+	return newWallet(
+		api,
+		key.Public().(ed25519.PublicKey),
+		version,
+		withPrivateKey(key),
+		withSigner(func(ctx context.Context, c *cell.Cell) ([]byte, error) {
+			if c == nil {
+				return nil, fmt.Errorf("cannot sign: cell is nil")
+			}
+			return c.Sign(key), nil
+		}))
+}
+
+func FromSigner(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, signer Signer) (*Wallet, error) {
+	return newWallet(
+		api,
+		publicKey,
+		version,
+		withSigner(signer))
+}
+
+func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, options ...walletOption) (*Wallet, error) {
 	var subwallet uint32 = DefaultSubwallet
 
 	// default subwallet depends on wallet type
@@ -167,17 +196,21 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (
 		subwallet = 0
 	}
 
-	addr, err := AddressFromPubKey(key.Public().(ed25519.PublicKey), version, subwallet)
+	addr, err := AddressFromPubKey(publicKey, version, subwallet)
 	if err != nil {
 		return nil, err
 	}
 
 	w := &Wallet{
 		api:       api,
-		key:       key,
 		addr:      addr,
 		ver:       version,
 		subwallet: subwallet,
+		pubKey:    publicKey,
+	}
+
+	for _, opt := range options {
+		opt(w)
 	}
 
 	w.spec, err = getSpec(w)
@@ -186,6 +219,18 @@ func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (
 	}
 
 	return w, nil
+}
+
+func withPrivateKey(privateKey ed25519.PrivateKey) walletOption {
+	return func(w *Wallet) {
+		w.key = privateKey
+	}
+}
+
+func withSigner(signer Signer) walletOption {
+	return func(w *Wallet) {
+		w.signer = signer
+	}
 }
 
 func getSpec(w *Wallet) (any, error) {
@@ -270,7 +315,7 @@ func (w *Wallet) PrivateKey() ed25519.PrivateKey {
 }
 
 func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
-	addr, err := AddressFromPubKey(w.key.Public().(ed25519.PublicKey), w.ver, subwallet)
+	addr, err := AddressFromPubKey(w.pubKey, w.ver, subwallet)
 	if err != nil {
 		return nil, err
 	}
@@ -278,9 +323,11 @@ func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
 	sub := &Wallet{
 		api:       w.api,
 		key:       w.key,
+		pubKey:    w.pubKey,
 		addr:      addr,
 		ver:       w.ver,
 		subwallet: subwallet,
+		signer:    w.signer,
 	}
 
 	sub.spec, err = getSpec(sub)
@@ -341,7 +388,7 @@ func (w *Wallet) BuildExternalMessageForMany(ctx context.Context, messages []*Me
 func (w *Wallet) PrepareExternalMessageForMany(ctx context.Context, withStateInit bool, messages []*Message) (_ *tlb.ExternalMessage, err error) {
 	var stateInit *tlb.StateInit
 	if withStateInit {
-		stateInit, err = GetStateInit(w.key.Public().(ed25519.PublicKey), w.ver, w.subwallet)
+		stateInit, err = GetStateInit(w.pubKey, w.ver, w.subwallet)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get state init: %w", err)
 		}
