@@ -479,6 +479,7 @@ type WaiterMock struct {
 	MLookupBlock                        func(ctx context.Context, workchain int32, shard int64, seqno uint32) (*ton.BlockIDExt, error)
 	MGetBlockData                       func(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error)
 	MGetBlockTransactionsV2             func(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error)
+	MGetBlockTransactionsV3             func(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]*tlb.Transaction, error)
 	MGetBlockShardsInfo                 func(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error)
 	MGetBlockchainConfig                func(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
 	MGetMasterchainInfo                 func(ctx context.Context) (*ton.BlockIDExt, error)
@@ -573,6 +574,15 @@ func (w WaiterMock) GetBlockData(ctx context.Context, block *ton.BlockIDExt) (*t
 
 func (w WaiterMock) GetBlockTransactionsV2(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error) {
 	return w.MGetBlockTransactionsV2(ctx, block, count, after...)
+}
+
+func (w WaiterMock) GetBlockTransactionsV3(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]*tlb.Transaction, error) {
+	return w.MGetBlockTransactionsV3(ctx, block, count, after...)
+}
+
+func (w WaiterMock) SubscribeOnAllTransactions(ctx context.Context, fromBlock *ton.BlockInfoShort, channel chan<- *tlb.Transaction) error {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (w WaiterMock) GetBlockShardsInfo(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error) {

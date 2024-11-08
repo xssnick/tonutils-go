@@ -198,7 +198,7 @@ type BlockTransactionsExt struct {
 	ReqCount     int32        `tl:"int"`
 	Incomplete   bool         `tl:"bool"`
 	Transactions []*cell.Cell `tl:"cell optional"`
-	Proof        []byte       `tl:"bytes"`
+	Proof        *cell.Cell   `tl:"cell optional"`
 }
 
 type BlockData struct {
@@ -505,6 +505,69 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 		return nil, false, t
 	}
 	return nil, false, errUnexpectedResponse(resp)
+}
+
+func (c *APIClient) GetBlockTransactionsV3(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]*tlb.Transaction, error) {
+	withAfter := uint32(0)
+	var afterTx *TransactionID3
+	if len(after) > 0 && after[0] != nil {
+		afterTx = after[0]
+		withAfter = 1
+	}
+
+	mode := 0b111 | (withAfter << 7)
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+		mode |= 1 << 5
+	}
+
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, ListBlockTransactionsExt{
+		ID:        block,
+		Mode:      mode,
+		Count:     count,
+		After:     afterTx,
+		WantProof: &True{},
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case BlockTransactionsExt:
+		var shardAccounts tlb.ShardAccountBlocks
+
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			if t.Proof == nil {
+				return nil, fmt.Errorf("no proof passed by ls")
+			}
+
+			blockProof, err := CheckBlockProof(t.Proof, block.RootHash)
+			if err != nil {
+				return nil, fmt.Errorf("failed to check block proof: %w", err)
+			}
+
+			if err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse()); err != nil {
+				return nil, fmt.Errorf("failed to load shard accounts from proof: %w", err)
+			}
+		}
+
+		txs := make([]*tlb.Transaction, 0, len(t.Transactions))
+		for _, txCell := range t.Transactions {
+			var tx tlb.Transaction
+			err = tlb.LoadFromCell(&tx, txCell.BeginParse())
+			if err != nil {
+				return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
+			}
+			tx.Hash = txCell.Hash()
+
+			txs = append(txs, &tx)
+		}
+
+		return txs, nil
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
 }
 
 // GetBlockShardsInfo - gets the information about workchains and its shards at given masterchain state

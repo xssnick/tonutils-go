@@ -24,7 +24,7 @@ var apiTestNet = func() APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://tonutils.com/testnet-global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -38,7 +38,7 @@ var api = func() APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cfg, err := liteclient.GetConfigFromUrl(ctx, "https://tonutils.com/global.config.json")
+	cfg, err := liteclient.GetConfigFromUrl(ctx, "https://ton.org/global.config.json")
 	if err != nil {
 		panic(err)
 	}

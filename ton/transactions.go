@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"strings"
-	"time"
 )
 
 func init() {
@@ -358,4 +360,115 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 			return nil, fmt.Errorf("scan limit of %d transactions was reached, %d transactions was checked and hash was not found", limit, scanned)
 		}
 	}
+}
+
+func (c *APIClient) SubscribeOnAllTransactions(workerCtx context.Context, fromBlock *BlockInfoShort, channel chan<- *tlb.Transaction) error {
+	defer func() {
+		close(channel)
+	}()
+
+	if fromBlock == nil {
+		ctx, cancel := context.WithTimeout(workerCtx, 10*time.Second)
+		master, err := c.CurrentMasterchainInfo(ctx)
+		cancel()
+		if err != nil {
+			return err
+		}
+
+		fromBlock = &BlockInfoShort{
+			Workchain: master.Workchain,
+			Shard:     master.Shard,
+			Seqno:     int32(master.SeqNo),
+		}
+	}
+
+	for {
+		if workerCtx.Done() != nil {
+			return nil
+		}
+
+		ctx, cancel := context.WithTimeout(workerCtx, 10*time.Second)
+		master, err := c.LookupBlock(ctx, fromBlock.Workchain, fromBlock.Shard, uint32(fromBlock.Seqno))
+		cancel()
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		var transactions []*tlb.Transaction
+
+		ctx, cancel = context.WithTimeout(workerCtx, 10*time.Second)
+		txs, err := c.getAllBlockTransactionsV3(ctx, master)
+		cancel()
+		if err != nil {
+			continue
+		}
+
+		transactions = append(transactions, txs...)
+
+		ctx, cancel = context.WithTimeout(workerCtx, 10*time.Second)
+		shards, err := c.GetBlockShardsInfo(ctx, master)
+		cancel()
+		if err != nil {
+			continue
+		}
+
+		wg := new(sync.WaitGroup)
+		wg.Add(len(shards))
+		for _, shard := range shards {
+			go func(shard *BlockIDExt) {
+				defer wg.Done()
+
+				ctx, cancel := context.WithTimeout(workerCtx, 10*time.Second)
+				txs, err := c.getAllBlockTransactionsV3(ctx, shard)
+				cancel()
+				if err != nil {
+					return
+				}
+
+				transactions = append(transactions, txs...)
+			}(shard)
+		}
+
+		wg.Wait()
+
+		fromBlock.Seqno++
+
+		for _, tx := range transactions {
+			channel <- tx
+		}
+	}
+}
+
+func (c *APIClient) getAllBlockTransactionsV3(workerCtx context.Context, block *BlockIDExt) ([]*tlb.Transaction, error) {
+	var (
+		transactions []*tlb.Transaction
+		afterTxId    *TransactionID3
+	)
+
+	for {
+		ctx, cancel := context.WithTimeout(workerCtx, 10*time.Second)
+		txs, err := c.GetBlockTransactionsV3(ctx, block, 30, afterTxId)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+
+		transactions = append(transactions, txs...)
+
+		if len(txs) < 10 {
+			break
+		}
+
+		if len(txs) == 0 {
+			break
+		}
+
+		afterTxId = &TransactionID3{
+			Account: txs[len(txs)-1].AccountAddr,
+			LT:      txs[len(txs)-1].LT,
+		}
+	}
+
+	return transactions, nil
 }

@@ -57,6 +57,9 @@ type APIClientWrapped interface {
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
 	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
+	GetBlockTransactionsV3(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]*tlb.Transaction, error)
+	// SubscribeOnAllTransactions - subscribe on transactions from the blocks
+	SubscribeOnAllTransactions(ctx context.Context, fromBlock *BlockInfoShort, channel chan<- *tlb.Transaction) error
 	GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) ([]*BlockIDExt, error)
 	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error)
 	GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)

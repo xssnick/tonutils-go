@@ -1,9 +1,14 @@
 package ton
 
 import (
+	"context"
 	"encoding/hex"
-	"github.com/xssnick/tonutils-go/tvm/cell"
+	"fmt"
 	"testing"
+	"time"
+
+	"github.com/xssnick/tonutils-go/liteclient"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 func TestLoadShardsFromHashes(t *testing.T) {
@@ -33,5 +38,64 @@ func TestLoadShardsFromHashes(t *testing.T) {
 	gotShards, err = LoadShardsFromHashes(di, false)
 	if err == nil {
 		t.Fatal("should be err")
+	}
+}
+
+func TestGetBlockTransactionsV3(t *testing.T) {
+	t.Skip()
+	client := liteclient.NewConnectionPool()
+
+	configUrl := "https://ton.org/global.config.json"
+	err := client.AddConnectionsFromConfigUrl(context.Background(), configUrl)
+	if err != nil {
+		panic(err)
+	}
+	api := NewAPIClient(client)
+	apiClient := api.WithRetry()
+
+	i := 0
+	var block *BlockIDExt
+	for {
+		newBlock, err := api.CurrentMasterchainInfo(context.Background())
+		if err != nil {
+			panic(err)
+		}
+
+		if block != nil && block.Equals(newBlock) {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		block = newBlock
+
+		b, err := api.GetBlockData(context.Background(), block)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("%+v\n\n", b)
+
+		shards, err := api.GetBlockShardsInfo(context.Background(), block)
+		if err != nil {
+			panic(err)
+		}
+		for _, shard := range shards {
+			fmt.Printf("%+v\n", shard)
+
+			txs, err := apiClient.GetBlockTransactionsV3(context.Background(), shard, 10)
+			if err != nil {
+				panic(err)
+			}
+			for _, tx := range txs {
+				println(tx.String())
+			}
+
+			fmt.Print("\n\n")
+		}
+		time.Sleep(1 * time.Second)
+		i++
+		if i > 10 {
+			break
+		}
 	}
 }
