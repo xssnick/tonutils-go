@@ -391,7 +391,7 @@ func (c *APIClient) SubscribeOnAllTransactions(workerCtx context.Context, fromBl
 		master, err := c.LookupBlock(ctx, fromBlock.Workchain, fromBlock.Shard, uint32(fromBlock.Seqno))
 		cancel()
 		if err != nil {
-			fmt.Println(err)
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 

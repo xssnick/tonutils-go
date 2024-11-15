@@ -22,8 +22,8 @@ func TestSubscribeOnTransactionsWithFilter(t *testing.T) {
 
 	c := make(chan *tlb.Transaction)
 	go func() {
-		for _ = range c {
-			// println(tx.String())
+		for tx := range c {
+			println(tx.String())
 		}
 	}()
 
