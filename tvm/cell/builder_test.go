@@ -309,6 +309,11 @@ func TestBuilder_StoreSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal("err incorrect, its:", err)
 	}
+
+	_, err = c.EndCellOrErr()
+	if err != ErrSmallSlice {
+		t.Fatal("err incorrect, its:", err)
+	}
 }
 
 func TestBuilder_StoreRef(t *testing.T) {

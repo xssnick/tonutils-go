@@ -13,6 +13,18 @@ type Builder struct {
 	// store it as slice of pointers to make indexing logic cleaner on parse,
 	// from outside it should always come as object to not have problems
 	refs []*Cell
+
+	err error
+}
+
+func (b *Builder) Err() error {
+	return b.err
+}
+
+func (b *Builder) setErr(err error) {
+	if b.err == nil && err != nil {
+		b.err = err
+	}
 }
 
 func (b *Builder) MustStoreCoins(value uint64) *Builder {
@@ -141,14 +153,17 @@ func (b *Builder) MustStoreBigUInt(value *big.Int, sz uint) *Builder {
 
 func (b *Builder) StoreBigUInt(value *big.Int, sz uint) error {
 	if value.BitLen() > 256 {
+		b.setErr(ErrTooBigValue)
 		return ErrTooBigValue
 	}
 
 	if value.Sign() == -1 {
+		b.setErr(ErrNegative)
 		return ErrNegative
 	}
 
 	if sz > 256 {
+		b.setErr(ErrTooBigSize)
 		return ErrTooBigSize
 	}
 
@@ -374,6 +389,7 @@ func (b *Builder) StoreBinarySnake(data []byte) error {
 
 	snake, err := f(int(b.BitsLeft() / 8))
 	if err != nil {
+		b.setErr(err)
 		return err
 	}
 
@@ -401,11 +417,7 @@ func (b *Builder) StoreDict(dict *Dictionary) error {
 		return b.StoreMaybeRef(nil)
 	}
 
-	c, err := dict.ToCell()
-	if err != nil {
-		return err
-	}
-	return b.StoreMaybeRef(c)
+	return b.StoreMaybeRef(dict.AsCell())
 }
 
 func (b *Builder) StoreMaybeRef(ref *Cell) error {
@@ -415,9 +427,11 @@ func (b *Builder) StoreMaybeRef(ref *Cell) error {
 
 	// we need early checks to do 2 stores atomically
 	if len(b.refs) >= 4 {
+		b.setErr(ErrTooMuchRefs)
 		return ErrTooMuchRefs
 	}
 	if b.bitsSz+1 >= 1024 {
+		b.setErr(ErrNotFit1023)
 		return ErrNotFit1023
 	}
 
@@ -435,10 +449,12 @@ func (b *Builder) MustStoreRef(ref *Cell) *Builder {
 
 func (b *Builder) StoreRef(ref *Cell) error {
 	if len(b.refs) >= 4 {
+		b.setErr(ErrTooMuchRefs)
 		return ErrTooMuchRefs
 	}
 
 	if ref == nil {
+		b.setErr(ErrRefCannotBeNil)
 		return ErrRefCannotBeNil
 	}
 
@@ -461,10 +477,12 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	}
 
 	if b.bitsSz+sz >= 1024 {
+		b.setErr(ErrNotFit1023)
 		return ErrNotFit1023
 	}
 
 	if uint(len(bytes)*8) < sz {
+		b.setErr(ErrSmallSlice)
 		return ErrSmallSlice
 	}
 
@@ -520,10 +538,12 @@ func (b *Builder) MustStoreBuilder(builder *Builder) *Builder {
 
 func (b *Builder) StoreBuilder(builder *Builder) error {
 	if len(b.refs)+len(builder.refs) > 4 {
+		b.setErr(ErrTooMuchRefs)
 		return ErrTooMuchRefs
 	}
 
 	if b.bitsSz+builder.bitsSz >= 1024 {
+		b.setErr(ErrNotFit1023)
 		return ErrNotFit1023
 	}
 
@@ -574,10 +594,34 @@ func (b *Builder) EndCell() *Cell {
 	return c
 }
 
+func (b *Builder) EndCellOrErr() (*Cell, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	c := &Cell{
+		bitsSz: b.bitsSz,
+		data:   append([]byte{}, b.data...), // copy data
+		refs:   b.refs,
+	}
+	c.calculateHashes()
+	return c, nil
+}
+
 func (b *Builder) ToSlice() *Slice {
 	return &Slice{
 		bitsSz: b.bitsSz,
 		data:   append([]byte{}, b.data...), // copy data,
 		refs:   b.refs,
 	}
+}
+
+func (b *Builder) ToSliceOrErr() (*Slice, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
+	return &Slice{
+		bitsSz: b.bitsSz,
+		data:   append([]byte{}, b.data...), // copy data,
+		refs:   b.refs,
+	}, nil
 }
