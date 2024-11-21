@@ -70,7 +70,6 @@ You could also join our **[Telegram channel](https://t.me/tonutilsnews)** and **
 You can use liteservers from TON configs:
 * Mainnet public servers - `https://ton.org/global.config.json`
 * Testnet public servers - `https://ton-blockchain.github.io/testnet-global.config.json`
-* Mainnet servers by Tonutils - `https://tonutils.com/ls/free-mainnet-config.json`
 
 from liteservers section, you need to convert int to ip and take port and key.
 
