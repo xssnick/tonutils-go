@@ -100,7 +100,7 @@ func (a *ADNLWrapper) UnregisterOverlay(id []byte) {
 }
 
 func (a *ADNLOverlayWrapper) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
-	return a.ADNLWrapper.SendCustomMessage(ctx, []tl.Serializable{Query{Overlay: a.overlayId}, req})
+	return a.ADNLWrapper.SendCustomMessage(ctx, []tl.Serializable{Message{Overlay: a.overlayId}, req})
 }
 
 func (a *ADNLOverlayWrapper) Query(ctx context.Context, req, result tl.Serializable) error {
