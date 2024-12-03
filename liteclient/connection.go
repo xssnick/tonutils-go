@@ -43,6 +43,9 @@ type connection struct {
 	authed  bool
 	authEvt chan bool
 
+	authLock sync.Mutex
+	ourNonce []byte
+
 	weight       int64
 	lastRespTime int64
 
