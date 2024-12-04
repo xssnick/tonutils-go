@@ -36,6 +36,10 @@ func (n *connection) authSignComplete(nonce []byte) error {
 		return fmt.Errorf("pool has no auth key")
 	}
 
+	if len(nonce) > 512 {
+		return fmt.Errorf("too long nonce")
+	}
+
 	payload, err := tl.Serialize(TCPAuthenticationComplete{
 		PublicKey: adnl.PublicKeyED25519{Key: n.pool.authKey.Public().(ed25519.PublicKey)},
 		Signature: ed25519.Sign(n.pool.authKey, append(append([]byte{}, n.ourNonce...), nonce...)),

@@ -593,21 +593,25 @@ func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey 
 		return nil, fmt.Errorf("opcode not match encrypted comment")
 	}
 
-	xorKey, err := slc.LoadSlice(256)
+	data, err := slc.LoadBinarySnake()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load xor key: %w", err)
+		return nil, fmt.Errorf("failed to load snake encrypted data: %w", err)
 	}
+
+	if len(data) < 32+32+16 || len(data)%16 != 0 {
+		return nil, fmt.Errorf("invalid data")
+	}
+
+	xorKey := data[:32]
+	msgKey := data[32:48]
+	data = data[48:]
+
 	for i := 0; i < 32; i++ {
 		xorKey[i] ^= theirKey[i]
 	}
 
 	if !bytes.Equal(xorKey, ourKey.Public().(ed25519.PublicKey)) {
 		return nil, fmt.Errorf("message was encrypted not for the given keys")
-	}
-
-	msgKey, err := slc.LoadSlice(128)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load xor key: %w", err)
 	}
 
 	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
@@ -618,15 +622,6 @@ func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey 
 	h := hmac.New(sha512.New, sharedKey)
 	h.Write(msgKey)
 	x := h.Sum(nil)
-
-	data, err := slc.LoadBinarySnake()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load snake encrypted data: %w", err)
-	}
-
-	if len(data) < 32 || len(data)%16 != 0 {
-		return nil, fmt.Errorf("invalid data")
-	}
 
 	c, err := aes.NewCipher(x[:32])
 	if err != nil {
@@ -639,7 +634,10 @@ func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey 
 		return nil, fmt.Errorf("invalid prefix size %d", data[0])
 	}
 
-	h = hmac.New(sha512.New, []byte(sender.String()))
+	// repacking address with expected flags
+	snd := address.NewAddress(0, byte(sender.Workchain()), sender.Data())
+
+	h = hmac.New(sha512.New, []byte(snd.String()))
 	h.Write(data)
 	if !bytes.Equal(msgKey, h.Sum(nil)[:16]) {
 		return nil, fmt.Errorf("incorrect msg key")
@@ -671,7 +669,10 @@ func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey
 	}
 	data = append(pfx, data...)
 
-	h := hmac.New(sha512.New, []byte(senderAddr.String()))
+	// repacking address with expected flags
+	snd := address.NewAddress(0, byte(senderAddr.Workchain()), senderAddr.Data())
+
+	h := hmac.New(sha512.New, []byte(snd.String()))
 	h.Write(data)
 	msgKey := h.Sum(nil)[:16]
 
@@ -692,8 +693,7 @@ func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey
 		xorKey[i] ^= theirKey[i]
 	}
 
-	root.MustStoreSlice(xorKey, 256)
-	root.MustStoreSlice(msgKey, 128)
+	data = append(append(xorKey, msgKey...), data...)
 
 	if err := root.StoreBinarySnake(data); err != nil {
 		return nil, fmt.Errorf("failed to build comment: %w", err)

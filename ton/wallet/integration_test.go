@@ -449,12 +449,12 @@ func randString(n int) string {
 		"абвгдежзиклмнопрстиквфыйцэюяАБВГДЕЖЗИЙКЛМНОПРСТИЮЯЗФЫУю!№%:,.!;(!)_+" +
 		"😱😨🍫💋💎😄🎉☠️🙈😁🙂📱😨😮🤮👿👏🤞🖕🤜👂👃👀")
 
-	buf := make([]byte, 2)
-	_, _ = rand.Read(buf)
-	rnd := binary.LittleEndian.Uint16(buf)
-
 	b := make([]rune, n)
 	for i := range b {
+		buf := make([]byte, 2)
+		_, _ = rand.Read(buf)
+		rnd := binary.LittleEndian.Uint16(buf)
+
 		b[i] = letterRunes[int(rnd)%len(letterRunes)]
 	}
 	return string(b)
