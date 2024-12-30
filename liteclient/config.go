@@ -18,7 +18,7 @@ func GetConfigFromUrl(ctx context.Context, url string) (*GlobalConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-
+        req.Header.Set("Accept", "*/*")
 	req = req.WithContext(ctx)
 
 	httpClient := http.DefaultClient
