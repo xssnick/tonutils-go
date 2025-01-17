@@ -106,8 +106,17 @@ func Test_EncodeDecodeFuzz(t *testing.T) {
 	}
 }
 
+// history of optimizations
 // Benchmark_EncodeDecodeFuzz-12: MatrixGF2    	                 907	   1329193 ns/op	  653478 B/op	    1806 allocs/op
 // Benchmark_EncodeDecodeFuzz-12: PlainMatrixGF2                1082	   1114249 ns/op	  652923 B/op	    1810 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        4532	    264006 ns/op	  656378 B/op	    1804 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        4906	    239055 ns/op	  675706 B/op	     959 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        5042	    237723 ns/op	  680747 B/op	     799 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        4368	    247088 ns/op	  683931 B/op	     687 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        5692	    208915 ns/op	  506834 B/op	     374 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        5490	    190236 ns/op	  365026 B/op	     225 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        6654	    177373 ns/op	  364961 B/op	     223 allocs/op
+// Benchmark_EncodeDecodeFuzz-10    	                        5732	    182353 ns/op	  364865 B/op	     203 allocs/op
 func Benchmark_EncodeDecodeFuzz(b *testing.B) {
 	str := make([]byte, 4096)
 	rand.Read(str)

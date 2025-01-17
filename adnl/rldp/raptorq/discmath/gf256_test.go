@@ -1,19 +1,37 @@
 package discmath
 
 import (
-	"encoding/hex"
+	"math/rand"
 	"testing"
+	"time"
 )
 
-func TestGF256MulAdd(t *testing.T) {
-	row, _ := hex.DecodeString("00006ef24e3a3f6717e9e91ae61c")
-	add, _ := hex.DecodeString("00000165499dbdf1b63ce3f3c0bc")
-	mul := uint8(110)
+func BenchmarkOctVecMulAdd(b *testing.B) {
+	// Инициализируем некие данные
+	rand.Seed(time.Now().UnixNano())
 
-	g := GF256{data: row}
-	v := GF256{data: add}
+	// Размер входных данных. Меняйте на нужный.
+	const size = 1024 * 16 // 16 KB
 
-	g.AddMul(&v, mul)
+	x := make([]byte, size)
+	y := make([]byte, size)
+	for i := 0; i < size; i++ {
+		x[i] = byte(rand.Intn(256))
+		y[i] = byte(rand.Intn(256))
+	}
 
-	println(g.String())
+	multiplier := uint8(rand.Intn(256))
+
+	// Сбрасываем таймер, чтобы инициализация не учитывалась в бенчмарке
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		// Копируем x в temp, чтобы каждый прогон начинался с одинаковых исходных данных
+		// (и результат XOR был сопоставим)
+		temp := make([]byte, size)
+		copy(temp, x)
+
+		// Запускаем саму функцию
+		OctVecMulAdd(temp, y, multiplier)
+	}
 }

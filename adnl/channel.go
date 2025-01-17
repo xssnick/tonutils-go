@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"github.com/xssnick/tonutils-go/tl"
 	"math/big"
+	"sync/atomic"
 )
 
 type Channel struct {
@@ -94,17 +96,23 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 }
 
 func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
-	rand1, err := randForPacket()
+	data := make([]byte, 32)
+	_, err := rand.Read(data)
 	if err != nil {
 		return nil, err
 	}
 
-	rand2, err := randForPacket()
+	rand1, err := resizeRandForPacket(data[:16])
 	if err != nil {
 		return nil, err
 	}
 
-	confSeq := int64(c.adnl.confirmSeqno)
+	rand2, err := resizeRandForPacket(data[16:])
+	if err != nil {
+		return nil, err
+	}
+
+	confSeq := atomic.LoadInt64(&c.adnl.confirmSeqno)
 	packet := &PacketContent{
 		Rand1:        rand1,
 		Messages:     msgs,

@@ -1,6 +1,7 @@
 package tl
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -16,21 +17,31 @@ import (
 type Serializable interface{}
 type Raw []byte
 
-type TL interface {
+type ParseableTL interface {
 	Parse(data []byte) ([]byte, error)
-	Serialize() ([]byte, error)
+}
+
+type SerializableTL interface {
+	Serialize(buf *bytes.Buffer) error
+}
+
+type TL interface {
+	ParseableTL
+	SerializableTL
 }
 
 var _SchemaIDByTypeName = map[string]uint32{}
 var _SchemaIDByName = map[string]uint32{}
 var _SchemaByID = map[uint32]reflect.Type{}
 
-var BoolTrue = CRC("boolTrue = Bool")
-var BoolFalse = CRC("boolFalse = Bool")
+var _BoolTrue = CRC("boolTrue = Bool")
+var _BoolFalse = CRC("boolFalse = Bool")
 
 var Logger = func(a ...any) {}
 
-func Serialize(v Serializable, boxed bool) ([]byte, error) {
+var DefaultSerializeBufferSize = 1024
+
+func Serialize(v Serializable, boxed bool, bufferSize ...int) ([]byte, error) {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
@@ -39,38 +50,48 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 		rv = rv.Elem()
 	}
 
+	bufSz := DefaultSerializeBufferSize
+	if len(bufferSize) > 0 && bufferSize[0] != 0 {
+		bufSz = bufferSize[0]
+	}
+
 	if rv.Type() == reflect.TypeOf(Raw{}) {
 		return rv.Bytes(), nil
 	} else if rv.Type() == reflect.TypeOf([]Serializable{}) {
-		var data []byte
-		for i, sv := range rv.Interface().([]Serializable) {
-			itemData, err := Serialize(sv, boxed)
+		items := rv.Interface().([]Serializable)
+		buf := bytes.NewBuffer(nil)
+		buf.Grow(bufSz * len(items))
+
+		for i, sv := range items {
+			itemData, err := Serialize(sv, boxed, bufSz)
 			if err != nil {
 				return nil, fmt.Errorf("failed to serialize %d elem of slice: %w", i, err)
 			}
-			data = append(data, itemData...)
+			buf.Write(itemData)
 		}
-		return data, nil
+
+		return buf.Bytes(), nil
 	}
 
-	var buf []byte
+	buf := bytes.NewBuffer(nil)
+	buf.Grow(bufSz)
 
 	if boxed {
 		id, ok := _SchemaIDByTypeName[rv.Type().String()]
 		if !ok {
 			panic("not registered tl type " + rv.Type().String())
 		}
-		buf = make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, id)
+		box := make([]byte, 4)
+		binary.LittleEndian.PutUint32(box, id)
+		buf.Write(box)
 	}
 
 	// if we have custom method, we use it
-	if t, ok := v.(TL); ok {
-		data, err := t.Serialize()
-		if err != nil {
+	if t, ok := v.(SerializableTL); ok {
+		if err := t.Serialize(buf); err != nil {
 			return nil, fmt.Errorf("failed to serialize %s using manual method: %w", rv.Type().String(), err)
 		}
-		return append(buf, data...), nil
+		return buf.Bytes(), nil
 	}
 
 	var flags *uint32
@@ -116,48 +137,46 @@ func Serialize(v Serializable, boxed bool) ([]byte, error) {
 				panic("vector should have slice type")
 			}
 
+			ln := fieldVal.Len()
 			tmp := make([]byte, 4)
-			binary.LittleEndian.PutUint32(tmp, uint32(fieldVal.Len()))
-			buf = append(buf, tmp...)
+			binary.LittleEndian.PutUint32(tmp, uint32(ln))
+			buf.Write(tmp)
 
-			for x := 0; x < fieldVal.Len(); x++ {
-				subBuf, err := serializeField(settings, fieldVal.Index(x))
-				if err != nil {
+			for x := 0; x < ln; x++ {
+				if err := serializeField(buf, settings, fieldVal.Index(x), bufSz); err != nil {
 					return nil, fmt.Errorf("failed to serialize field %s: %w", field.Name, err)
 				}
-				buf = append(buf, subBuf...)
 			}
 			continue
 		}
 
-		subBuf, err := serializeField(settings, fieldVal)
-		if err != nil {
+		if err := serializeField(buf, settings, fieldVal, bufSz); err != nil {
 			return nil, fmt.Errorf("failed to serialize field %s: %w", field.Name, err)
 		}
-		buf = append(buf, subBuf...)
 	}
 
-	return buf, nil
+	return buf.Bytes(), nil
 }
 
 func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, err error) {
 	src := reflect.ValueOf(v)
+	// println("PR", src.Type().String())
 	if src.Kind() != reflect.Pointer || src.IsNil() {
 		return nil, fmt.Errorf("v should be a pointer and not nil")
 	}
-	src = src.Elem()
+	srcElem := src.Elem()
 
-	rv := src
+	var rv reflect.Value
 
 	if boxed {
 		if len(data) < 4 {
-			return nil, fmt.Errorf("failed to parse id of %s, too short data", src.Type().String())
+			return nil, fmt.Errorf("failed to parse id of %s, too short data", srcElem.Type().String())
 		}
 		dataID := binary.LittleEndian.Uint32(data)
 
 		sch, ok := _SchemaByID[dataID]
 		if !ok {
-			return nil, fmt.Errorf("schema for id %s (%d) is not found, during parsing of: %s", hex.EncodeToString(data[:4]), int32(dataID), rv.Type().String())
+			return nil, fmt.Errorf("schema for id %s (%d) is not found, during parsing of: %s", hex.EncodeToString(data[:4]), int32(dataID), srcElem.Type().String())
 		}
 
 		if len(names) > 0 {
@@ -174,121 +193,129 @@ func Parse(v Serializable, data []byte, boxed bool, names ...string) (_ []byte, 
 			}
 		}
 
-		if src.Kind() != reflect.Interface && sch != src.Type() {
-			return nil, fmt.Errorf("required schema %s not match actual %s", src.Type().String(), sch.String())
-		} else if src.Kind() == reflect.Interface {
-			rv = reflect.New(sch).Elem()
+		if srcElem.Kind() != reflect.Interface && sch != srcElem.Type() {
+			return nil, fmt.Errorf("required schema %s not match actual %s", srcElem.Type().String(), sch.String())
+		} else if srcElem.Kind() == reflect.Interface {
+			rv = reflect.New(sch)
 		}
 		data = data[4:]
 	}
 
+	isInterface := rv.IsValid()
+	if !isInterface {
+		rv = src
+	}
+
 	// if we have custom method, we use it
-	if t, ok := v.(TL); ok {
+	if t, ok := rv.Interface().(ParseableTL); ok {
 		data, err = t.Parse(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse %s using manual method: %w", src.Type().String(), err)
+			return nil, fmt.Errorf("failed to parse %s using manual method: %w", rv.Type().String(), err)
 		}
-		return data, nil
-	}
+		rv = rv.Elem()
+	} else {
+		// we work with rv type as with underlying struct to process each field
+		rv = rv.Elem()
 
-	if rv.Kind() == reflect.Interface {
-		panic("interfaces can be parsed only when boxing is enabled")
-	}
-
-	var flags *uint32
-	for i := 0; i < rv.NumField(); i++ {
-		field := rv.Type().Field(i)
-		value := rv.Field(i)
-
-		tag := strings.TrimSpace(field.Tag.Get("tl"))
-		if tag == "-" || len(tag) == 0 {
-			continue
+		if rv.Kind() == reflect.Interface {
+			panic("interfaces can be parsed only when boxing is enabled")
 		}
-		settings := strings.Split(tag, " ")
 
-		if settings[0][0] == '?' {
-			if flags == nil {
-				panic("flag field should be defined before usage")
-			}
+		var flags *uint32
+		for i := 0; i < rv.NumField(); i++ {
+			field := rv.Type().Field(i)
+			value := rv.Field(i)
 
-			bit, err := strconv.Atoi(settings[0][1:])
-			if err != nil {
-				panic("invalid flag bit in tag, should be number")
-			}
-			if bit < 0 || bit > 31 {
-				panic("invalid flag bit in tag, should be > 0 && < 32")
-			}
-
-			if *flags&(1<<bit) == 0 {
-				// no flags for this field set
+			tag := strings.TrimSpace(field.Tag.Get("tl"))
+			if tag == "-" || len(tag) == 0 {
 				continue
 			}
-			settings = settings[1:]
-		}
+			settings := strings.Split(tag, " ")
 
-		var isFlags bool
-		if settings[0] == "flags" {
-			isFlags = true
-			settings = []string{"int"}
-		}
-
-		if settings[0] == "vector" {
-			settings = settings[1:]
-
-			if len(data) < 4 {
-				return nil, fmt.Errorf("failed to parse vector size of %s, err: too short data", src.Type().String())
-			}
-			sz := binary.LittleEndian.Uint32(data)
-			data = data[4:]
-
-			if field.Type.Kind() != reflect.Slice {
-				panic("vector should have slice type")
-			}
-
-			// in case if we have something, to overwrite
-			value.SetLen(0)
-
-			for x := uint32(0); x < sz; x++ {
-				vl := reflect.New(field.Type.Elem()).Elem()
-
-				data, err = parseField(data, settings, &vl)
-				if err != nil {
-					return nil, fmt.Errorf("failed to parse vector field %s, element %d of size %d, err: %w", field.Name, x, sz, err)
+			if settings[0][0] == '?' {
+				if flags == nil {
+					panic("flag field should be defined before usage")
 				}
 
-				value = reflect.Append(value, vl)
+				bit, err := strconv.Atoi(settings[0][1:])
+				if err != nil {
+					panic("invalid flag bit in tag, should be number")
+				}
+				if bit < 0 || bit > 31 {
+					panic("invalid flag bit in tag, should be > 0 && < 32")
+				}
+
+				if *flags&(1<<bit) == 0 {
+					// no flags for this field set
+					continue
+				}
+				settings = settings[1:]
 			}
 
+			var isFlags bool
+			if settings[0] == "flags" {
+				isFlags = true
+				settings = []string{"int"}
+			}
+
+			if settings[0] == "vector" {
+				settings = settings[1:]
+
+				if len(data) < 4 {
+					return nil, fmt.Errorf("failed to parse vector size of %s, err: too short data", rv.Type().String())
+				}
+				sz := binary.LittleEndian.Uint32(data)
+				data = data[4:]
+
+				if field.Type.Kind() != reflect.Slice {
+					panic("vector should have slice type")
+				}
+
+				// in case if we have something, to overwrite
+				value.SetLen(0)
+
+				for x := uint32(0); x < sz; x++ {
+					vl := reflect.New(field.Type.Elem()).Elem()
+
+					data, err = parseField(data, settings, &vl)
+					if err != nil {
+						return nil, fmt.Errorf("failed to parse vector field %s, element %d of size %d, err: %w", field.Name, x, sz, err)
+					}
+
+					value = reflect.Append(value, vl)
+				}
+
+				rv.Field(i).Set(value)
+				continue
+			}
+
+			data, err = parseField(data, settings, &value)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse field %s of %s, err: %w", field.Name, rv.Type().String(), err)
+			}
 			rv.Field(i).Set(value)
-			continue
-		}
 
-		data, err = parseField(data, settings, &value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse field %s of %s, err: %w", field.Name, rv.Type().String(), err)
-		}
-		rv.Field(i).Set(value)
-
-		if isFlags {
-			f := uint32(value.Uint())
-			flags = &f
+			if isFlags {
+				f := uint32(value.Uint())
+				flags = &f
+			}
 		}
 	}
 
-	// in case of interface
-	if src != rv {
-		src.Set(rv)
+	if isInterface {
+		srcElem.Set(rv)
 	}
 
 	return data, nil
 }
 
-func serializeField(tags []string, value reflect.Value) (buf []byte, err error) {
+func serializeField(buf *bytes.Buffer, tags []string, value reflect.Value, bufSz int) (err error) {
 	switch tags[0] {
 	case "string":
 		switch value.Type().Kind() {
 		case reflect.String:
-			return ToBytes([]byte(value.String())), nil
+			ToBytesToBuffer(buf, []byte(value.String()))
+			return nil
 		}
 	case "cell":
 		optional := len(tags) > 1 && tags[1] == "optional"
@@ -306,50 +333,55 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 
 		if value.IsNil() || (value.Kind() == reflect.Slice && value.Len() == 0) {
 			if optional {
-				return ToBytes(nil), nil
+				ToBytesToBuffer(buf, nil)
+				return nil
 			}
-			return nil, fmt.Errorf("nil cell is not allowed in field %s", value.Type().String())
+			return fmt.Errorf("nil cell is not allowed in field %s", value.Type().String())
 		}
 
 		if value.Type() == cellType {
 			if num > 0 {
 				panic("field type should be cell slice to use cells num tag")
 			}
-			return ToBytes(value.Interface().(*cell.Cell).ToBOCWithFlags(false)), nil
+			ToBytesToBuffer(buf, value.Interface().(*cell.Cell).ToBOCWithFlags(false))
+			return nil
 		} else if value.Type() == cellArrType {
 			cells := value.Interface().([]*cell.Cell)
 			if num > 0 && num != len(cells) {
-				return nil, fmt.Errorf("incorrect cells len %d in field %s", len(cells), value.Type().String())
+				return fmt.Errorf("incorrect cells len %d in field %s", len(cells), value.Type().String())
 			}
-			return ToBytes(cell.ToBOCWithFlags(cells, false)), nil
+			ToBytesToBuffer(buf, cell.ToBOCWithFlags(cells, false))
+			return nil
 		}
 		panic("for cell tag only *cell.Cell is supported")
 	case "int256", "bytes":
 		if tags[0] == "bytes" && len(tags) > 1 && tags[1] == "struct" {
-			res, err := Serialize(value.Interface(), len(tags) > 2 && tags[2] == "boxed")
+			res, err := Serialize(value.Interface(), len(tags) > 2 && tags[2] == "boxed", bufSz)
 			if err != nil {
-				return nil, fmt.Errorf("failed to serialize struct to bytes: %w", err)
+				return fmt.Errorf("failed to serialize struct to bytes: %w", err)
 			}
-			return ToBytes(res), nil
+			ToBytesToBuffer(buf, res)
+			return nil
 		}
 
-		switch value.Type().Kind() {
+		typ := value.Type()
+		switch typ.Kind() {
 		case reflect.Slice:
-			switch value.Type().Elem().Kind() {
+			switch typ.Elem().Kind() {
 			case reflect.Uint8:
 				if tags[0] == "int256" {
-					bytes := value.Bytes()
-					if len(bytes) == 0 {
+					bts := value.Bytes()
+					if len(bts) == 0 {
 						// consider it as 0
-						bytes = make([]byte, 32)
-					} else if len(bytes) != 32 {
-						return nil, fmt.Errorf("not 32 bytes for int256 value")
+						bts = make([]byte, 32)
+					} else if len(bts) != 32 {
+						return fmt.Errorf("not 32 bytes for int256 value")
 					}
-					buf = append(buf, bytes...)
+					buf.Write(bts)
 				} else {
-					buf = append(buf, ToBytes(value.Bytes())...)
+					ToBytesToBuffer(buf, value.Bytes())
 				}
-				return buf, nil
+				return nil
 			}
 		}
 		panic("for int256 only bytes array/slice supported")
@@ -358,12 +390,12 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 		case reflect.Bool:
 			tmp := make([]byte, 4)
 			if value.Bool() {
-				binary.LittleEndian.PutUint32(tmp, BoolTrue)
+				binary.LittleEndian.PutUint32(tmp, _BoolTrue)
 			} else {
-				binary.LittleEndian.PutUint32(tmp, BoolFalse)
+				binary.LittleEndian.PutUint32(tmp, _BoolFalse)
 			}
-			buf = append(buf, tmp...)
-			return buf, nil
+			buf.Write(tmp)
+			return nil
 		}
 	case "int", "long":
 		switch value.Type().Kind() {
@@ -376,8 +408,8 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 				tmp = make([]byte, 8)
 				binary.LittleEndian.PutUint64(tmp, uint64(value.Int()))
 			}
-			buf = append(buf, tmp...)
-			return buf, nil
+			buf.Write(tmp)
+			return nil
 		case reflect.Uint64, reflect.Uint32, reflect.Uint16, reflect.Uint8, reflect.Uint:
 			var tmp []byte
 			if tags[0] == "int" {
@@ -387,8 +419,8 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 				tmp = make([]byte, 8)
 				binary.LittleEndian.PutUint64(tmp, value.Uint())
 			}
-			buf = append(buf, tmp...)
-			return buf, nil
+			buf.Write(tmp)
+			return nil
 		case reflect.Slice:
 			switch value.Type().Elem().Kind() {
 			case reflect.Uint8:
@@ -398,7 +430,7 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 				}
 
 				if value.Len() != sz {
-					return nil, fmt.Errorf("failed to serialize %s for %s, err: incorrect size of slice, shpuld be %d", tags[0], value.Type().String(), sz)
+					return fmt.Errorf("failed to serialize %s for %s, err: incorrect size of slice, shpuld be %d", tags[0], value.Type().String(), sz)
 				}
 
 				ipBytes := value.Bytes()
@@ -409,8 +441,8 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 					data[0], data[1], data[2], data[3] = data[3], data[2], data[1], data[0]
 				}
 
-				buf = append(buf, data...)
-				return buf, nil
+				buf.Write(data)
+				return nil
 			}
 		}
 	case "struct":
@@ -418,7 +450,7 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 
 		if value.Type().Kind() == reflect.Interface {
 			if !isBoxed {
-				return nil, fmt.Errorf("interface type in %s field should be boxed", value.Type().String())
+				return fmt.Errorf("interface type in %s field should be boxed", value.Type().String())
 			}
 
 			list := splitAllowed(tags[2:])
@@ -437,16 +469,16 @@ func serializeField(tags []string, value reflect.Value) (buf []byte, err error) 
 			}
 
 			if !found {
-				return nil, fmt.Errorf("tl object has not allowed type, should be one of %s, got type %s", list, elem.String())
+				return fmt.Errorf("tl object has not allowed type, should be one of %s, got type %s", list, elem.String())
 			}
 		}
 
-		subBuf, err := Serialize(value.Interface(), isBoxed)
+		subBuf, err := Serialize(value.Interface(), isBoxed, bufSz)
 		if err != nil {
-			return nil, fmt.Errorf("failed to serialize %s type as struct, err: %w", value.Type().String(), err)
+			return fmt.Errorf("failed to serialize %s type as struct, err: %w", value.Type().String(), err)
 		}
-		buf = append(buf, subBuf...)
-		return buf, nil
+		buf.Write(subBuf)
+		return nil
 	}
 
 	panic(fmt.Sprintf("cannot serialize type '%s' as tag '%s', use manual serialization", value.Type().String(), strings.Join(tags, " ")))
@@ -601,7 +633,7 @@ func parseField(data []byte, tags []string, value *reflect.Value) (_ []byte, err
 			if len(data) < 4 {
 				return nil, fmt.Errorf("failed to parse int for %s, err: too short data", value.Type().String())
 			}
-			value.SetBool(binary.LittleEndian.Uint32(data) == BoolTrue)
+			value.SetBool(binary.LittleEndian.Uint32(data) == _BoolTrue)
 			data = data[4:]
 			return data, nil
 		}

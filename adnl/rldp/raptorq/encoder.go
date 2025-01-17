@@ -8,7 +8,7 @@ import (
 type Encoder struct {
 	symbolSz uint32
 	relaxed  *discmath.MatrixGF256
-	symbols  []*Symbol
+	symbols  []Symbol
 	params   *raptorParams
 }
 
@@ -35,9 +35,7 @@ func (r *RaptorQ) CreateEncoder(data []byte) (*Encoder, error) {
 
 func (e *Encoder) GenSymbol(id uint32) []byte {
 	if id < e.params._K {
-		x := make([]byte, len(e.symbols[id].Data))
-		copy(x, e.symbols[id].Data)
-		return x
+		return e.symbols[id].Data
 	}
 
 	return e.params.genSymbol(e.relaxed, e.symbolSz, id+e.params._KPadded-e.params._K)

@@ -9,22 +9,20 @@ import (
 
 var ErrNotEnoughSymbols = errors.New("not enough symbols")
 
-func (p *raptorParams) createD(symbols []*Symbol) *discmath.MatrixGF256 {
+func (p *raptorParams) createD(symbols []Symbol) *discmath.MatrixGF256 {
 	symSz := uint32(len(symbols[0].Data))
 	d := discmath.NewMatrixGF256(p._S+p._H+uint32(len(symbols)), symSz)
 
 	offset := p._S
-	for _, symbol := range symbols {
-		for i, b := range symbol.Data {
-			d.Set(offset, uint32(i), b)
-		}
+	for i := range symbols {
+		d.RowSet(offset, symbols[i].Data)
 		offset++
 	}
 
 	return d
 }
 
-func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
+func (p *raptorParams) Solve(symbols []Symbol) (*discmath.MatrixGF256, error) {
 	d := p.createD(symbols)
 
 	eRows := make([]*encodingRow, 0, len(symbols))
@@ -61,10 +59,7 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 
 	// Encode
 	for ri, row := range eRows {
-		f := func(col uint32) {
-			aUpper.Set(uint32(ri)+p._S, col, 1)
-		}
-		row.encode(p, f)
+		row.encode(aUpper, uint32(ri), p)
 	}
 
 	uSize, rowPermutation, colPermutation := inactivateDecode(aUpper, p._P)
@@ -79,25 +74,38 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 	cPermut := discmath.InversePermutation(colPermutation)
 
 	aUpperMutRow := discmath.NewMatrixGF256(aUpper.RowsNum(), aUpper.ColsNum())
-	aUpper.Each(func(row, col uint32) {
-		aUpperMutRow.Set(rPermut[row], col, 1)
-	})
-	aUpper = aUpperMutRow
-	aUpperMutCol := discmath.NewMatrixGF256(aUpper.RowsNum(), aUpper.ColsNum())
+	for i, val := range aUpper.Data {
+		if val != 0 {
+			row := uint32(i) / aUpper.Cols
+			col := uint32(i) % aUpper.Cols
 
-	aUpper.Each(func(row, col uint32) {
-		aUpperMutCol.Set(row, cPermut[col], 1)
-	})
+			// TODO: do in place?
+			aUpperMutRow.Set(rPermut[row], col, 1)
+		}
+	}
+	aUpper = aUpperMutRow
+
+	aUpperMutCol := discmath.NewMatrixGF256(aUpper.RowsNum(), aUpper.ColsNum())
+	for i, val := range aUpper.Data {
+		if val != 0 {
+			row := uint32(i) / aUpper.Cols
+			col := uint32(i) % aUpper.Cols
+
+			// TODO: do in place?
+			aUpperMutCol.Set(row, cPermut[col], 1)
+		}
+	}
 	aUpper = aUpperMutCol
 
 	e := aUpper.ToGF2(0, uSize, uSize, p._L-uSize)
 
 	c := discmath.NewMatrixGF256(aUpper.ColsNum(), d.ColsNum())
-	c.SetFrom(d.GetBlock(0, 0, uSize, d.ColsNum()), 0, 0)
+	c.SetFromBlock(d, 0, 0, uSize, d.ColsNum(), 0, 0)
 
 	// Make U Identity matrix and calculate E and D_upper.
+	colsBuf := make([]uint32, 0, aUpper.Rows)
 	for i := uint32(0); i < uSize; i++ {
-		for _, row := range aUpper.GetCols(i) {
+		for _, row := range aUpper.GetCols(colsBuf, i) {
 			if row == i {
 				continue
 			}
@@ -121,10 +129,16 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 	gLeft := aUpper.GetBlock(uSize, 0, aUpper.RowsNum()-uSize, uSize)
 
 	smallAUpper := discmath.NewMatrixGF256(aUpper.RowsNum()-uSize, aUpper.ColsNum()-uSize)
-	aUpper.GetBlock(uSize, uSize, aUpper.RowsNum()-uSize, aUpper.ColsNum()-uSize).
-		Each(func(row, col uint32) {
+	ub := aUpper.GetBlock(uSize, uSize, aUpper.RowsNum()-uSize, aUpper.ColsNum()-uSize)
+
+	for i, val := range ub.Data {
+		if val != 0 {
+			row := uint32(i) / ub.Cols
+			col := uint32(i) % ub.Cols
+
 			smallAUpper.Set(row, col, 1)
-		})
+		}
+	}
 
 	smallAUpper = smallAUpper.Add(e.Mul(gLeft).ToGF256())
 
@@ -146,14 +160,14 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 	smallALower = smallALower.Add(hdpcMul(e.ToGF256()))
 
 	dUpper := discmath.NewMatrixGF256(uSize, d.ColsNum())
-	dUpper.SetFrom(d.GetBlock(0, 0, dUpper.RowsNum(), dUpper.ColsNum()), 0, 0)
+	dUpper.SetFromBlock(d, 0, 0, dUpper.RowsNum(), dUpper.ColsNum(), 0, 0)
 
 	smallDUpper := discmath.NewMatrixGF256(aUpper.RowsNum()-uSize, d.ColsNum())
-	smallDUpper.SetFrom(d.GetBlock(uSize, 0, smallDUpper.RowsNum(), smallDUpper.ColsNum()), 0, 0)
+	smallDUpper.SetFromBlock(d, uSize, 0, smallDUpper.RowsNum(), smallDUpper.ColsNum(), 0, 0)
 	smallDUpper = smallDUpper.Add(dUpper.MulSparse(gLeft))
 
 	smallDLower := discmath.NewMatrixGF256(p._H, d.ColsNum())
-	smallDLower.SetFrom(d.GetBlock(aUpper.RowsNum(), 0, smallDLower.RowsNum(), smallDLower.ColsNum()), 0, 0)
+	smallDLower.SetFromBlock(d, aUpper.RowsNum(), 0, smallDLower.RowsNum(), smallDLower.ColsNum(), 0, 0)
 	smallDLower = smallDLower.Add(hdpcMul(dUpper))
 
 	// combine small A
@@ -174,9 +188,10 @@ func (p *raptorParams) Solve(symbols []*Symbol) (*discmath.MatrixGF256, error) {
 		return nil, fmt.Errorf("failed to calc gauss elimination: %w", err)
 	}
 
-	c.SetFrom(smallC.GetBlock(0, 0, c.RowsNum()-uSize, c.ColsNum()), uSize, 0)
+	c.SetFromBlock(smallC, 0, 0, c.RowsNum()-uSize, c.ColsNum(), uSize, 0)
+	rowsBuf := make([]uint32, 0, aUpper.Rows)
 	for row := uint32(0); row < uSize; row++ {
-		for _, col := range aUpper.GetRows(row) {
+		for _, col := range aUpper.GetRows(rowsBuf, row) {
 			if col == row {
 				continue
 			}

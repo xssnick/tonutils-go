@@ -1,7 +1,6 @@
 package adnl
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -41,8 +40,6 @@ func init() {
 var ErrTooShortData = errors.New("too short data")
 
 func parsePacket(data []byte) (_ *PacketContent, err error) {
-	var packet PacketContent
-
 	if len(data) < 4 {
 		return nil, ErrTooShortData
 	}
@@ -63,6 +60,8 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 	flags := binary.LittleEndian.Uint32(data)
 	data = data[4:]
+
+	var packet PacketContent
 
 	if flags&_FlagFrom != 0 {
 		if len(data) < 4 {
@@ -179,7 +178,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 func (p *PacketContent) Serialize() ([]byte, error) {
 	// adnl.packetContents id
-	data := make([]byte, 4)
+	data := make([]byte, 4, 2048)
 	binary.LittleEndian.PutUint32(data, _PacketContentID)
 
 	data = append(data, tl.ToBytes(p.Rand1)...)
@@ -354,13 +353,7 @@ var _FlagsDBG = map[uint32]string{
 	0x1fff: "ALL",
 }
 
-func randForPacket() ([]byte, error) {
-	data := make([]byte, 16)
-	_, err := rand.Read(data)
-	if err != nil {
-		return nil, err
-	}
-
+func resizeRandForPacket(data []byte) ([]byte, error) {
 	if data[0]&1 > 0 {
 		return data[1:], nil
 	}

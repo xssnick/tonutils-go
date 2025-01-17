@@ -148,6 +148,10 @@ func Test_ServerProxy(t *testing.T) {
 
 				return sc.Send(adnl.MessageAnswer{ID: m.ID, Data: resp})
 			}
+		case TCPAuthenticate:
+			return sc.Send(TCPAuthenticationNonce{make([]byte, 32)})
+		case TCPAuthenticationComplete:
+			return nil
 		case TCPPing:
 			return sc.Send(TCPPong{RandomID: m.RandomID})
 		}

@@ -137,34 +137,55 @@ func (r *encodingRow) Size() uint32 {
 	return r.d + r.d1
 }
 
-func (r *encodingRow) encode(p *raptorParams, f func(col uint32)) {
-	f(r.b)
+func (r *encodingRow) encode(aUpper *discmath.MatrixGF256, ri uint32, p *raptorParams) {
+	aUpper.Set(ri+p._S, r.b, 1)
+
 	for j := uint32(1); j < r.d; j++ {
 		r.b = (r.b + r.a) % p._W
-		f(r.b)
+		aUpper.Set(ri+p._S, r.b, 1)
 	}
 
 	for r.b1 >= p._P {
 		r.b1 = (r.b1 + r.a1) % p._P1
 	}
 
-	f(p._W + r.b1)
+	aUpper.Set(ri+p._S, p._W+r.b1, 1)
 	for j := uint32(1); j < r.d1; j++ {
 		r.b1 = (r.b1 + r.a1) % p._P1
 		for r.b1 >= p._P {
 			r.b1 = (r.b1 + r.a1) % p._P1
 		}
-		f(p._W + r.b1)
+		aUpper.Set(ri+p._S, p._W+r.b1, 1)
+	}
+}
+
+func (r *encodingRow) encodeGen(m, relaxed *discmath.MatrixGF256, p *raptorParams) {
+	m.RowAdd(0, relaxed.GetRow(r.b))
+
+	for j := uint32(1); j < r.d; j++ {
+		r.b = (r.b + r.a) % p._W
+		m.RowAdd(0, relaxed.GetRow(r.b))
+	}
+
+	for r.b1 >= p._P {
+		r.b1 = (r.b1 + r.a1) % p._P1
+	}
+
+	m.RowAdd(0, relaxed.GetRow(p._W+r.b1))
+	for j := uint32(1); j < r.d1; j++ {
+		r.b1 = (r.b1 + r.a1) % p._P1
+		for r.b1 >= p._P {
+			r.b1 = (r.b1 + r.a1) % p._P1
+		}
+		m.RowAdd(0, relaxed.GetRow(p._W+r.b1))
 	}
 }
 
 func (p *raptorParams) genSymbol(relaxed *discmath.MatrixGF256, symbolSz, id uint32) []byte {
 	m := discmath.NewMatrixGF256(1, symbolSz)
-	p.calcEncodingRow(id).encode(p, func(col uint32) {
-		m.RowAdd(0, relaxed.GetRow(col))
-	})
+	p.calcEncodingRow(id).encodeGen(m, relaxed, p)
 
-	return m.GetRow(0).Bytes()
+	return m.GetRow(0)
 }
 
 func isPrime(n uint32) bool {

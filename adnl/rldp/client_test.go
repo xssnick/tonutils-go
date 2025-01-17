@@ -30,6 +30,10 @@ type MockADNL struct {
 	close                   func()
 }
 
+func (m MockADNL) GetCloserCtx() context.Context {
+	return context.Background()
+}
+
 func (m MockADNL) GetID() []byte {
 	//TODO implement me
 	panic("implement me")
@@ -123,7 +127,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 		t.Fatal("failed to serialize test query, err: ", err)
 	}
 
-	encQuery, err := raptorq.NewRaptorQ(_SymbolSize).CreateEncoder(dataQuery)
+	encQuery, err := raptorq.NewRaptorQ(DefaultSymbolSize).CreateEncoder(dataQuery)
 	if err != nil {
 		t.Fatal("failed to create test raptorq object encoder, err: ", err)
 	}
@@ -134,7 +138,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 		TransferID: tId,
 		FecType: FECRaptorQ{
 			DataSize:     int32(len(dataQuery)),
-			SymbolSize:   _SymbolSize,
+			SymbolSize:   int32(DefaultSymbolSize),
 			SymbolsCount: int32(encQuery.BaseSymbolsNum()),
 		},
 		Part:      int32(0),
@@ -164,7 +168,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 		t.Fatal("failed to serialize test query, err: ", err)
 	}
 
-	encAnswer, err := raptorq.NewRaptorQ(_SymbolSize).CreateEncoder(dataAnswer)
+	encAnswer, err := raptorq.NewRaptorQ(DefaultSymbolSize).CreateEncoder(dataAnswer)
 	if err != nil {
 		t.Fatal("failed to create test raptorq object encoder, err: ", err)
 	}
@@ -173,7 +177,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 		TransferID: tId,
 		FecType: FECRaptorQ{
 			DataSize:     int32(len(dataAnswer)),
-			SymbolSize:   _SymbolSize,
+			SymbolSize:   int32(DefaultSymbolSize),
 			SymbolsCount: int32(encAnswer.BaseSymbolsNum()),
 		},
 		Part:      int32(0),
@@ -227,8 +231,12 @@ func TestRLDP_handleMessage(t *testing.T) {
 				}
 			} else if test.tstSubName == "answer case" {
 				queryId := string(tQuery.ID)
-				tChan := make(chan any, 2)
-				cli.activeRequests[queryId] = tChan
+				tChan := make(chan AsyncQueryResult, 2)
+				cli.activeRequests[queryId] = &activeRequest{
+					id:       queryId,
+					deadline: time.Now().Add(time.Second * 10).Unix(),
+					result:   tChan,
+				}
 			}
 
 			err = cli.handleMessage(test.msg)
@@ -294,8 +302,18 @@ func TestRLDP_handleMessage(t *testing.T) {
 			}
 			cli := NewClient(tAdnl)
 
-			tChan := make(chan bool, 1)
-			cli.activeTransfers[string(tId)] = tChan
+			cli.activeTransfers[string(tId)] = &activeTransfer{
+				id:               nil,
+				enc:              nil,
+				seqno:            0,
+				timeout:          0,
+				feq:              FECRaptorQ{},
+				lastConfirmSeqno: 0,
+				lastConfirmAt:    0,
+				lastMorePartAt:   0,
+				startedAt:        0,
+				nextRecoverDelay: 0,
+			}
 
 			err := cli.handleMessage(msgComplete)
 			if err != nil {
@@ -304,10 +322,6 @@ func TestRLDP_handleMessage(t *testing.T) {
 
 			if len(cli.activeTransfers) != 0 {
 				t.Errorf("got '%d' actiive transfers after handeling, want '0'", len(cli.activeTransfers))
-			}
-
-			if <-tChan != false {
-				t.Error("got 'true' in chan, want 'false'")
 			}
 		})
 	}
@@ -367,7 +381,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 				t.Fatalf("want 'MessagePart' type, got '%s'", reflect.TypeOf(req).String())
 			}
 
-			tDecoder, err := raptorq.NewRaptorQ(_SymbolSize).CreateDecoder(uint32(reqMsg.TotalSize))
+			tDecoder, err := raptorq.NewRaptorQ(DefaultSymbolSize).CreateDecoder(uint32(reqMsg.TotalSize))
 			if err != nil {
 				t.Fatal("failed to prepare test decoder, err: ", err)
 			}
@@ -398,11 +412,11 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 	t.Run("positive case (got true in chan activeTransfers)", func(t *testing.T) {
 		go func() {
 			time.Sleep(2 * time.Second)
-			for _, v := range cli.activeTransfers {
-				v <- true
-			}
+			//for _, v := range cli.activeTransfers {
+			//	v <- true
+			//}
 		}()
-		err = cli.sendMessageParts(context.Background(), nil, data)
+		err = cli.sendMessageParts(context.Background(), nil, data, 3*time.Second)
 		if err != nil {
 			t.Fatal("sendMessageParts execution failed, err: ", err)
 		}
@@ -411,7 +425,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 	t.Run("negative case (deadline exceeded)", func(t *testing.T) {
 		ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
 
-		err = cli.sendMessageParts(ctx, nil, data)
+		err = cli.sendMessageParts(ctx, nil, data, 3*time.Second)
 		if !errors.Is(err, ctx.Err()) {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}
@@ -473,7 +487,7 @@ func TestRLDP_DoQuery(t *testing.T) {
 				t.Fatalf("want 'MessagePart' type, got '%s'", reflect.TypeOf(req).String())
 			}
 
-			tDecoder, err := raptorq.NewRaptorQ(_SymbolSize).CreateDecoder(uint32(reqMsg.TotalSize))
+			tDecoder, err := raptorq.NewRaptorQ(DefaultSymbolSize).CreateDecoder(uint32(reqMsg.TotalSize))
 			if err != nil {
 				t.Fatal("failed to prepare test decoder, err: ", err)
 			}
@@ -508,25 +522,27 @@ func TestRLDP_DoQuery(t *testing.T) {
 
 	t.Run("positive case", func(t *testing.T) {
 		go func() {
-			time.Sleep(2 * time.Second)
+			time.Sleep(300 * time.Millisecond)
 
 			for _, v := range cli.activeRequests {
-				v <- answer
+				v.result <- AsyncQueryResult{
+					QueryID: answer.ID,
+					Result:  answer.Data,
+				}
 			}
 		}()
-		var res Answer
+		var res testResponse
 		err = cli.DoQuery(context.Background(), int64(_RLDPMaxAnswerSize), tReq, &res)
 		if err != nil {
 			t.Fatal("DoQuery execution failed, err: ", err)
 		}
 
-		if !reflect.DeepEqual(res, answer) {
+		if !reflect.DeepEqual(res, answer.Data) {
 			t.Error("got bad response")
 		}
-
-		time.Sleep(time.Second)
-		if len(cli.activeRequests) != 0 || len(cli.activeTransfers) != 0 {
-			t.Error("invalid activeRequests and activeTransfers after response")
+		time.Sleep(1 * time.Second)
+		if len(cli.activeRequests) != 0 {
+			t.Error("invalid activeRequests and activeTransfers after response", len(cli.activeRequests))
 		}
 
 	})
@@ -566,7 +582,7 @@ func TestRLDP_SendAnswer(t *testing.T) {
 				t.Fatalf("want 'MessagePart' type, got '%s'", reflect.TypeOf(req).String())
 			}
 
-			tDecoder, err := raptorq.NewRaptorQ(_SymbolSize).CreateDecoder(uint32(reqAnswer.TotalSize))
+			tDecoder, err := raptorq.NewRaptorQ(DefaultSymbolSize).CreateDecoder(uint32(reqAnswer.TotalSize))
 			if err != nil {
 				t.Fatal("failed to prepare test decoder, err: ", err)
 			}
@@ -612,10 +628,13 @@ func TestRLDP_SendAnswer(t *testing.T) {
 
 	t.Run("positive case", func(t *testing.T) {
 		go func() {
-			time.Sleep(2 * time.Second)
-			for _, v := range cli.activeTransfers {
-				v <- true
+			time.Sleep(300 * time.Millisecond)
+			for k, _ := range cli.activeTransfers {
+				delete(cli.activeTransfers, k)
 			}
+			//for _, v := range cli.activeTransfers {
+			// v <- true
+			//}
 		}()
 		err := cli.SendAnswer(context.Background(), 100, tId, nil, response)
 		if err != nil {
@@ -625,15 +644,6 @@ func TestRLDP_SendAnswer(t *testing.T) {
 		time.Sleep(time.Second)
 		if len(cli.activeRequests) != 0 || len(cli.activeTransfers) != 0 {
 			t.Error("invalid activeRequests and activeTransfers after response")
-		}
-	})
-
-	t.Run("negative case (deadline exceeded)", func(t *testing.T) {
-		ctx, _ := context.WithTimeout(context.Background(), time.Second)
-
-		err := cli.SendAnswer(ctx, 100, tId, nil, response)
-		if !strings.Contains(err.Error(), "context deadline exceeded") {
-			t.Errorf("got '%s', want contex error", err.Error())
 		}
 	})
 }

@@ -1,6 +1,8 @@
 package discmath
 
-import "unsafe"
+import (
+	"unsafe"
+)
 
 var _LogPreCalc = [...]uint8{0, 0, 1, 25, 2, 50, 26, 198, 3, 223, 51, 238, 27, 104, 199, 75, 4, 100, 224, 14, 52, 141, 239,
 	129, 28, 193, 105, 248, 200, 8, 76, 113, 5, 138, 101, 47, 225, 36, 15, 33, 53, 147, 142, 218, 240,
@@ -62,19 +64,6 @@ func OctInverse(x uint8) uint8 {
 	return OctExp(uint32(255 - _LogPreCalc[x]))
 }
 
-func OctVecAdd(x, y []byte) {
-	xUint64 := *(*[]uint64)(unsafe.Pointer(&x))
-	yUint64 := *(*[]uint64)(unsafe.Pointer(&y))
-
-	for i := 0; i < len(x)/8; i++ {
-		xUint64[i] ^= yUint64[i]
-	}
-
-	for i := len(x) - len(x)%8; i < len(x); i++ {
-		x[i] ^= y[i]
-	}
-}
-
 func OctVecMul(vector []byte, multiplier uint8) {
 	table := _MulPreCalc[multiplier]
 	for i := 0; i < len(vector); i++ {
@@ -83,10 +72,12 @@ func OctVecMul(vector []byte, multiplier uint8) {
 }
 
 func OctVecMulAdd(x, y []byte, multiplier uint8) {
+	// TODO: bit-slicing?
+	n := len(x)
 	table := _MulPreCalc[multiplier]
 	xUint64 := *(*[]uint64)(unsafe.Pointer(&x))
 	pos := 0
-	for i := 0; i < len(x)/8; i++ {
+	for i := 0; i < n/8; i++ {
 		var prod uint64
 		prod |= uint64(table[y[pos]])
 		prod |= uint64(table[y[pos+1]]) << 8
@@ -101,7 +92,7 @@ func OctVecMulAdd(x, y []byte, multiplier uint8) {
 		xUint64[i] ^= prod
 	}
 
-	for i := len(x) - len(x)%8; i < len(x); i++ {
+	for i := n - n%8; i < n; i++ {
 		x[i] ^= table[y[i]]
 	}
 }

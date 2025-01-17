@@ -5,8 +5,6 @@ import "errors"
 var ErrNotSolvable = errors.New("not solvable")
 
 func GaussianElimination(a, d *MatrixGF256) (*MatrixGF256, error) {
-	a = a.Copy()
-	d = d.Copy()
 	rows := a.RowsNum()
 
 	rowPerm := make([]uint32, rows)

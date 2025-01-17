@@ -27,24 +27,32 @@ func inactivateDecode(l *discmath.MatrixGF256, pi uint32) (side uint32, pRows, p
 	rows := l.RowsNum()
 
 	dec := &inactivateDecoder{
-		l:      l,
-		cols:   cols,
-		rows:   rows,
-		wasRow: make([]bool, rows),
-		wasCol: make([]bool, cols),
-		colCnt: make([]uint32, cols),
-		rowCnt: make([]uint32, rows),
-		rowXor: make([]uint32, rows),
+		l:            l,
+		cols:         cols,
+		rows:         rows,
+		wasRow:       make([]bool, rows),
+		wasCol:       make([]bool, cols),
+		colCnt:       make([]uint32, cols),
+		rowCnt:       make([]uint32, rows),
+		rowXor:       make([]uint32, rows),
+		pRows:        make([]uint32, 0, rows),
+		pCols:        make([]uint32, 0, cols),
+		inactiveCols: make([]uint32, 0, cols),
 	}
 
-	l.Each(func(row, col uint32) {
-		if col >= cols {
-			return
+	for i, val := range l.Data {
+		if val != 0 {
+			row := uint32(i) / l.Cols
+			col := uint32(i) % l.Cols
+
+			if col >= cols {
+				continue
+			}
+			dec.colCnt[col]++
+			dec.rowCnt[row]++
+			dec.rowXor[row] ^= col
 		}
-		dec.colCnt[col]++
-		dec.rowCnt[row]++
-		dec.rowXor[row] ^= col
-	})
+	}
 
 	dec.sort()
 	dec.loop()
@@ -94,40 +102,43 @@ func (dec *inactivateDecoder) sort() {
 }
 
 func (dec *inactivateDecoder) loop() {
+	rowsBuf := make([]uint32, 0, dec.l.Rows)
+	colsBuf := make([]uint32, 0, dec.l.Rows)
+
 	// loop
 	for dec.rowCntOffset[1] != dec.rows {
 		row := dec.sortedRows[dec.rowCntOffset[1]]
-		col := dec.chooseCol(row)
+		col := dec.chooseCol(rowsBuf, row)
 
 		cnt := dec.rowCnt[row]
 		dec.pCols = append(dec.pCols, col)
 		dec.pRows = append(dec.pRows, row)
 
 		if cnt == 1 {
-			dec.inactivate(col)
+			dec.inactivate(colsBuf, col)
 		} else {
-			for _, x := range dec.l.GetRows(row) {
+			for _, x := range dec.l.GetRows(rowsBuf, row) {
 				if x >= dec.cols || dec.wasCol[x] {
 					continue
 				}
 				if x != col {
 					dec.inactiveCols = append(dec.inactiveCols, x)
 				}
-				dec.inactivate(x)
+				dec.inactivate(colsBuf, x)
 			}
 		}
 		dec.wasRow[row] = true
 	}
 }
 
-func (dec *inactivateDecoder) chooseCol(row uint32) uint32 {
+func (dec *inactivateDecoder) chooseCol(buf []uint32, row uint32) uint32 {
 	cnt := dec.rowCnt[row]
 	if cnt == 1 {
 		return dec.rowXor[row]
 	}
 
 	bestCol := uint32(0xFFFFFFFF)
-	for _, col := range dec.l.GetRows(row) {
+	for _, col := range dec.l.GetRows(buf, row) {
 		if col >= dec.cols || dec.wasCol[col] {
 			continue
 		}
@@ -138,9 +149,9 @@ func (dec *inactivateDecoder) chooseCol(row uint32) uint32 {
 	return bestCol
 }
 
-func (dec *inactivateDecoder) inactivate(col uint32) {
+func (dec *inactivateDecoder) inactivate(buf []uint32, col uint32) {
 	dec.wasCol[col] = true
-	for _, row := range dec.l.GetCols(col) {
+	for _, row := range dec.l.GetCols(buf, col) {
 		if dec.wasRow[row] {
 			continue
 		}

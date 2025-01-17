@@ -335,6 +335,7 @@ func (n *connection) listen(connResult chan<- error) {
 }
 
 func (n *connection) startPings(every time.Duration) {
+	// TODO: do without goroutines
 	for {
 		select {
 		case <-n.pool.globalCtx.Done():

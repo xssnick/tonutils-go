@@ -393,10 +393,9 @@ func TestPlainMatrixGF2_ToGF256(t *testing.T) {
 				data:    []byte{2, 5},
 			},
 			want: &MatrixGF256{
-				rows: []GF256{
-					{data: []uint8{0, 1, 0}},
-					{data: []uint8{1, 0, 1}},
-				},
+				Rows: 2,
+				Cols: 3,
+				Data: []uint8{0, 1, 0, 1, 0, 1},
 			},
 		},
 	}
