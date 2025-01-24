@@ -73,6 +73,21 @@ func main() {
 			ti := tx.IO.In.AsInternal()
 			src := ti.SrcAddr
 
+			if !ti.ExtraCurrencies.IsEmpty() {
+				kv, err := ti.ExtraCurrencies.LoadAll()
+				if err != nil {
+					log.Fatalln("load extra currencies err: ", err.Error())
+					return
+				}
+
+				for _, dictKV := range kv {
+					currencyId := dictKV.Key.MustLoadUInt(32)
+					amount := dictKV.Value.MustLoadVarUInt(32)
+
+					log.Println("received", amount.String(), "ExtraCurrency with id", currencyId, "from", src.String())
+				}
+			}
+
 			// verify that event sender is our jetton wallet
 			if ti.SrcAddr.Equals(treasuryJettonWallet.Address()) {
 				var transfer jetton.TransferNotification
@@ -86,8 +101,10 @@ func main() {
 				}
 			}
 
-			// show received ton amount
-			log.Println("received", ti.Amount.String(), "TON from", src.String())
+			if ti.Amount.Nano().Sign() > 0 {
+				// show received ton amount
+				log.Println("received", ti.Amount.String(), "TON from", src.String())
+			}
 		}
 
 		// update last processed lt and save it in db
