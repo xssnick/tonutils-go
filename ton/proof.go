@@ -218,7 +218,7 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 
 	toBlock, err := CheckBlockProof(destProof, to.RootHash)
 	if err != nil {
-		return fmt.Errorf("failed to check traget block proof: %w", err)
+		return fmt.Errorf("failed to check target block proof: %w", err)
 	}
 
 	if toBlock.BlockInfo.KeyBlock != toKey {
@@ -258,7 +258,7 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 	}
 
 	if !bytes.Equal(blk.BlkRef.RootHash, to.RootHash) {
-		return fmt.Errorf("incorret target block hash in proof")
+		return fmt.Errorf("incorrect target block hash in proof")
 	}
 	return nil
 }
@@ -274,7 +274,7 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 
 	toBlock, err := CheckBlockProof(destProof, to.RootHash)
 	if err != nil {
-		return fmt.Errorf("failed to check traget block proof: %w", err)
+		return fmt.Errorf("failed to check target block proof: %w", err)
 	}
 
 	if toBlock.BlockInfo.KeyBlock != toKey {
