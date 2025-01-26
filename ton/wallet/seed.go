@@ -7,6 +7,7 @@ import (
 	"crypto/sha512"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/ton/wallet/hdwallet"
 	"math/big"
 	"strings"
 
@@ -18,6 +19,7 @@ const (
 	_Salt         = "TON default seed"
 	_BasicSalt    = "TON seed version"
 	_PasswordSalt = "TON fast seed version"
+	_Path         = "m/44'/607'/0'"
 )
 
 func NewSeed() []string {
@@ -61,33 +63,51 @@ func NewSeedWithPassword(password string) []string {
 
 type VersionConfig any
 
-func FromSeed(api TonAPI, seed []string, version VersionConfig) (*Wallet, error) {
-	return FromSeedWithPassword(api, seed, "", version)
+func FromSeed(api TonAPI, seed []string, version VersionConfig, isCompatBip39 ...bool) (*Wallet, error) {
+	return FromSeedWithPassword(api, seed, "", version, isCompatBip39...)
 }
 
-func FromSeedWithPassword(api TonAPI, seed []string, password string, version VersionConfig) (*Wallet, error) {
+func FromSeedWithPassword(api TonAPI, seed []string, password string, version VersionConfig, isCompatBip39 ...bool) (*Wallet, error) {
 	// validate seed
 	if len(seed) < 12 {
 		return nil, fmt.Errorf("seed should have at least 12 words")
 	}
 	for _, s := range seed {
 		if !words[s] {
-			return nil, fmt.Errorf("unknown word '%s' in seed", s)
+			return nil, fmt.Errorf("unknown word '%seedBytes' in seed", s)
 		}
 	}
-
-	mac := hmac.New(sha512.New, []byte(strings.Join(seed, " ")))
+	seedBytes := []byte(strings.Join(seed, " "))
+	mac := hmac.New(sha512.New, seedBytes)
 	mac.Write([]byte(password))
 	hash := mac.Sum(nil)
 
 	if len(password) > 0 {
 		p := pbkdf2.Key(hash, []byte(_PasswordSalt), 1, 1, sha512.New)
 		if p[0] != 1 {
+			// compat big39
+			if len(isCompatBip39) > 0 && isCompatBip39[0] {
+				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"+password), 2048, 64, sha512.New)
+				dk, err := hdwallet.Derived(_Path, pKey)
+				if err != nil {
+					return nil, err
+				}
+				return FromPrivateKey(nil, ed25519.NewKeyFromSeed(dk.PrivateKey), version)
+			}
 			return nil, errors.New("invalid seed")
 		}
 	} else {
 		p := pbkdf2.Key(hash, []byte(_BasicSalt), _Iterations/256, 1, sha512.New)
 		if p[0] != 0 {
+			// compat big39
+			if len(isCompatBip39) > 0 && isCompatBip39[0] {
+				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"), 2048, 64, sha512.New)
+				dk, err := hdwallet.Derived(_Path, pKey)
+				if err != nil {
+					return nil, err
+				}
+				return FromPrivateKey(nil, ed25519.NewKeyFromSeed(dk.PrivateKey), version)
+			}
 			return nil, errors.New("invalid seed")
 		}
 	}
