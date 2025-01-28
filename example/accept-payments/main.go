@@ -73,6 +73,12 @@ func main() {
 			ti := tx.IO.In.AsInternal()
 			src := ti.SrcAddr
 
+			if dsc, ok := tx.Description.(tlb.TransactionDescriptionOrdinary); ok && dsc.BouncePhase != nil {
+				// transaction was bounced, and coins was returned to sender
+				// this can happen mostly on custom contracts
+				continue
+			}
+
 			// verify that event sender is our jetton wallet
 			if ti.SrcAddr.Equals(treasuryJettonWallet.Address()) {
 				var transfer jetton.TransferNotification
