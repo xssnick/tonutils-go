@@ -31,7 +31,7 @@ func (p *PublicKeyED25519) Parse(data []byte) ([]byte, error) {
 	return data[ed25519.PublicKeySize:], nil
 }
 
-func (p PublicKeyED25519) Serialize(buf *bytes.Buffer) error {
+func (p *PublicKeyED25519) Serialize(buf *bytes.Buffer) error {
 	if len(p.Key) != ed25519.PublicKeySize {
 		return errors.New("invalid public key")
 	}
@@ -54,7 +54,7 @@ func (p *PublicKeyAES) Parse(data []byte) ([]byte, error) {
 	return data[ed25519.PublicKeySize:], nil
 }
 
-func (p PublicKeyAES) Serialize(buf *bytes.Buffer) error {
+func (p *PublicKeyAES) Serialize(buf *bytes.Buffer) error {
 	if len(p.Key) != ed25519.PublicKeySize {
 		return errors.New("invalid aes key")
 	}

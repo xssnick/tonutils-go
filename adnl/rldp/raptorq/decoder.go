@@ -3,7 +3,6 @@ package raptorq
 import (
 	"errors"
 	"fmt"
-	"time"
 )
 
 type Decoder struct {
@@ -115,7 +114,6 @@ func (d *Decoder) Decode() (bool, []byte, error) {
 			})
 		}
 
-		tmx := time.Now()
 		// we have not all fast symbols, try to recover them from slow
 		relaxed, err := d.pm.Solve(toRelax)
 		if err != nil {
@@ -123,10 +121,6 @@ func (d *Decoder) Decode() (bool, []byte, error) {
 				return false, nil, nil
 			}
 			return false, nil, fmt.Errorf("failed to relax known symbols, err: %w", err)
-		}
-		t := time.Since(tmx)
-		if t > 10*time.Millisecond {
-			println("SLOW RLDP SOLVE", t.String())
 		}
 
 		for i := uint32(0); i < d.pm._K; i++ {

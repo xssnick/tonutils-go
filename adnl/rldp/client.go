@@ -94,7 +94,6 @@ type decoderStream struct {
 var DefaultSymbolSize uint32 = 768
 
 const _MTU = 1 << 37
-const _PacketWaitTime = 5 * time.Millisecond
 
 func NewClient(a ADNL) *RLDP {
 	r := &RLDP{
@@ -217,7 +216,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			}
 
 			if stream.finishedAt != nil {
-				// println("FINISHED ALREADY", m.Seqno, hex.EncodeToString(m.TransferID))
 				if stream.lastCompleteAt.Add(5 * time.Millisecond).Before(tm) { // we not send completions too often, to not get socket buffer overflow
 
 					var complete tl.Serializable = Complete{
@@ -330,14 +328,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					}
 
 					return nil
-
-					/*if time.Since(stream.startedAt) > 1*time.Second {
-						var str string
-						for i, at := range stream.received {
-							str += fmt.Sprint(i) + "|" + fmt.Sprint(at.seqno) + " " + at.at.String() + "\n"
-						}
-						println("RLDP DCD LONG", hex.EncodeToString(m.TransferID), stream.receivedNum, time.Since(stream.startedAt).String(), "\n"+str)
-					}*/
 				}
 			} else {
 

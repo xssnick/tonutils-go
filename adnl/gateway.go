@@ -471,7 +471,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	addrList.ReinitDate = int32(time.Now().Unix())
 	addrList.Version = addrList.ReinitDate
 
-	a := initADNL(g.key)
+	a := g.initADNL()
 	a.SetAddresses(addrList)
 	a.peerKey = key
 	a.addr = addr.String()

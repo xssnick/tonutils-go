@@ -21,6 +21,7 @@ type Channel struct {
 	wantConfirm bool
 
 	id     []byte
+	idEnc  []byte
 	encKey []byte
 	decKey []byte
 
@@ -28,7 +29,7 @@ type Channel struct {
 }
 
 func (c *Channel) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
-	return c.adnl.sendCustomMessage(ctx, c, req)
+	return c.adnl.SendCustomMessage(ctx, req)
 }
 
 func (c *Channel) decodePacket(packet []byte) ([]byte, error) {
@@ -42,9 +43,8 @@ func (c *Channel) decodePacket(packet []byte) ([]byte, error) {
 
 	ctr.XORKeyStream(data, data)
 
-	hash := sha256.New()
-	hash.Write(data)
-	if !bytes.Equal(hash.Sum(nil), checksum) {
+	hash := sha256.Sum256(data)
+	if !bytes.Equal(hash[:], checksum) {
 		return nil, errors.New("invalid checksum of packet")
 	}
 
@@ -85,6 +85,11 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		return err
 	}
 
+	c.idEnc, err = tl.Hash(PublicKeyAES{Key: c.encKey})
+	if err != nil {
+		return err
+	}
+
 	h := c.adnl.onChannel
 	if h != nil {
 		h(c)
@@ -121,28 +126,31 @@ func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 		Rand2:        rand2,
 	}
 
-	packetData, err := packet.Serialize()
+	buf := bytes.NewBuffer(make([]byte, 64))
+	buf.Grow(MaxMTU - 64)
+
+	payloadSz, err := packet.Serialize(buf)
 	if err != nil {
 		return nil, err
 	}
 
-	hash := sha256.New()
-	hash.Write(packetData)
-	checksum := hash.Sum(nil)
+	bufBytes := buf.Bytes()
+	packetBytes := bufBytes[64:]
+
+	atomic.StoreUint32(&c.adnl.prevPacketHeaderSz, uint32(len(packetBytes)-payloadSz))
+
+	hash := sha256.Sum256(packetBytes)
+	checksum := hash[:]
 
 	ctr, err := BuildSharedCipher(c.encKey, checksum)
 	if err != nil {
 		return nil, err
 	}
 
-	ctr.XORKeyStream(packetData, packetData)
+	ctr.XORKeyStream(packetBytes, packetBytes)
 
-	enc, err := tl.Hash(PublicKeyAES{Key: c.encKey})
-	if err != nil {
-		return nil, err
-	}
-	enc = append(enc, checksum...)
-	enc = append(enc, packetData...)
+	copy(bufBytes, c.idEnc)
+	copy(bufBytes[32:], checksum)
 
-	return enc, nil
+	return bufBytes, nil
 }

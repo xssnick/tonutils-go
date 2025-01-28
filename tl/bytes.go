@@ -8,7 +8,7 @@ import (
 )
 
 func ToBytes(buf []byte) []byte {
-	var data []byte
+	var data = make([]byte, 0, ((len(buf)+4)/4+1)*4)
 
 	// store buf length
 	if len(buf) >= 0xFE {
@@ -32,9 +32,7 @@ func ToBytes(buf []byte) []byte {
 func ToBytesToBuffer(buf *bytes.Buffer, data []byte) {
 	if len(data) == 0 {
 		// fast path for empty slice
-		for i := 0; i < 4; i++ {
-			buf.WriteByte(0)
-		}
+		buf.Write(make([]byte, 4))
 		return
 	}
 
@@ -56,6 +54,24 @@ func ToBytesToBuffer(buf *bytes.Buffer, data []byte) {
 		for i := 0; i < 4-round; i++ {
 			buf.WriteByte(0)
 		}
+	}
+}
+
+func RemapBufferAsSlice(buf *bytes.Buffer, from int) {
+	serializedLen := buf.Len() - (from + 4)
+
+	bufPtr := buf.Bytes()
+	if serializedLen >= 0xFE {
+		binary.LittleEndian.PutUint32(bufPtr[from:], uint32(serializedLen<<8)|0xFE)
+	} else {
+		bufPtr[from] = byte(serializedLen)
+		copy(bufPtr[from+1:], bufPtr[from+4:])
+		buf.Truncate(buf.Len() - 3)
+	}
+
+	// bytes array padding
+	if pad := (buf.Len() - from) % 4; pad > 0 {
+		buf.Write(make([]byte, 4-pad))
 	}
 }
 

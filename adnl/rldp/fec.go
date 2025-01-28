@@ -29,7 +29,7 @@ func (f *FECRaptorQ) Parse(data []byte) ([]byte, error) {
 	return data[12:], nil
 }
 
-func (f FECRaptorQ) Serialize(buf *bytes.Buffer) error {
+func (f *FECRaptorQ) Serialize(buf *bytes.Buffer) error {
 	tmp := make([]byte, 12)
 	binary.LittleEndian.PutUint32(tmp[0:4], uint32(f.DataSize))
 	binary.LittleEndian.PutUint32(tmp[4:8], uint32(f.SymbolSize))

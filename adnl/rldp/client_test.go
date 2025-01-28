@@ -20,7 +20,7 @@ import (
 func init() {
 	tl.Register(testRequest{}, "http.request id:int256 method:string url:string http_version:string headers:(vector http.header) = http.Response")
 	tl.Register(testResponse{}, "http.response http_version:string status_code:int reason:string headers:(vector http.header) no_payload:Bool = http.Response")
-
+	tl.Register(testHeader{}, "")
 }
 
 type MockADNL struct {

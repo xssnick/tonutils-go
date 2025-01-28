@@ -60,21 +60,21 @@ type batchConn struct {
 	mx  sync.Mutex
 }
 
-type packet struct {
+type syncPacket struct {
 	addr net.Addr
 	buf  []byte
 }
 
 type SyncConn struct {
 	conn    net.PacketConn
-	chWrite chan packet
-	chRead  chan packet
+	chWrite chan syncPacket
+	chRead  chan syncPacket
 }
 
 func NewSyncConn(conn net.PacketConn, packetsBufSz int) *SyncConn {
 	sc := &SyncConn{
 		conn:    conn,
-		chWrite: make(chan packet, packetsBufSz),
+		chWrite: make(chan syncPacket, packetsBufSz),
 	}
 	go sc.writer()
 	return sc
@@ -86,7 +86,6 @@ func (s *SyncConn) writer() {
 		case p := <-s.chWrite:
 			_, err := s.conn.WriteTo(p.buf, p.addr)
 			if err != nil {
-				println("SYNC WRITE ERR:", err.Error())
 				_ = s.conn.Close()
 				return
 			}
@@ -99,7 +98,7 @@ func (s *SyncConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (s *SyncConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	s.chWrite <- packet{addr, p}
+	s.chWrite <- syncPacket{addr, p}
 	return len(p), nil
 }
 

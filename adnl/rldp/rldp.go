@@ -107,14 +107,9 @@ func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 	return data, nil
 }
 
-func (m MessagePart) Serialize(buf *bytes.Buffer) error {
+func (m *MessagePart) Serialize(buf *bytes.Buffer) error {
 	switch m.FecType.(type) {
 	case FECRaptorQ:
-		fec, err := tl.Serialize(m.FecType, true, 16)
-		if err != nil {
-			return err
-		}
-
 		if len(m.TransferID) == 0 {
 			buf.Write(make([]byte, 32))
 		} else if len(m.TransferID) != 32 {
@@ -122,7 +117,11 @@ func (m MessagePart) Serialize(buf *bytes.Buffer) error {
 		} else {
 			buf.Write(m.TransferID)
 		}
-		buf.Write(fec)
+
+		_, err := tl.Serialize(m.FecType, true, buf)
+		if err != nil {
+			return err
+		}
 	default:
 		return errors.New("invalid fec type")
 	}

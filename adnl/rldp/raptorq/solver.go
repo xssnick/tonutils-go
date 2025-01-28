@@ -70,8 +70,8 @@ func (p *raptorParams) Solve(symbols []Symbol) (*discmath.MatrixGF256, error) {
 
 	d = d.ApplyPermutation(rowPermutation)
 
-	rPermut := discmath.InversePermutation(rowPermutation)
-	cPermut := discmath.InversePermutation(colPermutation)
+	rPermut := inversePermutation(rowPermutation)
+	cPermut := inversePermutation(colPermutation)
 
 	aUpperMutRow := discmath.NewMatrixGF256(aUpper.RowsNum(), aUpper.ColsNum())
 	for i, val := range aUpper.Data {
@@ -199,5 +199,13 @@ func (p *raptorParams) Solve(symbols []Symbol) (*discmath.MatrixGF256, error) {
 		}
 	}
 
-	return c.ApplyPermutation(discmath.InversePermutation(colPermutation)), nil
+	return c.ApplyPermutation(inversePermutation(colPermutation)), nil
+}
+
+func inversePermutation(mut []uint32) []uint32 {
+	res := make([]uint32, len(mut))
+	for i, u := range mut {
+		res[u] = uint32(i)
+	}
+	return res
 }
