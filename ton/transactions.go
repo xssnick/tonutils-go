@@ -177,16 +177,17 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 }
 
 func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction) {
-	defer func() {
-		close(channel)
-	}()
+	defer close(channel)
 
 	wait := 0 * time.Second
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-workerCtx.Done():
 			return
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 		wait = 3 * time.Second
 
@@ -194,6 +195,7 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 		master, err := c.CurrentMasterchainInfo(ctx)
 		cancel()
 		if err != nil {
+			timer.Reset(wait)
 			continue
 		}
 
@@ -201,15 +203,18 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 		acc, err := c.GetAccount(ctx, master, addr)
 		cancel()
 		if err != nil {
+			timer.Reset(wait)
 			continue
 		}
 		if !acc.IsActive || acc.LastTxLT == 0 {
 			// no transactions
+			timer.Reset(wait)
 			continue
 		}
 
 		if lastProcessedLT == acc.LastTxLT {
 			// already processed all
+			timer.Reset(wait)
 			continue
 		}
 
@@ -217,12 +222,15 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 		lastHash, lastLT := acc.LastTxHash, acc.LastTxLT
 
 		waitList := 0 * time.Second
+		listTimer := time.NewTimer(waitList)
+
 	list:
 		for {
 			select {
 			case <-workerCtx.Done():
+				listTimer.Stop()
 				return
-			case <-time.After(waitList):
+			case <-listTimer.C:
 			}
 
 			if lastLT == 0 {
@@ -236,12 +244,14 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			if err != nil {
 				if lsErr, ok := err.(LSError); ok && lsErr.Code == -400 {
 					// lt not in db error
+					listTimer.Stop()
 					return
 				} else if errors.Is(err, ErrNoTransactionsWereFound) && (len(transactions) > 0) {
 					// process already found transactions
 					break
 				}
 				waitList = 3 * time.Second
+				listTimer.Reset(waitList)
 				continue
 			}
 
@@ -264,7 +274,10 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			lastLT, lastHash = res[len(res)-1].PrevTxLT, res[len(res)-1].PrevTxHash
 			transactions = append(transactions, res...)
 			waitList = 0 * time.Second
+			listTimer.Reset(waitList)
 		}
+
+		listTimer.Stop()
 
 		if len(transactions) > 0 {
 			lastProcessedLT = transactions[0].LT // mark last transaction as known to not trigger twice
@@ -280,6 +293,8 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 
 			wait = 0 * time.Second
 		}
+
+		timer.Reset(wait)
 	}
 }
 
