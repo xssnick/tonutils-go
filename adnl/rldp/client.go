@@ -6,14 +6,19 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/xssnick/raptorq"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/raptorq"
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/tl"
+
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 type ADNL interface {
