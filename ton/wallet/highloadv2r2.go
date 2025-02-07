@@ -62,7 +62,11 @@ func (s *SpecHighloadV2R2) BuildMessage(ctx context.Context, messages []*Message
 		MustStoreUInt(boundedID, 64).
 		MustStoreDict(dict)
 
-	sign := payload.EndCell().Sign(s.wallet.key)
+	sign, err := s.wallet.signer(ctx, payload.EndCell(), s.wallet.subwallet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign: %w", err)
+	}
+
 	msg := cell.BeginCell().MustStoreSlice(sign, 512).MustStoreBuilder(payload).EndCell()
 
 	return msg, nil

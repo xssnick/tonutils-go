@@ -581,3 +581,7 @@ func (b *Builder) ToSlice() *Slice {
 		refs:   b.refs,
 	}
 }
+
+func (b *Builder) String() string {
+	return b.EndCell().String()
+}

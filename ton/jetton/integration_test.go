@@ -83,14 +83,14 @@ func TestJettonMasterClient_Mint(t *testing.T) {
 }
 
 func TestJettonMasterClient_Transfer(t *testing.T) {
-	cli := NewJettonMasterClient(api, address.MustParseAddr("EQAbMQzuuGiCne0R7QEj9nrXsjM7gNjeVmrlBZouyC-SCLlO"))
+	cli := NewJettonMasterClient(api, address.MustParseAddr("kQDYYvd3BvVQkMLcQiV2iGOvpFz01LXSj1GK3Tmr_LJQ3i7D"))
 
 	ctx := api.Client().StickyContext(context.Background())
 
 	w := getWallet(api)
-	log.Println("test wallet:", w.Address().String())
+	log.Println("test wallet:", w.WalletAddress().String())
 
-	tokenWallet, err := cli.GetJettonWallet(ctx, w.Address())
+	tokenWallet, err := cli.GetJettonWallet(ctx, w.WalletAddress())
 	if err != nil {
 		t.Fatal(err)
 	}
