@@ -53,6 +53,10 @@ type MockADNL struct {
 	close func()
 }
 
+func (m MockADNL) GetCloserCtx() context.Context {
+	return context.Background()
+}
+
 func (m MockADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
 	return nil
 }

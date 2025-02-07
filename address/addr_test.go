@@ -708,3 +708,26 @@ func TestAddress_UnmarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestAddress_ToRaw(t *testing.T) {
+	a := MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	if v := a.StringRaw(); v != "0:ba295e33b3c4c9b5265aa4ead1166a92931ce9abea120a8c5e91044a1257f89c" {
+		t.Fatal("address incorrect:", v)
+	}
+}
+
+func TestAddress_Flags(t *testing.T) {
+	a := MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I").Testnet(true).Bounce(false)
+	if v := a.String(); v != "0QC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nMsH" {
+		t.Fatal("address incorrect:", v)
+	}
+}
+
+func TestAddress_Eq(t *testing.T) {
+	a := MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I")
+	b := MustParseAddr("EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I").Bounce(false)
+
+	if !a.Equals(b) {
+		t.Fatal("not eq")
+	}
+}

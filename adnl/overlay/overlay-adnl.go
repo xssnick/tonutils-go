@@ -7,9 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/raptorq"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
-	"github.com/xssnick/tonutils-go/adnl/rldp/raptorq"
 	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
 	"sync"
@@ -100,7 +100,7 @@ func (a *ADNLWrapper) UnregisterOverlay(id []byte) {
 }
 
 func (a *ADNLOverlayWrapper) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
-	return a.ADNLWrapper.SendCustomMessage(ctx, []tl.Serializable{Query{Overlay: a.overlayId}, req})
+	return a.ADNLWrapper.SendCustomMessage(ctx, []tl.Serializable{Message{Overlay: a.overlayId}, req})
 }
 
 func (a *ADNLOverlayWrapper) Query(ctx context.Context, req, result tl.Serializable) error {
@@ -174,13 +174,11 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	stream := a.broadcastStreams[id]
 	a.streamsMx.RUnlock()
 
-	partDataHasher := sha256.New()
-	partDataHasher.Write(t.Data)
-	partDataHash := partDataHasher.Sum(nil)
+	partDataHash := sha256.Sum256(t.Data)
 
 	partHash, err := tl.Hash(&BroadcastFECPartID{
 		BroadcastHash: broadcastHash,
-		DataHash:      partDataHash,
+		DataHash:      partDataHash[:],
 		Seqno:         t.Seqno,
 	})
 	if err != nil {
@@ -341,9 +339,8 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			}
 			a.streamsMx.Unlock()
 
-			dHash := sha256.New()
-			dHash.Write(data)
-			if !bytes.Equal(dHash.Sum(nil), t.DataHash) {
+			dHash := sha256.Sum256(data)
+			if !bytes.Equal(dHash[:], t.DataHash) {
 				return fmt.Errorf("incorrect data hash")
 			}
 

@@ -22,9 +22,6 @@ func init() {
 	tl.Register(MessagePong{}, "adnl.pong value:long = adnl.Pong")
 }
 
-const _MTU = 1024
-const _HugePacketMaxSz = _MTU*8 + 128
-
 type MessagePing struct {
 	Value int64 `tl:"long"`
 }
@@ -120,36 +117,33 @@ func (m *partitionedMessage) Build(msgHash []byte) ([]byte, error) {
 		return nil, fmt.Errorf("not full yet")
 	}
 
-	hash := sha256.New()
-	hash.Write(m.buf)
-	if !bytes.Equal(hash.Sum(nil), msgHash) {
+	hash := sha256.Sum256(m.buf)
+	if !bytes.Equal(hash[:], msgHash) {
 		return nil, fmt.Errorf("invalid message, hash not matches")
 	}
 
 	return m.buf, nil
 }
 
-func splitMessage(data []byte) []MessagePart {
-	h := sha256.New()
-	h.Write(data)
-	hash := h.Sum(nil)
+func splitMessage(data []byte, mtu int) []MessagePart {
+	hash := sha256.Sum256(data)
 
-	x := len(data) / _MTU
-	if len(data)%_MTU != 0 {
+	x := len(data) / mtu
+	if len(data)%mtu != 0 {
 		x++
 	}
 
 	res := make([]MessagePart, 0, x)
 	for i := 0; i < x; i++ {
-		buf := data[i*_MTU:]
-		if len(buf) > _MTU {
-			buf = buf[:_MTU]
+		buf := data[i*mtu:]
+		if len(buf) > mtu {
+			buf = buf[:mtu]
 		}
 
 		res = append(res, MessagePart{
-			Hash:      hash,
+			Hash:      hash[:],
 			TotalSize: int32(len(data)),
-			Offset:    int32(i * _MTU),
+			Offset:    int32(i * mtu),
 			Data:      buf,
 		})
 	}

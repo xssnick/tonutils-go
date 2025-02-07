@@ -68,15 +68,25 @@ func FromSeed(api TonAPI, seed []string, version VersionConfig, isCompatBip39 ..
 }
 
 func FromSeedWithPassword(api TonAPI, seed []string, password string, version VersionConfig, isCompatBip39 ...bool) (*Wallet, error) {
-	// validate seed
+  k, err := SeedToPrivateKey(seed, password, len(isCompatBip39) > 0 && isCompatBip39[0])
+	if err != nil {
+		return nil, err
+	}
+
+	return FromPrivateKey(api, k, version)
+}
+
+func SeedToPrivateKey(seed []string, password string, isBip39 bool) (ed25519.PrivateKey, error) {
 	if len(seed) < 12 {
 		return nil, fmt.Errorf("seed should have at least 12 words")
 	}
+  
 	for _, s := range seed {
 		if !words[s] {
 			return nil, fmt.Errorf("unknown word '%seedBytes' in seed", s)
 		}
 	}
+  
 	seedBytes := []byte(strings.Join(seed, " "))
 	mac := hmac.New(sha512.New, seedBytes)
 	mac.Write([]byte(password))
@@ -85,8 +95,7 @@ func FromSeedWithPassword(api TonAPI, seed []string, password string, version Ve
 	if len(password) > 0 {
 		p := pbkdf2.Key(hash, []byte(_PasswordSalt), 1, 1, sha512.New)
 		if p[0] != 1 {
-			// compat big39
-			if len(isCompatBip39) > 0 && isCompatBip39[0] {
+			if isBip39 {
 				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"+password), 2048, 64, sha512.New)
 				dk, err := hdwallet.Derived(_Path, pKey)
 				if err != nil {
@@ -99,8 +108,7 @@ func FromSeedWithPassword(api TonAPI, seed []string, password string, version Ve
 	} else {
 		p := pbkdf2.Key(hash, []byte(_BasicSalt), _Iterations/256, 1, sha512.New)
 		if p[0] != 0 {
-			// compat big39
-			if len(isCompatBip39) > 0 && isCompatBip39[0] {
+			if isBip39 {
 				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"), 2048, 64, sha512.New)
 				dk, err := hdwallet.Derived(_Path, pKey)
 				if err != nil {
@@ -114,7 +122,7 @@ func FromSeedWithPassword(api TonAPI, seed []string, password string, version Ve
 
 	k := pbkdf2.Key(hash, []byte(_Salt), _Iterations, 32, sha512.New)
 
-	return FromPrivateKey(api, ed25519.NewKeyFromSeed(k), version)
+	return ed25519.NewKeyFromSeed(k), nil
 }
 
 var wordsArr = func() []string {
