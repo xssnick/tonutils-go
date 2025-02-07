@@ -237,6 +237,9 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 				if lsErr, ok := err.(LSError); ok && lsErr.Code == -400 {
 					// lt not in db error
 					return
+				} else if errors.Is(err, ErrNoTransactionsWereFound) && (len(transactions) > 0) {
+					// process already found transactions
+					break
 				}
 				waitList = 3 * time.Second
 				continue
