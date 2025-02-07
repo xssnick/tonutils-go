@@ -9,8 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl/address"
-	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"reflect"
 	"strings"
@@ -18,6 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 const (
@@ -438,7 +439,6 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	}
 
 	res := make(chan tl.Serializable, 1)
-
 	reqID := hex.EncodeToString(q.ID)
 
 	a.mx.Lock()
@@ -452,9 +452,11 @@ reSplit:
 		a.mx.Lock()
 		delete(a.activeQueries, reqID)
 		a.mx.Unlock()
-
 		return fmt.Errorf("request failed: %w", err)
 	}
+
+	timer := time.NewTimer(250 * time.Millisecond)
+	defer timer.Stop()
 
 	for {
 		for i, packet := range packets {
@@ -467,6 +469,8 @@ reSplit:
 			}
 		}
 
+		timer.Reset(250 * time.Millisecond)
+
 		select {
 		case resp := <-res:
 			if err, ok := resp.(error); ok {
@@ -476,7 +480,7 @@ reSplit:
 			return nil
 		case <-ctx.Done():
 			return fmt.Errorf("deadline exceeded, addr %s %s, err: %w", a.addr, hex.EncodeToString(a.peerKey), ctx.Err())
-		case <-time.After(250 * time.Millisecond):
+		case <-timer.C:
 		}
 	}
 }

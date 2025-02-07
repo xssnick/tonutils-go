@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
 	"testing"
 	"time"
+
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 func init() {
@@ -150,9 +151,12 @@ func TestADNL_ClientServer(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		timer := time.NewTimer(150 * time.Millisecond)
+		defer timer.Stop()
+
 		select {
 		case <-gotSrvDiscon:
-		case <-time.After(150 * time.Millisecond):
+		case <-timer.C:
 			t.Fatal("disconnect not triggered on server")
 		}
 	})*/
@@ -163,18 +167,24 @@ func TestADNL_ClientServer(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		timer := time.NewTimer(150 * time.Millisecond)
+		defer timer.Stop()
+
 		select {
 		case <-gotSrvCustom:
-		case <-time.After(150 * time.Millisecond):
+		case <-timer.C:
 			t.Fatal("custom not received from client")
 		}
+
+		timer = time.NewTimer(150 * time.Millisecond)
+		defer timer.Stop()
 
 		select {
 		case m := <-gotCliCustom:
 			if len(m.(TestMsg).Data) != 1280 {
 				t.Fatal("invalid custom from server")
 			}
-		case <-time.After(150 * time.Millisecond):
+		case <-timer.C:
 			t.Fatal("custom not received from server")
 		}
 	})
@@ -190,18 +200,24 @@ func TestADNL_ClientServer(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		timer := time.NewTimer(150 * time.Millisecond)
+		defer timer.Stop()
+
 		select {
 		case <-gotSrvCustom:
-		case <-time.After(150 * time.Millisecond):
+		case <-timer.C:
 			t.Fatal("custom not received from client")
 		}
+
+		timer = time.NewTimer(150 * time.Millisecond)
+		defer timer.Stop()
 
 		select {
 		case m := <-gotCliCustom2:
 			if len(m.(TestMsg).Data) != 1280 {
 				t.Fatal("invalid custom from server")
 			}
-		case <-time.After(150 * time.Millisecond):
+		case <-timer.C:
 			t.Fatal("custom not received from server")
 		}
 	})

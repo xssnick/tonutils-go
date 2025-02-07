@@ -336,11 +336,14 @@ func (n *connection) listen(connResult chan<- error) {
 
 func (n *connection) startPings(every time.Duration) {
 	// TODO: do without goroutines
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-n.pool.globalCtx.Done():
 			return
-		case <-time.After(every):
+		case <-ticker.C:
 		}
 
 		num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
@@ -348,11 +351,9 @@ func (n *connection) startPings(every time.Duration) {
 			continue
 		}
 
-		err = n.ping(num.Int64())
-		if err != nil {
+		if err := n.ping(num.Int64()); err != nil {
 			// force close in case of error
 			_ = n.tcp.Close()
-
 			break
 		}
 	}

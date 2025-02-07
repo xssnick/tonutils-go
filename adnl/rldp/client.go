@@ -6,14 +6,15 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/xssnick/raptorq"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/raptorq"
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 type ADNL interface {
@@ -404,12 +405,14 @@ func (r *RLDP) recoverySender() {
 	timedOut := make([]*activeTransfer, 0, 128)
 	timedOutReq := make([]*activeRequest, 0, 128)
 	closerCtx := r.adnl.GetCloserCtx()
+	ticker := time.NewTicker(1 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-closerCtx.Done():
 			return
-		case <-time.After(1 * time.Millisecond):
+		case <-ticker.C:
 			packets = packets[:0]
 			transfersToProcess = transfersToProcess[:0]
 			timedOut = timedOut[:0]
