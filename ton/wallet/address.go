@@ -12,7 +12,7 @@ import (
 
 const DefaultSubwallet = 698983191
 
-func AddressFromPubKey(key ed25519.PublicKey, version VersionConfig, subwallet uint32) (*address.Address, error) {
+func AddressFromPubKey(key ed25519.PublicKey, version VersionConfig, subwallet uint32, workchain ...int8) (*address.Address, error) {
 	state, err := GetStateInit(key, version, subwallet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state: %w", err)
@@ -23,7 +23,12 @@ func AddressFromPubKey(key ed25519.PublicKey, version VersionConfig, subwallet u
 		return nil, fmt.Errorf("failed to get state cell: %w", err)
 	}
 
-	addr := address.NewAddress(0, 0, stateCell.Hash())
+	wc := byte(0)
+	if len(workchain) > 0 {
+		wc = byte(workchain[0])
+	}
+
+	addr := address.NewAddress(0, wc, stateCell.Hash())
 
 	return addr, nil
 }

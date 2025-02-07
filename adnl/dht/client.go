@@ -400,7 +400,6 @@ func (c *Client) Store(
 					atomic.AddInt32(&stored, 1)
 					return
 				}
-				println(err.Error())
 				Logger("Failed to store value on node", node.id(), "- affinity", aff, err.Error())
 			}()
 		}

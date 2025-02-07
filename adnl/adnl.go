@@ -409,15 +409,22 @@ func (a *ADNL) processAnswer(id string, query any) {
 }
 
 func (a *ADNL) SendCustomMessage(_ context.Context, req tl.Serializable) error {
+	baseMTU := false
+
+reSplit:
 	packets, err := a.buildRequestMaySplit(&MessageCustom{
 		Data: req,
-	})
+	}, baseMTU)
 	if err != nil {
 		return fmt.Errorf("failed to send custom message: %w", err)
 	}
 
 	for _, packet := range packets {
 		if err = a.send(packet); err != nil {
+			if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
+				baseMTU = true
+				goto reSplit
+			}
 			return fmt.Errorf("failed to send custom packet: %w", err)
 		}
 	}
@@ -438,7 +445,9 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	a.activeQueries[reqID] = res
 	a.mx.Unlock()
 
-	packets, err := a.buildRequestMaySplit(q)
+	baseMTU := false
+reSplit:
+	packets, err := a.buildRequestMaySplit(q, baseMTU)
 	if err != nil {
 		a.mx.Lock()
 		delete(a.activeQueries, reqID)
@@ -450,6 +459,10 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	for {
 		for i, packet := range packets {
 			if err = a.send(packet); err != nil {
+				if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
+					baseMTU = true
+					goto reSplit
+				}
 				return fmt.Errorf("failed to send query packet %d: %w", i, err)
 			}
 		}
@@ -469,16 +482,22 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 }
 
 func (a *ADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
+	baseMTU := false
+reSplit:
 	packets, err := a.buildRequestMaySplit(&MessageAnswer{
 		ID:   queryID,
 		Data: result,
-	})
+	}, baseMTU)
 	if err != nil {
 		return fmt.Errorf("send answer  failed: %w", err)
 	}
 
 	for _, packet := range packets {
 		if err = a.send(packet); err != nil {
+			if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
+				baseMTU = true
+				goto reSplit
+			}
 			return fmt.Errorf("failed to send answer: %w", err)
 		}
 	}
@@ -487,16 +506,18 @@ func (a *ADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializabl
 
 const MaxMTU = 1500 - 40 - 8 // max is for ipv6 over ethernet
 
-func (a *ADNL) buildRequestMaySplit(req tl.Serializable) (packets [][]byte, err error) {
+func (a *ADNL) buildRequestMaySplit(req tl.Serializable, useBase bool) (packets [][]byte, err error) {
 	msg, err := tl.Serialize(req, true)
 	if err != nil {
 		return nil, err
 	}
 
 	mtu := BasePayloadMTU
-	if sz := atomic.LoadUint32(&a.prevPacketHeaderSz); sz > 0 {
-		// trying to extend mtu to send use all possible mtu
-		mtu = (MaxMTU - 32 - 64) - int(sz)
+	if !useBase { // useBase is true when packet is oversize, and we rebuild it with lower MTU
+		if sz := atomic.LoadUint32(&a.prevPacketHeaderSz); sz > 0 {
+			// trying to extend mtu to send use all possible mtu
+			mtu = (MaxMTU - 32 - 64) - int(sz)
+		}
 	}
 
 	if len(msg) > mtu {
@@ -585,10 +606,11 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 	return buf, nil
 }
 
+var ErrPacketBiggerThanMTU = fmt.Errorf("packet bigger than MTU")
+
 func (a *ADNL) send(buf []byte) error {
 	if len(buf) > MaxMTU {
-		println("Too much")
-		return fmt.Errorf("packet bigger than MTU, sz %d", len(buf))
+		return ErrPacketBiggerThanMTU
 	}
 
 	if n, err := a.writer.Write(buf, time.Time{}); err != nil {

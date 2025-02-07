@@ -184,28 +184,26 @@ func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err erro
 	if ip == nil {
 		ip = net.ParseIP(adr[0])
 	}
-	ip = ip.To4()
 
-	if ip.Equal(net.IPv4zero) {
-		return fmt.Errorf("external ip cannot be 0.0.0.0, set it explicitly")
-	}
-	port, err := strconv.ParseUint(adr[1], 10, 16)
-	if err != nil {
-		return fmt.Errorf("invalid listen port")
-	}
+	if ip = ip.To4(); !ip.Equal(net.IPv4zero) {
+		port, err := strconv.ParseUint(adr[1], 10, 16)
+		if err != nil {
+			return fmt.Errorf("invalid listen port")
+		}
 
-	tm := int32(time.Now().Unix())
-	g.addrList = address.List{
-		Addresses: []*address.UDP{
-			{
-				IP:   ip,
-				Port: int32(port),
+		tm := int32(time.Now().Unix())
+		g.addrList = address.List{
+			Addresses: []*address.UDP{
+				{
+					IP:   ip,
+					Port: int32(port),
+				},
 			},
-		},
-		Version:    tm,
-		ReinitDate: tm,
-		Priority:   0,
-		ExpireAt:   0,
+			Version:    tm,
+			ReinitDate: tm,
+			Priority:   0,
+			ExpireAt:   0,
+		}
 	}
 
 	g.conn, err = g.listener(listenAddr)

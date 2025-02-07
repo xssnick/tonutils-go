@@ -31,23 +31,26 @@ const MainnetGlobalID = -239
 const TestnetGlobalID = -3
 
 const (
-	V1R1               Version = 11
-	V1R2               Version = 12
-	V1R3               Version = 13
-	V2R1               Version = 21
-	V2R2               Version = 22
-	V3R1               Version = 31
-	V3R2               Version = 32
-	V3                         = V3R2
-	V4R1               Version = 41
-	V4R2               Version = 42
-	V5R1Beta           Version = 51 // W5 Beta
-	V5R1Final          Version = 52 // W5 Final
-	HighloadV2R2       Version = 122
+	V1R1       Version = 11
+	V1R2       Version = 12
+	V1R3       Version = 13
+	V2R1       Version = 21
+	V2R2       Version = 22
+	V3R1       Version = 31
+	V3R2       Version = 32
+	V3                 = V3R2
+	V4R1       Version = 41
+	V4R2       Version = 42
+	V5R1Beta   Version = 51 // W5 Beta
+	V5R1Final  Version = 52 // W5 Final
+	HighloadV3 Version = 300
+	Lockup     Version = 200
+	Unknown    Version = 0
+
+	// Deprecated: HighloadV2R2 contract has potential overflow issues, it is better to switch to HighloadV3
+	HighloadV2R2 Version = 122
+	// Deprecated: HighloadV2Verified contract has potential overflow issues, it is better to switch to HighloadV3
 	HighloadV2Verified Version = 123
-	HighloadV3         Version = 300
-	Lockup             Version = 200
-	Unknown            Version = 0
 )
 
 const (
@@ -162,20 +165,23 @@ type Wallet struct {
 	signer Signer
 }
 
-type walletOption func(*Wallet)
+type Option func(*Wallet)
 
 func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (*Wallet, error) {
 	return newWallet(
 		api,
 		key.Public().(ed25519.PublicKey),
 		version,
-		withPrivateKey(key),
-		withSigner(func(ctx context.Context, c *cell.Cell) ([]byte, error) {
-			if c == nil {
-				return nil, fmt.Errorf("cannot sign: cell is nil")
-			}
-			return c.Sign(key), nil
-		}))
+		WithPrivateKey(key))
+}
+
+// FromPrivateKeyWithOptions - can initialize customizable wallet, for example: FromPrivateKeyWithOptions(api, key, version, WithWorkchain(-1))
+func FromPrivateKeyWithOptions(api TonAPI, key ed25519.PrivateKey, version VersionConfig, options ...Option) (*Wallet, error) {
+	return newWallet(
+		api,
+		key.Public().(ed25519.PublicKey),
+		version,
+		append([]Option{WithPrivateKey(key)}, options...)...)
 }
 
 func FromSigner(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, signer Signer) (*Wallet, error) {
@@ -183,10 +189,10 @@ func FromSigner(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, 
 		api,
 		publicKey,
 		version,
-		withSigner(signer))
+		WithSigner(signer))
 }
 
-func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, options ...walletOption) (*Wallet, error) {
+func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, options ...Option) (*Wallet, error) {
 	var subwallet uint32 = DefaultSubwallet
 
 	// default subwallet depends on wallet type
@@ -221,15 +227,27 @@ func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, o
 	return w, nil
 }
 
-func withPrivateKey(privateKey ed25519.PrivateKey) walletOption {
+func WithPrivateKey(privateKey ed25519.PrivateKey) Option {
 	return func(w *Wallet) {
 		w.key = privateKey
+		w.signer = func(ctx context.Context, c *cell.Cell) ([]byte, error) {
+			if c == nil {
+				return nil, fmt.Errorf("cannot sign: cell is nil")
+			}
+			return c.Sign(privateKey), nil
+		}
 	}
 }
 
-func withSigner(signer Signer) walletOption {
+func WithSigner(signer Signer) Option {
 	return func(w *Wallet) {
 		w.signer = signer
+	}
+}
+
+func WithWorkchain(wc int8) Option {
+	return func(w *Wallet) {
+		w.addr = address.NewAddress(w.addr.FlagsToByte(), byte(wc), w.addr.Data())
 	}
 }
 
@@ -315,7 +333,7 @@ func (w *Wallet) PrivateKey() ed25519.PrivateKey {
 }
 
 func (w *Wallet) GetSubwallet(subwallet uint32) (*Wallet, error) {
-	addr, err := AddressFromPubKey(w.pubKey, w.ver, subwallet)
+	addr, err := AddressFromPubKey(w.pubKey, w.ver, subwallet, int8(w.addr.Workchain()))
 	if err != nil {
 		return nil, err
 	}
@@ -465,6 +483,10 @@ func (w *Wallet) BuildTransfer(to *address.Address, amount tlb.Coins, bounce boo
 func (w *Wallet) BuildTransferEncrypted(ctx context.Context, to *address.Address, amount tlb.Coins, bounce bool, comment string) (_ *Message, err error) {
 	var body *cell.Cell
 	if comment != "" {
+		if w.key == nil {
+			return nil, fmt.Errorf("private key is not set for this wallet")
+		}
+
 		key, err := GetPublicKey(ctx, w.api, to)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get destination contract (wallet) public key")
@@ -710,7 +732,7 @@ func (w *Wallet) transfer(ctx context.Context, to *address.Address, amount tlb.C
 	return w.Send(ctx, transfer, waitConfirmation...)
 }
 
-func (w *Wallet) DeployContractWaitTransaction(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell) (*address.Address, *tlb.Transaction, *ton.BlockIDExt, error) {
+func (w *Wallet) DeployContractWaitTransaction(ctx context.Context, amount tlb.Coins, msgBody, contractCode, contractData *cell.Cell, workchain ...int8) (*address.Address, *tlb.Transaction, *ton.BlockIDExt, error) {
 	state := &tlb.StateInit{
 		Data: contractData,
 		Code: contractCode,
@@ -721,7 +743,12 @@ func (w *Wallet) DeployContractWaitTransaction(ctx context.Context, amount tlb.C
 		return nil, nil, nil, err
 	}
 
-	addr := address.NewAddress(0, 0, stateCell.Hash())
+	wc := int8(0)
+	if len(workchain) > 0 {
+		wc = workchain[0]
+	}
+
+	addr := address.NewAddress(0, byte(wc), stateCell.Hash())
 
 	tx, block, err := w.SendWaitTransaction(ctx, &Message{
 		Mode: PayGasSeparately + IgnoreErrors,

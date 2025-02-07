@@ -455,7 +455,7 @@ func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte,
 
 	if boxed {
 		if !bytes.Equal(t.id, buf[:4]) {
-			return nil, fmt.Errorf("invalid TL type id %s, want %s", hex.EncodeToString(buf[:4]), hex.EncodeToString(t.id))
+			return nil, fmt.Errorf("invalid TL type id %s, want %s for %s", hex.EncodeToString(buf[:4]), hex.EncodeToString(t.id), t.tp.String())
 		}
 		buf = buf[4:]
 	}
