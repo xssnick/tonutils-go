@@ -56,8 +56,9 @@ type RLDP struct {
 	adnl  ADNL
 	useV2 bool
 
-	activeRequests  map[string]*activeRequest
-	activeTransfers map[string]*activeTransfer
+	activateRecoverySender chan bool
+	activeRequests         map[string]*activeRequest
+	activeTransfers        map[string]*activeTransfer
 
 	recvStreams map[string]*decoderStream
 
@@ -98,10 +99,11 @@ const _MTU = 1 << 37
 
 func NewClient(a ADNL) *RLDP {
 	r := &RLDP{
-		adnl:            a,
-		activeRequests:  map[string]*activeRequest{},
-		activeTransfers: map[string]*activeTransfer{},
-		recvStreams:     map[string]*decoderStream{},
+		adnl:                   a,
+		activeRequests:         map[string]*activeRequest{},
+		activeTransfers:        map[string]*activeTransfer{},
+		recvStreams:            map[string]*decoderStream{},
+		activateRecoverySender: make(chan bool, 1),
 	}
 
 	a.SetCustomMessageHandler(r.handleMessage)
@@ -401,9 +403,9 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 func (r *RLDP) recoverySender() {
 	packets := make([]tl.Serializable, 0, 1024)
-	transfersToProcess := make([]*activeTransfer, 0, 1024)
-	timedOut := make([]*activeTransfer, 0, 128)
-	timedOutReq := make([]*activeRequest, 0, 128)
+	transfersToProcess := make([]*activeTransfer, 0, 128)
+	timedOut := make([]*activeTransfer, 0, 32)
+	timedOutReq := make([]*activeRequest, 0, 32)
 	closerCtx := r.adnl.GetCloserCtx()
 	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
@@ -438,6 +440,11 @@ func (r *RLDP) recoverySender() {
 				if req.deadline < ms {
 					timedOutReq = append(timedOutReq, req)
 				}
+			}
+
+			if len(r.activeRequests)+len(r.activeTransfers) == 0 {
+				// stop ticks to not consume resources
+				ticker.Stop()
 			}
 			r.mx.RUnlock()
 
@@ -484,6 +491,8 @@ func (r *RLDP) recoverySender() {
 				}
 				r.mx.Unlock()
 			}
+		case <-r.activateRecoverySender:
+			ticker.Reset(1 * time.Millisecond)
 		}
 	}
 }
@@ -546,6 +555,11 @@ func (r *RLDP) sendMessageParts(ctx context.Context, transferId, data []byte, re
 		if err != nil {
 			return fmt.Errorf("failed to send message part %d: %w", i, err)
 		}
+	}
+
+	select {
+	case r.activateRecoverySender <- true:
+	default:
 	}
 
 	return nil
