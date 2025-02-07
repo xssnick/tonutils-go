@@ -83,7 +83,7 @@ func (s *SpecHighloadV3) BuildMessage(ctx context.Context, messages []*Message) 
 		MustStoreUInt(uint64(s.config.MessageTTL), 22).
 		EndCell()
 
-	sign, err := s.wallet.signer(ctx, payload)
+	sign, err := s.wallet.signer(ctx, payload, s.wallet.subwallet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign: %w", err)
 	}

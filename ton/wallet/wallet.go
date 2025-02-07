@@ -146,7 +146,7 @@ type Message struct {
 	InternalMessage *tlb.InternalMessage
 }
 
-type Signer func(context.Context, *cell.Cell) ([]byte, error)
+type Signer func(ctx context.Context, toSign *cell.Cell, subwallet uint32) ([]byte, error)
 
 type Wallet struct {
 	api    TonAPI
@@ -230,11 +230,11 @@ func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, o
 func WithPrivateKey(privateKey ed25519.PrivateKey) Option {
 	return func(w *Wallet) {
 		w.key = privateKey
-		w.signer = func(ctx context.Context, c *cell.Cell) ([]byte, error) {
-			if c == nil {
+		w.signer = func(ctx context.Context, toSign *cell.Cell, subwallet uint32) ([]byte, error) {
+			if toSign == nil {
 				return nil, fmt.Errorf("cannot sign: cell is nil")
 			}
-			return c.Sign(privateKey), nil
+			return toSign.Sign(privateKey), nil
 		}
 	}
 }
