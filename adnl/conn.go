@@ -2,6 +2,8 @@ package adnl
 
 import (
 	"fmt"
+	"golang.org/x/net/ipv4"
+	"net"
 	"sync"
 	"time"
 )
@@ -48,4 +50,74 @@ func (c *clientConn) Close() error {
 	}
 
 	return nil
+}
+
+type batchConn struct {
+	localAddr net.Addr
+	conn      *ipv4.PacketConn
+
+	buf []ipv4.Message
+	mx  sync.Mutex
+}
+
+type syncPacket struct {
+	addr net.Addr
+	buf  []byte
+}
+
+type SyncConn struct {
+	conn    net.PacketConn
+	chWrite chan syncPacket
+	chRead  chan syncPacket
+}
+
+func NewSyncConn(conn net.PacketConn, packetsBufSz int) *SyncConn {
+	sc := &SyncConn{
+		conn:    conn,
+		chWrite: make(chan syncPacket, packetsBufSz),
+	}
+	go sc.writer()
+	return sc
+}
+
+func (s *SyncConn) writer() {
+	for {
+		select {
+		case p := <-s.chWrite:
+			_, err := s.conn.WriteTo(p.buf, p.addr)
+			if err != nil {
+				_ = s.conn.Close()
+				return
+			}
+		}
+	}
+}
+
+func (s *SyncConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	return s.conn.ReadFrom(p)
+}
+
+func (s *SyncConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	s.chWrite <- syncPacket{addr, p}
+	return len(p), nil
+}
+
+func (s *SyncConn) Close() error {
+	return s.conn.Close()
+}
+
+func (s *SyncConn) LocalAddr() net.Addr {
+	return s.conn.LocalAddr()
+}
+
+func (s *SyncConn) SetDeadline(t time.Time) error {
+	return s.conn.SetDeadline(t)
+}
+
+func (s *SyncConn) SetReadDeadline(t time.Time) error {
+	return s.conn.SetReadDeadline(t)
+}
+
+func (s *SyncConn) SetWriteDeadline(t time.Time) error {
+	return s.conn.SetWriteDeadline(t)
 }

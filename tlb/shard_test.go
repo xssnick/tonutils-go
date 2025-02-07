@@ -293,6 +293,7 @@ func TestShardIdent_IsAncestor(t *testing.T) {
 
 func TestShardIdent_GetShardID(t *testing.T) {
 	type fields struct {
+		PrefixBits  int8
 		ShardPrefix uint64
 	}
 	tests := []struct {
@@ -303,18 +304,20 @@ func TestShardIdent_GetShardID(t *testing.T) {
 		{
 			name: "ok",
 			fields: fields{
-				ShardPrefix: 0xE000000000000000,
+				PrefixBits:  2,
+				ShardPrefix: 0x4000000000000000,
 			},
-			want: 0xE000000000000000,
+			want: 0x6000000000000000,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := ShardIdent{
+				PrefixBits:  tt.fields.PrefixBits,
 				ShardPrefix: tt.fields.ShardPrefix,
 			}
 			if got := s.GetShardID(); got != tt.want {
-				t.Errorf("GetShardID() = %v, want %v", got, tt.want)
+				t.Errorf("GetShardID() = %x, want %x", got, tt.want)
 			}
 		})
 	}

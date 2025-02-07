@@ -14,6 +14,7 @@ type RLDP interface {
 	GetADNL() rldp.ADNL
 	Close()
 	DoQuery(ctx context.Context, maxAnswerSize int64, query, result tl.Serializable) error
+	DoQueryAsync(ctx context.Context, maxAnswerSize int64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
 	SetOnQuery(handler func(transferId []byte, query *rldp.Query) error)
 	SetOnDisconnect(handler func())
 	SendAnswer(ctx context.Context, maxAnswerSize int64, queryId, transferId []byte, answer tl.Serializable) error

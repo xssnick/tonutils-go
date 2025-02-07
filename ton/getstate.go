@@ -15,6 +15,7 @@ func init() {
 	tl.Register(GetAccountStatePruned{}, "liteServer.getAccountStatePrunned id:tonNode.blockIdExt account:liteServer.accountId = liteServer.AccountState")
 	tl.Register(GetAccountState{}, "liteServer.getAccountState id:tonNode.blockIdExt account:liteServer.accountId = liteServer.AccountState")
 	tl.Register(AccountState{}, "liteServer.accountState id:tonNode.blockIdExt shardblk:tonNode.blockIdExt shard_proof:bytes proof:bytes state:bytes = liteServer.AccountState")
+	tl.Register(AccountID{}, "liteServer.accountId workchain:int id:int256 = liteServer.AccountId")
 }
 
 type AccountState struct {

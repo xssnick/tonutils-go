@@ -1,13 +1,14 @@
 package tl
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 )
 
 func ToBytes(buf []byte) []byte {
-	var data []byte
+	var data = make([]byte, 0, ((len(buf)+4)/4+1)*4)
 
 	// store buf length
 	if len(buf) >= 0xFE {
@@ -26,6 +27,52 @@ func ToBytes(buf []byte) []byte {
 	}
 
 	return data
+}
+
+func ToBytesToBuffer(buf *bytes.Buffer, data []byte) {
+	if len(data) == 0 {
+		// fast path for empty slice
+		buf.Write(make([]byte, 4))
+		return
+	}
+
+	prevLen := buf.Len()
+
+	// store buf length
+	if len(data) >= 0xFE {
+		ln := make([]byte, 4)
+		binary.LittleEndian.PutUint32(ln, uint32(len(data)<<8)|0xFE)
+		buf.Write(ln)
+	} else {
+		buf.WriteByte(byte(len(data)))
+	}
+
+	buf.Write(data)
+
+	// adjust actual length to fit % 4 = 0
+	if round := (buf.Len() - prevLen) % 4; round != 0 {
+		for i := 0; i < 4-round; i++ {
+			buf.WriteByte(0)
+		}
+	}
+}
+
+func RemapBufferAsSlice(buf *bytes.Buffer, from int) {
+	serializedLen := buf.Len() - (from + 4)
+
+	bufPtr := buf.Bytes()
+	if serializedLen >= 0xFE {
+		binary.LittleEndian.PutUint32(bufPtr[from:], uint32(serializedLen<<8)|0xFE)
+	} else {
+		bufPtr[from] = byte(serializedLen)
+		copy(bufPtr[from+1:], bufPtr[from+4:])
+		buf.Truncate(buf.Len() - 3)
+	}
+
+	// bytes array padding
+	if pad := (buf.Len() - from) % 4; pad > 0 {
+		buf.Write(make([]byte, 4-pad))
+	}
 }
 
 func FromBytes(data []byte) (loaded []byte, buffer []byte, err error) {

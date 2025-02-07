@@ -380,6 +380,7 @@ func (d *Dictionary) findKey(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (
 		return nil, nil, ErrNoSuchKeyInDict
 	}
 
+	var depth int
 	var sk, root *ProofSkeleton
 	if at != nil {
 		root = CreateProofSkeleton()
@@ -414,6 +415,10 @@ func (d *Dictionary) findKey(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (
 
 		if lKey.BitsLeft() == 0 {
 			if sk != nil {
+				if depth == 0 {
+					// key is at the dict root
+					return branchSlice, at, nil
+				}
 				at.Merge(root)
 			}
 			return branchSlice, sk, nil
@@ -424,6 +429,7 @@ func (d *Dictionary) findKey(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (
 			return nil, nil, err
 		}
 
+		depth++
 		branch, err = branch.PeekRef(int(idx))
 		if err != nil {
 			return nil, nil, err

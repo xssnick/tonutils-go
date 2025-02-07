@@ -15,7 +15,9 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -35,37 +37,42 @@ const (
 	_FlagAll                 uint32 = 0x1fff
 )
 
+const BasePayloadMTU = 1024
+const HugePacketMaxSz = 1024*8 + 128
+
 type CustomMessageHandler func(msg *MessageCustom) error
 type QueryHandler func(msg *MessageQuery) error
 type DisconnectHandler func(addr string, key ed25519.PublicKey)
 
-type packetWriter interface {
+type PacketWriter interface {
 	Write(b []byte, deadline time.Time) (n int, err error)
 	Close() error
 }
 
 type ADNL struct {
-	writer packetWriter
-	ourKey ed25519.PrivateKey
-	addr   string
-	closer chan bool
-	closed bool
+	writer             PacketWriter
+	ourKey             ed25519.PrivateKey
+	addr               string
+	prevPacketHeaderSz uint32
 
-	channel *Channel
+	closerCtx context.Context
+	closeFn   context.CancelFunc
+
+	channelPtr               unsafe.Pointer
+	channelExchangeCompleted int32
 
 	msgParts map[string]*partitionedMessage
 
 	reinitTime           int32
-	seqno                uint64
-	confirmSeqno         uint64
+	seqno                int64
+	confirmSeqno         int64
 	dstReinit            int32
 	recvAddrVer          int32
 	recvPriorityAddrVer  int32
 	ourAddrVerOnPeerSide int32
-	loss                 uint64
 
 	peerKey      ed25519.PublicKey
-	ourAddresses address.List
+	ourAddresses unsafe.Pointer
 
 	activeQueries map[string]chan tl.Serializable
 
@@ -74,25 +81,24 @@ type ADNL struct {
 	onDisconnect         DisconnectHandler
 	onChannel            func(ch *Channel)
 
-	lastReceiveAt time.Time
-
 	mx sync.RWMutex
 }
 
 var Logger = log.Println
 
-func initADNL(key ed25519.PrivateKey) *ADNL {
+func (g *Gateway) initADNL() *ADNL {
 	tm := int32(time.Now().Unix())
+	closerCtx, closeFn := context.WithCancel(context.Background())
 	return &ADNL{
-		ourAddresses: address.List{
+		ourAddresses: unsafe.Pointer(&address.List{
 			Version:    tm,
 			ReinitDate: tm,
-		},
-		reinitTime: tm,
-		ourKey:     key,
-		closer:     make(chan bool, 1),
-
-		msgParts:      map[string]*partitionedMessage{},
+		}),
+		reinitTime:    tm,
+		ourKey:        g.key,
+		closerCtx:     closerCtx,
+		closeFn:       closeFn,
+		msgParts:      make(map[string]*partitionedMessage, 128),
 		activeQueries: map[string]chan tl.Serializable{},
 	}
 }
@@ -101,24 +107,27 @@ func (a *ADNL) Close() {
 	trigger := false
 
 	a.mx.Lock()
-	if !a.closed {
-		a.closed = true
-
-		close(a.closer)
+	select {
+	case <-a.closerCtx.Done():
+	default:
+		a.closeFn()
 
 		con := a.writer
 		if con != nil {
-			con.Close()
+			_ = con.Close()
 		}
 
 		trigger = true
 	}
 	a.mx.Unlock()
 
-	disc := a.onDisconnect
-	if trigger && disc != nil {
+	if disc := a.onDisconnect; trigger && disc != nil {
 		disc(a.addr, a.peerKey)
 	}
+}
+
+func (a *ADNL) GetCloserCtx() context.Context {
+	return a.closerCtx
 }
 
 func (c *Channel) process(buf []byte) error {
@@ -137,74 +146,70 @@ func (c *Channel) process(buf []byte) error {
 		return fmt.Errorf("failed to parse packet: %w", err)
 	}
 
-	err = c.adnl.processPacket(packet, c)
+	err = c.adnl.processPacket(packet, true)
 	if err != nil {
 		return fmt.Errorf("failed to process packet: %w", err)
 	}
 	return nil
 }
 
-func (a *ADNL) processPacket(packet *PacketContent, ch *Channel) (err error) {
-	a.mx.Lock()
-
-	if packet.DstReinitDate != nil && *packet.DstReinitDate > 0 && *packet.DstReinitDate < a.reinitTime {
+func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error) {
+	if packet.DstReinitDate != nil && *packet.DstReinitDate > 0 && *packet.DstReinitDate < atomic.LoadInt32(&a.reinitTime) {
 		if packet.ReinitDate != nil {
-			a.dstReinit = *packet.ReinitDate
+			atomic.StoreInt32(&a.dstReinit, *packet.ReinitDate)
 		}
-		a.mx.Unlock()
 
-		buf, err := a.buildRequest(ch, MessageNop{})
+		buf, err := a.buildRequest(MessageNop{})
 		if err != nil {
 			return fmt.Errorf("failed to create packet: %w", err)
 		}
-		if err = a.send(context.Background(), buf); err != nil {
+		if err = a.send(buf); err != nil {
 			return fmt.Errorf("failed to send ping reinit: %w", err)
 		}
 
 		return nil
 	}
 
-	seqno := uint64(*packet.Seqno)
-	a.lastReceiveAt = time.Now()
-
-	if ch == nil && packet.From != nil && a.peerKey == nil {
-		a.peerKey = packet.From.Key
+	if !fromChannel && packet.From != nil {
+		a.mx.Lock()
+		if a.peerKey == nil {
+			a.peerKey = packet.From.Key
+		}
+		a.mx.Unlock()
 	}
 
-	if a.confirmSeqno+1 < seqno {
-		a.loss += seqno - (a.confirmSeqno + 1)
+	seqno := *packet.Seqno
+
+	for { // to guarantee swap to highest
+		if conf := atomic.LoadInt64(&a.confirmSeqno); seqno > conf {
+			if !atomic.CompareAndSwapInt64(&a.confirmSeqno, conf, seqno) {
+				continue
+			}
+		}
+		break
 	}
 
-	if seqno > a.confirmSeqno {
-		a.confirmSeqno = seqno
-	}
-
-	if (packet.ReinitDate != nil && *packet.ReinitDate > a.dstReinit) &&
-		(packet.DstReinitDate != nil && *packet.DstReinitDate == a.reinitTime) {
+	if (packet.ReinitDate != nil && *packet.ReinitDate > atomic.LoadInt32(&a.dstReinit)) &&
+		(packet.DstReinitDate != nil && *packet.DstReinitDate == atomic.LoadInt32(&a.reinitTime)) {
 		// reset their seqno even if it is lower,
 		// because other side could lose counter
-		a.confirmSeqno = seqno
-		a.loss = 0
-
-		a.dstReinit = *packet.ReinitDate
+		atomic.StoreInt64(&a.confirmSeqno, seqno)
+		atomic.StoreInt32(&a.dstReinit, *packet.ReinitDate)
 	}
 
 	if packet.RecvPriorityAddrListVersion != nil {
-		a.ourAddrVerOnPeerSide = *packet.RecvPriorityAddrListVersion
-	}
-
-	if packet.RecvAddrListVersion != nil {
-		a.ourAddrVerOnPeerSide = *packet.RecvAddrListVersion
+		atomic.StoreInt32(&a.ourAddrVerOnPeerSide, *packet.RecvPriorityAddrListVersion)
+	} else if packet.RecvAddrListVersion != nil {
+		atomic.StoreInt32(&a.ourAddrVerOnPeerSide, *packet.RecvAddrListVersion)
 	}
 
 	if packet.Address != nil {
 		// a.recvAddrVer = packet.Address.Version
-		a.recvPriorityAddrVer = packet.Address.Version
+		atomic.StoreInt32(&a.recvPriorityAddrVer, packet.Address.Version)
 	}
-	a.mx.Unlock()
 
 	for i, message := range packet.Messages {
-		err = a.processMessage(message, ch)
+		err = a.processMessage(message)
 		if err != nil {
 			return fmt.Errorf("failed to process message %d %s: %v", i, reflect.TypeOf(message), err)
 		}
@@ -213,17 +218,17 @@ func (a *ADNL) processPacket(packet *PacketContent, ch *Channel) (err error) {
 	return nil
 }
 
-func (a *ADNL) processMessage(message any, ch *Channel) error {
+func (a *ADNL) processMessage(message any) error {
 	switch ms := message.(type) {
 	case MessagePong:
 		// TODO: record
 	case MessagePing:
-		buf, err := a.buildRequest(ch, MessagePong{Value: ms.Value})
+		buf, err := a.buildRequest(MessagePong{Value: ms.Value})
 		if err != nil {
 			return fmt.Errorf("failed to build pong request: %w", err)
 		}
 
-		if err = a.send(context.Background(), buf); err != nil {
+		if err = a.send(buf); err != nil {
 			return fmt.Errorf("failed to send pong: %w", err)
 		}
 	case MessageQuery:
@@ -238,18 +243,23 @@ func (a *ADNL) processMessage(message any, ch *Channel) error {
 		a.mx.Lock()
 		defer a.mx.Unlock()
 
-		if a.channel != nil {
-			if bytes.Equal(a.channel.peerKey, ms.Key) {
+		ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+
+		var err error
+		var key ed25519.PrivateKey
+		if ch != nil {
+			if bytes.Equal(ch.peerKey, ms.Key) {
 				// already initialized on our side, but client missed confirmation,
 				// channel is already known, so more confirmations will be sent in the next packets
 				return nil
 			}
 			// looks like channel was lost on the other side, we will reinit it
-		}
-
-		_, key, err := ed25519.GenerateKey(nil)
-		if err != nil {
-			return err
+			key = ch.key
+		} else {
+			_, key, err = ed25519.GenerateKey(nil)
+			if err != nil {
+				return err
+			}
 		}
 
 		newChan := &Channel{
@@ -259,26 +269,28 @@ func (a *ADNL) processMessage(message any, ch *Channel) error {
 			wantConfirm: true,
 		}
 
-		err = newChan.setup(ms.Key)
-		if err != nil {
+		if err = newChan.setup(ms.Key); err != nil {
 			return fmt.Errorf("failed to setup channel: %w", err)
 		}
-		a.channel = newChan
+
+		atomic.StorePointer(&a.channelPtr, unsafe.Pointer(newChan))
+		atomic.StoreInt32(&a.channelExchangeCompleted, 0)
 	case MessageConfirmChannel:
 		a.mx.Lock()
 		defer a.mx.Unlock()
 
-		if a.channel == nil || !bytes.Equal(a.channel.key.Public().(ed25519.PublicKey), ms.PeerKey) {
+		ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+
+		if ch == nil || !bytes.Equal(ch.key.Public().(ed25519.PublicKey), ms.PeerKey) {
 			return fmt.Errorf("confirmation for unknown channel %s", hex.EncodeToString(ms.PeerKey))
 		}
 
-		if a.channel.ready {
+		if ch.ready {
 			// not required confirmation, skip it
 			return nil
 		}
 
-		err := a.channel.setup(ms.Key)
-		if err != nil {
+		if err := ch.setup(ms.Key); err != nil {
 			return fmt.Errorf("failed to setup channel: %w", err)
 		}
 	case MessagePart:
@@ -287,7 +299,7 @@ func (a *ADNL) processMessage(message any, ch *Channel) error {
 		a.mx.Lock()
 		p, ok := a.msgParts[msgID]
 		if !ok {
-			if ms.TotalSize > _HugePacketMaxSz {
+			if ms.TotalSize > HugePacketMaxSz {
 				a.mx.Unlock()
 				return fmt.Errorf("skip too big partitioned message with len %d bytes", ms.TotalSize)
 			}
@@ -332,20 +344,18 @@ func (a *ADNL) processMessage(message any, ch *Channel) error {
 				return fmt.Errorf("message part cant be inside another part")
 			}
 
-			err = a.processMessage(msg, ch)
+			err = a.processMessage(msg)
 			if err != nil {
 				return fmt.Errorf("failed to process message built from parts: %w", err)
 			}
 		}
 	case MessageCustom:
 		if a.customMessageHandler != nil {
-			err := a.customMessageHandler(&ms)
-			if err != nil {
+			if err := a.customMessageHandler(&ms); err != nil {
 				return fmt.Errorf("failed to handle custom message: %w", err)
 			}
 		}
 	case MessageNop:
-		return nil
 	default:
 		return fmt.Errorf("skipped unprocessable message of type %s", reflect.TypeOf(message).String())
 	}
@@ -398,20 +408,23 @@ func (a *ADNL) processAnswer(id string, query any) {
 	}
 }
 
-func (a *ADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
-	return a.sendCustomMessage(ctx, nil, req)
-}
+func (a *ADNL) SendCustomMessage(_ context.Context, req tl.Serializable) error {
+	baseMTU := false
 
-func (a *ADNL) sendCustomMessage(ctx context.Context, ch *Channel, req tl.Serializable) error {
-	packets, err := a.buildRequestMaySplit(ch, &MessageCustom{
+reSplit:
+	packets, err := a.buildRequestMaySplit(&MessageCustom{
 		Data: req,
-	})
+	}, baseMTU)
 	if err != nil {
 		return fmt.Errorf("failed to send custom message: %w", err)
 	}
 
 	for _, packet := range packets {
-		if err = a.send(ctx, packet); err != nil {
+		if err = a.send(packet); err != nil {
+			if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
+				baseMTU = true
+				goto reSplit
+			}
 			return fmt.Errorf("failed to send custom packet: %w", err)
 		}
 	}
@@ -419,10 +432,6 @@ func (a *ADNL) sendCustomMessage(ctx context.Context, ch *Channel, req tl.Serial
 }
 
 func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
-	return a.query(ctx, nil, req, result)
-}
-
-func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializable) error {
 	q, err := createQueryMessage(req)
 	if err != nil {
 		return fmt.Errorf("failed to create query message: %w", err)
@@ -436,7 +445,9 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 	a.activeQueries[reqID] = res
 	a.mx.Unlock()
 
-	packets, err := a.buildRequestMaySplit(ch, q)
+	baseMTU := false
+reSplit:
+	packets, err := a.buildRequestMaySplit(q, baseMTU)
 	if err != nil {
 		a.mx.Lock()
 		delete(a.activeQueries, reqID)
@@ -447,7 +458,11 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 
 	for {
 		for i, packet := range packets {
-			if err = a.send(ctx, packet); err != nil {
+			if err = a.send(packet); err != nil {
+				if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
+					baseMTU = true
+					goto reSplit
+				}
 				return fmt.Errorf("failed to send query packet %d: %w", i, err)
 			}
 		}
@@ -467,37 +482,53 @@ func (a *ADNL) query(ctx context.Context, ch *Channel, req, result tl.Serializab
 }
 
 func (a *ADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
-	packets, err := a.buildRequestMaySplit(nil, &MessageAnswer{
+	baseMTU := false
+reSplit:
+	packets, err := a.buildRequestMaySplit(&MessageAnswer{
 		ID:   queryID,
 		Data: result,
-	})
+	}, baseMTU)
 	if err != nil {
 		return fmt.Errorf("send answer  failed: %w", err)
 	}
 
 	for _, packet := range packets {
-		if err = a.send(ctx, packet); err != nil {
+		if err = a.send(packet); err != nil {
+			if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
+				baseMTU = true
+				goto reSplit
+			}
 			return fmt.Errorf("failed to send answer: %w", err)
 		}
 	}
 	return nil
 }
 
-func (a *ADNL) buildRequestMaySplit(ch *Channel, req tl.Serializable) (packets [][]byte, err error) {
+const MaxMTU = 1500 - 40 - 8 // max is for ipv6 over ethernet
+
+func (a *ADNL) buildRequestMaySplit(req tl.Serializable, useBase bool) (packets [][]byte, err error) {
 	msg, err := tl.Serialize(req, true)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(msg) > _MTU {
-		parts := splitMessage(msg)
-		if len(parts) > 8 {
-			return nil, fmt.Errorf("too big message, more than 8 parts")
+	mtu := BasePayloadMTU
+	if !useBase { // useBase is true when packet is oversize, and we rebuild it with lower MTU
+		if sz := atomic.LoadUint32(&a.prevPacketHeaderSz); sz > 0 {
+			// trying to extend mtu to send use all possible mtu
+			mtu = (MaxMTU - 32 - 64) - int(sz)
+		}
+	}
+
+	if len(msg) > mtu {
+		if len(msg) > HugePacketMaxSz {
+			return nil, fmt.Errorf("too big message payload")
 		}
 
+		parts := splitMessage(msg, mtu)
 		packets = make([][]byte, 0, len(parts))
 		for i, part := range parts {
-			buf, err := a.buildRequest(ch, part)
+			buf, err := a.buildRequest(part)
 			if err != nil {
 				return nil, fmt.Errorf("filed to build message part %d, err: %w", i, err)
 			}
@@ -506,108 +537,91 @@ func (a *ADNL) buildRequestMaySplit(ch *Channel, req tl.Serializable) (packets [
 		return packets, nil
 	}
 
-	buf, err := a.buildRequest(ch, tl.Raw(msg))
+	buf, err := a.buildRequest(tl.Raw(msg))
 	if err != nil {
 		return nil, fmt.Errorf("filed to build message, err: %w", err)
 	}
 	return [][]byte{buf}, nil
 }
 
-func (a *ADNL) buildRequest(ch *Channel, req tl.Serializable) (buf []byte, err error) {
-	a.mx.Lock()
-	defer a.mx.Unlock()
+func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
+	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+	seqno := atomic.AddInt64(&a.seqno, 1)
 
-	if a.writer == nil {
-		return nil, fmt.Errorf("ADNL connection is not active")
-	}
-
-	if ch != nil && !ch.ready {
-		return nil, fmt.Errorf("channel is not ready yet")
-	}
-
-	seqno := a.seqno + 1
-
-	// if channel == nil, we will use root channel,
-	if ch == nil {
-		if a.channel != nil && a.channel.ready {
-			if a.channel.wantConfirm {
-				// if client not yet received confirmation - we will send it till his first packet in channel
-				chMsg := &MessageConfirmChannel{
-					Key:     a.channel.key.Public().(ed25519.PublicKey),
-					PeerKey: a.channel.peerKey,
-					Date:    a.channel.initDate,
-				}
-
-				buf, err = a.createPacket(int64(seqno), true, chMsg, req)
-				if err != nil {
-					return nil, fmt.Errorf("failed to create packet: %w", err)
-				}
-			} else {
-				// channel is active
-				ch = a.channel
-			}
-		} else {
-			// if it is not exists, we will create it,
-			if a.channel == nil {
-				_, key, err := ed25519.GenerateKey(nil)
-				if err != nil {
-					return nil, err
-				}
-
-				a.channel = &Channel{
-					adnl:     a,
-					key:      key,
-					initDate: int32(time.Now().Unix()),
-				}
+	if ch != nil && ch.ready {
+		if ch.wantConfirm {
+			// if client not yet received confirmation - we will send it till his first packet in channel
+			chMsg := &MessageConfirmChannel{
+				Key:     ch.key.Public().(ed25519.PublicKey),
+				PeerKey: ch.peerKey,
+				Date:    ch.initDate,
 			}
 
-			// if it is pending, we will send creation (can be sent multiple times, it is ok)
-			chMsg := &MessageCreateChannel{
-				Key:  a.channel.key.Public().(ed25519.PublicKey),
-				Date: a.channel.initDate,
-			}
-
-			buf, err = a.createPacket(int64(seqno), false, chMsg, req)
+			buf, err = a.createPacket(seqno, true, chMsg, req)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create packet: %w", err)
 			}
+			return buf, nil
 		}
-	}
 
-	if ch != nil {
-		buf, err = ch.createPacket(int64(seqno), req)
+		atomic.StoreInt32(&a.channelExchangeCompleted, 1)
+
+		// channel is active
+		buf, err = ch.createPacket(seqno, req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create packet: %w", err)
 		}
+		return buf, nil
 	}
 
-	a.seqno = seqno
+	// if it is not exists, we will create it,
+	if ch == nil {
+		_, key, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			return nil, err
+		}
+
+		a.mx.Lock()
+		ch = &Channel{
+			adnl:     a,
+			key:      key,
+			initDate: int32(time.Now().Unix()),
+		}
+		atomic.StorePointer(&a.channelPtr, unsafe.Pointer(ch))
+		atomic.StoreInt32(&a.channelExchangeCompleted, 0)
+		a.mx.Unlock()
+	}
+
+	// if it is pending, we will send creation (can be sent multiple times, it is ok)
+	chMsg := &MessageCreateChannel{
+		Key:  ch.key.Public().(ed25519.PublicKey),
+		Date: ch.initDate,
+	}
+
+	buf, err = a.createPacket(seqno, false, chMsg, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create packet: %w", err)
+	}
 
 	return buf, nil
 }
 
-func (a *ADNL) send(ctx context.Context, buf []byte) error {
-	if err := ctx.Err(); err != nil {
-		// check if context is failed to not try to write
-		return err
+var ErrPacketBiggerThanMTU = fmt.Errorf("packet bigger than MTU")
+
+func (a *ADNL) send(buf []byte) error {
+	if len(buf) > MaxMTU {
+		return ErrPacketBiggerThanMTU
 	}
 
-	dl, ok := ctx.Deadline()
-	if !ok {
-		dl = time.Now().Add(10 * time.Second)
-	}
-
-	n, err := a.writer.Write(buf, dl)
-	if err != nil {
+	if n, err := a.writer.Write(buf, time.Time{}); err != nil {
 		// not close on io timeout because it can be triggered by network overload
 		if !strings.Contains(err.Error(), "i/o timeout") {
 			// it should trigger disconnect handler in read routine
 			a.writer.Close()
 		}
 		return err
-	}
-	if n != len(buf) {
-		return fmt.Errorf("too big packet")
+	} else if n != len(buf) {
+		return fmt.Errorf("not full packet was written")
 	}
 
 	return nil
@@ -630,9 +644,8 @@ func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 
 	ctr.XORKeyStream(data, data)
 
-	hash := sha256.New()
-	hash.Write(data)
-	if !bytes.Equal(hash.Sum(nil), checksum) {
+	hash := sha256.Sum256(data)
+	if !bytes.Equal(hash[:], checksum) {
 		return nil, errors.New("invalid checksum of packet")
 	}
 
@@ -640,12 +653,13 @@ func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 }
 
 func (a *ADNL) SetAddresses(list address.List) {
-	a.reinitTime = list.ReinitDate
-	a.ourAddresses = list
+	atomic.StoreInt32(&a.reinitTime, list.ReinitDate)
+	atomic.StorePointer(&a.ourAddresses, unsafe.Pointer(&list))
 }
 
 func (a *ADNL) GetAddressList() address.List {
-	return a.ourAddresses
+	ourAddr := (*address.List)(atomic.LoadPointer(&a.ourAddresses))
+	return *ourAddr
 }
 
 func (a *ADNL) GetID() []byte {
@@ -658,19 +672,25 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 		return nil, fmt.Errorf("unknown peer")
 	}
 
-	confSeq := int64(a.confirmSeqno)
-	reinit := a.reinitTime
-	dstReinit := a.dstReinit
+	confSeq := atomic.LoadInt64(&a.confirmSeqno)
+	reinit := atomic.LoadInt32(&a.reinitTime)
+	dstReinit := atomic.LoadInt32(&a.dstReinit)
 
 	// addrVer := a.recvAddrVer
-	priorityAddrVer := a.recvPriorityAddrVer
+	priorityAddrVer := atomic.LoadInt32(&a.recvPriorityAddrVer)
 
-	rand1, err := randForPacket()
+	randData := make([]byte, 32)
+	_, err := rand.Read(randData)
 	if err != nil {
 		return nil, err
 	}
 
-	rand2, err := randForPacket()
+	rand1, err := resizeRandForPacket(randData[:16])
+	if err != nil {
+		return nil, err
+	}
+
+	rand2, err := resizeRandForPacket(randData[16:])
 	if err != nil {
 		return nil, err
 	}
@@ -696,25 +716,30 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 		}
 	}
 
-	if a.ourAddrVerOnPeerSide != a.ourAddresses.Version {
-		packet.Address = &a.ourAddresses
+	ourAddr := (*address.List)(atomic.LoadPointer(&a.ourAddresses))
+	if atomic.LoadInt32(&a.ourAddrVerOnPeerSide) != ourAddr.Version {
+		packet.Address = ourAddr
 	}
 
-	toSign, err := packet.Serialize()
-	if err != nil {
+	buf := bytes.NewBuffer(make([]byte, 96))
+	buf.Grow(MaxMTU - 32)
+
+	if _, err = packet.Serialize(buf); err != nil {
 		return nil, err
 	}
 
-	packet.Signature = ed25519.Sign(a.ourKey, toSign)
+	packet.Signature = ed25519.Sign(a.ourKey, buf.Bytes()[96:])
+	buf.Truncate(96)
 
-	packetData, err := packet.Serialize()
+	_, err = packet.Serialize(buf)
 	if err != nil {
 		return nil, err
 	}
+	bufData := buf.Bytes()
+	packetData := bufData[96:]
 
-	hash := sha256.New()
-	hash.Write(packetData)
-	checksum := hash.Sum(nil)
+	hash := sha256.Sum256(packetData)
+	checksum := hash[:]
 
 	key, err := SharedKey(a.ourKey, a.peerKey)
 	if err != nil {
@@ -726,18 +751,17 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 		return nil, err
 	}
 
+	ctr.XORKeyStream(packetData, packetData)
+
 	enc, err := tl.Hash(PublicKeyED25519{Key: a.peerKey})
 	if err != nil {
 		return nil, err
 	}
+	copy(bufData, enc)
+	copy(bufData[32:], a.ourKey.Public().(ed25519.PublicKey))
+	copy(bufData[64:], checksum)
 
-	ctr.XORKeyStream(packetData, packetData)
-
-	enc = append(enc, a.ourKey.Public().(ed25519.PublicKey)...)
-	enc = append(enc, checksum...)
-	enc = append(enc, packetData...)
-
-	return enc, nil
+	return bufData, nil
 }
 
 func createQueryMessage(query any) (*MessageQuery, error) {
