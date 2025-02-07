@@ -352,7 +352,7 @@ func TestWallet_DeployContractUsingHW3Masterchain(t *testing.T) {
 	seed := strings.Split(_seed, " ")
 	ctx := api.Client().StickyContext(context.Background())
 
-	key, err := SeedToPrivateKey(seed, "")
+	key, err := SeedToPrivateKey(seed, "", false)
 	if err != nil {
 		t.Fatal("SeedToPrivateKey err:", err.Error())
 	}

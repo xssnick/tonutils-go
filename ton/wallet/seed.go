@@ -63,12 +63,12 @@ func NewSeedWithPassword(password string) []string {
 
 type VersionConfig any
 
-func FromSeed(api TonAPI, seed []string, version VersionConfig, isCompatBip39 ...bool) (*Wallet, error) {
-	return FromSeedWithPassword(api, seed, "", version, isCompatBip39...)
+func FromSeed(api TonAPI, seed []string, version VersionConfig, isBIP39 ...bool) (*Wallet, error) {
+	return FromSeedWithPassword(api, seed, "", version, isBIP39...)
 }
 
-func FromSeedWithPassword(api TonAPI, seed []string, password string, version VersionConfig, isCompatBip39 ...bool) (*Wallet, error) {
-  k, err := SeedToPrivateKey(seed, password, len(isCompatBip39) > 0 && isCompatBip39[0])
+func FromSeedWithPassword(api TonAPI, seed []string, password string, version VersionConfig, isBIP39 ...bool) (*Wallet, error) {
+	k, err := SeedToPrivateKey(seed, password, len(isBIP39) > 0 && isBIP39[0])
 	if err != nil {
 		return nil, err
 	}
@@ -76,17 +76,20 @@ func FromSeedWithPassword(api TonAPI, seed []string, password string, version Ve
 	return FromPrivateKey(api, k, version)
 }
 
-func SeedToPrivateKey(seed []string, password string, isBip39 bool) (ed25519.PrivateKey, error) {
+// SeedToPrivateKey convert seed to private key,
+// by default ton seeds are not compatible with bip39,
+// but you can enable compatibility with isBIP39 = true
+func SeedToPrivateKey(seed []string, password string, isBIP39 bool) (ed25519.PrivateKey, error) {
 	if len(seed) < 12 {
 		return nil, fmt.Errorf("seed should have at least 12 words")
 	}
-  
+
 	for _, s := range seed {
 		if !words[s] {
 			return nil, fmt.Errorf("unknown word '%seedBytes' in seed", s)
 		}
 	}
-  
+
 	seedBytes := []byte(strings.Join(seed, " "))
 	mac := hmac.New(sha512.New, seedBytes)
 	mac.Write([]byte(password))
@@ -95,26 +98,26 @@ func SeedToPrivateKey(seed []string, password string, isBip39 bool) (ed25519.Pri
 	if len(password) > 0 {
 		p := pbkdf2.Key(hash, []byte(_PasswordSalt), 1, 1, sha512.New)
 		if p[0] != 1 {
-			if isBip39 {
+			if isBIP39 {
 				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"+password), 2048, 64, sha512.New)
 				dk, err := hdwallet.Derived(_Path, pKey)
 				if err != nil {
 					return nil, err
 				}
-				return FromPrivateKey(nil, ed25519.NewKeyFromSeed(dk.PrivateKey), version)
+				return ed25519.NewKeyFromSeed(dk.PrivateKey), nil
 			}
 			return nil, errors.New("invalid seed")
 		}
 	} else {
 		p := pbkdf2.Key(hash, []byte(_BasicSalt), _Iterations/256, 1, sha512.New)
 		if p[0] != 0 {
-			if isBip39 {
+			if isBIP39 {
 				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"), 2048, 64, sha512.New)
 				dk, err := hdwallet.Derived(_Path, pKey)
 				if err != nil {
 					return nil, err
 				}
-				return FromPrivateKey(nil, ed25519.NewKeyFromSeed(dk.PrivateKey), version)
+				return ed25519.NewKeyFromSeed(dk.PrivateKey), nil
 			}
 			return nil, errors.New("invalid seed")
 		}

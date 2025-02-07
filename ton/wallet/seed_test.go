@@ -1,6 +1,7 @@
 package wallet
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -43,5 +44,20 @@ func TestNewSeedWithPassword(t *testing.T) {
 	_, err = FromSeedWithPassword(nil, seedNoPass, "123", V3)
 	if err == nil {
 		t.Fatal("should be invalid 5", seedNoPass)
+	}
+}
+
+func TestBIP39Load(t *testing.T) {
+	seed := strings.Split("awesome scale mansion decade will rail beyond pink into enrich flock before cream oval pottery priority acid onion burst salad police pyramid stick hawk", " ")
+	w, err := FromSeed(nil, seed, ConfigV5R1Final{
+		NetworkGlobalID: MainnetGlobalID,
+		Workchain:       0,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if w.WalletAddress().String() != "UQCdMgVv3MHurW103oa4tdsuP1a-wZmNE0ZweBlK_Iy7tK1o" {
+		t.Fatal("wrong address", w.WalletAddress())
 	}
 }
