@@ -87,6 +87,17 @@ func (a *Address) BitsLen() uint {
 
 var crcTable = crc16.MakeTable(crc16.CRC16_XMODEM)
 
+func (a *Address) StringRaw() string {
+	switch a.addrType {
+	case NoneAddress:
+		return "NONE"
+	case StdAddress:
+		return strconv.Itoa(int(a.workchain)) + ":" + hex.EncodeToString(a.data)
+	default:
+		return "NOT_SUPPORTED"
+	}
+}
+
 func (a *Address) String() string {
 	switch a.addrType {
 	case NoneAddress:
@@ -115,28 +126,6 @@ func (a *Address) String() string {
 		return fmt.Sprintf("VAR:%s", hex.EncodeToString(address))
 	default:
 		return "NOT_SUPPORTED"
-	}
-}
-
-func (a *Address) StringToBytes(dst []byte, addr []byte) {
-	switch a.addrType {
-	case NoneAddress:
-		copy(dst, []byte("NONE"))
-		return
-	case StdAddress:
-		copy(addr[0:34], a.prepareChecksumData())
-		binary.BigEndian.PutUint16(addr[34:], crc16.Checksum(addr[:34], crcTable))
-		base64.RawURLEncoding.Encode(dst, addr[:])
-		return
-	case ExtAddress:
-		copy(dst, []byte("EXT_ADDRESS"))
-		return
-	case VarAddress:
-		copy(dst, []byte("VAR_ADDRESS"))
-		return
-	default:
-		copy(dst, []byte("NOT_SUPPORTED"))
-		return
 	}
 }
 

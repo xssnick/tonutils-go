@@ -1,6 +1,10 @@
 package rldp
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
@@ -58,12 +62,78 @@ type CompleteV2 struct {
 }
 
 type MessagePart struct {
-	TransferID []byte `tl:"int256"`
-	FecType    any    `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
-	Part       int32  `tl:"int"`
-	TotalSize  int64  `tl:"long"`
-	Seqno      int32  `tl:"int"`
-	Data       []byte `tl:"bytes"`
+	TransferID []byte // `tl:"int256"`
+	FecType    any    // `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
+	Part       int32  // `tl:"int"`
+	TotalSize  int64  // `tl:"long"`
+	Seqno      int32  // `tl:"int"`
+	Data       []byte // `tl:"bytes"`
+}
+
+func (m *MessagePart) Parse(data []byte) ([]byte, error) {
+	if len(data) < 56 {
+		return nil, errors.New("message part is too short")
+	}
+
+	transfer := make([]byte, 32)
+	copy(transfer, data)
+
+	var fec FECRaptorQ
+	data, err := tl.Parse(fec, data[32:], true)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(data) < 20 {
+		return nil, errors.New("message part is too short")
+	}
+
+	part := int32(binary.LittleEndian.Uint32(data))
+	size := int64(binary.LittleEndian.Uint64(data[4:]))
+	seq := int32(binary.LittleEndian.Uint32(data[12:]))
+
+	slc, data, err := tl.FromBytes(data[16:])
+	if err != nil {
+		return nil, fmt.Errorf("tl.FromBytes: %v", err)
+	}
+
+	m.TransferID = transfer
+	m.FecType = fec
+	m.Part = part
+	m.TotalSize = size
+	m.Seqno = seq
+	m.Data = slc
+
+	return data, nil
+}
+
+func (m *MessagePart) Serialize(buf *bytes.Buffer) error {
+	switch m.FecType.(type) {
+	case FECRaptorQ:
+		if len(m.TransferID) == 0 {
+			buf.Write(make([]byte, 32))
+		} else if len(m.TransferID) != 32 {
+			return errors.New("invalid transfer id")
+		} else {
+			buf.Write(m.TransferID)
+		}
+
+		_, err := tl.Serialize(m.FecType, true, buf)
+		if err != nil {
+			return err
+		}
+	default:
+		return errors.New("invalid fec type")
+	}
+
+	tmp := make([]byte, 16)
+	binary.LittleEndian.PutUint32(tmp, uint32(m.Part))
+	binary.LittleEndian.PutUint64(tmp[4:], uint64(m.TotalSize))
+	binary.LittleEndian.PutUint32(tmp[12:], uint32(m.Seqno))
+	buf.Write(tmp)
+	tl.ToBytesToBuffer(buf, m.Data)
+
+	return nil
 }
 
 type MessagePartV2 struct {

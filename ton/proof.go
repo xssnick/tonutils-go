@@ -20,6 +20,7 @@ import (
 
 func init() {
 	tl.Register(ValidatorSetHashable{}, "test0.validatorSet#901660ed")
+	tl.Register(ValidatorItemHashable{}, "")
 }
 
 var ErrNoProof = fmt.Errorf("liteserver has no proof for this account in a given block, request newer block or disable proof checks")
@@ -324,19 +325,19 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 		return fmt.Errorf("failed to parse validators config: %w", err)
 	}
 
-	validators, err := getMainValidators(to, catchainCfg, blockValidators, toBlock.BlockInfo.GenCatchainSeqno)
+	validators, err := GetMainValidators(to, catchainCfg, blockValidators, toBlock.BlockInfo.GenCatchainSeqno)
 	if err != nil {
 		return fmt.Errorf("failed to verify and get main block validators: %w", err)
 	}
 
-	if err = checkBlockSignatures(to, signatures, validators); err != nil {
+	if err = CheckBlockSignatures(to, signatures, validators); err != nil {
 		return fmt.Errorf("failed to check validators signatures: %w", err)
 	}
 
 	return nil
 }
 
-func getMainValidators(block *BlockIDExt, catConfig tlb.CatchainConfig, validatorConfig tlb.ValidatorSetAny, ccSeqno uint32) ([]*tlb.ValidatorAddr, error) {
+func GetMainValidators(block *BlockIDExt, catConfig tlb.CatchainConfig, validatorConfig tlb.ValidatorSetAny, ccSeqno uint32) ([]*tlb.ValidatorAddr, error) {
 	if block.Workchain != address.MasterchainID {
 		return nil, fmt.Errorf("only masterchain blocks currently supported")
 	}
@@ -435,7 +436,7 @@ func getMainValidators(block *BlockIDExt, catConfig tlb.CatchainConfig, validato
 	return validators, nil
 }
 
-func checkBlockSignatures(block *BlockIDExt, sigs *SignatureSet, validators []*tlb.ValidatorAddr) error {
+func CheckBlockSignatures(block *BlockIDExt, sigs *SignatureSet, validators []*tlb.ValidatorAddr) error {
 	if len(sigs.Signatures) == 0 || len(validators) == 0 {
 		return fmt.Errorf("zero signatures or validators")
 	}

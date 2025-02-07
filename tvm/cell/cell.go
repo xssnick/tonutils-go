@@ -305,3 +305,7 @@ func (c *Cell) UnmarshalJSON(bytes []byte) error {
 func (c *Cell) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.Quote(base64.StdEncoding.EncodeToString(c.ToBOC()))), nil
 }
+
+func (c *Cell) String() string {
+	return c.Dump()
+}

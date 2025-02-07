@@ -56,9 +56,9 @@ func generateWallets(caseSensitive bool, suffix string, counter *uint64) {
 	}
 
 	// We use same bytes array for every iteration to avoid allocations
-	addrFrom := make([]byte, 36) // bytes for address conversion function
-	addrTo := make([]byte, 48)   // bytes for address conversion function result
-	hashDst := make([]byte, 32)  // bytes for sha256 state init hash
+	// addrFrom := make([]byte, 36) // bytes for address conversion function
+	// addrTo := make([]byte, 48)  // bytes for address conversion function result
+	hashDst := make([]byte, 32) // bytes for sha256 state init hash
 
 	subwalletIDBytes := []byte{0, 0, 0, 0}
 
@@ -98,9 +98,8 @@ func generateWallets(caseSensitive bool, suffix string, counter *uint64) {
 			getHashV3HashFromKey(hash, subwalletIDBytes, v3DataCell, v3StateInit, hashDst)
 
 			addr := address.NewAddress(0, 0, hashDst).Bounce(false)
-			addr.StringToBytes(addrTo, addrFrom)
 
-			if equalityFunc(suffix, string(addrTo[strCmpOffset:])) {
+			if equalityFunc(suffix, addr.String()[strCmpOffset:]) {
 				log.Println(
 					"========== FOUND ==========\n",
 					"Address:", addr.String(), "\n", "Private key:", hex.EncodeToString(pk.Seed()), i,

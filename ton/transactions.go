@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"strings"
-	"time"
 )
 
 func init() {
@@ -222,6 +223,11 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 			case <-workerCtx.Done():
 				return
 			case <-time.After(waitList):
+			}
+
+			if lastLT == 0 {
+				// exhausted all transactions
+				break
 			}
 
 			ctx, cancel = context.WithTimeout(workerCtx, 10*time.Second)

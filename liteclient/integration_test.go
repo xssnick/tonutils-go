@@ -16,6 +16,8 @@ import (
 func init() {
 	tl.Register(MasterchainInfo{}, "liteServer.masterchainInfo last:tonNode.blockIdExt state_root_hash:int256 init:tonNode.zeroStateIdExt = liteServer.MasterchainInfo")
 	tl.Register(GetMasterchainInf{}, "liteServer.getMasterchainInfo = liteServer.MasterchainInfo")
+	tl.Register(BlockIDExt{}, "tonNode.blockIdExt workchain:int shard:long seqno:int root_hash:int256 file_hash:int256 = tonNode.BlockIdExt")
+	tl.Register(ZeroStateIDExt{}, "tonNode.zeroStateIdExt workchain:int root_hash:int256 file_hash:int256 = tonNode.ZeroStateIdExt")
 }
 
 type GetMasterchainInf struct{}
@@ -148,6 +150,10 @@ func Test_ServerProxy(t *testing.T) {
 
 				return sc.Send(adnl.MessageAnswer{ID: m.ID, Data: resp})
 			}
+		case TCPAuthenticate:
+			return sc.Send(TCPAuthenticationNonce{make([]byte, 32)})
+		case TCPAuthenticationComplete:
+			return nil
 		case TCPPing:
 			return sc.Send(TCPPong{RandomID: m.RandomID})
 		}

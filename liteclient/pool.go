@@ -54,8 +54,12 @@ type ConnectionPool struct {
 
 // NewConnectionPool - ordinary pool to query liteserver
 func NewConnectionPool() *ConnectionPool {
+	// new protocol requires auth, at least with some key
+	_, authKey, _ := ed25519.GenerateKey(nil)
+
 	c := &ConnectionPool{
 		activeReqs: map[string]*ADNLRequest{},
+		authKey:    authKey,
 	}
 
 	// default reconnect policy
