@@ -74,9 +74,11 @@ func main() {
 			src := ti.SrcAddr
 
 			if dsc, ok := tx.Description.(tlb.TransactionDescriptionOrdinary); ok && dsc.BouncePhase != nil {
-				// transaction was bounced, and coins was returned to sender
-				// this can happen mostly on custom contracts
-				continue
+				if _, ok = dsc.BouncePhase.Phase.(tlb.BouncePhaseOk); ok {
+					// transaction was bounced, and coins were returned to sender
+					// this can happen mostly on custom contracts
+					continue
+				}
 			}
 
 			if !ti.ExtraCurrencies.IsEmpty() {

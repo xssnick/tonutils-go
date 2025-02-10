@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"reflect"
 	"strings"
 	"sync"
@@ -85,7 +84,7 @@ type ADNL struct {
 	mx sync.RWMutex
 }
 
-var Logger = log.Println
+var Logger = func(v ...any) {}
 
 func (g *Gateway) initADNL() *ADNL {
 	tm := int32(time.Now().Unix())
