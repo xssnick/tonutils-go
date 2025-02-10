@@ -233,7 +233,6 @@ func TestRLDP_handleMessage(t *testing.T) {
 				queryId := string(tQuery.ID)
 				tChan := make(chan AsyncQueryResult, 2)
 				cli.activeRequests[queryId] = &activeRequest{
-					id:       queryId,
 					deadline: time.Now().Add(time.Second * 10).Unix(),
 					result:   tChan,
 				}
@@ -540,11 +539,6 @@ func TestRLDP_DoQuery(t *testing.T) {
 		if !reflect.DeepEqual(res, answer.Data) {
 			t.Error("got bad response")
 		}
-		time.Sleep(1 * time.Second)
-		if len(cli.activeRequests) != 0 {
-			t.Error("invalid activeRequests and activeTransfers after response", len(cli.activeRequests))
-		}
-
 	})
 
 	t.Run("negative case (deadline exceeded)", func(t *testing.T) {

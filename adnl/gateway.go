@@ -68,7 +68,9 @@ type udpPacket struct {
 type Gateway struct {
 	conn net.PacketConn
 
-	dhtIP      net.IP
+	dhtIP   net.IP
+	dhtPort uint16
+
 	addrList   address.List
 	key        ed25519.PrivateKey
 	processors map[string]*srvProcessor
@@ -169,6 +171,10 @@ func (g *Gateway) SetExternalIP(ip net.IP) {
 	g.dhtIP = ip
 }
 
+func (g *Gateway) SetExternalPort(port uint16) {
+	g.dhtPort = port
+}
+
 func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err error) {
 	threads := 1
 	if len(listenThreads) > 0 && listenThreads[0] > 0 {
@@ -186,9 +192,12 @@ func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err erro
 	}
 
 	if ip = ip.To4(); !ip.Equal(net.IPv4zero) {
-		port, err := strconv.ParseUint(adr[1], 10, 16)
-		if err != nil {
-			return fmt.Errorf("invalid listen port")
+		port := uint64(g.dhtPort)
+		if port == 0 {
+			port, err = strconv.ParseUint(adr[1], 10, 16)
+			if err != nil {
+				return fmt.Errorf("invalid listen port")
+			}
 		}
 
 		tm := int32(time.Now().Unix())

@@ -47,9 +47,13 @@ type activeTransfer struct {
 }
 
 type activeRequest struct {
-	id       string
 	deadline int64
 	result   chan<- AsyncQueryResult
+}
+
+type expectedTransfer struct {
+	deadline int64
+	maxSize  int64
 }
 
 type RLDP struct {
@@ -59,6 +63,7 @@ type RLDP struct {
 	activateRecoverySender chan bool
 	activeRequests         map[string]*activeRequest
 	activeTransfers        map[string]*activeTransfer
+	expectedTransfers      map[string]*expectedTransfer
 
 	recvStreams map[string]*decoderStream
 
@@ -94,6 +99,7 @@ type decoderStream struct {
 }
 
 var DefaultSymbolSize uint32 = 768
+var MaxUnexpectedTransferSize int64 = 1 << 16 // 64 KB
 
 const _MTU = 1 << 37
 
@@ -103,6 +109,7 @@ func NewClient(a ADNL) *RLDP {
 		activeRequests:         map[string]*activeRequest{},
 		activeTransfers:        map[string]*activeTransfer{},
 		recvStreams:            map[string]*decoderStream{},
+		expectedTransfers:      map[string]*expectedTransfer{},
 		activateRecoverySender: make(chan bool, 1),
 	}
 
@@ -168,12 +175,22 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		id := string(m.TransferID)
 		r.mx.RLock()
 		stream := r.recvStreams[id]
+		expected := r.expectedTransfers[id]
 		r.mx.RUnlock()
 
 		if stream == nil {
-			// TODO: limit unexpected transfer size to 1024 bytes
 			if m.TotalSize > _MTU || m.TotalSize <= 0 {
-				return fmt.Errorf("bad rldp packet total size")
+				return fmt.Errorf("bad rldp packet total size %d", m.TotalSize)
+			}
+
+			// unexpected transfers limited to this size, for protection
+			var maxTransferSize = MaxUnexpectedTransferSize
+			if expected != nil {
+				maxTransferSize = expected.maxSize
+			}
+
+			if m.TotalSize > maxTransferSize {
+				return fmt.Errorf("too big transfer size %d, max allowed %d", m.TotalSize, maxTransferSize)
 			}
 
 			stream = &decoderStream{
@@ -189,6 +206,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			} else {
 				r.recvStreams[id] = stream
 			}
+			delete(r.expectedTransfers, id)
 			r.mx.Unlock()
 		}
 
@@ -405,7 +423,8 @@ func (r *RLDP) recoverySender() {
 	packets := make([]tl.Serializable, 0, 1024)
 	transfersToProcess := make([]*activeTransfer, 0, 128)
 	timedOut := make([]*activeTransfer, 0, 32)
-	timedOutReq := make([]*activeRequest, 0, 32)
+	timedOutReq := make([]string, 0, 32)
+	timedOutExp := make([]string, 0, 32)
 	closerCtx := r.adnl.GetCloserCtx()
 	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
@@ -419,6 +438,7 @@ func (r *RLDP) recoverySender() {
 			transfersToProcess = transfersToProcess[:0]
 			timedOut = timedOut[:0]
 			timedOutReq = timedOutReq[:0]
+			timedOutExp = timedOutExp[:0]
 
 			ms := time.Now().UnixNano() / int64(time.Millisecond)
 
@@ -436,13 +456,19 @@ func (r *RLDP) recoverySender() {
 				}
 			}
 
-			for _, req := range r.activeRequests {
+			for id, req := range r.activeRequests {
 				if req.deadline < ms {
-					timedOutReq = append(timedOutReq, req)
+					timedOutReq = append(timedOutReq, id)
 				}
 			}
 
-			if len(r.activeRequests)+len(r.activeTransfers) == 0 {
+			for id, req := range r.expectedTransfers {
+				if req.deadline < ms {
+					timedOutExp = append(timedOutExp, id)
+				}
+			}
+
+			if len(r.activeRequests)+len(r.activeTransfers)+len(r.expectedTransfers) == 0 {
 				// stop ticks to not consume resources
 				ticker.Stop()
 			}
@@ -481,13 +507,16 @@ func (r *RLDP) recoverySender() {
 				}
 			}
 
-			if len(timedOut) > 0 || len(timedOutReq) > 0 {
+			if len(timedOut) > 0 || len(timedOutReq) > 0 || len(timedOutExp) > 0 {
 				r.mx.Lock()
 				for _, transfer := range timedOut {
 					delete(r.activeTransfers, string(transfer.id))
 				}
 				for _, req := range timedOutReq {
-					delete(r.activeRequests, req.id)
+					delete(r.activeRequests, req)
+				}
+				for _, req := range timedOutExp {
+					delete(r.expectedTransfers, req)
 				}
 				r.mx.Unlock()
 			}
@@ -580,17 +609,9 @@ func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize int64, query, result t
 
 	select {
 	case resp := <-res:
-		r.mx.Lock()
-		delete(r.activeRequests, string(qid))
-		r.mx.Unlock()
-
 		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp.Result))
 		return nil
 	case <-ctx.Done():
-		r.mx.Lock()
-		delete(r.activeRequests, string(qid))
-		r.mx.Unlock()
-
 		return fmt.Errorf("response deadline exceeded, err: %w", ctx.Err())
 	}
 }
@@ -627,6 +648,7 @@ func (r *RLDP) DoQueryAsync(ctx context.Context, maxAnswerSize int64, id []byte,
 	if err != nil {
 		return err
 	}
+	reverseId := reverseTransferId(transferId)
 
 	out := timeout.UnixNano() / int64(time.Millisecond)
 
@@ -634,6 +656,10 @@ func (r *RLDP) DoQueryAsync(ctx context.Context, maxAnswerSize int64, id []byte,
 	r.activeRequests[string(q.ID)] = &activeRequest{
 		deadline: out,
 		result:   result,
+	}
+	r.expectedTransfers[string(reverseId)] = &expectedTransfer{
+		deadline: out,
+		maxSize:  maxAnswerSize,
 	}
 	r.mx.Unlock()
 
@@ -659,17 +685,14 @@ func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize int64, queryId, toT
 		return fmt.Errorf("too big answer for that client, client wants no more than %d bytes", maxAnswerSize)
 	}
 
-	transferId := make([]byte, 32)
+	var transferId []byte
 
 	if toTransferId != nil {
 		// if we have transfer to respond, invert it and use id
-		copy(transferId, toTransferId)
-		for i := range transferId {
-			transferId[i] ^= 0xFF
-		}
+		transferId = reverseTransferId(toTransferId)
 	} else {
-		_, err = rand.Read(transferId)
-		if err != nil {
+		transferId = make([]byte, 32)
+		if _, err = rand.Read(transferId); err != nil {
 			return err
 		}
 	}
@@ -679,4 +702,13 @@ func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize int64, queryId, toT
 	}
 
 	return nil
+}
+
+func reverseTransferId(id []byte) []byte {
+	rev := make([]byte, 32)
+	copy(rev, id)
+	for i := range rev {
+		rev[i] ^= 0xFF
+	}
+	return rev
 }

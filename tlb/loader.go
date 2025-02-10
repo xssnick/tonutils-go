@@ -364,7 +364,7 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 				Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", strings.Join(settings[3:], " "))),
 			}})
 
-			values, err := dict.LoadAll()
+			values, err := dict.LoadAll(skipProofBranches)
 			if err != nil {
 				return fmt.Errorf("failed to load dict values for %v: %w", structField.Name, err)
 			}
