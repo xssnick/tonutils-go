@@ -132,4 +132,34 @@ func main() {
 
 	println("\n\nProof of 2 keys in 2 dictionaries on diff depth:")
 	println(proof.Dump())
+
+	////////////////////////////////////////////////////
+	///// VERIFY PROOF
+	////////////////////////////////////////////////////
+
+	println("Checking and parsing proof:")
+	expectedHash := exampleCell.Hash()
+
+	proofBody, err := cell.UnwrapProof(proof, expectedHash)
+	if err != nil {
+		panic(err)
+	}
+
+	println("proof verified, now we can trust its body and parse it")
+
+	var dataProof ExampleStruct
+	// LoadFromCellAsProof loads only not pruned branches and maps them to struct field, pruned fields stays empty
+	if err = tlb.LoadFromCellAsProof(&dataProof, proofBody.BeginParse()); err != nil {
+		panic(err)
+	}
+
+	val, err := dataProof.DictA.LoadValueByIntKey(big.NewInt(778))
+	if err != nil {
+		panic(err)
+	}
+
+	println("Trusted data inside proof mapped to struct:")
+	println("Some struct fields:", dataProof.A, val.String())
+
+	println("Not pruned dict keys:\n", dataProof.DictA.String())
 }
