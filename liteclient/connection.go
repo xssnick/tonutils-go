@@ -335,28 +335,27 @@ func (n *connection) listen(connResult chan<- error) {
 }
 
 func (n *connection) startPings(every time.Duration) {
-	// TODO: do without goroutines
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
+    ticker := time.NewTicker(every)
+    defer ticker.Stop()
 
-	for {
-		select {
-		case <-n.pool.globalCtx.Done():
-			return
-		case <-ticker.C:
-		}
+    for {
+        select {
+        case <-n.pool.globalCtx.Done():
+            return
+        case <-ticker.C:
+            num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
+            if err != nil {
+                continue
+            }
 
-		num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
-		if err != nil {
-			continue
-		}
-
-		if err := n.ping(num.Int64()); err != nil {
-			// force close in case of error
-			_ = n.tcp.Close()
-			break
-		}
-	}
+            if err := n.ping(num.Int64()); err != nil {
+                // Close the connection and trigger the reconnection logic
+                _ = n.tcp.Close()
+                // Exit the goroutine after connection closure
+                return
+            }
+        }
+    }
 }
 
 func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
