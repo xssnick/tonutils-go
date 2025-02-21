@@ -58,8 +58,7 @@ type ADNL struct {
 	closerCtx context.Context
 	closeFn   context.CancelFunc
 
-	channelPtr               unsafe.Pointer
-	channelExchangeCompleted int32
+	channelPtr unsafe.Pointer
 
 	msgParts map[string]*partitionedMessage
 
@@ -274,7 +273,6 @@ func (a *ADNL) processMessage(message any) error {
 		}
 
 		atomic.StorePointer(&a.channelPtr, unsafe.Pointer(newChan))
-		atomic.StoreInt32(&a.channelExchangeCompleted, 0)
 	case MessageConfirmChannel:
 		a.mx.Lock()
 		defer a.mx.Unlock()
@@ -567,8 +565,6 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 			return buf, nil
 		}
 
-		atomic.StoreInt32(&a.channelExchangeCompleted, 1)
-
 		// channel is active
 		buf, err = ch.createPacket(seqno, req)
 		if err != nil {
@@ -591,7 +587,6 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 			initDate: int32(time.Now().Unix()),
 		}
 		atomic.StorePointer(&a.channelPtr, unsafe.Pointer(ch))
-		atomic.StoreInt32(&a.channelExchangeCompleted, 0)
 		a.mx.Unlock()
 	}
 
@@ -668,6 +663,18 @@ func (a *ADNL) GetAddressList() address.List {
 func (a *ADNL) GetID() []byte {
 	id, _ := tl.Hash(PublicKeyED25519{Key: a.peerKey})
 	return id
+}
+
+func (a *ADNL) GetPubKey() ed25519.PublicKey {
+	return a.peerKey
+}
+
+func (a *ADNL) Reinit() {
+	atomic.StorePointer(&a.channelPtr, nil)
+	atomic.StoreInt32(&a.reinitTime, int32(time.Now().Unix()))
+	atomic.StoreInt32(&a.dstReinit, 0)
+	atomic.StoreInt64(&a.seqno, 0)
+	atomic.StoreInt64(&a.confirmSeqno, 0)
 }
 
 func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, error) {

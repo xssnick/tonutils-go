@@ -29,6 +29,8 @@ type Peer interface {
 	GetCloserCtx() context.Context
 	RemoteAddr() string
 	GetID() []byte
+	GetPubKey() ed25519.PublicKey
+	Reinit()
 	Close()
 }
 
@@ -458,6 +460,18 @@ func (p *peerConn) checkUpdateAddr(addr net.Addr) {
 	}
 }
 
+func (g *Gateway) GetActivePeers() []Peer {
+	g.mx.RLock()
+	defer g.mx.RUnlock()
+
+	peers := make([]Peer, 0, len(g.peers))
+	for _, p := range g.peers {
+		peers = append(peers, p)
+	}
+
+	return peers
+}
+
 func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string) (*peerConn, error) {
 	g.mx.Lock()
 	defer g.mx.Unlock()
@@ -584,6 +598,14 @@ func (g *Gateway) GetID() []byte {
 
 func (p *peerConn) GetID() []byte {
 	return p.client.GetID()
+}
+
+func (p *peerConn) Reinit() {
+	p.client.Reinit()
+}
+
+func (p *peerConn) GetPubKey() ed25519.PublicKey {
+	return p.client.GetPubKey()
 }
 
 func (p *peerConn) SetCustomMessageHandler(handler func(msg *MessageCustom) error) {
