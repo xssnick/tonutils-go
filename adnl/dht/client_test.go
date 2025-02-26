@@ -64,6 +64,8 @@ func (m MockADNL) GetCloserCtx() context.Context {
 	return context.Background()
 }
 
+func (m MockADNL) SetAddresses(addresses address.List) {}
+
 func (m MockADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
 	return nil
 }

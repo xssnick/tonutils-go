@@ -27,6 +27,7 @@ type Peer interface {
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
 	GetQueryHandler() func(msg *MessageQuery) error
 	GetCloserCtx() context.Context
+	SetAddresses(addresses address.List)
 	RemoteAddr() string
 	GetID() []byte
 	GetPubKey() ed25519.PublicKey
@@ -55,6 +56,10 @@ func (p *peerConn) GetCloserCtx() context.Context {
 	return p.client.GetCloserCtx()
 }
 
+func (p *peerConn) SetAddresses(addresses address.List) {
+	p.client.SetAddresses(addresses)
+}
+
 type srvProcessor struct {
 	lastPacketAt time.Time
 	processor    func(buf []byte) error
@@ -70,10 +75,7 @@ type udpPacket struct {
 type Gateway struct {
 	conn net.PacketConn
 
-	dhtIP   net.IP
-	dhtPort uint16
-
-	addrList   address.List
+	addrList   unsafe.Pointer
 	key        ed25519.PrivateKey
 	processors map[string]*srvProcessor
 	peers      map[string]*peerConn
@@ -135,15 +137,27 @@ var DefaultListener = func(addr string) (net.PacketConn, error) {
 }
 
 func (g *Gateway) GetAddressList() address.List {
-	return g.addrList
+	return *(*address.List)(atomic.LoadPointer(&g.addrList))
 }
 
-func (g *Gateway) SetExternalIP(ip net.IP) {
-	g.dhtIP = ip
-}
+func (g *Gateway) SetAddressList(addresses []*address.UDP) {
+	g.mx.Lock()
+	defer g.mx.Unlock()
 
-func (g *Gateway) SetExternalPort(port uint16) {
-	g.dhtPort = port
+	tm := int32(time.Now().Unix())
+	list := address.List{
+		Addresses:  addresses,
+		Version:    tm,
+		ReinitDate: tm,
+		Priority:   0,
+		ExpireAt:   0,
+	}
+	atomic.StorePointer(&g.addrList, unsafe.Pointer(&list))
+
+	for _, conn := range g.peers {
+		// update addr for all peers
+		conn.client.SetAddresses(list)
+	}
 }
 
 func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err error) {
@@ -157,32 +171,28 @@ func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err erro
 		return fmt.Errorf("invalid listen address")
 	}
 
-	ip := g.dhtIP
-	if ip == nil {
-		ip = net.ParseIP(adr[0])
-	}
+	if g.addrList == nil {
+		ip := net.ParseIP(adr[0])
 
-	if ip = ip.To4(); !ip.Equal(net.IPv4zero) {
-		port := uint64(g.dhtPort)
-		if port == 0 {
-			port, err = strconv.ParseUint(adr[1], 10, 16)
+		if ip = ip.To4(); !ip.Equal(net.IPv4zero) {
+			port, err := strconv.ParseUint(adr[1], 10, 16)
 			if err != nil {
 				return fmt.Errorf("invalid listen port")
 			}
-		}
 
-		tm := int32(time.Now().Unix())
-		g.addrList = address.List{
-			Addresses: []*address.UDP{
-				{
-					IP:   ip,
-					Port: int32(port),
+			tm := int32(time.Now().Unix())
+			g.addrList = unsafe.Pointer(&address.List{
+				Addresses: []*address.UDP{
+					{
+						IP:   ip,
+						Port: int32(port),
+					},
 				},
-			},
-			Version:    tm,
-			ReinitDate: tm,
-			Priority:   0,
-			ExpireAt:   0,
+				Version:    tm,
+				ReinitDate: tm,
+				Priority:   0,
+				ExpireAt:   0,
+			})
 		}
 	}
 
@@ -218,13 +228,15 @@ func (g *Gateway) StartClient(listenThreads ...int) (err error) {
 		threads = listenThreads[0]
 	}
 
-	tm := int32(time.Now().Unix())
-	g.addrList = address.List{
-		Addresses:  []*address.UDP{}, // no specified addresses, we are acting as a client
-		Version:    tm,
-		ReinitDate: tm,
-		Priority:   0,
-		ExpireAt:   0,
+	if g.addrList == nil {
+		tm := int32(time.Now().Unix())
+		g.addrList = unsafe.Pointer(&address.List{
+			Addresses:  []*address.UDP{}, // no specified addresses, we are acting as a client
+			Version:    tm,
+			ReinitDate: tm,
+			Priority:   0,
+			ExpireAt:   0,
+		})
 	}
 
 	// listen all addresses, port will be auto-chosen
@@ -443,7 +455,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 		server:   g,
 	}
 
-	addrList := g.addrList
+	addrList := *(*address.List)(atomic.LoadPointer(&g.addrList))
 	addrList.ReinitDate = int32(time.Now().Unix())
 	addrList.Version = addrList.ReinitDate
 
