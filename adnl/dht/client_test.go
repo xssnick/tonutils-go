@@ -53,6 +53,13 @@ type MockADNL struct {
 	close func()
 }
 
+func (m MockADNL) GetPubKey() ed25519.PublicKey {
+	return ed25519.PublicKey{}
+}
+
+func (m MockADNL) Reinit() {
+}
+
 func (m MockADNL) GetCloserCtx() context.Context {
 	return context.Background()
 }

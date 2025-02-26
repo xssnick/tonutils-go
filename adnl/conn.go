@@ -1,8 +1,10 @@
 package adnl
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"golang.org/x/net/ipv4"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -52,43 +54,46 @@ func (c *clientConn) Close() error {
 	return nil
 }
 
-type batchConn struct {
-	localAddr net.Addr
-	conn      *ipv4.PacketConn
-
-	buf []ipv4.Message
-	mx  sync.Mutex
-}
-
 type syncPacket struct {
 	addr net.Addr
 	buf  []byte
 }
 
 type SyncConn struct {
-	conn    net.PacketConn
-	chWrite chan syncPacket
-	chRead  chan syncPacket
+	conn      net.PacketConn
+	chWrite   chan syncPacket
+	chRead    chan syncPacket
+	closerCtx context.Context
+	closer    context.CancelFunc
 }
 
 func NewSyncConn(conn net.PacketConn, packetsBufSz int) *SyncConn {
+	ctx, cancel := context.WithCancel(context.Background())
 	sc := &SyncConn{
-		conn:    conn,
-		chWrite: make(chan syncPacket, packetsBufSz),
+		conn:      conn,
+		chWrite:   make(chan syncPacket, packetsBufSz),
+		closer:    cancel,
+		closerCtx: ctx,
 	}
 	go sc.writer()
 	return sc
 }
 
 func (s *SyncConn) writer() {
+	defer s.Close()
+
 	for {
 		select {
 		case p := <-s.chWrite:
-			_, err := s.conn.WriteTo(p.buf, p.addr)
-			if err != nil {
-				_ = s.conn.Close()
-				return
+			if _, err := s.conn.WriteTo(p.buf, p.addr); err != nil {
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				// should not happen, but if will we want to see
+				log.Println("[CONN] Write error:", err.Error())
 			}
+		case <-s.closerCtx.Done():
+			return
 		}
 	}
 }
@@ -98,11 +103,16 @@ func (s *SyncConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (s *SyncConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	s.chWrite <- syncPacket{addr, p}
-	return len(p), nil
+	select {
+	case <-s.closerCtx.Done():
+		return 0, fmt.Errorf("connection was closed")
+	case s.chWrite <- syncPacket{addr, p}:
+		return len(p), nil
+	}
 }
 
 func (s *SyncConn) Close() error {
+	s.closer()
 	return s.conn.Close()
 }
 
