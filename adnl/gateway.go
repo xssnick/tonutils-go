@@ -137,6 +137,9 @@ var DefaultListener = func(addr string) (net.PacketConn, error) {
 }
 
 func (g *Gateway) GetAddressList() address.List {
+	if g.addrList == nil {
+		return address.List{}
+	}
 	return *(*address.List)(atomic.LoadPointer(&g.addrList))
 }
 
