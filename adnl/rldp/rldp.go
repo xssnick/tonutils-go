@@ -79,7 +79,7 @@ func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 	copy(transfer, data)
 
 	var fec FECRaptorQ
-	data, err := tl.Parse(fec, data[32:], true)
+	data, err := tl.Parse(&fec, data[32:], true)
 	if err != nil {
 		return nil, err
 	}
