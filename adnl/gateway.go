@@ -29,6 +29,8 @@ type Peer interface {
 	GetCloserCtx() context.Context
 	RemoteAddr() string
 	GetID() []byte
+	GetPubKey() ed25519.PublicKey
+	Reinit()
 	Close()
 }
 
@@ -125,42 +127,11 @@ func NewGatewayWithListener(key ed25519.PrivateKey, listener func(addr string) (
 }
 
 var DefaultListener = func(addr string) (net.PacketConn, error) {
-	/*ra, err := net.ResolveUDPAddr("udp", *dstAddr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	conn, err := net.DialUDP("udp", nil, ra)
-	if err != nil {
-		log.Fatal(err)
-	}
-	pconn := ipv6.NewPacketConn(conn)
-
-	pconn := ipv6.NewPacketConn(g.conn)
-
-	wb := make([]ipv6.Message, *batchSize)
-	for i := 0; i < *batchSize; i++ {
-		wb[i].Addr = ra
-		wb[i].Buffers = [][]byte{make([]byte, *packetSize)}
-	}
-
-	pconn.SendMsgs()*/
-	/*lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			var opErr error
-			err := c.Control(func(fd uintptr) {
-				opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
-			})
-			if err != nil {
-				return err
-			}
-			return opErr
-		},
-	}*/
 	lp, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return nil, err
 	}
-	return NewSyncConn(lp, 1*1024*1024), nil
+	return NewSyncConn(lp, 512*1024), nil
 }
 
 func (g *Gateway) GetAddressList() address.List {
@@ -430,20 +401,6 @@ func (g *Gateway) listen(rootId []byte) {
 			}
 		}
 
-		// TODO: processors pool
-		/*func() {
-			defer func() {
-				if r := recover(); r != nil {
-					Logger("critical error while processing packet at server:", r)
-				}
-			}()
-
-			if err := proc.processor(buf); err != nil {
-				Logger("failed to process packet at server:", err)
-				return
-			}
-		}()*/
-
 		if err := proc.processor(buf); err != nil {
 			Logger("failed to process packet at server:", err)
 		}
@@ -456,6 +413,18 @@ func (p *peerConn) checkUpdateAddr(addr net.Addr) {
 	if currentAddr.String() != addr.String() {
 		atomic.StorePointer(&p.addr, unsafe.Pointer(&addr))
 	}
+}
+
+func (g *Gateway) GetActivePeers() []Peer {
+	g.mx.RLock()
+	defer g.mx.RUnlock()
+
+	peers := make([]Peer, 0, len(g.peers))
+	for _, p := range g.peers {
+		peers = append(peers, p)
+	}
+
+	return peers
 }
 
 func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string) (*peerConn, error) {
@@ -584,6 +553,14 @@ func (g *Gateway) GetID() []byte {
 
 func (p *peerConn) GetID() []byte {
 	return p.client.GetID()
+}
+
+func (p *peerConn) Reinit() {
+	p.client.Reinit()
+}
+
+func (p *peerConn) GetPubKey() ed25519.PublicKey {
+	return p.client.GetPubKey()
 }
 
 func (p *peerConn) SetCustomMessageHandler(handler func(msg *MessageCustom) error) {
