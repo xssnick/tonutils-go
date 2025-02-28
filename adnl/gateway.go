@@ -199,11 +199,6 @@ func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err erro
 		}
 	}
 
-	rootId, err := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
-	if err != nil {
-		return err
-	}
-
 	if err = g.reader.InitConnection(g, listenAddr); err != nil {
 		return err
 	}
@@ -211,7 +206,7 @@ func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err erro
 
 	go g.startOldPeersChecker()
 	for i := 0; i < threads; i++ {
-		go g.listen(rootId)
+		go g.listen(g.GetID())
 	}
 
 	return nil
@@ -241,11 +236,6 @@ func (g *Gateway) StartClient(listenThreads ...int) (err error) {
 		})
 	}
 
-	rootId, err := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
-	if err != nil {
-		return err
-	}
-
 	// listen all addresses, port will be auto-chosen
 	if err = g.reader.InitConnection(g, ":"); err != nil {
 		return err
@@ -254,7 +244,7 @@ func (g *Gateway) StartClient(listenThreads ...int) (err error) {
 
 	go g.startOldPeersChecker()
 	for i := 0; i < threads; i++ {
-		go g.listen(rootId)
+		go g.listen(g.GetID())
 	}
 
 	return nil
@@ -311,7 +301,7 @@ func (g *Gateway) listen(rootId []byte) {
 			}
 
 			g.mx.RLock()
-			cli := g.peers[string(peerId)]
+			cli := g.peers[*(*string)(unsafe.Pointer(&peerId))]
 			g.mx.RUnlock()
 
 			if cli == nil {
@@ -339,7 +329,7 @@ func (g *Gateway) listen(rootId []byte) {
 		}
 
 		g.mx.RLock()
-		proc := g.processors[string(id)]
+		proc := g.processors[*(*string)(unsafe.Pointer(&id))]
 		g.mx.RUnlock()
 
 		if proc == nil {
