@@ -397,6 +397,12 @@ func (g *Gateway) GetActivePeers() []Peer {
 }
 
 func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string) (*peerConn, error) {
+	if a, ok := addr.(*net.UDPAddr); !ok {
+		return nil, fmt.Errorf("invalid address type")
+	} else if a.IP.Equal(net.IPv4zero) {
+		return nil, fmt.Errorf("zero address is invalid")
+	}
+
 	g.mx.Lock()
 	defer g.mx.Unlock()
 
