@@ -814,7 +814,13 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			}
 		case _ExecuteTypeIP4:
 			ipBytes := *(*net.IP)(ptr)
-			if len(ipBytes) == 4 {
+			if len(ipBytes) == net.IPv6len {
+				ipBytes = ipBytes.To4()
+				if ipBytes == nil {
+					return fmt.Errorf("invalid ip v4 in field %s", field.String())
+				}
+			}
+			if len(ipBytes) == net.IPv4len {
 				for i := 3; i >= 0; i-- {
 					buf.WriteByte(ipBytes[i])
 				}
