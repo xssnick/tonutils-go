@@ -437,6 +437,32 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 	return nil, errUnexpectedResponse(resp)
 }
 
+// GetBlockDataAsCell - get block cell
+func (c *APIClient) GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (*cell.Cell, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, GetBlockData{ID: block}, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case BlockData:
+		pl, err := cell.FromBOC(t.Payload)
+		if err != nil {
+			return nil, err
+		}
+
+		if !bytes.Equal(pl.Hash(), block.RootHash) {
+			return nil, fmt.Errorf("incorrect block")
+		}
+
+		return pl, nil
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
+}
+
 // GetBlockTransactionsV2 - list of block transactions
 func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error) {
 	withAfter := uint32(0)

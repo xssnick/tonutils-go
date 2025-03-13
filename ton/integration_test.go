@@ -99,6 +99,16 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 		return
 	}
 
+	// TODO: uncomment after aug dict impl
+	/*x, err := tlb.ToCell(mb)
+	if err != nil {
+		t.Fatal("to cell err:", err.Error())
+	}
+
+	if !bytes.Equal(x.Hash(), b.RootHash) {
+		t.Fatal("master hash not eq after serialize")
+	}*/
+
 	shards, err := api.WaitForBlock(b.SeqNo).GetBlockShardsInfo(ctx, b)
 	if err != nil {
 		log.Fatalln("get shards err:", err.Error())
@@ -115,6 +125,29 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 		if err != nil {
 			t.Fatal("Get block parents err:", err.Error())
 			return
+		}
+
+		x, err := tlb.ToCell(data)
+		if err != nil {
+			t.Fatal("to cell err:", err.Error())
+		}
+
+		if !bytes.Equal(x.Hash(), shard.RootHash) {
+			t.Fatal("hash not eq after serialize")
+		}
+
+		var bData tlb.Block
+		if err = tlb.LoadFromCell(&bData, x.BeginParse()); err != nil {
+			t.Fatal(err)
+		}
+
+		x2, err := tlb.ToCell(bData)
+		if err != nil {
+			t.Fatal("to cell2 err:", err.Error())
+		}
+
+		if !bytes.Equal(x.Hash(), x2.Hash()) {
+			t.Fatal("hash not eq after serialize/deserialize")
 		}
 	}
 

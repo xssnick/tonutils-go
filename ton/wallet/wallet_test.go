@@ -479,6 +479,7 @@ type WaiterMock struct {
 	MGetTime                            func(ctx context.Context) (uint32, error)
 	MLookupBlock                        func(ctx context.Context, workchain int32, shard int64, seqno uint32) (*ton.BlockIDExt, error)
 	MGetBlockData                       func(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error)
+	MGetBlockDataAsCell                 func(ctx context.Context, block *ton.BlockIDExt) (*cell.Cell, error)
 	MGetBlockTransactionsV2             func(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error)
 	MGetBlockShardsInfo                 func(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error)
 	MGetBlockchainConfig                func(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
@@ -570,6 +571,10 @@ func (w WaiterMock) LookupBlock(ctx context.Context, workchain int32, shard int6
 
 func (w WaiterMock) GetBlockData(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error) {
 	return w.MGetBlockData(ctx, block)
+}
+
+func (w WaiterMock) GetBlockDataAsCell(ctx context.Context, block *ton.BlockIDExt) (*cell.Cell, error) {
+	return w.MGetBlockDataAsCell(ctx, block)
 }
 
 func (w WaiterMock) GetBlockTransactionsV2(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error) {

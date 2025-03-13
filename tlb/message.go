@@ -20,12 +20,25 @@ func init() {
 	Register(ExternalMessage{})
 	Register(ExternalMessageOut{})
 	Register(InternalMessage{})
+
+	Register(ActionSendMsg{})
 }
 
 type AnyMessage interface {
 	Payload() *cell.Cell
 	SenderAddr() *address.Address
 	DestAddr() *address.Address
+}
+
+type OutList struct {
+	Prev *cell.Cell `tlb:"^"`
+	Out  any        `tlb:"[ActionSendMsg]"`
+}
+
+type ActionSendMsg struct {
+	_    Magic      `tlb:"#0ec3c86d"`
+	Mode uint8      `tlb:"## 8"`
+	Msg  *cell.Cell `tlb:"^"`
 }
 
 type Message struct {

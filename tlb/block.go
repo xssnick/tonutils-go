@@ -24,14 +24,19 @@ type StateUpdate struct {
 type McBlockExtra struct {
 	_           Magic            `tlb:"#cca5"`
 	KeyBlock    bool             `tlb:"bool"`
-	ShardHashes *cell.Dictionary `tlb:"dict 32"`
-	ShardFees   *cell.Dictionary `tlb:"dict 96"`
+	ShardHashes *cell.Dictionary `tlb:"dict 32"` // TODO: aug
+	ShardFees   *cell.Dictionary `tlb:"dict 96"` // TODO: aug
 	Details     struct {
 		PrevBlockSignatures *cell.Dictionary `tlb:"dict 16"`
 		RecoverCreateMsg    *cell.Cell       `tlb:"maybe ^"`
 		MintMsg             *cell.Cell       `tlb:"maybe ^"`
 	} `tlb:"^"`
 	ConfigParams *ConfigParams `tlb:"?KeyBlock ."`
+}
+
+func (e *McBlockExtra) ToCell() (*cell.Cell, error) {
+	//TODO: implement augmented dict
+	return nil, fmt.Errorf("serialization of McBlockExtra is not supported yet, because of aug dicts")
 }
 
 type BlockExtra struct {
@@ -138,6 +143,60 @@ func (h *BlockInfo) Copy() *BlockInfo {
 	}
 }
 
+func (h BlockHeader) ToCell() (*cell.Cell, error) {
+	b := cell.BeginCell()
+
+	info, err := ToCell(h.blockInfoPart)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert blockInfoPart: %w", err)
+	}
+	b.MustStoreBuilder(info.ToBuilder())
+
+	if h.Flags&1 == 1 {
+		if h.GenSoftware == nil {
+			return nil, fmt.Errorf("GenSoftware is nil but flag specified")
+		}
+
+		g, err := ToCell(h.GenSoftware)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert GenSoftware: %w", err)
+		}
+		b.MustStoreBuilder(g.ToBuilder())
+	}
+
+	if h.NotMaster {
+		if h.MasterRef == nil {
+			return nil, fmt.Errorf("MasterRef is nil but flag specified")
+		}
+
+		m, err := ToCell(h.MasterRef)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert MasterRef: %w", err)
+		}
+		b.MustStoreRef(m)
+	}
+
+	bIn := cell.BeginCell()
+	if err = storeBlkPrevInfo(&h.PrevRef, bIn, h.AfterMerge); err != nil {
+		return nil, fmt.Errorf("failed to store prev ref: %w", err)
+	}
+	b.MustStoreRef(bIn.EndCell())
+
+	if h.VertSeqnoIncr {
+		if h.PrevVertRef == nil {
+			return nil, fmt.Errorf("PrevVertRef is nil but flag specified")
+		}
+
+		bIn = cell.BeginCell()
+		if err = storeBlkPrevInfo(h.PrevVertRef, bIn, false); err != nil {
+			return nil, fmt.Errorf("failed to store prev ref: %w", err)
+		}
+		b.MustStoreRef(bIn.EndCell())
+	}
+
+	return b.EndCell(), nil
+}
+
 func (h *BlockHeader) LoadFromCell(loader *cell.Slice) error {
 	var infoPart blockInfoPart
 	err := LoadFromCell(&infoPart, loader)
@@ -232,6 +291,30 @@ func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) 
 	res.Prev1 = blkRef1
 	res.Prev2 = &blkRef2
 	return &res, nil
+}
+
+func storeBlkPrevInfo(info *BlkPrevInfo, b *cell.Builder, afterMerge bool) error {
+	if !afterMerge {
+		c, err := ToCell(info.Prev1)
+		if err != nil {
+			return err
+		}
+		b.MustStoreBuilder(c.ToBuilder())
+		return nil
+	}
+
+	c1, err := ToCell(info.Prev1)
+	if err != nil {
+		return err
+	}
+	c2, err := ToCell(info.Prev2)
+	if err != nil {
+		return err
+	}
+
+	b.MustStoreRef(c1)
+	b.MustStoreRef(c2)
+	return err
 }
 
 func ConvertShardIdentToShard(si ShardIdent) (workchain int32, shard uint64) {

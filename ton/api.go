@@ -56,6 +56,7 @@ type APIClientWrapped interface {
 	GetLibraries(ctx context.Context, list ...[]byte) ([]*cell.Cell, error)
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
+	GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (*cell.Cell, error)
 	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
 	GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) ([]*BlockIDExt, error)
 	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error)
