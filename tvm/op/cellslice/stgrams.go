@@ -22,10 +22,10 @@ func STGRAMS() *helpers.SimpleOP {
 				return err
 			}
 
-			if err := b1.StoreBigCoins(i0.ToBigInt()); err != nil {
+			if err := b1.StoreBigCoins(i0); err != nil {
 				return err
 			}
-			return state.Stack.Push(b1)
+			return state.Stack.PushBuilder(b1)
 		},
 		Name:   "STGRAMS",
 		Prefix: []byte{0xFA, 0x02},

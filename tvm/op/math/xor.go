@@ -12,16 +12,16 @@ func init() {
 func XOR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopInt()
+			i0, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
-			i1, err := state.Stack.PopInt()
+			i1, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.Push(i0.Xor(i1))
+			return state.Stack.PushInt(i0.Xor(i0, i1))
 		},
 		Name:   "XOR",
 		Prefix: []byte{0xB2},

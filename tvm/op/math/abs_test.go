@@ -2,8 +2,8 @@ package math
 
 import (
 	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/int257"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"math/big"
 	"testing"
 )
 
@@ -27,7 +27,7 @@ func TestAbsOperation(t *testing.T) {
 			operation := ABS()
 			arg := test.a
 
-			err := st.Push(int257.NewInt257FromInt64(int64(arg)))
+			err := st.Push(big.NewInt(int64(arg)))
 			if err != nil {
 				t.Fatal("Failed argument pushing:", err.Error())
 			}
@@ -43,8 +43,8 @@ func TestAbsOperation(t *testing.T) {
 			if err != nil {
 				t.Fatal("Failed ABS pop:", err.Error())
 			}
-			gotTyped := got.(int257.Int257)
-			wantTyped := int257.NewInt257FromInt64(test.want)
+			gotTyped := got.(*big.Int)
+			wantTyped := big.NewInt(test.want)
 			if wantTyped.Cmp(gotTyped) != 0 {
 				t.Errorf("got %s, want %d\n", got, test.want)
 			}

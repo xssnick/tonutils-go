@@ -25,7 +25,7 @@ func STB() *helpers.SimpleOP {
 			if err := b0.StoreBuilder(b1); err != nil {
 				return err
 			}
-			return state.Stack.Push(b0)
+			return state.Stack.PushBuilder(b0)
 		},
 		Name:   "STB",
 		Prefix: []byte{0xCF, 0x13},

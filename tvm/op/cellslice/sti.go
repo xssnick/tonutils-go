@@ -24,10 +24,10 @@ func STI(sz uint) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			if err := b0.StoreBigInt(i1.ToBigInt(), sz); err != nil {
+			if err := b0.StoreBigInt(i1, sz); err != nil {
 				return err
 			}
-			return state.Stack.Push(b0)
+			return state.Stack.PushBuilder(b0)
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d STI", sz)

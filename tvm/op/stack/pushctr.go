@@ -43,5 +43,5 @@ func (op *OpPUSHCTR) SerializeText() string {
 }
 
 func (op *OpPUSHCTR) Interpret(state *vm.State) error {
-	return state.Stack.Push(state.Reg.Get(int(op.ctrIndex)))
+	return state.Stack.PushAny(state.Reg.Get(int(op.ctrIndex)))
 }

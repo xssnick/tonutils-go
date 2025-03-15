@@ -16,7 +16,7 @@ func NOW() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.Push(v)
+			return state.Stack.PushAny(v)
 		},
 		Name:   "NOW",
 		Prefix: []byte{0xF8, 0x23},

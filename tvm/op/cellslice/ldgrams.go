@@ -22,11 +22,11 @@ func LDGRAMS() *helpers.SimpleOP {
 				return err
 			}
 
-			err = state.Stack.Push(coins)
+			err = state.Stack.PushInt(coins)
 			if err != nil {
 				return err
 			}
-			return state.Stack.Push(s)
+			return state.Stack.PushSlice(s)
 		},
 		Name:   "LDGRAMS",
 		Prefix: []byte{0xFA, 0x00},

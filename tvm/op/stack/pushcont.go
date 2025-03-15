@@ -173,7 +173,7 @@ func (op *OpPUSHCONT) SerializeText() string {
 }
 
 func (op *OpPUSHCONT) Interpret(state *vm.State) error {
-	return state.Stack.Push(&vm.OrdinaryContinuation{Code: op.cont.BeginParse(), Data: vm.ControlData{
+	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{Code: op.cont.BeginParse(), Data: vm.ControlData{
 		NumArgs: vm.ControlDataAllArgs,
 		CP:      state.CP,
 	}})

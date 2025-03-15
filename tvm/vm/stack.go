@@ -3,7 +3,6 @@ package vm
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/int257"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 	"math/big"
 )
@@ -33,7 +32,44 @@ func (e *Elem) Copy() *Elem {
 	}
 }
 
-func (s *Stack) Push(val any) error {
+func (s *Stack) PushBool(val bool) error {
+	if val {
+		return s.PushAny(big.NewInt(-1))
+	}
+	return s.PushAny(big.NewInt(0))
+}
+
+func (s *Stack) PushBuilder(val *cell.Builder) error {
+	return s.PushAny(val)
+}
+
+func (s *Stack) PushSlice(val *cell.Slice) error {
+	return s.PushAny(val)
+}
+
+func (s *Stack) PushCell(val *cell.Cell) error {
+	return s.PushAny(val)
+}
+
+func (s *Stack) PushContinuation(val Continuation) error {
+	return s.PushAny(val)
+}
+
+func (s *Stack) PushInt(val *big.Int) error {
+	if val.BitLen() > 256 { // 257th bit is sign
+		return vmerr.ErrIntOverflow
+	}
+	return s.PushAny(val)
+}
+
+func (s *Stack) PushIntQuiet(val *big.Int) error {
+	if val.BitLen() > 256 { // 257th bit is sign
+		val = nil // NaN
+	}
+	return s.PushAny(val)
+}
+
+func (s *Stack) PushAny(val any) error {
 	if len(s.elems) >= 255 {
 		return vmerr.ErrStackOverflow
 	}
@@ -85,7 +121,7 @@ func (s *Stack) PushAt(at int) error {
 	if at < 0 || at >= len(s.elems) {
 		return vmerr.ErrStackUnderflow
 	}
-	return s.Push(s.elems[at].value)
+	return s.PushAny(s.elems[at].value)
 }
 
 func (s *Stack) Drop(num int) error {
@@ -132,25 +168,25 @@ func (s *Stack) Pop() (any, error) {
 	return e.value, nil
 }
 
-func (s *Stack) PopInt() (int257.Int257, error) {
+func (s *Stack) PopInt() (*big.Int, error) {
 	e, err := s.Pop()
 	if err != nil {
-		return int257.Int257{}, err
+		return nil, err
 	}
-	if v, ok := e.(int257.Int257); !ok {
-		return int257.Int257{}, vmerr.ErrTypeCheck
+	if v, ok := e.(*big.Int); !ok {
+		return nil, vmerr.ErrTypeCheck
 	} else {
 		return v, nil
 	}
 }
 
-func (s *Stack) PopIntFinite() (int257.Int257, error) {
+func (s *Stack) PopIntFinite() (*big.Int, error) {
 	e, err := s.PopInt()
 	if err != nil {
-		return int257.Int257{}, err
+		return nil, err
 	}
-	if !e.IsValid() {
-		return int257.Int257{}, vmerr.ErrIntOverflow
+	if e == nil { // nil = non valid
+		return nil, vmerr.ErrIntOverflow
 	}
 	return e, nil
 }
@@ -211,17 +247,15 @@ func (s *Stack) PopSlice() (*cell.Slice, error) {
 	}
 }
 
-func (s *Stack) PopIntRange(min, max int64) (int257.Int257, error) {
+func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 	e, err := s.PopInt()
 	if err != nil {
-		return int257.Int257{}, err
+		return nil, err
 	}
 
-	v := e.ToBigInt()
-	if v.Cmp(big.NewInt(min)) < 0 || v.Cmp(big.NewInt(max)) > 0 {
-		return int257.Int257{}, vmerr.ErrRangeCheck
+	if e.Cmp(big.NewInt(min)) < 0 || e.Cmp(big.NewInt(max)) > 0 {
+		return nil, vmerr.ErrRangeCheck
 	}
-
 	return e, nil
 }
 

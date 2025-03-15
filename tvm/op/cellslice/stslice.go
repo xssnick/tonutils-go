@@ -25,7 +25,7 @@ func STSLICE() *helpers.SimpleOP {
 			if err := b0.StoreBuilder(s1.ToBuilder()); err != nil {
 				return err
 			}
-			return state.Stack.Push(b0)
+			return state.Stack.PushBuilder(b0)
 		},
 		Name:   "STSLICE",
 		Prefix: []byte{0xCE},

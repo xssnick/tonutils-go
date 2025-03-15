@@ -16,7 +16,7 @@ func ENDC() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.Push(b.EndCell())
+			return state.Stack.PushCell(b.EndCell())
 		},
 		Name:   "ENDC",
 		Prefix: []byte{0xC9},

@@ -1,6 +1,7 @@
 package cellslice
 
 import (
+	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -22,16 +23,16 @@ func LDSLICEX() *helpers.SimpleOP {
 				return err
 			}
 
-			s, err := s1.LoadSlice(uint(i0.ToBigInt().Uint64()))
+			s, err := s1.LoadSlice(uint(i0.Uint64()))
 			if err != nil {
 				return err
 			}
 
-			err = state.Stack.Push(s)
+			err = state.Stack.PushSlice(cell.BeginCell().MustStoreSlice(s, uint(i0.Uint64())).ToSlice())
 			if err != nil {
 				return err
 			}
-			return state.Stack.Push(s1)
+			return state.Stack.PushSlice(s1)
 		},
 		Name:   "LDSLICEX",
 		Prefix: []byte{0xD7, 0x18},

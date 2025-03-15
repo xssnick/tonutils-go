@@ -24,12 +24,12 @@ func PLDU(sz uint) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			err = state.Stack.Push(i)
+			err = state.Stack.PushInt(i)
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.Push(s0)
+			return state.Stack.PushSlice(s0)
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d PLDU", sz)

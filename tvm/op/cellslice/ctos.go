@@ -1,8 +1,10 @@
 package cellslice
 
 import (
+	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -17,7 +19,14 @@ func CTOS() *helpers.SimpleOP {
 				return err
 			}
 
-			return state.Stack.Push(c.BeginParse())
+			if c.GetType() != cell.OrdinaryCellType {
+				return vmerr.VMError{
+					Code: vmerr.ErrCellUnderflow.Code,
+					Msg:  "unexpected special cell",
+				}
+			}
+
+			return state.Stack.PushSlice(c.BeginParse())
 		},
 		Name:   "CTOS",
 		Prefix: []byte{0xD0},

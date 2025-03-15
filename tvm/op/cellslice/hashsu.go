@@ -1,9 +1,9 @@
 package cellslice
 
 import (
-	"github.com/xssnick/tonutils-go/tvm/int257"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"math/big"
 )
 
 func init() {
@@ -17,9 +17,7 @@ func HASHSU() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-
-			res := int257.NewInt257FromBytes(s.MustToCell().Hash())
-			return state.Stack.Push(res)
+			return state.Stack.PushInt(new(big.Int).SetBytes(s.MustToCell().Hash()))
 		},
 		Name:   "HASHSU",
 		Prefix: []byte{0xF9, 0x01},

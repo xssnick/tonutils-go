@@ -2,8 +2,8 @@ package math
 
 import (
 	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/int257"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"math/big"
 	"testing"
 )
 
@@ -27,7 +27,7 @@ func TestIszeroOperation(t *testing.T) {
 			operation := ISZERO()
 			arg := test.a
 
-			err := st.Push(int257.NewInt257FromInt64(int64(arg)))
+			err := st.Push(big.NewInt(int64(arg)))
 			if err != nil {
 				t.Fatal("Failed argument pushing:", err.Error())
 			}
@@ -41,7 +41,7 @@ func TestIszeroOperation(t *testing.T) {
 			if err != nil {
 				t.Fatal("Failed result popping:", err.Error())
 			}
-			gotTyped := got.(int257.Int257).Bool()
+			gotTyped := got.(*big.Int).Sign() != 0
 			if gotTyped != test.want {
 				t.Errorf("got %t, want %t\n", got, test.want)
 			}

@@ -24,10 +24,10 @@ func STU(sz uint) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			if err := b0.StoreBigUInt(i1.ToBigInt(), sz); err != nil {
+			if err := b0.StoreBigUInt(i1, sz); err != nil {
 				return err
 			}
-			return state.Stack.Push(b0)
+			return state.Stack.PushBuilder(b0)
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d STU", sz)

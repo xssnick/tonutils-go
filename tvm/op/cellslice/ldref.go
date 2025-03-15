@@ -27,11 +27,11 @@ func LDREF() *helpers.SimpleOP {
 				return err
 			}
 
-			err = state.Stack.Push(c)
+			err = state.Stack.PushCell(c)
 			if err != nil {
 				return err
 			}
-			return state.Stack.Push(s0)
+			return state.Stack.PushSlice(s0)
 		},
 		Name:   "LDREF",
 		Prefix: []byte{0xD4},

@@ -3,9 +3,9 @@ package tvm
 import (
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/int257"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"math/big"
 	"testing"
 )
 
@@ -19,7 +19,7 @@ func TestTVM_Execute(t *testing.T) {
 	data, _ := cell.FromBOC(walletV3DataBytes)
 
 	s := vm.NewStack()
-	_ = s.Push(int257.NewInt257FromInt64(85143))
+	_ = s.PushInt(big.NewInt(85143))
 
 	err := v.Execute(code, data, tuple.Tuple{}, vm.Gas{}, s)
 	if err != nil {

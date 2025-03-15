@@ -2,8 +2,8 @@ package math
 
 import (
 	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/int257"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"math/big"
 	"testing"
 )
 
@@ -26,7 +26,7 @@ func TestIsnposOperation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			operation := ISNPOS()
 
-			err := st.Push(int257.NewInt257FromInt64(int64(test.arg)))
+			err := st.Push(big.NewInt(int64(test.arg)))
 			if err != nil {
 				t.Fatal("Failed 'arg' argument pushing:", err.Error())
 			}
@@ -40,7 +40,7 @@ func TestIsnposOperation(t *testing.T) {
 			if err != nil {
 				t.Fatal("Failed ISNPOS result popping:", err.Error())
 			}
-			gotTyped := got.(int257.Int257).Bool()
+			gotTyped := got.(*big.Int).Sign() != 0
 			if gotTyped != test.want {
 				t.Errorf("got %t, want %t\n", gotTyped, test.want)
 			}

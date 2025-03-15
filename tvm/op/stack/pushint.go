@@ -3,7 +3,6 @@ package stack
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/int257"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"math/big"
 )
@@ -126,5 +125,5 @@ func (op *OpPUSHINT) SerializeText() string {
 }
 
 func (op *OpPUSHINT) Interpret(state *vm.State) error {
-	return state.Stack.Push(int257.NewInt257FromBigInt(op.value))
+	return state.Stack.PushInt(new(big.Int).Set(op.value))
 }

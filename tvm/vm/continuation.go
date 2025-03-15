@@ -37,7 +37,7 @@ func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 	}
 
 	return nil, vmerr.VMError{
-		Code: ^v.ToBigInt().Int64(),
+		Code: ^v.Int64(),
 	}
 }
 

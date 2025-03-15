@@ -26,9 +26,9 @@ func CONDSEL() *helpers.SimpleOP {
 			}
 
 			if i2.Sign() == 0 {
-				return state.Stack.Push(x1)
+				return state.Stack.PushAny(x1)
 			}
-			return state.Stack.Push(x0)
+			return state.Stack.PushAny(x0)
 		},
 		Name:   "CONDSEL",
 		Prefix: []byte{0xE3, 0x04},
