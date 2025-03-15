@@ -9,9 +9,9 @@ import (
 func TestRotOperation(t *testing.T) {
 	st := vm.NewStack()
 
-	st.Push(1)
-	st.Push(2)
-	st.Push(3)
+	st.PushAny(1)
+	st.PushAny(2)
+	st.PushAny(3)
 
 	rot := ROT()
 
@@ -22,17 +22,17 @@ func TestRotOperation(t *testing.T) {
 		t.Fatal("Failed ROT interpretation:", err.Error())
 	}
 
-	a, err := st.Pop()
+	a, err := st.PopAny()
 	if err != nil || a != 1 {
 		t.Errorf("Expected 1 at a, got %v", a)
 	}
 
-	c, err := st.Pop()
+	c, err := st.PopAny()
 	if err != nil || c != 3 {
 		t.Errorf("Expected 3 at c, got %v", c)
 	}
 
-	b, err := st.Pop()
+	b, err := st.PopAny()
 	if err != nil || b != 2 {
 		t.Errorf("Expected 2 at b, got %v", b)
 	}

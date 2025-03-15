@@ -12,11 +12,11 @@ func init() {
 func CONDSEL() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x0, err := state.Stack.Pop()
+			x0, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
-			x1, err := state.Stack.Pop()
+			x1, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}

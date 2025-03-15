@@ -26,7 +26,7 @@ func TestIsnegOperation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			operation := ISNEG()
 
-			err := st.Push(big.NewInt(int64(test.arg)))
+			err := st.PushInt(big.NewInt(int64(test.arg)))
 			if err != nil {
 				t.Fatal("Failed 'arg' argument pushing:", err.Error())
 			}
@@ -36,7 +36,7 @@ func TestIsnegOperation(t *testing.T) {
 				t.Fatal("Failed ISNEG interpretation:", err.Error())
 			}
 
-			got, err := st.Pop()
+			got, err := st.PopAny()
 			if err != nil {
 				t.Fatal("Failed ISNEG result popping:", err.Error())
 			}

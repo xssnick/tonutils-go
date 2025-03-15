@@ -27,7 +27,7 @@ func TestNeqintOperation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			operation := NEQINT(test.cons)
 
-			err := st.Push(big.NewInt(int64(test.arg)))
+			err := st.PushInt(big.NewInt(int64(test.arg)))
 			if err != nil {
 				t.Fatal("Failed 'arg' argument pushing:", err.Error())
 			}
@@ -37,7 +37,7 @@ func TestNeqintOperation(t *testing.T) {
 				t.Fatal("Failed NEQINT interpretation:", err.Error())
 			}
 
-			got, err := st.Pop()
+			got, err := st.PopAny()
 			if err != nil {
 				t.Fatal("Failed 'got' argument popping:", err.Error())
 			}

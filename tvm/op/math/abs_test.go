@@ -27,7 +27,7 @@ func TestAbsOperation(t *testing.T) {
 			operation := ABS()
 			arg := test.a
 
-			err := st.Push(big.NewInt(int64(arg)))
+			err := st.PushInt(big.NewInt(int64(arg)))
 			if err != nil {
 				t.Fatal("Failed argument pushing:", err.Error())
 			}
@@ -39,7 +39,7 @@ func TestAbsOperation(t *testing.T) {
 				t.Fatal("Failed ABS interpretation:", err.Error())
 			}
 
-			got, err := st.Pop()
+			got, err := st.PopAny()
 			if err != nil {
 				t.Fatal("Failed ABS pop:", err.Error())
 			}

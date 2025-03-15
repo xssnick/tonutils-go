@@ -12,25 +12,25 @@ func init() {
 func ROT() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			c, err := state.Stack.Pop()
+			c, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
-			b, err := state.Stack.Pop()
+			b, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
-			a, err := state.Stack.Pop()
+			a, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
-			if err = state.Stack.Push(b); err != nil {
+			if err = state.Stack.PushAny(b); err != nil {
 				return err
 			}
-			if err = state.Stack.Push(c); err != nil {
+			if err = state.Stack.PushAny(c); err != nil {
 				return err
 			}
-			if err = state.Stack.Push(a); err != nil {
+			if err = state.Stack.PushAny(a); err != nil {
 				return err
 			}
 			return nil

@@ -159,7 +159,7 @@ func (s *Stack) Set(at int, what any) error {
 	return nil
 }
 
-func (s *Stack) Pop() (any, error) {
+func (s *Stack) PopAny() (any, error) {
 	if len(s.elems) == 0 {
 		return nil, vmerr.ErrStackUnderflow
 	}
@@ -169,7 +169,7 @@ func (s *Stack) Pop() (any, error) {
 }
 
 func (s *Stack) PopInt() (*big.Int, error) {
-	e, err := s.Pop()
+	e, err := s.PopAny()
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +185,7 @@ func (s *Stack) PopIntFinite() (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if e == nil { // nil = non valid
+	if e == nil { // nil = non valid (NaN)
 		return nil, vmerr.ErrIntOverflow
 	}
 	return e, nil
@@ -200,7 +200,7 @@ func (s *Stack) PopBool() (bool, error) {
 }
 
 func (s *Stack) PopCell() (*cell.Cell, error) {
-	e, err := s.Pop()
+	e, err := s.PopAny()
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +212,7 @@ func (s *Stack) PopCell() (*cell.Cell, error) {
 }
 
 func (s *Stack) PopContinuation() (Continuation, error) {
-	e, err := s.Pop()
+	e, err := s.PopAny()
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +224,7 @@ func (s *Stack) PopContinuation() (Continuation, error) {
 }
 
 func (s *Stack) PopBuilder() (*cell.Builder, error) {
-	e, err := s.Pop()
+	e, err := s.PopAny()
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func (s *Stack) PopBuilder() (*cell.Builder, error) {
 }
 
 func (s *Stack) PopSlice() (*cell.Slice, error) {
-	e, err := s.Pop()
+	e, err := s.PopAny()
 	if err != nil {
 		return nil, err
 	}
