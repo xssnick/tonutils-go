@@ -6,10 +6,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return SUB() })
+	vm.List = append(vm.List, func() vm.OP { return SUBR() })
 }
 
-func SUB() *helpers.SimpleOP {
+func SUBR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			i0, err := state.Stack.PopIntFinite()
@@ -21,9 +21,9 @@ func SUB() *helpers.SimpleOP {
 				return err
 			}
 
-			return state.Stack.PushInt(i0.Sub(i1, i0))
+			return state.Stack.PushInt(i0.Sub(i0, i1))
 		},
-		Name:   "SUB",
-		Prefix: []byte{0xA1},
+		Name:   "SUBR",
+		Prefix: []byte{0xA2},
 	}
 }
