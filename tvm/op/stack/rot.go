@@ -16,14 +16,17 @@ func ROT() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
+
 			b, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
+
 			a, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
+
 			if err = state.Stack.PushAny(b); err != nil {
 				return err
 			}
@@ -33,6 +36,7 @@ func ROT() *helpers.SimpleOP {
 			if err = state.Stack.PushAny(a); err != nil {
 				return err
 			}
+
 			return nil
 		},
 		Name:   "ROT",

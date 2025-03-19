@@ -211,6 +211,21 @@ func (s *Stack) PopCell() (*cell.Cell, error) {
 	}
 }
 
+func (s *Stack) PopMaybeCell() (*cell.Cell, error) {
+	e, err := s.PopAny()
+	if err != nil {
+		return nil, err
+	}
+	if e == nil {
+		return nil, nil
+	}
+	if v, ok := e.(*cell.Cell); !ok {
+		return nil, vmerr.ErrTypeCheck
+	} else {
+		return v, nil
+	}
+}
+
 func (s *Stack) PopContinuation() (Continuation, error) {
 	e, err := s.PopAny()
 	if err != nil {
