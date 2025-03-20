@@ -34,9 +34,9 @@ func ADDDIVMOD() *helpers.SimpleOP {
 				return vmerr.ErrIntOverflow
 			}
 
-			sum := new(big.Int).Add(x, w)
+			sum := x.Add(x, w)
 
-			q, r := new(big.Int).DivMod(sum, z, new(big.Int))
+			q, r := w.DivMod(sum, z, new(big.Int))
 
 			err = state.Stack.PushInt(q)
 			if err != nil {

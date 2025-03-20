@@ -27,14 +27,15 @@ func TestAddConstOperation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			st.PushInt(big.NewInt(test.x))
 
-			op := ADDCONST()
-
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
 			codeSlice := codeCell.BeginParse()
 
+			op := ADDCONST(0)
+
+			op.Deserialize(codeSlice)
+
 			err := op.Interpret(&vm.State{
-				Stack:       st,
-				CurrentCode: codeSlice,
+				Stack: st,
 			})
 			if err != nil {
 				t.Fatal(err)

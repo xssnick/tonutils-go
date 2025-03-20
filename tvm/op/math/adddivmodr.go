@@ -34,12 +34,12 @@ func ADDDIVMODR() *helpers.SimpleOP {
 				return vmerr.ErrIntOverflow
 			}
 
-			sum := new(big.Int).Add(x, w)
+			sum := x.Add(x, w)
 
-			q := new(big.Int).Div(sum, z)
+			q := w.Div(sum, z)
 			r := new(big.Int).Sub(sum, new(big.Int).Mul(z, q))
 
-			twoR := new(big.Int).Mul(r, big.NewInt(2))
+			twoR := x.Mul(r, big.NewInt(2))
 			if twoR.Cmp(z) >= 0 {
 				q.Add(q, big.NewInt(1))
 				r.Sub(r, z)

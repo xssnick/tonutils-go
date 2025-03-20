@@ -2,10 +2,11 @@ package math
 
 import (
 	"fmt"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"math/big"
 )
 
 func init() {
@@ -30,7 +31,7 @@ func GTINT(value int8) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("%d GTINT", value)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
+			val, err := code.LoadInt(8)
 			if err != nil {
 				return err
 			}
