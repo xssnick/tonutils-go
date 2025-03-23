@@ -10,10 +10,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return EQINT(0) })
+	vm.List = append(vm.List, func() vm.OP { return ADDCONST(0) })
 }
 
-func EQINT(value int8) (op *helpers.AdvancedOP) {
+func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		Action: func(state *vm.State) error {
 			i0, err := state.Stack.PopIntFinite()
@@ -21,14 +21,14 @@ func EQINT(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			return state.Stack.PushBool(i0.Cmp(big.NewInt(int64(value))) == 0)
+			return state.Stack.PushInt(i0.Add(i0, big.NewInt(int64(value))))
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xC0}, 8).EndCell(),
+		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xA6}, 8).EndCell(),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},
 		NameSerializer: func() string {
-			return fmt.Sprintf("%d EQINT", value)
+			return fmt.Sprintf("%d ADDCONST", value)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
 			val, err := code.LoadInt(8)
