@@ -7,17 +7,13 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDDIVMODR() })
+	vm.List = append(vm.List, func() vm.OP { return DIVR() })
 }
 
-func ADDDIVMODR() *helpers.SimpleOP {
+func DIVR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			z, err := state.Stack.PopIntFinite()
-			if err != nil {
-				return err
-			}
-			w, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
@@ -26,7 +22,7 @@ func ADDDIVMODR() *helpers.SimpleOP {
 				return err
 			}
 
-			if z.Sign() == 0 {
+			if y.Sign() == 0 {
 				// division by 0
 				return vmerr.VMError{
 					Code: vmerr.ErrIntOverflow.Code,
@@ -34,18 +30,11 @@ func ADDDIVMODR() *helpers.SimpleOP {
 				}
 			}
 
-			sum := w.Add(x, w)
-			q := helpers.DivRound(sum, z)
-			r := x.Sub(sum, z.Mul(z, q))
+			q := helpers.DivRound(x, y)
 
-			err = state.Stack.PushInt(q)
-			if err != nil {
-				return err
-			}
-
-			return state.Stack.PushInt(r)
+			return state.Stack.PushInt(q)
 		},
-		Name:   "ADDDIVMODR",
-		Prefix: []byte{0xA9, 0x01},
+		Name:   "DIVR",
+		Prefix: []byte{0xA9, 0x05},
 	}
 }

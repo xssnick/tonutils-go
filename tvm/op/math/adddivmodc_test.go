@@ -8,22 +8,17 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func TestAddDivModrOperation(t *testing.T) {
+func TestAddDivModcOperation(t *testing.T) {
 	tests := []struct {
 		x, w, z int64
 		q, r    int64
 	}{
-		{10, 5, 4, 4, -1},
-		{9, 4, 3, 4, 1},
-		{20, 10, 5, 6, 0},
-		{10, 3, 2, 7, -1},
-		{10, 3, 5, 3, -2},
-		{9, 2, 1, 11, 0},
-		{8, 3, 1, 11, 0},
-		{-10, 3, 2, -3, -1},
-		{-10, -3, 2, -6, -1},
-		{-10, 3, -2, 4, 1},
-		{10, -3, -2, -3, 1},
+		{10, 3, 4, 4, -3},
+		{12, 3, 3, 5, 0},
+		{1, 9, 4, 3, -2},
+		{10, -3, 4, 2, -1},
+		{-10, 3, 4, -1, -3},
+		{10, 3, -4, -3, 1},
 	}
 
 	st := vm.NewStack()
@@ -35,10 +30,10 @@ func TestAddDivModrOperation(t *testing.T) {
 			st.PushInt(big.NewInt(test.w))
 			st.PushInt(big.NewInt(test.z))
 
-			adddivmodr := ADDDIVMODR()
-			err := adddivmodr.Interpret(&vm.State{Stack: st})
+			adddivmodc := ADDDIVMODC()
+			err := adddivmodc.Interpret(&vm.State{Stack: st})
 			if err != nil {
-				t.Fatal("Failed ADDDIVMODR execution:", err.Error())
+				t.Fatal("Failed ADDDIVMODC execution:", err.Error())
 			}
 
 			remainder, err := st.PopIntFinite()
