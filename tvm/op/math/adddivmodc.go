@@ -7,10 +7,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDDIVMODR() })
+	vm.List = append(vm.List, func() vm.OP { return ADDDIVMODC() })
 }
 
-func ADDDIVMODR() *helpers.SimpleOP {
+func ADDDIVMODC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			z, err := state.Stack.PopIntFinite()
@@ -35,7 +35,7 @@ func ADDDIVMODR() *helpers.SimpleOP {
 			}
 
 			sum := w.Add(x, w)
-			q := helpers.DivRound(sum, z)
+			q := helpers.DivCeil(sum, z)
 			r := x.Sub(sum, z.Mul(z, q))
 
 			err = state.Stack.PushInt(q)
@@ -45,7 +45,7 @@ func ADDDIVMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "ADDDIVMODR",
-		Prefix: []byte{0xA9, 0x01},
+		Name:   "ADDDIVMODC",
+		Prefix: []byte{0xA9, 0x02},
 	}
 }
