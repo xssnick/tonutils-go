@@ -22,8 +22,8 @@ func init() {
 
 type Query struct {
 	ID            []byte `tl:"int256"`
-	MaxAnswerSize int64  `tl:"long"`
-	Timeout       int32  `tl:"int"`
+	MaxAnswerSize uint64 `tl:"long"`
+	Timeout       uint32 `tl:"int"`
 	Data          any    `tl:"bytes struct boxed"`
 }
 
@@ -39,34 +39,34 @@ type Message struct {
 
 type Confirm struct {
 	TransferID []byte `tl:"int256"`
-	Part       int32  `tl:"int"`
-	Seqno      int32  `tl:"int"`
+	Part       uint32 `tl:"int"`
+	Seqno      uint32 `tl:"int"`
 }
 
 type ConfirmV2 struct {
 	TransferID    []byte `tl:"int256"`
-	Part          int32  `tl:"int"`
-	MaxSeqno      int32  `tl:"int"`
-	ReceivedMask  int32  `tl:"int"`
-	ReceivedCount int32  `tl:"int"`
+	Part          uint32 `tl:"int"`
+	MaxSeqno      uint32 `tl:"int"`
+	ReceivedMask  uint32 `tl:"int"`
+	ReceivedCount uint32 `tl:"int"`
 }
 
 type Complete struct {
 	TransferID []byte `tl:"int256"`
-	Part       int32  `tl:"int"`
+	Part       uint32 `tl:"int"`
 }
 
 type CompleteV2 struct {
 	TransferID []byte `tl:"int256"`
-	Part       int32  `tl:"int"`
+	Part       uint32 `tl:"int"`
 }
 
 type MessagePart struct {
 	TransferID []byte // `tl:"int256"`
 	FecType    any    // `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
-	Part       int32  // `tl:"int"`
-	TotalSize  int64  // `tl:"long"`
-	Seqno      int32  // `tl:"int"`
+	Part       uint32 // `tl:"int"`
+	TotalSize  uint64 // `tl:"long"`
+	Seqno      uint32 // `tl:"int"`
 	Data       []byte // `tl:"bytes"`
 }
 
@@ -88,9 +88,9 @@ func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 		return nil, errors.New("message part is too short")
 	}
 
-	part := int32(binary.LittleEndian.Uint32(data))
-	size := int64(binary.LittleEndian.Uint64(data[4:]))
-	seq := int32(binary.LittleEndian.Uint32(data[12:]))
+	part := binary.LittleEndian.Uint32(data)
+	size := binary.LittleEndian.Uint64(data[4:])
+	seq := binary.LittleEndian.Uint32(data[12:])
 
 	slc, data, err := tl.FromBytes(data[16:])
 	if err != nil {
@@ -127,9 +127,9 @@ func (m *MessagePart) Serialize(buf *bytes.Buffer) error {
 	}
 
 	tmp := make([]byte, 16)
-	binary.LittleEndian.PutUint32(tmp, uint32(m.Part))
-	binary.LittleEndian.PutUint64(tmp[4:], uint64(m.TotalSize))
-	binary.LittleEndian.PutUint32(tmp[12:], uint32(m.Seqno))
+	binary.LittleEndian.PutUint32(tmp, m.Part)
+	binary.LittleEndian.PutUint64(tmp[4:], m.TotalSize)
+	binary.LittleEndian.PutUint32(tmp[12:], m.Seqno)
 	buf.Write(tmp)
 	tl.ToBytesToBuffer(buf, m.Data)
 
@@ -139,8 +139,8 @@ func (m *MessagePart) Serialize(buf *bytes.Buffer) error {
 type MessagePartV2 struct {
 	TransferID []byte `tl:"int256"`
 	FecType    any    `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
-	Part       int32  `tl:"int"`
-	TotalSize  int64  `tl:"long"`
-	Seqno      int32  `tl:"int"`
+	Part       uint32 `tl:"int"`
+	TotalSize  uint64 `tl:"long"`
+	Seqno      uint32 `tl:"int"`
 	Data       []byte `tl:"bytes"`
 }
