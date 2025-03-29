@@ -40,8 +40,7 @@ func (m MockADNL) GetID() []byte {
 }
 
 func (m MockADNL) RemoteAddr() string {
-	//TODO implement me
-	panic("implement me")
+	return "1.1.1.1:1234"
 }
 
 func (m MockADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
@@ -117,8 +116,8 @@ func TestRLDP_handleMessage(t *testing.T) {
 	_RLDPMaxAnswerSize := 2*_ChunkSize + 1024
 	tQuery := &Query{
 		ID:            tId,
-		MaxAnswerSize: int64(_RLDPMaxAnswerSize),
-		Timeout:       int32(123456),
+		MaxAnswerSize: uint64(_RLDPMaxAnswerSize),
+		Timeout:       uint32(123456),
 		Data:          req,
 	}
 
@@ -137,13 +136,13 @@ func TestRLDP_handleMessage(t *testing.T) {
 	tMsg := MessagePart{
 		TransferID: tId,
 		FecType: FECRaptorQ{
-			DataSize:     int32(len(dataQuery)),
-			SymbolSize:   int32(DefaultSymbolSize),
-			SymbolsCount: int32(encQuery.BaseSymbolsNum()),
+			DataSize:     uint32(len(dataQuery)),
+			SymbolSize:   DefaultSymbolSize,
+			SymbolsCount: encQuery.BaseSymbolsNum(),
 		},
-		Part:      int32(0),
-		TotalSize: int64(len(dataQuery)),
-		Seqno:     int32(symbolsSent),
+		Part:      uint32(0),
+		TotalSize: uint64(len(dataQuery)),
+		Seqno:     symbolsSent,
 		Data:      encQuery.GenSymbol(symbolsSent),
 	}
 
@@ -176,13 +175,13 @@ func TestRLDP_handleMessage(t *testing.T) {
 	tMsg = MessagePart{
 		TransferID: tId,
 		FecType: FECRaptorQ{
-			DataSize:     int32(len(dataAnswer)),
-			SymbolSize:   int32(DefaultSymbolSize),
-			SymbolsCount: int32(encAnswer.BaseSymbolsNum()),
+			DataSize:     uint32(len(dataAnswer)),
+			SymbolSize:   DefaultSymbolSize,
+			SymbolsCount: encAnswer.BaseSymbolsNum(),
 		},
-		Part:      int32(0),
-		TotalSize: int64(len(dataAnswer)),
-		Seqno:     int32(symbolsSent),
+		Part:      uint32(0),
+		TotalSize: uint64(len(dataAnswer)),
+		Seqno:     symbolsSent,
 		Data:      encAnswer.GenSymbol(symbolsSent),
 	}
 
@@ -361,8 +360,8 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 	_RLDPMaxAnswerSize := 2*_ChunkSize + 1024
 	tQuery := &Query{
 		ID:            tId,
-		MaxAnswerSize: int64(_RLDPMaxAnswerSize),
-		Timeout:       int32(123456),
+		MaxAnswerSize: uint64(_RLDPMaxAnswerSize),
+		Timeout:       uint32(123456),
 		Data:          req,
 	}
 
@@ -531,7 +530,7 @@ func TestRLDP_DoQuery(t *testing.T) {
 			}
 		}()
 		var res testResponse
-		err = cli.DoQuery(context.Background(), int64(_RLDPMaxAnswerSize), tReq, &res)
+		err = cli.DoQuery(context.Background(), uint64(_RLDPMaxAnswerSize), tReq, &res)
 		if err != nil {
 			t.Fatal("DoQuery execution failed, err: ", err)
 		}
@@ -545,7 +544,7 @@ func TestRLDP_DoQuery(t *testing.T) {
 		ctx, _ := context.WithTimeout(context.Background(), time.Second)
 
 		var res Answer
-		err = cli.DoQuery(ctx, int64(_RLDPMaxAnswerSize), tReq, &res)
+		err = cli.DoQuery(ctx, uint64(_RLDPMaxAnswerSize), tReq, &res)
 		if !strings.Contains(err.Error(), "context deadline exceeded") {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}
@@ -580,7 +579,7 @@ func TestRLDP_SendAnswer(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to prepare test decoder, err: ", err)
 			}
-			added, err := tDecoder.AddSymbol(uint32(reqAnswer.Seqno), reqAnswer.Data)
+			added, err := tDecoder.AddSymbol(reqAnswer.Seqno, reqAnswer.Data)
 			if err != nil || added != true {
 				t.Fatal("failed to added symbol to test decoder, err: ", err)
 			}

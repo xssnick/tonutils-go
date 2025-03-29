@@ -109,7 +109,10 @@ func TestADNL_ClientServer(t *testing.T) {
 			t.Fatal("value not eq")
 		}
 
-		if len(s.processors) == 0 {
+		s.mx.RLock()
+		ln := len(s.processors)
+		s.mx.RUnlock()
+		if ln == 0 {
 			t.Fatal("no processors for server")
 		}
 
