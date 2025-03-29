@@ -73,6 +73,23 @@ func (s *Stack) PushAny(val any) error {
 	if len(s.elems) >= 255 {
 		return vmerr.ErrStackOverflow
 	}
+
+	switch t := val.(type) {
+	case *big.Int:
+		// TODO: maybe optimize
+		val = new(big.Int).Set(t) // copy for safety
+	case *cell.Cell:
+	case *cell.Builder:
+		val = t.Copy()
+	case *cell.Slice:
+		val = t.Copy()
+	case nil:
+	default:
+		if _, ok := val.(Continuation); !ok {
+			return vmerr.ErrTypeCheck
+		}
+	}
+
 	s.elems = append([]*Elem{{value: val}}, s.elems...)
 	return nil
 }
