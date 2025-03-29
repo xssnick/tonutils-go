@@ -62,7 +62,7 @@ func (p *peerConn) SetAddresses(addresses address.List) {
 }
 
 type srvProcessor struct {
-	lastPacketAt time.Time
+	lastPacketAt int64
 	processor    func(buf []byte) error
 	closer       func()
 }
@@ -79,7 +79,7 @@ type Gateway struct {
 	processors map[string]*srvProcessor
 	peers      map[string]*peerConn
 
-	connHandler func(client Peer) error
+	connHandler unsafe.Pointer // func(client Peer) error
 
 	globalCtx       context.Context
 	globalCtxCancel func()
@@ -336,7 +336,7 @@ func (g *Gateway) listen(rootId []byte) {
 			continue
 		}
 
-		proc.lastPacketAt = time.Now()
+		atomic.StoreInt64(&proc.lastPacketAt, time.Now().Unix())
 		if err := proc.processor(buf); err != nil {
 			Logger("failed to process packet at server:", err)
 		}
@@ -360,12 +360,12 @@ func (g *Gateway) startOldPeersChecker() {
 		case <-t.C:
 		}
 
-		now := time.Now()
+		now := time.Now().Unix()
 
 		var prc []*srvProcessor
 		g.mx.Lock()
 		for k, pr := range g.processors {
-			if now.Sub(pr.lastPacketAt) > 10*time.Minute {
+			if now-atomic.LoadInt64(&pr.lastPacketAt) > 10*60 {
 				prc = append(prc, pr)
 				delete(g.processors, k)
 
@@ -453,7 +453,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 		}
 		g.processors[chID] = &srvProcessor{
 			processor:    ch.process,
-			lastPacketAt: time.Now(),
+			lastPacketAt: time.Now().Unix(),
 			closer:       ch.adnl.Close,
 		}
 		if g.onChannelOpen != nil {
@@ -462,10 +462,13 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 		g.mx.Unlock()
 	})
 
-	connHandler := g.connHandler
+	connHandler := atomic.LoadPointer(&g.connHandler)
 	if connHandler != nil {
 		go func() {
-			if err := connHandler(peer); err != nil {
+			type handlerFunc func(client Peer) error
+
+			ch := *(*handlerFunc)(connHandler)
+			if err := ch(peer); err != nil {
 				// close connection if connection handler reports an error
 				a.Close()
 			}
@@ -491,7 +494,7 @@ func (g *Gateway) RegisterClient(addr string, key ed25519.PublicKey) (Peer, erro
 }
 
 func (g *Gateway) SetConnectionHandler(handler func(client Peer) error) {
-	g.connHandler = handler
+	atomic.StorePointer(&g.connHandler, unsafe.Pointer(&handler))
 }
 
 func (g *Gateway) Close() error {
