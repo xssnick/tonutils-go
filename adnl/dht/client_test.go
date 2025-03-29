@@ -38,8 +38,6 @@ func (m *MockGateway) Close() error {
 
 func (m *MockGateway) SetConnectionHandler(f func(client adnl.Peer) error) {}
 
-func (m *MockGateway) SetExternalIP(ip net.IP) {}
-
 func (m *MockGateway) StartServer(listenAddr string) error {
 	return nil
 }
