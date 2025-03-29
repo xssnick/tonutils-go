@@ -15,20 +15,12 @@ type SendMsgAction struct {
 }
 
 type Stack struct {
-	elems []*Elem
-}
-
-type Elem struct {
-	value any
+	elems []any
 }
 
 func NewStack() *Stack {
-	return &Stack{}
-}
-
-func (e *Elem) Copy() *Elem {
-	return &Elem{
-		value: e.value,
+	return &Stack{
+		elems: make([]any, 0, 256),
 	}
 }
 
@@ -85,12 +77,14 @@ func (s *Stack) PushAny(val any) error {
 		val = t.Copy()
 	case nil:
 	default:
-		if _, ok := val.(Continuation); !ok {
+		if c, ok := val.(Continuation); !ok {
 			return vmerr.ErrTypeCheck
+		} else {
+			val = c.Copy()
 		}
 	}
 
-	s.elems = append([]*Elem{{value: val}}, s.elems...)
+	s.elems = append(s.elems, val)
 	return nil
 }
 
@@ -134,18 +128,22 @@ func (s *Stack) MoveFrom(from *Stack, num int) error {
 	return nil
 }
 
+func (s *Stack) index(i int) int {
+	return len(s.elems) - 1 - i
+}
+
 func (s *Stack) PushAt(at int) error {
 	if at < 0 || at >= len(s.elems) {
 		return vmerr.ErrStackUnderflow
 	}
-	return s.PushAny(s.elems[at].value)
+	return s.PushAny(s.elems[s.index(at)])
 }
 
 func (s *Stack) Drop(num int) error {
 	if len(s.elems) < num {
 		return vmerr.ErrStackUnderflow
 	}
-	s.elems = s.elems[num:]
+	s.elems = s.elems[:len(s.elems)-num]
 	return nil
 }
 
@@ -153,26 +151,17 @@ func (s *Stack) DropAfter(num int) error {
 	if len(s.elems) < num {
 		return vmerr.ErrStackUnderflow
 	}
-	s.elems = s.elems[:num]
+	s.elems = s.elems[len(s.elems)-num:]
 	return nil
 }
 
-func (s *Stack) PopSwapAt(at int) (any, error) {
-	if at < 0 || at >= len(s.elems) {
-		return nil, vmerr.ErrStackUnderflow
-	}
-
-	se := s.elems[at]
-	s.elems[at], s.elems[len(s.elems)-1] = s.elems[len(s.elems)-1], s.elems[at]
-	s.elems = s.elems[:len(s.elems)-1]
-	return se.value, nil
-}
-
-func (s *Stack) Set(at int, what any) error {
+func (s *Stack) PopSwapAt(at int) error {
 	if at < 0 || at >= len(s.elems) {
 		return vmerr.ErrStackUnderflow
 	}
-	s.elems[at].value = what
+
+	s.elems[s.index(at)] = s.elems[len(s.elems)-1]
+	s.elems = s.elems[:len(s.elems)-1]
 	return nil
 }
 
@@ -180,9 +169,9 @@ func (s *Stack) PopAny() (any, error) {
 	if len(s.elems) == 0 {
 		return nil, vmerr.ErrStackUnderflow
 	}
-	e := s.elems[0]
-	s.elems = s.elems[1:]
-	return e.value, nil
+	e := s.elems[len(s.elems)-1]
+	s.elems = s.elems[:len(s.elems)-1]
+	return e, nil
 }
 
 func (s *Stack) PopInt() (*big.Int, error) {
@@ -291,8 +280,11 @@ func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 	return e, nil
 }
 
-func (s *Stack) Get(n uint8) any {
-	return s.elems[n].value
+func (s *Stack) Get(at int) (any, error) {
+	if at < 0 || at >= len(s.elems) {
+		return nil, vmerr.ErrStackUnderflow
+	}
+	return s.elems[s.index(at)], nil
 }
 
 func (s *Stack) Len() int {
@@ -303,7 +295,8 @@ func (s *Stack) Exchange(a, b int) error {
 	if (a < 0 || a >= len(s.elems)) || (b < 0 || b >= len(s.elems)) {
 		return vmerr.ErrStackUnderflow
 	}
-	s.elems[a], s.elems[b] = s.elems[b], s.elems[a]
+	aIdx, bIdx := s.index(a), s.index(b)
+	s.elems[aIdx], s.elems[bIdx] = s.elems[bIdx], s.elems[aIdx]
 	return nil
 }
 
@@ -312,7 +305,7 @@ func (s *Stack) String() string {
 	for i := len(s.elems) - 1; i >= 0; i-- {
 		typ := "???"
 		val := "???"
-		switch x := s.elems[i].value.(type) {
+		switch x := s.elems[i].(type) {
 		case nil:
 			typ = "nil"
 			val = "nil"
@@ -336,14 +329,10 @@ func (s *Stack) String() string {
 }
 
 func (s *Stack) Copy() *Stack {
-	c := &Stack{
-		elems: make([]*Elem, len(s.elems)),
-	}
+	c := NewStack()
 
-	for i, elem := range s.elems {
-		c.elems[i] = &Elem{
-			value: elem.value,
-		}
+	for _, elem := range s.elems {
+		_ = c.PushAny(elem)
 	}
 
 	return c

@@ -52,8 +52,7 @@ func (op *OpPOP) SerializeText() string {
 }
 
 func (op *OpPOP) Interpret(state *vm.State) error {
-	_, err := state.Stack.PopSwapAt(int(op.stackIndex))
-	if err != nil {
+	if err := state.Stack.PopSwapAt(int(op.stackIndex)); err != nil {
 		return err
 	}
 	return nil

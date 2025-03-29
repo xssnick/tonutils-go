@@ -44,6 +44,21 @@ func (r *Register) Get(i int) any {
 	return Null{}
 }
 
+func (r *Register) Copy() Register {
+	rg := Register{}
+	for i := 0; i < 4; i++ {
+		if rg.C[i] == nil {
+			continue
+		}
+		rg.C[i] = r.C[i].Copy()
+	}
+	for i := 0; i < 2; i++ {
+		rg.D[i] = r.D[i]
+	}
+	rg.C7 = r.C7 // must be immutable during run, means safe
+	return rg
+}
+
 type Gas struct {
 	Consumed uint64
 	Limit    uint64
@@ -120,4 +135,18 @@ func (s *State) GetParam(idx int) (any, error) {
 	}
 
 	return v, nil
+}
+
+func (c ControlData) Copy() ControlData {
+	var stk *Stack
+	if c.Stack != nil {
+		stk = c.Stack.Copy()
+	}
+
+	return ControlData{
+		Save:    c.Save.Copy(),
+		Stack:   stk,
+		NumArgs: c.NumArgs,
+		CP:      c.CP,
+	}
 }

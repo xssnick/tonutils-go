@@ -8,6 +8,7 @@ import (
 type Continuation interface {
 	GetControlData() *ControlData
 	Jump(state *State) (Continuation, error)
+	Copy() Continuation
 }
 
 type QuitContinuation struct {
@@ -22,6 +23,11 @@ func (c *QuitContinuation) Jump(state *State) (Continuation, error) {
 	return nil, vmerr.VMError{
 		Code: c.ExitCode,
 	}
+}
+
+func (c *QuitContinuation) Copy() Continuation {
+	cont := *c
+	return &cont
 }
 
 type ExcQuitContinuation struct{}
@@ -41,6 +47,11 @@ func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 	}
 }
 
+func (c *ExcQuitContinuation) Copy() Continuation {
+	cont := *c
+	return &cont
+}
+
 type OrdinaryContinuation struct {
 	Data ControlData
 	Code *cell.Slice
@@ -54,4 +65,12 @@ func (c *OrdinaryContinuation) Jump(state *State) (Continuation, error) {
 	state.CurrentCode = c.Code.Copy()
 	state.Reg.AdjustWith(&c.Data.Save)
 	return nil, nil
+}
+
+func (c *OrdinaryContinuation) Copy() Continuation {
+	cont := &OrdinaryContinuation{
+		Data: c.Data.Copy(),
+		Code: c.Code.Copy(),
+	}
+	return cont
 }

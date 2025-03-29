@@ -1,7 +1,6 @@
 package tvm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -13,28 +12,31 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"sort"
+	"unsafe"
 )
 
-type opPrefix struct {
-	op     vm.OPGetter
-	prefix *cell.Slice
-}
 type TVM struct {
-	prefixes []opPrefix
+	prefixes map[uint64]vm.OPGetter
 }
 
 func NewTVM() *TVM {
-	var prefixes []opPrefix
+	var prefixes = map[uint64]vm.OPGetter{}
+
 	for _, op := range vm.List {
 		for _, s := range op().GetPrefixes() {
-			prefixes = append(prefixes, opPrefix{op, s})
+			var buf [8]byte
+			opBits := s.BitsLeft()
+			bts := s.MustPreloadSlice(opBits)
+			if len(bts) > 7 {
+				panic("too long prefix for opcode " + op().SerializeText())
+			}
+
+			buf[0] = uint8(opBits)
+			copy(buf[1:], bts)
+
+			prefixes[*(*uint64)(unsafe.Pointer(&buf[0]))] = op
 		}
 	}
-
-	sort.Slice(prefixes, func(i, j int) bool {
-		return prefixes[i].prefix.BitsLeft() > prefixes[j].prefix.BitsLeft()
-	})
 
 	return &TVM{
 		prefixes: prefixes,
@@ -110,30 +112,35 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 }
 
 func (tvm *TVM) step(state *vm.State) (err error) {
-	for _, px := range tvm.prefixes {
-		if state.CurrentCode.BitsLeft() < px.prefix.BitsLeft() {
+	var buf [8]byte
+	for prefixLen := uint(4); prefixLen < 7*8; prefixLen += 4 {
+		if state.CurrentCode.BitsLeft() < prefixLen {
+			break
+		}
+
+		buf[0] = uint8(prefixLen)
+		copy(buf[1:], state.CurrentCode.MustPreloadSlice(prefixLen))
+
+		px := tvm.prefixes[*(*uint64)(unsafe.Pointer(&buf[0]))]
+		if px == nil {
 			continue
 		}
 
-		if bytes.Equal(px.prefix.Copy().MustLoadSlice(px.prefix.BitsLeft()),
-			state.CurrentCode.Copy().MustLoadSlice(px.prefix.BitsLeft())) {
+		op := px()
 
-			op := px.op()
-
-			err = op.Deserialize(state.CurrentCode)
-			if err != nil {
-				return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
-			}
-
-			println(op.SerializeText())
-			err = op.Interpret(state)
-			if err != nil {
-				return err
-			}
-			// TODO: consume gas
-
-			return nil
+		err = op.Deserialize(state.CurrentCode)
+		if err != nil {
+			return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
 		}
+
+		println(op.SerializeText())
+		err = op.Interpret(state)
+		if err != nil {
+			return err
+		}
+		// TODO: consume gas
+
+		return nil
 	}
 
 	return fmt.Errorf("opcode not found: %w (%s)", vm.ErrCorruptedOpcode, state.CurrentCode.String())
