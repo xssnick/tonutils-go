@@ -2,9 +2,10 @@ package vm
 
 import (
 	"fmt"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
 )
 
 type Null struct{}
@@ -347,4 +348,43 @@ func (s *Stack) Copy() *Stack {
 	}
 
 	return c
+}
+
+func (s *Stack) FromTop(offset int) (int, error) {
+	stackLen := len(s.elems)
+	if stackLen < offset {
+		return 0, vmerr.ErrStackUnderflow
+	}
+	return stackLen - offset, nil
+}
+
+func (s *Stack) Rotate(first, middle, last int) error {
+	if first < 0 || middle < first || last <= middle || last > len(s.elems) {
+		return vmerr.ErrStackUnderflow
+	}
+
+	sub := s.elems[first:last]
+	middleOffset := last - middle
+
+	rotated := append(sub[middleOffset:], sub[:middleOffset]...)
+
+	copy(s.elems[first:last], rotated)
+	return nil
+}
+
+func (s *Stack) Reverse(j, i int) error {
+	stackLen := len(s.elems)
+	if stackLen < i || stackLen < j || i < 0 || j < 0 || j < i {
+		return vmerr.ErrStackUnderflow
+	}
+
+	num := (i + j) / 2
+	if (i+j)%2 > 0 {
+		num++
+	}
+	for ; i != num; i, j = i+1, j-1 {
+		s.elems[i], s.elems[j] = s.elems[j], s.elems[i]
+	}
+
+	return nil
 }
