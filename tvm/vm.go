@@ -112,35 +112,39 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 }
 
 func (tvm *TVM) step(state *vm.State) (err error) {
-	var buf [8]byte
-	for prefixLen := uint(4); prefixLen < 7*8; prefixLen += 4 {
-		if state.CurrentCode.BitsLeft() < prefixLen {
-			break
+	// we are doing 2 rounds of lookup, first one is fast and covers 99% of opcodes, if not found we are trying to check each bit
+	for _, move := range []uint{4, 1} {
+		var buf [8]byte
+		for prefixLen := uint(4); prefixLen < 7*8; prefixLen += move {
+			if state.CurrentCode.BitsLeft() < prefixLen {
+				break
+			}
+
+			buf[0] = uint8(prefixLen)
+			pfx := state.CurrentCode.MustPreloadSlice(prefixLen)
+			copy(buf[1:], pfx)
+
+			px := tvm.prefixes[*(*uint64)(unsafe.Pointer(&buf[0]))]
+			if px == nil {
+				continue
+			}
+
+			op := px()
+
+			err = op.Deserialize(state.CurrentCode)
+			if err != nil {
+				return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
+			}
+
+			println(op.SerializeText())
+			err = op.Interpret(state)
+			if err != nil {
+				return err
+			}
+			// TODO: consume gas
+
+			return nil
 		}
-
-		buf[0] = uint8(prefixLen)
-		copy(buf[1:], state.CurrentCode.MustPreloadSlice(prefixLen))
-
-		px := tvm.prefixes[*(*uint64)(unsafe.Pointer(&buf[0]))]
-		if px == nil {
-			continue
-		}
-
-		op := px()
-
-		err = op.Deserialize(state.CurrentCode)
-		if err != nil {
-			return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
-		}
-
-		println(op.SerializeText())
-		err = op.Interpret(state)
-		if err != nil {
-			return err
-		}
-		// TODO: consume gas
-
-		return nil
 	}
 
 	return fmt.Errorf("opcode not found: %w (%s)", vm.ErrCorruptedOpcode, state.CurrentCode.String())
