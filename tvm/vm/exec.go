@@ -56,16 +56,10 @@ func (s *State) CallArgs(c Continuation, passArgs, retArgs int) error {
 
 		depth := s.Stack.Len()
 		if passArgs > depth || data.NumArgs > depth {
-			return vmerr.VMError{
-				Code: vmerr.ErrStackUnderflow.Code,
-				Msg:  "stack underflow while calling a continuation: not enough arguments on stack",
-			}
+			return vmerr.Error(vmerr.CodeStackUnderflow, "stack underflow while calling a continuation: not enough arguments on stack")
 		}
 		if data.NumArgs > passArgs && passArgs >= 0 {
-			return vmerr.VMError{
-				Code: vmerr.ErrStackUnderflow.Code,
-				Msg:  "stack underflow while calling a closure continuation: not enough arguments passed",
-			}
+			return vmerr.Error(vmerr.CodeStackUnderflow, "stack underflow while calling a closure continuation: not enough arguments passed")
 		}
 
 		cp := data.NumArgs
@@ -105,16 +99,12 @@ func (s *State) CallArgs(c Continuation, passArgs, retArgs int) error {
 				return err
 			}
 		} else {
-			s.Stack.Clear()
 			newStack = s.Stack
 		}
 	} else {
 		depth := s.Stack.Len()
 		if passArgs > depth {
-			return vmerr.VMError{
-				Code: vmerr.ErrStackUnderflow.Code,
-				Msg:  "stack underflow while calling a continuation: not enough arguments on stack",
-			}
+			return vmerr.Error(vmerr.CodeStackUnderflow, "stack underflow while calling a continuation: not enough arguments on stack")
 		}
 
 		newStack = s.Stack
@@ -198,16 +188,10 @@ func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, erro
 	if data != nil {
 		depth := s.Stack.Len()
 		if passArgs > depth || data.NumArgs > depth {
-			return nil, vmerr.VMError{
-				Code: vmerr.ErrStackUnderflow.Code,
-				Msg:  "stack underflow while jumping to a continuation: not enough arguments on stack",
-			}
+			return nil, vmerr.Error(vmerr.CodeStackUnderflow, "stack underflow while jumping to a continuation: not enough arguments on stack")
 		}
 		if data.NumArgs > passArgs && passArgs >= 0 {
-			return nil, vmerr.VMError{
-				Code: vmerr.ErrStackUnderflow.Code,
-				Msg:  "stack underflow while jumping to closure continuation: not enough arguments passed",
-			}
+			return nil, vmerr.Error(vmerr.CodeStackUnderflow, "stack underflow while jumping to closure continuation: not enough arguments passed")
 		}
 
 		cp := data.NumArgs
@@ -245,10 +229,7 @@ func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, erro
 	if passArgs >= 0 {
 		depth := s.Stack.Len()
 		if passArgs > depth {
-			return nil, vmerr.VMError{
-				Code: vmerr.ErrStackUnderflow.Code,
-				Msg:  "stack underflow while jumping to a continuation: not enough arguments on stack",
-			}
+			return nil, vmerr.Error(vmerr.CodeStackUnderflow, "stack underflow while jumping to a continuation: not enough arguments on stack")
 		} else if passArgs < depth {
 			if err := s.Stack.DropAfter(passArgs); err != nil {
 				return nil, err
@@ -260,4 +241,49 @@ func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, erro
 	}
 
 	return c, nil
+}
+
+func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*OrdinaryContinuation, error) {
+	var newStack *Stack
+	if stackCopy < 0 || stackCopy == s.Stack.Len() {
+		newStack = s.Stack
+	} else if stackCopy > 0 {
+		ns, err := s.Stack.SplitTop(stackCopy, 0)
+		if err != nil {
+			return nil, err
+		}
+		newStack = ns
+
+		if err = s.Gas.ConsumeStackGas(newStack); err != nil {
+			return nil, err
+		}
+	} else {
+		newStack = NewStack()
+	}
+
+	cc := &OrdinaryContinuation{
+		Data: ControlData{
+			NumArgs: ccArgs,
+			CP:      s.CP,
+			Stack:   s.Stack,
+		},
+		Code: s.CurrentCode,
+	}
+	s.Stack = newStack
+
+	if saveCR&7 != 0 {
+		cData := cc.GetControlData()
+		if saveCR&1 != 0 {
+			cData.Save.C[0] = s.Reg.C[0]
+			s.Reg.C[0] = &QuitContinuation{ExitCode: 0}
+		}
+		if saveCR&2 != 0 {
+			cData.Save.C[1] = s.Reg.C[1]
+			s.Reg.C[1] = &QuitContinuation{ExitCode: 1}
+		}
+		if saveCR&4 != 0 {
+			cData.Save.C[2] = s.Reg.C[2]
+		}
+	}
+	return cc, nil
 }

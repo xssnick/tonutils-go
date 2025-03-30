@@ -18,10 +18,7 @@ func ENDS() *helpers.SimpleOP {
 				return err
 			}
 			if s.RefsNum() > 0 || s.BitsLeft() > 0 {
-				return vmerr.VMError{
-					Code: vmerr.ErrCellUnderflow.Code,
-					Msg:  "extra data remaining in deserialized cell",
-				}
+				return vmerr.Error(vmerr.CodeCellUnderflow, "extra data remaining in deserialized cell")
 			}
 			return nil
 		},

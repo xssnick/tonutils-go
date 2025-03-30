@@ -14,9 +14,15 @@ func (t *Tuple) Len() int {
 	return len(t.val)
 }
 
+func (t *Tuple) Copy() Tuple {
+	tp := Tuple{make([]any, len(t.val))}
+	copy(tp.val, t.val)
+	return tp
+}
+
 func (t *Tuple) Index(i int) (any, error) {
 	if i >= len(t.val) {
-		return nil, vmerr.ErrRangeCheck
+		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return t.val[i], nil
 }

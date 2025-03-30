@@ -3,8 +3,10 @@ package vm
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 	"math/big"
+	"reflect"
 )
 
 type Null struct{}
@@ -49,7 +51,7 @@ func (s *Stack) PushContinuation(val Continuation) error {
 
 func (s *Stack) PushInt(val *big.Int) error {
 	if val.BitLen() > 256 { // 257th bit is sign
-		return vmerr.ErrIntOverflow
+		return vmerr.Error(vmerr.CodeIntOverflow)
 	}
 	return s.PushAny(val)
 }
@@ -63,7 +65,7 @@ func (s *Stack) PushIntQuiet(val *big.Int) error {
 
 func (s *Stack) PushAny(val any) error {
 	if len(s.elems) >= 255 {
-		return vmerr.ErrStackOverflow
+		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 
 	switch t := val.(type) {
@@ -75,10 +77,12 @@ func (s *Stack) PushAny(val any) error {
 		val = t.Copy()
 	case *cell.Slice:
 		val = t.Copy()
+	case tuple.Tuple:
+		val = t.Copy()
 	case nil:
 	default:
 		if c, ok := val.(Continuation); !ok {
-			return vmerr.ErrTypeCheck
+			return vmerr.Error(vmerr.CodeTypeCheck, "type check failed: "+reflect.TypeOf(val).String())
 		} else {
 			val = c.Copy()
 		}
@@ -115,11 +119,11 @@ func (s *Stack) Clear() {
 
 func (s *Stack) MoveFrom(from *Stack, num int) error {
 	if len(from.elems) < num {
-		return vmerr.ErrStackUnderflow
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
 	if len(s.elems)+num >= 255 {
-		return vmerr.ErrStackOverflow
+		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 
 	s.elems = append(s.elems, from.elems[:num]...)
@@ -134,14 +138,14 @@ func (s *Stack) index(i int) int {
 
 func (s *Stack) PushAt(at int) error {
 	if at < 0 || at >= len(s.elems) {
-		return vmerr.ErrStackUnderflow
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	return s.PushAny(s.elems[s.index(at)])
 }
 
 func (s *Stack) Drop(num int) error {
 	if len(s.elems) < num {
-		return vmerr.ErrStackUnderflow
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	s.elems = s.elems[:len(s.elems)-num]
 	return nil
@@ -149,7 +153,7 @@ func (s *Stack) Drop(num int) error {
 
 func (s *Stack) DropAfter(num int) error {
 	if len(s.elems) < num {
-		return vmerr.ErrStackUnderflow
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	s.elems = s.elems[len(s.elems)-num:]
 	return nil
@@ -157,7 +161,7 @@ func (s *Stack) DropAfter(num int) error {
 
 func (s *Stack) PopSwapAt(at int) error {
 	if at < 0 || at >= len(s.elems) {
-		return vmerr.ErrStackUnderflow
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
 	s.elems[s.index(at)] = s.elems[len(s.elems)-1]
@@ -167,7 +171,7 @@ func (s *Stack) PopSwapAt(at int) error {
 
 func (s *Stack) PopAny() (any, error) {
 	if len(s.elems) == 0 {
-		return nil, vmerr.ErrStackUnderflow
+		return nil, vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	e := s.elems[len(s.elems)-1]
 	s.elems = s.elems[:len(s.elems)-1]
@@ -180,7 +184,7 @@ func (s *Stack) PopInt() (*big.Int, error) {
 		return nil, err
 	}
 	if v, ok := e.(*big.Int); !ok {
-		return nil, vmerr.ErrTypeCheck
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
 	}
@@ -192,7 +196,7 @@ func (s *Stack) PopIntFinite() (*big.Int, error) {
 		return nil, err
 	}
 	if e == nil { // nil = non valid (NaN)
-		return nil, vmerr.ErrIntOverflow
+		return nil, vmerr.Error(vmerr.CodeIntOverflow)
 	}
 	return e, nil
 }
@@ -211,7 +215,7 @@ func (s *Stack) PopCell() (*cell.Cell, error) {
 		return nil, err
 	}
 	if v, ok := e.(*cell.Cell); !ok {
-		return nil, vmerr.ErrTypeCheck
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
 	}
@@ -226,7 +230,7 @@ func (s *Stack) PopMaybeCell() (*cell.Cell, error) {
 		return nil, nil
 	}
 	if v, ok := e.(*cell.Cell); !ok {
-		return nil, vmerr.ErrTypeCheck
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
 	}
@@ -238,7 +242,7 @@ func (s *Stack) PopContinuation() (Continuation, error) {
 		return nil, err
 	}
 	if v, ok := e.(Continuation); !ok {
-		return nil, vmerr.ErrTypeCheck
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
 	}
@@ -250,7 +254,7 @@ func (s *Stack) PopBuilder() (*cell.Builder, error) {
 		return nil, err
 	}
 	if v, ok := e.(*cell.Builder); !ok {
-		return nil, vmerr.ErrTypeCheck
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
 	}
@@ -262,7 +266,7 @@ func (s *Stack) PopSlice() (*cell.Slice, error) {
 		return nil, err
 	}
 	if v, ok := e.(*cell.Slice); !ok {
-		return nil, vmerr.ErrTypeCheck
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
 	}
@@ -275,14 +279,14 @@ func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 	}
 
 	if e.Cmp(big.NewInt(min)) < 0 || e.Cmp(big.NewInt(max)) > 0 {
-		return nil, vmerr.ErrRangeCheck
+		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return e, nil
 }
 
 func (s *Stack) Get(at int) (any, error) {
 	if at < 0 || at >= len(s.elems) {
-		return nil, vmerr.ErrStackUnderflow
+		return nil, vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	return s.elems[s.index(at)], nil
 }
@@ -293,7 +297,7 @@ func (s *Stack) Len() int {
 
 func (s *Stack) Exchange(a, b int) error {
 	if (a < 0 || a >= len(s.elems)) || (b < 0 || b >= len(s.elems)) {
-		return vmerr.ErrStackUnderflow
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	aIdx, bIdx := s.index(a), s.index(b)
 	s.elems[aIdx], s.elems[bIdx] = s.elems[bIdx], s.elems[aIdx]
@@ -301,11 +305,15 @@ func (s *Stack) Exchange(a, b int) error {
 }
 
 func (s *Stack) String() string {
+	if len(s.elems) == 0 {
+		return "[empty stack]"
+	}
+
 	var res string
 	for i := len(s.elems) - 1; i >= 0; i-- {
 		typ := "???"
 		val := "???"
-		switch x := s.elems[i].(type) {
+		switch x := s.elems[s.index(i)].(type) {
 		case nil:
 			typ = "nil"
 			val = "nil"

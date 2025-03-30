@@ -5,7 +5,11 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
+	"math/big"
 )
+
+const ControlDataAllArgs = -1
+const CP = -1
 
 type Register struct {
 	C  [4]Continuation
@@ -59,36 +63,43 @@ func (r *Register) Copy() Register {
 	return rg
 }
 
-type Gas struct {
-	Consumed uint64
-	Limit    uint64
-	Credit   uint64
-	Price    uint64
-}
-
-func (g *Gas) Consume(amt uint64) error {
-	g.Consumed += amt
-	if g.Consumed > g.Limit || (g.Credit > 0 && g.Consumed > g.Credit) {
-		// TODO: enable when gas ready
-		// return vmerr.ErrOutOfGas
+func (r *Register) Define(i int, val any) bool {
+	if i < 0 {
+		return false
 	}
-	return nil
-}
 
-func (g *Gas) ConsumeStackGas(s *Stack) error {
-	const pricePerStackEntry = 1
-	const freeDepth = 32
+	if i < 4 {
+		c, ok := val.(Continuation)
+		if !ok || c == nil {
+			return false
+		}
 
-	amt := uint64(s.Len())
-	if amt < freeDepth {
-		amt = freeDepth
+		r.C[i] = c
+		return true
 	}
-	return g.Consume((amt - freeDepth) * pricePerStackEntry)
+
+	if i < 6 {
+		c, ok := val.(*cell.Cell)
+		if !ok || c == nil {
+			return false
+		}
+
+		r.D[i-4] = c
+		return true
+	}
+
+	if i == 7 {
+		c, ok := val.(tuple.Tuple)
+		if !ok {
+			return false
+		}
+
+		r.C7 = c
+		return true
+	}
+
+	return false
 }
-
-const ControlDataAllArgs = -1
-
-const CP = -1
 
 type ControlData struct {
 	Save    Register
@@ -126,7 +137,7 @@ func (s *State) GetParam(idx int) (any, error) {
 
 	p, ok := params.(tuple.Tuple)
 	if !ok {
-		return nil, vmerr.ErrTypeCheck
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 
 	v, err := p.Index(idx)
@@ -135,6 +146,32 @@ func (s *State) GetParam(idx int) (any, error) {
 	}
 
 	return v, nil
+}
+
+func (s *State) ThrowException(code *big.Int, arg ...any) error {
+	s.Stack.Clear()
+	if len(arg) == 1 {
+		if err := s.Stack.PushAny(arg[0]); err != nil {
+			return err
+		}
+	} else if len(arg) == 0 {
+		if err := s.Stack.PushAny(big.NewInt(0)); err != nil {
+			return err
+		}
+	} else {
+		return errors.New("too many arguments")
+	}
+
+	if err := s.Stack.PushInt(code); err != nil {
+		return err
+	}
+
+	s.CurrentCode = cell.BeginCell().ToSlice()
+	if err := s.Gas.Consume(ExceptionGasPrice); err != nil {
+		return err
+	}
+
+	return s.Jump(s.Reg.C[2])
 }
 
 func (c ControlData) Copy() ControlData {
@@ -149,4 +186,17 @@ func (c ControlData) Copy() ControlData {
 		NumArgs: c.NumArgs,
 		CP:      c.CP,
 	}
+}
+
+func ForceControlData(cont Continuation) Continuation {
+	if cont.GetControlData() == nil {
+		cont = &ArgExtContinuation{
+			Data: ControlData{
+				NumArgs: ControlDataAllArgs,
+				CP:      CP,
+			},
+			Ext: cont,
+		}
+	}
+	return cont
 }

@@ -20,9 +20,7 @@ func (c *QuitContinuation) GetControlData() *ControlData {
 }
 
 func (c *QuitContinuation) Jump(state *State) (Continuation, error) {
-	return nil, vmerr.VMError{
-		Code: c.ExitCode,
-	}
+	return nil, vmerr.Error(c.ExitCode)
 }
 
 func (c *QuitContinuation) Copy() Continuation {
@@ -42,9 +40,7 @@ func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 		return nil, err
 	}
 
-	return nil, vmerr.VMError{
-		Code: ^v.Int64(),
-	}
+	return nil, vmerr.Error(^v.Int64())
 }
 
 func (c *ExcQuitContinuation) Copy() Continuation {
@@ -71,6 +67,32 @@ func (c *OrdinaryContinuation) Copy() Continuation {
 	cont := &OrdinaryContinuation{
 		Data: c.Data.Copy(),
 		Code: c.Code.Copy(),
+	}
+	return cont
+}
+
+type ArgExtContinuation struct {
+	Data ControlData
+	Ext  Continuation
+}
+
+func (c *ArgExtContinuation) GetControlData() *ControlData {
+	return &c.Data
+}
+
+func (c *ArgExtContinuation) Jump(state *State) (Continuation, error) {
+	state.Reg.AdjustWith(&c.Data.Save)
+	if c.Data.CP != -1 {
+		// TODO: custom cp support
+		return nil, vmerr.Error(vmerr.CodeInvalidOpcode, "unsupported codepage")
+	}
+	return c.Ext, nil
+}
+
+func (c *ArgExtContinuation) Copy() Continuation {
+	cont := &ArgExtContinuation{
+		Data: c.Data.Copy(),
+		Ext:  c.Ext.Copy(),
 	}
 	return cont
 }

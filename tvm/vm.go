@@ -12,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
+	"math/big"
 	"unsafe"
 )
 
@@ -52,7 +53,7 @@ func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack
 				&vm.QuitContinuation{ExitCode: 0},
 				&vm.QuitContinuation{ExitCode: 1},
 				&vm.ExcQuitContinuation{},
-				&vm.QuitContinuation{ExitCode: vmerr.ErrUnknown.Code},
+				&vm.QuitContinuation{ExitCode: vmerr.CodeUnknown},
 			},
 			D: [2]*cell.Cell{
 				data,                       // c4
@@ -96,7 +97,15 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 			}
 
 			if err = tvm.step(state); err != nil {
-				// TODO: check vm err (try catch logic)
+				var e vmerr.VMError
+				if state.Reg.C[2] != nil && errors.As(err, &e) && e.Code != 0 {
+					println("[EXCEPTION]", e.Code, e.Msg)
+
+					if err = state.ThrowException(big.NewInt(e.Code)); err == nil {
+						continue
+					}
+				}
+
 				return err
 			}
 		}

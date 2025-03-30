@@ -35,10 +35,7 @@ func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
 
 	ref, err := code.LoadRef()
 	if err != nil {
-		return vmerr.VMError{
-			Code: vmerr.ErrInvalidOpcode.Code,
-			Msg:  "no references left for a PUSHREF instruction",
-		}
+		return vmerr.Error(vmerr.CodeInvalidOpcode, "no references left for a PUSHREF instruction")
 	}
 
 	op.value = ref

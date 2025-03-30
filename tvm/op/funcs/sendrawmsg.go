@@ -34,10 +34,7 @@ func SENDRAWMSG() *helpers.SimpleOP {
 
 			res, err := tlb.ToCell(list)
 			if err != nil {
-				return vmerr.VMError{
-					Code: vmerr.ErrCellOverflow.Code,
-					Msg:  "cannot serialize raw output message into an output action cell; " + err.Error(),
-				}
+				return vmerr.Error(vmerr.CodeCellOverflow, "cannot serialize raw output message into an output action cell; "+err.Error())
 			}
 			state.Reg.D[1] = res
 			return nil

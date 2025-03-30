@@ -24,10 +24,7 @@ func DIVMODC() *helpers.SimpleOP {
 
 			if y.Sign() == 0 {
 				// division by 0
-				return vmerr.VMError{
-					Code: vmerr.ErrIntOverflow.Code,
-					Msg:  "division by zero",
-				}
+				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
 			q := helpers.DivCeil(x, y)

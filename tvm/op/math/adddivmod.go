@@ -31,7 +31,7 @@ func ADDDIVMOD() *helpers.SimpleOP {
 			}
 
 			if z.Sign() == 0 {
-				return vmerr.ErrIntOverflow
+				return vmerr.Error(vmerr.CodeIntOverflow)
 			}
 
 			sum := x.Add(x, w)

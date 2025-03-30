@@ -24,10 +24,7 @@ func DIV() *helpers.SimpleOP {
 
 			if i1.Sign() == 0 {
 				// division by 0
-				return vmerr.VMError{
-					Code: vmerr.ErrIntOverflow.Code,
-					Msg:  "division by zero",
-				}
+				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
 			return state.Stack.PushInt(i0.Div(i0, i1))

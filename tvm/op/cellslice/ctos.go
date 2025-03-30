@@ -20,10 +20,7 @@ func CTOS() *helpers.SimpleOP {
 			}
 
 			if c.GetType() != cell.OrdinaryCellType {
-				return vmerr.VMError{
-					Code: vmerr.ErrCellUnderflow.Code,
-					Msg:  "unexpected special cell",
-				}
+				return vmerr.Error(vmerr.CodeCellUnderflow, "unexpected special cell")
 			}
 
 			return state.Stack.PushSlice(c.BeginParse())

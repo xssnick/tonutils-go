@@ -1,77 +1,71 @@
 package vmerr
 
-import "fmt"
+import (
+	"fmt"
+	"runtime/debug"
+)
+
+var TVMTraceEnabled = true
 
 type VMError struct {
-	Code int64
-	Msg  string
+	Code  int64
+	Msg   string
+	trace string
 }
 
-func (v VMError) Error() string {
-	return "[VMError] Code: " + fmt.Sprint(v.Code) + " Text:" + v.Msg
+func (e VMError) Error() string {
+	return "[VMError] Code: " + fmt.Sprint(e.Code) + " Text:" + e.Msg + "\n" + e.trace
 }
 
-var ErrStackUnderflow = VMError{
-	Code: 2,
-	Msg:  "stack underflow",
-}
+const (
+	CodeStackUnderflow = 2
+	CodeStackOverflow  = 3
+	CodeIntOverflow    = 4
+	CodeRangeCheck     = 5
+	CodeInvalidOpcode  = 6
+	CodeTypeCheck      = 7
+	CodeCellOverflow   = 8
+	CodeCellUnderflow  = 9
+	CodeDict           = 10
+	CodeUnknown        = 11
+	CodeFatal          = 12
+	CodeOutOfGas       = 13
+	CodeVirtualization = 14
+)
 
-var ErrStackOverflow = VMError{
-	Code: 3,
-	Msg:  "stack overflow",
-}
+func Error(code int64, msg ...string) VMError {
+	e := VMError{
+		Code: code,
+	}
 
-var ErrIntOverflow = VMError{
-	Code: 4,
-	Msg:  "integer overflow",
-}
+	if len(msg) == 0 {
+		switch code {
+		case CodeStackUnderflow:
+			e.Msg = "stack underflow"
+		case CodeStackOverflow:
+			e.Msg = "stack overflow"
+		case CodeIntOverflow:
+			e.Msg = "integer overflow"
+		case CodeRangeCheck:
+			e.Msg = "range check failed"
+		case CodeInvalidOpcode:
+			e.Msg = "invalid opcode"
+		case CodeTypeCheck:
+			e.Msg = "type check failed"
+		case CodeCellOverflow:
+			e.Msg = "cell overflow"
+		case CodeCellUnderflow:
+			e.Msg = "cell underflow"
+		case CodeDict:
+			e.Msg = "dictionary error"
+		}
+	} else {
+		e.Msg = msg[0]
+	}
 
-var ErrRangeCheck = VMError{
-	Code: 5,
-	Msg:  "range check failed",
-}
+	if TVMTraceEnabled {
+		e.trace = string(debug.Stack())
+	}
 
-var ErrInvalidOpcode = VMError{
-	Code: 6,
-	Msg:  "invalid opcode",
-}
-
-var ErrTypeCheck = VMError{
-	Code: 7,
-	Msg:  "type check failed",
-}
-
-var ErrCellOverflow = VMError{
-	Code: 8,
-	Msg:  "cell overflow",
-}
-
-var ErrCellUnderflow = VMError{
-	Code: 9,
-	Msg:  "cell underflow",
-}
-
-var ErrDict = VMError{
-	Code: 10,
-	Msg:  "dictionary error",
-}
-
-var ErrUnknown = VMError{
-	Code: 11,
-	Msg:  "unknown",
-}
-
-var ErrFatal = VMError{
-	Code: 12,
-	Msg:  "fatal",
-}
-
-var ErrOutOfGas = VMError{
-	Code: 13,
-	Msg:  "out of gas",
-}
-
-var ErrVirtualization = VMError{
-	Code: 14,
-	Msg:  "virtualization error",
+	return e
 }
