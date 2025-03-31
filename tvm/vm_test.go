@@ -2,16 +2,19 @@ package tvm
 
 import (
 	"encoding/hex"
+	"errors"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 	"math/big"
 	"testing"
+	"time"
 )
 
 var MainContractCode = func() *cell.Cell {
-	contractCodeBytes, _ := hex.DecodeString("b5ee9c7241021401000150000114ff00f4a413f4bcf2c80b0102016202070202ce0306020120040500691b088831c02456f8007434c0cc1caa42644c383c0074c7f4cfcc4060841fa1d93beea6f4c7cc3e1080683e18bc00b80c2103fcbc20001d3b513434c7c07e1874c7c07e18b460001d4c8f84101cb1ff84201cb1fc9ed548020120080b020148090a000db7203e003f08300057b62bddb45dbf7da83da87da89da8bda8f2ab6e3b66261dacfdacbdac9dac7dac32749b663da83dbe203e5ff00201580c130201200d120201200e0f0021ad1cbacdb84b80d200d2106102731872400201201011000caad0f001f8420022aacd759c709320c1059401a401a4e830e4000db3aedd646939200099b42eae1da83da87da89da8bda8f26b700c9dacfdacbdac9dac7dac31c50eb1c46f5264184011c314ae71c24054841840a4984016125e46fbc054a418203cc61d061fc01c863da83dbe203e5ff06d90840d")
+	contractCodeBytes, _ := hex.DecodeString("b5ee9c724102160100016f000114ff00f4a413f4bcf2c80b0102016202070202ce0306020120040500691b088831c02456f8007434c0cc1caa42644c383c0074c7f4cfcc4060841fa1d93beea6f4c7cc3e1080683e18bc00b80c2103fcbc20001d3b513434c7c07e1874c7c07e18b460001d4c8f84101cb1ff84201cb1fc9ed548020120080d020120090c0201200a0b000db7203e003f08300057b62bddb45dbf7da83da87da89da8bda8f2ab6e3b66261dacfdacbdac9dac7dac32749b663da83dbe203e5ff0002fb829a708e10709320c1059402a402a4e830a420c204e63080201200e0f0099bbfe470ed41ed43ed44ed45ed47935b8064ed67ed65ed64ed63ed618e28758e237a9320c2008e18a5738e1202a420c20524c200b092f237de02a520c101e630e830fe00e431ed41edf101f2ff8020148101502012011120021ad1cbacdb84b80d200d2106102731872400201201314000caad0f001f8420022aacd759c709320c1059401a401a4e830e4000db3aedd646939206847fced")
 	code, _ := cell.FromBOC(contractCodeBytes)
 	return code
 }()
@@ -116,12 +119,14 @@ func TestTVM_ExecuteTvmTestLoops(t *testing.T) {
 
 	s := vm.NewStack()
 	_ = s.PushInt(big.NewInt(0))
-	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("repeatWhileUntil"))))
+	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("tryRepeatWhileUntil"))))
 
+	tm := time.Now()
 	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
+	println(">>>", time.Since(tm).String())
 
 	res, err := s.PopInt()
 	if err != nil {
@@ -177,6 +182,28 @@ func TestTVM_ExecuteTvmTestSimpleRepeatWhile(t *testing.T) {
 	}
 }
 
+func TestTVM_ExecuteTvmTestSimpleUntilWhile(t *testing.T) {
+	v := NewTVM()
+
+	s := vm.NewStack()
+	_ = s.PushInt(big.NewInt(2))
+	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleUntilWhile"))))
+
+	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.PopInt()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if res.Int64() != 27 {
+		t.Fatal("result is not 7:", res.Int64())
+	}
+}
+
 func TestTVM_ExecuteTvmTestSimpleRepeatUntil(t *testing.T) {
 	v := NewTVM()
 
@@ -196,5 +223,101 @@ func TestTVM_ExecuteTvmTestSimpleRepeatUntil(t *testing.T) {
 
 	if res.Int64() != 27 {
 		t.Fatal("result is not 7:", res.Int64())
+	}
+}
+
+func TestTVM_SuperContract(t *testing.T) {
+	type args struct {
+		name   string
+		input  int64
+		result int64
+	}
+	tests := []struct {
+		args    args
+		wantErr int64
+	}{
+		{
+			args: args{
+				name:   "simpleRepeatUntil",
+				input:  2,
+				result: 27,
+			},
+			wantErr: 0,
+		},
+		{
+			args: args{
+				name:   "simpleUntilWhile",
+				input:  3,
+				result: 28,
+			},
+			wantErr: 0,
+		},
+		{
+			args: args{
+				name:   "simpleRepeatWhile",
+				input:  2,
+				result: 27,
+			},
+			wantErr: 0,
+		},
+		{
+			args: args{
+				name:   "simpleRepeat",
+				input:  2,
+				result: 7,
+			},
+			wantErr: 0,
+		},
+		{
+			args: args{
+				name:   "tryRepeatWhileUntil",
+				input:  0,
+				result: 150,
+			},
+			wantErr: 0,
+		},
+		{
+			args: args{
+				name:   "tryRepeatWhileUntil",
+				input:  1,
+				result: 100,
+			},
+			wantErr: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.args.name, func(t *testing.T) {
+			v := NewTVM()
+
+			s := vm.NewStack()
+			_ = s.PushInt(big.NewInt(tt.args.input))
+			_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash(tt.args.name))))
+
+			err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+			if err != nil {
+				if tt.wantErr >= 1 {
+					var e vmerr.VMError
+					if errors.As(err, &e) {
+						if e.Code == tt.wantErr {
+							return
+						}
+					}
+				}
+				t.Errorf("Execute() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if tt.wantErr >= 1 {
+				t.Errorf("Execute() no error, wantErr %v", tt.wantErr)
+			}
+
+			res, err := s.PopInt()
+			if err != nil {
+				t.Errorf("PopInt() error = %v", err)
+			}
+
+			if res.Int64() != tt.args.result {
+				t.Errorf("result %v, but want %v", res.Int64(), tt.args.result)
+			}
+		})
 	}
 }

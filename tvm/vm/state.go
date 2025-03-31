@@ -51,7 +51,7 @@ func (r *Register) Get(i int) any {
 func (r *Register) Copy() Register {
 	rg := Register{}
 	for i := 0; i < 4; i++ {
-		if rg.C[i] == nil {
+		if r.C[i] == nil {
 			continue
 		}
 		rg.C[i] = r.C[i].Copy()
@@ -59,7 +59,7 @@ func (r *Register) Copy() Register {
 	for i := 0; i < 2; i++ {
 		rg.D[i] = r.D[i]
 	}
-	rg.C7 = r.C7 // must be immutable during run, means safe
+	rg.C7 = r.C7.Copy()
 	return rg
 }
 

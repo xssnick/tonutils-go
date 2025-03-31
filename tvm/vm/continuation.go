@@ -132,16 +132,14 @@ func (c *RepeatContinuation) GetControlData() *ControlData {
 }
 
 func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
-	println("REPEATX", c.Count)
-
 	if c.Count <= 0 {
-		println("REPEAT END!")
-
+		println("finish REPEAT")
 		return c.After, nil
 	}
 
+	println("iteration REPEAT", c.Count)
+
 	if cd := c.Body.GetControlData(); cd != nil && cd.Save.C[0] != nil {
-		println("REPEAT HAS C0!")
 		return c.Body, nil
 	}
 
@@ -151,7 +149,6 @@ func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
 		After: c.After.Copy(),
 	}
 
-	println("REPEAT JUMP BODY!")
 	return c.Body, nil
 }
 
@@ -182,8 +179,7 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 		}
 
 		if !more {
-			println("WHILE END!")
-
+			println("finish WHILE")
 			return c.After, nil
 		}
 
@@ -192,7 +188,7 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 				CheckCond: false,
 				Body:      c.Body.Copy(),
 				Cond:      c.Cond.Copy(),
-				After:     c.After.Copy(),
+				After:     c.After,
 			}
 		}
 
@@ -204,7 +200,7 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 			CheckCond: true,
 			Body:      c.Body.Copy(),
 			Cond:      c.Cond.Copy(),
-			After:     c.After.Copy(),
+			After:     c.After,
 		}
 	}
 
@@ -236,8 +232,7 @@ func (c *UntilContinuation) Jump(state *State) (Continuation, error) {
 	}
 
 	if end {
-		println("UNTIL END!")
-
+		println("finish UNTIL")
 		return c.After, nil
 	}
 

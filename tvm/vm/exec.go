@@ -3,7 +3,6 @@ package vm
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"reflect"
 )
 
 func (s *State) Return(args ...int) error {
@@ -12,7 +11,6 @@ func (s *State) Return(args ...int) error {
 	if len(args) == 1 {
 		return s.JumpArgs(cont, args[0])
 	} else if len(args) == 0 {
-		println("RETURN", reflect.TypeOf(cont).String())
 		return s.Jump(cont)
 	}
 	return fmt.Errorf("only one arg supported")

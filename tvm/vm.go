@@ -102,7 +102,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 				}
 			}
 
-			if steps > 1000 {
+			if steps > 100000 {
 				return fmt.Errorf("too many steps")
 			}
 
