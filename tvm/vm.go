@@ -74,6 +74,7 @@ func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack
 }
 
 func (tvm *TVM) execute(state *vm.State) (err error) {
+	var steps uint32
 	for {
 		for state.CurrentCode.BitsLeft() > 0 || state.CurrentCode.RefsNum() > 0 {
 			if state.CurrentCode.BitsLeft() == 0 {
@@ -90,10 +91,19 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 					Code: cc,
 				}
 
+				if err = state.Gas.Consume(vm.ImplicitJmprefGasPrice); err != nil {
+					return err
+				}
+
 				// implicit JMPREF
+				println("implicit JMPREF")
 				if err = state.Jump(c); err != nil {
 					return err
 				}
+			}
+
+			if steps > 1000 {
+				return fmt.Errorf("too many steps")
 			}
 
 			if err = tvm.step(state); err != nil {
@@ -108,13 +118,15 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 
 				return err
 			}
+			steps++
 		}
 
-		if state.Reg.C[0] == nil {
-			return fmt.Errorf("something wrong, c0 is nil")
+		println("implicit RET")
+		if err = state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
+			return err
 		}
 
-		if err = state.Jump(state.Reg.C[0]); err != nil {
+		if err = state.Return(); err != nil {
 			return err
 		}
 	}

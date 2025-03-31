@@ -22,7 +22,7 @@ func TRY() (op *helpers.SimpleOP) {
 			}
 
 			oldC2 := state.Reg.C[2]
-			cc, err := state.ExtractCurrentContinuation(1, -1, 7)
+			cc, err := state.ExtractCurrentContinuation(7, -1, -1)
 
 			handler = vm.ForceControlData(handler)
 			handler.GetControlData().Save.Define(2, oldC2)

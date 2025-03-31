@@ -3,20 +3,30 @@ package vm
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
+	"reflect"
 )
 
-func (s *State) Return() error {
-	if s.Reg.C[0] == nil {
-		return fmt.Errorf("something wrong, c0 is nil")
+func (s *State) Return(args ...int) error {
+	cont := Continuation(&QuitContinuation{ExitCode: 0})
+	s.Reg.C[0], cont = cont, s.Reg.C[0]
+	if len(args) == 1 {
+		return s.JumpArgs(cont, args[0])
+	} else if len(args) == 0 {
+		println("RETURN", reflect.TypeOf(cont).String())
+		return s.Jump(cont)
 	}
-	return s.Jump(s.Reg.C[0])
+	return fmt.Errorf("only one arg supported")
 }
 
-func (s *State) ReturnAlt() error {
-	if s.Reg.C[1] == nil {
-		return fmt.Errorf("something wrong, c1 is nil")
+func (s *State) ReturnAlt(args ...int) error {
+	cont := Continuation(&QuitContinuation{ExitCode: 1})
+	s.Reg.C[1], cont = cont, s.Reg.C[1]
+	if len(args) == 1 {
+		return s.JumpArgs(cont, args[0])
+	} else if len(args) == 0 {
+		return s.Jump(cont)
 	}
-	return s.Jump(s.Reg.C[1])
+	return fmt.Errorf("only one arg supported")
 }
 
 func (s *State) Call(c Continuation) error {
@@ -153,6 +163,9 @@ func (s *State) JumpArgs(c Continuation, passArgs int) error {
 }
 
 func (s *State) JumpTo(c Continuation) (err error) {
+	println(s.Stack.String())
+	println("[JUMP]")
+
 	const freeIterations = 8
 
 	var iter int
@@ -184,6 +197,9 @@ func (s *State) JumpTo(c Continuation) (err error) {
 }
 
 func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, error) {
+	println("ADJUST JUMP CONT:", passArgs)
+	// println(s.Stack.String())
+
 	data := c.GetControlData()
 	if data != nil {
 		depth := s.Stack.Len()
@@ -200,13 +216,17 @@ func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, erro
 		}
 
 		if data.Stack != nil && data.Stack.Len() > 0 {
-			if cp < 0 {
+			var newStack *Stack
+			if cp < 0 || cp == data.Stack.Len() {
 				cp = data.Stack.Len()
+				newStack = data.Stack.Copy()
+			} else {
+				newStack = NewStack()
+				if err := newStack.MoveFrom(s.Stack, cp); err != nil {
+					return nil, err
+				}
 			}
-			newStack := data.Stack.Copy()
-			if err := newStack.MoveFrom(s.Stack, cp); err != nil {
-				return nil, err
-			}
+
 			if err := s.Gas.ConsumeStackGas(newStack); err != nil {
 				return nil, err
 			}
@@ -247,6 +267,7 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 	var newStack *Stack
 	if stackCopy < 0 || stackCopy == s.Stack.Len() {
 		newStack = s.Stack
+		s.Stack = nil
 	} else if stackCopy > 0 {
 		ns, err := s.Stack.SplitTop(stackCopy, 0)
 		if err != nil {

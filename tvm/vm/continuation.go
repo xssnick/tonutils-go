@@ -3,6 +3,7 @@ package vm
 import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
+	"math/big"
 )
 
 type Continuation interface {
@@ -95,4 +96,161 @@ func (c *ArgExtContinuation) Copy() Continuation {
 		Ext:  c.Ext.Copy(),
 	}
 	return cont
+}
+
+type PushIntContinuation struct {
+	Int  int64
+	Next Continuation
+}
+
+func (c *PushIntContinuation) GetControlData() *ControlData {
+	return nil
+}
+
+func (c *PushIntContinuation) Jump(state *State) (Continuation, error) {
+	if err := state.Stack.PushInt(big.NewInt(c.Int)); err != nil {
+		return nil, err
+	}
+	return c.Next, nil
+}
+
+func (c *PushIntContinuation) Copy() Continuation {
+	return &PushIntContinuation{
+		Int:  c.Int,
+		Next: c.Next.Copy(),
+	}
+}
+
+type RepeatContinuation struct {
+	Count int64
+	Body  Continuation
+	After Continuation
+}
+
+func (c *RepeatContinuation) GetControlData() *ControlData {
+	return nil
+}
+
+func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
+	println("REPEATX", c.Count)
+
+	if c.Count <= 0 {
+		println("REPEAT END!")
+
+		return c.After, nil
+	}
+
+	if cd := c.Body.GetControlData(); cd != nil && cd.Save.C[0] != nil {
+		println("REPEAT HAS C0!")
+		return c.Body, nil
+	}
+
+	state.Reg.C[0] = &RepeatContinuation{
+		Count: c.Count - 1,
+		Body:  c.Body.Copy(),
+		After: c.After.Copy(),
+	}
+
+	println("REPEAT JUMP BODY!")
+	return c.Body, nil
+}
+
+func (c *RepeatContinuation) Copy() Continuation {
+	return &RepeatContinuation{
+		Count: c.Count,
+		Body:  c.Body.Copy(),
+		After: c.After.Copy(),
+	}
+}
+
+type WhileContinuation struct {
+	CheckCond bool
+	Body      Continuation
+	Cond      Continuation
+	After     Continuation
+}
+
+func (c *WhileContinuation) GetControlData() *ControlData {
+	return nil
+}
+
+func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
+	if c.CheckCond {
+		more, err := state.Stack.PopBool()
+		if err != nil {
+			return nil, err
+		}
+
+		if !more {
+			println("WHILE END!")
+
+			return c.After, nil
+		}
+
+		if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+			state.Reg.C[0] = &WhileContinuation{
+				CheckCond: false,
+				Body:      c.Body.Copy(),
+				Cond:      c.Cond.Copy(),
+				After:     c.After.Copy(),
+			}
+		}
+
+		return c.Body, nil
+	}
+
+	if cd := c.Cond.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+		state.Reg.C[0] = &WhileContinuation{
+			CheckCond: true,
+			Body:      c.Body.Copy(),
+			Cond:      c.Cond.Copy(),
+			After:     c.After.Copy(),
+		}
+	}
+
+	return c.Cond, nil
+}
+
+func (c *WhileContinuation) Copy() Continuation {
+	return &WhileContinuation{
+		CheckCond: c.CheckCond,
+		Body:      c.Body.Copy(),
+		Cond:      c.Cond.Copy(),
+		After:     c.After.Copy(),
+	}
+}
+
+type UntilContinuation struct {
+	Body  Continuation
+	After Continuation
+}
+
+func (c *UntilContinuation) GetControlData() *ControlData {
+	return nil
+}
+
+func (c *UntilContinuation) Jump(state *State) (Continuation, error) {
+	end, err := state.Stack.PopBool()
+	if err != nil {
+		return nil, err
+	}
+
+	if end {
+		println("UNTIL END!")
+
+		return c.After, nil
+	}
+
+	if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+		state.Reg.C[0] = c
+	}
+
+	return c.Body, nil
+}
+
+func (c *UntilContinuation) Copy() Continuation {
+	return &UntilContinuation{
+		Body:  c.Body.Copy(),
+		After: c.After.Copy(),
+	}
 }

@@ -123,6 +123,8 @@ func (s *Stack) MoveFrom(from *Stack, num int) error {
 	}
 
 	if len(s.elems)+num >= 255 {
+		println(s.String())
+		println("MOVE", len(s.elems), num, len(s.elems)+num)
 		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 

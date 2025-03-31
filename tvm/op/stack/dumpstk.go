@@ -13,6 +13,7 @@ func DUMPSTK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			// TODO: log
+			println("DUMPSTK:\n", state.Stack.String())
 			return nil
 		},
 		Name:   "DUMPSTK",
