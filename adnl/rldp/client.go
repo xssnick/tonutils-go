@@ -121,16 +121,16 @@ type decoderStream struct {
 
 	messages chan *MessagePart
 
-	totalSize     uint64
-	expectedParts uint32
-	buf           []byte
+	totalSize uint64
+	buf       []byte
 
 	mx sync.Mutex
 }
 
-var DefaultSymbolSize uint32 = 768
 var MaxUnexpectedTransferSize uint64 = 1 << 16 // 64 KB
 var MaxFECDataSize uint64 = 2 << 20            // 2 MB
+var DefaultFECDataSize uint64 = 1 << 20        // 1 MB
+var DefaultSymbolSize uint32 = 768
 
 const _MTU = 1 << 37
 
@@ -232,20 +232,14 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 				return fmt.Errorf("bad rldp total size %d, expected at least %d", m.TotalSize, fec.DataSize)
 			}
 
-			expectedParts := uint32(m.TotalSize / uint64(fec.DataSize))
-			if m.TotalSize%uint64(fec.DataSize) != 0 {
-				expectedParts++
-			}
-
 			stream = &decoderStream{
 				lastMessageAt: tm,
 				messages:      make(chan *MessagePart, 256),
 				currentPart: decoderStreamPart{
 					index: 0,
 				},
-				expectedParts: expectedParts,
-				totalSize:     m.TotalSize,
-				buf:           make([]byte, 0, m.TotalSize),
+				totalSize: m.TotalSize,
+				buf:       make([]byte, 0, m.TotalSize),
 			}
 
 			r.mx.Lock()
@@ -336,7 +330,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 				// it may not be decoded due to unsolvable math system, it means we need more symbols
 				if decoded {
-					Logger("[RLDP] part", part.Part, "out of", stream.expectedParts, "decoded on seqno", part.Seqno, "symbols:", fec.SymbolsCount, "decode took", time.Since(tmd).String())
+					Logger("[RLDP] part", part.Part, "decoded on seqno", part.Seqno, "symbols:", fec.SymbolsCount, "decode took", time.Since(tmd).String())
 
 					stream.currentPart = decoderStreamPart{
 						index: stream.currentPart.index + 1,
@@ -357,7 +351,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 						return fmt.Errorf("failed to send rldp complete message: %w", err)
 					}
 
-					if stream.currentPart.index >= stream.expectedParts {
+					if uint64(len(stream.buf)) >= stream.totalSize {
 						stream.finishedAt = &tmd
 
 						r.mx.Lock()
@@ -371,6 +365,10 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 							}
 						}
 						r.mx.Unlock()
+
+						if uint64(len(stream.buf)) > stream.totalSize {
+							return fmt.Errorf("received more data than expected, expected %d, got %d", stream.totalSize, len(stream.buf))
+						}
 
 						var res any
 						if _, err = tl.Parse(&res, stream.buf, true); err != nil {
