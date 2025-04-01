@@ -3,7 +3,6 @@ package stack
 import (
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -13,25 +12,15 @@ func init() {
 func DUP2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
-				return vmerr.Error(vmerr.CodeStackUnderflow)
-			}
-
-			b, err := state.Stack.PopAny()
+			a, err := state.Stack.Get(1)
 			if err != nil {
 				return err
 			}
-			a, err := state.Stack.PopAny()
+			b, err := state.Stack.Get(0)
 			if err != nil {
 				return err
 			}
 
-			if err = state.Stack.PushAny(a); err != nil {
-				return err
-			}
-			if err = state.Stack.PushAny(b); err != nil {
-				return err
-			}
 			if err = state.Stack.PushAny(a); err != nil {
 				return err
 			}

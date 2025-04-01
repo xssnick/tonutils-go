@@ -12,20 +12,12 @@ func init() {
 func TUCK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-
-			b, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-			a, err := state.Stack.PopAny()
+			b, err := state.Stack.Get(0)
 			if err != nil {
 				return err
 			}
 
-			if err = state.Stack.PushAny(b); err != nil {
-				return err
-			}
-			if err = state.Stack.PushAny(a); err != nil {
+			if err = state.Stack.Exchange(0, 1); err != nil {
 				return err
 			}
 
