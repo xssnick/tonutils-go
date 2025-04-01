@@ -7,22 +7,21 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func TestRotOperation(t *testing.T) {
+func Test_BLKSWAP(t *testing.T) {
 	st := vm.NewStack()
 
 	st.PushAny(big.NewInt(1))
 	st.PushAny(big.NewInt(2))
 	st.PushAny(big.NewInt(3))
 
-	rot := ROT()
+	blkswap := BLKSWAP(0, 1)
 
-	err := rot.Interpret(&vm.State{
+	err := blkswap.Interpret(&vm.State{
 		Stack: st,
 	})
 	if err != nil {
 		t.Fatal("Failed ROT interpretation:", err.Error())
 	}
-
 	a, err := st.PopInt()
 	if err != nil || a.Cmp(big.NewInt(1)) != 0 {
 		t.Errorf("Expected 1 at a, got %v", a)
