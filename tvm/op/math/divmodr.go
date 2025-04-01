@@ -35,7 +35,10 @@ func DIVMODR() *helpers.SimpleOP {
 			q := helpers.DivRound(x, y)
 			r := new(big.Int).Sub(x, y.Mul(y, q))
 
-			state.Stack.PushInt(q)
+			err = state.Stack.PushInt(q)
+			if err != nil {
+				return err
+			}
 
 			return state.Stack.PushInt(r)
 		},
