@@ -5,21 +5,16 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDDIVMOD() })
+	vm.List = append(vm.List, func() vm.OP { return RSHIFTMODR() })
 }
 
-func ADDDIVMOD() *helpers.SimpleOP {
+func RSHIFTMODR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			z, err := state.Stack.PopIntFinite()
-			if err != nil {
-				return err
-			}
-			w, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopIntRange(0, 1023)
 			if err != nil {
 				return err
 			}
@@ -28,12 +23,9 @@ func ADDDIVMOD() *helpers.SimpleOP {
 				return err
 			}
 
-			if z.Sign() == 0 {
-				return vmerr.ErrIntOverflow
-			}
-
-			sum := x.Add(x, w)
-			q, r := w.DivMod(sum, z, new(big.Int))
+			divider := y.Lsh(big.NewInt(1), uint(y.Uint64()))
+			q := helpers.DivRound(x, divider)
+			r := x.Sub(x, y.Mul(q, divider))
 
 			err = state.Stack.PushInt(q)
 			if err != nil {
@@ -42,7 +34,7 @@ func ADDDIVMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "ADDDIVMOD",
-		Prefix: []byte{0xA9, 0x00},
+		Name:   "RSHIFTMODR",
+		Prefix: []byte{0xA9, 0x2D},
 	}
 }
