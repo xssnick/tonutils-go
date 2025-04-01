@@ -17,7 +17,7 @@ type RLDP interface {
 	DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
 	SetOnQuery(handler func(transferId []byte, query *rldp.Query) error)
 	SetOnDisconnect(handler func())
-	SendAnswer(ctx context.Context, maxAnswerSize uint64, queryId, transferId []byte, answer tl.Serializable) error
+	SendAnswer(ctx context.Context, maxAnswerSize uint64, timeoutAt uint32, queryId, transferId []byte, answer tl.Serializable) error
 }
 
 type RLDPWrapper struct {
