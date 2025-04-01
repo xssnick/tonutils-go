@@ -19,12 +19,10 @@ func ADDDIVMOD() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-
 			w, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
-
 			x, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
@@ -35,7 +33,6 @@ func ADDDIVMOD() *helpers.SimpleOP {
 			}
 
 			sum := x.Add(x, w)
-
 			q, r := w.DivMod(sum, z, new(big.Int))
 
 			err = state.Stack.PushInt(q)

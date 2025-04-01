@@ -9,29 +9,31 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func TestMulConstOperation(t *testing.T) {
+func TestLshiftcodeOperation(t *testing.T) {
 	tests := []struct {
 		code []byte
 		x    int64
 		want int64
 	}{
-		{[]byte{0xA7, 0x0A}, 5, 50},
-		{[]byte{0xA7, 0xFB}, 0, 0},
-		{[]byte{0xA7, 0xFB}, 5, -25},
-		{[]byte{0xA7, 0xFB}, -5, 25},
+		{code: []byte{0xAA, 0x03}, x: 10, want: 160},
+		{[]byte{0xAA, 0x04}, 10, 320},
+		{[]byte{0xAA, 0x03}, -7, -112},
+		{[]byte{0xAA, 0x02}, -5634879008887978, -45079032071103824},
+		{[]byte{0xAA, 0x02}, -7, -56},
+		{[]byte{0xAA, 0x02}, -13, -104},
 	}
 
 	st := vm.NewStack()
 
 	for _, test := range tests {
-		name := fmt.Sprintf("case -> code: %x cc: %d arg: %d", test.code, test.x, test.want)
+		name := fmt.Sprintf("case -> code: %x x: %d arg: %d", test.code, test.x, test.want)
 		t.Run(name, func(t *testing.T) {
 			st.PushInt(big.NewInt(test.x))
 
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
 			codeSlice := codeCell.BeginParse()
 
-			op := MULCONST(0)
+			op := LSHIFTCODE(0)
 			op.Deserialize(codeSlice)
 
 			err := op.Interpret(&vm.State{
@@ -43,7 +45,7 @@ func TestMulConstOperation(t *testing.T) {
 
 			res, err := st.PopIntFinite()
 			if err != nil {
-				t.Fatal("Failed MULCONST pop: ", err.Error())
+				t.Fatal("Failed LSHIFT# pop: ", err.Error())
 			}
 
 			if res.Cmp(big.NewInt(test.want)) != 0 {

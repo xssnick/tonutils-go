@@ -5,17 +5,16 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return DIVMODR() })
+	vm.List = append(vm.List, func() vm.OP { return RSHIFTMOD() })
 }
 
-func DIVMODR() *helpers.SimpleOP {
+func RSHIFTMOD() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopIntRange(0, 1023)
 			if err != nil {
 				return err
 			}
@@ -24,13 +23,9 @@ func DIVMODR() *helpers.SimpleOP {
 				return err
 			}
 
-			if y.Sign() == 0 {
-				// division by 0
-				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
-			}
-
-			q := helpers.DivRound(x, y)
-			r := new(big.Int).Sub(x, y.Mul(y, q))
+			divider := y.Lsh(big.NewInt(1), uint(y.Uint64()))
+			q := new(big.Int).Div(x, divider)
+			r := x.Sub(x, y.Mul(q, divider))
 
 			err = state.Stack.PushInt(q)
 			if err != nil {
@@ -39,7 +34,7 @@ func DIVMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "DIVMODR",
-		Prefix: []byte{0xA9, 0x0D},
+		Name:   "RSHIFTMOD",
+		Prefix: []byte{0xA9, 0x2C},
 	}
 }
