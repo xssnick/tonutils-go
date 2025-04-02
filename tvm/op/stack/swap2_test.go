@@ -7,32 +7,40 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func TestRotOperation(t *testing.T) {
+func Test_Swap2(t *testing.T) {
 	st := vm.NewStack()
 
 	st.PushAny(big.NewInt(1))
 	st.PushAny(big.NewInt(2))
 	st.PushAny(big.NewInt(3))
+	st.PushAny(big.NewInt(4))
+	swap2 := SWAP2()
 
-	rot := ROT()
-
-	err := rot.Interpret(&vm.State{
+	err := swap2.Interpret(&vm.State{
 		Stack: st,
 	})
 	if err != nil {
 		t.Fatal("Failed ROT interpretation:", err.Error())
 	}
 
-	a, err := st.PopInt()
-	if err != nil || a.Cmp(big.NewInt(1)) != 0 {
-		t.Errorf("Expected 1 at a, got %v", a)
-	}
-	c, err := st.PopInt()
-	if err != nil || c.Cmp(big.NewInt(3)) != 0 {
-		t.Errorf("Expected 3 at c, got %v", c)
-	}
 	b, err := st.PopInt()
 	if err != nil || b.Cmp(big.NewInt(2)) != 0 {
 		t.Errorf("Expected 2 at b, got %v", b)
 	}
+
+	a, err := st.PopInt()
+	if err != nil || a.Cmp(big.NewInt(1)) != 0 {
+		t.Errorf("Expected 1 at a, got %v", a)
+	}
+
+	d, err := st.PopInt()
+	if err != nil || d.Cmp(big.NewInt(4)) != 0 {
+		t.Errorf("Expected 4 at d, got %v", d)
+	}
+
+	c, err := st.PopInt()
+	if err != nil || c.Cmp(big.NewInt(3)) != 0 {
+		t.Errorf("Expected 3 at c, got %v", c)
+	}
+
 }

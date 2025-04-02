@@ -2,11 +2,12 @@ package vm
 
 import (
 	"fmt"
+	"math/big"
+	"reflect"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
-	"reflect"
 )
 
 type Null struct{}
@@ -346,4 +347,41 @@ func (s *Stack) Copy() *Stack {
 	}
 
 	return c
+}
+
+func (s *Stack) FromTop(offset int) (int, error) {
+	stackLen := len(s.elems)
+	if stackLen < offset {
+		return 0, vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+	return stackLen - 1 - offset, nil
+}
+
+func (s *Stack) Rotate(from, to int) error {
+	stackLen := len(s.elems)
+	if stackLen-(from+to) < 0 || stackLen-(from+to) >= stackLen {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+
+	if err := s.Reverse(stackLen-1, from+to); err != nil {
+		return err
+	}
+	if err := s.Reverse(from+to-1, 0); err != nil {
+		return err
+	}
+
+	return s.Reverse(stackLen-1, 0)
+}
+
+func (s *Stack) Reverse(j, i int) error {
+	stackLen := len(s.elems)
+	if stackLen < i || stackLen < j || i < 0 || j < 0 || j < i {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+
+	for i, j := s.index(j), s.index(i); i < j; i, j = i+1, j-1 {
+		s.elems[i], s.elems[j] = s.elems[j], s.elems[i]
+	}
+
+	return nil
 }
