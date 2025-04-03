@@ -34,9 +34,9 @@ type fecBroadcastStream struct {
 
 type ADNLOverlayWrapper struct {
 	overlayId      []byte
-	authorizedKeys map[string]int32
+	authorizedKeys map[string]uint32
 
-	maxUnauthSize     int32
+	maxUnauthSize     uint32
 	allowFEC          bool
 	trustUnauthorized bool
 
@@ -57,7 +57,7 @@ func (a *ADNLWrapper) WithOverlay(id []byte) *ADNLOverlayWrapper {
 	return a.CreateOverlayWithSettings(id, 0, true, false)
 }
 
-func (a *ADNLWrapper) CreateOverlayWithSettings(id []byte, maxUnauthBroadcastSize int32,
+func (a *ADNLWrapper) CreateOverlayWithSettings(id []byte, maxUnauthBroadcastSize uint32,
 	allowBroadcastFEC bool, trustUnauthorizedBroadcast bool) *ADNLOverlayWrapper {
 	a.mx.Lock()
 	defer a.mx.Unlock()
@@ -81,12 +81,12 @@ func (a *ADNLWrapper) CreateOverlayWithSettings(id []byte, maxUnauthBroadcastSiz
 	return w
 }
 
-func (a *ADNLOverlayWrapper) SetAuthorizedKeys(keysWithMaxLen map[string]int32) {
+func (a *ADNLOverlayWrapper) SetAuthorizedKeys(keysWithMaxLen map[string]uint32) {
 	a.mx.Lock()
 	defer a.mx.Unlock()
 
 	// reset and copy
-	a.authorizedKeys = map[string]int32{}
+	a.authorizedKeys = map[string]uint32{}
 	for k, v := range keysWithMaxLen {
 		a.authorizedKeys[k] = v
 	}
@@ -136,7 +136,7 @@ func (a *ADNLOverlayWrapper) Close() {
 	a.ADNLWrapper.UnregisterOverlay(a.overlayId)
 }
 
-func (a *ADNLOverlayWrapper) checkRules(keyId string, dataSize int32, isFEC bool) CertCheckResult {
+func (a *ADNLOverlayWrapper) checkRules(keyId string, dataSize uint32, isFEC bool) CertCheckResult {
 	if dataSize == 0 {
 		return CertCheckResultForbidden
 	}

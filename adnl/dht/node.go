@@ -50,10 +50,13 @@ func (l dhtNodeList) Less(i, j int) bool {
 	if l[i] == nil || l[j] == nil {
 		return false
 	}
-	if l[i].badScore != l[j].badScore {
-		return l[i].badScore < l[j].badScore
+	iScore := atomic.LoadInt32(&l[i].badScore)
+	jScore := atomic.LoadInt32(&l[j].badScore)
+
+	if iScore != jScore {
+		return iScore < jScore
 	}
-	return l[i].ping < l[j].ping
+	return atomic.LoadInt64(&l[i].ping) < atomic.LoadInt64(&l[j].ping)
 }
 
 func (c *Client) connectToNode(id []byte, addr string, serverKey ed25519.PublicKey) *dhtNode {

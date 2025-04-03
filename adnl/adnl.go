@@ -75,9 +75,9 @@ type ADNL struct {
 
 	activeQueries map[string]chan tl.Serializable
 
-	customMessageHandler CustomMessageHandler
-	queryHandler         QueryHandler
-	onDisconnect         DisconnectHandler
+	customMessageHandler unsafe.Pointer // CustomMessageHandler
+	queryHandler         unsafe.Pointer // QueryHandler
+	onDisconnect         unsafe.Pointer // DisconnectHandler
 	onChannel            func(ch *Channel)
 
 	mx sync.RWMutex
@@ -120,8 +120,8 @@ func (a *ADNL) Close() {
 	}
 	a.mx.Unlock()
 
-	if disc := a.onDisconnect; trigger && disc != nil {
-		disc(a.addr, a.peerKey)
+	if d := a.GetDisconnectHandler(); trigger && d != nil {
+		d(a.addr, a.peerKey)
 	}
 }
 
@@ -231,8 +231,10 @@ func (a *ADNL) processMessage(message any) error {
 			return fmt.Errorf("failed to send pong: %w", err)
 		}
 	case MessageQuery:
-		if a.queryHandler != nil {
-			if err := a.queryHandler(&ms); err != nil {
+		qh := atomic.LoadPointer(&a.queryHandler)
+		if qh != nil {
+			h := *(*QueryHandler)(qh)
+			if err := h(&ms); err != nil {
 				return fmt.Errorf("failed to handle query: %w", err)
 			}
 		}
@@ -348,8 +350,10 @@ func (a *ADNL) processMessage(message any) error {
 			}
 		}
 	case MessageCustom:
-		if a.customMessageHandler != nil {
-			if err := a.customMessageHandler(&ms); err != nil {
+		ch := atomic.LoadPointer(&a.customMessageHandler)
+		if ch != nil {
+			h := *(*CustomMessageHandler)(ch)
+			if err := h(&ms); err != nil {
 				return fmt.Errorf("failed to handle custom message: %w", err)
 			}
 		}
@@ -362,23 +366,31 @@ func (a *ADNL) processMessage(message any) error {
 }
 
 func (a *ADNL) SetCustomMessageHandler(handler func(msg *MessageCustom) error) {
-	a.customMessageHandler = handler
+	atomic.StorePointer(&a.customMessageHandler, unsafe.Pointer(&handler))
 }
 
 func (a *ADNL) SetQueryHandler(handler func(msg *MessageQuery) error) {
-	a.queryHandler = handler
+	atomic.StorePointer(&a.queryHandler, unsafe.Pointer(&handler))
 }
 
 func (a *ADNL) GetQueryHandler() func(msg *MessageQuery) error {
-	return a.queryHandler
+	h := atomic.LoadPointer(&a.queryHandler)
+	if h == nil {
+		return nil
+	}
+	return *(*QueryHandler)(h)
 }
 
 func (a *ADNL) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
-	a.onDisconnect = handler
+	atomic.StorePointer(&a.onDisconnect, unsafe.Pointer(&handler))
 }
 
 func (a *ADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
-	return a.onDisconnect
+	d := (*DisconnectHandler)(atomic.LoadPointer(&a.onDisconnect))
+	if d == nil {
+		return nil
+	}
+	return *d
 }
 
 func (a *ADNL) SetChannelReadyHandler(handler func(ch *Channel)) {

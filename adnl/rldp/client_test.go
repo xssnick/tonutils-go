@@ -5,16 +5,19 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"github.com/xssnick/raptorq"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
+	"log"
 	"net/http"
 	"net/url"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func init() {
@@ -40,8 +43,7 @@ func (m MockADNL) GetID() []byte {
 }
 
 func (m MockADNL) RemoteAddr() string {
-	//TODO implement me
-	panic("implement me")
+	return "1.1.1.1:1234"
 }
 
 func (m MockADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
@@ -117,8 +119,8 @@ func TestRLDP_handleMessage(t *testing.T) {
 	_RLDPMaxAnswerSize := 2*_ChunkSize + 1024
 	tQuery := &Query{
 		ID:            tId,
-		MaxAnswerSize: int64(_RLDPMaxAnswerSize),
-		Timeout:       int32(123456),
+		MaxAnswerSize: uint64(_RLDPMaxAnswerSize),
+		Timeout:       uint32(123456),
 		Data:          req,
 	}
 
@@ -137,13 +139,13 @@ func TestRLDP_handleMessage(t *testing.T) {
 	tMsg := MessagePart{
 		TransferID: tId,
 		FecType: FECRaptorQ{
-			DataSize:     int32(len(dataQuery)),
-			SymbolSize:   int32(DefaultSymbolSize),
-			SymbolsCount: int32(encQuery.BaseSymbolsNum()),
+			DataSize:     uint32(len(dataQuery)),
+			SymbolSize:   DefaultSymbolSize,
+			SymbolsCount: encQuery.BaseSymbolsNum(),
 		},
-		Part:      int32(0),
-		TotalSize: int64(len(dataQuery)),
-		Seqno:     int32(symbolsSent),
+		Part:      uint32(0),
+		TotalSize: uint64(len(dataQuery)),
+		Seqno:     symbolsSent,
 		Data:      encQuery.GenSymbol(symbolsSent),
 	}
 
@@ -176,13 +178,13 @@ func TestRLDP_handleMessage(t *testing.T) {
 	tMsg = MessagePart{
 		TransferID: tId,
 		FecType: FECRaptorQ{
-			DataSize:     int32(len(dataAnswer)),
-			SymbolSize:   int32(DefaultSymbolSize),
-			SymbolsCount: int32(encAnswer.BaseSymbolsNum()),
+			DataSize:     uint32(len(dataAnswer)),
+			SymbolSize:   DefaultSymbolSize,
+			SymbolsCount: encAnswer.BaseSymbolsNum(),
 		},
-		Part:      int32(0),
-		TotalSize: int64(len(dataAnswer)),
-		Seqno:     int32(symbolsSent),
+		Part:      uint32(0),
+		TotalSize: uint64(len(dataAnswer)),
+		Seqno:     symbolsSent,
 		Data:      encAnswer.GenSymbol(symbolsSent),
 	}
 
@@ -285,7 +287,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to execute handleMessage func, err: ", err)
 			}
-			if cli.recvStreams[string(tId)].lastCompleteAt.IsZero() {
+			if cli.recvStreams[string(tId)].currentPart.lastCompleteAt.IsZero() {
 				t.Error("got lastCompleteAt == nil, want != nil")
 			}
 		})
@@ -302,16 +304,11 @@ func TestRLDP_handleMessage(t *testing.T) {
 			cli := NewClient(tAdnl)
 
 			cli.activeTransfers[string(tId)] = &activeTransfer{
-				id:               nil,
-				enc:              nil,
-				seqno:            0,
-				timeout:          0,
-				feq:              FECRaptorQ{},
-				lastConfirmSeqno: 0,
-				lastConfirmAt:    0,
-				lastMorePartAt:   0,
-				startedAt:        0,
-				nextRecoverDelay: 0,
+				id:   nil,
+				data: make([]byte, 10),
+				currentPart: unsafe.Pointer(&activeTransferPart{
+					index: 0,
+				}),
 			}
 
 			err := cli.handleMessage(msgComplete)
@@ -320,7 +317,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			}
 
 			if len(cli.activeTransfers) != 0 {
-				t.Errorf("got '%d' actiive transfers after handeling, want '0'", len(cli.activeTransfers))
+				t.Errorf("got '%d' active transfers after handeling, want '0'", len(cli.activeTransfers))
 			}
 		})
 	}
@@ -361,8 +358,8 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 	_RLDPMaxAnswerSize := 2*_ChunkSize + 1024
 	tQuery := &Query{
 		ID:            tId,
-		MaxAnswerSize: int64(_RLDPMaxAnswerSize),
-		Timeout:       int32(123456),
+		MaxAnswerSize: uint64(_RLDPMaxAnswerSize),
+		Timeout:       uint32(123456),
 		Data:          req,
 	}
 
@@ -415,7 +412,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 			//	v <- true
 			//}
 		}()
-		err = cli.sendMessageParts(context.Background(), nil, data, 3*time.Second)
+		err = cli.startTransfer(context.Background(), nil, data, int64(3*time.Second))
 		if err != nil {
 			t.Fatal("sendMessageParts execution failed, err: ", err)
 		}
@@ -424,7 +421,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 	t.Run("negative case (deadline exceeded)", func(t *testing.T) {
 		ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
 
-		err = cli.sendMessageParts(ctx, nil, data, 3*time.Second)
+		err = cli.startTransfer(ctx, nil, data, int64(3*time.Second))
 		if !errors.Is(err, ctx.Err()) {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}
@@ -531,7 +528,7 @@ func TestRLDP_DoQuery(t *testing.T) {
 			}
 		}()
 		var res testResponse
-		err = cli.DoQuery(context.Background(), int64(_RLDPMaxAnswerSize), tReq, &res)
+		err = cli.DoQuery(context.Background(), uint64(_RLDPMaxAnswerSize), tReq, &res)
 		if err != nil {
 			t.Fatal("DoQuery execution failed, err: ", err)
 		}
@@ -545,7 +542,7 @@ func TestRLDP_DoQuery(t *testing.T) {
 		ctx, _ := context.WithTimeout(context.Background(), time.Second)
 
 		var res Answer
-		err = cli.DoQuery(ctx, int64(_RLDPMaxAnswerSize), tReq, &res)
+		err = cli.DoQuery(ctx, uint64(_RLDPMaxAnswerSize), tReq, &res)
 		if !strings.Contains(err.Error(), "context deadline exceeded") {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}
@@ -580,7 +577,7 @@ func TestRLDP_SendAnswer(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to prepare test decoder, err: ", err)
 			}
-			added, err := tDecoder.AddSymbol(uint32(reqAnswer.Seqno), reqAnswer.Data)
+			added, err := tDecoder.AddSymbol(reqAnswer.Seqno, reqAnswer.Data)
 			if err != nil || added != true {
 				t.Fatal("failed to added symbol to test decoder, err: ", err)
 			}
@@ -630,7 +627,7 @@ func TestRLDP_SendAnswer(t *testing.T) {
 			// v <- true
 			//}
 		}()
-		err := cli.SendAnswer(context.Background(), 100, tId, nil, response)
+		err := cli.SendAnswer(context.Background(), 100, uint32(time.Now().Add(10*time.Second).Unix()), tId, nil, response)
 		if err != nil {
 			t.Fatal("SendAnswer execution failed, err: ", err)
 		}
@@ -640,4 +637,106 @@ func TestRLDP_SendAnswer(t *testing.T) {
 			t.Error("invalid activeRequests and activeTransfers after response")
 		}
 	})
+}
+
+func TestRLDP_ClientServer(t *testing.T) {
+	srvPub, srvKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cliKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := adnl.NewGateway(srvKey)
+	err = s.StartServer("127.0.0.1:19155")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.SetConnectionHandler(func(client adnl.Peer) error {
+		conn := NewClientV2(client)
+		conn.SetOnQuery(func(transferId []byte, query *Query) error {
+			q := query.Data.(testRequest)
+
+			res := testResponse{
+				Version:    "HTTP/1.1",
+				StatusCode: int32(200),
+				Reason:     "test ok:" + hex.EncodeToString(q.ID) + q.URL,
+				Headers:    []testHeader{{"test", "test"}},
+				NoPayload:  true,
+			}
+
+			println("QUERY RECEIVED")
+			if err = conn.SendAnswer(context.Background(), query.MaxAnswerSize, query.Timeout, query.ID, transferId, res); err != nil {
+				println("ANSWER SEND ERROR", err.Error())
+				t.Fatal(err.Error())
+			}
+			println("ANSWER SENT")
+
+			return nil
+		})
+		return nil
+	})
+
+	time.Sleep(1 * time.Second)
+
+	clg := adnl.NewGateway(cliKey)
+
+	err = clg.StartClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := clg.RegisterClient("127.0.0.1:19155", srvPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr := NewClientV2(cli)
+
+	t.Run("small", func(t *testing.T) {
+		u := "abc"
+		var resp testResponse
+		err := cr.DoQuery(context.Background(), 4096, testRequest{
+			ID:      make([]byte, 32),
+			Method:  "GET",
+			URL:     u,
+			Version: "1",
+		}, &resp)
+		if err != nil {
+			t.Fatal("bad client execution, err: ", err)
+		}
+
+		if resp.Reason != "test ok:"+hex.EncodeToString(make([]byte, 32))+u {
+			t.Fatal("bad response data")
+		}
+	})
+
+	Logger = log.Println
+	t.Run("big multipart 10mb", func(t *testing.T) {
+		old := MaxUnexpectedTransferSize
+		MaxUnexpectedTransferSize = 1 << 30
+		defer func() {
+			MaxUnexpectedTransferSize = old
+		}()
+
+		u := strings.Repeat("a", 10*1024*1024)
+
+		var resp testResponse
+		err := cr.DoQuery(context.Background(), 4096+uint64(len(u)), testRequest{
+			ID:      make([]byte, 32),
+			Method:  "GET",
+			URL:     u,
+			Version: "1",
+		}, &resp)
+		if err != nil {
+			t.Fatal("bad client execution, err: ", err)
+		}
+
+		if resp.Reason != "test ok:"+hex.EncodeToString(make([]byte, 32))+u {
+			t.Fatal("bad response data")
+		}
+	})
+
 }
