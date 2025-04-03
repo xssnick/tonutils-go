@@ -238,6 +238,12 @@ func (c *Client) StoreAddress(
 	ownerKey ed25519.PrivateKey,
 	replicas int,
 ) (replicasMade int, idKey []byte, err error) {
+	for i, udp := range addresses.Addresses {
+		if udp.IP.Equal(net.IPv4zero) {
+			return 0, nil, fmt.Errorf("address %d is zero", i)
+		}
+	}
+
 	data, err := tl.Serialize(addresses, true)
 	if err != nil {
 		return 0, nil, err

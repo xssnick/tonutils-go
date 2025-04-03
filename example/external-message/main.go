@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"log"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -83,6 +84,8 @@ func main() {
 		DstAddr: address.MustParseAddr("kQBL2_3lMiyywU17g-or8N7v9hDmPCpttzBPE2isF2GTziky"),
 		Body:    data,
 	}
+
+	log.Println("Sending external message with hash:", hex.EncodeToString(msg.NormalizedHash()))
 
 	err = api.SendExternalMessage(ctx, msg)
 	if err != nil {

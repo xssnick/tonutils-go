@@ -50,7 +50,7 @@ func (r *RLDPOverlayWrapper) SetOnDisconnect(handler func()) {
 	r.disconnectHandler = handler
 }
 
-func (r *RLDPOverlayWrapper) DoQuery(ctx context.Context, maxAnswerSize int64, req, result tl.Serializable) error {
+func (r *RLDPOverlayWrapper) DoQuery(ctx context.Context, maxAnswerSize uint64, req, result tl.Serializable) error {
 	return r.RLDPWrapper.DoQuery(ctx, maxAnswerSize, []tl.Serializable{Query{Overlay: r.overlayId}, req}, result)
 }
 

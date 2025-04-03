@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/tl"
@@ -27,6 +28,7 @@ type Peer interface {
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
 	GetQueryHandler() func(msg *MessageQuery) error
 	GetCloserCtx() context.Context
+	SetAddresses(addresses address.List)
 	RemoteAddr() string
 	GetID() []byte
 	GetPubKey() ed25519.PublicKey
@@ -55,41 +57,39 @@ func (p *peerConn) GetCloserCtx() context.Context {
 	return p.client.GetCloserCtx()
 }
 
+func (p *peerConn) SetAddresses(addresses address.List) {
+	p.client.SetAddresses(addresses)
+}
+
 type srvProcessor struct {
-	lastPacketAt time.Time
+	lastPacketAt int64
 	processor    func(buf []byte) error
 	closer       func()
 }
 
-type udpPacket struct {
+type UDPPacket struct {
 	from net.Addr
 	data []byte
 	n    int
 }
 
 type Gateway struct {
-	conn net.PacketConn
-
-	dhtIP   net.IP
-	dhtPort uint16
-
-	addrList   address.List
+	addrList   unsafe.Pointer
 	key        ed25519.PrivateKey
 	processors map[string]*srvProcessor
 	peers      map[string]*peerConn
 
-	connHandler func(client Peer) error
+	connHandler unsafe.Pointer // func(client Peer) error
 
 	globalCtx       context.Context
 	globalCtxCancel func()
 
-	listener func(addr string) (net.PacketConn, error)
-
 	started bool
 	mx      sync.RWMutex
 
-	bufPool sync.Pool
-	udpBuf  chan *udpPacket
+	reader         NetManager
+	onChannelOpen  func(ch *Channel)
+	onChannelClose func(id string)
 
 	lastTrack int64
 	packets   uint64
@@ -97,10 +97,10 @@ type Gateway struct {
 }
 
 func NewGateway(key ed25519.PrivateKey) *Gateway {
-	return NewGatewayWithListener(key, DefaultListener)
+	return NewGatewayWithNetManager(key, NewSingleNetReader(DefaultListener))
 }
 
-func NewGatewayWithListener(key ed25519.PrivateKey, listener func(addr string) (net.PacketConn, error)) *Gateway {
+func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gateway {
 	if key == nil {
 		panic("key is nil")
 	}
@@ -112,17 +112,7 @@ func NewGatewayWithListener(key ed25519.PrivateKey, listener func(addr string) (
 		peers:           map[string]*peerConn{},
 		globalCtx:       ctx,
 		globalCtxCancel: cancel,
-		listener:        listener,
-		udpBuf:          make(chan *udpPacket, 10*1024*1024),
-		bufPool: sync.Pool{
-			New: func() interface{} {
-				return &udpPacket{
-					from: nil,
-					data: make([]byte, 2048),
-					n:    0,
-				}
-			},
-		},
+		reader:          reader,
 	}
 }
 
@@ -135,18 +125,45 @@ var DefaultListener = func(addr string) (net.PacketConn, error) {
 }
 
 func (g *Gateway) GetAddressList() address.List {
-	return g.addrList
+	if g.addrList == nil {
+		return address.List{}
+	}
+	return *(*address.List)(atomic.LoadPointer(&g.addrList))
 }
 
-func (g *Gateway) SetExternalIP(ip net.IP) {
-	g.dhtIP = ip
+func (g *Gateway) setupChannelCallbacks(onOpen func(ch *Channel), onClose func(id string)) {
+	g.onChannelOpen = onOpen
+	g.onChannelClose = onClose
 }
 
-func (g *Gateway) SetExternalPort(port uint16) {
-	g.dhtPort = port
+func (g *Gateway) SetAddressList(addresses []*address.UDP) {
+	g.mx.Lock()
+	defer g.mx.Unlock()
+
+	tm := int32(time.Now().Unix())
+	list := address.List{
+		Addresses:  addresses,
+		Version:    tm,
+		ReinitDate: tm,
+		Priority:   0,
+		ExpireAt:   0,
+	}
+	atomic.StorePointer(&g.addrList, unsafe.Pointer(&list))
+
+	for _, conn := range g.peers {
+		// update addr for all peers
+		conn.client.SetAddresses(list)
+	}
 }
 
 func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err error) {
+	g.mx.Lock()
+	defer g.mx.Unlock()
+
+	if g.started {
+		return errors.New("gateway is already started")
+	}
+
 	threads := 1
 	if len(listenThreads) > 0 && listenThreads[0] > 0 {
 		threads = listenThreads[0]
@@ -157,150 +174,94 @@ func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err erro
 		return fmt.Errorf("invalid listen address")
 	}
 
-	ip := g.dhtIP
-	if ip == nil {
-		ip = net.ParseIP(adr[0])
-	}
+	if g.addrList == nil {
+		ip := net.ParseIP(adr[0])
 
-	if ip = ip.To4(); !ip.Equal(net.IPv4zero) {
-		port := uint64(g.dhtPort)
-		if port == 0 {
-			port, err = strconv.ParseUint(adr[1], 10, 16)
+		if ip = ip.To4(); !ip.Equal(net.IPv4zero) {
+			port, err := strconv.ParseUint(adr[1], 10, 16)
 			if err != nil {
 				return fmt.Errorf("invalid listen port")
 			}
-		}
 
-		tm := int32(time.Now().Unix())
-		g.addrList = address.List{
-			Addresses: []*address.UDP{
-				{
-					IP:   ip,
-					Port: int32(port),
+			tm := int32(time.Now().Unix())
+			g.addrList = unsafe.Pointer(&address.List{
+				Addresses: []*address.UDP{
+					{
+						IP:   ip,
+						Port: int32(port),
+					},
 				},
-			},
-			Version:    tm,
-			ReinitDate: tm,
-			Priority:   0,
-			ExpireAt:   0,
+				Version:    tm,
+				ReinitDate: tm,
+				Priority:   0,
+				ExpireAt:   0,
+			})
 		}
 	}
 
-	g.conn, err = g.listener(listenAddr)
-	if err != nil {
+	if err = g.reader.InitConnection(g, listenAddr); err != nil {
 		return err
-	}
-
-	rootId, err := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
-	if err != nil {
-		return err
-	}
-
-	g.mx.Lock()
-	defer g.mx.Unlock()
-
-	if g.started {
-		return fmt.Errorf("already started")
 	}
 	g.started = true
 
-	go g.read()
+	go g.startOldPeersChecker()
 	for i := 0; i < threads; i++ {
-		go g.listen(rootId)
+		go g.listen(g.GetID())
 	}
 
 	return nil
 }
 
 func (g *Gateway) StartClient(listenThreads ...int) (err error) {
+	g.mx.Lock()
+	defer g.mx.Unlock()
+
+	if g.started {
+		return errors.New("gateway is already started")
+	}
+
 	threads := 1
 	if len(listenThreads) > 0 && listenThreads[0] > 0 {
 		threads = listenThreads[0]
 	}
 
-	tm := int32(time.Now().Unix())
-	g.addrList = address.List{
-		Addresses:  []*address.UDP{}, // no specified addresses, we are acting as a client
-		Version:    tm,
-		ReinitDate: tm,
-		Priority:   0,
-		ExpireAt:   0,
+	if g.addrList == nil {
+		tm := int32(time.Now().Unix())
+		g.addrList = unsafe.Pointer(&address.List{
+			Addresses:  []*address.UDP{}, // no specified addresses, we are acting as a client
+			Version:    tm,
+			ReinitDate: tm,
+			Priority:   0,
+			ExpireAt:   0,
+		})
 	}
 
 	// listen all addresses, port will be auto-chosen
-	g.conn, err = g.listener(":")
-	if err != nil {
+	if err = g.reader.InitConnection(g, ":"); err != nil {
 		return err
-	}
-
-	rootId, err := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
-	if err != nil {
-		return err
-	}
-
-	g.mx.Lock()
-	defer g.mx.Unlock()
-
-	if g.started {
-		return fmt.Errorf("already started")
 	}
 	g.started = true
 
-	go g.read()
+	go g.startOldPeersChecker()
 	for i := 0; i < threads; i++ {
-		go g.listen(rootId)
+		go g.listen(g.GetID())
 	}
 
 	return nil
 }
 
-func (g *Gateway) read() {
-	for {
-		p := g.bufPool.Get().(*udpPacket)
-
-		n, addr, err := g.conn.ReadFrom(p.data)
-		if err != nil {
-			g.bufPool.Put(p)
-
-			select {
-			case <-g.globalCtx.Done():
-				return
-			default:
-			}
-
-			Logger("failed to read packet:", err)
-			continue
-		}
-
-		if n < 64 {
-			g.bufPool.Put(p)
-
-			// too small packet
-			continue
-		}
-
-		p.from = addr
-		p.n = n
-		select {
-		case g.udpBuf <- p:
-		default:
-			g.bufPool.Put(p)
-		}
-	}
-}
-
 func (g *Gateway) listen(rootId []byte) {
-	lastListCheck := time.Now()
-	var pk *udpPacket
+	ch := g.reader.GetReaderChan(g)
+	var pk *UDPPacket
 	for {
 		if pk != nil {
-			g.bufPool.Put(pk)
+			g.reader.Free(pk)
 		}
 
 		select {
 		case <-g.globalCtx.Done():
 			return
-		case pk = <-g.udpBuf:
+		case pk = <-ch:
 		}
 
 		buf := pk.data[:pk.n]
@@ -340,7 +301,7 @@ func (g *Gateway) listen(rootId []byte) {
 			}
 
 			g.mx.RLock()
-			cli := g.peers[string(peerId)]
+			cli := g.peers[*(*string)(unsafe.Pointer(&peerId))]
 			g.mx.RUnlock()
 
 			if cli == nil {
@@ -368,39 +329,14 @@ func (g *Gateway) listen(rootId []byte) {
 		}
 
 		g.mx.RLock()
-		proc := g.processors[string(id)]
+		proc := g.processors[*(*string)(unsafe.Pointer(&id))]
 		g.mx.RUnlock()
 
 		if proc == nil {
 			continue
-			// return fmt.Errorf("no processor for ADNL packet from: %s %s", pk.from.String(), hex.EncodeToString(id))
 		}
 
-		now := time.Now()
-		proc.lastPacketAt = now
-
-		if now.Sub(lastListCheck) > 10*time.Second {
-			lastListCheck = now
-			var prc []*srvProcessor
-
-			g.mx.Lock()
-			for k, pr := range g.processors {
-				if now.Sub(pr.lastPacketAt) > 60*time.Minute {
-					prc = append(prc, pr)
-					delete(g.processors, k)
-				}
-			}
-			g.mx.Unlock()
-
-			if len(prc) > 0 {
-				go func() {
-					for _, pr := range prc {
-						pr.closer()
-					}
-				}()
-			}
-		}
-
+		atomic.StoreInt64(&proc.lastPacketAt, time.Now().Unix())
 		if err := proc.processor(buf); err != nil {
 			Logger("failed to process packet at server:", err)
 		}
@@ -412,6 +348,39 @@ func (p *peerConn) checkUpdateAddr(addr net.Addr) {
 	currentAddr := *(*net.Addr)(atomic.LoadPointer(&p.addr))
 	if currentAddr.String() != addr.String() {
 		atomic.StorePointer(&p.addr, unsafe.Pointer(&addr))
+	}
+}
+
+func (g *Gateway) startOldPeersChecker() {
+	t := time.NewTicker(10 * time.Second)
+	for {
+		select {
+		case <-g.globalCtx.Done():
+			return
+		case <-t.C:
+		}
+
+		now := time.Now().Unix()
+
+		var prc []*srvProcessor
+		g.mx.Lock()
+		for k, pr := range g.processors {
+			if now-atomic.LoadInt64(&pr.lastPacketAt) > 10*60 {
+				prc = append(prc, pr)
+				delete(g.processors, k)
+
+				if g.onChannelClose != nil {
+					g.onChannelClose(k)
+				}
+			}
+		}
+		g.mx.Unlock()
+
+		if len(prc) > 0 {
+			for _, pr := range prc {
+				pr.closer()
+			}
+		}
 	}
 }
 
@@ -428,6 +397,12 @@ func (g *Gateway) GetActivePeers() []Peer {
 }
 
 func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string) (*peerConn, error) {
+	if a, ok := addr.(*net.UDPAddr); !ok {
+		return nil, fmt.Errorf("invalid address type")
+	} else if a.IP.Equal(net.IPv4zero) {
+		return nil, fmt.Errorf("zero address is invalid")
+	}
+
 	g.mx.Lock()
 	defer g.mx.Unlock()
 
@@ -443,7 +418,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 		server:   g,
 	}
 
-	addrList := g.addrList
+	addrList := *(*address.List)(atomic.LoadPointer(&g.addrList))
 	addrList.ReinitDate = int32(time.Now().Unix())
 	addrList.Version = addrList.ReinitDate
 
@@ -453,7 +428,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	a.addr = addr.String()
 	a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
 		currentAddr := *(*net.Addr)(atomic.LoadPointer(&peer.addr))
-		return g.write(deadline, currentAddr, p)
+		return g.write(currentAddr, p)
 	}, a.Close)
 	peer.client = a
 
@@ -471,19 +446,29 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 		g.mx.Lock()
 		if oldId != "" {
 			delete(g.processors, oldId)
+
+			if g.onChannelClose != nil {
+				g.onChannelClose(oldId)
+			}
 		}
 		g.processors[chID] = &srvProcessor{
 			processor:    ch.process,
-			lastPacketAt: time.Now(),
+			lastPacketAt: time.Now().Unix(),
 			closer:       ch.adnl.Close,
+		}
+		if g.onChannelOpen != nil {
+			g.onChannelOpen(ch)
 		}
 		g.mx.Unlock()
 	})
 
-	connHandler := g.connHandler
+	connHandler := atomic.LoadPointer(&g.connHandler)
 	if connHandler != nil {
 		go func() {
-			if err := connHandler(peer); err != nil {
+			type handlerFunc func(client Peer) error
+
+			ch := *(*handlerFunc)(connHandler)
+			if err := ch(peer); err != nil {
 				// close connection if connection handler reports an error
 				a.Close()
 			}
@@ -509,7 +494,7 @@ func (g *Gateway) RegisterClient(addr string, key ed25519.PublicKey) (Peer, erro
 }
 
 func (g *Gateway) SetConnectionHandler(handler func(client Peer) error) {
-	g.connHandler = handler
+	atomic.StorePointer(&g.connHandler, unsafe.Pointer(&handler))
 }
 
 func (g *Gateway) Close() error {
@@ -518,23 +503,12 @@ func (g *Gateway) Close() error {
 
 	g.globalCtxCancel()
 
-	if g.conn == nil {
-		return nil
-	}
-
-	return g.conn.Close()
+	g.reader.CloseConnection(g)
+	return nil
 }
 
-func (g *Gateway) write(deadline time.Time, addr net.Addr, buf []byte) error {
-	// g.mx.Lock()
-	// defer g.mx.Unlock()
-
-	if g.conn == nil {
-		return fmt.Errorf("no active socket connection")
-	}
-
-	// _ = g.conn.SetWriteDeadline(deadline)
-	n, err := g.conn.WriteTo(buf, addr)
+func (g *Gateway) write(addr net.Addr, buf []byte) error {
+	n, err := g.reader.WritePacket(g, buf, addr)
 	if err != nil {
 		return err
 	}
@@ -576,6 +550,9 @@ func (p *peerConn) SetDisconnectHandler(handler func(addr string, key ed25519.Pu
 		p.server.mx.Lock()
 		delete(p.server.processors, p.channelId)
 		delete(p.server.peers, p.clientId)
+		if p.server.onChannelClose != nil {
+			p.server.onChannelClose(p.channelId)
+		}
 		p.server.mx.Unlock()
 
 		if handler != nil {
