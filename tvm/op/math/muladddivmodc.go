@@ -7,12 +7,20 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return DIVMOD() })
+	vm.List = append(vm.List, func() vm.OP { return MULADDDIVMODC() })
 }
 
-func DIVMOD() *helpers.SimpleOP {
+func MULADDDIVMODC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			z, err := state.Stack.PopIntFinite()
+			if err != nil {
+				return err
+			}
+			w, err := state.Stack.PopIntFinite()
+			if err != nil {
+				return err
+			}
 			y, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
@@ -22,15 +30,13 @@ func DIVMOD() *helpers.SimpleOP {
 				return err
 			}
 
-			if y.Sign() == 0 {
-				// division by 0
-				return vmerr.VMError{
-					Code: vmerr.ErrIntOverflow.Code,
-					Msg:  "division by zero",
-				}
+			if z.Sign() == 0 {
+				return vmerr.ErrIntOverflow
 			}
 
-			q, r := helpers.DivFloor(x, y)
+			sum := x.Add(x.Mul(x, y), w)
+			q := helpers.DivCeil(sum, z)
+			r := y.Sub(sum, w.Mul(z, q))
 
 			err = state.Stack.PushInt(q)
 			if err != nil {
@@ -39,7 +45,7 @@ func DIVMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "DIVMOD",
-		Prefix: []byte{0xA9, 0x0C},
+		Name:   "MULADDDIVMODC",
+		Prefix: []byte{0xA9, 0x82},
 	}
 }

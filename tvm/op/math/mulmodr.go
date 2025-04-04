@@ -7,12 +7,16 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return DIVMOD() })
+	vm.List = append(vm.List, func() vm.OP { return MULMODR() })
 }
 
-func DIVMOD() *helpers.SimpleOP {
+func MULMODR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			z, err := state.Stack.PopIntFinite()
+			if err != nil {
+				return err
+			}
 			y, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
@@ -22,7 +26,7 @@ func DIVMOD() *helpers.SimpleOP {
 				return err
 			}
 
-			if y.Sign() == 0 {
+			if z.Sign() == 0 {
 				// division by 0
 				return vmerr.VMError{
 					Code: vmerr.ErrIntOverflow.Code,
@@ -30,16 +34,12 @@ func DIVMOD() *helpers.SimpleOP {
 				}
 			}
 
-			q, r := helpers.DivFloor(x, y)
-
-			err = state.Stack.PushInt(q)
-			if err != nil {
-				return err
-			}
+			q := helpers.DivRound(x.Mul(x, y), z)
+			r := x.Sub(x, z.Mul(z, q))
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "DIVMOD",
-		Prefix: []byte{0xA9, 0x0C},
+		Name:   "MULMODR",
+		Prefix: []byte{0xA9, 0x89},
 	}
 }

@@ -1,23 +1,25 @@
 package math
 
 import (
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDDIVMOD() })
+	vm.List = append(vm.List, func() vm.OP { return MULDIVC() })
 }
 
-func ADDDIVMOD() *helpers.SimpleOP {
+func MULDIVC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			z, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
-			w, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
@@ -30,17 +32,11 @@ func ADDDIVMOD() *helpers.SimpleOP {
 				return vmerr.ErrIntOverflow
 			}
 
-			sum := x.Add(x, w)
-			q, r := helpers.DivFloor(sum, z)
+			q := helpers.DivCeil(new(big.Int).Mul(x, y), z)
 
-			err = state.Stack.PushInt(q)
-			if err != nil {
-				return err
-			}
-
-			return state.Stack.PushInt(r)
+			return state.Stack.PushInt(q)
 		},
-		Name:   "ADDDIVMOD",
-		Prefix: []byte{0xA9, 0x00},
+		Name:   "MULDIVC",
+		Prefix: []byte{0xA9, 0x86},
 	}
 }
