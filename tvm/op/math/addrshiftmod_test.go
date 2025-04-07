@@ -8,20 +8,18 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func TestAddDivMod(t *testing.T) {
+func TestAddrshiftmodOperation(t *testing.T) {
 	tests := []struct {
 		x, w, z int64
 		q, r    int64
 	}{
-		{10, 5, 3, 5, 0},
-		{-10, 5, 3, -2, 1},
-		{10, -5, 3, 1, 2},
-		{10, 5, -3, -5, 0},
-		{-10, -5, 3, -5, 0},
-		{-10, 5, -3, 1, -2},
-		{10, -5, -3, -2, -1},
-		{7, 4, 2, 5, 1},
-		{20, 10, 5, 6, 0},
+		{9, 2, 4, 0, 11},
+		{-9, 2, 4, -1, 9},
+		{0, 2, 4, 0, 2},
+		{9, 2, 0, 11, 0},
+		{-5634879008887978, 2, 4, -352179938055499, 8},
+		{11, 2, 4, 0, 13},
+		{-11, 2, 4, -1, 7},
 	}
 
 	st := vm.NewStack()
@@ -33,10 +31,10 @@ func TestAddDivMod(t *testing.T) {
 			st.PushInt(big.NewInt(test.w))
 			st.PushInt(big.NewInt(test.z))
 
-			adddivmod := ADDDIVMOD()
-			err := adddivmod.Interpret(&vm.State{Stack: st})
+			op := ADDRSHIFTMOD()
+			err := op.Interpret(&vm.State{Stack: st})
 			if err != nil {
-				t.Fatal("Failed ADDDIVMOD execution:", err.Error())
+				t.Fatal("Failed ADDRSHIFTMOD execution:", err.Error())
 			}
 
 			remainder, err := st.PopIntFinite()

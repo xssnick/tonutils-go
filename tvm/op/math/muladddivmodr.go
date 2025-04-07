@@ -7,10 +7,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDDIVMOD() })
+	vm.List = append(vm.List, func() vm.OP { return MULADDDIVMODR() })
 }
 
-func ADDDIVMOD() *helpers.SimpleOP {
+func MULADDDIVMODR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			z, err := state.Stack.PopIntFinite()
@@ -21,17 +21,22 @@ func ADDDIVMOD() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
+			y, err := state.Stack.PopIntFinite()
+			if err != nil {
+				return err
+			}
 			x, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
 
 			if z.Sign() == 0 {
-				return vmerr.Error(vmerr.CodeIntOverflow)
+				return vmerr.ErrIntOverflow
 			}
 
-			sum := x.Add(x, w)
-			q, r := helpers.DivFloor(sum, z)
+			sum := x.Add(x.Mul(x, y), w)
+			q := helpers.DivRound(sum, z)
+			r := y.Sub(sum, w.Mul(z, q))
 
 			err = state.Stack.PushInt(q)
 			if err != nil {
@@ -40,7 +45,7 @@ func ADDDIVMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "ADDDIVMOD",
-		Prefix: []byte{0xA9, 0x00},
+		Name:   "MULADDDIVMODR",
+		Prefix: []byte{0xA9, 0x81},
 	}
 }

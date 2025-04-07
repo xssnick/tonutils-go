@@ -7,17 +7,17 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDDIVMOD() })
+	vm.List = append(vm.List, func() vm.OP { return MULMODC() })
 }
 
-func ADDDIVMOD() *helpers.SimpleOP {
+func MULMODC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			z, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
-			w, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
@@ -27,20 +27,19 @@ func ADDDIVMOD() *helpers.SimpleOP {
 			}
 
 			if z.Sign() == 0 {
-				return vmerr.Error(vmerr.CodeIntOverflow)
+				// division by 0
+				return vmerr.VMError{
+					Code: vmerr.ErrIntOverflow.Code,
+					Msg:  "division by zero",
+				}
 			}
 
-			sum := x.Add(x, w)
-			q, r := helpers.DivFloor(sum, z)
-
-			err = state.Stack.PushInt(q)
-			if err != nil {
-				return err
-			}
+			q := helpers.DivCeil(x.Mul(x, y), z)
+			r := x.Sub(x, z.Mul(z, q))
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "ADDDIVMOD",
-		Prefix: []byte{0xA9, 0x00},
+		Name:   "MULMODC",
+		Prefix: []byte{0xA9, 0x89},
 	}
 }

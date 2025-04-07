@@ -1,19 +1,20 @@
 package math
 
 import (
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDDIVMOD() })
+	vm.List = append(vm.List, func() vm.OP { return ADDRSHIFTMOD() })
 }
 
-func ADDDIVMOD() *helpers.SimpleOP {
+func ADDRSHIFTMOD() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			z, err := state.Stack.PopIntFinite()
+			z, err := state.Stack.PopIntRange(0, 256)
 			if err != nil {
 				return err
 			}
@@ -26,12 +27,9 @@ func ADDDIVMOD() *helpers.SimpleOP {
 				return err
 			}
 
-			if z.Sign() == 0 {
-				return vmerr.Error(vmerr.CodeIntOverflow)
-			}
-
-			sum := x.Add(x, w)
-			q, r := helpers.DivFloor(sum, z)
+			dividend := x.Add(x, w)
+			q, _ := helpers.DivFloor(dividend, z.Lsh(big.NewInt(1), uint(z.Uint64())))
+			r := w.Sub(dividend, z.Mul(q, z))
 
 			err = state.Stack.PushInt(q)
 			if err != nil {
@@ -40,7 +38,7 @@ func ADDDIVMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "ADDDIVMOD",
-		Prefix: []byte{0xA9, 0x00},
+		Name:   "ADDRSHIFTMOD",
+		Prefix: []byte{0xA9, 0x20},
 	}
 }

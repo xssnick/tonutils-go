@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -29,20 +27,7 @@ func DIVMOD() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
-			q := new(big.Int).Div(x, y)
-			r := new(big.Int).Mod(x, y)
-
-			if y.Sign() > 0 {
-				if r.Sign() < 0 {
-					q.Sub(q, big.NewInt(1))
-					r.Add(r, y)
-				}
-			} else {
-				if r.Sign() > 0 {
-					q.Sub(q, big.NewInt(1))
-					r.Add(r, y)
-				}
-			}
+			q, r := helpers.DivFloor(x, y)
 
 			err = state.Stack.PushInt(q)
 			if err != nil {
