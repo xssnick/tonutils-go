@@ -211,8 +211,6 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 			return err
 		}
 
-		go conn.startPings(5 * time.Second)
-
 		c.nodesMx.Lock()
 		c.activeNodes = append(c.activeNodes, conn)
 		c.nodesMx.Unlock()
@@ -334,27 +332,33 @@ func (n *connection) listen(connResult chan<- error) {
 	}
 }
 
-func (n *connection) startPings(every time.Duration) {
-	// TODO: do without goroutines
+func (c *ConnectionPool) startPings(every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
+	var nodes []*connection
 	for {
 		select {
-		case <-n.pool.globalCtx.Done():
+		case <-c.globalCtx.Done():
 			return
 		case <-ticker.C:
 		}
+		nodes = nodes[:0]
+
+		c.nodesMx.RLock()
+		nodes = append(nodes, c.activeNodes...)
+		c.nodesMx.RUnlock()
 
 		num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
 		if err != nil {
 			continue
 		}
 
-		if err := n.ping(num.Int64()); err != nil {
-			// force close in case of error
-			_ = n.tcp.Close()
-			break
+		for _, node := range nodes {
+			if err = node.ping(num.Int64()); err != nil {
+				// force close on error
+				_ = node.tcp.Close()
+			}
 		}
 	}
 }
