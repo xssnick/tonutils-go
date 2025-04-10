@@ -550,16 +550,14 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 						tokens := r.rateLimit.GetTokensLeft()
 
-						if ratio >= 0.95 && rate < 5000000 {
+						if ratio >= 0.95 {
 							if tokens < (rate/3)*2 {
 								r.rateLimit.SetRate(rate + rate/10) // +10%
 							}
-						} else if ratio < 0.75 && rate > 50 {
-							// some loss, decrease speed
-							r.rateLimit.SetRate(rate - rate/20) // -5%
-						} else if ratio < 0.35 && rate > 50 {
-							// big loss, decrease speed
+						} else if ratio < 0.35 {
 							r.rateLimit.SetRate(rate - rate/10) // -10%
+						} else if ratio < 0.75 {
+							r.rateLimit.SetRate(rate - rate/20) // -5%
 						}
 					}
 				}
