@@ -43,7 +43,7 @@ func TestModpow2ccodeOperation(t *testing.T) {
 				Stack: st,
 			})
 			if err != nil {
-				t.Fatal(err)
+				t.Fatal("Failed MODPOW2C# execution:", err.Error())
 			}
 
 			res, err := st.PopIntFinite()
