@@ -74,6 +74,7 @@ type ADNL struct {
 	ourAddresses unsafe.Pointer
 
 	activeQueries map[string]chan tl.Serializable
+	activePings   map[int64]chan MessagePong
 
 	customMessageHandler unsafe.Pointer // CustomMessageHandler
 	queryHandler         unsafe.Pointer // QueryHandler
@@ -98,6 +99,7 @@ func (g *Gateway) initADNL() *ADNL {
 		closerCtx:     closerCtx,
 		closeFn:       closeFn,
 		msgParts:      make(map[string]*partitionedMessage, 128),
+		activePings:   make(map[int64]chan MessagePong),
 		activeQueries: map[string]chan tl.Serializable{},
 	}
 }
@@ -220,7 +222,16 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 func (a *ADNL) processMessage(message any) error {
 	switch ms := message.(type) {
 	case MessagePong:
-		// TODO: record
+		a.mx.RLock()
+		ch := a.activePings[ms.Value]
+		a.mx.RUnlock()
+
+		if ch != nil {
+			select {
+			case ch <- ms:
+			default:
+			}
+		}
 	case MessagePing:
 		buf, err := a.buildRequest(MessagePong{Value: ms.Value})
 		if err != nil {
@@ -294,7 +305,7 @@ func (a *ADNL) processMessage(message any) error {
 			return fmt.Errorf("failed to setup channel: %w", err)
 		}
 	case MessagePart:
-		msgID := hex.EncodeToString(ms.Hash)
+		msgID := string(ms.Hash)
 
 		a.mx.Lock()
 		p, ok := a.msgParts[msgID]
@@ -439,6 +450,47 @@ reSplit:
 		}
 	}
 	return nil
+}
+
+func (a *ADNL) Ping(ctx context.Context) (time.Duration, error) {
+	val := time.Now().UnixNano()
+	req, err := a.buildRequest(MessagePing{
+		Value: val,
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	ch := make(chan MessagePong, 1)
+	a.mx.Lock()
+	a.activePings[val] = ch
+	a.mx.Unlock()
+
+	defer func() {
+		a.mx.Lock()
+		delete(a.activePings, val)
+		a.mx.Unlock()
+	}()
+
+	for {
+		try, cancel := context.WithTimeout(ctx, 1*time.Second)
+
+		if err = a.send(req); err != nil {
+			cancel()
+			return 0, fmt.Errorf("failed to send ping packet: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			cancel()
+			return 0, ctx.Err()
+		case <-ch:
+			cancel()
+			return time.Since(time.Unix(0, val)), nil
+		case <-try.Done():
+			continue
+		}
+	}
 }
 
 func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {

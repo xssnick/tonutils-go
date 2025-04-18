@@ -51,6 +51,10 @@ type MockADNL struct {
 	close func()
 }
 
+func (m MockADNL) Ping(ctx context.Context) (time.Duration, error) {
+	return 1 * time.Millisecond, nil
+}
+
 func (m MockADNL) GetPubKey() ed25519.PublicKey {
 	return ed25519.PublicKey{}
 }

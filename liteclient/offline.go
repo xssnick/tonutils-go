@@ -29,3 +29,7 @@ func (o OfflineClient) StickyContextNextNode(ctx context.Context) (context.Conte
 func (o OfflineClient) StickyNodeID(ctx context.Context) uint32 {
 	return 0
 }
+
+func (o OfflineClient) StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error) {
+	return ctx, nil
+}

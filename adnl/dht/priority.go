@@ -27,6 +27,26 @@ func newPriorityList(maxLen int, targetId []byte) *priorityList {
 	return p
 }
 
+func (p *priorityList) ready(num int) bool {
+	p.mx.Lock()
+	defer p.mx.Unlock()
+
+	next := p.list
+	for next != nil {
+		if next.priority >= _K {
+			num--
+
+			if num <= 0 {
+				return true
+			}
+		}
+
+		next = next.next
+	}
+
+	return false
+}
+
 func (p *priorityList) addNode(node *dhtNode) bool {
 	id := node.id()
 

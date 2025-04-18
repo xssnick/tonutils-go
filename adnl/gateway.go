@@ -26,6 +26,7 @@ type Peer interface {
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
+	Ping(ctx context.Context) (time.Duration, error)
 	GetQueryHandler() func(msg *MessageQuery) error
 	GetCloserCtx() context.Context
 	SetAddresses(addresses address.List)
@@ -59,6 +60,10 @@ func (p *peerConn) GetCloserCtx() context.Context {
 
 func (p *peerConn) SetAddresses(addresses address.List) {
 	p.client.SetAddresses(addresses)
+}
+
+func (p *peerConn) Ping(ctx context.Context) (time.Duration, error) {
+	return p.client.Ping(ctx)
 }
 
 type srvProcessor struct {

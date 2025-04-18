@@ -284,6 +284,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					}
 
 					// got packet for a finished part, let them know that it is completed, again
+					// TODO: just mark to auto send later?
 					err := r.adnl.SendCustomMessage(context.Background(), complete)
 					if err != nil {
 						return fmt.Errorf("failed to send rldp complete message: %w", err)

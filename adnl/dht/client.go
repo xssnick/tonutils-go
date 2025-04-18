@@ -37,7 +37,6 @@ type Gateway interface {
 type Client struct {
 	knownNodes map[string]*dhtNode // unused, nodes are stored in buckets
 	buckets    [256]*Bucket
-	mx         sync.RWMutex // unused, buckets has its own mutex
 
 	gateway Gateway
 
@@ -289,7 +288,7 @@ func (c *Client) Store(
 	rule any,
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
-	_ int, // unused, TON Whitepaper 3.2.7 - Store queries must be sent to all nodes in the K-sized bucket
+	replicas int,
 ) (_ int, idKey []byte, err error) {
 	idKey, err = tl.Hash(id)
 	if err != nil {
@@ -330,6 +329,10 @@ func (c *Client) Store(
 	checked := map[string]bool{}
 	plist := c.buildPriorityList(keyId)
 
+	if replicas <= 0 {
+		replicas = 3
+	}
+
 	const activeQueries = 6
 
 	for {
@@ -337,6 +340,10 @@ func (c *Client) Store(
 
 	chk:
 		for {
+			if plist.ready(replicas) {
+				break
+			}
+
 			var wg sync.WaitGroup
 			for i := 0; i < activeQueries; i++ {
 				node, _ := plist.getNode()
