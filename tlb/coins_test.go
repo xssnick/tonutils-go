@@ -274,3 +274,237 @@ func TestCoins_UnmarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestCoins_GreaterThan(t *testing.T) {
+	tests := []struct {
+		name   string
+		coins1 string
+		coins2 string
+		want   bool
+	}{
+		{"zero comparison", "0.0", "0.0", false},
+		{"zero comparison negative", "-0.0", "-0.0", false},
+		{"greater", "2.0", "1.0", true},
+		{"equal", "1.0", "1.0", false},
+		{"less", "1.0", "2.0", false},
+		{"small difference", "1.000000001", "1.0", true},
+		{"greater negative comparison", "-1.0", "-2.0", true},
+		{"equal negative comparison", "-1.0", "-1.0", false},
+		{"less negative comparison", "-2.0", "-1.0", false},
+		{"small difference negative", "-1.0", "-1.000000001", true},
+		{"too many decimals", "1.00000000001", "1.0", false},
+		{"too many decimals ", "-1.0", "-1.0000000001", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c1 := MustFromTON(tt.coins1)
+			c2 := MustFromTON(tt.coins2)
+			if got := c1.GreaterThan(&c2); got != tt.want {
+				t.Logf("c1: %s, c2: %s", c1, c2)
+				t.Errorf("GreaterThan() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoins_GreaterOrEqual(t *testing.T) {
+	tests := []struct {
+		name   string
+		coins1 string
+		coins2 string
+		want   bool
+	}{
+		{"zero comparison", "0.0", "0.0", true},
+		{"zero comparison negative", "-0.0", "-0.0", true},
+		{"greater", "2.0", "1.0", true},
+		{"equal", "1.0", "1.0", true},
+		{"less", "1.0", "2.0", false},
+		{"zero comparison", "0.0", "0.0", true},
+		{"small difference", "1.000000001", "1.0", true},
+		{"greater negative comparison", "-1.0", "-2.0", true},
+		{"equal negative comparison", "-1.0", "-1.0", true},
+		{"less negative comparison", "-2.0", "-1.0", false},
+		{"small difference negative", "-1.0", "-1.000000001", true},
+		{"too many decimals", "1.00000000001", "1.0", true},
+		{"too many decimals ", "-1.0", "-1.0000000001", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c1 := MustFromTON(tt.coins1)
+			c2 := MustFromTON(tt.coins2)
+			if got := c1.GreaterOrEqual(&c2); got != tt.want {
+				t.Errorf("GreaterOrEqual() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoins_LessThan(t *testing.T) {
+	tests := []struct {
+		name   string
+		coins1 string
+		coins2 string
+		want   bool
+	}{
+		{"zero comparison", "0.0", "0.0", false},
+		{"zero comparison negative", "-0.0", "-0.0", false},
+		{"greater", "2.0", "1.0", false},
+		{"equal", "1.0", "1.0", false},
+		{"less", "1.0", "2.0", true},
+		{"small difference", "1.0", "1.000000001", true},
+		{"greater negative comparison", "-1.0", "-2.0", false},
+		{"equal negative comparison", "-1.0", "-1.0", false},
+		{"less negative comparison", "-2.0", "-1.0", true},
+		{"small difference negative", "-1.000000001", "-1.0", true},
+		{"too many decimals", "1.00000000001", "1.0", false},
+		{"too many decimals ", "-1.0", "-1.0000000001", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c1 := MustFromTON(tt.coins1)
+			c2 := MustFromTON(tt.coins2)
+			if got := c1.LessThan(&c2); got != tt.want {
+				t.Errorf("LessThan() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoins_LessOrEqual(t *testing.T) {
+	tests := []struct {
+		name   string
+		coins1 string
+		coins2 string
+		want   bool
+	}{
+		{"zero comparison", "0.0", "0.0", true},
+		{"zero comparison negative", "-0.0", "-0.0", true},
+		{"greater", "2.0", "1.0", false},
+		{"equal", "1.0", "1.0", true},
+		{"less", "1.0", "2.0", true},
+		{"small difference", "1.0", "1.000000001", true},
+		{"greater negative comparison", "-1.0", "-2.0", false},
+		{"equal negative comparison", "-1.0", "-1.0", true},
+		{"less negative comparison", "-2.0", "-1.0", true},
+		{"small difference negative", "-1.000000001", "-1.0", true},
+		{"too many decimals", "1.00000000001", "1.0", true},
+		{"too many decimals ", "-1.0", "-1.0000000001", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c1 := MustFromTON(tt.coins1)
+			c2 := MustFromTON(tt.coins2)
+			if got := c1.LessOrEqual(&c2); got != tt.want {
+				t.Errorf("LessOrEqual() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoins_Equals(t *testing.T) {
+	tests := []struct {
+		name   string
+		coins1 string
+		coins2 string
+		want   bool
+	}{
+		{"equal", "1.0", "1.0", true},
+		{"not equal", "1.0", "2.0", false},
+		{"zero comparison", "0.0", "0.0", true},
+		{"small difference", "1.0", "1.000000001", false},
+		{"too many decimals", "1.0", "1.000000000001", true},
+		{"negative equal", "-1.0", "-1.0", true},
+		{"negative not equal", "-1.0", "-2.0", false},
+		{"different decimal representation", "1.0", "1.000000000", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c1 := MustFromTON(tt.coins1)
+			c2 := MustFromTON(tt.coins2)
+			if got := c1.Equals(&c2); got != tt.want {
+				t.Errorf("Equals() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoins_IsZero(t *testing.T) {
+	tests := []struct {
+		name  string
+		coins string
+		want  bool
+	}{
+		{"zero", "0.0", true},
+		{"positive", "1.0", false},
+		{"negative", "-1.0", false},
+		{"small positive", "0.000000001", false},
+		{"small negative", "-0.000000001", false},
+		{"too many decimals", "0.000000000001", true},
+		{"too many decimals, negative", "-0.000000000001", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := MustFromTON(tt.coins)
+			if got := c.IsZero(); got != tt.want {
+				t.Errorf("IsZero() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoins_IsPositive(t *testing.T) {
+	tests := []struct {
+		name  string
+		coins string
+		want  bool
+	}{
+		{"zero", "0.0", false},
+		{"positive", "1.0", true},
+		{"negative", "-1.0", false},
+		{"small positive", "0.000000001", true},
+		{"small negative", "-0.1", false},
+		{"too many decimals", "0.000000000001", false},
+		{"too many decimals, negative", "-0.000000000001", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := MustFromTON(tt.coins)
+			if got := c.IsPositive(); got != tt.want {
+				t.Logf("n: %s", c)
+				t.Errorf("IsPositive() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCoins_IsNegative(t *testing.T) {
+	tests := []struct {
+		name  string
+		coins string
+		want  bool
+	}{
+		{"zero", "0.0", false},
+		{"positive", "1.0", false},
+		{"negative", "-1.0", true},
+		{"small positive", "0.000000001", false},
+		{"small negative", "-0.000000001", true},
+		{"too many decimals", "0.000000000001", false},
+		{"too many decimals, negative", "-0.000000000001", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := MustFromTON(tt.coins)
+			if got := c.IsNegative(); got != tt.want {
+				t.Errorf("IsNegative() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
