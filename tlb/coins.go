@@ -175,7 +175,12 @@ func FromDecimal(val string, decimals int) (Coins, error) {
 		digits := len(lo.String()) // =_=
 		lo = lo.Mul(lo, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64((decimals-leadZeroes)-digits)), nil))
 
-		hi = hi.Add(hi, lo)
+		// Add lo for positive numbers and subtract for negative numbers.
+		if val[0] == '-' {
+			hi = hi.Sub(hi, lo)
+		} else {
+			hi = hi.Add(hi, lo)
+		}
 	}
 
 	if uint((hi.BitLen()+7)>>3) >= 16 {
@@ -229,6 +234,51 @@ func (g *Coins) Compare(coins *Coins) int {
 	}
 
 	return g.Nano().Cmp(coins.Nano())
+}
+
+// GreaterThan returns true if the current coins amount is greater than the
+// given coins amount
+func (g *Coins) GreaterThan(coins *Coins) bool {
+	return g.Compare(coins) > 0
+}
+
+// GreaterOrEqual returns true if the current coins amount is greater than or
+// equal to the given coins amount
+func (g *Coins) GreaterOrEqual(coins *Coins) bool {
+	return g.Compare(coins) >= 0
+}
+
+// LessThan returns true if the current coins amount is less than the given coins
+// amount
+func (g *Coins) LessThan(coins *Coins) bool {
+	return g.Compare(coins) < 0
+}
+
+// LessOrEqual returns true if the current coins amount is less than or equal to
+// the given coins amount
+func (g *Coins) LessOrEqual(coins *Coins) bool {
+	return g.Compare(coins) <= 0
+}
+
+// Equals returns true if the current coins amount is equal to the given coins
+// amount
+func (g *Coins) Equals(coins *Coins) bool {
+	return g.Compare(coins) == 0
+}
+
+// IsZero returns true if the coins amount is zero
+func (g *Coins) IsZero() bool {
+	return g.Nano().Sign() == 0
+}
+
+// IsPositive returns true if the coins amount is greater than zero
+func (g *Coins) IsPositive() bool {
+	return g.Nano().Sign() > 0
+}
+
+// IsNegative returns true if the coins amount is less than zero
+func (g *Coins) IsNegative() bool {
+	return g.Nano().Sign() < 0
 }
 
 func (g *Coins) Decimals() int {
