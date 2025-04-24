@@ -354,12 +354,18 @@ func (c *ConnectionPool) startPings(every time.Duration) {
 			continue
 		}
 
+		var wg sync.WaitGroup
 		for _, node := range nodes {
-			if err = node.ping(num.Int64()); err != nil {
-				// force close on error
-				_ = node.tcp.Close()
-			}
+			wg.Add(1)
+			go func(n *connection) {
+				defer wg.Done()
+				if err := n.ping(num.Int64()); err != nil {
+					// force close on error
+					_ = n.tcp.Close()
+				}
+			}(node)
 		}
+		wg.Wait()
 	}
 }
 
@@ -455,7 +461,7 @@ func writeEncrypt(conn net.Conn, crypt cipher.Stream, buf []byte) error {
 	crypt.XORKeyStream(buf, buf)
 
 	// write timeout in case of stuck socket, to reconnect
-	_ = conn.SetWriteDeadline(time.Now().Add(7 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	// write all
 	for len(buf) > 0 {
 		num, err := conn.Write(buf)
