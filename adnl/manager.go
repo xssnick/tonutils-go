@@ -14,6 +14,7 @@ type NetManager interface {
 	InitConnection(gate *Gateway, addr string) error
 	CloseConnection(gate *Gateway)
 	WritePacket(gate *Gateway, p []byte, addr net.Addr) (n int, err error)
+	Close()
 }
 
 type SingleNetManager struct {
@@ -95,6 +96,11 @@ func (s *SingleNetManager) InitConnection(gate *Gateway, addr string) error {
 	}()
 
 	return nil
+}
+
+func (s *SingleNetManager) Close() {
+	s.globalCtxCancel()
+	_ = s.conn.Close()
 }
 
 func (s *SingleNetManager) Free(p *UDPPacket) {
