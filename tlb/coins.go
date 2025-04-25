@@ -236,6 +236,127 @@ func (g *Coins) Compare(coins *Coins) int {
 	return g.Nano().Cmp(coins.Nano())
 }
 
+// Add adds the value of coins to the current Coins value.
+// It requires both Coins instances to have the same number of decimals,
+// otherwise it panics.
+func (g *Coins) Add(coins *Coins) *Coins {
+	if g.decimals != coins.decimals {
+		panic("invalid addition")
+	}
+
+	return &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Add(g.Nano(), coins.Nano()),
+	}
+}
+
+// Sub subtracts the value of coins from the current Coins value.
+// It requires both Coins instances to have the same number of decimals,
+// otherwise it panics.
+func (g *Coins) Sub(coins *Coins) *Coins {
+	if g.decimals != coins.decimals {
+		panic("invalid subtraction")
+	}
+
+	result := &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Sub(g.Nano(), coins.Nano()),
+	}
+	return result
+}
+
+// Mul multiplies the Coins value by an integer scalar x.
+func (g *Coins) Mul(x *big.Int) *Coins {
+	return &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Mul(g.Nano(), x),
+	}
+}
+
+// MulRat multiplies the Coins value by a rational number r.
+// The result is truncated towards zero (integer division) if the result
+// is not an exact multiple of the smallest coin unit (nano-unit for TON).
+// Panics if the denominator of r is zero.
+func (g *Coins) MulRat(r *big.Rat) *Coins {
+	// Get numerator and denominator
+	num := r.Num()
+	den := r.Denom()
+
+	if den.Sign() == 0 {
+		panic("division by zero in rational denominator")
+	}
+
+	// Calculate new nano value: (g.val * num) / den
+	newVal := new(big.Int).Div(
+		new(big.Int).Mul(g.val, num),
+		den,
+	)
+
+	return &Coins{
+		decimals: g.decimals,
+		val:      newVal,
+	}
+}
+
+// Div divides the Coins value by an integer scalar x.
+// The result is truncated towards zero (integer division).
+// Panics if x is zero.
+func (g *Coins) Div(x *big.Int) *Coins {
+	if x.Sign() == 0 {
+		panic("division by zero")
+	}
+
+	return &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Div(g.Nano(), x),
+	}
+}
+
+// DivRat divides the Coins value by a rational number r.
+// This is equivalent to multiplying by the reciprocal of r.
+// The resunt is result if the result is not an exact multiple of the
+// smallest coin unit (nano-unit for TON).
+// Panics if the numerator of r is zero (division by zero).
+func (g *Coins) DivRat(r *big.Rat) *Coins {
+	// Get numerator and denominator
+	num := r.Num()
+	den := r.Denom()
+
+	if den.Sign() == 0 {
+		panic("division by zero in rational numerator")
+	}
+
+	// Calculate new nano value: (g.val * den) / num
+	newVal := new(big.Int).Div(
+		new(big.Int).Mul(g.val, den),
+		num,
+	)
+
+	return &Coins{
+		decimals: g.decimals,
+		val:      newVal,
+	}
+}
+
+// Neg returns a new Coins value representing the negation of the original value.
+// The number of decimals remains the same.
+func (g *Coins) Neg() *Coins {
+	result := &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Neg(g.Nano()),
+	}
+	return result
+}
+
+// Abs returns a new Coins value representing the absolute value of the original value.
+// The number of decimals remains the same.
+func (g *Coins) Abs() *Coins {
+	return &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Abs(g.Nano()),
+	}
+}
+
 // GreaterThan returns true if the current coins amount is greater than the
 // given coins amount
 func (g *Coins) GreaterThan(coins *Coins) bool {
