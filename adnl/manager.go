@@ -195,6 +195,11 @@ func (m *MultiNetManager) Free(p *UDPPacket) {
 	m.bufPool.Put(p)
 }
 
+func (m *MultiNetManager) Close() {
+	m.globalCtxCancel()
+	_ = m.conn.Close()
+}
+
 func (m *MultiNetManager) GetReaderChan(gate *Gateway) <-chan *UDPPacket {
 	m.mx.Lock()
 	defer m.mx.Unlock()
