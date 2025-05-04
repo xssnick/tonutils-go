@@ -121,12 +121,15 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 	}
 }
 
+var PacketsBufferSize = 128 * 1024
+
 var DefaultListener = func(addr string) (net.PacketConn, error) {
-	lp, err := net.ListenPacket("udp", addr)
+	// since ip field in adnl accept only 4 bytes, we cannot fully support v6 right now
+	lp, err := net.ListenPacket("udp4", addr)
 	if err != nil {
 		return nil, err
 	}
-	return NewSyncConn(lp, 512*1024), nil
+	return NewSyncConn(lp, PacketsBufferSize), nil
 }
 
 func (g *Gateway) GetAddressList() address.List {

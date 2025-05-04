@@ -399,7 +399,7 @@ func parseBoxedType(buf []byte) ([]byte, *structInfo, error) {
 
 	info := _SchemaByID[binary.LittleEndian.Uint32(buf)]
 	if info == nil {
-		return nil, nil, fmt.Errorf("struct id %s is not registered", hex.EncodeToString(buf[:4]))
+		return nil, nil, fmt.Errorf("struct id %s is not registered %s", hex.EncodeToString(buf[:4]), hex.EncodeToString(buf))
 	}
 	return buf[4:], info, nil
 }

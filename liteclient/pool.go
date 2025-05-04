@@ -67,7 +67,7 @@ func NewConnectionPool() *ConnectionPool {
 	c.globalCtx, c.stop = context.WithCancel(context.Background())
 
 	go c.startPings(5 * time.Second)
-	
+
 	return c
 }
 

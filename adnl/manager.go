@@ -40,7 +40,7 @@ func NewSingleNetReader(connector func(addr string) (net.PacketConn, error)) *Si
 				}
 			},
 		},
-		udpBuf:          make(chan *UDPPacket, 1*1024*1024),
+		udpBuf:          make(chan *UDPPacket, PacketsBufferSize),
 		globalCtx:       globalCtx,
 		globalCtxCancel: globalCtxCancel,
 	}
@@ -217,7 +217,7 @@ func (m *MultiNetManager) InitConnection(gate *Gateway, addr string) error {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	chPackets := make(chan *UDPPacket, 1*1024*1024)
+	chPackets := make(chan *UDPPacket, PacketsBufferSize)
 	m.src[gate] = chPackets
 	m.processors[string(gate.GetID())] = chPackets
 

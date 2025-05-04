@@ -317,10 +317,16 @@ func (a *ADNL) processMessage(message any) error {
 
 			if len(a.msgParts) > 100 {
 				// cleanup old stuck messages
+				tm := time.Now().Add(-7 * time.Second)
 				for s, pt := range a.msgParts {
-					if time.Since(pt.startedAt) > 10*time.Second {
+					if tm.After(pt.startedAt) {
 						delete(a.msgParts, s)
 					}
+				}
+
+				if len(a.msgParts) > 16*1024 {
+					a.mx.Unlock()
+					return fmt.Errorf("too many incomplete messages")
 				}
 			}
 

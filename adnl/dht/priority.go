@@ -1,152 +1,115 @@
 package dht
 
 import (
+	"sort"
 	"sync"
 )
 
+// priorityList maintains a fixed-size list of nodes ordered by closeness to a target ID.
+// It's safe for concurrent use.
+// maxLen: maximum number of nodes to keep.
+// targetID: ID we're measuring affinity against.
+type priorityList struct {
+	maxLen   int
+	targetID []byte
+	items    []*nodePriority
+	mu       sync.Mutex
+}
+
+// nodePriority holds a node reference along with its computed priority.
 type nodePriority struct {
 	id       string
 	node     *dhtNode
 	priority int
-	next     *nodePriority
 	used     bool
 }
 
-type priorityList struct {
-	maxLen   int
-	targetId []byte
-	list     *nodePriority
-	mx       sync.Mutex
-}
-
-func newPriorityList(maxLen int, targetId []byte) *priorityList {
-	p := &priorityList{
-		targetId: targetId,
+// newPriorityList constructs a new priorityList with the given capacity and target ID.
+func newPriorityList(maxLen int, targetID []byte) *priorityList {
+	return &priorityList{
 		maxLen:   maxLen,
+		targetID: targetID,
+		items:    make([]*nodePriority, 0, maxLen),
 	}
-	return p
 }
 
-func (p *priorityList) ready(num int) bool {
-	p.mx.Lock()
-	defer p.mx.Unlock()
-
-	next := p.list
-	for next != nil {
-		if next.priority >= _K {
-			num--
-
-			if num <= 0 {
-				return true
-			}
-		}
-
-		next = next.next
-	}
-
-	return false
-}
-
-func (p *priorityList) addNode(node *dhtNode) bool {
+// Add inserts or updates a node's priority. Returns true if the list changed.
+func (p *priorityList) Add(node *dhtNode) bool {
 	id := node.id()
+	pr := int(affinity(node.adnlId, p.targetID))
 
-	item := &nodePriority{
-		id:       id,
-		node:     node,
-		priority: int(affinity(node.adnlId, p.targetId)) - int(node.badScore),
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Update existing
+	for _, np := range p.items {
+		if np.id == id {
+			if pr <= np.priority {
+				return false // no improvement
+			}
+			np.priority = pr
+			np.used = false
+			p.sort()
+			return true
+		}
 	}
 
-	p.mx.Lock()
-	defer p.mx.Unlock()
-
-	if p.list == nil {
-		p.list = item
-		return true
-	}
-
-	var prev, cur *nodePriority
-	cur = p.list
-
-	i := 0
-	for cur != nil {
-		if i > p.maxLen {
+	// Trim if full
+	if len(p.items) >= p.maxLen {
+		// skip if new is worse than last
+		sorted := p.items[len(p.items)-1].priority
+		if pr <= sorted {
 			return false
 		}
-		i++
-
-		if cur.id == item.id {
-			return false
-		}
-
-		if item.priority > cur.priority {
-			item.next = cur
-			if prev != nil {
-				prev.next = item
-			} else {
-				p.list = item
-			}
-			break
-		}
-
-		if cur.next == nil {
-			cur.next = item
-			break
-		}
-
-		prev, cur = cur, cur.next
+		p.items = p.items[:len(p.items)-1]
 	}
 
-	// check all nodes again to find if we already have it in list,
-	// if yes, we need to leave only the most prioritized
-	saw := false
-	prev, cur = nil, p.list
-	for cur != nil {
-		if cur.id == id {
-			if saw {
-				// remove it from the list
-				prev.next = cur.next
-			} else {
-				saw = true
-			}
-		}
-		prev, cur = cur, cur.next
-	}
-
+	// Append new
+	p.items = append(p.items, &nodePriority{id: id, node: node, priority: pr})
+	p.sort()
 	return true
 }
 
-func (p *priorityList) getNode() (*dhtNode, int) {
-	p.mx.Lock()
-	defer p.mx.Unlock()
-
-	res := p.list
-	for res != nil && res.used {
-		res = res.next
+// Get returns the next unused node and its priority, marking it used.
+// Returns (nil,0) if all nodes are used.
+func (p *priorityList) Get() (*dhtNode, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, np := range p.items {
+		if !np.used {
+			np.used = true
+			return np.node, np.priority
+		}
 	}
-
-	if res == nil {
-		return nil, 0
-	}
-	res.used = true
-
-	return res.node, res.priority
+	return nil, 0
 }
 
-func (p *priorityList) markUsed(node *dhtNode, used bool) {
-	// in case if we don't yet have it
-	p.addNode(node)
+// Len reports the current number of items in the list.
+func (p *priorityList) Len() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.items)
+}
 
-	p.mx.Lock()
-	defer p.mx.Unlock()
+// MarkUsed sets or clears the used flag for a given node, adding it if absent.
+func (p *priorityList) MarkUsed(node *dhtNode, used bool) {
+	// Ensure it exists
+	p.Add(node)
 
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	id := node.id()
-
-	curNode := p.list
-	for curNode != nil {
-		if curNode.id == id {
-			curNode.used = used
+	for _, np := range p.items {
+		if np.id == id {
+			np.used = used
 			break
 		}
-		curNode = curNode.next
 	}
+}
+
+// sort orders items by descending priority.
+func (p *priorityList) sort() {
+	sort.Slice(p.items, func(i, j int) bool {
+		return p.items[i].priority > p.items[j].priority
+	})
 }

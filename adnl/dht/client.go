@@ -160,15 +160,22 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 
 	if len(node.AddrList.Addresses) == 0 {
 		return nil, fmt.Errorf("no addresses to connect to")
-	} else if len(node.AddrList.Addresses) > 8 {
-		// max 8 addresses to check
-		node.AddrList.Addresses = node.AddrList.Addresses[:8]
+	} else if len(node.AddrList.Addresses) > 5 {
+		// max 5 addresses to check
+		node.AddrList.Addresses = node.AddrList.Addresses[:5]
 	}
 
 	// TODO: maybe use other addresses too
 	addr := node.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(node.AddrList.Addresses[0].Port)
 
-	kNode := c.connectToNode(kid, addr, pub.Key)
+	if hf := bucket.findNode(kid); hf != nil {
+		if hf.addr == addr {
+			return nil, fmt.Errorf("node already exists")
+		}
+		// updated address otherwise
+	}
+
+	kNode := c.initNode(kid, addr, pub.Key)
 	bucket.addNode(kNode)
 
 	return kNode, nil
@@ -288,7 +295,7 @@ func (c *Client) Store(
 	rule any,
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
-	replicas int,
+	_ int,
 ) (_ int, idKey []byte, err error) {
 	idKey, err = tl.Hash(id)
 	if err != nil {
@@ -327,100 +334,76 @@ func (c *Client) Store(
 	}
 
 	checked := map[string]bool{}
-	plist := c.buildPriorityList(keyId)
 
-	if replicas <= 0 {
-		replicas = 3
-	}
-
-	const activeQueries = 6
+	final := newPriorityList(_K, keyId)
 
 	for {
-		currentLen := len(checked)
+		plist := c.buildPriorityList(keyId)
 
-	chk:
-		for {
-			if plist.ready(replicas) {
-				break
-			}
-
-			var wg sync.WaitGroup
-			for i := 0; i < activeQueries; i++ {
-				node, _ := plist.getNode()
-				if node == nil {
-					break chk
-				}
-
-				nodeId := node.id()
-				if checked[nodeId] {
-					continue
-				}
-				checked[nodeId] = true
-
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-
-					Logger("Search nodes", nodeId)
-
-					storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-					nodes, err := node.findNodes(storeCallCtx, keyId, _K)
-					cancel()
-					if err != nil {
-						return
-					}
-
-					Logger("Adding nodes", len(nodes))
-					for _, n := range nodes {
-						if _, err = c.addNode(n); err != nil {
-							continue
-						}
-					}
-				}()
-			}
-			wg.Wait()
-		}
-		plist = c.buildPriorityList(keyId)
-		if len(checked) == currentLen {
-			Logger("S list stops growing:", len(checked))
-			break
-		} else {
-			Logger("K iteration ends. Current size:", len(checked))
-		}
-	}
-
-	stored := int32(0)
-
-	for {
-		noMoreNodes := false
 		var wg sync.WaitGroup
-		for i := 0; i < activeQueries; i++ {
-			node, aff := plist.getNode()
+		var expansion int32
+		for {
+			node, _ := plist.Get()
 			if node == nil {
-				noMoreNodes = true
 				break
 			}
+
+			if _, ok := checked[string(node.adnlId)]; ok {
+				continue
+			}
+			checked[string(node.adnlId)] = true
 
 			wg.Add(1)
-			go func() {
+			go func(n *dhtNode) {
 				defer wg.Done()
 
-				storeCallCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-				err := node.storeValue(storeCallCtx, keyId, &val)
-				cancel()
-				if err == nil {
-					Logger("Value stored on node", node.id(), "- affinity", aff)
-					atomic.AddInt32(&stored, 1)
+				ctxQuery, cancel := context.WithTimeout(ctx, queryTimeout)
+				defer cancel()
+
+				nodes, err := n.findNodes(ctxQuery, keyId, _K)
+				if err != nil {
 					return
 				}
-				Logger("Failed to store value on node", node.id(), "- affinity", aff, err.Error())
-			}()
+
+				// add responsive nodes
+				final.Add(n)
+
+				for _, newN := range nodes {
+					if _, err = c.addNode(newN); err == nil {
+						atomic.StoreInt32(&expansion, 1)
+					}
+				}
+			}(node)
 		}
 		wg.Wait()
-		if atomic.LoadInt32(&stored) >= _K || noMoreNodes {
+
+		if atomic.LoadInt32(&expansion) == 0 {
 			break
 		}
 	}
+
+	var wg sync.WaitGroup
+	var stored int32
+
+	for {
+		node, _ := final.Get()
+		if node == nil {
+			break
+		}
+		wg.Add(1)
+
+		go func(n *dhtNode) {
+			defer wg.Done()
+
+			ctxStore, cancel := context.WithTimeout(ctx, queryTimeout)
+			defer cancel()
+
+			if err := n.storeValue(ctxStore, keyId, &val); err == nil {
+				atomic.AddInt32(&stored, 1)
+			}
+		}(node)
+	}
+	wg.Wait()
 
 	if stored == 0 {
 		return 0, idKey, fmt.Errorf("no alive nodes found to store this key")
@@ -442,6 +425,7 @@ type foundResult struct {
 	node  *dhtNode
 }
 
+// FindValue attempts to retrieve a value from the DHT based on the given key.
 func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
 	id, keyErr := tl.Hash(key)
 	if keyErr != nil {
@@ -449,96 +433,77 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	}
 
 	plist := c.buildPriorityList(id)
-
 	cont := &Continuation{}
 	if len(continuation) > 0 && continuation[0] != nil {
 		cont = continuation[0]
 		for _, n := range cont.checkedNodes {
-			// mark nodes as used to not get a value from them again
-			plist.markUsed(n, true)
+			plist.MarkUsed(n, true)
 		}
 	}
 
 	threadCtx, stopThreads := context.WithCancel(ctx)
+	defer stopThreads()
 
-	const threads = 6
+	const threads = 3
 	result := make(chan *foundResult, threads)
 
-	var numWaitingNextNode int
 	cond := sync.NewCond(&sync.Mutex{})
+	waitingThreads := 0
 
-	defer func() {
-		stopThreads()
-		cond.Broadcast()
-	}()
+	launchWorker := func() {
+		for {
+			select {
+			case <-threadCtx.Done():
+				return
+			default:
+			}
 
-	for i := 0; i < threads; i++ {
-		go func() {
-			for {
-				select {
-				case <-threadCtx.Done():
-					return
-				default:
-				}
-
-				node, _ := plist.getNode()
-				if node == nil {
-					cond.L.Lock()
-					numWaitingNextNode++
-
-					for {
-						select {
-						case <-threadCtx.Done():
-							cond.L.Unlock()
-							return
-						default:
-						}
-
-						if numWaitingNextNode == threads {
-							cond.L.Unlock()
-
-							result <- nil
-
-							return
-						}
-
-						node, _ = plist.getNode()
-						if node != nil {
-							break
-						}
-
-						cond.Wait()
-					}
-
-					numWaitingNextNode--
+			var node *dhtNode
+			cond.L.Lock()
+			node, _ = plist.Get()
+			for node == nil {
+				waitingThreads++
+				if waitingThreads == threads {
 					cond.L.Unlock()
-				}
-
-				findCtx, findCancel := context.WithTimeout(threadCtx, queryTimeout)
-
-				val, err := node.findValue(findCtx, id, _K)
-				findCancel()
-				if err != nil {
-					continue
-				}
-
-				switch v := val.(type) {
-				case *Value:
-					result <- &foundResult{value: v, node: node}
+					result <- nil
 					return
-				case []*Node:
-					for _, n := range v {
-						newNode, err := c.addNode(n)
-						if err != nil {
-							continue
-						}
+				}
 
-						plist.addNode(newNode)
-						cond.Signal()
+				cond.Wait()
+				node, _ = plist.Get()
+				waitingThreads--
+			}
+			cond.L.Unlock()
+
+			findCtx, cancel := context.WithTimeout(threadCtx, queryTimeout)
+			val, err := node.findValue(findCtx, id, _K)
+			cancel()
+			if err != nil {
+				continue
+			}
+
+			switch v := val.(type) {
+			case *Value:
+				result <- &foundResult{value: v, node: node}
+				return
+			case []*Node:
+				added := false
+				for _, n := range v {
+					if newNode, err := c.addNode(n); err == nil {
+						plist.Add(newNode)
+						added = true
 					}
+				}
+
+				if added {
+					cond.Broadcast()
 				}
 			}
-		}()
+		}
+	}
+
+	for i := 0; i < threads; i++ {
+		go launchWorker()
 	}
 
 	select {
@@ -550,14 +515,13 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 		}
 
 		cont.checkedNodes = append(cont.checkedNodes, val.node)
-
 		return val.value, cont, nil
 	}
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
-	plistGood := newPriorityList(_K*3, id)
-	plistBad := newPriorityList(_K, id)
+	plistGood := newPriorityList(_K+_K/2, id)
+	plistBad := newPriorityList(_K/2, id)
 
 	for i := 255; i >= 0; i-- {
 		bucket := c.buckets[i]
@@ -568,20 +532,20 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 			}
 
 			if atomic.LoadInt32(&node.badScore) == 0 {
-				plistGood.addNode(node)
+				plistGood.Add(node)
 			} else {
-				plistBad.addNode(node)
+				plistBad.Add(node)
 			}
 		}
 	}
 
 	// add K not good nodes to retry them if they can be better
 	for {
-		node, _ := plistBad.getNode()
+		node, _ := plistBad.Get()
 		if node == nil {
 			break
 		}
-		plistGood.addNode(node)
+		plistGood.Add(node)
 	}
 
 	return plistGood
