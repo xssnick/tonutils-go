@@ -536,11 +536,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					rate := r.rateLimit.GetRate()
 
 					// boost when low rate, and slowdown checks when high
-					delay := 10 + rate/800
+					delay := 10 + rate/2000
 					if delay < 10 {
 						delay = 10
-					} else if delay > 1000 {
-						delay = 1000
+					} else if delay > 500 {
+						delay = 500
 					}
 
 					if batches >= 3 && lastAt+delay <= nowMs && atomic.CompareAndSwapInt64(&r.lastNetworkBatchesNum, batches, 0) {
