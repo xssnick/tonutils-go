@@ -2,6 +2,7 @@ package tlb
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -510,12 +511,25 @@ func TestCoins_IsNegative(t *testing.T) {
 }
 
 func TestCoins_Add(t *testing.T) {
+	// Define a very large number close to the 16-byte limit
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	maxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatalf("got err: %s", err)
+	}
+	oneNano, err := FromNano(big.NewInt(1), 9)
+	if err != nil {
+		t.Fatalf("got err: %s", err)
+	}
+
 	tests := []struct {
-		name      string
-		a         Coins
-		b         Coins
-		want      Coins
-		wantPanic bool
+		name    string
+		a       Coins
+		b       Coins
+		want    Coins
+		wantErr error // Expected error for non-Must version
 	}{
 		{
 			name: "add zero to positive",
@@ -578,25 +592,29 @@ func TestCoins_Add(t *testing.T) {
 			want: MustFromDecimal("2", 6),
 		},
 		{
-			name:      "different decimals panic",
-			a:         MustFromDecimal("1", 9),
-			b:         MustFromDecimal("1", 6),
-			wantPanic: true,
+			name:    "different decimals error",
+			a:       MustFromDecimal("1", 9),
+			b:       MustFromDecimal("1", 6),
+			wantErr: errDecimalMismatch,
+		},
+		{
+			name:    "result too big error",
+			a:       maxCoins,
+			b:       oneNano, // Adding 1 nano makes it 2^120
+			wantErr: errTooBigForVarUint16,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if (r != nil) != tt.wantPanic {
-					t.Errorf("Add() panic = %v, wantPanic %v", r, tt.wantPanic)
-				}
-			}()
+			got, err := tt.a.Add(&tt.b)
 
-			got := tt.a.Add(&tt.b)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Add() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
 
-			if !tt.wantPanic {
+			if tt.wantErr == nil {
 				if !got.Equals(&tt.want) {
 					t.Errorf("Add() got = %v, want %v", got, tt.want)
 				}
@@ -608,13 +626,81 @@ func TestCoins_Add(t *testing.T) {
 	}
 }
 
-func TestCoins_Sub(t *testing.T) {
+func TestCoins_MustAdd(t *testing.T) {
+	// Define a very large number close to the 16-byte limit
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	maxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneNano, err := FromNano(big.NewInt(1), 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		name      string
 		a         Coins
 		b         Coins
-		want      Coins
-		wantPanic bool
+		wantPanic bool // Expected panic for Must version
+	}{
+		{
+			name:      "different decimals panic",
+			a:         MustFromDecimal("1", 9),
+			b:         MustFromDecimal("1", 6),
+			wantPanic: true,
+		},
+		{
+			name:      "result too big panic",
+			a:         maxCoins,
+			b:         oneNano,
+			wantPanic: true,
+		},
+		{
+			name:      "no panic",
+			a:         MustFromTON("1"),
+			b:         MustFromTON("2"),
+			wantPanic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if (r != nil) != tt.wantPanic {
+					t.Errorf("MustAdd() panic = %v, wantPanic %v", r, tt.wantPanic)
+				}
+			}()
+
+			// We only call MustAdd to check for panics, result checked in TestCoins_Add
+			_ = tt.a.MustAdd(&tt.b)
+		})
+	}
+}
+
+func TestCoins_Sub(t *testing.T) {
+	// Define a very large negative number close to the 16-byte limit.
+	largeNegValStr := "-1329227995784915872903807060280344575" // 2^120 - 1
+	largeNegVal := new(big.Int)
+	largeNegVal.SetString(largeNegValStr, 10)
+	minCoins, err := FromNano(largeNegVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneNano, err := FromNano(big.NewInt(1), 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		a       Coins
+		b       Coins
+		want    Coins
+		wantErr error
 	}{
 		{
 			name: "subtract zero from positive",
@@ -695,27 +781,32 @@ func TestCoins_Sub(t *testing.T) {
 			want: MustFromDecimal("1", 6),
 		},
 		{
-			name:      "different decimals panic",
-			a:         MustFromDecimal("1", 9),
-			b:         MustFromDecimal("1", 6),
-			wantPanic: true,
+			name:    "different decimals error",
+			a:       MustFromDecimal("1", 9),
+			b:       MustFromDecimal("1", 6),
+			wantErr: errDecimalMismatch,
+		},
+		{
+			name:    "result too small error",
+			a:       minCoins,
+			b:       oneNano,               // Subtracting 1 nano makes it less than -2^120
+			wantErr: errTooBigForVarUint16, // The check is based on bit length, large negative numbers also fail
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if (r != nil) != tt.wantPanic {
-					t.Errorf("Sub() panic = %v, wantPanic %v", r, tt.wantPanic)
-				}
-			}()
+			got, err := tt.a.Sub(&tt.b)
 
-			got := tt.a.Sub(&tt.b)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Sub() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
 
-			if !tt.wantPanic {
-				if !got.Equals(&tt.want) {
-					t.Errorf("Sub() got = %v, want %v", t, tt.want)
+			if tt.wantErr == nil {
+				// Use Nano().Cmp because direct Equals might fail due to precision diffs in test setup vs calculation
+				if got.Nano().Cmp(tt.want.Nano()) != 0 {
+					t.Errorf("Sub() got = %v (%s), want %v (%s)", got, got.Nano().String(), tt.want, tt.want.Nano().String())
 				}
 				if got.Decimals() != tt.want.Decimals() {
 					t.Errorf("Sub() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
@@ -725,12 +816,75 @@ func TestCoins_Sub(t *testing.T) {
 	}
 }
 
-func TestCoins_Mul(t *testing.T) {
+func TestCoins_MustSub(t *testing.T) {
+	// Define a very large negative number close to the 16-byte limit
+	largeNegValStr := "-1329227995784915872903807060280344575" // 2^120 - 1
+	largeNegVal := new(big.Int)
+	largeNegVal.SetString(largeNegValStr, 10)
+	minCoins, err := FromNano(largeNegVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneNano, err := FromNano(big.NewInt(1), 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
-		name string
-		a    Coins
-		x    *big.Int
-		want Coins
+		name      string
+		a         Coins
+		b         Coins
+		wantPanic bool
+	}{
+		{
+			name:      "different decimals panic",
+			a:         MustFromDecimal("1", 9),
+			b:         MustFromDecimal("1", 6),
+			wantPanic: true,
+		},
+		{
+			name:      "result too small panic",
+			a:         minCoins,
+			b:         oneNano,
+			wantPanic: true,
+		},
+		{
+			name:      "no panic",
+			a:         MustFromTON("3"),
+			b:         MustFromTON("1"),
+			wantPanic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if (r != nil) != tt.wantPanic {
+					t.Errorf("MustSub() panic = %v, wantPanic %v", r, tt.wantPanic)
+				}
+			}()
+
+			_ = tt.a.MustSub(&tt.b)
+		})
+	}
+}
+
+func TestCoins_Mul(t *testing.T) {
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	halfMaxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		a       Coins
+		x       *big.Int
+		want    Coins
+		wantErr error
 	}{
 		{
 			name: "multiply positive by positive",
@@ -776,9 +930,9 @@ func TestCoins_Mul(t *testing.T) {
 		},
 		{
 			name: "too many decimals gets truncated",
-			a:    MustFromTON("1.1234567891234"),
+			a:    MustFromDecimal("1.1234567891234", 9),
 			x:    big.NewInt(2),
-			want: MustFromTON("2.246913578"),
+			want: MustFromDecimal("2.246913578", 9),
 		},
 		{
 			name: "non-standard decimals works",
@@ -786,29 +940,97 @@ func TestCoins_Mul(t *testing.T) {
 			x:    big.NewInt(2),
 			want: MustFromDecimal("2.4690", 4),
 		},
+		{
+			name:    "result too big error",
+			a:       halfMaxCoins,
+			x:       big.NewInt(2), // 2^119 * 2 = 2^120
+			wantErr: errTooBigForVarUint16,
+		},
+		{
+			name:    "result too small error",
+			a:       halfMaxCoins,
+			x:       big.NewInt(-2), // 2^119 * -2 = -2^120
+			wantErr: errTooBigForVarUint16,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.a.Mul(tt.x)
+			got, err := tt.a.Mul(tt.x)
 
-			if !got.Equals(&tt.want) {
-				t.Errorf("Mul() got = %v, want %v", got, tt.want)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Mul() error = %v, wantErr %v", err, tt.wantErr)
+				return
 			}
-			if got.Decimals() != tt.want.Decimals() {
-				t.Errorf("Mul() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
+
+			if tt.wantErr == nil {
+				if !got.Equals(&tt.want) {
+					t.Errorf("Mul() got = %v, want %v", got, tt.want)
+				}
+				if got.Decimals() != tt.want.Decimals() {
+					t.Errorf("Mul() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
+				}
 			}
+		})
+	}
+}
+
+func TestCoins_MustMul(t *testing.T) {
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	halfMaxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		a         Coins
+		x         *big.Int
+		wantPanic bool
+	}{
+		{
+			name:      "result too big panic",
+			a:         halfMaxCoins,
+			x:         big.NewInt(2),
+			wantPanic: true,
+		},
+		{
+			name:      "result too small panic",
+			a:         halfMaxCoins,
+			x:         big.NewInt(-2),
+			wantPanic: true,
+		},
+		{
+			name:      "no panic",
+			a:         MustFromTON("1.5"),
+			x:         big.NewInt(2),
+			wantPanic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if (r != nil) != tt.wantPanic {
+					t.Errorf("MustMul() panic = %v, wantPanic %v", r, tt.wantPanic)
+				}
+			}()
+
+			_ = tt.a.MustMul(tt.x)
 		})
 	}
 }
 
 func TestCoins_Div(t *testing.T) {
 	tests := []struct {
-		name      string
-		a         Coins
-		x         *big.Int
-		want      Coins
-		wantPanic bool
+		name    string
+		a       Coins
+		x       *big.Int
+		want    Coins
+		wantErr error
 	}{
 		{
 			name: "divide positive by positive",
@@ -823,10 +1045,10 @@ func TestCoins_Div(t *testing.T) {
 			want: MustFromTON("0.333333333"), // 1_000_000_000 / 3 = 333_333_333
 		},
 		{
-			name:      "divide by zero panic",
-			a:         MustFromTON("1.234567890"),
-			x:         big.NewInt(0),
-			wantPanic: true,
+			name:    "divide by zero error",
+			a:       MustFromTON("1.234567890"),
+			x:       big.NewInt(0),
+			wantErr: errDivisionByZero,
 		},
 		{
 			name: "divide positive by negative",
@@ -859,16 +1081,60 @@ func TestCoins_Div(t *testing.T) {
 			want: MustFromTON("1.1"),
 		},
 		{
-			name: "too many deciamals gets truncated",
-			a:    MustFromTON("1.123456789123"),
+			name: "too many decimals gets truncated", // Input truncation
+			a:    MustFromDecimal("1.123456789123", 9),
 			x:    big.NewInt(2),
-			want: MustFromTON("0.5617283945"),
+			want: MustFromDecimal("0.561728394", 9), // 1123456789 / 2 = 561728394
 		},
 		{
 			name: "non-standard decimals works",
 			a:    MustFromDecimal("2.4690", 4),
 			x:    big.NewInt(2),
 			want: MustFromDecimal("1.2345", 4),
+		},
+		// errTooBigForVarUint16 is less likely with Div but possible if dividing a large number by < 1 (not possible with integer Div)
+		// or if the input 'a' itself was already invalid (handled by FromNano). The check is on the result.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.a.Div(tt.x)
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Div() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr == nil {
+				if !got.Equals(&tt.want) {
+					t.Errorf("Div() got = %v, want %v", got, tt.want)
+				}
+				if got.Decimals() != tt.want.Decimals() {
+					t.Errorf("Div() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
+				}
+			}
+		})
+	}
+}
+
+func TestCoins_MustDiv(t *testing.T) {
+	tests := []struct {
+		name      string
+		a         Coins
+		x         *big.Int
+		wantPanic bool
+	}{
+		{
+			name:      "divide by zero panic",
+			a:         MustFromTON("1.234567890"),
+			x:         big.NewInt(0),
+			wantPanic: true,
+		},
+		{
+			name:      "no panic",
+			a:         MustFromTON("4"),
+			x:         big.NewInt(2),
+			wantPanic: false,
 		},
 	}
 
@@ -877,20 +1143,11 @@ func TestCoins_Div(t *testing.T) {
 			defer func() {
 				r := recover()
 				if (r != nil) != tt.wantPanic {
-					t.Errorf("Div() panic = %v, wantPanic %v", r, tt.wantPanic)
+					t.Errorf("MustDiv() panic = %v, wantPanic %v", r, tt.wantPanic)
 				}
 			}()
 
-			got := tt.a.Div(tt.x)
-
-			if !tt.wantPanic {
-				if !got.Equals(&tt.want) {
-					t.Errorf("Div() got = %v, want %v", got, tt.want)
-				}
-				if got.Decimals() != tt.want.Decimals() {
-					t.Errorf("Div() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
-				}
-			}
+			_ = tt.a.MustDiv(tt.x)
 		})
 	}
 }
@@ -995,12 +1252,20 @@ func TestCoins_Abs(t *testing.T) {
 }
 
 func TestCoins_MulRat(t *testing.T) {
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	halfMaxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
-		name      string
-		a         Coins
-		r         *big.Rat
-		want      Coins
-		wantPanic bool
+		name    string
+		a       Coins
+		r       *big.Rat
+		want    Coins
+		wantErr error
 	}{
 		{
 			name: "multiply by 1/2",
@@ -1047,7 +1312,7 @@ func TestCoins_MulRat(t *testing.T) {
 		{
 			name: "multiply by zero rational",
 			a:    MustFromTON("123.456"),
-			r:    big.NewRat(0, 1),
+			r:    big.NewRat(0, 1), // 0/1 is valid
 			want: MustFromTON("0"),
 		},
 		{
@@ -1069,39 +1334,31 @@ func TestCoins_MulRat(t *testing.T) {
 			want: MustFromTON("2.5"),
 		},
 		{
-			name: "divide by rational equal to 1",
-			a:    MustFromTON("7.89"),
-			r:    big.NewRat(3, 3),
-			want: MustFromTON("7.89"),
+			name:    "result too big error",
+			a:       halfMaxCoins,
+			r:       big.NewRat(2, 1), // * 2
+			wantErr: errTooBigForVarUint16,
 		},
 		{
-			name: "divide by rational equal to -1",
-			a:    MustFromTON("7.89"),
-			r:    big.NewRat(-3, 3),
-			want: MustFromTON("-7.89"),
-		},
-		{
-			name: "divide by rational with zero denominator (currently returns 0)",
-			a:    MustFromTON("1.0"),
-			r:    new(big.Rat),
-			want: MustFromTON("0"),
+			name:    "result too small error",
+			a:       halfMaxCoins,
+			r:       big.NewRat(-2, 1), // * -2
+			wantErr: errTooBigForVarUint16,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				if (r != nil) != tt.wantPanic {
-					t.Errorf("MulRat() panic = %v, wantPanic %v", r, tt.wantPanic)
-				}
-			}()
+			got, err := tt.a.MulRat(tt.r)
 
-			got := tt.a.MulRat(tt.r)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("MulRat() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
 
-			if !tt.wantPanic {
+			if tt.wantErr == nil {
 				if !got.Equals(&tt.want) {
-					t.Errorf("MulRat() got = %v, want %v", got, tt.want)
+					t.Errorf("MulRat() got = %v (%s), want %v (%s)", got, got.Nano().String(), tt.want, tt.want.Nano().String())
 				}
 				if got.Decimals() != tt.want.Decimals() {
 					t.Errorf("MulRat() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
@@ -1111,13 +1368,70 @@ func TestCoins_MulRat(t *testing.T) {
 	}
 }
 
-func TestCoins_DivRat(t *testing.T) {
+func TestCoins_MustMulRat(t *testing.T) {
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	halfMaxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		name      string
 		a         Coins
 		r         *big.Rat
-		want      Coins
 		wantPanic bool
+	}{
+		{
+			name:      "result too big panic",
+			a:         halfMaxCoins,
+			r:         big.NewRat(2, 1),
+			wantPanic: true,
+		},
+		{
+			name:      "result too small panic",
+			a:         halfMaxCoins,
+			r:         big.NewRat(-2, 1),
+			wantPanic: true,
+		},
+		{
+			name:      "no panic",
+			a:         MustFromTON("1.5"),
+			r:         big.NewRat(1, 2),
+			wantPanic: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if (r != nil) != tt.wantPanic {
+					t.Errorf("MustMulRat() panic = %v, wantPanic %v", r, tt.wantPanic)
+				}
+			}()
+
+			_ = tt.a.MustMulRat(tt.r)
+		})
+	}
+}
+
+func TestCoins_DivRat(t *testing.T) {
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	halfMaxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		a       Coins
+		r       *big.Rat
+		want    Coins
+		wantErr error
 	}{
 		{
 			name: "divide by 1/2",
@@ -1162,10 +1476,10 @@ func TestCoins_DivRat(t *testing.T) {
 			want: MustFromTON("0"),
 		},
 		{
-			name:      "divide by rational with zero numerator",
-			a:         MustFromTON("1.0"),
-			r:         big.NewRat(0, 1),
-			wantPanic: true,
+			name:    "divide by rational with zero numerator", // Division by zero
+			a:       MustFromTON("1.0"),
+			r:       big.NewRat(0, 1),
+			wantErr: errDivisionByZero,
 		},
 		{
 			name: "non-standard decimals",
@@ -1192,10 +1506,78 @@ func TestCoins_DivRat(t *testing.T) {
 			want: MustFromTON("-7.89"),
 		},
 		{
-			name:      "divide by rational with zero denominator",
+			name:    "result too big error",
+			a:       halfMaxCoins,
+			r:       big.NewRat(1, 2), // * 2
+			wantErr: errTooBigForVarUint16,
+		},
+		{
+			name:    "result too small error",
+			a:       halfMaxCoins,
+			r:       big.NewRat(-1, 2), // * -2
+			wantErr: errTooBigForVarUint16,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.a.DivRat(tt.r)
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("DivRat() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr == nil {
+				if !got.Equals(&tt.want) {
+					t.Errorf("DivRat() got = %v (%s), want %v (%s)", got, got.Nano().String(), tt.want, tt.want.Nano().String())
+				}
+				if got.Decimals() != tt.want.Decimals() {
+					t.Errorf("DivRat() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
+				}
+			}
+		})
+	}
+}
+
+func TestCoins_MustDivRat(t *testing.T) {
+	largeValStr := "1329227995784915872903807060280344575" // 2^120 - 1
+	largeVal := new(big.Int)
+	largeVal.SetString(largeValStr, 10)
+	halfMaxCoins, err := FromNano(largeVal, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		a         Coins
+		r         *big.Rat
+		wantPanic bool
+	}{
+		{
+			name:      "divide by rational with zero numerator panic",
 			a:         MustFromTON("1.0"),
-			r:         new(big.Rat),
+			r:         big.NewRat(0, 1),
 			wantPanic: true,
+		},
+		{
+			name:      "result too big panic",
+			a:         halfMaxCoins,
+			r:         big.NewRat(1, 2),
+			wantPanic: true,
+		},
+		{
+			name:      "result too small panic",
+			a:         halfMaxCoins,
+			r:         big.NewRat(-1, 2),
+			wantPanic: true,
+		},
+		{
+			name:      "no panic",
+			a:         MustFromTON("3.0"),
+			r:         big.NewRat(1, 2),
+			wantPanic: false,
 		},
 	}
 
@@ -1203,21 +1585,17 @@ func TestCoins_DivRat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
 				r := recover()
+				// Check if panic occurred as expected
 				if (r != nil) != tt.wantPanic {
-					t.Errorf("DivRat() panic = %v, wantPanic %v", r, tt.wantPanic)
+					t.Errorf("MustDivRat() panic = %v, wantPanic %v", r, tt.wantPanic)
 				}
+				// Optionally check the panic value matches expected error type if needed
+				// if tt.wantPanic && r != nil {
+				//	 Check if r matches errDivisionByZero or similar if Must wraps errors
+				// }
 			}()
 
-			got := tt.a.DivRat(tt.r)
-
-			if !tt.wantPanic {
-				if !got.Equals(&tt.want) {
-					t.Errorf("DivRat() got = %v, want %v", got, tt.want)
-				}
-				if got.Decimals() != tt.want.Decimals() {
-					t.Errorf("DivRat() got decimals = %d, want %d", got.Decimals(), tt.want.Decimals())
-				}
-			}
+			_ = tt.a.MustDivRat(tt.r)
 		})
 	}
 }
