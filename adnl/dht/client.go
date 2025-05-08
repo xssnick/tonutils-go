@@ -369,7 +369,7 @@ func (c *Client) Store(
 				final.Add(n)
 
 				for _, newN := range nodes {
-					if _, err = c.addNode(newN); err == nil {
+					if an, err := c.addNode(newN); err == nil && affinity(an.adnlId, keyId) >= uint(final.GetBestAffinity()) {
 						atomic.StoreInt32(&expansion, 1)
 					}
 				}

@@ -84,6 +84,13 @@ func (p *priorityList) Get() (*dhtNode, int) {
 	return nil, 0
 }
 
+func (p *priorityList) GetBestAffinity() int {
+	if len(p.items) == 0 {
+		return 0
+	}
+	return p.items[0].priority
+}
+
 // Len reports the current number of items in the list.
 func (p *priorityList) Len() int {
 	p.mu.Lock()
