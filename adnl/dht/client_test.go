@@ -12,11 +12,9 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
-	"log"
 	"net"
 	"reflect"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -537,85 +535,4 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 	if len(res.Addresses) != 3 {
 		t.Fatal("addr len not 3")
 	}
-}
-
-func TestClient_StoreAddressIntegrationInfinite(t *testing.T) {
-	_, priv, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	gateway := adnl.NewGateway(priv)
-	err = gateway.StartClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	dhtClient, err := NewClientFromConfigUrl(context.Background(), gateway, "https://tonutils.com/global.config.json")
-	if err != nil {
-		t.Fatalf("failed to init DHT client: %s", err.Error())
-	}
-
-	addrList := address.List{
-		Addresses: []*address.UDP{
-			{
-				net.IPv4(1, 1, 1, 1).To4(),
-				11111,
-			},
-			{
-				net.IPv4(2, 2, 2, 2).To4(),
-				22222,
-			},
-			{
-				net.IPv4(3, 3, 3, 3).To4(),
-				333333,
-			},
-		},
-		Version:    0,
-		ReinitDate: 0,
-		Priority:   0,
-		ExpireAt:   0,
-	}
-
-	var oks int32
-	for i := 0; i < 100; i++ {
-		go func(i int) {
-			for {
-				func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 900*time.Second)
-					defer cancel()
-
-					pub, key, _ := ed25519.GenerateKey(nil)
-
-					kid, err := tl.Hash(adnl.PublicKeyED25519{
-						Key: pub,
-					})
-					if err != nil {
-						t.Fatal(err)
-					}
-
-					for {
-						tm := time.Now()
-						reps, _, err := dhtClient.StoreAddress(ctx, addrList, 60*time.Minute, key, 3)
-						if err != nil {
-							log.Println(i, "store", base64.StdEncoding.EncodeToString(kid), err.Error(), time.Since(tm).String())
-							continue
-						}
-
-						// log.Println(atomic.AddInt32(&stores, 1), "stored", reps, base64.StdEncoding.EncodeToString(kid), time.Since(tm).String())
-
-						_, _, err = dhtClient.FindAddresses(ctx, kid)
-						if err != nil {
-							log.Println(i, "find", reps, err.Error(), base64.StdEncoding.EncodeToString(kid), time.Since(tm).String())
-							continue
-						}
-						log.Println(atomic.AddInt32(&oks, 1), "ok", reps, base64.StdEncoding.EncodeToString(kid), time.Since(tm).String())
-						break
-					}
-				}()
-			}
-		}(i)
-	}
-
-	<-make(chan interface{})
 }

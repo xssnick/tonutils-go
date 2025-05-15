@@ -96,8 +96,9 @@ var (
 		HighloadV3: _HighloadV3CodeHex,
 		Lockup:     _LockupCodeHex,
 	}
-	walletCodeBOC = map[Version][]byte{}
-	walletCode    = map[Version]*cell.Cell{}
+	walletCodeBOC           = map[Version][]byte{}
+	walletCode              = map[Version]*cell.Cell{}
+	walletVersionByCodeHash = map[string]Version{}
 )
 
 func init() {
@@ -108,10 +109,13 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
-		walletCode[ver], err = cell.FromBOC(walletCodeBOC[ver])
+		code, err := cell.FromBOC(walletCodeBOC[ver])
 		if err != nil {
 			panic(err)
 		}
+		
+		walletCode[ver] = code
+		walletVersionByCodeHash[string(code.Hash())] = ver
 	}
 }
 

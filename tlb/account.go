@@ -11,6 +11,11 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+func init() {
+	Register(StorageExtraNone{})
+	Register(StorageExtraInfo{})
+}
+
 type AccountStatus string
 
 const (
@@ -58,15 +63,24 @@ type AccountStorage struct {
 }
 
 type StorageUsed struct {
-	CellsUsed       *big.Int `tlb:"var uint 7"`
-	BitsUsed        *big.Int `tlb:"var uint 7"`
-	PublicCellsUsed *big.Int `tlb:"var uint 7"`
+	CellsUsed *big.Int `tlb:"var uint 7"`
+	BitsUsed  *big.Int `tlb:"var uint 7"`
+}
+
+type StorageExtraNone struct {
+	_ Magic `tlb:"$000"`
+}
+
+type StorageExtraInfo struct {
+	_        Magic  `tlb:"$001"`
+	DictHash []byte `tlb:"bits 256"`
 }
 
 type StorageInfo struct {
-	StorageUsed StorageUsed `tlb:"."`
-	LastPaid    uint32      `tlb:"## 32"`
-	DuePayment  *Coins      `tlb:"maybe ."`
+	StorageUsed  StorageUsed `tlb:"."`
+	StorageExtra any         `tlb:"[StorageExtraNone,StorageExtraInfo]"`
+	LastPaid     uint32      `tlb:"## 32"`
+	DuePayment   *Coins      `tlb:"maybe ."`
 }
 
 type AccountState struct {

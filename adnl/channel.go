@@ -74,7 +74,7 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 	}
 
 	// if serverID < ourID, swap keys. if same -> copy enc key
-	if eq := new(big.Int).SetBytes(theirID).Cmp(new(big.Int).SetBytes(ourID)); eq == -1 {
+	if eq := new(big.Int).SetBytes(theirID).Cmp(new(big.Int).SetBytes(ourID)); eq < 0 {
 		c.encKey, c.decKey = c.decKey, c.encKey
 	} else if eq == 0 {
 		c.encKey = c.decKey

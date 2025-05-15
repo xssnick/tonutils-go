@@ -57,10 +57,11 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 		return ErrNoConnections
 	}
 
+	const attempts = 2
 	fails := int32(0)
-	result := make(chan error, len(config.Liteservers))
+	result := make(chan error, len(config.Liteservers)*attempts)
 
-	timeout := 3 * time.Second
+	timeout := attempts * 8 * time.Second
 	if dl, ok := ctx.Deadline(); ok {
 		timeout = dl.Sub(time.Now())
 	}
@@ -71,19 +72,20 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 		ls := ls
 
 		go func() {
-			// we need personal context for each call, because it gets cancelled on failure of one
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
+			for i := 0; i < attempts; i++ {
+				// we need personal context for each call, because it gets cancelled on failure of one
+				ctx, cancel := context.WithTimeout(context.Background(), timeout/attempts)
+				err := c.AddConnection(ctx, conStr, ls.ID.Key)
+				cancel()
+				if err == nil {
+					result <- nil
+					return
+				}
 
-			err := c.AddConnection(ctx, conStr, ls.ID.Key)
-			if err == nil {
-				result <- nil
-				return
-			}
-
-			// if everything failed
-			if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers) {
-				result <- err
+				// if everything failed
+				if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers)*attempts {
+					result <- err
+				}
 			}
 		}()
 	}
@@ -359,6 +361,7 @@ func (c *ConnectionPool) startPings(every time.Duration) {
 			wg.Add(1)
 			go func(n *connection) {
 				defer wg.Done()
+				time.Sleep(1 * time.Second)
 				if err := n.ping(num.Int64()); err != nil {
 					// force close on error
 					_ = n.tcp.Close()
@@ -461,7 +464,7 @@ func writeEncrypt(conn net.Conn, crypt cipher.Stream, buf []byte) error {
 	crypt.XORKeyStream(buf, buf)
 
 	// write timeout in case of stuck socket, to reconnect
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(7 * time.Second))
 	// write all
 	for len(buf) > 0 {
 		num, err := conn.Write(buf)
