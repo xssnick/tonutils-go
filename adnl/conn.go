@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -90,7 +89,7 @@ func (s *SyncConn) writer() {
 					return
 				}
 				// should not happen, but if will we want to see
-				log.Println("[CONN] Write error:", err.Error())
+				Logger("[CONN] Write error:", err.Error())
 			}
 		case <-s.closerCtx.Done():
 			return

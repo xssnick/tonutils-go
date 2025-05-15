@@ -8,6 +8,7 @@ import (
 )
 
 type ConfigCustom interface {
+	ParsePubKeyFromData(data *cell.Cell) (ed25519.PublicKey, error)
 	GetStateInit(pubKey ed25519.PublicKey, subWallet uint32) (*tlb.StateInit, error)
 	GetSpec(w *Wallet) MessageBuilder
 }

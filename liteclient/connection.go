@@ -57,10 +57,11 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 		return ErrNoConnections
 	}
 
+	const attempts = 2
 	fails := int32(0)
-	result := make(chan error, len(config.Liteservers))
+	result := make(chan error, len(config.Liteservers)*attempts)
 
-	timeout := 3 * time.Second
+	timeout := attempts * 8 * time.Second
 	if dl, ok := ctx.Deadline(); ok {
 		timeout = dl.Sub(time.Now())
 	}
@@ -71,19 +72,20 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 		ls := ls
 
 		go func() {
-			// we need personal context for each call, because it gets cancelled on failure of one
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
+			for i := 0; i < attempts; i++ {
+				// we need personal context for each call, because it gets cancelled on failure of one
+				ctx, cancel := context.WithTimeout(context.Background(), timeout/attempts)
+				err := c.AddConnection(ctx, conStr, ls.ID.Key)
+				cancel()
+				if err == nil {
+					result <- nil
+					return
+				}
 
-			err := c.AddConnection(ctx, conStr, ls.ID.Key)
-			if err == nil {
-				result <- nil
-				return
-			}
-
-			// if everything failed
-			if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers) {
-				result <- err
+				// if everything failed
+				if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers)*attempts {
+					result <- err
+				}
 			}
 		}()
 	}
@@ -211,8 +213,6 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 			return err
 		}
 
-		go conn.startPings(5 * time.Second)
-
 		c.nodesMx.Lock()
 		c.activeNodes = append(c.activeNodes, conn)
 		c.nodesMx.Unlock()
@@ -334,28 +334,41 @@ func (n *connection) listen(connResult chan<- error) {
 	}
 }
 
-func (n *connection) startPings(every time.Duration) {
-	// TODO: do without goroutines
+func (c *ConnectionPool) startPings(every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
+	var nodes []*connection
 	for {
 		select {
-		case <-n.pool.globalCtx.Done():
+		case <-c.globalCtx.Done():
 			return
 		case <-ticker.C:
 		}
+		nodes = nodes[:0]
+
+		c.nodesMx.RLock()
+		nodes = append(nodes, c.activeNodes...)
+		c.nodesMx.RUnlock()
 
 		num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
 		if err != nil {
 			continue
 		}
 
-		if err := n.ping(num.Int64()); err != nil {
-			// force close in case of error
-			_ = n.tcp.Close()
-			break
+		var wg sync.WaitGroup
+		for _, node := range nodes {
+			wg.Add(1)
+			go func(n *connection) {
+				defer wg.Done()
+				time.Sleep(1 * time.Second)
+				if err := n.ping(num.Int64()); err != nil {
+					// force close on error
+					_ = n.tcp.Close()
+				}
+			}(node)
 		}
+		wg.Wait()
 	}
 }
 
