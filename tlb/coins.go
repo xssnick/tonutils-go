@@ -9,7 +9,12 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-var errInvalid = errors.New("invalid string")
+var (
+	errInvalid            = errors.New("invalid string")
+	errDecimalMismatch    = errors.New("decimal mismatch")
+	errTooBigForVarUint16 = errors.New("value is too big to be represented as a VarUint16")
+	errDivisionByZero     = errors.New("division by zero in rational denominator")
+)
 
 type Coins struct {
 	decimals int
@@ -93,8 +98,17 @@ func MustFromNano(val *big.Int, decimals int) Coins {
 	return v
 }
 
+// tooBigForVarUint16 checks if the given big.Int value requires 16 or more bytes
+// for its representation. This is used to ensure the value can be encoded
+// as a TL-B VarUInteger16, which is the type used for Coins.
+//
+// Docs: https://docs.ton.org/v3/documentation/smart-contracts/func/docs/stdlib#store_coins
+func tooBigForVarUint16(val *big.Int) bool {
+	return (val.BitLen()+7)>>3 >= 16
+}
+
 func FromNano(val *big.Int, decimals int) (Coins, error) {
-	if uint((val.BitLen()+7)>>3) >= 16 {
+	if tooBigForVarUint16(val) {
 		return Coins{}, fmt.Errorf("too big number for coins")
 	}
 
@@ -183,7 +197,7 @@ func FromDecimal(val string, decimals int) (Coins, error) {
 		}
 	}
 
-	if uint((hi.BitLen()+7)>>3) >= 16 {
+	if tooBigForVarUint16(hi) {
 		return Coins{}, fmt.Errorf("too big number for coins")
 	}
 
@@ -234,6 +248,214 @@ func (g *Coins) Compare(coins *Coins) int {
 	}
 
 	return g.Nano().Cmp(coins.Nano())
+}
+
+// MustAdd adds the provided coins to the current coins and returns the result.
+// It panics if the operation fails (e.g., due to decimal mismatch or overflow).
+func (g *Coins) MustAdd(coins *Coins) *Coins {
+	result, err := g.Add(coins)
+	if err != nil {
+		panic(err)
+	}
+
+	return result
+}
+
+// Add adds the provided coins to the current coins and returns the result.
+// Returns an error if the coins have different decimal places or if the result
+// would overflow the maximum allowed value.
+func (g *Coins) Add(coins *Coins) (*Coins, error) {
+	if g.decimals != coins.decimals {
+		return &Coins{}, errDecimalMismatch
+	}
+
+	result := &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Add(g.Nano(), coins.Nano()),
+	}
+	if tooBigForVarUint16(result.val) {
+		return &Coins{}, errTooBigForVarUint16
+	}
+
+	return result, nil
+}
+
+// MustSub subtracts the provided coins from the current coins and returns the result.
+// It panics if the operation fails (e.g., due to decimal mismatch or overflow).
+func (g *Coins) MustSub(coins *Coins) *Coins {
+	result, err := g.Sub(coins)
+	if err != nil {
+		panic(err)
+	}
+
+	return result
+}
+
+// Sub subtracts the provided coins from the current coins and returns the result.
+// Returns an error if the coins have different decimal places or if the result
+// would overflow the maximum allowed value.
+func (g *Coins) Sub(coins *Coins) (*Coins, error) {
+	if g.decimals != coins.decimals {
+		return &Coins{}, errDecimalMismatch
+	}
+
+	result := &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Sub(g.Nano(), coins.Nano()),
+	}
+	if tooBigForVarUint16(result.val) {
+		return &Coins{}, errTooBigForVarUint16
+	}
+
+	return result, nil
+}
+
+// MustMul multiplies the current coins by the provided big.Int and returns the result.
+// It panics if the operation fails (e.g., due to overflow).
+func (g *Coins) MustMul(x *big.Int) *Coins {
+	result, err := g.Mul(x)
+	if err != nil {
+		panic(err)
+	}
+
+	return result
+}
+
+// Mul multiplies the current coins by the provided big.Int and returns the result.
+// Returns an error if the result would overflow the maximum allowed value.
+func (g *Coins) Mul(x *big.Int) (*Coins, error) {
+	result := &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Mul(g.val, x),
+	}
+	if tooBigForVarUint16(result.val) {
+		return &Coins{}, errTooBigForVarUint16
+	}
+
+	return result, nil
+}
+
+// MustMulRat multiplies the current coins by the provided big.Rat and returns the result.
+// It panics if the operation fails (e.g., due to division by zero or overflow).
+func (g *Coins) MustMulRat(r *big.Rat) *Coins {
+	result, err := g.MulRat(r)
+	if err != nil {
+		panic(err)
+	}
+
+	return result
+}
+
+// MulRat multiplies the current coins by the provided big.Rat and returns the result.
+// Returns an error if the denominator is zero or if the result would overflow the maximum allowed value.
+func (g *Coins) MulRat(r *big.Rat) (*Coins, error) {
+	// Get numerator and denominator
+	num := r.Num()
+	den := r.Denom()
+
+	if den.Sign() == 0 {
+		return &Coins{}, errDivisionByZero
+	}
+
+	// Calculate new nano value: (g.val * num) / den
+	newVal := new(big.Int).Div(
+		new(big.Int).Mul(g.val, num),
+		den,
+	)
+	if tooBigForVarUint16(newVal) {
+		return &Coins{}, errTooBigForVarUint16
+	}
+
+	return &Coins{
+		decimals: g.decimals,
+		val:      newVal,
+	}, nil
+}
+
+// MustDiv divides the current coins by the provided big.Int and returns the result.
+// It panics if the operation fails (e.g., due to division by zero or overflow).
+func (g *Coins) MustDiv(x *big.Int) *Coins {
+	result, err := g.Div(x)
+	if err != nil {
+		panic(err)
+	}
+
+	return result
+}
+
+// Div divides the current coins by the provided big.Int and returns the result.
+// Returns an error if the divisor is zero or if the result would overflow the maximum allowed value.
+func (g *Coins) Div(x *big.Int) (*Coins, error) {
+	if x.Sign() == 0 {
+		return &Coins{}, errDivisionByZero
+	}
+
+	result := &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Div(g.Nano(), x),
+	}
+	if tooBigForVarUint16(result.val) {
+		return &Coins{}, errTooBigForVarUint16
+	}
+
+	return result, nil
+}
+
+// MustDivRat divides the current coins by the provided big.Rat and returns the result.
+// It panics if the operation fails (e.g., due to division by zero or overflow).
+func (g *Coins) MustDivRat(r *big.Rat) *Coins {
+	result, err := g.DivRat(r)
+	if err != nil {
+		panic(err)
+	}
+
+	return result
+}
+
+// DivRat divides the current coins by the provided big.Rat and returns the result.
+// This is equivalent to multiplying by the reciprocal of the rational number.
+// Returns an error if the rational has zero numerator or denominator, or if the result would overflow.
+func (g *Coins) DivRat(r *big.Rat) (*Coins, error) {
+	// Get numerator and denominator
+	num := r.Num()
+	den := r.Denom()
+
+	if num.Sign() == 0 || den.Sign() == 0 {
+		return &Coins{}, errDivisionByZero
+	}
+
+	// Calculate new nano value: (g.val * den) / num
+	newVal := new(big.Int).Div(
+		new(big.Int).Mul(g.val, den),
+		num,
+	)
+	if tooBigForVarUint16(newVal) {
+		return &Coins{}, errTooBigForVarUint16
+	}
+
+	return &Coins{
+		decimals: g.decimals,
+		val:      newVal,
+	}, nil
+}
+
+// Neg returns a new Coins value representing the negation of the original value.
+// The number of decimals remains the same.
+func (g *Coins) Neg() *Coins {
+	result := &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Neg(g.Nano()),
+	}
+	return result
+}
+
+// Abs returns a new Coins value representing the absolute value of the original value.
+// The number of decimals remains the same.
+func (g *Coins) Abs() *Coins {
+	return &Coins{
+		decimals: g.decimals,
+		val:      new(big.Int).Abs(g.Nano()),
+	}
 }
 
 // GreaterThan returns true if the current coins amount is greater than the
