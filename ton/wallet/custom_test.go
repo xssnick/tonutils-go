@@ -15,6 +15,10 @@ type configCustomV5R1 struct {
 	ConfigV5R1Final
 }
 
+func (c *configCustomV5R1) ParsePubKeyFromData(data *cell.Cell) (ed25519.PublicKey, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func newConfigCustomV5R1(code *cell.Cell) ConfigCustom {
 	return &configCustomV5R1{code: code, ConfigV5R1Final: ConfigV5R1Final{
 		NetworkGlobalID: MainnetGlobalID,
@@ -95,6 +99,14 @@ func TestConfigCustom_CmpV5SubWalletAddress(t *testing.T) {
 type configCustomHighloadV3 struct {
 	code *cell.Cell
 	ConfigHighloadV3
+}
+
+func (c *configCustomHighloadV3) ParsePubKeyFromData(data *cell.Cell) (ed25519.PublicKey, error) {
+	key, err := data.BeginParse().LoadSlice(256)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse pubkey: %w", err)
+	}
+	return key, nil
 }
 
 func newConfigCustomHighloadV3(code *cell.Cell) ConfigCustom {

@@ -66,6 +66,8 @@ func NewConnectionPool() *ConnectionPool {
 	c.SetOnDisconnect(c.DefaultReconnect(3*time.Second, -1))
 	c.globalCtx, c.stop = context.WithCancel(context.Background())
 
+	go c.startPings(5 * time.Second)
+
 	return c
 }
 

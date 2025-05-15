@@ -13,7 +13,7 @@ import (
 func main() {
 	client := liteclient.NewConnectionPool()
 
-	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton.org/global.config.json")
+	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		log.Fatalln("get config err: ", err.Error())
 		return

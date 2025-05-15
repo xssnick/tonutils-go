@@ -30,7 +30,6 @@ type dhtNode struct {
 	currentState int
 	badScore     int32
 
-	lastQueryAt  int64
 	inFlyQueries int32
 
 	mx sync.Mutex
@@ -59,7 +58,7 @@ func (l dhtNodeList) Less(i, j int) bool {
 	return atomic.LoadInt64(&l[i].ping) < atomic.LoadInt64(&l[j].ping)
 }
 
-func (c *Client) connectToNode(id []byte, addr string, serverKey ed25519.PublicKey) *dhtNode {
+func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey) *dhtNode {
 	n := &dhtNode{
 		adnlId:    id,
 		addr:      addr,
@@ -266,13 +265,12 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 
 	defer func() {
 		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.badScore > 1 {
-			peer.Close()
+			peer.Reinit()
 		}
 	}()
 
 	t := time.Now()
 	reportLimit := t.Add(queryTimeout - 500*time.Millisecond)
-	atomic.StoreInt64(&n.lastQueryAt, t.Unix())
 	err = peer.Query(ctx, req, res)
 	if err != nil {
 		if time.Now().After(reportLimit) {
@@ -292,7 +290,7 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 func (n *dhtNode) updateStatus(isGood bool) {
 	if isGood {
 		atomic.StoreInt32(&n.badScore, 0)
-		Logger("Make DHT peer {} feel good {}", n.id(), 0)
+		Logger("Make DHT peer", n.id(), "feel good")
 		return
 	}
 
@@ -300,7 +298,7 @@ func (n *dhtNode) updateStatus(isGood bool) {
 	if badScore <= _MaxFailCount {
 		badScore = atomic.AddInt32(&n.badScore, 1)
 	}
-	Logger("Make DHT peer {} feel bad {}", n.id(), badScore)
+	Logger("Make DHT peer", n.id(), "feel bad", badScore)
 }
 
 func (n *dhtNode) id() string {

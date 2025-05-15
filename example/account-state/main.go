@@ -3,19 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"sort"
-
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
+	"log"
+	"sort"
 )
 
 func main() {
 	client := liteclient.NewConnectionPool()
 
 	// connect to mainnet lite servers
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		log.Fatalln("connection err: ", err.Error())
 		return

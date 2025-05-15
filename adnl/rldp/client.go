@@ -284,6 +284,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					}
 
 					// got packet for a finished part, let them know that it is completed, again
+					// TODO: just mark to auto send later?
 					err := r.adnl.SendCustomMessage(context.Background(), complete)
 					if err != nil {
 						return fmt.Errorf("failed to send rldp complete message: %w", err)
@@ -535,11 +536,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					rate := r.rateLimit.GetRate()
 
 					// boost when low rate, and slowdown checks when high
-					delay := 10 + rate/800
+					delay := 10 + rate/2000
 					if delay < 10 {
 						delay = 10
-					} else if delay > 1000 {
-						delay = 1000
+					} else if delay > 500 {
+						delay = 500
 					}
 
 					if batches >= 3 && lastAt+delay <= nowMs && atomic.CompareAndSwapInt64(&r.lastNetworkBatchesNum, batches, 0) {
@@ -550,16 +551,14 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 						tokens := r.rateLimit.GetTokensLeft()
 
-						if ratio >= 0.95 && rate < 5000000 {
+						if ratio >= 0.95 {
 							if tokens < (rate/3)*2 {
 								r.rateLimit.SetRate(rate + rate/10) // +10%
 							}
-						} else if ratio < 0.75 && rate > 50 {
-							// some loss, decrease speed
-							r.rateLimit.SetRate(rate - rate/20) // -5%
-						} else if ratio < 0.35 && rate > 50 {
-							// big loss, decrease speed
+						} else if ratio < 0.35 {
 							r.rateLimit.SetRate(rate - rate/10) // -10%
+						} else if ratio < 0.75 {
+							r.rateLimit.SetRate(rate - rate/20) // -5%
 						}
 					}
 				}

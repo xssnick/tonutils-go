@@ -26,6 +26,7 @@ type Peer interface {
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
+	Ping(ctx context.Context) (time.Duration, error)
 	GetQueryHandler() func(msg *MessageQuery) error
 	GetCloserCtx() context.Context
 	SetAddresses(addresses address.List)
@@ -59,6 +60,10 @@ func (p *peerConn) GetCloserCtx() context.Context {
 
 func (p *peerConn) SetAddresses(addresses address.List) {
 	p.client.SetAddresses(addresses)
+}
+
+func (p *peerConn) Ping(ctx context.Context) (time.Duration, error) {
+	return p.client.Ping(ctx)
 }
 
 type srvProcessor struct {
@@ -116,12 +121,15 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 	}
 }
 
+var PacketsBufferSize = 128 * 1024
+
 var DefaultListener = func(addr string) (net.PacketConn, error) {
-	lp, err := net.ListenPacket("udp", addr)
+	// since ip field in adnl accept only 4 bytes, we cannot fully support v6 right now
+	lp, err := net.ListenPacket("udp4", addr)
 	if err != nil {
 		return nil, err
 	}
-	return NewSyncConn(lp, 512*1024), nil
+	return NewSyncConn(lp, PacketsBufferSize), nil
 }
 
 func (g *Gateway) GetAddressList() address.List {
