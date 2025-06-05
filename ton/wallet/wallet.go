@@ -113,7 +113,7 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
-		
+
 		walletCode[ver] = code
 		walletVersionByCodeHash[string(code.Hash())] = ver
 	}
@@ -134,15 +134,10 @@ var (
 
 type TonAPI interface {
 	WaitForBlock(seqno uint32) ton.APIClientWrapped
-	Client() ton.LiteClient
 	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
-	GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
-	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
-	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
-	FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
 }
 
 type Message struct {

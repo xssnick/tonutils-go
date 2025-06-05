@@ -181,14 +181,6 @@ func ParsePubKeyFromData(version VersionConfig, data *cell.Cell) (ed25519.Public
 	switch v := version.(type) {
 	case Version:
 		ver = v
-		switch ver {
-		case HighloadV3:
-			return nil, fmt.Errorf("use ConfigHighloadV3 for highload v3 spec")
-		case V5R1Beta:
-			return nil, fmt.Errorf("use ConfigV5R1Beta for V5 spec")
-		case V5R1Final:
-			return nil, fmt.Errorf("use ConfigV5R1Final for V5 spec")
-		}
 	case ConfigHighloadV3:
 		ver = HighloadV3
 	case ConfigV5R1Beta:
