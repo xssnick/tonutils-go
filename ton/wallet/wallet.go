@@ -13,9 +13,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"time"
-
-	"github.com/xssnick/tonutils-go/adnl"
 
 	"github.com/xssnick/tonutils-go/ton"
 
@@ -635,7 +634,7 @@ func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey 
 		return nil, fmt.Errorf("message was encrypted not for the given keys")
 	}
 
-	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	sharedKey, err := keys.SharedKey(ourKey, theirKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute shared key: %w", err)
 	}
@@ -671,7 +670,7 @@ func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey
 	// encrypted comment op code
 	root := cell.BeginCell().MustStoreUInt(EncryptedCommentOpcode, 32)
 
-	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	sharedKey, err := keys.SharedKey(ourKey, theirKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute shared key: %w", err)
 	}

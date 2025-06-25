@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
@@ -41,7 +41,7 @@ func (n *connection) authSignComplete(nonce []byte) error {
 	}
 
 	payload, err := tl.Serialize(TCPAuthenticationComplete{
-		PublicKey: adnl.PublicKeyED25519{Key: n.pool.authKey.Public().(ed25519.PublicKey)},
+		PublicKey: keys.PublicKeyED25519{Key: n.pool.authKey.Public().(ed25519.PublicKey)},
 		Signature: ed25519.Sign(n.pool.authKey, append(append([]byte{}, n.ourNonce...), nonce...)),
 	}, true)
 	if err != nil {

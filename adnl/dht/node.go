@@ -6,13 +6,13 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"math/bits"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/tl"
 )
@@ -199,7 +199,7 @@ func checkValue(id []byte, value *Value) error {
 	case UpdateRuleAnybody:
 		// no checks
 	case UpdateRuleSignature:
-		pub, ok := value.KeyDescription.ID.(adnl.PublicKeyED25519)
+		pub, ok := value.KeyDescription.ID.(keys.PublicKeyED25519)
 		if !ok {
 			return fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(value.KeyDescription.ID).String())
 		}

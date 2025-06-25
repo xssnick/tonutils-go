@@ -66,12 +66,12 @@ func (c *WalletClient) GetBalanceAtBlock(ctx context.Context, b *ton.BlockIDExt)
 	return balance, nil
 }
 
-// Deprecated: use BuildTransferPayloadV2
-func (c *WalletClient) BuildTransferPayload(to *address.Address, amountCoins, amountForwardTON tlb.Coins, payloadForward *cell.Cell) (*cell.Cell, error) {
-	return c.BuildTransferPayloadV2(to, to, amountCoins, amountForwardTON, payloadForward, nil)
+// Deprecated: use jetton.BuildTransferPayload (static func)
+func (c *WalletClient) BuildTransferPayloadV2(to, responseTo *address.Address, amountCoins, amountForwardTON tlb.Coins, payloadForward, customPayload *cell.Cell) (*cell.Cell, error) {
+	return BuildTransferPayload(to, responseTo, amountCoins, amountForwardTON, payloadForward, customPayload)
 }
 
-func (c *WalletClient) BuildTransferPayloadV2(to, responseTo *address.Address, amountCoins, amountForwardTON tlb.Coins, payloadForward, customPayload *cell.Cell) (*cell.Cell, error) {
+func BuildTransferPayload(to, responseTo *address.Address, amountCoins, amountForwardTON tlb.Coins, payloadForward, customPayload *cell.Cell) (*cell.Cell, error) {
 	if payloadForward == nil {
 		payloadForward = cell.BeginCell().EndCell()
 	}
@@ -98,7 +98,12 @@ func (c *WalletClient) BuildTransferPayloadV2(to, responseTo *address.Address, a
 	return body, nil
 }
 
+// Deprecated: use jetton.BuildBurnPayload (static func)
 func (c *WalletClient) BuildBurnPayload(amountCoins tlb.Coins, notifyAddr *address.Address) (*cell.Cell, error) {
+	return BuildBurnPayload(amountCoins, notifyAddr)
+}
+
+func BuildBurnPayload(amountCoins tlb.Coins, notifyAddr *address.Address) (*cell.Cell, error) {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
 		return nil, err

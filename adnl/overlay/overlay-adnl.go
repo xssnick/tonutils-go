@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/xssnick/raptorq"
 	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
@@ -193,7 +194,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 		return fmt.Errorf("failed to serialize broadcast for sign check: %w", err)
 	}
 
-	sourceKey, ok := t.Source.(adnl.PublicKeyED25519)
+	sourceKey, ok := t.Source.(keys.PublicKeyED25519)
 	if !ok {
 		return fmt.Errorf("invalid signer key format")
 	}

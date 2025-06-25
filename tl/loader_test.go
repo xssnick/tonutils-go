@@ -8,6 +8,7 @@ import (
 	"errors"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"net"
+	"reflect"
 	"testing"
 )
 
@@ -98,7 +99,9 @@ func init() {
 	Register(TestManual{}, "manual val")
 
 	buf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(buf, Register(Small{}, "small 123"))
+	binary.LittleEndian.PutUint32(buf, RegisterWithFabric(Small{}, "small 123", func() reflect.Value {
+		return reflect.ValueOf(&Small{})
+	}))
 	println(hex.EncodeToString(buf))
 }
 

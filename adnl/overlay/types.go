@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
 	"time"
@@ -63,7 +63,7 @@ func (c Certificate) Check(issuedToId []byte, overlayId []byte, dataSize uint32,
 		return CertCheckResultForbidden, err
 	}
 
-	issuer, ok := c.IssuedBy.(adnl.PublicKeyED25519)
+	issuer, ok := c.IssuedBy.(keys.PublicKeyED25519)
 	if !ok {
 		return CertCheckResultForbidden, fmt.Errorf("unsupported issuer key format")
 	}
@@ -119,7 +119,7 @@ func (c CertificateV2) Check(issuedToId []byte, overlayId []byte, dataSize uint3
 		return CertCheckResultForbidden, err
 	}
 
-	issuer, ok := c.IssuedBy.(adnl.PublicKeyED25519)
+	issuer, ok := c.IssuedBy.(keys.PublicKeyED25519)
 	if !ok {
 		return CertCheckResultForbidden, fmt.Errorf("unsupported issuer key format")
 	}
@@ -248,7 +248,7 @@ type FECCompleted struct {
 }
 
 func (n *Node) CheckSignature() error {
-	pub, ok := n.ID.(adnl.PublicKeyED25519)
+	pub, ok := n.ID.(keys.PublicKeyED25519)
 	if !ok {
 		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(n.ID).String())
 	}
@@ -273,7 +273,7 @@ func (n *Node) CheckSignature() error {
 }
 
 func (n *Node) Sign(key ed25519.PrivateKey) error {
-	pub, ok := n.ID.(adnl.PublicKeyED25519)
+	pub, ok := n.ID.(keys.PublicKeyED25519)
 	if !ok {
 		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(n.ID).String())
 	}
@@ -301,7 +301,7 @@ func (n *Node) Sign(key ed25519.PrivateKey) error {
 }
 
 func NewNode(overlay []byte, key ed25519.PrivateKey) (*Node, error) {
-	keyHash, err := tl.Hash(adnl.PublicKeyOverlay{
+	keyHash, err := tl.Hash(keys.PublicKeyOverlay{
 		Key: overlay,
 	})
 	if err != nil {
@@ -309,7 +309,7 @@ func NewNode(overlay []byte, key ed25519.PrivateKey) (*Node, error) {
 	}
 
 	oNode := Node{
-		ID:      adnl.PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)},
+		ID:      keys.PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)},
 		Overlay: keyHash,
 		Version: int32(time.Now().Unix()),
 	}

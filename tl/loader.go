@@ -121,6 +121,13 @@ func getStructInfoReferenceByShortName(name string) *structInfo {
 
 func Register(typ any, tl string) uint32 {
 	t := reflect.TypeOf(typ)
+	return RegisterWithFabric(typ, tl, func() reflect.Value {
+		return reflect.New(t)
+	})
+}
+
+func RegisterWithFabric(typ any, tl string, fab func() reflect.Value) uint32 {
+	t := reflect.TypeOf(typ)
 
 	si := getStructInfoReference(t)
 	if si.finalized {
@@ -151,8 +158,9 @@ func Register(typ any, tl string) uint32 {
 		si.tlName = nameParts[0]
 	}
 	si.tp = t
+	si.fabric = fab
 
-	nw := reflect.New(t).Interface()
+	nw := fab().Interface()
 
 	// if we have custom method, we use it
 	if _, ok := nw.(SerializableTL); ok {

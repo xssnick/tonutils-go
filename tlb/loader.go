@@ -350,40 +350,12 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 				setVal(reflect.ValueOf(dict))
 				continue
 			}
-			if structField.Type.Kind() != reflect.Map {
-				return fmt.Errorf("can map dictionary only into the map")
-			}
-			if structField.Type.Key() != reflect.TypeOf("") {
-				return fmt.Errorf("can map dictionary only into the map with string key")
-			}
 
-			mappedDict := reflect.MakeMapWithSize(reflect.MapOf(structField.Type.Key(), structField.Type.Elem()), 0)
-			dictVT := reflect.StructOf([]reflect.StructField{{
-				Name: "Value",
-				Type: structField.Type.Elem(),
-				Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", strings.Join(settings[3:], " "))),
-			}})
-
-			values, err := dict.LoadAll(skipProofBranches)
+			mv, err := prepareMap(settings, structField, dict, sz, skipProofBranches)
 			if err != nil {
-				return fmt.Errorf("failed to load dict values for %v: %w", structField.Name, err)
+				return fmt.Errorf("failed to prepare map for %s, err: %w", structField.Name, err)
 			}
-
-			for _, kv := range values {
-				dictK, err := kv.Key.LoadBigUInt(uint(sz))
-				if err != nil {
-					return fmt.Errorf("failed to load dict key for %s: %w", structField.Name, err)
-				}
-
-				dictV := reflect.New(dictVT).Interface()
-				if err = loadFromCell(dictV, kv.Value, skipProofBranches, false); err != nil {
-					return fmt.Errorf("failed to parse dict value for %v: %w", structField.Name, err)
-				}
-
-				mappedDict.SetMapIndex(reflect.ValueOf(dictK.String()), reflect.ValueOf(dictV).Elem().Field(0))
-			}
-
-			setVal(mappedDict)
+			setVal(mv)
 			continue
 		} else if settings[0] == "var" {
 			if settings[1] == "uint" {
@@ -725,49 +697,10 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 		if len(settings) < 3 || settings[1] != "->" {
 			dict = fieldVal.Interface().(*cell.Dictionary)
 		} else {
-			if fieldVal.Kind() != reflect.Map {
-				return fmt.Errorf("want to create dictionary from map, but instead got %s type", fieldVal.Type())
-			}
-			if fieldVal.Type().Key() != reflect.TypeOf("") {
-				return fmt.Errorf("map key should be string, but instead got %s type", fieldVal.Type().Key())
-			}
-
-			sz, err := strconv.ParseUint(settings[0], 10, 64)
+			var err error
+			dict, err = prepareDict(fieldVal, settings, structField)
 			if err != nil {
-				panic(fmt.Sprintf("cannot deserialize field '%s' as dict, bad size '%s'", structField.Name, settings[0]))
-			}
-
-			dict = cell.NewDict(uint(sz))
-
-			for _, mapK := range fieldVal.MapKeys() {
-				mapKI, ok := big.NewInt(0).SetString(mapK.Interface().(string), 10)
-				if !ok {
-					return fmt.Errorf("cannot parse '%s' map key to big int of '%s' field", mapK.Interface().(string), structField.Name)
-				}
-
-				mapKB := cell.BeginCell()
-				if err := mapKB.StoreBigInt(mapKI, uint(sz)); err != nil {
-					return fmt.Errorf("store big int of size %d to %s field", sz, structField.Name)
-				}
-
-				mapV := fieldVal.MapIndex(mapK)
-
-				cellVT := reflect.StructOf([]reflect.StructField{{
-					Name: "Value",
-					Type: mapV.Type(),
-					Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", strings.Join(settings[2:], " "))),
-				}})
-				cellV := reflect.New(cellVT).Elem()
-				cellV.Field(0).Set(mapV)
-
-				mapVC, err := ToCell(cellV.Interface())
-				if err != nil {
-					return fmt.Errorf("creating cell for dict value of '%s' field: %w", structField.Name, err)
-				}
-
-				if err := dict.Set(mapKB.EndCell(), mapVC); err != nil {
-					return fmt.Errorf("set dict key/value on '%s' field: %w", structField.Name, err)
-				}
+				return fmt.Errorf("failed to prepare dict for %s, err: %w", structField.Name, err)
 			}
 		}
 
