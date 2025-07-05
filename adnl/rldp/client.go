@@ -249,7 +249,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			} else {
 				r.recvStreams[id] = stream
 			}
-			delete(r.expectedTransfers, id)
 			r.mx.Unlock()
 		}
 
@@ -346,11 +345,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					if isV2 {
 						complete = CompleteV2(complete.(Complete))
 					}
-
-					err = r.adnl.SendCustomMessage(context.Background(), complete)
-					if err != nil {
-						return fmt.Errorf("failed to send rldp complete message: %w", err)
-					}
+					_ = r.adnl.SendCustomMessage(context.Background(), complete)
 
 					if uint64(len(stream.buf)) >= stream.totalSize {
 						stream.finishedAt = &tmd
@@ -396,6 +391,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 							req := r.activeRequests[qid]
 							if req != nil {
 								delete(r.activeRequests, qid)
+								delete(r.expectedTransfers, id)
 							}
 							r.mx.Unlock()
 
