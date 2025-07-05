@@ -301,6 +301,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			}
 
 			if stream.currentPart.decoder == nil {
+				fec, ok := part.FecType.(FECRaptorQ)
+				if !ok {
+					return fmt.Errorf("not supported fec type in part: %d", part.Part)
+				}
+
 				if uint64(fec.DataSize) > stream.totalSize || fec.DataSize > uint32(MaxFECDataSize) ||
 					fec.SymbolSize == 0 || fec.SymbolsCount == 0 {
 					return fmt.Errorf("invalid fec")
@@ -311,6 +316,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					return fmt.Errorf("failed to init raptorq decoder: %w", err)
 				}
 				stream.currentPart.decoder = dec
+				Logger("[ID]", hex.EncodeToString(part.TransferID), "[RLDP] created decoder for part:", part.Part, "data size:", fec.DataSize, "symbol size:", fec.SymbolSize, "symbols:", fec.SymbolsCount)
 			}
 
 			canTryDecode, err := stream.currentPart.decoder.AddSymbol(part.Seqno, part.Data)
