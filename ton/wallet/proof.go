@@ -122,46 +122,52 @@ func buildMessage(addr *address.Address, proof TonConnectProof) ([]byte, error) 
 }
 
 func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Address, stateInit []byte) (ed25519.PublicKey, error) {
-	key, err := GetPublicKey(ctx, v.client, addr)
+	// First, try to get public key "offline" from stateInit
+	key, err := getPublicKeyFromStateInit(addr, stateInit)
+
+	// Only if it's impossible to parse public key from stateInit, make a request to get it
 	if err != nil {
-		var cErr ton.ContractExecError
-		if !errors.As(err, &cErr) || cErr.Code != ton.ErrCodeContractNotInitialized {
+		key, err = GetPublicKey(ctx, v.client, addr)
+		if err != nil {
 			return nil, fmt.Errorf("failed to get public key: %w", err)
-		}
-
-		if len(stateInit) == 0 {
-			return nil, errors.New("wallet is not initialized and state init is empty")
-		}
-
-		siCell, err := cell.FromBOC(stateInit)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse state init boc: %w", err)
-		}
-
-		if !bytes.Equal(siCell.Hash(), addr.Data()) {
-			return nil, errors.New("state init hash does not match address")
-		}
-
-		var si tlb.StateInit
-		if err = tlb.LoadFromCell(&si, siCell.BeginParse()); err != nil {
-			return nil, fmt.Errorf("failed to parse state init: %w", err)
-		}
-
-		if si.Code == nil || si.Data == nil {
-			return nil, errors.New("state init has no code or data")
-		}
-
-		ver, ok := walletVersionByCodeHash[string(si.Code.Hash())]
-		if !ok {
-			return nil, errors.New("state init has unknown code")
-		}
-
-		key, err = ParsePubKeyFromData(ver, si.Data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse public key from code: %w", err)
 		}
 	}
 
+	return key, nil
+}
+
+func getPublicKeyFromStateInit(addr *address.Address, stateInit []byte) (ed25519.PublicKey, error) {
+	if len(stateInit) == 0 {
+		return nil, errors.New("wallet is not initialized and state init is empty")
+	}
+
+	siCell, err := cell.FromBOC(stateInit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse state init boc: %w", err)
+	}
+
+	if !bytes.Equal(siCell.Hash(), addr.Data()) {
+		return nil, errors.New("state init hash does not match address")
+	}
+
+	var si tlb.StateInit
+	if err = tlb.LoadFromCell(&si, siCell.BeginParse()); err != nil {
+		return nil, fmt.Errorf("failed to parse state init: %w", err)
+	}
+
+	if si.Code == nil || si.Data == nil {
+		return nil, errors.New("state init has no code or data")
+	}
+
+	ver, ok := walletVersionByCodeHash[string(si.Code.Hash())]
+	if !ok {
+		return nil, errors.New("state init has unknown code")
+	}
+
+	key, err := ParsePubKeyFromData(ver, si.Data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key from code: %w", err)
+	}
 	return key, nil
 }
 
