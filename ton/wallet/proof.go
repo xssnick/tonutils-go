@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
@@ -40,7 +44,15 @@ func NewTonConnectVerifier(domain string, ttlRange time.Duration, client ton.API
 	}
 }
 
-func (v *TonConnectVerifier) VerifyProof(ctx context.Context, addr *address.Address, proof TonConnectProof, expectedPayload string, stateInit []byte) error {
+func (v *TonConnectVerifier) VerifyProofWithPayload(ctx context.Context, addr *address.Address, proof TonConnectProof, stateInit []byte, payloadVerifier func(payload, secret string) error, secret string) error {
+	if err := payloadVerifier(proof.Payload, secret); err != nil {
+		return fmt.Errorf("payload check failed: %w", err)
+	}
+
+	return v.VerifyProof(ctx, addr, proof, stateInit)
+}
+
+func (v *TonConnectVerifier) VerifyProof(ctx context.Context, addr *address.Address, proof TonConnectProof, stateInit []byte) error {
 	if !strings.EqualFold(proof.Domain.Value, v.domain) {
 		return errors.New("invalid domain in proof")
 	}
@@ -49,10 +61,6 @@ func (v *TonConnectVerifier) VerifyProof(ctx context.Context, addr *address.Addr
 
 	if skew := now.Sub(time.Unix(proof.Timestamp, 0)); skew > v.ttlRange || skew < -v.ttlRange {
 		return errors.New("timestamp out of allowed range")
-	}
-
-	if proof.Payload != expectedPayload {
-		return errors.New("invalid payload in proof")
 	}
 
 	msg, err := buildMessage(addr, proof)
@@ -155,4 +163,37 @@ func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Addres
 	}
 
 	return key, nil
+}
+
+func GeneratePayload(secret string, ttl time.Duration) (string, error) {
+	payload := make([]byte, 16, 48)
+	_, err := rand.Read(payload[:8])
+	if err != nil {
+		return "", fmt.Errorf("could not generate nonce")
+	}
+	binary.BigEndian.PutUint64(payload[8:16], uint64(time.Now().Add(ttl).Unix()))
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write(payload)
+	payload = h.Sum(payload)
+	return hex.EncodeToString(payload[:32]), nil
+}
+
+func CheckPayload(payload, secret string) error {
+	b, err := hex.DecodeString(payload)
+	if err != nil {
+		return err
+	}
+	if len(b) != 32 {
+		return fmt.Errorf("invalid payload length")
+	}
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write(b[:16])
+	sign := h.Sum(nil)
+	if subtle.ConstantTimeCompare(b[16:], sign[:16]) != 1 {
+		return fmt.Errorf("invalid payload signature")
+	}
+	if time.Since(time.Unix(int64(binary.BigEndian.Uint64(b[8:16])), 0)) > 0 {
+		return fmt.Errorf("payload expired")
+	}
+	return nil
 }
