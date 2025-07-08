@@ -939,7 +939,17 @@ func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize uint64, timeoutAt u
 		}
 	}
 
-	if err = r.startTransfer(ctx, transferId, data, int64(timeoutAt)); err != nil {
+	timeout, ok := ctx.Deadline()
+	if !ok {
+		timeout = time.Now().Add(15 * time.Second)
+	}
+	tm := timeout.Unix()
+
+	if int64(timeoutAt) < tm {
+		tm = int64(timeoutAt)
+	}
+
+	if err = r.startTransfer(ctx, transferId, data, tm); err != nil {
 		return fmt.Errorf("failed to send partitioned answer: %w", err)
 	}
 
