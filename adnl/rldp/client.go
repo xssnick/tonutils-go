@@ -705,7 +705,7 @@ func (r *RLDP) recoverySender() {
 func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recoverTimeoutAt int64) error {
 	at := &activeTransfer{
 		id:        transferId,
-		timeoutAt: recoverTimeoutAt * int64(time.Millisecond),
+		timeoutAt: recoverTimeoutAt * 1000, // ms
 		data:      data,
 		rldp:      r,
 	}
