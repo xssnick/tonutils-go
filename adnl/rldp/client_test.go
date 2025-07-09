@@ -17,7 +17,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 func init() {
@@ -303,13 +302,15 @@ func TestRLDP_handleMessage(t *testing.T) {
 			}
 			cli := NewClient(tAdnl)
 
-			cli.activeTransfers[string(tId)] = &activeTransfer{
-				id:   nil,
+			td := &activeTransfer{
+				id:   tId,
 				data: make([]byte, 10),
-				currentPart: unsafe.Pointer(&activeTransferPart{
-					index: 0,
-				}),
 			}
+			td.currentPart.Store(&activeTransferPart{
+				index: 0,
+			})
+
+			cli.activeTransfers[string(tId)] = td
 
 			err := cli.handleMessage(msgComplete)
 			if err != nil {

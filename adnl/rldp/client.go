@@ -7,16 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/raptorq"
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/tl"
 	"math/bits"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
-
-	"github.com/xssnick/raptorq"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/tl"
 )
 
 type ADNL interface {
@@ -56,7 +54,7 @@ type activeTransfer struct {
 	data      []byte
 	timeoutAt int64
 
-	currentPart unsafe.Pointer //*activeTransferPart
+	currentPart atomic.Pointer[activeTransferPart]
 	rldp        *RLDP
 
 	mx sync.Mutex
@@ -97,6 +95,8 @@ type RLDP struct {
 	lastNetworkProcessAt   int64
 	lastNetworkPacketsRecv int64
 	lastNetworkBatchesNum  int64
+
+	lastReport time.Time
 }
 
 type decoderStreamPart struct {
@@ -249,7 +249,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			} else {
 				r.recvStreams[id] = stream
 			}
-			delete(r.expectedTransfers, id)
 			r.mx.Unlock()
 		}
 
@@ -352,11 +351,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					if isV2 {
 						complete = CompleteV2(complete.(Complete))
 					}
-
-					err = r.adnl.SendCustomMessage(context.Background(), complete)
-					if err != nil {
-						return fmt.Errorf("failed to send rldp complete message: %w", err)
-					}
+					_ = r.adnl.SendCustomMessage(context.Background(), complete)
 
 					if uint64(len(stream.buf)) >= stream.totalSize {
 						stream.finishedAt = &tmd
@@ -402,6 +397,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 							req := r.activeRequests[qid]
 							if req != nil {
 								delete(r.activeRequests, qid)
+								delete(r.expectedTransfers, id)
 							}
 							r.mx.Unlock()
 
@@ -467,10 +463,8 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			}
 		}
 	case Complete: // receiver has fully received transfer part, send new part or close our stream if done
-		id := string(m.TransferID)
-
 		r.mx.RLock()
-		t := r.activeTransfers[id]
+		t := r.activeTransfers[string(m.TransferID)]
 		r.mx.RUnlock()
 
 		if t != nil {
@@ -492,7 +486,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 			if !more {
 				r.mx.Lock()
-				delete(r.activeTransfers, id)
+				delete(r.activeTransfers, string(t.id))
 				r.mx.Unlock()
 
 				break
@@ -580,7 +574,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 }
 
 func (r *RLDP) recoverySender() {
-	packets := make([]tl.Serializable, 0, 1024)
 	transfersToProcess := make([]*activeTransferPart, 0, 128)
 	timedOut := make([]*activeTransfer, 0, 32)
 	timedOutReq := make([]string, 0, 32)
@@ -594,11 +587,19 @@ func (r *RLDP) recoverySender() {
 		case <-closerCtx.Done():
 			return
 		case <-ticker.C:
-			packets = packets[:0]
-			transfersToProcess = transfersToProcess[:0]
-			timedOut = timedOut[:0]
-			timedOutReq = timedOutReq[:0]
-			timedOutExp = timedOutExp[:0]
+			if r.lastReport.Before(time.Now().Add(-10 * time.Second)) {
+				r.lastReport = time.Now()
+				r.mx.RLock()
+				Logger("[RLDP] recovery sender stats",
+					"peer", hex.EncodeToString(r.adnl.GetID()),
+					"active transfers", len(r.activeTransfers),
+					"active requests", len(r.activeRequests),
+					"expected transfers", len(r.expectedTransfers),
+					"transfers to process", len(transfersToProcess),
+					"timed out", len(timedOut),
+				)
+				r.mx.RUnlock()
+			}
 
 			ms := time.Now().UnixMilli()
 
@@ -700,6 +701,11 @@ func (r *RLDP) recoverySender() {
 				}
 				r.mx.Unlock()
 			}
+
+			transfersToProcess = transfersToProcess[:0]
+			timedOut = timedOut[:0]
+			timedOutReq = timedOutReq[:0]
+			timedOutExp = timedOutExp[:0]
 		case <-r.activateRecoverySender:
 			ticker.Reset(1 * time.Millisecond)
 		}
@@ -709,7 +715,7 @@ func (r *RLDP) recoverySender() {
 func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recoverTimeoutAt int64) error {
 	at := &activeTransfer{
 		id:        transferId,
-		timeoutAt: recoverTimeoutAt * int64(time.Millisecond),
+		timeoutAt: recoverTimeoutAt * 1000, // ms
 		data:      data,
 		rldp:      r,
 	}
@@ -740,7 +746,7 @@ func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recov
 }
 
 func (t *activeTransfer) getCurrentPart() *activeTransferPart {
-	return (*activeTransferPart)(atomic.LoadPointer(&t.currentPart))
+	return t.currentPart.Load()
 }
 
 func (t *activeTransfer) prepareNextPart() (bool, error) {
@@ -781,7 +787,7 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 		transfer:         t,
 	}
 
-	atomic.StorePointer(&t.currentPart, unsafe.Pointer(&part))
+	t.currentPart.Store(&part)
 	return true, nil
 }
 
@@ -931,19 +937,17 @@ func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize uint64, timeoutAt u
 		return fmt.Errorf("too big answer for that client, client wants no more than %d bytes", maxAnswerSize)
 	}
 
-	var transferId []byte
+	timeout, ok := ctx.Deadline()
+	if !ok {
+		timeout = time.Now().Add(15 * time.Second)
+	}
+	tm := timeout.Unix()
 
-	if toTransferId != nil {
-		// if we have transfer to respond, invert it and use id
-		transferId = reverseTransferId(toTransferId)
-	} else {
-		transferId = make([]byte, 32)
-		if _, err = rand.Read(transferId); err != nil {
-			return err
-		}
+	if int64(timeoutAt) < tm {
+		tm = int64(timeoutAt)
 	}
 
-	if err = r.startTransfer(ctx, transferId, data, int64(timeoutAt)); err != nil {
+	if err = r.startTransfer(ctx, reverseTransferId(toTransferId), data, tm); err != nil {
 		return fmt.Errorf("failed to send partitioned answer: %w", err)
 	}
 
