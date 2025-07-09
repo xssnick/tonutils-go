@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"github.com/xssnick/raptorq"
@@ -37,8 +38,8 @@ func (m MockADNL) GetCloserCtx() context.Context {
 }
 
 func (m MockADNL) GetID() []byte {
-	//TODO implement me
-	panic("implement me")
+	v := sha256.Sum256([]byte("1.1.1.1:1234"))
+	return v[:]
 }
 
 func (m MockADNL) RemoteAddr() string {
