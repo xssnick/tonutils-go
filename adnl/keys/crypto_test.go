@@ -1,8 +1,7 @@
-package adnl
+package keys
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
 	"reflect"
 	"testing"
 )
@@ -56,21 +55,4 @@ func Test_sharedKey(t *testing.T) {
 			}
 		})
 	}
-}
-
-func Benchmark_sharedKey(b *testing.B) {
-
-	checksum := []byte{
-		175, 46, 138, 194, 124, 100, 226,
-		85, 88, 44, 196, 159, 130, 167,
-		223, 23, 125, 231, 145, 177, 104,
-		171, 189, 252, 16, 143, 108, 237,
-		99, 32, 104, 10}
-
-	var f []byte
-	for i := 0; i < b.N; i++ {
-		sm := sha256.Sum256(checksum)
-		f = sm[:]
-	}
-	println(f)
 }

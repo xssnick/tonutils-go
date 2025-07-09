@@ -4,8 +4,8 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
 )
@@ -105,7 +105,7 @@ type Pong struct {
 }
 
 func (n *Node) CheckSignature() error {
-	pub, ok := n.ID.(adnl.PublicKeyED25519)
+	pub, ok := n.ID.(keys.PublicKeyED25519)
 	if !ok {
 		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(n.ID).String())
 	}

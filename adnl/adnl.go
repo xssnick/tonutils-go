@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"reflect"
 	"strings"
 	"sync"
@@ -700,12 +701,12 @@ func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 	checksum := packet[32:64]
 	data := packet[64:]
 
-	key, err := SharedKey(key, pub)
+	key, err := keys.SharedKey(key, pub)
 	if err != nil {
 		return nil, err
 	}
 
-	ctr, err := BuildSharedCipher(key, checksum)
+	ctr, err := keys.BuildSharedCipher(key, checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -731,7 +732,7 @@ func (a *ADNL) GetAddressList() address.List {
 }
 
 func (a *ADNL) GetID() []byte {
-	id, _ := tl.Hash(PublicKeyED25519{Key: a.peerKey})
+	id, _ := tl.Hash(keys.PublicKeyED25519{Key: a.peerKey})
 	return id
 }
 
@@ -788,9 +789,9 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	}
 
 	if !isResp {
-		packet.From = &PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
+		packet.From = &keys.PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
 	} else {
-		packet.FromIDShort, err = tl.Hash(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
+		packet.FromIDShort, err = tl.Hash(keys.PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
 		if err != nil {
 			return nil, err
 		}
@@ -821,19 +822,19 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	hash := sha256.Sum256(packetData)
 	checksum := hash[:]
 
-	key, err := SharedKey(a.ourKey, a.peerKey)
+	key, err := keys.SharedKey(a.ourKey, a.peerKey)
 	if err != nil {
 		return nil, err
 	}
 
-	ctr, err := BuildSharedCipher(key, checksum)
+	ctr, err := keys.BuildSharedCipher(key, checksum)
 	if err != nil {
 		return nil, err
 	}
 
 	ctr.XORKeyStream(packetData, packetData)
 
-	enc, err := tl.Hash(PublicKeyED25519{Key: a.peerKey})
+	enc, err := tl.Hash(keys.PublicKeyED25519{Key: a.peerKey})
 	if err != nil {
 		return nil, err
 	}

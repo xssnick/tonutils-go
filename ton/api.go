@@ -3,12 +3,12 @@ package ton
 import (
 	"context"
 	"fmt"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"reflect"
 	"sync"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
-	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"

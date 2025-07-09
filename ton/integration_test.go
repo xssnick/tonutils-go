@@ -124,7 +124,7 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 func TestAPIClient_GetOldBlockData(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")

@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"hash/crc32"
 	"io"
 	"log"
@@ -167,11 +168,11 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 	}
 
 	// build ciphers for incoming packets and for outgoing
-	conn.rCrypt, err = adnl.NewCipherCtr(rnd[:32], rnd[64:80])
+	conn.rCrypt, err = keys.NewCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
 		return err
 	}
-	conn.wCrypt, err = adnl.NewCipherCtr(rnd[32:64], rnd[80:96])
+	conn.wCrypt, err = keys.NewCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
 		return err
 	}
@@ -485,12 +486,12 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 
 	pub := ourKey.Public().(ed25519.PublicKey)
 
-	kid, err := tl.Hash(adnl.PublicKeyED25519{Key: serverKey})
+	kid, err := tl.Hash(keys.PublicKeyED25519{Key: serverKey})
 	if err != nil {
 		return err
 	}
 
-	key, err := adnl.SharedKey(ourKey, serverKey)
+	key, err := keys.SharedKey(ourKey, serverKey)
 	if err != nil {
 		return err
 	}
@@ -507,7 +508,7 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 		key[24], key[25], key[26], key[27], key[28], key[29], key[30], key[31],
 	}
 
-	ctr, err := adnl.NewCipherCtr(k, iv)
+	ctr, err := keys.NewCipherCtr(k, iv)
 	if err != nil {
 		return err
 	}

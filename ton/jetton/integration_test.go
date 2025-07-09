@@ -106,7 +106,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 
 	amt := tlb.MustFromTON("1.15")
 	to := address.MustParseAddr("EQD4vUD2PYRLQd0mSwjmnnWSpeulTjZoFypJVUJAyJoUbrRu")
-	transferPayload, err := tokenWallet.BuildTransferPayload(to, amt, tlb.MustFromTON("0"), nil)
+	transferPayload, err := BuildTransferPayload(to, to, amt, tlb.MustFromTON("0"), nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -119,7 +119,7 @@ func TestJettonMasterClient_Transfer(t *testing.T) {
 	}
 
 	fmt.Println("Burning tokens...")
-	burnPayload, err := tokenWallet.BuildBurnPayload(amt, to)
+	burnPayload, err := BuildBurnPayload(amt, to)
 	if err != nil {
 		panic(err)
 	}
