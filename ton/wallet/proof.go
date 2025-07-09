@@ -172,16 +172,16 @@ func getPublicKeyFromStateInit(addr *address.Address, stateInit []byte) (ed25519
 }
 
 func GeneratePayload(secret string, ttl time.Duration) (string, error) {
-	payload := make([]byte, 16, 48)
-	_, err := rand.Read(payload[:8])
+	payload := make([]byte, 32, 64)
+	_, err := rand.Read(payload[:24])
 	if err != nil {
 		return "", fmt.Errorf("could not generate nonce")
 	}
-	binary.BigEndian.PutUint64(payload[8:16], uint64(time.Now().Add(ttl).Unix()))
+	binary.BigEndian.PutUint64(payload[24:32], uint64(time.Now().Add(ttl).Unix()))
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write(payload)
 	payload = h.Sum(payload)
-	return hex.EncodeToString(payload[:32]), nil
+	return hex.EncodeToString(payload), nil
 }
 
 func CheckPayload(payload, secret string) error {
@@ -189,16 +189,16 @@ func CheckPayload(payload, secret string) error {
 	if err != nil {
 		return err
 	}
-	if len(b) != 32 {
+	if len(b) != 64 {
 		return fmt.Errorf("invalid payload length")
 	}
 	h := hmac.New(sha256.New, []byte(secret))
-	h.Write(b[:16])
+	h.Write(b[:32])
 	sign := h.Sum(nil)
-	if subtle.ConstantTimeCompare(b[16:], sign[:16]) != 1 {
+	if subtle.ConstantTimeCompare(b[32:], sign) != 1 {
 		return fmt.Errorf("invalid payload signature")
 	}
-	if time.Since(time.Unix(int64(binary.BigEndian.Uint64(b[8:16])), 0)) > 0 {
+	if time.Since(time.Unix(int64(binary.BigEndian.Uint64(b[24:32])), 0)) > 0 {
 		return fmt.Errorf("payload expired")
 	}
 	return nil
