@@ -513,13 +513,16 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	a.activeQueries[reqID] = res
 	a.mx.Unlock()
 
+	defer func() {
+		a.mx.Lock()
+		delete(a.activeQueries, reqID)
+		a.mx.Unlock()
+	}()
+
 	baseMTU := false
 reSplit:
 	packets, err := a.buildRequestMaySplit(q, baseMTU)
 	if err != nil {
-		a.mx.Lock()
-		delete(a.activeQueries, reqID)
-		a.mx.Unlock()
 		return fmt.Errorf("request failed: %w", err)
 	}
 
