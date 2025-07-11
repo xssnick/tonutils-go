@@ -44,15 +44,11 @@ func NewTonConnectVerifier(domain string, ttlRange time.Duration, client ton.API
 	}
 }
 
-func (v *TonConnectVerifier) VerifyProofWithPayload(ctx context.Context, addr *address.Address, proof TonConnectProof, stateInit []byte, payloadVerifier func(payload, secret string) error, secret string) error {
+func (v *TonConnectVerifier) VerifyProofHandlePayload(ctx context.Context, addr *address.Address, proof TonConnectProof, stateInit []byte, payloadVerifier func(payload, secret string) error, secret string) error {
 	if err := payloadVerifier(proof.Payload, secret); err != nil {
 		return fmt.Errorf("payload check failed: %w", err)
 	}
 
-	return v.VerifyProof(ctx, addr, proof, stateInit)
-}
-
-func (v *TonConnectVerifier) VerifyProof(ctx context.Context, addr *address.Address, proof TonConnectProof, stateInit []byte) error {
 	if !strings.EqualFold(proof.Domain.Value, v.domain) {
 		return errors.New("invalid domain in proof")
 	}
@@ -90,6 +86,17 @@ func (v *TonConnectVerifier) VerifyProof(ctx context.Context, addr *address.Addr
 	}
 
 	return nil
+}
+
+// VerifyProof uses a simple payloadVerifier to maintain compatibility with previous versions.
+// For enhanced functionality, it is recommended to use VerifyProofHandlePayload with the CheckPayload and GeneratePayload methods
+func (v *TonConnectVerifier) VerifyProof(ctx context.Context, addr *address.Address, proof TonConnectProof, expectedPayload string, stateInit []byte) error {
+	return v.VerifyProofHandlePayload(ctx, addr, proof, stateInit, func(payload, secret string) error {
+		if expectedPayload != proof.Payload {
+			return errors.New("invalid payload in proof")
+		}
+		return nil
+	}, expectedPayload)
 }
 
 const tonProofPrefix = "ton-proof-item-v2/"

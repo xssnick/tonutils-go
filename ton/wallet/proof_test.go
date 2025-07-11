@@ -31,7 +31,7 @@ func TestTonConnectVerifier_VerifyProof(t *testing.T) {
 
 	addr := address.MustParseRawAddr(data.Address)
 
-	err = vi.VerifyProof(context.Background(), addr, data.Proof, data.StateInit)
+	err = vi.VerifyProof(context.Background(), addr, data.Proof, "1747303885:", data.StateInit)
 	if err != nil {
 		t.Fatalf("failed to verify proof: %v", err)
 	}
