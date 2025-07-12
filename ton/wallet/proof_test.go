@@ -37,3 +37,62 @@ func TestTonConnectVerifier_VerifyProof(t *testing.T) {
 	}
 
 }
+
+func TestTonConnectVerifier_CheckPayload(t *testing.T) {
+	secret := "test_secret"
+
+	// Test case: Valid payload
+	t.Run("ValidPayload", func(t *testing.T) {
+		ttl := 5 * time.Second
+		payload, err := GeneratePayload(secret, ttl)
+		if err != nil {
+			t.Fatalf("GeneratePayload failed: %v", err)
+		}
+
+		err = CheckPayload(payload, secret)
+		if err != nil {
+			t.Errorf("CheckPayload failed for valid payload: %v", err)
+		}
+	})
+
+	// Test case: Expired payload
+	t.Run("ExpiredPayload", func(t *testing.T) {
+		ttl := -5 * time.Second // Already expired
+		payload, err := GeneratePayload(secret, ttl)
+		if err != nil {
+			t.Fatalf("GeneratePayload failed: %v", err)
+		}
+
+		err = CheckPayload(payload, secret)
+		if err == nil || err.Error() != "payload expired" {
+			t.Errorf("Expected 'payload expired', got: %v", err)
+		}
+	})
+
+	// Test case: Tampered payload
+	t.Run("TamperedPayload", func(t *testing.T) {
+		ttl := 5 * time.Second
+		payload, err := GeneratePayload(secret, ttl)
+		if err != nil {
+			t.Fatalf("GeneratePayload failed: %v", err)
+		}
+
+		// Tamper with the payload
+		tamperedPayload := payload[:len(payload)-1] + "a"
+
+		err = CheckPayload(tamperedPayload, secret)
+		if err == nil || err.Error() != "invalid payload signature" {
+			t.Errorf("Expected 'invalid payload signature', got: %v", err)
+		}
+	})
+
+	// Test case: Invalid payload length
+	t.Run("InvalidPayloadLength", func(t *testing.T) {
+		invalidPayload := "abcd" // Too short to be valid
+
+		err := CheckPayload(invalidPayload, secret)
+		if err == nil || err.Error() != "invalid payload length" {
+			t.Errorf("Expected 'invalid payload length', got: %v", err)
+		}
+	})
+}
