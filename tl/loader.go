@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 type Serializable interface{}
@@ -126,7 +127,12 @@ func Register(typ any, tl string) uint32 {
 	})
 }
 
+var initMx sync.Mutex
+
 func RegisterWithFabric(typ any, tl string, fab func() reflect.Value) uint32 {
+	initMx.Lock() // we lock because init() methods in independent packages can be called in parallel
+	defer initMx.Unlock()
+	
 	t := reflect.TypeOf(typ)
 
 	si := getStructInfoReference(t)
