@@ -40,7 +40,7 @@ func Test_Conn(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://tonutils.com/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatal("add connections err", err)
 	}
@@ -90,7 +90,7 @@ func Test_ConnSticky(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://tonutils.com/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatal("add connections err", err)
 	}
@@ -129,7 +129,7 @@ func Test_ConnSticky(t *testing.T) {
 func Test_ServerProxy(t *testing.T) {
 	client := NewConnectionPool()
 
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://tonutils.com/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatal("add connections err", err)
 	}

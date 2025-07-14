@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"net/netip"
@@ -301,7 +302,7 @@ func (g *Gateway) listen(rootId []byte) {
 					continue
 				}
 
-				peerId, err = tl.Hash(PublicKeyED25519{Key: packet.From.Key})
+				peerId, err = tl.Hash(keys.PublicKeyED25519{Key: packet.From.Key})
 				if err != nil {
 					Logger("invalid peer id, err:", err.Error())
 					continue
@@ -493,7 +494,7 @@ func (g *Gateway) RegisterClient(addr string, key ed25519.PublicKey) (Peer, erro
 	}
 	udpAddr := net.UDPAddrFromAddrPort(pAddr)
 
-	clientId, err := tl.Hash(PublicKeyED25519{Key: key})
+	clientId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
 	if err != nil {
 		return nil, err
 	}
@@ -529,7 +530,7 @@ func (g *Gateway) write(addr net.Addr, buf []byte) error {
 }
 
 func (g *Gateway) GetID() []byte {
-	id, _ := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
+	id, _ := tl.Hash(keys.PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
 	return id
 }
 

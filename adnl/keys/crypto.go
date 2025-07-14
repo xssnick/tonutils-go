@@ -1,35 +1,31 @@
-package adnl
+package keys
 
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdh"
 	"crypto/ed25519"
-	"github.com/oasisprotocol/curve25519-voi/curve"
-	ed25519crv "github.com/oasisprotocol/curve25519-voi/primitives/ed25519"
-	"github.com/oasisprotocol/curve25519-voi/primitives/x25519"
+	"crypto/sha512"
+	"filippo.io/edwards25519" // lib from core golang developer, based on go source with extended features
 )
 
 // SharedKey - Generate encryption key based on our and server key, ECDH algorithm
 func SharedKey(ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) ([]byte, error) {
-	comp, err := curve.NewCompressedEdwardsYFromBytes(serverKey)
+	privateKey, err := ecdh.X25519().NewPrivateKey(Ed25519PrivateToX25519(ourKey))
 	if err != nil {
 		return nil, err
 	}
 
-	ep, err := curve.NewEdwardsPoint().SetCompressedY(comp)
+	pubX, err := Ed25519PubToX25519(serverKey)
 	if err != nil {
 		return nil, err
 	}
 
-	mp := curve.NewMontgomeryPoint().SetEdwards(ep)
-	bb := x25519.EdPrivateKeyToX25519(ed25519crv.PrivateKey(ourKey))
-
-	key, err := x25519.X25519(bb, mp[:])
+	pubKey, err := ecdh.X25519().NewPublicKey(pubX)
 	if err != nil {
 		return nil, err
 	}
-
-	return key, nil
+	return privateKey.ECDH(pubKey)
 }
 
 func BuildSharedCipher(key []byte, checksum []byte) (cipher.Stream, error) {
@@ -57,4 +53,22 @@ func NewCipherCtr(key, iv []byte) (cipher.Stream, error) {
 	}
 
 	return cipher.NewCTR(c, iv), nil
+}
+
+func Ed25519PrivateToX25519(edPrivate ed25519.PrivateKey) []byte {
+	h := sha512.Sum512(edPrivate.Seed())
+	h[0] &= 248
+	h[31] &= 127
+	h[31] |= 64
+	return h[:32]
+}
+
+func Ed25519PubToX25519(edPub ed25519.PublicKey) ([]byte, error) {
+	// convert ed pub key to ec pub key
+	point := new(edwards25519.Point)
+	_, err := point.SetBytes(edPub)
+	if err != nil {
+		return nil, err
+	}
+	return point.BytesMontgomery(), nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"io"
 	mRand "math/rand"
@@ -18,12 +17,6 @@ import (
 
 const _StickyCtxKey = "_ton_node_sticky"
 const _StickyCtxUsedNodesKey = "_ton_used_nodes_sticky"
-
-var (
-	ErrNoActiveConnections = errors.New("no active connections")
-	ErrADNLReqTimeout      = errors.New("adnl request timeout")
-	ErrNoNodesLeft         = errors.New("no more active nodes left")
-)
 
 type OnDisconnectCallback func(addr, key string)
 
