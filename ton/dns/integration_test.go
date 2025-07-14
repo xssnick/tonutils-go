@@ -14,16 +14,16 @@ var api = func() ton.APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://tonutils.com/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client).WithRetry()
+	return ton.NewAPIClient(client).WithTimeout(5 * time.Second).WithRetry()
 }()
 
 func TestDNSClient_Resolve(t *testing.T) {
-	root, err := RootContractAddr(api)
+	root, err := GetRootContractAddr(context.Background(), api)
 	if err != nil {
 		t.Fatal(err)
 	}

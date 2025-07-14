@@ -423,7 +423,7 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://tonutils.com/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -486,7 +486,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://tonutils.com/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
