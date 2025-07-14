@@ -34,7 +34,7 @@ jobs:
       env:
         WALLET_SEED: ${{ secrets.WALLET_SEED }}
       run: |
-        go test -v $(go list ./... | grep -v /example/) -covermode=count -coverprofile=coverage.out
+        go test -v -failfast $(go list ./... | grep -v /example/) -covermode=count -coverprofile=coverage.out
         go tool cover -func=coverage.out -o=coverage.out
 
     - name: Go Coverage Badge  # Pass the `coverage.out` output to this action

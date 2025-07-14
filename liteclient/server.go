@@ -5,7 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/ed25519"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"net"
@@ -37,10 +37,10 @@ type ServerClient struct {
 	mx   sync.Mutex
 }
 
-func NewServer(keys []ed25519.PrivateKey) *Server {
+func NewServer(keysList []ed25519.PrivateKey) *Server {
 	list := map[string]ed25519.PrivateKey{}
-	for _, k := range keys {
-		kid, err := tl.Hash(adnl.PublicKeyED25519{Key: k.Public().(ed25519.PublicKey)})
+	for _, k := range keysList {
+		kid, err := tl.Hash(keys.PublicKeyED25519{Key: k.Public().(ed25519.PublicKey)})
 		if err != nil {
 			panic(err.Error())
 		}
@@ -218,7 +218,7 @@ func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stre
 		return nil, nil, nil, fmt.Errorf("incorrect server key in packet")
 	}
 
-	key, err := adnl.SharedKey(serverKey, packet[32:64])
+	key, err := keys.SharedKey(serverKey, packet[32:64])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to calc shared key: %w", err)
 	}
@@ -237,7 +237,7 @@ func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stre
 		key[24], key[25], key[26], key[27], key[28], key[29], key[30], key[31],
 	}
 
-	ctr, err := adnl.NewCipherCtr(k, iv)
+	ctr, err := keys.NewCipherCtr(k, iv)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to calc cipher for rnd: %w", err)
 	}
@@ -247,11 +247,11 @@ func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stre
 	ctr.XORKeyStream(rnd, rnd)
 
 	// build ciphers for incoming packets and for outgoing
-	w, err := adnl.NewCipherCtr(rnd[:32], rnd[64:80])
+	w, err := keys.NewCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to calc cipher for w crypt: %w", err)
 	}
-	r, err := adnl.NewCipherCtr(rnd[32:64], rnd[80:96])
+	r, err := keys.NewCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to calc cipher for r crypt: %w", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
@@ -170,7 +171,7 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 		return nil, err
 	}
 	testNode := &Node{
-		adnl.PublicKeyED25519{Key: tPubKey},
+		keys.PublicKeyED25519{Key: tPubKey},
 		&address.List{
 			Addresses: []*address.UDP{
 				{net.IPv4(a, b, c, d).To4(),
@@ -200,7 +201,7 @@ func correctValue(tAdnlAddr []byte) (*ValueFoundResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	pubIdRes := adnl.PublicKeyED25519{pubId}
+	pubIdRes := keys.PublicKeyED25519{pubId}
 	sign, err := base64.StdEncoding.DecodeString("Zwj4eW/tMbgzF7kQtI8AF11E0q76h5/3+hkylzHuJzKDD2sDd7sw/FXIiVptjrrOIPze8kbbDEkq4K5O78KeDQ==")
 	if err != nil {
 		return nil, err
@@ -346,7 +347,7 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal("failed creating pId of test value, err:", err)
 	}
-	tPubIdRes := adnl.PublicKeyED25519{Key: pubId}
+	tPubIdRes := keys.PublicKeyED25519{Key: pubId}
 
 	t.Run("find addresses positive case", func(t *testing.T) {
 		gateway := &MockGateway{}
@@ -422,7 +423,7 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://tonutils.com/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -485,7 +486,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://tonutils.com/global.config.json")
+	dhtClient, err := NewClientFromConfigUrl(ctx, gateway, "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		t.Fatalf("failed to init DHT client: %s", err.Error())
 	}
@@ -520,7 +521,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kid, err := tl.Hash(adnl.PublicKeyED25519{
+	kid, err := tl.Hash(keys.PublicKeyED25519{
 		Key: pub,
 	})
 	if err != nil {

@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"net"
 	"reflect"
 	"sync"
@@ -16,7 +18,6 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/overlay"
-	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
@@ -81,7 +82,7 @@ func NewClientFromConfig(gateway Gateway, cfg *liteclient.GlobalConfig) (*Client
 		}
 
 		n := &Node{
-			ID: adnl.PublicKeyED25519{
+			ID: keys.PublicKeyED25519{
 				Key: key,
 			},
 			AddrList: &address.List{
@@ -145,7 +146,7 @@ func (c *Client) Close() {
 }
 
 func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
-	pub, ok := node.ID.(adnl.PublicKeyED25519)
+	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
 		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
 	}
@@ -182,7 +183,7 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 }
 
 func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
-	keyHash, err := tl.Hash(adnl.PublicKeyOverlay{
+	keyHash, err := tl.Hash(keys.PublicKeyOverlay{
 		Key: overlayKey,
 	})
 
@@ -227,7 +228,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 		return nil, nil, fmt.Errorf("failed to parse address list: %w", err)
 	}
 
-	keyID, ok := val.KeyDescription.ID.(adnl.PublicKeyED25519)
+	keyID, ok := val.KeyDescription.ID.(keys.PublicKeyED25519)
 	if !ok {
 		return nil, nil, fmt.Errorf("unsupported key type %s", reflect.TypeOf(val.KeyDescription.ID))
 	}
@@ -255,7 +256,7 @@ func (c *Client) StoreAddress(
 		return 0, nil, err
 	}
 
-	id := adnl.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
+	id := keys.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
 	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey, replicas)
 }
 
@@ -282,7 +283,7 @@ func (c *Client) StoreOverlayNodes(
 		return 0, nil, err
 	}
 
-	id := adnl.PublicKeyOverlay{Key: overlayKey}
+	id := keys.PublicKeyOverlay{Key: overlayKey}
 	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil, replicas)
 }
 

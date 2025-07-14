@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 type Serializable interface{}
@@ -121,6 +122,18 @@ func getStructInfoReferenceByShortName(name string) *structInfo {
 
 func Register(typ any, tl string) uint32 {
 	t := reflect.TypeOf(typ)
+	return RegisterWithFabric(typ, tl, func() reflect.Value {
+		return reflect.New(t)
+	})
+}
+
+var initMx sync.Mutex
+
+func RegisterWithFabric(typ any, tl string, fab func() reflect.Value) uint32 {
+	initMx.Lock() // we lock because init() methods in independent packages can be called in parallel
+	defer initMx.Unlock()
+	
+	t := reflect.TypeOf(typ)
 
 	si := getStructInfoReference(t)
 	if si.finalized {
@@ -151,8 +164,9 @@ func Register(typ any, tl string) uint32 {
 		si.tlName = nameParts[0]
 	}
 	si.tp = t
+	si.fabric = fab
 
-	nw := reflect.New(t).Interface()
+	nw := fab().Interface()
 
 	// if we have custom method, we use it
 	if _, ok := nw.(SerializableTL); ok {

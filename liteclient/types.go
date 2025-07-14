@@ -1,6 +1,9 @@
 package liteclient
 
-import "github.com/xssnick/tonutils-go/tl"
+import (
+	"errors"
+	"github.com/xssnick/tonutils-go/tl"
+)
 
 func init() {
 	tl.Register(LiteServerQuery{}, "liteServer.query data:bytes = Object")
@@ -10,6 +13,12 @@ func init() {
 	tl.Register(TCPAuthenticationNonce{}, "tcp.authentificationNonce nonce:bytes = tcp.Message")
 	tl.Register(TCPAuthenticationComplete{}, "tcp.authentificationComplete key:PublicKey signature:bytes = tcp.Message")
 }
+
+var (
+	ErrNoActiveConnections = errors.New("no active connections")
+	ErrADNLReqTimeout      = errors.New("adnl request timeout")
+	ErrNoNodesLeft         = errors.New("no more active nodes left")
+)
 
 type LiteServerQuery struct {
 	Data any `tl:"bytes struct boxed"`
