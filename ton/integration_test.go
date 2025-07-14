@@ -124,13 +124,14 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 func TestAPIClient_GetOldBlockData(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
 	err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
 	if err != nil {
 		panic(err)
 	}
+	log.Println("CONNECTED")
 
 	api := NewAPIClient(client)
 
@@ -145,12 +146,14 @@ func TestAPIClient_GetOldBlockData(t *testing.T) {
 		t.Fatal("lookup err:", err.Error())
 		return
 	}
+	log.Println("LOOKUP: ", b.SeqNo)
 
 	shards, err := api.GetBlockShardsInfo(ctx, b)
 	if err != nil {
 		log.Fatalln("get shards err:", err.Error())
 		return
 	}
+	log.Println("SHARDS: ", b.SeqNo)
 
 	for _, shard := range shards {
 		data, err := api.GetBlockData(ctx, shard)
@@ -163,6 +166,7 @@ func TestAPIClient_GetOldBlockData(t *testing.T) {
 			t.Fatal("Get block parents err:", err.Error())
 			return
 		}
+		log.Println("GOT SHARD: ", shard.Shard, shard.SeqNo)
 	}
 
 	_, err = api.GetBlockData(ctx, b)
@@ -581,10 +585,10 @@ func Test_LSErrorCase(t *testing.T) {
 func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	err := client.AddConnection(context.Background(), "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
+	err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
 	if err != nil {
 		t.Fatal(err)
 	}
