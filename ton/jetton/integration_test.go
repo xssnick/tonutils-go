@@ -26,7 +26,7 @@ var api = func() ton.APIClientWrapped {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client).WithRetry()
+	return ton.NewAPIClient(client).WithTimeout(5 * time.Second).WithRetry()
 }()
 
 func TestJettonMasterClient_GetJettonData(t *testing.T) {

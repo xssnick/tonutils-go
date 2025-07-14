@@ -48,7 +48,7 @@ var api = func() APIClientWrapped {
 		panic(err)
 	}
 
-	a := NewAPIClient(client, ProofCheckPolicySecure).WithRetry()
+	a := NewAPIClient(client, ProofCheckPolicySecure).WithTimeout(5 * time.Second).WithRetry()
 	// a.SetTrustedBlockFromConfig(cfg)
 	return a
 }()
