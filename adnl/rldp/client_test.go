@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"github.com/xssnick/raptorq"
@@ -17,7 +18,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 func init() {
@@ -38,8 +38,8 @@ func (m MockADNL) GetCloserCtx() context.Context {
 }
 
 func (m MockADNL) GetID() []byte {
-	//TODO implement me
-	panic("implement me")
+	v := sha256.Sum256([]byte("1.1.1.1:1234"))
+	return v[:]
 }
 
 func (m MockADNL) RemoteAddr() string {
@@ -303,13 +303,15 @@ func TestRLDP_handleMessage(t *testing.T) {
 			}
 			cli := NewClient(tAdnl)
 
-			cli.activeTransfers[string(tId)] = &activeTransfer{
-				id:   nil,
+			td := &activeTransfer{
+				id:   tId,
 				data: make([]byte, 10),
-				currentPart: unsafe.Pointer(&activeTransferPart{
-					index: 0,
-				}),
 			}
+			td.currentPart.Store(&activeTransferPart{
+				index: 0,
+			})
+
+			cli.activeTransfers[string(tId)] = td
 
 			err := cli.handleMessage(msgComplete)
 			if err != nil {
