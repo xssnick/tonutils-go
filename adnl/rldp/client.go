@@ -72,7 +72,7 @@ type expectedTransfer struct {
 
 type RLDP struct {
 	adnl  ADNL
-	useV2 bool
+	useV2 atomic.Int32
 
 	activateRecoverySender chan bool
 	activeRequests         map[string]*activeRequest
@@ -153,7 +153,7 @@ func NewClient(a ADNL) *RLDP {
 
 func NewClientV2(a ADNL) *RLDP {
 	c := NewClient(a)
-	c.useV2 = true
+	c.useV2.Store(1)
 	return c
 }
 
@@ -196,6 +196,13 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		isV2 = false
 	default:
 		isV2 = false
+	}
+
+	prevUseV2 := r.useV2.Load() == 1
+	if isV2 && !prevUseV2 {
+		r.useV2.Store(1)
+	} else if !isV2 && prevUseV2 {
+		r.useV2.Store(0)
 	}
 
 	switch m := msg.Data.(type) {
@@ -334,9 +341,9 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					return fmt.Errorf("failed to decode raptorq packet: %w", err)
 				}
 
-				// it may not be decoded due to unsolvable math system, it means we need more symbols
+				// it may not be decoded due to an unsolvable math system, it means we need more symbols
 				if decoded {
-					Logger("[RLDP] part", part.Part, "decoded on seqno", part.Seqno, "symbols:", fec.SymbolsCount, "decode took", time.Since(tmd).String())
+					Logger("[RLDP] v2:", isV2, "part", part.Part, "decoded on seqno", part.Seqno, "symbols:", fec.SymbolsCount, "decode took", time.Since(tmd).String())
 
 					stream.currentPart = decoderStreamPart{
 						index: stream.currentPart.index + 1,
@@ -651,6 +658,7 @@ func (r *RLDP) recoverySender() {
 					numToResend = int(sc)
 				}
 
+				isV2 := r.useV2.Load() == 1
 				seqno := atomic.LoadUint32(&part.seqno)
 				for i := 0; i < numToResend; i++ {
 					p := MessagePart{
@@ -664,12 +672,12 @@ func (r *RLDP) recoverySender() {
 					seqno++
 
 					var msgPart tl.Serializable = p
-					if r.useV2 {
+					if isV2 {
 						msgPart = MessagePartV2(p)
 					}
 
 					for {
-						if r.useV2 && !r.rateLimit.TryConsume() {
+						if !r.rateLimit.TryConsume() {
 							select {
 							case <-closerCtx.Done():
 								return
@@ -811,17 +819,18 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 
 	sc := part.feq.SymbolsCount + smb // ~3% recovery
 
+	isV2 := r.useV2.Load() == 1
 	for i := uint32(0); i < sc; i++ {
 		p.Seqno = i
 		p.Data = part.encoder.GenSymbol(i)
 
 		var msgPart tl.Serializable = p
-		if r.useV2 {
+		if isV2 {
 			msgPart = MessagePartV2(p)
 		}
 
 		for {
-			if r.useV2 && !r.rateLimit.TryConsume() {
+			if !r.rateLimit.TryConsume() {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
