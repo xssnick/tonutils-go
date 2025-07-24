@@ -41,12 +41,12 @@ type activeTransferPart struct {
 
 	lastConfirmRecvProcessed  uint32
 	lastConfirmSeqnoProcessed uint32
-	lastConfirmSeqno          uint32
 	lastConfirmAt             int64
 	lastRecoverAt             int64
 
 	nextRecoverDelay int64
 	fastSeqnoTill    uint32
+	recoveryReady    atomic.Int32
 
 	transfer *activeTransfer
 }
@@ -95,10 +95,6 @@ type RLDP struct {
 	rateLimit *TokenBucket
 	rateCtrl  *AdaptiveRateController
 
-	lastNetworkProcessAt   int64
-	lastNetworkPacketsRecv int64
-	lastNetworkBatchesNum  int64
-
 	lastReport time.Time
 }
 
@@ -145,17 +141,21 @@ func NewClient(a ADNL) *RLDP {
 		recvStreams:            map[string]*decoderStream{},
 		expectedTransfers:      map[string]*expectedTransfer{},
 		activateRecoverySender: make(chan bool, 1),
-		rateLimit:              NewTokenBucket(6000, a.RemoteAddr()),
+		rateLimit:              NewTokenBucket(10000, a.RemoteAddr()),
 	}
 
 	r.rateCtrl = NewAdaptiveRateController(r.rateLimit, AdaptiveRateOptions{
-		MinRate:             600,
-		MaxRate:             0,
-		EnableSlowStart:     true,
-		SlowStartMultiplier: 3.0,
-		TargetLoss:          0.05,
-		HighLoss:            0.18,
-		Deadband:            0.01,
+		MinRate:                     2500,
+		MaxRate:                     0,
+		EnableSlowStart:             true,
+		SlowStartMultiplier:         2.5,
+		TargetLoss:                  0.05,
+		HighLoss:                    0.25,
+		Deadband:                    0.01,
+		DecreaseFactor:              0.15,
+		MildDecreaseFactor:          0.05,
+		IncreaseFactor:              0.067,
+		IncreaseOnlyWhenTokensBelow: 0.75,
 	})
 
 	a.SetCustomMessageHandler(r.handleMessage)
@@ -569,11 +569,18 @@ func (r *RLDP) recoverySender() {
 	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
 
+	active := false
 	for {
 		select {
 		case <-closerCtx.Done():
 			return
+		case <-r.activateRecoverySender:
+			active = true
 		case <-ticker.C:
+			if !active {
+				break
+			}
+
 			if r.lastReport.Before(time.Now().Add(-10 * time.Second)) {
 				r.lastReport = time.Now()
 				r.mx.RLock()
@@ -598,14 +605,18 @@ func (r *RLDP) recoverySender() {
 				}
 
 				part := transfer.getCurrentPart()
-				if part == nil || atomic.LoadUint32(&part.seqno) < part.feq.SymbolsCount {
+				if part == nil {
 					// no parts or fast symbols not yet sent
 					continue
 				}
 
-				if ms-part.lastRecoverAt > part.nextRecoverDelay ||
-					(atomic.LoadUint32(&part.lastConfirmSeqno) >= part.feq.SymbolsCount &&
-						part.lastRecoverAt < atomic.LoadInt64(&part.lastConfirmAt)) {
+				if part.recoveryReady.Load() == 0 {
+					continue
+				}
+
+				if atomic.LoadUint32(&part.seqno) < part.fastSeqnoTill ||
+					ms-part.lastRecoverAt > part.nextRecoverDelay ||
+					part.lastRecoverAt < atomic.LoadInt64(&part.lastConfirmAt) {
 					transfersToProcess = append(transfersToProcess, part)
 				}
 			}
@@ -623,21 +634,19 @@ func (r *RLDP) recoverySender() {
 			}
 
 			if len(r.activeRequests)+len(r.activeTransfers)+len(r.expectedTransfers) == 0 {
-				// stop ticks to not consume resources
-				ticker.Stop()
+				// stop active ticks to not consume resources
+				active = false
 			}
 			r.mx.RUnlock()
 
-			sort.Slice(transfersToProcess, func(i, j int) bool { // put 0 recover to end of list
-				return transfersToProcess[i].lastRecoverAt < transfersToProcess[j].lastRecoverAt
+			sort.Slice(transfersToProcess, func(i, j int) bool {
+				// recently confirmed transfers are prioritized
+				return atomic.LoadInt64(&transfersToProcess[i].lastConfirmAt) > atomic.LoadInt64(&transfersToProcess[j].lastConfirmAt)
 			})
 
 			isV2 := r.useV2.Load() == 1
 		loop:
 			for _, part := range transfersToProcess {
-				part.lastRecoverAt = ms
-				part.nextRecoverDelay = 30 // fixed for now
-
 				numToResend := 1
 				if sc := part.feq.SymbolsCount / 300; sc > 1 { // up to 0.3% per loop
 					numToResend = int(sc)
@@ -650,7 +659,13 @@ func (r *RLDP) recoverySender() {
 					}
 				}
 
+				consumed := false
 				for i := 0; i < numToResend; i++ {
+					if !r.rateLimit.TryConsume() {
+						consumed = true
+						break
+					}
+
 					p := MessagePart{
 						TransferID: part.transfer.id,
 						FecType:    part.feq,
@@ -666,24 +681,26 @@ func (r *RLDP) recoverySender() {
 						msgPart = MessagePartV2(p)
 					}
 
-					for {
-						if !r.rateLimit.TryConsume() {
-							select {
-							case <-closerCtx.Done():
-								return
-							case <-time.After(1 * time.Millisecond):
-							}
-							continue
-						}
+					if err := r.adnl.SendCustomMessage(closerCtx, msgPart); err != nil {
+						Logger("failed to send recovery message part", p.Seqno, err.Error())
+						break loop
+					}
+				}
 
-						if err := r.adnl.SendCustomMessage(closerCtx, msgPart); err != nil {
-							Logger("failed to send recovery message part", p.Seqno, err.Error())
-							break loop
-						}
-						break
+				if atomic.LoadUint32(&part.seqno) < seqno {
+					// we sent something, so considering to be updated
+					part.lastRecoverAt = ms
+					if consumed {
+						part.nextRecoverDelay = 10
+					} else {
+						part.nextRecoverDelay = 50
 					}
 				}
 				atomic.StoreUint32(&part.seqno, seqno)
+
+				if consumed {
+					break
+				}
 			}
 
 			if len(timedOut) > 0 || len(timedOutReq) > 0 || len(timedOutExp) > 0 {
@@ -704,8 +721,6 @@ func (r *RLDP) recoverySender() {
 			timedOut = timedOut[:0]
 			timedOutReq = timedOutReq[:0]
 			timedOutExp = timedOutExp[:0]
-		case <-r.activateRecoverySender:
-			ticker.Reset(1 * time.Millisecond)
 		}
 	}
 }
@@ -826,6 +841,7 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 		}
 	}
 	atomic.StoreUint32(&part.seqno, sc)
+	part.recoveryReady.Store(1)
 
 	select {
 	case r.activateRecoverySender <- true:
