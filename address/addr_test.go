@@ -334,7 +334,7 @@ func TestAddress_Workchain(t *testing.T) {
 	}
 }
 
-func TestAddress_prepareChecksumData(t *testing.T) {
+func TestAddress_Bytes(t *testing.T) {
 	type fields struct {
 		flags     flags
 		workchain int32
@@ -357,8 +357,8 @@ func TestAddress_prepareChecksumData(t *testing.T) {
 				workchain: tt.fields.workchain,
 				data:      tt.fields.data,
 			}
-			if got := a.prepareChecksumData(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("prepareChecksumData() = %v, want %v", got, tt.want)
+			if got := a.Bytes(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Bytes() = %v, want %v", got, tt.want)
 			}
 		})
 	}

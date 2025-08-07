@@ -230,7 +230,10 @@ func ParseAddr(addr string) (*Address, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseBytes(data)
+}
 
+func ParseBytes(data []byte) (*Address, error) {
 	if len(data) != 36 {
 		return nil, errors.New("incorrect address data")
 	}
@@ -267,10 +270,10 @@ func ParseRawAddr(addr string) (*Address, error) {
 }
 
 func (a *Address) Checksum() uint16 {
-	return crc16.Checksum(a.prepareChecksumData(), crc16.MakeTable(crc16.CRC16_XMODEM))
+	return crc16.Checksum(a.Bytes(), crc16.MakeTable(crc16.CRC16_XMODEM))
 }
 
-func (a *Address) prepareChecksumData() []byte {
+func (a *Address) Bytes() []byte {
 	var data [34]byte
 	data[0] = a.FlagsToByte()
 	data[1] = byte(a.workchain)
