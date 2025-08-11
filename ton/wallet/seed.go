@@ -7,9 +7,10 @@ import (
 	"crypto/sha512"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/ton/wallet/hdwallet"
 	"math/big"
 	"strings"
+
+	"github.com/xssnick/tonutils-go/ton/wallet/hdwallet"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -20,7 +21,65 @@ const (
 	_BasicSalt    = "TON seed version"
 	_PasswordSalt = "TON fast seed version"
 	_Path         = "m/44'/607'/0'"
+	_LedgerPath   = "m/44'/607'/0'/0'/0'/0'"
 )
+
+// SeedOption represents a functional option for seed operations.
+type SeedOption func(*seedConfig)
+
+// seedConfig holds the configuration for seed operations.
+type seedConfig struct {
+	path     string
+	isBIP39  bool
+	password string
+}
+
+// defaultSeedConfig returns the default configuration
+func defaultSeedConfig() *seedConfig {
+	return &seedConfig{
+		path:     _Path,
+		isBIP39:  false,
+		password: "",
+	}
+}
+
+// WithLedger configures the seed to use BIP 39 and a Ledger compatible path.
+func WithLedger() SeedOption {
+	return func(c *seedConfig) {
+		c.isBIP39 = true
+		c.path = _LedgerPath
+	}
+}
+
+// WithCustomPath configures the seed to use a custom derivation path.
+func WithCustomPath(path string) SeedOption {
+	return func(c *seedConfig) {
+		c.path = path
+	}
+}
+
+// WithPassword configures the seed to use a specific password.
+func WithPassword(password string) SeedOption {
+	return func(c *seedConfig) {
+		c.password = password
+	}
+}
+
+// WithBIP39 enables BIP39 compatibility.
+func WithBIP39(enabled bool) SeedOption {
+	return func(c *seedConfig) {
+		c.isBIP39 = enabled
+	}
+}
+
+// applySeedOptions applies the functional options to the configuration.
+func applySeedOptions(opts ...SeedOption) *seedConfig {
+	config := defaultSeedConfig()
+	for _, opt := range opts {
+		opt(config)
+	}
+	return config
+}
 
 func NewSeed() []string {
 	return NewSeedWithPassword("")
@@ -63,12 +122,19 @@ func NewSeedWithPassword(password string) []string {
 
 type VersionConfig any
 
+// Deprecated: Use FromSeedWithOptions instead.
+//
+// Example: FromSeedWithOptions(api, seed, version)
 func FromSeed(api TonAPI, seed []string, version VersionConfig, isBIP39 ...bool) (*Wallet, error) {
 	return FromSeedWithPassword(api, seed, "", version, isBIP39...)
 }
 
+// Decprecated: Use FromSeedWithOptions instead.
+//
+// Example: FromSeedWithOptions(api, seed, version, WithPassword("<secret password>"))
 func FromSeedWithPassword(api TonAPI, seed []string, password string, version VersionConfig, isBIP39 ...bool) (*Wallet, error) {
-	k, err := SeedToPrivateKey(seed, password, len(isBIP39) > 0 && isBIP39[0])
+	useBIP39 := len(isBIP39) > 0 && isBIP39[0]
+	k, err := SeedToPrivateKeyWithOptions(seed, WithPassword(password), WithBIP39(useBIP39))
 	if err != nil {
 		return nil, err
 	}
@@ -76,10 +142,29 @@ func FromSeedWithPassword(api TonAPI, seed []string, password string, version Ve
 	return FromPrivateKey(api, k, version)
 }
 
-// SeedToPrivateKey convert seed to private key,
-// by default ton seeds are not compatible with bip39,
-// but you can enable compatibility with isBIP39 = true
+// Deprecated: Use SeedToPrivateKeyWithOptions instead.
+//
+// Examples:
+//   - SeedToPrivateKeyWithOptions(seed)
+//   - SeedToPrivateKeyWithOptions(seed, WithPassword("<password>"))
+//   - SeedToPrivateKeyWithOptions(seed, WithBIP39(true))
 func SeedToPrivateKey(seed []string, password string, isBIP39 bool) (ed25519.PrivateKey, error) {
+	return SeedToPrivateKeyWithOptions(seed, WithPassword(password), WithBIP39(isBIP39))
+}
+
+// FromSeedWithOptions creates a wallet from seed with functional options.
+func FromSeedWithOptions(api TonAPI, seed []string, version VersionConfig, opts ...SeedOption) (*Wallet, error) {
+	k, err := SeedToPrivateKeyWithOptions(seed, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return FromPrivateKey(api, k, version)
+}
+
+// SeedToPrivateKeyWithOptions converts seed to private key with functional options.
+// Functional options can be used to set different options.
+func SeedToPrivateKeyWithOptions(seed []string, opts ...SeedOption) (ed25519.PrivateKey, error) {
 	if len(seed) < 12 {
 		return nil, fmt.Errorf("seed should have at least 12 words")
 	}
@@ -90,17 +175,19 @@ func SeedToPrivateKey(seed []string, password string, isBIP39 bool) (ed25519.Pri
 		}
 	}
 
+	config := applySeedOptions(opts...)
+
 	seedBytes := []byte(strings.Join(seed, " "))
 	mac := hmac.New(sha512.New, seedBytes)
-	mac.Write([]byte(password))
+	mac.Write([]byte(config.password))
 	hash := mac.Sum(nil)
 
-	if len(password) > 0 {
+	if len(config.password) > 0 {
 		p := pbkdf2.Key(hash, []byte(_PasswordSalt), 1, 1, sha512.New)
 		if p[0] != 1 {
-			if isBIP39 {
-				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"+password), 2048, 64, sha512.New)
-				dk, err := hdwallet.Derived(_Path, pKey)
+			if config.isBIP39 {
+				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"+config.password), 2048, 64, sha512.New)
+				dk, err := hdwallet.Derived(config.path, pKey)
 				if err != nil {
 					return nil, err
 				}
@@ -111,9 +198,9 @@ func SeedToPrivateKey(seed []string, password string, isBIP39 bool) (ed25519.Pri
 	} else {
 		p := pbkdf2.Key(hash, []byte(_BasicSalt), _Iterations/256, 1, sha512.New)
 		if p[0] != 0 {
-			if isBIP39 {
+			if config.isBIP39 {
 				pKey := pbkdf2.Key(seedBytes, []byte("mnemonic"), 2048, 64, sha512.New)
-				dk, err := hdwallet.Derived(_Path, pKey)
+				dk, err := hdwallet.Derived(config.path, pKey)
 				if err != nil {
 					return nil, err
 				}
