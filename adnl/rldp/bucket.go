@@ -26,8 +26,8 @@ func NewTokenBucket(rate int64, peerName string) *TokenBucket {
 }
 
 func (tb *TokenBucket) SetRate(pps int64) {
-	if pps < 50 {
-		pps = 50
+	if pps < 128 {
+		pps = 128
 	} else if pps > 5000000 {
 		pps = 5000000
 	}

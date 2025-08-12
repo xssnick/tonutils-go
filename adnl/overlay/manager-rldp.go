@@ -12,6 +12,7 @@ import (
 
 type RLDP interface {
 	GetADNL() rldp.ADNL
+	GetRateInfo() (left int64, total int64)
 	Close()
 	DoQuery(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error
 	DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error

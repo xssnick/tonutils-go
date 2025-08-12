@@ -1599,3 +1599,32 @@ func TestCoins_MustDivRat(t *testing.T) {
 		})
 	}
 }
+
+func TestCoins_NegStr(t *testing.T) {
+	c, err := FromDecimal("-1.22", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.String() != "-1.22" {
+		t.Fatalf("NegStr() got = %s, want %s", c.String(), "-1.22")
+	}
+
+	c, err = FromDecimal("-0.0011", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.String() != "-0.0011" {
+		t.Fatalf("NegStr() got = %s, want %s", c.String(), "-0.0011")
+	}
+
+	c, err = FromDecimal("-0.01111", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.String() != "-0.01" {
+		t.Fatalf("NegStr() got = %s, want %s", c.String(), "-0.01")
+	}
+}

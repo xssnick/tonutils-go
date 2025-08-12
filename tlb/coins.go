@@ -33,10 +33,17 @@ func (g Coins) String() string {
 		return "0"
 	}
 
-	a := g.val.String()
+	// add sign if negative
+	sign := ""
+	val := g.val
+	if val.Sign() < 0 {
+		sign = "-"
+		val = new(big.Int).Abs(val)
+	}
+
+	a := val.String()
 	if a == "0" {
-		// process 0 faster and simpler
-		return a
+		return "0"
 	}
 
 	splitter := len(a) - g.decimals
@@ -59,7 +66,7 @@ func (g Coins) String() string {
 		}
 	}
 
-	return a
+	return sign + a
 }
 
 // Deprecated: use Nano
