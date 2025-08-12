@@ -689,7 +689,7 @@ func (a *ADNL) send(buf []byte) error {
 		// not close on io timeout because it can be triggered by network overload
 		if !strings.Contains(err.Error(), "i/o timeout") {
 			// it should trigger disconnect handler in read routine
-			a.writer.Close()
+			a.Close()
 		}
 		return err
 	} else if n != len(buf) {

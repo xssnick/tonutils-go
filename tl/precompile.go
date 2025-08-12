@@ -29,6 +29,7 @@ const (
 	_ExecuteTypeLong
 	_ExecuteTypeBool
 	_ExecuteTypeVector
+	_ExecuteTypeIP6
 )
 
 const (
@@ -196,7 +197,11 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 					if tags[0] == "int256" {
 						info.typ = _ExecuteTypeInt256
 					} else if tags[0] == "int128" {
-						info.typ = _ExecuteTypeInt128
+						if f.Type == reflect.TypeOf(net.IP{}) {
+							info.typ = _ExecuteTypeIP6
+						} else {
+							info.typ = _ExecuteTypeInt128
+						}
 					} else {
 						info.typ = _ExecuteTypeBytes
 					}
@@ -567,6 +572,17 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 			bts[0], bts[1], bts[2], bts[3] = buf[3], buf[2], buf[1], buf[0]
 			*(*[]byte)(ptr) = bts
 			buf = buf[4:]
+		case _ExecuteTypeIP6:
+			if len(buf) < 16 {
+				return nil, fmt.Errorf("not enough bytes to parse ip v6 field %s", field.String())
+			}
+
+			bts := make([]byte, 16)
+			for i := 0; i < 16; i++ {
+				bts[i] = buf[15-i]
+			}
+			*(*[]byte)(ptr) = bts
+			buf = buf[16:]
 		case _ExecuteTypeSingleCell:
 			var bts []byte
 			if bts, buf, err = FromBytes(buf); err != nil {
@@ -835,6 +851,21 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 				}
 			} else if len(ipBytes) == 0 {
 				buf.Write(make([]byte, 4))
+			} else {
+				return fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
+			}
+		case _ExecuteTypeIP6:
+			ipBytes := *(*net.IP)(ptr)
+			if len(ipBytes) == net.IPv4len {
+				ipBytes = ipBytes.To16()
+				if ipBytes == nil {
+					return fmt.Errorf("invalid ip v6 in field %s", field.String())
+				}
+			}
+			if len(ipBytes) == net.IPv6len {
+				buf.Write(ipBytes)
+			} else if len(ipBytes) == 0 {
+				buf.Write(make([]byte, 16))
 			} else {
 				return fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
 			}

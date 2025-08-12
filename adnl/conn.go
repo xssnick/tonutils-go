@@ -25,10 +25,12 @@ func newWriter(writer func(p []byte, deadline time.Time) (err error), close func
 	}
 }
 
+var ErrPeerConnClosed = errors.New("peer connection was closed")
+
 func (c *clientConn) Write(b []byte, deadline time.Time) (n int, err error) {
 	select {
 	case <-c.closer:
-		return 0, fmt.Errorf("connection was closed")
+		return 0, ErrPeerConnClosed
 	default:
 	}
 
