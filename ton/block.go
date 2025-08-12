@@ -324,7 +324,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, 
 	master.mx.Lock()
 	defer master.mx.Unlock()
 
-	if time.Now().After(master.updatedAt.Add(5 * time.Second)) {
+	if time.Now().After(master.updatedAt.Add(1 * time.Second)) {
 		ctx = c.client.StickyContext(ctx)
 
 		var block *BlockIDExt
@@ -409,6 +409,20 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int6
 
 // GetBlockData - get block detailed information
 func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error) {
+	cl, err := c.GetBlockDataAsCell(ctx, block)
+	if err != nil {
+		return nil, err
+	}
+
+	var bData tlb.Block
+	if err = tlb.LoadFromCell(&bData, cl.BeginParse()); err != nil {
+		return nil, fmt.Errorf("failed to parse block data: %w", err)
+	}
+	return &bData, nil
+}
+
+// GetBlockDataAsCell - get block detailed information as a cell
+func (c *APIClient) GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (*cell.Cell, error) {
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, GetBlockData{ID: block}, &resp)
 	if err != nil {
@@ -426,18 +440,14 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 			return nil, fmt.Errorf("incorrect block")
 		}
 
-		var bData tlb.Block
-		if err = tlb.LoadFromCell(&bData, pl.BeginParse()); err != nil {
-			return nil, fmt.Errorf("failed to parse block data: %w", err)
-		}
-		return &bData, nil
+		return pl, nil
 	case LSError:
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
 }
 
-// GetBlockTransactionsV2 - list of block transactions
+// GetBlockTransactionsV2 - a list of block transactions
 func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error) {
 	withAfter := uint32(0)
 	var afterTx *TransactionID3

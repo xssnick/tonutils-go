@@ -560,6 +560,10 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 	return nil
 }
 
+func (r *RLDP) GetRateInfo() (left int64, total int64) {
+	return r.rateLimit.GetTokensLeft(), r.rateLimit.GetRate()
+}
+
 func (r *RLDP) recoverySender() {
 	transfersToProcess := make([]*activeTransferPart, 0, 128)
 	timedOut := make([]*activeTransfer, 0, 32)
