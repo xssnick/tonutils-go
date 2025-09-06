@@ -51,15 +51,15 @@ func TestNewSeedWithPassword(t *testing.T) {
 
 func TestBIP39Create(t *testing.T) {
 	seed := NewSeed()
-	wallet, err := FromSeed(nil, seed, ConfigV5R1Final{
-		NetworkGlobalID: TestnetGlobalID,
+	wallet, err := FromSeed(api, seed, ConfigV5R1Final{
+		NetworkGlobalID: MainnetGlobalID,
 		Workchain:       0,
 	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := wallet.WalletAddress()
-	addr.SetTestnetOnly(true)
+	addr.SetTestnetOnly(false)
 
 	// only test
 	fmt.Println("ton wallet seed:", seed)
