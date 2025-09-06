@@ -83,7 +83,7 @@ func TestSetBit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setBit(tt.args.n, tt.args.pos)
 			if *tt.args.n == 0 {
-				t.Errorf("ClearBit() = %v, n = %v", tt.name, *tt.args.n)
+				t.Errorf("SetBit() = %v, n = %v", tt.name, *tt.args.n)
 			}
 		})
 	}
