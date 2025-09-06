@@ -59,19 +59,11 @@ func TestBIP39Create(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := wallet.WalletAddress()
-<<<<<<< HEAD
 	addr.SetTestnetOnly(true)
 
 	// only test
 	fmt.Println("ton wallet seed:", seed)
 	fmt.Println("ton wallet testnet Address:", addr.String())
-=======
-
-	// only test
-	fmt.Println("ton wallet seed:", seed)
-	fmt.Println("ton wallet mainnet Address:", addr.Copy().Testnet(false))
-	fmt.Println("ton wallet testnet Address:", addr.Copy().Testnet(true))
->>>>>>> 2820b25d042e8ccaaf05a86ba95b9b5302fa44dd
 	fmt.Println("ton wallet privateKey:", hex.EncodeToString(wallet.PrivateKey()))
 	fmt.Println("ton wallet publicKey:", hex.EncodeToString(wallet.pubKey))
 }
