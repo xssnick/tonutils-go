@@ -1,6 +1,8 @@
 package wallet
 
 import (
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -45,6 +47,25 @@ func TestNewSeedWithPassword(t *testing.T) {
 	if err == nil {
 		t.Fatal("should be invalid 5", seedNoPass)
 	}
+}
+
+func TestBIP39Create(t *testing.T) {
+	seed := NewSeed()
+	wallet, err := FromSeed(nil, seed, ConfigV5R1Final{
+		NetworkGlobalID: TestnetGlobalID,
+		Workchain:       0,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := wallet.WalletAddress()
+
+	// only test
+	fmt.Println("ton wallet seed:", seed)
+	fmt.Println("ton wallet mainnet Address:", addr.Copy().Testnet(false))
+	fmt.Println("ton wallet testnet Address:", addr.Copy().Testnet(true))
+	fmt.Println("ton wallet privateKey:", hex.EncodeToString(wallet.PrivateKey()))
+	fmt.Println("ton wallet publicKey:", hex.EncodeToString(wallet.pubKey))
 }
 
 func TestBIP39Load(t *testing.T) {
