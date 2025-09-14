@@ -375,15 +375,14 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 					if uint64(len(stream.buf)) >= stream.totalSize {
 						stream.finishedAt = &tmd
+						stream.currentPart.decoder = nil
 
 						r.mx.Lock()
-						if len(r.recvStreams) > 100 {
-							for sID, s := range r.recvStreams {
-								// remove streams that was finished more than 30 sec ago or when it was no messages for more than 60 seconds.
-								if s.lastMessageAt.Add(60*time.Second).Before(tm) ||
-									(s.finishedAt != nil && s.finishedAt.Add(30*time.Second).Before(tm)) {
-									delete(r.recvStreams, sID)
-								}
+						for sID, s := range r.recvStreams {
+							// remove streams that was finished more than 15 sec ago or when it was no messages for more than 30 seconds.
+							if s.lastMessageAt.Add(30*time.Second).Before(tm) ||
+								(s.finishedAt != nil && s.finishedAt.Add(15*time.Second).Before(tm)) {
+								delete(r.recvStreams, sID)
 							}
 						}
 						r.mx.Unlock()
@@ -394,8 +393,10 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 						var res any
 						if _, err = tl.Parse(&res, stream.buf, true); err != nil {
+							stream.buf = nil
 							return fmt.Errorf("failed to parse custom message: %w", err)
 						}
+						stream.buf = nil
 
 						Logger("[RLDP] stream finished and parsed, processing transfer data", hex.EncodeToString(part.TransferID))
 
