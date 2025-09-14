@@ -7,14 +7,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/raptorq"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/raptorq"
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 type ADNL interface {
@@ -121,7 +122,9 @@ type decoderStream struct {
 	messages chan *MessagePart
 
 	totalSize uint64
-	buf       []byte
+
+	parts     [][]byte
+	partsSize uint64
 
 	mx sync.Mutex
 }
@@ -259,7 +262,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					index: 0,
 				},
 				totalSize: m.TotalSize,
-				buf:       make([]byte, 0, m.TotalSize),
 			}
 
 			r.mx.Lock()
@@ -361,7 +363,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					stream.currentPart = decoderStreamPart{
 						index: stream.currentPart.index + 1,
 					}
-					stream.buf = append(stream.buf, data...)
+
+					if len(data) > 0 {
+						stream.parts = append(stream.parts, data)
+						stream.partsSize += uint64(len(data))
+					}
 
 					var complete tl.Serializable = Complete{
 						TransferID: part.TransferID,
@@ -373,7 +379,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					}
 					_ = r.adnl.SendCustomMessage(context.Background(), complete)
 
-					if uint64(len(stream.buf)) >= stream.totalSize {
+					if stream.partsSize >= stream.totalSize {
 						stream.finishedAt = &tmd
 						stream.currentPart.decoder = nil
 
@@ -387,16 +393,21 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 						}
 						r.mx.Unlock()
 
-						if uint64(len(stream.buf)) > stream.totalSize {
-							return fmt.Errorf("received more data than expected, expected %d, got %d", stream.totalSize, len(stream.buf))
+						if stream.partsSize > stream.totalSize {
+							return fmt.Errorf("received more data than expected, expected %d, got %d", stream.totalSize, stream.partsSize)
 						}
+						buf := make([]byte, stream.totalSize)
+						off := 0
+						for _, p := range stream.parts {
+							off += copy(buf[off:], p)
+						}
+						stream.parts = nil
+						stream.partsSize = 0
 
 						var res any
-						if _, err = tl.Parse(&res, stream.buf, true); err != nil {
-							stream.buf = nil
+						if _, err = tl.Parse(&res, buf, true); err != nil {
 							return fmt.Errorf("failed to parse custom message: %w", err)
 						}
-						stream.buf = nil
 
 						Logger("[RLDP] stream finished and parsed, processing transfer data", hex.EncodeToString(part.TransferID))
 
