@@ -162,7 +162,7 @@ func FromSeedWithOptions(api TonAPI, seed []string, version VersionConfig, opts 
 	return FromPrivateKey(api, k, version)
 }
 
-// SeedToPrivateKeyWithOptions converts seed to private key with functional options.
+// SeedToPrivateKeyWithOptions converts seed to a private key with functional options.
 // Functional options can be used to set different options.
 func SeedToPrivateKeyWithOptions(seed []string, opts ...SeedOption) (ed25519.PrivateKey, error) {
 	if len(seed) < 12 {

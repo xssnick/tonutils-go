@@ -234,7 +234,7 @@ func (g Coins) MarshalJSON() ([]byte, error) {
 
 func (g *Coins) UnmarshalJSON(data []byte) error {
 	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
-		return fmt.Errorf("invalid data")
+		return fmt.Errorf("invalid coins data")
 	}
 
 	data = data[1 : len(data)-1]
@@ -249,9 +249,9 @@ func (g *Coins) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (g *Coins) Compare(coins *Coins) int {
+func (g Coins) Compare(coins Coins) int {
 	if g.decimals != coins.decimals {
-		panic("invalid comparsion")
+		panic("invalid comparison")
 	}
 
 	return g.Nano().Cmp(coins.Nano())
@@ -259,7 +259,7 @@ func (g *Coins) Compare(coins *Coins) int {
 
 // MustAdd adds the provided coins to the current coins and returns the result.
 // It panics if the operation fails (e.g., due to decimal mismatch or overflow).
-func (g *Coins) MustAdd(coins *Coins) *Coins {
+func (g Coins) MustAdd(coins Coins) Coins {
 	result, err := g.Add(coins)
 	if err != nil {
 		panic(err)
@@ -271,17 +271,17 @@ func (g *Coins) MustAdd(coins *Coins) *Coins {
 // Add adds the provided coins to the current coins and returns the result.
 // Returns an error if the coins have different decimal places or if the result
 // would overflow the maximum allowed value.
-func (g *Coins) Add(coins *Coins) (*Coins, error) {
+func (g Coins) Add(coins Coins) (Coins, error) {
 	if g.decimals != coins.decimals {
-		return &Coins{}, errDecimalMismatch
+		return Coins{}, errDecimalMismatch
 	}
 
-	result := &Coins{
+	result := Coins{
 		decimals: g.decimals,
 		val:      new(big.Int).Add(g.Nano(), coins.Nano()),
 	}
 	if tooBigForVarUint16(result.val) {
-		return &Coins{}, errTooBigForVarUint16
+		return Coins{}, errTooBigForVarUint16
 	}
 
 	return result, nil
@@ -289,7 +289,7 @@ func (g *Coins) Add(coins *Coins) (*Coins, error) {
 
 // MustSub subtracts the provided coins from the current coins and returns the result.
 // It panics if the operation fails (e.g., due to decimal mismatch or overflow).
-func (g *Coins) MustSub(coins *Coins) *Coins {
+func (g Coins) MustSub(coins Coins) Coins {
 	result, err := g.Sub(coins)
 	if err != nil {
 		panic(err)
@@ -301,17 +301,17 @@ func (g *Coins) MustSub(coins *Coins) *Coins {
 // Sub subtracts the provided coins from the current coins and returns the result.
 // Returns an error if the coins have different decimal places or if the result
 // would overflow the maximum allowed value.
-func (g *Coins) Sub(coins *Coins) (*Coins, error) {
+func (g Coins) Sub(coins Coins) (Coins, error) {
 	if g.decimals != coins.decimals {
-		return &Coins{}, errDecimalMismatch
+		return Coins{}, errDecimalMismatch
 	}
 
-	result := &Coins{
+	result := Coins{
 		decimals: g.decimals,
 		val:      new(big.Int).Sub(g.Nano(), coins.Nano()),
 	}
 	if tooBigForVarUint16(result.val) {
-		return &Coins{}, errTooBigForVarUint16
+		return Coins{}, errTooBigForVarUint16
 	}
 
 	return result, nil
@@ -319,7 +319,7 @@ func (g *Coins) Sub(coins *Coins) (*Coins, error) {
 
 // MustMul multiplies the current coins by the provided big.Int and returns the result.
 // It panics if the operation fails (e.g., due to overflow).
-func (g *Coins) MustMul(x *big.Int) *Coins {
+func (g Coins) MustMul(x *big.Int) Coins {
 	result, err := g.Mul(x)
 	if err != nil {
 		panic(err)
@@ -330,13 +330,13 @@ func (g *Coins) MustMul(x *big.Int) *Coins {
 
 // Mul multiplies the current coins by the provided big.Int and returns the result.
 // Returns an error if the result would overflow the maximum allowed value.
-func (g *Coins) Mul(x *big.Int) (*Coins, error) {
-	result := &Coins{
+func (g Coins) Mul(x *big.Int) (Coins, error) {
+	result := Coins{
 		decimals: g.decimals,
 		val:      new(big.Int).Mul(g.val, x),
 	}
 	if tooBigForVarUint16(result.val) {
-		return &Coins{}, errTooBigForVarUint16
+		return Coins{}, errTooBigForVarUint16
 	}
 
 	return result, nil
@@ -344,7 +344,7 @@ func (g *Coins) Mul(x *big.Int) (*Coins, error) {
 
 // MustMulRat multiplies the current coins by the provided big.Rat and returns the result.
 // It panics if the operation fails (e.g., due to division by zero or overflow).
-func (g *Coins) MustMulRat(r *big.Rat) *Coins {
+func (g Coins) MustMulRat(r *big.Rat) Coins {
 	result, err := g.MulRat(r)
 	if err != nil {
 		panic(err)
@@ -355,13 +355,13 @@ func (g *Coins) MustMulRat(r *big.Rat) *Coins {
 
 // MulRat multiplies the current coins by the provided big.Rat and returns the result.
 // Returns an error if the denominator is zero or if the result would overflow the maximum allowed value.
-func (g *Coins) MulRat(r *big.Rat) (*Coins, error) {
+func (g Coins) MulRat(r *big.Rat) (Coins, error) {
 	// Get numerator and denominator
 	num := r.Num()
 	den := r.Denom()
 
 	if den.Sign() == 0 {
-		return &Coins{}, errDivisionByZero
+		return Coins{}, errDivisionByZero
 	}
 
 	// Calculate new nano value: (g.val * num) / den
@@ -370,10 +370,10 @@ func (g *Coins) MulRat(r *big.Rat) (*Coins, error) {
 		den,
 	)
 	if tooBigForVarUint16(newVal) {
-		return &Coins{}, errTooBigForVarUint16
+		return Coins{}, errTooBigForVarUint16
 	}
 
-	return &Coins{
+	return Coins{
 		decimals: g.decimals,
 		val:      newVal,
 	}, nil
@@ -381,7 +381,7 @@ func (g *Coins) MulRat(r *big.Rat) (*Coins, error) {
 
 // MustDiv divides the current coins by the provided big.Int and returns the result.
 // It panics if the operation fails (e.g., due to division by zero or overflow).
-func (g *Coins) MustDiv(x *big.Int) *Coins {
+func (g Coins) MustDiv(x *big.Int) Coins {
 	result, err := g.Div(x)
 	if err != nil {
 		panic(err)
@@ -392,17 +392,17 @@ func (g *Coins) MustDiv(x *big.Int) *Coins {
 
 // Div divides the current coins by the provided big.Int and returns the result.
 // Returns an error if the divisor is zero or if the result would overflow the maximum allowed value.
-func (g *Coins) Div(x *big.Int) (*Coins, error) {
+func (g Coins) Div(x *big.Int) (Coins, error) {
 	if x.Sign() == 0 {
-		return &Coins{}, errDivisionByZero
+		return Coins{}, errDivisionByZero
 	}
 
-	result := &Coins{
+	result := Coins{
 		decimals: g.decimals,
 		val:      new(big.Int).Div(g.Nano(), x),
 	}
 	if tooBigForVarUint16(result.val) {
-		return &Coins{}, errTooBigForVarUint16
+		return Coins{}, errTooBigForVarUint16
 	}
 
 	return result, nil
@@ -410,7 +410,7 @@ func (g *Coins) Div(x *big.Int) (*Coins, error) {
 
 // MustDivRat divides the current coins by the provided big.Rat and returns the result.
 // It panics if the operation fails (e.g., due to division by zero or overflow).
-func (g *Coins) MustDivRat(r *big.Rat) *Coins {
+func (g Coins) MustDivRat(r *big.Rat) Coins {
 	result, err := g.DivRat(r)
 	if err != nil {
 		panic(err)
@@ -422,13 +422,13 @@ func (g *Coins) MustDivRat(r *big.Rat) *Coins {
 // DivRat divides the current coins by the provided big.Rat and returns the result.
 // This is equivalent to multiplying by the reciprocal of the rational number.
 // Returns an error if the rational has zero numerator or denominator, or if the result would overflow.
-func (g *Coins) DivRat(r *big.Rat) (*Coins, error) {
+func (g Coins) DivRat(r *big.Rat) (Coins, error) {
 	// Get numerator and denominator
 	num := r.Num()
 	den := r.Denom()
 
 	if num.Sign() == 0 || den.Sign() == 0 {
-		return &Coins{}, errDivisionByZero
+		return Coins{}, errDivisionByZero
 	}
 
 	// Calculate new nano value: (g.val * den) / num
@@ -437,10 +437,10 @@ func (g *Coins) DivRat(r *big.Rat) (*Coins, error) {
 		num,
 	)
 	if tooBigForVarUint16(newVal) {
-		return &Coins{}, errTooBigForVarUint16
+		return Coins{}, errTooBigForVarUint16
 	}
 
-	return &Coins{
+	return Coins{
 		decimals: g.decimals,
 		val:      newVal,
 	}, nil
@@ -448,8 +448,8 @@ func (g *Coins) DivRat(r *big.Rat) (*Coins, error) {
 
 // Neg returns a new Coins value representing the negation of the original value.
 // The number of decimals remains the same.
-func (g *Coins) Neg() *Coins {
-	result := &Coins{
+func (g Coins) Neg() Coins {
+	result := Coins{
 		decimals: g.decimals,
 		val:      new(big.Int).Neg(g.Nano()),
 	}
@@ -458,8 +458,8 @@ func (g *Coins) Neg() *Coins {
 
 // Abs returns a new Coins value representing the absolute value of the original value.
 // The number of decimals remains the same.
-func (g *Coins) Abs() *Coins {
-	return &Coins{
+func (g Coins) Abs() Coins {
+	return Coins{
 		decimals: g.decimals,
 		val:      new(big.Int).Abs(g.Nano()),
 	}
@@ -467,49 +467,49 @@ func (g *Coins) Abs() *Coins {
 
 // GreaterThan returns true if the current coins amount is greater than the
 // given coins amount
-func (g *Coins) GreaterThan(coins *Coins) bool {
+func (g Coins) GreaterThan(coins Coins) bool {
 	return g.Compare(coins) > 0
 }
 
 // GreaterOrEqual returns true if the current coins amount is greater than or
 // equal to the given coins amount
-func (g *Coins) GreaterOrEqual(coins *Coins) bool {
+func (g Coins) GreaterOrEqual(coins Coins) bool {
 	return g.Compare(coins) >= 0
 }
 
 // LessThan returns true if the current coins amount is less than the given coins
 // amount
-func (g *Coins) LessThan(coins *Coins) bool {
+func (g Coins) LessThan(coins Coins) bool {
 	return g.Compare(coins) < 0
 }
 
 // LessOrEqual returns true if the current coins amount is less than or equal to
 // the given coins amount
-func (g *Coins) LessOrEqual(coins *Coins) bool {
+func (g Coins) LessOrEqual(coins Coins) bool {
 	return g.Compare(coins) <= 0
 }
 
 // Equals returns true if the current coins amount is equal to the given coins
 // amount
-func (g *Coins) Equals(coins *Coins) bool {
+func (g Coins) Equals(coins Coins) bool {
 	return g.Compare(coins) == 0
 }
 
 // IsZero returns true if the coins amount is zero
-func (g *Coins) IsZero() bool {
+func (g Coins) IsZero() bool {
 	return g.Nano().Sign() == 0
 }
 
 // IsPositive returns true if the coins amount is greater than zero
-func (g *Coins) IsPositive() bool {
+func (g Coins) IsPositive() bool {
 	return g.Nano().Sign() > 0
 }
 
 // IsNegative returns true if the coins amount is less than zero
-func (g *Coins) IsNegative() bool {
+func (g Coins) IsNegative() bool {
 	return g.Nano().Sign() < 0
 }
 
-func (g *Coins) Decimals() int {
+func (g Coins) Decimals() int {
 	return g.decimals
 }
