@@ -12,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
+	"maps"
 	"reflect"
 	"sync"
 	"time"
@@ -88,9 +89,7 @@ func (a *ADNLOverlayWrapper) SetAuthorizedKeys(keysWithMaxLen map[string]uint32)
 
 	// reset and copy
 	a.authorizedKeys = map[string]uint32{}
-	for k, v := range keysWithMaxLen {
-		a.authorizedKeys[k] = v
-	}
+	maps.Copy(a.authorizedKeys, keysWithMaxLen)
 }
 
 func (a *ADNLWrapper) UnregisterOverlay(id []byte) {
