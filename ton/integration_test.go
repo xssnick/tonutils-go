@@ -111,7 +111,7 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 			t.Fatal("Get shard block data err:", err.Error())
 			return
 		}
-		_, err = data.BlockInfo.GetParentBlocks()
+		_, err = GetParentBlocks(&data.BlockInfo)
 		if err != nil {
 			t.Fatal("Get block parents err:", err.Error())
 			return
@@ -174,7 +174,7 @@ func TestAPIClient_GetOldBlockData(t *testing.T) {
 			t.Fatal("Get shard block data err:", err.Error())
 			return
 		}
-		_, err = data.BlockInfo.GetParentBlocks()
+		_, err = GetParentBlocks(&data.BlockInfo)
 		if err != nil {
 			t.Fatal("Get block parents err:", err.Error())
 			return

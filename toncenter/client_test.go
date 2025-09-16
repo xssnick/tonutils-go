@@ -17,7 +17,7 @@ import (
 
 var cli = New("https://toncenter.com",
 	WithTimeout(20*time.Second),
-	WithRateLimit(0.6),
+	WithRateLimit(0.5),
 )
 
 func TestTestnetEC(t *testing.T) {
