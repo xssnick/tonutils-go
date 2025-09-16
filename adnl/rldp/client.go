@@ -7,14 +7,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/raptorq"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/raptorq"
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 type ADNL interface {
@@ -121,7 +122,9 @@ type decoderStream struct {
 	messages chan *MessagePart
 
 	totalSize uint64
-	buf       []byte
+
+	parts     [][]byte
+	partsSize uint64
 
 	mx sync.Mutex
 }
@@ -146,7 +149,7 @@ func NewClient(a ADNL) *RLDP {
 
 	r.rateCtrl = NewAdaptiveRateController(r.rateLimit, AdaptiveRateOptions{
 		MinRate:                     2500,
-		MaxRate:                     0,
+		MaxRate:                     60000,
 		EnableSlowStart:             true,
 		SlowStartMultiplier:         2.5,
 		TargetLoss:                  0.05,
@@ -259,7 +262,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					index: 0,
 				},
 				totalSize: m.TotalSize,
-				buf:       make([]byte, 0, m.TotalSize),
 			}
 
 			r.mx.Lock()
@@ -361,7 +363,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					stream.currentPart = decoderStreamPart{
 						index: stream.currentPart.index + 1,
 					}
-					stream.buf = append(stream.buf, data...)
+
+					if len(data) > 0 {
+						stream.parts = append(stream.parts, data)
+						stream.partsSize += uint64(len(data))
+					}
 
 					var complete tl.Serializable = Complete{
 						TransferID: part.TransferID,
@@ -373,27 +379,33 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					}
 					_ = r.adnl.SendCustomMessage(context.Background(), complete)
 
-					if uint64(len(stream.buf)) >= stream.totalSize {
+					if stream.partsSize >= stream.totalSize {
 						stream.finishedAt = &tmd
+						stream.currentPart.decoder = nil
 
 						r.mx.Lock()
-						if len(r.recvStreams) > 100 {
-							for sID, s := range r.recvStreams {
-								// remove streams that was finished more than 30 sec ago or when it was no messages for more than 60 seconds.
-								if s.lastMessageAt.Add(60*time.Second).Before(tm) ||
-									(s.finishedAt != nil && s.finishedAt.Add(30*time.Second).Before(tm)) {
-									delete(r.recvStreams, sID)
-								}
+						for sID, s := range r.recvStreams {
+							// remove streams that was finished more than 15 sec ago or when it was no messages for more than 30 seconds.
+							if s.lastMessageAt.Add(30*time.Second).Before(tm) ||
+								(s.finishedAt != nil && s.finishedAt.Add(15*time.Second).Before(tm)) {
+								delete(r.recvStreams, sID)
 							}
 						}
 						r.mx.Unlock()
 
-						if uint64(len(stream.buf)) > stream.totalSize {
-							return fmt.Errorf("received more data than expected, expected %d, got %d", stream.totalSize, len(stream.buf))
+						if stream.partsSize > stream.totalSize {
+							return fmt.Errorf("received more data than expected, expected %d, got %d", stream.totalSize, stream.partsSize)
 						}
+						buf := make([]byte, stream.totalSize)
+						off := 0
+						for _, p := range stream.parts {
+							off += copy(buf[off:], p)
+						}
+						stream.parts = nil
+						stream.partsSize = 0
 
 						var res any
-						if _, err = tl.Parse(&res, stream.buf, true); err != nil {
+						if _, err = tl.Parse(&res, buf, true); err != nil {
 							return fmt.Errorf("failed to parse custom message: %w", err)
 						}
 

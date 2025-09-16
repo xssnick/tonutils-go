@@ -140,8 +140,33 @@ type Signature struct {
 type Object struct{}
 type True struct{}
 
-// TODO: will be moved here in the next version
-type BlockIDExt = tlb.BlockInfo
+type BlockIDExt struct {
+	Workchain int32  `tl:"int"`
+	Shard     int64  `tl:"long"`
+	SeqNo     uint32 `tl:"int"`
+	RootHash  []byte `tl:"int256"`
+	FileHash  []byte `tl:"int256"`
+}
+
+func (h *BlockIDExt) Equals(h2 *BlockIDExt) bool {
+	return h.Shard == h2.Shard && h.SeqNo == h2.SeqNo && h.Workchain == h2.Workchain &&
+		bytes.Equal(h.FileHash, h2.FileHash) && bytes.Equal(h.RootHash, h2.RootHash)
+}
+
+func (h *BlockIDExt) Copy() *BlockIDExt {
+	root := make([]byte, len(h.RootHash))
+	file := make([]byte, len(h.FileHash))
+	copy(root, h.RootHash)
+	copy(file, h.FileHash)
+
+	return &BlockIDExt{
+		Workchain: h.Workchain,
+		Shard:     h.Shard,
+		SeqNo:     h.SeqNo,
+		RootHash:  root,
+		FileHash:  file,
+	}
+}
 
 type MasterchainInfo struct {
 	Last          *BlockIDExt     `tl:"struct"`
@@ -676,4 +701,46 @@ func (c *APIClient) GetBlockProof(ctx context.Context, known, target *BlockIDExt
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
+}
+
+func GetParentBlocks(h *tlb.BlockHeader) ([]*BlockIDExt, error) {
+	var parents []*BlockIDExt
+	workchain, shard := tlb.ConvertShardIdentToShard(h.Shard)
+
+	if !h.AfterMerge && !h.AfterSplit {
+		return []*BlockIDExt{{
+			Workchain: workchain,
+			SeqNo:     h.PrevRef.Prev1.SeqNo,
+			RootHash:  h.PrevRef.Prev1.RootHash,
+			FileHash:  h.PrevRef.Prev1.FileHash,
+			Shard:     int64(shard),
+		}}, nil
+	} else if !h.AfterMerge && h.AfterSplit {
+		return []*BlockIDExt{{
+			Workchain: workchain,
+			SeqNo:     h.PrevRef.Prev1.SeqNo,
+			RootHash:  h.PrevRef.Prev1.RootHash,
+			FileHash:  h.PrevRef.Prev1.FileHash,
+			Shard:     int64(tlb.ShardParent(shard)),
+		}}, nil
+	}
+
+	if h.PrevRef.Prev2 == nil {
+		return nil, fmt.Errorf("must be 2 parent blocks after merge")
+	}
+	parents = append(parents, &BlockIDExt{
+		Workchain: workchain,
+		SeqNo:     h.PrevRef.Prev1.SeqNo,
+		RootHash:  h.PrevRef.Prev1.RootHash,
+		FileHash:  h.PrevRef.Prev1.FileHash,
+		Shard:     int64(tlb.ShardChild(shard, true)),
+	})
+	parents = append(parents, &BlockIDExt{
+		Workchain: workchain,
+		SeqNo:     h.PrevRef.Prev2.SeqNo,
+		RootHash:  h.PrevRef.Prev2.RootHash,
+		FileHash:  h.PrevRef.Prev2.FileHash,
+		Shard:     int64(tlb.ShardChild(shard, false)),
+	})
+	return parents, nil
 }

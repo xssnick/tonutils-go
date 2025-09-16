@@ -14,13 +14,6 @@ func TestBlockMaster(t *testing.T) {
 	if err := LoadFromCell(&block, c.BeginParse()); err != nil {
 		t.Fatal(err)
 	}
-
-	parents, err := block.BlockInfo.GetParentBlocks()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	println(len(parents))
 }
 
 func TestBlockNotMaster(t *testing.T) {
@@ -31,11 +24,4 @@ func TestBlockNotMaster(t *testing.T) {
 	if err := LoadFromCell(&block, c.BeginParse()); err != nil {
 		t.Fatal(err)
 	}
-
-	parents, err := block.BlockInfo.GetParentBlocks()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	println(len(parents))
 }

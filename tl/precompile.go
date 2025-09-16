@@ -170,7 +170,7 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 				}
 				structFlags |= _StructFlagsInterface
 
-				list := splitAllowed(tags[2:])
+				list := parseAllowed(tags[2:])
 				for _, s := range list {
 					info.allowedTypes = append(info.allowedTypes, getStructInfoReferenceByShortName(s))
 				}

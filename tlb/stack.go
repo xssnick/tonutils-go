@@ -3,6 +3,7 @@ package tlb
 import (
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/address"
 	"math/big"
 	"reflect"
 
@@ -118,6 +119,16 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 		if vl.BitLen() < 64 {
 			val = vl.Int64()
 		}
+	}
+
+	// address is often used as a value, but it was not obvious
+	// that it should be a slice, so we convert it internally
+	if addr, ok := val.(*address.Address); ok {
+		ab := cell.BeginCell()
+		if err := ab.StoreAddr(addr); err != nil {
+			return fmt.Errorf("failed to store address: %w", err)
+		}
+		val = ab.ToSlice()
 	}
 
 	switch v := val.(type) {

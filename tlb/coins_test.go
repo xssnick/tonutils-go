@@ -301,7 +301,7 @@ func TestCoins_GreaterThan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c1 := MustFromTON(tt.coins1)
 			c2 := MustFromTON(tt.coins2)
-			if got := c1.GreaterThan(&c2); got != tt.want {
+			if got := c1.GreaterThan(c2); got != tt.want {
 				t.Logf("c1: %s, c2: %s", c1, c2)
 				t.Errorf("GreaterThan() = %v, want %v", got, tt.want)
 			}
@@ -335,7 +335,7 @@ func TestCoins_GreaterOrEqual(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c1 := MustFromTON(tt.coins1)
 			c2 := MustFromTON(tt.coins2)
-			if got := c1.GreaterOrEqual(&c2); got != tt.want {
+			if got := c1.GreaterOrEqual(c2); got != tt.want {
 				t.Errorf("GreaterOrEqual() = %v, want %v", got, tt.want)
 			}
 		})
@@ -367,7 +367,7 @@ func TestCoins_LessThan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c1 := MustFromTON(tt.coins1)
 			c2 := MustFromTON(tt.coins2)
-			if got := c1.LessThan(&c2); got != tt.want {
+			if got := c1.LessThan(c2); got != tt.want {
 				t.Errorf("LessThan() = %v, want %v", got, tt.want)
 			}
 		})
@@ -399,7 +399,7 @@ func TestCoins_LessOrEqual(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c1 := MustFromTON(tt.coins1)
 			c2 := MustFromTON(tt.coins2)
-			if got := c1.LessOrEqual(&c2); got != tt.want {
+			if got := c1.LessOrEqual(c2); got != tt.want {
 				t.Errorf("LessOrEqual() = %v, want %v", got, tt.want)
 			}
 		})
@@ -427,7 +427,7 @@ func TestCoins_Equals(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c1 := MustFromTON(tt.coins1)
 			c2 := MustFromTON(tt.coins2)
-			if got := c1.Equals(&c2); got != tt.want {
+			if got := c1.Equals(c2); got != tt.want {
 				t.Errorf("Equals() = %v, want %v", got, tt.want)
 			}
 		})
@@ -607,7 +607,7 @@ func TestCoins_Add(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.a.Add(&tt.b)
+			got, err := tt.a.Add(tt.b)
 
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Add() error = %v, wantErr %v", err, tt.wantErr)
@@ -615,7 +615,7 @@ func TestCoins_Add(t *testing.T) {
 			}
 
 			if tt.wantErr == nil {
-				if !got.Equals(&tt.want) {
+				if !got.Equals(tt.want) {
 					t.Errorf("Add() got = %v, want %v", got, tt.want)
 				}
 				if got.Decimals() != tt.want.Decimals() {
@@ -676,7 +676,7 @@ func TestCoins_MustAdd(t *testing.T) {
 			}()
 
 			// We only call MustAdd to check for panics, result checked in TestCoins_Add
-			_ = tt.a.MustAdd(&tt.b)
+			_ = tt.a.MustAdd(tt.b)
 		})
 	}
 }
@@ -796,7 +796,7 @@ func TestCoins_Sub(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.a.Sub(&tt.b)
+			got, err := tt.a.Sub(tt.b)
 
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("Sub() error = %v, wantErr %v", err, tt.wantErr)
@@ -865,7 +865,7 @@ func TestCoins_MustSub(t *testing.T) {
 				}
 			}()
 
-			_ = tt.a.MustSub(&tt.b)
+			_ = tt.a.MustSub(tt.b)
 		})
 	}
 }
@@ -964,7 +964,7 @@ func TestCoins_Mul(t *testing.T) {
 			}
 
 			if tt.wantErr == nil {
-				if !got.Equals(&tt.want) {
+				if !got.Equals(tt.want) {
 					t.Errorf("Mul() got = %v, want %v", got, tt.want)
 				}
 				if got.Decimals() != tt.want.Decimals() {
@@ -1106,7 +1106,7 @@ func TestCoins_Div(t *testing.T) {
 			}
 
 			if tt.wantErr == nil {
-				if !got.Equals(&tt.want) {
+				if !got.Equals(tt.want) {
 					t.Errorf("Div() got = %v, want %v", got, tt.want)
 				}
 				if got.Decimals() != tt.want.Decimals() {
@@ -1194,7 +1194,7 @@ func TestCoins_Neg(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.a.Neg()
 
-			if !got.Equals(&tt.want) {
+			if !got.Equals(tt.want) {
 				t.Errorf("Neg() got = %v, want %v", got, tt.want)
 			}
 			if got.Decimals() != tt.want.Decimals() {
@@ -1241,7 +1241,7 @@ func TestCoins_Abs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.a.Abs()
 
-			if !got.Equals(&tt.want) {
+			if !got.Equals(tt.want) {
 				t.Errorf("Abs() got = %v, want %v", got, tt.want)
 			}
 			if got.Decimals() != tt.want.Decimals() {
@@ -1357,7 +1357,7 @@ func TestCoins_MulRat(t *testing.T) {
 			}
 
 			if tt.wantErr == nil {
-				if !got.Equals(&tt.want) {
+				if !got.Equals(tt.want) {
 					t.Errorf("MulRat() got = %v (%s), want %v (%s)", got, got.Nano().String(), tt.want, tt.want.Nano().String())
 				}
 				if got.Decimals() != tt.want.Decimals() {
@@ -1529,7 +1529,7 @@ func TestCoins_DivRat(t *testing.T) {
 			}
 
 			if tt.wantErr == nil {
-				if !got.Equals(&tt.want) {
+				if !got.Equals(tt.want) {
 					t.Errorf("DivRat() got = %v (%s), want %v (%s)", got, got.Nano().String(), tt.want, tt.want.Nano().String())
 				}
 				if got.Decimals() != tt.want.Decimals() {

@@ -358,13 +358,13 @@ func TestWallet_DeployContractUsingHW3Masterchain(t *testing.T) {
 	}
 
 	// init wallet
-	w, err := FromPrivateKeyWithOptions(api, key, ConfigHighloadV3{
+	w, err := FromPrivateKeyWithOptions(key, ConfigHighloadV3{
 		MessageTTL: 120,
 		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
 			tm := time.Now().Unix() - 30
 			return uint32(10000 + tm%(1<<23)), tm, nil
 		},
-	}, WithWorkchain(-1))
+	}, WithWorkchain(-1), WithAPI(api))
 	if err != nil {
 		t.Fatal("FromSeed err:", err.Error())
 	}

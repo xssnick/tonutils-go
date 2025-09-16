@@ -111,7 +111,7 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 			t.Fatal("Get shard block data err:", err.Error())
 			return
 		}
-		_, err = data.BlockInfo.GetParentBlocks()
+		_, err = GetParentBlocks(&data.BlockInfo)
 		if err != nil {
 			t.Fatal("Get block parents err:", err.Error())
 			return
@@ -124,14 +124,27 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 func TestAPIClient_GetOldBlockData(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
+	var ok bool
+	for i := 0; i < 10; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+		err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
+		cancel()
+		if err != nil {
+			log.Println("ERR TRY", i)
+			continue
+		}
+		ok = true
+		break
+	}
+
+	if !ok {
+		panic("connect to archive node failed")
+	}
+
+	log.Println("CONNECTED")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-
-	err := client.AddConnection(ctx, "135.181.177.59:53312", "aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=")
-	if err != nil {
-		panic(err)
-	}
-	log.Println("CONNECTED")
 
 	api := NewAPIClient(client)
 
@@ -161,7 +174,7 @@ func TestAPIClient_GetOldBlockData(t *testing.T) {
 			t.Fatal("Get shard block data err:", err.Error())
 			return
 		}
-		_, err = data.BlockInfo.GetParentBlocks()
+		_, err = GetParentBlocks(&data.BlockInfo)
 		if err != nil {
 			t.Fatal("Get block parents err:", err.Error())
 			return
@@ -258,7 +271,7 @@ func Test_Account(t *testing.T) {
 		return
 	}
 
-	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	addr := address.MustParseAddr("EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs")
 	res, err := api.WaitForBlock(b.SeqNo).GetAccount(ctx, b, addr)
 	if err != nil {
 		t.Fatal("get account err:", err.Error())
@@ -277,7 +290,7 @@ func Test_Account(t *testing.T) {
 			fmt.Printf("Data: %s\n", res.Data.Dump())
 		}
 	} else {
-		t.Fatal("TF account not active")
+		t.Fatal("account not active")
 	}
 
 	// take last tx info from account info
