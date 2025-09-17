@@ -282,9 +282,13 @@ func (c *Cell) GetType() Type {
 
 func (c *Cell) UnmarshalJSON(bytes []byte) error {
 	if len(bytes) < 2 || bytes[0] != '"' || bytes[len(bytes)-1] != '"' {
-		return fmt.Errorf("invalid data")
+		return fmt.Errorf("invalid cell data")
 	}
 	bytes = bytes[1 : len(bytes)-1]
+
+	if len(bytes) == 0 {
+		return nil
+	}
 
 	data := make([]byte, base64.StdEncoding.DecodedLen(len(bytes)))
 

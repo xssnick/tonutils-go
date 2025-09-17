@@ -167,16 +167,14 @@ type Option func(*Wallet)
 
 func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (*Wallet, error) {
 	return newWallet(
-		api,
 		key.Public().(ed25519.PublicKey),
 		version,
-		WithPrivateKey(key))
+		WithPrivateKey(key), WithAPI(api))
 }
 
-// FromPrivateKeyWithOptions - can initialize customizable wallet, for example: FromPrivateKeyWithOptions(api, key, version, WithWorkchain(-1))
-func FromPrivateKeyWithOptions(api TonAPI, key ed25519.PrivateKey, version VersionConfig, options ...Option) (*Wallet, error) {
+// FromPrivateKeyWithOptions - can initialize a customizable wallet, for example, FromPrivateKeyWithOptions(key, version, WithAPI(api), WithWorkchain(-1))
+func FromPrivateKeyWithOptions(key ed25519.PrivateKey, version VersionConfig, options ...Option) (*Wallet, error) {
 	return newWallet(
-		api,
 		key.Public().(ed25519.PublicKey),
 		version,
 		append([]Option{WithPrivateKey(key)}, options...)...)
@@ -184,13 +182,19 @@ func FromPrivateKeyWithOptions(api TonAPI, key ed25519.PrivateKey, version Versi
 
 func FromSigner(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, signer Signer) (*Wallet, error) {
 	return newWallet(
-		api,
 		publicKey,
 		version,
-		WithSigner(signer))
+		WithSigner(signer), WithAPI(api))
 }
 
-func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, options ...Option) (*Wallet, error) {
+func FromPubKeyWithOptions(publicKey ed25519.PublicKey, version VersionConfig, options ...Option) (*Wallet, error) {
+	return newWallet(
+		publicKey,
+		version,
+		options...)
+}
+
+func newWallet(publicKey ed25519.PublicKey, version VersionConfig, options ...Option) (*Wallet, error) {
 	var subwallet uint32 = DefaultSubwallet
 
 	// default subwallet depends on wallet type
@@ -206,7 +210,6 @@ func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, o
 	}
 
 	w := &Wallet{
-		api:       api,
 		addr:      addr,
 		ver:       version,
 		subwallet: subwallet,
@@ -240,6 +243,12 @@ func WithPrivateKey(privateKey ed25519.PrivateKey) Option {
 func WithSigner(signer Signer) Option {
 	return func(w *Wallet) {
 		w.signer = signer
+	}
+}
+
+func WithAPI(api TonAPI) Option {
+	return func(w *Wallet) {
+		w.api = api
 	}
 }
 
@@ -315,8 +324,7 @@ func getSpec(w *Wallet) (any, error) {
 }
 
 // Address - returns old (bounce) version of wallet address
-// DEPRECATED: because of address reform, use WalletAddress,
-// it will return UQ format
+// Deprecated: because of address reform, use WalletAddress, it will return UQ format
 func (w *Wallet) Address() *address.Address {
 	return w.addr
 }

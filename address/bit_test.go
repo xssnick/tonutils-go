@@ -7,15 +7,26 @@ func TestClearBit(t *testing.T) {
 		n   *byte
 		pos uint
 	}
+	bytePtr := func(v byte) *byte { b := v; return &b }
 	tests := []struct {
 		name string
 		args args
 	}{
-		// TODO: Add test cases.
+		{"0", args{bytePtr(0b00000001), 0}},
+		{"1", args{bytePtr(0b00000010), 1}},
+		{"2", args{bytePtr(0b00000100), 2}},
+		{"3", args{bytePtr(0b00001000), 3}},
+		{"4", args{bytePtr(0b00010000), 4}},
+		{"5", args{bytePtr(0b00100000), 5}},
+		{"6", args{bytePtr(0b01000000), 6}},
+		{"7", args{bytePtr(0b10000000), 7}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clearBit(tt.args.n, tt.args.pos)
+			if *tt.args.n != 0 {
+				t.Errorf("ClearBit() = %v, n = %v", tt.name, *tt.args.n)
+			}
 		})
 	}
 }
@@ -54,15 +65,26 @@ func TestSetBit(t *testing.T) {
 		n   *byte
 		pos uint
 	}
+	bytePtr := func(v byte) *byte { b := v; return &b }
 	tests := []struct {
 		name string
 		args args
 	}{
-		// TODO: Add test cases.
+		{"0", args{bytePtr(0b00000000), 0}},
+		{"1", args{bytePtr(0b00000000), 1}},
+		{"2", args{bytePtr(0b00000000), 2}},
+		{"3", args{bytePtr(0b00000000), 3}},
+		{"4", args{bytePtr(0b00000000), 4}},
+		{"5", args{bytePtr(0b00000000), 5}},
+		{"6", args{bytePtr(0b00000000), 6}},
+		{"7", args{bytePtr(0b00000000), 7}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setBit(tt.args.n, tt.args.pos)
+			if *tt.args.n == 0 {
+				t.Errorf("SetBit() = %v, n = %v", tt.name, *tt.args.n)
+			}
 		})
 	}
 }
