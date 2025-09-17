@@ -121,7 +121,8 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 	// TODO: data check
 }
 
-func TestAPIClient_GetOldBlockData(t *testing.T) {
+// commented because public archival LS works too bad to test
+/*func TestAPIClient_GetOldBlockData(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
 	var ok bool
@@ -189,7 +190,7 @@ func TestAPIClient_GetOldBlockData(t *testing.T) {
 	}
 
 	// TODO: data check
-}
+}*/
 
 func Test_RunMethod(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
