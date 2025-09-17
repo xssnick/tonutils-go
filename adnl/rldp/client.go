@@ -149,7 +149,7 @@ func NewClient(a ADNL) *RLDP {
 
 	r.rateCtrl = NewAdaptiveRateController(r.rateLimit, AdaptiveRateOptions{
 		MinRate:                     2500,
-		MaxRate:                     60000,
+		MaxRate:                     0,
 		EnableSlowStart:             true,
 		SlowStartMultiplier:         2.5,
 		TargetLoss:                  0.05,
