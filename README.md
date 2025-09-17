@@ -12,12 +12,14 @@ This library is native golang implementation of ADNL and lite protocol. It works
 
 It is concurrent safe and can be used from multiple goroutines under high workloads.
 
-All main TON protocols are implemented: ADNL, DHT, RLDP, Overlays, HTTP-RLDP, etc.
+All main TON protocols are implemented: ADNL, DHT, RLDP, Overlays, etc.
 
 ------
 
 If you love this library and want to support its development you can donate any amount of coins to this ton address ☺️
 `EQBx6tZZWa2Tbv6BvgcvegoOQxkRrVaBVwBOoW85nbP37_Go`
+
+You can find many usage examples in **[example](https://github.com/xssnick/tonutils-go/tree/master/example)** directory
 
 ### How to use
 - [Connection](#Connection)
@@ -56,13 +58,8 @@ If you love this library and want to support its development you can donate any 
   - [Proof creation](#Proofs)
 - [Network](https://github.com/xssnick/tonutils-go/tree/master/adnl)
   - [ADNL UDP](https://github.com/xssnick/tonutils-go/blob/master/adnl/adnl_test.go)
-  - [TON Site request](https://github.com/xssnick/tonutils-go/blob/master/example/site-request/main.go)
-  - [RLDP-HTTP Client-Server](https://github.com/xssnick/tonutils-go/blob/master/example/http-rldp-highload-test/main.go)
 - [Custom reconnect policy](#Custom-reconnect-policy)
 - [Features to implement](#Features-to-implement)
-
-
-You can find usage examples in **[example](https://github.com/xssnick/tonutils-go/tree/master/example)** directory
 
 You could also join our **[Telegram channel](https://t.me/tonutilsnews)** and **[group](https://t.me/tonutils)**, feel free ask any questions :)
 
@@ -502,7 +499,7 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ Payment channels
 * ✅ Liteserver proofs automatic validation
 * DHT Server
-* TVM
+* TVM (Contract execution emulation)
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue
