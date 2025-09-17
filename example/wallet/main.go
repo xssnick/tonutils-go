@@ -40,7 +40,7 @@ func main() {
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("diet diet attack autumn expose honey skate lounge holiday opinion village priority major enroll romance famous motor pact hello rubber express warfare rose whisper", " ")
 
-	w, err := wallet.FromSeed(api, words, wallet.ConfigV5R1Final{
+	w, err := wallet.FromSeedWithOptions(api, words, wallet.ConfigV5R1Final{
 		NetworkGlobalID: wallet.MainnetGlobalID,
 	})
 	if err != nil {

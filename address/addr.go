@@ -7,10 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/crc16"
 	"strconv"
 	"strings"
-
-	"github.com/sigurn/crc16"
 )
 
 type AddrType int
@@ -85,8 +84,6 @@ func (a *Address) BitsLen() uint {
 	return a.bitsLen
 }
 
-var crcTable = crc16.MakeTable(crc16.CRC16_XMODEM)
-
 func (a *Address) StringRaw() string {
 	switch a.addrType {
 	case NoneAddress:
@@ -105,7 +102,7 @@ func (a *Address) String() string {
 	case StdAddress:
 		var address [36]byte
 		copy(address[0:34], a.prepareChecksumData())
-		binary.BigEndian.PutUint16(address[34:], crc16.Checksum(address[:34], crcTable))
+		binary.BigEndian.PutUint16(address[34:], crc16.ChecksumXMODEM(address[:34]))
 		return base64.RawURLEncoding.EncodeToString(address[:])
 	case ExtAddress:
 		address := make([]byte, 1+4+len(a.data))
@@ -232,11 +229,11 @@ func ParseAddr(addr string) (*Address, error) {
 	}
 
 	if len(data) != 36 {
-		return nil, errors.New("incorrect address data")
+		return nil, errors.New("incorrect address data " + addr)
 	}
 
 	checksum := data[len(data)-2:]
-	if crc16.Checksum(data[:len(data)-2], crc16.MakeTable(crc16.CRC16_XMODEM)) != binary.BigEndian.Uint16(checksum) {
+	if crc16.ChecksumXMODEM(data[:len(data)-2]) != binary.BigEndian.Uint16(checksum) {
 		return nil, errors.New("invalid address")
 	}
 
@@ -267,7 +264,7 @@ func ParseRawAddr(addr string) (*Address, error) {
 }
 
 func (a *Address) Checksum() uint16 {
-	return crc16.Checksum(a.prepareChecksumData(), crc16.MakeTable(crc16.CRC16_XMODEM))
+	return crc16.ChecksumXMODEM(a.prepareChecksumData())
 }
 
 func (a *Address) prepareChecksumData() []byte {
