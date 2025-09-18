@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"github.com/xssnick/raptorq"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
@@ -69,6 +70,7 @@ type testRequest struct {
 	URL     string       `tl:"string"`
 	Version string       `tl:"string"`
 	Headers []testHeader `tl:"vector struct"`
+	RespSz  uint64       `tl:"long"`
 }
 
 type testResponse struct {
@@ -665,7 +667,7 @@ func TestRLDP_ClientServer(t *testing.T) {
 			res := testResponse{
 				Version:    "HTTP/1.1",
 				StatusCode: int32(200),
-				Reason:     "test ok:" + hex.EncodeToString(q.ID) + q.URL,
+				Reason:     q.URL,
 				Headers:    []testHeader{{"test", "test"}},
 				NoPayload:  true,
 			}
@@ -741,4 +743,97 @@ func TestRLDP_ClientServer(t *testing.T) {
 		}
 	})
 
+}
+
+func BenchmarkRLDP_ClientServer(b *testing.B) {
+	srvPub, srvKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	_, cliKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	s := adnl.NewGateway(srvKey)
+	if err := s.StartServer("127.0.0.1:19155"); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		_ = s.Close()
+	})
+
+	s.SetConnectionHandler(func(client adnl.Peer) error {
+		conn := NewClientV2(client)
+		conn.SetOnQuery(func(transferId []byte, query *Query) error {
+			q := query.Data.(testRequest)
+			res := testResponse{
+				Version:    "HTTP/1.1",
+				StatusCode: 200,
+				Reason:     string(make([]byte, q.RespSz)),
+				Headers:    []testHeader{{"test", "test"}},
+				NoPayload:  true,
+			}
+			return conn.SendAnswer(context.Background(), query.MaxAnswerSize, query.Timeout, query.ID, transferId, res)
+		})
+		return nil
+	})
+
+	clg := adnl.NewGateway(cliKey)
+	if err := clg.StartClient(); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = clg.Close() })
+
+	cli, err := clg.RegisterClient("127.0.0.1:19155", srvPub)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cr := NewClientV2(cli)
+
+	sizes := []uint64{1 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20} // 1KB, 256KB, 1MB, 4MB, 10 MB
+
+	for _, sz := range sizes {
+		b.Run(fmt.Sprintf("resp=%dKB", sz>>10), func(b *testing.B) {
+			b.SetBytes(int64(sz))
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				var resp testResponse
+				if err := cr.DoQuery(context.Background(), 1<<30, testRequest{
+					ID:      make([]byte, 32),
+					Method:  "GET",
+					URL:     "123",
+					Version: "1",
+					RespSz:  sz,
+				}, &resp); err != nil {
+					b.Fatalf("client exec err: %v", err)
+				}
+			}
+		})
+
+		b.Run(fmt.Sprintf("resp=%dKB/parallel", sz>>10), func(b *testing.B) {
+			b.SetBytes(int64(sz))
+			b.ReportAllocs()
+			b.SetParallelism(8)
+
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					var resp testResponse
+					if err := cr.DoQuery(context.Background(), 1<<30, testRequest{
+						ID:      make([]byte, 32),
+						Method:  "GET",
+						URL:     "123",
+						Version: "1",
+						RespSz:  sz,
+					}, &resp); err != nil {
+						b.Fatalf("client exec err: %v", err)
+					}
+				}
+			})
+		})
+	}
 }
