@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"sync"
@@ -31,7 +32,7 @@ type ADNL interface {
 
 var Logger = func(a ...any) {}
 
-var PartSize = uint32(1 << 20)
+var PartSize = uint32(256 << 10)
 
 type activeTransferPart struct {
 	encoder *raptorq.Encoder
@@ -48,6 +49,10 @@ type activeTransferPart struct {
 	nextRecoverDelay int64
 	fastSeqnoTill    uint32
 	recoveryReady    atomic.Int32
+	lossEWMA         atomic.Uint64
+	drrDeficit       int64
+
+	sendClock *SendClock
 
 	transfer *activeTransfer
 }
@@ -94,7 +99,7 @@ type RLDP struct {
 	packetsSz uint64
 
 	rateLimit *TokenBucket
-	rateCtrl  *AdaptiveRateController
+	rateCtrl  *BBRv2Controller
 
 	lastReport time.Time
 }
@@ -129,12 +134,14 @@ type decoderStream struct {
 	mx sync.Mutex
 }
 
-var MaxUnexpectedTransferSize uint64 = 1 << 16 // 64 KB
-var MaxFECDataSize uint64 = 2 << 20            // 2 MB
-var DefaultFECDataSize uint64 = 1 << 20        // 1 MB
+var MaxUnexpectedTransferSize uint64 = 64 << 10 // 64 KB
+var MaxFECDataSize uint64 = 2 << 20             // 2 MB
 var DefaultSymbolSize uint32 = 768
 
 const _MTU = 1 << 37
+
+var MinRateBytesSec = int64(1 << 20)
+var MaxRateBytesSec = int64(512 << 20)
 
 func NewClient(a ADNL) *RLDP {
 	r := &RLDP{
@@ -144,21 +151,21 @@ func NewClient(a ADNL) *RLDP {
 		recvStreams:            map[string]*decoderStream{},
 		expectedTransfers:      map[string]*expectedTransfer{},
 		activateRecoverySender: make(chan bool, 1),
-		rateLimit:              NewTokenBucket(10000, a.RemoteAddr()),
+		rateLimit:              NewTokenBucket(1<<20, a.RemoteAddr()),
 	}
 
-	r.rateCtrl = NewAdaptiveRateController(r.rateLimit, AdaptiveRateOptions{
-		MinRate:                     2500,
-		MaxRate:                     0,
-		EnableSlowStart:             true,
-		SlowStartMultiplier:         2.5,
-		TargetLoss:                  0.05,
-		HighLoss:                    0.25,
-		Deadband:                    0.01,
-		DecreaseFactor:              0.15,
-		MildDecreaseFactor:          0.05,
-		IncreaseFactor:              0.067,
-		IncreaseOnlyWhenTokensBelow: 0.75,
+	r.rateCtrl = NewBBRv2Controller(r.rateLimit, BBRv2Options{
+		Name:               r.adnl.RemoteAddr(),
+		MinRate:            MinRateBytesSec,
+		MaxRate:            MaxRateBytesSec,
+		HighLoss:           0.2,
+		Beta:               0.9,
+		DefaultRTTMs:       25,
+		BtlBwWindowSec:     10,
+		ProbeBwCycleMs:     200,
+		ProbeRTTDurationMs: 200,
+		MinRTTExpiryMs:     20_000,
+		MinSampleMs:        50,
 	})
 
 	a.SetCustomMessageHandler(r.handleMessage)
@@ -257,7 +264,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 			stream = &decoderStream{
 				lastMessageAt: tm,
-				messages:      make(chan *MessagePart, 256),
+				messages:      make(chan *MessagePart, 1024),
 				currentPart: decoderStreamPart{
 					index: 0,
 				},
@@ -549,18 +556,57 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		}
 
 		lastProc := atomic.LoadUint32(&part.lastConfirmSeqnoProcessed)
-		if isV2 && lastProc+32 <= m.MaxSeqno &&
+		if isV2 && lastProc < m.MaxSeqno &&
 			atomic.CompareAndSwapUint32(&part.lastConfirmSeqnoProcessed, lastProc, m.MaxSeqno) {
 
-			total := (m.MaxSeqno - lastProc) + 1
+			total := int64(m.MaxSeqno - lastProc)
 			prevRecv := atomic.SwapUint32(&part.lastConfirmRecvProcessed, m.ReceivedCount)
-			var recvDelta uint32
+			var recvDelta int64
 			if m.ReceivedCount >= prevRecv {
-				recvDelta = m.ReceivedCount - prevRecv
+				recvDelta = int64(m.ReceivedCount - prevRecv)
 			}
 
 			if total > 0 {
-				r.rateCtrl.ObserveDelta(total, recvDelta)
+				r.rateCtrl.ObserveDelta(total*int64(part.feq.SymbolSize), recvDelta*int64(part.feq.SymbolSize))
+
+				// estimate loss
+				loss := 1.0 - float64(recvDelta)/float64(total)
+				if loss < 0 {
+					loss = 0
+				}
+				if loss > 1 {
+					loss = 1
+				}
+
+				const alpha = 0.2
+				prev := math.Float64frombits(part.lossEWMA.Load())
+				if prev == 0 {
+					prev = loss
+				}
+				ew := prev*(1-alpha) + loss*alpha
+				part.lossEWMA.Store(math.Float64bits(ew))
+
+				//  (2% base + 1.5 * loss), limit 20%
+				k := float64(part.feq.SymbolsCount)
+				overhead := 0.02 + 1.5*ew
+				if overhead < 0.01 {
+					overhead = 0.01
+				}
+
+				if overhead > 0.20 {
+					overhead = 0.20
+				}
+
+				target := uint32(k + math.Ceil(k*overhead))
+
+				cur := atomic.LoadUint32(&part.fastSeqnoTill)
+				if target > cur {
+					atomic.StoreUint32(&part.fastSeqnoTill, target)
+				}
+			}
+
+			if tms, ok := part.sendClock.SentAt(m.MaxSeqno); ok {
+				r.rateCtrl.ObserveRTT(time.Now().UnixMilli() - tms)
 			}
 		}
 
@@ -584,6 +630,9 @@ func (r *RLDP) recoverySender() {
 	closerCtx := r.adnl.GetCloserCtx()
 	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
+
+	// round-robin head for fair recovery
+	// var rrHead atomic.Uint32
 
 	active := false
 	for {
@@ -657,7 +706,8 @@ func (r *RLDP) recoverySender() {
 
 			sort.Slice(transfersToProcess, func(i, j int) bool {
 				// recently confirmed transfers are prioritized
-				return atomic.LoadInt64(&transfersToProcess[i].lastConfirmAt) > atomic.LoadInt64(&transfersToProcess[j].lastConfirmAt)
+				return atomic.LoadInt64(&transfersToProcess[i].lastConfirmAt) >
+					atomic.LoadInt64(&transfersToProcess[j].lastConfirmAt)
 			})
 
 			isV2 := r.useV2.Load() == 1
@@ -675,13 +725,10 @@ func (r *RLDP) recoverySender() {
 					}
 				}
 
-				consumed := false
-				for i := 0; i < numToResend; i++ {
-					if !r.rateLimit.TryConsume() {
-						consumed = true
-						break
-					}
+				ms = time.Now().UnixMilli()
 
+				consumed := r.rateLimit.ConsumePackets(numToResend, int(part.feq.SymbolSize))
+				for i := 0; i < consumed; i++ {
 					p := MessagePart{
 						TransferID: part.transfer.id,
 						FecType:    part.feq,
@@ -697,6 +744,7 @@ func (r *RLDP) recoverySender() {
 						msgPart = MessagePartV2(p)
 					}
 
+					part.sendClock.OnSend(p.Seqno, ms)
 					if err := r.adnl.SendCustomMessage(closerCtx, msgPart); err != nil {
 						Logger("failed to send recovery message part", p.Seqno, err.Error())
 						break loop
@@ -705,16 +753,24 @@ func (r *RLDP) recoverySender() {
 
 				if atomic.LoadUint32(&part.seqno) < seqno {
 					// we sent something, so considering to be updated
-					part.lastRecoverAt = ms
-					if consumed {
-						part.nextRecoverDelay = 10
-					} else {
-						part.nextRecoverDelay = 50
+					base := r.rateCtrl.opts.DefaultRTTMs
+					if base <= 0 {
+						base = 25
 					}
+					minGap := max64(8, base/4)  // нижняя граница ~¼ RTT
+					maxGap := max64(20, base/2) // верхняя ~½ RTT
+
+					if consumed > 0 {
+						part.nextRecoverDelay = minGap
+					} else {
+						part.nextRecoverDelay = maxGap
+					}
+
+					part.lastRecoverAt = ms
 				}
 				atomic.StoreUint32(&part.seqno, seqno)
 
-				if consumed {
+				if consumed != numToResend {
 					break
 				}
 			}
@@ -731,6 +787,12 @@ func (r *RLDP) recoverySender() {
 					delete(r.expectedTransfers, req)
 				}
 				r.mx.Unlock()
+			}
+
+			if len(transfersToProcess) == 0 && r.rateLimit.GetTokensLeft() > 0 {
+				r.rateCtrl.SetAppLimited(true)
+			} else {
+				r.rateCtrl.SetAppLimited(false)
 			}
 
 			transfersToProcess = transfersToProcess[:0]
@@ -812,8 +874,9 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 			SymbolSize:   DefaultSymbolSize,
 			SymbolsCount: enc.BaseSymbolsNum(),
 		},
-		nextRecoverDelay: 30,
-		fastSeqnoTill:    enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/33, // +3%
+		nextRecoverDelay: 15,
+		fastSeqnoTill:    enc.BaseSymbolsNum() + enc.BaseSymbolsNum()/50 + 1, // +2%
+		sendClock:        NewSendClock(64 << 10),
 		transfer:         t,
 	}
 
@@ -837,26 +900,39 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 	sc := part.fastSeqnoTill
 
 	isV2 := r.useV2.Load() == 1
-	for i := uint32(0); i < sc; i++ {
-		if !r.rateLimit.TryConsume() {
-			// we cannot send right now, so we enqueue it
-			sc = i
+	maxBatch := int(^uint(0) >> 1)
+	seqno := uint32(0)
+	for seqno < sc {
+		remaining := uint64(sc - seqno)
+		if remaining > uint64(maxBatch) {
+			remaining = uint64(maxBatch)
+		}
+
+		batch := r.rateLimit.ConsumePackets(int(remaining), int(part.feq.SymbolSize))
+		if batch == 0 {
 			break
 		}
+		now := time.Now().UnixMilli()
 
-		p.Seqno = i
-		p.Data = part.encoder.GenSymbol(i)
+		for i := 0; i < batch; i++ {
+			currentSeqno := seqno
+			p.Seqno = currentSeqno
+			p.Data = part.encoder.GenSymbol(currentSeqno)
 
-		var msgPart tl.Serializable = p
-		if isV2 {
-			msgPart = MessagePartV2(p)
-		}
+			var msgPart tl.Serializable = p
+			if isV2 {
+				msgPart = MessagePartV2(p)
+			}
 
-		if err := r.adnl.SendCustomMessage(ctx, msgPart); err != nil {
-			return fmt.Errorf("failed to send message part %d: %w", i, err)
+			part.sendClock.OnSend(currentSeqno, now)
+			if err := r.adnl.SendCustomMessage(ctx, msgPart); err != nil {
+				return fmt.Errorf("failed to send message part %d: %w", currentSeqno, err)
+			}
+
+			seqno++
 		}
 	}
-	atomic.StoreUint32(&part.seqno, sc)
+	atomic.StoreUint32(&part.seqno, seqno)
 	part.recoveryReady.Store(1)
 
 	select {

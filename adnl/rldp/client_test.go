@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/xssnick/raptorq"
@@ -16,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +25,8 @@ func init() {
 	tl.Register(testRequest{}, "http.request id:int256 method:string url:string http_version:string headers:(vector http.header) = http.Response")
 	tl.Register(testResponse{}, "http.response http_version:string status_code:int reason:string headers:(vector http.header) no_payload:Bool = http.Response")
 	tl.Register(testHeader{}, "")
+	tl.Register(benchRequest{}, "benchRequest")
+	tl.Register(benchResponse{}, "benchResponse")
 }
 
 type MockADNL struct {
@@ -62,6 +64,14 @@ func (m MockADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) er
 }
 
 func (m MockADNL) Close() {
+}
+
+type benchRequest struct {
+	WantLen uint32 `tl:"int"`
+}
+
+type benchResponse struct {
+	Data []byte `tl:"bytes"`
 }
 
 type testRequest struct {
@@ -712,12 +722,13 @@ func TestRLDP_ClientServer(t *testing.T) {
 			t.Fatal("bad client execution, err: ", err)
 		}
 
-		if resp.Reason != "test ok:"+hex.EncodeToString(make([]byte, 32))+u {
+		if resp.Reason != u {
 			t.Fatal("bad response data")
 		}
 	})
 
 	Logger = log.Println
+
 	t.Run("big multipart 10mb", func(t *testing.T) {
 		old := MaxUnexpectedTransferSize
 		MaxUnexpectedTransferSize = 1 << 30
@@ -738,7 +749,7 @@ func TestRLDP_ClientServer(t *testing.T) {
 			t.Fatal("bad client execution, err: ", err)
 		}
 
-		if resp.Reason != "test ok:"+hex.EncodeToString(make([]byte, 32))+u {
+		if resp.Reason != u {
 			t.Fatal("bad response data")
 		}
 	})
@@ -746,6 +757,12 @@ func TestRLDP_ClientServer(t *testing.T) {
 }
 
 func BenchmarkRLDP_ClientServer(b *testing.B) {
+	old := MaxUnexpectedTransferSize
+	MaxUnexpectedTransferSize = 1 << 30
+	defer func() {
+		MaxUnexpectedTransferSize = old
+	}()
+
 	srvPub, srvKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		b.Fatal(err)
@@ -757,7 +774,7 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 	}
 
 	s := adnl.NewGateway(srvKey)
-	if err := s.StartServer("127.0.0.1:19155"); err != nil {
+	if err := s.StartServer("127.0.0.1:19157"); err != nil {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() {
@@ -767,13 +784,9 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 	s.SetConnectionHandler(func(client adnl.Peer) error {
 		conn := NewClientV2(client)
 		conn.SetOnQuery(func(transferId []byte, query *Query) error {
-			q := query.Data.(testRequest)
-			res := testResponse{
-				Version:    "HTTP/1.1",
-				StatusCode: 200,
-				Reason:     string(make([]byte, q.RespSz)),
-				Headers:    []testHeader{{"test", "test"}},
-				NoPayload:  true,
+			q := query.Data.(benchRequest)
+			res := benchResponse{
+				Data: make([]byte, q.WantLen),
 			}
 			return conn.SendAnswer(context.Background(), query.MaxAnswerSize, query.Timeout, query.ID, transferId, res)
 		})
@@ -786,28 +799,24 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 	}
 	b.Cleanup(func() { _ = clg.Close() })
 
-	cli, err := clg.RegisterClient("127.0.0.1:19155", srvPub)
+	cli, err := clg.RegisterClient("127.0.0.1:19157", srvPub)
 	if err != nil {
 		b.Fatal(err)
 	}
 	cr := NewClientV2(cli)
 
-	sizes := []uint64{1 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20} // 1KB, 256KB, 1MB, 4MB, 10 MB
+	// 16KB, 256KB, 1MB, 4MB, 10 MB
+	sizes := []uint32{16 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20}
 
 	for _, sz := range sizes {
 		b.Run(fmt.Sprintf("resp=%dKB", sz>>10), func(b *testing.B) {
 			b.SetBytes(int64(sz))
-			b.ReportAllocs()
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				var resp testResponse
-				if err := cr.DoQuery(context.Background(), 1<<30, testRequest{
-					ID:      make([]byte, 32),
-					Method:  "GET",
-					URL:     "123",
-					Version: "1",
-					RespSz:  sz,
+				var resp benchResponse
+				if err := cr.DoQuery(context.Background(), 1<<30, benchRequest{
+					WantLen: sz,
 				}, &resp); err != nil {
 					b.Fatalf("client exec err: %v", err)
 				}
@@ -816,19 +825,14 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 
 		b.Run(fmt.Sprintf("resp=%dKB/parallel", sz>>10), func(b *testing.B) {
 			b.SetBytes(int64(sz))
-			b.ReportAllocs()
-			b.SetParallelism(8)
+			b.SetParallelism(runtime.NumCPU())
 
 			b.ResetTimer()
 			b.RunParallel(func(pb *testing.PB) {
 				for pb.Next() {
-					var resp testResponse
-					if err := cr.DoQuery(context.Background(), 1<<30, testRequest{
-						ID:      make([]byte, 32),
-						Method:  "GET",
-						URL:     "123",
-						Version: "1",
-						RespSz:  sz,
+					var resp benchResponse
+					if err := cr.DoQuery(context.Background(), 1<<30, benchRequest{
+						WantLen: sz,
 					}, &resp); err != nil {
 						b.Fatalf("client exec err: %v", err)
 					}

@@ -131,9 +131,8 @@ func (m *MessagePart) Serialize(buf *bytes.Buffer) error {
 	binary.LittleEndian.PutUint64(tmp[4:], m.TotalSize)
 	binary.LittleEndian.PutUint32(tmp[12:], m.Seqno)
 	buf.Write(tmp)
-	tl.ToBytesToBuffer(buf, m.Data)
-
-	return nil
+	
+	return tl.ToBytesToBuffer(buf, m.Data)
 }
 
 type MessagePartV2 struct {

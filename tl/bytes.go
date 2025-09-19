@@ -7,39 +7,21 @@ import (
 	"fmt"
 )
 
-func ToBytes(buf []byte) []byte {
-	var data = make([]byte, 0, ((len(buf)+4)/4+1)*4)
-
-	// store buf length
-	if len(buf) >= 0xFE {
-		ln := make([]byte, 4)
-		binary.LittleEndian.PutUint32(ln, uint32(len(buf)<<8)|0xFE)
-		data = append(data, ln...)
-	} else {
-		data = append(data, byte(len(buf)))
-	}
-
-	data = append(data, buf...)
-
-	// adjust actual length to fit % 4 = 0
-	if round := len(data) % 4; round != 0 {
-		data = append(data, make([]byte, 4-round)...)
-	}
-
-	return data
-}
-
-func ToBytesToBuffer(buf *bytes.Buffer, data []byte) {
+func ToBytesToBuffer(buf *bytes.Buffer, data []byte) error {
 	if len(data) == 0 {
 		// fast path for empty slice
 		buf.Write(make([]byte, 4))
-		return
+		return nil
 	}
 
 	prevLen := buf.Len()
 
 	// store buf length
 	if len(data) >= 0xFE {
+		if len(data) >= 1<<24 {
+			return fmt.Errorf("too big bytes len, TL bytes array limited by 1<<24")
+		}
+
 		ln := make([]byte, 4)
 		binary.LittleEndian.PutUint32(ln, uint32(len(data)<<8)|0xFE)
 		buf.Write(ln)
@@ -55,6 +37,7 @@ func ToBytesToBuffer(buf *bytes.Buffer, data []byte) {
 			buf.WriteByte(0)
 		}
 	}
+	return nil
 }
 
 func RemapBufferAsSlice(buf *bytes.Buffer, from int) {
