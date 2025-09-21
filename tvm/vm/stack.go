@@ -275,6 +275,64 @@ func (s *Stack) PopSlice() (*cell.Slice, error) {
 	}
 }
 
+func (s *Stack) PopTuple() (tuple.Tuple, error) {
+	e, err := s.PopAny()
+	if err != nil {
+		return tuple.Tuple{}, err
+	}
+	if v, ok := e.(tuple.Tuple); ok {
+		return v, nil
+	}
+	return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple")
+}
+
+func (s *Stack) PopTupleRange(max int, min ...int) (tuple.Tuple, error) {
+	t, err := s.PopTuple()
+	if err != nil {
+		return tuple.Tuple{}, err
+	}
+
+	lower := 0
+	if len(min) > 0 {
+		lower = min[0]
+	}
+
+	if (max >= 0 && t.Len() > max) || t.Len() < lower {
+		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
+	}
+
+	return t, nil
+}
+
+func (s *Stack) PopMaybeTupleRange(max int) (*tuple.Tuple, error) {
+	e, err := s.PopAny()
+	if err != nil {
+		return nil, err
+	}
+	if e == nil {
+		return nil, nil
+	}
+	v, ok := e.(tuple.Tuple)
+	if !ok {
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple")
+	}
+	if max >= 0 && v.Len() > max {
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
+	}
+	return &v, nil
+}
+
+func (s *Stack) PushTuple(t tuple.Tuple) error {
+	return s.PushAny(t)
+}
+
+func (s *Stack) PushMaybeTuple(t *tuple.Tuple) error {
+	if t == nil {
+		return s.PushAny(nil)
+	}
+	return s.PushAny(*t)
+}
+
 func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 	e, err := s.PopInt()
 	if err != nil {
