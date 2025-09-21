@@ -12,7 +12,7 @@ func init() {
 func OVER2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			val, err := state.Stack.Get(int(3))
+			val, err := state.Stack.Get(3)
 			if err != nil {
 				return err
 			}
@@ -25,7 +25,7 @@ func OVER2() *helpers.SimpleOP {
 			}
 			return state.Stack.PushAny(val)
 		},
-		Name:   "OVER2",
+		Name:   "2OVER",
 		Prefix: []byte{0x5D},
 	}
 }

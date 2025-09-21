@@ -27,7 +27,7 @@ func DUP2() *helpers.SimpleOP {
 
 			return state.Stack.PushAny(b)
 		},
-		Name:   "DUP2",
+		Name:   "2DUP",
 		Prefix: []byte{0x5C},
 	}
 }
