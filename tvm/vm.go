@@ -162,7 +162,6 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 			if err != nil {
 				return err
 			}
-			// TODO: consume gas
 
 			return nil
 		}

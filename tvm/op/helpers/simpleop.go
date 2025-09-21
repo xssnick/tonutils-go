@@ -7,9 +7,10 @@ import (
 )
 
 type SimpleOP struct {
-	Action func(*vm.State) error
-	Prefix []byte
-	Name   string
+	Action       func(*vm.State) error
+	Prefix       []byte
+	Name         string
+	BaseGasPrice uint64
 }
 
 func (op *SimpleOP) GetPrefixes() []*cell.Slice {
@@ -40,5 +41,8 @@ func (op *SimpleOP) SerializeText() string {
 }
 
 func (op *SimpleOP) Interpret(state *vm.State) error {
+	if err := state.Gas.Consume(op.BaseGasPrice); err != nil {
+		return err
+	}
 	return op.Action(state)
 }

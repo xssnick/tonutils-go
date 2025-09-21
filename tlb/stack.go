@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"math/big"
 	"reflect"
 
@@ -25,6 +26,21 @@ type StackNaN struct{}
 
 func NewStack() *Stack {
 	return &Stack{}
+}
+
+func NewStackFromVM(s *vm.Stack) (*Stack, error) {
+	s = s.Copy()
+
+	ns := &Stack{}
+	for range s.Len() {
+		val, err := s.PopAny()
+		if err != nil {
+			return nil, err
+		}
+		ns.Push(val)
+	}
+
+	return ns, nil
 }
 
 func (s *Stack) Depth() uint {
