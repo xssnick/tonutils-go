@@ -3,7 +3,6 @@ package exec
 import (
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"math"
 )
 
 func init() {
@@ -18,7 +17,7 @@ func REPEAT() *helpers.SimpleOP {
 				return err
 			}
 
-			i1, err := state.Stack.PopIntRange(-1, math.MaxInt32)
+			i1, err := state.Stack.PopIntRange(repeatCountMin, repeatCountMax)
 			if err != nil {
 				return err
 			}
@@ -33,7 +32,7 @@ func REPEAT() *helpers.SimpleOP {
 				return err
 			}
 
-			if count <= 0 {
+			if count == 0 {
 				return state.Jump(after)
 			}
 
