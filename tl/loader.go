@@ -9,6 +9,7 @@ import (
 	"hash/crc32"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 type Serializable interface{}
@@ -47,7 +48,7 @@ var Logger = func(a ...any) {}
 
 var DefaultSerializeBufferSize = 1024
 
-func splitAllowed(leftTags []string) []string {
+func parseAllowed(leftTags []string) []string {
 	if len(leftTags) == 0 {
 		return nil
 	}
@@ -61,9 +62,20 @@ func splitAllowed(leftTags []string) []string {
 	allowed = allowed[1 : len(allowed)-1]
 	list := strings.Split(allowed, ",")
 
-	return list
+	var finalList = make([]string, 0, len(list))
+	for _, s := range list {
+		if vals, ok := _allowedGroup[s]; ok {
+			// short group alias for many types
+			finalList = append(finalList, vals...)
+		} else {
+			finalList = append(finalList, s)
+		}
+	}
+
+	return finalList
 }
 
+var _allowedGroup = map[string][]string{}
 var _structInfoTable = map[string]*structInfo{}
 var _structInfoTableTLNames = map[string]*structInfo{}
 
@@ -119,7 +131,30 @@ func getStructInfoReferenceByShortName(name string) *structInfo {
 	return si
 }
 
+// RegisterAllowedGroup - register an alias for a group of types to use in tl tags in [brackets]
+// In case the name is already registered, types will be appended
+func RegisterAllowedGroup(name string, names ...string) {
+	initMx.Lock() // we lock because init() methods in independent packages can be called in parallel
+	defer initMx.Unlock()
+	
+	grp := _allowedGroup[name]
+	grp = append(grp, names...)
+	_allowedGroup[name] = grp
+}
+
 func Register(typ any, tl string) uint32 {
+	t := reflect.TypeOf(typ)
+	return RegisterWithFabric(typ, tl, func() reflect.Value {
+		return reflect.New(t)
+	})
+}
+
+var initMx sync.Mutex
+
+func RegisterWithFabric(typ any, tl string, fab func() reflect.Value) uint32 {
+	initMx.Lock() // we lock because init() methods in independent packages can be called in parallel
+	defer initMx.Unlock()
+
 	t := reflect.TypeOf(typ)
 
 	si := getStructInfoReference(t)
@@ -151,8 +186,9 @@ func Register(typ any, tl string) uint32 {
 		si.tlName = nameParts[0]
 	}
 	si.tp = t
+	si.fabric = fab
 
-	nw := reflect.New(t).Interface()
+	nw := fab().Interface()
 
 	// if we have custom method, we use it
 	if _, ok := nw.(SerializableTL); ok {

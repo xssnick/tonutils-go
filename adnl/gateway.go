@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/address"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"net/netip"
@@ -26,6 +27,7 @@ type Peer interface {
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
+	Ping(ctx context.Context) (time.Duration, error)
 	GetQueryHandler() func(msg *MessageQuery) error
 	GetCloserCtx() context.Context
 	SetAddresses(addresses address.List)
@@ -59,6 +61,10 @@ func (p *peerConn) GetCloserCtx() context.Context {
 
 func (p *peerConn) SetAddresses(addresses address.List) {
 	p.client.SetAddresses(addresses)
+}
+
+func (p *peerConn) Ping(ctx context.Context) (time.Duration, error) {
+	return p.client.Ping(ctx)
 }
 
 type srvProcessor struct {
@@ -116,12 +122,14 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 	}
 }
 
+var PacketsBufferSize = 128 * 1024
+
 var DefaultListener = func(addr string) (net.PacketConn, error) {
 	lp, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return nil, err
 	}
-	return NewSyncConn(lp, 512*1024), nil
+	return NewSyncConn(lp, PacketsBufferSize), nil
 }
 
 func (g *Gateway) GetAddressList() address.List {
@@ -293,7 +301,7 @@ func (g *Gateway) listen(rootId []byte) {
 					continue
 				}
 
-				peerId, err = tl.Hash(PublicKeyED25519{Key: packet.From.Key})
+				peerId, err = tl.Hash(keys.PublicKeyED25519{Key: packet.From.Key})
 				if err != nil {
 					Logger("invalid peer id, err:", err.Error())
 					continue
@@ -485,7 +493,7 @@ func (g *Gateway) RegisterClient(addr string, key ed25519.PublicKey) (Peer, erro
 	}
 	udpAddr := net.UDPAddrFromAddrPort(pAddr)
 
-	clientId, err := tl.Hash(PublicKeyED25519{Key: key})
+	clientId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +529,7 @@ func (g *Gateway) write(addr net.Addr, buf []byte) error {
 }
 
 func (g *Gateway) GetID() []byte {
-	id, _ := tl.Hash(PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
+	id, _ := tl.Hash(keys.PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
 	return id
 }
 
@@ -556,7 +564,9 @@ func (p *peerConn) SetDisconnectHandler(handler func(addr string, key ed25519.Pu
 		p.server.mx.Unlock()
 
 		if handler != nil {
-			handler(addr, key)
+			// run it async to avoid potential deadlock issues in user code
+			// in case closed under lock, and the same lock is used in handler
+			go handler(addr, key)
 		}
 	})
 }

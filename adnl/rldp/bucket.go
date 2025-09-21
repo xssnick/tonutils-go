@@ -26,6 +26,12 @@ func NewTokenBucket(rate int64, peerName string) *TokenBucket {
 }
 
 func (tb *TokenBucket) SetRate(pps int64) {
+	if pps < 128 {
+		pps = 128
+	} else if pps > 5000000 {
+		pps = 5000000
+	}
+
 	atomic.StoreInt64(&tb.ratePerSec, pps*1000)
 	atomic.StoreInt64(&tb.capacity, pps*1000)
 	Logger("[RLDP] Peer rate updated:", tb.peerName, pps)

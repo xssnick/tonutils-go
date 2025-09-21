@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/sigurn/crc16"
+	"github.com/xssnick/tonutils-go/crc16"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
+
+func init() {
+	Register(StorageExtraNone{})
+	Register(StorageExtraInfo{})
+}
 
 type AccountStatus string
 
@@ -58,15 +63,24 @@ type AccountStorage struct {
 }
 
 type StorageUsed struct {
-	CellsUsed       *big.Int `tlb:"var uint 7"`
-	BitsUsed        *big.Int `tlb:"var uint 7"`
-	PublicCellsUsed *big.Int `tlb:"var uint 7"`
+	CellsUsed *big.Int `tlb:"var uint 7"`
+	BitsUsed  *big.Int `tlb:"var uint 7"`
+}
+
+type StorageExtraNone struct {
+	_ Magic `tlb:"$000"`
+}
+
+type StorageExtraInfo struct {
+	_        Magic  `tlb:"$001"`
+	DictHash []byte `tlb:"bits 256"`
 }
 
 type StorageInfo struct {
-	StorageUsed StorageUsed `tlb:"."`
-	LastPaid    uint32      `tlb:"## 32"`
-	DuePayment  *Coins      `tlb:"maybe ."`
+	StorageUsed  StorageUsed `tlb:"."`
+	StorageExtra any         `tlb:"[StorageExtraNone,StorageExtraInfo]"`
+	LastPaid     uint32      `tlb:"## 32"`
+	DuePayment   *Coins      `tlb:"maybe ."`
 }
 
 type AccountState struct {
@@ -261,5 +275,5 @@ func (a *Account) HasGetMethod(name string) bool {
 
 func MethodNameHash(name string) uint64 {
 	// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/smc-envelope/SmartContract.h#L75
-	return uint64(crc16.Checksum([]byte(name), crc16.MakeTable(crc16.CRC16_XMODEM))) | 0x10000
+	return uint64(crc16.ChecksumXMODEM([]byte(name))) | 0x10000
 }

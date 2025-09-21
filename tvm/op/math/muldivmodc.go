@@ -27,7 +27,7 @@ func MULDIVMODC() *helpers.SimpleOP {
 			}
 
 			if z.Sign() == 0 {
-				return vmerr.ErrIntOverflow
+				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
 			q := helpers.DivCeil(x.Mul(x, y), z)

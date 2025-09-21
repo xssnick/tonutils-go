@@ -31,7 +31,7 @@ func MULADDDIVMODC() *helpers.SimpleOP {
 			}
 
 			if z.Sign() == 0 {
-				return vmerr.ErrIntOverflow
+				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
 			sum := x.Add(x.Mul(x, y), w)

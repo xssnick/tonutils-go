@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 	"math/big"
 	"sync/atomic"
@@ -36,7 +37,7 @@ func (c *Channel) decodePacket(packet []byte) ([]byte, error) {
 	checksum := packet[0:32]
 	data := packet[32:]
 
-	ctr, err := BuildSharedCipher(c.decKey, checksum)
+	ctr, err := keys.BuildSharedCipher(c.decKey, checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +54,7 @@ func (c *Channel) decodePacket(packet []byte) ([]byte, error) {
 
 func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 	c.peerKey = theirKey
-	c.decKey, err = SharedKey(c.key, c.peerKey)
+	c.decKey, err = keys.SharedKey(c.key, c.peerKey)
 	if err != nil {
 		return err
 	}
@@ -63,29 +64,29 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		c.encKey[(len(c.decKey)-1)-i] = c.decKey[i]
 	}
 
-	theirID, err := tl.Hash(PublicKeyED25519{c.adnl.peerKey})
+	theirID, err := tl.Hash(keys.PublicKeyED25519{c.adnl.peerKey})
 	if err != nil {
 		return err
 	}
 
-	ourID, err := tl.Hash(PublicKeyED25519{c.adnl.ourKey.Public().(ed25519.PublicKey)})
+	ourID, err := tl.Hash(keys.PublicKeyED25519{c.adnl.ourKey.Public().(ed25519.PublicKey)})
 	if err != nil {
 		return err
 	}
 
 	// if serverID < ourID, swap keys. if same -> copy enc key
-	if eq := new(big.Int).SetBytes(theirID).Cmp(new(big.Int).SetBytes(ourID)); eq == -1 {
+	if eq := new(big.Int).SetBytes(theirID).Cmp(new(big.Int).SetBytes(ourID)); eq < 0 {
 		c.encKey, c.decKey = c.decKey, c.encKey
 	} else if eq == 0 {
 		c.encKey = c.decKey
 	}
 
-	c.id, err = tl.Hash(PublicKeyAES{Key: c.decKey})
+	c.id, err = tl.Hash(keys.PublicKeyAES{Key: c.decKey})
 	if err != nil {
 		return err
 	}
 
-	c.idEnc, err = tl.Hash(PublicKeyAES{Key: c.encKey})
+	c.idEnc, err = tl.Hash(keys.PublicKeyAES{Key: c.encKey})
 	if err != nil {
 		return err
 	}
@@ -142,7 +143,7 @@ func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 	hash := sha256.Sum256(packetBytes)
 	checksum := hash[:]
 
-	ctr, err := BuildSharedCipher(c.encKey, checksum)
+	ctr, err := keys.BuildSharedCipher(c.encKey, checksum)
 	if err != nil {
 		return nil, err
 	}

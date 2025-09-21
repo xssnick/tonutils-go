@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"hash/crc32"
 	"io"
 	"log"
@@ -57,10 +58,11 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 		return ErrNoConnections
 	}
 
+	const attempts = 2
 	fails := int32(0)
-	result := make(chan error, len(config.Liteservers))
+	result := make(chan error, len(config.Liteservers)*attempts)
 
-	timeout := 3 * time.Second
+	timeout := attempts * 8 * time.Second
 	if dl, ok := ctx.Deadline(); ok {
 		timeout = dl.Sub(time.Now())
 	}
@@ -71,19 +73,20 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 		ls := ls
 
 		go func() {
-			// we need personal context for each call, because it gets cancelled on failure of one
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
+			for i := 0; i < attempts; i++ {
+				// we need personal context for each call, because it gets cancelled on failure of one
+				ctx, cancel := context.WithTimeout(context.Background(), timeout/attempts)
+				err := c.AddConnection(ctx, conStr, ls.ID.Key)
+				cancel()
+				if err == nil {
+					result <- nil
+					return
+				}
 
-			err := c.AddConnection(ctx, conStr, ls.ID.Key)
-			if err == nil {
-				result <- nil
-				return
-			}
-
-			// if everything failed
-			if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers) {
-				result <- err
+				// if everything failed
+				if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers)*attempts {
+					result <- err
+				}
 			}
 		}()
 	}
@@ -165,11 +168,11 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 	}
 
 	// build ciphers for incoming packets and for outgoing
-	conn.rCrypt, err = adnl.NewCipherCtr(rnd[:32], rnd[64:80])
+	conn.rCrypt, err = keys.NewCipherCtr(rnd[:32], rnd[64:80])
 	if err != nil {
 		return err
 	}
-	conn.wCrypt, err = adnl.NewCipherCtr(rnd[32:64], rnd[80:96])
+	conn.wCrypt, err = keys.NewCipherCtr(rnd[32:64], rnd[80:96])
 	if err != nil {
 		return err
 	}
@@ -210,8 +213,6 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		if err != nil {
 			return err
 		}
-
-		go conn.startPings(5 * time.Second)
 
 		c.nodesMx.Lock()
 		c.activeNodes = append(c.activeNodes, conn)
@@ -334,28 +335,41 @@ func (n *connection) listen(connResult chan<- error) {
 	}
 }
 
-func (n *connection) startPings(every time.Duration) {
-	// TODO: do without goroutines
+func (c *ConnectionPool) startPings(every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
+	var nodes []*connection
 	for {
 		select {
-		case <-n.pool.globalCtx.Done():
+		case <-c.globalCtx.Done():
 			return
 		case <-ticker.C:
 		}
+		nodes = nodes[:0]
+
+		c.nodesMx.RLock()
+		nodes = append(nodes, c.activeNodes...)
+		c.nodesMx.RUnlock()
 
 		num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
 		if err != nil {
 			continue
 		}
 
-		if err := n.ping(num.Int64()); err != nil {
-			// force close in case of error
-			_ = n.tcp.Close()
-			break
+		var wg sync.WaitGroup
+		for _, node := range nodes {
+			wg.Add(1)
+			go func(n *connection) {
+				defer wg.Done()
+				time.Sleep(1 * time.Second)
+				if err := n.ping(num.Int64()); err != nil {
+					// force close on error
+					_ = n.tcp.Close()
+				}
+			}(node)
 		}
+		wg.Wait()
 	}
 }
 
@@ -371,7 +385,7 @@ func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
 
 	sz := binary.LittleEndian.Uint32(size)
 
-	if sz > 10<<20 {
+	if sz > 16<<20 {
 		return 0, fmt.Errorf("too big size of packet: %s", hex.EncodeToString(size))
 	}
 
@@ -379,7 +393,7 @@ func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
 }
 
 func readData(conn net.Conn, crypt cipher.Stream, sz uint32) ([]byte, error) {
-	if sz > 8<<20 {
+	if sz > 16<<20 {
 		return nil, fmt.Errorf("too big packet")
 	}
 
@@ -472,12 +486,12 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 
 	pub := ourKey.Public().(ed25519.PublicKey)
 
-	kid, err := tl.Hash(adnl.PublicKeyED25519{Key: serverKey})
+	kid, err := tl.Hash(keys.PublicKeyED25519{Key: serverKey})
 	if err != nil {
 		return err
 	}
 
-	key, err := adnl.SharedKey(ourKey, serverKey)
+	key, err := keys.SharedKey(ourKey, serverKey)
 	if err != nil {
 		return err
 	}
@@ -494,7 +508,7 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 		key[24], key[25], key[26], key[27], key[28], key[29], key[30], key[31],
 	}
 
-	ctr, err := adnl.NewCipherCtr(k, iv)
+	ctr, err := keys.NewCipherCtr(k, iv)
 	if err != nil {
 		return err
 	}

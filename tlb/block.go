@@ -1,20 +1,10 @@
 package tlb
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
-
-// Deprecated: use ton.BlockIDExt
-type BlockInfo struct {
-	Workchain int32  `tl:"int"`
-	Shard     int64  `tl:"long"`
-	SeqNo     uint32 `tl:"int"`
-	RootHash  []byte `tl:"int256"`
-	FileHash  []byte `tl:"int256"`
-}
 
 type StateUpdate struct {
 	Old any        `tlb:"^ [ShardStateUnsplit,ShardStateSplit]"`
@@ -121,26 +111,6 @@ type GlobalVersion struct {
 type BlkPrevInfo struct {
 	Prev1 ExtBlkRef
 	Prev2 *ExtBlkRef
-}
-
-func (h *BlockInfo) Equals(h2 *BlockInfo) bool {
-	return h.Shard == h2.Shard && h.SeqNo == h2.SeqNo && h.Workchain == h2.Workchain &&
-		bytes.Equal(h.FileHash, h2.FileHash) && bytes.Equal(h.RootHash, h2.RootHash)
-}
-
-func (h *BlockInfo) Copy() *BlockInfo {
-	root := make([]byte, len(h.RootHash))
-	file := make([]byte, len(h.FileHash))
-	copy(root, h.RootHash)
-	copy(file, h.FileHash)
-
-	return &BlockInfo{
-		Workchain: h.Workchain,
-		Shard:     h.Shard,
-		SeqNo:     h.SeqNo,
-		RootHash:  root,
-		FileHash:  file,
-	}
 }
 
 func (h BlockHeader) ToCell() (*cell.Cell, error) {
@@ -322,67 +292,4 @@ func ConvertShardIdentToShard(si ShardIdent) (workchain int32, shard uint64) {
 	pow2 := uint64(1) << (63 - si.PrefixBits)
 	shard |= pow2
 	return si.WorkchainID, shard
-}
-
-func shardChild(shard uint64, left bool) uint64 {
-	x := lowerBit64(shard) >> 1
-	if left {
-		return shard - x
-	}
-	return shard + x
-}
-
-func shardParent(shard uint64) uint64 {
-	x := lowerBit64(shard)
-	return (shard - x) | (x << 1)
-}
-
-func lowerBit64(x uint64) uint64 {
-	return x & bitsNegate64(x)
-}
-
-func bitsNegate64(x uint64) uint64 {
-	return ^x + 1
-}
-
-func (h *BlockHeader) GetParentBlocks() ([]*BlockInfo, error) {
-	var parents []*BlockInfo
-	workchain, shard := ConvertShardIdentToShard(h.Shard)
-
-	if !h.AfterMerge && !h.AfterSplit {
-		return []*BlockInfo{{
-			Workchain: workchain,
-			SeqNo:     h.PrevRef.Prev1.SeqNo,
-			RootHash:  h.PrevRef.Prev1.RootHash,
-			FileHash:  h.PrevRef.Prev1.FileHash,
-			Shard:     int64(shard),
-		}}, nil
-	} else if !h.AfterMerge && h.AfterSplit {
-		return []*BlockInfo{{
-			Workchain: workchain,
-			SeqNo:     h.PrevRef.Prev1.SeqNo,
-			RootHash:  h.PrevRef.Prev1.RootHash,
-			FileHash:  h.PrevRef.Prev1.FileHash,
-			Shard:     int64(shardParent(shard)),
-		}}, nil
-	}
-
-	if h.PrevRef.Prev2 == nil {
-		return nil, fmt.Errorf("must be 2 parent blocks after merge")
-	}
-	parents = append(parents, &BlockInfo{
-		Workchain: workchain,
-		SeqNo:     h.PrevRef.Prev1.SeqNo,
-		RootHash:  h.PrevRef.Prev1.RootHash,
-		FileHash:  h.PrevRef.Prev1.FileHash,
-		Shard:     int64(shardChild(shard, true)),
-	})
-	parents = append(parents, &BlockInfo{
-		Workchain: workchain,
-		SeqNo:     h.PrevRef.Prev2.SeqNo,
-		RootHash:  h.PrevRef.Prev2.RootHash,
-		FileHash:  h.PrevRef.Prev2.FileHash,
-		Shard:     int64(shardChild(shard, false)),
-	})
-	return parents, nil
 }

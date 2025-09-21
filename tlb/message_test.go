@@ -2,6 +2,7 @@ package tlb
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"testing"
 
@@ -149,4 +150,18 @@ func TestMessage_LoadFromCell(t *testing.T) {
 			t.Errorf("wrong msg type, want EXTERNAL_OUT, got %s", msg.MsgType)
 		}
 	})
+}
+
+func TestMessage_NormalizedHash(t *testing.T) {
+	data, _ := base64.StdEncoding.DecodeString("te6ccgEBAgEAqgAB4YgA2ZpktQsYby0n9cV5VWOFINBjScIU2HdondFsK3lDpEAFG8W4Jpf7AeOqfzL9vZ79mX3eM6UEBxZvN6+QmpYwXBq32QOBIrP4lF5ijGgQmZbC6KDeiiptxmTNwl5f59OAGU1NGLsixYlYAAAA2AAcAQBoYgBZQOG7qXmeA/2Tw1pLX2IkcQ5h5fxWzzcBskMJbVVRsKNaTpAAAAAAAAAAAAAAAAAAAA==")
+	c, _ := cell.FromBOC(data)
+
+	var msg ExternalMessageIn
+	if err := LoadFromCell(&msg, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+
+	if hex.EncodeToString(msg.NormalizedHash()) != "23ff6f150d573f64d5599a57813f991882b7b4d5ae0550ebd08ea658431e62f6" {
+		t.Fatal("hash not match")
+	}
 }

@@ -14,6 +14,7 @@ type NetManager interface {
 	InitConnection(gate *Gateway, addr string) error
 	CloseConnection(gate *Gateway)
 	WritePacket(gate *Gateway, p []byte, addr net.Addr) (n int, err error)
+	Close()
 }
 
 type SingleNetManager struct {
@@ -39,7 +40,7 @@ func NewSingleNetReader(connector func(addr string) (net.PacketConn, error)) *Si
 				}
 			},
 		},
-		udpBuf:          make(chan *UDPPacket, 1*1024*1024),
+		udpBuf:          make(chan *UDPPacket, PacketsBufferSize),
 		globalCtx:       globalCtx,
 		globalCtxCancel: globalCtxCancel,
 	}
@@ -95,6 +96,11 @@ func (s *SingleNetManager) InitConnection(gate *Gateway, addr string) error {
 	}()
 
 	return nil
+}
+
+func (s *SingleNetManager) Close() {
+	s.globalCtxCancel()
+	_ = s.conn.Close()
 }
 
 func (s *SingleNetManager) Free(p *UDPPacket) {
@@ -195,6 +201,11 @@ func (m *MultiNetManager) Free(p *UDPPacket) {
 	m.bufPool.Put(p)
 }
 
+func (m *MultiNetManager) Close() {
+	m.globalCtxCancel()
+	_ = m.conn.Close()
+}
+
 func (m *MultiNetManager) GetReaderChan(gate *Gateway) <-chan *UDPPacket {
 	m.mx.Lock()
 	defer m.mx.Unlock()
@@ -206,7 +217,7 @@ func (m *MultiNetManager) InitConnection(gate *Gateway, addr string) error {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 
-	chPackets := make(chan *UDPPacket, 1*1024*1024)
+	chPackets := make(chan *UDPPacket, PacketsBufferSize)
 	m.src[gate] = chPackets
 	m.processors[string(gate.GetID())] = chPackets
 

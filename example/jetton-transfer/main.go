@@ -17,7 +17,7 @@ func main() {
 	client := liteclient.NewConnectionPool()
 
 	// connect to testnet lite server
-	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton.org/global.config.json")
+	err := client.AddConnectionsFromConfigUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
 	if err != nil {
 		panic(err)
 	}
@@ -59,7 +59,7 @@ func main() {
 
 	// address of receiver's wallet (not token wallet, just usual)
 	to := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
-	transferPayload, err := tokenWallet.BuildTransferPayloadV2(to, to, amountTokens, tlb.ZeroCoins, comment, nil)
+	transferPayload, err := jetton.BuildTransferPayload(to, to, amountTokens, tlb.ZeroCoins, comment, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

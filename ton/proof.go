@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
-	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -453,7 +453,7 @@ func CheckBlockSignatures(block *BlockIDExt, sigs *SignatureSet, validators []*t
 	var totalWeight, signedWeight uint64
 	validatorsMap := map[string]*tlb.ValidatorAddr{}
 	for _, v := range validators {
-		kid, err := tl.Hash(adnl.PublicKeyED25519{Key: v.PublicKey.Key})
+		kid, err := tl.Hash(keys.PublicKeyED25519{Key: v.PublicKey.Key})
 		if err != nil {
 			return fmt.Errorf("failed to calc validator key id: %w", err)
 		}

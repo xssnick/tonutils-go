@@ -68,6 +68,7 @@ type InternalMessage struct {
 	Body      *cell.Cell `tlb:"either . ^"`
 }
 
+type ExternalMessageIn = ExternalMessage
 type ExternalMessage struct {
 	_         Magic            `tlb:"$10"`
 	SrcAddr   *address.Address `tlb:"addr"`
@@ -110,6 +111,24 @@ func (m *InternalMessage) Comment() string {
 		}
 	}
 	return ""
+}
+
+func (m *ExternalMessage) NormalizedHash() []byte {
+	body := m.Body
+	if body == nil {
+		// to not panic when body is nil
+		body = cell.BeginCell().EndCell()
+	}
+
+	return cell.BeginCell().
+		MustStoreUInt(0b10, 2).
+		MustStoreAddr(nil). // no src addr
+		MustStoreAddr(m.DstAddr).
+		MustStoreCoins(0).       // no import fee
+		MustStoreBoolBit(false). // no state init
+		MustStoreBoolBit(true).  // body always in ref
+		MustStoreRef(body).
+		EndCell().Hash()
 }
 
 func (m *ExternalMessage) Payload() *cell.Cell {

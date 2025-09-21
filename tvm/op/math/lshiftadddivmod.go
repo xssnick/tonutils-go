@@ -35,7 +35,7 @@ func LSHIFTADDDIVMOD() *helpers.SimpleOP {
 			if z.Sign() == 0 {
 				// division by 0
 				return vmerr.VMError{
-					Code: vmerr.ErrIntOverflow.Code,
+					Code: vmerr.CodeIntOverflow,
 					Msg:  "division by zero",
 				}
 			}

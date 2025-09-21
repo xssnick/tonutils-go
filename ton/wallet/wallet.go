@@ -13,9 +13,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"time"
-
-	"github.com/xssnick/tonutils-go/adnl"
 
 	"github.com/xssnick/tonutils-go/ton"
 
@@ -96,8 +95,9 @@ var (
 		HighloadV3: _HighloadV3CodeHex,
 		Lockup:     _LockupCodeHex,
 	}
-	walletCodeBOC = map[Version][]byte{}
-	walletCode    = map[Version]*cell.Cell{}
+	walletCodeBOC           = map[Version][]byte{}
+	walletCode              = map[Version]*cell.Cell{}
+	walletVersionByCodeHash = map[string]Version{}
 )
 
 func init() {
@@ -108,10 +108,13 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
-		walletCode[ver], err = cell.FromBOC(walletCodeBOC[ver])
+		code, err := cell.FromBOC(walletCodeBOC[ver])
 		if err != nil {
 			panic(err)
 		}
+
+		walletCode[ver] = code
+		walletVersionByCodeHash[string(code.Hash())] = ver
 	}
 }
 
@@ -130,15 +133,10 @@ var (
 
 type TonAPI interface {
 	WaitForBlock(seqno uint32) ton.APIClientWrapped
-	Client() ton.LiteClient
 	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
-	GetAccount(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
-	RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
-	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
-	FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
 }
 
 type Message struct {
@@ -169,16 +167,14 @@ type Option func(*Wallet)
 
 func FromPrivateKey(api TonAPI, key ed25519.PrivateKey, version VersionConfig) (*Wallet, error) {
 	return newWallet(
-		api,
 		key.Public().(ed25519.PublicKey),
 		version,
-		WithPrivateKey(key))
+		WithPrivateKey(key), WithAPI(api))
 }
 
-// FromPrivateKeyWithOptions - can initialize customizable wallet, for example: FromPrivateKeyWithOptions(api, key, version, WithWorkchain(-1))
-func FromPrivateKeyWithOptions(api TonAPI, key ed25519.PrivateKey, version VersionConfig, options ...Option) (*Wallet, error) {
+// FromPrivateKeyWithOptions - can initialize a customizable wallet, for example, FromPrivateKeyWithOptions(key, version, WithAPI(api), WithWorkchain(-1))
+func FromPrivateKeyWithOptions(key ed25519.PrivateKey, version VersionConfig, options ...Option) (*Wallet, error) {
 	return newWallet(
-		api,
 		key.Public().(ed25519.PublicKey),
 		version,
 		append([]Option{WithPrivateKey(key)}, options...)...)
@@ -186,13 +182,19 @@ func FromPrivateKeyWithOptions(api TonAPI, key ed25519.PrivateKey, version Versi
 
 func FromSigner(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, signer Signer) (*Wallet, error) {
 	return newWallet(
-		api,
 		publicKey,
 		version,
-		WithSigner(signer))
+		WithSigner(signer), WithAPI(api))
 }
 
-func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, options ...Option) (*Wallet, error) {
+func FromPubKeyWithOptions(publicKey ed25519.PublicKey, version VersionConfig, options ...Option) (*Wallet, error) {
+	return newWallet(
+		publicKey,
+		version,
+		options...)
+}
+
+func newWallet(publicKey ed25519.PublicKey, version VersionConfig, options ...Option) (*Wallet, error) {
 	var subwallet uint32 = DefaultSubwallet
 
 	// default subwallet depends on wallet type
@@ -208,7 +210,6 @@ func newWallet(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, o
 	}
 
 	w := &Wallet{
-		api:       api,
 		addr:      addr,
 		ver:       version,
 		subwallet: subwallet,
@@ -242,6 +243,12 @@ func WithPrivateKey(privateKey ed25519.PrivateKey) Option {
 func WithSigner(signer Signer) Option {
 	return func(w *Wallet) {
 		w.signer = signer
+	}
+}
+
+func WithAPI(api TonAPI) Option {
+	return func(w *Wallet) {
+		w.api = api
 	}
 }
 
@@ -317,8 +324,7 @@ func getSpec(w *Wallet) (any, error) {
 }
 
 // Address - returns old (bounce) version of wallet address
-// DEPRECATED: because of address reform, use WalletAddress,
-// it will return UQ format
+// Deprecated: because of address reform, use WalletAddress, it will return UQ format
 func (w *Wallet) Address() *address.Address {
 	return w.addr
 }
@@ -636,7 +642,7 @@ func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey 
 		return nil, fmt.Errorf("message was encrypted not for the given keys")
 	}
 
-	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	sharedKey, err := keys.SharedKey(ourKey, theirKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute shared key: %w", err)
 	}
@@ -672,7 +678,7 @@ func CreateEncryptedCommentCell(text string, senderAddr *address.Address, ourKey
 	// encrypted comment op code
 	root := cell.BeginCell().MustStoreUInt(EncryptedCommentOpcode, 32)
 
-	sharedKey, err := adnl.SharedKey(ourKey, theirKey)
+	sharedKey, err := keys.SharedKey(ourKey, theirKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute shared key: %w", err)
 	}

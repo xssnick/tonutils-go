@@ -328,7 +328,7 @@ func (d *Dictionary) All() []*HashmapKV {
 }
 
 func (d *Dictionary) LoadAll(skipPruned ...bool) ([]DictKV, error) {
-	if d.root == nil {
+	if d == nil || d.root == nil {
 		return []DictKV{}, nil
 	}
 	return d.mapInner(d.keySz, d.keySz, d.root, BeginCell(), len(skipPruned) > 0 && skipPruned[0])

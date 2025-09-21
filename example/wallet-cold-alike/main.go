@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -30,7 +31,7 @@ func main() {
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
 
-	w, err := wallet.FromSeed(api, words, wallet.V3)
+	w, err := wallet.FromSeedWithOptions(api, words, wallet.V3)
 	if err != nil {
 		log.Fatalln("FromSeed err:", err.Error())
 		return
@@ -62,6 +63,9 @@ func main() {
 		log.Fatalln("BuildTransfer err:", err.Error())
 		return
 	}
+
+	// this hash could be used for transaction discovery in explorers
+	log.Println("External message hash:", hex.EncodeToString(ext.NormalizedHash()))
 
 	// if you wish to send message from diff source, or later, you could serialize it to BoC
 	msgCell, _ := tlb.ToCell(ext)

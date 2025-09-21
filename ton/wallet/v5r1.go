@@ -66,7 +66,7 @@ func (s *SpecV5R1Final) BuildMessage(ctx context.Context, _ bool, _ *ton.BlockID
 		return nil, fmt.Errorf("failed to fetch seqno: %w", err)
 	}
 
-	actions, err := packV5Actions(messages)
+	actions, err := PackV5OutActions(messages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build actions: %w", err)
 	}
@@ -108,8 +108,7 @@ func validateMessageFields(messages []*Message) error {
 	return nil
 }
 
-// Pack Actions
-func packV5Actions(messages []*Message) (*cell.Builder, error) {
+func PackV5OutActions(messages []*Message) (*cell.Builder, error) {
 	if err := validateMessageFields(messages); err != nil {
 		return nil, err
 	}

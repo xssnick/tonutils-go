@@ -29,6 +29,7 @@ const (
 	_ExecuteTypeLong
 	_ExecuteTypeBool
 	_ExecuteTypeVector
+	_ExecuteTypeIP6
 )
 
 const (
@@ -106,8 +107,11 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 			// creating virtual struct with one field
 			// to simplify serialization in runtime
 			info.structInfo = &structInfo{
-				tp:        f.Type,
-				fields:    []*fieldInfo{elemInfo},
+				tp:     f.Type,
+				fields: []*fieldInfo{elemInfo},
+				fabric: func() reflect.Value {
+					return reflect.New(f.Type)
+				},
 				finalized: true,
 				tlName:    "##unusable_name",
 			}
@@ -123,13 +127,13 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 				tags = tags[1:]
 			}
 
-			var err error
-			var num int
+			var num uint32
 			if len(tags) > 1 {
-				num, err = strconv.Atoi(tags[1])
-				if err != nil || num <= 0 {
+				numP, err := strconv.ParseUint(tags[1], 10, 32)
+				if err != nil {
 					panic("cells num tag should be positive integer")
 				}
+				num = uint32(numP)
 			}
 
 			if f.Type == reflect.TypeOf(&cell.Cell{}) {
@@ -166,7 +170,7 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 				}
 				structFlags |= _StructFlagsInterface
 
-				list := splitAllowed(tags[2:])
+				list := parseAllowed(tags[2:])
 				for _, s := range list {
 					info.allowedTypes = append(info.allowedTypes, getStructInfoReferenceByShortName(s))
 				}
@@ -193,7 +197,11 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 					if tags[0] == "int256" {
 						info.typ = _ExecuteTypeInt256
 					} else if tags[0] == "int128" {
-						info.typ = _ExecuteTypeInt128
+						if f.Type == reflect.TypeOf(net.IP{}) {
+							info.typ = _ExecuteTypeIP6
+						} else {
+							info.typ = _ExecuteTypeInt128
+						}
 					} else {
 						info.typ = _ExecuteTypeBytes
 					}
@@ -244,6 +252,7 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 type structInfo struct {
 	id              []byte
 	tp              reflect.Type
+	fabric          func() reflect.Value
 	fields          []*fieldInfo
 	manualSerialize bool
 	manualParse     bool
@@ -291,7 +300,12 @@ func addressablePtr(val reflect.Value) (reflect.Value, error) {
 		return val, nil
 	case reflect.Struct:
 		if !val.CanAddr() {
-			rvx := reflect.New(val.Type())
+			si := _structInfoTable[val.Type().String()]
+			if si == nil {
+				return reflect.Value{}, fmt.Errorf("tl type %s is not compilled", val.Type().String())
+			}
+
+			rvx := si.fabric()
 			rvx.Elem().Set(val)
 			return rvx, nil
 		}
@@ -399,7 +413,7 @@ func parseBoxedType(buf []byte) ([]byte, *structInfo, error) {
 
 	info := _SchemaByID[binary.LittleEndian.Uint32(buf)]
 	if info == nil {
-		return nil, nil, fmt.Errorf("struct id %s is not registered", hex.EncodeToString(buf[:4]))
+		return nil, nil, fmt.Errorf("struct id %s is not registered %s", hex.EncodeToString(buf[:4]), hex.EncodeToString(buf))
 	}
 	return buf[4:], info, nil
 }
@@ -431,7 +445,7 @@ func Parse(v Serializable, data []byte, boxed bool) (_ []byte, err error) {
 			return nil, err
 		}
 
-		e := reflect.New(info.tp)
+		e := info.fabric()
 		if data, err = parsePrecompiled(e.UnsafePointer(), info, false, data, false); err != nil {
 			return nil, err
 		}
@@ -558,6 +572,17 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 			bts[0], bts[1], bts[2], bts[3] = buf[3], buf[2], buf[1], buf[0]
 			*(*[]byte)(ptr) = bts
 			buf = buf[4:]
+		case _ExecuteTypeIP6:
+			if len(buf) < 16 {
+				return nil, fmt.Errorf("not enough bytes to parse ip v6 field %s", field.String())
+			}
+
+			bts := make([]byte, 16)
+			for i := 0; i < 16; i++ {
+				bts[i] = buf[15-i]
+			}
+			*(*[]byte)(ptr) = bts
+			buf = buf[16:]
 		case _ExecuteTypeSingleCell:
 			var bts []byte
 			if bts, buf, err = FromBytes(buf); err != nil {
@@ -580,7 +605,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 				return nil, fmt.Errorf("failed to parse slice cell bytes, field %s: %w", field.String(), err)
 			}
 
-			flag := field.meta.(int)
+			flag := field.meta.(uint32)
 			if len(bts) == 0 && flag&(1<<31) != 0 {
 				*(*[]*cell.Cell)(ptr) = nil
 				break
@@ -592,7 +617,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 			}
 
 			num := flag & 0x7FFFFFFF
-			if num > 0 && len(c) != num {
+			if num > 0 && uint32(len(c)) != num {
 				return nil, fmt.Errorf("incorrect cells num %d in field %s, want %d", len(c), field.String(), field.meta.(int))
 			}
 			*(*[]*cell.Cell)(ptr) = c
@@ -611,7 +636,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 			}
 
 			if structFlags&_StructFlagsPointer != 0 { // pointer
-				nw := reflect.New(info.tp).UnsafePointer()
+				nw := info.fabric().UnsafePointer()
 				*(*unsafe.Pointer)(ptr) = nw
 				ptr = nw
 			} else if structFlags&_StructFlagsInterface != 0 {
@@ -627,7 +652,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 							return nil, fmt.Errorf("invalid type %s is not allowed at field %s", info.tp.String(), field.String())
 						}
 
-						e := reflect.New(info.tp)
+						e := info.fabric()
 						if source, err = parsePrecompiled(e.UnsafePointer(), info, false, source, noCopy); err != nil {
 							return nil, err
 						}
@@ -653,7 +678,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 						return nil, fmt.Errorf("invalid type %s is not allowed at field %s", info.tp.String(), field.String())
 					}
 
-					e := reflect.New(info.tp)
+					e := info.fabric()
 					if source, err = parsePrecompiled(e.UnsafePointer(), info, false, source, noCopy); err != nil {
 						return nil, err
 					}
@@ -829,6 +854,21 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			} else {
 				return fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
 			}
+		case _ExecuteTypeIP6:
+			ipBytes := *(*net.IP)(ptr)
+			if len(ipBytes) == net.IPv4len {
+				ipBytes = ipBytes.To16()
+				if ipBytes == nil {
+					return fmt.Errorf("invalid ip v6 in field %s", field.String())
+				}
+			}
+			if len(ipBytes) == net.IPv6len {
+				buf.Write(ipBytes)
+			} else if len(ipBytes) == 0 {
+				buf.Write(make([]byte, 16))
+			} else {
+				return fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
+			}
 		case _ExecuteTypeSingleCell:
 			c := *(**cell.Cell)(ptr)
 			if c == nil {
@@ -841,7 +881,7 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithFlags(false))
 		case _ExecuteTypeSliceCell:
 			c := *(*[]*cell.Cell)(ptr)
-			flag := field.meta.(int)
+			flag := field.meta.(uint32)
 			num := flag & 0x7FFFFFFF
 
 			if len(c) == 0 && flag&(1<<31) != 0 {
@@ -849,7 +889,7 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 				break
 			}
 
-			if num > 0 && len(c) != num {
+			if num > 0 && uint32(len(c)) != num {
 				return fmt.Errorf("incorrect cells len %d in field %s", len(c), field.String())
 			}
 			ToBytesToBuffer(buf, cell.ToBOCWithFlags(c, false))
@@ -961,15 +1001,15 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 				buf.Write(_BoolFalse)
 			}
 		case _ExecuteTypeVector:
-			st := reflect.NewAt(field.structInfo.tp, ptr).Elem()
-			ln := st.Len()
+			hdr := (*reflect.SliceHeader)(ptr)
+			ln := hdr.Len
 
 			tmp := make([]byte, 4)
 			binary.LittleEndian.PutUint32(tmp, uint32(ln))
 			buf.Write(tmp)
 
 			sz := field.structInfo.tp.Elem().Size()
-			ePtr := st.Pointer()
+			ePtr := hdr.Data
 
 			for x := 0; x < ln; x++ {
 				if err := executeSerialize(buf, ePtr, field.structInfo); err != nil {

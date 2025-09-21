@@ -151,6 +151,27 @@ type ShardDescB struct {
 	FundsCreated       CurrencyCollection `tlb:"."`
 }
 
+func ShardChild(shard uint64, left bool) uint64 {
+	x := lowerBit64(shard) >> 1
+	if left {
+		return shard - x
+	}
+	return shard + x
+}
+
+func ShardParent(shard uint64) uint64 {
+	x := lowerBit64(shard)
+	return (shard - x) | (x << 1)
+}
+
+func lowerBit64(x uint64) uint64 {
+	return x & bitsNegate64(x)
+}
+
+func bitsNegate64(x uint64) uint64 {
+	return ^x + 1
+}
+
 func (s ShardID) IsSibling(with ShardID) bool {
 	return (s^with) != 0 && ((s ^ with) == ((s & ShardID(bitsNegate64(uint64(s)))) << 1))
 }

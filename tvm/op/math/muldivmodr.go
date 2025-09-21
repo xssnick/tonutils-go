@@ -27,7 +27,7 @@ func MULDIVMODR() *helpers.SimpleOP {
 			}
 
 			if z.Sign() == 0 {
-				return vmerr.ErrIntOverflow
+				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
 			q := helpers.DivRound(x.Mul(x, y), z)

@@ -140,8 +140,33 @@ type Signature struct {
 type Object struct{}
 type True struct{}
 
-// TODO: will be moved here in the next version
-type BlockIDExt = tlb.BlockInfo
+type BlockIDExt struct {
+	Workchain int32  `tl:"int"`
+	Shard     int64  `tl:"long"`
+	SeqNo     uint32 `tl:"int"`
+	RootHash  []byte `tl:"int256"`
+	FileHash  []byte `tl:"int256"`
+}
+
+func (h *BlockIDExt) Equals(h2 *BlockIDExt) bool {
+	return h.Shard == h2.Shard && h.SeqNo == h2.SeqNo && h.Workchain == h2.Workchain &&
+		bytes.Equal(h.FileHash, h2.FileHash) && bytes.Equal(h.RootHash, h2.RootHash)
+}
+
+func (h *BlockIDExt) Copy() *BlockIDExt {
+	root := make([]byte, len(h.RootHash))
+	file := make([]byte, len(h.FileHash))
+	copy(root, h.RootHash)
+	copy(file, h.FileHash)
+
+	return &BlockIDExt{
+		Workchain: h.Workchain,
+		Shard:     h.Shard,
+		SeqNo:     h.SeqNo,
+		RootHash:  root,
+		FileHash:  file,
+	}
+}
 
 type MasterchainInfo struct {
 	Last          *BlockIDExt     `tl:"struct"`
@@ -324,7 +349,7 @@ func (c *APIClient) CurrentMasterchainInfo(ctx context.Context) (_ *BlockIDExt, 
 	master.mx.Lock()
 	defer master.mx.Unlock()
 
-	if time.Now().After(master.updatedAt.Add(5 * time.Second)) {
+	if time.Now().After(master.updatedAt.Add(1 * time.Second)) {
 		ctx = c.client.StickyContext(ctx)
 
 		var block *BlockIDExt
@@ -409,35 +434,19 @@ func (c *APIClient) LookupBlock(ctx context.Context, workchain int32, shard int6
 
 // GetBlockData - get block detailed information
 func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error) {
-	var resp tl.Serializable
-	err := c.client.QueryLiteserver(ctx, GetBlockData{ID: block}, &resp)
+	cl, err := c.GetBlockDataAsCell(ctx, block)
 	if err != nil {
 		return nil, err
 	}
 
-	switch t := resp.(type) {
-	case BlockData:
-		pl, err := cell.FromBOC(t.Payload)
-		if err != nil {
-			return nil, err
-		}
-
-		if !bytes.Equal(pl.Hash(), block.RootHash) {
-			return nil, fmt.Errorf("incorrect block")
-		}
-
-		var bData tlb.Block
-		if err = tlb.LoadFromCell(&bData, pl.BeginParse()); err != nil {
-			return nil, fmt.Errorf("failed to parse block data: %w", err)
-		}
-		return &bData, nil
-	case LSError:
-		return nil, t
+	var bData tlb.Block
+	if err = tlb.LoadFromCell(&bData, cl.BeginParse()); err != nil {
+		return nil, fmt.Errorf("failed to parse block data: %w", err)
 	}
-	return nil, errUnexpectedResponse(resp)
+	return &bData, nil
 }
 
-// GetBlockDataAsCell - get block cell
+// GetBlockDataAsCell - get block detailed information as a cell
 func (c *APIClient) GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (*cell.Cell, error) {
 	var resp tl.Serializable
 	err := c.client.QueryLiteserver(ctx, GetBlockData{ID: block}, &resp)
@@ -463,7 +472,7 @@ func (c *APIClient) GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (
 	return nil, errUnexpectedResponse(resp)
 }
 
-// GetBlockTransactionsV2 - list of block transactions
+// GetBlockTransactionsV2 - a list of block transactions
 func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error) {
 	withAfter := uint32(0)
 	var afterTx *TransactionID3
@@ -692,4 +701,46 @@ func (c *APIClient) GetBlockProof(ctx context.Context, known, target *BlockIDExt
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
+}
+
+func GetParentBlocks(h *tlb.BlockHeader) ([]*BlockIDExt, error) {
+	var parents []*BlockIDExt
+	workchain, shard := tlb.ConvertShardIdentToShard(h.Shard)
+
+	if !h.AfterMerge && !h.AfterSplit {
+		return []*BlockIDExt{{
+			Workchain: workchain,
+			SeqNo:     h.PrevRef.Prev1.SeqNo,
+			RootHash:  h.PrevRef.Prev1.RootHash,
+			FileHash:  h.PrevRef.Prev1.FileHash,
+			Shard:     int64(shard),
+		}}, nil
+	} else if !h.AfterMerge && h.AfterSplit {
+		return []*BlockIDExt{{
+			Workchain: workchain,
+			SeqNo:     h.PrevRef.Prev1.SeqNo,
+			RootHash:  h.PrevRef.Prev1.RootHash,
+			FileHash:  h.PrevRef.Prev1.FileHash,
+			Shard:     int64(tlb.ShardParent(shard)),
+		}}, nil
+	}
+
+	if h.PrevRef.Prev2 == nil {
+		return nil, fmt.Errorf("must be 2 parent blocks after merge")
+	}
+	parents = append(parents, &BlockIDExt{
+		Workchain: workchain,
+		SeqNo:     h.PrevRef.Prev1.SeqNo,
+		RootHash:  h.PrevRef.Prev1.RootHash,
+		FileHash:  h.PrevRef.Prev1.FileHash,
+		Shard:     int64(tlb.ShardChild(shard, true)),
+	})
+	parents = append(parents, &BlockIDExt{
+		Workchain: workchain,
+		SeqNo:     h.PrevRef.Prev2.SeqNo,
+		RootHash:  h.PrevRef.Prev2.RootHash,
+		FileHash:  h.PrevRef.Prev2.FileHash,
+		Shard:     int64(tlb.ShardChild(shard, false)),
+	})
+	return parents, nil
 }

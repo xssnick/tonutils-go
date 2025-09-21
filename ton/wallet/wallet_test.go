@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
 
 	"github.com/xssnick/tonutils-go/address"

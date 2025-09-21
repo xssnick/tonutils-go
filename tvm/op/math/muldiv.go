@@ -29,7 +29,7 @@ func MULDIV() *helpers.SimpleOP {
 			}
 
 			if z.Sign() == 0 {
-				return vmerr.ErrIntOverflow
+				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
 			q, _ := helpers.DivFloor(new(big.Int).Mul(x, y), z)

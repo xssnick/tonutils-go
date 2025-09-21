@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"reflect"
 	"strings"
 	"sync"
@@ -74,6 +75,7 @@ type ADNL struct {
 	ourAddresses unsafe.Pointer
 
 	activeQueries map[string]chan tl.Serializable
+	activePings   map[int64]chan MessagePong
 
 	customMessageHandler unsafe.Pointer // CustomMessageHandler
 	queryHandler         unsafe.Pointer // QueryHandler
@@ -98,6 +100,7 @@ func (g *Gateway) initADNL() *ADNL {
 		closerCtx:     closerCtx,
 		closeFn:       closeFn,
 		msgParts:      make(map[string]*partitionedMessage, 128),
+		activePings:   make(map[int64]chan MessagePong),
 		activeQueries: map[string]chan tl.Serializable{},
 	}
 }
@@ -220,7 +223,16 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 func (a *ADNL) processMessage(message any) error {
 	switch ms := message.(type) {
 	case MessagePong:
-		// TODO: record
+		a.mx.RLock()
+		ch := a.activePings[ms.Value]
+		a.mx.RUnlock()
+
+		if ch != nil {
+			select {
+			case ch <- ms:
+			default:
+			}
+		}
 	case MessagePing:
 		buf, err := a.buildRequest(MessagePong{Value: ms.Value})
 		if err != nil {
@@ -294,7 +306,7 @@ func (a *ADNL) processMessage(message any) error {
 			return fmt.Errorf("failed to setup channel: %w", err)
 		}
 	case MessagePart:
-		msgID := hex.EncodeToString(ms.Hash)
+		msgID := string(ms.Hash)
 
 		a.mx.Lock()
 		p, ok := a.msgParts[msgID]
@@ -306,10 +318,16 @@ func (a *ADNL) processMessage(message any) error {
 
 			if len(a.msgParts) > 100 {
 				// cleanup old stuck messages
+				tm := time.Now().Add(-7 * time.Second)
 				for s, pt := range a.msgParts {
-					if time.Since(pt.startedAt) > 10*time.Second {
+					if tm.After(pt.startedAt) {
 						delete(a.msgParts, s)
 					}
+				}
+
+				if len(a.msgParts) > 16*1024 {
+					a.mx.Unlock()
+					return fmt.Errorf("too many incomplete messages")
 				}
 			}
 
@@ -441,6 +459,47 @@ reSplit:
 	return nil
 }
 
+func (a *ADNL) Ping(ctx context.Context) (time.Duration, error) {
+	val := time.Now().UnixNano()
+	req, err := a.buildRequest(MessagePing{
+		Value: val,
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	ch := make(chan MessagePong, 1)
+	a.mx.Lock()
+	a.activePings[val] = ch
+	a.mx.Unlock()
+
+	defer func() {
+		a.mx.Lock()
+		delete(a.activePings, val)
+		a.mx.Unlock()
+	}()
+
+	for {
+		try, cancel := context.WithTimeout(ctx, 1*time.Second)
+
+		if err = a.send(req); err != nil {
+			cancel()
+			return 0, fmt.Errorf("failed to send ping packet: %w", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			cancel()
+			return 0, ctx.Err()
+		case <-ch:
+			cancel()
+			return time.Since(time.Unix(0, val)), nil
+		case <-try.Done():
+			continue
+		}
+	}
+}
+
 func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	q, err := createQueryMessage(req)
 	if err != nil {
@@ -454,13 +513,16 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	a.activeQueries[reqID] = res
 	a.mx.Unlock()
 
+	defer func() {
+		a.mx.Lock()
+		delete(a.activeQueries, reqID)
+		a.mx.Unlock()
+	}()
+
 	baseMTU := false
 reSplit:
 	packets, err := a.buildRequestMaySplit(q, baseMTU)
 	if err != nil {
-		a.mx.Lock()
-		delete(a.activeQueries, reqID)
-		a.mx.Unlock()
 		return fmt.Errorf("request failed: %w", err)
 	}
 
@@ -627,7 +689,7 @@ func (a *ADNL) send(buf []byte) error {
 		// not close on io timeout because it can be triggered by network overload
 		if !strings.Contains(err.Error(), "i/o timeout") {
 			// it should trigger disconnect handler in read routine
-			a.writer.Close()
+			a.Close()
 		}
 		return err
 	} else if n != len(buf) {
@@ -642,12 +704,12 @@ func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 	checksum := packet[32:64]
 	data := packet[64:]
 
-	key, err := SharedKey(key, pub)
+	key, err := keys.SharedKey(key, pub)
 	if err != nil {
 		return nil, err
 	}
 
-	ctr, err := BuildSharedCipher(key, checksum)
+	ctr, err := keys.BuildSharedCipher(key, checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -673,7 +735,7 @@ func (a *ADNL) GetAddressList() address.List {
 }
 
 func (a *ADNL) GetID() []byte {
-	id, _ := tl.Hash(PublicKeyED25519{Key: a.peerKey})
+	id, _ := tl.Hash(keys.PublicKeyED25519{Key: a.peerKey})
 	return id
 }
 
@@ -730,9 +792,9 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	}
 
 	if !isResp {
-		packet.From = &PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
+		packet.From = &keys.PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
 	} else {
-		packet.FromIDShort, err = tl.Hash(PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
+		packet.FromIDShort, err = tl.Hash(keys.PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
 		if err != nil {
 			return nil, err
 		}
@@ -763,19 +825,19 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	hash := sha256.Sum256(packetData)
 	checksum := hash[:]
 
-	key, err := SharedKey(a.ourKey, a.peerKey)
+	key, err := keys.SharedKey(a.ourKey, a.peerKey)
 	if err != nil {
 		return nil, err
 	}
 
-	ctr, err := BuildSharedCipher(key, checksum)
+	ctr, err := keys.BuildSharedCipher(key, checksum)
 	if err != nil {
 		return nil, err
 	}
 
 	ctr.XORKeyStream(packetData, packetData)
 
-	enc, err := tl.Hash(PublicKeyED25519{Key: a.peerKey})
+	enc, err := tl.Hash(keys.PublicKeyED25519{Key: a.peerKey})
 	if err != nil {
 		return nil, err
 	}

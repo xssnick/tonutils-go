@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"github.com/xssnick/raptorq"
 	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
+	"maps"
 	"reflect"
 	"sync"
 	"time"
@@ -87,9 +89,7 @@ func (a *ADNLOverlayWrapper) SetAuthorizedKeys(keysWithMaxLen map[string]uint32)
 
 	// reset and copy
 	a.authorizedKeys = map[string]uint32{}
-	for k, v := range keysWithMaxLen {
-		a.authorizedKeys[k] = v
-	}
+	maps.Copy(a.authorizedKeys, keysWithMaxLen)
 }
 
 func (a *ADNLWrapper) UnregisterOverlay(id []byte) {
@@ -193,7 +193,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 		return fmt.Errorf("failed to serialize broadcast for sign check: %w", err)
 	}
 
-	sourceKey, ok := t.Source.(adnl.PublicKeyED25519)
+	sourceKey, ok := t.Source.(keys.PublicKeyED25519)
 	if !ok {
 		return fmt.Errorf("invalid signer key format")
 	}
@@ -295,12 +295,10 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	defer stream.mx.Unlock()
 
 	if stream.finishedAt != nil {
-		var received tl.Serializable = FECCompleted{
-			Hash: broadcastHash,
-		}
-
 		// got packet for a finished stream, let them know that it is received
-		err := a.ADNL.SendCustomMessage(context.Background(), received)
+		err := a.ADNL.SendCustomMessage(context.Background(), FECCompleted{
+			Hash: broadcastHash,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to send overlay fec received message: %w", err)
 		}
@@ -311,7 +309,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	tm := time.Now()
 	stream.lastMessageAt = tm
 
-	canTryDecode, err := stream.decoder.AddSymbol(uint32(t.Seqno), t.Data)
+	canTryDecode, err := stream.decoder.AddSymbol(t.Seqno, t.Data)
 	if err != nil {
 		return fmt.Errorf("failed to add raptorq symbol %d: %w", t.Seqno, err)
 	}
@@ -350,19 +348,13 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 				return fmt.Errorf("failed to parse decoded broadcast message: %w", err)
 			}
 
-			var complete tl.Serializable = FECCompleted{
+			_ = a.ADNL.SendCustomMessage(context.Background(), FECCompleted{
 				Hash: broadcastHash,
-			}
-
-			err = a.ADNL.SendCustomMessage(context.Background(), complete)
-			if err != nil {
-				return fmt.Errorf("failed to send rldp complete message: %w", err)
-			}
+			})
 
 			if bHandler := a.broadcastHandler; bHandler != nil {
 				// handle result
-				err = bHandler(res, stream.trusted)
-				if err != nil {
+				if err = bHandler(res, stream.trusted); err != nil {
 					return fmt.Errorf("failed to process broadcast message: %w", err)
 				}
 			}
