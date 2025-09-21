@@ -27,7 +27,7 @@ func XCHG3(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d XCHG3", i, j, k)
 		},
-                Prefix: cell.BeginCell().MustStoreUInt(0x4, 4).EndCell(),
+		Prefix: cell.BeginCell().MustStoreUInt(0x4, 4).EndCell(),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4).MustStoreUInt(uint64(k), 4)
 		},

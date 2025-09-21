@@ -41,7 +41,7 @@ func SWAP2() *helpers.SimpleOP {
 
 			return state.Stack.PushAny(b)
 		},
-		Name:   "SWAP2",
+		Name:   "2SWAP",
 		Prefix: []byte{0x5A},
 	}
 }
