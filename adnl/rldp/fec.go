@@ -44,6 +44,25 @@ type FECRoundRobin struct {
 	SymbolsCount uint32 `tl:"int"`
 }
 
+func (f *FECRoundRobin) Parse(data []byte) ([]byte, error) {
+	if len(data) < 12 {
+		return nil, fmt.Errorf("fec rr data too short")
+	}
+	f.DataSize = binary.LittleEndian.Uint32(data[:4])
+	f.SymbolSize = binary.LittleEndian.Uint32(data[4:8])
+	f.SymbolsCount = binary.LittleEndian.Uint32(data[8:12])
+	return data[12:], nil
+}
+
+func (f *FECRoundRobin) Serialize(buf *bytes.Buffer) error {
+	tmp := make([]byte, 12)
+	binary.LittleEndian.PutUint32(tmp[0:4], f.DataSize)
+	binary.LittleEndian.PutUint32(tmp[4:8], f.SymbolSize)
+	binary.LittleEndian.PutUint32(tmp[8:12], f.SymbolsCount)
+	buf.Write(tmp)
+	return nil
+}
+
 type FECOnline struct {
 	DataSize     uint32 `tl:"int"`
 	SymbolSize   uint32 `tl:"int"`

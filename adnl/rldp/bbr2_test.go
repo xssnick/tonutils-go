@@ -1,6 +1,7 @@
 package rldp
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -211,13 +212,65 @@ func TestBBR_BtlBwDecay(t *testing.T) {
 	}
 
 	winMs := int64(opts.BtlBwWindowSec * 1000)
-	bbr.cycleStamp.Store(time.Now().UnixMilli() - winMs - 10)
+	bbr.lastBtlBwDecay.Store(time.Now().UnixMilli() - winMs - 10)
 	bbr.ObserveDelta(1, 1)
 	time.Sleep(12 * time.Millisecond)
 
 	decayed := bbr.btlbw.Load()
 	if !(decayed < peak && decayed >= opts.MinRate) {
 		t.Fatalf("expected btlbw decay: before=%d after=%d (min=%d)", peak, decayed, opts.MinRate)
+	}
+}
+
+func TestBBR_LossSampleTracked(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:            60_000,
+		DefaultRTTMs:       20,
+		MinSampleMs:        10,
+		BtlBwWindowSec:     2,
+		ProbeBwCycleMs:     40,
+		ProbeRTTDurationMs: 40,
+		MinRTTExpiryMs:     5_000,
+		HighLoss:           0.05,
+		Beta:               0.85,
+	}
+	bbr, _ := newBBR(t, opts.MinRate, opts)
+
+	time.Sleep(12 * time.Millisecond)
+	bbr.ObserveDelta(400_000, 200_000)
+
+	total, lost, rate := bbr.LastLossSample()
+	if total <= 0 || lost <= 0 {
+		t.Fatalf("expected non-zero loss sample, got total=%d lost=%d", total, lost)
+	}
+
+	expected := float64(lost) / float64(total)
+	if math.Abs(rate-expected) > 1e-3 {
+		t.Fatalf("loss rate mismatch: want %.4f got %.4f (total=%d lost=%d)", expected, rate, total, lost)
+	}
+}
+
+func TestBBR_InflightAllowance(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:      40_000,
+		DefaultRTTMs: 20,
+		MinSampleMs:  10,
+	}
+	bbr, _ := newBBR(t, opts.MinRate, opts)
+
+	bbr.hiInflight.Store(60_000)
+	if got := bbr.InflightAllowance(30_000); got != 30_000 {
+		t.Fatalf("unexpected allowance: %d", got)
+	}
+
+	if got := bbr.InflightAllowance(80_000); got != 0 {
+		t.Fatalf("allowance should clamp at zero, got %d", got)
+	}
+
+	bbr.hiInflight.Store(0)
+	bbr.inflight.Store(45_000)
+	if got := bbr.InflightAllowance(5_000); got != 40_000 {
+		t.Fatalf("fallback allowance mismatch: %d", got)
 	}
 }
 

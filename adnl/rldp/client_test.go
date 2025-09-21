@@ -12,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -754,6 +755,34 @@ func TestRLDP_ClientServer(t *testing.T) {
 		}
 	})
 
+	t.Run("big multipart 4mb rr", func(t *testing.T) {
+		old := MaxUnexpectedTransferSize
+		MaxUnexpectedTransferSize = 1 << 30
+		MultiFECMode = true
+		defer func() {
+			MaxUnexpectedTransferSize = old
+			MultiFECMode = false
+			RoundRobinFECLimit = 1 << 30
+		}()
+
+		u := strings.Repeat("a", 4*1024*1024)
+
+		var resp testResponse
+		err := cr.DoQuery(context.Background(), 4096+uint64(len(u)), testRequest{
+			ID:      make([]byte, 32),
+			Method:  "GET",
+			URL:     u,
+			Version: "1",
+		}, &resp)
+		if err != nil {
+			t.Fatal("bad client execution, err: ", err)
+		}
+
+		if resp.Reason != u {
+			t.Fatal("bad response data")
+		}
+	})
+
 }
 
 func BenchmarkRLDP_ClientServer(b *testing.B) {
@@ -763,6 +792,107 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 		MaxUnexpectedTransferSize = old
 	}()
 
+	defaultSizes := []uint32{16 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20}
+
+	scenarios := []struct {
+		name         string
+		sizes        []uint32
+		setup        func(*testing.B) (*RLDP, func())
+		withParallel bool
+	}{
+		{
+			name:  "loopback_rr",
+			sizes: defaultSizes,
+			setup: func(b *testing.B) (*RLDP, func()) {
+				oldLim := RoundRobinFECLimit
+				RoundRobinFECLimit = 2 << 30
+				MultiFECMode = true
+				rl, end := setupLoopbackBenchmark(b)
+
+				return rl, func() {
+					end()
+					RoundRobinFECLimit = oldLim
+				}
+			},
+			withParallel: true,
+		},
+		{
+			name:         "loopback_raptorq",
+			sizes:        defaultSizes,
+			setup:        setupLoopbackBenchmark,
+			withParallel: true,
+		},
+		{
+			// it requires some time to speedup by bbr, so will show a low rate
+			name:  "netem_loss_raptorq",
+			sizes: []uint32{4 << 20},
+			setup: func(tb *testing.B) (*RLDP, func()) {
+				return setupNetemBenchmark(tb, 0.02, 50*time.Millisecond, 5*time.Millisecond)
+			},
+			withParallel: true,
+		},
+	}
+
+	for _, sc := range scenarios {
+		sc := sc
+		b.Run(sc.name, func(b *testing.B) {
+			client, cleanup := sc.setup(b)
+			defer cleanup()
+			runRLDPBenchSizes(b, client, sc.sizes, sc.withParallel)
+		})
+	}
+}
+
+func runRLDPBenchSizes(b *testing.B, client *RLDP, sizes []uint32, withParallel bool) {
+	for _, sz := range sizes {
+		b.Run(fmt.Sprintf("resp=%dKB", sz>>10), func(b *testing.B) {
+			b.SetBytes(int64(sz))
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				var resp benchResponse
+				if err := client.DoQuery(context.Background(), 1<<30, benchRequest{
+					WantLen: sz,
+				}, &resp); err != nil {
+					b.Fatalf("client exec err: %v", err)
+				}
+			}
+		})
+
+		if withParallel {
+			b.Run(fmt.Sprintf("resp=%dKB/parallel", sz>>10), func(b *testing.B) {
+				b.SetBytes(int64(sz))
+				b.SetParallelism(runtime.NumCPU())
+
+				b.ResetTimer()
+				b.RunParallel(func(pb *testing.PB) {
+					for pb.Next() {
+						var resp benchResponse
+						if err := client.DoQuery(context.Background(), 1<<30, benchRequest{
+							WantLen: sz,
+						}, &resp); err != nil {
+							b.Fatalf("client exec err: %v", err)
+						}
+					}
+				})
+			})
+		}
+	}
+}
+
+func configureBenchServer(g *adnl.Gateway) {
+	g.SetConnectionHandler(func(client adnl.Peer) error {
+		conn := NewClientV2(client)
+		conn.SetOnQuery(func(transferId []byte, query *Query) error {
+			q := query.Data.(benchRequest)
+			res := benchResponse{Data: make([]byte, q.WantLen)}
+			return conn.SendAnswer(context.Background(), query.MaxAnswerSize, query.Timeout, query.ID, transferId, res)
+		})
+		return nil
+	})
+}
+
+func setupLoopbackBenchmark(b *testing.B) (*RLDP, func()) {
 	srvPub, srvKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		b.Fatal(err)
@@ -773,71 +903,73 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	s := adnl.NewGateway(srvKey)
-	if err := s.StartServer("127.0.0.1:19157"); err != nil {
+	srv := adnl.NewGateway(srvKey)
+	if err := srv.StartServer("127.0.0.1:19157"); err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() {
-		_ = s.Close()
-	})
+	configureBenchServer(srv)
 
-	s.SetConnectionHandler(func(client adnl.Peer) error {
-		conn := NewClientV2(client)
-		conn.SetOnQuery(func(transferId []byte, query *Query) error {
-			q := query.Data.(benchRequest)
-			res := benchResponse{
-				Data: make([]byte, q.WantLen),
-			}
-			return conn.SendAnswer(context.Background(), query.MaxAnswerSize, query.Timeout, query.ID, transferId, res)
-		})
-		return nil
-	})
-
-	clg := adnl.NewGateway(cliKey)
-	if err := clg.StartClient(); err != nil {
+	cliGateway := adnl.NewGateway(cliKey)
+	if err := cliGateway.StartClient(); err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { _ = clg.Close() })
 
-	cli, err := clg.RegisterClient("127.0.0.1:19157", srvPub)
+	cli, err := cliGateway.RegisterClient("127.0.0.1:19157", srvPub)
 	if err != nil {
 		b.Fatal(err)
 	}
-	cr := NewClientV2(cli)
 
-	// 16KB, 256KB, 1MB, 4MB, 10 MB
-	sizes := []uint32{16 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20}
+	client := NewClientV2(cli)
 
-	for _, sz := range sizes {
-		b.Run(fmt.Sprintf("resp=%dKB", sz>>10), func(b *testing.B) {
-			b.SetBytes(int64(sz))
-			b.ResetTimer()
-
-			for i := 0; i < b.N; i++ {
-				var resp benchResponse
-				if err := cr.DoQuery(context.Background(), 1<<30, benchRequest{
-					WantLen: sz,
-				}, &resp); err != nil {
-					b.Fatalf("client exec err: %v", err)
-				}
-			}
-		})
-
-		b.Run(fmt.Sprintf("resp=%dKB/parallel", sz>>10), func(b *testing.B) {
-			b.SetBytes(int64(sz))
-			b.SetParallelism(runtime.NumCPU())
-
-			b.ResetTimer()
-			b.RunParallel(func(pb *testing.PB) {
-				for pb.Next() {
-					var resp benchResponse
-					if err := cr.DoQuery(context.Background(), 1<<30, benchRequest{
-						WantLen: sz,
-					}, &resp); err != nil {
-						b.Fatalf("client exec err: %v", err)
-					}
-				}
-			})
-		})
+	cleanup := func() {
+		client.Close()
+		_ = cliGateway.Close()
+		_ = srv.Close()
 	}
+
+	return client, cleanup
+}
+
+func setupNetemBenchmark(b *testing.B, loss float64, baseDelay, jitter time.Duration) (*RLDP, func()) {
+	srvPub, srvKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	_, cliKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	srvConn, cliConn := newMemPacketConnPair(loss, baseDelay, jitter, 512<<10)
+
+	srv := adnl.NewGatewayWithNetManager(srvKey, adnl.NewSingleNetReader(func(string) (net.PacketConn, error) {
+		return srvConn, nil
+	}))
+	if err := srv.StartServer("127.0.0.1:19158"); err != nil {
+		b.Fatal(err)
+	}
+	configureBenchServer(srv)
+
+	cliGateway := adnl.NewGatewayWithNetManager(cliKey, adnl.NewSingleNetReader(func(string) (net.PacketConn, error) {
+		return cliConn, nil
+	}))
+	if err := cliGateway.StartClient(); err != nil {
+		b.Fatal(err)
+	}
+
+	cli, err := cliGateway.RegisterClient("127.0.0.1:19158", srvPub)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	client := NewClientV2(cli)
+
+	cleanup := func() {
+		client.Close()
+		_ = cliGateway.Close()
+		_ = srv.Close()
+	}
+
+	return client, cleanup
 }
