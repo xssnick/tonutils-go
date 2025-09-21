@@ -13,21 +13,23 @@ func init() {
 func DIV() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
-			i1, err := state.Stack.PopIntFinite()
+			x, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
 
-			if i1.Sign() == 0 {
+			if y.Sign() == 0 {
 				// division by 0
 				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
-			return state.Stack.PushInt(i0.Div(i0, i1))
+			q, _ := helpers.DivFloor(x, y)
+
+			return state.Stack.PushInt(q)
 		},
 		Name:   "DIV",
 		Prefix: []byte{0xA9, 0x04},
