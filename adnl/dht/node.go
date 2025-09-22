@@ -6,8 +6,10 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"math/bits"
+	"net"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -26,6 +28,8 @@ type dhtNode struct {
 	ping      int64
 	addr      string
 	serverKey ed25519.PublicKey
+
+	node *Node
 
 	currentState int
 	badScore     int32
@@ -58,14 +62,48 @@ func (l dhtNodeList) Less(i, j int) bool {
 	return atomic.LoadInt64(&l[i].ping) < atomic.LoadInt64(&l[j].ping)
 }
 
-func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey) *dhtNode {
+func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey, node *Node) *dhtNode {
 	n := &dhtNode{
 		adnlId:    id,
 		addr:      addr,
 		serverKey: serverKey,
 		client:    c,
 	}
+	if node != nil {
+		n.setNode(node)
+	}
 	return n
+}
+
+func (n *dhtNode) setNode(node *Node) {
+	if node == nil {
+		return
+	}
+
+	clone := cloneNode(node)
+	n.mx.Lock()
+	n.node = clone
+	n.mx.Unlock()
+}
+
+func (n *dhtNode) updateEndpoint(addr string, key ed25519.PublicKey) {
+	n.mx.Lock()
+	if addr != "" {
+		n.addr = addr
+	}
+	if key != nil {
+		n.serverKey = key
+	}
+	n.mx.Unlock()
+}
+
+func (n *dhtNode) getNode() *Node {
+	n.mx.Lock()
+	defer n.mx.Unlock()
+	if n.node == nil {
+		return nil
+	}
+	return cloneNode(n.node)
 }
 
 func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*Node, err error) {
@@ -315,4 +353,49 @@ func affinity(x, y []byte) uint {
 		}
 	}
 	return result
+}
+
+func cloneNode(node *Node) *Node {
+	if node == nil {
+		return nil
+	}
+
+	clone := *node
+
+	switch id := node.ID.(type) {
+	case keys.PublicKeyED25519:
+		cp := make([]byte, len(id.Key))
+		copy(cp, id.Key)
+		clone.ID = keys.PublicKeyED25519{Key: cp}
+	case keys.PublicKeyAES:
+		cp := make([]byte, len(id.Key))
+		copy(cp, id.Key)
+		clone.ID = keys.PublicKeyAES{Key: cp}
+	}
+
+	if node.AddrList != nil {
+		addrClone := *node.AddrList
+		if len(node.AddrList.Addresses) > 0 {
+			addrClone.Addresses = make([]*address.UDP, len(node.AddrList.Addresses))
+			for i, addr := range node.AddrList.Addresses {
+				if addr == nil {
+					continue
+				}
+				udpClone := *addr
+				if addr.IP != nil {
+					ip := make(net.IP, len(addr.IP))
+					copy(ip, addr.IP)
+					udpClone.IP = ip
+				}
+				addrClone.Addresses[i] = &udpClone
+			}
+		}
+		clone.AddrList = &addrClone
+	}
+
+	if len(node.Signature) > 0 {
+		clone.Signature = append([]byte(nil), node.Signature...)
+	}
+
+	return &clone
 }
