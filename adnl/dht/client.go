@@ -170,13 +170,12 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 	addr := node.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(node.AddrList.Addresses[0].Port)
 
 	if hf := bucket.findNode(kid); hf != nil {
-		if hf.addr == addr {
-			return nil, fmt.Errorf("node already exists")
-		}
-		// updated address otherwise
+		hf.updateEndpoint(addr, pub.Key)
+		hf.setNode(node)
+		return hf, nil
 	}
 
-	kNode := c.initNode(kid, addr, pub.Key)
+	kNode := c.initNode(kid, addr, pub.Key, node)
 	bucket.addNode(kNode)
 
 	return kNode, nil
@@ -550,4 +549,54 @@ func (c *Client) buildPriorityList(id []byte) *priorityList {
 	}
 
 	return plistGood
+}
+
+type nodeAffinity struct {
+	node     *Node
+	affinity int
+}
+
+func (c *Client) nearestNodeAffinities(id []byte, limit int) []nodeAffinity {
+	if limit <= 0 {
+		return nil
+	}
+
+	plist := c.buildPriorityList(id)
+	result := make([]nodeAffinity, 0, limit)
+	seen := map[string]struct{}{}
+
+	for len(result) < limit {
+		node, pr := plist.Get()
+		if node == nil {
+			break
+		}
+
+		key := node.id()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		nn := node.getNode()
+		if nn == nil {
+			continue
+		}
+
+		result = append(result, nodeAffinity{node: nn, affinity: pr})
+	}
+
+	return result
+}
+
+func (c *Client) nearestNodes(id []byte, limit int) ([]*Node, []int) {
+	details := c.nearestNodeAffinities(id, limit)
+	nodes := make([]*Node, 0, len(details))
+	affinities := make([]int, 0, len(details))
+
+	for _, d := range details {
+		nodes = append(nodes, d.node)
+		affinities = append(affinities, d.affinity)
+	}
+
+	return nodes, affinities
 }

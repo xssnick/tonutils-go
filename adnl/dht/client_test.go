@@ -14,6 +14,7 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
+	"os"
 	"reflect"
 	"strconv"
 	"testing"
@@ -406,6 +407,10 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 }
 
 func TestClient_FindAddressesIntegration(t *testing.T) {
+	if _, ok := os.LookupEnv("TON_DHT_INTEGRATION_TEST"); !ok {
+		t.Skip("TON_DHT_INTEGRATION_TEST is not set; skipping integration test that requires public DHT network access")
+	}
+
 	_, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -472,6 +477,10 @@ func TestClient_Close(t *testing.T) {
 }
 
 func TestClient_StoreAddressIntegration(t *testing.T) {
+	if _, ok := os.LookupEnv("TON_DHT_INTEGRATION_TEST"); !ok {
+		t.Skip("TON_DHT_INTEGRATION_TEST is not set; skipping integration test that requires public DHT network access")
+	}
+
 	_, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
