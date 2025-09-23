@@ -434,7 +434,6 @@ To check proof you could use `cell.CheckProof(merkleProof, hash)` method, or `ce
 
 ### TLB Loader
 You can also load cells to structures, similar to JSON, using tags. 
-You can find more details in comment-description of `tlb.LoadFromCell` method
 
 Example:
 ```golang
@@ -460,6 +459,122 @@ if err = tlb.LoadFromCell(&state, cl.BeginParse()); err != nil {
     panic(err)
 }
 ```
+
+#### Available tags
+
+##### 1. `## N` — Fixed-Bit Integer
+- **Description**: Loads an unsigned integer with exactly N bits. If N ≤ 64, uses `uint` type (any size, e.g., `uint8`, `uint64`). If N > 64, uses `*big.Int` for large numbers.
+- **Example**:
+  ```go
+  type ExampleStruct struct {
+      SmallValue uint32 `tlb:"## 32"`  // 32-bit uint32
+      LargeValue *big.Int `tlb:"## 128"` // 128-bit large number in *big.Int
+  }
+  ```
+- **Notes**: The field type must match the size (for N ≤ 64). For larger N, use `*big.Int` to avoid overflow.
+
+##### 2. `^` — Load by Reference
+- **Description**: Reads a reference to another cell and recursively calls `LoadFromCell` for deserialization. If the field type is `*cell.Cell`, loads the raw cell without parsing.
+- **Example**:
+  ```go
+  type NestedStruct struct {
+      Inner *InnerType `tlb:"^"`  // Recursive deserialization into another struct
+      RawCell *cell.Cell `tlb:"^"` // Raw cell without parsing
+  }
+  ```
+- **Notes**: Useful for tree-like TON structures where data is distributed across multiple cells.
+
+##### 3. `.` — Continue Deserialization from Current Loader
+- **Description**: Recursively calls `LoadFromCell` for the field, continuing reading from the current `*cell.Slice` (without reading a new reference).
+- **Example**:
+  ```go
+  type BalanceStruct struct {
+      Coins Coins `tlb:"."`  // Coins is a struct, deserialized from the current slice
+  }
+  ```
+- **Notes**: Used for nested structs within a single cell. Often combined with other tags, e.g., `maybe .`.
+
+##### 4. `dict [inline] N` — Dictionary (Hashmap)
+- **Description**: Loads a dictionary with key size N bits. The `inline` option indicates a `Hashmap` (not `HashmapE`). Without `inline`, it's `HashmapE`.
+- **Example**:
+  ```go
+  type DictStruct struct {
+      MyDict cell.Dictionary `tlb:"dict 256"`       // Dictionary with 256-bit keys
+      InlineDict cell.Dictionary `tlb:"dict inline 32"` // Inline variant
+  }
+  ```
+- **Notes**: The field must be of type `cell.Dictionary`. Keys and values are deserialized based on dictionary types.
+
+##### 5. `bits N` — Bit Slice in []byte
+- **Description**: Loads exactly N bits into a byte slice `[]byte`.
+- **Example**:
+  ```go
+  type KeyStruct struct {
+      Key []byte `tlb:"bits 256"`  // 256 bits in []byte (32 bytes)
+  }
+  ```
+- **Notes**: Ideal for fixed bit strings, such as keys or hashes.
+
+##### 6. `bool` — Boolean Value (1 Bit)
+- **Description**: Loads 1 bit as `bool` (0 — false, 1 — true).
+- **Example**:
+  ```go
+  type FlagStruct struct {
+      Initialized bool `tlb:"bool"`
+  }
+  ```
+- **Notes**: Simple tag for flags.
+
+##### 7. `addr` — TON Address
+- **Description**: Loads a TON address into a field of type `*address.Address`.
+- **Example**:
+  ```go
+  type AddrStruct struct {
+      Addr *address.Address `tlb:"addr"`
+  }
+  ```
+- **Notes**: Specialized tag for TON addresses.
+
+##### 8. `maybe` — Optional Field
+- **Description**: Reads 1 bit; if 1, loads the rest of the field. Can be combined with other tags (e.g., `maybe ^` or `maybe .`).
+- **Example**:
+  ```go
+  type OptionalStruct struct {
+      Fees Coins `tlb:"maybe ."`  // If bit 1, deserializes Coins from current slice
+  }
+  ```
+- **Notes**: If bit 0, the field remains nil or default.
+
+##### 9. `either [leave {bits},{refs}] X Y` — Alternative (Union)
+- **Description**: Reads 1 bit; if 0 — loads X, if 1 — Y. The `leave` option checks remaining bits/refs after loading. X and Y are other tags.
+- **Example**:
+  ```go
+  type UnionStruct struct {
+      Variant interface{} `tlb:"either ^ ."`  // 0: by reference, 1: from current
+  }
+  ```
+- **Notes**: Useful for type variants. During deserialization, tries the first variant; if bits/refs are insufficient, tries the second.
+
+##### 10. `?FieldName` — Conditional Field Based on Another Field
+- **Description**: Loads the field only if the specified boolean field (`FieldName`) is true. `FieldName` must be declared earlier in the struct.
+- **Example**:
+  ```go
+  type ConditionalStruct struct {
+      IsActive bool     `tlb:"bool"`
+      NextStep *Step    `tlb:"?IsActive ^"`  // Loaded only if IsActive == true
+  }
+  ```
+- **Notes**: If `FieldName` is not true or undefined, the field is skipped. `FieldName` must be bool and precede the conditional field.
+
+##### 11. Magic Number
+- **Description**: Checks the initial bits against a specified value to identify the struct type. Format: `#hex` (HEX) or `$bin` (BIN).
+- **Example**:
+  ```go
+  type MagicStruct struct {
+      // ... fields ...
+  } `tlb:"#deadbeef"`  // Checks 32-bit HEX deadbeef at the start
+  ```
+- **Notes**: Specified at the struct level (not field). Skipped if `skipMagic: true` is passed. Useful for distinguishing struct variants.
 
 #### TLB Serialize
 Its also possible to serialize structures back to cells using `tlb.ToCell`, see [build NFT mint message](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/collection.go#L189) for example.
