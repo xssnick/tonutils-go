@@ -23,7 +23,7 @@ const _MaxFailCount = 3
 
 type dhtNode struct {
 	adnlId []byte
-	client *Client
+	client *DHT
 
 	ping      int64
 	addr      string
@@ -62,7 +62,7 @@ func (l dhtNodeList) Less(i, j int) bool {
 	return atomic.LoadInt64(&l[i].ping) < atomic.LoadInt64(&l[j].ping)
 }
 
-func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey, node *Node) *dhtNode {
+func (c *DHT) initNode(id []byte, addr string, serverKey ed25519.PublicKey, node *Node) *dhtNode {
 	n := &dhtNode{
 		adnlId:    id,
 		addr:      addr,
@@ -107,16 +107,21 @@ func (n *dhtNode) getNode() *Node {
 }
 
 func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*Node, err error) {
-	val, err := tl.Serialize(FindNode{
+	var query tl.Serializable = FindNode{
 		Key: id,
 		K:   K,
-	}, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize dht query: %w", err)
+	}
+
+	if n.client.serverMode {
+		self, err := n.client.selfNode()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get self node: %w", err)
+		}
+		query = []tl.Serializable{Query{Node: self}, query}
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	err = n.query(ctx, query, &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dht node: %w", err)
 	}
@@ -130,15 +135,20 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 }
 
 func (n *dhtNode) doPing(ctx context.Context) (err error) {
-	val, err := tl.Serialize(Ping{
+	var query tl.Serializable = Ping{
 		ID: time.Now().Unix(),
-	}, true)
-	if err != nil {
-		return fmt.Errorf("failed to serialize dht ping query: %w", err)
+	}
+
+	if n.client.serverMode {
+		self, err := n.client.selfNode()
+		if err != nil {
+			return fmt.Errorf("failed to get self node: %w", err)
+		}
+		query = []tl.Serializable{Query{Node: self}, query}
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	err = n.query(ctx, query, &res)
 	if err != nil {
 		return fmt.Errorf("failed to ping dht node: %w", err)
 	}
@@ -155,16 +165,20 @@ func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error
 		return fmt.Errorf("corrupted value: %w", err)
 	}
 
-	val, err := tl.Serialize(Store{
+	var query tl.Serializable = Store{
 		Value: value,
-	}, true)
-	if err != nil {
-		return fmt.Errorf("failed to serialize dht query: %w", err)
+	}
+
+	if n.client.serverMode {
+		self, err := n.client.selfNode()
+		if err != nil {
+			return fmt.Errorf("failed to get self node: %w", err)
+		}
+		query = []tl.Serializable{Query{Node: self}, query}
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
-	if err != nil {
+	if err := n.query(ctx, query, &res); err != nil {
 		return fmt.Errorf("failed to query dht node: %w", err)
 	}
 
@@ -177,18 +191,22 @@ func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error
 }
 
 func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any, err error) {
-	val, err := tl.Serialize(FindValue{
+	var query tl.Serializable = FindValue{
 		Key: id,
 		K:   K,
-	}, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize dht value: %w", err)
+	}
+
+	if n.client.serverMode {
+		self, err := n.client.selfNode()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get self node: %w", err)
+		}
+		query = []tl.Serializable{Query{Node: self}, query}
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
-	if err != nil {
-		return nil, fmt.Errorf("failed to do query to dht node: %w", err)
+	if err := n.query(ctx, query, &res); err != nil {
+		return nil, fmt.Errorf("failed to query dht node: %w", err)
 	}
 
 	switch r := res.(type) {
@@ -212,7 +230,9 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 
 func checkValue(id []byte, value *Value) error {
 	k := value.KeyDescription.Key
-	if len(k.Name) == 0 || len(k.Name) > 127 || k.Index < 0 || k.Index > 15 { // TODO: move to better place when dht store ready
+	if len(k.Name) == 0 || len(k.Name) > 127 ||
+		k.Index < 0 || k.Index > 15 ||
+		len(value.Data) > MaxValueSize {
 		return fmt.Errorf("invalid dht key")
 	}
 

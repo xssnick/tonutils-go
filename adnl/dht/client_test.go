@@ -14,7 +14,6 @@ import (
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
-	"os"
 	"reflect"
 	"strconv"
 	"testing"
@@ -407,10 +406,6 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 }
 
 func TestClient_FindAddressesIntegration(t *testing.T) {
-	if _, ok := os.LookupEnv("TON_DHT_INTEGRATION_TEST"); !ok {
-		t.Skip("TON_DHT_INTEGRATION_TEST is not set; skipping integration test that requires public DHT network access")
-	}
-
 	_, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -477,10 +472,6 @@ func TestClient_Close(t *testing.T) {
 }
 
 func TestClient_StoreAddressIntegration(t *testing.T) {
-	if _, ok := os.LookupEnv("TON_DHT_INTEGRATION_TEST"); !ok {
-		t.Skip("TON_DHT_INTEGRATION_TEST is not set; skipping integration test that requires public DHT network access")
-	}
-
 	_, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -544,5 +535,177 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 
 	if len(res.Addresses) != 3 {
 		t.Fatal("addr len not 3")
+	}
+}
+
+func TestClientBootstrapPopulatesRoutingTable(t *testing.T) {
+	bootstrap, err := newCorrectNode(10, 0, 0, 1, 10001)
+	if err != nil {
+		t.Fatalf("failed to create bootstrap node: %v", err)
+	}
+
+	nodeA, err := newCorrectNode(10, 0, 0, 2, 10002)
+	if err != nil {
+		t.Fatalf("failed to create nodeA: %v", err)
+	}
+
+	nodeB, err := newCorrectNode(10, 0, 0, 3, 10003)
+	if err != nil {
+		t.Fatalf("failed to create nodeB: %v", err)
+	}
+
+	nodeC, err := newCorrectNode(10, 0, 0, 4, 10004)
+	if err != nil {
+		t.Fatalf("failed to create nodeC: %v", err)
+	}
+
+	addrOf := func(n *Node) string {
+		udp := n.AddrList.Addresses[0]
+		return net.JoinHostPort(udp.IP.String(), fmt.Sprint(udp.Port))
+	}
+
+	responses := map[string][]*Node{
+		addrOf(bootstrap): {nodeA, nodeB},
+		addrOf(nodeA):     {nodeC},
+		addrOf(nodeB):     nil,
+		addrOf(nodeC):     nil,
+	}
+
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		nodes := responses[addr]
+
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				switch request := req.(type) {
+				case tl.Raw:
+					var parsed FindNode
+					if _, err := tl.Parse(&parsed, request, true); err != nil {
+						return err
+					}
+
+					clone := make([]*Node, len(nodes))
+					for i, n := range nodes {
+						clone[i] = n
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{List: clone}))
+					return nil
+				case Ping:
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
+					return nil
+				default:
+					return fmt.Errorf("unexpected request type %T", req)
+				}
+			},
+		}, nil
+	}
+
+	client, err := NewClient(gateway, []*Node{bootstrap})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err = client.Bootstrap(ctx, 4); err != nil {
+		t.Fatalf("bootstrap failed: %v", err)
+	}
+
+	ensurePresent := func(n *Node) {
+		kid, err := tl.Hash(n.ID)
+		if err != nil {
+			t.Fatalf("failed to hash node id: %v", err)
+		}
+		bucket := client.buckets[affinity(kid, client.gateway.GetID())]
+		if bucket.findNode(kid) == nil {
+			t.Fatalf("node %s not added to buckets", addrOf(n))
+		}
+	}
+
+	ensurePresent(bootstrap)
+	ensurePresent(nodeA)
+	ensurePresent(nodeB)
+	ensurePresent(nodeC)
+}
+
+func TestClientBootstrapStopsWithoutProgress(t *testing.T) {
+	bootstrap, err := newCorrectNode(10, 0, 0, 1, 10001)
+	if err != nil {
+		t.Fatalf("failed to create bootstrap node: %v", err)
+	}
+
+	addr := net.JoinHostPort(bootstrap.AddrList.Addresses[0].IP.String(), fmt.Sprint(bootstrap.AddrList.Addresses[0].Port))
+
+	gateway := &MockGateway{}
+	gateway.reg = func(reqAddr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		if reqAddr != addr {
+			return nil, fmt.Errorf("unexpected addr %s", reqAddr)
+		}
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				switch request := req.(type) {
+				case tl.Raw:
+					var parsed FindNode
+					if _, err := tl.Parse(&parsed, request, true); err != nil {
+						return err
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+					return nil
+				case Ping:
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Pong{ID: request.ID}))
+					return nil
+				default:
+					return fmt.Errorf("unexpected request type %T", req)
+				}
+			},
+		}, nil
+	}
+
+	client, err := NewClient(gateway, []*Node{bootstrap})
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err = client.Bootstrap(ctx, 3); err == nil {
+		t.Fatal("expected bootstrap to fail when no new nodes are discovered")
+	}
+}
+
+func TestRandomBootstrapKeyCopiesPrefix(t *testing.T) {
+	selfID := make([]byte, 32)
+	for i := range selfID {
+		selfID[i] = byte(i)
+	}
+
+	randomData := append(make([]byte, 32), 0, 0)
+	key, err := randomBootstrapKey(bytes.NewReader(randomData), selfID)
+	if err != nil {
+		t.Fatalf("randomBootstrapKey failed: %v", err)
+	}
+
+	if !bytes.Equal(key[:8], selfID[:8]) {
+		t.Fatalf("expected prefix to match self id, got %x want %x", key[:8], selfID[:8])
+	}
+}
+
+func TestRandomBootstrapKeyAllowsZeroPrefix(t *testing.T) {
+	selfID := make([]byte, 32)
+	for i := range selfID {
+		selfID[i] = byte(i)
+	}
+
+	base := bytes.Repeat([]byte{0xAA}, 32)
+	randomData := append(append([]byte{}, base...), 6, 64)
+	key, err := randomBootstrapKey(bytes.NewReader(randomData), selfID)
+	if err != nil {
+		t.Fatalf("randomBootstrapKey failed: %v", err)
+	}
+
+	if !bytes.Equal(key, base) {
+		t.Fatalf("expected key to remain random when prefix is zero, got %x", key)
 	}
 }

@@ -85,6 +85,8 @@ type Gateway struct {
 	processors map[string]*srvProcessor
 	peers      map[string]*peerConn
 
+	id []byte
+
 	connHandler unsafe.Pointer // func(client Peer) error
 
 	globalCtx       context.Context
@@ -111,8 +113,11 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 		panic("key is nil")
 	}
 
+	id, _ := tl.Hash(keys.PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)})
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Gateway{
+		id:              id,
 		key:             key,
 		processors:      map[string]*srvProcessor{},
 		peers:           map[string]*peerConn{},
@@ -529,8 +534,11 @@ func (g *Gateway) write(addr net.Addr, buf []byte) error {
 }
 
 func (g *Gateway) GetID() []byte {
-	id, _ := tl.Hash(keys.PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
-	return id
+	return g.id
+}
+
+func (g *Gateway) GetKey() ed25519.PrivateKey {
+	return g.key
 }
 
 func (p *peerConn) GetID() []byte {

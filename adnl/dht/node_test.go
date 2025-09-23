@@ -66,7 +66,7 @@ func TestNode_findNodes(t *testing.T) {
 	}
 	t.Run("good response", func(t *testing.T) {
 		gateway := &MockGateway{}
-		client := &Client{
+		client := &DHT{
 			gateway: gateway,
 		}
 		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
@@ -105,7 +105,7 @@ func TestNode_findNodes(t *testing.T) {
 
 	t.Run("bad response", func(t *testing.T) {
 		gateway := &MockGateway{}
-		client := &Client{
+		client := &DHT{
 			gateway: gateway,
 		}
 		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
@@ -169,7 +169,7 @@ func TestNode_storeValue(t *testing.T) {
 
 	t.Run("good response", func(t *testing.T) {
 		gateway := &MockGateway{}
-		client := &Client{
+		client := &DHT{
 			gateway: gateway,
 		}
 		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
@@ -205,7 +205,7 @@ func TestNode_storeValue(t *testing.T) {
 
 	t.Run("bad response", func(t *testing.T) {
 		gateway := &MockGateway{}
-		client := &Client{
+		client := &DHT{
 			gateway: gateway,
 		}
 		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
