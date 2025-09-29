@@ -180,6 +180,7 @@ func FromPrivateKeyWithOptions(key ed25519.PrivateKey, version VersionConfig, op
 		append([]Option{WithPrivateKey(key)}, options...)...)
 }
 
+// Deprecated: use FromPubKeyWithOptions(publicKey, version, WithSigner(signer))
 func FromSigner(api TonAPI, publicKey ed25519.PublicKey, version VersionConfig, signer Signer) (*Wallet, error) {
 	return newWallet(
 		publicKey,
