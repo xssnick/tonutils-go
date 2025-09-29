@@ -63,7 +63,7 @@ type CompleteV2 struct {
 
 type MessagePart struct {
 	TransferID []byte // `tl:"int256"`
-	FecType    any    // `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
+	FecType    FEC    // `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
 	Part       uint32 // `tl:"int"`
 	TotalSize  uint64 // `tl:"long"`
 	Seqno      uint32 // `tl:"int"`
@@ -78,10 +78,15 @@ func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 	transfer := make([]byte, 32)
 	copy(transfer, data)
 
-	var fec any
-	data, err := tl.Parse(&fec, data[32:], true)
+	var fecAny any
+	data, err := tl.Parse(&fecAny, data[32:], true)
 	if err != nil {
 		return nil, err
+	}
+
+	fec, ok := fecAny.(FEC)
+	if !ok {
+		return nil, errors.New("invalid fec type")
 	}
 
 	if len(data) < 20 {
@@ -139,7 +144,7 @@ func (m *MessagePart) Serialize(buf *bytes.Buffer) error {
 
 type MessagePartV2 struct {
 	TransferID []byte `tl:"int256"`
-	FecType    any    `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
+	FecType    FEC    `tl:"struct boxed [fec.roundRobin,fec.raptorQ,fec.online]"`
 	Part       uint32 `tl:"int"`
 	TotalSize  uint64 `tl:"long"`
 	Seqno      uint32 `tl:"int"`
@@ -154,10 +159,15 @@ func (m *MessagePartV2) Parse(data []byte) ([]byte, error) {
 	transfer := make([]byte, 32)
 	copy(transfer, data)
 
-	var fec any
-	data, err := tl.Parse(&fec, data[32:], true)
+	var fecAny any
+	data, err := tl.Parse(&fecAny, data[32:], true)
 	if err != nil {
 		return nil, err
+	}
+
+	fec, ok := fecAny.(FEC)
+	if !ok {
+		return nil, errors.New("invalid fec type")
 	}
 
 	if len(data) < 20 {

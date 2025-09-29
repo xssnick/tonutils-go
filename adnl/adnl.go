@@ -747,11 +747,11 @@ func (a *ADNL) GetAddressList() address.List {
 }
 
 func (a *ADNL) GetID() []byte {
-	return append([]byte{}, a.peerKey...)
+	return append([]byte{}, a.peerID...)
 }
 
 func (a *ADNL) GetPubKey() ed25519.PublicKey {
-	return a.peerKey
+	return append(ed25519.PublicKey{}, a.peerKey...)
 }
 
 func (a *ADNL) Reinit() {

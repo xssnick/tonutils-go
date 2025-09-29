@@ -13,10 +13,28 @@ func init() {
 	tl.Register(FECOnline{}, "fec.online data_size:int symbol_size:int symbols_count:int = fec.Type")
 }
 
+type FEC interface {
+	GetDataSize() uint32
+	GetSymbolSize() uint32
+	GetSymbolsCount() uint32
+}
+
 type FECRaptorQ struct {
 	DataSize     uint32 // `tl:"int"`
 	SymbolSize   uint32 // `tl:"int"`
 	SymbolsCount uint32 // `tl:"int"`
+}
+
+func (f FECRaptorQ) GetDataSize() uint32 {
+	return f.DataSize
+}
+
+func (f FECRaptorQ) GetSymbolSize() uint32 {
+	return f.SymbolSize
+}
+
+func (f FECRaptorQ) GetSymbolsCount() uint32 {
+	return f.SymbolsCount
 }
 
 func (f *FECRaptorQ) Parse(data []byte) ([]byte, error) {
@@ -42,6 +60,18 @@ type FECRoundRobin struct {
 	DataSize     uint32 `tl:"int"`
 	SymbolSize   uint32 `tl:"int"`
 	SymbolsCount uint32 `tl:"int"`
+}
+
+func (f FECRoundRobin) GetDataSize() uint32 {
+	return f.DataSize
+}
+
+func (f FECRoundRobin) GetSymbolSize() uint32 {
+	return f.SymbolSize
+}
+
+func (f FECRoundRobin) GetSymbolsCount() uint32 {
+	return f.SymbolsCount
 }
 
 func (f *FECRoundRobin) Parse(data []byte) ([]byte, error) {
