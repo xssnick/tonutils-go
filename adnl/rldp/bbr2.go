@@ -153,7 +153,7 @@ func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
 
 	start := l.GetRate()
 	if start <= 0 {
-		start = max64(o.MinRate, 1024*64) // 64KiB/s как нижний разумный
+		start = max64(o.MinRate, 1024*64)
 	}
 	c.btlbw.Store(start)
 	c.pacingRate.Store(start)
