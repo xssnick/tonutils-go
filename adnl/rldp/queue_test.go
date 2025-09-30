@@ -28,7 +28,7 @@ func TestQueue_Basic(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected ok for i=%d", i)
 		}
-		
+
 		if m.Seqno != i {
 			t.Fatalf("want=%d got=%d", i, m.Seqno)
 		}
@@ -43,7 +43,6 @@ func TestQueue_Basic(t *testing.T) {
 func TestQueue_OverwriteOldest(t *testing.T) {
 	q := NewQueue(4)
 
-	// кладём 6 без чтения — должны остаться последние 4: 2,3,4,5
 	for i := uint32(0); i < 6; i++ {
 		q.Enqueue(mp(i))
 	}
@@ -67,11 +66,10 @@ func TestQueue_OverwriteOldest(t *testing.T) {
 func TestQueue_OverwriteInterleaved(t *testing.T) {
 	q := NewQueue(2)
 
-	// вместимость 2: заполним и начнем выталкивать
 	q.Enqueue(mp(0))
 	q.Enqueue(mp(1))
-	q.Enqueue(mp(2)) // вытолкнет 0
-	q.Enqueue(mp(3)) // вытолкнет 1
+	q.Enqueue(mp(2))
+	q.Enqueue(mp(3))
 
 	// ожидаем 2,3
 	m, ok := q.Dequeue()

@@ -70,10 +70,12 @@ type activeTransferPart struct {
 type activeTransfer struct {
 	id        []byte
 	data      []byte
+	totalSize uint64
 	timeoutAt int64
 
-	currentPart atomic.Pointer[activeTransferPart]
-	rldp        *RLDP
+	nextPartIndex uint32
+	currentPart   atomic.Pointer[activeTransferPart]
+	rldp          *RLDP
 
 	mx sync.Mutex
 }
@@ -840,7 +842,7 @@ func (r *RLDP) recoverySender() {
 							TransferID: part.transfer.id,
 							FecType:    part.fec,
 							Part:       part.index,
-							TotalSize:  uint64(len(part.transfer.data)),
+							TotalSize:  part.transfer.totalSize,
 							Seqno:      seqno,
 							Data:       part.encoder.GenSymbol(seqno),
 						}
@@ -924,9 +926,24 @@ func (r *RLDP) recoverySender() {
 				r.rateCtrl.SetAppLimited(false)
 			}
 
+			for i := range transfersToProcess {
+				transfersToProcess[i] = nil
+			}
 			transfersToProcess = transfersToProcess[:0]
+
+			for i := range timedOut {
+				timedOut[i] = nil
+			}
 			timedOut = timedOut[:0]
+
+			for i := range timedOutReq {
+				timedOutReq[i] = ""
+			}
 			timedOutReq = timedOutReq[:0]
+
+			for i := range timedOutExp {
+				timedOutExp[i] = ""
+			}
 			timedOutExp = timedOutExp[:0]
 		}
 	}
@@ -937,6 +954,7 @@ func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recov
 		id:        transferId,
 		timeoutAt: recoverTimeoutAt * 1000, // ms
 		data:      data,
+		totalSize: uint64(len(data)),
 		rldp:      r,
 	}
 
@@ -974,20 +992,21 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 		return false, nil // fmt.Errorf("transfer timed out")
 	}
 
-	partIndex := uint32(0)
-	if cp := t.getCurrentPart(); cp != nil {
-		partIndex = cp.index + 1
-	}
-
-	if len(t.data) <= int(partIndex*PartSize) {
-		// all parts sent
+	if len(t.data) == 0 {
 		return false, nil
 	}
 
-	payload := t.data[partIndex*PartSize:]
+	partIndex := t.nextPartIndex
+
+	payload := t.data
 	if len(payload) > int(PartSize) {
 		payload = payload[:PartSize]
 	}
+
+	if len(payload) == 0 {
+		return false, nil
+	}
+	remaining := t.data[len(payload):]
 
 	cnt := uint32(len(payload))/DefaultSymbolSize + 1
 
@@ -1029,10 +1048,24 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 		fecSymbolSize:    fec.GetSymbolSize(),
 		nextRecoverDelay: 15,
 		fastSeqnoTill:    cnt + cnt/50 + 1, // +2%
-		sendClock:        NewSendClock(32 << 10),
 		transfer:         t,
 	}
 
+	pt := uint32(1) << uint32(math.Ceil(math.Log2(float64(part.fecSymbolsCount))))
+	if pt > 16<<10 {
+		pt = 16 << 10
+	} else if pt < 64 {
+		pt = 64
+	}
+	part.sendClock = NewSendClock(int(pt))
+
+	if len(remaining) == 0 {
+		t.data = nil
+	} else {
+		t.data = remaining
+	}
+
+	t.nextPartIndex++
 	t.currentPart.Store(&part)
 	return true, nil
 }
@@ -1047,7 +1080,7 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 		TransferID: transfer.id,
 		FecType:    part.fec,
 		Part:       part.index,
-		TotalSize:  uint64(len(transfer.data)),
+		TotalSize:  transfer.totalSize,
 	}
 
 	sc := part.fastSeqnoTill
@@ -1124,13 +1157,14 @@ type AsyncQueryResult struct {
 }
 
 func (r *RLDP) DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- AsyncQueryResult) error {
-	timeout, ok := ctx.Deadline()
-	if !ok {
-		timeout = time.Now().Add(15 * time.Second)
-	}
-
 	if len(id) != 32 {
 		return errors.New("invalid id")
+	}
+
+	now := time.Now()
+	timeout, ok := ctx.Deadline()
+	if !ok {
+		timeout = now.Add(15 * time.Second)
 	}
 
 	q := &Query{
@@ -1138,6 +1172,11 @@ func (r *RLDP) DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []byte
 		MaxAnswerSize: maxAnswerSize,
 		Timeout:       uint32(timeout.Unix()),
 		Data:          query,
+	}
+
+	if uxMin := now.Unix() + 2; int64(q.Timeout) < uxMin {
+		// because timeout in seconds, we should add some to avoid an early drop
+		q.Timeout = uint32(uxMin)
 	}
 
 	data, err := tl.Serialize(q, true)
@@ -1195,6 +1234,11 @@ func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize uint64, timeoutAt u
 
 	if int64(timeoutAt) < tm {
 		tm = int64(timeoutAt)
+	}
+
+	if minT := time.Now().Unix() + 1; tm < minT {
+		// give at least 1 sec in case of a clock problem
+		tm = minT
 	}
 
 	if err = r.startTransfer(ctx, reverseTransferId(toTransferId), data, tm); err != nil {

@@ -450,6 +450,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 
 	cond := sync.NewCond(&sync.Mutex{})
 	waitingThreads := 0
+	stopped := false
 
 	launchWorker := func() {
 		for {
@@ -465,12 +466,18 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 			for node == nil {
 				waitingThreads++
 				if waitingThreads == threads {
+					stopped = true
+					cond.Broadcast()
 					cond.L.Unlock()
 					result <- nil
 					return
 				}
 
 				cond.Wait()
+				if stopped {
+					cond.L.Unlock()
+					return
+				}
 				node, _ = plist.Get()
 				waitingThreads--
 			}
@@ -485,20 +492,27 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 
 			switch v := val.(type) {
 			case *Value:
+				cond.L.Lock()
+				if !stopped {
+					stopped = true
+					cond.Broadcast()
+				}
+				cond.L.Unlock()
 				result <- &foundResult{value: v, node: node}
 				return
 			case []*Node:
 				added := false
+				cond.L.Lock()
 				for _, n := range v {
 					if newNode, err := c.addNode(n); err == nil {
 						plist.Add(newNode)
 						added = true
 					}
 				}
-
 				if added {
 					cond.Broadcast()
 				}
+				cond.L.Unlock()
 			}
 		}
 	}
@@ -509,8 +523,20 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 
 	select {
 	case <-ctx.Done():
+		cond.L.Lock()
+		if !stopped {
+			stopped = true
+			cond.Broadcast()
+		}
+		cond.L.Unlock()
 		return nil, nil, ctx.Err()
 	case val := <-result:
+		cond.L.Lock()
+		if !stopped {
+			stopped = true
+			cond.Broadcast()
+		}
+		cond.L.Unlock()
 		if val == nil {
 			return nil, cont, ErrDHTValueIsNotFound
 		}
