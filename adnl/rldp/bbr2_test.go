@@ -39,9 +39,10 @@ func TestBBR_StartupIncreasesRate(t *testing.T) {
 		Beta:               0.85,
 	}
 	bbr, tb := newBBR(t, opts.MinRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
 
 	for i := 0; i < 60; i++ {
-		bbr.ObserveDelta(100_000, 100_000)
+		bbr.ObserveDelta(200_000, 200_000)
 		time.Sleep(12 * time.Millisecond)
 	}
 
@@ -67,15 +68,16 @@ func TestBBR_HighLossReducesRate(t *testing.T) {
 		Beta:               0.85,
 	}
 	bbr, _ := newBBR(t, opts.MinRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
 
 	for i := 0; i < 12; i++ {
-		bbr.ObserveDelta(200_000, 200_000)
+		bbr.ObserveDelta(400_000, 400_000)
 		time.Sleep(12 * time.Millisecond)
 	}
 	r1 := bbr.pacingRate.Load()
 
 	for i := 0; i < 8; i++ {
-		bbr.ObserveDelta(100_000, 80_000)
+		bbr.ObserveDelta(300_000, 180_000)
 		time.Sleep(12 * time.Millisecond)
 	}
 	r2 := bbr.pacingRate.Load()
@@ -97,16 +99,17 @@ func TestBBR_ProbeRTT_EnterAndExit(t *testing.T) {
 		Beta:               0.9,
 	}
 	bbr, _ := newBBR(t, opts.MinRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
 
 	// немного трафика
 	for i := 0; i < 5; i++ {
-		bbr.ObserveDelta(50_000, 50_000)
+		bbr.ObserveDelta(200_000, 200_000)
 		time.Sleep(12 * time.Millisecond)
 	}
 
 	time.Sleep(70 * time.Millisecond)
 	for i := 0; i < 10 && bbr.state.Load() != 3; i++ {
-		bbr.ObserveDelta(1_000, 1_000)
+		bbr.ObserveDelta(150_000, 150_000)
 		time.Sleep(12 * time.Millisecond)
 	}
 	if bbr.state.Load() != 3 {
@@ -114,7 +117,7 @@ func TestBBR_ProbeRTT_EnterAndExit(t *testing.T) {
 	}
 
 	for i := 0; i < 20 && bbr.state.Load() != 2; i++ {
-		bbr.ObserveDelta(1_000, 1_000)
+		bbr.ObserveDelta(150_000, 150_000)
 		time.Sleep(12 * time.Millisecond)
 	}
 	if bbr.state.Load() != 2 {
@@ -135,6 +138,7 @@ func TestBBR_RespectsMinMaxRate(t *testing.T) {
 		Beta:               0.85,
 	}
 	bbr, _ := newBBR(t, opts.MinRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
 
 	for i := 0; i < 25; i++ {
 		bbr.ObserveDelta(1_000_000, 1_000_000)
@@ -145,7 +149,7 @@ func TestBBR_RespectsMinMaxRate(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		bbr.ObserveDelta(100_000, 20_000) // 80% loss
+		bbr.ObserveDelta(700_000, 140_000) // 80% loss
 		time.Sleep(12 * time.Millisecond)
 	}
 	if got := bbr.pacingRate.Load(); got < opts.MinRate {
@@ -166,21 +170,28 @@ func TestBBR_SmoothingBounds(t *testing.T) {
 		Beta:               0.85,
 	}
 	bbr, _ := newBBR(t, opts.MinRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 50 && bbr.state.Load() != 2; i++ {
 		bbr.ObserveDelta(500_000, 500_000)
 		time.Sleep(12 * time.Millisecond)
+	}
+	if s := bbr.state.Load(); s != 2 {
+		t.Fatalf("expected ProbeBW state after warmup, got %d", s)
 	}
 	prev := bbr.pacingRate.Load()
 
 	bbr.ObserveDelta(10_000_000, 10_000_000)
 	time.Sleep(14 * time.Millisecond)
+	if s := bbr.state.Load(); s != 2 {
+		t.Fatalf("expected ProbeBW during smoothing check, got %d", s)
+	}
 	now := bbr.pacingRate.Load()
 	if now > int64(float64(prev)*1.55) {
 		t.Fatalf("up-smoothing failed: prev=%d now=%d", prev, now)
 	}
 
-	bbr.ObserveDelta(1_000_000, 100_000) // 90% loss
+	bbr.ObserveDelta(1_300_000, 130_000) // 90% loss
 	time.Sleep(14 * time.Millisecond)
 	after := bbr.pacingRate.Load()
 	if after < int64(float64(now)*0.65) {
@@ -201,6 +212,7 @@ func TestBBR_BtlBwDecay(t *testing.T) {
 		Beta:               0.85,
 	}
 	bbr, _ := newBBR(t, opts.MinRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
 
 	for i := 0; i < 6; i++ {
 		bbr.ObserveDelta(200_000, 200_000)
@@ -213,7 +225,7 @@ func TestBBR_BtlBwDecay(t *testing.T) {
 
 	winMs := int64(opts.BtlBwWindowSec * 1000)
 	bbr.lastBtlBwDecay.Store(time.Now().UnixMilli() - winMs - 10)
-	bbr.ObserveDelta(1, 1)
+	bbr.ObserveDelta(200_000, 200_000)
 	time.Sleep(12 * time.Millisecond)
 
 	decayed := bbr.btlbw.Load()
@@ -235,6 +247,7 @@ func TestBBR_LossSampleTracked(t *testing.T) {
 		Beta:               0.85,
 	}
 	bbr, _ := newBBR(t, opts.MinRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
 
 	time.Sleep(12 * time.Millisecond)
 	bbr.ObserveDelta(400_000, 200_000)
