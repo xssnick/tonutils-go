@@ -121,6 +121,8 @@ type BBRv2Controller struct {
 	lastLossRate  atomic.Uint64
 	lastSampleTot atomic.Int64
 	lastSampleLos atomic.Int64
+
+	lastActive atomic.Int64
 }
 
 func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
@@ -135,6 +137,7 @@ func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
 	c.lastProc.Store(now)
 	c.lastAckTs.Store(now)
 	c.lastBtlBwDecay.Store(now)
+	c.lastActive.Store(now)
 
 	if o.MinRate > 0 {
 		c.pacingRate.Store(o.MinRate)
@@ -190,17 +193,27 @@ func applyBBRDefaults(o *BBRv2Options) {
 		o.DefaultRTTMs = 25
 	}
 	if o.MinSampleMs == 0 {
-		o.MinSampleMs = 25
+		o.MinSampleMs = 50
 	}
 }
 
 func (c *BBRv2Controller) SetAppLimited(v bool) { c.appLimited.Store(v) }
 
+func (c *BBRv2Controller) markActive() { c.lastActive.Store(nowMs()) }
+
+func (c *BBRv2Controller) OnNewSendBurst() {
+	if c.appLimited.Swap(false) {
+		c.fullBW.Store(0)
+		c.fullBWCount.Store(0)
+	}
+	c.markActive()
+}
+
 func (c *BBRv2Controller) ObserveDelta(total, recv int64) {
 	if total == 0 {
 		return
 	}
-
+	c.markActive()
 	c._total.Add(total)
 	c._recv.Add(recv)
 	c._samples.Add(1)
@@ -209,6 +222,7 @@ func (c *BBRv2Controller) ObserveDelta(total, recv int64) {
 
 func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
 	now := nowMs()
+	c.markActive()
 	old := c.minRTT.Load()
 	provisional := c.minRTTProvisional.Load()
 
@@ -228,6 +242,12 @@ func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
 
 func (c *BBRv2Controller) maybeUpdate() {
 	now := nowMs()
+
+	minRtt := max64(c.minRTT.Load(), 1)
+	idleMs := max64(800, 2*minRtt)
+	if la := c.lastActive.Load(); la > 0 && now-la > idleMs {
+		c.resetForNewFlow(now)
+	}
 
 	last := c.lastProc.Load()
 	if last+c.opts.MinSampleMs > now {
@@ -264,9 +284,12 @@ func (c *BBRv2Controller) maybeUpdate() {
 		c.lossLost.Add(lost)
 	}
 
+	const minAckForRateUpdate = 128 * 1024
 	if acked > 0 {
-		ackRate := int64(float64(acked) * 1000.0 / float64(elapsedMs)) // B/s
-		c.updateBtlBw(ackRate, now)
+		if acked >= minAckForRateUpdate || elapsedMs >= 250 {
+			ackRate := int64(float64(acked) * 1000.0 / float64(elapsedMs))
+			c.updateBtlBw(ackRate, now)
+		}
 	}
 
 	c.checkProbeRTT(now, acked)
@@ -289,11 +312,47 @@ func (c *BBRv2Controller) maybeUpdate() {
 	}
 }
 
+func (c *BBRv2Controller) resetForNewFlow(now int64) {
+	c.state.Store(0)
+	c.cycleStamp.Store(now)
+	c.cycleIndex.Store(0)
+	c.fullBW.Store(0)
+	c.fullBWCount.Store(0)
+	c.lossTotal.Store(0)
+	c.lossLost.Store(0)
+	c.minRTTProvisional.Store(true)
+	model := rateToInflight(max64(c.btlbw.Load(), c.pacingRate.Load()), max64(c.minRTT.Load(), 1))
+	if model <= 0 {
+		model = rateToInflight(c.opts.MinRate, max64(c.minRTT.Load(), 1))
+	}
+	c.hiInflight.Store(max64(model+model/4, 2*1500))
+	c.lastAckTs.Store(now)
+	c.appLimited.Store(false)
+	c.primeTokenBucketForRate(now, c.pacingRate.Load())
+}
+
+func (c *BBRv2Controller) primeTokenBucketForRate(now int64, rate int64) {
+	if rate <= 0 {
+		rate = c.opts.MinRate
+	}
+	rtt := max64(c.minRTT.Load(), 1)
+	bdp := rateToInflight(rate, rtt)
+	burst := max64(64*1024, min64(8*bdp, 4*1024*1024))
+	type tbIface interface {
+		SetBurst(int64)
+		AddTokens(int64)
+	}
+	if tb, ok := any(c.limiter).(tbIface); ok {
+		tb.SetBurst(burst)
+		tb.AddTokens(min64(bdp, burst))
+	}
+}
+
 func humanBps(bps int64) string {
 	if bps <= 0 {
 		return "0 B/s (0 Mbit/s)"
 	}
-	miBps := float64(bps) / (1024.0 * 1024.0) // MiB/s
+	miBps := float64(bps) / (1024.0 * 1024.0)
 	mbps := float64(bps*8) / 1e6
 	return fmt.Sprintf("%.2f MB/s (%.2f Mbit/s)", miBps, mbps)
 }
@@ -394,7 +453,7 @@ func (c *BBRv2Controller) CurrentRTT() int64 {
 }
 
 func (c *BBRv2Controller) checkProbeRTT(now int64, ackedBytes int64) {
-	if c.state.Load() != 3 && now-c.minRTTAt.Load() > c.opts.MinRTTExpiryMs &&
+	if c.state.Load() != 3 && (now-c.minRTTAt.Load() > c.opts.MinRTTExpiryMs/2 || c.minRTTProvisional.Load()) &&
 		!c.appLimited.Load() && ackedBytes > 0 {
 
 		c.state.Store(3)
@@ -447,9 +506,21 @@ func (c *BBRv2Controller) updateModelAndRate(now int64) float64 {
 		}
 		c.hiInflight.Store(newHi)
 	} else {
-		// Slowly relax upward
-		relax := hi + max64(inflight/16, 1500) // +~6% or at least one MSS
-		c.hiInflight.Store(min64(relax, inflight*4))
+		step := inflight / 16
+		if lossRate < c.opts.HighLoss/2 {
+			if step < inflight/6 {
+				step = inflight / 6
+			}
+		} else {
+			if step < 1500 {
+				step = 1500
+			}
+		}
+		relax := hi + step
+		if relax > inflight*4 {
+			relax = inflight * 4
+		}
+		c.hiInflight.Store(relax)
 	}
 
 	// Choose pacing_gain by state
@@ -534,6 +605,9 @@ func (c *BBRv2Controller) updateModelAndRate(now int64) float64 {
 	if target != prev {
 		c.pacingRate.Store(target)
 		c.limiter.SetRate(target)
+		if target > int64(float64(prev)*1.2) {
+			c.primeTokenBucketForRate(now, target)
+		}
 	}
 	return lossRate
 }
