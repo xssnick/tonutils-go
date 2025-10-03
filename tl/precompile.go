@@ -738,16 +738,16 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			buf = buf[4:]
 
 			sl := reflect.MakeSlice(field.structInfo.tp, ln, ln)
-			elemSize := field.structInfo.tp.Elem().Size()
 
-			elemPtr := unsafe.Pointer(sl.Pointer())
-			for i := 0; i < ln; i++ {
-				var perr error
-				buf, perr = executeParse(buf, elemPtr, field.structInfo, noCopy)
-				if perr != nil {
-					return nil, fmt.Errorf("failed to parse %s type, vector element %d: %w", si.tp.String(), i, perr)
+			sz := field.structInfo.tp.Elem().Size()
+			ePtr := unsafe.Pointer(sl.Pointer())
+
+			for x := 0; x < ln; x++ {
+				buf, err = executeParse(buf, ePtr, field.structInfo, noCopy)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
-				elemPtr = unsafe.Add(elemPtr, elemSize)
+				ePtr = unsafe.Add(ePtr, sz)
 			}
 
 			*(*reflect.SliceHeader)(ptr) = reflect.SliceHeader{
@@ -768,16 +768,15 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 		return fmt.Errorf("TL struct %s is not registered", si.tp.String())
 	}
 
-	// держим исходный объект живым пока сериализуем
 	defer runtime.KeepAlive((*byte)(base))
 
 	var flags uint32
 	for _, field := range si.fields {
 		if field.hasFlags && (1<<field.flag)&flags == 0 {
+			// skip serialization if flag is not set
 			continue
 		}
 
-		// было: ptr := unsafe.Pointer(startPtr + field.offset)  // 💥 checkptr под -race
 		ptr := unsafe.Add(base, field.offset)
 
 		switch t := field.typ; t {
@@ -982,13 +981,15 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 
 			sz := field.structInfo.tp.Elem().Size()
 
-			elemPtr := unsafe.Pointer(hdr.Data)
-			for i := 0; i < ln; i++ {
-				if err := executeSerialize(buf, elemPtr, field.structInfo); err != nil {
-					return fmt.Errorf("failed to serialize %s, vector elem %d: %w", si.tp.String(), i, err)
+			ePtr := unsafe.Pointer(hdr.Data)
+			for x := 0; x < ln; x++ {
+				if err := executeSerialize(buf, ePtr, field.structInfo); err != nil {
+					return fmt.Errorf("failed to serialize %s, vector elem %d: %w", si.tp.String(), x, err)
 				}
-				elemPtr = unsafe.Add(elemPtr, sz)
+				ePtr = unsafe.Add(ePtr, sz)
 			}
+		default:
+			return fmt.Errorf("unknown type %d for field %s", t, field.String())
 		}
 	}
 
