@@ -904,13 +904,13 @@ func setupLoopbackBenchmark(b *testing.B) (*RLDP, func()) {
 	}
 
 	srv := adnl.NewGateway(srvKey)
-	if err := srv.StartServer("127.0.0.1:19157"); err != nil {
+	if err := srv.StartServer("127.0.0.1:19157", 4); err != nil {
 		b.Fatal(err)
 	}
 	configureBenchServer(srv)
 
 	cliGateway := adnl.NewGateway(cliKey)
-	if err := cliGateway.StartClient(); err != nil {
+	if err := cliGateway.StartClient(4); err != nil {
 		b.Fatal(err)
 	}
 
