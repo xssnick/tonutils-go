@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"net"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -768,6 +769,11 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 		return fmt.Errorf("TL struct %s is not registered", si.tp.String())
 	}
 
+	basePtr := unsafe.Pointer(startPtr)
+
+	baseKeepAlive := (*byte)(basePtr)
+	defer runtime.KeepAlive(baseKeepAlive)
+
 	var flags uint32
 	for _, field := range si.fields {
 		if field.hasFlags && (1<<field.flag)&flags == 0 {
@@ -775,8 +781,7 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			continue
 		}
 
-		//goland:noinspection GoVetUnsafePointer
-		ptr := unsafe.Pointer(startPtr + field.offset)
+		ptr := unsafe.Add(basePtr, field.offset)
 
 		switch t := field.typ; t {
 		case _ExecuteTypeFlags:
@@ -877,13 +882,16 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			}
 
 			var serialized bool
-			if structFlags&_StructFlagsPointer != 0 { // pointer
-				ptr = *(*unsafe.Pointer)(ptr)
+			fp := ptr
+
+			if structFlags&_StructFlagsPointer != 0 {
+				fp = *(*unsafe.Pointer)(ptr)
 			} else if structFlags&_StructFlagsInterface != 0 {
 				ifc := *(*Serializable)(ptr)
 				switch v := ifc.(type) {
 				case Raw:
-					ptr = unsafe.Pointer(&v)
+					tmp := v
+					fp = unsafe.Pointer(&tmp)
 					info = rawStructInfo
 				case []Serializable:
 					// serialize each element and write them as Raw, to pack into main struct after
@@ -899,8 +907,7 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 					if err != nil {
 						return fmt.Errorf("invalid type for interface in field %s: %w", field.String(), err)
 					}
-
-					ptr = e.UnsafePointer()
+					fp = e.UnsafePointer()
 					info = _structInfoTable[e.Elem().Type().String()]
 					if info == nil {
 						return fmt.Errorf("unregistered TL type %s for interface in field %s", e.Elem().Type().String(), field.String())
@@ -916,8 +923,7 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 				if info == nil {
 					return fmt.Errorf("unregistered TL type in field %s", field.String())
 				}
-
-				if err := serializePrecompiled(ptr, info, boxed, buf); err != nil {
+				if err := serializePrecompiled(fp, info, boxed, buf); err != nil {
 					return err
 				}
 			}
@@ -978,13 +984,12 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			buf.Write(tmp)
 
 			sz := field.structInfo.tp.Elem().Size()
-			ePtr := hdr.Data
-
+			ePtr := unsafe.Pointer(hdr.Data)
 			for x := 0; x < ln; x++ {
-				if err := executeSerialize(buf, ePtr, field.structInfo); err != nil {
+				if err := executeSerialize(buf, uintptr(ePtr), field.structInfo); err != nil {
 					return fmt.Errorf("failed to serialize %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
-				ePtr += sz
+				ePtr = unsafe.Add(ePtr, sz)
 			}
 		default:
 			return fmt.Errorf("unknown type %d for field %s", t, field.String())
