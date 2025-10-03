@@ -747,6 +747,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				if err != nil {
 					return nil, fmt.Errorf("failed to parse %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
+
 				ePtr = unsafe.Add(ePtr, sz)
 			}
 
@@ -878,15 +879,13 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			}
 
 			var serialized bool
-
-			if structFlags&_StructFlagsPointer != 0 {
+			if structFlags&_StructFlagsPointer != 0 { // pointer
 				ptr = *(*unsafe.Pointer)(ptr)
 			} else if structFlags&_StructFlagsInterface != 0 {
 				ifc := *(*Serializable)(ptr)
 				switch v := ifc.(type) {
 				case Raw:
 					ptr = unsafe.Pointer(&v)
-
 					info = rawStructInfo
 				case []Serializable:
 					// serialize each element and write them as Raw, to pack into main struct after
@@ -902,6 +901,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 					if err != nil {
 						return fmt.Errorf("invalid type for interface in field %s: %w", field.String(), err)
 					}
+
 					ptr = e.UnsafePointer()
 					info = _structInfoTable[e.Elem().Type().String()]
 					if info == nil {
@@ -918,6 +918,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 				if info == nil {
 					return fmt.Errorf("unregistered TL type in field %s", field.String())
 				}
+
 				if err := serializePrecompiled(ptr, info, boxed, buf); err != nil {
 					return err
 				}
@@ -979,8 +980,8 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			buf.Write(tmp)
 
 			sz := field.structInfo.tp.Elem().Size()
-
 			ePtr := unsafe.Pointer(hdr.Data)
+
 			for x := 0; x < ln; x++ {
 				if err := executeSerialize(buf, ePtr, field.structInfo); err != nil {
 					return fmt.Errorf("failed to serialize %s type, vector element %d: %w", si.tp.String(), x, err)
