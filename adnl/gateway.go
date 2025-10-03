@@ -431,8 +431,23 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	addrList.Version = addrList.ReinitDate
 
 	a := g.initADNL()
-	a.SetAddresses(addrList)
+
+	sharedKey, err := keys.SharedKey(a.ourKey, key)
+	if err != nil {
+		return nil, err
+	}
+
+	peerId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
+	if err != nil {
+		return nil, err
+	}
+
+	a.peerID = peerId
+	a.sharedKey = sharedKey
 	a.peerKey = key
+
+	a.SetAddresses(addrList)
+
 	a.addr = addr.String()
 	a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
 		currentAddr := *(*net.Addr)(atomic.LoadPointer(&peer.addr))

@@ -385,7 +385,7 @@ func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
 
 	sz := binary.LittleEndian.Uint32(size)
 
-	if sz > 10<<20 {
+	if sz > 16<<20 {
 		return 0, fmt.Errorf("too big size of packet: %s", hex.EncodeToString(size))
 	}
 
@@ -393,7 +393,7 @@ func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
 }
 
 func readData(conn net.Conn, crypt cipher.Stream, sz uint32) ([]byte, error) {
-	if sz > 8<<20 {
+	if sz > 16<<20 {
 		return nil, fmt.Errorf("too big packet")
 	}
 

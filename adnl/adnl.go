@@ -71,6 +71,8 @@ type ADNL struct {
 	recvPriorityAddrVer  int32
 	ourAddrVerOnPeerSide int32
 
+	peerID       []byte
+	sharedKey    []byte
 	peerKey      ed25519.PublicKey
 	ourAddresses unsafe.Pointer
 
@@ -175,6 +177,16 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 	if !fromChannel && packet.From != nil {
 		a.mx.Lock()
 		if a.peerKey == nil {
+			a.sharedKey, err = keys.SharedKey(a.ourKey, packet.From.Key)
+			if err != nil {
+				return err
+			}
+
+			a.peerID, err = tl.Hash(keys.PublicKeyED25519{Key: packet.From.Key})
+			if err != nil {
+				return err
+			}
+
 			a.peerKey = packet.From.Key
 		}
 		a.mx.Unlock()
@@ -735,12 +747,11 @@ func (a *ADNL) GetAddressList() address.List {
 }
 
 func (a *ADNL) GetID() []byte {
-	id, _ := tl.Hash(keys.PublicKeyED25519{Key: a.peerKey})
-	return id
+	return append([]byte{}, a.peerID...)
 }
 
 func (a *ADNL) GetPubKey() ed25519.PublicKey {
-	return a.peerKey
+	return append(ed25519.PublicKey{}, a.peerKey...)
 }
 
 func (a *ADNL) Reinit() {
@@ -825,23 +836,14 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	hash := sha256.Sum256(packetData)
 	checksum := hash[:]
 
-	key, err := keys.SharedKey(a.ourKey, a.peerKey)
-	if err != nil {
-		return nil, err
-	}
-
-	ctr, err := keys.BuildSharedCipher(key, checksum)
+	ctr, err := keys.BuildSharedCipher(a.sharedKey, checksum)
 	if err != nil {
 		return nil, err
 	}
 
 	ctr.XORKeyStream(packetData, packetData)
 
-	enc, err := tl.Hash(keys.PublicKeyED25519{Key: a.peerKey})
-	if err != nil {
-		return nil, err
-	}
-	copy(bufData, enc)
+	copy(bufData, a.peerID)
 	copy(bufData[32:], a.ourKey.Public().(ed25519.PublicKey))
 	copy(bufData[64:], checksum)
 

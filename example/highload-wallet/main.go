@@ -30,7 +30,7 @@ func main() {
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
 
 	// initialize high-load wallet
-	w, err := wallet.FromSeed(api, words, wallet.ConfigHighloadV3{
+	w, err := wallet.FromSeedWithOptions(api, words, wallet.ConfigHighloadV3{
 		MessageTTL: 60 * 5,
 		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
 			// Due to specific of externals emulation on liteserver,

@@ -171,7 +171,7 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 				}
 				structFlags |= _StructFlagsInterface
 
-				list := splitAllowed(tags[2:])
+				list := parseAllowed(tags[2:])
 				for _, s := range list {
 					info.allowedTypes = append(info.allowedTypes, getStructInfoReferenceByShortName(s))
 				}
@@ -793,9 +793,13 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			binary.LittleEndian.PutUint32(tmp, flags)
 			buf.Write(tmp)
 		case _ExecuteTypeString:
-			ToBytesToBuffer(buf, []byte(*(*string)(ptr)))
+			if err := ToBytesToBuffer(buf, []byte(*(*string)(ptr))); err != nil {
+				return fmt.Errorf("failed to serialize string field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeBytes:
-			ToBytesToBuffer(buf, *(*[]byte)(ptr))
+			if err := ToBytesToBuffer(buf, *(*[]byte)(ptr)); err != nil {
+				return fmt.Errorf("failed to serialize bytes field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeInt256:
 			if bts := *(*[]byte)(ptr); len(bts) == 32 {
 				buf.Write(*(*[]byte)(ptr))
@@ -849,26 +853,31 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			c := *(**cell.Cell)(ptr)
 			if c == nil {
 				if field.meta.(bool) {
-					ToBytesToBuffer(buf, nil)
+					_ = ToBytesToBuffer(buf, nil)
 					break
 				}
 				return fmt.Errorf("nil cell is not allowed in field %s", field.String())
 			}
-			ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithFlags(false))
+
+			if err := ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithFlags(false)); err != nil {
+				return fmt.Errorf("failed to serialize cell field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeSliceCell:
 			c := *(*[]*cell.Cell)(ptr)
 			flag := field.meta.(uint32)
 			num := flag & 0x7FFFFFFF
 
 			if len(c) == 0 && flag&(1<<31) != 0 {
-				ToBytesToBuffer(buf, nil)
+				_ = ToBytesToBuffer(buf, nil)
 				break
 			}
 
 			if num > 0 && uint32(len(c)) != num {
 				return fmt.Errorf("incorrect cells len %d in field %s", len(c), field.String())
 			}
-			ToBytesToBuffer(buf, cell.ToBOCWithFlags(c, false))
+			if err := ToBytesToBuffer(buf, cell.ToBOCWithFlags(c, false)); err != nil {
+				return fmt.Errorf("failed to serialize slice cell field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeStruct:
 			info := field.structInfo
 			structFlags := field.meta.(uint32)

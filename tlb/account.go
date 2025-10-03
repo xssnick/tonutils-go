@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/sigurn/crc16"
+	"github.com/xssnick/tonutils-go/crc16"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -275,5 +275,5 @@ func (a *Account) HasGetMethod(name string) bool {
 
 func MethodNameHash(name string) uint64 {
 	// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/smc-envelope/SmartContract.h#L75
-	return uint64(crc16.Checksum([]byte(name), crc16.MakeTable(crc16.CRC16_XMODEM))) | 0x10000
+	return uint64(crc16.ChecksumXMODEM([]byte(name))) | 0x10000
 }

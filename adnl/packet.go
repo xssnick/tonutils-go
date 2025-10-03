@@ -184,7 +184,7 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	binary.LittleEndian.PutUint32(tmp, _PacketContentID)
 	buf.Write(tmp)
 
-	tl.ToBytesToBuffer(buf, p.Rand1)
+	_ = tl.ToBytesToBuffer(buf, p.Rand1)
 
 	var flags uint32
 	if p.Seqno != nil {
@@ -314,10 +314,10 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	}
 
 	if p.Signature != nil {
-		tl.ToBytesToBuffer(buf, p.Signature)
+		_ = tl.ToBytesToBuffer(buf, p.Signature)
 	}
 
-	tl.ToBytesToBuffer(buf, p.Rand2)
+	_ = tl.ToBytesToBuffer(buf, p.Rand2)
 
 	return payloadLen, nil
 }
