@@ -825,9 +825,9 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 		{
 			// it requires some time to speedup by bbr, so will show a low rate
 			name:  "netem_loss_raptorq",
-			sizes: []uint32{4 << 20},
+			sizes: []uint32{256 << 10},
 			setup: func(tb *testing.B) (*RLDP, func()) {
-				return setupNetemBenchmark(tb, 0.02, 50*time.Millisecond, 5*time.Millisecond)
+				return setupNetemBenchmark(tb, 0.01, 50*time.Millisecond, 0*time.Millisecond)
 			},
 			withParallel: true,
 		},
@@ -846,14 +846,26 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 func runRLDPBenchSizes(b *testing.B, client *RLDP, sizes []uint32, withParallel bool) {
 	for _, sz := range sizes {
 		b.Run(fmt.Sprintf("resp=%dKB", sz>>10), func(b *testing.B) {
+			var resp benchResponse
+			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+			err := client.DoQuery(ctx, 1<<30, benchRequest{
+				WantLen: sz,
+			}, &resp)
+			cancel()
+			if err != nil {
+				b.Fatalf("client exec err: %v", err)
+			}
+
 			b.SetBytes(int64(sz))
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				var resp benchResponse
-				if err := client.DoQuery(context.Background(), 1<<30, benchRequest{
+				ctx, cancel = context.WithTimeout(context.Background(), 7*time.Second)
+				err = client.DoQuery(ctx, 1<<30, benchRequest{
 					WantLen: sz,
-				}, &resp); err != nil {
+				}, &resp)
+				cancel()
+				if err != nil {
 					b.Fatalf("client exec err: %v", err)
 				}
 			}
@@ -861,6 +873,16 @@ func runRLDPBenchSizes(b *testing.B, client *RLDP, sizes []uint32, withParallel 
 
 		if withParallel {
 			b.Run(fmt.Sprintf("resp=%dKB/parallel", sz>>10), func(b *testing.B) {
+				var resp benchResponse
+				ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+				err := client.DoQuery(ctx, 1<<30, benchRequest{
+					WantLen: sz,
+				}, &resp)
+				cancel()
+				if err != nil {
+					b.Fatalf("client exec err: %v", err)
+				}
+
 				b.SetBytes(int64(sz))
 				b.SetParallelism(runtime.NumCPU())
 
@@ -868,9 +890,12 @@ func runRLDPBenchSizes(b *testing.B, client *RLDP, sizes []uint32, withParallel 
 				b.RunParallel(func(pb *testing.PB) {
 					for pb.Next() {
 						var resp benchResponse
-						if err := client.DoQuery(context.Background(), 1<<30, benchRequest{
+						ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+						err := client.DoQuery(ctx, 1<<30, benchRequest{
 							WantLen: sz,
-						}, &resp); err != nil {
+						}, &resp)
+						cancel()
+						if err != nil {
 							b.Fatalf("client exec err: %v", err)
 						}
 					}

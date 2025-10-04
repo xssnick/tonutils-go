@@ -160,7 +160,8 @@ func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
 	}
 	c.btlbw.Store(start)
 	c.pacingRate.Store(start)
-	c.inflight.Store(rateToInflight(start, c.minRTT.Load()))
+	initialInflight := rateToInflight(start, c.minRTT.Load())
+	c.applyInflightLimit(initialInflight)
 	c.hiInflight.Store(c.inflight.Load())
 	c.loInflight.Store(0)
 
@@ -201,6 +202,28 @@ func (c *BBRv2Controller) SetAppLimited(v bool) { c.appLimited.Store(v) }
 
 func (c *BBRv2Controller) markActive() { c.lastActive.Store(nowMs()) }
 
+func (c *BBRv2Controller) applyInflightLimit(inflight int64) {
+	if inflight < 0 {
+		inflight = 0
+	}
+	c.inflight.Store(inflight)
+
+	burst := inflight + inflight/4
+	const minBurst = 32 * 1024
+	if burst < minBurst {
+		burst = minBurst
+	}
+
+	if maxRate := c.opts.MaxRate; maxRate > 0 {
+		maxBurst := rateToInflight(maxRate, max64(c.minRTT.Load(), 1))
+		if maxBurst > 0 && burst > maxBurst {
+			burst = maxBurst
+		}
+	}
+
+	c.limiter.SetCapacityBytes(burst)
+}
+
 func (c *BBRv2Controller) OnNewSendBurst() {
 	if c.appLimited.Swap(false) {
 		c.fullBW.Store(0)
@@ -236,7 +259,7 @@ func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
 	c.lastRTT.Store(rttMs)
 
 	if btl := c.btlbw.Load(); btl > 0 {
-		c.inflight.Store(rateToInflight(btl, c.minRTT.Load()))
+		c.applyInflightLimit(rateToInflight(btl, c.minRTT.Load()))
 	}
 }
 
@@ -325,6 +348,7 @@ func (c *BBRv2Controller) resetForNewFlow(now int64) {
 	if model <= 0 {
 		model = rateToInflight(c.opts.MinRate, max64(c.minRTT.Load(), 1))
 	}
+	c.applyInflightLimit(model)
 	c.hiInflight.Store(max64(model+model/4, 2*1500))
 	c.lastAckTs.Store(now)
 	c.appLimited.Store(false)
@@ -337,15 +361,12 @@ func (c *BBRv2Controller) primeTokenBucketForRate(now int64, rate int64) {
 	}
 	rtt := max64(c.minRTT.Load(), 1)
 	bdp := rateToInflight(rate, rtt)
-	burst := max64(64*1024, min64(8*bdp, 4*1024*1024))
-	type tbIface interface {
-		SetBurst(int64)
-		AddTokens(int64)
+	target := bdp
+	if cur := c.inflight.Load(); cur > target {
+		target = cur
 	}
-	if tb, ok := any(c.limiter).(tbIface); ok {
-		tb.SetBurst(burst)
-		tb.AddTokens(min64(bdp, burst))
-	}
+	c.applyInflightLimit(target)
+	c.limiter.AddTokens(min64(bdp, target))
 }
 
 func humanBps(bps int64) string {
@@ -445,7 +466,10 @@ func (c *BBRv2Controller) InflightAllowance(currentBytes int64) int64 {
 }
 
 func (c *BBRv2Controller) CurrentMinRTT() int64 {
-	return c.minRTT.Load()
+	if !c.minRTTProvisional.Load() {
+		return c.minRTT.Load()
+	}
+	return -1
 }
 
 func (c *BBRv2Controller) CurrentRTT() int64 {
@@ -479,7 +503,7 @@ func (c *BBRv2Controller) updateModelAndRate(now int64) float64 {
 	if inflight <= 0 {
 		inflight = 2 * 1500 // at least two MSS-equivalents
 	}
-	c.inflight.Store(inflight)
+	c.applyInflightLimit(inflight)
 
 	// Losses in the last window → decide whether to lower inflight_hi
 	var lossRate float64
