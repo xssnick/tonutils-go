@@ -1059,11 +1059,9 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 		transfer:         t,
 	}
 
-	pt := uint32(1) << uint32(math.Ceil(math.Log2(float64(part.fecSymbolsCount)*1.5)+50))
+	pt := uint32(1) << uint32(math.Ceil(math.Log2(float64(part.fecSymbolsCount)*3+50)))
 	if pt > 16<<10 {
 		pt = 16 << 10
-	} else if pt < 64 {
-		pt = 64
 	}
 	part.sendClock = NewSendClock(int(pt))
 
