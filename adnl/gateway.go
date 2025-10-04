@@ -123,12 +123,23 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 }
 
 var PacketsBufferSize = 128 * 1024
+var DefaultUDPBufferSize = 32 << 20
 
 var DefaultListener = func(addr string) (net.PacketConn, error) {
 	lp, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return nil, err
 	}
+
+	if conn, ok := lp.(*net.UDPConn); ok {
+		if err := conn.SetReadBuffer(DefaultUDPBufferSize); err != nil {
+			Logger("[ADNL] failed to set read buffer:", err)
+		}
+		if err := conn.SetWriteBuffer(DefaultUDPBufferSize); err != nil {
+			Logger("[ADNL] failed to set write buffer:", err)
+		}
+	}
+
 	return NewSyncConn(lp, PacketsBufferSize), nil
 }
 
