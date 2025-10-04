@@ -815,9 +815,10 @@ func (r *RLDP) recoverySender() {
 
 					seqno := atomic.LoadUint32(&part.seqno)
 
+					// can be -1 when unknown
 					rtt := r.rateCtrl.CurrentMinRTT()
-					if rtt < 5 {
-						rtt = 5
+					if rtt >= 0 && rtt < 8 {
+						rtt = 8
 					}
 
 					var delay = int64(5)
