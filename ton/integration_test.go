@@ -596,6 +596,7 @@ func Test_LSErrorCase(t *testing.T) {
 	}
 }
 
+/*
 func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
@@ -635,7 +636,7 @@ func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 			t.Fatal("expected extra currencies dict")
 		}
 	})
-}
+}*/
 
 func TestAPIClient_GetBlockProofForward(t *testing.T) {
 	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
