@@ -1,6 +1,7 @@
 package rldp
 
 import (
+	"math"
 	"sync/atomic"
 	"time"
 )
@@ -36,7 +37,18 @@ func (tb *TokenBucket) SetCapacityBytes(burstBytes int64) {
 	if burstBytes < 0 {
 		burstBytes = 0
 	}
-	atomic.StoreInt64(&tb.capacity, burstBytes*1000)
+	capMicro := toMicroBytes(burstBytes)
+	atomic.StoreInt64(&tb.capacity, capMicro)
+
+	for {
+		curr := atomic.LoadInt64(&tb.tokens)
+		if curr <= capMicro {
+			break
+		}
+		if atomic.CompareAndSwapInt64(&tb.tokens, curr, capMicro) {
+			break
+		}
+	}
 }
 
 func (tb *TokenBucket) SetRate(bps int64) {
@@ -124,6 +136,33 @@ func (tb *TokenBucket) ConsumePackets(maxPackets, partSize int) int {
 	return gotBytes / partSize
 }
 
+// SetBurst implements the interface used by the BBR controller for seeding
+// the token bucket with a specific burst size (in bytes).
+func (tb *TokenBucket) SetBurst(burstBytes int64) {
+	tb.SetCapacityBytes(burstBytes)
+}
+
+// AddTokens adds up to n bytes worth of tokens into the bucket.
+// The total amount of tokens is always capped at the configured capacity.
+func (tb *TokenBucket) AddTokens(n int64) {
+	if n <= 0 {
+		return
+	}
+
+	add := toMicroBytes(n)
+	for {
+		curr := atomic.LoadInt64(&tb.tokens)
+		cp := atomic.LoadInt64(&tb.capacity)
+		newVal := curr + add
+		if cp > 0 && newVal > cp {
+			newVal = cp
+		}
+		if atomic.CompareAndSwapInt64(&tb.tokens, curr, newVal) {
+			return
+		}
+	}
+}
+
 func (tb *TokenBucket) TryConsumeBytes(n int) bool {
 	return tb.ConsumeUpTo(n) == n
 }
@@ -133,4 +172,14 @@ func abs64(x int64) int64 {
 		return -x
 	}
 	return x
+}
+
+func toMicroBytes(v int64) int64 {
+	if v >= math.MaxInt64/1000 {
+		return math.MaxInt64
+	}
+	if v <= math.MinInt64/1000 {
+		return math.MinInt64
+	}
+	return v * 1000
 }

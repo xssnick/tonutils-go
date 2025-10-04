@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -791,8 +792,7 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 		MaxUnexpectedTransferSize = old
 	}()
 
-	// defaultSizes := []uint32{16 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20}
-	defaultSizes := []uint32{256 << 10, 1 << 20, 4 << 20, 10 << 20}
+	defaultSizes := []uint32{16 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20}
 
 	scenarios := []struct {
 		name         string
@@ -800,7 +800,7 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 		setup        func(*testing.B) (*RLDP, func())
 		withParallel bool
 	}{
-		/*{
+		{
 			name:  "loopback_rr",
 			sizes: defaultSizes,
 			setup: func(b *testing.B) (*RLDP, func()) {
@@ -815,14 +815,14 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 				}
 			},
 			withParallel: true,
-		},*/
+		},
 		{
 			name:         "loopback_raptorq",
 			sizes:        defaultSizes,
 			setup:        setupLoopbackBenchmark,
 			withParallel: true,
 		},
-		/*{
+		{
 			// it requires some time to speedup by bbr, so will show a low rate
 			name:  "netem_loss_raptorq",
 			sizes: []uint32{256 << 10},
@@ -830,7 +830,7 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 				return setupNetemBenchmark(tb, 0.01, 50*time.Millisecond, 0*time.Millisecond)
 			},
 			withParallel: true,
-		},*/
+		},
 	}
 
 	for _, sc := range scenarios {
@@ -846,14 +846,26 @@ func BenchmarkRLDP_ClientServer(b *testing.B) {
 func runRLDPBenchSizes(b *testing.B, client *RLDP, sizes []uint32, withParallel bool) {
 	for _, sz := range sizes {
 		b.Run(fmt.Sprintf("resp=%dKB", sz>>10), func(b *testing.B) {
+			var resp benchResponse
+			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+			err := client.DoQuery(ctx, 1<<30, benchRequest{
+				WantLen: sz,
+			}, &resp)
+			cancel()
+			if err != nil {
+				b.Fatalf("client exec err: %v", err)
+			}
+
 			b.SetBytes(int64(sz))
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				var resp benchResponse
-				if err := client.DoQuery(context.Background(), 1<<30, benchRequest{
+				ctx, cancel = context.WithTimeout(context.Background(), 7*time.Second)
+				err = client.DoQuery(ctx, 1<<30, benchRequest{
 					WantLen: sz,
-				}, &resp); err != nil {
+				}, &resp)
+				cancel()
+				if err != nil {
 					b.Fatalf("client exec err: %v", err)
 				}
 			}
@@ -861,16 +873,29 @@ func runRLDPBenchSizes(b *testing.B, client *RLDP, sizes []uint32, withParallel 
 
 		if withParallel {
 			b.Run(fmt.Sprintf("resp=%dKB/parallel", sz>>10), func(b *testing.B) {
+				var resp benchResponse
+				ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+				err := client.DoQuery(ctx, 1<<30, benchRequest{
+					WantLen: sz,
+				}, &resp)
+				cancel()
+				if err != nil {
+					b.Fatalf("client exec err: %v", err)
+				}
+
 				b.SetBytes(int64(sz))
-				b.SetParallelism(20)
+				b.SetParallelism(runtime.NumCPU())
 
 				b.ResetTimer()
 				b.RunParallel(func(pb *testing.PB) {
 					for pb.Next() {
 						var resp benchResponse
-						if err := client.DoQuery(context.Background(), 1<<30, benchRequest{
+						ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+						err := client.DoQuery(ctx, 1<<30, benchRequest{
 							WantLen: sz,
-						}, &resp); err != nil {
+						}, &resp)
+						cancel()
+						if err != nil {
 							b.Fatalf("client exec err: %v", err)
 						}
 					}
@@ -904,13 +929,13 @@ func setupLoopbackBenchmark(b *testing.B) (*RLDP, func()) {
 	}
 
 	srv := adnl.NewGateway(srvKey)
-	if err := srv.StartServer("127.0.0.1:19157", 4); err != nil {
+	if err := srv.StartServer("127.0.0.1:19157"); err != nil {
 		b.Fatal(err)
 	}
 	configureBenchServer(srv)
 
 	cliGateway := adnl.NewGateway(cliKey)
-	if err := cliGateway.StartClient(4); err != nil {
+	if err := cliGateway.StartClient(); err != nil {
 		b.Fatal(err)
 	}
 

@@ -58,6 +58,7 @@ type activeTransferPart struct {
 
 	nextRecoverDelay int64
 	fastSeqnoTill    uint32
+	startedAt        time.Time
 	recoveryReady    atomic.Bool
 	lossEWMA         atomic.Uint64
 	drrDeficit       int64
@@ -141,6 +142,7 @@ type decoderStreamPart struct {
 
 	lastConfirmAt  time.Time
 	lastCompleteAt time.Time
+	startedAt      time.Time
 }
 
 type decoderStream struct {
@@ -294,7 +296,8 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					startedAt:     tm,
 					msgBuf:        NewQueue(qsz),
 					currentPart: decoderStreamPart{
-						index: 0,
+						index:     0,
+						startedAt: tm,
 					},
 					totalSize: m.TotalSize,
 				}
@@ -410,28 +413,13 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 
 					// it may not be decoded due to an unsolvable math system, it means we need more symbols
 					if decoded {
-						took := time.Since(stream.startedAt)
-						if took > 200*time.Millisecond && part.Part == 0 {
-							fmt.Println("[RLDP] v2:", isV2, "part", part.Part, "part sz", stream.currentPart.fecDataSize, "decoded on seqno", part.Seqno, "symbols:", stream.currentPart.fecSymbolsCount, "received:", stream.currentPart.receivedNum, "fast", stream.currentPart.receivedFastNum,
-								"decode took", time.Since(tmd).String(), "took", took.String())
-							ord := ""
-							for i, u := range stream.currentPart.recvOrder {
-								if i > 0 && stream.currentPart.recvOrder[i-1] != u-1 {
-									sym := "?"
-									for _, u2 := range stream.currentPart.recvOrder {
-										if u2 == u-1 {
-											sym = "."
-											break
-										}
-									}
-									ord += fmt.Sprint(sym + ", ")
-								}
-								ord += fmt.Sprintf("%d, ", u)
-							}
-							println(ord, "\n")
-						}
+						took := tmd.Sub(stream.currentPart.startedAt)
+						Logger("[RLDP] v2:", isV2, "part", part.Part, "part sz", stream.currentPart.fecDataSize, "decoded on seqno", part.Seqno, "symbols:", stream.currentPart.fecSymbolsCount, "received:", stream.currentPart.receivedNum, "fast", stream.currentPart.receivedFastNum,
+							"decode took", time.Since(tmd).String(), "took", took.String())
+
 						stream.currentPart = decoderStreamPart{
-							index: stream.currentPart.index + 1,
+							index:     stream.currentPart.index + 1,
+							startedAt: tmd,
 						}
 
 						if len(data) > 0 {
@@ -783,8 +771,7 @@ func (r *RLDP) recoverySender() {
 					continue
 				}
 
-				if                                              //atomic.LoadUint32(&part.seqno) < part.fastSeqnoTill ||
-				ms-part.lastRecoverAt > part.nextRecoverDelay { // part.lastRecoverAt < atomic.LoadInt64(&part.lastConfirmAt)
+				if ms-part.lastRecoverAt > part.nextRecoverDelay {
 					transfersToProcess = append(transfersToProcess, part)
 				}
 			}
@@ -824,27 +811,50 @@ func (r *RLDP) recoverySender() {
 				for i := 0; i < n; i++ {
 					idx := (start + i) % n
 					part := transfersToProcess[idx]
+					ms = time.Now().UnixMilli()
 
 					seqno := atomic.LoadUint32(&part.seqno)
 
-					quantum := int64(1)
-					if sc := part.fecSymbolsCount / 100; sc > 1 {
-						quantum = int64(sc)
+					rtt := r.rateCtrl.CurrentMinRTT()
+					if rtt < 5 {
+						rtt = 5
 					}
+
+					var delay = int64(5)
+					if rtt > 0 {
+						delay = rtt / 4
+					}
+
+					quantum := int64(1)
 
 					if seqno < part.fastSeqnoTill {
 						fastDiff := int64(part.fastSeqnoTill - seqno)
 						if fastDiff > quantum {
 							quantum = fastDiff
 						}
+					} else if rtt > 0 {
+						perFrame := int64(part.fecSymbolsCount / 4)
+						if perFrame < 2 {
+							perFrame = 2
+						}
+
+						prevTm := int64(0)
+						if part.lastRecoverAt > 0 {
+							prevTm = part.lastRecoverAt - part.startedAt.UnixMilli()
+						}
+
+						tmOfFrame := ms - part.startedAt.UnixMilli()
+						amt := float64(perFrame) * (float64(tmOfFrame-prevTm) / float64(rtt))
+						quantum = int64(amt)
+						if quantum > perFrame/2 {
+							quantum = perFrame / 2
+						}
+
+						// smooth recovery to decrease bursts
+						delay = 0
+					} else if sc := part.fecSymbolsCount / 100; sc > 1 {
+						quantum = int64(sc)
 					}
-
-					/*part.drrDeficit += quantum
-					if part.drrDeficit <= 0 {
-						continue
-					}*/
-
-					ms = time.Now().UnixMilli()
 
 					requested := int(quantum)
 					consumed := r.rateLimit.ConsumePackets(requested, int(part.fecSymbolSize))
@@ -879,33 +889,7 @@ func (r *RLDP) recoverySender() {
 					}
 
 					if seqno > prevSeqno {
-						/*sent := int64(seqno - prevSeqno)
-						part.drrDeficit -= sent
-						if part.drrDeficit < 0 {
-							part.drrDeficit = 0
-						}*/
-
-						base := r.rateCtrl.CurrentMinRTT()
-						if base <= 0 {
-							base = r.rateCtrl.opts.DefaultRTTMs
-							if base <= 0 {
-								base = 25
-							}
-						}
-
-						if seqno > part.fastSeqnoTill {
-							minGap := max64(8, base/4)
-							maxGap := max64(20, base/2)
-
-							if consumed > 0 {
-								part.nextRecoverDelay = minGap
-							} else {
-								part.nextRecoverDelay = maxGap
-							}
-						} else {
-							part.nextRecoverDelay = 0
-						}
-
+						part.nextRecoverDelay = delay
 						part.lastRecoverAt = ms
 						lastServedIdx = idx
 						atomic.StoreUint32(&part.seqno, seqno)
@@ -1094,57 +1078,54 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 }
 
 func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) error {
-	go func() error {
-		part := transfer.getCurrentPart()
-		if part == nil {
-			return fmt.Errorf("no active parts")
+	part := transfer.getCurrentPart()
+	if part == nil {
+		return fmt.Errorf("no active parts")
+	}
+
+	p := MessagePart{
+		TransferID: transfer.id,
+		FecType:    part.fec,
+		Part:       part.index,
+		TotalSize:  transfer.totalSize,
+	}
+
+	r.rateCtrl.OnNewSendBurst()
+
+	isV2 := r.useV2.Load()
+
+	seqno := uint32(0)
+	batch := r.rateLimit.ConsumePackets(int(part.fastSeqnoTill), int(part.fecSymbolSize))
+	now := time.Now().UnixMilli()
+
+	for i := 0; i < batch; i++ {
+		currentSeqno := seqno
+		p.Seqno = currentSeqno
+		p.Data = part.encoder.GenSymbol(currentSeqno)
+
+		var msgPart tl.Serializable = p
+		if isV2 {
+			msgPart = MessagePartV2(p)
 		}
 
-		p := MessagePart{
-			TransferID: transfer.id,
-			FecType:    part.fec,
-			Part:       part.index,
-			TotalSize:  transfer.totalSize,
+		part.sendClock.OnSend(currentSeqno, now)
+		if err := r.adnl.SendCustomMessage(ctx, msgPart); err != nil {
+			return fmt.Errorf("failed to send message part %d: %w", currentSeqno, err)
 		}
 
-		r.rateCtrl.OnNewSendBurst()
+		seqno++
+	}
 
-		isV2 := r.useV2.Load()
+	atomic.StoreUint32(&part.seqno, seqno)
+	part.recoveryReady.Store(true)
+	part.startedAt = time.Now()
 
-		seqno := uint32(0)
-		batch := r.rateLimit.ConsumePackets(int(part.fastSeqnoTill), int(part.fecSymbolSize))
-		now := time.Now().UnixMilli()
+	select {
+	case r.activateRecoverySender <- true:
+	default:
+	}
 
-		for i := 0; i < batch; i++ {
-			currentSeqno := seqno
-			p.Seqno = currentSeqno
-			p.Data = part.encoder.GenSymbol(currentSeqno)
-
-			var msgPart tl.Serializable = p
-			if isV2 {
-				msgPart = MessagePartV2(p)
-			}
-
-			part.sendClock.OnSend(currentSeqno, now)
-			if err := r.adnl.SendCustomMessage(ctx, msgPart); err != nil {
-				return fmt.Errorf("failed to send message part %d: %w", currentSeqno, err)
-			}
-
-			seqno++
-		}
-
-		atomic.StoreUint32(&part.seqno, seqno)
-		part.recoveryReady.Store(true)
-
-		select {
-		case r.activateRecoverySender <- true:
-		default:
-		}
-		return nil
-
-	}()
 	return nil
-
 }
 
 func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error {
@@ -1155,6 +1136,12 @@ func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize uint64, query, result 
 	}
 
 	res := make(chan AsyncQueryResult, 1)
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	}
 
 	if err = r.DoQueryAsync(ctx, maxAnswerSize, qid, query, res); err != nil {
 		return fmt.Errorf("failed to do query: %w", err)
