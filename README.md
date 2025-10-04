@@ -53,6 +53,7 @@ You can find many usage examples in **[example](https://github.com/xssnick/tonut
 - [Cells](#Cells)
   - [Create](#Cells)
   - [Parse](#Cells)
+  - [Event](#Event)
   - [TLB Loader/Serializer](#TLB-Loader)
   - [BoC](#BoC)
   - [Proof creation](#Proofs)
@@ -403,6 +404,35 @@ There are 2 types of methods `Must` and regular. The difference is that in case 
 but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
 
 To debug cells you can use `Dump()` and `DumpBits()` methods of cell, they will return string with beautifully formatted cells and their refs tree
+
+##### Event
+
+Event message type produced by `emit` is ExternalOut, so you need to listen out messages of desired contract.
+```golang
+        go api.SubscribeOnTransactions(context.Background(), yourContractAddress, lastProcessedLT, transactions)
+
+        for tx := range transactions {
+		outs, err := tx.IO.Out.ToSlice()
+		if err != nil {
+			return err
+		}
+
+		for _, out := range outs {
+			if out.MsgType == tlb.MsgTypeExternalOut {
+				println("Event happened")
+				msg := out.AsExternalOut()
+                body := msg.Body.BeginParse()
+                opCode = body.MustLoadUInt(32)     // Operation Code
+                id := body.MustLoadBigUInt(256)    // Event field
+                addr := body.MustLoadAddr()        // Event field
+                str := body.MustLoadStringSnake()  // Event field
+			}
+		}
+	}
+```
+
+btw: `string snake` uses all remaining space of cell to store/load, so it must be the last field of cell.
+
 ##### BoC
 
 Sometimes it is needed to import or export cell, for example to transfer over the network, for this, Bag of Cells serialization format is exists.
