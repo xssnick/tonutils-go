@@ -121,6 +121,26 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 	// TODO: data check
 }
 
+func TestAPIClient_GetBlockHeader(t *testing.T) {
+	ctx := api.Client().StickyContext(context.Background())
+
+	b, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	hdr, err := api.WaitForBlock(b.SeqNo).GetBlockHeader(ctx, b)
+	if err != nil {
+		t.Fatal("Get master block data err:", err.Error())
+		return
+	}
+
+	if hdr.SeqNo != b.SeqNo {
+		t.Fatal("not eq")
+	}
+}
+
 // commented because public archival LS works too bad to test
 /*func TestAPIClient_GetOldBlockData(t *testing.T) {
 	client := liteclient.NewConnectionPool()

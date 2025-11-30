@@ -446,6 +446,37 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 	return &bData, nil
 }
 
+// GetBlockHeader - get block detailed information
+func (c *APIClient) GetBlockHeader(ctx context.Context, block *BlockIDExt) (*tlb.BlockHeader, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, GetBlockHeader{ID: block}, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case BlockHeader:
+		pl, err := cell.FromBOC(t.HeaderProof)
+		if err != nil {
+			return nil, err
+		}
+
+		pl, err = cell.UnwrapProof(pl, block.RootHash)
+		if err != nil {
+			return nil, fmt.Errorf("incorrect proof: %w", err)
+		}
+
+		var bData tlb.Block
+		if err = tlb.LoadFromCellAsProof(&bData, pl.BeginParse()); err != nil {
+			return nil, fmt.Errorf("failed to parse block data proof: %w", err)
+		}
+		return &bData.BlockInfo, nil
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
+}
+
 // GetBlockDataAsCell - get block detailed information as a cell
 func (c *APIClient) GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (*cell.Cell, error) {
 	var resp tl.Serializable

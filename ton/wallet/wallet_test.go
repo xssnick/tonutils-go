@@ -498,6 +498,26 @@ type WaiterMock struct {
 	MSendExternalMessageWaitTransaction func(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
 }
 
+func (w WaiterMock) GetBlockHeader(ctx context.Context, block *ton.BlockIDExt) (*tlb.BlockHeader, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) WithLSInfoInErrors() ton.APIClientWrapped {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) FindLastTransactionByInMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (w WaiterMock) FindLastTransactionByOutMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (w WaiterMock) FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
 	return w.MFindLastTransactionByInMsgHash(ctx, addr, msgHash, maxTxNumToScan...)
 }
