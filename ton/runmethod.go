@@ -143,6 +143,11 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 
 		return NewExecutionResult(result), nil
 	case LSError:
+		if t.Code == ErrCodeContractNotInitialized {
+			return nil, ContractExecError{
+				ErrCodeContractNotInitialized,
+			}
+		}
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
