@@ -34,12 +34,7 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 		tries++
 
 		if err != nil {
-			if !errors.Is(err, liteclient.ErrADNLReqTimeout) && !errors.Is(err, context.DeadlineExceeded) {
-				return err
-			}
-
-			err := ctx.Err()
-			if err != nil {
+			if !errors.Is(err, liteclient.ErrADNLReqTimeout) {
 				return err
 			}
 
