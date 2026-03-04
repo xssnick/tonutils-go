@@ -128,7 +128,7 @@ func Test_WalletTransfer(t *testing.T) {
 	for _, v := range []VersionConfig{ConfigV5R1Final{
 		NetworkGlobalID: TestnetGlobalID,
 	}, ConfigV5R1Beta{
-		NetworkGlobalID: TestnetGlobalID,
+		NetworkGlobalID: TestnetGlobalID - 1,
 	}, V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified, ConfigHighloadV3{
 		MessageTTL: 120,
 		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
@@ -185,7 +185,7 @@ func Test_WalletTransfer(t *testing.T) {
 
 					tx, _, err := w.SendManyWaitTransaction(ctx, []*Message{tr})
 					if err != nil {
-						t.Fatal("Transfer err:", err.Error())
+						t.Fatal("Transfer err:", w.WalletAddress().String(), err.Error())
 						return
 					}
 
@@ -194,7 +194,7 @@ func Test_WalletTransfer(t *testing.T) {
 						return
 					}
 				} else {
-					t.Fatal("not enough balance")
+					t.Fatal(w.WalletAddress().Testnet(true).String(), "not enough balance")
 					return
 				}
 			})

@@ -136,7 +136,7 @@ func getStructInfoReferenceByShortName(name string) *structInfo {
 func RegisterAllowedGroup(name string, names ...string) {
 	initMx.Lock() // we lock because init() methods in independent packages can be called in parallel
 	defer initMx.Unlock()
-	
+
 	grp := _allowedGroup[name]
 	grp = append(grp, names...)
 	_allowedGroup[name] = grp
