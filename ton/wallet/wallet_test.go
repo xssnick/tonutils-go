@@ -7,11 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xssnick/tonutils-go/liteclient"
 
 	"github.com/xssnick/tonutils-go/ton"
 
@@ -626,6 +627,22 @@ func (w WaiterMock) ListTransactions(ctx context.Context, addr *address.Address,
 
 func (w WaiterMock) GetTransaction(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error) {
 	return w.MGetTransaction(ctx, block, addr, lt)
+}
+
+func (w WaiterMock) GetOutMsgQueueSizes(ctx context.Context, wc *int32, shard *int64) (*ton.OutMsgQueueSizes, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetBlockOutMsgQueueSize(ctx context.Context, block *ton.BlockIDExt) (*ton.BlockOutMsgQueueSize, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetDispatchQueueInfo(ctx context.Context, block *ton.BlockIDExt, afterAddr *address.Address, maxAccounts int) (*ton.DispatchQueueInfo, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetDispatchQueueMessages(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*ton.GetDispatchQueueMessages)) (*ton.DispatchQueueMessages, error) {
+	panic("implement me")
 }
 
 func TestDecryptCommentCell(t *testing.T) {

@@ -49,8 +49,17 @@ func init() {
 	tl.Register(BlockLinkBackward{}, "liteServer.blockLinkBack to_key_block:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt dest_proof:bytes proof:bytes state_proof:bytes = liteServer.BlockLink")
 	tl.Register(BlockLinkForward{}, "liteServer.blockLinkForward to_key_block:Bool from:tonNode.blockIdExt to:tonNode.blockIdExt dest_proof:bytes config_proof:bytes signatures:liteServer.SignatureSet = liteServer.BlockLink")
 	tl.Register(SignatureSet{}, "liteServer.signatureSet validator_set_hash:int catchain_seqno:int signatures:(vector liteServer.signature) = liteServer.SignatureSet")
+	tl.Register(SignatureSetOrdinary{}, "liteServer.signatureSet.ordinary#f644a6e6 validator_set_hash:int catchain_seqno:int signatures:(vector liteServer.signature) = liteServer.SignatureSet")
+	tl.Register(SignatureSetSimplex{}, "liteServer.signatureSet.simplex cc_seqno:int validator_set_hash:int signatures:(vector liteServer.signature) session_id:int256 slot:int candidate:bytes = liteServer.SignatureSet")
 	tl.Register(Signature{}, "liteServer.signature node_id_short:int256 signature:bytes = liteServer.Signature")
 	tl.Register(BlockID{}, "ton.blockId root_cell_hash:int256 file_hash:int256 = ton.BlockId")
+	tl.Register(ConsensusDataToSign{}, "consensus.dataToSign session_id:int256 data:bytes = consensus.DataToSign")
+	tl.Register(ConsensusCandidateID{}, "consensus.candidateId slot:int hash:int256 = consensus.CandidateId")
+	tl.Register(ConsensusSimplexFinalizeVote{}, "consensus.simplex.finalizeVote id:consensus.CandidateId = consensus.simplex.UnsignedVote")
+	tl.Register(ConsensusCandidateParent{}, "consensus.candidateParent id:consensus.CandidateId = consensus.CandidateParent")
+	tl.Register(ConsensusCandidateWithoutParents{}, "consensus.candidateWithoutParents = consensus.CandidateParent")
+	tl.Register(ConsensusCandidateHashDataOrdinary{}, "consensus.candidateHashDataOrdinary block:tonNode.blockIdExt collated_file_hash:int256 parent:consensus.CandidateParent = consensus.CandidateHashData")
+	tl.Register(ConsensusCandidateHashDataEmpty{}, "consensus.candidateHashDataEmpty block:tonNode.blockIdExt parent:consensus.candidateId = consensus.CandidateHashData")
 
 	tl.Register(GetVersion{}, "liteServer.getVersion = liteServer.Version")
 	tl.Register(Version{}, "liteServer.version mode:# version:int capabilities:long now:int = liteServer.Version")
@@ -118,12 +127,12 @@ type BlockLinkBackward struct {
 }
 
 type BlockLinkForward struct {
-	ToKeyBlock   bool          `tl:"bool"`
-	From         *BlockIDExt   `tl:"struct"`
-	To           *BlockIDExt   `tl:"struct"`
-	DestProof    []byte        `tl:"bytes"`
-	ConfigProof  []byte        `tl:"bytes"`
-	SignatureSet *SignatureSet `tl:"struct boxed"`
+	ToKeyBlock   bool        `tl:"bool"`
+	From         *BlockIDExt `tl:"struct"`
+	To           *BlockIDExt `tl:"struct"`
+	DestProof    []byte      `tl:"bytes"`
+	ConfigProof  []byte      `tl:"bytes"`
+	SignatureSet any         `tl:"struct boxed [liteServer.signatureSet,liteServer.signatureSet.ordinary,liteServer.signatureSet.simplex]"`
 }
 
 type SignatureSet struct {
@@ -132,9 +141,55 @@ type SignatureSet struct {
 	Signatures       []Signature `tl:"vector struct"`
 }
 
+type SignatureSetOrdinary struct {
+	ValidatorSetHash int32       `tl:"int"`
+	CatchainSeqno    int32       `tl:"int"`
+	Signatures       []Signature `tl:"vector struct"`
+}
+
+type SignatureSetSimplex struct {
+	CCSeqno          int32       `tl:"int"`
+	ValidatorSetHash int32       `tl:"int"`
+	Signatures       []Signature `tl:"vector struct"`
+	SessionID        []byte      `tl:"int256"`
+	Slot             int32       `tl:"int"`
+	Candidate        []byte      `tl:"bytes"`
+}
+
 type Signature struct {
 	NodeIDShort []byte `tl:"int256"`
 	Signature   []byte `tl:"bytes"`
+}
+
+type ConsensusDataToSign struct {
+	SessionID []byte `tl:"int256"`
+	Data      []byte `tl:"bytes"`
+}
+
+type ConsensusCandidateID struct {
+	Slot int32  `tl:"int"`
+	Hash []byte `tl:"int256"`
+}
+
+type ConsensusSimplexFinalizeVote struct {
+	ID any `tl:"struct boxed [consensus.candidateId]"`
+}
+
+type ConsensusCandidateParent struct {
+	ID any `tl:"struct boxed [consensus.candidateId]"`
+}
+
+type ConsensusCandidateWithoutParents struct{}
+
+type ConsensusCandidateHashDataOrdinary struct {
+	Block            BlockIDExt `tl:"struct"`
+	CollatedFileHash []byte     `tl:"int256"`
+	Parent           any        `tl:"struct boxed [consensus.candidateParent,consensus.candidateWithoutParents]"`
+}
+
+type ConsensusCandidateHashDataEmpty struct {
+	Block  BlockIDExt           `tl:"struct"`
+	Parent ConsensusCandidateID `tl:"struct"`
 }
 
 type Object struct{}

@@ -3,10 +3,11 @@ package ton
 import (
 	"context"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient"
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/xssnick/tonutils-go/liteclient"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
@@ -83,6 +84,11 @@ type APIClientWrapped interface {
 	FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
 	FindLastTransactionByInMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error)
 	FindLastTransactionByOutMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error)
+
+	GetOutMsgQueueSizes(ctx context.Context, wc *int32, shard *int64) (*OutMsgQueueSizes, error)
+	GetBlockOutMsgQueueSize(ctx context.Context, block *BlockIDExt) (*BlockOutMsgQueueSize, error)
+	GetDispatchQueueInfo(ctx context.Context, block *BlockIDExt, afterAddr *address.Address, maxAccounts int) (*DispatchQueueInfo, error)
+	GetDispatchQueueMessages(ctx context.Context, block *BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*GetDispatchQueueMessages)) (*DispatchQueueMessages, error)
 }
 
 type APIClient struct {
