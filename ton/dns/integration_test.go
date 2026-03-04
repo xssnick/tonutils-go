@@ -19,7 +19,7 @@ var api = func() ton.APIClientWrapped {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client).WithTimeout(5 * time.Second).WithRetry()
+	return ton.NewAPIClient(client).WithTimeout(5 * time.Second).WithRetry().WithLSInfoInErrors()
 }()
 
 func TestDNSClient_Resolve(t *testing.T) {

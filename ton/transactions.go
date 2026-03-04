@@ -298,17 +298,31 @@ func (c *APIClient) SubscribeOnTransactions(workerCtx context.Context, addr *add
 	}
 }
 
+// Deprecated: use FindLastTransactionByInMsgHashAfterTime, to search by message hash and not body hash
 // FindLastTransactionByInMsgHash returns last transaction in account where incoming message (payload) hash equal to msgHash.
 func (c *APIClient) FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
-	return c.findLastTransactionByHash(ctx, addr, false, msgHash, maxTxNumToScan...)
+	return c.findLastTransactionByHash(ctx, addr, false, msgHash, time.Time{}, false, maxTxNumToScan...)
 }
 
+// FindLastTransactionByInMsgHashAfterTime returns last transaction in account where incoming message hash equal to msgHash.
+// Checks all account transactions after specified time, use estimated execution time, it allows us to reduce scanning depth
+func (c *APIClient) FindLastTransactionByInMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error) {
+	return c.findLastTransactionByHash(ctx, addr, false, msgHash, after, true, 0)
+}
+
+// Deprecated: use FindLastTransactionByOutMsgHashAfterTime, to search by message hash and not body hash
 // FindLastTransactionByOutMsgHash returns last transaction in account where one of outgoing message (payload) hashes equal to msgHash.
 func (c *APIClient) FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
-	return c.findLastTransactionByHash(ctx, addr, true, msgHash, maxTxNumToScan...)
+	return c.findLastTransactionByHash(ctx, addr, true, msgHash, time.Time{}, false, maxTxNumToScan...)
 }
 
-func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address.Address, isOut bool, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
+// FindLastTransactionByOutMsgHashAfterTime returns last transaction in account where outgoing message hash equal to msgHash.
+// Checks all account transactions after specified time, use estimated execution time, it allows us to reduce scanning depth
+func (c *APIClient) FindLastTransactionByOutMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error) {
+	return c.findLastTransactionByHash(ctx, addr, true, msgHash, after, true, 0)
+}
+
+func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address.Address, isOut bool, msgHash []byte, after time.Time, updated bool, maxTxNumToScan ...int) (*tlb.Transaction, error) {
 	limit := 60
 	if len(maxTxNumToScan) > 0 {
 		limit = maxTxNumToScan[0]
@@ -323,7 +337,7 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 	if err != nil {
 		return nil, fmt.Errorf("cannot get account: %w", err)
 	}
-	if !acc.IsActive { // no tx is made from this account
+	if !acc.IsActive {
 		return nil, fmt.Errorf("account is inactive: %w", ErrTxWasNotFound)
 	}
 
@@ -341,10 +355,15 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 			return nil, fmt.Errorf("cannot list transactions: %w", err)
 		}
 
-		for i, transaction := range txList {
+		for i := len(txList) - 1; i >= 0; i-- {
+			transaction := txList[i]
 			if i == 0 {
 				// get previous of the oldest tx, in case if we need to scan deeper
-				lastLt, lastHash = txList[0].PrevTxLT, txList[0].PrevTxHash
+				lastLt, lastHash = transaction.PrevTxLT, transaction.PrevTxHash
+			}
+
+			if !after.IsZero() && int64(transaction.Now) < after.Unix() {
+				return nil, ErrTxWasNotFound
 			}
 
 			if isOut {
@@ -358,8 +377,19 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 				}
 
 				for _, m := range list {
-					if bytes.Equal(m.Msg.Payload().Hash(), msgHash) {
-						return transaction, nil
+					if updated {
+						msgCell, err := tlb.ToCell(m.Msg)
+						if err != nil {
+							return nil, fmt.Errorf("cannot convert message to cell: %w", err)
+						}
+
+						if bytes.Equal(msgCell.Hash(), msgHash) {
+							return transaction, nil
+						}
+					} else {
+						if bytes.Equal(m.Msg.Payload().Hash(), msgHash) {
+							return transaction, nil
+						}
 					}
 				}
 			} else {
@@ -372,15 +402,26 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 					return transaction, nil
 				}
 
-				if bytes.Equal(transaction.IO.In.Msg.Payload().Hash(), msgHash) {
-					return transaction, nil
+				if updated {
+					msgCell, err := tlb.ToCell(transaction.IO.In.Msg)
+					if err != nil {
+						return nil, fmt.Errorf("cannot convert message to cell: %w", err)
+					}
+
+					if bytes.Equal(msgCell.Hash(), msgHash) {
+						return transaction, nil
+					}
+				} else {
+					if bytes.Equal(transaction.IO.In.Msg.Payload().Hash(), msgHash) {
+						return transaction, nil
+					}
 				}
 			}
 		}
 
 		scanned += 15
 
-		if scanned >= limit {
+		if limit > 0 && scanned >= limit {
 			return nil, fmt.Errorf("scan limit of %d transactions was reached, %d transactions was checked and hash was not found", limit, scanned)
 		}
 	}

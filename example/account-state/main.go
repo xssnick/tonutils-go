@@ -20,7 +20,7 @@ func main() {
 		return
 	}
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry().WithLSInfoInErrors()
 
 	// if we want to route all requests to the same node, we can use it
 	ctx := client.StickyContext(context.Background())

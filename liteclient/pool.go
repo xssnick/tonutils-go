@@ -17,11 +17,16 @@ import (
 
 const _StickyCtxKey = "_ton_node_sticky"
 const _StickyCtxUsedNodesKey = "_ton_used_nodes_sticky"
+const CtxLSInfoKey = "_ls_info"
 
 type OnDisconnectCallback func(addr, key string)
 
 type ADNLResponse struct {
 	Data tl.Serializable
+}
+
+type LSInfo struct {
+	Details string
 }
 
 type ADNLRequest struct {
@@ -241,8 +246,18 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 	// wait for response
 	select {
 	case resp := <-ch:
+		took := time.Since(tm)
 		atomic.AddInt64(&node.weight, 1)
-		atomic.StoreInt64(&node.lastRespTime, int64(time.Since(tm)))
+		atomic.StoreInt64(&node.lastRespTime, int64(took))
+
+		if inf, ok := ctx.Value(CtxLSInfoKey).(*LSInfo); ok && inf != nil {
+			str := fmt.Sprintf("(%s, took: %d ms)", node.addr, took.Milliseconds())
+			if inf.Details != "" {
+				inf.Details += ", " + str
+			} else {
+				inf.Details = str
+			}
+		}
 
 		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp.Data))
 		return nil

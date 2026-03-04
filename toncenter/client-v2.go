@@ -486,11 +486,11 @@ type OutMsgQueueSizesV2Result struct {
 }
 
 func (v *V2) GetOutMsgQueueSizes(ctx context.Context) (*OutMsgQueueSizesV2Result, error) {
-	return V2GetCall[OutMsgQueueSizesV2Result](ctx, v, "getOutMsgQueueSizes", nil)
+	return V2GetCall[OutMsgQueueSizesV2Result](ctx, v, "getOutMsgQueueSize", nil)
 }
 
 type TokenDataV2Result struct {
-	TotalSupply   *big.Int         `json:"total_supply"`
+	TotalSupply   NanoCoins        `json:"total_supply"`
 	Mintable      bool             `json:"mintable"`
 	AdminAddress  *address.Address `json:"admin_address"`
 	JettonContent struct {

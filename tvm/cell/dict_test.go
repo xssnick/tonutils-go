@@ -429,3 +429,24 @@ func TestDictionary_String(t *testing.T) {
 		t.Fatal(d.String())
 	}
 }
+
+func TestDictionary_Sz(t *testing.T) {
+	d := NewDict(32)
+
+	for i := 0; i < 14000; i++ {
+		n, _ := rand.Int(rand.Reader, big.NewInt(0xFFFFFFFF))
+		d.SetIntKey(n, BeginCell().MustStoreRef(BeginCell().EndCell()).EndCell())
+	}
+
+	var calc func(cl *Cell) int
+	calc = func(cl *Cell) int {
+		var childs int
+		for i := 0; i < int(cl.RefsNum()); i++ {
+			childs += calc(cl.MustPeekRef(i))
+		}
+		return childs + 1
+	}
+
+	c := d.AsCell()
+	println(c.Depth(), calc(c))
+}

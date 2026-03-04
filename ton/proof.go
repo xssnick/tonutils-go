@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -264,7 +265,7 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 	return nil
 }
 
-func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destProof *cell.Cell, signatures *SignatureSet) error {
+func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destProof *cell.Cell, sigSet any) error {
 	if from.Workchain != address.MasterchainID || to.Workchain != address.MasterchainID {
 		return fmt.Errorf("both blocks should be from masterchain")
 	}
@@ -280,14 +281,6 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 
 	if toBlock.BlockInfo.KeyBlock != toKey {
 		return fmt.Errorf("target block type not matches requested")
-	}
-
-	if toBlock.BlockInfo.GenValidatorListHashShort != uint32(signatures.ValidatorSetHash) {
-		return fmt.Errorf("incorrect validator set hash")
-	}
-
-	if toBlock.BlockInfo.GenCatchainSeqno != uint32(signatures.CatchainSeqno) {
-		return fmt.Errorf("incorrect catchain seqno")
 	}
 
 	if toBlock.BlockInfo.SeqNo <= from.SeqNo {
@@ -330,8 +323,45 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 		return fmt.Errorf("failed to verify and get main block validators: %w", err)
 	}
 
-	if err = CheckBlockSignatures(to, signatures, validators); err != nil {
-		return fmt.Errorf("failed to check validators signatures: %w", err)
+	var valSetHash uint32
+	var valSetSeqno uint32
+	var signatures []Signature
+	var simplexSet *SignatureSetSimplex
+	switch t := sigSet.(type) {
+	case SignatureSet:
+		valSetSeqno = uint32(t.CatchainSeqno)
+		valSetHash = uint32(t.ValidatorSetHash)
+		signatures = t.Signatures
+	case SignatureSetOrdinary:
+		valSetSeqno = uint32(t.CatchainSeqno)
+		valSetHash = uint32(t.ValidatorSetHash)
+		signatures = t.Signatures
+	case SignatureSetSimplex:
+		valSetSeqno = uint32(t.CCSeqno)
+		valSetHash = uint32(t.ValidatorSetHash)
+		signatures = t.Signatures
+		simplexSet = &t
+	default:
+		return fmt.Errorf("unsupported signature set type %T", sigSet)
+	}
+
+	if signatures != nil {
+		if toBlock.BlockInfo.GenValidatorListHashShort != valSetHash {
+			return fmt.Errorf("incorrect validator set hash")
+		}
+
+		if toBlock.BlockInfo.GenCatchainSeqno != valSetSeqno {
+			return fmt.Errorf("incorrect catchain seqno")
+		}
+
+		if simplexSet != nil {
+			err = CheckBlockSignaturesSimplex(to, valSetSeqno, valSetHash, simplexSet.SessionID, simplexSet.Slot, simplexSet.Candidate, signatures, validators)
+		} else {
+			err = CheckBlockSignatures(to, valSetSeqno, valSetHash, signatures, validators)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to check validators signatures: %w", err)
+		}
 	}
 
 	return nil
@@ -436,17 +466,94 @@ func GetMainValidators(block *BlockIDExt, catConfig tlb.CatchainConfig, validato
 	return validators, nil
 }
 
-func CheckBlockSignatures(block *BlockIDExt, sigs *SignatureSet, validators []*tlb.ValidatorAddr) error {
-	if len(sigs.Signatures) == 0 || len(validators) == 0 {
+func CheckBlockSignatures(block *BlockIDExt, chainSeqno, setHash uint32, sigs []Signature, validators []*tlb.ValidatorAddr) error {
+	blockIDBytes, err := tl.Serialize(BlockID{RootHash: block.RootHash, FileHash: block.FileHash}, true)
+	if err != nil {
+		return fmt.Errorf("failed to serialize block id: %w", err)
+	}
+
+	return checkBlockSignaturesPayload(blockIDBytes, chainSeqno, setHash, sigs, validators)
+}
+
+func CheckBlockSignaturesSimplex(block *BlockIDExt, chainSeqno, setHash uint32, sessionID []byte, slot int32, candidate []byte, sigs []Signature, validators []*tlb.ValidatorAddr) error {
+	toSign, err := buildSimplexToSignPayload(block, sessionID, slot, candidate)
+	if err != nil {
+		return err
+	}
+	return checkBlockSignaturesPayload(toSign, chainSeqno, setHash, sigs, validators)
+}
+
+func buildSimplexToSignPayload(block *BlockIDExt, sessionID []byte, slot int32, candidate []byte) ([]byte, error) {
+	if len(sessionID) != 32 {
+		return nil, fmt.Errorf("invalid simplex session id len %d", len(sessionID))
+	}
+	if len(candidate) == 0 {
+		return nil, fmt.Errorf("empty simplex candidate")
+	}
+
+	candidateBlock, err := parseSimplexCandidateBlock(candidate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse simplex candidate: %w", err)
+	}
+	if !candidateBlock.Equals(block) {
+		return nil, fmt.Errorf("simplex candidate block id mismatch")
+	}
+
+	candidateHash := sha256.Sum256(candidate)
+	voteData, err := tl.Serialize(ConsensusSimplexFinalizeVote{
+		ID: ConsensusCandidateID{
+			Slot: slot,
+			Hash: candidateHash[:],
+		},
+	}, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize simplex finalize vote: %w", err)
+	}
+
+	toSign, err := tl.Serialize(ConsensusDataToSign{
+		SessionID: sessionID,
+		Data:      voteData,
+	}, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize simplex data to sign: %w", err)
+	}
+
+	return toSign, nil
+}
+
+func parseSimplexCandidateBlock(candidate []byte) (*BlockIDExt, error) {
+	var ordinary ConsensusCandidateHashDataOrdinary
+	left, errOrdinary := tl.Parse(&ordinary, candidate, true)
+	if errOrdinary == nil {
+		if len(left) > 0 {
+			return nil, fmt.Errorf("unexpected trailing bytes in ordinary candidate")
+		}
+		return &ordinary.Block, nil
+	}
+
+	var empty ConsensusCandidateHashDataEmpty
+	left, errEmpty := tl.Parse(&empty, candidate, true)
+	if errEmpty == nil {
+		if len(left) > 0 {
+			return nil, fmt.Errorf("unexpected trailing bytes in empty candidate")
+		}
+		return &empty.Block, nil
+	}
+
+	return nil, fmt.Errorf("unsupported candidate type: ordinary parse failed: %v; empty parse failed: %v", errOrdinary, errEmpty)
+}
+
+func checkBlockSignaturesPayload(toSign []byte, chainSeqno, setHash uint32, sigs []Signature, validators []*tlb.ValidatorAddr) error {
+	if len(sigs) == 0 || len(validators) == 0 {
 		return fmt.Errorf("zero signatures or validators")
 	}
 
-	setHash, err := calcValidatorSetHash(uint32(sigs.CatchainSeqno), validators)
+	calcedSetHash, err := calcValidatorSetHash(chainSeqno, validators)
 	if err != nil {
 		return fmt.Errorf("failed to calc validator set hash: %w", err)
 	}
 
-	if setHash != uint32(sigs.ValidatorSetHash) {
+	if setHash != calcedSetHash {
 		return fmt.Errorf("incorrect validator set hash")
 	}
 
@@ -462,17 +569,12 @@ func CheckBlockSignatures(block *BlockIDExt, sigs *SignatureSet, validators []*t
 		validatorsMap[string(kid)] = v
 	}
 
-	blockIDBytes, err := tl.Serialize(BlockID{RootHash: block.RootHash, FileHash: block.FileHash}, true)
-	if err != nil {
-		return fmt.Errorf("failed to serialize block id: %w", err)
-	}
-
-	sort.Slice(sigs.Signatures, func(i, j int) bool {
-		return string(sigs.Signatures[i].NodeIDShort) < string(sigs.Signatures[j].NodeIDShort)
+	sort.Slice(sigs, func(i, j int) bool {
+		return string(sigs[i].NodeIDShort) < string(sigs[j].NodeIDShort)
 	})
 
-	for i, sig := range sigs.Signatures {
-		if i > 0 && string(sigs.Signatures[i-1].NodeIDShort) == string(sig.NodeIDShort) {
+	for i, sig := range sigs {
+		if i > 0 && string(sigs[i-1].NodeIDShort) == string(sig.NodeIDShort) {
 			return fmt.Errorf("duplicated node signature")
 		}
 
@@ -481,7 +583,7 @@ func CheckBlockSignatures(block *BlockIDExt, sigs *SignatureSet, validators []*t
 			return fmt.Errorf("signature of unknown validator %s", hex.EncodeToString(sig.NodeIDShort))
 		}
 
-		if !ed25519.Verify(v.PublicKey.Key, blockIDBytes, sig.Signature) {
+		if !ed25519.Verify(v.PublicKey.Key, toSign, sig.Signature) {
 			return fmt.Errorf("incorrect signature of validator %s", hex.EncodeToString(sig.NodeIDShort))
 		}
 		signedWeight += v.Weight
