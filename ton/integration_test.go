@@ -743,7 +743,7 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 	defer cancel()
 	ctx := apiTestNet.Client().StickyContext(_ctx)
 
-	addr := address.MustParseAddr("EQBi-jwMXO2AlSdhun2Th8lDr2jgsijuqWdyyD-ec-K1SYY1")
+	addr := address.MustParseAddr("0QDSbmZlj51noKgXhUmrfcIcjJXXtLgDis2ydvx8uKKqXhHQ")
 
 	b, err := apiTestNet.CurrentMasterchainInfo(ctx)
 	if err != nil {
