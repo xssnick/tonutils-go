@@ -147,10 +147,9 @@ func TestHash(t *testing.T) {
 func BenchmarkSerializePrecompiled(b *testing.B) {
 	tst, _ := parse()
 
-	b.ResetTimer()
 	b.ReportAllocs()
 	var dt []byte
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var err error
 		dt, err = Serialize(&tst, true)
 		if err != nil {
@@ -163,10 +162,9 @@ func BenchmarkSerializePrecompiled(b *testing.B) {
 func BenchmarkParse(b *testing.B) {
 	data := testData
 
-	b.ResetTimer()
 	b.ReportAllocs()
 	var tst TestTL
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := Parse(&tst, data, true)
 		if err != nil {
 			panic(err)
@@ -185,7 +183,7 @@ func BenchmarkSerialize(b *testing.B) {
 		v.Data = append(v.Data, make([]byte, 1<<20))
 	}
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := Serialize(&v, true)
 		if err != nil {
 			panic(err)
