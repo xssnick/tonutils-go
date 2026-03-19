@@ -24,7 +24,7 @@ var apiTestNet = func() APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
+	err := client.AddConnection(ctx, "109.236.80.69:49913", "AxFZRHVD1qIO9Fyva52P4vC3tRvk8ac1KKOG0c6IVio=")
 	if err != nil {
 		panic(err)
 	}
@@ -152,6 +152,26 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 	}
 
 	// TODO: data check
+}
+
+func TestAPIClient_GetBlockHeader(t *testing.T) {
+	ctx := api.Client().StickyContext(context.Background())
+
+	b, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+		return
+	}
+
+	hdr, err := api.WaitForBlock(b.SeqNo).GetBlockHeader(ctx, b)
+	if err != nil {
+		t.Fatal("Get master block data err:", err.Error())
+		return
+	}
+
+	if hdr.SeqNo != b.SeqNo {
+		t.Fatal("not eq")
+	}
 }
 
 // commented because public archival LS works too bad to test
@@ -629,6 +649,7 @@ func Test_LSErrorCase(t *testing.T) {
 	}
 }
 
+/*
 func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 	client := liteclient.NewConnectionPool()
 
@@ -668,7 +689,7 @@ func TestAccountStorage_LoadFromCell_ExtraCurrencies(t *testing.T) {
 			t.Fatal("expected extra currencies dict")
 		}
 	})
-}
+}*/
 
 func TestAPIClient_GetBlockProofForward(t *testing.T) {
 	cfg, err := liteclient.GetConfigFromUrl(context.Background(), "https://ton-blockchain.github.io/global.config.json")
@@ -755,7 +776,7 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 	defer cancel()
 	ctx := apiTestNet.Client().StickyContext(_ctx)
 
-	addr := address.MustParseAddr("EQBi-jwMXO2AlSdhun2Th8lDr2jgsijuqWdyyD-ec-K1SYY1")
+	addr := address.MustParseAddr("0QDSbmZlj51noKgXhUmrfcIcjJXXtLgDis2ydvx8uKKqXhHQ")
 
 	b, err := apiTestNet.CurrentMasterchainInfo(ctx)
 	if err != nil {

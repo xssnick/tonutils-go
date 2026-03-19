@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"net"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -398,7 +399,7 @@ func serializePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf *by
 		return nil
 	}
 
-	if err := executeSerialize(buf, uintptr(ptr), t); err != nil {
+	if err := executeSerialize(buf, ptr, t); err != nil {
 		buf.Truncate(bufStart)
 		return fmt.Errorf("failed to serialize %s type: %w", t.tp.String(), err)
 	}
@@ -482,18 +483,18 @@ func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte,
 		return buf, nil
 	}
 
-	if buf, err = executeParse(buf, uintptr(ptr), t, noCopy); err != nil {
+	if buf, err = executeParse(buf, ptr, t, noCopy); err != nil {
 		return nil, fmt.Errorf("failed to parse %s type: %w", t.tp.String(), err)
 	}
 	return buf, nil
 }
 
-func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]byte, error) {
+func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) ([]byte, error) {
 	if !si.finalized {
 		return nil, fmt.Errorf("TL struct %s is not registered", si.tp.String())
 	}
 
-	// TODO: noCopy mode
+	defer runtime.KeepAlive((*byte)(base))
 
 	var flags uint32
 	for _, field := range si.fields {
@@ -502,8 +503,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 			continue
 		}
 
-		//goland:noinspection GoVetUnsafePointer
-		ptr := unsafe.Pointer(startPtr + field.offset)
+		ptr := unsafe.Add(base, field.offset)
 
 		var err error
 		switch t := field.typ; t {
@@ -756,7 +756,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 			sl := reflect.MakeSlice(field.structInfo.tp, ln, ln)
 
 			sz := field.structInfo.tp.Elem().Size()
-			ePtr := sl.Pointer()
+			ePtr := unsafe.Pointer(sl.Pointer())
 
 			for x := 0; x < ln; x++ {
 				buf, err = executeParse(buf, ePtr, field.structInfo, noCopy)
@@ -764,7 +764,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 					return nil, fmt.Errorf("failed to parse %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
 
-				ePtr += sz
+				ePtr = unsafe.Add(ePtr, sz)
 			}
 
 			*(*reflect.SliceHeader)(ptr) = reflect.SliceHeader{
@@ -772,6 +772,7 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 				Len:  ln,
 				Cap:  ln,
 			}
+			runtime.KeepAlive(sl)
 		default:
 			return nil, fmt.Errorf("unknown type %d for field %s", t, field.String())
 		}
@@ -779,10 +780,12 @@ func executeParse(buf []byte, startPtr uintptr, si *structInfo, noCopy bool) ([]
 	return buf, nil
 }
 
-func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error {
+func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) error {
 	if !si.finalized {
 		return fmt.Errorf("TL struct %s is not registered", si.tp.String())
 	}
+
+	defer runtime.KeepAlive((*byte)(base))
 
 	var flags uint32
 	for _, field := range si.fields {
@@ -791,8 +794,7 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			continue
 		}
 
-		//goland:noinspection GoVetUnsafePointer
-		ptr := unsafe.Pointer(startPtr + field.offset)
+		ptr := unsafe.Add(base, field.offset)
 
 		switch t := field.typ; t {
 		case _ExecuteTypeFlags:
@@ -802,9 +804,13 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			binary.LittleEndian.PutUint32(tmp, flags)
 			buf.Write(tmp)
 		case _ExecuteTypeString:
-			ToBytesToBuffer(buf, []byte(*(*string)(ptr)))
+			if err := ToBytesToBuffer(buf, []byte(*(*string)(ptr))); err != nil {
+				return fmt.Errorf("failed to serialize string field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeBytes:
-			ToBytesToBuffer(buf, *(*[]byte)(ptr))
+			if err := ToBytesToBuffer(buf, *(*[]byte)(ptr)); err != nil {
+				return fmt.Errorf("failed to serialize bytes field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeInt256:
 			if bts := *(*[]byte)(ptr); len(bts) == 32 {
 				buf.Write(*(*[]byte)(ptr))
@@ -873,26 +879,31 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			c := *(**cell.Cell)(ptr)
 			if c == nil {
 				if field.meta.(bool) {
-					ToBytesToBuffer(buf, nil)
+					_ = ToBytesToBuffer(buf, nil)
 					break
 				}
 				return fmt.Errorf("nil cell is not allowed in field %s", field.String())
 			}
-			ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithFlags(false))
+
+			if err := ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithFlags(false)); err != nil {
+				return fmt.Errorf("failed to serialize cell field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeSliceCell:
 			c := *(*[]*cell.Cell)(ptr)
 			flag := field.meta.(uint32)
 			num := flag & 0x7FFFFFFF
 
 			if len(c) == 0 && flag&(1<<31) != 0 {
-				ToBytesToBuffer(buf, nil)
+				_ = ToBytesToBuffer(buf, nil)
 				break
 			}
 
 			if num > 0 && uint32(len(c)) != num {
 				return fmt.Errorf("incorrect cells len %d in field %s", len(c), field.String())
 			}
-			ToBytesToBuffer(buf, cell.ToBOCWithFlags(c, false))
+			if err := ToBytesToBuffer(buf, cell.ToBOCWithFlags(c, false)); err != nil {
+				return fmt.Errorf("failed to serialize slice cell field %s: %w", field.String(), err)
+			}
 		case _ExecuteTypeStruct:
 			info := field.structInfo
 			structFlags := field.meta.(uint32)
@@ -1009,13 +1020,13 @@ func executeSerialize(buf *bytes.Buffer, startPtr uintptr, si *structInfo) error
 			buf.Write(tmp)
 
 			sz := field.structInfo.tp.Elem().Size()
-			ePtr := hdr.Data
+			ePtr := unsafe.Pointer(hdr.Data)
 
 			for x := 0; x < ln; x++ {
 				if err := executeSerialize(buf, ePtr, field.structInfo); err != nil {
 					return fmt.Errorf("failed to serialize %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
-				ePtr += sz
+				ePtr = unsafe.Add(ePtr, sz)
 			}
 		default:
 			return fmt.Errorf("unknown type %d for field %s", t, field.String())

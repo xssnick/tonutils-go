@@ -3,10 +3,11 @@ package ton
 import (
 	"context"
 	"fmt"
-	"github.com/xssnick/tonutils-go/liteclient"
 	"reflect"
 	"sync"
 	"time"
+
+	"github.com/xssnick/tonutils-go/liteclient"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tl"
@@ -45,6 +46,8 @@ type ContractExecError struct {
 type LSError struct {
 	Code int32  `tl:"int"`
 	Text string `tl:"string"`
+
+	Servers string `tl:"-"`
 }
 
 // Deprecated: use APIClientWrapped
@@ -57,6 +60,7 @@ type APIClientWrapped interface {
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
 	GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (*cell.Cell, error)
+	GetBlockHeader(ctx context.Context, block *BlockIDExt) (*tlb.BlockHeader, error)
 	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
 	GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) ([]*BlockIDExt, error)
 	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error)
@@ -74,10 +78,18 @@ type APIClientWrapped interface {
 	WaitForBlock(seqno uint32) APIClientWrapped
 	WithRetry(maxRetries ...int) APIClientWrapped
 	WithTimeout(timeout time.Duration) APIClientWrapped
+	WithLSInfoInErrors() APIClientWrapped
 	SetTrustedBlock(block *BlockIDExt)
 	SetTrustedBlockFromConfig(cfg *liteclient.GlobalConfig)
 	FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
 	FindLastTransactionByOutMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
+	FindLastTransactionByInMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error)
+	FindLastTransactionByOutMsgHashAfterTime(ctx context.Context, addr *address.Address, msgHash []byte, after time.Time) (*tlb.Transaction, error)
+
+	GetOutMsgQueueSizes(ctx context.Context, wc *int32, shard *int64) (*OutMsgQueueSizes, error)
+	GetBlockOutMsgQueueSize(ctx context.Context, block *BlockIDExt) (*BlockOutMsgQueueSize, error)
+	GetDispatchQueueInfo(ctx context.Context, block *BlockIDExt, afterAddr *address.Address, maxAccounts int) (*DispatchQueueInfo, error)
+	GetDispatchQueueMessages(ctx context.Context, block *BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*GetDispatchQueueMessages)) (*DispatchQueueMessages, error)
 }
 
 type APIClient struct {
@@ -147,7 +159,15 @@ func (c *APIClient) WithRetry(maxTries ...int) APIClientWrapped {
 	}
 	return &APIClient{
 		parent:           c,
-		client:           &retryClient{original: c.client, maxRetries: tries},
+		client:           &retryClient{LiteClient: c.client, maxRetries: tries},
+		proofCheckPolicy: c.proofCheckPolicy,
+	}
+}
+
+func (c *APIClient) WithLSInfoInErrors() APIClientWrapped {
+	return &APIClient{
+		parent:           c,
+		client:           &nodeEnricherWrapper{LiteClient: c.client},
 		proofCheckPolicy: c.proofCheckPolicy,
 	}
 }
@@ -169,6 +189,9 @@ func (c *APIClient) root() *APIClient {
 }
 
 func (e LSError) Error() string {
+	if e.Servers != "" {
+		return fmt.Sprintf("lite server error, code %d: [%s] %s", e.Code, e.Servers, e.Text)
+	}
 	return fmt.Sprintf("lite server error, code %d: %s", e.Code, e.Text)
 }
 

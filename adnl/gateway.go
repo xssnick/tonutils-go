@@ -123,12 +123,23 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 }
 
 var PacketsBufferSize = 128 * 1024
+var DefaultUDPBufferSize = 32 << 20
 
 var DefaultListener = func(addr string) (net.PacketConn, error) {
 	lp, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return nil, err
 	}
+
+	if conn, ok := lp.(*net.UDPConn); ok {
+		if err := conn.SetReadBuffer(DefaultUDPBufferSize); err != nil {
+			Logger("[ADNL] failed to set read buffer:", err)
+		}
+		if err := conn.SetWriteBuffer(DefaultUDPBufferSize); err != nil {
+			Logger("[ADNL] failed to set write buffer:", err)
+		}
+	}
+
 	return NewSyncConn(lp, PacketsBufferSize), nil
 }
 
@@ -431,8 +442,23 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	addrList.Version = addrList.ReinitDate
 
 	a := g.initADNL()
-	a.SetAddresses(addrList)
+
+	sharedKey, err := keys.SharedKey(a.ourKey, key)
+	if err != nil {
+		return nil, err
+	}
+
+	peerId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
+	if err != nil {
+		return nil, err
+	}
+
+	a.peerID = peerId
+	a.sharedKey = sharedKey
 	a.peerKey = key
+
+	a.SetAddresses(addrList)
+
 	a.addr = addr.String()
 	a.writer = newWriter(func(p []byte, deadline time.Time) (err error) {
 		currentAddr := *(*net.Addr)(atomic.LoadPointer(&peer.addr))

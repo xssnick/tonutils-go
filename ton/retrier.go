@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -12,7 +13,11 @@ import (
 
 type retryClient struct {
 	maxRetries int
-	original   LiteClient
+	LiteClient
+}
+
+type nodeEnricherWrapper struct {
+	LiteClient
 }
 
 func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error {
@@ -22,24 +27,19 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 	ctxBackup := ctx
 
 	for {
-		err := w.original.QueryLiteserver(ctx, payload, result)
+		err := w.LiteClient.QueryLiteserver(ctx, payload, result)
 		if w.maxRetries > 0 && tries >= w.maxRetries {
 			return err
 		}
 		tries++
 
 		if err != nil {
-			if !errors.Is(err, liteclient.ErrADNLReqTimeout) && !errors.Is(err, context.DeadlineExceeded) {
-				return err
-			}
-
-			err := ctx.Err()
-			if err != nil {
+			if !errors.Is(err, liteclient.ErrADNLReqTimeout) {
 				return err
 			}
 
 			// try next node
-			ctx, err = w.original.StickyContextNextNode(ctx)
+			ctx, err = w.LiteClient.StickyContextNextNode(ctx)
 			if err != nil {
 				rounds++
 				if rounds < maxRounds {
@@ -61,8 +61,10 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 				lsErr.Code == -400 ||
 				lsErr.Code == -503 ||
 				lsErr.Code == 502 ||
+				lsErr.Code == 228 ||
+				lsErr.Code == 429 ||
 				(lsErr.Code == 0 && strings.Contains(lsErr.Text, "Failed to get account state"))) {
-				if ctx, err = w.original.StickyContextNextNode(ctx); err != nil { // try next node
+				if ctx, err = w.LiteClient.StickyContextNextNode(ctx); err != nil { // try next node
 					rounds++
 					if rounds < maxRounds {
 						// try same nodes one more time
@@ -80,18 +82,22 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 	}
 }
 
-func (w *retryClient) StickyContext(ctx context.Context) context.Context {
-	return w.original.StickyContext(ctx)
-}
+func (w *nodeEnricherWrapper) QueryLiteserver(ctx context.Context, payload tl.Serializable, result tl.Serializable) error {
+	inf := liteclient.LSInfo{}
+	ctx = context.WithValue(ctx, liteclient.CtxLSInfoKey, &inf)
 
-func (w *retryClient) StickyNodeID(ctx context.Context) uint32 {
-	return w.original.StickyNodeID(ctx)
-}
+	err := w.LiteClient.QueryLiteserver(ctx, payload, result)
+	if err != nil {
+		return err
+	}
 
-func (w *retryClient) StickyContextNextNode(ctx context.Context) (context.Context, error) {
-	return w.original.StickyContextNextNode(ctx)
-}
+	if tmp, ok := result.(*tl.Serializable); ok && tmp != nil {
+		if lsErr, ok := (*tmp).(LSError); ok {
+			// enrich with server addr
+			lsErr.Servers = inf.Details
+			reflect.ValueOf(result).Elem().Set(reflect.ValueOf(lsErr))
+		}
+	}
 
-func (w *retryClient) StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error) {
-	return w.original.StickyContextNextNodeBalanced(ctx)
+	return nil
 }
