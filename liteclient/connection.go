@@ -48,9 +48,156 @@ type connection struct {
 	ourNonce []byte
 
 	weight       int64
+	inflight     int64
 	lastRespTime int64
+	missedPings  int64
+
+	pingMx      sync.Mutex
+	activePings map[int64]time.Time
 
 	pool *ConnectionPool
+}
+
+const (
+	_nodeMaxWeight          = int64(1000)
+	_nodeInitialWeight      = int64(700)
+	_nodeReqSuccessReward   = int64(35)
+	_nodePingSuccessReward  = int64(12)
+	_nodeReqTimeoutPenalty  = int64(150)
+	_nodeReqSendPenalty     = int64(220)
+	_nodePingTimeoutPenalty = int64(60)
+	_nodeInflightPenalty    = int64(75)
+	_nodeEWMAHistoryWeight  = int64(3) // 75% history, 25% new sample
+	_nodeWarmupLatency      = 750 * time.Millisecond
+	_nodeMaxMissedPings     = int64(3)
+)
+
+func (n *connection) effectiveWeight() int64 {
+	return atomic.LoadInt64(&n.weight) - atomic.LoadInt64(&n.inflight)*_nodeInflightPenalty
+}
+
+func (n *connection) effectiveLatency() int64 {
+	latency := atomic.LoadInt64(&n.lastRespTime)
+	if latency <= 0 {
+		return int64(_nodeWarmupLatency)
+	}
+	return latency
+}
+
+func (n *connection) adjustWeight(delta int64) {
+	for {
+		cur := atomic.LoadInt64(&n.weight)
+		next := cur + delta
+		if next < 0 {
+			next = 0
+		}
+		if next > _nodeMaxWeight {
+			next = _nodeMaxWeight
+		}
+		if atomic.CompareAndSwapInt64(&n.weight, cur, next) {
+			return
+		}
+	}
+}
+
+func (n *connection) observeLatency(sample time.Duration) {
+	if sample <= 0 {
+		return
+	}
+
+	sampleNs := sample.Nanoseconds()
+	for {
+		curRaw := atomic.LoadInt64(&n.lastRespTime)
+		if curRaw <= 0 {
+			if atomic.CompareAndSwapInt64(&n.lastRespTime, curRaw, sampleNs) {
+				return
+			}
+			continue
+		}
+
+		next := (curRaw*_nodeEWMAHistoryWeight + sampleNs) / (_nodeEWMAHistoryWeight + 1)
+		if atomic.CompareAndSwapInt64(&n.lastRespTime, curRaw, next) {
+			return
+		}
+	}
+}
+
+func (n *connection) requestStarted() {
+	atomic.AddInt64(&n.inflight, 1)
+}
+
+func (n *connection) requestFinished() {
+	if atomic.AddInt64(&n.inflight, -1) < 0 {
+		atomic.StoreInt64(&n.inflight, 0)
+	}
+}
+
+func (n *connection) requestSucceeded(took time.Duration) {
+	n.requestFinished()
+	atomic.StoreInt64(&n.missedPings, 0)
+	n.observeLatency(took)
+	n.adjustWeight(_nodeReqSuccessReward)
+}
+
+func (n *connection) requestTimedOut(took time.Duration) {
+	n.requestFinished()
+	if took >= 200*time.Millisecond {
+		n.adjustWeight(-_nodeReqTimeoutPenalty)
+	}
+}
+
+func (n *connection) requestSendFailed() {
+	n.requestFinished()
+	n.adjustWeight(-_nodeReqSendPenalty)
+}
+
+func (n *connection) notePingSent(qid int64, sentAt time.Time) {
+	n.pingMx.Lock()
+	if n.activePings == nil {
+		n.activePings = map[int64]time.Time{}
+	}
+	n.activePings[qid] = sentAt
+	n.pingMx.Unlock()
+}
+
+func (n *connection) forgetPing(qid int64) {
+	n.pingMx.Lock()
+	delete(n.activePings, qid)
+	n.pingMx.Unlock()
+}
+
+func (n *connection) notePong(qid int64) {
+	n.pingMx.Lock()
+	sentAt, ok := n.activePings[qid]
+	if ok {
+		delete(n.activePings, qid)
+	}
+	n.pingMx.Unlock()
+	if !ok {
+		return
+	}
+
+	atomic.StoreInt64(&n.missedPings, 0)
+	n.observeLatency(time.Since(sentAt))
+	n.adjustWeight(_nodePingSuccessReward)
+}
+
+func (n *connection) expirePingsBefore(deadline time.Time) int {
+	n.pingMx.Lock()
+	missed := 0
+	for qid, sentAt := range n.activePings {
+		if !sentAt.After(deadline) {
+			delete(n.activePings, qid)
+			missed++
+		}
+	}
+	n.pingMx.Unlock()
+
+	if missed > 0 {
+		atomic.AddInt64(&n.missedPings, int64(missed))
+		n.adjustWeight(-_nodePingTimeoutPenalty * int64(missed))
+	}
+	return missed
 }
 
 func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *GlobalConfig) error {
@@ -147,7 +294,7 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		reqs:       make(chan *ADNLRequest),
 		pool:       c,
 		id:         crc32.ChecksumIEEE([]byte(serverKey)),
-		weight:     1000,
+		weight:     _nodeInitialWeight,
 	}
 
 	// get timeout if exists
@@ -276,7 +423,7 @@ func (n *connection) listen(connResult chan<- error) {
 
 		switch t := resp.(type) {
 		case TCPPong:
-			// TODO: check ping
+			n.notePong(t.RandomID)
 		case TCPAuthenticationNonce:
 			if n.pool.authKey == nil {
 				log.Println("server wants authorization, but we dont have a key:", err.Error())
@@ -352,18 +499,26 @@ func (c *ConnectionPool) startPings(every time.Duration) {
 		nodes = append(nodes, c.activeNodes...)
 		c.nodesMx.RUnlock()
 
-		num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
-		if err != nil {
-			continue
-		}
-
 		var wg sync.WaitGroup
 		for _, node := range nodes {
 			wg.Add(1)
 			go func(n *connection) {
 				defer wg.Done()
-				time.Sleep(1 * time.Second)
-				if err := n.ping(num.Int64()); err != nil {
+				n.expirePingsBefore(time.Now().Add(-2 * every))
+				if atomic.LoadInt64(&n.missedPings) >= _nodeMaxMissedPings {
+					_ = n.tcp.Close()
+					return
+				}
+
+				num, err := rand.Int(rand.Reader, new(big.Int).SetInt64(0xFFFFFFFFFFFFFFF))
+				if err != nil {
+					return
+				}
+
+				qid := num.Int64()
+				n.notePingSent(qid, time.Now())
+				if err := n.ping(qid); err != nil {
+					n.forgetPing(qid)
 					// force close on error
 					_ = n.tcp.Close()
 				}

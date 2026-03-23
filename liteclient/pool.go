@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	mRand "math/rand"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -92,39 +91,29 @@ func (c *ConnectionPool) StickyContext(ctx context.Context) context.Context {
 
 	var id uint32
 
-	c.nodesMx.RLock()
-	if len(c.activeNodes) > 0 {
-		// pick random one
-		id = c.activeNodes[mRand.Uint32()%uint32(len(c.activeNodes))].id
+	if node := c.pickBestNode(nil); node != nil {
+		id = node.id
 	}
-	c.nodesMx.RUnlock()
 
 	return context.WithValue(ctx, _StickyCtxKey, id)
 }
 
-// StickyContextNextNode - select next node in the available list (pseudo random)
+// StickyContextNextNode - select next best available node which was not used yet.
 func (c *ConnectionPool) StickyContextNextNode(ctx context.Context) (context.Context, error) {
+	return c.StickyContextNextNodeBalanced(ctx)
+}
+
+func (c *ConnectionPool) buildExcludedNodeSet(ctx context.Context) map[uint32]struct{} {
 	nodeID, _ := ctx.Value(_StickyCtxKey).(uint32)
 	usedNodes, _ := ctx.Value(_StickyCtxUsedNodesKey).([]uint32)
+	excluded := make(map[uint32]struct{}, len(usedNodes)+1)
 	if nodeID > 0 {
-		usedNodes = append(usedNodes, nodeID)
+		excluded[nodeID] = struct{}{}
 	}
-
-	c.nodesMx.RLock()
-	defer c.nodesMx.RUnlock()
-
-iter:
-	for _, node := range c.activeNodes {
-		for _, usedNode := range usedNodes {
-			if usedNode == node.id {
-				continue iter
-			}
-		}
-
-		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, node.id), _StickyCtxUsedNodesKey, usedNodes), nil
+	for _, usedNode := range usedNodes {
+		excluded[usedNode] = struct{}{}
 	}
-
-	return ctx, ErrNoNodesLeft
+	return excluded
 }
 
 // StickyContextNextNodeBalanced - select next node based on its weight and availability
@@ -135,31 +124,7 @@ func (c *ConnectionPool) StickyContextNextNodeBalanced(ctx context.Context) (con
 		usedNodes = append(usedNodes, nodeID)
 	}
 
-	c.nodesMx.RLock()
-	defer c.nodesMx.RUnlock()
-
-	var reqNode *connection
-
-iter:
-	for _, node := range c.activeNodes {
-		for _, usedNode := range usedNodes {
-			if usedNode == node.id {
-				continue iter
-			}
-		}
-
-		if reqNode == nil {
-			reqNode = node
-			continue
-		}
-
-		// select best node on this moment
-		nw, old := atomic.LoadInt64(&node.weight), atomic.LoadInt64(&reqNode.weight)
-		if nw > old || (nw == old && atomic.LoadInt64(&node.lastRespTime) < atomic.LoadInt64(&reqNode.lastRespTime)) {
-			reqNode = node
-		}
-	}
-
+	reqNode := c.pickBestNode(c.buildExcludedNodeSet(ctx))
 	if reqNode != nil {
 		return context.WithValue(context.WithValue(ctx, _StickyCtxKey, reqNode.id), _StickyCtxUsedNodesKey, usedNodes), nil
 	}
@@ -237,7 +202,7 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 			return err
 		}
 	} else {
-		node, err = c.queryWithSmartBalancer(req)
+		node, err = c.queryWithSmartBalancer(req, nil)
 		if err != nil {
 			return err
 		}
@@ -247,8 +212,7 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 	select {
 	case resp := <-ch:
 		took := time.Since(tm)
-		atomic.AddInt64(&node.weight, 1)
-		atomic.StoreInt64(&node.lastRespTime, int64(took))
+		node.requestSucceeded(took)
 
 		if inf, ok := ctx.Value(CtxLSInfoKey).(*LSInfo); ok && inf != nil {
 			str := fmt.Sprintf("(%s, took: %d ms)", node.addr, took.Milliseconds())
@@ -262,10 +226,7 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp.Data))
 		return nil
 	case <-ctx.Done():
-		if time.Since(tm) < 200*time.Millisecond {
-			// consider it as too short timeout to punish node
-			atomic.AddInt64(&node.weight, 1)
-		}
+		node.requestTimedOut(time.Since(tm))
 
 		if !hasDeadline {
 			return fmt.Errorf("%w, node %s", ErrADNLReqTimeout, node.addr)
@@ -279,49 +240,87 @@ func (c *ConnectionPool) querySticky(id uint32, req *ADNLRequest) (*connection, 
 	c.nodesMx.RLock()
 	for _, node := range c.activeNodes {
 		if node.id == id {
-			atomic.AddInt64(&node.weight, -1)
+			node.requestStarted()
 			_, err := node.queryAdnl(req.QueryID, req.Data)
 			if err == nil {
 				c.nodesMx.RUnlock()
 				return node, nil
 			}
+			node.requestSendFailed()
 			break
 		}
 	}
 	c.nodesMx.RUnlock()
 
 	// fallback if bounded node is not available
-	return c.queryWithSmartBalancer(req)
+	return c.queryWithSmartBalancer(req, map[uint32]struct{}{id: {}})
 }
 
-func (c *ConnectionPool) queryWithSmartBalancer(req *ADNLRequest) (*connection, error) {
-	var reqNode *connection
+func (c *ConnectionPool) queryWithSmartBalancer(req *ADNLRequest, excluded map[uint32]struct{}) (*connection, error) {
+	var lastErr error
 
-	c.nodesMx.RLock()
-	for _, node := range c.activeNodes {
+	for {
+		reqNode := c.pickBestNode(excluded)
 		if reqNode == nil {
-			reqNode = node
-			continue
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, ErrNoActiveConnections
 		}
 
-		nw, old := atomic.LoadInt64(&node.weight), atomic.LoadInt64(&reqNode.weight)
-		if nw > old || (nw == old && atomic.LoadInt64(&node.lastRespTime) < atomic.LoadInt64(&reqNode.lastRespTime)) {
+		reqNode.requestStarted()
+		_, err := reqNode.queryAdnl(req.QueryID, req.Data)
+		if err == nil {
+			return reqNode, nil
+		}
+
+		reqNode.requestSendFailed()
+		lastErr = err
+
+		if excluded == nil {
+			excluded = map[uint32]struct{}{}
+		}
+		excluded[reqNode.id] = struct{}{}
+	}
+}
+
+func (c *ConnectionPool) pickBestNode(excluded map[uint32]struct{}) *connection {
+	c.nodesMx.RLock()
+	defer c.nodesMx.RUnlock()
+
+	if len(c.activeNodes) == 0 {
+		return nil
+	}
+
+	start := int(atomic.AddUint64(&c.roundRobinOffset, 1)-1) % len(c.activeNodes)
+	var reqNode *connection
+	for i := 0; i < len(c.activeNodes); i++ {
+		node := c.activeNodes[(start+i)%len(c.activeNodes)]
+		if excluded != nil {
+			if _, skip := excluded[node.id]; skip {
+				continue
+			}
+		}
+
+		if reqNode == nil || betterNode(node, reqNode) {
 			reqNode = node
 		}
 	}
-	c.nodesMx.RUnlock()
+	return reqNode
+}
 
-	if reqNode == nil {
-		return nil, ErrNoActiveConnections
+func betterNode(candidate, current *connection) bool {
+	candidateWeight, currentWeight := candidate.effectiveWeight(), current.effectiveWeight()
+	if candidateWeight != currentWeight {
+		return candidateWeight > currentWeight
 	}
 
-	atomic.AddInt64(&reqNode.weight, -1)
-
-	_, err := reqNode.queryAdnl(req.QueryID, req.Data)
-	if err != nil {
-		return nil, err
+	candidateLatency, currentLatency := candidate.effectiveLatency(), current.effectiveLatency()
+	if candidateLatency != currentLatency {
+		return candidateLatency < currentLatency
 	}
-	return reqNode, nil
+
+	return false
 }
 
 func (c *ConnectionPool) SetOnDisconnect(cb OnDisconnectCallback) {

@@ -1,4 +1,4 @@
-//go:build darwin && cgo && tvm_cross_emulator
+//go:build cgo && tvm_cross_emulator
 
 package tvm
 

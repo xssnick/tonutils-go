@@ -182,3 +182,66 @@ func TestStateCallArgsPassesTopElements(t *testing.T) {
 
 	assertPopInts(t, ret.Data.Stack, 2, 1)
 }
+
+func TestStateCallArgsWithCapturedStackPreservesClosureStack(t *testing.T) {
+	s := NewStack()
+	pushInts(t, s, 1, 2, 3, 4)
+
+	closureStack := NewStack()
+	pushInts(t, closureStack, 8, 9)
+
+	state := &State{
+		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		Stack:       s,
+	}
+
+	cont := &OrdinaryContinuation{
+		Data: ControlData{
+			Stack:   closureStack,
+			NumArgs: 2,
+			CP:      CP,
+		},
+		Code: cell.BeginCell().EndCell().BeginParse(),
+	}
+
+	if err := state.CallArgs(cont, 3, -1); err != nil {
+		t.Fatal(err)
+	}
+
+	assertPopInts(t, state.Stack, 9, 8)
+
+	ret, ok := state.Reg.C[0].(*OrdinaryContinuation)
+	if !ok {
+		t.Fatalf("expected return continuation, got %T", state.Reg.C[0])
+	}
+
+	assertPopInts(t, ret.Data.Stack, 3, 2, 1)
+}
+
+func TestStateJumpArgsWithCapturedStackUsesClosureStack(t *testing.T) {
+	s := NewStack()
+	pushInts(t, s, 1, 2, 3, 4)
+
+	closureStack := NewStack()
+	pushInts(t, closureStack, 8, 9)
+
+	state := &State{
+		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		Stack:       s,
+	}
+
+	cont := &OrdinaryContinuation{
+		Data: ControlData{
+			Stack:   closureStack,
+			NumArgs: 2,
+			CP:      CP,
+		},
+		Code: cell.BeginCell().EndCell().BeginParse(),
+	}
+
+	if err := state.JumpArgs(cont, 2); err != nil {
+		t.Fatal(err)
+	}
+
+	assertPopInts(t, state.Stack, 9, 8)
+}
