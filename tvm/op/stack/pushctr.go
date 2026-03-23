@@ -8,6 +8,7 @@ import (
 )
 
 type OpPUSHCTR struct {
+	helpers.Prefixed
 	ctrIndex uint8
 }
 
@@ -17,12 +18,9 @@ func init() {
 
 func PUSHCTR(ctrIndex uint8) *OpPUSHCTR {
 	return &OpPUSHCTR{
+		Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xED4, 12)),
 		ctrIndex: ctrIndex,
 	}
-}
-
-func (op *OpPUSHCTR) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0xED4, 12).EndCell().BeginParse()}
 }
 
 func (op *OpPUSHCTR) Deserialize(code *cell.Slice) error {

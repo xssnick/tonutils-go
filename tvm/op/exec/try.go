@@ -32,7 +32,7 @@ func TRY() (op *helpers.SimpleOP) {
 
 			return state.Jump(cont)
 		},
-		Name:   "TRY",
-		Prefix: []byte{0xF2, 0xFF},
+		Name:      "TRY",
+		BitPrefix: helpers.BytesPrefix(0xF2, 0xFF),
 	}
 }

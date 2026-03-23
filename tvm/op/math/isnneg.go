@@ -19,7 +19,7 @@ func ISNNEG() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Sign() != -1)
 		},
-		Name:   "ISNNEG",
-		Prefix: []byte{0xC2, 0xFF},
+		Name:      "ISNNEG",
+		BitPrefix: helpers.BytesPrefix(0xC2, 0xFF),
 	}
 }

@@ -19,7 +19,7 @@ func ISNEG() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Sign() == -1)
 		},
-		Name:   "ISNEG",
-		Prefix: []byte{0xC1, 0x00},
+		Name:      "ISNEG",
+		BitPrefix: helpers.BytesPrefix(0xC1, 0x00),
 	}
 }

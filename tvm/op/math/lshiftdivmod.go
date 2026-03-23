@@ -45,7 +45,7 @@ func LSHIFTDIVMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "LSHIFTDIVMOD",
-		Prefix: []byte{0xA9, 0xCC},
+		Name:      "LSHIFTDIVMOD",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xCC),
 	}
 }

@@ -19,7 +19,7 @@ func JMPX() *helpers.SimpleOP {
 
 			return state.Jump(cont)
 		},
-		Name:   "JMPX",
-		Prefix: []byte{0xD9},
+		Name:      "JMPX",
+		BitPrefix: helpers.BytesPrefix(0xD9),
 	}
 }

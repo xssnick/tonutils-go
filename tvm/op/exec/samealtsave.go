@@ -18,7 +18,7 @@ func SAMEALTSAVE() (op *helpers.SimpleOP) {
 			state.Reg.C[1] = c0.Copy()
 			return nil
 		},
-		Name:   "SAMEALTSAVE",
-		Prefix: []byte{0xED, 0xFB},
+		Name:      "SAMEALTSAVE",
+		BitPrefix: helpers.BytesPrefix(0xED, 0xFB),
 	}
 }

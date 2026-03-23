@@ -14,7 +14,7 @@ func DUP() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return state.Stack.PushAt(0)
 		},
-		Name:   "DUP",
-		Prefix: []byte{0x20},
+		Name:      "DUP",
+		BitPrefix: helpers.BytesPrefix(0x20),
 	}
 }

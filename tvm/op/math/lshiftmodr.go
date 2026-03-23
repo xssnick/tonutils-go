@@ -41,7 +41,7 @@ func LSHIFTMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "LSHIFTMODR",
-		Prefix: []byte{0xA9, 0xC9},
+		Name:      "LSHIFTMODR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xC9),
 	}
 }

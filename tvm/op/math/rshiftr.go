@@ -27,7 +27,7 @@ func RSHIFTR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(res)
 		},
-		Name:   "RSHIFTR",
-		Prefix: []byte{0xA9, 0x25},
+		Name:      "RSHIFTR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x25),
 	}
 }

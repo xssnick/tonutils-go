@@ -14,7 +14,7 @@ func OVER() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return state.Stack.PushAt(1)
 		},
-		Name:   "OVER",
-		Prefix: []byte{0x21},
+		Name:      "OVER",
+		BitPrefix: helpers.BytesPrefix(0x21),
 	}
 }

@@ -11,8 +11,8 @@ func init() {
 
 func PUSHNULL() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "PUSHNULL",
-		Prefix: []byte{0x6d},
+		Name:      "PUSHNULL",
+		BitPrefix: helpers.BytesPrefix(0x6d),
 		Action: func(state *vm.State) error {
 			return state.Stack.PushAny(nil)
 		},

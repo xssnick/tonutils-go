@@ -23,7 +23,7 @@ func LESS() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Cmp(i1) == -1)
 		},
-		Name:   "LESS",
-		Prefix: []byte{0xB9},
+		Name:      "LESS",
+		BitPrefix: helpers.BytesPrefix(0xB9),
 	}
 }

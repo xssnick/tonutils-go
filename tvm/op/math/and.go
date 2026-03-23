@@ -23,7 +23,7 @@ func AND() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.And(i0, i1))
 		},
-		Name:   "AND",
-		Prefix: []byte{0xB0},
+		Name:      "AND",
+		BitPrefix: helpers.BytesPrefix(0xB0),
 	}
 }

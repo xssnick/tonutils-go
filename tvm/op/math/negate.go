@@ -19,7 +19,7 @@ func NEGATE() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Neg(i0))
 		},
-		Name:   "NEGATE",
-		Prefix: []byte{0xA3},
+		Name:      "NEGATE",
+		BitPrefix: helpers.BytesPrefix(0xA3),
 	}
 }

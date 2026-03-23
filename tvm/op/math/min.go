@@ -26,7 +26,7 @@ func MIN() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(i1)
 		},
-		Name:   "MIN",
-		Prefix: []byte{0xB6, 0x08},
+		Name:      "MIN",
+		BitPrefix: helpers.BytesPrefix(0xB6, 0x08),
 	}
 }

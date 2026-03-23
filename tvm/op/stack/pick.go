@@ -22,7 +22,7 @@ func PICK() *helpers.SimpleOP {
 			}
 			return state.Stack.PushAt(idx)
 		},
-		Name:   "PICK",
-		Prefix: []byte{0x60},
+		Name:      "PICK",
+		BitPrefix: helpers.BytesPrefix(0x60),
 	}
 }

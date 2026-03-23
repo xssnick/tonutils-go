@@ -181,7 +181,7 @@ func TestLoadFromCell(t *testing.T) {
 
 	mRef := cell.BeginCell().
 		MustStoreUInt('y', 8).
-		MustStoreBuilder(dMapInnerInlineInt.MustToCell().ToBuilder()).
+		MustStoreBuilder(dMapInnerInlineInt.AsCell().ToBuilder()).
 		EndCell()
 
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).

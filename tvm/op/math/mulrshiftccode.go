@@ -29,7 +29,7 @@ func MULRSHIFTCCODE(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushInt(q)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xA9, 0xB6}, 16).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xB6),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},

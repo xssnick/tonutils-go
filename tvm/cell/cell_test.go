@@ -258,6 +258,38 @@ func TestCell_ShardStateProof(t *testing.T) {
 	}
 }
 
+func TestCell_FromRawUnsafeAndUnsafeModify(t *testing.T) {
+	raw := RawUnsafeCell{
+		IsSpecial: true,
+		BitsSz:    8 + 256,
+		Data:      append([]byte{byte(LibraryCellType)}, make([]byte, 32)...),
+	}
+
+	fromRaw := FromRawUnsafe(raw)
+	if fromRaw.GetType() != LibraryCellType {
+		t.Fatalf("unexpected raw cell type: %v", fromRaw.GetType())
+	}
+	if fromRaw.Depth(0) != 0 {
+		t.Fatalf("unexpected raw cell depth: %d", fromRaw.Depth(0))
+	}
+
+	c := BeginCell().MustStoreUInt(uint64(LibraryCellType), 8).MustStoreSlice(make([]byte, 32), 256).EndCell()
+	if c.GetType() != OrdinaryCellType {
+		t.Fatalf("unexpected initial type: %v", c.GetType())
+	}
+
+	c.UnsafeModify(LevelMask{}, true)
+	if c.GetType() != LibraryCellType {
+		t.Fatalf("unexpected modified cell type: %v", c.GetType())
+	}
+
+	short := BeginCell().MustStoreUInt(1, 1).EndCell()
+	short.UnsafeModify(LevelMask{}, true)
+	if short.GetType() != UnknownCellType {
+		t.Fatalf("unexpected short special cell type: %v", short.GetType())
+	}
+}
+
 func TestSameBocIndex(t *testing.T) {
 	r := BeginCell().MustStoreUInt(555, 32).EndCell()
 	c := BeginCell().MustStoreUInt(55, 64).MustStoreRef(r).MustStoreRef(r).MustStoreRef(r.copy()).EndCell()

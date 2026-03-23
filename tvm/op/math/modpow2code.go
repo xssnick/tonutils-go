@@ -27,7 +27,7 @@ func MODPOW2CODE(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushInt(r)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xA9, 0x38}, 16).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x38),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},

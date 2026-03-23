@@ -32,7 +32,7 @@ func MODC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "MODC",
-		Prefix: []byte{0xA9, 0x0A},
+		Name:      "MODC",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x0A),
 	}
 }

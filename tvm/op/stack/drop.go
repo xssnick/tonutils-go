@@ -15,7 +15,7 @@ func DROP() *helpers.SimpleOP {
 			_, err := state.Stack.PopAny()
 			return err
 		},
-		Name:   "DROP",
-		Prefix: []byte{0x30},
+		Name:      "DROP",
+		BitPrefix: helpers.BytesPrefix(0x30),
 	}
 }

@@ -19,7 +19,7 @@ func ISNPOS() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Sign() != 1)
 		},
-		Name:   "ISNPOS",
-		Prefix: []byte{0xC1, 0x01},
+		Name:      "ISNPOS",
+		BitPrefix: helpers.BytesPrefix(0xC1, 0x01),
 	}
 }

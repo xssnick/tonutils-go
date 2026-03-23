@@ -18,7 +18,7 @@ func EXECUTE() *helpers.SimpleOP {
 			}
 			return state.Call(c0)
 		},
-		Name:   "EXECUTE",
-		Prefix: []byte{0xD8},
+		Name:      "EXECUTE",
+		BitPrefix: helpers.BytesPrefix(0xD8),
 	}
 }

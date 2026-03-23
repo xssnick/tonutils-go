@@ -11,8 +11,8 @@ func init() {
 
 func TPUSH() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "TPUSH",
-		Prefix: []byte{0x6f, 0x8c},
+		Name:      "TPUSH",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x8c),
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.PopAny()
 			if err != nil {

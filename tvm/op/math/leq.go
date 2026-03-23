@@ -23,7 +23,7 @@ func LEQ() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Cmp(i1) != 1)
 		},
-		Name:   "LEQ",
-		Prefix: []byte{0xBB},
+		Name:      "LEQ",
+		BitPrefix: helpers.BytesPrefix(0xBB),
 	}
 }

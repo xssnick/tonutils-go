@@ -11,8 +11,8 @@ func init() {
 
 func LAST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "LAST",
-		Prefix: []byte{0x6f, 0x8b},
+		Name:      "LAST",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x8b),
 		Action: func(state *vm.State) error {
 			tup, err := state.Stack.PopTupleRange(255, 1)
 			if err != nil {

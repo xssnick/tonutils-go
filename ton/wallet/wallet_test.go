@@ -452,14 +452,18 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 		t.Fatal("query id is incorrect")
 	}
 
-	if len(p.MustLoadDict(16).All()) != 1 {
+	items, err := p.MustLoadDict(16).LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
 		t.Fatal("dict incorrect")
 	}
 
 	intMsgRef, _ := tlb.ToCell(intMsg)
 
 	dict := cell.NewDict(16)
-	err := dict.SetIntKey(big.NewInt(0), cell.BeginCell().
+	err = dict.SetIntKey(big.NewInt(0), cell.BeginCell().
 		MustStoreUInt(uint64(128), 8).
 		MustStoreRef(intMsgRef).
 		EndCell())

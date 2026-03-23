@@ -27,7 +27,7 @@ func IFNOT() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "IFNOT",
-		Prefix: []byte{0xDF},
+		Name:      "IFNOT",
+		BitPrefix: helpers.BytesPrefix(0xDF),
 	}
 }

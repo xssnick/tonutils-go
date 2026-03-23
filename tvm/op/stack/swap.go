@@ -14,7 +14,7 @@ func SWAP() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return state.Stack.Exchange(0, 1)
 		},
-		Name:   "SWAP",
-		Prefix: []byte{0x01},
+		Name:      "SWAP",
+		BitPrefix: helpers.BytesPrefix(0x01),
 	}
 }

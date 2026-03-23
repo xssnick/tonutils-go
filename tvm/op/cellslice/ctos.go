@@ -25,7 +25,7 @@ func CTOS() *helpers.SimpleOP {
 
 			return state.Stack.PushSlice(c.BeginParse())
 		},
-		Name:   "CTOS",
-		Prefix: []byte{0xD0},
+		Name:      "CTOS",
+		BitPrefix: helpers.BytesPrefix(0xD0),
 	}
 }

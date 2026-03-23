@@ -21,7 +21,7 @@ func INC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Add(i0, big.NewInt(1)))
 		},
-		Name:   "INC",
-		Prefix: []byte{0xA4},
+		Name:      "INC",
+		BitPrefix: helpers.BytesPrefix(0xA4),
 	}
 }

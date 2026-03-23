@@ -220,83 +220,76 @@ func (c *Cell) calculateHashes() {
 	hashIndexOffset := totalHashCount - hashCount
 	hashIndex := 0
 	level := c.levelMask.GetLevel()
+	isMerkle := typ == MerkleProofCellType || typ == MerkleUpdateCellType
+	var bodyBuf [maxCellDataBytes]byte
+	var hashBuf [2 + maxCellDataBytes + (4 * depthSize) + (4 * hashSize)]byte
+
 	for levelIndex := 0; levelIndex <= level; levelIndex++ {
 		if !c.levelMask.IsSignificant(levelIndex) {
 			continue
 		}
 
-		func() {
-			defer func() {
-				hashIndex++
-			}()
+		if levelIndex < hashIndexOffset {
+			hashIndex++
+			continue
+		}
 
-			if levelIndex < hashIndexOffset {
-				return
+		dsc1, dsc2 := c.descriptors(c.levelMask.Apply(levelIndex))
+		hashBuf[0], hashBuf[1] = dsc1, dsc2
+		bufPos := 2
+
+		if hashIndex == hashIndexOffset {
+			if levelIndex != 0 && typ != PrunedCellType {
+				// should never happen
+				panic("not pruned or 0")
 			}
 
-			dsc := make([]byte, 2)
-			dsc[0], dsc[1] = c.descriptors(c.levelMask.Apply(levelIndex))
-
-			hash := sha256.New()
-			hash.Write(dsc)
-
-			if hashIndex == hashIndexOffset {
-				if levelIndex != 0 && typ != PrunedCellType {
-					// should never happen
-					panic("not pruned or 0")
-				}
-
-				data := c.BeginParse().MustLoadSlice(c.bitsSz)
-				unusedBits := 8 - (c.bitsSz % 8)
-				if unusedBits != 8 {
-					// we need to set bit at the end if not whole byte was used
-					data[len(data)-1] += 1 << (unusedBits - 1)
-				}
-				hash.Write(data)
+			if c.bitsSz%8 == 0 {
+				bufPos += copy(hashBuf[bufPos:], c.data)
 			} else {
-				if levelIndex == 0 || typ == PrunedCellType {
-					// should never happen
-					panic("pruned or 0")
-				}
-				off := hashIndex - hashIndexOffset - 1
-				hash.Write(c.hashes[off*32 : (off+1)*32])
+				bodySize := c.serializeBOCBodyTo(bodyBuf[:])
+				bufPos += copy(hashBuf[bufPos:], bodyBuf[:bodySize])
 			}
-
-			var depth uint16
-			for i := 0; i < len(c.refs); i++ {
-				var childDepth uint16
-				if typ == MerkleProofCellType || typ == MerkleUpdateCellType {
-					childDepth = c.refs[i].getDepth(levelIndex + 1)
-				} else {
-					childDepth = c.refs[i].getDepth(levelIndex)
-				}
-
-				depthBytes := make([]byte, 2)
-				binary.BigEndian.PutUint16(depthBytes, childDepth)
-				hash.Write(depthBytes)
-
-				if childDepth > depth {
-					depth = childDepth
-				}
+		} else {
+			if levelIndex == 0 || typ == PrunedCellType {
+				// should never happen
+				panic("pruned or 0")
 			}
-			if len(c.refs) > 0 {
-				depth++
-				if depth >= maxDepth {
-					panic("depth is more than max depth")
-				}
-			}
+			prevHashOff := hashIndex - hashIndexOffset - 1
+			bufPos += copy(hashBuf[bufPos:], c.hashes[prevHashOff*32:(prevHashOff+1)*32])
+		}
 
-			for i := 0; i < len(c.refs); i++ {
-				if typ == MerkleProofCellType || typ == MerkleUpdateCellType {
-					hash.Write(c.refs[i].getHash(levelIndex + 1))
-				} else {
-					hash.Write(c.refs[i].getHash(levelIndex))
-				}
+		childLevelIndex := levelIndex
+		if isMerkle {
+			childLevelIndex++
+		}
+
+		var depth uint16
+		for i := 0; i < len(c.refs); i++ {
+			childDepth := c.refs[i].getDepth(childLevelIndex)
+			binary.BigEndian.PutUint16(hashBuf[bufPos:bufPos+depthSize], childDepth)
+			bufPos += depthSize
+
+			if childDepth > depth {
+				depth = childDepth
 			}
-			off := hashIndex - hashIndexOffset
-			c.depthLevels[off] = depth
-			copy(c.hashes[off*32:(off+1)*32], hash.Sum(nil))
-		}()
+		}
+		if len(c.refs) > 0 {
+			depth++
+			if depth >= maxDepth {
+				panic("depth is more than max depth")
+			}
+		}
+
+		for i := 0; i < len(c.refs); i++ {
+			bufPos += copy(hashBuf[bufPos:], c.refs[i].getHash(childLevelIndex))
+		}
+
+		off := hashIndex - hashIndexOffset
+		c.depthLevels[off] = depth
+		sum := sha256.Sum256(hashBuf[:bufPos])
+		copy(c.hashes[off*32:(off+1)*32], sum[:])
+		hashIndex++
 	}
 }
 

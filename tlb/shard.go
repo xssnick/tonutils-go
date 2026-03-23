@@ -29,7 +29,7 @@ type ShardStateUnsplit struct {
 	OutMsgQueueInfo *cell.Cell `tlb:"^"`
 	BeforeSplit     bool       `tlb:"bool"`
 	Accounts        struct {
-		ShardAccounts *cell.Dictionary `tlb:"dict 256"`
+		ShardAccounts *ShardAccountsAugDict `tlb:"."`
 	} `tlb:"^"`
 	Stats        *cell.Cell `tlb:"^"`
 	McStateExtra *cell.Cell `tlb:"maybe ^"`
@@ -60,11 +60,11 @@ type ValidatorInfo struct {
 }
 
 type McStateExtraBlockInfo struct {
-	Flags            uint16           `tlb:"## 16"`
-	ValidatorInfo    ValidatorInfo    `tlb:"."`
-	PrevBlocks       *cell.Dictionary `tlb:"dict 32"`
-	LastKeyBlock     *ExtBlkRef       `tlb:"maybe ."`
-	BlockCreateStats *cell.Cell       `tlb:"."`
+	Flags            uint16                  `tlb:"## 16"`
+	ValidatorInfo    ValidatorInfo           `tlb:"."`
+	PrevBlocks       *OldMcBlocksInfoAugDict `tlb:"."`
+	LastKeyBlock     *ExtBlkRef              `tlb:"maybe ."`
+	BlockCreateStats *cell.Cell              `tlb:"."`
 }
 
 type ConfigParams struct {

@@ -139,6 +139,10 @@ func (c *Slice) MustPreloadUInt(sz uint) uint64 {
 }
 
 func (c *Slice) LoadUInt(sz uint) (uint64, error) {
+	if sz <= 64 {
+		return c.loadUintFast(sz, false)
+	}
+
 	res, err := c.LoadBigUInt(sz)
 	if err != nil {
 		return 0, err
@@ -147,6 +151,10 @@ func (c *Slice) LoadUInt(sz uint) (uint64, error) {
 }
 
 func (c *Slice) PreloadUInt(sz uint) (uint64, error) {
+	if sz <= 64 {
+		return c.loadUintFast(sz, true)
+	}
+
 	res, err := c.PreloadBigUInt(sz)
 	if err != nil {
 		return 0, err
@@ -163,6 +171,10 @@ func (c *Slice) MustLoadInt(sz uint) int64 {
 }
 
 func (c *Slice) LoadInt(sz uint) (int64, error) {
+	if sz <= 64 {
+		return c.loadIntFast(sz)
+	}
+
 	res, err := c.LoadBigInt(sz)
 	if err != nil {
 		return 0, err
@@ -179,11 +191,11 @@ func (c *Slice) MustLoadBoolBit() bool {
 }
 
 func (c *Slice) LoadBoolBit() (bool, error) {
-	res, err := c.LoadBigUInt(1)
+	res, err := c.LoadUInt(1)
 	if err != nil {
 		return false, err
 	}
-	return res.Uint64() == 1, nil
+	return res == 1, nil
 }
 
 func (c *Slice) MustLoadBigUInt(sz uint) *big.Int {
@@ -200,6 +212,61 @@ func (c *Slice) MustPreloadBigUInt(sz uint) *big.Int {
 		panic(err)
 	}
 	return r
+}
+
+func (c *Slice) loadUintFast(sz uint, preload bool) (uint64, error) {
+	if c.bitsSz-c.loadedSz < sz {
+		return 0, ErrNotEnoughData(int(c.bitsSz-c.loadedSz), int(sz))
+	}
+
+	if sz == 0 {
+		return 0, nil
+	}
+
+	var value uint64
+	data := c.data
+	startBitOffset := c.loadedSz % 8
+	bitOffset := startBitOffset
+
+	for i := uint(0); i < sz; i++ {
+		value <<= 1
+		value |= uint64((data[0] >> (7 - bitOffset)) & 1)
+
+		bitOffset++
+		if bitOffset == 8 {
+			bitOffset = 0
+			data = data[1:]
+		}
+	}
+
+	if !preload {
+		consumedBytes := (startBitOffset + sz) / 8
+		c.loadedSz += sz
+		c.data = c.data[consumedBytes:]
+	}
+
+	return value, nil
+}
+
+func (c *Slice) loadIntFast(sz uint) (int64, error) {
+	u, err := c.loadUintFast(sz, false)
+	if err != nil {
+		return 0, err
+	}
+
+	if sz == 0 {
+		return 0, nil
+	}
+
+	if sz == 64 {
+		return int64(u), nil
+	}
+
+	signBit := uint64(1) << (sz - 1)
+	if u&signBit != 0 {
+		u |= ^((uint64(1) << sz) - 1)
+	}
+	return int64(u), nil
 }
 
 func (c *Slice) LoadBigUInt(sz uint) (*big.Int, error) {
@@ -585,7 +652,9 @@ func (c *Slice) MustToCell() *Cell {
 }
 
 func (c *Slice) Copy() *Slice {
-	// copy data
+	// Copy byte storage to preserve snapshot semantics even if the originating
+	// cell was constructed through RawUnsafe helpers and its backing bytes are
+	// mutated later.
 	data := append([]byte{}, c.data...)
 
 	return &Slice{

@@ -19,7 +19,7 @@ func ISZERO() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Sign() == 0)
 		},
-		Name:   "ABS",
-		Prefix: []byte{0xC0, 0x00},
+		Name:      "ABS",
+		BitPrefix: helpers.BytesPrefix(0xC0, 0x00),
 	}
 }

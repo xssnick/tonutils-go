@@ -45,7 +45,7 @@ func DICTIGETJMPZ() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i2)
 		},
-		Name:   "DICTIGETJMPZ",
-		Prefix: []byte{0xF4, 0xBC},
+		Name:      "DICTIGETJMPZ",
+		BitPrefix: helpers.BytesPrefix(0xF4, 0xBC),
 	}
 }

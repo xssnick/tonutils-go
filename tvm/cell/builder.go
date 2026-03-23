@@ -15,6 +15,10 @@ type Builder struct {
 	refs []*Cell
 }
 
+type SerializableToCell interface {
+	ToCell() (*Cell, error)
+}
+
 func (b *Builder) MustStoreCoins(value uint64) *Builder {
 	err := b.StoreCoins(value)
 	if err != nil {
@@ -96,11 +100,15 @@ func (b *Builder) StoreUInt(value uint64, sz uint) error {
 		return b.StoreBigUInt(new(big.Int).SetUint64(value), sz)
 	}
 
-	value <<= 64 - sz
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, value)
+	if sz == 0 {
+		return nil
+	}
 
-	return b.StoreSlice(buf, sz)
+	value <<= 64 - sz
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], value)
+
+	return b.StoreSlice(buf[:], sz)
 }
 
 func (b *Builder) MustStoreInt(value int64, sz uint) *Builder {
@@ -112,6 +120,26 @@ func (b *Builder) MustStoreInt(value int64, sz uint) *Builder {
 }
 
 func (b *Builder) StoreInt(value int64, sz uint) error {
+	if sz > 257 {
+		return ErrTooBigSize
+	}
+
+	if sz <= 64 {
+		if value >= 0 {
+			return b.StoreUInt(uint64(value), sz)
+		}
+
+		if sz == 0 {
+			return b.StoreUInt(0, 0)
+		}
+
+		u := uint64(value)
+		if sz < 64 {
+			u &= (uint64(1) << sz) - 1
+		}
+		return b.StoreUInt(u, sz)
+	}
+
 	return b.StoreBigInt(new(big.Int).SetInt64(value), sz)
 }
 
@@ -128,7 +156,7 @@ func (b *Builder) StoreBoolBit(value bool) error {
 	if value {
 		i = 1
 	}
-	return b.StoreBigUInt(new(big.Int).SetUint64(i), 1)
+	return b.StoreUInt(i, 1)
 }
 
 func (b *Builder) MustStoreBigUInt(value *big.Int, sz uint) *Builder {
@@ -380,7 +408,7 @@ func (b *Builder) StoreBinarySnake(data []byte) error {
 	return b.StoreBuilder(snake)
 }
 
-func (b *Builder) MustStoreDict(dict *Dictionary) *Builder {
+func (b *Builder) MustStoreDict(dict SerializableToCell) *Builder {
 	err := b.StoreDict(dict)
 	if err != nil {
 		panic(err)
@@ -396,7 +424,7 @@ func (b *Builder) MustStoreMaybeRef(ref *Cell) *Builder {
 	return b
 }
 
-func (b *Builder) StoreDict(dict *Dictionary) error {
+func (b *Builder) StoreDict(dict SerializableToCell) error {
 	if dict == nil {
 		return b.StoreMaybeRef(nil)
 	}
@@ -570,6 +598,7 @@ func (b *Builder) EndCell() *Cell {
 		data:   append([]byte{}, b.data...), // copy data
 		refs:   b.refs,
 	}
+	c.levelMask = ordinaryLevelMask(c.refs)
 	c.calculateHashes()
 	return c
 }

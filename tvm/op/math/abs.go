@@ -19,7 +19,7 @@ func ABS() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Abs(i0))
 		},
-		Name:   "ABS",
-		Prefix: []byte{0xB6, 0x0B},
+		Name:      "ABS",
+		BitPrefix: helpers.BytesPrefix(0xB6, 0x0B),
 	}
 }

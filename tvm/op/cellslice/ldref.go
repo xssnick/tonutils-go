@@ -33,7 +33,7 @@ func LDREF() *helpers.SimpleOP {
 			}
 			return state.Stack.PushSlice(s0)
 		},
-		Name:   "LDREF",
-		Prefix: []byte{0xD4},
+		Name:      "LDREF",
+		BitPrefix: helpers.BytesPrefix(0xD4),
 	}
 }

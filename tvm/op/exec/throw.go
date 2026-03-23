@@ -41,7 +41,7 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 
 	var exc uint64
 	op := &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(prefixValue, prefixBits).EndCell(),
+		BitPrefix: helpers.UIntPrefix(prefixValue, prefixBits),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%s %d", name, exc)
 		},
@@ -106,7 +106,7 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 func newThrowAny() *helpers.AdvancedOP {
 	var args uint64
 	op := &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x1E5E, 13).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x1E5E, 13),
 		NameSerializer: func() string {
 			name := "THROW"
 			if args&1 != 0 {

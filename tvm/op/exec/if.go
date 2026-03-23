@@ -27,7 +27,7 @@ func IF() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "IF",
-		Prefix: []byte{0xDE},
+		Name:      "IF",
+		BitPrefix: helpers.BytesPrefix(0xDE),
 	}
 }

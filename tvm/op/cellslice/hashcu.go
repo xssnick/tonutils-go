@@ -19,7 +19,7 @@ func HASHCU() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(new(big.Int).SetBytes(c.Hash()))
 		},
-		Name:   "HASHCU",
-		Prefix: []byte{0xF9, 0x00},
+		Name:      "HASHCU",
+		BitPrefix: helpers.BytesPrefix(0xF9, 0x00),
 	}
 }

@@ -15,7 +15,7 @@ func NEWC() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return state.Stack.PushBuilder(cell.BeginCell())
 		},
-		Name:   "NEWC",
-		Prefix: []byte{0xC8},
+		Name:      "NEWC",
+		BitPrefix: helpers.BytesPrefix(0xC8),
 	}
 }

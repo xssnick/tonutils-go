@@ -14,8 +14,8 @@ func init() {
 
 func QTLEN() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "QTLEN",
-		Prefix: []byte{0x6f, 0x89},
+		Name:      "QTLEN",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x89),
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.PopAny()
 			if err != nil {

@@ -23,7 +23,7 @@ func SUB() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Sub(i1, i0))
 		},
-		Name:   "SUB",
-		Prefix: []byte{0xA1},
+		Name:      "SUB",
+		BitPrefix: helpers.BytesPrefix(0xA1),
 	}
 }

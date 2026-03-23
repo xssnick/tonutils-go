@@ -34,7 +34,7 @@ func LDSLICEX() *helpers.SimpleOP {
 			}
 			return state.Stack.PushSlice(s1)
 		},
-		Name:   "LDSLICEX",
-		Prefix: []byte{0xD7, 0x18},
+		Name:      "LDSLICEX",
+		BitPrefix: helpers.BytesPrefix(0xD7, 0x18),
 	}
 }

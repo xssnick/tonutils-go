@@ -3,11 +3,13 @@ package stack
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type OpPUSHREFSLICE struct {
+	helpers.Prefixed
 	value *cell.Slice
 }
 
@@ -17,13 +19,8 @@ func init() {
 
 func PUSHSLICE(value *cell.Slice) *OpPUSHREFSLICE {
 	return &OpPUSHREFSLICE{
-		value: value.Copy(),
-	}
-}
-
-func (op *OpPUSHREFSLICE) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{
-		cell.BeginCell().MustStoreUInt(0x89, 8).EndCell().BeginParse(),
+		Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x89, 8)),
+		value:    value.Copy(),
 	}
 }
 

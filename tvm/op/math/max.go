@@ -26,7 +26,7 @@ func MAX() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(i1)
 		},
-		Name:   "MAX",
-		Prefix: []byte{0xB6, 0x09},
+		Name:      "MAX",
+		BitPrefix: helpers.BytesPrefix(0xB6, 0x09),
 	}
 }

@@ -11,8 +11,8 @@ func init() {
 
 func TUPLEVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "TUPLEVAR",
-		Prefix: []byte{0x6f, 0x80},
+		Name:      "TUPLEVAR",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x80),
 		Action: func(state *vm.State) error {
 			count, err := state.Stack.PopIntRange(0, 255)
 			if err != nil {

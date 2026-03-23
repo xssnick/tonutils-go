@@ -23,8 +23,8 @@ func ONLYTOPX() *helpers.SimpleOP {
 			}
 			return state.Stack.DropAfter(count)
 		},
-		Name:   "ONLYTOPX",
-		Prefix: []byte{0x6a},
+		Name:      "ONLYTOPX",
+		BitPrefix: helpers.BytesPrefix(0x6a),
 	}
 }
 
@@ -40,7 +40,7 @@ func ONLYX() *helpers.SimpleOP {
 			}
 			return state.Stack.Drop(state.Stack.Len() - count)
 		},
-		Name:   "ONLYX",
-		Prefix: []byte{0x6b},
+		Name:      "ONLYX",
+		BitPrefix: helpers.BytesPrefix(0x6b),
 	}
 }

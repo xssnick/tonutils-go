@@ -39,7 +39,7 @@ func MULMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "MULMODR",
-		Prefix: []byte{0xA9, 0x89},
+		Name:      "MULMODR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x89),
 	}
 }

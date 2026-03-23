@@ -31,7 +31,7 @@ func PUXC(i, j uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d PUXC", i, j)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0x52}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0x52),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
 		},

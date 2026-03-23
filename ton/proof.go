@@ -146,21 +146,19 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 	}
 
 	addrKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
-	val := shardState.Accounts.ShardAccounts.Get(addrKey)
-	if val == nil {
+	value, extra, err := shardState.Accounts.ShardAccounts.LoadValueExtra(addrKey)
+	if err != nil {
 		return nil, nil, ErrNoAddrInProof
 	}
 
-	loadVal := val.BeginParse()
-
 	var balanceInfo tlb.DepthBalanceInfo
-	err := tlb.LoadFromCell(&balanceInfo, loadVal)
+	err = tlb.LoadFromCell(&balanceInfo, extra)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load DepthBalanceInfo: %w", err)
 	}
 
 	var accInfo tlb.ShardAccount
-	err = tlb.LoadFromCell(&accInfo, loadVal)
+	err = tlb.LoadFromCell(&accInfo, value)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load ShardAccount: %w", err)
 	}
@@ -169,13 +167,12 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 }
 
 func CheckTransactionProof(txHash []byte, txLT uint64, txAccount []byte, shardAccounts *tlb.ShardAccountBlocks) error {
-	accProof := shardAccounts.Accounts.Get(cell.BeginCell().MustStoreSlice(txAccount, 256).EndCell())
-	if accProof == nil {
+	accProofSlice, accExtra, err := shardAccounts.Accounts.LoadValueExtra(cell.BeginCell().MustStoreSlice(txAccount, 256).EndCell())
+	if err != nil {
 		return fmt.Errorf("no tx account in proof")
 	}
 
-	accProofSlice := accProof.BeginParse()
-	err := tlb.LoadFromCellAsProof(new(tlb.CurrencyCollection), accProofSlice)
+	err = tlb.LoadFromCellAsProof(new(tlb.CurrencyCollection), accExtra)
 	if err != nil {
 		return fmt.Errorf("failed to load account CurrencyCollection proof cell: %w", err)
 	}
@@ -186,13 +183,12 @@ func CheckTransactionProof(txHash []byte, txLT uint64, txAccount []byte, shardAc
 		return fmt.Errorf("failed to load account from proof cell: %w", err)
 	}
 
-	accTx := accBlock.Transactions.Get(cell.BeginCell().MustStoreUInt(txLT, 64).EndCell())
-	if accTx == nil {
+	accTxSlice, accTxExtra, err := accBlock.Transactions.LoadValueExtra(cell.BeginCell().MustStoreUInt(txLT, 64).EndCell())
+	if err != nil {
 		return fmt.Errorf("no tx in account block proof")
 	}
 
-	accTxSlice := accTx.BeginParse()
-	err = tlb.LoadFromCellAsProof(new(tlb.CurrencyCollection), accTxSlice)
+	err = tlb.LoadFromCellAsProof(new(tlb.CurrencyCollection), accTxExtra)
 	if err != nil {
 		return fmt.Errorf("failed to load tx CurrencyCollection proof cell: %w", err)
 	}
@@ -238,13 +234,12 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 		return fmt.Errorf("failed to load tx CurrencyCollection proof cell: %w", err)
 	}
 
-	toInfo := info.PrevBlocks.GetByIntKey(big.NewInt(int64(to.SeqNo)))
-	if toInfo == nil {
+	slc, extra, err := info.PrevBlocks.LoadValueExtraByIntKey(big.NewInt(int64(to.SeqNo)))
+	if err != nil {
 		return fmt.Errorf("target block not found in state proof")
 	}
 
-	slc := toInfo.BeginParse()
-	err = tlb.LoadFromCellAsProof(new(tlb.KeyMaxLt), slc)
+	err = tlb.LoadFromCellAsProof(new(tlb.KeyMaxLt), extra)
 	if err != nil {
 		return fmt.Errorf("failed to load block KeyMaxLt proof cell: %w", err)
 	}

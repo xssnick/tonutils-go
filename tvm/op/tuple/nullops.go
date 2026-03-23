@@ -53,8 +53,8 @@ func NULLROTRIFNOT2() *helpers.SimpleOP {
 
 func makeNullOp(name string, prefix uint64, cond bool, depth, count int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   name,
-		Prefix: []byte{byte(prefix >> 8), byte(prefix)},
+		Name:      name,
+		BitPrefix: helpers.BytesPrefix(byte(prefix>>8), byte(prefix)),
 		Action: func(state *vm.State) error {
 			if state.Stack.Len() < depth+1 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)

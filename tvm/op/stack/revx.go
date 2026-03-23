@@ -29,7 +29,7 @@ func REVX() *helpers.SimpleOP {
 			}
 			return state.Stack.Reverse(x+y-1, y)
 		},
-		Name:   "REVX",
-		Prefix: []byte{0x64},
+		Name:      "REVX",
+		BitPrefix: helpers.BytesPrefix(0x64),
 	}
 }

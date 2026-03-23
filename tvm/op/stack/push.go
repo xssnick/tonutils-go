@@ -8,6 +8,7 @@ import (
 )
 
 type OpPUSH struct {
+	helpers.Prefixed
 	stackIndex uint8
 }
 
@@ -17,12 +18,9 @@ func init() {
 
 func PUSH(stackIndex uint8) *OpPUSH {
 	return &OpPUSH{
+		Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0x2, 4)),
 		stackIndex: stackIndex,
 	}
-}
-
-func (op *OpPUSH) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0x2, 4).EndCell().BeginParse()}
 }
 
 func (op *OpPUSH) Deserialize(code *cell.Slice) error {

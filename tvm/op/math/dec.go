@@ -21,7 +21,7 @@ func DEC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Sub(i0, big.NewInt(1)))
 		},
-		Name:   "DEC",
-		Prefix: []byte{0xA5},
+		Name:      "DEC",
+		BitPrefix: helpers.BytesPrefix(0xA5),
 	}
 }

@@ -8,6 +8,7 @@ import (
 )
 
 type OpPOP struct {
+	helpers.Prefixed
 	stackIndex uint8
 }
 
@@ -17,12 +18,9 @@ func init() {
 
 func POP(stackIndex uint8) *OpPOP {
 	return &OpPOP{
+		Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0x3, 4)),
 		stackIndex: stackIndex,
 	}
-}
-
-func (op *OpPOP) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0x3, 4).EndCell().BeginParse()}
 }
 
 func (op *OpPOP) Deserialize(code *cell.Slice) error {

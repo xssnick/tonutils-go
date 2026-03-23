@@ -28,7 +28,7 @@ func ROLL() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "ROLL",
-		Prefix: []byte{0x61},
+		Name:      "ROLL",
+		BitPrefix: helpers.BytesPrefix(0x61),
 	}
 }

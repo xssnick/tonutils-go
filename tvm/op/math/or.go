@@ -23,7 +23,7 @@ func OR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Or(i0, i1))
 		},
-		Name:   "OR",
-		Prefix: []byte{0xB1},
+		Name:      "OR",
+		BitPrefix: helpers.BytesPrefix(0xB1),
 	}
 }

@@ -23,7 +23,7 @@ func SUM() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Add(i0, i1))
 		},
-		Name:   "SUM",
-		Prefix: []byte{0xA0},
+		Name:      "SUM",
+		BitPrefix: helpers.BytesPrefix(0xA0),
 	}
 }

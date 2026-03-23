@@ -41,7 +41,7 @@ func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 		return nil, err
 	}
 
-	return nil, vmerr.Error(^v.Int64())
+	return nil, vmerr.Error(v.Int64())
 }
 
 func (c *ExcQuitContinuation) Copy() Continuation {
@@ -133,11 +133,11 @@ func (c *RepeatContinuation) GetControlData() *ControlData {
 
 func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
 	if c.Count <= 0 {
-		println("finish REPEAT")
+		trace("finish REPEAT")
 		return c.After, nil
 	}
 
-	println("iteration REPEAT", c.Count)
+	tracef("iteration REPEAT %d", c.Count)
 
 	if cd := c.Body.GetControlData(); cd != nil && cd.Save.C[0] != nil {
 		return c.Body, nil
@@ -179,7 +179,7 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 		}
 
 		if !more {
-			println("finish WHILE")
+			trace("finish WHILE")
 			return c.After, nil
 		}
 
@@ -232,7 +232,7 @@ func (c *UntilContinuation) Jump(state *State) (Continuation, error) {
 	}
 
 	if end {
-		println("finish UNTIL")
+		trace("finish UNTIL")
 		return c.After, nil
 	}
 

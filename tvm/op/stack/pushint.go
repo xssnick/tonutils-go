@@ -3,11 +3,13 @@ package stack
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"math/big"
 )
 
 type OpPUSHINT struct {
+	helpers.Prefixed
 	value *big.Int
 }
 
@@ -17,16 +19,13 @@ func init() {
 
 func PUSHINT(value *big.Int) *OpPUSHINT {
 	return &OpPUSHINT{
+		Prefixed: helpers.NewPrefixed(
+			helpers.UIntPrefix(0x7, 4),
+			helpers.UIntPrefix(0x80, 8),
+			helpers.UIntPrefix(0x81, 8),
+			helpers.UIntPrefix(0x82, 8),
+		),
 		value: value,
-	}
-}
-
-func (op *OpPUSHINT) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{
-		cell.BeginCell().MustStoreUInt(0x7, 4).ToSlice(),
-		cell.BeginCell().MustStoreUInt(0x80, 8).EndCell().BeginParse(),
-		cell.BeginCell().MustStoreUInt(0x81, 8).EndCell().BeginParse(),
-		cell.BeginCell().MustStoreUInt(0x82, 8).EndCell().BeginParse(),
 	}
 }
 

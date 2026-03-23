@@ -1,39 +1,37 @@
 package helpers
 
 import (
-	"bytes"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 type SimpleOP struct {
 	Action       func(*vm.State) error
-	Prefix       []byte
+	BitPrefix    BitPrefix
 	Name         string
 	BaseGasPrice uint64
 }
 
+func (op *SimpleOP) prefix() BitPrefix {
+	return op.BitPrefix
+}
+
 func (op *SimpleOP) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{
-		cell.BeginCell().MustStoreSlice(op.Prefix, uint(8*len(op.Prefix))).EndCell().BeginParse(),
-	}
+	return PrefixSlices(op.prefix())
 }
 
 func (op *SimpleOP) Deserialize(code *cell.Slice) error {
-	prefix, err := code.LoadSlice(8 * uint(len(op.Prefix)))
-	if err != nil {
-		return err
-	}
+	return op.DeserializeMatched(code)
+}
 
-	if !bytes.HasPrefix(prefix, op.Prefix) {
-		return vm.ErrCorruptedOpcode
-	}
-
-	return nil
+func (op *SimpleOP) DeserializeMatched(code *cell.Slice) error {
+	_, err := code.LoadSlice(op.prefix().Bits)
+	return err
 }
 
 func (op *SimpleOP) Serialize() *cell.Builder {
-	return Builder(op.Prefix)
+	prefix := op.prefix()
+	return cell.BeginCell().MustStoreSlice(prefix.Data, prefix.Bits)
 }
 
 func (op *SimpleOP) SerializeText() string {

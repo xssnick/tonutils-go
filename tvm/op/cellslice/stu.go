@@ -32,7 +32,7 @@ func STU(sz uint) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d STU", sz)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xCB}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xCB),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(sz-1), 8)
 		},

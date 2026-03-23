@@ -23,7 +23,7 @@ func NEQ() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Cmp(i1) != 0)
 		},
-		Name:   "NEQ",
-		Prefix: []byte{0xBD},
+		Name:      "NEQ",
+		BitPrefix: helpers.BytesPrefix(0xBD),
 	}
 }

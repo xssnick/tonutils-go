@@ -6,19 +6,16 @@ import (
 )
 
 func (s *State) Return(args ...int) error {
-	cont := Continuation(&QuitContinuation{ExitCode: 0})
-	s.Reg.C[0], cont = cont, s.Reg.C[0]
-	if len(args) == 1 {
-		return s.JumpArgs(cont, args[0])
-	} else if len(args) == 0 {
-		return s.Jump(cont)
-	}
-	return fmt.Errorf("only one arg supported")
+	return s.returnTo(0, 0, args...)
 }
 
 func (s *State) ReturnAlt(args ...int) error {
-	cont := Continuation(&QuitContinuation{ExitCode: 1})
-	s.Reg.C[1], cont = cont, s.Reg.C[1]
+	return s.returnTo(1, 1, args...)
+}
+
+func (s *State) returnTo(regIdx int, exitCode int64, args ...int) error {
+	cont := Continuation(&QuitContinuation{ExitCode: exitCode})
+	s.Reg.C[regIdx], cont = cont, s.Reg.C[regIdx]
 	if len(args) == 1 {
 		return s.JumpArgs(cont, args[0])
 	} else if len(args) == 0 {
@@ -161,8 +158,7 @@ func (s *State) JumpArgs(c Continuation, passArgs int) error {
 }
 
 func (s *State) JumpTo(c Continuation) (err error) {
-	println(s.Stack.String())
-	println("[JUMP]")
+	traceStack("[JUMP]", s.Stack)
 
 	const freeIterations = 8
 
@@ -195,8 +191,7 @@ func (s *State) JumpTo(c Continuation) (err error) {
 }
 
 func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, error) {
-	println("ADJUST JUMP CONT:", passArgs)
-	// println(s.Stack.String())
+	tracef("ADJUST JUMP CONT: %d", passArgs)
 
 	data := c.GetControlData()
 	if data != nil {

@@ -27,7 +27,7 @@ func ROLLREV() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "ROLLREV",
-		Prefix: []byte{0x62},
+		Name:      "ROLLREV",
+		BitPrefix: helpers.BytesPrefix(0x62),
 	}
 }

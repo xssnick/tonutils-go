@@ -79,6 +79,27 @@ func TestPushNullAndIsNull(t *testing.T) {
 	}
 }
 
+func TestIsNullDoesNotTreatNaNAsNull(t *testing.T) {
+	state := newState()
+
+	overflow := new(big.Int).Lsh(big.NewInt(1), 257)
+	if err := state.Stack.PushIntQuiet(overflow); err != nil {
+		t.Fatalf("failed to push quiet NaN: %v", err)
+	}
+
+	if err := ISNULL().Interpret(state); err != nil {
+		t.Fatalf("ISNULL failed: %v", err)
+	}
+
+	boolVal, err := state.Stack.PopBool()
+	if err != nil {
+		t.Fatalf("failed to pop bool: %v", err)
+	}
+	if boolVal {
+		t.Fatalf("expected false from ISNULL on NaN")
+	}
+}
+
 func TestTupleCreationAndIndexing(t *testing.T) {
 	state := newState()
 

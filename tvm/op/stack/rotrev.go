@@ -35,7 +35,7 @@ func ROTREV() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "ROTREV",
-		Prefix: []byte{0x59},
+		Name:      "ROTREV",
+		BitPrefix: helpers.BytesPrefix(0x59),
 	}
 }

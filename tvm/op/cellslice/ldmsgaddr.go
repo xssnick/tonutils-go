@@ -29,7 +29,7 @@ func LDMSGADDR() *helpers.SimpleOP {
 			}
 			return state.Stack.PushSlice(s0)
 		},
-		Name:   "LDMSGADDR",
-		Prefix: []byte{0xFA, 0x40},
+		Name:      "LDMSGADDR",
+		BitPrefix: helpers.BytesPrefix(0xFA, 0x40),
 	}
 }

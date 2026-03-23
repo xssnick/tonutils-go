@@ -11,8 +11,8 @@ func init() {
 
 func TPOP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "TPOP",
-		Prefix: []byte{0x6f, 0x8d},
+		Name:      "TPOP",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x8d),
 		Action: func(state *vm.State) error {
 			tup, err := state.Stack.PopTupleRange(255, 1)
 			if err != nil {

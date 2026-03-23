@@ -11,8 +11,8 @@ func init() {
 
 func ISNULL() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "ISNULL",
-		Prefix: []byte{0x6e},
+		Name:      "ISNULL",
+		BitPrefix: helpers.BytesPrefix(0x6e),
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.PopAny()
 			if err != nil {

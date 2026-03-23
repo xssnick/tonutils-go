@@ -32,7 +32,7 @@ func MODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "MODR",
-		Prefix: []byte{0xA9, 0x09},
+		Name:      "MODR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x09),
 	}
 }

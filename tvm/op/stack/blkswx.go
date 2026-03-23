@@ -35,7 +35,7 @@ func BLKSWX() *helpers.SimpleOP {
 			}
 			return state.Stack.Reverse(x+y-1, 0)
 		},
-		Name:   "BLKSWX",
-		Prefix: []byte{0x63},
+		Name:      "BLKSWX",
+		BitPrefix: helpers.BytesPrefix(0x63),
 	}
 }

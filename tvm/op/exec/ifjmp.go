@@ -27,7 +27,7 @@ func IFJMP() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "IFJMP",
-		Prefix: []byte{0xE0},
+		Name:      "IFJMP",
+		BitPrefix: helpers.BytesPrefix(0xE0),
 	}
 }

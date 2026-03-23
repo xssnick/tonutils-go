@@ -40,7 +40,7 @@ func MULDIVMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "MULDIVMOD",
-		Prefix: []byte{0xA9, 0x8C},
+		Name:      "MULDIVMOD",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x8C),
 	}
 }

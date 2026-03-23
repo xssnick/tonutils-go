@@ -3,10 +3,12 @@ package stack
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 type OpPUSHCONT struct {
+	helpers.Prefixed
 	cont *cell.Cell
 	typ  string
 }
@@ -17,15 +19,12 @@ func init() {
 
 func PUSHCONT(cont *cell.Cell) *OpPUSHCONT {
 	return &OpPUSHCONT{
+		Prefixed: helpers.NewPrefixed(
+			helpers.UIntPrefix(0x9, 4),
+			helpers.UIntPrefix(0x47, 7),
+			helpers.UIntPrefix(0x8A, 8),
+		),
 		cont: cont,
-	}
-}
-
-func (op *OpPUSHCONT) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{
-		cell.BeginCell().MustStoreUInt(0x9, 4).EndCell().BeginParse(),
-		cell.BeginCell().MustStoreUInt(0x47, 7).EndCell().BeginParse(),
-		cell.BeginCell().MustStoreUInt(0x8A, 8).EndCell().BeginParse(),
 	}
 }
 

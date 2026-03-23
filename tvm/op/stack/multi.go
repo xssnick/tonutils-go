@@ -36,7 +36,7 @@ func XC2PU(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d XC2PU", i, j, k)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x541, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x541, 12),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().
 				MustStoreUInt(uint64(i), 4).
@@ -86,7 +86,7 @@ func XCPUXC(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d XCPUXC", i, j, k)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x542, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x542, 12),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().
 				MustStoreUInt(uint64(i), 4).
@@ -137,7 +137,7 @@ func XCPU2(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d XCPU2", i, j, k)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x543, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x543, 12),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().
 				MustStoreUInt(uint64(i), 4).
@@ -187,7 +187,7 @@ func PUXC2(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d PUXC2", i, j, k)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x544, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x544, 12),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().
 				MustStoreUInt(uint64(i), 4).
@@ -241,7 +241,7 @@ func PUXCPU(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d PUXCPU", i, j, k)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x545, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x545, 12),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().
 				MustStoreUInt(uint64(i), 4).
@@ -298,7 +298,7 @@ func PU2XC(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d PU2XC", i, j, k)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x546, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x546, 12),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().
 				MustStoreUInt(uint64(i), 4).
@@ -353,7 +353,7 @@ func PUSH3(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d PUSH3", i, j, k)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x547, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x547, 12),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().
 				MustStoreUInt(uint64(i), 4).

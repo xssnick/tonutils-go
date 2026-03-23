@@ -9,39 +9,89 @@ import (
 	_ "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	_ "github.com/xssnick/tonutils-go/tvm/op/math"
 	_ "github.com/xssnick/tonutils-go/tvm/op/stack"
+	_ "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 	"math/big"
-	"unsafe"
 )
 
+type trieNode struct {
+	next [2]*trieNode
+	op   vm.OPGetter
+}
+
+type matchedDeserializer interface {
+	DeserializeMatched(code *cell.Slice) error
+}
+
 type TVM struct {
-	prefixes map[uint64]vm.OPGetter
+	trie         *trieNode
+	maxPrefixLen uint
 }
 
 func NewTVM() *TVM {
-	var prefixes = map[uint64]vm.OPGetter{}
+	tvm := &TVM{
+		trie: &trieNode{},
+	}
 
 	for _, op := range vm.List {
 		for _, s := range op().GetPrefixes() {
-			var buf [8]byte
-			opBits := s.BitsLeft()
-			bts := s.MustPreloadSlice(opBits)
-			if len(bts) > 7 {
-				panic("too long prefix for opcode " + op().SerializeText())
-			}
-
-			buf[0] = uint8(opBits)
-			copy(buf[1:], bts)
-
-			prefixes[*(*uint64)(unsafe.Pointer(&buf[0]))] = op
+			tvm.addTriePrefix(s, op)
 		}
 	}
 
-	return &TVM{
-		prefixes: prefixes,
+	return tvm
+}
+
+func bitAt(data []byte, bit uint) uint8 {
+	return (data[bit/8] >> (7 - (bit % 8))) & 1
+}
+
+func (tvm *TVM) addTriePrefix(prefix *cell.Slice, op vm.OPGetter) {
+	n := tvm.trie
+	bits := prefix.BitsLeft()
+	raw := prefix.MustPreloadSlice(bits)
+
+	if bits > tvm.maxPrefixLen {
+		tvm.maxPrefixLen = bits
 	}
+
+	for i := uint(0); i < bits; i++ {
+		b := bitAt(raw, i)
+		if n.next[b] == nil {
+			n.next[b] = &trieNode{}
+		}
+		n = n.next[b]
+	}
+
+	n.op = op
+}
+
+func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
+	limit := code.BitsLeft()
+	if limit == 0 {
+		return nil
+	}
+	if limit > tvm.maxPrefixLen {
+		limit = tvm.maxPrefixLen
+	}
+
+	raw := code.MustPreloadSlice(limit)
+	n := tvm.trie
+	var matched vm.OPGetter
+
+	for i := uint(0); i < limit; i++ {
+		n = n.next[bitAt(raw, i)]
+		if n == nil {
+			break
+		}
+		if n.op != nil {
+			matched = n.op
+		}
+	}
+
+	return matched
 }
 
 func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) (err error) {
@@ -66,7 +116,7 @@ func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack
 
 	var e vmerr.VMError
 	if errors.As(err, &e) {
-		if e.Code == 0 {
+		if e.Code == 0 || e.Code == 1 {
 			return nil
 		}
 	}
@@ -96,7 +146,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 				}
 
 				// implicit JMPREF
-				println("implicit JMPREF")
+				vm.Tracef("implicit JMPREF")
 				if err = state.Jump(c); err != nil {
 					return err
 				}
@@ -109,7 +159,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 			if err = tvm.step(state); err != nil {
 				var e vmerr.VMError
 				if state.Reg.C[2] != nil && errors.As(err, &e) && e.Code != 0 {
-					println("[EXCEPTION]", e.Code, e.Msg)
+					vm.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
 
 					if err = state.ThrowException(big.NewInt(e.Code)); err == nil {
 						continue
@@ -121,7 +171,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 			steps++
 		}
 
-		println("implicit RET")
+		vm.Tracef("implicit RET")
 		if err = state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
 			return err
 		}
@@ -133,39 +183,27 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 }
 
 func (tvm *TVM) step(state *vm.State) (err error) {
-	// we are doing 2 rounds of lookup, first one is fast and covers 99% of opcodes, if not found we are trying to check each bit
-	for _, move := range []uint{4, 1} {
-		var buf [8]byte
-		for prefixLen := uint(4); prefixLen < 7*8; prefixLen += move {
-			if state.CurrentCode.BitsLeft() < prefixLen {
-				break
-			}
-
-			buf[0] = uint8(prefixLen)
-			pfx := state.CurrentCode.MustPreloadSlice(prefixLen)
-			copy(buf[1:], pfx)
-
-			px := tvm.prefixes[*(*uint64)(unsafe.Pointer(&buf[0]))]
-			if px == nil {
-				continue
-			}
-
-			op := px()
-
-			err = op.Deserialize(state.CurrentCode)
-			if err != nil {
-				return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
-			}
-
-			println(op.SerializeText())
-			err = op.Interpret(state)
-			if err != nil {
-				return err
-			}
-
-			return nil
-		}
+	px := tvm.matchOpcode(state.CurrentCode)
+	if px == nil {
+		return fmt.Errorf("opcode not found: %w (%s)", vm.ErrCorruptedOpcode, state.CurrentCode.String())
 	}
 
-	return fmt.Errorf("opcode not found: %w (%s)", vm.ErrCorruptedOpcode, state.CurrentCode.String())
+	op := px()
+
+	if fast, ok := op.(matchedDeserializer); ok {
+		err = fast.DeserializeMatched(state.CurrentCode)
+	} else {
+		err = op.Deserialize(state.CurrentCode)
+	}
+	if err != nil {
+		return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
+	}
+
+	vm.Tracef("%s", op.SerializeText())
+	err = op.Interpret(state)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

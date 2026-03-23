@@ -32,7 +32,7 @@ func IFELSE() *helpers.SimpleOP {
 			}
 			return state.Call(c0)
 		},
-		Name:   "IFELSE",
-		Prefix: []byte{0xE2},
+		Name:      "IFELSE",
+		BitPrefix: helpers.BytesPrefix(0xE2),
 	}
 }

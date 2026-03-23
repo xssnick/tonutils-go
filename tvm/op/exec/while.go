@@ -38,7 +38,7 @@ func WHILE() *helpers.SimpleOP {
 
 			return state.Jump(cond)
 		},
-		Name:   "WHILE",
-		Prefix: []byte{0xE8},
+		Name:      "WHILE",
+		BitPrefix: helpers.BytesPrefix(0xE8),
 	}
 }

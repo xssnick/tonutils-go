@@ -19,7 +19,7 @@ func HASHSU() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(new(big.Int).SetBytes(s.MustToCell().Hash()))
 		},
-		Name:   "HASHSU",
-		Prefix: []byte{0xF9, 0x01},
+		Name:      "HASHSU",
+		BitPrefix: helpers.BytesPrefix(0xF9, 0x01),
 	}
 }

@@ -34,7 +34,7 @@ func LDU(sz uint) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d LDU", sz)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xD3}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xD3),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(sz-1), 8)
 		},

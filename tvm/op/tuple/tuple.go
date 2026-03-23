@@ -16,7 +16,7 @@ func init() {
 
 func TUPLE(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6f0, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6f0, 12),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d TUPLE", n)
 		},

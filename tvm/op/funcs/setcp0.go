@@ -15,7 +15,7 @@ func SETCP(cp int) *helpers.SimpleOP {
 			state.CP = cp
 			return nil
 		},
-		Name:   "SETCP",
-		Prefix: []byte{0xFF, 0x00},
+		Name:      "SETCP",
+		BitPrefix: helpers.BytesPrefix(0xFF, 0x00),
 	}
 }

@@ -22,7 +22,7 @@ func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushInt(x.Lsh(x, uint(value)))
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xAA}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xAA),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},

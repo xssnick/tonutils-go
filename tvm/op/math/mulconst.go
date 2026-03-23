@@ -23,7 +23,7 @@ func MULCONST(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushInt(i0.Mul(i0, big.NewInt(int64(value))))
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xA7}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xA7),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},

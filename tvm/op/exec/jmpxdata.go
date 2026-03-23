@@ -28,7 +28,7 @@ func JMPXDATA() *helpers.SimpleOP {
 
 			return state.Jump(cont)
 		},
-		Name:   "JMPXDATA",
-		Prefix: []byte{0xDB, 0x35},
+		Name:      "JMPXDATA",
+		BitPrefix: helpers.BytesPrefix(0xDB, 0x35),
 	}
 }

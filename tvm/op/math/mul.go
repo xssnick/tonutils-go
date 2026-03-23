@@ -23,7 +23,7 @@ func MUL() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Mul(i0, i1))
 		},
-		Name:   "MUL",
-		Prefix: []byte{0xA8},
+		Name:      "MUL",
+		BitPrefix: helpers.BytesPrefix(0xA8),
 	}
 }

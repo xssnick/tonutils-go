@@ -21,7 +21,7 @@ func POW2() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(y.Lsh(big.NewInt(1), uint(y.Uint64())))
 		},
-		Name:   "POW2",
-		Prefix: []byte{0xAE},
+		Name:      "POW2",
+		BitPrefix: helpers.BytesPrefix(0xAE),
 	}
 }

@@ -12,7 +12,7 @@ func init() {
 func CONDSEL() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x0, err := state.Stack.PopAny()
+			y0, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
@@ -20,17 +20,17 @@ func CONDSEL() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			i2, err := state.Stack.PopInt()
+			f2, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
 
-			if i2.Sign() == 0 {
-				return state.Stack.PushAny(x1)
+			if f2.Sign() == 0 {
+				return state.Stack.PushAny(y0)
 			}
-			return state.Stack.PushAny(x0)
+			return state.Stack.PushAny(x1)
 		},
-		Name:   "CONDSEL",
-		Prefix: []byte{0xE3, 0x04},
+		Name:      "CONDSEL",
+		BitPrefix: helpers.BytesPrefix(0xE3, 0x04),
 	}
 }

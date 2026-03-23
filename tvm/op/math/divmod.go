@@ -36,7 +36,7 @@ func DIVMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "DIVMOD",
-		Prefix: []byte{0xA9, 0x0C},
+		Name:      "DIVMOD",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x0C),
 	}
 }

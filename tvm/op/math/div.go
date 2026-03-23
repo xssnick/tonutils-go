@@ -31,7 +31,7 @@ func DIV() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(q)
 		},
-		Name:   "DIV",
-		Prefix: []byte{0xA9, 0x04},
+		Name:      "DIV",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x04),
 	}
 }

@@ -150,6 +150,8 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 	switch v := val.(type) {
 	case nil:
 		b.MustStoreUInt(0x00, 8)
+	case vm.NaN, *vm.NaN:
+		b.MustStoreSlice([]byte{0x02, 0xFF}, 16)
 	case int, int8, int16, int32, int64, uint8, uint16, uint32:
 		b.MustStoreUInt(0x01, 8)
 

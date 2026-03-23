@@ -29,7 +29,7 @@ func BLKPUSH(i, j uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d, %d BLKPUSH", i, j)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0x5F}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0x5F),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
 		},

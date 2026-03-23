@@ -40,7 +40,7 @@ func LSHIFTMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "LSHIFTMOD",
-		Prefix: []byte{0xA9, 0xC8},
+		Name:      "LSHIFTMOD",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xC8),
 	}
 }

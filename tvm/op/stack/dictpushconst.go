@@ -3,11 +3,13 @@ package stack
 import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"math/big"
 )
 
 type OpDICTPUSHCONST struct {
+	helpers.Prefixed
 	cont *cell.Cell
 	pfx  uint64
 }
@@ -18,13 +20,8 @@ func init() {
 
 func DICTPUSHCONST(cont *cell.Cell) *OpDICTPUSHCONST {
 	return &OpDICTPUSHCONST{
-		cont: cont,
-	}
-}
-
-func (op *OpDICTPUSHCONST) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{
-		cell.BeginCell().MustStoreSlice([]byte{0xF4, 0xA4}, 13).ToSlice(),
+		Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(13, []byte{0xF4, 0xA4})),
+		cont:     cont,
 	}
 }
 

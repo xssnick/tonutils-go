@@ -23,7 +23,7 @@ func EQUAL() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Cmp(i1) == 0)
 		},
-		Name:   "EQUAL",
-		Prefix: []byte{0xBA},
+		Name:      "EQUAL",
+		BitPrefix: helpers.BytesPrefix(0xBA),
 	}
 }

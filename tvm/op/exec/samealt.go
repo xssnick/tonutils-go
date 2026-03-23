@@ -15,7 +15,7 @@ func SAMEALT() (op *helpers.SimpleOP) {
 			state.Reg.C[1] = state.Reg.C[0].Copy()
 			return nil
 		},
-		Name:   "SAMEALT",
-		Prefix: []byte{0xED, 0xFA},
+		Name:      "SAMEALT",
+		BitPrefix: helpers.BytesPrefix(0xED, 0xFA),
 	}
 }

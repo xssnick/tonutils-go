@@ -15,7 +15,7 @@ func init() {
 
 func EXPLODE(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6f4, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6f4, 12),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d EXPLODE", n)
 		},

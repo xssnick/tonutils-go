@@ -33,7 +33,7 @@ func REPEATEND() *helpers.SimpleOP {
 				After: state.Reg.C[0],
 			})
 		},
-		Name:   "REPEATEND",
-		Prefix: []byte{0xE5},
+		Name:      "REPEATEND",
+		BitPrefix: helpers.BytesPrefix(0xE5),
 	}
 }

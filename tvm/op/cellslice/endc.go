@@ -18,7 +18,7 @@ func ENDC() *helpers.SimpleOP {
 			}
 			return state.Stack.PushCell(b.EndCell())
 		},
-		Name:   "ENDC",
-		Prefix: []byte{0xC9},
+		Name:      "ENDC",
+		BitPrefix: helpers.BytesPrefix(0xC9),
 	}
 }

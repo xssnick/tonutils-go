@@ -24,7 +24,7 @@ func XCHG2(i, j uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d XCHG2", i, j)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0x50}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0x50),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
 		},

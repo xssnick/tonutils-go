@@ -31,7 +31,7 @@ func DIVR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(q)
 		},
-		Name:   "DIVR",
-		Prefix: []byte{0xA9, 0x05},
+		Name:      "DIVR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x05),
 	}
 }

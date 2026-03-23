@@ -15,7 +15,7 @@ func init() {
 
 func SETINDEX(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6f5, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6f5, 12),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d SETINDEX", n)
 		},

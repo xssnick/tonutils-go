@@ -23,7 +23,7 @@ func GEQ() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Cmp(i1) != -1)
 		},
-		Name:   "GEQ",
-		Prefix: []byte{0xBE},
+		Name:      "GEQ",
+		BitPrefix: helpers.BytesPrefix(0xBE),
 	}
 }

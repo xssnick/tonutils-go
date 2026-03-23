@@ -27,7 +27,7 @@ func STREF() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBuilder(b0)
 		},
-		Name:   "STREF",
-		Prefix: []byte{0xCC},
+		Name:      "STREF",
+		BitPrefix: helpers.BytesPrefix(0xCC),
 	}
 }

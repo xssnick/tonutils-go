@@ -12,8 +12,8 @@ func init() {
 
 func ISTUPLE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "ISTUPLE",
-		Prefix: []byte{0x6f, 0x8a},
+		Name:      "ISTUPLE",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x8a),
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.PopAny()
 			if err != nil {

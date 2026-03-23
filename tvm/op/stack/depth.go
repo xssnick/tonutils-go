@@ -16,7 +16,7 @@ func DEPTH() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return state.Stack.PushInt(big.NewInt(int64(state.Stack.Len())))
 		},
-		Name:   "DEPTH",
-		Prefix: []byte{0x68},
+		Name:      "DEPTH",
+		BitPrefix: helpers.BytesPrefix(0x68),
 	}
 }

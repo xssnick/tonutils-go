@@ -31,7 +31,7 @@ func UNTIL() *helpers.SimpleOP {
 
 			return state.Jump(body)
 		},
-		Name:   "UNTIL",
-		Prefix: []byte{0xE6},
+		Name:      "UNTIL",
+		BitPrefix: helpers.BytesPrefix(0xE6),
 	}
 }

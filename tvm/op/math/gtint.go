@@ -23,7 +23,7 @@ func GTINT(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushBool(i0.Cmp(big.NewInt(int64(value))) == 1)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xC2}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xC2),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},

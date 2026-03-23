@@ -22,7 +22,7 @@ func IFNOTRET() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "IFNOTRET",
-		Prefix: []byte{0xDD},
+		Name:      "IFNOTRET",
+		BitPrefix: helpers.BytesPrefix(0xDD),
 	}
 }

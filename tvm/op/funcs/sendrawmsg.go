@@ -39,7 +39,7 @@ func SENDRAWMSG() *helpers.SimpleOP {
 			state.Reg.D[1] = res
 			return nil
 		},
-		Name:   "SENDRAWMSG",
-		Prefix: []byte{0xFB, 0x00},
+		Name:      "SENDRAWMSG",
+		BitPrefix: helpers.BytesPrefix(0xFB, 0x00),
 	}
 }

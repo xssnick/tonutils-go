@@ -34,7 +34,7 @@ func WHILEEND() *helpers.SimpleOP {
 
 			return state.Jump(cond)
 		},
-		Name:   "WHILEEND",
-		Prefix: []byte{0xE9},
+		Name:      "WHILEEND",
+		BitPrefix: helpers.BytesPrefix(0xE9),
 	}
 }

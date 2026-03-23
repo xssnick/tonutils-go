@@ -1,16 +1,16 @@
 package cell
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"math"
 )
 
 const hashSize = 32
 const depthSize = 2
+
+var castTable = crc32.MakeTable(crc32.Castagnoli)
 
 var bocMagic = []byte{0xB5, 0xEE, 0x9C, 0x72}
 
@@ -35,42 +35,84 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 	}
 
 	r := newReader(data)
+	readDyn := func(size int, name string) (int, error) {
+		b, err := r.ReadBytes(size)
+		if err != nil {
+			return 0, fmt.Errorf("failed to read %s: %w", name, err)
+		}
+		return dynInt(b), nil
+	}
 
-	if !bytes.Equal(r.MustReadBytes(4), bocMagic) {
+	magic := r.MustReadBytes(4)
+	if !matchBOCMagic(magic, bocMagic) {
 		return nil, errors.New("invalid boc magic header")
 	}
 
 	flags, cellNumSizeBytes := parseBOCFlags(r.MustReadByte()) // has_idx:(## 1) has_crc32c:(## 1)  has_cache_bits:(## 1) flags:(## 2) { flags = 0 } size:(## 3) { size <= 4 }
-	dataSizeBytes := int(r.MustReadByte())                     // off_bytes:(## 8) { off_bytes <= 8 }
+	if cellNumSizeBytes < 1 || cellNumSizeBytes > 4 {
+		return nil, errors.New("invalid boc size descriptor")
+	}
 
-	cellsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) // cells:(##(size * 8))
-	rootsNum := dynInt(r.MustReadBytes(cellNumSizeBytes)) // roots:(##(size * 8)) { roots >= 1 }
+	dataSizeBytes := int(r.MustReadByte()) // off_bytes:(## 8) { off_bytes <= 8 }
+	if dataSizeBytes < 1 || dataSizeBytes > 8 {
+		return nil, errors.New("invalid boc offset descriptor")
+	}
+
+	cellsNum, err := readDyn(cellNumSizeBytes, "cells count") // cells:(##(size * 8))
+	if err != nil {
+		return nil, err
+	}
+	rootsNum, err := readDyn(cellNumSizeBytes, "roots count") // roots:(##(size * 8)) { roots >= 1 }
+	if err != nil {
+		return nil, err
+	}
+	if cellsNum <= 0 || rootsNum <= 0 {
+		return nil, errors.New("invalid boc counters")
+	}
 
 	// complete BOCs - ??? (absent:(##(size * 8)) { roots + absent <= cells })
-	_ = r.MustReadBytes(cellNumSizeBytes)
+	absentNum, err := readDyn(cellNumSizeBytes, "absent count")
+	if err != nil {
+		return nil, err
+	}
+	if absentNum < 0 || absentNum > cellsNum || rootsNum+absentNum > cellsNum {
+		return nil, errors.New("invalid boc counters")
+	}
 
-	dataLen := dynInt(r.MustReadBytes(dataSizeBytes)) // tot_cells_size:(##(off_bytes * 8))
+	dataLen, err := readDyn(dataSizeBytes, "cells data size") // tot_cells_size:(##(off_bytes * 8))
+	if err != nil {
+		return nil, err
+	}
+	if dataLen < cellsNum*2 {
+		return nil, errors.New("invalid boc cells data size")
+	}
 
 	// with checksum
 	if flags.HasCrc32c {
-		crc := crc32.Checksum(data[:len(data)-4], crc32.MakeTable(crc32.Castagnoli))
+		crc := crc32.Checksum(data[:len(data)-4], castTable)
 		if binary.LittleEndian.Uint32(data[len(data)-4:]) != crc {
 			return nil, errors.New("checksum not matches")
 		}
-	}
-
-	rootsIndex := make([]int, rootsNum)
-	for i := 0; i < rootsNum; i++ {
-		rootsIndex[i] = dynInt(r.MustReadBytes(cellNumSizeBytes))
 	}
 
 	if flags.hasCacheBits && !flags.hasIndex {
 		return nil, fmt.Errorf("cache flag cant be set without index flag")
 	}
 
+	rootsIndex := make([]int, rootsNum)
+	for i := 0; i < rootsNum; i++ {
+		rootsIndex[i], err = readDyn(cellNumSizeBytes, "root index")
+		if err != nil {
+			return nil, err
+		}
+		if rootsIndex[i] < 0 || rootsIndex[i] >= cellsNum {
+			return nil, errors.New("invalid root index")
+		}
+	}
+
 	var index []int
 	if flags.hasIndex {
-		index = make([]int, 0, cellsNum)
+		index = make([]int, cellsNum)
 		idxData, err := r.ReadBytes(cellsNum * dataSizeBytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read custom index, err: %v", err)
@@ -83,7 +125,7 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 				// we don't need a cache, cause our loader uses memory
 				val /= 2
 			}
-			index = append(index, val)
+			index[i] = val
 		}
 	}
 
@@ -148,10 +190,13 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 		}
 
 		if withHashes {
-			maskBits := int(math.Ceil(math.Log2(float64(levelMask.Mask) + 1)))
-			hashesNum := maskBits + 1
+			hashesNum := levelMask.getHashesCount()
+			hashesSize := hashesNum*hashSize + hashesNum*depthSize
+			if len(data)-offset < hashesSize {
+				return nil, errors.New("failed to parse cell hashes, corrupted data")
+			}
 
-			offset += hashesNum*hashSize + hashesNum*depthSize
+			offset += hashesSize
 			// TODO: check depth and hashes
 		}
 
@@ -162,16 +207,11 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 			return nil, errors.New("failed to parse cell refs, corrupted data")
 		}
 
-		refsIndex := make([]int, 0, refsNum)
+		refs := make([]*Cell, refsNum)
 		for y := 0; y < refsNum; y++ {
-			refIndex := data[offset : offset+refSzBytes]
-
-			refsIndex = append(refsIndex, dynInt(refIndex))
+			id := dynInt(data[offset : offset+refSzBytes])
 			offset += refSzBytes
-		}
 
-		refs := make([]*Cell, len(refsIndex))
-		for y, id := range refsIndex {
 			if i == id {
 				return nil, errors.New("recursive reference of cells")
 			}
@@ -209,6 +249,9 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 
 	for i := len(cells) - 1; i >= 0; i-- {
 		cells[i].calculateHashes()
+		if err := validateLoadedCell(cells[i]); err != nil {
+			return nil, fmt.Errorf("invalid cell #%d: %w", i, err)
+		}
 	}
 
 	for i, idx := range rootsIndex {
@@ -227,8 +270,13 @@ func parseBOCFlags(data byte) (bocFlags, int) {
 }
 
 func dynInt(data []byte) int {
-	tmp := make([]byte, 8)
-	copy(tmp[8-len(data):], data)
+	var v uint64
+	for _, b := range data {
+		v = (v << 8) | uint64(b)
+	}
+	return int(v)
+}
 
-	return int(binary.BigEndian.Uint64(tmp))
+func matchBOCMagic(magic, expected []byte) bool {
+	return magic[0] == expected[0] && magic[1] == expected[1] && magic[2] == expected[2] && magic[3] == expected[3]
 }

@@ -26,7 +26,7 @@ func SAVECTR(i int) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("c%d SAVECTR", i)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xED, 0xA0}, 12).EndCell(),
+		BitPrefix: helpers.SlicePrefix(12, []byte{0xED, 0xA0}),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4)
 		},

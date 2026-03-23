@@ -37,7 +37,7 @@ func MULRSHIFTMOD_VAR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "MULRSHIFTMOD_VAR",
-		Prefix: []byte{0xA9, 0xAC},
+		Name:      "MULRSHIFTMOD_VAR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xAC),
 	}
 }

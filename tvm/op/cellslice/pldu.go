@@ -28,13 +28,12 @@ func PLDU(sz uint) (op *helpers.AdvancedOP) {
 			if err != nil {
 				return err
 			}
-
-			return state.Stack.PushSlice(s0)
+			return nil
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d PLDU", sz)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xD7, 0x0B}, 16).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xD7, 0x0B),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(sz-1), 8)
 		},

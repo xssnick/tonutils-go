@@ -4,10 +4,12 @@ import (
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 type OpPUSHL struct {
+	helpers.Prefixed
 	stackIndex uint8
 }
 
@@ -16,11 +18,10 @@ func init() {
 }
 
 func PUSHL(index uint8) *OpPUSHL {
-	return &OpPUSHL{stackIndex: index}
-}
-
-func (op *OpPUSHL) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0x56, 8).EndCell().BeginParse()}
+	return &OpPUSHL{
+		Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0x56, 8)),
+		stackIndex: index,
+	}
 }
 
 func (op *OpPUSHL) Deserialize(code *cell.Slice) error {

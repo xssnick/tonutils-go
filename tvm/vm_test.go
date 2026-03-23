@@ -39,6 +39,17 @@ func TestTVM_Execute(t *testing.T) {
 	t.Log(s.String())
 }
 
+func TestTVM_ExecuteRetAltIsSuccessful(t *testing.T) {
+	v := NewTVM()
+
+	code := cell.BeginCell().MustStoreSlice([]byte{0xDB, 0x31}, 16).EndCell()
+
+	err := v.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, vm.NewStack())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTVM_ExecuteJetton(t *testing.T) {
 	v := NewTVM()
 

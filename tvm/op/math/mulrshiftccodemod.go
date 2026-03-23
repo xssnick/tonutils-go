@@ -35,7 +35,7 @@ func MULRSHIFTCCODEMOD(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushInt(r)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xA9, 0xBE}, 16).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xBE),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},

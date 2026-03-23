@@ -31,7 +31,7 @@ func MULRSHIFT() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(q)
 		},
-		Name:   "MULRSHIFT",
-		Prefix: []byte{0xA9, 0xA4},
+		Name:      "MULRSHIFT",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xA4),
 	}
 }

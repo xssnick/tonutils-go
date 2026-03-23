@@ -14,7 +14,7 @@ func NOP() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return nil
 		},
-		Name:   "NOP",
-		Prefix: []byte{0x00},
+		Name:      "NOP",
+		BitPrefix: helpers.BytesPrefix(0x00),
 	}
 }

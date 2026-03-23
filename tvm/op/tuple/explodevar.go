@@ -11,8 +11,8 @@ func init() {
 
 func EXPLODEVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "EXPLODEVAR",
-		Prefix: []byte{0x6f, 0x84},
+		Name:      "EXPLODEVAR",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x84),
 		Action: func(state *vm.State) error {
 			max, err := state.Stack.PopIntRange(0, 255)
 			if err != nil {

@@ -12,6 +12,8 @@ import (
 
 type Null struct{}
 
+type NaN struct{}
+
 type SendMsgAction struct {
 	Mode uint8
 	Msg  *cell.Cell
@@ -20,6 +22,9 @@ type SendMsgAction struct {
 type Stack struct {
 	elems []any
 }
+
+var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
 func NewStack() *Stack {
 	return &Stack{
@@ -50,16 +55,20 @@ func (s *Stack) PushContinuation(val Continuation) error {
 	return s.PushAny(val)
 }
 
+func fitsTVMInt(val *big.Int) bool {
+	return val.Cmp(minTVMInt) >= 0 && val.Cmp(maxTVMInt) <= 0
+}
+
 func (s *Stack) PushInt(val *big.Int) error {
-	if val.BitLen() > 256 { // 257th bit is sign
+	if !fitsTVMInt(val) {
 		return vmerr.Error(vmerr.CodeIntOverflow)
 	}
 	return s.PushAny(val)
 }
 
 func (s *Stack) PushIntQuiet(val *big.Int) error {
-	if val.BitLen() > 256 { // 257th bit is sign
-		val = nil // NaN
+	if !fitsTVMInt(val) {
+		return s.PushAny(NaN{})
 	}
 	return s.PushAny(val)
 }
@@ -73,6 +82,9 @@ func (s *Stack) PushAny(val any) error {
 	case *big.Int:
 		// TODO: maybe optimize
 		val = new(big.Int).Set(t) // copy for safety
+	case NaN:
+	case *NaN:
+		val = NaN{}
 	case *cell.Cell:
 	case *cell.Builder:
 		val = t.Copy()
@@ -95,8 +107,8 @@ func (s *Stack) PushAny(val any) error {
 
 func (s *Stack) SplitTop(top, drop int) (*Stack, error) {
 	n := s.Len()
-	if top >= n || drop > n-top {
-		return NewStack(), nil
+	if top < 0 || drop < 0 || top > n || drop > n-top {
+		return nil, vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
 	newStack := NewStack()
@@ -119,16 +131,17 @@ func (s *Stack) Clear() {
 }
 
 func (s *Stack) MoveFrom(from *Stack, num int) error {
-	if len(from.elems) < num {
+	if num < 0 || len(from.elems) < num {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	if len(s.elems)+num >= 255 {
+	if len(s.elems)+num > 255 {
 		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 
-	s.elems = append(s.elems, from.elems[:num]...)
-	from.elems = from.elems[num:]
+	fromStart := len(from.elems) - num
+	s.elems = append(s.elems, from.elems[fromStart:]...)
+	from.elems = from.elems[:fromStart]
 
 	return nil
 }
@@ -184,10 +197,14 @@ func (s *Stack) PopInt() (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v, ok := e.(*big.Int); !ok {
-		return nil, vmerr.Error(vmerr.CodeTypeCheck)
-	} else {
+
+	switch v := e.(type) {
+	case NaN, *NaN:
+		return nil, nil
+	case *big.Int:
 		return v, nil
+	default:
+		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 }
 
@@ -337,6 +354,10 @@ func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 		return nil, err
 	}
 
+	if e == nil {
+		return nil, vmerr.Error(vmerr.CodeIntOverflow)
+	}
+
 	if e.Cmp(big.NewInt(min)) < 0 || e.Cmp(big.NewInt(max)) > 0 {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
@@ -376,6 +397,9 @@ func (s *Stack) String() string {
 		case nil:
 			typ = "nil"
 			val = "nil"
+		case NaN, *NaN:
+			typ = "nan"
+			val = "NaN"
 		case *big.Int:
 			typ = "int"
 			val = x.String()

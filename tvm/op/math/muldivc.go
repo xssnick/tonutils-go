@@ -36,7 +36,7 @@ func MULDIVC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(q)
 		},
-		Name:   "MULDIVC",
-		Prefix: []byte{0xA9, 0x86},
+		Name:      "MULDIVC",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x86),
 	}
 }

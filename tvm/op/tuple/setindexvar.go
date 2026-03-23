@@ -11,8 +11,8 @@ func init() {
 
 func SETINDEXVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "SETINDEXVAR",
-		Prefix: []byte{0x6f, 0x85},
+		Name:      "SETINDEXVAR",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x85),
 		Action: func(state *vm.State) error {
 			idx, err := state.Stack.PopIntRange(0, 254)
 			if err != nil {

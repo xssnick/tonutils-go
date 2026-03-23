@@ -18,7 +18,7 @@ func XCHGX() *helpers.SimpleOP {
 			}
 			return state.Stack.Exchange(0, idx)
 		},
-		Name:   "XCHGX",
-		Prefix: []byte{0x67},
+		Name:      "XCHGX",
+		BitPrefix: helpers.BytesPrefix(0x67),
 	}
 }

@@ -40,7 +40,7 @@ func LSHIFTDIVR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(q)
 		},
-		Name:   "LSHIFTDIVR",
-		Prefix: []byte{0xA9, 0xC5},
+		Name:      "LSHIFTDIVR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xC5),
 	}
 }

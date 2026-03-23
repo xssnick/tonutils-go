@@ -33,7 +33,7 @@ func LDI(sz uint) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d LDI", sz)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xD2}, 8).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xD2),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(sz-1), 8)
 		},

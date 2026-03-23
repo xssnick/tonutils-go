@@ -32,7 +32,7 @@ func MULMODPOW2R_VAR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "MULMODPOW2R_VAR",
-		Prefix: []byte{0xA9, 0xA9},
+		Name:      "MULMODPOW2R_VAR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xA9),
 	}
 }

@@ -21,6 +21,7 @@ const (
 )
 
 const maxDepth = 1024
+const maxCellDataBytes = 128
 
 type Cell struct {
 	special   bool
@@ -55,8 +56,17 @@ func (c *Cell) copy() *Cell {
 	}
 }
 
+func (c *Cell) cloneWithRef(i int, ref *Cell) *Cell {
+	cp := c.copy()
+	cp.refs[i] = ref
+	cp.calculateHashes()
+	return cp
+}
+
 func (c *Cell) BeginParse() *Slice {
-	// copy data
+	// Copy data to keep the returned slice a stable snapshot. This is important
+	// even though Cell is logically immutable, because RawUnsafe helpers expose
+	// the backing byte storage to callers.
 	data := append([]byte{}, c.data...)
 
 	return &Slice{

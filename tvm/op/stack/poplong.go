@@ -4,10 +4,12 @@ import (
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 type OpPOPL struct {
+	helpers.Prefixed
 	stackIndex uint8
 }
 
@@ -16,11 +18,10 @@ func init() {
 }
 
 func POPL(index uint8) *OpPOPL {
-	return &OpPOPL{stackIndex: index}
-}
-
-func (op *OpPOPL) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0x57, 8).EndCell().BeginParse()}
+	return &OpPOPL{
+		Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0x57, 8)),
+		stackIndex: index,
+	}
 }
 
 func (op *OpPOPL) Deserialize(code *cell.Slice) error {

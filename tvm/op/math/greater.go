@@ -23,7 +23,7 @@ func GREATER() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Cmp(i1) == 1)
 		},
-		Name:   "GREATER",
-		Prefix: []byte{0xBC},
+		Name:      "GREATER",
+		BitPrefix: helpers.BytesPrefix(0xBC),
 	}
 }

@@ -20,7 +20,7 @@ func XCHG0L(i uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d XCHG0", i)
 		},
-		Prefix: cell.BeginCell().MustStoreUInt(0x11, 8).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x11, 8),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 8)
 		},

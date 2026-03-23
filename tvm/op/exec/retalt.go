@@ -14,7 +14,7 @@ func RETALT() (op *helpers.SimpleOP) {
 		Action: func(state *vm.State) error {
 			return state.ReturnAlt()
 		},
-		Name:   "RETALT",
-		Prefix: []byte{0xDB, 0x31},
+		Name:      "RETALT",
+		BitPrefix: helpers.BytesPrefix(0xDB, 0x31),
 	}
 }

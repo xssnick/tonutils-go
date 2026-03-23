@@ -8,6 +8,7 @@ import (
 )
 
 type OpXCHG struct {
+	helpers.Prefixed
 	a uint8
 	b uint8
 }
@@ -18,15 +19,12 @@ func init() {
 
 func XCHG(a, b uint8) *OpXCHG {
 	return &OpXCHG{
+		Prefixed: helpers.NewPrefixed(
+			helpers.UIntPrefix(0x0, 4),
+			helpers.UIntPrefix(0x1, 4),
+			helpers.UIntPrefix(0x10, 8),
+		),
 		a: a, b: b,
-	}
-}
-
-func (op *OpXCHG) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{
-		cell.BeginCell().MustStoreUInt(0x0, 4).EndCell().BeginParse(),
-		cell.BeginCell().MustStoreUInt(0x1, 4).EndCell().BeginParse(),
-		cell.BeginCell().MustStoreUInt(0x10, 8).EndCell().BeginParse(),
 	}
 }
 

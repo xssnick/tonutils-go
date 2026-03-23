@@ -23,7 +23,7 @@ func TUCK() *helpers.SimpleOP {
 
 			return state.Stack.PushAny(b)
 		},
-		Name:   "TUCK",
-		Prefix: []byte{0x66},
+		Name:      "TUCK",
+		BitPrefix: helpers.BytesPrefix(0x66),
 	}
 }

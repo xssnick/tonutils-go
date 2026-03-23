@@ -32,7 +32,7 @@ func RSHIFTRCODEMOD(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushInt(r)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0xA9, 0x3D}, 16).EndCell(),
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x3D),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},

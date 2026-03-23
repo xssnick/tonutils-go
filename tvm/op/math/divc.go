@@ -31,7 +31,7 @@ func DIVC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(q)
 		},
-		Name:   "DIVC",
-		Prefix: []byte{0xA9, 0x06},
+		Name:      "DIVC",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x06),
 	}
 }

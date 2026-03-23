@@ -28,7 +28,7 @@ func LDGRAMS() *helpers.SimpleOP {
 			}
 			return state.Stack.PushSlice(s)
 		},
-		Name:   "LDGRAMS",
-		Prefix: []byte{0xFA, 0x00},
+		Name:      "LDGRAMS",
+		BitPrefix: helpers.BytesPrefix(0xFA, 0x00),
 	}
 }

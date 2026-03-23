@@ -22,7 +22,7 @@ func ENDS() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "ENDS",
-		Prefix: []byte{0xD1},
+		Name:      "ENDS",
+		BitPrefix: helpers.BytesPrefix(0xD1),
 	}
 }

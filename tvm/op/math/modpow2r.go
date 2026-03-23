@@ -29,7 +29,7 @@ func MODPOW2R() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "MODPOW2R",
-		Prefix: []byte{0xA9, 0x29},
+		Name:      "MODPOW2R",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x29),
 	}
 }

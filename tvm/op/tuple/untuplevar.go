@@ -14,8 +14,8 @@ func init() {
 
 func UNTUPLEVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "UNTUPLEVAR",
-		Prefix: []byte{0x6f, 0x82},
+		Name:      "UNTUPLEVAR",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x82),
 		Action: func(state *vm.State) error {
 			count, err := state.Stack.PopIntRange(0, 255)
 			if err != nil {
@@ -28,8 +28,8 @@ func UNTUPLEVAR() *helpers.SimpleOP {
 
 func UNPACKFIRSTVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "UNPACKFIRSTVAR",
-		Prefix: []byte{0x6f, 0x83},
+		Name:      "UNPACKFIRSTVAR",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x83),
 		Action: func(state *vm.State) error {
 			count, err := state.Stack.PopIntRange(0, 255)
 			if err != nil {

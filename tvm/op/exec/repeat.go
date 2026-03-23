@@ -42,7 +42,7 @@ func REPEAT() *helpers.SimpleOP {
 				After: after,
 			})
 		},
-		Name:   "REPEAT",
-		Prefix: []byte{0xE4},
+		Name:      "REPEAT",
+		BitPrefix: helpers.BytesPrefix(0xE4),
 	}
 }

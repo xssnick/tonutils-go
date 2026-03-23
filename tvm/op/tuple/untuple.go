@@ -17,7 +17,7 @@ func init() {
 
 func UNTUPLE(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6f2, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6f2, 12),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d UNTUPLE", n)
 		},
@@ -40,7 +40,7 @@ func UNTUPLE(n uint8) *helpers.AdvancedOP {
 
 func UNPACKFIRST(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6f3, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6f3, 12),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d UNPACKFIRST", n)
 		},

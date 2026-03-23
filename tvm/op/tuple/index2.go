@@ -19,7 +19,7 @@ func init() {
 
 func INDEX2(i, j uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6fb, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6fb, 12),
 		NameSerializer: func() string {
 			return fmt.Sprintf("INDEX2 %d,%d", i, j)
 		},
@@ -44,7 +44,7 @@ func INDEX2(i, j uint8) *helpers.AdvancedOP {
 
 func INDEX3(i, j, k uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6fc>>2, 10).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6fc>>2, 10),
 		NameSerializer: func() string {
 			return fmt.Sprintf("INDEX3 %d,%d,%d", i, j, k)
 		},

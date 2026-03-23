@@ -42,7 +42,7 @@ func ADDDIVMODC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "ADDDIVMODC",
-		Prefix: []byte{0xA9, 0x02},
+		Name:      "ADDDIVMODC",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x02),
 	}
 }

@@ -40,7 +40,7 @@ func LSHIFTDIV() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(q)
 		},
-		Name:   "LSHIFTDIV",
-		Prefix: []byte{0xA9, 0xC4},
+		Name:      "LSHIFTDIV",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xC4),
 	}
 }

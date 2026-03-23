@@ -39,7 +39,7 @@ func ROT() *helpers.SimpleOP {
 
 			return nil
 		},
-		Name:   "ROT",
-		Prefix: []byte{0x58},
+		Name:      "ROT",
+		BitPrefix: helpers.BytesPrefix(0x58),
 	}
 }

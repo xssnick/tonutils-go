@@ -25,7 +25,7 @@ func OVER2() *helpers.SimpleOP {
 			}
 			return state.Stack.PushAny(val)
 		},
-		Name:   "2OVER",
-		Prefix: []byte{0x5D},
+		Name:      "2OVER",
+		BitPrefix: helpers.BytesPrefix(0x5D),
 	}
 }

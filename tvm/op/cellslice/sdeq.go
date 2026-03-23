@@ -26,7 +26,7 @@ func SDEQ() *helpers.SimpleOP {
 			res := bytes.Equal(s0.MustToCell().Hash(), s1.MustToCell().Hash())
 			return state.Stack.PushBool(res)
 		},
-		Name:   "SDEQ",
-		Prefix: []byte{0xC7, 0x05},
+		Name:      "SDEQ",
+		BitPrefix: helpers.BytesPrefix(0xC7, 0x05),
 	}
 }

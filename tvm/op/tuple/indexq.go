@@ -14,7 +14,7 @@ func init() {
 
 func INDEXQ(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		Prefix: cell.BeginCell().MustStoreUInt(0x6f6, 12).EndCell(),
+		BitPrefix: helpers.UIntPrefix(0x6f6, 12),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d INDEXQ", n)
 		},

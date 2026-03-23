@@ -27,7 +27,7 @@ func IFNOTJMP() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "IFNOTJMP",
-		Prefix: []byte{0xE1},
+		Name:      "IFNOTJMP",
+		BitPrefix: helpers.BytesPrefix(0xE1),
 	}
 }

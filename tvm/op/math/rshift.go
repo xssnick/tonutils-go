@@ -23,7 +23,7 @@ func RSHIFT() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(x.Rsh(x, uint(y.Uint64())))
 		},
-		Name:   "RSHIFT",
-		Prefix: []byte{0xAD},
+		Name:      "RSHIFT",
+		BitPrefix: helpers.BytesPrefix(0xAD),
 	}
 }

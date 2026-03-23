@@ -27,7 +27,7 @@ func UNTILEND() *helpers.SimpleOP {
 
 			return state.Jump(body)
 		},
-		Name:   "UNTILEND",
-		Prefix: []byte{0xE7},
+		Name:      "UNTILEND",
+		BitPrefix: helpers.BytesPrefix(0xE7),
 	}
 }

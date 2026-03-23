@@ -13,8 +13,8 @@ func init() {
 
 func TLEN() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:   "TLEN",
-		Prefix: []byte{0x6f, 0x88},
+		Name:      "TLEN",
+		BitPrefix: helpers.BytesPrefix(0x6f, 0x88),
 		Action: func(state *vm.State) error {
 			tup, err := state.Stack.PopTupleRange(255)
 			if err != nil {

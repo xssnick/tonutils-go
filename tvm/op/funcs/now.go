@@ -18,7 +18,7 @@ func NOW() *helpers.SimpleOP {
 			}
 			return state.Stack.PushAny(v)
 		},
-		Name:   "NOW",
-		Prefix: []byte{0xF8, 0x23},
+		Name:      "NOW",
+		BitPrefix: helpers.BytesPrefix(0xF8, 0x23),
 	}
 }

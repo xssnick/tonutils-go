@@ -34,7 +34,7 @@ func RSHIFTMODC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "RSHIFTMODC",
-		Prefix: []byte{0xA9, 0x2E},
+		Name:      "RSHIFTMODC",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x2E),
 	}
 }

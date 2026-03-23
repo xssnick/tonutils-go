@@ -34,7 +34,7 @@ func DIVMODC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "DIVMODC",
-		Prefix: []byte{0xA9, 0x0E},
+		Name:      "DIVMODC",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x0E),
 	}
 }

@@ -46,7 +46,7 @@ func LSHIFTDIVMODC() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "LSHIFTDIVMODC",
-		Prefix: []byte{0xA9, 0xCE},
+		Name:      "LSHIFTDIVMODC",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0xCE),
 	}
 }

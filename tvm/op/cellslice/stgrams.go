@@ -27,7 +27,7 @@ func STGRAMS() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBuilder(b1)
 		},
-		Name:   "STGRAMS",
-		Prefix: []byte{0xFA, 0x02},
+		Name:      "STGRAMS",
+		BitPrefix: helpers.BytesPrefix(0xFA, 0x02),
 	}
 }

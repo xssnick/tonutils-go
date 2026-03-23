@@ -19,7 +19,7 @@ func BLKDROP(num uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d BLKDROP", num)
 		},
-		Prefix: cell.BeginCell().MustStoreSlice([]byte{0x5F, 0x00}, 12).EndCell(),
+		BitPrefix: helpers.SlicePrefix(12, []byte{0x5F, 0x00}),
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(num), 4)
 		},

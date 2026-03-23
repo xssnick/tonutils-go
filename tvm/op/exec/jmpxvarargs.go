@@ -35,7 +35,7 @@ func JMPXVARARGS() *helpers.SimpleOP {
 
 			return state.JumpArgs(cont, params)
 		},
-		Name:   "JMPXVARARGS",
-		Prefix: []byte{0xDB, 0x3A},
+		Name:      "JMPXVARARGS",
+		BitPrefix: helpers.BytesPrefix(0xDB, 0x3A),
 	}
 }

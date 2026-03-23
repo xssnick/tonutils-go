@@ -25,7 +25,7 @@ func BOOLOR() (op *helpers.SimpleOP) {
 			cont.GetControlData().Save.Define(1, val)
 			return state.Stack.PushContinuation(cont)
 		},
-		Name:   "BOOLOR",
-		Prefix: []byte{0xED, 0xF1},
+		Name:      "BOOLOR",
+		BitPrefix: helpers.BytesPrefix(0xED, 0xF1),
 	}
 }

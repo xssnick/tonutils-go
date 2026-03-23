@@ -22,7 +22,7 @@ func CHKDEPTH() *helpers.SimpleOP {
 			}
 			return nil
 		},
-		Name:   "CHKDEPTH",
-		Prefix: []byte{0x69},
+		Name:      "CHKDEPTH",
+		BitPrefix: helpers.BytesPrefix(0x69),
 	}
 }

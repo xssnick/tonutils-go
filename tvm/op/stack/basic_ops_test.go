@@ -61,3 +61,33 @@ func TestNIP(t *testing.T) {
 		}
 	}
 }
+
+func TestCONDSELReturnsFirstValueForTrueFlag(t *testing.T) {
+	st := newStack(1, 111, 222)
+	if err := CONDSEL().Interpret(&vm.State{Stack: st}); err != nil {
+		t.Fatalf("CONDSEL failed: %v", err)
+	}
+
+	got := popInts(t, st, 1)
+	want := []int64{111}
+	for i, v := range want {
+		if got[i] != v {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	}
+}
+
+func TestCONDSELReturnsSecondValueForFalseFlag(t *testing.T) {
+	st := newStack(0, 111, 222)
+	if err := CONDSEL().Interpret(&vm.State{Stack: st}); err != nil {
+		t.Fatalf("CONDSEL failed: %v", err)
+	}
+
+	got := popInts(t, st, 1)
+	want := []int64{222}
+	for i, v := range want {
+		if got[i] != v {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+	}
+}

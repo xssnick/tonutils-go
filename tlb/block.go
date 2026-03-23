@@ -12,10 +12,10 @@ type StateUpdate struct {
 }
 
 type McBlockExtra struct {
-	_           Magic            `tlb:"#cca5"`
-	KeyBlock    bool             `tlb:"bool"`
-	ShardHashes *cell.Dictionary `tlb:"dict 32"` // TODO: aug
-	ShardFees   *cell.Dictionary `tlb:"dict 96"` // TODO: aug
+	_           Magic             `tlb:"#cca5"`
+	KeyBlock    bool              `tlb:"bool"`
+	ShardHashes *cell.Dictionary  `tlb:"dict 32"`
+	ShardFees   *ShardFeesAugDict `tlb:"."`
 	Details     struct {
 		PrevBlockSignatures *cell.Dictionary `tlb:"dict 16"`
 		RecoverCreateMsg    *cell.Cell       `tlb:"maybe ^"`
@@ -40,14 +40,14 @@ type BlockExtra struct {
 }
 
 type ShardAccountBlocks struct {
-	Accounts *cell.Dictionary `tlb:"dict 256"`
+	Accounts *ShardAccountBlocksAugDict `tlb:"."`
 }
 
 type AccountBlock struct {
-	_            Magic            `tlb:"#5"`
-	Addr         []byte           `tlb:"bits 256"`
-	Transactions *cell.Dictionary `tlb:"dict inline 64"`
-	StateUpdate  *cell.Cell       `tlb:"^"`
+	_            Magic                       `tlb:"#5"`
+	Addr         []byte                      `tlb:"bits 256"`
+	Transactions *AccountTransactionsAugDict `tlb:"."`
+	StateUpdate  *cell.Cell                  `tlb:"^"`
 }
 
 type Block struct {

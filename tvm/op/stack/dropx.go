@@ -18,7 +18,7 @@ func DROPX() *helpers.SimpleOP {
 			}
 			return state.Stack.Drop(idx)
 		},
-		Name:   "DROPX",
-		Prefix: []byte{0x65},
+		Name:      "DROPX",
+		BitPrefix: helpers.BytesPrefix(0x65),
 	}
 }

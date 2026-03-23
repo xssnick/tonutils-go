@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestStack_ToCell(t *testing.T) {
@@ -129,5 +130,36 @@ func TestParseStackValue(t *testing.T) {
 
 	if !bytes.Equal(b.EndCell().Hash(), c.Hash()) {
 		t.Fatal("rebuild not same", err)
+	}
+}
+
+func TestNewStackFromVMSerializesNaN(t *testing.T) {
+	vmStack := vm.NewStack()
+	overflow := new(big.Int).Lsh(big.NewInt(1), 257)
+	if err := vmStack.PushIntQuiet(overflow); err != nil {
+		t.Fatalf("push quiet overflow: %v", err)
+	}
+
+	stack, err := NewStackFromVM(vmStack)
+	if err != nil {
+		t.Fatalf("stack from vm: %v", err)
+	}
+
+	cellValue, err := stack.ToCell()
+	if err != nil {
+		t.Fatalf("stack to cell: %v", err)
+	}
+
+	var parsed Stack
+	if err = parsed.LoadFromCell(cellValue.BeginParse()); err != nil {
+		t.Fatalf("stack from cell: %v", err)
+	}
+
+	val, err := parsed.Pop()
+	if err != nil {
+		t.Fatalf("pop serialized value: %v", err)
+	}
+	if _, ok := val.(StackNaN); !ok {
+		t.Fatalf("expected StackNaN after serialization, got %T", val)
 	}
 }

@@ -39,7 +39,7 @@ func DIVMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:   "DIVMODR",
-		Prefix: []byte{0xA9, 0x0D},
+		Name:      "DIVMODR",
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x0D),
 	}
 }

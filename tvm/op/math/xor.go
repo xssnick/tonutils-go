@@ -23,7 +23,7 @@ func XOR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(i0.Xor(i0, i1))
 		},
-		Name:   "XOR",
-		Prefix: []byte{0xB2},
+		Name:      "XOR",
+		BitPrefix: helpers.BytesPrefix(0xB2),
 	}
 }

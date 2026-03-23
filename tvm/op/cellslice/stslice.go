@@ -27,7 +27,7 @@ func STSLICE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBuilder(b0)
 		},
-		Name:   "STSLICE",
-		Prefix: []byte{0xCE},
+		Name:      "STSLICE",
+		BitPrefix: helpers.BytesPrefix(0xCE),
 	}
 }

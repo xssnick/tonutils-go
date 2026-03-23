@@ -16,10 +16,10 @@ func ISPOS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			
+
 			return state.Stack.PushBool(i0.Sign() == 1)
 		},
-		Name:   "ISPOS",
-		Prefix: []byte{0xC2, 0x00},
+		Name:      "ISPOS",
+		BitPrefix: helpers.BytesPrefix(0xC2, 0x00),
 	}
 }

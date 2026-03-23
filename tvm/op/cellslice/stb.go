@@ -27,7 +27,7 @@ func STB() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBuilder(b0)
 		},
-		Name:   "STB",
-		Prefix: []byte{0xCF, 0x13},
+		Name:      "STB",
+		BitPrefix: helpers.BytesPrefix(0xCF, 0x13),
 	}
 }

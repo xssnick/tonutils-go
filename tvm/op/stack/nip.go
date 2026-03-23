@@ -14,7 +14,7 @@ func NIP() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return state.Stack.PopSwapAt(1)
 		},
-		Name:   "NIP",
-		Prefix: []byte{0x31},
+		Name:      "NIP",
+		BitPrefix: helpers.BytesPrefix(0x31),
 	}
 }
