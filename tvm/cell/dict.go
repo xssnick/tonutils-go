@@ -10,7 +10,9 @@ import (
 type Dictionary struct {
 	keySz uint
 
-	root *Cell
+	root         *Cell
+	observer     Observer
+	skipRootLoad bool
 }
 
 type HashmapKV struct {
@@ -50,13 +52,15 @@ func (c *Slice) ToDict(keySz uint) (*Dictionary, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if err = validatePlainDictRoot(root, keySz); err != nil {
 		return nil, fmt.Errorf("failed to validate dict: %w", err)
 	}
-	return &Dictionary{
+
+	return (&Dictionary{
 		keySz: keySz,
 		root:  root,
-	}, nil
+	}).SetObserver(c.observer), nil
 }
 
 func (c *Slice) MustLoadDict(keySz uint) *Dictionary {
@@ -88,9 +92,48 @@ func (d *Dictionary) GetKeySize() uint {
 
 func (d *Dictionary) Copy() *Dictionary {
 	return &Dictionary{
-		keySz: d.keySz,
-		root:  d.root,
+		keySz:        d.keySz,
+		root:         d.root,
+		observer:     d.observer,
+		skipRootLoad: d.skipRootLoad,
 	}
+}
+
+func (d *Dictionary) SetObserver(observer Observer) *Dictionary {
+	d.observer = observer
+	d.skipRootLoad = observer != nil
+	return d
+}
+
+func (d *Dictionary) beginParse(c *Cell) *Slice {
+	if d != nil {
+		return d.beginParseNode(c)
+	}
+	return c.BeginParse()
+}
+
+func beginParseObserved(c *Cell, observer Observer, charge bool) *Slice {
+	if observer != nil {
+		if charge {
+			observer.OnCellLoad(c.Hash())
+		}
+		return c.BeginParse().SetObserver(observer)
+	}
+	return c.BeginParse()
+}
+
+func (d *Dictionary) beginParseNode(c *Cell) *Slice {
+	if d == nil {
+		return c.BeginParse()
+	}
+
+	charge := true
+	if d.skipRootLoad {
+		d.skipRootLoad = false
+		charge = false
+	}
+
+	return beginParseObserved(c, d.observer, charge)
 }
 
 func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
@@ -109,9 +152,11 @@ func (d *Dictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) 
 	if err := b.StoreRef(left); err != nil {
 		return nil, fmt.Errorf("failed to store left branch: %w", err)
 	}
+
 	if err := b.StoreRef(right); err != nil {
 		return nil, fmt.Errorf("failed to store right branch: %w", err)
 	}
+
 	return storeDictNode(label, b, keyOffset)
 }
 
@@ -119,6 +164,7 @@ func (d *Dictionary) Set(key, value *Cell) error {
 	if value == nil {
 		return d.Delete(key)
 	}
+
 	_, err := d.SetWithMode(key, value, DictSetModeSet)
 	return err
 }
@@ -133,6 +179,7 @@ func (d *Dictionary) SetRefWithMode(key, value *Cell, mode DictSetMode) (bool, e
 	if err != nil {
 		return false, err
 	}
+
 	return d.SetBuilderWithMode(key, b, mode)
 }
 
@@ -145,6 +192,7 @@ func (d *Dictionary) SetWithMode(key, value *Cell, mode DictSetMode) (bool, erro
 	if value == nil {
 		return false, fmt.Errorf("value is nil")
 	}
+
 	return d.SetBuilderWithMode(key, value.ToBuilder(), mode)
 }
 
@@ -178,7 +226,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		return leaf, err == nil, err
 	}
 
-	s := branch.BeginParse()
+	s := d.beginParse(branch)
 	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to load label: %w", err)
@@ -230,6 +278,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		if ref == nil {
 			return nil, false, fmt.Errorf("set produced nil child")
 		}
+
 		return branch.cloneWithRef(refIdx, ref), true, nil
 	}
 
@@ -267,7 +316,7 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		return nil, nil, false, nil
 	}
 
-	s := branch.BeginParse()
+	s := d.beginParse(branch)
 	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
@@ -307,7 +356,7 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 			return nil, nil, false, fmt.Errorf("failed to peek neighbour ref %d: %w", otherIdx, err)
 		}
 
-		slc := otherRef.BeginParse()
+		slc := d.beginParse(otherRef)
 		_, otherLabel, err := loadLabel(nextKeyOffset, slc, BeginCell())
 		if err != nil {
 			return nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
@@ -436,7 +485,7 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 			return nil, nil, fmt.Errorf("dict has special cells in tree structure")
 		}
 
-		loader := branch.BeginParse()
+		loader := d.beginParse(branch)
 		labelLen, keyBuilder, err := loadLabel(remaining, loader, key)
 		if err != nil {
 			return nil, nil, err
@@ -603,7 +652,7 @@ func (d *Dictionary) LoadValueWithProof(key *Cell, skeleton *ProofSkeleton) (*Sl
 	if key.BitsSize() != d.keySz {
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
-	return findKeyInDict(d.root, key, skeleton)
+	return findKeyInDictObserved(d.root, key, skeleton, d.observer, true)
 }
 
 // Deprecated: use LoadValue
@@ -644,7 +693,7 @@ func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder
 		return nil, fmt.Errorf("dict has special cells in tree structure, cannot load some values")
 	}
 
-	loader := c.BeginParse()
+	loader := d.beginParse(c)
 
 	sz, keyPrefix, err = loadLabel(leftKeySz, loader, keyPrefix)
 	if err != nil {
@@ -684,6 +733,10 @@ func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder
 }
 
 func findKeyInDict(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
+	return findKeyInDictObserved(branch, lookupKey, at, nil, false)
+}
+
+func findKeyInDictObserved(branch *Cell, lookupKey *Cell, at *ProofSkeleton, observer Observer, skipInitialLoad bool) (*Slice, *ProofSkeleton, error) {
 	if branch == nil {
 		// empty dict
 		return nil, nil, ErrNoSuchKeyInDict
@@ -699,7 +752,8 @@ func findKeyInDict(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (*Slice, *P
 
 	// until key size is not equals we go deeper
 	for {
-		branchSlice := branch.BeginParse()
+		branchSlice := beginParseObserved(branch, observer, !skipInitialLoad)
+		skipInitialLoad = false
 		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), branchSlice, lKey)
 		if err != nil {
 			return nil, nil, err

@@ -59,5 +59,5 @@ func execMakeTuple(state *vm.State, count int) error {
 	}
 
 	newTuple := tuplepkg.NewTuple(vals...)
-	return state.Stack.PushTuple(*newTuple)
+	return state.PushTupleCharged(*newTuple)
 }

@@ -26,6 +26,7 @@ type dhtNode struct {
 	ping      int64
 	addr      string
 	serverKey ed25519.PublicKey
+	version   int32
 
 	currentState int
 	badScore     int32
@@ -58,12 +59,13 @@ func (l dhtNodeList) Less(i, j int) bool {
 	return atomic.LoadInt64(&l[i].ping) < atomic.LoadInt64(&l[j].ping)
 }
 
-func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey) *dhtNode {
+func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey, version int32) *dhtNode {
 	n := &dhtNode{
 		adnlId:    id,
 		addr:      addr,
 		serverKey: serverKey,
 		client:    c,
+		version:   version,
 	}
 	return n
 }
@@ -85,6 +87,11 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 
 	switch r := res.(type) {
 	case NodesList:
+		for _, node := range r.List {
+			if err = node.validate(0, n.clientNetworkID()); err != nil {
+				return nil, fmt.Errorf("untrusted nodes list response: %w", err)
+			}
+		}
 		return r.List, nil
 	}
 
@@ -113,7 +120,7 @@ func (n *dhtNode) doPing(ctx context.Context) (err error) {
 }
 
 func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error {
-	if err := checkValue(id, value); err != nil {
+	if err := checkValueWithNetworkID(id, value, n.clientNetworkID()); err != nil {
 		return fmt.Errorf("corrupted value: %w", err)
 	}
 
@@ -156,15 +163,18 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 	switch r := res.(type) {
 	case ValueNotFoundResult:
 		for _, node := range r.Nodes.List {
-			err = node.CheckSignature()
+			err = node.validate(0, n.clientNetworkID())
 			if err != nil {
 				return nil, fmt.Errorf("untrusted nodes list response: %s", err.Error())
 			}
 		}
 		return r.Nodes.List, nil
 	case ValueFoundResult:
-		if err = checkValue(id, &r.Value); err != nil {
+		if err = checkValueWithNetworkID(id, &r.Value, n.clientNetworkID()); err != nil {
 			return nil, fmt.Errorf("corrupted value: %w", err)
+		}
+		if !isValueAcceptable(&r.Value) {
+			return n.findNodes(ctx, id, K)
 		}
 		return &r.Value, nil
 	}
@@ -173,6 +183,17 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 }
 
 func checkValue(id []byte, value *Value) error {
+	return checkValueWithNetworkID(id, value, _UnknownNetworkID)
+}
+
+func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error {
+	if value == nil {
+		return fmt.Errorf("nil value")
+	}
+	if len(value.Data) > _MaxValueSize {
+		return fmt.Errorf("too big value")
+	}
+
 	k := value.KeyDescription.Key
 	if len(k.Name) == 0 || len(k.Name) > 127 || k.Index < 0 || k.Index > 15 { // TODO: move to better place when dht store ready
 		return fmt.Errorf("invalid dht key")
@@ -197,7 +218,9 @@ func checkValue(id []byte, value *Value) error {
 
 	switch value.KeyDescription.UpdateRule.(type) {
 	case UpdateRuleAnybody:
-		// no checks
+		if len(value.Signature) > 0 {
+			return fmt.Errorf("cannot have signature in DhtUpdateRuleAnybody")
+		}
 	case UpdateRuleSignature:
 		pub, ok := value.KeyDescription.ID.(keys.PublicKeyED25519)
 		if !ok {
@@ -229,24 +252,98 @@ func checkValue(id []byte, value *Value) error {
 		}
 
 	case UpdateRuleOverlayNodes:
-		var nodes overlay.NodesList
-
-		_, err = tl.Parse(&nodes, value.Data, true)
-		if err != nil {
-			return fmt.Errorf("unsupported data for overlay nodes rule, err: %s", err.Error())
+		if len(value.Signature) > 0 {
+			return fmt.Errorf("cannot have signature in DhtUpdateRuleOverlayNodes")
 		}
-
-		for _, node := range nodes.List {
-			err = node.CheckSignature()
-			if err != nil {
-				return fmt.Errorf("untrusted overlay response: %s", err.Error())
-			}
+		if err = checkOverlayNodesValue(k.ID, value.Data, ourNetworkID); err != nil {
+			return err
 		}
-		return nil
 	default:
 		return fmt.Errorf("update rule type %s is not supported yet", reflect.TypeOf(value.KeyDescription.UpdateRule))
 	}
 	return nil
+}
+
+func checkOverlayNodesValue(overlayID, data []byte, ourNetworkID int32) error {
+	var nodes overlay.NodesList
+
+	_, err := tl.Parse(&nodes, data, true)
+	if err != nil {
+		return fmt.Errorf("unsupported data for overlay nodes rule, err: %s", err.Error())
+	}
+
+	for i := range nodes.List {
+		err = checkOverlayNode(&nodes.List[i], overlayID, ourNetworkID)
+		if err != nil {
+			return fmt.Errorf("untrusted overlay response: %s", err.Error())
+		}
+	}
+	return nil
+}
+
+func checkOverlayNode(node *overlay.Node, overlayID []byte, ourNetworkID int32) error {
+	if node == nil {
+		return fmt.Errorf("nil overlay node")
+	}
+	if !bytes.Equal(node.Overlay, overlayID) {
+		return fmt.Errorf("bad overlay id")
+	}
+
+	pub, ok := node.ID.(keys.PublicKeyED25519)
+	if !ok {
+		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
+	}
+
+	signature, err := splitNodeSignature(node.Signature, ourNetworkID)
+	if err != nil {
+		return err
+	}
+
+	id, err := tl.Hash(node.ID)
+	if err != nil {
+		return fmt.Errorf("failed to calc id: %w", err)
+	}
+
+	toVerify, err := tl.Serialize(overlay.NodeToSign{
+		ID:      id,
+		Overlay: node.Overlay,
+		Version: node.Version,
+	}, true)
+	if err != nil {
+		return fmt.Errorf("failed to serialize node: %w", err)
+	}
+	if !ed25519.Verify(pub.Key, toVerify, signature) {
+		return fmt.Errorf("bad signature for node: %s", hex.EncodeToString(pub.Key))
+	}
+	return nil
+}
+
+func isValueAcceptable(value *Value) bool {
+	switch value.KeyDescription.UpdateRule.(type) {
+	case UpdateRuleOverlayNodes:
+		var nodes overlay.NodesList
+
+		if _, err := tl.Parse(&nodes, value.Data, true); err != nil {
+			return false
+		}
+
+		now := time.Now().Unix()
+		for _, node := range nodes.List {
+			if int64(node.Version)+600 > now {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+func (n *dhtNode) clientNetworkID() int32 {
+	if n == nil || n.client == nil {
+		return _UnknownNetworkID
+	}
+	return n.client.networkID
 }
 
 func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {

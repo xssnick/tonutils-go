@@ -40,6 +40,10 @@ func (op *OpPUSHCTR) SerializeText() string {
 	return fmt.Sprintf("c%d PUSH", op.ctrIndex)
 }
 
+func (op *OpPUSHCTR) InstructionBits() int64 {
+	return 16
+}
+
 func (op *OpPUSHCTR) Interpret(state *vm.State) error {
 	return state.Stack.PushAny(state.Reg.Get(int(op.ctrIndex)))
 }

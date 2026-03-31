@@ -109,14 +109,20 @@ type ControlData struct {
 }
 
 type State struct {
-	CP          int
-	CurrentCode *cell.Slice
-	Reg         Register
-	Gas         Gas
-	Stack       *Stack
+	GlobalVersion int
+	CP            int
+	CurrentCode   *cell.Slice
+	Reg           Register
+	Gas           Gas
+	Cells         CellManager
+	Stack         *Stack
+	Steps         uint32
 }
 
 type OPGetter func() OP
+type GasPricedOp interface {
+	InstructionBits() int64
+}
 type OP interface {
 	GetPrefixes() []*cell.Slice
 	Deserialize(code *cell.Slice) error
@@ -128,6 +134,80 @@ type OP interface {
 var List []OPGetter
 
 var ErrCorruptedOpcode = errors.New("corrupted opcode")
+
+func (s *State) InitForExecution() {
+	if s.GlobalVersion == 0 {
+		s.GlobalVersion = DefaultGlobalVersion
+	}
+	s.Cells.Init(s)
+	if s.Stack != nil {
+		s.Stack.SetObserver(&s.Cells)
+	}
+	s.Reg.C7 = bindTupleObserver(s.Reg.C7, &s.Cells)
+}
+
+func (s *State) ConsumeGas(amount int64) error {
+	return s.Gas.Consume(amount)
+}
+
+func (s *State) CheckGas() error {
+	if err := s.Cells.PendingError(); err != nil {
+		return err
+	}
+	return s.Gas.Check()
+}
+
+func (s *State) ConsumeFreeGas(amount int64) {
+	s.Gas.ConsumeFree(amount)
+}
+
+func (s *State) FlushFreeGas() error {
+	return s.Gas.FlushFree()
+}
+
+func (s *State) ConsumeStackGasLen(depth int) error {
+	amt := int64(depth)
+	if amt < FreeStackDepth {
+		amt = FreeStackDepth
+	}
+	return s.ConsumeGas((amt - FreeStackDepth) * StackEntryGasPrice)
+}
+
+func (s *State) ConsumeStackGas(stk *Stack) error {
+	if stk == nil {
+		return nil
+	}
+	return s.ConsumeStackGasLen(stk.Len())
+}
+
+func (s *State) ConsumeTupleGasLen(length int) error {
+	return s.ConsumeGas(int64(length) * TupleEntryGasPrice)
+}
+
+func (s *State) ConsumeTupleGas(t tuple.Tuple) error {
+	return s.ConsumeTupleGasLen(t.Len())
+}
+
+func (s *State) PushTupleCharged(t tuple.Tuple) error {
+	if err := s.ConsumeTupleGas(t); err != nil {
+		return err
+	}
+	return s.Stack.PushTuple(t)
+}
+
+func (s *State) SetC7(t tuple.Tuple) error {
+	s.Cells.Init(s)
+	s.Reg.C7 = bindTupleObserver(t, &s.Cells)
+	return nil
+}
+
+func (s *State) UpdateC7(fn func(tuple.Tuple) (tuple.Tuple, error)) error {
+	next, err := fn(s.Reg.C7.Copy())
+	if err != nil {
+		return err
+	}
+	return s.SetC7(next)
+}
 
 func (s *State) GetParam(idx int) (any, error) {
 	params, err := s.Reg.C7.Index(0)
@@ -167,7 +247,7 @@ func (s *State) ThrowException(code *big.Int, arg ...any) error {
 	}
 
 	s.CurrentCode = cell.BeginCell().ToSlice()
-	if err := s.Gas.Consume(ExceptionGasPrice); err != nil {
+	if err := s.ConsumeGas(ExceptionGasPrice); err != nil {
 		return err
 	}
 

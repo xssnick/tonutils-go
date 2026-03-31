@@ -55,6 +55,24 @@ type BlockchainConfig struct {
 	data map[int32]*cell.Cell
 }
 
+func unwrapLibraryResultCell(root *cell.Cell, hash []byte) *cell.Cell {
+	for root != nil {
+		if bytes.Equal(hash, root.Hash()) {
+			return root
+		}
+
+		// Some liteservers wrap the actual library root into an empty root cell.
+		// Keep walking that wrapper chain, but only through the canonical 0-bit/1-ref form.
+		if root.BitsSize() != 0 || root.RefsNum() != 1 {
+			return nil
+		}
+
+		root = root.MustPeekRef(0)
+	}
+
+	return nil
+}
+
 func (c *APIClient) GetLibraries(ctx context.Context, hashes ...[]byte) ([]*cell.Cell, error) {
 	var (
 		resp tl.Serializable
@@ -71,10 +89,12 @@ func (c *APIClient) GetLibraries(ctx context.Context, hashes ...[]byte) ([]*cell
 
 		for i := 0; i < len(hashes); i++ {
 			for _, e := range t.Result {
-				// we are calculating hash by ourselves
-				// to make sure that LS is not cheating
-				if bytes.Equal(hashes[i], e.Data.Hash()) {
-					libList[i] = e.Data
+				// Calculate hashes by ourselves to make sure that LS is not cheating.
+				// Some LS responses wrap the actual library root into an empty root cell,
+				// so we only unwrap that canonical wrapper form before matching.
+				if lib := unwrapLibraryResultCell(e.Data, hashes[i]); lib != nil {
+					libList[i] = lib
+					break
 				}
 			}
 		}

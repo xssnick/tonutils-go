@@ -171,6 +171,19 @@ func (op *OpPUSHCONT) SerializeText() string {
 	return fmt.Sprintf("<%s> %s PUSHCONT", str, op.typ)
 }
 
+func (op *OpPUSHCONT) InstructionBits() int64 {
+	switch op.typ {
+	case "SMALL":
+		return 8
+	case "BIG":
+		return 16
+	case "REF":
+		return 8
+	default:
+		return 8
+	}
+}
+
 func (op *OpPUSHCONT) Interpret(state *vm.State) error {
 	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{Code: op.cont.BeginParse(), Data: vm.ControlData{
 		NumArgs: vm.ControlDataAllArgs,

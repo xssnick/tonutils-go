@@ -16,7 +16,8 @@ func DUMPSTK() *helpers.SimpleOP {
 			println("DUMPSTK:\n", state.Stack.String())
 			return nil
 		},
-		Name:      "DUMPSTK",
-		BitPrefix: helpers.BytesPrefix(0xFE, 0x00),
+		Name:         "DUMPSTK",
+		BitPrefix:    helpers.BytesPrefix(0xFE, 0x00),
+		BaseGasPrice: -8,
 	}
 }

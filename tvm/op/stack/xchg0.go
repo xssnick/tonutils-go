@@ -14,6 +14,7 @@ func init() {
 
 func XCHG0(i uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
 			return state.Stack.Exchange(int(0), int(i))
 		},

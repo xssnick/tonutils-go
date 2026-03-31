@@ -21,6 +21,7 @@ import (
 
 type crossRunResult struct {
 	exitCode int32
+	gasUsed  int64
 	stack    *cell.Cell
 }
 
@@ -168,6 +169,12 @@ func TestTVMCrossEmulatorReference(t *testing.T) {
 				t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
 			}
 
+			println(goRes.gasUsed, refRes.gasUsed)
+		
+			if goRes.gasUsed != refRes.gasUsed {
+				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+			}
+
 			if !bytes.Equal(goRes.stack.Hash(), refRes.stack.Hash()) {
 				t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goRes.stack.Dump(), refRes.stack.Dump())
 			}
@@ -187,7 +194,7 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 		return nil, err
 	}
 
-	err := NewTVM().Execute(code, data, c7, vm.Gas{}, stack)
+	res, err := NewTVM().ExecuteDetailed(code, data, c7, vm.GasWithLimit(crossTestMaxGas), stack)
 	exitCode := int32(0)
 	if err != nil {
 		var vmErr vmerr.VMError
@@ -195,6 +202,8 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 			return nil, err
 		}
 		exitCode = int32(vmErr.Code)
+	} else {
+		exitCode = int32(res.ExitCode)
 	}
 
 	stackCell, err := stackToCell(stack)
@@ -204,6 +213,7 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 
 	return &crossRunResult{
 		exitCode: exitCode,
+		gasUsed:  res.GasUsed,
 		stack:    stackCell,
 	}, nil
 }

@@ -77,7 +77,7 @@ func (p continuationStackPlan) hasCapturedStack() bool {
 }
 
 func (p continuationStackPlan) consumeAdjustedStack(s *State, stk *Stack) error {
-	return s.Gas.ConsumeStackGas(stk)
+	return s.ConsumeStackGas(stk)
 }
 
 func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
@@ -243,8 +243,6 @@ func (s *State) JumpArgs(c Continuation, passArgs int) error {
 func (s *State) JumpTo(c Continuation) (err error) {
 	traceStack("[JUMP]", s.Stack)
 
-	const freeIterations = 8
-
 	var iter int
 	for c != nil {
 		c, err = c.Jump(s)
@@ -253,8 +251,8 @@ func (s *State) JumpTo(c Continuation) (err error) {
 		}
 		iter++
 
-		if iter > freeIterations {
-			if err = s.Gas.Consume(1); err != nil {
+		if iter > FreeNestedContJump {
+			if err = s.ConsumeGas(1); err != nil {
 				return err
 			}
 		}
@@ -300,7 +298,7 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 		}
 		newStack = ns
 
-		if err = s.Gas.ConsumeStackGas(newStack); err != nil {
+		if err = s.ConsumeStackGas(newStack); err != nil {
 			return nil, err
 		}
 	} else {

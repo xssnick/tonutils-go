@@ -10,7 +10,10 @@ import (
 )
 
 func newState() *vm.State {
-	return &vm.State{Stack: vm.NewStack()}
+	return &vm.State{
+		Stack: vm.NewStack(),
+		Gas:   vm.NewGas(),
+	}
 }
 
 func pushInts(t *testing.T, state *vm.State, values ...int64) {

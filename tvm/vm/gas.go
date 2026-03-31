@@ -1,19 +1,26 @@
 package vm
 
-// Gas prices constants
+import "github.com/xssnick/tonutils-go/tvm/vmerr"
+
+// Gas prices constants.
 const (
-	CellLoadGasPrice       = 100
-	CellReloadGasPrice     = 25
-	CellCreateGasPrice     = 500
-	ExceptionGasPrice      = 50
-	TupleEntryGasPrice     = 1
-	ImplicitJmprefGasPrice = 10
-	ImplicitRetGasPrice    = 5
-	FreeStackDepth         = 32
-	StackEntryGasPrice     = 1
-	RunvmGasPrice          = 40
-	HashExtEntryGasPrice   = 1
-	FreeNestedContJump     = 8
+	GasInfinite          int64 = 1<<63 - 1
+	DefaultGlobalVersion       = 9
+
+	CellLoadGasPrice           = 100
+	CellReloadGasPrice         = 25
+	CellCreateGasPrice         = 500
+	ExceptionGasPrice          = 50
+	InstructionBaseGasPrice    = 10
+	InstructionCellRefGasPrice = 5
+	TupleEntryGasPrice         = 1
+	ImplicitJmprefGasPrice     = 10
+	ImplicitRetGasPrice        = 5
+	FreeStackDepth             = 32
+	StackEntryGasPrice         = 1
+	RunvmGasPrice              = 40
+	HashExtEntryGasPrice       = 1
+	FreeNestedContJump         = 8
 
 	Rist255MulGasPrice      = 2000
 	Rist255MulbaseGasPrice  = 750
@@ -59,25 +66,115 @@ const (
 )
 
 type Gas struct {
-	Consumed uint64
-	Limit    uint64
-	Credit   uint64
-	Price    uint64
+	Max          int64
+	Limit        int64
+	Credit       int64
+	Remaining    int64
+	Base         int64
+	FreeConsumed int64
 }
 
-func (g *Gas) Consume(amt uint64) error {
-	g.Consumed += amt
-	if g.Consumed > g.Limit || (g.Credit > 0 && g.Consumed > g.Credit) {
-		// TODO: enable when gas ready
-		// return vmerr.ErrOutOfGas
+type GasConfig struct {
+	Max    int64
+	Limit  int64
+	Credit int64
+}
+
+func NewGas(cfg ...GasConfig) Gas {
+	c := GasConfig{}
+	if len(cfg) > 0 {
+		c = cfg[0]
+	}
+
+	max := c.Max
+	if max == 0 {
+		max = GasInfinite
+	}
+	limit := c.Limit
+	if limit == 0 {
+		limit = max
+	}
+	if limit > max {
+		limit = max
+	}
+
+	base := limit + c.Credit
+	return Gas{
+		Max:       max,
+		Limit:     limit,
+		Credit:    c.Credit,
+		Base:      base,
+		Remaining: base,
+	}
+}
+
+func GasWithLimit(limit int64, max ...int64) Gas {
+	cfg := GasConfig{Limit: limit}
+	if len(max) > 0 {
+		cfg.Max = max[0]
+	}
+	return NewGas(cfg)
+}
+
+func (g *Gas) SetLimits(max, limit int64, credit ...int64) {
+	creditVal := int64(0)
+	if len(credit) > 0 {
+		creditVal = credit[0]
+	}
+	g.Max = max
+	g.Limit = limit
+	g.Credit = creditVal
+	g.Base = limit + creditVal
+	g.Remaining = g.Base
+	g.FreeConsumed = 0
+}
+
+func (g *Gas) ChangeBase(base int64) {
+	g.Remaining += base - g.Base
+	g.Base = base
+}
+
+func (g *Gas) ChangeLimit(limit int64) {
+	if limit < 0 {
+		limit = 0
+	}
+	if limit > g.Max {
+		limit = g.Max
+	}
+	g.Credit = 0
+	g.Limit = limit
+	g.ChangeBase(limit)
+}
+
+func (g *Gas) Consume(amount int64) error {
+	g.Remaining -= amount
+	if g.Remaining < 0 {
+		return vmerr.Error(vmerr.CodeOutOfGas)
 	}
 	return nil
 }
 
-func (g *Gas) ConsumeStackGas(s *Stack) error {
-	amt := uint64(s.Len())
-	if amt < FreeStackDepth {
-		amt = FreeStackDepth
+func (g *Gas) Check() error {
+	if g.Remaining < 0 {
+		return vmerr.Error(vmerr.CodeOutOfGas)
 	}
-	return g.Consume((amt - FreeStackDepth) * StackEntryGasPrice)
+	return nil
+}
+
+func (g *Gas) ConsumeFree(amount int64) {
+	g.FreeConsumed += amount
+}
+
+func (g *Gas) FlushFree() error {
+	if g.FreeConsumed == 0 {
+		return nil
+	}
+
+	amt := g.FreeConsumed
+	g.FreeConsumed = 0
+	return g.Consume(amt)
+}
+
+func (g *Gas) Used() int64 {
+	return g.Base - g.Remaining
 }

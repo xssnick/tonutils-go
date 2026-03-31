@@ -11,6 +11,7 @@ type DHTConfig struct {
 	Type        string   `json:"@type"`
 	K           int      `json:"k"`
 	A           int      `json:"a"`
+	NetworkID   *int32   `json:"network_id,omitempty"`
 	StaticNodes DHTNodes `json:"static_nodes"`
 }
 

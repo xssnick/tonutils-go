@@ -268,3 +268,124 @@ func TestAugmentedDictionary_ReadOnlyLoader(t *testing.T) {
 		t.Fatalf("expected read-only augmented dict mutation to fail with ErrAugmentationSemanticsUnavailable, got %v", err)
 	}
 }
+
+func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_LeafRefValueKeepsTail(t *testing.T) {
+	aug := testMetricAugmentation{}
+	dict, err := NewAugDict(8, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key := mustTestAugKey(t, 0x44)
+	refValue := BeginCell().MustStoreUInt(0xbeef, 16).EndCell()
+	if _, err = dict.SetRefWithMode(key, refValue, DictSetModeSet); err != nil {
+		t.Fatal(err)
+	}
+
+	container := BeginCell().
+		MustStoreUInt(0b101, 3).
+		MustStoreBuilder(dict.root.ToBuilder()).
+		MustStoreUInt(0x1d, 5).
+		EndCell()
+
+	loader := container.BeginParse()
+	if got := loader.MustLoadUInt(3); got != 0b101 {
+		t.Fatalf("unexpected prefix bits: %b", got)
+	}
+
+	loaded, err := loader.ToAugDictWithValueAndAugmentation(8, aug, func(loader *Slice) error {
+		_, err := loader.LoadRefCell()
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value, extra, err := loaded.LoadValueRefExtra(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalCellContents(value, refValue) {
+		t.Fatal("loaded ref value does not match original ref")
+	}
+	if metric := mustLoadTestMetricExtra(t, extra); metric != 257 {
+		t.Fatalf("unexpected leaf extra metric: %d", metric)
+	}
+
+	if metric := mustLoadTestMetricExtra(t, loaded.GetRootExtra().BeginParse()); metric != 257 {
+		t.Fatalf("unexpected root extra metric: %d", metric)
+	}
+
+	if got := loader.MustLoadUInt(5); got != 0x1d {
+		t.Fatalf("unexpected tail bits: %x", got)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		t.Fatalf("unexpected trailing data after inline augmented dict: %d bits, %d refs", loader.BitsLeft(), loader.RefsNum())
+	}
+}
+
+func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_ForkRootKeepsTail(t *testing.T) {
+	aug := testMetricAugmentation{}
+	dict, err := NewAugDict(8, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key1 := mustTestAugKey(t, 0x10)
+	key2 := mustTestAugKey(t, 0x11)
+	val1 := mustTestAugValue(t, 0xaa, 8)
+	val2 := mustTestAugValue(t, 0xbb, 8)
+
+	if _, err = dict.SetWithMode(key1, val1, DictSetModeSet); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = dict.SetWithMode(key2, val2, DictSetModeSet); err != nil {
+		t.Fatal(err)
+	}
+
+	container := BeginCell().
+		MustStoreUInt(0b11, 2).
+		MustStoreBuilder(dict.root.ToBuilder()).
+		MustStoreUInt(0x2a, 6).
+		EndCell()
+
+	loader := container.BeginParse()
+	if got := loader.MustLoadUInt(2); got != 0b11 {
+		t.Fatalf("unexpected prefix bits: %b", got)
+	}
+
+	loaded, err := loader.ToAugDictWithValueAndAugmentation(8, aug, func(loader *Slice) error {
+		_, err := loader.LoadUInt(8)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value1, err := loaded.LoadValue(key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, value1, 8); got != 0xaa {
+		t.Fatalf("unexpected first loaded value: %x", got)
+	}
+
+	value2, err := loaded.LoadValue(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, value2, 8); got != 0xbb {
+		t.Fatalf("unexpected second loaded value: %x", got)
+	}
+
+	if metric := mustLoadTestMetricExtra(t, loaded.GetRootExtra().BeginParse()); metric != 16 {
+		t.Fatalf("unexpected fork root extra metric: %d", metric)
+	}
+
+	if got := loader.MustLoadUInt(6); got != 0x2a {
+		t.Fatalf("unexpected tail bits: %x", got)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		t.Fatalf("unexpected trailing data after fork inline augmented dict: %d bits, %d refs", loader.BitsLeft(), loader.RefsNum())
+	}
+}

@@ -28,7 +28,7 @@ func DICTIGETJMPZ() *helpers.SimpleOP {
 			}
 
 			if c1 != nil {
-				if v, err := c1.AsDict(uint(i0.Uint64())).LoadValueByIntKey(i2); err == nil &&
+				if v, err := c1.AsDict(uint(i0.Uint64())).SetObserver(&state.Cells).LoadValueByIntKey(i2); err == nil &&
 					(v.RefsNum() > 0 || v.BitsLeft() > 0) {
 					cnt := &vm.OrdinaryContinuation{
 						Data: vm.ControlData{

@@ -36,6 +36,9 @@ func SENDRAWMSG() *helpers.SimpleOP {
 			if err != nil {
 				return vmerr.Error(vmerr.CodeCellOverflow, "cannot serialize raw output message into an output action cell; "+err.Error())
 			}
+			if err = state.Cells.RegisterCellCreate(); err != nil {
+				return err
+			}
 			state.Reg.D[1] = res
 			return nil
 		},

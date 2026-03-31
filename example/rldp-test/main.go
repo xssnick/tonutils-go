@@ -180,7 +180,7 @@ func publishAddress(ctx context.Context, gateway *adnl.Gateway, priv ed25519.Pri
 			default:
 			}
 
-			_, _, err := dhtClient.StoreAddress(ctx, gateway.GetAddressList(), dhtTTL, priv, 5)
+			_, _, err := dhtClient.StoreAddress(ctx, gateway.GetAddressList(), dhtTTL, priv)
 			if err != nil {
 				log.Printf("DHT publish failed: %v", err)
 			} else {

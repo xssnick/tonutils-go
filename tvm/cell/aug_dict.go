@@ -41,14 +41,6 @@ func (a readOnlyAugmentation) CombineExtra(*Slice, *Slice) (*Cell, error) {
 	return nil, ErrAugmentationSemanticsUnavailable
 }
 
-type DictSetMode uint8
-
-const (
-	DictSetModeReplace DictSetMode = 1
-	DictSetModeAdd     DictSetMode = 2
-	DictSetModeSet     DictSetMode = DictSetModeReplace | DictSetModeAdd
-)
-
 type AugmentedDictionary struct {
 	keySz uint
 
@@ -151,38 +143,6 @@ func (c *Slice) ToAugDictWithValueAndAugmentation(keySz uint, aug Augmentation, 
 		root:  root,
 		aug:   aug,
 	}, nil
-}
-
-func (c *Slice) MustToAugDict(keySz uint, skipExtra AugmentedExtraSkipper) *AugmentedDictionary {
-	dict, err := c.ToAugDict(keySz, skipExtra)
-	if err != nil {
-		panic(err)
-	}
-	return dict
-}
-
-func (c *Slice) MustToAugDictWithAugmentation(keySz uint, aug Augmentation) *AugmentedDictionary {
-	dict, err := c.ToAugDictWithAugmentation(keySz, aug)
-	if err != nil {
-		panic(err)
-	}
-	return dict
-}
-
-func (c *Slice) MustToAugDictWithValue(keySz uint, skipExtra AugmentedExtraSkipper, skipValue AugmentedExtraSkipper) *AugmentedDictionary {
-	dict, err := c.ToAugDictWithValue(keySz, skipExtra, skipValue)
-	if err != nil {
-		panic(err)
-	}
-	return dict
-}
-
-func (c *Slice) MustToAugDictWithValueAndAugmentation(keySz uint, aug Augmentation, skipValue AugmentedExtraSkipper) *AugmentedDictionary {
-	dict, err := c.ToAugDictWithValueAndAugmentation(keySz, aug, skipValue)
-	if err != nil {
-		panic(err)
-	}
-	return dict
 }
 
 func (c *Slice) LoadAugDict(keySz uint, skipExtra AugmentedExtraSkipper) (*AugmentedDictionary, error) {

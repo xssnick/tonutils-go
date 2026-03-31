@@ -3,8 +3,6 @@ package dht
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
@@ -39,7 +37,8 @@ type Client struct {
 	knownNodes map[string]*dhtNode // unused, nodes are stored in buckets
 	buckets    [256]*Bucket
 
-	gateway Gateway
+	gateway   Gateway
+	networkID int32
 
 	globalCtx       context.Context
 	globalCtxCancel func()
@@ -69,49 +68,24 @@ func NewClientFromConfigUrl(ctx context.Context, gateway Gateway, cfgUrl string)
 }
 
 func NewClientFromConfig(gateway Gateway, cfg *liteclient.GlobalConfig) (*Client, error) {
-	var nodes []*Node
-	for _, node := range cfg.DHT.StaticNodes.Nodes {
-		key, err := base64.StdEncoding.DecodeString(node.ID.Key)
-		if err != nil {
-			continue
-		}
-
-		sign, err := base64.StdEncoding.DecodeString(node.Signature)
-		if err != nil {
-			continue
-		}
-
-		n := &Node{
-			ID: keys.PublicKeyED25519{
-				Key: key,
-			},
-			AddrList: &address.List{
-				Version:    int32(node.AddrList.Version),
-				ReinitDate: int32(node.AddrList.ReinitDate),
-				Priority:   int32(node.AddrList.Priority),
-				ExpireAt:   int32(node.AddrList.ExpireAt),
-			},
-			Version:   int32(node.Version),
-			Signature: sign,
-		}
-
-		for _, addr := range node.AddrList.Addrs {
-			ip := make(net.IP, 4)
-			ii := int32(addr.IP)
-			binary.BigEndian.PutUint32(ip, uint32(ii))
-			n.AddrList.Addresses = append(n.AddrList.Addresses, &address.UDP{
-				IP:   ip,
-				Port: int32(addr.Port),
-			})
-		}
-
-		nodes = append(nodes, n)
+	nodes, err := nodesFromConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	return NewClient(gateway, nodes)
+	networkID := _UnknownNetworkID
+	if cfg.DHT.NetworkID != nil {
+		networkID = *cfg.DHT.NetworkID
+	}
+
+	return newClient(gateway, nodes, networkID)
 }
 
 func NewClient(gateway Gateway, nodes []*Node) (*Client, error) {
+	return newClient(gateway, nodes, _UnknownNetworkID)
+}
+
+func newClient(gateway Gateway, nodes []*Node, networkID int32) (*Client, error) {
 	globalCtx, cancel := context.WithCancel(context.Background())
 
 	buckets := [256]*Bucket{}
@@ -125,12 +99,17 @@ func NewClient(gateway Gateway, nodes []*Node) (*Client, error) {
 		globalCtx:       globalCtx,
 		globalCtxCancel: cancel,
 		gateway:         gateway,
+		networkID:       networkID,
 	}
 
 	for _, node := range nodes {
 		_, err := c.addNode(node)
 		if err != nil {
-			Logger("failed to add DHT node", node.AddrList.Addresses[0].IP.String(), node.AddrList.Addresses[0].Port, " from config, err:", err.Error())
+			logAddr := "<unknown>"
+			if node != nil && node.AddrList != nil && len(node.AddrList.Addresses) > 0 && node.AddrList.Addresses[0] != nil {
+				logAddr = node.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(node.AddrList.Addresses[0].Port)
+			}
+			Logger("failed to add DHT node", logAddr, " from config, err:", err.Error())
 			continue
 		}
 	}
@@ -146,6 +125,10 @@ func (c *Client) Close() {
 }
 
 func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
+	if node == nil {
+		return nil, fmt.Errorf("nil node")
+	}
+
 	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
 		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
@@ -159,24 +142,31 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 	affinity := affinity(kid, c.gateway.GetID())
 	bucket := c.buckets[affinity]
 
-	if len(node.AddrList.Addresses) == 0 {
-		return nil, fmt.Errorf("no addresses to connect to")
-	} else if len(node.AddrList.Addresses) > 5 {
+	var currentVersion int32
+	if existing := bucket.findNode(kid); existing != nil {
+		currentVersion = existing.version
+	}
+	if err := node.validate(currentVersion, c.networkID); err != nil {
+		return nil, err
+	}
+
+	addresses := node.AddrList.Addresses
+	if len(addresses) > 5 {
 		// max 5 addresses to check
-		node.AddrList.Addresses = node.AddrList.Addresses[:5]
+		addresses = addresses[:5]
 	}
 
 	// TODO: maybe use other addresses too
-	addr := node.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(node.AddrList.Addresses[0].Port)
+	addr := addresses[0].IP.String() + ":" + fmt.Sprint(addresses[0].Port)
 
 	if hf := bucket.findNode(kid); hf != nil {
-		if hf.addr == addr {
+		if hf.addr == addr && hf.version == node.Version {
 			return nil, fmt.Errorf("node already exists")
 		}
 		// updated address otherwise
 	}
 
-	kNode := c.initNode(kid, addr, pub.Key)
+	kNode := c.initNode(kid, addr, pub.Key, node.Version)
 	bucket.addNode(kNode)
 
 	return kNode, nil
@@ -243,8 +233,7 @@ func (c *Client) StoreAddress(
 	addresses address.List,
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
-	replicas int,
-) (replicasMade int, idKey []byte, err error) {
+) (storedCount int, idKey []byte, err error) {
 	for i, udp := range addresses.Addresses {
 		if udp.IP.Equal(net.IPv4zero) {
 			return 0, nil, fmt.Errorf("address %d is zero", i)
@@ -257,7 +246,7 @@ func (c *Client) StoreAddress(
 	}
 
 	id := keys.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
-	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey, replicas)
+	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey)
 }
 
 func (c *Client) StoreOverlayNodes(
@@ -265,14 +254,18 @@ func (c *Client) StoreOverlayNodes(
 	overlayKey []byte,
 	nodes *overlay.NodesList,
 	ttl time.Duration,
-	replicas int,
-) (replicasMade int, idKey []byte, err error) {
-	if len(nodes.List) == 0 {
+) (storedCount int, idKey []byte, err error) {
+	if nodes == nil || len(nodes.List) == 0 {
 		return 0, nil, fmt.Errorf("0 nodes in list")
 	}
 
-	for _, node := range nodes.List {
-		err := node.CheckSignature()
+	overlayID, err := tl.Hash(keys.PublicKeyOverlay{Key: overlayKey})
+	if err != nil {
+		return 0, nil, err
+	}
+
+	for i := range nodes.List {
+		err := checkOverlayNode(&nodes.List[i], overlayID, c.networkID)
 		if err != nil {
 			return 0, nil, fmt.Errorf("untrusted overlay node in list: %w", err)
 		}
@@ -284,7 +277,7 @@ func (c *Client) StoreOverlayNodes(
 	}
 
 	id := keys.PublicKeyOverlay{Key: overlayKey}
-	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil, replicas)
+	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil)
 }
 
 func (c *Client) Store(
@@ -296,8 +289,7 @@ func (c *Client) Store(
 	rule any,
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
-	_ int,
-) (_ int, idKey []byte, err error) {
+) (storedCount int, idKey []byte, err error) {
 	idKey, err = tl.Hash(id)
 	if err != nil {
 		return 0, nil, err

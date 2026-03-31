@@ -49,6 +49,10 @@ func (op *OpPUSH) SerializeText() string {
 	return fmt.Sprintf("s%d PUSH", op.stackIndex)
 }
 
+func (op *OpPUSH) InstructionBits() int64 {
+	return 8
+}
+
 func (op *OpPUSH) Interpret(state *vm.State) error {
 	return state.Stack.PushAt(int(op.stackIndex))
 }

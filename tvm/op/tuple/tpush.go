@@ -23,7 +23,7 @@ func TPUSH() *helpers.SimpleOP {
 				return err
 			}
 			tup.Append(val)
-			return state.Stack.PushTuple(tup)
+			return state.PushTupleCharged(tup)
 		},
 	}
 }

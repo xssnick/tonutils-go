@@ -31,7 +31,7 @@ func TestTVM_Execute(t *testing.T) {
 	s := vm.NewStack()
 	_ = s.PushInt(big.NewInt(85143))
 
-	err := v.Execute(code, data, tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestTVM_ExecuteRetAltIsSuccessful(t *testing.T) {
 
 	code := cell.BeginCell().MustStoreSlice([]byte{0xDB, 0x31}, 16).EndCell()
 
-	err := v.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, vm.NewStack())
+	err := v.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), vm.NewStack())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestTVM_ExecuteJetton(t *testing.T) {
 	s := vm.NewStack()
 	_ = s.PushInt(big.NewInt(115562))
 
-	err := v.Execute(code, data, tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestTVM_ExecuteTvmTests(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(id)))
 
-	err := v.Execute(code, data, tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestTVM_ExecuteTvmTestLoops(t *testing.T) {
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("tryRepeatWhileUntil"))))
 
 	tm := time.Now()
-	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestTVM_ExecuteTvmTestSimpleRepeat(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleRepeat"))))
 
-	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestTVM_ExecuteTvmTestSimpleRepeatWhile(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleRepeatWhile"))))
 
-	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestTVM_ExecuteTvmTestSimpleUntilWhile(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleUntilWhile"))))
 
-	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestTVM_ExecuteTvmTestSimpleRepeatUntil(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleRepeatUntil"))))
 
-	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+	err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestTVM_SuperContract(t *testing.T) {
 			_ = s.PushInt(big.NewInt(tt.args.input))
 			_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash(tt.args.name))))
 
-			err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.Gas{}, s)
+			err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s)
 			if err != nil {
 				if tt.wantErr >= 1 {
 					var e vmerr.VMError

@@ -79,6 +79,13 @@ func (op *OpXCHG) SerializeText() string {
 	return fmt.Sprintf("s%d,s%d XCHG", op.a, op.b)
 }
 
+func (op *OpXCHG) InstructionBits() int64 {
+	if op.a == 0 || op.b == 0 || op.a == 1 || op.b == 1 {
+		return 8
+	}
+	return 16
+}
+
 func (op *OpXCHG) Interpret(state *vm.State) error {
 	return state.Stack.Exchange(int(op.a), int(op.b))
 }

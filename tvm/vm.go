@@ -26,13 +26,15 @@ type matchedDeserializer interface {
 }
 
 type TVM struct {
-	trie         *trieNode
-	maxPrefixLen uint
+	trie          *trieNode
+	maxPrefixLen  uint
+	globalVersion int
 }
 
 func NewTVM() *TVM {
 	tvm := &TVM{
-		trie: &trieNode{},
+		trie:          &trieNode{},
+		globalVersion: vm.DefaultGlobalVersion,
 	}
 
 	for _, op := range vm.List {
@@ -42,6 +44,16 @@ func NewTVM() *TVM {
 	}
 
 	return tvm
+}
+
+type ExecutionResult struct {
+	ExitCode int64
+	GasUsed  int64
+	Steps    uint32
+	Gas      vm.Gas
+	Stack    *vm.Stack
+	Data     *cell.Cell
+	Actions  *cell.Cell
 }
 
 func bitAt(data []byte, bit uint) uint8 {
@@ -94,10 +106,15 @@ func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
 	return matched
 }
 
-func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) (err error) {
-	err = tvm.execute(&vm.State{
-		CurrentCode: code.BeginParse(),
-		Gas:         gas,
+func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) error {
+	_, err := tvm.ExecuteDetailed(code, data, c7, gas, stack)
+	return err
+}
+
+func (tvm *TVM) ExecuteDetailed(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) (*ExecutionResult, error) {
+	state := &vm.State{
+		GlobalVersion: tvm.globalVersion,
+		Gas:           gas,
 		Reg: vm.Register{
 			C: [4]vm.Continuation{
 				&vm.QuitContinuation{ExitCode: 0},
@@ -112,23 +129,38 @@ func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack
 			C7: c7,
 		},
 		Stack: stack,
-	})
+	}
+	state.InitForExecution()
 
-	var e vmerr.VMError
-	if errors.As(err, &e) {
-		if e.Code == 0 || e.Code == 1 {
-			return nil
+	state.CurrentCode = code.BeginParse().SetObserver(&state.Cells)
+
+	err := tvm.execute(state)
+
+	exitCode := int64(0)
+	var vmErr vmerr.VMError
+	if errors.As(err, &vmErr) {
+		exitCode = vmErr.Code
+		if exitCode == 0 || exitCode == 1 {
+			err = nil
 		}
 	}
-	return err
+
+	return &ExecutionResult{
+		ExitCode: exitCode,
+		GasUsed:  state.Gas.Used(),
+		Steps:    state.Steps,
+		Gas:      state.Gas,
+		Stack:    state.Stack,
+		Data:     state.Reg.D[0],
+		Actions:  state.Reg.D[1],
+	}, err
 }
 
 func (tvm *TVM) execute(state *vm.State) (err error) {
-	var steps uint32
 	for {
 		for state.CurrentCode.BitsLeft() > 0 || state.CurrentCode.RefsNum() > 0 {
 			if state.CurrentCode.BitsLeft() == 0 {
-				cc, err := state.CurrentCode.LoadRef()
+				cc, err := state.Cells.LoadRef(state.CurrentCode)
 				if err != nil {
 					return err
 				}
@@ -141,7 +173,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 					Code: cc,
 				}
 
-				if err = state.Gas.Consume(vm.ImplicitJmprefGasPrice); err != nil {
+				if err = state.ConsumeGas(vm.ImplicitJmprefGasPrice); err != nil {
 					return err
 				}
 
@@ -150,10 +182,6 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 				if err = state.Jump(c); err != nil {
 					return err
 				}
-			}
-
-			if steps > 100000 {
-				return fmt.Errorf("too many steps")
 			}
 
 			if err = tvm.step(state); err != nil {
@@ -168,11 +196,11 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 
 				return err
 			}
-			steps++
+			state.Steps++
 		}
 
 		vm.Tracef("implicit RET")
-		if err = state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
+		if err = state.ConsumeGas(vm.ImplicitRetGasPrice); err != nil {
 			return err
 		}
 
@@ -198,10 +226,21 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 	if err != nil {
 		return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
 	}
+	if gasOp, ok := op.(vm.GasPricedOp); ok {
+		if err = state.ConsumeGas(vm.InstructionBaseGasPrice + gasOp.InstructionBits()); err != nil {
+			return err
+		}
+	}
+	if err = state.CheckGas(); err != nil {
+		return err
+	}
 
 	vm.Tracef("%s", op.SerializeText())
 	err = op.Interpret(state)
 	if err != nil {
+		return err
+	}
+	if err = state.CheckGas(); err != nil {
 		return err
 	}
 

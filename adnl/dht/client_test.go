@@ -166,10 +166,27 @@ func makeStrAddress(ip int32, port int) string {
 }
 
 func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
+	return newCorrectNodeWithVersion(a, b, c, d, port, 1671102718)
+}
+
+func newCorrectNodeWithVersion(a byte, b byte, c byte, d byte, port int32, version int32) (*Node, error) {
 	tPubKey, tPrivKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return nil, err
 	}
+	return newCorrectNodeWithKey(a, b, c, d, port, version, tPubKey, tPrivKey)
+}
+
+func newCorrectNodeWithKey(
+	a byte,
+	b byte,
+	c byte,
+	d byte,
+	port int32,
+	version int32,
+	tPubKey ed25519.PublicKey,
+	tPrivKey ed25519.PrivateKey,
+) (*Node, error) {
 	testNode := &Node{
 		keys.PublicKeyED25519{Key: tPubKey},
 		&address.List{
@@ -183,7 +200,7 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 			Priority:   0,
 			ExpireAt:   0,
 		},
-		1671102718,
+		version,
 		nil,
 	}
 
@@ -318,6 +335,39 @@ func TestClient_FindValue(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClient_addNodeRejectsTooOldVersion(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := newCorrectNodeWithKey(1, 2, 3, 4, 12345, 10, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := newCorrectNodeWithKey(1, 2, 3, 4, 12345, 9, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := newCorrectNodeWithKey(1, 2, 3, 4, 12345, 11, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := NewClient(&MockGateway{}, []*Node{current})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = cli.addNode(older); err == nil || err.Error() != "too old version" {
+		t.Fatalf("got unexpected error %v", err)
+	}
+
+	if _, err = cli.addNode(newer); err != nil {
+		t.Fatalf("failed to add newer node: %v", err)
 	}
 }
 
@@ -516,7 +566,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		ExpireAt:   0,
 	}
 
-	_, _, err = dhtClient.StoreAddress(ctx, addrList, 12*time.Minute, key, 3)
+	_, _, err = dhtClient.StoreAddress(ctx, addrList, 12*time.Minute, key)
 	if err != nil {
 		t.Fatal(err)
 	}

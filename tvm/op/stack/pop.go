@@ -49,6 +49,10 @@ func (op *OpPOP) SerializeText() string {
 	return fmt.Sprintf("s%d POP", op.stackIndex)
 }
 
+func (op *OpPOP) InstructionBits() int64 {
+	return 8
+}
+
 func (op *OpPOP) Interpret(state *vm.State) error {
 	if err := state.Stack.PopSwapAt(int(op.stackIndex)); err != nil {
 		return err

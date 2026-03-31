@@ -101,6 +101,7 @@ func runReferenceCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method strin
 
 	return &crossRunResult{
 		exitCode: result.ExitCode,
+		gasUsed:  result.GasUsed,
 		stack:    result.Stack,
 	}, nil
 }

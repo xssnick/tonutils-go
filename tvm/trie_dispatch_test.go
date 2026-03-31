@@ -18,6 +18,7 @@ func TestTVMStepUsesBitTrieForNonByteAlignedOpcode(t *testing.T) {
 			},
 		},
 		Stack: vm.NewStack(),
+		Gas:   vm.NewGas(),
 	}
 
 	if err := machine.step(state); err != nil {

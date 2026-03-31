@@ -9,7 +9,7 @@ type SimpleOP struct {
 	Action       func(*vm.State) error
 	BitPrefix    BitPrefix
 	Name         string
-	BaseGasPrice uint64
+	BaseGasPrice int64
 }
 
 func (op *SimpleOP) prefix() BitPrefix {
@@ -38,9 +38,15 @@ func (op *SimpleOP) SerializeText() string {
 	return op.Name
 }
 
+func (op *SimpleOP) InstructionBits() int64 {
+	return int64(op.prefix().Bits)
+}
+
 func (op *SimpleOP) Interpret(state *vm.State) error {
-	if err := state.Gas.Consume(op.BaseGasPrice); err != nil {
-		return err
+	if op.BaseGasPrice != 0 {
+		if err := state.ConsumeGas(op.BaseGasPrice); err != nil {
+			return err
+		}
 	}
 	return op.Action(state)
 }

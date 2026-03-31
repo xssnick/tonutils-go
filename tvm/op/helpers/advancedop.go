@@ -11,7 +11,8 @@ type AdvancedOP struct {
 	NameSerializer    func() string
 	SerializeSuffix   func() *cell.Builder
 	DeserializeSuffix func(code *cell.Slice) error
-	BaseGasPrice      uint64
+	BaseGasPrice      int64
+	FixedSizeBits     int64
 }
 
 func (op *AdvancedOP) prefix() BitPrefix {
@@ -49,9 +50,15 @@ func (op *AdvancedOP) SerializeText() string {
 	return op.NameSerializer()
 }
 
+func (op *AdvancedOP) InstructionBits() int64 {
+	return int64(op.prefix().Bits) + op.FixedSizeBits
+}
+
 func (op *AdvancedOP) Interpret(state *vm.State) error {
-	if err := state.Gas.Consume(op.BaseGasPrice); err != nil {
-		return err
+	if op.BaseGasPrice != 0 {
+		if err := state.ConsumeGas(op.BaseGasPrice); err != nil {
+			return err
+		}
 	}
 	return op.Action(state)
 }

@@ -15,6 +15,7 @@ type Slice struct {
 	bitsSz    uint
 	loadedSz  uint
 	data      []byte
+	observer  Observer
 
 	// store it as slice of pointers to make indexing logic cleaner on parse,
 	// from outside it should always come as object to not have problems
@@ -34,7 +35,7 @@ func (c *Slice) LoadRef() (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ref.BeginParse(), nil
+	return ref.BeginParse().SetObserver(c.observer), nil
 }
 
 func (c *Slice) PreloadRef() (*Slice, error) {
@@ -42,7 +43,7 @@ func (c *Slice) PreloadRef() (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ref.BeginParse(), nil
+	return ref.BeginParse().SetObserver(c.observer), nil
 }
 
 func (c *Slice) LoadRefCell() (*Cell, error) {
@@ -51,6 +52,9 @@ func (c *Slice) LoadRefCell() (*Cell, error) {
 	}
 	ref := c.refs[0]
 	c.refs = c.refs[1:]
+	if c.observer != nil {
+		c.observer.OnCellLoad(ref.Hash())
+	}
 
 	return ref, nil
 }
@@ -59,7 +63,11 @@ func (c *Slice) PreloadRefCell() (*Cell, error) {
 	if len(c.refs) == 0 {
 		return nil, ErrNoMoreRefs
 	}
-	return c.refs[0], nil
+	ref := c.refs[0]
+	if c.observer != nil {
+		c.observer.OnCellLoad(ref.Hash())
+	}
+	return ref, nil
 }
 
 func (c *Slice) MustLoadMaybeRef() *Slice {
@@ -85,8 +93,11 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 	}
 	ref := c.refs[0]
 	c.refs = c.refs[1:]
+	if c.observer != nil {
+		c.observer.OnCellLoad(ref.Hash())
+	}
 
-	return ref.BeginParse(), nil
+	return ref.BeginParse().SetObserver(c.observer), nil
 }
 
 func (c *Slice) RefsNum() int {
@@ -406,68 +417,39 @@ func (c *Slice) loadSlice(sz uint, preload bool) ([]byte, error) {
 		return nil, ErrNotEnoughData(int(c.bitsSz-c.loadedSz), int(sz))
 	}
 
-	if sz <= 0 {
+	if sz == 0 {
 		return []byte{}, nil
 	}
 
-	leftSz := sz
-	var unusedBits = uint(0)
-	if l := c.loadedSz % 8; l > 0 && c.loadedSz > 0 {
-		unusedBits = 8 - (c.loadedSz % 8)
-	}
+	startBitOffset := c.loadedSz % 8
+	outLen := int((sz + 7) / 8)
+	loadedData := make([]byte, outLen)
 
-	var loadedData []byte
+	if startBitOffset == 0 {
+		copy(loadedData, c.data[:outLen])
+	} else {
+		shift := uint8(startBitOffset)
+		invShift := uint8(8 - startBitOffset)
+		last := outLen - 1
+		sourceBytesNeeded := int((startBitOffset + sz + 7) / 8)
 
-	var oneMoreLeft, oneMoreRight uint
-	if unusedBits > 0 && sz > unusedBits {
-		oneMoreLeft = 1
-	}
-	if (sz-unusedBits)%8 != 0 || sz-unusedBits == 0 {
-		oneMoreRight = 1
-	}
-
-	ln := (sz-unusedBits)/8 + oneMoreLeft + oneMoreRight
-
-	i := oneMoreLeft
-	for leftSz > 0 {
-		var b byte
-		if oneMoreLeft > 0 {
-			b = c.data[i-1] << byte(8-unusedBits)
-			if i < ln {
-				b += c.data[i] >> unusedBits
-			}
-		} else {
-			b = c.data[i]
-			if unusedBits > 0 {
-				b <<= byte(8 - unusedBits)
-			}
+		for i := 0; i < last; i++ {
+			loadedData[i] = c.data[i]<<shift | c.data[i+1]>>invShift
 		}
 
-		if leftSz < 8 {
-			b &= 0xFF << (8 - leftSz)
-			leftSz = 0
-			loadedData = append(loadedData, b)
-			break
+		loadedData[last] = c.data[last] << shift
+		if sourceBytesNeeded > outLen {
+			loadedData[last] |= c.data[last+1] >> invShift
 		}
+	}
 
-		if i < ln {
-			loadedData = append(loadedData, b)
-		}
-
-		leftSz -= 8
-		i++
+	if rem := sz % 8; rem != 0 {
+		loadedData[outLen-1] &= byte(0xFF << (8 - rem))
 	}
 
 	if !preload {
-		if sz >= unusedBits {
-			usedBytes := (sz - unusedBits) / 8
-			if unusedBits > 0 {
-				usedBytes++
-			}
-
-			c.data = c.data[usedBytes:]
-		}
 		c.loadedSz += sz
+		c.data = c.data[(startBitOffset+sz)/8:]
 	}
 
 	return loadedData, nil
@@ -664,15 +646,17 @@ func (c *Slice) Copy() *Slice {
 		loadedSz:  c.loadedSz,
 		data:      data,
 		refs:      c.refs,
+		observer:  c.observer,
 	}
 }
 
 func (c *Slice) ToBuilder() *Builder {
 	left := c.bitsSz - c.loadedSz
 	return &Builder{
-		bitsSz: left,
-		data:   c.MustPreloadSlice(left),
-		refs:   c.refs,
+		bitsSz:   left,
+		data:     c.MustPreloadSlice(left),
+		refs:     c.refs,
+		observer: c.observer,
 	}
 }
 
@@ -693,13 +677,27 @@ func (c *Slice) ToCell() (*Cell, error) {
 		refs:      c.refs,
 	}
 	cl.calculateHashes()
+	if c.observer != nil {
+		c.observer.OnCellCreate()
+	}
 	return cl, nil
 }
 
 func (c *Slice) String() string {
-	cl, err := c.ToCell()
+	cl, err := c.WithoutObserver().ToCell()
 	if err != nil {
 		return "<invalid>"
 	}
 	return cl.String()
+}
+
+func (c *Slice) SetObserver(observer Observer) *Slice {
+	c.observer = observer
+	return c
+}
+
+func (c *Slice) WithoutObserver() *Slice {
+	cp := c.Copy()
+	cp.observer = nil
+	return cp
 }

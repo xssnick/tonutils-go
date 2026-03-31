@@ -13,6 +13,7 @@ func init() {
 
 func PLDU(sz uint) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			s0, err := state.Stack.PopSlice()
 			if err != nil {

@@ -42,7 +42,7 @@ func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
 	}
 
 	op.pfx = pfx
-	op.cont = ref.MustToCell()
+	op.cont = ref.WithoutObserver().MustToCell()
 
 	return nil
 }
@@ -57,6 +57,10 @@ func (op *OpDICTPUSHCONST) SerializeText() string {
 		str = op.cont.Dump()
 	}
 	return fmt.Sprintf("<%s> %d DICTPUSHCONST", str, op.pfx)
+}
+
+func (op *OpDICTPUSHCONST) InstructionBits() int64 {
+	return 24
 }
 
 func (op *OpDICTPUSHCONST) Interpret(state *vm.State) error {

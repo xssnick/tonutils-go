@@ -14,6 +14,7 @@ func init() {
 
 func SETCONTCTR(i int) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
 			cont0, err := state.Stack.PopContinuation()
 			if err != nil {

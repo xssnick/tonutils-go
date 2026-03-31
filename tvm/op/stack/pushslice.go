@@ -52,6 +52,10 @@ func (op *OpPUSHREFSLICE) SerializeText() string {
 	return fmt.Sprintf("%s PUSHREFSLICE", str)
 }
 
+func (op *OpPUSHREFSLICE) InstructionBits() int64 {
+	return 8
+}
+
 func (op *OpPUSHREFSLICE) Interpret(state *vm.State) error {
 	return state.Stack.PushSlice(op.value)
 }

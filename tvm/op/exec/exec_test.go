@@ -43,6 +43,7 @@ func newTestState() *vm.State {
 	st := &vm.State{
 		Stack:       vm.NewStack(),
 		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		Gas:         vm.NewGas(),
 	}
 	st.Reg.C[0] = &vm.QuitContinuation{ExitCode: 0}
 	return st

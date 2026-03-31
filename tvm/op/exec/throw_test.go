@@ -128,8 +128,8 @@ func TestThrowUnconditional(t *testing.T) {
 		t.Fatalf("runtime stack argument mismatch, got %s", arg.String())
 	}
 
-	if state.Gas.Consumed != vm.ExceptionGasPrice {
-		t.Fatalf("expected exception gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Consumed)
+	if state.Gas.Used() != vm.ExceptionGasPrice {
+		t.Fatalf("expected exception gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Used())
 	}
 
 	if bits := state.CurrentCode.BitsLeft(); bits != 0 {
@@ -173,8 +173,8 @@ func TestThrowArgUnconditional(t *testing.T) {
 		t.Fatalf("expected runtime stack size 2, got %d", state.Stack.Len())
 	}
 
-	if state.Gas.Consumed != vm.ExceptionGasPrice {
-		t.Fatalf("expected exception gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Consumed)
+	if state.Gas.Used() != vm.ExceptionGasPrice {
+		t.Fatalf("expected exception gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Used())
 	}
 }
 
@@ -257,8 +257,8 @@ func TestThrowIfVariants(t *testing.T) {
 					t.Fatalf("expected zero argument, got %s", arg.String())
 				}
 
-				if state.Gas.Consumed != vm.ExceptionGasPrice {
-					t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Consumed)
+				if state.Gas.Used() != vm.ExceptionGasPrice {
+					t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Used())
 				}
 			} else {
 				if recorder.calls != 0 {
@@ -273,8 +273,8 @@ func TestThrowIfVariants(t *testing.T) {
 					t.Fatalf("expected sentinel %s, got %s", sentinel.String(), top.String())
 				}
 
-				if state.Gas.Consumed != 0 {
-					t.Fatalf("expected zero gas consumption, got %d", state.Gas.Consumed)
+				if state.Gas.Used() != 0 {
+					t.Fatalf("expected zero gas consumption, got %d", state.Gas.Used())
 				}
 			}
 		})
@@ -365,8 +365,8 @@ func TestThrowArgIfVariants(t *testing.T) {
 					t.Fatalf("expected argument %s, got %s", argVal.String(), arg.String())
 				}
 
-				if state.Gas.Consumed != vm.ExceptionGasPrice {
-					t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Consumed)
+				if state.Gas.Used() != vm.ExceptionGasPrice {
+					t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Used())
 				}
 			} else {
 				if recorder.calls != 0 {
@@ -381,8 +381,8 @@ func TestThrowArgIfVariants(t *testing.T) {
 					t.Fatalf("expected sentinel %s, got %s", sentinel.String(), top.String())
 				}
 
-				if state.Gas.Consumed != 0 {
-					t.Fatalf("expected zero gas consumption, got %d", state.Gas.Consumed)
+				if state.Gas.Used() != 0 {
+					t.Fatalf("expected zero gas consumption, got %d", state.Gas.Used())
 				}
 			}
 		})
@@ -463,8 +463,8 @@ func TestThrowAnyUnconditional(t *testing.T) {
 				}
 			}
 
-			if state.Gas.Consumed != vm.ExceptionGasPrice {
-				t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Consumed)
+			if state.Gas.Used() != vm.ExceptionGasPrice {
+				t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Used())
 			}
 		})
 	}
@@ -549,8 +549,8 @@ func TestThrowAnyConditional(t *testing.T) {
 					}
 				}
 
-				if state.Gas.Consumed != vm.ExceptionGasPrice {
-					t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Consumed)
+				if state.Gas.Used() != vm.ExceptionGasPrice {
+					t.Fatalf("expected gas %d, got %d", vm.ExceptionGasPrice, state.Gas.Used())
 				}
 			} else {
 				if recorder.calls != 0 {
@@ -566,8 +566,8 @@ func TestThrowAnyConditional(t *testing.T) {
 					t.Fatalf("expected sentinel %s, got %s", sentinel.String(), top.String())
 				}
 
-				if state.Gas.Consumed != 0 {
-					t.Fatalf("expected zero gas consumption, got %d", state.Gas.Consumed)
+				if state.Gas.Used() != 0 {
+					t.Fatalf("expected zero gas consumption, got %d", state.Gas.Used())
 				}
 			}
 		})

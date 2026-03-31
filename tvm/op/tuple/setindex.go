@@ -51,5 +51,5 @@ func execSetIndex(state *vm.State, idx int) error {
 	if err := (&tup).Set(idx, val); err != nil {
 		return err
 	}
-	return state.Stack.PushTuple(tup)
+	return state.PushTupleCharged(tup)
 }

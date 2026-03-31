@@ -123,6 +123,21 @@ func (op *OpPUSHINT) SerializeText() string {
 	return fmt.Sprintf("%s PUSHINT", op.value.String())
 }
 
+func (op *OpPUSHINT) InstructionBits() int64 {
+	bitsSz := op.value.BitLen() + 1
+
+	switch {
+	case op.value.BitLen() < 4 && op.value.Sign() >= 0:
+		return 8
+	case bitsSz <= 8:
+		return 16
+	case bitsSz <= 16:
+		return 24
+	default:
+		return 13
+	}
+}
+
 func (op *OpPUSHINT) Interpret(state *vm.State) error {
 	return state.Stack.PushInt(new(big.Int).Set(op.value))
 }

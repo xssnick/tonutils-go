@@ -21,6 +21,7 @@ type SendMsgAction struct {
 
 type Stack struct {
 	elems []any
+	obs   cell.Observer
 }
 
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
@@ -29,6 +30,50 @@ var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 func NewStack() *Stack {
 	return &Stack{
 		elems: make([]any, 0, 256),
+	}
+}
+
+func (s *Stack) SetObserver(observer cell.Observer) {
+	s.obs = observer
+	if observer == nil {
+		return
+	}
+	for i, val := range s.elems {
+		s.elems[i] = bindValueObserver(val, observer)
+	}
+}
+
+func bindTupleObserver(t tuple.Tuple, observer cell.Observer) tuple.Tuple {
+	if observer == nil {
+		return t
+	}
+	cp := t.Copy()
+	for i := 0; i < cp.Len(); i++ {
+		val, err := cp.Index(i)
+		if err != nil {
+			panic(err)
+		}
+		if err = cp.Set(i, bindValueObserver(val, observer)); err != nil {
+			panic(err)
+		}
+	}
+	return cp
+}
+
+func bindValueObserver(val any, observer cell.Observer) any {
+	if observer == nil {
+		return val
+	}
+
+	switch x := val.(type) {
+	case *cell.Slice:
+		return x.Copy().SetObserver(observer)
+	case *cell.Builder:
+		return x.Copy().SetObserver(observer)
+	case tuple.Tuple:
+		return bindTupleObserver(x, observer)
+	default:
+		return val
 	}
 }
 
@@ -100,6 +145,8 @@ func (s *Stack) PushAny(val any) error {
 			val = c.Copy()
 		}
 	}
+
+	val = bindValueObserver(val, s.obs)
 
 	s.elems = append(s.elems, val)
 	return nil
@@ -405,10 +452,10 @@ func (s *Stack) String() string {
 			val = x.String()
 		case *cell.Slice:
 			typ = "slice"
-			val = x.MustToCell().Dump()
+			val = x.WithoutObserver().MustToCell().Dump()
 		case *cell.Builder:
 			typ = "builder"
-			val = x.EndCell().Dump()
+			val = x.WithoutObserver().EndCell().Dump()
 		case *cell.Cell:
 			typ = "cell"
 			val = x.Dump()
@@ -421,6 +468,7 @@ func (s *Stack) String() string {
 
 func (s *Stack) Copy() *Stack {
 	c := NewStack()
+	c.obs = s.obs
 
 	for _, elem := range s.elems {
 		_ = c.PushAny(elem)

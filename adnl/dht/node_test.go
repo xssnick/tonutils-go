@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/keys"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"reflect"
@@ -141,6 +143,69 @@ func TestNode_findNodes(t *testing.T) {
 			t.Errorf("got unexcpected error '%s', want unexpected response", err.Error())
 		}
 	})
+
+	t.Run("untrusted nodes list response", func(t *testing.T) {
+		badNode := *tNode
+		badNode.Signature = []byte("bad-signature")
+
+		gateway := &MockGateway{}
+		client := &Client{
+			gateway:   gateway,
+			networkID: _UnknownNetworkID,
+		}
+		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+			return MockADNL{
+				query: func(ctx context.Context, req, result tl.Serializable) error {
+					switch request := req.(type) {
+					case tl.Raw:
+						var _req FindNode
+						_, err := tl.Parse(&_req, request, true)
+						if err != nil {
+							t.Fatal("failed to prepare test data, err", err)
+						}
+
+						if bytes.Equal(kId, _req.Key) {
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{&badNode}}))
+						} else {
+							t.Fatal("bad request received")
+						}
+					default:
+						return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
+					}
+					return nil
+				},
+			}, nil
+		}
+
+		tDhtNode.client = client
+		_, err := tDhtNode.findNodes(context.Background(), kId, 10)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "untrusted nodes list response") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+}
+
+func TestNode_CheckSignatureExtendedNetworkID(t *testing.T) {
+	node, err := newCorrectNode(1, 2, 3, 4, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signature := append([]byte{}, node.Signature...)
+	node.Signature = make([]byte, 4+len(signature))
+	binary.LittleEndian.PutUint32(node.Signature[:4], uint32(17))
+	copy(node.Signature[4:], signature)
+
+	if err = node.CheckSignatureWithNetworkID(17); err != nil {
+		t.Fatalf("failed to validate node with correct network id: %v", err)
+	}
+
+	if err = node.CheckSignatureWithNetworkID(18); err == nil || !strings.Contains(err.Error(), "wrong network id") {
+		t.Fatalf("got unexpected error %v", err)
+	}
 }
 
 func TestNode_storeValue(t *testing.T) {
@@ -392,20 +457,101 @@ func TestNode_checkValue(t *testing.T) {
 	}
 
 	t.Run("correct value", func(t *testing.T) {
-		err = checkValue(kId, &val)
+		testVal := val
+		err = checkValue(kId, &testVal)
 		if err != nil {
 			t.Fatal("failed to execute checkValue func, err: ", err)
 		}
 	})
 
 	t.Run("corrupted value: bad value sign", func(t *testing.T) {
-		val.Signature = []byte("qewrgheau;igqn41463[8u9y1436h1[iu1gh[8935]988hg]q5")
-		err = checkValue(kId, &val)
+		testVal := val
+		testVal.Signature = []byte("qewrgheau;igqn41463[8u9y1436h1[iu1gh[8935]988hg]q5")
+		err = checkValue(kId, &testVal)
 		if err == nil {
 			t.Error("got error nil, want error not nil")
 		}
 		if strings.Contains(err.Error(), "value's signature not match key") != true {
 			t.Errorf("got unexcpected error '%s', want signature not match key", err.Error())
+		}
+	})
+
+	t.Run("corrupted value: too big", func(t *testing.T) {
+		testVal := val
+		testVal.Data = make([]byte, _MaxValueSize+1)
+		err = checkValue(kId, &testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "too big value") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("anybody rule cannot have signature", func(t *testing.T) {
+		testVal := val
+		testVal.KeyDescription.UpdateRule = UpdateRuleAnybody{}
+		testVal.Signature = []byte{1}
+		err = checkValue(kId, &testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "cannot have signature in DhtUpdateRuleAnybody") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("overlay nodes rule cannot have signature", func(t *testing.T) {
+		testVal, testKeyID := newCorrectOverlayValue(t, false)
+		testVal.Signature = []byte{1}
+		err = checkValue(testKeyID, testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "cannot have signature in DhtUpdateRuleOverlayNodes") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("overlay nodes rule bad overlay id", func(t *testing.T) {
+		testVal, testKeyID := newCorrectOverlayValue(t, true)
+		err = checkValue(testKeyID, testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "bad overlay id") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("overlay nodes rule wrong network id", func(t *testing.T) {
+		testVal, testKeyID := newCorrectOverlayValue(t, false)
+
+		var nodes overlay.NodesList
+		if _, err = tl.Parse(&nodes, testVal.Data, true); err != nil {
+			t.Fatal(err)
+		}
+
+		signature := append([]byte{}, nodes.List[0].Signature...)
+		nodes.List[0].Signature = make([]byte, 4+len(signature))
+		binary.LittleEndian.PutUint32(nodes.List[0].Signature[:4], uint32(17))
+		copy(nodes.List[0].Signature[4:], signature)
+
+		testVal.Data, err = tl.Serialize(nodes, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = checkValueWithNetworkID(testKeyID, testVal, 18)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "wrong network id") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+
+		if err = checkValueWithNetworkID(testKeyID, testVal, 17); err != nil {
+			t.Fatalf("failed to validate overlay nodes with correct network id: %v", err)
 		}
 	})
 
@@ -419,4 +565,59 @@ func TestNode_checkValue(t *testing.T) {
 	//	t.Errorf("got unexcpected error '%s', want signature not match key", err.Error())
 	//}
 	//})
+}
+
+func newCorrectOverlayValue(t *testing.T, wrongOverlayID bool) (*Value, []byte) {
+	t.Helper()
+
+	_, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	overlayKey := []byte("test-overlay-key")
+	overlayHash, err := tl.Hash(keys.PublicKeyOverlay{Key: overlayKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := overlay.NewNode(overlayKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if wrongOverlayID {
+		node.Overlay = bytes.Repeat([]byte{1}, 32)
+		if err = node.Sign(priv); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	data, err := tl.Serialize(overlay.NodesList{
+		List: []overlay.Node{*node},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	val := &Value{
+		KeyDescription: KeyDescription{
+			Key: Key{
+				ID:    overlayHash,
+				Name:  []byte("nodes"),
+				Index: 0,
+			},
+			ID:         keys.PublicKeyOverlay{Key: overlayKey},
+			UpdateRule: UpdateRuleOverlayNodes{},
+		},
+		Data: data,
+		TTL:  int32(time.Now().Unix()),
+	}
+
+	keyID, err := tl.Hash(val.KeyDescription.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return val, keyID
 }

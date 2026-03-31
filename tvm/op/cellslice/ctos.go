@@ -23,7 +23,11 @@ func CTOS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeCellUnderflow, "unexpected special cell")
 			}
 
-			return state.Stack.PushSlice(c.BeginParse())
+			sl, err := state.Cells.BeginParse(c)
+			if err != nil {
+				return err
+			}
+			return state.Stack.PushSlice(sl)
 		},
 		Name:      "CTOS",
 		BitPrefix: helpers.BytesPrefix(0xD0),

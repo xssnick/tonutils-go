@@ -22,7 +22,7 @@ func TPOP() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			if err = state.Stack.PushTuple(tup); err != nil {
+			if err = state.PushTupleCharged(tup); err != nil {
 				return err
 			}
 			return state.Stack.PushAny(val)

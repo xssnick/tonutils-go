@@ -35,6 +35,11 @@ type Cell struct {
 	refs []*Cell
 }
 
+type Observer interface {
+	OnCellLoad(hash []byte)
+	OnCellCreate()
+}
+
 type RawUnsafeCell struct {
 	IsSpecial bool
 	LevelMask LevelMask
@@ -75,6 +80,7 @@ func (c *Cell) BeginParse() *Slice {
 		bitsSz:    c.bitsSz,
 		data:      data,
 		refs:      c.refs,
+		observer:  nil,
 	}
 }
 
@@ -83,9 +89,10 @@ func (c *Cell) ToBuilder() *Builder {
 	data := append([]byte{}, c.data...)
 
 	return &Builder{
-		bitsSz: c.bitsSz,
-		data:   data,
-		refs:   c.refs,
+		bitsSz:   c.bitsSz,
+		data:     data,
+		refs:     c.refs,
+		observer: nil,
 	}
 }
 

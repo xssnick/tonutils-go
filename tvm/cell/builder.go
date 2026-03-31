@@ -7,8 +7,9 @@ import (
 )
 
 type Builder struct {
-	bitsSz uint
-	data   []byte
+	bitsSz   uint
+	data     []byte
+	observer Observer
 
 	// store it as slice of pointers to make indexing logic cleaner on parse,
 	// from outside it should always come as object to not have problems
@@ -582,9 +583,10 @@ func (b *Builder) Copy() *Builder {
 	data := append([]byte{}, b.data...)
 
 	return &Builder{
-		bitsSz: b.bitsSz,
-		data:   data,
-		refs:   b.refs,
+		bitsSz:   b.bitsSz,
+		data:     data,
+		refs:     b.refs,
+		observer: b.observer,
 	}
 }
 
@@ -600,17 +602,32 @@ func (b *Builder) EndCell() *Cell {
 	}
 	c.levelMask = ordinaryLevelMask(c.refs)
 	c.calculateHashes()
+	if b.observer != nil {
+		b.observer.OnCellCreate()
+	}
 	return c
 }
 
 func (b *Builder) ToSlice() *Slice {
 	return &Slice{
-		bitsSz: b.bitsSz,
-		data:   append([]byte{}, b.data...), // copy data,
-		refs:   b.refs,
+		bitsSz:   b.bitsSz,
+		data:     append([]byte{}, b.data...), // copy data,
+		refs:     b.refs,
+		observer: b.observer,
 	}
 }
 
 func (b *Builder) String() string {
-	return b.EndCell().String()
+	return b.WithoutObserver().EndCell().String()
+}
+
+func (b *Builder) SetObserver(observer Observer) *Builder {
+	b.observer = observer
+	return b
+}
+
+func (b *Builder) WithoutObserver() *Builder {
+	cp := b.Copy()
+	cp.observer = nil
+	return cp
 }

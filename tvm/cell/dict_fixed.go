@@ -6,6 +6,14 @@ import (
 	"sort"
 )
 
+type DictSetMode uint8
+
+const (
+	DictSetModeReplace DictSetMode = 1
+	DictSetModeAdd     DictSetMode = 2
+	DictSetModeSet     DictSetMode = DictSetModeReplace | DictSetModeAdd
+)
+
 type DictItem struct {
 	Key   *Cell
 	Value *Slice
