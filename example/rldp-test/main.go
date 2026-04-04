@@ -50,7 +50,7 @@ func main() {
 	configURL := flag.String("config", defaultConfigURL, "URL to global config for DHT")
 	adnlIDHex := flag.String("adnl", "", "remote ADNL ID (hex), if empty runs in server mode")
 	listenAddr := flag.String("listen", defaultListenAddr, "listen address for server mode")
-	publicIP := flag.String("public", "", "public IPv4 address to publish in DHT (server mode)")
+	publicIP := flag.String("public", "", "public IP address to publish in DHT (server mode)")
 	payload := flag.Uint64("payload", defaultPayloadSize, "payload size in bytes for each request (client mode)")
 	parallel := flag.Int("parallel", defaultParallel, "number of parallel queries (client mode)")
 	timeout := flag.Duration("timeout", 30*time.Second, "per-request timeout")
@@ -149,19 +149,17 @@ func publishAddress(ctx context.Context, gateway *adnl.Gateway, priv ed25519.Pri
 	if ip == nil {
 		return fmt.Errorf("invalid public IP: %s", publicIP)
 	}
-	if ip.To4() == nil {
-		return fmt.Errorf("only IPv4 is supported for publication: %s", publicIP)
-	}
 
 	port, err := net.LookupPort("udp", portStr)
 	if err != nil {
 		return fmt.Errorf("invalid listen port: %w", err)
 	}
 
-	gateway.SetAddressList([]*address.UDP{{
-		IP:   ip,
-		Port: int32(port),
-	}})
+	addr, err := address.NewAddress(ip, int32(port))
+	if err != nil {
+		return err
+	}
+	gateway.SetAddressList([]address.Address{addr})
 
 	log.Println("Starting DHT client for publication")
 	dhtClient, err := dht.NewClientFromConfigUrl(ctx, gateway, configURL)
@@ -264,7 +262,11 @@ func runClient(adnlIDHex string, payload uint64, parallel int, timeout time.Dura
 
 	var peer adnl.Peer
 	for _, addr := range addrList.Addresses {
-		remote := addr.IP.String() + ":" + fmt.Sprint(addr.Port)
+		remote, err := address.DialString(addr)
+		if err != nil {
+			log.Printf("failed to format address: %v", err)
+			continue
+		}
 		log.Printf("Trying address %s", remote)
 		peer, err = gateway.RegisterClient(remote, pubKey)
 		if err != nil {

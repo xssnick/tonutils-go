@@ -71,13 +71,16 @@ type ADNL struct {
 	recvPriorityAddrVer  int32
 	ourAddrVerOnPeerSide int32
 
-	peerID       []byte
-	sharedKey    []byte
-	peerKey      ed25519.PublicKey
-	ourAddresses unsafe.Pointer
+	peerID        []byte
+	peerKey       ed25519.PublicKey
+	peerKeyX25519 []byte
+	ourAddresses  unsafe.Pointer
 
-	activeQueries map[string]chan tl.Serializable
+	activeQueries map[queryID]chan tl.Serializable
 	activePings   map[int64]chan MessagePong
+
+	queryMx sync.Mutex
+	pingMx  sync.RWMutex
 
 	customMessageHandler unsafe.Pointer // CustomMessageHandler
 	queryHandler         unsafe.Pointer // QueryHandler
@@ -103,7 +106,7 @@ func (g *Gateway) initADNL() *ADNL {
 		closeFn:       closeFn,
 		msgParts:      make(map[string]*partitionedMessage, 128),
 		activePings:   make(map[int64]chan MessagePong),
-		activeQueries: map[string]chan tl.Serializable{},
+		activeQueries: map[queryID]chan tl.Serializable{},
 	}
 }
 
@@ -159,6 +162,12 @@ func (c *Channel) process(buf []byte) error {
 
 func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error) {
 	if packet.DstReinitDate != nil && *packet.DstReinitDate > 0 && *packet.DstReinitDate < atomic.LoadInt32(&a.reinitTime) {
+		Logger(
+			"[ADNL DEBUG] early reinit path",
+			"packet_reinit", packet.ReinitDateValue(),
+			"packet_dst_reinit", packet.DstReinitDateValue(),
+			"our_reinit", atomic.LoadInt32(&a.reinitTime),
+		)
 		if packet.ReinitDate != nil {
 			atomic.StoreInt32(&a.dstReinit, *packet.ReinitDate)
 		}
@@ -177,22 +186,24 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 	if !fromChannel && packet.From != nil {
 		a.mx.Lock()
 		if a.peerKey == nil {
-			a.sharedKey, err = keys.SharedKey(a.ourKey, packet.From.Key)
-			if err != nil {
-				return err
-			}
-
 			a.peerID, err = tl.Hash(keys.PublicKeyED25519{Key: packet.From.Key})
 			if err != nil {
 				return err
 			}
 
 			a.peerKey = packet.From.Key
+			a.peerKeyX25519, err = keys.Ed25519PubToX25519(packet.From.Key)
+			if err != nil {
+				return err
+			}
 		}
 		a.mx.Unlock()
 	}
 
-	seqno := *packet.Seqno
+	var seqno int64
+	if packet.Seqno != nil {
+		seqno = *packet.Seqno
+	}
 
 	for { // to guarantee swap to highest
 		if conf := atomic.LoadInt64(&a.confirmSeqno); seqno > conf {
@@ -218,11 +229,15 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 	}
 
 	if packet.Address != nil {
-		// a.recvAddrVer = packet.Address.Version
-		atomic.StoreInt32(&a.recvPriorityAddrVer, packet.Address.Version)
+		atomic.StoreInt32(&a.recvAddrVer, packet.Address.Version)
+	}
+
+	if packet.PriorityAddress != nil {
+		atomic.StoreInt32(&a.recvPriorityAddrVer, packet.PriorityAddress.Version)
 	}
 
 	for i, message := range packet.Messages {
+		Logger("[ADNL DEBUG] process packet message", i, reflect.TypeOf(message))
 		err = a.processMessage(message)
 		if err != nil {
 			return fmt.Errorf("failed to process message %d %s: %v", i, reflect.TypeOf(message), err)
@@ -235,9 +250,9 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 func (a *ADNL) processMessage(message any) error {
 	switch ms := message.(type) {
 	case MessagePong:
-		a.mx.RLock()
+		a.pingMx.RLock()
 		ch := a.activePings[ms.Value]
-		a.mx.RUnlock()
+		a.pingMx.RUnlock()
 
 		if ch != nil {
 			select {
@@ -255,16 +270,20 @@ func (a *ADNL) processMessage(message any) error {
 			return fmt.Errorf("failed to send pong: %w", err)
 		}
 	case MessageQuery:
+		Logger("[ADNL DEBUG] recv MessageQuery", hex.EncodeToString(ms.ID), reflect.TypeOf(ms.Data))
 		qh := atomic.LoadPointer(&a.queryHandler)
 		if qh != nil {
 			h := *(*QueryHandler)(qh)
 			if err := h(&ms); err != nil {
 				return fmt.Errorf("failed to handle query: %w", err)
 			}
+		} else {
+			Logger("[ADNL DEBUG] query handler is nil", hex.EncodeToString(ms.ID))
 		}
 	case MessageAnswer:
-		a.processAnswer(hex.EncodeToString(ms.ID), ms.Data)
+		a.processAnswer(ms.ID, ms.Data)
 	case MessageCreateChannel:
+		Logger("[ADNL DEBUG] recv MessageCreateChannel", hex.EncodeToString(ms.Key))
 		a.mx.Lock()
 		defer a.mx.Unlock()
 
@@ -431,13 +450,18 @@ func (a *ADNL) RemoteAddr() string {
 	return a.addr
 }
 
-func (a *ADNL) processAnswer(id string, query any) {
-	a.mx.Lock()
-	res, ok := a.activeQueries[id]
-	if ok {
-		delete(a.activeQueries, id)
+func (a *ADNL) processAnswer(id []byte, query any) {
+	queryID, okID := encodeQueryID(id)
+	if !okID {
+		return
 	}
-	a.mx.Unlock()
+
+	a.queryMx.Lock()
+	res, ok := a.activeQueries[queryID]
+	if ok {
+		delete(a.activeQueries, queryID)
+	}
+	a.queryMx.Unlock()
 
 	if ok {
 		if res != nil { // nil means - we did query, but dont want response
@@ -481,14 +505,14 @@ func (a *ADNL) Ping(ctx context.Context) (time.Duration, error) {
 	}
 
 	ch := make(chan MessagePong, 1)
-	a.mx.Lock()
+	a.pingMx.Lock()
 	a.activePings[val] = ch
-	a.mx.Unlock()
+	a.pingMx.Unlock()
 
 	defer func() {
-		a.mx.Lock()
+		a.pingMx.Lock()
 		delete(a.activePings, val)
-		a.mx.Unlock()
+		a.pingMx.Unlock()
 	}()
 
 	for {
@@ -519,16 +543,19 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 	}
 
 	res := make(chan tl.Serializable, 1)
-	reqID := hex.EncodeToString(q.ID)
+	reqID, okID := encodeQueryID(q.ID)
+	if !okID {
+		return fmt.Errorf("invalid query id size")
+	}
 
-	a.mx.Lock()
+	a.queryMx.Lock()
 	a.activeQueries[reqID] = res
-	a.mx.Unlock()
+	a.queryMx.Unlock()
 
 	defer func() {
-		a.mx.Lock()
+		a.queryMx.Lock()
 		delete(a.activeQueries, reqID)
-		a.mx.Unlock()
+		a.queryMx.Unlock()
 	}()
 
 	baseMTU := false
@@ -578,6 +605,7 @@ reSplit:
 	if err != nil {
 		return fmt.Errorf("send answer  failed: %w", err)
 	}
+	Logger("[ADNL DEBUG] answer type", reflect.TypeOf(result), "packets", len(packets), "lens", packetLens(packets), "baseMTU", baseMTU)
 
 	for _, packet := range packets {
 		if err = a.send(packet); err != nil {
@@ -589,6 +617,14 @@ reSplit:
 		}
 	}
 	return nil
+}
+
+func packetLens(packets [][]byte) []int {
+	lens := make([]int, 0, len(packets))
+	for _, packet := range packets {
+		lens = append(lens, len(packet))
+	}
+	return lens
 }
 
 const MaxMTU = 1500 - 40 - 8 // max is for ipv6 over ethernet
@@ -644,7 +680,7 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 				Date:    ch.initDate,
 			}
 
-			buf, err = a.createPacket(seqno, true, chMsg, req)
+			buf, err = a.createPacket(seqno, chMsg, req)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create packet: %w", err)
 			}
@@ -682,7 +718,7 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 		Date: ch.initDate,
 	}
 
-	buf, err = a.createPacket(seqno, false, chMsg, req)
+	buf, err = a.createPacket(seqno, chMsg, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create packet: %w", err)
 	}
@@ -712,6 +748,10 @@ func (a *ADNL) send(buf []byte) error {
 }
 
 func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
+	if len(packet) < 64 {
+		return nil, ErrTooShortData
+	}
+
 	pub := packet[0:32]
 	checksum := packet[32:64]
 	data := packet[64:]
@@ -737,13 +777,20 @@ func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 }
 
 func (a *ADNL) SetAddresses(list address.List) {
-	atomic.StoreInt32(&a.reinitTime, list.ReinitDate)
-	atomic.StorePointer(&a.ourAddresses, unsafe.Pointer(&list))
+	listCopy := address.CloneList(&list)
+	if listCopy == nil {
+		listCopy = &address.List{}
+	}
+	atomic.StoreInt32(&a.reinitTime, listCopy.ReinitDate)
+	atomic.StorePointer(&a.ourAddresses, unsafe.Pointer(listCopy))
 }
 
 func (a *ADNL) GetAddressList() address.List {
 	ourAddr := (*address.List)(atomic.LoadPointer(&a.ourAddresses))
-	return *ourAddr
+	if ourAddr == nil {
+		return address.List{}
+	}
+	return *address.CloneList(ourAddr)
 }
 
 func (a *ADNL) GetID() []byte {
@@ -762,7 +809,7 @@ func (a *ADNL) Reinit() {
 	atomic.StoreInt64(&a.confirmSeqno, 0)
 }
 
-func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, error) {
+func (a *ADNL) createPacket(seqno int64, msgs ...any) ([]byte, error) {
 	if a.peerKey == nil {
 		return nil, fmt.Errorf("unknown peer")
 	}
@@ -770,10 +817,8 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	confSeq := atomic.LoadInt64(&a.confirmSeqno)
 	reinit := atomic.LoadInt32(&a.reinitTime)
 	dstReinit := atomic.LoadInt32(&a.dstReinit)
-
-	// addrVer := a.recvAddrVer
+	addrVer := atomic.LoadInt32(&a.recvAddrVer)
 	priorityAddrVer := atomic.LoadInt32(&a.recvPriorityAddrVer)
-
 	randData := make([]byte, 32)
 	_, err := rand.Read(randData)
 	if err != nil {
@@ -797,18 +842,15 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 		ConfirmSeqno:  &confSeq,
 		ReinitDate:    &reinit,
 		DstReinitDate: &dstReinit,
-		// RecvAddrListVersion:         &addrVer,         // if version is less, peer will send us his address,
-		RecvPriorityAddrListVersion: &priorityAddrVer, // but we don't need it in current implementation
-		Rand2:                       rand2,
+		Rand2:         rand2,
 	}
 
-	if !isResp {
-		packet.From = &keys.PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
-	} else {
-		packet.FromIDShort, err = tl.Hash(keys.PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)})
-		if err != nil {
-			return nil, err
-		}
+	packet.From = &keys.PublicKeyED25519{Key: a.ourKey.Public().(ed25519.PublicKey)}
+	if addrVer > 0 {
+		packet.RecvAddrListVersion = &addrVer
+	}
+	if priorityAddrVer > 0 {
+		packet.RecvPriorityAddrListVersion = &priorityAddrVer
 	}
 
 	ourAddr := (*address.List)(atomic.LoadPointer(&a.ourAddresses))
@@ -836,7 +878,17 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	hash := sha256.Sum256(packetData)
 	checksum := hash[:]
 
-	ctr, err := keys.BuildSharedCipher(a.sharedKey, checksum)
+	_, outerPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	sharedKey, err := keys.SharedKeyWithPeerX25519(outerPriv, a.peerKeyX25519)
+	if err != nil {
+		return nil, err
+	}
+
+	ctr, err := keys.BuildSharedCipher(sharedKey, checksum)
 	if err != nil {
 		return nil, err
 	}
@@ -844,7 +896,7 @@ func (a *ADNL) createPacket(seqno int64, isResp bool, msgs ...any) ([]byte, erro
 	ctr.XORKeyStream(packetData, packetData)
 
 	copy(bufData, a.peerID)
-	copy(bufData[32:], a.ourKey.Public().(ed25519.PublicKey))
+	copy(bufData[32:], outerPriv.Public().(ed25519.PublicKey))
 	copy(bufData[64:], checksum)
 
 	return bufData, nil
@@ -861,4 +913,15 @@ func createQueryMessage(query any) (*MessageQuery, error) {
 		ID:   qid,
 		Data: query,
 	}, nil
+}
+
+type queryID [32]byte
+
+func encodeQueryID(id []byte) (queryID, bool) {
+	var qid queryID
+	if len(id) != len(qid) {
+		return qid, false
+	}
+	copy(qid[:], id)
+	return qid, true
 }

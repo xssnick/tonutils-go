@@ -2,9 +2,7 @@ package dht
 
 import (
 	"encoding/base64"
-	"encoding/binary"
 	"fmt"
-	"net"
 
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/keys"
@@ -51,13 +49,11 @@ func nodesFromConfig(cfg *liteclient.GlobalConfig) ([]*Node, error) {
 		}
 
 		for _, addr := range node.AddrList.Addrs {
-			ip := make(net.IP, 4)
-			ii := int32(addr.IP)
-			binary.BigEndian.PutUint32(ip, uint32(ii))
-			n.AddrList.Addresses = append(n.AddrList.Addresses, &address.UDP{
-				IP:   ip,
-				Port: int32(addr.Port),
-			})
+			adnlAddr, err := addr.ToADNLAddress()
+			if err != nil {
+				continue
+			}
+			n.AddrList.Addresses = append(n.AddrList.Addresses, adnlAddr)
 		}
 
 		nodes = append(nodes, n)

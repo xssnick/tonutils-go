@@ -578,9 +578,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			}
 
 			bts := make([]byte, 16)
-			for i := 0; i < 16; i++ {
-				bts[i] = buf[15-i]
-			}
+			copy(bts, buf[:16])
 			*(*[]byte)(ptr) = bts
 			buf = buf[16:]
 		case _ExecuteTypeSingleCell:

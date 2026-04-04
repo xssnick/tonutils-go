@@ -394,9 +394,6 @@ func TestNode_findValue(t *testing.T) {
 					}
 				}
 			}
-			for _, val := range cli.knownNodes {
-				testNode = val
-			}
 
 			siteAddr, err := hex.DecodeString(test.addr)
 			if err != nil {

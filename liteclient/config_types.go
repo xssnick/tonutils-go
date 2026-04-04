@@ -1,5 +1,14 @@
 package liteclient
 
+import (
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"net"
+
+	"github.com/xssnick/tonutils-go/adnl/address"
+)
+
 type GlobalConfig struct {
 	Type        string             `json:"@type"`
 	DHT         DHTConfig          `json:"dht"`
@@ -47,6 +56,105 @@ type DHTAddress struct {
 	Type string `json:"@type"`
 	IP   int    `json:"ip"`
 	Port int    `json:"port"`
+
+	IPv6 net.IP `json:"-"`
+}
+
+func (a *DHTAddress) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type string          `json:"@type"`
+		IP   json.RawMessage `json:"ip"`
+		Port int             `json:"port"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	a.Type = raw.Type
+	a.Port = raw.Port
+	a.IP = 0
+	a.IPv6 = nil
+
+	switch raw.Type {
+	case "adnl.address.udp", "":
+		if len(raw.IP) == 0 {
+			return nil
+		}
+		var ip int
+		if err := json.Unmarshal(raw.IP, &ip); err != nil {
+			return err
+		}
+		a.IP = ip
+		return nil
+	case "adnl.address.udp6":
+		ip, err := parseDHTIPv6(raw.IP)
+		if err != nil {
+			return err
+		}
+		a.IPv6 = ip
+		return nil
+	default:
+		// keep unknown address types parseable for forward-compat
+		return nil
+	}
+}
+
+func parseDHTIPv6(data json.RawMessage) (net.IP, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var ipStr string
+	if err := json.Unmarshal(data, &ipStr); err == nil {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid ipv6 address %q", ipStr)
+		}
+		ip = ip.To16()
+		if ip == nil {
+			return nil, fmt.Errorf("invalid ipv6 address %q", ipStr)
+		}
+		return ip, nil
+	}
+
+	var words []uint32
+	if err := json.Unmarshal(data, &words); err == nil {
+		switch len(words) {
+		case 4:
+			ip := make(net.IP, net.IPv6len)
+			for i, word := range words {
+				binary.BigEndian.PutUint32(ip[i*4:], word)
+			}
+			return ip, nil
+		case 16:
+			ip := make(net.IP, net.IPv6len)
+			for i, word := range words {
+				if word > 0xff {
+					return nil, fmt.Errorf("invalid ipv6 byte %d", word)
+				}
+				ip[i] = byte(word)
+			}
+			return ip, nil
+		}
+	}
+
+	return nil, fmt.Errorf("unsupported ipv6 encoding")
+}
+
+func (a DHTAddress) ToADNLAddress() (address.Address, error) {
+	switch a.Type {
+	case "adnl.address.udp", "":
+		b := make(net.IP, net.IPv4len)
+		binary.BigEndian.PutUint32(b, uint32(int32(a.IP)))
+		return address.NewAddress(b, int32(a.Port))
+	case "adnl.address.udp6":
+		if len(a.IPv6) == 0 {
+			return nil, fmt.Errorf("missing ipv6 address")
+		}
+		return address.NewAddress(a.IPv6, int32(a.Port))
+	default:
+		return nil, fmt.Errorf("unsupported address type %q", a.Type)
+	}
 }
 
 type ServerID struct {

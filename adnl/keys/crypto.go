@@ -28,6 +28,19 @@ func SharedKey(ourKey ed25519.PrivateKey, serverKey ed25519.PublicKey) ([]byte, 
 	return privateKey.ECDH(pubKey)
 }
 
+func SharedKeyWithPeerX25519(ourKey ed25519.PrivateKey, serverKeyX25519 []byte) ([]byte, error) {
+	privateKey, err := ecdh.X25519().NewPrivateKey(Ed25519PrivateToX25519(ourKey))
+	if err != nil {
+		return nil, err
+	}
+
+	pubKey, err := ecdh.X25519().NewPublicKey(serverKeyX25519)
+	if err != nil {
+		return nil, err
+	}
+	return privateKey.ECDH(pubKey)
+}
+
 func BuildSharedCipher(key []byte, checksum []byte) (cipher.Stream, error) {
 	kiv := make([]byte, 48)
 	// key

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/address"
@@ -12,7 +13,6 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,6 +81,7 @@ type UDPPacket struct {
 
 type Gateway struct {
 	addrList   unsafe.Pointer
+	id         []byte
 	key        ed25519.PrivateKey
 	processors map[string]*srvProcessor
 	peers      map[string]*peerConn
@@ -111,8 +112,14 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 		panic("key is nil")
 	}
 
+	id, err := tl.Hash(keys.PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)})
+	if err != nil {
+		panic(err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Gateway{
+		id:              id,
 		key:             key,
 		processors:      map[string]*srvProcessor{},
 		peers:           map[string]*peerConn{},
@@ -144,10 +151,15 @@ var DefaultListener = func(addr string) (net.PacketConn, error) {
 }
 
 func (g *Gateway) GetAddressList() address.List {
-	if g.addrList == nil {
+	ptr := (*address.List)(atomic.LoadPointer(&g.addrList))
+	if ptr == nil {
 		return address.List{}
 	}
-	return *(*address.List)(atomic.LoadPointer(&g.addrList))
+	return *address.CloneList(ptr)
+}
+
+func (g *Gateway) GetPublicKey() ed25519.PublicKey {
+	return append(ed25519.PublicKey(nil), g.key.Public().(ed25519.PublicKey)...)
 }
 
 func (g *Gateway) setupChannelCallbacks(onOpen func(ch *Channel), onClose func(id string)) {
@@ -155,18 +167,19 @@ func (g *Gateway) setupChannelCallbacks(onOpen func(ch *Channel), onClose func(i
 	g.onChannelClose = onClose
 }
 
-func (g *Gateway) SetAddressList(addresses []*address.UDP) {
+func (g *Gateway) SetAddressList(addresses []address.Address) {
 	g.mx.Lock()
 	defer g.mx.Unlock()
 
 	tm := int32(time.Now().Unix())
 	list := address.List{
-		Addresses:  addresses,
+		Addresses:  append([]address.Address(nil), addresses...),
 		Version:    tm,
 		ReinitDate: tm,
 		Priority:   0,
 		ExpireAt:   0,
 	}
+	list = *address.CloneList(&list)
 	atomic.StorePointer(&g.addrList, unsafe.Pointer(&list))
 
 	for _, conn := range g.peers {
@@ -188,28 +201,39 @@ func (g *Gateway) StartServer(listenAddr string, listenThreads ...int) (err erro
 		threads = listenThreads[0]
 	}
 
-	adr := strings.Split(listenAddr, ":")
-	if len(adr) != 2 {
+	host, portStr, err := net.SplitHostPort(listenAddr)
+	if err != nil {
 		return fmt.Errorf("invalid listen address")
 	}
 
 	if g.addrList == nil {
-		ip := net.ParseIP(adr[0])
+		tm := int32(time.Now().Unix())
+		ip := net.ParseIP(host)
 
-		if ip = ip.To4(); !ip.Equal(net.IPv4zero) {
-			port, err := strconv.ParseUint(adr[1], 10, 16)
+		if ip != nil && !ip.IsUnspecified() {
+			port, err := strconv.ParseUint(portStr, 10, 16)
 			if err != nil {
 				return fmt.Errorf("invalid listen port")
 			}
 
-			tm := int32(time.Now().Unix())
+			addr, err := address.NewAddress(ip, int32(port))
+			if err != nil {
+				return err
+			}
+
 			g.addrList = unsafe.Pointer(&address.List{
-				Addresses: []*address.UDP{
-					{
-						IP:   ip,
-						Port: int32(port),
-					},
-				},
+				Addresses:  []address.Address{addr},
+				Version:    tm,
+				ReinitDate: tm,
+				Priority:   0,
+				ExpireAt:   0,
+			})
+		} else {
+			// We may listen on 0.0.0.0/[::] or an ephemeral port before a public
+			// address is known, but peer/client initialization still requires a
+			// non-nil address list.
+			g.addrList = unsafe.Pointer(&address.List{
+				Addresses:  []address.Address{},
 				Version:    tm,
 				ReinitDate: tm,
 				Priority:   0,
@@ -247,7 +271,7 @@ func (g *Gateway) StartClient(listenThreads ...int) (err error) {
 	if g.addrList == nil {
 		tm := int32(time.Now().Unix())
 		g.addrList = unsafe.Pointer(&address.List{
-			Addresses:  []*address.UDP{}, // no specified addresses, we are acting as a client
+			Addresses:  []address.Address{}, // no specified addresses, we are acting as a client
 			Version:    tm,
 			ReinitDate: tm,
 			Priority:   0,
@@ -283,15 +307,21 @@ func (g *Gateway) listen(rootId []byte) {
 		case pk = <-ch:
 		}
 
+		if pk.n < 32 {
+			continue
+		}
+
 		buf := pk.data[:pk.n]
 		id := buf[:32]
 		buf = buf[32:]
 
 		if bytes.Equal(rootId, id) {
-			if len(buf) < 32 {
+			if len(buf) < 64 {
 				// too small packet
 				continue
 			}
+
+			Logger("[ADNL DEBUG] gateway root packet", "len", len(buf), "from", pk.from.String())
 
 			data, err := decodePacket(g.key, buf)
 			if err != nil {
@@ -304,32 +334,54 @@ func (g *Gateway) listen(rootId []byte) {
 				Logger("failed to parse packet:", err.Error())
 				continue
 			}
+			Logger(
+				"[ADNL DEBUG] gateway parsed root packet",
+				"from_full", packet.From != nil,
+				"from_short", packet.FromIDShort != nil,
+				"msgs", len(packet.Messages),
+				"seqno", packet.SeqnoValue(),
+				"confirm_seqno", packet.ConfirmSeqnoValue(),
+				"reinit", packet.ReinitDateValue(),
+				"dst_reinit", packet.DstReinitDateValue(),
+			)
 
-			peerId := packet.FromIDShort
-			if peerId == nil {
-				if packet.From == nil {
-					Logger("invalid packet source")
-					continue
-				}
-
-				peerId, err = tl.Hash(keys.PublicKeyED25519{Key: packet.From.Key})
+			var (
+				cli     *peerConn
+				peerKey ed25519.PublicKey
+				peerId  []byte
+			)
+			if packet.From != nil {
+				peerKey = append(ed25519.PublicKey(nil), packet.From.Key...)
+				peerId, err = tl.Hash(keys.PublicKeyED25519{Key: peerKey})
 				if err != nil {
 					Logger("invalid peer id, err:", err.Error())
 					continue
 				}
-			}
+			} else if packet.FromIDShort != nil {
+				peerId = append([]byte(nil), packet.FromIDShort...)
 
-			g.mx.RLock()
-			cli := g.peers[*(*string)(unsafe.Pointer(&peerId))]
-			g.mx.RUnlock()
-
-			if cli == nil {
-				if packet.From == nil {
-					Logger("invalid packet source")
+				g.mx.RLock()
+				cli = g.peers[*(*string)(unsafe.Pointer(&peerId))]
+				g.mx.RUnlock()
+				if cli == nil {
 					continue
 				}
 
-				cli, err = g.registerClient(pk.from, packet.From.Key, string(peerId))
+				peerKey = cli.client.GetPubKey()
+				if len(peerKey) != ed25519.PublicKeySize {
+					continue
+				}
+			} else {
+				continue
+			}
+
+			if err = packet.verifySignature(peerKey); err != nil {
+				Logger("failed to verify packet signature:", err.Error())
+				continue
+			}
+
+			if cli == nil {
+				cli, err = g.registerClient(pk.from, peerKey, string(peerId))
 				if err != nil {
 					Logger("failed to register client:", err.Error())
 					continue
@@ -352,6 +404,7 @@ func (g *Gateway) listen(rootId []byte) {
 		g.mx.RUnlock()
 
 		if proc == nil {
+			Logger("[ADNL DEBUG] no processor for packet", hex.EncodeToString(id), "len", len(buf), "from", pk.from.String())
 			continue
 		}
 
@@ -418,15 +471,14 @@ func (g *Gateway) GetActivePeers() []Peer {
 func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string) (*peerConn, error) {
 	if a, ok := addr.(*net.UDPAddr); !ok {
 		return nil, fmt.Errorf("invalid address type")
-	} else if a.IP.Equal(net.IPv4zero) {
+	} else if a.IP == nil || a.IP.IsUnspecified() {
 		return nil, fmt.Errorf("zero address is invalid")
 	}
 
 	g.mx.Lock()
-	defer g.mx.Unlock()
-
 	peer := g.peers[id]
 	if peer != nil {
+		g.mx.Unlock()
 		peer.checkUpdateAddr(addr)
 		return peer, nil
 	}
@@ -438,15 +490,8 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	}
 
 	addrList := *(*address.List)(atomic.LoadPointer(&g.addrList))
-	addrList.ReinitDate = int32(time.Now().Unix())
-	addrList.Version = addrList.ReinitDate
 
 	a := g.initADNL()
-
-	sharedKey, err := keys.SharedKey(a.ourKey, key)
-	if err != nil {
-		return nil, err
-	}
 
 	peerId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
 	if err != nil {
@@ -454,8 +499,11 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	}
 
 	a.peerID = peerId
-	a.sharedKey = sharedKey
 	a.peerKey = key
+	a.peerKeyX25519, err = keys.Ed25519PubToX25519(key)
+	if err != nil {
+		return nil, err
+	}
 
 	a.SetAddresses(addrList)
 
@@ -497,16 +545,17 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	})
 
 	connHandler := atomic.LoadPointer(&g.connHandler)
-	if connHandler != nil {
-		go func() {
-			type handlerFunc func(client Peer) error
+	g.mx.Unlock()
 
-			ch := *(*handlerFunc)(connHandler)
-			if err := ch(peer); err != nil {
-				// close connection if connection handler reports an error
-				a.Close()
-			}
-		}()
+	if connHandler != nil {
+		type handlerFunc func(client Peer) error
+
+		ch := *(*handlerFunc)(connHandler)
+		if err := ch(peer); err != nil {
+			// close connection if connection handler reports an error
+			a.Close()
+			return nil, err
+		}
 	}
 
 	return peer, nil
@@ -555,8 +604,7 @@ func (g *Gateway) write(addr net.Addr, buf []byte) error {
 }
 
 func (g *Gateway) GetID() []byte {
-	id, _ := tl.Hash(keys.PublicKeyED25519{Key: g.key.Public().(ed25519.PublicKey)})
-	return id
+	return append([]byte{}, g.id...)
 }
 
 func (p *peerConn) GetID() []byte {

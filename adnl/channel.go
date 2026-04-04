@@ -34,6 +34,10 @@ func (c *Channel) SendCustomMessage(ctx context.Context, req tl.Serializable) er
 }
 
 func (c *Channel) decodePacket(packet []byte) ([]byte, error) {
+	if len(packet) < 32 {
+		return nil, ErrTooShortData
+	}
+
 	checksum := packet[0:32]
 	data := packet[32:]
 
