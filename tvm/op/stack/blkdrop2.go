@@ -14,15 +14,9 @@ func init() {
 
 func BLKDROP2(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			if err := state.Stack.Reverse(int(i)+int(j), 0); err != nil {
-				return err
-			}
-			if err := state.Stack.Drop(int(i)); err != nil {
-				return err
-			}
-
-			return state.Stack.Reverse(int(j), 0)
+			return state.Stack.DropMany(int(i), int(j))
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d BLKDROP2", i, j)

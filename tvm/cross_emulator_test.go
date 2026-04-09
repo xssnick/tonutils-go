@@ -19,12 +19,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-type crossRunResult struct {
-	exitCode int32
-	gasUsed  int64
-	stack    *cell.Cell
-}
-
 var (
 	crossTestAddr      = address.MustParseAddr("EQAYqo4u7VF0fa4DPAebk4g9lBytj2VFny7pzXR0trjtXQaO")
 	crossTestTime      = time.Unix(1_710_000_000, 0).UTC()
@@ -169,8 +163,6 @@ func TestTVMCrossEmulatorReference(t *testing.T) {
 				t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
 			}
 
-			println(goRes.gasUsed, refRes.gasUsed)
-		
 			if goRes.gasUsed != refRes.gasUsed {
 				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
 			}
@@ -195,6 +187,10 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 	}
 
 	res, err := NewTVM().ExecuteDetailed(code, data, c7, vm.GasWithLimit(crossTestMaxGas), stack)
+	finalStack := stack
+	if res != nil && res.Stack != nil {
+		finalStack = res.Stack
+	}
 	exitCode := int32(0)
 	if err != nil {
 		var vmErr vmerr.VMError
@@ -206,7 +202,7 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 		exitCode = int32(res.ExitCode)
 	}
 
-	stackCell, err := stackToCell(stack)
+	stackCell, err := stackToCell(finalStack)
 	if err != nil {
 		return nil, err
 	}
@@ -242,38 +238,6 @@ func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
 	}
 
 	return *tuple.NewTuple(inner)
-}
-
-func tupleToStackCell(v tuple.Tuple) (*cell.Cell, error) {
-	stack := tlb.NewStack()
-	stack.Push(tupleToAny(v))
-	return stack.ToCell()
-}
-
-func tupleToAny(v tuple.Tuple) []any {
-	res := make([]any, 0, v.Len())
-	for i := 0; i < v.Len(); i++ {
-		val, err := v.Index(i)
-		if err != nil {
-			panic(err)
-		}
-
-		if nested, ok := val.(tuple.Tuple); ok {
-			res = append(res, tupleToAny(nested))
-			continue
-		}
-
-		res = append(res, val)
-	}
-	return res
-}
-
-func stackToCell(stack *vm.Stack) (*cell.Cell, error) {
-	tlbStack, err := tlb.NewStackFromVM(stack)
-	if err != nil {
-		return nil, err
-	}
-	return tlbStack.ToCell()
 }
 
 func mustCellFromHex(src string) *cell.Cell {

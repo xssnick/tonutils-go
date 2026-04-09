@@ -28,7 +28,10 @@ func Test_BLKDROP2(t *testing.T) {
 		t.Errorf("Expected 4 at d, got %v", d)
 	}
 	c, err := st.PopInt()
-	if err != nil || c.Cmp(big.NewInt(3)) != 0 {
-		t.Errorf("Expected 3 at c, got %v", c)
+	if err != nil || c.Cmp(big.NewInt(1)) != 0 {
+		t.Errorf("Expected 1 at c, got %v", c)
+	}
+	if st.Len() != 0 {
+		t.Fatalf("expected stack to contain exactly two elements, got %d", st.Len())
 	}
 }

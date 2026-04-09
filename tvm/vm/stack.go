@@ -47,17 +47,19 @@ func bindTupleObserver(t tuple.Tuple, observer cell.Observer) tuple.Tuple {
 	if observer == nil {
 		return t
 	}
-	cp := t.Copy()
-	for i := 0; i < cp.Len(); i++ {
-		val, err := cp.Index(i)
+	if t.HasBindingID(observer) {
+		return t
+	}
+
+	vals := make([]any, t.Len())
+	for i := range vals {
+		val, err := t.RawIndex(i)
 		if err != nil {
 			panic(err)
 		}
-		if err = cp.Set(i, bindValueObserver(val, observer)); err != nil {
-			panic(err)
-		}
+		vals[i] = bindValueObserver(val, observer)
 	}
-	return cp
+	return tuple.NewTuple(vals...).WithBindingID(observer)
 }
 
 func bindValueObserver(val any, observer cell.Observer) any {
@@ -74,6 +76,41 @@ func bindValueObserver(val any, observer cell.Observer) any {
 		return bindTupleObserver(x, observer)
 	default:
 		return val
+	}
+}
+
+func shareStackValue(val any, observer cell.Observer) (any, error) {
+	switch t := val.(type) {
+	case *big.Int:
+		return new(big.Int).Set(t), nil
+	case NaN:
+		return NaN{}, nil
+	case *NaN:
+		return NaN{}, nil
+	case *cell.Cell:
+		return t, nil
+	case *cell.Builder:
+		cp := t.Copy()
+		if observer != nil {
+			cp.SetObserver(observer)
+		}
+		return cp, nil
+	case *cell.Slice:
+		cp := t.Copy()
+		if observer != nil {
+			cp.SetObserver(observer)
+		}
+		return cp, nil
+	case tuple.Tuple:
+		return bindTupleObserver(t, observer), nil
+	case nil:
+		return nil, nil
+	default:
+		c, ok := val.(Continuation)
+		if !ok {
+			return nil, vmerr.Error(vmerr.CodeTypeCheck, "type check failed: "+reflect.TypeOf(val).String())
+		}
+		return c.Copy(), nil
 	}
 }
 
@@ -123,30 +160,11 @@ func (s *Stack) PushAny(val any) error {
 		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 
-	switch t := val.(type) {
-	case *big.Int:
-		// TODO: maybe optimize
-		val = new(big.Int).Set(t) // copy for safety
-	case NaN:
-	case *NaN:
-		val = NaN{}
-	case *cell.Cell:
-	case *cell.Builder:
-		val = t.Copy()
-	case *cell.Slice:
-		val = t.Copy()
-	case tuple.Tuple:
-		val = t.Copy()
-	case nil:
-	default:
-		if c, ok := val.(Continuation); !ok {
-			return vmerr.Error(vmerr.CodeTypeCheck, "type check failed: "+reflect.TypeOf(val).String())
-		} else {
-			val = c.Copy()
-		}
+	var err error
+	val, err = shareStackValue(val, s.obs)
+	if err != nil {
+		return err
 	}
-
-	val = bindValueObserver(val, s.obs)
 
 	s.elems = append(s.elems, val)
 	return nil
@@ -209,6 +227,20 @@ func (s *Stack) Drop(num int) error {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	s.elems = s.elems[:len(s.elems)-num]
+	return nil
+}
+
+func (s *Stack) DropMany(num, offs int) error {
+	if num < 0 || offs < 0 || len(s.elems) < num+offs {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+	if num == 0 {
+		return nil
+	}
+
+	end := len(s.elems)
+	copy(s.elems[end-(num+offs):end-num], s.elems[end-offs:end])
+	s.elems = s.elems[:end-num]
 	return nil
 }
 
@@ -467,13 +499,17 @@ func (s *Stack) String() string {
 }
 
 func (s *Stack) Copy() *Stack {
-	c := NewStack()
-	c.obs = s.obs
-
-	for _, elem := range s.elems {
-		_ = c.PushAny(elem)
+	c := &Stack{
+		elems: make([]any, len(s.elems)),
+		obs:   s.obs,
 	}
-
+	for i, elem := range s.elems {
+		cloned, err := shareStackValue(elem, c.obs)
+		if err != nil {
+			panic(err)
+		}
+		c.elems[i] = cloned
+	}
 	return c
 }
 

@@ -46,14 +46,14 @@ func (m *timeoutRetryMock) StickyNodeID(ctx context.Context) uint32 {
 	return 0
 }
 
-func TestAPIClient_WithTimeoutAndRetry_RetriesAttemptTimeout(t *testing.T) {
+func TestAPIClient_WithRetryTimeout_RetriesAttemptTimeout(t *testing.T) {
 	mock := &timeoutRetryMock{
 		response: MasterchainInfo{
 			Last: &BlockIDExt{SeqNo: 123},
 		},
 	}
 
-	api := NewAPIClient(mock).WithTimeout(20 * time.Millisecond).WithRetry()
+	api := NewAPIClient(mock).WithRetryTimeout(0, 20*time.Millisecond)
 
 	block, err := api.GetMasterchainInfo(context.Background())
 	if err != nil {
@@ -73,14 +73,14 @@ func TestAPIClient_WithTimeoutAndRetry_RetriesAttemptTimeout(t *testing.T) {
 	}
 }
 
-func TestAPIClient_WithTimeoutAndRetry_DoesNotMaskParentDeadline(t *testing.T) {
+func TestAPIClient_WithRetryTimeout_DoesNotMaskParentDeadline(t *testing.T) {
 	mock := &timeoutRetryMock{
 		response: MasterchainInfo{
 			Last: &BlockIDExt{SeqNo: 123},
 		},
 	}
 
-	api := NewAPIClient(mock).WithTimeout(200 * time.Millisecond).WithRetry()
+	api := NewAPIClient(mock).WithRetryTimeout(0, 200*time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

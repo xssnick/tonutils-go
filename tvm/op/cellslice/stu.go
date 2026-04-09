@@ -13,6 +13,7 @@ func init() {
 
 func STU(sz uint) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			b0, err := state.Stack.PopBuilder()
 			if err != nil {

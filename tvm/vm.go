@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	_ "github.com/xssnick/tonutils-go/tvm/op/cellslice"
+	_ "github.com/xssnick/tonutils-go/tvm/op/dict"
 	_ "github.com/xssnick/tonutils-go/tvm/op/exec"
 	_ "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	_ "github.com/xssnick/tonutils-go/tvm/op/math"
@@ -52,6 +53,7 @@ type ExecutionResult struct {
 	Steps    uint32
 	Gas      vm.Gas
 	Stack    *vm.Stack
+	Code     *cell.Cell
 	Data     *cell.Cell
 	Actions  *cell.Cell
 }
@@ -89,12 +91,15 @@ func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
 		limit = tvm.maxPrefixLen
 	}
 
-	raw := code.MustPreloadSlice(limit)
 	n := tvm.trie
 	var matched vm.OPGetter
 
 	for i := uint(0); i < limit; i++ {
-		n = n.next[bitAt(raw, i)]
+		bit, err := code.BitAt(i)
+		if err != nil {
+			break
+		}
+		n = n.next[bit]
 		if n == nil {
 			break
 		}
@@ -112,37 +117,21 @@ func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack
 }
 
 func (tvm *TVM) ExecuteDetailed(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) (*ExecutionResult, error) {
-	state := &vm.State{
-		GlobalVersion: tvm.globalVersion,
-		Gas:           gas,
-		Reg: vm.Register{
-			C: [4]vm.Continuation{
-				&vm.QuitContinuation{ExitCode: 0},
-				&vm.QuitContinuation{ExitCode: 1},
-				&vm.ExcQuitContinuation{},
-				&vm.QuitContinuation{ExitCode: vmerr.CodeUnknown},
-			},
-			D: [2]*cell.Cell{
-				data,                       // c4
-				cell.BeginCell().EndCell(), // c5
-			},
-			C7: c7,
-		},
-		Stack: stack,
-	}
-	state.InitForExecution()
+	return tvm.ExecuteDetailedWithLibraries(code, data, c7, gas, stack)
+}
 
-	state.CurrentCode = code.BeginParse().SetObserver(&state.Cells)
+func (tvm *TVM) ExecuteDetailedWithLibraries(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
+	state := vm.NewExecutionState(tvm.globalVersion, gas, data, c7, stack, libraries...)
+	state.SetChildRunner(tvm.runState)
+	state.PrepareExecution(code.BeginParseNoCopy())
 
-	err := tvm.execute(state)
+	exitCode, err := tvm.runState(state)
 
-	exitCode := int64(0)
-	var vmErr vmerr.VMError
-	if errors.As(err, &vmErr) {
-		exitCode = vmErr.Code
-		if exitCode == 0 || exitCode == 1 {
-			err = nil
-		}
+	dataRes := state.Reg.D[0]
+	actionsRes := state.Reg.D[1]
+	if state.Committed.Committed {
+		dataRes = state.Committed.Data
+		actionsRes = state.Committed.Actions
 	}
 
 	return &ExecutionResult{
@@ -151,9 +140,36 @@ func (tvm *TVM) ExecuteDetailed(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Ga
 		Steps:    state.Steps,
 		Gas:      state.Gas,
 		Stack:    state.Stack,
-		Data:     state.Reg.D[0],
-		Actions:  state.Reg.D[1],
+		Code:     code,
+		Data:     dataRes,
+		Actions:  actionsRes,
 	}, err
+}
+
+func (tvm *TVM) runState(state *vm.State) (exitCode int64, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			exitCode = vmerr.CodeFatal
+			err = vmerr.Error(vmerr.CodeFatal, fmt.Sprintf("vm panic: %v", recovered))
+		}
+	}()
+
+	if err = tvm.execute(state); err != nil {
+		var vmErr vmerr.VMError
+		if !errors.As(err, &vmErr) {
+			return 0, err
+		}
+
+		exitCode = vmErr.Code
+		if !vm.IsSuccessExitCode(exitCode) {
+			return exitCode, err
+		}
+	}
+
+	if state.TryCommitCurrent() {
+		return exitCode, nil
+	}
+	return vmerr.CodeCellOverflow, vmerr.Error(vmerr.CodeCellOverflow, "cannot commit too deep cells as new data/actions")
 }
 
 func (tvm *TVM) execute(state *vm.State) (err error) {
@@ -186,7 +202,17 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 
 			if err = tvm.step(state); err != nil {
 				var e vmerr.VMError
-				if state.Reg.C[2] != nil && errors.As(err, &e) && e.Code != 0 {
+				var handled vm.HandledException
+				if errors.As(err, &e) && e.Code == vmerr.CodeOutOfGas {
+					if stackErr := state.HandleOutOfGas(); stackErr != nil {
+						return stackErr
+					}
+					return err
+				}
+				if errors.As(err, &handled) {
+					return err
+				}
+				if state.Reg.C[2] != nil && errors.As(err, &e) && !vm.IsSuccessExitCode(e.Code) {
 					vm.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
 
 					if err = state.ThrowException(big.NewInt(e.Code)); err == nil {
@@ -203,6 +229,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 		if err = state.ConsumeGas(vm.ImplicitRetGasPrice); err != nil {
 			return err
 		}
+		vm.Tracef("gas remaining: %d", state.Gas.Remaining)
 
 		if err = state.Return(); err != nil {
 			return err
@@ -243,6 +270,7 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 	if err = state.CheckGas(); err != nil {
 		return err
 	}
+	vm.Tracef("gas remaining: %d", state.Gas.Remaining)
 
 	return nil
 }

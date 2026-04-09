@@ -20,6 +20,7 @@ func init() {
 
 func XC2PU(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			if err := state.Stack.Exchange(1, int(i)); err != nil {
 				return err
@@ -67,6 +68,7 @@ func XC2PU(i, j, k uint8) (op *helpers.AdvancedOP) {
 
 func XCPUXC(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			if err := state.Stack.Exchange(1, int(i)); err != nil {
 				return err
@@ -117,6 +119,7 @@ func XCPUXC(i, j, k uint8) (op *helpers.AdvancedOP) {
 
 func XCPU2(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			if err := state.Stack.Exchange(0, int(i)); err != nil {
 				return err
@@ -168,6 +171,7 @@ func XCPU2(i, j, k uint8) (op *helpers.AdvancedOP) {
 
 func PUXC2(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
@@ -218,6 +222,7 @@ func PUXC2(i, j, k uint8) (op *helpers.AdvancedOP) {
 
 func PUXCPU(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
@@ -272,6 +277,7 @@ func PUXCPU(i, j, k uint8) (op *helpers.AdvancedOP) {
 
 func PU2XC(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
@@ -329,6 +335,7 @@ func PU2XC(i, j, k uint8) (op *helpers.AdvancedOP) {
 
 func PUSH3(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.Get(int(i))
 			if err != nil {

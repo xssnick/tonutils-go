@@ -93,8 +93,11 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 		cn := cell.BeginCell().MustStoreSlice(data, uint(szBytes*8))
 
 		for i := 0; i < int(refsNum); i++ {
-			ref, err := code.LoadRefCell()
+			ref, err := code.PeekRefCell()
 			if err != nil {
+				return err
+			}
+			if err = code.AdvanceExt(0, 1); err != nil {
 				return err
 			}
 
@@ -107,8 +110,11 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 		op.cont = cn.EndCell()
 		return nil
 	case "REF":
-		ref, err := code.LoadRefCell()
+		ref, err := code.PeekRefCell()
 		if err != nil {
+			return err
+		}
+		if err = code.AdvanceExt(0, 1); err != nil {
 			return err
 		}
 

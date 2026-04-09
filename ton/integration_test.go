@@ -18,10 +18,16 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+const (
+	integrationSetupTimeout        = 15 * time.Second
+	integrationRequestTimeout      = 30 * time.Second
+	integrationRetryAttemptTimeout = 3 * time.Second
+)
+
 var apiTestNet = func() APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationSetupTimeout)
 	defer cancel()
 
 	err := client.AddConnection(ctx, "109.236.80.69:49913", "AxFZRHVD1qIO9Fyva52P4vC3tRvk8ac1KKOG0c6IVio=")
@@ -29,13 +35,13 @@ var apiTestNet = func() APIClientWrapped {
 		panic(err)
 	}
 
-	return NewAPIClient(client, ProofCheckPolicySecure)
+	return NewAPIClient(client, ProofCheckPolicyFast)
 }()
 
 var api = func() APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationSetupTimeout)
 	defer cancel()
 
 	cfg, err := liteclient.GetConfigFromUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
@@ -48,7 +54,7 @@ var api = func() APIClientWrapped {
 		panic(err)
 	}
 
-	a := NewAPIClient(client, ProofCheckPolicySecure).WithTimeout(5 * time.Second).WithRetry()
+	a := NewAPIClient(client, ProofCheckPolicyFast).WithRetryTimeout(0, integrationRetryAttemptTimeout)
 	// a.SetTrustedBlockFromConfig(cfg)
 	return a
 }()
@@ -246,7 +252,7 @@ func TestAPIClient_GetBlockHeader(t *testing.T) {
 }*/
 
 func Test_RunMethod(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 
 	b, err := api.CurrentMasterchainInfo(ctx)
@@ -315,7 +321,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 }
 
 func Test_Account(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx = api.Client().StickyContext(ctx)
 
@@ -377,7 +383,7 @@ func Test_Account(t *testing.T) {
 }
 
 func Test_AccountMaster(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx = api.Client().StickyContext(ctx)
 
@@ -441,7 +447,7 @@ func Test_AccountMaster(t *testing.T) {
 func Test_AccountHasMethod(t *testing.T) {
 	connectionPool := liteclient.NewConnectionPool()
 
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx := connectionPool.StickyContext(_ctx)
 
@@ -567,7 +573,7 @@ func Test_BlockScan(t *testing.T) {
 }
 
 func Test_GetTime(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 
 	utime, err := api.GetTime(ctx)
@@ -628,7 +634,7 @@ func Test_GetConfigParams8(t *testing.T) {
 func Test_LSErrorCase(t *testing.T) {
 	connectionPool := liteclient.NewConnectionPool()
 
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx := connectionPool.StickyContext(_ctx)
 
@@ -816,8 +822,8 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 	}
 }
 
-func TestAPIClient_WithRetry(t *testing.T) {
-	apiTimeout := api.WithTimeout(1 * time.Millisecond)
+func TestAPIClient_WithRetryTimeout(t *testing.T) {
+	apiTimeout := api.WithRetryTimeout(1, 1*time.Millisecond)
 
 	_, err := apiTimeout.GetMasterchainInfo(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {

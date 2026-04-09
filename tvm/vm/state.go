@@ -108,6 +108,12 @@ type ControlData struct {
 	CP      int
 }
 
+type CommittedState struct {
+	Data      *cell.Cell
+	Actions   *cell.Cell
+	Committed bool
+}
+
 type State struct {
 	GlobalVersion int
 	CP            int
@@ -115,8 +121,46 @@ type State struct {
 	Reg           Register
 	Gas           Gas
 	Cells         CellManager
+	Libraries     []*cell.Cell
 	Stack         *Stack
 	Steps         uint32
+	ChksgnCounter uint32
+	Committed     CommittedState
+	childRunner   ChildRunner
+}
+
+func emptyCell() *cell.Cell {
+	return cell.BeginCell().EndCell()
+}
+
+func IsSuccessExitCode(code int64) bool {
+	return code == 0 || code == 1
+}
+
+func NewExecutionState(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
+	if data == nil {
+		data = emptyCell()
+	}
+
+	return &State{
+		GlobalVersion: globalVersion,
+		Gas:           gas,
+		Reg: Register{
+			C: [4]Continuation{
+				&QuitContinuation{ExitCode: 0},
+				&QuitContinuation{ExitCode: 1},
+				&ExcQuitContinuation{},
+				&QuitContinuation{ExitCode: vmerr.CodeUnknown},
+			},
+			D: [2]*cell.Cell{
+				data,
+				emptyCell(),
+			},
+			C7: c7,
+		},
+		Stack:     stack,
+		Libraries: append([]*cell.Cell{}, libraries...),
+	}
 }
 
 type OPGetter func() OP
@@ -135,6 +179,8 @@ var List []OPGetter
 
 var ErrCorruptedOpcode = errors.New("corrupted opcode")
 
+const MaxDataDepth = 512
+
 func (s *State) InitForExecution() {
 	if s.GlobalVersion == 0 {
 		s.GlobalVersion = DefaultGlobalVersion
@@ -144,6 +190,37 @@ func (s *State) InitForExecution() {
 		s.Stack.SetObserver(&s.Cells)
 	}
 	s.Reg.C7 = bindTupleObserver(s.Reg.C7, &s.Cells)
+}
+
+func (s *State) PrepareExecution(code *cell.Slice) {
+	s.InitForExecution()
+	if code != nil {
+		s.CurrentCode = code.SetObserver(&s.Cells)
+	}
+}
+
+type ChildRunner func(*State) (int64, error)
+
+func (s *State) SetChildRunner(fn ChildRunner) {
+	s.childRunner = fn
+}
+
+func (s *State) RunChild(child *State) (int64, error) {
+	if child == nil {
+		return 0, vmerr.Error(vmerr.CodeFatal, "child state is nil")
+	}
+	if s.childRunner == nil {
+		return 0, vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
+	}
+	if child.GlobalVersion == 0 {
+		child.GlobalVersion = s.GlobalVersion
+	}
+	if len(child.Libraries) == 0 && len(s.Libraries) > 0 {
+		child.Libraries = append([]*cell.Cell{}, s.Libraries...)
+	}
+	child.childRunner = s.childRunner
+	child.PrepareExecution(child.CurrentCode)
+	return s.childRunner(child)
 }
 
 func (s *State) ConsumeGas(amount int64) error {
@@ -165,6 +242,15 @@ func (s *State) FlushFreeGas() error {
 	return s.Gas.FlushFree()
 }
 
+func (s *State) RegisterChksgnCall() error {
+	s.ChksgnCounter++
+	if s.ChksgnCounter > ChksgnFreeCount {
+		return s.ConsumeGas(ChksgnGasPrice)
+	}
+	s.ConsumeFreeGas(ChksgnGasPrice)
+	return nil
+}
+
 func (s *State) ConsumeStackGasLen(depth int) error {
 	amt := int64(depth)
 	if amt < FreeStackDepth {
@@ -184,12 +270,8 @@ func (s *State) ConsumeTupleGasLen(length int) error {
 	return s.ConsumeGas(int64(length) * TupleEntryGasPrice)
 }
 
-func (s *State) ConsumeTupleGas(t tuple.Tuple) error {
-	return s.ConsumeTupleGasLen(t.Len())
-}
-
 func (s *State) PushTupleCharged(t tuple.Tuple) error {
-	if err := s.ConsumeTupleGas(t); err != nil {
+	if err := s.ConsumeTupleGasLen(t.Len()); err != nil {
 		return err
 	}
 	return s.Stack.PushTuple(t)
@@ -226,6 +308,88 @@ func (s *State) GetParam(idx int) (any, error) {
 	}
 
 	return v, nil
+}
+
+func (s *State) GetUnpackedConfigTuple() (tuple.Tuple, error) {
+	v, err := s.GetParam(14)
+	if err != nil {
+		return tuple.Tuple{}, err
+	}
+	t, ok := v.(tuple.Tuple)
+	if !ok {
+		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck)
+	}
+	return t, nil
+}
+
+func (s *State) GetGlobal(idx int) (any, error) {
+	if idx < 0 || idx >= 255 {
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "tuple index out of range")
+	}
+	if idx >= s.Reg.C7.Len() {
+		return nil, nil
+	}
+	return s.Reg.C7.Index(idx)
+}
+
+func (s *State) SetGlobal(idx int, val any) error {
+	if idx < 0 || idx >= 255 {
+		return vmerr.Error(vmerr.CodeRangeCheck, "tuple index out of range")
+	}
+
+	tup := s.Reg.C7.Copy()
+	if idx >= tup.Len() {
+		if val == nil {
+			return nil
+		}
+		tup.Resize(idx + 1)
+	}
+
+	if err := s.ConsumeTupleGasLen(tup.Len()); err != nil {
+		return err
+	}
+	if err := tup.Set(idx, val); err != nil {
+		return err
+	}
+	return s.SetC7(tup)
+}
+
+func (s *State) SetGasLimit(limit int64) error {
+	if limit < s.Gas.Used() {
+		return vmerr.Error(vmerr.CodeOutOfGas)
+	}
+	s.Gas.ChangeLimit(limit)
+	return nil
+}
+
+func (s *State) HandleOutOfGas() error {
+	s.Stack.Clear()
+	return s.Stack.PushInt(big.NewInt(s.Gas.Used()))
+}
+
+func (s *State) TryCommitCurrent() bool {
+	if s.Reg.D[0] == nil || s.Reg.D[1] == nil {
+		return false
+	}
+	if s.Reg.D[0].Depth() > MaxDataDepth || s.Reg.D[1].Depth() > MaxDataDepth {
+		return false
+	}
+	if s.Reg.D[0].Level() != 0 || s.Reg.D[1].Level() != 0 {
+		return false
+	}
+	s.Committed = CommittedState{
+		Data:      s.Reg.D[0],
+		Actions:   s.Reg.D[1],
+		Committed: true,
+	}
+	return true
+}
+
+func (s *State) ForceCommitCurrent() error {
+	if !s.TryCommitCurrent() {
+		return vmerr.Error(vmerr.CodeCellOverflow, "cannot commit too deep cells as new data/actions")
+	}
+	return nil
 }
 
 func (s *State) ThrowException(code *big.Int, arg ...any) error {

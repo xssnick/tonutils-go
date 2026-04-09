@@ -30,12 +30,15 @@ func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
 		return err
 	}
 
-	ref, err := code.LoadRef()
+	refCell, err := code.PeekRefCell()
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, "no references left for a PUSHREF instruction")
 	}
+	if err = code.AdvanceExt(0, 1); err != nil {
+		return err
+	}
 
-	op.value = ref
+	op.value = refCell.BeginParse()
 	return nil
 }
 
@@ -47,7 +50,7 @@ func (op *OpPUSHREFSLICE) Serialize() *cell.Builder {
 func (op *OpPUSHREFSLICE) SerializeText() string {
 	str := "???"
 	if op.value != nil {
-		str = op.value.MustToCell().Dump()
+		str = op.value.WithoutObserver().MustToCell().Dump()
 	}
 	return fmt.Sprintf("%s PUSHREFSLICE", str)
 }

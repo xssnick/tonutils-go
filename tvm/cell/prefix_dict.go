@@ -5,7 +5,9 @@ import "fmt"
 type PrefixDictionary struct {
 	keySz uint
 
-	root *Cell
+	root         *Cell
+	observer     Observer
+	skipRootLoad bool
 }
 
 func NewPrefixDict(keySz uint) *PrefixDictionary {
@@ -29,10 +31,11 @@ func (c *Slice) ToPrefixDict(keySz uint) (*PrefixDictionary, error) {
 	if err = validatePrefixDictRoot(root, keySz); err != nil {
 		return nil, fmt.Errorf("failed to validate prefix dict: %w", err)
 	}
-	return &PrefixDictionary{
+	dict := &PrefixDictionary{
 		keySz: keySz,
 		root:  root,
-	}, nil
+	}
+	return dict.SetObserver(c.observer), nil
 }
 
 func (c *Slice) MustToPrefixDict(keySz uint) *PrefixDictionary {
@@ -76,9 +79,31 @@ func (d *PrefixDictionary) Copy() *PrefixDictionary {
 	}
 
 	return &PrefixDictionary{
-		keySz: d.keySz,
-		root:  d.root,
+		keySz:        d.keySz,
+		root:         d.root,
+		observer:     d.observer,
+		skipRootLoad: d.skipRootLoad,
 	}
+}
+
+func (d *PrefixDictionary) SetObserver(observer Observer) *PrefixDictionary {
+	d.observer = observer
+	d.skipRootLoad = false
+	return d
+}
+
+func (d *PrefixDictionary) beginParse(c *Cell) *Slice {
+	if d == nil {
+		return c.BeginParse()
+	}
+
+	charge := true
+	if d.skipRootLoad {
+		d.skipRootLoad = false
+		charge = false
+	}
+
+	return beginParseObserved(c, d.observer, charge)
 }
 
 func (d *PrefixDictionary) IsEmpty() bool {
@@ -106,7 +131,7 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 			return nil, matched, fmt.Errorf("prefix dict has special cells in tree structure")
 		}
 
-		branchSlice := branch.BeginParse()
+		branchSlice := d.beginParse(branch)
 		labelLen, commonPrefix, err := matchLabelPrefix(remaining, branchSlice, keySlice)
 		if err != nil {
 			return nil, matched, err
@@ -278,7 +303,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		return nil, false, fmt.Errorf("prefix dict has special cells in tree structure")
 	}
 
-	s := branch.BeginParse()
+	s := d.beginParse(branch)
 	labelLen, label, err := loadLabel(remaining, s, BeginCell())
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to load label: %w", err)
@@ -384,7 +409,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		return branch, false, nil
 	}
 
-	return branch.cloneWithRef(int(idx), child), true, nil
+	return branch.cloneWithRefObserved(int(idx), child, d.observer), true, nil
 }
 
 func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint) (*Slice, *Cell, bool, error) {
@@ -398,7 +423,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return nil, nil, false, fmt.Errorf("prefix dict has special cells in tree structure")
 	}
 
-	s := branch.BeginParse()
+	s := d.beginParse(branch)
 	labelLen, label, err := loadLabel(remaining, s, BeginCell())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
@@ -460,7 +485,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 	}
 
 	if newChild != nil && otherChild != nil {
-		return oldValue, branch.cloneWithRef(int(idx), newChild), true, nil
+		return oldValue, branch.cloneWithRefObserved(int(idx), newChild, d.observer), true, nil
 	}
 
 	survivor := otherChild
@@ -474,7 +499,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return oldValue, nil, true, nil
 	}
 
-	survivorSlice := survivor.BeginParse()
+	survivorSlice := d.beginParse(survivor)
 	_, survivorLabel, err := loadLabel(remaining-(labelLen+1), survivorSlice, BeginCell())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load survivor label: %w", err)
@@ -495,7 +520,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 }
 
 func (d *PrefixDictionary) storePrefixNode(label *Slice, payload *Builder, remaining uint) (*Cell, error) {
-	node, err := storeDictNode(label, payload, remaining)
+	node, err := storeDictNodeObserved(label, payload, remaining, d.observer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store prefix node: %w", err)
 	}
@@ -503,7 +528,7 @@ func (d *PrefixDictionary) storePrefixNode(label *Slice, payload *Builder, remai
 }
 
 func (d *PrefixDictionary) storePrefixLeaf(label *Slice, value *Builder, remaining uint) (*Cell, error) {
-	b := BeginCell()
+	b := BeginCell().SetObserver(d.observer)
 	if err := storeDictLabel(b, label, remaining); err != nil {
 		return nil, fmt.Errorf("failed to store label: %w", err)
 	}
@@ -517,7 +542,7 @@ func (d *PrefixDictionary) storePrefixLeaf(label *Slice, value *Builder, remaini
 }
 
 func (d *PrefixDictionary) storePrefixFork(label *Slice, left, right *Cell, remaining uint) (*Cell, error) {
-	b := BeginCell()
+	b := BeginCell().SetObserver(d.observer)
 	if err := storeDictLabel(b, label, remaining); err != nil {
 		return nil, fmt.Errorf("failed to store label: %w", err)
 	}

@@ -23,6 +23,10 @@ func TestExcQuitContinuationReturnsOriginalCode(t *testing.T) {
 	if !errors.As(err, &vmErr) {
 		t.Fatalf("expected VMError, got %T", err)
 	}
+	var handled HandledException
+	if !errors.As(err, &handled) {
+		t.Fatalf("expected handled exception wrapper, got %T", err)
+	}
 	if vmErr.Code != 55 {
 		t.Fatalf("expected exit code 55, got %d", vmErr.Code)
 	}

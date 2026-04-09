@@ -247,6 +247,17 @@ func storeDictNode(label *Slice, payload *Builder, keyLen uint) (*Cell, error) {
 	return b.EndCell(), nil
 }
 
+func storeDictNodeObserved(label *Slice, payload *Builder, keyLen uint, observer Observer) (*Cell, error) {
+	b := BeginCell().SetObserver(observer)
+	if err := storeDictLabel(b, label, keyLen); err != nil {
+		return nil, err
+	}
+	if err := b.StoreBuilder(payload); err != nil {
+		return nil, err
+	}
+	return b.EndCell(), nil
+}
+
 func storeDictShort(b *Builder, partSz uint64, bits []byte) error {
 	if err := b.StoreUInt(0b0, 1); err != nil {
 		return err

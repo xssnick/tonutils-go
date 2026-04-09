@@ -244,6 +244,50 @@ func TestSliceCopy_SnapshotsUnsafeData(t *testing.T) {
 	}
 }
 
+func TestCellBeginParseTrusted_IndependentCursors(t *testing.T) {
+	ref := BeginCell().MustStoreUInt(0xCD, 8).EndCell()
+	c := BeginCell().
+		MustStoreUInt(0xAB, 8).
+		MustStoreRef(ref).
+		EndCell()
+
+	left := c.BeginParseNoCopy()
+	right := c.BeginParseNoCopy()
+
+	if got := left.MustLoadUInt(4); got != 0xA {
+		t.Fatalf("unexpected left prefix: %x", got)
+	}
+	if got := right.MustLoadUInt(8); got != 0xAB {
+		t.Fatalf("unexpected right value: %x", got)
+	}
+	if left.RefsNum() != 1 || right.RefsNum() != 1 {
+		t.Fatalf("unexpected refs before load: left=%d right=%d", left.RefsNum(), right.RefsNum())
+	}
+
+	leftRef := left.MustLoadRef()
+	if got := leftRef.MustLoadUInt(8); got != 0xCD {
+		t.Fatalf("unexpected left ref value: %x", got)
+	}
+	if left.RefsNum() != 0 {
+		t.Fatalf("left ref cursor was not consumed")
+	}
+	if right.RefsNum() != 1 {
+		t.Fatalf("right cursor was unexpectedly affected")
+	}
+}
+
+func TestCellHashKey_MatchesHash(t *testing.T) {
+	c := BeginCell().
+		MustStoreUInt(0xABCD, 16).
+		MustStoreRef(BeginCell().MustStoreUInt(1, 1).EndCell()).
+		EndCell()
+
+	key := c.HashKey()
+	if !bytes.Equal(key[:], c.Hash()) {
+		t.Fatalf("hash key does not match regular hash")
+	}
+}
+
 func TestSlice_PreloadRefAndBigUIntWrappers(t *testing.T) {
 	refCell := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 	value := new(big.Int).Lsh(big.NewInt(1), 72)

@@ -34,6 +34,7 @@ func LDI(sz uint) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("%d LDI", sz)
 		},
 		BitPrefix: helpers.BytesPrefix(0xD2),
+		FixedSizeBits: 8,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(sz-1), 8)
 		},

@@ -101,7 +101,7 @@ func (d *Dictionary) Copy() *Dictionary {
 
 func (d *Dictionary) SetObserver(observer Observer) *Dictionary {
 	d.observer = observer
-	d.skipRootLoad = observer != nil
+	d.skipRootLoad = false
 	return d
 }
 
@@ -109,22 +109,22 @@ func (d *Dictionary) beginParse(c *Cell) *Slice {
 	if d != nil {
 		return d.beginParseNode(c)
 	}
-	return c.BeginParse()
+	return c.BeginParseNoCopy()
 }
 
 func beginParseObserved(c *Cell, observer Observer, charge bool) *Slice {
 	if observer != nil {
 		if charge {
-			observer.OnCellLoad(c.Hash())
+			notifyCellLoad(observer, c)
 		}
-		return c.BeginParse().SetObserver(observer)
+		return c.BeginParseNoCopy().SetObserver(observer)
 	}
-	return c.BeginParse()
+	return c.BeginParseNoCopy()
 }
 
 func (d *Dictionary) beginParseNode(c *Cell) *Slice {
 	if d == nil {
-		return c.BeginParse()
+		return c.BeginParseNoCopy()
 	}
 
 	charge := true
@@ -144,11 +144,11 @@ func (d *Dictionary) storeLeaf(keyPfx *Slice, value *Builder, keyOffset uint) (*
 	if value == nil {
 		return nil, nil
 	}
-	return storeDictNode(keyPfx, value, keyOffset)
+	return storeDictNodeObserved(keyPfx, value, keyOffset, d.observer)
 }
 
 func (d *Dictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) (*Cell, error) {
-	b := BeginCell()
+	b := BeginCell().SetObserver(d.observer)
 	if err := b.StoreRef(left); err != nil {
 		return nil, fmt.Errorf("failed to store left branch: %w", err)
 	}
@@ -157,7 +157,7 @@ func (d *Dictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) 
 		return nil, fmt.Errorf("failed to store right branch: %w", err)
 	}
 
-	return storeDictNode(label, b, keyOffset)
+	return storeDictNodeObserved(label, b, keyOffset, d.observer)
 }
 
 func (d *Dictionary) Set(key, value *Cell) error {
@@ -207,7 +207,7 @@ func (d *Dictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetM
 		return false, fmt.Errorf("value builder is nil")
 	}
 
-	newRoot, changed, err := d.set(d.root, key.BeginParse(), d.keySz, value, mode)
+	newRoot, changed, err := d.set(d.root, key.BeginParseNoCopy(), d.keySz, value, mode)
 	if err != nil {
 		return false, fmt.Errorf("failed to set value in dict, err: %w", err)
 	}
@@ -279,7 +279,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 			return nil, false, fmt.Errorf("set produced nil child")
 		}
 
-		return branch.cloneWithRef(refIdx, ref), true, nil
+		return branch.cloneWithRefObserved(refIdx, ref, d.observer), true, nil
 	}
 
 	if mode == DictSetModeReplace {
@@ -376,7 +376,7 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		return removed, merged, true, nil
 	}
 
-	return removed, branch.cloneWithRef(refIdx, newChild), true, nil
+	return removed, branch.cloneWithRefObserved(refIdx, newChild, d.observer), true, nil
 }
 
 func (d *Dictionary) Delete(key *Cell) error {
@@ -387,7 +387,7 @@ func (d *Dictionary) Delete(key *Cell) error {
 		return fmt.Errorf("incorrect key size")
 	}
 
-	_, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParse(), d.keySz)
+	_, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParseNoCopy(), d.keySz)
 	if err != nil {
 		return err
 	}
@@ -476,7 +476,7 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 		return nil, nil, ErrNoSuchKeyInDict
 	}
 
-	key := BeginCell()
+	key := BeginCell().SetObserver(d.observer)
 	branch := d.root
 	remaining := d.keySz
 
@@ -624,7 +624,7 @@ func (d *Dictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	removed, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParse(), d.keySz)
+	removed, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParseNoCopy(), d.keySz)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +652,7 @@ func (d *Dictionary) LoadValueWithProof(key *Cell, skeleton *ProofSkeleton) (*Sl
 	if key.BitsSize() != d.keySz {
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
-	return findKeyInDictObserved(d.root, key, skeleton, d.observer, true)
+	return findKeyInDictObserved(d.root, key, skeleton, d.observer, false)
 }
 
 // Deprecated: use LoadValue
@@ -748,7 +748,7 @@ func findKeyInDictObserved(branch *Cell, lookupKey *Cell, at *ProofSkeleton, obs
 		root = CreateProofSkeleton()
 		sk = root
 	}
-	lKey := lookupKey.BeginParse()
+	lKey := lookupKey.BeginParseNoCopy()
 
 	// until key size is not equals we go deeper
 	for {

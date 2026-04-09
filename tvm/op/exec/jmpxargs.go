@@ -25,7 +25,8 @@ func JMPXARGS(params int) *helpers.AdvancedOP {
 		NameSerializer: func() string {
 			return fmt.Sprintf("JMPXARGS %d", params)
 		},
-		BitPrefix: helpers.SlicePrefix(12, []byte{0xDB, 0x10}),
+		BitPrefix:     helpers.SlicePrefix(12, []byte{0xDB, 0x10}),
+		FixedSizeBits: 4,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(params), 4)
 		},

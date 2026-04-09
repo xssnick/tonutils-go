@@ -76,7 +76,10 @@ type APIClientWrapped interface {
 	SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction)
 	VerifyProofChain(ctx context.Context, from, to *BlockIDExt) error
 	WaitForBlock(seqno uint32) APIClientWrapped
+	WithRetryTimeout(maxRetries int, timeout time.Duration) APIClientWrapped
+	// Deprecated: prefer WithRetryTimeout for new code to keep timeout and retry semantics together.
 	WithRetry(maxRetries ...int) APIClientWrapped
+	// Deprecated: prefer WithRetryTimeout for new code when timeout and retry behavior must stay coordinated.
 	WithTimeout(timeout time.Duration) APIClientWrapped
 	WithLSInfoInErrors() APIClientWrapped
 	SetTrustedBlock(block *BlockIDExt)
@@ -143,6 +146,28 @@ func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 	}
 }
 
+// WithRetryTimeout adds a per-attempt timeout and retries failed attempts on another node.
+//
+// If maxRetries = 0
+//
+//	Automatically retries requests to another available liteserver
+//	when an attempt times out, or error code 651 or -400 is received.
+//
+// If maxRetries > 0
+//
+//	Limits additional attempts to this number.
+func (c *APIClient) WithRetryTimeout(maxRetries int, timeout time.Duration) APIClientWrapped {
+	return &APIClient{
+		parent: c,
+		client: &retryClient{
+			LiteClient: c.client,
+			maxRetries: maxRetries,
+			timeout:    timeout,
+		},
+		proofCheckPolicy: c.proofCheckPolicy,
+	}
+}
+
 // WithRetry
 // If maxTries = 0
 //
@@ -152,16 +177,14 @@ func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 // If maxTries > 0
 //
 //	Limits additional attempts to this number.
+//
+// Deprecated: prefer WithRetryTimeout for new code to keep timeout and retry behavior together.
 func (c *APIClient) WithRetry(maxTries ...int) APIClientWrapped {
 	tries := 0
 	if len(maxTries) > 0 {
 		tries = maxTries[0]
 	}
-	return &APIClient{
-		parent:           c,
-		client:           &retryClient{LiteClient: c.client, maxRetries: tries},
-		proofCheckPolicy: c.proofCheckPolicy,
-	}
+	return c.WithRetryTimeout(tries, 0)
 }
 
 func (c *APIClient) WithLSInfoInErrors() APIClientWrapped {
@@ -173,6 +196,8 @@ func (c *APIClient) WithLSInfoInErrors() APIClientWrapped {
 }
 
 // WithTimeout add timeout to each LiteServer request
+//
+// Deprecated: prefer WithRetryTimeout for new code when timeout and retry behavior must stay coordinated.
 func (c *APIClient) WithTimeout(timeout time.Duration) APIClientWrapped {
 	return &APIClient{
 		parent:           c,

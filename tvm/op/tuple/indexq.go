@@ -14,7 +14,8 @@ func init() {
 
 func INDEXQ(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix: helpers.UIntPrefix(0x6f6, 12),
+		BitPrefix:     helpers.UIntPrefix(0x6f6, 12),
+		FixedSizeBits: 4,
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d INDEXQ", n)
 		},

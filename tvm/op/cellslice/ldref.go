@@ -3,6 +3,7 @@ package cellslice
 import (
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -17,17 +18,12 @@ func LDREF() *helpers.SimpleOP {
 				return err
 			}
 
-			ref, err := s0.LoadRef()
+			ref, err := s0.LoadRefCell()
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 
-			c, err := ref.ToCell()
-			if err != nil {
-				return err
-			}
-
-			err = state.Stack.PushCell(c)
+			err = state.Stack.PushCell(ref)
 			if err != nil {
 				return err
 			}

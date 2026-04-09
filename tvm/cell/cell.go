@@ -40,6 +40,10 @@ type Observer interface {
 	OnCellCreate()
 }
 
+type HashKeyObserver interface {
+	OnCellLoadKey(hash [32]byte)
+}
+
 type RawUnsafeCell struct {
 	IsSpecial bool
 	LevelMask LevelMask
@@ -68,12 +72,22 @@ func (c *Cell) cloneWithRef(i int, ref *Cell) *Cell {
 	return cp
 }
 
-func (c *Cell) BeginParse() *Slice {
-	// Copy data to keep the returned slice a stable snapshot. This is important
-	// even though Cell is logically immutable, because RawUnsafe helpers expose
-	// the backing byte storage to callers.
-	data := append([]byte{}, c.data...)
+func (c *Cell) cloneWithRefObserved(i int, ref *Cell, observer Observer) *Cell {
+	cp := c.cloneWithRef(i, ref)
+	if observer != nil {
+		observer.OnCellCreate()
+	}
+	return cp
+}
 
+func (c *Cell) beginParse(copyData bool) *Slice {
+	data := c.data
+	if copyData {
+		// Copy data to keep the returned slice a stable snapshot. This is important
+		// even though Cell is logically immutable, because RawUnsafe helpers expose
+		// the backing byte storage to callers.
+		data = append([]byte{}, c.data...)
+	}
 	return &Slice{
 		special:   c.special,
 		levelMask: c.levelMask,
@@ -82,6 +96,17 @@ func (c *Cell) BeginParse() *Slice {
 		refs:      c.refs,
 		observer:  nil,
 	}
+}
+
+func (c *Cell) BeginParse() *Slice {
+	return c.beginParse(true)
+}
+
+// BeginParseNoCopy returns a parsing slice that shares the cell backing bytes.
+// It is safe as long as the caller does not mutate the cell through RawUnsafe
+// helpers while the returned slice is in use.
+func (c *Cell) BeginParseNoCopy() *Slice {
+	return c.beginParse(false)
 }
 
 func (c *Cell) ToBuilder() *Builder {
@@ -247,6 +272,16 @@ func (c *Cell) Hash(level ...int) []byte {
 		return append([]byte{}, c.getHash(level[0])...)
 	}
 	return append([]byte{}, c.getHash(_DataCellMaxLevel)...)
+}
+
+func (c *Cell) HashKey(level ...int) [32]byte {
+	var key [32]byte
+	if len(level) > 0 {
+		copy(key[:], c.getHash(level[0]))
+		return key
+	}
+	copy(key[:], c.getHash(_DataCellMaxLevel))
+	return key
 }
 
 func (c *Cell) Depth(level ...int) uint16 {

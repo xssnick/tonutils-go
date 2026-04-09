@@ -15,6 +15,7 @@ func init() {
 
 func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			i0, err := state.Stack.PopIntFinite()
 			if err != nil {
@@ -28,7 +29,7 @@ func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 			return cell.BeginCell().MustStoreInt(int64(value), 8)
 		},
 		NameSerializer: func() string {
-			return fmt.Sprintf("%d ADDCONST", value)
+			return fmt.Sprintf("ADDINT %d", value)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
 			val, err := code.LoadInt(8)
@@ -40,4 +41,8 @@ func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 		},
 	}
 	return op
+}
+
+func ADDINT(value int8) *helpers.AdvancedOP {
+	return ADDCONST(value)
 }

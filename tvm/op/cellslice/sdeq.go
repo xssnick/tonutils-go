@@ -1,7 +1,6 @@
 package cellslice
 
 import (
-	"bytes"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -23,7 +22,7 @@ func SDEQ() *helpers.SimpleOP {
 				return err
 			}
 
-			res := bytes.Equal(s0.MustToCell().Hash(), s1.MustToCell().Hash())
+			res := s1.LexCompare(s0) == 0
 			return state.Stack.PushBool(res)
 		},
 		Name:      "SDEQ",

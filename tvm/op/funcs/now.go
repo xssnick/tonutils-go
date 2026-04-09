@@ -16,7 +16,7 @@ func NOW() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushAny(v)
+			return pushHostValue(state, v)
 		},
 		Name:      "NOW",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x23),

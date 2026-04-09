@@ -14,6 +14,7 @@ func init() {
 
 func XCHG3(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
 			if err := state.Stack.Exchange(2, int(i)); err != nil {
 				return err

@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/jetton"
 	"log"
+	"time"
 )
 
 func main() {
@@ -27,7 +28,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetryTimeout(3, 5*time.Second)
 	api.SetTrustedBlockFromConfig(cfg)
 
 	master, err := api.CurrentMasterchainInfo(context.Background()) // we fetch block just to trigger chain proof check

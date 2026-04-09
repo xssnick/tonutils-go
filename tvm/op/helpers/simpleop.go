@@ -12,12 +12,8 @@ type SimpleOP struct {
 	BaseGasPrice int64
 }
 
-func (op *SimpleOP) prefix() BitPrefix {
-	return op.BitPrefix
-}
-
 func (op *SimpleOP) GetPrefixes() []*cell.Slice {
-	return PrefixSlices(op.prefix())
+	return PrefixSlices(op.BitPrefix)
 }
 
 func (op *SimpleOP) Deserialize(code *cell.Slice) error {
@@ -25,13 +21,12 @@ func (op *SimpleOP) Deserialize(code *cell.Slice) error {
 }
 
 func (op *SimpleOP) DeserializeMatched(code *cell.Slice) error {
-	_, err := code.LoadSlice(op.prefix().Bits)
+	_, err := code.LoadSlice(op.BitPrefix.Bits)
 	return err
 }
 
 func (op *SimpleOP) Serialize() *cell.Builder {
-	prefix := op.prefix()
-	return cell.BeginCell().MustStoreSlice(prefix.Data, prefix.Bits)
+	return cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits)
 }
 
 func (op *SimpleOP) SerializeText() string {
@@ -39,7 +34,7 @@ func (op *SimpleOP) SerializeText() string {
 }
 
 func (op *SimpleOP) InstructionBits() int64 {
-	return int64(op.prefix().Bits)
+	return int64(op.BitPrefix.Bits)
 }
 
 func (op *SimpleOP) Interpret(state *vm.State) error {

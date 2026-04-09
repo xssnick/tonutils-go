@@ -22,6 +22,11 @@ func init() {
 	Register(InternalMessage{})
 
 	Register(ActionSendMsg{})
+	Register(ActionSetCode{})
+	Register(ActionReserveCurrency{})
+	Register(LibRefHash{})
+	Register(LibRefRef{})
+	Register(ActionChangeLibrary{})
 }
 
 type AnyMessage interface {
@@ -32,13 +37,40 @@ type AnyMessage interface {
 
 type OutList struct {
 	Prev *cell.Cell `tlb:"^"`
-	Out  any        `tlb:"[ActionSendMsg]"`
+	Out  any        `tlb:"[ActionSendMsg,ActionSetCode,ActionReserveCurrency,ActionChangeLibrary]"`
 }
 
 type ActionSendMsg struct {
 	_    Magic      `tlb:"#0ec3c86d"`
 	Mode uint8      `tlb:"## 8"`
 	Msg  *cell.Cell `tlb:"^"`
+}
+
+type ActionSetCode struct {
+	_       Magic      `tlb:"#ad4de08e"`
+	NewCode *cell.Cell `tlb:"^"`
+}
+
+type ActionReserveCurrency struct {
+	_        Magic              `tlb:"#36e6b809"`
+	Mode     uint8              `tlb:"## 8"`
+	Currency CurrencyCollection `tlb:"."`
+}
+
+type LibRefHash struct {
+	_       Magic  `tlb:"$0"`
+	LibHash []byte `tlb:"bits 256"`
+}
+
+type LibRefRef struct {
+	_       Magic      `tlb:"$1"`
+	Library *cell.Cell `tlb:"^"`
+}
+
+type ActionChangeLibrary struct {
+	_      Magic `tlb:"#26fa1dd4"`
+	Mode   uint8 `tlb:"## 7"`
+	LibRef any   `tlb:"[LibRefHash,LibRefRef]"`
 }
 
 type Message struct {
@@ -249,4 +281,31 @@ func (m *MessagesList) ToSlice() ([]Message, error) {
 		list = append(list, msg)
 	}
 	return list, nil
+}
+
+func (o *OutList) ToSlice() ([]any, error) {
+	if o == nil {
+		return nil, nil
+	}
+	prev, err := LoadOutList(o.Prev)
+	if err != nil {
+		return nil, err
+	}
+	return append(prev, o.Out), nil
+}
+
+func LoadOutList(root *cell.Cell) ([]any, error) {
+	if root == nil {
+		return nil, nil
+	}
+	sl := root.BeginParse()
+	if sl.BitsLeft() == 0 && sl.RefsNum() == 0 {
+		return nil, nil
+	}
+
+	var list OutList
+	if err := LoadFromCell(&list, root.BeginParse()); err != nil {
+		return nil, err
+	}
+	return list.ToSlice()
 }

@@ -12,16 +12,16 @@ func init() {
 func GREATER() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
-			i1, err := state.Stack.PopIntFinite()
+			x, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.PushBool(i0.Cmp(i1) == 1)
+			return state.Stack.PushBool(x.Cmp(y) == 1)
 		},
 		Name:      "GREATER",
 		BitPrefix: helpers.BytesPrefix(0xBC),

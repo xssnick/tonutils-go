@@ -14,6 +14,7 @@ func init() {
 
 func NEQINT(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			i0, err := state.Stack.PopIntFinite()
 			if err != nil {
@@ -30,7 +31,7 @@ func NEQINT(value int8) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("%d NEQINT", value)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
+			val, err := code.LoadInt(8)
 			if err != nil {
 				return err
 			}

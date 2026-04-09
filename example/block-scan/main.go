@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"log"
+	"time"
 )
 
 // func to get storage map key
@@ -62,7 +63,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetryTimeout(3, 5*time.Second)
 	api.SetTrustedBlockFromConfig(cfg)
 
 	log.Println("checking proofs since config init block, it may take near a minute...")

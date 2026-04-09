@@ -5,7 +5,7 @@ import "github.com/xssnick/tonutils-go/tvm/vmerr"
 // Gas prices constants.
 const (
 	GasInfinite          int64 = 1<<63 - 1
-	DefaultGlobalVersion       = 9
+	DefaultGlobalVersion       = 13
 
 	CellLoadGasPrice           = 100
 	CellReloadGasPrice         = 25

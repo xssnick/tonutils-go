@@ -31,9 +31,19 @@ func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
 		return err
 	}
 
-	ref, err := code.LoadMaybeRef()
+	hasRef, err := code.LoadBoolBit()
 	if err != nil {
 		return err
+	}
+	var ref *cell.Cell
+	if hasRef {
+		ref, err = code.PeekRefCell()
+		if err != nil {
+			return err
+		}
+		if err = code.AdvanceExt(0, 1); err != nil {
+			return err
+		}
 	}
 
 	pfx, err := code.LoadUInt(10)
@@ -42,7 +52,7 @@ func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
 	}
 
 	op.pfx = pfx
-	op.cont = ref.WithoutObserver().MustToCell()
+	op.cont = ref
 
 	return nil
 }

@@ -14,6 +14,7 @@ func init() {
 
 func BLKSWAP(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			return state.Stack.Rotate(int(i)+int(j), int(j))
 		},

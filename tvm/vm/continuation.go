@@ -31,6 +31,18 @@ func (c *QuitContinuation) Copy() Continuation {
 
 type ExcQuitContinuation struct{}
 
+type HandledException struct {
+	vmerr.VMError
+}
+
+func (e HandledException) Error() string {
+	return e.VMError.Error()
+}
+
+func (e HandledException) Unwrap() error {
+	return e.VMError
+}
+
 func (c *ExcQuitContinuation) GetControlData() *ControlData {
 	return nil
 }
@@ -41,7 +53,7 @@ func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 		return nil, err
 	}
 
-	return nil, vmerr.Error(v.Int64())
+	return nil, HandledException{VMError: vmerr.Error(v.Int64())}
 }
 
 func (c *ExcQuitContinuation) Copy() Continuation {
@@ -59,7 +71,7 @@ func (c *OrdinaryContinuation) GetControlData() *ControlData {
 }
 
 func (c *OrdinaryContinuation) Jump(state *State) (Continuation, error) {
-	state.CurrentCode = c.Code.Copy()
+	state.CurrentCode = c.Code.Copy().SetObserver(&state.Cells)
 	state.Reg.AdjustWith(&c.Data.Save)
 	return nil, nil
 }
@@ -67,7 +79,7 @@ func (c *OrdinaryContinuation) Jump(state *State) (Continuation, error) {
 func (c *OrdinaryContinuation) Copy() Continuation {
 	cont := &OrdinaryContinuation{
 		Data: c.Data.Copy(),
-		Code: c.Code.Copy(),
+		Code: c.Code,
 	}
 	return cont
 }
@@ -93,7 +105,7 @@ func (c *ArgExtContinuation) Jump(state *State) (Continuation, error) {
 func (c *ArgExtContinuation) Copy() Continuation {
 	cont := &ArgExtContinuation{
 		Data: c.Data.Copy(),
-		Ext:  c.Ext.Copy(),
+		Ext:  c.Ext,
 	}
 	return cont
 }
@@ -117,7 +129,7 @@ func (c *PushIntContinuation) Jump(state *State) (Continuation, error) {
 func (c *PushIntContinuation) Copy() Continuation {
 	return &PushIntContinuation{
 		Int:  c.Int,
-		Next: c.Next.Copy(),
+		Next: c.Next,
 	}
 }
 
@@ -145,8 +157,8 @@ func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
 
 	state.Reg.C[0] = &RepeatContinuation{
 		Count: c.Count - 1,
-		Body:  c.Body.Copy(),
-		After: c.After.Copy(),
+		Body:  c.Body,
+		After: c.After,
 	}
 
 	return c.Body, nil
@@ -155,8 +167,29 @@ func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
 func (c *RepeatContinuation) Copy() Continuation {
 	return &RepeatContinuation{
 		Count: c.Count,
-		Body:  c.Body.Copy(),
-		After: c.After.Copy(),
+		Body:  c.Body,
+		After: c.After,
+	}
+}
+
+type AgainContinuation struct {
+	Body Continuation
+}
+
+func (c *AgainContinuation) GetControlData() *ControlData {
+	return nil
+}
+
+func (c *AgainContinuation) Jump(state *State) (Continuation, error) {
+	if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+		state.Reg.C[0] = c.Copy()
+	}
+	return c.Body, nil
+}
+
+func (c *AgainContinuation) Copy() Continuation {
+	return &AgainContinuation{
+		Body: c.Body,
 	}
 }
 
@@ -186,8 +219,8 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 		if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
 			state.Reg.C[0] = &WhileContinuation{
 				CheckCond: false,
-				Body:      c.Body.Copy(),
-				Cond:      c.Cond.Copy(),
+				Body:      c.Body,
+				Cond:      c.Cond,
 				After:     c.After,
 			}
 		}
@@ -198,8 +231,8 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 	if cd := c.Cond.GetControlData(); cd == nil || cd.Save.C[0] == nil {
 		state.Reg.C[0] = &WhileContinuation{
 			CheckCond: true,
-			Body:      c.Body.Copy(),
-			Cond:      c.Cond.Copy(),
+			Body:      c.Body,
+			Cond:      c.Cond,
 			After:     c.After,
 		}
 	}
@@ -210,9 +243,9 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 func (c *WhileContinuation) Copy() Continuation {
 	return &WhileContinuation{
 		CheckCond: c.CheckCond,
-		Body:      c.Body.Copy(),
-		Cond:      c.Cond.Copy(),
-		After:     c.After.Copy(),
+		Body:      c.Body,
+		Cond:      c.Cond,
+		After:     c.After,
 	}
 }
 
@@ -245,7 +278,7 @@ func (c *UntilContinuation) Jump(state *State) (Continuation, error) {
 
 func (c *UntilContinuation) Copy() Continuation {
 	return &UntilContinuation{
-		Body:  c.Body.Copy(),
-		After: c.After.Copy(),
+		Body:  c.Body,
+		After: c.After,
 	}
 }

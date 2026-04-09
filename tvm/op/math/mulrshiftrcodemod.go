@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -14,7 +13,9 @@ func init() {
 }
 
 func MULRSHIFTRCODEMOD(value int8) (op *helpers.AdvancedOP) {
+	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			y, err := state.Stack.PopIntFinite()
 			if err != nil {
@@ -25,7 +26,7 @@ func MULRSHIFTRCODEMOD(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			q := helpers.DivRound(x.Mul(x, y), y.Lsh(big.NewInt(1), uint(value)))
+			q := helpers.DivRound(x.Mul(x, y), y.Lsh(big.NewInt(1), uint(imm())))
 			r := y.Sub(x, y.Mul(y, q))
 
 			err = state.Stack.PushInt(q)
@@ -35,21 +36,12 @@ func MULRSHIFTRCODEMOD(value int8) (op *helpers.AdvancedOP) {
 
 			return state.Stack.PushInt(r)
 		},
-		BitPrefix: helpers.BytesPrefix(0xA9, 0xBD),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreInt(int64(value), 8)
-		},
+		BitPrefix:       helpers.BytesPrefix(0xA9, 0xBD),
+		SerializeSuffix: serializeImmediate,
 		NameSerializer: func() string {
-			return fmt.Sprintf("%d MULRSHIFTR#MOD", value)
+			return fmt.Sprintf("%d MULRSHIFTR#MOD", imm())
 		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			value = int8(val) + 1
-			return nil
-		},
+		DeserializeSuffix: deserializeImmediate,
 	}
 	return op
 }

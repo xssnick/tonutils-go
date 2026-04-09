@@ -3,7 +3,6 @@ package math
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -13,30 +12,23 @@ func init() {
 }
 
 func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
+	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			x, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.PushInt(x.Lsh(x, uint(value)))
+			return state.Stack.PushInt(x.Lsh(x, uint(imm())))
 		},
-		BitPrefix: helpers.BytesPrefix(0xAA),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreInt(int64(value), 8)
-		},
+		BitPrefix:       helpers.BytesPrefix(0xAA),
+		SerializeSuffix: serializeImmediate,
 		NameSerializer: func() string {
-			return fmt.Sprintf("%d LSHIFT#", value)
+			return fmt.Sprintf("%d LSHIFT#", imm())
 		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			value = int8(val) + 1 // x - x*2^(cc+1)
-			return nil
-		},
+		DeserializeSuffix: deserializeImmediate,
 	}
 	return op
 }

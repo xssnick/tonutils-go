@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -26,7 +27,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client).WithRetry()
+	api := ton.NewAPIClient(client).WithRetryTimeout(3, 5*time.Second)
 	w := getWallet(api)
 
 	log.Println("Deploy wallet:", w.WalletAddress().String())
@@ -86,8 +87,8 @@ func getContractData(collectionOwnerAddr, royaltyAddr *address.Address) *cell.Ce
 	//           = Storage;
 
 	royalty := cell.BeginCell().
-		MustStoreUInt(5, 16). // 5% royalty
-		MustStoreUInt(100, 16). // denominator
+		MustStoreUInt(5, 16).       // 5% royalty
+		MustStoreUInt(100, 16).     // denominator
 		MustStoreAddr(royaltyAddr). // fee addr destination
 		EndCell()
 

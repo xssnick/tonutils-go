@@ -76,21 +76,26 @@ func (p continuationStackPlan) hasCapturedStack() bool {
 	return p.data != nil && p.data.Stack != nil && p.data.Stack.Len() > 0
 }
 
-func (p continuationStackPlan) consumeAdjustedStack(s *State, stk *Stack) error {
-	return s.ConsumeStackGas(stk)
-}
-
 func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
 	if p.data != nil {
 		// copy=-1 : pass whole stack, else pass top `cp` elements, drop next `skip` elements.
 		if p.hasCapturedStack() {
 			newStack := p.data.Stack.Copy()
+			copyCount := p.cp
+			if copyCount < 0 {
+				copyCount = s.Stack.Len()
+			}
+			if copyCount > 0 {
+				if err := newStack.MoveFrom(s.Stack, copyCount); err != nil {
+					return nil, err
+				}
+			}
 			if p.skip > 0 {
 				if err := s.Stack.Drop(p.skip); err != nil {
 					return nil, err
 				}
 			}
-			if err := p.consumeAdjustedStack(s, newStack); err != nil {
+			if err := s.ConsumeStackGas(newStack); err != nil {
 				return nil, err
 			}
 			return newStack, nil
@@ -101,7 +106,7 @@ func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err = p.consumeAdjustedStack(s, newStack); err != nil {
+			if err = s.ConsumeStackGas(newStack); err != nil {
 				return nil, err
 			}
 			return newStack, nil
@@ -114,7 +119,7 @@ func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err = p.consumeAdjustedStack(s, newStack); err != nil {
+		if err = s.ConsumeStackGas(newStack); err != nil {
 			return nil, err
 		}
 		return newStack, nil
@@ -125,18 +130,19 @@ func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
 func (p continuationStackPlan) applyJumpStack(s *State) error {
 	if p.data != nil {
 		if p.hasCapturedStack() {
-			cp := p.cp
-			var newStack *Stack
-			if cp < 0 || cp == p.data.Stack.Len() {
-				newStack = p.data.Stack.Copy()
-			} else {
-				newStack = NewStack()
-				if err := newStack.MoveFrom(s.Stack, cp); err != nil {
+			copyCount := p.cp
+			if copyCount < 0 {
+				copyCount = s.Stack.Len()
+			}
+
+			newStack := p.data.Stack.Copy()
+			if copyCount > 0 {
+				if err := newStack.MoveFrom(s.Stack, copyCount); err != nil {
 					return err
 				}
 			}
 
-			if err := p.consumeAdjustedStack(s, newStack); err != nil {
+			if err := s.ConsumeStackGas(newStack); err != nil {
 				return err
 			}
 			s.Stack = newStack
@@ -147,7 +153,7 @@ func (p continuationStackPlan) applyJumpStack(s *State) error {
 			if err := s.Stack.DropAfter(p.cp); err != nil {
 				return err
 			}
-			if err := p.consumeAdjustedStack(s, s.Stack); err != nil {
+			if err := s.ConsumeStackGas(s.Stack); err != nil {
 				return err
 			}
 		}
@@ -158,7 +164,7 @@ func (p continuationStackPlan) applyJumpStack(s *State) error {
 		if err := s.Stack.DropAfter(p.passArgs); err != nil {
 			return err
 		}
-		if err := p.consumeAdjustedStack(s, s.Stack); err != nil {
+		if err := s.ConsumeStackGas(s.Stack); err != nil {
 			return err
 		}
 	}
@@ -226,7 +232,7 @@ func (s *State) CallArgs(c Continuation, passArgs, retArgs int) error {
 
 func (s *State) Jump(c Continuation) error {
 	data := c.GetControlData()
-	if data != nil && data.Stack != nil && data.NumArgs > 0 {
+	if data != nil && (data.Stack != nil || data.NumArgs >= 0) {
 		return s.JumpArgs(c, -1)
 	}
 	return s.JumpTo(c)
@@ -290,7 +296,7 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 	var newStack *Stack
 	if stackCopy < 0 || stackCopy == s.Stack.Len() {
 		newStack = s.Stack
-		s.Stack = nil
+		s.Stack = NewStack()
 	} else if stackCopy > 0 {
 		ns, err := s.Stack.SplitTop(stackCopy, 0)
 		if err != nil {

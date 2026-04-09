@@ -2,7 +2,6 @@ package exec
 
 import (
 	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -36,18 +35,9 @@ func SETCONTCTR(i int) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("c%d SETCONTCTR", i)
 		},
-		BitPrefix: helpers.SlicePrefix(12, []byte{0xED, 0x60}),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			i = int(val)
-			return nil
-		},
+		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x60}),
+		SerializeSuffix:   serializeControlRegisterIndex(&i),
+		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
 	return op
 }

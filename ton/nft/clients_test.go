@@ -119,6 +119,10 @@ func (m *nftAPIMock) WithRetry(maxRetries ...int) ton.APIClientWrapped {
 	return m
 }
 
+func (m *nftAPIMock) WithRetryTimeout(maxRetries int, timeout time.Duration) ton.APIClientWrapped {
+	return m
+}
+
 func (m *nftAPIMock) WithTimeout(timeout time.Duration) ton.APIClientWrapped {
 	return m
 }

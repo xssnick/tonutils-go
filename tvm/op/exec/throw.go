@@ -40,12 +40,8 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 	}
 
 	var exc uint64
-	fixedBits := int64(0)
-	if prefixBits == 10 && immBits == 6 {
-		fixedBits = -2
-	}
 	op := &helpers.AdvancedOP{
-		FixedSizeBits: fixedBits,
+		FixedSizeBits: int64(immBits),
 		BitPrefix:     helpers.UIntPrefix(prefixValue, prefixBits),
 		NameSerializer: func() string {
 			return fmt.Sprintf("%s %d", name, exc)
@@ -111,7 +107,8 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 func newThrowAny() *helpers.AdvancedOP {
 	var args uint64
 	op := &helpers.AdvancedOP{
-		BitPrefix: helpers.UIntPrefix(0x1E5E, 13),
+		BitPrefix:     helpers.UIntPrefix(0x1E5E, 13),
+		FixedSizeBits: 3,
 		NameSerializer: func() string {
 			name := "THROW"
 			if args&1 != 0 {

@@ -1,6 +1,6 @@
 package main
 
-// #cgo LDFLAGS: -L ./lib -Wl,-rpath,./tvm/vm/cross-emulate-test/lib -lemulator
+// #cgo darwin LDFLAGS: -L${SRCDIR}/lib -Wl,-rpath,${SRCDIR}/lib -lemulator
 // #include <stdlib.h>
 // #include <stdbool.h>
 // #include "lib/emulator-extern.h"

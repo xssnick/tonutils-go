@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/ton"
 	"log"
 	"sort"
+	"time"
 )
 
 func main() {
@@ -20,7 +21,7 @@ func main() {
 		return
 	}
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry().WithLSInfoInErrors()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetryTimeout(3, 5*time.Second).WithLSInfoInErrors()
 
 	// if we want to route all requests to the same node, we can use it
 	ctx := client.StickyContext(context.Background())

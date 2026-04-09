@@ -17,7 +17,8 @@ func init() {
 
 func UNTUPLE(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix: helpers.UIntPrefix(0x6f2, 12),
+		BitPrefix:     helpers.UIntPrefix(0x6f2, 12),
+		FixedSizeBits: 4,
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d UNTUPLE", n)
 		},
@@ -40,7 +41,8 @@ func UNTUPLE(n uint8) *helpers.AdvancedOP {
 
 func UNPACKFIRST(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix: helpers.UIntPrefix(0x6f3, 12),
+		BitPrefix:     helpers.UIntPrefix(0x6f3, 12),
+		FixedSizeBits: 4,
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d UNPACKFIRST", n)
 		},

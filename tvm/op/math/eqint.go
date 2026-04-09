@@ -15,6 +15,7 @@ func init() {
 
 func EQINT(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			i0, err := state.Stack.PopIntFinite()
 			if err != nil {

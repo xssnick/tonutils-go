@@ -15,12 +15,8 @@ type AdvancedOP struct {
 	FixedSizeBits     int64
 }
 
-func (op *AdvancedOP) prefix() BitPrefix {
-	return op.BitPrefix
-}
-
 func (op *AdvancedOP) GetPrefixes() []*cell.Slice {
-	return PrefixSlices(op.prefix())
+	return PrefixSlices(op.BitPrefix)
 }
 
 func (op *AdvancedOP) Deserialize(code *cell.Slice) error {
@@ -28,7 +24,7 @@ func (op *AdvancedOP) Deserialize(code *cell.Slice) error {
 }
 
 func (op *AdvancedOP) DeserializeMatched(code *cell.Slice) error {
-	if _, err := code.LoadSlice(op.prefix().Bits); err != nil {
+	if _, err := code.LoadSlice(op.BitPrefix.Bits); err != nil {
 		return err
 	}
 	if op.DeserializeSuffix != nil {
@@ -38,8 +34,7 @@ func (op *AdvancedOP) DeserializeMatched(code *cell.Slice) error {
 }
 
 func (op *AdvancedOP) Serialize() *cell.Builder {
-	prefix := op.prefix()
-	b := cell.BeginCell().MustStoreSlice(prefix.Data, prefix.Bits)
+	b := cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits)
 	if op.SerializeSuffix != nil {
 		b.MustStoreBuilder(op.SerializeSuffix())
 	}
@@ -51,7 +46,7 @@ func (op *AdvancedOP) SerializeText() string {
 }
 
 func (op *AdvancedOP) InstructionBits() int64 {
-	return int64(op.prefix().Bits) + op.FixedSizeBits
+	return int64(op.BitPrefix.Bits) + op.FixedSizeBits
 }
 
 func (op *AdvancedOP) Interpret(state *vm.State) error {

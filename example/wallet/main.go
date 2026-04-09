@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -31,7 +32,7 @@ func main() {
 	}
 
 	// api client with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetryTimeout(3, 5*time.Second)
 	api.SetTrustedBlockFromConfig(cfg)
 
 	// bound all requests to single ton node

@@ -13,6 +13,7 @@ func init() {
 
 func BLKDROP(num uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
 			return state.Stack.Drop(int(num))
 		},

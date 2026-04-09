@@ -14,6 +14,7 @@ func init() {
 
 func REVERSE(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			return state.Stack.Reverse(int(i+2), int(j))
 		},

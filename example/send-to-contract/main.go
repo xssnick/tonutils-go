@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -25,7 +26,7 @@ func main() {
 		return
 	}
 
-	api := ton.NewAPIClient(client).WithRetry()
+	api := ton.NewAPIClient(client).WithRetryTimeout(3, 5*time.Second)
 
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")

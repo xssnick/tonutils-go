@@ -37,7 +37,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 
 	switch prefix {
 	case 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f:
-		op.value = big.NewInt(int64(prefix - 0x70))
+		op.value = big.NewInt(int64(((prefix + 5) & 0xF) - 5))
 		return nil
 	case 0x80:
 		val, err := code.LoadBigInt(8)
@@ -85,8 +85,8 @@ func (op *OpPUSHINT) Serialize() *cell.Builder {
 	bitsSz := op.value.BitLen() + 1 // 1 bit for sign
 
 	switch {
-	case op.value.BitLen() < 4 && op.value.Sign() >= 0:
-		return cell.BeginCell().MustStoreUInt(0x70|op.value.Uint64(), 8)
+	case op.value.IsInt64() && op.value.Int64() >= -5 && op.value.Int64() <= 10:
+		return cell.BeginCell().MustStoreUInt(0x70|(uint64(op.value.Int64())&0xF), 8)
 	case bitsSz <= 8:
 		return cell.BeginCell().MustStoreUInt(0x80, 8).MustStoreBigInt(op.value, 8)
 	case bitsSz <= 16:
@@ -127,7 +127,7 @@ func (op *OpPUSHINT) InstructionBits() int64 {
 	bitsSz := op.value.BitLen() + 1
 
 	switch {
-	case op.value.BitLen() < 4 && op.value.Sign() >= 0:
+	case op.value.IsInt64() && op.value.Int64() >= -5 && op.value.Int64() <= 10:
 		return 8
 	case bitsSz <= 8:
 		return 16

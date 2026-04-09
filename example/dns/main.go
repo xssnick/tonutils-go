@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"github.com/xssnick/tonutils-go/ton/dns"
 	"log"
+	"time"
 
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/ton"
@@ -21,7 +22,7 @@ func main() {
 
 	ctx := client.StickyContext(context.Background())
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client).WithRetry()
+	api := ton.NewAPIClient(client).WithRetryTimeout(3, 5*time.Second)
 
 	// get root dns address from network config
 	root, err := dns.GetRootContractAddr(context.Background(), api)

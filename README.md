@@ -82,7 +82,7 @@ if err != nil {
     panic(err)
 }
 api := ton.NewAPIClient(client)
-api = api.WithRetry() // if you want automatic retries with failover to another node
+api = api.WithRetryTimeout(0, 5*time.Second) // automatic retries with failover and a per-attempt timeout
 ```
 
 Since `client` implements connection pool, it can be the chance that some block is not yet applied on one of the nodes, so it can lead to errors.

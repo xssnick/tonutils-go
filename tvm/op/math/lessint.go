@@ -31,7 +31,7 @@ func LESSINT(value int8) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("%d LESSINT", value)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
+			val, err := code.LoadInt(8)
 			if err != nil {
 				return err
 			}

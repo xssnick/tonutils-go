@@ -22,6 +22,17 @@ type Slice struct {
 	refs []*Cell
 }
 
+func notifyCellLoad(observer Observer, ref *Cell) {
+	if observer == nil || ref == nil {
+		return
+	}
+	if keyObserver, ok := observer.(HashKeyObserver); ok {
+		keyObserver.OnCellLoadKey(ref.HashKey())
+		return
+	}
+	observer.OnCellLoad(ref.Hash())
+}
+
 func (c *Slice) MustLoadRef() *Slice {
 	r, err := c.LoadRef()
 	if err != nil {
@@ -52,9 +63,7 @@ func (c *Slice) LoadRefCell() (*Cell, error) {
 	}
 	ref := c.refs[0]
 	c.refs = c.refs[1:]
-	if c.observer != nil {
-		c.observer.OnCellLoad(ref.Hash())
-	}
+	notifyCellLoad(c.observer, ref)
 
 	return ref, nil
 }
@@ -64,10 +73,15 @@ func (c *Slice) PreloadRefCell() (*Cell, error) {
 		return nil, ErrNoMoreRefs
 	}
 	ref := c.refs[0]
-	if c.observer != nil {
-		c.observer.OnCellLoad(ref.Hash())
-	}
+	notifyCellLoad(c.observer, ref)
 	return ref, nil
+}
+
+func (c *Slice) PeekRefCell() (*Cell, error) {
+	if len(c.refs) == 0 {
+		return nil, ErrNoMoreRefs
+	}
+	return c.refs[0], nil
 }
 
 func (c *Slice) MustLoadMaybeRef() *Slice {
@@ -93,15 +107,97 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 	}
 	ref := c.refs[0]
 	c.refs = c.refs[1:]
-	if c.observer != nil {
-		c.observer.OnCellLoad(ref.Hash())
-	}
+	notifyCellLoad(c.observer, ref)
 
 	return ref.BeginParse().SetObserver(c.observer), nil
 }
 
 func (c *Slice) RefsNum() int {
 	return len(c.refs)
+}
+
+func (c *Slice) BitAt(offset uint) (uint8, error) {
+	if offset >= c.BitsLeft() {
+		return 0, ErrNotEnoughData(int(c.BitsLeft()), int(offset+1))
+	}
+
+	bitPos := (c.loadedSz % 8) + offset
+	byteIdx := bitPos / 8
+	bitIdx := 7 - (bitPos % 8)
+	return (c.data[byteIdx] >> bitIdx) & 1, nil
+}
+
+func (c *Slice) Advance(bits uint) error {
+	if c.bitsSz-c.loadedSz < bits {
+		return ErrNotEnoughData(int(c.bitsSz-c.loadedSz), int(bits))
+	}
+	if bits == 0 {
+		return nil
+	}
+
+	startBitOffset := c.loadedSz % 8
+	c.loadedSz += bits
+	c.data = c.data[(startBitOffset+bits)/8:]
+	return nil
+}
+
+func (c *Slice) AdvanceExt(bits uint, refs int) error {
+	if refs < 0 {
+		return ErrNoMoreRefs
+	}
+	if len(c.refs) < refs {
+		return ErrNoMoreRefs
+	}
+	if err := c.Advance(bits); err != nil {
+		return err
+	}
+	c.refs = c.refs[refs:]
+	return nil
+}
+
+func (c *Slice) FetchSubslice(bits uint, refs int) (*Slice, error) {
+	if refs < 0 {
+		return nil, ErrNoMoreRefs
+	}
+	if len(c.refs) < refs {
+		return nil, ErrNoMoreRefs
+	}
+	data, err := c.LoadSlice(bits)
+	if err != nil {
+		return nil, err
+	}
+	outRefs := append([]*Cell(nil), c.refs[:refs]...)
+	c.refs = c.refs[refs:]
+	return &Slice{
+		special:   c.special,
+		levelMask: c.levelMask,
+		bitsSz:    bits,
+		data:      data,
+		refs:      outRefs,
+		observer:  c.observer,
+	}, nil
+}
+
+func (c *Slice) PreloadSubslice(bits uint, refs int) (*Slice, error) {
+	if refs < 0 {
+		return nil, ErrNoMoreRefs
+	}
+	if len(c.refs) < refs {
+		return nil, ErrNoMoreRefs
+	}
+	data, err := c.PreloadSlice(bits)
+	if err != nil {
+		return nil, err
+	}
+	outRefs := append([]*Cell(nil), c.refs[:refs]...)
+	return &Slice{
+		special:   c.special,
+		levelMask: c.levelMask,
+		bitsSz:    bits,
+		data:      data,
+		refs:      outRefs,
+		observer:  c.observer,
+	}, nil
 }
 
 func (c *Slice) MustLoadCoins() uint64 {
@@ -364,6 +460,15 @@ func (c *Slice) LoadBigInt(sz uint) (*big.Int, error) {
 	}
 
 	return u, nil
+}
+
+func (c *Slice) PreloadBigInt(sz uint) (*big.Int, error) {
+	if sz > 257 {
+		return nil, ErrTooBigSize
+	}
+
+	cp := c.Copy()
+	return cp.LoadBigInt(sz)
 }
 
 func (c *Slice) LoadVarUInt(sz uint) (*big.Int, error) {
@@ -661,10 +766,8 @@ func (c *Slice) ToBuilder() *Builder {
 }
 
 func (c *Slice) ToCell() (*Cell, error) {
-	cp := c.Copy()
-
-	left := cp.bitsSz - cp.loadedSz
-	data, err := cp.LoadSlice(left)
+	left := c.bitsSz - c.loadedSz
+	data, err := c.PreloadSlice(left)
 	if err != nil {
 		return nil, err
 	}

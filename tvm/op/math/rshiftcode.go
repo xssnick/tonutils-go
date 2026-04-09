@@ -3,7 +3,6 @@ package math
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -13,30 +12,23 @@ func init() {
 }
 
 func RSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
+	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			x, err := state.Stack.PopIntFinite()
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.PushInt(x.Rsh(x, uint(value)))
+			return state.Stack.PushInt(x.Rsh(x, uint(imm())))
 		},
-		BitPrefix: helpers.BytesPrefix(0xAB),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreInt(int64(value), 8)
-		},
+		BitPrefix:       helpers.BytesPrefix(0xAB),
+		SerializeSuffix: serializeImmediate,
 		NameSerializer: func() string {
-			return fmt.Sprintf("%d RSHIFT#", value)
+			return fmt.Sprintf("%d RSHIFT#", imm())
 		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			value = int8(val) + 1
-			return nil
-		},
+		DeserializeSuffix: deserializeImmediate,
 	}
 	return op
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
@@ -13,6 +14,7 @@ import (
 
 type retryClient struct {
 	maxRetries int
+	timeout    time.Duration
 	LiteClient
 }
 
@@ -27,13 +29,27 @@ func (w *retryClient) QueryLiteserver(ctx context.Context, payload tl.Serializab
 	ctxBackup := ctx
 
 	for {
-		err := w.LiteClient.QueryLiteserver(ctx, payload, result)
+		attemptCtx := ctx
+		var cancel context.CancelFunc
+		if w.timeout > 0 {
+			attemptCtx, cancel = context.WithTimeout(ctx, w.timeout)
+		}
+
+		err := w.LiteClient.QueryLiteserver(attemptCtx, payload, result)
+		if cancel != nil {
+			cancel()
+		}
+
 		if w.maxRetries > 0 && tries >= w.maxRetries {
 			return err
 		}
 		tries++
 
 		if err != nil {
+			if w.timeout > 0 && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				err = attemptTimeoutError{cause: err}
+			}
+
 			if !errors.Is(err, liteclient.ErrADNLReqTimeout) {
 				return err
 			}
