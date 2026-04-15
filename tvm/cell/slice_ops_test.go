@@ -2,6 +2,18 @@ package cell
 
 import "testing"
 
+func mustPanicOnNilReceiver(t *testing.T, fn func()) {
+	t.Helper()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected nil receiver to panic")
+		}
+	}()
+
+	fn()
+}
+
 func mustBitSlice(t *testing.T, bits string, refs ...*Cell) *Slice {
 	t.Helper()
 	b := BeginCell()
@@ -118,9 +130,6 @@ func TestSliceOpsComparisonsAndCounts(t *testing.T) {
 	if got := prefix.LexCompare(mustBitSlice(t, "101")); got != 0 {
 		t.Fatalf("equal slices should compare to zero, got %d", got)
 	}
-	if got := (*Slice)(nil).LexCompare(mustBitSlice(t, "1")); got != -1 {
-		t.Fatalf("nil should sort before non-empty, got %d", got)
-	}
 	if got := mustBitSlice(t, "").LexCompare(nil); got != 0 {
 		t.Fatalf("empty slice should compare equal to nil, got %d", got)
 	}
@@ -148,6 +157,24 @@ func TestSliceOpsComparisonsAndCounts(t *testing.T) {
 	if allZero.BitsLeft() != 0 {
 		t.Fatalf("all-zero slice should become empty, bits=%d", allZero.BitsLeft())
 	}
+}
+
+func TestSliceOpsNilReceiverPanics(t *testing.T) {
+	var nilSlice *Slice
+	full := mustBitSlice(t, "101")
+
+	mustPanicOnNilReceiver(t, func() {
+		_ = nilSlice.LexCompare(full)
+	})
+	mustPanicOnNilReceiver(t, func() {
+		_ = nilSlice.BitsEqual(full)
+	})
+	mustPanicOnNilReceiver(t, func() {
+		_ = nilSlice.IsPrefixOf(full)
+	})
+	mustPanicOnNilReceiver(t, func() {
+		_ = nilSlice.IsSuffixOf(full)
+	})
 }
 
 func TestSliceDepth(t *testing.T) {

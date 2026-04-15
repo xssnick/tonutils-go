@@ -86,7 +86,7 @@ func (s *storageStat) addCell(cl *cell.Cell) bool {
 	s.seen[key] = struct{}{}
 	s.cells++
 
-	sl := cl.BeginParseNoCopy()
+	sl := cl.BeginParse()
 	s.bits += uint64(sl.BitsLeft())
 	s.refs += uint64(sl.RefsNum())
 	for i := 0; i < sl.RefsNum(); i++ {

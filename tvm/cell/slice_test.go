@@ -82,7 +82,7 @@ func TestLoadCell_Loaders(t *testing.T) {
 		return
 	}
 
-	if lr.MustLoadRef().bitsSz != 0 {
+	if lr.MustLoadRef().BitsLeft() != 0 {
 		t.Fatal("first ref of loaded ref not empty")
 		return
 	}
@@ -218,32 +218,6 @@ func TestSlice_LoadIntSmallWidths(t *testing.T) {
 	}
 }
 
-func TestCellBeginParse_SnapshotsUnsafeData(t *testing.T) {
-	c := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	s := c.BeginParse()
-
-	raw := c.ToRawUnsafe()
-	raw.Data[0] = 0xCD
-
-	if got := s.MustLoadUInt(8); got != 0xAB {
-		t.Fatalf("snapshot changed after unsafe mutation, got %x", got)
-	}
-}
-
-func TestSliceCopy_SnapshotsUnsafeData(t *testing.T) {
-	c := BeginCell().MustStoreUInt(0b10110110, 8).EndCell()
-	s := c.BeginParse()
-	s.MustLoadUInt(3)
-	cp := s.Copy()
-
-	raw := c.ToRawUnsafe()
-	raw.Data[0] = 0x00
-
-	if got := cp.MustLoadUInt(5); got != 0b10110 {
-		t.Fatalf("copied slice changed after unsafe mutation, got %b", got)
-	}
-}
-
 func TestCellBeginParseTrusted_IndependentCursors(t *testing.T) {
 	ref := BeginCell().MustStoreUInt(0xCD, 8).EndCell()
 	c := BeginCell().
@@ -251,8 +225,8 @@ func TestCellBeginParseTrusted_IndependentCursors(t *testing.T) {
 		MustStoreRef(ref).
 		EndCell()
 
-	left := c.BeginParseNoCopy()
-	right := c.BeginParseNoCopy()
+	left := c.BeginParse()
+	right := c.BeginParse()
 
 	if got := left.MustLoadUInt(4); got != 0xA {
 		t.Fatalf("unexpected left prefix: %x", got)

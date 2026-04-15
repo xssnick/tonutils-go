@@ -158,7 +158,7 @@ func fixedDictCommonPrefix(root *Cell, keySz uint, limit uint) (*Cell, error) {
 	if root == nil || limit == 0 {
 		return BeginCell().EndCell(), nil
 	}
-	if root.special {
+	if root.IsSpecial() {
 		return nil, fmt.Errorf("dict has special cells in tree structure")
 	}
 
@@ -199,7 +199,7 @@ func collectFixedDictEntriesInner(root *Cell, remaining uint, prefix *Builder) (
 	if root == nil {
 		return []DictItem{}, nil
 	}
-	if root.special {
+	if root.IsSpecial() {
 		return nil, fmt.Errorf("dict has special cells in tree structure")
 	}
 
@@ -368,7 +368,7 @@ func extractPrefixSubdictRoot(root *Cell, keySz uint, prefix *Cell, removePrefix
 		if branch == nil {
 			return nil, true, nil
 		}
-		if branch.special {
+		if branch.IsSpecial() {
 			return nil, false, fmt.Errorf("dict has special cells in tree structure")
 		}
 

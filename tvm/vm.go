@@ -112,7 +112,7 @@ func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
 }
 
 func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) error {
-	_, err := tvm.ExecuteDetailed(code, data, c7, gas, stack)
+	_, err := tvm.executeDetailedWithLibrariesRaw(code, data, c7, gas, stack)
 	return err
 }
 
@@ -121,9 +121,20 @@ func (tvm *TVM) ExecuteDetailed(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Ga
 }
 
 func (tvm *TVM) ExecuteDetailedWithLibraries(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
+	res, err := tvm.executeDetailedWithLibrariesRaw(code, data, c7, gas, stack, libraries...)
+	if err != nil {
+		if _, ok := vmerr.ErrorCode(err); ok {
+			return res, nil
+		}
+		return nil, err
+	}
+	return res, nil
+}
+
+func (tvm *TVM) executeDetailedWithLibrariesRaw(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
 	state := vm.NewExecutionState(tvm.globalVersion, gas, data, c7, stack, libraries...)
 	state.SetChildRunner(tvm.runState)
-	state.PrepareExecution(code.BeginParseNoCopy())
+	state.PrepareExecution(code.BeginParse())
 
 	exitCode, err := tvm.runState(state)
 
@@ -150,19 +161,18 @@ func (tvm *TVM) runState(state *vm.State) (exitCode int64, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			exitCode = vmerr.CodeFatal
-			err = vmerr.Error(vmerr.CodeFatal, fmt.Sprintf("vm panic: %v", recovered))
+			err = fmt.Errorf("vm panic: %v", recovered)
 		}
 	}()
 
 	if err = tvm.execute(state); err != nil {
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) {
+		if code, ok := vmerr.ErrorCode(err); ok {
+			exitCode = code
+			if !vm.IsSuccessExitCode(exitCode) {
+				return exitCode, err
+			}
+		} else {
 			return 0, err
-		}
-
-		exitCode = vmErr.Code
-		if !vm.IsSuccessExitCode(exitCode) {
-			return exitCode, err
 		}
 	}
 
@@ -202,11 +212,15 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 
 			if err = tvm.step(state); err != nil {
 				var e vmerr.VMError
+				var virt vmerr.VirtualizationError
 				var handled vm.HandledException
 				if errors.As(err, &e) && e.Code == vmerr.CodeOutOfGas {
 					if stackErr := state.HandleOutOfGas(); stackErr != nil {
 						return stackErr
 					}
+					return err
+				}
+				if errors.As(err, &virt) {
 					return err
 				}
 				if errors.As(err, &handled) {
@@ -240,7 +254,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 func (tvm *TVM) step(state *vm.State) (err error) {
 	px := tvm.matchOpcode(state.CurrentCode)
 	if px == nil {
-		return fmt.Errorf("opcode not found: %w (%s)", vm.ErrCorruptedOpcode, state.CurrentCode.String())
+		return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("opcode not found: %s", state.CurrentCode.String()))
 	}
 
 	op := px()
@@ -251,6 +265,9 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 		err = op.Deserialize(state.CurrentCode)
 	}
 	if err != nil {
+		if errors.Is(err, vm.ErrCorruptedOpcode) {
+			return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("deserialize opcode [%s] failed", op.SerializeText()))
+		}
 		return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
 	}
 	if gasOp, ok := op.(vm.GasPricedOp); ok {

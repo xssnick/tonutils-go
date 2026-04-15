@@ -14,6 +14,16 @@ var castTable = crc32.MakeTable(crc32.Castagnoli)
 
 var bocMagic = []byte{0xB5, 0xEE, 0x9C, 0x72}
 
+// MaxBOCRoots limits how many roots may be decoded from a single BOC payload,
+// including the improved compression/decompression path.
+// Set it to 0 or a negative value to disable the limit.
+var MaxBOCRoots = 16384
+
+// MaxBOCCells limits how many cells may be decoded from a single BOC payload,
+// including the improved compression/decompression path.
+// Set it to 0 or a negative value to disable the limit.
+var MaxBOCCells = 1 << 20
+
 type bocFlags struct {
 	hasIndex     bool
 	HasCrc32c    bool
@@ -68,6 +78,12 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 	}
 	if cellsNum <= 0 || rootsNum <= 0 {
 		return nil, errors.New("invalid boc counters")
+	}
+	if MaxBOCCells > 0 && cellsNum > MaxBOCCells {
+		return nil, fmt.Errorf("too many cells in boc: %d > %d", cellsNum, MaxBOCCells)
+	}
+	if MaxBOCRoots > 0 && rootsNum > MaxBOCRoots {
+		return nil, fmt.Errorf("too many roots in boc: %d > %d", rootsNum, MaxBOCRoots)
 	}
 
 	// complete BOCs - ??? (absent:(##(size * 8)) { roots + absent <= cells })
@@ -137,6 +153,16 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read payload, want %d, has %d", dataLen, r.LeftLen())
 	}
+	expectedTrailer := 0
+	if flags.HasCrc32c {
+		expectedTrailer = 4
+	}
+	if left := r.LeftLen(); left != expectedTrailer {
+		if left > expectedTrailer {
+			return nil, fmt.Errorf("unexpected trailing data after boc payload: %d bytes", left-expectedTrailer)
+		}
+		return nil, fmt.Errorf("invalid boc trailer size, want %d bytes, got %d", expectedTrailer, left)
+	}
 
 	cll, err := parseCells(rootsIndex, cellsNum, cellNumSizeBytes, payload, index)
 	if err != nil {
@@ -147,25 +173,36 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 }
 
 func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index []int) ([]*Cell, error) {
-	cells := make([]*Cell, cellsNum)
-	for i := 0; i < cellsNum; i++ {
-		// initialize them one by one for flexible gc and memory usage
-		cells[i] = &Cell{}
+	cells := make([]Cell, cellsNum)
+	refIndex := make([][]int, cellsNum)
+
+	if index != nil {
+		prevEnd := 0
+		for i, end := range index {
+			if end < prevEnd || end > len(data) {
+				return nil, errors.New("invalid cell index")
+			}
+			if i == len(index)-1 && end != len(data) {
+				return nil, errors.New("invalid cell index")
+			}
+			prevEnd = end
+		}
 	}
 
-	// index = nil
 	offset := 0
 	for i := 0; i < cellsNum; i++ {
-		if len(data)-offset < 2 {
-			return nil, errors.New("failed to parse cell header, corrupted data")
-		}
+		cellEnd := len(data)
 
 		if index != nil {
-			// if we have index, then set offset from it, it stores end of each cell
 			offset = 0
 			if i > 0 {
 				offset = index[i-1]
 			}
+			cellEnd = index[i]
+		}
+
+		if cellEnd-offset < 2 {
+			return nil, errors.New("failed to parse cell header, corrupted data")
 		}
 
 		// len(self.refs) + self.is_special() * 8 + self.level() * 32
@@ -185,14 +222,14 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 		sz := int(ln/2 + oneMore)
 
 		offset += 2
-		if len(data)-offset < sz {
+		if cellEnd-offset < sz {
 			return nil, errors.New("failed to parse cell payload, corrupted data")
 		}
 
 		if withHashes {
 			hashesNum := levelMask.getHashesCount()
 			hashesSize := hashesNum*hashSize + hashesNum*depthSize
-			if len(data)-offset < hashesSize {
+			if cellEnd-offset < hashesSize {
 				return nil, errors.New("failed to parse cell hashes, corrupted data")
 			}
 
@@ -203,11 +240,13 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 		payload := data[offset : offset+sz]
 
 		offset += sz
-		if len(data)-offset < refsNum*refSzBytes {
+		if cellEnd-offset < refsNum*refSzBytes {
 			return nil, errors.New("failed to parse cell refs, corrupted data")
 		}
 
-		refs := make([]*Cell, refsNum)
+		if refsNum > 0 {
+			refIndex[i] = make([]int, 0, refsNum)
+		}
 		for y := 0; y < refsNum; y++ {
 			id := dynInt(data[offset : offset+refSzBytes])
 			offset += refSzBytes
@@ -218,12 +257,14 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 			if id < i && index == nil { // compatibility with c++ implementation
 				return nil, errors.New("reference to index which is behind parent cell")
 			}
-			if id >= len(cells) {
+			if id < 0 || id >= len(cells) {
 				return nil, errors.New("invalid index, out of scope")
 			}
 
-			refs[y] = cells[id]
+			refIndex[i] = append(refIndex[i], id)
+			cells[i].setRef(y, &cells[id])
 		}
+		cells[i].setRefsCount(refsNum)
 
 		bitsSz := uint(int(ln) * 4)
 
@@ -238,27 +279,81 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 			}
 		}
 
-		cells[i].special = special
-		cells[i].bitsSz = bitsSz
-		cells[i].levelMask = levelMask
+		cells[i].setSpecial(special)
+		cells[i].bitsSz = uint16(bitsSz)
+		cells[i].setLevelMask(levelMask)
 		cells[i].data = payload
-		cells[i].refs = refs
+
+		if index != nil && offset != cellEnd {
+			return nil, errors.New("invalid indexed cell boundary")
+		}
+	}
+
+	if index == nil && offset != len(data) {
+		return nil, errors.New("failed to parse cells payload, corrupted data")
+	}
+
+	order, err := topologicalCellOrder(refIndex)
+	if err != nil {
+		return nil, err
 	}
 
 	roots := make([]*Cell, len(rootsIndex))
 
-	for i := len(cells) - 1; i >= 0; i-- {
-		cells[i].calculateHashes()
-		if err := validateLoadedCell(cells[i]); err != nil {
-			return nil, fmt.Errorf("invalid cell #%d: %w", i, err)
+	for _, idx := range order {
+		if err := cells[idx].calculateHashesSafe(); err != nil {
+			return nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
+		}
+		if err := validateLoadedCell(&cells[idx]); err != nil {
+			return nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
 		}
 	}
 
 	for i, idx := range rootsIndex {
-		roots[i] = cells[idx]
+		roots[i] = &cells[idx]
 	}
 
 	return roots, nil
+}
+
+func topologicalCellOrder(refIndex [][]int) ([]int, error) {
+	type frame struct {
+		idx  int
+		next int
+	}
+
+	state := make([]byte, len(refIndex))
+	order := make([]int, 0, len(refIndex))
+
+	for start := range refIndex {
+		if state[start] != 0 {
+			continue
+		}
+
+		state[start] = 1
+		stack := []frame{{idx: start}}
+		for len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.next >= len(refIndex[top.idx]) {
+				state[top.idx] = 2
+				order = append(order, top.idx)
+				stack = stack[:len(stack)-1]
+				continue
+			}
+
+			child := refIndex[top.idx][top.next]
+			top.next++
+			switch state[child] {
+			case 0:
+				state[child] = 1
+				stack = append(stack, frame{idx: child})
+			case 1:
+				return nil, errors.New("recursive reference of cells")
+			}
+		}
+	}
+
+	return order, nil
 }
 
 func parseBOCFlags(data byte) (bocFlags, int) {
@@ -270,6 +365,19 @@ func parseBOCFlags(data byte) (bocFlags, int) {
 }
 
 func dynInt(data []byte) int {
+	switch len(data) {
+	case 0:
+		return 0
+	case 1:
+		return int(data[0])
+	case 2:
+		return int(binary.BigEndian.Uint16(data))
+	case 3:
+		return int(data[0])<<16 | int(data[1])<<8 | int(data[2])
+	case 4:
+		return int(binary.BigEndian.Uint32(data))
+	}
+
 	var v uint64
 	for _, b := range data {
 		v = (v << 8) | uint64(b)

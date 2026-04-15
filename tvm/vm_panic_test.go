@@ -1,13 +1,12 @@
 package tvm
 
 import (
-	"errors"
+	"strings"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type panicTestOP struct{}
@@ -49,12 +48,10 @@ func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected fatal error")
 	}
-
-	var vmErr vmerr.VMError
-	if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeFatal {
-		t.Fatalf("expected fatal VM error, got %v", err)
+	if res != nil {
+		t.Fatalf("expected nil result on fatal execution error, got %#v", res)
 	}
-	if res == nil || res.ExitCode != vmerr.CodeFatal {
-		t.Fatalf("expected fatal exit code, got %#v", res)
+	if !strings.Contains(err.Error(), "vm panic: panic test") {
+		t.Fatalf("expected panic context in error, got %v", err)
 	}
 }

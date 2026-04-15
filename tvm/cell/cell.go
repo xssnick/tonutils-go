@@ -24,15 +24,14 @@ const maxDepth = 1024
 const maxCellDataBytes = 128
 
 type Cell struct {
-	special   bool
-	levelMask LevelMask
-	bitsSz    uint
-	data      []byte
+	data  []byte
+	hash0 [32]byte
+	refs  [4]*Cell
+	meta  *cellMeta
 
-	hashes      []byte
-	depthLevels []uint16
-
-	refs []*Cell
+	bitsSz uint16
+	depth0 uint16
+	flags  uint8
 }
 
 type Observer interface {
@@ -44,30 +43,22 @@ type HashKeyObserver interface {
 	OnCellLoadKey(hash [32]byte)
 }
 
-type RawUnsafeCell struct {
-	IsSpecial bool
-	LevelMask LevelMask
-	BitsSz    uint
-	Data      []byte
-
-	Refs []*Cell
-}
-
 func (c *Cell) copy() *Cell {
-	return &Cell{
-		special:     c.special,
-		levelMask:   c.levelMask,
-		bitsSz:      c.bitsSz,
-		data:        append([]byte{}, c.data...),
-		hashes:      append([]byte{}, c.hashes...),
-		depthLevels: append([]uint16{}, c.depthLevels...),
-		refs:        append([]*Cell{}, c.refs...),
+	cp := &Cell{
+		data:   append([]byte{}, c.data...),
+		meta:   cloneCellMeta(c.meta),
+		bitsSz: c.bitsSz,
+		depth0: c.depth0,
+		flags:  c.flags,
 	}
+	copy(cp.hash0[:], c.hash0[:])
+	copy(cp.refs[:], c.rawRefs())
+	return cp
 }
 
 func (c *Cell) cloneWithRef(i int, ref *Cell) *Cell {
 	cp := c.copy()
-	cp.refs[i] = ref
+	cp.setRef(i, ref)
 	cp.calculateHashes()
 	return cp
 }
@@ -80,92 +71,46 @@ func (c *Cell) cloneWithRefObserved(i int, ref *Cell, observer Observer) *Cell {
 	return cp
 }
 
-func (c *Cell) beginParse(copyData bool) *Slice {
-	data := c.data
-	if copyData {
-		// Copy data to keep the returned slice a stable snapshot. This is important
-		// even though Cell is logically immutable, because RawUnsafe helpers expose
-		// the backing byte storage to callers.
-		data = append([]byte{}, c.data...)
-	}
-	return &Slice{
-		special:   c.special,
-		levelMask: c.levelMask,
-		bitsSz:    c.bitsSz,
-		data:      data,
-		refs:      c.refs,
-		observer:  nil,
-	}
-}
-
 func (c *Cell) BeginParse() *Slice {
-	return c.beginParse(true)
-}
-
-// BeginParseNoCopy returns a parsing slice that shares the cell backing bytes.
-// It is safe as long as the caller does not mutate the cell through RawUnsafe
-// helpers while the returned slice is in use.
-func (c *Cell) BeginParseNoCopy() *Slice {
-	return c.beginParse(false)
+	return &Slice{
+		cell:   c,
+		bitEnd: c.bitsSz,
+		refEnd: uint8(c.refsCount()),
+	}
 }
 
 func (c *Cell) ToBuilder() *Builder {
-	// copy data
-	data := append([]byte{}, c.data...)
+	var b Builder
+	b.bitsSz = uint(c.bitsSz)
+	copy(b.data[:], c.data)
 
-	return &Builder{
-		bitsSz:   c.bitsSz,
-		data:     data,
-		refs:     c.refs,
-		observer: nil,
-	}
-}
+	b.refsNum = uint8(c.refsCount())
+	copy(b.refs[:], c.rawRefs())
 
-func (c *Cell) ToRawUnsafe() RawUnsafeCell {
-	return RawUnsafeCell{
-		IsSpecial: c.special,
-		LevelMask: c.levelMask,
-		BitsSz:    c.bitsSz,
-		Data:      c.data,
-		Refs:      c.refs,
-	}
-}
-
-func FromRawUnsafe(u RawUnsafeCell) *Cell {
-	c := &Cell{
-		special:   u.IsSpecial,
-		levelMask: u.LevelMask,
-		bitsSz:    u.BitsSz,
-		data:      u.Data,
-		refs:      u.Refs,
-	}
-	c.calculateHashes()
-	return c
+	return &b
 }
 
 func (c *Cell) BitsSize() uint {
-	return c.bitsSz
+	return uint(c.bitsSz)
 }
 
 func (c *Cell) RefsNum() uint {
-	return uint(len(c.refs))
+	return uint(c.refsCount())
 }
 
 func (c *Cell) MustPeekRef(i int) *Cell {
-	return c.refs[i]
-}
-
-func (c *Cell) UnsafeModify(levelMask LevelMask, special bool) {
-	c.special = special
-	c.levelMask = levelMask
-	c.calculateHashes()
+	ref, err := c.PeekRef(i)
+	if err != nil {
+		panic(err)
+	}
+	return ref
 }
 
 func (c *Cell) PeekRef(i int) (*Cell, error) {
-	if i >= len(c.refs) {
+	if i >= c.refsCount() {
 		return nil, ErrNoMoreRefs
 	}
-	return c.refs[i], nil
+	return c.visibleRef(i), nil
 }
 
 func (c *Cell) Dump(limitLength ...int) string {
@@ -222,25 +167,26 @@ func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
 	builder.WriteString(val)
 	builder.WriteByte(']')
 
-	if c.levelMask.GetLevel() > 0 {
+	if c.getLevelMask().GetLevel() > 0 {
 		builder.WriteByte('{')
-		builder.WriteString(strconv.Itoa(c.levelMask.GetLevel()))
+		builder.WriteString(strconv.Itoa(c.getLevelMask().GetLevel()))
 		builder.WriteByte('}')
 
 	}
-	if c.special {
+	if c.isSpecial() {
 		builder.WriteByte('*')
 	}
-	if len(c.refs) > 0 {
+	refCnt := c.refsCount()
+	if refCnt > 0 {
 
 		builder.WriteString(" -> {")
 
-		for i, ref := range c.refs {
+		for i, ref := range c.visibleRefs() {
 
 			builder.WriteByte('\n')
 			builder.WriteString(ref.dump(deep+1, bin, limitLength))
 
-			if i == len(c.refs)-1 {
+			if i == refCnt-1 {
 				builder.WriteByte('\n')
 			} else {
 				builder.WriteByte(',')
@@ -300,7 +246,7 @@ func (c *Cell) Verify(key ed25519.PublicKey, signature []byte) bool {
 }
 
 func (c *Cell) GetType() Type {
-	if !c.special {
+	if !c.isSpecial() {
 		return OrdinaryCellType
 	}
 	if c.BitsSize() < 8 {

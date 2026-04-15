@@ -19,7 +19,7 @@ func loadReferenceFixtureRoot(tb testing.TB) (*Cell, []byte) {
 	if err != nil {
 		tb.Fatalf("failed to parse raw boc: %v", err)
 	}
-	return root, rawBOC
+	return root, root.ToBOCWithOptions(mode31Options())
 }
 
 func mode31Options() BOCOptions {

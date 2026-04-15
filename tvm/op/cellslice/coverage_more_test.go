@@ -30,9 +30,6 @@ func TestParseLoadedCellSliceBranches(t *testing.T) {
 	if _, err = parseLoadedCellSlice(state, mustPrunedCell(t)); err == nil {
 		t.Fatal("expected pruned cell parse to fail")
 	}
-	if _, err = parseLoadedCellSlice(state, mustUnknownSpecialCell(t)); err == nil {
-		t.Fatal("expected unknown special cell parse to fail")
-	}
 }
 
 func TestRegisteredCellSliceOpsInstantiate(t *testing.T) {
@@ -423,7 +420,7 @@ func TestAdvancedDeserializeOps(t *testing.T) {
 		}
 
 		state = newCellSliceState()
-		pushCellSliceCell(t, state, mustUnknownSpecialCell(t))
+		pushCellSliceCell(t, state, mustPrunedCell(t))
 		if err := XCTOS().Interpret(state); err != nil {
 			t.Fatalf("XCTOS special failed: %v", err)
 		}

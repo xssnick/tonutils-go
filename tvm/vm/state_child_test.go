@@ -12,13 +12,12 @@ import (
 
 func assertVMErrorCode(t *testing.T, err error, code int64) {
 	t.Helper()
-
-	var vmErr vmerr.VMError
-	if !errors.As(err, &vmErr) {
-		t.Fatalf("expected VMError code %d, got %T (%v)", code, err, err)
+	got, ok := vmerr.ErrorCode(err)
+	if !ok {
+		t.Fatalf("expected VM-like error code %d, got %T (%v)", code, err, err)
 	}
-	if vmErr.Code != code {
-		t.Fatalf("vm error code = %d, want %d", vmErr.Code, code)
+	if got != code {
+		t.Fatalf("vm error code = %d, want %d", got, code)
 	}
 }
 
@@ -318,8 +317,7 @@ func TestStateCommitThrowAndRunChild(t *testing.T) {
 		assertVMErrorCode(t, err, vmerr.CodeCellOverflow)
 	}
 
-	levelCell := cell.BeginCell().EndCell()
-	levelCell.UnsafeModify(cell.LevelMask{Mask: 1}, false)
+	levelCell := mustPrunedCell(t)
 	levelState := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), levelCell, tuple.Tuple{}, NewStack())
 	levelState.Reg.D[1] = cell.BeginCell().EndCell()
 	if levelState.TryCommitCurrent() {

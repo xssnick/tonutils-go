@@ -2,7 +2,6 @@ package tvm
 
 import (
 	"bytes"
-	"errors"
 	"math/big"
 	"testing"
 
@@ -252,7 +251,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("xloadq expected false without libraries")
 		}
 
-		depthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 1).EndCell()).EndCell()
+		depthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
 		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD764), depthCell.BeginParse())
 		if err != nil {
 			t.Fatalf("sdepth unexpected error: %v", err)
@@ -339,13 +338,9 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 	t.Run("XLoadPrunedCell", func(t *testing.T) {
 		pruned := mustPrunedCellForXLoad(t)
 
-		_, _, err := runRawCode(codeFromOpcodes(t, 0xD73A), pruned)
-		if err == nil {
-			t.Fatalf("xload expected error on pruned cell")
-		}
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellUnderflow {
-			t.Fatalf("xload expected cell underflow on pruned cell, got %v", err)
+		_, res, err := runRawCode(codeFromOpcodes(t, 0xD73A), pruned)
+		if code := exitCodeFromResult(res, err); code != vmerr.CodeCellUnderflow {
+			t.Fatalf("xload expected cell underflow on pruned cell, got %d", code)
 		}
 
 		stack, res, err := runRawCode(codeFromOpcodes(t, 0xD73B), pruned)
@@ -498,13 +493,9 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 	})
 
 	t.Run("NonQuietFailures", func(t *testing.T) {
-		_, _, err := runRawCode(codeFromOpcodes(t, 0xD741), cell.BeginCell().MustStoreUInt(0, 1).EndCell().BeginParse(), int64(2))
-		if err == nil {
-			t.Fatalf("schkbits expected failure")
-		}
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellUnderflow {
-			t.Fatalf("schkbits expected cell underflow, got %v", err)
+		_, res, err := runRawCode(codeFromOpcodes(t, 0xD741), cell.BeginCell().MustStoreUInt(0, 1).EndCell().BeginParse(), int64(2))
+		if code := exitCodeFromResult(res, err); code != vmerr.CodeCellUnderflow {
+			t.Fatalf("schkbits expected cell underflow, got %d", code)
 		}
 	})
 
@@ -667,13 +658,9 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("stule4 expected little-endian bytes, got %x", got)
 		}
 
-		_, _, err = runRawCode(codeFromBuilders(t, cellsliceop.STILE4().Serialize()), int64(1<<40), cell.BeginCell())
-		if err == nil {
-			t.Fatalf("stile4 expected range check failure")
-		}
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeRangeCheck {
-			t.Fatalf("stile4 expected range check, got %v", err)
+		_, res, err = runRawCode(codeFromBuilders(t, cellsliceop.STILE4().Serialize()), int64(1<<40), cell.BeginCell())
+		if code := exitCodeFromResult(res, err); code != vmerr.CodeRangeCheck {
+			t.Fatalf("stile4 expected range check, got %d", code)
 		}
 
 		builderWithData := cell.BeginCell().MustStoreUInt(0xA, 4).MustStoreRef(cell.BeginCell().EndCell())
@@ -755,7 +742,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("endcst expected builder with one ref")
 		}
 
-		complex := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 1).EndCell()).EndCell()
+		complex := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.CHASHI(0).Serialize()), complex)
 		if err != nil {
 			t.Fatalf("chashi unexpected error: %v", err)

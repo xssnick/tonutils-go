@@ -4,7 +4,6 @@ package tvm
 
 import (
 	"bytes"
-	"errors"
 	"math/big"
 	"os"
 	"testing"
@@ -12,7 +11,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 const upstreamVMRegressionCrossGasLimit = int64(1000)
@@ -38,19 +36,12 @@ func runGoCrossCodeNoStack(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stac
 
 	machine := NewTVM()
 	res, err := machine.ExecuteDetailedWithLibraries(code, data, c7, vm.GasWithLimit(upstreamVMRegressionCrossGasLimit), execStack)
-	exitCode := int32(0)
 	if err != nil {
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) {
-			return nil, err
-		}
-		exitCode = int32(vmErr.Code)
-	} else {
-		exitCode = int32(res.ExitCode)
+		return nil, err
 	}
 
 	return &crossRunResult{
-		exitCode: exitCode,
+		exitCode: int32(res.ExitCode),
 		gasUsed:  res.GasUsed,
 	}, nil
 }

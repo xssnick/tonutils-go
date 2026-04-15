@@ -107,20 +107,12 @@ func TestPrefixDictionary_WrappersCompatibilityAndObservers(t *testing.T) {
 		t.Fatalf("second beginParse should charge observer once, got %d", obs.loads)
 	}
 
-	pruned := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		BitsSz:    288,
-		Data:      append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...),
-	})
+	pruned := makeManualCellForTest(true, LevelMask{}, 288, append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...), nil)
 	if err := validatePrefixDictRoot(pruned, 4); err != nil {
 		t.Fatalf("pruned cell should be accepted in prefix dict validation, got %v", err)
 	}
 
-	lib := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		BitsSz:    8,
-		Data:      []byte{byte(LibraryCellType)},
-	})
+	lib := makeManualCellForTest(true, LevelMask{}, 8, []byte{byte(LibraryCellType)}, nil)
 	if err := validatePrefixDictRoot(lib, 4); err == nil {
 		t.Fatal("unsupported special prefix dict cell should fail validation")
 	}
@@ -280,21 +272,12 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 		t.Fatalf("unexpected LoadBigUInt result: got=%v err=%v", got, err)
 	}
 
-	unknown := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		BitsSz:    8,
-		Data:      []byte{0xff},
-	})
+	unknown := makeManualCellForTest(true, LevelMask{}, 8, []byte{0xff}, nil)
 	if err := validateLoadedCell(unknown); err == nil {
 		t.Fatal("unknown special cell type should fail validation")
 	}
 
-	prunedWithRef := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		BitsSz:    16,
-		Data:      []byte{byte(PrunedCellType), 0x01},
-		Refs:      []*Cell{BeginCell().EndCell()},
-	})
+	prunedWithRef := makeManualCellForTest(true, LevelMask{}, 16, []byte{byte(PrunedCellType), 0x01}, []*Cell{BeginCell().EndCell()})
 	if err := validateLoadedCell(prunedWithRef); err == nil {
 		t.Fatal("pruned special cell with refs should fail validation")
 	}
@@ -307,22 +290,12 @@ func TestValidateLoadedCellAdditionalMerkleAndPrunedPaths(t *testing.T) {
 		t.Fatalf("hash observer should be notified via key path, got keys=%d loads=%d", obs.keys, obs.loads)
 	}
 
-	validPruned := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: LevelMask{Mask: 1},
-		BitsSz:    288,
-		Data:      append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...),
-	})
+	validPruned := makeManualCellForTest(true, LevelMask{Mask: 1}, 288, append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...), nil)
 	if err := validateLoadedCell(validPruned); err != nil {
 		t.Fatalf("valid pruned branch should pass validation: %v", err)
 	}
 
-	shortPruned := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: LevelMask{Mask: 1},
-		BitsSz:    280,
-		Data:      append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 33)...),
-	})
+	shortPruned := makeManualCellForTest(true, LevelMask{Mask: 1}, 280, append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 33)...), nil)
 	if err := validateLoadedCell(shortPruned); err == nil {
 		t.Fatal("short pruned branch should fail validation")
 	}
@@ -335,35 +308,18 @@ func TestValidateLoadedCellAdditionalMerkleAndPrunedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	proofNoRefs := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: proof.levelMask,
-		BitsSz:    proof.bitsSz,
-		Data:      append([]byte(nil), proof.data...),
-	})
+	proofNoRefs := makeManualCellForTest(true, proof.LevelMask(), proof.BitsSize(), proof.data, nil)
 	if err := validateLoadedCell(proofNoRefs); err == nil {
 		t.Fatal("merkle proof without refs should fail")
 	}
 
-	proofBadHash := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: proof.levelMask,
-		BitsSz:    proof.bitsSz,
-		Data:      append([]byte(nil), proof.data...),
-		Refs:      proof.refs,
-	})
+	proofBadHash := makeManualCellForTest(true, proof.LevelMask(), proof.BitsSize(), proof.data, proof.rawRefs())
 	proofBadHash.data[1] ^= 0xff
 	if err := validateLoadedCell(proofBadHash); err == nil {
 		t.Fatal("merkle proof with bad hash should fail")
 	}
 
-	proofBadDepth := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: proof.levelMask,
-		BitsSz:    proof.bitsSz,
-		Data:      append([]byte(nil), proof.data...),
-		Refs:      proof.refs,
-	})
+	proofBadDepth := makeManualCellForTest(true, proof.LevelMask(), proof.BitsSize(), proof.data, proof.rawRefs())
 	proofBadDepth.data[1+hashSize] ^= 0xff
 	if err := validateLoadedCell(proofBadDepth); err == nil {
 		t.Fatal("merkle proof with bad depth should fail")
@@ -373,36 +329,18 @@ func TestValidateLoadedCellAdditionalMerkleAndPrunedPaths(t *testing.T) {
 	right := BeginCell().MustStoreUInt(0xbb, 8).EndCell()
 	update := mustMerkleUpdateCell(t, left, right)
 
-	updateOneRef := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: update.levelMask,
-		BitsSz:    update.bitsSz,
-		Data:      append([]byte(nil), update.data...),
-		Refs:      []*Cell{left},
-	})
+	updateOneRef := makeManualCellForTest(true, update.LevelMask(), update.BitsSize(), update.data, []*Cell{left})
 	if err := validateLoadedCell(updateOneRef); err == nil {
 		t.Fatal("merkle update with wrong ref count should fail")
 	}
 
-	updateBadFirstHash := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: update.levelMask,
-		BitsSz:    update.bitsSz,
-		Data:      append([]byte(nil), update.data...),
-		Refs:      update.refs,
-	})
+	updateBadFirstHash := makeManualCellForTest(true, update.LevelMask(), update.BitsSize(), update.data, update.rawRefs())
 	updateBadFirstHash.data[1] ^= 0xff
 	if err := validateLoadedCell(updateBadFirstHash); err == nil {
 		t.Fatal("merkle update with bad first hash should fail")
 	}
 
-	updateBadSecondDepth := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: update.levelMask,
-		BitsSz:    update.bitsSz,
-		Data:      append([]byte(nil), update.data...),
-		Refs:      update.refs,
-	})
+	updateBadSecondDepth := makeManualCellForTest(true, update.LevelMask(), update.BitsSize(), update.data, update.rawRefs())
 	secondDepthOff := 1 + hashSize*2 + depthSize
 	updateBadSecondDepth.data[secondDepthOff] ^= 0xff
 	if err := validateLoadedCell(updateBadSecondDepth); err == nil {

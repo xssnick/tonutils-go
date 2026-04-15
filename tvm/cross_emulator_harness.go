@@ -3,14 +3,12 @@
 package tvm
 
 import (
-	"errors"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type crossRunResult struct {
@@ -73,20 +71,12 @@ func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, 
 	machine := NewTVM()
 	machine.globalVersion = globalVersion
 	res, err := machine.ExecuteDetailedWithLibraries(code, data, c7, vm.GasWithLimit(gasLimit), execStack, libs...)
+	if err != nil {
+		return nil, err
+	}
 	finalStack := execStack
 	if res != nil && res.Stack != nil {
 		finalStack = res.Stack
-	}
-
-	exitCode := int32(0)
-	if err != nil {
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) {
-			return nil, err
-		}
-		exitCode = int32(vmErr.Code)
-	} else {
-		exitCode = int32(res.ExitCode)
 	}
 
 	stackCell, err := stackToCell(finalStack)
@@ -95,7 +85,7 @@ func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, 
 	}
 
 	return &crossRunResult{
-		exitCode: exitCode,
+		exitCode: int32(res.ExitCode),
 		gasUsed:  res.GasUsed,
 		stack:    stackCell,
 	}, nil

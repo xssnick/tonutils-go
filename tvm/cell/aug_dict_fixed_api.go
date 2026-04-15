@@ -301,7 +301,7 @@ func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, pr
 	if branch == nil {
 		return nil, nil, nil
 	}
-	if branch.special {
+	if branch.IsSpecial() {
 		return nil, nil, fmt.Errorf("augmented dict has special cells in tree structure")
 	}
 

@@ -239,15 +239,20 @@ func TestBuilder_MustStoreUInt(t *testing.T) {
 		t.Fatal("incorrect7", val)
 	}
 
-	val = BeginCell().MustStoreUInt(0xFFFFFFFFFFFFFFFF, 60).EndCell().BeginParse().MustLoadUInt(60)
-	if val != 0xFFFFFFFFFFFFFFF {
-		t.Fatal("incorrect8", val)
-	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected oversized MustStoreUInt to panic")
+		}
+	}()
+	BeginCell().MustStoreUInt(0xFFFFFFFFFFFFFFFF, 60)
 }
 
 func TestBuilder_StoreUIntZeroBits(t *testing.T) {
 	b := BeginCell()
-	if err := b.StoreUInt(0xDEADBEEF, 0); err != nil {
+	if err := b.StoreUInt(0xDEADBEEF, 0); err != ErrTooBigValue {
+		t.Fatalf("expected ErrTooBigValue, got %v", err)
+	}
+	if err := b.StoreUInt(0, 0); err != nil {
 		t.Fatal(err)
 	}
 	if b.BitsUsed() != 0 {

@@ -61,28 +61,11 @@ func pushInt64(state *vm.State, v int64) error {
 }
 
 func parseLoadedCellSlice(state *vm.State, cl *cell.Cell) (*cell.Slice, error) {
-	if cl == nil {
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load cell")
-	}
-	if !cl.IsSpecial() {
-		return cl.BeginParse().SetObserver(&state.Cells), nil
-	}
-
-	switch cl.GetType() {
-	case cell.LibraryCellType:
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
-	case cell.PrunedCellType:
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "trying to load pruned cell")
-	default:
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "unexpected special cell")
-	}
+	return state.Cells.BeginParse(cl)
 }
 
 func beginLoadedCellSlice(state *vm.State, cl *cell.Cell) (*cell.Slice, error) {
-	if err := state.Cells.RegisterCellLoad(cl); err != nil {
-		return nil, err
-	}
-	return parseLoadedCellSlice(state, cl)
+	return state.Cells.BeginParse(cl)
 }
 
 func LDREFRTOS() *helpers.SimpleOP {
@@ -93,12 +76,7 @@ func LDREFRTOS() *helpers.SimpleOP {
 				return err
 			}
 
-			ref, err := state.Cells.LoadRefCell(s0)
-			if err != nil {
-				return vmerr.Error(vmerr.CodeCellUnderflow)
-			}
-
-			child, err := parseLoadedCellSlice(state, ref)
+			child, err := state.Cells.LoadRef(s0)
 			if err != nil {
 				return err
 			}
@@ -400,14 +378,14 @@ func XCTOS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			sl, err := state.Cells.BeginParse(cl)
+			sl, special, err := state.Cells.BeginParseSpecial(cl)
 			if err != nil {
 				return err
 			}
 			if err = state.Stack.PushSlice(sl); err != nil {
 				return err
 			}
-			return state.Stack.PushBool(cl.IsSpecial())
+			return state.Stack.PushBool(special)
 		},
 		Name:      "XCTOS",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x39),

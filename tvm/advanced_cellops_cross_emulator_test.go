@@ -33,7 +33,7 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 	splitSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()
 	refsSlice := cell.BeginCell().MustStoreUInt(0b111000, 6).MustStoreRef(subsliceRefA).MustStoreRef(subsliceRefB).EndCell().BeginParse()
 	leadingOnes := cell.BeginCell().MustStoreUInt(0b111000, 6).EndCell().BeginParse()
-	depthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 1).EndCell()).EndCell()
+	depthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
 	compareLeft := cell.BeginCell().MustStoreUInt(0b1010, 4).MustStoreRef(refCell).EndCell().BeginParse()
 	compareRight := cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse()
 	compareGreater := cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().BeginParse()
@@ -44,7 +44,12 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 	beginsMiss := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().BeginParse()
 	leNegTwo := cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().BeginParse()
 	leShort := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 32).EndCell().BeginParse()
-	hashDepthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 1).EndCell()).EndCell()
+	hashDepthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
+	proofRoot := cell.BeginCell().MustStoreUInt(0, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()).EndCell()
+	proofCell, err := proofRoot.CreateProof(cell.CreateProofSkeleton())
+	if err != nil {
+		t.Fatalf("create proof cell: %v", err)
+	}
 	fullRefBuilder := cell.BeginCell().
 		MustStoreRef(cell.BeginCell().EndCell()).
 		MustStoreRef(cell.BeginCell().EndCell()).
@@ -159,6 +164,36 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 			name:  "cdepth_nil",
 			code:  codeFromOpcodes(t, 0xD765),
 			stack: []any{nil},
+			exit:  0,
+		},
+		{
+			name:  "clevel_proof",
+			code:  codeFromBuilders(t, cellsliceop.CLEVEL().Serialize()),
+			stack: []any{proofCell},
+			exit:  0,
+		},
+		{
+			name:  "clevelmask_proof",
+			code:  codeFromBuilders(t, cellsliceop.CLEVELMASK().Serialize()),
+			stack: []any{proofCell},
+			exit:  0,
+		},
+		{
+			name:  "cdepth_proof",
+			code:  codeFromBuilders(t, cellsliceop.CDEPTH().Serialize()),
+			stack: []any{proofCell},
+			exit:  0,
+		},
+		{
+			name:  "chashi_proof_lvl0",
+			code:  codeFromBuilders(t, cellsliceop.CHASHI(0).Serialize()),
+			stack: []any{proofCell},
+			exit:  0,
+		},
+		{
+			name:  "cdepthi_proof_lvl0",
+			code:  codeFromBuilders(t, cellsliceop.CDEPTHI(0).Serialize()),
+			stack: []any{proofCell},
 			exit:  0,
 		},
 		{

@@ -95,22 +95,22 @@ func (g AccountStatus) ToCell() (*cell.Cell, error) {
 	res := cell.BeginCell()
 	switch string(g) {
 	case AccountStatusNonExist:
-		err := res.StoreInt(0b11, 2)
+		err := res.StoreUInt(0b11, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}
 	case AccountStatusActive:
-		err := res.StoreInt(0b10, 2)
+		err := res.StoreUInt(0b10, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}
 	case AccountStatusFrozen:
-		err := res.StoreInt(0b01, 2)
+		err := res.StoreUInt(0b01, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}
 	case AccountStatusUninit:
-		err := res.StoreInt(0b00, 2)
+		err := res.StoreUInt(0b00, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}

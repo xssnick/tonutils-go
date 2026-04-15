@@ -7,6 +7,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func makeStateC7WithParams(params tuple.Tuple) tuple.Tuple {
@@ -34,7 +35,7 @@ func TestStateRunChildAndParamHelpers(t *testing.T) {
 		}
 
 		child := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
-		child.CurrentCode = cell.BeginCell().EndCell().BeginParseNoCopy()
+		child.CurrentCode = cell.BeginCell().EndCell().BeginParse()
 		if _, err := child.RunChild(child); err == nil {
 			t.Fatal("expected missing child runner to fail")
 		}
@@ -60,6 +61,24 @@ func TestStateRunChildAndParamHelpers(t *testing.T) {
 		}
 		if !called || got != 17 {
 			t.Fatalf("unexpected child result: called=%v exit=%d", called, got)
+		}
+	})
+
+	t.Run("RunChildNormalizesVMExitErrors", func(t *testing.T) {
+		parent := makeStateWithParams(t)
+		child := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
+		child.CurrentCode = cell.BeginCell().EndCell().BeginParse()
+
+		parent.SetChildRunner(func(*State) (int64, error) {
+			return 33, vmerr.Error(33)
+		})
+
+		got, err := parent.RunChild(child)
+		if err != nil {
+			t.Fatalf("run child should not return vm exit as error: %v", err)
+		}
+		if got != 33 {
+			t.Fatalf("unexpected child exit code: %d", got)
 		}
 	})
 
@@ -193,9 +212,7 @@ func TestStateGasCommitAndThrowHelpers(t *testing.T) {
 			t.Fatal("nil data register should prevent commit")
 		}
 
-		levelCell := cell.FromRawUnsafe(cell.RawUnsafeCell{
-			LevelMask: cell.LevelMask{Mask: 1},
-		})
+		levelCell := mustPrunedCell(t)
 		commitState.Reg.D[0] = levelCell
 		commitState.Reg.D[1] = cell.BeginCell().EndCell()
 		if commitState.TryCommitCurrent() {

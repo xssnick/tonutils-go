@@ -10,14 +10,14 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 const (
-	DefaultExternalMessageGasMax    = int64(1_000_000)
-	DefaultExternalMessageGasCredit = int64(10_000)
-	DefaultInternalMessageGasMax    = int64(1_000_000)
-	InternalMessageGasAmountFactor  = int64(1_000)
+	DefaultExternalMessageGasMax     = int64(1_000_000)
+	DefaultExternalMessageGasCredit  = int64(10_000)
+	DefaultInternalMessageGasMax     = int64(1_000_000)
+	DefaultTickTockTransactionGasMax = int64(1_000_000)
+	InternalMessageGasAmountFactor   = int64(1_000)
 )
 
 var internalEmulationSrcAddr = address.MustParseRawAddr("-1:0000000000000000000000000000000000000000000000000000000000000000")
@@ -45,16 +45,14 @@ type MessageEmulationConfig struct {
 
 type EmulateExternalMessageConfig = MessageEmulationConfig
 type EmulateInternalMessageConfig = MessageEmulationConfig
+type EmulateTickTockTransactionConfig = MessageEmulationConfig
 
 type MessageExecutionResult struct {
 	ExecutionResult
 	Accepted bool
 }
 
-type ExternalMessageResult = MessageExecutionResult
-type InternalMessageResult = MessageExecutionResult
-
-func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalMessage, cfg EmulateExternalMessageConfig) (*ExternalMessageResult, error) {
+func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalMessage, cfg EmulateExternalMessageConfig) (*MessageExecutionResult, error) {
 	addr := cfg.Address
 	if addr == nil {
 		addr = msg.DstAddr
@@ -96,7 +94,7 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.Libraries...)
 }
 
-func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*InternalMessageResult, error) {
+func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*MessageExecutionResult, error) {
 	body = messageBodyCell(body)
 	msgCell, err := buildInternalMessageForEmulation(cfg.Address, body, amount)
 	if err != nil {
@@ -129,30 +127,64 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.Libraries...)
 }
 
+func (tvm *TVM) EmulateTickTransaction(code, data *cell.Cell, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
+	return tvm.emulateTickTockTransaction(code, data, false, cfg)
+}
+
+func (tvm *TVM) EmulateTockTransaction(code, data *cell.Cell, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
+	return tvm.emulateTickTockTransaction(code, data, true, cfg)
+}
+
+func (tvm *TVM) emulateTickTockTransaction(code, data *cell.Cell, isTock bool, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
+	addr := cfg.Address
+	if addr == nil {
+		return nil, errors.New("tick/tock emulation address is required")
+	}
+
+	accAddr, err := messageEmulationAccountAddr(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	stack := vm.NewStack()
+	balance := messageEmulationBalance(cfg.Balance)
+	if err = stack.PushInt(balance); err != nil {
+		return nil, err
+	}
+	if err = stack.PushInt(accAddr); err != nil {
+		return nil, err
+	}
+	if err = stack.PushBool(isTock); err != nil {
+		return nil, err
+	}
+	if err = stack.PushInt(big.NewInt(-2)); err != nil {
+		return nil, err
+	}
+
+	c7, err := buildMessageEmulationC7(addr, code, cfg, balance)
+	if err != nil {
+		return nil, err
+	}
+
+	return tvm.executeMessageEmulation(code, data, c7, defaultTickTockTransactionGas(cfg.Gas), stack, cfg.Libraries...)
+}
+
 func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
 	res, execErr := tvm.ExecuteDetailedWithLibraries(code, data, c7, gas, stack, libraries...)
+	if execErr != nil {
+		return nil, execErr
+	}
 
 	out := &MessageExecutionResult{
 		ExecutionResult: *res,
 		Accepted:        res.Gas.Credit == 0,
 	}
-	if execErr != nil || !out.Accepted {
+	if !out.Accepted || !vm.IsSuccessExitCode(out.ExitCode) {
 		out.Code = code
 		out.Data = data
 		out.Actions = nil
 	}
-
-	if execErr == nil {
-		return out, nil
-	}
-
-	var vmErr vmerr.VMError
-	if errors.As(execErr, &vmErr) {
-		out.ExitCode = vmErr.Code
-		return out, nil
-	}
-
-	return out, execErr
+	return out, nil
 }
 
 func messageBodyCell(body *cell.Cell) *cell.Cell {
@@ -270,11 +302,31 @@ func defaultInternalMessageGas(gas vm.Gas, amount uint64) vm.Gas {
 	}
 }
 
+func defaultTickTockTransactionGas(gas vm.Gas) vm.Gas {
+	if gas != (vm.Gas{}) {
+		return gas
+	}
+	return vm.NewGas(vm.GasConfig{
+		Max:   DefaultTickTockTransactionGasMax,
+		Limit: DefaultTickTockTransactionGasMax,
+	})
+}
+
 func messageEmulationSeed(seed []byte) (*big.Int, error) {
 	if len(seed) == 0 {
 		return big.NewInt(0), nil
 	}
 	return new(big.Int).SetBytes(seed), nil
+}
+
+func messageEmulationAccountAddr(addr *address.Address) (*big.Int, error) {
+	if addr == nil {
+		return nil, errors.New("address is nil")
+	}
+	if addr.Type() != address.StdAddress || addr.BitsLen() != 256 {
+		return nil, errors.New("tick/tock emulation requires std 256-bit address")
+	}
+	return new(big.Int).SetBytes(addr.Data()), nil
 }
 
 func messageIncomingValue(value tuple.Tuple) tuple.Tuple {

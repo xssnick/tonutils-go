@@ -109,7 +109,7 @@ func (d *Dictionary) beginParse(c *Cell) *Slice {
 	if d != nil {
 		return d.beginParseNode(c)
 	}
-	return c.BeginParseNoCopy()
+	return c.BeginParse()
 }
 
 func beginParseObserved(c *Cell, observer Observer, charge bool) *Slice {
@@ -117,14 +117,14 @@ func beginParseObserved(c *Cell, observer Observer, charge bool) *Slice {
 		if charge {
 			notifyCellLoad(observer, c)
 		}
-		return c.BeginParseNoCopy().SetObserver(observer)
+		return c.BeginParse().SetObserver(observer)
 	}
-	return c.BeginParseNoCopy()
+	return c.BeginParse()
 }
 
 func (d *Dictionary) beginParseNode(c *Cell) *Slice {
 	if d == nil {
-		return c.BeginParseNoCopy()
+		return c.BeginParse()
 	}
 
 	charge := true
@@ -207,7 +207,7 @@ func (d *Dictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetM
 		return false, fmt.Errorf("value builder is nil")
 	}
 
-	newRoot, changed, err := d.set(d.root, key.BeginParseNoCopy(), d.keySz, value, mode)
+	newRoot, changed, err := d.set(d.root, key.BeginParse(), d.keySz, value, mode)
 	if err != nil {
 		return false, fmt.Errorf("failed to set value in dict, err: %w", err)
 	}
@@ -387,7 +387,7 @@ func (d *Dictionary) Delete(key *Cell) error {
 		return fmt.Errorf("incorrect key size")
 	}
 
-	_, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParseNoCopy(), d.keySz)
+	_, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParse(), d.keySz)
 	if err != nil {
 		return err
 	}
@@ -481,7 +481,7 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 	remaining := d.keySz
 
 	for {
-		if branch.special {
+		if branch.IsSpecial() {
 			return nil, nil, fmt.Errorf("dict has special cells in tree structure")
 		}
 
@@ -624,7 +624,7 @@ func (d *Dictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	removed, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParseNoCopy(), d.keySz)
+	removed, newRoot, changed, err := d.lookupDelete(d.root, key.BeginParse(), d.keySz)
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +685,7 @@ func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder
 	var err error
 	var sz uint
 
-	if c.special {
+	if c.IsSpecial() {
 		if skipPruned && c.GetType() == PrunedCellType {
 			// ignore pruned keys
 			return []DictKV{}, nil
@@ -748,7 +748,7 @@ func findKeyInDictObserved(branch *Cell, lookupKey *Cell, at *ProofSkeleton, obs
 		root = CreateProofSkeleton()
 		sk = root
 	}
-	lKey := lookupKey.BeginParseNoCopy()
+	lKey := lookupKey.BeginParse()
 
 	// until key size is not equals we go deeper
 	for {

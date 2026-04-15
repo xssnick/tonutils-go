@@ -1074,7 +1074,7 @@ func validateAugmentedDictNode(c *Cell, keySz uint, skipExtra AugmentedExtraSkip
 		return fmt.Errorf("augmented dict branch is nil")
 	}
 
-	if c.special {
+	if c.IsSpecial() {
 		if c.GetType() == PrunedCellType {
 			return nil
 		}
@@ -1116,7 +1116,7 @@ func computeAugmentedNodeExtra(c *Cell, keySz uint, aug Augmentation) (*Cell, er
 		return aug.EmptyExtra()
 	}
 
-	if c.special {
+	if c.IsSpecial() {
 		if c.GetType() == PrunedCellType {
 			return nil, ErrAugmentationSemanticsUnavailable
 		}

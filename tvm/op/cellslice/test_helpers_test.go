@@ -6,6 +6,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func newCellSliceState() *vm.State {
@@ -111,6 +112,17 @@ func sameSliceHash(a, b *cell.Slice) bool {
 	return sameCellHash(a.MustToCell(), b.MustToCell())
 }
 
+func assertCellSliceVMErrorCode(t *testing.T, err error, code int64) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected vm error code %d, got nil", code)
+	}
+	got, ok := vmerr.ErrorCode(err)
+	if !ok || got != code {
+		t.Fatalf("unexpected vm error code: got %v (ok=%v), want %d, err=%v", got, ok, code, err)
+	}
+}
+
 func mustLibraryCell(t *testing.T) *cell.Cell {
 	t.Helper()
 	cl, err := cell.BeginCell().
@@ -137,11 +149,31 @@ func mustPrunedCell(t *testing.T) *cell.Cell {
 	return cl
 }
 
-func mustUnknownSpecialCell(t *testing.T) *cell.Cell {
+func mustVirtualizedProofBodyAndPrunedRef(t *testing.T) (*cell.Cell, *cell.Cell) {
 	t.Helper()
-	cl := cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell()
-	cl.UnsafeModify(cell.LevelMask{}, true)
-	return cl
+
+	branch := cell.BeginCell().
+		MustStoreUInt(0xBEEF, 16).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(1, 1).EndCell()).
+		EndCell()
+	root := cell.BeginCell().
+		MustStoreUInt(0, 1).
+		MustStoreRef(branch).
+		EndCell()
+
+	proof, err := root.CreateProof(cell.CreateProofSkeleton())
+	if err != nil {
+		t.Fatalf("failed to build proof: %v", err)
+	}
+	body, err := cell.UnwrapProofVirtualized(proof, root.Hash())
+	if err != nil {
+		t.Fatalf("failed to unwrap virtualized proof: %v", err)
+	}
+	pruned, err := body.PeekRef(0)
+	if err != nil {
+		t.Fatalf("failed to peek pruned ref: %v", err)
+	}
+	return body, pruned
 }
 
 func mustFullBuilder(t *testing.T) *cell.Builder {

@@ -39,7 +39,7 @@ func makeInternalMessageFailureCode(t *testing.T, newData *cell.Cell) *cell.Cell
 	)
 }
 
-func emulateInternalForTest(t *testing.T, code, data, body *cell.Cell) (*InternalMessageResult, error) {
+func emulateInternalForTest(t *testing.T, code, data, body *cell.Cell) (*MessageExecutionResult, error) {
 	t.Helper()
 
 	return NewTVM().EmulateInternalMessage(code, data, body, internalMessageTestAmount, EmulateInternalMessageConfig{

@@ -35,13 +35,7 @@ func TestProofReaderCompressionAndSliceEdgeCases(t *testing.T) {
 			t.Fatal("proof with wrong expected hash should fail")
 		}
 
-		badDepth := FromRawUnsafe(RawUnsafeCell{
-			IsSpecial: true,
-			LevelMask: proof.levelMask,
-			BitsSz:    proof.bitsSz,
-			Data:      append([]byte(nil), proof.data...),
-			Refs:      proof.refs,
-		})
+		badDepth := makeManualCellForTest(true, proof.LevelMask(), proof.BitsSize(), proof.data, proof.rawRefs())
 		badDepth.data[33] ^= 0xff
 		if _, err = UnwrapProof(badDepth, proof.data[1:33]); err == nil {
 			t.Fatal("proof with wrong stored depth should fail")
@@ -52,12 +46,7 @@ func TestProofReaderCompressionAndSliceEdgeCases(t *testing.T) {
 		fakeData[0] = byte(MerkleProofCellType)
 		copy(fakeData[1:], other.getHash(0))
 		binary.BigEndian.PutUint16(fakeData[33:], leaf.getDepth(0))
-		fakeProof := FromRawUnsafe(RawUnsafeCell{
-			IsSpecial: true,
-			BitsSz:    280,
-			Data:      fakeData,
-			Refs:      []*Cell{leaf},
-		})
+		fakeProof := makeManualCellForTest(true, LevelMask{}, 280, fakeData, []*Cell{leaf})
 		if _, err = UnwrapProof(fakeProof, other.getHash(0)); err == nil {
 			t.Fatal("proof with mismatched underlying hash should fail")
 		}
@@ -127,19 +116,9 @@ func TestProofReaderCompressionAndSliceEdgeCases(t *testing.T) {
 	})
 
 	t.Run("SliceOpsNilAndEmptyPaths", func(t *testing.T) {
-		var nilSlice *Slice
 		empty := mustBitSlice(t, "")
 		full := mustBitSlice(t, "101")
 
-		if !nilSlice.BitsEqual(nil) || nilSlice.BitsEqual(full) {
-			t.Fatal("BitsEqual should handle nil receivers")
-		}
-		if !nilSlice.IsPrefixOf(full) || !nilSlice.IsSuffixOf(full) {
-			t.Fatal("nil slice should be a prefix and suffix of any slice")
-		}
-		if nilSlice.IsProperPrefixOf(empty) || nilSlice.IsProperSuffixOf(empty) {
-			t.Fatal("nil slice should not be a proper prefix/suffix of an empty slice")
-		}
 		if full.HasPrefix(nil) != true {
 			t.Fatal("HasPrefix(nil) should always match")
 		}

@@ -66,6 +66,13 @@ func (s bitSpan) Bytes() []byte {
 	if s.bitLen == 0 {
 		return nil
 	}
+
+	if s.bitOffset%8 == 0 && s.bitLen%8 == 0 {
+		start := s.bitOffset / 8
+		end := start + s.bitLen/8
+		return append([]byte{}, s.data[start:end]...)
+	}
+
 	out := make([]byte, (s.bitLen+7)/8)
 	for i := 0; i < s.bitLen; i++ {
 		if s.Bit(i) == 0 {
@@ -90,7 +97,18 @@ func (w *bitWriter) ensure(bits int) {
 	if needBytes <= len(w.data) {
 		return
 	}
-	w.data = append(w.data, make([]byte, needBytes-len(w.data))...)
+
+	newLen := len(w.data) * 2
+	if newLen < 32 {
+		newLen = 32
+	}
+	for newLen < needBytes {
+		newLen *= 2
+	}
+
+	data := make([]byte, newLen)
+	copy(data, w.data)
+	w.data = data
 }
 
 func (w *bitWriter) WriteBit(bit byte) {
@@ -108,6 +126,27 @@ func (w *bitWriter) WriteUint(value uint64, bits int) {
 }
 
 func (w *bitWriter) AppendSpan(span bitSpan) {
+	if span.bitLen == 0 {
+		return
+	}
+
+	if w.bitLen%8 == 0 && span.bitOffset%8 == 0 {
+		fullBytes := span.bitLen / 8
+		if fullBytes > 0 {
+			w.ensure(fullBytes * 8)
+
+			start := span.bitOffset / 8
+			dstOff := w.bitLen / 8
+			copy(w.data[dstOff:dstOff+fullBytes], span.data[start:start+fullBytes])
+			w.bitLen += fullBytes * 8
+
+			if fullBytes*8 == span.bitLen {
+				return
+			}
+			span = span.Subspan(fullBytes*8, span.bitLen-fullBytes*8)
+		}
+	}
+
 	for i := 0; i < span.Len(); i++ {
 		w.WriteBit(span.Bit(i))
 	}
@@ -120,7 +159,7 @@ func (w *bitWriter) AlignByteZero() {
 }
 
 func (w *bitWriter) Bytes() []byte {
-	return append([]byte{}, w.data[:(w.bitLen+7)/8]...)
+	return w.data[:(w.bitLen+7)/8]
 }
 
 type bitReader struct {
@@ -285,6 +324,13 @@ func storeBitSpan(builder *Builder, span bitSpan) error {
 	if span.Len() == 0 {
 		return nil
 	}
+
+	if span.bitOffset%8 == 0 && span.bitLen%8 == 0 {
+		start := span.bitOffset / 8
+		end := start + span.bitLen/8
+		return builder.StoreSlice(span.data[start:end], uint(span.Len()))
+	}
+
 	return builder.StoreSlice(span.Bytes(), uint(span.Len()))
 }
 
@@ -294,15 +340,20 @@ func cellBits(c *Cell) bitSpan {
 
 func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 	c := &Cell{
-		special: special,
-		bitsSz:  builder.bitsSz,
-		data:    append([]byte{}, builder.data...),
-		refs:    append([]*Cell{}, builder.refs...),
+		bitsSz: uint16(builder.bitsSz),
+		data:   append([]byte{}, builder.dataSlice()...),
+	}
+	c.setSpecial(special)
+	c.setRefs(builder.rawRefs())
+	if err := validateCellRefDepthLimit(c.rawRefs()); err != nil {
+		return nil, err
 	}
 
 	if !special {
-		c.levelMask = ordinaryLevelMask(c.refs)
-		c.calculateHashes()
+		c.setLevelMask(ordinaryLevelMask(c.rawRefs()))
+		if err := c.calculateHashesSafe(); err != nil {
+			return nil, err
+		}
 		return c, nil
 	}
 
@@ -312,18 +363,18 @@ func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 
 	switch Type(c.data[0]) {
 	case PrunedCellType:
-		if len(c.refs) != 0 {
+		if c.refsCount() != 0 {
 			return nil, fmt.Errorf("pruned branch special cell has a cell reference")
 		}
 		if c.bitsSz < 16 {
 			return nil, fmt.Errorf("not enough data for a pruned branch special cell")
 		}
-		c.levelMask = LevelMask{c.data[1]}
-		level := c.levelMask.GetLevel()
+		c.setLevelMask(LevelMask{c.data[1]})
+		level := c.getLevelMask().GetLevel()
 		if level > _DataCellMaxLevel || level == 0 {
 			return nil, fmt.Errorf("pruned branch has an invalid level")
 		}
-		expectedBits := (2 + c.levelMask.Apply(level-1).getHashesCount()*(hashSize+depthSize)) * 8
+		expectedBits := (2 + c.getLevelMask().Apply(level-1).getHashesCount()*(hashSize+depthSize)) * 8
 		if int(c.bitsSz) != expectedBits {
 			return nil, fmt.Errorf("not enough data for a pruned branch special cell")
 		}
@@ -335,43 +386,45 @@ func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 		if c.bitsSz != 8+(hashSize+depthSize)*8 {
 			return nil, fmt.Errorf("not enough data for a merkle proof special cell")
 		}
-		if len(c.refs) != 1 {
+		if c.refsCount() != 1 {
 			return nil, fmt.Errorf("wrong references count for a merkle proof special cell")
 		}
-		if !bytes.Equal(c.data[1:1+hashSize], c.refs[0].getHash(0)) {
+		if !bytes.Equal(c.data[1:1+hashSize], c.ref(0).getHash(0)) {
 			return nil, fmt.Errorf("hash mismatch in a merkle proof special cell")
 		}
-		if binary.BigEndian.Uint16(c.data[1+hashSize:1+hashSize+depthSize]) != c.refs[0].getDepth(0) {
+		if binary.BigEndian.Uint16(c.data[1+hashSize:1+hashSize+depthSize]) != c.ref(0).getDepth(0) {
 			return nil, fmt.Errorf("depth mismatch in a merkle proof special cell")
 		}
-		c.levelMask = LevelMask{c.refs[0].levelMask.Mask >> 1}
+		c.setLevelMask(LevelMask{c.ref(0).getLevelMask().Mask >> 1})
 	case MerkleUpdateCellType:
 		if c.bitsSz != 8+(hashSize+depthSize)*8*2 {
 			return nil, fmt.Errorf("not enough data for a merkle update special cell")
 		}
-		if len(c.refs) != 2 {
+		if c.refsCount() != 2 {
 			return nil, fmt.Errorf("wrong references count for a merkle update special cell")
 		}
-		if !bytes.Equal(c.data[1:1+hashSize], c.refs[0].getHash(0)) {
+		if !bytes.Equal(c.data[1:1+hashSize], c.ref(0).getHash(0)) {
 			return nil, fmt.Errorf("first hash mismatch in a merkle update special cell")
 		}
-		if !bytes.Equal(c.data[1+hashSize:1+hashSize*2], c.refs[1].getHash(0)) {
+		if !bytes.Equal(c.data[1+hashSize:1+hashSize*2], c.ref(1).getHash(0)) {
 			return nil, fmt.Errorf("second hash mismatch in a merkle update special cell")
 		}
 		firstDepthOff := 1 + hashSize*2
 		secondDepthOff := firstDepthOff + depthSize
-		if binary.BigEndian.Uint16(c.data[firstDepthOff:firstDepthOff+depthSize]) != c.refs[0].getDepth(0) {
+		if binary.BigEndian.Uint16(c.data[firstDepthOff:firstDepthOff+depthSize]) != c.ref(0).getDepth(0) {
 			return nil, fmt.Errorf("first depth mismatch in a merkle update special cell")
 		}
-		if binary.BigEndian.Uint16(c.data[secondDepthOff:secondDepthOff+depthSize]) != c.refs[1].getDepth(0) {
+		if binary.BigEndian.Uint16(c.data[secondDepthOff:secondDepthOff+depthSize]) != c.ref(1).getDepth(0) {
 			return nil, fmt.Errorf("second depth mismatch in a merkle update special cell")
 		}
-		c.levelMask = LevelMask{(c.refs[0].levelMask.Mask | c.refs[1].levelMask.Mask) >> 1}
+		c.setLevelMask(LevelMask{(c.ref(0).getLevelMask().Mask | c.ref(1).getLevelMask().Mask) >> 1})
 	default:
 		return nil, fmt.Errorf("unknown special cell type")
 	}
 
-	c.calculateHashes()
+	if err := c.calculateHashesSafe(); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 
@@ -380,7 +433,7 @@ func createPrunedBranchFromCell(source *Cell, newLevel int) (*Cell, error) {
 		return nil, fmt.Errorf("source cell is nil")
 	}
 
-	levelMask := source.levelMask.Apply(_DataCellMaxLevel)
+	levelMask := source.getLevelMask().Apply(_DataCellMaxLevel)
 	level := levelMask.GetLevel()
 	if newLevel < level+1 {
 		return nil, fmt.Errorf("invalid new pruned level")
@@ -531,7 +584,7 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 		}
 	}
 
-	cellHashes := map[string]int{}
+	cellHashes := map[cellHashKey]int{}
 	var bocGraph [][4]int
 	var refsCnt []int
 	var cellData []bitSpan
@@ -545,7 +598,7 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 			return 0, fmt.Errorf("error while importing a cell during serialization: cell is nil")
 		}
 
-		cellHash := string(cell.Hash())
+		cellHash := cell.HashKey()
 		if idx, ok := cellHashes[cellHash]; ok {
 			return idx, nil
 		}
@@ -554,21 +607,21 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 		cellHashes[cellHash] = currentCellID
 
 		typ := cell.GetType()
-		if cell.special && typ == UnknownCellType {
+		if cell.isSpecial() && typ == UnknownCellType {
 			head := byte(0)
 			if len(cell.data) > 0 {
 				head = cell.data[0]
 			}
-			return 0, fmt.Errorf("invalid loaded cell data: unknown special cell, bits=%d refs=%d mask=%d head=%d", cell.bitsSz, len(cell.refs), cell.levelMask.Mask, head)
+			return 0, fmt.Errorf("invalid loaded cell data: unknown special cell, bits=%d refs=%d mask=%d head=%d", cell.bitsSz, cell.refsCount(), cell.getLevelMask().Mask, head)
 		}
 
 		bitsView := cellBits(cell)
 		bocGraph = append(bocGraph, [4]int{})
-		refsCnt = append(refsCnt, len(cell.refs))
+		refsCnt = append(refsCnt, cell.refsCount())
 		cellType = append(cellType, typ)
 		pbLevelMask = append(pbLevelMask, 0)
 
-		if len(cell.refs) > 4 {
+		if cell.refsCount() > 4 {
 			return 0, fmt.Errorf("invalid loaded cell data: too many refs")
 		}
 
@@ -586,14 +639,14 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 			cellData[len(cellData)-1] = bitSpan{}
 		}
 
-		if muRemoveSubtreeSums && typ == MerkleUpdateCellType && mainMUCell != nil && bytes.Equal(cell.Hash(), mainMUCell.Hash()) {
-			childLeftID, err := buildGraph(cell.refs[0], mainMUCell, true, false, nil, nil)
+		if muRemoveSubtreeSums && typ == MerkleUpdateCellType && mainMUCell != nil && cellHash == mainMUCell.HashKey() {
+			childLeftID, err := buildGraph(cell.ref(0), mainMUCell, true, false, nil, nil)
 			if err != nil {
 				return 0, err
 			}
 			bocGraph[currentCellID][0] = childLeftID
 
-			childRightID, err := buildGraph(cell.refs[1], mainMUCell, false, true, cell.refs[0], nil)
+			childRightID, err := buildGraph(cell.ref(1), mainMUCell, false, true, cell.ref(0), nil)
 			if err != nil {
 				return 0, err
 			}
@@ -603,12 +656,12 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 
 		if underMURight && leftCell != nil {
 			sumChildDiff := big.NewInt(0)
-			for i := 0; i < len(cell.refs); i++ {
+			for i := 0; i < cell.refsCount(); i++ {
 				var pairedLeftChild *Cell
-				if i < len(leftCell.refs) {
-					pairedLeftChild = leftCell.refs[i]
+				if i < leftCell.refsCount() {
+					pairedLeftChild = leftCell.ref(i)
 				}
-				childID, err := buildGraph(cell.refs[i], mainMUCell, false, true, pairedLeftChild, sumChildDiff)
+				childID, err := buildGraph(cell.ref(i), mainMUCell, false, true, pairedLeftChild, sumChildDiff)
 				if err != nil {
 					return 0, err
 				}
@@ -616,7 +669,7 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 			}
 
 			vertexDiff := processShardAccountsVertex(leftCell, cell)
-			if !cell.special && vertexDiff != nil && sumChildDiff.Cmp(vertexDiff) == 0 {
+			if !cell.isSpecial() && vertexDiff != nil && sumChildDiff.Cmp(vertexDiff) == 0 {
 				cellData[currentCellID] = bitSpan{}
 				pbLevelMask[currentCellID] = 9
 			}
@@ -626,8 +679,8 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 			return currentCellID, nil
 		}
 
-		for i := 0; i < len(cell.refs); i++ {
-			childID, err := buildGraph(cell.refs[i], mainMUCell, underMULeft, underMURight, nil, nil)
+		for i := 0; i < cell.refsCount(); i++ {
+			childID, err := buildGraph(cell.ref(i), mainMUCell, underMULeft, underMURight, nil, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -638,8 +691,8 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 
 	for _, root := range roots {
 		var mainMUCell *Cell
-		if len(root.refs) > kMUCellOrderInRoot {
-			mainMUCell = root.refs[kMUCellOrderInRoot]
+		if root.refsCount() > kMUCellOrderInRoot {
+			mainMUCell = root.ref(kMUCellOrderInRoot)
 		}
 
 		rootID, err := buildGraph(root, mainMUCell, false, false, nil, nil)
@@ -838,8 +891,6 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMerkleUpdate bool, state *Cell) ([]*Cell, error) {
 	const (
 		maxCellDataLengthBits = 1024
-		maxNodeCount          = 1 << 20
-		defaultMaxRoots       = 16384
 		noNode                = -1
 	)
 
@@ -860,8 +911,11 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		return nil, fmt.Errorf("boc decompression failed: %w", err)
 	}
 	rootCount := int(rootCount64)
-	if rootCount < 1 || rootCount > defaultMaxRoots {
+	if rootCount < 1 {
 		return nil, fmt.Errorf("boc decompression failed: invalid root count")
+	}
+	if MaxBOCRoots > 0 && rootCount > MaxBOCRoots {
+		return nil, fmt.Errorf("boc decompression failed: too many roots: %d > %d", rootCount, MaxBOCRoots)
 	}
 	if rootCount > len(serialized) {
 		return nil, fmt.Errorf("boc decompression failed: invalid root count")
@@ -881,8 +935,11 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		return nil, fmt.Errorf("boc decompression failed: %w", err)
 	}
 	nodeCount := int(nodeCount64)
-	if nodeCount < 1 || nodeCount > maxNodeCount {
+	if nodeCount < 1 {
 		return nil, fmt.Errorf("boc decompression failed: invalid node count")
+	}
+	if MaxBOCCells > 0 && nodeCount > MaxBOCCells {
+		return nil, fmt.Errorf("boc decompression failed: too many nodes: %d > %d", nodeCount, MaxBOCCells)
 	}
 	if nodeCount > len(serialized) {
 		return nil, fmt.Errorf("boc decompression failed: incorrect node count provided")
@@ -1174,7 +1231,7 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 			return fmt.Errorf("boc decompression failed: invalid level for prunned branch under MerkleUpdate")
 		}
 
-		if int(sourceCell.levelMask.GetLevel()) == pbLevel {
+		if sourceCell.Level() == pbLevel {
 			nodes[idx] = sourceCell
 			return nil
 		}
@@ -1199,15 +1256,15 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		if pbLevelMask[leftIdx] != 0 {
 			return buildPrunedBranchFromState(leftIdx, stateCell)
 		}
-		if len(stateCell.refs) != cellRefsCnt[leftIdx] {
+		if stateCell.refsCount() != cellRefsCnt[leftIdx] {
 			return fmt.Errorf("boc decompression failed: state subtree refs mismatch while restoring MerkleUpdate left subtree")
 		}
-		if isSpecial[leftIdx] != stateCell.special {
+		if isSpecial[leftIdx] != stateCell.isSpecial() {
 			return fmt.Errorf("boc decompression failed: state subtree special flag mismatch while restoring MerkleUpdate left subtree")
 		}
 
 		for j := 0; j < cellRefsCnt[leftIdx]; j++ {
-			if err := buildLeftUnderMU(bocGraph[leftIdx][j], stateCell.refs[j]); err != nil {
+			if err := buildLeftUnderMU(bocGraph[leftIdx][j], stateCell.ref(j)); err != nil {
 				return err
 			}
 		}

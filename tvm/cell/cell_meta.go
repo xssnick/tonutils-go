@@ -1,13 +1,13 @@
 package cell
 
 func (c *Cell) IsSpecial() bool {
-	return c.special
+	return c.isSpecial()
 }
 
 func (c *Cell) Level() int {
-	return c.levelMask.GetLevel()
+	return c.getLevelMask().GetLevel()
 }
 
 func (c *Cell) LevelMask() LevelMask {
-	return c.levelMask
+	return c.getLevelMask()
 }

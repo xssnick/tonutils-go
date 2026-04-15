@@ -262,9 +262,10 @@ func storeDictShort(b *Builder, partSz uint64, bits []byte) error {
 	if err := b.StoreUInt(0b0, 1); err != nil {
 		return err
 	}
-
-	all1s := uint64(1<<(partSz+1) - 1)
-	if err := b.StoreUInt(all1s<<1, uint(partSz+1)); err != nil {
+	if err := b.StoreSameBit(true, uint(partSz)); err != nil {
+		return err
+	}
+	if err := b.StoreUInt(0, 1); err != nil {
 		return err
 	}
 	return b.StoreSlice(bits, uint(partSz))

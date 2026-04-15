@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
@@ -135,7 +136,29 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		if internal.Max != DefaultInternalMessageGasMax || internal.Limit != wantLimit || internal.Base != wantLimit || internal.Remaining != wantLimit {
 			t.Fatalf("unexpected internal default gas: %+v", internal)
 		}
+
+		tickTock := defaultTickTockTransactionGas(vmcore.Gas{})
+		if tickTock.Max != DefaultTickTockTransactionGasMax || tickTock.Limit != DefaultTickTockTransactionGasMax || tickTock.Credit != 0 {
+			t.Fatalf("unexpected tick/tock default gas: %+v", tickTock)
+		}
 	})
+}
+
+func TestMessageEmulationAccountAddr(t *testing.T) {
+	addrInt, err := messageEmulationAccountAddr(tickTockTestAddr)
+	if err != nil {
+		t.Fatalf("messageEmulationAccountAddr failed: %v", err)
+	}
+	if addrInt.Cmp(new(big.Int).SetBytes(tickTockTestAddr.Data())) != 0 {
+		t.Fatalf("unexpected account int: got %s", addrInt.String())
+	}
+
+	if _, err = messageEmulationAccountAddr(nil); err == nil {
+		t.Fatal("nil address should fail")
+	}
+	if _, err = messageEmulationAccountAddr(address.NewAddressNone()); err == nil {
+		t.Fatal("non-std address should fail")
+	}
 }
 
 func TestBuildMessageEmulationC7NormalizesGlobals(t *testing.T) {

@@ -116,7 +116,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		}
 	}
 
-	exitCode, childErr := s.RunChild(child)
+	exitCode, childErr := s.runChildRaw(child)
 
 	s.Steps += child.Steps
 	if !cfg.IsolateGas {

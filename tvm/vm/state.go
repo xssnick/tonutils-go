@@ -205,12 +205,12 @@ func (s *State) SetChildRunner(fn ChildRunner) {
 	s.childRunner = fn
 }
 
-func (s *State) RunChild(child *State) (int64, error) {
+func (s *State) prepareChildForRun(child *State) error {
 	if child == nil {
-		return 0, vmerr.Error(vmerr.CodeFatal, "child state is nil")
+		return vmerr.Error(vmerr.CodeFatal, "child state is nil")
 	}
 	if s.childRunner == nil {
-		return 0, vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
+		return vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
 	}
 	if child.GlobalVersion == 0 {
 		child.GlobalVersion = s.GlobalVersion
@@ -220,7 +220,28 @@ func (s *State) RunChild(child *State) (int64, error) {
 	}
 	child.childRunner = s.childRunner
 	child.PrepareExecution(child.CurrentCode)
+	return nil
+}
+
+func (s *State) runChildRaw(child *State) (int64, error) {
+	if err := s.prepareChildForRun(child); err != nil {
+		return 0, err
+	}
 	return s.childRunner(child)
+}
+
+func (s *State) RunChild(child *State) (int64, error) {
+	if err := s.prepareChildForRun(child); err != nil {
+		return 0, err
+	}
+	exitCode, err := s.childRunner(child)
+	if err != nil {
+		if _, ok := vmerr.ErrorCode(err); ok {
+			return exitCode, nil
+		}
+		return 0, err
+	}
+	return exitCode, nil
 }
 
 func (s *State) ConsumeGas(amount int64) error {

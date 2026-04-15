@@ -127,7 +127,7 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 	keySlice := key.BeginParse()
 
 	for {
-		if branch.special {
+		if branch.IsSpecial() {
 			return nil, matched, fmt.Errorf("prefix dict has special cells in tree structure")
 		}
 
@@ -299,7 +299,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		return leaf, err == nil, err
 	}
 
-	if branch.special {
+	if branch.IsSpecial() {
 		return nil, false, fmt.Errorf("prefix dict has special cells in tree structure")
 	}
 
@@ -419,7 +419,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 	if branch == nil {
 		return nil, nil, false, nil
 	}
-	if branch.special {
+	if branch.IsSpecial() {
 		return nil, nil, false, fmt.Errorf("prefix dict has special cells in tree structure")
 	}
 
@@ -570,7 +570,7 @@ func validatePrefixDictNode(c *Cell, keySz uint) error {
 		return fmt.Errorf("prefix dict branch is nil")
 	}
 
-	if c.special {
+	if c.IsSpecial() {
 		if c.GetType() == PrunedCellType {
 			return nil
 		}

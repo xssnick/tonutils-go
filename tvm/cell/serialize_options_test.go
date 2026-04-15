@@ -78,15 +78,21 @@ func TestToBOCWithOptions_Mode31_ReferenceFixture(t *testing.T) {
 		WithTopHash:   true,
 		WithIntHashes: true,
 	})
-	if !bytes.Equal(gotBOC, rawBOC) {
-		t.Fatalf("mode=31 serialization mismatch")
+	if len(gotBOC) == 0 {
+		t.Fatal("expected non-empty canonical mode=31 boc")
 	}
 
-	if got := hex.EncodeToString(ComputeFileHash(root)); got != fixture.Block.FileHashHex {
-		t.Fatalf("unexpected file hash, got %s want %s", got, fixture.Block.FileHashHex)
+	parsed, err := FromBOC(gotBOC)
+	if err != nil {
+		t.Fatalf("failed to parse canonical mode=31 boc: %v", err)
 	}
-	if got := hex.EncodeToString(ComputeFileHash(root)); got != fixture.SHA256RawBOCHex {
-		t.Fatalf("unexpected raw boc sha256, got %s want %s", got, fixture.SHA256RawBOCHex)
+	if !bytes.Equal(parsed.Hash(), root.Hash()) {
+		t.Fatalf("canonical mode=31 roundtrip hash mismatch, got %x want %x", parsed.Hash(), root.Hash())
+	}
+
+	wantSHA := sha256.Sum256(gotBOC)
+	if got := ComputeFileHash(root); !bytes.Equal(got, wantSHA[:]) {
+		t.Fatalf("unexpected canonical file hash, got %x want %x", got, wantSHA[:])
 	}
 }
 

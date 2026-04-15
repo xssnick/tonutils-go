@@ -1,7 +1,6 @@
 package tvm
 
 import (
-	"errors"
 	"math/big"
 	"testing"
 
@@ -549,9 +548,8 @@ func exitCodeFromResult(res *ExecutionResult, err error) int64 {
 		}
 		return res.ExitCode
 	}
-	var vmErr vmerr.VMError
-	if errors.As(err, &vmErr) {
-		return vmErr.Code
+	if code, ok := vmerr.ErrorCode(err); ok {
+		return code
 	}
 	return -1
 }

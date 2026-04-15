@@ -16,7 +16,7 @@ func validatePlainDictNode(c *Cell, keySz uint) error {
 		return fmt.Errorf("dict branch is nil")
 	}
 
-	if c.special {
+	if c.IsSpecial() {
 		if c.GetType() == PrunedCellType {
 			return nil
 		}

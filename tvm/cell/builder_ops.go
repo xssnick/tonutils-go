@@ -1,12 +1,12 @@
 package cell
 
 func (b *Builder) CanExtendBy(bits uint, refs uint) bool {
-	return b.bitsSz+bits < 1024 && len(b.refs)+int(refs) <= 4
+	return b.bitsSz+bits < 1024 && int(b.refsNum)+int(refs) <= 4
 }
 
 func (b *Builder) Depth() uint16 {
 	var depth uint16
-	for _, ref := range b.refs {
+	for _, ref := range b.rawRefs() {
 		childDepth := ref.Depth() + 1
 		if childDepth > depth {
 			depth = childDepth

@@ -1,50 +1,48 @@
 package cell
 
 func (c *Slice) PeekRefCellAt(i int) (*Cell, error) {
-	if i < 0 || i >= len(c.refs) {
+	if i < 0 || i >= c.RefsNum() {
 		return nil, ErrNoMoreRefs
 	}
-	return c.refs[i], nil
+	return c.refCellAt(i), nil
 }
 
 func (c *Slice) bitAt(offset uint) byte {
-	abs := c.loadedSz + offset
-	return (c.data[abs/8] >> (7 - (abs % 8))) & 1
+	abs := uint(c.bitStart) + offset
+	return (c.cell.data[abs/8] >> (7 - (abs % 8))) & 1
 }
 
 func (c *Slice) OnlyFirst(bits uint, refs int) bool {
-	if refs < 0 || c.BitsLeft() < bits || len(c.refs) < refs {
+	if refs < 0 || c.BitsLeft() < bits || c.RefsNum() < refs {
 		return false
 	}
-	c.bitsSz = c.loadedSz + bits
-	c.refs = c.refs[:refs]
+	c.bitEnd = c.bitStart + uint16(bits)
+	c.refEnd = c.refStart + uint8(refs)
 	return true
 }
 
 func (c *Slice) SkipFirst(bits uint, refs int) bool {
-	if refs < 0 || c.BitsLeft() < bits || len(c.refs) < refs {
+	if refs < 0 || c.BitsLeft() < bits || c.RefsNum() < refs {
 		return false
 	}
 	return c.AdvanceExt(bits, refs) == nil
 }
 
 func (c *Slice) OnlyLast(bits uint, refs int) bool {
-	if refs < 0 || c.BitsLeft() < bits || len(c.refs) < refs {
+	if refs < 0 || c.BitsLeft() < bits || c.RefsNum() < refs {
 		return false
 	}
-	if err := c.Advance(c.BitsLeft() - bits); err != nil {
-		return false
-	}
-	c.refs = c.refs[len(c.refs)-refs:]
+	c.bitStart = c.bitEnd - uint16(bits)
+	c.refStart = c.refEnd - uint8(refs)
 	return true
 }
 
 func (c *Slice) SkipLast(bits uint, refs int) bool {
-	if refs < 0 || c.BitsLeft() < bits || len(c.refs) < refs {
+	if refs < 0 || c.BitsLeft() < bits || c.RefsNum() < refs {
 		return false
 	}
-	c.bitsSz -= bits
-	c.refs = c.refs[:len(c.refs)-refs]
+	c.bitEnd -= uint16(bits)
+	c.refEnd -= uint8(refs)
 	return true
 }
 
@@ -77,20 +75,10 @@ func (c *Slice) bitsEqualAt(other *Slice, offset, otherOffset, bits uint) bool {
 
 func (c *Slice) LexCompare(other *Slice) int {
 	if other == nil {
-		switch {
-		case c == nil:
-			return 0
-		case c.BitsLeft() == 0:
-			return 0
-		default:
-			return 1
-		}
-	}
-	if c == nil {
-		if other.BitsLeft() == 0 {
+		if c.BitsLeft() == 0 {
 			return 0
 		}
-		return -1
+		return 1
 	}
 
 	left := c.BitsLeft()
@@ -122,16 +110,13 @@ func (c *Slice) LexCompare(other *Slice) int {
 }
 
 func (c *Slice) BitsEqual(other *Slice) bool {
-	if c == nil || other == nil {
-		return c == other
+	if other == nil {
+		return false
 	}
 	return c.BitsLeft() == other.BitsLeft() && c.bitsEqualAt(other, 0, 0, c.BitsLeft())
 }
 
 func (c *Slice) IsPrefixOf(other *Slice) bool {
-	if c == nil {
-		return true
-	}
 	if other == nil || c.BitsLeft() > other.BitsLeft() {
 		return false
 	}
@@ -139,16 +124,10 @@ func (c *Slice) IsPrefixOf(other *Slice) bool {
 }
 
 func (c *Slice) IsProperPrefixOf(other *Slice) bool {
-	if c == nil {
-		return other != nil && other.BitsLeft() > 0
-	}
 	return other != nil && c.BitsLeft() < other.BitsLeft() && c.bitsEqualAt(other, 0, 0, c.BitsLeft())
 }
 
 func (c *Slice) IsSuffixOf(other *Slice) bool {
-	if c == nil {
-		return true
-	}
 	if other == nil || c.BitsLeft() > other.BitsLeft() {
 		return false
 	}
@@ -156,9 +135,6 @@ func (c *Slice) IsSuffixOf(other *Slice) bool {
 }
 
 func (c *Slice) IsProperSuffixOf(other *Slice) bool {
-	if c == nil {
-		return other != nil && other.BitsLeft() > 0
-	}
 	return other != nil && c.BitsLeft() < other.BitsLeft() &&
 		c.bitsEqualAt(other, 0, other.BitsLeft()-c.BitsLeft(), c.BitsLeft())
 }
@@ -208,18 +184,18 @@ func (c *Slice) RemoveTrailing() int {
 
 	trailing := c.CountTrailing(false)
 	if trailing >= int(c.BitsLeft()) {
-		c.bitsSz -= uint(trailing)
+		c.bitEnd -= uint16(trailing)
 		return trailing
 	}
 
-	c.bitsSz -= uint(trailing + 1)
+	c.bitEnd -= uint16(trailing + 1)
 	return trailing
 }
 
 func (c *Slice) Depth() uint16 {
 	var depth uint16
-	for _, ref := range c.refs {
-		childDepth := ref.Depth() + 1
+	for i := 0; i < c.RefsNum(); i++ {
+		childDepth := c.refCellAt(i).Depth() + 1
 		if childDepth > depth {
 			depth = childDepth
 		}

@@ -4,23 +4,14 @@ import "testing"
 
 func TestValidateLoadedCellSpecialVariants(t *testing.T) {
 	t.Run("OrdinaryCellsStayPermissive", func(t *testing.T) {
-		raw := FromRawUnsafe(RawUnsafeCell{
-			IsSpecial: false,
-			LevelMask: LevelMask{Mask: 7},
-			BitsSz:    1,
-			Data:      []byte{0x80},
-		})
+		raw := makeManualCellForTest(false, LevelMask{Mask: 7}, 1, []byte{0x80}, nil)
 		if err := validateLoadedCell(raw); err != nil {
 			t.Fatalf("ordinary cells should stay permissive, got %v", err)
 		}
 	})
 
 	t.Run("LibraryAndShortErrors", func(t *testing.T) {
-		short := FromRawUnsafe(RawUnsafeCell{
-			IsSpecial: true,
-			BitsSz:    0,
-			Data:      nil,
-		})
+		short := makeManualCellForTest(true, LevelMask{}, 0, nil, nil)
 		if err := validateLoadedCell(short); err == nil {
 			t.Fatal("short special cell should fail validation")
 		}
@@ -34,11 +25,7 @@ func TestValidateLoadedCellSpecialVariants(t *testing.T) {
 			t.Fatalf("valid library cell should pass validation: %v", err)
 		}
 
-		badLib := FromRawUnsafe(RawUnsafeCell{
-			IsSpecial: true,
-			BitsSz:    8,
-			Data:      []byte{byte(LibraryCellType)},
-		})
+		badLib := makeManualCellForTest(true, LevelMask{}, 8, []byte{byte(LibraryCellType)}, nil)
 		if err := validateLoadedCell(badLib); err == nil {
 			t.Fatal("library cell with wrong size should fail")
 		}
@@ -56,13 +43,7 @@ func TestValidateLoadedCellSpecialVariants(t *testing.T) {
 			t.Fatalf("valid merkle proof should pass validation: %v", err)
 		}
 
-		badProof := FromRawUnsafe(RawUnsafeCell{
-			IsSpecial: true,
-			LevelMask: LevelMask{Mask: 1},
-			BitsSz:    proof.bitsSz,
-			Data:      append([]byte(nil), proof.data...),
-			Refs:      proof.refs,
-		})
+		badProof := makeManualCellForTest(true, LevelMask{Mask: 1}, proof.BitsSize(), proof.data, proof.rawRefs())
 		if err := validateLoadedCell(badProof); err == nil {
 			t.Fatal("merkle proof with mismatched level mask should fail")
 		}
@@ -74,13 +55,7 @@ func TestValidateLoadedCellSpecialVariants(t *testing.T) {
 			t.Fatalf("valid merkle update should pass validation: %v", err)
 		}
 
-		badUpdate := FromRawUnsafe(RawUnsafeCell{
-			IsSpecial: true,
-			LevelMask: LevelMask{Mask: 1},
-			BitsSz:    update.bitsSz,
-			Data:      append([]byte(nil), update.data...),
-			Refs:      update.refs,
-		})
+		badUpdate := makeManualCellForTest(true, LevelMask{Mask: 1}, update.BitsSize(), update.data, update.rawRefs())
 		if err := validateLoadedCell(badUpdate); err == nil {
 			t.Fatal("merkle update with mismatched level mask should fail")
 		}

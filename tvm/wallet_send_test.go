@@ -120,7 +120,7 @@ func walletV5SeqnoFromData(t *testing.T, data *cell.Cell) uint32 {
 	return uint32(seqno)
 }
 
-func emulateWalletSendExternal(t *testing.T, code, data *cell.Cell, addr *address.Address, body *cell.Cell, now uint32, globalVersion int) (*ExternalMessageResult, error) {
+func emulateWalletSendExternal(t *testing.T, code, data *cell.Cell, addr *address.Address, body *cell.Cell, now uint32, globalVersion int) (*MessageExecutionResult, error) {
 	t.Helper()
 
 	msg := &tlb.ExternalMessage{

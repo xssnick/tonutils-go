@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
@@ -69,6 +70,51 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 		sl := popCellSliceSlice(t, st)
 		if !isSpecial || sl == nil {
 			t.Fatalf("expected special cell slice and true flag")
+		}
+	})
+
+	t.Run("VirtualizedLoadPathsReturnExit14", func(t *testing.T) {
+		body, pruned := mustVirtualizedProofBodyAndPrunedRef(t)
+
+		st := newCellSliceState()
+		pushCellSliceCell(t, st, pruned)
+		if err := CTOS().Interpret(st); err == nil {
+			t.Fatal("expected CTOS on virtualized pruned cell to fail")
+		} else {
+			assertCellSliceVMErrorCode(t, err, vmerr.CodeVirtualization)
+		}
+
+		st = newCellSliceState()
+		pushCellSliceCell(t, st, pruned)
+		if err := XCTOS().Interpret(st); err == nil {
+			t.Fatal("expected XCTOS on virtualized pruned cell to fail")
+		} else {
+			assertCellSliceVMErrorCode(t, err, vmerr.CodeVirtualization)
+		}
+
+		st = newCellSliceState()
+		pushCellSliceSlice(t, st, body.BeginParse())
+		if err := LDREFRTOS().Interpret(st); err == nil {
+			t.Fatal("expected LDREFRTOS to fail when loading a virtualized pruned child")
+		} else {
+			assertCellSliceVMErrorCode(t, err, vmerr.CodeVirtualization)
+		}
+
+		st = newCellSliceState()
+		pushCellSliceCell(t, st, pruned)
+		if err := XLOADQ().Interpret(st); err != nil {
+			t.Fatalf("XLOADQ on virtualized pruned cell should fail quietly: %v", err)
+		}
+		if popCellSliceBool(t, st) {
+			t.Fatal("expected XLOADQ failure flag on virtualized pruned cell")
+		}
+
+		st = newCellSliceState()
+		pushCellSliceCell(t, st, pruned)
+		if err := XLOAD().Interpret(st); err == nil {
+			t.Fatal("expected XLOAD on virtualized pruned cell to fail")
+		} else {
+			assertCellSliceVMErrorCode(t, err, vmerr.CodeCellUnderflow)
 		}
 	})
 

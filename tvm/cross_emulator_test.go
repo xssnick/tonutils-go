@@ -5,7 +5,6 @@ package tvm
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"math/big"
 	"os"
 	"testing"
@@ -16,7 +15,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 var (
@@ -187,19 +185,12 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 	}
 
 	res, err := NewTVM().ExecuteDetailed(code, data, c7, vm.GasWithLimit(crossTestMaxGas), stack)
+	if err != nil {
+		return nil, err
+	}
 	finalStack := stack
 	if res != nil && res.Stack != nil {
 		finalStack = res.Stack
-	}
-	exitCode := int32(0)
-	if err != nil {
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) {
-			return nil, err
-		}
-		exitCode = int32(vmErr.Code)
-	} else {
-		exitCode = int32(res.ExitCode)
 	}
 
 	stackCell, err := stackToCell(finalStack)
@@ -208,7 +199,7 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 	}
 
 	return &crossRunResult{
-		exitCode: exitCode,
+		exitCode: int32(res.ExitCode),
 		gasUsed:  res.GasUsed,
 		stack:    stackCell,
 	}, nil

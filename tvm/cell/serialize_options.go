@@ -84,10 +84,7 @@ func ToBOCWithOptions(roots []*Cell, opts BOCOptions) []byte {
 }
 
 func (c *Cell) ToBOCWithOptions(opts BOCOptions) []byte {
-	if c == nil {
-		return nil
-	}
-	return ToBOCWithOptions([]*Cell{c}, opts)
+	return ToBOCWithOptions([]*Cell{c.rawCell()}, opts)
 }
 
 func ComputeFileHash(root *Cell) []byte {
@@ -190,6 +187,7 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (int, error) {
 	if cell == nil {
 		return 0, fmt.Errorf("cell is nil")
 	}
+	cell = cell.rawCell()
 
 	hash := makeCellHashKey(cell)
 	if pos, ok := s.cells[hash]; ok {
@@ -197,9 +195,10 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (int, error) {
 		return pos, nil
 	}
 
+	visibleRefs := cell.visibleRefs()
 	refs := [4]int{-1, -1, -1, -1}
 	sumChildWeight := 1
-	for i, ref := range cell.refs {
+	for i, ref := range visibleRefs {
 		refIdx, err := s.importCell(ref, depth+1)
 		if err != nil {
 			return 0, err
@@ -218,9 +217,9 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (int, error) {
 	s.cellList = append(s.cellList, bocSerializeItem{
 		cell:   cell,
 		refIdx: refs,
-		refNum: len(cell.refs),
+		refNum: len(visibleRefs),
 		wt:     byte(wt),
-		hcnt:   byte(cell.levelMask.getHashesCount()),
+		hcnt:   byte(cell.getLevelMask().getHashesCount()),
 		newIdx: -1,
 	})
 	s.dataBytes += uint64(cell.serializedBOCSize(false))
@@ -283,7 +282,7 @@ func (s *bocSerializer) reorderCells() {
 	s.topHashes = 0
 	for i := range s.roots {
 		item := &s.cellList[s.roots[i].idx]
-		if item.isRootCell {
+		if !item.isRootCell {
 			item.isRootCell = true
 			if item.wt != 0 {
 				s.topHashes += int(item.hcnt)
@@ -521,27 +520,28 @@ func (s *bocSerializer) shouldSerializeHashes(item *bocSerializeItem, mode int) 
 func (c *Cell) serializedBOCSize(withHashes bool) int {
 	size := 2 + c.serializedBOCBodySize()
 	if withHashes {
-		size += c.levelMask.getHashesCount() * (hashSize + depthSize)
+		size += c.getLevelMask().getHashesCount() * (hashSize + depthSize)
 	}
 	return size
 }
 
 func (c *Cell) serializeBOCTo(dst []byte, withHashes bool) int {
-	dst[0], dst[1] = c.descriptors(c.levelMask)
+	levelMask := c.getLevelMask()
+	dst[0], dst[1] = c.descriptors(levelMask)
 
 	offset := 2
 	if withHashes {
 		dst[0] |= 16
 
-		for level := 0; level <= c.levelMask.GetLevel(); level++ {
-			if !c.levelMask.IsSignificant(level) {
+		for level := 0; level <= levelMask.GetLevel(); level++ {
+			if !levelMask.IsSignificant(level) {
 				continue
 			}
 			copy(dst[offset:offset+hashSize], c.getHash(level))
 			offset += hashSize
 		}
-		for level := 0; level <= c.levelMask.GetLevel(); level++ {
-			if !c.levelMask.IsSignificant(level) {
+		for level := 0; level <= levelMask.GetLevel(); level++ {
+			if !levelMask.IsSignificant(level) {
 				continue
 			}
 			binary.BigEndian.PutUint16(dst[offset:offset+depthSize], c.getDepth(level))
@@ -553,7 +553,7 @@ func (c *Cell) serializeBOCTo(dst []byte, withHashes bool) int {
 }
 
 func (c *Cell) serializedBOCBodySize() int {
-	return int((c.bitsSz + 7) / 8)
+	return int((uint(c.bitsSz) + 7) / 8)
 }
 
 func (c *Cell) serializeBOCBodyTo(dst []byte) int {

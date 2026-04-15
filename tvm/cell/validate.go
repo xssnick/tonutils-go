@@ -9,13 +9,13 @@ import (
 func ordinaryLevelMask(refs []*Cell) LevelMask {
 	mask := byte(0)
 	for _, ref := range refs {
-		mask |= ref.levelMask.Mask
+		mask |= ref.getLevelMask().Mask
 	}
 	return LevelMask{Mask: mask}
 }
 
 func validateLoadedCell(c *Cell) error {
-	if !c.special {
+	if !c.isSpecial() {
 		// TODO: not allow later?
 		// Keep ordinary cells permissive on the read path. The reference parser rejects
 		// non-canonical ordinary level masks, but tonutils-go historically accepted
@@ -31,20 +31,20 @@ func validateLoadedCell(c *Cell) error {
 
 	switch typ := c.GetType(); typ {
 	case PrunedCellType:
-		if len(c.refs) != 0 {
+		if c.refsCount() != 0 {
 			return fmt.Errorf("pruned branch special cell has a cell reference")
 		}
 		if len(c.data) < 2 {
 			return fmt.Errorf("not enough data for a pruned branch special cell")
 		}
-		if c.levelMask.Mask != c.data[1] {
+		if c.getLevelMask().Mask != c.data[1] {
 			return fmt.Errorf("pruned branch level mask mismatch")
 		}
-		level := c.levelMask.GetLevel()
+		level := c.getLevelMask().GetLevel()
 		if level > _DataCellMaxLevel || level == 0 {
 			return fmt.Errorf("pruned branch has an invalid level")
 		}
-		expectedBits := (2 + c.levelMask.Apply(level-1).getHashesCount()*(hashSize+depthSize)) * 8
+		expectedBits := (2 + c.getLevelMask().Apply(level-1).getHashesCount()*(hashSize+depthSize)) * 8
 		if int(c.bitsSz) != expectedBits {
 			return fmt.Errorf("not enough data for a pruned branch special cell")
 		}
@@ -56,42 +56,42 @@ func validateLoadedCell(c *Cell) error {
 		if c.bitsSz != 8+(hashSize+depthSize)*8 {
 			return fmt.Errorf("not enough data for a merkle proof special cell")
 		}
-		if len(c.refs) != 1 {
+		if c.refsCount() != 1 {
 			return fmt.Errorf("wrong references count for a merkle proof special cell")
 		}
-		if !bytes.Equal(c.data[1:1+hashSize], c.refs[0].getHash(0)) {
+		if !bytes.Equal(c.data[1:1+hashSize], c.ref(0).getHash(0)) {
 			return fmt.Errorf("hash mismatch in a merkle proof special cell")
 		}
-		if binary.BigEndian.Uint16(c.data[1+hashSize:1+hashSize+depthSize]) != c.refs[0].getDepth(0) {
+		if binary.BigEndian.Uint16(c.data[1+hashSize:1+hashSize+depthSize]) != c.ref(0).getDepth(0) {
 			return fmt.Errorf("depth mismatch in a merkle proof special cell")
 		}
-		expectedMask := c.refs[0].levelMask.Mask >> 1
-		if c.levelMask.Mask != expectedMask {
+		expectedMask := c.ref(0).getLevelMask().Mask >> 1
+		if c.getLevelMask().Mask != expectedMask {
 			return fmt.Errorf("merkle proof level mask mismatch")
 		}
 	case MerkleUpdateCellType:
 		if c.bitsSz != 8+(hashSize+depthSize)*8*2 {
 			return fmt.Errorf("not enough data for a merkle update special cell")
 		}
-		if len(c.refs) != 2 {
+		if c.refsCount() != 2 {
 			return fmt.Errorf("wrong references count for a merkle update special cell")
 		}
-		if !bytes.Equal(c.data[1:1+hashSize], c.refs[0].getHash(0)) {
+		if !bytes.Equal(c.data[1:1+hashSize], c.ref(0).getHash(0)) {
 			return fmt.Errorf("first hash mismatch in a merkle update special cell")
 		}
-		if !bytes.Equal(c.data[1+hashSize:1+hashSize*2], c.refs[1].getHash(0)) {
+		if !bytes.Equal(c.data[1+hashSize:1+hashSize*2], c.ref(1).getHash(0)) {
 			return fmt.Errorf("second hash mismatch in a merkle update special cell")
 		}
 		firstDepthOff := 1 + hashSize*2
 		secondDepthOff := firstDepthOff + depthSize
-		if binary.BigEndian.Uint16(c.data[firstDepthOff:firstDepthOff+depthSize]) != c.refs[0].getDepth(0) {
+		if binary.BigEndian.Uint16(c.data[firstDepthOff:firstDepthOff+depthSize]) != c.ref(0).getDepth(0) {
 			return fmt.Errorf("first depth mismatch in a merkle update special cell")
 		}
-		if binary.BigEndian.Uint16(c.data[secondDepthOff:secondDepthOff+depthSize]) != c.refs[1].getDepth(0) {
+		if binary.BigEndian.Uint16(c.data[secondDepthOff:secondDepthOff+depthSize]) != c.ref(1).getDepth(0) {
 			return fmt.Errorf("second depth mismatch in a merkle update special cell")
 		}
-		expectedMask := (c.refs[0].levelMask.Mask | c.refs[1].levelMask.Mask) >> 1
-		if c.levelMask.Mask != expectedMask {
+		expectedMask := (c.ref(0).getLevelMask().Mask | c.ref(1).getLevelMask().Mask) >> 1
+		if c.getLevelMask().Mask != expectedMask {
 			return fmt.Errorf("merkle update level mask mismatch")
 		}
 	default:

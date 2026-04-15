@@ -1,6 +1,7 @@
 package vmerr
 
 import (
+	"errors"
 	"fmt"
 	"runtime/debug"
 )
@@ -15,6 +16,10 @@ type VMError struct {
 
 func (e VMError) Error() string {
 	return "[VMError] Code: " + fmt.Sprint(e.Code) + " Text:" + e.Msg + "\n" + e.trace
+}
+
+func (e VMError) VMCode() int64 {
+	return e.Code
 }
 
 const (
@@ -32,6 +37,46 @@ const (
 	CodeOutOfGas       = 13
 	CodeVirtualization = 14
 )
+
+type VirtualizationError struct {
+	Virtualization int
+	Msg            string
+	trace          string
+}
+
+func (e VirtualizationError) Error() string {
+	return "[VMVirtError] Code: " + fmt.Sprint(CodeVirtualization) + " Text:" + e.Msg + "\n" + e.trace
+}
+
+func (e VirtualizationError) VMCode() int64 {
+	return CodeVirtualization
+}
+
+func Virtualization(virtualization int, msg ...string) VirtualizationError {
+	e := VirtualizationError{
+		Virtualization: virtualization,
+		Msg:            "pruned branch",
+	}
+	if len(msg) > 0 && msg[0] != "" {
+		e.Msg = msg[0]
+	}
+	if TVMTraceEnabled {
+		e.trace = string(debug.Stack())
+	}
+	return e
+}
+
+type codeError interface {
+	VMCode() int64
+}
+
+func ErrorCode(err error) (int64, bool) {
+	var coded codeError
+	if errors.As(err, &coded) {
+		return coded.VMCode(), true
+	}
+	return 0, false
+}
 
 func Error(code int64, msg ...string) VMError {
 	e := VMError{

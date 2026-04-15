@@ -174,7 +174,7 @@ func TestConstStoreRemainingAndIndexedDepth(t *testing.T) {
 		t.Fatalf("expected 1019/3, got %d/%d", bitsLeft.Int64(), refsLeft.Int64())
 	}
 
-	complex := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 1).EndCell()).EndCell()
+	complex := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
 	st = vm.NewStack()
 	if err = st.PushCell(complex); err != nil {
 		t.Fatalf("push cell: %v", err)

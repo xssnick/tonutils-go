@@ -7,7 +7,10 @@ import (
 
 var ErrTooBigValue = errors.New("too big value")
 var ErrNegative = errors.New("value should be non negative")
+var ErrInvalidSize = errors.New("size should be positive")
+var ErrNilBigInt = errors.New("value cannot be nil")
 var ErrRefCannotBeNil = errors.New("ref cannot be nil")
+var ErrCellDepthLimit = errors.New("cell depth exceeds max depth")
 var ErrSmallSlice = errors.New("too small slice for this size")
 var ErrTooBigSize = errors.New("too big size")
 var ErrTooMuchRefs = errors.New("too much refs")
@@ -53,17 +56,17 @@ func ToBOCWithFlags(roots []*Cell, flags ...bool) []byte {
 
 func (c *Cell) descriptors(lvl LevelMask) (byte, byte) {
 	// calc size
-	ln := (c.bitsSz / 8) * 2
+	ln := (uint(c.bitsSz) / 8) * 2
 	if c.bitsSz%8 != 0 {
 		ln++
 	}
 
 	specBit := byte(0)
-	if c.special {
+	if c.isSpecial() {
 		specBit = 8
 	}
 
-	return byte(len(c.refs)) + specBit + lvl.Mask*32, byte(ln)
+	return byte(c.refsCount()) + specBit + lvl.Mask*32, byte(ln)
 }
 
 func dynamicIntBytes(val uint64, sz uint, buffer []byte) []byte {

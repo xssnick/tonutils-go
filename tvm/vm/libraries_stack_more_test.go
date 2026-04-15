@@ -28,15 +28,6 @@ func makeLibraryRoot(t *testing.T, lib *cell.Cell) *cell.Cell {
 	return root
 }
 
-func makeSpecialCell(typ byte, bits uint, data []byte) *cell.Cell {
-	cl := cell.FromRawUnsafe(cell.RawUnsafeCell{
-		IsSpecial: true,
-		BitsSz:    bits,
-		Data:      append([]byte(nil), data...),
-	})
-	return cl
-}
-
 func TestLibrariesAndResolveXLoadCell(t *testing.T) {
 	lib := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 	root := makeLibraryRoot(t, lib)
@@ -64,23 +55,14 @@ func TestLibrariesAndResolveXLoadCell(t *testing.T) {
 		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)
 	}
 
-	libraryCell := cell.BeginCell().MustStoreUInt(uint64(cell.LibraryCellType), 8).MustStoreSlice(lib.Hash(), 256).EndCell()
-	libraryCell.UnsafeModify(cell.LevelMask{}, true)
+	libraryCell := mustLibraryCellForHash(t, lib.Hash())
 	if got, err := st.ResolveXLoadCell(libraryCell); err != nil || got != lib {
 		t.Fatalf("resolve library cell = (%v, %v), want (%v, nil)", got, err, lib)
 	}
 
-	prunedData := append([]byte{byte(cell.PrunedCellType), 0x01}, make([]byte, 34)...)
-	pruned := makeSpecialCell(byte(cell.PrunedCellType), 288, prunedData)
+	pruned := mustPrunedCell(t)
 	if _, err := st.ResolveXLoadCell(pruned); err == nil {
 		t.Fatal("expected pruned cell resolution to fail")
-	} else {
-		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)
-	}
-
-	unknown := makeSpecialCell(0xFF, 8, []byte{0xFF})
-	if _, err := st.ResolveXLoadCell(unknown); err == nil {
-		t.Fatal("expected unknown special cell resolution to fail")
 	} else {
 		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)
 	}
@@ -156,6 +138,49 @@ func TestCellManagerHelpers(t *testing.T) {
 	lowGas.Cells.OnCellLoad(root.Hash())
 	if !errors.Is(lowGas.Cells.PendingError(), keepErr) {
 		t.Fatalf("pending error should be preserved, got %v", lowGas.Cells.PendingError())
+	}
+}
+
+func TestCellManagerVirtualizationSemantics(t *testing.T) {
+	st := NewExecutionState(DefaultGlobalVersion, GasWithLimit(10_000), nil, tuple.Tuple{}, NewStack())
+	st.InitForExecution()
+
+	pruned := mustPrunedCell(t)
+	virtualized := pruned.Virtualize(0)
+	if !virtualized.IsVirtualized() {
+		t.Fatal("expected virtualized pruned cell")
+	}
+
+	if _, err := st.Cells.BeginParse(pruned); err == nil {
+		t.Fatal("expected raw pruned parse to fail")
+	} else {
+		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+	}
+
+	sl, special, err := st.Cells.BeginParseSpecial(pruned)
+	if err != nil {
+		t.Fatalf("begin parse special pruned: %v", err)
+	}
+	if !special || sl == nil || !sl.IsSpecial() {
+		t.Fatal("expected begin parse special to preserve raw pruned cell")
+	}
+
+	if _, err := st.Cells.BeginParse(virtualized); err == nil {
+		t.Fatal("expected virtualized pruned parse to fail")
+	} else {
+		assertVMErrorCode(t, err, vmerr.CodeVirtualization)
+	}
+
+	if _, _, err := st.Cells.BeginParseSpecial(virtualized); err == nil {
+		t.Fatal("expected virtualized pruned special parse to fail")
+	} else {
+		assertVMErrorCode(t, err, vmerr.CodeVirtualization)
+	}
+
+	if _, err := st.ResolveXLoadCell(virtualized); err == nil {
+		t.Fatal("expected xload on virtualized pruned cell to stay underflow")
+	} else {
+		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)
 	}
 }
 

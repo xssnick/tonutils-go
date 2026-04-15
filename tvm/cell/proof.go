@@ -76,14 +76,14 @@ func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
 	binary.BigEndian.PutUint16(data[1+32:], body.getDepth(0))
 
 	proof := &Cell{
-		special:   true,
-		levelMask: LevelMask{body.levelMask.Mask},
-		bitsSz:    8 + 256 + 16,
-		data:      data,
-		refs:      []*Cell{body},
+		data:   data,
+		bitsSz: 8 + 256 + 16,
 	}
-	if proof.levelMask.Mask > 0 {
-		proof.levelMask.Mask -= 1
+	proof.setSpecial(true)
+	proof.setLevelMask(LevelMask{body.getLevelMask().Mask})
+	proof.setRefs([]*Cell{body})
+	if proof.getLevelMask().Mask > 0 {
+		proof.setLevelMask(LevelMask{proof.getLevelMask().Mask - 1})
 	}
 	proof.calculateHashes()
 
@@ -95,7 +95,7 @@ func toProof(c *Cell, skeleton *ProofSkeleton) (*Cell, error) {
 		return c, nil
 	}
 
-	cLvl := c.levelMask.Mask
+	cLvl := c.getLevelMask().Mask
 	c = c.copy()
 	for i := 0; i < len(skeleton.branches); i++ {
 		if skeleton.branches[i] != nil { // dive into branch
@@ -108,24 +108,24 @@ func toProof(c *Cell, skeleton *ProofSkeleton) (*Cell, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
-			c.refs[i] = r
+			c.setRef(i, r)
 
-			cLvl |= r.levelMask.Mask
-		} else if len(c.refs) > i && len(c.refs[i].refs) > 0 { // prune branch
+			cLvl |= r.getLevelMask().Mask
+		} else if c.refsCount() > i && c.ref(i).refsCount() > 0 { // prune branch
 			r, err := c.PeekRef(i)
 			if err != nil {
 				return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
 			}
 
-			parentLvl := c.levelMask.GetLevel()
-			ourLvl := r.levelMask.GetLevel()
+			parentLvl := c.getLevelMask().GetLevel()
+			ourLvl := r.getLevelMask().GetLevel()
 			if parentLvl >= 3 || ourLvl >= 3 {
 				return nil, fmt.Errorf("level is to big to prune")
 			}
 
 			prunedData := make([]byte, 2+(ourLvl+1)*(32+2))
 			prunedData[0] = byte(PrunedCellType)
-			prunedData[1] = r.levelMask.Mask | (1 << parentLvl)
+			prunedData[1] = r.getLevelMask().Mask | (1 << parentLvl)
 
 			for lvl := 0; lvl <= ourLvl; lvl++ {
 				copy(prunedData[2+(lvl*32):], r.getHash(lvl))
@@ -133,25 +133,25 @@ func toProof(c *Cell, skeleton *ProofSkeleton) (*Cell, error) {
 			}
 
 			r = &Cell{
-				special:   true,
-				levelMask: LevelMask{prunedData[1]},
-				bitsSz:    uint(len(prunedData) * 8),
-				data:      prunedData,
+				data:   prunedData,
+				bitsSz: uint16(len(prunedData) * 8),
 			}
+			r.setSpecial(true)
+			r.setLevelMask(LevelMask{prunedData[1]})
 			r.calculateHashes()
-			c.refs[i] = r
+			c.setRef(i, r)
 
-			cLvl |= r.levelMask.Mask
+			cLvl |= r.getLevelMask().Mask
 		}
 	}
 
-	if c.special && c.GetType() == MerkleProofCellType {
+	if c.isSpecial() && c.GetType() == MerkleProofCellType {
 		// unset merkle level bit
 		m := LevelMask{cLvl}
 		mask := byte(^(1 << m.GetLevel()))
-		c.levelMask = LevelMask{m.Mask & mask}
+		c.setLevelMask(LevelMask{m.Mask & mask})
 	} else {
-		c.levelMask = LevelMask{cLvl}
+		c.setLevelMask(LevelMask{cLvl})
 	}
 	c.calculateHashes()
 
@@ -163,8 +163,13 @@ func CheckProof(proof *Cell, hash []byte) error {
 	return err
 }
 
+func CheckProofVirtualized(proof *Cell, hash []byte) error {
+	_, err := UnwrapProofVirtualized(proof, hash)
+	return err
+}
+
 func UnwrapProof(proof *Cell, hash []byte) (*Cell, error) {
-	if !proof.special || proof.RefsNum() != 1 || proof.BitsSize() != 280 ||
+	if !proof.isSpecial() || proof.RefsNum() != 1 || proof.BitsSize() != 280 ||
 		Type(proof.data[0]) != MerkleProofCellType {
 		return nil, fmt.Errorf("not a merkle proof cell")
 	}
@@ -173,24 +178,33 @@ func UnwrapProof(proof *Cell, hash []byte) (*Cell, error) {
 		return nil, fmt.Errorf("incorrect proof hash")
 	}
 
-	calcDepth := proof.refs[0].getDepth(0)
+	body := proof.ref(0)
+	calcDepth := body.getDepth(0)
 	if calcDepth != binary.BigEndian.Uint16(proof.data[33:]) {
 		return nil, fmt.Errorf("incorrect proof depth")
 	}
 
 	// we unwrap level by 1 to correctly check proofs on pruned cells
-	calcHash := proof.refs[0].getHash(0)
+	calcHash := body.getHash(0)
 	if !bytes.Equal(hash, calcHash) {
 		return nil, fmt.Errorf("incorrect proof")
 	}
-	return proof.refs[0], nil
+	return body, nil
 }
 
-func (c *Cell) getLevelMask() LevelMask {
-	return c.levelMask
+func UnwrapProofVirtualized(proof *Cell, hash []byte) (*Cell, error) {
+	body, err := UnwrapProof(proof, hash)
+	if err != nil {
+		return nil, err
+	}
+	return body.Virtualize(0), nil
 }
 
 func (c *Cell) getHash(level int) []byte {
+	if base := c.baseCell(); base != nil {
+		return base.getHash(min(level, int(c.effectiveLevelValue())))
+	}
+
 	hashIndex := c.getLevelMask().Apply(level).getHashIndex()
 
 	if c.GetType() == PrunedCellType {
@@ -202,14 +216,46 @@ func (c *Cell) getHash(level int) []byte {
 		hashIndex = 0
 	}
 
-	return c.hashes[hashIndex*32 : (hashIndex+1)*32]
+	return c.hashAt(hashIndex)
+}
+
+func (c *Cell) calculateHashesSafe() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			switch v := r.(type) {
+			case string:
+				if v == "depth is more than max depth" {
+					err = ErrCellDepthLimit
+					return
+				}
+			case error:
+				if v.Error() == "depth is more than max depth" {
+					err = ErrCellDepthLimit
+					return
+				}
+			}
+			panic(r)
+		}
+	}()
+
+	c.calculateHashes()
+	return nil
 }
 
 // calculateHashes - we are precalculating cell hashes during creation for safe read parallel access later
 func (c *Cell) calculateHashes() {
-	totalHashCount := c.levelMask.getHashIndex() + 1
-	c.hashes = make([]byte, 32*totalHashCount)
-	c.depthLevels = make([]uint16, totalHashCount)
+	c.clearVirtualization()
+
+	totalHashCount := c.getLevelMask().getHashIndex() + 1
+	if totalHashCount <= 1 {
+		c.clearExtraHashes()
+	} else {
+		meta := c.ensureMeta()
+		if meta.extraHashes == nil {
+			meta.extraHashes = new([3][32]byte)
+		}
+		meta.extraDepths = [3]uint16{}
+	}
 
 	hashCount := totalHashCount
 	typ := c.GetType()
@@ -219,13 +265,13 @@ func (c *Cell) calculateHashes() {
 
 	hashIndexOffset := totalHashCount - hashCount
 	hashIndex := 0
-	level := c.levelMask.GetLevel()
+	level := c.getLevelMask().GetLevel()
 	isMerkle := typ == MerkleProofCellType || typ == MerkleUpdateCellType
 	var bodyBuf [maxCellDataBytes]byte
 	var hashBuf [2 + maxCellDataBytes + (4 * depthSize) + (4 * hashSize)]byte
 
 	for levelIndex := 0; levelIndex <= level; levelIndex++ {
-		if !c.levelMask.IsSignificant(levelIndex) {
+		if !c.getLevelMask().IsSignificant(levelIndex) {
 			continue
 		}
 
@@ -234,7 +280,7 @@ func (c *Cell) calculateHashes() {
 			continue
 		}
 
-		dsc1, dsc2 := c.descriptors(c.levelMask.Apply(levelIndex))
+		dsc1, dsc2 := c.descriptors(c.getLevelMask().Apply(levelIndex))
 		hashBuf[0], hashBuf[1] = dsc1, dsc2
 		bufPos := 2
 
@@ -256,7 +302,7 @@ func (c *Cell) calculateHashes() {
 				panic("pruned or 0")
 			}
 			prevHashOff := hashIndex - hashIndexOffset - 1
-			bufPos += copy(hashBuf[bufPos:], c.hashes[prevHashOff*32:(prevHashOff+1)*32])
+			bufPos += copy(hashBuf[bufPos:], c.hashAt(prevHashOff))
 		}
 
 		childLevelIndex := levelIndex
@@ -265,7 +311,8 @@ func (c *Cell) calculateHashes() {
 		}
 
 		var depth uint16
-		for i := 0; i < len(c.refs); i++ {
+		refCnt := c.refsCount()
+		for i := 0; i < refCnt; i++ {
 			childDepth := c.refs[i].getDepth(childLevelIndex)
 			binary.BigEndian.PutUint16(hashBuf[bufPos:bufPos+depthSize], childDepth)
 			bufPos += depthSize
@@ -274,26 +321,30 @@ func (c *Cell) calculateHashes() {
 				depth = childDepth
 			}
 		}
-		if len(c.refs) > 0 {
+		if refCnt > 0 {
 			depth++
 			if depth >= maxDepth {
 				panic("depth is more than max depth")
 			}
 		}
 
-		for i := 0; i < len(c.refs); i++ {
+		for i := 0; i < refCnt; i++ {
 			bufPos += copy(hashBuf[bufPos:], c.refs[i].getHash(childLevelIndex))
 		}
 
 		off := hashIndex - hashIndexOffset
-		c.depthLevels[off] = depth
+		c.setDepthAt(off, depth)
 		sum := sha256.Sum256(hashBuf[:bufPos])
-		copy(c.hashes[off*32:(off+1)*32], sum[:])
+		c.setHashAt(off, sum[:])
 		hashIndex++
 	}
 }
 
 func (c *Cell) getDepth(level int) uint16 {
+	if base := c.baseCell(); base != nil {
+		return base.getDepth(min(level, int(c.effectiveLevelValue())))
+	}
+
 	hashIndex := c.getLevelMask().Apply(level).getHashIndex()
 	if c.GetType() == PrunedCellType {
 		prunedHashIndex := c.getLevelMask().getHashIndex()
@@ -305,5 +356,5 @@ func (c *Cell) getDepth(level int) uint16 {
 		hashIndex = 0
 	}
 
-	return c.depthLevels[hashIndex]
+	return c.depthAt(hashIndex)
 }

@@ -4,20 +4,46 @@ import (
 	"encoding/binary"
 	"github.com/xssnick/tonutils-go/address"
 	"math/big"
+	"math/bits"
 )
 
 type Builder struct {
-	bitsSz   uint
-	data     []byte
 	observer Observer
-
-	// store it as slice of pointers to make indexing logic cleaner on parse,
-	// from outside it should always come as object to not have problems
-	refs []*Cell
+	data     [maxCellDataBytes]byte
+	refs     [4]*Cell
+	bitsSz   uint
+	refsNum  uint8
 }
 
 type SerializableToCell interface {
 	ToCell() (*Cell, error)
+}
+
+func (b *Builder) usedBytes() int {
+	return int((b.bitsSz + 7) / 8)
+}
+
+func (b *Builder) dataSlice() []byte {
+	return b.data[:b.usedBytes()]
+}
+
+func (b *Builder) rawRefs() []*Cell {
+	if b.refsNum == 0 {
+		return nil
+	}
+	return b.refs[:b.refsNum:b.refsNum]
+}
+
+func validateCellRefDepthLimit(refs []*Cell) error {
+	for _, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		if ref.Depth() >= maxDepth-1 {
+			return ErrCellDepthLimit
+		}
+	}
+	return nil
 }
 
 func (b *Builder) MustStoreCoins(value uint64) *Builder {
@@ -50,12 +76,22 @@ func (b *Builder) StoreVarUInt(val uint64, sz uint) error {
 }
 
 func (b *Builder) StoreBigVarUInt(val *big.Int, sz uint) error {
+	if val == nil {
+		return ErrNilBigInt
+	}
+	if sz == 0 {
+		return ErrInvalidSize
+	}
+	if val.Sign() < 0 {
+		return ErrNegative
+	}
+
 	ln := uint((val.BitLen() + 7) >> 3) // bytes required for value
 	if ln >= sz {
 		return ErrTooBigValue
 	}
 
-	szLen := uint(big.NewInt(int64(sz - 1)).BitLen())
+	szLen := uint(bits.Len64(uint64(sz - 1)))
 	if b.bitsSz+szLen+(ln*8) >= 1024 {
 		return ErrNotFit1023
 	}
@@ -97,12 +133,17 @@ func (b *Builder) MustStoreUInt(value uint64, sz uint) *Builder {
 }
 
 func (b *Builder) StoreUInt(value uint64, sz uint) error {
+	if sz == 0 {
+		if value != 0 {
+			return ErrTooBigValue
+		}
+		return nil
+	}
 	if sz > 64 {
 		return b.StoreBigUInt(new(big.Int).SetUint64(value), sz)
 	}
-
-	if sz == 0 {
-		return nil
+	if sz < 64 && value>>sz != 0 {
+		return ErrTooBigValue
 	}
 
 	value <<= 64 - sz
@@ -124,14 +165,19 @@ func (b *Builder) StoreInt(value int64, sz uint) error {
 	if sz > 257 {
 		return ErrTooBigSize
 	}
+	if sz == 0 {
+		if value != 0 {
+			return ErrTooBigValue
+		}
+		return nil
+	}
 
 	if sz <= 64 {
+		if !fitsSignedInt64(value, sz) {
+			return ErrTooBigValue
+		}
 		if value >= 0 {
 			return b.StoreUInt(uint64(value), sz)
-		}
-
-		if sz == 0 {
-			return b.StoreUInt(0, 0)
 		}
 
 		u := uint64(value)
@@ -169,8 +215,8 @@ func (b *Builder) MustStoreBigUInt(value *big.Int, sz uint) *Builder {
 }
 
 func (b *Builder) StoreBigUInt(value *big.Int, sz uint) error {
-	if value.BitLen() > 256 {
-		return ErrTooBigValue
+	if value == nil {
+		return ErrNilBigInt
 	}
 
 	if value.Sign() == -1 {
@@ -179,6 +225,15 @@ func (b *Builder) StoreBigUInt(value *big.Int, sz uint) error {
 
 	if sz > 256 {
 		return ErrTooBigSize
+	}
+	if sz == 0 {
+		if value.Sign() != 0 {
+			return ErrTooBigValue
+		}
+		return nil
+	}
+	if value.BitLen() > int(sz) {
+		return ErrTooBigValue
 	}
 
 	return b.storeBig(value, sz)
@@ -222,28 +277,32 @@ func (b *Builder) MustStoreBigInt(value *big.Int, sz uint) *Builder {
 }
 
 func (b *Builder) StoreBigInt(value *big.Int, sz uint) error {
-	if value.BitLen() > 256 {
-		return ErrTooBigValue
+	if value == nil {
+		return ErrNilBigInt
 	}
 
 	if sz > 257 {
 		return ErrTooBigSize
 	}
-
-	one := big.NewInt(1)
-
-	if value.Sign() == -1 {
-		// get max value of given sz
-		i := new(big.Int).Lsh(one, uint(sz)) // 100000000
-		i = i.Sub(i, one)                    // 11111111
-
-		// 11111111 is -1, so we need to add 1 to our negative value first,
-		// because we already have -1 in 'i'
-		value = value.Add(value, one)
-		value = value.Add(value, i)
+	if sz == 0 {
+		if value.Sign() != 0 {
+			return ErrTooBigValue
+		}
+		return nil
+	}
+	if value.Sign() >= 0 {
+		if value.BitLen() > int(sz) {
+			return ErrTooBigValue
+		}
+		return b.storeBig(value, sz)
+	}
+	if !fitsNegativeBigInt(value, sz) {
+		return ErrTooBigValue
 	}
 
-	return b.storeBig(value, sz)
+	encoded := new(big.Int).Lsh(big.NewInt(1), sz)
+	encoded.Add(encoded, value)
+	return b.storeBig(encoded, sz)
 }
 
 func (b *Builder) MustStoreAddr(addr *address.Address) *Builder {
@@ -302,7 +361,7 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 			return err
 		}
 
-		err = b.StoreUInt(uint64(addr.Workchain()), 8)
+		err = b.StoreUInt(uint64(uint8(addr.Workchain())), 8)
 		if err != nil {
 			return err
 		}
@@ -351,6 +410,32 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 	return ErrAddressTypeNotSupported
 }
 
+func fitsSignedInt64(value int64, sz uint) bool {
+	if sz == 0 {
+		return value == 0
+	}
+	if sz >= 64 {
+		return true
+	}
+
+	max := int64(uint64(1)<<(sz-1)) - 1
+	min := -int64(uint64(1) << (sz - 1))
+	return value >= min && value <= max
+}
+
+func fitsNegativeBigInt(value *big.Int, sz uint) bool {
+	if sz == 0 {
+		return value.Sign() == 0
+	}
+	if value.Sign() >= 0 {
+		return false
+	}
+
+	absMinusOne := new(big.Int).Neg(new(big.Int).Set(value))
+	absMinusOne.Sub(absMinusOne, big.NewInt(1))
+	return absMinusOne.BitLen() <= int(sz-1)
+}
+
 func (b *Builder) MustStoreStringSnake(str string) *Builder {
 	err := b.StoreStringSnake(str)
 	if err != nil {
@@ -386,17 +471,22 @@ func (b *Builder) StoreBinarySnake(data []byte) error {
 
 		data = data[space:]
 
-		if len(data) > 0 {
-			ref, err := f(127)
-			if err != nil {
-				return nil, err
-			}
+			if len(data) > 0 {
+				ref, err := f(127)
+				if err != nil {
+					return nil, err
+				}
 
-			err = c.StoreRef(ref.EndCell())
-			if err != nil {
-				return nil, err
+				child, err := ref.EndCellSpecial(false)
+				if err != nil {
+					return nil, err
+				}
+
+				err = c.StoreRef(child)
+				if err != nil {
+					return nil, err
+				}
 			}
-		}
 
 		return c, nil
 	}
@@ -443,7 +533,7 @@ func (b *Builder) StoreMaybeRef(ref *Cell) error {
 	}
 
 	// we need early checks to do 2 stores atomically
-	if len(b.refs) >= 4 {
+	if b.refsNum >= 4 {
 		return ErrTooMuchRefs
 	}
 	if b.bitsSz+1 >= 1024 {
@@ -463,15 +553,19 @@ func (b *Builder) MustStoreRef(ref *Cell) *Builder {
 }
 
 func (b *Builder) StoreRef(ref *Cell) error {
-	if len(b.refs) >= 4 {
+	if b.refsNum >= 4 {
 		return ErrTooMuchRefs
 	}
 
 	if ref == nil {
 		return ErrRefCannotBeNil
 	}
+	if err := validateCellRefDepthLimit([]*Cell{ref}); err != nil {
+		return err
+	}
 
-	b.refs = append(b.refs, ref)
+	b.refs[b.refsNum] = ref
+	b.refsNum++
 
 	return nil
 }
@@ -505,33 +599,36 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 		bytesNeeded++
 	}
 
-	b.data = append(b.data, bytes[:bytesNeeded]...)
+	oldUsedBytes := b.usedBytes()
+	copy(b.data[oldUsedBytes:oldUsedBytes+int(bytesNeeded)], bytes[:bytesNeeded])
 
 	szLastBits := sz % 8
 	if szLastBits == 0 {
 		szLastBits = 8
 	}
 	lastUsedBits := dataByteOffset + szLastBits
+	bufLen := oldUsedBytes + int(bytesNeeded)
+	buf := b.data[:bufLen]
 
 	if dataByteOffset != 0 {
 		// shift slice left to fill unused bits of existing byte
-		b.data[dataOffset] |= b.data[dataOffset+1] >> dataByteOffset
-		for i := dataOffset + 1; i < uint(len(b.data)); i++ {
+		buf[dataOffset] |= buf[dataOffset+1] >> dataByteOffset
+		for i := dataOffset + 1; i < uint(len(buf)); i++ {
 			if i > dataOffset+1 {
-				b.data[i-1] |= b.data[i] >> dataByteOffset
+				buf[i-1] |= buf[i] >> dataByteOffset
 			}
-			b.data[i] <<= 8 - dataByteOffset
+			buf[i] <<= 8 - dataByteOffset
 		}
 
 		// cut empty last byte if needed
 		if lastUsedBits <= 8 {
-			b.data = b.data[:len(b.data)-1]
+			bufLen--
 		}
 	}
 
 	// clear last unused bits
 	if lastUsedBits%8 != 0 {
-		b.data[len(b.data)-1] &= uint8(0xFF) << (8 - (lastUsedBits % 8))
+		b.data[bufLen-1] &= uint8(0xFF) << (8 - (lastUsedBits % 8))
 	}
 
 	b.bitsSz += sz
@@ -548,22 +645,28 @@ func (b *Builder) MustStoreBuilder(builder *Builder) *Builder {
 }
 
 func (b *Builder) StoreBuilder(builder *Builder) error {
-	if len(b.refs)+len(builder.refs) > 4 {
+	if int(b.refsNum)+int(builder.refsNum) > 4 {
 		return ErrTooMuchRefs
 	}
 
 	if b.bitsSz+builder.bitsSz >= 1024 {
 		return ErrNotFit1023
 	}
+	if err := validateCellRefDepthLimit(builder.rawRefs()); err != nil {
+		return err
+	}
 
-	b.refs = append(b.refs, builder.refs...)
-	b.MustStoreSlice(builder.data, builder.bitsSz)
+	for _, ref := range builder.rawRefs() {
+		b.refs[b.refsNum] = ref
+		b.refsNum++
+	}
+	b.MustStoreSlice(builder.dataSlice(), builder.bitsSz)
 
 	return nil
 }
 
 func (b *Builder) RefsUsed() int {
-	return len(b.refs)
+	return int(b.refsNum)
 }
 
 func (b *Builder) BitsUsed() uint {
@@ -575,19 +678,18 @@ func (b *Builder) BitsLeft() uint {
 }
 
 func (b *Builder) RefsLeft() uint {
-	return 4 - uint(len(b.refs))
+	return 4 - uint(b.refsNum)
 }
 
 func (b *Builder) Copy() *Builder {
-	// copy data
-	data := append([]byte{}, b.data...)
-
-	return &Builder{
-		bitsSz:   b.bitsSz,
-		data:     data,
-		refs:     b.refs,
+	cp := &Builder{
 		observer: b.observer,
+		bitsSz:   b.bitsSz,
+		refsNum:  b.refsNum,
 	}
+	copy(cp.data[:], b.dataSlice())
+	copy(cp.refs[:], b.rawRefs())
+	return cp
 }
 
 func BeginCell() *Builder {
@@ -595,13 +697,10 @@ func BeginCell() *Builder {
 }
 
 func (b *Builder) EndCell() *Cell {
-	c := &Cell{
-		bitsSz: b.bitsSz,
-		data:   append([]byte{}, b.data...), // copy data
-		refs:   b.refs,
+	c, err := finalizeCellFromBuilder(b, false)
+	if err != nil {
+		panic(err)
 	}
-	c.levelMask = ordinaryLevelMask(c.refs)
-	c.calculateHashes()
 	if b.observer != nil {
 		b.observer.OnCellCreate()
 	}
@@ -609,12 +708,7 @@ func (b *Builder) EndCell() *Cell {
 }
 
 func (b *Builder) ToSlice() *Slice {
-	return &Slice{
-		bitsSz:   b.bitsSz,
-		data:     append([]byte{}, b.data...), // copy data,
-		refs:     b.refs,
-		observer: b.observer,
-	}
+	return b.EndCell().BeginParse().SetObserver(b.observer)
 }
 
 func (b *Builder) String() string {

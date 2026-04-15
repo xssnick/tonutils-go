@@ -573,12 +573,7 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 		t.Fatal("TraverseExtra should fail on unsupported special cells")
 	}
 
-	pruned := FromRawUnsafe(RawUnsafeCell{
-		IsSpecial: true,
-		LevelMask: LevelMask{Mask: 1},
-		BitsSz:    288,
-		Data:      append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...),
-	})
+	pruned := makeManualCellForTest(true, LevelMask{Mask: 1}, 288, append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...), nil)
 	if err := validateAugmentedDictNode(pruned, 8, aug.SkipExtra); err != nil {
 		t.Fatalf("pruned augmented node should be accepted: %v", err)
 	}
