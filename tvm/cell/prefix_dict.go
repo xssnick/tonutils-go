@@ -103,7 +103,7 @@ func (d *PrefixDictionary) beginParse(c *Cell) *Slice {
 		charge = false
 	}
 
-	return beginParseObserved(c, d.observer, charge)
+	return beginParseObservedNode(c, d.observer, 0, charge)
 }
 
 func (d *PrefixDictionary) IsEmpty() bool {

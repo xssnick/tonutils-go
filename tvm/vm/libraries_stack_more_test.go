@@ -82,11 +82,12 @@ func TestCellManagerHelpers(t *testing.T) {
 		t.Fatalf("register nil cell load: %v", err)
 	}
 
-	st.Cells.OnCellLoad(root.Hash())
+	rootHash := root.HashKey()
+	st.Cells.OnCellLoad(rootHash)
 	if err := st.Cells.PendingError(); err != nil {
 		t.Fatalf("unexpected pending error after first load: %v", err)
 	}
-	st.Cells.OnCellLoadKey(root.HashKey())
+	st.Cells.OnCellLoad(rootHash)
 	if err := st.Cells.PendingError(); err != nil {
 		t.Fatalf("unexpected pending error after reload: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestCellManagerHelpers(t *testing.T) {
 
 	keepErr := errors.New("keep me")
 	lowGas.Cells.pendingErr = keepErr
-	lowGas.Cells.OnCellLoad(root.Hash())
+	lowGas.Cells.OnCellLoad(rootHash)
 	if !errors.Is(lowGas.Cells.PendingError(), keepErr) {
 		t.Fatalf("pending error should be preserved, got %v", lowGas.Cells.PendingError())
 	}

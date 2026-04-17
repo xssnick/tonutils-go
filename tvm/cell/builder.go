@@ -321,6 +321,18 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 		return b.StoreUInt(0, 2)
 	}
 
+	anycast := addr.Anycast()
+	anycastBits := uint(0)
+	if anycast != nil {
+		if anycast.Depth() == 0 || anycast.Depth() > 30 {
+			return ErrTooBigSize
+		}
+		if uint(len(anycast.Prefix())*8) < anycast.Depth() {
+			return ErrSmallSlice
+		}
+		anycastBits = 5 + anycast.Depth()
+	}
+
 	switch addr.Type() {
 	case address.ExtAddress:
 		if b.bitsSz+2+9+addr.BitsLen() >= 1024 {
@@ -345,7 +357,7 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 
 		return nil
 	case address.StdAddress:
-		if b.bitsSz+2+1+8+256 >= 1024 {
+		if b.bitsSz+2+1+anycastBits+8+256 >= 1024 {
 			return ErrNotFit1023
 		}
 
@@ -355,10 +367,24 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 			return err
 		}
 
-		// anycast
-		err = b.StoreUInt(0b0, 1)
-		if err != nil {
-			return err
+		if anycast == nil {
+			err = b.StoreUInt(0b0, 1)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = b.StoreUInt(0b1, 1)
+			if err != nil {
+				return err
+			}
+			err = b.StoreUInt(uint64(anycast.Depth()), 5)
+			if err != nil {
+				return err
+			}
+			err = b.StoreSlice(anycast.Prefix(), anycast.Depth())
+			if err != nil {
+				return err
+			}
 		}
 
 		err = b.StoreUInt(uint64(uint8(addr.Workchain())), 8)
@@ -373,7 +399,7 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 
 		return nil
 	case address.VarAddress:
-		if b.bitsSz+2+1+9+32+addr.BitsLen() >= 1024 {
+		if b.bitsSz+2+1+anycastBits+9+32+addr.BitsLen() >= 1024 {
 			return ErrNotFit1023
 		}
 
@@ -383,10 +409,24 @@ func (b *Builder) StoreAddr(addr *address.Address) error {
 			return err
 		}
 
-		// anycast
-		err = b.StoreUInt(0b0, 1)
-		if err != nil {
-			return err
+		if anycast == nil {
+			err = b.StoreUInt(0b0, 1)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = b.StoreUInt(0b1, 1)
+			if err != nil {
+				return err
+			}
+			err = b.StoreUInt(uint64(anycast.Depth()), 5)
+			if err != nil {
+				return err
+			}
+			err = b.StoreSlice(anycast.Prefix(), anycast.Depth())
+			if err != nil {
+				return err
+			}
 		}
 
 		err = b.StoreUInt(uint64(addr.BitsLen()), 9)

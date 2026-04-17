@@ -437,7 +437,7 @@ func execDictGet(variant dictValueVariant) func(*vm.State) error {
 
 		dict := newObservedDict(root, keyBits, state)
 		if variant.byRef {
-			value, err := dict.LoadValueRef(key)
+			value, err := loadDictRefValue(dict, key)
 			if err != nil {
 				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return state.Stack.PushBool(false)
@@ -478,7 +478,7 @@ func execDictGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		}
 
 		dict := newObservedDict(root, keyBits, state)
-		value, err := dict.LoadValueRef(key)
+		value, err := loadDictRefValue(dict, key)
 		if err != nil {
 			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return pushMaybeCell(state.Stack, nil)
@@ -508,7 +508,7 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 				if err != nil {
 					return err
 				}
-				changed, err = dict.SetRefWithMode(key, value, mode)
+				changed, err = setDictRefValueWithMode(dict, key, value, mode)
 				if err != nil {
 					return mapDictError(err)
 				}
@@ -592,11 +592,11 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 				if err != nil {
 					return err
 				}
-				oldValue, err := shadow.LoadValueRef(key)
+				oldValue, err := loadDictRefValue(shadow, key)
 				if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return mapDictError(err)
 				}
-				if _, err = dict.SetRefWithMode(key, value, mode); err != nil {
+				if _, err = setDictRefValueWithMode(dict, key, value, mode); err != nil {
 					return mapDictError(err)
 				}
 				if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -667,6 +667,62 @@ func pushSetGetResultSlice(state *vm.State, oldValue *cell.Slice, mode cell.Dict
 	return state.Stack.PushBool(mode == cell.DictSetModeAdd)
 }
 
+func loadSingleRefDictValue(value *cell.Slice) (*cell.Cell, error) {
+	if value == nil {
+		return nil, cell.ErrNoSuchKeyInDict
+	}
+	if value.BitsLeft() != 0 || value.RefsNum() != 1 {
+		return nil, errors.New("value is not a single ref")
+	}
+	return value.PeekRefCell()
+}
+
+func loadDictRefValue(dict *cell.Dictionary, key *cell.Cell) (*cell.Cell, error) {
+	value, err := dict.LoadValue(key)
+	if err != nil {
+		return nil, err
+	}
+	return loadSingleRefDictValue(value)
+}
+
+func loadDictRefValueAndDelete(dict *cell.Dictionary, key *cell.Cell) (*cell.Cell, error) {
+	value, err := dict.LoadValueAndDelete(key)
+	if err != nil {
+		return nil, err
+	}
+	return loadSingleRefDictValue(value)
+}
+
+func setDictRefValueWithMode(dict *cell.Dictionary, key, value *cell.Cell, mode cell.DictSetMode) (bool, error) {
+	if value == nil {
+		return false, errors.New("value ref is nil")
+	}
+	return dict.SetBuilderWithMode(key, cell.BeginCell().MustStoreRef(value), mode)
+}
+
+func loadDictMinMaxRefValue(dict *cell.Dictionary, fetchMax, invertFirst, remove bool) (*cell.Cell, *cell.Cell, error) {
+	var (
+		keyCell  *cell.Cell
+		valSlice *cell.Slice
+		err      error
+	)
+
+	if remove {
+		keyCell, valSlice, err = dict.LoadMinMaxAndDelete(fetchMax, invertFirst)
+	} else {
+		keyCell, valSlice, err = dict.LoadMinMax(fetchMax, invertFirst)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	valRef, err := loadSingleRefDictValue(valSlice)
+	if err != nil {
+		return nil, nil, err
+	}
+	return keyCell, valRef, nil
+}
+
 func pushSetGetResultRef(state *vm.State, oldValue *cell.Cell, mode cell.DictSetMode) error {
 	if oldValue != nil {
 		if err := state.Stack.PushCell(oldValue); err != nil {
@@ -724,7 +780,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 		}
 
 		if variant.byRef {
-			value, err := dict.LoadValueRefAndDelete(key)
+			value, err := loadDictRefValueAndDelete(dict, key)
 			if err != nil {
 				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -782,15 +838,15 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		var oldValue *cell.Cell
 		if newValue != nil {
 			shadow := newPlainDict(root, keyBits)
-			oldValue, err = shadow.LoadValueRef(key)
+			oldValue, err = loadDictRefValue(shadow, key)
 			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return mapDictError(err)
 			}
-			if _, err = dict.SetRefWithMode(key, newValue, cell.DictSetModeSet); err != nil {
+			if _, err = setDictRefValueWithMode(dict, key, newValue, cell.DictSetModeSet); err != nil {
 				return mapDictError(err)
 			}
 		} else {
-			oldValue, err = dict.LoadValueRefAndDelete(key)
+			oldValue, err = loadDictRefValueAndDelete(dict, key)
 			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return mapDictError(err)
 			}
@@ -824,9 +880,9 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 
 			if variant.byRef {
 				if remove {
-					keyCell, valRef, err = dict.LoadMinMaxRefAndDelete(fetchMax, invertFirst)
+					keyCell, valRef, err = loadDictMinMaxRefValue(dict, fetchMax, invertFirst, true)
 				} else {
-					keyCell, valRef, err = dict.LoadMinMaxRef(fetchMax, invertFirst)
+					keyCell, valRef, err = loadDictMinMaxRefValue(dict, fetchMax, invertFirst, false)
 				}
 			} else {
 				if remove {

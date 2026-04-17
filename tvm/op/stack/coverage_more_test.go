@@ -280,19 +280,21 @@ func TestPushContRoundTripAndInterpret(t *testing.T) {
 		EndCell()
 
 	tests := []struct {
-		name string
-		cont *cell.Cell
-		typ  string
-		bits int64
+		name       string
+		cont       *cell.Cell
+		newOp      func(*cell.Cell) *OpPUSHCONT
+		typ        string
+		wantText   string
+		bits       int64
 	}{
-		{name: "Small", cont: small, typ: "SMALL", bits: 8},
-		{name: "Big", cont: big, typ: "BIG", bits: 16},
-		{name: "Ref", cont: ref, typ: "REF", bits: 8},
+		{name: "Small", cont: small, newOp: PUSHCONT, typ: "SMALL", wantText: "SMALL PUSHCONT", bits: 8},
+		{name: "Big", cont: big, newOp: PUSHCONT, typ: "BIG", wantText: "BIG PUSHCONT", bits: 16},
+		{name: "Ref", cont: ref, newOp: PUSHREFCONT, typ: "REF", wantText: "PUSHREFCONT", bits: 8},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			src := PUSHCONT(tt.cont)
+			src := tt.newOp(tt.cont)
 			serialized := src.Serialize()
 			dst := PUSHCONT(nil)
 			if err := dst.Deserialize(serialized.EndCell().BeginParse()); err != nil {
@@ -304,7 +306,7 @@ func TestPushContRoundTripAndInterpret(t *testing.T) {
 			if got := dst.InstructionBits(); got != tt.bits {
 				t.Fatalf("unexpected instruction bits: %d", got)
 			}
-			if got := dst.SerializeText(); !strings.Contains(got, tt.typ+" PUSHCONT") {
+			if got := dst.SerializeText(); !strings.Contains(got, tt.wantText) {
 				t.Fatalf("unexpected text: %q", got)
 			}
 

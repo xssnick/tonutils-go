@@ -64,98 +64,92 @@ func (s *ProofSkeleton) Copy() *ProofSkeleton {
 }
 
 func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
-	body, err := toProof(c, skeleton)
+	body, err := buildProofBody(c, skeleton, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
 	}
-
-	// build root Merkle Proof cell
-	data := make([]byte, 1+32+2)
-	data[0] = byte(MerkleProofCellType)
-	copy(data[1:], body.getHash(0))
-	binary.BigEndian.PutUint16(data[1+32:], body.getDepth(0))
-
-	proof := &Cell{
-		data:   data,
-		bitsSz: 8 + 256 + 16,
-	}
-	proof.setSpecial(true)
-	proof.setLevelMask(LevelMask{body.getLevelMask().Mask})
-	proof.setRefs([]*Cell{body})
-	if proof.getLevelMask().Mask > 0 {
-		proof.setLevelMask(LevelMask{proof.getLevelMask().Mask - 1})
-	}
-	proof.calculateHashes()
-
-	return proof, nil
+	return createMerkleProofCell(body)
 }
 
-func toProof(c *Cell, skeleton *ProofSkeleton) (*Cell, error) {
-	if skeleton.recursive {
+func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, error) {
+	if c == nil {
+		return nil, fmt.Errorf("cell is nil")
+	}
+	if skeleton == nil {
+		skeleton = CreateProofSkeleton()
+	}
+	if skeleton.recursive && !c.IsVirtualized() {
 		return c, nil
 	}
 
-	cLvl := c.getLevelMask().Mask
-	c = c.copy()
-	for i := 0; i < len(skeleton.branches); i++ {
-		if skeleton.branches[i] != nil { // dive into branch
-			r, err := c.PeekRef(i)
-			if err != nil {
-				return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
+	refCnt := c.refsCount()
+	if !skeleton.recursive {
+		for i := refCnt; i < len(skeleton.branches); i++ {
+			if skeleton.branches[i] == nil {
+				continue
 			}
+			return nil, fmt.Errorf("failed to peek %d ref: %w", i, ErrNoMoreRefs)
+		}
+	}
+	if refCnt == 0 {
+		return c, nil
+	}
 
-			r, err = toProof(r, skeleton.branches[i])
+	var refsBuf [4]*Cell
+	refs := refsBuf[:refCnt]
+	childDepth := merkleChildDepth(c, merkleDepth)
+	for i := 0; i < refCnt; i++ {
+		ref := c.visibleRef(i)
+
+		var (
+			next *Cell
+			err  error
+		)
+		if skeleton.recursive {
+			next, err = buildProofBody(ref, skeleton, childDepth)
 			if err != nil {
 				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
-			c.setRef(i, r)
-
-			cLvl |= r.getLevelMask().Mask
-		} else if c.refsCount() > i && c.ref(i).refsCount() > 0 { // prune branch
-			r, err := c.PeekRef(i)
+		} else if skeleton.branches[i] != nil {
+			next, err = buildProofBody(ref, skeleton.branches[i], childDepth)
 			if err != nil {
-				return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
+				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
-
-			parentLvl := c.getLevelMask().GetLevel()
-			ourLvl := r.getLevelMask().GetLevel()
-			if parentLvl >= 3 || ourLvl >= 3 {
-				return nil, fmt.Errorf("level is to big to prune")
+		} else {
+			if !ref.IsVirtualized() && ref.refsCount() == 0 {
+				next = ref
+			} else {
+				next, err = createPrunedBranchFromCell(ref, childDepth+1)
+				if err != nil {
+					return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
+				}
 			}
-
-			prunedData := make([]byte, 2+(ourLvl+1)*(32+2))
-			prunedData[0] = byte(PrunedCellType)
-			prunedData[1] = r.getLevelMask().Mask | (1 << parentLvl)
-
-			for lvl := 0; lvl <= ourLvl; lvl++ {
-				copy(prunedData[2+(lvl*32):], r.getHash(lvl))
-				binary.BigEndian.PutUint16(prunedData[2+((ourLvl+1)*32)+2*lvl:], r.getDepth(lvl))
-			}
-
-			r = &Cell{
-				data:   prunedData,
-				bitsSz: uint16(len(prunedData) * 8),
-			}
-			r.setSpecial(true)
-			r.setLevelMask(LevelMask{prunedData[1]})
-			r.calculateHashes()
-			c.setRef(i, r)
-
-			cLvl |= r.getLevelMask().Mask
 		}
+		refs[i] = next
 	}
 
-	if c.isSpecial() && c.GetType() == MerkleProofCellType {
-		// unset merkle level bit
-		m := LevelMask{cLvl}
-		mask := byte(^(1 << m.GetLevel()))
-		c.setLevelMask(LevelMask{m.Mask & mask})
-	} else {
-		c.setLevelMask(LevelMask{cLvl})
+	rebuilt, err := rebuildCellWithRefs(c, refs)
+	if err != nil {
+		return nil, err
 	}
-	c.calculateHashes()
+	return rebuilt, nil
+}
 
-	return c, nil
+func createMerkleProofCell(body *Cell) (*Cell, error) {
+	builder := BeginCell()
+	if err := builder.StoreUInt(uint64(MerkleProofCellType), 8); err != nil {
+		return nil, fmt.Errorf("failed to store merkle proof type: %w", err)
+	}
+	if err := builder.StoreSlice(body.getHash(0), hashSize*8); err != nil {
+		return nil, fmt.Errorf("failed to store merkle proof hash: %w", err)
+	}
+	if err := builder.StoreUInt(uint64(body.getDepth(0)), depthSize*8); err != nil {
+		return nil, fmt.Errorf("failed to store merkle proof depth: %w", err)
+	}
+	if err := builder.StoreRef(body); err != nil {
+		return nil, fmt.Errorf("failed to store merkle proof ref: %w", err)
+	}
+	return finalizeCellFromBuilder(builder, true)
 }
 
 func CheckProof(proof *Cell, hash []byte) error {
@@ -252,7 +246,7 @@ func (c *Cell) calculateHashes() {
 	} else {
 		meta := c.ensureMeta()
 		if meta.extraHashes == nil {
-			meta.extraHashes = new([3][32]byte)
+			meta.extraHashes = new([3]Hash)
 		}
 		meta.extraDepths = [3]uint16{}
 	}

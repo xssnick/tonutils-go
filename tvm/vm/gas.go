@@ -12,7 +12,6 @@ const (
 	CellCreateGasPrice         = 500
 	ExceptionGasPrice          = 50
 	InstructionBaseGasPrice    = 10
-	InstructionCellRefGasPrice = 5
 	TupleEntryGasPrice         = 1
 	ImplicitJmprefGasPrice     = 10
 	ImplicitRetGasPrice        = 5

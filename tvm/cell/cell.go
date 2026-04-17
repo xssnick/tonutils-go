@@ -20,12 +20,14 @@ const (
 	UnknownCellType      Type = 0xFF
 )
 
+type Hash [hashSize]byte
+
 const maxDepth = 1024
 const maxCellDataBytes = 128
 
 type Cell struct {
 	data  []byte
-	hash0 [32]byte
+	hash0 Hash
 	refs  [4]*Cell
 	meta  *cellMeta
 
@@ -34,13 +36,20 @@ type Cell struct {
 	flags  uint8
 }
 
+type TraceNode uint32
+
 type Observer interface {
-	OnCellLoad(hash []byte)
+	OnCellLoad(hash Hash)
 	OnCellCreate()
+
+	OnRef(parent TraceNode, refIdx int) TraceNode
 }
 
-type HashKeyObserver interface {
-	OnCellLoadKey(hash [32]byte)
+func notifyCellLoad(observer Observer, c *Cell) {
+	if observer == nil || c == nil {
+		return
+	}
+	observer.OnCellLoad(c.HashKey())
 }
 
 func (c *Cell) copy() *Cell {
@@ -220,8 +229,8 @@ func (c *Cell) Hash(level ...int) []byte {
 	return append([]byte{}, c.getHash(_DataCellMaxLevel)...)
 }
 
-func (c *Cell) HashKey(level ...int) [32]byte {
-	var key [32]byte
+func (c *Cell) HashKey(level ...int) Hash {
+	var key Hash
 	if len(level) > 0 {
 		copy(key[:], c.getHash(level[0]))
 		return key

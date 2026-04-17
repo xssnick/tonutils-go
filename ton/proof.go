@@ -291,10 +291,21 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 		return fmt.Errorf("source block proof is lack of info")
 	}
 
-	catchainCfgCell := fromBlock.Extra.Custom.ConfigParams.Config.Params.GetByIntKey(big.NewInt(28))
-	blockValidatorsCell := fromBlock.Extra.Custom.ConfigParams.Config.Params.GetByIntKey(big.NewInt(34))
-	if catchainCfgCell == nil || blockValidatorsCell == nil {
+	catchainCfgVal, err := fromBlock.Extra.Custom.ConfigParams.Config.Params.LoadValueByIntKey(big.NewInt(28))
+	if err != nil {
 		return fmt.Errorf("not all required configs are in proof")
+	}
+	blockValidatorsVal, err := fromBlock.Extra.Custom.ConfigParams.Config.Params.LoadValueByIntKey(big.NewInt(34))
+	if err != nil {
+		return fmt.Errorf("not all required configs are in proof")
+	}
+	catchainCfgCell, err := catchainCfgVal.ToCell()
+	if err != nil {
+		return fmt.Errorf("failed to load catchain config: %w", err)
+	}
+	blockValidatorsCell, err := blockValidatorsVal.ToCell()
+	if err != nil {
+		return fmt.Errorf("failed to load validator config: %w", err)
 	}
 	if catchainCfgCell, err = catchainCfgCell.PeekRef(0); err != nil {
 		return fmt.Errorf("no ref in catchain cell")

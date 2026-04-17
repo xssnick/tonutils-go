@@ -279,14 +279,17 @@ func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
 	}
 
 	key := cell.BeginCell().MustStoreBigUInt(idx, 32).EndCell()
-	val, err := root.AsDict(32).SetObserver(&state.Cells).LoadValueRef(key)
+	val, err := root.AsDict(32).SetObserver(&state.Cells).LoadValue(key)
 	if err != nil {
 		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return val, nil
+	if val.BitsLeft() != 0 || val.RefsNum() != 1 {
+		return nil, errors.New("value is not a single ref")
+	}
+	return val.PeekRefCell()
 }
 
 func CONFIGPARAM() *helpers.SimpleOP {

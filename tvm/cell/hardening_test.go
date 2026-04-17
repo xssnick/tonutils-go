@@ -55,7 +55,7 @@ func TestBuilderRejectsOutOfRangeValues(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.err != ErrTooBigValue {
+			if !errors.Is(tc.err, ErrTooBigValue) {
 				t.Fatalf("expected ErrTooBigValue, got %v", tc.err)
 			}
 		})
@@ -192,16 +192,17 @@ func TestToBOCWithTopHashChangesEncoding(t *testing.T) {
 }
 
 func TestCalculateHashesSafeRejectsTooDeepCells(t *testing.T) {
-	root := &Cell{}
-	for i := 0; i < maxDepth; i++ {
-		parent := &Cell{}
-		parent.setRef(0, root)
-		parent.setRefsCount(1)
-		parent.setLevelMask(ordinaryLevelMask(parent.rawRefs()))
-		root = parent
+	root := BeginCell().EndCell()
+	for i := 0; i < maxDepth-1; i++ {
+		root = BeginCell().MustStoreRef(root).EndCell()
 	}
 
-	if err := root.calculateHashesSafe(); !errors.Is(err, ErrCellDepthLimit) {
+	overflow := &Cell{}
+	overflow.setRef(0, root)
+	overflow.setRefsCount(1)
+	overflow.setLevelMask(ordinaryLevelMask(overflow.rawRefs()))
+
+	if err := overflow.calculateHashesSafe(); !errors.Is(err, ErrCellDepthLimit) {
 		t.Fatalf("expected ErrCellDepthLimit, got %v", err)
 	}
 }

@@ -11,8 +11,9 @@ import (
 )
 
 type Slice struct {
-	cell     *Cell
-	observer Observer
+	cell      *Cell
+	observer  Observer
+	traceNode TraceNode
 
 	bitStart uint16
 	bitEnd   uint16
@@ -30,15 +31,22 @@ func (c *Slice) refCellAt(i int) *Cell {
 	return c.cell.visibleRef(int(c.refStart) + i)
 }
 
-func notifyCellLoad(observer Observer, ref *Cell) {
-	if observer == nil || ref == nil {
-		return
+func (c *Slice) loadRefCellObserved(advance bool) (*Cell, TraceNode, error) {
+	if c.refStart >= c.refEnd {
+		return nil, 0, ErrNoMoreRefs
 	}
-	if keyObserver, ok := observer.(HashKeyObserver); ok {
-		keyObserver.OnCellLoadKey(ref.HashKey())
-		return
+
+	ref := c.refCellAt(0)
+	var node TraceNode
+	if c.observer != nil && ref != nil {
+		node = c.observer.OnRef(c.traceNode, int(c.refStart))
+		c.observer.OnCellLoad(ref.HashKey())
 	}
-	observer.OnCellLoad(ref.Hash())
+
+	if advance {
+		c.refStart++
+	}
+	return ref, node, nil
 }
 
 func (c *Slice) MustLoadRef() *Slice {
@@ -50,39 +58,37 @@ func (c *Slice) MustLoadRef() *Slice {
 }
 
 func (c *Slice) LoadRef() (*Slice, error) {
-	ref, err := c.LoadRefCell()
+	ref, node, err := c.loadRefCellObserved(true)
 	if err != nil {
 		return nil, err
 	}
-	return ref.BeginParse().SetObserver(c.observer), nil
+	return ref.BeginParse().SetObserverNode(c.observer, node), nil
 }
 
 func (c *Slice) PreloadRef() (*Slice, error) {
-	ref, err := c.PreloadRefCell()
+	ref, node, err := c.loadRefCellObserved(false)
 	if err != nil {
 		return nil, err
 	}
-	return ref.BeginParse().SetObserver(c.observer), nil
+	return ref.BeginParse().SetObserverNode(c.observer, node), nil
 }
 
 func (c *Slice) LoadRefCell() (*Cell, error) {
-	if c.refStart >= c.refEnd {
-		return nil, ErrNoMoreRefs
-	}
-	ref := c.refCellAt(0)
-	c.refStart++
-	notifyCellLoad(c.observer, ref)
+	ref, _, err := c.loadRefCellObserved(true)
+	return ref, err
+}
 
-	return ref, nil
+func (c *Slice) LoadRefCellWithNode() (*Cell, TraceNode, error) {
+	return c.loadRefCellObserved(true)
 }
 
 func (c *Slice) PreloadRefCell() (*Cell, error) {
-	if c.refStart >= c.refEnd {
-		return nil, ErrNoMoreRefs
-	}
-	ref := c.refCellAt(0)
-	notifyCellLoad(c.observer, ref)
-	return ref, nil
+	ref, _, err := c.loadRefCellObserved(false)
+	return ref, err
+}
+
+func (c *Slice) PreloadRefCellWithNode() (*Cell, TraceNode, error) {
+	return c.loadRefCellObserved(false)
 }
 
 func (c *Slice) PeekRefCell() (*Cell, error) {
@@ -110,14 +116,12 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 		return nil, nil
 	}
 
-	if c.refStart >= c.refEnd {
-		return nil, ErrNoMoreRefs
+	ref, node, err := c.loadRefCellObserved(true)
+	if err != nil {
+		return nil, err
 	}
-	ref := c.refCellAt(0)
-	c.refStart++
-	notifyCellLoad(c.observer, ref)
 
-	return ref.BeginParse().SetObserver(c.observer), nil
+	return ref.BeginParse().SetObserverNode(c.observer, node), nil
 }
 
 func (c *Slice) RefsNum() int {
@@ -172,12 +176,13 @@ func (c *Slice) FetchSubslice(bits uint, refs int) (*Slice, error) {
 		return nil, ErrNotEnoughData(int(c.BitsLeft()), int(bits))
 	}
 	out := &Slice{
-		cell:     c.cell,
-		observer: c.observer,
-		bitStart: c.bitStart,
-		bitEnd:   c.bitStart + uint16(bits),
-		refStart: c.refStart,
-		refEnd:   c.refStart + uint8(refs),
+		cell:      c.cell,
+		observer:  c.observer,
+		traceNode: c.traceNode,
+		bitStart:  c.bitStart,
+		bitEnd:    c.bitStart + uint16(bits),
+		refStart:  c.refStart,
+		refEnd:    c.refStart + uint8(refs),
 	}
 	if err := c.AdvanceExt(bits, refs); err != nil {
 		return nil, err
@@ -196,12 +201,13 @@ func (c *Slice) PreloadSubslice(bits uint, refs int) (*Slice, error) {
 		return nil, ErrNotEnoughData(int(c.BitsLeft()), int(bits))
 	}
 	return &Slice{
-		cell:     c.cell,
-		observer: c.observer,
-		bitStart: c.bitStart,
-		bitEnd:   c.bitStart + uint16(bits),
-		refStart: c.refStart,
-		refEnd:   c.refStart + uint8(refs),
+		cell:      c.cell,
+		observer:  c.observer,
+		traceNode: c.traceNode,
+		bitStart:  c.bitStart,
+		bitEnd:    c.bitStart + uint16(bits),
+		refStart:  c.refStart,
+		refEnd:    c.refStart + uint8(refs),
 	}, nil
 }
 
@@ -639,6 +645,7 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 
 		return address.NewAddressExt(0, uint(ln), data), nil
 	case 2:
+		var anycast *address.Anycast
 		isAnycast, err := c.LoadBoolBit()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load anycast bit: %w", err)
@@ -656,9 +663,7 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to load prefix: %w", err)
 			}
-			_ = pfx
-
-			// TODO: save anycast
+			anycast = address.NewAnycast(uint(depth), pfx)
 		}
 
 		workchain, err := c.LoadUInt(8)
@@ -671,8 +676,9 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 			return nil, fmt.Errorf("failed to load addr data: %w", err)
 		}
 
-		return address.NewAddress(0, byte(workchain), data), nil
+		return address.NewAddress(0, byte(workchain), data).WithAnycast(anycast), nil
 	case 3:
+		var anycast *address.Anycast
 		isAnycast, err := c.LoadBoolBit()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load anycast bit: %w", err)
@@ -690,9 +696,7 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to load prefix: %w", err)
 			}
-			_ = pfx
-
-			// TODO: save anycast
+			anycast = address.NewAnycast(uint(depth), pfx)
 		}
 
 		ln, err := c.LoadUInt(9)
@@ -710,7 +714,7 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 			return nil, fmt.Errorf("failed to load addr data: %w", err)
 		}
 
-		return address.NewAddressVar(0, int32(workchain), uint(ln), data), nil
+		return address.NewAddressVar(0, int32(workchain), uint(ln), data).WithAnycast(anycast), nil
 	default:
 		return nil, errors.New("not supported type of address")
 	}
@@ -789,12 +793,13 @@ func (c *Slice) MustToCell() *Cell {
 
 func (c *Slice) Copy() *Slice {
 	return &Slice{
-		cell:     c.cell,
-		observer: c.observer,
-		bitStart: c.bitStart,
-		bitEnd:   c.bitEnd,
-		refStart: c.refStart,
-		refEnd:   c.refEnd,
+		cell:      c.cell,
+		observer:  c.observer,
+		traceNode: c.traceNode,
+		bitStart:  c.bitStart,
+		bitEnd:    c.bitEnd,
+		refStart:  c.refStart,
+		refEnd:    c.refEnd,
 	}
 }
 
@@ -856,12 +861,19 @@ func (c *Slice) String() string {
 }
 
 func (c *Slice) SetObserver(observer Observer) *Slice {
+	return c.SetObserverNode(observer, 0)
+}
+
+// SetObserverNode attaches an observer together with the current trace node context.
+func (c *Slice) SetObserverNode(observer Observer, node TraceNode) *Slice {
 	c.observer = observer
+	c.traceNode = node
 	return c
 }
 
 func (c *Slice) WithoutObserver() *Slice {
 	cp := c.Copy()
 	cp.observer = nil
+	cp.traceNode = 0
 	return cp
 }

@@ -328,37 +328,31 @@ func (d *AugmentedDictionary) LoadValueWithExtraByIntKey(key *big.Int) (*Slice, 
 }
 
 func (d *AugmentedDictionary) LoadValueWithExtra(key *Cell) (*Slice, error) {
-	res, _, err := d.LoadValueWithExtraAndProof(key, nil)
-	return res, err
+	return d.loadValueExtraSlice(key)
 }
 
-func (d *AugmentedDictionary) LoadValueWithExtraAndProof(key *Cell, skeleton *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
-	if key.BitsSize() != d.keySz {
-		return nil, nil, fmt.Errorf("incorrect key size")
+func (d *AugmentedDictionary) loadValueExtraSlice(key *Cell) (*Slice, error) {
+	if key == nil || key.BitsSize() != d.keySz {
+		return nil, fmt.Errorf("incorrect key size")
 	}
-	return d.findKey(d.root, key, skeleton)
+	return findKeyInDict(d.root, key, nil, 0, false)
 }
 
 func (d *AugmentedDictionary) LoadValue(key *Cell) (*Slice, error) {
-	res, _, err := d.LoadValueWithProof(key, nil)
-	return res, err
-}
-
-func (d *AugmentedDictionary) LoadValueWithProof(key *Cell, skeleton *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
-	valueExtra, proof, err := d.LoadValueWithExtraAndProof(key, skeleton)
+	valueExtra, err := d.loadValueExtraSlice(key)
 	if err != nil {
-		return nil, proof, err
+		return nil, err
 	}
 
 	value, _, err := d.decomposeValueExtra(valueExtra)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return value, proof, nil
+	return value, nil
 }
 
 func (d *AugmentedDictionary) LoadValueExtra(key *Cell) (*Slice, *Slice, error) {
-	valueExtra, err := d.LoadValueWithExtra(key)
+	valueExtra, err := d.loadValueExtraSlice(key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -367,30 +361,6 @@ func (d *AugmentedDictionary) LoadValueExtra(key *Cell) (*Slice, *Slice, error) 
 
 func (d *AugmentedDictionary) LoadValueExtraByIntKey(key *big.Int) (*Slice, *Slice, error) {
 	return d.LoadValueExtra(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
-}
-
-func (d *AugmentedDictionary) LoadValueRef(key *Cell) (*Cell, error) {
-	valueExtra, err := d.LoadValueWithExtra(key)
-	if err != nil {
-		return nil, err
-	}
-	return d.extractValueRef(valueExtra)
-}
-
-func (d *AugmentedDictionary) LoadValueRefExtra(key *Cell) (*Cell, *Slice, error) {
-	valueExtra, err := d.LoadValueWithExtra(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return d.decomposeValueRefExtra(valueExtra)
-}
-
-func (d *AugmentedDictionary) LoadValueRefByIntKey(key *big.Int) (*Cell, error) {
-	return d.LoadValueRef(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
-}
-
-func (d *AugmentedDictionary) LoadValueRefExtraByIntKey(key *big.Int) (*Cell, *Slice, error) {
-	return d.LoadValueRefExtra(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
 }
 
 func (d *AugmentedDictionary) GetWithExtra(key *Cell) *Cell {
@@ -417,10 +387,6 @@ func (d *AugmentedDictionary) Get(key *Cell) *Cell {
 		return nil
 	}
 	return c
-}
-
-func (d *AugmentedDictionary) GetByIntKey(key *big.Int) *Cell {
-	return d.Get(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
 }
 
 func (d *AugmentedDictionary) LoadValueWithExtraAndDelete(key *Cell) (*Slice, error) {
@@ -454,22 +420,6 @@ func (d *AugmentedDictionary) LoadValueExtraAndDelete(key *Cell) (*Slice, *Slice
 	return d.decomposeValueExtra(valueExtra)
 }
 
-func (d *AugmentedDictionary) LoadValueRefAndDelete(key *Cell) (*Cell, error) {
-	valueExtra, err := d.LoadValueWithExtraAndDelete(key)
-	if err != nil {
-		return nil, err
-	}
-	return d.extractValueRef(valueExtra)
-}
-
-func (d *AugmentedDictionary) LoadValueRefExtraAndDelete(key *Cell) (*Cell, *Slice, error) {
-	valueExtra, err := d.LoadValueWithExtraAndDelete(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return d.decomposeValueRefExtra(valueExtra)
-}
-
 func (d *AugmentedDictionary) Delete(key *Cell) error {
 	_, _, err := d.lookupDeleteWithExtra(key)
 	return err
@@ -485,19 +435,6 @@ func (d *AugmentedDictionary) SetWithMode(key, value *Cell, mode DictSetMode) (b
 		return false, fmt.Errorf("value is nil")
 	}
 	return d.SetBuilderWithMode(key, value.ToBuilder(), mode)
-}
-
-func (d *AugmentedDictionary) SetRef(key, value *Cell) error {
-	_, err := d.SetRefWithMode(key, value, DictSetModeSet)
-	return err
-}
-
-func (d *AugmentedDictionary) SetRefWithMode(key, value *Cell, mode DictSetMode) (bool, error) {
-	b, err := refValueBuilder(value)
-	if err != nil {
-		return false, err
-	}
-	return d.SetBuilderWithMode(key, b, mode)
 }
 
 func (d *AugmentedDictionary) SetBuilder(key *Cell, value *Builder) error {
@@ -530,10 +467,6 @@ func (d *AugmentedDictionary) SetBuilderWithMode(key *Cell, value *Builder, mode
 		return false, err
 	}
 	return true, nil
-}
-
-func (d *AugmentedDictionary) findKey(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
-	return findKeyInDict(branch, lookupKey, at)
 }
 
 func (d *AugmentedDictionary) ToCell() (*Cell, error) {
@@ -642,23 +575,6 @@ func (d *AugmentedDictionary) decomposeValueExtra(valueExtra *Slice) (*Slice, *S
 	return value, extraCell.BeginParse(), nil
 }
 
-func (d *AugmentedDictionary) decomposeValueRefExtra(valueExtra *Slice) (*Cell, *Slice, error) {
-	value, extra, err := d.decomposeValueExtra(valueExtra)
-	if err != nil {
-		return nil, nil, err
-	}
-	ref, err := loadSingleRefValue(value)
-	if err != nil {
-		return nil, nil, err
-	}
-	return ref, extra, nil
-}
-
-func (d *AugmentedDictionary) extractValueRef(valueExtra *Slice) (*Cell, error) {
-	ref, _, err := d.decomposeValueRefExtra(valueExtra)
-	return ref, err
-}
-
 func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, error) {
 	if d == nil {
 		return nil, false, fmt.Errorf("dict is nil")
@@ -681,10 +597,6 @@ func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, er
 		return nil, false, err
 	}
 	return removed, true, nil
-}
-
-func (d *AugmentedDictionary) setRoot(root *Cell) error {
-	return d.setRootWithExtra(root, nil)
 }
 
 func (d *AugmentedDictionary) setRootWithExtra(root, rootExtra *Cell) error {

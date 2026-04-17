@@ -721,25 +721,25 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 			return nil, fmt.Errorf("load BinTree err: %w", err)
 		}
 
-		for _, bk := range binTree.All() {
-			if skipPruned && bk.Value.GetType() != cell.OrdinaryCellType {
+		if err = binTree.Walk(func(_ *cell.Cell, value *cell.Cell) error {
+			if skipPruned && value.GetType() != cell.OrdinaryCellType {
 				// in case of split we have list with only needed shard,
 				// and pruned branch for others.
-				continue
+				return nil
 			}
 
-			loader := bk.Value.BeginParse()
+			loader := value.BeginParse()
 
 			ab, err := loader.LoadUInt(4)
 			if err != nil {
-				return nil, fmt.Errorf("load ShardDesc magic err: %w", err)
+				return fmt.Errorf("load ShardDesc magic err: %w", err)
 			}
 
 			switch ab {
 			case 0xa:
 				var shardDesc tlb.ShardDesc
 				if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
-					return nil, fmt.Errorf("load ShardDesc err: %w", err)
+					return fmt.Errorf("load ShardDesc err: %w", err)
 				}
 				shards = append(shards, &BlockIDExt{
 					Workchain: int32(workchain),
@@ -751,7 +751,7 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 			case 0xb:
 				var shardDesc tlb.ShardDescB
 				if err = tlb.LoadFromCell(&shardDesc, loader, true); err != nil {
-					return nil, fmt.Errorf("load ShardDescB err: %w", err)
+					return fmt.Errorf("load ShardDescB err: %w", err)
 				}
 				shards = append(shards, &BlockIDExt{
 					Workchain: int32(workchain),
@@ -761,8 +761,11 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 					FileHash:  shardDesc.FileHash,
 				})
 			default:
-				return nil, fmt.Errorf("wrong ShardDesc magic: %x", ab)
+				return fmt.Errorf("wrong ShardDesc magic: %x", ab)
 			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	}
 	return

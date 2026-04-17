@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -175,6 +176,8 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index []int) ([]*Cell, error) {
 	cells := make([]Cell, cellsNum)
 	refIndex := make([][]int, cellsNum)
+	storedHashes := make([][][]byte, cellsNum)
+	storedDepths := make([][]uint16, cellsNum)
 
 	if index != nil {
 		prevEnd := 0
@@ -232,9 +235,22 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 			if cellEnd-offset < hashesSize {
 				return nil, errors.New("failed to parse cell hashes, corrupted data")
 			}
-
-			offset += hashesSize
-			// TODO: check depth and hashes
+			storedHashes[i] = make([][]byte, 0, hashesNum)
+			for level := 0; level <= levelMask.GetLevel(); level++ {
+				if !levelMask.IsSignificant(level) {
+					continue
+				}
+				storedHashes[i] = append(storedHashes[i], append([]byte{}, data[offset:offset+hashSize]...))
+				offset += hashSize
+			}
+			storedDepths[i] = make([]uint16, 0, hashesNum)
+			for level := 0; level <= levelMask.GetLevel(); level++ {
+				if !levelMask.IsSignificant(level) {
+					continue
+				}
+				storedDepths[i] = append(storedDepths[i], binary.BigEndian.Uint16(data[offset:offset+depthSize]))
+				offset += depthSize
+			}
 		}
 
 		payload := data[offset : offset+sz]
@@ -266,23 +282,24 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 		}
 		cells[i].setRefsCount(refsNum)
 
-		bitsSz := uint(int(ln) * 4)
+		bitsSz := int(ln) * 4
 
 		// if not full byte
 		if int(ln)%2 != 0 {
 			// find last bit of byte which indicates the end and cut it and next
-			for y := uint(0); y < 8; y++ {
+			for y := 0; y < 8; y++ {
 				if (payload[len(payload)-1]>>y)&1 == 1 {
 					bitsSz += 3 - y
 					break
 				}
 			}
 		}
+		bodyBytes := (bitsSz + 7) / 8
 
 		cells[i].setSpecial(special)
 		cells[i].bitsSz = uint16(bitsSz)
 		cells[i].setLevelMask(levelMask)
-		cells[i].data = payload
+		cells[i].data = payload[:bodyBytes]
 
 		if index != nil && offset != cellEnd {
 			return nil, errors.New("invalid indexed cell boundary")
@@ -304,6 +321,9 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 		if err := cells[idx].calculateHashesSafe(); err != nil {
 			return nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
 		}
+		if err := validateStoredHashesDepths(&cells[idx], storedHashes[idx], storedDepths[idx]); err != nil {
+			return nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
+		}
 		if err := validateLoadedCell(&cells[idx]); err != nil {
 			return nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
 		}
@@ -314,6 +334,34 @@ func parseCells(rootsIndex []int, cellsNum, refSzBytes int, data []byte, index [
 	}
 
 	return roots, nil
+}
+
+func validateStoredHashesDepths(c *Cell, storedHashes [][]byte, storedDepths []uint16) error {
+	if len(storedHashes) == 0 && len(storedDepths) == 0 {
+		return nil
+	}
+
+	levelMask := c.LevelMask()
+	expected := levelMask.getHashesCount()
+	if len(storedHashes) != expected || len(storedDepths) != expected {
+		return errors.New("invalid serialized hashes/depth metadata")
+	}
+
+	idx := 0
+	for level := 0; level <= levelMask.GetLevel(); level++ {
+		if !levelMask.IsSignificant(level) {
+			continue
+		}
+		if !bytes.Equal(storedHashes[idx], c.Hash(level)) {
+			return fmt.Errorf("serialized hash mismatch at level %d", level)
+		}
+		if storedDepths[idx] != c.Depth(level) {
+			return fmt.Errorf("serialized depth mismatch at level %d", level)
+		}
+		idx++
+	}
+
+	return nil
 }
 
 func topologicalCellOrder(refIndex [][]int) ([]int, error) {

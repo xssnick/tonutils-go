@@ -141,12 +141,12 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 		if len(onlyParams) > 0 {
 			// we need it because lite server may add some unwanted keys
 			for _, param := range onlyParams {
-				res := stateExtra.ConfigParams.Config.Params.GetByIntKey(big.NewInt(int64(param)))
-				if res == nil {
+				res, err := stateExtra.ConfigParams.Config.Params.LoadValueByIntKey(big.NewInt(int64(param)))
+				if err != nil {
 					return nil, fmt.Errorf("config param %d not found", param)
 				}
 
-				v, err := res.BeginParse().LoadRef()
+				v, err := res.LoadRef()
 				if err != nil {
 					return nil, fmt.Errorf("failed to load config param %d, err: %w", param, err)
 				}

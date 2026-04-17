@@ -187,7 +187,7 @@ func mustConfigDictCell(t *testing.T, entries map[uint32]*cell.Cell) *cell.Cell 
 	t.Helper()
 	dict := cell.NewDict(32)
 	for key, value := range entries {
-		if _, err := dict.SetRefWithMode(mustUintKeyCell(t, uint64(key), 32), value, cell.DictSetModeSet); err != nil {
+		if _, err := dict.SetBuilderWithMode(mustUintKeyCell(t, uint64(key), 32), cell.BeginCell().MustStoreRef(value), cell.DictSetModeSet); err != nil {
 			t.Fatalf("failed to seed config entry %d: %v", key, err)
 		}
 	}

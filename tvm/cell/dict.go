@@ -12,6 +12,7 @@ type Dictionary struct {
 
 	root         *Cell
 	observer     Observer
+	traceNode    TraceNode
 	skipRootLoad bool
 }
 
@@ -23,13 +24,6 @@ type HashmapKV struct {
 type DictKV struct {
 	Key   *Slice
 	Value *Slice
-}
-
-func b2i(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
 }
 
 var ErrNoSuchKeyInDict = errors.New("no such key in dict")
@@ -60,7 +54,7 @@ func (c *Slice) ToDict(keySz uint) (*Dictionary, error) {
 	return (&Dictionary{
 		keySz: keySz,
 		root:  root,
-	}).SetObserver(c.observer), nil
+	}).SetObserverNode(c.observer, c.traceNode), nil
 }
 
 func (c *Slice) MustLoadDict(keySz uint) *Dictionary {
@@ -78,9 +72,9 @@ func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
 	}
 
 	if cl == nil {
-		return &Dictionary{
+		return (&Dictionary{
 			keySz: keySz,
-		}, nil
+		}).SetObserverNode(c.observer, c.traceNode), nil
 	}
 
 	return cl.ToDict(keySz)
@@ -95,34 +89,40 @@ func (d *Dictionary) Copy() *Dictionary {
 		keySz:        d.keySz,
 		root:         d.root,
 		observer:     d.observer,
+		traceNode:    d.traceNode,
 		skipRootLoad: d.skipRootLoad,
 	}
 }
 
 func (d *Dictionary) SetObserver(observer Observer) *Dictionary {
+	return d.SetObserverNode(observer, 0)
+}
+
+func (d *Dictionary) SetObserverNode(observer Observer, node TraceNode) *Dictionary {
 	d.observer = observer
-	d.skipRootLoad = false
+	d.traceNode = node
+	d.skipRootLoad = observer != nil && node != 0 && d.root != nil
 	return d
 }
 
 func (d *Dictionary) beginParse(c *Cell) *Slice {
 	if d != nil {
-		return d.beginParseNode(c)
+		return d.beginParseNode(c, 0)
 	}
 	return c.BeginParse()
 }
 
-func beginParseObserved(c *Cell, observer Observer, charge bool) *Slice {
+func beginParseObservedNode(c *Cell, observer Observer, node TraceNode, charge bool) *Slice {
 	if observer != nil {
 		if charge {
 			notifyCellLoad(observer, c)
 		}
-		return c.BeginParse().SetObserver(observer)
+		return c.BeginParse().SetObserverNode(observer, node)
 	}
 	return c.BeginParse()
 }
 
-func (d *Dictionary) beginParseNode(c *Cell) *Slice {
+func (d *Dictionary) beginParseNode(c *Cell, node TraceNode) *Slice {
 	if d == nil {
 		return c.BeginParse()
 	}
@@ -133,7 +133,7 @@ func (d *Dictionary) beginParseNode(c *Cell) *Slice {
 		charge = false
 	}
 
-	return beginParseObserved(c, d.observer, charge)
+	return beginParseObservedNode(c, d.observer, node, charge)
 }
 
 func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
@@ -167,20 +167,6 @@ func (d *Dictionary) Set(key, value *Cell) error {
 
 	_, err := d.SetWithMode(key, value, DictSetModeSet)
 	return err
-}
-
-func (d *Dictionary) SetRef(key, value *Cell) error {
-	_, err := d.SetRefWithMode(key, value, DictSetModeSet)
-	return err
-}
-
-func (d *Dictionary) SetRefWithMode(key, value *Cell, mode DictSetMode) (bool, error) {
-	b, err := refValueBuilder(value)
-	if err != nil {
-		return false, err
-	}
-
-	return d.SetBuilderWithMode(key, b, mode)
 }
 
 func (d *Dictionary) SetBuilder(key *Cell, value *Builder) error {
@@ -401,26 +387,9 @@ func (d *Dictionary) DeleteIntKey(key *big.Int) error {
 	return d.Delete(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
 }
 
-// Deprecated: use LoadValueByIntKey
-func (d *Dictionary) GetByIntKey(key *big.Int) *Cell {
-	return d.Get(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
-}
-
-// LoadValueByIntKey - same as LoadValue, but constructs cell key from int
+// LoadValueByIntKey is the same as LoadValue, but constructs the key cell from int.
 func (d *Dictionary) LoadValueByIntKey(key *big.Int) (*Slice, error) {
 	return d.LoadValue(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
-}
-
-func (d *Dictionary) LoadValueRefByIntKey(key *big.Int) (*Cell, error) {
-	return d.LoadValueRef(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
-}
-
-func (d *Dictionary) LoadValueAndDeleteByIntKey(key *big.Int) (*Slice, error) {
-	return d.LoadValueAndDelete(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
-}
-
-func (d *Dictionary) LoadValueRefAndDeleteByIntKey(key *big.Int) (*Cell, error) {
-	return d.LoadValueRefAndDelete(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
 }
 
 func (d *Dictionary) LoadMin() (*Cell, *Slice, error) {
@@ -431,14 +400,6 @@ func (d *Dictionary) LoadMax() (*Cell, *Slice, error) {
 	return d.LoadMinMax(true, false)
 }
 
-func (d *Dictionary) LoadMinRef() (*Cell, *Cell, error) {
-	return d.LoadMinMaxRef(false, false)
-}
-
-func (d *Dictionary) LoadMaxRef() (*Cell, *Cell, error) {
-	return d.LoadMinMaxRef(true, false)
-}
-
 func (d *Dictionary) LoadMinAndDelete() (*Cell, *Slice, error) {
 	return d.LoadMinMaxAndDelete(false, false)
 }
@@ -447,28 +408,17 @@ func (d *Dictionary) LoadMaxAndDelete() (*Cell, *Slice, error) {
 	return d.LoadMinMaxAndDelete(true, false)
 }
 
-func (d *Dictionary) LoadMinRefAndDelete() (*Cell, *Cell, error) {
-	return d.LoadMinMaxRefAndDelete(false, false)
-}
-
-func (d *Dictionary) LoadMaxRefAndDelete() (*Cell, *Cell, error) {
-	return d.LoadMinMaxRefAndDelete(true, false)
-}
-
 // LoadValue - searches key in the underline dict cell and returns its value
 //
 //	If key is not found ErrNoSuchKeyInDict will be returned
 func (d *Dictionary) LoadValue(key *Cell) (*Slice, error) {
-	res, _, err := d.LoadValueWithProof(key, nil)
-	return res, err
-}
-
-func (d *Dictionary) LoadValueRef(key *Cell) (*Cell, error) {
-	value, err := d.LoadValue(key)
-	if err != nil {
-		return nil, err
+	if key == nil || key.BitsSize() != d.keySz {
+		return nil, fmt.Errorf("incorrect key size")
 	}
-	return loadSingleRefValue(value)
+
+	skipInitialLoad := d.skipRootLoad
+	d.skipRootLoad = false
+	return findKeyInDict(d.root, key, d.observer, d.traceNode, skipInitialLoad)
 }
 
 func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice, error) {
@@ -478,6 +428,7 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 
 	key := BeginCell().SetObserver(d.observer)
 	branch := d.root
+	node := d.traceNode
 	remaining := d.keySz
 
 	for {
@@ -485,7 +436,7 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 			return nil, nil, fmt.Errorf("dict has special cells in tree structure")
 		}
 
-		loader := d.beginParse(branch)
+		loader := d.beginParseNode(branch, node)
 		labelLen, keyBuilder, err := loadLabel(remaining, loader, key)
 		if err != nil {
 			return nil, nil, err
@@ -506,25 +457,19 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 			return nil, nil, err
 		}
 
-		branch, err = branch.PeekRef(b2i(bit))
+		refIdx := 0
+		if bit {
+			refIdx = 1
+		}
+		if d.observer != nil {
+			node = d.observer.OnRef(node, refIdx)
+		}
+		branch, err = branch.PeekRef(refIdx)
 		if err != nil {
 			return nil, nil, err
 		}
 		remaining--
 	}
-}
-
-func (d *Dictionary) LoadMinMaxRef(fetchMax bool, invertFirst bool) (*Cell, *Cell, error) {
-	key, value, err := d.LoadMinMax(fetchMax, invertFirst)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	ref, err := loadSingleRefValue(value)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key, ref, nil
 }
 
 func (d *Dictionary) LoadMinMaxAndDelete(fetchMax bool, invertFirst bool) (*Cell, *Slice, error) {
@@ -538,19 +483,6 @@ func (d *Dictionary) LoadMinMaxAndDelete(fetchMax bool, invertFirst bool) (*Cell
 		return nil, nil, err
 	}
 	return key, value, nil
-}
-
-func (d *Dictionary) LoadMinMaxRefAndDelete(fetchMax bool, invertFirst bool) (*Cell, *Cell, error) {
-	key, _, err := d.LoadMinMax(fetchMax, invertFirst)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	ref, err := d.LoadValueRefAndDelete(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key, ref, nil
 }
 
 func (d *Dictionary) LoadValueAndSet(key, value *Cell) (*Slice, bool, error) {
@@ -594,28 +526,6 @@ func (d *Dictionary) LoadValueAndSetBuilderWithMode(key *Cell, value *Builder, m
 	return oldValue, changed, nil
 }
 
-func (d *Dictionary) LoadValueRefAndSetRef(key, value *Cell) (*Cell, bool, error) {
-	return d.LoadValueRefAndSetRefWithMode(key, value, DictSetModeSet)
-}
-
-func (d *Dictionary) LoadValueRefAndSetRefWithMode(key, value *Cell, mode DictSetMode) (*Cell, bool, error) {
-	builder, err := refValueBuilder(value)
-	if err != nil {
-		return nil, false, err
-	}
-
-	oldValue, changed, err := d.LoadValueAndSetBuilderWithMode(key, builder, mode)
-	if err != nil || oldValue == nil {
-		return nil, changed, err
-	}
-
-	ref, err := loadSingleRefValue(oldValue)
-	if err != nil {
-		return nil, false, err
-	}
-	return ref, changed, nil
-}
-
 func (d *Dictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 	if d == nil {
 		return nil, ErrNoSuchKeyInDict
@@ -634,25 +544,6 @@ func (d *Dictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 
 	d.root = newRoot
 	return removed, nil
-}
-
-func (d *Dictionary) LoadValueRefAndDelete(key *Cell) (*Cell, error) {
-	value, err := d.LoadValueAndDelete(key)
-	if err != nil {
-		return nil, err
-	}
-	return loadSingleRefValue(value)
-}
-
-// LoadValueWithProof - searches key in the underline dict cell, constructs proof path and returns leaf
-//
-//	If key is not found ErrNoSuchKeyInDict will be returned,
-//	and path with proof of non-existing key will be attached to skeleton (if passed)
-func (d *Dictionary) LoadValueWithProof(key *Cell, skeleton *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
-	if key.BitsSize() != d.keySz {
-		return nil, nil, fmt.Errorf("incorrect key size")
-	}
-	return findKeyInDictObserved(d.root, key, skeleton, d.observer, false)
 }
 
 // Deprecated: use LoadValue
@@ -732,64 +623,44 @@ func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder
 	}}, nil
 }
 
-func findKeyInDict(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
-	return findKeyInDictObserved(branch, lookupKey, at, nil, false)
-}
-
-func findKeyInDictObserved(branch *Cell, lookupKey *Cell, at *ProofSkeleton, observer Observer, skipInitialLoad bool) (*Slice, *ProofSkeleton, error) {
+func findKeyInDict(branch *Cell, lookupKey *Cell, observer Observer, observerNode TraceNode, skipInitialLoad bool) (*Slice, error) {
 	if branch == nil {
 		// empty dict
-		return nil, nil, ErrNoSuchKeyInDict
+		return nil, ErrNoSuchKeyInDict
 	}
 
-	var depth int
-	var sk, root *ProofSkeleton
-	if at != nil {
-		root = CreateProofSkeleton()
-		sk = root
-	}
 	lKey := lookupKey.BeginParse()
 
 	// until key size is not equals we go deeper
 	for {
-		branchSlice := beginParseObserved(branch, observer, !skipInitialLoad)
+		branchSlice := beginParseObservedNode(branch, observer, observerNode, !skipInitialLoad)
 		skipInitialLoad = false
 		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), branchSlice, lKey)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
 		if matched != sz {
-			if sk != nil {
-				at.Merge(root)
-			}
-			return nil, nil, ErrNoSuchKeyInDict
+			return nil, ErrNoSuchKeyInDict
 		}
 
 		if lKey.BitsLeft() == 0 {
-			if sk != nil {
-				if depth == 0 {
-					// key is at the dict root
-					return branchSlice, at, nil
-				}
-				at.Merge(root)
-			}
-			return branchSlice, sk, nil
+			return branchSlice, nil
 		}
 
 		idx, err := lKey.LoadUInt(1)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
-		depth++
+		refIdx := int(idx)
+		if observer != nil {
+			observerNode = observer.OnRef(observerNode, refIdx)
+		}
+
 		branch, err = branch.PeekRef(int(idx))
 		if err != nil {
-			return nil, nil, err
-		}
-
-		if sk != nil {
-			sk = sk.ProofRef(int(idx))
+			return nil, err
 		}
 	}
 }

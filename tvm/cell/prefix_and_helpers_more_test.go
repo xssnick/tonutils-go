@@ -11,15 +11,22 @@ type testCellObserver struct {
 	creates int
 }
 
-func (o *testCellObserver) OnCellLoad([]byte) { o.loads++ }
+func (o *testCellObserver) OnCellLoad(_ Hash) { o.loads++ }
 func (o *testCellObserver) OnCellCreate()     { o.creates++ }
+
+func (o *testCellObserver) OnRef(_ TraceNode, _ int) TraceNode {
+	return 0
+}
 
 type testHashObserver struct {
 	testCellObserver
 	keys int
 }
 
-func (o *testHashObserver) OnCellLoadKey([32]byte) { o.keys++ }
+func (o *testHashObserver) OnCellLoad(hash Hash) {
+	_ = hash
+	o.keys++
+}
 
 func TestPrefixDictionary_WrappersCompatibilityAndObservers(t *testing.T) {
 	var nilDict *PrefixDictionary
@@ -133,12 +140,15 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 		}
 	}
 
-	all := dict.All()
-	if len(all) != 3 {
-		t.Fatalf("unexpected compatibility All size: %d", len(all))
+	all, err := dict.LoadAll()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := mustUIntFromCell(t, all[0].Value, 8); got == 0 {
-		t.Fatal("compatibility All should expose value cells")
+	if len(all) != 3 {
+		t.Fatalf("unexpected LoadAll size: %d", len(all))
+	}
+	if got, err := all[0].Value.ToCell(); err != nil || mustUIntFromCell(t, got, 8) == 0 {
+		t.Fatal("LoadAll should expose value cells")
 	}
 
 	items, err := dict.Range(false, false)

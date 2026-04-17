@@ -14,7 +14,7 @@ func mustRefDictRoot(t *testing.T, keyBits uint, items map[uint64]*cell.Cell) *c
 	t.Helper()
 	dict := cell.NewDict(keyBits)
 	for key, value := range items {
-		if _, err := dict.SetRefWithMode(mustDictKeyCell(t, key, keyBits), value, cell.DictSetModeSet); err != nil {
+		if _, err := dict.SetBuilderWithMode(mustDictKeyCell(t, key, keyBits), cell.BeginCell().MustStoreRef(value), cell.DictSetModeSet); err != nil {
 			t.Fatalf("seed ref dict: %v", err)
 		}
 	}
@@ -153,7 +153,11 @@ func TestDictSetAdditionalBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pop addref root: %v", err)
 	}
-	gotRef, err := newRoot.AsDict(8).LoadValueRefByIntKey(big.NewInt(0x21))
+	gotRefValue, err := newRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x21))
+	if err != nil {
+		t.Fatalf("unexpected addref result: %v err=%v", nil, err)
+	}
+	gotRef, err := gotRefValue.LoadRefCell()
 	if err != nil || string(gotRef.Hash()) != string(refValue.Hash()) || !ok {
 		t.Fatalf("unexpected addref result: %v err=%v", gotRef, err)
 	}
@@ -250,7 +254,11 @@ func TestDictSetGetAdditionalBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pop setget-ref root: %v", err)
 	}
-	gotNewRef, err := newRoot.AsDict(8).LoadValueRefByIntKey(big.NewInt(0x12))
+	gotNewRefValue, err := newRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x12))
+	if err != nil {
+		t.Fatalf("unexpected setget-ref replace result")
+	}
+	gotNewRef, err := gotNewRefValue.LoadRefCell()
 	if err != nil || !ok || string(gotOldRef.Hash()) != string(oldRef.Hash()) || string(gotNewRef.Hash()) != string(newRef.Hash()) {
 		t.Fatalf("unexpected setget-ref replace result")
 	}
@@ -279,7 +287,11 @@ func TestDictSetGetAdditionalBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pop setget-add-ref root: %v", err)
 	}
-	gotNewRef, err = newRoot.AsDict(8).LoadValueRefByIntKey(big.NewInt(0x44))
+	gotNewRefValue, err = newRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x44))
+	if err != nil {
+		t.Fatalf("unexpected setget add ref result")
+	}
+	gotNewRef, err = gotNewRefValue.LoadRefCell()
 	if err != nil || !ok || string(gotNewRef.Hash()) != string(newRef.Hash()) || state.Stack.Len() != 0 {
 		t.Fatalf("unexpected setget add ref result")
 	}
@@ -835,7 +847,11 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pop setgetoptref new root: %v", err)
 	}
-	gotRef, err := newRoot.AsDict(8).LoadValueRefByIntKey(big.NewInt(0x11))
+	gotRefValue, err := newRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x11))
+	if err != nil {
+		t.Fatalf("unexpected setgetoptref replace result")
+	}
+	gotRef, err := gotRefValue.LoadRefCell()
 	if err != nil || string(oldRef.Hash()) != string(refValue.Hash()) || string(gotRef.Hash()) != string(newRef.Hash()) {
 		t.Fatalf("unexpected setgetoptref replace result")
 	}
@@ -1281,7 +1297,11 @@ func TestDictSetGetAndDeleteGetTailBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pop add-existing ref root: %v", err)
 	}
-	gotRef, err := newRoot.AsDict(8).LoadValueRefByIntKey(big.NewInt(0x12))
+	gotRefValue, err := newRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x12))
+	if err != nil {
+		t.Fatalf("expected add-existing ref to return old value and keep dict intact")
+	}
+	gotRef, err := gotRefValue.LoadRefCell()
 	if err != nil || ok || string(oldRef.Hash()) != string(refValue.Hash()) || string(gotRef.Hash()) != string(refValue.Hash()) {
 		t.Fatalf("expected add-existing ref to return old value and keep dict intact")
 	}

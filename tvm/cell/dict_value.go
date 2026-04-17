@@ -11,15 +11,3 @@ func loadSingleRefValue(value *Slice) (*Cell, error) {
 	}
 	return value.PeekRefCell()
 }
-
-func refValueBuilder(value *Cell) (*Builder, error) {
-	if value == nil {
-		return nil, fmt.Errorf("value ref is nil")
-	}
-
-	b := BeginCell()
-	if err := b.StoreRef(value); err != nil {
-		return nil, err
-	}
-	return b, nil
-}

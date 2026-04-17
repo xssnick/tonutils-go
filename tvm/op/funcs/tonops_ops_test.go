@@ -21,7 +21,7 @@ func makeConfigRootRefDict(t *testing.T, entries map[uint32]*cell.Cell) *cell.Ce
 	dict := cell.NewDict(32)
 	for idx, value := range entries {
 		key := cell.BeginCell().MustStoreUInt(uint64(idx), 32).EndCell()
-		if err := dict.SetRef(key, value); err != nil {
+		if err := dict.SetBuilder(key, cell.BeginCell().MustStoreRef(value)); err != nil {
 			t.Fatalf("failed to set config ref %d: %v", idx, err)
 		}
 	}

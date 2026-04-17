@@ -429,11 +429,16 @@ func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 }
 
 func createPrunedBranchFromCell(source *Cell, newLevel int) (*Cell, error) {
+	return createPrunedBranchFromCellAtDepth(source, newLevel, _DataCellMaxLevel)
+}
+
+func createPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*Cell, error) {
 	if source == nil {
 		return nil, fmt.Errorf("source cell is nil")
 	}
 
-	levelMask := source.getLevelMask().Apply(_DataCellMaxLevel)
+	virtLevel = max(0, min(virtLevel, _DataCellMaxLevel))
+	levelMask := source.getLevelMask().Apply(virtLevel)
 	level := levelMask.GetLevel()
 	if newLevel < level+1 {
 		return nil, fmt.Errorf("invalid new pruned level")

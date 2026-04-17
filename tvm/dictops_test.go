@@ -102,7 +102,7 @@ func TestDictOpsGetSetDeleteFamilies(t *testing.T) {
 	t.Run("DICTUGETREF", func(t *testing.T) {
 		dict := cell.NewDict(8)
 		ref := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
-		if _, err := dict.SetRefWithMode(mustKeyCell(t, 0xFE, 8), ref, cell.DictSetModeSet); err != nil {
+		if _, err := dict.SetBuilderWithMode(mustKeyCell(t, 0xFE, 8), cell.BeginCell().MustStoreRef(ref), cell.DictSetModeSet); err != nil {
 			t.Fatalf("failed to seed dict: %v", err)
 		}
 		stack, _, err := runRawCode(codeFromOpcodes(t, 0xF40F), big.NewInt(0xFE), dict.AsCell(), int64(8))
@@ -167,7 +167,7 @@ func TestDictOpsGetSetDeleteFamilies(t *testing.T) {
 	t.Run("DICTDELGETREF", func(t *testing.T) {
 		dict := cell.NewDict(8)
 		ref := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
-		if _, err := dict.SetRefWithMode(mustKeyCell(t, 0x10, 8), ref, cell.DictSetModeSet); err != nil {
+		if _, err := dict.SetBuilderWithMode(mustKeyCell(t, 0x10, 8), cell.BeginCell().MustStoreRef(ref), cell.DictSetModeSet); err != nil {
 			t.Fatalf("failed to seed dict: %v", err)
 		}
 		stack, _, err := runRawCode(codeFromOpcodes(t, 0xF463), mustSliceKey(t, 0x10, 8), dict.AsCell(), int64(8))
@@ -212,10 +212,10 @@ func TestDictOpsMinPrefixAndExecFamilies(t *testing.T) {
 		dict := cell.NewDict(8)
 		minRef := cell.BeginCell().MustStoreUInt(0x1111, 16).EndCell()
 		maxRef := cell.BeginCell().MustStoreUInt(0x2222, 16).EndCell()
-		if _, err := dict.SetRefWithMode(mustKeyCell(t, 0x01, 8), minRef, cell.DictSetModeSet); err != nil {
+		if _, err := dict.SetBuilderWithMode(mustKeyCell(t, 0x01, 8), cell.BeginCell().MustStoreRef(minRef), cell.DictSetModeSet); err != nil {
 			t.Fatalf("failed to seed min ref: %v", err)
 		}
-		if _, err := dict.SetRefWithMode(mustKeyCell(t, 0xFE, 8), maxRef, cell.DictSetModeSet); err != nil {
+		if _, err := dict.SetBuilderWithMode(mustKeyCell(t, 0xFE, 8), cell.BeginCell().MustStoreRef(maxRef), cell.DictSetModeSet); err != nil {
 			t.Fatalf("failed to seed max ref: %v", err)
 		}
 

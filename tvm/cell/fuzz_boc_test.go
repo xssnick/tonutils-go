@@ -43,7 +43,6 @@ func FuzzFromBOCMultiRoot(f *testing.F) {
 		if len(roots) == 0 {
 			t.Fatal("expected parsed boc to contain at least one root")
 		}
-
 		reboc := ToBOCWithOptions(roots, BOCOptions{
 			WithCRC32C:    true,
 			WithIndex:     true,

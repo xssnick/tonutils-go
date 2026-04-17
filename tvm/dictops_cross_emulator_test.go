@@ -29,7 +29,7 @@ func TestTVMCrossEmulatorDictOps(t *testing.T) {
 
 	refDict := cell.NewDict(8)
 	refValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
-	if _, err := refDict.SetRefWithMode(mustKeyCell(t, 0x10, 8), refValue, cell.DictSetModeSet); err != nil {
+	if _, err := refDict.SetBuilderWithMode(mustKeyCell(t, 0x10, 8), cell.BeginCell().MustStoreRef(refValue), cell.DictSetModeSet); err != nil {
 		t.Fatalf("failed to seed ref dict: %v", err)
 	}
 
@@ -204,10 +204,10 @@ func buildMinMaxRefDict(t *testing.T) *cell.Dictionary {
 	dict := cell.NewDict(8)
 	minRef := cell.BeginCell().MustStoreUInt(0x1111, 16).EndCell()
 	maxRef := cell.BeginCell().MustStoreUInt(0x2222, 16).EndCell()
-	if _, err := dict.SetRefWithMode(mustKeyCell(t, 0x01, 8), minRef, cell.DictSetModeSet); err != nil {
+	if _, err := dict.SetBuilderWithMode(mustKeyCell(t, 0x01, 8), cell.BeginCell().MustStoreRef(minRef), cell.DictSetModeSet); err != nil {
 		t.Fatalf("failed to seed min ref: %v", err)
 	}
-	if _, err := dict.SetRefWithMode(mustKeyCell(t, 0xFE, 8), maxRef, cell.DictSetModeSet); err != nil {
+	if _, err := dict.SetBuilderWithMode(mustKeyCell(t, 0xFE, 8), cell.BeginCell().MustStoreRef(maxRef), cell.DictSetModeSet); err != nil {
 		t.Fatalf("failed to seed max ref: %v", err)
 	}
 	return dict

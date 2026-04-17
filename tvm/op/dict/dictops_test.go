@@ -656,7 +656,7 @@ func TestAdvancedDictExecOps(t *testing.T) {
 
 	refDict := cell.NewDict(8)
 	refValue := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
-	if _, err := refDict.SetRefWithMode(mustDictKeyCell(t, 0x22, 8), refValue, cell.DictSetModeSet); err != nil {
+	if _, err := refDict.SetBuilderWithMode(mustDictKeyCell(t, 0x22, 8), cell.BeginCell().MustStoreRef(refValue), cell.DictSetModeSet); err != nil {
 		t.Fatalf("seed ref dict: %v", err)
 	}
 

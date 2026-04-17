@@ -6,10 +6,14 @@ type builderOpsObserver struct {
 	created int
 }
 
-func (o *builderOpsObserver) OnCellLoad(_ []byte) {}
+func (o *builderOpsObserver) OnCellLoad(_ Hash) {}
 
 func (o *builderOpsObserver) OnCellCreate() {
 	o.created++
+}
+
+func (o *builderOpsObserver) OnRef(_ TraceNode, _ int) TraceNode {
+	return 0
 }
 
 func TestBuilderOpsAndCellMeta(t *testing.T) {

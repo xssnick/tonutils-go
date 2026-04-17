@@ -28,6 +28,14 @@ func PUSHCONT(cont *cell.Cell) *OpPUSHCONT {
 	}
 }
 
+func PUSHREFCONT(cont *cell.Cell) *OpPUSHCONT {
+	return &OpPUSHCONT{
+		Prefixed: helpers.NewPrefixed(helpers.UIntPrefix(0x8A, 8)),
+		cont:     cont,
+		typ:      "REF",
+	}
+}
+
 func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 	prefix, err := code.LoadUInt(4)
 	if err != nil {
@@ -128,6 +136,9 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 func (op *OpPUSHCONT) Serialize() *cell.Builder {
 	var b *cell.Builder
 	switch {
+	case op.typ == "REF":
+		b = cell.BeginCell().
+			MustStoreUInt(0x8A, 8).MustStoreRef(op.cont)
 	case op.cont.RefsNum() == 0 && op.cont.BitsSize() <= 16*8:
 		op.typ = "SMALL"
 
@@ -160,10 +171,7 @@ func (op *OpPUSHCONT) Serialize() *cell.Builder {
 			b.MustStoreRef(codeSlice.MustLoadRef().MustToCell())
 		}
 	default:
-		op.typ = "REF"
-
-		b = cell.BeginCell().
-			MustStoreUInt(0x8A, 8).MustStoreRef(op.cont)
+		panic("PUSHCONT cannot encode continuation with more than 3 refs; use PUSHREFCONT")
 	}
 
 	return b
@@ -173,6 +181,9 @@ func (op *OpPUSHCONT) SerializeText() string {
 	str := "???"
 	if op.cont != nil {
 		str = op.cont.Dump()
+	}
+	if op.typ == "REF" {
+		return fmt.Sprintf("<%s> PUSHREFCONT", str)
 	}
 	return fmt.Sprintf("<%s> %s PUSHCONT", str, op.typ)
 }

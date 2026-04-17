@@ -7,14 +7,14 @@ import (
 
 type CellManager struct {
 	state      *State
-	loaded     map[[32]byte]struct{}
+	loaded     map[cell.Hash]struct{}
 	pendingErr error
 }
 
 func (m *CellManager) Init(state *State) {
 	m.state = state
 	if m.loaded == nil {
-		m.loaded = map[[32]byte]struct{}{}
+		m.loaded = map[cell.Hash]struct{}{}
 	}
 }
 
@@ -22,14 +22,7 @@ func (m *CellManager) PendingError() error {
 	return m.pendingErr
 }
 
-func (m *CellManager) OnCellLoad(hash []byte) {
-	if m.pendingErr != nil {
-		return
-	}
-	m.pendingErr = m.RegisterCellLoadHash(hash)
-}
-
-func (m *CellManager) OnCellLoadKey(hash [32]byte) {
+func (m *CellManager) OnCellLoad(hash cell.Hash) {
 	if m.pendingErr != nil {
 		return
 	}
@@ -43,6 +36,10 @@ func (m *CellManager) OnCellCreate() {
 	m.pendingErr = m.RegisterCellCreate()
 }
 
+func (m *CellManager) OnRef(_ cell.TraceNode, _ int) cell.TraceNode {
+	return 0
+}
+
 func (m *CellManager) RegisterCellLoad(cl *cell.Cell) error {
 	if cl == nil {
 		return nil
@@ -50,13 +47,7 @@ func (m *CellManager) RegisterCellLoad(cl *cell.Cell) error {
 	return m.RegisterCellLoadKey(cl.HashKey())
 }
 
-func (m *CellManager) RegisterCellLoadHash(hash []byte) error {
-	var key [32]byte
-	copy(key[:], hash)
-	return m.RegisterCellLoadKey(key)
-}
-
-func (m *CellManager) RegisterCellLoadKey(key [32]byte) error {
+func (m *CellManager) RegisterCellLoadKey(key cell.Hash) error {
 	_, ok := m.loaded[key]
 	if !ok {
 		m.loaded[key] = struct{}{}

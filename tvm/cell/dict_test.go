@@ -343,7 +343,7 @@ func TestDict_CornerSame(t *testing.T) {
 	mm.SetIntKey(big.NewInt(255), BeginCell().EndCell())
 	hh, _ := mm.AsCell().BeginParse().ToDict(64)
 
-	if hh.GetByIntKey(big.NewInt(255)) == nil {
+	if _, err := hh.LoadValueByIntKey(big.NewInt(255)); err != nil {
 		t.Fatal("invalid key")
 	}
 }
@@ -360,12 +360,13 @@ func TestDict_Delete(t *testing.T) {
 	hh, _ := mm.AsCell().BeginParse().ToDict(64)
 
 	kProof := BeginCell().MustStoreBigInt(big.NewInt(332), 64).EndCell()
-	sk := CreateProofSkeleton()
-	_, _, err := hh.LoadValueWithProof(kProof, sk)
+	trace := NewProofTrace()
+	hh.SetObserver(trace)
+	_, err := hh.LoadValue(kProof)
 	if !errors.Is(err, ErrNoSuchKeyInDict) {
 		t.Fatal("no such key")
 	}
-	proof, err := hh.AsCell().CreateProof(sk)
+	proof, err := hh.AsCell().CreateProof(trace.Skeleton())
 	if err != nil {
 		t.Fatal("failed to proof no key")
 	}
@@ -385,11 +386,11 @@ func TestDict_Delete(t *testing.T) {
 	hh.DeleteIntKey(big.NewInt(255))
 	hh2, _ := hh.AsCell().BeginParse().ToDict(64)
 
-	if hh2.GetByIntKey(big.NewInt(255)) != nil {
+	if _, err := hh2.LoadValueByIntKey(big.NewInt(255)); err == nil {
 		t.Fatal("invalid key")
 	}
 
-	if hh2.GetByIntKey(big.NewInt(777)) == nil {
+	if _, err := hh2.LoadValueByIntKey(big.NewInt(777)); err != nil {
 		t.Fatal("invalid key")
 	}
 }
@@ -524,12 +525,16 @@ func TestDictionary_SetModesAndRefBuilder(t *testing.T) {
 	}
 
 	refValue := BeginCell().MustStoreUInt(0xfeed, 16).EndCell()
-	changed, err = dict.SetRefWithMode(key2, refValue, DictSetModeSet)
+	changed, err = dict.SetBuilderWithMode(key2, BeginCell().MustStoreRef(refValue), DictSetModeSet)
 	if err != nil || !changed {
 		t.Fatalf("failed to set ref value: changed=%v err=%v", changed, err)
 	}
 
-	loadedRef, err := dict.LoadValueRef(key2)
+	loadedRefValue, err := dict.LoadValue(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedRef, err := loadSingleRefValue(loadedRefValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +543,15 @@ func TestDictionary_SetModesAndRefBuilder(t *testing.T) {
 	}
 
 	nextRefValue := BeginCell().MustStoreUInt(0xbeef, 16).EndCell()
-	previousRef, changed, err := dict.LoadValueRefAndSetRefWithMode(key2, nextRefValue, DictSetModeReplace)
+	previousRefValue, err := dict.LoadValue(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousRef, err := loadSingleRefValue(previousRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err = dict.SetBuilderWithMode(key2, BeginCell().MustStoreRef(nextRefValue), DictSetModeReplace)
 	if err != nil || !changed {
 		t.Fatalf("failed to replace ref value: changed=%v err=%v", changed, err)
 	}
@@ -566,7 +579,11 @@ func TestDictionary_SetModesAndRefBuilder(t *testing.T) {
 		t.Fatal("loaded builder value does not match stored builder")
 	}
 
-	if _, err = dict.LoadValueRef(key3); err == nil {
+	nonRefValue, err := dict.LoadValue(key3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = loadSingleRefValue(nonRefValue); err == nil {
 		t.Fatal("expected single-ref extraction to fail for non-ref value")
 	}
 
@@ -578,7 +595,11 @@ func TestDictionary_SetModesAndRefBuilder(t *testing.T) {
 		t.Fatalf("unexpected deleted value: %x", got)
 	}
 
-	removedRef, err := dict.LoadValueRefAndDelete(key2)
+	removedRefValue, err := dict.LoadValueAndDelete(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedRef, err := loadSingleRefValue(removedRefValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,14 +658,18 @@ func TestDictionary_MinMax(t *testing.T) {
 	refMin := BeginCell().MustStoreUInt(0x1111, 16).EndCell()
 	refMax := BeginCell().MustStoreUInt(0x2222, 16).EndCell()
 
-	if err := refDict.SetRef(BeginCell().MustStoreUInt(0x01, 8).EndCell(), refMin); err != nil {
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0x01, 8).EndCell(), BeginCell().MustStoreRef(refMin)); err != nil {
 		t.Fatal(err)
 	}
-	if err := refDict.SetRef(BeginCell().MustStoreUInt(0xfe, 8).EndCell(), refMax); err != nil {
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0xfe, 8).EndCell(), BeginCell().MustStoreRef(refMax)); err != nil {
 		t.Fatal(err)
 	}
 
-	key, ref, err := refDict.LoadMinRef()
+	key, refValue, err := refDict.LoadMinMax(false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := loadSingleRefValue(refValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,7 +691,11 @@ func TestDictionary_MinMax(t *testing.T) {
 		t.Fatalf("unexpected deleted max value: %x", got)
 	}
 
-	key, ref, err = refDict.LoadMaxRefAndDelete()
+	key, refValue, err = refDict.LoadMinMaxAndDelete(true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err = loadSingleRefValue(refValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,7 +728,7 @@ func TestDictionary_WrapperCoverage(t *testing.T) {
 	}
 
 	refValue := BeginCell().MustStoreUInt(0x1234, 16).EndCell()
-	if err := dict.SetRef(key2, refValue); err != nil {
+	if err := dict.SetBuilder(key2, BeginCell().MustStoreRef(refValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -719,7 +748,15 @@ func TestDictionary_WrapperCoverage(t *testing.T) {
 		t.Fatalf("unexpected previous builder value: %x", got)
 	}
 
-	prevRef, changed, err := dict.LoadValueRefAndSetRef(key2, BeginCell().MustStoreUInt(0x5678, 16).EndCell())
+	prevRefValue, err := dict.LoadValue(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevRef, err := loadSingleRefValue(prevRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err = dict.SetBuilderWithMode(key2, BeginCell().MustStoreRef(BeginCell().MustStoreUInt(0x5678, 16).EndCell()), DictSetModeSet)
 	if err != nil || !changed {
 		t.Fatalf("failed to swap ref value: changed=%v err=%v", changed, err)
 	}
@@ -727,7 +764,11 @@ func TestDictionary_WrapperCoverage(t *testing.T) {
 		t.Fatal("unexpected previous ref value")
 	}
 
-	loadedRef, err := dict.LoadValueRefByIntKey(big.NewInt(2))
+	loadedRefValue, err := dict.LoadValueByIntKey(big.NewInt(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedRef, err := loadSingleRefValue(loadedRefValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,7 +795,7 @@ func TestDictionary_WrapperCoverage(t *testing.T) {
 		t.Fatal("dict with values should not be empty")
 	}
 
-	deleted, err := dict.LoadValueAndDeleteByIntKey(big.NewInt(1))
+	deleted, err := dict.LoadValueAndDelete(BeginCell().MustStoreBigInt(big.NewInt(1), dict.GetKeySize()).EndCell())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +803,11 @@ func TestDictionary_WrapperCoverage(t *testing.T) {
 		t.Fatalf("unexpected deleted direct value: %x", got)
 	}
 
-	deletedRef, err := dict.LoadValueRefAndDeleteByIntKey(big.NewInt(2))
+	deletedRefValue, err := dict.LoadValueAndDelete(BeginCell().MustStoreBigInt(big.NewInt(2), dict.GetKeySize()).EndCell())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedRef, err := loadSingleRefValue(deletedRefValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,14 +878,18 @@ func TestDictionary_MinMaxWrappers(t *testing.T) {
 	refDict := NewDict(8)
 	refMin := BeginCell().MustStoreUInt(0x1111, 16).EndCell()
 	refMax := BeginCell().MustStoreUInt(0x2222, 16).EndCell()
-	if err := refDict.SetRef(BeginCell().MustStoreUInt(0x02, 8).EndCell(), refMin); err != nil {
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0x02, 8).EndCell(), BeginCell().MustStoreRef(refMin)); err != nil {
 		t.Fatal(err)
 	}
-	if err := refDict.SetRef(BeginCell().MustStoreUInt(0xFE, 8).EndCell(), refMax); err != nil {
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0xFE, 8).EndCell(), BeginCell().MustStoreRef(refMax)); err != nil {
 		t.Fatal(err)
 	}
 
-	maxRefKey, maxRef, err := refDict.LoadMaxRef()
+	maxRefKey, maxRefValue, err := refDict.LoadMinMax(true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxRef, err := loadSingleRefValue(maxRefValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,7 +900,11 @@ func TestDictionary_MinMaxWrappers(t *testing.T) {
 		t.Fatal("unexpected max ref value")
 	}
 
-	minRefKey, minRef, err := refDict.LoadMinRefAndDelete()
+	minRefKey, minRefValue, err := refDict.LoadMinMaxAndDelete(false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minRef, err := loadSingleRefValue(minRefValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -884,16 +937,17 @@ func TestDict_150KProof(t *testing.T) {
 	tm = time.Now()
 	proofs := make([]*Cell, sz/10)
 	for i := 0; i < sz/10; i++ {
-		sk := CreateProofSkeleton()
+		trace := NewProofTrace()
+		observed := dict.AsCell().AsDict(dict.GetKeySize()).SetObserver(trace)
 		for y := 0; y < 10; y++ {
-			_, valSk, err := dict.LoadValueWithProof(keys[i*10+y], sk)
+			val, err := observed.LoadValue(keys[i*10+y])
 			if err != nil {
 				t.Fatal(err.Error())
 			}
-			valSk.SetRecursive() // to leave full value in proof
+			trace.MarkRecursive(val) // to leave full value in proof
 		}
 
-		prf, err := dict.AsCell().CreateProof(sk)
+		prf, err := dict.AsCell().CreateProof(trace.Skeleton())
 		if err != nil {
 			t.Fatal(err.Error())
 		}
@@ -941,13 +995,14 @@ func TestDictionary_String(t *testing.T) {
 		}
 	}
 
-	sk := CreateProofSkeleton()
-	_, _, err := dict.LoadValueWithProof(BeginCell().MustStoreUInt(uint64(7), 32).EndCell(), sk)
+	trace := NewProofTrace()
+	observed := dict.AsCell().AsDict(dict.GetKeySize()).SetObserver(trace)
+	_, err := observed.LoadValue(BeginCell().MustStoreUInt(uint64(7), 32).EndCell())
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	prf, err := dict.AsCell().CreateProof(sk)
+	prf, err := dict.AsCell().CreateProof(trace.Skeleton())
 	if err != nil {
 		t.Fatal(err.Error())
 	}

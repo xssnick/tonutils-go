@@ -55,14 +55,14 @@ type storageStat struct {
 	cells uint64
 	bits  uint64
 	refs  uint64
-	seen  map[[32]byte]struct{}
+	seen  map[cell.Hash]struct{}
 	state *vm.State
 }
 
 func newStorageStat(limit uint64, state *vm.State) *storageStat {
 	return &storageStat{
 		limit: limit,
-		seen:  map[[32]byte]struct{}{},
+		seen:  map[cell.Hash]struct{}{},
 		state: state,
 	}
 }

@@ -79,7 +79,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	refValue := BeginCell().MustStoreUInt(0x3333, 16).EndCell()
-	if err = dict.SetRef(mustTestAugKey(t, 0x03), refValue); err != nil {
+	if err = dict.SetBuilder(mustTestAugKey(t, 0x03), BeginCell().MustStoreRef(refValue)); err != nil {
 		t.Fatal(err)
 	}
 	if err = dict.SetBuilder(mustTestAugKey(t, 0x04), BeginCell().MustStoreUInt(0x44, 8)); err != nil {
@@ -89,7 +89,17 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 	if got := mustUIntFromCell(t, dict.Get(mustTestAugKey(t, 0x01)), 8); got != 0x11 {
 		t.Fatalf("unexpected Get value: %x", got)
 	}
-	if got := mustUIntFromCell(t, dict.GetByIntKey(big.NewInt(2)), 8); got != 0x22 {
+	if got := mustUIntFromCell(t, func() *Cell {
+		val, err := dict.LoadValueByIntKey(big.NewInt(2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := val.ToCell()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}(), 8); got != 0x22 {
 		t.Fatalf("unexpected GetByIntKey value: %x", got)
 	}
 	if dict.GetWithExtra(mustTestAugKey(t, 0x01)) == nil {
@@ -130,7 +140,11 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		t.Fatalf("unexpected value extra by int key: %x", got)
 	}
 
-	ref, err := dict.LoadValueRefByIntKey(big.NewInt(3))
+	refValueSlice, err := dict.LoadValueByIntKey(big.NewInt(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := loadSingleRefValue(refValueSlice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +152,11 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		t.Fatal("unexpected ref loaded by int key")
 	}
 
-	ref, extra, err = dict.LoadValueRefExtraByIntKey(big.NewInt(3))
+	refValueSlice, extra, err = dict.LoadValueExtraByIntKey(big.NewInt(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err = loadSingleRefValue(refValueSlice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +345,7 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	refValue := BeginCell().MustStoreUInt(0xcafe, 16).EndCell()
-	if err = dict.SetRef(mustTestAugKey(t, 0x12), refValue); err != nil {
+	if err = dict.SetBuilder(mustTestAugKey(t, 0x12), BeginCell().MustStoreRef(refValue)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -342,7 +360,11 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 		t.Fatalf("unexpected deleted inline value: %x", got)
 	}
 
-	ref, err := dict.LoadValueRefAndDelete(mustTestAugKey(t, 0x12))
+	refValueSlice, err := dict.LoadValueAndDelete(mustTestAugKey(t, 0x12))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := loadSingleRefValue(refValueSlice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,10 +372,14 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 		t.Fatal("unexpected deleted ref value")
 	}
 
-	if err = dict.SetRef(mustTestAugKey(t, 0x12), refValue); err != nil {
+	if err = dict.SetBuilder(mustTestAugKey(t, 0x12), BeginCell().MustStoreRef(refValue)); err != nil {
 		t.Fatal(err)
 	}
-	ref, extra, err = dict.LoadValueRefExtraAndDelete(mustTestAugKey(t, 0x12))
+	refValueSlice, extra, err = dict.LoadValueExtraAndDelete(mustTestAugKey(t, 0x12))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err = loadSingleRefValue(refValueSlice)
 	if err != nil {
 		t.Fatal(err)
 	}

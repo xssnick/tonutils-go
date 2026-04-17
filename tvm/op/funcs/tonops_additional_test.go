@@ -22,7 +22,7 @@ func mustConfigRoot(t *testing.T, idx uint64, value *cell.Cell) *cell.Cell {
 
 	dict := cell.NewDict(32)
 	key := cell.BeginCell().MustStoreUInt(idx, 32).EndCell()
-	if err := dict.SetRef(key, value); err != nil {
+	if err := dict.SetBuilder(key, cell.BeginCell().MustStoreRef(value)); err != nil {
 		t.Fatalf("failed to build config dict: %v", err)
 	}
 	return dict.AsCell()

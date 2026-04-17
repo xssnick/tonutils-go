@@ -14,7 +14,7 @@ const (
 type cellMeta struct {
 	base *Cell
 
-	extraHashes *[3][32]byte
+	extraHashes *[3]Hash
 	extraDepths [3]uint16
 
 	effectiveLevel uint8
@@ -168,7 +168,7 @@ func (c *Cell) setHashAt(index int, sum []byte) {
 
 	meta := c.ensureMeta()
 	if meta.extraHashes == nil {
-		meta.extraHashes = new([3][32]byte)
+		meta.extraHashes = new([3]Hash)
 	}
 	copy(meta.extraHashes[index-1][:], sum)
 }

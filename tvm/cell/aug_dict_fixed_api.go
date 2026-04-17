@@ -234,7 +234,7 @@ func (d *AugmentedDictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) 
 		d.keySz -= prefix.BitsSize()
 	}
 	if changed {
-		if err = d.setRoot(root); err != nil {
+		if err = d.setRootWithExtra(root, nil); err != nil {
 			return false, err
 		}
 	}

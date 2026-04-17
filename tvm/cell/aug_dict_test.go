@@ -165,12 +165,16 @@ func TestAugmentedDictionary_SetRefAndBuilder(t *testing.T) {
 	key2 := mustTestAugKey(t, 0x81)
 	refValue := BeginCell().MustStoreUInt(0xfeed, 16).EndCell()
 
-	changed, err := dict.SetRefWithMode(key1, refValue, DictSetModeSet)
+	changed, err := dict.SetBuilderWithMode(key1, BeginCell().MustStoreRef(refValue), DictSetModeSet)
 	if err != nil || !changed {
 		t.Fatalf("failed to set ref value: changed=%v err=%v", changed, err)
 	}
 
-	ref, extra, err := dict.LoadValueRefExtra(key1)
+	refValueSlice, extra, err := dict.LoadValueExtra(key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := loadSingleRefValue(refValueSlice)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +199,7 @@ func TestAugmentedDictionary_SetRefAndBuilder(t *testing.T) {
 		t.Fatalf("unexpected combined root metric: %d", metric)
 	}
 
-	changed, err = dict.SetRefWithMode(key1, BeginCell().EndCell(), DictSetModeAdd)
+	changed, err = dict.SetBuilderWithMode(key1, BeginCell().MustStoreRef(BeginCell().EndCell()), DictSetModeAdd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +229,11 @@ func TestAugmentedDictionary_SetRefAndBuilder(t *testing.T) {
 		t.Fatalf("unexpected replaced value: %x", got)
 	}
 
-	if _, err = dict.LoadValueRef(key1); err == nil {
+	value, err = dict.LoadValue(key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = loadSingleRefValue(value); err == nil {
 		t.Fatal("expected single-ref extraction to fail for inline value")
 	}
 }
@@ -278,7 +286,7 @@ func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_LeafRefValueKeeps
 
 	key := mustTestAugKey(t, 0x44)
 	refValue := BeginCell().MustStoreUInt(0xbeef, 16).EndCell()
-	if _, err = dict.SetRefWithMode(key, refValue, DictSetModeSet); err != nil {
+	if _, err = dict.SetBuilderWithMode(key, BeginCell().MustStoreRef(refValue), DictSetModeSet); err != nil {
 		t.Fatal(err)
 	}
 
@@ -301,7 +309,11 @@ func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_LeafRefValueKeeps
 		t.Fatal(err)
 	}
 
-	value, extra, err := loaded.LoadValueRefExtra(key)
+	valueSlice, extra, err := loaded.LoadValueExtra(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := loadSingleRefValue(valueSlice)
 	if err != nil {
 		t.Fatal(err)
 	}

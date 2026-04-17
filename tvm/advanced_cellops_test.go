@@ -789,7 +789,7 @@ func mustLibraryCollection(t *testing.T, entries ...*cell.Cell) *cell.Cell {
 	dict := cell.NewDict(256)
 	for _, entry := range entries {
 		key := cell.BeginCell().MustStoreSlice(entry.Hash(), 256).EndCell()
-		if _, err := dict.SetRefWithMode(key, entry, cell.DictSetModeSet); err != nil {
+		if _, err := dict.SetBuilderWithMode(key, cell.BeginCell().MustStoreRef(entry), cell.DictSetModeSet); err != nil {
 			t.Fatalf("failed to add library entry: %v", err)
 		}
 	}

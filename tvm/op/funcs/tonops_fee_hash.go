@@ -17,8 +17,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-const hashExtEntryGasPrice = int64(1)
-
 type tonGasPrices struct {
 	FlatGasLimit    uint64
 	FlatGasPrice    uint64
@@ -756,7 +754,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 					return bitsErr
 				}
 				buf = appendBits(buf, &totalBits, data, bits)
-				gasTotal := int64(i+1)*hashExtEntryGasPrice + int64(totalBits/8)/hasher.BytesPerGasUnit()
+				gasTotal := int64(i+1)*vm.HashExtEntryGasPrice + int64(totalBits/8)/hasher.BytesPerGasUnit()
 				if err = state.ConsumeGas(gasTotal - gasConsumed); err != nil {
 					return err
 				}

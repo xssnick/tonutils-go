@@ -45,7 +45,7 @@ func (o BOCOptions) mode() int {
 	return mode
 }
 
-type cellHashKey [hashSize]byte
+type cellHashKey = Hash
 
 func makeCellHashKey(cell *Cell) cellHashKey {
 	var key cellHashKey
