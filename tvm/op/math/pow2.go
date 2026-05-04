@@ -14,7 +14,7 @@ func init() {
 func POW2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntRange(0, 1023)
+			y, err := popIntRange(state, 0, 1023)
 			if err != nil {
 				return err
 			}

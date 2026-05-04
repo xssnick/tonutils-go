@@ -162,17 +162,18 @@ func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
 	if err != nil {
 		return err
 	}
-	var root *cell.Slice
-	if hasRoot {
-		rootCell, err := code.PeekRefCell()
-		if err != nil {
-			return err
-		}
-		if err = code.AdvanceExt(0, 1); err != nil {
-			return err
-		}
-		root = rootCell.BeginParse()
+	if !hasRoot {
+		return vm.ErrCorruptedOpcode
 	}
+	var root *cell.Slice
+	rootCell, err := code.PeekRefCell()
+	if err != nil {
+		return err
+	}
+	if err = code.AdvanceExt(0, 1); err != nil {
+		return err
+	}
+	root = rootCell.BeginParse()
 	bits, err := code.LoadUInt(10)
 	if err != nil {
 		return err
@@ -187,6 +188,9 @@ func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
 }
 
 func (op *OpPFXDICTSWITCH) Serialize() *cell.Builder {
+	if op.root == nil {
+		panic("PFXDICTSWITCH requires dictionary ref")
+	}
 	return cell.BeginCell().
 		MustStoreSlice([]byte{0xF4, 0xAC}, 13).
 		MustStoreMaybeRef(op.root).
@@ -496,7 +500,7 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 			if err != nil {
 				return err
 			}
-			key, _, err := popDictKey(state, keyBits, variant.kind, true)
+			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
@@ -508,6 +512,9 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 				if err != nil {
 					return err
 				}
+				if keyErr != nil {
+					return keyErr
+				}
 				changed, err = setDictRefValueWithMode(dict, key, value, mode)
 				if err != nil {
 					return mapDictError(err)
@@ -516,6 +523,9 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 				value, err := state.Stack.PopSlice()
 				if err != nil {
 					return err
+				}
+				if keyErr != nil {
+					return keyErr
 				}
 				changed, err = dict.SetBuilderWithMode(key, value.ToBuilder(), mode)
 				if err != nil {
@@ -544,13 +554,16 @@ func execDictSetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*vm.
 			if err != nil {
 				return err
 			}
-			key, _, err := popDictKey(state, keyBits, variant.kind, true)
+			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
 			value, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
+			}
+			if keyErr != nil {
+				return keyErr
 			}
 
 			dict := newObservedDict(root, keyBits, state)
@@ -579,7 +592,7 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 			if err != nil {
 				return err
 			}
-			key, _, err := popDictKey(state, keyBits, variant.kind, true)
+			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
@@ -591,6 +604,9 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 				value, err := state.Stack.PopCell()
 				if err != nil {
 					return err
+				}
+				if keyErr != nil {
+					return keyErr
 				}
 				oldValue, err := loadDictRefValue(shadow, key)
 				if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
@@ -608,6 +624,9 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 			value, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
+			}
+			if keyErr != nil {
+				return keyErr
 			}
 			oldValue, err := shadow.LoadValue(key)
 			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
@@ -631,13 +650,16 @@ func execDictSetGetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*
 			if err != nil {
 				return err
 			}
-			key, _, err := popDictKey(state, keyBits, variant.kind, true)
+			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
 			value, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
+			}
+			if keyErr != nil {
+				return keyErr
 			}
 
 			shadow := newPlainDict(root, keyBits)
@@ -825,13 +847,16 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		key, _, err := popDictKey(state, keyBits, variant.kind, true)
+		key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
 		if err != nil {
 			return err
 		}
 		newValue, err := state.Stack.PopMaybeCell()
 		if err != nil {
 			return err
+		}
+		if keyErr != nil {
+			return keyErr
 		}
 
 		dict := newObservedDict(root, keyBits, state)
@@ -1350,6 +1375,38 @@ func popDictKey(state *vm.State, bits uint, kind dictKeyKind, strict bool) (*cel
 	}
 }
 
+func popDictSetKey(state *vm.State, bits uint, kind dictKeyKind) (*cell.Cell, error, error) {
+	switch kind {
+	case dictKeySlice:
+		key, err := state.Stack.PopSlice()
+		if err != nil {
+			return nil, nil, err
+		}
+		cellKey, err := sliceKeyCell(key, bits)
+		return cellKey, err, nil
+	case dictKeySignedInt:
+		val, err := state.Stack.PopInt()
+		if err != nil {
+			return nil, nil, err
+		}
+		key, ok := encodeDictIntKey(val, bits, true)
+		if !ok {
+			return nil, nil, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
+		}
+		return key, nil, nil
+	default:
+		val, err := state.Stack.PopInt()
+		if err != nil {
+			return nil, nil, err
+		}
+		key, ok := encodeDictIntKey(val, bits, false)
+		if !ok {
+			return nil, nil, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
+		}
+		return key, nil, nil
+	}
+}
+
 func sliceKeyCell(sl *cell.Slice, bits uint) (*cell.Cell, error) {
 	if sl.BitsLeft() < bits {
 		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key")
@@ -1412,6 +1469,9 @@ func encodeDictIntKey(value *big.Int, bits uint, signed bool) (*cell.Cell, bool)
 }
 
 func encodeDictIntBits(value *big.Int, bits uint, signed bool) ([]byte, bool) {
+	if value == nil {
+		return nil, false
+	}
 	if bits == 0 {
 		return []byte{}, value.Sign() == 0
 	}

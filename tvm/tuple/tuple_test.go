@@ -34,7 +34,7 @@ func TestTupleBindingHelpers(t *testing.T) {
 		t.Fatal("tuple should keep assigned binding id")
 	}
 
-	tup := NewTuple("a")
+	tup := NewTupleValue("a")
 	if tup.HasBindingID(id) {
 		t.Fatal("fresh tuple should not have binding id")
 	}
@@ -60,7 +60,7 @@ func TestTupleIndexClonesMutableLeaves(t *testing.T) {
 	sliceVal := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
 	builderVal := cell.BeginCell().MustStoreUInt(0xBB, 8)
 
-	tup := NewTuple(intVal, sliceVal, builderVal)
+	tup := NewTupleValue(intVal, sliceVal, builderVal)
 
 	gotIntAny, err := tup.Index(0)
 	if err != nil {

@@ -3,7 +3,6 @@ package cell
 import (
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"math/bits"
 
@@ -21,31 +20,66 @@ type Slice struct {
 	refEnd   uint8
 }
 
-func (c *Slice) refCellAt(i int) *Cell {
-	if c == nil || c.cell == nil {
-		return nil
+func (c *Slice) refCellAt(i int) (*Cell, error) {
+	refView := newCellRefView(c.cell)
+	return refView.resolvedRef(int(c.refStart) + i)
+}
+
+func (c *Slice) boundaryRefCellAt(i int) *Cell {
+	refView := newCellRefView(c.cell)
+	ref, _ := refView.boundaryRef(int(c.refStart) + i)
+	return ref
+}
+
+func (c *Slice) peekRefCellAt(i int) (*Cell, error) {
+	if i < 0 {
+		return nil, ErrNegative
 	}
-	if i < 0 || i >= c.RefsNum() {
-		return nil
+	if i >= c.RefsNum() {
+		return nil, ErrNoMoreRefs
 	}
-	return c.cell.visibleRef(int(c.refStart) + i)
+
+	return c.refCellAt(i)
+}
+
+func (c *Slice) loadRefCellAtObserved(i int) (*Cell, TraceNode, error) {
+	ref, err := c.peekRefCellAt(i)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var node TraceNode
+	if c.observer != nil {
+		node = c.observer.OnRef(c.traceNode, int(c.refStart)+i)
+	}
+
+	return ref, node, nil
 }
 
 func (c *Slice) loadRefCellObserved(advance bool) (*Cell, TraceNode, error) {
-	if c.refStart >= c.refEnd {
-		return nil, 0, ErrNoMoreRefs
-	}
-
-	ref := c.refCellAt(0)
-	var node TraceNode
-	if c.observer != nil && ref != nil {
-		node = c.observer.OnRef(c.traceNode, int(c.refStart))
-		c.observer.OnCellLoad(ref.HashKey())
+	ref, node, err := c.loadRefCellAtObserved(0)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	if advance {
 		c.refStart++
 	}
+	return ref, node, nil
+}
+
+func (c *Slice) loadBoundaryRefCellWithNode() (*Cell, TraceNode, error) {
+	if c.RefsNum() < 1 {
+		return nil, 0, ErrNoMoreRefs
+	}
+
+	ref := c.boundaryRefCellAt(0)
+	var node TraceNode
+	if c.observer != nil {
+		node = c.observer.OnRef(c.traceNode, int(c.refStart))
+	}
+
+	c.refStart++
 	return ref, node, nil
 }
 
@@ -62,7 +96,7 @@ func (c *Slice) LoadRef() (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ref.BeginParse().SetObserverNode(c.observer, node), nil
+	return beginParseObservedNode(ref, c.observer, node), nil
 }
 
 func (c *Slice) PreloadRef() (*Slice, error) {
@@ -70,7 +104,7 @@ func (c *Slice) PreloadRef() (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ref.BeginParse().SetObserverNode(c.observer, node), nil
+	return beginParseObservedNode(ref, c.observer, node), nil
 }
 
 func (c *Slice) LoadRefCell() (*Cell, error) {
@@ -92,10 +126,7 @@ func (c *Slice) PreloadRefCellWithNode() (*Cell, TraceNode, error) {
 }
 
 func (c *Slice) PeekRefCell() (*Cell, error) {
-	if c.refStart >= c.refEnd {
-		return nil, ErrNoMoreRefs
-	}
-	return c.refCellAt(0), nil
+	return c.peekRefCellAt(0)
 }
 
 func (c *Slice) MustLoadMaybeRef() *Slice {
@@ -121,7 +152,7 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 		return nil, err
 	}
 
-	return ref.BeginParse().SetObserverNode(c.observer, node), nil
+	return beginParseObservedNode(ref, c.observer, node), nil
 }
 
 func (c *Slice) RefsNum() int {
@@ -129,8 +160,9 @@ func (c *Slice) RefsNum() int {
 }
 
 func (c *Slice) BitAt(offset uint) (uint8, error) {
-	if offset >= c.BitsLeft() {
-		return 0, ErrNotEnoughData(int(c.BitsLeft()), int(offset+1))
+	left := c.BitsLeft()
+	if offset >= left {
+		return 0, ErrNotEnoughData(int(left), int(offset+1))
 	}
 
 	bitPos := uint(c.bitStart) + offset
@@ -140,11 +172,9 @@ func (c *Slice) BitAt(offset uint) (uint8, error) {
 }
 
 func (c *Slice) Advance(bits uint) error {
-	if c.BitsLeft() < bits {
-		return ErrNotEnoughData(int(c.BitsLeft()), int(bits))
-	}
-	if bits == 0 {
-		return nil
+	left := c.BitsLeft()
+	if left < bits {
+		return ErrNotEnoughData(int(left), int(bits))
 	}
 
 	c.bitStart += uint16(bits)
@@ -152,28 +182,28 @@ func (c *Slice) Advance(bits uint) error {
 }
 
 func (c *Slice) AdvanceExt(bits uint, refs int) error {
-	if refs < 0 {
+	if refs < 0 || c.RefsNum() < refs {
 		return ErrNoMoreRefs
 	}
-	if c.RefsNum() < refs {
-		return ErrNoMoreRefs
+
+	left := c.BitsLeft()
+	if left < bits {
+		return ErrNotEnoughData(int(left), int(bits))
 	}
-	if err := c.Advance(bits); err != nil {
-		return err
-	}
+
+	c.bitStart += uint16(bits)
 	c.refStart += uint8(refs)
 	return nil
 }
 
 func (c *Slice) FetchSubslice(bits uint, refs int) (*Slice, error) {
-	if refs < 0 {
+	if refs < 0 || c.RefsNum() < refs {
 		return nil, ErrNoMoreRefs
 	}
-	if c.RefsNum() < refs {
-		return nil, ErrNoMoreRefs
-	}
-	if c.BitsLeft() < bits {
-		return nil, ErrNotEnoughData(int(c.BitsLeft()), int(bits))
+
+	left := c.BitsLeft()
+	if left < bits {
+		return nil, ErrNotEnoughData(int(left), int(bits))
 	}
 	out := &Slice{
 		cell:      c.cell,
@@ -184,21 +214,19 @@ func (c *Slice) FetchSubslice(bits uint, refs int) (*Slice, error) {
 		refStart:  c.refStart,
 		refEnd:    c.refStart + uint8(refs),
 	}
-	if err := c.AdvanceExt(bits, refs); err != nil {
-		return nil, err
-	}
+	c.bitStart += uint16(bits)
+	c.refStart += uint8(refs)
 	return out, nil
 }
 
 func (c *Slice) PreloadSubslice(bits uint, refs int) (*Slice, error) {
-	if refs < 0 {
+	if refs < 0 || c.RefsNum() < refs {
 		return nil, ErrNoMoreRefs
 	}
-	if c.RefsNum() < refs {
-		return nil, ErrNoMoreRefs
-	}
-	if c.BitsLeft() < bits {
-		return nil, ErrNotEnoughData(int(c.BitsLeft()), int(bits))
+
+	left := c.BitsLeft()
+	if left < bits {
+		return nil, ErrNotEnoughData(int(left), int(bits))
 	}
 	return &Slice{
 		cell:      c.cell,
@@ -220,8 +248,26 @@ func (c *Slice) MustLoadCoins() uint64 {
 }
 
 func (c *Slice) LoadCoins() (uint64, error) {
-	cp := c.Copy()
-	value, err := cp.LoadBigCoins()
+	cp := *c
+	ln, err := cp.LoadUInt(4)
+	if err != nil {
+		return 0, err
+	}
+	if ln >= 16 {
+		return 0, ErrTooBigValue
+	}
+
+	if ln <= 8 {
+		value, err := cp.LoadUInt(uint(ln * 8))
+		if err != nil {
+			return 0, err
+		}
+		c.bitStart = cp.bitStart
+		c.refStart = cp.refStart
+		return value, nil
+	}
+
+	value, err := cp.LoadBigUInt(uint(ln * 8))
 	if err != nil {
 		return 0, err
 	}
@@ -330,11 +376,14 @@ func (c *Slice) MustLoadBoolBit() bool {
 }
 
 func (c *Slice) LoadBoolBit() (bool, error) {
-	res, err := c.LoadUInt(1)
-	if err != nil {
-		return false, err
+	if c.bitStart >= c.bitEnd {
+		return false, ErrNotEnoughData(0, 1)
 	}
-	return res == 1, nil
+
+	bitPos := c.bitStart
+	bit := (c.cell.data[bitPos/8] >> (7 - (bitPos % 8))) & 1
+	c.bitStart++
+	return bit == 1, nil
 }
 
 func (c *Slice) MustLoadBigUInt(sz uint) *big.Int {
@@ -354,40 +403,56 @@ func (c *Slice) MustPreloadBigUInt(sz uint) *big.Int {
 }
 
 func (c *Slice) loadUintFast(sz uint, preload bool) (uint64, error) {
-	if c.BitsLeft() < sz {
-		return 0, ErrNotEnoughData(int(c.BitsLeft()), int(sz))
+	left := c.BitsLeft()
+	if left < sz {
+		return 0, ErrNotEnoughData(int(left), int(sz))
 	}
 
 	if sz == 0 {
 		return 0, nil
 	}
 
-	var value uint64
 	startBit := uint(c.bitStart)
-	data := c.cell.data[startBit/8:]
-	startBitOffset := startBit % 8
+	if sz == 1 {
+		value := uint64((c.cell.data[startBit/8] >> (7 - (startBit % 8))) & 1)
+		if !preload {
+			c.bitStart++
+		}
+		return value, nil
+	}
 
+	startBitOffset := startBit % 8
+	byteStart := int(startBit / 8)
+	bytesNeeded := int((startBitOffset + sz + 7) / 8)
+	data := c.cell.data[byteStart : byteStart+bytesNeeded]
+
+	var value uint64
 	if startBitOffset == 0 && sz%8 == 0 {
-		for _, b := range data[:sz/8] {
+		for _, b := range data {
 			value = (value << 8) | uint64(b)
 		}
-
 		if !preload {
 			c.bitStart += uint16(sz)
 		}
 		return value, nil
 	}
 
-	bitOffset := startBitOffset
-
-	for i := uint(0); i < sz; i++ {
-		value <<= 1
-		value |= uint64((data[0] >> (7 - bitOffset)) & 1)
-
-		bitOffset++
-		if bitOffset == 8 {
-			bitOffset = 0
-			data = data[1:]
+	if bytesNeeded <= 8 {
+		for _, b := range data {
+			value = (value << 8) | uint64(b)
+		}
+		value >>= uint(bytesNeeded*8) - startBitOffset - sz
+		if sz < 64 {
+			value &= (uint64(1) << sz) - 1
+		}
+	} else {
+		for _, b := range data[:8] {
+			value = (value << 8) | uint64(b)
+		}
+		value <<= startBitOffset
+		value |= uint64(data[8] >> (8 - startBitOffset))
+		if sz < 64 {
+			value >>= 64 - sz
 		}
 	}
 
@@ -539,8 +604,38 @@ func (c *Slice) LoadVarUInt(sz uint) (*big.Int, error) {
 	return value, nil
 }
 
+func (c *Slice) LoadVarInt(sz uint) (*big.Int, error) {
+	if sz == 0 {
+		return nil, ErrInvalidSize
+	}
+
+	lnBits := uint(bits.Len64(uint64(sz - 1)))
+	ln, err := c.LoadUInt(lnBits)
+	if err != nil {
+		return nil, err
+	}
+	if ln >= uint64(sz) {
+		return nil, ErrTooBigValue
+	}
+
+	value, err := c.LoadBigInt(uint(ln * 8))
+	if err != nil {
+		return nil, err
+	}
+
+	return value, nil
+}
+
 func (c *Slice) MustLoadVarUInt(sz uint) *big.Int {
 	s, err := c.LoadVarUInt(sz)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func (c *Slice) MustLoadVarInt(sz uint) *big.Int {
+	s, err := c.LoadVarInt(sz)
 	if err != nil {
 		panic(err)
 	}
@@ -572,8 +667,9 @@ func (c *Slice) PreloadSlice(sz uint) ([]byte, error) {
 }
 
 func (c *Slice) loadSlice(sz uint, preload bool) ([]byte, error) {
-	if c.BitsLeft() < sz {
-		return nil, ErrNotEnoughData(int(c.BitsLeft()), int(sz))
+	left := c.BitsLeft()
+	if left < sz {
+		return nil, ErrNotEnoughData(int(left), int(sz))
 	}
 
 	if sz == 0 {
@@ -652,11 +748,12 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 		}
 
 		if isAnycast {
-			depthLen := uint(math.Ceil(math.Log2(30)))
-
-			depth, err := c.LoadUInt(depthLen)
+			depth, err := c.LoadUInt(5)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load depth: %w", err)
+			}
+			if depth == 0 || depth > 30 {
+				return nil, fmt.Errorf("invalid anycast depth: %d", depth)
 			}
 
 			pfx, err := c.LoadSlice(uint(depth))
@@ -685,11 +782,12 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 		}
 
 		if isAnycast {
-			depthLen := uint(math.Ceil(math.Log2(30)))
-
-			depth, err := c.LoadUInt(depthLen)
+			depth, err := c.LoadUInt(5)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load depth: %w", err)
+			}
+			if depth == 0 || depth > 30 {
+				return nil, fmt.Errorf("invalid anycast depth: %d", depth)
 			}
 
 			pfx, err := c.LoadSlice(uint(depth))
@@ -770,7 +868,7 @@ func (c *Slice) LoadBinarySnake() ([]byte, error) {
 }
 
 func (c *Slice) IsSpecial() bool {
-	return c.cell != nil && c.cell.isSpecial()
+	return c.cell.IsSpecial()
 }
 
 func (c *Slice) BitsLeft() uint {
@@ -803,6 +901,18 @@ func (c *Slice) Copy() *Slice {
 	}
 }
 
+func (c *Slice) BaseCell() *Cell {
+	return c.cell
+}
+
+func (c *Slice) BitRange() (start, end uint) {
+	return uint(c.bitStart), uint(c.bitEnd)
+}
+
+func (c *Slice) RefRange() (start, end int) {
+	return int(c.refStart), int(c.refEnd)
+}
+
 func (c *Slice) ToBuilder() *Builder {
 	left := c.BitsLeft()
 	var b Builder
@@ -813,7 +923,7 @@ func (c *Slice) ToBuilder() *Builder {
 
 	b.refsNum = uint8(c.RefsNum())
 	for i := uint8(0); i < b.refsNum; i++ {
-		b.refs[i] = c.refCellAt(int(i))
+		b.refs[i] = c.boundaryRefCellAt(int(i))
 	}
 
 	return &b
@@ -828,22 +938,20 @@ func (c *Slice) ToCell() (*Cell, error) {
 
 	refs := make([]*Cell, c.RefsNum())
 	for i := range refs {
-		refs[i] = c.refCellAt(i)
+		refs[i] = c.boundaryRefCellAt(i)
 	}
 
 	cl := &Cell{
 		bitsSz: uint16(left),
 		data:   data,
 	}
-	cl.setSpecial(c.cell != nil && c.cell.isSpecial())
-	if c.cell != nil {
-		cl.setLevelMask(c.cell.getLevelMask())
-	}
+	cl.setSpecial(c.cell.IsSpecial())
+	cl.setLevelMask(c.cell.getLevelMask())
 	cl.setRefs(refs)
 	if err := validateCellRefDepthLimit(refs); err != nil {
 		return nil, err
 	}
-	if err := cl.calculateHashesSafe(); err != nil {
+	if err := cl.calculateHashes(); err != nil {
 		return nil, err
 	}
 	if c.observer != nil {

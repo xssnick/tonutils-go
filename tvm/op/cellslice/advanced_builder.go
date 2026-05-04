@@ -56,6 +56,14 @@ func pushStoreQuietStatus(state *vm.State, failed bool) error {
 	return pushBuilderInt(state, 0)
 }
 
+func endBuilderCell(builder *cell.Builder) (*cell.Cell, error) {
+	cl, err := builder.EndCellSpecial(false)
+	if err != nil {
+		return nil, vmerr.Error(vmerr.CodeCellOverflow, err.Error())
+	}
+	return cl, nil
+}
+
 func STBREF() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
@@ -70,7 +78,11 @@ func STBREF() *helpers.SimpleOP {
 			if !dst.CanExtendBy(0, 1) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if err = dst.StoreRef(src.EndCell()); err != nil {
+			srcCell, err := endBuilderCell(src)
+			if err != nil {
+				return err
+			}
+			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(dst)
@@ -94,7 +106,11 @@ func STBREFR() *helpers.SimpleOP {
 			if !dst.CanExtendBy(0, 1) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if err = dst.StoreRef(src.EndCell()); err != nil {
+			srcCell, err := endBuilderCell(src)
+			if err != nil {
+				return err
+			}
+			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(dst)
@@ -118,7 +134,7 @@ func STREFR() *helpers.SimpleOP {
 			if !dst.CanExtendBy(0, 1) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if err = dst.StoreRef(cl); err != nil {
+			if err = dst.StoreRefUncheckedDepth(cl); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(dst)
@@ -148,7 +164,7 @@ func STREFQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreRef(cl); err != nil {
+			if err = dst.StoreRefUncheckedDepth(cl); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -181,7 +197,11 @@ func STBREFQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreRef(src.EndCell()); err != nil {
+			srcCell, err := endBuilderCell(src)
+			if err != nil {
+				return err
+			}
+			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -214,7 +234,7 @@ func STSLICEQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreBuilder(sl.ToBuilder()); err != nil {
+			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -247,7 +267,7 @@ func STBQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreBuilder(src); err != nil {
+			if err = dst.StoreBuilderUncheckedDepth(src); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -274,7 +294,7 @@ func STSLICER() *helpers.SimpleOP {
 			if !dst.CanExtendBy(sl.BitsLeft(), uint(sl.RefsNum())) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if err = dst.StoreBuilder(sl.ToBuilder()); err != nil {
+			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(dst)
@@ -298,7 +318,7 @@ func STBR() *helpers.SimpleOP {
 			if !dst.CanExtendBy(src.BitsUsed(), uint(src.RefsUsed())) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if err = dst.StoreBuilder(src); err != nil {
+			if err = dst.StoreBuilderUncheckedDepth(src); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(dst)
@@ -328,7 +348,11 @@ func STBREFRQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreRef(src.EndCell()); err != nil {
+			srcCell, err := endBuilderCell(src)
+			if err != nil {
+				return err
+			}
+			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -361,7 +385,7 @@ func STREFRQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreRef(cl); err != nil {
+			if err = dst.StoreRefUncheckedDepth(cl); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -394,7 +418,7 @@ func STBRQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreBuilder(src); err != nil {
+			if err = dst.StoreBuilderUncheckedDepth(src); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -427,7 +451,7 @@ func STSLICERQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreBuilder(sl.ToBuilder()); err != nil {
+			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
 				return err
 			}
 			if err = state.Stack.PushBuilder(dst); err != nil {
@@ -677,7 +701,11 @@ func BTOS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(builder.ToSlice())
+			cl, err := endBuilderCell(builder.WithoutObserver())
+			if err != nil {
+				return err
+			}
+			return state.Stack.PushSlice(cl.BeginParse())
 		},
 		Name:      "BTOS",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x50),

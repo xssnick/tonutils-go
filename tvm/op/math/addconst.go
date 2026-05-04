@@ -17,12 +17,14 @@ func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntFinite()
+			i0, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.PushInt(i0.Add(i0, big.NewInt(int64(value))))
+			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
+				return x.Add(x, big.NewInt(int64(value)))
+			})
 		},
 		BitPrefix: helpers.BytesPrefix(0xA6),
 		SerializeSuffix: func() *cell.Builder {

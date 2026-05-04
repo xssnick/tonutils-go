@@ -42,7 +42,7 @@ func mustPopInt64(t *testing.T, s *Stack) int64 {
 func TestRegisterHelpersAndNewExecutionState(t *testing.T) {
 	data := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 	lib := cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()
-	c7 := *tuple.NewTuple("params")
+	c7 := tuple.NewTupleValue("params")
 
 	reg := Register{}
 	if !reg.Define(0, &QuitContinuation{ExitCode: 7}) {
@@ -84,7 +84,7 @@ func TestRegisterHelpersAndNewExecutionState(t *testing.T) {
 	update := Register{}
 	update.C[1] = &QuitContinuation{ExitCode: 8}
 	update.D[1] = lib
-	update.C7 = *tuple.NewTuple("globals")
+	update.C7 = tuple.NewTupleValue("globals")
 	reg.AdjustWith(&update)
 
 	if reg.C[1] == nil || reg.D[1] != lib || reg.C7.Len() != 1 {
@@ -114,12 +114,12 @@ func TestStateParamsGlobalsAndGasHelpers(t *testing.T) {
 	if err := params.Set(1, big.NewInt(17)); err != nil {
 		t.Fatalf("set param 1: %v", err)
 	}
-	cfgTuple := *tuple.NewTuple("cfg")
+	cfgTuple := tuple.NewTupleValue("cfg")
 	if err := params.Set(14, cfgTuple); err != nil {
 		t.Fatalf("set param 14: %v", err)
 	}
 
-	st := NewExecutionState(0, GasWithLimit(1_000_000), cell.BeginCell().EndCell(), *tuple.NewTuple(params), NewStack())
+	st := NewExecutionState(0, GasWithLimit(1_000_000), cell.BeginCell().EndCell(), tuple.NewTupleValue(params), NewStack())
 	st.PrepareExecution(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse())
 
 	if st.GlobalVersion != DefaultGlobalVersion {
@@ -157,7 +157,7 @@ func TestStateParamsGlobalsAndGasHelpers(t *testing.T) {
 		t.Fatalf("config tuple len = %d, want 1", unpacked.Len())
 	}
 
-	badParamState := NewExecutionState(DefaultGlobalVersion, GasWithLimit(1000), nil, *tuple.NewTuple("not-tuple"), NewStack())
+	badParamState := NewExecutionState(DefaultGlobalVersion, GasWithLimit(1000), nil, tuple.NewTupleValue("not-tuple"), NewStack())
 	if _, err = badParamState.GetParam(0); err == nil {
 		t.Fatal("expected type check for non-tuple params")
 	} else {
@@ -256,7 +256,7 @@ func TestStateParamsGlobalsAndGasHelpers(t *testing.T) {
 		t.Fatalf("consume nil stack gas: %v", err)
 	}
 	lowGasState := NewExecutionState(DefaultGlobalVersion, Gas{}, nil, tuple.Tuple{}, NewStack())
-	if err = lowGasState.PushTupleCharged(*tuple.NewTuple("x")); err == nil {
+	if err = lowGasState.PushTupleCharged(tuple.NewTupleValue("x")); err == nil {
 		t.Fatal("expected tuple push to fail when gas is exhausted")
 	}
 	if err = st.SetGasLimit(st.Gas.Used() - 1); err == nil {

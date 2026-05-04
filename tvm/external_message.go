@@ -10,6 +10,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 const (
@@ -41,6 +42,7 @@ type MessageEmulationConfig struct {
 	GlobalID            int32
 	Libraries           []*cell.Cell
 	Gas                 vm.Gas
+	StopOnAccept        bool
 }
 
 type EmulateExternalMessageConfig = MessageEmulationConfig
@@ -91,7 +93,7 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.Libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.Libraries...)
 }
 
 func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*MessageExecutionResult, error) {
@@ -124,7 +126,7 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.Libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, cfg.Libraries...)
 }
 
 func (tvm *TVM) EmulateTickTransaction(code, data *cell.Cell, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
@@ -166,13 +168,15 @@ func (tvm *TVM) emulateTickTockTransaction(code, data *cell.Cell, isTock bool, c
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultTickTockTransactionGas(cfg.Gas), stack, cfg.Libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultTickTockTransactionGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.Libraries...)
 }
 
-func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
-	res, execErr := tvm.ExecuteDetailedWithLibraries(code, data, c7, gas, stack, libraries...)
+func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
+	res, execErr := tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, stopOnAccept, libraries...)
 	if execErr != nil {
-		return nil, execErr
+		if _, ok := vmerr.ErrorCode(execErr); !ok {
+			return nil, execErr
+		}
 	}
 
 	out := &MessageExecutionResult{
@@ -221,7 +225,7 @@ func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg Message
 		cfg.BlockLT,
 		cfg.LogicalTime,
 		seed,
-		*tuple.NewTuple(new(big.Int).Set(balance), nil),
+		tuple.NewTupleValue(new(big.Int).Set(balance), nil),
 		myAddr,
 		cfg.ConfigRoot,
 		code,
@@ -239,7 +243,7 @@ func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg Message
 		normalizedValues[i] = normalizeMessageTupleValue(val)
 	}
 
-	inner := *tuple.NewTuple(normalizedValues...)
+	inner := tuple.NewTupleValue(normalizedValues...)
 	topLen := 1
 	for idx := range cfg.Globals {
 		if idx <= 0 {
@@ -331,7 +335,7 @@ func messageEmulationAccountAddr(addr *address.Address) (*big.Int, error) {
 
 func messageIncomingValue(value tuple.Tuple) tuple.Tuple {
 	if value.Len() == 0 {
-		return *tuple.NewTuple(big.NewInt(0), nil)
+		return tuple.NewTupleValue(big.NewInt(0), nil)
 	}
 	return value
 }
@@ -343,14 +347,14 @@ func messageUnpackedConfig(cfg MessageEmulationConfig) any {
 	if cfg.GlobalID == 0 {
 		return nil
 	}
-	return *tuple.NewTuple(nil, cell.BeginCell().MustStoreUInt(uint64(uint32(cfg.GlobalID)), 32).ToSlice())
+	return tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(uint64(uint32(cfg.GlobalID)), 32).ToSlice())
 }
 
 func messageInMsgParams(params tuple.Tuple) tuple.Tuple {
 	if params.Len() > 0 {
 		return params
 	}
-	return *tuple.NewTuple(
+	return tuple.NewTupleValue(
 		int64(0),
 		int64(0),
 		cell.BeginCell().MustStoreUInt(0, 2).ToSlice(),

@@ -14,12 +14,14 @@ func init() {
 func DEC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntFinite()
+			i0, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.PushInt(i0.Sub(i0, big.NewInt(1)))
+			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
+				return x.Sub(x, big.NewInt(1))
+			})
 		},
 		Name:      "DEC",
 		BitPrefix: helpers.BytesPrefix(0xA5),

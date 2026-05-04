@@ -42,7 +42,7 @@ func quietBinaryLogicOp(name string, prefix helpers.BitPrefix, fn func(x, y *big
 func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntRange(0, 1023)
+			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -50,7 +50,7 @@ func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.Si
 			if err != nil {
 				return err
 			}
-			if x == nil {
+			if x == nil || y == nil || y.Sign() < 0 || y.Cmp(big.NewInt(1023)) > 0 {
 				return pushNaNOrOverflow(state, true)
 			}
 
@@ -96,9 +96,12 @@ func QRSHIFT() *helpers.SimpleOP {
 func QPOW2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntRange(0, 1023)
+			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
+			}
+			if y == nil || y.Sign() < 0 || y.Cmp(big.NewInt(1023)) > 0 {
+				return pushNaNOrOverflow(state, true)
 			}
 			return state.Stack.PushIntQuiet(new(big.Int).Lsh(big.NewInt(1), uint(y.Uint64())))
 		},

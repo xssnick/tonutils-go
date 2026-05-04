@@ -27,6 +27,9 @@ func BLKSWX() *helpers.SimpleOP {
 			if x == 0 || y == 0 {
 				return nil
 			}
+			if err := consumeLargeStackMoveGas(state, x+y); err != nil {
+				return err
+			}
 			if err := state.Stack.Reverse(x+y-1, y); err != nil {
 				return err
 			}

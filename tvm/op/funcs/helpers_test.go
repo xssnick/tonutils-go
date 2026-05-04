@@ -174,7 +174,7 @@ func TestPushHostValueAndSmallInt(t *testing.T) {
 		t.Fatalf("unexpected builder bytes: %x", got)
 	}
 
-	tup := *tuple.NewTuple(big.NewInt(7), big.NewInt(9))
+	tup := tuple.NewTupleValue(big.NewInt(7), big.NewInt(9))
 	st = newFuncTestState(t, nil)
 	if err := pushHostValue(st, tup); err != nil {
 		t.Fatalf("pushHostValue(tuple) failed: %v", err)
@@ -233,10 +233,10 @@ func TestExportFeeAndConfigHelpers(t *testing.T) {
 	if storagePrices.ValidSince != 1 || storagePrices.BitPrice != 2 || storagePrices.CellPrice != 3 || storagePrices.MCBitPrice != 4 || storagePrices.MCCellPrice != 5 {
 		t.Fatalf("unexpected storage prices: %+v", storagePrices)
 	}
-	if got := storagePrices.computeStorageFee(false, 10, 20, 3); got.Int64() != 1 {
+	if got := storagePrices.ComputeStorageFee(false, 10, 20, 3); got.Int64() != 1 {
 		t.Fatalf("unexpected ordinary storage fee: %v", got)
 	}
-	if got := storagePrices.computeStorageFee(true, 1<<16, 1, 1); got.Int64() != 9 {
+	if got := storagePrices.ComputeStorageFee(true, 1<<16, 1, 1); got.Int64() != 9 {
 		t.Fatalf("unexpected masterchain storage fee: %v", got)
 	}
 	if parsedNil, err := parseTonStoragePrices(nil); err != nil || parsedNil != nil {
@@ -266,10 +266,10 @@ func TestExportFeeAndConfigHelpers(t *testing.T) {
 	if gasPrices.FlatGasLimit != 10 || gasPrices.FlatGasPrice != 3 || gasPrices.SpecialGasLimit != 80 {
 		t.Fatalf("unexpected gas prices: %+v", gasPrices)
 	}
-	if got := gasPrices.computeGasPrice(9); got.Int64() != 3 {
+	if got := gasPrices.ComputeGasPrice(9); got.Int64() != 3 {
 		t.Fatalf("unexpected flat gas fee: %v", got)
 	}
-	if got := gasPrices.computeGasPrice(13); got.Int64() != 6 {
+	if got := gasPrices.ComputeGasPrice(13); got.Int64() != 6 {
 		t.Fatalf("unexpected extended gas fee: %v", got)
 	}
 	if _, err = parseTonGasPrices(nil); err == nil {
@@ -304,7 +304,7 @@ func TestExportFeeAndConfigHelpers(t *testing.T) {
 	if msgPrices.LumpPrice != 100 || msgPrices.IHRFactor != 77 || msgPrices.FirstFrac != 9 || msgPrices.NextFrac != 10 {
 		t.Fatalf("unexpected msg prices: %+v", msgPrices)
 	}
-	if got := msgPrices.computeForwardFee(2, 3); got.Int64() != 107 {
+	if got := msgPrices.ComputeForwardFee(2, 3); got.Int64() != 107 {
 		t.Fatalf("unexpected forward fee: %v", got)
 	}
 	if _, err = parseTonMsgPrices(nil); err == nil {
@@ -314,17 +314,21 @@ func TestExportFeeAndConfigHelpers(t *testing.T) {
 		t.Fatal("invalid msg prices tag should fail")
 	}
 
-	configTuple := tuple.NewTupleSized(6)
-	if err = configTuple.Set(0, cell.BeginCell().MustStoreUInt(0xCC, 8).MustStoreUInt(1, 32).MustStoreUInt(2, 64).MustStoreUInt(3, 64).MustStoreUInt(4, 64).MustStoreUInt(5, 64).ToSlice()); err != nil {
-		t.Fatalf("failed to set storage config: %v", err)
-	}
-	if err = configTuple.Set(2, gasSlice); err != nil {
-		t.Fatalf("failed to set mc gas config: %v", err)
-	}
-	if err = configTuple.Set(5, msgConfigSlice); err != nil {
-		t.Fatalf("failed to set msg config: %v", err)
-	}
-	st := newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: configTuple})
+	storageCell := cell.BeginCell().
+		MustStoreUInt(0xCC, 8).
+		MustStoreUInt(1, 32).
+		MustStoreUInt(2, 64).
+		MustStoreUInt(3, 64).
+		MustStoreUInt(4, 64).
+		MustStoreUInt(5, 64).
+		EndCell()
+	st := newFuncTestState(t, map[int]any{
+		9: makeConfigRootRefDict(t, map[uint32]*cell.Cell{
+			18: makeStoragePricesConfigDict(t, map[uint32]*cell.Cell{1: storageCell}),
+			20: gasSlice.MustToCell(),
+			25: msgConfigSlice.MustToCell(),
+		}),
+	})
 	if parsed, err := getTonGasPrices(st, true); err != nil || parsed.FlatGasLimit != 10 {
 		t.Fatalf("getTonGasPrices(masterchain) = (%+v, %v)", parsed, err)
 	}
@@ -554,8 +558,8 @@ func TestHashExtHelpersAndSHA256U(t *testing.T) {
 }
 
 func TestPRNGHelpersAndOps(t *testing.T) {
-	prevBlocks := *tuple.NewTuple(big.NewInt(1), big.NewInt(2), big.NewInt(3))
-	inMsg := *tuple.NewTuple(big.NewInt(4), big.NewInt(5), big.NewInt(6))
+	prevBlocks := tuple.NewTupleValue(big.NewInt(1), big.NewInt(2), big.NewInt(3))
+	inMsg := tuple.NewTupleValue(big.NewInt(4), big.NewInt(5), big.NewInt(6))
 	seed := big.NewInt(5)
 	st := newFuncTestState(t, map[int]any{
 		paramIdxPrevBlocksInfo: prevBlocks,

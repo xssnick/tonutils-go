@@ -16,28 +16,24 @@ func validatePlainDictNode(c *Cell, keySz uint) error {
 		return fmt.Errorf("dict branch is nil")
 	}
 
-	if c.IsSpecial() {
-		if c.GetType() == PrunedCellType {
-			return nil
-		}
-		return fmt.Errorf("dict has unsupported special cell in tree structure")
-	}
-
-	loader := c.BeginParse()
-	labelLen, _, err := loadLabel(keySz, loader, BeginCell())
+	node, err := parseFixedDictNode(c, keySz, nil)
 	if err != nil {
-		return fmt.Errorf("failed to parse dict label: %w", err)
+		return err
 	}
 
-	if labelLen < keySz {
-		if loader.BitsLeft() != 0 || loader.RefsNum() != 2 {
+	if pruned, err := node.prunedBoundary("dict"); err != nil || pruned {
+		return err
+	}
+
+	if !node.isLeaf(keySz) {
+		if node.loader.BitsLeft() != 0 || node.loader.RefsNum() != 2 {
 			return fmt.Errorf("invalid dict fork node: %d data bits left, %d refs left after %d-bit label with %d remaining key bits",
-				loader.BitsLeft(), loader.RefsNum(), labelLen, keySz)
+				node.loader.BitsLeft(), node.loader.RefsNum(), node.labelLen, keySz)
 		}
 
-		nextKeySz := keySz - labelLen - 1
+		nextKeySz := node.nextKeyBits(keySz)
 
-		left, err := loader.LoadRefCell()
+		left, err := node.boundaryRef(0)
 		if err != nil {
 			return fmt.Errorf("failed to load left branch: %w", err)
 		}
@@ -45,7 +41,7 @@ func validatePlainDictNode(c *Cell, keySz uint) error {
 			return fmt.Errorf("invalid left branch: %w", err)
 		}
 
-		right, err := loader.LoadRefCell()
+		right, err := node.boundaryRef(1)
 		if err != nil {
 			return fmt.Errorf("failed to load right branch: %w", err)
 		}

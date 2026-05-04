@@ -19,7 +19,7 @@ var ErrNoMoreRefs = errors.New("no more refs exists")
 var ErrAddressTypeNotSupported = errors.New("address type is not supported")
 
 func (c *Cell) ToBOC() []byte {
-	return c.ToBOCWithOptions(BOCOptions{WithCRC32C: true})
+	return c.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true})
 }
 
 // ToBOCWithFlags serializes the cell into BOC using the legacy boolean-flag API.
@@ -45,7 +45,7 @@ func ToBOCWithFlags(roots []*Cell, flags ...bool) []byte {
 	withTopHash := len(flags) > 3 && flags[3]
 	withIntHashes := len(flags) > 4 && flags[4]
 
-	return ToBOCWithOptions(roots, BOCOptions{
+	return ToBOCWithOptions(roots, BOCSerializeOptions{
 		WithCRC32C:    withCRC,
 		WithIndex:     withIndex,
 		WithCacheBits: withCache,
@@ -62,15 +62,29 @@ func (c *Cell) descriptors(lvl LevelMask) (byte, byte) {
 	}
 
 	specBit := byte(0)
-	if c.isSpecial() {
+	if c.IsSpecial() {
 		specBit = 8
 	}
 
 	return byte(c.refsCount()) + specBit + lvl.Mask*32, byte(ln)
 }
 
-func dynamicIntBytes(val uint64, sz uint, buffer []byte) []byte {
-	binary.BigEndian.PutUint64(buffer, val)
-
-	return buffer[8-sz:]
+func storeUintTo(dst []byte, val uint64, sz int) {
+	switch sz {
+	case 1:
+		dst[0] = byte(val)
+	case 2:
+		binary.BigEndian.PutUint16(dst, uint16(val))
+	case 3:
+		dst[0] = byte(val >> 16)
+		dst[1] = byte(val >> 8)
+		dst[2] = byte(val)
+	case 4:
+		binary.BigEndian.PutUint32(dst, uint32(val))
+	default:
+		for i := sz - 1; i >= 0; i-- {
+			dst[i] = byte(val)
+			val >>= 8
+		}
+	}
 }

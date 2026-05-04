@@ -97,13 +97,16 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 
 	var refsBuf [4]*Cell
 	refs := refsBuf[:refCnt]
+	refView := newCellRefView(c)
 	childDepth := merkleChildDepth(c, merkleDepth)
 	for i := 0; i < refCnt; i++ {
-		ref := c.visibleRef(i)
+		ref, err := refView.resolvedRef(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
+		}
 
 		var (
 			next *Cell
-			err  error
 		)
 		if skeleton.recursive {
 			next, err = buildProofBody(ref, skeleton, childDepth)
@@ -116,19 +119,15 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
 		} else {
-			if !ref.IsVirtualized() && ref.refsCount() == 0 {
-				next = ref
-			} else {
-				next, err = createPrunedBranchFromCell(ref, childDepth+1)
-				if err != nil {
-					return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
-				}
+			next, err = createPrunedBranchFromCell(ref, childDepth+1)
+			if err != nil {
+				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
 		}
 		refs[i] = next
 	}
 
-	rebuilt, err := rebuildCellWithRefs(c, refs)
+	rebuilt, _, err := refView.cloneWithRefs(refs, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +162,7 @@ func CheckProofVirtualized(proof *Cell, hash []byte) error {
 }
 
 func UnwrapProof(proof *Cell, hash []byte) (*Cell, error) {
-	if !proof.isSpecial() || proof.RefsNum() != 1 || proof.BitsSize() != 280 ||
+	if !proof.IsSpecial() || proof.RefsNum() != 1 || proof.BitsSize() != 280 ||
 		Type(proof.data[0]) != MerkleProofCellType {
 		return nil, fmt.Errorf("not a merkle proof cell")
 	}
@@ -172,7 +171,11 @@ func UnwrapProof(proof *Cell, hash []byte) (*Cell, error) {
 		return nil, fmt.Errorf("incorrect proof hash")
 	}
 
-	body := proof.ref(0)
+	refView := newCellRefView(proof)
+	body, err := refView.resolvedRef(0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load proof body: %w", err)
+	}
 	calcDepth := body.getDepth(0)
 	if calcDepth != binary.BigEndian.Uint16(proof.data[33:]) {
 		return nil, fmt.Errorf("incorrect proof depth")
@@ -195,8 +198,8 @@ func UnwrapProofVirtualized(proof *Cell, hash []byte) (*Cell, error) {
 }
 
 func (c *Cell) getHash(level int) []byte {
-	if base := c.baseCell(); base != nil {
-		return base.getHash(min(level, int(c.effectiveLevelValue())))
+	if c.meta != nil && c.meta.viewLevel != 0 {
+		return c.meta.viewOf.getHash(min(level, int(c.meta.viewLevel-1)))
 	}
 
 	hashIndex := c.getLevelMask().Apply(level).getHashIndex()
@@ -213,31 +216,8 @@ func (c *Cell) getHash(level int) []byte {
 	return c.hashAt(hashIndex)
 }
 
-func (c *Cell) calculateHashesSafe() (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			switch v := r.(type) {
-			case string:
-				if v == "depth is more than max depth" {
-					err = ErrCellDepthLimit
-					return
-				}
-			case error:
-				if v.Error() == "depth is more than max depth" {
-					err = ErrCellDepthLimit
-					return
-				}
-			}
-			panic(r)
-		}
-	}()
-
-	c.calculateHashes()
-	return nil
-}
-
 // calculateHashes - we are precalculating cell hashes during creation for safe read parallel access later
-func (c *Cell) calculateHashes() {
+func (c *Cell) calculateHashes() error {
 	c.clearVirtualization()
 
 	totalHashCount := c.getLevelMask().getHashIndex() + 1
@@ -280,20 +260,18 @@ func (c *Cell) calculateHashes() {
 
 		if hashIndex == hashIndexOffset {
 			if levelIndex != 0 && typ != PrunedCellType {
-				// should never happen
-				panic("not pruned or 0")
+				return fmt.Errorf("invalid hash level state")
 			}
 
 			if c.bitsSz%8 == 0 {
 				bufPos += copy(hashBuf[bufPos:], c.data)
 			} else {
-				bodySize := c.serializeBOCBodyTo(bodyBuf[:])
+				bodySize := c.SerializeBOCBodyTo(bodyBuf[:])
 				bufPos += copy(hashBuf[bufPos:], bodyBuf[:bodySize])
 			}
 		} else {
 			if levelIndex == 0 || typ == PrunedCellType {
-				// should never happen
-				panic("pruned or 0")
+				return fmt.Errorf("invalid hash level state")
 			}
 			prevHashOff := hashIndex - hashIndexOffset - 1
 			bufPos += copy(hashBuf[bufPos:], c.hashAt(prevHashOff))
@@ -318,7 +296,7 @@ func (c *Cell) calculateHashes() {
 		if refCnt > 0 {
 			depth++
 			if depth >= maxDepth {
-				panic("depth is more than max depth")
+				return ErrCellDepthLimit
 			}
 		}
 
@@ -332,11 +310,13 @@ func (c *Cell) calculateHashes() {
 		c.setHashAt(off, sum[:])
 		hashIndex++
 	}
+
+	return nil
 }
 
 func (c *Cell) getDepth(level int) uint16 {
-	if base := c.baseCell(); base != nil {
-		return base.getDepth(min(level, int(c.effectiveLevelValue())))
+	if c.meta != nil && c.meta.viewLevel != 0 {
+		return c.meta.viewOf.getDepth(min(level, int(c.meta.viewLevel-1)))
 	}
 
 	hashIndex := c.getLevelMask().Apply(level).getHashIndex()

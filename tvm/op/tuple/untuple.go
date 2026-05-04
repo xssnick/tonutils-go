@@ -93,5 +93,5 @@ func execUntuple(state *vm.State, count int, exact bool) error {
 		}
 	}
 
-	return nil
+	return state.ConsumeTupleGasLen(limit)
 }

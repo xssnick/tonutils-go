@@ -174,7 +174,9 @@ func BenchmarkHash(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		c.calculateHashes()
+		if err := c.calculateHashes(); err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.StopTimer()
 }

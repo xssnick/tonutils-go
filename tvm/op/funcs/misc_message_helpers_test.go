@@ -46,7 +46,7 @@ func makeSendMsgState(t *testing.T, myAddr *address.Address) *vm.State {
 
 	st := newFuncTestState(t, map[int]any{
 		paramIdxUnpackedConfig: cfg,
-		7:                      *tuple.NewTuple(big.NewInt(1000), makeExtraBalanceDict(t, map[uint32]uint64{7: 55})),
+		7:                      tuple.NewTupleValue(big.NewInt(1000), makeExtraBalanceDict(t, map[uint32]uint64{7: 55})),
 		8:                      cell.BeginCell().MustStoreAddr(myAddr).ToSlice(),
 	})
 	st.InitForExecution()
@@ -694,7 +694,7 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 		t.Fatalf("getMyAddr = (%v, %v)", myAddr, err)
 	}
 
-	cfg := *tuple.NewTuple(
+	cfg := tuple.NewTupleValue(
 		nil, nil, nil, nil, nil, nil,
 		cell.BeginCell().MustStoreUInt(0x01, 8).MustStoreUInt(7, 32).MustStoreUInt(123, 32).ToSlice(),
 	)
@@ -702,10 +702,10 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	if maxCells, err := getSizeLimitsMaxMsgCells(st); err != nil || maxCells != 123 {
 		t.Fatalf("getSizeLimitsMaxMsgCells = (%d, %v)", maxCells, err)
 	}
-	if maxCells, err := getSizeLimitsMaxMsgCells(newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: *tuple.NewTuple(nil, nil, nil, nil, nil, nil, nil)})); err != nil || maxCells != 1<<13 {
+	if maxCells, err := getSizeLimitsMaxMsgCells(newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: tuple.NewTupleValue(nil, nil, nil, nil, nil, nil, nil)})); err != nil || maxCells != 1<<13 {
 		t.Fatalf("getSizeLimitsMaxMsgCells(default) = (%d, %v)", maxCells, err)
 	}
-	cfg = *tuple.NewTuple(
+	cfg = tuple.NewTupleValue(
 		nil, nil, nil, nil, nil, nil,
 		cell.BeginCell().MustStoreUInt(0x02, 8).MustStoreUInt(9, 32).MustStoreUInt(321, 32).ToSlice(),
 	)
@@ -713,7 +713,7 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	if maxCells, err := getSizeLimitsMaxMsgCells(st); err != nil || maxCells != 321 {
 		t.Fatalf("getSizeLimitsMaxMsgCells(v2) = (%d, %v)", maxCells, err)
 	}
-	if _, err := getSizeLimitsMaxMsgCells(newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: *tuple.NewTuple(nil, nil, nil, nil, nil, nil, cell.BeginCell().MustStoreUInt(0x03, 8).ToSlice())})); err == nil {
+	if _, err := getSizeLimitsMaxMsgCells(newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: tuple.NewTupleValue(nil, nil, nil, nil, nil, nil, cell.BeginCell().MustStoreUInt(0x03, 8).ToSlice())})); err == nil {
 		t.Fatal("getSizeLimitsMaxMsgCells should reject invalid config tags")
 	}
 }

@@ -77,15 +77,15 @@ func makeSizeLimitsSlice(maxMsgBits, maxMsgCells uint64) *cell.Slice {
 
 func makeInMsgParamsTuple() tuple.Tuple {
 	src := cell.BeginCell().MustStoreAddr(address.MustParseAddr("EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c")).ToSlice()
-	return *tuple.NewTuple(
+	return tuple.NewTupleValue(
 		int64(1),
 		int64(0),
 		src,
 		int64(11),
 		int64(22),
 		int64(33),
-		*tuple.NewTuple(big.NewInt(44), nil),
-		*tuple.NewTuple(big.NewInt(55), nil),
+		tuple.NewTupleValue(big.NewInt(44), nil),
+		tuple.NewTupleValue(big.NewInt(55), nil),
 		nil,
 		nil,
 	)
@@ -104,7 +104,7 @@ func feeTestC7(t *testing.T) tuple.Tuple {
 	return makeTonopsTestC7(t, tonopsTestC7Config{
 		UnpackedConfig: unpacked,
 		ExtraParams: map[int]any{
-			13: *tuple.NewTuple(int64(111), int64(222), int64(333)),
+			13: tuple.NewTupleValue(int64(111), int64(222), int64(333)),
 			15: int64(444),
 			16: int64(555),
 			17: makeInMsgParamsTuple(),
@@ -358,7 +358,7 @@ func TestTonOpsExtendedFeesAndHashing(t *testing.T) {
 		}
 
 		c7WithExtra := makeTonopsTestC7(t, tonopsTestC7Config{
-			Balance: *tuple.NewTuple(new(big.Int).Set(tonopsTestBalance), extraDict.AsCell()),
+			Balance: tuple.NewTupleValue(new(big.Int).Set(tonopsTestBalance), extraDict.AsCell()),
 		})
 
 		_, res, err := runRawCodeWithEnv(t,

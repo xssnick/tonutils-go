@@ -22,7 +22,7 @@ func STB() *helpers.SimpleOP {
 				return err
 			}
 
-			if err := b0.StoreBuilder(b1); err != nil {
+			if err := b0.StoreBuilderUncheckedDepth(b1); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(b0)

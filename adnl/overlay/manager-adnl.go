@@ -10,8 +10,6 @@ import (
 	"sync"
 )
 
-const _BroadcastFlagAnySender = 1
-
 const _CertFlagAllowFEC = 1
 const _CertFlagTrusted = 2
 
@@ -137,7 +135,10 @@ func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
 		switch t := obj.(type) {
 		case Broadcast:
 		case BroadcastFECShort:
-			// TODO:
+			if err := o.processFECBroadcastShort(&t); err != nil {
+				return fmt.Errorf("failed to process short FEC broadcast: %w", err)
+			}
+			return nil
 		case BroadcastFEC:
 			if err := o.processFECBroadcast(&t); err != nil {
 				return fmt.Errorf("failed to process FEC broadcast: %w", err)

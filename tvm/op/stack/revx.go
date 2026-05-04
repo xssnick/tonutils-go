@@ -27,6 +27,9 @@ func REVX() *helpers.SimpleOP {
 			if x == 0 {
 				return nil
 			}
+			if err := consumeLargeStackMoveGas(state, x); err != nil {
+				return err
+			}
 			return state.Stack.Reverse(x+y-1, y)
 		},
 		Name:      "REVX",

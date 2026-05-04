@@ -73,12 +73,12 @@ func makeTonopsTestC7(t *testing.T, cfg tonopsTestC7Config) tuple.Tuple {
 
 	balance := cfg.Balance
 	if balance.Len() == 0 {
-		balance = *tuple.NewTuple(new(big.Int).Set(tonopsTestBalance), nil)
+		balance = tuple.NewTupleValue(new(big.Int).Set(tonopsTestBalance), nil)
 	}
 
 	incomingValue := cfg.IncomingValue
 	if incomingValue.Len() == 0 {
-		incomingValue = *tuple.NewTuple(big.NewInt(7777), nil)
+		incomingValue = tuple.NewTupleValue(big.NewInt(7777), nil)
 	}
 
 	unpacked := cfg.UnpackedConfig

@@ -6,7 +6,8 @@ func (b *Builder) CanExtendBy(bits uint, refs uint) bool {
 
 func (b *Builder) Depth() uint16 {
 	var depth uint16
-	for _, ref := range b.rawRefs() {
+	for i := uint8(0); i < b.refsNum; i++ {
+		ref := b.refs[i]
 		childDepth := ref.Depth() + 1
 		if childDepth > depth {
 			depth = childDepth
@@ -30,29 +31,50 @@ func (b *Builder) StoreSameBit(bit bool, bits uint) error {
 	if !b.CanExtendBy(bits, 0) {
 		return ErrNotFit1023
 	}
-
-	for bits >= 64 {
-		if bit {
-			if err := b.StoreUInt(^uint64(0), 64); err != nil {
-				return err
-			}
-		} else {
-			if err := b.StoreUInt(0, 64); err != nil {
-				return err
-			}
-		}
-		bits -= 64
-	}
-
 	if bits == 0 {
 		return nil
 	}
 
-	if !bit {
-		return b.StoreUInt(0, bits)
+	start := b.bitsSz
+	byteIdx := int(start / 8)
+	bitOffset := start % 8
+	left := bits
+
+	if bitOffset != 0 {
+		n := min(left, 8-bitOffset)
+		mask := byte(((uint16(1) << n) - 1) << (8 - bitOffset - n))
+		if bit {
+			b.data[byteIdx] |= mask
+		} else {
+			b.data[byteIdx] &^= mask
+		}
+		left -= n
+		byteIdx++
 	}
-	if bits == 64 {
-		return b.StoreUInt(^uint64(0), bits)
+
+	fullBytes := int(left / 8)
+	if bit {
+		for i := 0; i < fullBytes; i++ {
+			b.data[byteIdx+i] = 0xFF
+		}
+	} else {
+		clear(b.data[byteIdx : byteIdx+fullBytes])
 	}
-	return b.StoreUInt((uint64(1)<<bits)-1, bits)
+	byteIdx += fullBytes
+	left %= 8
+
+	if left != 0 {
+		mask := byte(0xFF << (8 - left))
+		if bit {
+			b.data[byteIdx] |= mask
+		} else {
+			b.data[byteIdx] &^= mask
+		}
+	}
+
+	b.bitsSz += bits
+	if rem := b.bitsSz % 8; rem != 0 {
+		b.data[b.bitsSz/8] &= byte(0xFF << (8 - rem))
+	}
+	return nil
 }

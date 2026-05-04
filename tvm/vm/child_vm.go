@@ -77,12 +77,14 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 			return err
 		}
 		s.ChksgnCounter = 0
+		s.GetExtraBalanceCounter = 0
 		s.Gas.FreeConsumed = 0
 	} else {
 		child.Cells.loaded = s.Cells.loaded
 	}
 
 	child.ChksgnCounter = s.ChksgnCounter
+	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.Gas.FreeConsumed = s.Gas.FreeConsumed
 
 	remaining := s.Gas.Remaining
@@ -123,6 +125,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		s.Cells.loaded = child.Cells.loaded
 	}
 	s.ChksgnCounter = child.ChksgnCounter
+	s.GetExtraBalanceCounter = child.GetExtraBalanceCounter
 	s.Gas.FreeConsumed = child.Gas.FreeConsumed
 
 	if childErr != nil {

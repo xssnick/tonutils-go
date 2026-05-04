@@ -10,41 +10,13 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/crypto/sha3"
 
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
-
-type tonGasPrices struct {
-	FlatGasLimit    uint64
-	FlatGasPrice    uint64
-	GasPrice        uint64
-	SpecialGasLimit uint64
-	GasLimit        uint64
-	GasCredit       uint64
-	BlockGasLimit   uint64
-	FreezeDueLimit  uint64
-	DeleteDueLimit  uint64
-}
-
-type tonMsgPrices struct {
-	LumpPrice uint64
-	BitPrice  uint64
-	CellPrice uint64
-	IHRFactor uint32
-	FirstFrac uint16
-	NextFrac  uint16
-}
-
-type tonStoragePrices struct {
-	ValidSince  uint32
-	BitPrice    uint64
-	CellPrice   uint64
-	MCBitPrice  uint64
-	MCCellPrice uint64
-}
 
 func init() {
 	vm.List = append(vm.List,
@@ -64,10 +36,16 @@ func init() {
 func unpackedConfigSlice(state *vm.State, idx int) (*cell.Slice, error) {
 	cfg, err := state.GetUnpackedConfigTuple()
 	if err != nil {
+		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
+			return nil, nil
+		}
 		return nil, err
 	}
 	v, err := cfg.Index(idx)
 	if err != nil {
+		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if v == nil {
@@ -80,200 +58,183 @@ func unpackedConfigSlice(state *vm.State, idx int) (*cell.Slice, error) {
 	return sl.Copy(), nil
 }
 
-func parseTonStoragePrices(sl *cell.Slice) (*tonStoragePrices, error) {
+func parseTonStoragePrices(sl *cell.Slice) (*tlb.ConfigStoragePrices, error) {
 	if sl == nil {
 		return nil, nil
 	}
-	tag, err := sl.LoadUInt(8)
-	if err != nil {
-		return nil, err
+
+	var prices tlb.ConfigStoragePrices
+	if err := tlb.LoadFromCell(&prices, sl.Copy()); err != nil {
+		return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
 	}
-	if tag != 0xCC {
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse config: invalid storage prices tag")
-	}
-	validSince, err := sl.LoadUInt(32)
-	if err != nil {
-		return nil, err
-	}
-	bitPrice, err := sl.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	cellPrice, err := sl.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	mcBitPrice, err := sl.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	mcCellPrice, err := sl.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	return &tonStoragePrices{
-		ValidSince:  uint32(validSince),
-		BitPrice:    bitPrice,
-		CellPrice:   cellPrice,
-		MCBitPrice:  mcBitPrice,
-		MCCellPrice: mcCellPrice,
-	}, nil
+	return &prices, nil
 }
 
-func parseTonGasPrices(sl *cell.Slice) (*tonGasPrices, error) {
+func parseTonGasPrices(sl *cell.Slice) (*tlb.ConfigGasLimitsPrices, error) {
 	if sl == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
 	}
-	out := &tonGasPrices{}
-	work := sl.Copy()
 
-	tag, err := work.PreloadUInt(8)
-	if err != nil {
-		return nil, err
+	var prices tlb.ConfigGasLimitsPrices
+	if err := tlb.LoadFromCell(&prices, sl.Copy()); err != nil {
+		return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
 	}
-	if tag == 0xD1 {
-		if _, err = work.LoadUInt(8); err != nil {
-			return nil, err
-		}
-		out.FlatGasLimit, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
-		}
-		out.FlatGasPrice, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
-		}
+	return &prices, nil
+}
+
+func parseTonMsgPrices(sl *cell.Slice) (*tlb.ConfigMsgForwardPrices, error) {
+	if sl == nil {
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
 	}
 
-	mainTag, err := work.LoadUInt(8)
-	if err != nil {
-		return nil, err
+	var prices tlb.ConfigMsgForwardPrices
+	if err := tlb.LoadFromCell(&prices, sl.Copy()); err != nil {
+		return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
 	}
-	switch mainTag {
-	case 0xDD:
-		out.GasPrice, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
+	return &prices, nil
+}
+
+func blockchainConfigFromC7(state *vm.State) (tlb.BlockchainConfig, error) {
+	root, err := configRootFromC7(state)
+	if err != nil {
+		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
+			return tlb.BlockchainConfig{}, nil
 		}
-		out.GasLimit, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
+		return tlb.BlockchainConfig{}, err
+	}
+	return tlb.BlockchainConfig{Root: root}, nil
+}
+
+func configNowFromC7(state *vm.State) (uint32, error) {
+	v, err := state.GetParam(3)
+	if err != nil {
+		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
+			return 0, nil
 		}
-		out.SpecialGasLimit = out.GasLimit
-		out.GasCredit, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
+		return 0, err
+	}
+	if v == nil {
+		return 0, err
+	}
+
+	switch now := v.(type) {
+	case int:
+		if now < 0 || now > (1<<32)-1 {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
 		}
-	case 0xDE:
-		out.GasPrice, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
+		return uint32(now), nil
+	case int32:
+		if now < 0 {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
 		}
-		out.GasLimit, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
+		return uint32(now), nil
+	case int64:
+		if now < 0 || now > (1<<32)-1 {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
 		}
-		out.SpecialGasLimit, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
+		return uint32(now), nil
+	case uint:
+		if now > (1<<32)-1 {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
 		}
-		out.GasCredit, err = work.LoadUInt(64)
-		if err != nil {
-			return nil, err
+		return uint32(now), nil
+	case uint32:
+		return now, nil
+	case uint64:
+		if now > (1<<32)-1 {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
 		}
+		return uint32(now), nil
+	case *big.Int:
+		if now.Sign() < 0 || now.BitLen() > 32 {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		return uint32(now.Uint64()), nil
 	default:
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse config: invalid gas prices tag")
+		return 0, vmerr.Error(vmerr.CodeTypeCheck)
 	}
-	out.BlockGasLimit, err = work.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	out.FreezeDueLimit, err = work.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	out.DeleteDueLimit, err = work.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
-func parseTonMsgPrices(sl *cell.Slice) (*tonMsgPrices, error) {
-	if sl == nil {
+func getTonGasPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigGasLimitsPrices, error) {
+	cfg, err := blockchainConfigFromC7(state)
+	if err != nil {
+		return nil, err
+	}
+
+	prices, err := cfg.GetGasPrices(isMasterchain)
+	if err != nil {
+		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
+		}
+
+		idx := 3
+		if isMasterchain {
+			idx = 2
+		}
+		sl, unpackErr := unpackedConfigSlice(state, idx)
+		if unpackErr != nil {
+			return nil, unpackErr
+		}
+		return parseTonGasPrices(sl)
+	}
+	if prices == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
 	}
-	tag, err := sl.LoadUInt(8)
-	if err != nil {
-		return nil, err
-	}
-	if tag != 0xEA {
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse config: invalid msg prices tag")
-	}
-	lump, err := sl.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	bitPrice, err := sl.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	cellPrice, err := sl.LoadUInt(64)
-	if err != nil {
-		return nil, err
-	}
-	ihrFactor, err := sl.LoadUInt(32)
-	if err != nil {
-		return nil, err
-	}
-	firstFrac, err := sl.LoadUInt(16)
-	if err != nil {
-		return nil, err
-	}
-	nextFrac, err := sl.LoadUInt(16)
-	if err != nil {
-		return nil, err
-	}
-	return &tonMsgPrices{
-		LumpPrice: lump,
-		BitPrice:  bitPrice,
-		CellPrice: cellPrice,
-		IHRFactor: uint32(ihrFactor),
-		FirstFrac: uint16(firstFrac),
-		NextFrac:  uint16(nextFrac),
-	}, nil
+	return prices, nil
 }
 
-func getTonGasPrices(state *vm.State, isMasterchain bool) (*tonGasPrices, error) {
-	idx := 3
-	if isMasterchain {
-		idx = 2
-	}
-	sl, err := unpackedConfigSlice(state, idx)
+func getTonMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
+	cfg, err := blockchainConfigFromC7(state)
 	if err != nil {
 		return nil, err
 	}
-	return parseTonGasPrices(sl)
+
+	prices, err := cfg.GetMsgForwardPrices(isMasterchain)
+	if err != nil {
+		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
+		}
+
+		idx := 5
+		if isMasterchain {
+			idx = 4
+		}
+		sl, unpackErr := unpackedConfigSlice(state, idx)
+		if unpackErr != nil {
+			return nil, unpackErr
+		}
+		return parseTonMsgPrices(sl)
+	}
+	if prices == nil {
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
+	}
+	return prices, nil
 }
 
-func getTonMsgPrices(state *vm.State, isMasterchain bool) (*tonMsgPrices, error) {
-	idx := 5
-	if isMasterchain {
-		idx = 4
-	}
-	sl, err := unpackedConfigSlice(state, idx)
+func getTonStoragePrices(state *vm.State) (*tlb.ConfigStoragePrices, error) {
+	cfg, err := blockchainConfigFromC7(state)
 	if err != nil {
 		return nil, err
 	}
-	return parseTonMsgPrices(sl)
-}
 
-func getTonStoragePrices(state *vm.State) (*tonStoragePrices, error) {
-	sl, err := unpackedConfigSlice(state, 0)
+	now, err := configNowFromC7(state)
 	if err != nil {
 		return nil, err
 	}
-	return parseTonStoragePrices(sl)
+
+	prices, err := cfg.GetStoragePrices(now)
+	if err != nil {
+		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
+		}
+
+		sl, unpackErr := unpackedConfigSlice(state, 0)
+		if unpackErr != nil {
+			return nil, unpackErr
+		}
+		return parseTonStoragePrices(sl)
+	}
+	return prices, nil
 }
 
 func ceilShiftRight(x *big.Int, bits uint) *big.Int {
@@ -293,37 +254,6 @@ func maxBig(x, y *big.Int) *big.Int {
 	return y
 }
 
-func (p *tonGasPrices) computeGasPrice(gasUsed uint64) *big.Int {
-	if gasUsed <= p.FlatGasLimit {
-		return new(big.Int).SetUint64(p.FlatGasPrice)
-	}
-	diff := gasUsed - p.FlatGasLimit
-	total := ceilShiftRight(new(big.Int).Mul(new(big.Int).SetUint64(p.GasPrice), new(big.Int).SetUint64(diff)), 16)
-	return total.Add(total, new(big.Int).SetUint64(p.FlatGasPrice))
-}
-
-func (p *tonMsgPrices) computeForwardFee(cells, bits uint64) *big.Int {
-	part := new(big.Int).Mul(new(big.Int).SetUint64(p.BitPrice), new(big.Int).SetUint64(bits))
-	part.Add(part, new(big.Int).Mul(new(big.Int).SetUint64(p.CellPrice), new(big.Int).SetUint64(cells)))
-	part = ceilShiftRight(part, 16)
-	return part.Add(part, new(big.Int).SetUint64(p.LumpPrice))
-}
-
-func (p *tonStoragePrices) computeStorageFee(isMasterchain bool, delta, bits, cells uint64) *big.Int {
-	var bitPrice, cellPrice uint64
-	if isMasterchain {
-		bitPrice = p.MCBitPrice
-		cellPrice = p.MCCellPrice
-	} else {
-		bitPrice = p.BitPrice
-		cellPrice = p.CellPrice
-	}
-	total := new(big.Int).Mul(new(big.Int).SetUint64(cells), new(big.Int).SetUint64(cellPrice))
-	total.Add(total, new(big.Int).Mul(new(big.Int).SetUint64(bits), new(big.Int).SetUint64(bitPrice)))
-	total.Mul(total, new(big.Int).SetUint64(delta))
-	return ceilShiftRight(total, 16)
-}
-
 func popUint64NonNegative(st *vm.Stack) (uint64, error) {
 	v, err := st.PopIntFinite()
 	if err != nil {
@@ -335,6 +265,56 @@ func popUint64NonNegative(st *vm.Stack) (uint64, error) {
 	return v.Uint64(), nil
 }
 
+type getExtraBalanceCheapObserver struct {
+	state     *vm.State
+	remaining int64
+	err       error
+}
+
+func newGetExtraBalanceCheapObserver(state *vm.State) *getExtraBalanceCheapObserver {
+	return &getExtraBalanceCheapObserver{
+		state:     state,
+		remaining: vm.GetExtraBalanceCheapMaxGas,
+	}
+}
+
+func (o *getExtraBalanceCheapObserver) OnCellLoad(hash cell.Hash) {
+	if o.err != nil {
+		return
+	}
+
+	price := int64(vm.CellReloadGasPrice)
+	if o.state.RegisterCellLoadFreeKey(hash) {
+		price = vm.CellLoadGasPrice
+	}
+
+	paid := price
+	if paid > o.remaining {
+		paid = o.remaining
+	}
+	if paid > 0 {
+		if err := o.state.ConsumeGas(paid); err != nil {
+			o.err = err
+			return
+		}
+		o.remaining -= paid
+	}
+	if free := price - paid; free > 0 {
+		o.state.ConsumeFreeGas(free)
+	}
+}
+
+func (o *getExtraBalanceCheapObserver) OnCellCreate() {
+}
+
+func (o *getExtraBalanceCheapObserver) OnRef(_ cell.TraceNode, _ int) cell.TraceNode {
+	return 0
+}
+
+func (o *getExtraBalanceCheapObserver) PendingError() error {
+	return o.err
+}
+
 func GETGASFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
@@ -342,15 +322,15 @@ func GETGASFEE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			prices, err := getTonGasPrices(state, isMasterchain)
-			if err != nil {
-				return err
-			}
 			gas, err := popUint64NonNegative(state.Stack)
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(prices.computeGasPrice(gas))
+			prices, err := getTonGasPrices(state, isMasterchain)
+			if err != nil {
+				return err
+			}
+			return state.Stack.PushInt(prices.ComputeGasPrice(gas))
 		},
 		Name:      "GETGASFEE",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x36),
@@ -383,7 +363,7 @@ func GETSTORAGEFEE() *helpers.SimpleOP {
 			if prices == nil {
 				return state.Stack.PushInt(big.NewInt(0))
 			}
-			return state.Stack.PushInt(prices.computeStorageFee(isMasterchain, delta, bits, cellsCnt))
+			return state.Stack.PushInt(prices.ComputeStorageFee(isMasterchain, delta, bits, cellsCnt))
 		},
 		Name:      "GETSTORAGEFEE",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x37),
@@ -409,7 +389,7 @@ func GETFORWARDFEE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(prices.computeForwardFee(cellsCnt, bits))
+			return state.Stack.PushInt(prices.ComputeForwardFee(cellsCnt, bits))
 		},
 		Name:      "GETFORWARDFEE",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x38),
@@ -497,12 +477,9 @@ func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 func GETEXTRABALANCE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			id, err := state.Stack.PopIntFinite()
+			id, err := state.Stack.PopIntRange(0, (1<<32)-1)
 			if err != nil {
 				return err
-			}
-			if id.Sign() < 0 || id.BitLen() > 32 {
-				return vmerr.Error(vmerr.CodeRangeCheck)
 			}
 
 			balanceAny, err := state.GetParam(7)
@@ -518,26 +495,46 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			if dictRootAny == nil {
-				return pushSmallInt(state, 0)
+			var dictRoot *cell.Cell
+			if dictRootAny != nil {
+				var ok bool
+				dictRoot, ok = dictRootAny.(*cell.Cell)
+				if !ok {
+					return vmerr.Error(vmerr.CodeTypeCheck)
+				}
 			}
-			dictRoot, ok := dictRootAny.(*cell.Cell)
-			if !ok {
-				return vmerr.Error(vmerr.CodeTypeCheck)
+			cheap := state.RegisterGetExtraBalanceCall()
+			if dictRoot == nil {
+				return pushSmallInt(state, 0)
 			}
 
 			key := cell.BeginCell().MustStoreBigUInt(id, 32).EndCell()
-			value, err := dictRoot.AsDict(32).SetObserver(&state.Cells).LoadValue(key)
+			observer := cell.Observer(&state.Cells)
+			var cheapObserver *getExtraBalanceCheapObserver
+			if cheap {
+				cheapObserver = newGetExtraBalanceCheapObserver(state)
+				observer = cheapObserver
+			}
+
+			value, err := dictRoot.AsDict(32).SetObserver(observer).LoadValue(key)
+			if cheapObserver != nil {
+				if gasErr := cheapObserver.PendingError(); gasErr != nil {
+					return gasErr
+				}
+			}
+			if gasErr := state.CheckGas(); gasErr != nil {
+				return gasErr
+			}
 			if err != nil {
 				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return pushSmallInt(state, 0)
 				}
-				return err
+				return vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
 			}
 
 			amount, err := value.LoadVarUInt(32)
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
 			}
 			return state.Stack.PushInt(amount)
 		},
@@ -725,21 +722,24 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 			appendMode := (args>>9)&1 != 0
 			hashID := int(args & 0xFF)
 			if hashID == 255 {
+				if state.Stack.Len() < 2 {
+					return vmerr.Error(vmerr.CodeStackUnderflow)
+				}
 				v, err := state.Stack.PopIntRange(0, 254)
 				if err != nil {
 					return err
 				}
 				hashID = int(v.Int64())
 			}
-			cntInt, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()))
+			maxCnt := state.Stack.Len() - 1
+			if appendMode {
+				maxCnt--
+			}
+			cntInt, err := state.Stack.PopIntRange(0, int64(maxCnt))
 			if err != nil {
 				return err
 			}
 			cnt := int(cntInt.Int64())
-			items, builder, err := collectHashExtItems(state, cnt, rev, appendMode)
-			if err != nil {
-				return err
-			}
 			hasher, err := newHashExtHasher(hashID)
 			if err != nil {
 				return err
@@ -748,17 +748,32 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 			var totalBits int
 			buf := make([]byte, 0, 64)
 			var gasConsumed int64
-			for i, item := range items {
+			for i := 0; i < cnt; i++ {
+				idx := i
+				if !rev {
+					idx = cnt - 1 - i
+				}
+				item, getErr := state.Stack.Get(idx)
+				if getErr != nil {
+					return getErr
+				}
 				data, bits, bitsErr := valueBitsForHashExt(item)
 				if bitsErr != nil {
+					if dropErr := state.Stack.Drop(cnt); dropErr != nil {
+						return dropErr
+					}
 					return bitsErr
 				}
-				buf = appendBits(buf, &totalBits, data, bits)
-				gasTotal := int64(i+1)*vm.HashExtEntryGasPrice + int64(totalBits/8)/hasher.BytesPerGasUnit()
+				nextTotalBits := totalBits + bits
+				gasTotal := int64(i+1)*vm.HashExtEntryGasPrice + int64(nextTotalBits/8)/hasher.BytesPerGasUnit()
 				if err = state.ConsumeGas(gasTotal - gasConsumed); err != nil {
 					return err
 				}
 				gasConsumed = gasTotal
+				buf = appendBits(buf, &totalBits, data, bits)
+			}
+			if err = state.Stack.Drop(cnt); err != nil {
+				return err
 			}
 			if totalBits%8 != 0 {
 				return vmerr.Error(vmerr.CodeCellUnderflow, "hash input does not consist of a whole number of bytes")
@@ -768,6 +783,10 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 			}
 			hash := hasher.Finish()
 			if appendMode {
+				builder, err := state.Stack.PopBuilder()
+				if err != nil {
+					return err
+				}
 				if !builder.CanExtendBy(uint(len(hash)*8), 0) {
 					return vmerr.Error(vmerr.CodeCellOverflow)
 				}
@@ -789,9 +808,6 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 				if err = out.Set(i, new(big.Int).SetBytes(hash[start:end])); err != nil {
 					return err
 				}
-			}
-			if err = state.ConsumeTupleGasLen(out.Len()); err != nil {
-				return err
 			}
 			return state.Stack.PushTuple(out)
 		},

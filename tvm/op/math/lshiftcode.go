@@ -16,7 +16,7 @@ func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopIntFinite()
+			x, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

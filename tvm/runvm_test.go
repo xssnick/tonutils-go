@@ -222,7 +222,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 	})
 
 	t.Run("RunvmLoadsChildC7", func(t *testing.T) {
-		childC7 := *tuple.NewTuple(*tuple.NewTuple(int64(11), int64(22)))
+		childC7 := tuple.NewTupleValue(tuple.NewTupleValue(int64(11), int64(22)))
 		stack, res, err := runRawCodeWithEnv(t,
 			codeFromBuilders(t, execop.RUNVM(16).Serialize()),
 			cell.BeginCell().EndCell(),

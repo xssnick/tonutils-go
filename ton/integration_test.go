@@ -605,6 +605,26 @@ func Test_GetConfigParamsAll(t *testing.T) {
 	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
 		t.Fatal("bad config response for 8 param")
 	}
+
+	for id := range conf.All() {
+		if conf.Get(id) == nil {
+			t.Fatalf("Get(%d) returned nil", id)
+		}
+	}
+
+	root, err := conf.ToCell()
+	if err != nil {
+		t.Fatal("build config root err:", err.Error())
+		return
+	}
+
+	parsedRoot, err := cell.FromBOC(root.ToBOC())
+	if err != nil {
+		t.Fatal("parse config boc err:", err.Error())
+		return
+	}
+
+	testTLBBlockchainConfigCoverage(t, tlb.BlockchainConfig{Root: parsedRoot})
 }
 
 func Test_GetConfigParams8(t *testing.T) {
@@ -628,6 +648,312 @@ func Test_GetConfigParams8(t *testing.T) {
 
 	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
 		t.Fatal("bad config response for 8 param")
+	}
+}
+
+func testTLBBlockchainConfigCoverage(t *testing.T, cfg tlb.BlockchainConfig) {
+	t.Helper()
+
+	for _, id := range []uint32{
+		tlb.ConfigParamConfigAddress,
+		tlb.ConfigParamElectorAddress,
+		tlb.ConfigParamMinterAddress,
+		tlb.ConfigParamFeeCollectorAddress,
+		tlb.ConfigParamDNSRootAddress,
+		tlb.ConfigParamBurningConfig,
+		tlb.ConfigParamExtraCurrencyMintPrices,
+		tlb.ConfigParamExtraCurrencyToMint,
+		tlb.ConfigParamGlobalVersion,
+		tlb.ConfigParamMandatoryParams,
+		tlb.ConfigParamCriticalParams,
+		tlb.ConfigParamConfigVotingSetup,
+		tlb.ConfigParamWorkchains,
+		tlb.ConfigParamComplaintPricing,
+		tlb.ConfigParamBlockCreateFees,
+		tlb.ConfigParamValidatorElectionTimings,
+		tlb.ConfigParamValidatorCountLimits,
+		tlb.ConfigParamValidatorStakeLimits,
+		tlb.ConfigParamStoragePrices,
+		tlb.ConfigParamGlobalID,
+		tlb.ConfigParamGasPricesMasterchain,
+		tlb.ConfigParamGasPricesBasechain,
+		tlb.ConfigParamBlockLimitsMasterchain,
+		tlb.ConfigParamBlockLimitsBasechain,
+		tlb.ConfigParamMsgForwardPricesMasterchain,
+		tlb.ConfigParamMsgForwardPricesBasechain,
+		tlb.ConfigParamCatchainConfig,
+		tlb.ConfigParamConsensusConfig,
+		tlb.ConfigParamNewConsensusConfig,
+		tlb.ConfigParamFundamentalSMCAddresses,
+		tlb.ConfigParamPrevValidators,
+		tlb.ConfigParamPrevTempValidators,
+		tlb.ConfigParamCurrentValidators,
+		tlb.ConfigParamCurrentTempValidators,
+		tlb.ConfigParamNextValidators,
+		tlb.ConfigParamNextTempValidators,
+		tlb.ConfigParamValidatorTempKeys,
+		tlb.ConfigParamMisbehaviourPunishment,
+		tlb.ConfigParamSizeLimits,
+		tlb.ConfigParamSuspendedAddressList,
+		tlb.ConfigParamPrecompiledContracts,
+	} {
+		param, err := cfg.GetParam(id)
+		if err != nil {
+			if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) && testTLBBlockchainConfigOptionalParam(id) {
+				continue
+			}
+
+			t.Fatalf("GetParam(%d) failed: %v", id, err)
+		}
+
+		if param == nil {
+			t.Fatalf("GetParam(%d) returned nil cell", id)
+		}
+	}
+
+	testTLBBlockchainConfigMustGet(t, "GetConfigAddress", func() error {
+		_, err := cfg.GetConfigAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetElectorAddress", func() error {
+		_, err := cfg.GetElectorAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMinterAddress", func() error {
+		_, err := cfg.GetMinterAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetFeeCollectorAddress", func() error {
+		_, err := cfg.GetFeeCollectorAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetDNSRootAddress", func() error {
+		_, err := cfg.GetDNSRootAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBurningConfig", func() error {
+		_, err := cfg.GetBurningConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetExtraCurrencyMintPrices", func() error {
+		_, err := cfg.GetExtraCurrencyMintPrices()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetExtraCurrencyToMint", func() error {
+		_, err := cfg.GetExtraCurrencyToMint()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGlobalVersion", func() error {
+		_, err := cfg.GetGlobalVersion()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMandatoryParams", func() error {
+		_, err := cfg.GetMandatoryParams()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetCriticalParams", func() error {
+		_, err := cfg.GetCriticalParams()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetConfigVotingSetup", func() error {
+		_, err := cfg.GetConfigVotingSetup()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetWorkchains", func() error {
+		_, err := cfg.GetWorkchains()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetComplaintPricing", func() error {
+		_, err := cfg.GetComplaintPricing()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBlockCreateFees", func() error {
+		_, err := cfg.GetBlockCreateFees()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetValidatorElectionTimings", func() error {
+		_, err := cfg.GetValidatorElectionTimings()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetValidatorCountLimits", func() error {
+		_, err := cfg.GetValidatorCountLimits()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetValidatorStakeLimits", func() error {
+		_, err := cfg.GetValidatorStakeLimits()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetStoragePrices", func() error {
+		_, err := cfg.GetStoragePrices(0)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGlobalID", func() error {
+		_, err := cfg.GetGlobalID()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGasPrices(masterchain)", func() error {
+		_, err := cfg.GetGasPrices(true)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGasPrices(basechain)", func() error {
+		_, err := cfg.GetGasPrices(false)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBlockLimits(masterchain)", func() error {
+		_, err := cfg.GetBlockLimits(true)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBlockLimits(basechain)", func() error {
+		_, err := cfg.GetBlockLimits(false)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMsgForwardPrices(masterchain)", func() error {
+		_, err := cfg.GetMsgForwardPrices(true)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMsgForwardPrices(basechain)", func() error {
+		_, err := cfg.GetMsgForwardPrices(false)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetCatchainConfig", func() error {
+		_, err := cfg.GetCatchainConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetConsensusConfig", func() error {
+		_, err := cfg.GetConsensusConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetNewConsensusConfig", func() error {
+		_, err := cfg.GetNewConsensusConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetFundamentalSmartContractAddresses", func() error {
+		_, err := cfg.GetFundamentalSmartContractAddresses()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetPrevValidators", func() error {
+		_, err := cfg.GetPrevValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetPrevTempValidators", func() error {
+		_, err := cfg.GetPrevTempValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetCurrentValidators", func() error {
+		_, err := cfg.GetCurrentValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetCurrentTempValidators", func() error {
+		_, err := cfg.GetCurrentTempValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetNextValidators", func() error {
+		_, err := cfg.GetNextValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetNextTempValidators", func() error {
+		_, err := cfg.GetNextTempValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetValidatorTempKeys", func() error {
+		_, err := cfg.GetValidatorTempKeys()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetMisbehaviourPunishmentConfig", func() error {
+		_, err := cfg.GetMisbehaviourPunishmentConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetSizeLimitsConfig", func() error {
+		_, err := cfg.GetSizeLimitsConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetSuspendedAddressList", func() error {
+		_, err := cfg.GetSuspendedAddressList()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetPrecompiledContractsConfig", func() error {
+		_, err := cfg.GetPrecompiledContractsConfig()
+		return err
+	})
+}
+
+func testTLBBlockchainConfigOptionalParam(id uint32) bool {
+	switch id {
+	case tlb.ConfigParamMinterAddress,
+		tlb.ConfigParamFeeCollectorAddress,
+		tlb.ConfigParamExtraCurrencyMintPrices,
+		tlb.ConfigParamExtraCurrencyToMint,
+		tlb.ConfigParamNewConsensusConfig,
+		tlb.ConfigParamFundamentalSMCAddresses,
+		tlb.ConfigParamPrevValidators,
+		tlb.ConfigParamPrevTempValidators,
+		tlb.ConfigParamCurrentTempValidators,
+		tlb.ConfigParamNextValidators,
+		tlb.ConfigParamNextTempValidators,
+		tlb.ConfigParamValidatorTempKeys,
+		tlb.ConfigParamMisbehaviourPunishment,
+		tlb.ConfigParamSizeLimits,
+		tlb.ConfigParamSuspendedAddressList,
+		tlb.ConfigParamPrecompiledContracts:
+		return true
+	}
+
+	return false
+}
+
+func testTLBBlockchainConfigMustGet(t *testing.T, name string, fn func() error) {
+	t.Helper()
+
+	if err := fn(); err != nil {
+		t.Fatalf("%s failed: %v", name, err)
+	}
+}
+
+func testTLBBlockchainConfigMaybeAbsent(t *testing.T, name string, fn func() error) {
+	t.Helper()
+
+	if err := fn(); err != nil && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
+		t.Fatalf("%s failed: %v", name, err)
 	}
 }
 

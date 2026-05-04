@@ -280,12 +280,12 @@ func TestPushContRoundTripAndInterpret(t *testing.T) {
 		EndCell()
 
 	tests := []struct {
-		name       string
-		cont       *cell.Cell
-		newOp      func(*cell.Cell) *OpPUSHCONT
-		typ        string
-		wantText   string
-		bits       int64
+		name     string
+		cont     *cell.Cell
+		newOp    func(*cell.Cell) *OpPUSHCONT
+		typ      string
+		wantText string
+		bits     int64
 	}{
 		{name: "Small", cont: small, newOp: PUSHCONT, typ: "SMALL", wantText: "SMALL PUSHCONT", bits: 8},
 		{name: "Big", cont: big, newOp: PUSHCONT, typ: "BIG", wantText: "BIG PUSHCONT", bits: 16},
@@ -739,10 +739,10 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 			j--
 		}
 	}
-	simRotate := func(vals []int64, from, to int) []int64 {
-		simReverse(vals, len(vals)-1, from+to)
-		simReverse(vals, from+to-1, 0)
-		simReverse(vals, len(vals)-1, 0)
+	simBlockSwap := func(vals []int64, x, y int) []int64 {
+		simReverse(vals, x+y-1, y)
+		simReverse(vals, y-1, 0)
+		simReverse(vals, x+y-1, 0)
 		return vals
 	}
 
@@ -874,7 +874,7 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 			text:    "2,1 BLKSWAP",
 			bits:    16,
 			expected: func(vals []int64) []int64 {
-				return simRotate(vals, 3, 1)
+				return simBlockSwap(vals, 3, 2)
 			},
 		},
 	}

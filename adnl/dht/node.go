@@ -241,6 +241,9 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 	if len(value.Data) > _MaxValueSize {
 		return fmt.Errorf("too big value")
 	}
+	if err := checkValueTTLAt(value.TTL, time.Now().Unix()); err != nil {
+		return err
+	}
 
 	k := value.KeyDescription.Key
 	if len(k.Name) == 0 || len(k.Name) > 127 || k.Index < 0 || k.Index > 15 { // TODO: move to better place when dht store ready
@@ -266,6 +269,10 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 
 	switch value.KeyDescription.UpdateRule.(type) {
 	case UpdateRuleAnybody:
+		switch value.KeyDescription.ID.(type) {
+		case keys.PublicKeyED25519, *keys.PublicKeyED25519, keys.PublicKeyOverlay, *keys.PublicKeyOverlay:
+			return fmt.Errorf("invalid key type for DhtUpdateRuleAnybody")
+		}
 		if len(value.Signature) > 0 {
 			return fmt.Errorf("cannot have signature in DhtUpdateRuleAnybody")
 		}

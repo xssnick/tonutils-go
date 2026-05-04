@@ -19,6 +19,17 @@ var MainContractCode = func() *cell.Cell {
 	return code
 }()
 
+func TestTVMSetGlobalVersionRejectsOldVersions(t *testing.T) {
+	v := NewTVM()
+
+	if err := v.SetGlobalVersion(MinSupportedGlobalVersion - 1); err == nil {
+		t.Fatal("SetGlobalVersion should reject old global version")
+	}
+	if err := v.SetGlobalVersion(MinSupportedGlobalVersion); err != nil {
+		t.Fatalf("SetGlobalVersion default version: %v", err)
+	}
+}
+
 func TestTVM_Execute(t *testing.T) {
 	v := NewTVM()
 

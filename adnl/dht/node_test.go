@@ -486,14 +486,49 @@ func TestNode_checkValue(t *testing.T) {
 	})
 
 	t.Run("anybody rule cannot have signature", func(t *testing.T) {
-		testVal := val
-		testVal.KeyDescription.UpdateRule = UpdateRuleAnybody{}
+		testID := keys.PublicKeyUnEnc{Key: []byte("anybody")}
+		testVal, testKeyID, err := buildStoreValue(testID, []byte("test"), 0, []byte("value"), UpdateRuleAnybody{}, time.Minute, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 		testVal.Signature = []byte{1}
-		err = checkValue(kId, &testVal)
+		err = checkValue(testKeyID, &testVal)
 		if err == nil {
 			t.Fatal("got error nil, want error not nil")
 		}
 		if !strings.Contains(err.Error(), "cannot have signature in DhtUpdateRuleAnybody") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("anybody rule rejects ed25519 key", func(t *testing.T) {
+		pub, _, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testVal, testKeyID, err := buildStoreValue(keys.PublicKeyED25519{Key: pub}, []byte("test"), 0, []byte("value"), UpdateRuleAnybody{}, time.Minute, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = checkValue(testKeyID, &testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "invalid key type for DhtUpdateRuleAnybody") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("anybody rule rejects overlay key", func(t *testing.T) {
+		testVal, testKeyID, err := buildStoreValue(keys.PublicKeyOverlay{Key: []byte("overlay")}, []byte("test"), 0, []byte("value"), UpdateRuleAnybody{}, time.Minute, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = checkValue(testKeyID, &testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "invalid key type for DhtUpdateRuleAnybody") {
 			t.Fatalf("got unexpected error %q", err.Error())
 		}
 	})

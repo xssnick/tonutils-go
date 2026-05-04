@@ -152,7 +152,7 @@ func TestBroadcastFECCalcID(t *testing.T) {
 		t.Fatalf("expected different hash for different sources")
 	}
 
-	base.Flags = _BroadcastFlagAnySender
+	base.Flags = BroadcastFlagAnySender
 	base.Source = keys.PublicKeyED25519{Key: pub1}
 	id3, err := base.CalcID()
 	if err != nil {

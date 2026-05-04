@@ -20,9 +20,9 @@ func TestTVMCrossEmulatorFixedSizeBitsOps(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	leafTuple := *tuplepkg.NewTuple(big.NewInt(2), big.NewInt(3))
-	midTuple := *tuplepkg.NewTuple(big.NewInt(1), leafTuple)
-	nestedTuple := *tuplepkg.NewTuple(midTuple)
+	leafTuple := tuplepkg.NewTupleValue(big.NewInt(2), big.NewInt(3))
+	midTuple := tuplepkg.NewTupleValue(big.NewInt(1), leafTuple)
+	nestedTuple := tuplepkg.NewTupleValue(midTuple)
 
 	type testCase struct {
 		name         string
@@ -51,7 +51,7 @@ func TestTVMCrossEmulatorFixedSizeBitsOps(t *testing.T) {
 		{
 			name:  "indexq_out_of_range",
 			code:  codeFromBuilders(t, tupleop.INDEXQ(2).Serialize()),
-			stack: []any{*tuplepkg.NewTuple(big.NewInt(11))},
+			stack: []any{tuplepkg.NewTupleValue(big.NewInt(11))},
 			exit:  0,
 		},
 		{

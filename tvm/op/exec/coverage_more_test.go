@@ -107,7 +107,7 @@ func TestSetContCtrAdditionalCoverage(t *testing.T) {
 		}
 
 		state := newTestState()
-		if err := state.Stack.PushTuple(*tuple.NewTuple(big.NewInt(7))); err != nil {
+		if err := state.Stack.PushTuple(tuple.NewTupleValue(big.NewInt(7))); err != nil {
 			t.Fatalf("push tuple: %v", err)
 		}
 		if err := state.Stack.PushContinuation(&testContinuation{name: "target"}); err != nil {
@@ -237,7 +237,7 @@ func TestControlRegisterHelperBranches(t *testing.T) {
 			t.Fatal("expected continuation clone to be a copy")
 		}
 
-		origTuple := *tuple.NewTuple(big.NewInt(9))
+		origTuple := tuple.NewTupleValue(big.NewInt(9))
 		clonedTuple, ok := cloneControlRegisterValue(origTuple).(tuple.Tuple)
 		if !ok || clonedTuple.Len() != 1 {
 			t.Fatalf("expected tuple clone")

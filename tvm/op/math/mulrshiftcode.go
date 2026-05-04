@@ -17,11 +17,11 @@ func MULRSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntFinite()
+			y, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

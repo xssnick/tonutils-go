@@ -36,28 +36,15 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	configRoot := mustConfigDictCell(t, map[uint32]*cell.Cell{
 		7: configValue,
 	})
-	version12Config := mustConfigDictCell(t, map[uint32]*cell.Cell{
-		8: cell.BeginCell().
-			MustStoreUInt(0xC4, 8).
-			MustStoreUInt(12, 32).
-			MustStoreUInt(0, 64).
-			EndCell(),
-	})
-	version12RefCfg := &referenceGetMethodConfig{
-		Address:    tonopsTestAddr,
-		Now:        uint32(tonopsTestTime.Unix()),
-		Balance:    uint64(tonopsTestBalance.Int64()),
-		RandSeed:   tonopsTestSeed,
-		ConfigRoot: version12Config,
-	}
+	version13RefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vm.DefaultGlobalVersion))
 	feeC7 := feeTestC7(t)
 	myCode := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	c7 := makeTonopsTestC7(t, tonopsTestC7Config{
 		ConfigRoot:    configRoot,
 		MyCode:        myCode,
 		StorageFees:   tonopsTestStorageFees,
-		IncomingValue: *tuple.NewTuple(big.NewInt(555), cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()),
-		Balance:       *tuple.NewTuple(big.NewInt(123456789), cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()),
+		IncomingValue: tuple.NewTupleValue(big.NewInt(555), cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()),
+		Balance:       tuple.NewTupleValue(big.NewInt(123456789), cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()),
 		Globals: map[int]any{
 			1: int64(111),
 			2: int64(222),
@@ -130,13 +117,12 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	badP256Key := append([]byte{0x05}, bytes.Repeat([]byte{0x01}, 32)...)
 
 	type testCase struct {
-		name          string
-		code          *cell.Cell
-		stack         []any
-		exit          int32
-		c7            tuple.Tuple
-		globalVersion int
-		refCfg        *referenceGetMethodConfig
+		name   string
+		code   *cell.Cell
+		stack  []any
+		exit   int32
+		c7     tuple.Tuple
+		refCfg *referenceGetMethodConfig
 	}
 
 	tests := []testCase{
@@ -457,6 +443,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "getextrabalance_nan_id_range",
+			code:  codeFromBuilders(t, funcsop.GETEXTRABALANCE().Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  int32(vmerr.CodeRangeCheck),
+			c7:    feeC7,
+		},
+		{
 			name:  "sha256u",
 			code:  codeFromBuilders(t, funcsop.SHA256U().Serialize()),
 			stack: []any{cell.BeginCell().MustStoreSlice([]byte("hello world"), 88).ToSlice()},
@@ -466,6 +459,56 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		{
 			name:  "hashext",
 			code:  codeFromBuilders(t, funcsop.HASHEXT(0).Serialize()),
+			stack: []any{cell.BeginCell().MustStoreSlice([]byte("hello world"), 88).ToSlice(), int64(1)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name: "hashext_bit_concat_success",
+			code: codeFromBuilders(t, funcsop.HASHEXT(0).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0xA, 4).ToSlice(),
+				cell.BeginCell().MustStoreUInt(0xB, 4).ToSlice(),
+				int64(2),
+			},
+			exit: 0,
+			c7:   feeC7,
+		},
+		{
+			name:  "hashext_unaligned_total_caught",
+			code:  codeFromBuilders(t, funcsop.HASHEXT(0).Serialize()),
+			stack: []any{cell.BeginCell().MustStoreUInt(0x7F, 7).ToSlice(), int64(1)},
+			exit:  int32(vmerr.CodeCellUnderflow),
+			c7:    feeC7,
+		},
+		{
+			name: "hashext_type_error_drops_items",
+			code: codeFromBuilders(t, funcsop.HASHEXT(0).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("ok"), 16).ToSlice(),
+				int64(777),
+				int64(2),
+			},
+			exit: int32(vmerr.CodeTypeCheck),
+			c7:   feeC7,
+		},
+		{
+			name:  "hashext_sha512_tuple",
+			code:  codeFromBuilders(t, funcsop.HASHEXT(1).Serialize()),
+			stack: []any{cell.BeginCell().MustStoreSlice([]byte("hello world"), 88).ToSlice(), int64(1)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "hashext_blake2b512_tuple",
+			code:  codeFromBuilders(t, funcsop.HASHEXT(2).Serialize()),
+			stack: []any{cell.BeginCell().MustStoreSlice([]byte("hello world"), 88).ToSlice(), int64(1)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "hashext_keccak512_tuple",
+			code:  codeFromBuilders(t, funcsop.HASHEXT(4).Serialize()),
 			stack: []any{cell.BeginCell().MustStoreSlice([]byte("hello world"), 88).ToSlice(), int64(1)},
 			exit:  0,
 			c7:    feeC7,
@@ -583,76 +626,68 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
-			name:          "ldstdaddr",
-			code:          codeFromBuilders(t, funcsop.LDSTDADDR().Serialize()),
-			stack:         []any{stdAddrSlice},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "ldstdaddr",
+			code:   codeFromBuilders(t, funcsop.LDSTDADDR().Serialize()),
+			stack:  []any{stdAddrSlice},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
-			name:          "ldstdaddrq",
-			code:          codeFromBuilders(t, funcsop.LDSTDADDRQ().Serialize()),
-			stack:         []any{stdAddrSlice},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "ldstdaddrq",
+			code:   codeFromBuilders(t, funcsop.LDSTDADDRQ().Serialize()),
+			stack:  []any{stdAddrSlice},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
-			name:          "ldoptstdaddr_none",
-			code:          codeFromBuilders(t, funcsop.LDOPTSTDADDR().Serialize()),
-			stack:         []any{addrNoneTail},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "ldoptstdaddr_none",
+			code:   codeFromBuilders(t, funcsop.LDOPTSTDADDR().Serialize()),
+			stack:  []any{addrNoneTail},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
-			name:          "ldoptstdaddrq_none",
-			code:          codeFromBuilders(t, funcsop.LDOPTSTDADDRQ().Serialize()),
-			stack:         []any{addrNoneTail},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "ldoptstdaddrq_none",
+			code:   codeFromBuilders(t, funcsop.LDOPTSTDADDRQ().Serialize()),
+			stack:  []any{addrNoneTail},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
-			name:          "ststdaddr",
-			code:          codeFromBuilders(t, funcsop.STSTDADDR().Serialize()),
-			stack:         []any{stdAddrSlice, cell.BeginCell()},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "ststdaddr",
+			code:   codeFromBuilders(t, funcsop.STSTDADDR().Serialize()),
+			stack:  []any{stdAddrSlice, cell.BeginCell()},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
-			name:          "ststdaddrq",
-			code:          codeFromBuilders(t, funcsop.STSTDADDRQ().Serialize()),
-			stack:         []any{stdAddrSlice, cell.BeginCell()},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "ststdaddrq",
+			code:   codeFromBuilders(t, funcsop.STSTDADDRQ().Serialize()),
+			stack:  []any{stdAddrSlice, cell.BeginCell()},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
-			name:          "stoptstdaddr_none",
-			code:          codeFromBuilders(t, funcsop.STOPTSTDADDR().Serialize()),
-			stack:         []any{nil, cell.BeginCell()},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "stoptstdaddr_none",
+			code:   codeFromBuilders(t, funcsop.STOPTSTDADDR().Serialize()),
+			stack:  []any{nil, cell.BeginCell()},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
-			name:          "stoptstdaddrq_none",
-			code:          codeFromBuilders(t, funcsop.STOPTSTDADDRQ().Serialize()),
-			stack:         []any{nil, cell.BeginCell()},
-			exit:          0,
-			c7:            feeC7,
-			globalVersion: 12,
-			refCfg:        version12RefCfg,
+			name:   "stoptstdaddrq_none",
+			code:   codeFromBuilders(t, funcsop.STOPTSTDADDRQ().Serialize()),
+			stack:  []any{nil, cell.BeginCell()},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
 		},
 		{
 			name:  "rawreserve",
@@ -717,11 +752,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				t.Fatalf("failed to build reference stack: %v", err)
 			}
 
-			goVersion := tt.globalVersion
-			if goVersion == 0 {
-				goVersion = vm.DefaultGlobalVersion
-			}
-			goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), tt.c7, goStack, goVersion)
+			goRes, err := runGoCrossCode(code, cell.BeginCell().EndCell(), tt.c7, goStack)
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
@@ -757,5 +788,27 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
 			}
 		})
+	}
+}
+
+func tonopsCrossConfigWithGlobalVersion(t *testing.T, version uint32) *cell.Cell {
+	t.Helper()
+
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version})
+	if err != nil {
+		t.Fatalf("failed to build global version config: %v", err)
+	}
+	return mustConfigDictCell(t, map[uint32]*cell.Cell{
+		uint32(tlb.ConfigParamGlobalVersion): versionCell,
+	})
+}
+
+func tonopsCrossRefConfig(configRoot *cell.Cell) *referenceGetMethodConfig {
+	return &referenceGetMethodConfig{
+		Address:    tonopsTestAddr,
+		Now:        uint32(tonopsTestTime.Unix()),
+		Balance:    uint64(tonopsTestBalance.Int64()),
+		RandSeed:   tonopsTestSeed,
+		ConfigRoot: configRoot,
 	}
 }

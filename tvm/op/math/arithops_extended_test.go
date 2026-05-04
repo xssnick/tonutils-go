@@ -5,6 +5,9 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/tvm/cell"
+	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -424,4 +427,158 @@ func TestQuietUnaryMinMaxAndCompareVariants(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestNonQuietNaNOperandsUseCppPopTimingUnderTry(t *testing.T) {
+	tests := []struct {
+		name      string
+		op        vm.OP
+		args      []any
+		wantStack []any
+		wantCode  int
+	}{
+		{name: "unary", op: NEGATE(), args: []any{vm.NaN{}}},
+		{name: "binary", op: SUM(), args: []any{int64(7), vm.NaN{}}},
+		{name: "division", op: DIV(), args: []any{int64(7), vm.NaN{}}},
+		{name: "shift count", op: LSHIFT(), args: []any{int64(7), vm.NaN{}}, wantStack: []any{int64(7)}, wantCode: vmerr.CodeRangeCheck},
+		{name: "shift value", op: LSHIFT(), args: []any{vm.NaN{}, int64(7)}},
+		{name: "mod", op: MOD(), args: []any{int64(7), vm.NaN{}}},
+		{name: "fits", op: FITS(7), args: []any{vm.NaN{}}},
+		{name: "compare", op: CMP(), args: []any{int64(7), vm.NaN{}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := vm.NewStack()
+			pushMathArgs(t, st, tt.args...)
+			var opErr error
+			var stackAtError *vm.Stack
+			var handlerCalls int
+
+			body := &mathTryContinuation{
+				jump: func(s *vm.State) (vm.Continuation, error) {
+					opErr = tt.op.Interpret(s)
+					if opErr == nil {
+						return nil, nil
+					}
+					stackAtError = s.Stack.Copy()
+
+					code, ok := vmerr.ErrorCode(opErr)
+					if !ok {
+						return nil, opErr
+					}
+					return nil, s.ThrowException(big.NewInt(code))
+				},
+			}
+			handler := &mathTryContinuation{
+				jump: func(*vm.State) (vm.Continuation, error) {
+					handlerCalls++
+					return nil, nil
+				},
+			}
+			if err := st.PushContinuation(body); err != nil {
+				t.Fatalf("failed to push TRY body: %v", err)
+			}
+			if err := st.PushContinuation(handler); err != nil {
+				t.Fatalf("failed to push TRY handler: %v", err)
+			}
+
+			state := vm.NewExecutionState(
+				vm.DefaultGlobalVersion,
+				vm.GasWithLimit(1_000_000),
+				cell.BeginCell().EndCell(),
+				tuple.Tuple{},
+				st,
+			)
+
+			if err := execop.TRY().Interpret(state); err != nil {
+				t.Fatalf("TRY failed: %v", err)
+			}
+			if opErr == nil {
+				t.Fatalf("expected %s to fail on NaN", tt.op.SerializeText())
+			}
+			wantCode := tt.wantCode
+			if wantCode == 0 {
+				wantCode = vmerr.CodeIntOverflow
+			}
+			if code, ok := vmerr.ErrorCode(opErr); !ok || code != int64(wantCode) {
+				t.Fatalf("expected code %d, got %v", wantCode, opErr)
+			}
+			if handlerCalls != 1 {
+				t.Fatalf("expected TRY handler to run once, got %d", handlerCalls)
+			}
+			if stackAtError == nil {
+				t.Fatal("missing stack snapshot at arithmetic error")
+			}
+
+			assertMathStackValues(t, stackAtError, tt.wantStack...)
+		})
+	}
+}
+
+type mathTryContinuation struct {
+	jump func(*vm.State) (vm.Continuation, error)
+}
+
+func (c *mathTryContinuation) GetControlData() *vm.ControlData {
+	return nil
+}
+
+func (c *mathTryContinuation) Jump(state *vm.State) (vm.Continuation, error) {
+	if c.jump == nil {
+		return nil, nil
+	}
+	return c.jump(state)
+}
+
+func (c *mathTryContinuation) Copy() vm.Continuation {
+	return &mathTryContinuation{jump: c.jump}
+}
+
+func pushMathArgs(t *testing.T, st *vm.Stack, vals ...any) {
+	t.Helper()
+
+	for _, val := range vals {
+		var err error
+		switch v := val.(type) {
+		case int64:
+			err = st.PushInt(big.NewInt(v))
+		default:
+			err = st.PushAny(v)
+		}
+		if err != nil {
+			t.Fatalf("failed to push test value: %v", err)
+		}
+	}
+}
+
+func assertMathStackValues(t *testing.T, st *vm.Stack, vals ...any) {
+	t.Helper()
+
+	if st.Len() != len(vals) {
+		t.Fatalf("stack length changed: got=%d want=%d stack=%s", st.Len(), len(vals), st.String())
+	}
+	for i := range vals {
+		want := vals[len(vals)-1-i]
+		got, err := st.Get(i)
+		if err != nil {
+			t.Fatalf("failed to read stack value %d: %v", i, err)
+		}
+
+		switch w := want.(type) {
+		case vm.NaN:
+			switch got.(type) {
+			case vm.NaN, *vm.NaN:
+			default:
+				t.Fatalf("stack value %d changed: got=%T want NaN", i, got)
+			}
+		case int64:
+			bi, ok := got.(*big.Int)
+			if !ok || bi.Int64() != w {
+				t.Fatalf("stack value %d changed: got=%v want=%d", i, got, w)
+			}
+		default:
+			t.Fatalf("unsupported expected value type %T", want)
+		}
+	}
 }

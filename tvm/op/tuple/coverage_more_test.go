@@ -12,7 +12,7 @@ import (
 
 func mustPushTupleValue(t *testing.T, state *vm.State, vals ...any) {
 	t.Helper()
-	if err := state.Stack.PushTuple(*tuplepkg.NewTuple(vals...)); err != nil {
+	if err := state.Stack.PushTuple(tuplepkg.NewTupleValue(vals...)); err != nil {
 		t.Fatalf("failed to push tuple: %v", err)
 	}
 }
@@ -105,7 +105,7 @@ func TestExecMakeTupleBranches(t *testing.T) {
 func TestTupleIndexAndExplodeBranches(t *testing.T) {
 	t.Run("Index2NavigatesNestedTuple", func(t *testing.T) {
 		state := newState()
-		inner := *tuplepkg.NewTuple(big.NewInt(7), big.NewInt(8), big.NewInt(9), big.NewInt(10))
+		inner := tuplepkg.NewTupleValue(big.NewInt(7), big.NewInt(8), big.NewInt(9), big.NewInt(10))
 		mustPushTupleValue(t, state, inner, big.NewInt(99))
 
 		if err := INDEX2(0, 2).Interpret(state); err != nil {
@@ -251,6 +251,30 @@ func TestSetIndexQuietBranches(t *testing.T) {
 		}
 		if got := val.(*big.Int).Int64(); got != 77 {
 			t.Fatalf("unexpected stored value: %d", got)
+		}
+	})
+
+	t.Run("NilFillBeyondLengthDoesNotChargeGas", func(t *testing.T) {
+		state := &vm.State{
+			Stack: vm.NewStack(),
+			Gas:   vm.GasWithLimit(100),
+		}
+		mustPushTupleValue(t, state, big.NewInt(1))
+		if err := state.Stack.PushAny(nil); err != nil {
+			t.Fatalf("failed to push nil value: %v", err)
+		}
+
+		before := state.Gas.Used()
+		if err := SETINDEXQ(3).Interpret(state); err != nil {
+			t.Fatalf("SETINDEXQ failed: %v", err)
+		}
+		if got := state.Gas.Used() - before; got != 0 {
+			t.Fatalf("SETINDEXQ nil extension gas = %d, want 0", got)
+		}
+
+		tup := mustPopTupleValue(t, state)
+		if tup.Len() != 1 {
+			t.Fatalf("tuple len = %d, want 1", tup.Len())
 		}
 	})
 }

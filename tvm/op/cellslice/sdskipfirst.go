@@ -3,6 +3,7 @@ package cellslice
 import (
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -22,8 +23,8 @@ func SDSKIPFIRST() *helpers.SimpleOP {
 				return err
 			}
 
-			if _, err = s1.LoadSlice(uint(i0.Uint64())); err != nil {
-				return err
+			if err = s1.Advance(uint(i0.Uint64())); err != nil {
+				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 
 			return state.Stack.PushSlice(s1)

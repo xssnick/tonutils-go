@@ -12,11 +12,11 @@ func init() {
 func MAX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntFinite()
+			i0, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			i1, err := state.Stack.PopIntFinite()
+			i1, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

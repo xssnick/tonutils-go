@@ -12,8 +12,8 @@ func FuzzFromBOCMultiRoot(f *testing.F) {
 		nil,
 		{},
 		valid.ToBOC(),
-		valid.ToBOCWithOptions(BOCOptions{WithIndex: true}),
-		valid.ToBOCWithOptions(BOCOptions{
+		valid.ToBOCWithOptions(BOCSerializeOptions{WithIndex: true}),
+		valid.ToBOCWithOptions(BOCSerializeOptions{
 			WithCRC32C:    true,
 			WithIndex:     true,
 			WithCacheBits: true,
@@ -43,7 +43,7 @@ func FuzzFromBOCMultiRoot(f *testing.F) {
 		if len(roots) == 0 {
 			t.Fatal("expected parsed boc to contain at least one root")
 		}
-		reboc := ToBOCWithOptions(roots, BOCOptions{
+		reboc := ToBOCWithOptions(roots, BOCSerializeOptions{
 			WithCRC32C:    true,
 			WithIndex:     true,
 			WithCacheBits: true,

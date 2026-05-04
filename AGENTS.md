@@ -22,6 +22,54 @@ This document is intentionally repo-specific. Follow the existing code and packa
 
 When adding code, keep it at the lowest layer that owns the responsibility. Do not pull high-level TON client concerns into `tl`, `tlb`, `tvm/cell`, or transport packages.
 
+
+## API design
+
+- Prefer linear APIs.
+- Do not use tri-state returns like `(value, ok, err)` in storage and domain code.
+
+- When data may be absent, use `(value, error)` and return a dedicated not-found error such as `ErrNotFound`.
+
+- If `err == nil`, the returned value must already be valid and ready to use.
+- Do not design APIs where `err == nil` but the caller still has to inspect `ok` or check the value for `nil`.
+
+- Keep boolean returns only when they represent a real property or business flag, not presence or absence of data.
+
+- Do not add wrapper APIs, aliases, or renames that do not simplify the code.
+- Avoid patterns like:
+  - `type X = Y`
+  - `type Options = ImplOptions`
+  - `Open -> OpenImpl`
+- Name public types and functions correctly once and use them directly.
+
+- Do not introduce internal conversion helpers like `fromX` and `toX` unless there is a real format boundary, protocol boundary, or external API boundary.
+- Inside the project, prefer using the actual types directly.
+
+## Code style
+
+- Add empty lines between logical blocks inside functions.
+
+- Do not make excessive nil checks.
+- Check only what can really be nil logically.
+- Do not check obvious value inputs for nil.
+- Treat low-level code as potentially hot. Add runtime checks only when they protect a real boundary, enforce an invariant that can be violated in normal use, or prevent a meaningful safety issue. Avoid defensive checks that duplicate earlier validation or guard states that cannot happen through the package API.
+
+- Keep code simple and optimized.
+- Add abstractions only when they remove real duplication or represent a real boundary.
+
+- Prefer straightforward Go-style code.
+- Keep the control flow linear and easy to read.
+- Avoid unnecessary indirection.
+
+## Protocol types
+
+- Any type used in `tl.Register(...)` must be public and named with a capital letter.
+
+## Tests
+
+- Keep test-only constants, hooks, and helpers in `_test.go` files.
+- Do not leave test-only code in normal production files.
+
 ## Architecture Rules
 
 - Treat `tvm/cell`, `tl`, and `tlb` as foundational packages. They should stay reusable and mostly independent from higher-level TON client logic.

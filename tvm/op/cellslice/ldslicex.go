@@ -1,9 +1,9 @@
 package cellslice
 
 import (
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -23,13 +23,11 @@ func LDSLICEX() *helpers.SimpleOP {
 				return err
 			}
 
-			s, err := s1.LoadSlice(uint(i0.Uint64()))
+			s, err := s1.FetchSubslice(uint(i0.Uint64()), 0)
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-
-			err = state.Stack.PushSlice(cell.BeginCell().MustStoreSlice(s, uint(i0.Uint64())).ToSlice())
-			if err != nil {
+			if err = state.Stack.PushSlice(s); err != nil {
 				return err
 			}
 			return state.Stack.PushSlice(s1)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -32,6 +33,18 @@ type reverseConnection struct {
 	key      ed25519.PublicKey
 	keyID    []byte
 	expireAt time.Time
+}
+
+type localStoreError struct {
+	err error
+}
+
+func (l *localStoreError) Error() string {
+	return l.err.Error()
+}
+
+func (l *localStoreError) Unwrap() error {
+	return l.err
 }
 
 type Server struct {
@@ -185,15 +198,62 @@ func (s *Server) Store(
 	s.ourValues[string(idKey)] = cloneValue(&val)
 	s.mx.Unlock()
 
-	if err = s.storeIn(&val); err != nil {
-		s.mx.Lock()
-		delete(s.ourValues, string(idKey))
-		s.mx.Unlock()
-		return 0, nil, err
+	storedCount, err = s.storePreparedValue(ctx, &val)
+	if err != nil {
+		var localErr *localStoreError
+		if errors.As(err, &localErr) {
+			s.mx.Lock()
+			delete(s.ourValues, string(idKey))
+			s.mx.Unlock()
+			return 0, nil, err
+		}
+	}
+	return storedCount, idKey, err
+}
+
+func (s *Server) storePreparedValue(ctx context.Context, val *Value) (storedCount int, err error) {
+	if val == nil {
+		return 0, fmt.Errorf("nil value")
 	}
 
-	storedCount, err = s.Client.storePreparedValue(ctx, &val)
-	return storedCount, idKey, err
+	keyID, err := tl.Hash(val.KeyDescription.Key)
+	if err != nil {
+		return 0, err
+	}
+
+	nearest := s.collectNearestNodes(ctx, keyID)
+
+	if s.shouldStoreLocally(keyID, nearest) {
+		if err = s.storeIn(val); err != nil {
+			return 0, &localStoreError{err: err}
+		}
+	}
+	if len(nearest) == 0 {
+		return 0, fmt.Errorf("no alive nodes found to store this key")
+	}
+
+	return s.Client.storeValueToNodes(ctx, keyID, val, nearest)
+}
+
+func (s *Server) shouldStoreLocally(keyID []byte, nearest []*dhtNode) bool {
+	if len(nearest) < s.k {
+		return true
+	}
+
+	var worst *dhtNode
+	for _, node := range nearest {
+		if node == nil {
+			continue
+		}
+		if worst == nil || xorDistanceLess(keyID, worst.adnlId, node.adnlId) {
+			worst = node
+		}
+	}
+	if worst == nil {
+		return true
+	}
+
+	return xorDistanceLess(keyID, s.selfID, worst.adnlId)
 }
 
 func (s *Server) RegisterReverseConnection(ctx context.Context) error {
@@ -534,7 +594,11 @@ func (s *Server) storeIn(value *Value) error {
 	if value == nil {
 		return fmt.Errorf("nil value")
 	}
-	if int64(value.TTL) <= time.Now().Unix() {
+	now := time.Now().Unix()
+	if err := checkValueTTLAt(value.TTL, now); err != nil {
+		return err
+	}
+	if int64(value.TTL) <= now {
 		return nil
 	}
 	keyID, err := tl.Hash(value.KeyDescription.Key)
@@ -748,44 +812,57 @@ func (s *Server) refreshNodes() {
 }
 
 func (s *Server) republishValues() {
+	now := time.Now().Unix()
+
 	s.mx.RLock()
-	values := make([]*Value, 0, len(s.ourValues))
-	for _, value := range s.ourValues {
-		values = append(values, cloneValue(value))
+	values := make(map[string]*Value, len(s.ourValues))
+	for keyID, value := range s.ourValues {
+		values[keyID] = cloneValue(value)
 	}
 	s.mx.RUnlock()
 
-	var forget [][]byte
-	for _, value := range values {
-		if value == nil || int64(value.TTL) <= time.Now().Unix()+60 {
+	republished := map[string]struct{}{}
+	for keyID, value := range values {
+		if value == nil || int64(value.TTL) <= now+60 {
 			continue
 		}
 
-		keyID, err := tl.Hash(value.KeyDescription.Key)
-		if err != nil {
+		if _, err := tl.Hash(value.KeyDescription.Key); err != nil {
 			continue
+		}
+
+		ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
+		_, _ = s.storePreparedValue(ctx, value)
+		cancel()
+		republished[keyID] = struct{}{}
+	}
+
+	var forget [][]byte
+	_ = s.store.ForEach(func(keyID []byte, value *Value) error {
+		if value == nil || int64(value.TTL) <= now+60 {
+			return nil
 		}
 
 		dist := s.distance(keyID, s.k+10)
 		if dist >= s.k+10 {
 			forget = append(forget, append([]byte{}, keyID...))
-			continue
+			return nil
 		}
 		if dist != 0 || !needRepublish(value) {
-			continue
+			return nil
+		}
+		if _, ok := republished[string(keyID)]; ok {
+			return nil
 		}
 
 		ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
-		_, _ = s.Client.storePreparedValue(ctx, value)
+		_, _ = s.storePreparedValue(ctx, value)
 		cancel()
-	}
+		return nil
+	})
 
-	if len(forget) > 0 {
-		s.mx.Lock()
-		for _, keyID := range forget {
-			delete(s.ourValues, string(keyID))
-		}
-		s.mx.Unlock()
+	for _, keyID := range forget {
+		_ = s.store.Delete(keyID)
 	}
 }
 
@@ -994,4 +1071,23 @@ func xorBit(a, b []byte, bit int) bool {
 	}
 	mask := byte(1 << uint(7-(bit%8)))
 	return (a[bit/8] & mask) != (b[bit/8] & mask)
+}
+
+func xorDistanceLess(key, a, b []byte) bool {
+	limit := len(key)
+	if len(a) < limit {
+		limit = len(a)
+	}
+	if len(b) < limit {
+		limit = len(b)
+	}
+
+	for i := 0; i < limit; i++ {
+		ax := key[i] ^ a[i]
+		bx := key[i] ^ b[i]
+		if ax != bx {
+			return ax < bx
+		}
+	}
+	return false
 }

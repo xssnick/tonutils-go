@@ -15,15 +15,18 @@ func init() {
 func DIVMODR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
 
+			if x == nil || y == nil {
+				return pushNaNOrOverflow(state, false)
+			}
 			if y.Sign() == 0 {
 				// division by 0
 				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")

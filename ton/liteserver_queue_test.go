@@ -192,7 +192,7 @@ func TestGetDispatchQueueMessages(t *testing.T) {
 					LT: 1000,
 					Metadata: TransactionMetadata{
 						Depth: 1,
-						Initiator: AccountId{
+						Initiator: AccountID{
 							Workchain: 0,
 							ID:        addr.Data(),
 						},

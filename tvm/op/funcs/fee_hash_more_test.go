@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -14,16 +15,15 @@ import (
 func makeFeeHashMoreState(t *testing.T) *vm.State {
 	t.Helper()
 
-	cfg := tuple.NewTupleSized(7)
-	storageSlice := cell.BeginCell().
+	storageCell := cell.BeginCell().
 		MustStoreUInt(0xCC, 8).
 		MustStoreUInt(1, 32).
 		MustStoreUInt(2, 64).
 		MustStoreUInt(3, 64).
 		MustStoreUInt(8, 64).
 		MustStoreUInt(13, 64).
-		ToSlice()
-	msgSliceMC := cell.BeginCell().
+		EndCell()
+	msgCellMC := cell.BeginCell().
 		MustStoreUInt(0xEA, 8).
 		MustStoreUInt(1, 64).
 		MustStoreUInt(0, 64).
@@ -31,8 +31,8 @@ func makeFeeHashMoreState(t *testing.T) *vm.State {
 		MustStoreUInt(0, 32).
 		MustStoreUInt(0, 16).
 		MustStoreUInt(0, 16).
-		ToSlice()
-	msgSliceWC := cell.BeginCell().
+		EndCell()
+	msgCellWC := cell.BeginCell().
 		MustStoreUInt(0xEA, 8).
 		MustStoreUInt(7, 64).
 		MustStoreUInt(1<<16, 64).
@@ -40,24 +40,80 @@ func makeFeeHashMoreState(t *testing.T) *vm.State {
 		MustStoreUInt(11, 32).
 		MustStoreUInt(3, 16).
 		MustStoreUInt(4, 16).
-		ToSlice()
-
-	if err := cfg.Set(0, storageSlice); err != nil {
-		t.Fatalf("failed to set storage config: %v", err)
-	}
-	if err := cfg.Set(4, msgSliceMC); err != nil {
-		t.Fatalf("failed to set masterchain msg config: %v", err)
-	}
-	if err := cfg.Set(5, msgSliceWC); err != nil {
-		t.Fatalf("failed to set workchain msg config: %v", err)
-	}
+		EndCell()
 
 	st := newFuncTestState(t, map[int]any{
-		paramIdxUnpackedConfig: cfg,
-		7:                      *tuple.NewTuple(big.NewInt(0), makeExtraBalanceDict(t, map[uint32]uint64{1: 9})),
+		9: makeConfigRootRefDict(t, map[uint32]*cell.Cell{
+			18: makeStoragePricesConfigDict(t, map[uint32]*cell.Cell{1: storageCell}),
+			24: msgCellMC,
+			25: msgCellWC,
+		}),
+		7: tuple.NewTupleValue(big.NewInt(0), makeExtraBalanceDict(t, map[uint32]uint64{1: 9})),
 	})
 	st.InitForExecution()
 	return st
+}
+
+func makeStoragePricesConfigDict(t *testing.T, entries map[uint32]*cell.Cell) *cell.Cell {
+	t.Helper()
+
+	dict := cell.NewDict(32)
+	for validSince, value := range entries {
+		if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(validSince)), value); err != nil {
+			t.Fatalf("failed to set storage prices entry %d: %v", validSince, err)
+		}
+	}
+
+	return dict.AsCell()
+}
+
+func makeDeepExtraBalanceDict(t *testing.T, salt uint32) *cell.Cell {
+	t.Helper()
+
+	entries := map[uint32]uint64{
+		0: uint64(1000 + salt),
+	}
+	for i := 0; i < 16; i++ {
+		entries[uint32(1)<<uint(31-i)] = uint64(2000 + salt + uint32(i))
+	}
+	return makeExtraBalanceDict(t, entries)
+}
+
+func setExtraBalanceParam(t *testing.T, st *vm.State, dict *cell.Cell) {
+	t.Helper()
+
+	params := tuple.NewTupleSized(8)
+	if err := params.Set(7, tuple.NewTupleValue(big.NewInt(0), dict)); err != nil {
+		t.Fatalf("failed to set balance param: %v", err)
+	}
+	c7 := tuple.NewTupleSized(1)
+	if err := c7.Set(0, params); err != nil {
+		t.Fatalf("failed to set c7 params: %v", err)
+	}
+	if err := st.SetC7(c7); err != nil {
+		t.Fatalf("failed to bind c7: %v", err)
+	}
+}
+
+func runExtraBalanceGasDelta(t *testing.T, st *vm.State, salt uint32) int64 {
+	t.Helper()
+
+	setExtraBalanceParam(t, st, makeDeepExtraBalanceDict(t, salt))
+	before := st.Gas.Used()
+	if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+		t.Fatalf("PushInt extra balance id failed: %v", err)
+	}
+	if err := GETEXTRABALANCE().Interpret(st); err != nil {
+		t.Fatalf("GETEXTRABALANCE failed: %v", err)
+	}
+	got, err := st.Stack.PopIntFinite()
+	if err != nil {
+		t.Fatalf("PopIntFinite extra balance failed: %v", err)
+	}
+	if got.Uint64() != uint64(1000+salt) {
+		t.Fatalf("unexpected extra balance: got %s want %d", got.String(), 1000+salt)
+	}
+	return st.Gas.Used() - before
 }
 
 func TestFeeHashMoreBranches(t *testing.T) {
@@ -112,6 +168,139 @@ func TestFeeHashMoreBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("hashext error timing preserves operands like cpp", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		if err := st.Stack.PushInt(big.NewInt(77)); err != nil {
+			t.Fatalf("PushInt marker failed: %v", err)
+		}
+		if err := st.Stack.PushBuilder(cell.BeginCell()); err != nil {
+			t.Fatalf("PushBuilder failed: %v", err)
+		}
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xAB, 8).ToSlice()); err != nil {
+			t.Fatalf("PushSlice failed: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(123)); err != nil {
+			t.Fatalf("PushInt bad item failed: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(2)); err != nil {
+			t.Fatalf("PushInt count failed: %v", err)
+		}
+		beforeGas := st.Gas.Used()
+		if err := HASHEXT(1 << 9).Interpret(st); err == nil {
+			t.Fatal("HASHEXTA should reject a non-slice item")
+		}
+		if delta := st.Gas.Used() - beforeGas; delta != vm.HashExtEntryGasPrice {
+			t.Fatalf("unexpected gas before type error: got %d want %d", delta, vm.HashExtEntryGasPrice)
+		}
+		if st.Stack.Len() != 2 {
+			t.Fatalf("expected marker and append builder after type error, got %d values", st.Stack.Len())
+		}
+		if _, err := st.Stack.PopBuilder(); err != nil {
+			t.Fatalf("append builder should remain on type error: %v", err)
+		}
+		if marker, err := st.Stack.PopIntFinite(); err != nil || marker.Int64() != 77 {
+			t.Fatalf("unexpected marker after type error: %v, %v", marker, err)
+		}
+
+		st = newFuncTestState(t, nil)
+		if err := st.Stack.PushInt(big.NewInt(88)); err != nil {
+			t.Fatalf("PushInt marker failed: %v", err)
+		}
+		if err := st.Stack.PushBuilder(cell.BeginCell()); err != nil {
+			t.Fatalf("PushBuilder failed: %v", err)
+		}
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreUInt(1, 1).ToSlice()); err != nil {
+			t.Fatalf("PushSlice failed: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("PushInt count failed: %v", err)
+		}
+		if err := HASHEXT(1 << 9).Interpret(st); err == nil {
+			t.Fatal("HASHEXTA should reject non-byte-aligned total input")
+		}
+		if st.Stack.Len() != 2 {
+			t.Fatalf("expected marker and append builder after byte error, got %d values", st.Stack.Len())
+		}
+		if _, err := st.Stack.PopBuilder(); err != nil {
+			t.Fatalf("append builder should remain on byte error: %v", err)
+		}
+
+		st = newFuncTestState(t, nil)
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("PushInt dynamic hash id failed: %v", err)
+		}
+		if err := HASHEXT(255).Interpret(st); err == nil {
+			t.Fatal("dynamic HASHEXT should fail before popping a lone hash id")
+		}
+		if st.Stack.Len() != 1 {
+			t.Fatalf("dynamic HASHEXT underflow popped hash id, stack len %d", st.Stack.Len())
+		}
+
+		st = newFuncTestState(t, nil)
+		if err := st.Stack.PushInt(big.NewInt(99)); err != nil {
+			t.Fatalf("PushInt marker failed: %v", err)
+		}
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xCD, 8).ToSlice()); err != nil {
+			t.Fatalf("PushSlice failed: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("PushInt count failed: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(42)); err != nil {
+			t.Fatalf("PushInt hash id failed: %v", err)
+		}
+		if err := HASHEXT(255).Interpret(st); err == nil {
+			t.Fatal("dynamic HASHEXT should reject unknown hash ids before popping items")
+		}
+		if st.Stack.Len() != 2 {
+			t.Fatalf("expected marker and item after hash-id error, got %d values", st.Stack.Len())
+		}
+		if _, err := st.Stack.PopSlice(); err != nil {
+			t.Fatalf("hash-id error should leave item on stack: %v", err)
+		}
+	})
+
+	t.Run("getextrabalance cheap gas and child counter", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		for i := uint32(0); i < vm.GetExtraBalanceCheapCount; i++ {
+			if delta := runExtraBalanceGasDelta(t, st, i); delta != vm.GetExtraBalanceCheapMaxGas {
+				t.Fatalf("cheap call %d gas = %d, want %d", i+1, delta, vm.GetExtraBalanceCheapMaxGas)
+			}
+		}
+		if st.Gas.FreeConsumed == 0 {
+			t.Fatal("expected cheap GETEXTRABALANCE to defer excess cell-load gas")
+		}
+		if delta := runExtraBalanceGasDelta(t, st, 100); delta <= vm.GetExtraBalanceCheapMaxGas {
+			t.Fatalf("sixth GETEXTRABALANCE should use normal gas, got %d", delta)
+		}
+
+		parent := newFuncTestState(t, nil)
+		parent.SetChildRunner(func(child *vm.State) (int64, error) {
+			setExtraBalanceParam(t, child, makeDeepExtraBalanceDict(t, 200))
+			if err := child.Stack.PushInt(big.NewInt(0)); err != nil {
+				return 0, err
+			}
+			if err := GETEXTRABALANCE().Interpret(child); err != nil {
+				return 0, err
+			}
+			_, err := child.Stack.PopIntFinite()
+			return 0, err
+		})
+		child := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
+		exitCode, err := parent.RunChild(child)
+		if err != nil || exitCode != 0 {
+			t.Fatalf("child GETEXTRABALANCE run = (%d, %v)", exitCode, err)
+		}
+		for i := uint32(0); i < vm.GetExtraBalanceCheapCount-1; i++ {
+			if delta := runExtraBalanceGasDelta(t, parent, 300+i); delta != vm.GetExtraBalanceCheapMaxGas {
+				t.Fatalf("post-child cheap call %d gas = %d, want %d", i+1, delta, vm.GetExtraBalanceCheapMaxGas)
+			}
+		}
+		if delta := runExtraBalanceGasDelta(t, parent, 400); delta <= vm.GetExtraBalanceCheapMaxGas {
+			t.Fatalf("child call did not advance parent cheap counter, next gas %d", delta)
+		}
+	})
+
 	t.Run("masterchain fee ops use the right config entries", func(t *testing.T) {
 		st := makeFeeHashMoreState(t)
 		if err := st.Stack.PushInt(big.NewInt(3)); err != nil {
@@ -133,13 +322,13 @@ func TestFeeHashMoreBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PopIntFinite failed: %v", err)
 		}
-		wantStorage := (&tonStoragePrices{
+		wantStorage := (&tlb.ConfigStoragePrices{
 			ValidSince:  1,
 			BitPrice:    2,
 			CellPrice:   3,
 			MCBitPrice:  8,
 			MCCellPrice: 13,
-		}).computeStorageFee(true, 7, 5, 3)
+		}).ComputeStorageFee(true, 7, 5, 3)
 		if gotStorage.Cmp(wantStorage) != 0 {
 			t.Fatalf("unexpected masterchain storage fee: want %v, got %v", wantStorage, gotStorage)
 		}
@@ -161,11 +350,11 @@ func TestFeeHashMoreBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PopIntFinite failed: %v", err)
 		}
-		wantForward := (&tonMsgPrices{
+		wantForward := (&tlb.ConfigMsgForwardPrices{
 			LumpPrice: 1,
 			BitPrice:  0,
 			CellPrice: 0,
-		}).computeForwardFee(2, 9)
+		}).ComputeForwardFee(2, 9)
 		if gotForward.Cmp(wantForward) != 0 {
 			t.Fatalf("unexpected masterchain forward fee: want %v, got %v", wantForward, gotForward)
 		}

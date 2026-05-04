@@ -44,7 +44,7 @@ func TestLoadCell_LoadAugDict(t *testing.T) {
 	ld = ld.MustLoadRef()
 
 	for i := 0; i < 3; i++ {
-		dict, err := ld.LoadAugDict(256, skipTestDepthBalanceInfoExtra)
+		dict, err := ld.LoadAugDict(256, ReadOnlyAugmentation{SkipExtraFn: skipTestDepthBalanceInfoExtra}, false)
 		if err != nil {
 			t.Fatal(err, i)
 			return
@@ -978,7 +978,11 @@ func TestDictionary_String(t *testing.T) {
 	Key 32[0000000E]: Value 32 bits, 0 refs
 }`
 
-	const lookProof = `{
+	const lookProofExact = `{
+	Key 32[00000007]: Value 32 bits, 0 refs
+}`
+
+	const lookProofWithNeighbor = `{
 	Key 32[00000006]: Value 32 bits, 0 refs
 	Key 32[00000007]: Value 32 bits, 0 refs
 }`
@@ -1016,9 +1020,11 @@ func TestDictionary_String(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	// 1 more neighbour key could be in proof, it is ok
-	if d := prf.AsDict(32); d.String() != lookProof {
-		t.Fatal(d.String())
+	// One neighbour key can be present in the proof, but it is not required.
+	d := prf.AsDict(32)
+	str := d.String()
+	if str != lookProofExact && str != lookProofWithNeighbor {
+		t.Fatal(str)
 	}
 }
 

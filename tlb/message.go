@@ -187,6 +187,23 @@ func (m *ExternalMessageOut) DestAddr() *address.Address {
 	return m.DstAddr
 }
 
+func (m *Message) ToCell() (*cell.Cell, error) {
+	if m == nil || m.Msg == nil {
+		return nil, errors.New("message is nil")
+	}
+
+	switch msg := m.Msg.(type) {
+	case *InternalMessage:
+		return ToCell(msg)
+	case *ExternalMessage:
+		return ToCell(msg)
+	case *ExternalMessageOut:
+		return ToCell(msg)
+	default:
+		return nil, fmt.Errorf("unsupported message type %T", m.Msg)
+	}
+}
+
 func (m *Message) LoadFromCell(loader *cell.Slice) error {
 	dup := loader.Copy()
 

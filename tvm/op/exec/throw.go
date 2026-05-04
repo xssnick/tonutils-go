@@ -7,6 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -62,6 +63,16 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 	op.Action = func(state *vm.State) error {
 		exception := big.NewInt(int64(exc))
 		expected := mode&1 == 1
+
+		if withArg {
+			need := 1
+			if mode != 0 {
+				need = 2
+			}
+			if state.Stack.Len() < need {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+		}
 
 		if mode != 0 {
 			cond, err := state.Stack.PopBool()
@@ -132,6 +143,9 @@ func newThrowAny() *helpers.AdvancedOP {
 			if err != nil {
 				return err
 			}
+			if val > 5 {
+				return vm.ErrCorruptedOpcode
+			}
 			args = val
 			return nil
 		},
@@ -143,6 +157,17 @@ func newThrowAny() *helpers.AdvancedOP {
 		throwCond := args&2 != 0
 
 		stack := state.Stack
+		need := 1
+		if hasCond {
+			need++
+		}
+		if hasParam {
+			need++
+		}
+		if stack.Len() < need {
+			return vmerr.Error(vmerr.CodeStackUnderflow)
+		}
+
 		var cond bool
 		var err error
 

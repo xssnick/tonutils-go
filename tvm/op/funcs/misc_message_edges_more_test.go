@@ -46,7 +46,7 @@ func makeSendMsgEdgeState(t *testing.T, myAddr *address.Address, mcPrices, wcPri
 
 	st := newFuncTestState(t, map[int]any{
 		paramIdxUnpackedConfig: cfg,
-		7:                      *tuple.NewTuple(big.NewInt(1000), makeExtraBalanceDict(t, map[uint32]uint64{7: 55})),
+		7:                      tuple.NewTupleValue(big.NewInt(1000), makeExtraBalanceDict(t, map[uint32]uint64{7: 55})),
 		8:                      cell.BeginCell().MustStoreAddr(myAddr).ToSlice(),
 	})
 	st.InitForExecution()

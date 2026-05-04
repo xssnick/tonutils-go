@@ -182,7 +182,7 @@ func TestConstStoreRemainingAndIndexedDepth(t *testing.T) {
 	if err = st.PushInt(big.NewInt(0)); err != nil {
 		t.Fatalf("push index: %v", err)
 	}
-	if err = CDEPTHIX().Interpret(&vm.State{Stack: st, GlobalVersion: 9}); err != nil {
+	if err = CDEPTHIX().Interpret(&vm.State{Stack: st, GlobalVersion: vm.DefaultGlobalVersion}); err != nil {
 		t.Fatalf("cdepthix: %v", err)
 	}
 	depth, err := st.PopIntFinite()

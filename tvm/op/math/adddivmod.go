@@ -13,15 +13,15 @@ func init() {
 func ADDDIVMOD() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			z, err := state.Stack.PopIntFinite()
+			z, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			w, err := state.Stack.PopIntFinite()
+			w, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

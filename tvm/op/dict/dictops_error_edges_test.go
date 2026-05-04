@@ -100,21 +100,15 @@ func TestPFXDICTSWITCHDeserializeEdgeBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("nil root serialization", func(t *testing.T) {
+	t.Run("nil root serialization fails", func(t *testing.T) {
 		op := PFXDICTSWITCH(cell.BeginCell().EndCell(), 1)
 		code := cell.BeginCell().
 			MustStoreSlice([]byte{0xF4, 0xAC}, 13).
 			MustStoreBoolBit(false).
 			MustStoreUInt(5, 10).
 			EndCell().BeginParse()
-		if err := op.Deserialize(code); err != nil {
-			t.Fatalf("Deserialize with nil root flag failed: %v", err)
-		}
-		if op.root != nil || op.bits != 5 {
-			t.Fatalf("expected Deserialize to clear the root and keep bits=5, got root=%v bits=%d", op.root, op.bits)
-		}
-		if got := op.SerializeText(); got != "PFXDICTSWITCH 5 (<nil>)" {
-			t.Fatalf("unexpected nil-root text form: %q", got)
+		if err := op.Deserialize(code); err == nil {
+			t.Fatal("expected Deserialize with nil root flag to fail")
 		}
 	})
 

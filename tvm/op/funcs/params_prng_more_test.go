@@ -11,7 +11,7 @@ import (
 func TestParamsPRNGMoreEdges(t *testing.T) {
 	t.Run("prev blocks alias propagates missing indexes", func(t *testing.T) {
 		st := newFuncTestState(t, map[int]any{
-			paramIdxPrevBlocksInfo: *tuple.NewTuple(big.NewInt(1)),
+			paramIdxPrevBlocksInfo: tuple.NewTupleValue(big.NewInt(1)),
 		})
 		if err := PREVMCBLOCKS_100().Interpret(st); err == nil {
 			t.Fatal("PREVMCBLOCKS_100 should fail when the tuple is too short")
@@ -20,14 +20,14 @@ func TestParamsPRNGMoreEdges(t *testing.T) {
 
 	t.Run("push in msg param propagates index errors", func(t *testing.T) {
 		st := newFuncTestState(t, map[int]any{
-			paramIdxInMsgParams: *tuple.NewTuple(big.NewInt(1)),
+			paramIdxInMsgParams: tuple.NewTupleValue(big.NewInt(1)),
 		})
 		if err := pushInMsgParam(st, 5); err == nil {
 			t.Fatal("pushInMsgParam should fail when the tuple is too short")
 		}
 
 		st = newFuncTestState(t, map[int]any{
-			paramIdxInMsgParams: *tuple.NewTuple(big.NewInt(1)),
+			paramIdxInMsgParams: tuple.NewTupleValue(big.NewInt(1)),
 		})
 		if err := INMSGPARAM(9).Interpret(st); err == nil {
 			t.Fatal("INMSGPARAM should propagate tuple index errors")

@@ -7,7 +7,7 @@ import (
 	"math/big"
 )
 
-var ErrAugmentationSemanticsUnavailable = errors.New("augmented dict was loaded without augmentation semantics; use the *WithAugmentation loader to enable mutation and extra validation")
+var ErrAugmentationSemanticsUnavailable = errors.New("augmented dict was loaded without augmentation semantics; provide an augmentation in LoadAugDict to enable mutation and extra validation")
 
 type AugmentedExtraSkipper func(*Slice) error
 
@@ -18,26 +18,26 @@ type Augmentation interface {
 	CombineExtra(leftExtra, rightExtra *Slice) (*Cell, error)
 }
 
-type readOnlyAugmentation struct {
-	skip AugmentedExtraSkipper
+type ReadOnlyAugmentation struct {
+	SkipExtraFn AugmentedExtraSkipper
 }
 
-func (a readOnlyAugmentation) SkipExtra(loader *Slice) error {
-	if a.skip == nil {
+func (a ReadOnlyAugmentation) SkipExtra(loader *Slice) error {
+	if a.SkipExtraFn == nil {
 		return fmt.Errorf("augmented dict extra skipper is nil")
 	}
-	return a.skip(loader)
+	return a.SkipExtraFn(loader)
 }
 
-func (a readOnlyAugmentation) EmptyExtra() (*Cell, error) {
+func (a ReadOnlyAugmentation) EmptyExtra() (*Cell, error) {
 	return nil, ErrAugmentationSemanticsUnavailable
 }
 
-func (a readOnlyAugmentation) LeafExtra(*Slice) (*Cell, error) {
+func (a ReadOnlyAugmentation) LeafExtra(*Slice) (*Cell, error) {
 	return nil, ErrAugmentationSemanticsUnavailable
 }
 
-func (a readOnlyAugmentation) CombineExtra(*Slice, *Slice) (*Cell, error) {
+func (a ReadOnlyAugmentation) CombineExtra(*Slice, *Slice) (*Cell, error) {
 	return nil, ErrAugmentationSemanticsUnavailable
 }
 
@@ -89,7 +89,7 @@ func (c *Slice) ToAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augmen
 // leaf value does not consume the whole remainder of the current slice.
 // Pass nil skipValue only when the augmented dict occupies the rest of the slice.
 func (c *Slice) ToAugDictWithValue(keySz uint, skipExtra AugmentedExtraSkipper, skipValue AugmentedExtraSkipper) (*AugmentedDictionary, error) {
-	return c.ToAugDictWithValueAndAugmentation(keySz, readOnlyAugmentation{skip: skipExtra}, skipValue)
+	return c.ToAugDictWithValueAndAugmentation(keySz, ReadOnlyAugmentation{SkipExtraFn: skipExtra}, skipValue)
 }
 
 func (c *Slice) ToAugDictWithValueAndAugmentation(keySz uint, aug Augmentation, skipValue AugmentedExtraSkipper) (*AugmentedDictionary, error) {
@@ -145,15 +145,15 @@ func (c *Slice) ToAugDictWithValueAndAugmentation(keySz uint, aug Augmentation, 
 	}, nil
 }
 
-func (c *Slice) LoadAugDict(keySz uint, skipExtra AugmentedExtraSkipper) (*AugmentedDictionary, error) {
-	return c.LoadAugDictWithAugmentation(keySz, readOnlyAugmentation{skip: skipExtra})
-}
-
-func (c *Slice) LoadAugDictWithAugmentation(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
-	if aug == nil {
-		return nil, fmt.Errorf("augmentation is nil")
+func (c *Slice) LoadAugDict(keySz uint, aug Augmentation, asProof bool) (*AugmentedDictionary, error) {
+	if asProof {
+		return c.loadAugDictAsProof(keySz, aug)
 	}
 
+	return c.loadAugDictWithAugmentation(keySz, aug)
+}
+
+func (c *Slice) loadAugDictWithAugmentation(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
 	hasSemantics, err := augmentationSupportsSemantics(aug)
 	if err != nil {
 		return nil, err
@@ -229,20 +229,49 @@ func (c *Slice) LoadAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augm
 	}, nil
 }
 
-func (c *Slice) MustLoadAugDict(keySz uint, skipExtra AugmentedExtraSkipper) *AugmentedDictionary {
-	dict, err := c.LoadAugDict(keySz, skipExtra)
+func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
+	hasRoot, err := c.LoadBoolBit()
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to load augmented dict root flag: %w", err)
 	}
-	return dict
-}
 
-func (c *Slice) MustLoadAugDictWithAugmentation(keySz uint, aug Augmentation) *AugmentedDictionary {
-	dict, err := c.LoadAugDictWithAugmentation(keySz, aug)
-	if err != nil {
-		panic(err)
+	if !hasRoot {
+		rootExtra, err := captureConsumedPrefix(c, aug.SkipExtra)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load augmented dict empty extra: %w", err)
+		}
+
+		return &AugmentedDictionary{
+			keySz:     keySz,
+			rootExtra: rootExtra,
+			wrapped:   true,
+			aug:       aug,
+		}, nil
 	}
-	return dict
+
+	root, err := c.LoadRefCell()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load augmented dict root ref: %w", err)
+	}
+
+	rootExtra, err := captureConsumedPrefix(c, aug.SkipExtra)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load augmented dict root extra: %w", err)
+	}
+
+	if root.GetType() != PrunedCellType {
+		if err = validateAugmentedDictRoot(root, keySz, aug); err != nil {
+			return nil, fmt.Errorf("failed to validate augmented dict root: %w", err)
+		}
+	}
+
+	return &AugmentedDictionary{
+		keySz:     keySz,
+		root:      root,
+		rootExtra: rootExtra,
+		wrapped:   true,
+		aug:       aug,
+	}, nil
 }
 
 func (d *AugmentedDictionary) GetKeySize() uint {
@@ -335,7 +364,7 @@ func (d *AugmentedDictionary) loadValueExtraSlice(key *Cell) (*Slice, error) {
 	if key == nil || key.BitsSize() != d.keySz {
 		return nil, fmt.Errorf("incorrect key size")
 	}
-	return findKeyInDict(d.root, key, nil, 0, false)
+	return findKeyInDict(d.root, key, nil, 0)
 }
 
 func (d *AugmentedDictionary) LoadValue(key *Cell) (*Slice, error) {
@@ -1132,8 +1161,10 @@ func captureConsumedPrefix(loader *Slice, consume func(*Slice) error) (*Cell, er
 	consumedRefs := beforeRefs - tmp.RefsNum()
 
 	b := BeginCell()
+	var err error
 	if consumedBits > 0 {
-		bits, err := loader.LoadSlice(consumedBits)
+		var bits []byte
+		bits, err = loader.LoadSlice(consumedBits)
 		if err != nil {
 			return nil, err
 		}

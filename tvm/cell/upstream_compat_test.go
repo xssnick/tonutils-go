@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-func bocOptionsFromMode(mode int) BOCOptions {
-	return BOCOptions{
+func bocOptionsFromMode(mode int) BOCSerializeOptions {
+	return BOCSerializeOptions{
 		WithIndex:     mode&1 != 0,
 		WithCRC32C:    mode&2 != 0,
 		WithTopHash:   mode&4 != 0,

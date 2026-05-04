@@ -1,6 +1,8 @@
 package math
 
 import (
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -12,16 +14,18 @@ func init() {
 func LEQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntFinite()
+			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
 
-			return state.Stack.PushBool(x.Cmp(y) != 1)
+			return pushCompareResult(state, x, y, func(x, y *big.Int) bool {
+				return x.Cmp(y) != 1
+			})
 		},
 		Name:      "LEQ",
 		BitPrefix: helpers.BytesPrefix(0xBB),

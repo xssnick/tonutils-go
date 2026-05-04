@@ -68,7 +68,7 @@ func execSetIndexQuiet(state *vm.State, idx int) error {
 
 	if idx >= length {
 		if val == nil {
-			return state.PushTupleCharged(*tup)
+			return state.Stack.PushTuple(*tup)
 		}
 		tup.Resize(idx + 1)
 	}

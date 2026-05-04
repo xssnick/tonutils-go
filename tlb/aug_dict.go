@@ -32,7 +32,16 @@ type ShardFeeCreated struct {
 }
 
 func (d *ShardAccountsAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, skipDepthBalanceInfoBoundary)
+	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipDepthBalanceInfoBoundary}, false)
+	if err != nil {
+		return err
+	}
+	d.AugmentedDictionary = dict
+	return nil
+}
+
+func (d *ShardAccountsAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
+	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipDepthBalanceInfoBoundary}, true)
 	if err != nil {
 		return err
 	}
@@ -45,7 +54,16 @@ func (d *ShardAccountsAugDict) ToCell() (*cell.Cell, error) {
 }
 
 func (d *ShardAccountBlocksAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, skipCurrencyCollectionBoundary)
+	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipCurrencyCollectionBoundary}, false)
+	if err != nil {
+		return err
+	}
+	d.AugmentedDictionary = dict
+	return nil
+}
+
+func (d *ShardAccountBlocksAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
+	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipCurrencyCollectionBoundary}, true)
 	if err != nil {
 		return err
 	}
@@ -71,7 +89,16 @@ func (d *AccountTransactionsAugDict) ToCell() (*cell.Cell, error) {
 }
 
 func (d *OldMcBlocksInfoAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(32, skipAugExtra[KeyMaxLt])
+	dict, err := loader.LoadAugDict(32, cell.ReadOnlyAugmentation{SkipExtraFn: skipAugExtra[KeyMaxLt]}, false)
+	if err != nil {
+		return err
+	}
+	d.AugmentedDictionary = dict
+	return nil
+}
+
+func (d *OldMcBlocksInfoAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
+	dict, err := loader.LoadAugDict(32, cell.ReadOnlyAugmentation{SkipExtraFn: skipAugExtra[KeyMaxLt]}, true)
 	if err != nil {
 		return err
 	}
@@ -84,7 +111,16 @@ func (d *OldMcBlocksInfoAugDict) ToCell() (*cell.Cell, error) {
 }
 
 func (d *ShardFeesAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(96, skipShardFeeCreatedBoundary)
+	dict, err := loader.LoadAugDict(96, cell.ReadOnlyAugmentation{SkipExtraFn: skipShardFeeCreatedBoundary}, false)
+	if err != nil {
+		return err
+	}
+	d.AugmentedDictionary = dict
+	return nil
+}
+
+func (d *ShardFeesAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
+	dict, err := loader.LoadAugDict(96, cell.ReadOnlyAugmentation{SkipExtraFn: skipShardFeeCreatedBoundary}, true)
 	if err != nil {
 		return err
 	}

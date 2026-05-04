@@ -33,7 +33,7 @@ func main() {
 		return
 	}
 
-	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	addr := address.MustParseAddr("UQDNx_gD2Tm4wbnIsOWYBwEf6ssseVNWyjGAl9KTSo4c4Sdr")
 
 	// we use WaitForBlock to make sure block is ready,
 	// it is optional but escapes us from liteserver block not ready errors

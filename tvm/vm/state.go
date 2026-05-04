@@ -30,7 +30,7 @@ func (r *Register) AdjustWith(r2 *Register) {
 		}
 		r.D[i] = r2.D[i]
 	}
-	if r2.C7.Len() > 0 {
+	if !r2.C7.IsNull() {
 		r.C7 = r2.C7
 	}
 }
@@ -90,7 +90,7 @@ func (r *Register) Define(i int, val any) bool {
 
 	if i == 7 {
 		c, ok := val.(tuple.Tuple)
-		if !ok {
+		if !ok || c.IsNull() {
 			return false
 		}
 
@@ -115,19 +115,23 @@ type CommittedState struct {
 }
 
 type State struct {
-	GlobalVersion int
-	CP            int
-	CurrentCode   *cell.Slice
-	Reg           Register
-	Gas           Gas
-	Cells         CellManager
-	Libraries     []*cell.Cell
-	Stack         *Stack
-	Steps         uint32
-	ChksgnCounter uint32
-	Committed     CommittedState
-	childRunner   ChildRunner
+	GlobalVersion          int
+	CP                     int
+	CurrentCode            *cell.Slice
+	Reg                    Register
+	Gas                    Gas
+	Cells                  CellManager
+	Libraries              []*cell.Cell
+	Stack                  *Stack
+	Steps                  uint32
+	StopOnAccept           bool
+	ChksgnCounter          uint32
+	GetExtraBalanceCounter uint32
+	Committed              CommittedState
+	childRunner            ChildRunner
 }
+
+var ErrStopOnAccept = errors.New("stop on accept")
 
 func emptyCell() *cell.Cell {
 	return cell.BeginCell().EndCell()
@@ -215,6 +219,7 @@ func (s *State) prepareChildForRun(child *State) error {
 	if child.GlobalVersion == 0 {
 		child.GlobalVersion = s.GlobalVersion
 	}
+	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	if len(child.Libraries) == 0 && len(s.Libraries) > 0 {
 		child.Libraries = append([]*cell.Cell{}, s.Libraries...)
 	}
@@ -227,7 +232,9 @@ func (s *State) runChildRaw(child *State) (int64, error) {
 	if err := s.prepareChildForRun(child); err != nil {
 		return 0, err
 	}
-	return s.childRunner(child)
+	exitCode, err := s.childRunner(child)
+	s.GetExtraBalanceCounter = child.GetExtraBalanceCounter
+	return exitCode, err
 }
 
 func (s *State) RunChild(child *State) (int64, error) {
@@ -235,6 +242,7 @@ func (s *State) RunChild(child *State) (int64, error) {
 		return 0, err
 	}
 	exitCode, err := s.childRunner(child)
+	s.GetExtraBalanceCounter = child.GetExtraBalanceCounter
 	if err != nil {
 		if _, ok := vmerr.ErrorCode(err); ok {
 			return exitCode, nil
@@ -270,6 +278,24 @@ func (s *State) RegisterChksgnCall() error {
 	}
 	s.ConsumeFreeGas(ChksgnGasPrice)
 	return nil
+}
+
+func (s *State) RegisterGetExtraBalanceCall() bool {
+	s.GetExtraBalanceCounter++
+	return s.GetExtraBalanceCounter <= GetExtraBalanceCheapCount
+}
+
+func (s *State) RegisterCellLoadFreeKey(key cell.Hash) bool {
+	s.Cells.Init(s)
+	if s.Cells.loaded == nil {
+		s.Cells.loaded = map[cell.Hash]struct{}{}
+	}
+	_, ok := s.Cells.loaded[key]
+	if !ok {
+		s.Cells.loaded[key] = struct{}{}
+		return true
+	}
+	return false
 }
 
 func (s *State) ConsumeStackGasLen(depth int) error {
@@ -379,7 +405,11 @@ func (s *State) SetGasLimit(limit int64) error {
 	if limit < s.Gas.Used() {
 		return vmerr.Error(vmerr.CodeOutOfGas)
 	}
+	accepting := s.StopOnAccept && s.Gas.Credit > 0
 	s.Gas.ChangeLimit(limit)
+	if accepting && s.Gas.Credit == 0 {
+		return ErrStopOnAccept
+	}
 	return nil
 }
 

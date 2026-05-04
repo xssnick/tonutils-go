@@ -56,15 +56,15 @@ func TestTVMCrossEmulatorSupercontractByPrefixes(t *testing.T) {
 	runSuperContractPrefixes(t, buildActionSuperContractSteps(t), feeTestC7(t))
 }
 
-func TestTVMCrossEmulatorSupercontractV12AddressByPrefixes(t *testing.T) {
+func TestTVMCrossEmulatorSupercontractAddressByPrefixes(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	version12Config := mustConfigDictCell(t, map[uint32]*cell.Cell{
+	version13Config := mustConfigDictCell(t, map[uint32]*cell.Cell{
 		8: cell.BeginCell().
 			MustStoreUInt(0xC4, 8).
-			MustStoreUInt(12, 32).
+			MustStoreUInt(13, 32).
 			MustStoreUInt(0, 64).
 			EndCell(),
 	})
@@ -73,9 +73,9 @@ func TestTVMCrossEmulatorSupercontractV12AddressByPrefixes(t *testing.T) {
 		Now:        uint32(tonopsTestTime.Unix()),
 		Balance:    uint64(tonopsTestBalance.Int64()),
 		RandSeed:   tonopsTestSeed,
-		ConfigRoot: version12Config,
+		ConfigRoot: version13Config,
 	}
-	steps := buildVersion12AddressSuperContractSteps(t)
+	steps := buildAddressSuperContractSteps(t)
 	builders := make([]*cell.Builder, 0, len(steps))
 	for _, step := range steps {
 		builders = append(builders, step.builder)
@@ -93,7 +93,7 @@ func TestTVMCrossEmulatorSupercontractV12AddressByPrefixes(t *testing.T) {
 			t.Fatalf("failed to build reference stack at step %d: %v", i+1, err)
 		}
 
-		goRes, err := runGoCrossCodeWithVersion(prefixCode, testEmptyCell(), feeTestC7(t), goStack, 12)
+		goRes, err := runGoCrossCode(prefixCode, testEmptyCell(), feeTestC7(t), goStack)
 		if err != nil {
 			t.Fatalf("go tvm execution failed at step %d (%s): %v", i+1, steps[i].name, err)
 		}
@@ -624,8 +624,8 @@ func buildSuperContractSteps(t *testing.T) ([]superContractStep, tuple.Tuple) {
 		7: configValue,
 	})
 	myCode := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
-	incomingValue := *tuple.NewTuple(big.NewInt(555), cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell())
-	balance := *tuple.NewTuple(big.NewInt(123456789), cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell())
+	incomingValue := tuple.NewTupleValue(big.NewInt(555), cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell())
+	balance := tuple.NewTupleValue(big.NewInt(123456789), cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell())
 
 	unpacked := tuple.NewTupleSized(7)
 	mustSetTupleValue(t, &unpacked, 0, makeStoragePricesSlice(100, 3, 5, 7, 11))
@@ -649,7 +649,7 @@ func buildSuperContractSteps(t *testing.T) ([]superContractStep, tuple.Tuple) {
 		},
 		ExtraParams: map[int]any{
 			2:  int64(42),
-			13: *tuple.NewTuple(int64(111), int64(222), int64(333)),
+			13: tuple.NewTupleValue(int64(111), int64(222), int64(333)),
 			15: int64(444),
 			16: int64(555),
 			17: makeInMsgParamsTuple(),
@@ -1207,10 +1207,10 @@ func feeExtraBalanceTestC7(t *testing.T) tuple.Tuple {
 	mustSetTupleValue(t, &unpacked, 6, makeSizeLimitsSlice(1<<20, 128))
 
 	return makeTonopsTestC7(t, tonopsTestC7Config{
-		Balance:        *tuple.NewTuple(new(big.Int).Set(tonopsTestBalance), extraDict.AsCell()),
+		Balance:        tuple.NewTupleValue(new(big.Int).Set(tonopsTestBalance), extraDict.AsCell()),
 		UnpackedConfig: unpacked,
 		ExtraParams: map[int]any{
-			13: *tuple.NewTuple(int64(111), int64(222), int64(333)),
+			13: tuple.NewTupleValue(int64(111), int64(222), int64(333)),
 			15: int64(444),
 			16: int64(555),
 			17: makeInMsgParamsTuple(),
@@ -1218,7 +1218,7 @@ func feeExtraBalanceTestC7(t *testing.T) tuple.Tuple {
 	})
 }
 
-func buildVersion12AddressSuperContractSteps(t *testing.T) []superContractStep {
+func buildAddressSuperContractSteps(t *testing.T) []superContractStep {
 	t.Helper()
 
 	stdAddrSlice := cell.BeginCell().MustStoreAddr(tonopsTestAddr).ToSlice()

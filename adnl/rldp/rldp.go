@@ -29,7 +29,7 @@ type Query struct {
 
 type Answer struct {
 	ID   []byte `tl:"int256"`
-	Data any    `tl:"bytes struct boxed"`
+	Data []byte `tl:"bytes"`
 }
 
 type Message struct {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -195,6 +196,209 @@ func TestServer_HandleQuery_StoreAndFindValue(t *testing.T) {
 	}
 	if !reflect.DeepEqual(res.Value, val) {
 		t.Fatalf("unexpected stored value")
+	}
+}
+
+func TestServer_HandleQuery_StoreRejectsTooLargeTTL(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	pubNode, err := newCorrectNode(1, 2, 3, 4, 17003)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := newMockPeerFromNode(t, pubNode, "1.2.3.4:17003")
+
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	val, _, err := buildStoreValue(
+		keys.PublicKeyED25519{Key: pub},
+		[]byte("address"),
+		0,
+		[]byte("value"),
+		UpdateRuleSignature{},
+		time.Duration(_MaxValueTTLSec+1)*time.Second,
+		key,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = server.handleQuery(peer, &adnl.MessageQuery{
+		ID:   make([]byte, 32),
+		Data: Store{Value: &val},
+	})
+	if err == nil {
+		t.Fatal("got error nil, want ttl error")
+	}
+	if !strings.Contains(err.Error(), "ttl is too big") {
+		t.Fatalf("got unexpected error %q", err.Error())
+	}
+}
+
+func TestServer_ShouldStoreLocallyMatchesCppRule(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+	server.k = 2
+
+	keyID := make([]byte, 32)
+	id := func(v byte) []byte {
+		out := make([]byte, 32)
+		out[31] = v
+		return out
+	}
+	nearest := []*dhtNode{
+		{adnlId: id(1)},
+		{adnlId: id(2)},
+	}
+
+	if !server.shouldStoreLocally(keyID, nearest[:1]) {
+		t.Fatal("should store locally when fewer than k nearest nodes are known")
+	}
+
+	server.selfID = id(3)
+	if server.shouldStoreLocally(keyID, nearest) {
+		t.Fatal("should not store locally when self is farther than worst nearest node")
+	}
+
+	server.selfID = id(0)
+	if !server.shouldStoreLocally(keyID, nearest) {
+		t.Fatal("should store locally when self is closer than worst nearest node")
+	}
+}
+
+func TestServer_RepublishOwnedValueEvenWhenNotClosest(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	val, keyID := newSignedTestValue(t)
+	addActiveTestNodeInBucket(t, server, firstDistanceBit(t, keyID, server.selfID, true))
+	if dist := server.distance(keyID, server.k+10); dist == 0 {
+		t.Fatal("test setup error: expected self not to be closest")
+	}
+
+	var storeCalls int32
+	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+
+	server.mx.Lock()
+	server.ourValues[string(keyID)] = cloneValue(&val)
+	server.mx.Unlock()
+
+	server.republishValues()
+
+	if atomic.LoadInt32(&storeCalls) == 0 {
+		t.Fatal("owned value was not republished")
+	}
+}
+
+func TestServer_RepublishStoredSignatureValueWhenClosest(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	val, keyID := newSignedTestValue(t)
+	addActiveTestNodeInBucket(t, server, firstDistanceBit(t, keyID, server.selfID, false))
+	if dist := server.distance(keyID, server.k+10); dist != 0 {
+		t.Fatalf("test setup error: expected self to be closest, dist=%d", dist)
+	}
+
+	var storeCalls int32
+	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+
+	if err := server.store.Put(keyID, &val); err != nil {
+		t.Fatal(err)
+	}
+
+	server.republishValues()
+
+	if atomic.LoadInt32(&storeCalls) == 0 {
+		t.Fatal("stored signature value was not republished")
+	}
+}
+
+func newSignedTestValue(t *testing.T) (Value, []byte) {
+	t.Helper()
+
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	val, keyID, err := buildStoreValue(
+		keys.PublicKeyED25519{Key: pub},
+		[]byte("address"),
+		0,
+		[]byte("value"),
+		UpdateRuleSignature{},
+		2*time.Minute,
+		key,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return val, keyID
+}
+
+func firstDistanceBit(t *testing.T, keyID, selfID []byte, wantDifferent bool) int {
+	t.Helper()
+
+	for bit := 0; bit < 256; bit++ {
+		if xorBit(keyID, selfID, bit) == wantDifferent {
+			return bit
+		}
+	}
+	t.Fatal("failed to find suitable distance bit")
+	return 0
+}
+
+func addActiveTestNodeInBucket(t *testing.T, server *Server, bit int) {
+	t.Helper()
+
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id := append([]byte{}, server.selfID...)
+	id[bit/8] ^= byte(1 << uint(7-(bit%8)))
+
+	node := server.initNode(id, fmt.Sprintf("127.0.0.1:%d", 20000+bit), pub, 1)
+	server.buckets[bit].addNode(node, true)
+}
+
+func dhtStoreQueryMock(t *testing.T, storeCalls *int32) func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	t.Helper()
+
+	return func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				raw, ok := req.(tl.Raw)
+				if !ok {
+					return nil
+				}
+
+				payload := []byte(raw)
+				var prefix Query
+				if rest, err := tl.Parse(&prefix, raw, true); err == nil {
+					payload = rest
+				}
+
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, payload, true); err == nil {
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+					return nil
+				}
+
+				var store Store
+				if _, err := tl.Parse(&store, payload, true); err == nil {
+					atomic.AddInt32(storeCalls, 1)
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+				}
+				return nil
+			},
+		}, nil
 	}
 }
 

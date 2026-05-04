@@ -21,6 +21,11 @@ func ONLYTOPX() *helpers.SimpleOP {
 			if count > state.Stack.Len() {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
+			if count < state.Stack.Len() {
+				if err := consumeLargeStackMoveGas(state, count); err != nil {
+					return err
+				}
+			}
 			return state.Stack.DropAfter(count)
 		},
 		Name:      "ONLYTOPX",

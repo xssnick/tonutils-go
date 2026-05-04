@@ -19,6 +19,8 @@ const (
 	StackEntryGasPrice         = 1
 	RunvmGasPrice              = 40
 	HashExtEntryGasPrice       = 1
+	GetExtraBalanceCheapCount  = 5
+	GetExtraBalanceCheapMaxGas = 200
 	FreeNestedContJump         = 8
 
 	Rist255MulGasPrice      = 2000

@@ -14,3 +14,10 @@ func popSmallIndex(state *vm.State) (int, error) {
 
 	return int(val.Int64()), nil
 }
+
+func consumeLargeStackMoveGas(state *vm.State, count int) error {
+	if count <= 255 {
+		return nil
+	}
+	return state.ConsumeGas(int64(count - 255))
+}

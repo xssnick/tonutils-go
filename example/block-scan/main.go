@@ -133,11 +133,13 @@ func main() {
 
 			// load all transactions in batches with 100 transactions in each while exists
 			for more {
+				took := time.Now()
 				fetchedIDs, more, err = api.WaitForBlock(master.SeqNo).GetBlockTransactionsV2(ctx, shard, 100, after)
 				if err != nil {
 					log.Fatalln("get tx ids err:", err.Error())
 					return
 				}
+				log.Printf("fetched %d transactions in %s\n", len(fetchedIDs), time.Since(took))
 
 				if more {
 					// set load offset for next query (pagination)
@@ -146,12 +148,14 @@ func main() {
 
 				for _, id := range fetchedIDs {
 					// get full transaction by id
+					took = time.Now()
 					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, byte(shard.Workchain), id.Account), id.LT)
 					if err != nil {
 						log.Fatalln("get tx data err:", err.Error())
 						return
 					}
 					txList = append(txList, tx)
+					log.Println("fetched tx:", "in", time.Since(took))
 				}
 			}
 		}
@@ -166,7 +170,7 @@ func main() {
 
 		master, err = api.WaitForBlock(master.SeqNo+1).LookupBlock(ctx, master.Workchain, master.Shard, master.SeqNo+1)
 		if err != nil {
-			log.Fatalln("get masterchain info err: ", err.Error())
+			log.Fatalln("lookup master err: ", err.Error())
 			return
 		}
 	}

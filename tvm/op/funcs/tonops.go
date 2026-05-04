@@ -284,12 +284,16 @@ func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
 		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, vmerr.Error(vmerr.CodeDict, err.Error())
 	}
 	if val.BitsLeft() != 0 || val.RefsNum() != 1 {
-		return nil, errors.New("value is not a single ref")
+		return nil, vmerr.Error(vmerr.CodeDict, "value is not a single ref")
 	}
-	return val.PeekRefCell()
+	ref, err := val.PeekRefCell()
+	if err != nil {
+		return nil, vmerr.Error(vmerr.CodeDict, err.Error())
+	}
+	return ref, nil
 }
 
 func CONFIGPARAM() *helpers.SimpleOP {

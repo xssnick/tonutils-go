@@ -206,7 +206,7 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 }
 
 func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
-	inner := *tuple.NewTuple(
+	inner := tuple.NewTupleValue(
 		uint32(0x076ef1ea),
 		uint8(0),
 		uint8(0),
@@ -214,21 +214,21 @@ func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
 		uint8(0),
 		uint8(0),
 		new(big.Int).SetBytes(crossTestSeed),
-		*tuple.NewTuple(new(big.Int).Set(crossTestBalance), nil),
+		tuple.NewTupleValue(new(big.Int).Set(crossTestBalance), nil),
 		cell.BeginCell().MustStoreAddr(crossTestAddr).ToSlice(),
 	)
 
 	if cfg != nil {
 		inner.Append(cfg.AsCell())
 		inner.Append(code)
-		inner.Append(*tuple.NewTuple(int64(0), nil))
+		inner.Append(tuple.NewTupleValue(int64(0), nil))
 		inner.Append(uint8(0))
 		inner.Append(nil)
 	} else {
 		inner.Append(nil)
 	}
 
-	return *tuple.NewTuple(inner)
+	return tuple.NewTupleValue(inner)
 }
 
 func mustCellFromHex(src string) *cell.Cell {

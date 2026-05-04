@@ -7,14 +7,67 @@ type merkleUpdateVisitKey struct {
 	merkleDepth int
 }
 
+type merkleUpdateCellKey struct {
+	cell        *Cell
+	merkleDepth int
+}
+
 type merkleUpdateValidator struct {
 	known     map[Hash]struct{}
-	visitedTo map[merkleUpdateVisitKey]struct{}
+	visitedTo map[merkleUpdateCellKey]struct{}
+}
+
+type merkleUpdateSourceIndex struct {
+	known map[Hash]*Cell
+	seen  map[merkleUpdateVisitKey]struct{}
 }
 
 type merkleUpdateApplier struct {
-	known map[Hash]*Cell
-	ready map[merkleUpdateVisitKey]*Cell
+	ready      map[merkleUpdateVisitKey]*Cell
+	reused     map[Hash]struct{}
+	reusedRefs map[merkleUpdateReusedRefKey]struct{}
+	reusedList []MerkleUpdateReusedCell
+	refList    []MerkleUpdateReusedRef
+}
+
+type merkleUpdateUnknownPrunedBranchError struct {
+	hash Hash
+}
+
+// MerkleUpdateReusedCell describes an old-state subtree reused through a
+// pruned boundary while applying a Merkle update.
+type MerkleUpdateReusedCell struct {
+	// Hash is the logical hash of the reused subtree as it appears in the
+	// returned root. It can be a virtual hash.
+	Hash Hash
+	// Cell carries the reference identity for storage and serialization. It may
+	// be a full source cell or a pruned placeholder with the same hashes/depths.
+	Cell *Cell
+}
+
+// MerkleUpdateReusedRef describes a parent->child edge where the child was
+// reused through a pruned boundary while applying a Merkle update.
+type MerkleUpdateReusedRef struct {
+	ParentHash  Hash
+	RefIndex    int
+	LogicalHash Hash
+	RawCell     *Cell
+}
+
+type MerkleUpdateReuse struct {
+	Cells []MerkleUpdateReusedCell
+	Refs  []MerkleUpdateReusedRef
+}
+
+type merkleUpdateReusedRefKey struct {
+	parentHash  Hash
+	refIndex    int
+	logicalHash Hash
+}
+
+type merkleUpdateReusedChild struct {
+	hash Hash
+	raw  *Cell
 }
 
 type merkleCombineNodeID uint32
@@ -53,18 +106,15 @@ func ValidateMerkleUpdate(update *Cell) error {
 
 	validator := merkleUpdateValidator{
 		known:     map[Hash]struct{}{},
-		visitedTo: map[merkleUpdateVisitKey]struct{}{},
+		visitedTo: map[merkleUpdateCellKey]struct{}{},
 	}
 
 	if err := walkMerkleUpdateSource(
 		updateFrom,
-		updateFrom,
 		0,
 		map[merkleUpdateVisitKey]struct{}{},
 		true,
-		func(source *Cell, merkleDepth int) {
-			validator.known[source.HashKey(merkleDepth)] = struct{}{}
-		},
+		validator.known,
 	); err != nil {
 		return err
 	}
@@ -90,41 +140,69 @@ func MayApplyMerkleUpdate(from, update *Cell) error {
 	return nil
 }
 
-func ApplyMerkleUpdate(from, update *Cell) (*Cell, error) {
+// ApplyMerkleUpdate applies update to from and returns the new root with
+// hashes of old-state subtrees reused through pruned boundaries.
+func ApplyMerkleUpdate(from, update *Cell) (*Cell, MerkleUpdateReuse, error) {
 	if from == nil {
-		return nil, fmt.Errorf("from cell is nil")
+		return nil, MerkleUpdateReuse{}, fmt.Errorf("from cell is nil")
 	}
 	if from.Level() != 0 {
-		return nil, fmt.Errorf("roots have non-zero level")
+		return nil, MerkleUpdateReuse{}, fmt.Errorf("roots have non-zero level")
 	}
 
 	updateFrom, updateTo, err := merkleUpdateRootRefs(update, true)
 	if err != nil {
-		return nil, err
+		return nil, MerkleUpdateReuse{}, err
 	}
 
 	if from.HashKey(0) != updateFrom.HashKey(0) {
-		return nil, fmt.Errorf("invalid Merkle update: expected old value hash = %x, applied to value with hash = %x", updateFrom.HashKey(0), from.HashKey(0))
+		return nil, MerkleUpdateReuse{}, fmt.Errorf("invalid Merkle update: expected old value hash = %x, applied to value with hash = %x", updateFrom.HashKey(0), from.HashKey(0))
 	}
 
+	return applyMerkleUpdateWithSourceIndex(from, updateFrom, updateTo)
+}
+
+func applyMerkleUpdateWithSourceIndex(from, updateFrom, updateTo *Cell) (*Cell, MerkleUpdateReuse, error) {
+	source := newMerkleUpdateSourceIndex(512)
+	if err := source.walkProof(from, updateFrom, 0); err != nil {
+		return nil, MerkleUpdateReuse{}, err
+	}
+	return collectMerkleUpdateRoot(updateTo, source.known, merkleUpdateReuseCap(source.known))
+}
+
+func newMerkleUpdateSourceIndex(capacity int) merkleUpdateSourceIndex {
+	return merkleUpdateSourceIndex{
+		known: make(map[Hash]*Cell, capacity),
+		seen:  make(map[merkleUpdateVisitKey]struct{}, capacity),
+	}
+}
+
+func merkleUpdateReuseCap(known map[Hash]*Cell) int {
+	capacity := len(known) / 2
+	if capacity < 1 {
+		return 1
+	}
+	return capacity
+}
+
+func (e merkleUpdateUnknownPrunedBranchError) Error() string {
+	return fmt.Sprintf("unknown pruned branch %x", e.hash[:])
+}
+
+func collectMerkleUpdateRoot(updateTo *Cell, known map[Hash]*Cell, reuseCap int) (*Cell, MerkleUpdateReuse, error) {
 	applier := merkleUpdateApplier{
-		known: map[Hash]*Cell{},
-		ready: map[merkleUpdateVisitKey]*Cell{},
+		ready:      make(map[merkleUpdateVisitKey]*Cell, len(known)),
+		reused:     make(map[Hash]struct{}, reuseCap),
+		reusedRefs: make(map[merkleUpdateReusedRefKey]struct{}, reuseCap),
 	}
-
-	if err := walkMerkleUpdateSource(
-		from,
-		updateFrom,
-		0,
-		map[merkleUpdateVisitKey]struct{}{},
-		false,
-		func(source *Cell, merkleDepth int) {
-			applier.known[source.HashKey(merkleDepth)] = source
-		},
-	); err != nil {
-		return nil, err
+	root, _, err := collectMerkleUpdateReuse(updateTo, 0, known, &applier)
+	if err != nil {
+		return nil, MerkleUpdateReuse{}, err
 	}
-	return applier.rebuild(updateTo, 0)
+	return root, MerkleUpdateReuse{
+		Cells: applier.reusedList,
+		Refs:  applier.refList,
+	}, nil
 }
 
 func CombineMerkleUpdate(ab, bc *Cell) (*Cell, error) {
@@ -178,11 +256,18 @@ func merkleUpdateRootRefs(update *Cell, validate bool) (*Cell, *Cell, error) {
 	if update.GetType() != MerkleUpdateCellType {
 		return nil, nil, fmt.Errorf("not a MerkleUpdate cell")
 	}
+	if update.refsCount() != 2 {
+		return nil, nil, fmt.Errorf("wrong references count for a merkle update special cell")
+	}
 
-	updateFrom := update.ref(0)
-	updateTo := update.ref(1)
-	if updateFrom == nil || updateTo == nil {
-		return nil, nil, fmt.Errorf("merkle update cell has nil references")
+	refView := newCellRefView(update)
+	updateFrom, err := refView.resolvedRef(0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load merkle update first ref: %w", err)
+	}
+	updateTo, err := refView.resolvedRef(1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load merkle update second ref: %w", err)
 	}
 	if validate {
 		if err := validateLoadedCell(update); err != nil {
@@ -204,41 +289,168 @@ func normalizeMerkleDepth(cell *Cell, merkleDepth int) int {
 	return cell.getLevelMask().Apply(merkleDepth).GetLevel()
 }
 
-func walkMerkleUpdateSource(source, shape *Cell, merkleDepth int, visited map[merkleUpdateVisitKey]struct{}, validateShape bool, onKnown func(source *Cell, merkleDepth int)) error {
-	if source == nil || shape == nil {
+func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpdateVisitKey]struct{}, validateSource bool, known map[Hash]struct{}) error {
+	if source == nil {
 		return fmt.Errorf("merkle update contains nil reference")
 	}
 
-	key := merkleUpdateSeenKey(shape, merkleDepth)
+	key := merkleUpdateSeenKey(source, merkleDepth)
 	if _, ok := visited[key]; ok {
 		return nil
 	}
 	visited[key] = struct{}{}
 
-	if validateShape {
-		if err := validateLoadedCell(shape); err != nil {
+	if validateSource {
+		if err := validateLoadedCell(source); err != nil {
 			return fmt.Errorf("invalid merkle update source subtree: %w", err)
 		}
 	}
 
-	onKnown(source, merkleDepth)
-	if shape.GetType() == PrunedCellType {
+	known[source.HashKey(merkleDepth)] = struct{}{}
+	if source.GetType() == PrunedCellType {
 		return nil
 	}
-	if source.refsCount() != shape.refsCount() {
-		return fmt.Errorf("invalid merkle update: source subtree refs mismatch")
-	}
 
-	childDepth := merkleChildDepth(shape, merkleDepth)
+	sourceRefs := newCellRefView(source)
+	childDepth := merkleChildDepth(source, merkleDepth)
 	for i := 0; i < source.refsCount(); i++ {
-		if err := walkMerkleUpdateSource(source.ref(i), shape.ref(i), childDepth, visited, validateShape, onKnown); err != nil {
+		sourceRef, err := sourceRefs.resolvedRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to load source ref %d: %w", i, err)
+		}
+		if err := walkMerkleUpdateSource(sourceRef, childDepth, visited, validateSource, known); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func merkleUpdateBoundaryPrunedHash(cell *Cell, merkleDepth int) (Hash, bool) {
+func (s *merkleUpdateSourceIndex) walkProof(original, source *Cell, merkleDepth int) error {
+	originalHash := original.HashKey(merkleDepth)
+	sourceHash := source.HashKey(merkleDepth)
+	if originalHash != sourceHash {
+		return fmt.Errorf("merkle update source hash mismatch: got=%x want=%x", originalHash[:], sourceHash[:])
+	}
+
+	s.known[originalHash] = original
+
+	key := merkleUpdateSeenKey(source, merkleDepth)
+	if _, ok := s.seen[key]; ok {
+		return nil
+	}
+	s.seen[key] = struct{}{}
+
+	if source.GetType() == PrunedCellType {
+		return nil
+	}
+
+	refsCount := source.refsCount()
+	if original.refsCount() != refsCount {
+		return fmt.Errorf("merkle update source refs mismatch: got=%d want=%d", original.refsCount(), refsCount)
+	}
+
+	sourceRefs := newCellRefView(source)
+	originalRefs := newCellRefView(original)
+	childDepth := merkleChildDepth(source, merkleDepth)
+	for i := 0; i < refsCount; i++ {
+		sourceRef, err := sourceRefs.resolvedRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to load source ref %d: %w", i, err)
+		}
+
+		originalRef, err := merkleUpdateSourceTreeRef(&originalRefs, sourceRef, i)
+		if err != nil {
+			return err
+		}
+		if err := s.walkProof(originalRef, sourceRef, childDepth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectMerkleUpdateReuse(cell *Cell, merkleDepth int, known map[Hash]*Cell, reuse *merkleUpdateApplier) (*Cell, *merkleUpdateReusedChild, error) {
+	if cell == nil {
+		return nil, nil, fmt.Errorf("merkle update contains nil reference")
+	}
+
+	if hash, ok := merkleUpdatePrunedBoundaryHash(cell, merkleDepth); ok {
+		ref := known[hash]
+		if ref == nil {
+			return nil, nil, merkleUpdateUnknownPrunedBranchError{hash: hash}
+		}
+		reuse.addReusedCell(hash, ref)
+		return ref, &merkleUpdateReusedChild{hash: hash, raw: ref}, nil
+	}
+	if cell.GetType() == PrunedCellType {
+		return cell, nil, nil
+	}
+
+	refsCount := cell.refsCount()
+	if refsCount == 0 {
+		return cell, nil, nil
+	}
+
+	key := merkleUpdateSeenKey(cell, merkleDepth)
+	if ready, ok := reuse.ready[key]; ok {
+		return ready, nil, nil
+	}
+
+	var refsBuf [4]*Cell
+	refs := refsBuf[:refsCount]
+	var reusedRefsBuf [4]*merkleUpdateReusedChild
+	reusedRefs := reusedRefsBuf[:0]
+	refView := newCellRefView(cell)
+	childDepth := merkleChildDepth(cell, merkleDepth)
+	changed := false
+	hasReused := false
+	for i := 0; i < len(refs); i++ {
+		ref, err := refView.resolvedRef(i)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load destination ref %d: %w", i, err)
+		}
+		rebuilt, reusedRef, err := collectMerkleUpdateReuse(ref, childDepth, known, reuse)
+		if err != nil {
+			return nil, nil, err
+		}
+		refs[i] = rebuilt
+		reusedRefs = append(reusedRefs, reusedRef)
+		changed = changed || rebuilt != ref
+		hasReused = hasReused || reusedRef != nil
+	}
+	if !changed {
+		reuse.ready[key] = cell
+		return cell, nil, nil
+	}
+	rebuilt, _, err := refView.cloneWithRefs(refs, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	if hasReused {
+		parentHash := rebuilt.HashKey()
+		for i, reusedRef := range reusedRefs {
+			if reusedRef != nil {
+				reuse.addReusedRef(parentHash, i, reusedRef.hash, reusedRef.raw)
+			}
+		}
+	}
+	reuse.ready[key] = rebuilt
+	return rebuilt, nil, nil
+}
+
+func merkleUpdateSourceTreeRef(refs *cellRefView, shapeRef *Cell, i int) (*Cell, error) {
+	if shapeRef.GetType() == PrunedCellType {
+		return refs.logicalBoundaryRef(i), nil
+	}
+
+	ref, err := refs.resolvedRef(i)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load source tree ref %d: %w", i, err)
+	}
+	return ref, nil
+}
+
+func merkleUpdatePrunedBoundaryHash(cell *Cell, merkleDepth int) (Hash, bool) {
 	if cell.GetType() != PrunedCellType || cell.Level() != merkleDepth+1 {
 		return Hash{}, false
 	}
@@ -250,7 +462,7 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 		return fmt.Errorf("merkle update contains nil reference")
 	}
 
-	key := merkleUpdateSeenKey(cell, merkleDepth)
+	key := merkleUpdateCellKey{cell: cell, merkleDepth: merkleDepth}
 	if _, ok := v.visitedTo[key]; ok {
 		return nil
 	}
@@ -260,7 +472,7 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 		return fmt.Errorf("invalid merkle update destination subtree: %w", err)
 	}
 
-	if hash, ok := merkleUpdateBoundaryPrunedHash(cell, merkleDepth); ok {
+	if hash, ok := merkleUpdatePrunedBoundaryHash(cell, merkleDepth); ok {
 		if _, ok := v.known[hash]; !ok {
 			return fmt.Errorf("unknown pruned cell in merkle update: %x", hash[:])
 		}
@@ -270,55 +482,43 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 		return nil
 	}
 
+	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	for i := 0; i < cell.refsCount(); i++ {
-		if err := v.dfsTo(cell.ref(i), childDepth); err != nil {
+		ref, err := refView.resolvedRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to load destination ref %d: %w", i, err)
+		}
+		if err := v.dfsTo(ref, childDepth); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (a *merkleUpdateApplier) rebuild(cell *Cell, merkleDepth int) (*Cell, error) {
-	if cell == nil {
-		return nil, fmt.Errorf("merkle update contains nil reference")
+func (a *merkleUpdateApplier) addReusedCell(hash Hash, raw *Cell) {
+	if _, ok := a.reused[hash]; ok {
+		return
 	}
+	a.reused[hash] = struct{}{}
+	a.reusedList = append(a.reusedList, MerkleUpdateReusedCell{
+		Hash: hash,
+		Cell: raw,
+	})
+}
 
-	if hash, ok := merkleUpdateBoundaryPrunedHash(cell, merkleDepth); ok {
-		if original, ok := a.known[hash]; ok {
-			return original, nil
-		}
-		return nil, fmt.Errorf("unknown pruned branch %x", hash[:])
+func (a *merkleUpdateApplier) addReusedRef(parentHash Hash, refIndex int, logicalHash Hash, raw *Cell) {
+	key := merkleUpdateReusedRefKey{parentHash: parentHash, refIndex: refIndex, logicalHash: logicalHash}
+	if _, ok := a.reusedRefs[key]; ok {
+		return
 	}
-	if cell.GetType() == PrunedCellType {
-		return cell, nil
-	}
-
-	key := merkleUpdateSeenKey(cell, merkleDepth)
-	if ready, ok := a.ready[key]; ok {
-		return ready, nil
-	}
-	if cell.refsCount() == 0 {
-		a.ready[key] = cell
-		return cell, nil
-	}
-
-	var refsBuf [4]*Cell
-	refs := refsBuf[:cell.refsCount()]
-	childDepth := merkleChildDepth(cell, merkleDepth)
-	for i := 0; i < len(refs); i++ {
-		ref, err := a.rebuild(cell.ref(i), childDepth)
-		if err != nil {
-			return nil, err
-		}
-		refs[i] = ref
-	}
-	rebuilt, err := rebuildCellWithRefs(cell, refs)
-	if err != nil {
-		return nil, err
-	}
-	a.ready[key] = rebuilt
-	return rebuilt, nil
+	a.reusedRefs[key] = struct{}{}
+	a.refList = append(a.refList, MerkleUpdateReusedRef{
+		ParentHash:  parentHash,
+		RefIndex:    refIndex,
+		LogicalHash: logicalHash,
+		RawCell:     raw,
+	})
 }
 
 func newMerkleCombineUsage() *merkleCombineUsage {
@@ -410,9 +610,14 @@ func (c *merkleUpdateCombiner) loadCells(cell *Cell, merkleDepth int) error {
 	}
 
 	info.cell = cell
+	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	for i := 0; i < cell.refsCount(); i++ {
-		if err := c.loadCells(cell.ref(i), childDepth); err != nil {
+		ref, err := refView.resolvedRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to load combine ref %d: %w", i, err)
+		}
+		if err := c.loadCells(ref, childDepth); err != nil {
 			return err
 		}
 	}
@@ -440,9 +645,14 @@ func (c *merkleUpdateCombiner) markA(cell *Cell, merkleDepth int, node merkleCom
 		return nil
 	}
 
+	refView := newCellRefView(info.cell)
 	childDepth := merkleChildDepth(info.cell, merkleDepth)
 	for i := 0; i < info.cell.refsCount(); i++ {
-		if err := c.markA(info.cell.ref(i), childDepth, c.usage.child(node, i)); err != nil {
+		ref, err := refView.resolvedRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to load source ref %d: %w", i, err)
+		}
+		if err := c.markA(ref, childDepth, c.usage.child(node, i)); err != nil {
 			return err
 		}
 	}
@@ -452,16 +662,22 @@ func (c *merkleUpdateCombiner) markA(cell *Cell, merkleDepth int, node merkleCom
 func (c *merkleUpdateCombiner) rebuildRefs(cell *Cell, merkleDepth, cacheDepth int, rebuild func(*Cell, int, int) (*Cell, error)) (*Cell, error) {
 	var refsBuf [4]*Cell
 	refs := refsBuf[:cell.refsCount()]
+	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	childCacheDepth := merkleChildDepth(cell, cacheDepth)
 	for i := 0; i < len(refs); i++ {
-		ref, err := rebuild(cell.ref(i), childDepth, childCacheDepth)
+		ref, err := refView.resolvedRef(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load combine ref %d: %w", i, err)
+		}
+		rebuilt, err := rebuild(ref, childDepth, childCacheDepth)
 		if err != nil {
 			return nil, err
 		}
-		refs[i] = ref
+		refs[i] = rebuilt
 	}
-	return rebuildCellWithRefs(cell, refs)
+	rebuilt, _, err := refView.cloneWithRefs(refs, nil)
+	return rebuilt, err
 }
 
 func (c *merkleUpdateCombiner) createD(cell *Cell, merkleDepth, dMerkleDepth int) (*Cell, error) {
@@ -585,43 +801,4 @@ func createMerkleUpdateCell(left, right *Cell) (*Cell, error) {
 		return nil, fmt.Errorf("failed to store right ref: %w", err)
 	}
 	return finalizeCellFromBuilder(builder, true)
-}
-
-func rebuildCellWithRefs(src *Cell, refs []*Cell) (*Cell, error) {
-	if src == nil {
-		return nil, fmt.Errorf("source cell is nil")
-	}
-	if len(refs) != src.refsCount() {
-		return nil, fmt.Errorf("unexpected refs count: got %d want %d", len(refs), src.refsCount())
-	}
-	for i, ref := range refs {
-		if ref != src.ref(i) {
-			return copyCellWithRefs(src, refs)
-		}
-	}
-	return src, nil
-}
-
-func copyCellWithRefs(src *Cell, refs []*Cell) (*Cell, error) {
-	if src == nil {
-		return nil, fmt.Errorf("source cell is nil")
-	}
-	if len(refs) != src.refsCount() {
-		return nil, fmt.Errorf("unexpected refs count: got %d want %d", len(refs), src.refsCount())
-	}
-
-	builder := BeginCell()
-	if err := storeBitSpan(builder, cellBits(src)); err != nil {
-		return nil, fmt.Errorf("failed to copy cell bits: %w", err)
-	}
-	for i, ref := range refs {
-		if err := builder.StoreRef(ref); err != nil {
-			return nil, fmt.Errorf("failed to store ref %d: %w", i, err)
-		}
-	}
-	rebuilt, err := finalizeCellFromBuilder(builder, src.isSpecial())
-	if err != nil {
-		return nil, fmt.Errorf("failed to finalize rebuilt cell: %w", err)
-	}
-	return rebuilt, nil
 }

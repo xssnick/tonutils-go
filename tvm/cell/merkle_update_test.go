@@ -2,6 +2,7 @@ package cell
 
 import (
 	"bytes"
+	"errors"
 	"math/rand"
 	"testing"
 )
@@ -46,16 +47,22 @@ func TestMerkleUpdateHands(t *testing.T) {
 		t.Fatalf("validate failed: %v", err)
 	}
 
-	got, err := ApplyMerkleUpdate(node, update)
+	got, reused, err := ApplyMerkleUpdate(node, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
 	assertCellsEqual(t, got, newNode)
+	if len(reused.Cells) != 1 || reused.Cells[0].Hash != data.HashKey() || reused.Cells[0].Cell != data {
+		t.Fatalf("unexpected reused cells: got=%x want=%x", reused, data.Hash())
+	}
+	if len(reused.Refs) != 1 || reused.Refs[0].LogicalHash != data.HashKey() || reused.Refs[0].RefIndex != 0 || reused.Refs[0].RawCell != reused.Cells[0].Cell {
+		t.Fatalf("unexpected reused refs: %+v", reused.Refs)
+	}
 
 	if err := MayApplyMerkleUpdate(otherNode, update); err == nil {
 		t.Fatal("expected may apply to reject a mismatched source root")
 	}
-	if _, err := ApplyMerkleUpdate(otherNode, update); err == nil {
+	if _, _, err := ApplyMerkleUpdate(otherNode, update); err == nil {
 		t.Fatal("expected apply to reject a mismatched source root")
 	}
 
@@ -75,7 +82,7 @@ func TestMerkleUpdateHands(t *testing.T) {
 	if err := ValidateMerkleUpdate(otherUpdate); err == nil {
 		t.Fatal("expected validate to reject unknown pruned destination branches")
 	}
-	if _, err := ApplyMerkleUpdate(otherNode, otherUpdate); err == nil {
+	if _, _, err := ApplyMerkleUpdate(otherNode, otherUpdate); err == nil {
 		t.Fatal("expected apply to reject unknown pruned destination branches")
 	}
 }
@@ -105,7 +112,7 @@ func TestMerkleUpdateOrdinaryTreeCases(t *testing.T) {
 				t.Fatalf("may apply failed: %v", err)
 			}
 
-			got, err := ApplyMerkleUpdate(from, update)
+			got, _, err := ApplyMerkleUpdate(from, update)
 			if err != nil {
 				t.Fatalf("apply failed: %v", err)
 			}
@@ -124,13 +131,270 @@ func TestApplyMerkleUpdateReusesUnchangedRefs(t *testing.T) {
 	}
 	update := mustMerkleUpdateCell(t, updateFrom, updateTo)
 
-	got, err := ApplyMerkleUpdate(from, update)
+	got, reused, err := ApplyMerkleUpdate(from, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
 	assertCellsEqual(t, got, to)
+	if !containsMerkleUpdateReusedCell(reused.Cells, from.ref(1).HashKey()) {
+		t.Fatalf("expected unchanged right subtree in reused cells: %x", from.ref(1).Hash())
+	}
 	if got.ref(1) != from.ref(1) {
-		t.Fatal("expected unchanged right subtree to be reused from source tree")
+		t.Fatal("expected unchanged right subtree to reuse source reference identity")
+	}
+}
+
+func TestApplyMerkleUpdatePreservesUnchangedLazyRefs(t *testing.T) {
+	from := buildBinaryTree([]uint16{1, 2, 3, 4})
+	to := buildBinaryTree([]uint16{101, 2, 3, 4})
+
+	updateFrom, updateTo, err := buildOrdinaryMerkleUpdateBodiesFromDiff(from, to)
+	if err != nil {
+		t.Fatalf("failed to build merkle update bodies: %v", err)
+	}
+	update := mustMerkleUpdateCell(t, updateFrom, updateTo)
+
+	loader := testLazyLoaderForCells(from.rawRefs()...)
+	lazyFrom := cellWithLazyRefsFromCell(from, loader.LoadCell)
+
+	got, reused, err := ApplyMerkleUpdate(lazyFrom, update)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if got.HashKey() != to.HashKey() {
+		t.Fatalf("hash mismatch: got=%x want=%x", got.Hash(), to.Hash())
+	}
+	rightHash := from.ref(1).HashKey()
+	if !containsMerkleUpdateReusedCell(reused.Cells, rightHash) {
+		t.Fatalf("expected unchanged right subtree in reused cells: %x", rightHash)
+	}
+	if len(reused.Cells) != 1 || reused.Cells[0].Cell == nil || reused.Cells[0].Cell.GetType() != PrunedCellType || !reused.Cells[0].Cell.IsLazy() {
+		t.Fatalf("expected reused cell metadata to carry source lazy ref identity, got %+v", reused)
+	}
+	if len(reused.Refs) != 1 || reused.Refs[0].LogicalHash != rightHash || reused.Refs[0].RefIndex != 1 || reused.Refs[0].RawCell != reused.Cells[0].Cell {
+		t.Fatalf("unexpected reused ref metadata: %+v", reused.Refs)
+	}
+	if loader.calls != 1 {
+		t.Fatalf("expected only changed source path to be loaded during apply, got %d", loader.calls)
+	}
+
+	right, err := got.PeekRef(1)
+	if err != nil {
+		t.Fatalf("load unchanged right ref: %v", err)
+	}
+	if right.HashKey() != from.ref(1).HashKey() {
+		t.Fatalf("unexpected right subtree hash: got=%x want=%x", right.Hash(), from.ref(1).Hash())
+	}
+}
+
+func TestApplyMerkleUpdateFullSourceWalkLoadsLazyBoundaries(t *testing.T) {
+	from := buildBinaryTree([]uint16{1, 2, 3, 4})
+
+	prunedLeft, err := createPrunedBranchFromCell(from.ref(0), 1)
+	if err != nil {
+		t.Fatalf("failed to prune left subtree: %v", err)
+	}
+	prunedRight, err := createPrunedBranchFromCell(from.ref(1), 1)
+	if err != nil {
+		t.Fatalf("failed to prune right subtree: %v", err)
+	}
+	updateTo, err := copyCellWithRefs(from, []*Cell{prunedLeft, prunedRight})
+	if err != nil {
+		t.Fatalf("failed to build pruned destination: %v", err)
+	}
+	update := mustMerkleUpdateCell(t, from, updateTo)
+
+	loader := testLazyLoaderForCells(from.rawRefs()...)
+	lazyFrom := cellWithLazyRefsFromCell(from, loader.LoadCell)
+
+	got, reused, err := ApplyMerkleUpdate(lazyFrom, update)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if got.HashKey() != from.HashKey() {
+		t.Fatalf("hash mismatch: got=%x want=%x", got.Hash(), from.Hash())
+	}
+	if loader.calls != 2 {
+		t.Fatalf("expected full source walk to load both lazy boundary refs, got %d", loader.calls)
+	}
+
+	leftHash := from.ref(0).HashKey()
+	rightHash := from.ref(1).HashKey()
+	if !containsMerkleUpdateReusedCell(reused.Cells, leftHash) || !containsMerkleUpdateReusedCell(reused.Cells, rightHash) {
+		t.Fatalf("expected both child subtrees in reused cells: %+v", reused.Cells)
+	}
+	if got.ref(0).IsLazy() || got.ref(1).IsLazy() {
+		t.Fatalf("expected full source walk to materialize reused refs")
+	}
+}
+
+func TestApplyMerkleUpdateCollectsKnownBranchesWhenDestinationShapeDiffers(t *testing.T) {
+	left := BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	right := BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	from := BeginCell().
+		MustStoreUInt(0x10, 8).
+		MustStoreRef(left).
+		MustStoreRef(right).
+		EndCell()
+	to := BeginCell().
+		MustStoreUInt(0x20, 8).
+		MustStoreRef(left).
+		EndCell()
+
+	prunedLeft, err := createPrunedBranchFromCell(left, 1)
+	if err != nil {
+		t.Fatalf("failed to prune left subtree: %v", err)
+	}
+	prunedRight, err := createPrunedBranchFromCell(right, 1)
+	if err != nil {
+		t.Fatalf("failed to prune right subtree: %v", err)
+	}
+	updateFrom, err := copyCellWithRefs(from, []*Cell{prunedLeft, prunedRight})
+	if err != nil {
+		t.Fatalf("failed to build pruned source: %v", err)
+	}
+	updateTo, err := copyCellWithRefs(to, []*Cell{prunedLeft})
+	if err != nil {
+		t.Fatalf("failed to build pruned destination: %v", err)
+	}
+	update := mustMerkleUpdateCell(t, updateFrom, updateTo)
+
+	lazyFrom := cellWithLazyRefsFromCell(from)
+
+	got, reused, err := ApplyMerkleUpdate(lazyFrom, update)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if got.HashKey() != to.HashKey() {
+		t.Fatalf("hash mismatch: got=%x want=%x", got.Hash(), to.Hash())
+	}
+	if !containsMerkleUpdateReusedCell(reused.Cells, left.HashKey()) {
+		t.Fatalf("expected reused left subtree in reused cells: %+v", reused.Cells)
+	}
+	if !got.ref(0).IsLazy() {
+		t.Fatal("expected reused left ref to remain lazy")
+	}
+}
+
+func TestApplyMerkleUpdateCollectsMovedDestinationBoundary(t *testing.T) {
+	reused := BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	oldLeft := BeginCell().MustStoreUInt(0x10, 8).MustStoreRef(reused).EndCell()
+	oldRight := BeginCell().MustStoreUInt(0x20, 8).EndCell()
+	from := BeginCell().
+		MustStoreUInt(0x30, 8).
+		MustStoreRef(oldLeft).
+		MustStoreRef(oldRight).
+		EndCell()
+
+	prunedReused, err := createPrunedBranchFromCell(reused, 1)
+	if err != nil {
+		t.Fatalf("failed to prune reused subtree: %v", err)
+	}
+	updateTo := BeginCell().
+		MustStoreUInt(0x40, 8).
+		MustStoreRef(prunedReused).
+		MustStoreRef(BeginCell().MustStoreUInt(0xBB, 8).EndCell()).
+		EndCell()
+	update := mustMerkleUpdateCell(t, from, updateTo)
+
+	loader := testLazyLoaderForCells(from.rawRefs()...)
+	lazyFrom := cellWithLazyRefsFromCell(from, loader.LoadCell)
+
+	got, reusedMeta, err := ApplyMerkleUpdate(lazyFrom, update)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if got.HashKey(0) != updateTo.HashKey(0) {
+		t.Fatalf("hash mismatch: got=%x want=%x", got.Hash(), updateTo.Hash())
+	}
+	if !containsMerkleUpdateReusedCell(reusedMeta.Cells, reused.HashKey()) {
+		t.Fatalf("expected moved reused subtree in reused cells: %+v", reusedMeta.Cells)
+	}
+	if loader.calls == 0 {
+		t.Fatal("expected fallback source walk to load old subtree")
+	}
+}
+
+func TestApplyMerkleUpdateFallsBackWhenBoundaryIsInsideSkippedSubtree(t *testing.T) {
+	oldLeft := BeginCell().MustStoreUInt(0x10, 8).EndCell()
+	reused := BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	oldRight := BeginCell().MustStoreUInt(0x20, 8).MustStoreRef(reused).EndCell()
+	from := BeginCell().
+		MustStoreUInt(0x30, 8).
+		MustStoreRef(oldLeft).
+		MustStoreRef(oldRight).
+		EndCell()
+
+	prunedReused, err := createPrunedBranchFromCell(reused, 1)
+	if err != nil {
+		t.Fatalf("failed to prune reused subtree: %v", err)
+	}
+	prunedOldRight, err := createPrunedBranchFromCell(oldRight, 1)
+	if err != nil {
+		t.Fatalf("failed to prune old right subtree: %v", err)
+	}
+	updateTo := BeginCell().
+		MustStoreUInt(0x40, 8).
+		MustStoreRef(prunedReused).
+		MustStoreRef(prunedOldRight).
+		EndCell()
+	update := mustMerkleUpdateCell(t, from, updateTo)
+
+	loader := testLazyLoaderForCells(from.rawRefs()...)
+	lazyFrom := cellWithLazyRefsFromCell(from, loader.LoadCell)
+
+	got, reusedMeta, err := ApplyMerkleUpdate(lazyFrom, update)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	if got.HashKey(0) != updateTo.HashKey(0) {
+		t.Fatalf("hash mismatch: got=%x want=%x", got.Hash(), updateTo.Hash())
+	}
+	if !containsMerkleUpdateReusedCell(reusedMeta.Cells, reused.HashKey()) {
+		t.Fatalf("expected nested moved subtree in reused cells: %+v", reusedMeta.Cells)
+	}
+	if loader.calls == 0 {
+		t.Fatal("expected fallback source walk to load skipped old subtree")
+	}
+}
+
+func containsMerkleUpdateReusedCell(cells []MerkleUpdateReusedCell, hash Hash) bool {
+	for _, candidate := range cells {
+		if candidate.Hash == hash {
+			return true
+		}
+	}
+	return false
+}
+
+func TestValidateMerkleUpdateLoadsLazyRootRefs(t *testing.T) {
+	from := buildBinaryTree([]uint16{1, 2, 3, 4})
+	to := buildBinaryTree([]uint16{1, 2, 3, 44})
+
+	updateFrom, updateTo, err := buildOrdinaryMerkleUpdateBodiesFromDiff(from, to)
+	if err != nil {
+		t.Fatalf("failed to build merkle update bodies: %v", err)
+	}
+
+	update := mustMerkleUpdateCell(t,
+		mustCreateLazyPrunedRef(t, lazyRefFromCell(updateFrom)),
+		mustCreateLazyPrunedRef(t, lazyRefFromCell(updateTo)),
+	)
+	if err = ValidateMerkleUpdate(update); !errors.Is(err, ErrLazyLoaderNotSet) {
+		t.Fatalf("expected lazy loader error, got %v", err)
+	}
+
+	loader := testLazyLoaderForCells(updateFrom, updateTo)
+	update = mustMerkleUpdateCell(t,
+		mustCreateLazyPrunedRef(t, lazyRefFromCell(updateFrom), loader.LoadCell),
+		mustCreateLazyPrunedRef(t, lazyRefFromCell(updateTo), loader.LoadCell),
+	)
+
+	if err = ValidateMerkleUpdate(update); err != nil {
+		t.Fatalf("validate failed: %v", err)
+	}
+	if loader.calls == 0 {
+		t.Fatal("expected lazy update refs to be loaded")
 	}
 }
 
@@ -403,7 +667,7 @@ func TestMerkleUpdateRejectsNonZeroLevelRoot(t *testing.T) {
 	if err := MayApplyMerkleUpdate(leafA, update); err == nil {
 		t.Fatal("expected may apply to reject a non-zero-level merkle update root")
 	}
-	if _, err := ApplyMerkleUpdate(leafA, update); err == nil {
+	if _, _, err := ApplyMerkleUpdate(leafA, update); err == nil {
 		t.Fatal("expected apply to reject a non-zero-level merkle update root")
 	}
 }
@@ -494,7 +758,7 @@ func buildOrdinaryMerkleUpdateBodiesFromDiffAt(from, to *Cell, allowPrune bool) 
 		}
 		return prunedFrom, prunedTo, nil
 	}
-	if from.refsCount() != to.refsCount() || from.isSpecial() != to.isSpecial() {
+	if from.refsCount() != to.refsCount() || from.IsSpecial() != to.IsSpecial() {
 		return nil, nil, bytes.ErrTooLarge
 	}
 	if from.refsCount() == 0 {
@@ -561,7 +825,7 @@ func checkMerkleUpdate(tb testing.TB, from, to, update *Cell) {
 		tb.Fatalf("validate failed: %v", err)
 	}
 
-	got, err := ApplyMerkleUpdate(from, update)
+	got, _, err := ApplyMerkleUpdate(from, update)
 	if err != nil {
 		tb.Fatalf("apply failed: %v", err)
 	}
@@ -608,7 +872,57 @@ func assertCellsEqual(tb testing.TB, got, want *Cell) {
 	if got.HashKey() != want.HashKey() {
 		tb.Fatalf("hash mismatch: got=%x want=%x", got.Hash(), want.Hash())
 	}
+	if hasPrunedCells(got, map[Hash]struct{}{}) {
+		return
+	}
 	if !bytes.Equal(got.ToBOC(), want.ToBOC()) {
 		tb.Fatalf("boc mismatch:\n got: %x\nwant: %x", got.ToBOC(), want.ToBOC())
 	}
+}
+
+func hasPrunedCells(cl *Cell, visited map[Hash]struct{}) bool {
+	if cl == nil {
+		return false
+	}
+	hash := cl.HashKey()
+	if _, ok := visited[hash]; ok {
+		return false
+	}
+	visited[hash] = struct{}{}
+
+	if cl.GetType() == PrunedCellType {
+		return true
+	}
+	for i := 0; i < cl.refsCount(); i++ {
+		if hasPrunedCells(cl.ref(i), visited) {
+			return true
+		}
+	}
+	return false
+}
+
+func copyCellWithRefs(src *Cell, refs []*Cell) (*Cell, error) {
+	builder := BeginCell()
+	if err := storeBitSpan(builder, cellBits(src)); err != nil {
+		return nil, err
+	}
+	for _, ref := range refs {
+		if err := builder.StoreRef(ref); err != nil {
+			return nil, err
+		}
+	}
+	return finalizeCellFromBuilder(builder, src.IsSpecial())
+}
+
+func testLazyLoaderForCells(cells ...*Cell) *testLazyLoader {
+	loader := &testLazyLoader{cells: map[Hash]*Cell{}}
+	for _, cell := range cells {
+		if cell == nil {
+			continue
+		}
+		loader.cells[cell.HashKey()] = cell
+		loader.cells[cell.HashKey(0)] = cell
+		loader.cells[cell.HashKey(cell.Level())] = cell
+	}
+	return loader
 }

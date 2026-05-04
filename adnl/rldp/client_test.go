@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/xssnick/raptorq"
 	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/rldp/roundrobin"
 	"github.com/xssnick/tonutils-go/tl"
 	"log"
 	"net"
@@ -34,10 +35,14 @@ type MockADNL struct {
 	setCustomMessageHandler func(msg *adnl.MessageCustom) error
 	setDisconnectHandler    func(addr string, key ed25519.PublicKey)
 	sendCustomMessage       func(ctx context.Context, req tl.Serializable) error
+	closerCtx               context.Context
 	close                   func()
 }
 
 func (m MockADNL) GetCloserCtx() context.Context {
+	if m.closerCtx != nil {
+		return m.closerCtx
+	}
 	return context.Background()
 }
 
@@ -173,9 +178,14 @@ func TestRLDP_handleMessage(t *testing.T) {
 		Headers:    []testHeader{{"test", "test"}},
 		NoPayload:  true,
 	}
+	responseData, err := tl.Serialize(response, true)
+	if err != nil {
+		t.Fatal("failed to serialize test response, err: ", err)
+	}
+
 	answer := Answer{
-		tId,
-		response,
+		ID:   tId,
+		Data: responseData,
 	}
 
 	dataAnswer, err := tl.Serialize(answer, true)
@@ -338,6 +348,122 @@ func TestRLDP_handleMessage(t *testing.T) {
 	}
 }
 
+func TestRLDP_handleMessageNoLostWakeupOnDrainEdge(t *testing.T) {
+	defer func() {
+		streamDrainEmptyHook = nil
+	}()
+
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	queryID := make([]byte, 32)
+	if _, err := rand.Read(queryID); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := &Query{
+		ID:            queryID,
+		MaxAnswerSize: 4096,
+		Timeout:       uint32(time.Now().Add(10 * time.Second).Unix()),
+		Data: testRequest{
+			ID:      queryID,
+			Method:  http.MethodGet,
+			URL:     "http://foundation.ton/no-lost-wakeup",
+			Version: "HTTP/1.1",
+			Headers: []testHeader{},
+		},
+	}
+
+	data, err := tl.Serialize(expected, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) < 2 {
+		t.Fatal("expected serialized query to be larger than one byte")
+	}
+
+	symbolSize := uint32(len(data) - 1)
+	symbolsCount := uint32((len(data) + int(symbolSize) - 1) / int(symbolSize))
+	if symbolsCount < 2 {
+		t.Fatalf("expected at least 2 symbols, got %d", symbolsCount)
+	}
+
+	enc, err := roundrobin.NewEncoder(data, symbolSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	part1 := MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   symbolSize,
+			SymbolsCount: symbolsCount,
+		},
+		Part:      0,
+		TotalSize: uint64(len(data)),
+		Seqno:     0,
+		Data:      enc.GenSymbol(0),
+	}
+	part2 := MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   symbolSize,
+			SymbolsCount: symbolsCount,
+		},
+		Part:      0,
+		TotalSize: uint64(len(data)),
+		Seqno:     1,
+		Data:      enc.GenSymbol(1),
+	}
+
+	gotQuery := false
+	cli := NewClient(MockADNL{
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+	cli.onQuery = func(transferId []byte, query *Query) error {
+		gotQuery = true
+		if !bytes.Equal(transferId, transferID) {
+			t.Fatalf("unexpected transfer id")
+		}
+		if !bytes.Equal(query.ID, expected.ID) || query.MaxAnswerSize != expected.MaxAnswerSize || query.Timeout != expected.Timeout {
+			t.Fatalf("unexpected query envelope: %#v", query)
+		}
+
+		gotReq, ok := query.Data.(testRequest)
+		if !ok {
+			t.Fatalf("unexpected query data type: %T", query.Data)
+		}
+		wantReq := expected.Data.(testRequest)
+		if !bytes.Equal(gotReq.ID, wantReq.ID) || gotReq.Method != wantReq.Method || gotReq.URL != wantReq.URL ||
+			gotReq.Version != wantReq.Version || gotReq.RespSz != wantReq.RespSz || !reflect.DeepEqual(gotReq.Headers, wantReq.Headers) {
+			t.Fatalf("unexpected query payload: %#v", query)
+		}
+		return nil
+	}
+
+	second := &adnl.MessageCustom{Data: part2}
+	streamDrainEmptyHook = func() {
+		streamDrainEmptyHook = nil
+		if err := cli.handleMessage(second); err != nil {
+			t.Fatalf("second handleMessage failed: %v", err)
+		}
+	}
+
+	if err = cli.handleMessage(&adnl.MessageCustom{Data: part1}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !gotQuery {
+		t.Fatal("expected queued packet to be processed without an extra wake-up packet")
+	}
+}
+
 func TestRDLP_sendMessageParts(t *testing.T) {
 	tId := make([]byte, 32)
 	_, err := rand.Read(tId)
@@ -484,9 +610,14 @@ func TestRLDP_DoQuery(t *testing.T) {
 		Headers:    []testHeader{{"test", "test"}},
 		NoPayload:  true,
 	}
+	responseData, err := tl.Serialize(response, true)
+	if err != nil {
+		t.Fatal("failed to serialize test response, err: ", err)
+	}
+
 	answer := Answer{
-		tId,
-		response,
+		ID:   tId,
+		Data: responseData,
 	}
 
 	tAdnl := MockADNL{
@@ -537,8 +668,8 @@ func TestRLDP_DoQuery(t *testing.T) {
 
 			for _, v := range cli.activeRequests {
 				v.result <- AsyncQueryResult{
-					QueryID: answer.ID,
-					Result:  answer.Data,
+					QueryID:     answer.ID,
+					ResultBytes: answer.Data,
 				}
 			}
 		}()
@@ -548,7 +679,7 @@ func TestRLDP_DoQuery(t *testing.T) {
 			t.Fatal("DoQuery execution failed, err: ", err)
 		}
 
-		if !reflect.DeepEqual(res, answer.Data) {
+		if !reflect.DeepEqual(res, response) {
 			t.Error("got bad response")
 		}
 	})
@@ -562,6 +693,127 @@ func TestRLDP_DoQuery(t *testing.T) {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}
 	})
+}
+
+func TestRLDP_DoQueryUnexpectedResponseType(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cli := NewClient(MockADNL{
+		closerCtx: ctx,
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+
+	go func() {
+		deadline := time.Now().Add(100 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			cli.mx.RLock()
+			var req *activeRequest
+			for _, v := range cli.activeRequests {
+				req = v
+				break
+			}
+			cli.mx.RUnlock()
+
+			if req != nil {
+				responseData, err := tl.Serialize(benchResponse{}, true)
+				if err != nil {
+					t.Fatal("failed to serialize test response, err: ", err)
+				}
+
+				req.result <- AsyncQueryResult{
+					QueryID:     make([]byte, 32),
+					ResultBytes: responseData,
+				}
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	var res testResponse
+	err := cli.DoQuery(context.Background(), 1024, testRequest{}, &res)
+	if err == nil || !strings.Contains(err.Error(), "unexpected response type") {
+		t.Fatalf("expected unexpected response type error, got: %v", err)
+	}
+}
+
+func TestRLDP_DoQueryAsyncRollsBackOnStartTransferError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sendErr := errors.New("send failed")
+	cli := NewClient(MockADNL{
+		closerCtx: ctx,
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return sendErr
+		},
+	})
+
+	queryID := make([]byte, 32)
+	_, err := rand.Read(queryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = cli.DoQueryAsync(context.Background(), 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1))
+	if err == nil || !strings.Contains(err.Error(), sendErr.Error()) {
+		t.Fatalf("expected wrapped send error, got: %v", err)
+	}
+
+	cli.mx.RLock()
+	defer cli.mx.RUnlock()
+
+	if len(cli.activeRequests) != 0 {
+		t.Fatalf("expected no active requests after send error, got %d", len(cli.activeRequests))
+	}
+	if len(cli.expectedTransfers) != 0 {
+		t.Fatalf("expected no expected transfers after send error, got %d", len(cli.expectedTransfers))
+	}
+	if len(cli.activeTransfers) != 0 {
+		t.Fatalf("expected no active transfers after send error, got %d", len(cli.activeTransfers))
+	}
+}
+
+func TestRLDP_RecvStreamsCleanupWithoutCompletedTransfer(t *testing.T) {
+	oldCleanupInterval := recvStreamCleanupInterval
+	recvStreamCleanupInterval = 10 * time.Millisecond
+	defer func() {
+		recvStreamCleanupInterval = oldCleanupInterval
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cli := NewClient(MockADNL{
+		closerCtx: ctx,
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+
+	staleAt := time.Now().Add(-_recvStreamIdleTimeout - time.Second)
+
+	cli.mx.Lock()
+	cli.recvStreams["stale"] = &decoderStream{
+		lastMessageAt: staleAt,
+		startedAt:     staleAt,
+		msgBuf:        NewQueue(1),
+		currentPart: decoderStreamPart{
+			index:     0,
+			startedAt: staleAt,
+		},
+		totalSize: 64,
+	}
+	cli.mx.Unlock()
+
+	waitUntil(t, 500*time.Millisecond, func() bool {
+		cli.mx.RLock()
+		defer cli.mx.RUnlock()
+		return len(cli.recvStreams) == 0
+	}, "stale recv stream should be cleaned up")
 }
 
 func TestRLDP_SendAnswer(t *testing.T) {
@@ -612,17 +864,12 @@ func TestRLDP_SendAnswer(t *testing.T) {
 				t.Fatal("failed to parse test data, err:", err)
 			}
 
-			checkAnswerSer, err := tl.Serialize(checkAnswer.Data, true)
-			if err != nil {
-				t.Fatal("failed to serialize test data, err:", err)
-			}
-
 			checkResponse, err := tl.Serialize(response, true)
 			if err != nil {
 				t.Fatal("failed to serialize test data, err:", err)
 			}
 
-			if !bytes.Equal(checkResponse, checkAnswerSer) {
+			if !bytes.Equal(checkResponse, checkAnswer.Data) {
 				t.Fatal("bad data received in 'sendCustomMessage'")
 			}
 

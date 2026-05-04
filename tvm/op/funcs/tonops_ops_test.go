@@ -45,7 +45,6 @@ func makeExtraBalanceDict(t *testing.T, entries map[uint32]uint64) *cell.Cell {
 func makeFeeState(t *testing.T) *vm.State {
 	t.Helper()
 
-	gasCfg := tuple.NewTupleSized(7)
 	gasSlice := cell.BeginCell().
 		MustStoreUInt(0xD1, 8).
 		MustStoreUInt(10, 64).
@@ -68,35 +67,30 @@ func makeFeeState(t *testing.T) *vm.State {
 		MustStoreUInt(9, 16).
 		MustStoreUInt(10, 16).
 		ToSlice()
-	storageSlice := cell.BeginCell().
+	storageCell := cell.BeginCell().
 		MustStoreUInt(0xCC, 8).
 		MustStoreUInt(1, 32).
 		MustStoreUInt(2, 64).
 		MustStoreUInt(3, 64).
 		MustStoreUInt(4, 64).
 		MustStoreUInt(5, 64).
-		ToSlice()
-	if err := gasCfg.Set(0, storageSlice); err != nil {
-		t.Fatalf("set storage cfg failed: %v", err)
-	}
-	if err := gasCfg.Set(2, gasSlice); err != nil {
-		t.Fatalf("set gas cfg failed: %v", err)
-	}
-	if err := gasCfg.Set(5, msgSlice); err != nil {
-		t.Fatalf("set msg cfg failed: %v", err)
-	}
+		EndCell()
 
-	balance := *tuple.NewTuple(big.NewInt(1000), makeExtraBalanceDict(t, map[uint32]uint64{7: 55}))
+	balance := tuple.NewTupleValue(big.NewInt(1000), makeExtraBalanceDict(t, map[uint32]uint64{7: 55}))
 	st := newFuncTestState(t, map[int]any{
-		paramIdxUnpackedConfig: gasCfg,
-		7:                      balance,
+		9: makeConfigRootRefDict(t, map[uint32]*cell.Cell{
+			18: makeStoragePricesConfigDict(t, map[uint32]*cell.Cell{1: storageCell}),
+			20: gasSlice.MustToCell(),
+			25: msgSlice.MustToCell(),
+		}),
+		7: balance,
 	})
 	st.InitForExecution()
 	return st
 }
 
 func TestTonopsGasConfigAndGlobals(t *testing.T) {
-	st := newFuncTestState(t, map[int]any{0: int64(21), 4: int64(44), 5: int64(55), 6: big.NewInt(66), 9: (*cell.Cell)(nil), 14: *tuple.NewTuple(nil, cell.BeginCell().MustStoreUInt(0xFFFFFFFF, 32).ToSlice())})
+	st := newFuncTestState(t, map[int]any{0: int64(21), 4: int64(44), 5: int64(55), 6: big.NewInt(66), 9: (*cell.Cell)(nil), 14: tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(0xFFFFFFFF, 32).ToSlice())})
 	st.Gas = vm.GasWithLimit(50)
 
 	if err := st.Gas.Consume(5); err != nil {
@@ -156,7 +150,7 @@ func TestTonopsGasConfigAndGlobals(t *testing.T) {
 
 	st = newFuncTestState(t, map[int]any{
 		9:  makeConfigRootRefDict(t, map[uint32]*cell.Cell{7: cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()}),
-		14: *tuple.NewTuple(nil, cell.BeginCell().MustStoreUInt(0xFFFFFFFF, 32).ToSlice()),
+		14: tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(0xFFFFFFFF, 32).ToSlice()),
 	})
 	st.InitForExecution()
 	if root, err := configRootFromC7(st); err != nil || root == nil {
@@ -201,7 +195,7 @@ func TestTonopsGasConfigAndGlobals(t *testing.T) {
 	}
 
 	st = newFuncTestState(t, map[int]any{
-		14: *tuple.NewTuple(nil, cell.BeginCell().MustStoreUInt(1, 8).ToSlice()),
+		14: tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(1, 8).ToSlice()),
 	})
 	if err := GLOBALID().Interpret(st); err == nil {
 		t.Fatal("GLOBALID should reject short config slices")
@@ -560,9 +554,9 @@ func TestFeeAndParamAliasOps(t *testing.T) {
 		t.Fatalf("HASHBU = (%v, %v)", got, err)
 	}
 
-	prevBlocks := *tuple.NewTuple(big.NewInt(11), big.NewInt(12), big.NewInt(13))
-	inMsg := *tuple.NewTuple(big.NewInt(1), big.NewInt(0), big.NewInt(2), big.NewInt(3), big.NewInt(4), big.NewInt(5), big.NewInt(6), big.NewInt(7), big.NewInt(8), big.NewInt(9))
-	cfg := *tuple.NewTuple(big.NewInt(100))
+	prevBlocks := tuple.NewTupleValue(big.NewInt(11), big.NewInt(12), big.NewInt(13))
+	inMsg := tuple.NewTupleValue(big.NewInt(1), big.NewInt(0), big.NewInt(2), big.NewInt(3), big.NewInt(4), big.NewInt(5), big.NewInt(6), big.NewInt(7), big.NewInt(8), big.NewInt(9))
+	cfg := tuple.NewTupleValue(big.NewInt(100))
 	st = newFuncTestState(t, map[int]any{
 		paramIdxPrevBlocksInfo: prevBlocks,
 		paramIdxUnpackedConfig: cfg,
@@ -734,7 +728,7 @@ func TestAdvancedOpSerializationAndCodepages(t *testing.T) {
 		t.Fatalf("INMSGPARAM.Deserialize failed: %v", err)
 	}
 	st = newFuncTestState(t, map[int]any{
-		paramIdxInMsgParams: *tuple.NewTuple(nil, nil, big.NewInt(321)),
+		paramIdxInMsgParams: tuple.NewTupleValue(nil, nil, big.NewInt(321)),
 	})
 	if err := parsedInMsgParam.Interpret(st); err != nil {
 		t.Fatalf("INMSGPARAM interpreted failed: %v", err)

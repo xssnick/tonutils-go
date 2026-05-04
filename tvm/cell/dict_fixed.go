@@ -3,7 +3,6 @@ package cell
 import (
 	"fmt"
 	"math/rand"
-	"sort"
 )
 
 type DictSetMode uint8
@@ -158,19 +157,19 @@ func fixedDictCommonPrefix(root *Cell, keySz uint, limit uint) (*Cell, error) {
 	if root == nil || limit == 0 {
 		return BeginCell().EndCell(), nil
 	}
-	if root.IsSpecial() {
-		return nil, fmt.Errorf("dict has special cells in tree structure")
-	}
-
-	loader := root.BeginParse()
-	labelLen, label, err := loadLabel(keySz, loader, BeginCell())
+	node, err := parseFixedDictNode(root, keySz, nil)
 	if err != nil {
 		return nil, err
 	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, err
+	}
+
+	labelLen := node.labelLen
 	if labelLen > limit {
 		labelLen = limit
 	}
-	return cellPrefix(label.EndCell(), labelLen)
+	return cellPrefix(node.label.EndCell(), labelLen)
 }
 
 func fixedDictHasCommonPrefix(root *Cell, keySz uint, prefix *Cell) (bool, error) {
@@ -188,103 +187,244 @@ func fixedDictHasCommonPrefix(root *Cell, keySz uint, prefix *Cell) (bool, error
 	return cellHasPrefix(common, prefix), nil
 }
 
-func collectFixedDictEntries(root *Cell, keySz uint) ([]DictItem, error) {
+func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefix *Builder, rev bool, invertFirst bool, rootLevel bool) error {
 	if root == nil {
-		return []DictItem{}, nil
-	}
-	return collectFixedDictEntriesInner(root, keySz, BeginCell())
-}
-
-func collectFixedDictEntriesInner(root *Cell, remaining uint, prefix *Builder) ([]DictItem, error) {
-	if root == nil {
-		return []DictItem{}, nil
-	}
-	if root.IsSpecial() {
-		return nil, fmt.Errorf("dict has special cells in tree structure")
+		return nil
 	}
 
-	loader := root.BeginParse()
-	labelLen, keyPrefix, err := loadLabel(remaining, loader, prefix)
+	node, err := parseFixedDictNode(root, remaining, nil)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return err
 	}
 
-	if labelLen == remaining {
-		return []DictItem{{
+	keyPrefix := prefix.Copy()
+	if err = keyPrefix.StoreBuilder(node.label); err != nil {
+		return err
+	}
+
+	if node.isLeaf(remaining) {
+		*items = append(*items, DictItem{
 			Key:   keyPrefix.EndCell(),
-			Value: loader,
-		}}, nil
+			Value: node.loader,
+		})
+		return nil
 	}
 
-	nextRemaining := remaining - (labelLen + 1)
-	left, err := loader.LoadRefCell()
-	if err != nil {
-		return nil, err
-	}
-	leftItems, err := collectFixedDictEntriesInner(left, nextRemaining, keyPrefix.Copy().MustStoreUInt(0, 1))
-	if err != nil {
-		return nil, err
-	}
-
-	right, err := loader.LoadRefCell()
-	if err != nil {
-		return nil, err
-	}
-	rightItems, err := collectFixedDictEntriesInner(right, nextRemaining, keyPrefix.Copy().MustStoreUInt(1, 1))
-	if err != nil {
-		return nil, err
+	first, second := 0, 1
+	if rootLevel && invertFirst && node.labelLen == 0 {
+		first, second = 1, 0
+		if rev {
+			first, second = 0, 1
+		}
+	} else if rev {
+		first, second = 1, 0
 	}
 
-	return append(leftItems, rightItems...), nil
-}
+	nextRemaining := node.nextKeyBits(remaining)
+	firstRef, err := node.resolvedRef(first)
+	if err != nil {
+		return err
+	}
+	if err = appendFixedDictEntries(items, firstRef, nextRemaining, keyPrefix.Copy().MustStoreUInt(uint64(first), 1), rev, invertFirst, false); err != nil {
+		return err
+	}
 
-func sortDictItems(items []DictItem, rev bool, invertFirst bool) {
-	sort.Slice(items, func(i, j int) bool {
-		return compareKeyCells(items[i].Key, items[j].Key, invertFirst) < 0
-	})
-	if !rev {
-		return
+	secondRef, err := node.resolvedRef(second)
+	if err != nil {
+		return err
 	}
-	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-		items[i], items[j] = items[j], items[i]
-	}
+	return appendFixedDictEntries(items, secondRef, nextRemaining, keyPrefix.Copy().MustStoreUInt(uint64(second), 1), rev, invertFirst, false)
 }
 
 func fixedDictRange(root *Cell, keySz uint, rev bool, invertFirst bool) ([]DictItem, error) {
-	items, err := collectFixedDictEntries(root, keySz)
-	if err != nil {
+	if root == nil {
+		return []DictItem{}, nil
+	}
+
+	items := make([]DictItem, 0)
+	if err := appendFixedDictEntries(&items, root, keySz, BeginCell(), rev, invertFirst, true); err != nil {
 		return nil, err
 	}
-	sortDictItems(items, rev, invertFirst)
 	return items, nil
 }
 
-func fixedDictNearest(items []DictItem, key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice) {
-	if len(items) == 0 || key == nil {
-		return nil, nil
+func fixedDictLookupNearest(root *Cell, keySz uint, key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
+	if root == nil {
+		return nil, nil, ErrNoSuchKeyInDict
 	}
 
-	pos := sort.Search(len(items), func(i int) bool {
-		return compareKeyCells(items[i].Key, key, invertFirst) >= 0
-	})
+	target, err := fixedDictKeyBits(key, keySz)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	if pos < len(items) && compareKeyCells(items[pos].Key, key, invertFirst) == 0 {
+	item, ok, err := fixedDictLookupNearestNode(root, keySz, BeginCell(), target, fetchNext, allowEq, invertFirst)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !ok {
+		return nil, nil, ErrNoSuchKeyInDict
+	}
+	return item.Key, item.Value, nil
+}
+
+func fixedDictKeyBits(key *Cell, keySz uint) ([]uint8, error) {
+	if key == nil || key.BitsSize() != keySz {
+		return nil, fmt.Errorf("incorrect key size")
+	}
+
+	loader := key.BeginParse()
+	bits := make([]uint8, keySz)
+	for i := uint(0); i < keySz; i++ {
+		bit, err := loader.LoadUInt(1)
+		if err != nil {
+			return nil, err
+		}
+		bits[i] = uint8(bit)
+	}
+	return bits, nil
+}
+
+func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, target []uint8, fetchNext bool, allowEq bool, invertFirst bool) (DictItem, bool, error) {
+	node, err := parseFixedDictNode(root, remaining, nil)
+	if err != nil {
+		return DictItem{}, false, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return DictItem{}, false, err
+	}
+
+	basePrefix := prefix.Copy()
+	prefix = prefix.Copy()
+	label := node.label.ToSlice()
+	for i := uint(0); i < node.labelLen; i++ {
+		bit, err := label.LoadUInt(1)
+		if err != nil {
+			return DictItem{}, false, err
+		}
+
+		pos := prefix.BitsUsed()
+		prefix.MustStoreUInt(bit, 1)
+		if pos >= uint(len(target)) || uint8(bit) == target[pos] {
+			continue
+		}
+
+		bitOrder := fixedDictOrderBit(uint8(bit), pos, invertFirst)
+		targetOrder := fixedDictOrderBit(target[pos], pos, invertFirst)
+		if fetchNext && bitOrder > targetOrder {
+			return fixedDictBoundary(root, remaining, basePrefix, false, invertFirst)
+		}
+		if !fetchNext && bitOrder < targetOrder {
+			return fixedDictBoundary(root, remaining, basePrefix, true, invertFirst)
+		}
+		return DictItem{}, false, nil
+	}
+
+	if node.isLeaf(remaining) {
 		if allowEq {
-			return items[pos].Key, cloneSlice(items[pos].Value)
+			return DictItem{Key: prefix.EndCell(), Value: cloneSlice(node.loader)}, true, nil
 		}
-		if fetchNext {
-			pos++
-		} else {
-			pos--
-		}
-	} else if !fetchNext {
-		pos--
+		return DictItem{}, false, nil
 	}
 
-	if pos < 0 || pos >= len(items) {
-		return nil, nil
+	pos := prefix.BitsUsed()
+	if pos >= uint(len(target)) {
+		return DictItem{}, false, fmt.Errorf("target key is shorter than dictionary key")
 	}
-	return items[pos].Key, cloneSlice(items[pos].Value)
+
+	targetBit := int(target[pos])
+	nextRemaining := node.nextKeyBits(remaining)
+	if fetchNext {
+		first, second := fixedDictOrderedChildPair(pos, targetBit, invertFirst)
+		firstRef, err := node.resolvedRef(first)
+		if err != nil {
+			return DictItem{}, false, err
+		}
+		item, ok, err := fixedDictLookupNearestNode(firstRef, nextRemaining, prefix.Copy().MustStoreUInt(uint64(first), 1), target, fetchNext, allowEq, invertFirst)
+		if err != nil || ok {
+			return item, ok, err
+		}
+		if fixedDictOrderBit(uint8(first), pos, invertFirst) < fixedDictOrderBit(uint8(second), pos, invertFirst) {
+			secondRef, err := node.resolvedRef(second)
+			if err != nil {
+				return DictItem{}, false, err
+			}
+			return fixedDictBoundary(secondRef, nextRemaining, prefix.Copy().MustStoreUInt(uint64(second), 1), false, invertFirst)
+		}
+		return DictItem{}, false, nil
+	}
+
+	first, second := fixedDictOrderedChildPair(pos, targetBit, invertFirst)
+	firstRef, err := node.resolvedRef(first)
+	if err != nil {
+		return DictItem{}, false, err
+	}
+	item, ok, err := fixedDictLookupNearestNode(firstRef, nextRemaining, prefix.Copy().MustStoreUInt(uint64(first), 1), target, fetchNext, allowEq, invertFirst)
+	if err != nil || ok {
+		return item, ok, err
+	}
+	if fixedDictOrderBit(uint8(first), pos, invertFirst) > fixedDictOrderBit(uint8(second), pos, invertFirst) {
+		secondRef, err := node.resolvedRef(second)
+		if err != nil {
+			return DictItem{}, false, err
+		}
+		return fixedDictBoundary(secondRef, nextRemaining, prefix.Copy().MustStoreUInt(uint64(second), 1), true, invertFirst)
+	}
+	return DictItem{}, false, nil
+}
+
+func fixedDictBoundary(root *Cell, remaining uint, prefix *Builder, max bool, invertFirst bool) (DictItem, bool, error) {
+	node, err := parseFixedDictNode(root, remaining, nil)
+	if err != nil {
+		return DictItem{}, false, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return DictItem{}, false, err
+	}
+
+	prefix = prefix.Copy().MustStoreBuilder(node.label)
+	if node.isLeaf(remaining) {
+		return DictItem{Key: prefix.EndCell(), Value: cloneSlice(node.loader)}, true, nil
+	}
+
+	refIdx := fixedDictBoundaryChild(prefix.BitsUsed(), max, invertFirst)
+
+	ref, err := node.resolvedRef(refIdx)
+	if err != nil {
+		return DictItem{}, false, err
+	}
+	return fixedDictBoundary(ref, node.nextKeyBits(remaining), prefix.MustStoreUInt(uint64(refIdx), 1), max, invertFirst)
+}
+
+func fixedDictOrderBit(bit uint8, pos uint, invertFirst bool) uint8 {
+	if invertFirst && pos == 0 {
+		return bit ^ 1
+	}
+	return bit
+}
+
+func fixedDictOrderedChildPair(pos uint, targetBit int, invertFirst bool) (int, int) {
+	targetOrder := fixedDictOrderBit(uint8(targetBit), pos, invertFirst)
+	if targetOrder == 0 {
+		first := targetBit
+		return first, first ^ 1
+	}
+	second := targetBit ^ 1
+	return targetBit, second
+}
+
+func fixedDictBoundaryChild(pos uint, max bool, invertFirst bool) int {
+	orderBit := uint8(0)
+	if max {
+		orderBit = 1
+	}
+	if invertFirst && pos == 0 {
+		orderBit ^= 1
+	}
+	return int(orderBit)
 }
 
 func fixedDictCheckForEach(items []DictItem, fn DictForeachFunc, shuffle bool) (bool, error) {
@@ -368,22 +508,20 @@ func extractPrefixSubdictRoot(root *Cell, keySz uint, prefix *Cell, removePrefix
 		if branch == nil {
 			return nil, true, nil
 		}
-		if branch.IsSpecial() {
-			return nil, false, fmt.Errorf("dict has special cells in tree structure")
-		}
-
-		loader := branch.BeginParse()
-		labelLen, label, err := loadLabel(keySz-consumed, loader, BeginCell())
+		node, err := parseFixedDictNode(branch, keySz-consumed, nil)
 		if err != nil {
+			return nil, false, err
+		}
+		if err = node.rejectSpecial("dict"); err != nil {
 			return nil, false, err
 		}
 
 		toMatch := prefixLen - consumed
-		if toMatch > labelLen {
-			toMatch = labelLen
+		if toMatch > node.labelLen {
+			toMatch = node.labelLen
 		}
 
-		matched, err := consumeCommonPrefix(label.ToSlice(), prefixSlice, toMatch)
+		matched, err := consumeCommonPrefix(node.label.ToSlice(), prefixSlice, toMatch)
 		if err != nil {
 			return nil, false, err
 		}
@@ -391,13 +529,13 @@ func extractPrefixSubdictRoot(root *Cell, keySz uint, prefix *Cell, removePrefix
 			return nil, true, nil
 		}
 
-		if consumed+labelLen < prefixLen {
+		if consumed+node.labelLen < prefixLen {
 			idx, err := prefixSlice.LoadUInt(1)
 			if err != nil {
 				return nil, false, err
 			}
-			consumed += labelLen + 1
-			branch, err = branch.PeekRef(int(idx))
+			consumed += node.labelLen + 1
+			branch, err = node.resolvedRef(int(idx))
 			if err != nil {
 				return nil, false, err
 			}
@@ -420,20 +558,20 @@ func extractPrefixSubdictRoot(root *Cell, keySz uint, prefix *Cell, removePrefix
 					return nil, false, err
 				}
 			}
-			if err = combined.StoreBuilder(label); err != nil {
+			if err = combined.StoreBuilder(node.label); err != nil {
 				return nil, false, err
 			}
-			node, err := storeDictNode(combined.ToSlice(), loader.ToBuilder(), keySz)
-			return node, true, err
+			subdict, err := storeDictNode(combined.ToSlice(), node.loader.ToBuilder(), keySz)
+			return subdict, true, err
 		}
 
-		suffix := label.ToSlice()
+		suffix := node.label.ToSlice()
 		if prefixLen > consumed {
 			if _, err := suffix.LoadSlice(prefixLen - consumed); err != nil {
 				return nil, false, err
 			}
 		}
-		node, err := storeDictNode(suffix, loader.ToBuilder(), keySz-prefixLen)
-		return node, true, err
+		subdict, err := storeDictNode(suffix, node.loader.ToBuilder(), keySz-prefixLen)
+		return subdict, true, err
 	}
 }

@@ -30,6 +30,47 @@ func pushSmallInt(state *vm.State, val int64) error {
 	return state.Stack.PushInt(big.NewInt(val))
 }
 
+func popIntFinite(state *vm.State) (*big.Int, error) {
+	return state.Stack.PopIntFinite()
+}
+
+func popIntRange(state *vm.State, min, max int64) (*big.Int, error) {
+	return state.Stack.PopIntRange(min, max)
+}
+
+func popIntOperand(state *vm.State, quiet bool) (*big.Int, error) {
+	return state.Stack.PopInt()
+}
+
+func unaryIntResult(x *big.Int, fn func(*big.Int) *big.Int) *big.Int {
+	if x == nil {
+		return nil
+	}
+	return fn(x)
+}
+
+func binaryIntResult(x, y *big.Int, fn func(*big.Int, *big.Int) *big.Int) *big.Int {
+	if x == nil || y == nil {
+		return nil
+	}
+	return fn(x, y)
+}
+
+func pushUnaryIntResult(state *vm.State, x *big.Int, fn func(*big.Int) *big.Int) error {
+	return pushMaybeInt(state, unaryIntResult(x, fn), false)
+}
+
+func pushBinaryIntResult(state *vm.State, x, y *big.Int, fn func(*big.Int, *big.Int) *big.Int) error {
+	return pushMaybeInt(state, binaryIntResult(x, y, fn), false)
+}
+
+func pushCompareResult(state *vm.State, x, y *big.Int, fn func(*big.Int, *big.Int) bool) error {
+	if x == nil || y == nil {
+		return pushNaNOrOverflow(state, false)
+	}
+	return state.Stack.PushBool(fn(x, y))
+}
+
 func signedFitsBits(x *big.Int, bits int) bool {
 	if x == nil {
 		return false

@@ -14,11 +14,11 @@ func init() {
 func MODPOW2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntRange(0, 1023)
+			y, err := popIntRange(state, 0, 256)
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

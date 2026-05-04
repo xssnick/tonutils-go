@@ -53,7 +53,7 @@ func TestTonopsMoreEdges(t *testing.T) {
 			t.Fatalf("CONFIGOPTPARAM(negative) = (%v, %v), want nil", raw, err)
 		}
 
-		st = newFuncTestState(t, map[int]any{14: *tuple.NewTuple(nil, big.NewInt(1))})
+		st = newFuncTestState(t, map[int]any{14: tuple.NewTupleValue(nil, big.NewInt(1))})
 		if err := GLOBALID().Interpret(st); err == nil {
 			t.Fatal("GLOBALID should reject non-slice config entries")
 		}

@@ -64,7 +64,7 @@ func TestRunChildVMWithModeSuccess(t *testing.T) {
 	data := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 	retData := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	retActions := cell.BeginCell().MustStoreUInt(0xDD, 8).EndCell()
-	c7 := *tuple.NewTuple(big.NewInt(9))
+	c7 := tuple.NewTupleValue(big.NewInt(9))
 
 	state.SetChildRunner(func(child *vm.State) (int64, error) {
 		if child.Gas.Limit != 50 || child.Gas.Max != 50 {
@@ -409,7 +409,7 @@ func TestAdditionalControlRegisterHelpers(t *testing.T) {
 	state := newTestState()
 	state.Reg.C[1] = &testContinuation{name: "alt"}
 	state.Reg.D[0] = cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	state.Reg.C7 = *tuple.NewTuple(big.NewInt(7))
+	state.Reg.C7 = tuple.NewTupleValue(big.NewInt(7))
 
 	if err := state.Stack.PushCell(state.Reg.D[0]); err != nil {
 		t.Fatalf("push cell: %v", err)

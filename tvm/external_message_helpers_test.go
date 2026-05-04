@@ -49,7 +49,7 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 			t.Fatalf("zero config should not synthesize unpacked config, got %T", got)
 		}
 
-		cfgTuple := *tuple.NewTuple("cfg")
+		cfgTuple := tuple.NewTupleValue("cfg")
 		if got := messageUnpackedConfig(MessageEmulationConfig{UnpackedConfig: cfgTuple}); func() int {
 			tup := got.(tuple.Tuple)
 			return tup.Len()
@@ -167,12 +167,12 @@ func TestBuildMessageEmulationC7NormalizesGlobals(t *testing.T) {
 		BlockLT:             77,
 		LogicalTime:         88,
 		ConfigRoot:          cell.BeginCell().MustStoreUInt(1, 1).EndCell(),
-		IncomingValue:       *tuple.NewTuple(int64(9), nil),
+		IncomingValue:       tuple.NewTupleValue(int64(9), nil),
 		StorageFees:         11,
 		PrevBlocks:          "prev",
 		DuePayment:          "due",
 		PrecompiledGasUsage: uint8(5),
-		InMsgParams:         *tuple.NewTuple("params"),
+		InMsgParams:         tuple.NewTupleValue("params"),
 		GlobalID:            7,
 		Globals: map[int]any{
 			2: uint16(55),

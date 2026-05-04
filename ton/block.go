@@ -39,7 +39,7 @@ func init() {
 	tl.Register(Object{}, "object ? = Object")
 	tl.Register(True{}, "true = True")
 	tl.Register(TransactionID3{}, "liteServer.transactionId3 account:int256 lt:long = liteServer.TransactionId3")
-	tl.Register(TransactionID{}, "liteServer.transactionId mode:# account:mode.0?int256 lt:mode.1?long hash:mode.2?int256 = liteServer.TransactionId")
+	tl.Register(TransactionID{}, "liteServer.transactionId#b12f65af mode:# account:mode.0?int256 lt:mode.1?long hash:mode.2?int256 metadata:mode.8?liteServer.transactionMetadata = liteServer.TransactionId")
 
 	tl.Register(GetState{}, "liteServer.getState id:tonNode.blockIdExt = liteServer.BlockState")
 	tl.Register(BlockState{}, "liteServer.blockState id:tonNode.blockIdExt root_hash:int256 file_hash:int256 data:bytes = liteServer.BlockState")
@@ -69,6 +69,11 @@ func init() {
 	tl.Register(GetBlockHeader{}, "liteServer.getBlockHeader id:tonNode.blockIdExt mode:# = liteServer.BlockHeader")
 	tl.Register(GetMasterchainInfoExt{}, "liteServer.getMasterchainInfoExt mode:# = liteServer.MasterchainInfoExt")
 	tl.Register(MasterchainInfoExt{}, "liteServer.masterchainInfoExt mode:# version:int capabilities:long last:tonNode.blockIdExt last_utime:int now:int state_root_hash:int256 init:tonNode.zeroStateIdExt = liteServer.MasterchainInfoExt")
+	tl.Register(LookupBlockWithProof{}, "liteServer.lookupBlockWithProof mode:# id:tonNode.blockId mc_block_id:tonNode.blockIdExt lt:mode.1?long utime:mode.2?int = liteServer.LookupBlockResult")
+	tl.Register(LookupBlockResult{}, "liteServer.lookupBlockResult id:tonNode.blockIdExt mode:# mc_block_id:tonNode.blockIdExt client_mc_state_proof:bytes mc_block_proof:bytes shard_links:(vector liteServer.shardBlockLink) header:bytes prev_header:bytes = liteServer.LookupBlockResult")
+	tl.Register(GetValidatorStats{}, "liteServer.getValidatorStats#091a58bc mode:# id:tonNode.blockIdExt limit:int start_after:mode.0?int256 modified_after:mode.2?int = liteServer.ValidatorStats")
+	tl.Register(ValidatorStats{}, "liteServer.validatorStats mode:# id:tonNode.blockIdExt count:int complete:Bool state_proof:bytes data_proof:bytes = liteServer.ValidatorStats")
+	tl.Register(DebugVerbosity{}, "liteServer.debug.verbosity value:int = liteServer.debug.Verbosity")
 }
 
 type GetVersion struct{}
@@ -81,14 +86,14 @@ type Version struct {
 }
 
 type GetState struct {
-	ID       *BlockIDExt `tl:"struct"`
-	RootHash []byte      `tl:"int256"`
-	FileHash []byte      `tl:"int256"`
-	Data     *cell.Cell  `tl:"cell"`
+	ID *BlockIDExt `tl:"struct"`
 }
 
 type BlockState struct {
-	ID *BlockIDExt `tl:"struct"`
+	ID       *BlockIDExt `tl:"struct"`
+	RootHash []byte      `tl:"int256"`
+	FileHash []byte      `tl:"int256"`
+	Data     []byte      `tl:"bytes"`
 }
 
 type GetShardBlockProof struct {
@@ -293,6 +298,25 @@ type LookupBlock struct {
 	UTime uint32          `tl:"?2 int"`
 }
 
+type LookupBlockWithProof struct {
+	Mode      uint32          `tl:"flags"`
+	ID        *BlockInfoShort `tl:"struct"`
+	MCBlockID *BlockIDExt     `tl:"struct"`
+	LT        uint64          `tl:"?1 long"`
+	UTime     uint32          `tl:"?2 int"`
+}
+
+type LookupBlockResult struct {
+	ID                 *BlockIDExt      `tl:"struct"`
+	Mode               uint32           `tl:"flags"`
+	MCBlockID          *BlockIDExt      `tl:"struct"`
+	ClientMCStateProof []byte           `tl:"bytes"`
+	MCBlockProof       []byte           `tl:"bytes"`
+	ShardLinks         []ShardBlockLink `tl:"vector struct"`
+	Header             []byte           `tl:"bytes"`
+	PrevHeader         []byte           `tl:"bytes"`
+}
+
 type GetBlockHeader struct {
 	ID   *BlockIDExt `tl:"struct"`
 	Mode uint32      `tl:"flags"`
@@ -356,6 +380,27 @@ type GetBlockProof struct {
 	TargetBlock *BlockIDExt `tl:"?0 struct"`
 }
 
+type GetValidatorStats struct {
+	Mode          uint32      `tl:"flags"`
+	ID            *BlockIDExt `tl:"struct"`
+	Limit         int32       `tl:"int"`
+	StartAfter    []byte      `tl:"?0 int256"`
+	ModifiedAfter uint32      `tl:"?2 int"`
+}
+
+type ValidatorStats struct {
+	Mode       uint32      `tl:"flags"`
+	ID         *BlockIDExt `tl:"struct"`
+	Count      int32       `tl:"int"`
+	Complete   bool        `tl:"bool"`
+	StateProof []byte      `tl:"bytes"`
+	DataProof  []byte      `tl:"bytes"`
+}
+
+type DebugVerbosity struct {
+	Value int32 `tl:"int"`
+}
+
 func (t *TransactionShortInfo) ID3() *TransactionID3 {
 	return &TransactionID3{
 		Account: t.Account,
@@ -364,10 +409,11 @@ func (t *TransactionShortInfo) ID3() *TransactionID3 {
 }
 
 type TransactionID struct {
-	Flags   uint32 `tl:"flags"`
-	Account []byte `tl:"?0 int256"`
-	LT      uint64 `tl:"?1 long"`
-	Hash    []byte `tl:"?2 int256"`
+	Flags    uint32               `tl:"flags"`
+	Account  []byte               `tl:"?0 int256"`
+	LT       uint64               `tl:"?1 long"`
+	Hash     []byte               `tl:"?2 int256"`
+	Metadata *TransactionMetadata `tl:"?8 struct"`
 }
 
 type TransactionID3 struct {
@@ -547,7 +593,8 @@ func (c *APIClient) GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (
 			return nil, err
 		}
 
-		if !bytes.Equal(pl.Hash(), block.RootHash) {
+		plHash := pl.HashKey()
+		if !bytes.Equal(plHash[:], block.RootHash) {
 			return nil, fmt.Errorf("incorrect block")
 		}
 
@@ -656,7 +703,8 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 					return nil, fmt.Errorf("failed to check proof: %w", err)
 				}
 
-				if blockProof.Extra == nil || blockProof.Extra.Custom == nil || !bytes.Equal(blockProof.Extra.Custom.ShardHashes.AsCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
+				if blockProof.Extra == nil || blockProof.Extra.Custom == nil ||
+					blockProof.Extra.Custom.ShardHashes.AsCell().HashKey(0) != t.Data.MustPeekRef(0).HashKey() {
 					return nil, fmt.Errorf("incorrect proof")
 				}
 			case 2: // old LS compatibility
@@ -680,7 +728,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 				}
 
 				if (dictProof == nil) != inf.ShardHashes.IsEmpty() ||
-					!bytes.Equal(dictProof.MustToCell().Hash(0), t.Data.MustPeekRef(0).Hash()) {
+					dictProof.MustToCell().HashKey(0) != t.Data.MustPeekRef(0).HashKey() {
 					return nil, fmt.Errorf("incorrect proof")
 				}
 			default:

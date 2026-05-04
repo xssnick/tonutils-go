@@ -136,16 +136,14 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 func (op *OpPUSHCONT) Serialize() *cell.Builder {
 	var b *cell.Builder
 	switch {
-	case op.typ == "REF":
+	case op.typ == "REF" || op.cont.BitsSize()%8 != 0:
+		op.typ = "REF"
 		b = cell.BeginCell().
 			MustStoreUInt(0x8A, 8).MustStoreRef(op.cont)
 	case op.cont.RefsNum() == 0 && op.cont.BitsSize() <= 16*8:
 		op.typ = "SMALL"
 
 		sz := uint64(op.cont.BitsSize() / 8)
-		if op.cont.BitsSize()%8 != 0 {
-			sz += 1
-		}
 
 		b = cell.BeginCell().
 			MustStoreUInt(9, 4).
@@ -155,9 +153,6 @@ func (op *OpPUSHCONT) Serialize() *cell.Builder {
 		op.typ = "BIG"
 
 		sz := uint64(op.cont.BitsSize() / 8)
-		if op.cont.BitsSize()%8 != 0 {
-			sz += 1
-		}
 
 		codeSlice := op.cont.BeginParse()
 

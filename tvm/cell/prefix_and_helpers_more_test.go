@@ -104,14 +104,9 @@ func TestPrefixDictionary_WrappersCompatibilityAndObservers(t *testing.T) {
 
 	obs := &testCellObserver{}
 	observed := copyDict.Copy().SetObserver(obs)
-	observed.skipRootLoad = true
-	_ = observed.beginParse(observed.root)
-	if obs.loads != 0 {
-		t.Fatalf("skipRootLoad should suppress first observer charge, got %d", obs.loads)
-	}
 	_ = observed.beginParse(observed.root)
 	if obs.loads != 1 {
-		t.Fatalf("second beginParse should charge observer once, got %d", obs.loads)
+		t.Fatalf("beginParse should charge observer once, got %d", obs.loads)
 	}
 
 	pruned := makeManualCellForTest(true, LevelMask{}, 288, append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...), nil)
@@ -155,17 +150,19 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, value := fixedDictNearest(items, mustDictKey(t, 0x20, 8), false, true, false)
+
+	key, value, err := dict.LookupNearestKey(mustDictKey(t, 0x20, 8), false, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if mustUIntFromCell(t, key, 8) != 0x20 || mustLoadTestValue(t, value, 8) != 0xb0 {
-		t.Fatal("fixedDictNearest should match equal key when allowed")
+		t.Fatal("LookupNearestKey should match equal key when allowed")
 	}
-	key, value = fixedDictNearest(items, mustDictKey(t, 0x05, 8), false, false, false)
-	if key != nil || value != nil {
-		t.Fatal("fixedDictNearest should miss before the first key")
+	if _, _, err = dict.LookupNearestKey(mustDictKey(t, 0x05, 8), false, false, false); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatalf("LookupNearestKey should miss before the first key, got %v", err)
 	}
-	key, value = fixedDictNearest(items, mustDictKey(t, 0x40, 8), true, false, false)
-	if key != nil || value != nil {
-		t.Fatal("fixedDictNearest should miss after the last key when fetching next")
+	if _, _, err = dict.LookupNearestKey(mustDictKey(t, 0x40, 8), true, false, false); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatalf("LookupNearestKey should miss after the last key when fetching next, got %v", err)
 	}
 
 	if compareKeyCells(nil, mustDictKey(t, 1, 1), false) >= 0 {

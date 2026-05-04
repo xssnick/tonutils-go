@@ -364,6 +364,26 @@ func TestBuilder_VarUint(t *testing.T) {
 	}
 }
 
+func TestBuilder_VarInt(t *testing.T) {
+	for _, value := range []*big.Int{
+		big.NewInt(0),
+		big.NewInt(127),
+		big.NewInt(128),
+		big.NewInt(-1),
+		big.NewInt(-128),
+		big.NewInt(-129),
+	} {
+		c := BeginCell().MustStoreBigVarInt(value, 3).EndCell()
+		if got := c.BeginParse().MustLoadVarInt(3); got.Cmp(value) != 0 {
+			t.Fatalf("var int not eq, got %s want %s", got, value)
+		}
+	}
+
+	if err := BeginCell().StoreBigVarInt(big.NewInt(1), 1); err != ErrTooBigValue {
+		t.Fatalf("expected ErrTooBigValue, got %v", err)
+	}
+}
+
 func TestBuilder_StoreBuilder(t *testing.T) {
 	c := BeginCell().MustStoreSlice(data1024, 1015).MustStoreRef(BeginCell().EndCell())
 	b1bad := BeginCell().MustStoreSlice([]byte{0xAA, 0xBB}, 16).MustStoreRef(BeginCell().EndCell())

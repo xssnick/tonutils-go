@@ -240,6 +240,9 @@ func setRandSeed(state *vm.State, seed *big.Int) error {
 	if err = inner.Set(paramIdxRandomSeed, new(big.Int).Set(seed)); err != nil {
 		return err
 	}
+	if err = state.SetC7(tuple.NewTupleValue()); err != nil {
+		return err
+	}
 	if err = state.ConsumeTupleGasLen(inner.Len()); err != nil {
 		return err
 	}

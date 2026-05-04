@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -18,9 +17,10 @@ import (
 func signedBroadcastFEC(t *testing.T, priv ed25519.PrivateKey, fec any, data []byte, dataSize uint32, flags int32) *BroadcastFEC {
 	t.Helper()
 
+	dataHash := bytes.Repeat([]byte{0xCC}, 32)
 	b := &BroadcastFEC{
 		Source:   ed25519Public(priv),
-		DataHash: bytes.Repeat([]byte{0xCC}, 32),
+		DataHash: dataHash,
 		DataSize: dataSize,
 		Flags:    flags,
 		Data:     data,
@@ -29,20 +29,9 @@ func signedBroadcastFEC(t *testing.T, priv ed25519.PrivateKey, fec any, data []b
 		Date:     uint32(time.Now().Unix()),
 	}
 
-	broadcastHash, err := b.CalcID()
-	if err != nil {
-		t.Fatalf("calc id failed: %v", err)
+	if err := b.Sign(priv); err != nil {
+		t.Fatalf("sign failed: %v", err)
 	}
-	partDataHash := sha256.Sum256(b.Data)
-	partHash, err := tl.Hash(&BroadcastFECPartID{BroadcastHash: broadcastHash, DataHash: partDataHash[:], Seqno: b.Seqno})
-	if err != nil {
-		t.Fatalf("part hash failed: %v", err)
-	}
-	toSign, err := tl.Serialize(&BroadcastToSign{Hash: partHash, Date: b.Date}, true)
-	if err != nil {
-		t.Fatalf("serialize sign payload failed: %v", err)
-	}
-	b.Signature = ed25519.Sign(priv, toSign)
 	return b
 }
 
@@ -191,7 +180,7 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 		t.Fatalf("expected data size mismatch error, got: %v", err)
 	}
 
-	finished := signedBroadcastFEC(t, priv, rldp.FECRaptorQ{DataSize: 4, SymbolSize: 2, SymbolsCount: 2}, []byte{1, 2, 3, 4}, 4, _BroadcastFlagAnySender)
+	finished := signedBroadcastFEC(t, priv, rldp.FECRaptorQ{DataSize: 4, SymbolSize: 2, SymbolsCount: 2}, []byte{1, 2, 3, 4}, 4, BroadcastFlagAnySender)
 	id, err := finished.CalcID()
 	if err != nil {
 		t.Fatalf("calc id failed: %v", err)
@@ -216,5 +205,93 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 	mismatch.Date = finished.Date
 	if err = o.processFECBroadcast(mismatch); err == nil || !strings.Contains(err.Error(), "malformed source") {
 		t.Fatalf("expected malformed source error, got: %v", err)
+	}
+}
+
+func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x54}, 32), 4096, true, true)
+
+	_, priv := keyPairFromSeed(33)
+	expectedOverlay := bytes.Repeat([]byte{0x29}, 32)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: expectedOverlay}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(256))
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	handled := 0
+	o.SetBroadcastHandler(func(msg tl.Serializable, trusted bool) error {
+		handled++
+		got, ok := msg.(Message)
+		if !ok {
+			t.Fatalf("unexpected decoded payload type %T", msg)
+		}
+		if !bytes.Equal(got.Overlay, expectedOverlay) {
+			t.Fatalf("unexpected decoded payload")
+		}
+		return nil
+	})
+
+	part0, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part 0 build failed: %v", err)
+	}
+	if err = o.processFECBroadcast(part0.full); err != nil {
+		t.Fatalf("process full part 0 failed: %v", err)
+	}
+
+	if handled != 1 {
+		t.Fatalf("expected one decoded broadcast, got %d", handled)
+	}
+	if len(m.sendCustomCalls) < 2 {
+		t.Fatalf("expected received/completed acks after decode")
+	}
+	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-2].(FECReceived); !ok {
+		t.Fatalf("expected FECReceived before completion ack, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-2])
+	}
+	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
+		t.Fatalf("expected FECCompleted after decode, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
+	}
+
+	shortPart, err := sender.part(sender.fec.SymbolsCount)
+	if err != nil {
+		t.Fatalf("repair part build failed: %v", err)
+	}
+	if err = o.processFECBroadcastShort(shortPart.short); err != nil {
+		t.Fatalf("finished short part processing failed: %v", err)
+	}
+	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
+		t.Fatalf("expected FECCompleted on finished short part, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
+	}
+}
+
+func TestProcessFECBroadcastShort_KnownPartialState(t *testing.T) {
+	w := CreateExtendedADNL(newMockADNL())
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x64}, 32), 4096, true, true)
+
+	_, priv := keyPairFromSeed(34)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x39}, 32)}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(24))
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	part0, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part 0 build failed: %v", err)
+	}
+	if err = o.processFECBroadcast(part0.full); err != nil {
+		t.Fatalf("process first full part failed: %v", err)
+	}
+	if err = o.processFECBroadcastShort(part0.short); err != nil {
+		t.Fatalf("known short part for partial stream must not fail: %v", err)
+	}
+
+	part1, err := sender.part(1)
+	if err != nil {
+		t.Fatalf("part 1 build failed: %v", err)
+	}
+	if err = o.processFECBroadcastShort(part1.short); err == nil || !strings.Contains(err.Error(), "unfinished broadcast") {
+		t.Fatalf("expected unfinished broadcast error for unseen short part, got: %v", err)
 	}
 }

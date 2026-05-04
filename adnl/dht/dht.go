@@ -15,7 +15,15 @@ import (
 const (
 	_UnknownNetworkID = int32(-1)
 	_MaxValueSize     = 768
+	_MaxValueTTLSec   = 3600 + 60
 )
+
+func checkValueTTLAt(ttl int32, now int64) error {
+	if int64(ttl) > now+_MaxValueTTLSec {
+		return fmt.Errorf("ttl is too big")
+	}
+	return nil
+}
 
 func init() {
 	tl.Register(FindNode{}, "dht.findNode key:int256 k:int = dht.Nodes")

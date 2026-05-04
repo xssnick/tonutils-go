@@ -17,15 +17,15 @@ func MULADDRSHIFTCCODEMOD(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			w, err := state.Stack.PopIntFinite()
+			w, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			y, err := state.Stack.PopIntFinite()
+			y, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

@@ -61,7 +61,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loadedEmpty, err := emptyCell.BeginParse().LoadAugDictWithAugmentation(8, aug)
+	loadedEmpty, err := emptyCell.BeginParse().LoadAugDict(8, aug, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 		t.Fatal("NewAugDict should reject nil augmentation")
 	}
 
-	ro := readOnlyAugmentation{}
+	ro := ReadOnlyAugmentation{}
 	if err := ro.SkipExtra(BeginCell().EndCell().BeginParse()); err == nil {
 		t.Fatal("readOnlyAugmentation without skipper should fail")
 	}
@@ -489,7 +489,7 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 
 func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	aug := testMetricAugmentation{}
-	roAug := readOnlyAugmentation{skip: func(loader *Slice) error {
+	roAug := ReadOnlyAugmentation{SkipExtraFn: func(loader *Slice) error {
 		_, err := loader.LoadUInt(16)
 		return err
 	}}
@@ -502,11 +502,11 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded, err := emptyCell.BeginParse().LoadAugDictWithAugmentation(8, roAug); err != nil || !loaded.IsEmpty() {
+	if loaded, err := emptyCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || !loaded.IsEmpty() {
 		t.Fatalf("unexpected read-only empty load: loaded=%v err=%v", loaded, err)
 	}
-	if loaded := emptyCell.BeginParse().MustLoadAugDictWithAugmentation(8, roAug); !loaded.IsEmpty() {
-		t.Fatal("MustLoadAugDictWithAugmentation should load empty wrapped dict")
+	if loaded, err := emptyCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || !loaded.IsEmpty() {
+		t.Fatalf("LoadAugDict should load empty wrapped dict: loaded=%v err=%v", loaded, err)
 	}
 
 	dict, err := NewAugDict(8, aug)
@@ -524,11 +524,11 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded, err := wrappedCell.BeginParse().LoadAugDictWithAugmentation(8, roAug); err != nil || loaded.GetRootExtra() == nil {
+	if loaded, err := wrappedCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || loaded.GetRootExtra() == nil {
 		t.Fatalf("unexpected read-only wrapped load: loaded=%v err=%v", loaded, err)
 	}
-	if loaded := wrappedCell.BeginParse().MustLoadAugDict(8, roAug.SkipExtra); loaded.GetRootExtra() == nil {
-		t.Fatal("MustLoadAugDict should expose wrapped root extra")
+	if loaded, err := wrappedCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || loaded.GetRootExtra() == nil {
+		t.Fatalf("LoadAugDict should expose wrapped root extra: loaded=%v err=%v", loaded, err)
 	}
 
 	emptyInline := &AugmentedDictionary{keySz: 8, aug: aug}
@@ -659,12 +659,12 @@ func TestAugmentedDictionary_ErrorBranchesForConstructionAndWrapping(t *testing.
 	}
 
 	badEmpty := BeginCell().MustStoreUInt(0, 1).MustStoreUInt(1, 16).EndCell()
-	if _, err = badEmpty.BeginParse().LoadAugDictWithAugmentation(8, aug); err == nil {
+	if _, err = badEmpty.BeginParse().LoadAugDict(8, aug, false); err == nil {
 		t.Fatal("wrapped empty augmented dict with bad extra should fail")
 	}
 
 	badRootExtra := BeginCell().MustStoreUInt(1, 1).MustStoreRef(valid.root).MustStoreUInt(0xffff, 16).EndCell()
-	if _, err = badRootExtra.BeginParse().LoadAugDictWithAugmentation(8, aug); err == nil {
+	if _, err = badRootExtra.BeginParse().LoadAugDict(8, aug, false); err == nil {
 		t.Fatal("wrapped augmented dict with bad root extra should fail")
 	}
 

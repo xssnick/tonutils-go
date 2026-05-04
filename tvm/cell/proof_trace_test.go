@@ -154,6 +154,28 @@ func TestSliceObserverTraceHooks(t *testing.T) {
 	}
 }
 
+func TestSliceObserverLoadRefCellOnlyTracksPath(t *testing.T) {
+	child := BeginCell().MustStoreUInt(2, 8).EndCell()
+	root := BeginCell().MustStoreUInt(1, 8).MustStoreRef(child).EndCell()
+
+	obs := &recordingTraceObserver{next: 100}
+	sl := root.BeginParse().SetObserver(obs)
+
+	got, err := sl.LoadRefCell()
+	if err != nil {
+		t.Fatalf("load ref cell: %v", err)
+	}
+	if got != child {
+		t.Fatal("unexpected child cell")
+	}
+	if len(obs.refs) != 1 {
+		t.Fatalf("expected one ref notification, got %d", len(obs.refs))
+	}
+	if len(obs.loads) != 0 {
+		t.Fatalf("load ref cell should not notify load observer, got %d notifications", len(obs.loads))
+	}
+}
+
 func TestSliceObserverTraceNodeIsStableAcrossPreloadAndLoad(t *testing.T) {
 	child := BeginCell().MustStoreUInt(2, 8).EndCell()
 	root := BeginCell().MustStoreUInt(1, 8).MustStoreRef(child).EndCell()

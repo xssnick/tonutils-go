@@ -11,7 +11,7 @@ import (
 )
 
 func makeStateC7WithParams(params tuple.Tuple) tuple.Tuple {
-	return *tuple.NewTuple(params)
+	return tuple.NewTupleValue(params)
 }
 
 func makeStateWithParams(t *testing.T, params ...any) *State {
@@ -87,7 +87,7 @@ func TestStateRunChildAndParamHelpers(t *testing.T) {
 		if err := params.Set(4, "blocklt"); err != nil {
 			t.Fatal(err)
 		}
-		if err := params.Set(14, *tuple.NewTuple("cfg")); err != nil {
+		if err := params.Set(14, tuple.NewTupleValue("cfg")); err != nil {
 			t.Fatal(err)
 		}
 

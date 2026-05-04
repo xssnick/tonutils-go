@@ -52,7 +52,22 @@ func notifyCellLoad(observer Observer, c *Cell) {
 	observer.OnCellLoad(c.HashKey())
 }
 
+func beginParseObservedNode(c *Cell, observer Observer, node TraceNode) *Slice {
+	if observer == nil {
+		return c.BeginParse()
+	}
+	notifyCellLoad(observer, c)
+	return &Slice{
+		cell:      c,
+		observer:  observer,
+		traceNode: node,
+		bitEnd:    c.bitsSz,
+		refEnd:    uint8(c.refsCount()),
+	}
+}
+
 func (c *Cell) copy() *Cell {
+	refCnt := c.refsCount()
 	cp := &Cell{
 		data:   append([]byte{}, c.data...),
 		meta:   cloneCellMeta(c.meta),
@@ -61,23 +76,23 @@ func (c *Cell) copy() *Cell {
 		flags:  c.flags,
 	}
 	copy(cp.hash0[:], c.hash0[:])
-	copy(cp.refs[:], c.rawRefs())
+	copy(cp.refs[:], c.refs[:refCnt])
 	return cp
 }
 
-func (c *Cell) cloneWithRef(i int, ref *Cell) *Cell {
+func (c *Cell) cloneWithRefObserved(i int, ref *Cell, observer Observer) (*Cell, error) {
 	cp := c.copy()
 	cp.setRef(i, ref)
-	cp.calculateHashes()
-	return cp
-}
-
-func (c *Cell) cloneWithRefObserved(i int, ref *Cell, observer Observer) *Cell {
-	cp := c.cloneWithRef(i, ref)
+	if err := cp.refreshLevelMaskForRefs(); err != nil {
+		return nil, err
+	}
+	if err := cp.calculateHashes(); err != nil {
+		return nil, err
+	}
 	if observer != nil {
 		observer.OnCellCreate()
 	}
-	return cp
+	return cp, nil
 }
 
 func (c *Cell) BeginParse() *Slice {
@@ -89,12 +104,13 @@ func (c *Cell) BeginParse() *Slice {
 }
 
 func (c *Cell) ToBuilder() *Builder {
+	refCnt := c.refsCount()
 	var b Builder
 	b.bitsSz = uint(c.bitsSz)
 	copy(b.data[:], c.data)
 
-	b.refsNum = uint8(c.refsCount())
-	copy(b.refs[:], c.rawRefs())
+	b.refsNum = uint8(refCnt)
+	copy(b.refs[:], c.refs[:refCnt])
 
 	return &b
 }
@@ -119,7 +135,12 @@ func (c *Cell) PeekRef(i int) (*Cell, error) {
 	if i >= c.refsCount() {
 		return nil, ErrNoMoreRefs
 	}
-	return c.visibleRef(i), nil
+	if i < 0 {
+		return nil, ErrNegative
+	}
+
+	refView := newCellRefView(c)
+	return refView.resolvedRef(i)
 }
 
 func (c *Cell) Dump(limitLength ...int) string {
@@ -176,13 +197,14 @@ func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
 	builder.WriteString(val)
 	builder.WriteByte(']')
 
-	if c.getLevelMask().GetLevel() > 0 {
+	level := c.getLevelMask().GetLevel()
+	if level > 0 {
 		builder.WriteByte('{')
-		builder.WriteString(strconv.Itoa(c.getLevelMask().GetLevel()))
+		builder.WriteString(strconv.Itoa(level))
 		builder.WriteByte('}')
 
 	}
-	if c.isSpecial() {
+	if c.IsSpecial() {
 		builder.WriteByte('*')
 	}
 	refCnt := c.refsCount()
@@ -190,7 +212,7 @@ func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
 
 		builder.WriteString(" -> {")
 
-		for i, ref := range c.visibleRefs() {
+		for i, ref := range c.boundaryRefs() {
 
 			builder.WriteByte('\n')
 			builder.WriteString(ref.dump(deep+1, bin, limitLength))
@@ -255,7 +277,7 @@ func (c *Cell) Verify(key ed25519.PublicKey, signature []byte) bool {
 }
 
 func (c *Cell) GetType() Type {
-	if !c.isSpecial() {
+	if !c.IsSpecial() {
 		return OrdinaryCellType
 	}
 	if c.BitsSize() < 8 {

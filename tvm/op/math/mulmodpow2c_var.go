@@ -14,15 +14,15 @@ func init() {
 func MULMODPOW2C_VAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			z, err := state.Stack.PopIntRange(0, 256)
+			z, err := popIntRange(state, 0, 256)
 			if err != nil {
 				return err
 			}
-			y, err := state.Stack.PopIntFinite()
+			y, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

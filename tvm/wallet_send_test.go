@@ -243,3 +243,81 @@ func TestWalletV5SendExternalGo(t *testing.T) {
 		}
 	})
 }
+
+func TestWalletV5RunSeqnoGo(t *testing.T) {
+	fx := makeWalletV5SendFixture(t, walletSendInitialSeqno)
+	first, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion)
+	if err != nil {
+		t.Fatalf("prepare wallet data: %v", err)
+	}
+	if got := walletV5SeqnoFromData(t, first.Data); got != walletSendSecondSeqno {
+		t.Fatalf("prepared data seqno = %d, want %d", got, walletSendSecondSeqno)
+	}
+
+	codeRef, libs := makeWalletV5LibraryCode(t, fx.code)
+
+	stack := vmcore.NewStack()
+	if err := stack.PushInt(big.NewInt(int64(tlb.MethodNameHash("seqno")))); err != nil {
+		t.Fatalf("push method id: %v", err)
+	}
+
+	machine := NewTVM()
+	machine.globalVersion = walletSendCrossVersion
+	c7, err := buildMessageEmulationC7(fx.address, codeRef, MessageEmulationConfig{
+		Now:      fx.now,
+		Balance:  new(big.Int).SetUint64(walletSendTestBalance),
+		RandSeed: walletSendTestSeed,
+	}, new(big.Int).SetUint64(walletSendTestBalance))
+	if err != nil {
+		t.Fatalf("build c7: %v", err)
+	}
+
+	res, err := machine.ExecuteDetailedWithLibraries(
+		codeRef,
+		first.Data,
+		c7,
+		vmcore.GasWithLimit(1_000_000_000),
+		stack,
+		libs,
+	)
+	if err != nil {
+		t.Fatalf("run seqno failed: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("seqno exit code = %d, want 0; stack depth=%d", res.ExitCode, res.Stack.Len())
+	}
+
+	seqno, err := res.Stack.PopInt()
+	if err != nil {
+		t.Fatalf("pop seqno: %v", err)
+	}
+	if seqno.Uint64() != uint64(walletSendSecondSeqno) {
+		t.Fatalf("seqno = %d, want %d", seqno.Uint64(), walletSendSecondSeqno)
+	}
+}
+
+func makeWalletV5LibraryCode(t *testing.T, code *cell.Cell) (*cell.Cell, *cell.Cell) {
+	t.Helper()
+
+	hash := code.Hash()
+	codeRef, err := cell.BeginCell().
+		MustStoreUInt(uint64(cell.LibraryCellType), 8).
+		MustStoreSlice(hash, 256).
+		EndCellSpecial(true)
+	if err != nil {
+		t.Fatalf("build library code ref: %v", err)
+	}
+
+	dict := cell.NewDict(256)
+	key := cell.BeginCell().MustStoreSlice(hash, 256).EndCell()
+	value := cell.BeginCell().MustStoreUInt(0, 2).MustStoreRef(code).EndCell()
+	if err = dict.Set(key, value); err != nil {
+		t.Fatalf("set library dict value: %v", err)
+	}
+	libs, err := dict.ToCell()
+	if err != nil {
+		t.Fatalf("build library dict: %v", err)
+	}
+
+	return codeRef, libs
+}

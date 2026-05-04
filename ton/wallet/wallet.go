@@ -114,7 +114,8 @@ func init() {
 		}
 
 		walletCode[ver] = code
-		walletVersionByCodeHash[string(code.Hash())] = ver
+		codeHash := code.HashKey()
+		walletVersionByCodeHash[string(codeHash[:])] = ver
 	}
 }
 

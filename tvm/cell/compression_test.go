@@ -3,6 +3,7 @@ package cell
 import (
 	"bytes"
 	"encoding/base64"
+	"math/big"
 	"testing"
 )
 
@@ -22,8 +23,8 @@ func loadReferenceFixtureRoot(tb testing.TB) (*Cell, []byte) {
 	return root, root.ToBOCWithOptions(mode31Options())
 }
 
-func mode31Options() BOCOptions {
-	return BOCOptions{
+func mode31Options() BOCSerializeOptions {
+	return BOCSerializeOptions{
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,
@@ -71,6 +72,27 @@ func buildStateAwareCompressionFixture(tb testing.TB) (*Cell, *Cell, []byte) {
 		EndCell()
 
 	return root, left, root.ToBOCWithOptions(mode31Options())
+}
+
+func TestExtractBalanceFromDepthBalanceCellAcceptsEmptyExtraDict(t *testing.T) {
+	grams := big.NewInt(123456789)
+	left := BeginCell().MustStoreUInt(1, 1).EndCell()
+	right := BeginCell().MustStoreUInt(0, 1).EndCell()
+	depthBalance := BeginCell().
+		MustStoreUInt(0, 7).
+		MustStoreBigCoins(grams).
+		MustStoreDict(nil).
+		MustStoreRef(left).
+		MustStoreRef(right).
+		EndCell()
+
+	got := extractBalanceFromDepthBalanceCell(depthBalance)
+	if got == nil {
+		t.Fatal("failed to extract grams from depth-balance cell with empty extra currencies")
+	}
+	if got.Cmp(grams) != 0 {
+		t.Fatalf("unexpected grams, got %s want %s", got, grams)
+	}
 }
 
 func TestCompressBOC_BaselineLZ4_RoundTripReferenceFixture(t *testing.T) {

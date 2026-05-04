@@ -164,5 +164,36 @@ func normalizeStackCell(cl *cell.Cell) (*cell.Cell, error) {
 	if err := stack.LoadFromCell(cl.BeginParse()); err != nil {
 		return nil, err
 	}
-	return stack.ToCell()
+
+	canonical := tlb.NewStack()
+	values := make([]any, 0, stack.Depth())
+	for stack.Depth() > 0 {
+		val, err := stack.Pop()
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, canonicalizeCrossStackValue(val))
+	}
+	for i := len(values) - 1; i >= 0; i-- {
+		canonical.Push(values[i])
+	}
+	return canonical.ToCell()
+}
+
+func canonicalizeCrossStackValue(val any) any {
+	switch v := val.(type) {
+	case *cell.Slice:
+		if v == nil {
+			return nil
+		}
+		return v.MustToCell().BeginParse()
+	case []any:
+		cp := make([]any, len(v))
+		for i := range v {
+			cp[i] = canonicalizeCrossStackValue(v[i])
+		}
+		return cp
+	default:
+		return val
+	}
 }

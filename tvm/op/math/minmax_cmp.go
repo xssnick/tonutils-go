@@ -38,11 +38,11 @@ func init() {
 func minMaxOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			x, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -73,7 +73,7 @@ func minMaxOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *help
 func absOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			x, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -93,11 +93,11 @@ func absOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP 
 func compareOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopInt()
+			y, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopInt()
+			x, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -115,7 +115,7 @@ func compareIntOp(name string, prefix helpers.BitPrefix, mode int, value int8, q
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			x, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -145,7 +145,7 @@ func compareIntOp(name string, prefix helpers.BitPrefix, mode int, value int8, q
 func signOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			x, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
 			}

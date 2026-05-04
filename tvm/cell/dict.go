@@ -10,10 +10,10 @@ import (
 type Dictionary struct {
 	keySz uint
 
-	root         *Cell
-	observer     Observer
-	traceNode    TraceNode
-	skipRootLoad bool
+	root *Cell
+
+	observer  Observer
+	traceNode TraceNode
 }
 
 type HashmapKV struct {
@@ -42,7 +42,7 @@ func (c *Cell) AsDict(keySz uint) *Dictionary {
 }
 
 func (c *Slice) ToDict(keySz uint) (*Dictionary, error) {
-	root, err := c.ToCell()
+	root, err := c.WithoutObserver().ToCell()
 	if err != nil {
 		return nil, err
 	}
@@ -66,18 +66,25 @@ func (c *Slice) MustLoadDict(keySz uint) *Dictionary {
 }
 
 func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
-	cl, err := c.LoadMaybeRef()
+	root, node, has, err := c.loadMaybeRefCellWithNode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load ref for dict, err: %w", err)
 	}
 
-	if cl == nil {
+	if !has {
 		return (&Dictionary{
 			keySz: keySz,
 		}).SetObserverNode(c.observer, c.traceNode), nil
 	}
 
-	return cl.ToDict(keySz)
+	if err = validatePlainDictRoot(root, keySz); err != nil {
+		return nil, fmt.Errorf("failed to validate dict: %w", err)
+	}
+
+	return (&Dictionary{
+		keySz: keySz,
+		root:  root,
+	}).SetObserverNode(c.observer, node), nil
 }
 
 func (d *Dictionary) GetKeySize() uint {
@@ -86,11 +93,10 @@ func (d *Dictionary) GetKeySize() uint {
 
 func (d *Dictionary) Copy() *Dictionary {
 	return &Dictionary{
-		keySz:        d.keySz,
-		root:         d.root,
-		observer:     d.observer,
-		traceNode:    d.traceNode,
-		skipRootLoad: d.skipRootLoad,
+		keySz:     d.keySz,
+		root:      d.root,
+		observer:  d.observer,
+		traceNode: d.traceNode,
 	}
 }
 
@@ -99,9 +105,11 @@ func (d *Dictionary) SetObserver(observer Observer) *Dictionary {
 }
 
 func (d *Dictionary) SetObserverNode(observer Observer, node TraceNode) *Dictionary {
+	if d == nil {
+		return nil
+	}
 	d.observer = observer
 	d.traceNode = node
-	d.skipRootLoad = observer != nil && node != 0 && d.root != nil
 	return d
 }
 
@@ -112,28 +120,11 @@ func (d *Dictionary) beginParse(c *Cell) *Slice {
 	return c.BeginParse()
 }
 
-func beginParseObservedNode(c *Cell, observer Observer, node TraceNode, charge bool) *Slice {
-	if observer != nil {
-		if charge {
-			notifyCellLoad(observer, c)
-		}
-		return c.BeginParse().SetObserverNode(observer, node)
-	}
-	return c.BeginParse()
-}
-
 func (d *Dictionary) beginParseNode(c *Cell, node TraceNode) *Slice {
 	if d == nil {
 		return c.BeginParse()
 	}
-
-	charge := true
-	if d.skipRootLoad {
-		d.skipRootLoad = false
-		charge = false
-	}
-
-	return beginParseObservedNode(c, d.observer, node, charge)
+	return beginParseObservedNode(c, d.observer, node)
 }
 
 func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
@@ -148,14 +139,10 @@ func (d *Dictionary) storeLeaf(keyPfx *Slice, value *Builder, keyOffset uint) (*
 }
 
 func (d *Dictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) (*Cell, error) {
-	b := BeginCell().SetObserver(d.observer)
-	if err := b.StoreRef(left); err != nil {
-		return nil, fmt.Errorf("failed to store left branch: %w", err)
-	}
-
-	if err := b.StoreRef(right); err != nil {
-		return nil, fmt.Errorf("failed to store right branch: %w", err)
-	}
+	b := BeginCell().
+		SetObserver(d.observer).
+		MustStoreRef(left).
+		MustStoreRef(right)
 
 	return storeDictNodeObserved(label, b, keyOffset, d.observer)
 }
@@ -212,46 +199,32 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		return leaf, err == nil, err
 	}
 
-	s := d.beginParse(branch)
-	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
+	node, err := parseFixedDictNode(branch, keyOffset, d.beginParse)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to load label: %w", err)
+		return nil, false, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, false, err
 	}
 
-	isNewRight, matches := false, true
-	kPartSlice := kPart.ToSlice()
-	var bitsMatches uint
-	for bitsMatches = 0; bitsMatches < sz; bitsMatches++ {
-		vCurr, err := kPartSlice.LoadUInt(1)
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to load current key bit: %w", err)
-		}
-
-		vNew, err := pfx.LoadUInt(1)
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to load new key bit: %w", err)
-		}
-
-		if vCurr != vNew {
-			isNewRight = vNew != 0
-			matches = false
-			break
-		}
+	bitsMatches, isNewRight, _, err := matchBuilderLabel(node.label, node.labelLen, pfx)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
 
-	if matches {
+	if bitsMatches == node.labelLen {
 		if pfx.BitsLeft() == 0 {
 			if mode == DictSetModeAdd {
-				return branch, false, nil
+				return node.cell, false, nil
 			}
-			leaf, err := d.storeLeaf(kPart.ToSlice(), value, keyOffset)
+			leaf, err := d.storeLeaf(node.label.ToSlice(), value, keyOffset)
 			return leaf, err == nil, err
 		}
 
 		refIdx := int(pfx.MustLoadUInt(1))
-		ref, err := branch.PeekRef(refIdx)
+		ref, err := node.resolvedRef(refIdx)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
+			return nil, false, fmt.Errorf("failed to load %d ref: %w", refIdx, err)
 		}
 
 		ref, changed, err := d.set(ref, pfx, keyOffset-(bitsMatches+1), value, mode)
@@ -259,27 +232,26 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 			return nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
 		}
 		if !changed {
-			return branch, false, nil
-		}
-		if ref == nil {
-			return nil, false, fmt.Errorf("set produced nil child")
+			return node.cell, false, nil
 		}
 
-		return branch.cloneWithRefObserved(refIdx, ref, d.observer), true, nil
+		return node.cloneWithRef(refIdx, ref, d.observer)
 	}
 
 	if mode == DictSetModeReplace {
-		return branch, false, nil
+		return node.cell, false, nil
 	}
 
-	prefixBits := kPart.ToSlice().MustLoadSlice(bitsMatches)
-	prefixLabel := BeginCell().MustStoreSlice(prefixBits, bitsMatches).ToSlice()
+	prefixLabel, labelRemainder, err := node.splitLabel(bitsMatches)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to split old child label: %w", err)
+	}
 
 	oldChild := BeginCell()
-	if err = storeDictLabel(oldChild, kPartSlice, keyOffset-(bitsMatches+1)); err != nil {
+	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
 		return nil, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
-	if err = oldChild.StoreBuilder(s.ToBuilder()); err != nil {
+	if err = oldChild.StoreBuilder(node.loader.ToBuilder()); err != nil {
 		return nil, false, fmt.Errorf("failed to store old child payload: %w", err)
 	}
 
@@ -302,28 +274,30 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		return nil, nil, false, nil
 	}
 
-	s := d.beginParse(branch)
-	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
+	node, err := parseFixedDictNode(branch, keyOffset, d.beginParse)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
+		return nil, nil, false, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, nil, false, err
 	}
 
-	bitsMatches, err := consumeCommonPrefix(kPart.ToSlice(), pfx, sz)
+	bitsMatches, err := consumeCommonPrefix(node.label.ToSlice(), pfx, node.labelLen)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
-	if bitsMatches < sz {
+	if bitsMatches < node.labelLen {
 		return nil, nil, false, nil
 	}
 
 	if pfx.BitsLeft() == 0 {
-		return s, nil, true, nil
+		return node.loader, nil, true, nil
 	}
 
 	refIdx := int(pfx.MustLoadUInt(1))
-	ref, err := branch.PeekRef(refIdx)
+	ref, err := node.resolvedRef(refIdx)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
+		return nil, nil, false, fmt.Errorf("failed to load %d ref: %w", refIdx, err)
 	}
 
 	nextKeyOffset := keyOffset - (bitsMatches + 1)
@@ -337,9 +311,9 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 
 	if newChild == nil {
 		otherIdx := refIdx ^ 1
-		otherRef, err := branch.PeekRef(otherIdx)
+		otherRef, err := node.resolvedRef(otherIdx)
 		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to peek neighbour ref %d: %w", otherIdx, err)
+			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
 		}
 
 		slc := d.beginParse(otherRef)
@@ -348,21 +322,19 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 			return nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
 		}
 
-		if err = kPart.StoreUInt(uint64(otherIdx), 1); err != nil {
-			return nil, nil, false, fmt.Errorf("failed to append neighbour edge bit: %w", err)
-		}
-		if err = kPart.StoreBuilder(otherLabel); err != nil {
-			return nil, nil, false, fmt.Errorf("failed to append neighbour label: %w", err)
+		if err = node.appendEdgeLabel(uint64(otherIdx), otherLabel, "neighbour"); err != nil {
+			return nil, nil, false, err
 		}
 
-		merged, err := d.storeLeaf(kPart.ToSlice(), slc.ToBuilder(), keyOffset)
+		merged, err := d.storeLeaf(node.label.ToSlice(), slc.ToBuilder(), keyOffset)
 		if err != nil {
 			return nil, nil, false, err
 		}
 		return removed, merged, true, nil
 	}
 
-	return removed, branch.cloneWithRefObserved(refIdx, newChild, d.observer), true, nil
+	cloned, changed, err := node.cloneWithRef(refIdx, newChild, d.observer)
+	return removed, cloned, changed, err
 }
 
 func (d *Dictionary) Delete(key *Cell) error {
@@ -416,9 +388,7 @@ func (d *Dictionary) LoadValue(key *Cell) (*Slice, error) {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	skipInitialLoad := d.skipRootLoad
-	d.skipRootLoad = false
-	return findKeyInDict(d.root, key, d.observer, d.traceNode, skipInitialLoad)
+	return findKeyInDict(d.root, key, d.observer, d.traceNode)
 }
 
 func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice, error) {
@@ -453,7 +423,7 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 			bit = !bit
 		}
 
-		if err = key.StoreBoolBit(bit); err != nil {
+		if err := key.StoreBoolBit(bit); err != nil {
 			return nil, nil, err
 		}
 
@@ -461,13 +431,11 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 		if bit {
 			refIdx = 1
 		}
-		if d.observer != nil {
-			node = d.observer.OnRef(node, refIdx)
-		}
-		branch, err = branch.PeekRef(refIdx)
+		next, nextNode, err := loader.loadRefCellAtObserved(refIdx)
 		if err != nil {
 			return nil, nil, err
 		}
+		branch, node = next, nextNode
 		remaining--
 	}
 }
@@ -569,22 +537,22 @@ func (d *Dictionary) LoadAll(skipPruned ...bool) ([]DictKV, error) {
 	if d == nil || d.root == nil {
 		return []DictKV{}, nil
 	}
-	return d.mapInner(d.keySz, d.keySz, d.root, BeginCell(), len(skipPruned) > 0 && skipPruned[0])
+	return d.mapInner(nil, d.keySz, d.keySz, d.root, BeginCell(), len(skipPruned) > 0 && skipPruned[0], d.traceNode)
 }
 
-func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder, skipPruned bool) ([]DictKV, error) {
+func (d *Dictionary) mapInner(out []DictKV, keySz, leftKeySz uint, c *Cell, keyPrefix *Builder, skipPruned bool, node TraceNode) ([]DictKV, error) {
 	var err error
 	var sz uint
 
 	if c.IsSpecial() {
 		if skipPruned && c.GetType() == PrunedCellType {
 			// ignore pruned keys
-			return []DictKV{}, nil
+			return out, nil
 		}
 		return nil, fmt.Errorf("dict has special cells in tree structure, cannot load some values")
 	}
 
-	loader := d.beginParse(c)
+	loader := d.beginParseNode(c, node)
 
 	sz, keyPrefix, err = loadLabel(leftKeySz, loader, keyPrefix)
 	if err != nil {
@@ -594,36 +562,38 @@ func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder
 	// until key size is not equals we go deeper
 	if keyPrefix.BitsUsed() < keySz {
 		// 0 bit branch
-		left, err := loader.LoadRefCell()
+		left, leftNode, err := loadDictMapRef(loader, skipPruned)
 		if err != nil {
 			return nil, err
 		}
 
-		keysL, err := d.mapInner(keySz, leftKeySz-(1+sz), left, keyPrefix.Copy().MustStoreUInt(0, 1), skipPruned)
+		out, err = d.mapInner(out, keySz, leftKeySz-(1+sz), left, keyPrefix.Copy().MustStoreUInt(0, 1), skipPruned, leftNode)
 		if err != nil {
 			return nil, err
 		}
 
 		// 1 bit branch
-		right, err := loader.LoadRefCell()
+		right, rightNode, err := loadDictMapRef(loader, skipPruned)
 		if err != nil {
 			return nil, err
 		}
-		keysR, err := d.mapInner(keySz, leftKeySz-(1+sz), right, keyPrefix.Copy().MustStoreUInt(1, 1), skipPruned)
-		if err != nil {
-			return nil, err
-		}
-
-		return append(keysL, keysR...), nil
+		return d.mapInner(out, keySz, leftKeySz-(1+sz), right, keyPrefix.Copy().MustStoreUInt(1, 1), skipPruned, rightNode)
 	}
 
-	return []DictKV{{
+	return append(out, DictKV{
 		Key:   keyPrefix.ToSlice(),
 		Value: loader,
-	}}, nil
+	}), nil
 }
 
-func findKeyInDict(branch *Cell, lookupKey *Cell, observer Observer, observerNode TraceNode, skipInitialLoad bool) (*Slice, error) {
+func loadDictMapRef(loader *Slice, skipPruned bool) (*Cell, TraceNode, error) {
+	if skipPruned {
+		return loader.loadBoundaryRefCellWithNode()
+	}
+	return loader.LoadRefCellWithNode()
+}
+
+func findKeyInDict(branch *Cell, lookupKey *Cell, observer Observer, observerNode TraceNode) (*Slice, error) {
 	if branch == nil {
 		// empty dict
 		return nil, ErrNoSuchKeyInDict
@@ -633,8 +603,10 @@ func findKeyInDict(branch *Cell, lookupKey *Cell, observer Observer, observerNod
 
 	// until key size is not equals we go deeper
 	for {
-		branchSlice := beginParseObservedNode(branch, observer, observerNode, !skipInitialLoad)
-		skipInitialLoad = false
+		if branch.IsSpecial() {
+			return nil, fmt.Errorf("dict has special cells in tree structure")
+		}
+		branchSlice := beginParseObservedNode(branch, observer, observerNode)
 		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), branchSlice, lKey)
 		if err != nil {
 			return nil, err
@@ -653,15 +625,11 @@ func findKeyInDict(branch *Cell, lookupKey *Cell, observer Observer, observerNod
 			return nil, err
 		}
 
-		refIdx := int(idx)
-		if observer != nil {
-			observerNode = observer.OnRef(observerNode, refIdx)
-		}
-
-		branch, err = branch.PeekRef(int(idx))
+		next, nextNode, err := branchSlice.loadRefCellAtObserved(int(idx))
 		if err != nil {
 			return nil, err
 		}
+		branch, observerNode = next, nextNode
 	}
 }
 

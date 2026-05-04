@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"hash/crc32"
 )
 
@@ -17,7 +18,14 @@ const (
 
 const bocMaxCellWeight = 64
 
-type BOCOptions struct {
+const (
+	bocInvalidCellIndex uint32 = ^uint32(0)
+	bocVisitScanned            = bocInvalidCellIndex - 1
+	bocVisitLinked             = bocInvalidCellIndex - 2
+)
+
+// BOCSerializeOptions configures BoC serialization.
+type BOCSerializeOptions struct {
 	WithCRC32C    bool
 	WithIndex     bool
 	WithCacheBits bool
@@ -25,7 +33,7 @@ type BOCOptions struct {
 	WithIntHashes bool
 }
 
-func (o BOCOptions) mode() int {
+func (o BOCSerializeOptions) mode() int {
 	mode := 0
 	if o.WithIndex {
 		mode |= bocModeWithIndex
@@ -45,26 +53,18 @@ func (o BOCOptions) mode() int {
 	return mode
 }
 
-type cellHashKey = Hash
-
-func makeCellHashKey(cell *Cell) cellHashKey {
-	var key cellHashKey
-	copy(key[:], cell.getHash(_DataCellMaxLevel))
-	return key
-}
-
 func newBOCSerializer(roots []*Cell) (*bocSerializer, error) {
 	if len(roots) == 0 {
 		return nil, nil
 	}
 
 	bag := &bocSerializer{
-		cells:    map[cellHashKey]int{},
-		roots:    make([]bocRoot, len(roots)),
-		maxDepth: maxDepth,
+		roots:     make([]bocRoot, len(roots)),
+		maxDepth:  maxDepth,
+		cellIndex: &bocHashIndex{},
 	}
 	for i, root := range roots {
-		bag.roots[i] = bocRoot{cell: root, idx: -1}
+		bag.roots[i] = bocRoot{cell: root, idx: bocInvalidCellIndex}
 	}
 
 	if err := bag.importCells(); err != nil {
@@ -74,17 +74,43 @@ func newBOCSerializer(roots []*Cell) (*bocSerializer, error) {
 	return bag, nil
 }
 
-func ToBOCWithOptions(roots []*Cell, opts BOCOptions) []byte {
-	bag, err := newBOCSerializer(roots)
-	if err != nil || bag == nil {
+func ToBOCWithOptions(roots []*Cell, opts BOCSerializeOptions) []byte {
+	boc, err := ToBOCWithOptionsErr(roots, opts)
+	if err != nil {
 		return nil
 	}
-
-	return bag.serialize(opts.mode())
+	return boc
 }
 
-func (c *Cell) ToBOCWithOptions(opts BOCOptions) []byte {
-	return ToBOCWithOptions([]*Cell{c.rawCell()}, opts)
+func ToBOCWithOptionsErr(roots []*Cell, opts BOCSerializeOptions) ([]byte, error) {
+	bag, err := newBOCSerializer(roots)
+	if err != nil {
+		return nil, err
+	}
+	if bag == nil {
+		return nil, nil
+	}
+
+	boc := bag.serialize(opts.mode())
+	if boc == nil {
+		return nil, fmt.Errorf("failed to serialize boc")
+	}
+	return boc, nil
+}
+
+func (c *Cell) ToBOCWithOptions(opts BOCSerializeOptions) []byte {
+	boc, err := c.ToBOCWithOptionsErr(opts)
+	if err != nil {
+		return nil
+	}
+	return boc
+}
+
+func (c *Cell) ToBOCWithOptionsErr(opts BOCSerializeOptions) ([]byte, error) {
+	if c == nil {
+		return nil, fmt.Errorf("cell is nil")
+	}
+	return ToBOCWithOptionsErr([]*Cell{c.rawCell()}, opts)
 }
 
 func ComputeFileHash(root *Cell) []byte {
@@ -92,7 +118,7 @@ func ComputeFileHash(root *Cell) []byte {
 		return nil
 	}
 
-	opts := BOCOptions{
+	opts := BOCSerializeOptions{
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,
@@ -105,18 +131,17 @@ func ComputeFileHash(root *Cell) []byte {
 		return nil
 	}
 
-	boc := bag.serialize(opts.mode())
-	if boc == nil {
+	fileHash, ok := bag.computeFileHash(opts.mode())
+	if !ok {
 		return nil
 	}
 
-	hash := sha256.Sum256(boc)
-	return hash[:]
+	return fileHash
 }
 
 type bocRoot struct {
 	cell *Cell
-	idx  int
+	idx  uint32
 }
 
 type bocSerializeInfo struct {
@@ -134,11 +159,10 @@ type bocSerializeInfo struct {
 
 type bocSerializeItem struct {
 	cell        *Cell
-	refIdx      [4]int
-	refNum      int
+	refIdx      [4]uint32
+	refNum      uint8
 	wt          byte
 	hcnt        byte
-	newIdx      int
 	shouldCache bool
 	isRootCell  bool
 }
@@ -156,12 +180,12 @@ type bocSerializer struct {
 
 	dataBytes uint64
 
-	cells    map[cellHashKey]int
+	cellIndex *bocHashIndex
+
 	cellList []bocSerializeItem
 	roots    []bocRoot
 
-	rvIdx       int
-	cellListTmp []bocSerializeItem
+	cellOrder []uint32
 }
 
 func (s *bocSerializer) importCells() error {
@@ -180,7 +204,7 @@ func (s *bocSerializer) importCells() error {
 	return nil
 }
 
-func (s *bocSerializer) importCell(cell *Cell, depth int) (int, error) {
+func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	if depth > s.maxDepth {
 		return 0, fmt.Errorf("cell depth too large")
 	}
@@ -188,23 +212,43 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (int, error) {
 		return 0, fmt.Errorf("cell is nil")
 	}
 	cell = cell.rawCell()
+	if cell.IsLazy() {
+		loaded, err := loadLazyPrunedRef(cell)
+		if err != nil {
+			return 0, err
+		}
+		cell = loaded.rawCell()
+	}
 
-	hash := makeCellHashKey(cell)
-	if pos, ok := s.cells[hash]; ok {
-		s.cellList[pos].shouldCache = true
+	hash := cell.getHash(_DataCellMaxLevel)
+	refCnt := cell.refsCount()
+	hashFingerprint := bocHashFingerprint(hash)
+	pos, found := s.cellIndex.get(hashFingerprint, hash, cell, s.cellList)
+	if found {
+		s.cellList[int(pos)].shouldCache = true
 		return pos, nil
 	}
 
-	visibleRefs := cell.visibleRefs()
-	refs := [4]int{-1, -1, -1, -1}
+	refView := newCellRefView(cell)
+	refs := [4]uint32{
+		bocInvalidCellIndex,
+		bocInvalidCellIndex,
+		bocInvalidCellIndex,
+		bocInvalidCellIndex,
+	}
 	sumChildWeight := 1
-	for i, ref := range visibleRefs {
+	for i := 0; i < refCnt; i++ {
+		ref, err := refView.resolvedRef(i)
+		if err != nil {
+			return 0, fmt.Errorf("failed to load ref %d: %w", i, err)
+		}
+
 		refIdx, err := s.importCell(ref, depth+1)
 		if err != nil {
 			return 0, err
 		}
 		refs[i] = refIdx
-		sumChildWeight += int(s.cellList[refIdx].wt)
+		sumChildWeight += int(s.cellList[int(refIdx)].wt)
 		s.intRefs++
 	}
 
@@ -213,30 +257,34 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (int, error) {
 		wt = 0xFF
 	}
 
-	s.cells[hash] = s.cellCount
+	idx := s.cellCount
+	if uint64(idx) >= uint64(bocVisitLinked) {
+		return 0, fmt.Errorf("too many cells to serialize")
+	}
+
 	s.cellList = append(s.cellList, bocSerializeItem{
 		cell:   cell,
 		refIdx: refs,
-		refNum: len(visibleRefs),
+		refNum: uint8(refCnt),
 		wt:     byte(wt),
 		hcnt:   byte(cell.getLevelMask().getHashesCount()),
-		newIdx: -1,
 	})
+	s.cellIndex.set(hashFingerprint, uint32(idx))
 	s.dataBytes += uint64(cell.serializedBOCSize(false))
 
-	idx := s.cellCount
 	s.cellCount++
-	return idx, nil
+	return uint32(idx), nil
 }
 
 func (s *bocSerializer) reorderCells() {
 	s.intHashes = 0
 	for i := s.cellCount - 1; i >= 0; i-- {
 		item := &s.cellList[i]
-		refsCnt, remaining, sum, mask := item.refNum, item.refNum, bocMaxCellWeight-1, 0
+		refsCnt := int(item.refNum)
+		remaining, sum, mask := refsCnt, bocMaxCellWeight-1, 0
 
 		for j := 0; j < refsCnt; j++ {
-			child := &s.cellList[item.refIdx[j]]
+			child := &s.cellList[int(item.refIdx[j])]
 			limit := (bocMaxCellWeight - 1 + j) / refsCnt
 			if int(child.wt) <= limit {
 				sum -= int(child.wt)
@@ -254,7 +302,7 @@ func (s *bocSerializer) reorderCells() {
 				continue
 			}
 
-			child := &s.cellList[item.refIdx[j]]
+			child := &s.cellList[int(item.refIdx[j])]
 			limit := sum / remaining
 			sum++
 			if int(child.wt) > limit {
@@ -266,8 +314,8 @@ func (s *bocSerializer) reorderCells() {
 	for i := 0; i < s.cellCount; i++ {
 		item := &s.cellList[i]
 		sum := 1
-		for j := 0; j < item.refNum; j++ {
-			sum += int(s.cellList[item.refIdx[j]].wt)
+		for j := 0; j < int(item.refNum); j++ {
+			sum += int(s.cellList[int(item.refIdx[j])].wt)
 		}
 
 		if sum <= int(item.wt) {
@@ -281,7 +329,7 @@ func (s *bocSerializer) reorderCells() {
 
 	s.topHashes = 0
 	for i := range s.roots {
-		item := &s.cellList[s.roots[i].idx]
+		item := &s.cellList[int(s.roots[i].idx)]
 		if !item.isRootCell {
 			item.isRootCell = true
 			if item.wt != 0 {
@@ -294,71 +342,73 @@ func (s *bocSerializer) reorderCells() {
 		return
 	}
 
-	s.rvIdx = 0
-	s.cellListTmp = make([]bocSerializeItem, 0, s.cellCount)
+	newIdx := make([]uint32, s.cellCount)
+	for i := range newIdx {
+		newIdx[i] = bocInvalidCellIndex
+	}
+	s.cellOrder = make([]uint32, 0, s.cellCount)
+	var nextIdx uint32
 
 	for _, root := range s.roots {
-		s.revisit(root.idx, 0)
-		s.revisit(root.idx, 1)
+		s.revisit(root.idx, 0, newIdx, &nextIdx)
+		s.revisit(root.idx, 1, newIdx, &nextIdx)
 	}
 	for i := range s.roots {
-		s.roots[i].idx = s.revisit(s.roots[i].idx, 2)
+		s.roots[i].idx = s.revisit(s.roots[i].idx, 2, newIdx, &nextIdx)
 	}
-
-	s.cellList = s.cellListTmp
-	s.cellListTmp = nil
 }
 
-func (s *bocSerializer) revisit(cellIdx, force int) int {
-	item := &s.cellList[cellIdx]
+func (s *bocSerializer) revisit(cellIdx uint32, force int, newIdx []uint32, nextIdx *uint32) uint32 {
+	pos := int(cellIdx)
+	item := &s.cellList[pos]
 
-	if item.newIdx >= 0 {
-		return item.newIdx
+	if newIdx[pos] < bocVisitLinked {
+		return newIdx[pos]
 	}
 
 	if force == 0 {
-		if item.newIdx != -1 {
-			return item.newIdx
+		if newIdx[pos] != bocInvalidCellIndex {
+			return newIdx[pos]
 		}
 
-		for j := item.refNum - 1; j >= 0; j-- {
+		for j := int(item.refNum) - 1; j >= 0; j-- {
 			childIdx := item.refIdx[j]
 			childForce := 0
-			if s.cellList[childIdx].isSpecial() {
+			if s.cellList[int(childIdx)].isSpecial() {
 				childForce = 1
 			}
-			s.revisit(childIdx, childForce)
+			s.revisit(childIdx, childForce, newIdx, nextIdx)
 		}
 
-		item.newIdx = -2
-		return item.newIdx
+		newIdx[pos] = bocVisitScanned
+		return newIdx[pos]
 	}
 
 	if force > 1 {
-		idx := s.rvIdx
-		s.rvIdx++
-		item.newIdx = idx
-		s.cellListTmp = append(s.cellListTmp, *item)
+		idx := *nextIdx
+		*nextIdx = idx + 1
+		newIdx[pos] = idx
+		s.cellOrder = append(s.cellOrder, cellIdx)
 		return idx
 	}
 
-	if item.newIdx == -3 {
-		return item.newIdx
+	if newIdx[pos] == bocVisitLinked {
+		return newIdx[pos]
 	}
 
 	if item.isSpecial() {
-		s.revisit(cellIdx, 0)
+		s.revisit(cellIdx, 0, newIdx, nextIdx)
 	}
 
-	for j := item.refNum - 1; j >= 0; j-- {
-		s.revisit(item.refIdx[j], 1)
+	for j := int(item.refNum) - 1; j >= 0; j-- {
+		s.revisit(item.refIdx[j], 1, newIdx, nextIdx)
 	}
-	for j := item.refNum - 1; j >= 0; j-- {
-		item.refIdx[j] = s.revisit(item.refIdx[j], 2)
+	for j := int(item.refNum) - 1; j >= 0; j-- {
+		item.refIdx[j] = s.revisit(item.refIdx[j], 2, newIdx, nextIdx)
 	}
 
-	item.newIdx = -3
-	return item.newIdx
+	newIdx[pos] = bocVisitLinked
+	return newIdx[pos]
 }
 
 func (s *bocSerializer) computeSizes(mode int) (uint64, int, int) {
@@ -379,7 +429,7 @@ func (s *bocSerializer) computeSizes(mode int) (uint64, int, int) {
 		hashBytes += s.intHashes
 	}
 
-	dataSize := s.dataBytes + uint64(s.intRefs*refByteSize) + uint64(hashBytes*(hashSize+depthSize))
+	dataSize := s.dataBytes + uint64(s.intRefs)*uint64(refByteSize) + uint64(hashBytes)*uint64(hashSize+depthSize)
 	maxOffset := dataSize
 	if mode&bocModeWithCacheBits != 0 {
 		maxOffset *= 2
@@ -431,6 +481,13 @@ func (s *bocSerializer) estimateSerializedSize(mode int) (bocSerializeInfo, bool
 	return info, true
 }
 
+func (s *bocSerializer) itemByIndex(idx int) *bocSerializeItem {
+	if s.cellOrder != nil {
+		return &s.cellList[int(s.cellOrder[idx])]
+	}
+	return &s.cellList[idx]
+}
+
 func (s *bocSerializer) serialize(mode int) []byte {
 	info, ok := s.estimateSerializedSize(mode)
 	if !ok {
@@ -438,11 +495,10 @@ func (s *bocSerializer) serialize(mode int) []byte {
 	}
 
 	data := make([]byte, info.totalSize)
-	dynBuffer := make([]byte, 8)
 	pos := 0
 
 	storeUint := func(value uint64, sz int) {
-		copy(data[pos:pos+sz], dynamicIntBytes(value, uint(sz), dynBuffer))
+		storeUintTo(data[pos:pos+sz], value, sz)
 		pos += sz
 	}
 
@@ -471,15 +527,15 @@ func (s *bocSerializer) serialize(mode int) []byte {
 	storeUint(info.dataSize, info.offsetByteSize)
 
 	for _, root := range s.roots {
-		storeUint(uint64(s.cellCount-1-root.idx), info.refByteSize)
+		storeUint(uint64(s.cellCount-1-int(root.idx)), info.refByteSize)
 	}
 
 	if info.hasIndex {
 		var offs uint64
 		for n := s.cellCount; n > 0; n-- {
 			i := n - 1
-			item := &s.cellList[i]
-			offs += uint64(item.cell.serializedBOCSize(s.shouldSerializeHashes(item, mode)) + item.refNum*info.refByteSize)
+			item := s.itemByIndex(i)
+			offs += uint64(item.cell.serializedBOCSize(s.shouldSerializeHashes(item, mode)) + int(item.refNum)*info.refByteSize)
 
 			offset := offs
 			if info.hasCacheBits {
@@ -493,11 +549,11 @@ func (s *bocSerializer) serialize(mode int) []byte {
 	}
 
 	for i := 0; i < s.cellCount; i++ {
-		item := &s.cellList[s.cellCount-1-i]
+		item := s.itemByIndex(s.cellCount - 1 - i)
 		pos += item.cell.serializeBOCTo(data[pos:], s.shouldSerializeHashes(item, mode))
 
-		for j := 0; j < item.refNum; j++ {
-			storeUint(uint64(s.cellCount-1-item.refIdx[j]), info.refByteSize)
+		for j := 0; j < int(item.refNum); j++ {
+			storeUint(uint64(s.cellCount-1-int(item.refIdx[j])), info.refByteSize)
 		}
 	}
 
@@ -509,6 +565,107 @@ func (s *bocSerializer) serialize(mode int) []byte {
 	return data
 }
 
+type bocHashWriter struct {
+	sum hash.Hash
+	crc uint32
+
+	buf       [8]byte
+	crcActive bool
+}
+
+func (w *bocHashWriter) write(data []byte) {
+	_, _ = w.sum.Write(data)
+	if w.crcActive {
+		w.crc = crc32.Update(w.crc, castTable, data)
+	}
+}
+
+func (w *bocHashWriter) writeByte(value byte) {
+	w.buf[0] = value
+	w.write(w.buf[:1])
+}
+
+func (w *bocHashWriter) writeUint(value uint64, sz int) {
+	storeUintTo(w.buf[:sz], value, sz)
+	w.write(w.buf[:sz])
+}
+
+func (s *bocSerializer) computeFileHash(mode int) ([]byte, bool) {
+	info, ok := s.estimateSerializedSize(mode)
+	if !ok {
+		return nil, false
+	}
+
+	h := sha256.New()
+	w := bocHashWriter{
+		sum:       h,
+		crcActive: info.hasCRC32C,
+	}
+
+	w.write(bocMagic)
+
+	flags := byte(info.refByteSize)
+	if info.hasIndex {
+		flags |= 1 << 7
+	}
+	if info.hasCRC32C {
+		flags |= 1 << 6
+	}
+	if info.hasCacheBits {
+		flags |= 1 << 5
+	}
+	w.writeByte(flags)
+	w.writeByte(byte(info.offsetByteSize))
+
+	w.writeUint(uint64(s.cellCount), info.refByteSize)
+	w.writeUint(uint64(len(s.roots)), info.refByteSize)
+	w.writeUint(0, info.refByteSize)
+	w.writeUint(info.dataSize, info.offsetByteSize)
+
+	for _, root := range s.roots {
+		w.writeUint(uint64(s.cellCount-1-int(root.idx)), info.refByteSize)
+	}
+
+	if info.hasIndex {
+		var offs uint64
+		for n := s.cellCount; n > 0; n-- {
+			i := n - 1
+			item := s.itemByIndex(i)
+			offs += uint64(item.cell.serializedBOCSize(s.shouldSerializeHashes(item, mode)) + int(item.refNum)*info.refByteSize)
+
+			offset := offs
+			if info.hasCacheBits {
+				offset = offs * 2
+				if item.shouldCache {
+					offset++
+				}
+			}
+			w.writeUint(offset, info.offsetByteSize)
+		}
+	}
+
+	var cellBuf [2 + maxCellDataBytes + 4*(hashSize+depthSize)]byte
+	for i := 0; i < s.cellCount; i++ {
+		item := s.itemByIndex(s.cellCount - 1 - i)
+		n := item.cell.serializeBOCTo(cellBuf[:], s.shouldSerializeHashes(item, mode))
+		w.write(cellBuf[:n])
+
+		for j := 0; j < int(item.refNum); j++ {
+			w.writeUint(uint64(s.cellCount-1-int(item.refIdx[j])), info.refByteSize)
+		}
+	}
+
+	if info.hasCRC32C {
+		var crcBuf [4]byte
+		binary.LittleEndian.PutUint32(crcBuf[:], w.crc)
+		w.crcActive = false
+		w.write(crcBuf[:])
+	}
+
+	var out [sha256.Size]byte
+	return h.Sum(out[:0]), true
+}
+
 func (s *bocSerializer) shouldSerializeHashes(item *bocSerializeItem, mode int) bool {
 	withHashes := mode&bocModeWithIntHashes != 0 && item.wt == 0
 	if item.isRootCell && mode&bocModeWithTopHash != 0 {
@@ -518,7 +675,7 @@ func (s *bocSerializer) shouldSerializeHashes(item *bocSerializeItem, mode int) 
 }
 
 func (c *Cell) serializedBOCSize(withHashes bool) int {
-	size := 2 + c.serializedBOCBodySize()
+	size := 2 + c.SerializedBOCBodySize()
 	if withHashes {
 		size += c.getLevelMask().getHashesCount() * (hashSize + depthSize)
 	}
@@ -549,15 +706,15 @@ func (c *Cell) serializeBOCTo(dst []byte, withHashes bool) int {
 		}
 	}
 
-	return offset + c.serializeBOCBodyTo(dst[offset:])
+	return offset + c.SerializeBOCBodyTo(dst[offset:])
 }
 
-func (c *Cell) serializedBOCBodySize() int {
+func (c *Cell) SerializedBOCBodySize() int {
 	return int((uint(c.bitsSz) + 7) / 8)
 }
 
-func (c *Cell) serializeBOCBodyTo(dst []byte) int {
-	bodySize := c.serializedBOCBodySize()
+func (c *Cell) SerializeBOCBodyTo(dst []byte) int {
+	bodySize := c.SerializedBOCBodySize()
 	if bodySize == 0 {
 		return 0
 	}

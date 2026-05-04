@@ -48,6 +48,22 @@ func TestStackGuardAndDeserializeErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("XchgLongDeserializeRejectsInvalidArguments", func(t *testing.T) {
+		for _, raw := range []uint64{0x1001, 0x1021, 0x1022} {
+			code := cell.BeginCell().MustStoreUInt(raw, 16).EndCell().BeginParse()
+			if err := XCHG(0, 0).Deserialize(code); !errors.Is(err, vm.ErrCorruptedOpcode) {
+				t.Fatalf("expected corrupted opcode for XCHG %#x, got %v", raw, err)
+			}
+		}
+	})
+
+	t.Run("Blkdrop2DeserializeRejectsZeroFirstCount", func(t *testing.T) {
+		code := cell.BeginCell().MustStoreUInt(0x6c05, 16).EndCell().BeginParse()
+		if err := BLKDROP2(0, 0).Deserialize(code); !errors.Is(err, vm.ErrCorruptedOpcode) {
+			t.Fatalf("expected corrupted opcode for BLKDROP2, got %v", err)
+		}
+	})
+
 	t.Run("PushContDeserializeErrors", func(t *testing.T) {
 		if err := PUSHCONT(nil).Deserialize(cell.BeginCell().MustStoreUInt(0x0, 8).EndCell().BeginParse()); !errors.Is(err, vm.ErrCorruptedOpcode) {
 			t.Fatalf("expected corrupted opcode for PUSHCONT, got %v", err)
@@ -69,13 +85,15 @@ func TestStackGuardAndDeserializeErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("DictPushConstDeserializeWithoutRefStillWorks", func(t *testing.T) {
+	t.Run("DictPushConstDeserializeWithoutRefFails", func(t *testing.T) {
 		op := DICTPUSHCONST(nil)
-		if err := op.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
-			t.Fatalf("DICTPUSHCONST nil-ref deserialize failed: %v", err)
-		}
-		if op.cont != nil || op.pfx != 0 {
-			t.Fatalf("unexpected DICTPUSHCONST decoded state: cont=%v pfx=%d", op.cont, op.pfx)
+		code := cell.BeginCell().
+			MustStoreSlice([]byte{0xF4, 0xA4}, 13).
+			MustStoreBoolBit(false).
+			MustStoreUInt(0, 10).
+			EndCell()
+		if err := op.Deserialize(code.BeginParse()); err == nil {
+			t.Fatal("expected DICTPUSHCONST without ref to fail")
 		}
 	})
 }

@@ -259,7 +259,7 @@ func TestStackWrappersAndHelpers(t *testing.T) {
 	if err != nil || gotTuple.Len() != 2 {
 		t.Fatalf("pop maybe tuple = (%v, %v), want len 2", gotTuple, err)
 	}
-	if err := s.PushTuple(*tuple.NewTuple("x", "y")); err != nil {
+	if err := s.PushTuple(tuple.NewTupleValue("x", "y")); err != nil {
 		t.Fatalf("push tuple: %v", err)
 	}
 	if _, err := s.PopTupleRange(1); err == nil {

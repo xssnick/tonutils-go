@@ -4,6 +4,7 @@ const (
 	cellFlagSpecial        uint8 = 1 << 0
 	cellFlagLevelMaskShift uint8 = 1
 	cellFlagRefsNumShift   uint8 = 4
+	cellFlagLazy           uint8 = 1 << 7
 )
 
 const (
@@ -12,12 +13,12 @@ const (
 )
 
 type cellMeta struct {
-	base *Cell
-
 	extraHashes *[3]Hash
-	extraDepths [3]uint16
+	viewOf      *Cell
+	lazyLoader  LazyCellLoader
 
-	effectiveLevel uint8
+	extraDepths [3]uint16
+	viewLevel   uint8 // effectiveLevel + 1
 }
 
 func cloneCellMeta(meta *cellMeta) *cellMeta {
@@ -33,7 +34,7 @@ func cloneCellMeta(meta *cellMeta) *cellMeta {
 	return &cp
 }
 
-func (c *Cell) isSpecial() bool {
+func (c *Cell) IsSpecial() bool {
 	return c.flags&cellFlagSpecial != 0
 }
 
@@ -43,6 +44,18 @@ func (c *Cell) setSpecial(special bool) {
 		return
 	}
 	c.flags &^= cellFlagSpecial
+}
+
+func (c *Cell) IsLazy() bool {
+	return c.flags&cellFlagLazy != 0
+}
+
+func (c *Cell) setLazy(lazy bool) {
+	if lazy {
+		c.flags |= cellFlagLazy
+		return
+	}
+	c.flags &^= cellFlagLazy
 }
 
 func (c *Cell) getLevelMask() LevelMask {
@@ -69,9 +82,6 @@ func (c *Cell) setRefsCount(refs int) {
 
 func (c *Cell) rawRefs() []*Cell {
 	refCnt := c.refsCount()
-	if refCnt == 0 {
-		return nil
-	}
 	return c.refs[:refCnt:refCnt]
 }
 
@@ -101,20 +111,6 @@ func (c *Cell) setRef(i int, ref *Cell) {
 	c.refs[i] = ref
 }
 
-func (c *Cell) baseCell() *Cell {
-	if c.meta == nil {
-		return nil
-	}
-	return c.meta.base
-}
-
-func (c *Cell) effectiveLevelValue() uint8 {
-	if c.meta == nil {
-		return 0
-	}
-	return c.meta.effectiveLevel
-}
-
 func (c *Cell) ensureMeta() *cellMeta {
 	if c.meta == nil {
 		c.meta = &cellMeta{}
@@ -126,7 +122,7 @@ func (c *Cell) clearMetaIfEmpty() {
 	if c.meta == nil {
 		return
 	}
-	if c.meta.base != nil || c.meta.extraHashes != nil || c.meta.effectiveLevel != 0 {
+	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil || c.meta.viewLevel != 0 {
 		return
 	}
 	c.meta = nil
@@ -136,8 +132,10 @@ func (c *Cell) clearVirtualization() {
 	if c.meta == nil {
 		return
 	}
-	c.meta.base = nil
-	c.meta.effectiveLevel = 0
+	if c.meta.viewLevel != 0 {
+		c.meta.viewOf = nil
+		c.meta.viewLevel = 0
+	}
 	c.clearMetaIfEmpty()
 }
 

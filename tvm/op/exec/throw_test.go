@@ -1,12 +1,14 @@
 package exec
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func setThrowImmediate(t *testing.T, op *helpers.AdvancedOP, bits uint, value uint64) {
@@ -571,5 +573,93 @@ func TestThrowAnyConditional(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestThrowUnderflowDoesNotConsumeOperands(t *testing.T) {
+	t.Run("fixed conditional arg", func(t *testing.T) {
+		op := newThrowFixed("THROWARGIF", []byte{0xF2, 0xD8, 0x00}, 13, 11, 3, true)
+		setThrowImmediate(t, op, 11, 7)
+
+		state := newTestState()
+		if err := state.Stack.PushBool(true); err != nil {
+			t.Fatalf("push condition: %v", err)
+		}
+
+		err := op.Interpret(state)
+		assertThrowVMError(t, err, vmerr.CodeStackUnderflow)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("stack len after underflow = %d, want 1", state.Stack.Len())
+		}
+		if top := mustStackInt(t, state.Stack, 0); top.Sign() == 0 {
+			t.Fatal("condition was consumed before underflow")
+		}
+	})
+
+	t.Run("throwargany", func(t *testing.T) {
+		op := newThrowAny()
+		setThrowImmediate(t, op, 3, 1)
+
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(0x123)); err != nil {
+			t.Fatalf("push exception: %v", err)
+		}
+
+		err := op.Interpret(state)
+		assertThrowVMError(t, err, vmerr.CodeStackUnderflow)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("stack len after underflow = %d, want 1", state.Stack.Len())
+		}
+		if exc := mustStackInt(t, state.Stack, 0); exc.Int64() != 0x123 {
+			t.Fatalf("exception was consumed before underflow: %s", exc.String())
+		}
+	})
+
+	t.Run("throwarganyif", func(t *testing.T) {
+		op := newThrowAny()
+		setThrowImmediate(t, op, 3, 3)
+
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(0x456)); err != nil {
+			t.Fatalf("push exception: %v", err)
+		}
+		if err := state.Stack.PushBool(true); err != nil {
+			t.Fatalf("push condition: %v", err)
+		}
+
+		err := op.Interpret(state)
+		assertThrowVMError(t, err, vmerr.CodeStackUnderflow)
+		if state.Stack.Len() != 2 {
+			t.Fatalf("stack len after underflow = %d, want 2", state.Stack.Len())
+		}
+		if cond := mustStackInt(t, state.Stack, 0); cond.Sign() == 0 {
+			t.Fatal("condition was consumed before underflow")
+		}
+		if exc := mustStackInt(t, state.Stack, 1); exc.Int64() != 0x456 {
+			t.Fatalf("exception was consumed before underflow: %s", exc.String())
+		}
+	})
+}
+
+func TestThrowAnyRejectsInvalidDuplicateEncodings(t *testing.T) {
+	for _, suffix := range []uint64{6, 7} {
+		t.Run(big.NewInt(int64(suffix)).String(), func(t *testing.T) {
+			op := newThrowAny()
+			code := cell.BeginCell().MustStoreUInt(0xf2f0|suffix, 16).EndCell().BeginParse()
+			if err := op.Deserialize(code); !errors.Is(err, vm.ErrCorruptedOpcode) {
+				t.Fatalf("deserialize suffix %d = %v, want corrupted opcode", suffix, err)
+			}
+		})
+	}
+}
+
+func assertThrowVMError(t *testing.T, err error, code int64) {
+	t.Helper()
+	var vmErr vmerr.VMError
+	if !errors.As(err, &vmErr) {
+		t.Fatalf("expected VMError %d, got %T (%v)", code, err, err)
+	}
+	if vmErr.Code != code {
+		t.Fatalf("vm error code = %d, want %d", vmErr.Code, code)
 	}
 }

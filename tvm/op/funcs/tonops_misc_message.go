@@ -1,7 +1,6 @@
 package funcs
 
 import (
-	"errors"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -397,18 +396,18 @@ func consumedPrefixSlice(src, rest *cell.Slice) (*cell.Slice, error) {
 }
 
 func pushParsedMessageTuple(state *vm.State, addr *parsedMsgAddress) error {
-	var tup *tuple.Tuple
+	var tup tuple.Tuple
 	switch addr.Kind {
 	case 0:
-		tup = tuple.NewTuple(big.NewInt(0))
+		tup = tuple.NewTupleValue(big.NewInt(0))
 	case 1:
-		tup = tuple.NewTuple(big.NewInt(1), addr.Addr)
+		tup = tuple.NewTupleValue(big.NewInt(1), addr.Addr)
 	case 2, 3:
 		var anycast any
 		if addr.Anycast != nil {
 			anycast = addr.Anycast
 		}
-		tup = tuple.NewTuple(
+		tup = tuple.NewTupleValue(
 			big.NewInt(int64(addr.Kind)),
 			anycast,
 			big.NewInt(int64(addr.Workchain)),
@@ -417,7 +416,7 @@ func pushParsedMessageTuple(state *vm.State, addr *parsedMsgAddress) error {
 	default:
 		return vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse a MsgAddress")
 	}
-	return state.Stack.PushTuple(*tup)
+	return state.Stack.PushTuple(tup)
 }
 
 func rewriteAddrBits(addrBits, prefix *cell.Slice) (*cell.Slice, bool) {
@@ -790,14 +789,17 @@ func STOPTSTDADDRQ() *helpers.SimpleOP {
 }
 
 func installAction(state *vm.State, build func(*cell.Builder) error) error {
-	b := cell.BeginCell().MustStoreRef(state.Reg.D[1])
-	if err := build(b); err != nil {
-		if errors.Is(err, cell.ErrNotFit1023) || errors.Is(err, cell.ErrTooMuchRefs) || errors.Is(err, cell.ErrRefCannotBeNil) {
-			return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
-		}
-		return err
+	b := cell.BeginCell()
+	if err := b.StoreRefUncheckedDepth(state.Reg.D[1]); err != nil {
+		return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
 	}
-	action := b.EndCell()
+	if err := build(b); err != nil {
+		return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
+	}
+	action, err := b.EndCellSpecial(false)
+	if err != nil {
+		return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
+	}
 	if err := state.Cells.RegisterCellCreate(); err != nil {
 		return err
 	}
@@ -829,7 +831,7 @@ func RAWRESERVE() *helpers.SimpleOP {
 				if err = b.StoreBigCoins(x); err != nil {
 					return err
 				}
-				return b.StoreMaybeRef(nil)
+				return b.StoreMaybeRefUncheckedDepth(nil)
 			})
 		},
 		Name:      "RAWRESERVE",
@@ -865,7 +867,7 @@ func RAWRESERVEX() *helpers.SimpleOP {
 				if err = b.StoreBigCoins(x); err != nil {
 					return err
 				}
-				return b.StoreMaybeRef(y)
+				return b.StoreMaybeRefUncheckedDepth(y)
 			})
 		},
 		Name:      "RAWRESERVEX",
@@ -884,7 +886,7 @@ func SETCODE() *helpers.SimpleOP {
 				if err = b.StoreUInt(0xAD4DE08E, 32); err != nil {
 					return err
 				}
-				return b.StoreRef(code)
+				return b.StoreRefUncheckedDepth(code)
 			})
 		},
 		Name:      "SETCODE",
@@ -921,7 +923,7 @@ func SETLIBCODE() *helpers.SimpleOP {
 				if err = b.StoreUInt(uint64(mode.Int64()*2+1), 8); err != nil {
 					return err
 				}
-				return b.StoreRef(code)
+				return b.StoreRefUncheckedDepth(code)
 			})
 		},
 		Name:      "SETLIBCODE",
@@ -1084,7 +1086,7 @@ func SENDMSG() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
 			}
 
-			fwd := prices.computeForwardFee(stat.cells, stat.bits)
+			fwd := prices.ComputeForwardFee(stat.cells, stat.bits)
 			ihr := big.NewInt(0)
 			if intMsg, ok := msg.Msg.(*tlb.InternalMessage); ok {
 				userFwd := intMsg.FwdFee.Nano()
@@ -1109,7 +1111,7 @@ func SENDMSG() *helpers.SimpleOP {
 				if err = b.StoreUInt(uint64(mode), 8); err != nil {
 					return err
 				}
-				return b.StoreRef(msgCell)
+				return b.StoreRefUncheckedDepth(msgCell)
 			})
 		},
 		Name:      "SENDMSG",

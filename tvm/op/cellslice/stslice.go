@@ -22,7 +22,7 @@ func STSLICE() *helpers.SimpleOP {
 				return err
 			}
 
-			if err := b0.StoreBuilder(s1.ToBuilder()); err != nil {
+			if err := b0.StoreBuilderUncheckedDepth(s1.ToBuilder()); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(b0)

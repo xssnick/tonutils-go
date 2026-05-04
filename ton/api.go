@@ -63,7 +63,7 @@ type APIClientWrapped interface {
 	GetBlockHeader(ctx context.Context, block *BlockIDExt) (*tlb.BlockHeader, error)
 	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
 	GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) ([]*BlockIDExt, error)
-	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error)
+	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*tlb.BlockchainConfig, error)
 	GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
 	GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error

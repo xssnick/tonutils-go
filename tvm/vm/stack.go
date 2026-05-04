@@ -24,6 +24,8 @@ type Stack struct {
 	obs   cell.Observer
 }
 
+const maxStackDepth = 1024
+
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
@@ -59,7 +61,8 @@ func bindTupleObserver(t tuple.Tuple, observer cell.Observer) tuple.Tuple {
 		}
 		vals[i] = bindValueObserver(val, observer)
 	}
-	return tuple.NewTuple(vals...).WithBindingID(observer)
+	bound := tuple.NewTupleValue(vals...)
+	return bound.WithBindingID(observer)
 }
 
 func bindValueObserver(val any, observer cell.Observer) any {
@@ -156,7 +159,7 @@ func (s *Stack) PushIntQuiet(val *big.Int) error {
 }
 
 func (s *Stack) PushAny(val any) error {
-	if len(s.elems) >= 255 {
+	if len(s.elems) >= maxStackDepth {
 		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 
@@ -200,7 +203,7 @@ func (s *Stack) MoveFrom(from *Stack, num int) error {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	if len(s.elems)+num > 255 {
+	if len(s.elems)+num > maxStackDepth {
 		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 
@@ -434,7 +437,7 @@ func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 	}
 
 	if e == nil {
-		return nil, vmerr.Error(vmerr.CodeIntOverflow)
+		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 
 	if e.Cmp(big.NewInt(min)) < 0 || e.Cmp(big.NewInt(max)) > 0 {
@@ -511,6 +514,18 @@ func (s *Stack) Copy() *Stack {
 		c.elems[i] = cloned
 	}
 	return c
+}
+
+func (s *Stack) Restore(src *Stack) {
+	s.elems = src.elems
+	s.obs = src.obs
+}
+
+func (s *Stack) Snapshot() *Stack {
+	return &Stack{
+		elems: append([]any(nil), s.elems...),
+		obs:   s.obs,
+	}
 }
 
 func (s *Stack) FromTop(offset int) (int, error) {

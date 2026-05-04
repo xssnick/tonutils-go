@@ -87,7 +87,7 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 
 		switch current.GetType() {
 		case cell.LibraryCellType:
-			if libraryLoaded && m.state.GlobalVersion >= 5 {
+			if libraryLoaded {
 				return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell: recursive library cells are not allowed")
 			}
 
@@ -133,7 +133,7 @@ func (m *CellManager) LoadRef(sl *cell.Slice) (*cell.Slice, error) {
 	if err = m.state.CheckGas(); err != nil {
 		return nil, err
 	}
-	parsed, _, err := m.beginParseLoadedCell(ref, false, true)
+	parsed, _, err := m.beginParseLoadedCell(ref, false, false)
 	return parsed, err
 }
 

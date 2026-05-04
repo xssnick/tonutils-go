@@ -34,7 +34,7 @@ func TestStatePushTupleChargedConsumesTupleGas(t *testing.T) {
 	}
 	st.InitForExecution()
 
-	tup := *tuple.NewTuple(int64(1), int64(2), int64(3))
+	tup := tuple.NewTupleValue(int64(1), int64(2), int64(3))
 	if err := st.PushTupleCharged(tup); err != nil {
 		t.Fatal(err)
 	}

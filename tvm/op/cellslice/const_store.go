@@ -187,7 +187,7 @@ func (op *OpSTSLICECONST) Interpret(state *vm.State) error {
 	if !builder.CanExtendBy(op.value.BitsLeft(), uint(op.value.RefsNum())) {
 		return vmerr.Error(vmerr.CodeCellOverflow)
 	}
-	if err = builder.StoreBuilder(op.value.ToBuilder()); err != nil {
+	if err = builder.StoreBuilderUncheckedDepth(op.value.ToBuilder()); err != nil {
 		return vmerr.Error(vmerr.CodeCellOverflow)
 	}
 	return state.Stack.PushBuilder(builder)
@@ -207,7 +207,11 @@ func ENDCST() *helpers.SimpleOP {
 			if !dst.CanExtendBy(0, 1) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if err = dst.StoreRef(src.EndCell()); err != nil {
+			srcCell, err := endBuilderCell(src)
+			if err != nil {
+				return err
+			}
+			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
 			return state.Stack.PushBuilder(dst)

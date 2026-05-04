@@ -234,3 +234,34 @@ func TestNestedDictionaryProofTraceExplicitNodeAPIMatchesLoadDict(t *testing.T) 
 
 	assertSameCellTree(t, mustCreateProof(t, root, trace.Skeleton()), autoProof)
 }
+
+func TestLoadDictDefersRootLoadToDictTraversal(t *testing.T) {
+	dict := NewDict(4)
+	key := makeTestDictKey(4, 0x1)
+	if err := dict.Set(key, makeTestDictValue(0x11)); err != nil {
+		t.Fatalf("set key: %v", err)
+	}
+
+	root := dict.AsCell()
+	obs := &recordingTraceObserver{}
+	container := BeginCell().MustStoreMaybeRef(root).EndCell().BeginParse().SetObserver(obs)
+
+	loaded, err := container.LoadDict(4)
+	if err != nil {
+		t.Fatalf("load dict: %v", err)
+	}
+	if len(obs.loads) != 0 {
+		t.Fatalf("LoadDict should only read the maybe-ref, got %d load notifications", len(obs.loads))
+	}
+
+	value, err := loaded.LoadValue(key)
+	if err != nil {
+		t.Fatalf("load value: %v", err)
+	}
+	if value.MustLoadUInt(8) != 0x11 {
+		t.Fatal("unexpected dict value")
+	}
+	if len(obs.loads) != 1 || obs.loads[0] != root.HashKey() {
+		t.Fatalf("expected one root load during traversal, got %v", obs.loads)
+	}
+}

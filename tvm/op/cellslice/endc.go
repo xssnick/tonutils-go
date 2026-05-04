@@ -16,7 +16,11 @@ func ENDC() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushCell(b.EndCell())
+			cl, err := endBuilderCell(b)
+			if err != nil {
+				return err
+			}
+			return state.Stack.PushCell(cl)
 		},
 		Name:      "ENDC",
 		BitPrefix: helpers.BytesPrefix(0xC9),

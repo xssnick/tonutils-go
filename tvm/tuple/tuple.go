@@ -17,9 +17,22 @@ type Tuple struct {
 	data *tupleData
 }
 
-func NewTuple(val ...any) *Tuple {
+func (t *Tuple) IsNull() bool {
+	return t == nil || t.data == nil
+}
+
+// NewTupleValue builds a tuple as a value wrapper, which is the preferred form
+// for storing and passing Tuple because it already shares its internal data via
+// pointer semantics.
+func NewTupleValue(val ...any) Tuple {
 	cp := append([]any(nil), val...)
-	return &Tuple{data: &tupleData{val: cp}}
+	return Tuple{data: &tupleData{val: cp}}
+}
+
+// NewTuple keeps the legacy pointer-returning constructor for compatibility.
+func NewTuple(val ...any) *Tuple {
+	t := NewTupleValue(val...)
+	return &t
 }
 
 func NewTupleSized(size int) Tuple {
@@ -30,7 +43,7 @@ func NewTupleSized(size int) Tuple {
 }
 
 func (t *Tuple) Len() int {
-	if t == nil || t.data == nil {
+	if t.IsNull() {
 		return 0
 	}
 	return len(t.data.val)
@@ -44,7 +57,7 @@ func (t *Tuple) Copy() Tuple {
 }
 
 func (t *Tuple) BindingID() any {
-	if t == nil || t.data == nil {
+	if t.IsNull() {
 		return nil
 	}
 	return t.data.bindingID
@@ -66,7 +79,7 @@ func (t *Tuple) HasBindingID(bindingID any) bool {
 }
 
 func (t *Tuple) WithBindingID(bindingID any) Tuple {
-	if t == nil || t.data == nil {
+	if t.IsNull() {
 		if bindingID == nil {
 			return Tuple{}
 		}
@@ -92,21 +105,21 @@ func cloneTupleLeaf(val any) any {
 }
 
 func (t *Tuple) Index(i int) (any, error) {
-	if t == nil || t.data == nil || i < 0 || i >= len(t.data.val) {
+	if t.IsNull() || i < 0 || i >= len(t.data.val) {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return cloneTupleLeaf(t.data.val[i]), nil
 }
 
 func (t *Tuple) RawIndex(i int) (any, error) {
-	if t == nil || t.data == nil || i < 0 || i >= len(t.data.val) {
+	if t.IsNull() || i < 0 || i >= len(t.data.val) {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return t.data.val[i], nil
 }
 
 func (t *Tuple) Set(i int, val any) error {
-	if t == nil || t.data == nil || i < 0 || i >= len(t.data.val) {
+	if t.IsNull() || i < 0 || i >= len(t.data.val) {
 		return vmerr.Error(vmerr.CodeRangeCheck)
 	}
 
@@ -134,7 +147,7 @@ func (t *Tuple) Resize(size int) {
 }
 
 func (t *Tuple) PopLast() (any, error) {
-	if t == nil || t.data == nil || len(t.data.val) == 0 {
+	if t.IsNull() || len(t.data.val) == 0 {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 

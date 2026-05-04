@@ -11,6 +11,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	tupleop "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -19,7 +20,7 @@ func TestTVMCrossEmulatorTupleOps(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	twoTuple := *tuplepkg.NewTuple(big.NewInt(7), big.NewInt(8))
+	twoTuple := tuplepkg.NewTupleValue(big.NewInt(7), big.NewInt(8))
 
 	type testCase struct {
 		name  string
@@ -29,6 +30,58 @@ func TestTVMCrossEmulatorTupleOps(t *testing.T) {
 	}
 
 	tests := []testCase{
+		{
+			name: "pushnull_isnull",
+			code: codeFromBuilders(t, tupleop.PUSHNULL().Serialize(), tupleop.ISNULL().Serialize()),
+			exit: 0,
+		},
+		{
+			name: "zero_tuple_is_not_null",
+			code: codeFromBuilders(t, tupleop.TUPLE(0).Serialize(), tupleop.ISNULL().Serialize()),
+			exit: 0,
+		},
+		{
+			name:  "nan_isnull",
+			code:  codeFromBuilders(t, tupleop.ISNULL().Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  0,
+		},
+		{
+			name:  "nan_istuple",
+			code:  codeFromBuilders(t, tupleop.ISTUPLE().Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  0,
+		},
+		{
+			name:  "nan_qtlen",
+			code:  codeFromBuilders(t, tupleop.QTLEN().Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  0,
+		},
+		{
+			name:  "indexq_nan_value",
+			code:  codeFromBuilders(t, tupleop.INDEXQ(0).Serialize()),
+			stack: []any{tuplepkg.NewTupleValue(vm.NaN{}, nil)},
+			exit:  0,
+		},
+		{
+			name:  "untuple_nan_and_null",
+			code:  codeFromBuilders(t, tupleop.UNTUPLE(2).Serialize()),
+			stack: []any{tuplepkg.NewTupleValue(vm.NaN{}, nil)},
+			exit:  0,
+		},
+		{
+			name:  "setindexq_nil_tuple_nan_value",
+			code:  codeFromBuilders(t, tupleop.SETINDEXQ(1).Serialize()),
+			stack: []any{nil, vm.NaN{}},
+			exit:  0,
+		},
+		{
+			name:  "setindexq_empty_tuple_nil_value",
+			code:  codeFromBuilders(t, tupleop.SETINDEXQ(0).Serialize()),
+			stack: []any{tuplepkg.NewTupleValue(), nil},
+			exit:  0,
+		},
 		{
 			name:  "indexq_out_of_range_nil",
 			code:  codeFromBuilders(t, tupleop.INDEXQ(5).Serialize()),

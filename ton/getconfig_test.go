@@ -13,20 +13,20 @@ func TestUnwrapLibraryResultCell(t *testing.T) {
 	library := cell.BeginCell().MustStoreUInt(0xFF00F4A4, 32).EndCell()
 	wrapped := cell.BeginCell().MustStoreRef(library).EndCell()
 
-	if got := unwrapLibraryResultCell(library, library.Hash()); got != library {
+	if got := unwrapLibraryResultCell(library.ToBOCWithFlags(false), library.Hash()); got == nil || !bytes.Equal(got.Hash(), library.Hash()) {
 		t.Fatalf("expected direct library cell to be returned")
 	}
 
-	if got := unwrapLibraryResultCell(wrapped, library.Hash()); got != library {
+	if got := unwrapLibraryResultCell(wrapped.ToBOCWithFlags(false), library.Hash()); got == nil || !bytes.Equal(got.Hash(), library.Hash()) {
 		t.Fatalf("expected wrapped library cell to be unwrapped")
 	}
 
-	if got := unwrapLibraryResultCell(wrapped, wrapped.Hash()); got != wrapped {
+	if got := unwrapLibraryResultCell(wrapped.ToBOCWithFlags(false), wrapped.Hash()); got == nil || !bytes.Equal(got.Hash(), wrapped.Hash()) {
 		t.Fatalf("expected wrapper hash to still resolve to wrapper")
 	}
 
 	nonCanonical := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(library).EndCell()
-	if got := unwrapLibraryResultCell(nonCanonical, library.Hash()); got != nil {
+	if got := unwrapLibraryResultCell(nonCanonical.ToBOCWithFlags(false), library.Hash()); got != nil {
 		t.Fatalf("expected non-canonical wrapper not to be unwrapped")
 	}
 }
@@ -41,7 +41,7 @@ func TestAPIClient_GetLibraries_UnwrapsEmptyRootWrapper(t *testing.T) {
 			Result: []*LibraryEntry{
 				{
 					Hash: library.Hash(),
-					Data: wrapped,
+					Data: wrapped.ToBOCWithFlags(false),
 				},
 			},
 		},

@@ -35,15 +35,16 @@ func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
 	if err != nil {
 		return err
 	}
+	if !hasRef {
+		return vm.ErrCorruptedOpcode
+	}
 	var ref *cell.Cell
-	if hasRef {
-		ref, err = code.PeekRefCell()
-		if err != nil {
-			return err
-		}
-		if err = code.AdvanceExt(0, 1); err != nil {
-			return err
-		}
+	ref, err = code.PeekRefCell()
+	if err != nil {
+		return err
+	}
+	if err = code.AdvanceExt(0, 1); err != nil {
+		return err
 	}
 
 	pfx, err := code.LoadUInt(10)
@@ -58,6 +59,9 @@ func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
 }
 
 func (op *OpDICTPUSHCONST) Serialize() *cell.Builder {
+	if op.cont == nil {
+		panic("DICTPUSHCONST requires dictionary ref")
+	}
 	return cell.BeginCell().MustStoreSlice([]byte{0xF4, 0xA4}, 13).MustStoreMaybeRef(op.cont).MustStoreUInt(op.pfx, 10)
 }
 

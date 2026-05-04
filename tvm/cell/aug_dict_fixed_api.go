@@ -82,7 +82,7 @@ func validateAugmentedDictionary(d *AugmentedDictionary) error {
 	if err != nil {
 		return err
 	}
-	_, err = root.BeginParse().LoadAugDictWithAugmentation(d.keySz, d.aug)
+	_, err = root.BeginParse().LoadAugDict(d.keySz, d.aug, false)
 	return err
 }
 
@@ -175,15 +175,7 @@ func (d *AugmentedDictionary) LookupNearestKey(key *Cell, fetchNext bool, allowE
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
 
-	items, err := fixedDictRange(d.root, d.keySz, false, invertFirst)
-	if err != nil {
-		return nil, nil, err
-	}
-	nearestKey, nearestValue := fixedDictNearest(items, key, fetchNext, allowEq, invertFirst)
-	if nearestKey == nil {
-		return nil, nil, ErrNoSuchKeyInDict
-	}
-	return nearestKey, nearestValue, nil
+	return fixedDictLookupNearest(d.root, d.keySz, key, fetchNext, allowEq, invertFirst)
 }
 
 func (d *AugmentedDictionary) HasCommonPrefix(prefix *Cell) (bool, error) {

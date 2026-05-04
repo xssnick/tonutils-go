@@ -354,10 +354,14 @@ func (c *Client) storePreparedValue(ctx context.Context, val *Value) (storedCoun
 		return 0, fmt.Errorf("no alive nodes found to store this key")
 	}
 
+	return c.storeValueToNodes(ctx, keyId, val, nearest)
+}
+
+func (c *Client) storeValueToNodes(ctx context.Context, keyId []byte, val *Value, nodes []*dhtNode) (storedCount int, err error) {
 	var wg sync.WaitGroup
 	var stored int32
 
-	for _, node := range nearest {
+	for _, node := range nodes {
 		if node == nil {
 			continue
 		}

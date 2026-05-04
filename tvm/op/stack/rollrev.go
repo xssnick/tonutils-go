@@ -20,6 +20,9 @@ func ROLLREV() *helpers.SimpleOP {
 			if idx >= state.Stack.Len() {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
+			if err := consumeLargeStackMoveGas(state, idx); err != nil {
+				return err
+			}
 			for i := 0; i < idx; i++ {
 				if err := state.Stack.Exchange(i, i+1); err != nil {
 					return err

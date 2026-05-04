@@ -133,6 +133,79 @@ func TestParseStackValue(t *testing.T) {
 	}
 }
 
+func TestStackSliceValueUsesBaseCellOffsets(t *testing.T) {
+	refA := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	refB := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	base := cell.BeginCell().
+		MustStoreUInt(0xABCD, 16).
+		MustStoreRef(refA).
+		MustStoreRef(refB).
+		EndCell()
+
+	value := cell.BeginCell().
+		MustStoreUInt(0x04, 8).
+		MustStoreRef(base).
+		MustStoreUInt(4, 10).
+		MustStoreUInt(12, 10).
+		MustStoreUInt(1, 3).
+		MustStoreUInt(2, 3).
+		EndCell()
+
+	parsed, err := ParseStackValue(value.BeginParse())
+	if err != nil {
+		t.Fatalf("parse stack slice: %v", err)
+	}
+	slc := parsed.(*cell.Slice)
+	check := slc.Copy()
+	if got := check.MustLoadUInt(8); got != 0xBC {
+		t.Fatalf("slice bits = %#x, want 0xbc", got)
+	}
+	if got := check.MustLoadRef().MustToCell().Hash(); !bytes.Equal(got, refB.Hash()) {
+		t.Fatal("slice ref was not restored from the base-cell offset")
+	}
+
+	roundTrip := cell.BeginCell()
+	if err = SerializeStackValue(roundTrip, parsed); err != nil {
+		t.Fatalf("serialize stack slice: %v", err)
+	}
+	if !bytes.Equal(roundTrip.EndCell().Hash(), value.Hash()) {
+		t.Fatal("slice stack value should preserve base cell offsets")
+	}
+}
+
+func TestStackTupleSliceValuePreservesOffsets(t *testing.T) {
+	ref := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	base := cell.BeginCell().MustStoreUInt(0x1234, 16).MustStoreRef(ref).EndCell()
+	slc, err := base.BeginParse().PreloadSubslice(12, 1)
+	if err != nil {
+		t.Fatalf("build tuple slice: %v", err)
+	}
+	if err = slc.Advance(4); err != nil {
+		t.Fatalf("advance tuple slice: %v", err)
+	}
+
+	value := cell.BeginCell()
+	if err = SerializeStackValue(value, []any{slc}); err != nil {
+		t.Fatalf("serialize tuple: %v", err)
+	}
+	parsed, err := ParseStackValue(value.EndCell().BeginParse())
+	if err != nil {
+		t.Fatalf("parse tuple: %v", err)
+	}
+	tup := parsed.([]any)
+	if len(tup) != 1 {
+		t.Fatalf("tuple len = %d, want 1", len(tup))
+	}
+	gotSlice := tup[0].(*cell.Slice)
+	start, end := gotSlice.BitRange()
+	if start != 4 || end != 12 {
+		t.Fatalf("tuple slice bit range = %d..%d, want 4..12", start, end)
+	}
+	if got := gotSlice.MustLoadUInt(8); got != 0x23 {
+		t.Fatalf("tuple slice bits = %#x, want 0x23", got)
+	}
+}
+
 func TestNewStackFromVMSerializesNaN(t *testing.T) {
 	vmStack := vm.NewStack()
 	overflow := new(big.Int).Lsh(big.NewInt(1), 257)

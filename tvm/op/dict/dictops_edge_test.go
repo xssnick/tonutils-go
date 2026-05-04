@@ -16,11 +16,13 @@ func TestPFXDICTSWITCHEdgeCases(t *testing.T) {
 	}
 
 	decoded := PFXDICTSWITCH(mustPlainDictRoot(t, 4, map[uint64]uint64{0b1010: 0x11}, 8))
-	if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
-		t.Fatalf("deserialize nil-root opcode failed: %v", err)
-	}
-	if decoded.bits != 4 || decoded.root != nil {
-		t.Fatalf("unexpected decoded nil-root state: bits=%d root=%v", decoded.bits, decoded.root)
+	nilRootCode := cell.BeginCell().
+		MustStoreSlice([]byte{0xF4, 0xAC}, 13).
+		MustStoreBoolBit(false).
+		MustStoreUInt(4, 10).
+		EndCell()
+	if err := decoded.Deserialize(nilRootCode.BeginParse()); err == nil {
+		t.Fatal("expected nil-root opcode to fail")
 	}
 
 	if err := decoded.Deserialize(cell.BeginCell().ToSlice()); err == nil {
@@ -28,21 +30,6 @@ func TestPFXDICTSWITCHEdgeCases(t *testing.T) {
 	}
 
 	state := newDictTestState()
-	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0b1010, 4)); err != nil {
-		t.Fatalf("push switch input: %v", err)
-	}
-	if err := op.Interpret(state); err != nil {
-		t.Fatalf("interpret nil-root switch failed: %v", err)
-	}
-	rest, err := state.Stack.PopSlice()
-	if err != nil {
-		t.Fatalf("pop switch rest: %v", err)
-	}
-	if rest.MustLoadUInt(4) != 0b1010 || state.Stack.Len() != 0 {
-		t.Fatalf("expected nil-root switch to leave only the input slice on the stack")
-	}
-
-	state = newDictTestState()
 	if err := op.Interpret(state); err == nil {
 		t.Fatal("expected switch interpret to fail on empty stack")
 	}

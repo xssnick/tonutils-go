@@ -12,9 +12,12 @@ func init() {
 func ISZERO() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntFinite()
+			i0, err := state.Stack.PopInt()
 			if err != nil {
 				return err
+			}
+			if i0 == nil {
+				return pushNaNOrOverflow(state, false)
 			}
 
 			return state.Stack.PushBool(i0.Sign() == 0)

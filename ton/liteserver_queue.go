@@ -74,13 +74,8 @@ type DispatchQueueMessage struct {
 type TransactionMetadata struct {
 	Mode        uint32    `tl:"flags"`
 	Depth       int32     `tl:"int"`
-	Initiator   AccountId `tl:"struct"`
+	Initiator   AccountID `tl:"struct"`
 	InitiatorLT uint64    `tl:"long"`
-}
-
-type AccountId struct {
-	Workchain int32  `tl:"int"`
-	ID        []byte `tl:"int256"`
 }
 
 // Requests

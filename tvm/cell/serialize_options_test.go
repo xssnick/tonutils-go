@@ -71,7 +71,7 @@ func TestToBOCWithOptions_Mode31_ReferenceFixture(t *testing.T) {
 		t.Fatalf("unexpected root hash, got %s want %s", got, fixture.ParsedRootHashHex)
 	}
 
-	gotBOC := root.ToBOCWithOptions(BOCOptions{
+	gotBOC := root.ToBOCWithOptions(BOCSerializeOptions{
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,
@@ -118,7 +118,7 @@ func TestToBOCWithOptions_Mode3_CanonicalizedLegacyDictFixture(t *testing.T) {
 		t.Fatalf("failed to parse canonicalized dict fixture: %v", err)
 	}
 
-	gotBOC := root.ToBOCWithOptions(BOCOptions{
+	gotBOC := root.ToBOCWithOptions(BOCSerializeOptions{
 		WithIndex:  true,
 		WithCRC32C: true,
 	})
@@ -140,7 +140,7 @@ func TestToBOCWithOptions_RoundTripWithHashes(t *testing.T) {
 		MustStoreRef(leaf).
 		EndCell()
 
-	opts := BOCOptions{
+	opts := BOCSerializeOptions{
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,
@@ -176,7 +176,7 @@ func TestToBOCWithFlags_MatchesToBOCWithOptions(t *testing.T) {
 		EndCell()
 
 	got := root.ToBOCWithFlags(true, true, true, true, true)
-	want := root.ToBOCWithOptions(BOCOptions{
+	want := root.ToBOCWithOptions(BOCSerializeOptions{
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,

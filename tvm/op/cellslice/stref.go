@@ -22,7 +22,7 @@ func STREF() *helpers.SimpleOP {
 				return err
 			}
 
-			if err := b0.StoreRef(c1); err != nil {
+			if err := b0.StoreRefUncheckedDepth(c1); err != nil {
 				return err
 			}
 			return state.Stack.PushBuilder(b0)

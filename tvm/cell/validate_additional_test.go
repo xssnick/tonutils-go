@@ -3,10 +3,10 @@ package cell
 import "testing"
 
 func TestValidateLoadedCellSpecialVariants(t *testing.T) {
-	t.Run("OrdinaryCellsStayPermissive", func(t *testing.T) {
+	t.Run("OrdinaryLevelMaskMismatchAllowedForGenericBOC", func(t *testing.T) {
 		raw := makeManualCellForTest(false, LevelMask{Mask: 7}, 1, []byte{0x80}, nil)
 		if err := validateLoadedCell(raw); err != nil {
-			t.Fatalf("ordinary cells should stay permissive, got %v", err)
+			t.Fatalf("generic BOC parser should accept ordinary level masks without an allow_nonzero_level API split: %v", err)
 		}
 	})
 
@@ -28,6 +28,11 @@ func TestValidateLoadedCellSpecialVariants(t *testing.T) {
 		badLib := makeManualCellForTest(true, LevelMask{}, 8, []byte{byte(LibraryCellType)}, nil)
 		if err := validateLoadedCell(badLib); err == nil {
 			t.Fatal("library cell with wrong size should fail")
+		}
+
+		libWithRef := makeManualCellForTest(true, LevelMask{}, libCell.BitsSize(), libCell.data, []*Cell{BeginCell().EndCell()})
+		if err := validateLoadedCell(libWithRef); err == nil {
+			t.Fatal("library cell with refs should fail")
 		}
 	})
 

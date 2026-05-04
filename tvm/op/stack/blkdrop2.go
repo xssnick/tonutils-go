@@ -34,6 +34,9 @@ func BLKDROP2(i, j uint8) (op *helpers.AdvancedOP) {
 			if err != nil {
 				return err
 			}
+			if ival == 0 {
+				return vm.ErrCorruptedOpcode
+			}
 			i = uint8(ival)
 			j = uint8(jval)
 			return nil

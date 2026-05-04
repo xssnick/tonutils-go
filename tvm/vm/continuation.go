@@ -66,13 +66,27 @@ type OrdinaryContinuation struct {
 	Code *cell.Slice
 }
 
+func applyContinuationCodepage(state *State, cp int) error {
+	if cp == CP || cp == state.CP {
+		return nil
+	}
+	if cp != 0 {
+		return vmerr.Error(vmerr.CodeInvalidOpcode, "unsupported codepage")
+	}
+	state.CP = cp
+	return nil
+}
+
 func (c *OrdinaryContinuation) GetControlData() *ControlData {
 	return &c.Data
 }
 
 func (c *OrdinaryContinuation) Jump(state *State) (Continuation, error) {
-	state.CurrentCode = c.Code.Copy().SetObserver(&state.Cells)
 	state.Reg.AdjustWith(&c.Data.Save)
+	state.CurrentCode = c.Code.Copy().SetObserver(&state.Cells)
+	if err := applyContinuationCodepage(state, c.Data.CP); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 
@@ -95,9 +109,8 @@ func (c *ArgExtContinuation) GetControlData() *ControlData {
 
 func (c *ArgExtContinuation) Jump(state *State) (Continuation, error) {
 	state.Reg.AdjustWith(&c.Data.Save)
-	if c.Data.CP != -1 {
-		// TODO: custom cp support
-		return nil, vmerr.Error(vmerr.CodeInvalidOpcode, "unsupported codepage")
+	if err := applyContinuationCodepage(state, c.Data.CP); err != nil {
+		return nil, err
 	}
 	return c.Ext, nil
 }

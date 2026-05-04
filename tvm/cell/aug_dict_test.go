@@ -144,7 +144,13 @@ func TestAugmentedDictionary_SetLoadDelete(t *testing.T) {
 		t.Fatalf("expected ErrNoSuchKeyInDict on second delete, got %v", err)
 	}
 
-	loaded := dict.MustToCell().BeginParse().MustLoadAugDictWithAugmentation(8, aug)
+	loaded, err := dict.MustToCell().BeginParse().LoadAugDict(8, aug, false)
+	if loaded == nil {
+		t.Fatal("failed to load augmented dict")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	roundtrip, err := loaded.LoadValue(key1)
 	if err != nil {
 		t.Fatal(err)
@@ -251,10 +257,13 @@ func TestAugmentedDictionary_ReadOnlyLoader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded := dict.MustToCell().BeginParse().MustLoadAugDict(8, func(loader *Slice) error {
+	loaded, err := dict.MustToCell().BeginParse().LoadAugDict(8, ReadOnlyAugmentation{SkipExtraFn: func(loader *Slice) error {
 		_, err := loader.LoadUInt(16)
 		return err
-	})
+	}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	value, err := loaded.LoadValue(key)
 	if err != nil {

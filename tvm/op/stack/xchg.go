@@ -49,6 +49,9 @@ func (op *OpXCHG) Deserialize(code *cell.Slice) error {
 		if err != nil {
 			return err
 		}
+		if a == 0 || a >= b {
+			return vm.ErrCorruptedOpcode
+		}
 	}
 
 	op.a = uint8(a)

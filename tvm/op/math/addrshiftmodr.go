@@ -14,15 +14,15 @@ func init() {
 func ADDRSHIFTMODR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			z, err := state.Stack.PopIntRange(0, 256)
+			z, err := popIntRange(state, 0, 256)
 			if err != nil {
 				return err
 			}
-			w, err := state.Stack.PopIntFinite()
+			w, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := popIntFinite(state)
 			if err != nil {
 				return err
 			}

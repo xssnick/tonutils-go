@@ -4,7 +4,7 @@ func (c *Slice) PeekRefCellAt(i int) (*Cell, error) {
 	if i < 0 || i >= c.RefsNum() {
 		return nil, ErrNoMoreRefs
 	}
-	return c.refCellAt(i), nil
+	return c.refCellAt(i)
 }
 
 func (c *Slice) bitAt(offset uint) byte {
@@ -25,7 +25,9 @@ func (c *Slice) SkipFirst(bits uint, refs int) bool {
 	if refs < 0 || c.BitsLeft() < bits || c.RefsNum() < refs {
 		return false
 	}
-	return c.AdvanceExt(bits, refs) == nil
+	c.bitStart += uint16(bits)
+	c.refStart += uint8(refs)
+	return true
 }
 
 func (c *Slice) OnlyLast(bits uint, refs int) bool {
@@ -113,30 +115,41 @@ func (c *Slice) BitsEqual(other *Slice) bool {
 	if other == nil {
 		return false
 	}
-	return c.BitsLeft() == other.BitsLeft() && c.bitsEqualAt(other, 0, 0, c.BitsLeft())
+	bits := c.BitsLeft()
+	return bits == other.BitsLeft() && c.bitsEqualAt(other, 0, 0, bits)
 }
 
 func (c *Slice) IsPrefixOf(other *Slice) bool {
-	if other == nil || c.BitsLeft() > other.BitsLeft() {
+	bits := c.BitsLeft()
+	if other == nil || bits > other.BitsLeft() {
 		return false
 	}
-	return c.bitsEqualAt(other, 0, 0, c.BitsLeft())
+	return c.bitsEqualAt(other, 0, 0, bits)
 }
 
 func (c *Slice) IsProperPrefixOf(other *Slice) bool {
-	return other != nil && c.BitsLeft() < other.BitsLeft() && c.bitsEqualAt(other, 0, 0, c.BitsLeft())
+	if other == nil {
+		return false
+	}
+	bits := c.BitsLeft()
+	return bits < other.BitsLeft() && c.bitsEqualAt(other, 0, 0, bits)
 }
 
 func (c *Slice) IsSuffixOf(other *Slice) bool {
-	if other == nil || c.BitsLeft() > other.BitsLeft() {
+	bits := c.BitsLeft()
+	if other == nil || bits > other.BitsLeft() {
 		return false
 	}
-	return c.bitsEqualAt(other, 0, other.BitsLeft()-c.BitsLeft(), c.BitsLeft())
+	return c.bitsEqualAt(other, 0, other.BitsLeft()-bits, bits)
 }
 
 func (c *Slice) IsProperSuffixOf(other *Slice) bool {
-	return other != nil && c.BitsLeft() < other.BitsLeft() &&
-		c.bitsEqualAt(other, 0, other.BitsLeft()-c.BitsLeft(), c.BitsLeft())
+	if other == nil {
+		return false
+	}
+	bits := c.BitsLeft()
+	otherBits := other.BitsLeft()
+	return bits < otherBits && c.bitsEqualAt(other, 0, otherBits-bits, bits)
 }
 
 func (c *Slice) CountLeading(bit bool) int {
@@ -178,12 +191,13 @@ func (c *Slice) CountTrailing(bit bool) int {
 }
 
 func (c *Slice) RemoveTrailing() int {
-	if c.BitsLeft() == 0 {
+	bits := c.BitsLeft()
+	if bits == 0 {
 		return 0
 	}
 
 	trailing := c.CountTrailing(false)
-	if trailing >= int(c.BitsLeft()) {
+	if trailing >= int(bits) {
 		c.bitEnd -= uint16(trailing)
 		return trailing
 	}
@@ -194,8 +208,9 @@ func (c *Slice) RemoveTrailing() int {
 
 func (c *Slice) Depth() uint16 {
 	var depth uint16
-	for i := 0; i < c.RefsNum(); i++ {
-		childDepth := c.refCellAt(i).Depth() + 1
+	refs := c.RefsNum()
+	for i := 0; i < refs; i++ {
+		childDepth := c.boundaryRefCellAt(i).Depth() + 1
 		if childDepth > depth {
 			depth = childDepth
 		}

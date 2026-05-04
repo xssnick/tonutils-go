@@ -84,6 +84,18 @@ type testTLB struct {
 	EndCell           *cell.Cell `tlb:"."`
 }
 
+type testAddressTags struct {
+	AnyExt         *address.Address `tlb:"addr"`
+	AnyNil         *address.Address `tlb:"addr"`
+	StdOptionalNil *address.Address `tlb:"addr std"`
+	RequiredExt    *address.Address `tlb:"addr required"`
+	StdRequired    *address.Address `tlb:"addr std required"`
+}
+
+type testVarIntTag struct {
+	Value *big.Int `tlb:"var int 3"`
+}
+
 func TestLoadAnyRegistered(t *testing.T) {
 	Register(StructA{})
 	Register(StructC{})
@@ -105,6 +117,137 @@ func TestLoadAnyRegistered(t *testing.T) {
 		t.Fatal(err)
 	}
 	json.NewEncoder(os.Stdout).Encode(v2)
+}
+
+func TestAddressTagOptionsRoundTrip(t *testing.T) {
+	std := address.MustParseRawAddr("0:1212121212121212121212121212121212121212121212121212121212121212")
+	ext := address.NewAddressExt(0, 20, []byte{0xAA, 0xBB, 0xC0})
+
+	src := testAddressTags{
+		AnyExt:      ext,
+		RequiredExt: ext,
+		StdRequired: std,
+	}
+
+	c, err := ToCell(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var dst testAddressTags
+	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+
+	if dst.AnyExt.Type() != address.ExtAddress {
+		t.Fatalf("any address type mismatch, got %d", dst.AnyExt.Type())
+	}
+	if !dst.AnyNil.IsAddrNone() {
+		t.Fatal("addr without options should allow nil")
+	}
+	if !dst.StdOptionalNil.IsAddrNone() {
+		t.Fatal("std address without required should allow nil")
+	}
+	if dst.RequiredExt.Type() != address.ExtAddress {
+		t.Fatalf("required address should allow ext, got %d", dst.RequiredExt.Type())
+	}
+	if dst.StdRequired.StringRaw() != std.StringRaw() {
+		t.Fatalf("std required address mismatch, got %s want %s", dst.StdRequired.StringRaw(), std.StringRaw())
+	}
+
+	c2, err := ToCell(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(c.Hash(), c2.Hash()) {
+		t.Fatal("cell hashes not same after address tag round trip")
+	}
+}
+
+func TestAddressRequiredRejectsNil(t *testing.T) {
+	type requiredAddr struct {
+		Addr *address.Address `tlb:"addr required"`
+	}
+
+	if _, err := ToCell(requiredAddr{}); err == nil {
+		t.Fatal("expected required address store to reject nil")
+	}
+	if _, err := ToCell(requiredAddr{Addr: address.NewAddressNone()}); err == nil {
+		t.Fatal("expected required address store to reject addr_none")
+	}
+
+	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
+
+	var dst requiredAddr
+	if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+		t.Fatal("expected required address load to reject addr_none")
+	}
+}
+
+func TestAddressStdRejectsNonStd(t *testing.T) {
+	type stdAddr struct {
+		Addr *address.Address `tlb:"addr std"`
+	}
+
+	for _, addr := range []*address.Address{
+		address.NewAddressExt(0, 20, []byte{0xAA, 0xBB, 0xC0}),
+		address.NewAddressVar(0, -1, 20, []byte{0xDE, 0xAD, 0xB0}),
+	} {
+		if _, err := ToCell(stdAddr{Addr: addr}); err == nil {
+			t.Fatalf("expected std address store to reject type %d", addr.Type())
+		}
+
+		var dst stdAddr
+		c := cell.BeginCell().MustStoreAddr(addr).EndCell()
+		if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+			t.Fatalf("expected std address load to reject type %d", addr.Type())
+		}
+	}
+
+	var dst stdAddr
+	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
+	if err := LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+	if !dst.Addr.IsAddrNone() {
+		t.Fatal("std address without required should allow addr_none")
+	}
+}
+
+func TestVarIntTagRoundTrip(t *testing.T) {
+	for _, value := range []*big.Int{
+		big.NewInt(0),
+		big.NewInt(127),
+		big.NewInt(128),
+		big.NewInt(-1),
+		big.NewInt(-128),
+		big.NewInt(-129),
+	} {
+		src := testVarIntTag{Value: value}
+
+		c, err := ToCell(src)
+		if err != nil {
+			t.Fatalf("store %s: %v", value, err)
+		}
+
+		var dst testVarIntTag
+		if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+			t.Fatalf("load %s: %v", value, err)
+		}
+		if dst.Value.Cmp(value) != 0 {
+			t.Fatalf("var int mismatch: got %s want %s", dst.Value, value)
+		}
+	}
+}
+
+func TestVarIntRejectsTooBigValue(t *testing.T) {
+	type smallVarInt struct {
+		Value *big.Int `tlb:"var int 1"`
+	}
+
+	if _, err := ToCell(smallVarInt{Value: big.NewInt(1)}); err == nil {
+		t.Fatal("expected var int to reject value which needs a byte when max length is zero")
+	}
 }
 
 func mustParseInt(x string) *big.Int {

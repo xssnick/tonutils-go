@@ -198,7 +198,8 @@ func CheckTransactionProof(txHash []byte, txLT uint64, txAccount []byte, shardAc
 		return fmt.Errorf("failed to load ref of acc tx proof cell: %w", err)
 	}
 
-	if !bytes.Equal(txHash, txAccProof.MustToCell().Hash(0)) {
+	txAccHash := txAccProof.MustToCell().HashKey(0)
+	if !bytes.Equal(txHash, txAccHash[:]) {
 		return fmt.Errorf("incorrect tx hash in proof")
 	}
 

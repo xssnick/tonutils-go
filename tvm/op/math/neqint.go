@@ -16,9 +16,12 @@ func NEQINT(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntFinite()
+			i0, err := state.Stack.PopInt()
 			if err != nil {
 				return err
+			}
+			if i0 == nil {
+				return pushNaNOrOverflow(state, false)
 			}
 
 			return state.Stack.PushBool(i0.Cmp(big.NewInt(int64(value))) != 0)
