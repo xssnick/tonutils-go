@@ -1,7 +1,6 @@
 package wallet
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"fmt"
@@ -43,7 +42,7 @@ func GetWalletVersion(account *tlb.Account) Version {
 		if !ok {
 			continue
 		}
-		if bytes.Equal(account.Code.Hash(), code.Hash()) {
+		if account.Code.HashKey() == code.HashKey() {
 			return v
 		}
 	}

@@ -32,7 +32,7 @@ func prepareMap(settings []string, structField reflect.StructField, dict *cell.D
 	}
 
 	for _, kv := range values {
-		dictK, err := kv.Key.LoadBigUInt(uint(sz))
+		dictK, err := kv.Key.LoadBigInt(uint(sz))
 		if err != nil {
 			return reflect.Value{}, fmt.Errorf("failed to load dict key for %s: %w", structField.Name, err)
 		}
@@ -68,6 +68,9 @@ func prepareDict(fieldVal reflect.Value, settings []string, structField reflect.
 		if !ok {
 			return nil, fmt.Errorf("cannot parse '%s' map key to big int of '%s' field", mapK.Interface().(string), structField.Name)
 		}
+		if !fitsMapSignedKey(mapKI, sz) {
+			return nil, fmt.Errorf("map key '%s' does not fit signed %d-bit key of '%s' field", mapK.Interface().(string), sz, structField.Name)
+		}
 
 		mapKB := cell.BeginCell()
 		if err := mapKB.StoreBigInt(mapKI, uint(sz)); err != nil {
@@ -95,4 +98,20 @@ func prepareDict(fieldVal reflect.Value, settings []string, structField reflect.
 	}
 
 	return dict, nil
+}
+
+func fitsMapSignedKey(key *big.Int, sz uint64) bool {
+	if sz == 0 {
+		return key.Sign() == 0
+	}
+	if sz > 257 {
+		return true
+	}
+	if key.Sign() >= 0 {
+		return key.BitLen() < int(sz)
+	}
+
+	absMinusOne := new(big.Int).Neg(new(big.Int).Set(key))
+	absMinusOne.Sub(absMinusOne, big.NewInt(1))
+	return absMinusOne.BitLen() <= int(sz-1)
 }

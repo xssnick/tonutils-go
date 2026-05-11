@@ -84,6 +84,20 @@ type testTLB struct {
 	EndCell           *cell.Cell `tlb:"."`
 }
 
+type testAddressTags struct {
+	AnyExt         *address.Address `tlb:"addr"`
+	AnyNil         *address.Address `tlb:"addr"`
+	StdOptionalNil *address.Address `tlb:"addr std"`
+	ExtOptionalNil *address.Address `tlb:"addr ext"`
+	RequiredExt    *address.Address `tlb:"addr required"`
+	StdRequired    *address.Address `tlb:"addr std required"`
+	ExtRequired    *address.Address `tlb:"addr ext required"`
+}
+
+type testVarIntTag struct {
+	Value *big.Int `tlb:"var int 3"`
+}
+
 func TestLoadAnyRegistered(t *testing.T) {
 	Register(StructA{})
 	Register(StructC{})
@@ -105,6 +119,259 @@ func TestLoadAnyRegistered(t *testing.T) {
 		t.Fatal(err)
 	}
 	json.NewEncoder(os.Stdout).Encode(v2)
+}
+
+func TestAddressTagOptionsRoundTrip(t *testing.T) {
+	std := address.MustParseRawAddr("0:1212121212121212121212121212121212121212121212121212121212121212")
+	ext := address.NewAddressExt(0, 20, []byte{0xAA, 0xBB, 0xC0})
+
+	src := testAddressTags{
+		AnyExt:      ext,
+		RequiredExt: ext,
+		StdRequired: std,
+		ExtRequired: ext,
+	}
+
+	c, err := ToCell(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var dst testAddressTags
+	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+
+	if dst.AnyExt.Type() != address.ExtAddress {
+		t.Fatalf("any address type mismatch, got %d", dst.AnyExt.Type())
+	}
+	if !dst.AnyNil.IsAddrNone() {
+		t.Fatal("addr without options should allow nil")
+	}
+	if !dst.StdOptionalNil.IsAddrNone() {
+		t.Fatal("std address without required should allow nil")
+	}
+	if !dst.ExtOptionalNil.IsAddrNone() {
+		t.Fatal("ext address without required should allow nil")
+	}
+	if dst.RequiredExt.Type() != address.ExtAddress {
+		t.Fatalf("required address should allow ext, got %d", dst.RequiredExt.Type())
+	}
+	if dst.StdRequired.StringRaw() != std.StringRaw() {
+		t.Fatalf("std required address mismatch, got %s want %s", dst.StdRequired.StringRaw(), std.StringRaw())
+	}
+	if dst.ExtRequired.Type() != address.ExtAddress {
+		t.Fatalf("ext required address mismatch, got type %d", dst.ExtRequired.Type())
+	}
+
+	c2, err := ToCell(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(c.Hash(), c2.Hash()) {
+		t.Fatal("cell hashes not same after address tag round trip")
+	}
+}
+
+func TestAddressRequiredRejectsNil(t *testing.T) {
+	type requiredAddr struct {
+		Addr *address.Address `tlb:"addr required"`
+	}
+
+	if _, err := ToCell(requiredAddr{}); err == nil {
+		t.Fatal("expected required address store to reject nil")
+	}
+	if _, err := ToCell(requiredAddr{Addr: address.NewAddressNone()}); err == nil {
+		t.Fatal("expected required address store to reject addr_none")
+	}
+
+	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
+
+	var dst requiredAddr
+	if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+		t.Fatal("expected required address load to reject addr_none")
+	}
+}
+
+func TestAddressStdRejectsNonStd(t *testing.T) {
+	type stdAddr struct {
+		Addr *address.Address `tlb:"addr std"`
+	}
+
+	for _, addr := range []*address.Address{
+		address.NewAddressExt(0, 20, []byte{0xAA, 0xBB, 0xC0}),
+		address.NewAddressVar(0, -1, 20, []byte{0xDE, 0xAD, 0xB0}),
+	} {
+		if _, err := ToCell(stdAddr{Addr: addr}); err == nil {
+			t.Fatalf("expected std address store to reject type %d", addr.Type())
+		}
+
+		var dst stdAddr
+		c := cell.BeginCell().MustStoreAddr(addr).EndCell()
+		if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+			t.Fatalf("expected std address load to reject type %d", addr.Type())
+		}
+	}
+
+	var dst stdAddr
+	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
+	if err := LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+	if !dst.Addr.IsAddrNone() {
+		t.Fatal("std address without required should allow addr_none")
+	}
+}
+
+func TestAddressExtRejectsNonExt(t *testing.T) {
+	type extAddr struct {
+		Addr *address.Address `tlb:"addr ext"`
+	}
+
+	for _, addr := range []*address.Address{
+		address.MustParseRawAddr("0:1212121212121212121212121212121212121212121212121212121212121212"),
+		address.NewAddressVar(0, -1, 20, []byte{0xDE, 0xAD, 0xB0}),
+	} {
+		if _, err := ToCell(extAddr{Addr: addr}); err == nil {
+			t.Fatalf("expected ext address store to reject type %d", addr.Type())
+		}
+
+		var dst extAddr
+		c := cell.BeginCell().MustStoreAddr(addr).EndCell()
+		if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+			t.Fatalf("expected ext address load to reject type %d", addr.Type())
+		}
+	}
+
+	var dst extAddr
+	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
+	if err := LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+	if !dst.Addr.IsAddrNone() {
+		t.Fatal("ext address without required should allow addr_none")
+	}
+}
+
+func TestVarIntTagRoundTrip(t *testing.T) {
+	for _, value := range []*big.Int{
+		big.NewInt(0),
+		big.NewInt(127),
+		big.NewInt(128),
+		big.NewInt(-1),
+		big.NewInt(-128),
+		big.NewInt(-129),
+	} {
+		src := testVarIntTag{Value: value}
+
+		c, err := ToCell(src)
+		if err != nil {
+			t.Fatalf("store %s: %v", value, err)
+		}
+
+		var dst testVarIntTag
+		if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+			t.Fatalf("load %s: %v", value, err)
+		}
+		if dst.Value.Cmp(value) != 0 {
+			t.Fatalf("var int mismatch: got %s want %s", dst.Value, value)
+		}
+	}
+}
+
+func TestVarIntRejectsTooBigValue(t *testing.T) {
+	type smallVarInt struct {
+		Value *big.Int `tlb:"var int 1"`
+	}
+
+	if _, err := ToCell(smallVarInt{Value: big.NewInt(1)}); err == nil {
+		t.Fatal("expected var int to reject value which needs a byte when max length is zero")
+	}
+}
+
+func TestLoadFromCellMaybeClearsAbsentValue(t *testing.T) {
+	type maybeValue struct {
+		Value *uint32 `tlb:"maybe ## 32"`
+	}
+
+	previous := uint32(7)
+	dst := maybeValue{Value: &previous}
+	c := cell.BeginCell().MustStoreBoolBit(false).EndCell()
+
+	if err := LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+	if dst.Value != nil {
+		t.Fatal("expected absent maybe value to clear destination field")
+	}
+}
+
+func TestEitherFallsBackToRefWhenInlineDoesNotFit(t *testing.T) {
+	type eitherValue struct {
+		Prefix []byte     `tlb:"bits 1022"`
+		Body   *cell.Cell `tlb:"either . ^"`
+	}
+
+	body := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
+	src := eitherValue{
+		Prefix: make([]byte, 128),
+		Body:   body,
+	}
+
+	c, err := ToCell(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	loader := c.BeginParse()
+	if _, err = loader.LoadSlice(1022); err != nil {
+		t.Fatal(err)
+	}
+	isRef, err := loader.LoadBoolBit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isRef {
+		t.Fatal("expected either to use ref branch when inline body does not fit")
+	}
+
+	var dst eitherValue
+	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+	if dst.Body == nil || !bytes.Equal(dst.Body.Hash(), body.Hash()) {
+		t.Fatal("body mismatch after either ref round trip")
+	}
+}
+
+func TestMappedDictSignedKeysRoundTrip(t *testing.T) {
+	type signedMap struct {
+		Values map[string]uint8 `tlb:"dict 5 -> ## 8"`
+	}
+
+	src := signedMap{
+		Values: map[string]uint8{
+			"-16": 1,
+			"-1":  2,
+			"15":  3,
+		},
+	}
+
+	c, err := ToCell(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var dst signedMap
+	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dst, src) {
+		t.Fatalf("signed map mismatch: got %#v want %#v", dst, src)
+	}
+	if _, err = ToCell(signedMap{Values: map[string]uint8{"16": 1}}); err == nil {
+		t.Fatal("expected signed map key overflow to fail")
+	}
 }
 
 func mustParseInt(x string) *big.Int {
@@ -181,7 +448,7 @@ func TestLoadFromCell(t *testing.T) {
 
 	mRef := cell.BeginCell().
 		MustStoreUInt('y', 8).
-		MustStoreBuilder(dMapInnerInlineInt.MustToCell().ToBuilder()).
+		MustStoreBuilder(dMapInnerInlineInt.AsCell().ToBuilder()).
 		EndCell()
 
 	ref := cell.BeginCell().MustStoreUInt(0b1011, 4).

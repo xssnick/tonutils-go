@@ -78,7 +78,7 @@ func TestAccountStatus_LoadFromCell(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			testAcc := cell.BeginCell()
-			err := testAcc.StoreInt(int64(test.status), 2)
+			err := testAcc.StoreUInt(uint64(test.status), 2)
 			if err != nil {
 				t.Fatal(err)
 			}

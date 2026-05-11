@@ -66,6 +66,9 @@ func FromBytes(data []byte) (loaded []byte, buffer []byte, err error) {
 	offset := 1
 	ln := int(data[0])
 	if ln == 0xFE {
+		if len(data) < 4 {
+			return nil, nil, errors.New("failed to load long bytes length, too short data")
+		}
 		ln = int(binary.LittleEndian.Uint32(data)) >> 8
 		offset = 4
 	}

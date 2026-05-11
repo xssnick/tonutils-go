@@ -143,25 +143,27 @@ func TestProofDictKey(t *testing.T) {
 	}
 	dHash := d.AsCell().Hash()
 
-	sk := CreateProofSkeleton()
-	_, leafProof, err := d.LoadValueWithProof(BeginCell().MustStoreUInt(777, 64).EndCell(), sk)
+	trace := NewProofTrace()
+	observed := d.Copy().SetObserver(trace)
+
+	val, err := observed.LoadValue(BeginCell().MustStoreUInt(777, 64).EndCell())
 	if err != nil {
 		t.Fatal(err)
 	}
-	leafProof.SetRecursive()
+	trace.MarkRecursive(val)
 
-	_, _, err = d.LoadValueWithProof(BeginCell().MustStoreUInt(333, 64).EndCell(), sk)
+	_, err = observed.LoadValue(BeginCell().MustStoreUInt(333, 64).EndCell())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, leafProof, err = d.LoadValueWithProof(BeginCell().MustStoreUInt(111, 64).EndCell(), sk)
+	val, err = observed.LoadValue(BeginCell().MustStoreUInt(111, 64).EndCell())
 	if err != nil {
 		t.Fatal(err)
 	}
-	leafProof.SetRecursive()
+	trace.MarkRecursive(val)
 
-	proof, err := d.AsCell().CreateProof(sk)
+	proof, err := d.AsCell().CreateProof(trace.Skeleton())
 	if err != nil {
 		t.Fatal(err)
 	}

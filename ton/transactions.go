@@ -383,11 +383,13 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 							return nil, fmt.Errorf("cannot convert message to cell: %w", err)
 						}
 
-						if bytes.Equal(msgCell.Hash(), msgHash) {
+						hash := msgCell.HashKey()
+						if bytes.Equal(hash[:], msgHash) {
 							return transaction, nil
 						}
 					} else {
-						if bytes.Equal(m.Msg.Payload().Hash(), msgHash) {
+						hash := m.Msg.Payload().HashKey()
+						if bytes.Equal(hash[:], msgHash) {
 							return transaction, nil
 						}
 					}
@@ -408,11 +410,13 @@ func (c *APIClient) findLastTransactionByHash(ctx context.Context, addr *address
 						return nil, fmt.Errorf("cannot convert message to cell: %w", err)
 					}
 
-					if bytes.Equal(msgCell.Hash(), msgHash) {
+					hash := msgCell.HashKey()
+					if bytes.Equal(hash[:], msgHash) {
 						return transaction, nil
 					}
 				} else {
-					if bytes.Equal(transaction.IO.In.Msg.Payload().Hash(), msgHash) {
+					hash := transaction.IO.In.Msg.Payload().HashKey()
+					if bytes.Equal(hash[:], msgHash) {
 						return transaction, nil
 					}
 				}

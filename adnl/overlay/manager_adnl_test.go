@@ -137,6 +137,16 @@ func TestADNLManagerCustomRouting(t *testing.T) {
 		t.Fatalf("expected wrapped fec processing error, got: %v", err)
 	}
 
+	err = w.customHandler(&adnl.MessageCustom{Data: WrapMessage(overlayID, BroadcastFECShort{
+		Source:        keys.PublicKeyAES{Key: bytes.Repeat([]byte{0x11}, 32)},
+		BroadcastHash: bytes.Repeat([]byte{0x33}, 32),
+		PartDataHash:  bytes.Repeat([]byte{0x44}, 32),
+		Seqno:         1,
+	})})
+	if err == nil || !strings.Contains(err.Error(), "failed to process short FEC broadcast") {
+		t.Fatalf("expected wrapped short fec processing error, got: %v", err)
+	}
+
 	rootSentinel := errors.New("root custom")
 	rootCalled := false
 	w.SetCustomMessageHandler(func(msg *adnl.MessageCustom) error {

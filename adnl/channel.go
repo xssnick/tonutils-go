@@ -18,8 +18,8 @@ type Channel struct {
 
 	key         ed25519.PrivateKey
 	peerKey     ed25519.PublicKey
-	ready       bool
-	wantConfirm bool
+	ready       atomic.Bool
+	wantConfirm atomic.Bool
 
 	id     []byte
 	idEnc  []byte
@@ -34,6 +34,10 @@ func (c *Channel) SendCustomMessage(ctx context.Context, req tl.Serializable) er
 }
 
 func (c *Channel) decodePacket(packet []byte) ([]byte, error) {
+	if len(packet) < 32 {
+		return nil, ErrTooShortData
+	}
+
 	checksum := packet[0:32]
 	data := packet[32:]
 
@@ -96,8 +100,7 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		h(c)
 	}
 
-	c.ready = true
-
+	c.ready.Store(true)
 	return nil
 }
 

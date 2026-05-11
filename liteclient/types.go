@@ -6,6 +6,7 @@ import (
 )
 
 func init() {
+	tl.Register(LiteServerQueryPrefix{}, "liteServer.queryPrefix = Object")
 	tl.Register(LiteServerQuery{}, "liteServer.query data:bytes = Object")
 	tl.Register(TCPPing{}, "tcp.ping random_id:long = tcp.Pong")
 	tl.Register(TCPPong{}, "tcp.pong random_id:long = tcp.Pong")
@@ -19,6 +20,8 @@ var (
 	ErrADNLReqTimeout      = errors.New("adnl request timeout")
 	ErrNoNodesLeft         = errors.New("no more active nodes left")
 )
+
+type LiteServerQueryPrefix struct{}
 
 type LiteServerQuery struct {
 	Data any `tl:"bytes struct boxed"`

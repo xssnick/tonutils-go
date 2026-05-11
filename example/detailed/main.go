@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
@@ -32,7 +33,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client).WithRetry()
+	api := ton.NewAPIClient(client).WithRetryTimeout(3, 5*time.Second)
 
 	// we need fresh block info to run get methods
 	b, err := api.CurrentMasterchainInfo(context.Background())

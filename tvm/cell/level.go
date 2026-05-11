@@ -14,6 +14,10 @@ func (m LevelMask) getHashIndex() int {
 	return bits.OnesCount8(m.Mask)
 }
 
+func (m LevelMask) getHashesCount() int {
+	return m.getHashIndex() + 1
+}
+
 func (m LevelMask) Apply(level int) LevelMask {
 	return LevelMask{m.Mask & ((1 << level) - 1)}
 }

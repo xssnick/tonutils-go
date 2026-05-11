@@ -27,6 +27,7 @@ type MockAPI struct {
 	sendExternalMessage     func(ctx context.Context, msg *tlb.ExternalMessage) error
 	sendExternalMessageWait func(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
 	runGetMethod            func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	runGetMethodByID        func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ton.ExecutionResult, error)
 	listTransactions        func(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 
 	extMsgSent *tlb.ExternalMessage
@@ -81,6 +82,13 @@ func (m MockAPI) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessa
 
 func (m MockAPI) RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {
 	return m.runGetMethod(ctx, blockInfo, addr, method, params...)
+}
+
+func (m MockAPI) RunGetMethodByID(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ton.ExecutionResult, error) {
+	if m.runGetMethodByID != nil {
+		return m.runGetMethodByID(ctx, blockInfo, addr, methodID, params...)
+	}
+	panic("implement me")
 }
 
 func (m MockAPI) ListTransactions(ctx context.Context, addr *address.Address, limit uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
@@ -452,14 +460,18 @@ func checkHighloadV2R2(t *testing.T, p *cell.Slice, w *Wallet, intMsg *tlb.Inter
 		t.Fatal("query id is incorrect")
 	}
 
-	if len(p.MustLoadDict(16).All()) != 1 {
+	items, err := p.MustLoadDict(16).LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
 		t.Fatal("dict incorrect")
 	}
 
 	intMsgRef, _ := tlb.ToCell(intMsg)
 
 	dict := cell.NewDict(16)
-	err := dict.SetIntKey(big.NewInt(0), cell.BeginCell().
+	err = dict.SetIntKey(big.NewInt(0), cell.BeginCell().
 		MustStoreUInt(uint64(128), 8).
 		MustStoreRef(intMsgRef).
 		EndCell())
@@ -480,6 +492,7 @@ type WaiterMock struct {
 	MGetTime                            func(ctx context.Context) (uint32, error)
 	MLookupBlock                        func(ctx context.Context, workchain int32, shard int64, seqno uint32) (*ton.BlockIDExt, error)
 	MGetBlockData                       func(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error)
+	MGetBlockDataAsCell                 func(ctx context.Context, block *ton.BlockIDExt) (*cell.Cell, error)
 	MGetBlockTransactionsV2             func(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error)
 	MGetBlockShardsInfo                 func(ctx context.Context, master *ton.BlockIDExt) ([]*ton.BlockIDExt, error)
 	MGetBlockchainConfig                func(ctx context.Context, block *ton.BlockIDExt, onlyParams ...int32) (*ton.BlockchainConfig, error)
@@ -487,10 +500,12 @@ type WaiterMock struct {
 	MGetAccount                         func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	MSendExternalMessage                func(ctx context.Context, msg *tlb.ExternalMessage) error
 	MRunGetMethod                       func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	MRunGetMethodByID                   func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ton.ExecutionResult, error)
 	MListTransactions                   func(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	MGetTransaction                     func(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 	MWaitForBlock                       func(seqno uint32) ton.APIClientWrapped
 	MWithRetry                          func(x ...int) ton.APIClientWrapped
+	MWithRetryTimeout                   func(maxRetries int, timeout time.Duration) ton.APIClientWrapped
 	MWithTimeout                        func(timeout time.Duration) ton.APIClientWrapped
 	MCurrentMasterchainInfo             func(ctx context.Context) (_ *ton.BlockIDExt, err error)
 	MGetBlockProof                      func(ctx context.Context, known, target *ton.BlockIDExt) (*ton.PartialBlockProof, error)
@@ -573,6 +588,10 @@ func (w WaiterMock) WithRetry(x ...int) ton.APIClientWrapped {
 	return w.MWithRetry(x...)
 }
 
+func (w WaiterMock) WithRetryTimeout(maxRetries int, timeout time.Duration) ton.APIClientWrapped {
+	return w.MWithRetryTimeout(maxRetries, timeout)
+}
+
 func (w WaiterMock) WithTimeout(timeout time.Duration) ton.APIClientWrapped {
 	return w.MWithTimeout(timeout)
 }
@@ -591,6 +610,10 @@ func (w WaiterMock) LookupBlock(ctx context.Context, workchain int32, shard int6
 
 func (w WaiterMock) GetBlockData(ctx context.Context, block *ton.BlockIDExt) (*tlb.Block, error) {
 	return w.MGetBlockData(ctx, block)
+}
+
+func (w WaiterMock) GetBlockDataAsCell(ctx context.Context, block *ton.BlockIDExt) (*cell.Cell, error) {
+	return w.MGetBlockDataAsCell(ctx, block)
 }
 
 func (w WaiterMock) GetBlockTransactionsV2(ctx context.Context, block *ton.BlockIDExt, count uint32, after ...*ton.TransactionID3) ([]ton.TransactionShortInfo, bool, error) {
@@ -621,6 +644,13 @@ func (w WaiterMock) RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt,
 	return w.MRunGetMethod(ctx, blockInfo, addr, method, params...)
 }
 
+func (w WaiterMock) RunGetMethodByID(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ton.ExecutionResult, error) {
+	if w.MRunGetMethodByID != nil {
+		return w.MRunGetMethodByID(ctx, blockInfo, addr, methodID, params...)
+	}
+	panic("implement me")
+}
+
 func (w WaiterMock) ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
 	return w.MListTransactions(ctx, addr, num, lt, txHash)
 }
@@ -642,6 +672,26 @@ func (w WaiterMock) GetDispatchQueueInfo(ctx context.Context, block *ton.BlockID
 }
 
 func (w WaiterMock) GetDispatchQueueMessages(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*ton.GetDispatchQueueMessages)) (*ton.DispatchQueueMessages, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetNonfinalValidatorGroups(ctx context.Context, wc int32, shard int64) (*ton.NonfinalValidatorGroups, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetAllNonfinalValidatorGroups(ctx context.Context) (*ton.NonfinalValidatorGroups, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetNonfinalCandidate(ctx context.Context, id *ton.NonfinalCandidateID) (*ton.NonfinalCandidate, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetNonfinalPendingShardBlocks(ctx context.Context, wc int32, shard int64) (*ton.NonfinalPendingShardBlocks, error) {
+	panic("implement me")
+}
+
+func (w WaiterMock) GetAllNonfinalPendingShardBlocks(ctx context.Context) (*ton.NonfinalPendingShardBlocks, error) {
 	panic("implement me")
 }
 

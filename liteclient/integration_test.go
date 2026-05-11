@@ -67,7 +67,7 @@ func Test_Conn(t *testing.T) {
 	doReq(nil)
 
 	// simulate network crash
-	for _, n := range client.activeNodes {
+	for _, n := range client.activeNodesSnapshot() {
 		_ = n.tcp.Close()
 	}
 
@@ -122,7 +122,7 @@ func Test_ConnSticky(t *testing.T) {
 	doReq(nil)
 
 	// simulate network crash
-	for _, n := range client.activeNodes {
+	for _, n := range client.activeNodesSnapshot() {
 		_ = n.tcp.Close()
 	}
 

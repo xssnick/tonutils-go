@@ -2,6 +2,7 @@ package adnl
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -25,6 +26,36 @@ type PacketContent struct {
 	DstReinitDate               *int32
 	Signature                   []byte
 	Rand2                       []byte
+
+	toSign []byte
+}
+
+func (p *PacketContent) SeqnoValue() int64 {
+	if p == nil || p.Seqno == nil {
+		return 0
+	}
+	return *p.Seqno
+}
+
+func (p *PacketContent) ConfirmSeqnoValue() int64 {
+	if p == nil || p.ConfirmSeqno == nil {
+		return 0
+	}
+	return *p.ConfirmSeqno
+}
+
+func (p *PacketContent) ReinitDateValue() int32 {
+	if p == nil || p.ReinitDate == nil {
+		return 0
+	}
+	return *p.ReinitDate
+}
+
+func (p *PacketContent) DstReinitDateValue() int32 {
+	if p == nil || p.DstReinitDate == nil {
+		return 0
+	}
+	return *p.DstReinitDate
 }
 
 var _PacketContentID uint32
@@ -42,6 +73,8 @@ func init() {
 var ErrTooShortData = errors.New("too short data")
 
 func parsePacket(data []byte) (_ *PacketContent, err error) {
+	orig := data
+
 	if len(data) < 4 {
 		return nil, ErrTooShortData
 	}
@@ -51,8 +84,9 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 	data = data[4:]
 
-	// skip rand1
-	_, data, err = tl.FromBytes(data)
+	var packet PacketContent
+
+	packet.Rand1, data, err = tl.FromBytes(data)
 	if err != nil {
 		return nil, err
 	}
@@ -60,10 +94,10 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	if len(data) < 4 {
 		return nil, ErrTooShortData
 	}
+
+	flagsOffset := len(orig) - len(data)
 	flags := binary.LittleEndian.Uint32(data)
 	data = data[4:]
-
-	var packet PacketContent
 
 	if flags&_FlagFrom != 0 {
 		if len(data) < 4 {
@@ -80,6 +114,10 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 
 	if flags&_FlagFromShort != 0 {
+		if len(data) < 32 {
+			return nil, ErrTooShortData
+		}
+
 		packet.FromIDShort = data[:32]
 		data = data[32:]
 	}
@@ -95,6 +133,10 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 
 	if flags&_FlagMultipleMessages != 0 {
+		if len(data) < 4 {
+			return nil, ErrTooShortData
+		}
+
 		num := binary.LittleEndian.Uint32(data)
 		data = data[4:]
 
@@ -131,6 +173,10 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 
 	if flags&_FlagSeqno != 0 {
+		if len(data) < 8 {
+			return nil, ErrTooShortData
+		}
+
 		seqno := int64(binary.LittleEndian.Uint64(data))
 		data = data[8:]
 
@@ -138,6 +184,10 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 
 	if flags&_FlagConfirmSeqno != 0 {
+		if len(data) < 8 {
+			return nil, ErrTooShortData
+		}
+
 		seqno := int64(binary.LittleEndian.Uint64(data))
 		data = data[8:]
 
@@ -145,13 +195,21 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 
 	if flags&_FlagRecvAddrListVer != 0 {
+		if len(data) < 4 {
+			return nil, ErrTooShortData
+		}
+
 		ver := int32(binary.LittleEndian.Uint32(data))
 		data = data[4:]
 
-		packet.RecvPriorityAddrListVersion = &ver
+		packet.RecvAddrListVersion = &ver
 	}
 
 	if flags&_FlagRecvPriorityAddrVer != 0 {
+		if len(data) < 4 {
+			return nil, ErrTooShortData
+		}
+
 		ver := int32(binary.LittleEndian.Uint32(data))
 		data = data[4:]
 
@@ -159,6 +217,10 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 
 	if flags&_FlagReinitDate != 0 {
+		if len(data) < 8 {
+			return nil, ErrTooShortData
+		}
+
 		reinit := int32(binary.LittleEndian.Uint32(data))
 		data = data[4:]
 		packet.ReinitDate = &reinit
@@ -168,14 +230,73 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 		packet.DstReinitDate = &dstReinit
 	}
 
+	signatureStart, signatureEnd := -1, -1
 	if flags&_FlagSignature != 0 {
+		signatureStart = len(orig) - len(data)
 		packet.Signature, data, err = tl.FromBytes(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse signature: %w", err)
 		}
+		signatureEnd = len(orig) - len(data)
 	}
 
+	packet.Rand2, data, err = tl.FromBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse rand2: %w", err)
+	}
+
+	if len(data) > 0 {
+		return nil, fmt.Errorf("too much data in packet")
+	}
+
+	packet.toSign = buildPacketToSign(orig, flagsOffset, flags, signatureStart, signatureEnd)
+
 	return &packet, nil
+}
+
+func buildPacketToSign(data []byte, flagsOffset int, flags uint32, signatureStart, signatureEnd int) []byte {
+	toSignLen := len(data)
+	if signatureStart >= 0 {
+		toSignLen -= signatureEnd - signatureStart
+	}
+
+	toSign := make([]byte, toSignLen)
+	if signatureStart >= 0 {
+		copy(toSign, data[:signatureStart])
+		copy(toSign[signatureStart:], data[signatureEnd:])
+	} else {
+		copy(toSign, data)
+	}
+
+	binary.LittleEndian.PutUint32(toSign[flagsOffset:], flags&^_FlagSignature)
+	return toSign
+}
+
+func (p *PacketContent) verifySignature(pub ed25519.PublicKey) error {
+	if len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid outer public key length")
+	}
+	if len(p.Signature) == 0 {
+		return fmt.Errorf("packet signature is missing")
+	}
+
+	if p.From != nil && !bytes.Equal(p.From.Key, pub) {
+		return fmt.Errorf("packet source mismatch")
+	}
+
+	if p.FromIDShort != nil {
+		shortID, err := tl.Hash(keys.PublicKeyED25519{Key: pub})
+		if err != nil {
+			return fmt.Errorf("failed to compute packet source id: %w", err)
+		}
+		if !bytes.Equal(p.FromIDShort, shortID) {
+			return fmt.Errorf("packet source short mismatch")
+		}
+	}
+	if !ed25519.Verify(pub, p.toSign, p.Signature) {
+		return fmt.Errorf("bad packet signature")
+	}
+	return nil
 }
 
 func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {

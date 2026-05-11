@@ -95,22 +95,22 @@ func (g AccountStatus) ToCell() (*cell.Cell, error) {
 	res := cell.BeginCell()
 	switch string(g) {
 	case AccountStatusNonExist:
-		err := res.StoreInt(0b11, 2)
+		err := res.StoreUInt(0b11, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}
 	case AccountStatusActive:
-		err := res.StoreInt(0b10, 2)
+		err := res.StoreUInt(0b10, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}
 	case AccountStatusFrozen:
-		err := res.StoreInt(0b01, 2)
+		err := res.StoreUInt(0b01, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}
 	case AccountStatusUninit:
-		err := res.StoreInt(0b00, 2)
+		err := res.StoreUInt(0b00, 2)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize account status: %w", err)
 		}
@@ -176,6 +176,35 @@ func (a *AccountState) LoadFromCell(loader *cell.Slice) error {
 	return nil
 }
 
+func (a AccountState) ToCell() (*cell.Cell, error) {
+	if !a.IsValid || a.Status == AccountStatusNonExist {
+		return cell.BeginCell().
+			MustStoreBoolBit(false).
+			EndCell(), nil
+	}
+
+	if a.Address == nil {
+		return nil, fmt.Errorf("account address is nil")
+	}
+
+	storageInfoCell, err := ToCell(&a.StorageInfo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize storage info: %w", err)
+	}
+
+	storageCell, err := ToCell(&a.AccountStorage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize account storage: %w", err)
+	}
+
+	return cell.BeginCell().
+		MustStoreBoolBit(true).
+		MustStoreAddr(a.Address).
+		MustStoreBuilder(storageInfoCell.ToBuilder()).
+		MustStoreBuilder(storageCell.ToBuilder()).
+		EndCell(), nil
+}
+
 func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 	lastTransaction, err := loader.LoadUInt(64)
 	if err != nil {
@@ -229,6 +258,64 @@ func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 	return nil
 }
 
+func (s AccountStorage) ToCell() (*cell.Cell, error) {
+	builder := cell.BeginCell().
+		MustStoreUInt(s.LastTransactionLT, 64).
+		MustStoreBigCoins(s.Balance.Nano()).
+		MustStoreDict(s.ExtraCurrencies)
+
+	switch s.Status {
+	case AccountStatusActive:
+		if s.StateInit == nil {
+			return nil, fmt.Errorf("active account state init is nil")
+		}
+
+		stateInitCell, err := ToCell(s.StateInit)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize state init: %w", err)
+		}
+
+		return builder.
+			MustStoreBoolBit(true).
+			MustStoreBuilder(stateInitCell.ToBuilder()).
+			EndCell(), nil
+
+	case AccountStatusFrozen:
+		return builder.
+			MustStoreBoolBit(false).
+			MustStoreBoolBit(true).
+			MustStoreSlice(normalizeAccountStateHash(s.StateHash), 256).
+			EndCell(), nil
+
+	case AccountStatusUninit:
+		return builder.
+			MustStoreBoolBit(false).
+			MustStoreBoolBit(false).
+			EndCell(), nil
+
+	case AccountStatusNonExist:
+		return nil, fmt.Errorf("non-existing account cannot be serialized as account storage")
+
+	default:
+		return nil, fmt.Errorf("unknown account status %s", s.Status)
+	}
+}
+
+func normalizeAccountStateHash(src []byte) []byte {
+	if len(src) == 32 {
+		return src
+	}
+
+	out := make([]byte, 32)
+	if len(src) >= 32 {
+		copy(out, src[len(src)-32:])
+		return out
+	}
+
+	copy(out[32-len(src):], src)
+	return out
+}
+
 func (a *Account) HasGetMethod(name string) bool {
 	if a.Code == nil {
 		return false
@@ -267,7 +354,7 @@ func (a *Account) HasGetMethod(name string) bool {
 		return false
 	}
 
-	if dict.GetByIntKey(big.NewInt(hash)) != nil {
+	if _, err = dict.LoadValueByIntKey(big.NewInt(hash)); err == nil {
 		return true
 	}
 	return false

@@ -1,7 +1,6 @@
 package ton
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -95,7 +94,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			return nil, fmt.Errorf("state must be presented")
 		}
 
-		if !bytes.Equal(shardAcc.Account.Hash(0), t.State.Hash()) {
+		if shardAcc.Account.HashKey(0) != t.State.HashKey() {
 			return nil, fmt.Errorf("proof hash not match state account hash")
 		}
 

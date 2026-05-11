@@ -29,6 +29,12 @@ type Address struct {
 	workchain int32
 	bitsLen   uint
 	data      []byte
+	anycast   *Anycast
+}
+
+type Anycast struct {
+	depth  uint
+	prefix []byte
 }
 
 type flags struct {
@@ -43,6 +49,13 @@ func NewAddress(flags byte, workchain byte, data []byte) *Address {
 		workchain: int32(int8(workchain)),
 		bitsLen:   256,
 		data:      data,
+	}
+}
+
+func NewAnycast(depth uint, prefix []byte) *Anycast {
+	return &Anycast{
+		depth:  depth,
+		prefix: append([]byte{}, prefix...),
 	}
 }
 
@@ -300,13 +313,17 @@ func (a *Address) IsBounceable() bool {
 }
 
 func (a *Address) Copy() *Address {
-	return &Address{
+	cp := &Address{
 		flags:     a.flags,
 		addrType:  a.addrType,
 		workchain: a.workchain,
 		bitsLen:   a.bitsLen,
 		data:      append(make([]byte, 0, len(a.data)), a.data...),
 	}
+	if a.anycast != nil {
+		cp.anycast = a.anycast.Copy()
+	}
+	return cp
 }
 
 func (a *Address) SetTestnetOnly(testnetOnly bool) {
@@ -325,6 +342,62 @@ func (a *Address) Data() []byte {
 	return a.data
 }
 
+func (a *Address) Anycast() *Anycast {
+	if a == nil || a.anycast == nil {
+		return nil
+	}
+	return a.anycast.Copy()
+}
+
+func (a *Address) SetAnycast(anycast *Anycast) {
+	if anycast == nil {
+		a.anycast = nil
+		return
+	}
+	a.anycast = anycast.Copy()
+}
+
+func (a *Address) WithAnycast(anycast *Anycast) *Address {
+	cp := a.Copy()
+	cp.SetAnycast(anycast)
+	return cp
+}
+
+func (a *Anycast) Copy() *Anycast {
+	if a == nil {
+		return nil
+	}
+	return &Anycast{
+		depth:  a.depth,
+		prefix: append([]byte{}, a.prefix...),
+	}
+}
+
+func (a *Anycast) Depth() uint {
+	if a == nil {
+		return 0
+	}
+	return a.depth
+}
+
+func (a *Anycast) Prefix() []byte {
+	if a == nil {
+		return nil
+	}
+	return append([]byte{}, a.prefix...)
+}
+
+func anycastEqual(a, b *Anycast) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return a.depth == b.depth && bytes.Equal(a.prefix, b.prefix)
+	}
+}
+
 func (a *Address) Equals(b *Address) bool {
-	return a.workchain == b.workchain && bytes.Equal(a.data, b.data)
+	return a.workchain == b.workchain && bytes.Equal(a.data, b.data) && anycastEqual(a.anycast, b.anycast)
 }

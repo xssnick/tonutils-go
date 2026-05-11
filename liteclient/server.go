@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
-	"log"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-var Logger = log.Println
+var Logger = func(v ...any) {}
 
 type Server struct {
 	keys     map[string]ed25519.PrivateKey
@@ -139,12 +139,12 @@ func (s *Server) serve(client *ServerClient) {
 
 			// 10 sec timeout for handshake
 			_ = client.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-			ln, err := client.conn.Read(buffer)
+			_, err := io.ReadFull(client.conn, buffer)
 			if err != nil {
 				Logger("["+client.conn.RemoteAddr().String()+"]", "failed to read from client:", err.Error())
 				return
 			}
-			packet := buffer[:ln]
+			packet := buffer
 
 			client.serverKey, client.wCrypt, client.rCrypt, err = s.processHandshake(packet)
 			if err != nil {
@@ -172,6 +172,9 @@ func (s *Server) serve(client *ServerClient) {
 
 		sz, err := readSize(client.conn, client.rCrypt)
 		if err != nil {
+			return
+		}
+		if sz <= 32 {
 			return
 		}
 

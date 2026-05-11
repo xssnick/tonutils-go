@@ -17,6 +17,10 @@ type Unmarshaler interface {
 	LoadFromCell(loader *cell.Slice) error
 }
 
+type ProofUnmarshaler interface {
+	LoadFromCellAsProof(loader *cell.Slice) error
+}
+
 type Marshaller interface {
 	ToCell() (*cell.Cell, error)
 }
@@ -28,7 +32,10 @@ type Marshaller interface {
 // dict [inline] N - loads dictionary with key size N, example: 'dict 256', inline option can be used if dict is Hashmap and not HashmapE
 // bits N - loads bit slice N len to []byte
 // bool - loads 1 bit boolean
-// addr - loads ton address
+// addr [std|ext] [required] - loads ton address
+// string - loads ref with snake-encoded bytes to string or []byte
+// array TAG - loads Tolk array<T>, where TAG is a regular tlb tag for T, example: 'array ## 16'
+// var uint/int N - loads variable length integer
 // maybe - reads 1 bit, and loads rest if its 1, can be used in combination with others only
 // either [leave {bits},{refs}] X Y - reads 1 bit, if its 0 - loads X, if 1 - loads Y,
 //
@@ -57,6 +64,16 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 		return fmt.Errorf("v should be a pointer and not nil")
 	}
 	rv = rv.Elem()
+
+	if skipProofBranches {
+		if ld, ok := v.(ProofUnmarshaler); ok {
+			err := ld.LoadFromCellAsProof(slice)
+			if err != nil {
+				return fmt.Errorf("failed to load from proof cell for %s, using manual loader, err: %w", rv.Type().Name(), err)
+			}
+			return nil
+		}
+	}
 
 	if ld, ok := v.(Unmarshaler); ok {
 		err := ld.LoadFromCell(slice)
@@ -100,6 +117,9 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			}
 
 			if !has {
+				if rv.Field(i).CanSet() {
+					rv.Field(i).Set(reflect.Zero(structField.Type))
+				}
 				continue
 			}
 			settings = settings[1:]
@@ -285,6 +305,11 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			if err != nil {
 				return fmt.Errorf("failed to load address, err: %w", err)
 			}
+			if len(settings) > 1 {
+				if err = checkAddressTag(x, settings); err != nil {
+					return fmt.Errorf("invalid address for %s, err: %w", structField.Name, err)
+				}
+			}
 
 			setVal(reflect.ValueOf(x))
 			continue
@@ -309,6 +334,35 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			}
 
 			setVal(reflect.ValueOf(x))
+			continue
+		} else if settings[0] == "string" {
+			if err := checkStringTagType(parseType); err != nil {
+				return fmt.Errorf("invalid string tag type for %s, err: %w", structField.Name, err)
+			}
+
+			ref, err := loader.LoadRefCell()
+			if err != nil {
+				return fmt.Errorf("failed to load string ref for %s, err: %w", structField.Name, err)
+			}
+
+			if skipProofBranches && ref.GetType() == cell.PrunedCellType {
+				continue
+			}
+
+			x, err := loadStringTagValue(parseType, ref.BeginParse())
+			if err != nil {
+				return fmt.Errorf("failed to load string for %s, err: %w", structField.Name, err)
+			}
+
+			setVal(x)
+			continue
+		} else if settings[0] == "array" {
+			x, err := loadArrayTag(parseType, settings[1:], loader, skipProofBranches)
+			if err != nil {
+				return fmt.Errorf("failed to load array for %s, err: %w", structField.Name, err)
+			}
+
+			setVal(x)
 			continue
 		} else if parseType == reflect.TypeOf(Magic{}) {
 			if skipMagic {
@@ -358,15 +412,22 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			setVal(mv)
 			continue
 		} else if settings[0] == "var" {
-			if settings[1] == "uint" {
-				sz, err := strconv.Atoi(settings[2])
-				if err != nil {
-					panic(err.Error())
-				}
+			sz, err := strconv.Atoi(settings[2])
+			if err != nil {
+				panic(err.Error())
+			}
 
+			if settings[1] == "uint" {
 				res, err := loader.LoadVarUInt(uint(sz))
 				if err != nil {
 					return fmt.Errorf("failed to load var uint: %w", err)
+				}
+				setVal(reflect.ValueOf(res))
+				continue
+			} else if settings[1] == "int" {
+				res, err := loader.LoadVarInt(uint(sz))
+				if err != nil {
+					return fmt.Errorf("failed to load var int: %w", err)
 				}
 				setVal(reflect.ValueOf(res))
 				continue
@@ -443,7 +504,7 @@ next:
 			continue
 		}
 
-		if settings[0][0] == '?' {
+		if len(settings[0]) > 0 && settings[0][0] == '?' {
 			// conditional tlb parse depending on some field value of this struct
 			cond := rv.FieldByName(settings[0][1:])
 			if !cond.Bool() {
@@ -518,19 +579,28 @@ next:
 					return nil, fmt.Errorf("failed to serialize field %s to cell as either %d: %w", structField.Name, x, err)
 				}
 
-				// check if we have enough free bits
-				if x == 0 && (int(root.BitsLeft())-int(builder.BitsUsed()+1) < leaveBits || int(root.RefsLeft())-int(builder.RefsUsed()) < leaveRefs) {
-					// if not, then we try second option
-					continue
-				}
-
-				if err := root.StoreUInt(uint64(x), 1); err != nil {
+				candidate := root.Copy()
+				if err := candidate.StoreUInt(uint64(x), 1); err != nil {
+					if x == 0 {
+						continue
+					}
 					return nil, fmt.Errorf("cannot store either bit: %w", err)
 				}
-				if err := root.StoreBuilder(builder); err != nil {
+				if err := candidate.StoreBuilder(builder); err != nil {
+					if x == 0 {
+						continue
+					}
 					return nil, fmt.Errorf("failed to concat builder of field %s to cell as either %d: %w", structField.Name, x, err)
 				}
 
+				if int(candidate.BitsLeft()) < leaveBits || int(candidate.RefsLeft()) < leaveRefs {
+					if x == 0 {
+						continue
+					}
+					continue
+				}
+
+				root = candidate
 				continue next
 			}
 
@@ -639,7 +709,14 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 			}
 		}
 	} else if settings[0] == "addr" {
-		err := builder.StoreAddr(fieldVal.Interface().(*address.Address))
+		addr := fieldVal.Interface().(*address.Address)
+		if len(settings) > 1 {
+			if err := checkAddressTag(addr, settings); err != nil {
+				return fmt.Errorf("invalid address, err: %w", err)
+			}
+		}
+
+		err := builder.StoreAddr(addr)
 		if err != nil {
 			return fmt.Errorf("failed to store address, err: %w", err)
 		}
@@ -658,6 +735,18 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 		err = builder.StoreSlice(fieldVal.Bytes(), uint(num))
 		if err != nil {
 			return fmt.Errorf("failed to store bits %d, err: %w", num, err)
+		}
+	} else if settings[0] == "string" {
+		ref, err := stringTagToCell(fieldVal, parseType)
+		if err != nil {
+			return fmt.Errorf("failed to store string for %s, err: %w", structField.Name, err)
+		}
+		if err = builder.StoreRef(ref); err != nil {
+			return fmt.Errorf("failed to store string ref for %s, err: %w", structField.Name, err)
+		}
+	} else if settings[0] == "array" {
+		if err := storeArrayTag(builder, fieldVal, parseType, settings[1:]); err != nil {
+			return fmt.Errorf("failed to store array for %s, err: %w", structField.Name, err)
 		}
 	} else if parseType == reflect.TypeOf(Magic{}) {
 		var sz, base int
@@ -723,15 +812,20 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 			}
 		}
 	} else if settings[0] == "var" {
-		if settings[1] == "uint" {
-			sz, err := strconv.Atoi(settings[2])
-			if err != nil {
-				panic(err.Error())
-			}
+		sz, err := strconv.Atoi(settings[2])
+		if err != nil {
+			panic(err.Error())
+		}
 
+		if settings[1] == "uint" {
 			err = builder.StoreBigVarUInt(fieldVal.Interface().(*big.Int), uint(sz))
 			if err != nil {
 				return fmt.Errorf("failed to store var uint: %w", err)
+			}
+		} else if settings[1] == "int" {
+			err = builder.StoreBigVarInt(fieldVal.Interface().(*big.Int), uint(sz))
+			if err != nil {
+				return fmt.Errorf("failed to store var int: %w", err)
 			}
 		} else {
 			panic("var of type " + settings[1] + " is not supported")
@@ -751,6 +845,88 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 }
 
 var cellType = reflect.TypeOf(&cell.Cell{})
+
+func checkStringTagType(typ reflect.Type) error {
+	if typ.Kind() == reflect.String {
+		return nil
+	}
+	if typ.Kind() == reflect.Slice && typ.Elem().Kind() == reflect.Uint8 {
+		return nil
+	}
+	return fmt.Errorf("string tag supports only string or []byte, got %s", typ.String())
+}
+
+func loadStringTagValue(typ reflect.Type, loader *cell.Slice) (reflect.Value, error) {
+	if typ.Kind() == reflect.String {
+		str, err := loader.LoadStringSnake()
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		return reflect.ValueOf(str), nil
+	}
+
+	data, err := loader.LoadBinarySnake()
+	if err != nil {
+		return reflect.Value{}, err
+	}
+	return reflect.ValueOf(data), nil
+}
+
+func stringTagToCell(fieldVal reflect.Value, typ reflect.Type) (*cell.Cell, error) {
+	if err := checkStringTagType(typ); err != nil {
+		return nil, err
+	}
+
+	builder := cell.BeginCell()
+	if typ.Kind() == reflect.String {
+		if err := builder.StoreStringSnake(fieldVal.String()); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := builder.StoreBinarySnake(fieldVal.Bytes()); err != nil {
+			return nil, err
+		}
+	}
+
+	return builder.EndCell(), nil
+}
+
+func checkAddressTag(addr *address.Address, settings []string) error {
+	std, ext, required := false, false, false
+	for i := 1; i < len(settings); i++ {
+		switch settings[i] {
+		case "std":
+			std = true
+		case "ext":
+			ext = true
+		case "required":
+			required = true
+		case "":
+		default:
+			panic("unknown address tag option: " + settings[i])
+		}
+	}
+
+	if std && ext {
+		return fmt.Errorf("address cannot be both std and ext")
+	}
+
+	if addr == nil || addr.IsAddrNone() {
+		if required {
+			return fmt.Errorf("address is required")
+		}
+		return nil
+	}
+
+	if std && addr.Type() != address.StdAddress {
+		return fmt.Errorf("address should be std, got type %d", addr.Type())
+	}
+	if ext && addr.Type() != address.ExtAddress {
+		return fmt.Errorf("address should be ext, got type %d", addr.Type())
+	}
+
+	return nil
+}
 
 func structLoad(field reflect.Type, loader *cell.Slice, skipMagic, skipProofBranches bool) (reflect.Value, error) {
 	if cellType == field {

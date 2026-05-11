@@ -19,6 +19,11 @@ type nftAPIMock struct {
 
 	currentMasterchainInfo func(ctx context.Context) (*ton.BlockIDExt, error)
 	runGetMethod           func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error)
+	runGetMethodByID       func(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ton.ExecutionResult, error)
+}
+
+func (m *nftAPIMock) GetBlockDataAsCell(ctx context.Context, block *ton.BlockIDExt) (*cell.Cell, error) {
+	return nil, nil
 }
 
 func (m *nftAPIMock) WaitForBlock(seqno uint32) ton.APIClientWrapped {
@@ -38,6 +43,13 @@ func (m *nftAPIMock) RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt
 		return nil, errors.New("runGetMethod is not configured")
 	}
 	return m.runGetMethod(ctx, blockInfo, addr, method, params...)
+}
+
+func (m *nftAPIMock) RunGetMethodByID(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ton.ExecutionResult, error) {
+	if m.runGetMethodByID == nil {
+		return nil, errors.New("runGetMethodByID is not configured")
+	}
+	return m.runGetMethodByID(ctx, blockInfo, addr, methodID, params...)
 }
 
 func (m *nftAPIMock) Client() ton.LiteClient {
@@ -115,6 +127,10 @@ func (m *nftAPIMock) WithRetry(maxRetries ...int) ton.APIClientWrapped {
 	return m
 }
 
+func (m *nftAPIMock) WithRetryTimeout(maxRetries int, timeout time.Duration) ton.APIClientWrapped {
+	return m
+}
+
 func (m *nftAPIMock) WithTimeout(timeout time.Duration) ton.APIClientWrapped {
 	return m
 }
@@ -158,6 +174,26 @@ func (m *nftAPIMock) GetDispatchQueueInfo(ctx context.Context, block *ton.BlockI
 }
 
 func (m *nftAPIMock) GetDispatchQueueMessages(ctx context.Context, block *ton.BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*ton.GetDispatchQueueMessages)) (*ton.DispatchQueueMessages, error) {
+	return nil, nil
+}
+
+func (m *nftAPIMock) GetNonfinalValidatorGroups(ctx context.Context, wc int32, shard int64) (*ton.NonfinalValidatorGroups, error) {
+	return nil, nil
+}
+
+func (m *nftAPIMock) GetAllNonfinalValidatorGroups(ctx context.Context) (*ton.NonfinalValidatorGroups, error) {
+	return nil, nil
+}
+
+func (m *nftAPIMock) GetNonfinalCandidate(ctx context.Context, id *ton.NonfinalCandidateID) (*ton.NonfinalCandidate, error) {
+	return nil, nil
+}
+
+func (m *nftAPIMock) GetNonfinalPendingShardBlocks(ctx context.Context, wc int32, shard int64) (*ton.NonfinalPendingShardBlocks, error) {
+	return nil, nil
+}
+
+func (m *nftAPIMock) GetAllNonfinalPendingShardBlocks(ctx context.Context) (*ton.NonfinalPendingShardBlocks, error) {
 	return nil, nil
 }
 
