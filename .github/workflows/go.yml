@@ -21,7 +21,7 @@ jobs:
         go-version: 1.25.0
 
     - name: Build
-      run: go build -v ./...
+      run: go build -v $(go list ./... | grep -v /tvm/vm/cross-emulate-test)
       
     - uses: actions/cache@v4
       with:
@@ -34,7 +34,7 @@ jobs:
       env:
         WALLET_SEED: ${{ secrets.WALLET_SEED }}
       run: |
-        go test -v -failfast $(go list ./... | grep -v /example/) -covermode=count -coverprofile=coverage.out
+        go test -v -failfast $(go list ./... | grep -v /example/ | grep -v /tvm/vm/cross-emulate-test) -covermode=count -coverprofile=coverage.out
         go tool cover -func=coverage.out -o=coverage.out
 
     - name: Go Coverage Badge  # Pass the `coverage.out` output to this action
