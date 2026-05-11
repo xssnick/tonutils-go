@@ -54,5 +54,9 @@ func execExplode(state *vm.State, max int) error {
 		}
 	}
 
+	if err := state.ConsumeTupleGasLen(length); err != nil {
+		return err
+	}
+
 	return state.Stack.PushInt(big.NewInt(int64(length)))
 }

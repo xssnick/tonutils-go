@@ -11,8 +11,10 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	cellsliceop "github.com/xssnick/tonutils-go/tvm/op/cellslice"
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
+	mathop "github.com/xssnick/tonutils-go/tvm/op/math"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestTVMCrossEmulatorCaughtTryEdges(t *testing.T) {
@@ -96,6 +98,34 @@ func TestTVMCrossEmulatorCaughtTryEdges(t *testing.T) {
 				nil,
 				int64(8),
 			},
+		},
+		{
+			name: "arith_min_nan_top",
+			code: tryCode(codeFromBuilders(t,
+				mathop.MIN().Serialize(),
+			)),
+			stack: []any{int64(7), vm.NaN{}},
+		},
+		{
+			name: "arith_muldiv_nan_top",
+			code: tryCode(codeFromBuilders(t,
+				mathop.MULDIV().Serialize(),
+			)),
+			stack: []any{int64(2), int64(3), vm.NaN{}},
+		},
+		{
+			name: "arith_adddivmod_nan_middle",
+			code: tryCode(codeFromBuilders(t,
+				mathop.ADDDIVMOD().Serialize(),
+			)),
+			stack: []any{int64(5), vm.NaN{}, int64(2)},
+		},
+		{
+			name: "arith_lshiftdiv_nan_divisor",
+			code: tryCode(codeFromBuilders(t,
+				mathop.LSHIFTDIV().Serialize(),
+			)),
+			stack: []any{int64(5), vm.NaN{}, int64(1)},
 		},
 	}
 

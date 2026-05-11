@@ -10,6 +10,15 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+func assertDictVMErrorCode(t *testing.T, err error, code int64) {
+	t.Helper()
+
+	got, ok := vmerr.ErrorCode(err)
+	if !ok || got != code {
+		t.Fatalf("expected VM error code %d, got %d (%v)", code, got, err)
+	}
+}
+
 func mustRefDictRoot(t *testing.T, keyBits uint, items map[uint64]*cell.Cell) *cell.Cell {
 	t.Helper()
 	dict := cell.NewDict(keyBits)
@@ -428,19 +437,10 @@ func TestDictDeleteGetAdditionalBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
 		t.Fatalf("push delget-invalid bits: %v", err)
 	}
-	if err := execDictDeleteGet(dictValueVariant{kind: dictKeyUnsignedInt})(state); err != nil {
-		t.Fatalf("dict delget invalid key should be relaxed: %v", err)
-	}
-	ok, err = state.Stack.PopBool()
-	if err != nil {
-		t.Fatalf("pop delget-invalid ok: %v", err)
-	}
-	newRoot, err = state.Stack.PopMaybeCell()
-	if err != nil {
-		t.Fatalf("pop delget-invalid root: %v", err)
-	}
-	if ok || newRoot == nil || string(newRoot.Hash()) != string(root.Hash()) || state.Stack.Len() != 0 {
-		t.Fatalf("expected invalid key to behave like a miss")
+	if err := execDictDeleteGet(dictValueVariant{kind: dictKeyUnsignedInt})(state); err == nil {
+		t.Fatal("dict delget invalid key should range-check")
+	} else {
+		assertDictVMErrorCode(t, err, vmerr.CodeRangeCheck)
 	}
 }
 
@@ -921,20 +921,10 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
 		t.Fatalf("push delete invalid bits: %v", err)
 	}
-	if err := execDictDelete(dictScalarVariant{kind: dictKeyUnsignedInt})(state); err != nil {
-		t.Fatalf("dict delete invalid key failed: %v", err)
-	}
-	ok, err = state.Stack.PopBool()
-	if err != nil {
-		t.Fatalf("pop delete invalid ok: %v", err)
-	}
-	newRoot, err = state.Stack.PopMaybeCell()
-	if err != nil {
-		t.Fatalf("pop delete invalid root: %v", err)
-	}
-	got, err = newRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x12))
-	if err != nil || ok || got.MustLoadUInt(8) != 0x34 {
-		t.Fatalf("expected invalid delete key to return false and keep dict")
+	if err := execDictDelete(dictScalarVariant{kind: dictKeyUnsignedInt})(state); err == nil {
+		t.Fatal("dict delete invalid key should range-check")
+	} else {
+		assertDictVMErrorCode(t, err, vmerr.CodeRangeCheck)
 	}
 
 	state = newDictTestState()
@@ -1246,8 +1236,19 @@ func TestDictLoadAndPrefixMissTailBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
 		t.Fatalf("push invalid pfx set bits: %v", err)
 	}
-	if err := execPfxDictSet(cell.DictSetModeSet)(state); err == nil {
-		t.Fatal("expected oversized prefix key to fail for pfx set")
+	if err := execPfxDictSet(cell.DictSetModeSet)(state); err != nil {
+		t.Fatalf("oversized prefix key should be a pfx set miss: %v", err)
+	}
+	ok, err = state.Stack.PopBool()
+	if err != nil {
+		t.Fatalf("pop oversized pfx set ok: %v", err)
+	}
+	pfxOutRoot, err := state.Stack.PopMaybeCell()
+	if err != nil {
+		t.Fatalf("pop oversized pfx set root: %v", err)
+	}
+	if ok || !sameMaybeCell(pfxOutRoot, pfxRoot) {
+		t.Fatal("expected oversized pfx set to leave dictionary unchanged")
 	}
 
 	state = newDictTestState()
@@ -1260,8 +1261,19 @@ func TestDictLoadAndPrefixMissTailBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
 		t.Fatalf("push invalid pfx delete bits: %v", err)
 	}
-	if err := execPfxDictDelete(state); err == nil {
-		t.Fatal("expected oversized prefix key to fail for pfx delete")
+	if err := execPfxDictDelete(state); err != nil {
+		t.Fatalf("oversized prefix key should be a pfx delete miss: %v", err)
+	}
+	ok, err = state.Stack.PopBool()
+	if err != nil {
+		t.Fatalf("pop oversized pfx delete ok: %v", err)
+	}
+	pfxOutRoot, err = state.Stack.PopMaybeCell()
+	if err != nil {
+		t.Fatalf("pop oversized pfx delete root: %v", err)
+	}
+	if ok || !sameMaybeCell(pfxOutRoot, pfxRoot) {
+		t.Fatal("expected oversized pfx delete to leave dictionary unchanged")
 	}
 }
 

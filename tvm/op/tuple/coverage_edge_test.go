@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"testing"
 
+	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -17,6 +18,17 @@ func assertTupleVMError(t *testing.T, err error, code int64) {
 	}
 	if vmErr.Code != code {
 		t.Fatalf("vm error code = %d, want %d", vmErr.Code, code)
+	}
+}
+
+func assertTupleVMErrorText(t *testing.T, err error, code int64, msg string) {
+	t.Helper()
+	var vmErr vmerr.VMError
+	if !errors.As(err, &vmErr) {
+		t.Fatalf("expected VMError %d, got %T (%v)", code, err, err)
+	}
+	if vmErr.Code != code || vmErr.Msg != msg {
+		t.Fatalf("vm error = (%d, %q), want (%d, %q)", vmErr.Code, vmErr.Msg, code, msg)
 	}
 }
 
@@ -40,17 +52,17 @@ func TestTupleHelperErrorBranches(t *testing.T) {
 		}
 	})
 
-		t.Run("ExecSetIndexQuietRejectsBadIndexAndPreservesTupleOnNilFill", func(t *testing.T) {
-			state := newState()
-			if err := state.Stack.PushAny(nil); err != nil {
-				t.Fatalf("push nil tuple: %v", err)
-			}
-			if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
-				t.Fatalf("push value: %v", err)
-			}
-			if err := execSetIndexQuiet(state, 255); err == nil {
-				t.Fatal("expected out-of-range set index to fail")
-			} else {
+	t.Run("ExecSetIndexQuietRejectsBadIndexAndPreservesTupleOnNilFill", func(t *testing.T) {
+		state := newState()
+		if err := state.Stack.PushAny(nil); err != nil {
+			t.Fatalf("push nil tuple: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+		if err := execSetIndexQuiet(state, 255); err == nil {
+			t.Fatal("expected out-of-range set index to fail")
+		} else {
 			assertTupleVMError(t, err, vmerr.CodeRangeCheck)
 		}
 
@@ -119,6 +131,47 @@ func TestTupleTailAndNullOpEdges(t *testing.T) {
 		if got := popInt(t, state); got != 5 {
 			t.Fatalf("null op should preserve top value, got %d", got)
 		}
+	})
+}
+
+func TestTupleErrorTextParity(t *testing.T) {
+	t.Run("PopTupleRangeRejectsNonTupleLikeCPP", func(t *testing.T) {
+		state := newState()
+		if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push non-tuple: %v", err)
+		}
+		assertTupleVMErrorText(t, INDEX(0).Interpret(state), vmerr.CodeTypeCheck, "not a tuple of valid size")
+	})
+
+	t.Run("TupleIndexUsesCPPRangeText", func(t *testing.T) {
+		state := newState()
+		mustPushTupleValue(t, state)
+		assertTupleVMErrorText(t, INDEX(0).Interpret(state), vmerr.CodeRangeCheck, "tuple index out of range")
+	})
+
+	t.Run("PopMaybeTupleRangeRejectsNonTupleLikeCPP", func(t *testing.T) {
+		state := newState()
+		if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push non-tuple: %v", err)
+		}
+		assertTupleVMErrorText(t, INDEXQ(0).Interpret(state), vmerr.CodeTypeCheck, "not a tuple of valid size")
+	})
+
+	t.Run("IndexMultiOversizedIntermediateUsesCPPText", func(t *testing.T) {
+		state := newState()
+		oversized := tuplepkg.NewTupleSized(256)
+		if err := state.Stack.PushTuple(tuplepkg.NewTupleValue(oversized)); err != nil {
+			t.Fatalf("push tuple: %v", err)
+		}
+		assertTupleVMErrorText(t, INDEX2(0, 0).Interpret(state), vmerr.CodeTypeCheck, "intermediate value is not a tuple")
+	})
+
+	t.Run("NullOpRejectsNonIntegerLikeCPP", func(t *testing.T) {
+		state := newState()
+		if err := state.Stack.PushAny(nil); err != nil {
+			t.Fatalf("push null: %v", err)
+		}
+		assertTupleVMErrorText(t, NULLSWAPIF().Interpret(state), vmerr.CodeTypeCheck, "not an integer")
 	})
 }
 

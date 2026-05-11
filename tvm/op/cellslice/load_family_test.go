@@ -90,6 +90,34 @@ func TestLoadIntAndSliceFamilies(t *testing.T) {
 		}
 	})
 
+	t.Run("PLDUZZeroExtendsShortSlice", func(t *testing.T) {
+		st := vm.NewStack()
+		src := cell.BeginCell().MustStoreUInt(0xAB, 8).ToSlice()
+		if err := st.PushSlice(src); err != nil {
+			t.Fatalf("failed to push slice: %v", err)
+		}
+
+		if err := PLDUZ(32).Interpret(&vm.State{Stack: st}); err != nil {
+			t.Fatalf("PLDUZ failed: %v", err)
+		}
+
+		got, err := st.PopIntFinite()
+		if err != nil {
+			t.Fatalf("failed to pop zero-extended value: %v", err)
+		}
+		if got.Cmp(new(big.Int).SetUint64(0xAB000000)) != 0 {
+			t.Fatalf("unexpected zero-extended value: %s", got.String())
+		}
+
+		rest, err := st.PopSlice()
+		if err != nil {
+			t.Fatalf("failed to pop preserved slice: %v", err)
+		}
+		if rest.BitsLeft() != 8 || rest.MustLoadUInt(8) != 0xAB {
+			t.Fatal("PLDUZ should preserve original short slice")
+		}
+	})
+
 	t.Run("PLDSLICEXQFailureReturnsOnlyFalse", func(t *testing.T) {
 		st := vm.NewStack()
 		if err := st.PushSlice(cell.BeginCell().MustStoreUInt(0xF, 4).ToSlice()); err != nil {

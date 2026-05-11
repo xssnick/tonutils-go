@@ -17,6 +17,9 @@ func MULADDRSHIFTCODEMOD(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
 			w, err := popIntFinite(state)
 			if err != nil {
 				return err

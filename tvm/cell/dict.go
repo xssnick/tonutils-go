@@ -247,7 +247,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		return nil, false, fmt.Errorf("failed to split old child label: %w", err)
 	}
 
-	oldChild := BeginCell()
+	oldChild := BeginCell().SetObserver(d.observer)
 	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
 		return nil, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
@@ -396,17 +396,17 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 		return nil, nil, ErrNoSuchKeyInDict
 	}
 
-	key := BeginCell().SetObserver(d.observer)
+	key := BeginCell()
 	branch := d.root
 	node := d.traceNode
 	remaining := d.keySz
 
 	for {
+		loader := d.beginParseNode(branch, node)
 		if branch.IsSpecial() {
 			return nil, nil, fmt.Errorf("dict has special cells in tree structure")
 		}
 
-		loader := d.beginParseNode(branch, node)
 		labelLen, keyBuilder, err := loadLabel(remaining, loader, key)
 		if err != nil {
 			return nil, nil, err
@@ -506,12 +506,19 @@ func (d *Dictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !changed {
+	if !changed || removed == nil || sameDictRoot(d.root, newRoot) {
 		return nil, ErrNoSuchKeyInDict
 	}
 
 	d.root = newRoot
 	return removed, nil
+}
+
+func sameDictRoot(a, b *Cell) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.HashKey() == b.HashKey()
 }
 
 // Deprecated: use LoadValue
@@ -603,10 +610,10 @@ func findKeyInDict(branch *Cell, lookupKey *Cell, observer Observer, observerNod
 
 	// until key size is not equals we go deeper
 	for {
+		branchSlice := beginParseObservedNode(branch, observer, observerNode)
 		if branch.IsSpecial() {
 			return nil, fmt.Errorf("dict has special cells in tree structure")
 		}
-		branchSlice := beginParseObservedNode(branch, observer, observerNode)
 		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), branchSlice, lKey)
 		if err != nil {
 			return nil, err

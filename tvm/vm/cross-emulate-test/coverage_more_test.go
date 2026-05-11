@@ -13,7 +13,9 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
+	tupleop "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
@@ -173,7 +175,7 @@ func TestMainPanicsWhenGoExecutionFailsAfterNativeSuccess(t *testing.T) {
 }
 
 func TestMainLogsMismatchWhenGoAndNativeStacksDiffer(t *testing.T) {
-	code := rawCodeCellFromHex(t, "778B04216D73F43E018B04591277F473")
+	code := codeFromBuilders(t, execop.PUSHCTR(7).Serialize(), tupleop.QTLEN().Serialize())
 
 	recovered, logs := runMainWithCodeAndLogs(t, code)
 	if recovered != nil {

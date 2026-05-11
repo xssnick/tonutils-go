@@ -56,6 +56,13 @@ func popRange(state *vm.State, max int64) (uint64, error) {
 	return v.Uint64(), nil
 }
 
+func checkStackDepth(state *vm.State, depth int) error {
+	if state.Stack.Len() < depth {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+	return nil
+}
+
 func pushInt64(state *vm.State, v int64) error {
 	return state.Stack.PushInt(big.NewInt(v))
 }
@@ -94,6 +101,10 @@ func LDREFRTOS() *helpers.SimpleOP {
 func SDCUTFIRST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			bits, err := popRange(state, 1023)
 			if err != nil {
 				return err
@@ -115,6 +126,10 @@ func SDCUTFIRST() *helpers.SimpleOP {
 func SDCUTLAST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			bits, err := popRange(state, 1023)
 			if err != nil {
 				return err
@@ -136,6 +151,10 @@ func SDCUTLAST() *helpers.SimpleOP {
 func SDSKIPLAST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			bits, err := popRange(state, 1023)
 			if err != nil {
 				return err
@@ -157,6 +176,10 @@ func SDSKIPLAST() *helpers.SimpleOP {
 func SDSUBSTR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			bits, err := popRange(state, 1023)
 			if err != nil {
 				return err
@@ -182,6 +205,10 @@ func SDSUBSTR() *helpers.SimpleOP {
 func SCUTFIRST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			refs, err := popRange(state, 4)
 			if err != nil {
 				return err
@@ -207,6 +234,10 @@ func SCUTFIRST() *helpers.SimpleOP {
 func SSKIPFIRST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			refs, err := popRange(state, 4)
 			if err != nil {
 				return err
@@ -232,6 +263,10 @@ func SSKIPFIRST() *helpers.SimpleOP {
 func SCUTLAST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			refs, err := popRange(state, 4)
 			if err != nil {
 				return err
@@ -257,6 +292,10 @@ func SCUTLAST() *helpers.SimpleOP {
 func SSKIPLAST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			refs, err := popRange(state, 4)
 			if err != nil {
 				return err
@@ -282,6 +321,10 @@ func SSKIPLAST() *helpers.SimpleOP {
 func SUBSLICE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 5); err != nil {
+				return err
+			}
+
 			r2, err := popRange(state, 4)
 			if err != nil {
 				return err
@@ -322,6 +365,10 @@ func splitOp(quiet bool) *helpers.SimpleOP {
 
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			refs, err := popRange(state, 4)
 			if err != nil {
 				return err
@@ -453,6 +500,10 @@ func sliceCheckOp(name string, prefix helpers.BitPrefix, quiet bool, fn func(*vm
 
 func SCHKBITS() *helpers.SimpleOP {
 	return sliceCheckOp("SCHKBITS", helpers.BytesPrefix(0xD7, 0x41), false, func(state *vm.State) (bool, error) {
+		if err := checkStackDepth(state, 2); err != nil {
+			return false, err
+		}
+
 		bits, err := popRange(state, 1023)
 		if err != nil {
 			return false, err
@@ -467,6 +518,10 @@ func SCHKBITS() *helpers.SimpleOP {
 
 func SCHKREFS() *helpers.SimpleOP {
 	return sliceCheckOp("SCHKREFS", helpers.BytesPrefix(0xD7, 0x42), false, func(state *vm.State) (bool, error) {
+		if err := checkStackDepth(state, 2); err != nil {
+			return false, err
+		}
+
 		refs, err := popRange(state, 1023)
 		if err != nil {
 			return false, err
@@ -481,6 +536,10 @@ func SCHKREFS() *helpers.SimpleOP {
 
 func SCHKBITREFS() *helpers.SimpleOP {
 	return sliceCheckOp("SCHKBITREFS", helpers.BytesPrefix(0xD7, 0x43), false, func(state *vm.State) (bool, error) {
+		if err := checkStackDepth(state, 3); err != nil {
+			return false, err
+		}
+
 		refs, err := popRange(state, 4)
 		if err != nil {
 			return false, err
@@ -499,6 +558,10 @@ func SCHKBITREFS() *helpers.SimpleOP {
 
 func SCHKBITSQ() *helpers.SimpleOP {
 	return sliceCheckOp("SCHKBITSQ", helpers.BytesPrefix(0xD7, 0x45), true, func(state *vm.State) (bool, error) {
+		if err := checkStackDepth(state, 2); err != nil {
+			return false, err
+		}
+
 		bits, err := popRange(state, 1023)
 		if err != nil {
 			return false, err
@@ -513,6 +576,10 @@ func SCHKBITSQ() *helpers.SimpleOP {
 
 func SCHKREFSQ() *helpers.SimpleOP {
 	return sliceCheckOp("SCHKREFSQ", helpers.BytesPrefix(0xD7, 0x46), true, func(state *vm.State) (bool, error) {
+		if err := checkStackDepth(state, 2); err != nil {
+			return false, err
+		}
+
 		refs, err := popRange(state, 1023)
 		if err != nil {
 			return false, err
@@ -527,6 +594,10 @@ func SCHKREFSQ() *helpers.SimpleOP {
 
 func SCHKBITREFSQ() *helpers.SimpleOP {
 	return sliceCheckOp("SCHKBITREFSQ", helpers.BytesPrefix(0xD7, 0x47), true, func(state *vm.State) (bool, error) {
+		if err := checkStackDepth(state, 3); err != nil {
+			return false, err
+		}
+
 		refs, err := popRange(state, 4)
 		if err != nil {
 			return false, err
@@ -546,6 +617,10 @@ func SCHKBITREFSQ() *helpers.SimpleOP {
 func PLDREFVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			idx, err := popRange(state, 3)
 			if err != nil {
 				return err
@@ -648,6 +723,10 @@ func ldSameOp(name string, prefix helpers.BitPrefix, fixed *bool) *helpers.Simpl
 		Action: func(state *vm.State) error {
 			var bit bool
 			if fixed == nil {
+				if err := checkStackDepth(state, 2); err != nil {
+					return err
+				}
+
 				v, err := popRange(state, 1)
 				if err != nil {
 					return err

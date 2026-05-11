@@ -49,6 +49,9 @@ type AugmentedDictionary struct {
 	wrapped   bool
 
 	aug Augmentation
+
+	observer  Observer
+	traceNode TraceNode
 }
 
 func NewAugDict(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
@@ -188,7 +191,7 @@ func (c *Slice) loadAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augm
 		}, nil
 	}
 
-	root, err := c.LoadRefCell()
+	root, node, err := c.LoadRefCellWithNode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dict root ref: %w", err)
 	}
@@ -220,13 +223,13 @@ func (c *Slice) loadAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augm
 		}
 	}
 
-	return &AugmentedDictionary{
+	return (&AugmentedDictionary{
 		keySz:     keySz,
 		root:      root,
 		rootExtra: rootExtra,
 		wrapped:   true,
 		aug:       aug,
-	}, nil
+	}).SetObserverNode(c.observer, node), nil
 }
 
 func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
@@ -249,7 +252,7 @@ func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDict
 		}, nil
 	}
 
-	root, err := c.LoadRefCell()
+	root, node, err := c.LoadRefCellWithNode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dict root ref: %w", err)
 	}
@@ -265,13 +268,13 @@ func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDict
 		}
 	}
 
-	return &AugmentedDictionary{
+	return (&AugmentedDictionary{
 		keySz:     keySz,
 		root:      root,
 		rootExtra: rootExtra,
 		wrapped:   true,
 		aug:       aug,
-	}, nil
+	}).SetObserverNode(c.observer, node), nil
 }
 
 func (d *AugmentedDictionary) GetKeySize() uint {
@@ -289,7 +292,22 @@ func (d *AugmentedDictionary) Copy() *AugmentedDictionary {
 		rootExtra: d.rootExtra,
 		wrapped:   d.wrapped,
 		aug:       d.aug,
+		observer:  d.observer,
+		traceNode: d.traceNode,
 	}
+}
+
+func (d *AugmentedDictionary) SetObserver(observer Observer) *AugmentedDictionary {
+	return d.SetObserverNode(observer, 0)
+}
+
+func (d *AugmentedDictionary) SetObserverNode(observer Observer, node TraceNode) *AugmentedDictionary {
+	if d == nil {
+		return nil
+	}
+	d.observer = observer
+	d.traceNode = node
+	return d
 }
 
 func (d *AugmentedDictionary) IsEmpty() bool {

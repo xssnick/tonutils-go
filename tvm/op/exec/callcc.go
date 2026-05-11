@@ -70,19 +70,14 @@ func CALLCCARGS(params, retvals int) *helpers.AdvancedOP {
 		},
 		BitPrefix: helpers.BytesPrefix(0xDB, 0x36),
 		SerializeSuffix: func() *cell.Builder {
-			encodedRet := (retvals + 1) & 0x0F
-			return cell.BeginCell().MustStoreUInt(uint64((params<<4)|encodedRet), 8)
+			return cell.BeginCell().MustStoreUInt(encodeCopyMore(params, retvals), 8)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
 			val, err := code.LoadUInt(8)
 			if err != nil {
 				return err
 			}
-			params = int((val >> 4) & 0x0F)
-			retvals = int(((val & 0x0F) + 15) & 0x0F)
-			if retvals == 15 {
-				retvals = -1
-			}
+			params, retvals = parseCopyMore(val)
 			return nil
 		},
 	}

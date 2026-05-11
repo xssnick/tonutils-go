@@ -144,12 +144,17 @@ func (c *ConnectionPool) StickyNodeID(ctx context.Context) uint32 {
 func (c *ConnectionPool) Stop() {
 	c.stop()
 
+	nodes := c.activeNodesSnapshot()
+	for _, node := range nodes {
+		_ = node.tcp.Close()
+	}
+}
+
+func (c *ConnectionPool) activeNodesSnapshot() []*connection {
 	c.nodesMx.RLock()
 	defer c.nodesMx.RUnlock()
 
-	for _, node := range c.activeNodes {
-		_ = node.tcp.Close()
-	}
+	return append([]*connection(nil), c.activeNodes...)
 }
 
 // QueryLiteserver - sends request to liteserver
@@ -223,7 +228,21 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 			}
 		}
 
-		reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp.Data))
+		dst := reflect.ValueOf(result)
+		if dst.Kind() != reflect.Ptr || dst.IsNil() {
+			return fmt.Errorf("result should be a non-nil pointer")
+		}
+
+		elem := dst.Elem()
+		src := reflect.ValueOf(resp.Data)
+		if !src.IsValid() {
+			return fmt.Errorf("unexpected nil response data")
+		}
+		if !src.Type().AssignableTo(elem.Type()) {
+			return fmt.Errorf("unexpected response type %s, want %s", src.Type(), elem.Type())
+		}
+
+		elem.Set(src)
 		return nil
 	case <-ctx.Done():
 		node.requestTimedOut(time.Since(tm))

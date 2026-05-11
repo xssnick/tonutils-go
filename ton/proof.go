@@ -352,23 +352,21 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 		return fmt.Errorf("unsupported signature set type %T", sigSet)
 	}
 
-	if signatures != nil {
-		if toBlock.BlockInfo.GenValidatorListHashShort != valSetHash {
-			return fmt.Errorf("incorrect validator set hash")
-		}
+	if toBlock.BlockInfo.GenValidatorListHashShort != valSetHash {
+		return fmt.Errorf("incorrect validator set hash")
+	}
 
-		if toBlock.BlockInfo.GenCatchainSeqno != valSetSeqno {
-			return fmt.Errorf("incorrect catchain seqno")
-		}
+	if toBlock.BlockInfo.GenCatchainSeqno != valSetSeqno {
+		return fmt.Errorf("incorrect catchain seqno")
+	}
 
-		if simplexSet != nil {
-			err = CheckBlockSignaturesSimplex(to, valSetSeqno, valSetHash, simplexSet.SessionID, simplexSet.Slot, simplexSet.Candidate, signatures, validators)
-		} else {
-			err = CheckBlockSignatures(to, valSetSeqno, valSetHash, signatures, validators)
-		}
-		if err != nil {
-			return fmt.Errorf("failed to check validators signatures: %w", err)
-		}
+	if simplexSet != nil {
+		err = CheckBlockSignaturesSimplex(to, valSetSeqno, valSetHash, simplexSet.SessionID, simplexSet.Slot, simplexSet.Candidate, signatures, validators)
+	} else {
+		err = CheckBlockSignatures(to, valSetSeqno, valSetHash, signatures, validators)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to check validators signatures: %w", err)
 	}
 
 	return nil
@@ -644,6 +642,8 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 	isForward := to.SeqNo > from.SeqNo
 
 	for from.SeqNo != to.SeqNo {
+		prevSeqNo := from.SeqNo
+
 		part, err := c.GetBlockProof(ctx, from, to)
 		if err != nil {
 			if lsErr, ok := err.(LSError); ok && (lsErr.Code == 651 || lsErr.Code == -400) { // block not applied error
@@ -683,22 +683,31 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 			return nil
 		}
 
+		stepFrom := from
 		if isForward {
 			for _, step := range part.Steps {
 				fwd, ok := step.(BlockLinkForward)
 				if !ok {
 					// proof back to key block
-					bwd, ok := step.(BlockLinkBackward)
-					if !ok {
+					bwd, bwdOk := step.(BlockLinkBackward)
+					if !bwdOk {
 						return fmt.Errorf("wrong proof step type %v", reflect.TypeOf(step).String())
+					}
+
+					if bwd.From == nil || !bwd.From.Equals(stepFrom) {
+						return fmt.Errorf("backward proof step starts from unexpected block")
 					}
 
 					if err = checkBackProof(&bwd); err != nil {
 						return err
 					}
 
-					from = bwd.To
+					stepFrom = bwd.To
 					continue
+				}
+
+				if fwd.From == nil || !fwd.From.Equals(stepFrom) {
+					return fmt.Errorf("forward proof step starts from unexpected block")
 				}
 
 				destProof, err := cell.FromBOC(fwd.DestProof)
@@ -711,11 +720,12 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 					return fmt.Errorf("config proof boc parse err: %w", err)
 				}
 
-				err = CheckForwardBlockProof(from, fwd.To, fwd.ToKeyBlock, configProof, destProof, fwd.SignatureSet)
+				err = CheckForwardBlockProof(stepFrom, fwd.To, fwd.ToKeyBlock, configProof, destProof, fwd.SignatureSet)
 				if err != nil {
 					return fmt.Errorf("invalid forward block from %d to %d proof: %w", fwd.From.SeqNo, fwd.To.SeqNo, err)
 				}
-				from = fwd.To
+
+				stepFrom = fwd.To
 			}
 		} else {
 			for _, step := range part.Steps {
@@ -724,12 +734,37 @@ func (c *APIClient) VerifyProofChain(ctx context.Context, from, to *BlockIDExt) 
 					return fmt.Errorf("wrong proof direction in response bw %v", reflect.TypeOf(step).String())
 				}
 
+				if bwd.From == nil || !bwd.From.Equals(stepFrom) {
+					return fmt.Errorf("backward proof step starts from unexpected block")
+				}
+
 				if err = checkBackProof(&bwd); err != nil {
 					return err
 				}
+
+				stepFrom = bwd.To
 			}
 		}
-		from = part.To
+		if !stepFrom.Equals(part.To) {
+			return fmt.Errorf("proof chain ended at unexpected block: %d, want %d", stepFrom.SeqNo, part.To.SeqNo)
+		}
+
+		from = stepFrom
+		if isForward {
+			if from.SeqNo <= prevSeqNo {
+				return fmt.Errorf("proof chain did not progress forward from %d to %d", prevSeqNo, from.SeqNo)
+			}
+			if from.SeqNo > to.SeqNo {
+				return fmt.Errorf("proof chain overshot target block: %d > %d", from.SeqNo, to.SeqNo)
+			}
+		} else {
+			if from.SeqNo >= prevSeqNo {
+				return fmt.Errorf("proof chain did not progress backward from %d to %d", prevSeqNo, from.SeqNo)
+			}
+			if from.SeqNo < to.SeqNo {
+				return fmt.Errorf("proof chain overshot target block: %d < %d", from.SeqNo, to.SeqNo)
+			}
+		}
 	}
 
 	if !from.Equals(to) {

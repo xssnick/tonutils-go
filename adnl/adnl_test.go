@@ -63,11 +63,10 @@ func TestADNL_ClientServer(t *testing.T) {
 						return fmt.Errorf("handle mock err")
 					}
 
-					err = client.Answer(context.Background(), msg.ID, MessagePong{
+					if err := client.Answer(context.Background(), msg.ID, MessagePong{
 						Value: m.Value,
-					})
-					if err != nil {
-						t.Fatal(err)
+					}); err != nil {
+						return err
 					}
 				}
 				return nil

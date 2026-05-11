@@ -48,6 +48,13 @@ func (m *CellManager) RegisterCellLoad(cl *cell.Cell) error {
 }
 
 func (m *CellManager) RegisterCellLoadKey(key cell.Hash) error {
+	if m.loaded == nil {
+		m.loaded = map[cell.Hash]struct{}{}
+	}
+	if m.state == nil {
+		return nil
+	}
+
 	_, ok := m.loaded[key]
 	if !ok {
 		m.loaded[key] = struct{}{}
@@ -118,6 +125,11 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 
 func (m *CellManager) BeginParse(cl *cell.Cell) (*cell.Slice, error) {
 	sl, _, err := m.beginParseLoadedCell(cl, false, false)
+	return sl, err
+}
+
+func (m *CellManager) BeginParseAlreadyLoaded(cl *cell.Cell) (*cell.Slice, error) {
+	sl, _, err := m.beginParseLoadedCell(cl, false, true)
 	return sl, err
 }
 

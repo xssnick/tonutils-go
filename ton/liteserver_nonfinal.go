@@ -1,6 +1,10 @@
 package ton
 
-import "github.com/xssnick/tonutils-go/tl"
+import (
+	"context"
+
+	"github.com/xssnick/tonutils-go/tl"
+)
 
 func init() {
 	tl.Register(NonfinalCandidateID{}, "liteServer.nonfinal.candidateId block_id:tonNode.blockIdExt creator:int256 collated_data_hash:int256 = liteServer.nonfinal.CandidateId")
@@ -65,4 +69,80 @@ type NonfinalGetPendingShardBlocks struct {
 	Mode  uint32 `tl:"flags"`
 	WC    int32  `tl:"?0 int"`
 	Shard int64  `tl:"?0 long"`
+}
+
+func (c *APIClient) GetNonfinalValidatorGroups(ctx context.Context, wc int32, shard int64) (*NonfinalValidatorGroups, error) {
+	req := NonfinalGetValidatorGroups{
+		Mode:  1,
+		WC:    wc,
+		Shard: shard,
+	}
+
+	return c.queryNonfinalValidatorGroups(ctx, req)
+}
+
+func (c *APIClient) GetAllNonfinalValidatorGroups(ctx context.Context) (*NonfinalValidatorGroups, error) {
+	return c.queryNonfinalValidatorGroups(ctx, NonfinalGetValidatorGroups{})
+}
+
+func (c *APIClient) queryNonfinalValidatorGroups(ctx context.Context, req NonfinalGetValidatorGroups) (*NonfinalValidatorGroups, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, req, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case NonfinalValidatorGroups:
+		return &t, nil
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
+}
+
+func (c *APIClient) GetNonfinalCandidate(ctx context.Context, id *NonfinalCandidateID) (*NonfinalCandidate, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, NonfinalGetCandidate{ID: id}, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case NonfinalCandidate:
+		return &t, nil
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
+}
+
+func (c *APIClient) GetNonfinalPendingShardBlocks(ctx context.Context, wc int32, shard int64) (*NonfinalPendingShardBlocks, error) {
+	req := NonfinalGetPendingShardBlocks{
+		Mode:  1,
+		WC:    wc,
+		Shard: shard,
+	}
+
+	return c.queryNonfinalPendingShardBlocks(ctx, req)
+}
+
+func (c *APIClient) GetAllNonfinalPendingShardBlocks(ctx context.Context) (*NonfinalPendingShardBlocks, error) {
+	return c.queryNonfinalPendingShardBlocks(ctx, NonfinalGetPendingShardBlocks{})
+}
+
+func (c *APIClient) queryNonfinalPendingShardBlocks(ctx context.Context, req NonfinalGetPendingShardBlocks) (*NonfinalPendingShardBlocks, error) {
+	var resp tl.Serializable
+	err := c.client.QueryLiteserver(ctx, req, &resp)
+	if err != nil {
+		return nil, err
+	}
+
+	switch t := resp.(type) {
+	case NonfinalPendingShardBlocks:
+		return &t, nil
+	case LSError:
+		return nil, t
+	}
+	return nil, errUnexpectedResponse(resp)
 }

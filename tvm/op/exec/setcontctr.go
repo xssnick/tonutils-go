@@ -15,6 +15,10 @@ func SETCONTCTR(i int) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			cont0, err := state.Stack.PopContinuation()
 			if err != nil {
 				return err
@@ -26,7 +30,7 @@ func SETCONTCTR(i int) (op *helpers.AdvancedOP) {
 			}
 
 			cont0 = vm.ForceControlData(cont0)
-			if !cont0.GetControlData().Save.Define(i, v1) {
+			if !cont0.GetControlData().Save.Define(i, cloneControlRegisterValue(v1)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 
@@ -36,6 +40,7 @@ func SETCONTCTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d SETCONTCTR", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x60}),
+		Prefixes:          controlRegisterPrefixes(0xED60),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}

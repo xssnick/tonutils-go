@@ -65,6 +65,10 @@ func SETCONTCTRMANY(mask uint8) *helpers.AdvancedOP {
 func SETCONTCTRMANYX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			mask, err := state.Stack.PopIntRange(0, 255)
 			if err != nil {
 				return err

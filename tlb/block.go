@@ -59,6 +59,78 @@ type Block struct {
 	Extra       *BlockExtra `tlb:"^"`
 }
 
+// ListTransactions returns all transactions stored in this block.
+func (b *Block) ListTransactions() ([]*Transaction, error) {
+	if b == nil {
+		return nil, fmt.Errorf("block is nil")
+	}
+	if b.Extra == nil || b.Extra.ShardAccountBlocks == nil {
+		return nil, fmt.Errorf("block has no shard account blocks")
+	}
+
+	accounts := b.Extra.ShardAccountBlocks.BeginParse()
+	hasAccounts, err := accounts.LoadBoolBit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load shard account blocks root flag: %w", err)
+	}
+	if !hasAccounts {
+		return []*Transaction{}, nil
+	}
+
+	root, err := accounts.LoadRefCell()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load shard account blocks root: %w", err)
+	}
+
+	accountList, err := root.AsDict(256).LoadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load account blocks: %w", err)
+	}
+
+	txList := make([]*Transaction, 0)
+	for _, accountKV := range accountList {
+		if err = skipCurrencyCollectionBoundary(accountKV.Value); err != nil {
+			return nil, fmt.Errorf("failed to load account block fees: %w", err)
+		}
+
+		var accountBlock AccountBlock
+		if err = LoadFromCell(&accountBlock, accountKV.Value); err != nil {
+			return nil, fmt.Errorf("failed to load account block: %w", err)
+		}
+
+		if accountBlock.Transactions == nil || accountBlock.Transactions.IsEmpty() {
+			continue
+		}
+
+		txRoot := accountBlock.Transactions.AsCell()
+		txKVList, err := txRoot.AsDict(64).LoadAll()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account transactions: %w", err)
+		}
+
+		for _, txKV := range txKVList {
+			if err = skipCurrencyCollectionBoundary(txKV.Value); err != nil {
+				return nil, fmt.Errorf("failed to load tx fees: %w", err)
+			}
+
+			txCell, err := txKV.Value.LoadRefCell()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load tx ref: %w", err)
+			}
+
+			var tx Transaction
+			if err = LoadFromCell(&tx, txCell.BeginParse()); err != nil {
+				return nil, fmt.Errorf("failed to load tx from cell: %w", err)
+			}
+
+			tx.Hash = txCell.Hash()
+			txList = append(txList, &tx)
+		}
+	}
+
+	return txList, nil
+}
+
 type AllShardsInfo struct {
 	ShardHashes *cell.Dictionary `tlb:"dict 32"`
 }

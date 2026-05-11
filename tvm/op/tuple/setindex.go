@@ -38,6 +38,9 @@ func SETINDEX(n uint8) *helpers.AdvancedOP {
 }
 
 func execSetIndex(state *vm.State, idx int) error {
+	if state.Stack.Len() < 2 {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
 	val, err := state.Stack.PopAny()
 	if err != nil {
 		return err

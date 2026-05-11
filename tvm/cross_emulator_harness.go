@@ -59,7 +59,7 @@ func runGoCrossCodeWithLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.
 }
 
 func runGoCrossCodeWithVersionAndLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack, globalVersion int) (*crossRunResult, error) {
-	return runGoCrossCodeWithVersionGasAndLibs(code, data, c7, libs, stack, globalVersion, crossTestMaxGas)
+	return runGoCrossCodeWithVersionGasAndLibs(code, data, c7, libs, stack, globalVersion, referenceDefaultMaxGas)
 }
 
 func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack, globalVersion int, gasLimit int64) (*crossRunResult, error) {

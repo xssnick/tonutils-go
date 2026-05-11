@@ -43,7 +43,7 @@ func SETCP(cp int) *helpers.AdvancedOP {
 		DeserializeSuffix: func(code *cell.Slice) error {
 			v, err := code.LoadUInt(8)
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 			cp = int((v + 0x10) & 0xFF)
 			cp -= 0x10

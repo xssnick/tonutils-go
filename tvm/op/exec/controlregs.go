@@ -29,6 +29,14 @@ func validControlRegisterIndex(i int) bool {
 	return (i >= 0 && i <= 5) || i == 7
 }
 
+func controlRegisterPrefixes(base uint64) []helpers.BitPrefix {
+	prefixes := make([]helpers.BitPrefix, 0, 7)
+	for _, idx := range []uint64{0, 1, 2, 3, 4, 5, 7} {
+		prefixes = append(prefixes, helpers.UIntPrefix(base|idx, 16))
+	}
+	return prefixes
+}
+
 func deserializeControlRegisterIndex(dst *int) func(*cell.Slice) error {
 	return func(code *cell.Slice) error {
 		val, err := code.LoadUInt(4)
@@ -67,7 +75,7 @@ func cloneControlRegisterValue(v any) any {
 }
 
 func setControlRegister(state *vm.State, idx int, val any) error {
-	if !state.Reg.Define(idx, val) {
+	if !state.Reg.Set(idx, val) {
 		return vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return nil
@@ -83,6 +91,7 @@ func PUSHCTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d PUSH", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x40}),
+		Prefixes:          controlRegisterPrefixes(0xED40),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -103,6 +112,7 @@ func POPCTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d POP", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x50}),
+		Prefixes:          controlRegisterPrefixes(0xED50),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -118,8 +128,8 @@ func SETRETCTR(i int) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			c0 := vm.ForceControlData(state.Reg.C[0])
-			if !c0.GetControlData().Save.Define(i, val) {
+			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+			if !c0.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			state.Reg.C[0] = c0
@@ -129,6 +139,7 @@ func SETRETCTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d SETRETCTR", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x70}),
+		Prefixes:          controlRegisterPrefixes(0xED70),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -144,8 +155,8 @@ func SETALTCTR(i int) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			c1 := vm.ForceControlData(state.Reg.C[1])
-			if !c1.GetControlData().Save.Define(i, val) {
+			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
+			if !c1.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			state.Reg.C[1] = c1
@@ -155,6 +166,7 @@ func SETALTCTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d SETALTCTR", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x80}),
+		Prefixes:          controlRegisterPrefixes(0xED80),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -175,10 +187,8 @@ func POPSAVECTR(i int) (op *helpers.AdvancedOP) {
 				}
 			}
 
-			c0 := vm.ForceControlData(state.Reg.C[0])
-			if !c0.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i))) {
-				return vmerr.Error(vmerr.CodeTypeCheck)
-			}
+			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+			c0.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i)))
 
 			if i == 0 {
 				state.Reg.C[0] = c0
@@ -195,6 +205,7 @@ func POPSAVECTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d POPSAVE", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x90}),
+		Prefixes:          controlRegisterPrefixes(0xED90),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -205,7 +216,7 @@ func SAVEALTCTR(i int) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
-			c1 := vm.ForceControlData(state.Reg.C[1])
+			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
 			if !c1.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i))) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
@@ -216,6 +227,7 @@ func SAVEALTCTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d SAVEALTCTR", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0xB0}),
+		Prefixes:          controlRegisterPrefixes(0xEDB0),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -226,16 +238,12 @@ func SAVEBOTHCTR(i int) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
-			c0 := vm.ForceControlData(state.Reg.C[0])
-			c1 := vm.ForceControlData(state.Reg.C[1])
+			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
 			val := state.Reg.Get(i)
 
-			if !c0.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
-				return vmerr.Error(vmerr.CodeTypeCheck)
-			}
-			if !c1.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
-				return vmerr.Error(vmerr.CodeTypeCheck)
-			}
+			c0.GetControlData().Save.Define(i, cloneControlRegisterValue(val))
+			c1.GetControlData().Save.Define(i, cloneControlRegisterValue(val))
 
 			state.Reg.C[0] = c0
 			state.Reg.C[1] = c1
@@ -245,6 +253,7 @@ func SAVEBOTHCTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d SAVEBOTHCTR", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0xC0}),
+		Prefixes:          controlRegisterPrefixes(0xEDC0),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -273,6 +282,10 @@ func POPCTRX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Name: "POPCTRX",
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			idx, err := state.Stack.PopIntRange(0, 16)
 			if err != nil {
 				return err
@@ -295,6 +308,10 @@ func SETCONTCTRX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Name: "SETCONTCTRX",
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 3 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			idx, err := state.Stack.PopIntRange(0, 16)
 			if err != nil {
 				return err
@@ -314,7 +331,7 @@ func SETCONTCTRX() *helpers.SimpleOP {
 			}
 
 			cont = vm.ForceControlData(cont)
-			if !cont.GetControlData().Save.Define(i, val) {
+			if !cont.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			return state.Stack.PushContinuation(cont)

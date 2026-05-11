@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/crc32"
+	"io"
 )
 
 const (
@@ -96,6 +97,26 @@ func ToBOCWithOptionsErr(roots []*Cell, opts BOCSerializeOptions) ([]byte, error
 		return nil, fmt.Errorf("failed to serialize boc")
 	}
 	return boc, nil
+}
+
+// WriteBOCWithOptions serializes roots into BoC and writes the result to w.
+// It avoids allocating the final BoC byte slice, but still performs the normal
+// prepass needed to order cells, resolve lazy refs, deduplicate cells, and build
+// optional indexes.
+func WriteBOCWithOptions(w io.Writer, roots []*Cell, opts BOCSerializeOptions) error {
+	if w == nil {
+		return fmt.Errorf("writer is nil")
+	}
+
+	bag, err := newBOCSerializer(roots)
+	if err != nil {
+		return err
+	}
+	if bag == nil {
+		return nil
+	}
+
+	return bag.writeTo(w, opts.mode())
 }
 
 func (c *Cell) ToBOCWithOptions(opts BOCSerializeOptions) []byte {
@@ -213,6 +234,10 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	}
 	cell = cell.rawCell()
 	if cell.IsLazy() {
+		if pos, found := s.findImportedCell(cell); found {
+			return pos, nil
+		}
+
 		loaded, err := loadLazyPrunedRef(cell)
 		if err != nil {
 			return 0, err
@@ -238,6 +263,20 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	}
 	sumChildWeight := 1
 	for i := 0; i < refCnt; i++ {
+		boundaryRef, err := refView.boundaryRef(i)
+		if err != nil {
+			return 0, fmt.Errorf("failed to load ref %d: %w", i, err)
+		}
+		if boundaryRef != nil && boundaryRef.IsLazy() {
+			refIdx, found := s.findImportedCell(boundaryRef)
+			if found {
+				refs[i] = refIdx
+				sumChildWeight += int(s.cellList[int(refIdx)].wt)
+				s.intRefs++
+				continue
+			}
+		}
+
 		ref, err := refView.resolvedRef(i)
 		if err != nil {
 			return 0, fmt.Errorf("failed to load ref %d: %w", i, err)
@@ -274,6 +313,16 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 
 	s.cellCount++
 	return uint32(idx), nil
+}
+
+func (s *bocSerializer) findImportedCell(cell *Cell) (uint32, bool) {
+	hash := cell.getHash(_DataCellMaxLevel)
+	hashFingerprint := bocHashFingerprint(hash)
+	pos, found := s.cellIndex.get(hashFingerprint, hash, cell, s.cellList)
+	if found {
+		s.cellList[int(pos)].shouldCache = true
+	}
+	return pos, found
 }
 
 func (s *bocSerializer) reorderCells() {
@@ -563,6 +612,204 @@ func (s *bocSerializer) serialize(mode int) []byte {
 	}
 
 	return data
+}
+
+const bocStreamBufferSize = 64 << 10
+
+type bocStreamWriter struct {
+	dst io.Writer
+	crc uint32
+
+	buf []byte
+	pos int
+
+	crcActive bool
+	err       error
+}
+
+func newBOCStreamWriter(dst io.Writer, crcActive bool, bufferSize int) bocStreamWriter {
+	if bufferSize <= 0 {
+		bufferSize = bocStreamBufferSize
+	}
+	return bocStreamWriter{
+		dst:       dst,
+		buf:       make([]byte, bufferSize),
+		crcActive: crcActive,
+	}
+}
+
+func (w *bocStreamWriter) write(data []byte) {
+	if w.err != nil || len(data) == 0 {
+		return
+	}
+	if len(data) >= len(w.buf) {
+		w.flush()
+		if w.err != nil {
+			return
+		}
+		w.writeFull(data)
+		return
+	}
+	if len(data) > len(w.buf)-w.pos {
+		w.flush()
+		if w.err != nil {
+			return
+		}
+	}
+
+	copy(w.buf[w.pos:], data)
+	w.pos += len(data)
+}
+
+func (w *bocStreamWriter) writeByte(value byte) {
+	if w.err != nil {
+		return
+	}
+	if w.pos == len(w.buf) {
+		w.flush()
+		if w.err != nil {
+			return
+		}
+	}
+
+	w.buf[w.pos] = value
+	w.pos++
+}
+
+func (w *bocStreamWriter) writeUint(value uint64, sz int) {
+	if w.err != nil {
+		return
+	}
+	if len(w.buf)-w.pos < sz {
+		w.flush()
+		if w.err != nil {
+			return
+		}
+	}
+
+	storeUintTo(w.buf[w.pos:w.pos+sz], value, sz)
+	w.pos += sz
+}
+
+func (w *bocStreamWriter) finish() error {
+	if w.err != nil {
+		return w.err
+	}
+	w.flush()
+	return w.err
+}
+
+func (w *bocStreamWriter) currentCRC() uint32 {
+	if !w.crcActive || w.pos == 0 {
+		return w.crc
+	}
+	return crc32.Update(w.crc, castTable, w.buf[:w.pos])
+}
+
+func (w *bocStreamWriter) flush() {
+	if w.err != nil || w.pos == 0 {
+		return
+	}
+
+	data := w.buf[:w.pos]
+	if w.crcActive {
+		w.crc = crc32.Update(w.crc, castTable, data)
+	}
+
+	n, err := w.dst.Write(data)
+	if err == nil && n != w.pos {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+		return
+	}
+	w.pos = 0
+}
+
+func (w *bocStreamWriter) writeFull(data []byte) {
+	if w.crcActive {
+		w.crc = crc32.Update(w.crc, castTable, data)
+	}
+
+	n, err := w.dst.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+	}
+}
+
+func (s *bocSerializer) writeTo(dst io.Writer, mode int) error {
+	info, ok := s.estimateSerializedSize(mode)
+	if !ok {
+		return fmt.Errorf("failed to serialize boc")
+	}
+
+	w := newBOCStreamWriter(dst, info.hasCRC32C, bocStreamBufferSize)
+
+	w.write(bocMagic)
+
+	flags := byte(info.refByteSize)
+	if info.hasIndex {
+		flags |= 1 << 7
+	}
+	if info.hasCRC32C {
+		flags |= 1 << 6
+	}
+	if info.hasCacheBits {
+		flags |= 1 << 5
+	}
+	w.writeByte(flags)
+	w.writeByte(byte(info.offsetByteSize))
+
+	w.writeUint(uint64(s.cellCount), info.refByteSize)
+	w.writeUint(uint64(len(s.roots)), info.refByteSize)
+	w.writeUint(0, info.refByteSize)
+	w.writeUint(info.dataSize, info.offsetByteSize)
+
+	for _, root := range s.roots {
+		w.writeUint(uint64(s.cellCount-1-int(root.idx)), info.refByteSize)
+	}
+
+	if info.hasIndex {
+		var offs uint64
+		for n := s.cellCount; n > 0; n-- {
+			i := n - 1
+			item := s.itemByIndex(i)
+			offs += uint64(item.cell.serializedBOCSize(s.shouldSerializeHashes(item, mode)) + int(item.refNum)*info.refByteSize)
+
+			offset := offs
+			if info.hasCacheBits {
+				offset = offs * 2
+				if item.shouldCache {
+					offset++
+				}
+			}
+			w.writeUint(offset, info.offsetByteSize)
+		}
+	}
+
+	var cellBuf [2 + maxCellDataBytes + 4*(hashSize+depthSize)]byte
+	for i := 0; i < s.cellCount; i++ {
+		item := s.itemByIndex(s.cellCount - 1 - i)
+		n := item.cell.serializeBOCTo(cellBuf[:], s.shouldSerializeHashes(item, mode))
+		w.write(cellBuf[:n])
+
+		for j := 0; j < int(item.refNum); j++ {
+			w.writeUint(uint64(s.cellCount-1-int(item.refIdx[j])), info.refByteSize)
+		}
+	}
+
+	if info.hasCRC32C {
+		var crcBuf [4]byte
+		binary.LittleEndian.PutUint32(crcBuf[:], w.currentCRC())
+		w.crcActive = false
+		w.write(crcBuf[:])
+	}
+
+	return w.finish()
 }
 
 type bocHashWriter struct {

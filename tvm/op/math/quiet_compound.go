@@ -149,6 +149,13 @@ func qDivModFamily(args uint8) *helpers.AdvancedOP {
 		if add {
 			d = 3
 		}
+		required := 2
+		if add {
+			required = 3
+		}
+		if err := checkStackDepth(state, required); err != nil {
+			return err
+		}
 
 		y, err := state.Stack.PopInt()
 		if err != nil {
@@ -209,6 +216,13 @@ func qShrModFamily(args uint8) *helpers.AdvancedOP {
 		add := d == 0
 		if add {
 			d = 3
+		}
+		required := 2
+		if add {
+			required = 3
+		}
+		if err := checkStackDepth(state, required); err != nil {
+			return err
 		}
 
 		shift, err := state.Stack.PopIntRange(0, 256)
@@ -275,6 +289,13 @@ func qMulDivModFamily(args uint8) *helpers.AdvancedOP {
 		if add {
 			d = 3
 		}
+		required := 3
+		if add {
+			required = 4
+		}
+		if err := checkStackDepth(state, required); err != nil {
+			return err
+		}
 
 		z, err := state.Stack.PopInt()
 		if err != nil {
@@ -339,6 +360,13 @@ func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
 		add := d == 0
 		if add {
 			d = 3
+		}
+		required := 3
+		if add {
+			required = 4
+		}
+		if err := checkStackDepth(state, required); err != nil {
+			return err
 		}
 
 		shift, err := state.Stack.PopInt()
@@ -406,6 +434,13 @@ func qShlDivModFamily(args uint8) *helpers.AdvancedOP {
 		add := d == 0
 		if add {
 			d = 3
+		}
+		required := 3
+		if add {
+			required = 4
+		}
+		if err := checkStackDepth(state, required); err != nil {
+			return err
 		}
 
 		shift, err := state.Stack.PopInt()

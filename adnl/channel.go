@@ -18,8 +18,8 @@ type Channel struct {
 
 	key         ed25519.PrivateKey
 	peerKey     ed25519.PublicKey
-	ready       bool
-	wantConfirm bool
+	ready       atomic.Bool
+	wantConfirm atomic.Bool
 
 	id     []byte
 	idEnc  []byte
@@ -100,8 +100,7 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		h(c)
 	}
 
-	c.ready = true
-
+	c.ready.Store(true)
 	return nil
 }
 

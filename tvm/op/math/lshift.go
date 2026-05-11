@@ -12,6 +12,9 @@ func init() {
 func LSHIFT() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			y, err := popIntRange(state, 0, 1023)
 			if err != nil {
 				return err

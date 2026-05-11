@@ -13,6 +13,9 @@ func init() {
 func REVX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			y, err := popSmallIndex(state)
 			if err != nil {
 				return err
@@ -24,13 +27,10 @@ func REVX() *helpers.SimpleOP {
 			if x < 0 || y < 0 || x+y > state.Stack.Len() {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			if x == 0 {
-				return nil
-			}
 			if err := consumeLargeStackMoveGas(state, x); err != nil {
 				return err
 			}
-			return state.Stack.Reverse(x+y-1, y)
+			return state.Stack.Reverse(x+y, y)
 		},
 		Name:      "REVX",
 		BitPrefix: helpers.BytesPrefix(0x64),

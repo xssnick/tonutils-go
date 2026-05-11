@@ -180,7 +180,7 @@ func GETPARAM(idx uint8) *helpers.AdvancedOP {
 		DeserializeSuffix: func(code *cell.Slice) error {
 			v, err := code.LoadUInt(4)
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 			idx = uint8(v)
 			return nil
@@ -195,12 +195,21 @@ func GETPARAM(idx uint8) *helpers.AdvancedOP {
 	}
 }
 
+var getParamLongPrefixes = func() []helpers.BitPrefix {
+	prefixes := make([]helpers.BitPrefix, 0, 255)
+	for i := uint64(0); i < 255; i++ {
+		prefixes = append(prefixes, helpers.UIntPrefix(0xF88100|i, 24))
+	}
+	return prefixes
+}()
+
 func GETPARAMLONG(idx uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		NameSerializer: func() string {
 			return fmt.Sprintf("GETPARAMLONG %d", idx)
 		},
 		BitPrefix:     helpers.BytesPrefix(0xF8, 0x81),
+		Prefixes:      getParamLongPrefixes,
 		FixedSizeBits: 8,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(idx), 8)
@@ -209,6 +218,9 @@ func GETPARAMLONG(idx uint8) *helpers.AdvancedOP {
 			v, err := code.LoadUInt(8)
 			if err != nil {
 				return err
+			}
+			if v == 255 {
+				return vm.ErrCorruptedOpcode
 			}
 			idx = uint8(v)
 			return nil
@@ -265,8 +277,14 @@ func configRootFromC7(state *vm.State) (*cell.Cell, error) {
 	return cl, nil
 }
 
+func fitsSignedBits(x *big.Int, bits uint) bool {
+	min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), bits-1))
+	max := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bits-1), big.NewInt(1))
+	return x.Cmp(min) >= 0 && x.Cmp(max) <= 0
+}
+
 func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
-	if idx == nil || idx.Sign() < 0 || idx.BitLen() > 32 {
+	if idx == nil || !fitsSignedBits(idx, 32) {
 		return nil, nil
 	}
 
@@ -278,7 +296,7 @@ func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
 		return nil, nil
 	}
 
-	key := cell.BeginCell().MustStoreBigUInt(idx, 32).EndCell()
+	key := cell.BeginCell().MustStoreBigInt(idx, 32).EndCell()
 	val, err := root.AsDict(32).SetObserver(&state.Cells).LoadValue(key)
 	if err != nil {
 		if errors.Is(err, cell.ErrNoSuchKeyInDict) {

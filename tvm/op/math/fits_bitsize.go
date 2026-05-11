@@ -2,7 +2,6 @@ package math
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -70,30 +69,9 @@ func fitTinyOp(name string, prefix helpers.BitPrefix, bits uint8, unsigned, quie
 func fitStackOp(name string, prefix helpers.BitPrefix, unsigned, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if quiet {
-				bits, err := state.Stack.PopInt()
-				if err != nil {
-					return err
-				}
-				x, err := state.Stack.PopInt()
-				if err != nil {
-					return err
-				}
-				if bits == nil || x == nil || bits.Sign() < 0 || bits.Cmp(big.NewInt(1023)) > 0 {
-					return pushNaNOrOverflow(state, true)
-				}
-
-				width := int(bits.Int64())
-				if unsigned {
-					if !unsignedFitsBits(x, width) {
-						x = nil
-					}
-				} else if !signedFitsBits(x, width) {
-					x = nil
-				}
-				return pushMaybeInt(state, x, true)
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
 			}
-
 			bits, err := popIntRange(state, 0, 1023)
 			if err != nil {
 				return err

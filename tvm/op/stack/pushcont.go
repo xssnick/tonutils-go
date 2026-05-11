@@ -5,6 +5,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type OpPUSHCONT struct {
@@ -47,7 +48,7 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 	if prefix != 0x9 {
 		prefix2, err := code.LoadUInt(3)
 		if err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		op.typ = "BIG"
@@ -56,7 +57,7 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 		if prefix != 0x47 {
 			prefix3, err := code.LoadUInt(1)
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 
 			op.typ = "REF"
@@ -72,12 +73,12 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 	case "SMALL":
 		szBytes, err := code.LoadUInt(4)
 		if err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		data, err := code.LoadSlice(uint(szBytes * 8))
 		if err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		op.cont = cell.BeginCell().MustStoreSlice(data, uint(szBytes*8)).EndCell()
@@ -85,17 +86,17 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 	case "BIG":
 		refsNum, err := code.LoadUInt(2)
 		if err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		szBytes, err := code.LoadUInt(7)
 		if err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		data, err := code.LoadSlice(uint(szBytes * 8))
 		if err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		cn := cell.BeginCell().MustStoreSlice(data, uint(szBytes*8))
@@ -103,10 +104,10 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 		for i := 0; i < int(refsNum); i++ {
 			ref, err := code.PeekRefCell()
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 			if err = code.AdvanceExt(0, 1); err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 
 			err = cn.StoreRef(ref)
@@ -120,10 +121,10 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 	case "REF":
 		ref, err := code.PeekRefCell()
 		if err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 		if err = code.AdvanceExt(0, 1); err != nil {
-			return err
+			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		op.cont = ref
@@ -197,6 +198,11 @@ func (op *OpPUSHCONT) InstructionBits() int64 {
 }
 
 func (op *OpPUSHCONT) Interpret(state *vm.State) error {
+	if op.typ == "REF" {
+		if err := state.Cells.RegisterCellLoad(op.cont); err != nil {
+			return err
+		}
+	}
 	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{Code: op.cont.BeginParse(), Data: vm.ControlData{
 		NumArgs: vm.ControlDataAllArgs,
 		CP:      state.CP,

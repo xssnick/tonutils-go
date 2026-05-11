@@ -35,6 +35,10 @@ func newIfBitJmpOp(bit uint8, negate bool) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 6,
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			cont, err := state.Stack.PopContinuation()
 			if err != nil {
 				return err

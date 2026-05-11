@@ -122,6 +122,10 @@ func IFNOTJMPREF(code *cell.Cell) vm.OP {
 
 func IFREFELSE(code *cell.Cell) vm.OP {
 	return bindRefCodeOp(newRefCodeOp("IFREFELSE", helpers.BytesPrefix(0xE3, 0x0D), 1, func(state *vm.State, refs []*cell.Cell) error {
+		if err := checkStackDepth(state, 2); err != nil {
+			return err
+		}
+
 		cont, err := state.Stack.PopContinuation()
 		if err != nil {
 			return err
@@ -142,6 +146,10 @@ func IFREFELSE(code *cell.Cell) vm.OP {
 
 func IFELSEREF(code *cell.Cell) vm.OP {
 	return bindRefCodeOp(newRefCodeOp("IFELSEREF", helpers.BytesPrefix(0xE3, 0x0E), 1, func(state *vm.State, refs []*cell.Cell) error {
+		if err := checkStackDepth(state, 2); err != nil {
+			return err
+		}
+
 		cont, err := state.Stack.PopContinuation()
 		if err != nil {
 			return err

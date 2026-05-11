@@ -14,6 +14,9 @@ func init() {
 func LEQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err

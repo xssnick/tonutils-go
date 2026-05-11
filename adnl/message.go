@@ -98,7 +98,7 @@ func (m *partitionedMessage) AddPart(offset int32, data []byte) (bool, error) {
 		return false, nil
 	}
 
-	if len(m.buf[offset:]) < len(data) {
+	if int64(offset) > int64(len(m.buf)) || int64(offset)+int64(len(data)) > int64(len(m.buf)) {
 		return false, fmt.Errorf("part is bigger than defined message")
 	}
 	if m.knownOffsets[offset] {

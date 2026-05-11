@@ -105,7 +105,7 @@ func returnArgsCommon(state *vm.State, count int) error {
 	}
 	state.Stack = newStack
 
-	cont := vm.ForceControlData(state.Reg.C[0])
+	cont := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
 	data := cont.GetControlData()
 	if data.NumArgs >= 0 && data.NumArgs < copyCount {
 		return closureStackOverflow()
@@ -225,6 +225,10 @@ func RETURNVARARGS() *helpers.SimpleOP {
 func SETCONTVARARGS() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			more, err := state.Stack.PopIntRange(-1, 255)
 			if err != nil {
 				return err
@@ -243,6 +247,10 @@ func SETCONTVARARGS() *helpers.SimpleOP {
 func SETNUMVARARGS() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			more, err := state.Stack.PopIntRange(-1, 255)
 			if err != nil {
 				return err
@@ -277,6 +285,10 @@ func BLESS() *helpers.SimpleOP {
 func BLESSVARARGS() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			more, err := state.Stack.PopIntRange(-1, 255)
 			if err != nil {
 				return err

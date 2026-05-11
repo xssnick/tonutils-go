@@ -469,6 +469,10 @@ func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte,
 	}
 
 	if boxed {
+		if len(buf) < 4 {
+			return nil, fmt.Errorf("not enough bytes to parse boxed %s type id", t.tp.String())
+		}
+
 		if !bytes.Equal(t.id, buf[:4]) {
 			return nil, fmt.Errorf("invalid TL type id %s, want %s for %s", hex.EncodeToString(buf[:4]), hex.EncodeToString(t.id), t.tp.String())
 		}
@@ -488,6 +492,10 @@ func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte,
 	}
 	return buf, nil
 }
+
+// MaxVectorElements limits vector element count accepted from untrusted TL input.
+// Set it to 0 or a negative value to disable the limit.
+var MaxVectorElements = 1 << 20
 
 func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) ([]byte, error) {
 	if !si.finalized {
@@ -748,8 +756,15 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			if len(buf) < 4 {
 				return nil, fmt.Errorf("not enough bytes to parse vector field %s", field.String())
 			}
-			ln := int(binary.LittleEndian.Uint32(buf))
+			lnRaw := binary.LittleEndian.Uint32(buf)
 			buf = buf[4:]
+			if MaxVectorElements > 0 && lnRaw > uint32(MaxVectorElements) {
+				return nil, fmt.Errorf("too many elements in vector field %s: %d > %d", field.String(), lnRaw, MaxVectorElements)
+			}
+			if uint64(lnRaw) > uint64(len(buf)) {
+				return nil, fmt.Errorf("not enough bytes to parse vector field %s with %d elements", field.String(), lnRaw)
+			}
+			ln := int(lnRaw)
 
 			sl := reflect.MakeSlice(field.structInfo.tp, ln, ln)
 

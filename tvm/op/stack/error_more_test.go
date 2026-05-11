@@ -6,6 +6,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestStackGuardAndDeserializeErrors(t *testing.T) {
@@ -48,11 +49,21 @@ func TestStackGuardAndDeserializeErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("XchgLongDeserializeRejectsInvalidArguments", func(t *testing.T) {
+	t.Run("XchgLongInvalidArgumentsFailOnInterpret", func(t *testing.T) {
 		for _, raw := range []uint64{0x1001, 0x1021, 0x1022} {
 			code := cell.BeginCell().MustStoreUInt(raw, 16).EndCell().BeginParse()
-			if err := XCHG(0, 0).Deserialize(code); !errors.Is(err, vm.ErrCorruptedOpcode) {
-				t.Fatalf("expected corrupted opcode for XCHG %#x, got %v", raw, err)
+			op := XCHG(0, 0)
+			if err := op.Deserialize(code); err != nil {
+				t.Fatalf("deserialize XCHG %#x failed: %v", raw, err)
+			}
+			if got := op.InstructionBits(); got != 16 {
+				t.Fatalf("unexpected XCHG %#x instruction bits: got %d want 16", raw, got)
+			}
+
+			err := op.Interpret(newStackState(1, 2, 3))
+			var tvmErr vmerr.VMError
+			if !errors.As(err, &tvmErr) || tvmErr.Code != vmerr.CodeInvalidOpcode || tvmErr.Msg != "invalid XCHG arguments" {
+				t.Fatalf("expected invalid XCHG arguments for %#x, got %v", raw, err)
 			}
 		}
 	})

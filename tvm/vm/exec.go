@@ -111,7 +111,14 @@ func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
 			}
 			return newStack, nil
 		}
-		return s.Stack, nil
+		newStack, err := s.Stack.SplitTop(s.Stack.Len(), 0)
+		if err != nil {
+			return nil, err
+		}
+		if err = s.ConsumeStackGas(newStack); err != nil {
+			return nil, err
+		}
+		return newStack, nil
 	}
 
 	if p.cp >= 0 {
@@ -124,7 +131,14 @@ func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
 		}
 		return newStack, nil
 	}
-	return s.Stack, nil
+	newStack, err := s.Stack.SplitTop(s.Stack.Len(), 0)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.ConsumeStackGas(newStack); err != nil {
+		return nil, err
+	}
+	return newStack, nil
 }
 
 func (p continuationStackPlan) applyJumpStack(s *State) error {
@@ -190,7 +204,7 @@ func (s *State) Call(c Continuation) error {
 		},
 		Code: s.CurrentCode,
 	}
-	ret.Data.Save.C[0] = s.Reg.C[0]
+	ret.Data.Save.C[0] = copyContinuation(s.Reg.C[0])
 	s.Reg.C[0] = ret
 
 	return s.JumpTo(c)
@@ -223,7 +237,7 @@ func (s *State) CallArgs(c Continuation, passArgs, retArgs int) error {
 		},
 		Code: s.CurrentCode,
 	}
-	ret.Data.Save.C[0] = s.Reg.C[0]
+	ret.Data.Save.C[0] = copyContinuation(s.Reg.C[0])
 
 	s.Stack = newStack
 	s.Reg.C[0] = ret
@@ -324,16 +338,23 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 	if saveCR&7 != 0 {
 		cData := cc.GetControlData()
 		if saveCR&1 != 0 {
-			cData.Save.C[0] = s.Reg.C[0]
+			cData.Save.C[0] = copyContinuation(s.Reg.C[0])
 			s.Reg.C[0] = &QuitContinuation{ExitCode: 0}
 		}
 		if saveCR&2 != 0 {
-			cData.Save.C[1] = s.Reg.C[1]
+			cData.Save.C[1] = copyContinuation(s.Reg.C[1])
 			s.Reg.C[1] = &QuitContinuation{ExitCode: 1}
 		}
 		if saveCR&4 != 0 {
-			cData.Save.C[2] = s.Reg.C[2]
+			cData.Save.C[2] = copyContinuation(s.Reg.C[2])
 		}
 	}
 	return cc, nil
+}
+
+func copyContinuation(cont Continuation) Continuation {
+	if cont == nil {
+		return nil
+	}
+	return cont.Copy()
 }

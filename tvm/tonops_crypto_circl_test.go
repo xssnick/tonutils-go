@@ -373,6 +373,7 @@ func TestTonOpsCryptoCirclBLS(t *testing.T) {
 		g1b := testBLSG1BytesForScalar(3)
 		g2a := testBLSG2BytesForScalar(2)
 		g2b := testBLSG2BytesForScalar(3)
+		blsOrderInt := new(big.Int).SetBytes(circlbls.Order())
 
 		var wantG1Add circlbls.G1
 		var g1aPoint, g1bPoint circlbls.G1
@@ -452,6 +453,15 @@ func TestTonOpsCryptoCirclBLS(t *testing.T) {
 		_, res, err = runRawCode(
 			codeFromBuilders(t, funcsop.BLS_G1_MUL().Serialize()),
 			testSliceFromBytes(testInvalidBLSG1Bytes(t)),
+			blsOrderInt,
+		)
+		if code := exitCodeFromResult(res, err); code != vmerr.CodeUnknown {
+			t.Fatalf("unexpected malformed g1 mul order exit code: %d", code)
+		}
+
+		_, res, err = runRawCode(
+			codeFromBuilders(t, funcsop.BLS_G1_MUL().Serialize()),
+			testSliceFromBytes(testInvalidBLSG1Bytes(t)),
 			int64(3),
 		)
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeUnknown {
@@ -488,6 +498,16 @@ func TestTonOpsCryptoCirclBLS(t *testing.T) {
 		}
 		if !bytes.Equal(testSliceToBytes(t, gotG1Zero), testBLSG1ZeroBytes()) {
 			t.Fatalf("unexpected g1 multiexp zero invalid-point result")
+		}
+
+		_, res, err = runRawCode(
+			codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			testSliceFromBytes(testInvalidBLSG1Bytes(t)),
+			blsOrderInt,
+			int64(1),
+		)
+		if code := exitCodeFromResult(res, err); code != vmerr.CodeUnknown {
+			t.Fatalf("unexpected malformed g1 multiexp order exit code: %d", code)
 		}
 
 		var wantG1Multi circlbls.G1
@@ -631,6 +651,15 @@ func TestTonOpsCryptoCirclBLS(t *testing.T) {
 		_, res, err = runRawCode(
 			codeFromBuilders(t, funcsop.BLS_G2_MUL().Serialize()),
 			testSliceFromBytes(testInvalidBLSG2Bytes(t)),
+			blsOrderInt,
+		)
+		if code := exitCodeFromResult(res, err); code != vmerr.CodeUnknown {
+			t.Fatalf("unexpected malformed g2 mul order exit code: %d", code)
+		}
+
+		_, res, err = runRawCode(
+			codeFromBuilders(t, funcsop.BLS_G2_MUL().Serialize()),
+			testSliceFromBytes(testInvalidBLSG2Bytes(t)),
 			int64(3),
 		)
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeUnknown {
@@ -667,6 +696,16 @@ func TestTonOpsCryptoCirclBLS(t *testing.T) {
 		}
 		if !bytes.Equal(testSliceToBytes(t, gotG2Zero), testBLSG2ZeroBytes()) {
 			t.Fatalf("unexpected g2 multiexp zero invalid-point result")
+		}
+
+		_, res, err = runRawCode(
+			codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			testSliceFromBytes(testInvalidBLSG2Bytes(t)),
+			blsOrderInt,
+			int64(1),
+		)
+		if code := exitCodeFromResult(res, err); code != vmerr.CodeUnknown {
+			t.Fatalf("unexpected malformed g2 multiexp order exit code: %d", code)
 		}
 
 		var wantG2Multi circlbls.G2

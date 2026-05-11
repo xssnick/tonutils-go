@@ -12,7 +12,9 @@ import (
 
 func init() {
 	vm.List = append(vm.List,
+		func() vm.OP { return strefAlias() },
 		func() vm.OP { return STBREF() },
+		func() vm.OP { return stsliceAlias() },
 		func() vm.OP { return STBREFR() },
 		func() vm.OP { return STREFR() },
 		func() vm.OP { return STSLICER() },
@@ -54,6 +56,18 @@ func pushStoreQuietStatus(state *vm.State, failed bool) error {
 		return pushBuilderInt(state, -1)
 	}
 	return pushBuilderInt(state, 0)
+}
+
+func strefAlias() *helpers.SimpleOP {
+	op := STREF()
+	op.BitPrefix = helpers.BytesPrefix(0xCF, 0x10)
+	return op
+}
+
+func stsliceAlias() *helpers.SimpleOP {
+	op := STSLICE()
+	op.BitPrefix = helpers.BytesPrefix(0xCF, 0x12)
+	return op
 }
 
 func endBuilderCell(builder *cell.Builder) (*cell.Cell, error) {
@@ -590,6 +604,17 @@ func BCHKBITSIMM(bits uint, quiet bool) *helpers.AdvancedOP {
 func bchkOp(name string, prefix helpers.BitPrefix, needBits, needRefs, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			required := 1
+			if needRefs {
+				required++
+			}
+			if needBits {
+				required++
+			}
+			if err := checkStackDepth(state, required); err != nil {
+				return err
+			}
+
 			var refs uint64
 			var bits uint64
 			var err error
@@ -647,6 +672,14 @@ func BCHKBITREFSQ() *helpers.SimpleOP {
 func sameStoreOp(name string, prefix helpers.BitPrefix, fixed *bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			required := 2
+			if fixed == nil {
+				required++
+			}
+			if err := checkStackDepth(state, required); err != nil {
+				return err
+			}
+
 			var bit bool
 			var err error
 			if fixed == nil {

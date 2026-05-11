@@ -19,16 +19,47 @@ func TestFromBOCMultiRootReaderLazyRequiresTrustedHashes(t *testing.T) {
 	}
 }
 
-func TestFromBOCMultiRootReaderLazyRequiresRootHashes(t *testing.T) {
-	root := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	boc := root.ToBOCWithOptions(BOCSerializeOptions{WithIndex: true})
+func TestFromBOCMultiRootReaderLazyIndexesBOCWithoutRootHashes(t *testing.T) {
+	child := BeginCell().MustStoreUInt(0xCD, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(child).EndCell()
 
-	_, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(boc), BOCParseOptions{
-		Lazy:          true,
-		TrustedHashes: true,
-	})
-	if err == nil || !strings.Contains(err.Error(), "does not store hashes") {
-		t.Fatalf("expected root hashes error, got %v", err)
+	for name, options := range map[string]BOCSerializeOptions{
+		"indexed":    {WithIndex: true},
+		"sequential": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			boc := root.ToBOCWithOptions(options)
+
+			roots, unique, err := FromBOCMultiRootReader(NewBOCNoCopyReader(boc), BOCParseOptions{
+				Lazy:          true,
+				TrustedHashes: true,
+			})
+			if err != nil {
+				t.Fatalf("lazy parse boc without root hashes: %v", err)
+			}
+			if unique != nil {
+				t.Fatalf("lazy parse should not return eager unique cells, got %d", len(unique))
+			}
+			if len(roots) != 1 {
+				t.Fatalf("unexpected roots count: got %d want 1", len(roots))
+			}
+			if roots[0].HashKey() != root.HashKey() {
+				t.Fatalf("unexpected root hash: got=%x want=%x", roots[0].Hash(), root.Hash())
+			}
+
+			stored := roots[0].rawRefs()
+			if len(stored) != 1 || !stored[0].IsLazy() {
+				t.Fatal("expected root ref to be a lazy indexed boundary")
+			}
+
+			ref, err := roots[0].PeekRef(0)
+			if err != nil {
+				t.Fatalf("load lazy indexed ref: %v", err)
+			}
+			if ref.HashKey() != child.HashKey() {
+				t.Fatalf("unexpected child hash: got=%x want=%x", ref.Hash(), child.Hash())
+			}
+		})
 	}
 }
 
@@ -198,23 +229,30 @@ func TestFromBOCMultiRootReaderLazyNoIndexWithTopHash(t *testing.T) {
 	}
 }
 
-func TestFromBOCMultiRootReaderLazyRejectsCPPBocHandsWithoutHashes(t *testing.T) {
+func TestFromBOCMultiRootReaderLazyIndexesCPPBocHandsWithoutHashes(t *testing.T) {
 	fixtures := [][]byte{
 		[]byte("h\377e\363\001\001\002\001\000*\004*\201\001P\001\210H\001\004\024\271\313\264\253\277\265\350dN\250{,\372\021\012:I\354\322|\255\245\330\204+&\345\214\026\300\064\000\001"),
 		[]byte("\254\303\247(\001\001\002\001\000*\004*\201\001P\001\210H\001\004\024\271\313\264\253\277\265\350dN\250{,\372\021\012:I\354\322|\255\245\330\204+&\345\214\026\300\064\000\001\032\231\063\274"),
 	}
 
 	for _, fixture := range fixtures {
-		if _, err := FromBOC(fixture); err != nil {
+		eager, err := FromBOC(fixture)
+		if err != nil {
 			t.Fatalf("C++ BocHands fixture should parse eagerly: %v", err)
 		}
 
-		_, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(fixture), BOCParseOptions{
+		roots, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(fixture), BOCParseOptions{
 			Lazy:          true,
 			TrustedHashes: true,
 		})
-		if err == nil || !strings.Contains(err.Error(), "does not store hashes") {
-			t.Fatalf("expected lazy root hashes error, got %v", err)
+		if err != nil {
+			t.Fatalf("lazy parse C++ BocHands fixture: %v", err)
+		}
+		if len(roots) != 1 {
+			t.Fatalf("unexpected roots count: got %d want 1", len(roots))
+		}
+		if roots[0].HashKey() != eager.HashKey() {
+			t.Fatalf("unexpected root hash: got=%x want=%x", roots[0].Hash(), eager.Hash())
 		}
 	}
 }

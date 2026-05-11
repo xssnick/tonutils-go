@@ -92,17 +92,21 @@ func Error(code int64, msg ...string) VMError {
 		case CodeIntOverflow:
 			e.Msg = "integer overflow"
 		case CodeRangeCheck:
-			e.Msg = "range check failed"
+			e.Msg = "integer out of range"
 		case CodeInvalidOpcode:
 			e.Msg = "invalid opcode"
 		case CodeTypeCheck:
-			e.Msg = "type check failed"
+			e.Msg = "type check error"
 		case CodeCellOverflow:
 			e.Msg = "cell overflow"
 		case CodeCellUnderflow:
 			e.Msg = "cell underflow"
 		case CodeDict:
 			e.Msg = "dictionary error"
+		case CodeUnknown:
+			e.Msg = "unknown error"
+		case CodeFatal:
+			e.Msg = "fatal error"
 		}
 	} else {
 		e.Msg = msg[0]

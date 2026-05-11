@@ -142,13 +142,13 @@ func (op *OpSTSLICECONST) Deserialize(code *cell.Slice) error {
 	}
 	arg, err := code.LoadUInt(5)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	refs := int((arg >> 3) & 0x3)
 	bits := uint((arg&0x7)*8 + 2)
 	sl, err := code.FetchSubslice(bits, refs)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	sl.RemoveTrailing()
 	op.value = sl

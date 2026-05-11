@@ -6,6 +6,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type OpPUSHSLICEINLINE struct {
@@ -31,7 +32,11 @@ func PUSHSLICEINLINE(value *cell.Slice) *OpPUSHSLICEINLINE {
 		Prefixed: helpers.NewPrefixed(
 			helpers.UIntPrefix(0x8B, 8),
 			helpers.UIntPrefix(0x8C, 8),
-			helpers.UIntPrefix(0x8D, 8),
+			helpers.UIntPrefix((0x8D<<3)|0, 11),
+			helpers.UIntPrefix((0x8D<<3)|1, 11),
+			helpers.UIntPrefix((0x8D<<3)|2, 11),
+			helpers.UIntPrefix((0x8D<<3)|3, 11),
+			helpers.UIntPrefix((0x8D<<3)|4, 11),
 		),
 		value: value.Copy(),
 		form:  "LONG",
@@ -119,7 +124,7 @@ func (op *OpPUSHSLICEINLINE) Deserialize(code *cell.Slice) error {
 
 	slice, err := code.FetchSubslice(bits, refs)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	slice.RemoveTrailing()
 	op.value = slice

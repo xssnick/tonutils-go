@@ -399,17 +399,11 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 	t.Run("LongPushPopRoundTrip", func(t *testing.T) {
 		pushDst := PUSHL(0)
 		pushCode := PUSHL(2).Serialize().EndCell().BeginParse()
-		if _, err := pushCode.LoadUInt(8); err != nil {
-			t.Fatalf("failed to skip PUSHL prefix: %v", err)
-		}
 		if err := pushDst.Deserialize(pushCode); err != nil {
 			t.Fatalf("push deserialize failed: %v", err)
 		}
 		popDst := POPL(0)
 		popCode := POPL(1).Serialize().EndCell().BeginParse()
-		if _, err := popCode.LoadUInt(8); err != nil {
-			t.Fatalf("failed to skip POPL prefix: %v", err)
-		}
 		if err := popDst.Deserialize(popCode); err != nil {
 			t.Fatalf("pop deserialize failed: %v", err)
 		}
@@ -827,9 +821,9 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 		},
 		{
 			name:    "REVERSE",
-			op:      REVERSE(1, 1),
-			decoded: REVERSE(0, 0),
-			text:    "1, 1 REVERSE",
+			op:      REVERSE(3, 1),
+			decoded: REVERSE(2, 0),
+			text:    "3, 1 REVERSE",
 			bits:    16,
 			expected: func(vals []int64) []int64 {
 				simReverse(vals, 3, 1)
@@ -870,11 +864,11 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 		{
 			name:    "BLKSWAP",
 			op:      BLKSWAP(2, 1),
-			decoded: BLKSWAP(0, 0),
+			decoded: BLKSWAP(1, 1),
 			text:    "2,1 BLKSWAP",
 			bits:    16,
 			expected: func(vals []int64) []int64 {
-				return simBlockSwap(vals, 3, 2)
+				return simBlockSwap(vals, 2, 1)
 			},
 		},
 	}

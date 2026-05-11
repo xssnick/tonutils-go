@@ -1,7 +1,11 @@
 package cell
 
 func (b *Builder) CanExtendBy(bits uint, refs uint) bool {
-	return b.bitsSz+bits < 1024 && int(b.refsNum)+int(refs) <= 4
+	if b.bitsSz >= 1024 {
+		return false
+	}
+	refsLeft := 4 - int(b.refsNum)
+	return refsLeft >= 0 && bits < 1024-b.bitsSz && refs <= uint(refsLeft)
 }
 
 func (b *Builder) Depth() uint16 {

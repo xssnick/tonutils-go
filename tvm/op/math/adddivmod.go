@@ -13,6 +13,9 @@ func init() {
 func ADDDIVMOD() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
 			z, err := popIntFinite(state)
 			if err != nil {
 				return err

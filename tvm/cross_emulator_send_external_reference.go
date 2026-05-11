@@ -57,8 +57,8 @@ func runReferenceSendExternal(code, data *cell.Cell, addr *address.Address, body
 	return runReferenceSendMessageWithConfig(code, data, body, 0, false, referenceSendMessageConfig{
 		address:  addr,
 		now:      now,
-		balance:  walletSendTestBalance,
-		randSeed: walletSendTestSeed,
+		balance:  referenceDefaultWalletSendBalance,
+		randSeed: referenceDefaultWalletSendSeed,
 	})
 }
 
@@ -66,8 +66,8 @@ func runReferenceSendInternal(code, data *cell.Cell, addr *address.Address, body
 	return runReferenceSendMessageWithConfig(code, data, body, amount, true, referenceSendMessageConfig{
 		address:  addr,
 		now:      now,
-		balance:  walletSendTestBalance,
-		randSeed: walletSendTestSeed,
+		balance:  referenceDefaultWalletSendBalance,
+		randSeed: referenceDefaultWalletSendSeed,
 	})
 }
 
@@ -76,10 +76,10 @@ func runReferenceSendMessageWithConfig(code, data, body *cell.Cell, amount uint6
 	dataB64 := base64.StdEncoding.EncodeToString(data.ToBOC())
 	bodyB64 := base64.StdEncoding.EncodeToString(body.ToBOC())
 	if cfg.balance == 0 {
-		cfg.balance = walletSendTestBalance
+		cfg.balance = referenceDefaultWalletSendBalance
 	}
 	if len(cfg.randSeed) == 0 {
-		cfg.randSeed = walletSendTestSeed
+		cfg.randSeed = referenceDefaultWalletSendSeed
 	}
 	seedHex := fmt.Sprintf("%x", cfg.randSeed)
 

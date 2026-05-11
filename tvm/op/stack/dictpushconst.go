@@ -5,6 +5,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 	"math/big"
 )
 
@@ -31,25 +32,21 @@ func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
 		return err
 	}
 
-	hasRef, err := code.LoadBoolBit()
-	if err != nil {
-		return err
-	}
-	if !hasRef {
-		return vm.ErrCorruptedOpcode
+	if _, err := code.LoadBoolBit(); err != nil {
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	var ref *cell.Cell
 	ref, err = code.PeekRefCell()
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	if err = code.AdvanceExt(0, 1); err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 
 	pfx, err := code.LoadUInt(10)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 
 	op.pfx = pfx

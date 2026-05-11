@@ -5,6 +5,7 @@ package tvm
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,9 +13,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	localec "github.com/xssnick/tonutils-go/tvm/internal/secp256k1"
+	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -28,17 +31,41 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	}
 	// This suite targets the subset of tonops that is both run_method-compatible
 	// and currently stable against the official reference harness. Transaction-only
-	// gas ops such as ACCEPT/SETGASLIMIT/COMMIT stay local-only. A few additional
-	// tonops paths are intentionally excluded here because the harness exposes
-	// known semantic mismatches that still need opcode/runtime fixes.
+	// gas ops such as ACCEPT/SETGASLIMIT/COMMIT stay local-only or are covered by
+	// dedicated emulator/transaction parity suites when the run_method harness would
+	// compare different environments.
 
 	configValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	// The raw C++ harness takes c7 directly, but version-gated opcodes still
+	// read global version from config param 8 inside that c7.
+	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.DefaultGlobalVersion})
+	if err != nil {
+		t.Fatalf("failed to build global version config: %v", err)
+	}
 	configRoot := mustConfigDictCell(t, map[uint32]*cell.Cell{
-		7: configValue,
+		7:                                    configValue,
+		uint32(tlb.ConfigParamGlobalVersion): globalVersionCell,
+	})
+	negativeConfigValue := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	signedConfigRoot := mustConfigDictCell(t, map[uint32]*cell.Cell{
+		^uint32(0):                           negativeConfigValue,
+		uint32(tlb.ConfigParamGlobalVersion): globalVersionCell,
 	})
 	version13RefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vm.DefaultGlobalVersion))
 	feeC7 := feeTestC7(t)
 	myCode := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	inMsgParams := tuple.NewTupleValue(
+		big.NewInt(1),
+		big.NewInt(0),
+		cell.BeginCell().MustStoreAddr(tonopsTestAddr).ToSlice(),
+		big.NewInt(333),
+		big.NewInt(tonopsTestLogicalTime),
+		big.NewInt(tonopsTestTime.Unix()),
+		big.NewInt(4444),
+		tuple.NewTupleValue(big.NewInt(5555), cell.BeginCell().MustStoreUInt(0xEF, 8).EndCell()),
+		cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
+		cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell(),
+	)
 	c7 := makeTonopsTestC7(t, tonopsTestC7Config{
 		ConfigRoot:    configRoot,
 		MyCode:        myCode,
@@ -50,8 +77,14 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			2: int64(222),
 		},
 		ExtraParams: map[int]any{
-			2: int64(42),
+			2:   int64(42),
+			15:  int64(6666),
+			17:  inMsgParams,
+			200: int64(20042),
 		},
+	})
+	signedConfigC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot: signedConfigRoot,
 	})
 	sendMsgCell, err := tlb.ToCell(&tlb.InternalMessage{
 		IHRDisabled: true,
@@ -68,7 +101,11 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	dataSizeLeaf := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
 	dataSizeRoot := cell.BeginCell().MustStoreRef(dataSizeLeaf).MustStoreRef(dataSizeLeaf).EndCell()
 	stdAddrSlice := cell.BeginCell().MustStoreAddr(tonopsTestAddr).ToSlice()
+	extAddrSlice := cell.BeginCell().MustStoreAddr(address.NewAddressExt(0, 256, bytes.Repeat([]byte{0x33}, 32))).ToSlice()
+	varAddrSlice := cell.BeginCell().MustStoreAddr(address.NewAddressVar(0, tonopsTestAddr.Workchain(), 256, tonopsTestAddr.Data())).ToSlice()
 	addrNoneTail := cell.BeginCell().MustStoreUInt(0, 2).MustStoreUInt(0xA, 4).ToSlice()
+	addrNoneSlice := cell.BeginCell().MustStoreUInt(0, 2).ToSlice()
+	shortStdAddrSlice := cell.BeginCell().MustStoreUInt(0b10, 2).ToSlice()
 	invalidAnycast := cell.BeginCell().
 		MustStoreUInt(0b10, 2).
 		MustStoreBoolBit(true).
@@ -115,6 +152,20 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	copy(p256SigS[32-len(p256SliceR.Bytes()):32], p256SliceR.Bytes())
 	copy(p256SigS[64-len(p256SliceS.Bytes()):64], p256SliceS.Bytes())
 	badP256Key := append([]byte{0x05}, bytes.Repeat([]byte{0x01}, 32)...)
+	edKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x11}, ed25519.SeedSize))
+	edPub := edKey.Public().(ed25519.PublicKey)
+	edHash := bytes.Repeat([]byte{0x44}, 32)
+	edSigU := ed25519.Sign(edKey, edHash)
+	edSliceData := []byte("ed25519-signed-slice")
+	edSigS := ed25519.Sign(edKey, edSliceData)
+	extraCurrency := cell.NewDict(32)
+	if _, err = extraCurrency.SetBuilderWithMode(
+		cell.BeginCell().MustStoreUInt(7, 32).EndCell(),
+		cell.BeginCell().MustStoreVarUInt(12345, 32),
+		cell.DictSetModeSet,
+	); err != nil {
+		t.Fatalf("failed to seed extra currency dict: %v", err)
+	}
 
 	type testCase struct {
 		name   string
@@ -176,6 +227,36 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit: 0,
 		},
 		{
+			name: "chksignu_success",
+			code: codeFromBuilders(t, funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(edHash),
+				cell.BeginCell().MustStoreSlice(edSigU, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+			exit: 0,
+		},
+		{
+			name: "chksignu_bad_key",
+			code: codeFromBuilders(t, funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(edHash),
+				cell.BeginCell().MustStoreSlice(edSigU, 512).ToSlice(),
+				new(big.Int).SetBytes(bytes.Repeat([]byte{0x22}, 32)),
+			},
+			exit: 0,
+		},
+		{
+			name: "chksigns_success",
+			code: codeFromBuilders(t, funcsop.CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(edSliceData, uint(len(edSliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(edSigS, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+			exit: 0,
+		},
+		{
 			name: "p256_chksignu_success",
 			code: codeFromBuilders(t, funcsop.P256_CHKSIGNU().Serialize()),
 			stack: []any{
@@ -220,6 +301,83 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			code: codeFromBuilders(t, funcsop.GETPARAM(2).Serialize()),
 			exit: 0,
 			c7:   c7,
+		},
+		{
+			name: "now",
+			code: codeFromBuilders(t, funcsop.NOW().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "getparamlong_high_index",
+			code: codeFromBuilders(t, funcsop.GETPARAMLONG(200).Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "globalid",
+			code: codeFromBuilders(t, funcsop.GLOBALID().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "gasconsumed_after_push",
+			code: codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize(), funcsop.GASCONSUMED().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "accept_then_gasconsumed",
+			code: codeFromBuilders(t, funcsop.ACCEPT().Serialize(), funcsop.GASCONSUMED().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name:  "setgaslimit_then_push",
+			code:  codeFromBuilders(t, funcsop.SETGASLIMIT().Serialize(), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(1000)},
+			exit:  0,
+			c7:    c7,
+		},
+		{
+			name:  "setgaslimit_too_low_out_of_gas",
+			code:  codeFromBuilders(t, funcsop.SETGASLIMIT().Serialize()),
+			stack: []any{int64(1)},
+			exit:  int32(^vmerr.CodeOutOfGas),
+			c7:    c7,
+		},
+		{
+			name:  "setgaslimit_huge_then_gasconsumed",
+			code:  codeFromBuilders(t, funcsop.SETGASLIMIT().Serialize(), funcsop.GASCONSUMED().Serialize()),
+			stack: []any{new(big.Int).Lsh(big.NewInt(1), 80)},
+			exit:  0,
+			c7:    c7,
+		},
+		{
+			name: "commit_then_push",
+			code: codeFromBuilders(t, funcsop.COMMIT().Serialize(), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "setcp_zero",
+			code: codeFromBuilders(t, funcsop.SETCP(0).Serialize(), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name:  "setcpx_zero",
+			code:  codeFromBuilders(t, funcsop.SETCPX().Serialize(), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(0)},
+			exit:  0,
+			c7:    c7,
+		},
+		{
+			name:  "setcpx_unsupported",
+			code:  codeFromBuilders(t, funcsop.SETCPX().Serialize()),
+			stack: []any{int64(1)},
+			exit:  int32(vmerr.CodeInvalidOpcode),
+			c7:    c7,
 		},
 		{
 			name: "blocklt",
@@ -276,6 +434,18 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:   c7,
 		},
 		{
+			name: "unpackedconfigtuple",
+			code: codeFromBuilders(t, funcsop.UNPACKEDCONFIGTUPLE().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "duepayment",
+			code: codeFromBuilders(t, funcsop.DUEPAYMENT().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
 			name: "configdict",
 			code: codeFromBuilders(t, funcsop.CONFIGDICT().Serialize()),
 			exit: 0,
@@ -289,9 +459,16 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    c7,
 		},
 		{
+			name:  "configparam_signed_negative_key",
+			code:  codeFromBuilders(t, funcsop.CONFIGPARAM().Serialize()),
+			stack: []any{int64(-1)},
+			exit:  0,
+			c7:    signedConfigC7,
+		},
+		{
 			name:  "configparam_miss",
 			code:  codeFromBuilders(t, funcsop.CONFIGPARAM().Serialize()),
-			stack: []any{int64(8)},
+			stack: []any{int64(99)},
 			exit:  0,
 			c7:    c7,
 		},
@@ -305,7 +482,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		{
 			name:  "configoptparam_miss",
 			code:  codeFromBuilders(t, funcsop.CONFIGOPTPARAM().Serialize()),
-			stack: []any{int64(8)},
+			stack: []any{int64(99)},
 			exit:  0,
 			c7:    c7,
 		},
@@ -342,6 +519,78 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack: []any{nil, int64(10)},
 			exit:  0,
 			c7:    c7,
+		},
+		{
+			name: "inmsgparams",
+			code: codeFromBuilders(t, funcsop.INMSGPARAMS().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsgparam_long_form",
+			code: codeFromBuilders(t, funcsop.INMSGPARAM(2).Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_value_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_VALUE().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_bounce_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_BOUNCE().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_bounced_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_BOUNCED().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_src_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_SRC().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_fwdfee_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_FWDFEE().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_lt_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_LT().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_utime_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_UTIME().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_origvalue_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_ORIGVALUE().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_valueextra_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_VALUEEXTRA().Serialize()),
+			exit: 0,
+			c7:   c7,
+		},
+		{
+			name: "inmsg_stateinit_alias",
+			code: codeFromBuilders(t, funcsop.INMSG_STATEINIT().Serialize()),
+			exit: 0,
+			c7:   c7,
 		},
 		{
 			name: "prevblocksinfotuple",
@@ -528,6 +777,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "sdatasizeq_success",
+			code:  codeFromBuilders(t, funcsop.SDATASIZEQ().Serialize()),
+			stack: []any{dataSizeRoot.BeginParse(), int64(10)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
 			name:  "ldvarint16",
 			code:  codeFromBuilders(t, funcsop.LDVARINT16().Serialize()),
 			stack: []any{cell.BeginCell().MustStoreUInt(1, 4).MustStoreInt(-17, 8).ToSlice()},
@@ -563,6 +819,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "stvaruint32",
+			code:  codeFromBuilders(t, funcsop.STVARUINT32().Serialize()),
+			stack: []any{cell.BeginCell(), int64(17)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
 			name:  "ldmsgaddr_ok",
 			code:  codeFromBuilders(t, funcsop.LDMSGADDR().Serialize()),
 			stack: []any{stdAddrSlice},
@@ -577,6 +840,27 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "ldmsgaddr_none",
+			code:  codeFromBuilders(t, funcsop.LDMSGADDR().Serialize()),
+			stack: []any{addrNoneSlice},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "ldmsgaddr_ext",
+			code:  codeFromBuilders(t, funcsop.LDMSGADDR().Serialize()),
+			stack: []any{extAddrSlice},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "ldmsgaddrq_short_std",
+			code:  codeFromBuilders(t, funcsop.LDMSGADDRQ().Serialize()),
+			stack: []any{shortStdAddrSlice},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
 			name:  "ldmsgaddrq_fail",
 			code:  codeFromBuilders(t, funcsop.LDMSGADDRQ().Serialize()),
 			stack: []any{cell.BeginCell().MustStoreUInt(0b11, 2).ToSlice()},
@@ -587,6 +871,20 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			name:  "parsemsgaddr",
 			code:  codeFromBuilders(t, funcsop.PARSEMSGADDR().Serialize()),
 			stack: []any{stdAddrSlice},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "parsemsgaddr_ext",
+			code:  codeFromBuilders(t, funcsop.PARSEMSGADDR().Serialize()),
+			stack: []any{extAddrSlice},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "parsemsgaddrq_short_std",
+			code:  codeFromBuilders(t, funcsop.PARSEMSGADDRQ().Serialize()),
+			stack: []any{shortStdAddrSlice},
 			exit:  0,
 			c7:    feeC7,
 		},
@@ -626,6 +924,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "rewritevaraddr_var_underflow",
+			code:  codeFromBuilders(t, funcsop.REWRITEVARADDR().Serialize()),
+			stack: []any{varAddrSlice},
+			exit:  int32(vmerr.CodeCellUnderflow),
+			c7:    feeC7,
+		},
+		{
 			name:   "ldstdaddr",
 			code:   codeFromBuilders(t, funcsop.LDSTDADDR().Serialize()),
 			stack:  []any{stdAddrSlice},
@@ -637,6 +942,14 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			name:   "ldstdaddrq",
 			code:   codeFromBuilders(t, funcsop.LDSTDADDRQ().Serialize()),
 			stack:  []any{stdAddrSlice},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
+		},
+		{
+			name:   "ldstdaddrq_var_fail",
+			code:   codeFromBuilders(t, funcsop.LDSTDADDRQ().Serialize()),
+			stack:  []any{varAddrSlice},
 			exit:   0,
 			c7:     feeC7,
 			refCfg: version13RefCfg,
@@ -658,6 +971,14 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			refCfg: version13RefCfg,
 		},
 		{
+			name:   "ldoptstdaddrq_std",
+			code:   codeFromBuilders(t, funcsop.LDOPTSTDADDRQ().Serialize()),
+			stack:  []any{stdAddrSlice},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
+		},
+		{
 			name:   "ststdaddr",
 			code:   codeFromBuilders(t, funcsop.STSTDADDR().Serialize()),
 			stack:  []any{stdAddrSlice, cell.BeginCell()},
@@ -669,6 +990,14 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			name:   "ststdaddrq",
 			code:   codeFromBuilders(t, funcsop.STSTDADDRQ().Serialize()),
 			stack:  []any{stdAddrSlice, cell.BeginCell()},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
+		},
+		{
+			name:   "ststdaddrq_var_fail",
+			code:   codeFromBuilders(t, funcsop.STSTDADDRQ().Serialize()),
+			stack:  []any{varAddrSlice, cell.BeginCell()},
 			exit:   0,
 			c7:     feeC7,
 			refCfg: version13RefCfg,
@@ -690,6 +1019,14 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			refCfg: version13RefCfg,
 		},
 		{
+			name:   "stoptstdaddr_std",
+			code:   codeFromBuilders(t, funcsop.STOPTSTDADDR().Serialize()),
+			stack:  []any{stdAddrSlice, cell.BeginCell()},
+			exit:   0,
+			c7:     feeC7,
+			refCfg: version13RefCfg,
+		},
+		{
 			name:  "rawreserve",
 			code:  codeFromBuilders(t, funcsop.RAWRESERVE().Serialize()),
 			stack: []any{big.NewInt(777), int64(0)},
@@ -697,9 +1034,30 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "rawreserve_mode_2",
+			code:  codeFromBuilders(t, funcsop.RAWRESERVE().Serialize()),
+			stack: []any{big.NewInt(777), int64(2)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "rawreserve_negative_range",
+			code:  codeFromBuilders(t, funcsop.RAWRESERVE().Serialize()),
+			stack: []any{big.NewInt(-1), int64(0)},
+			exit:  int32(vmerr.CodeRangeCheck),
+			c7:    feeC7,
+		},
+		{
 			name:  "rawreservex",
 			code:  codeFromBuilders(t, funcsop.RAWRESERVEX().Serialize()),
 			stack: []any{big.NewInt(777), nil, int64(0)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "rawreservex_extra_currency",
+			code:  codeFromBuilders(t, funcsop.RAWRESERVEX().Serialize()),
+			stack: []any{big.NewInt(777), extraCurrency.AsCell(), int64(2)},
 			exit:  0,
 			c7:    feeC7,
 		},
@@ -718,9 +1076,37 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "setlibcode_mode_0",
+			code:  codeFromBuilders(t, funcsop.SETLIBCODE().Serialize()),
+			stack: []any{sendMsgCell, int64(0)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "setlibcode_invalid_mode",
+			code:  codeFromBuilders(t, funcsop.SETLIBCODE().Serialize()),
+			stack: []any{sendMsgCell, int64(4)},
+			exit:  int32(vmerr.CodeRangeCheck),
+			c7:    feeC7,
+		},
+		{
 			name:  "changelib",
 			code:  codeFromBuilders(t, funcsop.CHANGELIB().Serialize()),
 			stack: []any{big.NewInt(1), int64(1)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "changelib_negative_hash",
+			code:  codeFromBuilders(t, funcsop.CHANGELIB().Serialize()),
+			stack: []any{big.NewInt(-1), int64(0)},
+			exit:  int32(vmerr.CodeRangeCheck),
+			c7:    feeC7,
+		},
+		{
+			name:  "changelib_mode_0",
+			code:  codeFromBuilders(t, funcsop.CHANGELIB().Serialize()),
+			stack: []any{big.NewInt(1), int64(0)},
 			exit:  0,
 			c7:    feeC7,
 		},
@@ -736,6 +1122,57 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			code:  codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
 			stack: []any{sendMsgCell, int64(1)},
 			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "sendmsg_ignore_errors_mode",
+			code:  codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
+			stack: []any{sendMsgCell, int64(3)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "sendmsg_invalid_mode_range",
+			code:  codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
+			stack: []any{sendMsgCell, int64(256)},
+			exit:  int32(vmerr.CodeRangeCheck),
+			c7:    feeC7,
+		},
+		{
+			name: "sendrawmsg_visible_c5",
+			code: codeFromBuilders(t,
+				funcsop.SENDRAWMSG().Serialize(),
+				execop.PUSHCTR(5).Serialize(),
+			),
+			stack: []any{sendMsgCell, int64(1)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name: "sendrawmsg_mode_0_visible_c5",
+			code: codeFromBuilders(t,
+				funcsop.SENDRAWMSG().Serialize(),
+				execop.PUSHCTR(5).Serialize(),
+			),
+			stack: []any{sendMsgCell, int64(0)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name: "sendrawmsg_mode_128_visible_c5",
+			code: codeFromBuilders(t,
+				funcsop.SENDRAWMSG().Serialize(),
+				execop.PUSHCTR(5).Serialize(),
+			),
+			stack: []any{sendMsgCell, int64(128)},
+			exit:  0,
+			c7:    feeC7,
+		},
+		{
+			name:  "sendrawmsg_invalid_mode_range",
+			code:  codeFromBuilders(t, funcsop.SENDRAWMSG().Serialize()),
+			stack: []any{sendMsgCell, int64(256)},
+			exit:  int32(vmerr.CodeRangeCheck),
 			c7:    feeC7,
 		},
 	}

@@ -18,7 +18,9 @@ import (
 	"unsafe"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
@@ -29,6 +31,8 @@ type referenceGetMethodConfig struct {
 	RandSeed   []byte
 	ConfigRoot *cell.Cell
 	Libs       *cell.Cell
+	PrevBlocks tuple.Tuple
+	GasLimit   int64
 }
 
 type referenceRunGetMethodJSON struct {
@@ -54,10 +58,10 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 		return nil, fmt.Errorf("reference get method address is nil")
 	}
 	if cfg.Balance == 0 {
-		cfg.Balance = uint64(tonopsTestBalance.Int64())
+		cfg.Balance = referenceDefaultTonopsBalance
 	}
 	if len(cfg.RandSeed) == 0 {
-		cfg.RandSeed = tonopsTestSeed
+		cfg.RandSeed = referenceDefaultTonopsSeed
 	}
 
 	codeB64 := base64.StdEncoding.EncodeToString(code.ToBOC())
@@ -100,6 +104,22 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 		return nil, fmt.Errorf("failed to initialize reference c7")
 	}
 
+	if cfg.PrevBlocks.Len() > 0 {
+		prevBlocksCell, err := stackValueToCell(cfg.PrevBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize reference prev blocks info: %w", err)
+		}
+		cPrevBlocks := C.CString(base64.StdEncoding.EncodeToString(prevBlocksCell.ToBOC()))
+		defer C.free(unsafe.Pointer(cPrevBlocks))
+		if !bool(C.tvm_emulator_set_prev_blocks_info(emulator, cPrevBlocks)) {
+			return nil, fmt.Errorf("failed to initialize reference prev blocks info")
+		}
+	}
+
+	if cfg.GasLimit != 0 && !bool(C.tvm_emulator_set_gas_limit(emulator, C.int64_t(cfg.GasLimit))) {
+		return nil, fmt.Errorf("failed to initialize reference gas limit")
+	}
+
 	cStack := C.CString(stackB64)
 	defer C.free(unsafe.Pointer(cStack))
 	resPtr := C.tvm_emulator_run_get_method(emulator, 0, cStack)
@@ -130,4 +150,12 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 		gasUsed:  gasUsed,
 		stack:    stackOut,
 	}, nil
+}
+
+func stackValueToCell(v any) (*cell.Cell, error) {
+	b := cell.BeginCell()
+	if err := tlb.SerializeStackValue(b, normalizeTLBStackValue(v)); err != nil {
+		return nil, err
+	}
+	return b.EndCell(), nil
 }

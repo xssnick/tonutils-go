@@ -425,6 +425,8 @@ func (p *peerConn) checkUpdateAddr(addr net.Addr) {
 
 func (g *Gateway) startOldPeersChecker() {
 	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+
 	for {
 		select {
 		case <-g.globalCtx.Done():
@@ -582,9 +584,19 @@ func (g *Gateway) SetConnectionHandler(handler func(client Peer) error) {
 
 func (g *Gateway) Close() error {
 	g.mx.Lock()
-	defer g.mx.Unlock()
-
 	g.globalCtxCancel()
+
+	peers := make([]*peerConn, 0, len(g.peers))
+	for _, peer := range g.peers {
+		peers = append(peers, peer)
+	}
+	g.peers = map[string]*peerConn{}
+	g.processors = map[string]*srvProcessor{}
+	g.mx.Unlock()
+
+	for _, peer := range peers {
+		peer.client.Close()
+	}
 
 	g.reader.CloseConnection(g)
 	return nil

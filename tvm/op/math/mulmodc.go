@@ -13,6 +13,9 @@ func init() {
 func MULMODC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
 			z, err := popIntFinite(state)
 			if err != nil {
 				return err
@@ -40,6 +43,6 @@ func MULMODC() *helpers.SimpleOP {
 			return state.Stack.PushInt(r)
 		},
 		Name:      "MULMODC",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0x89),
+		BitPrefix: helpers.BytesPrefix(0xA9, 0x8A),
 	}
 }

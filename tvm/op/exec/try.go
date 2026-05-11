@@ -35,7 +35,7 @@ func TRYARGS(params, retvals int) *helpers.AdvancedOP {
 		},
 		BitPrefix: helpers.UIntPrefix(0xF3, 8),
 		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(((params & 0x0F) << 4) | (retvals & 0x0F)), 8)
+			return cell.BeginCell().MustStoreUInt(uint64(((params&0x0F)<<4)|(retvals&0x0F)), 8)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
 			val, err := code.LoadUInt(8)
@@ -74,8 +74,8 @@ func executeTry(state *vm.State, params, retvals int) error {
 	}
 
 	handler = vm.ForceControlData(handler)
-	handler.GetControlData().Save.Define(2, oldC2)
-	handler.GetControlData().Save.Define(0, cc)
+	handler.GetControlData().Save.Define(2, cloneContinuation(oldC2))
+	handler.GetControlData().Save.Define(0, cloneContinuation(cc))
 	state.Reg.C[0] = cc
 	state.Reg.C[2] = handler
 

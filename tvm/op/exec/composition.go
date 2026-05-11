@@ -22,6 +22,10 @@ func init() {
 func composeCont(mask uint8, name string, prefix helpers.BitPrefix) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.PopContinuation()
 			if err != nil {
 				return err
@@ -34,10 +38,10 @@ func composeCont(mask uint8, name string, prefix helpers.BitPrefix) *helpers.Sim
 			cont = vm.ForceControlData(cont)
 			data := cont.GetControlData()
 			if mask&1 != 0 {
-				data.Save.C[0] = val
+				defineSavedContinuation(&data.Save, 0, val)
 			}
 			if mask&2 != 0 {
-				data.Save.C[1] = val.Copy()
+				defineSavedContinuation(&data.Save, 1, val)
 			}
 			return state.Stack.PushContinuation(cont)
 		},
@@ -62,7 +66,7 @@ func ATEXIT() *helpers.SimpleOP {
 				return err
 			}
 			cont = vm.ForceControlData(cont)
-			cont.GetControlData().Save.C[0] = state.Reg.C[0]
+			defineSavedContinuation(&cont.GetControlData().Save, 0, state.Reg.C[0])
 			state.Reg.C[0] = cont
 			return nil
 		},
@@ -79,7 +83,7 @@ func ATEXITALT() *helpers.SimpleOP {
 				return err
 			}
 			cont = vm.ForceControlData(cont)
-			cont.GetControlData().Save.C[1] = state.Reg.C[1]
+			defineSavedContinuation(&cont.GetControlData().Save, 1, state.Reg.C[1])
 			state.Reg.C[1] = cont
 			return nil
 		},
@@ -97,8 +101,8 @@ func SETEXITALT() *helpers.SimpleOP {
 			}
 			cont = vm.ForceControlData(cont)
 			data := cont.GetControlData()
-			data.Save.C[0] = state.Reg.C[0]
-			data.Save.C[1] = state.Reg.C[1]
+			defineSavedContinuation(&data.Save, 0, state.Reg.C[0])
+			defineSavedContinuation(&data.Save, 1, state.Reg.C[1])
 			state.Reg.C[1] = cont
 			return nil
 		},
@@ -115,7 +119,7 @@ func THENRET() *helpers.SimpleOP {
 				return err
 			}
 			cont = vm.ForceControlData(cont)
-			cont.GetControlData().Save.C[0] = state.Reg.C[0]
+			defineSavedContinuation(&cont.GetControlData().Save, 0, state.Reg.C[0])
 			return state.Stack.PushContinuation(cont)
 		},
 		Name:      "THENRET",
@@ -131,7 +135,7 @@ func THENRETALT() *helpers.SimpleOP {
 				return err
 			}
 			cont = vm.ForceControlData(cont)
-			cont.GetControlData().Save.C[0] = state.Reg.C[1]
+			defineSavedContinuation(&cont.GetControlData().Save, 0, state.Reg.C[1])
 			return state.Stack.PushContinuation(cont)
 		},
 		Name:      "THENRETALT",

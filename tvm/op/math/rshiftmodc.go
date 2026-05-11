@@ -14,6 +14,9 @@ func init() {
 func RSHIFTMODC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			y, err := popIntRange(state, 0, 256)
 			if err != nil {
 				return err

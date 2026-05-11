@@ -200,7 +200,7 @@ func (d *AugmentedDictionary) ExtractPrefixSubdictRoot(prefix *Cell, removePrefi
 	if d == nil {
 		return nil, nil
 	}
-	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix)
+	root, changed, err := extractPrefixSubdictRootObserved(d.root, d.keySz, prefix, removePrefix, d.observer, d.traceNode)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func (d *AugmentedDictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) 
 		return false, nil
 	}
 
-	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix)
+	root, changed, err := extractPrefixSubdictRootObserved(d.root, d.keySz, prefix, removePrefix, d.observer, d.traceNode)
 	if err != nil {
 		return false, err
 	}

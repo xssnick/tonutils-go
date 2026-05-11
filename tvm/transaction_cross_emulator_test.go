@@ -5,12 +5,18 @@ package tvm
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 	"os"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	cellsliceop "github.com/xssnick/tonutils-go/tvm/op/cellslice"
+	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
+	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
+	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 )
 
 func TestTVMCrossEmulatorTransactionExternal(t *testing.T) {
@@ -101,6 +107,32 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 	wrongAnycastPrefix := []byte{tonopsTestAddr.Data()[0] & 0x80}
 	wrongAnycastPrefix[0] ^= 0x80
 	anycastDestInternalMsg := buildTransactionOutboundInternalCellWithAddresses(t, address.NewAddressNone(), tonopsTestAddr.WithAnycast(address.NewAnycast(1, wrongAnycastPrefix)), 1000, cell.BeginCell().MustStoreUInt(0xB0, 8).EndCell())
+	stateInitData := cell.BeginCell().MustStoreUInt(0xACDC, 16).EndCell()
+	stateInitNewData := cell.BeginCell().MustStoreUInt(0xDCAC, 16).EndCell()
+	stateInit := &tlb.StateInit{
+		Code: makeTransactionInternalSuccessCode(t, stateInitNewData),
+		Data: stateInitData,
+	}
+	stateInitAddr := stateInit.CalcAddress(0)
+	stateInitCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatalf("failed to build state init cell: %v", err)
+	}
+	badStateHash := bytes.Repeat([]byte{0x77}, 32)
+	storageDebt := tlb.FromNanoTONU(1000)
+	storageDebtInfo := tlb.StorageInfo{
+		StorageUsed: tlb.StorageUsed{
+			CellsUsed: big.NewInt(0),
+			BitsUsed:  big.NewInt(0),
+		},
+		StorageExtra: tlb.StorageExtraNone{},
+		LastPaid:     now - 60,
+		DuePayment:   &storageDebt,
+	}
+	storageDebtConfig := referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
+		int32(tlb.ConfigParamGasPricesBasechain):   buildTransactionGasLimitsCell(t, 100, 500),
+		int32(tlb.ConfigParamGasPricesMasterchain): buildTransactionGasLimitsCell(t, 100, 500),
+	})
 	nextCode := cell.BeginCell().MustStoreUInt(0xD00D, 16).EndCell()
 	libCode := cell.BeginCell().MustStoreUInt(0xC0DE, 16).EndCell()
 	tooManyActions := buildTransactionRepeatedSetCodeActions(t, nextCode, 256)
@@ -127,6 +159,7 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		addr       *address.Address
 		shard      *tlb.ShardAccount
 		msg        *cell.Cell
 		configRoot *cell.Cell
@@ -185,6 +218,83 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 				SrcAddr:     internalEmulationSrcAddr,
 				DstAddr:     tonopsTestAddr,
 				Amount:      tlb.FromNanoTONU(richValue),
+				Body:        body,
+			}),
+		},
+		{
+			name:  "internal_stateinit_activates_nonexist",
+			addr:  stateInitAddr,
+			shard: buildTransactionTestNoneShardAccount(t),
+			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
+				IHRDisabled: true,
+				SrcAddr:     internalEmulationSrcAddr,
+				DstAddr:     stateInitAddr,
+				Amount:      tlb.FromNanoTONU(richValue),
+				StateInit:   stateInit,
+				Body:        body,
+			}),
+		},
+		{
+			name:  "internal_stateinit_bad_hash",
+			shard: buildTransactionTestNoneShardAccount(t),
+			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
+				IHRDisabled: true,
+				Bounce:      true,
+				SrcAddr:     internalEmulationSrcAddr,
+				DstAddr:     tonopsTestAddr,
+				Amount:      tlb.FromNanoTONU(richValue),
+				StateInit:   stateInit,
+				Body:        body,
+			}),
+		},
+		{
+			name:  "frozen_stateinit_reactivates",
+			addr:  stateInitAddr,
+			shard: buildTransactionTestFrozenShardAccount(t, stateInitAddr, stateInitCell.Hash(), walletSendTestBalance, tlb.StorageInfo{StorageExtra: tlb.StorageExtraNone{}, LastPaid: now}),
+			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
+				IHRDisabled: true,
+				SrcAddr:     internalEmulationSrcAddr,
+				DstAddr:     stateInitAddr,
+				Amount:      tlb.FromNanoTONU(richValue),
+				StateInit:   stateInit,
+				Body:        body,
+			}),
+		},
+		{
+			name:  "frozen_stateinit_bad_hash_bounces",
+			addr:  stateInitAddr,
+			shard: buildTransactionTestFrozenShardAccount(t, stateInitAddr, badStateHash, walletSendTestBalance, tlb.StorageInfo{StorageExtra: tlb.StorageExtraNone{}, LastPaid: now}),
+			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
+				IHRDisabled: true,
+				Bounce:      true,
+				SrcAddr:     internalEmulationSrcAddr,
+				DstAddr:     stateInitAddr,
+				Amount:      tlb.FromNanoTONU(richValue),
+				StateInit:   stateInit,
+				Body:        body,
+			}),
+		},
+		{
+			name:       "storage_debt_freezes_active",
+			shard:      buildTransactionTestShardAccountWithStorageInfo(t, tonopsTestAddr, makeTransactionInternalSuccessCode(t, newData), origData, 50, storageDebtInfo),
+			configRoot: storageDebtConfig,
+			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
+				IHRDisabled: true,
+				SrcAddr:     internalEmulationSrcAddr,
+				DstAddr:     tonopsTestAddr,
+				Amount:      tlb.FromNanoTONU(0),
+				Body:        body,
+			}),
+		},
+		{
+			name:       "storage_debt_deletes_uninit",
+			shard:      buildTransactionTestUninitShardAccount(t, tonopsTestAddr, 50, storageDebtInfo),
+			configRoot: storageDebtConfig,
+			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
+				IHRDisabled: true,
+				SrcAddr:     internalEmulationSrcAddr,
+				DstAddr:     tonopsTestAddr,
+				Amount:      tlb.FromNanoTONU(0),
 				Body:        body,
 			}),
 		},
@@ -486,8 +596,12 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 			if tt.configRoot != nil {
 				testConfigRoot = tt.configRoot
 			}
+			testAddr := tonopsTestAddr
+			if tt.addr != nil {
+				testAddr = tt.addr
+			}
 			goRes, err := NewTVM().EmulateTransaction(tt.shard, tt.msg, TransactionEmulationConfig{
-				Address:     tonopsTestAddr,
+				Address:     testAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
 				LogicalTime: transactionTestLogicalTime,
@@ -506,8 +620,118 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 				t.Fatalf("reference transaction emulation failed: %v", err)
 			}
 
+			if goRes.GasUsed != refRes.gasUsed {
+				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.GasUsed, refRes.gasUsed)
+			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("shard account mismatch context:\ngo=%s\nreference=%s\ngo summary=%s\nreference summary=%s\ngo tx=%s\nreference tx=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump(), transactionCrossShardSummary(t, goRes.ShardAccountCell), transactionCrossShardSummary(t, refRes.shardCell), transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
+				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
+			}
+			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			}
+		})
+	}
+}
+
+func TestTVMCrossEmulatorTransactionC7Options(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	configRoot := mustReferenceTransactionConfigRoot(t)
+	now := uint32(tonopsTestTime.Unix())
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	prevBlocks := tuple.NewTupleValue(int64(111), int64(222), int64(333))
+	libraryTarget := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	libraryRef := mustCrossLibraryCellForHash(t, libraryTarget.Hash())
+	libraryCollection := mustCrossLibraryCollection(t, libraryTarget)
+
+	txCode := func(builders ...*cell.Builder) *cell.Cell {
+		all := make([]*cell.Builder, 0, 5+len(builders))
+		for range 5 {
+			all = append(all, stackop.DROP().Serialize())
+		}
+		all = append(all, builders...)
+		return codeFromBuilders(t, all...)
+	}
+
+	tests := []struct {
+		name       string
+		code       *cell.Cell
+		prevBlocks tuple.Tuple
+		refLibs    *cell.Cell
+		goLibs     []*cell.Cell
+	}{
+		{
+			name: "prev_blocks_info",
+			code: txCode(
+				funcsop.PREVMCBLOCKS_100().Serialize(),
+				cellsliceop.NEWC().Serialize(),
+				cellsliceop.STU(16).Serialize(),
+				cellsliceop.ENDC().Serialize(),
+				execop.POPCTR(4).Serialize(),
+			),
+			prevBlocks: prevBlocks,
+		},
+		{
+			name: "library_collection",
+			code: txCode(
+				stackop.PUSHREF(libraryRef).Serialize(),
+				cellsliceop.XLOADQ().Serialize(),
+				stackop.DROP().Serialize(),
+				cellsliceop.HASHCU().Serialize(),
+				cellsliceop.NEWC().Serialize(),
+				cellsliceop.STU(256).Serialize(),
+				cellsliceop.ENDC().Serialize(),
+				execop.POPCTR(4).Serialize(),
+			),
+			refLibs: libraryCollection,
+			goLibs:  []*cell.Cell{libraryCollection},
+		},
+	}
+
+	msg := mustTransactionMsgCell(t, &tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     internalEmulationSrcAddr,
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.FromNanoTONU(1_000_000_000),
+		Body:        body,
+	})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, tt.code, origData, walletSendTestBalance, now)
+			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+				Address:     tonopsTestAddr,
+				Now:         now,
+				BlockLT:     transactionTestLogicalTime,
+				LogicalTime: transactionTestLogicalTime,
+				RandSeed:    append([]byte(nil), tonopsTestSeed...),
+				ConfigRoot:  configRoot,
+				PrevBlocks:  tt.prevBlocks,
+				Libraries:   tt.goLibs,
+			})
+			if err != nil {
+				t.Fatalf("go transaction emulation failed: %v", err)
+			}
+
+			refRes, err := runReferenceOrdinaryTransactionWithConfigRootAndOptions(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot, referenceTransactionOptions{
+				libs:       tt.refLibs,
+				prevBlocks: tt.prevBlocks,
+			})
+			if err != nil {
+				t.Fatalf("reference transaction emulation failed: %v", err)
+			}
+
+			if goRes.ExitCode != refRes.exitCode {
+				t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.ExitCode, refRes.exitCode)
+			}
+			if goRes.GasUsed != refRes.gasUsed {
+				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.GasUsed, refRes.gasUsed)
+			}
+			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
 			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
@@ -532,6 +756,18 @@ func transactionCrossTxSummary(t *testing.T, txCell *cell.Cell) string {
 	compute := fmt.Sprintf("%T", desc.ComputePhase.Phase)
 	if skipped, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseSkipped); ok {
 		compute = fmt.Sprintf("skip:%s", skipped.Reason.Type)
+	} else if vmPhase, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseVM); ok {
+		compute = fmt.Sprintf(
+			"vm:success=%t msg_state=%t activated=%t gas=%s/%s credit=%s exit=%d steps=%d",
+			vmPhase.Success,
+			vmPhase.MsgStateUsed,
+			vmPhase.AccountActivated,
+			vmPhase.Details.GasUsed.String(),
+			vmPhase.Details.GasLimit.String(),
+			transactionCrossBigIntPtr(vmPhase.Details.GasCredit),
+			vmPhase.Details.ExitCode,
+			vmPhase.Details.VMSteps,
+		)
 	}
 	bounce := "<nil>"
 	if desc.BouncePhase != nil {
@@ -571,6 +807,13 @@ func transactionCrossInt32Ptr(v *int32) string {
 		return "<nil>"
 	}
 	return fmt.Sprintf("%d", *v)
+}
+
+func transactionCrossBigIntPtr(v *big.Int) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return v.String()
 }
 
 func transactionCrossCoinsPtr(v *tlb.Coins) string {

@@ -49,6 +49,10 @@ func NewExecutionResult(data []any) *ExecutionResult {
 }
 
 func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...any) (*ExecutionResult, error) {
+	return c.RunGetMethodByID(ctx, blockInfo, addr, tlb.MethodNameHash(method), params...)
+}
+
+func (c *APIClient) RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, methodID uint64, params ...any) (*ExecutionResult, error) {
 	var stack tlb.Stack
 	for i := len(params) - 1; i >= 0; i-- {
 		// push args in reverse order
@@ -73,7 +77,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			Workchain: addr.Workchain(),
 			ID:        addr.Data(),
 		},
-		MethodID: tlb.MethodNameHash(method),
+		MethodID: methodID,
 		Params:   req,
 	}, &resp)
 	if err != nil {

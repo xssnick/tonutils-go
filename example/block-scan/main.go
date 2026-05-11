@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
@@ -127,37 +126,21 @@ func main() {
 		for _, shard := range newShards {
 			log.Printf("scanning block %d of shard %x in workchain %d...", shard.SeqNo, uint64(shard.Shard), shard.Workchain)
 
-			var fetchedIDs []ton.TransactionShortInfo
-			var after *ton.TransactionID3
-			var more = true
-
-			// load all transactions in batches with 100 transactions in each while exists
-			for more {
-				took := time.Now()
-				fetchedIDs, more, err = api.WaitForBlock(master.SeqNo).GetBlockTransactionsV2(ctx, shard, 100, after)
-				if err != nil {
-					log.Fatalln("get tx ids err:", err.Error())
-					return
-				}
-				log.Printf("fetched %d transactions in %s\n", len(fetchedIDs), time.Since(took))
-
-				if more {
-					// set load offset for next query (pagination)
-					after = fetchedIDs[len(fetchedIDs)-1].ID3()
-				}
-
-				for _, id := range fetchedIDs {
-					// get full transaction by id
-					took = time.Now()
-					tx, err := api.GetTransaction(ctx, shard, address.NewAddress(0, byte(shard.Workchain), id.Account), id.LT)
-					if err != nil {
-						log.Fatalln("get tx data err:", err.Error())
-						return
-					}
-					txList = append(txList, tx)
-					log.Println("fetched tx:", "in", time.Since(took))
-				}
+			took := time.Now()
+			block, err := api.WaitForBlock(master.SeqNo).GetBlockData(ctx, shard)
+			if err != nil {
+				log.Fatalln("get block data err:", err.Error())
+				return
 			}
+
+			fetchedTxs, err := block.ListTransactions()
+			if err != nil {
+				log.Fatalln("list txs err:", err.Error())
+				return
+			}
+			log.Printf("loaded %d transactions from block data in %s\n", len(fetchedTxs), time.Since(took))
+
+			txList = append(txList, fetchedTxs...)
 		}
 
 		for i, transaction := range txList {

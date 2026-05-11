@@ -19,6 +19,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
@@ -39,6 +40,11 @@ type referenceTransactionResult struct {
 	actionsCell *cell.Cell
 }
 
+type referenceTransactionOptions struct {
+	libs       *cell.Cell
+	prevBlocks tuple.Tuple
+}
+
 func runReferenceOrdinaryTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, now uint32, lt uint64, randSeed []byte) (*referenceTransactionResult, error) {
 	configB64, err := loadReferenceTransactionConfigB64()
 	if err != nil {
@@ -51,10 +57,21 @@ func runReferenceOrdinaryTransactionWithConfigRoot(shard *tlb.ShardAccount, msgC
 	if configRoot == nil {
 		return nil, fmt.Errorf("reference transaction config root is nil")
 	}
-	return runReferenceOrdinaryTransactionWithConfigB64(shard, msgCell, now, lt, randSeed, base64.StdEncoding.EncodeToString(configRoot.ToBOC()))
+	return runReferenceOrdinaryTransactionWithConfigRootAndOptions(shard, msgCell, now, lt, randSeed, configRoot, referenceTransactionOptions{})
+}
+
+func runReferenceOrdinaryTransactionWithConfigRootAndOptions(shard *tlb.ShardAccount, msgCell *cell.Cell, now uint32, lt uint64, randSeed []byte, configRoot *cell.Cell, opts referenceTransactionOptions) (*referenceTransactionResult, error) {
+	if configRoot == nil {
+		return nil, fmt.Errorf("reference transaction config root is nil")
+	}
+	return runReferenceOrdinaryTransactionWithConfigB64AndOptions(shard, msgCell, now, lt, randSeed, base64.StdEncoding.EncodeToString(configRoot.ToBOC()), opts)
 }
 
 func runReferenceOrdinaryTransactionWithConfigB64(shard *tlb.ShardAccount, msgCell *cell.Cell, now uint32, lt uint64, randSeed []byte, configB64 string) (*referenceTransactionResult, error) {
+	return runReferenceOrdinaryTransactionWithConfigB64AndOptions(shard, msgCell, now, lt, randSeed, configB64, referenceTransactionOptions{})
+}
+
+func runReferenceOrdinaryTransactionWithConfigB64AndOptions(shard *tlb.ShardAccount, msgCell *cell.Cell, now uint32, lt uint64, randSeed []byte, configB64 string, opts referenceTransactionOptions) (*referenceTransactionResult, error) {
 	shardCell, err := tlb.ToCell(shard)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize shard account: %w", err)
@@ -79,6 +96,24 @@ func runReferenceOrdinaryTransactionWithConfigB64(shard *tlb.ShardAccount, msgCe
 		defer C.free(unsafe.Pointer(seedHex))
 		if !bool(C.transaction_emulator_set_rand_seed(emulator, seedHex)) {
 			return nil, fmt.Errorf("failed to set reference rand seed")
+		}
+	}
+	if opts.libs != nil {
+		cLibs := C.CString(base64.StdEncoding.EncodeToString(opts.libs.ToBOC()))
+		defer C.free(unsafe.Pointer(cLibs))
+		if !bool(C.transaction_emulator_set_libs(emulator, cLibs)) {
+			return nil, fmt.Errorf("failed to initialize reference libraries")
+		}
+	}
+	if opts.prevBlocks.Len() > 0 {
+		prevBlocksCell, err := stackValueToCell(opts.prevBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize reference prev blocks info: %w", err)
+		}
+		cPrevBlocks := C.CString(base64.StdEncoding.EncodeToString(prevBlocksCell.ToBOC()))
+		defer C.free(unsafe.Pointer(cPrevBlocks))
+		if !bool(C.transaction_emulator_set_prev_blocks_info(emulator, cPrevBlocks)) {
+			return nil, fmt.Errorf("failed to initialize reference prev blocks info")
 		}
 	}
 
@@ -180,11 +215,25 @@ func referenceTransactionConfigRootWithGlobalVersion(t testingT, base *cell.Cell
 		t.Fatalf("failed to build global version config: %v", err)
 	}
 	params[int32(tlb.ConfigParamGlobalVersion)] = versionCell
+	return referenceTransactionConfigRootWithOverridesMap(t, params)
+}
 
+func referenceTransactionConfigRootWithOverrides(t testingT, base *cell.Cell, overrides map[int32]*cell.Cell) *cell.Cell {
+	params := tlb.BlockchainConfig{Root: base}.All()
+	if params == nil {
+		t.Fatalf("failed to load reference config params")
+	}
+	for id, param := range overrides {
+		params[id] = param
+	}
+	return referenceTransactionConfigRootWithOverridesMap(t, params)
+}
+
+func referenceTransactionConfigRootWithOverridesMap(t testingT, params map[int32]*cell.Cell) *cell.Cell {
 	dict := cell.NewDict(32)
 	for id, param := range params {
 		value := cell.BeginCell().MustStoreRef(param).EndCell()
-		if err = dict.SetIntKey(big.NewInt(int64(id)), value); err != nil {
+		if err := dict.SetIntKey(big.NewInt(int64(id)), value); err != nil {
 			t.Fatalf("failed to store config param %d: %v", id, err)
 		}
 	}

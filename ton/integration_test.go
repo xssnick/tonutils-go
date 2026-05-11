@@ -180,6 +180,77 @@ func TestAPIClient_GetBlockHeader(t *testing.T) {
 	}
 }
 
+func TestAPIClient_GetOutMsgQueueSizesLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(apiTestNet.Client().StickyContext(context.Background()), 90*time.Second)
+	defer cancel()
+
+	wc := address.MasterchainID
+	shard := int64(-9223372036854775808)
+	sizes, err := apiTestNet.GetOutMsgQueueSizes(ctx, &wc, &shard)
+	if err != nil {
+		if isIntegrationNodeTimeout(err) {
+			t.Skipf("live liteservers did not answer getOutMsgQueueSizes: %v", err)
+		}
+		t.Fatal("get out msg queue sizes err:", err.Error())
+	}
+	if len(sizes.Shards) == 0 {
+		t.Fatal("expected at least one out msg queue size")
+	}
+	if sizes.Shards[0].ID == nil {
+		t.Fatal("out msg queue size has nil block id")
+	}
+}
+
+func TestAPIClient_OutMsgQueueProofMethods(t *testing.T) {
+	ctx, cancel := context.WithTimeout(apiTestNet.Client().StickyContext(context.Background()), 90*time.Second)
+	defer cancel()
+
+	block, err := apiTestNet.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+	}
+
+	blockSize, err := apiTestNet.GetBlockOutMsgQueueSize(ctx, block)
+	if err != nil {
+		t.Fatal("get block out msg queue size err:", err.Error())
+	}
+	if blockSize.Proof == nil {
+		t.Fatal("expected block out msg queue size proof")
+	}
+	if blockSize.Size < 0 {
+		t.Fatalf("unexpected negative queue size: %d", blockSize.Size)
+	}
+
+	dispatchInfo, err := apiTestNet.GetDispatchQueueInfo(ctx, block, nil, 1)
+	if err != nil {
+		t.Fatal("get dispatch queue info err:", err.Error())
+	}
+	if dispatchInfo.Proof == nil {
+		t.Fatal("expected dispatch queue info proof")
+	}
+	if len(dispatchInfo.AccountDispatchQueues) > 1 {
+		t.Fatalf("expected at most one dispatch queue account, got %d", len(dispatchInfo.AccountDispatchQueues))
+	}
+
+	zeroAddr := address.NewAddress(0, 0, make([]byte, 32))
+	messages, err := apiTestNet.GetDispatchQueueMessages(ctx, block, zeroAddr, 0, 2, WithDispatchQueueOneAccount(), WithDispatchQueueMessagesBOC())
+	if err != nil {
+		t.Fatal("get dispatch queue messages err:", err.Error())
+	}
+	if messages.Proof == nil {
+		t.Fatal("expected dispatch queue messages proof")
+	}
+	if len(messages.Messages) > 2 {
+		t.Fatalf("expected at most two dispatch queue messages, got %d", len(messages.Messages))
+	}
+}
+
+func isIntegrationNodeTimeout(err error) bool {
+	return errors.Is(err, liteclient.ErrADNLReqTimeout) ||
+		errors.Is(err, liteclient.ErrNoNodesLeft) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
 // commented because public archival LS works too bad to test
 /*func TestAPIClient_GetOldBlockData(t *testing.T) {
 	client := liteclient.NewConnectionPool()

@@ -53,7 +53,7 @@ func runReferenceCrossMethodWithGas(code, data *cell.Cell, c7 tuple.Tuple, metho
 }
 
 func runReferenceCrossMethodWithLibs(code, data *cell.Cell, c7 tuple.Tuple, libs *cell.Cell, method string, args ...int64) (*crossRunResult, error) {
-	return runReferenceCrossMethodWithLibsAndGas(code, data, c7, libs, method, crossTestMaxGas, args...)
+	return runReferenceCrossMethodWithLibsAndGas(code, data, c7, libs, method, referenceDefaultMaxGas, args...)
 }
 
 func runReferenceCrossMethodWithLibsAndGas(code, data *cell.Cell, c7 tuple.Tuple, libs *cell.Cell, method string, gasLimit int64, args ...int64) (*crossRunResult, error) {
@@ -119,11 +119,11 @@ func runReferenceCrossMethodWithLibsAndGas(code, data *cell.Cell, c7 tuple.Tuple
 }
 
 func runReferenceCrossCode(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack) (*crossRunResult, error) {
-	return runReferenceCrossCodeWithLibsAndGas(code, data, c7, nil, stack, crossTestMaxGas)
+	return runReferenceCrossCodeWithLibsAndGas(code, data, c7, nil, stack, referenceDefaultMaxGas)
 }
 
 func runReferenceCrossCodeWithLibs(code, data *cell.Cell, c7 tuple.Tuple, libs *cell.Cell, stack *vm.Stack) (*crossRunResult, error) {
-	return runReferenceCrossCodeWithLibsAndGas(code, data, c7, libs, stack, crossTestMaxGas)
+	return runReferenceCrossCodeWithLibsAndGas(code, data, c7, libs, stack, referenceDefaultMaxGas)
 }
 
 func runReferenceCrossCodeWithGas(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack, gasLimit int64) (*crossRunResult, error) {

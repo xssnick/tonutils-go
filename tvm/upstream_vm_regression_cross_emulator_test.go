@@ -4,46 +4,28 @@ package tvm
 
 import (
 	"bytes"
-	"math/big"
 	"os"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
-	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 const upstreamVMRegressionCrossGasLimit = int64(1000)
 
-var upstreamVMRegressionCrossSkip = map[string]string{
-	"assert_lookup_prefix": "release get-method emulator path disagrees with the raw vm.cpp harness on this prefix-lookup exception regression",
-	"memory_leak_new":      "release reference emulator returns nil on this raw-code continuation regression",
-	"infinity_loop_1": "release reference emulator still hangs on this raw-code infinite-loop regression even under the same 1000-gas harness as vm.cpp",
-	"infinity_loop_2": "release reference emulator still hangs on this raw-code infinite-loop regression even under the same 1000-gas harness as vm.cpp",
-	"oom_1":           "release reference emulator still hangs on this raw-code oom regression even under the same 1000-gas harness as vm.cpp",
-}
+func upstreamVMRegressionCrossCases(t *testing.T) []upstreamVMRegressionCase {
+	t.Helper()
 
-var upstreamVMRegressionNoStackCompare = map[string]string{
-	"assert_pfx_dict_lookup": "raw-code prefix-dictionary regression is kept locally deterministic, but wrapped get-method stack parity is unstable on the release emulator path",
-	"memory_leak":           "Go stack contains runtime-only values that are not representable via the TLB stack serializer",
-}
-
-func runGoCrossCodeNoStack(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack) (*crossRunResult, error) {
-	execStack := stack.Copy()
-	if err := execStack.PushInt(big.NewInt(0)); err != nil {
-		return nil, err
+	return []upstreamVMRegressionCase{
+		{name: "bug_div_short_any", code: rawCodeCellFromHex(t, "6883FF73A98D")},
+		{name: "assert_code_not_null", code: rawCodeCellFromHex(t, "76ED40DE")},
+		{name: "bug_exec_dict_getnear", code: rawCodeCellFromHex(t, "8B048B00006D72F47573655F6D656D6D656D8B007F")},
+		{name: "bug_stack_overflow", code: rawCodeCellFromHex(t, "72A93AF8")},
+		{name: "assert_extract_minmax_key", code: rawCodeCellFromHex(t, "6D6DEB21807AF49C2180EB21807AF41C")},
+		{name: "unhandled_exception_1", code: rawCodeCellFromHex(t, "70EDA2ED00")},
+		{name: "unhandled_exception_4", code: rawCodeCellFromHex(t, "7F853EA1C8CB3E")},
+		{name: "unhandled_exception_5", code: rawCodeCellFromHex(t, "738B04016D21F41476A721F49F")},
 	}
-
-	machine := NewTVM()
-	res, err := machine.ExecuteDetailedWithLibraries(code, data, c7, vm.GasWithLimit(upstreamVMRegressionCrossGasLimit), execStack)
-	if err != nil {
-		return nil, err
-	}
-
-	return &crossRunResult{
-		exitCode: int32(res.ExitCode),
-		gasUsed:  res.GasUsed,
-	}, nil
 }
 
 func TestTVMCrossEmulatorUpstreamVMRegressions(t *testing.T) {
@@ -51,12 +33,8 @@ func TestTVMCrossEmulatorUpstreamVMRegressions(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for _, tt := range upstreamVMRegressionCases(t) {
+	for _, tt := range upstreamVMRegressionCrossCases(t) {
 		t.Run(tt.name, func(t *testing.T) {
-			if reason, skip := upstreamVMRegressionCrossSkip[tt.name]; skip {
-				t.Skip(reason)
-			}
-
 			code := prependRawMethodDrop(tt.code)
 
 			goStack, err := buildCrossStack()
@@ -68,12 +46,7 @@ func TestTVMCrossEmulatorUpstreamVMRegressions(t *testing.T) {
 				t.Fatalf("failed to build reference stack: %v", err)
 			}
 
-			var goRes *crossRunResult
-			if _, skip := upstreamVMRegressionNoStackCompare[tt.name]; skip {
-				goRes, err = runGoCrossCodeNoStack(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack)
-			} else {
-				goRes, err = runGoCrossCodeWithGas(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack, upstreamVMRegressionCrossGasLimit)
-			}
+			goRes, err := runGoCrossCodeWithGas(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack, upstreamVMRegressionCrossGasLimit)
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
@@ -88,10 +61,6 @@ func TestTVMCrossEmulatorUpstreamVMRegressions(t *testing.T) {
 			}
 			if goRes.gasUsed != refRes.gasUsed {
 				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
-			}
-
-			if _, skip := upstreamVMRegressionNoStackCompare[tt.name]; skip {
-				return
 			}
 
 			goStackCell, err := normalizeStackCell(goRes.stack)

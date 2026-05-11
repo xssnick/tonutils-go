@@ -69,6 +69,7 @@ type APIClientWrapped interface {
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	SendExternalMessageWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error)
 	RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ExecutionResult, error)
+	RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	GetTransaction(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 	GetBlockProof(ctx context.Context, known, target *BlockIDExt) (*PartialBlockProof, error)
@@ -93,6 +94,12 @@ type APIClientWrapped interface {
 	GetBlockOutMsgQueueSize(ctx context.Context, block *BlockIDExt) (*BlockOutMsgQueueSize, error)
 	GetDispatchQueueInfo(ctx context.Context, block *BlockIDExt, afterAddr *address.Address, maxAccounts int) (*DispatchQueueInfo, error)
 	GetDispatchQueueMessages(ctx context.Context, block *BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*GetDispatchQueueMessages)) (*DispatchQueueMessages, error)
+
+	GetAllNonfinalValidatorGroups(ctx context.Context) (*NonfinalValidatorGroups, error)
+	GetNonfinalValidatorGroups(ctx context.Context, wc int32, shard int64) (*NonfinalValidatorGroups, error)
+	GetNonfinalCandidate(ctx context.Context, id *NonfinalCandidateID) (*NonfinalCandidate, error)
+	GetAllNonfinalPendingShardBlocks(ctx context.Context) (*NonfinalPendingShardBlocks, error)
+	GetNonfinalPendingShardBlocks(ctx context.Context, wc int32, shard int64) (*NonfinalPendingShardBlocks, error)
 }
 
 type APIClient struct {
@@ -128,7 +135,11 @@ func NewAPIClient(client LiteClient, proofCheckPolicy ...ProofCheckPolicy) *APIC
 
 // SetTrustedBlock - set starting point to verify master block proofs chain
 func (c *APIClient) SetTrustedBlock(block *BlockIDExt) {
-	c.root().trustedBlock = block.Copy()
+	root := c.root()
+	root.trustedLock.Lock()
+	defer root.trustedLock.Unlock()
+
+	root.trustedBlock = block.Copy()
 }
 
 // SetTrustedBlockFromConfig - same as SetTrustedBlock but takes init block from config

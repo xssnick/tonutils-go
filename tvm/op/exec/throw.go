@@ -23,6 +23,14 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return newThrowAny() })
 }
 
+func throwAnyPrefixes() []helpers.BitPrefix {
+	prefixes := make([]helpers.BitPrefix, 0, 6)
+	for args := uint64(0); args <= 5; args++ {
+		prefixes = append(prefixes, helpers.UIntPrefix(0xF2F0|args, 16))
+	}
+	return prefixes
+}
+
 func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode int, withArg bool) *helpers.AdvancedOP {
 	var prefixValue uint64
 	for _, b := range prefix {
@@ -119,6 +127,7 @@ func newThrowAny() *helpers.AdvancedOP {
 	var args uint64
 	op := &helpers.AdvancedOP{
 		BitPrefix:     helpers.UIntPrefix(0x1E5E, 13),
+		Prefixes:      throwAnyPrefixes(),
 		FixedSizeBits: 3,
 		NameSerializer: func() string {
 			name := "THROW"

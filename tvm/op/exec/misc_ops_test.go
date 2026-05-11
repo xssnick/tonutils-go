@@ -102,7 +102,7 @@ func TestCompositionOps(t *testing.T) {
 	if err := ATEXIT().Interpret(state); err != nil {
 		t.Fatalf("atexit failed: %v", err)
 	}
-	if state.Reg.C[0].GetControlData().Save.C[0] != oldC0 {
+	if continuationName(t, state.Reg.C[0].GetControlData().Save.C[0]) != "old_c0" {
 		t.Fatalf("expected old c0 to be saved")
 	}
 
@@ -113,7 +113,7 @@ func TestCompositionOps(t *testing.T) {
 	if err := ATEXITALT().Interpret(state); err != nil {
 		t.Fatalf("atexitalt failed: %v", err)
 	}
-	if state.Reg.C[1].GetControlData().Save.C[1] != oldC1 {
+	if continuationName(t, state.Reg.C[1].GetControlData().Save.C[1]) != "old_c1" {
 		t.Fatalf("expected old c1 to be saved")
 	}
 
@@ -517,7 +517,7 @@ func TestCallXAndTryOps(t *testing.T) {
 		t.Fatalf("expected try body to run once, got %d", handled)
 	}
 	data := state.Reg.C[2].GetControlData()
-	if data == nil || data.Save.C[2] != oldC2 || data.Save.C[0] == nil {
+	if data == nil || continuationName(t, data.Save.C[2]) != "old_c2" || data.Save.C[0] == nil {
 		t.Fatalf("expected handler to capture c2 and current continuation")
 	}
 }

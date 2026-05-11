@@ -26,6 +26,9 @@ func init() {
 func quietUnaryIntOp(name string, prefix helpers.BitPrefix, fn func(*big.Int) *big.Int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 1); err != nil {
+				return err
+			}
 			x, err := state.Stack.PopInt()
 			if err != nil {
 				return err
@@ -43,6 +46,9 @@ func quietUnaryIntOp(name string, prefix helpers.BitPrefix, fn func(*big.Int) *b
 func quietBinaryIntOp(name string, prefix helpers.BitPrefix, fn func(x, y *big.Int) *big.Int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
@@ -65,6 +71,9 @@ func quietTinyIntOp(name string, prefix helpers.BitPrefix, value int8, fn func(x
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 1); err != nil {
+				return err
+			}
 			x, err := state.Stack.PopInt()
 			if err != nil {
 				return err

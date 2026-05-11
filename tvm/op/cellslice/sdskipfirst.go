@@ -13,6 +13,10 @@ func init() {
 func SDSKIPFIRST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			i0, err := state.Stack.PopIntRange(0, 1023)
 			if err != nil {
 				return err

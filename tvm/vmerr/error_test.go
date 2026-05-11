@@ -13,12 +13,14 @@ func TestErrorDefaultMessages(t *testing.T) {
 		{CodeStackUnderflow, "stack underflow"},
 		{CodeStackOverflow, "stack overflow"},
 		{CodeIntOverflow, "integer overflow"},
-		{CodeRangeCheck, "range check failed"},
+		{CodeRangeCheck, "integer out of range"},
 		{CodeInvalidOpcode, "invalid opcode"},
-		{CodeTypeCheck, "type check failed"},
+		{CodeTypeCheck, "type check error"},
 		{CodeCellOverflow, "cell overflow"},
 		{CodeCellUnderflow, "cell underflow"},
 		{CodeDict, "dictionary error"},
+		{CodeUnknown, "unknown error"},
+		{CodeFatal, "fatal error"},
 	}
 
 	prev := TVMTraceEnabled

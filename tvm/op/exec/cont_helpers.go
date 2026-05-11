@@ -31,14 +31,29 @@ func pushCurrentCode(state *vm.State) error {
 	return state.Stack.PushSlice(state.CurrentCode.Copy())
 }
 
+func checkStackDepth(state *vm.State, depth int) error {
+	if state.Stack.Len() < depth {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+	return nil
+}
+
 func defineSavedContinuation(reg *vm.Register, idx int, cont vm.Continuation) {
 	if reg.C[idx] == nil {
-		reg.C[idx] = cont
+		reg.C[idx] = cloneContinuation(cont)
 	}
+}
+
+func cloneContinuation(cont vm.Continuation) vm.Continuation {
+	if cont == nil {
+		return nil
+	}
+	return cont.Copy()
 }
 
 func c1Envelope(state *vm.State, cont vm.Continuation, save bool) vm.Continuation {
 	if save {
+		cont = cloneContinuation(cont)
 		cont = vm.ForceControlData(cont)
 		data := cont.GetControlData()
 		defineSavedContinuation(&data.Save, 1, state.Reg.C[1])
@@ -57,11 +72,11 @@ func c1EnvelopeIf(state *vm.State, enabled bool, cont vm.Continuation) vm.Contin
 
 func c1SaveSet(state *vm.State, save bool) {
 	if save {
-		c0 := vm.ForceControlData(state.Reg.C[0])
+		c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
 		defineSavedContinuation(&c0.GetControlData().Save, 1, state.Reg.C[1])
 		state.Reg.C[0] = c0
 	}
-	state.Reg.C[1] = state.Reg.C[0]
+	state.Reg.C[1] = cloneContinuation(state.Reg.C[0])
 }
 
 type refCodeOp struct {

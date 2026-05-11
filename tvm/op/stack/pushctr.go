@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
@@ -16,9 +17,17 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHCTR(0) })
 }
 
+func pushCtrPrefixes() []helpers.BitPrefix {
+	prefixes := make([]helpers.BitPrefix, 0, 7)
+	for _, idx := range []uint64{0, 1, 2, 3, 4, 5, 7} {
+		prefixes = append(prefixes, helpers.UIntPrefix(0xED40|idx, 16))
+	}
+	return prefixes
+}
+
 func PUSHCTR(ctrIndex uint8) *OpPUSHCTR {
 	return &OpPUSHCTR{
-		Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xED4, 12)),
+		Prefixed: helpers.NewPrefixed(pushCtrPrefixes()...),
 		ctrIndex: ctrIndex,
 	}
 }
@@ -29,6 +38,9 @@ func (op *OpPUSHCTR) Deserialize(code *cell.Slice) error {
 		return err
 	}
 	op.ctrIndex = uint8(data & 0xF)
+	if op.ctrIndex == 6 || op.ctrIndex > 7 {
+		return vm.ErrCorruptedOpcode
+	}
 	return nil
 }
 
@@ -45,5 +57,19 @@ func (op *OpPUSHCTR) InstructionBits() int64 {
 }
 
 func (op *OpPUSHCTR) Interpret(state *vm.State) error {
-	return state.Stack.PushAny(state.Reg.Get(int(op.ctrIndex)))
+	return state.Stack.PushAny(cloneLegacyControlRegisterValue(state.Reg.Get(int(op.ctrIndex))))
+}
+
+func cloneLegacyControlRegisterValue(v any) any {
+	switch val := v.(type) {
+	case vm.Continuation:
+		if val == nil {
+			return nil
+		}
+		return val.Copy()
+	case tuple.Tuple:
+		return val.Copy()
+	default:
+		return v
+	}
 }

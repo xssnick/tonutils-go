@@ -48,10 +48,10 @@ func rawCodeCellFromBase64(t *testing.T, src string) *cell.Cell {
 func upstreamVMRegressionCases(t *testing.T) []upstreamVMRegressionCase {
 	t.Helper()
 
-	// Selected from cppnode/ton/crypto/test/vm.cpp.
+	// Selected from cppnode/ton/crypto/test/vm.cpp cases that exercise
+	// deterministic VM behavior in this emulator. C++ leak/OOM harness-only
+	// payloads are intentionally not included here.
 	return []upstreamVMRegressionCase{
-		{name: "memory_leak_old", code: rawCodeCellFromHex(t, "90787FDB3B")},
-		{name: "memory_leak", code: rawCodeCellFromHex(t, "90707FDB3B")},
 		{name: "bug_div_short_any", code: rawCodeCellFromHex(t, "6883FF73A98D")},
 		{name: "assert_pfx_dict_lookup", code: rawCodeCellFromHex(t, "778B04216D73F43E018B04591277F473")},
 		{name: "assert_lookup_prefix", code: rawCodeCellFromHex(t, "78E58B008B028B04010000016D90ED5272F43A755D77F4A8")},
@@ -59,18 +59,12 @@ func upstreamVMRegressionCases(t *testing.T) []upstreamVMRegressionCase {
 		{name: "bug_exec_dict_getnear", code: rawCodeCellFromHex(t, "8B048B00006D72F47573655F6D656D6D656D8B007F")},
 		{name: "bug_stack_overflow", code: rawCodeCellFromHex(t, "72A93AF8")},
 		{name: "assert_extract_minmax_key", code: rawCodeCellFromHex(t, "6D6DEB21807AF49C2180EB21807AF41C")},
-		{name: "memory_leak_new", code: rawCodeCellFromHex(t, "72E5ED40DB3603")},
 		{name: "unhandled_exception_1", code: rawCodeCellFromHex(t, "70EDA2ED00")},
 		{name: "unhandled_exception_4", code: rawCodeCellFromHex(t, "7F853EA1C8CB3E")},
 		{name: "unhandled_exception_5", code: rawCodeCellFromHex(t, "738B04016D21F41476A721F49F")},
 		{name: "infinity_loop_1", code: rawCodeCellFromBase64(t, "f3r4AJGQ6rDraIQ=")},
 		{name: "infinity_loop_2", code: rawCodeCellFromBase64(t, "kpTt7ZLrig==")},
-		{name: "oom_1", code: rawCodeCellFromBase64(t, "bXflX/BvDw==")},
 	}
-}
-
-var upstreamVMRegressionLocalNoStackCompare = map[string]string{
-	"oom_1": "case builds recursive stack structures, so deterministic coverage here is limited to exit code and gas",
 }
 
 func regressionStackFingerprint(stack *vmcore.Stack) string {
@@ -182,10 +176,6 @@ func TestUpstreamVMRegressionsAreDeterministic(t *testing.T) {
 			gas2 := gasFromResult(res2)
 			if gas1 != gas2 {
 				t.Fatalf("gas is not deterministic: first=%d second=%d", gas1, gas2)
-			}
-
-			if _, skip := upstreamVMRegressionLocalNoStackCompare[tt.name]; skip {
-				return
 			}
 
 			fp1 := regressionStackFingerprint(stack1)

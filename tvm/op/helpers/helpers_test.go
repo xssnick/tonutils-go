@@ -148,7 +148,7 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 			decoded = val
 			return nil
 		},
-		BaseGasPrice: 4,
+		BaseGasPrice:  4,
 		FixedSizeBits: 3,
 	}
 
@@ -225,6 +225,15 @@ func TestMathHelpers(t *testing.T) {
 	}
 	if got := DivRound(big.NewInt(-7), big.NewInt(2)); got.Int64() != -3 {
 		t.Fatalf("unexpected negative rounded result: %s", got)
+	}
+	largeQuotient := new(big.Int).Lsh(big.NewInt(1), 200)
+	large := new(big.Int).Mul(largeQuotient, big.NewInt(6))
+	large.Add(large, big.NewInt(3))
+	largeDivisor := big.NewInt(6)
+	wantLarge := new(big.Int).Set(largeQuotient)
+	wantLarge.Add(wantLarge, big.NewInt(1))
+	if got := DivRound(large, largeDivisor); got.Cmp(wantLarge) != 0 {
+		t.Fatalf("unexpected large rounded result: got=%s want=%s", got, wantLarge)
 	}
 
 	if got := DivCeil(big.NewInt(7), big.NewInt(3)); got.Int64() != 3 {

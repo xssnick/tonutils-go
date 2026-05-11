@@ -9,33 +9,33 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return REVERSE(0, 0) })
+	vm.List = append(vm.List, func() vm.OP { return REVERSE(2, 0) })
 }
 
-func REVERSE(i, j uint8) (op *helpers.AdvancedOP) {
+func REVERSE(x, y uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			return state.Stack.Reverse(int(i+2), int(j))
+			return state.Stack.Reverse(int(x)+int(y), int(y))
 		},
 		NameSerializer: func() string {
-			return fmt.Sprintf("%d, %d REVERSE", i, j)
+			return fmt.Sprintf("%d, %d REVERSE", x, y)
 		},
 		BitPrefix: helpers.BytesPrefix(0x5E),
 		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
+			return cell.BeginCell().MustStoreUInt(uint64(x-2), 4).MustStoreUInt(uint64(y), 4)
 		},
 		DeserializeSuffix: func(code *cell.Slice) error {
-			ival, err := code.LoadUInt(4)
+			xval, err := code.LoadUInt(4)
 			if err != nil {
 				return err
 			}
-			jval, err := code.LoadUInt(4)
+			yval, err := code.LoadUInt(4)
 			if err != nil {
 				return err
 			}
-			i = uint8(ival)
-			j = uint8(jval)
+			x = uint8(xval + 2)
+			y = uint8(yval)
 
 			return nil
 		},

@@ -59,13 +59,13 @@ func (op *OpSDBEGINSCONST) Deserialize(code *cell.Slice) error {
 	}
 	arg, err := code.LoadUInt(8)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	op.quiet = (arg & 0x80) != 0
 	bits := uint((arg&0x7F)*8 + 3)
 	sl, err := code.FetchSubslice(bits, 0)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	sl.RemoveTrailing()
 	op.value = sl

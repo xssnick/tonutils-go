@@ -12,6 +12,10 @@ func init() {
 func BOOLOR() (op *helpers.SimpleOP) {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.PopContinuation()
 			if err != nil {
 				return err
@@ -22,7 +26,7 @@ func BOOLOR() (op *helpers.SimpleOP) {
 			}
 
 			cont = vm.ForceControlData(cont)
-			cont.GetControlData().Save.Define(1, val)
+			cont.GetControlData().Save.Define(1, cloneContinuation(val))
 			return state.Stack.PushContinuation(cont)
 		},
 		Name:      "BOOLOR",

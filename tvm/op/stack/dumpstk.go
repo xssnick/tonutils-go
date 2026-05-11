@@ -7,6 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -159,11 +160,11 @@ func (op *debugStrOp) DeserializeMatched(code *cell.Slice) error {
 	}
 	v, err := code.LoadUInt(4)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	data, err := code.LoadSlice(uint(v+1) * 8)
 	if err != nil {
-		return err
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	op.data = append(op.data[:0], data...)
 	return nil
@@ -193,7 +194,7 @@ func (op *debugStrOp) Interpret(state *vm.State) error {
 }
 
 func (op *debugStrOp) InstructionBits() int64 {
-	return 16 + int64(len(op.data))*8
+	return 16
 }
 
 func debugValueString(v any) string {

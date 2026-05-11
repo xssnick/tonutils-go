@@ -7,6 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -36,7 +37,7 @@ func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 		DeserializeSuffix: func(code *cell.Slice) error {
 			val, err := code.LoadInt(8)
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 			value = int8(val)
 			return nil

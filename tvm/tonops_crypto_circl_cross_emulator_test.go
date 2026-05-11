@@ -4,6 +4,7 @@ package tvm
 
 import (
 	"bytes"
+	"math/big"
 	"os"
 	"testing"
 
@@ -20,11 +21,14 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 	}
 
 	msg := []byte("ton-circl-bls-cross")
+	msg2 := []byte("ton-circl-bls-cross-2")
 	pub1 := testBLSPubBytes(3)
 	pub2 := testBLSPubBytes(5)
 	sig1 := testBLSSigBytes(3, msg)
 	sig2 := testBLSSigBytes(5, msg)
+	sig2Msg2 := testBLSSigBytes(5, msg2)
 	aggSig := testBLSAggregateSigBytes(t, sig1, sig2)
+	aggDistinctSig := testBLSAggregateSigBytes(t, sig1, sig2Msg2)
 
 	g1a := testBLSG1BytesForScalar(2)
 	g1b := testBLSG1BytesForScalar(3)
@@ -36,6 +40,10 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 	invalidRist := testInvalidRistrettoInt(t)
 	invalidG1 := testInvalidBLSG1Bytes(t)
 	invalidG2 := testInvalidBLSG2Bytes(t)
+	ristOrder := testBigIntDecimal(t, "723700557733226221397318656304299424085711635937990760600195093828545425057")
+	blsOrderInt := new(big.Int).SetBytes(circlbls.Order())
+	blsOrderMinusOne := new(big.Int).Sub(blsOrderInt, big.NewInt(1))
+	blsOrderPlusOne := new(big.Int).Add(blsOrderInt, big.NewInt(1))
 
 	type testCase struct {
 		name          string
@@ -100,6 +108,16 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			globalVersion: 13,
 		},
 		{
+			name: "rist255_add_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_ADD().Serialize()),
+			stack: []any{
+				invalidRist,
+				testRistrettoMulBaseInt(t, 1),
+			},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 13,
+		},
+		{
 			name: "rist255_qsub_invalid",
 			code: codeFromBuilders(t, funcsop.RIST255_QSUB().Serialize()),
 			stack: []any{
@@ -139,6 +157,24 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			globalVersion: 13,
 		},
 		{
+			name: "rist255_mulbase_order",
+			code: codeFromBuilders(t, funcsop.RIST255_MULBASE().Serialize()),
+			stack: []any{
+				ristOrder,
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "rist255_qmulbase_order",
+			code: codeFromBuilders(t, funcsop.RIST255_QMULBASE().Serialize()),
+			stack: []any{
+				ristOrder,
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
 			name:          "bls_pushr",
 			code:          codeFromBuilders(t, funcsop.BLS_PUSHR().Serialize()),
 			exit:          0,
@@ -153,6 +189,39 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 				testSliceFromBytes(sig1),
 			},
 			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_verify_short_pub_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1[:47]),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(sig1),
+			},
+			exit:          int32(vmerr.CodeCellUnderflow),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_verify_short_sig_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(sig1[:95]),
+			},
+			exit:          int32(vmerr.CodeCellUnderflow),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_verify_non_byte_msg_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testBitSlice(7),
+				testSliceFromBytes(sig1),
+			},
+			exit:          int32(vmerr.CodeCellUnderflow),
 			globalVersion: 13,
 		},
 		{
@@ -175,6 +244,16 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 				int64(2),
 			},
 			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_aggregate_short_sig_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATE().Serialize()),
+			stack: []any{
+				testSliceFromBytes(sig1[:95]),
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeCellUnderflow),
 			globalVersion: 13,
 		},
 		{
@@ -202,6 +281,18 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			globalVersion: 13,
 		},
 		{
+			name: "bls_fastaggregateverify_short_pub_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1[:47]),
+				int64(1),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(aggSig),
+			},
+			exit:          int32(vmerr.CodeCellUnderflow),
+			globalVersion: 13,
+		},
+		{
 			name: "bls_fastaggregateverify_invalid_pub_false",
 			code: codeFromBuilders(t, funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
 			stack: []any{
@@ -224,6 +315,34 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 				testSliceFromBytes(msg),
 				int64(2),
 				testSliceFromBytes(aggSig),
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_aggregateverify_distinct_msgs_true",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(pub2),
+				testSliceFromBytes(msg2),
+				int64(2),
+				testSliceFromBytes(aggDistinctSig),
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_aggregateverify_swapped_msgs_false",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg2),
+				testSliceFromBytes(pub2),
+				testSliceFromBytes(msg),
+				int64(2),
+				testSliceFromBytes(aggDistinctSig),
 			},
 			exit:          0,
 			globalVersion: 13,
@@ -261,6 +380,26 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			globalVersion: 13,
 		},
 		{
+			name: "bls_g1_mul_order_zero",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MUL().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+				blsOrderInt,
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g1_mul_invalid_order",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MUL().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				blsOrderInt,
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
 			name: "bls_g1_multiexp_zero",
 			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
 			stack: []any{
@@ -280,6 +419,63 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 				int64(2),
 			},
 			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g1_multiexp_count_too_large",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+				int64(5),
+				int64(2),
+			},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g1_multiexp_invalid_term",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+				int64(5),
+				testSliceFromBytes(invalidG1),
+				int64(7),
+				int64(2),
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g1_multiexp_invalid_order_single",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				blsOrderInt,
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g1_multiexp_invalid_order_minus_one_single",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				blsOrderMinusOne,
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g1_multiexp_invalid_order_plus_one_single",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				blsOrderPlusOne,
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeUnknown),
 			globalVersion: 13,
 		},
 		{
@@ -331,6 +527,15 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			globalVersion: 13,
 		},
 		{
+			name: "bls_g1_ingroup_zero_true",
+			code: codeFromBuilders(t, funcsop.BLS_G1_INGROUP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(testBLSG1ZeroBytes()),
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
 			name: "bls_g1_ingroup_invalid_false",
 			code: codeFromBuilders(t, funcsop.BLS_G1_INGROUP().Serialize()),
 			stack: []any{
@@ -378,6 +583,26 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			globalVersion: 13,
 		},
 		{
+			name: "bls_g2_mul_order_zero",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MUL().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+				blsOrderInt,
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g2_mul_invalid_order",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MUL().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+				blsOrderInt,
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
 			name: "bls_g2_multiexp_zero",
 			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
 			stack: []any{
@@ -397,6 +622,63 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 				int64(2),
 			},
 			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g2_multiexp_count_too_large",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+				int64(5),
+				int64(2),
+			},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g2_multiexp_invalid_term",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+				int64(5),
+				testSliceFromBytes(invalidG2),
+				int64(7),
+				int64(2),
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g2_multiexp_invalid_order_single",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+				blsOrderInt,
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g2_multiexp_invalid_order_minus_one_single",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+				blsOrderMinusOne,
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeUnknown),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g2_multiexp_invalid_order_plus_one_single",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+				blsOrderPlusOne,
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeUnknown),
 			globalVersion: 13,
 		},
 		{
@@ -463,6 +745,15 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 				testSliceFromBytes(fp2[:95]),
 			},
 			exit:          int32(vmerr.CodeCellUnderflow),
+			globalVersion: 13,
+		},
+		{
+			name: "bls_g2_ingroup_zero_true",
+			code: codeFromBuilders(t, funcsop.BLS_G2_INGROUP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(testBLSG2ZeroBytes()),
+			},
+			exit:          0,
 			globalVersion: 13,
 		},
 		{
@@ -566,4 +857,18 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 
 func testEmptyCell() *cell.Cell {
 	return cell.BeginCell().EndCell()
+}
+
+func testBigIntDecimal(t *testing.T, src string) *big.Int {
+	t.Helper()
+
+	n, ok := new(big.Int).SetString(src, 10)
+	if !ok {
+		t.Fatalf("invalid decimal big int %q", src)
+	}
+	return n
+}
+
+func testBitSlice(bits uint) *cell.Slice {
+	return cell.BeginCell().MustStoreUInt(0, bits).ToSlice()
 }

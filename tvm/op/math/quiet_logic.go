@@ -1,6 +1,7 @@
 package math
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -14,6 +15,8 @@ func init() {
 		func() vm.OP { return QXOR() },
 		func() vm.OP { return QLSHIFT() },
 		func() vm.OP { return QRSHIFT() },
+		func() vm.OP { return QLSHIFTCODE(0) },
+		func() vm.OP { return QRSHIFTCODE(0) },
 		func() vm.OP { return QPOW2() },
 	)
 }
@@ -21,6 +24,9 @@ func init() {
 func quietBinaryLogicOp(name string, prefix helpers.BitPrefix, fn func(x, y *big.Int) *big.Int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
@@ -42,6 +48,9 @@ func quietBinaryLogicOp(name string, prefix helpers.BitPrefix, fn func(x, y *big
 func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
@@ -64,6 +73,39 @@ func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.Si
 		},
 		Name:      name,
 		BitPrefix: prefix,
+	}
+}
+
+func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int8, right bool) *helpers.AdvancedOP {
+	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
+	return &helpers.AdvancedOP{
+		FixedSizeBits: 8,
+		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 1); err != nil {
+				return err
+			}
+			x, err := state.Stack.PopInt()
+			if err != nil {
+				return err
+			}
+			if x == nil {
+				return pushNaNOrOverflow(state, true)
+			}
+
+			res := new(big.Int).Set(x)
+			if right {
+				res.Rsh(res, uint(imm()))
+			} else {
+				res.Lsh(res, uint(imm()))
+			}
+			return state.Stack.PushIntQuiet(res)
+		},
+		BitPrefix:       prefix,
+		SerializeSuffix: serializeImmediate,
+		NameSerializer: func() string {
+			return fmt.Sprintf("%d %s", imm(), name)
+		},
+		DeserializeSuffix: deserializeImmediate,
 	}
 }
 
@@ -93,9 +135,20 @@ func QRSHIFT() *helpers.SimpleOP {
 	return quietShiftOp("QRSHIFT", helpers.BytesPrefix(0xB7, 0xAD), true)
 }
 
+func QLSHIFTCODE(value int8) *helpers.AdvancedOP {
+	return quietShiftCodeOp("QLSHIFT#", helpers.BytesPrefix(0xB7, 0xAA), value, false)
+}
+
+func QRSHIFTCODE(value int8) *helpers.AdvancedOP {
+	return quietShiftCodeOp("QRSHIFT#", helpers.BytesPrefix(0xB7, 0xAB), value, true)
+}
+
 func QPOW2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 1); err != nil {
+				return err
+			}
 			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err

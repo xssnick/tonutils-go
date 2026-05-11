@@ -12,6 +12,10 @@ func init() {
 func IFELSE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			c0, err := state.Stack.PopContinuation()
 			if err != nil {
 				return err

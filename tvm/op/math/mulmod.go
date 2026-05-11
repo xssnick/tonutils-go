@@ -15,6 +15,9 @@ func init() {
 func MULMOD() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
 			z, err := popIntFinite(state)
 			if err != nil {
 				return err
@@ -36,7 +39,7 @@ func MULMOD() *helpers.SimpleOP {
 				}
 			}
 
-			r := new(big.Int).Mod(x.Mul(x, y), z)
+			_, r := helpers.DivFloor(new(big.Int).Mul(x, y), z)
 
 			return state.Stack.PushInt(r)
 		},

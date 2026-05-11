@@ -24,10 +24,27 @@ type Stack struct {
 	obs   cell.Observer
 }
 
-const maxStackDepth = 1024
+type StackCheckpoint struct {
+	elems []any
+	obs   cell.Observer
+}
+
+func (s *Stack) Checkpoint() StackCheckpoint {
+	return StackCheckpoint{
+		elems: s.elems,
+		obs:   s.obs,
+	}
+}
+
+func (s *Stack) RestoreCheckpoint(cp StackCheckpoint) {
+	s.elems = cp.elems
+	s.obs = cp.obs
+}
 
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
+
+const maxStackDepth = 1 << 16
 
 func NewStack() *Stack {
 	return &Stack{
@@ -286,7 +303,7 @@ func (s *Stack) PopInt() (*big.Int, error) {
 	case *big.Int:
 		return v, nil
 	default:
-		return nil, vmerr.Error(vmerr.CodeTypeCheck)
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not an integer")
 	}
 }
 
@@ -384,9 +401,13 @@ func (s *Stack) PopTuple() (tuple.Tuple, error) {
 }
 
 func (s *Stack) PopTupleRange(max int, min ...int) (tuple.Tuple, error) {
-	t, err := s.PopTuple()
+	e, err := s.PopAny()
 	if err != nil {
 		return tuple.Tuple{}, err
+	}
+	t, ok := e.(tuple.Tuple)
+	if !ok {
+		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
 	}
 
 	lower := 0
@@ -411,7 +432,7 @@ func (s *Stack) PopMaybeTupleRange(max int) (*tuple.Tuple, error) {
 	}
 	v, ok := e.(tuple.Tuple)
 	if !ok {
-		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple")
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
 	}
 	if max >= 0 && v.Len() > max {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
@@ -440,7 +461,11 @@ func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 
-	if e.Cmp(big.NewInt(min)) < 0 || e.Cmp(big.NewInt(max)) > 0 {
+	if !e.IsInt64() {
+		return nil, vmerr.Error(vmerr.CodeRangeCheck)
+	}
+	val := e.Int64()
+	if val < min || val > max {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return e, nil
@@ -538,28 +563,29 @@ func (s *Stack) FromTop(offset int) (int, error) {
 
 func (s *Stack) Rotate(from, to int) error {
 	stackLen := len(s.elems)
-	if stackLen-(from+to) < 0 || stackLen-(from+to) >= stackLen {
+	if from < 0 || to < 0 || from+to <= 0 || from+to > stackLen {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	if err := s.Reverse(stackLen-1, from+to); err != nil {
+	if err := s.Reverse(stackLen, from+to); err != nil {
 		return err
 	}
-	if err := s.Reverse(from+to-1, 0); err != nil {
+	if err := s.Reverse(from+to, 0); err != nil {
 		return err
 	}
 
-	return s.Reverse(stackLen-1, 0)
+	return s.Reverse(stackLen, 0)
 }
 
-func (s *Stack) Reverse(j, i int) error {
+// Reverse reverses a half-open stack range using the same offsets as C++ from_top.
+func (s *Stack) Reverse(from, to int) error {
 	stackLen := len(s.elems)
-	if stackLen < i || stackLen < j || i < 0 || j < 0 || j < i {
+	if from < 0 || to < 0 || from > stackLen || to > stackLen || from < to {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	for i, j := s.index(j), s.index(i); i < j; i, j = i+1, j-1 {
-		s.elems[i], s.elems[j] = s.elems[j], s.elems[i]
+	for l, r := stackLen-from, stackLen-to-1; l < r; l, r = l+1, r-1 {
+		s.elems[l], s.elems[r] = s.elems[r], s.elems[l]
 	}
 
 	return nil

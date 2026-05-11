@@ -12,7 +12,6 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp/roundrobin"
 	"github.com/xssnick/tonutils-go/tl"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -666,8 +665,15 @@ func TestRLDP_DoQuery(t *testing.T) {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
 
+			cli.mx.RLock()
+			results := make([]chan<- AsyncQueryResult, 0, len(cli.activeRequests))
 			for _, v := range cli.activeRequests {
-				v.result <- AsyncQueryResult{
+				results = append(results, v.result)
+			}
+			cli.mx.RUnlock()
+
+			for _, result := range results {
+				result <- AsyncQueryResult{
 					QueryID:     answer.ID,
 					ResultBytes: answer.Data,
 				}
@@ -882,9 +888,11 @@ func TestRLDP_SendAnswer(t *testing.T) {
 	t.Run("positive case", func(t *testing.T) {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
-			for k, _ := range cli.activeTransfers {
+			cli.mx.Lock()
+			for k := range cli.activeTransfers {
 				delete(cli.activeTransfers, k)
 			}
+			cli.mx.Unlock()
 			//for _, v := range cli.activeTransfers {
 			// v <- true
 			//}
@@ -895,7 +903,11 @@ func TestRLDP_SendAnswer(t *testing.T) {
 		}
 
 		time.Sleep(time.Second)
-		if len(cli.activeRequests) != 0 || len(cli.activeTransfers) != 0 {
+		cli.mx.RLock()
+		activeRequests := len(cli.activeRequests)
+		activeTransfers := len(cli.activeTransfers)
+		cli.mx.RUnlock()
+		if activeRequests != 0 || activeTransfers != 0 {
 			t.Error("invalid activeRequests and activeTransfers after response")
 		}
 	})
@@ -974,8 +986,6 @@ func TestRLDP_ClientServer(t *testing.T) {
 			t.Fatal("bad response data")
 		}
 	})
-
-	Logger = log.Println
 
 	t.Run("big multipart 10mb", func(t *testing.T) {
 		old := MaxUnexpectedTransferSize

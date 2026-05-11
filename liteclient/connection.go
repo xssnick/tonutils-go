@@ -55,6 +55,10 @@ type connection struct {
 	pingMx      sync.Mutex
 	activePings map[int64]time.Time
 
+	registered bool
+	closed     bool
+	closeErr   error
+
 	pool *ConnectionPool
 }
 
@@ -206,12 +210,17 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 	}
 
 	const attempts = 2
-	fails := int32(0)
-	result := make(chan error, len(config.Liteservers)*attempts)
+	const attemptTimeout = 8 * time.Second
 
-	timeout := attempts * 8 * time.Second
-	if dl, ok := ctx.Deadline(); ok {
-		timeout = dl.Sub(time.Now())
+	fails := int32(0)
+	totalAttempts := int32(len(config.Liteservers) * attempts)
+	result := make(chan error, 1)
+	var reportOnce sync.Once
+
+	report := func(err error) {
+		reportOnce.Do(func() {
+			result <- err
+		})
 	}
 
 	for _, ls := range config.Liteservers {
@@ -221,25 +230,32 @@ func (c *ConnectionPool) AddConnectionsFromConfig(ctx context.Context, config *G
 
 		go func() {
 			for i := 0; i < attempts; i++ {
-				// we need personal context for each call, because it gets cancelled on failure of one
-				ctx, cancel := context.WithTimeout(context.Background(), timeout/attempts)
+				// Keep background dialing tied to the pool lifetime, not the caller's wait context.
+				ctx, cancel := context.WithTimeout(c.globalCtx, attemptTimeout)
 				err := c.AddConnection(ctx, conStr, ls.ID.Key)
 				cancel()
 				if err == nil {
-					result <- nil
+					report(nil)
 					return
 				}
 
 				// if everything failed
-				if int(atomic.AddInt32(&fails, 1)) == len(config.Liteservers)*attempts {
-					result <- err
+				if atomic.AddInt32(&fails, 1) == totalAttempts {
+					report(err)
 				}
 			}
 		}()
 	}
 
 	// return on first success connection
-	return <-result
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.globalCtx.Done():
+		return ErrStopped
+	}
 }
 
 func (c *ConnectionPool) AddConnectionsFromConfigFile(configPath string) error {
@@ -263,6 +279,12 @@ func (c *ConnectionPool) AddConnectionsFromConfigUrl(ctx context.Context, config
 var ErrStopped = errors.New("connection pool is closed")
 
 func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey string, clientKey ...ed25519.PrivateKey) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+	}
+
 	select {
 	case <-c.globalCtx.Done():
 		return ErrStopped
@@ -297,16 +319,18 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		weight:     _nodeInitialWeight,
 	}
 
-	// get timeout if exists
-	till, ok := ctx.Deadline()
-	if !ok {
-		till = time.Now().Add(60 * time.Second)
-	}
+	till, _ := ctx.Deadline()
 
 	conn.tcp, err = net.DialTimeout("tcp", addr, till.Sub(time.Now()))
 	if err != nil {
 		return err
 	}
+	registered := false
+	defer func() {
+		if !registered && conn.tcp != nil {
+			_ = conn.tcp.Close()
+		}
+	}()
 
 	// we need 160 random bytes from which we will construct encryption keys for packets
 	rnd := make([]byte, 160)
@@ -329,15 +353,30 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		return err
 	}
 
-	connResult := make(chan error, 1)
-
-	// we are waiting for handshake response and after
-	// connection established sending signal to connResult
-	// and listen goroutine stays working after it to serve responses
-	go conn.listen(connResult)
+	handshakeResult := make(chan error, 1)
+	listenResult := make(chan error, 1)
 
 	if c.authKey != nil {
 		conn.authEvt = make(chan bool, 1)
+	}
+
+	// we are waiting for handshake response and after
+	// connection established sending signal to handshakeResult
+	// and listen goroutine stays working after it to serve responses
+	go conn.listen(handshakeResult, listenResult)
+
+	select {
+	case <-c.globalCtx.Done():
+		return ErrStopped
+	case err = <-handshakeResult:
+		if err != nil {
+			return err
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	if c.authKey != nil {
 		err = conn.authRequest()
 		if err != nil {
 			return fmt.Errorf("failed to send auth: %w", err)
@@ -346,6 +385,11 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 		select {
 		case <-conn.authEvt:
 			// auth completed
+		case err = <-listenResult:
+			if err == nil {
+				err = io.ErrClosedPipe
+			}
+			return err
 		case <-c.globalCtx.Done():
 			return ErrStopped
 		case <-ctx.Done():
@@ -356,50 +400,73 @@ func (c *ConnectionPool) AddConnection(ctx context.Context, addr, serverKey stri
 	select {
 	case <-c.globalCtx.Done():
 		return ErrStopped
-	case err = <-connResult:
-		if err != nil {
-			return err
-		}
-
-		c.nodesMx.Lock()
-		c.activeNodes = append(c.activeNodes, conn)
-		c.nodesMx.Unlock()
-
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
+	}
+
+	if err = c.registerConnection(conn); err != nil {
+		return err
+	}
+	registered = true
+
+	return nil
+}
+
+func (c *ConnectionPool) registerConnection(conn *connection) error {
+	c.nodesMx.Lock()
+	defer c.nodesMx.Unlock()
+
+	if conn.closed {
+		if conn.closeErr != nil {
+			return conn.closeErr
+		}
+		return io.ErrClosedPipe
+	}
+
+	conn.registered = true
+	c.activeNodes = append(c.activeNodes, conn)
+
+	return nil
+}
+
+func sendListenResult(ch chan<- error, err error) {
+	select {
+	case ch <- err:
+	default:
 	}
 }
 
-func (n *connection) listen(connResult chan<- error) {
+func (n *connection) listen(handshakeResult, listenResult chan<- error) {
 	var initialized bool
 
 	var err error
 	// listen for incoming packets
+listenLoop:
 	for {
 		var sz uint32
 		sz, err = readSize(n.tcp, n.rCrypt)
 		if err != nil {
-			break
+			break listenLoop
 		}
 
 		// should at least have nonce (its 32 bytes) and something else
 		if sz <= 32 {
 			err = errors.New("too small size of packet")
-			break
+			break listenLoop
 		}
 
 		var data []byte
 		data, err = readData(n.tcp, n.rCrypt, sz)
 		if err != nil {
-			break
+			break listenLoop
 		}
 
 		checksum := data[len(data)-32:]
 		data = data[:len(data)-32]
 
 		if err = validatePacket(data, checksum); err != nil {
-			break
+			break listenLoop
 		}
 
 		// skip nonce
@@ -409,7 +476,7 @@ func (n *connection) listen(connResult chan<- error) {
 		if len(data) == 0 {
 			if !initialized {
 				initialized = true
-				connResult <- nil
+				sendListenResult(handshakeResult, nil)
 			}
 			continue
 		}
@@ -418,7 +485,7 @@ func (n *connection) listen(connResult chan<- error) {
 		_, err = tl.Parse(&resp, data, true)
 		if err != nil {
 			log.Println("failed to parse message:", err.Error())
-			break
+			break listenLoop
 		}
 
 		switch t := resp.(type) {
@@ -426,14 +493,15 @@ func (n *connection) listen(connResult chan<- error) {
 			n.notePong(t.RandomID)
 		case TCPAuthenticationNonce:
 			if n.pool.authKey == nil {
-				log.Println("server wants authorization, but we dont have a key:", err.Error())
-				break
+				err = errors.New("server wants authorization, but we dont have a key")
+				log.Println(err.Error())
+				break listenLoop
 			}
 
 			err = n.authSignComplete(t.Nonce)
 			if err != nil {
 				log.Println("failed to sign and send auth message:", err.Error())
-				break
+				break listenLoop
 			}
 		case adnl.MessageAnswer:
 			n.pool.reqMx.RLock()
@@ -441,8 +509,11 @@ func (n *connection) listen(connResult chan<- error) {
 			n.pool.reqMx.RUnlock()
 
 			if ch != nil {
-				ch.RespChan <- &ADNLResponse{
+				select {
+				case ch.RespChan <- &ADNLResponse{
 					Data: t.Data,
+				}:
+				default:
 				}
 			}
 		default:
@@ -453,11 +524,11 @@ func (n *connection) listen(connResult chan<- error) {
 	// force close in case of error
 	_ = n.tcp.Close()
 
-	connResult <- err
-
-	if initialized {
-		// deactivate connection
-		n.pool.nodesMx.Lock()
+	n.pool.nodesMx.Lock()
+	n.closed = true
+	n.closeErr = err
+	registered := n.registered
+	if registered {
 		for i := range n.pool.activeNodes {
 			if n.pool.activeNodes[i] == n {
 				// remove from list
@@ -465,8 +536,16 @@ func (n *connection) listen(connResult chan<- error) {
 				break
 			}
 		}
-		n.pool.nodesMx.Unlock()
+	}
+	n.pool.nodesMx.Unlock()
 
+	if !initialized {
+		sendListenResult(handshakeResult, err)
+	} else {
+		sendListenResult(listenResult, err)
+	}
+
+	if initialized && registered {
 		select {
 		case <-n.pool.globalCtx.Done():
 			return
@@ -530,7 +609,7 @@ func (c *ConnectionPool) startPings(every time.Duration) {
 
 func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
 	size := make([]byte, 4)
-	_, err := conn.Read(size)
+	_, err := io.ReadFull(conn, size)
 	if err != nil {
 		return 0, err
 	}
@@ -619,6 +698,10 @@ func writeEncrypt(conn net.Conn, crypt cipher.Stream, buf []byte) error {
 	// encrypt data
 	crypt.XORKeyStream(buf, buf)
 
+	return writeFull(conn, buf)
+}
+
+func writeFull(conn net.Conn, buf []byte) error {
 	// write timeout in case of stuck socket, to reconnect
 	_ = conn.SetWriteDeadline(time.Now().Add(7 * time.Second))
 	// write all
@@ -627,6 +710,10 @@ func writeEncrypt(conn net.Conn, crypt cipher.Stream, buf []byte) error {
 		if err != nil {
 			_ = conn.Close()
 			return NetworkErr{err}
+		}
+		if num == 0 {
+			_ = conn.Close()
+			return NetworkErr{io.ErrShortWrite}
 		}
 
 		buf = buf[num:]
@@ -678,8 +765,7 @@ func (n *connection) handshake(data []byte, ourKey ed25519.PrivateKey, serverKey
 	res = append(res, data...)
 
 	// send handshake packet to establish connection
-	_, err = n.tcp.Write(res)
-	if err != nil {
+	if err = writeFull(n.tcp, res); err != nil {
 		return err
 	}
 
@@ -707,10 +793,9 @@ func (n *connection) queryAdnl(qid []byte, req tl.Serializable) (string, error) 
 }
 
 func (c *ConnectionPool) DefaultReconnect(waitBeforeReconnect time.Duration, maxTries int) OnDisconnectCallback {
-	var tries int
-
 	var cb OnDisconnectCallback
 	cb = func(addr, key string) {
+		tries := 0
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
 			err := c.AddConnection(ctx, addr, key)
@@ -723,7 +808,6 @@ func (c *ConnectionPool) DefaultReconnect(waitBeforeReconnect time.Duration, max
 			}
 			break
 		}
-		tries = 0
 	}
 
 	return cb

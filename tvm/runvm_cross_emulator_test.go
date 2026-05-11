@@ -23,15 +23,20 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 	}
 
 	type testCase struct {
-		name  string
-		code  *cell.Cell
-		stack []any
-		c7    tuple.Tuple
+		name    string
+		code    *cell.Cell
+		stack   []any
+		c7      tuple.Tuple
+		goLibs  []*cell.Cell
+		refLibs *cell.Cell
 	}
 
 	childC7 := tuple.NewTupleValue(tuple.NewTupleValue(int64(11), int64(22)))
 	returnedData := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 	returnedActions := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	childLibTarget := cell.BeginCell().MustStoreUInt(0xA11CE, 20).EndCell()
+	childLibCell := mustCrossLibraryCellForHash(t, childLibTarget.Hash())
+	childLibraries := mustCrossLibraryCollection(t, childLibTarget)
 
 	tests := []testCase{
 		{
@@ -151,6 +156,35 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			},
 		},
 		{
+			name: "runvm_return_32_values_free_stack_depth",
+			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(0).Serialize())),
+			stack: []any{
+				int64(0),
+				makeRunvmPushIntsChild(t, 32).BeginParse(),
+			},
+		},
+		{
+			name: "runvm_return_33_values_stack_depth_charge",
+			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(0).Serialize())),
+			stack: []any{
+				int64(0),
+				makeRunvmPushIntsChild(t, 33).BeginParse(),
+			},
+		},
+		{
+			name: "runvm_child_inherits_libraries",
+			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(0).Serialize())),
+			stack: []any{
+				int64(0),
+				codeFromBuilders(t,
+					stackop.PUSHREF(childLibCell).Serialize(),
+					cellsliceop.XLOADQ().Serialize(),
+				).BeginParse(),
+			},
+			goLibs:  []*cell.Cell{childLibraries},
+			refLibs: childLibraries,
+		},
+		{
 			name: "runvm_commit_then_throw",
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(4|8).Serialize())),
 			stack: []any{
@@ -227,6 +261,39 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			},
 		},
 		{
+			name: "runvm_child_gas_limit_oog_without_gas_max",
+			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(8).Serialize())),
+			stack: []any{
+				int64(0),
+				makeRunvmPushIntsChild(t, 12).BeginParse(),
+				int64(45),
+			},
+		},
+		{
+			name: "runvm_child_gas_limit_raised_to_limit_when_max_lower",
+			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(8|64).Serialize())),
+			stack: []any{
+				int64(0),
+				codeFromBuilders(t,
+					stackop.PUSHINT(big.NewInt(1)).Serialize(),
+					stackop.PUSHINT(big.NewInt(2)).Serialize(),
+					stackop.PUSHINT(big.NewInt(3)).Serialize(),
+				).BeginParse(),
+				int64(200),
+				int64(40),
+			},
+		},
+		{
+			name: "runvm_child_zero_gas_reports_oog",
+			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(8|64).Serialize())),
+			stack: []any{
+				int64(0),
+				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(1)).Serialize()).BeginParse(),
+				int64(0),
+				int64(0),
+			},
+		},
+		{
 			name: "runvm_isolated_loaded_cells",
 			code: prependRawMethodDrop(codeFromBuilders(t,
 				stackop.PUSHREF(cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()).Serialize(),
@@ -251,11 +318,21 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 				t.Fatalf("failed to build reference stack: %v", err)
 			}
 
-			goRes, err := runGoCrossCode(tt.code, cell.BeginCell().EndCell(), tt.c7, goStack)
+			var goRes *crossRunResult
+			if len(tt.goLibs) > 0 {
+				goRes, err = runGoCrossCodeWithLibs(tt.code, cell.BeginCell().EndCell(), tt.c7, tt.goLibs, goStack)
+			} else {
+				goRes, err = runGoCrossCode(tt.code, cell.BeginCell().EndCell(), tt.c7, goStack)
+			}
 			if err != nil {
 				t.Fatalf("go execution failed: %v", err)
 			}
-			refRes, err := runReferenceCrossCode(tt.code, cell.BeginCell().EndCell(), tt.c7, refStack)
+			var refRes *crossRunResult
+			if tt.refLibs != nil {
+				refRes, err = runReferenceCrossCodeWithLibs(tt.code, cell.BeginCell().EndCell(), tt.c7, tt.refLibs, refStack)
+			} else {
+				refRes, err = runReferenceCrossCode(tt.code, cell.BeginCell().EndCell(), tt.c7, refStack)
+			}
 			if err != nil {
 				t.Fatalf("reference execution failed: %v", err)
 			}
@@ -281,4 +358,14 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			}
 		})
 	}
+}
+
+func makeRunvmPushIntsChild(t *testing.T, count int) *cell.Cell {
+	t.Helper()
+
+	builders := make([]*cell.Builder, 0, count)
+	for i := 0; i < count; i++ {
+		builders = append(builders, stackop.PUSHINT(big.NewInt(int64(i+1))).Serialize())
+	}
+	return codeFromBuilders(t, builders...)
 }

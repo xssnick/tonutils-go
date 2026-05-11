@@ -232,6 +232,54 @@ func buildTransactionTestShardAccountWithStorageInfo(t *testing.T, addr *address
 	}
 }
 
+func buildTransactionTestStoredShardAccount(t *testing.T, addr *address.Address, status tlb.AccountStatus, balance uint64, storageInfo tlb.StorageInfo, stateInit *tlb.StateInit, stateHash []byte) *tlb.ShardAccount {
+	t.Helper()
+
+	if storageInfo.StorageExtra == nil {
+		storageInfo.StorageExtra = tlb.StorageExtraNone{}
+	}
+	if storageInfo.StorageUsed.CellsUsed == nil {
+		storageInfo.StorageUsed.CellsUsed = big.NewInt(0)
+	}
+	if storageInfo.StorageUsed.BitsUsed == nil {
+		storageInfo.StorageUsed.BitsUsed = big.NewInt(0)
+	}
+
+	accountCell, err := tlb.ToCell(&tlb.AccountState{
+		IsValid:     true,
+		Address:     addr,
+		StorageInfo: storageInfo,
+		AccountStorage: tlb.AccountStorage{
+			Status:          status,
+			Balance:         tlb.FromNanoTONU(balance),
+			StateInit:       stateInit,
+			StateHash:       stateHash,
+			ExtraCurrencies: nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to build account state: %v", err)
+	}
+
+	return &tlb.ShardAccount{
+		Account:       accountCell,
+		LastTransHash: make([]byte, 32),
+		LastTransLT:   0,
+	}
+}
+
+func buildTransactionTestUninitShardAccount(t *testing.T, addr *address.Address, balance uint64, storageInfo tlb.StorageInfo) *tlb.ShardAccount {
+	t.Helper()
+
+	return buildTransactionTestStoredShardAccount(t, addr, tlb.AccountStatusUninit, balance, storageInfo, nil, nil)
+}
+
+func buildTransactionTestFrozenShardAccount(t *testing.T, addr *address.Address, stateHash []byte, balance uint64, storageInfo tlb.StorageInfo) *tlb.ShardAccount {
+	t.Helper()
+
+	return buildTransactionTestStoredShardAccount(t, addr, tlb.AccountStatusFrozen, balance, storageInfo, nil, stateHash)
+}
+
 func buildTransactionConfigRoot(t *testing.T, params map[uint32]*cell.Cell) *cell.Cell {
 	t.Helper()
 

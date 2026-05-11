@@ -3,6 +3,8 @@ package vm
 import (
 	"math/big"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func Test_StackRotate(t *testing.T) {
@@ -154,7 +156,7 @@ func Test_Reverse(t *testing.T) {
 		stack.PushAny(big.NewInt(1))
 		stack.PushAny(big.NewInt(2))
 		stack.PushAny(big.NewInt(3))
-		if err := stack.Reverse(2, 0); err != nil {
+		if err := stack.Reverse(3, 0); err != nil {
 			t.Error(err)
 		}
 
@@ -180,7 +182,7 @@ func Test_Reverse(t *testing.T) {
 		stack.PushAny(big.NewInt(3))
 		stack.PushAny(big.NewInt(4))
 
-		if err := stack.Reverse(3, 0); err != nil {
+		if err := stack.Reverse(4, 0); err != nil {
 			t.Error(err)
 		}
 
@@ -210,7 +212,7 @@ func Test_Reverse(t *testing.T) {
 		stack.PushAny(big.NewInt(3))
 		stack.PushAny(big.NewInt(4))
 
-		if err := stack.Reverse(2, 1); err != nil {
+		if err := stack.Reverse(3, 1); err != nil {
 			t.Error(err)
 		}
 
@@ -245,5 +247,49 @@ func TestStack_PushInt(t *testing.T) {
 	err := stk.PushInt(i.Neg(i))
 	if err == nil {
 		t.Fatal("should be err")
+	}
+}
+
+func TestStack_PopIntRange(t *testing.T) {
+	tests := []struct {
+		name string
+		val  *big.Int
+		min  int64
+		max  int64
+		code int64
+	}{
+		{name: "inside", val: big.NewInt(7), min: 0, max: 10},
+		{name: "below", val: big.NewInt(-1), min: 0, max: 10, code: vmerr.CodeRangeCheck},
+		{name: "above", val: big.NewInt(11), min: 0, max: 10, code: vmerr.CodeRangeCheck},
+		{name: "huge_positive", val: new(big.Int).Lsh(big.NewInt(1), 80), min: 0, max: 10, code: vmerr.CodeRangeCheck},
+		{name: "huge_negative", val: new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 80)), min: 0, max: 10, code: vmerr.CodeRangeCheck},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stk := NewStack()
+			if err := stk.PushAny(tt.val); err != nil {
+				t.Fatalf("push failed: %v", err)
+			}
+
+			got, err := stk.PopIntRange(tt.min, tt.max)
+			if tt.code == 0 {
+				if err != nil {
+					t.Fatalf("PopIntRange failed: %v", err)
+				}
+				if got.Cmp(tt.val) != 0 {
+					t.Fatalf("PopIntRange value = %v, want %v", got, tt.val)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatal("expected range error")
+			}
+			code, ok := vmerr.ErrorCode(err)
+			if !ok || code != tt.code {
+				t.Fatalf("error code = %d, ok=%v, want %d", code, ok, tt.code)
+			}
+		})
 	}
 }

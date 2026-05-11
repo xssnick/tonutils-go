@@ -135,9 +135,12 @@ func (c *APIClient) GetOutMsgQueueSizes(ctx context.Context, wc *int32, shard *i
 }
 
 func (c *APIClient) GetBlockOutMsgQueueSize(ctx context.Context, block *BlockIDExt) (*BlockOutMsgQueueSize, error) {
-	// TODO: support proofs
 	req := GetBlockOutMsgQueueSize{
 		ID: block,
+	}
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+		req.Mode |= 1
+		req.WantProof = &True{}
 	}
 
 	var resp tl.Serializable
@@ -148,6 +151,11 @@ func (c *APIClient) GetBlockOutMsgQueueSize(ctx context.Context, block *BlockIDE
 
 	switch t := resp.(type) {
 	case BlockOutMsgQueueSize:
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			if err = verifyBlockOutMsgQueueSizeProof(block, &t); err != nil {
+				return nil, err
+			}
+		}
 		return &t, nil
 	case LSError:
 		return nil, t
@@ -156,10 +164,13 @@ func (c *APIClient) GetBlockOutMsgQueueSize(ctx context.Context, block *BlockIDE
 }
 
 func (c *APIClient) GetDispatchQueueInfo(ctx context.Context, block *BlockIDExt, afterAddr *address.Address, maxAccounts int) (*DispatchQueueInfo, error) {
-	// TODO: support proofs
 	req := GetDispatchQueueInfo{
 		ID:          block,
 		MaxAccounts: int32(maxAccounts),
+	}
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+		req.Mode |= 1
+		req.WantProof = &True{}
 	}
 
 	if afterAddr != nil {
@@ -175,6 +186,11 @@ func (c *APIClient) GetDispatchQueueInfo(ctx context.Context, block *BlockIDExt,
 
 	switch t := resp.(type) {
 	case DispatchQueueInfo:
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			if err = verifyDispatchQueueInfoProof(block, afterAddr, maxAccounts, &t); err != nil {
+				return nil, err
+			}
+		}
 		return &t, nil
 	case LSError:
 		return nil, t
@@ -183,12 +199,15 @@ func (c *APIClient) GetDispatchQueueInfo(ctx context.Context, block *BlockIDExt,
 }
 
 func (c *APIClient) GetDispatchQueueMessages(ctx context.Context, block *BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*GetDispatchQueueMessages)) (*DispatchQueueMessages, error) {
-	// TODO: support proofs
 	req := GetDispatchQueueMessages{
 		ID:          block,
 		Addr:        addr.Data(),
 		AfterLT:     afterLT,
 		MaxMessages: int32(maxMessages),
+	}
+	if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+		req.Mode |= 1
+		req.WantProof = &True{}
 	}
 
 	for _, opt := range options {
@@ -203,6 +222,11 @@ func (c *APIClient) GetDispatchQueueMessages(ctx context.Context, block *BlockID
 
 	switch t := resp.(type) {
 	case DispatchQueueMessages:
+		if c.proofCheckPolicy != ProofCheckPolicyUnsafe {
+			if err = verifyDispatchQueueMessagesProof(block, addr, afterLT, maxMessages, req, &t); err != nil {
+				return nil, err
+			}
+		}
 		return &t, nil
 	case LSError:
 		return nil, t

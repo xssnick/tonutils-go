@@ -13,6 +13,10 @@ func init() {
 func CONDSELCHK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			y, err := state.Stack.PopAny()
 			if err != nil {
 				return err

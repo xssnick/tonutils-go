@@ -10,7 +10,8 @@ import (
 
 type OpPUSHINT struct {
 	helpers.Prefixed
-	value *big.Int
+	value           *big.Int
+	instructionBits int64
 }
 
 func init() {
@@ -18,14 +19,17 @@ func init() {
 }
 
 func PUSHINT(value *big.Int) *OpPUSHINT {
+	prefixes := []helpers.BitPrefix{
+		helpers.UIntPrefix(0x7, 4),
+		helpers.UIntPrefix(0x80, 8),
+		helpers.UIntPrefix(0x81, 8),
+	}
+	for i := uint64(0); i < 31; i++ {
+		prefixes = append(prefixes, helpers.UIntPrefix(0x82<<5|i, 13))
+	}
 	return &OpPUSHINT{
-		Prefixed: helpers.NewPrefixed(
-			helpers.UIntPrefix(0x7, 4),
-			helpers.UIntPrefix(0x80, 8),
-			helpers.UIntPrefix(0x81, 8),
-			helpers.UIntPrefix(0x82, 8),
-		),
-		value: value,
+		Prefixed: helpers.NewPrefixed(prefixes...),
+		value:    value,
 	}
 }
 
@@ -38,6 +42,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 	switch prefix {
 	case 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f:
 		op.value = big.NewInt(int64(((prefix + 5) & 0xF) - 5))
+		op.instructionBits = 8
 		return nil
 	case 0x80:
 		val, err := code.LoadBigInt(8)
@@ -45,6 +50,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 			return err
 		}
 		op.value = val
+		op.instructionBits = 16
 		return nil
 	case 0x81:
 		val, err := code.LoadBigInt(16)
@@ -52,11 +58,15 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 			return err
 		}
 		op.value = val
+		op.instructionBits = 24
 		return nil
 	case 0x82:
 		szBytes, err := code.LoadUInt(5)
 		if err != nil {
 			return err
+		}
+		if szBytes == 31 {
+			return vm.ErrCorruptedOpcode
 		}
 
 		sz := szBytes*8 + 19
@@ -75,6 +85,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 		}
 
 		op.value = val
+		op.instructionBits = 13
 		return nil
 	}
 
@@ -120,10 +131,17 @@ func (op *OpPUSHINT) Serialize() *cell.Builder {
 }
 
 func (op *OpPUSHINT) SerializeText() string {
+	if op.value == nil {
+		return "PUSHINT"
+	}
 	return fmt.Sprintf("%s PUSHINT", op.value.String())
 }
 
 func (op *OpPUSHINT) InstructionBits() int64 {
+	if op.instructionBits != 0 {
+		return op.instructionBits
+	}
+
 	bitsSz := op.value.BitLen() + 1
 
 	switch {

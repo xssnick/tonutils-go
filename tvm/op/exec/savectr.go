@@ -15,8 +15,8 @@ func SAVECTR(i int) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
-			c0 := vm.ForceControlData(state.Reg.C[0])
-			if !c0.GetControlData().Save.Define(i, state.Reg.Get(i)) {
+			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+			if !c0.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i))) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 
@@ -27,6 +27,7 @@ func SAVECTR(i int) (op *helpers.AdvancedOP) {
 			return fmt.Sprintf("c%d SAVECTR", i)
 		},
 		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0xA0}),
+		Prefixes:          controlRegisterPrefixes(0xEDA0),
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}

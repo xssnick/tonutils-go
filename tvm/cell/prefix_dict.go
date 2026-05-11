@@ -129,9 +129,6 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 	if d == nil {
 		return nil, 0, nil
 	}
-	if key.BitsSize() > d.keySz {
-		return nil, 0, fmt.Errorf("incorrect key size")
-	}
 	if d.root == nil {
 		return nil, 0, nil
 	}
@@ -143,11 +140,11 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 	keySlice := key.BeginParse()
 
 	for {
+		branchSlice := d.beginParseNode(branch, node)
 		if branch.IsSpecial() {
 			return nil, matched, fmt.Errorf("prefix dict has special cells in tree structure")
 		}
 
-		branchSlice := d.beginParseNode(branch, node)
 		labelLen, commonPrefix, err := matchLabelPrefix(remaining, branchSlice, keySlice)
 		if err != nil {
 			return nil, matched, err
@@ -272,7 +269,7 @@ func (d *PrefixDictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !changed {
+	if !changed || value == nil || sameDictRoot(d.root, newRoot) {
 		return nil, ErrNoSuchKeyInDict
 	}
 

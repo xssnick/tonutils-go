@@ -1,7 +1,6 @@
 package stack
 
 import (
-	"math/big"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -9,13 +8,8 @@ import (
 
 func Test_REVERSE(t *testing.T) {
 	t.Run("full", func(t *testing.T) {
-		st := vm.NewStack()
-
-		st.PushAny(big.NewInt(1))
-		st.PushAny(big.NewInt(2))
-		st.PushAny(big.NewInt(3))
-		st.PushAny(big.NewInt(4))
-		blkpush := REVERSE(1, 0)
+		st := newStack(1, 2, 3, 4)
+		blkpush := REVERSE(4, 0)
 
 		err := blkpush.Interpret(&vm.State{
 			Stack: st,
@@ -24,31 +18,13 @@ func Test_REVERSE(t *testing.T) {
 			t.Fatal("Failed ROT interpretation:", err.Error())
 		}
 
-		a, err := st.PopInt()
-		if err != nil || a.Cmp(big.NewInt(1)) != 0 {
-			t.Errorf("Expected 1 at a, got %v", a)
-		}
-		b, err := st.PopInt()
-		if err != nil || b.Cmp(big.NewInt(2)) != 0 {
-			t.Errorf("Expected 2 at b, got %v", b)
-		}
-		c, err := st.PopInt()
-		if err != nil || c.Cmp(big.NewInt(3)) != 0 {
-			t.Errorf("Expected 3 at c, got %v", c)
-		}
-		d, err := st.PopInt()
-		if err != nil || d.Cmp(big.NewInt(4)) != 0 {
-			t.Errorf("Expected 4 at d, got %v", d)
+		if got := popInts(t, st, 4); !equalInts(got, []int64{1, 2, 3, 4}) {
+			t.Errorf("Expected [1 2 3 4], got %v", got)
 		}
 	})
 	t.Run("part", func(t *testing.T) {
-		st := vm.NewStack()
-
-		st.PushAny(big.NewInt(1))
-		st.PushAny(big.NewInt(2))
-		st.PushAny(big.NewInt(3))
-		st.PushAny(big.NewInt(4))
-		blkpush := REVERSE(0, 1)
+		st := newStack(1, 2, 3, 4)
+		blkpush := REVERSE(2, 1)
 
 		err := blkpush.Interpret(&vm.State{
 			Stack: st,
@@ -57,22 +33,49 @@ func Test_REVERSE(t *testing.T) {
 			t.Fatal("Failed ROT interpretation:", err.Error())
 		}
 
-		d, err := st.PopInt()
-		if err != nil || d.Cmp(big.NewInt(4)) != 0 {
-			t.Errorf("Expected 4 at d, got %v", d)
-		}
-		b, err := st.PopInt()
-		if err != nil || b.Cmp(big.NewInt(2)) != 0 {
-			t.Errorf("Expected 2 at b, got %v", b)
-		}
-		c, err := st.PopInt()
-		if err != nil || c.Cmp(big.NewInt(3)) != 0 {
-			t.Errorf("Expected 3 at c, got %v", c)
-		}
-		a, err := st.PopInt()
-		if err != nil || a.Cmp(big.NewInt(1)) != 0 {
-			t.Errorf("Expected 1 at a, got %v", a)
+		if got := popInts(t, st, 4); !equalInts(got, []int64{4, 2, 3, 1}) {
+			t.Errorf("Expected [4 2 3 1], got %v", got)
 		}
 	})
+	t.Run("matches cxx opcode range", func(t *testing.T) {
+		for encodedX := 0; encodedX <= 15; encodedX++ {
+			for y := 0; y <= 15; y++ {
+				x := encodedX + 2
+				stackLen := x + y + 3
 
+				initial := make([]int64, stackLen)
+				for i := range initial {
+					initial[i] = int64(i + 1)
+				}
+
+				want := reverseLikeCXX(initial, x, y)
+				st := newStack(initial...)
+				op := REVERSE(uint8(x), uint8(y))
+				decoded := REVERSE(2, 0)
+				if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+					t.Fatalf("decode REVERSE(%d,%d): %v", x, y, err)
+				}
+				if err := decoded.Interpret(&vm.State{Stack: st}); err != nil {
+					t.Fatalf("execute REVERSE(%d,%d): %v", x, y, err)
+				}
+				if got := popInts(t, st, stackLen); !equalInts(got, want) {
+					t.Fatalf("REVERSE(%d,%d): expected %v, got %v", x, y, want, got)
+				}
+			}
+		}
+	})
+}
+
+func reverseLikeCXX(initial []int64, x, y int) []int64 {
+	vals := append([]int64(nil), initial...)
+	for l, r := len(vals)-x-y, len(vals)-y-1; l < r; l, r = l+1, r-1 {
+		vals[l], vals[r] = vals[r], vals[l]
+	}
+
+	res := make([]int64, len(vals))
+	for i := range vals {
+		res[i] = vals[len(vals)-1-i]
+	}
+
+	return res
 }

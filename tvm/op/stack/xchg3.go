@@ -10,9 +10,18 @@ import (
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return XCHG3(0, 0, 0) })
+	vm.List = append(vm.List, func() vm.OP { return xchg3Ext(0, 0, 0) })
 }
 
 func XCHG3(i, j, k uint8) (op *helpers.AdvancedOP) {
+	return xchg3(helpers.UIntPrefix(0x4, 4), i, j, k)
+}
+
+func xchg3Ext(i, j, k uint8) *helpers.AdvancedOP {
+	return xchg3(helpers.UIntPrefix(0x540, 12), i, j, k)
+}
+
+func xchg3(prefix helpers.BitPrefix, i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
@@ -28,7 +37,7 @@ func XCHG3(i, j, k uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d,%d XCHG3", i, j, k)
 		},
-		BitPrefix: helpers.UIntPrefix(0x4, 4),
+		BitPrefix: prefix,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4).MustStoreUInt(uint64(k), 4)
 		},

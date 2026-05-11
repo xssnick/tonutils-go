@@ -246,7 +246,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 		)
 
 		stack, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.DefaultGlobalVersion)
-		if code := exitCodeFromResult(res, err); code != vmerr.CodeOutOfGas {
+		if code := exitCodeFromResult(res, err); code != ^vmerr.CodeOutOfGas {
 			t.Fatalf("expected out of gas exit, got %d", code)
 		}
 

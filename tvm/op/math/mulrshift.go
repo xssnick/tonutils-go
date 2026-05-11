@@ -14,6 +14,9 @@ func init() {
 func MULRSHIFT() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
 			z, err := popIntRange(state, 0, 256)
 			if err != nil {
 				return err

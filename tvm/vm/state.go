@@ -69,6 +69,42 @@ func (r *Register) Define(i int, val any) bool {
 	}
 
 	if i < 4 {
+		if r.C[i] != nil {
+			return false
+		}
+
+		return r.Set(i, val)
+	}
+
+	if i < 6 {
+		if r.D[i-4] != nil {
+			return false
+		}
+
+		return r.Set(i, val)
+	}
+
+	if i == 7 {
+		c, ok := val.(tuple.Tuple)
+		if !ok || c.IsNull() {
+			return false
+		}
+
+		if r.C7.IsNull() {
+			r.C7 = c
+		}
+		return true
+	}
+
+	return false
+}
+
+func (r *Register) Set(i int, val any) bool {
+	if i < 0 {
+		return false
+	}
+
+	if i < 4 {
 		c, ok := val.(Continuation)
 		if !ok || c == nil {
 			return false
@@ -144,6 +180,9 @@ func IsSuccessExitCode(code int64) bool {
 func NewExecutionState(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
 	if data == nil {
 		data = emptyCell()
+	}
+	if c7.IsNull() {
+		c7 = tuple.NewTupleValue()
 	}
 
 	return &State{

@@ -8,6 +8,7 @@ import (
 type AdvancedOP struct {
 	Action            func(*vm.State) error
 	BitPrefix         BitPrefix
+	Prefixes          []BitPrefix
 	NameSerializer    func() string
 	SerializeSuffix   func() *cell.Builder
 	DeserializeSuffix func(code *cell.Slice) error
@@ -16,6 +17,9 @@ type AdvancedOP struct {
 }
 
 func (op *AdvancedOP) GetPrefixes() []*cell.Slice {
+	if len(op.Prefixes) > 0 {
+		return PrefixSlices(op.Prefixes...)
+	}
 	return PrefixSlices(op.BitPrefix)
 }
 

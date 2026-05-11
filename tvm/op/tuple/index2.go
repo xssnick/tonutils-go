@@ -83,11 +83,8 @@ func execIndexMulti(state *vm.State, indices []int) error {
 			return err
 		}
 		nested, ok := val.(tuplepkg.Tuple)
-		if !ok {
+		if !ok || nested.Len() > 255 {
 			return vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a tuple")
-		}
-		if nested.Len() > 255 {
-			return vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
 		}
 		current = nested
 	}

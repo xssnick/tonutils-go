@@ -744,14 +744,18 @@ func BLS_G1_MUL() *helpers.SimpleOP {
 				return err
 			}
 
-			n := new(big.Int).Mod(new(big.Int).Set(x), blsOrder)
-			if n.Sign() == 0 {
+			if x.Sign() == 0 {
 				return pushSliceBytes(state, blsG1ZeroCompressed)
 			}
 
 			p, err := parseBLSG1(pData)
 			if err != nil {
 				return blsUnknown("invalid bls g1 point", err)
+			}
+
+			n := blsScalarMod(x)
+			if n.Sign() == 0 {
+				return pushSliceBytes(state, blsG1ZeroCompressed)
 			}
 
 			var out circlbls.G1
@@ -807,13 +811,16 @@ func BLS_G1_MULTIEXP() *helpers.SimpleOP {
 				if err != nil {
 					return err
 				}
-				scalar := blsScalarMod(x)
-				if scalar.Sign() == 0 {
+				if x.Sign() == 0 {
 					return pushSliceBytes(state, blsG1ZeroCompressed)
 				}
 				p, err := parseBLSG1(pData)
 				if err != nil {
 					return blsUnknown("invalid bls g1 point", err)
+				}
+				scalar := blsScalarMod(x)
+				if scalar.Sign() == 0 {
+					return pushSliceBytes(state, blsG1ZeroCompressed)
 				}
 				var out circlbls.G1
 				out.ScalarMult(blsScalarFromInt(scalar), p)
@@ -1021,14 +1028,18 @@ func BLS_G2_MUL() *helpers.SimpleOP {
 				return err
 			}
 
-			n := new(big.Int).Mod(new(big.Int).Set(x), blsOrder)
-			if n.Sign() == 0 {
+			if x.Sign() == 0 {
 				return pushSliceBytes(state, blsG2ZeroCompressed)
 			}
 
 			p, err := parseBLSG2(pData)
 			if err != nil {
 				return blsUnknown("invalid bls g2 point", err)
+			}
+
+			n := blsScalarMod(x)
+			if n.Sign() == 0 {
+				return pushSliceBytes(state, blsG2ZeroCompressed)
 			}
 
 			var out circlbls.G2
@@ -1084,13 +1095,16 @@ func BLS_G2_MULTIEXP() *helpers.SimpleOP {
 				if err != nil {
 					return err
 				}
-				scalar := blsScalarMod(x)
-				if scalar.Sign() == 0 {
+				if x.Sign() == 0 {
 					return pushSliceBytes(state, blsG2ZeroCompressed)
 				}
 				p, err := parseBLSG2(pData)
 				if err != nil {
 					return blsUnknown("invalid bls g2 point", err)
+				}
+				scalar := blsScalarMod(x)
+				if scalar.Sign() == 0 {
+					return pushSliceBytes(state, blsG2ZeroCompressed)
 				}
 				var out circlbls.G2
 				out.ScalarMult(blsScalarFromInt(scalar), p)

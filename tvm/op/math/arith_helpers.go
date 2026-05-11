@@ -30,6 +30,13 @@ func pushSmallInt(state *vm.State, val int64) error {
 	return state.Stack.PushInt(big.NewInt(val))
 }
 
+func checkStackDepth(state *vm.State, depth int) error {
+	if state.Stack.Len() < depth {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+	return nil
+}
+
 func popIntFinite(state *vm.State) (*big.Int, error) {
 	return state.Stack.PopIntFinite()
 }

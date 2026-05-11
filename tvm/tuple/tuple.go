@@ -106,21 +106,21 @@ func cloneTupleLeaf(val any) any {
 
 func (t *Tuple) Index(i int) (any, error) {
 	if t.IsNull() || i < 0 || i >= len(t.data.val) {
-		return nil, vmerr.Error(vmerr.CodeRangeCheck)
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "tuple index out of range")
 	}
 	return cloneTupleLeaf(t.data.val[i]), nil
 }
 
 func (t *Tuple) RawIndex(i int) (any, error) {
 	if t.IsNull() || i < 0 || i >= len(t.data.val) {
-		return nil, vmerr.Error(vmerr.CodeRangeCheck)
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "tuple index out of range")
 	}
 	return t.data.val[i], nil
 }
 
 func (t *Tuple) Set(i int, val any) error {
 	if t.IsNull() || i < 0 || i >= len(t.data.val) {
-		return vmerr.Error(vmerr.CodeRangeCheck)
+		return vmerr.Error(vmerr.CodeRangeCheck, "tuple index out of range")
 	}
 
 	next := append([]any(nil), t.data.val...)
@@ -148,7 +148,7 @@ func (t *Tuple) Resize(size int) {
 
 func (t *Tuple) PopLast() (any, error) {
 	if t.IsNull() || len(t.data.val) == 0 {
-		return nil, vmerr.Error(vmerr.CodeRangeCheck)
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "tuple index out of range")
 	}
 
 	idx := len(t.data.val) - 1

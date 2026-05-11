@@ -138,8 +138,6 @@ type decoderStreamPart struct {
 	receivedFastNum      uint32
 	receivedNumConfirmed uint32
 
-	recvOrder []uint32
-
 	lastConfirmAt  time.Time
 	lastCompleteAt time.Time
 	startedAt      time.Time
@@ -474,7 +472,6 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					if part.Seqno < stream.currentPart.fecSymbolsCount {
 						stream.currentPart.receivedFastNum++
 					}
-					stream.currentPart.recvOrder = append(stream.currentPart.recvOrder, part.Seqno)
 
 					if canTryDecode {
 						tmd := time.Now()
@@ -804,8 +801,18 @@ func (r *RLDP) recoverySender() {
 	timedOutReq := make([]string, 0, 32)
 	timedOutExp := make([]string, 0, 32)
 	closerCtx := r.adnl.GetCloserCtx()
-	ticker := time.NewTicker(1 * time.Millisecond)
-	defer ticker.Stop()
+	var ticker *time.Ticker
+	var tickerC <-chan time.Time
+	stopTicker := func() {
+		if ticker == nil {
+			return
+		}
+
+		ticker.Stop()
+		ticker = nil
+		tickerC = nil
+	}
+	defer stopTicker()
 
 	// round-robin head for fair recovery
 	var rrHead uint32
@@ -817,9 +824,14 @@ func (r *RLDP) recoverySender() {
 			return
 		case <-r.activateRecoverySender:
 			active = true
-		case <-ticker.C:
+			if ticker == nil {
+				ticker = time.NewTicker(1 * time.Millisecond)
+				tickerC = ticker.C
+			}
+		case <-tickerC:
 			if !active {
-				break
+				stopTicker()
+				continue
 			}
 
 			if r.lastReport.Before(time.Now().Add(-5 * time.Second)) {
@@ -871,6 +883,7 @@ func (r *RLDP) recoverySender() {
 			if len(r.activeRequests)+len(r.activeTransfers)+len(r.expectedTransfers) == 0 {
 				// stop active ticks to not consume resources
 				active = false
+				stopTicker()
 			}
 			r.mx.RUnlock()
 

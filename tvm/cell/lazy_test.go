@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"bytes"
 	"errors"
 	"math/big"
 	"testing"
@@ -486,6 +487,56 @@ func TestToBOCLoadsLazyRefs(t *testing.T) {
 	}
 	if decodedRef.HashKey() != ref.HashKey() {
 		t.Fatalf("unexpected decoded ref hash: got=%x want=%x", decodedRef.Hash(), ref.Hash())
+	}
+}
+
+func TestToBOCSkipsDuplicateLazyRefLoad(t *testing.T) {
+	ref := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
+	src := BeginCell().MustStoreUInt(0b101, 3).MustStoreRef(ref).MustStoreRef(ref).EndCell()
+	loader := &testLazyLoader{cells: map[Hash]*Cell{ref.HashKey(0): ref}}
+	cellWithLazyRefs := cellWithLazyRefsFromCell(src, loader.LoadCell)
+
+	boc := cellWithLazyRefs.ToBOC()
+	if boc == nil {
+		t.Fatal("expected cell with duplicate lazy refs to serialize")
+	}
+	if loader.calls != 1 {
+		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
+	}
+
+	decoded, err := FromBOC(boc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.HashKey() != src.HashKey() {
+		t.Fatalf("unexpected decoded hash: got=%x want=%x", decoded.Hash(), src.Hash())
+	}
+}
+
+func TestToBOCSkipsDuplicateMultiLevelLazyRefLoad(t *testing.T) {
+	base := BeginCell().MustStoreUInt(0x11, 8).EndCell()
+	ref, err := createPrunedBranchFromCell(base, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := BeginCell().MustStoreRef(ref).MustStoreRef(ref).EndCell()
+	loader := &testLazyLoader{cells: map[Hash]*Cell{ref.HashKey(ref.Level()): ref}}
+	cellWithLazyRefs := cellWithLazyRefsFromCell(src, loader.LoadCell)
+
+	got := cellWithLazyRefs.ToBOC()
+	if got == nil {
+		t.Fatal("expected cell with duplicate multi-level lazy refs to serialize")
+	}
+	if loader.calls != 1 {
+		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
+	}
+	if loader.lastHash != ref.HashKey(ref.Level()) {
+		t.Fatalf("unexpected load hash: got=%x want=%x", loader.lastHash, ref.HashKey(ref.Level()))
+	}
+
+	want := src.ToBOC()
+	if !bytes.Equal(got, want) {
+		t.Fatal("lazy multi-level boc diverges from eager serialization")
 	}
 }
 

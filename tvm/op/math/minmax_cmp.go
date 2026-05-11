@@ -38,6 +38,9 @@ func init() {
 func minMaxOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			x, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err
@@ -93,6 +96,9 @@ func absOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP 
 func compareOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			y, err := popIntOperand(state, quiet)
 			if err != nil {
 				return err

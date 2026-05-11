@@ -17,17 +17,17 @@ func BLKSWAP(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, y := int(i)+1, int(j)+1
+			x, y := int(i), int(j)
 			if x+y > state.Stack.Len() {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			if err := state.Stack.Reverse(x+y-1, y); err != nil {
+			if err := state.Stack.Reverse(x+y, y); err != nil {
 				return err
 			}
-			if err := state.Stack.Reverse(y-1, 0); err != nil {
+			if err := state.Stack.Reverse(y, 0); err != nil {
 				return err
 			}
-			return state.Stack.Reverse(x+y-1, 0)
+			return state.Stack.Reverse(x+y, 0)
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d BLKSWAP", i, j)

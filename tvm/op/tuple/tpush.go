@@ -3,6 +3,7 @@ package tuple
 import (
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -14,6 +15,9 @@ func TPUSH() *helpers.SimpleOP {
 		Name:      "TPUSH",
 		BitPrefix: helpers.BytesPrefix(0x6f, 0x8c),
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			val, err := state.Stack.PopAny()
 			if err != nil {
 				return err

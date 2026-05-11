@@ -152,7 +152,7 @@ func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7
 	state.StopOnAccept = stopOnAccept
 	state.SetChildRunner(tvm.runState)
 	state.InitForExecution()
-	currentCode, err := state.Cells.BeginParse(code)
+	currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
 	if err != nil {
 		return executionResultFromState(vmerrCode(err), state, code, data), err
 	}
@@ -220,6 +220,9 @@ func (tvm *TVM) runState(state *vm.State) (exitCode int64, err error) {
 	if err = tvm.execute(state); err != nil {
 		if code, ok := vmerr.ErrorCode(err); ok {
 			exitCode = code
+			if exitCode == vmerr.CodeOutOfGas {
+				exitCode = ^exitCode
+			}
 			if !vm.IsSuccessExitCode(exitCode) {
 				return exitCode, err
 			}
@@ -350,6 +353,19 @@ func normalizeCellError(err error) error {
 	}
 }
 
+func normalizeOpcodeDeserializeError(err error, op vm.OP) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, vm.ErrCorruptedOpcode) ||
+		errors.Is(err, cell.ErrNoMoreRefs) ||
+		errors.Is(err, cell.ErrSmallSlice) ||
+		strings.Contains(err.Error(), "not enough data") {
+		return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("deserialize opcode [%s] failed", op.SerializeText()))
+	}
+	return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
+}
+
 func (tvm *TVM) step(state *vm.State) (err error) {
 	px := tvm.matchOpcode(state.CurrentCode)
 	if px == nil {
@@ -370,10 +386,7 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 		if gasErr := consumeInstructionGas(state, op); gasErr != nil {
 			return gasErr
 		}
-		if errors.Is(err, vm.ErrCorruptedOpcode) {
-			return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("deserialize opcode [%s] failed", op.SerializeText()))
-		}
-		return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
+		return normalizeOpcodeDeserializeError(err, op)
 	}
 	if err = consumeInstructionGas(state, op); err != nil {
 		return err
@@ -382,12 +395,15 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 		return err
 	}
 
-	vm.Tracef("%s", op.SerializeText())
-	stackBefore := state.Stack.Snapshot()
+	if vm.TraceHook != nil {
+		vm.Tracef("%s", op.SerializeText())
+	}
+
+	stackBefore := state.Stack.Checkpoint()
 	err = op.Interpret(state)
 	if err != nil {
 		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow {
-			state.Stack.Restore(stackBefore)
+			state.Stack.RestoreCheckpoint(stackBefore)
 		}
 		err = normalizeCellError(err)
 		return err

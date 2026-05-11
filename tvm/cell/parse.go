@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 )
 
 const hashSize = 32
@@ -28,6 +29,18 @@ var MaxBOCRoots = 16384
 // including the improved compression/decompression path.
 // Set it to 0 or a negative value to disable the limit.
 var MaxBOCCells = 1 << 20
+
+const maxSerializedBOCCellBytes = 2 + maxCellDataBytes + 4*4 + (hashSize+depthSize)*4
+
+func maxBOCPayloadBytes() int {
+	if MaxBOCCells <= 0 {
+		return 0
+	}
+	if MaxBOCCells > math.MaxInt/maxSerializedBOCCellBytes {
+		return math.MaxInt
+	}
+	return MaxBOCCells * maxSerializedBOCCellBytes
+}
 
 // BOCParseOptions configures BoC parsing.
 type BOCParseOptions struct {
@@ -356,6 +369,13 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 	}
 	if dataLen < cellsNum*2 {
 		return nil, nil, errors.New("invalid boc cells data size")
+	}
+	maxPayloadBytes := maxBOCPayloadBytes()
+	if maxPayloadBytes > 0 && dataLen > maxPayloadBytes {
+		return nil, nil, fmt.Errorf("boc cells data size is too big: %d > %d", dataLen, maxPayloadBytes)
+	}
+	if cellsNum > 0 && dataLen > cellsNum*maxSerializedBOCCellBytes {
+		return nil, nil, fmt.Errorf("boc cells data size is too big for cells count: data len %d, cells %d", dataLen, cellsNum)
 	}
 
 	if flags.hasCacheBits && !flags.hasIndex {

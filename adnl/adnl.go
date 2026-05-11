@@ -138,9 +138,9 @@ func (a *ADNL) GetCloserCtx() context.Context {
 }
 
 func (c *Channel) process(buf []byte) error {
-	if c.wantConfirm {
+	if c.wantConfirm.Load() {
 		// we got message in channel, no more confirmations required
-		c.wantConfirm = false
+		c.wantConfirm.Store(false)
 	}
 
 	data, err := c.decodePacket(buf)
@@ -307,11 +307,11 @@ func (a *ADNL) processMessage(message any) error {
 		}
 
 		newChan := &Channel{
-			adnl:        a,
-			key:         key,
-			initDate:    int32(time.Now().Unix()),
-			wantConfirm: true,
+			adnl:     a,
+			key:      key,
+			initDate: int32(time.Now().Unix()),
 		}
+		newChan.wantConfirm.Store(true)
 
 		if err = newChan.setup(ms.Key); err != nil {
 			return fmt.Errorf("failed to setup channel: %w", err)
@@ -328,7 +328,7 @@ func (a *ADNL) processMessage(message any) error {
 			return fmt.Errorf("confirmation for unknown channel %s", hex.EncodeToString(ms.PeerKey))
 		}
 
-		if ch.ready {
+		if ch.ready.Load() {
 			// not required confirmation, skip it
 			return nil
 		}
@@ -338,15 +338,13 @@ func (a *ADNL) processMessage(message any) error {
 		}
 	case MessagePart:
 		msgID := string(ms.Hash)
+		if ms.TotalSize <= 0 || ms.TotalSize > HugePacketMaxSz {
+			return fmt.Errorf("skip invalid partitioned message with len %d bytes", ms.TotalSize)
+		}
 
 		a.mx.Lock()
 		p, ok := a.msgParts[msgID]
 		if !ok {
-			if ms.TotalSize > HugePacketMaxSz {
-				a.mx.Unlock()
-				return fmt.Errorf("skip too big partitioned message with len %d bytes", ms.TotalSize)
-			}
-
 			if len(a.msgParts) > 100 {
 				// cleanup old stuck messages
 				tm := time.Now().Add(-7 * time.Second)
@@ -671,8 +669,8 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
 	seqno := atomic.AddInt64(&a.seqno, 1)
 
-	if ch != nil && ch.ready {
-		if ch.wantConfirm {
+	if ch != nil && ch.ready.Load() {
+		if ch.wantConfirm.Load() {
 			// if client not yet received confirmation - we will send it till his first packet in channel
 			chMsg := &MessageConfirmChannel{
 				Key:     ch.key.Public().(ed25519.PublicKey),

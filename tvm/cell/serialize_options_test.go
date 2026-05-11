@@ -168,6 +168,40 @@ func TestToBOCWithOptions_RoundTripWithHashes(t *testing.T) {
 	}
 }
 
+func TestWriteBOCWithOptionsMatchesToBOCWithOptions(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
+	left := BeginCell().MustStoreUInt(0x12, 8).MustStoreRef(leaf).EndCell()
+	right := BeginCell().MustStoreUInt(0x34, 8).MustStoreRef(leaf).EndCell()
+	root := BeginCell().
+		MustStoreUInt(0x99, 8).
+		MustStoreRef(left).
+		MustStoreRef(right).
+		MustStoreRef(leaf).
+		EndCell()
+
+	opts := BOCSerializeOptions{
+		WithCRC32C:    true,
+		WithIndex:     true,
+		WithCacheBits: true,
+		WithTopHash:   true,
+		WithIntHashes: true,
+	}
+
+	want := ToBOCWithOptions([]*Cell{root, leaf}, opts)
+	if len(want) == 0 {
+		t.Fatal("expected non-empty boc")
+	}
+
+	var got bytes.Buffer
+	if err := WriteBOCWithOptions(&got, []*Cell{root, leaf}, opts); err != nil {
+		t.Fatalf("failed to write boc: %v", err)
+	}
+
+	if !bytes.Equal(got.Bytes(), want) {
+		t.Fatal("writer boc output diverges from byte-slice serialization")
+	}
+}
+
 func TestToBOCWithFlags_MatchesToBOCWithOptions(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
 	root := BeginCell().

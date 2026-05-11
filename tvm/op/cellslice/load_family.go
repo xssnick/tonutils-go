@@ -2,6 +2,7 @@ package cellslice
 
 import (
 	"fmt"
+	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -152,6 +153,10 @@ func loadIntXOp(name string, mode uint64) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			bits, err := state.Stack.PopIntRange(0, 257-int64(mode&1))
 			if err != nil {
 				return err
@@ -236,9 +241,19 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 			if err != nil {
 				return err
 			}
-			val, err := cs.PreloadBigUInt(actualBits)
-			if err != nil {
-				return vmerr.Error(vmerr.CodeCellUnderflow)
+			loadBits := actualBits
+			if left := cs.BitsLeft(); left < loadBits {
+				loadBits = left
+			}
+			val := big.NewInt(0)
+			if loadBits > 0 {
+				val, err = cs.PreloadBigUInt(loadBits)
+				if err != nil {
+					return vmerr.Error(vmerr.CodeCellUnderflow)
+				}
+			}
+			if loadBits < actualBits {
+				val.Lsh(val, actualBits-loadBits)
 			}
 			if err = state.Stack.PushSlice(cs); err != nil {
 				return err
@@ -265,6 +280,10 @@ func loadSliceXOp(name string, mode uint64) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			bits, err := state.Stack.PopIntRange(0, 1023)
 			if err != nil {
 				return err

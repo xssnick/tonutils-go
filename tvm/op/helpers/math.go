@@ -24,18 +24,23 @@ func DivFloor(x, y *big.Int) (*big.Int, *big.Int) {
 
 // division with rounding to nearest integer (return quotient)
 func DivRound(x, y *big.Int) *big.Int {
-	xFloat := new(big.Float).SetInt(x)
-	yFloat := new(big.Float).SetInt(y)
+	q := new(big.Int).Quo(x, y)
+	r := new(big.Int).Rem(x, y)
+	if r.Sign() == 0 {
+		return q
+	}
 
-	quotient := new(big.Float).Quo(xFloat, yFloat)
+	twiceRem := new(big.Int).Abs(r)
+	twiceRem.Lsh(twiceRem, 1)
+	absY := new(big.Int).Abs(y)
+	cmp := twiceRem.Cmp(absY)
 
-	q, _ := quotient.Int(nil)
-	r := new(big.Float).Sub(quotient, new(big.Float).SetInt(q))
-
-	if quotient.Sign() >= 0 && r.Cmp(big.NewFloat(0.5)) >= 0 {
-		q.Add(q, big.NewInt(1)) // ↑ if r >= 0.5
-	} else if quotient.Sign() < 0 && r.Cmp(big.NewFloat(-0.5)) < 0 {
-		q.Sub(q, big.NewInt(1)) // ↓ if r < -0.5
+	if x.Sign() == y.Sign() {
+		if cmp >= 0 {
+			q.Add(q, big.NewInt(1))
+		}
+	} else if cmp > 0 {
+		q.Sub(q, big.NewInt(1))
 	}
 
 	return q

@@ -56,7 +56,7 @@ func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, i
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
 
-	return fixedDictLookupNearest(d.root, d.keySz, key, fetchNext, allowEq, invertFirst)
+	return fixedDictLookupNearestObserved(d.root, d.keySz, key, fetchNext, allowEq, invertFirst, d.observer, d.traceNode)
 }
 
 func (d *Dictionary) HasCommonPrefix(prefix *Cell) (bool, error) {
@@ -81,7 +81,7 @@ func (d *Dictionary) ExtractPrefixSubdictRoot(prefix *Cell, removePrefix bool) (
 	if d == nil {
 		return nil, nil
 	}
-	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix)
+	root, changed, err := extractPrefixSubdictRootObserved(d.root, d.keySz, prefix, removePrefix, d.observer, d.traceNode)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func (d *Dictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) (bool, er
 		return false, nil
 	}
 
-	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix)
+	root, changed, err := extractPrefixSubdictRootObserved(d.root, d.keySz, prefix, removePrefix, d.observer, d.traceNode)
 	if err != nil {
 		return false, err
 	}

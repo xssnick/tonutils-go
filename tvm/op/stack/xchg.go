@@ -5,12 +5,14 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type OpXCHG struct {
 	helpers.Prefixed
 	a uint8
 	b uint8
+	l bool
 }
 
 func init() {
@@ -24,7 +26,7 @@ func XCHG(a, b uint8) *OpXCHG {
 			helpers.UIntPrefix(0x1, 4),
 			helpers.UIntPrefix(0x10, 8),
 		),
-		a: a, b: b,
+		a: a, b: b, l: a > 1 && b > 1,
 	}
 }
 
@@ -49,9 +51,9 @@ func (op *OpXCHG) Deserialize(code *cell.Slice) error {
 		if err != nil {
 			return err
 		}
-		if a == 0 || a >= b {
-			return vm.ErrCorruptedOpcode
-		}
+		op.l = true
+	} else {
+		op.l = false
 	}
 
 	op.a = uint8(a)
@@ -83,6 +85,9 @@ func (op *OpXCHG) SerializeText() string {
 }
 
 func (op *OpXCHG) InstructionBits() int64 {
+	if op.l {
+		return 16
+	}
 	if op.a == 0 || op.b == 0 || op.a == 1 || op.b == 1 {
 		return 8
 	}
@@ -90,5 +95,8 @@ func (op *OpXCHG) InstructionBits() int64 {
 }
 
 func (op *OpXCHG) Interpret(state *vm.State) error {
+	if op.l && (op.a == 0 || op.a >= op.b) {
+		return vmerr.Error(vmerr.CodeInvalidOpcode, "invalid XCHG arguments")
+	}
 	return state.Stack.Exchange(int(op.a), int(op.b))
 }

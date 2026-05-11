@@ -25,6 +25,14 @@ func PUSHL(index uint8) *OpPUSHL {
 }
 
 func (op *OpPUSHL) Deserialize(code *cell.Slice) error {
+	prefix, err := code.LoadUInt(8)
+	if err != nil {
+		return err
+	}
+	if prefix != 0x56 {
+		return vm.ErrCorruptedOpcode
+	}
+
 	val, err := code.LoadUInt(8)
 	if err != nil {
 		return err

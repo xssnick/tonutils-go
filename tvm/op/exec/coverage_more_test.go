@@ -145,7 +145,7 @@ func TestSetContCtrAdditionalCoverage(t *testing.T) {
 		if err := state.Stack.PushInt(big.NewInt(6)); err != nil {
 			t.Fatalf("push idx: %v", err)
 		}
-		assertVMErrCode(t, SETCONTCTRX().Interpret(state), vmerr.CodeRangeCheck)
+		assertVMErrCode(t, SETCONTCTRX().Interpret(state), vmerr.CodeStackUnderflow)
 	})
 }
 

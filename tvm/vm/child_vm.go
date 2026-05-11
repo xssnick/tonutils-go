@@ -134,7 +134,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		if !errors.As(childErr, &vmErr) && !errors.As(childErr, &handled) {
 			return childErr
 		}
-		if errors.As(childErr, &vmErr) && vmErr.Code == vmerr.CodeOutOfGas {
+		if errors.As(childErr, &vmErr) && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {
 			exitCode = ^exitCode
 		}
 	}

@@ -12,8 +12,8 @@ func init() {
 func SAMEALTSAVE() (op *helpers.SimpleOP) {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			c0 := vm.ForceControlData(state.Reg.C[0])
-			c0.GetControlData().Save.Define(1, state.Reg.C[1])
+			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+			c0.GetControlData().Save.Define(1, cloneContinuation(state.Reg.C[1]))
 			state.Reg.C[0] = c0
 			state.Reg.C[1] = c0.Copy()
 			return nil

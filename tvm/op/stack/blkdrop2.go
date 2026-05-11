@@ -12,9 +12,18 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return BLKDROP2(0, 0) })
 }
 
+func blkdrop2Prefixes() []helpers.BitPrefix {
+	prefixes := make([]helpers.BitPrefix, 0, 15)
+	for i := uint64(1); i <= 15; i++ {
+		prefixes = append(prefixes, helpers.UIntPrefix((0x6C<<4)|i, 12))
+	}
+	return prefixes
+}
+
 func BLKDROP2(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
+		Prefixes:      blkdrop2Prefixes(),
 		Action: func(state *vm.State) error {
 			return state.Stack.DropMany(int(i), int(j))
 		},

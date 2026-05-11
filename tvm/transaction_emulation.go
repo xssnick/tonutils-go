@@ -2210,8 +2210,8 @@ func buildTransactionDescription(params transactionBuildDescriptionParams) any {
 		ComputePhase: tlb.ComputePhase{
 			Phase: tlb.ComputePhaseVM{
 				Success:          computeSuccess,
-				MsgStateUsed:     params.msgStateUsed,
-				AccountActivated: params.activated,
+				MsgStateUsed:     false,
+				AccountActivated: false,
 				GasFees:          tlb.FromNanoTON(params.gasFees),
 				Details: tlb.ComputePhaseVMDetails{
 					GasUsed:          big.NewInt(params.computeResult.GasUsed),

@@ -25,6 +25,14 @@ func POPL(index uint8) *OpPOPL {
 }
 
 func (op *OpPOPL) Deserialize(code *cell.Slice) error {
+	prefix, err := code.LoadUInt(8)
+	if err != nil {
+		return err
+	}
+	if prefix != 0x57 {
+		return vm.ErrCorruptedOpcode
+	}
+
 	val, err := code.LoadUInt(8)
 	if err != nil {
 		return err

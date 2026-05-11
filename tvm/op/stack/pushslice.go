@@ -60,5 +60,8 @@ func (op *OpPUSHREFSLICE) InstructionBits() int64 {
 }
 
 func (op *OpPUSHREFSLICE) Interpret(state *vm.State) error {
+	if err := state.Cells.RegisterCellLoad(op.value.WithoutObserver().MustToCell()); err != nil {
+		return err
+	}
 	return state.Stack.PushSlice(op.value)
 }
