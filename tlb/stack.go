@@ -319,7 +319,7 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 			return nil, fmt.Errorf("end ref index > 4")
 		}
 
-		if err = val.AdvanceExt(uint(start), int(startRef)); err != nil {
+		if err = val.SkipBitsAndRefs(uint(start), int(startRef)); err != nil {
 			return nil, fmt.Errorf("failed to skip slice stack value's prefix, err: %w", err)
 		}
 		out, err := val.PreloadSubslice(uint(end-start), int(endRef-startRef))

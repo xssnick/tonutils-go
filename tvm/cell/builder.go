@@ -8,11 +8,11 @@ import (
 )
 
 type Builder struct {
-	observer Observer
-	data     [maxCellDataBytes]byte
-	refs     [4]*Cell
-	bitsSz   uint
-	refsNum  uint8
+	trace   *Trace
+	data    [maxCellDataBytes]byte
+	refs    [4]*Cell
+	bitsSz  uint
+	refsNum uint8
 }
 
 type SerializableToCell interface {
@@ -800,9 +800,9 @@ func (b *Builder) RefsLeft() uint {
 
 func (b *Builder) Copy() *Builder {
 	cp := &Builder{
-		observer: b.observer,
-		bitsSz:   b.bitsSz,
-		refsNum:  b.refsNum,
+		trace:   b.trace,
+		bitsSz:  b.bitsSz,
+		refsNum: b.refsNum,
 	}
 	copy(cp.data[:], b.dataSlice())
 	copy(cp.refs[:], b.rawRefs())
@@ -814,7 +814,7 @@ func BeginCell() *Builder {
 }
 
 func (b *Builder) EndCell() *Cell {
-	if err := notifyCellCreate(b.observer); err != nil {
+	if err := b.trace.NotifyCreate(); err != nil {
 		panic(err)
 	}
 	c, err := finalizeCellFromBuilder(b, false)
@@ -825,20 +825,27 @@ func (b *Builder) EndCell() *Cell {
 }
 
 func (b *Builder) ToSlice() *Slice {
-	return b.EndCell().BeginParse().SetObserver(b.observer)
+	return b.EndCell().MustBeginParse().SetTrace(b.trace)
 }
 
 func (b *Builder) String() string {
-	return b.WithoutObserver().EndCell().String()
+	return b.WithoutTrace().EndCell().String()
 }
 
-func (b *Builder) SetObserver(observer Observer) *Builder {
-	b.observer = observer
+func (b *Builder) SetTrace(trace *Trace) *Builder {
+	b.trace = trace
 	return b
 }
 
-func (b *Builder) WithoutObserver() *Builder {
+func (b *Builder) Trace() *Trace {
+	if b == nil {
+		return nil
+	}
+	return b.trace
+}
+
+func (b *Builder) WithoutTrace() *Builder {
 	cp := b.Copy()
-	cp.observer = nil
+	cp.trace = nil
 	return cp
 }

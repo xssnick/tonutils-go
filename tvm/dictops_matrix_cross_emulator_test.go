@@ -56,7 +56,7 @@ func dictMatrixLoadCases() []dictMatrixCrossCase {
 			name: "load/lddictq_invalid_quiet",
 			op:   0xF406,
 			stack: func(t *testing.T) []any {
-				return []any{cell.BeginCell().EndCell().BeginParse()}
+				return []any{cell.BeginCell().EndCell().MustBeginParse()}
 			},
 			exit: 0,
 		},
@@ -2141,7 +2141,7 @@ func dictMatrixOpcode(op uint16) func(*testing.T) *cell.Cell {
 }
 
 func dictMatrixSlice(value uint64, bits uint) *cell.Slice {
-	return cell.BeginCell().MustStoreUInt(value, bits).EndCell().BeginParse()
+	return cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse()
 }
 
 func dictMatrixBuilder(value uint64, bits uint) *cell.Builder {

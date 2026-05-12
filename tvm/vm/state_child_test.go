@@ -120,7 +120,7 @@ func TestStateParamsGlobalsAndGasHelpers(t *testing.T) {
 	}
 
 	st := NewExecutionState(0, GasWithLimit(1_000_000), cell.BeginCell().EndCell(), tuple.NewTupleValue(params), NewStack())
-	st.PrepareExecution(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse())
+	st.PrepareExecution(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse())
 
 	if st.GlobalVersion != DefaultGlobalVersion {
 		t.Fatalf("global version = %d, want %d", st.GlobalVersion, DefaultGlobalVersion)
@@ -373,7 +373,7 @@ func TestStateCommitThrowAndRunChild(t *testing.T) {
 	}
 
 	child := NewExecutionState(0, GasWithLimit(1000), nil, tuple.Tuple{}, NewStack())
-	child.CurrentCode = cell.BeginCell().MustStoreUInt(0xEF, 8).EndCell().BeginParse()
+	child.CurrentCode = cell.BeginCell().MustStoreUInt(0xEF, 8).EndCell().MustBeginParse()
 	if _, err = child.RunChild(child); err == nil {
 		t.Fatal("expected child runner to be required")
 	} else {
@@ -478,7 +478,7 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 	})
 
 	if err = successParent.RunChildVM(ChildVMConfig{
-		Code:          cell.BeginCell().MustStoreUInt(1, 8).EndCell().BeginParse(),
+		Code:          cell.BeginCell().MustStoreUInt(1, 8).EndCell().MustBeginParse(),
 		Gas:           GasWithLimit(50),
 		SameC3:        true,
 		PushZero:      true,
@@ -504,14 +504,14 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pop actions: %v", err)
 	}
-	if bits, _, _ := actionCell.BeginParse().RestBits(); bits != 8 {
+	if bits, _, _ := actionCell.MustBeginParse().RestBits(); bits != 8 {
 		t.Fatalf("unexpected actions bits = %d", bits)
 	}
 	dataCell, err := successParent.Stack.PopCell()
 	if err != nil {
 		t.Fatalf("pop data: %v", err)
 	}
-	if bits, _, _ := dataCell.BeginParse().RestBits(); bits != 8 {
+	if bits, _, _ := dataCell.MustBeginParse().RestBits(); bits != 8 {
 		t.Fatalf("unexpected data bits = %d", bits)
 	}
 	if got := mustPopInt64(t, successParent.Stack); got != 0 {
@@ -525,7 +525,7 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 		return 0, nil
 	})
 	if err = underflowParent.RunChildVM(ChildVMConfig{
-		Code:         cell.BeginCell().EndCell().BeginParse(),
+		Code:         cell.BeginCell().EndCell().MustBeginParse(),
 		Gas:          GasWithLimit(10),
 		ReturnValues: 2,
 	}); err != nil {
@@ -544,7 +544,7 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 		assertVMErrorCode(t, err, vmerr.CodeTypeCheck)
 	}
 	if err = underflowParent.RunChildVM(ChildVMConfig{
-		Code:         cell.BeginCell().EndCell().BeginParse(),
+		Code:         cell.BeginCell().EndCell().MustBeginParse(),
 		ReturnValues: -2,
 	}); err == nil {
 		t.Fatal("expected invalid return values count to fail")
@@ -558,7 +558,7 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 		return 0, expectedErr
 	})
 	if err = propParent.RunChildVM(ChildVMConfig{
-		Code: cell.BeginCell().EndCell().BeginParse(),
+		Code: cell.BeginCell().EndCell().MustBeginParse(),
 		Gas:  GasWithLimit(10),
 	}); !errors.Is(err, expectedErr) {
 		t.Fatalf("propagated child error = %v, want %v", err, expectedErr)
@@ -571,7 +571,7 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 		return 5, vmerr.Error(vmerr.CodeOutOfGas)
 	})
 	if err = outOfGasParent.RunChildVM(ChildVMConfig{
-		Code: cell.BeginCell().EndCell().BeginParse(),
+		Code: cell.BeginCell().EndCell().MustBeginParse(),
 		Gas:  GasWithLimit(5),
 	}); err != nil {
 		t.Fatalf("run child vm out of gas: %v", err)
@@ -599,7 +599,7 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 		return 0, nil
 	})
 	if err = isolatedParent.RunChildVM(ChildVMConfig{
-		Code:       cell.BeginCell().EndCell().BeginParse(),
+		Code:       cell.BeginCell().EndCell().MustBeginParse(),
 		Gas:        GasWithLimit(50),
 		IsolateGas: true,
 	}); err != nil {

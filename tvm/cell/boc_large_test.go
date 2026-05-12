@@ -14,9 +14,15 @@ type testBatchRecordLoader struct {
 	batches [][]Hash
 	buf     []LargeBOCPayloadRecord
 	metaBuf []LargeBOCMetaRecord
+	cellBuf []LargeBOCRecord
+
+	metaLoads    int
+	payloadLoads int
+	cellLoads    int
 }
 
 func (l *testBatchRecordLoader) LoadMeta(hashes []Hash, dst []LargeBOCMetaRecord) ([]LargeBOCMetaRecord, error) {
+	l.metaLoads++
 	if l.batches != nil {
 		l.batches = append(l.batches, append([]Hash(nil), hashes...))
 	}
@@ -34,6 +40,7 @@ func (l *testBatchRecordLoader) LoadMeta(hashes []Hash, dst []LargeBOCMetaRecord
 }
 
 func (l *testBatchRecordLoader) LoadPayload(hashes []Hash, dst []LargeBOCPayloadRecord) ([]LargeBOCPayloadRecord, error) {
+	l.payloadLoads++
 	records := dst[:0]
 	for _, hash := range hashes {
 		record, ok := l.records[hash]
@@ -43,6 +50,27 @@ func (l *testBatchRecordLoader) LoadPayload(hashes []Hash, dst []LargeBOCPayload
 		records = append(records, record.payload)
 	}
 	l.buf = records
+	return records, nil
+}
+
+func (l *testBatchRecordLoader) LoadCells(hashes []Hash, dst []LargeBOCRecord) ([]LargeBOCRecord, error) {
+	l.cellLoads++
+	if l.batches != nil {
+		l.batches = append(l.batches, append([]Hash(nil), hashes...))
+	}
+
+	records := dst[:0]
+	for _, hash := range hashes {
+		record, ok := l.records[hash]
+		if !ok {
+			continue
+		}
+		records = append(records, LargeBOCRecord{
+			Meta:    record.meta,
+			Payload: record.payload,
+		})
+	}
+	l.cellBuf = records
 	return records, nil
 }
 
@@ -83,6 +111,50 @@ func TestToLargeBOCMatchesToBOCWithOptions(t *testing.T) {
 		}
 		if !bytes.Equal(got.Bytes(), want) {
 			t.Fatalf("large boc diverges from ordinary serialization with opts %+v", opts)
+		}
+	}
+}
+
+func TestToLargeBOCOnePassMatchesToBOCWithOptions(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
+	left := BeginCell().MustStoreUInt(0x12, 8).MustStoreRef(leaf).EndCell()
+	right := BeginCell().MustStoreUInt(0x34, 8).MustStoreRef(leaf).EndCell()
+	root := BeginCell().
+		MustStoreUInt(0x99, 8).
+		MustStoreRef(left).
+		MustStoreRef(right).
+		MustStoreRef(leaf).
+		EndCell()
+
+	for _, opts := range []BOCSerializeOptions{
+		{},
+		{WithCRC32C: true},
+		{WithIndex: true},
+		{
+			WithCRC32C:    true,
+			WithIndex:     true,
+			WithCacheBits: true,
+			WithTopHash:   true,
+			WithIntHashes: true,
+		},
+	} {
+		loader := &testBatchRecordLoader{
+			records: testCellRecordsForTree(root),
+		}
+		want := ToBOCWithOptions([]*Cell{root, leaf}, opts)
+		if len(want) == 0 {
+			t.Fatal("expected non-empty boc")
+		}
+
+		var got bytes.Buffer
+		if err := ToLargeBOCOnePass(&got, []Hash{root.HashKey(), leaf.HashKey()}, opts, loader, uint64(len(loader.records)), testLargeBOCLoadBatchSize); err != nil {
+			t.Fatalf("failed to write one-pass large boc: %v", err)
+		}
+		if !bytes.Equal(got.Bytes(), want) {
+			t.Fatalf("one-pass large boc diverges from ordinary serialization with opts %+v", opts)
+		}
+		if loader.metaLoads != 0 || loader.payloadLoads != 0 || loader.cellLoads == 0 {
+			t.Fatalf("unexpected loader calls: meta=%d payload=%d cells=%d", loader.metaLoads, loader.payloadLoads, loader.cellLoads)
 		}
 	}
 }
@@ -158,6 +230,43 @@ func TestToLargeBOCLoadsMultiLevelLazyRefsAsRecords(t *testing.T) {
 	}
 }
 
+func TestToLargeBOCOnePassLoadsMultiLevelLazyRefsAsRecords(t *testing.T) {
+	base := BeginCell().MustStoreUInt(0x11, 8).EndCell()
+	ref, err := createPrunedBranchFromCell(base, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := BeginCell().MustStoreRef(ref).MustStoreRef(ref).EndCell()
+	lazyRoot := cellWithLazyRefsFromCell(root)
+	loader := &testBatchRecordLoader{
+		records: testCellRecordsForTree(root),
+		batches: [][]Hash{},
+	}
+
+	opts := BOCSerializeOptions{
+		WithCRC32C:    true,
+		WithIndex:     true,
+		WithCacheBits: true,
+		WithTopHash:   true,
+		WithIntHashes: true,
+	}
+
+	want := root.ToBOCWithOptions(opts)
+	var got bytes.Buffer
+	if err = ToLargeBOCOnePass(&got, []Hash{lazyRoot.HashKey()}, opts, loader, uint64(len(loader.records)), testLargeBOCLoadBatchSize); err != nil {
+		t.Fatalf("failed to write one-pass large multi-level lazy boc: %v", err)
+	}
+	if !bytes.Equal(got.Bytes(), want) {
+		t.Fatal("one-pass large multi-level lazy boc diverges from eager serialization")
+	}
+	if len(loader.batches) != 2 || len(loader.batches[0]) != 1 || len(loader.batches[1]) != 1 {
+		t.Fatalf("unexpected lazy batches: %+v", loader.batches)
+	}
+	if loader.metaLoads != 0 || loader.payloadLoads != 0 || loader.cellLoads == 0 {
+		t.Fatalf("unexpected loader calls: meta=%d payload=%d cells=%d", loader.metaLoads, loader.payloadLoads, loader.cellLoads)
+	}
+}
+
 func TestToLargeBOCUsesLoadBatchSize(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
 	left := BeginCell().MustStoreUInt(0x12, 8).MustStoreRef(leaf).EndCell()
@@ -188,6 +297,36 @@ func TestToLargeBOCUsesLoadBatchSize(t *testing.T) {
 	}
 }
 
+func TestToLargeBOCOnePassUsesLoadBatchSize(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
+	left := BeginCell().MustStoreUInt(0x12, 8).MustStoreRef(leaf).EndCell()
+	right := BeginCell().MustStoreUInt(0x34, 8).MustStoreRef(leaf).EndCell()
+	root := BeginCell().
+		MustStoreUInt(0x99, 8).
+		MustStoreRef(left).
+		MustStoreRef(right).
+		MustStoreRef(leaf).
+		EndCell()
+	lazyRoot := cellWithLazyRefsFromCell(root)
+	loader := &testBatchRecordLoader{
+		records: testCellRecordsForTree(root),
+		batches: [][]Hash{},
+	}
+
+	var got bytes.Buffer
+	if err := ToLargeBOCOnePass(&got, []Hash{lazyRoot.HashKey()}, BOCSerializeOptions{}, loader, uint64(len(loader.records)), 2); err != nil {
+		t.Fatalf("failed to write one-pass large lazy boc: %v", err)
+	}
+	if len(loader.batches) != 3 {
+		t.Fatalf("unexpected batches count: %+v", loader.batches)
+	}
+	for _, batch := range loader.batches {
+		if len(batch) > 2 {
+			t.Fatalf("batch is larger than requested size: %+v", loader.batches)
+		}
+	}
+}
+
 func TestToLargeBOCReturnsMissingRecordError(t *testing.T) {
 	ref := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
 	root := BeginCell().MustStoreRef(ref).EndCell()
@@ -196,6 +335,19 @@ func TestToLargeBOCReturnsMissingRecordError(t *testing.T) {
 
 	var got bytes.Buffer
 	err := ToLargeBOC(&got, []Hash{lazyRoot.HashKey()}, BOCSerializeOptions{}, loader, 0, testLargeBOCLoadBatchSize)
+	if !errors.Is(err, ErrLazyRefNotFound) {
+		t.Fatalf("expected missing record error, got %v", err)
+	}
+}
+
+func TestToLargeBOCOnePassReturnsMissingRecordError(t *testing.T) {
+	ref := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
+	root := BeginCell().MustStoreRef(ref).EndCell()
+	lazyRoot := cellWithLazyRefsFromCell(root)
+	loader := &testBatchRecordLoader{records: map[Hash]testLargeBOCRecord{}}
+
+	var got bytes.Buffer
+	err := ToLargeBOCOnePass(&got, []Hash{lazyRoot.HashKey()}, BOCSerializeOptions{}, loader, 0, testLargeBOCLoadBatchSize)
 	if !errors.Is(err, ErrLazyRefNotFound) {
 		t.Fatalf("expected missing record error, got %v", err)
 	}
@@ -309,6 +461,18 @@ func BenchmarkToLargeBOC(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			if err := ToLargeBOC(io.Discard, []Hash{lazyRoot.HashKey()}, opts, loader, uint64(len(records)), testLargeBOCLoadBatchSize); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("ToLargeBOCOnePass", func(b *testing.B) {
+		loader := &testBatchRecordLoader{records: records}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := ToLargeBOCOnePass(io.Discard, []Hash{lazyRoot.HashKey()}, opts, loader, uint64(len(records)), testLargeBOCLoadBatchSize); err != nil {
 				b.Fatal(err)
 			}
 		}

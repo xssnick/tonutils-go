@@ -229,7 +229,7 @@ func TestTonOpsExtendedParamsAndPRNG(t *testing.T) {
 		}
 		mix := make([]byte, 64)
 		copy(mix, tonopsTestSeed)
-		copy(mix[32:], cell.BeginCell().MustStoreBigUInt(big.NewInt(7), 256).EndCell().BeginParse().MustLoadSlice(256))
+		copy(mix[32:], cell.BeginCell().MustStoreBigUInt(big.NewInt(7), 256).EndCell().MustBeginParse().MustLoadSlice(256))
 		wantMix := sha256.Sum256(mix)
 		seedAny, err = state.GetParam(6)
 		if err != nil {

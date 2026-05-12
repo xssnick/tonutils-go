@@ -25,7 +25,7 @@ func TestRegisterDefineRejectsNullC7Tuple(t *testing.T) {
 
 func TestOrdinaryContinuationJumpRestoresCP0AndEmptySavedC7(t *testing.T) {
 	state := NewExecutionState(DefaultGlobalVersion, NewGas(), nil, tuple.NewTupleValue("old"), NewStack())
-	state.PrepareExecution(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse())
+	state.PrepareExecution(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse())
 	state.CP = 7
 
 	cont := &OrdinaryContinuation{
@@ -35,7 +35,7 @@ func TestOrdinaryContinuationJumpRestoresCP0AndEmptySavedC7(t *testing.T) {
 			},
 			CP: 0,
 		},
-		Code: cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().BeginParse(),
+		Code: cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().MustBeginParse(),
 	}
 
 	if _, err := cont.Jump(state); err != nil {

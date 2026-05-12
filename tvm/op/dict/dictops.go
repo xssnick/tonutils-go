@@ -145,8 +145,9 @@ func registerSimpleExact(opcode uint16, name string, action func(*vm.State) erro
 
 type OpPFXDICTSWITCH struct {
 	helpers.Prefixed
-	root *cell.Cell
-	bits uint64
+	root       *cell.Cell
+	bits       uint64
+	rootLoaded bool
 }
 
 func PFXDICTSWITCH(root *cell.Cell, bits ...uint64) *OpPFXDICTSWITCH {
@@ -174,17 +175,18 @@ func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
-	if err = code.AdvanceExt(0, 1); err != nil {
+	if err = code.SkipBitsAndRefs(0, 1); err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
-	root = rootCell.BeginParse()
+	root = rootCell.MustBeginParse()
+	op.rootLoaded = true
 	bits, err := code.LoadUInt(10)
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	op.bits = bits
 	if hasRoot && root != nil {
-		op.root = root.WithoutObserver().MustToCell()
+		op.root = root.WithoutTrace().MustToCell()
 	} else {
 		op.root = nil
 	}
@@ -217,12 +219,16 @@ func (op *OpPFXDICTSWITCH) Interpret(state *vm.State) error {
 	if err != nil {
 		return err
 	}
-	keyCell, err := input.WithoutObserver().ToCell()
+	keyCell, err := input.WithoutTrace().ToCell()
 	if err != nil {
 		return cellUnderflowError(err)
 	}
 
-	dict := newObservedPrefixDict(op.root, uint(op.bits), state)
+	trace := state.Cells.Trace()
+	if op.rootLoaded && state.Cells.IsCellLoaded(op.root) {
+		trace = state.Cells.TraceAlreadyLoaded()
+	}
+	dict := newPrefixDictWithTrace(op.root, uint(op.bits), trace)
 	value, matched, err := dict.LookupPrefix(keyCell)
 	if err != nil {
 		return mapDictError(err)
@@ -335,7 +341,7 @@ func execSkipDict(state *vm.State) error {
 	if refs < 0 {
 		return vmerr.Error(vmerr.CodeCellUnderflow, "invalid dictionary serialization")
 	}
-	if err = sl.AdvanceExt(1, refs); err != nil {
+	if err = sl.SkipBitsAndRefs(1, refs); err != nil {
 		return cellUnderflowError(err)
 	}
 	return state.Stack.PushSlice(sl)
@@ -415,7 +421,7 @@ func execLoadDict(preload bool, quiet bool) func(*vm.State) error {
 			return err
 		}
 		if !preload {
-			if err = sl.AdvanceExt(1, refs); err != nil {
+			if err = sl.SkipBitsAndRefs(1, refs); err != nil {
 				return cellUnderflowError(err)
 			}
 			if err = state.Stack.PushSlice(sl); err != nil {
@@ -447,7 +453,7 @@ func execDictGet(variant dictValueVariant) func(*vm.State) error {
 			return state.Stack.PushBool(false)
 		}
 
-		dict := newObservedDict(root, keyBits, state)
+		dict := newTracedDict(root, keyBits, state)
 		if variant.byRef {
 			value, err := loadDictRefValue(dict, key)
 			if err != nil {
@@ -493,7 +499,7 @@ func execDictGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 			return pushMaybeCell(state.Stack, nil)
 		}
 
-		dict := newObservedDict(root, keyBits, state)
+		dict := newTracedDict(root, keyBits, state)
 		value, err := loadDictRefValue(dict, key)
 		if err != nil {
 			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
@@ -521,7 +527,7 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 				return err
 			}
 
-			dict := newObservedDict(root, keyBits, state)
+			dict := newTracedDict(root, keyBits, state)
 			var changed bool
 			if variant.byRef {
 				value, err := state.Stack.PopCell()
@@ -586,7 +592,7 @@ func execDictSetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*vm.
 				return keyErr
 			}
 
-			dict := newObservedDict(root, keyBits, state)
+			dict := newTracedDict(root, keyBits, state)
 			changed, err := dict.SetBuilderWithMode(key, value, mode)
 			if err != nil {
 				return mapDictError(err)
@@ -622,7 +628,7 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 			}
 
 			shadow := newPlainDict(root, keyBits)
-			dict := newObservedDict(root, keyBits, state)
+			dict := newTracedDict(root, keyBits, state)
 
 			if variant.byRef {
 				value, err := state.Stack.PopCell()
@@ -695,7 +701,7 @@ func execDictSetGetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*
 			}
 
 			shadow := newPlainDict(root, keyBits)
-			dict := newObservedDict(root, keyBits, state)
+			dict := newTracedDict(root, keyBits, state)
 			oldValue, err := shadow.LoadValue(key)
 			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return mapDictError(err)
@@ -805,7 +811,7 @@ func execDictDelete(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		dict := newObservedDict(root, keyBits, state)
+		dict := newTracedDict(root, keyBits, state)
 		if !ok {
 			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
 				return err
@@ -838,7 +844,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		dict := newObservedDict(root, keyBits, state)
+		dict := newTracedDict(root, keyBits, state)
 		if !ok {
 			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
 				return err
@@ -908,7 +914,7 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 			return keyErr
 		}
 
-		dict := newObservedDict(root, keyBits, state)
+		dict := newTracedDict(root, keyBits, state)
 		var oldValue *cell.Cell
 		if newValue != nil {
 			shadow := newPlainDict(root, keyBits)
@@ -951,7 +957,7 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 			if err != nil {
 				return err
 			}
-			dict := newObservedDict(root, keyBits, state)
+			dict := newTracedDict(root, keyBits, state)
 
 			invertFirst := variant.kind == dictKeySignedInt
 			var (
@@ -1044,11 +1050,11 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 			return state.Stack.PushBool(false)
 		}
 
-		keyCell, err := keySlice.WithoutObserver().ToCell()
+		keyCell, err := keySlice.WithoutTrace().ToCell()
 		if err != nil {
 			return cellUnderflowError(err)
 		}
-		dict := newObservedPrefixDict(root, keyBits, state)
+		dict := newTracedPrefixDict(root, keyBits, state)
 		changed, err := dict.SetBuilderWithMode(keyCell, value.ToBuilder(), mode)
 		if err != nil {
 			return mapDictError(err)
@@ -1085,12 +1091,12 @@ func execPfxDictDelete(state *vm.State) error {
 		return state.Stack.PushBool(false)
 	}
 
-	keyCell, err := keySlice.WithoutObserver().ToCell()
+	keyCell, err := keySlice.WithoutTrace().ToCell()
 	if err != nil {
 		return cellUnderflowError(err)
 	}
 
-	dict := newObservedPrefixDict(root, keyBits, state)
+	dict := newTracedPrefixDict(root, keyBits, state)
 	oldRoot := dict.AsCell()
 	_, err = dict.LoadValueAndDelete(keyCell)
 	if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
@@ -1126,7 +1132,7 @@ func execPfxDictGet(op int) func(*vm.State) error {
 		if err != nil {
 			return cellUnderflowError(err)
 		}
-		dict := newObservedPrefixDict(root, keyBits, state)
+		dict := newTracedPrefixDict(root, keyBits, state)
 		value, matched, err := dict.LookupPrefix(keyCell)
 		if err != nil {
 			return mapDictError(err)
@@ -1194,7 +1200,7 @@ func execDictGetNear(variant dictNearVariant) func(*vm.State) error {
 			return err
 		}
 
-		dict := newObservedDict(root, keyBits, state)
+		dict := newTracedDict(root, keyBits, state)
 		invertFirst := variant.kind == dictKeySignedInt
 
 		var (
@@ -1277,7 +1283,7 @@ func execDictGetExec(unsigned bool, call bool, keepOnMiss bool) func(*vm.State) 
 
 		key, ok := encodeDictIntKey(idx, keyBits, !unsigned)
 		if ok {
-			dict := newObservedDict(root, keyBits, state)
+			dict := newTracedDict(root, keyBits, state)
 			value, lookupErr := dict.LoadValue(key)
 			if lookupErr == nil {
 				cont := newOrdContinuation(value, state.CP)
@@ -1320,7 +1326,7 @@ func execSubdict(removePrefix bool) func(dictScalarVariant) func(*vm.State) erro
 				return err
 			}
 
-			dict := newObservedDict(root, keyBits, state)
+			dict := newTracedDict(root, keyBits, state)
 			if ok, err := dict.CutPrefixSubdict(prefix, removePrefix); err != nil {
 				return mapDictError(err)
 			} else if !ok {
@@ -1394,7 +1400,7 @@ func prefixDictLookupKeyCell(input *cell.Slice, keyBits uint) (*cell.Cell, error
 	if keyLen > keyBits {
 		keyLen = keyBits
 	}
-	key, err := input.WithoutObserver().PreloadSubslice(keyLen, 0)
+	key, err := input.WithoutTrace().PreloadSubslice(keyLen, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1404,15 +1410,15 @@ func prefixDictLookupKeyCell(input *cell.Slice, keyBits uint) (*cell.Cell, error
 func pushDictKeyValue(state *vm.State, key *cell.Cell, kind dictKeyKind) error {
 	switch kind {
 	case dictKeySlice:
-		return state.Stack.PushSlice(key.BeginParse())
+		return state.Stack.PushSlice(key.MustBeginParse())
 	case dictKeySignedInt:
-		val, err := key.BeginParse().LoadBigInt(key.BitsSize())
+		val, err := key.MustBeginParse().LoadBigInt(key.BitsSize())
 		if err != nil {
 			return cellUnderflowError(err)
 		}
 		return state.Stack.PushInt(val)
 	default:
-		val, err := key.BeginParse().LoadBigUInt(key.BitsSize())
+		val, err := key.MustBeginParse().LoadBigUInt(key.BitsSize())
 		if err != nil {
 			return cellUnderflowError(err)
 		}
@@ -1540,11 +1546,11 @@ func sliceKeyCell(sl *cell.Slice, bits uint) (*cell.Cell, error) {
 	return cell.BeginCell().MustStoreSlice(data, bits).EndCell(), nil
 }
 
-func newObservedDict(root *cell.Cell, bits uint, state *vm.State) *cell.Dictionary {
+func newTracedDict(root *cell.Cell, bits uint, state *vm.State) *cell.Dictionary {
 	if root == nil {
-		return cell.NewDict(bits).SetObserver(&state.Cells)
+		return cell.NewDict(bits).SetTrace(state.Cells.Trace())
 	}
-	return root.AsDict(bits).SetObserver(&state.Cells)
+	return root.AsDict(bits).SetTrace(state.Cells.Trace())
 }
 
 func newPlainDict(root *cell.Cell, bits uint) *cell.Dictionary {
@@ -1554,11 +1560,15 @@ func newPlainDict(root *cell.Cell, bits uint) *cell.Dictionary {
 	return root.AsDict(bits)
 }
 
-func newObservedPrefixDict(root *cell.Cell, bits uint, state *vm.State) *cell.PrefixDictionary {
+func newTracedPrefixDict(root *cell.Cell, bits uint, state *vm.State) *cell.PrefixDictionary {
+	return newPrefixDictWithTrace(root, bits, state.Cells.Trace())
+}
+
+func newPrefixDictWithTrace(root *cell.Cell, bits uint, trace *cell.Trace) *cell.PrefixDictionary {
 	if root == nil {
-		return cell.NewPrefixDict(bits).SetObserver(&state.Cells)
+		return cell.NewPrefixDict(bits).SetTrace(trace)
 	}
-	return root.AsPrefixDict(bits).SetObserver(&state.Cells)
+	return root.AsPrefixDict(bits).SetTrace(trace)
 }
 
 func pushMaybeCell(stack *vm.Stack, value *cell.Cell) error {

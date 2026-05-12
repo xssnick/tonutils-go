@@ -52,7 +52,7 @@ func Test_REVERSE(t *testing.T) {
 				st := newStack(initial...)
 				op := REVERSE(uint8(x), uint8(y))
 				decoded := REVERSE(2, 0)
-				if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+				if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 					t.Fatalf("decode REVERSE(%d,%d): %v", x, y, err)
 				}
 				if err := decoded.Interpret(&vm.State{Stack: st}); err != nil {

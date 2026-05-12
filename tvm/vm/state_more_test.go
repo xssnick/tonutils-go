@@ -35,7 +35,7 @@ func TestStateRunChildAndParamHelpers(t *testing.T) {
 		}
 
 		child := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
-		child.CurrentCode = cell.BeginCell().EndCell().BeginParse()
+		child.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 		if _, err := child.RunChild(child); err == nil {
 			t.Fatal("expected missing child runner to fail")
 		}
@@ -67,7 +67,7 @@ func TestStateRunChildAndParamHelpers(t *testing.T) {
 	t.Run("RunChildNormalizesVMExitErrors", func(t *testing.T) {
 		parent := makeStateWithParams(t)
 		child := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
-		child.CurrentCode = cell.BeginCell().EndCell().BeginParse()
+		child.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 
 		parent.SetChildRunner(func(*State) (int64, error) {
 			return 33, vmerr.Error(33)
@@ -317,7 +317,7 @@ func TestChildVMHelpersAndForceControlData(t *testing.T) {
 			t.Fatal("nil child code should fail")
 		}
 		if err := state.RunChildVM(ChildVMConfig{
-			Code:         cell.BeginCell().EndCell().BeginParse(),
+			Code:         cell.BeginCell().EndCell().MustBeginParse(),
 			ReturnValues: -2,
 		}); err == nil {
 			t.Fatal("invalid return values should fail")

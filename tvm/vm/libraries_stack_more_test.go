@@ -83,17 +83,14 @@ func TestCellManagerHelpers(t *testing.T) {
 	}
 
 	rootHash := root.HashKey()
-	st.Cells.OnCellLoad(rootHash)
-	if err := st.Cells.PendingError(); err != nil {
-		t.Fatalf("unexpected pending error after first load: %v", err)
+	if err := st.Cells.RegisterCellLoadKey(rootHash); err != nil {
+		t.Fatalf("unexpected error after first load: %v", err)
 	}
-	st.Cells.OnCellLoad(rootHash)
-	if err := st.Cells.PendingError(); err != nil {
-		t.Fatalf("unexpected pending error after reload: %v", err)
+	if err := st.Cells.RegisterCellLoadKey(rootHash); err != nil {
+		t.Fatalf("unexpected error after reload: %v", err)
 	}
-	st.Cells.OnCellCreate()
-	if err := st.Cells.PendingError(); err != nil {
-		t.Fatalf("unexpected pending error after create: %v", err)
+	if err := st.Cells.RegisterCellCreate(); err != nil {
+		t.Fatalf("unexpected error after create: %v", err)
 	}
 
 	parsed, err := st.Cells.BeginParse(root)
@@ -112,7 +109,7 @@ func TestCellManagerHelpers(t *testing.T) {
 		t.Fatalf("load ref slice bits = (%d, %v), want (32, nil)", v, err)
 	}
 
-	parsed = root.BeginParse()
+	parsed = root.MustBeginParse()
 	if _, err = parsed.LoadUInt(8); err != nil {
 		t.Fatalf("load root prefix: %v", err)
 	}
@@ -129,14 +126,14 @@ func TestCellManagerHelpers(t *testing.T) {
 		Stack: NewStack(),
 	}
 	lowGas.InitForExecution()
-	lowGas.Cells.OnCellCreate()
+	_ = lowGas.Cells.Trace().NotifyCreate()
 	if err := lowGas.Cells.PendingError(); err == nil {
 		t.Fatal("expected pending error when cell creation exceeds available gas")
 	}
 
 	keepErr := errors.New("keep me")
 	lowGas.Cells.pendingErr = keepErr
-	lowGas.Cells.OnCellLoad(rootHash)
+	lowGas.Cells.Trace().NotifyLoad(root)
 	if !errors.Is(lowGas.Cells.PendingError(), keepErr) {
 		t.Fatalf("pending error should be preserved, got %v", lowGas.Cells.PendingError())
 	}
@@ -201,7 +198,7 @@ func TestStackWrappersAndHelpers(t *testing.T) {
 	}
 
 	builder := cell.BeginCell().MustStoreUInt(0xAA, 8)
-	slice := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().BeginParse()
+	slice := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().MustBeginParse()
 	cl := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	cont := &QuitContinuation{ExitCode: 9}
 

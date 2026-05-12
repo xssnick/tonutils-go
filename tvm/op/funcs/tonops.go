@@ -300,7 +300,7 @@ func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
 	}
 
 	key := cell.BeginCell().MustStoreBigInt(idx, 32).EndCell()
-	val, err := root.AsDict(32).SetObserver(&state.Cells).LoadValue(key)
+	val, err := root.AsDict(32).SetTrace(state.Cells.Trace()).LoadValue(key)
 	if err != nil {
 		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 			return nil, nil

@@ -17,7 +17,7 @@ func TestExecutionResult(t *testing.T) {
 		big.NewInt(1),
 		cell.BeginCell(),
 		cell.BeginCell().EndCell(),
-		cell.BeginCell().EndCell().BeginParse(),
+		cell.BeginCell().EndCell().MustBeginParse(),
 		[]any{big.NewInt(2), big.NewInt(3)},
 		tlb.StackNaN{},
 		nil,

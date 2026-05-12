@@ -18,7 +18,7 @@ func TestLoadShardsFromHashes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	di, err := cl.BeginParse().ToDict(32)
+	di, err := cl.MustBeginParse().ToDict(32)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestBlockMaster(t *testing.T) {
 	c, _ := cell.FromBOC(boc)
 
 	var block tlb.Block
-	if err := tlb.LoadFromCell(&block, c.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&block, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,7 +59,7 @@ func TestBlockNotMaster(t *testing.T) {
 	c, _ := cell.FromBOC(boc)
 
 	var block tlb.Block
-	if err := tlb.LoadFromCell(&block, c.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&block, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 

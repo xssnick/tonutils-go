@@ -77,12 +77,15 @@ func validateAugmentedDictionary(d *AugmentedDictionary) error {
 	if !d.wrapped {
 		return validateAugmentedDictRoot(d.root, d.keySz, d.aug)
 	}
+	if err := validateAugmentedDictRoot(d.root, d.keySz, d.aug); err != nil {
+		return err
+	}
 
 	root, err := d.ToCell()
 	if err != nil {
 		return err
 	}
-	_, err = root.BeginParse().LoadAugDict(d.keySz, d.aug, false)
+	_, err = root.MustBeginParse().LoadAugDict(d.keySz, d.aug, false)
 	return err
 }
 
@@ -200,7 +203,7 @@ func (d *AugmentedDictionary) ExtractPrefixSubdictRoot(prefix *Cell, removePrefi
 	if d == nil {
 		return nil, nil
 	}
-	root, changed, err := extractPrefixSubdictRootObserved(d.root, d.keySz, prefix, removePrefix, d.observer, d.traceNode)
+	root, changed, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +221,7 @@ func (d *AugmentedDictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) 
 		return false, nil
 	}
 
-	root, changed, err := extractPrefixSubdictRootObserved(d.root, d.keySz, prefix, removePrefix, d.observer, d.traceNode)
+	root, changed, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
 	if err != nil {
 		return false, err
 	}
@@ -297,7 +300,7 @@ func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, pr
 		return nil, nil, fmt.Errorf("augmented dict has special cells in tree structure")
 	}
 
-	loader := branch.BeginParse()
+	loader := branch.MustBeginParse()
 	labelLen, prefixKey, err := loadLabel(remaining, loader, prefix)
 	if err != nil {
 		return nil, nil, err
@@ -331,7 +334,7 @@ func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, pr
 		return nil, nil, err
 	}
 
-	r, err := fn(prefixKey.EndCell(), extra.BeginParse(), nil)
+	r, err := fn(prefixKey.EndCell(), extra.MustBeginParse(), nil)
 	if err != nil {
 		return nil, nil, err
 	}

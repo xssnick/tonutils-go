@@ -21,7 +21,7 @@ func TestPFXDICTSWITCHEdgeCases(t *testing.T) {
 		MustStoreBoolBit(false).
 		MustStoreUInt(4, 10).
 		EndCell()
-	if err := decoded.Deserialize(nilRootCode.BeginParse()); err == nil {
+	if err := decoded.Deserialize(nilRootCode.MustBeginParse()); err == nil {
 		t.Fatal("expected nil-root opcode to fail")
 	}
 

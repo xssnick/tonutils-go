@@ -32,7 +32,7 @@ func Test_BLKSWAP(t *testing.T) {
 				st := newStack(initial...)
 				op := BLKSWAP(uint8(x), uint8(y))
 				decoded := BLKSWAP(1, 1)
-				if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+				if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 					t.Fatalf("decode BLKSWAP(%d,%d): %v", x, y, err)
 				}
 				if err := decoded.Interpret(newStackStateWithStack(st)); err != nil {

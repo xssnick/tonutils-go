@@ -44,7 +44,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(0).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize()).BeginParse(),
+				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize()).MustBeginParse(),
 			},
 		},
 		{
@@ -52,7 +52,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVMX().Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(9)).Serialize()).BeginParse(),
+				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(9)).Serialize()).MustBeginParse(),
 				int64(0),
 			},
 		},
@@ -61,7 +61,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(3).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, stackop.DROP().Serialize()).BeginParse(),
+				codeFromBuilders(t, stackop.DROP().Serialize()).MustBeginParse(),
 			},
 		},
 		{
@@ -69,7 +69,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(2).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, stackop.DROP().Serialize()).BeginParse(),
+				codeFromBuilders(t, stackop.DROP().Serialize()).MustBeginParse(),
 			},
 		},
 		{
@@ -77,7 +77,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(3).Serialize())),
 			stack: []any{
 				int64(0),
-				makeRunvmSameC3CallDictChild(t, 5, 9).BeginParse(),
+				makeRunvmSameC3CallDictChild(t, 5, 9).MustBeginParse(),
 			},
 		},
 		{
@@ -85,7 +85,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(3).Serialize())),
 			stack: []any{
 				int64(0),
-				makeRunvmSameC3JmpDictChild(t, 8).BeginParse(),
+				makeRunvmSameC3JmpDictChild(t, 8).MustBeginParse(),
 			},
 		},
 		{
@@ -93,7 +93,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(3).Serialize())),
 			stack: []any{
 				int64(0),
-				makeRunvmSameC3PrepareDictChild(t, 9, 11).BeginParse(),
+				makeRunvmSameC3PrepareDictChild(t, 9, 11).MustBeginParse(),
 			},
 		},
 		{
@@ -101,7 +101,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(16).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, funcsop.GETPARAM(1).Serialize()).BeginParse(),
+				codeFromBuilders(t, funcsop.GETPARAM(1).Serialize()).MustBeginParse(),
 				childC7,
 			},
 		},
@@ -115,7 +115,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 					execop.POPCTR(4).Serialize(),
 					stackop.PUSHREF(returnedActions).Serialize(),
 					execop.POPCTR(5).Serialize(),
-				).BeginParse(),
+				).MustBeginParse(),
 				cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
 			},
 		},
@@ -129,7 +129,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 					execop.POPCTR(4).Serialize(),
 					stackop.PUSHREF(returnedActions).Serialize(),
 					execop.POPCTR(5).Serialize(),
-				).BeginParse(),
+				).MustBeginParse(),
 				cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
 				int64(10_000),
 			},
@@ -142,7 +142,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 				codeFromBuilders(t,
 					stackop.PUSHINT(big.NewInt(7)).Serialize(),
 					stackop.PUSHINT(big.NewInt(8)).Serialize(),
-				).BeginParse(),
+				).MustBeginParse(),
 				int64(1),
 			},
 		},
@@ -151,7 +151,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(256).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize()).BeginParse(),
+				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize()).MustBeginParse(),
 				int64(2),
 			},
 		},
@@ -160,7 +160,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(0).Serialize())),
 			stack: []any{
 				int64(0),
-				makeRunvmPushIntsChild(t, 32).BeginParse(),
+				makeRunvmPushIntsChild(t, 32).MustBeginParse(),
 			},
 		},
 		{
@@ -168,7 +168,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(0).Serialize())),
 			stack: []any{
 				int64(0),
-				makeRunvmPushIntsChild(t, 33).BeginParse(),
+				makeRunvmPushIntsChild(t, 33).MustBeginParse(),
 			},
 		},
 		{
@@ -179,7 +179,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 				codeFromBuilders(t,
 					stackop.PUSHREF(childLibCell).Serialize(),
 					cellsliceop.XLOADQ().Serialize(),
-				).BeginParse(),
+				).MustBeginParse(),
 			},
 			goLibs:  []*cell.Cell{childLibraries},
 			refLibs: childLibraries,
@@ -194,7 +194,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 					execop.POPCTR(4).Serialize(),
 					funcsop.COMMIT().Serialize(),
 					codeFromOpcodes(t, 0xF22A).ToBuilder(),
-				).BeginParse(),
+				).MustBeginParse(),
 				cell.BeginCell().EndCell(),
 				int64(10_000),
 			},
@@ -204,7 +204,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(512).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t).BeginParse(),
+				codeFromBuilders(t).MustBeginParse(),
 			},
 		},
 		{
@@ -212,7 +212,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVMX().Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t).BeginParse(),
+				codeFromBuilders(t).MustBeginParse(),
 				int64(4096),
 			},
 		},
@@ -221,7 +221,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(16).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t).BeginParse(),
+				codeFromBuilders(t).MustBeginParse(),
 				int64(1),
 			},
 		},
@@ -230,7 +230,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(4).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t).BeginParse(),
+				codeFromBuilders(t).MustBeginParse(),
 				int64(1),
 			},
 		},
@@ -247,7 +247,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(0).Serialize())),
 			stack: []any{
 				int64(1),
-				codeFromBuilders(t).BeginParse(),
+				codeFromBuilders(t).MustBeginParse(),
 			},
 		},
 		{
@@ -255,7 +255,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(8|64).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize()).BeginParse(),
+				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize()).MustBeginParse(),
 				int64(0),
 				int64(100),
 			},
@@ -265,7 +265,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(8).Serialize())),
 			stack: []any{
 				int64(0),
-				makeRunvmPushIntsChild(t, 12).BeginParse(),
+				makeRunvmPushIntsChild(t, 12).MustBeginParse(),
 				int64(45),
 			},
 		},
@@ -278,7 +278,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 					stackop.PUSHINT(big.NewInt(1)).Serialize(),
 					stackop.PUSHINT(big.NewInt(2)).Serialize(),
 					stackop.PUSHINT(big.NewInt(3)).Serialize(),
-				).BeginParse(),
+				).MustBeginParse(),
 				int64(200),
 				int64(40),
 			},
@@ -288,7 +288,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(8|64).Serialize())),
 			stack: []any{
 				int64(0),
-				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(1)).Serialize()).BeginParse(),
+				codeFromBuilders(t, stackop.PUSHINT(big.NewInt(1)).Serialize()).MustBeginParse(),
 				int64(0),
 				int64(0),
 			},
@@ -301,7 +301,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 				stackop.DROP().Serialize(),
 				stackop.PUSHREF(cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()).Serialize(),
 				stackop.PUSHINT(big.NewInt(1)).Serialize(),
-				stackop.PUSHSLICEINLINE(codeFromBuilders(t, cellsliceop.CTOS().Serialize(), stackop.DROP().Serialize()).BeginParse()).Serialize(),
+				stackop.PUSHSLICEINLINE(codeFromBuilders(t, cellsliceop.CTOS().Serialize(), stackop.DROP().Serialize()).MustBeginParse()).Serialize(),
 				execop.RUNVM(128).Serialize(),
 			)),
 		},

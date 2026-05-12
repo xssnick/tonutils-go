@@ -259,15 +259,15 @@ func TestWallet_Send(t *testing.T) {
 				switch ver {
 				case V3:
 					t.Run("v3 body check", func(t *testing.T) {
-						checkV3(t, msg.Body.BeginParse(), w, flow, intMsg)
+						checkV3(t, msg.Body.MustBeginParse(), w, flow, intMsg)
 					})
 				case V4R2:
 					t.Run("v4r2 body check", func(t *testing.T) {
-						checkV4R2(t, msg.Body.BeginParse(), w, flow, intMsg)
+						checkV4R2(t, msg.Body.MustBeginParse(), w, flow, intMsg)
 					})
 				case HighloadV2R2:
 					t.Run("highloadV2R2 body check", func(t *testing.T) {
-						checkHighloadV2R2(t, msg.Body.BeginParse(), w, intMsg)
+						checkHighloadV2R2(t, msg.Body.MustBeginParse(), w, intMsg)
 					})
 				}
 				return nil

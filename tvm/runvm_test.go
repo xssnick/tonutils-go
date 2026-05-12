@@ -78,7 +78,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			child.BeginParse(),
+			child.MustBeginParse(),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
 			t.Fatalf("expected exit 0, got %d", code)
@@ -101,7 +101,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			child.BeginParse(),
+			child.MustBeginParse(),
 			int64(0),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
@@ -126,7 +126,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			dropCode.BeginParse(),
+			dropCode.MustBeginParse(),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
 			t.Fatalf("expected exit 0 for RUNVM 3, got %d", code)
@@ -142,7 +142,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			dropCode.BeginParse(),
+			dropCode.MustBeginParse(),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
 			t.Fatalf("expected parent exit 0, got %d", code)
@@ -160,7 +160,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			makeRunvmSameC3CallDictChild(t, 5, 9).BeginParse(),
+			makeRunvmSameC3CallDictChild(t, 5, 9).MustBeginParse(),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
 			t.Fatalf("expected exit 0 for same_c3 calldict, got %d", code)
@@ -182,7 +182,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			makeRunvmSameC3JmpDictChild(t, 8).BeginParse(),
+			makeRunvmSameC3JmpDictChild(t, 8).MustBeginParse(),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
 			t.Fatalf("expected exit 0 for same_c3 jmpdict, got %d", code)
@@ -204,7 +204,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			makeRunvmSameC3PrepareDictChild(t, 9, 11).BeginParse(),
+			makeRunvmSameC3PrepareDictChild(t, 9, 11).MustBeginParse(),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
 			t.Fatalf("expected exit 0 for same_c3 preparedict, got %d", code)
@@ -229,7 +229,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			codeFromBuilders(t, funcsop.GETPARAM(1).Serialize()).BeginParse(),
+			codeFromBuilders(t, funcsop.GETPARAM(1).Serialize()).MustBeginParse(),
 			childC7,
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
@@ -263,7 +263,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			child.BeginParse(),
+			child.MustBeginParse(),
 			initialData,
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
@@ -295,7 +295,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			child.BeginParse(),
+			child.MustBeginParse(),
 			int64(1),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
@@ -321,7 +321,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			child.BeginParse(),
+			child.MustBeginParse(),
 			int64(2),
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {
@@ -344,7 +344,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			codeFromBuilders(t).BeginParse(),
+			codeFromBuilders(t).MustBeginParse(),
 		)
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeRangeCheck {
 			t.Fatalf("expected range check for invalid flags, got %d", code)
@@ -366,7 +366,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			child.BeginParse(),
+			child.MustBeginParse(),
 			cell.BeginCell().EndCell(),
 			int64(10_000),
 		)
@@ -398,7 +398,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			vmcore.DefaultGlobalVersion,
 			int64(0),
-			child.BeginParse(),
+			child.MustBeginParse(),
 			int64(0),
 			int64(100),
 		)
@@ -427,7 +427,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 				stackop.DROP().Serialize(),
 				stackop.PUSHREF(refCell).Serialize(),
 				stackop.PUSHINT(big.NewInt(1)).Serialize(),
-				stackop.PUSHSLICEINLINE(child.BeginParse()).Serialize(),
+				stackop.PUSHSLICEINLINE(child.MustBeginParse()).Serialize(),
 				execop.RUNVM(mode).Serialize(),
 			)
 		}
@@ -453,7 +453,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			tuple.Tuple{},
 			11,
 			int64(0),
-			codeFromOpcodes(t, 0xF205).BeginParse(),
+			codeFromOpcodes(t, 0xF205).MustBeginParse(),
 			initialData,
 		)
 		if code := exitCodeFromResult(res, err); code != 0 {

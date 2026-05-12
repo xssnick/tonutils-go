@@ -36,51 +36,6 @@ type Cell struct {
 	flags  uint8
 }
 
-type TraceNode uint32
-
-type Observer interface {
-	OnCellLoad(hash Hash)
-	OnCellCreate()
-
-	OnRef(parent TraceNode, refIdx int) TraceNode
-}
-
-type pendingObserver interface {
-	PendingError() error
-}
-
-func notifyCellCreate(observer Observer) error {
-	if observer == nil {
-		return nil
-	}
-	observer.OnCellCreate()
-	if pending, ok := observer.(pendingObserver); ok {
-		return pending.PendingError()
-	}
-	return nil
-}
-
-func notifyCellLoad(observer Observer, c *Cell) {
-	if observer == nil || c == nil {
-		return
-	}
-	observer.OnCellLoad(c.HashKey())
-}
-
-func beginParseObservedNode(c *Cell, observer Observer, node TraceNode) *Slice {
-	if observer == nil {
-		return c.BeginParse()
-	}
-	notifyCellLoad(observer, c)
-	return &Slice{
-		cell:      c,
-		observer:  observer,
-		traceNode: node,
-		bitEnd:    c.bitsSz,
-		refEnd:    uint8(c.refsCount()),
-	}
-}
-
 func (c *Cell) copy() *Cell {
 	refCnt := c.refsCount()
 	cp := &Cell{
@@ -95,27 +50,70 @@ func (c *Cell) copy() *Cell {
 	return cp
 }
 
-func (c *Cell) cloneWithRefObserved(i int, ref *Cell, observer Observer) (*Cell, error) {
-	cp := c.copy()
-	cp.setRef(i, ref)
-	if err := notifyCellCreate(observer); err != nil {
-		return nil, err
+func (c *Cell) load() (*Cell, error) {
+	if c == nil || !c.IsLazy() {
+		return c, nil
 	}
-	if err := cp.refreshLevelMaskForRefs(); err != nil {
-		return nil, err
-	}
-	if err := cp.calculateHashes(); err != nil {
-		return nil, err
-	}
-	return cp, nil
+	return loadLazyPrunedRef(c)
 }
 
-func (c *Cell) BeginParse() *Slice {
-	return &Slice{
-		cell:   c,
-		bitEnd: c.bitsSz,
-		refEnd: uint8(c.refsCount()),
+func (c *Cell) BeginParse() (*Slice, error) {
+	loaded, err := c.load()
+	if err != nil {
+		return nil, err
 	}
+
+	trace := loaded.Trace()
+	trace.NotifyLoad(loaded)
+	return &Slice{
+		cell:   loaded,
+		trace:  trace,
+		bitEnd: loaded.bitsSz,
+		refEnd: uint8(loaded.refsCount()),
+	}, nil
+}
+
+func (c *Cell) MustBeginParse() *Slice {
+	s, err := c.BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func (c *Cell) Trace() *Trace {
+	if c == nil || c.meta == nil {
+		return nil
+	}
+	return c.meta.trace
+}
+
+func (c *Cell) WithTrace(trace *Trace) *Cell {
+	if c == nil {
+		return nil
+	}
+	cp := c.copy()
+	if trace != nil {
+		cp.ensureMeta().trace = trace
+		return cp
+	}
+	if cp.meta != nil {
+		cp.meta.trace = nil
+		cp.clearMetaIfEmpty()
+	}
+	return cp
+}
+
+func (c *Cell) withTraceCombined(trace *Trace) *Cell {
+	if c == nil || trace == nil {
+		return c
+	}
+	current := c.Trace()
+	combined := CombineTraces(current, trace)
+	if combined == current {
+		return c
+	}
+	return c.WithTrace(combined)
 }
 
 func (c *Cell) ToBuilder() *Builder {
@@ -155,7 +153,11 @@ func (c *Cell) PeekRef(i int) (*Cell, error) {
 	}
 
 	refView := newCellRefView(c)
-	return refView.resolvedRef(i)
+	ref, err := refView.boundaryRef(i)
+	if err != nil || ref == nil || c.Trace() == nil {
+		return ref, err
+	}
+	return ref.WithTrace(c.Trace().Child(i)), nil
 }
 
 func (c *Cell) Dump(limitLength ...int) string {
@@ -177,7 +179,7 @@ func (c *Cell) DumpBits(limitLength ...int) string {
 }
 
 func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
-	sz, data, _ := c.BeginParse().RestBits()
+	sz, data, _ := c.MustBeginParse().RestBits()
 
 	builder := strings.Builder{}
 

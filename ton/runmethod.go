@@ -45,7 +45,7 @@ type RunMethodResult struct {
 }
 
 func NewExecutionResult(data []any) *ExecutionResult {
-	return &ExecutionResult{data}
+	return &ExecutionResult{result: data}
 }
 
 func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...any) (*ExecutionResult, error) {
@@ -130,7 +130,7 @@ func (c *APIClient) RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt,
 		}
 
 		var resStack tlb.Stack
-		err = resStack.LoadFromCell(t.Result.BeginParse())
+		err = resStack.LoadFromCell(t.Result.MustBeginParse())
 		if err != nil {
 			return nil, err
 		}

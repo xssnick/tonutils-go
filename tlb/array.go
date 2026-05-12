@@ -46,7 +46,7 @@ func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Sl
 	values := reflect.MakeSlice(reflect.SliceOf(elemType), 0, int(ln))
 
 	for loaded := 0; loaded < int(ln); {
-		chunk := ref.BeginParse()
+		chunk := ref.MustBeginParse()
 		hasNext, err := chunk.LoadBoolBit()
 		if err != nil {
 			return reflect.Value{}, fmt.Errorf("failed to load array chunk next bit: %w", err)

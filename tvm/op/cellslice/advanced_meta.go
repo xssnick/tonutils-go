@@ -48,7 +48,7 @@ func sdbeginsXOp(quiet bool) *helpers.SimpleOP {
 				}
 				return state.Stack.PushBool(false)
 			}
-			if err = cs.Advance(needle.BitsLeft()); err != nil {
+			if err = cs.SkipBits(needle.BitsLeft()); err != nil {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 			if err = state.Stack.PushSlice(cs); err != nil {

@@ -57,7 +57,7 @@ func TestTupleBindingHelpers(t *testing.T) {
 
 func TestTupleIndexClonesMutableLeaves(t *testing.T) {
 	intVal := big.NewInt(11)
-	sliceVal := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+	sliceVal := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 	builderVal := cell.BeginCell().MustStoreUInt(0xBB, 8)
 
 	tup := NewTupleValue(intVal, sliceVal, builderVal)

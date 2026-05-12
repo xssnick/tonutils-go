@@ -157,7 +157,7 @@ func TestVirtualizedHashesDepthAndLevelsClampLikeCppVirtualCell(t *testing.T) {
 func TestVirtualizedSlicesExposeVisibleRefsAndDepth(t *testing.T) {
 	_, body, pruned := buildVirtualizedProofBody(t)
 
-	sl := body.BeginParse()
+	sl := body.MustBeginParse()
 	if got, want := sl.Depth(), uint16(pruned.Depth()+1); got != want {
 		t.Fatalf("unexpected slice depth: got=%d want=%d", got, want)
 	}

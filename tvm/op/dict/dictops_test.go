@@ -18,7 +18,7 @@ type dictPrefixEntry struct {
 
 func newDictTestState() *vm.State {
 	st := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
-	st.CurrentCode = cell.BeginCell().EndCell().BeginParse()
+	st.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 	st.InitForExecution()
 	return st
 }
@@ -30,7 +30,7 @@ func mustDictKeyCell(t *testing.T, value uint64, bits uint) *cell.Cell {
 
 func mustDictKeySlice(t *testing.T, value uint64, bits uint) *cell.Slice {
 	t.Helper()
-	return mustDictKeyCell(t, value, bits).BeginParse()
+	return mustDictKeyCell(t, value, bits).MustBeginParse()
 }
 
 func mustPlainDictRoot(t *testing.T, keyBits uint, items map[uint64]uint64, valueBits uint) *cell.Cell {
@@ -94,7 +94,7 @@ func TestDictNamingAndRegistrationHelpers(t *testing.T) {
 		t.Fatalf("unexpected vm list growth: got %d want %d", len(vm.List), expected)
 	}
 
-	if got := vm.List[before]().Serialize().EndCell().BeginParse().MustLoadUInt(16); got != 0xF000 {
+	if got := vm.List[before]().Serialize().EndCell().MustBeginParse().MustLoadUInt(16); got != 0xF000 {
 		t.Fatalf("unexpected registered opcode: %#x", got)
 	}
 }
@@ -181,7 +181,7 @@ func TestDictHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sliceKeyCell failed: %v", err)
 	}
-	if got := keyCell.BeginParse().MustLoadUInt(4); got != 0xA {
+	if got := keyCell.MustBeginParse().MustLoadUInt(4); got != 0xA {
 		t.Fatalf("unexpected key cell: %#x", got)
 	}
 	if _, err = sliceKeyCell(mustDictKeySlice(t, 0x1, 1), 4); err == nil {
@@ -192,7 +192,7 @@ func TestDictHelpers(t *testing.T) {
 	if err = state.Stack.PushSlice(mustDictKeySlice(t, 0xA, 4)); err != nil {
 		t.Fatalf("push slice key: %v", err)
 	}
-	if key, ok, err := popDictKey(state, 4, dictKeySlice, false); err != nil || !ok || key.BeginParse().MustLoadUInt(4) != 0xA {
+	if key, ok, err := popDictKey(state, 4, dictKeySlice, false); err != nil || !ok || key.MustBeginParse().MustLoadUInt(4) != 0xA {
 		t.Fatalf("unexpected slice pop result: key=%v ok=%v err=%v", key, ok, err)
 	}
 
@@ -243,7 +243,7 @@ func TestDictHelpers(t *testing.T) {
 	if err = state.Stack.PushInt(big.NewInt(2)); err != nil {
 		t.Fatalf("push prefix bits: %v", err)
 	}
-	if bits, prefix, err := popSubdictPrefix(state, 4, dictKeySlice); err != nil || bits != 2 || prefix.BeginParse().MustLoadUInt(2) != 0b10 {
+	if bits, prefix, err := popSubdictPrefix(state, 4, dictKeySlice); err != nil || bits != 2 || prefix.MustBeginParse().MustLoadUInt(2) != 0b10 {
 		t.Fatalf("unexpected slice prefix result: bits=%d prefix=%v err=%v", bits, prefix, err)
 	}
 
@@ -276,7 +276,7 @@ func TestDictHelpers(t *testing.T) {
 		t.Fatalf("unexpected pushed unsigned dict key value: %v err=%v", got, err)
 	}
 
-	cont := newOrdContinuation(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse(), 7)
+	cont := newOrdContinuation(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse(), 7)
 	if cont.Data.CP != 7 || cont.Code.MustLoadUInt(8) != 0xAA {
 		t.Fatalf("unexpected ordinary continuation contents")
 	}
@@ -296,7 +296,7 @@ func TestPFXDICTSWITCHLifecycleAndInterpret(t *testing.T) {
 	}
 
 	decoded := PFXDICTSWITCH(nil)
-	if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+	if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
 	}
 	if decoded.bits != 4 || decoded.root == nil {
@@ -449,7 +449,7 @@ func TestDictBasicExecOps(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := pushSetGetResultSlice(state, cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().BeginParse(), cell.DictSetModeReplace); err != nil {
+	if err := pushSetGetResultSlice(state, cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse(), cell.DictSetModeReplace); err != nil {
 		t.Fatalf("push set/get slice result: %v", err)
 	}
 	ok, err = state.Stack.PopBool()
@@ -511,7 +511,7 @@ func TestDictMutationExecOps(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push new value: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(0x12)); err != nil {
@@ -565,7 +565,7 @@ func TestDictMutationExecOps(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push value: %v", err)
 	}
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x56, 8)); err != nil {
@@ -770,7 +770,7 @@ func TestAdvancedDictExecOps(t *testing.T) {
 	})
 
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push pfx set value: %v", err)
 	}
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0b11, 2)); err != nil {

@@ -13,7 +13,7 @@ func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return ENDCST() },
 		func() vm.OP { return STREFCONST(nil) },
-		func() vm.OP { return STSLICECONST(cell.BeginCell().EndCell().BeginParse()) },
+		func() vm.OP { return STSLICECONST(cell.BeginCell().EndCell().MustBeginParse()) },
 		func() vm.OP { return BREMBITS() },
 		func() vm.OP { return BREMREFS() },
 		func() vm.OP { return BREMBITREFS() },
@@ -51,7 +51,7 @@ func (op *OpSTREFCONST) Deserialize(code *cell.Slice) error {
 		if err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, "no references left for a STREFCONST instruction")
 		}
-		if err = code.AdvanceExt(0, 1); err != nil {
+		if err = code.SkipBitsAndRefs(0, 1); err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, "no references left for a STREFCONST instruction")
 		}
 		refs[i] = ref
@@ -106,7 +106,7 @@ type OpSTSLICECONST struct {
 
 func STSLICECONST(value *cell.Slice) *OpSTSLICECONST {
 	if value == nil {
-		value = cell.BeginCell().EndCell().BeginParse()
+		value = cell.BeginCell().EndCell().MustBeginParse()
 	}
 	return &OpSTSLICECONST{value: value.Copy()}
 }
@@ -172,7 +172,7 @@ func (op *OpSTSLICECONST) Serialize() *cell.Builder {
 }
 
 func (op *OpSTSLICECONST) SerializeText() string {
-	return fmt.Sprintf("STSLICECONST %s", op.value.WithoutObserver().MustToCell().DumpBits())
+	return fmt.Sprintf("STSLICECONST %s", op.value.WithoutTrace().MustToCell().DumpBits())
 }
 
 func (op *OpSTSLICECONST) InstructionBits() int64 {

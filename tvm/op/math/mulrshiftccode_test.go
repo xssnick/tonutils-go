@@ -32,7 +32,7 @@ func TestMulrshiftccodeOperation(t *testing.T) {
 			st.PushInt(big.NewInt(test.y))
 
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
-			codeSlice := codeCell.BeginParse()
+			codeSlice := codeCell.MustBeginParse()
 
 			op := MULRSHIFTCCODE(0)
 			op.Deserialize(codeSlice)

@@ -536,7 +536,7 @@ func TestContOpsGoSemantics(t *testing.T) {
 
 	t.Run("BlessFamilies", func(t *testing.T) {
 		bodyCell := codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize())
-		bodySlice := bodyCell.BeginParse()
+		bodySlice := bodyCell.MustBeginParse()
 
 		stack, res, err := runRawCode(codeFromBuilders(t, execop.BLESS().Serialize(), execop.EXECUTE().Serialize()), bodySlice)
 		_ = stack
@@ -554,27 +554,27 @@ func TestContOpsGoSemantics(t *testing.T) {
 			t.Fatalf("bless expected 7, got %s", got.String())
 		}
 
-		stack, res, err = runRawCode(codeFromBuilders(t, execop.BLESSARGS(1, 0).Serialize(), execop.EXECUTE().Serialize()), int64(55), bodyCell.BeginParse())
+		stack, res, err = runRawCode(codeFromBuilders(t, execop.BLESSARGS(1, 0).Serialize(), execop.EXECUTE().Serialize()), int64(55), bodyCell.MustBeginParse())
 		if err != nil {
 			t.Fatalf("blessargs unexpected error: %v", err)
 		}
 		if res.ExitCode != 0 {
 			t.Fatalf("blessargs unexpected exit code: %d", res.ExitCode)
 		}
-			got, err = res.Stack.PopIntFinite()
-			if err != nil {
-				t.Fatalf("blessargs pop result: %v", err)
-			}
-			if got.Int64() != 7 {
-				t.Fatalf("blessargs expected top value 7, got %s", got.String())
-			}
-			got, err = res.Stack.PopIntFinite()
-			if err != nil {
-				t.Fatalf("blessargs pop captured arg: %v", err)
-			}
-			if got.Int64() != 55 {
-				t.Fatalf("blessargs expected captured arg 55, got %s", got.String())
-			}
+		got, err = res.Stack.PopIntFinite()
+		if err != nil {
+			t.Fatalf("blessargs pop result: %v", err)
+		}
+		if got.Int64() != 7 {
+			t.Fatalf("blessargs expected top value 7, got %s", got.String())
+		}
+		got, err = res.Stack.PopIntFinite()
+		if err != nil {
+			t.Fatalf("blessargs pop captured arg: %v", err)
+		}
+		if got.Int64() != 55 {
+			t.Fatalf("blessargs expected captured arg 55, got %s", got.String())
+		}
 
 		stack, res, err = runRawCode(
 			codeFromBuilders(
@@ -584,7 +584,7 @@ func TestContOpsGoSemantics(t *testing.T) {
 				execop.BLESSVARARGS().Serialize(),
 				execop.EXECUTE().Serialize(),
 			),
-			int64(66), bodyCell.BeginParse(),
+			int64(66), bodyCell.MustBeginParse(),
 		)
 		if err != nil {
 			t.Fatalf("blessvarargs unexpected error: %v", err)
@@ -592,20 +592,20 @@ func TestContOpsGoSemantics(t *testing.T) {
 		if res.ExitCode != 0 {
 			t.Fatalf("blessvarargs unexpected exit code: %d", res.ExitCode)
 		}
-			got, err = res.Stack.PopIntFinite()
-			if err != nil {
-				t.Fatalf("blessvarargs pop result: %v", err)
-			}
-			if got.Int64() != 7 {
-				t.Fatalf("blessvarargs expected top value 7, got %s", got.String())
-			}
-			got, err = res.Stack.PopIntFinite()
-			if err != nil {
-				t.Fatalf("blessvarargs pop captured arg: %v", err)
-			}
-			if got.Int64() != 66 {
-				t.Fatalf("blessvarargs expected captured arg 66, got %s", got.String())
-			}
+		got, err = res.Stack.PopIntFinite()
+		if err != nil {
+			t.Fatalf("blessvarargs pop result: %v", err)
+		}
+		if got.Int64() != 7 {
+			t.Fatalf("blessvarargs expected top value 7, got %s", got.String())
+		}
+		got, err = res.Stack.PopIntFinite()
+		if err != nil {
+			t.Fatalf("blessvarargs pop captured arg: %v", err)
+		}
+		if got.Int64() != 66 {
+			t.Fatalf("blessvarargs expected captured arg 66, got %s", got.String())
+		}
 	})
 
 	t.Run("CompositionAndExitOps", func(t *testing.T) {

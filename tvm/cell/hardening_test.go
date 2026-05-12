@@ -195,7 +195,7 @@ func TestFromBOCCopiesCellPayload(t *testing.T) {
 				t.Fatal("parsed cell data should not alias source boc")
 			}
 
-			value, err := c.BeginParse().LoadUInt(16)
+			value, err := c.MustBeginParse().LoadUInt(16)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,7 +223,7 @@ func TestFromBOCMultiRootReaderNoCopyPayloadSharesInput(t *testing.T) {
 		t.Fatalf("expected 1 unique cell, got %d", len(unique))
 	}
 
-	value, err := roots[0].BeginParse().LoadUInt(16)
+	value, err := roots[0].MustBeginParse().LoadUInt(16)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestFromBOCMultiRootReaderNoCopyPayloadSharesInput(t *testing.T) {
 	boc[dataOffset] = 0xAB
 	boc[dataOffset+1] = 0xCD
 
-	value, err = roots[0].BeginParse().LoadUInt(16)
+	value, err = roots[0].MustBeginParse().LoadUInt(16)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestStoreBigIntSupportsSigned257Boundary(t *testing.T) {
 	min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
 	cell := BeginCell().MustStoreBigInt(min, 257).EndCell()
-	got, err := cell.BeginParse().LoadBigInt(257)
+	got, err := cell.MustBeginParse().LoadBigInt(257)
 	if err != nil {
 		t.Fatalf("failed to load signed 257-bit value: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestStoreBigIntSupportsSigned257Boundary(t *testing.T) {
 }
 
 func TestSliceRejectsNarrowLoadOverflow(t *testing.T) {
-	tooBigUInt := BeginCell().MustStoreBigUInt(new(big.Int).Lsh(big.NewInt(1), 64), 65).EndCell().BeginParse()
+	tooBigUInt := BeginCell().MustStoreBigUInt(new(big.Int).Lsh(big.NewInt(1), 64), 65).EndCell().MustBeginParse()
 	beforeUInt := tooBigUInt.BitsLeft()
 	if _, err := tooBigUInt.LoadUInt(65); err != ErrTooBigValue {
 		t.Fatalf("expected ErrTooBigValue from LoadUInt, got %v", err)
@@ -433,7 +433,7 @@ func TestSliceRejectsNarrowLoadOverflow(t *testing.T) {
 		t.Fatalf("expected ErrTooBigValue from PreloadUInt, got %v", err)
 	}
 
-	tooBigInt := BeginCell().MustStoreBigInt(new(big.Int).Lsh(big.NewInt(1), 63), 65).EndCell().BeginParse()
+	tooBigInt := BeginCell().MustStoreBigInt(new(big.Int).Lsh(big.NewInt(1), 63), 65).EndCell().MustBeginParse()
 	beforeInt := tooBigInt.BitsLeft()
 	if _, err := tooBigInt.LoadInt(65); err != ErrTooBigValue {
 		t.Fatalf("expected ErrTooBigValue from LoadInt, got %v", err)
@@ -442,7 +442,7 @@ func TestSliceRejectsNarrowLoadOverflow(t *testing.T) {
 		t.Fatalf("LoadInt overflow advanced slice: before=%d after=%d", beforeInt, tooBigInt.BitsLeft())
 	}
 
-	tooBigCoins := BeginCell().MustStoreBigCoins(new(big.Int).Lsh(big.NewInt(1), 64)).EndCell().BeginParse()
+	tooBigCoins := BeginCell().MustStoreBigCoins(new(big.Int).Lsh(big.NewInt(1), 64)).EndCell().MustBeginParse()
 	beforeCoins := tooBigCoins.BitsLeft()
 	if _, err := tooBigCoins.LoadCoins(); err != ErrTooBigValue {
 		t.Fatalf("expected ErrTooBigValue from LoadCoins, got %v", err)
@@ -453,7 +453,7 @@ func TestSliceRejectsNarrowLoadOverflow(t *testing.T) {
 }
 
 func TestSliceLoadBigIntZeroBits(t *testing.T) {
-	s := BeginCell().MustStoreUInt(0xAB, 8).EndCell().BeginParse()
+	s := BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
 
 	before := s.BitsLeft()
 	got, err := s.LoadBigInt(0)
@@ -488,8 +488,8 @@ func TestBuilderStoreSliceNearCapacityUnaligned(t *testing.T) {
 		t.Fatalf("unexpected builder bits: got %d, want 1021", bits)
 	}
 
-	s := b.EndCell().BeginParse()
-	if err := s.Advance(1020); err != nil {
+	s := b.EndCell().MustBeginParse()
+	if err := s.SkipBits(1020); err != nil {
 		t.Fatalf("failed to skip prefix bits: %v", err)
 	}
 	bit, err := s.LoadUInt(1)
@@ -502,7 +502,7 @@ func TestBuilderStoreSliceNearCapacityUnaligned(t *testing.T) {
 }
 
 func TestSliceLoadVarUIntRejectsInvalidLengthEncoding(t *testing.T) {
-	s := BeginCell().MustStoreUInt(10, 4).EndCell().BeginParse()
+	s := BeginCell().MustStoreUInt(10, 4).EndCell().MustBeginParse()
 	if _, err := s.LoadVarUInt(10); err != ErrTooBigValue {
 		t.Fatalf("expected ErrTooBigValue from invalid varuint length, got %v", err)
 	}

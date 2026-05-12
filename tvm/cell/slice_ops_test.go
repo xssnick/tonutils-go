@@ -30,7 +30,7 @@ func mustBitSlice(t *testing.T, bits string, refs ...*Cell) *Slice {
 	for _, ref := range refs {
 		b.MustStoreRef(ref)
 	}
-	return b.EndCell().BeginParse()
+	return b.EndCell().MustBeginParse()
 }
 
 func TestSliceOpsWindowing(t *testing.T) {
@@ -75,6 +75,44 @@ func TestSliceOpsWindowing(t *testing.T) {
 		}
 		if sl := mustBitSlice(t, "10"); sl.SkipLast(3, 0) {
 			t.Fatal("SkipLast should reject oversized bit request")
+		}
+	})
+
+	t.Run("SkipBitsAndRefs", func(t *testing.T) {
+		sl := mustBitSlice(t, "101100", refA, refB)
+		if err := sl.SkipBits(2); err != nil {
+			t.Fatal(err)
+		}
+		if sl.BitsLeft() != 4 || sl.RefsNum() != 2 {
+			t.Fatalf("SkipBits should advance only bits, bits=%d refs=%d", sl.BitsLeft(), sl.RefsNum())
+		}
+		if got := sl.MustLoadUInt(2); got != 0b11 {
+			t.Fatalf("unexpected bits after SkipBits: %b", got)
+		}
+
+		sl = mustBitSlice(t, "101100", refA, refB)
+		if err := sl.SkipBitsAndRefs(3, 1); err != nil {
+			t.Fatal(err)
+		}
+		if sl.BitsLeft() != 3 || sl.RefsNum() != 1 {
+			t.Fatalf("SkipBitsAndRefs should advance bits and refs, bits=%d refs=%d", sl.BitsLeft(), sl.RefsNum())
+		}
+		if got, err := sl.LoadRefCell(); err != nil || got != refB {
+			t.Fatalf("unexpected remaining ref after SkipBitsAndRefs: got=%v err=%v", got, err)
+		}
+
+		sl = mustBitSlice(t, "10", refA)
+		if err := sl.SkipBits(3); err == nil {
+			t.Fatal("SkipBits should reject oversized bit request")
+		}
+		if sl.BitsLeft() != 2 || sl.RefsNum() != 1 {
+			t.Fatalf("failed SkipBits should not advance, bits=%d refs=%d", sl.BitsLeft(), sl.RefsNum())
+		}
+		if err := sl.SkipBitsAndRefs(0, -1); err == nil {
+			t.Fatal("SkipBitsAndRefs should reject negative refs")
+		}
+		if sl.BitsLeft() != 2 || sl.RefsNum() != 1 {
+			t.Fatalf("failed SkipBitsAndRefs should not advance, bits=%d refs=%d", sl.BitsLeft(), sl.RefsNum())
 		}
 	})
 

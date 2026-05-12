@@ -62,7 +62,7 @@ func main() {
 	for _, c := range res.AsTuple() {
 		switch res := c.(type) {
 		case *cell.Cell:
-			sz, payload, err := res.BeginParse().RestBits()
+			sz, payload, err := res.MustBeginParse().RestBits()
 			if err != nil {
 				println("ERR", err.Error())
 				return

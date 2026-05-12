@@ -22,7 +22,7 @@ func TestStack_ToCell(t *testing.T) {
 	s.Push(cell.BeginCell().MustStoreUInt(0xCC, 8).MustStoreRef(ref).EndCell())
 	s.Push(uint64(18446744073709551615))
 	s.Push(int64(555))
-	s.Push(cell.BeginCell().MustStoreUInt(0x55, 8).MustStoreRef(ref).EndCell().BeginParse())
+	s.Push(cell.BeginCell().MustStoreUInt(0x55, 8).MustStoreRef(ref).EndCell().MustBeginParse())
 
 	c, err := s.ToCell()
 	if err != nil {
@@ -30,7 +30,7 @@ func TestStack_ToCell(t *testing.T) {
 	}
 
 	var s2 Stack
-	err = s2.LoadFromCell(c.BeginParse())
+	err = s2.LoadFromCell(c.MustBeginParse())
 	if err != nil {
 		t.Fatal("failed from cell", err)
 	}
@@ -117,7 +117,7 @@ func TestParseStackValue(t *testing.T) {
 	boc, _ := hex.DecodeString("b5ee9c724101140100be00010607000101020607000a021302000304020005060109040010b020070200080902060700020a13004380115c9efc1f3c4944ec3bc823fa372c3bff194d21a5bf9a0b1a35ea8acc5e8b7e5002000b0c00440200a6e7d0f36eaebcc9b69f116cd65416c8703d9ea2e1e663692fdd3f9c166d41740012010000000005c8f38202000d0c001201000028bd7718211002000e0f020010110012010000000065d8d26802001211001201000000000000000000120100000000076ef1ea00020039c2bf52")
 	c, _ := cell.FromBOC(boc)
 
-	vl, err := ParseStackValue(c.BeginParse())
+	vl, err := ParseStackValue(c.MustBeginParse())
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -151,7 +151,7 @@ func TestStackSliceValueUsesBaseCellOffsets(t *testing.T) {
 		MustStoreUInt(2, 3).
 		EndCell()
 
-	parsed, err := ParseStackValue(value.BeginParse())
+	parsed, err := ParseStackValue(value.MustBeginParse())
 	if err != nil {
 		t.Fatalf("parse stack slice: %v", err)
 	}
@@ -176,11 +176,11 @@ func TestStackSliceValueUsesBaseCellOffsets(t *testing.T) {
 func TestStackTupleSliceValuePreservesOffsets(t *testing.T) {
 	ref := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	base := cell.BeginCell().MustStoreUInt(0x1234, 16).MustStoreRef(ref).EndCell()
-	slc, err := base.BeginParse().PreloadSubslice(12, 1)
+	slc, err := base.MustBeginParse().PreloadSubslice(12, 1)
 	if err != nil {
 		t.Fatalf("build tuple slice: %v", err)
 	}
-	if err = slc.Advance(4); err != nil {
+	if err = slc.SkipBits(4); err != nil {
 		t.Fatalf("advance tuple slice: %v", err)
 	}
 
@@ -188,7 +188,7 @@ func TestStackTupleSliceValuePreservesOffsets(t *testing.T) {
 	if err = SerializeStackValue(value, []any{slc}); err != nil {
 		t.Fatalf("serialize tuple: %v", err)
 	}
-	parsed, err := ParseStackValue(value.EndCell().BeginParse())
+	parsed, err := ParseStackValue(value.EndCell().MustBeginParse())
 	if err != nil {
 		t.Fatalf("parse tuple: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestNewStackFromVMSerializesNaN(t *testing.T) {
 	}
 
 	var parsed Stack
-	if err = parsed.LoadFromCell(cellValue.BeginParse()); err != nil {
+	if err = parsed.LoadFromCell(cellValue.MustBeginParse()); err != nil {
 		t.Fatalf("stack from cell: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestNewStackFromVMPreservesSerializedOrder(t *testing.T) {
 func loadSerializedStackInts(t *testing.T, stack *cell.Cell) []int64 {
 	t.Helper()
 
-	next := stack.BeginParse()
+	next := stack.MustBeginParse()
 	depth, err := next.LoadUInt(24)
 	if err != nil {
 		t.Fatalf("load stack depth: %v", err)

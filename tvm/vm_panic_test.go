@@ -12,7 +12,7 @@ import (
 type panicTestOP struct{}
 
 func (o *panicTestOP) GetPrefixes() []*cell.Slice {
-	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell().BeginParse()}
+	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell().MustBeginParse()}
 }
 
 func (o *panicTestOP) Deserialize(code *cell.Slice) error {

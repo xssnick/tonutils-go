@@ -6,29 +6,7 @@ import (
 	"testing"
 )
 
-type testCellObserver struct {
-	loads   int
-	creates int
-}
-
-func (o *testCellObserver) OnCellLoad(_ Hash) { o.loads++ }
-func (o *testCellObserver) OnCellCreate()     { o.creates++ }
-
-func (o *testCellObserver) OnRef(_ TraceNode, _ int) TraceNode {
-	return 0
-}
-
-type testHashObserver struct {
-	testCellObserver
-	keys int
-}
-
-func (o *testHashObserver) OnCellLoad(hash Hash) {
-	_ = hash
-	o.keys++
-}
-
-func TestPrefixDictionary_WrappersCompatibilityAndObservers(t *testing.T) {
+func TestPrefixDictionary_WrappersCompatibilityAndTrace(t *testing.T) {
 	var nilDict *PrefixDictionary
 	if !nilDict.IsEmpty() {
 		t.Fatal("nil prefix dict should be empty")
@@ -82,12 +60,12 @@ func TestPrefixDictionary_WrappersCompatibilityAndObservers(t *testing.T) {
 		t.Fatalf("unexpected AsPrefixDict load: err=%v", err)
 	}
 
-	inlineLoaded := root.BeginParse().MustToPrefixDict(4)
+	inlineLoaded := root.MustBeginParse().MustToPrefixDict(4)
 	if got, err := inlineLoaded.LoadValue(keyB); err != nil || mustLoadTestValue(t, got, 8) != 0xbb {
 		t.Fatalf("unexpected MustToPrefixDict load: err=%v", err)
 	}
 
-	maybeLoaded := BeginCell().MustStoreMaybeRef(root).EndCell().BeginParse().MustLoadPrefixDict(4)
+	maybeLoaded := BeginCell().MustStoreMaybeRef(root).EndCell().MustBeginParse().MustLoadPrefixDict(4)
 	if got, err := maybeLoaded.LoadValue(keyA); err != nil || mustLoadTestValue(t, got, 8) != 0xaa {
 		t.Fatalf("unexpected MustLoadPrefixDict load: err=%v", err)
 	}
@@ -102,11 +80,11 @@ func TestPrefixDictionary_WrappersCompatibilityAndObservers(t *testing.T) {
 		t.Fatalf("unexpected delete error for missing prefix key: %v", err)
 	}
 
-	obs := &testCellObserver{}
-	observed := copyDict.Copy().SetObserver(obs)
-	_ = observed.beginParse(observed.root)
-	if obs.loads != 1 {
-		t.Fatalf("beginParse should charge observer once, got %d", obs.loads)
+	loads := 0
+	observed := copyDict.Copy().SetTrace(NewTrace(TraceHooks{OnLoad: func(*Cell) { loads++ }}))
+	_ = observed.root.MustBeginParse()
+	if loads != 1 {
+		t.Fatalf("beginParse should notify trace once, got %d", loads)
 	}
 
 	pruned := makeManualCellForTest(true, LevelMask{}, 288, append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...), nil)
@@ -185,7 +163,7 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pfx.BeginParse().MustLoadUInt(4) != 0x0a {
+	if pfx.MustBeginParse().MustLoadUInt(4) != 0x0a {
 		t.Fatalf("unexpected cellPrefix value: %s", pfx.Dump())
 	}
 
@@ -206,7 +184,7 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 		t.Fatalf("unexpected nil-filter result: len=%d changes=%d err=%v", len(filtered), changes, err)
 	}
 	filtered, changes, err = fixedDictFilterItems(items, func(_ *Slice, key *Cell) (DictFilterAction, error) {
-		if key.BeginParse().MustLoadUInt(8) == 0x10 {
+		if key.MustBeginParse().MustLoadUInt(8) == 0x10 {
 			return DictFilterKeepRest, nil
 		}
 		return DictFilterRemove, nil
@@ -215,7 +193,7 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 		t.Fatalf("unexpected keep-rest filter result: len=%d changes=%d err=%v", len(filtered), changes, err)
 	}
 	filtered, changes, err = fixedDictFilterItems(items, func(_ *Slice, key *Cell) (DictFilterAction, error) {
-		if key.BeginParse().MustLoadUInt(8) == 0x20 {
+		if key.MustBeginParse().MustLoadUInt(8) == 0x20 {
 			return DictFilterRemoveRest, nil
 		}
 		return DictFilterKeep, nil
@@ -271,7 +249,7 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 
 	bigVal := new(big.Int).Lsh(big.NewInt(1), 72)
 	bigVal.Add(bigVal, big.NewInt(0x55))
-	bigSrc := BeginCell().MustStoreBigUInt(bigVal, 80).EndCell().BeginParse()
+	bigSrc := BeginCell().MustStoreBigUInt(bigVal, 80).EndCell().MustBeginParse()
 	if got, err := bigSrc.PreloadBigUInt(80); err != nil || got.Cmp(bigVal) != 0 {
 		t.Fatalf("unexpected PreloadBigUInt result: got=%v err=%v", got, err)
 	}
@@ -291,10 +269,11 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 }
 
 func TestValidateLoadedCellAdditionalMerkleAndPrunedPaths(t *testing.T) {
-	obs := &testHashObserver{}
-	notifyCellLoad(obs, BeginCell().MustStoreUInt(1, 1).EndCell())
-	if obs.keys != 1 || obs.loads != 0 {
-		t.Fatalf("hash observer should be notified via key path, got keys=%d loads=%d", obs.keys, obs.loads)
+	loads := 0
+	trace := NewTrace(TraceHooks{OnLoad: func(*Cell) { loads++ }})
+	trace.NotifyLoad(BeginCell().MustStoreUInt(1, 1).EndCell())
+	if loads != 1 {
+		t.Fatalf("trace should be notified once, got %d", loads)
 	}
 
 	validPruned := makeManualCellForTest(true, LevelMask{Mask: 1}, 288, append([]byte{byte(PrunedCellType), 0x01}, make([]byte, 34)...), nil)
@@ -404,8 +383,8 @@ func TestDictionaryFixedAPI_NilAndErrorBranches(t *testing.T) {
 	}
 
 	root, err := rebuildPlainDict(8, []DictItem{
-		{Key: mustDictKey(t, 1, 8), Value: mustPrefixValue(t, 0xaa, 8).BeginParse()},
-		{Key: mustDictKey(t, 2, 8), Value: mustPrefixValue(t, 0xbb, 8).BeginParse()},
+		{Key: mustDictKey(t, 1, 8), Value: mustPrefixValue(t, 0xaa, 8).MustBeginParse()},
+		{Key: mustDictKey(t, 2, 8), Value: mustPrefixValue(t, 0xbb, 8).MustBeginParse()},
 	})
 	if err != nil || root == nil {
 		t.Fatalf("rebuildPlainDict should rebuild a root: root=%v err=%v", root, err)

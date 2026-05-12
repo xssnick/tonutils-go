@@ -43,7 +43,7 @@ func TestTVMCrossEmulatorCellOpsMatrix(t *testing.T) {
 		{name: "ldsame_short_stack_bad_bit_order", code: codeFromBuilders(t, cellsliceop.LDSAME().Serialize()), stack: []any{int64(2)}, exit: vmerr.CodeStackUnderflow},
 		{name: "ldux_range_257", code: codeFromBuilders(t, cellsliceop.LDUX().Serialize()), stack: []any{matrixSlice(t, 257, 0), int64(257)}, exit: vmerr.CodeRangeCheck},
 		{name: "ldix_range_258", code: codeFromBuilders(t, cellsliceop.LDIX().Serialize()), stack: []any{matrixSlice(t, 257, 0), int64(258)}, exit: vmerr.CodeRangeCheck},
-		{name: "plduz_short_zero_extend", code: codeFromBuilders(t, cellsliceop.PLDUZ(32).Serialize()), stack: []any{cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().BeginParse()}, exit: 0},
+		{name: "plduz_short_zero_extend", code: codeFromBuilders(t, cellsliceop.PLDUZ(32).Serialize()), stack: []any{cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()}, exit: 0},
 		{name: "stu_builder_full_bits", code: codeFromBuilders(t, cellsliceop.STU(1).Serialize()), stack: []any{int64(1), matrixBuilder(t, 1023, 0)}, exit: vmerr.CodeCellOverflow},
 		{name: "stu_overflow_precedes_range", code: codeFromBuilders(t, cellsliceop.STU(1).Serialize()), stack: []any{int64(2), matrixBuilder(t, 1023, 0)}, exit: vmerr.CodeCellOverflow},
 		{name: "sti_overflow_precedes_range", code: codeFromBuilders(t, cellsliceop.STI(1).Serialize()), stack: []any{int64(1), matrixBuilder(t, 1023, 0)}, exit: vmerr.CodeCellOverflow},
@@ -53,8 +53,8 @@ func TestTVMCrossEmulatorCellOpsMatrix(t *testing.T) {
 		{name: "stsliceq_builder_full_refs", code: codeFromBuilders(t, cellsliceop.STSLICEQ().Serialize()), stack: []any{matrixSlice(t, 0, 1), matrixBuilder(t, 0, 4)}, exit: 0},
 		{name: "stref_cf10_alias", code: cell.BeginCell().MustStoreUInt(0xCF10, 16).EndCell(), stack: []any{matrixCell(t, 0, 0), cell.BeginCell()}, exit: 0},
 		{name: "stslice_cf12_alias", code: cell.BeginCell().MustStoreUInt(0xCF12, 16).EndCell(), stack: []any{matrixSlice(t, 4, 0), cell.BeginCell()}, exit: 0},
-		{name: "ldgrams_zero", code: codeFromBuilders(t, cellsliceop.LDGRAMS().Serialize()), stack: []any{cell.BeginCell().MustStoreCoins(0).EndCell().BeginParse()}, exit: 0},
-		{name: "ldgrams_large", code: codeFromBuilders(t, cellsliceop.LDGRAMS().Serialize()), stack: []any{cell.BeginCell().MustStoreBigCoins(new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 120), big.NewInt(1))).EndCell().BeginParse()}, exit: 0},
+		{name: "ldgrams_zero", code: codeFromBuilders(t, cellsliceop.LDGRAMS().Serialize()), stack: []any{cell.BeginCell().MustStoreCoins(0).EndCell().MustBeginParse()}, exit: 0},
+		{name: "ldgrams_large", code: codeFromBuilders(t, cellsliceop.LDGRAMS().Serialize()), stack: []any{cell.BeginCell().MustStoreBigCoins(new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 120), big.NewInt(1))).EndCell().MustBeginParse()}, exit: 0},
 		{name: "stgrams_zero", code: codeFromBuilders(t, cellsliceop.STGRAMS().Serialize()), stack: []any{cell.BeginCell(), int64(0)}, exit: 0},
 		{name: "stgrams_one", code: codeFromBuilders(t, cellsliceop.STGRAMS().Serialize()), stack: []any{cell.BeginCell(), int64(1)}, exit: 0},
 		{name: "stgrams_overflow_value", code: codeFromBuilders(t, cellsliceop.STGRAMS().Serialize()), stack: []any{cell.BeginCell(), new(big.Int).Lsh(big.NewInt(1), 120)}, exit: vmerr.CodeRangeCheck},
@@ -167,10 +167,10 @@ func TestTVMCrossEmulatorCellOpsMatrix(t *testing.T) {
 		cellParityCase{name: "sdbeginsxq_miss", code: codeFromBuilders(t, cellsliceop.SDBEGINSXQ().Serialize()), stack: []any{left, properSuffix}, exit: 0},
 	)
 
-	le4 := cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF, 0xA5}, 40).EndCell().BeginParse()
-	le8 := cell.BeginCell().MustStoreSlice([]byte{0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0xA5}, 72).EndCell().BeginParse()
-	short4 := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 31).EndCell().BeginParse()
-	short8 := cell.BeginCell().MustStoreSlice([]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}, 63).EndCell().BeginParse()
+	le4 := cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF, 0xA5}, 40).EndCell().MustBeginParse()
+	le8 := cell.BeginCell().MustStoreSlice([]byte{0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0xA5}, 72).EndCell().MustBeginParse()
+	short4 := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 31).EndCell().MustBeginParse()
+	short8 := cell.BeginCell().MustStoreSlice([]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}, 63).EndCell().MustBeginParse()
 	tests = append(tests,
 		cellParityCase{name: "ldile4_success", code: codeFromBuilders(t, cellsliceop.LDILE4().Serialize()), stack: []any{le4}, exit: 0},
 		cellParityCase{name: "ldule4_success", code: codeFromBuilders(t, cellsliceop.LDULE4().Serialize()), stack: []any{le4}, exit: 0},
@@ -353,7 +353,7 @@ func matrixCell(t *testing.T, bits uint, refs int) *cell.Cell {
 
 func matrixSlice(t *testing.T, bits uint, refs int) *cell.Slice {
 	t.Helper()
-	return matrixCell(t, bits, refs).BeginParse()
+	return matrixCell(t, bits, refs).MustBeginParse()
 }
 
 func matrixBuilder(t *testing.T, bits uint, refs int) *cell.Builder {
@@ -378,7 +378,7 @@ func matrixSliceFromBits(t *testing.T, bits string) *cell.Slice {
 			b.MustStoreUInt(0, 1)
 		}
 	}
-	return b.EndCell().BeginParse()
+	return b.EndCell().MustBeginParse()
 }
 
 func matrixPattern(bits uint) []byte {

@@ -11,7 +11,7 @@ func mustCollectDictKeys(t *testing.T, items []DictItem, bits uint) []uint64 {
 
 	keys := make([]uint64, len(items))
 	for i, item := range items {
-		keys[i] = item.Key.BeginParse().MustLoadUInt(bits)
+		keys[i] = item.Key.MustBeginParse().MustLoadUInt(bits)
 	}
 	return keys
 }
@@ -59,7 +59,7 @@ func TestDictionary_RangeIteratorNearestAndCommonPrefix(t *testing.T) {
 	}
 	var reverse []uint64
 	for it.Next() {
-		reverse = append(reverse, it.Key().BeginParse().MustLoadUInt(8))
+		reverse = append(reverse, it.Key().MustBeginParse().MustLoadUInt(8))
 	}
 	if !equalUint64Slices(reverse, []uint64{0xf0, 0x80, 0x7f, 0x10}) {
 		t.Fatalf("unexpected reverse iterator order: %v", reverse)
@@ -69,7 +69,7 @@ func TestDictionary_RangeIteratorNearestAndCommonPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := key.BeginParse().MustLoadUInt(8); got != 0x80 {
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0x80 {
 		t.Fatalf("unexpected previous nearest key: %x", got)
 	}
 	if got := mustLoadTestValue(t, value, 8); got != 0xc3 {
@@ -80,7 +80,7 @@ func TestDictionary_RangeIteratorNearestAndCommonPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := key.BeginParse().MustLoadUInt(8); got != 0xf0 {
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0xf0 {
 		t.Fatalf("unexpected next nearest key: %x", got)
 	}
 
@@ -88,7 +88,7 @@ func TestDictionary_RangeIteratorNearestAndCommonPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := key.BeginParse().MustLoadUInt(8); got != 0xf0 {
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0xf0 {
 		t.Fatalf("unexpected signed previous nearest key: %x", got)
 	}
 
@@ -96,7 +96,7 @@ func TestDictionary_RangeIteratorNearestAndCommonPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := key.BeginParse().MustLoadUInt(8); got != 0x7f {
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0x7f {
 		t.Fatalf("unexpected signed next nearest key: %x", got)
 	}
 
@@ -127,7 +127,7 @@ func TestDictionary_RangeIteratorNearestAndCommonPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := common.BeginParse().MustLoadUInt(4); got != 0b1000 {
+	if got := common.MustBeginParse().MustLoadUInt(4); got != 0b1000 {
 		t.Fatalf("unexpected common prefix bits: %b", got)
 	}
 }
@@ -166,9 +166,9 @@ func TestDictionary_LookupNearestKeyMatchesOrderedScan(t *testing.T) {
 						t.Fatalf("query=%02x fetchNext=%v allowEq=%v signed=%v: %v", query, fetchNext, allowEq, invertFirst, err)
 					}
 					if compareKeyCells(gotKey, expected, false) != 0 {
-						t.Fatalf("query=%02x fetchNext=%v allowEq=%v signed=%v: key=%02x, want %02x", query, fetchNext, allowEq, invertFirst, gotKey.BeginParse().MustLoadUInt(8), expected.BeginParse().MustLoadUInt(8))
+						t.Fatalf("query=%02x fetchNext=%v allowEq=%v signed=%v: key=%02x, want %02x", query, fetchNext, allowEq, invertFirst, gotKey.MustBeginParse().MustLoadUInt(8), expected.MustBeginParse().MustLoadUInt(8))
 					}
-					if got := mustLoadTestValue(t, gotValue, 8); got != gotKey.BeginParse().MustLoadUInt(8)^0xff {
+					if got := mustLoadTestValue(t, gotValue, 8); got != gotKey.MustBeginParse().MustLoadUInt(8)^0xff {
 						t.Fatalf("query=%02x fetchNext=%v allowEq=%v signed=%v: value=%02x does not match key", query, fetchNext, allowEq, invertFirst, got)
 					}
 				}
@@ -244,7 +244,7 @@ func TestDictionary_PrefixSubdictAndFilter(t *testing.T) {
 	}
 
 	changes, err := dict.Filter(func(value *Slice, key *Cell) (DictFilterAction, error) {
-		if key.BeginParse().MustLoadUInt(4) == 0b0011 {
+		if key.MustBeginParse().MustLoadUInt(4) == 0b0011 {
 			return DictFilterRemove, nil
 		}
 		return DictFilterKeep, nil

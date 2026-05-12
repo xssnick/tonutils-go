@@ -38,7 +38,7 @@ func TestAdvancedMetaOps(t *testing.T) {
 
 		hashOp := CHASHI(0)
 		hashDecoded := CHASHI(1)
-		if err := hashDecoded.Deserialize(hashOp.Serialize().EndCell().BeginParse()); err != nil {
+		if err := hashDecoded.Deserialize(hashOp.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("CHASHI deserialize failed: %v", err)
 		}
 		state := newCellSliceState()
@@ -56,7 +56,7 @@ func TestAdvancedMetaOps(t *testing.T) {
 
 		depthOp := CDEPTHI(0)
 		depthDecoded := CDEPTHI(1)
-		if err := depthDecoded.Deserialize(depthOp.Serialize().EndCell().BeginParse()); err != nil {
+		if err := depthDecoded.Deserialize(depthOp.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("CDEPTHI deserialize failed: %v", err)
 		}
 		state = newCellSliceState()
@@ -155,14 +155,14 @@ func TestLittleEndianOpVariants(t *testing.T) {
 		if err := STILE4().Interpret(state); err != nil {
 			t.Fatalf("STILE4 failed: %v", err)
 		}
-		if got := decodeLEInt(popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadSlice(32), false).Int64(); got != -2 {
+		if got := decodeLEInt(popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadSlice(32), false).Int64(); got != -2 {
 			t.Fatalf("unexpected STILE4 value: %d", got)
 		}
 	})
 
 	t.Run("RoundTripMetadata", func(t *testing.T) {
 		loadDecoded := LDILE4()
-		if err := loadDecoded.Deserialize(LDULE8Q().Serialize().EndCell().BeginParse()); err != nil {
+		if err := loadDecoded.Deserialize(LDULE8Q().Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("LDULE8Q deserialize failed: %v", err)
 		}
 		if got := loadDecoded.SerializeText(); got != "LDULE8Q" {
@@ -173,7 +173,7 @@ func TestLittleEndianOpVariants(t *testing.T) {
 		}
 
 		storeDecoded := STILE4()
-		if err := storeDecoded.Deserialize(STULE8().Serialize().EndCell().BeginParse()); err != nil {
+		if err := storeDecoded.Deserialize(STULE8().Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("STULE8 deserialize failed: %v", err)
 		}
 		if got := storeDecoded.SerializeText(); got != "STULE8" {
@@ -300,7 +300,7 @@ func TestLoadFamilyVariants(t *testing.T) {
 
 	t.Run("RoundTripMetadata", func(t *testing.T) {
 		intDecoded := LDIFIX(1, false, false, false)
-		if err := intDecoded.Deserialize(LDUFIX(32, true, false, true).Serialize().EndCell().BeginParse()); err != nil {
+		if err := intDecoded.Deserialize(LDUFIX(32, true, false, true).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("LDUFIX deserialize failed: %v", err)
 		}
 		if got := intDecoded.SerializeText(); got != "LDUQ 32" {
@@ -311,7 +311,7 @@ func TestLoadFamilyVariants(t *testing.T) {
 		}
 
 		sliceDecoded := LDSLICEFIX(1, false, false)
-		if err := sliceDecoded.Deserialize(PLDSLICEFIX(16, true, true).Serialize().EndCell().BeginParse()); err != nil {
+		if err := sliceDecoded.Deserialize(PLDSLICEFIX(16, true, true).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("PLDSLICEFIX deserialize failed: %v", err)
 		}
 		if got := sliceDecoded.SerializeText(); got != "PLDSLICEQ 16" {
@@ -322,7 +322,7 @@ func TestLoadFamilyVariants(t *testing.T) {
 		}
 
 		plduzDecoded := PLDUZ(32)
-		if err := plduzDecoded.Deserialize(PLDUZ(64).Serialize().EndCell().BeginParse()); err != nil {
+		if err := plduzDecoded.Deserialize(PLDUZ(64).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("PLDUZ deserialize failed: %v", err)
 		}
 		if got := plduzDecoded.InstructionBits(); got != 16 {

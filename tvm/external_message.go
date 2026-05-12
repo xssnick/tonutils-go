@@ -1,7 +1,9 @@
 package tvm
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -43,6 +45,8 @@ type MessageEmulationConfig struct {
 	Libraries           []*cell.Cell
 	Gas                 vm.Gas
 	StopOnAccept        bool
+	BuildProof          bool
+	AccountRoot         *cell.Cell
 }
 
 type EmulateExternalMessageConfig = MessageEmulationConfig
@@ -58,6 +62,11 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 	addr := cfg.Address
 	if addr == nil {
 		addr = msg.DstAddr
+	}
+
+	proof, code, data, libraries, addr, err := prepareMessageExecutionProof(code, data, cfg, addr)
+	if err != nil {
+		return nil, err
 	}
 
 	normalized := *msg
@@ -81,7 +90,7 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 	if err = stack.PushCell(msgCell); err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(body.BeginParse()); err != nil {
+	if err = stack.PushSlice(body.MustBeginParse()); err != nil {
 		return nil, err
 	}
 	if err = stack.PushInt(big.NewInt(-1)); err != nil {
@@ -93,12 +102,18 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.Libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, proof, libraries...)
 }
 
 func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*MessageExecutionResult, error) {
+	addr := cfg.Address
+	proof, code, data, libraries, addr, err := prepareMessageExecutionProof(code, data, cfg, addr)
+	if err != nil {
+		return nil, err
+	}
+
 	body = messageBodyCell(body)
-	msgCell, err := buildInternalMessageForEmulation(cfg.Address, body, amount)
+	msgCell, err := buildInternalMessageForEmulation(addr, body, amount)
 	if err != nil {
 		return nil, err
 	}
@@ -114,19 +129,19 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 	if err = stack.PushCell(msgCell); err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(body.BeginParse()); err != nil {
+	if err = stack.PushSlice(body.MustBeginParse()); err != nil {
 		return nil, err
 	}
 	if err = stack.PushInt(big.NewInt(0)); err != nil {
 		return nil, err
 	}
 
-	c7, err := buildMessageEmulationC7(cfg.Address, code, cfg, balance)
+	c7, err := buildMessageEmulationC7(addr, code, cfg, balance)
 	if err != nil {
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, cfg.Libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, proof, libraries...)
 }
 
 func (tvm *TVM) EmulateTickTransaction(code, data *cell.Cell, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
@@ -139,6 +154,11 @@ func (tvm *TVM) EmulateTockTransaction(code, data *cell.Cell, cfg EmulateTickToc
 
 func (tvm *TVM) emulateTickTockTransaction(code, data *cell.Cell, isTock bool, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
 	addr := cfg.Address
+	proof, code, data, libraries, addr, err := prepareMessageExecutionProof(code, data, cfg, addr)
+	if err != nil {
+		return nil, err
+	}
+
 	if addr == nil {
 		return nil, errors.New("tick/tock emulation address is required")
 	}
@@ -168,11 +188,14 @@ func (tvm *TVM) emulateTickTockTransaction(code, data *cell.Cell, isTock bool, c
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultTickTockTransactionGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.Libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultTickTockTransactionGas(cfg.Gas), stack, cfg.StopOnAccept, proof, libraries...)
 }
 
-func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
-	res, execErr := tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, stopOnAccept, libraries...)
+func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, proof *cell.MerkleProofBuilder, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
+	res, execErr := tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{
+		stopOnAccept: stopOnAccept,
+		proof:        proof,
+	}, libraries...)
 	if execErr != nil {
 		if _, ok := vmerr.ErrorCode(execErr); !ok {
 			return nil, execErr
@@ -189,6 +212,58 @@ func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, g
 		out.Actions = nil
 	}
 	return out, nil
+}
+
+func prepareMessageExecutionProof(code, data *cell.Cell, cfg MessageEmulationConfig, addr *address.Address) (*cell.MerkleProofBuilder, *cell.Cell, *cell.Cell, []*cell.Cell, *address.Address, error) {
+	libraries := append([]*cell.Cell(nil), cfg.Libraries...)
+	if !cfg.BuildProof {
+		return nil, code, data, libraries, addr, nil
+	}
+	if cfg.AccountRoot == nil {
+		return nil, nil, nil, nil, nil, errors.New("account root is required to build execution proof")
+	}
+
+	proof, acc, err := prepareAccountExecutionProof(cfg.AccountRoot)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	if !accountCanExecute(acc) {
+		return nil, nil, nil, nil, nil, errors.New("account root is not an active executable account")
+	}
+	addr, err = executionProofAddress(addr, acc.Address)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	if code != nil && !sameCellHash(code, acc.StateInit.Code) {
+		return nil, nil, nil, nil, nil, errors.New("account root code differs from execution code")
+	}
+	if data != nil && !sameCellHash(data, acc.StateInit.Data) {
+		return nil, nil, nil, nil, nil, errors.New("account root data differs from execution data")
+	}
+	if acc.StateInit.Lib != nil && acc.StateInit.Lib.AsCell() != nil {
+		libraries = append(libraries, acc.StateInit.Lib.AsCell())
+	}
+	return proof, acc.StateInit.Code, acc.StateInit.Data, libraries, addr, nil
+}
+
+func executionProofAddress(selected, account *address.Address) (*address.Address, error) {
+	if account == nil {
+		return nil, errors.New("account root address is missing")
+	}
+	if selected == nil {
+		return account, nil
+	}
+	if selected.Type() != account.Type() || selected.BitsLen() != account.BitsLen() || !selected.Equals(account) {
+		return nil, fmt.Errorf("account root address %s differs from execution address %s", account.String(), selected.String())
+	}
+	return selected, nil
+}
+
+func sameCellHash(a, b *cell.Cell) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return bytes.Equal(a.Hash(), b.Hash())
 }
 
 func messageBodyCell(body *cell.Cell) *cell.Cell {

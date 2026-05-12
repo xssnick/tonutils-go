@@ -92,14 +92,22 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	}
 
 	var msg tlb.Message
-	if err := tlb.LoadFromCell(&msg, msgCell.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&msg, msgCell.MustBeginParse()); err != nil {
 		return nil, fmt.Errorf("failed to decode input message: %w", err)
 	}
 	if msg.MsgType == tlb.MsgTypeExternalOut {
 		return nil, errors.New("external outbound messages cannot be used as transaction input")
 	}
 
-	runtimeAcc, err := loadTransactionRuntimeAccount(shard, msg.Msg.DestAddr())
+	var proof *cell.MerkleProofBuilder
+	if cfg.BuildProof {
+		if shard.Account == nil {
+			return nil, errors.New("shard account root is nil")
+		}
+		proof = cell.NewMerkleProofBuilder(shard.Account)
+	}
+
+	runtimeAcc, err := loadTransactionRuntimeAccount(shard, msg.Msg.DestAddr(), proof)
 	if err != nil {
 		return nil, err
 	}
@@ -148,13 +156,16 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 			if err != nil {
 				return nil, err
 			}
+			if cfg.BuildProof && msgStateUsed && skipReason == nil {
+				return nil, errors.New("account execution proof cannot be built for code loaded from message state init")
+			}
 		}
 	}
 
 	var msgRes *MessageExecutionResult
 	accountActivated := false
 	if skipReason == nil {
-		msgRes, err = tvm.executeTransactionMessage(computeAcc, msgCell, &msg, execCfg, gas, prepared.msgBalance.grams)
+		msgRes, err = tvm.executeTransactionMessage(computeAcc, msgCell, &msg, execCfg, gas, prepared.msgBalance.grams, proof)
 		if err != nil {
 			return nil, err
 		}
@@ -296,7 +307,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	}
 
 	var tx tlb.Transaction
-	if err = tlb.LoadFromCell(&tx, txCell.BeginParse()); err != nil {
+	if err = tlb.LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
 		return nil, fmt.Errorf("failed to decode built transaction: %w", err)
 	}
 	tx.Hash = append([]byte(nil), txCell.Hash()...)
@@ -320,13 +331,18 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	return out, nil
 }
 
-func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *address.Address) (*transactionRuntimeAccount, error) {
+func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *address.Address, proof *cell.MerkleProofBuilder) (*transactionRuntimeAccount, error) {
 	if shard.Account == nil {
 		return nil, errors.New("shard account root is nil")
 	}
 
+	accountRoot := shard.Account
+	if proof != nil {
+		accountRoot = proof.Root()
+	}
+
 	var acc tlb.AccountState
-	if err := tlb.LoadFromCell(&acc, shard.Account.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&acc, accountRoot.MustBeginParse()); err != nil {
 		return nil, fmt.Errorf("failed to decode account state: %w", err)
 	}
 
@@ -482,7 +498,7 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 	}
 }
 
-func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCell *cell.Cell, msg *tlb.Message, cfg TransactionEmulationConfig, gas vm.Gas, msgBalance *big.Int) (*MessageExecutionResult, error) {
+func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCell *cell.Cell, msg *tlb.Message, cfg TransactionEmulationConfig, gas vm.Gas, msgBalance *big.Int, proof *cell.MerkleProofBuilder) (*MessageExecutionResult, error) {
 	body := messageBodyCell(msg.Msg.Payload())
 	stack := vm.NewStack()
 	balance := new(big.Int).Set(cfg.Balance)
@@ -498,7 +514,7 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 		if err := stack.PushCell(msgCell); err != nil {
 			return nil, err
 		}
-		if err := stack.PushSlice(body.BeginParse()); err != nil {
+		if err := stack.PushSlice(body.MustBeginParse()); err != nil {
 			return nil, err
 		}
 		if err := stack.PushInt(big.NewInt(-1)); err != nil {
@@ -514,7 +530,7 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 		if err := stack.PushCell(msgCell); err != nil {
 			return nil, err
 		}
-		if err := stack.PushSlice(body.BeginParse()); err != nil {
+		if err := stack.PushSlice(body.MustBeginParse()); err != nil {
 			return nil, err
 		}
 		if err := stack.PushInt(big.NewInt(0)); err != nil {
@@ -529,7 +545,12 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 		return nil, err
 	}
 
-	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, cfg.Libraries...)
+	libraries := append([]*cell.Cell(nil), cfg.Libraries...)
+	if acc.libraries != nil && acc.libraries.AsCell() != nil {
+		libraries = append(libraries, acc.libraries.AsCell())
+	}
+
+	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, libraries...)
 	if err != nil {
 		return nil, err
 	}
@@ -967,7 +988,7 @@ func transactionLoadActions(root *cell.Cell) (*transactionActionLoadResult, erro
 			out.resultArg = &arg
 			return out, nil
 		}
-		sl := cur.BeginParse()
+		sl := cur.MustBeginParse()
 		if sl.RefsNum() == 0 {
 			out.resultCode = 32
 			arg := int32(len(nodes))
@@ -996,7 +1017,7 @@ func transactionLoadActions(root *cell.Cell) (*transactionActionLoadResult, erro
 	for i := len(nodes) - 1; i >= 0; i-- {
 		node := nodes[i]
 		var list tlb.OutList
-		if err := tlb.LoadFromCell(&list, node.BeginParse()); err != nil {
+		if err := tlb.LoadFromCell(&list, node.MustBeginParse()); err != nil {
 			mode, isSend := transactionMalformedSendMode(node)
 			if isSend {
 				if mode&2 != 0 {
@@ -1026,7 +1047,7 @@ func transactionMalformedSendMode(node *cell.Cell) (uint8, bool) {
 	if node == nil || node.IsSpecial() {
 		return 0, false
 	}
-	sl := node.BeginParse()
+	sl := node.MustBeginParse()
 	if sl.RefsNum() == 0 {
 		return 0, false
 	}
@@ -1066,7 +1087,7 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 	}
 
 	var suggestedMsg tlb.Message
-	if err := tlb.LoadFromCell(&suggestedMsg, act.Msg.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&suggestedMsg, act.Msg.MustBeginParse()); err != nil {
 		if mode&2 != 0 {
 			return transactionSendIgnored(out, mode), nil
 		}
@@ -1111,7 +1132,7 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 	}
 
 	var msg tlb.Message
-	if err = tlb.LoadFromCell(&msg, msgCell.BeginParse()); err != nil {
+	if err = tlb.LoadFromCell(&msg, msgCell.MustBeginParse()); err != nil {
 		if mode&2 != 0 {
 			return transactionSendIgnored(out, mode), nil
 		}
@@ -1458,7 +1479,7 @@ func transactionNormalizeOutboundMessage(msgCell *cell.Cell, srcAddr *address.Ad
 	}
 
 	var msg tlb.Message
-	if err := tlb.LoadFromCell(&msg, msgCell.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&msg, msgCell.MustBeginParse()); err != nil {
 		return nil, fmt.Errorf("failed to decode outbound message: %w", err)
 	}
 
@@ -1827,7 +1848,7 @@ func transactionBuildBounceBody(in *tlb.InternalMessage, cfg tlb.BlockchainConfi
 	if in.Body == nil {
 		return body.EndCell()
 	}
-	bodySlice := in.Body.BeginParse()
+	bodySlice := in.Body.MustBeginParse()
 	bits := bodySlice.BitsLeft()
 	if bits > 256 {
 		bits = 256
@@ -1865,7 +1886,7 @@ func transactionBounceOriginalBody(body *cell.Cell, full bool) *cell.Cell {
 	if full {
 		return body
 	}
-	slice := body.BeginParse()
+	slice := body.MustBeginParse()
 	b := cell.BeginCell()
 	if bits := slice.BitsLeft(); bits > 0 {
 		b.MustStoreSlice(slice.MustLoadSlice(bits), bits)
@@ -2141,7 +2162,7 @@ func buildTransactionCell(params transactionBuildParams) (*cell.Cell, error) {
 	}
 
 	inMsg := &tlb.Message{}
-	if err := tlb.LoadFromCell(inMsg, params.inMsg.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(inMsg, params.inMsg.MustBeginParse()); err != nil {
 		return nil, fmt.Errorf("failed to decode input message: %w", err)
 	}
 

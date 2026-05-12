@@ -15,12 +15,12 @@ type OpSDBEGINSCONST struct {
 }
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return SDBEGINSCONST(cell.BeginCell().EndCell().BeginParse(), false) })
+	vm.List = append(vm.List, func() vm.OP { return SDBEGINSCONST(cell.BeginCell().EndCell().MustBeginParse(), false) })
 }
 
 func SDBEGINSCONST(value *cell.Slice, quiet bool) *OpSDBEGINSCONST {
 	if value == nil {
-		value = cell.BeginCell().EndCell().BeginParse()
+		value = cell.BeginCell().EndCell().MustBeginParse()
 	}
 	return &OpSDBEGINSCONST{
 		value: value.Copy(),
@@ -90,7 +90,7 @@ func (op *OpSDBEGINSCONST) SerializeText() string {
 	if op.quiet {
 		name = "SDBEGINSQ"
 	}
-	return fmt.Sprintf("%s %s", name, op.value.WithoutObserver().MustToCell().DumpBits())
+	return fmt.Sprintf("%s %s", name, op.value.WithoutTrace().MustToCell().DumpBits())
 }
 
 func (op *OpSDBEGINSCONST) InstructionBits() int64 {
@@ -112,7 +112,7 @@ func (op *OpSDBEGINSCONST) Interpret(state *vm.State) error {
 		}
 		return state.Stack.PushBool(false)
 	}
-	if err = cs.Advance(needle.BitsLeft()); err != nil {
+	if err = cs.SkipBits(needle.BitsLeft()); err != nil {
 		return vmerr.Error(vmerr.CodeCellUnderflow)
 	}
 	if err = state.Stack.PushSlice(cs); err != nil {

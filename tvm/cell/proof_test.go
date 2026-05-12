@@ -143,14 +143,14 @@ func TestProofDictKey(t *testing.T) {
 	}
 	dHash := d.AsCell().Hash()
 
-	trace := NewProofTrace()
-	observed := d.Copy().SetObserver(trace)
+	pb := NewMerkleProofBuilder(d.AsCell())
+	observed := pb.Root().AsDict(64)
 
 	val, err := observed.LoadValue(BeginCell().MustStoreUInt(777, 64).EndCell())
 	if err != nil {
 		t.Fatal(err)
 	}
-	trace.MarkRecursive(val)
+	val.MustLoadRef().MustLoadRef().MustLoadUInt(128)
 
 	_, err = observed.LoadValue(BeginCell().MustStoreUInt(333, 64).EndCell())
 	if err != nil {
@@ -161,9 +161,9 @@ func TestProofDictKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trace.MarkRecursive(val)
+	val.MustLoadRef().MustLoadRef().MustLoadUInt(128)
 
-	proof, err := d.AsCell().CreateProof(trace.Skeleton())
+	proof, err := pb.CreateProof()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,5 +201,124 @@ func TestProofDictKey(t *testing.T) {
 	_, err = dp.LoadValueByIntKey(big.NewInt(2222))
 	if err == nil {
 		t.Fatal("should not be accessible")
+	}
+}
+
+func TestMerkleProofBuilderKeepsRefTraceThroughSliceCopy(t *testing.T) {
+	child := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0xCD, 8).MustStoreRef(child).EndCell()
+
+	tests := []struct {
+		name string
+		copy func(*Slice) (*Cell, error)
+	}{
+		{
+			name: "to builder",
+			copy: func(sl *Slice) (*Cell, error) {
+				return sl.ToBuilder().EndCell(), nil
+			},
+		},
+		{
+			name: "to cell",
+			copy: func(sl *Slice) (*Cell, error) {
+				return sl.ToCell()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pb := NewMerkleProofBuilder(root)
+
+			copied, err := tt.copy(pb.Root().MustBeginParse())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			loaded, err := copied.MustBeginParse().LoadRef()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := loaded.MustLoadUInt(8); got != 0xAB {
+				t.Fatalf("unexpected copied ref value: got %x", got)
+			}
+
+			proof, err := pb.CreateProof()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			body, err := UnwrapProof(proof, root.Hash())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ref, err := body.PeekRef(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ref.IsSpecial() {
+				t.Fatal("copied ref load was not included into usage proof")
+			}
+
+			if got := ref.MustBeginParse().MustLoadUInt(8); got != 0xAB {
+				t.Fatalf("unexpected proof ref value: got %x", got)
+			}
+		})
+	}
+}
+
+func TestMerkleProofBuilderPeekRefCellAtTracesChild(t *testing.T) {
+	child := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0xCD, 8).MustStoreRef(child).EndCell()
+
+	pb := NewMerkleProofBuilder(root)
+
+	ref, err := pb.Root().MustBeginParse().PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ref.MustBeginParse().MustLoadUInt(8); got != 0xAB {
+		t.Fatalf("unexpected ref value: got %x", got)
+	}
+
+	proof, err := pb.CreateProof()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := UnwrapProof(proof, root.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proofRef, err := body.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proofRef.IsSpecial() {
+		t.Fatal("peeked ref load was not included into usage proof")
+	}
+
+	if got := proofRef.MustBeginParse().MustLoadUInt(8); got != 0xAB {
+		t.Fatalf("unexpected proof ref value: got %x", got)
+	}
+}
+
+func TestMerkleProofCreateRejectsNonZeroLevelRootCppParity(t *testing.T) {
+	root := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	prunedRoot, err := createPrunedBranchFromCell(root, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prunedRoot.Level() == 0 {
+		t.Fatal("expected non-zero level root")
+	}
+
+	if _, err = prunedRoot.CreateProof(CreateProofSkeleton()); err == nil {
+		t.Fatal("expected skeleton proof to reject non-zero level root")
+	}
+	if _, err = prunedRoot.CreateUsageProof(NewCellUsageTree()); err == nil {
+		t.Fatal("expected usage proof to reject non-zero level root")
 	}
 }

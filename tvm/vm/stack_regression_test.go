@@ -158,7 +158,7 @@ func TestStateCallArgsPassesTopElements(t *testing.T) {
 	pushInts(t, s, 1, 2, 3, 4)
 
 	state := &State{
-		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().EndCell().MustBeginParse(),
 		Stack:       s,
 	}
 
@@ -167,7 +167,7 @@ func TestStateCallArgsPassesTopElements(t *testing.T) {
 			NumArgs: 2,
 			CP:      CP,
 		},
-		Code: cell.BeginCell().EndCell().BeginParse(),
+		Code: cell.BeginCell().EndCell().MustBeginParse(),
 	}
 
 	if err := state.CallArgs(cont, 2, -1); err != nil {
@@ -192,7 +192,7 @@ func TestStateCallArgsWithCapturedStackPreservesClosureStack(t *testing.T) {
 	pushInts(t, closureStack, 8, 9)
 
 	state := &State{
-		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().EndCell().MustBeginParse(),
 		Stack:       s,
 	}
 
@@ -202,7 +202,7 @@ func TestStateCallArgsWithCapturedStackPreservesClosureStack(t *testing.T) {
 			NumArgs: 2,
 			CP:      CP,
 		},
-		Code: cell.BeginCell().EndCell().BeginParse(),
+		Code: cell.BeginCell().EndCell().MustBeginParse(),
 	}
 
 	if err := state.CallArgs(cont, 3, -1); err != nil {
@@ -227,7 +227,7 @@ func TestStateJumpArgsWithCapturedStackUsesClosureStack(t *testing.T) {
 	pushInts(t, closureStack, 8, 9)
 
 	state := &State{
-		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().EndCell().MustBeginParse(),
 		Stack:       s,
 	}
 
@@ -237,7 +237,7 @@ func TestStateJumpArgsWithCapturedStackUsesClosureStack(t *testing.T) {
 			NumArgs: 2,
 			CP:      CP,
 		},
-		Code: cell.BeginCell().EndCell().BeginParse(),
+		Code: cell.BeginCell().EndCell().MustBeginParse(),
 	}
 
 	if err := state.JumpArgs(cont, 2); err != nil {
@@ -251,10 +251,10 @@ func TestStackCopyClonesMutableValues(t *testing.T) {
 	src := NewStack()
 
 	intVal := big.NewInt(7)
-	sliceVal := cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()).EndCell().BeginParse()
+	sliceVal := cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()).EndCell().MustBeginParse()
 	builderVal := cell.BeginCell().MustStoreUInt(0xEF, 8)
 	tupleVal := tuple.NewTupleSized(1)
-	if err := tupleVal.Set(0, cell.BeginCell().MustStoreUInt(0x12, 8).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()); err != nil {
+	if err := tupleVal.Set(0, cell.BeginCell().MustStoreUInt(0x12, 8).MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -348,7 +348,7 @@ func TestStackCopyClonesMutableValues(t *testing.T) {
 
 func TestStateUpdateC7DoesNotAliasOriginalTuple(t *testing.T) {
 	inner := tuple.NewTupleSized(1)
-	if err := inner.Set(0, cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()); err != nil {
+	if err := inner.Set(0, cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -370,7 +370,7 @@ func TestStateUpdateC7DoesNotAliasOriginalTuple(t *testing.T) {
 			return tuple.Tuple{}, err
 		}
 		nested := v.(tuple.Tuple)
-		if err = nested.Set(0, cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().BeginParse()); err != nil {
+		if err = nested.Set(0, cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().MustBeginParse()); err != nil {
 			return tuple.Tuple{}, err
 		}
 		if err = t.Set(1, nested); err != nil {

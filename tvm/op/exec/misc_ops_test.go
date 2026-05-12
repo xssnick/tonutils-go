@@ -33,7 +33,7 @@ func TestAgainOps(t *testing.T) {
 	}
 
 	state = newTestState()
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
 	if err := AGAINEND().Interpret(state); err != nil {
 		t.Fatalf("againend failed: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 
 	encoded := op.Serialize().EndCell()
 	decoded := IFBITJMP(0)
-	if err := decoded.Deserialize(encoded.BeginParse()); err != nil {
+	if err := decoded.Deserialize(encoded.MustBeginParse()); err != nil {
 		t.Fatalf("deserialize ifbitjmp failed: %v", err)
 	}
 	if decoded.SerializeText() != "IFBITJMP 2" {
@@ -587,7 +587,7 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 	}
 
 	refOp := IFNBITJMPREF(1, refCode)
-	if err := refOp.Deserialize(refOp.Serialize().EndCell().BeginParse()); err != nil {
+	if err := refOp.Deserialize(refOp.Serialize().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize ifnbitjmpref failed: %v", err)
 	}
 	if refOp.SerializeText() != "IFNBITJMPREF" {
@@ -618,7 +618,7 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 		t.Helper()
 		state := newTestState()
 		state.InitForExecution()
-		state.CurrentCode = cell.BeginCell().MustStoreUInt(0x44, 8).EndCell().BeginParse()
+		state.CurrentCode = cell.BeginCell().MustStoreUInt(0x44, 8).EndCell().MustBeginParse()
 		if err := state.Stack.PushBool(cond); err != nil {
 			t.Fatalf("push ref noop cond: %v", err)
 		}
@@ -744,7 +744,7 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 	}
 
 	state = newTestState()
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell().MustBeginParse()
 	state.InitForExecution()
 	if err := JMPREFDATA(refCode).Interpret(state); err != nil {
 		t.Fatalf("jmprefdata failed: %v", err)
@@ -832,7 +832,7 @@ func TestArgsVarAndDictJumpOps(t *testing.T) {
 	}
 
 	state = newTestState()
-	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 	if err := state.Stack.PushSlice(code); err != nil {
 		t.Fatalf("push bless code: %v", err)
 	}
@@ -992,7 +992,7 @@ func TestArgsVarAndDictJumpOps(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			encoded := tt.op.Serialize().EndCell()
 			decoded := tt.op
-			if err := decoded.Deserialize(encoded.BeginParse()); err != nil {
+			if err := decoded.Deserialize(encoded.MustBeginParse()); err != nil {
 				t.Fatalf("deserialize failed: %v", err)
 			}
 			if decoded.SerializeText() != tt.want {

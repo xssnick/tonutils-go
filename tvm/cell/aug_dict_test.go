@@ -144,7 +144,7 @@ func TestAugmentedDictionary_SetLoadDelete(t *testing.T) {
 		t.Fatalf("expected ErrNoSuchKeyInDict on second delete, got %v", err)
 	}
 
-	loaded, err := dict.MustToCell().BeginParse().LoadAugDict(8, aug, false)
+	loaded, err := dict.MustToCell().MustBeginParse().LoadAugDict(8, aug, false)
 	if loaded == nil {
 		t.Fatal("failed to load augmented dict")
 	}
@@ -257,7 +257,7 @@ func TestAugmentedDictionary_ReadOnlyLoader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := dict.MustToCell().BeginParse().LoadAugDict(8, ReadOnlyAugmentation{SkipExtraFn: func(loader *Slice) error {
+	loaded, err := dict.MustToCell().MustBeginParse().LoadAugDict(8, ReadOnlyAugmentation{SkipExtraFn: func(loader *Slice) error {
 		_, err := loader.LoadUInt(16)
 		return err
 	}}, false)
@@ -277,7 +277,7 @@ func TestAugmentedDictionary_ReadOnlyLoader(t *testing.T) {
 	if extra == nil {
 		t.Fatal("root extra should still be readable for read-only loader")
 	}
-	if metric := mustLoadTestMetricExtra(t, extra.BeginParse()); metric != 8 {
+	if metric := mustLoadTestMetricExtra(t, extra.MustBeginParse()); metric != 8 {
 		t.Fatalf("unexpected read-only root extra metric: %d", metric)
 	}
 
@@ -305,7 +305,7 @@ func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_LeafRefValueKeeps
 		MustStoreUInt(0x1d, 5).
 		EndCell()
 
-	loader := container.BeginParse()
+	loader := container.MustBeginParse()
 	if got := loader.MustLoadUInt(3); got != 0b101 {
 		t.Fatalf("unexpected prefix bits: %b", got)
 	}
@@ -333,7 +333,7 @@ func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_LeafRefValueKeeps
 		t.Fatalf("unexpected leaf extra metric: %d", metric)
 	}
 
-	if metric := mustLoadTestMetricExtra(t, loaded.GetRootExtra().BeginParse()); metric != 257 {
+	if metric := mustLoadTestMetricExtra(t, loaded.GetRootExtra().MustBeginParse()); metric != 257 {
 		t.Fatalf("unexpected root extra metric: %d", metric)
 	}
 
@@ -370,7 +370,7 @@ func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_ForkRootKeepsTail
 		MustStoreUInt(0x2a, 6).
 		EndCell()
 
-	loader := container.BeginParse()
+	loader := container.MustBeginParse()
 	if got := loader.MustLoadUInt(2); got != 0b11 {
 		t.Fatalf("unexpected prefix bits: %b", got)
 	}
@@ -399,7 +399,7 @@ func TestAugmentedDictionary_ToAugDictWithValueAndAugmentation_ForkRootKeepsTail
 		t.Fatalf("unexpected second loaded value: %x", got)
 	}
 
-	if metric := mustLoadTestMetricExtra(t, loaded.GetRootExtra().BeginParse()); metric != 16 {
+	if metric := mustLoadTestMetricExtra(t, loaded.GetRootExtra().MustBeginParse()); metric != 16 {
 		t.Fatalf("unexpected fork root extra metric: %d", metric)
 	}
 

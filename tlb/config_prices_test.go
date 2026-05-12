@@ -17,7 +17,7 @@ func TestConfigStoragePricesRoundTripAndCompute(t *testing.T) {
 	}
 
 	var parsed ConfigStoragePrices
-	if err = LoadFromCell(&parsed, cell.BeginParse()); err != nil {
+	if err = LoadFromCell(&parsed, cell.MustBeginParse()); err != nil {
 		t.Fatalf("LoadFromCell failed: %v", err)
 	}
 
@@ -46,7 +46,7 @@ func TestConfigMsgForwardPricesRoundTripAndCompute(t *testing.T) {
 	}
 
 	var parsed ConfigMsgForwardPrices
-	if err = LoadFromCell(&parsed, cell.BeginParse()); err != nil {
+	if err = LoadFromCell(&parsed, cell.MustBeginParse()); err != nil {
 		t.Fatalf("LoadFromCell failed: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestConfigGasLimitsPricesRoundTripAndCompute(t *testing.T) {
 	}
 
 	var parsed ConfigGasLimitsPrices
-	if err = LoadFromCell(&parsed, cell.BeginParse()); err != nil {
+	if err = LoadFromCell(&parsed, cell.MustBeginParse()); err != nil {
 		t.Fatalf("LoadFromCell failed: %v", err)
 	}
 

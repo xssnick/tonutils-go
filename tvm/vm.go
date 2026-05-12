@@ -68,6 +68,7 @@ type ExecutionResult struct {
 	Code     *cell.Cell
 	Data     *cell.Cell
 	Actions  *cell.Cell
+	Proof    *cell.Cell
 }
 
 func bitAt(data []byte, bit uint) uint8 {
@@ -145,17 +146,26 @@ func (tvm *TVM) ExecuteDetailedWithLibraries(code, data *cell.Cell, c7 tuple.Tup
 }
 
 func (tvm *TVM) executeDetailedWithLibrariesRaw(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
-	return tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, false, libraries...)
+	return tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{}, libraries...)
 }
 
-func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, libraries ...*cell.Cell) (*ExecutionResult, error) {
+type executeOptions struct {
+	stopOnAccept bool
+	proof        *cell.MerkleProofBuilder
+}
+
+func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
 	state := vm.NewExecutionState(tvm.globalVersion, gas, data, c7, stack, libraries...)
-	state.StopOnAccept = stopOnAccept
+	state.StopOnAccept = options.stopOnAccept
 	state.SetChildRunner(tvm.runState)
 	state.InitForExecution()
 	currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
 	if err != nil {
-		return executionResultFromState(vmerrCode(err), state, code, data), err
+		res := executionResultFromState(vmerrCode(err), state, code, data)
+		if proofErr := attachExecutionProof(res, state, options.proof); proofErr != nil {
+			return res, proofErr
+		}
+		return res, err
 	}
 	state.CurrentCode = currentCode
 
@@ -168,7 +178,7 @@ func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7
 		actionsRes = state.Committed.Actions
 	}
 
-	return &ExecutionResult{
+	res := &ExecutionResult{
 		ExitCode: exitCode,
 		GasUsed:  state.Gas.Used(),
 		Steps:    state.Steps,
@@ -177,7 +187,11 @@ func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7
 		Code:     code,
 		Data:     dataRes,
 		Actions:  actionsRes,
-	}, err
+	}
+	if proofErr := attachExecutionProof(res, state, options.proof); proofErr != nil {
+		return res, proofErr
+	}
+	return res, err
 }
 
 func executionResultFromState(exitCode int64, state *vm.State, code, data *cell.Cell) *ExecutionResult {

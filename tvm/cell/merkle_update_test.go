@@ -87,6 +87,106 @@ func TestMerkleUpdateHands(t *testing.T) {
 	}
 }
 
+func TestCreateMerkleUpdateCppGoldenUsageTreeHands(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xE, 4).EndCell()
+	reused := BeginCell().MustStoreUInt(0xC0DE, 16).MustStoreRef(leaf).EndCell()
+	from := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(reused).EndCell()
+
+	usageTree := NewCellUsageTree()
+	usageFrom := from.WithTrace(usageTree.RootTrace())
+	reusedRef, err := usageFrom.MustBeginParse().PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(reusedRef).EndCell()
+
+	update, err := usageTree.CreateMerkleUpdate(usageFrom, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prunedReused, err := createPrunedBranchFromCell(reused, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedFrom := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(prunedReused).EndCell()
+	expectedTo := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(prunedReused).EndCell()
+	expectedUpdate := mustMerkleUpdateCell(t, expectedFrom, expectedTo)
+	if !bytes.Equal(update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{})) {
+		t.Fatalf("usage-tree merkle update BOC mismatch:\n got: %x\nwant: %x", update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{}))
+	}
+
+	if err := MayApplyMerkleUpdate(from, update); err != nil {
+		t.Fatalf("may apply failed: %v", err)
+	}
+	if err := ValidateMerkleUpdate(update); err != nil {
+		t.Fatalf("validate failed: %v", err)
+	}
+	got, reuse, err := ApplyMerkleUpdate(from, update)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	assertCellsEqual(t, got, to)
+	if len(reuse.Cells) != 1 || reuse.Cells[0].Hash != reused.HashKey() {
+		t.Fatalf("unexpected reused cells: %+v", reuse.Cells)
+	}
+}
+
+func TestCreateMerkleUpdateRestoresUsageTreeMarkMode(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xE, 4).EndCell()
+	reused := BeginCell().MustStoreUInt(0xC0DE, 16).MustStoreRef(leaf).EndCell()
+	from := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(reused).EndCell()
+
+	usageTree := NewCellUsageTree()
+	usageFrom := from.WithTrace(usageTree.RootTrace())
+	reusedRef, err := usageFrom.MustBeginParse().PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(reusedRef).EndCell()
+
+	if _, err = usageTree.CreateMerkleUpdate(usageFrom, to); err != nil {
+		t.Fatal(err)
+	}
+	if usageTree.useMark {
+		t.Fatal("CreateMerkleUpdate should restore ordinary load-based IsLoaded mode")
+	}
+	if usageTree.HasMark(usageTree.RootNode()) {
+		t.Fatal("CreateMerkleUpdate should not leave temporary reuse marks behind")
+	}
+}
+
+func TestCreateMerkleUpdateCppGoldenNoReusePrunesSourceRoot(t *testing.T) {
+	from := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(BeginCell().MustStoreUInt(0x11, 8).EndCell()).EndCell()
+	to := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(BeginCell().MustStoreUInt(0x22, 8).EndCell()).EndCell()
+
+	usageTree := NewCellUsageTree()
+	usageFrom := from.WithTrace(usageTree.RootTrace())
+	if _, err := usageFrom.BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+
+	update, err := usageTree.CreateMerkleUpdate(usageFrom, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prunedFrom, err := createPrunedBranchFromCell(from, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedUpdate := mustMerkleUpdateCell(t, prunedFrom, to)
+	if !bytes.Equal(update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{})) {
+		t.Fatalf("no-reuse merkle update BOC mismatch:\n got: %x\nwant: %x", update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{}))
+	}
+
+	got, _, err := ApplyMerkleUpdate(from, update)
+	if err != nil {
+		t.Fatalf("apply failed: %v", err)
+	}
+	assertCellsEqual(t, got, to)
+}
+
 func TestMerkleUpdateOrdinaryTreeCases(t *testing.T) {
 	fromValues := []uint16{0, 1, 2, 3, 4, 5, 6, 7}
 

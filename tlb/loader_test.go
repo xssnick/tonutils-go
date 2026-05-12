@@ -114,7 +114,7 @@ func TestLoadAnyRegistered(t *testing.T) {
 	}
 
 	var v2 testAny
-	err = LoadFromCell(&v2, c.BeginParse())
+	err = LoadFromCell(&v2, c.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestAddressTagOptionsRoundTrip(t *testing.T) {
 	}
 
 	var dst testAddressTags
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,7 +188,7 @@ func TestAddressRequiredRejectsNil(t *testing.T) {
 	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
 
 	var dst requiredAddr
-	if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+	if err := LoadFromCell(&dst, c.MustBeginParse()); err == nil {
 		t.Fatal("expected required address load to reject addr_none")
 	}
 }
@@ -208,14 +208,14 @@ func TestAddressStdRejectsNonStd(t *testing.T) {
 
 		var dst stdAddr
 		c := cell.BeginCell().MustStoreAddr(addr).EndCell()
-		if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+		if err := LoadFromCell(&dst, c.MustBeginParse()); err == nil {
 			t.Fatalf("expected std address load to reject type %d", addr.Type())
 		}
 	}
 
 	var dst stdAddr
 	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
-	if err := LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err := LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if !dst.Addr.IsAddrNone() {
@@ -238,14 +238,14 @@ func TestAddressExtRejectsNonExt(t *testing.T) {
 
 		var dst extAddr
 		c := cell.BeginCell().MustStoreAddr(addr).EndCell()
-		if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+		if err := LoadFromCell(&dst, c.MustBeginParse()); err == nil {
 			t.Fatalf("expected ext address load to reject type %d", addr.Type())
 		}
 	}
 
 	var dst extAddr
 	c := cell.BeginCell().MustStoreAddr(nil).EndCell()
-	if err := LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err := LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if !dst.Addr.IsAddrNone() {
@@ -270,7 +270,7 @@ func TestVarIntTagRoundTrip(t *testing.T) {
 		}
 
 		var dst testVarIntTag
-		if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+		if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 			t.Fatalf("load %s: %v", value, err)
 		}
 		if dst.Value.Cmp(value) != 0 {
@@ -298,7 +298,7 @@ func TestLoadFromCellMaybeClearsAbsentValue(t *testing.T) {
 	dst := maybeValue{Value: &previous}
 	c := cell.BeginCell().MustStoreBoolBit(false).EndCell()
 
-	if err := LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err := LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if dst.Value != nil {
@@ -323,7 +323,7 @@ func TestEitherFallsBackToRefWhenInlineDoesNotFit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loader := c.BeginParse()
+	loader := c.MustBeginParse()
 	if _, err = loader.LoadSlice(1022); err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestEitherFallsBackToRefWhenInlineDoesNotFit(t *testing.T) {
 	}
 
 	var dst eitherValue
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if dst.Body == nil || !bytes.Equal(dst.Body.Hash(), body.Hash()) {
@@ -363,7 +363,7 @@ func TestMappedDictSignedKeysRoundTrip(t *testing.T) {
 	}
 
 	var dst signedMap
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(dst, src) {
@@ -472,7 +472,7 @@ func TestLoadFromCell(t *testing.T) {
 	x := testTLB{}
 
 	check := func() {
-		err = LoadFromCell(&x, a.BeginParse())
+		err = LoadFromCell(&x, a.MustBeginParse())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -589,7 +589,7 @@ func TestLoadFromCell_MappedDict(t *testing.T) {
 	}
 
 	x := b.EndCell()
-	err = LoadFromCell(&ret, x.BeginParse())
+	err = LoadFromCell(&ret, x.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,7 +40,7 @@ func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
-	if err = code.AdvanceExt(0, 1); err != nil {
+	if err = code.SkipBitsAndRefs(0, 1); err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 

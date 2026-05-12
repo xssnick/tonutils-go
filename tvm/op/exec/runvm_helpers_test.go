@@ -32,13 +32,13 @@ func TestRUNVMSerializeDeserialize(t *testing.T) {
 
 	serialized := op.Serialize().EndCell()
 	parsed := RUNVM(0)
-	if err := parsed.Deserialize(serialized.BeginParse()); err != nil {
+	if err := parsed.Deserialize(serialized.MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
 	}
 	if parsed.SerializeText() != "RUNVM 37" {
 		t.Fatalf("deserialize should update mode, got %q", parsed.SerializeText())
 	}
-	if got := parsed.Serialize().EndCell().BeginParse().MustLoadUInt(24); got != serialized.BeginParse().MustLoadUInt(24) {
+	if got := parsed.Serialize().EndCell().MustBeginParse().MustLoadUInt(24); got != serialized.MustBeginParse().MustLoadUInt(24) {
 		t.Fatalf("unexpected round-trip encoding: %#x", got)
 	}
 }
@@ -58,9 +58,9 @@ func TestRunChildVMWithModeRejectsInvalidFlags(t *testing.T) {
 
 func TestRunChildVMWithModeSuccess(t *testing.T) {
 	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xFE, 8).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xFE, 8).EndCell().MustBeginParse()
 
-	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 	data := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 	retData := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	retActions := cell.BeginCell().MustStoreUInt(0xDD, 8).EndCell()
@@ -183,7 +183,7 @@ func TestRunChildVMWithModeRejectsInvalidStackSize(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
 		t.Fatalf("push stack size: %v", err)
 	}
-	if err := state.Stack.PushSlice(cell.BeginCell().EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push code: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestRunChildVMWithModeRejectsInvalidStackSize(t *testing.T) {
 
 func TestRUNVMXUsesDynamicMode(t *testing.T) {
 	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
-	state.CurrentCode = cell.BeginCell().EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 	state.SetChildRunner(func(child *vm.State) (int64, error) {
 		child.Stack.Clear()
 		return 0, nil
@@ -204,7 +204,7 @@ func TestRUNVMXUsesDynamicMode(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
 		t.Fatalf("push stack size: %v", err)
 	}
-	if err := state.Stack.PushSlice(cell.BeginCell().EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push code: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
@@ -312,7 +312,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 		if len(refs) != 2 {
 			t.Fatalf("unexpected refs len: %d", len(refs))
 		}
-		return state.Stack.PushInt(big.NewInt(int64(refs[0].BeginParse().MustLoadUInt(8) + refs[1].BeginParse().MustLoadUInt(8))))
+		return state.Stack.PushInt(big.NewInt(int64(refs[0].MustBeginParse().MustLoadUInt(8) + refs[1].MustBeginParse().MustLoadUInt(8))))
 	})
 	op.fixedBits = 3
 	op.serializeSuffix = func() *cell.Builder {
@@ -346,7 +346,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 	decoded := newRefCodeOp("REFOP", vmPrefixForTest(), 2, func(*vm.State, []*cell.Cell) error { return nil })
 	decoded.fixedBits = 3
 	decoded.deserializeSuffix = op.deserializeSuffix
-	if err := decoded.Deserialize(serialized.BeginParse()); err != nil {
+	if err := decoded.Deserialize(serialized.MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
 	}
 	if suffixValue != 0x5 {
@@ -391,18 +391,18 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 func TestAdditionalControlRegisterHelpers(t *testing.T) {
 	idx := 5
 	serialize := serializeControlRegisterIndex(&idx)
-	if got := serialize().EndCell().BeginParse().MustLoadUInt(4); got != 5 {
+	if got := serialize().EndCell().MustBeginParse().MustLoadUInt(4); got != 5 {
 		t.Fatalf("unexpected serialized control register index: %d", got)
 	}
 
 	var decoded int
-	if err := deserializeControlRegisterIndex(&decoded)(cell.BeginCell().MustStoreUInt(5, 4).EndCell().BeginParse()); err != nil {
+	if err := deserializeControlRegisterIndex(&decoded)(cell.BeginCell().MustStoreUInt(5, 4).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize control register index failed: %v", err)
 	}
 	if decoded != 5 {
 		t.Fatalf("unexpected decoded control register index: %d", decoded)
 	}
-	if err := deserializeControlRegisterIndex(&decoded)(cell.BeginCell().MustStoreUInt(6, 4).EndCell().BeginParse()); !errors.Is(err, vm.ErrCorruptedOpcode) {
+	if err := deserializeControlRegisterIndex(&decoded)(cell.BeginCell().MustStoreUInt(6, 4).EndCell().MustBeginParse()); !errors.Is(err, vm.ErrCorruptedOpcode) {
 		t.Fatalf("expected corrupted opcode, got %v", err)
 	}
 

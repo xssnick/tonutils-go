@@ -106,7 +106,7 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 			if err != nil {
 				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
-			if err = code.AdvanceExt(0, 1); err != nil {
+			if err = code.SkipBitsAndRefs(0, 1); err != nil {
 				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 
@@ -123,7 +123,7 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 		if err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
-		if err = code.AdvanceExt(0, 1); err != nil {
+		if err = code.SkipBitsAndRefs(0, 1); err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
@@ -149,13 +149,13 @@ func (op *OpPUSHCONT) Serialize() *cell.Builder {
 		b = cell.BeginCell().
 			MustStoreUInt(9, 4).
 			MustStoreUInt(sz, 4).
-			MustStoreSlice(op.cont.BeginParse().MustLoadSlice(op.cont.BitsSize()), uint(sz*8))
+			MustStoreSlice(op.cont.MustBeginParse().MustLoadSlice(op.cont.BitsSize()), uint(sz*8))
 	case op.cont.RefsNum() <= 3:
 		op.typ = "BIG"
 
 		sz := uint64(op.cont.BitsSize() / 8)
 
-		codeSlice := op.cont.BeginParse()
+		codeSlice := op.cont.MustBeginParse()
 
 		b = cell.BeginCell().
 			MustStoreUInt(0x47, 7). // 0x8E >> 1 = 0x47
@@ -198,12 +198,20 @@ func (op *OpPUSHCONT) InstructionBits() int64 {
 }
 
 func (op *OpPUSHCONT) Interpret(state *vm.State) error {
+	var code *cell.Slice
 	if op.typ == "REF" {
 		if err := state.Cells.RegisterCellLoad(op.cont); err != nil {
 			return err
 		}
+		var err error
+		code, err = state.Cells.BeginParseAlreadyLoadedRaw(op.cont)
+		if err != nil {
+			return err
+		}
+	} else {
+		code = op.cont.MustBeginParse()
 	}
-	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{Code: op.cont.BeginParse(), Data: vm.ControlData{
+	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{Code: code, Data: vm.ControlData{
 		NumArgs: vm.ControlDataAllArgs,
 		CP:      state.CP,
 	}})

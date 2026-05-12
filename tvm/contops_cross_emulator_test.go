@@ -30,7 +30,7 @@ func TestTVMCrossEmulatorContOps(t *testing.T) {
 	emptyBody := codeFromBuilders(t)
 	remainingCodeBody := codeFromBuilders(t, execop.RETDATA().Serialize(), stackop.PUSHINT(big.NewInt(3)).Serialize())
 	push7Body := intBody(7)
-	push7Slice := push7Body.BeginParse()
+	push7Slice := push7Body.MustBeginParse()
 
 	type testCase struct {
 		name  string
@@ -302,7 +302,7 @@ func TestTVMCrossEmulatorContOps(t *testing.T) {
 		{
 			name:  "blessargs_execute",
 			code:  codeFromBuilders(t, execop.BLESSARGS(1, 0).Serialize(), execop.EXECUTE().Serialize()),
-			stack: []any{int64(55), push7Body.BeginParse()},
+			stack: []any{int64(55), push7Body.MustBeginParse()},
 			exit:  0,
 		},
 		{
@@ -313,7 +313,7 @@ func TestTVMCrossEmulatorContOps(t *testing.T) {
 				execop.BLESSVARARGS().Serialize(),
 				execop.EXECUTE().Serialize(),
 			),
-			stack: []any{int64(66), push7Body.BeginParse()},
+			stack: []any{int64(66), push7Body.MustBeginParse()},
 			exit:  0,
 		},
 		{

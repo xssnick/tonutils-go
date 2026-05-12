@@ -68,7 +68,7 @@ func (b *Block) ListTransactions() ([]*Transaction, error) {
 		return nil, fmt.Errorf("block has no shard account blocks")
 	}
 
-	accounts := b.Extra.ShardAccountBlocks.BeginParse()
+	accounts := b.Extra.ShardAccountBlocks.MustBeginParse()
 	hasAccounts, err := accounts.LoadBoolBit()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load shard account blocks root flag: %w", err)
@@ -119,7 +119,7 @@ func (b *Block) ListTransactions() ([]*Transaction, error) {
 			}
 
 			var tx Transaction
-			if err = LoadFromCell(&tx, txCell.BeginParse()); err != nil {
+			if err = LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
 				return nil, fmt.Errorf("failed to load tx from cell: %w", err)
 			}
 

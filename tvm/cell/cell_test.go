@@ -154,7 +154,7 @@ func TestVarAddr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		a := c.BeginParse().MustLoadAddr()
+		a := c.MustBeginParse().MustLoadAddr()
 		if a.Type() != addrType {
 			t.Fatal(addrType, a.Type(), "not correct addr type")
 		}

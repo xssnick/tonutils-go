@@ -285,7 +285,7 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ToCell failed: %v", err)
 		}
-		if refs := msgCell.BeginParse().RefsNum(); refs < 2 {
+		if refs := msgCell.MustBeginParse().RefsNum(); refs < 2 {
 			t.Fatalf("test message should have at least two refs, got %d", refs)
 		}
 

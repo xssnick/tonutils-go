@@ -43,7 +43,7 @@ func mustUIntFromCell(t *testing.T, c *Cell, bits uint) uint64 {
 	if c == nil {
 		t.Fatal("cell is nil")
 	}
-	return c.BeginParse().MustLoadUInt(bits)
+	return c.MustBeginParse().MustLoadUInt(bits)
 }
 
 func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
@@ -61,14 +61,14 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loadedEmpty, err := emptyCell.BeginParse().LoadAugDict(8, aug, false)
+	loadedEmpty, err := emptyCell.MustBeginParse().LoadAugDict(8, aug, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !loadedEmpty.IsEmpty() {
 		t.Fatal("empty wrapped augmented dict should stay empty after roundtrip")
 	}
-	if metric := mustLoadTestMetricExtra(t, loadedEmpty.GetRootExtra().BeginParse()); metric != 0 {
+	if metric := mustLoadTestMetricExtra(t, loadedEmpty.GetRootExtra().MustBeginParse()); metric != 0 {
 		t.Fatalf("unexpected empty root metric: %d", metric)
 	}
 
@@ -176,7 +176,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 	}
 	var iterKeys []uint64
 	for it.Next() {
-		iterKeys = append(iterKeys, it.Key().BeginParse().MustLoadUInt(8))
+		iterKeys = append(iterKeys, it.Key().MustBeginParse().MustLoadUInt(8))
 		if it.Value() == nil {
 			t.Fatal("iterator value should not be nil")
 		}
@@ -185,7 +185,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		t.Fatalf("unexpected iterator order: %v", iterKeys)
 	}
 	it.Reset()
-	if !it.Next() || it.Key().BeginParse().MustLoadUInt(8) != 0x01 {
+	if !it.Next() || it.Key().MustBeginParse().MustLoadUInt(8) != 0x01 {
 		t.Fatal("iterator Reset should rewind iteration")
 	}
 
@@ -207,7 +207,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 	}
 	var reverseKeys []uint64
 	for extraIt.Next() {
-		reverseKeys = append(reverseKeys, extraIt.Key().BeginParse().MustLoadUInt(8))
+		reverseKeys = append(reverseKeys, extraIt.Key().MustBeginParse().MustLoadUInt(8))
 		if extraIt.Value() == nil || extraIt.Extra() == nil {
 			t.Fatal("augmented iterator should expose value and extra")
 		}
@@ -216,7 +216,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		t.Fatalf("unexpected augmented iterator order: %v", reverseKeys)
 	}
 	extraIt.Reset()
-	if !extraIt.Next() || extraIt.Key().BeginParse().MustLoadUInt(8) != 0x04 {
+	if !extraIt.Next() || extraIt.Key().MustBeginParse().MustLoadUInt(8) != 0x04 {
 		t.Fatal("augmented iterator Reset should rewind iteration")
 	}
 
@@ -259,11 +259,11 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if common.BitsSize() != 5 || common.BeginParse().MustLoadUInt(5) != 0 {
+	if common.BitsSize() != 5 || common.MustBeginParse().MustLoadUInt(5) != 0 {
 		t.Fatalf("unexpected common prefix: %s", common.Dump())
 	}
 
-	semanticInline, err := dict.root.BeginParse().ToAugDictWithAugmentation(8, aug)
+	semanticInline, err := dict.root.MustBeginParse().ToAugDictWithAugmentation(8, aug)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		t.Fatalf("unexpected semantic inline load: err=%v", err)
 	}
 
-	readOnlyInline, err := dict.root.BeginParse().ToAugDict(8, func(loader *Slice) error {
+	readOnlyInline, err := dict.root.MustBeginParse().ToAugDict(8, func(loader *Slice) error {
 		_, err := loader.LoadUInt(16)
 		return err
 	})
@@ -294,7 +294,7 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		MustStoreBuilder(leafDict.root.ToBuilder()).
 		MustStoreUInt(0x1d, 5).
 		EndCell()
-	loader := container.BeginParse()
+	loader := container.MustBeginParse()
 	if got := loader.MustLoadUInt(3); got != 0b101 {
 		t.Fatalf("unexpected container prefix: %b", got)
 	}
@@ -324,13 +324,13 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 	}
 
 	ro := ReadOnlyAugmentation{}
-	if err := ro.SkipExtra(BeginCell().EndCell().BeginParse()); err == nil {
+	if err := ro.SkipExtra(BeginCell().EndCell().MustBeginParse()); err == nil {
 		t.Fatal("readOnlyAugmentation without skipper should fail")
 	}
-	if _, err := ro.LeafExtra(BeginCell().EndCell().BeginParse()); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
+	if _, err := ro.LeafExtra(BeginCell().EndCell().MustBeginParse()); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
 		t.Fatalf("unexpected LeafExtra error: %v", err)
 	}
-	if _, err := ro.CombineExtra(BeginCell().EndCell().BeginParse(), BeginCell().EndCell().BeginParse()); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
+	if _, err := ro.CombineExtra(BeginCell().EndCell().MustBeginParse(), BeginCell().EndCell().MustBeginParse()); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
 		t.Fatalf("unexpected CombineExtra error: %v", err)
 	}
 
@@ -408,7 +408,7 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 	}
 
 	changes, err := dict.Filter(func(value, _ *Slice, key *Cell) (DictFilterAction, error) {
-		switch key.BeginParse().MustLoadUInt(8) {
+		switch key.MustBeginParse().MustLoadUInt(8) {
 		case 0x20:
 			return DictFilterKeepRest, nil
 		case 0x21:
@@ -428,7 +428,7 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 	}
 
 	changes, err = dict.Filter(func(_ *Slice, _ *Slice, key *Cell) (DictFilterAction, error) {
-		if key.BeginParse().MustLoadUInt(8) == 0x21 {
+		if key.MustBeginParse().MustLoadUInt(8) == 0x21 {
 			return DictFilterRemoveRest, nil
 		}
 		return DictFilterKeep, nil
@@ -454,7 +454,7 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = dict.storeFork(BeginCell().EndCell().BeginParse(), left, right, 2); err != nil {
+	if _, err = dict.storeFork(BeginCell().EndCell().MustBeginParse(), left, right, 2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -466,7 +466,7 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = dict.storeForkWithExtra(BeginCell().EndCell().BeginParse(), nil, leftExtra, right, rightExtra, 2); err == nil {
+	if _, _, err = dict.storeForkWithExtra(BeginCell().EndCell().MustBeginParse(), nil, leftExtra, right, rightExtra, 2); err == nil {
 		t.Fatal("fork with nil child should fail")
 	}
 	if _, _, err = dict.storeForkWithExtra(BeginCell().MustStoreUInt(0b11, 2).ToSlice(), left, leftExtra, right, rightExtra, 2); err == nil {
@@ -502,10 +502,10 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded, err := emptyCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || !loaded.IsEmpty() {
+	if loaded, err := emptyCell.MustBeginParse().LoadAugDict(8, roAug, false); err != nil || !loaded.IsEmpty() {
 		t.Fatalf("unexpected read-only empty load: loaded=%v err=%v", loaded, err)
 	}
-	if loaded, err := emptyCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || !loaded.IsEmpty() {
+	if loaded, err := emptyCell.MustBeginParse().LoadAugDict(8, roAug, false); err != nil || !loaded.IsEmpty() {
 		t.Fatalf("LoadAugDict should load empty wrapped dict: loaded=%v err=%v", loaded, err)
 	}
 
@@ -524,10 +524,10 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded, err := wrappedCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || loaded.GetRootExtra() == nil {
+	if loaded, err := wrappedCell.MustBeginParse().LoadAugDict(8, roAug, false); err != nil || loaded.GetRootExtra() == nil {
 		t.Fatalf("unexpected read-only wrapped load: loaded=%v err=%v", loaded, err)
 	}
-	if loaded, err := wrappedCell.BeginParse().LoadAugDict(8, roAug, false); err != nil || loaded.GetRootExtra() == nil {
+	if loaded, err := wrappedCell.MustBeginParse().LoadAugDict(8, roAug, false); err != nil || loaded.GetRootExtra() == nil {
 		t.Fatalf("LoadAugDict should expose wrapped root extra: loaded=%v err=%v", loaded, err)
 	}
 
@@ -536,7 +536,7 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metric := mustLoadTestMetricExtra(t, extra.BeginParse()); metric != 0 {
+	if metric := mustLoadTestMetricExtra(t, extra.MustBeginParse()); metric != 0 {
 		t.Fatalf("unexpected ensured empty extra: %d", metric)
 	}
 	inlineCopy := dict.Copy()
@@ -545,7 +545,7 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metric := mustLoadTestMetricExtra(t, extra.BeginParse()); metric != 16 {
+	if metric := mustLoadTestMetricExtra(t, extra.MustBeginParse()); metric != 16 {
 		t.Fatalf("unexpected ensured root extra: %d", metric)
 	}
 
@@ -620,7 +620,7 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 		t.Fatal("different cells should not compare equal")
 	}
 
-	if _, err := captureConsumedPrefix(BeginCell().MustStoreUInt(0xaa, 8).EndCell().BeginParse(), func(*Slice) error {
+	if _, err := captureConsumedPrefix(BeginCell().MustStoreUInt(0xaa, 8).EndCell().MustBeginParse(), func(*Slice) error {
 		return errors.New("boom")
 	}); err == nil {
 		t.Fatal("captureConsumedPrefix should propagate consumer errors")
@@ -659,12 +659,12 @@ func TestAugmentedDictionary_ErrorBranchesForConstructionAndWrapping(t *testing.
 	}
 
 	badEmpty := BeginCell().MustStoreUInt(0, 1).MustStoreUInt(1, 16).EndCell()
-	if _, err = badEmpty.BeginParse().LoadAugDict(8, aug, false); err == nil {
+	if _, err = badEmpty.MustBeginParse().LoadAugDict(8, aug, false); err == nil {
 		t.Fatal("wrapped empty augmented dict with bad extra should fail")
 	}
 
 	badRootExtra := BeginCell().MustStoreUInt(1, 1).MustStoreRef(valid.root).MustStoreUInt(0xffff, 16).EndCell()
-	if _, err = badRootExtra.BeginParse().LoadAugDict(8, aug, false); err == nil {
+	if _, err = badRootExtra.MustBeginParse().LoadAugDict(8, aug, false); err == nil {
 		t.Fatal("wrapped augmented dict with bad root extra should fail")
 	}
 
@@ -685,13 +685,13 @@ func TestAugmentedDictionary_ErrorBranchesForConstructionAndWrapping(t *testing.
 	if err := rootSetter.setRootWithExtra(nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if metric := mustLoadTestMetricExtra(t, rootSetter.rootExtra.BeginParse()); metric != 0 {
+	if metric := mustLoadTestMetricExtra(t, rootSetter.rootExtra.MustBeginParse()); metric != 0 {
 		t.Fatalf("unexpected empty root extra after setRootWithExtra: %d", metric)
 	}
 	if err := rootSetter.setRootWithExtra(valid.root, nil); err != nil {
 		t.Fatal(err)
 	}
-	if metric := mustLoadTestMetricExtra(t, rootSetter.rootExtra.BeginParse()); metric != 8 {
+	if metric := mustLoadTestMetricExtra(t, rootSetter.rootExtra.MustBeginParse()); metric != 8 {
 		t.Fatalf("unexpected extracted root extra after setRootWithExtra: %d", metric)
 	}
 }

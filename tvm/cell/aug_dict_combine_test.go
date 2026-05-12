@@ -194,7 +194,7 @@ func TestAugmentedDictionaryCombineRootExtraRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to serialize wrapped dict: %v", err)
 	}
-	loaded, err := wrapped.BeginParse().LoadAugDict(8, aug, false)
+	loaded, err := wrapped.MustBeginParse().LoadAugDict(8, aug, false)
 	if err != nil {
 		t.Fatalf("failed to load combined wrapped dict: %v", err)
 	}

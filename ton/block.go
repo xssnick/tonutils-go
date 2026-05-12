@@ -541,7 +541,7 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 	}
 
 	var bData tlb.Block
-	if err = tlb.LoadFromCell(&bData, cl.BeginParse()); err != nil {
+	if err = tlb.LoadFromCell(&bData, cl.MustBeginParse()); err != nil {
 		return nil, fmt.Errorf("failed to parse block data: %w", err)
 	}
 	return &bData, nil
@@ -568,7 +568,7 @@ func (c *APIClient) GetBlockHeader(ctx context.Context, block *BlockIDExt) (*tlb
 		}
 
 		var bData tlb.Block
-		if err = tlb.LoadFromCellAsProof(&bData, pl.BeginParse()); err != nil {
+		if err = tlb.LoadFromCellAsProof(&bData, pl.MustBeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to parse block data proof: %w", err)
 		}
 		return &bData.BlockInfo, nil
@@ -645,7 +645,7 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 				return nil, false, fmt.Errorf("failed to check block proof: %w", err)
 			}
 
-			if err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.BeginParse()); err != nil {
+			if err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.MustBeginParse()); err != nil {
 				return nil, false, fmt.Errorf("failed to load shard accounts from proof: %w", err)
 			}
 		}
@@ -686,7 +686,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 	switch t := resp.(type) {
 	case AllShardsInfo:
 		var inf tlb.AllShardsInfo
-		err = tlb.LoadFromCell(&inf, t.Data.BeginParse())
+		err = tlb.LoadFromCell(&inf, t.Data.MustBeginParse())
 		if err != nil {
 			return nil, err
 		}
@@ -713,7 +713,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 					return nil, fmt.Errorf("failed to check proof: %w", err)
 				}
 
-				mcShort := shardState.McStateExtra.BeginParse()
+				mcShort := shardState.McStateExtra.MustBeginParse()
 				if v, err := mcShort.LoadUInt(16); err != nil || v != 0xcc26 {
 					return nil, fmt.Errorf("invalic mc extra in proof")
 				}
@@ -776,7 +776,7 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 				return nil
 			}
 
-			loader := value.BeginParse()
+			loader := value.MustBeginParse()
 
 			ab, err := loader.LoadUInt(4)
 			if err != nil {

@@ -171,7 +171,7 @@ func TestPrefixDictionary_DeleteMergesEdges(t *testing.T) {
 		t.Fatal("dict root should not be nil after deleting one of two keys")
 	}
 
-	loader := root.BeginParse()
+	loader := root.MustBeginParse()
 	labelLen, label, err := loadLabel(8, loader, BeginCell())
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestPrefixDictionary_DeleteMergesEdges(t *testing.T) {
 	}
 
 	stored := BeginCell().MustStoreDict(dict).EndCell()
-	roundtrip := stored.BeginParse().MustLoadPrefixDict(8)
+	roundtrip := stored.MustBeginParse().MustLoadPrefixDict(8)
 	value, err := roundtrip.LoadValue(mustPrefixKey(t, 0b101, 3))
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +204,7 @@ func TestPrefixDictionary_DeleteMergesEdges(t *testing.T) {
 	}
 }
 
-func TestLoadCell_LoadPrefixDictRejectsMalformedForks(t *testing.T) {
+func TestLoadCell_LoadPrefixDictDefersMalformedForkValidation(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0, 2).MustStoreBoolBit(false).EndCell()
 
 	rootZeroRemaining := BeginCell()
@@ -213,9 +213,13 @@ func TestLoadCell_LoadPrefixDictRejectsMalformedForks(t *testing.T) {
 	}
 	rootZeroRemaining.MustStoreBoolBit(true).MustStoreRef(leaf).MustStoreRef(leaf)
 
-	_, err := BeginCell().MustStoreMaybeRef(rootZeroRemaining.EndCell()).EndCell().BeginParse().LoadPrefixDict(1)
-	if err == nil || !strings.Contains(err.Error(), "zero remaining key length") {
-		t.Fatalf("expected zero remaining key length error, got %v", err)
+	zeroRemaining := rootZeroRemaining.EndCell()
+	dict, err := BeginCell().MustStoreMaybeRef(zeroRemaining).EndCell().MustBeginParse().LoadPrefixDict(1)
+	if err != nil {
+		t.Fatalf("LoadPrefixDict should not recursively validate branches: %v", err)
+	}
+	if err = validatePrefixDictRoot(dict.root, dict.keySz); err == nil || !strings.Contains(err.Error(), "zero remaining key length") {
+		t.Fatalf("expected zero remaining key length error during explicit validation, got %v", err)
 	}
 
 	validLeaf := BeginCell().MustStoreUInt(0, 2).MustStoreBoolBit(false).EndCell()
@@ -227,8 +231,11 @@ func TestLoadCell_LoadPrefixDictRejectsMalformedForks(t *testing.T) {
 		MustStoreRef(validLeaf).
 		EndCell()
 
-	_, err = BeginCell().MustStoreMaybeRef(rootExtraBits).EndCell().BeginParse().LoadPrefixDict(1)
-	if err == nil || !strings.Contains(err.Error(), "invalid fork node in a prefix code dictionary") {
-		t.Fatalf("expected malformed fork error, got %v", err)
+	dict, err = BeginCell().MustStoreMaybeRef(rootExtraBits).EndCell().MustBeginParse().LoadPrefixDict(1)
+	if err != nil {
+		t.Fatalf("LoadPrefixDict should not recursively validate branches: %v", err)
+	}
+	if err = validatePrefixDictRoot(dict.root, dict.keySz); err == nil || !strings.Contains(err.Error(), "invalid fork node in a prefix code dictionary") {
+		t.Fatalf("expected malformed fork error during explicit validation, got %v", err)
 	}
 }

@@ -2,18 +2,8 @@ package cell
 
 import "fmt"
 
-type refMode uint8
-
-const (
-	refStored refMode = iota
-	refBoundary
-	refResolved
-)
-
 type cellRefView struct {
 	cell       *Cell
-	refs       [4]*Cell
-	loaded     uint8
 	refCnt     uint8
 	childLevel uint8
 	virtual    bool
@@ -48,7 +38,7 @@ func (v *cellRefView) effectiveRef(ref *Cell) *Cell {
 	return ref.Virtualize(childEffectiveLevelFor(v.cell, 0))
 }
 
-func (v *cellRefView) refAt(i int, mode refMode) (*Cell, error) {
+func (v *cellRefView) boundaryRef(i int) (*Cell, error) {
 	if i < 0 {
 		return nil, ErrNegative
 	}
@@ -56,45 +46,14 @@ func (v *cellRefView) refAt(i int, mode refMode) (*Cell, error) {
 		return nil, ErrNoMoreRefs
 	}
 
-	ref := v.cell.refs[i]
-	switch mode {
-	case refStored:
-		return ref, nil
-	case refBoundary:
-		return v.viewRef(ref), nil
-	case refResolved:
-	default:
-		return nil, fmt.Errorf("unknown ref mode")
-	}
-
-	mask := uint8(1 << i)
-	if v.loaded&mask == 0 {
-		if ref != nil && ref.IsLazy() {
-			loaded, err := loadLazyPrunedRef(ref)
-			if err != nil {
-				return nil, err
-			}
-			ref = loaded
-		}
-		v.refs[i] = v.viewRef(ref)
-		v.loaded |= mask
-	}
-	return v.refs[i], nil
-}
-
-func (v *cellRefView) resolvedRef(i int) (*Cell, error) {
-	return v.refAt(i, refResolved)
-}
-
-func (v *cellRefView) boundaryRef(i int) (*Cell, error) {
-	return v.refAt(i, refBoundary)
+	return v.viewRef(v.cell.refs[i]), nil
 }
 
 func (v *cellRefView) logicalBoundaryRef(i int) *Cell {
 	return v.effectiveRef(v.cell.refs[i])
 }
 
-func (v *cellRefView) cloneWithRef(i int, ref *Cell, observer Observer) (*Cell, bool, error) {
+func (v *cellRefView) cloneWithRef(i int, ref *Cell, trace *Trace) (*Cell, bool, error) {
 	if ref == nil {
 		return nil, false, ErrRefCannotBeNil
 	}
@@ -104,16 +63,16 @@ func (v *cellRefView) cloneWithRef(i int, ref *Cell, observer Observer) (*Cell, 
 		refs := refsBuf[:v.refCnt]
 		var err error
 		for j := range refs {
-			refs[j], err = v.resolvedRef(j)
+			refs[j], err = v.boundaryRef(j)
 			if err != nil {
 				return nil, false, err
 			}
 		}
 		refs[i] = ref
-		return v.cloneWithRefs(refs, observer)
+		return v.cloneWithRefs(refs, trace)
 	}
 
-	oldRef, err := v.resolvedRef(i)
+	oldRef, err := v.boundaryRef(i)
 	if err != nil {
 		return nil, false, err
 	}
@@ -121,11 +80,21 @@ func (v *cellRefView) cloneWithRef(i int, ref *Cell, observer Observer) (*Cell, 
 		return v.cell, false, nil
 	}
 
-	cloned, err := v.cell.cloneWithRefObserved(i, ref, observer)
-	return cloned, err == nil, err
+	cloned := v.cell.copy()
+	cloned.setRef(i, ref)
+	if err := trace.NotifyCreate(); err != nil {
+		return nil, false, err
+	}
+	if err := cloned.refreshLevelMaskForRefs(); err != nil {
+		return nil, false, err
+	}
+	if err := cloned.calculateHashes(); err != nil {
+		return nil, false, err
+	}
+	return cloned, true, nil
 }
 
-func (v *cellRefView) cloneWithRefs(refs []*Cell, observer Observer) (*Cell, bool, error) {
+func (v *cellRefView) cloneWithRefs(refs []*Cell, trace *Trace) (*Cell, bool, error) {
 	refCnt := int(v.refCnt)
 	if len(refs) != refCnt {
 		return nil, false, fmt.Errorf("unexpected refs count: got %d want %d", len(refs), refCnt)
@@ -138,7 +107,9 @@ func (v *cellRefView) cloneWithRefs(refs []*Cell, observer Observer) (*Cell, boo
 		cloned = v.cell.copy()
 	}
 	for i, ref := range refs {
-		oldRef, err := v.resolvedRef(i)
+		var oldRef *Cell
+		var err error
+		oldRef, err = v.boundaryRef(i)
 		if err != nil {
 			return nil, false, err
 		}
@@ -157,7 +128,7 @@ func (v *cellRefView) cloneWithRefs(refs []*Cell, observer Observer) (*Cell, boo
 		return v.cell, false, nil
 	}
 
-	if err := notifyCellCreate(observer); err != nil {
+	if err := trace.NotifyCreate(); err != nil {
 		return nil, false, err
 	}
 	if err := cloned.refreshLevelMaskForRefs(); err != nil {

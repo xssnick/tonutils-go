@@ -28,7 +28,7 @@ func mustPopTupleValue(t *testing.T, state *vm.State) tuplepkg.Tuple {
 
 func mustDeserializeAdvanced(t *testing.T, op *helpers.AdvancedOP, code *cell.Builder) {
 	t.Helper()
-	if err := op.Deserialize(code.EndCell().BeginParse()); err != nil {
+	if err := op.Deserialize(code.EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
 	}
 }

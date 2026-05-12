@@ -65,7 +65,7 @@ func GetRootContractAddr(ctx context.Context, api TonApi) (*address.Address, err
 		return nil, fmt.Errorf("failed to get root address from network config")
 	}
 
-	hash, err := data.BeginParse().LoadSlice(256)
+	hash, err := data.MustBeginParse().LoadSlice(256)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get root address from network config 4, failed to load hash: %w", err)
 	}
@@ -105,7 +105,7 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 		return nil, fmt.Errorf("failed to pack domain name: %w", err)
 	}
 
-	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, contractAddr, "dnsresolve", nameCell.EndCell().BeginParse(), 0)
+	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, contractAddr, "dnsresolve", nameCell.EndCell().MustBeginParse(), 0)
 	if err != nil {
 		if cErr, ok := err.(ton.ContractExecError); ok && cErr.Code == ton.ErrCodeContractNotInitialized {
 			return nil, ErrNoSuchRecord
@@ -135,7 +135,7 @@ func (c *Client) resolve(ctx context.Context, contractAddr *address.Address, cha
 		return nil, fmt.Errorf("data get err: %w", err)
 	}
 
-	s := data.BeginParse()
+	s := data.MustBeginParse()
 
 	var category uint64
 	if len(chain) > bytesResolved { // if partially resolved
@@ -180,7 +180,7 @@ func (d *Domain) GetWalletRecord() *address.Address {
 		return nil
 	}
 
-	p, err := rec.BeginParse().LoadRef()
+	p, err := rec.MustBeginParse().LoadRef()
 	if err != nil {
 		return nil
 	}
@@ -208,7 +208,7 @@ func (d *Domain) GetSiteRecord() (_ []byte, inStorage bool) {
 		return nil, false
 	}
 
-	p, err := rec.BeginParse().LoadRef()
+	p, err := rec.MustBeginParse().LoadRef()
 	if err != nil {
 		return nil, false
 	}

@@ -161,7 +161,7 @@ func prependRawMethodDrop(code *cell.Cell) *cell.Cell {
 
 func normalizeStackCell(cl *cell.Cell) (*cell.Cell, error) {
 	var stack tlb.Stack
-	if err := stack.LoadFromCell(cl.BeginParse()); err != nil {
+	if err := stack.LoadFromCell(cl.MustBeginParse()); err != nil {
 		return nil, err
 	}
 
@@ -186,7 +186,7 @@ func canonicalizeCrossStackValue(val any) any {
 		if v == nil {
 			return nil
 		}
-		return v.MustToCell().BeginParse()
+		return v.MustToCell().MustBeginParse()
 	case []any:
 		cp := make([]any, len(v))
 		for i := range v {

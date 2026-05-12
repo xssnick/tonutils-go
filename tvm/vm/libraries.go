@@ -56,7 +56,10 @@ func (s *State) ResolveXLoadCell(cl *cell.Cell) (*cell.Cell, error) {
 
 	switch cl.GetType() {
 	case cell.LibraryCellType:
-		libSlice := cl.BeginParse()
+		libSlice, err := s.Cells.BeginParseAlreadyLoadedRaw(cl)
+		if err != nil {
+			return nil, err
+		}
 		if _, err := libSlice.LoadUInt(8); err != nil {
 			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
 		}

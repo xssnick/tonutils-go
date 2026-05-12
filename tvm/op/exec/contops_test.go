@@ -172,7 +172,7 @@ func TestRETDATAPushesRemainingCodeSlice(t *testing.T) {
 		},
 	}
 
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0x73, 8).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0x73, 8).EndCell().MustBeginParse()
 
 	if err := RETDATA().Interpret(state); err != nil {
 		t.Fatalf("retdata failed: %v", err)

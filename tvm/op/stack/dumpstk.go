@@ -206,9 +206,9 @@ func debugValueString(v any) string {
 	case *big.Int:
 		return x.String() + " [int]"
 	case *cell.Slice:
-		return x.WithoutObserver().MustToCell().Dump() + " [slice]"
+		return x.WithoutTrace().MustToCell().Dump() + " [slice]"
 	case *cell.Builder:
-		return x.WithoutObserver().EndCell().Dump() + " [builder]"
+		return x.WithoutTrace().EndCell().Dump() + " [builder]"
 	case *cell.Cell:
 		return x.Dump() + " [cell]"
 	default:

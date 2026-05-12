@@ -154,7 +154,7 @@ func TestBreakLoopOps(t *testing.T) {
 
 	t.Run("repeatendbrk_installs_repeat_continuation", func(t *testing.T) {
 		state := newTestState()
-		state.CurrentCode = cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+		state.CurrentCode = cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 		state.Reg.C[0] = &testContinuation{name: "after"}
 		state.Reg.C[1] = &testContinuation{name: "alt"}
 
@@ -208,7 +208,7 @@ func TestBreakLoopOps(t *testing.T) {
 
 	t.Run("untilendbrk_installs_until_continuation", func(t *testing.T) {
 		state := newTestState()
-		state.CurrentCode = cell.BeginCell().MustStoreUInt(0x03, 2).EndCell().BeginParse()
+		state.CurrentCode = cell.BeginCell().MustStoreUInt(0x03, 2).EndCell().MustBeginParse()
 		state.Reg.C[0] = &testContinuation{name: "after"}
 		state.Reg.C[1] = &testContinuation{name: "alt"}
 
@@ -234,7 +234,7 @@ func TestBreakLoopOps(t *testing.T) {
 
 	t.Run("whileendbrk_installs_while_continuation", func(t *testing.T) {
 		state := newTestState()
-		state.CurrentCode = cell.BeginCell().MustStoreUInt(0x01, 1).EndCell().BeginParse()
+		state.CurrentCode = cell.BeginCell().MustStoreUInt(0x01, 1).EndCell().MustBeginParse()
 		state.Reg.C[0] = &testContinuation{name: "after"}
 		state.Reg.C[1] = &testContinuation{name: "alt"}
 
@@ -275,7 +275,7 @@ func TestBreakLoopOps(t *testing.T) {
 
 	t.Run("againbrk_captures_current_continuation_in_c1", func(t *testing.T) {
 		state := newTestState()
-		state.CurrentCode = cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().BeginParse()
+		state.CurrentCode = cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().MustBeginParse()
 		state.Reg.C[0] = &testContinuation{name: "after"}
 		state.Reg.C[1] = &testContinuation{name: "alt"}
 
@@ -312,7 +312,7 @@ func TestBreakLoopOps(t *testing.T) {
 
 	t.Run("againendbrk_wraps_c0_and_restarts_current_code", func(t *testing.T) {
 		state := newTestState()
-		state.CurrentCode = cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell().BeginParse()
+		state.CurrentCode = cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell().MustBeginParse()
 		state.Reg.C[0] = &testContinuation{name: "after"}
 		state.Reg.C[1] = &testContinuation{name: "alt"}
 
@@ -433,7 +433,7 @@ func TestExecAdvancedOpRoundTrips(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			encoded := tt.op.Serialize().EndCell()
 			decoded := tt.op
-			if err := decoded.Deserialize(encoded.BeginParse()); err != nil {
+			if err := decoded.Deserialize(encoded.MustBeginParse()); err != nil {
 				t.Fatalf("deserialize failed: %v", err)
 			}
 			if decoded.SerializeText() != tt.want {

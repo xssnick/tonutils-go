@@ -28,7 +28,7 @@ func TestStringTagRoundTrip(t *testing.T) {
 		t.Fatalf("string tag should store refs only, got %d bits and %d refs", c.BitsSize(), c.RefsNum())
 	}
 
-	text, err := c.MustPeekRef(0).BeginParse().LoadStringSnake()
+	text, err := c.MustPeekRef(0).MustBeginParse().LoadStringSnake()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestStringTagRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected string ref value: got %q want %q", text, src.Text)
 	}
 
-	data, err := c.MustPeekRef(1).BeginParse().LoadBinarySnake()
+	data, err := c.MustPeekRef(1).MustBeginParse().LoadBinarySnake()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestStringTagRoundTrip(t *testing.T) {
 	}
 
 	var dst testStringTag
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if dst.Text != src.Text {
@@ -76,7 +76,7 @@ func TestStringTagMaybeRoundTrip(t *testing.T) {
 	}
 
 	var dst maybeStrings
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if dst.Text == nil || *dst.Text != text {
@@ -104,7 +104,7 @@ func TestStringTagRejectsUnsupportedType(t *testing.T) {
 		EndCell()
 
 	var dst badString
-	if err := LoadFromCell(&dst, src.BeginParse()); err == nil {
+	if err := LoadFromCell(&dst, src.MustBeginParse()); err == nil {
 		t.Fatal("expected string tag load to reject unsupported field type")
 	}
 }

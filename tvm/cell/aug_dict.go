@@ -50,8 +50,7 @@ type AugmentedDictionary struct {
 
 	aug Augmentation
 
-	observer  Observer
-	traceNode TraceNode
+	trace *Trace
 }
 
 func NewAugDict(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
@@ -137,7 +136,7 @@ func (c *Slice) ToAugDictWithValueAndAugmentation(keySz uint, aug Augmentation, 
 		}
 	}
 
-	if err = validateAugmentedDictRoot(root, keySz, aug); err != nil {
+	if err = validateDictKeySize(keySz); err != nil {
 		return nil, fmt.Errorf("failed to validate augmented dict: %w", err)
 	}
 
@@ -191,7 +190,7 @@ func (c *Slice) loadAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augm
 		}, nil
 	}
 
-	root, node, err := c.LoadRefCellWithNode()
+	root, err := c.LoadRefCell()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dict root ref: %w", err)
 	}
@@ -201,26 +200,16 @@ func (c *Slice) loadAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augm
 		return nil, fmt.Errorf("failed to load augmented dict root extra: %w", err)
 	}
 
-	if err = validateAugmentedDictRoot(root, keySz, aug); err != nil {
+	if err = validateDictKeySize(keySz); err != nil {
 		return nil, fmt.Errorf("failed to validate augmented dict root: %w", err)
 	}
 
-	if hasSemantics {
-		expected, expectedErr := computeAugmentedNodeExtra(root, keySz, aug)
-		if expectedErr != nil {
-			return nil, fmt.Errorf("failed to compute augmented dict root extra: %w", expectedErr)
-		}
-		if !equalCellContents(rootExtra, expected) {
-			return nil, fmt.Errorf("augmented dict root extra mismatch")
-		}
-	} else {
-		nodeExtra, err := extractAugmentedNodeExtra(root, keySz, aug.SkipExtra)
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract augmented dict node extra: %w", err)
-		}
-		if !equalCellContents(rootExtra, nodeExtra) {
-			return nil, fmt.Errorf("augmented dict root extra mismatch")
-		}
+	nodeExtra, err := extractAugmentedNodeExtra(root.WithTrace(nil), keySz, aug.SkipExtra)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract augmented dict node extra: %w", err)
+	}
+	if !equalCellContents(rootExtra, nodeExtra) {
+		return nil, fmt.Errorf("augmented dict root extra mismatch")
 	}
 
 	return (&AugmentedDictionary{
@@ -229,7 +218,7 @@ func (c *Slice) loadAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augm
 		rootExtra: rootExtra,
 		wrapped:   true,
 		aug:       aug,
-	}).SetObserverNode(c.observer, node), nil
+	}).SetTrace(root.Trace()), nil
 }
 
 func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
@@ -252,7 +241,7 @@ func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDict
 		}, nil
 	}
 
-	root, node, err := c.LoadRefCellWithNode()
+	root, err := c.LoadRefCell()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dict root ref: %w", err)
 	}
@@ -263,7 +252,7 @@ func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDict
 	}
 
 	if root.GetType() != PrunedCellType {
-		if err = validateAugmentedDictRoot(root, keySz, aug); err != nil {
+		if err = validateDictKeySize(keySz); err != nil {
 			return nil, fmt.Errorf("failed to validate augmented dict root: %w", err)
 		}
 	}
@@ -274,7 +263,7 @@ func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDict
 		rootExtra: rootExtra,
 		wrapped:   true,
 		aug:       aug,
-	}).SetObserverNode(c.observer, node), nil
+	}).SetTrace(root.Trace()), nil
 }
 
 func (d *AugmentedDictionary) GetKeySize() uint {
@@ -292,21 +281,16 @@ func (d *AugmentedDictionary) Copy() *AugmentedDictionary {
 		rootExtra: d.rootExtra,
 		wrapped:   d.wrapped,
 		aug:       d.aug,
-		observer:  d.observer,
-		traceNode: d.traceNode,
+		trace:     d.trace,
 	}
 }
 
-func (d *AugmentedDictionary) SetObserver(observer Observer) *AugmentedDictionary {
-	return d.SetObserverNode(observer, 0)
-}
-
-func (d *AugmentedDictionary) SetObserverNode(observer Observer, node TraceNode) *AugmentedDictionary {
+func (d *AugmentedDictionary) SetTrace(trace *Trace) *AugmentedDictionary {
 	if d == nil {
 		return nil
 	}
-	d.observer = observer
-	d.traceNode = node
+	d.trace = trace
+	d.root = d.root.withTraceCombined(trace)
 	return d
 }
 
@@ -332,7 +316,7 @@ func (d *AugmentedDictionary) LoadRootExtra() (*Slice, error) {
 	}
 
 	if d.rootExtra != nil {
-		return d.rootExtra.BeginParse(), nil
+		return d.rootExtra.MustBeginParse(), nil
 	}
 
 	if d.root == nil {
@@ -343,7 +327,7 @@ func (d *AugmentedDictionary) LoadRootExtra() (*Slice, error) {
 		if err != nil {
 			return nil, err
 		}
-		return extra.BeginParse(), nil
+		return extra.MustBeginParse(), nil
 	}
 
 	if d.aug == nil {
@@ -354,7 +338,7 @@ func (d *AugmentedDictionary) LoadRootExtra() (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	return extra.BeginParse(), nil
+	return extra.MustBeginParse(), nil
 }
 
 func (d *AugmentedDictionary) SetIntKey(key *big.Int, value *Cell) error {
@@ -382,7 +366,11 @@ func (d *AugmentedDictionary) loadValueExtraSlice(key *Cell) (*Slice, error) {
 	if key == nil || key.BitsSize() != d.keySz {
 		return nil, fmt.Errorf("incorrect key size")
 	}
-	return findKeyInDict(d.root, key, nil, 0)
+	return (&Dictionary{
+		keySz: d.keySz,
+		root:  d.root,
+		trace: d.trace,
+	}).LoadValue(key)
 }
 
 func (d *AugmentedDictionary) LoadValue(key *Cell) (*Slice, error) {
@@ -503,7 +491,7 @@ func (d *AugmentedDictionary) SetBuilderWithMode(key *Cell, value *Builder, mode
 		return false, err
 	}
 
-	newRoot, rootExtra, changed, err := d.set(d.root, key.BeginParse(), d.keySz, value, mode)
+	newRoot, rootExtra, changed, err := d.set(d.root, key.MustBeginParse(), d.keySz, value, mode)
 	if err != nil {
 		return false, err
 	}
@@ -619,7 +607,7 @@ func (d *AugmentedDictionary) decomposeValueExtra(valueExtra *Slice) (*Slice, *S
 	if err != nil {
 		return nil, nil, err
 	}
-	return value, extraCell.BeginParse(), nil
+	return value, extraCell.MustBeginParse(), nil
 }
 
 func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, error) {
@@ -633,7 +621,7 @@ func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, er
 		return nil, false, err
 	}
 
-	newRoot, rootExtra, removed, changed, err := d.delete(d.root, key.BeginParse(), d.keySz)
+	newRoot, rootExtra, removed, changed, err := d.delete(d.root, key.MustBeginParse(), d.keySz)
 	if err != nil {
 		return nil, false, err
 	}
@@ -689,7 +677,7 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		return leaf, extra, err == nil, err
 	}
 
-	s := branch.BeginParse()
+	s := branch.MustBeginParse()
 	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
@@ -815,7 +803,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint) (
 		return nil, nil, nil, false, nil
 	}
 
-	s := branch.BeginParse()
+	s := branch.MustBeginParse()
 	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("failed to load label: %w", err)
@@ -855,7 +843,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint) (
 			return nil, nil, nil, false, fmt.Errorf("failed to peek neighbour ref %d: %w", otherIdx, err)
 		}
 
-		slc := otherRef.BeginParse()
+		slc := otherRef.MustBeginParse()
 		_, otherLabel, err := loadLabel(nextKeyOffset, slc, BeginCell())
 		if err != nil {
 			return nil, nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
@@ -922,7 +910,7 @@ func (d *AugmentedDictionary) storeLeafWithExtra(keyPfx *Slice, value *Builder, 
 		return nil, nil, fmt.Errorf("failed to compute leaf extra: %w", err)
 	}
 
-	b := BeginCell()
+	b := BeginCell().SetTrace(d.trace)
 	if err = storeDictLabel(b, keyPfx, keyOffset); err != nil {
 		return nil, nil, fmt.Errorf("failed to store label: %w", err)
 	}
@@ -950,12 +938,12 @@ func (d *AugmentedDictionary) storeForkWithExtra(label *Slice, left, leftExtra, 
 		return nil, nil, fmt.Errorf("invalid fork label length")
 	}
 
-	extra, err := d.aug.CombineExtra(leftExtra.BeginParse(), rightExtra.BeginParse())
+	extra, err := d.aug.CombineExtra(leftExtra.MustBeginParse(), rightExtra.MustBeginParse())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to compute fork extra: %w", err)
 	}
 
-	b := BeginCell()
+	b := BeginCell().SetTrace(d.trace)
 	if err = storeDictLabel(b, label, keyOffset); err != nil {
 		return nil, nil, fmt.Errorf("failed to store label: %w", err)
 	}
@@ -989,13 +977,17 @@ func (d *AugmentedDictionary) storeFork(label *Slice, left, right *Cell, keyOffs
 }
 
 func (d *AugmentedDictionary) storeNode(label *Slice, payload *Builder, keyOffset uint) (*Cell, error) {
-	return storeDictNode(label, payload, keyOffset)
+	return storeDictNodeTraced(label, payload, keyOffset, d.trace)
 }
 
 func validateAugmentedDictRoot(root *Cell, keySz uint, aug Augmentation) error {
 	if root == nil {
-		return nil
+		return validateDictKeySize(keySz)
 	}
+	if err := validateDictKeySize(keySz); err != nil {
+		return err
+	}
+	root = root.WithTrace(nil)
 
 	if err := validateAugmentedDictNode(root, keySz, aug.SkipExtra); err != nil {
 		return err
@@ -1040,7 +1032,7 @@ func validateAugmentedDictNode(c *Cell, keySz uint, skipExtra AugmentedExtraSkip
 		return fmt.Errorf("augmented dict has unsupported special cell in tree structure")
 	}
 
-	loader := c.BeginParse()
+	loader := c.MustBeginParse()
 	labelLen, _, err := loadLabel(keySz, loader, BeginCell())
 	if err != nil {
 		return fmt.Errorf("failed to parse augmented dict label: %w", err)
@@ -1082,7 +1074,7 @@ func computeAugmentedNodeExtra(c *Cell, keySz uint, aug Augmentation) (*Cell, er
 		return nil, fmt.Errorf("augmented dict has unsupported special cell in tree structure")
 	}
 
-	loader := c.BeginParse()
+	loader := c.MustBeginParse()
 	labelLen, _, err := loadLabel(keySz, loader, BeginCell())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse augmented dict label: %w", err)
@@ -1131,7 +1123,7 @@ func computeAugmentedNodeExtra(c *Cell, keySz uint, aug Augmentation) (*Cell, er
 		return nil, fmt.Errorf("invalid right branch: %w", err)
 	}
 
-	computedExtra, err := aug.CombineExtra(leftExtra.BeginParse(), rightExtra.BeginParse())
+	computedExtra, err := aug.CombineExtra(leftExtra.MustBeginParse(), rightExtra.MustBeginParse())
 	if err != nil {
 		return nil, err
 	}
@@ -1146,7 +1138,7 @@ func extractAugmentedNodeExtra(c *Cell, keySz uint, skipExtra AugmentedExtraSkip
 		return nil, fmt.Errorf("augmented dict branch is nil")
 	}
 
-	loader := c.BeginParse()
+	loader := c.MustBeginParse()
 	labelLen, _, err := loadLabel(keySz, loader, BeginCell())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse augmented dict label: %w", err)

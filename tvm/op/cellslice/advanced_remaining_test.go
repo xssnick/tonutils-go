@@ -11,8 +11,8 @@ import (
 
 func TestCompareFamiliesUseBitOnlySemantics(t *testing.T) {
 	st := vm.NewStack()
-	left := cell.BeginCell().MustStoreUInt(0b1010, 4).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()
-	right := cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse()
+	left := cell.BeginCell().MustStoreUInt(0b1010, 4).MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()
+	right := cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().MustBeginParse()
 
 	if err := st.PushSlice(left); err != nil {
 		t.Fatalf("push left: %v", err)
@@ -32,10 +32,10 @@ func TestCompareFamiliesUseBitOnlySemantics(t *testing.T) {
 	}
 
 	st = vm.NewStack()
-	if err = st.PushSlice(cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse()); err != nil {
+	if err = st.PushSlice(cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push left cmp: %v", err)
 	}
-	if err = st.PushSlice(cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().BeginParse()); err != nil {
+	if err = st.PushSlice(cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push right cmp: %v", err)
 	}
 	if err = SDLEXCMP().Interpret(&vm.State{Stack: st}); err != nil {
@@ -52,8 +52,8 @@ func TestCompareFamiliesUseBitOnlySemantics(t *testing.T) {
 
 func TestSDBeginsAndLittleEndianOps(t *testing.T) {
 	st := vm.NewStack()
-	hay := cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().BeginParse()
-	needle := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().BeginParse()
+	hay := cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().MustBeginParse()
+	needle := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().MustBeginParse()
 	if err := st.PushSlice(hay); err != nil {
 		t.Fatalf("push hay: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestSDBeginsAndLittleEndianOps(t *testing.T) {
 	}
 
 	st = vm.NewStack()
-	if err = st.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().BeginParse()); err != nil {
+	if err = st.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push ldile4 slice: %v", err)
 	}
 	if err = LDILE4().Interpret(&vm.State{Stack: st}); err != nil {
@@ -140,7 +140,7 @@ func TestConstStoreRemainingAndIndexedDepth(t *testing.T) {
 	}
 
 	st = vm.NewStack()
-	src := cell.BeginCell().MustStoreUInt(0b10101, 5).MustStoreRef(refA).EndCell().BeginParse()
+	src := cell.BeginCell().MustStoreUInt(0b10101, 5).MustStoreRef(refA).EndCell().MustBeginParse()
 	if err = st.PushBuilder(cell.BeginCell()); err != nil {
 		t.Fatalf("push stsliceconst builder: %v", err)
 	}

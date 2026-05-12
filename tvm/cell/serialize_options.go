@@ -277,7 +277,7 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 			}
 		}
 
-		ref, err := refView.resolvedRef(i)
+		ref, err := boundaryRef.load()
 		if err != nil {
 			return 0, fmt.Errorf("failed to load ref %d: %w", i, err)
 		}

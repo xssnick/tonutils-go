@@ -80,7 +80,7 @@ func TestCallCCAdditionalCoverage(t *testing.T) {
 	t.Run("RoundTrip", func(t *testing.T) {
 		src := CALLCCARGS(2, -1)
 		dst := CALLCCARGS(0, 0)
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); got != "CALLCCARGS 2,-1" {
@@ -96,7 +96,7 @@ func TestSetContCtrAdditionalCoverage(t *testing.T) {
 	t.Run("RoundTripAndTupleSave", func(t *testing.T) {
 		src := SETCONTCTR(7)
 		dst := SETCONTCTR(0)
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); got != "c7 SETCONTCTR" {

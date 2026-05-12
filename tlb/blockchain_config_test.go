@@ -22,7 +22,7 @@ func TestBlockchainConfigGetParam(t *testing.T) {
 		t.Fatal("GetParam returned nil cell")
 	}
 
-	val, err := param.BeginParse().LoadUInt(8)
+	val, err := param.MustBeginParse().LoadUInt(8)
 	if err != nil {
 		t.Fatalf("LoadUInt failed: %v", err)
 	}

@@ -60,11 +60,11 @@ func mustValidRunMethodParams(t *testing.T) RunMethodParams {
 
 func TestRunGetMethodRejectsMalformedButSerializableInputs(t *testing.T) {
 	tests := []struct {
-		name      string
-		maxGas    int64
-		mutate    func(*RunMethodParams)
-		wantErr   bool
-		wantExit  *int32
+		name     string
+		maxGas   int64
+		mutate   func(*RunMethodParams)
+		wantErr  bool
+		wantExit *int32
 	}{
 		{
 			name:   "EmptyCodeCell",

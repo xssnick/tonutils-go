@@ -22,7 +22,7 @@ func TestTVMCrossEmulatorStackOpsMisc(t *testing.T) {
 	}
 
 	refCell := cell.BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
-	refSlice := cell.BeginCell().MustStoreUInt(0x5, 3).MustStoreRef(refCell).EndCell().BeginParse()
+	refSlice := cell.BeginCell().MustStoreUInt(0x5, 3).MustStoreRef(refCell).EndCell().MustBeginParse()
 	pushRefContBody := codeFromBuilders(t, stackop.PUSHINT(big.NewInt(77)).Serialize())
 	debugSlice := cell.BeginCell().MustStoreSlice([]byte("debug"), 40).ToSlice()
 

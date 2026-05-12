@@ -67,7 +67,7 @@ func assertMathCoverageVMError(t *testing.T, err error, code int64) {
 
 func mustRoundTripMathAdvanced(t *testing.T, src *helpers.AdvancedOP, dst *helpers.AdvancedOP, wantText string) {
 	t.Helper()
-	if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+	if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize advanced op: %v", err)
 	}
 	if got := dst.SerializeText(); got != wantText {
@@ -138,7 +138,7 @@ func TestMathImmediateAndAdvancedAliases(t *testing.T) {
 			t.Fatalf("initial immediate = %d, want 3", got)
 		}
 
-		encoded, err := serialize().EndCell().BeginParse().LoadUInt(8)
+		encoded, err := serialize().EndCell().MustBeginParse().LoadUInt(8)
 		if err != nil {
 			t.Fatalf("load encoded immediate: %v", err)
 		}
@@ -371,7 +371,7 @@ func TestMathQuietMinMaxCompareAndSignBranches(t *testing.T) {
 
 func vmCellWithByte(t *testing.T, v uint64) *cell.Slice {
 	t.Helper()
-	return cell.BeginCell().MustStoreUInt(v, 8).EndCell().BeginParse()
+	return cell.BeginCell().MustStoreUInt(v, 8).EndCell().MustBeginParse()
 }
 
 func TestMathAdditionalWrappersAndQuietOps(t *testing.T) {

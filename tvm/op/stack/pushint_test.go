@@ -30,7 +30,7 @@ func TestPUSHINTTinyFormMatchesReferenceRange(t *testing.T) {
 			t.Fatalf("unexpected encoding for %d: got %s want %s", tc.value, got, want)
 		}
 
-		slice := cell.BeginCell().MustStoreUInt(tc.byte, 8).EndCell().BeginParse()
+		slice := cell.BeginCell().MustStoreUInt(tc.byte, 8).EndCell().MustBeginParse()
 		decoded := PUSHINT(nil)
 		if err := decoded.Deserialize(slice); err != nil {
 			t.Fatalf("failed to decode %d: %v", tc.value, err)

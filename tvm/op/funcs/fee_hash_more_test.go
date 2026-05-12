@@ -124,7 +124,7 @@ func TestFeeHashMoreBranches(t *testing.T) {
 		}
 
 		decoded := HASHEXT(0)
-		if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("HASHEXT deserialize failed: %v", err)
 		}
 		if got := decoded.SerializeText(); got != "HASHEXTAR -1" {

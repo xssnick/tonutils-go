@@ -82,22 +82,33 @@ func TestCreateWithLazyRefsUnsafeCreatesRegularCellWithLazyRef(t *testing.T) {
 		t.Fatal("cell data was copied")
 	}
 
-	loaded, err := cell.PeekRef(0)
+	boundary, err := cell.PeekRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != ref {
+	if !boundary.IsLazy() || boundary.GetType() != PrunedCellType {
+		t.Fatal("expected lazy boundary ref")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("peek ref should not load, calls=%d", loader.calls)
+	}
+
+	loaded, err := cell.MustBeginParse().LoadRef()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MustLoadUInt(8) != 0xA5 {
 		t.Fatal("unexpected loaded ref")
 	}
 	if loader.lastHash != ref.HashKey(0) {
 		t.Fatalf("unexpected load hash: got=%x want=%x", loader.lastHash, ref.HashKey(0))
 	}
-	loaded, err = cell.BeginParse().LoadRefCell()
+	loadedRef, err := cell.MustBeginParse().LoadRefCell()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != ref {
-		t.Fatal("unexpected loaded ref from slice")
+	if !loadedRef.IsLazy() {
+		t.Fatal("LoadRefCell should return boundary ref without parsing it")
 	}
 }
 
@@ -135,7 +146,7 @@ func TestSliceToCellPreservesLazyRef(t *testing.T) {
 		loader.LoadCell,
 	)
 
-	cell, err := cellWithLazyRef.BeginParse().ToCell()
+	cell, err := cellWithLazyRef.MustBeginParse().ToCell()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,12 +157,22 @@ func TestSliceToCellPreservesLazyRef(t *testing.T) {
 		t.Fatalf("unexpected hash: got=%x want=%x", cell.Hash(), src.Hash())
 	}
 
-	loaded, err := cell.PeekRef(0)
+	boundary, err := cell.PeekRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != ref {
-		t.Fatal("unexpected ref in cell with lazy ref")
+	if !boundary.IsLazy() {
+		t.Fatal("expected lazy ref in cell copy")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("slice copy should not load refs, calls=%d", loader.calls)
+	}
+	loaded, err := boundary.BeginParse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MustLoadUInt(8) != 0xA5 {
+		t.Fatal("unexpected loaded ref")
 	}
 	if loader.calls != 1 {
 		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
@@ -175,8 +196,8 @@ func TestSliceToCellPreservesLazyRefForPartialSlice(t *testing.T) {
 		loader.LoadCell,
 	)
 
-	slice := cellWithLazyRef.BeginParse()
-	if err := slice.Advance(1); err != nil {
+	slice := cellWithLazyRef.MustBeginParse()
+	if err := slice.SkipBits(1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,12 +209,22 @@ func TestSliceToCellPreservesLazyRefForPartialSlice(t *testing.T) {
 		t.Fatal("partial slice with lazy refs should not inherit lazy marker")
 	}
 
-	loaded, err := cell.PeekRef(0)
+	boundary, err := cell.PeekRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != ref {
-		t.Fatal("unexpected ref in partial cell")
+	if !boundary.IsLazy() {
+		t.Fatal("expected lazy ref in partial cell")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("partial slice copy should not load refs, calls=%d", loader.calls)
+	}
+	loaded, err := boundary.BeginParse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MustLoadUInt(8) != 0xA5 {
+		t.Fatal("unexpected loaded ref")
 	}
 	if loader.calls != 1 {
 		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
@@ -219,12 +250,22 @@ func TestCellToBuilderPreservesLazyRef(t *testing.T) {
 		t.Fatal("builder cell with lazy refs should not inherit lazy marker")
 	}
 
-	loaded, err := cell.PeekRef(0)
+	boundary, err := cell.PeekRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != ref {
-		t.Fatal("unexpected ref in builder cell")
+	if !boundary.IsLazy() {
+		t.Fatal("expected lazy ref in builder cell")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("builder copy should not load refs, calls=%d", loader.calls)
+	}
+	loaded, err := boundary.BeginParse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MustLoadUInt(8) != 0xA5 {
+		t.Fatal("unexpected loaded ref")
 	}
 	if loader.calls != 1 {
 		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
@@ -249,20 +290,21 @@ func TestCellToBuilderMaterializesLazyPrunedCell(t *testing.T) {
 
 func TestSliceToCellMaterializesLazyPrunedCell(t *testing.T) {
 	src := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
-	lazyPruned := mustCreateLazyPrunedRef(t, lazyRefFromCell(src))
+	loader := &testLazyLoader{cells: map[Hash]*Cell{src.HashKey(): src}}
+	lazyPruned := mustCreateLazyPrunedRef(t, lazyRefFromCell(src), loader.LoadCell)
 
-	cell, err := lazyPruned.BeginParse().ToCell()
+	cell, err := lazyPruned.MustBeginParse().ToCell()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cell.GetType() != PrunedCellType {
-		t.Fatalf("expected pruned cell, got %v", cell.GetType())
+	if cell.GetType() != OrdinaryCellType {
+		t.Fatalf("expected ordinary cell, got %v", cell.GetType())
 	}
 	if cell.IsLazy() {
 		t.Fatal("slice cell conversion should not preserve lazy marker from source cell")
 	}
-	if cell.HashKey() == lazyPruned.HashKey() {
-		t.Fatal("slice cell conversion should be rehashed as materialized pruned cell")
+	if cell.HashKey() != src.HashKey() {
+		t.Fatal("slice cell conversion should materialize original cell")
 	}
 }
 
@@ -298,12 +340,22 @@ func TestStoreBuilderPreservesLazyRef(t *testing.T) {
 		t.Fatal("builder merge with lazy refs should not inherit lazy marker")
 	}
 
-	loaded, err := cell.PeekRef(0)
+	boundary, err := cell.PeekRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != ref {
-		t.Fatal("unexpected ref in merged builder cell")
+	if !boundary.IsLazy() {
+		t.Fatal("expected lazy ref in merged builder cell")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("builder merge should not load refs, calls=%d", loader.calls)
+	}
+	loaded, err := boundary.BeginParse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MustLoadUInt(8) != 0xA5 {
+		t.Fatal("unexpected loaded ref")
 	}
 	if loader.calls != 1 {
 		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
@@ -329,11 +381,18 @@ func TestCreateWithLazyRefsUnsafeLoadsMultiLevelRefByRepresentedHash(t *testing.
 		loader.LoadCell,
 	)
 
-	loaded, err := cellWithLazyRef.PeekRef(0)
+	boundary, err := cellWithLazyRef.PeekRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != ref {
+	if !boundary.IsLazy() {
+		t.Fatal("expected lazy boundary ref")
+	}
+	loaded, err := boundary.BeginParse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.BitsLeft() != ref.BitsSize() {
 		t.Fatal("unexpected loaded ref")
 	}
 	if loader.lastHash != ref.HashKey(ref.Level()) {
@@ -353,15 +412,19 @@ func TestCreateWithLazyRefsUnsafeWithoutLoader(t *testing.T) {
 		[]LazyRef{lazyRefFromCell(ref)},
 	)
 
-	if _, err := cellWithLazyRef.PeekRef(0); !errors.Is(err, ErrLazyLoaderNotSet) {
+	boundary, err := cellWithLazyRef.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = boundary.BeginParse(); !errors.Is(err, ErrLazyLoaderNotSet) {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if got := cellWithLazyRef.BeginParse().Depth(); got != src.BeginParse().Depth() {
-		t.Fatalf("unexpected lazy slice depth: got=%d want=%d", got, src.BeginParse().Depth())
+	if got := cellWithLazyRef.MustBeginParse().Depth(); got != src.MustBeginParse().Depth() {
+		t.Fatalf("unexpected lazy slice depth: got=%d want=%d", got, src.MustBeginParse().Depth())
 	}
 }
 
-func TestCreateProofLoadsLazyRef(t *testing.T) {
+func TestCreateProofLoadsOnlyRequestedLazyRef(t *testing.T) {
 	ref := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
 	src := BeginCell().MustStoreUInt(0b101, 3).MustStoreRef(ref).EndCell()
 	loader := &testLazyLoader{cells: map[Hash]*Cell{ref.HashKey(0): ref}}
@@ -378,12 +441,21 @@ func TestCreateProofLoadsLazyRef(t *testing.T) {
 	if _, err := cellWithLazyRef.CreateProof(CreateProofSkeleton()); err != nil {
 		t.Fatal(err)
 	}
+	if loader.calls != 0 {
+		t.Fatalf("proof with pruned ref should not load, calls=%d", loader.calls)
+	}
+
+	sk := CreateProofSkeleton()
+	sk.ProofRef(0)
+	if _, err := cellWithLazyRef.CreateProof(sk); err != nil {
+		t.Fatal(err)
+	}
 	if loader.calls != 1 {
 		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
 	}
 }
 
-func TestDictionaryTreatsLazyPrunedRootAsPruned(t *testing.T) {
+func TestDictionaryLoadsLazyPrunedRootUnlessSkipPruned(t *testing.T) {
 	dict := NewDict(8)
 	if err := dict.Set(BeginCell().MustStoreUInt(0x11, 8).EndCell(), BeginCell().MustStoreUInt(0xAA, 8).EndCell()); err != nil {
 		t.Fatal(err)
@@ -402,24 +474,77 @@ func TestDictionaryTreatsLazyPrunedRootAsPruned(t *testing.T) {
 		t.Fatalf("unexpected lazy root hash: got=%x want=%x", lazyRoot.Hash(), root.Hash())
 	}
 
-	if _, err := lazyRoot.AsDict(8).LoadAll(); err == nil {
-		t.Fatal("LoadAll should fail on pruned root without skip")
+	items, err := lazyRoot.AsDict(8).LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("unexpected loaded items count: got %d want 2", len(items))
 	}
 
-	items, err := lazyRoot.AsDict(8).LoadAll(true)
+	value, err := lazyRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x11))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.MustLoadUInt(8) != 0xAA {
+		t.Fatal("unexpected lazy root dict value")
+	}
+
+	if loader.calls == 0 {
+		t.Fatal("lazy pruned root should be loaded for ordinary dictionary reads")
+	}
+
+	skipLoader := &testLazyLoader{cells: map[Hash]*Cell{root.HashKey(): root}}
+	skipRoot := mustCreateLazyPrunedRef(t, lazyRefFromCell(root), skipLoader.LoadCell)
+	items, err = skipRoot.AsDict(8).LoadAll(true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(items) != 0 {
 		t.Fatalf("pruned root should be skipped, got %d items", len(items))
 	}
+	if skipLoader.calls != 0 {
+		t.Fatalf("skip pruned should not load lazy root, calls=%d", skipLoader.calls)
+	}
+}
 
-	if _, err = lazyRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x11)); err == nil {
-		t.Fatal("LoadValue should fail on pruned root")
+func TestDictionaryMutatesLazyPrunedRootAfterMaterialization(t *testing.T) {
+	dict := NewDict(8)
+	if err := dict.Set(BeginCell().MustStoreUInt(0x11, 8).EndCell(), BeginCell().MustStoreUInt(0xAA, 8).EndCell()); err != nil {
+		t.Fatal(err)
+	}
+	if err := dict.Set(BeginCell().MustStoreUInt(0x22, 8).EndCell(), BeginCell().MustStoreUInt(0xBB, 8).EndCell()); err != nil {
+		t.Fatal(err)
 	}
 
-	if loader.calls != 0 {
-		t.Fatalf("lazy pruned root should not be loaded, calls=%d", loader.calls)
+	root := dict.AsCell()
+	setLoader := &testLazyLoader{cells: map[Hash]*Cell{root.HashKey(): root}}
+	setDict := mustCreateLazyPrunedRef(t, lazyRefFromCell(root), setLoader.LoadCell).AsDict(8)
+	if err := setDict.Set(BeginCell().MustStoreUInt(0x33, 8).EndCell(), BeginCell().MustStoreUInt(0xCC, 8).EndCell()); err != nil {
+		t.Fatal(err)
+	}
+	value, err := setDict.LoadValueByIntKey(big.NewInt(0x33))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.MustLoadUInt(8) != 0xCC {
+		t.Fatal("unexpected value after lazy root set")
+	}
+
+	deleteLoader := &testLazyLoader{cells: map[Hash]*Cell{root.HashKey(): root}}
+	deleteDict := mustCreateLazyPrunedRef(t, lazyRefFromCell(root), deleteLoader.LoadCell).AsDict(8)
+	if err := deleteDict.Delete(BeginCell().MustStoreUInt(0x11, 8).EndCell()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = deleteDict.LoadValueByIntKey(big.NewInt(0x11)); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatalf("deleted lazy root key should be absent, got %v", err)
+	}
+	value, err = deleteDict.LoadValueByIntKey(big.NewInt(0x22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.MustLoadUInt(8) != 0xBB {
+		t.Fatal("unexpected surviving value after lazy root delete")
 	}
 }
 
@@ -435,7 +560,8 @@ func TestDictionaryLoadAllSkipPrunedLazyChildDoesNotLoad(t *testing.T) {
 	root := dict.AsCell()
 	left := root.ref(0)
 	lazyLeft := mustCreateLazyPrunedRef(t, lazyRefFromCell(left))
-	rootWithLazyChild, err := root.cloneWithRefObserved(0, lazyLeft, nil)
+	refView := newCellRefView(root)
+	rootWithLazyChild, _, err := refView.cloneWithRef(0, lazyLeft, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,21 +716,18 @@ func TestToBOCLoadsLazyPrunedRoot(t *testing.T) {
 	}
 }
 
-func TestCellRefViewModes(t *testing.T) {
+func TestCellRefViewBoundaryModeDoesNotLoadLazyRef(t *testing.T) {
 	ref := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
 	src := BeginCell().MustStoreUInt(0b101, 3).MustStoreRef(ref).EndCell()
 	cellWithLazyRef := cellWithLazyRefsFromCell(src)
 
 	view := newCellRefView(cellWithLazyRef)
-	stored, err := view.refAt(0, refStored)
-	if err != nil {
-		t.Fatal(err)
-	}
+	stored := cellWithLazyRef.ref(0)
 	if !stored.IsLazy() || stored.GetType() != PrunedCellType {
-		t.Fatal("stored mode should return lazy pruned boundary")
+		t.Fatal("stored ref should be lazy pruned boundary")
 	}
 
-	boundary, err := view.refAt(0, refBoundary)
+	boundary, err := view.boundaryRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,18 +735,24 @@ func TestCellRefViewModes(t *testing.T) {
 		t.Fatal("boundary mode should preserve stored lazy boundary")
 	}
 
-	if _, err = view.refAt(0, refResolved); !errors.Is(err, ErrLazyLoaderNotSet) {
-		t.Fatalf("unexpected resolved error: %v", err)
-	}
-
 	loader := &testLazyLoader{cells: map[Hash]*Cell{ref.HashKey(): ref}}
 	view = newCellRefView(cellWithLazyRefsFromCell(src, loader.LoadCell))
-	resolved, err := view.refAt(0, refResolved)
+	boundary, err = view.boundaryRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved != ref {
-		t.Fatal("resolved mode should load full ref")
+	if !boundary.IsLazy() {
+		t.Fatal("boundary mode should not load full ref")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("unexpected load calls after boundary read: got=%d want=0", loader.calls)
+	}
+	loaded, err := boundary.BeginParse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.MustLoadUInt(8) != 0xA5 {
+		t.Fatal("begin parse should load full ref")
 	}
 	if loader.calls != 1 {
 		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)

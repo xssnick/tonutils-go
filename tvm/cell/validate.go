@@ -15,14 +15,14 @@ func ordinaryLevelMask(refs []*Cell) LevelMask {
 }
 
 func validateLoadedCell(c *Cell) error {
-	return validateCell(c, refResolved)
+	return validateCell(c, true)
 }
 
 func validateBoundaryCell(c *Cell) error {
-	return validateCell(c, refBoundary)
+	return validateCell(c, false)
 }
 
-func validateCell(c *Cell, refsMode refMode) error {
+func validateCell(c *Cell, loadRefs bool) error {
 	if !c.IsSpecial() {
 		return nil
 	}
@@ -33,7 +33,7 @@ func validateCell(c *Cell, refsMode refMode) error {
 
 	switch typ := c.GetType(); typ {
 	case PrunedCellType:
-		if _, err := specialCellRefs(c, typ, refsMode); err != nil {
+		if _, err := specialCellRefs(c, typ, loadRefs); err != nil {
 			return err
 		}
 		if len(c.data) < 2 {
@@ -51,7 +51,7 @@ func validateCell(c *Cell, refsMode refMode) error {
 			return fmt.Errorf("not enough data for a pruned branch special cell")
 		}
 	case LibraryCellType:
-		if _, err := specialCellRefs(c, typ, refsMode); err != nil {
+		if _, err := specialCellRefs(c, typ, loadRefs); err != nil {
 			return err
 		}
 		if c.bitsSz != 8+256 {
@@ -61,7 +61,7 @@ func validateCell(c *Cell, refsMode refMode) error {
 		if c.bitsSz != 8+(hashSize+depthSize)*8 {
 			return fmt.Errorf("not enough data for a merkle proof special cell")
 		}
-		refs, err := specialCellRefs(c, typ, refsMode)
+		refs, err := specialCellRefs(c, typ, loadRefs)
 		if err != nil {
 			return err
 		}
@@ -80,7 +80,7 @@ func validateCell(c *Cell, refsMode refMode) error {
 		if c.bitsSz != 8+(hashSize+depthSize)*8*2 {
 			return fmt.Errorf("not enough data for a merkle update special cell")
 		}
-		refs, err := specialCellRefs(c, typ, refsMode)
+		refs, err := specialCellRefs(c, typ, loadRefs)
 		if err != nil {
 			return err
 		}
@@ -110,7 +110,7 @@ func validateCell(c *Cell, refsMode refMode) error {
 	return nil
 }
 
-func specialCellRefs(c *Cell, typ Type, refsMode refMode) ([2]*Cell, error) {
+func specialCellRefs(c *Cell, typ Type, loadRefs bool) ([2]*Cell, error) {
 	var refs [2]*Cell
 
 	switch typ {
@@ -127,9 +127,15 @@ func specialCellRefs(c *Cell, typ Type, refsMode refMode) ([2]*Cell, error) {
 			return refs, fmt.Errorf("wrong references count for a merkle proof special cell")
 		}
 		refView := newCellRefView(c)
-		ref, err := refView.refAt(0, refsMode)
+		ref, err := refView.boundaryRef(0)
 		if err != nil {
-			return refs, fmt.Errorf("failed to load merkle proof ref: %w", err)
+			return refs, fmt.Errorf("failed to peek merkle proof ref: %w", err)
+		}
+		if loadRefs {
+			ref, err = ref.load()
+			if err != nil {
+				return refs, fmt.Errorf("failed to load merkle proof ref: %w", err)
+			}
 		}
 		refs[0] = ref
 	case MerkleUpdateCellType:
@@ -137,13 +143,23 @@ func specialCellRefs(c *Cell, typ Type, refsMode refMode) ([2]*Cell, error) {
 			return refs, fmt.Errorf("wrong references count for a merkle update special cell")
 		}
 		refView := newCellRefView(c)
-		left, err := refView.refAt(0, refsMode)
+		left, err := refView.boundaryRef(0)
 		if err != nil {
-			return refs, fmt.Errorf("failed to load merkle update first ref: %w", err)
+			return refs, fmt.Errorf("failed to peek merkle update first ref: %w", err)
 		}
-		right, err := refView.refAt(1, refsMode)
+		right, err := refView.boundaryRef(1)
 		if err != nil {
-			return refs, fmt.Errorf("failed to load merkle update second ref: %w", err)
+			return refs, fmt.Errorf("failed to peek merkle update second ref: %w", err)
+		}
+		if loadRefs {
+			left, err = left.load()
+			if err != nil {
+				return refs, fmt.Errorf("failed to load merkle update first ref: %w", err)
+			}
+			right, err = right.load()
+			if err != nil {
+				return refs, fmt.Errorf("failed to load merkle update second ref: %w", err)
+			}
 		}
 		refs[0], refs[1] = left, right
 	default:

@@ -178,14 +178,14 @@ func TestTVMCrossEmulatorTonOpsEdgeCandidates(t *testing.T) {
 		{
 			name:  "sdatasizeq_limit_zero",
 			code:  codeFromBuilders(t, funcsop.SDATASIZEQ().Serialize()),
-			stack: []any{dataSizeRoot.BeginParse(), int64(0)},
+			stack: []any{dataSizeRoot.MustBeginParse(), int64(0)},
 			exit:  0,
 			c7:    feeC7,
 		},
 		{
 			name:  "sdatasize_limit_zero",
 			code:  codeFromBuilders(t, funcsop.SDATASIZE().Serialize()),
-			stack: []any{dataSizeRoot.BeginParse(), int64(0)},
+			stack: []any{dataSizeRoot.MustBeginParse(), int64(0)},
 			exit:  int32(vmerr.CodeCellOverflow),
 			c7:    feeC7,
 		},

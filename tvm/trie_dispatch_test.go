@@ -14,7 +14,7 @@ func TestTVMStepUsesBitTrieForNonByteAlignedOpcode(t *testing.T) {
 	machine := NewTVM()
 
 	state := &vm.State{
-		CurrentCode: opstack.PUSHCTR(0).Serialize().EndCell().BeginParse(),
+		CurrentCode: opstack.PUSHCTR(0).Serialize().EndCell().MustBeginParse(),
 		Reg: vm.Register{
 			C: [4]vm.Continuation{
 				&vm.QuitContinuation{ExitCode: 7},
@@ -44,7 +44,7 @@ func TestTVMStepUsesBitTrieForNonByteAlignedOpcode(t *testing.T) {
 
 func TestTVMRegistersSDBEGINSConstPrefix(t *testing.T) {
 	machine := NewTVM()
-	code := opcellslice.SDBEGINSCONST(cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().BeginParse(), false).Serialize().EndCell().BeginParse()
+	code := opcellslice.SDBEGINSCONST(cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().MustBeginParse(), false).Serialize().EndCell().MustBeginParse()
 
 	if got := machine.matchOpcode(code); got == nil {
 		t.Fatal("expected SDBEGINS const opcode to be registered in trie")
@@ -57,7 +57,7 @@ func TestTVMMatchesWalletTraceSDBEGINSConstOpcode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode trace opcode: %v", err)
 	}
-	code := cell.BeginCell().MustStoreSlice(raw, 352).EndCell().BeginParse()
+	code := cell.BeginCell().MustStoreSlice(raw, 352).EndCell().MustBeginParse()
 
 	if got := machine.matchOpcode(code); got == nil {
 		t.Fatal("expected wallet trace D728 opcode to be registered in trie")
@@ -66,7 +66,7 @@ func TestTVMMatchesWalletTraceSDBEGINSConstOpcode(t *testing.T) {
 
 func TestTVMMatchesF88111AsInMsgParams(t *testing.T) {
 	machine := NewTVM()
-	code := cell.BeginCell().MustStoreUInt(0xF88111, 24).EndCell().BeginParse()
+	code := cell.BeginCell().MustStoreUInt(0xF88111, 24).EndCell().MustBeginParse()
 
 	getter := machine.matchOpcode(code)
 	if getter == nil {

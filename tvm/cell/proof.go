@@ -9,16 +9,27 @@ import (
 
 type cellHash = []byte
 
+// ProofSkeleton describes the old manual Merkle proof selection tree.
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 type ProofSkeleton struct {
 	recursive bool
 	branches  [4]*ProofSkeleton
 }
 
+// CreateProofSkeleton creates the old manual Merkle proof selection tree.
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 func CreateProofSkeleton() *ProofSkeleton {
 	return &ProofSkeleton{}
 }
 
 // ProofRef - include ref with index i to proof
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 func (s *ProofSkeleton) ProofRef(i int) *ProofSkeleton {
 	if s.branches[i] == nil {
 		s.branches[i] = &ProofSkeleton{}
@@ -27,16 +38,25 @@ func (s *ProofSkeleton) ProofRef(i int) *ProofSkeleton {
 }
 
 // SetRecursive - include all underlying refs recursively in ordinary form to proof
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 func (s *ProofSkeleton) SetRecursive() {
 	s.recursive = true
 }
 
 // AttachAt - attach skeleton chain at specific ref slot
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 func (s *ProofSkeleton) AttachAt(i int, sk *ProofSkeleton) {
 	s.branches[i] = sk
 }
 
 // Merge - merge 2 proof chains in a single proof tree
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 func (s *ProofSkeleton) Merge(sk *ProofSkeleton) {
 	for i, v := range sk.branches {
 		if v == nil {
@@ -56,6 +76,10 @@ func (s *ProofSkeleton) Merge(sk *ProofSkeleton) {
 	}
 }
 
+// Copy returns a shallow copy of the old manual Merkle proof selection tree.
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 func (s *ProofSkeleton) Copy() *ProofSkeleton {
 	return &ProofSkeleton{
 		recursive: s.recursive,
@@ -63,7 +87,15 @@ func (s *ProofSkeleton) Copy() *ProofSkeleton {
 	}
 }
 
+// CreateProof creates a Merkle proof from the old manual proof skeleton.
+//
+// Deprecated: use NewMerkleProofBuilder with traced cell loads, or
+// Cell.CreateUsageProof with CellUsageTree.
 func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
+	if c.Level() != 0 {
+		return nil, fmt.Errorf("failed to build proof for cell: level is not 0")
+	}
+
 	body, err := buildProofBody(c, skeleton, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
@@ -100,7 +132,7 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 	refView := newCellRefView(c)
 	childDepth := merkleChildDepth(c, merkleDepth)
 	for i := 0; i < refCnt; i++ {
-		ref, err := refView.resolvedRef(i)
+		ref, err := refView.boundaryRef(i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
 		}
@@ -109,19 +141,31 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 			next *Cell
 		)
 		if skeleton.recursive {
+			ref, err = ref.load()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
+			}
 			next, err = buildProofBody(ref, skeleton, childDepth)
 			if err != nil {
 				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
 		} else if skeleton.branches[i] != nil {
+			ref, err = ref.load()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
+			}
 			next, err = buildProofBody(ref, skeleton.branches[i], childDepth)
 			if err != nil {
 				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
 		} else {
-			next, err = createPrunedBranchFromCell(ref, childDepth+1)
-			if err != nil {
-				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
+			if ref.GetType() == PrunedCellType {
+				next = ref
+			} else {
+				next, err = createPrunedBranchFromCell(ref, childDepth+1)
+				if err != nil {
+					return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
+				}
 			}
 		}
 		refs[i] = next
@@ -172,7 +216,7 @@ func UnwrapProof(proof *Cell, hash []byte) (*Cell, error) {
 	}
 
 	refView := newCellRefView(proof)
-	body, err := refView.resolvedRef(0)
+	body, err := refView.boundaryRef(0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load proof body: %w", err)
 	}

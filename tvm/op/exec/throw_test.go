@@ -14,7 +14,7 @@ import (
 func setThrowImmediate(t *testing.T, op *helpers.AdvancedOP, bits uint, value uint64) {
 	t.Helper()
 
-	slice := cell.BeginCell().MustStoreUInt(value, bits).EndCell().BeginParse()
+	slice := cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse()
 	if err := op.DeserializeSuffix(slice); err != nil {
 		t.Fatalf("set immediate: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestThrowFixedSerialization(t *testing.T) {
 			t.Fatalf("unexpected mnemonic: %s", got)
 		}
 
-		val := op.Serialize().EndCell().BeginParse().MustLoadUInt(16)
+		val := op.Serialize().EndCell().MustBeginParse().MustLoadUInt(16)
 		if val != 0xF237 {
 			t.Fatalf("expected machine encoding 0xF237, got %#x", val)
 		}
@@ -80,7 +80,7 @@ func TestThrowFixedSerialization(t *testing.T) {
 			t.Fatalf("unexpected mnemonic: %s", got)
 		}
 
-		val := op.Serialize().EndCell().BeginParse().MustLoadUInt(24)
+		val := op.Serialize().EndCell().MustBeginParse().MustLoadUInt(24)
 		if val != 0xF2CB45 {
 			t.Fatalf("expected machine encoding 0xF2CB45, got %#x", val)
 		}
@@ -645,7 +645,7 @@ func TestThrowAnyRejectsInvalidDuplicateEncodings(t *testing.T) {
 	for _, suffix := range []uint64{6, 7} {
 		t.Run(big.NewInt(int64(suffix)).String(), func(t *testing.T) {
 			op := newThrowAny()
-			code := cell.BeginCell().MustStoreUInt(0xf2f0|suffix, 16).EndCell().BeginParse()
+			code := cell.BeginCell().MustStoreUInt(0xf2f0|suffix, 16).EndCell().MustBeginParse()
 			if err := op.Deserialize(code); !errors.Is(err, vm.ErrCorruptedOpcode) {
 				t.Fatalf("deserialize suffix %d = %v, want corrupted opcode", suffix, err)
 			}

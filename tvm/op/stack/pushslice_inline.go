@@ -24,7 +24,7 @@ func paddedInlineBits(actual uint, mod uint) uint {
 }
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return PUSHSLICEINLINE(cell.BeginCell().EndCell().BeginParse()) })
+	vm.List = append(vm.List, func() vm.OP { return PUSHSLICEINLINE(cell.BeginCell().EndCell().MustBeginParse()) })
 }
 
 func PUSHSLICEINLINE(value *cell.Slice) *OpPUSHSLICEINLINE {
@@ -164,7 +164,7 @@ func (op *OpPUSHSLICEINLINE) Serialize() *cell.Builder {
 func (op *OpPUSHSLICEINLINE) SerializeText() string {
 	str := "???"
 	if op.value != nil {
-		str = op.value.WithoutObserver().MustToCell().Dump()
+		str = op.value.WithoutTrace().MustToCell().Dump()
 	}
 	return fmt.Sprintf("%s PUSHSLICE", str)
 }

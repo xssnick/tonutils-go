@@ -27,7 +27,7 @@ func TestBinTreeWalkAndGet(t *testing.T) {
 	root := makeBinTreeFork(makeBinTreeLeaf(leftValue), makeBinTreeLeaf(rightValue))
 
 	var tree BinTree
-	if err := LoadFromCell(&tree, root.BeginParse()); err != nil {
+	if err := LoadFromCell(&tree, root.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,7 +90,7 @@ func TestBinTreePrunedLeafCompatibility(t *testing.T) {
 	}
 
 	var tree BinTree
-	if err = LoadFromCell(&tree, prunedRoot.BeginParse()); err != nil {
+	if err = LoadFromCell(&tree, prunedRoot.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -127,7 +127,7 @@ func TestBinTreeMalformedForkDoesNotPanic(t *testing.T) {
 		EndCell()
 
 	var tree BinTree
-	if err := LoadFromCell(&tree, malformed.BeginParse()); err != nil {
+	if err := LoadFromCell(&tree, malformed.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 

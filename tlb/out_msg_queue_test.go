@@ -27,7 +27,7 @@ func TestMsgEnvelopeV2Metadata(t *testing.T) {
 		EndCell()
 
 	var parsed MsgEnvelope
-	if err := parsed.LoadFromCell(envelope.BeginParse()); err != nil {
+	if err := parsed.LoadFromCell(envelope.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if parsed.Msg == nil || !bytes.Equal(parsed.Msg.Hash(), msg.Hash()) {
@@ -52,7 +52,7 @@ func TestMsgMetadataRejectsAnycast(t *testing.T) {
 		EndCell()
 
 	var parsed MsgMetadata
-	if err := parsed.LoadFromCell(metadata.BeginParse()); err == nil {
+	if err := parsed.LoadFromCell(metadata.MustBeginParse()); err == nil {
 		t.Fatal("expected anycast metadata initiator to be rejected")
 	}
 }
@@ -64,7 +64,7 @@ func TestMsgEnvelopeRejectsNonRegularIntermediateAddress(t *testing.T) {
 		EndCell()
 
 	var parsed MsgEnvelope
-	if err := parsed.LoadFromCell(envelope.BeginParse()); err == nil {
+	if err := parsed.LoadFromCell(envelope.MustBeginParse()); err == nil {
 		t.Fatal("expected non-regular intermediate address to be rejected")
 	}
 }

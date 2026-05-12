@@ -40,7 +40,7 @@ func TestContinuationImplementations(t *testing.T) {
 		Data: ControlData{
 			Save: Register{C: [4]Continuation{nil, &QuitContinuation{ExitCode: 33}}},
 		},
-		Code: cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse(),
+		Code: cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse(),
 	}
 	if ordinary.GetControlData() == nil {
 		t.Fatal("ordinary continuation should expose control data")
@@ -224,7 +224,7 @@ func TestLoopContinuations(t *testing.T) {
 
 func TestExecHelpers(t *testing.T) {
 	state := &State{
-		CurrentCode: cell.BeginCell().MustStoreUInt(0x11, 8).EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().MustStoreUInt(0x11, 8).EndCell().MustBeginParse(),
 		Stack:       NewStack(),
 	}
 	state.Reg.C[0] = &QuitContinuation{ExitCode: 9}
@@ -252,11 +252,11 @@ func TestExecHelpers(t *testing.T) {
 	}
 
 	callState := &State{
-		CurrentCode: cell.BeginCell().MustStoreUInt(0x12, 8).EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().MustStoreUInt(0x12, 8).EndCell().MustBeginParse(),
 		Stack:       NewStack(),
 	}
 	target := &OrdinaryContinuation{
-		Code: cell.BeginCell().MustStoreUInt(0x34, 8).EndCell().BeginParse(),
+		Code: cell.BeginCell().MustStoreUInt(0x34, 8).EndCell().MustBeginParse(),
 	}
 	if err := callState.Call(target); err != nil {
 		t.Fatalf("simple call: %v", err)
@@ -273,13 +273,13 @@ func TestExecHelpers(t *testing.T) {
 	}
 
 	complexCallState := &State{
-		CurrentCode: cell.BeginCell().MustStoreUInt(0x13, 8).EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().MustStoreUInt(0x13, 8).EndCell().MustBeginParse(),
 		Stack:       NewStack(),
 	}
 	pushInts(t, complexCallState.Stack, 1, 2)
 	if err := complexCallState.Call(&OrdinaryContinuation{
 		Data: ControlData{NumArgs: 1, CP: CP},
-		Code: cell.BeginCell().MustStoreUInt(0x35, 8).EndCell().BeginParse(),
+		Code: cell.BeginCell().MustStoreUInt(0x35, 8).EndCell().MustBeginParse(),
 	}); err != nil {
 		t.Fatalf("complex call: %v", err)
 	}
@@ -288,14 +288,14 @@ func TestExecHelpers(t *testing.T) {
 	}
 
 	jumpState := &State{
-		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().EndCell().MustBeginParse(),
 		Stack:       NewStack(),
 	}
 	jumpTarget := &OrdinaryContinuation{
 		Data: ControlData{
 			Save: Register{C: [4]Continuation{&QuitContinuation{ExitCode: 77}}},
 		},
-		Code: cell.BeginCell().MustStoreUInt(0x56, 8).EndCell().BeginParse(),
+		Code: cell.BeginCell().MustStoreUInt(0x56, 8).EndCell().MustBeginParse(),
 	}
 	if err := jumpState.Jump(jumpTarget); err != nil {
 		t.Fatalf("simple jump: %v", err)
@@ -314,7 +314,7 @@ func TestExecHelpers(t *testing.T) {
 	}
 
 	extractState := &State{
-		CurrentCode: cell.BeginCell().MustStoreUInt(0x78, 8).EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().MustStoreUInt(0x78, 8).EndCell().MustBeginParse(),
 		Stack:       NewStack(),
 	}
 	pushInts(t, extractState.Stack, 1, 2, 3)
@@ -339,7 +339,7 @@ func TestExecHelpers(t *testing.T) {
 	}
 
 	extractAllState := &State{
-		CurrentCode: cell.BeginCell().MustStoreUInt(0x79, 8).EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().MustStoreUInt(0x79, 8).EndCell().MustBeginParse(),
 		Stack:       NewStack(),
 	}
 	pushInts(t, extractAllState.Stack, 4, 5)

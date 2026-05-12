@@ -21,7 +21,7 @@ func TestText(t *testing.T) {
 		}
 
 		txt2 := Text{}
-		err = LoadFromCell(&txt2, cl.BeginParse())
+		err = LoadFromCell(&txt2, cl.MustBeginParse())
 		if err != nil {
 			t.Fatal(err)
 		}

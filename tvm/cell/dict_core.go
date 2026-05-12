@@ -2,17 +2,17 @@ package cell
 
 import "fmt"
 
-func (c *Slice) loadMaybeRefCellWithNode() (*Cell, TraceNode, bool, error) {
+func (c *Slice) loadMaybeRefCell() (*Cell, bool, error) {
 	has, err := c.LoadBoolBit()
 	if err != nil {
-		return nil, 0, false, err
+		return nil, false, err
 	}
 	if !has {
-		return nil, 0, false, nil
+		return nil, false, nil
 	}
 
-	ref, node, err := c.LoadRefCellWithNode()
-	return ref, node, true, err
+	ref, err := c.LoadRefCell()
+	return ref, true, err
 }
 
 type fixedDictNode struct {
@@ -23,23 +23,22 @@ type fixedDictNode struct {
 	labelLen uint
 }
 
-func parseFixedDictNode(branch *Cell, remaining uint, beginParse func(*Cell) *Slice) (fixedDictNode, error) {
-	refView := newCellRefView(branch)
-	if branch.IsSpecial() {
-		return fixedDictNode{cell: branch, refView: refView}, nil
+func parseFixedDictNode(branch *Cell, remaining uint) (fixedDictNode, error) {
+	loader, err := branch.BeginParse()
+	if err != nil {
+		return fixedDictNode{}, err
 	}
-	if beginParse == nil {
-		beginParse = (*Cell).BeginParse
+	refView := newCellRefView(loader.cell)
+	if loader.cell.IsSpecial() {
+		return fixedDictNode{cell: loader.cell, refView: refView, loader: loader}, nil
 	}
-
-	loader := beginParse(branch)
 	labelLen, label, err := loadLabel(remaining, loader, BeginCell())
 	if err != nil {
 		return fixedDictNode{}, err
 	}
 
 	return fixedDictNode{
-		cell:     branch,
+		cell:     loader.cell,
 		refView:  refView,
 		loader:   loader,
 		label:    label,
@@ -55,21 +54,33 @@ func (n fixedDictNode) nextKeyBits(remaining uint) uint {
 	return remaining - n.labelLen - 1
 }
 
-func (n *fixedDictNode) resolvedRef(i int) (*Cell, error) {
-	return n.refView.resolvedRef(i)
-}
-
-func (n *fixedDictNode) boundaryRef(i int) (*Cell, error) {
+func (n *fixedDictNode) ref(i int) (*Cell, error) {
+	if n.loader != nil {
+		return n.loader.peekRefCellAt(i)
+	}
 	return n.refView.boundaryRef(i)
 }
 
-func (n *fixedDictNode) resolvedRefs() (*Cell, *Cell, error) {
-	left, err := n.resolvedRef(0)
+func (n *fixedDictNode) boundaryRef(i int) (*Cell, error) {
+	if n.loader != nil {
+		if i < 0 {
+			return nil, ErrNegative
+		}
+		if i >= n.loader.RefsNum() {
+			return nil, ErrNoMoreRefs
+		}
+		return n.loader.withChildTrace(n.loader.boundaryRefCellAt(i), int(n.loader.refStart)+i), nil
+	}
+	return n.refView.boundaryRef(i)
+}
+
+func (n *fixedDictNode) refs() (*Cell, *Cell, error) {
+	left, err := n.ref(0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load left ref: %w", err)
 	}
 
-	right, err := n.resolvedRef(1)
+	right, err := n.ref(1)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load right ref: %w", err)
 	}
@@ -105,8 +116,8 @@ func (n fixedDictNode) requireAugmentedBody(kind string) error {
 	return nil
 }
 
-func (n *fixedDictNode) cloneWithRef(i int, ref *Cell, observer Observer) (*Cell, bool, error) {
-	return n.refView.cloneWithRef(i, ref, observer)
+func (n *fixedDictNode) cloneWithRef(i int, ref *Cell, trace *Trace) (*Cell, bool, error) {
+	return n.refView.cloneWithRef(i, ref, trace)
 }
 
 func (n fixedDictNode) splitLabel(matched uint) (*Slice, *Slice, error) {
@@ -115,7 +126,7 @@ func (n fixedDictNode) splitLabel(matched uint) (*Slice, *Slice, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load label prefix: %w", err)
 	}
-	if err = label.Advance(1); err != nil {
+	if err = label.SkipBits(1); err != nil {
 		return nil, nil, fmt.Errorf("failed to skip label edge bit: %w", err)
 	}
 

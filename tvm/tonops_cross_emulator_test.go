@@ -796,14 +796,14 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		{
 			name:  "sdatasize",
 			code:  codeFromBuilders(t, funcsop.SDATASIZE().Serialize()),
-			stack: []any{dataSizeRoot.BeginParse(), int64(10)},
+			stack: []any{dataSizeRoot.MustBeginParse(), int64(10)},
 			exit:  0,
 			c7:    feeC7,
 		},
 		{
 			name:  "sdatasizeq_success",
 			code:  codeFromBuilders(t, funcsop.SDATASIZEQ().Serialize()),
-			stack: []any{dataSizeRoot.BeginParse(), int64(10)},
+			stack: []any{dataSizeRoot.MustBeginParse(), int64(10)},
 			exit:  0,
 			c7:    feeC7,
 		},

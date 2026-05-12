@@ -9,6 +9,8 @@ type CellManager struct {
 	state      *State
 	loaded     map[cell.Hash]struct{}
 	pendingErr error
+	trace      *cell.Trace
+	loadTrace  *cell.Trace
 }
 
 func (m *CellManager) Init(state *State) {
@@ -22,22 +24,65 @@ func (m *CellManager) PendingError() error {
 	return m.pendingErr
 }
 
-func (m *CellManager) OnCellLoad(hash cell.Hash) {
-	if m.pendingErr != nil {
-		return
+func (m *CellManager) Trace() *cell.Trace {
+	if m == nil {
+		return nil
 	}
-	m.pendingErr = m.RegisterCellLoadKey(hash)
+	if m.trace == nil {
+		m.trace = cell.NewTrace(cell.TraceHooks{
+			OnLoad: func(c *cell.Cell) {
+				if m.pendingErr != nil {
+					return
+				}
+				m.pendingErr = m.RegisterCellLoad(c)
+			},
+			OnCreate: func() {
+				if m.pendingErr != nil {
+					return
+				}
+				m.pendingErr = m.RegisterCellCreate()
+			},
+			OnChild: func(int) *cell.Trace {
+				return m.Trace()
+			},
+			PendingError: m.PendingError,
+		})
+	}
+	return m.trace
 }
 
-func (m *CellManager) OnCellCreate() {
-	if m.pendingErr != nil {
-		return
-	}
-	m.pendingErr = m.RegisterCellCreate()
+func (m *CellManager) TraceAlreadyLoaded() *cell.Trace {
+	gasTrace := m.Trace()
+	return cell.NewTrace(cell.TraceHooks{
+		OnCreate: func() {
+			_ = gasTrace.NotifyCreate()
+		},
+		OnChild: func(refIdx int) *cell.Trace {
+			return gasTrace.Child(refIdx)
+		},
+		PendingError: gasTrace.PendingError,
+	})
 }
 
-func (m *CellManager) OnRef(_ cell.TraceNode, _ int) cell.TraceNode {
-	return 0
+func (m *CellManager) LoadTrace() *cell.Trace {
+	if m == nil {
+		return nil
+	}
+	if m.loadTrace == nil {
+		m.loadTrace = cell.NewTrace(cell.TraceHooks{
+			OnLoad: func(c *cell.Cell) {
+				if m.pendingErr != nil {
+					return
+				}
+				m.pendingErr = m.RegisterCellLoad(c)
+			},
+			OnChild: func(int) *cell.Trace {
+				return m.LoadTrace()
+			},
+			PendingError: m.PendingError,
+		})
+	}
+	return m.loadTrace
 }
 
 func (m *CellManager) RegisterCellLoad(cl *cell.Cell) error {
@@ -63,8 +108,77 @@ func (m *CellManager) RegisterCellLoadKey(key cell.Hash) error {
 	return m.state.ConsumeGas(CellReloadGasPrice)
 }
 
+func (m *CellManager) IsCellLoaded(cl *cell.Cell) bool {
+	if cl == nil {
+		return false
+	}
+	return m.IsCellLoadedKey(cl.HashKey())
+}
+
+func (m *CellManager) IsCellLoadedKey(key cell.Hash) bool {
+	if m == nil || m.loaded == nil {
+		return false
+	}
+	_, ok := m.loaded[key]
+	return ok
+}
+
 func (m *CellManager) RegisterCellCreate() error {
+	if m == nil || m.state == nil {
+		return nil
+	}
 	return m.state.ConsumeGas(CellCreateGasPrice)
+}
+
+func (m *CellManager) beginParseWithGasTrace(cl *cell.Cell, alreadyLoaded bool) (*cell.Slice, error) {
+	gasTrace := m.Trace()
+	cellTrace := cl.Trace().WithoutTrace(gasTrace)
+	withGas := cell.CombineTraces(cellTrace, gasTrace)
+
+	var sl *cell.Slice
+	var err error
+	if alreadyLoaded {
+		sl, err = cl.WithTrace(cellTrace).BeginParse()
+		if err != nil {
+			return nil, err
+		}
+		sl.SetTrace(withGas)
+	} else {
+		sl, err = cl.WithTrace(withGas).BeginParse()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := withGas.PendingError(); err != nil {
+		return nil, err
+	}
+	return sl, nil
+}
+
+func (m *CellManager) BeginParseAlreadyLoadedRaw(cl *cell.Cell) (*cell.Slice, error) {
+	sl, err := m.beginParseWithGasTrace(cl, true)
+	if err != nil {
+		return nil, err
+	}
+	return sl, nil
+}
+
+func (m *CellManager) BeginParseAlreadyLoadedNoCreate(cl *cell.Cell) (*cell.Slice, error) {
+	gasTrace := m.Trace()
+	loadTrace := m.LoadTrace()
+	cellTrace := cl.Trace().WithoutTrace(gasTrace).WithoutTrace(loadTrace)
+	withLoad := cell.CombineTraces(cellTrace, loadTrace)
+
+	sl, err := cl.WithTrace(cellTrace).BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	sl.SetTrace(withLoad)
+	if err := withLoad.PendingError(); err != nil {
+		return nil, err
+	}
+	return sl, nil
 }
 
 func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, currentAlreadyLoaded bool) (*cell.Slice, bool, error) {
@@ -75,21 +189,35 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 		if current == nil {
 			return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load cell")
 		}
-		if !currentAlreadyLoaded && !libraryLoaded {
-			if err := m.RegisterCellLoad(current); err != nil {
-				return nil, false, err
-			}
-		}
+		alreadyLoaded := currentAlreadyLoaded || libraryLoaded
 		currentAlreadyLoaded = false
+		var loadedSlice *cell.Slice
 
 		if current.GetType() == cell.PrunedCellType && current.IsVirtualized() && current.EffectiveLevel() < current.ActualLevel() {
 			return nil, false, vmerr.Virtualization(1)
 		}
+		if current.IsLazy() {
+			sl, err := m.beginParseWithGasTrace(current, alreadyLoaded)
+			if err != nil {
+				return nil, false, err
+			}
+			loadedSlice = sl
+			current = sl.BaseCell()
+			alreadyLoaded = true
+		}
 		if allowSpecial {
-			return current.BeginParse().SetObserver(m), current.IsSpecial(), nil
+			if loadedSlice != nil {
+				return loadedSlice, current.IsSpecial(), nil
+			}
+			sl, err := m.beginParseWithGasTrace(current, alreadyLoaded)
+			return sl, current.IsSpecial(), err
 		}
 		if !current.IsSpecial() {
-			return current.BeginParse().SetObserver(m), false, nil
+			if loadedSlice != nil {
+				return loadedSlice, false, nil
+			}
+			sl, err := m.beginParseWithGasTrace(current, alreadyLoaded)
+			return sl, false, err
 		}
 
 		switch current.GetType() {
@@ -98,7 +226,14 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 				return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell: recursive library cells are not allowed")
 			}
 
-			libSlice := current.BeginParse()
+			libSlice := loadedSlice
+			if libSlice == nil {
+				var err error
+				libSlice, err = m.beginParseWithGasTrace(current, alreadyLoaded)
+				if err != nil {
+					return nil, false, err
+				}
+			}
 			if _, err := libSlice.LoadUInt(8); err != nil {
 				return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
 			}
@@ -116,8 +251,18 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 			libraryLoaded = true
 			current = resolved
 		case cell.PrunedCellType:
+			if loadedSlice == nil {
+				if _, err := m.beginParseWithGasTrace(current, alreadyLoaded); err != nil {
+					return nil, false, err
+				}
+			}
 			return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "trying to load pruned cell")
 		default:
+			if loadedSlice == nil {
+				if _, err := m.beginParseWithGasTrace(current, alreadyLoaded); err != nil {
+					return nil, false, err
+				}
+			}
 			return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "unexpected special cell")
 		}
 	}

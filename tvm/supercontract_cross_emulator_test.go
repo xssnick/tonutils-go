@@ -1061,7 +1061,7 @@ func buildFeeSuperContractSteps(t *testing.T) []superContractStep {
 		pushIntStep("pushint 1", 1),
 		opStep("cdatasizeq", funcsop.CDATASIZEQ().Serialize()),
 		opStep("drop", stackop.DROP().Serialize()),
-		pushSliceStep("push datasize slice", dataSizeRoot.BeginParse()),
+		pushSliceStep("push datasize slice", dataSizeRoot.MustBeginParse()),
 		pushIntStep("pushint 10", 10),
 		opStep("sdatasize", funcsop.SDATASIZE().Serialize()),
 		opStep("drop", stackop.DROP().Serialize()),

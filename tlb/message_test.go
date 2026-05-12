@@ -35,7 +35,7 @@ func TestInternalMessage_ToCell(t *testing.T) { // need to deploy contract on te
 	}
 
 	var intMsg2 InternalMessage
-	err = LoadFromCell(&intMsg2, c.BeginParse())
+	err = LoadFromCell(&intMsg2, c.MustBeginParse())
 	if err != nil {
 		t.Fatal("from cell err", err)
 	}
@@ -62,7 +62,7 @@ func TestCornerMessage(t *testing.T) {
 	}
 
 	var m InternalMessage
-	err = LoadFromCell(&m, c.BeginParse())
+	err = LoadFromCell(&m, c.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestMessage_LoadFromCell(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = msg.LoadFromCell(_cell.BeginParse())
+		err = msg.LoadFromCell(_cell.MustBeginParse())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestMessage_LoadFromCell(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = msg.LoadFromCell(_cell.BeginParse())
+		err = msg.LoadFromCell(_cell.MustBeginParse())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +142,7 @@ func TestMessage_LoadFromCell(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = msg.LoadFromCell(_cell.BeginParse())
+		err = msg.LoadFromCell(_cell.MustBeginParse())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +157,7 @@ func TestMessage_NormalizedHash(t *testing.T) {
 	c, _ := cell.FromBOC(data)
 
 	var msg ExternalMessageIn
-	if err := LoadFromCell(&msg, c.BeginParse()); err != nil {
+	if err := LoadFromCell(&msg, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 

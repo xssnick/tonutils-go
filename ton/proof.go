@@ -38,7 +38,7 @@ func CheckShardMcStateExtraProof(master *BlockIDExt, shardProof []*cell.Cell) (*
 	}
 
 	var stateExtra tlb.McStateExtra
-	err = tlb.LoadFromCell(&stateExtra, shardState.McStateExtra.BeginParse())
+	err = tlb.LoadFromCell(&stateExtra, shardState.McStateExtra.MustBeginParse())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load masterchain state extra: %w", err)
 	}
@@ -85,7 +85,7 @@ func CheckBlockShardStateProof(proof []*cell.Cell, blockRootHash []byte) (*tlb.S
 	}
 
 	var shardState tlb.ShardStateUnsplit
-	if err = tlb.LoadFromCellAsProof(&shardState, shardStateProofData.BeginParse(), false); err != nil {
+	if err = tlb.LoadFromCellAsProof(&shardState, shardStateProofData.MustBeginParse(), false); err != nil {
 		return nil, fmt.Errorf("failed to parse ShardStateUnsplit: %w", err)
 	}
 
@@ -99,7 +99,7 @@ func CheckBlockProof(proof *cell.Cell, blockRootHash []byte) (*tlb.Block, error)
 	}
 
 	var block tlb.Block
-	if err := tlb.LoadFromCellAsProof(&block, blockProof.BeginParse(), false); err != nil {
+	if err := tlb.LoadFromCellAsProof(&block, blockProof.MustBeginParse(), false); err != nil {
 		return nil, fmt.Errorf("failed to parse Block: %w", err)
 	}
 
@@ -129,7 +129,7 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 			return nil, nil, fmt.Errorf("incorrect block proof: %w", err)
 		}
 	} else {
-		shardStateProofData, err := stateProof[1].BeginParse().LoadRef()
+		shardStateProofData, err := stateProof[1].MustBeginParse().LoadRef()
 		if err != nil {
 			return nil, nil, fmt.Errorf("shard state proof should have ref: %w", err)
 		}
@@ -230,7 +230,7 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 	}
 
 	var info tlb.McStateExtraBlockInfo
-	err = tlb.LoadFromCellAsProof(&info, stateExtra.Info.BeginParse())
+	err = tlb.LoadFromCellAsProof(&info, stateExtra.Info.MustBeginParse())
 	if err != nil {
 		return fmt.Errorf("failed to load tx CurrencyCollection proof cell: %w", err)
 	}
@@ -316,12 +316,12 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 	}
 
 	var catchainCfg tlb.CatchainConfig
-	if err = tlb.LoadFromCell(&catchainCfg, catchainCfgCell.BeginParse()); err != nil {
+	if err = tlb.LoadFromCell(&catchainCfg, catchainCfgCell.MustBeginParse()); err != nil {
 		return fmt.Errorf("failed to parse catchain config: %w", err)
 	}
 
 	var blockValidators tlb.ValidatorSetAny
-	if err = tlb.LoadFromCell(&blockValidators, blockValidatorsCell.BeginParse()); err != nil {
+	if err = tlb.LoadFromCell(&blockValidators, blockValidatorsCell.MustBeginParse()); err != nil {
 		return fmt.Errorf("failed to parse validators config: %w", err)
 	}
 

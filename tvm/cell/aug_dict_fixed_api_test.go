@@ -7,7 +7,7 @@ func mustCollectAugKeys(t *testing.T, items []AugDictItem, bits uint) []uint64 {
 
 	keys := make([]uint64, len(items))
 	for i, item := range items {
-		keys[i] = item.Key.BeginParse().MustLoadUInt(bits)
+		keys[i] = item.Key.MustBeginParse().MustLoadUInt(bits)
 	}
 	return keys
 }
@@ -57,7 +57,7 @@ func TestAugmentedDictionary_RangeNearestCheckAndTraverse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := key.BeginParse().MustLoadUInt(8); got != 0x11 {
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0x11 {
 		t.Fatalf("unexpected nearest key: %x", got)
 	}
 	value, extra, err := dict.decomposeValueExtra(valueExtra)
@@ -100,7 +100,7 @@ func TestAugmentedDictionary_RangeNearestCheckAndTraverse(t *testing.T) {
 		if value == nil {
 			return 6, nil
 		}
-		if keyPrefix.BeginParse().MustLoadUInt(8) == 0x11 {
+		if keyPrefix.MustBeginParse().MustLoadUInt(8) == 0x11 {
 			return 1, nil
 		}
 		return 0, nil

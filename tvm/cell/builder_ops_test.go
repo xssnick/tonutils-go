@@ -2,18 +2,8 @@ package cell
 
 import "testing"
 
-type builderOpsObserver struct {
+type builderOpsTrace struct {
 	created int
-}
-
-func (o *builderOpsObserver) OnCellLoad(_ Hash) {}
-
-func (o *builderOpsObserver) OnCellCreate() {
-	o.created++
-}
-
-func (o *builderOpsObserver) OnRef(_ TraceNode, _ int) TraceNode {
-	return 0
 }
 
 func TestBuilderOpsAndCellMeta(t *testing.T) {
@@ -50,7 +40,7 @@ func TestBuilderOpsAndCellMeta(t *testing.T) {
 		}
 
 		cl := b.EndCell()
-		sl := cl.BeginParse()
+		sl := cl.MustBeginParse()
 		for i := 0; i < 70; i++ {
 			if !sl.MustLoadBoolBit() {
 				t.Fatalf("bit %d should be true", i)
@@ -64,15 +54,15 @@ func TestBuilderOpsAndCellMeta(t *testing.T) {
 
 		specBuilder := BeginCell()
 		specBuilder.MustStoreUInt(uint64(LibraryCellType), 8).MustStoreSlice(make([]byte, 32), 256)
-		obs := &builderOpsObserver{}
-		specBuilder.observer = obs
+		tr := &builderOpsTrace{}
+		specBuilder.SetTrace(NewTrace(TraceHooks{OnCreate: func() { tr.created++ }}))
 
 		specCell, err := specBuilder.EndCellSpecial(true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if obs.created != 1 {
-			t.Fatalf("expected observer notification, got %d", obs.created)
+		if tr.created != 1 {
+			t.Fatalf("expected trace notification, got %d", tr.created)
 		}
 		if !specCell.IsSpecial() {
 			t.Fatal("cell should be marked special")

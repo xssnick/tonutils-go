@@ -67,14 +67,14 @@ func TestTVMCrossEmulatorCaughtTryEdges(t *testing.T) {
 			code: tryCode(codeFromBuilders(t,
 				cellsliceop.LDU(8).Serialize(),
 			)),
-			stack: []any{cell.BeginCell().EndCell().BeginParse(), int64(111)},
+			stack: []any{cell.BeginCell().EndCell().MustBeginParse(), int64(111)},
 		},
 		{
 			name: "ldref_underflow",
 			code: tryCode(codeFromBuilders(t,
 				cellsliceop.LDREF().Serialize(),
 			)),
-			stack: []any{cell.BeginCell().MustStoreUInt(0xA, 4).EndCell().BeginParse(), int64(222)},
+			stack: []any{cell.BeginCell().MustStoreUInt(0xA, 4).EndCell().MustBeginParse(), int64(222)},
 		},
 		{
 			name: "dictset_short_key_underflow",
@@ -82,8 +82,8 @@ func TestTVMCrossEmulatorCaughtTryEdges(t *testing.T) {
 				cell.BeginCell().MustStoreUInt(0xF412, 16),
 			)),
 			stack: []any{
-				cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse(),
-				cell.BeginCell().MustStoreUInt(0x1, 4).EndCell().BeginParse(),
+				cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse(),
+				cell.BeginCell().MustStoreUInt(0x1, 4).EndCell().MustBeginParse(),
 				nil,
 				int64(8),
 			},
@@ -95,7 +95,7 @@ func TestTVMCrossEmulatorCaughtTryEdges(t *testing.T) {
 			)),
 			stack: []any{
 				cell.BeginCell().EndCell(),
-				cell.BeginCell().MustStoreUInt(0x1, 4).EndCell().BeginParse(),
+				cell.BeginCell().MustStoreUInt(0x1, 4).EndCell().MustBeginParse(),
 				nil,
 				int64(8),
 			},

@@ -613,7 +613,7 @@ func CreateCommentCell(text string) (*cell.Cell, error) {
 const EncryptedCommentOpcode = 0x2167da4b
 
 func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) ([]byte, error) {
-	slc := commentCell.BeginParse()
+	slc := commentCell.MustBeginParse()
 	op, err := slc.LoadUInt(32)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load op code: %w", err)

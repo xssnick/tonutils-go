@@ -19,7 +19,7 @@ func (b *BinTree) LoadFromCell(loader *cell.Slice) error {
 		return fmt.Errorf("failed to load BinTree: nil slice")
 	}
 
-	root, err := loader.WithoutObserver().ToCell()
+	root, err := loader.WithoutTrace().ToCell()
 	if err != nil {
 		return fmt.Errorf("failed to load BinTree root: %w", err)
 	}
@@ -40,7 +40,7 @@ func (b *BinTree) walk(node *cell.Cell, key *cell.Builder, fn func(key *cell.Cel
 		return fmt.Errorf("failed to load BinTree node: unexpected special cell type %v", node.GetType())
 	}
 
-	sl := node.BeginParse()
+	sl := node.MustBeginParse()
 	typ, err := sl.LoadUInt(1)
 	if err != nil {
 		return fmt.Errorf("failed to load BinTree type flag: %w", err)
@@ -88,7 +88,7 @@ func (b *BinTree) Get(key *cell.Cell) *cell.Cell {
 		return nil
 	}
 
-	path := key.BeginParse()
+	path := key.MustBeginParse()
 	if path.RefsNum() != 0 {
 		return nil
 	}
@@ -109,7 +109,7 @@ func (b *BinTree) Get(key *cell.Cell) *cell.Cell {
 			return nil
 		}
 
-		sl := node.BeginParse()
+		sl := node.MustBeginParse()
 		typ, err := sl.LoadUInt(1)
 		if err != nil {
 			return nil

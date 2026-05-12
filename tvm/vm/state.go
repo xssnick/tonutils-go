@@ -230,15 +230,15 @@ func (s *State) InitForExecution() {
 	}
 	s.Cells.Init(s)
 	if s.Stack != nil {
-		s.Stack.SetObserver(&s.Cells)
+		s.Stack.SetTrace(s.Cells.Trace())
 	}
-	s.Reg.C7 = bindTupleObserver(s.Reg.C7, &s.Cells)
+	s.Reg.C7 = bindTupleTrace(s.Reg.C7, s.Cells.Trace())
 }
 
 func (s *State) PrepareExecution(code *cell.Slice) {
 	s.InitForExecution()
 	if code != nil {
-		s.CurrentCode = code.SetObserver(&s.Cells)
+		s.CurrentCode = code.SetTrace(cell.CombineTraces(code.Trace(), s.Cells.Trace()))
 	}
 }
 
@@ -365,7 +365,7 @@ func (s *State) PushTupleCharged(t tuple.Tuple) error {
 
 func (s *State) SetC7(t tuple.Tuple) error {
 	s.Cells.Init(s)
-	s.Reg.C7 = bindTupleObserver(t, &s.Cells)
+	s.Reg.C7 = bindTupleTrace(t, s.Cells.Trace())
 	return nil
 }
 

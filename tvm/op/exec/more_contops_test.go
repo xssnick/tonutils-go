@@ -121,7 +121,7 @@ func TestRETURNARGSMovesResidualIntoC0Closure(t *testing.T) {
 func TestBLESSARGSCapturesCodeAndStack(t *testing.T) {
 	state := newTestState()
 	state.CP = 7
-	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 
 	if err := state.Stack.PushInt(big.NewInt(99)); err != nil {
 		t.Fatalf("push arg: %v", err)
@@ -165,17 +165,17 @@ func TestSetContAndBlessArgsEncodingMatchesContOps(t *testing.T) {
 	}{
 		{
 			name: "setcontargs_copy1_more_minus1",
-			got:  SETCONTARGS(1, -1).Serialize().EndCell().BeginParse().MustLoadUInt(16),
+			got:  SETCONTARGS(1, -1).Serialize().EndCell().MustBeginParse().MustLoadUInt(16),
 			want: 0xEC1F,
 		},
 		{
 			name: "setcontargs_copy2_more0",
-			got:  SETCONTARGS(2, 0).Serialize().EndCell().BeginParse().MustLoadUInt(16),
+			got:  SETCONTARGS(2, 0).Serialize().EndCell().MustBeginParse().MustLoadUInt(16),
 			want: 0xEC20,
 		},
 		{
 			name: "blessargs_copy3_more5",
-			got:  BLESSARGS(3, 5).Serialize().EndCell().BeginParse().MustLoadUInt(16),
+			got:  BLESSARGS(3, 5).Serialize().EndCell().MustBeginParse().MustLoadUInt(16),
 			want: 0xEE35,
 		},
 	}

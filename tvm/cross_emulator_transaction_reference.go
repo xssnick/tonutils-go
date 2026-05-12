@@ -168,7 +168,7 @@ func runReferenceOrdinaryTransactionWithConfigB64AndOptions(shard *tlb.ShardAcco
 
 func referenceOrdinaryComputePhase(txCell *cell.Cell) (int64, int64, error) {
 	var tx tlb.Transaction
-	if err := tlb.LoadFromCell(&tx, txCell.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
 		return 0, 0, fmt.Errorf("failed to decode reference transaction: %w", err)
 	}
 	desc, ok := tx.Description.(tlb.TransactionDescriptionOrdinary)

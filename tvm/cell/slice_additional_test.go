@@ -22,7 +22,7 @@ func TestSliceLoadAddrVariantsAndPreloadBigInt(t *testing.T) {
 
 		for _, tc := range tests {
 			t.Run(tc.name, func(t *testing.T) {
-				sl := BeginCell().MustStoreAddr(tc.addr).EndCell().BeginParse()
+				sl := BeginCell().MustStoreAddr(tc.addr).EndCell().MustBeginParse()
 				got, err := sl.LoadAddr()
 				if err != nil {
 					t.Fatal(err)
@@ -37,7 +37,7 @@ func TestSliceLoadAddrVariantsAndPreloadBigInt(t *testing.T) {
 					t.Fatalf("unexpected address roundtrip: got=%v want=%v", got, want)
 				}
 
-				sl = BeginCell().MustStoreAddr(tc.addr).EndCell().BeginParse()
+				sl = BeginCell().MustStoreAddr(tc.addr).EndCell().MustBeginParse()
 				got = sl.MustLoadAddr()
 				if got.Type() != want.Type() {
 					t.Fatalf("must-loader returned wrong type: got=%v want=%v", got.Type(), want.Type())
@@ -54,8 +54,7 @@ func TestSliceLoadAddrVariantsAndPreloadBigInt(t *testing.T) {
 			MustStoreSlice([]byte{0b10100000}, 3).
 			MustStoreUInt(0xFF, 8).
 			MustStoreSlice(bytes.Repeat([]byte{0x11}, 32), 256).
-			EndCell().
-			BeginParse()
+			EndCell().MustBeginParse()
 
 		stdAddr, err := stdAnycast.LoadAddr()
 		if err != nil {
@@ -73,8 +72,7 @@ func TestSliceLoadAddrVariantsAndPreloadBigInt(t *testing.T) {
 			MustStoreUInt(20, 9).
 			MustStoreInt(-7, 32).
 			MustStoreSlice([]byte{0xAB, 0xC0, 0x00}, 20).
-			EndCell().
-			BeginParse()
+			EndCell().MustBeginParse()
 
 		varAddr, err := varAnycast.LoadAddr()
 		if err != nil {
@@ -87,7 +85,7 @@ func TestSliceLoadAddrVariantsAndPreloadBigInt(t *testing.T) {
 
 	t.Run("PreloadBigIntAndSnakeErrors", func(t *testing.T) {
 		val := new(big.Int).Neg(big.NewInt(12345))
-		sl := BeginCell().MustStoreBigInt(new(big.Int).Set(val), 32).EndCell().BeginParse()
+		sl := BeginCell().MustStoreBigInt(new(big.Int).Set(val), 32).EndCell().MustBeginParse()
 		before := sl.BitsLeft()
 		preloaded, err := sl.PreloadBigInt(32)
 		if err != nil {
@@ -104,8 +102,8 @@ func TestSliceLoadAddrVariantsAndPreloadBigInt(t *testing.T) {
 			MustStoreSlice([]byte("a"), 8).
 			MustStoreRef(BeginCell().MustStoreSlice([]byte("b"), 8).EndCell()).
 			MustStoreRef(BeginCell().MustStoreSlice([]byte("c"), 8).EndCell()).
-			EndCell().
-			BeginParse()
+			EndCell().MustBeginParse()
+
 		if _, err := badSnake.LoadBinarySnake(); err == nil {
 			t.Fatal("snake with multiple refs should fail")
 		}

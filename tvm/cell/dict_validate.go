@@ -2,13 +2,25 @@ package cell
 
 import "fmt"
 
+const maxDictKeyBits = 1023
+
+func validateDictKeySize(keySz uint) error {
+	if keySz > maxDictKeyBits {
+		return fmt.Errorf("dict key size exceeds %d bits", maxDictKeyBits)
+	}
+	return nil
+}
+
 // validatePlainDictRoot applies strict HashmapE/Hashmap validation.
 // Augmented dictionaries must use the dedicated LoadAugDict/ToAugDict path.
 func validatePlainDictRoot(root *Cell, keySz uint) error {
 	if root == nil {
-		return nil
+		return validateDictKeySize(keySz)
 	}
-	return validatePlainDictNode(root, keySz)
+	if err := validateDictKeySize(keySz); err != nil {
+		return err
+	}
+	return validatePlainDictNode(root.WithTrace(nil), keySz)
 }
 
 func validatePlainDictNode(c *Cell, keySz uint) error {
@@ -16,7 +28,7 @@ func validatePlainDictNode(c *Cell, keySz uint) error {
 		return fmt.Errorf("dict branch is nil")
 	}
 
-	node, err := parseFixedDictNode(c, keySz, nil)
+	node, err := parseFixedDictNode(c, keySz)
 	if err != nil {
 		return err
 	}

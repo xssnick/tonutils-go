@@ -38,7 +38,7 @@ func refreshSpecialCellLevelMask(c *Cell) error {
 
 	switch Type(c.data[0]) {
 	case PrunedCellType:
-		if _, err := specialCellRefs(c, PrunedCellType, refBoundary); err != nil {
+		if _, err := specialCellRefs(c, PrunedCellType, false); err != nil {
 			return err
 		}
 		if c.bitsSz < 16 {
@@ -46,18 +46,18 @@ func refreshSpecialCellLevelMask(c *Cell) error {
 		}
 		c.setLevelMask(LevelMask{c.data[1]})
 	case LibraryCellType:
-		if _, err := specialCellRefs(c, LibraryCellType, refBoundary); err != nil {
+		if _, err := specialCellRefs(c, LibraryCellType, false); err != nil {
 			return err
 		}
 		c.setLevelMask(LevelMask{})
 	case MerkleProofCellType:
-		refs, err := specialCellRefs(c, MerkleProofCellType, refBoundary)
+		refs, err := specialCellRefs(c, MerkleProofCellType, false)
 		if err != nil {
 			return err
 		}
 		c.setLevelMask(LevelMask{refs[0].getLevelMask().Mask >> 1})
 	case MerkleUpdateCellType:
-		refs, err := specialCellRefs(c, MerkleUpdateCellType, refBoundary)
+		refs, err := specialCellRefs(c, MerkleUpdateCellType, false)
 		if err != nil {
 			return err
 		}

@@ -73,7 +73,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if builder := popCellSliceBuilder(t, state); builder.RefsUsed() != dst.RefsUsed() {
 			t.Fatal("expected STBREFQ to preserve dst")
 		}
-		if builder := popCellSliceBuilder(t, state); builder.EndCell().BeginParse().MustLoadUInt(8) != 0x33 {
+		if builder := popCellSliceBuilder(t, state); builder.EndCell().MustBeginParse().MustLoadUInt(8) != 0x33 {
 			t.Fatal("expected STBREFQ to preserve src")
 		}
 
@@ -86,7 +86,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if status := popCellSliceInt(t, state); status != -1 {
 			t.Fatalf("unexpected STBREFRQ status: %d", status)
 		}
-		if builder := popCellSliceBuilder(t, state); builder.EndCell().BeginParse().MustLoadUInt(8) != 0x33 {
+		if builder := popCellSliceBuilder(t, state); builder.EndCell().MustBeginParse().MustLoadUInt(8) != 0x33 {
 			t.Fatal("expected STBREFRQ to preserve src")
 		}
 		if builder := popCellSliceBuilder(t, state); builder.RefsUsed() != dst.RefsUsed() {
@@ -172,7 +172,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if status := popCellSliceInt(t, state); status != 0 {
 			t.Fatalf("unexpected STSLICERQ success status: %d", status)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0xAB {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0xAB {
 			t.Fatalf("unexpected STSLICERQ stored value: %x", got)
 		}
 	})
@@ -187,7 +187,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if status := popCellSliceInt(t, state); status != 0 {
 			t.Fatalf("unexpected STSLICEQ status: %d", status)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0xAB {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0xAB {
 			t.Fatalf("unexpected STSLICEQ value: %x", got)
 		}
 
@@ -200,7 +200,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if status := popCellSliceInt(t, state); status != 0 {
 			t.Fatalf("unexpected STBQ status: %d", status)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0xCD {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0xCD {
 			t.Fatalf("unexpected STBQ value: %x", got)
 		}
 
@@ -210,7 +210,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if err := STBR().Interpret(state); err != nil {
 			t.Fatalf("STBR failed: %v", err)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0xEF {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0xEF {
 			t.Fatalf("unexpected STBR value: %x", got)
 		}
 
@@ -223,7 +223,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if status := popCellSliceInt(t, state); status != 0 {
 			t.Fatalf("unexpected STBRQ status: %d", status)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0x55 {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0x55 {
 			t.Fatalf("unexpected STBRQ value: %x", got)
 		}
 	})
@@ -261,7 +261,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if builder := popCellSliceBuilder(t, state); builder.BitsUsed() != fullBits.BitsUsed() {
 			t.Fatal("expected STBQ to preserve destination builder")
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0xCD {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0xCD {
 			t.Fatalf("unexpected preserved STBQ source: %x", got)
 		}
 
@@ -274,7 +274,7 @@ func TestAdvancedBuilderStoreOps(t *testing.T) {
 		if status := popCellSliceInt(t, state); status != -1 {
 			t.Fatalf("unexpected STBRQ failure status: %d", status)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0xCD {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0xCD {
 			t.Fatalf("unexpected preserved STBRQ source: %x", got)
 		}
 		if builder := popCellSliceBuilder(t, state); builder.BitsUsed() != fullBits.BitsUsed() {
@@ -418,7 +418,7 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 
 	t.Run("BuilderChecksAndSameBits", func(t *testing.T) {
 		decodedImm := BCHKBITSIMM(1, false)
-		if err := decodedImm.Deserialize(BCHKBITSIMM(8, false).Serialize().EndCell().BeginParse()); err != nil {
+		if err := decodedImm.Deserialize(BCHKBITSIMM(8, false).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("BCHKBITSIMM deserialize failed: %v", err)
 		}
 		if got := decodedImm.SerializeText(); got != "BCHKBITS 8" {
@@ -429,7 +429,7 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 		}
 
 		decodedQuietImm := BCHKBITSIMM(1, true)
-		if err := decodedQuietImm.Deserialize(BCHKBITSIMM(8, true).Serialize().EndCell().BeginParse()); err != nil {
+		if err := decodedQuietImm.Deserialize(BCHKBITSIMM(8, true).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("BCHKBITSIMMQ deserialize failed: %v", err)
 		}
 		if got := decodedQuietImm.SerializeText(); got != "BCHKBITSQ 8" {
@@ -521,7 +521,7 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 		if err := STZEROES().Interpret(state); err != nil {
 			t.Fatalf("STZEROES failed: %v", err)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(3); got != 0 {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(3); got != 0 {
 			t.Fatalf("unexpected STZEROES bits: %b", got)
 		}
 
@@ -531,7 +531,7 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 		if err := STONES().Interpret(state); err != nil {
 			t.Fatalf("STONES failed: %v", err)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(3); got != 0x7 {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(3); got != 0x7 {
 			t.Fatalf("unexpected STONES bits: %b", got)
 		}
 
@@ -542,7 +542,7 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 		if err := STSAME().Interpret(state); err != nil {
 			t.Fatalf("STSAME failed: %v", err)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(3); got != 0x7 {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(3); got != 0x7 {
 			t.Fatalf("unexpected STSAME bits: %b", got)
 		}
 	})

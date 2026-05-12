@@ -15,7 +15,7 @@ func TestShardAccountsAugDictFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loader := c.BeginParse()
+	loader := c.MustBeginParse()
 	loader.MustLoadRef()
 	loader = loader.MustLoadRef()
 

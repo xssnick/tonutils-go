@@ -99,7 +99,7 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 		}
 
 		var st tlb.AccountState
-		if err = st.LoadFromCell(t.State.BeginParse()); err != nil {
+		if err = st.LoadFromCell(t.State.MustBeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to load account state: %w", err)
 		}
 

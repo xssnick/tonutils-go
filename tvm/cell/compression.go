@@ -385,7 +385,7 @@ func extractBalanceFromDepthBalanceCell(c *Cell) *big.Int {
 		return nil
 	}
 
-	s := c.BeginParse()
+	s := c.MustBeginParse()
 	label, err := s.LoadUInt(2)
 	if err != nil || label != 0 {
 		return nil

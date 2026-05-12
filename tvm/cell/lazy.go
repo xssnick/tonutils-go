@@ -3,6 +3,7 @@ package cell
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 )
 
 var ErrLazyLoaderNotSet = errors.New("lazy pruned ref loader is not set")
@@ -155,6 +156,7 @@ func loadLazyPrunedRef(c *Cell) (*Cell, error) {
 	if meta == nil || meta.lazyLoader == nil {
 		return nil, ErrLazyLoaderNotSet
 	}
+	trace := c.Trace()
 
 	loaded, err := meta.lazyLoader(c.HashKey())
 	if err != nil {
@@ -163,11 +165,20 @@ func loadLazyPrunedRef(c *Cell) (*Cell, error) {
 	if loaded == nil {
 		return nil, ErrLazyRefNotFound
 	}
-
-	if meta.viewLevel == 0 {
-		return loaded, nil
+	if loaded.HashKey() != c.HashKey() {
+		return nil, fmt.Errorf("lazy cell hash mismatch: got %x, want %x", loaded.Hash(), c.Hash())
 	}
-	return loaded.Virtualize(meta.viewLevel - 1), nil
+
+	var out *Cell
+	if meta.viewLevel == 0 {
+		out = loaded
+	} else {
+		out = loaded.Virtualize(meta.viewLevel - 1)
+	}
+	if trace != nil {
+		out = out.WithTrace(trace)
+	}
+	return out, nil
 }
 
 func (c *Cell) cellLazyLoader() LazyCellLoader {

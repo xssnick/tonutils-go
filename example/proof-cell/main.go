@@ -64,9 +64,9 @@ func main() {
 	fmt.Println("Original cell tree structure:")
 	fmt.Println(exampleCell.Dump())
 
-	// ProofTrace follows the actual reads you performed and turns them into a proof skeleton.
-	trace := cell.NewProofTrace()
-	root := exampleCell.BeginParse().SetObserver(trace)
+	// MerkleProofBuilder follows the actual cells loaded from its root.
+	pb := cell.NewMerkleProofBuilder(exampleCell)
+	root := pb.Root().MustBeginParse()
 	if _, err := root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
@@ -77,7 +77,7 @@ func main() {
 		panic(fmt.Errorf("failed to load ExampleStruct.DictA: %w", err))
 	}
 
-	proof, err := exampleCell.CreateProof(trace.Skeleton())
+	proof, err := pb.CreateProof()
 	if err != nil {
 		panic(err)
 	}
@@ -85,18 +85,17 @@ func main() {
 	fmt.Println("\n\nProof of `DictA` field access path (dictionary content is still pruned):")
 	fmt.Println(proof.Dump())
 
-	trace = cell.NewProofTrace()
-	root = exampleCell.BeginParse().SetObserver(trace)
+	pb = cell.NewMerkleProofBuilder(exampleCell)
+	root = pb.Root().MustBeginParse()
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
-	innerObserved, err := root.LoadRef()
+	innerSlice, err := root.LoadRef()
 	if err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.Inner ref: %w", err))
 	}
-	trace.MarkRecursive(innerObserved) // keep whole Inner subtree readable in proof
 
-	proof, err = exampleCell.CreateProof(trace.Skeleton())
+	proof, err = pb.CreateProof()
 	if err != nil {
 		panic(err)
 	}
@@ -104,28 +103,28 @@ func main() {
 	fmt.Println("\n\nProof of `Inner` field (with content):")
 	fmt.Println(proof.Dump())
 
-	trace = cell.NewProofTrace()
-	root = exampleCell.BeginParse().SetObserver(trace)
+	pb = cell.NewMerkleProofBuilder(exampleCell)
+	root = pb.Root().MustBeginParse()
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
-	innerObserved, err = root.LoadRef()
+	innerSlice, err = root.LoadRef()
 	if err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.Inner ref: %w", err))
 	}
-	if _, err = innerObserved.LoadUInt(32); err != nil {
+	if _, err = innerSlice.LoadUInt(32); err != nil {
 		panic(err)
 	}
-	deepObserved, err := innerObserved.LoadRef()
+	deepSlice, err := innerSlice.LoadRef()
 	if err != nil {
 		panic(err)
 	}
-	deepValue, err := deepObserved.LoadBigInt(128)
+	deepValue, err := deepSlice.LoadBigInt(128)
 	if err != nil {
 		panic(err)
 	}
 
-	proof, err = exampleCell.CreateProof(trace.Skeleton())
+	proof, err = pb.CreateProof()
 	if err != nil {
 		panic(err)
 	}
@@ -135,9 +134,9 @@ func main() {
 
 	// Now we build a complex proof:
 	// we prove two values from two dictionaries on different levels.
-	trace = cell.NewProofTrace()
+	pb = cell.NewMerkleProofBuilder(exampleCell)
 
-	root = exampleCell.BeginParse().SetObserver(trace)
+	root = pb.Root().MustBeginParse()
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
@@ -152,23 +151,22 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	trace.MarkRecursive(valA) // keep full value tree inside proof
 
-	root = exampleCell.BeginParse().SetObserver(trace)
+	root = pb.Root().MustBeginParse()
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
-	innerObserved, err = root.LoadRef()
+	innerSlice, err = root.LoadRef()
 	if err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.Inner ref: %w", err))
 	}
-	if _, err = innerObserved.LoadUInt(32); err != nil {
+	if _, err = innerSlice.LoadUInt(32); err != nil {
 		panic(err)
 	}
-	if _, err = innerObserved.LoadRefCell(); err != nil {
+	if _, err = innerSlice.LoadRefCell(); err != nil {
 		panic(err)
 	}
-	dictB, err := innerObserved.LoadDict(128)
+	dictB, err := innerSlice.LoadDict(128)
 	if err != nil {
 		panic(err)
 	}
@@ -176,9 +174,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	trace.MarkRecursive(valB) // keep second value tree too
 
-	proof, err = exampleCell.CreateProof(trace.Skeleton())
+	proof, err = pb.CreateProof()
 	if err != nil {
 		panic(err)
 	}
@@ -198,7 +195,7 @@ func main() {
 
 	var dataProof ExampleStruct
 	// LoadFromCellAsProof loads only non-pruned branches into the target struct.
-	if err = tlb.LoadFromCellAsProof(&dataProof, proofBody.BeginParse()); err != nil {
+	if err = tlb.LoadFromCellAsProof(&dataProof, proofBody.MustBeginParse()); err != nil {
 		panic(err)
 	}
 

@@ -94,11 +94,22 @@ func TestFromBOCMultiRootReaderLazyMode31MultiRootCache(t *testing.T) {
 		t.Fatal("expected root refs to be lazy pruned boundaries")
 	}
 
-	first, err := roots[0].PeekRef(0)
+	firstBoundary, err := roots[0].PeekRef(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := roots[0].PeekRef(1)
+	secondBoundary, err := roots[0].PeekRef(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !firstBoundary.IsLazy() || !secondBoundary.IsLazy() {
+		t.Fatal("peek ref should keep shared refs as lazy boundaries")
+	}
+	first, err := firstBoundary.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := secondBoundary.load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,8 +282,12 @@ func materializeTestCellTree(root *Cell) error {
 		}
 		visited[key] = struct{}{}
 
-		for i := 0; i < int(c.RefsNum()); i++ {
-			ref, err := c.PeekRef(i)
+		s, err := c.BeginParse()
+		if err != nil {
+			return err
+		}
+		for i := 0; i < s.RefsNum(); i++ {
+			ref, err := s.PeekRefCellAt(i)
 			if err != nil {
 				return err
 			}

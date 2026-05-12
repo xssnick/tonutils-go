@@ -132,7 +132,7 @@ func (op *refCodeOp) DeserializeMatched(code *cell.Slice) error {
 			op.refs[i] = nil
 			continue
 		}
-		if err = code.AdvanceExt(0, 1); err != nil {
+		if err = code.SkipBitsAndRefs(0, 1); err != nil {
 			return err
 		}
 		op.refs[i] = ref

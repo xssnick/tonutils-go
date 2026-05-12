@@ -162,6 +162,64 @@ func ApplyMerkleUpdate(from, update *Cell) (*Cell, MerkleUpdateReuse, error) {
 	return applyMerkleUpdateWithSourceIndex(from, updateFrom, updateTo)
 }
 
+// CreateMerkleUpdate creates a MerkleUpdate using the same usage-tree flow as
+// the reference VM: the destination proof marks reused source paths, then the
+// source proof is generated from these marks.
+func (t *CellUsageTree) CreateMerkleUpdate(from, to *Cell) (*Cell, error) {
+	if from.Level() != 0 || to.Level() != 0 {
+		return nil, fmt.Errorf("roots have non-zero level")
+	}
+
+	updateFrom, updateTo, err := t.createMerkleUpdateRaw(from, to)
+	if err != nil {
+		return nil, err
+	}
+	return createMerkleUpdateCell(updateFrom, updateTo)
+}
+
+func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, error) {
+	prevUseMark := t.useMark
+	prevMarks := make([]bool, len(t.nodes))
+	for i := range t.nodes {
+		prevMarks[i] = t.nodes[i].marked
+	}
+	defer func() {
+		t.useMark = prevUseMark
+		for i := range t.nodes {
+			t.nodes[i].marked = i < len(prevMarks) && prevMarks[i]
+		}
+	}()
+
+	updateTo, err := buildMerkleProofBodyByPruneFunc(to, func(c *Cell) (bool, error) {
+		loaded, err := c.load()
+		if err != nil {
+			return false, err
+		}
+		if loaded.refsCount() == 0 {
+			return false, nil
+		}
+		node, ok := t.NodeForCell(loaded)
+		if !ok {
+			return false, nil
+		}
+		return t.MarkPath(node), nil
+	}, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build merkle update destination proof: %w", err)
+	}
+
+	t.SetUseMarkForIsLoaded(true)
+	visited := map[Hash]struct{}{}
+	if err = collectUsageProofHashes(from, t, t.RootNode(), visited); err != nil {
+		return nil, nil, fmt.Errorf("failed to collect merkle update source proof: %w", err)
+	}
+	updateFrom, err := buildUsageProofBody(from, visited, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to build merkle update source proof: %w", err)
+	}
+	return updateFrom, updateTo, nil
+}
+
 func applyMerkleUpdateWithSourceIndex(from, updateFrom, updateTo *Cell) (*Cell, MerkleUpdateReuse, error) {
 	source := newMerkleUpdateSourceIndex(512)
 	if err := source.walkProof(from, updateFrom, 0); err != nil {
@@ -261,11 +319,19 @@ func merkleUpdateRootRefs(update *Cell, validate bool) (*Cell, *Cell, error) {
 	}
 
 	refView := newCellRefView(update)
-	updateFrom, err := refView.resolvedRef(0)
+	updateFrom, err := refView.boundaryRef(0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to peek merkle update first ref: %w", err)
+	}
+	updateFrom, err = updateFrom.load()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load merkle update first ref: %w", err)
 	}
-	updateTo, err := refView.resolvedRef(1)
+	updateTo, err := refView.boundaryRef(1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to peek merkle update second ref: %w", err)
+	}
+	updateTo, err = updateTo.load()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load merkle update second ref: %w", err)
 	}
@@ -314,7 +380,11 @@ func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpd
 	sourceRefs := newCellRefView(source)
 	childDepth := merkleChildDepth(source, merkleDepth)
 	for i := 0; i < source.refsCount(); i++ {
-		sourceRef, err := sourceRefs.resolvedRef(i)
+		sourceRef, err := sourceRefs.boundaryRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to peek source ref %d: %w", i, err)
+		}
+		sourceRef, err = sourceRef.load()
 		if err != nil {
 			return fmt.Errorf("failed to load source ref %d: %w", i, err)
 		}
@@ -353,7 +423,11 @@ func (s *merkleUpdateSourceIndex) walkProof(original, source *Cell, merkleDepth 
 	originalRefs := newCellRefView(original)
 	childDepth := merkleChildDepth(source, merkleDepth)
 	for i := 0; i < refsCount; i++ {
-		sourceRef, err := sourceRefs.resolvedRef(i)
+		sourceRef, err := sourceRefs.boundaryRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to peek source ref %d: %w", i, err)
+		}
+		sourceRef, err = sourceRef.load()
 		if err != nil {
 			return fmt.Errorf("failed to load source ref %d: %w", i, err)
 		}
@@ -405,7 +479,11 @@ func collectMerkleUpdateReuse(cell *Cell, merkleDepth int, known map[Hash]*Cell,
 	changed := false
 	hasReused := false
 	for i := 0; i < len(refs); i++ {
-		ref, err := refView.resolvedRef(i)
+		ref, err := refView.boundaryRef(i)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to peek destination ref %d: %w", i, err)
+		}
+		ref, err = ref.load()
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to load destination ref %d: %w", i, err)
 		}
@@ -443,7 +521,11 @@ func merkleUpdateSourceTreeRef(refs *cellRefView, shapeRef *Cell, i int) (*Cell,
 		return refs.logicalBoundaryRef(i), nil
 	}
 
-	ref, err := refs.resolvedRef(i)
+	ref, err := refs.boundaryRef(i)
+	if err != nil {
+		return nil, fmt.Errorf("failed to peek source tree ref %d: %w", i, err)
+	}
+	ref, err = ref.load()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load source tree ref %d: %w", i, err)
 	}
@@ -485,7 +567,11 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	for i := 0; i < cell.refsCount(); i++ {
-		ref, err := refView.resolvedRef(i)
+		ref, err := refView.boundaryRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to peek destination ref %d: %w", i, err)
+		}
+		ref, err = ref.load()
 		if err != nil {
 			return fmt.Errorf("failed to load destination ref %d: %w", i, err)
 		}
@@ -613,7 +699,11 @@ func (c *merkleUpdateCombiner) loadCells(cell *Cell, merkleDepth int) error {
 	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	for i := 0; i < cell.refsCount(); i++ {
-		ref, err := refView.resolvedRef(i)
+		ref, err := refView.boundaryRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to peek combine ref %d: %w", i, err)
+		}
+		ref, err = ref.load()
 		if err != nil {
 			return fmt.Errorf("failed to load combine ref %d: %w", i, err)
 		}
@@ -648,7 +738,11 @@ func (c *merkleUpdateCombiner) markA(cell *Cell, merkleDepth int, node merkleCom
 	refView := newCellRefView(info.cell)
 	childDepth := merkleChildDepth(info.cell, merkleDepth)
 	for i := 0; i < info.cell.refsCount(); i++ {
-		ref, err := refView.resolvedRef(i)
+		ref, err := refView.boundaryRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to peek source ref %d: %w", i, err)
+		}
+		ref, err = ref.load()
 		if err != nil {
 			return fmt.Errorf("failed to load source ref %d: %w", i, err)
 		}
@@ -666,7 +760,11 @@ func (c *merkleUpdateCombiner) rebuildRefs(cell *Cell, merkleDepth, cacheDepth i
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	childCacheDepth := merkleChildDepth(cell, cacheDepth)
 	for i := 0; i < len(refs); i++ {
-		ref, err := refView.resolvedRef(i)
+		ref, err := refView.boundaryRef(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to peek combine ref %d: %w", i, err)
+		}
+		ref, err = ref.load()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load combine ref %d: %w", i, err)
 		}

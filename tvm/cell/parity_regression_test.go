@@ -121,7 +121,7 @@ func TestSliceLoadAddrRejectsInvalidAnycastDepth(t *testing.T) {
 				b.MustStoreSlice(make([]byte, 32), 256)
 			}
 
-			if _, err := b.EndCell().BeginParse().LoadAddr(); err == nil {
+			if _, err := b.EndCell().MustBeginParse().LoadAddr(); err == nil {
 				t.Fatalf("expected invalid anycast depth %d to be rejected", tc.depth)
 			}
 		})

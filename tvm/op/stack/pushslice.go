@@ -34,11 +34,11 @@ func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, "no references left for a PUSHREF instruction")
 	}
-	if err = code.AdvanceExt(0, 1); err != nil {
+	if err = code.SkipBitsAndRefs(0, 1); err != nil {
 		return err
 	}
 
-	op.value = refCell.BeginParse()
+	op.value = refCell.MustBeginParse()
 	return nil
 }
 
@@ -50,7 +50,7 @@ func (op *OpPUSHREFSLICE) Serialize() *cell.Builder {
 func (op *OpPUSHREFSLICE) SerializeText() string {
 	str := "???"
 	if op.value != nil {
-		str = op.value.WithoutObserver().MustToCell().Dump()
+		str = op.value.WithoutTrace().MustToCell().Dump()
 	}
 	return fmt.Sprintf("%s PUSHREFSLICE", str)
 }
@@ -60,8 +60,11 @@ func (op *OpPUSHREFSLICE) InstructionBits() int64 {
 }
 
 func (op *OpPUSHREFSLICE) Interpret(state *vm.State) error {
-	if err := state.Cells.RegisterCellLoad(op.value.WithoutObserver().MustToCell()); err != nil {
-		return err
+	value := op.value.WithoutTrace().MustToCell()
+	if !state.Cells.IsCellLoaded(value) {
+		if err := state.Cells.RegisterCellLoad(value); err != nil {
+			return err
+		}
 	}
 	return state.Stack.PushSlice(op.value)
 }

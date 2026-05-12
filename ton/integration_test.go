@@ -143,7 +143,7 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 		}
 
 		var bData tlb.Block
-		if err = tlb.LoadFromCell(&bData, x.BeginParse()); err != nil {
+		if err = tlb.LoadFromCell(&bData, x.MustBeginParse()); err != nil {
 			t.Fatal(err)
 		}
 
@@ -332,7 +332,7 @@ func Test_RunMethod(t *testing.T) {
 		return
 	}
 
-	c1 := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+	c1 := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 	c2 := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 
 	res, err := api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, testContractAddr, "clltst2", c1, c2)
@@ -673,7 +673,7 @@ func Test_GetConfigParamsAll(t *testing.T) {
 		t.Fatal("bad config response, too short")
 	}
 
-	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
+	if conf.Get(8).MustBeginParse().MustLoadUInt(8) != 0xC4 {
 		t.Fatal("bad config response for 8 param")
 	}
 
@@ -717,7 +717,7 @@ func Test_GetConfigParams8(t *testing.T) {
 		t.Fatal("bad config response, bad length")
 	}
 
-	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
+	if conf.Get(8).MustBeginParse().MustLoadUInt(8) != 0xC4 {
 		t.Fatal("bad config response for 8 param")
 	}
 }
@@ -1195,7 +1195,7 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 
 	println(acc.Code.Dump())
 
-	bSnake := acc.Code.BeginParse().MustLoadBinarySnake()
+	bSnake := acc.Code.MustBeginParse().MustLoadBinarySnake()
 
 	resp, err := apiTestNet.GetLibraries(ctx, bSnake[1:], make([]byte, 32), bSnake[1:])
 	if err != nil {

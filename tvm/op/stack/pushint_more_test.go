@@ -18,22 +18,22 @@ func TestPUSHINTAdditionalForms(t *testing.T) {
 		}{
 			{
 				name: "Int8",
-				code: cell.BeginCell().MustStoreUInt(0x80, 8).MustStoreInt(-7, 8).EndCell().BeginParse(),
+				code: cell.BeginCell().MustStoreUInt(0x80, 8).MustStoreInt(-7, 8).EndCell().MustBeginParse(),
 				want: -7,
 			},
 			{
 				name: "Int16",
-				code: cell.BeginCell().MustStoreUInt(0x81, 8).MustStoreInt(300, 16).EndCell().BeginParse(),
+				code: cell.BeginCell().MustStoreUInt(0x81, 8).MustStoreInt(300, 16).EndCell().MustBeginParse(),
 				want: 300,
 			},
 			{
 				name: "SmallImmediate",
-				code: cell.BeginCell().MustStoreUInt(0x75, 8).EndCell().BeginParse(),
+				code: cell.BeginCell().MustStoreUInt(0x75, 8).EndCell().MustBeginParse(),
 				want: 5,
 			},
 			{
 				name: "Long",
-				code: PUSHINT(big.NewInt(70000)).Serialize().EndCell().BeginParse(),
+				code: PUSHINT(big.NewInt(70000)).Serialize().EndCell().MustBeginParse(),
 				want: 70000,
 			},
 		}
@@ -51,7 +51,7 @@ func TestPUSHINTAdditionalForms(t *testing.T) {
 		}
 
 		op := PUSHINT(nil)
-		err := op.Deserialize(cell.BeginCell().MustStoreUInt(0x83, 8).EndCell().BeginParse())
+		err := op.Deserialize(cell.BeginCell().MustStoreUInt(0x83, 8).EndCell().MustBeginParse())
 		if !errors.Is(err, vm.ErrCorruptedOpcode) {
 			t.Fatalf("expected corrupted opcode, got %v", err)
 		}
@@ -74,7 +74,7 @@ func TestPUSHINTAdditionalForms(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				op := PUSHINT(tt.val)
 				decoded := PUSHINT(nil)
-				if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+				if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 					t.Fatalf("deserialize failed: %v", err)
 				}
 				if decoded.value.Cmp(tt.val) != 0 {

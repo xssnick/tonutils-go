@@ -218,7 +218,7 @@ func buildReferenceTickTockShardAccount(addr *address.Address, code, data *cell.
 
 func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, error) {
 	var tx tlb.Transaction
-	if err := tlb.LoadFromCell(&tx, txCell.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
 		return 0, 0, fmt.Errorf("failed to decode reference tick/tock transaction: %w", err)
 	}
 
@@ -237,12 +237,12 @@ func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, error) {
 
 func referenceTickTockAccountState(shardCell *cell.Cell) (*cell.Cell, *cell.Cell, error) {
 	var shard tlb.ShardAccount
-	if err := tlb.LoadFromCell(&shard, shardCell.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&shard, shardCell.MustBeginParse()); err != nil {
 		return nil, nil, fmt.Errorf("failed to decode reference shard account: %w", err)
 	}
 
 	var acc tlb.AccountState
-	if err := tlb.LoadFromCell(&acc, shard.Account.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&acc, shard.Account.MustBeginParse()); err != nil {
 		return nil, nil, fmt.Errorf("failed to decode reference account state: %w", err)
 	}
 	if !acc.IsValid || acc.Status != tlb.AccountStatusActive || acc.StateInit == nil {

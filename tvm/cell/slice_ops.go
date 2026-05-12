@@ -1,10 +1,7 @@
 package cell
 
 func (c *Slice) PeekRefCellAt(i int) (*Cell, error) {
-	if i < 0 || i >= c.RefsNum() {
-		return nil, ErrNoMoreRefs
-	}
-	return c.refCellAt(i)
+	return c.peekRefCellAt(i)
 }
 
 func (c *Slice) bitAt(offset uint) byte {

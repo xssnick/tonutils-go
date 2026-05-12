@@ -73,7 +73,7 @@ func TestSimpleCellSliceOps(t *testing.T) {
 			t.Fatal("unexpected CTOS slice")
 		}
 
-		pushCellSliceSlice(t, state, cell.BeginCell().EndCell().BeginParse())
+		pushCellSliceSlice(t, state, cell.BeginCell().EndCell().MustBeginParse())
 		if err := ENDS().Interpret(state); err != nil {
 			t.Fatalf("ENDS failed on empty slice: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestSimpleCellSliceOps(t *testing.T) {
 		}
 
 		state = newCellSliceState()
-		pushCellSliceSlice(t, state, cl.BeginParse())
+		pushCellSliceSlice(t, state, cl.MustBeginParse())
 		if err := HASHSU().Interpret(state); err != nil {
 			t.Fatalf("HASHSU failed: %v", err)
 		}
@@ -183,7 +183,7 @@ func TestSimpleCellSliceOps(t *testing.T) {
 
 	t.Run("ReferenceAndSliceWrappers", func(t *testing.T) {
 		ref := cell.BeginCell().MustStoreUInt(0x44, 8).EndCell()
-		src := cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(ref).EndCell().BeginParse()
+		src := cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(ref).EndCell().MustBeginParse()
 		state := newCellSliceState()
 		pushCellSliceSlice(t, state, src)
 		if err := LDREF().Interpret(state); err != nil {
@@ -231,7 +231,7 @@ func TestSimpleCellSliceOps(t *testing.T) {
 			t.Fatalf("STSLICE failed: %v", err)
 		}
 		builder = popCellSliceBuilder(t, state)
-		if got := builder.EndCell().BeginParse().MustLoadUInt(8); got != 0xAB {
+		if got := builder.EndCell().MustBeginParse().MustLoadUInt(8); got != 0xAB {
 			t.Fatalf("unexpected STSLICE value: %x", got)
 		}
 
@@ -243,7 +243,7 @@ func TestSimpleCellSliceOps(t *testing.T) {
 			t.Fatalf("STB failed: %v", err)
 		}
 		builder = popCellSliceBuilder(t, state)
-		if got := builder.EndCell().BeginParse().MustLoadUInt(8); got != 0xCD {
+		if got := builder.EndCell().MustBeginParse().MustLoadUInt(8); got != 0xCD {
 			t.Fatalf("unexpected STB value: %x", got)
 		}
 	})
@@ -525,7 +525,7 @@ func TestAdvancedDeserializeOps(t *testing.T) {
 
 		op := PLDREFIDX(0)
 		decoded := PLDREFIDX(1)
-		if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("PLDREFIDX deserialize failed: %v", err)
 		}
 		state = newCellSliceState()
@@ -605,7 +605,7 @@ func TestAdvancedDeserializeOps(t *testing.T) {
 
 		deep := cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreRef(cell.BeginCell().EndCell()).EndCell()).EndCell()
 		state = newCellSliceState()
-		pushCellSliceSlice(t, state, deep.BeginParse())
+		pushCellSliceSlice(t, state, deep.MustBeginParse())
 		if err := SDEPTH().Interpret(state); err != nil {
 			t.Fatalf("SDEPTH failed: %v", err)
 		}
@@ -659,7 +659,7 @@ func TestConstStoreHelpersAndOps(t *testing.T) {
 		ref1 := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 		op := STREF2CONST(ref0, ref1)
 		decoded := STREFCONST(nil)
-		if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("STREFCONST deserialize failed: %v", err)
 		}
 		if got := decoded.SerializeText(); got != "STREF2CONST" {
@@ -683,8 +683,8 @@ func TestConstStoreHelpersAndOps(t *testing.T) {
 	t.Run("SliceConstRoundTripAndRemainderOps", func(t *testing.T) {
 		value := cell.BeginCell().MustStoreUInt(0xA, 4).ToSlice()
 		op := STSLICECONST(value)
-		decoded := STSLICECONST(cell.BeginCell().EndCell().BeginParse())
-		if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+		decoded := STSLICECONST(cell.BeginCell().EndCell().MustBeginParse())
+		if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("STSLICECONST deserialize failed: %v", err)
 		}
 		if got := decoded.SerializeText(); got == "" {
@@ -700,14 +700,14 @@ func TestConstStoreHelpersAndOps(t *testing.T) {
 			t.Fatalf("STSLICECONST failed: %v", err)
 		}
 		builder := popCellSliceBuilder(t, state)
-		if got := builder.EndCell().BeginParse().MustLoadUInt(4); got != 0xA {
+		if got := builder.EndCell().MustBeginParse().MustLoadUInt(4); got != 0xA {
 			t.Fatalf("unexpected STSLICECONST value: %x", got)
 		}
 
 		if got := paddedConstStoreSliceBits(3); got != 10 {
 			t.Fatalf("unexpected padded const bits: %d", got)
 		}
-		payload := encodeConstStoreSlicePayload(cell.BeginCell().MustStoreUInt(1, 1).ToSlice(), 10).EndCell().BeginParse()
+		payload := encodeConstStoreSlicePayload(cell.BeginCell().MustStoreUInt(1, 1).ToSlice(), 10).EndCell().MustBeginParse()
 		if payload.BitsLeft() != 10 {
 			t.Fatalf("unexpected const payload bits: %d", payload.BitsLeft())
 		}
@@ -774,7 +774,7 @@ func TestFixedWidthLoadStoreRoundTripsAndErrors(t *testing.T) {
 	t.Run("RoundTrips", func(t *testing.T) {
 		state := newCellSliceState()
 		ldu := LDU(1)
-		if err := ldu.Deserialize(LDU(8).Serialize().EndCell().BeginParse()); err != nil {
+		if err := ldu.Deserialize(LDU(8).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("LDU deserialize failed: %v", err)
 		}
 		if got := ldu.SerializeText(); got != "8 LDU" {
@@ -790,7 +790,7 @@ func TestFixedWidthLoadStoreRoundTripsAndErrors(t *testing.T) {
 
 		state = newCellSliceState()
 		ldi := LDI(1)
-		if err := ldi.Deserialize(LDI(8).Serialize().EndCell().BeginParse()); err != nil {
+		if err := ldi.Deserialize(LDI(8).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("LDI deserialize failed: %v", err)
 		}
 		if got := ldi.SerializeText(); got != "8 LDI" {
@@ -806,7 +806,7 @@ func TestFixedWidthLoadStoreRoundTripsAndErrors(t *testing.T) {
 
 		state = newCellSliceState()
 		pldu := PLDU(1)
-		if err := pldu.Deserialize(PLDU(8).Serialize().EndCell().BeginParse()); err != nil {
+		if err := pldu.Deserialize(PLDU(8).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("PLDU deserialize failed: %v", err)
 		}
 		if got := pldu.SerializeText(); got != "8 PLDU" {
@@ -822,7 +822,7 @@ func TestFixedWidthLoadStoreRoundTripsAndErrors(t *testing.T) {
 
 		state = newCellSliceState()
 		stu := STU(1)
-		if err := stu.Deserialize(STU(8).Serialize().EndCell().BeginParse()); err != nil {
+		if err := stu.Deserialize(STU(8).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("STU deserialize failed: %v", err)
 		}
 		if got := stu.SerializeText(); got != "8 STU" {
@@ -833,13 +833,13 @@ func TestFixedWidthLoadStoreRoundTripsAndErrors(t *testing.T) {
 		if err := stu.Interpret(state); err != nil {
 			t.Fatalf("STU failed: %v", err)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadUInt(8); got != 0xEE {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadUInt(8); got != 0xEE {
 			t.Fatalf("unexpected STU value: %x", got)
 		}
 
 		state = newCellSliceState()
 		sti := STI(1)
-		if err := sti.Deserialize(STI(8).Serialize().EndCell().BeginParse()); err != nil {
+		if err := sti.Deserialize(STI(8).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("STI deserialize failed: %v", err)
 		}
 		if got := sti.SerializeText(); got != "8 STI" {
@@ -850,7 +850,7 @@ func TestFixedWidthLoadStoreRoundTripsAndErrors(t *testing.T) {
 		if err := sti.Interpret(state); err != nil {
 			t.Fatalf("STI failed: %v", err)
 		}
-		if got := popCellSliceBuilder(t, state).EndCell().BeginParse().MustLoadInt(8); got != -3 {
+		if got := popCellSliceBuilder(t, state).EndCell().MustBeginParse().MustLoadInt(8); got != -3 {
 			t.Fatalf("unexpected STI value: %d", got)
 		}
 	})

@@ -44,7 +44,7 @@ func TestPrefixHelpers(t *testing.T) {
 	}
 
 	builder := Builder([]byte{0xDE, 0xAD})
-	if got := builder.EndCell().BeginParse().MustLoadUInt(16); got != 0xDEAD {
+	if got := builder.EndCell().MustBeginParse().MustLoadUInt(16); got != 0xDEAD {
 		t.Fatalf("unexpected builder value: %#x", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestSimpleOPLifecycle(t *testing.T) {
 	}
 
 	encoded := op.Serialize().EndCell()
-	if got := encoded.BeginParse().MustLoadUInt(5); got != 0x1A {
+	if got := encoded.MustBeginParse().MustLoadUInt(5); got != 0x1A {
 		t.Fatalf("unexpected serialized prefix: %#x", got)
 	}
 
@@ -77,11 +77,11 @@ func TestSimpleOPLifecycle(t *testing.T) {
 		t.Fatalf("unexpected instruction bits: %d", op.InstructionBits())
 	}
 
-	if err := op.Deserialize(encoded.BeginParse()); err != nil {
+	if err := op.Deserialize(encoded.MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
 	}
 
-	shortCode := cell.BeginCell().MustStoreUInt(0x1, 1).EndCell().BeginParse()
+	shortCode := cell.BeginCell().MustStoreUInt(0x1, 1).EndCell().MustBeginParse()
 	if err := op.DeserializeMatched(shortCode); err == nil {
 		t.Fatal("expected deserialize underflow")
 	}
@@ -163,10 +163,10 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 	}
 
 	serialized := op.Serialize().EndCell()
-	if got := serialized.BeginParse().MustLoadUInt(7); got != 0b1010101 {
+	if got := serialized.MustBeginParse().MustLoadUInt(7); got != 0b1010101 {
 		t.Fatalf("unexpected serialized value: %#b", got)
 	}
-	if err := op.Deserialize(serialized.BeginParse()); err != nil {
+	if err := op.Deserialize(serialized.MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
 	}
 	if decoded != 0x5 {
@@ -193,7 +193,7 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 		BitPrefix:      BytesPrefix(0x80),
 		NameSerializer: func() string { return "PLAIN" },
 	}
-	if err := plain.Deserialize(plain.Serialize().EndCell().BeginParse()); err != nil {
+	if err := plain.Deserialize(plain.Serialize().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("plain deserialize failed: %v", err)
 	}
 

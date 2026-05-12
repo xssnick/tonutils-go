@@ -110,7 +110,7 @@ func fingerprintRegressionValue(val any, depth int) string {
 		if v == nil {
 			return "slice:<nil>"
 		}
-		cl, err := v.WithoutObserver().ToCell()
+		cl, err := v.WithoutTrace().ToCell()
 		if err != nil {
 			return "slice:<invalid:" + err.Error() + ">"
 		}

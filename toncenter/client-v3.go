@@ -171,7 +171,7 @@ func parseStackV3(stack []stackElementV3) ([]any, error) {
 			if a.Type == "cell" {
 				stk = append(stk, c)
 			} else {
-				stk = append(stk, c.BeginParse())
+				stk = append(stk, c.MustBeginParse())
 			}
 		case "num":
 			var val string

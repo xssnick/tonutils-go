@@ -11,7 +11,7 @@ import (
 func TestBasicSliceCompareOps(t *testing.T) {
 	t.Run("SEMPTYTrueOnlyForNoBitsAndNoRefs", func(t *testing.T) {
 		state := &vm.State{Stack: vm.NewStack()}
-		if err := state.Stack.PushSlice(cell.BeginCell().EndCell().BeginParse()); err != nil {
+		if err := state.Stack.PushSlice(cell.BeginCell().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("push slice: %v", err)
 		}
 		if err := SEMPTY().Interpret(state); err != nil {
@@ -26,7 +26,7 @@ func TestBasicSliceCompareOps(t *testing.T) {
 		}
 
 		state = &vm.State{Stack: vm.NewStack()}
-		withRef := cell.BeginCell().MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()
+		withRef := cell.BeginCell().MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()
 		if err := state.Stack.PushSlice(withRef); err != nil {
 			t.Fatalf("push slice with ref: %v", err)
 		}
@@ -44,7 +44,7 @@ func TestBasicSliceCompareOps(t *testing.T) {
 
 	t.Run("SDFIRSTAndCountsUseRemainingBits", func(t *testing.T) {
 		state := &vm.State{Stack: vm.NewStack()}
-		sl := cell.BeginCell().MustStoreUInt(0b0011100, 7).EndCell().BeginParse()
+		sl := cell.BeginCell().MustStoreUInt(0b0011100, 7).EndCell().MustBeginParse()
 
 		if err := state.Stack.PushSlice(sl.Copy()); err != nil {
 			t.Fatalf("push slice for sdfirst: %v", err)

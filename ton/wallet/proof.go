@@ -142,7 +142,7 @@ func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Addres
 		}
 
 		var si tlb.StateInit
-		if err = tlb.LoadFromCell(&si, siCell.BeginParse()); err != nil {
+		if err = tlb.LoadFromCell(&si, siCell.MustBeginParse()); err != nil {
 			return nil, fmt.Errorf("failed to parse state init: %w", err)
 		}
 

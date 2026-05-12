@@ -247,8 +247,8 @@ func storeDictNode(label *Slice, payload *Builder, keyLen uint) (*Cell, error) {
 	return b.EndCell(), nil
 }
 
-func storeDictNodeObserved(label *Slice, payload *Builder, keyLen uint, observer Observer) (*Cell, error) {
-	b := BeginCell().SetObserver(observer)
+func storeDictNodeTraced(label *Slice, payload *Builder, keyLen uint, trace *Trace) (*Cell, error) {
+	b := BeginCell().SetTrace(trace)
 	if err := storeDictLabel(b, label, keyLen); err != nil {
 		return nil, err
 	}

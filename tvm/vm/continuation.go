@@ -87,7 +87,7 @@ func (c *OrdinaryContinuation) GetControlData() *ControlData {
 
 func (c *OrdinaryContinuation) Jump(state *State) (Continuation, error) {
 	state.Reg.AdjustWith(&c.Data.Save)
-	state.CurrentCode = c.Code.Copy().SetObserver(&state.Cells)
+	state.CurrentCode = c.Code.Copy().SetTrace(cell.CombineTraces(c.Code.Trace(), state.Cells.Trace()))
 	if err := applyContinuationCodepage(state, c.Data.CP); err != nil {
 		return nil, err
 	}

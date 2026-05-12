@@ -22,29 +22,29 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 	libraryCell := mustLibraryCell(t)
 	libraryBuilder := mustLibraryBuilder(t)
 	refCell := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
-	shortSlice := cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().BeginParse()
-	refSlice := cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(refCell).EndCell().BeginParse()
-	longSlice := cell.BeginCell().MustStoreSlice(make([]byte, 32), 250).EndCell().BeginParse()
+	shortSlice := cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().MustBeginParse()
+	refSlice := cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(refCell).EndCell().MustBeginParse()
+	longSlice := cell.BeginCell().MustStoreSlice(make([]byte, 32), 250).EndCell().MustBeginParse()
 	ldrefrtosParent := cell.BeginCell().MustStoreUInt(0xCD, 8).MustStoreRef(cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()).EndCell()
-	sdsubstrSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).EndCell().BeginParse()
+	sdsubstrSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).EndCell().MustBeginParse()
 	subsliceRefA := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 	subsliceRefB := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
-	subsliceSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(subsliceRefA).MustStoreRef(subsliceRefB).EndCell().BeginParse()
-	cutSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(subsliceRefA).MustStoreRef(subsliceRefB).EndCell().BeginParse()
-	splitSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()
-	refsSlice := cell.BeginCell().MustStoreUInt(0b111000, 6).MustStoreRef(subsliceRefA).MustStoreRef(subsliceRefB).EndCell().BeginParse()
-	leadingOnes := cell.BeginCell().MustStoreUInt(0b111000, 6).EndCell().BeginParse()
+	subsliceSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(subsliceRefA).MustStoreRef(subsliceRefB).EndCell().MustBeginParse()
+	cutSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(subsliceRefA).MustStoreRef(subsliceRefB).EndCell().MustBeginParse()
+	splitSlice := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()
+	refsSlice := cell.BeginCell().MustStoreUInt(0b111000, 6).MustStoreRef(subsliceRefA).MustStoreRef(subsliceRefB).EndCell().MustBeginParse()
+	leadingOnes := cell.BeginCell().MustStoreUInt(0b111000, 6).EndCell().MustBeginParse()
 	depthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
-	compareLeft := cell.BeginCell().MustStoreUInt(0b1010, 4).MustStoreRef(refCell).EndCell().BeginParse()
-	compareRight := cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse()
-	compareGreater := cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().BeginParse()
-	prefixSlice := cell.BeginCell().MustStoreUInt(0b10, 2).EndCell().BeginParse()
-	suffixSlice := cell.BeginCell().MustStoreUInt(0b011, 3).EndCell().BeginParse()
-	beginsHay := cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().BeginParse()
-	beginsNeedle := cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().BeginParse()
-	beginsMiss := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().BeginParse()
-	leNegTwo := cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().BeginParse()
-	leShort := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 32).EndCell().BeginParse()
+	compareLeft := cell.BeginCell().MustStoreUInt(0b1010, 4).MustStoreRef(refCell).EndCell().MustBeginParse()
+	compareRight := cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().MustBeginParse()
+	compareGreater := cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().MustBeginParse()
+	prefixSlice := cell.BeginCell().MustStoreUInt(0b10, 2).EndCell().MustBeginParse()
+	suffixSlice := cell.BeginCell().MustStoreUInt(0b011, 3).EndCell().MustBeginParse()
+	beginsHay := cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().MustBeginParse()
+	beginsNeedle := cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().MustBeginParse()
+	beginsMiss := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().MustBeginParse()
+	leNegTwo := cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().MustBeginParse()
+	leShort := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 32).EndCell().MustBeginParse()
 	hashDepthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
 	proofRoot := cell.BeginCell().MustStoreUInt(0, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()).EndCell()
 	proofCell, err := proofRoot.CreateProof(cell.CreateProofSkeleton())
@@ -74,10 +74,10 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 		MustStoreRef(cell.BeginCell().EndCell())
 	fullBitsBuilder := cell.BeginCell().MustStoreSlice(make([]byte, 128), 1023)
 	bremBuilder := cell.BeginCell().MustStoreUInt(0xA, 4).MustStoreRef(cell.BeginCell().EndCell())
-	constSlice := cell.BeginCell().MustStoreUInt(0b10101, 5).MustStoreRef(refCell).EndCell().BeginParse()
+	constSlice := cell.BeginCell().MustStoreUInt(0b10101, 5).MustStoreRef(refCell).EndCell().MustBeginParse()
 	storeBuilderSrc := cell.BeginCell().MustStoreUInt(0xA, 4)
 	storeBuilderDst := cell.BeginCell().MustStoreUInt(0xB, 4)
-	storeSlice := cell.BeginCell().MustStoreUInt(0xC, 4).MustStoreRef(refCell).EndCell().BeginParse()
+	storeSlice := cell.BeginCell().MustStoreUInt(0xC, 4).MustStoreRef(refCell).EndCell().MustBeginParse()
 
 	type testCase struct {
 		name  string
@@ -196,7 +196,7 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 		{
 			name:  "ldrefrtos",
 			code:  codeFromBuilders(t, cell.BeginCell().MustStoreUInt(0xD5, 8)),
-			stack: []any{ldrefrtosParent.BeginParse()},
+			stack: []any{ldrefrtosParent.MustBeginParse()},
 			exit:  0,
 		},
 		{
@@ -298,7 +298,7 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 		{
 			name:  "schkbits_underflow",
 			code:  codeFromOpcodes(t, 0xD741),
-			stack: []any{cell.BeginCell().MustStoreUInt(0, 1).EndCell().BeginParse(), int64(2)},
+			stack: []any{cell.BeginCell().MustStoreUInt(0, 1).EndCell().MustBeginParse(), int64(2)},
 			exit:  vmerr.CodeCellUnderflow,
 		},
 		{
@@ -316,7 +316,7 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 		{
 			name:  "sdepth",
 			code:  codeFromOpcodes(t, 0xD764),
-			stack: []any{depthCell.BeginParse()},
+			stack: []any{depthCell.MustBeginParse()},
 			exit:  0,
 		},
 		{
@@ -412,7 +412,7 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 		{
 			name:  "stsliceq_fail",
 			code:  codeFromOpcodes(t, 0xCF1A),
-			stack: []any{cell.BeginCell().MustStoreUInt(1, 1).EndCell().BeginParse(), fullBitsBuilder},
+			stack: []any{cell.BeginCell().MustStoreUInt(1, 1).EndCell().MustBeginParse(), fullBitsBuilder},
 			exit:  0,
 		},
 		{

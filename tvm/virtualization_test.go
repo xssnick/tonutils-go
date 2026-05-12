@@ -65,7 +65,7 @@ func TestVirtualizationErrorsBypassC2(t *testing.T) {
 		if err := state.Stack.PushCell(cl); err != nil {
 			t.Fatalf("push cell: %v", err)
 		}
-		state.PrepareExecution(code.BeginParse())
+		state.PrepareExecution(code.MustBeginParse())
 		return tvm.runState(state)
 	}
 
@@ -176,7 +176,7 @@ func TestVirtualizedGetterOpcodesClampToEffectiveLevel(t *testing.T) {
 func TestVirtualizedSliceDepthOpcodeMatchesVisibleRefs(t *testing.T) {
 	_, virtBody, _, virtPruned := mustVirtualizedProofBodyForTVM(t)
 
-	stack, _, err := runRawCode(codeFromBuilders(t, cellsliceop.SDEPTH().Serialize()), virtBody.BeginParse())
+	stack, _, err := runRawCode(codeFromBuilders(t, cellsliceop.SDEPTH().Serialize()), virtBody.MustBeginParse())
 	if err != nil {
 		t.Fatalf("SDEPTH failed: %v", err)
 	}

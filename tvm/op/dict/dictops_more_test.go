@@ -172,7 +172,7 @@ func TestDictSetAdditionalBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x55, 8).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x55, 8).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push replace-miss value: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(0x33)); err != nil {
@@ -201,7 +201,7 @@ func TestDictSetAdditionalBranches(t *testing.T) {
 
 	root := mustPlainDictRoot(t, 8, map[uint64]uint64{0x12: 0x34}, 8)
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push add-existing value: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(0x12)); err != nil {
@@ -306,7 +306,7 @@ func TestDictSetGetAdditionalBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x66, 8).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x66, 8).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push setget-replace-miss value: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(0x44)); err != nil {
@@ -335,7 +335,7 @@ func TestDictSetGetAdditionalBranches(t *testing.T) {
 
 	root := mustPlainDictRoot(t, 8, map[uint64]uint64{0x12: 0x34}, 8)
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x77, 8).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x77, 8).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push setget-add-existing value: %v", err)
 	}
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x12, 8)); err != nil {
@@ -755,7 +755,7 @@ func TestPopSubdictPrefixUnsignedAndErrorPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("popSubdictPrefix unsigned failed: %v", err)
 	}
-	if bits != 2 || prefix.BeginParse().MustLoadUInt(2) != 0b11 {
+	if bits != 2 || prefix.MustBeginParse().MustLoadUInt(2) != 0b11 {
 		t.Fatalf("unexpected unsigned prefix result")
 	}
 
@@ -995,7 +995,7 @@ func TestPrefixMutationMissBranches(t *testing.T) {
 	})
 
 	state := newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push pfx replace miss value: %v", err)
 	}
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0b11, 2)); err != nil {
@@ -1023,7 +1023,7 @@ func TestPrefixMutationMissBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push pfx add existing value: %v", err)
 	}
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0b10, 2)); err != nil {
@@ -1224,7 +1224,7 @@ func TestDictLoadAndPrefixMissTailBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().BeginParse()); err != nil {
+	if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xE, 4).EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("push invalid pfx set value: %v", err)
 	}
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0b11, 2)); err != nil {

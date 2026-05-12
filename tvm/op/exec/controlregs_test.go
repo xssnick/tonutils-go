@@ -138,7 +138,7 @@ func TestControlRegisterAdvancedOpRoundTrips(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			encoded := tt.op.Serialize().EndCell()
 			decoded := tt.op
-			if err := decoded.Deserialize(encoded.BeginParse()); err != nil {
+			if err := decoded.Deserialize(encoded.MustBeginParse()); err != nil {
 				t.Fatalf("deserialize failed: %v", err)
 			}
 			if decoded.SerializeText() != tt.want {

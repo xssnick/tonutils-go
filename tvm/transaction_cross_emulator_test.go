@@ -745,7 +745,7 @@ func transactionCrossTxSummary(t *testing.T, txCell *cell.Cell) string {
 	t.Helper()
 
 	var tx tlb.Transaction
-	if err := tlb.LoadFromCell(&tx, txCell.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
 		return fmt.Sprintf("decode tx failed: %v", err)
 	}
 	desc, ok := tx.Description.(tlb.TransactionDescriptionOrdinary)
@@ -827,11 +827,11 @@ func transactionCrossShardSummary(t *testing.T, shardCell *cell.Cell) string {
 	t.Helper()
 
 	var shard tlb.ShardAccount
-	if err := tlb.LoadFromCell(&shard, shardCell.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&shard, shardCell.MustBeginParse()); err != nil {
 		return fmt.Sprintf("decode shard failed: %v", err)
 	}
 	var acc tlb.AccountState
-	if err := tlb.LoadFromCell(&acc, shard.Account.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&acc, shard.Account.MustBeginParse()); err != nil {
 		return fmt.Sprintf("decode account failed: %v", err)
 	}
 	if !acc.IsValid {

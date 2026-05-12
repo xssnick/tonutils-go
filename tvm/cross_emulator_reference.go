@@ -107,7 +107,7 @@ func runReferenceCrossMethodWithLibsAndGas(code, data *cell.Cell, c7 tuple.Tuple
 	}
 
 	var result referenceRunResult
-	if err = tlb.LoadFromCell(&result, resCell.BeginParse()); err != nil {
+	if err = tlb.LoadFromCell(&result, resCell.MustBeginParse()); err != nil {
 		return nil, err
 	}
 
@@ -174,7 +174,7 @@ func runReferenceCrossCodeWithLibsAndGas(code, data *cell.Cell, c7 tuple.Tuple, 
 	}
 
 	var result referenceRunResult
-	if err = tlb.LoadFromCell(&result, resCell.BeginParse()); err != nil {
+	if err = tlb.LoadFromCell(&result, resCell.MustBeginParse()); err != nil {
 		return nil, err
 	}
 

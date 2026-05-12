@@ -12,7 +12,7 @@ import (
 func TestLoadCell_LoadAddr(t *testing.T) {
 	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
 
-	c := BeginCell().MustStoreUInt(1, 3).MustStoreAddr(addr).EndCell().BeginParse()
+	c := BeginCell().MustStoreUInt(1, 3).MustStoreAddr(addr).EndCell().MustBeginParse()
 	c.MustLoadUInt(3)
 
 	lAddr, err := c.LoadAddr()
@@ -37,14 +37,14 @@ func TestLoadCell_Loaders(t *testing.T) {
 		MustStoreCoins(41282931).
 		MustStoreMaybeRef(ref).MustStoreMaybeRef(nil).EndCell()
 
-	b := a.BeginParse().MustToCell()
+	b := a.MustBeginParse().MustToCell()
 
 	if !bytes.Equal(b.Hash(), a.Hash()) {
 		t.Fatal("hashes diff after serialize")
 		return
 	}
 
-	c := b.BeginParse()
+	c := b.MustBeginParse()
 
 	if c.RefsNum() != 1 || a.RefsNum() != 1 {
 		t.Fatal("refs num diff")
@@ -104,13 +104,13 @@ func TestLoadCell_Loaders(t *testing.T) {
 }
 
 func TestSlice_LoadBigInt(t *testing.T) {
-	v := BeginCell().MustStoreInt(-5, 5).EndCell().BeginParse().MustLoadInt(5)
+	v := BeginCell().MustStoreInt(-5, 5).EndCell().MustBeginParse().MustLoadInt(5)
 	if v != -5 {
 		t.Fatal("i not -5", v)
 		return
 	}
 
-	v = BeginCell().MustStoreInt(-53276879, 256).EndCell().BeginParse().MustLoadInt(256)
+	v = BeginCell().MustStoreInt(-53276879, 256).EndCell().MustBeginParse().MustLoadInt(256)
 	if v != -53276879 {
 		t.Fatal("i not -53276879", v)
 		return
@@ -119,7 +119,7 @@ func TestSlice_LoadBigInt(t *testing.T) {
 
 func TestSlice_Snake(t *testing.T) {
 	str := "big brown cherry-pick going to hunt your pussy 😃😃😄😇🤪🤪🙁😤😨🖕💅👏☝️👍👃👃👨‍👩‍👩🧑👨‍"
-	v := BeginCell().MustStoreStringSnake(str).EndCell().BeginParse()
+	v := BeginCell().MustStoreStringSnake(str).EndCell().MustBeginParse()
 
 	ldStr := v.MustLoadStringSnake()
 	if str != ldStr {
@@ -131,8 +131,7 @@ func TestSlice_PreloadUInt_UnalignedDoesNotAdvance(t *testing.T) {
 	s := BeginCell().
 		MustStoreUInt(0b101, 3).
 		MustStoreUInt(0b11010, 5).
-		EndCell().
-		BeginParse()
+		EndCell().MustBeginParse()
 
 	if got := s.MustLoadUInt(3); got != 0b101 {
 		t.Fatalf("unexpected prefix bits: %b", got)
@@ -162,8 +161,7 @@ func TestSlice_LoadBoolBit_Unaligned(t *testing.T) {
 		MustStoreUInt(0b101, 3).
 		MustStoreBoolBit(true).
 		MustStoreBoolBit(false).
-		EndCell().
-		BeginParse()
+		EndCell().MustBeginParse()
 
 	if got := s.MustLoadUInt(3); got != 0b101 {
 		t.Fatalf("unexpected prefix bits: %b", got)
@@ -177,7 +175,7 @@ func TestSlice_LoadBoolBit_Unaligned(t *testing.T) {
 }
 
 func TestSlice_LoadUIntZeroBits(t *testing.T) {
-	s := BeginCell().MustStoreUInt(0xAB, 8).EndCell().BeginParse()
+	s := BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
 
 	before := s.BitsLeft()
 	got, err := s.LoadUInt(0)
@@ -210,7 +208,7 @@ func TestSlice_LoadIntSmallWidths(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := BeginCell().MustStoreInt(tc.value, tc.bits).EndCell().BeginParse().MustLoadInt(tc.bits)
+			got := BeginCell().MustStoreInt(tc.value, tc.bits).EndCell().MustBeginParse().MustLoadInt(tc.bits)
 			if got != tc.value {
 				t.Fatalf("unexpected roundtrip: got=%d want=%d", got, tc.value)
 			}
@@ -225,8 +223,8 @@ func TestCellBeginParseTrusted_IndependentCursors(t *testing.T) {
 		MustStoreRef(ref).
 		EndCell()
 
-	left := c.BeginParse()
-	right := c.BeginParse()
+	left := c.MustBeginParse()
+	right := c.MustBeginParse()
 
 	if got := left.MustLoadUInt(4); got != 0xA {
 		t.Fatalf("unexpected left prefix: %x", got)
@@ -270,8 +268,7 @@ func TestSlice_PreloadRefAndBigUIntWrappers(t *testing.T) {
 	s := BeginCell().
 		MustStoreRef(refCell).
 		MustStoreBigUInt(value, 80).
-		EndCell().
-		BeginParse()
+		EndCell().MustBeginParse()
 
 	preCell, err := s.PreloadRefCell()
 	if err != nil {
@@ -316,21 +313,20 @@ func TestSlice_PreloadRefAndBigUIntWrappers(t *testing.T) {
 }
 
 func TestSlice_LoadVarUIntZeroAndBinarySnake(t *testing.T) {
-	s := BeginCell().MustStoreVarUInt(0, 16).EndCell().BeginParse()
+	s := BeginCell().MustStoreVarUInt(0, 16).EndCell().MustBeginParse()
 	if got := s.MustLoadVarUInt(16); got.Sign() != 0 {
 		t.Fatalf("expected zero varuint, got %s", got)
 	}
 
 	data := []byte("binary snake payload")
-	if got := BeginCell().MustStoreBinarySnake(data).EndCell().BeginParse().MustLoadBinarySnake(); !bytes.Equal(got, data) {
+	if got := BeginCell().MustStoreBinarySnake(data).EndCell().MustBeginParse().MustLoadBinarySnake(); !bytes.Equal(got, data) {
 		t.Fatalf("unexpected snake payload: %q", got)
 	}
 
 	invalid := BeginCell().
 		MustStoreRef(BeginCell().EndCell()).
 		MustStoreRef(BeginCell().EndCell()).
-		EndCell().
-		BeginParse()
+		EndCell().MustBeginParse()
 
 	if _, err := invalid.LoadBinarySnake(); err == nil {
 		t.Fatal("expected invalid snake with more than one ref")
@@ -339,13 +335,13 @@ func TestSlice_LoadVarUIntZeroAndBinarySnake(t *testing.T) {
 
 func TestSlice_LoadAddrVariants(t *testing.T) {
 	ext := address.NewAddressExt(0, 20, []byte{0xAA, 0xBB, 0xC0})
-	gotExt := BeginCell().MustStoreAddr(ext).EndCell().BeginParse().MustLoadAddr()
+	gotExt := BeginCell().MustStoreAddr(ext).EndCell().MustBeginParse().MustLoadAddr()
 	if gotExt.String() != ext.String() {
 		t.Fatalf("unexpected ext address: got=%s want=%s", gotExt.String(), ext.String())
 	}
 
 	varAddr := address.NewAddressVar(0, -1, 20, []byte{0xDE, 0xAD, 0xB0})
-	gotVar := BeginCell().MustStoreAddr(varAddr).EndCell().BeginParse().MustLoadAddr()
+	gotVar := BeginCell().MustStoreAddr(varAddr).EndCell().MustBeginParse().MustLoadAddr()
 	if gotVar.String() != varAddr.String() {
 		t.Fatalf("unexpected var address: got=%s want=%s", gotVar.String(), varAddr.String())
 	}
@@ -358,8 +354,7 @@ func TestSlice_LoadAddrVariants(t *testing.T) {
 		MustStoreUInt(0b101, 3).
 		MustStoreUInt(0xFF, 8).
 		MustStoreSlice(stdAnycastData, 256).
-		EndCell().
-		BeginParse().
+		EndCell().MustBeginParse().
 		MustLoadAddr()
 
 	wantStdAnycast := address.NewAddress(0, 0xFF, stdAnycastData)
@@ -375,8 +370,7 @@ func TestSlice_LoadAddrVariants(t *testing.T) {
 		MustStoreUInt(20, 9).
 		MustStoreInt(-1, 32).
 		MustStoreSlice([]byte{0xF0, 0x0D, 0x50}, 20).
-		EndCell().
-		BeginParse().
+		EndCell().MustBeginParse().
 		MustLoadAddr()
 
 	wantVarAnycast := address.NewAddressVar(0, -1, 20, []byte{0xF0, 0x0D, 0x50})

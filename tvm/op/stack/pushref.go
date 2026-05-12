@@ -34,7 +34,7 @@ func (op *OpPUSHREF) Deserialize(code *cell.Slice) error {
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, "no references left for a PUSHREF instruction")
 	}
-	if err = code.AdvanceExt(0, 1); err != nil {
+	if err = code.SkipBitsAndRefs(0, 1); err != nil {
 		return err
 	}
 

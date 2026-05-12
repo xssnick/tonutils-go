@@ -29,7 +29,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("pushref mismatch: got=%s want=%s", gotCell.Dump(), refCell.Dump())
 		}
 
-		shortSlice := cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().BeginParse()
+		shortSlice := cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromBuilders(t, stackop.PUSHSLICEINLINE(shortSlice).Serialize()))
 		if err != nil {
 			t.Fatalf("pushslice short unexpected error: %v", err)
@@ -43,7 +43,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("pushslice short expected 0b101, got %b", got)
 		}
 
-		longSlice := cell.BeginCell().MustStoreSlice(make([]byte, 32), 250).EndCell().BeginParse()
+		longSlice := cell.BeginCell().MustStoreSlice(make([]byte, 32), 250).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromBuilders(t, stackop.PUSHSLICEINLINE(longSlice).Serialize()))
 		if err != nil {
 			t.Fatalf("pushslice long unexpected error: %v", err)
@@ -62,7 +62,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 		child := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 		parent := cell.BeginCell().MustStoreUInt(0xCD, 8).MustStoreRef(child).EndCell()
 
-		stack, res, err := runRawCode(codeFromBuilders(t, cell.BeginCell().MustStoreUInt(0xD5, 8)), parent.BeginParse())
+		stack, res, err := runRawCode(codeFromBuilders(t, cell.BeginCell().MustStoreUInt(0xD5, 8)), parent.MustBeginParse())
 		if err != nil {
 			t.Fatalf("ldrefrtos unexpected error: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("ldrefrtos parent expected 0xCD, got %x", got)
 		}
 
-		src := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()
+		src := cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD720), src, int64(3))
 		if err != nil {
 			t.Fatalf("sdcutfirst unexpected error: %v", err)
@@ -96,7 +96,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("sdcutfirst expected 110, got %b", got)
 		}
 
-		src = cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().MustStoreUInt(1, 1).EndCell()).EndCell().BeginParse()
+		src = cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().MustStoreUInt(1, 1).EndCell()).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD733), src, int64(2), int64(1))
 		if err != nil {
 			t.Fatalf("sskiplast unexpected error: %v", err)
@@ -110,7 +110,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("sskiplast expected 4 bits/0 refs, got %d bits/%d refs", trimmed.BitsLeft(), trimmed.RefsNum())
 		}
 
-		src = cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()
+		src = cell.BeginCell().MustStoreUInt(0b110101, 6).MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD737), src, int64(8), int64(0))
 		if err != nil {
 			t.Fatalf("splitq unexpected error: %v", err)
@@ -135,7 +135,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 	t.Run("SliceChecksRefsAndSameRuns", func(t *testing.T) {
 		refA := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 		refB := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
-		src := cell.BeginCell().MustStoreUInt(0b111000, 6).MustStoreRef(refA).MustStoreRef(refB).EndCell().BeginParse()
+		src := cell.BeginCell().MustStoreUInt(0b111000, 6).MustStoreRef(refA).MustStoreRef(refB).EndCell().MustBeginParse()
 
 		stack, res, err := runRawCode(codeFromOpcodes(t, 0xD748), src, int64(1))
 		if err != nil {
@@ -176,7 +176,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("schkbitrefsq expected false")
 		}
 
-		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD760), cell.BeginCell().MustStoreUInt(0b000111, 6).EndCell().BeginParse())
+		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD760), cell.BeginCell().MustStoreUInt(0b000111, 6).EndCell().MustBeginParse())
 		if err != nil {
 			t.Fatalf("ldzeroes unexpected error: %v", err)
 		}
@@ -193,7 +193,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("ldzeroes expected count=3 rest=3 bits, got count=%d rest=%d", count.Int64(), rest.BitsLeft())
 		}
 
-		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD762), cell.BeginCell().MustStoreUInt(0b111000, 6).EndCell().BeginParse(), int64(1))
+		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD762), cell.BeginCell().MustStoreUInt(0b111000, 6).EndCell().MustBeginParse(), int64(1))
 		if err != nil {
 			t.Fatalf("ldsame unexpected error: %v", err)
 		}
@@ -252,7 +252,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 		}
 
 		depthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
-		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD764), depthCell.BeginParse())
+		stack, res, err = runRawCode(codeFromOpcodes(t, 0xD764), depthCell.MustBeginParse())
 		if err != nil {
 			t.Fatalf("sdepth unexpected error: %v", err)
 		}
@@ -493,15 +493,15 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 	})
 
 	t.Run("NonQuietFailures", func(t *testing.T) {
-		_, res, err := runRawCode(codeFromOpcodes(t, 0xD741), cell.BeginCell().MustStoreUInt(0, 1).EndCell().BeginParse(), int64(2))
+		_, res, err := runRawCode(codeFromOpcodes(t, 0xD741), cell.BeginCell().MustStoreUInt(0, 1).EndCell().MustBeginParse(), int64(2))
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeCellUnderflow {
 			t.Fatalf("schkbits expected cell underflow, got %d", code)
 		}
 	})
 
 	t.Run("CompareFamilyUsesBitSemantics", func(t *testing.T) {
-		left := cell.BeginCell().MustStoreUInt(0b1010, 4).MustStoreRef(cell.BeginCell().EndCell()).EndCell().BeginParse()
-		right := cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse()
+		left := cell.BeginCell().MustStoreUInt(0b1010, 4).MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse()
+		right := cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().MustBeginParse()
 
 		stack, res, err := runRawCode(codeFromBuilders(t, cellsliceop.SDEQ().Serialize()), left, right)
 		if err != nil {
@@ -517,8 +517,8 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 		}
 
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.SDLEXCMP().Serialize()),
-			cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse(),
-			cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().MustBeginParse(),
+			cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().MustBeginParse(),
 		)
 		if err != nil {
 			t.Fatalf("sdlexcmp unexpected error: %v", err)
@@ -533,8 +533,8 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 		}
 
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.SDPFX().Serialize()),
-			cell.BeginCell().MustStoreUInt(0b10, 2).EndCell().BeginParse(),
-			cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreUInt(0b10, 2).EndCell().MustBeginParse(),
+			cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().MustBeginParse(),
 		)
 		if err != nil {
 			t.Fatalf("sdpfx unexpected error: %v", err)
@@ -549,8 +549,8 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 		}
 
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.SDSFX().Serialize()),
-			cell.BeginCell().MustStoreUInt(0b011, 3).EndCell().BeginParse(),
-			cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreUInt(0b011, 3).EndCell().MustBeginParse(),
+			cell.BeginCell().MustStoreUInt(0b1011, 4).EndCell().MustBeginParse(),
 		)
 		if err != nil {
 			t.Fatalf("sdsfx unexpected error: %v", err)
@@ -567,8 +567,8 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 
 	t.Run("SDBeginsAndLittleEndianLoads", func(t *testing.T) {
 		stack, res, err := runRawCode(codeFromBuilders(t, cellsliceop.SDBEGINSX().Serialize()),
-			cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().BeginParse(),
-			cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().MustBeginParse(),
+			cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().MustBeginParse(),
 		)
 		if err != nil {
 			t.Fatalf("sdbeginsx unexpected error: %v", err)
@@ -582,10 +582,10 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("sdbeginsx expected remaining 101, got %b", got)
 		}
 
-		orig := cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().BeginParse()
+		orig := cell.BeginCell().MustStoreUInt(0b101101, 6).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.SDBEGINSXQ().Serialize()),
 			orig,
-			cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().MustBeginParse(),
 		)
 		if err != nil {
 			t.Fatalf("sdbeginsxq unexpected error: %v", err)
@@ -607,7 +607,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 		}
 
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.LDILE4().Serialize()),
-			cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().MustBeginParse(),
 		)
 		if err != nil {
 			t.Fatalf("ldile4 unexpected error: %v", err)
@@ -625,7 +625,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("ldile4 expected -2 and empty slice, got %d and %d bits", val.Int64(), rest.BitsLeft())
 		}
 
-		short := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 32).EndCell().BeginParse()
+		short := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 32).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.PLDULE8Q().Serialize()), short)
 		if err != nil {
 			t.Fatalf("pldule8q unexpected error: %v", err)
@@ -712,7 +712,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("stref2const expected two refs, got %d", builder.RefsUsed())
 		}
 
-		constSlice := cell.BeginCell().MustStoreUInt(0b10101, 5).MustStoreRef(refA).EndCell().BeginParse()
+		constSlice := cell.BeginCell().MustStoreUInt(0b10101, 5).MustStoreRef(refA).EndCell().MustBeginParse()
 		stack, res, err = runRawCode(codeFromBuilders(t, cellsliceop.STSLICECONST(constSlice).Serialize()), cell.BeginCell())
 		if err != nil {
 			t.Fatalf("stsliceconst unexpected error: %v", err)

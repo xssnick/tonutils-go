@@ -25,7 +25,7 @@ func TestReverseBuilderStoreOps(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to pop builder: %v", err)
 		}
-		if got := builder.EndCell().BeginParse().MustLoadUInt(8); got != 0xAB {
+		if got := builder.EndCell().MustBeginParse().MustLoadUInt(8); got != 0xAB {
 			t.Fatalf("unexpected stored value: %x", got)
 		}
 	})

@@ -155,7 +155,7 @@ func makeDictTestDepth1024Cell(t *testing.T) *cell.Cell {
 func TestPFXDICTSWITCHDeserializeEdgeBranches(t *testing.T) {
 	t.Run("short prefix", func(t *testing.T) {
 		op := PFXDICTSWITCH(nil)
-		if err := op.Deserialize(cell.BeginCell().EndCell().BeginParse()); err == nil {
+		if err := op.Deserialize(cell.BeginCell().EndCell().MustBeginParse()); err == nil {
 			t.Fatal("expected Deserialize to fail on short opcode prefix")
 		}
 	})
@@ -166,7 +166,7 @@ func TestPFXDICTSWITCHDeserializeEdgeBranches(t *testing.T) {
 			MustStoreSlice([]byte{0xF4, 0xAC}, 13).
 			MustStoreBoolBit(true).
 			MustStoreUInt(1, 10).
-			EndCell().BeginParse()
+			EndCell().MustBeginParse()
 		if err := op.Deserialize(code); err == nil {
 			t.Fatal("expected Deserialize to fail when root flag is set without a ref")
 		}
@@ -178,7 +178,7 @@ func TestPFXDICTSWITCHDeserializeEdgeBranches(t *testing.T) {
 			MustStoreSlice([]byte{0xF4, 0xAC}, 13).
 			MustStoreBoolBit(false).
 			MustStoreRef(cell.BeginCell().EndCell()).
-			EndCell().BeginParse()
+			EndCell().MustBeginParse()
 		if err := op.Deserialize(code); err == nil {
 			t.Fatal("expected Deserialize to fail when key bits are truncated")
 		}
@@ -191,7 +191,7 @@ func TestPFXDICTSWITCHDeserializeEdgeBranches(t *testing.T) {
 			MustStoreBoolBit(false).
 			MustStoreRef(cell.BeginCell().EndCell()).
 			MustStoreUInt(5, 10).
-			EndCell().BeginParse()
+			EndCell().MustBeginParse()
 		if err := op.Deserialize(code); err != nil {
 			t.Fatalf("Deserialize with nil root flag and ref failed: %v", err)
 		}

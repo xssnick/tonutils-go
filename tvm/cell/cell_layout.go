@@ -16,6 +16,7 @@ type cellMeta struct {
 	extraHashes *[3]Hash
 	viewOf      *Cell
 	lazyLoader  LazyCellLoader
+	trace       *Trace
 
 	extraDepths [3]uint16
 	viewLevel   uint8 // effectiveLevel + 1
@@ -30,6 +31,10 @@ func cloneCellMeta(meta *cellMeta) *cellMeta {
 	if meta.extraHashes != nil {
 		extra := *meta.extraHashes
 		cp.extraHashes = &extra
+	}
+	cp.trace = nil
+	if cp.extraHashes == nil && cp.viewOf == nil && cp.lazyLoader == nil && cp.viewLevel == 0 {
+		return nil
 	}
 	return &cp
 }
@@ -122,7 +127,7 @@ func (c *Cell) clearMetaIfEmpty() {
 	if c.meta == nil {
 		return
 	}
-	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil || c.meta.viewLevel != 0 {
+	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil || c.meta.trace != nil || c.meta.viewLevel != 0 {
 		return
 	}
 	c.meta = nil

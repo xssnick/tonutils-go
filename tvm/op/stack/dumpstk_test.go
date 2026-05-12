@@ -29,7 +29,7 @@ func captureTrace(t *testing.T, fn func()) string {
 
 func TestSTRDUMP_PrintsStringAndDoesNotMutateStack(t *testing.T) {
 	st := vm.NewStack()
-	src := cell.BeginCell().MustStoreSlice([]byte("hello"), 40).EndCell().BeginParse()
+	src := cell.BeginCell().MustStoreSlice([]byte("hello"), 40).EndCell().MustBeginParse()
 
 	if err := st.PushSlice(src); err != nil {
 		t.Fatalf("push slice failed: %v", err)
@@ -61,28 +61,28 @@ func TestSTRDUMP_PrintsStringAndDoesNotMutateStack(t *testing.T) {
 }
 
 func TestSTRDUMP_CornerCases(t *testing.T) {
-		t.Run("empty stack", func(t *testing.T) {
-			st := vm.NewStack()
-			out := captureTrace(t, func() {
-				if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
-					t.Fatalf("STRDUMP failed: %v", err)
-				}
+	t.Run("empty stack", func(t *testing.T) {
+		st := vm.NewStack()
+		out := captureTrace(t, func() {
+			if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
+				t.Fatalf("STRDUMP failed: %v", err)
+			}
 		})
 		if !strings.Contains(out, "s0 is absent") {
 			t.Fatalf("unexpected output: %q", out)
 		}
 	})
 
-		t.Run("not a slice", func(t *testing.T) {
-			st := vm.NewStack()
-			if err := st.PushInt(big.NewInt(1)); err != nil {
-				t.Fatalf("push int failed: %v", err)
-			}
+	t.Run("not a slice", func(t *testing.T) {
+		st := vm.NewStack()
+		if err := st.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push int failed: %v", err)
+		}
 
-			out := captureTrace(t, func() {
-				if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
-					t.Fatalf("STRDUMP failed: %v", err)
-				}
+		out := captureTrace(t, func() {
+			if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
+				t.Fatalf("STRDUMP failed: %v", err)
+			}
 		})
 		if !strings.Contains(out, "is not a slice") {
 			t.Fatalf("unexpected output: %q", out)
@@ -92,16 +92,16 @@ func TestSTRDUMP_CornerCases(t *testing.T) {
 		}
 	})
 
-		t.Run("not byte aligned", func(t *testing.T) {
-			st := vm.NewStack()
-			if err := st.PushSlice(cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().BeginParse()); err != nil {
-				t.Fatalf("push slice failed: %v", err)
-			}
+	t.Run("not byte aligned", func(t *testing.T) {
+		st := vm.NewStack()
+		if err := st.PushSlice(cell.BeginCell().MustStoreUInt(0b101, 3).EndCell().MustBeginParse()); err != nil {
+			t.Fatalf("push slice failed: %v", err)
+		}
 
-			out := captureTrace(t, func() {
-				if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
-					t.Fatalf("STRDUMP failed: %v", err)
-				}
+		out := captureTrace(t, func() {
+			if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
+				t.Fatalf("STRDUMP failed: %v", err)
+			}
 		})
 		if !strings.Contains(out, "slice contains not valid bits count") {
 			t.Fatalf("unexpected output: %q", out)

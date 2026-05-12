@@ -85,7 +85,20 @@ func (s *storageStat) addCell(cl *cell.Cell) bool {
 	s.seen[key] = struct{}{}
 	s.cells++
 
-	sl := cl.BeginParse()
+	var sl *cell.Slice
+	if s.state != nil {
+		var err error
+		sl, err = s.state.Cells.BeginParseAlreadyLoadedNoCreate(cl)
+		if err != nil {
+			return false
+		}
+	} else {
+		var err error
+		sl, err = cl.BeginParse()
+		if err != nil {
+			return false
+		}
+	}
 	s.bits += uint64(sl.BitsLeft())
 	s.refs += uint64(sl.RefsNum())
 	for i := 0; i < sl.RefsNum(); i++ {
@@ -467,7 +480,7 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 				}
 				if tag, _ := src.PreloadUInt(2); tag == 0 {
 					rest := src.Copy()
-					if err = rest.Advance(2); err != nil {
+					if err = rest.SkipBits(2); err != nil {
 						return err
 					}
 					if err = state.Stack.PushAny(nil); err != nil {
@@ -1018,17 +1031,28 @@ func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
 }
 
 func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) bool {
+	var root *cell.Slice
 	if stat.state != nil {
 		if err := stat.state.Cells.RegisterCellLoad(msgCell); err != nil {
 			return false
 		}
+		var err error
+		root, err = stat.state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
+		if err != nil {
+			return false
+		}
+	} else {
+		var err error
+		root, err = msgCell.BeginParse()
+		if err != nil {
+			return false
+		}
 	}
-	root := msgCell.BeginParse()
-	if err := root.Advance(root.BitsLeft()); err != nil {
+	if err := root.SkipBits(root.BitsLeft()); err != nil {
 		return false
 	}
 	if skipFirstRefs > 0 {
-		if err := root.AdvanceExt(0, skipFirstRefs); err != nil {
+		if err := root.SkipBitsAndRefs(0, skipFirstRefs); err != nil {
 			return false
 		}
 	}
@@ -1056,7 +1080,11 @@ func SENDMSG() *helpers.SimpleOP {
 			}
 
 			var msg tlb.Message
-			if err = tlb.LoadFromCell(&msg, msgCell.BeginParse()); err != nil {
+			msgSlice, err := state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
+			if err != nil {
+				return err
+			}
+			if err = tlb.LoadFromCell(&msg, msgSlice); err != nil {
 				return vmerr.Error(vmerr.CodeUnknown, "invalid message")
 			}
 

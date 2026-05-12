@@ -206,7 +206,7 @@ func (f *failingContent) ContentCell() (*cell.Cell, error) {
 }
 
 func addrSlice(addr *address.Address) *cell.Slice {
-	return cell.BeginCell().MustStoreAddr(addr).EndCell().BeginParse()
+	return cell.BeginCell().MustStoreAddr(addr).EndCell().MustBeginParse()
 }
 
 func offchainCell(t *testing.T, uri string) *cell.Cell {
@@ -221,7 +221,7 @@ func offchainCell(t *testing.T, uri string) *cell.Cell {
 
 func decode[T any](t *testing.T, cl *cell.Cell, dst *T) {
 	t.Helper()
-	if err := tlb.LoadFromCell(dst, cl.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(dst, cl.MustBeginParse()); err != nil {
 		t.Fatalf("failed to decode payload: %v", err)
 	}
 }
@@ -289,7 +289,7 @@ func TestToNftContent(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		uri, err := cl.BeginParse().LoadStringSnake()
+		uri, err := cl.MustBeginParse().LoadStringSnake()
 		if err != nil {
 			t.Fatalf("failed to parse offchain uri: %v", err)
 		}
@@ -475,7 +475,7 @@ func TestCollectionClient_BuildMintPayloads(t *testing.T) {
 			t.Fatalf("unexpected amount: %s", payload.TonAmount.Nano().String())
 		}
 
-		s := payload.Content.BeginParse()
+		s := payload.Content.MustBeginParse()
 		parsedOwner, err := s.LoadAddr()
 		if err != nil {
 			t.Fatalf("failed to parse owner: %v", err)
@@ -510,7 +510,7 @@ func TestCollectionClient_BuildMintPayloads(t *testing.T) {
 			t.Fatalf("unexpected amount: %s", payload.TonAmount.Nano().String())
 		}
 
-		s := payload.Content.BeginParse()
+		s := payload.Content.MustBeginParse()
 		parsedOwner, err := s.LoadAddr()
 		if err != nil {
 			t.Fatalf("failed to parse owner: %v", err)
@@ -749,7 +749,7 @@ func TestItemEditableClient_GetEditorAndBuildEditPayload(t *testing.T) {
 		var payload ItemEditPayload
 		decode(t, body, &payload)
 
-		uri, err := payload.Content.BeginParse().LoadStringSnake()
+		uri, err := payload.Content.MustBeginParse().LoadStringSnake()
 		if err != nil {
 			t.Fatalf("failed to parse offchain uri: %v", err)
 		}

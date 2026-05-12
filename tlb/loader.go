@@ -54,6 +54,14 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 	return loadFromCell(v, loader, false, len(skipMagic) > 0 && skipMagic[0])
 }
 
+func Load(v any, c *cell.Cell) error {
+	loader, err := c.BeginParse()
+	if err != nil {
+		return err
+	}
+	return loadFromCell(v, loader, false, false)
+}
+
 func LoadFromCellAsProof(v any, loader *cell.Slice, skipMagic ...bool) error {
 	return loadFromCell(v, loader, true, len(skipMagic) > 0 && skipMagic[0])
 }
@@ -189,9 +197,16 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			if skipProofBranches && ref.GetType() == cell.PrunedCellType {
 				continue
 			}
+			if typeToLoad == cellType {
+				setVal(reflect.ValueOf(ref))
+				continue
+			}
 
 			settings = settings[1:]
-			loader = ref.BeginParse()
+			loader, err = ref.BeginParse()
+			if err != nil {
+				return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
+			}
 		}
 
 		if structField.Type.Kind() == reflect.Interface {
@@ -349,7 +364,12 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 				continue
 			}
 
-			x, err := loadStringTagValue(parseType, ref.BeginParse())
+			refS, err := ref.BeginParse()
+			if err != nil {
+				return fmt.Errorf("failed to load string ref for %s, err: %w", structField.Name, err)
+			}
+
+			x, err := loadStringTagValue(parseType, refS)
 			if err != nil {
 				return fmt.Errorf("failed to load string for %s, err: %w", structField.Name, err)
 			}

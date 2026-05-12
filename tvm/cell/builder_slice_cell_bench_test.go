@@ -176,7 +176,7 @@ func BenchmarkSliceLoadUInt(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				slice := bm.cell.BeginParse()
+				slice := bm.cell.MustBeginParse()
 				v, err := slice.LoadUInt(bm.bits)
 				if err != nil {
 					b.Fatal(err)
@@ -194,7 +194,7 @@ func BenchmarkSliceLoadBoolBit(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		slice := cell.BeginParse()
+		slice := cell.MustBeginParse()
 		v, err := slice.LoadBoolBit()
 		if err != nil {
 			b.Fatal(err)
@@ -221,7 +221,7 @@ func BenchmarkSliceLoadSlice(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				slice := bm.cell.BeginParse()
+				slice := bm.cell.MustBeginParse()
 				out, err := slice.LoadSlice(bm.bits)
 				if err != nil {
 					b.Fatal(err)
@@ -248,7 +248,7 @@ func BenchmarkSliceLoadBigUInt(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				slice := bm.cell.BeginParse()
+				slice := bm.cell.MustBeginParse()
 				v, err := slice.LoadBigUInt(bm.bits)
 				if err != nil {
 					b.Fatal(err)
@@ -260,7 +260,7 @@ func BenchmarkSliceLoadBigUInt(b *testing.B) {
 }
 
 func BenchmarkSliceToBuilder(b *testing.B) {
-	slice := benchLargeCell().BeginParse()
+	slice := benchLargeCell().MustBeginParse()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -271,7 +271,7 @@ func BenchmarkSliceToBuilder(b *testing.B) {
 }
 
 func BenchmarkSliceToCell(b *testing.B) {
-	slice := benchLargeCell().BeginParse()
+	slice := benchLargeCell().MustBeginParse()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -300,7 +300,7 @@ func BenchmarkCellBeginParse(b *testing.B) {
 			b.ResetTimer()
 
 			for i := 0; i < b.N; i++ {
-				benchmarkSliceSink = bm.cell.BeginParse()
+				benchmarkSliceSink = bm.cell.MustBeginParse()
 			}
 		})
 	}

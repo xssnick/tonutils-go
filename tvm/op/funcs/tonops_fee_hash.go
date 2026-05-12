@@ -265,20 +265,36 @@ func popUint64NonNegative(st *vm.Stack) (uint64, error) {
 	return v.Uint64(), nil
 }
 
-type getExtraBalanceCheapObserver struct {
+type getExtraBalanceCheapTrace struct {
 	state     *vm.State
 	remaining int64
 	err       error
+	trace     *cell.Trace
 }
 
-func newGetExtraBalanceCheapObserver(state *vm.State) *getExtraBalanceCheapObserver {
-	return &getExtraBalanceCheapObserver{
+func newGetExtraBalanceCheapTrace(state *vm.State) *getExtraBalanceCheapTrace {
+	return &getExtraBalanceCheapTrace{
 		state:     state,
 		remaining: vm.GetExtraBalanceCheapMaxGas,
 	}
 }
 
-func (o *getExtraBalanceCheapObserver) OnCellLoad(hash cell.Hash) {
+func (o *getExtraBalanceCheapTrace) Trace() *cell.Trace {
+	if o.trace == nil {
+		o.trace = cell.NewTrace(cell.TraceHooks{
+			OnLoad: func(c *cell.Cell) {
+				o.onCellLoad(c.HashKey())
+			},
+			OnChild: func(int) *cell.Trace {
+				return o.Trace()
+			},
+			PendingError: o.PendingError,
+		})
+	}
+	return o.trace
+}
+
+func (o *getExtraBalanceCheapTrace) onCellLoad(hash cell.Hash) {
 	if o.err != nil {
 		return
 	}
@@ -304,14 +320,7 @@ func (o *getExtraBalanceCheapObserver) OnCellLoad(hash cell.Hash) {
 	}
 }
 
-func (o *getExtraBalanceCheapObserver) OnCellCreate() {
-}
-
-func (o *getExtraBalanceCheapObserver) OnRef(_ cell.TraceNode, _ int) cell.TraceNode {
-	return 0
-}
-
-func (o *getExtraBalanceCheapObserver) PendingError() error {
+func (o *getExtraBalanceCheapTrace) PendingError() error {
 	return o.err
 }
 
@@ -527,16 +536,16 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 			}
 
 			key := cell.BeginCell().MustStoreBigUInt(id, 32).EndCell()
-			observer := cell.Observer(&state.Cells)
-			var cheapObserver *getExtraBalanceCheapObserver
+			trace := state.Cells.Trace()
+			var cheapTrace *getExtraBalanceCheapTrace
 			if cheap {
-				cheapObserver = newGetExtraBalanceCheapObserver(state)
-				observer = cheapObserver
+				cheapTrace = newGetExtraBalanceCheapTrace(state)
+				trace = cheapTrace.Trace()
 			}
 
-			value, err := dictRoot.AsDict(32).SetObserver(observer).LoadValue(key)
-			if cheapObserver != nil {
-				if gasErr := cheapObserver.PendingError(); gasErr != nil {
+			value, err := dictRoot.AsDict(32).SetTrace(trace).LoadValue(key)
+			if cheapTrace != nil {
+				if gasErr := cheapTrace.PendingError(); gasErr != nil {
 					return gasErr
 				}
 			}
@@ -692,7 +701,7 @@ func valueBitsForHashExt(val any) ([]byte, int, error) {
 		}
 		return data, int(x.BitsLeft()), nil
 	case *cell.Builder:
-		sl := x.WithoutObserver().ToSlice()
+		sl := x.WithoutTrace().ToSlice()
 		data, err := sl.PreloadSlice(sl.BitsLeft())
 		if err != nil {
 			return nil, 0, err
@@ -839,7 +848,7 @@ func HASHBU() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			cl := builder.WithoutObserver().EndCell()
+			cl := builder.WithoutTrace().EndCell()
 			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash()))
 		},
 		Name:      "HASHBU",

@@ -285,11 +285,17 @@ func combineAugmentedIntoRightFork(leftNode, rightNode *augmentedCombineNode, co
 }
 
 func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*augmentedCombineNode, error) {
-	if view.cell.IsSpecial() {
+	if view.cell.IsSpecial() && !view.cell.IsLazy() {
 		return nil, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", view.cell.GetType())
 	}
 
-	loader := view.cell.BeginParse()
+	loader, err := view.cell.BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	if loader.cell.IsSpecial() {
+		return nil, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", loader.cell.GetType())
+	}
 	labelLen, labelBuilder, err := loadLabel(view.keySz, loader, BeginCell())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dictionary label: %w", err)
@@ -372,7 +378,7 @@ func extractAugmentedNodeExtraStrict(c *Cell, keySz uint, aug Augmentation) (*Ce
 }
 
 func validateAugmentedExtraCellForCombine(extra *Cell, aug Augmentation) error {
-	loader := extra.BeginParse()
+	loader := extra.MustBeginParse()
 	if err := aug.SkipExtra(loader); err != nil {
 		return fmt.Errorf("failed to load augmented dictionary extra: %w", err)
 	}
@@ -384,7 +390,7 @@ func validateAugmentedExtraCellForCombine(extra *Cell, aug Augmentation) error {
 }
 
 func storeAugmentedForkForCombine(aug Augmentation, label *Slice, left, leftExtra, right, rightExtra *Cell, keySz uint) (*Cell, *Cell, error) {
-	extra, err := aug.CombineExtra(leftExtra.BeginParse(), rightExtra.BeginParse())
+	extra, err := aug.CombineExtra(leftExtra.MustBeginParse(), rightExtra.MustBeginParse())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -392,7 +398,7 @@ func storeAugmentedForkForCombine(aug Augmentation, label *Slice, left, leftExtr
 	fork := BeginCell().
 		MustStoreRef(left).
 		MustStoreRef(right).
-		MustStoreBuilder(extra.BeginParse().ToBuilder())
+		MustStoreBuilder(extra.MustBeginParse().ToBuilder())
 
 	root, err := storeDictNode(label, fork, keySz)
 	if err != nil {
@@ -434,6 +440,10 @@ func augmentedPayloadBuilderForCombine(payload *Slice) (*Builder, error) {
 	refsCount := refs.RefsNum()
 	for i := 0; i < refsCount; i++ {
 		ref, err := refs.LoadRefCell()
+		if err != nil {
+			return nil, err
+		}
+		ref, err = ref.load()
 		if err != nil {
 			return nil, err
 		}

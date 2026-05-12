@@ -86,7 +86,7 @@ func TestMatchLabelPrefix(t *testing.T) {
 			}
 			builder.MustStoreBoolBit(tc.wantPayload)
 
-			loader := builder.EndCell().BeginParse()
+			loader := builder.EndCell().MustBeginParse()
 			key := BeginCell().MustStoreUInt(tc.keyValue, tc.keyBits).ToSlice()
 
 			gotLen, gotMatched, err := matchLabelPrefix(tc.maxLen, loader, key)

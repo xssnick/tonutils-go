@@ -210,7 +210,11 @@ func benchmarkWalkMerkleUpdateSource(
 	shapeRefs := newCellRefView(shape)
 	childDepth := merkleChildDepth(shape, merkleDepth)
 	for i := 0; i < source.refsCount(); i++ {
-		shapeRef, err := shapeRefs.resolvedRef(i)
+		shapeRef, err := shapeRefs.boundaryRef(i)
+		if err != nil {
+			return fmt.Errorf("failed to peek shape ref %d: %w", i, err)
+		}
+		shapeRef, err = shapeRef.load()
 		if err != nil {
 			return fmt.Errorf("failed to load shape ref %d: %w", i, err)
 		}
@@ -265,7 +269,11 @@ func benchmarkCollectMerkleUpdateReuse(
 	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	for i := 0; i < len(refs); i++ {
-		ref, err := refView.resolvedRef(i)
+		ref, err := refView.boundaryRef(i)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to peek destination ref %d: %w", i, err)
+		}
+		ref, err = ref.load()
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to load destination ref %d: %w", i, err)
 		}

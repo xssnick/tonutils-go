@@ -27,7 +27,7 @@ func SDSKIPFIRST() *helpers.SimpleOP {
 				return err
 			}
 
-			if err = s1.Advance(uint(i0.Uint64())); err != nil {
+			if err = s1.SkipBits(uint(i0.Uint64())); err != nil {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 

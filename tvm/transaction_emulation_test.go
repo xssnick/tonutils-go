@@ -1469,7 +1469,7 @@ func TestEmulateTransactionNewBounceBodyFormat(t *testing.T) {
 	if got := bounced.IHRFee.Nano().Uint64(); got != 1 {
 		t.Fatalf("bounce should preserve low extra_flags bits, got=%d", got)
 	}
-	bs := bounced.Body.BeginParse()
+	bs := bounced.Body.MustBeginParse()
 	tag, err := bs.LoadUInt(32)
 	if err != nil {
 		t.Fatalf("failed to load bounce body tag: %v", err)

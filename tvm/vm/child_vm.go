@@ -69,8 +69,13 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		return vmerr.Error(vmerr.CodeRangeCheck, "invalid child return values count")
 	}
 
-	child := NewExecutionState(s.GlobalVersion, cfg.Gas, cfg.Data, cfg.C7, cfg.Stack)
-	child.CurrentCode = cfg.Code.Copy()
+	parentTrace := s.Cells.Trace()
+	childStack := cfg.Stack.WithoutTrace(parentTrace)
+	childC7 := unbindTupleTrace(cfg.C7, parentTrace)
+	childCode := cfg.Code.Copy().SetTrace(cfg.Code.Trace().WithoutTrace(parentTrace))
+
+	child := NewExecutionState(s.GlobalVersion, cfg.Gas, cfg.Data, childC7, childStack)
+	child.CurrentCode = childCode
 
 	if cfg.IsolateGas {
 		if err := s.FlushFreeGas(); err != nil {

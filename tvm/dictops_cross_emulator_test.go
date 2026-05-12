@@ -63,7 +63,7 @@ func TestTVMCrossEmulatorDictOps(t *testing.T) {
 		{
 			name:  "plddictq_invalid",
 			code:  codeFromOpcodes(t, 0xF407),
-			stack: []any{cell.BeginCell().EndCell().BeginParse()},
+			stack: []any{cell.BeginCell().EndCell().MustBeginParse()},
 			exit:  0,
 		},
 		{
@@ -81,7 +81,7 @@ func TestTVMCrossEmulatorDictOps(t *testing.T) {
 		{
 			name:  "dictsetget_missing",
 			code:  codeFromOpcodes(t, 0xF41A),
-			stack: []any{cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse(), mustSliceKey(t, 0x01, 8), nil, int64(8)},
+			stack: []any{cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse(), mustSliceKey(t, 0x01, 8), nil, int64(8)},
 			exit:  0,
 		},
 		{
@@ -147,7 +147,7 @@ func TestTVMCrossEmulatorDictOps(t *testing.T) {
 		{
 			name:  "dictuset_negative_key",
 			code:  codeFromOpcodes(t, 0xF416),
-			stack: []any{cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse(), bigIntFromString(t, "-1"), nil, int64(8)},
+			stack: []any{cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse(), bigIntFromString(t, "-1"), nil, int64(8)},
 			exit:  vmerr.CodeRangeCheck,
 		},
 	}

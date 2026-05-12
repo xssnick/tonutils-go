@@ -10,7 +10,7 @@ import (
 func TestBasicSliceComparisonOps(t *testing.T) {
 	t.Run("EmptyChecks", func(t *testing.T) {
 		state := newCellSliceState()
-		pushCellSliceSlice(t, state, cell.BeginCell().EndCell().BeginParse())
+		pushCellSliceSlice(t, state, cell.BeginCell().EndCell().MustBeginParse())
 		if err := SDEMPTY().Interpret(state); err != nil {
 			t.Fatalf("SDEMPTY failed: %v", err)
 		}

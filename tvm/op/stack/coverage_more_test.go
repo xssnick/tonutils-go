@@ -56,7 +56,7 @@ func TestPushPopAndXchgRoundTrip(t *testing.T) {
 	t.Run("PushRoundTripAndInterpret", func(t *testing.T) {
 		src := PUSH(1)
 		dst := PUSH(0)
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); got != "s1 PUSH" {
@@ -78,7 +78,7 @@ func TestPushPopAndXchgRoundTrip(t *testing.T) {
 	t.Run("PopRoundTripAndInterpret", func(t *testing.T) {
 		src := POP(1)
 		dst := POP(0)
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); got != "s1 POP" {
@@ -112,7 +112,7 @@ func TestPushPopAndXchgRoundTrip(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				dst := XCHG(0, 0)
-				if err := dst.Deserialize(tt.src.Serialize().EndCell().BeginParse()); err != nil {
+				if err := dst.Deserialize(tt.src.Serialize().EndCell().MustBeginParse()); err != nil {
 					t.Fatalf("deserialize failed: %v", err)
 				}
 				if got := dst.SerializeText(); got != tt.text {
@@ -141,7 +141,7 @@ func TestPushRefAndSliceRoundTrip(t *testing.T) {
 	t.Run("PushRefRoundTripAndInterpret", func(t *testing.T) {
 		src := PUSHREF(ref)
 		dst := PUSHREF(nil)
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); !strings.Contains(got, "PUSHREF") {
@@ -165,15 +165,15 @@ func TestPushRefAndSliceRoundTrip(t *testing.T) {
 	})
 
 	t.Run("PushRefDeserializeRequiresReference", func(t *testing.T) {
-		if err := PUSHREF(nil).Deserialize(cell.BeginCell().MustStoreUInt(0x88, 8).EndCell().BeginParse()); err == nil {
+		if err := PUSHREF(nil).Deserialize(cell.BeginCell().MustStoreUInt(0x88, 8).EndCell().MustBeginParse()); err == nil {
 			t.Fatal("expected PUSHREF deserialize without ref to fail")
 		}
 	})
 
 	t.Run("PushSliceRoundTripAndInterpret", func(t *testing.T) {
 		src := PUSHSLICE(sl)
-		dst := PUSHSLICE(cell.BeginCell().EndCell().BeginParse())
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		dst := PUSHSLICE(cell.BeginCell().EndCell().MustBeginParse())
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); !strings.Contains(got, "PUSHREFSLICE") {
@@ -197,7 +197,7 @@ func TestPushRefAndSliceRoundTrip(t *testing.T) {
 	})
 
 	t.Run("PushSliceDeserializeRequiresReference", func(t *testing.T) {
-		if err := PUSHSLICE(cell.BeginCell().EndCell().BeginParse()).Deserialize(cell.BeginCell().MustStoreUInt(0x89, 8).EndCell().BeginParse()); err == nil {
+		if err := PUSHSLICE(cell.BeginCell().EndCell().MustBeginParse()).Deserialize(cell.BeginCell().MustStoreUInt(0x89, 8).EndCell().MustBeginParse()); err == nil {
 			t.Fatal("expected PUSHSLICE deserialize without ref to fail")
 		}
 	})
@@ -222,8 +222,8 @@ func TestPushSliceInlineForms(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			src := PUSHSLICEINLINE(tt.value)
-			dst := PUSHSLICEINLINE(cell.BeginCell().EndCell().BeginParse())
-			if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+			dst := PUSHSLICEINLINE(cell.BeginCell().EndCell().MustBeginParse())
+			if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 				t.Fatalf("deserialize failed: %v", err)
 			}
 			if dst.form != tt.form {
@@ -254,15 +254,15 @@ func TestPushSliceInlineForms(t *testing.T) {
 		if got := paddedInlineBits(7, 4); got != 12 {
 			t.Fatalf("unexpected padded bits: %d", got)
 		}
-		payload := encodeInlineSlicePayload(cell.BeginCell().MustStoreUInt(1, 1).ToSlice(), 4).EndCell().BeginParse()
+		payload := encodeInlineSlicePayload(cell.BeginCell().MustStoreUInt(1, 1).ToSlice(), 4).EndCell().MustBeginParse()
 		if payload.BitsLeft() != 4 {
 			t.Fatalf("unexpected encoded payload bits: %d", payload.BitsLeft())
 		}
 	})
 
 	t.Run("DeserializeRejectsTooManyRefsInLongForm", func(t *testing.T) {
-		code := cell.BeginCell().MustStoreUInt(0x8D, 8).MustStoreUInt(5<<7, 10).EndCell().BeginParse()
-		if err := PUSHSLICEINLINE(cell.BeginCell().EndCell().BeginParse()).Deserialize(code); err == nil {
+		code := cell.BeginCell().MustStoreUInt(0x8D, 8).MustStoreUInt(5<<7, 10).EndCell().MustBeginParse()
+		if err := PUSHSLICEINLINE(cell.BeginCell().EndCell().MustBeginParse()).Deserialize(code); err == nil {
 			t.Fatal("expected invalid long inline slice to fail")
 		}
 	})
@@ -297,7 +297,7 @@ func TestPushContRoundTripAndInterpret(t *testing.T) {
 			src := tt.newOp(tt.cont)
 			serialized := src.Serialize()
 			dst := PUSHCONT(nil)
-			if err := dst.Deserialize(serialized.EndCell().BeginParse()); err != nil {
+			if err := dst.Deserialize(serialized.EndCell().MustBeginParse()); err != nil {
 				t.Fatalf("deserialize failed: %v", err)
 			}
 			if dst.typ != tt.typ {
@@ -337,7 +337,7 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 	t.Run("PushCtrRoundTripAndInterpret", func(t *testing.T) {
 		src := PUSHCTR(4)
 		dst := PUSHCTR(0)
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); got != "c4 PUSH" {
@@ -366,7 +366,7 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 		src := DICTPUSHCONST(ref)
 		src.pfx = 511
 		dst := DICTPUSHCONST(nil)
-		if err := dst.Deserialize(src.Serialize().EndCell().BeginParse()); err != nil {
+		if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 		if got := dst.SerializeText(); !strings.Contains(got, "511 DICTPUSHCONST") {
@@ -398,12 +398,12 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 
 	t.Run("LongPushPopRoundTrip", func(t *testing.T) {
 		pushDst := PUSHL(0)
-		pushCode := PUSHL(2).Serialize().EndCell().BeginParse()
+		pushCode := PUSHL(2).Serialize().EndCell().MustBeginParse()
 		if err := pushDst.Deserialize(pushCode); err != nil {
 			t.Fatalf("push deserialize failed: %v", err)
 		}
 		popDst := POPL(0)
-		popCode := POPL(1).Serialize().EndCell().BeginParse()
+		popCode := POPL(1).Serialize().EndCell().MustBeginParse()
 		if err := popDst.Deserialize(popCode); err != nil {
 			t.Fatalf("pop deserialize failed: %v", err)
 		}
@@ -680,7 +680,7 @@ func TestMultiOpsAndAliases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.decoded.Deserialize(tt.op.Serialize().EndCell().BeginParse()); err != nil {
+			if err := tt.decoded.Deserialize(tt.op.Serialize().EndCell().MustBeginParse()); err != nil {
 				t.Fatalf("deserialize failed: %v", err)
 			}
 			if got := tt.decoded.SerializeText(); got != tt.text {
@@ -875,7 +875,7 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.decoded.Deserialize(tt.op.Serialize().EndCell().BeginParse()); err != nil {
+			if err := tt.decoded.Deserialize(tt.op.Serialize().EndCell().MustBeginParse()); err != nil {
 				t.Fatalf("deserialize failed: %v", err)
 			}
 			if got := tt.decoded.SerializeText(); got != tt.text {

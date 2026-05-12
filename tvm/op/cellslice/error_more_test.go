@@ -22,7 +22,7 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 		src := cell.BeginCell().
 			MustStoreUInt(0b101011, 6).
 			MustStoreRef(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()).
-			EndCell().BeginParse()
+			EndCell().MustBeginParse()
 
 		st := newCellSliceState()
 		pushCellSliceSlice(t, st, src.Copy())
@@ -93,7 +93,7 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 		}
 
 		st = newCellSliceState()
-		pushCellSliceSlice(t, st, body.BeginParse())
+		pushCellSliceSlice(t, st, body.MustBeginParse())
 		if err := LDREFRTOS().Interpret(st); err == nil {
 			t.Fatal("expected LDREFRTOS to fail when loading a virtualized pruned child")
 		} else {
@@ -136,7 +136,7 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 		}
 
 		st = newCellSliceState()
-		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreUInt(0xEF, 8).MustStoreRef(ref).EndCell().BeginParse())
+		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreUInt(0xEF, 8).MustStoreRef(ref).EndCell().MustBeginParse())
 		pushCellSliceBuilder(t, st, mustFullBuilder(t))
 		if err := STSLICE().Interpret(st); err == nil {
 			t.Fatal("STSLICE should fail when refs overflow")
@@ -156,7 +156,7 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 
 		hashOp := CHASHI(1)
 		decodedHash := CHASHI(0)
-		if err := decodedHash.Deserialize(hashOp.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decodedHash.Deserialize(hashOp.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("CHASHI deserialize failed: %v", err)
 		}
 		if got := decodedHash.SerializeText(); got != "CHASHI 1" {
@@ -178,7 +178,7 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 
 		depthOp := CDEPTHI(1)
 		decodedDepth := CDEPTHI(0)
-		if err := decodedDepth.Deserialize(depthOp.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decodedDepth.Deserialize(depthOp.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("CDEPTHI deserialize failed: %v", err)
 		}
 		if got := decodedDepth.SerializeText(); got != "CDEPTHI 1" {

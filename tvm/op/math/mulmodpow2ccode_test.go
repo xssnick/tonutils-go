@@ -34,7 +34,7 @@ func TestMulmodpow2ccodeOperation(t *testing.T) {
 			st.PushInt(big.NewInt(test.y))
 
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
-			codeSlice := codeCell.BeginParse()
+			codeSlice := codeCell.MustBeginParse()
 
 			op := MULMODPOW2CCODE(0)
 			op.Deserialize(codeSlice)

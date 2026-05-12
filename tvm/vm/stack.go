@@ -21,24 +21,24 @@ type SendMsgAction struct {
 
 type Stack struct {
 	elems []any
-	obs   cell.Observer
+	trace *cell.Trace
 }
 
 type StackCheckpoint struct {
 	elems []any
-	obs   cell.Observer
+	trace *cell.Trace
 }
 
 func (s *Stack) Checkpoint() StackCheckpoint {
 	return StackCheckpoint{
 		elems: s.elems,
-		obs:   s.obs,
+		trace: s.trace,
 	}
 }
 
 func (s *Stack) RestoreCheckpoint(cp StackCheckpoint) {
 	s.elems = cp.elems
-	s.obs = cp.obs
+	s.trace = cp.trace
 }
 
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
@@ -52,21 +52,21 @@ func NewStack() *Stack {
 	}
 }
 
-func (s *Stack) SetObserver(observer cell.Observer) {
-	s.obs = observer
-	if observer == nil {
+func (s *Stack) SetTrace(trace *cell.Trace) {
+	s.trace = trace
+	if trace == nil {
 		return
 	}
 	for i, val := range s.elems {
-		s.elems[i] = bindValueObserver(val, observer)
+		s.elems[i] = bindValueTrace(val, trace)
 	}
 }
 
-func bindTupleObserver(t tuple.Tuple, observer cell.Observer) tuple.Tuple {
-	if observer == nil {
+func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
+	if trace == nil {
 		return t
 	}
-	if t.HasBindingID(observer) {
+	if t.HasBindingID(trace) {
 		return t
 	}
 
@@ -76,30 +76,79 @@ func bindTupleObserver(t tuple.Tuple, observer cell.Observer) tuple.Tuple {
 		if err != nil {
 			panic(err)
 		}
-		vals[i] = bindValueObserver(val, observer)
+		vals[i] = bindValueTrace(val, trace)
 	}
 	bound := tuple.NewTupleValue(vals...)
-	return bound.WithBindingID(observer)
+	return bound.WithBindingID(trace)
 }
 
-func bindValueObserver(val any, observer cell.Observer) any {
-	if observer == nil {
+func bindValueTrace(val any, trace *cell.Trace) any {
+	if trace == nil {
 		return val
 	}
 
 	switch x := val.(type) {
 	case *cell.Slice:
-		return x.Copy().SetObserver(observer)
+		return x.Copy().SetTrace(cell.CombineTraces(x.Trace(), trace))
 	case *cell.Builder:
-		return x.Copy().SetObserver(observer)
+		return x.Copy().SetTrace(cell.CombineTraces(x.Trace(), trace))
 	case tuple.Tuple:
-		return bindTupleObserver(x, observer)
+		return bindTupleTrace(x, trace)
 	default:
 		return val
 	}
 }
 
-func shareStackValue(val any, observer cell.Observer) (any, error) {
+func unbindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
+	if trace == nil || t.IsNull() {
+		return t
+	}
+
+	vals := make([]any, t.Len())
+	for i := range vals {
+		val, err := t.RawIndex(i)
+		if err != nil {
+			panic(err)
+		}
+		vals[i] = unbindValueTrace(val, trace)
+	}
+	return tuple.NewTupleValue(vals...)
+}
+
+func unbindValueTrace(val any, trace *cell.Trace) any {
+	if trace == nil {
+		return val
+	}
+
+	switch x := val.(type) {
+	case *cell.Cell:
+		return x.WithTrace(x.Trace().WithoutTrace(trace))
+	case *cell.Slice:
+		return x.Copy().SetTrace(x.Trace().WithoutTrace(trace))
+	case *cell.Builder:
+		return x.Copy().SetTrace(x.Trace().WithoutTrace(trace))
+	case tuple.Tuple:
+		return unbindTupleTrace(x, trace)
+	default:
+		return val
+	}
+}
+
+func (s *Stack) WithoutTrace(trace *cell.Trace) *Stack {
+	if s == nil || trace == nil {
+		return s
+	}
+	cp := &Stack{
+		elems: make([]any, len(s.elems)),
+		trace: s.trace.WithoutTrace(trace),
+	}
+	for i, val := range s.elems {
+		cp.elems[i] = unbindValueTrace(val, trace)
+	}
+	return cp
+}
+
+func shareStackValue(val any, trace *cell.Trace) (any, error) {
 	switch t := val.(type) {
 	case *big.Int:
 		return new(big.Int).Set(t), nil
@@ -111,18 +160,18 @@ func shareStackValue(val any, observer cell.Observer) (any, error) {
 		return t, nil
 	case *cell.Builder:
 		cp := t.Copy()
-		if observer != nil {
-			cp.SetObserver(observer)
+		if trace != nil {
+			cp.SetTrace(cell.CombineTraces(cp.Trace(), trace))
 		}
 		return cp, nil
 	case *cell.Slice:
 		cp := t.Copy()
-		if observer != nil {
-			cp.SetObserver(observer)
+		if trace != nil {
+			cp.SetTrace(cell.CombineTraces(cp.Trace(), trace))
 		}
 		return cp, nil
 	case tuple.Tuple:
-		return bindTupleObserver(t, observer), nil
+		return bindTupleTrace(t, trace), nil
 	case nil:
 		return nil, nil
 	default:
@@ -181,7 +230,7 @@ func (s *Stack) PushAny(val any) error {
 	}
 
 	var err error
-	val, err = shareStackValue(val, s.obs)
+	val, err = shareStackValue(val, s.trace)
 	if err != nil {
 		return err
 	}
@@ -512,10 +561,10 @@ func (s *Stack) String() string {
 			val = x.String()
 		case *cell.Slice:
 			typ = "slice"
-			val = x.WithoutObserver().MustToCell().Dump()
+			val = x.WithoutTrace().MustToCell().Dump()
 		case *cell.Builder:
 			typ = "builder"
-			val = x.WithoutObserver().EndCell().Dump()
+			val = x.WithoutTrace().EndCell().Dump()
 		case *cell.Cell:
 			typ = "cell"
 			val = x.Dump()
@@ -529,10 +578,10 @@ func (s *Stack) String() string {
 func (s *Stack) Copy() *Stack {
 	c := &Stack{
 		elems: make([]any, len(s.elems)),
-		obs:   s.obs,
+		trace: s.trace,
 	}
 	for i, elem := range s.elems {
-		cloned, err := shareStackValue(elem, c.obs)
+		cloned, err := shareStackValue(elem, c.trace)
 		if err != nil {
 			panic(err)
 		}
@@ -543,13 +592,13 @@ func (s *Stack) Copy() *Stack {
 
 func (s *Stack) Restore(src *Stack) {
 	s.elems = src.elems
-	s.obs = src.obs
+	s.trace = src.trace
 }
 
 func (s *Stack) Snapshot() *Stack {
 	return &Stack{
 		elems: append([]any(nil), s.elems...),
-		obs:   s.obs,
+		trace: s.trace,
 	}
 }
 

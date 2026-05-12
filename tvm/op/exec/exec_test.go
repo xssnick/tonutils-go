@@ -42,7 +42,7 @@ func (t *testContinuation) Copy() vm.Continuation {
 func newTestState() *vm.State {
 	st := &vm.State{
 		Stack:       vm.NewStack(),
-		CurrentCode: cell.BeginCell().EndCell().BeginParse(),
+		CurrentCode: cell.BeginCell().EndCell().MustBeginParse(),
 		Gas:         vm.NewGas(),
 	}
 	st.Reg.C[0] = &vm.QuitContinuation{ExitCode: 0}
@@ -137,7 +137,7 @@ func TestRepeatSkipsNonPositive(t *testing.T) {
 
 func TestRepeatEndSetsNextIteration(t *testing.T) {
 	state := newTestState()
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 
 	after := &testContinuation{name: "after"}
 	state.Reg.C[0] = after
@@ -170,7 +170,7 @@ func TestRepeatEndSetsNextIteration(t *testing.T) {
 
 func TestRepeatEndReturnOnZero(t *testing.T) {
 	state := newTestState()
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell().MustBeginParse()
 
 	var calls int
 	original := &testContinuation{
@@ -236,7 +236,7 @@ func TestUntilRunsUntilCondition(t *testing.T) {
 
 func TestUntilEndInstallsContinuation(t *testing.T) {
 	state := newTestState()
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0x01, 2).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0x01, 2).EndCell().MustBeginParse()
 
 	after := &testContinuation{name: "after"}
 	state.Reg.C[0] = after
@@ -305,7 +305,7 @@ func TestWhileRunsWhileCondition(t *testing.T) {
 
 func TestWhileEndInstallsContinuation(t *testing.T) {
 	state := newTestState()
-	state.CurrentCode = cell.BeginCell().MustStoreUInt(0x0, 1).EndCell().BeginParse()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0x0, 1).EndCell().MustBeginParse()
 
 	after := &testContinuation{name: "after"}
 	state.Reg.C[0] = after
@@ -407,7 +407,7 @@ func TestJumpXArgs(t *testing.T) {
 
 func TestJumpXData(t *testing.T) {
 	state := newTestState()
-	code := cell.BeginCell().MustStoreUInt(0xC3, 8).MustStoreUInt(0x55, 8).EndCell().BeginParse()
+	code := cell.BeginCell().MustStoreUInt(0xC3, 8).MustStoreUInt(0x55, 8).EndCell().MustBeginParse()
 	state.CurrentCode = code
 
 	var pushedHash []byte

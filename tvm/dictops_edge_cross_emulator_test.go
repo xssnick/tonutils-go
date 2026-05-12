@@ -618,11 +618,11 @@ func dictEdgeKey(t *testing.T, value *big.Int, bits uint) *cell.Cell {
 
 func dictEdgeSliceKey(t *testing.T, value *big.Int, bits uint) *cell.Slice {
 	t.Helper()
-	return dictEdgeKey(t, value, bits).BeginParse()
+	return dictEdgeKey(t, value, bits).MustBeginParse()
 }
 
 func dictEdgeSlice(value uint64, bits uint) *cell.Slice {
-	return cell.BeginCell().MustStoreUInt(value, bits).EndCell().BeginParse()
+	return cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse()
 }
 
 func dictEdgeBuilder(value uint64, bits uint) *cell.Builder {

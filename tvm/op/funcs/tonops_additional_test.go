@@ -588,7 +588,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 	t.Run("SetcpAndGlobalRoundTrips", func(t *testing.T) {
 		setCP := SETCP(-1)
 		decodedSetCP := SETCP(0)
-		if err := decodedSetCP.Deserialize(setCP.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decodedSetCP.Deserialize(setCP.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("SETCP deserialize failed: %v", err)
 		}
 		if got := decodedSetCP.SerializeText(); got != "SETCP -1" {
@@ -601,7 +601,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 
 		setGlob := SETGLOB(7)
 		decodedSetGlob := SETGLOB(0)
-		if err := decodedSetGlob.Deserialize(setGlob.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decodedSetGlob.Deserialize(setGlob.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("SETGLOB deserialize failed: %v", err)
 		}
 		if got := decodedSetGlob.SerializeText(); got != "SETGLOB 7" {
@@ -618,7 +618,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 
 		getGlob := GETGLOB(7)
 		decodedGetGlob := GETGLOB(0)
-		if err := decodedGetGlob.Deserialize(getGlob.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decodedGetGlob.Deserialize(getGlob.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("GETGLOB deserialize failed: %v", err)
 		}
 		if got := decodedGetGlob.SerializeText(); got != "GETGLOB 7" {
@@ -638,7 +638,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 		root := cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(ref).EndCell()
 
 		st := newFuncTestState(t, nil)
-		if err := st.Stack.PushSlice(root.BeginParse()); err != nil {
+		if err := st.Stack.PushSlice(root.MustBeginParse()); err != nil {
 			t.Fatalf("failed to push SDATASIZE slice: %v", err)
 		}
 		if err := st.Stack.PushInt(big.NewInt(10)); err != nil {
@@ -664,7 +664,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 		}
 
 		st = newFuncTestState(t, nil)
-		if err := st.Stack.PushSlice(root.BeginParse()); err != nil {
+		if err := st.Stack.PushSlice(root.MustBeginParse()); err != nil {
 			t.Fatalf("failed to push SDATASIZEQ slice: %v", err)
 		}
 		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
@@ -847,7 +847,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 		st = newFuncTestState(t, map[int]any{paramIdxInMsgParams: inMsg})
 		op := INMSGPARAM(3)
 		decoded := INMSGPARAM(0)
-		if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+		if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("INMSGPARAM deserialize failed: %v", err)
 		}
 		if got := decoded.SerializeText(); got != "INMSGPARAM 3" {

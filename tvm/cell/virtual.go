@@ -40,6 +40,7 @@ func (c *Cell) ActualLevel() int {
 }
 
 func (c *Cell) Virtualize(effectiveLevel uint8) *Cell {
+	trace := c.Trace()
 	level := c.Level()
 	if level <= int(effectiveLevel) {
 		return c
@@ -48,6 +49,9 @@ func (c *Cell) Virtualize(effectiveLevel uint8) *Cell {
 	raw := c.rawCell()
 	rawLevelMask := raw.getLevelMask()
 	if rawLevelMask.GetLevel() <= int(effectiveLevel) {
+		if trace != nil && raw.Trace() != trace {
+			return raw.WithTrace(trace)
+		}
 		return raw
 	}
 
@@ -61,6 +65,7 @@ func (c *Cell) Virtualize(effectiveLevel uint8) *Cell {
 	vc.meta = &cellMeta{
 		viewOf:     raw,
 		lazyLoader: raw.cellLazyLoader(),
+		trace:      trace,
 		viewLevel:  effectiveLevel + 1,
 	}
 	return vc

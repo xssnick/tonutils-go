@@ -72,7 +72,7 @@ func RunGetMethod(params RunMethodParams, maxGas int64) (*RunResult, error) {
 	}
 
 	var result RunResult
-	if err := tlb.LoadFromCell(&result, c.BeginParse()); err != nil {
+	if err := tlb.LoadFromCell(&result, c.MustBeginParse()); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -151,7 +151,7 @@ func main() {
 	}
 
 	var resStack tlb.Stack
-	err = resStack.LoadFromCell(res.Stack.BeginParse())
+	err = resStack.LoadFromCell(res.Stack.MustBeginParse())
 	if err != nil {
 		panic(4)
 	}

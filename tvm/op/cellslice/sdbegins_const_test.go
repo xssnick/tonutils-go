@@ -11,15 +11,15 @@ import (
 
 func TestSDBEGINSCONST(t *testing.T) {
 	t.Run("DeserializeAndMatchAdvancesSlice", func(t *testing.T) {
-		needle := cell.BeginCell().MustStoreUInt(0b101011, 6).EndCell().BeginParse()
+		needle := cell.BeginCell().MustStoreUInt(0b101011, 6).EndCell().MustBeginParse()
 		op := SDBEGINSCONST(needle, false)
-		decoded := SDBEGINSCONST(cell.BeginCell().EndCell().BeginParse(), false)
-		if err := decoded.Deserialize(op.Serialize().EndCell().BeginParse()); err != nil {
+		decoded := SDBEGINSCONST(cell.BeginCell().EndCell().MustBeginParse(), false)
+		if err := decoded.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize failed: %v", err)
 		}
 
 		state := &vm.State{Stack: vm.NewStack()}
-		haystack := cell.BeginCell().MustStoreUInt(0b10101111, 8).EndCell().BeginParse()
+		haystack := cell.BeginCell().MustStoreUInt(0b10101111, 8).EndCell().MustBeginParse()
 		if err := state.Stack.PushSlice(haystack); err != nil {
 			t.Fatalf("push haystack: %v", err)
 		}
@@ -37,9 +37,9 @@ func TestSDBEGINSCONST(t *testing.T) {
 	})
 
 	t.Run("QuietFailurePreservesSliceAndReturnsFalse", func(t *testing.T) {
-		needle := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().BeginParse()
+		needle := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().MustBeginParse()
 		state := &vm.State{Stack: vm.NewStack()}
-		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse()); err != nil {
+		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("push haystack: %v", err)
 		}
 
@@ -65,9 +65,9 @@ func TestSDBEGINSCONST(t *testing.T) {
 	})
 
 	t.Run("NonQuietFailureReturnsCellUnderflow", func(t *testing.T) {
-		needle := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().BeginParse()
+		needle := cell.BeginCell().MustStoreUInt(0b111, 3).EndCell().MustBeginParse()
 		state := &vm.State{Stack: vm.NewStack()}
-		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().BeginParse()); err != nil {
+		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0b1010, 4).EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("push haystack: %v", err)
 		}
 

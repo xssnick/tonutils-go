@@ -74,7 +74,7 @@ func TestStorageStatsDataSizeAndVarInts(t *testing.T) {
 	}
 
 	sliceStat := newStorageStat(10, nil)
-	if !sliceStat.addSlice(root.BeginParse()) || sliceStat.refs != 1 || sliceStat.bits != 16 || sliceStat.cells != 1 {
+	if !sliceStat.addSlice(root.MustBeginParse()) || sliceStat.refs != 1 || sliceStat.bits != 16 || sliceStat.cells != 1 {
 		t.Fatalf("unexpected slice stats: %+v", sliceStat)
 	}
 
@@ -189,7 +189,7 @@ func TestStorageStatsDataSizeAndVarInts(t *testing.T) {
 	}
 
 	st = newFuncTestState(t, nil)
-	if err := st.Stack.PushSlice(root.BeginParse()); err != nil {
+	if err := st.Stack.PushSlice(root.MustBeginParse()); err != nil {
 		t.Fatalf("PushSlice failed: %v", err)
 	}
 	if err := st.Stack.PushInt(big.NewInt(10)); err != nil {
@@ -215,7 +215,7 @@ func TestStorageStatsDataSizeAndVarInts(t *testing.T) {
 	}
 
 	st = newFuncTestState(t, nil)
-	if err := st.Stack.PushSlice(root.BeginParse()); err != nil {
+	if err := st.Stack.PushSlice(root.MustBeginParse()); err != nil {
 		t.Fatalf("PushSlice failed: %v", err)
 	}
 	if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
@@ -731,7 +731,7 @@ func TestActionInstallAndLibraryOps(t *testing.T) {
 	if err := RAWRESERVE().Interpret(st); err != nil {
 		t.Fatalf("RAWRESERVE failed: %v", err)
 	}
-	tag, err := st.Reg.D[1].BeginParse().LoadUInt(32)
+	tag, err := st.Reg.D[1].MustBeginParse().LoadUInt(32)
 	if err != nil || tag != 0x36e6b809 {
 		t.Fatalf("unexpected RAWRESERVE tag: %x / %v", tag, err)
 	}
@@ -760,7 +760,7 @@ func TestActionInstallAndLibraryOps(t *testing.T) {
 	if err := SETCODE().Interpret(st); err != nil {
 		t.Fatalf("SETCODE failed: %v", err)
 	}
-	tag, err = st.Reg.D[1].BeginParse().LoadUInt(32)
+	tag, err = st.Reg.D[1].MustBeginParse().LoadUInt(32)
 	if err != nil || tag != 0xAD4DE08E {
 		t.Fatalf("unexpected SETCODE tag: %x / %v", tag, err)
 	}
@@ -791,7 +791,7 @@ func TestActionInstallAndLibraryOps(t *testing.T) {
 	if err := SETLIBCODE().Interpret(st); err != nil {
 		t.Fatalf("SETLIBCODE failed: %v", err)
 	}
-	tag, err = st.Reg.D[1].BeginParse().LoadUInt(32)
+	tag, err = st.Reg.D[1].MustBeginParse().LoadUInt(32)
 	if err != nil || tag != 0x26FA1DD4 {
 		t.Fatalf("unexpected SETLIBCODE tag: %x / %v", tag, err)
 	}
@@ -808,7 +808,7 @@ func TestActionInstallAndLibraryOps(t *testing.T) {
 	if err := CHANGELIB().Interpret(st); err != nil {
 		t.Fatalf("CHANGELIB failed: %v", err)
 	}
-	tag, err = st.Reg.D[1].BeginParse().LoadUInt(32)
+	tag, err = st.Reg.D[1].MustBeginParse().LoadUInt(32)
 	if err != nil || tag != 0x26FA1DD4 {
 		t.Fatalf("unexpected CHANGELIB tag: %x / %v", tag, err)
 	}
@@ -878,7 +878,7 @@ func TestSendMsgAndTailStorage(t *testing.T) {
 	if fee.Sign() <= 0 {
 		t.Fatalf("unexpected SENDMSG fee: %v", fee)
 	}
-	tag, err := st.Reg.D[1].BeginParse().LoadUInt(32)
+	tag, err := st.Reg.D[1].MustBeginParse().LoadUInt(32)
 	if err != nil || tag != 0x0EC3C86D {
 		t.Fatalf("unexpected SENDMSG action tag: %x / %v", tag, err)
 	}

@@ -86,7 +86,7 @@ func makeWalletV5SendFixture(t *testing.T, seqno uint32) walletSendFixture {
 func walletV5MessageValidUntil(t *testing.T, body *cell.Cell) uint32 {
 	t.Helper()
 
-	s := body.BeginParse()
+	s := body.MustBeginParse()
 	if op, err := s.LoadUInt(32); err != nil {
 		t.Fatalf("failed to load wallet v5 op: %v", err)
 	} else if op != 0x7369676e {
@@ -105,7 +105,7 @@ func walletV5MessageValidUntil(t *testing.T, body *cell.Cell) uint32 {
 func walletV5SeqnoFromData(t *testing.T, data *cell.Cell) uint32 {
 	t.Helper()
 
-	s := data.BeginParse()
+	s := data.MustBeginParse()
 	flag, err := s.LoadBoolBit()
 	if err != nil {
 		t.Fatalf("failed to load wallet v5 flag: %v", err)

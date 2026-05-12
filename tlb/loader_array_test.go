@@ -42,7 +42,7 @@ func TestArrayTagRoundTrip(t *testing.T) {
 	}
 
 	var scalarDst testScalarArrayTags
-	if err = LoadFromCell(&scalarDst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&scalarDst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,7 +68,7 @@ func TestArrayTagRoundTrip(t *testing.T) {
 	}
 
 	var dst testNestedArrayTags
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +91,7 @@ func TestArrayTagEmptyLayout(t *testing.T) {
 		t.Fatalf("empty array should be 9 bits and no refs, got %d bits and %d refs", c.BitsSize(), c.RefsNum())
 	}
 
-	loader := c.BeginParse()
+	loader := c.MustBeginParse()
 	ln, err := loader.LoadUInt(8)
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestArrayTagChunkingRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := c.BeginParse()
+	root := c.MustBeginParse()
 	root.MustLoadUInt(8)
 	if hasRef := root.MustLoadBoolBit(); !hasRef {
 		t.Fatal("non-empty array should have data ref")
@@ -135,7 +135,7 @@ func TestArrayTagChunkingRoundTrip(t *testing.T) {
 	}
 
 	var dst chunkedArray
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(dst.Values, values) {
@@ -156,7 +156,7 @@ func TestArrayTagRefElementsReserveNextRef(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := c.BeginParse()
+	root := c.MustBeginParse()
 	root.MustLoadUInt(8)
 	root.MustLoadBoolBit()
 	first := root.MustLoadRef()
@@ -169,7 +169,7 @@ func TestArrayTagRefElementsReserveNextRef(t *testing.T) {
 	}
 
 	var dst stringArray
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(dst, src) {
@@ -189,7 +189,7 @@ func TestArrayTagFixedArrayRoundTrip(t *testing.T) {
 	}
 
 	var dst fixedArray
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if dst != src {
@@ -209,7 +209,7 @@ func TestArrayTagZeroSizeElementsRoundTrip(t *testing.T) {
 	}
 
 	var dst emptyStructArray
-	if err = LoadFromCell(&dst, c.BeginParse()); err != nil {
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 	if len(dst.Values) != len(src.Values) {
@@ -240,7 +240,7 @@ func TestArrayTagRejectsMalformedData(t *testing.T) {
 			EndCell()
 
 		var dst emptyArray
-		if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+		if err := LoadFromCell(&dst, c.MustBeginParse()); err == nil {
 			t.Fatal("expected empty array with data ref to fail")
 		}
 	})
@@ -261,7 +261,7 @@ func TestArrayTagRejectsMalformedData(t *testing.T) {
 			EndCell()
 
 		var dst malformedArray
-		if err := LoadFromCell(&dst, c.BeginParse()); err == nil {
+		if err := LoadFromCell(&dst, c.MustBeginParse()); err == nil {
 			t.Fatal("expected chunk with missing next ref to fail")
 		}
 	})

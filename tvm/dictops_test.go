@@ -38,7 +38,7 @@ func TestDictOpsLoadFamilies(t *testing.T) {
 	})
 
 	t.Run("PLDDICTQInvalid", func(t *testing.T) {
-		stack, _, err := runRawCode(codeFromOpcodes(t, 0xF407), cell.BeginCell().EndCell().BeginParse())
+		stack, _, err := runRawCode(codeFromOpcodes(t, 0xF407), cell.BeginCell().EndCell().MustBeginParse())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -140,7 +140,7 @@ func TestDictOpsGetSetDeleteFamilies(t *testing.T) {
 	t.Run("DICTSETGETMissingReturnsFalse", func(t *testing.T) {
 		stack, _, err := runRawCode(
 			codeFromOpcodes(t, 0xF41A),
-			cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse(),
 			mustSliceKey(t, 0x01, 8),
 			nil,
 			int64(8),
@@ -430,7 +430,7 @@ func TestDictOpsCornerCases(t *testing.T) {
 	t.Run("DICTUSETNegativeKeyFailsWithRangeCheck", func(t *testing.T) {
 		_, res, err := runRawCode(
 			codeFromOpcodes(t, 0xF416),
-			cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse(),
+			cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse(),
 			big.NewInt(-1),
 			nil,
 			int64(8),
@@ -483,7 +483,7 @@ func mustKeyCell(t *testing.T, value uint64, bits uint) *cell.Cell {
 
 func mustSliceKey(t *testing.T, value uint64, bits uint) *cell.Slice {
 	t.Helper()
-	return mustKeyCell(t, value, bits).BeginParse()
+	return mustKeyCell(t, value, bits).MustBeginParse()
 }
 
 func codeFromOpcodes(t *testing.T, opcodes ...uint16) *cell.Cell {

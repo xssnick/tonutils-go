@@ -43,10 +43,17 @@ type LargeBOCMetaRecord struct {
 	Depths [4]uint16
 }
 
-// LargeBOCPayloadRecord is the second-pass large BoC payload record. Data must
-// contain raw cell data bytes without the BoC terminator bit.
+// LargeBOCPayloadRecord is a compact storage-shaped cell payload record. Data
+// must contain raw cell data bytes without the BoC terminator bit.
 type LargeBOCPayloadRecord struct {
 	Data []byte
+}
+
+// LargeBOCRecord is a one-pass large BoC storage record. Meta is used to import
+// the graph, while Payload is retained until final serialization.
+type LargeBOCRecord struct {
+	Meta    LargeBOCMetaRecord
+	Payload LargeBOCPayloadRecord
 }
 
 // LargeBOCLoader provides two-phase large BoC loading. LoadMeta is used during
@@ -66,6 +73,16 @@ type LargeBOCLoader interface {
 	LoadPayload(hashes []Hash, dst []LargeBOCPayloadRecord) ([]LargeBOCPayloadRecord, error)
 }
 
+// LargeBOCOnePassLoader provides one-pass large BoC loading. LoadCells must
+// append exactly one LargeBOCRecord per input hash to dst, in the same order as
+// hashes. ToLargeBOCOnePass may prefetch the next batch in a goroutine while the
+// current batch is being imported, so LoadCells calls can overlap and
+// implementations must synchronize any shared state they touch. Payload data
+// must stay valid until ToLargeBOCOnePass returns.
+type LargeBOCOnePassLoader interface {
+	LoadCells(hashes []Hash, dst []LargeBOCRecord) ([]LargeBOCRecord, error)
+}
+
 // ToLargeBOC serializes roots into BoC and writes the result to w. It follows
 // the same large-BOC shape as the C++ serializer: cells are imported by hash in
 // batches, only compact metadata is retained, and payload records are loaded
@@ -81,28 +98,61 @@ func ToLargeBOC(w io.Writer, rootHashes []Hash, opts BOCSerializeOptions, loader
 	if loader == nil {
 		return ErrLazyLoaderNotSet
 	}
-	if loadBatchSize <= 0 {
-		return fmt.Errorf("large boc load batch size must be positive")
-	}
 
-	capacity, err := largeBOCCellCapacityHint(cellsCountHint)
+	s, err := newLargeBOCSerializer(cellsCountHint, loadBatchSize)
 	if err != nil {
 		return err
 	}
 
-	s := &largeBOCSerializer{
+	s.roots = make([]uint32, len(rootHashes))
+	s.batchLoad = loader
+
+	return s.serialize(w, rootHashes, opts)
+}
+
+// ToLargeBOCOnePass serializes roots into BoC and writes the result to w. It
+// imports cell metadata and payload data together, so backing storage is read
+// once. Payloads are retained until final serialization, which uses more memory
+// than ToLargeBOC but avoids the second storage pass.
+func ToLargeBOCOnePass(w io.Writer, rootHashes []Hash, opts BOCSerializeOptions, loader LargeBOCOnePassLoader, cellsCountHint uint64, loadBatchSize int) error {
+	if w == nil {
+		return fmt.Errorf("writer is nil")
+	}
+	if len(rootHashes) == 0 {
+		return nil
+	}
+	if loader == nil {
+		return ErrLazyLoaderNotSet
+	}
+
+	s, err := newLargeBOCSerializer(cellsCountHint, loadBatchSize)
+	if err != nil {
+		return err
+	}
+
+	s.roots = make([]uint32, len(rootHashes))
+	s.onePassLoad = loader
+	s.loadPayloads = make([]LargeBOCPayloadRecord, 0, cap(s.cellList))
+
+	return s.serialize(w, rootHashes, opts)
+}
+
+func newLargeBOCSerializer(cellsCountHint uint64, loadBatchSize int) (*largeBOCSerializer, error) {
+	if loadBatchSize <= 0 {
+		return nil, fmt.Errorf("large boc load batch size must be positive")
+	}
+
+	capacity, err := largeBOCCellCapacityHint(cellsCountHint)
+	if err != nil {
+		return nil, err
+	}
+
+	return &largeBOCSerializer{
 		maxDepth:      maxDepth,
 		cellIndex:     newLargeBOCHashIndex(capacity),
 		cellList:      make([]largeBOCItem, 0, capacity),
-		roots:         make([]uint32, len(rootHashes)),
-		batchLoad:     loader,
 		loadBatchSize: loadBatchSize,
-	}
-
-	if err := s.importCells(rootHashes); err != nil {
-		return err
-	}
-	return s.writeTo(w, opts.mode())
+	}, nil
 }
 
 type largeBOCItem struct {
@@ -162,10 +212,12 @@ type largeBOCSerializer struct {
 	roots     []uint32
 
 	batchLoad     LargeBOCLoader
+	onePassLoad   LargeBOCOnePassLoader
 	loadBatchSize int
 
 	loadHashes   []Hash
 	loadMeta     []LargeBOCMetaRecord
+	loadCells    []LargeBOCRecord
 	loadPayloads []LargeBOCPayloadRecord
 	nextFrontier []uint32
 }
@@ -176,11 +228,12 @@ type largeBOCExtraMeta struct {
 }
 
 type largeBOCMetaBatch struct {
-	start   int
-	end     int
-	hashes  []Hash
-	records []LargeBOCMetaRecord
-	err     error
+	start       int
+	end         int
+	hashes      []Hash
+	records     []LargeBOCMetaRecord
+	cellRecords []LargeBOCRecord
+	err         error
 }
 
 type largeBOCPayloadBatch struct {
@@ -228,7 +281,10 @@ func (s *largeBOCSerializer) importCells(rootHashes []Hash) error {
 
 	s.loadHashes = nil
 	s.loadMeta = nil
-	s.loadPayloads = nil
+	s.loadCells = nil
+	if s.onePassLoad == nil {
+		s.loadPayloads = nil
+	}
 	s.nextFrontier = nil
 	s.cellIndex = nil
 
@@ -240,6 +296,13 @@ func (s *largeBOCSerializer) importCells(rootHashes []Hash) error {
 	return nil
 }
 
+func (s *largeBOCSerializer) serialize(w io.Writer, rootHashes []Hash, opts BOCSerializeOptions) error {
+	if err := s.importCells(rootHashes); err != nil {
+		return err
+	}
+	return s.writeTo(w, opts.mode())
+}
+
 func (s *largeBOCSerializer) importFrontier(frontier []uint32, depth int) ([]uint32, error) {
 	next := s.nextFrontier[:0]
 	if len(frontier) == 0 {
@@ -248,15 +311,16 @@ func (s *largeBOCSerializer) importFrontier(frontier []uint32, depth int) ([]uin
 	}
 
 	current := s.prepareMetaBatch(frontier, 0, s.loadHashes[:0])
-	current = s.loadPreparedMetaBatch(current, s.loadMeta[:0])
+	current = s.loadPreparedMetaBatch(current, s.loadMeta[:0], s.loadCells[:0])
 	var spareHashes []Hash
 	var spareRecords []LargeBOCMetaRecord
+	var spareCellRecords []LargeBOCRecord
 
 	for {
 		if current.err != nil {
 			return nil, current.err
 		}
-		if len(current.records) != len(current.hashes) {
+		if current.recordsLen() != len(current.hashes) {
 			return nil, ErrLazyRefNotFound
 		}
 
@@ -265,9 +329,10 @@ func (s *largeBOCSerializer) importFrontier(frontier []uint32, depth int) ([]uin
 		if nextStart < len(frontier) {
 			prefetch := s.prepareMetaBatch(frontier, nextStart, spareHashes)
 			records := spareRecords
+			cellRecords := spareCellRecords
 			nextBatch = make(chan largeBOCMetaBatch, 1)
 			go func() {
-				nextBatch <- s.loadPreparedMetaBatch(prefetch, records)
+				nextBatch <- s.loadPreparedMetaBatch(prefetch, records, cellRecords)
 			}()
 		}
 
@@ -281,14 +346,17 @@ func (s *largeBOCSerializer) importFrontier(frontier []uint32, depth int) ([]uin
 		if nextBatch == nil {
 			s.loadHashes = current.hashes[:0]
 			s.loadMeta = current.records[:0]
+			s.loadCells = current.cellRecords[:0]
 			break
 		}
 
 		oldHashes := current.hashes[:0]
 		oldRecords := current.records[:0]
+		oldCellRecords := current.cellRecords[:0]
 		current = <-nextBatch
 		spareHashes = oldHashes
 		spareRecords = oldRecords
+		spareCellRecords = oldCellRecords
 	}
 
 	s.nextFrontier = frontier[:0]
@@ -313,7 +381,35 @@ func (s *largeBOCSerializer) prepareMetaBatch(frontier []uint32, start int, hash
 	}
 }
 
-func (s *largeBOCSerializer) loadPreparedMetaBatch(batch largeBOCMetaBatch, records []LargeBOCMetaRecord) largeBOCMetaBatch {
+func (batch largeBOCMetaBatch) recordsLen() int {
+	if batch.cellRecords != nil {
+		return len(batch.cellRecords)
+	}
+	return len(batch.records)
+}
+
+func (batch *largeBOCMetaBatch) metaRecord(i int) *LargeBOCMetaRecord {
+	if batch.cellRecords != nil {
+		return &batch.cellRecords[i].Meta
+	}
+	return &batch.records[i]
+}
+
+func (batch *largeBOCMetaBatch) payloadRecord(i int) *LargeBOCPayloadRecord {
+	if batch.cellRecords == nil {
+		return nil
+	}
+	return &batch.cellRecords[i].Payload
+}
+
+func (s *largeBOCSerializer) loadPreparedMetaBatch(batch largeBOCMetaBatch, records []LargeBOCMetaRecord, cellRecords []LargeBOCRecord) largeBOCMetaBatch {
+	if s.onePassLoad != nil {
+		loaded, err := s.onePassLoad.LoadCells(batch.hashes, cellRecords[:0])
+		batch.cellRecords = loaded
+		batch.err = err
+		return batch
+	}
+
 	loaded, err := s.batchLoad.LoadMeta(batch.hashes, records[:0])
 	batch.records = loaded
 	batch.err = err
@@ -321,10 +417,17 @@ func (s *largeBOCSerializer) loadPreparedMetaBatch(batch largeBOCMetaBatch, reco
 }
 
 func (s *largeBOCSerializer) importMetaBatch(frontier []uint32, depth int, batch largeBOCMetaBatch, next *[]uint32) error {
-	for i := range batch.records {
+	for i := 0; i < batch.recordsLen(); i++ {
 		idx := frontier[batch.start+i]
-		if err := s.importRecord(idx, &batch.records[i], batch.hashes[i], depth, next); err != nil {
+		if err := s.importRecord(idx, batch.metaRecord(i), batch.hashes[i], depth, next); err != nil {
 			return err
+		}
+		if payload := batch.payloadRecord(i); payload != nil {
+			item := &s.cellList[idx]
+			if err := validatePayloadRecordForItem(payload, item); err != nil {
+				return err
+			}
+			s.loadPayloads[idx] = *payload
 		}
 	}
 	return nil
@@ -387,6 +490,9 @@ func (s *largeBOCSerializer) addHash(hash Hash) (uint32, bool, error) {
 		idx:      uint32(idx),
 		extraIdx: ^uint32(0),
 	})
+	if s.onePassLoad != nil {
+		s.loadPayloads = append(s.loadPayloads, LargeBOCPayloadRecord{})
+	}
 	s.cellIndex.set(hash, uint32(idx), s)
 	s.cellCount++
 	return uint32(idx), true, nil
@@ -562,6 +668,9 @@ func (s *largeBOCSerializer) reorderInPlace() {
 		for s.cellList[i].idx != uint32(i) {
 			dst := int(s.cellList[i].idx)
 			s.cellList[i], s.cellList[dst] = s.cellList[dst], s.cellList[i]
+			if s.onePassLoad != nil {
+				s.loadPayloads[i], s.loadPayloads[dst] = s.loadPayloads[dst], s.loadPayloads[i]
+			}
 		}
 	}
 }
@@ -665,6 +774,20 @@ func (s *largeBOCSerializer) loadPayloadBatch(start int, hashes []Hash, payloads
 	}
 }
 
+func (s *largeBOCSerializer) writePayloadRecord(w *bocStreamWriter, info bocSerializeInfo, mode int, item *largeBOCItem, record *LargeBOCPayloadRecord, cellBuf []byte) error {
+	if err := validatePayloadRecordForItem(record, item); err != nil {
+		return err
+	}
+
+	n := s.serializeItemBOCTo(item, record.Data, cellBuf, s.shouldSerializeHashes(item, mode))
+	w.write(cellBuf[:n])
+
+	for j := 0; j < item.refsNum(); j++ {
+		w.writeUint(uint64(s.cellCount-1-int(item.refIdx[j])), info.refByteSize)
+	}
+	return w.err
+}
+
 func (s *largeBOCSerializer) writePayloadBatch(w *bocStreamWriter, info bocSerializeInfo, mode int, batch largeBOCPayloadBatch, cellBuf []byte) error {
 	if batch.err != nil {
 		return batch.err
@@ -675,18 +798,19 @@ func (s *largeBOCSerializer) writePayloadBatch(w *bocStreamWriter, info bocSeria
 
 	for i := range batch.records {
 		item := &s.cellList[s.cellCount-1-batch.start-i]
-		if err := validatePayloadRecordForItem(&batch.records[i], item); err != nil {
+		if err := s.writePayloadRecord(w, info, mode, item, &batch.records[i], cellBuf); err != nil {
 			return err
 		}
+	}
+	return nil
+}
 
-		n := s.serializeItemBOCTo(item, batch.records[i].Data, cellBuf, s.shouldSerializeHashes(item, mode))
-		w.write(cellBuf[:n])
-
-		for j := 0; j < item.refsNum(); j++ {
-			w.writeUint(uint64(s.cellCount-1-int(item.refIdx[j])), info.refByteSize)
-		}
-		if w.err != nil {
-			return w.err
+func (s *largeBOCSerializer) writeOnePassPayloads(w *bocStreamWriter, info bocSerializeInfo, mode int, cellBuf []byte) error {
+	for n := s.cellCount; n > 0; n-- {
+		item := &s.cellList[n-1]
+		record := &s.loadPayloads[n-1]
+		if err := s.writePayloadRecord(w, info, mode, item, record, cellBuf); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -796,7 +920,13 @@ func (s *largeBOCSerializer) writeTo(dst io.Writer, mode int) error {
 	}
 
 	var cellBuf [2 + maxCellDataBytes + 4*(hashSize+depthSize)]byte
-	if err := s.writePayloadBatches(&w, info, mode, cellBuf[:]); err != nil {
+	var err error
+	if s.onePassLoad != nil {
+		err = s.writeOnePassPayloads(&w, info, mode, cellBuf[:])
+	} else {
+		err = s.writePayloadBatches(&w, info, mode, cellBuf[:])
+	}
+	if err != nil {
 		return err
 	}
 

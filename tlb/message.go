@@ -136,7 +136,7 @@ func (m *InternalMessage) DestAddr() *address.Address {
 
 func (m *InternalMessage) Comment() string {
 	if m.Body != nil {
-		l := m.Body.BeginParse()
+		l := m.Body.MustBeginParse()
 		if val, err := l.LoadUInt(32); err == nil && val == 0 {
 			str, _ := l.LoadStringSnake()
 			return str
@@ -315,13 +315,13 @@ func LoadOutList(root *cell.Cell) ([]any, error) {
 	if root == nil {
 		return nil, nil
 	}
-	sl := root.BeginParse()
+	sl := root.MustBeginParse()
 	if sl.BitsLeft() == 0 && sl.RefsNum() == 0 {
 		return nil, nil
 	}
 
 	var list OutList
-	if err := LoadFromCell(&list, root.BeginParse()); err != nil {
+	if err := LoadFromCell(&list, root.MustBeginParse()); err != nil {
 		return nil, err
 	}
 	return list.ToSlice()

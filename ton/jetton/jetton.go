@@ -75,7 +75,7 @@ func (c *Client) GetJettonWallet(ctx context.Context, ownerAddr *address.Address
 
 func (c *Client) GetJettonWalletAtBlock(ctx context.Context, ownerAddr *address.Address, b *ton.BlockIDExt) (*WalletClient, error) {
 	res, err := c.api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, c.addr, "get_wallet_address",
-		cell.BeginCell().MustStoreAddr(ownerAddr).EndCell().BeginParse())
+		cell.BeginCell().MustStoreAddr(ownerAddr).EndCell().MustBeginParse())
 	if err != nil {
 		return nil, fmt.Errorf("failed to run get_wallet_address method: %w", err)
 	}
