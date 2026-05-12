@@ -42,6 +42,10 @@ func (op *OpXCHG) Deserialize(code *cell.Slice) error {
 	}
 
 	if a == 1 && b == 0 {
+		op.a = uint8(a)
+		op.b = uint8(b)
+		op.l = true
+
 		a, err = code.LoadUInt(4)
 		if err != nil {
 			return err
@@ -51,7 +55,6 @@ func (op *OpXCHG) Deserialize(code *cell.Slice) error {
 		if err != nil {
 			return err
 		}
-		op.l = true
 	} else {
 		op.l = false
 	}

@@ -38,6 +38,31 @@ func TestTVMCrossEmulatorDecodeFailures(t *testing.T) {
 			exit: vmerr.CodeInvalidOpcode,
 		},
 		{
+			name: "pushint_tiny_truncated_opcode_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x7, 4).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "pushint_8_truncated_value_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x80, 8).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "pushint_16_truncated_value_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x81, 8).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "pushint_long_truncated_value_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x82, 8).MustStoreUInt(0, 5).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "pushint_long_truncated_size_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x82, 8).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
 			name: "getparamlong_255_invalid",
 			code: cell.BeginCell().MustStoreUInt(0xF881FF, 24).EndCell(),
 			exit: vmerr.CodeInvalidOpcode,
@@ -60,6 +85,11 @@ func TestTVMCrossEmulatorDecodeFailures(t *testing.T) {
 		{
 			name: "pushslice_long_refs5_invalid",
 			code: cell.BeginCell().MustStoreUInt(0x8D, 8).MustStoreUInt(5<<7, 10).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "pushslice_long_truncated_prefix_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x8D, 8).EndCell(),
 			exit: vmerr.CodeInvalidOpcode,
 		},
 		{
@@ -123,6 +153,36 @@ func TestTVMCrossEmulatorDecodeFailures(t *testing.T) {
 			exit: vmerr.CodeInvalidOpcode,
 		},
 		{
+			name: "accept_family_truncated_opcode_invalid",
+			code: cell.BeginCell().MustStoreUInt(0xF8, 8).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "tuple_family_truncated_opcode_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x6F, 8).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "stack_compound_truncated_opcode_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x5, 4).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "continuation_db_truncated_opcode_invalid",
+			code: cell.BeginCell().MustStoreUInt(0xDB, 8).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "continuation_ed_truncated_opcode_invalid",
+			code: cell.BeginCell().MustStoreUInt(0xED, 8).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "getparamlong_truncated_immediate_invalid",
+			code: cell.BeginCell().MustStoreUInt(0xF881, 16).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
 			name: "push_short_truncated_immediate_invalid",
 			code: cell.BeginCell().MustStoreUInt(0x2, 4).EndCell(),
 			exit: vmerr.CodeInvalidOpcode,
@@ -130,6 +190,11 @@ func TestTVMCrossEmulatorDecodeFailures(t *testing.T) {
 		{
 			name: "pop_short_truncated_immediate_invalid",
 			code: cell.BeginCell().MustStoreUInt(0x3, 4).EndCell(),
+			exit: vmerr.CodeInvalidOpcode,
+		},
+		{
+			name: "xchg_long_truncated_immediate_invalid",
+			code: cell.BeginCell().MustStoreUInt(0x10, 8).EndCell(),
 			exit: vmerr.CodeInvalidOpcode,
 		},
 		{

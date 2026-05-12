@@ -95,21 +95,22 @@ func (tvm *TVM) addTriePrefix(prefix *cell.Slice, op vm.OPGetter) {
 }
 
 func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
-	limit := code.BitsLeft()
-	if limit == 0 {
+	available := code.BitsLeft()
+	if available == 0 {
 		return nil
-	}
-	if limit > tvm.maxPrefixLen {
-		limit = tvm.maxPrefixLen
 	}
 
 	n := tvm.trie
 	var matched vm.OPGetter
 
-	for i := uint(0); i < limit; i++ {
-		bit, err := code.BitAt(i)
-		if err != nil {
-			break
+	for i := uint(0); i < tvm.maxPrefixLen; i++ {
+		bit := uint8(0)
+		if i < available {
+			var err error
+			bit, err = code.BitAt(i)
+			if err != nil {
+				break
+			}
 		}
 		n = n.next[bit]
 		if n == nil {
@@ -220,7 +221,8 @@ func (tvm *TVM) runState(state *vm.State) (exitCode int64, err error) {
 	if err = tvm.execute(state); err != nil {
 		if code, ok := vmerr.ErrorCode(err); ok {
 			exitCode = code
-			if exitCode == vmerr.CodeOutOfGas {
+			var handled vm.HandledException
+			if exitCode == vmerr.CodeOutOfGas && !errors.As(err, &handled) {
 				exitCode = ^exitCode
 			}
 			if !vm.IsSuccessExitCode(exitCode) {
@@ -250,6 +252,9 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 			var e vmerr.VMError
 			var virt vmerr.VirtualizationError
 			var handled vm.HandledException
+			if errors.As(err, &handled) {
+				return err
+			}
 			if errors.As(err, &e) && e.Code == vmerr.CodeOutOfGas {
 				state.Steps++
 				if stackErr := state.HandleOutOfGas(); stackErr != nil {
@@ -258,9 +263,6 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 				return err
 			}
 			if errors.As(err, &virt) {
-				return err
-			}
-			if errors.As(err, &handled) {
 				return err
 			}
 			if state.Reg.C[2] != nil && errors.As(err, &e) && !vm.IsSuccessExitCode(e.Code) {
@@ -293,6 +295,10 @@ func (tvm *TVM) stepAny(state *vm.State) error {
 	if state.CurrentCode.RefsNum() > 0 {
 		state.Steps++
 
+		if err := state.ConsumeGas(vm.ImplicitJmprefGasPrice); err != nil {
+			return err
+		}
+
 		cc, err := state.Cells.LoadRef(state.CurrentCode)
 		if err != nil {
 			return err
@@ -304,10 +310,6 @@ func (tvm *TVM) stepAny(state *vm.State) error {
 				NumArgs: vm.ControlDataAllArgs,
 			},
 			Code: cc,
-		}
-
-		if err = state.ConsumeGas(vm.ImplicitJmprefGasPrice); err != nil {
-			return err
 		}
 
 		vm.Tracef("implicit JMPREF")
@@ -402,7 +404,8 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 	stackBefore := state.Stack.Checkpoint()
 	err = op.Interpret(state)
 	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow {
+		var handled vm.HandledException
+		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow && !errors.As(err, &handled) {
 			state.Stack.RestoreCheckpoint(stackBefore)
 		}
 		err = normalizeCellError(err)

@@ -22,6 +22,10 @@ func XC2PU(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 2, int(i), int(j), int(k)); err != nil {
+				return err
+			}
+
 			if err := state.Stack.Exchange(1, int(i)); err != nil {
 				return err
 			}
@@ -70,6 +74,10 @@ func XCPUXC(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, maxStackDepthCount(int(k), 2), int(i), int(j)); err != nil {
+				return err
+			}
+
 			if err := state.Stack.Exchange(1, int(i)); err != nil {
 				return err
 			}
@@ -121,6 +129,10 @@ func XCPU2(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 0, int(i), int(j), int(k)); err != nil {
+				return err
+			}
+
 			if err := state.Stack.Exchange(0, int(i)); err != nil {
 				return err
 			}
@@ -173,6 +185,10 @@ func PUXC2(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, maxStackDepthCount(int(j), int(k)), int(i), 1); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
 				return err
@@ -224,6 +240,10 @@ func PUXCPU(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, maxStackDepthCount(int(j), int(k)), int(i)); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
 				return err
@@ -279,6 +299,10 @@ func PU2XC(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, maxStackDepthCount(int(j), int(k)-1), int(i)); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
 				return err
@@ -337,6 +361,10 @@ func PUSH3(i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 0, int(i), int(j), int(k)); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
 				return err

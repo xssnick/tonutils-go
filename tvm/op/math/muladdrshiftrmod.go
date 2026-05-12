@@ -21,16 +21,19 @@ func MULADDRSHIFTRMOD() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			w, err := popIntFinite(state)
+			w, err := popInt(state)
 			if err != nil {
 				return err
 			}
-			y, err := popIntFinite(state)
+			y, err := popInt(state)
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
+				return err
+			}
+			if err = requireFiniteInts(w, y, x); err != nil {
 				return err
 			}
 

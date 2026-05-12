@@ -12,6 +12,10 @@ func init() {
 func ROTREV() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			c, err := state.Stack.PopAny()
 			if err != nil {
 				return err

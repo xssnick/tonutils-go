@@ -25,6 +25,10 @@ func xchg3(prefix helpers.BitPrefix, i, j, k uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 12,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 3, int(i), int(j), int(k)); err != nil {
+				return err
+			}
+
 			if err := state.Stack.Exchange(2, int(i)); err != nil {
 				return err
 			}

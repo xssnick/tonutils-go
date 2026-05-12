@@ -12,6 +12,10 @@ func init() {
 func TUCK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			b, err := state.Stack.Get(0)
 			if err != nil {
 				return err

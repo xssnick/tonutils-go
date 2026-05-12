@@ -73,6 +73,9 @@ func stsliceAlias() *helpers.SimpleOP {
 func endBuilderCell(builder *cell.Builder) (*cell.Cell, error) {
 	cl, err := builder.EndCellSpecial(false)
 	if err != nil {
+		if _, ok := vmerr.ErrorCode(err); ok {
+			return nil, err
+		}
 		return nil, vmerr.Error(vmerr.CodeCellOverflow, err.Error())
 	}
 	return cl, nil
@@ -491,6 +494,9 @@ func ENDXC() *helpers.SimpleOP {
 			}
 			cl, err := builder.EndCellSpecial(special)
 			if err != nil {
+				if _, ok := vmerr.ErrorCode(err); ok {
+					return err
+				}
 				return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
 			}
 			return state.Stack.PushCell(cl)

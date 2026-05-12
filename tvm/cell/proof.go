@@ -295,7 +295,7 @@ func (c *Cell) calculateHashes() error {
 		}
 		if refCnt > 0 {
 			depth++
-			if depth >= maxDepth {
+			if depth > maxDepth {
 				return ErrCellDepthLimit
 			}
 		}

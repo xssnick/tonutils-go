@@ -157,14 +157,14 @@ func (v *cellRefView) cloneWithRefs(refs []*Cell, observer Observer) (*Cell, boo
 		return v.cell, false, nil
 	}
 
+	if err := notifyCellCreate(observer); err != nil {
+		return nil, false, err
+	}
 	if err := cloned.refreshLevelMaskForRefs(); err != nil {
 		return nil, false, err
 	}
 	if err := cloned.calculateHashes(); err != nil {
 		return nil, false, err
-	}
-	if observer != nil {
-		observer.OnCellCreate()
 	}
 	return cloned, true, nil
 }
@@ -176,7 +176,7 @@ func (c *Cell) refreshLevelMaskForRefs() error {
 		if ref == nil {
 			return ErrRefCannotBeNil
 		}
-		if ref.Depth() >= maxDepth-1 {
+		if ref.Depth() >= maxDepth {
 			return ErrCellDepthLimit
 		}
 		mask |= ref.getLevelMask().Mask

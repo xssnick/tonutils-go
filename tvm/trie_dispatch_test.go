@@ -63,3 +63,20 @@ func TestTVMMatchesWalletTraceSDBEGINSConstOpcode(t *testing.T) {
 		t.Fatal("expected wallet trace D728 opcode to be registered in trie")
 	}
 }
+
+func TestTVMMatchesF88111AsInMsgParams(t *testing.T) {
+	machine := NewTVM()
+	code := cell.BeginCell().MustStoreUInt(0xF88111, 24).EndCell().BeginParse()
+
+	getter := machine.matchOpcode(code)
+	if getter == nil {
+		t.Fatal("expected F88111 opcode to be registered in trie")
+	}
+	op := getter()
+	if err := op.Deserialize(code); err != nil {
+		t.Fatalf("deserialize F88111: %v", err)
+	}
+	if got := op.SerializeText(); got != "INMSGPARAMS" {
+		t.Fatalf("F88111 matched %q, want INMSGPARAMS", got)
+	}
+}

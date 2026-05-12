@@ -236,3 +236,72 @@ func TestNewStackFromVMSerializesNaN(t *testing.T) {
 		t.Fatalf("expected StackNaN after serialization, got %T", val)
 	}
 }
+
+func TestNewStackFromVMPreservesSerializedOrder(t *testing.T) {
+	vmStack := vm.NewStack()
+	for _, val := range []int64{11, 22, 33} {
+		if err := vmStack.PushInt(big.NewInt(val)); err != nil {
+			t.Fatalf("push %d: %v", val, err)
+		}
+	}
+
+	stack, err := NewStackFromVM(vmStack)
+	if err != nil {
+		t.Fatalf("stack from vm: %v", err)
+	}
+
+	cellValue, err := stack.ToCell()
+	if err != nil {
+		t.Fatalf("stack to cell: %v", err)
+	}
+
+	got := loadSerializedStackInts(t, cellValue)
+	want := []int64{33, 22, 11}
+	if len(got) != len(want) {
+		t.Fatalf("serialized stack len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("serialized stack top-to-bottom = %v, want %v", got, want)
+		}
+	}
+}
+
+func loadSerializedStackInts(t *testing.T, stack *cell.Cell) []int64 {
+	t.Helper()
+
+	next := stack.BeginParse()
+	depth, err := next.LoadUInt(24)
+	if err != nil {
+		t.Fatalf("load stack depth: %v", err)
+	}
+
+	res := make([]int64, 0, depth)
+	for i := uint64(0); i < depth; i++ {
+		rest, err := next.LoadRef()
+		if err != nil {
+			t.Fatalf("load stack rest %d: %v", i, err)
+		}
+
+		val, err := ParseStackValue(next)
+		if err != nil {
+			t.Fatalf("parse stack value %d: %v", i, err)
+		}
+		intVal, ok := val.(*big.Int)
+		if !ok {
+			t.Fatalf("stack value %d type = %T, want *big.Int", i, val)
+		}
+		if !intVal.IsInt64() {
+			t.Fatalf("stack value %d = %s, want int64", i, intVal)
+		}
+		res = append(res, intVal.Int64())
+
+		next = rest
+	}
+
+	if next.BitsLeft() != 0 || next.RefsNum() != 0 {
+		t.Fatalf("stack tail is not nil: %d bits, %d refs", next.BitsLeft(), next.RefsNum())
+	}
+
+	return res
+}

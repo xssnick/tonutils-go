@@ -384,7 +384,7 @@ func (s *State) GetParam(idx int) (any, error) {
 	}
 
 	p, ok := params.(tuple.Tuple)
-	if !ok {
+	if !ok || p.Len() > 255 {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 
@@ -402,7 +402,7 @@ func (s *State) GetUnpackedConfigTuple() (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	t, ok := v.(tuple.Tuple)
-	if !ok {
+	if !ok || t.Len() > 255 {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return t, nil

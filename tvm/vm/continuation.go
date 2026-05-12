@@ -50,7 +50,11 @@ func (c *ExcQuitContinuation) GetControlData() *ControlData {
 func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 	v, err := state.Stack.PopIntRange(0, 0xffff)
 	if err != nil {
-		return nil, err
+		code, ok := vmerr.ErrorCode(err)
+		if !ok {
+			code = vmerr.CodeFatal
+		}
+		return nil, HandledException{VMError: vmerr.Error(code)}
 	}
 
 	return nil, HandledException{VMError: vmerr.Error(v.Int64())}

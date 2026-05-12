@@ -45,22 +45,23 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 		op.instructionBits = 8
 		return nil
 	case 0x80:
+		op.instructionBits = 16
 		val, err := code.LoadBigInt(8)
 		if err != nil {
 			return err
 		}
 		op.value = val
-		op.instructionBits = 16
 		return nil
 	case 0x81:
+		op.instructionBits = 24
 		val, err := code.LoadBigInt(16)
 		if err != nil {
 			return err
 		}
 		op.value = val
-		op.instructionBits = 24
 		return nil
 	case 0x82:
+		op.instructionBits = 13
 		szBytes, err := code.LoadUInt(5)
 		if err != nil {
 			return err
@@ -85,7 +86,6 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 		}
 
 		op.value = val
-		op.instructionBits = 13
 		return nil
 	}
 
@@ -140,6 +140,9 @@ func (op *OpPUSHINT) SerializeText() string {
 func (op *OpPUSHINT) InstructionBits() int64 {
 	if op.instructionBits != 0 {
 		return op.instructionBits
+	}
+	if op.value == nil {
+		return 8
 	}
 
 	bitsSz := op.value.BitLen() + 1

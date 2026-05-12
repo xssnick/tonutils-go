@@ -12,6 +12,10 @@ func init() {
 func OVER2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 4); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.Get(3)
 			if err != nil {
 				return err

@@ -33,7 +33,7 @@ func (b *Builder) rawRefs() []*Cell {
 
 func validateCellRefDepthLimit(refs []*Cell) error {
 	for _, ref := range refs {
-		if ref.Depth() >= maxDepth-1 {
+		if ref.Depth() >= maxDepth {
 			return ErrCellDepthLimit
 		}
 	}
@@ -652,7 +652,7 @@ func (b *Builder) storeMaybeRef(ref *Cell, checkDepth bool) error {
 	if b.bitsSz+1 >= 1024 {
 		return ErrNotFit1023
 	}
-	if checkDepth && ref.Depth() >= maxDepth-1 {
+	if checkDepth && ref.Depth() >= maxDepth {
 		return ErrCellDepthLimit
 	}
 
@@ -687,7 +687,7 @@ func (b *Builder) storeRef(ref *Cell, checkDepth bool) error {
 	if ref == nil {
 		return ErrRefCannotBeNil
 	}
-	if checkDepth && ref.Depth() >= maxDepth-1 {
+	if checkDepth && ref.Depth() >= maxDepth {
 		return ErrCellDepthLimit
 	}
 	b.refs[b.refsNum] = ref
@@ -814,12 +814,12 @@ func BeginCell() *Builder {
 }
 
 func (b *Builder) EndCell() *Cell {
+	if err := notifyCellCreate(b.observer); err != nil {
+		panic(err)
+	}
 	c, err := finalizeCellFromBuilder(b, false)
 	if err != nil {
 		panic(err)
-	}
-	if b.observer != nil {
-		b.observer.OnCellCreate()
 	}
 	return c
 }

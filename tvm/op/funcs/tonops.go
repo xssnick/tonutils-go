@@ -196,8 +196,11 @@ func GETPARAM(idx uint8) *helpers.AdvancedOP {
 }
 
 var getParamLongPrefixes = func() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 255)
+	prefixes := make([]helpers.BitPrefix, 0, 254)
 	for i := uint64(0); i < 255; i++ {
+		if i == 17 {
+			continue
+		}
 		prefixes = append(prefixes, helpers.UIntPrefix(0xF88100|i, 24))
 	}
 	return prefixes
@@ -695,6 +698,9 @@ func GETGLOB(idx uint8) *helpers.AdvancedOP {
 func SETGLOBVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			idx, err := state.Stack.PopIntRange(0, 254)
 			if err != nil {
 				return err

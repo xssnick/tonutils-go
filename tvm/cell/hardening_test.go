@@ -536,7 +536,7 @@ func TestToBOCWithTopHashChangesEncoding(t *testing.T) {
 
 func TestCalculateHashesSafeRejectsTooDeepCells(t *testing.T) {
 	root := BeginCell().EndCell()
-	for i := 0; i < maxDepth-1; i++ {
+	for i := 0; i < maxDepth; i++ {
 		root = BeginCell().MustStoreRef(root).EndCell()
 	}
 
@@ -594,7 +594,7 @@ func TestFromBOCRejectsTrailingDataAfterPayload(t *testing.T) {
 }
 
 func TestStoreBinarySnakeRejectsDepthOverflow(t *testing.T) {
-	data := bytes.Repeat([]byte{0xAB}, 127*1024+1)
+	data := bytes.Repeat([]byte{0xAB}, 127*(maxDepth+1)+1)
 
 	if err := BeginCell().StoreBinarySnake(data); !errors.Is(err, ErrCellDepthLimit) {
 		t.Fatalf("expected ErrCellDepthLimit, got %v", err)

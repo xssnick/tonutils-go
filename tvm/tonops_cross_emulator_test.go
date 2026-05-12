@@ -83,6 +83,10 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			200: int64(20042),
 		},
 	})
+	shortRandC7 := tuple.NewTupleValue(tuple.NewTupleValue())
+	oversizedParams := tuple.NewTupleSized(256)
+	mustSetTupleValue(t, &oversizedParams, 0, big.NewInt(1))
+	oversizedParamsC7 := tuple.NewTupleValue(oversizedParams)
 	signedConfigC7 := makeTonopsTestC7(t, tonopsTestC7Config{
 		ConfigRoot: signedConfigRoot,
 	})
@@ -521,6 +525,19 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    c7,
 		},
 		{
+			name:  "setglobvar_one_item_underflow_precedes_type",
+			code:  codeFromBuilders(t, funcsop.SETGLOBVAR().Serialize()),
+			stack: []any{nil},
+			exit:  int32(vmerr.CodeStackUnderflow),
+			c7:    c7,
+		},
+		{
+			name: "getparam_rejects_oversized_params_tuple",
+			code: codeFromBuilders(t, funcsop.GETPARAM(0).Serialize()),
+			exit: int32(vmerr.CodeTypeCheck),
+			c7:   oversizedParamsC7,
+		},
+		{
 			name: "inmsgparams",
 			code: codeFromBuilders(t, funcsop.INMSGPARAMS().Serialize()),
 			exit: 0,
@@ -641,6 +658,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack: []any{big.NewInt(7)},
 			exit:  0,
 			c7:    feeC7,
+		},
+		{
+			name:  "setrand_extends_short_c7_params",
+			code:  codeFromBuilders(t, funcsop.SETRAND().Serialize(), funcsop.RANDSEED().Serialize()),
+			stack: []any{big.NewInt(7)},
+			exit:  0,
+			c7:    shortRandC7,
 		},
 		{
 			name:  "addrand",

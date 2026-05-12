@@ -73,6 +73,18 @@ func TestTVMCrossEmulatorGasBeyondOutOfGas(t *testing.T) {
 			gasLimit: 115,
 		},
 		{
+			name:     "cell_create_overruns_before_endc_push",
+			code:     body(cellsliceop.ENDC().Serialize()),
+			stack:    []any{cell.BeginCell().MustStoreUInt(0xA, 4)},
+			gasLimit: 20,
+		},
+		{
+			name:     "cell_create_overruns_before_endxc_finalize",
+			code:     prependRawMethodDrop(body(cellsliceop.ENDXC().Serialize())),
+			stack:    []any{cell.BeginCell(), int64(0)},
+			gasLimit: 200,
+		},
+		{
 			name: "exception_handler_tuple_gas_overruns_limit",
 			code: prependRawMethodDrop(body(
 				stackop.PUSHCONT(throwArgBody).Serialize(),
@@ -123,6 +135,41 @@ func TestTVMCrossEmulatorGasBeyondOutOfGas(t *testing.T) {
 				t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
 			}
 		})
+	}
+}
+
+func TestTVMCrossEmulatorImplicitJmprefGasBeforeRefLoad(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	code := cell.BeginCell().
+		MustStoreRef(testEmptyCell()).
+		EndCell()
+
+	goStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithGas(code, testEmptyCell(), tuple.Tuple{}, goStack, 50)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refRes, err := runReferenceCrossCodeWithGas(code, testEmptyCell(), tuple.Tuple{}, refStack, 50)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != int32(^vmerr.CodeOutOfGas) || refRes.exitCode != int32(^vmerr.CodeOutOfGas) {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, ^vmerr.CodeOutOfGas)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
 	}
 }
 

@@ -275,6 +275,16 @@ func TestTVMCrossEmulatorArithOpsOpcodeCoverage(t *testing.T) {
 	tests = append(tests, arithShiftDivModFamilyCases(t, "lshiftdivmod", 0xa9c, 12, false)...)
 	tests = append(tests, arithShiftDivModFamilyCases(t, "qlshiftdivmod", 0xb7a9c, 20, true)...)
 	tests = append(tests, arithImmediateShiftDivModFamilyCases(t, "lshiftdivmod_code", 0xa9d)...)
+	tests = append(tests,
+		arithParityCase{name: "divmod_invalid_round", code: arithRawCode(t, 0xa903, 16), exit: int32(vmerr.CodeInvalidOpcode)},
+		arithParityCase{name: "rshiftmod_invalid_round", code: arithRawCode(t, 0xa927, 16), exit: int32(vmerr.CodeInvalidOpcode)},
+		arithParityCase{name: "rshiftmod_code_invalid_round", code: arithRawCode(t, 0xa93300, 24), exit: int32(vmerr.CodeInvalidOpcode)},
+		arithParityCase{name: "muldivmod_invalid_round", code: arithRawCode(t, 0xa987, 16), exit: int32(vmerr.CodeInvalidOpcode)},
+		arithParityCase{name: "mulrshiftmod_invalid_round", code: arithRawCode(t, 0xa9a7, 16), exit: int32(vmerr.CodeInvalidOpcode)},
+		arithParityCase{name: "mulrshiftmod_code_invalid_round", code: arithRawCode(t, 0xa9b300, 24), exit: int32(vmerr.CodeInvalidOpcode)},
+		arithParityCase{name: "lshiftdivmod_invalid_round", code: arithRawCode(t, 0xa9c7, 16), exit: int32(vmerr.CodeInvalidOpcode)},
+		arithParityCase{name: "lshiftdivmod_code_invalid_round", code: arithRawCode(t, 0xa9d300, 24), exit: int32(vmerr.CodeInvalidOpcode)},
+	)
 
 	runArithParityCases(t, tests)
 }

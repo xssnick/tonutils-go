@@ -308,6 +308,7 @@ func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, erro
 
 func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*OrdinaryContinuation, error) {
 	var newStack *Stack
+	var capturedStack *Stack
 	if stackCopy < 0 || stackCopy == s.Stack.Len() {
 		newStack = s.Stack
 		s.Stack = NewStack()
@@ -317,19 +318,21 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 			return nil, err
 		}
 		newStack = ns
+		capturedStack = s.Stack
 
 		if err = s.ConsumeStackGas(newStack); err != nil {
 			return nil, err
 		}
 	} else {
 		newStack = NewStack()
+		capturedStack = s.Stack
 	}
 
 	cc := &OrdinaryContinuation{
 		Data: ControlData{
 			NumArgs: ccArgs,
 			CP:      s.CP,
-			Stack:   s.Stack,
+			Stack:   capturedStack,
 		},
 		Code: s.CurrentCode,
 	}

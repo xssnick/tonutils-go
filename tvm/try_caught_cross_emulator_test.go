@@ -11,6 +11,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	cellsliceop "github.com/xssnick/tonutils-go/tvm/op/cellslice"
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
+	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	mathop "github.com/xssnick/tonutils-go/tvm/op/math"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -126,6 +127,41 @@ func TestTVMCrossEmulatorCaughtTryEdges(t *testing.T) {
 				mathop.LSHIFTDIV().Serialize(),
 			)),
 			stack: []any{int64(5), vm.NaN{}, int64(1)},
+		},
+		{
+			name: "arith_addrshiftmod_nan_addend",
+			code: tryCode(codeFromBuilders(t,
+				mathop.ADDRSHIFTMOD().Serialize(),
+			)),
+			stack: []any{int64(11), vm.NaN{}, int64(5)},
+		},
+		{
+			name: "arith_muladdrshiftmod_nan_addend",
+			code: tryCode(codeFromBuilders(t,
+				mathop.MULADDRSHIFTMOD().Serialize(),
+			)),
+			stack: []any{int64(11), int64(3), vm.NaN{}, int64(5)},
+		},
+		{
+			name: "arith_mulmodpow2_nan_multiplier",
+			code: tryCode(codeFromBuilders(t,
+				mathop.MULMODPOW2_VAR().Serialize(),
+			)),
+			stack: []any{int64(11), vm.NaN{}, int64(5)},
+		},
+		{
+			name: "fee_getgasfee_short_stack_keeps_arg",
+			code: tryCode(codeFromBuilders(t,
+				funcsop.GETGASFEE().Serialize(),
+			)),
+			stack: []any{int64(250)},
+		},
+		{
+			name: "fee_getgasfee_nan_gas_range",
+			code: tryCode(codeFromBuilders(t,
+				funcsop.GETGASFEE().Serialize(),
+			)),
+			stack: []any{vm.NaN{}, int64(0)},
 		},
 	}
 

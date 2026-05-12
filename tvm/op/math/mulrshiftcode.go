@@ -20,12 +20,15 @@ func MULRSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			y, err := popIntFinite(state)
+			y, err := popInt(state)
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
+				return err
+			}
+			if err = requireFiniteInts(y, x); err != nil {
 				return err
 			}
 

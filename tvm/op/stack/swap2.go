@@ -12,6 +12,10 @@ func init() {
 func SWAP2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 4); err != nil {
+				return err
+			}
+
 			d, err := state.Stack.PopAny()
 			if err != nil {
 				return err

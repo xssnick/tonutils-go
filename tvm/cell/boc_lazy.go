@@ -385,7 +385,7 @@ func (l *lazyBOCLoader) computeRegularCellMeta(idx int, typ Type) error {
 		}
 		if refCnt > 0 {
 			depth++
-			if depth >= maxDepth {
+			if depth > maxDepth {
 				return ErrCellDepthLimit
 			}
 		}

@@ -39,21 +39,28 @@ func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int8) *he
 				return err
 			}
 
-			z, err := popIntFinite(state)
+			z, err := popInt(state)
 			if err != nil {
 				return err
 			}
 
 			var w *big.Int
 			if d == 0 {
-				w, err = popIntFinite(state)
+				w, err = popInt(state)
 				if err != nil {
 					return err
 				}
 			}
 
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
+				return err
+			}
+			if d == 0 {
+				if err = requireFiniteInts(z, w, x); err != nil {
+					return err
+				}
+			} else if err = requireFiniteInts(z, x); err != nil {
 				return err
 			}
 			if z.Sign() == 0 {

@@ -19,7 +19,13 @@ func TestStackGuardAndDeserializeErrors(t *testing.T) {
 			{name: "DUP2", op: DUP2(), st: newStackState(1)},
 			{name: "OVER2", op: OVER2(), st: newStackState(1, 2, 3)},
 			{name: "TUCK", op: TUCK(), st: newStackState(1)},
+			{name: "DROP2", op: DROP2(), st: newStackState(1)},
+			{name: "SWAP2", op: SWAP2(), st: newStackState(1, 2, 3)},
+			{name: "ROT", op: ROT(), st: newStackState(1, 2)},
+			{name: "ROTREV", op: ROTREV(), st: newStackState(1, 2)},
 			{name: "PUSH2", op: PUSH2(1, 2), st: newStackState(1)},
+			{name: "XCPU", op: XCPU(1, 0), st: newStackState(1)},
+			{name: "XCHG2", op: XCHG2(1, 2), st: newStackState(1, 2)},
 			{name: "PUXC", op: PUXC(2, 1), st: newStackState(1)},
 			{name: "XCHG3", op: XCHG3(3, 1, 0), st: newStackState(1, 2)},
 			{name: "XC2PU", op: XC2PU(2, 0, 1), st: newStackState(1)},
@@ -33,8 +39,12 @@ func TestStackGuardAndDeserializeErrors(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
+				before := tt.st.Stack.String()
 				if err := tt.op.Interpret(tt.st); err == nil {
 					t.Fatalf("%s should fail on a short stack", tt.name)
+				}
+				if after := tt.st.Stack.String(); after != before {
+					t.Fatalf("%s mutated stack before reporting underflow:\nbefore:\n%s\nafter:\n%s", tt.name, before, after)
 				}
 			})
 		}

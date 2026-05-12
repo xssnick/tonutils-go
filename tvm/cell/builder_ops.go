@@ -21,12 +21,12 @@ func (b *Builder) Depth() uint16 {
 }
 
 func (b *Builder) EndCellSpecial(special bool) (*Cell, error) {
+	if err := notifyCellCreate(b.observer); err != nil {
+		return nil, err
+	}
 	cl, err := finalizeCellFromBuilder(b, special)
 	if err != nil {
 		return nil, err
-	}
-	if b.observer != nil {
-		b.observer.OnCellCreate()
 	}
 	return cl, nil
 }

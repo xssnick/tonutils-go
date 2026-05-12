@@ -5,6 +5,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -25,6 +26,12 @@ func STI(sz uint) (op *helpers.AdvancedOP) {
 				return err
 			}
 
+			if !b0.CanExtendBy(sz, 0) {
+				return vmerr.Error(vmerr.CodeCellOverflow)
+			}
+			if !signedStoreFits(i1, sz) {
+				return cell.ErrTooBigValue
+			}
 			if err := b0.StoreBigInt(i1, sz); err != nil {
 				return err
 			}

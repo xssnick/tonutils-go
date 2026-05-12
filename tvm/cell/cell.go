@@ -45,6 +45,21 @@ type Observer interface {
 	OnRef(parent TraceNode, refIdx int) TraceNode
 }
 
+type pendingObserver interface {
+	PendingError() error
+}
+
+func notifyCellCreate(observer Observer) error {
+	if observer == nil {
+		return nil
+	}
+	observer.OnCellCreate()
+	if pending, ok := observer.(pendingObserver); ok {
+		return pending.PendingError()
+	}
+	return nil
+}
+
 func notifyCellLoad(observer Observer, c *Cell) {
 	if observer == nil || c == nil {
 		return
@@ -83,14 +98,14 @@ func (c *Cell) copy() *Cell {
 func (c *Cell) cloneWithRefObserved(i int, ref *Cell, observer Observer) (*Cell, error) {
 	cp := c.copy()
 	cp.setRef(i, ref)
+	if err := notifyCellCreate(observer); err != nil {
+		return nil, err
+	}
 	if err := cp.refreshLevelMaskForRefs(); err != nil {
 		return nil, err
 	}
 	if err := cp.calculateHashes(); err != nil {
 		return nil, err
-	}
-	if observer != nil {
-		observer.OnCellCreate()
 	}
 	return cp, nil
 }

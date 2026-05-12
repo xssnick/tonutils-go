@@ -2,6 +2,7 @@ package dict
 
 import (
 	"errors"
+	"math/big"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -47,6 +48,75 @@ func TestExecStoreDictAndSkipDictErrorBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("store dict defers depth overflow to cell finalization", func(t *testing.T) {
+		state := newDictTestState()
+		deep := makeDictTestDepth1024Cell(t)
+		if err := state.Stack.PushCell(deep); err != nil {
+			t.Fatalf("push deep dict root: %v", err)
+		}
+		if err := state.Stack.PushBuilder(cell.BeginCell()); err != nil {
+			t.Fatalf("push builder: %v", err)
+		}
+		if err := execStoreDict(state); err != nil {
+			t.Fatalf("storing depth-1024 dict root should be deferred: %v", err)
+		}
+		builder, err := state.Stack.PopBuilder()
+		if err != nil {
+			t.Fatalf("pop builder: %v", err)
+		}
+		if _, err = builder.EndCellSpecial(false); !errors.Is(err, cell.ErrCellDepthLimit) {
+			t.Fatalf("expected finalization depth error, got %v", err)
+		}
+	})
+
+	t.Run("dict set ref maps depth overflow to cell overflow", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushCell(makeDictTestDepth1024Cell(t)); err != nil {
+			t.Fatalf("push deep value ref: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push key: %v", err)
+		}
+		if err := state.Stack.PushAny(nil); err != nil {
+			t.Fatalf("push empty root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key width: %v", err)
+		}
+
+		err := execDictSet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeyUnsignedInt, byRef: true})(state)
+		var vmErr vmerr.VMError
+		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellOverflow {
+			t.Fatalf("expected cell overflow, got %v", err)
+		}
+	})
+
+	t.Run("dict set builder maps depth overflow to cell overflow", func(t *testing.T) {
+		state := newDictTestState()
+		value := cell.BeginCell()
+		if err := value.StoreRefUncheckedDepth(makeDictTestDepth1024Cell(t)); err != nil {
+			t.Fatalf("store deep value ref: %v", err)
+		}
+		if err := state.Stack.PushBuilder(value); err != nil {
+			t.Fatalf("push deep value builder: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push key: %v", err)
+		}
+		if err := state.Stack.PushAny(nil); err != nil {
+			t.Fatalf("push empty root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key width: %v", err)
+		}
+
+		err := execDictSetBuilder(cell.DictSetModeSet)(dictScalarVariant{kind: dictKeyUnsignedInt})(state)
+		var vmErr vmerr.VMError
+		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellOverflow {
+			t.Fatalf("expected cell overflow, got %v", err)
+		}
+	})
+
 	t.Run("skip dict missing slice", func(t *testing.T) {
 		if err := execSkipDict(newDictTestState()); err == nil {
 			t.Fatal("expected execSkipDict to fail on missing slice")
@@ -67,6 +137,19 @@ func TestExecStoreDictAndSkipDictErrorBranches(t *testing.T) {
 			t.Fatalf("expected cell underflow, got %v", err)
 		}
 	})
+}
+
+func makeDictTestDepth1024Cell(t *testing.T) *cell.Cell {
+	t.Helper()
+
+	root := cell.BeginCell().EndCell()
+	for i := 0; i < 1024; i++ {
+		root = cell.BeginCell().MustStoreRef(root).EndCell()
+	}
+	if root.Depth() != 1024 {
+		t.Fatalf("unexpected test cell depth: %d", root.Depth())
+	}
+	return root
 }
 
 func TestPFXDICTSWITCHDeserializeEdgeBranches(t *testing.T) {
@@ -94,21 +177,26 @@ func TestPFXDICTSWITCHDeserializeEdgeBranches(t *testing.T) {
 		code := cell.BeginCell().
 			MustStoreSlice([]byte{0xF4, 0xAC}, 13).
 			MustStoreBoolBit(false).
+			MustStoreRef(cell.BeginCell().EndCell()).
 			EndCell().BeginParse()
 		if err := op.Deserialize(code); err == nil {
 			t.Fatal("expected Deserialize to fail when key bits are truncated")
 		}
 	})
 
-	t.Run("nil root serialization fails", func(t *testing.T) {
+	t.Run("nil root flag with ref decodes as empty switch", func(t *testing.T) {
 		op := PFXDICTSWITCH(cell.BeginCell().EndCell(), 1)
 		code := cell.BeginCell().
 			MustStoreSlice([]byte{0xF4, 0xAC}, 13).
 			MustStoreBoolBit(false).
+			MustStoreRef(cell.BeginCell().EndCell()).
 			MustStoreUInt(5, 10).
 			EndCell().BeginParse()
-		if err := op.Deserialize(code); err == nil {
-			t.Fatal("expected Deserialize with nil root flag to fail")
+		if err := op.Deserialize(code); err != nil {
+			t.Fatalf("Deserialize with nil root flag and ref failed: %v", err)
+		}
+		if op.root != nil || op.bits != 5 {
+			t.Fatalf("unexpected decoded switch: root=%v bits=%d", op.root, op.bits)
 		}
 	})
 

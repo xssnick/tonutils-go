@@ -527,10 +527,10 @@ func (d *PrefixDictionary) storePrefixLeaf(label *Slice, value *Builder, remaini
 	if err := b.StoreBoolBit(false); err != nil {
 		return nil, fmt.Errorf("failed to store leaf constructor: %w", err)
 	}
-	if err := b.StoreBuilder(value); err != nil {
+	if err := b.StoreBuilderUncheckedDepth(value); err != nil {
 		return nil, fmt.Errorf("failed to store value: %w", err)
 	}
-	return b.EndCell(), nil
+	return b.EndCellSpecial(false)
 }
 
 func (d *PrefixDictionary) storePrefixFork(label *Slice, left, right *Cell, remaining uint) (*Cell, error) {
@@ -541,13 +541,13 @@ func (d *PrefixDictionary) storePrefixFork(label *Slice, left, right *Cell, rema
 	if err := b.StoreBoolBit(true); err != nil {
 		return nil, fmt.Errorf("failed to store fork constructor: %w", err)
 	}
-	if err := b.StoreRef(left); err != nil {
+	if err := b.StoreRefUncheckedDepth(left); err != nil {
 		return nil, fmt.Errorf("failed to store left branch: %w", err)
 	}
-	if err := b.StoreRef(right); err != nil {
+	if err := b.StoreRefUncheckedDepth(right); err != nil {
 		return nil, fmt.Errorf("failed to store right branch: %w", err)
 	}
-	return b.EndCell(), nil
+	return b.EndCellSpecial(false)
 }
 
 func validatePrefixDictRoot(root *Cell, keySz uint) error {

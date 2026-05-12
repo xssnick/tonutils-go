@@ -24,12 +24,15 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int8, round
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			w, err := popIntFinite(state)
+			w, err := popInt(state)
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
+				return err
+			}
+			if err = requireFiniteInts(w, x); err != nil {
 				return err
 			}
 

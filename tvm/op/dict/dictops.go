@@ -145,9 +145,8 @@ func registerSimpleExact(opcode uint16, name string, action func(*vm.State) erro
 
 type OpPFXDICTSWITCH struct {
 	helpers.Prefixed
-	root          *cell.Cell
-	bits          uint64
-	malformedRoot bool
+	root *cell.Cell
+	bits uint64
 }
 
 func PFXDICTSWITCH(root *cell.Cell, bits ...uint64) *OpPFXDICTSWITCH {
@@ -184,7 +183,6 @@ func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	op.bits = bits
-	op.malformedRoot = !hasRoot
 	if hasRoot && root != nil {
 		op.root = root.WithoutObserver().MustToCell()
 	} else {
@@ -215,10 +213,6 @@ func (op *OpPFXDICTSWITCH) InstructionBits() int64 {
 }
 
 func (op *OpPFXDICTSWITCH) Interpret(state *vm.State) error {
-	if op.malformedRoot {
-		return vmerr.Error(vmerr.CodeDict, "invalid dictionary")
-	}
-
 	input, err := state.Stack.PopSlice()
 	if err != nil {
 		return err
@@ -326,7 +320,7 @@ func execStoreDict(state *vm.State) error {
 	if err != nil {
 		return err
 	}
-	if err = builder.StoreMaybeRef(dict); err != nil {
+	if err = builder.StoreMaybeRefUncheckedDepth(dict); err != nil {
 		return cellOverflowError(err)
 	}
 	return state.Stack.PushBuilder(builder)
@@ -638,11 +632,15 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 				if keyErr != nil {
 					return keyErr
 				}
-				oldValue, err := loadDictRefValue(shadow, key)
+				oldSlice, err := shadow.LoadValue(key)
 				if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return mapDictError(err)
 				}
 				if _, err = setDictRefValueWithMode(dict, key, value, mode); err != nil {
+					return mapDictError(err)
+				}
+				oldValue, err := loadSingleRefDictValue(oldSlice)
+				if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return mapDictError(err)
 				}
 				if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -753,7 +751,11 @@ func setDictRefValueWithMode(dict *cell.Dictionary, key, value *cell.Cell, mode 
 	if value == nil {
 		return false, errors.New("value ref is nil")
 	}
-	return dict.SetBuilderWithMode(key, cell.BeginCell().MustStoreRef(value), mode)
+	builder := cell.BeginCell()
+	if err := builder.StoreRefUncheckedDepth(value); err != nil {
+		return false, err
+	}
+	return dict.SetBuilderWithMode(key, builder, mode)
 }
 
 func loadDictMinMaxRefValue(dict *cell.Dictionary, fetchMax, invertFirst, remove bool) (*cell.Cell, *cell.Cell, error) {
@@ -910,11 +912,15 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		var oldValue *cell.Cell
 		if newValue != nil {
 			shadow := newPlainDict(root, keyBits)
-			oldValue, err = loadDictRefValue(shadow, key)
+			oldSlice, err := shadow.LoadValue(key)
 			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return mapDictError(err)
 			}
 			if _, err = setDictRefValueWithMode(dict, key, newValue, cell.DictSetModeSet); err != nil {
+				return mapDictError(err)
+			}
+			oldValue, err = loadSingleRefDictValue(oldSlice)
+			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return mapDictError(err)
 			}
 		} else {
@@ -978,12 +984,6 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 				}
 				return mapDictError(err)
 			}
-			if variant.kind == dictKeySlice {
-				if err = state.ConsumeGas(vm.CellCreateGasPrice); err != nil {
-					return err
-				}
-			}
-
 			if remove {
 				if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
 					return err
@@ -1000,6 +1000,11 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 				}
 			}
 
+			if variant.kind == dictKeySlice {
+				if err = state.ConsumeGas(vm.CellCreateGasPrice); err != nil {
+					return err
+				}
+			}
 			if err = pushDictKeyValue(state, keyCell, variant.kind); err != nil {
 				return err
 			}
@@ -1240,14 +1245,13 @@ func execDictGetNear(variant dictNearVariant) func(*vm.State) error {
 			}
 		}
 
+		if err = state.Stack.PushSlice(value); err != nil {
+			return err
+		}
 		if variant.kind == dictKeySlice {
 			if err = state.ConsumeGas(vm.CellCreateGasPrice); err != nil {
 				return err
 			}
-		}
-
-		if err = state.Stack.PushSlice(value); err != nil {
-			return err
 		}
 		if err = pushDictKeyValue(state, nearestKey, variant.kind); err != nil {
 			return err
@@ -1674,7 +1678,10 @@ func mapDictError(err error) error {
 		return vmerr.Error(vmerr.CodeDict, err.Error())
 	case errors.Is(err, cell.ErrNoMoreRefs):
 		return cellUnderflowError(err)
-	case errors.Is(err, cell.ErrTooMuchRefs), errors.Is(err, cell.ErrNotFit1023):
+	case errors.Is(err, cell.ErrTooMuchRefs),
+		errors.Is(err, cell.ErrNotFit1023),
+		errors.Is(err, cell.ErrCellDepthLimit),
+		errors.Is(err, cell.ErrRefCannotBeNil):
 		return cellOverflowError(err)
 	case strings.Contains(err.Error(), "not enough data in reader"),
 		strings.Contains(err.Error(), "label exceeds remaining key bits"),

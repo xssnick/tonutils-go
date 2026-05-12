@@ -12,13 +12,7 @@ func init() {
 func DROP2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			_, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-
-			_, err = state.Stack.PopAny()
-			return err
+			return state.Stack.Drop(2)
 		},
 		Name:      "2DROP",
 		BitPrefix: helpers.BytesPrefix(0x5B),

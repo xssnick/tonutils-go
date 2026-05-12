@@ -252,10 +252,10 @@ func storeDictNodeObserved(label *Slice, payload *Builder, keyLen uint, observer
 	if err := storeDictLabel(b, label, keyLen); err != nil {
 		return nil, err
 	}
-	if err := b.StoreBuilder(payload); err != nil {
+	if err := b.StoreBuilderUncheckedDepth(payload); err != nil {
 		return nil, err
 	}
-	return b.EndCell(), nil
+	return b.EndCellSpecial(false)
 }
 
 func storeDictShort(b *Builder, partSz uint64, bits []byte) error {

@@ -16,6 +16,10 @@ func XCPU(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 0, int(i), int(j)); err != nil {
+				return err
+			}
+
 			if err := state.Stack.Exchange(0, int(i)); err != nil {
 				return err
 			}

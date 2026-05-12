@@ -680,6 +680,50 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 		}
 	})
 
+	t.Run("ctos_library_resolution_gas", func(t *testing.T) {
+		target := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+		libraryCell := mustCrossLibraryCellForHash(t, target.Hash())
+		libraries := mustCrossLibraryCollection(t, target)
+
+		code := prependRawMethodDrop(codeFromBuilders(t, cellsliceop.CTOS().Serialize()))
+		goStack, err := buildCrossStack(libraryCell)
+		if err != nil {
+			t.Fatalf("failed to build go stack: %v", err)
+		}
+		refStack, err := buildCrossStack(libraryCell)
+		if err != nil {
+			t.Fatalf("failed to build reference stack: %v", err)
+		}
+
+		goRes, err := runGoCrossCodeWithLibs(code, cell.BeginCell().EndCell(), tuple.Tuple{}, []*cell.Cell{libraries}, goStack)
+		if err != nil {
+			t.Fatalf("go tvm execution failed: %v", err)
+		}
+		refRes, err := runReferenceCrossCodeWithLibs(code, cell.BeginCell().EndCell(), tuple.Tuple{}, libraries, refStack)
+		if err != nil {
+			t.Fatalf("reference tvm execution failed: %v", err)
+		}
+
+		if goRes.exitCode != 0 || refRes.exitCode != 0 {
+			t.Fatalf("unexpected exit code: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
+		}
+		if goRes.gasUsed != refRes.gasUsed {
+			t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+		}
+
+		goStackCell, err := normalizeStackCell(goRes.stack)
+		if err != nil {
+			t.Fatalf("failed to normalize go stack: %v", err)
+		}
+		refStackCell, err := normalizeStackCell(refRes.stack)
+		if err != nil {
+			t.Fatalf("failed to normalize reference stack: %v", err)
+		}
+		if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+			t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+		}
+	})
+
 	t.Run("xloadq_library_resolution", func(t *testing.T) {
 		target := cell.BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
 		libraryCell := mustCrossLibraryCellForHash(t, target.Hash())

@@ -75,7 +75,7 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 		if current == nil {
 			return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load cell")
 		}
-		if !currentAlreadyLoaded {
+		if !currentAlreadyLoaded && !libraryLoaded {
 			if err := m.RegisterCellLoad(current); err != nil {
 				return nil, false, err
 			}

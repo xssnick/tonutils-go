@@ -139,10 +139,13 @@ func (d *Dictionary) storeLeaf(keyPfx *Slice, value *Builder, keyOffset uint) (*
 }
 
 func (d *Dictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) (*Cell, error) {
-	b := BeginCell().
-		SetObserver(d.observer).
-		MustStoreRef(left).
-		MustStoreRef(right)
+	b := BeginCell().SetObserver(d.observer)
+	if err := b.StoreRefUncheckedDepth(left); err != nil {
+		return nil, err
+	}
+	if err := b.StoreRefUncheckedDepth(right); err != nil {
+		return nil, err
+	}
 
 	return storeDictNodeObserved(label, b, keyOffset, d.observer)
 }
@@ -251,7 +254,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
 		return nil, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
-	if err = oldChild.StoreBuilder(node.loader.ToBuilder()); err != nil {
+	if err = oldChild.StoreBuilderUncheckedDepth(node.loader.ToBuilder()); err != nil {
 		return nil, false, fmt.Errorf("failed to store old child payload: %w", err)
 	}
 
@@ -260,7 +263,12 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		return nil, false, fmt.Errorf("failed to store new child leaf: %w", err)
 	}
 
-	left, right := newChild, oldChild.EndCell()
+	oldChildCell, err := oldChild.EndCellSpecial(false)
+	if err != nil {
+		return nil, false, err
+	}
+
+	left, right := newChild, oldChildCell
 	if isNewRight {
 		left, right = right, left
 	}

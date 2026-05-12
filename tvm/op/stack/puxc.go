@@ -16,6 +16,10 @@ func PUXC(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, int(j), int(i)); err != nil {
+				return err
+			}
+
 			val, err := state.Stack.Get(int(i))
 			if err != nil {
 				return err

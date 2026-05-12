@@ -2,9 +2,11 @@ package cellslice
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -25,6 +27,9 @@ func STU(sz uint) (op *helpers.AdvancedOP) {
 				return err
 			}
 
+			if !b0.CanExtendBy(sz, 0) {
+				return vmerr.Error(vmerr.CodeCellOverflow)
+			}
 			if err := b0.StoreBigUInt(i1, sz); err != nil {
 				return err
 			}

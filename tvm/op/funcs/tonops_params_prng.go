@@ -236,14 +236,23 @@ func setRandSeed(state *vm.State, seed *big.Int) error {
 	if !ok {
 		return vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a tuple")
 	}
+	if inner.Len() > 255 {
+		return vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a tuple")
+	}
 	inner = inner.Copy()
+	innerCharge := inner.Len()
+	if paramIdxRandomSeed >= inner.Len() {
+		inner.Resize(paramIdxRandomSeed + 1)
+		innerCharge = inner.Len()
+	}
 	if err = inner.Set(paramIdxRandomSeed, new(big.Int).Set(seed)); err != nil {
 		return err
 	}
+
 	if err = state.SetC7(tuple.NewTupleValue()); err != nil {
 		return err
 	}
-	if err = state.ConsumeTupleGasLen(inner.Len()); err != nil {
+	if err = state.ConsumeTupleGasLen(innerCharge); err != nil {
 		return err
 	}
 	if err = top.Set(0, inner); err != nil {

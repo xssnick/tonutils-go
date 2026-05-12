@@ -286,6 +286,14 @@ func dictMatrixValueCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "value/setget_ref_bad_old_value_after_set_gas",
+			op:   0xF41B,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixRefValue(0xF00D, 16), mustSliceKey(t, 0x10, 8), dictMatrixPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
+		},
+		{
 			name: "value/isetget_hit",
 			op:   0xF41C,
 			stack: func(t *testing.T) []any {
@@ -950,6 +958,14 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 				return []any{dictMatrixRefValue(0x0202, 16), mustSliceKey(t, 0x10, 8), dictMatrixRefRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "optref/setgetoptref_bad_old_value_after_set_gas",
+			op:   0xF46D,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixRefValue(0x0707, 16), mustSliceKey(t, 0x10, 8), dictMatrixPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
 		},
 		{
 			name: "optref/setgetoptref_delete_existing",
@@ -1721,6 +1737,21 @@ func dictMatrixPrefixCases() []dictMatrixCrossCase {
 				return []any{mustSliceKey(t, 0b0111, 4)}
 			},
 			exit: 0,
+		},
+		{
+			name: "prefix/pfxdictswitch_nil_root_flag_with_ref",
+			code: func(t *testing.T) *cell.Cell {
+				return cell.BeginCell().
+					MustStoreSlice([]byte{0xF4, 0xAC}, 13).
+					MustStoreBoolBit(false).
+					MustStoreRef(cell.BeginCell().EndCell()).
+					MustStoreUInt(4, 10).
+					EndCell()
+			},
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0b1011, 4)}
+			},
+			exit: vmerr.CodeStackUnderflow,
 		},
 		{
 			name: "prefix/pfxdictswitch_long_input_hit",

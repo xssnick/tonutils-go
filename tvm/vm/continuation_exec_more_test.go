@@ -347,7 +347,7 @@ func TestExecHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract all stack continuation: %v", err)
 	}
-	if extractAllState.Stack.Len() != 2 || allCont.Data.Stack.Len() != 0 {
+	if extractAllState.Stack.Len() != 2 || allCont.Data.Stack != nil {
 		t.Fatal("extract all stack branch should swap the active stack and captured stack")
 	}
 }

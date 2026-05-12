@@ -16,20 +16,23 @@ func MULADDDIVMODR() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 4); err != nil {
 				return err
 			}
-			z, err := popIntFinite(state)
+			z, err := popInt(state)
 			if err != nil {
 				return err
 			}
-			w, err := popIntFinite(state)
+			w, err := popInt(state)
 			if err != nil {
 				return err
 			}
-			y, err := popIntFinite(state)
+			y, err := popInt(state)
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
+				return err
+			}
+			if err = requireFiniteInts(z, w, y, x); err != nil {
 				return err
 			}
 

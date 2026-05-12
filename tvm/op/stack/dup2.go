@@ -12,6 +12,10 @@ func init() {
 func DUP2() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			a, err := state.Stack.Get(1)
 			if err != nil {
 				return err

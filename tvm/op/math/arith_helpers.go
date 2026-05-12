@@ -45,6 +45,19 @@ func popIntRange(state *vm.State, min, max int64) (*big.Int, error) {
 	return state.Stack.PopIntRange(min, max)
 }
 
+func popInt(state *vm.State) (*big.Int, error) {
+	return state.Stack.PopInt()
+}
+
+func requireFiniteInts(values ...*big.Int) error {
+	for _, value := range values {
+		if value == nil {
+			return vmerr.Error(vmerr.CodeIntOverflow)
+		}
+	}
+	return nil
+}
+
 func popIntOperand(state *vm.State, quiet bool) (*big.Int, error) {
 	return state.Stack.PopInt()
 }

@@ -948,14 +948,14 @@ func (c *Slice) ToCell() (*Cell, error) {
 	cl.setSpecial(c.cell.IsSpecial())
 	cl.setLevelMask(c.cell.getLevelMask())
 	cl.setRefs(refs)
+	if err := notifyCellCreate(c.observer); err != nil {
+		return nil, err
+	}
 	if err := validateCellRefDepthLimit(refs); err != nil {
 		return nil, err
 	}
 	if err := cl.calculateHashes(); err != nil {
 		return nil, err
-	}
-	if c.observer != nil {
-		c.observer.OnCellCreate()
 	}
 	return cl, nil
 }

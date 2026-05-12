@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestTVMCrossEmulatorThrowOps(t *testing.T) {
@@ -82,6 +84,21 @@ func TestTVMCrossEmulatorThrowOps(t *testing.T) {
 				int64(0),
 			},
 			exit:         0x222,
+			noStackCheck: true,
+		},
+		{
+			name:         "throw_13_is_handled_exception_not_oog",
+			code:         codeFromBuilders(t, cell.BeginCell().MustStoreUInt(0xF20D, 16)),
+			exit:         int32(vmerr.CodeOutOfGas),
+			noStackCheck: true,
+		},
+		{
+			name: "default_c2_empty_stack_returns_pop_error",
+			code: codeFromBuilders(t,
+				execop.PUSHCTR(2).Serialize(),
+				execop.JMPX().Serialize(),
+			),
+			exit:         int32(vmerr.CodeStackUnderflow),
 			noStackCheck: true,
 		},
 	}

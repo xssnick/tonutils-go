@@ -45,6 +45,8 @@ func TestTVMCrossEmulatorCellOpsMatrix(t *testing.T) {
 		{name: "ldix_range_258", code: codeFromBuilders(t, cellsliceop.LDIX().Serialize()), stack: []any{matrixSlice(t, 257, 0), int64(258)}, exit: vmerr.CodeRangeCheck},
 		{name: "plduz_short_zero_extend", code: codeFromBuilders(t, cellsliceop.PLDUZ(32).Serialize()), stack: []any{cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().BeginParse()}, exit: 0},
 		{name: "stu_builder_full_bits", code: codeFromBuilders(t, cellsliceop.STU(1).Serialize()), stack: []any{int64(1), matrixBuilder(t, 1023, 0)}, exit: vmerr.CodeCellOverflow},
+		{name: "stu_overflow_precedes_range", code: codeFromBuilders(t, cellsliceop.STU(1).Serialize()), stack: []any{int64(2), matrixBuilder(t, 1023, 0)}, exit: vmerr.CodeCellOverflow},
+		{name: "sti_overflow_precedes_range", code: codeFromBuilders(t, cellsliceop.STI(1).Serialize()), stack: []any{int64(1), matrixBuilder(t, 1023, 0)}, exit: vmerr.CodeCellOverflow},
 		{name: "stref_builder_full_refs", code: codeFromBuilders(t, cellsliceop.STREF().Serialize()), stack: []any{matrixCell(t, 0, 0), matrixBuilder(t, 0, 4)}, exit: vmerr.CodeCellOverflow},
 		{name: "strefq_builder_full_refs", code: codeFromBuilders(t, cellsliceop.STREFQ().Serialize()), stack: []any{matrixCell(t, 0, 0), matrixBuilder(t, 0, 4)}, exit: 0},
 		{name: "stsliceq_builder_full_bits", code: codeFromBuilders(t, cellsliceop.STSLICEQ().Serialize()), stack: []any{matrixSlice(t, 1, 0), matrixBuilder(t, 1023, 0)}, exit: 0},
@@ -109,6 +111,9 @@ func TestTVMCrossEmulatorCellOpsMatrix(t *testing.T) {
 	}
 
 	tests = append(tests,
+		cellParityCase{name: "sti_1_positive_rangecheck", code: codeFromBuilders(t, cellsliceop.STI(1).Serialize()), stack: []any{int64(1), cell.BeginCell()}, exit: vmerr.CodeRangeCheck},
+		cellParityCase{name: "sti_8_positive_rangecheck", code: codeFromBuilders(t, cellsliceop.STI(8).Serialize()), stack: []any{int64(128), cell.BeginCell()}, exit: vmerr.CodeRangeCheck},
+		cellParityCase{name: "sti_256_positive_rangecheck", code: codeFromBuilders(t, cellsliceop.STI(256).Serialize()), stack: []any{new(big.Int).Lsh(big.NewInt(1), 255), cell.BeginCell()}, exit: vmerr.CodeRangeCheck},
 		cellParityCase{name: "stix_ext_width_257", code: storeIntVarExtCode(0), stack: []any{big.NewInt(-1), cell.BeginCell(), int64(257)}, exit: 0},
 		cellParityCase{name: "stux_ext_success", code: storeIntVarExtCode(1), stack: []any{int64(5), cell.BeginCell(), int64(3)}, exit: 0},
 		cellParityCase{name: "stux_ext_width_rangecheck", code: storeIntVarExtCode(1), stack: []any{int64(0), cell.BeginCell(), int64(257)}, exit: vmerr.CodeRangeCheck},

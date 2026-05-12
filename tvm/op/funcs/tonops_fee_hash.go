@@ -255,11 +255,11 @@ func maxBig(x, y *big.Int) *big.Int {
 }
 
 func popUint64NonNegative(st *vm.Stack) (uint64, error) {
-	v, err := st.PopIntFinite()
+	v, err := st.PopInt()
 	if err != nil {
 		return 0, err
 	}
-	if v.Sign() < 0 || v.BitLen() > 63 {
+	if v == nil || v.Sign() < 0 || v.BitLen() > 63 {
 		return 0, vmerr.Error(vmerr.CodeRangeCheck, "finite non-negative integer expected")
 	}
 	return v.Uint64(), nil
@@ -318,6 +318,9 @@ func (o *getExtraBalanceCheapObserver) PendingError() error {
 func GETGASFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			isMasterchain, err := state.Stack.PopBool()
 			if err != nil {
 				return err
@@ -340,6 +343,9 @@ func GETGASFEE() *helpers.SimpleOP {
 func GETSTORAGEFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 4 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			isMasterchain, err := state.Stack.PopBool()
 			if err != nil {
 				return err
@@ -373,6 +379,9 @@ func GETSTORAGEFEE() *helpers.SimpleOP {
 func GETFORWARDFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 3 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			isMasterchain, err := state.Stack.PopBool()
 			if err != nil {
 				return err
@@ -399,6 +408,9 @@ func GETFORWARDFEE() *helpers.SimpleOP {
 func GETORIGINALFWDFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			isMasterchain, err := state.Stack.PopBool()
 			if err != nil {
 				return err
@@ -426,6 +438,9 @@ func GETORIGINALFWDFEE() *helpers.SimpleOP {
 func GETGASFEESIMPLE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			isMasterchain, err := state.Stack.PopBool()
 			if err != nil {
 				return err
@@ -449,6 +464,9 @@ func GETGASFEESIMPLE() *helpers.SimpleOP {
 func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 3 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
 			isMasterchain, err := state.Stack.PopBool()
 			if err != nil {
 				return err

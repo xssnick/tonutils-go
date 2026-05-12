@@ -93,7 +93,7 @@ func (op *OpSTREFCONST) Interpret(state *vm.State) error {
 		return vmerr.Error(vmerr.CodeCellOverflow)
 	}
 	for _, ref := range op.refs {
-		if err = builder.StoreRef(ref); err != nil {
+		if err = builder.StoreRefUncheckedDepth(ref); err != nil {
 			return vmerr.Error(vmerr.CodeCellOverflow)
 		}
 	}
