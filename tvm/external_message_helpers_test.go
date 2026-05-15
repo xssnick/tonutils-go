@@ -99,11 +99,8 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 			t.Fatalf("unexpected seed value: got %s want %s", seed.String(), want.String())
 		}
 
-		if got := normalizeMessageTupleValue(int16(-7)).(*big.Int).Int64(); got != -7 {
-			t.Fatalf("unexpected normalized int: %d", got)
-		}
-		if got := normalizeMessageTupleValue(uint16(17)).(*big.Int).Uint64(); got != 17 {
-			t.Fatalf("unexpected normalized uint: %d", got)
+		if got := normalizeMessageTupleValue(int16(-7)); got != int16(-7) {
+			t.Fatalf("host ints should not be normalized to TVM ints, got %T %v", got, got)
 		}
 
 		orig := big.NewInt(55)
@@ -161,21 +158,21 @@ func TestMessageEmulationAccountAddr(t *testing.T) {
 	}
 }
 
-func TestBuildMessageEmulationC7NormalizesGlobals(t *testing.T) {
+func TestBuildMessageEmulationC7CopiesGlobals(t *testing.T) {
 	cfg := MessageEmulationConfig{
 		Now:                 12345,
 		BlockLT:             77,
 		LogicalTime:         88,
 		ConfigRoot:          cell.BeginCell().MustStoreUInt(1, 1).EndCell(),
-		IncomingValue:       tuple.NewTupleValue(int64(9), nil),
+		IncomingValue:       tuple.NewTupleValue(big.NewInt(9), nil),
 		StorageFees:         11,
 		PrevBlocks:          "prev",
 		DuePayment:          "due",
-		PrecompiledGasUsage: uint8(5),
+		PrecompiledGasUsage: big.NewInt(5),
 		InMsgParams:         tuple.NewTupleValue("params"),
 		GlobalID:            7,
 		Globals: map[int]any{
-			2: uint16(55),
+			2: big.NewInt(55),
 		},
 	}
 
@@ -225,7 +222,80 @@ func TestBuildMessageEmulationC7NormalizesGlobals(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := globalRaw.(*big.Int).Int64(); got != 55 {
-		t.Fatalf("unexpected normalized global value: %d", got)
+		t.Fatalf("unexpected global value: %d", got)
+	}
+}
+
+func TestBuildMessageEmulationC7UsesRealNilForAbsentPrecompiledGas(t *testing.T) {
+	c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), MessageEmulationConfig{}, big.NewInt(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	innerRaw, err := c7.RawIndex(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := innerRaw.(tuple.Tuple)
+	precompiledRaw, err := inner.RawIndex(16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if precompiledRaw != nil {
+		t.Fatalf("precompiled gas field = %#v, want real nil", precompiledRaw)
+	}
+}
+
+func TestBuildMessageEmulationC7ClonesMutableConfigValues(t *testing.T) {
+	unpackedSlice := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
+	prevSlice := cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell().MustBeginParse()
+	cfg := MessageEmulationConfig{
+		ConfigRoot:     cell.BeginCell().MustStoreUInt(1, 1).EndCell(),
+		PrevBlocks:     tuple.NewTupleValue(prevSlice),
+		UnpackedConfig: tuple.NewTupleValue(unpackedSlice),
+	}
+
+	c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), cfg, big.NewInt(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paramsRaw, err := c7.RawIndex(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := paramsRaw.(tuple.Tuple)
+
+	prevRaw, err := params.RawIndex(13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := prevRaw.(tuple.Tuple)
+	copiedPrevRaw, err := prev.RawIndex(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = copiedPrevRaw.(*cell.Slice).LoadUInt(8); err != nil {
+		t.Fatal(err)
+	}
+	if prevSlice.BitsLeft() != 8 {
+		t.Fatalf("prev blocks slice was mutated, bits left %d", prevSlice.BitsLeft())
+	}
+
+	unpackedRaw, err := params.RawIndex(14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unpacked := unpackedRaw.(tuple.Tuple)
+	copiedUnpackedRaw, err := unpacked.RawIndex(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = copiedUnpackedRaw.(*cell.Slice).LoadUInt(8); err != nil {
+		t.Fatal(err)
+	}
+	if unpackedSlice.BitsLeft() != 8 {
+		t.Fatalf("unpacked config slice was mutated, bits left %d", unpackedSlice.BitsLeft())
 	}
 }
 

@@ -60,19 +60,16 @@ func (b *MerkleProofBuilder) CreateProof() (*Cell, error) {
 }
 
 func (c *Cell) CreateUsageProof(usageTree *CellUsageTree) (*Cell, error) {
-	if c.Level() != 0 {
-		return nil, fmt.Errorf("failed to build usage proof: level is not 0")
-	}
 	if usageTree == nil {
 		return nil, fmt.Errorf("failed to build usage proof: usage tree is nil")
 	}
 
-	visited := map[Hash]struct{}{}
-	if err := collectUsageProofHashes(c, usageTree, usageTree.RootNode(), visited); err != nil {
+	state := newUsageProofBuildState()
+	if err := collectUsageProofHashes(c, usageTree, usageTree.RootNode(), state); err != nil {
 		return nil, err
 	}
 
-	body, err := buildUsageProofBody(c, visited, 0)
+	body, err := buildUsageProofBody(c, state, c.Level())
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
 	}
@@ -91,7 +88,7 @@ func buildMerkleProofBodyByPruneFunc(c *Cell, shouldPrune merkleProofPruneFunc, 
 			return nil, err
 		}
 		if pruned {
-			return createUsageProofPrunedBranch(c, merkleDepth+1)
+			return createPrunedBranchFromCell(c, merkleDepth+1)
 		}
 	}
 
@@ -110,7 +107,7 @@ func buildMerkleProofBodyByPruneFunc(c *Cell, shouldPrune merkleProofPruneFunc, 
 	refView := newCellRefView(loaded)
 	childDepth := merkleChildDepth(loaded, merkleDepth)
 	for i := 0; i < refCnt; i++ {
-		ref, err := refView.boundaryRef(i)
+		ref, err := merkleProofRef(c, refView, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
 		}
@@ -128,74 +125,190 @@ func buildMerkleProofBodyByPruneFunc(c *Cell, shouldPrune merkleProofPruneFunc, 
 	return rebuilt, nil
 }
 
-func collectUsageProofHashes(c *Cell, usageTree *CellUsageTree, node TraceNode, visited map[Hash]struct{}) error {
+type usageProofBuildKey struct {
+	hash        Hash
+	merkleDepth int
+}
+
+type usageProofBuildState struct {
+	visited map[Hash]struct{}
+	loaded  map[Hash]*Cell
+	built   map[usageProofBuildKey]*Cell
+}
+
+func newUsageProofBuildState() *usageProofBuildState {
+	return &usageProofBuildState{
+		visited: map[Hash]struct{}{},
+		loaded:  map[Hash]*Cell{},
+		built:   map[usageProofBuildKey]*Cell{},
+	}
+}
+
+func (s *usageProofBuildState) markVisited(c *Cell) {
+	hash := c.HashKey()
+	s.visited[hash] = struct{}{}
+	if !c.IsLazy() {
+		s.loaded[hash] = c
+	}
+}
+
+func (s *usageProofBuildState) rememberLoaded(boundary, loaded *Cell) {
+	if boundary == nil || loaded == nil {
+		return
+	}
+	s.loaded[boundary.HashKey()] = loaded
+	s.loaded[loaded.HashKey()] = loaded
+}
+
+func (s *usageProofBuildState) isVisited(c *Cell) bool {
+	_, ok := s.visited[c.HashKey()]
+	return ok
+}
+
+func (s *usageProofBuildState) loadedCell(c *Cell) (*Cell, bool) {
+	loaded, ok := s.loaded[c.HashKey()]
+	return loaded, ok
+}
+
+func (s *usageProofBuildState) loadForUsage(c *Cell, usageTree *CellUsageTree, node TraceNode) (*Cell, error) {
+	if c == nil {
+		return nil, fmt.Errorf("cell is nil")
+	}
+	if loaded, ok := s.loadedCell(c); ok {
+		return loaded, nil
+	}
+	if loaded, ok := usageTree.loadedCell(node); ok {
+		loaded = loadedForBoundary(c, loaded)
+		if loaded.HashKey() == c.HashKey() {
+			s.rememberLoaded(c, loaded)
+			return loaded, nil
+		}
+	}
+	if loaded, ok := usageTree.loadedCellByHash(c.HashKey()); ok {
+		s.rememberLoaded(c, loaded)
+		return loaded, nil
+	}
+	if !c.IsLazy() {
+		s.rememberLoaded(c, c)
+		return c, nil
+	}
+
+	loaded, err := c.load()
+	if err != nil {
+		return nil, err
+	}
+	s.rememberLoaded(c, loaded)
+	return loaded, nil
+}
+
+func loadedForBoundary(boundary, loaded *Cell) *Cell {
+	if boundary == nil || loaded == nil || boundary.HashKey() == loaded.HashKey() {
+		return loaded
+	}
+
+	raw := loaded.rawCell()
+	if trace := loaded.Trace(); trace != nil && raw.Trace() != trace {
+		raw = raw.WithTrace(trace)
+	}
+	return raw.Virtualize(uint8(boundary.currentEffectiveLevel()))
+}
+
+func collectUsageProofHashes(c *Cell, usageTree *CellUsageTree, node TraceNode, state *usageProofBuildState) error {
 	if c == nil || !usageTree.IsLoaded(node) {
 		return nil
 	}
-	visited[c.HashKey()] = struct{}{}
+	state.markVisited(c)
 
-	refCnt := c.refsCount()
+	loaded, err := state.loadForUsage(c, usageTree, node)
+	if err != nil {
+		return err
+	}
+	if loaded != c {
+		state.markVisited(loaded)
+	}
+
+	refCnt := loaded.refsCount()
 	if refCnt == 0 {
 		return nil
 	}
 
-	refView := newCellRefView(c)
+	refView := newCellRefView(loaded)
 	for i := 0; i < refCnt; i++ {
 		childNode := usageTree.GetChild(node, i)
 		if !usageTree.IsLoaded(childNode) {
 			continue
 		}
 
-		ref, err := refView.boundaryRef(i)
+		ref, err := merkleProofRef(loaded, refView, i)
 		if err != nil {
 			return fmt.Errorf("failed to peek %d ref: %w", i, err)
 		}
-		ref, err = ref.load()
+		ref, err = state.loadForUsage(ref, usageTree, childNode)
 		if err != nil {
 			return fmt.Errorf("failed to load %d ref: %w", i, err)
 		}
-		if err = collectUsageProofHashes(ref, usageTree, childNode, visited); err != nil {
+		if err = collectUsageProofHashes(ref, usageTree, childNode, state); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func buildUsageProofBody(c *Cell, visited map[Hash]struct{}, merkleDepth int) (*Cell, error) {
+func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) (*Cell, error) {
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	if _, ok := visited[c.HashKey()]; !ok {
-		return createUsageProofPrunedBranch(c, merkleDepth+1)
+	key := usageProofBuildKey{hash: c.HashKey(), merkleDepth: merkleDepth}
+	if built := state.built[key]; built != nil {
+		return built, nil
 	}
 
-	refCnt := c.refsCount()
+	if !state.isVisited(c) {
+		pruned, err := createPrunedBranchFromCell(c, merkleDepth+1)
+		if err != nil {
+			return nil, err
+		}
+		state.built[key] = pruned
+		return pruned, nil
+	}
+
+	loaded := c
+	if cached, ok := state.loadedCell(c); ok {
+		loaded = cached
+	}
+
+	refCnt := loaded.refsCount()
 	if refCnt == 0 {
-		return c, nil
+		state.built[key] = loaded
+		return loaded, nil
 	}
 
 	var refsBuf [4]*Cell
 	refs := refsBuf[:refCnt]
-	refView := newCellRefView(c)
-	childDepth := merkleChildDepth(c, merkleDepth)
+	refView := newCellRefView(loaded)
+	childDepth := merkleChildDepth(loaded, merkleDepth)
 	for i := 0; i < refCnt; i++ {
-		ref, err := refView.boundaryRef(i)
+		ref, err := merkleProofRef(loaded, refView, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
 		}
 
 		next := ref
-		if _, ok := visited[ref.HashKey()]; ok {
-			ref, err = ref.load()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
+		if state.isVisited(ref) {
+			loadedRef, ok := state.loadedCell(ref)
+			if !ok {
+				loadedRef, err = ref.load()
+				if err != nil {
+					return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
+				}
+				state.rememberLoaded(ref, loadedRef)
 			}
-			next, err = buildUsageProofBody(ref, visited, childDepth)
+			next, err = buildUsageProofBody(loadedRef, state, childDepth)
 			if err != nil {
 				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
 			}
 		} else {
-			next, err = createUsageProofPrunedBranch(ref, childDepth+1)
+			next, err = buildUsageProofBody(ref, state, childDepth)
 			if err != nil {
 				return nil, fmt.Errorf("failed to prune %d ref: %w", i, err)
 			}
@@ -207,13 +320,14 @@ func buildUsageProofBody(c *Cell, visited map[Hash]struct{}, merkleDepth int) (*
 	if err != nil {
 		return nil, err
 	}
+	state.built[key] = rebuilt
 	return rebuilt, nil
 }
 
-func createUsageProofPrunedBranch(source *Cell, newLevel int) (*Cell, error) {
-	level := source.getLevelMask().Apply(_DataCellMaxLevel).GetLevel()
-	if newLevel < level+1 {
-		newLevel = level + 1
+func merkleProofRef(parent *Cell, refView cellRefView, i int) (*Cell, error) {
+	ref, err := refView.boundaryRef(i)
+	if err != nil {
+		return nil, err
 	}
-	return createPrunedBranchFromCell(source, newLevel)
+	return ref.Virtualize(childEffectiveLevelFor(parent, uint8(parent.currentEffectiveLevel()))), nil
 }

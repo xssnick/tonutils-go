@@ -157,16 +157,16 @@ func loadLazyPrunedRef(c *Cell) (*Cell, error) {
 		return nil, ErrLazyLoaderNotSet
 	}
 	trace := c.Trace()
+	raw := c.rawCell()
+	wantHash := c.HashKey()
+	wantDepth := c.Depth()
 
-	loaded, err := meta.lazyLoader(c.HashKey())
+	loaded, err := meta.lazyLoader(raw.HashKey())
 	if err != nil {
 		return nil, err
 	}
 	if loaded == nil {
 		return nil, ErrLazyRefNotFound
-	}
-	if loaded.HashKey() != c.HashKey() {
-		return nil, fmt.Errorf("lazy cell hash mismatch: got %x, want %x", loaded.Hash(), c.Hash())
 	}
 
 	var out *Cell
@@ -174,6 +174,12 @@ func loadLazyPrunedRef(c *Cell) (*Cell, error) {
 		out = loaded
 	} else {
 		out = loaded.Virtualize(meta.viewLevel - 1)
+	}
+	if gotHash := out.HashKey(); gotHash != wantHash {
+		return nil, fmt.Errorf("lazy cell hash mismatch: got %x, want %x", gotHash[:], wantHash[:])
+	}
+	if gotDepth := out.Depth(); gotDepth != wantDepth {
+		return nil, fmt.Errorf("lazy cell depth mismatch: got %d, want %d", gotDepth, wantDepth)
 	}
 	if trace != nil {
 		out = out.WithTrace(trace)

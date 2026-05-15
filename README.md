@@ -158,7 +158,11 @@ if err != nil {
 }
 
 // we are sure that return value is 1 cell, we can directly cast it and parse
-val, err := res.MustCell(0).MustBeginParse().LoadUInt(64)
+slice, err := res.MustCell(0).BeginParse()
+if err != nil {
+    panic(err)
+}
+val, err := slice.LoadUInt(64)
 if err != nil {
     panic(err)
 }
@@ -416,7 +420,10 @@ fmt.Println(result.Dump())
 
 Load from cell:
 ```golang
-slice := someCell.MustBeginParse()
+slice, err := someCell.BeginParse()
+if err != nil {
+    panic(err)
+}
 wc := slice.MustLoadUInt(8)
 data := slice.MustLoadSlice(256)
 ```
@@ -667,7 +674,7 @@ You can load cells directly into Go structs using TLB tags and serialize them ba
 
 For most application-level code it is recommended to use TLB structs instead of manual raw cell assembly.
 Raw `cell.BeginCell()` / `Load*` flows are still useful for low-level work, debugging, uncommon layouts and dynamic structures,
-but if payload layout is known in advance, `tlb.LoadFromCell` and `tlb.ToCell` are usually simpler, shorter and less error-prone.
+but if payload layout is known in advance, `tlb.Parse` (or `tlb.LoadFromCell` when you already have a `*cell.Slice`) and `tlb.ToCell` are usually simpler, shorter and less error-prone.
 
 Supported tags:
 
@@ -698,10 +705,10 @@ Tags can be combined. Typical examples:
 
 Custom parsing/serialization hooks are also supported:
 
-- if a value implements `tlb.Unmarshaler`, `LoadFromCell` calls its custom loader
+- if a value implements `tlb.Unmarshaler`, its `LoadFromCell` method is used by `tlb.Parse` and `tlb.LoadFromCell`
 - if a value implements `tlb.Marshaller`, `ToCell` calls its custom serializer
 
-For exact behavior and edge cases, see comments on `tlb.LoadFromCell` and `tlb.ToCell`.
+For exact behavior and edge cases, see comments on `tlb.Parse`, `tlb.LoadFromCell` and `tlb.ToCell`.
 
 Example of parsing:
 ```golang
@@ -723,7 +730,7 @@ type ShardIdent struct {
 }
 
 var state ShardState
-if err := tlb.LoadFromCell(&state, cl.MustBeginParse()); err != nil {
+if err := tlb.Parse(&state, cl); err != nil {
     panic(err)
 }
 
@@ -753,13 +760,17 @@ payloadCell := cell.BeginCell().
     EndCell()
 
 var payload ExamplePayload
-if err := tlb.LoadFromCell(&payload, payloadCell.MustBeginParse()); err != nil {
+if err := tlb.Parse(&payload, payloadCell); err != nil {
     panic(err)
 }
 
 fmt.Println(payload.QueryID)                  // 123
 fmt.Println(payload.Flags)                    // 7
-fmt.Println(payload.Body.MustBeginParse().MustLoadUInt(16)) // 0xCAFE
+body, err := payload.Body.BeginParse()
+if err != nil {
+    panic(err)
+}
+fmt.Println(body.MustLoadUInt(16)) // 0xCAFE
 ```
 
 #### TLB Serialize
@@ -797,7 +808,7 @@ if err != nil {
 }
 
 var decoded ExamplePayload
-if err = tlb.LoadFromCell(&decoded, payloadCell.MustBeginParse()); err != nil {
+if err = tlb.Parse(&decoded, payloadCell); err != nil {
     panic(err)
 }
 

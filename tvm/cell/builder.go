@@ -825,7 +825,11 @@ func (b *Builder) EndCell() *Cell {
 }
 
 func (b *Builder) ToSlice() *Slice {
-	return b.EndCell().MustBeginParse().SetTrace(b.trace)
+	s, err := b.EndCell().BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	return s.SetTrace(b.trace)
 }
 
 func (b *Builder) String() string {

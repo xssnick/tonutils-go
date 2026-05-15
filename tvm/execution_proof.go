@@ -35,7 +35,8 @@ func (tvm *TVM) ExecuteDetailedWithAccountProof(accountRoot *cell.Cell, c7 tuple
 	}
 
 	return tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{
-		proof: proof,
+		proof:           proof,
+		skipFinalCommit: true,
 	}, libraries...)
 }
 

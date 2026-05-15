@@ -44,6 +44,10 @@ func (s *Stack) RestoreCheckpoint(cp StackCheckpoint) {
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
+var stackIntMinusOne = big.NewInt(-1)
+var stackIntZero = big.NewInt(0)
+var stackIntOne = big.NewInt(1)
+
 const maxStackDepth = 1 << 16
 
 func NewStack() *Stack {
@@ -151,20 +155,32 @@ func (s *Stack) WithoutTrace(trace *cell.Trace) *Stack {
 func shareStackValue(val any, trace *cell.Trace) (any, error) {
 	switch t := val.(type) {
 	case *big.Int:
-		return new(big.Int).Set(t), nil
+		if t == nil {
+			return nil, nil
+		}
+		return canonicalStackInt(t), nil
 	case NaN:
 		return NaN{}, nil
 	case *NaN:
 		return NaN{}, nil
 	case *cell.Cell:
+		if t == nil {
+			return nil, nil
+		}
 		return t, nil
 	case *cell.Builder:
+		if t == nil {
+			return nil, nil
+		}
 		cp := t.Copy()
 		if trace != nil {
 			cp.SetTrace(cell.CombineTraces(cp.Trace(), trace))
 		}
 		return cp, nil
 	case *cell.Slice:
+		if t == nil {
+			return nil, nil
+		}
 		cp := t.Copy()
 		if trace != nil {
 			cp.SetTrace(cell.CombineTraces(cp.Trace(), trace))
@@ -185,9 +201,49 @@ func shareStackValue(val any, trace *cell.Trace) (any, error) {
 
 func (s *Stack) PushBool(val bool) error {
 	if val {
-		return s.PushAny(big.NewInt(-1))
+		return s.pushStaticInt(stackIntMinusOne)
 	}
-	return s.PushAny(big.NewInt(0))
+	return s.pushStaticInt(stackIntZero)
+}
+
+func (s *Stack) pushStaticInt(val *big.Int) error {
+	if len(s.elems) >= maxStackDepth {
+		return vmerr.Error(vmerr.CodeStackOverflow)
+	}
+
+	s.elems = append(s.elems, val)
+	return nil
+}
+
+func canonicalStackInt(val *big.Int) *big.Int {
+	switch {
+	case val.Sign() == 0:
+		return stackIntZero
+	case val.IsInt64():
+		switch val.Int64() {
+		case -1:
+			return stackIntMinusOne
+		case 1:
+			return stackIntOne
+		}
+	}
+	return new(big.Int).Set(val)
+}
+
+func isStaticStackInt(val *big.Int) bool {
+	return val == stackIntMinusOne || val == stackIntZero || val == stackIntOne
+}
+
+// PushHostValue accepts values already encoded with TVM stack types.
+func (s *Stack) PushHostValue(val any) error {
+	x, ok := val.(*big.Int)
+	if ok {
+		if x == nil {
+			return s.PushAny(nil)
+		}
+		return s.PushInt(x)
+	}
+	return s.PushAny(val)
 }
 
 func (s *Stack) PushBuilder(val *cell.Builder) error {
@@ -214,14 +270,14 @@ func (s *Stack) PushInt(val *big.Int) error {
 	if !fitsTVMInt(val) {
 		return vmerr.Error(vmerr.CodeIntOverflow)
 	}
-	return s.PushAny(val)
+	return s.pushStaticInt(canonicalStackInt(val))
 }
 
 func (s *Stack) PushIntQuiet(val *big.Int) error {
 	if !fitsTVMInt(val) {
 		return s.PushAny(NaN{})
 	}
-	return s.PushAny(val)
+	return s.pushStaticInt(canonicalStackInt(val))
 }
 
 func (s *Stack) PushAny(val any) error {
@@ -350,6 +406,9 @@ func (s *Stack) PopInt() (*big.Int, error) {
 	case NaN, *NaN:
 		return nil, nil
 	case *big.Int:
+		if isStaticStackInt(v) {
+			return new(big.Int).Set(v), nil
+		}
 		return v, nil
 	default:
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not an integer")
@@ -368,11 +427,18 @@ func (s *Stack) PopIntFinite() (*big.Int, error) {
 }
 
 func (s *Stack) PopBool() (bool, error) {
-	e, err := s.PopIntFinite()
+	e, err := s.PopAny()
 	if err != nil {
 		return false, err
 	}
-	return e.Sign() != 0, nil
+	switch v := e.(type) {
+	case NaN, *NaN:
+		return false, vmerr.Error(vmerr.CodeIntOverflow)
+	case *big.Int:
+		return v.Sign() != 0, nil
+	default:
+		return false, vmerr.Error(vmerr.CodeTypeCheck, "not an integer")
+	}
 }
 
 func (s *Stack) PopCell() (*cell.Cell, error) {

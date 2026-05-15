@@ -190,7 +190,10 @@ func ParsePubKeyFromData(version VersionConfig, data *cell.Cell) (ed25519.Public
 		return v.ParsePubKeyFromData(data)
 	}
 
-	s := data.MustBeginParse()
+	s, err := data.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load wallet data: %w", err)
+	}
 	switch ver {
 	case V1R1, V1R2, V1R3, V2R1, V2R2:
 		_, err := s.LoadSlice(32)

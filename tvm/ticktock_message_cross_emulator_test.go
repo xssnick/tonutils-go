@@ -58,7 +58,7 @@ func TestTVMCrossEmulatorTickTockTransaction(t *testing.T) {
 	})
 }
 
-func assertTickTockMatchesReference(t *testing.T, goRes *MessageExecutionResult, refRes *referenceTickTockResult) {
+func assertTickTockMatchesReference(t *testing.T, goRes *TransactionExecutionResult, refRes *referenceTickTockResult) {
 	t.Helper()
 
 	if goRes.ExitCode != refRes.exitCode {

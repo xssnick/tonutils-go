@@ -117,42 +117,14 @@ func configNowFromC7(state *vm.State) (uint32, error) {
 		return 0, err
 	}
 
-	switch now := v.(type) {
-	case int:
-		if now < 0 || now > (1<<32)-1 {
-			return 0, vmerr.Error(vmerr.CodeRangeCheck)
-		}
-		return uint32(now), nil
-	case int32:
-		if now < 0 {
-			return 0, vmerr.Error(vmerr.CodeRangeCheck)
-		}
-		return uint32(now), nil
-	case int64:
-		if now < 0 || now > (1<<32)-1 {
-			return 0, vmerr.Error(vmerr.CodeRangeCheck)
-		}
-		return uint32(now), nil
-	case uint:
-		if now > (1<<32)-1 {
-			return 0, vmerr.Error(vmerr.CodeRangeCheck)
-		}
-		return uint32(now), nil
-	case uint32:
-		return now, nil
-	case uint64:
-		if now > (1<<32)-1 {
-			return 0, vmerr.Error(vmerr.CodeRangeCheck)
-		}
-		return uint32(now), nil
-	case *big.Int:
-		if now.Sign() < 0 || now.BitLen() > 32 {
-			return 0, vmerr.Error(vmerr.CodeRangeCheck)
-		}
-		return uint32(now.Uint64()), nil
-	default:
+	now, ok := v.(*big.Int)
+	if !ok {
 		return 0, vmerr.Error(vmerr.CodeTypeCheck)
 	}
+	if now.Sign() < 0 || now.BitLen() > 32 {
+		return 0, vmerr.Error(vmerr.CodeRangeCheck)
+	}
+	return uint32(now.Uint64()), nil
 }
 
 func getTonGasPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigGasLimitsPrices, error) {

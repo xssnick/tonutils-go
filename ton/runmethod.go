@@ -98,7 +98,7 @@ func (c *APIClient) RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt,
 			}
 
 			var shardProof []*cell.Cell
-			var shardHash []byte
+			var shardBlock *BlockIDExt
 			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID &&
 				blockInfo.Workchain == address.MasterchainID {
 				if len(t.ShardProof) == 0 {
@@ -107,14 +107,19 @@ func (c *APIClient) RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt,
 
 				shardProof = t.ShardProof
 
-				if t.ShardBlock == nil || len(t.ShardBlock.RootHash) != 32 {
+				if t.ShardBlock == nil {
 					return nil, fmt.Errorf("shard block not passed")
 				}
 
-				shardHash = t.ShardBlock.RootHash
+				shardBlock = t.ShardBlock
 			}
 
-			shardAcc, _, err := CheckAccountStateProof(addr, blockInfo, t.Proof, shardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			var shardAcc *tlb.ShardAccount
+			if shardBlock != nil {
+				shardAcc, _, err = CheckAccountStateProofForShard(addr, blockInfo, t.Proof, shardProof, shardBlock, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			} else {
+				shardAcc, _, err = CheckAccountStateProof(addr, blockInfo, t.Proof, shardProof, nil, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("failed to check acc state proof: %w", err)
 			}
@@ -130,7 +135,7 @@ func (c *APIClient) RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt,
 		}
 
 		var resStack tlb.Stack
-		err = resStack.LoadFromCell(t.Result.MustBeginParse())
+		err = tlb.Parse(&resStack, t.Result)
 		if err != nil {
 			return nil, err
 		}

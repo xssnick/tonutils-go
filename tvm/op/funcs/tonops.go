@@ -55,39 +55,7 @@ func pushSmallInt(state *vm.State, v int64) error {
 }
 
 func pushHostValue(state *vm.State, v any) error {
-	switch x := v.(type) {
-	case int:
-		return state.Stack.PushInt(big.NewInt(int64(x)))
-	case int8:
-		return state.Stack.PushInt(big.NewInt(int64(x)))
-	case int16:
-		return state.Stack.PushInt(big.NewInt(int64(x)))
-	case int32:
-		return state.Stack.PushInt(big.NewInt(int64(x)))
-	case int64:
-		return state.Stack.PushInt(big.NewInt(x))
-	case uint8:
-		return state.Stack.PushInt(new(big.Int).SetUint64(uint64(x)))
-	case uint16:
-		return state.Stack.PushInt(new(big.Int).SetUint64(uint64(x)))
-	case uint32:
-		return state.Stack.PushInt(new(big.Int).SetUint64(uint64(x)))
-	case uint64:
-		return state.Stack.PushInt(new(big.Int).SetUint64(x))
-	case *cell.Cell:
-		if x == nil {
-			return state.Stack.PushAny(nil)
-		}
-	case *cell.Slice:
-		if x == nil {
-			return state.Stack.PushAny(nil)
-		}
-	case *cell.Builder:
-		if x == nil {
-			return state.Stack.PushAny(nil)
-		}
-	}
-	return state.Stack.PushAny(v)
+	return state.Stack.PushHostValue(v)
 }
 
 func exportUnsignedBytes(x *big.Int, size int, msg string) ([]byte, error) {

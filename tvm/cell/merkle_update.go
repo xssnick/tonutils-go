@@ -191,9 +191,19 @@ func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, err
 	}()
 
 	updateTo, err := buildMerkleProofBodyByPruneFunc(to, func(c *Cell) (bool, error) {
-		loaded, err := c.load()
-		if err != nil {
-			return false, err
+		loaded := c
+		if cached, ok := t.loadedCellByHash(c.HashKey()); ok {
+			cached = loadedForBoundary(c, cached)
+			if cached.HashKey() == c.HashKey() {
+				loaded = cached
+			}
+		}
+		if loaded == c && c.IsLazy() {
+			var err error
+			loaded, err = c.load()
+			if err != nil {
+				return false, err
+			}
 		}
 		if loaded.refsCount() == 0 {
 			return false, nil
@@ -203,17 +213,17 @@ func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, err
 			return false, nil
 		}
 		return t.MarkPath(node), nil
-	}, 0)
+	}, to.Level())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build merkle update destination proof: %w", err)
 	}
 
 	t.SetUseMarkForIsLoaded(true)
-	visited := map[Hash]struct{}{}
-	if err = collectUsageProofHashes(from, t, t.RootNode(), visited); err != nil {
+	state := newUsageProofBuildState()
+	if err = collectUsageProofHashes(from, t, t.RootNode(), state); err != nil {
 		return nil, nil, fmt.Errorf("failed to collect merkle update source proof: %w", err)
 	}
-	updateFrom, err := buildUsageProofBody(from, visited, 0)
+	updateFrom, err := buildUsageProofBody(from, state, from.Level())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build merkle update source proof: %w", err)
 	}

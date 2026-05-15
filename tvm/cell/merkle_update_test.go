@@ -270,8 +270,10 @@ func TestApplyMerkleUpdateDefaultPathLoadsLazyRefs(t *testing.T) {
 }
 
 func TestApplyMerkleUpdateCollectsKnownBranchesWhenDestinationShapeDiffers(t *testing.T) {
-	left := BeginCell().MustStoreUInt(0xAA, 8).EndCell()
-	right := BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	leftLeaf := BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	rightLeaf := BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	left := BeginCell().MustStoreRef(leftLeaf).EndCell()
+	right := BeginCell().MustStoreRef(rightLeaf).EndCell()
 	from := BeginCell().
 		MustStoreUInt(0x10, 8).
 		MustStoreRef(left).
@@ -606,12 +608,14 @@ func TestCombineMerkleUpdateArrayLikeChain(t *testing.T) {
 func TestMerkleUpdateRejectsNonZeroLevelRoot(t *testing.T) {
 	leafA := BeginCell().MustStoreUInt(0xA, 4).EndCell()
 	leafB := BeginCell().MustStoreUInt(0xB, 4).EndCell()
+	branchA := BeginCell().MustStoreRef(leafA).EndCell()
+	branchB := BeginCell().MustStoreRef(leafB).EndCell()
 
-	prunedA, err := createPrunedBranchFromCell(leafA, 2)
+	prunedA, err := createPrunedBranchFromCell(branchA, 2)
 	if err != nil {
 		t.Fatalf("failed to create pruned A: %v", err)
 	}
-	prunedB, err := createPrunedBranchFromCell(leafB, 2)
+	prunedB, err := createPrunedBranchFromCell(branchB, 2)
 	if err != nil {
 		t.Fatalf("failed to create pruned B: %v", err)
 	}
@@ -628,6 +632,50 @@ func TestMerkleUpdateRejectsNonZeroLevelRoot(t *testing.T) {
 	}
 	if _, _, err := ApplyMerkleUpdate(leafA, update); err == nil {
 		t.Fatal("expected apply to reject a non-zero-level merkle update root")
+	}
+}
+
+func TestMerkleUpdateRawGenerationAcceptsNonZeroLevelRootsCppParity(t *testing.T) {
+	fromLeaf := BeginCell().MustStoreUInt(0xA, 4).EndCell()
+	toLeaf := BeginCell().MustStoreUInt(0xB, 4).EndCell()
+	fromBranch := BeginCell().MustStoreRef(fromLeaf).EndCell()
+	toBranch := BeginCell().MustStoreRef(toLeaf).EndCell()
+
+	fromPruned, err := createPrunedBranchFromCell(fromBranch, 1)
+	if err != nil {
+		t.Fatalf("failed to create source pruned branch: %v", err)
+	}
+	toPruned, err := createPrunedBranchFromCell(toBranch, 1)
+	if err != nil {
+		t.Fatalf("failed to create destination pruned branch: %v", err)
+	}
+
+	from := BeginCell().MustStoreUInt(0, 1).MustStoreRef(fromPruned).EndCell()
+	to := BeginCell().MustStoreUInt(1, 1).MustStoreRef(toPruned).EndCell()
+	if from.Level() == 0 || to.Level() == 0 {
+		t.Fatal("expected non-zero-level roots")
+	}
+
+	usageTree := NewCellUsageTree()
+	if _, err = usageTree.CreateMerkleUpdate(from, to); err == nil {
+		t.Fatal("expected wrapped merkle update generation to reject non-zero-level roots")
+	}
+
+	updateFrom, updateTo, err := usageTree.createMerkleUpdateRaw(from, to)
+	if err != nil {
+		t.Fatalf("raw merkle update generation should accept non-zero-level roots: %v", err)
+	}
+	if err = validateLoadedCell(updateFrom); err != nil {
+		t.Fatalf("source raw proof validation failed: %v", err)
+	}
+	if err = validateLoadedCell(updateTo); err != nil {
+		t.Fatalf("destination raw proof validation failed: %v", err)
+	}
+	if updateFrom.Level() != from.Level()+1 {
+		t.Fatalf("unexpected source raw proof level: got %d want %d", updateFrom.Level(), from.Level()+1)
+	}
+	if updateTo.Level() != to.Level() {
+		t.Fatalf("unexpected destination raw proof level: got %d want %d", updateTo.Level(), to.Level())
 	}
 }
 

@@ -37,6 +37,10 @@ func (op *SimpleOP) InstructionBits() int64 {
 	return int64(op.BitPrefix.Bits)
 }
 
+func (op *SimpleOP) Reusable() bool {
+	return true
+}
+
 func (op *SimpleOP) Interpret(state *vm.State) error {
 	if op.BaseGasPrice != 0 {
 		if err := state.ConsumeGas(op.BaseGasPrice); err != nil {

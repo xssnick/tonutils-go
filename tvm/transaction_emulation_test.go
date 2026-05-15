@@ -30,6 +30,30 @@ func makeTransactionExternalSuccessCode(t *testing.T, newData *cell.Cell) *cell.
 	)
 }
 
+func TestTransactionStateInitMatchesAddressFixedPrefix(t *testing.T) {
+	depth := uint64(8)
+	stateInit := &tlb.StateInit{
+		Depth: &depth,
+		Code:  cell.BeginCell().EndCell(),
+		Data:  cell.BeginCell().EndCell(),
+	}
+	stateCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatalf("serialize state init: %v", err)
+	}
+
+	addrData := append([]byte(nil), stateCell.Hash()...)
+	addrData[0] ^= 0xff
+	if !transactionStateInitMatchesAddress(stateCell.Hash(), address.NewAddress(0, 0, addrData), stateInit.Depth) {
+		t.Fatal("fixed prefix hash should match when only prefix bits differ")
+	}
+
+	addrData[1] ^= 0x80
+	if transactionStateInitMatchesAddress(stateCell.Hash(), address.NewAddress(0, 0, addrData), stateInit.Depth) {
+		t.Fatal("fixed prefix hash should not match when suffix bits differ")
+	}
+}
+
 func makeTransactionExternalAcceptThenFailCode(t *testing.T) *cell.Cell {
 	t.Helper()
 	return codeFromBuilders(t,
@@ -40,6 +64,25 @@ func makeTransactionExternalAcceptThenFailCode(t *testing.T) *cell.Cell {
 		stackop.DROP().Serialize(),
 		funcsop.ACCEPT().Serialize(),
 		stackop.DROP().Serialize(),
+	)
+}
+
+func makeTransactionExternalCommitThenThrowCode(t *testing.T, newData, outMsg *cell.Cell, exitCode uint64) *cell.Cell {
+	t.Helper()
+	return codeFromBuilders(t,
+		stackop.DROP().Serialize(),
+		stackop.DROP().Serialize(),
+		stackop.DROP().Serialize(),
+		stackop.DROP().Serialize(),
+		stackop.DROP().Serialize(),
+		funcsop.ACCEPT().Serialize(),
+		stackop.PUSHREF(outMsg).Serialize(),
+		stackop.PUSHINT(big.NewInt(0)).Serialize(),
+		funcsop.SENDRAWMSG().Serialize(),
+		stackop.PUSHREF(newData).Serialize(),
+		execop.POPCTR(4).Serialize(),
+		funcsop.COMMIT().Serialize(),
+		cell.BeginCell().MustStoreUInt(0xF2C000|exitCode, 24),
 	)
 }
 
@@ -508,6 +551,62 @@ func TestEmulateTransactionExternalCommit(t *testing.T) {
 	}
 	if vmPhase.Details.VMSteps != res.Steps {
 		t.Fatalf("unexpected vm step count: got=%d want=%d", vmPhase.Details.VMSteps, res.Steps)
+	}
+}
+
+func TestEmulateTransactionCommittedThrowRunsActionPhase(t *testing.T) {
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	outMsg := buildTransactionOutboundInternalCell(t, 10)
+	code := makeTransactionExternalCommitThenThrowCode(t, newData, outMsg, 304)
+	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
+
+	msgCell, err := tlb.ToCell(&tlb.ExternalMessage{
+		DstAddr: tonopsTestAddr,
+		Body:    body,
+	})
+	if err != nil {
+		t.Fatalf("failed to build external message: %v", err)
+	}
+
+	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+		Address:     tonopsTestAddr,
+		Now:         uint32(tonopsTestTime.Unix()),
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		Gas: vmcore.NewGas(vmcore.GasConfig{
+			Max:    walletSendTestGasMax,
+			Credit: walletSendTestCredit,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("emulate transaction failed: %v", err)
+	}
+	if !res.Accepted || !res.Committed {
+		t.Fatalf("expected accepted committed compute, accepted=%t committed=%t", res.Accepted, res.Committed)
+	}
+	if res.ExitCode != 304 {
+		t.Fatalf("exit code = %d, want 304", res.ExitCode)
+	}
+
+	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	if !ok {
+		t.Fatalf("unexpected transaction description %T", res.Transaction.Description)
+	}
+	compute, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseVM)
+	if !ok {
+		t.Fatalf("unexpected compute phase %T", desc.ComputePhase.Phase)
+	}
+	if !compute.Success || desc.ActionPhase == nil || !desc.ActionPhase.Success || desc.Aborted {
+		t.Fatalf("committed throw should run successful action phase: compute=%+v action=%+v aborted=%t", compute, desc.ActionPhase, desc.Aborted)
+	}
+	if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), newData.Hash()) {
+		t.Fatalf("unexpected committed data:\nwant=%s\ngot=%s", newData.Dump(), res.AccountState.StateInit.Data.Dump())
+	}
+	if res.Transaction.OutMsgCount != 1 {
+		t.Fatalf("out msg count = %d, want 1", res.Transaction.OutMsgCount)
 	}
 }
 
@@ -991,6 +1090,62 @@ func TestEmulateTransactionActionSendMsgAccountsForwardFees(t *testing.T) {
 	}
 }
 
+func TestEmulateTransactionActionSendMsgClearsOutboundBouncedFlag(t *testing.T) {
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	outMsg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		Bounce:      true,
+		Bounced:     true,
+		SrcAddr:     address.NewAddressNone(),
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.FromNanoTONU(1000),
+		Body:        cell.BeginCell().MustStoreUInt(0xB0, 8).EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build outbound internal message: %v", err)
+	}
+	code := makeTransactionInternalSendCode(t, outMsg, newData, 0)
+	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, 10_000, uint32(tonopsTestTime.Unix()))
+
+	inMsg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     internalEmulationSrcAddr,
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.FromNanoTONU(0),
+		Body:        cell.BeginCell().EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build inbound message: %v", err)
+	}
+
+	res, err := NewTVM().EmulateTransaction(shard, inMsg, TransactionEmulationConfig{
+		Address:     tonopsTestAddr,
+		Now:         uint32(tonopsTestTime.Unix()),
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamMsgForwardPricesBasechain:   buildTransactionMsgForwardPricesCell(t, 100, 1<<15),
+			tlb.ConfigParamMsgForwardPricesMasterchain: buildTransactionMsgForwardPricesCell(t, 100, 1<<15),
+		}),
+		Gas: vmcore.NewGas(vmcore.GasConfig{Max: 1_000_000, Limit: 1_000_000}),
+	})
+	if err != nil {
+		t.Fatalf("emulate transaction failed: %v", err)
+	}
+
+	out, err := res.Transaction.IO.Out.ToSlice()
+	if err != nil {
+		t.Fatalf("failed to read outbound messages: %v", err)
+	}
+	if len(out) != 1 || out[0].MsgType != tlb.MsgTypeInternal {
+		t.Fatalf("unexpected outbound messages: %+v", out)
+	}
+	if out[0].AsInternal().Bounced {
+		t.Fatal("outbound internal message must clear bounced flag")
+	}
+}
+
 func TestEmulateTransactionActionSendMsgNoFundsAbortsWithoutCommit(t *testing.T) {
 	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
 	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
@@ -1123,9 +1278,10 @@ func TestTransactionApplyActionsReserveCurrencyAffectsLaterSends(t *testing.T) {
 	res, err := transactionApplyActions(acc, &MessageExecutionResult{
 		Accepted: true,
 		ExecutionResult: ExecutionResult{
-			ExitCode: 0,
-			Data:     origData,
-			Actions:  actions,
+			ExitCode:  0,
+			Data:      origData,
+			Actions:   actions,
+			Committed: true,
 		},
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
@@ -1169,9 +1325,10 @@ func TestTransactionApplyActionsSendMode2SkipsInvalidExtraFlags(t *testing.T) {
 	res, err := transactionApplyActions(acc, &MessageExecutionResult{
 		Accepted: true,
 		ExecutionResult: ExecutionResult{
-			ExitCode: 0,
-			Data:     data,
-			Actions:  actions,
+			ExitCode:  0,
+			Data:      data,
+			Actions:   actions,
+			Committed: true,
 		},
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
@@ -1213,9 +1370,10 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 			res, err := transactionApplyActions(acc, &MessageExecutionResult{
 				Accepted: true,
 				ExecutionResult: ExecutionResult{
-					ExitCode: 0,
-					Data:     data,
-					Actions:  malformed,
+					ExitCode:  0,
+					Data:      data,
+					Actions:   malformed,
+					Committed: true,
 				},
 			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 			if err != nil {
@@ -1250,9 +1408,10 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 	res, err := transactionApplyActions(acc, &MessageExecutionResult{
 		Accepted: true,
 		ExecutionResult: ExecutionResult{
-			ExitCode: 0,
-			Data:     data,
-			Actions:  actions,
+			ExitCode:  0,
+			Data:      data,
+			Actions:   actions,
+			Committed: true,
 		},
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
@@ -1285,9 +1444,10 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 	failedRes, err := transactionApplyActions(acc, &MessageExecutionResult{
 		Accepted: true,
 		ExecutionResult: ExecutionResult{
-			ExitCode: 0,
-			Data:     data,
-			Actions:  failAfterLib,
+			ExitCode:  0,
+			Data:      data,
+			Actions:   failAfterLib,
+			Committed: true,
 		},
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
@@ -1305,9 +1465,10 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 	limitRes, err := transactionApplyActions(acc, &MessageExecutionResult{
 		Accepted: true,
 		ExecutionResult: ExecutionResult{
-			ExitCode: 0,
-			Data:     data,
-			Actions:  limitActions,
+			ExitCode:  0,
+			Data:      data,
+			Actions:   limitActions,
+			Committed: true,
 		},
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{
 		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{

@@ -169,8 +169,10 @@ type State struct {
 
 var ErrStopOnAccept = errors.New("stop on accept")
 
+var sharedEmptyCell = cell.BeginCell().EndCell()
+
 func emptyCell() *cell.Cell {
-	return cell.BeginCell().EndCell()
+	return sharedEmptyCell
 }
 
 func IsSuccessExitCode(code int64) bool {

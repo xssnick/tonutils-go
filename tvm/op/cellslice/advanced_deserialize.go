@@ -63,7 +63,7 @@ func checkStackDepth(state *vm.State, depth int) error {
 	return nil
 }
 
-func pushInt64(state *vm.State, v int64) error {
+func pushSmallInt(state *vm.State, v int64) error {
 	return state.Stack.PushInt(big.NewInt(v))
 }
 
@@ -680,7 +680,7 @@ func SBITS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cs.BitsLeft()))
+			return pushSmallInt(state, int64(cs.BitsLeft()))
 		},
 		Name:      "SBITS",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x49),
@@ -694,7 +694,7 @@ func SREFS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cs.RefsNum()))
+			return pushSmallInt(state, int64(cs.RefsNum()))
 		},
 		Name:      "SREFS",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x4A),
@@ -708,10 +708,10 @@ func SBITREFS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			if err = pushInt64(state, int64(cs.BitsLeft())); err != nil {
+			if err = pushSmallInt(state, int64(cs.BitsLeft())); err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cs.RefsNum()))
+			return pushSmallInt(state, int64(cs.RefsNum()))
 		},
 		Name:      "SBITREFS",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x4B),
@@ -744,7 +744,7 @@ func ldSameOp(name string, prefix helpers.BitPrefix, fixed *bool) *helpers.Simpl
 			if count > 0 && !cs.SkipFirst(uint(count), 0) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			if err = pushInt64(state, int64(count)); err != nil {
+			if err = pushSmallInt(state, int64(count)); err != nil {
 				return err
 			}
 			return state.Stack.PushSlice(cs)
@@ -775,7 +775,7 @@ func SDEPTH() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cs.Depth()))
+			return pushSmallInt(state, int64(cs.Depth()))
 		},
 		Name:      "SDEPTH",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x64),
@@ -790,9 +790,9 @@ func CDEPTH() *helpers.SimpleOP {
 				return err
 			}
 			if cl == nil {
-				return pushInt64(state, 0)
+				return pushSmallInt(state, 0)
 			}
-			return pushInt64(state, int64(cl.Depth()))
+			return pushSmallInt(state, int64(cl.Depth()))
 		},
 		Name:      "CDEPTH",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x65),
@@ -806,7 +806,7 @@ func CLEVEL() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cl.Level()))
+			return pushSmallInt(state, int64(cl.Level()))
 		},
 		Name:      "CLEVEL",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x66),
@@ -820,7 +820,7 @@ func CLEVELMASK() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cl.LevelMask().Mask))
+			return pushSmallInt(state, int64(cl.LevelMask().Mask))
 		},
 		Name:      "CLEVELMASK",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x67),

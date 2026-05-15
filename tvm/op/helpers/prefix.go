@@ -36,9 +36,11 @@ func SlicePrefix(bits uint, data []byte) BitPrefix {
 }
 
 func UIntPrefix(value uint64, bits uint) BitPrefix {
+	s := cell.BeginCell().MustStoreUInt(value, bits).ToSlice()
+
 	return BitPrefix{
 		Bits: bits,
-		Data: cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse().MustPreloadSlice(bits),
+		Data: s.MustPreloadSlice(bits),
 	}
 }
 
@@ -55,5 +57,5 @@ func (p Prefixed) GetPrefixes() []*cell.Slice {
 }
 
 func (p BitPrefix) ToSlice() *cell.Slice {
-	return cell.BeginCell().MustStoreSlice(p.Data, p.Bits).EndCell().MustBeginParse()
+	return cell.BeginCell().MustStoreSlice(p.Data, p.Bits).ToSlice()
 }

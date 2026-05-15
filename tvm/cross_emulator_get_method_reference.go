@@ -76,7 +76,7 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 	defer C.free(unsafe.Pointer(cCode))
 	cData := C.CString(dataB64)
 	defer C.free(unsafe.Pointer(cData))
-	emulator := C.tvm_emulator_create(cCode, cData, 0)
+	emulator := C.tvm_emulator_create(cCode, cData, C.int(referenceVMLogVerbosity()))
 	if emulator == nil {
 		return nil, fmt.Errorf("failed to create reference tvm emulator")
 	}

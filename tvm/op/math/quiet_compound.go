@@ -17,6 +17,11 @@ func init() {
 		func() vm.OP { return qMulShrModFamily(0) },
 		func() vm.OP { return qShlDivModFamily(0) },
 	)
+
+	// B7A93*, B7A9B*, and B7A9D* quiet immediate variants are listed in
+	// docs.ton.org, but upstream C++ node keeps their registrations commented out
+	// in crypto/vm/arithops.cpp. Keep them unregistered here until cppnode enables
+	// them too.
 }
 
 func qFamilySuffix(args uint8) (string, error) {

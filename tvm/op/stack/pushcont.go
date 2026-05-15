@@ -145,17 +145,24 @@ func (op *OpPUSHCONT) Serialize() *cell.Builder {
 		op.typ = "SMALL"
 
 		sz := uint64(op.cont.BitsSize() / 8)
+		codeSlice, err := op.cont.BeginParse()
+		if err != nil {
+			panic(err)
+		}
 
 		b = cell.BeginCell().
 			MustStoreUInt(9, 4).
 			MustStoreUInt(sz, 4).
-			MustStoreSlice(op.cont.MustBeginParse().MustLoadSlice(op.cont.BitsSize()), uint(sz*8))
+			MustStoreSlice(codeSlice.MustLoadSlice(op.cont.BitsSize()), uint(sz*8))
 	case op.cont.RefsNum() <= 3:
 		op.typ = "BIG"
 
 		sz := uint64(op.cont.BitsSize() / 8)
 
-		codeSlice := op.cont.MustBeginParse()
+		codeSlice, err := op.cont.BeginParse()
+		if err != nil {
+			panic(err)
+		}
 
 		b = cell.BeginCell().
 			MustStoreUInt(0x47, 7). // 0x8E >> 1 = 0x47
@@ -209,7 +216,11 @@ func (op *OpPUSHCONT) Interpret(state *vm.State) error {
 			return err
 		}
 	} else {
-		code = op.cont.MustBeginParse()
+		var err error
+		code, err = op.cont.BeginParse()
+		if err != nil {
+			return err
+		}
 	}
 	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{Code: code, Data: vm.ControlData{
 		NumArgs: vm.ControlDataAllArgs,

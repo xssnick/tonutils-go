@@ -30,10 +30,7 @@ func mustVirtualizedProofBodyForTVM(t *testing.T) (*cell.Cell, *cell.Cell, *cell
 		MustStoreRef(branch).
 		EndCell()
 
-	proof, err := root.CreateProof(cell.CreateProofSkeleton())
-	if err != nil {
-		t.Fatalf("create proof: %v", err)
-	}
+	proof := mustUsageProofWithLoadedRoot(t, root)
 
 	rawBody, err := cell.UnwrapProof(proof, root.Hash())
 	if err != nil {

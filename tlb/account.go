@@ -330,7 +330,11 @@ func (a *Account) HasGetMethod(name string) bool {
 		hash = int64(MethodNameHash(name))
 	}
 
-	code := a.Code.MustBeginParse()
+	code, err := a.Code.BeginParse()
+	if err != nil {
+		return false
+	}
+
 	hdr, err := code.LoadSlice(56)
 	if err != nil {
 		return false

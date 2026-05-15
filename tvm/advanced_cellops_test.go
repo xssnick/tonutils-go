@@ -808,10 +808,7 @@ func mustPrunedCellForXLoad(t *testing.T) *cell.Cell {
 		MustStoreRef(branch).
 		EndCell()
 
-	proof, err := root.CreateProof(cell.CreateProofSkeleton())
-	if err != nil {
-		t.Fatalf("failed to build proof for pruned cell: %v", err)
-	}
+	proof := mustUsageProofWithLoadedRoot(t, root)
 	body, err := cell.UnwrapProof(proof, root.Hash())
 	if err != nil {
 		t.Fatalf("failed to unwrap proof for pruned cell: %v", err)

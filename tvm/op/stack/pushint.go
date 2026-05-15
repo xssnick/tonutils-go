@@ -160,5 +160,5 @@ func (op *OpPUSHINT) InstructionBits() int64 {
 }
 
 func (op *OpPUSHINT) Interpret(state *vm.State) error {
-	return state.Stack.PushInt(new(big.Int).Set(op.value))
+	return state.Stack.PushInt(op.value)
 }

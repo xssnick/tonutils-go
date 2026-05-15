@@ -38,7 +38,10 @@ func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
 		return err
 	}
 
-	op.value = refCell.MustBeginParse()
+	op.value, err = refCell.BeginParse()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

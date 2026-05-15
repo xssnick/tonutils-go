@@ -31,7 +31,7 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 		refLibs *cell.Cell
 	}
 
-	childC7 := tuple.NewTupleValue(tuple.NewTupleValue(int64(11), int64(22)))
+	childC7 := tuple.NewTupleValue(tuple.NewTupleValue(big.NewInt(11), big.NewInt(22)))
 	returnedData := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 	returnedActions := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	childLibTarget := cell.BeginCell().MustStoreUInt(0xA11CE, 20).EndCell()

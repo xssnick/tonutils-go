@@ -33,7 +33,7 @@ func TestTVMCrossEmulatorContExecScenarios(t *testing.T) {
 	cellB := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
 	cellC := cell.BeginCell().MustStoreUInt(0xC0DE, 16).EndCell()
 	defaultData := cell.BeginCell().EndCell()
-	nonEmptyC7 := tuple.NewTupleValue(int64(10), tuple.NewTupleValue(int64(20)), nil)
+	nonEmptyC7 := tuple.NewTupleValue(big.NewInt(10), tuple.NewTupleValue(big.NewInt(20)), nil)
 
 	push7Body := body(intCode(7))
 	push9Body := body(intCode(9))
@@ -564,7 +564,7 @@ func TestTVMCrossEmulatorContExecScenarios(t *testing.T) {
 				execop.RET().Serialize(),
 			),
 			c7:    nonEmptyC7,
-			stack: []any{tuple.NewTupleValue(int64(99))},
+			stack: []any{tuple.NewTupleValue(big.NewInt(99))},
 			exit:  0,
 		},
 		{

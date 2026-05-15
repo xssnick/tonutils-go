@@ -161,7 +161,11 @@ func mustVirtualizedProofBodyAndPrunedRef(t *testing.T) (*cell.Cell, *cell.Cell)
 		MustStoreRef(branch).
 		EndCell()
 
-	proof, err := root.CreateProof(cell.CreateProofSkeleton())
+	builder := cell.NewMerkleProofBuilder(root)
+	if _, err := builder.Root().BeginParse(); err != nil {
+		t.Fatalf("failed to trace proof root load: %v", err)
+	}
+	proof, err := builder.CreateProof()
 	if err != nil {
 		t.Fatalf("failed to build proof: %v", err)
 	}

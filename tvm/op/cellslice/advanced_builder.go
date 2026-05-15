@@ -744,7 +744,11 @@ func BTOS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(cl.MustBeginParse())
+			s, err := cl.BeginParse()
+			if err != nil {
+				return err
+			}
+			return state.Stack.PushSlice(s)
 		},
 		Name:      "BTOS",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x50),

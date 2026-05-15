@@ -91,6 +91,24 @@ func pushCompareResult(state *vm.State, x, y *big.Int, fn func(*big.Int, *big.In
 	return state.Stack.PushBool(fn(x, y))
 }
 
+func compareBigIntInt64(x *big.Int, y int64) int {
+	if x.IsInt64() {
+		xv := x.Int64()
+		switch {
+		case xv < y:
+			return -1
+		case xv > y:
+			return 1
+		default:
+			return 0
+		}
+	}
+	if x.Sign() < 0 {
+		return -1
+	}
+	return 1
+}
+
 func signedFitsBits(x *big.Int, bits int) bool {
 	if x == nil {
 		return false

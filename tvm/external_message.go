@@ -38,7 +38,7 @@ type MessageEmulationConfig struct {
 	PrevBlocks          any
 	UnpackedConfig      tuple.Tuple
 	DuePayment          any
-	PrecompiledGasUsage any
+	PrecompiledGasUsage *big.Int
 	InMsgParams         tuple.Tuple
 	Globals             map[int]any
 	GlobalID            int32
@@ -47,11 +47,11 @@ type MessageEmulationConfig struct {
 	StopOnAccept        bool
 	BuildProof          bool
 	AccountRoot         *cell.Cell
+	AccountStorageStat  *cell.Cell
 }
 
 type EmulateExternalMessageConfig = MessageEmulationConfig
 type EmulateInternalMessageConfig = MessageEmulationConfig
-type EmulateTickTockTransactionConfig = MessageEmulationConfig
 
 type MessageExecutionResult struct {
 	ExecutionResult
@@ -90,7 +90,11 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 	if err = stack.PushCell(msgCell); err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(body.MustBeginParse()); err != nil {
+	bodySlice, err := body.BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	if err = stack.PushSlice(bodySlice); err != nil {
 		return nil, err
 	}
 	if err = stack.PushInt(big.NewInt(-1)); err != nil {
@@ -129,7 +133,11 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 	if err = stack.PushCell(msgCell); err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(body.MustBeginParse()); err != nil {
+	bodySlice, err := body.BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	if err = stack.PushSlice(bodySlice); err != nil {
 		return nil, err
 	}
 	if err = stack.PushInt(big.NewInt(0)); err != nil {
@@ -142,53 +150,6 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 	}
 
 	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, proof, libraries...)
-}
-
-func (tvm *TVM) EmulateTickTransaction(code, data *cell.Cell, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
-	return tvm.emulateTickTockTransaction(code, data, false, cfg)
-}
-
-func (tvm *TVM) EmulateTockTransaction(code, data *cell.Cell, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
-	return tvm.emulateTickTockTransaction(code, data, true, cfg)
-}
-
-func (tvm *TVM) emulateTickTockTransaction(code, data *cell.Cell, isTock bool, cfg EmulateTickTockTransactionConfig) (*MessageExecutionResult, error) {
-	addr := cfg.Address
-	proof, code, data, libraries, addr, err := prepareMessageExecutionProof(code, data, cfg, addr)
-	if err != nil {
-		return nil, err
-	}
-
-	if addr == nil {
-		return nil, errors.New("tick/tock emulation address is required")
-	}
-
-	accAddr, err := messageEmulationAccountAddr(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	stack := vm.NewStack()
-	balance := messageEmulationBalance(cfg.Balance)
-	if err = stack.PushInt(balance); err != nil {
-		return nil, err
-	}
-	if err = stack.PushInt(accAddr); err != nil {
-		return nil, err
-	}
-	if err = stack.PushBool(isTock); err != nil {
-		return nil, err
-	}
-	if err = stack.PushInt(big.NewInt(-2)); err != nil {
-		return nil, err
-	}
-
-	c7, err := buildMessageEmulationC7(addr, code, cfg, balance)
-	if err != nil {
-		return nil, err
-	}
-
-	return tvm.executeMessageEmulation(code, data, c7, defaultTickTockTransactionGas(cfg.Gas), stack, cfg.StopOnAccept, proof, libraries...)
 }
 
 func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, proof *cell.MerkleProofBuilder, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
@@ -206,7 +167,7 @@ func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, g
 		ExecutionResult: *res,
 		Accepted:        res.Gas.Credit == 0,
 	}
-	if !out.Accepted || !vm.IsSuccessExitCode(out.ExitCode) {
+	if !out.Accepted || !out.Committed {
 		out.Code = code
 		out.Data = data
 		out.Actions = nil
@@ -293,23 +254,23 @@ func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg Message
 
 	myAddr := cell.BeginCell().MustStoreAddr(addr).ToSlice()
 	values := []any{
-		uint32(0x076ef1ea),
-		uint8(0),
-		uint8(0),
-		int64(now),
-		cfg.BlockLT,
-		cfg.LogicalTime,
+		messageTupleUint(0x076ef1ea),
+		messageTupleInt(0),
+		messageTupleInt(0),
+		messageTupleUint(uint64(now)),
+		messageTupleInt(cfg.BlockLT),
+		messageTupleInt(cfg.LogicalTime),
 		seed,
 		tuple.NewTupleValue(new(big.Int).Set(balance), nil),
 		myAddr,
 		cfg.ConfigRoot,
 		code,
 		messageIncomingValue(cfg.IncomingValue),
-		cfg.StorageFees,
+		messageTupleInt(cfg.StorageFees),
 		cfg.PrevBlocks,
 		messageUnpackedConfig(cfg),
 		cfg.DuePayment,
-		cfg.PrecompiledGasUsage,
+		messageTupleMaybeInt(cfg.PrecompiledGasUsage),
 		messageInMsgParams(cfg.InMsgParams),
 	}
 
@@ -430,45 +391,76 @@ func messageInMsgParams(params tuple.Tuple) tuple.Tuple {
 		return params
 	}
 	return tuple.NewTupleValue(
-		int64(0),
-		int64(0),
+		messageTupleInt(0),
+		messageTupleInt(0),
 		cell.BeginCell().MustStoreUInt(0, 2).ToSlice(),
-		int64(0),
-		int64(0),
-		int64(0),
-		int64(0),
-		int64(0),
+		messageTupleInt(0),
+		messageTupleInt(0),
+		messageTupleInt(0),
+		messageTupleInt(0),
+		messageTupleInt(0),
 		nil,
 		nil,
 	)
 }
 
+func messageTupleInt(v int64) *big.Int {
+	return big.NewInt(v)
+}
+
+func messageTupleUint(v uint64) *big.Int {
+	return new(big.Int).SetUint64(v)
+}
+
+func messageTupleMaybeInt(v *big.Int) any {
+	if v == nil {
+		return nil
+	}
+	return new(big.Int).Set(v)
+}
+
 func normalizeMessageTupleValue(val any) any {
 	switch v := val.(type) {
-	case int:
-		return big.NewInt(int64(v))
-	case int8:
-		return big.NewInt(int64(v))
-	case int16:
-		return big.NewInt(int64(v))
-	case int32:
-		return big.NewInt(int64(v))
-	case int64:
-		return big.NewInt(v)
-	case uint8:
-		return new(big.Int).SetUint64(uint64(v))
-	case uint16:
-		return new(big.Int).SetUint64(uint64(v))
-	case uint32:
-		return new(big.Int).SetUint64(uint64(v))
-	case uint64:
-		return new(big.Int).SetUint64(v)
 	case *big.Int:
 		if v == nil {
 			return nil
 		}
 		return new(big.Int).Set(v)
+	case *cell.Slice:
+		if v == nil {
+			return nil
+		}
+		return v.Copy()
+	case *cell.Builder:
+		if v == nil {
+			return nil
+		}
+		return v.Copy()
+	case tuple.Tuple:
+		return cloneMessageTuple(v)
+	case *tuple.Tuple:
+		if v == nil {
+			return nil
+		}
+		cloned := cloneMessageTuple(*v)
+		return cloned
 	default:
 		return val
 	}
+}
+
+func cloneMessageTuple(value tuple.Tuple) tuple.Tuple {
+	if value.Len() == 0 {
+		return tuple.Tuple{}
+	}
+
+	items := make([]any, value.Len())
+	for i := range items {
+		item, err := value.RawIndex(i)
+		if err != nil {
+			return tuple.Tuple{}
+		}
+		items[i] = normalizeMessageTupleValue(item)
+	}
+	return tuple.NewTupleValue(items...)
 }

@@ -13,7 +13,7 @@ func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return ENDCST() },
 		func() vm.OP { return STREFCONST(nil) },
-		func() vm.OP { return STSLICECONST(cell.BeginCell().EndCell().MustBeginParse()) },
+		func() vm.OP { return STSLICECONST(cell.BeginCell().ToSlice()) },
 		func() vm.OP { return BREMBITS() },
 		func() vm.OP { return BREMREFS() },
 		func() vm.OP { return BREMBITREFS() },
@@ -106,7 +106,7 @@ type OpSTSLICECONST struct {
 
 func STSLICECONST(value *cell.Slice) *OpSTSLICECONST {
 	if value == nil {
-		value = cell.BeginCell().EndCell().MustBeginParse()
+		value = cell.BeginCell().ToSlice()
 	}
 	return &OpSTSLICECONST{value: value.Copy()}
 }

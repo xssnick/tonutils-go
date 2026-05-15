@@ -1075,15 +1075,15 @@ func SENDMSG() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
+
 			if err = state.Cells.RegisterCellLoad(msgCell); err != nil {
 				return err
 			}
-
-			var msg tlb.Message
 			msgSlice, err := state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
 			if err != nil {
 				return err
 			}
+			var msg tlb.MessageRelaxed
 			if err = tlb.LoadFromCell(&msg, msgSlice); err != nil {
 				return vmerr.Error(vmerr.CodeUnknown, "invalid message")
 			}
@@ -1092,9 +1092,8 @@ func SENDMSG() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			dest := msg.Msg.DestAddr()
 			isMasterchain := myAddr != nil && myAddr.Workchain() == -1
-			if msg.MsgType == tlb.MsgTypeInternal && dest != nil && dest.Workchain() == -1 {
+			if msg.MsgType == tlb.MsgTypeInternal && msg.Info.DstAddr != nil && msg.Info.DstAddr.Workchain() == -1 {
 				isMasterchain = true
 			}
 			prices, err := getTonMsgPrices(state, isMasterchain)
@@ -1107,7 +1106,7 @@ func SENDMSG() *helpers.SimpleOP {
 			}
 			stat := newStorageStat(maxCells, state)
 			skipRefs := 0
-			if intMsg, ok := msg.Msg.(*tlb.InternalMessage); ok && intMsg.ExtraCurrencies != nil && intMsg.ExtraCurrencies.AsCell() != nil {
+			if state.GlobalVersion >= 10 && msg.Info.HasExtraCurrencies() {
 				skipRefs = 1
 			}
 			if !addMessageTailStorage(stat, msgCell, skipRefs) {
@@ -1116,13 +1115,16 @@ func SENDMSG() *helpers.SimpleOP {
 
 			fwd := prices.ComputeForwardFee(stat.cells, stat.bits)
 			ihr := big.NewInt(0)
-			if intMsg, ok := msg.Msg.(*tlb.InternalMessage); ok {
-				userFwd := intMsg.FwdFee.Nano()
-				fwd = maxBig(fwd, userFwd)
-				ihrDisabled := true
+			if msg.MsgType == tlb.MsgTypeInternal {
+				fwd = maxBig(fwd, msg.Info.FwdFee)
+				ihrDisabled := msg.Info.IHRDisabled || state.GlobalVersion >= 11
 				if !ihrDisabled {
-					part := ceilShiftRight(new(big.Int).Mul(fwd, new(big.Int).SetUint64(uint64(prices.IHRFactor))), 16)
-					ihr = part
+					userIHRFee := big.NewInt(0)
+					if state.GlobalVersion < 12 {
+						userIHRFee = msg.Info.ExtraFlags
+					}
+					ihr = ceilShiftRight(new(big.Int).Mul(fwd, new(big.Int).SetUint64(uint64(prices.IHRFactor))), 16)
+					ihr = maxBig(ihr, userIHRFee)
 				}
 			}
 			totalFee := new(big.Int).Add(fwd, ihr)

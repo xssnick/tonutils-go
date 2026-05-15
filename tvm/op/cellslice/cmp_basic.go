@@ -42,7 +42,7 @@ func unarySliceIntOp(name string, prefix helpers.BitPrefix, fn func(*vm.State, *
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, val)
+			return pushSmallInt(state, val)
 		},
 		BitPrefix: prefix,
 	}

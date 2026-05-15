@@ -44,7 +44,11 @@ func loadOutMsgQueueInfoFromProof(shardState *tlb.ShardStateUnsplit) (*tlb.OutMs
 	}
 
 	var info tlb.OutMsgQueueInfo
-	if err := tlb.LoadFromCellAsProof(&info, shardState.OutMsgQueueInfo.MustBeginParse()); err != nil {
+	loader, err := shardState.OutMsgQueueInfo.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load out message queue info proof: %w", err)
+	}
+	if err := tlb.LoadFromCellAsProof(&info, loader); err != nil {
 		return nil, fmt.Errorf("failed to load out message queue info from proof: %w", err)
 	}
 	return &info, nil
@@ -329,7 +333,11 @@ func loadDispatchQueueMessage(addr []byte, lt uint64, value *cell.Slice) (dispat
 	}
 
 	var envelope tlb.MsgEnvelope
-	if err := tlb.LoadFromCellAsProof(&envelope, enqueued.Msg.MustBeginParse()); err != nil {
+	loader, err := enqueued.Msg.BeginParse()
+	if err != nil {
+		return dispatchQueueMessageProof{}, fmt.Errorf("failed to load message envelope cell: %w", err)
+	}
+	if err := tlb.LoadFromCellAsProof(&envelope, loader); err != nil {
 		return dispatchQueueMessageProof{}, fmt.Errorf("failed to load message envelope: %w", err)
 	}
 	if envelope.Msg == nil {
@@ -428,9 +436,17 @@ func transactionMetadataEqual(a, b TransactionMetadata) bool {
 }
 
 func loadBits(c *cell.Cell, bits uint) ([]byte, error) {
-	return c.MustBeginParse().LoadSlice(bits)
+	loader, err := c.BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	return loader.LoadSlice(bits)
 }
 
 func loadUint64Key(c *cell.Cell) (uint64, error) {
-	return c.MustBeginParse().LoadUInt(64)
+	loader, err := c.BeginParse()
+	if err != nil {
+		return 0, err
+	}
+	return loader.LoadUInt(64)
 }

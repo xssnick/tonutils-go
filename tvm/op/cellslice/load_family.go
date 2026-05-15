@@ -32,6 +32,7 @@ func init() {
 		func() vm.OP { return PLDSLICEX() },
 		func() vm.OP { return LDSLICEXQ() },
 		func() vm.OP { return PLDSLICEXQ() },
+		func() vm.OP { return LDSLICE(1) },
 		func() vm.OP { return LDSLICEFIX(1, false, false) },
 		func() vm.OP { return PLDSLICEFIX(1, false, false) },
 		func() vm.OP { return LDSLICEFIX(1, true, false) },
@@ -374,6 +375,30 @@ func PLDUFIX(bits uint, quiet, preload, unsigned bool) *helpers.AdvancedOP {
 func PLDSLICEX() *helpers.AdvancedOP  { return loadSliceXOp("PLDSLICEX", 1) }
 func LDSLICEXQ() *helpers.AdvancedOP  { return loadSliceXOp("LDSLICEXQ", 2) }
 func PLDSLICEXQ() *helpers.AdvancedOP { return loadSliceXOp("PLDSLICEXQ", 3) }
+
+func LDSLICE(bits uint) *helpers.AdvancedOP {
+	return &helpers.AdvancedOP{
+		NameSerializer: func() string {
+			return fmt.Sprintf("LDSLICE %d", bits)
+		},
+		BitPrefix:     helpers.BytesPrefix(0xD6),
+		FixedSizeBits: 8,
+		SerializeSuffix: func() *cell.Builder {
+			return cell.BeginCell().MustStoreUInt(uint64(bits-1), 8)
+		},
+		DeserializeSuffix: func(code *cell.Slice) error {
+			loaded, err := code.LoadUInt(8)
+			if err != nil {
+				return err
+			}
+			bits = uint(loaded) + 1
+			return nil
+		},
+		Action: func(state *vm.State) error {
+			return loadSliceCommon(state, bits, false, false)
+		},
+	}
+}
 
 func LDSLICEFIX(bits uint, quiet, preload bool) *helpers.AdvancedOP {
 	name := "LDSLICE"

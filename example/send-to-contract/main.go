@@ -65,7 +65,7 @@ func main() {
 			).EndCell()
 
 		/*
-			// alternative, more high level way to serialize cell; see tlb.LoadFromCell method for doc
+			// alternative, more high level way to serialize cell; see tlb.Parse and tlb.ToCell docs
 			type ContractRequest struct {
 				_        tlb.Magic        `tlb:"#123abc55"`
 				QueryID  uint64           `tlb:"## 64"`

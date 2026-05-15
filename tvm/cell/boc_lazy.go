@@ -39,6 +39,9 @@ func parseLazyBOC(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOC
 	if err != nil {
 		return nil, fmt.Errorf("failed to read payload, want %d: %w", dataLen, err)
 	}
+	if !options.NoCopyPayload && r.direct {
+		payload = append([]byte(nil), payload...)
+	}
 
 	loader := &lazyBOCLoader{
 		payload:    payload,

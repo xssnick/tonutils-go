@@ -69,18 +69,12 @@ func mustTupleInt(t *testing.T, tup tuple.Tuple, idx int) *big.Int {
 func TestPushHostValueAndSmallInt(t *testing.T) {
 	intCases := []struct {
 		name  string
-		value any
+		value *big.Int
 		want  int64
 	}{
-		{name: "int", value: int(12), want: 12},
-		{name: "int8", value: int8(-8), want: -8},
-		{name: "int16", value: int16(16), want: 16},
-		{name: "int32", value: int32(-32), want: -32},
-		{name: "int64", value: int64(64), want: 64},
-		{name: "uint8", value: uint8(8), want: 8},
-		{name: "uint16", value: uint16(16), want: 16},
-		{name: "uint32", value: uint32(32), want: 32},
-		{name: "uint64", value: uint64(64), want: 64},
+		{name: "positive", value: big.NewInt(12), want: 12},
+		{name: "negative", value: big.NewInt(-8), want: -8},
+		{name: "zero", value: big.NewInt(0), want: 0},
 	}
 
 	for _, tc := range intCases {
@@ -109,6 +103,11 @@ func TestPushHostValueAndSmallInt(t *testing.T) {
 	}
 	if got.Int64() != -15 {
 		t.Fatalf("unexpected pushSmallInt value: %v", got)
+	}
+
+	st = newFuncTestState(t, nil)
+	if err := pushHostValue(st, int64(64)); err == nil {
+		t.Fatal("pushHostValue should reject raw Go integer values")
 	}
 
 	nilCases := []struct {
@@ -691,10 +690,10 @@ func TestPRNGHelpersAndOps(t *testing.T) {
 
 func TestNowGetParamAndCodepageOps(t *testing.T) {
 	st := newFuncTestState(t, map[int]any{
-		0:  int64(21),
-		3:  int64(1234),
+		0:  big.NewInt(21),
+		3:  big.NewInt(1234),
 		9:  cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell(),
-		15: int64(21),
+		15: big.NewInt(21),
 	})
 
 	if err := NOW().Interpret(st); err != nil {

@@ -378,7 +378,10 @@ func extractAugmentedNodeExtraStrict(c *Cell, keySz uint, aug Augmentation) (*Ce
 }
 
 func validateAugmentedExtraCellForCombine(extra *Cell, aug Augmentation) error {
-	loader := extra.MustBeginParse()
+	loader, err := extra.BeginParse()
+	if err != nil {
+		return fmt.Errorf("failed to load augmented dictionary extra: %w", err)
+	}
 	if err := aug.SkipExtra(loader); err != nil {
 		return fmt.Errorf("failed to load augmented dictionary extra: %w", err)
 	}
@@ -390,15 +393,29 @@ func validateAugmentedExtraCellForCombine(extra *Cell, aug Augmentation) error {
 }
 
 func storeAugmentedForkForCombine(aug Augmentation, label *Slice, left, leftExtra, right, rightExtra *Cell, keySz uint) (*Cell, *Cell, error) {
-	extra, err := aug.CombineExtra(leftExtra.MustBeginParse(), rightExtra.MustBeginParse())
+	leftExtraSlice, err := leftExtra.BeginParse()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load left extra: %w", err)
+	}
+	rightExtraSlice, err := rightExtra.BeginParse()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load right extra: %w", err)
+	}
+
+	extra, err := aug.CombineExtra(leftExtraSlice, rightExtraSlice)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	extraSlice, err := extra.BeginParse()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load combined extra: %w", err)
 	}
 
 	fork := BeginCell().
 		MustStoreRef(left).
 		MustStoreRef(right).
-		MustStoreBuilder(extra.MustBeginParse().ToBuilder())
+		MustStoreBuilder(extraSlice.ToBuilder())
 
 	root, err := storeDictNode(label, fork, keySz)
 	if err != nil {

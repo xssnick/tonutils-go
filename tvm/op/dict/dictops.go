@@ -178,7 +178,10 @@ func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
 	if err = code.SkipBitsAndRefs(0, 1); err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
-	root = rootCell.MustBeginParse()
+	root, err = rootCell.BeginParse()
+	if err != nil {
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
+	}
 	op.rootLoaded = true
 	bits, err := code.LoadUInt(10)
 	if err != nil {
@@ -1410,15 +1413,27 @@ func prefixDictLookupKeyCell(input *cell.Slice, keyBits uint) (*cell.Cell, error
 func pushDictKeyValue(state *vm.State, key *cell.Cell, kind dictKeyKind) error {
 	switch kind {
 	case dictKeySlice:
-		return state.Stack.PushSlice(key.MustBeginParse())
+		s, err := key.BeginParse()
+		if err != nil {
+			return cellUnderflowError(err)
+		}
+		return state.Stack.PushSlice(s)
 	case dictKeySignedInt:
-		val, err := key.MustBeginParse().LoadBigInt(key.BitsSize())
+		s, err := key.BeginParse()
+		if err != nil {
+			return cellUnderflowError(err)
+		}
+		val, err := s.LoadBigInt(key.BitsSize())
 		if err != nil {
 			return cellUnderflowError(err)
 		}
 		return state.Stack.PushInt(val)
 	default:
-		val, err := key.MustBeginParse().LoadBigUInt(key.BitsSize())
+		s, err := key.BeginParse()
+		if err != nil {
+			return cellUnderflowError(err)
+		}
+		val, err := s.LoadBigUInt(key.BitsSize())
 		if err != nil {
 			return cellUnderflowError(err)
 		}

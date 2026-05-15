@@ -44,7 +44,13 @@ func main() {
 		return
 	}
 
-	val, err := res.MustCell(0).MustBeginParse().LoadUInt(64)
+	cellRes := res.MustCell(0)
+	loader, err := cellRes.BeginParse()
+	if err != nil {
+		println("ERR", err.Error())
+		return
+	}
+	val, err := loader.LoadUInt(64)
 	if err != nil {
 		println("ERR", err.Error())
 		return

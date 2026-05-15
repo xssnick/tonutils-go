@@ -169,4 +169,36 @@ func TestLoadIntAndSliceFamilies(t *testing.T) {
 			t.Fatal("unexpected remainder subslice")
 		}
 	})
+
+	t.Run("LDSLICEShortDecodesD6", func(t *testing.T) {
+		decoded := LDSLICE(1)
+		if err := decoded.Deserialize(cell.BeginCell().MustStoreUInt(0xD603, 16).ToSlice()); err != nil {
+			t.Fatalf("LDSLICE short deserialize failed: %v", err)
+		}
+		if got := decoded.SerializeText(); got != "LDSLICE 4" {
+			t.Fatalf("unexpected LDSLICE short name: %s", got)
+		}
+
+		st := vm.NewStack()
+		if err := st.PushSlice(cell.BeginCell().MustStoreUInt(0xAB, 8).ToSlice()); err != nil {
+			t.Fatalf("failed to push slice: %v", err)
+		}
+		if err := decoded.Interpret(&vm.State{Stack: st}); err != nil {
+			t.Fatalf("LDSLICE short failed: %v", err)
+		}
+		rest, err := st.PopSlice()
+		if err != nil {
+			t.Fatalf("failed to pop remainder: %v", err)
+		}
+		part, err := st.PopSlice()
+		if err != nil {
+			t.Fatalf("failed to pop part: %v", err)
+		}
+		if part.BitsLeft() != 4 || part.MustLoadUInt(4) != 0xA {
+			t.Fatal("unexpected short loaded subslice")
+		}
+		if rest.BitsLeft() != 4 || rest.MustLoadUInt(4) != 0xB {
+			t.Fatal("unexpected short remainder")
+		}
+	})
 }

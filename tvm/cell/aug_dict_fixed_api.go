@@ -85,7 +85,11 @@ func validateAugmentedDictionary(d *AugmentedDictionary) error {
 	if err != nil {
 		return err
 	}
-	_, err = root.MustBeginParse().LoadAugDict(d.keySz, d.aug, false)
+	loader, err := root.BeginParse()
+	if err != nil {
+		return err
+	}
+	_, err = loader.LoadAugDict(d.keySz, d.aug, false)
 	return err
 }
 
@@ -296,11 +300,14 @@ func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, pr
 	if branch == nil {
 		return nil, nil, nil
 	}
-	if branch.IsSpecial() {
+
+	loader, err := branch.BeginParse()
+	if err != nil {
+		return nil, nil, err
+	}
+	if loader.cell.IsSpecial() {
 		return nil, nil, fmt.Errorf("augmented dict has special cells in tree structure")
 	}
-
-	loader := branch.MustBeginParse()
 	labelLen, prefixKey, err := loadLabel(remaining, loader, prefix)
 	if err != nil {
 		return nil, nil, err
@@ -334,7 +341,12 @@ func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, pr
 		return nil, nil, err
 	}
 
-	r, err := fn(prefixKey.EndCell(), extra.MustBeginParse(), nil)
+	extraSlice, err := extra.BeginParse()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	r, err := fn(prefixKey.EndCell(), extraSlice, nil)
 	if err != nil {
 		return nil, nil, err
 	}

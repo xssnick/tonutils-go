@@ -46,11 +46,14 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 	leNegTwo := cell.BeginCell().MustStoreSlice([]byte{0xFE, 0xFF, 0xFF, 0xFF}, 32).EndCell().MustBeginParse()
 	leShort := cell.BeginCell().MustStoreSlice([]byte{0xAA, 0xBB, 0xCC, 0xDD}, 32).EndCell().MustBeginParse()
 	hashDepthCell := cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).EndCell()
-	proofRoot := cell.BeginCell().MustStoreUInt(0, 1).MustStoreRef(cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()).EndCell()
-	proofCell, err := proofRoot.CreateProof(cell.CreateProofSkeleton())
-	if err != nil {
-		t.Fatalf("create proof cell: %v", err)
-	}
+	proofRoot := cell.BeginCell().
+		MustStoreUInt(0, 1).
+		MustStoreRef(cell.BeginCell().
+			MustStoreUInt(0xBEEF, 16).
+			MustStoreRef(cell.BeginCell().MustStoreUInt(1, 1).EndCell()).
+			EndCell()).
+		EndCell()
+	proofCell := mustUsageProofWithLoadedRoot(t, proofRoot)
 	proofBody, err := cell.UnwrapProof(proofCell, proofRoot.Hash())
 	if err != nil {
 		t.Fatalf("unwrap proof cell: %v", err)

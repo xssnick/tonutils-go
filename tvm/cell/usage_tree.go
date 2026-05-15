@@ -7,10 +7,12 @@ type usageTreeNode struct {
 	children [4]TraceNode
 	loaded   bool
 	marked   bool
+	cell     *Cell
 }
 
 type CellUsageTree struct {
 	nodes       []usageTreeNode
+	loadedCells map[Hash]*Cell
 	useMark     bool
 	ignoreLoads int
 	onLoadFn    func(*Cell)
@@ -18,7 +20,8 @@ type CellUsageTree struct {
 
 func NewCellUsageTree() *CellUsageTree {
 	return &CellUsageTree{
-		nodes: make([]usageTreeNode, 2),
+		nodes:       make([]usageTreeNode, 2),
+		loadedCells: map[Hash]*Cell{},
 	}
 }
 
@@ -79,13 +82,47 @@ func (t *CellUsageTree) NodeForTrace(trace *Trace) (TraceNode, bool) {
 }
 
 func (t *CellUsageTree) OnLoad(node TraceNode, c *Cell) {
-	if t == nil || t.ignoreLoads > 0 || !t.validNode(node) || t.nodes[node].loaded {
+	if t == nil || t.ignoreLoads > 0 || !t.validNode(node) {
 		return
 	}
+
+	wasLoaded := t.nodes[node].loaded
+	t.storeLoadedCell(node, c)
+	if wasLoaded {
+		return
+	}
+
 	t.nodes[node].loaded = true
 	if t.onLoadFn != nil {
 		t.onLoadFn(c)
 	}
+}
+
+func (t *CellUsageTree) loadedCell(node TraceNode) (*Cell, bool) {
+	if t == nil || !t.validNode(node) {
+		return nil, false
+	}
+	c := t.nodes[node].cell
+	return c, c != nil
+}
+
+func (t *CellUsageTree) loadedCellByHash(hash Hash) (*Cell, bool) {
+	if t == nil || t.loadedCells == nil {
+		return nil, false
+	}
+	c := t.loadedCells[hash]
+	return c, c != nil
+}
+
+func (t *CellUsageTree) storeLoadedCell(node TraceNode, c *Cell) {
+	if c == nil || c.IsLazy() {
+		return
+	}
+	t.nodes[node].cell = c
+	if t.loadedCells == nil {
+		t.loadedCells = map[Hash]*Cell{}
+	}
+	t.loadedCells[c.HashKey()] = c
 }
 
 func (t *CellUsageTree) IsLoaded(node TraceNode) bool {

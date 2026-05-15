@@ -452,7 +452,7 @@ func blockchainConfigLoad[T any](root *cell.Cell, err error) (*T, error) {
 	}
 
 	var out T
-	if err = LoadFromCell(&out, root.MustBeginParse()); err != nil {
+	if err = Parse(&out, root); err != nil {
 		return nil, err
 	}
 

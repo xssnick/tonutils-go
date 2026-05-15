@@ -55,7 +55,7 @@ func TestTVMCrossEmulatorTonOpsEmulatorC7Path(t *testing.T) {
 				funcsop.PREVKEYBLOCK().Serialize(),
 				funcsop.PREVMCBLOCKS_100().Serialize(),
 			)),
-			prevBlocks: tuple.NewTupleValue(int64(111), int64(222), int64(333)),
+			prevBlocks: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
 		},
 		{
 			name:     "gas_limit_setter_path",

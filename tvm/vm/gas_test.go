@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -34,7 +35,7 @@ func TestStatePushTupleChargedConsumesTupleGas(t *testing.T) {
 	}
 	st.InitForExecution()
 
-	tup := tuple.NewTupleValue(int64(1), int64(2), int64(3))
+	tup := tuple.NewTupleValue(big.NewInt(1), big.NewInt(2), big.NewInt(3))
 	if err := st.PushTupleCharged(tup); err != nil {
 		t.Fatal(err)
 	}

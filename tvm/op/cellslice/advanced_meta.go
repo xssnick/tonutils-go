@@ -118,7 +118,7 @@ func CDEPTHI(i int) *helpers.AdvancedOP {
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cl.Depth(i)))
+			return pushSmallInt(state, int64(cl.Depth(i)))
 		},
 	}
 }
@@ -152,7 +152,7 @@ func CDEPTHIX() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, int64(cl.Depth(int(idx))))
+			return pushSmallInt(state, int64(cl.Depth(int(idx))))
 		},
 		Name:      "CDEPTHIX",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x71),

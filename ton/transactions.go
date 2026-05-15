@@ -78,10 +78,8 @@ func (c *APIClient) ListTransactions(ctx context.Context, addr *address.Address,
 		res := make([]*tlb.Transaction, len(txList))
 
 		for i := 0; i < len(txList); i++ {
-			loader := txList[i].MustBeginParse()
-
 			var tx tlb.Transaction
-			err = tlb.LoadFromCell(&tx, loader)
+			err = tlb.Parse(&tx, txList[i])
 			if err != nil {
 				return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
 			}
@@ -134,7 +132,7 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 		}
 
 		var tx tlb.Transaction
-		err = tlb.LoadFromCell(&tx, txCell.MustBeginParse())
+		err = tlb.Parse(&tx, txCell)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load transaction from cell: %w", err)
 		}
@@ -156,7 +154,11 @@ func (c *APIClient) GetTransaction(ctx context.Context, block *BlockIDExt, addr 
 			}
 
 			var shardAccounts tlb.ShardAccountBlocks
-			err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.MustBeginParse())
+			shardAccountsLoader, err := blockProof.Extra.ShardAccountBlocks.BeginParse()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load shard accounts proof: %w", err)
+			}
+			err = tlb.LoadFromCellAsProof(&shardAccounts, shardAccountsLoader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to load shard accounts from proof: %w", err)
 			}

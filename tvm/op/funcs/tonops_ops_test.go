@@ -90,7 +90,7 @@ func makeFeeState(t *testing.T) *vm.State {
 }
 
 func TestTonopsGasConfigAndGlobals(t *testing.T) {
-	st := newFuncTestState(t, map[int]any{0: int64(21), 4: int64(44), 5: int64(55), 6: big.NewInt(66), 9: (*cell.Cell)(nil), 14: tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(0xFFFFFFFF, 32).ToSlice())})
+	st := newFuncTestState(t, map[int]any{0: big.NewInt(21), 4: big.NewInt(44), 5: big.NewInt(55), 6: big.NewInt(66), 9: (*cell.Cell)(nil), 14: tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(0xFFFFFFFF, 32).ToSlice())})
 	st.Gas = vm.GasWithLimit(50)
 
 	if err := st.Gas.Consume(5); err != nil {
@@ -137,7 +137,7 @@ func TestTonopsGasConfigAndGlobals(t *testing.T) {
 	}
 	for _, tc := range paramOps {
 		t.Run(tc.name, func(t *testing.T) {
-			local := newFuncTestState(t, map[int]any{4: int64(44), 5: int64(55)})
+			local := newFuncTestState(t, map[int]any{4: big.NewInt(44), 5: big.NewInt(55)})
 			if err := (*tc.op).Interpret(local); err != nil {
 				t.Fatalf("%s failed: %v", tc.name, err)
 			}
@@ -664,7 +664,7 @@ func TestAdvancedOpSerializationAndCodepages(t *testing.T) {
 	if err := parsedGetParam.Deserialize(getParam.Serialize().ToSlice()); err != nil {
 		t.Fatalf("GETPARAM.Deserialize failed: %v", err)
 	}
-	st = newFuncTestState(t, map[int]any{14: int64(88)})
+	st = newFuncTestState(t, map[int]any{14: big.NewInt(88)})
 	if err := parsedGetParam.Interpret(st); err != nil {
 		t.Fatalf("GETPARAM interpreted failed: %v", err)
 	}
@@ -680,7 +680,7 @@ func TestAdvancedOpSerializationAndCodepages(t *testing.T) {
 	if err := parsedGetParamLong.Deserialize(getParamLong.Serialize().ToSlice()); err != nil {
 		t.Fatalf("GETPARAMLONG.Deserialize failed: %v", err)
 	}
-	st = newFuncTestState(t, map[int]any{200: int64(99)})
+	st = newFuncTestState(t, map[int]any{200: big.NewInt(99)})
 	if err := parsedGetParamLong.Interpret(st); err != nil {
 		t.Fatalf("GETPARAMLONG interpreted failed: %v", err)
 	}

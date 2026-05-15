@@ -385,7 +385,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 
 	t.Run("GlobalsSetAndNoopNilPastEnd", func(t *testing.T) {
 		c7 := makeTonopsTestC7(t, tonopsTestC7Config{
-			Globals: map[int]any{1: int64(123)},
+			Globals: map[int]any{1: big.NewInt(123)},
 		})
 
 		code := codeFromBuilders(t,
@@ -426,7 +426,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 
 	t.Run("GetParamLong", func(t *testing.T) {
 		c7 := makeTonopsTestC7(t, tonopsTestC7Config{
-			ExtraParams: map[int]any{18: int64(0x55AA)},
+			ExtraParams: map[int]any{18: big.NewInt(0x55AA)},
 		})
 
 		code := codeFromBuilders(t, funcsop.GETPARAMLONG(18).Serialize())

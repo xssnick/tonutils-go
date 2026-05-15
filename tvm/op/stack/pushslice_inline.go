@@ -24,7 +24,7 @@ func paddedInlineBits(actual uint, mod uint) uint {
 }
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return PUSHSLICEINLINE(cell.BeginCell().EndCell().MustBeginParse()) })
+	vm.List = append(vm.List, func() vm.OP { return PUSHSLICEINLINE(cell.BeginCell().ToSlice()) })
 }
 
 func PUSHSLICEINLINE(value *cell.Slice) *OpPUSHSLICEINLINE {

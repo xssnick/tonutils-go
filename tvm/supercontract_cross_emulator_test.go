@@ -649,7 +649,7 @@ func buildSuperContractSteps(t *testing.T) ([]superContractStep, tuple.Tuple) {
 		},
 		ExtraParams: map[int]any{
 			2:  int64(42),
-			13: tuple.NewTupleValue(int64(111), int64(222), int64(333)),
+			13: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
 			15: int64(444),
 			16: int64(555),
 			17: makeInMsgParamsTuple(),
@@ -1210,7 +1210,7 @@ func feeExtraBalanceTestC7(t *testing.T) tuple.Tuple {
 		Balance:        tuple.NewTupleValue(new(big.Int).Set(tonopsTestBalance), extraDict.AsCell()),
 		UnpackedConfig: unpacked,
 		ExtraParams: map[int]any{
-			13: tuple.NewTupleValue(int64(111), int64(222), int64(333)),
+			13: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
 			15: int64(444),
 			16: int64(555),
 			17: makeInMsgParamsTuple(),

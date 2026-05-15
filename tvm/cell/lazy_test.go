@@ -445,6 +445,37 @@ func TestCreateProofLoadsOnlyRequestedLazyRef(t *testing.T) {
 		t.Fatalf("proof with pruned ref should not load, calls=%d", loader.calls)
 	}
 
+	proof, err := cellWithLazyRef.CreateProof(CreateProofSkeleton())
+	if err != nil {
+		t.Fatal(err)
+	}
+	boc := proof.ToBOCWithFlags(false)
+	if boc == nil {
+		t.Fatal("expected proof boc")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("serializing proof with pruned ref should not load, calls=%d", loader.calls)
+	}
+
+	decoded, err := FromBOC(boc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := UnwrapProof(decoded, src.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := body.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned.IsLazy() {
+		t.Fatal("serialized proof kept lazy pruned ref")
+	}
+	if pruned.GetType() != PrunedCellType {
+		t.Fatalf("serialized proof expanded pruned ref, got %v", pruned.GetType())
+	}
+
 	sk := CreateProofSkeleton()
 	sk.ProofRef(0)
 	if _, err := cellWithLazyRef.CreateProof(sk); err != nil {

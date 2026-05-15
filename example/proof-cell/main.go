@@ -66,7 +66,10 @@ func main() {
 
 	// MerkleProofBuilder follows the actual cells loaded from its root.
 	pb := cell.NewMerkleProofBuilder(exampleCell)
-	root := pb.Root().MustBeginParse()
+	root, err := pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
 	if _, err := root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
@@ -86,7 +89,10 @@ func main() {
 	fmt.Println(proof.Dump())
 
 	pb = cell.NewMerkleProofBuilder(exampleCell)
-	root = pb.Root().MustBeginParse()
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
@@ -104,7 +110,10 @@ func main() {
 	fmt.Println(proof.Dump())
 
 	pb = cell.NewMerkleProofBuilder(exampleCell)
-	root = pb.Root().MustBeginParse()
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
@@ -136,7 +145,10 @@ func main() {
 	// we prove two values from two dictionaries on different levels.
 	pb = cell.NewMerkleProofBuilder(exampleCell)
 
-	root = pb.Root().MustBeginParse()
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
@@ -152,7 +164,10 @@ func main() {
 		panic(err)
 	}
 
-	root = pb.Root().MustBeginParse()
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
 	if _, err = root.LoadUInt(24); err != nil {
 		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
 	}
@@ -195,7 +210,11 @@ func main() {
 
 	var dataProof ExampleStruct
 	// LoadFromCellAsProof loads only non-pruned branches into the target struct.
-	if err = tlb.LoadFromCellAsProof(&dataProof, proofBody.MustBeginParse()); err != nil {
+	proofBodyLoader, err := proofBody.BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	if err = tlb.LoadFromCellAsProof(&dataProof, proofBodyLoader); err != nil {
 		panic(err)
 	}
 

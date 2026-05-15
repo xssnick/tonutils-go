@@ -67,7 +67,7 @@ func runReferenceTickTock(code, data *cell.Cell, addr *address.Address, isTock b
 
 	cConfig := C.CString(configB64)
 	defer C.free(unsafe.Pointer(cConfig))
-	emulator := C.transaction_emulator_create(cConfig, C.int(0))
+	emulator := C.transaction_emulator_create(cConfig, C.int(referenceVMLogVerbosity()))
 	if emulator == nil {
 		return nil, fmt.Errorf("failed to create reference transaction emulator")
 	}
@@ -133,7 +133,7 @@ func runReferenceTickTock(code, data *cell.Cell, addr *address.Address, isTock b
 		code:     codeCell,
 		data:     dataCell,
 		actions:  actionsCell,
-		vmLog:    raw.VMLog,
+		vmLog:    referenceVMLog(raw.VMLog),
 	}, nil
 }
 
@@ -218,7 +218,7 @@ func buildReferenceTickTockShardAccount(addr *address.Address, code, data *cell.
 
 func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, error) {
 	var tx tlb.Transaction
-	if err := tlb.LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
+	if err := tlb.Parse(&tx, txCell); err != nil {
 		return 0, 0, fmt.Errorf("failed to decode reference tick/tock transaction: %w", err)
 	}
 
@@ -237,12 +237,12 @@ func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, error) {
 
 func referenceTickTockAccountState(shardCell *cell.Cell) (*cell.Cell, *cell.Cell, error) {
 	var shard tlb.ShardAccount
-	if err := tlb.LoadFromCell(&shard, shardCell.MustBeginParse()); err != nil {
+	if err := tlb.Parse(&shard, shardCell); err != nil {
 		return nil, nil, fmt.Errorf("failed to decode reference shard account: %w", err)
 	}
 
 	var acc tlb.AccountState
-	if err := tlb.LoadFromCell(&acc, shard.Account.MustBeginParse()); err != nil {
+	if err := tlb.Parse(&acc, shard.Account); err != nil {
 		return nil, nil, fmt.Errorf("failed to decode reference account state: %w", err)
 	}
 	if !acc.IsValid || acc.Status != tlb.AccountStatusActive || acc.StateInit == nil {

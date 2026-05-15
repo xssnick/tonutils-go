@@ -541,7 +541,7 @@ func (c *APIClient) GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.B
 	}
 
 	var bData tlb.Block
-	if err = tlb.LoadFromCell(&bData, cl.MustBeginParse()); err != nil {
+	if err = tlb.Parse(&bData, cl); err != nil {
 		return nil, fmt.Errorf("failed to parse block data: %w", err)
 	}
 	return &bData, nil
@@ -568,7 +568,11 @@ func (c *APIClient) GetBlockHeader(ctx context.Context, block *BlockIDExt) (*tlb
 		}
 
 		var bData tlb.Block
-		if err = tlb.LoadFromCellAsProof(&bData, pl.MustBeginParse()); err != nil {
+		loader, err := pl.BeginParse()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load block data proof: %w", err)
+		}
+		if err = tlb.LoadFromCellAsProof(&bData, loader); err != nil {
 			return nil, fmt.Errorf("failed to parse block data proof: %w", err)
 		}
 		return &bData.BlockInfo, nil
@@ -645,7 +649,11 @@ func (c *APIClient) GetBlockTransactionsV2(ctx context.Context, block *BlockIDEx
 				return nil, false, fmt.Errorf("failed to check block proof: %w", err)
 			}
 
-			if err = tlb.LoadFromCellAsProof(&shardAccounts, blockProof.Extra.ShardAccountBlocks.MustBeginParse()); err != nil {
+			shardAccountsLoader, err := blockProof.Extra.ShardAccountBlocks.BeginParse()
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to load shard accounts proof: %w", err)
+			}
+			if err = tlb.LoadFromCellAsProof(&shardAccounts, shardAccountsLoader); err != nil {
 				return nil, false, fmt.Errorf("failed to load shard accounts from proof: %w", err)
 			}
 		}
@@ -686,7 +694,7 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 	switch t := resp.(type) {
 	case AllShardsInfo:
 		var inf tlb.AllShardsInfo
-		err = tlb.LoadFromCell(&inf, t.Data.MustBeginParse())
+		err = tlb.Parse(&inf, t.Data)
 		if err != nil {
 			return nil, err
 		}
@@ -713,7 +721,10 @@ func (c *APIClient) GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) 
 					return nil, fmt.Errorf("failed to check proof: %w", err)
 				}
 
-				mcShort := shardState.McStateExtra.MustBeginParse()
+				mcShort, err := shardState.McStateExtra.BeginParse()
+				if err != nil {
+					return nil, fmt.Errorf("failed to load mc extra in proof: %w", err)
+				}
 				if v, err := mcShort.LoadUInt(16); err != nil || v != 0xcc26 {
 					return nil, fmt.Errorf("invalic mc extra in proof")
 				}
@@ -769,14 +780,22 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 			return nil, fmt.Errorf("load BinTree err: %w", err)
 		}
 
-		if err = binTree.Walk(func(_ *cell.Cell, value *cell.Cell) error {
+		if err = binTree.Walk(func(key *cell.Cell, value *cell.Cell) error {
 			if skipPruned && value.GetType() != cell.OrdinaryCellType {
 				// in case of split we have list with only needed shard,
 				// and pruned branch for others.
 				return nil
 			}
 
-			loader := value.MustBeginParse()
+			shardID, err := shardFromBinTreeKey(key)
+			if err != nil {
+				return err
+			}
+
+			loader, err := value.BeginParse()
+			if err != nil {
+				return fmt.Errorf("load ShardDesc err: %w", err)
+			}
 
 			ab, err := loader.LoadUInt(4)
 			if err != nil {
@@ -791,7 +810,7 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 				}
 				shards = append(shards, &BlockIDExt{
 					Workchain: int32(workchain),
-					Shard:     shardDesc.NextValidatorShard,
+					Shard:     shardID,
 					SeqNo:     shardDesc.SeqNo,
 					RootHash:  shardDesc.RootHash,
 					FileHash:  shardDesc.FileHash,
@@ -803,7 +822,7 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 				}
 				shards = append(shards, &BlockIDExt{
 					Workchain: int32(workchain),
-					Shard:     shardDesc.NextValidatorShard,
+					Shard:     shardID,
 					SeqNo:     shardDesc.SeqNo,
 					RootHash:  shardDesc.RootHash,
 					FileHash:  shardDesc.FileHash,
@@ -817,6 +836,32 @@ func LoadShardsFromHashes(shardHashes *cell.Dictionary, skipPruned bool) (shards
 		}
 	}
 	return
+}
+
+func shardFromBinTreeKey(key *cell.Cell) (int64, error) {
+	if key == nil {
+		return 0, fmt.Errorf("shard key is nil")
+	}
+
+	shard := tlb.ShardID(uint64(1) << 63)
+	loader, err := key.BeginParse()
+	if err != nil {
+		return 0, fmt.Errorf("failed to load shard key: %w", err)
+	}
+
+	for loader.BitsLeft() > 0 {
+		if uint64(shard)&1 != 0 {
+			return 0, fmt.Errorf("shard key is too deep")
+		}
+
+		bit, err := loader.LoadUInt(1)
+		if err != nil {
+			return 0, fmt.Errorf("failed to load shard key bit: %w", err)
+		}
+		shard = shard.GetChild(bit == 0)
+	}
+
+	return int64(shard), nil
 }
 
 // GetBlockProof - gets proof chain for the block

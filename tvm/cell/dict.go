@@ -167,7 +167,12 @@ func (d *Dictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetM
 		return false, fmt.Errorf("value builder is nil")
 	}
 
-	newRoot, changed, err := d.set(d.root, key.MustBeginParse(), d.keySz, value, mode)
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return false, fmt.Errorf("failed to load key: %w", err)
+	}
+
+	newRoot, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
 	if err != nil {
 		return false, fmt.Errorf("failed to set value in dict, err: %w", err)
 	}
@@ -308,7 +313,11 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
 		}
 
-		slc := otherRef.MustBeginParse()
+		slc, err := otherRef.BeginParse()
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+		}
+
 		_, otherLabel, err := loadLabel(nextKeyOffset, slc, BeginCell())
 		if err != nil {
 			return nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
@@ -337,7 +346,12 @@ func (d *Dictionary) Delete(key *Cell) error {
 		return fmt.Errorf("incorrect key size")
 	}
 
-	_, newRoot, changed, err := d.lookupDelete(d.root, key.MustBeginParse(), d.keySz)
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return fmt.Errorf("failed to load key: %w", err)
+	}
+
+	_, newRoot, changed, err := d.lookupDelete(d.root, keySlice, d.keySz)
 	if err != nil {
 		return err
 	}
@@ -496,7 +510,12 @@ func (d *Dictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	removed, newRoot, changed, err := d.lookupDelete(d.root, key.MustBeginParse(), d.keySz)
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load key: %w", err)
+	}
+
+	removed, newRoot, changed, err := d.lookupDelete(d.root, keySlice, d.keySz)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +629,10 @@ func (d *Dictionary) findKey(lookupKey *Cell) (*Slice, error) {
 		return nil, ErrNoSuchKeyInDict
 	}
 
-	lKey := lookupKey.MustBeginParse()
+	lKey, err := lookupKey.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load lookup key: %w", err)
+	}
 
 	// until key size is not equals we go deeper
 	for {

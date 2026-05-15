@@ -20,23 +20,11 @@ type crossRunResult struct {
 func buildCrossStack(values ...any) (*vm.Stack, error) {
 	stack := vm.NewStack()
 	for _, value := range values {
-		switch v := value.(type) {
-		case int:
-			if err := stack.PushInt(big.NewInt(int64(v))); err != nil {
-				return nil, err
-			}
-		case int64:
-			if err := stack.PushInt(big.NewInt(v)); err != nil {
-				return nil, err
-			}
-		case *big.Int:
-			if err := stack.PushInt(v); err != nil {
-				return nil, err
-			}
-		default:
-			if err := stack.PushAny(value); err != nil {
-				return nil, err
-			}
+		if v, ok := value.(int64); ok {
+			value = big.NewInt(v)
+		}
+		if err := stack.PushHostValue(value); err != nil {
+			return nil, err
 		}
 	}
 	return stack, nil
@@ -161,7 +149,7 @@ func prependRawMethodDrop(code *cell.Cell) *cell.Cell {
 
 func normalizeStackCell(cl *cell.Cell) (*cell.Cell, error) {
 	var stack tlb.Stack
-	if err := stack.LoadFromCell(cl.MustBeginParse()); err != nil {
+	if err := tlb.Parse(&stack, cl); err != nil {
 		return nil, err
 	}
 
@@ -172,7 +160,11 @@ func normalizeStackCell(cl *cell.Cell) (*cell.Cell, error) {
 		if err != nil {
 			return nil, err
 		}
-		values = append(values, canonicalizeCrossStackValue(val))
+		val, err = canonicalizeCrossStackValue(val)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, val)
 	}
 	for i := len(values) - 1; i >= 0; i-- {
 		canonical.Push(values[i])
@@ -180,20 +172,28 @@ func normalizeStackCell(cl *cell.Cell) (*cell.Cell, error) {
 	return canonical.ToCell()
 }
 
-func canonicalizeCrossStackValue(val any) any {
+func canonicalizeCrossStackValue(val any) (any, error) {
 	switch v := val.(type) {
 	case *cell.Slice:
 		if v == nil {
-			return nil
+			return nil, nil
 		}
-		return v.MustToCell().MustBeginParse()
+		c, err := v.ToCell()
+		if err != nil {
+			return nil, err
+		}
+		return c.BeginParse()
 	case []any:
 		cp := make([]any, len(v))
 		for i := range v {
-			cp[i] = canonicalizeCrossStackValue(v[i])
+			var err error
+			cp[i], err = canonicalizeCrossStackValue(v[i])
+			if err != nil {
+				return nil, err
+			}
 		}
-		return cp
+		return cp, nil
 	default:
-		return val
+		return val, nil
 	}
 }

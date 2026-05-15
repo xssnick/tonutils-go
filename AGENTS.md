@@ -50,7 +50,7 @@ When adding code, keep it at the lowest layer that owns the responsibility. Do n
 - Add empty lines between logical blocks inside functions.
 
 - Do not make excessive nil checks.
-- Check only what can really be nil logically.
+- Check only what can really be nil logically. Do not check obvious input values for nil, which are intended to have a value.
 - Do not check obvious value inputs for nil.
 - Treat low-level code as potentially hot. Add runtime checks only when they protect a real boundary, enforce an invariant that can be violated in normal use, or prevent a meaningful safety issue. Avoid defensive checks that duplicate earlier validation or guard states that cannot happen through the package API.
 
@@ -60,6 +60,9 @@ When adding code, keep it at the lowest layer that owns the responsibility. Do n
 - Prefer straightforward Go-style code.
 - Keep the control flow linear and easy to read.
 - Avoid unnecessary indirection.
+- 
+- Beware of fallbacks, each fallback must have a strong reason why it is necessary and commented.
+- Do not leave useless short wrapper methods, less calls are better unless it is big piece of code which is used in many places
 
 ## Protocol types
 

@@ -38,6 +38,7 @@ type referenceTransactionResult struct {
 	txCell      *cell.Cell
 	shardCell   *cell.Cell
 	actionsCell *cell.Cell
+	vmLog       string
 }
 
 type referenceTransactionOptions struct {
@@ -79,7 +80,7 @@ func runReferenceOrdinaryTransactionWithConfigB64AndOptions(shard *tlb.ShardAcco
 
 	cConfig := C.CString(configB64)
 	defer C.free(unsafe.Pointer(cConfig))
-	emulator := C.transaction_emulator_create(cConfig, C.int(0))
+	emulator := C.transaction_emulator_create(cConfig, C.int(referenceVMLogVerbosity()))
 	if emulator == nil {
 		return nil, fmt.Errorf("failed to create reference transaction emulator")
 	}
@@ -163,12 +164,13 @@ func runReferenceOrdinaryTransactionWithConfigB64AndOptions(shard *tlb.ShardAcco
 		txCell:      txCell,
 		shardCell:   newShardCell,
 		actionsCell: actionsCell,
+		vmLog:       referenceVMLog(raw.VMLog),
 	}, nil
 }
 
 func referenceOrdinaryComputePhase(txCell *cell.Cell) (int64, int64, error) {
 	var tx tlb.Transaction
-	if err := tlb.LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
+	if err := tlb.Parse(&tx, txCell); err != nil {
 		return 0, 0, fmt.Errorf("failed to decode reference transaction: %w", err)
 	}
 	desc, ok := tx.Description.(tlb.TransactionDescriptionOrdinary)

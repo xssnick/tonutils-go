@@ -2,7 +2,6 @@ package math
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -25,7 +24,7 @@ func EQINT(value int8) (op *helpers.AdvancedOP) {
 				return pushNaNOrOverflow(state, false)
 			}
 
-			return state.Stack.PushBool(i0.Cmp(big.NewInt(int64(value))) == 0)
+			return state.Stack.PushBool(compareBigIntInt64(i0, int64(value)) == 0)
 		},
 		BitPrefix: helpers.BytesPrefix(0xC0),
 		SerializeSuffix: func() *cell.Builder {

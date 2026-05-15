@@ -121,6 +121,9 @@ func (c *Cell) ToBuilder() *Builder {
 	var b Builder
 	b.bitsSz = uint(c.bitsSz)
 	copy(b.data[:], c.data)
+	if rem := b.bitsSz % 8; rem != 0 {
+		b.data[b.bitsSz/8] &= byte(0xFF << (8 - rem))
+	}
 
 	b.refsNum = uint8(refCnt)
 	copy(b.refs[:], c.refs[:refCnt])
@@ -179,7 +182,11 @@ func (c *Cell) DumpBits(limitLength ...int) string {
 }
 
 func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
-	sz, data, _ := c.MustBeginParse().RestBits()
+	s, err := c.BeginParse()
+	if err != nil {
+		return strings.Repeat("  ", deep) + "<failed to load cell: " + err.Error() + ">"
+	}
+	sz, data, _ := s.RestBits()
 
 	builder := strings.Builder{}
 

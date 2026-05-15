@@ -128,7 +128,7 @@ func TestSliceLoadAddrRejectsInvalidAnycastDepth(t *testing.T) {
 	}
 }
 
-func TestCreateProofPrunesOmittedLeafRef(t *testing.T) {
+func TestCreateProofKeepsOmittedLoadedLeafRefLikeCpp(t *testing.T) {
 	left := BeginCell().MustStoreUInt(0x11, 8).EndCell()
 	right := BeginCell().MustStoreUInt(0x22, 8).EndCell()
 	root := BeginCell().MustStoreUInt(0x33, 8).MustStoreRef(left).MustStoreRef(right).EndCell()
@@ -154,14 +154,14 @@ func TestCreateProofPrunesOmittedLeafRef(t *testing.T) {
 		t.Fatalf("included leaf ref should stay ordinary")
 	}
 
-	pruned, err := body.PeekRef(1)
+	omitted, err := body.PeekRef(1)
 	if err != nil {
-		t.Fatalf("failed to load pruned ref: %v", err)
+		t.Fatalf("failed to load omitted ref: %v", err)
 	}
-	if !pruned.IsSpecial() || pruned.GetType() != PrunedCellType {
-		t.Fatalf("omitted leaf ref should be pruned, got special=%v type=%v", pruned.IsSpecial(), pruned.GetType())
+	if omitted.IsSpecial() {
+		t.Fatalf("omitted loaded leaf ref should stay ordinary like C++, got type=%v", omitted.GetType())
 	}
-	if !bytes.Equal(pruned.Hash(0), right.Hash()) {
-		t.Fatalf("pruned ref must preserve omitted leaf hash")
+	if !bytes.Equal(omitted.Hash(0), right.Hash()) {
+		t.Fatalf("omitted ref must preserve leaf hash")
 	}
 }

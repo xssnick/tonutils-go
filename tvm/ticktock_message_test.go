@@ -75,7 +75,7 @@ func makeTickTockStateOnlyCode(t *testing.T, tickData, tockData *cell.Cell) *cel
 	)
 }
 
-func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*MessageExecutionResult, *cell.Cell, *cell.Cell, error) {
+func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*TransactionExecutionResult, *cell.Cell, *cell.Cell, error) {
 	t.Helper()
 
 	tickBody := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
@@ -89,8 +89,12 @@ func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*
 		return nil, nil, nil, err
 	}
 
-	cfg := EmulateTickTockTransactionConfig{
-		Address:  tickTockTestAddr,
+	shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, code, data, tickTockTestBalance)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	cfg := TransactionEmulationConfig{
 		Now:      uint32(tonopsTestTime.Unix()),
 		Balance:  new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed: append([]byte(nil), tonopsTestSeed...),
@@ -100,13 +104,45 @@ func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*
 		}),
 	}
 
-	var res *MessageExecutionResult
-	if isTock {
-		res, err = NewTVM().EmulateTockTransaction(code, data, cfg)
-	} else {
-		res, err = NewTVM().EmulateTickTransaction(code, data, cfg)
-	}
+	res, err := NewTVM().EmulateTickTockTransaction(shard, isTock, cfg)
 	return res, tickMsg, tockMsg, err
+}
+
+func buildTickTockShardAccountForTest(t *testing.T, addr *address.Address, code, data *cell.Cell, balance uint64) (*tlb.ShardAccount, error) {
+	t.Helper()
+
+	account := &tlb.AccountState{
+		IsValid: true,
+		Address: addr,
+		StorageInfo: tlb.StorageInfo{
+			StorageUsed: tlb.StorageUsed{
+				CellsUsed: big.NewInt(0),
+				BitsUsed:  big.NewInt(0),
+			},
+			StorageExtra: tlb.StorageExtraNone{},
+			LastPaid:     0,
+		},
+		AccountStorage: tlb.AccountStorage{
+			LastTransactionLT: 0,
+			Balance:           tlb.FromNanoTONU(balance),
+			Status:            tlb.AccountStatusActive,
+			StateInit: &tlb.StateInit{
+				TickTock: &tlb.TickTock{Tick: true, Tock: true},
+				Code:     code,
+				Data:     data,
+			},
+		},
+	}
+
+	accountCell, err := tlb.ToCell(account)
+	if err != nil {
+		return nil, err
+	}
+	return &tlb.ShardAccount{
+		Account:       accountCell,
+		LastTransHash: make([]byte, 32),
+		LastTransLT:   0,
+	}, nil
 }
 
 func TestEmulateTickTockTransaction(t *testing.T) {
@@ -209,10 +245,10 @@ func TestEmulateTickTockTransaction(t *testing.T) {
 		}
 	})
 
-	t.Run("RequiresAddress", func(t *testing.T) {
-		_, err := NewTVM().EmulateTickTransaction(cell.BeginCell().EndCell(), cell.BeginCell().EndCell(), EmulateTickTockTransactionConfig{})
+	t.Run("RequiresShardAccount", func(t *testing.T) {
+		_, err := NewTVM().EmulateTickTockTransaction(nil, false, TransactionEmulationConfig{})
 		if err == nil {
-			t.Fatal("expected missing address to fail")
+			t.Fatal("expected missing shard account to fail")
 		}
 	})
 }

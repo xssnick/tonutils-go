@@ -92,11 +92,7 @@ func (s *ProofSkeleton) Copy() *ProofSkeleton {
 // Deprecated: use NewMerkleProofBuilder with traced cell loads, or
 // Cell.CreateUsageProof with CellUsageTree.
 func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
-	if c.Level() != 0 {
-		return nil, fmt.Errorf("failed to build proof for cell: level is not 0")
-	}
-
-	body, err := buildProofBody(c, skeleton, 0)
+	body, err := buildProofBody(c, skeleton, c.Level())
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
 	}
@@ -160,7 +156,7 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 			}
 		} else {
 			if ref.GetType() == PrunedCellType {
-				next = ref
+				next = materializePrunedBranchBoundary(ref)
 			} else {
 				next, err = createPrunedBranchFromCell(ref, childDepth+1)
 				if err != nil {
@@ -176,6 +172,20 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 		return nil, err
 	}
 	return rebuilt, nil
+}
+
+func materializePrunedBranchBoundary(c *Cell) *Cell {
+	if c == nil || c.GetType() != PrunedCellType || !c.IsLazy() || c.IsVirtualized() {
+		return c
+	}
+
+	cp := c.copy()
+	cp.setLazy(false)
+	if cp.meta != nil {
+		cp.meta.lazyLoader = nil
+		cp.clearMetaIfEmpty()
+	}
+	return cp
 }
 
 func createMerkleProofCell(body *Cell) (*Cell, error) {

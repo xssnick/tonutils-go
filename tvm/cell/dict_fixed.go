@@ -92,8 +92,14 @@ func compareKeyCells(a, b *Cell, invertFirst bool) int {
 		}
 	}
 
-	aSlice := a.MustBeginParse()
-	bSlice := b.MustBeginParse()
+	aSlice, err := a.BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	bSlice, err := b.BeginParse()
+	if err != nil {
+		panic(err)
+	}
 	limit := aSlice.BitsLeft()
 	if bSlice.BitsLeft() < limit {
 		limit = bSlice.BitsLeft()
@@ -125,22 +131,28 @@ func compareKeyCells(a, b *Cell, invertFirst bool) int {
 	}
 }
 
-func cellHasPrefix(key, prefix *Cell) bool {
+func cellHasPrefix(key, prefix *Cell) (bool, error) {
 	if prefix == nil {
-		return true
+		return true, nil
 	}
 	if key == nil || prefix.BitsSize() > key.BitsSize() {
-		return false
+		return false, nil
 	}
 
-	keySlice := key.MustBeginParse()
-	prefixSlice := prefix.MustBeginParse()
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return false, err
+	}
+	prefixSlice, err := prefix.BeginParse()
+	if err != nil {
+		return false, err
+	}
 	for prefixSlice.BitsLeft() > 0 {
 		if keySlice.MustLoadUInt(1) != prefixSlice.MustLoadUInt(1) {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 func cellPrefix(key *Cell, bits uint) (*Cell, error) {
@@ -150,7 +162,15 @@ func cellPrefix(key *Cell, bits uint) (*Cell, error) {
 	if bits > key.BitsSize() {
 		return nil, fmt.Errorf("prefix length is too large")
 	}
-	return BeginCell().MustStoreSlice(key.MustBeginParse().MustLoadSlice(bits), bits).EndCell(), nil
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load key: %w", err)
+	}
+	keyBits, err := keySlice.LoadSlice(bits)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load key prefix: %w", err)
+	}
+	return BeginCell().MustStoreSlice(keyBits, bits).EndCell(), nil
 }
 
 func fixedDictCommonPrefix(root *Cell, keySz uint, limit uint) (*Cell, error) {
@@ -184,7 +204,7 @@ func fixedDictHasCommonPrefix(root *Cell, keySz uint, prefix *Cell) (bool, error
 	if err != nil {
 		return false, err
 	}
-	return cellHasPrefix(common, prefix), nil
+	return cellHasPrefix(common, prefix)
 }
 
 func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefix *Builder, rev bool, invertFirst bool, rootLevel bool) error {
@@ -281,7 +301,10 @@ func fixedDictKeyBits(key *Cell, keySz uint) ([]uint8, error) {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	loader := key.MustBeginParse()
+	loader, err := key.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load key: %w", err)
+	}
 	bits := make([]uint8, keySz)
 	for i := uint(0); i < keySz; i++ {
 		bit, err := loader.LoadUInt(1)
@@ -499,9 +522,13 @@ func extractPrefixSubdictRootTraced(root *Cell, keySz uint, prefix *Cell, remove
 	var prefixSlice *Slice
 	if prefix != nil {
 		prefixLen = prefix.BitsSize()
-		prefixSlice = prefix.MustBeginParse()
+		var err error
+		prefixSlice, err = prefix.BeginParse()
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to load prefix: %w", err)
+		}
 	} else {
-		prefixSlice = BeginCell().EndCell().MustBeginParse()
+		prefixSlice = BeginCell().ToSlice()
 	}
 
 	if prefixLen == 0 {
@@ -557,7 +584,11 @@ func extractPrefixSubdictRootTraced(root *Cell, keySz uint, prefix *Cell, remove
 				return branch, false, nil
 			}
 
-			prefixBits, err := prefix.MustBeginParse().LoadSlice(consumed)
+			prefixLoader, err := prefix.BeginParse()
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to load prefix: %w", err)
+			}
+			prefixBits, err := prefixLoader.LoadSlice(consumed)
 			if err != nil {
 				return nil, false, err
 			}

@@ -15,12 +15,12 @@ type OpSDBEGINSCONST struct {
 }
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return SDBEGINSCONST(cell.BeginCell().EndCell().MustBeginParse(), false) })
+	vm.List = append(vm.List, func() vm.OP { return SDBEGINSCONST(cell.BeginCell().ToSlice(), false) })
 }
 
 func SDBEGINSCONST(value *cell.Slice, quiet bool) *OpSDBEGINSCONST {
 	if value == nil {
-		value = cell.BeginCell().EndCell().MustBeginParse()
+		value = cell.BeginCell().ToSlice()
 	}
 	return &OpSDBEGINSCONST{
 		value: value.Copy(),

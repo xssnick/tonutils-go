@@ -113,6 +113,9 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 	if d == nil {
 		return nil, 0, nil
 	}
+	if key == nil {
+		return nil, 0, fmt.Errorf("key is nil")
+	}
 	if d.root == nil {
 		return nil, 0, nil
 	}
@@ -120,10 +123,16 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 	branch := d.root
 	remaining := d.keySz
 	matched := uint(0)
-	keySlice := key.MustBeginParse()
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to load key: %w", err)
+	}
 
 	for {
-		branchSlice := branch.MustBeginParse()
+		branchSlice, err := branch.BeginParse()
+		if err != nil {
+			return nil, matched, fmt.Errorf("failed to load prefix dict branch: %w", err)
+		}
 		if branchSlice.cell.IsSpecial() {
 			return nil, matched, fmt.Errorf("prefix dict has special cells in tree structure")
 		}
@@ -176,6 +185,10 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 }
 
 func (d *PrefixDictionary) LoadValue(key *Cell) (*Slice, error) {
+	if key == nil {
+		return nil, fmt.Errorf("key is nil")
+	}
+
 	value, matched, err := d.LookupPrefix(key)
 	if err != nil {
 		return nil, err
@@ -223,14 +236,19 @@ func (d *PrefixDictionary) SetBuilderWithMode(key *Cell, value *Builder, mode Di
 	if d == nil {
 		return false, fmt.Errorf("prefix dict is nil")
 	}
-	if key.BitsSize() > d.keySz {
+	if key == nil || key.BitsSize() > d.keySz {
 		return false, fmt.Errorf("invalid key size")
 	}
 	if value == nil {
 		return false, fmt.Errorf("value is nil")
 	}
 
-	newRoot, changed, err := d.set(d.root, key.MustBeginParse(), d.keySz, value, mode)
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return false, fmt.Errorf("failed to load key: %w", err)
+	}
+
+	newRoot, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
 	if err != nil {
 		return false, err
 	}
@@ -244,11 +262,16 @@ func (d *PrefixDictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 	if d == nil {
 		return nil, ErrNoSuchKeyInDict
 	}
-	if key.BitsSize() > d.keySz {
+	if key == nil || key.BitsSize() > d.keySz {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	value, newRoot, changed, err := d.lookupDelete(d.root, key.MustBeginParse(), d.keySz)
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load key: %w", err)
+	}
+
+	value, newRoot, changed, err := d.lookupDelete(d.root, keySlice, d.keySz)
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +500,11 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return oldValue, nil, true, nil
 	}
 
-	survivorSlice := survivor.MustBeginParse()
+	survivorSlice, err := survivor.BeginParse()
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to load survivor branch: %w", err)
+	}
+
 	_, survivorLabel, err := loadLabel(remaining-(node.labelLen+1), survivorSlice, BeginCell())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load survivor label: %w", err)

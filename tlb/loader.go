@@ -25,7 +25,7 @@ type Marshaller interface {
 	ToCell() (*cell.Cell, error)
 }
 
-// LoadFromCell automatically parses cell based on struct tags
+// LoadFromCell automatically parses slice based on struct tags
 // ## N - means integer with N bits, if size <= 64 it loads to uint of any size, if > 64 it loads to *big.Int
 // ^ - loads ref and calls recursively, if field type is *cell.Cell, it loads without parsing
 // . - calls recursively to continue load from current loader (inner struct)
@@ -54,7 +54,32 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 	return loadFromCell(v, loader, false, len(skipMagic) > 0 && skipMagic[0])
 }
 
-func Load(v any, c *cell.Cell) error {
+// Parse automatically parses cell based on struct tags
+// ## N - means integer with N bits, if size <= 64 it loads to uint of any size, if > 64 it loads to *big.Int
+// ^ - loads ref and calls recursively, if field type is *cell.Cell, it loads without parsing
+// . - calls recursively to continue load from current loader (inner struct)
+// dict [inline] N - loads dictionary with key size N, example: 'dict 256', inline option can be used if dict is Hashmap and not HashmapE
+// bits N - loads bit slice N len to []byte
+// bool - loads 1 bit boolean
+// addr [std|ext] [required] - loads ton address
+// string - loads ref with snake-encoded bytes to string or []byte
+// array TAG - loads Tolk array<T>, where TAG is a regular tlb tag for T, example: 'array ## 16'
+// var uint/int N - loads variable length integer
+// maybe - reads 1 bit, and loads rest if its 1, can be used in combination with others only
+// either [leave {bits},{refs}] X Y - reads 1 bit, if its 0 - loads X, if 1 - loads Y,
+//
+//	tries to serialize first condition, if not succeed (not enough free bits or refs), then second.
+//	if 'leave' is specified, then after write it will additionally check specified
+//	number of free bits and refs in cell.
+//
+// ?FieldName - Conditional field loading depending on boolean value of specified field.
+// /            Specified field must be declared before tag usage, or it will be always false during loading
+// Some tags can be combined, for example "dict 256", "maybe ^"
+// Magic can be used to load first bits and check struct type, in tag can be specified magic number itself, in [#]HEX or [$]BIN format
+// Example:
+// _ Magic `tlb:"#deadbeef"
+// _ Magic `tlb:"$1101"
+func Parse(v any, c *cell.Cell) error {
 	loader, err := c.BeginParse()
 	if err != nil {
 		return err

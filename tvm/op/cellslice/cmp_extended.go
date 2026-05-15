@@ -50,7 +50,7 @@ func binarySliceIntOp(name string, prefix helpers.BitPrefix, fn func(a, b *cell.
 			if err != nil {
 				return err
 			}
-			return pushInt64(state, fn(cs1, cs2))
+			return pushSmallInt(state, fn(cs1, cs2))
 		},
 		BitPrefix: prefix,
 	}

@@ -30,7 +30,7 @@ func executionProofFixture(t *testing.T) (*cell.Cell, *cell.Cell) {
 	code := cell.BeginCell().MustStoreRef(codeTail).EndCell()
 
 	usedData := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	unusedData := cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()
+	unusedData := executionProofUnusedDataBranch()
 	data := cell.BeginCell().MustStoreRef(usedData).MustStoreRef(unusedData).EndCell()
 
 	return code, data
@@ -49,10 +49,17 @@ func executionProofResultSliceFixture(t *testing.T) (*cell.Cell, *cell.Cell) {
 	code := cell.BeginCell().MustStoreRef(codeTail).EndCell()
 
 	usedData := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	unusedData := cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()
+	unusedData := executionProofUnusedDataBranch()
 	data := cell.BeginCell().MustStoreRef(usedData).MustStoreRef(unusedData).EndCell()
 
 	return code, data
+}
+
+func executionProofUnusedDataBranch() *cell.Cell {
+	// Keep this branch non-leaf: omitted ordinary leaf refs are materialized as proof boundaries.
+	return cell.BeginCell().
+		MustStoreRef(cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()).
+		EndCell()
 }
 
 func executionProofCodeTail(t *testing.T, ops ...*cell.Builder) *cell.Cell {
@@ -183,6 +190,24 @@ func TestExecuteDetailedWithAccountProofMarksResultStackCells(t *testing.T) {
 	}
 	if resultReferencedData.IsSpecial() {
 		t.Fatal("result stack slice should keep referenced data branch ordinary")
+	}
+}
+
+func TestExecuteDetailedWithAccountProofDoesNotFinalCommitGetMethodData(t *testing.T) {
+	code := cell.BeginCell().MustStoreRef(executionProofCodeTail(t, opexec.RET().Serialize())).EndCell()
+	data := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	proofData := mustUsageProofWithLoadedRoot(t, data)
+	accountRoot := executionProofAccountRoot(t, code, proofData)
+
+	res, err := NewTVM().ExecuteDetailedWithAccountProof(accountRoot, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack())
+	if err != nil {
+		t.Fatalf("execution with proof failed: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", res.ExitCode)
+	}
+	if res.Data == nil || res.Data.HashKey() != proofData.HashKey() {
+		t.Fatal("get method execution should leave data register unchanged without final commit")
 	}
 }
 

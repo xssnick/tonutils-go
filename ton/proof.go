@@ -38,14 +38,37 @@ func CheckShardMcStateExtraProof(master *BlockIDExt, shardProof []*cell.Cell) (*
 	}
 
 	var stateExtra tlb.McStateExtra
-	err = tlb.LoadFromCell(&stateExtra, shardState.McStateExtra.MustBeginParse())
-	if err != nil {
+	if err = tlb.Parse(&stateExtra, shardState.McStateExtra); err != nil {
 		return nil, fmt.Errorf("failed to load masterchain state extra: %w", err)
 	}
 	return &stateExtra, nil
 }
 
 func CheckShardInMasterProof(master *BlockIDExt, shardProof []*cell.Cell, workchain int32, shardRootHash []byte) error {
+	return checkShardInMasterProof(master, shardProof, workchain, shardRootHash, nil)
+}
+
+func CheckShardInMasterProofForAccount(master *BlockIDExt, shardProof []*cell.Cell, shard *BlockIDExt, addr *address.Address) error {
+	if shard == nil {
+		return fmt.Errorf("shard block not passed")
+	}
+	if addr == nil {
+		return fmt.Errorf("account address is nil")
+	}
+	if shard.Workchain != addr.Workchain() {
+		return fmt.Errorf("shard workchain does not match account workchain")
+	}
+	if shard.Shard == 0 || len(shard.RootHash) != 32 || len(shard.FileHash) != 32 {
+		return fmt.Errorf("invalid shard block id")
+	}
+	if !tlb.ShardID(uint64(shard.Shard)).ContainsAddress(addr) {
+		return fmt.Errorf("account address is not in shard")
+	}
+
+	return checkShardInMasterProof(master, shardProof, shard.Workchain, shard.RootHash, shard)
+}
+
+func checkShardInMasterProof(master *BlockIDExt, shardProof []*cell.Cell, workchain int32, shardRootHash []byte, expected *BlockIDExt) error {
 	stateExtra, err := CheckShardMcStateExtraProof(master, shardProof)
 	if err != nil {
 		return fmt.Errorf("failed to check proof for mc state extra: %w", err)
@@ -57,9 +80,16 @@ func CheckShardInMasterProof(master *BlockIDExt, shardProof []*cell.Cell, workch
 	}
 
 	for _, shard := range shards {
-		if shard.Workchain == workchain && bytes.Equal(shard.RootHash, shardRootHash) {
-			return nil
+		if shard.Workchain != workchain || !bytes.Equal(shard.RootHash, shardRootHash) {
+			continue
 		}
+		if expected != nil {
+			if shard.Shard != expected.Shard || shard.SeqNo != expected.SeqNo ||
+				!bytes.Equal(shard.FileHash, expected.FileHash) {
+				continue
+			}
+		}
+		return nil
 	}
 	return fmt.Errorf("required shard hash not found in proof")
 }
@@ -85,7 +115,11 @@ func CheckBlockShardStateProof(proof []*cell.Cell, blockRootHash []byte) (*tlb.S
 	}
 
 	var shardState tlb.ShardStateUnsplit
-	if err = tlb.LoadFromCellAsProof(&shardState, shardStateProofData.MustBeginParse(), false); err != nil {
+	loader, err := shardStateProofData.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load ShardStateUnsplit proof: %w", err)
+	}
+	if err = tlb.LoadFromCellAsProof(&shardState, loader, false); err != nil {
 		return nil, fmt.Errorf("failed to parse ShardStateUnsplit: %w", err)
 	}
 
@@ -99,7 +133,11 @@ func CheckBlockProof(proof *cell.Cell, blockRootHash []byte) (*tlb.Block, error)
 	}
 
 	var block tlb.Block
-	if err := tlb.LoadFromCellAsProof(&block, blockProof.MustBeginParse(), false); err != nil {
+	loader, err := blockProof.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load Block proof: %w", err)
+	}
+	if err := tlb.LoadFromCellAsProof(&block, loader, false); err != nil {
 		return nil, fmt.Errorf("failed to parse Block: %w", err)
 	}
 
@@ -107,6 +145,14 @@ func CheckBlockProof(proof *cell.Cell, blockRootHash []byte) (*tlb.Block, error)
 }
 
 func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof []*cell.Cell, shardProof []*cell.Cell, shardHash []byte, skipBlockCheck bool) (*tlb.ShardAccount, *tlb.DepthBalanceInfo, error) {
+	return checkAccountStateProof(addr, block, stateProof, shardProof, nil, shardHash, skipBlockCheck)
+}
+
+func CheckAccountStateProofForShard(addr *address.Address, block *BlockIDExt, stateProof []*cell.Cell, shardProof []*cell.Cell, shard *BlockIDExt, skipBlockCheck bool) (*tlb.ShardAccount, *tlb.DepthBalanceInfo, error) {
+	return checkAccountStateProof(addr, block, stateProof, shardProof, shard, nil, skipBlockCheck)
+}
+
+func checkAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof []*cell.Cell, shardProof []*cell.Cell, shard *BlockIDExt, shardHash []byte, skipBlockCheck bool) (*tlb.ShardAccount, *tlb.DepthBalanceInfo, error) {
 	if len(stateProof) != 2 {
 		return nil, nil, fmt.Errorf("proof should have 2 roots")
 	}
@@ -116,7 +162,12 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 	if !skipBlockCheck {
 		blockHash := block.RootHash
 		// we need shard proof only for not masterchain
-		if len(shardHash) > 0 && block.Workchain == address.MasterchainID {
+		if shard != nil && block.Workchain == address.MasterchainID {
+			if err := CheckShardInMasterProofForAccount(block, shardProof, shard, addr); err != nil {
+				return nil, nil, fmt.Errorf("shard proof is incorrect: %w", err)
+			}
+			blockHash = shard.RootHash
+		} else if len(shardHash) > 0 && block.Workchain == address.MasterchainID {
 			if err := CheckShardInMasterProof(block, shardProof, addr.Workchain(), shardHash); err != nil {
 				return nil, nil, fmt.Errorf("shard proof is incorrect: %w", err)
 			}
@@ -129,7 +180,11 @@ func CheckAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 			return nil, nil, fmt.Errorf("incorrect block proof: %w", err)
 		}
 	} else {
-		shardStateProofData, err := stateProof[1].MustBeginParse().LoadRef()
+		stateProofLoader, err := stateProof[1].BeginParse()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to load shard state proof: %w", err)
+		}
+		shardStateProofData, err := stateProofLoader.LoadRef()
 		if err != nil {
 			return nil, nil, fmt.Errorf("shard state proof should have ref: %w", err)
 		}
@@ -230,7 +285,11 @@ func CheckBackwardBlockProof(from, to *BlockIDExt, toKey bool, stateProof, destP
 	}
 
 	var info tlb.McStateExtraBlockInfo
-	err = tlb.LoadFromCellAsProof(&info, stateExtra.Info.MustBeginParse())
+	loader, err := stateExtra.Info.BeginParse()
+	if err != nil {
+		return fmt.Errorf("failed to load tx CurrencyCollection proof cell: %w", err)
+	}
+	err = tlb.LoadFromCellAsProof(&info, loader)
 	if err != nil {
 		return fmt.Errorf("failed to load tx CurrencyCollection proof cell: %w", err)
 	}
@@ -316,12 +375,12 @@ func CheckForwardBlockProof(from, to *BlockIDExt, toKey bool, configProof, destP
 	}
 
 	var catchainCfg tlb.CatchainConfig
-	if err = tlb.LoadFromCell(&catchainCfg, catchainCfgCell.MustBeginParse()); err != nil {
+	if err = tlb.Parse(&catchainCfg, catchainCfgCell); err != nil {
 		return fmt.Errorf("failed to parse catchain config: %w", err)
 	}
 
 	var blockValidators tlb.ValidatorSetAny
-	if err = tlb.LoadFromCell(&blockValidators, blockValidatorsCell.MustBeginParse()); err != nil {
+	if err = tlb.Parse(&blockValidators, blockValidatorsCell); err != nil {
 		return fmt.Errorf("failed to parse validators config: %w", err)
 	}
 

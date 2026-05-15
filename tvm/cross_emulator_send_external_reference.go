@@ -14,7 +14,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"unsafe"
 
@@ -97,11 +96,7 @@ func runReferenceSendMessageWithConfig(code, data, body *cell.Cell, amount uint6
 	cBody := C.CString(bodyB64)
 	defer C.free(unsafe.Pointer(cBody))
 
-	verbosity := 0
-	if os.Getenv("TVM_TRACE_WALLET_SEND_REF") != "" {
-		verbosity = 3
-	}
-	emulator := C.tvm_emulator_create(cCode, cData, C.int(verbosity))
+	emulator := C.tvm_emulator_create(cCode, cData, C.int(referenceVMLogVerbosity()))
 	if emulator == nil {
 		return nil, fmt.Errorf("failed to create reference tvm emulator")
 	}
@@ -175,7 +170,7 @@ func runReferenceSendMessageWithConfig(code, data, body *cell.Cell, amount uint6
 		code:     codeCell,
 		data:     dataCell,
 		actions:  actionsCell,
-		vmLog:    raw.VMLog,
+		vmLog:    referenceVMLog(raw.VMLog),
 	}, nil
 }
 

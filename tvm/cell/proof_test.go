@@ -305,20 +305,44 @@ func TestMerkleProofBuilderPeekRefCellAtTracesChild(t *testing.T) {
 	}
 }
 
-func TestMerkleProofCreateRejectsNonZeroLevelRootCppParity(t *testing.T) {
-	root := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	prunedRoot, err := createPrunedBranchFromCell(root, 2)
+func TestMerkleProofCreateNonZeroLevelRoot(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	branch := BeginCell().MustStoreRef(leaf).EndCell()
+	pruned, err := createPrunedBranchFromCell(branch, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prunedRoot.Level() == 0 {
+	root := BeginCell().MustStoreUInt(1, 1).MustStoreRef(pruned).EndCell()
+	if root.Level() == 0 {
 		t.Fatal("expected non-zero level root")
 	}
 
-	if _, err = prunedRoot.CreateProof(CreateProofSkeleton()); err == nil {
-		t.Fatal("expected skeleton proof to reject non-zero level root")
+	skeletonProof, err := root.CreateProof(CreateProofSkeleton())
+	if err != nil {
+		t.Fatalf("skeleton proof should accept non-zero level root: %v", err)
 	}
-	if _, err = prunedRoot.CreateUsageProof(NewCellUsageTree()); err == nil {
-		t.Fatal("expected usage proof to reject non-zero level root")
+	if err = validateLoadedCell(skeletonProof); err != nil {
+		t.Fatalf("skeleton proof validation failed: %v", err)
+	}
+	if _, err = UnwrapProof(skeletonProof, root.Hash(0)); err != nil {
+		t.Fatalf("unwrap skeleton proof: %v", err)
+	}
+
+	proof, err := root.CreateUsageProof(NewCellUsageTree())
+	if err != nil {
+		t.Fatalf("usage proof should accept non-zero level root through raw proof generation: %v", err)
+	}
+	if err = validateLoadedCell(proof); err != nil {
+		t.Fatalf("usage proof validation failed: %v", err)
+	}
+	if proof.Level() != root.Level() {
+		t.Fatalf("unexpected proof level: got %d want %d", proof.Level(), root.Level())
+	}
+	body, err := UnwrapProof(proof, root.Hash(0))
+	if err != nil {
+		t.Fatalf("unwrap usage proof: %v", err)
+	}
+	if body.Level() != root.Level()+1 {
+		t.Fatalf("unexpected raw proof body level: got %d want %d", body.Level(), root.Level()+1)
 	}
 }

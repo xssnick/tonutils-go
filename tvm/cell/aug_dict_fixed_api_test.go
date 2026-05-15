@@ -132,6 +132,54 @@ func TestAugmentedDictionary_RangeNearestCheckAndTraverse(t *testing.T) {
 	}
 }
 
+func TestAugmentedDictionaryTraverseExtraLoadsLazyBranches(t *testing.T) {
+	aug := testMetricAugmentation{}
+	dict, err := NewAugDict(8, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range []struct {
+		key uint64
+		val uint64
+	}{
+		{0x10, 0xa1},
+		{0x11, 0xb2},
+		{0x80, 0xc3},
+	} {
+		if _, err = dict.SetWithMode(mustTestAugKey(t, pair.key), mustTestAugValue(t, pair.val, 8), DictSetModeSet); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	loader := testLazyLoaderForCellTree(dict.root)
+	lazy := &AugmentedDictionary{
+		keySz: dict.keySz,
+		root:  cellWithLazyRefsFromCell(dict.root, loader.LoadCell),
+		aug:   dict.aug,
+	}
+	foundValue, foundExtra, err := lazy.TraverseExtra(func(keyPrefix *Cell, extra *Slice, value *Slice) (int, error) {
+		if value == nil {
+			return 6, nil
+		}
+		if keyPrefix.MustBeginParse().MustLoadUInt(8) == 0x11 {
+			return 1, nil
+		}
+		return 0, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loader.calls == 0 {
+		t.Fatal("expected traversal to load lazy branch")
+	}
+	if metric := mustLoadTestMetricExtra(t, foundExtra); metric != 8 {
+		t.Fatalf("unexpected traversed extra metric: %d", metric)
+	}
+	if got := mustLoadTestValue(t, foundValue, 8); got != 0xb2 {
+		t.Fatalf("unexpected traversed value: %x", got)
+	}
+}
+
 func TestAugmentedDictionary_FilterAndPrefixCut(t *testing.T) {
 	aug := testMetricAugmentation{}
 	dict, err := NewAugDict(4, aug)

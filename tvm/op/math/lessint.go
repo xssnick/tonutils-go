@@ -2,10 +2,10 @@ package math
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
-	"math/big"
 )
 
 func init() {
@@ -24,7 +24,7 @@ func LESSINT(value int8) (op *helpers.AdvancedOP) {
 				return pushNaNOrOverflow(state, false)
 			}
 
-			return state.Stack.PushBool(i0.Cmp(big.NewInt(int64(value))) == -1)
+			return state.Stack.PushBool(compareBigIntInt64(i0, int64(value)) == -1)
 		},
 		BitPrefix: helpers.BytesPrefix(0xC1),
 		SerializeSuffix: func() *cell.Builder {

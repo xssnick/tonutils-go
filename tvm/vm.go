@@ -15,6 +15,8 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 	"math/big"
+	"os"
+	"runtime/debug"
 	"strings"
 )
 
@@ -25,6 +27,10 @@ type trieNode struct {
 
 type matchedDeserializer interface {
 	DeserializeMatched(code *cell.Slice) error
+}
+
+type reusableOP interface {
+	Reusable() bool
 }
 
 type TVM struct {
@@ -41,13 +47,24 @@ func NewTVM() *TVM {
 		globalVersion: vm.DefaultGlobalVersion,
 	}
 
-	for _, op := range vm.List {
-		for _, s := range op().GetPrefixes() {
-			tvm.addTriePrefix(s, op)
+	for _, opGetter := range vm.List {
+		op := opGetter()
+		getter := opGetter
+		if reusable, ok := op.(reusableOP); ok && reusable.Reusable() {
+			getter = cachedOPGetter(op)
+		}
+		for _, s := range op.GetPrefixes() {
+			tvm.addTriePrefix(s, getter)
 		}
 	}
 
 	return tvm
+}
+
+func cachedOPGetter(op vm.OP) vm.OPGetter {
+	return func() vm.OP {
+		return op
+	}
 }
 
 func (tvm *TVM) SetGlobalVersion(version int) error {
@@ -60,15 +77,16 @@ func (tvm *TVM) SetGlobalVersion(version int) error {
 }
 
 type ExecutionResult struct {
-	ExitCode int64
-	GasUsed  int64
-	Steps    uint32
-	Gas      vm.Gas
-	Stack    *vm.Stack
-	Code     *cell.Cell
-	Data     *cell.Cell
-	Actions  *cell.Cell
-	Proof    *cell.Cell
+	ExitCode  int64
+	GasUsed   int64
+	Steps     uint32
+	Gas       vm.Gas
+	Stack     *vm.Stack
+	Code      *cell.Cell
+	Data      *cell.Cell
+	Actions   *cell.Cell
+	Committed bool
+	Proof     *cell.Cell
 }
 
 func bitAt(data []byte, bit uint) uint8 {
@@ -101,6 +119,43 @@ func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
 		return nil
 	}
 
+	if tvm.maxPrefixLen <= 64 {
+		return tvm.matchOpcodeFast(code, available)
+	}
+	return tvm.matchOpcodeSlow(code, available)
+}
+
+func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) vm.OPGetter {
+	preloadBits := tvm.maxPrefixLen
+	if available < preloadBits {
+		preloadBits = available
+	}
+	raw, err := code.PreloadUInt(preloadBits)
+	if err != nil {
+		return nil
+	}
+
+	n := tvm.trie
+	var matched vm.OPGetter
+
+	for i := uint(0); i < tvm.maxPrefixLen; i++ {
+		bit := uint8(0)
+		if i < preloadBits {
+			bit = uint8((raw >> (preloadBits - 1 - i)) & 1)
+		}
+		n = n.next[bit]
+		if n == nil {
+			break
+		}
+		if n.op != nil {
+			matched = n.op
+		}
+	}
+
+	return matched
+}
+
+func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) vm.OPGetter {
 	n := tvm.trie
 	var matched vm.OPGetter
 
@@ -150,8 +205,9 @@ func (tvm *TVM) executeDetailedWithLibrariesRaw(code, data *cell.Cell, c7 tuple.
 }
 
 type executeOptions struct {
-	stopOnAccept bool
-	proof        *cell.MerkleProofBuilder
+	stopOnAccept    bool
+	proof           *cell.MerkleProofBuilder
+	skipFinalCommit bool
 }
 
 func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
@@ -168,8 +224,15 @@ func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7
 		return res, err
 	}
 	state.CurrentCode = currentCode
+	state.Reg.C[3] = &vm.OrdinaryContinuation{
+		Data: vm.ControlData{
+			CP:      vm.CP,
+			NumArgs: vm.ControlDataAllArgs,
+		},
+		Code: currentCode.Copy(),
+	}
 
-	exitCode, err := tvm.runState(state)
+	exitCode, err := tvm.runStateWithOptions(state, options.skipFinalCommit)
 
 	dataRes := state.Reg.D[0]
 	actionsRes := state.Reg.D[1]
@@ -179,14 +242,15 @@ func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7
 	}
 
 	res := &ExecutionResult{
-		ExitCode: exitCode,
-		GasUsed:  state.Gas.Used(),
-		Steps:    state.Steps,
-		Gas:      state.Gas,
-		Stack:    state.Stack,
-		Code:     code,
-		Data:     dataRes,
-		Actions:  actionsRes,
+		ExitCode:  exitCode,
+		GasUsed:   state.Gas.Used(),
+		Steps:     state.Steps,
+		Gas:       state.Gas,
+		Stack:     state.Stack,
+		Code:      code,
+		Data:      dataRes,
+		Actions:   actionsRes,
+		Committed: state.Committed.Committed,
 	}
 	if proofErr := attachExecutionProof(res, state, options.proof); proofErr != nil {
 		return res, proofErr
@@ -206,14 +270,15 @@ func executionResultFromState(exitCode int64, state *vm.State, code, data *cell.
 	}
 
 	return &ExecutionResult{
-		ExitCode: exitCode,
-		GasUsed:  state.Gas.Used(),
-		Steps:    state.Steps,
-		Gas:      state.Gas,
-		Stack:    state.Stack,
-		Code:     code,
-		Data:     dataRes,
-		Actions:  actionsRes,
+		ExitCode:  exitCode,
+		GasUsed:   state.Gas.Used(),
+		Steps:     state.Steps,
+		Gas:       state.Gas,
+		Stack:     state.Stack,
+		Code:      code,
+		Data:      dataRes,
+		Actions:   actionsRes,
+		Committed: state.Committed.Committed,
 	}
 }
 
@@ -225,9 +290,17 @@ func vmerrCode(err error) int64 {
 }
 
 func (tvm *TVM) runState(state *vm.State) (exitCode int64, err error) {
+	return tvm.runStateWithOptions(state, false)
+}
+
+func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exitCode int64, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			exitCode = vmerr.CodeFatal
+			if os.Getenv("TVM_PANIC_STACK") != "" {
+				err = fmt.Errorf("vm panic: %v\n%s", recovered, debug.Stack())
+				return
+			}
 			err = fmt.Errorf("vm panic: %v", recovered)
 		}
 	}()
@@ -247,6 +320,9 @@ func (tvm *TVM) runState(state *vm.State) (exitCode int64, err error) {
 		}
 	}
 
+	if skipFinalCommit {
+		return exitCode, nil
+	}
 	if state.TryCommitCurrent() {
 		return exitCode, nil
 	}

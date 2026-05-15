@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"math/big"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -150,6 +151,72 @@ func TestMessage_LoadFromCell(t *testing.T) {
 			t.Errorf("wrong msg type, want EXTERNAL_OUT, got %s", msg.MsgType)
 		}
 	})
+}
+
+func TestMessageRelaxedDoesNotParseStateInitRef(t *testing.T) {
+	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	data := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	stateInit, err := ToCell(StateInit{
+		Code: code,
+		Data: data,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stateInitLoads := 0
+	tracedStateInit := stateInit.WithTrace(cell.NewTrace(cell.TraceHooks{
+		OnLoad: func(*cell.Cell) {
+			stateInitLoads++
+		},
+	}))
+	body := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	msgCell := cell.BeginCell().
+		MustStoreBoolBit(false).
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(false).
+		MustStoreAddr(nil).
+		MustStoreAddr(nil).
+		MustStoreBigCoins(big.NewInt(1)).
+		MustStoreDict(nil).
+		MustStoreBigCoins(big.NewInt(0)).
+		MustStoreBigCoins(big.NewInt(0)).
+		MustStoreUInt(1, 64).
+		MustStoreUInt(2, 32).
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(true).
+		MustStoreRef(tracedStateInit).
+		MustStoreBoolBit(true).
+		MustStoreRef(body).
+		EndCell()
+
+	var msg MessageRelaxed
+	if err = Parse(&msg, msgCell); err != nil {
+		t.Fatal(err)
+	}
+	if msg.MsgType != MsgTypeInternal {
+		t.Fatalf("wrong message type, got %s", msg.MsgType)
+	}
+	if !msg.Init.Exists || !msg.Init.InRef {
+		t.Fatalf("state init layout not detected as ref: %+v", msg.Init)
+	}
+	if !bytes.Equal(msg.Init.Ref.Hash(), stateInit.Hash()) {
+		t.Fatal("state init ref hash mismatch")
+	}
+	if !msg.Body.InRef {
+		t.Fatal("body layout not detected as ref")
+	}
+	if stateInitLoads != 0 {
+		t.Fatalf("relaxed message parser loaded state init ref %d times", stateInitLoads)
+	}
+
+	if _, err = tracedStateInit.BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+	if stateInitLoads != 1 {
+		t.Fatalf("state init trace is not wired, loads=%d", stateInitLoads)
+	}
 }
 
 func TestMessage_NormalizedHash(t *testing.T) {

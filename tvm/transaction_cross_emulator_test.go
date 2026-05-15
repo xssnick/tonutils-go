@@ -643,7 +643,7 @@ func TestTVMCrossEmulatorTransactionC7Options(t *testing.T) {
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
 	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
-	prevBlocks := tuple.NewTupleValue(int64(111), int64(222), int64(333))
+	prevBlocks := tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333))
 	libraryTarget := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
 	libraryRef := mustCrossLibraryCellForHash(t, libraryTarget.Hash())
 	libraryCollection := mustCrossLibraryCollection(t, libraryTarget)

@@ -347,30 +347,53 @@ func createPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*
 	}
 
 	virtLevel = max(0, min(virtLevel, _DataCellMaxLevel))
+	if !source.IsLazy() && !source.IsVirtualized() && source.Level() <= virtLevel && source.refsCount() == 0 {
+		return materializePrunedBranchBoundary(source), nil
+	}
+	return buildPrunedBranchFromCellAtDepth(source, newLevel, virtLevel)
+}
+
+func buildPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*Cell, error) {
+	if source == nil {
+		return nil, fmt.Errorf("source cell is nil")
+	}
+
+	virtLevel = max(0, min(virtLevel, _DataCellMaxLevel))
 	levelMask := source.getLevelMask().Apply(virtLevel)
 	level := levelMask.GetLevel()
 	if newLevel < level+1 {
 		return nil, fmt.Errorf("invalid new pruned level")
 	}
 
-	builder := BeginCell().
-		MustStoreUInt(uint64(PrunedCellType), 8).
-		MustStoreUInt(uint64(levelMask.Mask|oneLevelMask(newLevel)), 8)
-
+	hashesCount := levelMask.getHashesCount()
+	data := make([]byte, 2+hashesCount*(hashSize+depthSize))
+	data[0] = byte(PrunedCellType)
+	data[1] = levelMask.Mask | oneLevelMask(newLevel)
+	hashOff := 2
+	depthOff := 2 + hashesCount*hashSize
+	hashIndex := 0
 	for i := 0; i <= level; i++ {
 		if !levelMask.IsSignificant(i) {
 			continue
 		}
-		builder.MustStoreSlice(source.getHash(i), hashSize*8)
-	}
-	for i := 0; i <= level; i++ {
-		if !levelMask.IsSignificant(i) {
-			continue
-		}
-		builder.MustStoreUInt(uint64(source.getDepth(i)), depthSize*8)
+		copy(data[hashOff+hashIndex*hashSize:], source.getHash(i))
+		binary.BigEndian.PutUint16(data[depthOff+hashIndex*depthSize:], source.getDepth(i))
+		hashIndex++
 	}
 
-	return finalizeCellFromBuilder(builder, true)
+	pruned := &Cell{
+		bitsSz: uint16(len(data) * 8),
+		data:   data,
+	}
+	pruned.setSpecial(true)
+	pruned.setLevelMask(LevelMask{Mask: data[1]})
+	if err := validateBoundaryCell(pruned); err != nil {
+		return nil, err
+	}
+	if err := pruned.calculateHashes(); err != nil {
+		return nil, err
+	}
+	return pruned, nil
 }
 
 func oneLevelMask(level int) byte {
@@ -385,7 +408,10 @@ func extractBalanceFromDepthBalanceCell(c *Cell) *big.Int {
 		return nil
 	}
 
-	s := c.MustBeginParse()
+	s, err := c.BeginParse()
+	if err != nil {
+		return nil
+	}
 	label, err := s.LoadUInt(2)
 	if err != nil || label != 0 {
 		return nil

@@ -2,7 +2,6 @@ package math
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -128,7 +127,7 @@ func compareIntOp(name string, prefix helpers.BitPrefix, mode int, value int8, q
 			if x == nil {
 				return pushNaNOrOverflow(state, quiet)
 			}
-			return pushSmallInt(state, compareModeValue(mode, x.Cmp(big.NewInt(int64(value)))))
+			return pushSmallInt(state, compareModeValue(mode, compareBigIntInt64(x, int64(value))))
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%s %d", name, value)

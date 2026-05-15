@@ -207,12 +207,12 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 
 func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
 	inner := tuple.NewTupleValue(
-		uint32(0x076ef1ea),
-		uint8(0),
-		uint8(0),
-		uint32(crossTestTime.Unix()),
-		uint8(0),
-		uint8(0),
+		new(big.Int).SetUint64(0x076ef1ea),
+		big.NewInt(0),
+		big.NewInt(0),
+		new(big.Int).SetUint64(uint64(crossTestTime.Unix())),
+		big.NewInt(0),
+		big.NewInt(0),
 		new(big.Int).SetBytes(crossTestSeed),
 		tuple.NewTupleValue(new(big.Int).Set(crossTestBalance), nil),
 		cell.BeginCell().MustStoreAddr(crossTestAddr).ToSlice(),
@@ -221,8 +221,8 @@ func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
 	if cfg != nil {
 		inner.Append(cfg.AsCell())
 		inner.Append(code)
-		inner.Append(tuple.NewTupleValue(int64(0), nil))
-		inner.Append(uint8(0))
+		inner.Append(tuple.NewTupleValue(big.NewInt(0), nil))
+		inner.Append(big.NewInt(0))
 		inner.Append(nil)
 	} else {
 		inner.Append(nil)

@@ -200,6 +200,12 @@ func TestCellUsageTreeCppGoldenLoadMarkAndIgnoreSemantics(t *testing.T) {
 	if tree.IsLoaded(right) || len(loaded) != 2 {
 		t.Fatal("ignore_loads should suppress both load flag and callback")
 	}
+	if _, ok := tree.loadedCell(right); ok {
+		t.Fatal("ignore_loads should not cache loaded cell by node")
+	}
+	if _, ok := tree.loadedCellByHash(rightCell.HashKey()); ok {
+		t.Fatal("ignore_loads should not cache loaded cell by hash")
+	}
 
 	tree.SetIgnoreLoads(false)
 	tree.OnLoad(right, rightCell)
@@ -211,6 +217,9 @@ func TestCellUsageTreeCppGoldenLoadMarkAndIgnoreSemantics(t *testing.T) {
 	tree.OnLoad(right, rightCell)
 	if !tree.IsLoaded(right) || len(loaded) != 3 {
 		t.Fatal("load after ignore reset was not tracked")
+	}
+	if cached, ok := tree.loadedCell(right); !ok || cached.HashKey() != rightCell.HashKey() {
+		t.Fatal("loaded cell was not cached after ignore reset")
 	}
 
 	if !tree.MarkPath(leaf) {
@@ -339,11 +348,81 @@ func TestMerkleProofBuilderCppGoldenPrunesUnloadedLazyBranch(t *testing.T) {
 	if !pruned.IsSpecial() || pruned.GetType() != PrunedCellType {
 		t.Fatalf("unloaded branch should be pruned, got special=%v type=%v", pruned.IsSpecial(), pruned.GetType())
 	}
+	if pruned.Level() != 1 {
+		t.Fatalf("unloaded lazy branch should keep original pruned boundary level: got=%d want=1", pruned.Level())
+	}
 	if !bytes.Equal(pruned.Hash(0), right.Hash()) {
 		t.Fatal("pruned lazy branch should preserve original branch hash")
 	}
 	if loads[right.HashKey(0)] != 0 {
 		t.Fatalf("proof inspection should not load pruned lazy branch, right loads=%d", loads[right.HashKey(0)])
+	}
+
+	boc := proof.ToBOCWithFlags(false)
+	if boc == nil {
+		t.Fatal("expected proof boc")
+	}
+	if loads[right.HashKey(0)] != 0 {
+		t.Fatalf("proof serialization should not load pruned lazy branch, right loads=%d", loads[right.HashKey(0)])
+	}
+}
+
+func TestMerkleProofBuilderCppGoldenKeepsUnloadedOrdinaryLeafRef(t *testing.T) {
+	child := BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	root := BeginCell().MustStoreUInt(0, 1).MustStoreRef(child).EndCell()
+
+	builder := NewMerkleProofBuilder(root)
+	if _, err := builder.Root().BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := builder.CreateProof()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := UnwrapProof(proof, root.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	kept, err := body.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.IsSpecial() {
+		t.Fatalf("unloaded ordinary leaf ref should stay ordinary like C++, got type=%v", kept.GetType())
+	}
+	if !bytes.Equal(kept.Hash(0), child.Hash()) {
+		t.Fatal("kept leaf should preserve child hash")
+	}
+}
+
+func TestMerkleProofBuilderCppGoldenPrunesUnloadedOrdinaryBranchRef(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(1, 1).EndCell()
+	child := BeginCell().MustStoreUInt(0xBEEF, 16).MustStoreRef(leaf).EndCell()
+	root := BeginCell().MustStoreUInt(0, 1).MustStoreRef(child).EndCell()
+
+	builder := NewMerkleProofBuilder(root)
+	if _, err := builder.Root().BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := builder.CreateProof()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := UnwrapProof(proof, root.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pruned, err := body.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pruned.IsSpecial() || pruned.GetType() != PrunedCellType {
+		t.Fatalf("unloaded ordinary branch ref should be pruned, got special=%v type=%v", pruned.IsSpecial(), pruned.GetType())
+	}
+	if !bytes.Equal(pruned.Hash(0), child.Hash()) {
+		t.Fatal("pruned branch should preserve child hash")
 	}
 }
 

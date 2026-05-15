@@ -929,13 +929,28 @@ func (c *Slice) ToCell() (*Cell, error) {
 		bitsSz: uint16(left),
 		data:   data,
 	}
-	cl.setSpecial(c.cell.IsSpecial())
-	cl.setLevelMask(c.cell.getLevelMask())
 	cl.setRefs(refs)
+	fullCell := c.bitStart == 0 &&
+		c.bitEnd == c.cell.bitsSz &&
+		c.refStart == 0 &&
+		int(c.refEnd) == c.cell.refsCount()
+	if c.cell.IsSpecial() && fullCell {
+		cl.setSpecial(true)
+		if err = refreshSpecialCellLevelMask(cl); err != nil {
+			return nil, err
+		}
+	} else if fullCell {
+		cl.setLevelMask(c.cell.getLevelMask())
+	} else {
+		cl.setLevelMask(ordinaryLevelMask(refs))
+	}
 	if err = c.trace.NotifyCreate(); err != nil {
 		return nil, err
 	}
 	if err := validateCellRefDepthLimit(refs); err != nil {
+		return nil, err
+	}
+	if err := validateBoundaryCell(cl); err != nil {
 		return nil, err
 	}
 	if err := cl.calculateHashes(); err != nil {

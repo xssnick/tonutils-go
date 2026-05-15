@@ -71,15 +71,15 @@ func TestTonParamAliasesAndGlobals(t *testing.T) {
 	myCode := cell.BeginCell().MustStoreUInt(0xDD, 8).EndCell()
 
 	params := map[int]any{
-		4:  int64(111),
-		5:  uint64(222),
-		6:  int64(333),
-		7:  int64(444),
+		4:  big.NewInt(111),
+		5:  big.NewInt(222),
+		6:  big.NewInt(333),
+		7:  big.NewInt(444),
 		8:  myAddr,
 		9:  configRoot,
 		10: myCode,
-		11: int64(555),
-		12: int64(666),
+		11: big.NewInt(555),
+		12: big.NewInt(666),
 		14: mustUnpackedConfig(t, -7),
 	}
 
