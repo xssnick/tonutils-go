@@ -91,7 +91,7 @@ func mustLoadSingleV3Message(t *testing.T, ext *tlb.ExternalMessage) *tlb.Intern
 		t.Fatal("external message body should not be nil")
 	}
 
-	ldr := ext.Body.BeginParse()
+	ldr := ext.Body.MustBeginParse()
 	_ = ldr.MustLoadSlice(512) // signature
 	_ = ldr.MustLoadUInt(32)   // subwallet
 	_ = ldr.MustLoadUInt(32)   // valid until
@@ -148,7 +148,7 @@ func TestPackV5OutActions(t *testing.T) {
 			t.Fatalf("pack error: %v", err)
 		}
 
-		root := actions.EndCell().BeginParse()
+		root := actions.EndCell().MustBeginParse()
 		if root.MustLoadUInt(1) != 1 {
 			t.Fatal("actions should start with 1 bit")
 		}

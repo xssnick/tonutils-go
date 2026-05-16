@@ -32,15 +32,18 @@ var _SchemaIDByTypeName = map[string]uint32{}
 var _SchemaIDByName = map[string]uint32{}
 var _SchemaByID = map[uint32]*structInfo{}
 
+var _BoolTrueID = CRC("boolTrue = Bool")
+var _BoolFalseID = CRC("boolFalse = Bool")
+
 var _BoolTrue = func() []byte {
 	buf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(buf, CRC("boolTrue = Bool"))
+	binary.LittleEndian.PutUint32(buf, _BoolTrueID)
 	return buf
 }()
 
 var _BoolFalse = func() []byte {
 	buf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(buf, CRC("boolFalse = Bool"))
+	binary.LittleEndian.PutUint32(buf, _BoolFalseID)
 	return buf
 }()
 
@@ -77,6 +80,7 @@ func parseAllowed(leftTags []string) []string {
 
 var _allowedGroup = map[string][]string{}
 var _structInfoTable = map[string]*structInfo{}
+var _structInfoTableByType = map[reflect.Type]*structInfo{}
 var _structInfoTableTLNames = map[string]*structInfo{}
 
 type unregisteredTL struct{}
@@ -102,6 +106,13 @@ func finalizeStructInfoReference(si *structInfo) {
 	} else if siType != si {
 		*siType = *si
 	}
+
+	siTypeByType := _structInfoTableByType[si.tp]
+	if siTypeByType == nil {
+		_structInfoTableByType[si.tp] = si
+	} else if siTypeByType != si {
+		*siTypeByType = *si
+	}
 	si.finalized = true
 }
 
@@ -114,9 +125,10 @@ func getStructInfoReference(t reflect.Type) *structInfo {
 		return rawStructInfo
 	}
 
-	si := _structInfoTable[t.String()]
+	si := _structInfoTableByType[t]
 	if si == nil {
 		si = &structInfo{tp: reflect.TypeOf(unregisteredTL{})}
+		_structInfoTableByType[t] = si
 		_structInfoTable[t.String()] = si
 	}
 	return si
@@ -183,6 +195,7 @@ func RegisterWithFabric(typ any, tl string, fab func() reflect.Value) uint32 {
 		binary.LittleEndian.PutUint32(b, id)
 
 		si.id = b
+		si.idNum = id
 		si.tlName = nameParts[0]
 	}
 	si.tp = t

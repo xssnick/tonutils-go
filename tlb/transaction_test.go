@@ -13,7 +13,7 @@ func TestTransaction_String(t *testing.T) {
 		t.Fatal(err)
 	}
 	var tx Transaction
-	err = LoadFromCell(&tx, txCell.BeginParse())
+	err = LoadFromCell(&tx, txCell.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestTransaction_Dump(t *testing.T) {
 		t.Fatal(err)
 	}
 	var tx Transaction
-	err = LoadFromCell(&tx, txCell.BeginParse())
+	err = LoadFromCell(&tx, txCell.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestTransaction_NoAction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	slc := txCell.BeginParse()
+	slc := txCell.MustBeginParse()
 	var tx Transaction
 	err = LoadFromCell(&tx, slc)
 	if err != nil {

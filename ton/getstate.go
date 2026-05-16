@@ -1,7 +1,6 @@
 package ton
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -68,21 +67,27 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			IsActive: true,
 		}
 
-		var shardHash []byte
+		var shardBlock *BlockIDExt
 		if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID &&
 			block.Workchain == address.MasterchainID {
 			if len(t.ShardProof) == 0 {
 				return nil, ErrNoProof
 			}
 
-			if t.Shard == nil || len(t.Shard.RootHash) != 32 {
+			if t.Shard == nil {
 				return nil, fmt.Errorf("shard block not passed")
 			}
 
-			shardHash = t.Shard.RootHash
+			shardBlock = t.Shard
 		}
 
-		shardAcc, balanceInfo, err := CheckAccountStateProof(addr, block, t.Proof, t.ShardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+		var shardAcc *tlb.ShardAccount
+		var balanceInfo *tlb.DepthBalanceInfo
+		if shardBlock != nil {
+			shardAcc, balanceInfo, err = CheckAccountStateProofForShard(addr, block, t.Proof, t.ShardProof, shardBlock, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+		} else {
+			shardAcc, balanceInfo, err = CheckAccountStateProof(addr, block, t.Proof, t.ShardProof, nil, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+		}
 		if errors.Is(err, ErrNoAddrInProof) && t.State == nil {
 			return &tlb.Account{
 				IsActive: false,
@@ -95,12 +100,12 @@ func (c *APIClient) GetAccount(ctx context.Context, block *BlockIDExt, addr *add
 			return nil, fmt.Errorf("state must be presented")
 		}
 
-		if !bytes.Equal(shardAcc.Account.Hash(0), t.State.Hash()) {
+		if shardAcc.Account.HashKey(0) != t.State.HashKey() {
 			return nil, fmt.Errorf("proof hash not match state account hash")
 		}
 
 		var st tlb.AccountState
-		if err = st.LoadFromCell(t.State.BeginParse()); err != nil {
+		if err = tlb.Parse(&st, t.State); err != nil {
 			return nil, fmt.Errorf("failed to load account state: %w", err)
 		}
 

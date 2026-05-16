@@ -1,0 +1,63 @@
+package stack
+
+import (
+	"fmt"
+	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/vm"
+)
+
+type OpPOP struct {
+	helpers.Prefixed
+	stackIndex uint8
+}
+
+func init() {
+	vm.List = append(vm.List, func() vm.OP { return POP(0) })
+}
+
+var popPrefixed = helpers.SinglePrefixed(helpers.UIntPrefix(0x3, 4))
+
+func POP(stackIndex uint8) *OpPOP {
+	return &OpPOP{
+		Prefixed:   popPrefixed,
+		stackIndex: stackIndex,
+	}
+}
+
+func (op *OpPOP) Deserialize(code *cell.Slice) error {
+	prefix, err := code.LoadUInt(4)
+	if err != nil {
+		return err
+	}
+
+	if prefix == 0x3 {
+		index, err := code.LoadUInt(4)
+		if err != nil {
+			return err
+		}
+		op.stackIndex = uint8(index)
+		return nil
+	}
+
+	return vm.ErrCorruptedOpcode
+}
+
+func (op *OpPOP) Serialize() *cell.Builder {
+	return helpers.Builder([]byte{0x30 | op.stackIndex})
+}
+
+func (op *OpPOP) SerializeText() string {
+	return fmt.Sprintf("s%d POP", op.stackIndex)
+}
+
+func (op *OpPOP) InstructionBits() int64 {
+	return 8
+}
+
+func (op *OpPOP) Interpret(state *vm.State) error {
+	if err := state.Stack.PopSwapAt(int(op.stackIndex)); err != nil {
+		return err
+	}
+	return nil
+}

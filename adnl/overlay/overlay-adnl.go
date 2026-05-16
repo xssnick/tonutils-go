@@ -25,13 +25,17 @@ const CertCheckResultTrusted CertCheckResult = 1
 const CertCheckResultNeedCheck CertCheckResult = 2
 
 type fecBroadcastStream struct {
-	decoder        *raptorq.Decoder
-	finishedAt     *time.Time
-	lastMessageAt  time.Time
-	lastCompleteAt time.Time
-	source         ed25519.PublicKey
-	trusted        bool
-	mx             sync.Mutex
+	decoder       *raptorq.Decoder
+	encoder       *raptorq.Encoder
+	parts         map[uint32][]byte
+	finishedAt    *time.Time
+	completedAt   *time.Time
+	lastMessageAt time.Time
+	source        ed25519.PublicKey
+	fec           rldp.FECRaptorQ
+	date          uint32
+	trusted       bool
+	mx            sync.Mutex
 }
 
 type ADNLOverlayWrapper struct {
@@ -163,6 +167,31 @@ func (a *ADNLOverlayWrapper) checkRules(keyId string, dataSize uint32, isFEC boo
 	return CertCheckResultNeedCheck
 }
 
+func broadcastFECSeqnoLimit(symbolsCount uint32) uint32 {
+	return symbolsCount*2 + 4
+}
+
+func (a *ADNLOverlayWrapper) cleanupBroadcastStreams(now time.Time) {
+	a.streamsMx.Lock()
+	if len(a.broadcastStreams) > 100 {
+		for sID, s := range a.broadcastStreams {
+			// remove streams that was finished more than 180 sec ago and stuck streams when it was no messages for 60 sec.
+			if s.lastMessageAt.Add(40*time.Second).Before(now) ||
+				(s.finishedAt != nil && s.finishedAt.Add(90*time.Second).Before(now)) {
+				delete(a.broadcastStreams, sID)
+			}
+		}
+	}
+	a.streamsMx.Unlock()
+}
+
+func (a *ADNLOverlayWrapper) sendFECControlMessage(msg tl.Serializable) error {
+	if err := a.ADNL.SendCustomMessage(context.Background(), msg); err != nil {
+		return fmt.Errorf("failed to send overlay fec control message: %w", err)
+	}
+	return nil
+}
+
 func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	broadcastHash, err := t.CalcID()
 	if err != nil {
@@ -174,32 +203,17 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	stream := a.broadcastStreams[id]
 	a.streamsMx.RUnlock()
 
-	partDataHash := sha256.Sum256(t.Data)
-
-	partHash, err := tl.Hash(&BroadcastFECPartID{
-		BroadcastHash: broadcastHash,
-		DataHash:      partDataHash[:],
-		Seqno:         t.Seqno,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to compute hash id of the part: %w", err)
-	}
-
-	toSign, err := tl.Serialize(&BroadcastToSign{
-		Hash: partHash,
-		Date: t.Date,
-	}, true)
-	if err != nil {
-		return fmt.Errorf("failed to serialize broadcast for sign check: %w", err)
-	}
-
 	sourceKey, ok := t.Source.(keys.PublicKeyED25519)
 	if !ok {
 		return fmt.Errorf("invalid signer key format")
 	}
 
-	if !ed25519.Verify(sourceKey.Key, toSign, t.Signature) {
-		return fmt.Errorf("invalid broadcast signature")
+	partHash, _, err := calcBroadcastFECPartData(broadcastHash, t.Data, t.Seqno)
+	if err != nil {
+		return err
+	}
+	if err = verifyBroadcastFECPartSignature(t.Source, partHash, t.Date, t.Signature); err != nil {
+		return err
 	}
 
 	if stream == nil {
@@ -210,6 +224,9 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 
 		if fec.DataSize != t.DataSize {
 			return fmt.Errorf("incorrect data size")
+		}
+		if t.Seqno >= broadcastFECSeqnoLimit(fec.SymbolsCount) {
+			return fmt.Errorf("too big seqno")
 		}
 
 		srcId, err := tl.Hash(t.Source)
@@ -274,8 +291,11 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 
 		stream = &fecBroadcastStream{
 			decoder:       dec,
+			parts:         map[uint32][]byte{},
 			lastMessageAt: time.Now(),
 			source:        sourceKey.Key,
+			fec:           fec,
+			date:          t.Date,
 			trusted:       checkRes == CertCheckResultTrusted,
 		}
 
@@ -287,78 +307,198 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			a.broadcastStreams[id] = stream
 		}
 		a.streamsMx.Unlock()
-	} else if !bytes.Equal(stream.source, sourceKey.Key) {
-		return fmt.Errorf("malformed source")
 	}
 
+	var (
+		decodedRes     any
+		decoded        bool
+		ackReceived    bool
+		ackCompleted   bool
+		cleanupStreams bool
+	)
+
 	stream.mx.Lock()
-	defer stream.mx.Unlock()
+	if !bytes.Equal(stream.source, sourceKey.Key) {
+		stream.mx.Unlock()
+		return fmt.Errorf("malformed source")
+	}
+	if t.Seqno >= broadcastFECSeqnoLimit(stream.fec.SymbolsCount) {
+		stream.mx.Unlock()
+		return fmt.Errorf("too big seqno")
+	}
 
 	if stream.finishedAt != nil {
-		// got packet for a finished stream, let them know that it is received
-		err := a.ADNL.SendCustomMessage(context.Background(), FECCompleted{
-			Hash: broadcastHash,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to send overlay fec received message: %w", err)
+		ackCompleted = true
+		stream.mx.Unlock()
+		if ackCompleted {
+			return a.sendFECControlMessage(FECCompleted{Hash: broadcastHash})
 		}
-
 		return nil
 	}
 
 	tm := time.Now()
 	stream.lastMessageAt = tm
 
+	if existing, ok := stream.parts[t.Seqno]; ok {
+		stream.mx.Unlock()
+		if !bytes.Equal(existing, t.Data) {
+			return fmt.Errorf("conflicting data for seqno %d", t.Seqno)
+		}
+		return nil
+	}
+	stream.parts[t.Seqno] = append([]byte(nil), t.Data...)
+
 	canTryDecode, err := stream.decoder.AddSymbol(t.Seqno, t.Data)
 	if err != nil {
+		delete(stream.parts, t.Seqno)
+		stream.mx.Unlock()
 		return fmt.Errorf("failed to add raptorq symbol %d: %w", t.Seqno, err)
 	}
 
 	if canTryDecode {
-		decoded, data, err := stream.decoder.Decode()
+		decodedNow, data, err := stream.decoder.Decode()
 		if err != nil {
+			stream.mx.Unlock()
 			return fmt.Errorf("failed to decode raptorq packet: %w", err)
 		}
 
 		// it may not be decoded due to unsolvable math system, it means we need more symbols
-		if decoded {
-			stream.finishedAt = &tm
-			stream.decoder = nil
-
-			a.streamsMx.Lock()
-			if len(a.broadcastStreams) > 100 {
-				for sID, s := range a.broadcastStreams {
-					// remove streams that was finished more than 180 sec ago and stuck streams when it was no messages for 60 sec.
-					if s.lastMessageAt.Add(40*time.Second).Before(tm) ||
-						(s.finishedAt != nil && s.finishedAt.Add(90*time.Second).Before(tm)) {
-						delete(a.broadcastStreams, sID)
-					}
-				}
-			}
-			a.streamsMx.Unlock()
-
+		if decodedNow {
 			dHash := sha256.Sum256(data)
 			if !bytes.Equal(dHash[:], t.DataHash) {
+				stream.mx.Unlock()
 				return fmt.Errorf("incorrect data hash")
+			}
+
+			enc, err := raptorq.NewRaptorQ(uint32(stream.fec.SymbolSize)).CreateEncoder(data)
+			if err != nil {
+				stream.mx.Unlock()
+				return fmt.Errorf("failed to init raptorq encoder: %w", err)
 			}
 
 			var res any
 			_, err = tl.Parse(&res, data, true)
 			if err != nil {
+				stream.mx.Unlock()
 				return fmt.Errorf("failed to parse decoded broadcast message: %w", err)
 			}
 
-			_ = a.ADNL.SendCustomMessage(context.Background(), FECCompleted{
-				Hash: broadcastHash,
-			})
-
-			if bHandler := a.broadcastHandler; bHandler != nil {
-				// handle result
-				if err = bHandler(res, stream.trusted); err != nil {
-					return fmt.Errorf("failed to process broadcast message: %w", err)
-				}
-			}
+			stream.finishedAt = &tm
+			stream.decoder = nil
+			stream.encoder = enc
+			stream.parts = nil
+			decodedRes = res
+			ackReceived = true
+			decoded = true
+			cleanupStreams = true
 		}
 	}
+
+	stream.mx.Unlock()
+
+	if cleanupStreams {
+		a.cleanupBroadcastStreams(tm)
+	}
+
+	if ackReceived {
+		if err = a.sendFECControlMessage(FECReceived{Hash: broadcastHash}); err != nil {
+			return err
+		}
+	}
+
+	if decoded {
+		if bHandler := a.broadcastHandler; bHandler != nil {
+			if err = bHandler(decodedRes, stream.trusted); err != nil {
+				return fmt.Errorf("failed to process broadcast message: %w", err)
+			}
+		}
+
+		ackCompleted = true
+		stream.mx.Lock()
+		if stream.completedAt == nil {
+			stream.completedAt = &tm
+		}
+		stream.mx.Unlock()
+	}
+
+	if ackCompleted {
+		if err = a.sendFECControlMessage(FECCompleted{Hash: broadcastHash}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) error {
+	if t.Seqno < 0 {
+		return fmt.Errorf("invalid seqno")
+	}
+
+	a.streamsMx.RLock()
+	stream := a.broadcastStreams[string(t.BroadcastHash)]
+	a.streamsMx.RUnlock()
+	if stream == nil {
+		return fmt.Errorf("short part of unknown broadcast")
+	}
+
+	sourceKey, ok := t.Source.(keys.PublicKeyED25519)
+	if !ok {
+		return fmt.Errorf("invalid signer key format")
+	}
+
+	var (
+		partData      []byte
+		date          uint32
+		ackCompleted  bool
+		knownPartOnly bool
+	)
+
+	stream.mx.Lock()
+	if !bytes.Equal(stream.source, sourceKey.Key) {
+		stream.mx.Unlock()
+		return fmt.Errorf("malformed source")
+	}
+
+	seqno := uint32(t.Seqno)
+	if seqno >= broadcastFECSeqnoLimit(stream.fec.SymbolsCount) {
+		stream.mx.Unlock()
+		return fmt.Errorf("too big seqno")
+	}
+
+	date = stream.date
+	stream.lastMessageAt = time.Now()
+
+	if knownPart, ok := stream.parts[seqno]; ok {
+		partData = append([]byte(nil), knownPart...)
+		knownPartOnly = true
+	} else if stream.encoder != nil {
+		partData = stream.encoder.GenSymbol(seqno)
+		if stream.parts != nil {
+			stream.parts[seqno] = append([]byte(nil), partData...)
+		}
+	} else {
+		stream.mx.Unlock()
+		return fmt.Errorf("short part of unfinished broadcast")
+	}
+
+	ackCompleted = stream.completedAt != nil
+	stream.mx.Unlock()
+
+	if !bytes.Equal(calcBroadcastFECPartDataHash(partData), t.PartDataHash) {
+		return fmt.Errorf("wrong part data hash")
+	}
+
+	if err := t.VerifySignature(date); err != nil {
+		return err
+	}
+
+	if ackCompleted {
+		return a.sendFECControlMessage(FECCompleted{Hash: t.BroadcastHash})
+	}
+
+	if knownPartOnly {
+		return nil
+	}
+
 	return nil
 }

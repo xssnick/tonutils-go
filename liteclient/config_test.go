@@ -2,10 +2,13 @@ package liteclient
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/adnl/address"
 )
 
 func TestGetConfigFromUrl(t *testing.T) {
@@ -80,6 +83,39 @@ func TestGetConfigFromUrl(t *testing.T) {
 				t.Errorf("GetConfigFromUrl() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDHTAddressUDP6Unmarshal(t *testing.T) {
+	var addr DHTAddress
+	err := addr.UnmarshalJSON([]byte(`{
+		"@type":"adnl.address.udp6",
+		"ip":"2001:db8::1",
+		"port":30303
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if addr.Type != "adnl.address.udp6" {
+		t.Fatalf("unexpected type %q", addr.Type)
+	}
+	if addr.Port != 30303 {
+		t.Fatalf("unexpected port %d", addr.Port)
+	}
+	if !addr.IPv6.Equal(net.ParseIP("2001:db8::1")) {
+		t.Fatalf("unexpected ipv6 %v", addr.IPv6)
+	}
+
+	adnlAddr, err := addr.ToADNLAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !address.IPValue(adnlAddr).Equal(net.ParseIP("2001:db8::1")) {
+		t.Fatalf("unexpected adnl ipv6 %v", address.IPValue(adnlAddr))
+	}
+	if address.PortValue(adnlAddr) != 30303 {
+		t.Fatalf("unexpected adnl port %d", address.PortValue(adnlAddr))
 	}
 }
 

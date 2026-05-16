@@ -99,16 +99,16 @@ func (c *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, acc
 							continue
 						}
 
-						if !bytes.Equal(ext.StateInit.Data.Hash(), extIn.StateInit.Data.Hash()) {
+						if ext.StateInit.Data.HashKey() != extIn.StateInit.Data.HashKey() {
 							continue
 						}
 
-						if !bytes.Equal(ext.StateInit.Code.Hash(), extIn.StateInit.Code.Hash()) {
+						if ext.StateInit.Code.HashKey() != extIn.StateInit.Code.HashKey() {
 							continue
 						}
 					}
 
-					if !bytes.Equal(extIn.Body.Hash(), ext.Body.Hash()) {
+					if extIn.Body.HashKey() != ext.Body.HashKey() {
 						continue
 					}
 

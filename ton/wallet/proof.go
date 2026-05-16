@@ -136,12 +136,13 @@ func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Addres
 			return nil, fmt.Errorf("failed to parse state init boc: %w", err)
 		}
 
-		if !bytes.Equal(siCell.Hash(), addr.Data()) {
+		stateInitHash := siCell.HashKey()
+		if !bytes.Equal(stateInitHash[:], addr.Data()) {
 			return nil, errors.New("state init hash does not match address")
 		}
 
 		var si tlb.StateInit
-		if err = tlb.LoadFromCell(&si, siCell.BeginParse()); err != nil {
+		if err = tlb.Parse(&si, siCell); err != nil {
 			return nil, fmt.Errorf("failed to parse state init: %w", err)
 		}
 
@@ -170,7 +171,8 @@ func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Addres
 		return nil, errors.New("account has no code or data")
 	}
 
-	ver, ok := walletVersionByCodeHash[string(code.Hash())]
+	codeHash := code.HashKey()
+	ver, ok := walletVersionByCodeHash[string(codeHash[:])]
 	if !ok {
 		return nil, errors.New("state init has unknown code")
 	}

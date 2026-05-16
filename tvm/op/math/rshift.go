@@ -1,0 +1,32 @@
+package math
+
+import (
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/vm"
+)
+
+func init() {
+	vm.List = append(vm.List, func() vm.OP { return RSHIFT() })
+}
+
+func RSHIFT() *helpers.SimpleOP {
+	return &helpers.SimpleOP{
+		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+			y, err := popIntRange(state, 0, 1023)
+			if err != nil {
+				return err
+			}
+			x, err := popIntFinite(state)
+			if err != nil {
+				return err
+			}
+
+			return state.Stack.PushInt(x.Rsh(x, uint(y.Uint64())))
+		},
+		Name:      "RSHIFT",
+		BitPrefix: helpers.BytesPrefix(0xAD),
+	}
+}

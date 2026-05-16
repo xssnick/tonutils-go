@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"net"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -98,6 +99,7 @@ func init() {
 	Register(TestTL{}, "root 222")
 	Register(TestManual{}, "manual val")
 	Register(AnyBig{}, "anybig")
+	Register(VectorLongAllocLimit{}, "")
 
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, RegisterWithFabric(Small{}, "small 123", func() reflect.Value {
@@ -179,6 +181,10 @@ type AnyBig struct {
 	Data [][]byte `tl:"vector bytes"`
 }
 
+type VectorLongAllocLimit struct {
+	Data []uint64 `tl:"vector long"`
+}
+
 func BenchmarkSerialize(b *testing.B) {
 	v := AnyBig{}
 	for i := 0; i < 100; i++ {
@@ -190,5 +196,45 @@ func BenchmarkSerialize(b *testing.B) {
 		if err != nil {
 			panic(err)
 		}
+	}
+}
+
+func TestParseVectorBytesRejectsShortBufferBeforeAllocation(t *testing.T) {
+	oldMaxVectorElements := MaxVectorElements
+	MaxVectorElements = 0
+	defer func() {
+		MaxVectorElements = oldMaxVectorElements
+	}()
+
+	data := make([]byte, 4+1<<20)
+	binary.LittleEndian.PutUint32(data, 1<<20)
+
+	var v AnyBig
+	_, err := Parse(&v, data, false)
+	if err == nil {
+		t.Fatal("expected short vector buffer error")
+	}
+	if !strings.Contains(err.Error(), "need at least 4194304 bytes") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseVectorAllocationLimit(t *testing.T) {
+	oldMaxVectorAllocationBytes := MaxVectorAllocationBytes
+	MaxVectorAllocationBytes = 16
+	defer func() {
+		MaxVectorAllocationBytes = oldMaxVectorAllocationBytes
+	}()
+
+	data := make([]byte, 4+3*8)
+	binary.LittleEndian.PutUint32(data, 3)
+
+	var v VectorLongAllocLimit
+	_, err := Parse(&v, data, false)
+	if err == nil {
+		t.Fatal("expected vector allocation limit error")
+	}
+	if !strings.Contains(err.Error(), "too big vector allocation") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

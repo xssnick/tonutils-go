@@ -102,7 +102,7 @@ type configCustomHighloadV3 struct {
 }
 
 func (c *configCustomHighloadV3) ParsePubKeyFromData(data *cell.Cell) (ed25519.PublicKey, error) {
-	key, err := data.BeginParse().LoadSlice(256)
+	key, err := data.MustBeginParse().LoadSlice(256)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse pubkey: %w", err)
 	}

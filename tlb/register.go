@@ -19,6 +19,7 @@ func register(name string, t reflect.Type) {
 	if !strings.HasPrefix(tag, "#") && !strings.HasPrefix(tag, "$") {
 		panic("invalid magic tag")
 	}
+	cachedMagic(tag)
 
 	registered[name] = t
 }

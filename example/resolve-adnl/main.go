@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"flag"
-	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/dht"
 	"log"
 	"time"
@@ -58,8 +58,12 @@ func main() {
 	log.Println("Resolved public key:", hex.EncodeToString(pubKey))
 	log.Println("Found addresses", len(addrList.Addresses))
 
-	for _, address := range addrList.Addresses {
-		addr := address.IP.String() + ":" + fmt.Sprint(address.Port)
+	for _, addrInfo := range addrList.Addresses {
+		addr, err := address.DialString(addrInfo)
+		if err != nil {
+			log.Println("Failed to format address:", err.Error())
+			continue
+		}
 		log.Println("Found address:", addr, "checking ping...")
 
 		peer, err := gw.RegisterClient(addr, pubKey)

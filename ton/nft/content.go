@@ -33,7 +33,11 @@ type ContentSemichain struct {
 }
 
 func ContentFromCell(c *cell.Cell) (ContentAny, error) {
-	return ContentFromSlice(c.BeginParse())
+	s, err := c.BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	return ContentFromSlice(s)
 }
 
 func ContentFromSlice(s *cell.Slice) (ContentAny, error) {
@@ -108,7 +112,11 @@ func getOnchainVal(dict *cell.Dictionary, key string) []byte {
 
 	val := dict.Get(cell.BeginCell().MustStoreSlice(h.Sum(nil), 256).EndCell())
 	if val != nil {
-		v, err := val.BeginParse().LoadRef()
+		loader, err := val.BeginParse()
+		if err != nil {
+			return nil
+		}
+		v, err := loader.LoadRef()
 		if err != nil {
 			return nil
 		}

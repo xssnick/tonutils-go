@@ -1,0 +1,19 @@
+package cell
+
+import "testing"
+
+func TestFromBOCMultiRootRejectsOverlongTerminatorOnlyTail(t *testing.T) {
+	raw := []byte{
+		0xB5, 0xEE, 0x9C, 0x72,
+		0x81, 0x01,
+		0x02, 0x01, 0x00, 0x06,
+		0x00,
+		0x03, 0x06,
+		0x41, 0x00, 0x01,
+		0x20, 0x01, 0x80,
+	}
+
+	if _, err := FromBOCMultiRoot(raw); err == nil {
+		t.Fatal("expected overlong terminator-only tail to fail")
+	}
+}

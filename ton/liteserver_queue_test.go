@@ -62,7 +62,7 @@ func TestGetOutMsgQueueSizes(t *testing.T) {
 		},
 	}
 
-	client := NewAPIClient(mock)
+	client := NewAPIClient(mock, ProofCheckPolicyUnsafe)
 	res, err := client.GetOutMsgQueueSizes(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestGetOutMsgQueueSizes_SpecificMsg(t *testing.T) {
 		},
 	}
 
-	client := NewAPIClient(mock)
+	client := NewAPIClient(mock, ProofCheckPolicyUnsafe)
 	_, err := client.GetOutMsgQueueSizes(context.Background(), &wc, &shard)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestGetBlockOutMsgQueueSize(t *testing.T) {
 		},
 	}
 
-	client := NewAPIClient(mock)
+	client := NewAPIClient(mock, ProofCheckPolicyUnsafe)
 	res, err := client.GetBlockOutMsgQueueSize(context.Background(), block)
 	if err != nil {
 		t.Fatal(err)
@@ -136,6 +136,30 @@ func TestGetBlockOutMsgQueueSize(t *testing.T) {
 
 	if res.Size != 1024 {
 		t.Errorf("expected size 1024, got %d", res.Size)
+	}
+}
+
+func TestGetBlockOutMsgQueueSizeRequestsProofByDefault(t *testing.T) {
+	block := &BlockIDExt{Workchain: 0, Shard: -9223372036854775808, SeqNo: 12345}
+
+	mock := &ValidationMock{
+		Response: LSError{Code: -400, Text: "stop after request validation"},
+		CheckQuery: func(payload tl.Serializable) error {
+			req, ok := payload.(GetBlockOutMsgQueueSize)
+			if !ok {
+				t.Fatalf("unexpected request type: %T", payload)
+			}
+			if req.Mode&1 == 0 || req.WantProof == nil {
+				t.Fatal("expected proof request")
+			}
+			return nil
+		},
+	}
+
+	client := NewAPIClient(mock)
+	_, err := client.GetBlockOutMsgQueueSize(context.Background(), block)
+	if err == nil {
+		t.Fatal("expected liteserver error")
 	}
 }
 
@@ -169,7 +193,7 @@ func TestGetDispatchQueueInfo(t *testing.T) {
 		},
 	}
 
-	client := NewAPIClient(mock)
+	client := NewAPIClient(mock, ProofCheckPolicyUnsafe)
 	res, err := client.GetDispatchQueueInfo(context.Background(), block, addr, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -192,7 +216,7 @@ func TestGetDispatchQueueMessages(t *testing.T) {
 					LT: 1000,
 					Metadata: TransactionMetadata{
 						Depth: 1,
-						Initiator: AccountId{
+						Initiator: AccountID{
 							Workchain: 0,
 							ID:        addr.Data(),
 						},
@@ -215,7 +239,7 @@ func TestGetDispatchQueueMessages(t *testing.T) {
 		},
 	}
 
-	client := NewAPIClient(mock)
+	client := NewAPIClient(mock, ProofCheckPolicyUnsafe)
 	// Using WithDispatchQueueMessagesBOC option
 	res, err := client.GetDispatchQueueMessages(context.Background(), block, addr, 500, 5, WithDispatchQueueMessagesBOC())
 	if err != nil {

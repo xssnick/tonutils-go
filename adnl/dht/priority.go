@@ -98,6 +98,19 @@ func (p *priorityList) Len() int {
 	return len(p.items)
 }
 
+func (p *priorityList) Items() []*dhtNode {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	items := make([]*dhtNode, 0, len(p.items))
+	for _, item := range p.items {
+		if item != nil && item.node != nil {
+			items = append(items, item.node)
+		}
+	}
+	return items
+}
+
 // MarkUsed sets or clears the used flag for a given node, adding it if absent.
 func (p *priorityList) MarkUsed(node *dhtNode, used bool) {
 	// Ensure it exists

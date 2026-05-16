@@ -3,13 +3,10 @@ package dht
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/liteclient"
-	"net"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -21,7 +18,10 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
-const queryTimeout = 3000 * time.Millisecond
+const (
+	queryTimeout           = 3000 * time.Millisecond
+	retryableQueryAttempts = 2
+)
 
 type ADNL interface {
 	Query(ctx context.Context, req, result tl.Serializable) error
@@ -32,14 +32,21 @@ type ADNL interface {
 type Gateway interface {
 	Close() error
 	GetID() []byte
+	GetPublicKey() ed25519.PublicKey
+	GetAddressList() address.List
 	RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error)
+	SetConnectionHandler(handler func(client adnl.Peer) error)
 }
 
 type Client struct {
-	knownNodes map[string]*dhtNode // unused, nodes are stored in buckets
-	buckets    [256]*Bucket
+	buckets [256]*Bucket
 
-	gateway Gateway
+	gateway     Gateway
+	selfID      []byte
+	networkID   int32
+	k           int
+	a           int
+	queryPrefix func() ([]byte, error)
 
 	globalCtx       context.Context
 	globalCtxCancel func()
@@ -69,68 +76,52 @@ func NewClientFromConfigUrl(ctx context.Context, gateway Gateway, cfgUrl string)
 }
 
 func NewClientFromConfig(gateway Gateway, cfg *liteclient.GlobalConfig) (*Client, error) {
-	var nodes []*Node
-	for _, node := range cfg.DHT.StaticNodes.Nodes {
-		key, err := base64.StdEncoding.DecodeString(node.ID.Key)
-		if err != nil {
-			continue
-		}
-
-		sign, err := base64.StdEncoding.DecodeString(node.Signature)
-		if err != nil {
-			continue
-		}
-
-		n := &Node{
-			ID: keys.PublicKeyED25519{
-				Key: key,
-			},
-			AddrList: &address.List{
-				Version:    int32(node.AddrList.Version),
-				ReinitDate: int32(node.AddrList.ReinitDate),
-				Priority:   int32(node.AddrList.Priority),
-				ExpireAt:   int32(node.AddrList.ExpireAt),
-			},
-			Version:   int32(node.Version),
-			Signature: sign,
-		}
-
-		for _, addr := range node.AddrList.Addrs {
-			ip := make(net.IP, 4)
-			ii := int32(addr.IP)
-			binary.BigEndian.PutUint32(ip, uint32(ii))
-			n.AddrList.Addresses = append(n.AddrList.Addresses, &address.UDP{
-				IP:   ip,
-				Port: int32(addr.Port),
-			})
-		}
-
-		nodes = append(nodes, n)
+	nodes, err := nodesFromConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 
-	return NewClient(gateway, nodes)
+	networkID := _UnknownNetworkID
+	if cfg.DHT.NetworkID != nil {
+		networkID = *cfg.DHT.NetworkID
+	}
+
+	k, a := normalizeKA(cfg.DHT.K, cfg.DHT.A)
+	return newClient(gateway, nodes, networkID, k, a)
 }
 
 func NewClient(gateway Gateway, nodes []*Node) (*Client, error) {
+	k, a := normalizeKA(0, 0)
+	return newClient(gateway, nodes, _UnknownNetworkID, k, a)
+}
+
+func newClient(gateway Gateway, nodes []*Node, networkID int32, k, a int) (*Client, error) {
 	globalCtx, cancel := context.WithCancel(context.Background())
 
 	buckets := [256]*Bucket{}
 	for i := 0; i < 256; i++ {
-		buckets[i] = newBucket(_K)
+		buckets[i] = newBucket(k)
 	}
 
 	c := &Client{
-		knownNodes:      map[string]*dhtNode{},
 		buckets:         buckets,
 		globalCtx:       globalCtx,
 		globalCtxCancel: cancel,
 		gateway:         gateway,
+		selfID:          gateway.GetID(),
+		networkID:       networkID,
+		k:               k,
+		a:               a,
 	}
 
 	for _, node := range nodes {
-		_, err := c.addNode(node)
+		_, err := c.addNodeWithStatus(node, true)
 		if err != nil {
-			Logger("failed to add DHT node", node.AddrList.Addresses[0].IP.String(), node.AddrList.Addresses[0].Port, " from config, err:", err.Error())
+			logAddr := "<unknown>"
+			if node != nil {
+				logAddr = describeNodeAddress(node.AddrList)
+			}
+			Logger("failed to add DHT node", logAddr, " from config, err:", err.Error())
 			continue
 		}
 	}
@@ -138,7 +129,27 @@ func NewClient(gateway Gateway, nodes []*Node) (*Client, error) {
 	return c, nil
 }
 
-const _K = 7
+const (
+	_defaultK = 10
+	_defaultA = 3
+	_maxK     = 10
+	_maxA     = 10
+)
+
+func normalizeKA(k, a int) (int, int) {
+	if k <= 0 {
+		k = _defaultK
+	} else if k > _maxK {
+		k = _maxK
+	}
+
+	if a <= 0 {
+		a = _defaultA
+	} else if a > _maxA {
+		a = _maxA
+	}
+	return k, a
+}
 
 func (c *Client) Close() {
 	c.globalCtxCancel()
@@ -146,6 +157,14 @@ func (c *Client) Close() {
 }
 
 func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
+	return c.addNodeWithStatus(node, false)
+}
+
+func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err error) {
+	if node == nil {
+		return nil, fmt.Errorf("nil node")
+	}
+
 	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
 		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
@@ -156,30 +175,42 @@ func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
 		return nil, err
 	}
 
-	affinity := affinity(kid, c.gateway.GetID())
+	affinity := affinity(kid, c.selfID)
+	if affinity >= uint(len(c.buckets)) {
+		return nil, fmt.Errorf("self node")
+	}
 	bucket := c.buckets[affinity]
 
-	if len(node.AddrList.Addresses) == 0 {
-		return nil, fmt.Errorf("no addresses to connect to")
-	} else if len(node.AddrList.Addresses) > 5 {
-		// max 5 addresses to check
-		node.AddrList.Addresses = node.AddrList.Addresses[:5]
+	var currentVersion int32
+	if existing := bucket.findNode(kid); existing != nil {
+		currentVersion = existing.version
+	}
+	if err := node.validate(currentVersion, c.networkID); err != nil {
+		return nil, err
 	}
 
-	// TODO: maybe use other addresses too
-	addr := node.AddrList.Addresses[0].IP.String() + ":" + fmt.Sprint(node.AddrList.Addresses[0].Port)
+	addresses := node.AddrList.Addresses
+	if len(addresses) > 5 {
+		// max 5 addresses to check
+		addresses = addresses[:5]
+	}
+
+	_, addr, err := firstDialAddress(addresses)
+	if err != nil {
+		return nil, err
+	}
 
 	if hf := bucket.findNode(kid); hf != nil {
-		if hf.addr == addr {
+		if hf.addr == addr && hf.version == node.Version {
 			return nil, fmt.Errorf("node already exists")
 		}
 		// updated address otherwise
 	}
 
-	kNode := c.initNode(kid, addr, pub.Key)
-	bucket.addNode(kNode)
+	kNode := c.initNode(kid, addr, pub.Key, node.Version)
+	kNode.node = cloneNode(node)
 
-	return kNode, nil
+	return bucket.addNode(kNode, setActive), nil
 }
 
 func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
@@ -243,10 +274,9 @@ func (c *Client) StoreAddress(
 	addresses address.List,
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
-	replicas int,
-) (replicasMade int, idKey []byte, err error) {
-	for i, udp := range addresses.Addresses {
-		if udp.IP.Equal(net.IPv4zero) {
+) (storedCount int, idKey []byte, err error) {
+	for i, addr := range addresses.Addresses {
+		if address.IsZero(addr) {
 			return 0, nil, fmt.Errorf("address %d is zero", i)
 		}
 	}
@@ -257,7 +287,7 @@ func (c *Client) StoreAddress(
 	}
 
 	id := keys.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
-	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey, replicas)
+	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey)
 }
 
 func (c *Client) StoreOverlayNodes(
@@ -265,14 +295,18 @@ func (c *Client) StoreOverlayNodes(
 	overlayKey []byte,
 	nodes *overlay.NodesList,
 	ttl time.Duration,
-	replicas int,
-) (replicasMade int, idKey []byte, err error) {
-	if len(nodes.List) == 0 {
+) (storedCount int, idKey []byte, err error) {
+	if nodes == nil || len(nodes.List) == 0 {
 		return 0, nil, fmt.Errorf("0 nodes in list")
 	}
 
-	for _, node := range nodes.List {
-		err := node.CheckSignature()
+	overlayID, err := tl.Hash(keys.PublicKeyOverlay{Key: overlayKey})
+	if err != nil {
+		return 0, nil, err
+	}
+
+	for i := range nodes.List {
+		err := checkOverlayNode(&nodes.List[i], overlayID, c.networkID)
 		if err != nil {
 			return 0, nil, fmt.Errorf("untrusted overlay node in list: %w", err)
 		}
@@ -284,7 +318,7 @@ func (c *Client) StoreOverlayNodes(
 	}
 
 	id := keys.PublicKeyOverlay{Key: overlayKey}
-	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil, replicas)
+	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil)
 }
 
 func (c *Client) Store(
@@ -296,11 +330,132 @@ func (c *Client) Store(
 	rule any,
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
-	_ int,
-) (_ int, idKey []byte, err error) {
-	idKey, err = tl.Hash(id)
+) (storedCount int, idKey []byte, err error) {
+	val, keyId, err := buildStoreValue(id, name, index, value, rule, ttl, ownerKey)
 	if err != nil {
 		return 0, nil, err
+	}
+	storedCount, err = c.storePreparedValue(ctx, &val)
+	return storedCount, keyId, err
+}
+
+func (c *Client) storePreparedValue(ctx context.Context, val *Value) (storedCount int, err error) {
+	if val == nil {
+		return 0, fmt.Errorf("nil value")
+	}
+
+	keyId, err := tl.Hash(val.KeyDescription.Key)
+	if err != nil {
+		return 0, err
+	}
+
+	nearest := c.collectNearestNodes(ctx, keyId)
+	if len(nearest) == 0 {
+		return 0, fmt.Errorf("no alive nodes found to store this key")
+	}
+
+	return c.storeValueToNodes(ctx, keyId, val, nearest)
+}
+
+func (c *Client) storeValueToNodes(ctx context.Context, keyId []byte, val *Value, nodes []*dhtNode) (storedCount int, err error) {
+	var wg sync.WaitGroup
+	var stored int32
+
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		wg.Add(1)
+
+		go func(n *dhtNode) {
+			defer wg.Done()
+
+			ctxStore, cancel := context.WithTimeout(ctx, queryTimeout)
+			defer cancel()
+
+			if err := n.storeValue(ctxStore, keyId, val); err == nil {
+				atomic.AddInt32(&stored, 1)
+			}
+		}(node)
+	}
+	wg.Wait()
+
+	if stored == 0 {
+		return 0, fmt.Errorf("no alive nodes found to store this key")
+	}
+
+	return int(stored), nil
+}
+
+func (c *Client) collectNearestNodes(ctx context.Context, keyId []byte) []*dhtNode {
+	attempts := map[string]int{}
+
+	final := newPriorityList(c.k, keyId)
+
+	for {
+		plist := c.buildPriorityList(keyId)
+
+		var wg sync.WaitGroup
+		var expansion int32
+		for {
+			node, _ := plist.Get()
+			if node == nil {
+				break
+			}
+
+			nodeID := string(node.adnlId)
+			if attempts[nodeID] >= retryableQueryAttempts {
+				continue
+			}
+			attempts[nodeID]++
+			attempt := attempts[nodeID]
+
+			wg.Add(1)
+			go func(n *dhtNode) {
+				defer wg.Done()
+
+				ctxQuery, cancel := context.WithTimeout(ctx, queryTimeout)
+				defer cancel()
+
+				nodes, err := n.findNodes(ctxQuery, keyId, int32(c.k))
+				if err != nil {
+					if errors.Is(err, context.DeadlineExceeded) && attempt < retryableQueryAttempts {
+						atomic.StoreInt32(&expansion, 1)
+					}
+					return
+				}
+
+				// add responsive nodes
+				final.Add(n)
+
+				for _, newN := range nodes {
+					if an, err := c.addNode(newN); err == nil && affinity(an.adnlId, keyId) >= uint(final.GetBestAffinity()) {
+						atomic.StoreInt32(&expansion, 1)
+					}
+				}
+			}(node)
+		}
+		wg.Wait()
+
+		if atomic.LoadInt32(&expansion) == 0 {
+			break
+		}
+	}
+	return final.Items()
+}
+
+func buildStoreValue(
+	id any,
+	name []byte,
+	index int32,
+	value []byte,
+	rule any,
+	ttl time.Duration,
+	ownerKey ed25519.PrivateKey,
+) (Value, []byte, error) {
+	idKey, err := tl.Hash(id)
+	if err != nil {
+		return Value{}, nil, err
 	}
 
 	val := Value{
@@ -321,96 +476,19 @@ func (c *Client) Store(
 	case UpdateRuleSignature:
 		val.KeyDescription.Signature, err = signTL(val.KeyDescription, ownerKey)
 		if err != nil {
-			return 0, nil, fmt.Errorf("failed to sign key description: %w", err)
+			return Value{}, nil, fmt.Errorf("failed to sign key description: %w", err)
 		}
 		val.Signature, err = signTL(val, ownerKey)
 		if err != nil {
-			return 0, nil, fmt.Errorf("failed to sign value: %w", err)
+			return Value{}, nil, fmt.Errorf("failed to sign value: %w", err)
 		}
 	}
 
 	keyId, err := tl.Hash(val.KeyDescription.Key)
 	if err != nil {
-		return 0, nil, err
+		return Value{}, nil, err
 	}
-
-	checked := map[string]bool{}
-
-	final := newPriorityList(_K, keyId)
-
-	for {
-		plist := c.buildPriorityList(keyId)
-
-		var wg sync.WaitGroup
-		var expansion int32
-		for {
-			node, _ := plist.Get()
-			if node == nil {
-				break
-			}
-
-			if _, ok := checked[string(node.adnlId)]; ok {
-				continue
-			}
-			checked[string(node.adnlId)] = true
-
-			wg.Add(1)
-			go func(n *dhtNode) {
-				defer wg.Done()
-
-				ctxQuery, cancel := context.WithTimeout(ctx, queryTimeout)
-				defer cancel()
-
-				nodes, err := n.findNodes(ctxQuery, keyId, _K)
-				if err != nil {
-					return
-				}
-
-				// add responsive nodes
-				final.Add(n)
-
-				for _, newN := range nodes {
-					if an, err := c.addNode(newN); err == nil && affinity(an.adnlId, keyId) >= uint(final.GetBestAffinity()) {
-						atomic.StoreInt32(&expansion, 1)
-					}
-				}
-			}(node)
-		}
-		wg.Wait()
-
-		if atomic.LoadInt32(&expansion) == 0 {
-			break
-		}
-	}
-
-	var wg sync.WaitGroup
-	var stored int32
-
-	for {
-		node, _ := final.Get()
-		if node == nil {
-			break
-		}
-		wg.Add(1)
-
-		go func(n *dhtNode) {
-			defer wg.Done()
-
-			ctxStore, cancel := context.WithTimeout(ctx, queryTimeout)
-			defer cancel()
-
-			if err := n.storeValue(ctxStore, keyId, &val); err == nil {
-				atomic.AddInt32(&stored, 1)
-			}
-		}(node)
-	}
-	wg.Wait()
-
-	if stored == 0 {
-		return 0, idKey, fmt.Errorf("no alive nodes found to store this key")
-	}
-
-	return int(stored), idKey, nil
+	return val, keyId, nil
 }
 
 func signTL(obj tl.Serializable, key ed25519.PrivateKey) ([]byte, error) {
@@ -445,8 +523,9 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	threadCtx, stopThreads := context.WithCancel(ctx)
 	defer stopThreads()
 
-	const threads = 3
+	threads := c.a
 	result := make(chan *foundResult, threads)
+	attempts := map[string]int{}
 
 	cond := sync.NewCond(&sync.Mutex{})
 	waitingThreads := 0
@@ -483,10 +562,22 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 			}
 			cond.L.Unlock()
 
+			nodeID := node.id()
+			cond.L.Lock()
+			attempts[nodeID]++
+			attempt := attempts[nodeID]
+			cond.L.Unlock()
+
 			findCtx, cancel := context.WithTimeout(threadCtx, queryTimeout)
-			val, err := node.findValue(findCtx, id, _K)
+			val, err := node.findValue(findCtx, id, int32(c.k))
 			cancel()
 			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && attempt < retryableQueryAttempts {
+					cond.L.Lock()
+					plist.MarkUsed(node, false)
+					cond.Broadcast()
+					cond.L.Unlock()
+				}
 				continue
 			}
 
@@ -510,6 +601,9 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 					}
 				}
 				if added {
+					cond.Broadcast()
+				} else if attempt < retryableQueryAttempts {
+					plist.MarkUsed(node, false)
 					cond.Broadcast()
 				}
 				cond.L.Unlock()
@@ -547,8 +641,8 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 }
 
 func (c *Client) buildPriorityList(id []byte) *priorityList {
-	plistGood := newPriorityList(_K+_K/2, id)
-	plistBad := newPriorityList(_K/2, id)
+	plistGood := newPriorityList(c.k+c.k/2, id)
+	plistBad := newPriorityList(c.k/2, id)
 
 	for i := 255; i >= 0; i-- {
 		bucket := c.buckets[i]

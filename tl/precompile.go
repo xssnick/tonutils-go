@@ -252,6 +252,7 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 
 type structInfo struct {
 	id              []byte
+	idNum           uint32
 	tp              reflect.Type
 	fabric          func() reflect.Value
 	fields          []*fieldInfo
@@ -301,7 +302,7 @@ func addressablePtr(val reflect.Value) (reflect.Value, error) {
 		return val, nil
 	case reflect.Struct:
 		if !val.CanAddr() {
-			si := _structInfoTable[val.Type().String()]
+			si := _structInfoTableByType[val.Type()]
 			if si == nil {
 				return reflect.Value{}, fmt.Errorf("tl type %s is not compilled", val.Type().String())
 			}
@@ -360,7 +361,7 @@ func serializeStruct(v reflect.Value, buf *bytes.Buffer, boxed bool, field *fiel
 		return err
 	}
 
-	si := _structInfoTable[rv.Type().Elem().String()]
+	si := _structInfoTableByType[rv.Type().Elem()]
 	if si == nil {
 		return fmt.Errorf("tl type %s is not compilled", rv.Type().String())
 	}
@@ -429,7 +430,7 @@ func Parse(v Serializable, data []byte, boxed bool) (_ []byte, err error) {
 	var info *structInfo
 	switch srcE.Kind() {
 	case reflect.Struct:
-		info = _structInfoTable[srcE.Type().String()]
+		info = _structInfoTableByType[srcE.Type()]
 		if info == nil {
 			return nil, fmt.Errorf("tl type %s is not compilled", srcE.Type().String())
 		}
@@ -469,7 +470,11 @@ func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte,
 	}
 
 	if boxed {
-		if !bytes.Equal(t.id, buf[:4]) {
+		if len(buf) < 4 {
+			return nil, fmt.Errorf("not enough bytes to parse boxed %s type id", t.tp.String())
+		}
+
+		if t.id == nil || binary.LittleEndian.Uint32(buf) != t.idNum {
 			return nil, fmt.Errorf("invalid TL type id %s, want %s for %s", hex.EncodeToString(buf[:4]), hex.EncodeToString(t.id), t.tp.String())
 		}
 		buf = buf[4:]
@@ -487,6 +492,37 @@ func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte,
 		return nil, fmt.Errorf("failed to parse %s type: %w", t.tp.String(), err)
 	}
 	return buf, nil
+}
+
+// MaxVectorElements limits vector element count accepted from untrusted TL input.
+// Set it to 0 or a negative value to disable the limit.
+var MaxVectorElements = 1 << 20
+
+// MaxVectorAllocationBytes limits memory allocated for vector slice storage.
+// Set it to 0 or a negative value to disable the limit.
+var MaxVectorAllocationBytes = 256 << 20
+
+func minVectorElementSize(si *structInfo) int {
+	if len(si.fields) != 1 {
+		return 0
+	}
+
+	field := si.fields[0]
+	if sz := serializedFixedSize(field); sz > 0 {
+		return sz
+	}
+
+	switch field.typ {
+	case _ExecuteTypeString, _ExecuteTypeBytes, _ExecuteTypeSingleCell, _ExecuteTypeSliceCell, _ExecuteTypeVector:
+		return 4
+	case _ExecuteTypeStruct:
+		flags := field.meta.(uint32)
+		if flags&_StructFlagsBytes != 0 || flags&_StructFlagsBoxed != 0 || flags&_StructFlagsInterface != 0 {
+			return 4
+		}
+	}
+
+	return 0
 }
 
 func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) ([]byte, error) {
@@ -516,11 +552,11 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			*(*uint32)(ptr) = flags
 			buf = buf[4:]
 		case _ExecuteTypeString:
-			var bts []byte
-			if bts, buf, err = FromBytes(buf); err != nil {
+			var s string
+			if s, buf, err = fromBytesString(buf); err != nil {
 				return nil, fmt.Errorf("failed to parse string field %s: %w", field.String(), err)
 			}
-			*(*string)(ptr) = string(bts)
+			*(*string)(ptr) = s
 		case _ExecuteTypeBytes:
 			var bts []byte
 			if bts, buf, err = FromBytes(buf); err != nil {
@@ -578,14 +614,12 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			}
 
 			bts := make([]byte, 16)
-			for i := 0; i < 16; i++ {
-				bts[i] = buf[15-i]
-			}
+			copy(bts, buf[:16])
 			*(*[]byte)(ptr) = bts
 			buf = buf[16:]
 		case _ExecuteTypeSingleCell:
 			var bts []byte
-			if bts, buf, err = FromBytes(buf); err != nil {
+			if bts, buf, err = fromBytesNoCopy(buf); err != nil {
 				return nil, fmt.Errorf("failed to parse single cell bytes, field %s: %w", field.String(), err)
 			}
 
@@ -601,7 +635,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			*(**cell.Cell)(ptr) = c
 		case _ExecuteTypeSliceCell:
 			var bts []byte
-			if bts, buf, err = FromBytes(buf); err != nil {
+			if bts, buf, err = fromBytesNoCopy(buf); err != nil {
 				return nil, fmt.Errorf("failed to parse slice cell bytes, field %s: %w", field.String(), err)
 			}
 
@@ -630,7 +664,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 
 			source := buf
 			if asBytes {
-				if source, buf, err = FromBytes(buf); err != nil {
+				if source, buf, err = fromBytesNoCopy(buf); err != nil {
 					return nil, fmt.Errorf("failed to parse struct bytes, field %s: %w", field.String(), err)
 				}
 			}
@@ -744,18 +778,41 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			if len(buf) < 4 {
 				return nil, fmt.Errorf("not enough bytes to parse bool field %s", field.String())
 			}
-			*(*bool)(ptr) = bytes.Equal(buf[:4], _BoolTrue)
+			*(*bool)(ptr) = binary.LittleEndian.Uint32(buf) == _BoolTrueID
 			buf = buf[4:]
 		case _ExecuteTypeVector:
 			if len(buf) < 4 {
 				return nil, fmt.Errorf("not enough bytes to parse vector field %s", field.String())
 			}
-			ln := int(binary.LittleEndian.Uint32(buf))
+			lnRaw := binary.LittleEndian.Uint32(buf)
 			buf = buf[4:]
+			if MaxVectorElements > 0 && uint64(lnRaw) > uint64(MaxVectorElements) {
+				return nil, fmt.Errorf("too many elements in vector field %s: %d > %d", field.String(), lnRaw, MaxVectorElements)
+			}
+
+			minElemSize := minVectorElementSize(field.structInfo)
+			if minElemSize > 0 && uint64(minElemSize)*uint64(lnRaw) > uint64(len(buf)) {
+				return nil, fmt.Errorf("not enough bytes to parse vector field %s with %d elements, need at least %d bytes", field.String(), lnRaw, uint64(minElemSize)*uint64(lnRaw))
+			}
+			if minElemSize == 0 && uint64(lnRaw) > uint64(len(buf)) {
+				return nil, fmt.Errorf("not enough bytes to parse vector field %s with %d elements", field.String(), lnRaw)
+			}
+			if uint64(lnRaw) > uint64(1)<<(strconv.IntSize-1)-1 {
+				return nil, fmt.Errorf("too many elements in vector field %s: %d overflows int", field.String(), lnRaw)
+			}
+
+			sz := field.structInfo.tp.Elem().Size()
+			if MaxVectorAllocationBytes > 0 && sz > 0 {
+				allocBytes := uint64(lnRaw) * uint64(sz)
+				if allocBytes > uint64(MaxVectorAllocationBytes) {
+					return nil, fmt.Errorf("too big vector allocation in field %s: %d > %d bytes", field.String(), allocBytes, MaxVectorAllocationBytes)
+				}
+			}
+
+			ln := int(lnRaw)
 
 			sl := reflect.MakeSlice(field.structInfo.tp, ln, ln)
 
-			sz := field.structInfo.tp.Elem().Size()
 			ePtr := unsafe.Pointer(sl.Pointer())
 
 			for x := 0; x < ln; x++ {
@@ -780,6 +837,76 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 	return buf, nil
 }
 
+func serializedFixedSize(field *fieldInfo) int {
+	switch field.typ {
+	case _ExecuteTypeFlags, _ExecuteTypeInt, _ExecuteTypeBool, _ExecuteTypeInt32Bytes, _ExecuteTypeIP4:
+		return 4
+	case _ExecuteTypeLong, _ExecuteTypeInt64Bytes:
+		return 8
+	case _ExecuteTypeInt128, _ExecuteTypeIP6:
+		return 16
+	case _ExecuteTypeInt256:
+		return 32
+	default:
+		return 0
+	}
+}
+
+func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *reflect.SliceHeader, elemSize uintptr) error {
+	if hdr.Len == 0 || len(field.structInfo.fields) != 1 {
+		return nil
+	}
+
+	elemField := field.structInfo.fields[0]
+	total := 4
+	if sz := serializedFixedSize(elemField); sz > 0 {
+		total += hdr.Len * sz
+		if total > buf.Available() {
+			buf.Grow(total)
+		}
+		return nil
+	}
+
+	ePtr := unsafe.Pointer(hdr.Data)
+	switch elemField.typ {
+	case _ExecuteTypeString:
+		if hdr.Len < 8 && len(*(*string)(ePtr)) < 4096 {
+			return nil
+		}
+
+		for x := 0; x < hdr.Len; x++ {
+			s := *(*string)(ePtr)
+			sz, err := tlBytesEncodedSize(len(s))
+			if err != nil {
+				return err
+			}
+			total += sz
+			ePtr = unsafe.Add(ePtr, elemSize)
+		}
+	case _ExecuteTypeBytes:
+		if hdr.Len < 8 && len(*(*[]byte)(ePtr)) < 4096 {
+			return nil
+		}
+
+		for x := 0; x < hdr.Len; x++ {
+			b := *(*[]byte)(ePtr)
+			sz, err := tlBytesEncodedSize(len(b))
+			if err != nil {
+				return err
+			}
+			total += sz
+			ePtr = unsafe.Add(ePtr, elemSize)
+		}
+	default:
+		return nil
+	}
+
+	if total > buf.Available() {
+		buf.Grow(total)
+	}
+	return nil
+}
+
 func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) error {
 	if !si.finalized {
 		return fmt.Errorf("TL struct %s is not registered", si.tp.String())
@@ -799,12 +926,9 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 		switch t := field.typ; t {
 		case _ExecuteTypeFlags:
 			flags = *(*uint32)(ptr)
-
-			tmp := make([]byte, 4)
-			binary.LittleEndian.PutUint32(tmp, flags)
-			buf.Write(tmp)
+			writeUint32(buf, flags)
 		case _ExecuteTypeString:
-			if err := ToBytesToBuffer(buf, []byte(*(*string)(ptr))); err != nil {
+			if err := toStringToBuffer(buf, *(*string)(ptr)); err != nil {
 				return fmt.Errorf("failed to serialize string field %s: %w", field.String(), err)
 			}
 		case _ExecuteTypeBytes:
@@ -815,7 +939,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			if bts := *(*[]byte)(ptr); len(bts) == 32 {
 				buf.Write(*(*[]byte)(ptr))
 			} else if len(bts) == 0 {
-				buf.Write(make([]byte, 32))
+				writeZeros(buf, 32)
 			} else {
 				return fmt.Errorf("invalid int256 size %d in field %s", len(bts), field.String())
 			}
@@ -823,7 +947,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			if bts := *(*[]byte)(ptr); len(bts) == 16 {
 				buf.Write(*(*[]byte)(ptr))
 			} else if len(bts) == 0 {
-				buf.Write(make([]byte, 16))
+				writeZeros(buf, 16)
 			} else {
 				return fmt.Errorf("invalid int128 size %d in field %s", len(bts), field.String())
 			}
@@ -831,7 +955,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			if bts := *(*[]byte)(ptr); len(bts) == 8 {
 				buf.Write(*(*[]byte)(ptr))
 			} else if len(bts) == 0 {
-				buf.Write(make([]byte, 8))
+				writeZeros(buf, 8)
 			} else {
 				return fmt.Errorf("invalid int64 size %d in field %s", len(bts), field.String())
 			}
@@ -839,7 +963,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			if bts := *(*[]byte)(ptr); len(bts) == 4 {
 				buf.Write(*(*[]byte)(ptr))
 			} else if len(bts) == 0 {
-				buf.Write(make([]byte, 4))
+				writeZeros(buf, 4)
 			} else {
 				return fmt.Errorf("invalid int32 size %d in field %s", len(bts), field.String())
 			}
@@ -856,7 +980,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 					buf.WriteByte(ipBytes[i])
 				}
 			} else if len(ipBytes) == 0 {
-				buf.Write(make([]byte, 4))
+				writeZeros(buf, 4)
 			} else {
 				return fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
 			}
@@ -871,7 +995,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			if len(ipBytes) == net.IPv6len {
 				buf.Write(ipBytes)
 			} else if len(ipBytes) == 0 {
-				buf.Write(make([]byte, 16))
+				writeZeros(buf, 16)
 			} else {
 				return fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
 			}
@@ -915,7 +1039,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			if asBytes {
 				remapFrom = buf.Len()
 				// bytes slice max length reserve
-				buf.Write(make([]byte, 4))
+				writeZeros(buf, 4)
 			}
 
 			var serialized bool
@@ -943,7 +1067,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 					}
 
 					ptr = e.UnsafePointer()
-					info = _structInfoTable[e.Elem().Type().String()]
+					info = _structInfoTableByType[e.Elem().Type()]
 					if info == nil {
 						return fmt.Errorf("unregistered TL type %s for interface in field %s", e.Elem().Type().String(), field.String())
 					}
@@ -968,43 +1092,41 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 				RemapBufferAsSlice(buf, remapFrom)
 			}
 		case _ExecuteTypeInt:
-			tmp := make([]byte, 4)
-
+			var val uint32
 			switch field.meta.(reflect.Kind) {
 			case reflect.Uint64, reflect.Int64:
-				binary.LittleEndian.PutUint32(tmp, uint32(*(*uint64)(ptr)))
+				val = uint32(*(*uint64)(ptr))
 			case reflect.Int32, reflect.Uint32:
-				binary.LittleEndian.PutUint32(tmp, *(*uint32)(ptr))
+				val = *(*uint32)(ptr)
 			case reflect.Uint16, reflect.Int16:
-				binary.LittleEndian.PutUint32(tmp, uint32(*(*uint16)(ptr)))
+				val = uint32(*(*uint16)(ptr))
 			case reflect.Uint8, reflect.Int8:
-				binary.LittleEndian.PutUint32(tmp, uint32(*(*uint8)(ptr)))
+				val = uint32(*(*uint8)(ptr))
 			case reflect.Int, reflect.Uint:
-				binary.LittleEndian.PutUint32(tmp, uint32(*(*uint)(ptr)))
+				val = uint32(*(*uint)(ptr))
 			default:
 				return fmt.Errorf("unsupported number type: %s", field.String())
 			}
 
-			buf.Write(tmp)
+			writeUint32(buf, val)
 		case _ExecuteTypeLong:
-			tmp := make([]byte, 8)
-
+			var val uint64
 			switch field.meta.(reflect.Kind) {
 			case reflect.Uint64, reflect.Int64:
-				binary.LittleEndian.PutUint64(tmp, *(*uint64)(ptr))
+				val = *(*uint64)(ptr)
 			case reflect.Int32, reflect.Uint32:
-				binary.LittleEndian.PutUint64(tmp, uint64(*(*uint32)(ptr)))
+				val = uint64(*(*uint32)(ptr))
 			case reflect.Uint16, reflect.Int16:
-				binary.LittleEndian.PutUint64(tmp, uint64(*(*uint16)(ptr)))
+				val = uint64(*(*uint16)(ptr))
 			case reflect.Uint8, reflect.Int8:
-				binary.LittleEndian.PutUint64(tmp, uint64(*(*uint8)(ptr)))
+				val = uint64(*(*uint8)(ptr))
 			case reflect.Int, reflect.Uint:
-				binary.LittleEndian.PutUint64(tmp, uint64(*(*uint)(ptr)))
+				val = uint64(*(*uint)(ptr))
 			default:
 				return fmt.Errorf("unsupported number type: %s", field.String())
 			}
 
-			buf.Write(tmp)
+			writeUint64(buf, val)
 		case _ExecuteTypeBool:
 			if *(*bool)(ptr) {
 				buf.Write(_BoolTrue)
@@ -1015,11 +1137,12 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			hdr := (*reflect.SliceHeader)(ptr)
 			ln := hdr.Len
 
-			tmp := make([]byte, 4)
-			binary.LittleEndian.PutUint32(tmp, uint32(ln))
-			buf.Write(tmp)
-
 			sz := field.structInfo.tp.Elem().Size()
+			if err := growSerializeVector(buf, field, hdr, sz); err != nil {
+				return fmt.Errorf("failed to reserve vector field %s: %w", field.String(), err)
+			}
+			writeUint32(buf, uint32(ln))
+
 			ePtr := unsafe.Pointer(hdr.Data)
 
 			for x := 0; x < ln; x++ {

@@ -19,7 +19,7 @@ func TestAccountState_LoadFromCell(t *testing.T) {
 	}
 
 	var as AccountState
-	err = as.LoadFromCell(acc.BeginParse())
+	err = as.LoadFromCell(acc.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 		return
@@ -78,12 +78,12 @@ func TestAccountStatus_LoadFromCell(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			testAcc := cell.BeginCell()
-			err := testAcc.StoreInt(int64(test.status), 2)
+			err := testAcc.StoreUInt(uint64(test.status), 2)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var accStatus AccountStatus
-			err = accStatus.LoadFromCell(testAcc.EndCell().BeginParse())
+			err = accStatus.LoadFromCell(testAcc.EndCell().MustBeginParse())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -147,7 +147,7 @@ func TestAccountStatus_ToCell(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			res, err := _cell.BeginParse().LoadUInt(2)
+			res, err := _cell.MustBeginParse().LoadUInt(2)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,7 +176,7 @@ func TestAccountStorage_LoadFromCell(t *testing.T) {
 		b.StoreSlice(sl, 256)
 
 		var tStor AccountStorage
-		err = tStor.LoadFromCell(b.EndCell().BeginParse())
+		err = tStor.LoadFromCell(b.EndCell().MustBeginParse())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -201,7 +201,7 @@ func TestAccountStorage_LoadFromCell(t *testing.T) {
 		b.StoreSlice(sl, 256)
 
 		var tStor AccountStorage
-		err = tStor.LoadFromCell(b.EndCell().BeginParse())
+		err = tStor.LoadFromCell(b.EndCell().MustBeginParse())
 		if err != nil {
 			t.Fatal(err)
 		}

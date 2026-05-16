@@ -239,6 +239,7 @@ func (m *MultiNetManager) CloseConnection(gate *Gateway) {
 	defer m.mx.Unlock()
 
 	delete(m.src, gate)
+	delete(m.processors, string(gate.GetID()))
 	if len(m.src) == 0 {
 		m.globalCtxCancel()
 		_ = m.conn.Close()
