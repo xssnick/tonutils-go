@@ -28,6 +28,10 @@ type testNestedArrayTags struct {
 	Refs   []testArrayPayload `tlb:"array ^"`
 }
 
+type benchUint8Array struct {
+	Values []uint8 `tlb:"array ## 8"`
+}
+
 func TestArrayTagRoundTrip(t *testing.T) {
 	scalars := testScalarArrayTags{
 		Numbers: []uint16{1, 2, 65535},
@@ -265,4 +269,40 @@ func TestArrayTagRejectsMalformedData(t *testing.T) {
 			t.Fatal("expected chunk with missing next ref to fail")
 		}
 	})
+}
+
+func BenchmarkArrayTagLoadUint8_200(b *testing.B) {
+	values := make([]uint8, 200)
+	for i := range values {
+		values[i] = uint8(i)
+	}
+
+	c, err := ToCell(benchUint8Array{Values: values})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var dst benchUint8Array
+		if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkArrayTagStoreUint8_200(b *testing.B) {
+	values := make([]uint8, 200)
+	for i := range values {
+		values[i] = uint8(i)
+	}
+	src := benchUint8Array{Values: values}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := ToCell(src); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

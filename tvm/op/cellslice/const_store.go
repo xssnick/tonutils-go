@@ -97,7 +97,7 @@ func (op *OpSTREFCONST) Interpret(state *vm.State) error {
 			return vmerr.Error(vmerr.CodeCellOverflow)
 		}
 	}
-	return state.Stack.PushBuilder(builder)
+	return state.Stack.PushOwnedBuilder(builder)
 }
 
 type OpSTSLICECONST struct {
@@ -190,7 +190,7 @@ func (op *OpSTSLICECONST) Interpret(state *vm.State) error {
 	if err = builder.StoreBuilderUncheckedDepth(op.value.ToBuilder()); err != nil {
 		return vmerr.Error(vmerr.CodeCellOverflow)
 	}
-	return state.Stack.PushBuilder(builder)
+	return state.Stack.PushOwnedBuilder(builder)
 }
 
 func ENDCST() *helpers.SimpleOP {
@@ -214,7 +214,7 @@ func ENDCST() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			return state.Stack.PushBuilder(dst)
+			return state.Stack.PushOwnedBuilder(dst)
 		},
 		Name:      "ENDCST",
 		BitPrefix: helpers.BytesPrefix(0xCD),

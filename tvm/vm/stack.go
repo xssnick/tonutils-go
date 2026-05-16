@@ -74,16 +74,48 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		return t
 	}
 
-	vals := make([]any, t.Len())
-	for i := range vals {
+	var vals []any
+	for i := 0; i < t.Len(); i++ {
 		val, err := t.RawIndex(i)
 		if err != nil {
 			panic(err)
 		}
-		vals[i] = bindValueTrace(val, trace)
+		bound := bindValueTrace(val, trace)
+		if vals == nil && sameStackValue(bound, val) {
+			continue
+		}
+		if vals == nil {
+			vals = make([]any, t.Len())
+			copyTuplePrefix(vals, t, i)
+		}
+		vals[i] = bound
 	}
-	bound := tuple.NewTupleValue(vals...)
+	if vals == nil {
+		return t.WithBindingID(trace)
+	}
+	bound := tuple.NewTupleOwned(vals)
 	return bound.WithBindingID(trace)
+}
+
+func sameStackValue(a, b any) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	ta := reflect.TypeOf(a)
+	if ta != reflect.TypeOf(b) || !ta.Comparable() {
+		return false
+	}
+	return a == b
+}
+
+func copyTuplePrefix(dst []any, src tuple.Tuple, end int) {
+	for i := 0; i < end; i++ {
+		val, err := src.RawIndex(i)
+		if err != nil {
+			panic(err)
+		}
+		dst[i] = val
+	}
 }
 
 func bindValueTrace(val any, trace *cell.Trace) any {
@@ -93,9 +125,17 @@ func bindValueTrace(val any, trace *cell.Trace) any {
 
 	switch x := val.(type) {
 	case *cell.Slice:
-		return x.Copy().SetTrace(cell.CombineTraces(x.Trace(), trace))
+		combined := cell.CombineTraces(x.Trace(), trace)
+		if combined == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(combined)
 	case *cell.Builder:
-		return x.Copy().SetTrace(cell.CombineTraces(x.Trace(), trace))
+		combined := cell.CombineTraces(x.Trace(), trace)
+		if combined == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(combined)
 	case tuple.Tuple:
 		return bindTupleTrace(x, trace)
 	default:
@@ -108,15 +148,26 @@ func unbindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		return t
 	}
 
-	vals := make([]any, t.Len())
-	for i := range vals {
+	var vals []any
+	for i := 0; i < t.Len(); i++ {
 		val, err := t.RawIndex(i)
 		if err != nil {
 			panic(err)
 		}
-		vals[i] = unbindValueTrace(val, trace)
+		unbound := unbindValueTrace(val, trace)
+		if vals == nil && sameStackValue(unbound, val) {
+			continue
+		}
+		if vals == nil {
+			vals = make([]any, t.Len())
+			copyTuplePrefix(vals, t, i)
+		}
+		vals[i] = unbound
 	}
-	return tuple.NewTupleValue(vals...)
+	if vals == nil {
+		return t.WithBindingID(nil)
+	}
+	return tuple.NewTupleOwned(vals)
 }
 
 func unbindValueTrace(val any, trace *cell.Trace) any {
@@ -128,9 +179,17 @@ func unbindValueTrace(val any, trace *cell.Trace) any {
 	case *cell.Cell:
 		return x.WithTrace(x.Trace().WithoutTrace(trace))
 	case *cell.Slice:
-		return x.Copy().SetTrace(x.Trace().WithoutTrace(trace))
+		next := x.Trace().WithoutTrace(trace)
+		if next == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(next)
 	case *cell.Builder:
-		return x.Copy().SetTrace(x.Trace().WithoutTrace(trace))
+		next := x.Trace().WithoutTrace(trace)
+		if next == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(next)
 	case tuple.Tuple:
 		return unbindTupleTrace(x, trace)
 	default:
@@ -250,8 +309,42 @@ func (s *Stack) PushBuilder(val *cell.Builder) error {
 	return s.PushAny(val)
 }
 
+// PushOwnedBuilder pushes a builder the caller no longer shares elsewhere.
+// Unlike PushBuilder, it binds stack trace in-place and skips a defensive copy.
+func (s *Stack) PushOwnedBuilder(val *cell.Builder) error {
+	if len(s.elems) >= maxStackDepth {
+		return vmerr.Error(vmerr.CodeStackOverflow)
+	}
+	if val == nil {
+		s.elems = append(s.elems, nil)
+		return nil
+	}
+	if s.trace != nil {
+		val.SetTrace(cell.CombineTraces(val.Trace(), s.trace))
+	}
+	s.elems = append(s.elems, val)
+	return nil
+}
+
 func (s *Stack) PushSlice(val *cell.Slice) error {
 	return s.PushAny(val)
+}
+
+// PushOwnedSlice pushes a slice the caller no longer shares elsewhere.
+// Unlike PushSlice, it binds stack trace in-place and skips a defensive copy.
+func (s *Stack) PushOwnedSlice(val *cell.Slice) error {
+	if len(s.elems) >= maxStackDepth {
+		return vmerr.Error(vmerr.CodeStackOverflow)
+	}
+	if val == nil {
+		s.elems = append(s.elems, nil)
+		return nil
+	}
+	if s.trace != nil {
+		val.SetTrace(cell.CombineTraces(val.Trace(), s.trace))
+	}
+	s.elems = append(s.elems, val)
+	return nil
 }
 
 func (s *Stack) PushCell(val *cell.Cell) error {
@@ -633,7 +726,7 @@ func (s *Stack) String() string {
 			val = x.WithoutTrace().EndCell().Dump()
 		case *cell.Cell:
 			typ = "cell"
-			val = x.Dump()
+			val = x.WithoutTrace().Dump()
 		}
 
 		res += fmt.Sprintf("s%d = %s [%s]\n", i, val, typ)

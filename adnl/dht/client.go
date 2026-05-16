@@ -388,10 +388,6 @@ func (c *Client) storeValueToNodes(ctx context.Context, keyId []byte, val *Value
 }
 
 func (c *Client) collectNearestNodes(ctx context.Context, keyId []byte) []*dhtNode {
-	if c == nil {
-		return nil
-	}
-
 	attempts := map[string]int{}
 
 	final := newPriorityList(c.k, keyId)

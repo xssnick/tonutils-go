@@ -22,7 +22,7 @@ func JMPXDATA() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeTypeCheck, "current code is nil")
 			}
 
-			if err := state.Stack.PushSlice(state.CurrentCode.Copy()); err != nil {
+			if err := state.Stack.PushOwnedSlice(state.CurrentCode.Copy()); err != nil {
 				return err
 			}
 

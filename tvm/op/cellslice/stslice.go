@@ -25,7 +25,7 @@ func STSLICE() *helpers.SimpleOP {
 			if err := b0.StoreBuilderUncheckedDepth(s1.ToBuilder()); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(b0)
+			return state.Stack.PushOwnedBuilder(b0)
 		},
 		Name:      "STSLICE",
 		BitPrefix: helpers.BytesPrefix(0xCE),

@@ -13,7 +13,7 @@ func init() {
 func NEWC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			return state.Stack.PushBuilder(cell.BeginCell().SetTrace(state.Cells.Trace()))
+			return state.Stack.PushOwnedBuilder(cell.BeginCell().SetTrace(state.Cells.Trace()))
 		},
 		Name:      "NEWC",
 		BitPrefix: helpers.BytesPrefix(0xC8),

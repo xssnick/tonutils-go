@@ -3,7 +3,6 @@ package cell
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 )
 
 var ErrLazyLoaderNotSet = errors.New("lazy pruned ref loader is not set")
@@ -100,17 +99,14 @@ func createLazyPrunedRef(ref LazyRef, loader LazyCellLoader) (*Cell, error) {
 		return nil, errors.New("invalid lazy ref depths count")
 	}
 
-	prunedMask := actualMask
-	prunedLevel := actualLevel
-	if prunedLevel == 0 {
-		prunedMask = LevelMask{Mask: oneLevelMask(1)}
-		prunedLevel = 1
+	storedMask := actualMask
+	if actualLevel > 0 {
+		storedMask = actualMask.Apply(actualLevel - 1)
 	}
-	storedMask := prunedMask.Apply(prunedLevel - 1)
 	storedCount := storedMask.getHashesCount()
 	data := make([]byte, 2+storedCount*(hashSize+depthSize))
 	data[0] = byte(PrunedCellType)
-	data[1] = prunedMask.Mask
+	data[1] = actualMask.Mask
 
 	for i := 0; i < storedCount; i++ {
 		copy(data[2+i*hashSize:], ref.Hashes[i*hashSize:(i+1)*hashSize])
@@ -126,7 +122,7 @@ func createLazyPrunedRef(ref LazyRef, loader LazyCellLoader) (*Cell, error) {
 	}
 	c.setSpecial(true)
 	c.setLazy(true)
-	c.setLevelMask(prunedMask)
+	c.setLevelMask(actualMask)
 	c.setHashAt(0, ref.Hashes[(hashesCount-1)*hashSize:hashesCount*hashSize])
 	c.setDepthAt(0, ref.Depths[hashesCount-1])
 	if loader != nil {
@@ -152,14 +148,15 @@ func setTrustedHashesDepths(c *Cell, levelMask LevelMask, hashes []byte, depths 
 }
 
 func loadLazyPrunedRef(c *Cell) (*Cell, error) {
+	return loadLazyPrunedRefWithTrace(c, c.Trace())
+}
+
+func loadLazyPrunedRefWithTrace(c *Cell, trace *Trace) (*Cell, error) {
 	meta := c.meta
 	if meta == nil || meta.lazyLoader == nil {
 		return nil, ErrLazyLoaderNotSet
 	}
-	trace := c.Trace()
 	raw := c.rawCell()
-	wantHash := c.HashKey()
-	wantDepth := c.Depth()
 
 	loaded, err := meta.lazyLoader(raw.HashKey())
 	if err != nil {
@@ -175,14 +172,103 @@ func loadLazyPrunedRef(c *Cell) (*Cell, error) {
 	} else {
 		out = loaded.Virtualize(meta.viewLevel - 1)
 	}
-	if gotHash := out.HashKey(); gotHash != wantHash {
-		return nil, fmt.Errorf("lazy cell hash mismatch: got %x, want %x", gotHash[:], wantHash[:])
-	}
-	if gotDepth := out.Depth(); gotDepth != wantDepth {
-		return nil, fmt.Errorf("lazy cell depth mismatch: got %d, want %d", gotDepth, wantDepth)
-	}
 	if trace != nil {
 		out = out.WithTrace(trace)
+	}
+	return out, nil
+}
+
+// PrewarmRecursive returns a new cell tree with lazy references loaded up to depth.
+// depth limits how many reference edges are traversed; 0 means no limit.
+// References beyond the depth boundary are kept as boundary refs, so lazy tips
+// stay lazy while all cells above them are materialized.
+func (c *Cell) PrewarmRecursive(depth int) (*Cell, error) {
+	if depth < 0 {
+		return nil, ErrNegative
+	}
+
+	return c.prewarmRecursive(depth, depth == 0, map[prewarmRecursiveKey]*Cell{})
+}
+
+type prewarmRecursiveKey struct {
+	hash      Hash
+	depth     int
+	unlimited bool
+}
+
+func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecursiveKey]*Cell) (*Cell, error) {
+	if c == nil {
+		return nil, nil
+	}
+
+	loaded, err := c.load()
+	if err != nil {
+		return nil, err
+	}
+
+	hash := loaded.HashKey()
+	key := prewarmRecursiveKey{hash: hash, depth: depth, unlimited: unlimited}
+	if unlimited {
+		key.depth = 0
+	}
+	if cached := cache[key]; cached != nil {
+		return cached, nil
+	}
+
+	refView := newCellRefView(loaded)
+	refCnt := loaded.refsCount()
+	refs := make([]*Cell, refCnt)
+	if !unlimited && depth == 0 {
+		for i := range refs {
+			refs[i], err = refView.boundaryRef(i)
+			if err != nil {
+				return nil, err
+			}
+		}
+		out, err := materializeLoadedCellWithRefs(loaded, refs)
+		if err != nil {
+			return nil, err
+		}
+		cache[key] = out
+		return out, nil
+	}
+
+	nextDepth := depth
+	if !unlimited {
+		nextDepth--
+	}
+	for i := range refs {
+		ref, err := refView.boundaryRef(i)
+		if err != nil {
+			return nil, err
+		}
+		refs[i], err = ref.prewarmRecursive(nextDepth, unlimited, cache)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out, err := materializeLoadedCellWithRefs(loaded, refs)
+	if err != nil {
+		return nil, err
+	}
+	cache[key] = out
+	return out, nil
+}
+
+func materializeLoadedCellWithRefs(c *Cell, refs []*Cell) (*Cell, error) {
+	out := c.copy()
+	out.setRefs(refs)
+	out.setLazy(false)
+	out.clearVirtualization()
+	if out.meta != nil {
+		out.meta.lazyLoader = nil
+		out.clearMetaIfEmpty()
+	}
+	if err := out.refreshLevelMaskForRefs(); err != nil {
+		return nil, err
+	}
+	if err := out.calculateHashes(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

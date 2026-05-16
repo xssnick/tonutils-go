@@ -88,10 +88,10 @@ func LDREFRTOS() *helpers.SimpleOP {
 				return err
 			}
 
-			if err = state.Stack.PushSlice(s0); err != nil {
+			if err = state.Stack.PushOwnedSlice(s0); err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(child)
+			return state.Stack.PushOwnedSlice(child)
 		},
 		Name:      "LDREFRTOS",
 		BitPrefix: helpers.BytesPrefix(0xD5),
@@ -116,7 +116,7 @@ func SDCUTFIRST() *helpers.SimpleOP {
 			if !cs.OnlyFirst(uint(bits), 0) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SDCUTFIRST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x20),
@@ -141,7 +141,7 @@ func SDCUTLAST() *helpers.SimpleOP {
 			if !cs.OnlyLast(uint(bits), 0) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SDCUTLAST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x22),
@@ -166,7 +166,7 @@ func SDSKIPLAST() *helpers.SimpleOP {
 			if !cs.SkipLast(uint(bits), 0) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SDSKIPLAST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x23),
@@ -195,7 +195,7 @@ func SDSUBSTR() *helpers.SimpleOP {
 			if !cs.SkipFirst(uint(offset), 0) || !cs.OnlyFirst(uint(bits), 0) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SDSUBSTR",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x24),
@@ -224,7 +224,7 @@ func SCUTFIRST() *helpers.SimpleOP {
 			if !cs.OnlyFirst(uint(bits), int(refs)) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SCUTFIRST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x30),
@@ -253,7 +253,7 @@ func SSKIPFIRST() *helpers.SimpleOP {
 			if !cs.SkipFirst(uint(bits), int(refs)) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SSKIPFIRST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x31),
@@ -282,7 +282,7 @@ func SCUTLAST() *helpers.SimpleOP {
 			if !cs.OnlyLast(uint(bits), int(refs)) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SCUTLAST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x32),
@@ -311,7 +311,7 @@ func SSKIPLAST() *helpers.SimpleOP {
 			if !cs.SkipLast(uint(bits), int(refs)) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SSKIPLAST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x33),
@@ -348,7 +348,7 @@ func SUBSLICE() *helpers.SimpleOP {
 			if !cs.SkipFirst(uint(l1), int(r1)) || !cs.OnlyFirst(uint(l2), int(r2)) {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      "SUBSLICE",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x34),
@@ -385,7 +385,7 @@ func splitOp(quiet bool) *helpers.SimpleOP {
 				if !quiet {
 					return vmerr.Error(vmerr.CodeCellUnderflow)
 				}
-				if err = state.Stack.PushSlice(cs); err != nil {
+				if err = state.Stack.PushOwnedSlice(cs); err != nil {
 					return err
 				}
 				return state.Stack.PushBool(false)
@@ -399,10 +399,10 @@ func splitOp(quiet bool) *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 
-			if err = state.Stack.PushSlice(first); err != nil {
+			if err = state.Stack.PushOwnedSlice(first); err != nil {
 				return err
 			}
-			if err = state.Stack.PushSlice(cs); err != nil {
+			if err = state.Stack.PushOwnedSlice(cs); err != nil {
 				return err
 			}
 			if quiet {
@@ -429,7 +429,7 @@ func XCTOS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			if err = state.Stack.PushSlice(sl); err != nil {
+			if err = state.Stack.PushOwnedSlice(sl); err != nil {
 				return err
 			}
 			return state.Stack.PushBool(special)
@@ -454,7 +454,7 @@ func xloadOp(quiet bool) *helpers.SimpleOP {
 				return err
 			}
 
-			resolved, err := state.ResolveXLoadCell(cl)
+			resolved, err := state.ResolveLibraryCell(cl)
 			if err != nil {
 				if quiet {
 					return state.Stack.PushBool(false)
@@ -747,7 +747,7 @@ func ldSameOp(name string, prefix helpers.BitPrefix, fixed *bool) *helpers.Simpl
 			if err = pushSmallInt(state, int64(count)); err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(cs)
+			return state.Stack.PushOwnedSlice(cs)
 		},
 		Name:      name,
 		BitPrefix: prefix,

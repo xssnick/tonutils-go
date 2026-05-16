@@ -102,7 +102,7 @@ func STBREF() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(dst)
+			return state.Stack.PushOwnedBuilder(dst)
 		},
 		Name:      "STBREF",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x11),
@@ -130,7 +130,7 @@ func STBREFR() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(dst)
+			return state.Stack.PushOwnedBuilder(dst)
 		},
 		Name:      "STBREFR",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x15),
@@ -154,7 +154,7 @@ func STREFR() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(cl); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(dst)
+			return state.Stack.PushOwnedBuilder(dst)
 		},
 		Name:      "STREFR",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x14),
@@ -176,7 +176,7 @@ func STREFQ() *helpers.SimpleOP {
 				if err = state.Stack.PushCell(cl); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
 				return pushStoreQuietStatus(state, true)
@@ -184,7 +184,7 @@ func STREFQ() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(cl); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -206,10 +206,10 @@ func STBREFQ() *helpers.SimpleOP {
 				return err
 			}
 			if !dst.CanExtendBy(0, 1) {
-				if err = state.Stack.PushBuilder(src); err != nil {
+				if err = state.Stack.PushOwnedBuilder(src); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
 				return pushStoreQuietStatus(state, true)
@@ -221,7 +221,7 @@ func STBREFQ() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -243,10 +243,10 @@ func STSLICEQ() *helpers.SimpleOP {
 				return err
 			}
 			if !dst.CanExtendBy(sl.BitsLeft(), uint(sl.RefsNum())) {
-				if err = state.Stack.PushSlice(sl); err != nil {
+				if err = state.Stack.PushOwnedSlice(sl); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
 				return pushStoreQuietStatus(state, true)
@@ -254,7 +254,7 @@ func STSLICEQ() *helpers.SimpleOP {
 			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -276,10 +276,10 @@ func STBQ() *helpers.SimpleOP {
 				return err
 			}
 			if !dst.CanExtendBy(src.BitsUsed(), uint(src.RefsUsed())) {
-				if err = state.Stack.PushBuilder(src); err != nil {
+				if err = state.Stack.PushOwnedBuilder(src); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
 				return pushStoreQuietStatus(state, true)
@@ -287,7 +287,7 @@ func STBQ() *helpers.SimpleOP {
 			if err = dst.StoreBuilderUncheckedDepth(src); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -314,7 +314,7 @@ func STSLICER() *helpers.SimpleOP {
 			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(dst)
+			return state.Stack.PushOwnedBuilder(dst)
 		},
 		Name:      "STSLICER",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x16),
@@ -338,7 +338,7 @@ func STBR() *helpers.SimpleOP {
 			if err = dst.StoreBuilderUncheckedDepth(src); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(dst)
+			return state.Stack.PushOwnedBuilder(dst)
 		},
 		Name:      "STBR",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x17),
@@ -357,10 +357,10 @@ func STBREFRQ() *helpers.SimpleOP {
 				return err
 			}
 			if !dst.CanExtendBy(0, 1) {
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(src); err != nil {
+				if err = state.Stack.PushOwnedBuilder(src); err != nil {
 					return err
 				}
 				return pushStoreQuietStatus(state, true)
@@ -372,7 +372,7 @@ func STBREFRQ() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(srcCell); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -394,7 +394,7 @@ func STREFRQ() *helpers.SimpleOP {
 				return err
 			}
 			if !dst.CanExtendBy(0, 1) {
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
 				if err = state.Stack.PushCell(cl); err != nil {
@@ -405,7 +405,7 @@ func STREFRQ() *helpers.SimpleOP {
 			if err = dst.StoreRefUncheckedDepth(cl); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -427,10 +427,10 @@ func STBRQ() *helpers.SimpleOP {
 				return err
 			}
 			if !dst.CanExtendBy(src.BitsUsed(), uint(src.RefsUsed())) {
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(src); err != nil {
+				if err = state.Stack.PushOwnedBuilder(src); err != nil {
 					return err
 				}
 				return pushStoreQuietStatus(state, true)
@@ -438,7 +438,7 @@ func STBRQ() *helpers.SimpleOP {
 			if err = dst.StoreBuilderUncheckedDepth(src); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -460,10 +460,10 @@ func STSLICERQ() *helpers.SimpleOP {
 				return err
 			}
 			if !dst.CanExtendBy(sl.BitsLeft(), uint(sl.RefsNum())) {
-				if err = state.Stack.PushBuilder(dst); err != nil {
+				if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 					return err
 				}
-				if err = state.Stack.PushSlice(sl); err != nil {
+				if err = state.Stack.PushOwnedSlice(sl); err != nil {
 					return err
 				}
 				return pushStoreQuietStatus(state, true)
@@ -471,7 +471,7 @@ func STSLICERQ() *helpers.SimpleOP {
 			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
 				return err
 			}
-			if err = state.Stack.PushBuilder(dst); err != nil {
+			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
 				return err
 			}
 			return pushStoreQuietStatus(state, false)
@@ -712,7 +712,7 @@ func sameStoreOp(name string, prefix helpers.BitPrefix, fixed *bool) *helpers.Si
 			if err = builder.StoreSameBit(bit, uint(bits)); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(builder)
+			return state.Stack.PushOwnedBuilder(builder)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -748,7 +748,7 @@ func BTOS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(s)
+			return state.Stack.PushOwnedSlice(s)
 		},
 		Name:      "BTOS",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x50),

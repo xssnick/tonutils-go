@@ -4,12 +4,19 @@ import "fmt"
 
 func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 	refs := builder.rawRefs()
+	var data []byte
+	if usedBytes := builder.usedBytes(); usedBytes > 0 {
+		data = make([]byte, usedBytes)
+		copy(data, builder.data[:usedBytes])
+	}
+
 	c := &Cell{
 		bitsSz: uint16(builder.bitsSz),
-		data:   append([]byte{}, builder.dataSlice()...),
+		data:   data,
 	}
 	c.setSpecial(special)
-	c.setRefs(refs)
+	copy(c.refs[:], refs)
+	c.setRefsCount(len(refs))
 	if err := validateCellRefDepthLimit(refs); err != nil {
 		return nil, err
 	}

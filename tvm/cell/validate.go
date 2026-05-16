@@ -43,6 +43,13 @@ func validateCell(c *Cell, loadRefs bool) error {
 			return fmt.Errorf("pruned branch level mask mismatch")
 		}
 		level := c.getLevelMask().GetLevel()
+		if level == 0 && c.IsLazy() {
+			expectedBits := (2 + hashSize + depthSize) * 8
+			if int(c.bitsSz) != expectedBits {
+				return fmt.Errorf("not enough data for a pruned branch special cell")
+			}
+			return nil
+		}
 		if level > _DataCellMaxLevel || level == 0 {
 			return fmt.Errorf("pruned branch has an invalid level")
 		}

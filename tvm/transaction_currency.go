@@ -31,8 +31,42 @@ func transactionBigOrZero(v *big.Int) *big.Int {
 	return new(big.Int).Set(v)
 }
 
-func transactionCollectUsage(root *cell.Cell) transactionUsage {
+func transactionCollectUsage(root *cell.Cell) (transactionUsage, error) {
 	return newTransactionUsageCollector().addCell(root, false)
+}
+
+func transactionLoadedCell(root *cell.Cell) (*cell.Cell, error) {
+	if root == nil {
+		return nil, nil
+	}
+
+	sl, err := root.BeginParseWithoutTrace()
+	if err != nil {
+		return nil, err
+	}
+	return sl.BaseCell(), nil
+}
+
+func transactionLoadedCellRefs(root *cell.Cell) (*cell.Cell, []*cell.Cell, error) {
+	if root == nil {
+		return nil, nil, nil
+	}
+
+	sl, err := root.BeginParseWithoutTrace()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	loaded := sl.BaseCell()
+	refs := make([]*cell.Cell, sl.RefsNum())
+	for i := range refs {
+		ref, err := sl.LoadRefCell()
+		if err != nil {
+			return nil, nil, err
+		}
+		refs[i] = ref
+	}
+	return loaded, refs, nil
 }
 
 type transactionUsageCollector struct {
@@ -43,13 +77,18 @@ func newTransactionUsageCollector() *transactionUsageCollector {
 	return &transactionUsageCollector{seen: map[cell.Hash]struct{}{}}
 }
 
-func (c *transactionUsageCollector) addCell(root *cell.Cell, skipRoot bool) transactionUsage {
+func (c *transactionUsageCollector) addCell(root *cell.Cell, skipRoot bool) (transactionUsage, error) {
 	if root == nil {
-		return transactionUsage{}
+		return transactionUsage{}, nil
 	}
-	key := root.HashKey()
+
+	loaded, refs, err := transactionLoadedCellRefs(root)
+	if err != nil {
+		return transactionUsage{}, err
+	}
+	key := loaded.HashKey()
 	if _, ok := c.seen[key]; ok {
-		return transactionUsage{}
+		return transactionUsage{}, nil
 	}
 	c.seen[key] = struct{}{}
 
@@ -57,14 +96,18 @@ func (c *transactionUsageCollector) addCell(root *cell.Cell, skipRoot bool) tran
 	if !skipRoot {
 		res = transactionUsage{
 			cells: 1,
-			bits:  uint64(root.BitsSize()),
+			bits:  uint64(loaded.BitsSize()),
 		}
 	}
 
-	for i := 0; i < int(root.RefsNum()); i++ {
-		res = transactionAddUsage(res, c.addCell(root.MustPeekRef(i), false))
+	for _, ref := range refs {
+		usage, err := c.addCell(ref, false)
+		if err != nil {
+			return transactionUsage{}, err
+		}
+		res = transactionAddUsage(res, usage)
 	}
-	return res
+	return res, nil
 }
 
 func transactionAddUsage(a, b transactionUsage) transactionUsage {

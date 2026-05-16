@@ -274,12 +274,11 @@ func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg Message
 		messageInMsgParams(cfg.InMsgParams),
 	}
 
-	normalizedValues := make([]any, len(values))
 	for i, val := range values {
-		normalizedValues[i] = normalizeMessageTupleValue(val)
+		values[i] = normalizeMessageTupleValue(val)
 	}
 
-	inner := tuple.NewTupleValue(normalizedValues...)
+	inner := tuple.NewTupleOwned(values)
 	topLen := 1
 	for idx := range cfg.Globals {
 		if idx <= 0 {
@@ -290,14 +289,12 @@ func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg Message
 		}
 	}
 
-	top := tuple.NewTupleSized(topLen)
-	top.Set(0, inner)
+	top := make([]any, topLen)
+	top[0] = inner
 	for idx, val := range cfg.Globals {
-		if err = top.Set(idx, normalizeMessageTupleValue(val)); err != nil {
-			return tuple.Tuple{}, err
-		}
+		top[idx] = normalizeMessageTupleValue(val)
 	}
-	return top, nil
+	return tuple.NewTupleOwned(top), nil
 }
 
 func buildInternalMessageForEmulation(addr *address.Address, body *cell.Cell, amount uint64) (*cell.Cell, error) {
@@ -421,6 +418,8 @@ func messageTupleMaybeInt(v *big.Int) any {
 
 func normalizeMessageTupleValue(val any) any {
 	switch v := val.(type) {
+	case big.Int:
+		return new(big.Int).Set(&v)
 	case *big.Int:
 		if v == nil {
 			return nil
@@ -462,5 +461,5 @@ func cloneMessageTuple(value tuple.Tuple) tuple.Tuple {
 		}
 		items[i] = normalizeMessageTupleValue(item)
 	}
-	return tuple.NewTupleValue(items...)
+	return tuple.NewTupleOwned(items)
 }

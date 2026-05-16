@@ -883,3 +883,50 @@ func TestSendMsgAndTailStorage(t *testing.T) {
 		t.Fatalf("unexpected SENDMSG action tag: %x / %v", tag, err)
 	}
 }
+
+func TestSendMsgFeeOnlyMovesInlineBodyWhenRewrittenRootOverflows(t *testing.T) {
+	myAddr := address.NewAddress(0, 0, bytes.Repeat([]byte{0x33}, 32))
+	body := cell.BeginCell().MustStoreSlice(bytes.Repeat([]byte{0xAB}, 50), 400).EndCell()
+	msgCell, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		Bounce:      true,
+		Bounced:     false,
+		SrcAddr:     address.NewAddressNone(),
+		DstAddr:     myAddr,
+		Amount:      tlb.FromNanoTONU(100),
+		IHRFee:      tlb.FromNanoTONU(0),
+		FwdFee:      tlb.FromNanoTONU(0),
+		CreatedLT:   1,
+		CreatedAt:   2,
+		Body:        body,
+	})
+	if err != nil {
+		t.Fatalf("ToCell failed: %v", err)
+	}
+
+	stat := newStorageStat(10, nil)
+	if !addMessageTailStorage(stat, msgCell, 0) {
+		t.Fatalf("unexpected tail storage stats: %+v", stat)
+	}
+	if stat.cells != 0 || stat.bits != 0 {
+		t.Fatalf("message body should be inline before SENDMSG rewrite, got %+v", stat)
+	}
+
+	st := makeSendMsgState(t, myAddr)
+	if err = st.Stack.PushCell(msgCell); err != nil {
+		t.Fatalf("PushCell failed: %v", err)
+	}
+	if err = st.Stack.PushInt(big.NewInt(1024)); err != nil {
+		t.Fatalf("PushInt failed: %v", err)
+	}
+	if err = SENDMSG().Interpret(st); err != nil {
+		t.Fatalf("SENDMSG(no-send) failed: %v", err)
+	}
+	fee, err := st.Stack.PopIntFinite()
+	if err != nil {
+		t.Fatalf("PopIntFinite failed: %v", err)
+	}
+	if want := big.NewInt(502); fee.Cmp(want) != 0 {
+		t.Fatalf("unexpected SENDMSG fee: want %v, got %v", want, fee)
+	}
+}

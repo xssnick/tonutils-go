@@ -28,7 +28,7 @@ func pushCurrentCode(state *vm.State) error {
 	if state.CurrentCode == nil {
 		return vmerr.Error(vmerr.CodeTypeCheck, "current code is nil")
 	}
-	return state.Stack.PushSlice(state.CurrentCode.Copy())
+	return state.Stack.PushOwnedSlice(state.CurrentCode.Copy())
 }
 
 func checkStackDepth(state *vm.State, depth int) error {

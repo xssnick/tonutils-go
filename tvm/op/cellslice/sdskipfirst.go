@@ -31,7 +31,7 @@ func SDSKIPFIRST() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 
-			return state.Stack.PushSlice(s1)
+			return state.Stack.PushOwnedSlice(s1)
 		},
 		Name:      "SDSKIPFIRST",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x21),

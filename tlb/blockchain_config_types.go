@@ -81,6 +81,10 @@ func init() {
 	Register(NewConsensusConfigSimplexV2{})
 	Register(SizeLimitsConfigV1{})
 	Register(SizeLimitsConfigV2{})
+	Register(WorkchainDescrV1{})
+	Register(WorkchainDescrV2{})
+	Register(WorkchainFormatBasic{})
+	Register(WorkchainFormatExtended{})
 }
 
 type ConfigParamAddress struct {
@@ -137,6 +141,49 @@ type ConfigVotingSetup struct {
 
 type WorkchainsConfig struct {
 	Workchains *cell.Dictionary `tlb:"dict 32"`
+}
+
+type WorkchainDescr struct {
+	Descr any `tlb:"[WorkchainDescrV1,WorkchainDescrV2]"`
+}
+
+type WorkchainDescrV1 struct {
+	_                    Magic `tlb:"#a6"`
+	WorkchainDescrFields `tlb:"."`
+}
+
+type WorkchainDescrV2 struct {
+	_                    Magic `tlb:"#a7"`
+	WorkchainDescrFields `tlb:"."`
+}
+
+type WorkchainDescrFields struct {
+	EnabledSince      uint32 `tlb:"## 32"`
+	ActualMinSplit    uint8  `tlb:"## 8"`
+	MinSplit          uint8  `tlb:"## 8"`
+	MaxSplit          uint8  `tlb:"## 8"`
+	Basic             bool   `tlb:"bool"`
+	Active            bool   `tlb:"bool"`
+	AcceptMsgs        bool   `tlb:"bool"`
+	Flags             uint16 `tlb:"## 13"`
+	ZeroStateRootHash []byte `tlb:"bits 256"`
+	ZeroStateFileHash []byte `tlb:"bits 256"`
+	Version           uint32 `tlb:"## 32"`
+	Format            any    `tlb:"[WorkchainFormatBasic,WorkchainFormatExtended]"`
+}
+
+type WorkchainFormatBasic struct {
+	_         Magic  `tlb:"#1"`
+	VMVersion int32  `tlb:"## 32"`
+	VMMode    uint64 `tlb:"## 64"`
+}
+
+type WorkchainFormatExtended struct {
+	_               Magic  `tlb:"#0"`
+	MinAddrLen      uint16 `tlb:"## 12"`
+	MaxAddrLen      uint16 `tlb:"## 12"`
+	AddrLenStep     uint16 `tlb:"## 12"`
+	WorkchainTypeID uint32 `tlb:"## 32"`
 }
 
 type ComplaintPricing struct {

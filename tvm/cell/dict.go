@@ -172,7 +172,7 @@ func (d *Dictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetM
 		return false, fmt.Errorf("failed to load key: %w", err)
 	}
 
-	newRoot, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
+	newRoot, _, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
 	if err != nil {
 		return false, fmt.Errorf("failed to set value in dict, err: %w", err)
 	}
@@ -182,79 +182,80 @@ func (d *Dictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetM
 	return changed, nil
 }
 
-func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode) (*Cell, bool, error) {
+func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode) (*Cell, *Slice, bool, error) {
 	if branch == nil {
 		if mode == DictSetModeReplace {
-			return nil, false, nil
+			return nil, nil, false, nil
 		}
 		leaf, err := d.storeLeaf(pfx, value, keyOffset)
-		return leaf, err == nil, err
+		return leaf, nil, err == nil, err
 	}
 
 	node, err := parseFixedDictNode(branch, keyOffset)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if err = node.rejectSpecial("dict"); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 
 	bitsMatches, isNewRight, _, err := matchBuilderLabel(node.label, node.labelLen, pfx)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to match key prefix: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
 
 	if bitsMatches == node.labelLen {
 		if pfx.BitsLeft() == 0 {
 			if mode == DictSetModeAdd {
-				return node.cell, false, nil
+				return node.cell, node.loader, false, nil
 			}
 			leaf, err := d.storeLeaf(node.label.ToSlice(), value, keyOffset)
-			return leaf, err == nil, err
+			return leaf, node.loader, err == nil, err
 		}
 
 		refIdx := int(pfx.MustLoadUInt(1))
 		ref, err := node.ref(refIdx)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to load %d ref: %w", refIdx, err)
+			return nil, nil, false, fmt.Errorf("failed to load %d ref: %w", refIdx, err)
 		}
 
-		ref, changed, err := d.set(ref, pfx, keyOffset-(bitsMatches+1), value, mode)
+		ref, oldValue, changed, err := d.set(ref, pfx, keyOffset-(bitsMatches+1), value, mode)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
+			return nil, nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
 		}
 		if !changed {
-			return node.cell, false, nil
+			return node.cell, oldValue, false, nil
 		}
 
-		return node.cloneWithRef(refIdx, ref, d.trace)
+		cloned, changed, err := node.cloneWithRef(refIdx, ref, d.trace)
+		return cloned, oldValue, changed, err
 	}
 
 	if mode == DictSetModeReplace {
-		return node.cell, false, nil
+		return node.cell, nil, false, nil
 	}
 
 	prefixLabel, labelRemainder, err := node.splitLabel(bitsMatches)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to split old child label: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to split old child label: %w", err)
 	}
 
 	oldChild := BeginCell().SetTrace(d.trace)
 	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
-		return nil, false, fmt.Errorf("failed to store old child label: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
 	if err = oldChild.StoreBuilderUncheckedDepth(node.loader.ToBuilder()); err != nil {
-		return nil, false, fmt.Errorf("failed to store old child payload: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to store old child payload: %w", err)
 	}
 
 	newChild, err := d.storeLeaf(pfx, value, keyOffset-(bitsMatches+1))
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to store new child leaf: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to store new child leaf: %w", err)
 	}
 
 	oldChildCell, err := oldChild.EndCellSpecial(false)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 
 	left, right := newChild, oldChildCell
@@ -263,7 +264,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 	}
 
 	newBranch, err := d.storeFork(prefixLabel, left, right, keyOffset)
-	return newBranch, err == nil, err
+	return newBranch, nil, err == nil, err
 }
 
 func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Slice, *Cell, bool, error) {
@@ -487,17 +488,17 @@ func (d *Dictionary) LoadValueAndSetBuilderWithMode(key *Cell, value *Builder, m
 		return nil, false, fmt.Errorf("value builder is nil")
 	}
 
-	oldValue, err := d.LoadValue(key)
+	keySlice, err := key.BeginParse()
 	if err != nil {
-		if !errors.Is(err, ErrNoSuchKeyInDict) {
-			return nil, false, err
-		}
-		oldValue = nil
+		return nil, false, fmt.Errorf("failed to load key: %w", err)
 	}
 
-	changed, err := d.SetBuilderWithMode(key, value, mode)
+	newRoot, oldValue, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("failed to set value in dict, err: %w", err)
+	}
+	if changed {
+		d.setRoot(newRoot)
 	}
 	return oldValue, changed, nil
 }

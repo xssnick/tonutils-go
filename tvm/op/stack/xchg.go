@@ -19,14 +19,16 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return XCHG(0, 0) })
 }
 
+var xchgPrefixed = helpers.NewPrefixed(
+	helpers.UIntPrefix(0x0, 4),
+	helpers.UIntPrefix(0x1, 4),
+	helpers.UIntPrefix(0x10, 8),
+)
+
 func XCHG(a, b uint8) *OpXCHG {
 	return &OpXCHG{
-		Prefixed: helpers.NewPrefixed(
-			helpers.UIntPrefix(0x0, 4),
-			helpers.UIntPrefix(0x1, 4),
-			helpers.UIntPrefix(0x10, 8),
-		),
-		a: a, b: b, l: a > 1 && b > 1,
+		Prefixed: xchgPrefixed,
+		a:        a, b: b, l: a > 1 && b > 1,
 	}
 }
 

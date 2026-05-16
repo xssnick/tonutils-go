@@ -285,7 +285,7 @@ func loadVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed bo
 			if err = state.Stack.PushInt(val); err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(rest)
+			return state.Stack.PushOwnedSlice(rest)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -310,7 +310,7 @@ func storeVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed b
 			if !ok {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			return state.Stack.PushBuilder(dst)
+			return state.Stack.PushOwnedBuilder(dst)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -471,7 +471,7 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 			if optStd {
 				if src.BitsLeft() < 2 {
 					if quiet {
-						if err = state.Stack.PushSlice(src); err != nil {
+						if err = state.Stack.PushOwnedSlice(src); err != nil {
 							return err
 						}
 						return state.Stack.PushBool(false)
@@ -486,7 +486,7 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 					if err = state.Stack.PushAny(nil); err != nil {
 						return err
 					}
-					if err = state.Stack.PushSlice(rest); err != nil {
+					if err = state.Stack.PushOwnedSlice(rest); err != nil {
 						return err
 					}
 					if quiet {
@@ -501,7 +501,7 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 			}
 			if !ok {
 				if quiet {
-					if err = state.Stack.PushSlice(src); err != nil {
+					if err = state.Stack.PushOwnedSlice(src); err != nil {
 						return err
 					}
 					return state.Stack.PushBool(false)
@@ -512,10 +512,10 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 			if err != nil {
 				return err
 			}
-			if err = state.Stack.PushSlice(addrSlice); err != nil {
+			if err = state.Stack.PushOwnedSlice(addrSlice); err != nil {
 				return err
 			}
-			if err = state.Stack.PushSlice(rest); err != nil {
+			if err = state.Stack.PushOwnedSlice(rest); err != nil {
 				return err
 			}
 			if quiet {
@@ -623,7 +623,7 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 				if err = state.Stack.PushInt(big.NewInt(int64(addr.Workchain))); err != nil {
 					return err
 				}
-				if err = state.Stack.PushSlice(rewritten); err != nil {
+				if err = state.Stack.PushOwnedSlice(rewritten); err != nil {
 					return err
 				}
 			}
@@ -674,10 +674,10 @@ func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 					}
 					return vmerr.Error(vmerr.CodeCellOverflow)
 				}
-				if err = state.Stack.PushSlice(addrSlice); err != nil {
+				if err = state.Stack.PushOwnedSlice(addrSlice); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(builder); err != nil {
+				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 					return err
 				}
 				return state.Stack.PushBool(true)
@@ -690,12 +690,12 @@ func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 				return err
 			}
 			if quiet {
-				if err = state.Stack.PushBuilder(builder); err != nil {
+				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 					return err
 				}
 				return state.Stack.PushBool(false)
 			}
-			return state.Stack.PushBuilder(builder)
+			return state.Stack.PushOwnedBuilder(builder)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -728,7 +728,7 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 					if err = state.Stack.PushAny(nil); err != nil {
 						return err
 					}
-					if err = state.Stack.PushBuilder(builder); err != nil {
+					if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 						return err
 					}
 					return state.Stack.PushBool(true)
@@ -737,12 +737,12 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 					return err
 				}
 				if quiet {
-					if err = state.Stack.PushBuilder(builder); err != nil {
+					if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 						return err
 					}
 					return state.Stack.PushBool(false)
 				}
-				return state.Stack.PushBuilder(builder)
+				return state.Stack.PushOwnedBuilder(builder)
 			}
 			addrSlice, ok := raw.(*cell.Slice)
 			if !ok {
@@ -753,7 +753,7 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 				if err = state.Stack.PushAny(nil); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(builder); err != nil {
+				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 					return err
 				}
 				return state.Stack.PushBool(true)
@@ -766,10 +766,10 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 					}
 					return vmerr.Error(vmerr.CodeCellOverflow)
 				}
-				if err = state.Stack.PushSlice(addrSlice); err != nil {
+				if err = state.Stack.PushOwnedSlice(addrSlice); err != nil {
 					return err
 				}
-				if err = state.Stack.PushBuilder(builder); err != nil {
+				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 					return err
 				}
 				return state.Stack.PushBool(true)
@@ -782,12 +782,12 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 				return err
 			}
 			if quiet {
-				if err = state.Stack.PushBuilder(builder); err != nil {
+				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 					return err
 				}
 				return state.Stack.PushBool(false)
 			}
-			return state.Stack.PushBuilder(builder)
+			return state.Stack.PushOwnedBuilder(builder)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -1059,6 +1059,185 @@ func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs 
 	return stat.addSlice(root)
 }
 
+type sendMsgLayout struct {
+	initExists     bool
+	initInRef      bool
+	initBits       uint
+	initRefs       int
+	bodyInRef      bool
+	bodyBits       uint
+	bodyRefs       int
+	extraFlagsBits uint
+}
+
+func loadSendMsgLayout(state *vm.State, msgCell *cell.Cell) (sendMsgLayout, error) {
+	var root *cell.Slice
+	var err error
+	if state != nil {
+		root, err = state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
+	} else {
+		root, err = msgCell.BeginParse()
+	}
+	if err != nil {
+		return sendMsgLayout{}, err
+	}
+
+	isExternal, err := root.LoadBoolBit()
+	if err != nil {
+		return sendMsgLayout{}, err
+	}
+	if isExternal {
+		isOut, err := root.LoadBoolBit()
+		if err != nil {
+			return sendMsgLayout{}, err
+		}
+		if !isOut {
+			return sendMsgLayout{}, vmerr.Error(vmerr.CodeUnknown, "external inbound message is not relaxed")
+		}
+		if _, err = root.LoadAddr(); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadAddr(); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadUInt(64); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadUInt(32); err != nil {
+			return sendMsgLayout{}, err
+		}
+	} else {
+		if err = root.SkipBits(3); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadAddr(); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadAddr(); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadBigCoins(); err != nil {
+			return sendMsgLayout{}, err
+		}
+		hasExtra, err := root.LoadBoolBit()
+		if err != nil {
+			return sendMsgLayout{}, err
+		}
+		if hasExtra {
+			if _, err = root.LoadRefCell(); err != nil {
+				return sendMsgLayout{}, err
+			}
+		}
+		extraFlagsBefore := root.BitsLeft()
+		if _, err = root.LoadVarUInt(16); err != nil {
+			return sendMsgLayout{}, err
+		}
+		layout := sendMsgLayout{extraFlagsBits: extraFlagsBefore - root.BitsLeft()}
+		if _, err = root.LoadBigCoins(); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadUInt(64); err != nil {
+			return sendMsgLayout{}, err
+		}
+		if _, err = root.LoadUInt(32); err != nil {
+			return sendMsgLayout{}, err
+		}
+		return loadSendMsgInitBodyLayout(root, layout)
+	}
+
+	return loadSendMsgInitBodyLayout(root, sendMsgLayout{})
+}
+
+func loadSendMsgInitBodyLayout(root *cell.Slice, layout sendMsgLayout) (sendMsgLayout, error) {
+	initPrefix := root.Copy()
+	initExists, err := initPrefix.LoadBoolBit()
+	if err != nil {
+		return sendMsgLayout{}, err
+	}
+	layout.initExists = initExists
+	if initExists {
+		layout.initInRef, err = initPrefix.LoadBoolBit()
+		if err != nil {
+			return sendMsgLayout{}, err
+		}
+	}
+	initBitsBefore, initRefsBefore := root.BitsLeft(), root.RefsNum()
+	var init tlb.MessageRelaxedStateInit
+	if err = init.LoadFromCell(root); err != nil {
+		return sendMsgLayout{}, err
+	}
+	layout.initBits = initBitsBefore - root.BitsLeft()
+	layout.initRefs = initRefsBefore - root.RefsNum()
+
+	bodyPrefix := root.Copy()
+	layout.bodyInRef, err = bodyPrefix.LoadBoolBit()
+	if err != nil {
+		return sendMsgLayout{}, err
+	}
+	bodyBitsBefore, bodyRefsBefore := root.BitsLeft(), root.RefsNum()
+	var body tlb.MessageRelaxedBody
+	if err = body.LoadFromCell(root); err != nil {
+		return sendMsgLayout{}, err
+	}
+	layout.bodyBits = bodyBitsBefore - root.BitsLeft()
+	layout.bodyRefs = bodyRefsBefore - root.RefsNum()
+	if root.BitsLeft() != 0 || root.RefsNum() != 0 {
+		return sendMsgLayout{}, vmerr.Error(vmerr.CodeUnknown, "relaxed message has trailing data")
+	}
+	return layout, nil
+}
+
+func sendMsgStoredCoinsBits(value *big.Int) uint {
+	if value == nil {
+		return 4
+	}
+	return 4 + uint((value.BitLen()+7)&^7)
+}
+
+func sendMsgBigOrZero(value *big.Int) *big.Int {
+	if value == nil {
+		return big.NewInt(0)
+	}
+	return new(big.Int).Set(value)
+}
+
+func sendMsgAddressBits(addr *address.Address) (uint, error) {
+	builder := cell.BeginCell()
+	if err := builder.StoreAddr(addr); err != nil {
+		return 0, err
+	}
+	return builder.BitsUsed(), nil
+}
+
+func sendMsgTupleAmount(state *vm.State, idx int, name string) (*big.Int, bool, error) {
+	v, err := state.GetParam(idx)
+	if err != nil {
+		return nil, false, err
+	}
+	balance, ok := v.(tuple.Tuple)
+	if !ok {
+		return nil, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
+	}
+	amountAny, err := balance.Index(0)
+	if err != nil {
+		return nil, false, err
+	}
+	amount, ok := amountAny.(*big.Int)
+	if !ok {
+		return nil, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
+	}
+
+	hasExtra := false
+	if state.GlobalVersion < 10 {
+		extraAny, err := balance.Index(1)
+		if err != nil {
+			return nil, false, err
+		}
+		hasExtra = extraAny != nil
+	}
+	return amount, hasExtra, nil
+}
+
 func SENDMSG() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
@@ -1087,6 +1266,10 @@ func SENDMSG() *helpers.SimpleOP {
 			if err = tlb.LoadFromCell(&msg, msgSlice); err != nil {
 				return vmerr.Error(vmerr.CodeUnknown, "invalid message")
 			}
+			layout, err := loadSendMsgLayout(state, msgCell)
+			if err != nil {
+				return vmerr.Error(vmerr.CodeUnknown, "invalid message")
+			}
 
 			myAddr, err := getMyAddr(state)
 			if err != nil {
@@ -1113,20 +1296,113 @@ func SENDMSG() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
 			}
 
-			fwd := prices.ComputeForwardFee(stat.cells, stat.bits)
-			ihr := big.NewInt(0)
+			value := sendMsgBigOrZero(msg.Info.Amount)
+			haveExtraCurrencies := msg.Info.HasExtraCurrencies()
 			if msg.MsgType == tlb.MsgTypeInternal {
-				fwd = maxBig(fwd, msg.Info.FwdFee)
-				ihrDisabled := msg.Info.IHRDisabled || state.GlobalVersion >= 11
-				if !ihrDisabled {
-					userIHRFee := big.NewInt(0)
-					if state.GlobalVersion < 12 {
-						userIHRFee = msg.Info.ExtraFlags
+				if mode&128 != 0 {
+					value, haveExtraCurrencies, err = sendMsgTupleAmount(state, 7, "BALANCE")
+					if err != nil {
+						return err
 					}
-					ihr = ceilShiftRight(new(big.Int).Mul(fwd, new(big.Int).SetUint64(uint64(prices.IHRFactor))), 16)
-					ihr = maxBig(ihr, userIHRFee)
+				} else if mode&64 != 0 {
+					incomingValue, incomingHasExtra, err := sendMsgTupleAmount(state, 11, "INCOMINGVALUE")
+					if err != nil {
+						return err
+					}
+					value = new(big.Int).Add(value, incomingValue)
+					haveExtraCurrencies = haveExtraCurrencies || incomingHasExtra
 				}
 			}
+
+			ihr := big.NewInt(0)
+			fwd := big.NewInt(0)
+			ihrDisabled := msg.MsgType != tlb.MsgTypeInternal || msg.Info.IHRDisabled || state.GlobalVersion >= 11
+			computeFees := func() {
+				computedFwd := prices.ComputeForwardFee(stat.cells, stat.bits)
+				computedIHR := big.NewInt(0)
+				if !ihrDisabled {
+					computedIHR = ceilShiftRight(new(big.Int).Mul(computedFwd, new(big.Int).SetUint64(uint64(prices.IHRFactor))), 16)
+				}
+
+				fwd = computedFwd
+				ihr = computedIHR
+				if msg.MsgType == tlb.MsgTypeInternal {
+					fwd = maxBig(fwd, msg.Info.FwdFee)
+					if !ihrDisabled && state.GlobalVersion < 12 {
+						ihr = maxBig(ihr, msg.Info.ExtraFlags)
+					}
+				}
+			}
+			computeFees()
+
+			myAddrBits, err := sendMsgAddressBits(myAddr)
+			if err != nil {
+				return err
+			}
+			destAddrBits, err := sendMsgAddressBits(msg.Info.DstAddr)
+			if err != nil {
+				return err
+			}
+			msgRootBits := func() uint {
+				var bits uint
+				if msg.MsgType == tlb.MsgTypeExternalOut {
+					bits = 2 + myAddrBits + destAddrBits + 32 + 64
+				} else {
+					fwdFeeFirst := new(big.Int).Rsh(new(big.Int).Mul(fwd, new(big.Int).SetUint64(uint64(prices.FirstFrac))), 16)
+					remainingFwdFee := new(big.Int).Sub(fwd, fwdFeeFirst)
+					bits = 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(value) + 1 + 32 + 64
+					bits += sendMsgStoredCoinsBits(remainingFwdFee)
+					if state.GlobalVersion >= 12 {
+						bits += layout.extraFlagsBits
+					} else {
+						bits += sendMsgStoredCoinsBits(ihr)
+					}
+				}
+				bits++
+				if layout.initExists {
+					bits++
+					if !layout.initInRef {
+						bits += layout.initBits - 2
+					}
+				}
+				bits++
+				if !layout.bodyInRef {
+					bits += layout.bodyBits - 1
+				}
+				return bits
+			}
+			msgRootRefs := func() uint {
+				var refs uint
+				if msg.MsgType == tlb.MsgTypeInternal && haveExtraCurrencies {
+					refs++
+				}
+				if layout.initExists {
+					if layout.initInRef {
+						refs++
+					} else {
+						refs += uint(layout.initRefs)
+					}
+				}
+				if layout.bodyInRef {
+					refs++
+				} else {
+					refs += uint(layout.bodyRefs)
+				}
+				return refs
+			}
+			if layout.initExists && !layout.initInRef && (msgRootBits() > 1023 || msgRootRefs() > 4) {
+				layout.initInRef = true
+				stat.cells++
+				stat.bits += uint64(layout.initBits - 2)
+				computeFees()
+			}
+			if !layout.bodyInRef && (msgRootBits() > 1023 || msgRootRefs() > 4) {
+				layout.bodyInRef = true
+				stat.cells++
+				stat.bits += uint64(layout.bodyBits - 1)
+				computeFees()
+			}
+
 			totalFee := new(big.Int).Add(fwd, ihr)
 			if err = state.Stack.PushInt(totalFee); err != nil {
 				return err

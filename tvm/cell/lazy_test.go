@@ -697,6 +697,110 @@ func TestToBOCSkipsDuplicateMultiLevelLazyRefLoad(t *testing.T) {
 	}
 }
 
+func TestPrewarmRecursiveLoadsLazyRefs(t *testing.T) {
+	grandChild := BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	child := BeginCell().MustStoreUInt(0xBB, 8).MustStoreRef(grandChild).EndCell()
+	loader := &testLazyLoader{cells: map[Hash]*Cell{}}
+	lazyChild := cellWithLazyRefsFromCell(child, loader.LoadCell)
+	root := BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(lazyChild).EndCell()
+	lazyRoot := cellWithLazyRefsFromCell(root, loader.LoadCell)
+	loader.cells[lazyChild.HashKey()] = lazyChild
+	loader.cells[grandChild.HashKey()] = grandChild
+
+	got, err := lazyRoot.PrewarmRecursive(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loader.calls != 2 {
+		t.Fatalf("unexpected load calls: got=%d want=2", loader.calls)
+	}
+	if got == lazyRoot {
+		t.Fatal("prewarm should return a new root")
+	}
+	if got.HashKey() != root.HashKey() {
+		t.Fatalf("unexpected root hash: got=%x want=%x", got.Hash(), root.Hash())
+	}
+	gotChild, err := got.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotChild.IsLazy() {
+		t.Fatal("unlimited prewarm should materialize child")
+	}
+	gotGrandChild, err := gotChild.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotGrandChild.IsLazy() {
+		t.Fatal("unlimited prewarm should materialize grandchild")
+	}
+}
+
+func TestPrewarmRecursiveDepthLimit(t *testing.T) {
+	grandChild := BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	child := BeginCell().MustStoreUInt(0xBB, 8).MustStoreRef(grandChild).EndCell()
+	loader := &testLazyLoader{cells: map[Hash]*Cell{}}
+	lazyChild := cellWithLazyRefsFromCell(child, loader.LoadCell)
+	root := BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(lazyChild).EndCell()
+	lazyRoot := cellWithLazyRefsFromCell(root, loader.LoadCell)
+	loader.cells[lazyChild.HashKey()] = lazyChild
+	loader.cells[grandChild.HashKey()] = grandChild
+
+	got, err := lazyRoot.PrewarmRecursive(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loader.calls != 1 {
+		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
+	}
+	gotChild, err := got.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotChild.IsLazy() {
+		t.Fatal("depth-limited prewarm should materialize refs inside the limit")
+	}
+	gotGrandChild, err := gotChild.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotGrandChild.IsLazy() {
+		t.Fatal("depth-limited prewarm should leave refs beyond the limit lazy")
+	}
+}
+
+func TestBuilderFinalizationKeepsLazyRefsTransparent(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	child := BeginCell().MustStoreUInt(0xBB, 8).MustStoreRef(leaf).EndCell()
+	loader := &testLazyLoader{cells: map[Hash]*Cell{child.HashKey(): child}}
+	root := BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(child).EndCell()
+	lazyRoot := cellWithLazyRefsFromCell(root, loader.LoadCell)
+
+	lazyChild, err := lazyRoot.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lazyChild.IsLazy() {
+		t.Fatal("test child should be lazy")
+	}
+
+	got := BeginCell().MustStoreUInt(1, 1).MustStoreRef(lazyChild).EndCell()
+	want := BeginCell().MustStoreUInt(1, 1).MustStoreRef(child).EndCell()
+	if got.HashKey() != want.HashKey() {
+		t.Fatalf("builder leaked lazy boundary hash: got=%x want=%x", got.Hash(), want.Hash())
+	}
+	gotRef, err := got.PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotRef.IsLazy() {
+		t.Fatal("builder should keep lazy ref")
+	}
+	if loader.calls != 0 {
+		t.Fatalf("builder hash should not load lazy ref, calls=%d", loader.calls)
+	}
+}
+
 func TestToBOCWithOptionsErrReturnsLazyError(t *testing.T) {
 	ref := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
 	src := BeginCell().MustStoreUInt(0b101, 3).MustStoreRef(ref).EndCell()
@@ -787,6 +891,34 @@ func TestCellRefViewBoundaryModeDoesNotLoadLazyRef(t *testing.T) {
 	}
 	if loader.calls != 1 {
 		t.Fatalf("unexpected load calls: got=%d want=1", loader.calls)
+	}
+}
+
+func TestDumpDoesNotNotifyTrace(t *testing.T) {
+	ref := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
+	src := BeginCell().MustStoreUInt(0b101, 3).MustStoreRef(ref).EndCell()
+	loader := &testLazyLoader{cells: map[Hash]*Cell{ref.HashKey(): ref}}
+	cellWithLazyRef := cellWithLazyRefsFromCell(src, loader.LoadCell)
+
+	loads := 0
+	creates := 0
+	traced := cellWithLazyRef.WithTrace(NewTrace(TraceHooks{
+		OnLoad: func(*Cell) {
+			loads++
+		},
+		OnCreate: func() {
+			creates++
+		},
+	}))
+
+	if dump := traced.Dump(); dump == "" {
+		t.Fatal("expected non-empty dump")
+	}
+	if loads != 0 || creates != 0 {
+		t.Fatalf("dump notified trace: loads=%d creates=%d", loads, creates)
+	}
+	if loader.calls == 0 {
+		t.Fatal("expected dump to load lazy data without notifying trace")
 	}
 }
 

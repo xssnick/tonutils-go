@@ -37,40 +37,44 @@ type Cell struct {
 }
 
 func (c *Cell) copy() *Cell {
-	refCnt := c.refsCount()
-	cp := &Cell{
-		data:   append([]byte{}, c.data...),
-		meta:   cloneCellMeta(c.meta),
-		bitsSz: c.bitsSz,
-		depth0: c.depth0,
-		flags:  c.flags,
-	}
-	copy(cp.hash0[:], c.hash0[:])
-	copy(cp.refs[:], c.refs[:refCnt])
-	return cp
+	cp := *c
+	cp.meta = cloneCellMeta(c.meta)
+	return &cp
 }
 
 func (c *Cell) load() (*Cell, error) {
+	return c.loadWithTrace(c.Trace())
+}
+
+func (c *Cell) loadWithTrace(trace *Trace) (*Cell, error) {
 	if c == nil || !c.IsLazy() {
 		return c, nil
 	}
-	return loadLazyPrunedRef(c)
+	return loadLazyPrunedRefWithTrace(c, trace)
 }
 
 func (c *Cell) BeginParse() (*Slice, error) {
-	loaded, err := c.load()
+	return c.beginParseWithTrace(c.Trace())
+}
+
+func (c *Cell) BeginParseWithoutTrace() (*Slice, error) {
+	return c.beginParseWithTrace(nil)
+}
+
+// BeginParseWithTrace parses the cell using trace instead of the trace attached
+// to the cell wrapper.
+func (c *Cell) BeginParseWithTrace(trace *Trace) (*Slice, error) {
+	return c.beginParseWithTrace(trace)
+}
+
+func (c *Cell) beginParseWithTrace(trace *Trace) (*Slice, error) {
+	loaded, err := c.loadWithTrace(trace)
 	if err != nil {
 		return nil, err
 	}
 
-	trace := loaded.Trace()
 	trace.NotifyLoad(loaded)
-	return &Slice{
-		cell:   loaded,
-		trace:  trace,
-		bitEnd: loaded.bitsSz,
-		refEnd: uint8(loaded.refsCount()),
-	}, nil
+	return newSliceFromCell(loaded, trace), nil
 }
 
 func (c *Cell) MustBeginParse() *Slice {
@@ -92,6 +96,9 @@ func (c *Cell) WithTrace(trace *Trace) *Cell {
 	if c == nil {
 		return nil
 	}
+	if c.Trace() == trace {
+		return c
+	}
 	cp := c.copy()
 	if trace != nil {
 		cp.ensureMeta().trace = trace
@@ -102,6 +109,10 @@ func (c *Cell) WithTrace(trace *Trace) *Cell {
 		cp.clearMetaIfEmpty()
 	}
 	return cp
+}
+
+func (c *Cell) WithoutTrace() *Cell {
+	return c.WithTrace(nil)
 }
 
 func (c *Cell) withTraceCombined(trace *Trace) *Cell {
@@ -182,10 +193,11 @@ func (c *Cell) DumpBits(limitLength ...int) string {
 }
 
 func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
-	s, err := c.BeginParse()
+	s, err := c.WithoutTrace().BeginParse()
 	if err != nil {
 		return strings.Repeat("  ", deep) + "<failed to load cell: " + err.Error() + ">"
 	}
+	base := s.BaseCell()
 	sz, data, _ := s.RestBits()
 
 	builder := strings.Builder{}
@@ -221,22 +233,22 @@ func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
 	builder.WriteString(val)
 	builder.WriteByte(']')
 
-	level := c.getLevelMask().GetLevel()
+	level := base.getLevelMask().GetLevel()
 	if level > 0 {
 		builder.WriteByte('{')
 		builder.WriteString(strconv.Itoa(level))
 		builder.WriteByte('}')
 
 	}
-	if c.IsSpecial() {
+	if base.IsSpecial() {
 		builder.WriteByte('*')
 	}
-	refCnt := c.refsCount()
+	refCnt := base.refsCount()
 	if refCnt > 0 {
 
 		builder.WriteString(" -> {")
 
-		for i, ref := range c.boundaryRefs() {
+		for i, ref := range base.boundaryRefs() {
 
 			builder.WriteByte('\n')
 			builder.WriteString(ref.dump(deep+1, bin, limitLength))
@@ -313,6 +325,9 @@ func (c *Cell) GetType() Type {
 		if c.BitsSize() >= 288 {
 			msk := LevelMask{c.data[1]}
 			lvl := msk.GetLevel()
+			if c.IsLazy() && lvl == 0 && c.RefsNum() == 0 && c.BitsSize() == 16+(256+16) {
+				return PrunedCellType
+			}
 			if lvl > 0 && lvl <= 3 && c.BitsSize() >= 16+(256+16)*(uint(msk.Apply(lvl-1).getHashIndex()+1)) {
 				return PrunedCellType
 			}

@@ -28,8 +28,28 @@ func makeLibraryRoot(t *testing.T, lib *cell.Cell) *cell.Cell {
 	return root
 }
 
+func makeLazyLibraryRoot(t *testing.T, root *cell.Cell) *cell.Cell {
+	t.Helper()
+
+	roots, _, err := cell.FromBOCMultiRootReader(cell.NewBOCNoCopyReader(root.ToBOCWithOptions(cell.BOCSerializeOptions{
+		WithTopHash:   true,
+		WithIntHashes: true,
+	})), cell.BOCParseOptions{
+		Lazy:          true,
+		TrustedHashes: true,
+	})
+	if err != nil {
+		t.Fatalf("parse lazy library root: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("unexpected lazy roots count: got %d want 1", len(roots))
+	}
+	return roots[0]
+}
+
 func TestLibrariesAndResolveXLoadCell(t *testing.T) {
-	lib := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	libChild := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	lib := cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(libChild).EndCell()
 	root := makeLibraryRoot(t, lib)
 
 	st := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
@@ -39,32 +59,77 @@ func TestLibrariesAndResolveXLoadCell(t *testing.T) {
 		t.Fatal("set libraries should replace the libraries slice")
 	}
 
-	if got, err := st.LoadLibraryByHash(lib.Hash()); err != nil || got != lib {
-		t.Fatalf("load library by hash = (%v, %v), want (%v, nil)", got, err, lib)
+	if got, err := st.LoadLibraryByHash(lib.Hash()); err != nil || got == nil || got.HashKey() != lib.HashKey() {
+		t.Fatalf("load library by hash = (%v, %v), want (%x, nil)", got, err, lib.Hash())
 	}
+	st.SetLibraries(makeLazyLibraryRoot(t, root))
+	got, err := st.LoadLibraryByHash(lib.Hash())
+	if err != nil {
+		t.Fatalf("load lazy library by hash: %v", err)
+	}
+	if got == nil || got.HashKey() != lib.HashKey() {
+		t.Fatalf("load lazy library by hash = %v, want %x", got, lib.Hash())
+	}
+	child, err := got.MustBeginParse().LoadRefCell()
+	if err != nil {
+		t.Fatalf("load library child: %v", err)
+	}
+	if child.HashKey() != libChild.HashKey() {
+		t.Fatalf("library child = %v, want %x", child, libChild.Hash())
+	}
+	st.SetLibraries(root)
 	if got, err := st.LoadLibraryByHash([]byte{1, 2, 3}); err != nil || got != nil {
 		t.Fatalf("load library by invalid hash len = (%v, %v), want (nil, nil)", got, err)
 	}
 
-	if got, err := st.ResolveXLoadCell(lib); err != nil || got != lib {
+	if got, err := st.ResolveLibraryCell(lib); err != nil || got != lib {
 		t.Fatalf("resolve ordinary cell = (%v, %v), want (%v, nil)", got, err, lib)
 	}
-	if _, err := st.ResolveXLoadCell(nil); err == nil {
+	if _, err := st.ResolveLibraryCell(nil); err == nil {
 		t.Fatal("expected nil xload cell to fail")
 	} else {
 		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)
 	}
 
 	libraryCell := mustLibraryCellForHash(t, lib.Hash())
-	if got, err := st.ResolveXLoadCell(libraryCell); err != nil || got != lib {
-		t.Fatalf("resolve library cell = (%v, %v), want (%v, nil)", got, err, lib)
+	if got, err := st.ResolveLibraryCell(libraryCell); err != nil || got == nil || got.HashKey() != lib.HashKey() {
+		t.Fatalf("resolve library cell = (%v, %v), want (%x, nil)", got, err, lib.Hash())
+	}
+	lazyLibraryCell := makeLazyLibraryRoot(t, libraryCell)
+	if got, err := st.ResolveLibraryCell(lazyLibraryCell); err != nil || got == nil || got.HashKey() != lib.HashKey() {
+		t.Fatalf("resolve lazy library cell = (%v, %v), want (%x, nil)", got, err, lib.Hash())
 	}
 
 	pruned := mustPrunedCell(t)
-	if _, err := st.ResolveXLoadCell(pruned); err == nil {
+	if _, err := st.ResolveLibraryCell(pruned); err == nil {
 		t.Fatal("expected pruned cell resolution to fail")
 	} else {
 		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+	}
+}
+
+func TestStackStringDoesNotConsumeCellTraceGas(t *testing.T) {
+	root := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	lazy := makeLazyLibraryRoot(t, root)
+
+	st := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+	st.InitForExecution()
+	traced := lazy.WithTrace(st.Cells.Trace())
+
+	stack := NewStack()
+	if err := stack.PushCell(traced); err != nil {
+		t.Fatalf("push cell: %v", err)
+	}
+
+	before := st.Gas
+	if text := stack.String(); text == "" {
+		t.Fatal("expected non-empty stack string")
+	}
+	if st.Gas != before {
+		t.Fatalf("stack string changed gas: got=%+v want=%+v", st.Gas, before)
+	}
+	if err := st.Cells.PendingError(); err != nil {
+		t.Fatalf("stack string left pending cell trace error: %v", err)
 	}
 }
 
@@ -175,7 +240,7 @@ func TestCellManagerVirtualizationSemantics(t *testing.T) {
 		assertVMErrorCode(t, err, vmerr.CodeVirtualization)
 	}
 
-	if _, err := st.ResolveXLoadCell(virtualized); err == nil {
+	if _, err := st.ResolveLibraryCell(virtualized); err == nil {
 		t.Fatal("expected xload on virtualized pruned cell to stay underflow")
 	} else {
 		assertVMErrorCode(t, err, vmerr.CodeCellUnderflow)

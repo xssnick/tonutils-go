@@ -6,7 +6,7 @@ import (
 	"runtime/debug"
 )
 
-var TVMTraceEnabled = true
+var TVMTraceEnabled = false
 
 type VMError struct {
 	Code  int64

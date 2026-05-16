@@ -36,7 +36,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, nil
 	}
 
-	bounceDstAddr, ok := transactionValidateAndNormalizeInternalDestAddr(in.SrcAddr, cfg)
+	bounceDstAddr, ok := transactionValidateAndNormalizeBounceDestAddr(in.SrcAddr, cfg)
 	if !ok {
 		return nil, nil
 	}
@@ -63,7 +63,10 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, fmt.Errorf("failed to serialize preliminary bounce message: %w", err)
 	}
 
-	msgSize := transactionBounceMessageUsage(in, bounceBody)
+	msgSize, err := transactionBounceMessageUsage(in, bounceBody)
+	if err != nil {
+		return nil, err
+	}
 	fwdFee := transactionComputeForwardFeeForUsage(cfg, in.DstAddr, bounceDstAddr, msgSize)
 	remainingMsgBalance := msgBalance.copy()
 	remainingMsgBalance.grams.Sub(remainingMsgBalance.grams, gasFees)
@@ -190,17 +193,25 @@ func transactionBuildBounceBody(in *tlb.InternalMessage, cfg tlb.BlockchainConfi
 	return body.EndCell(), nil
 }
 
-func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell) transactionUsage {
+func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell) (transactionUsage, error) {
 	usage := transactionUsage{}
 	if in == nil {
-		return usage
+		return usage, nil
 	}
 	if body != nil {
-		for i := 0; i < int(body.RefsNum()); i++ {
-			usage = transactionAddUsage(usage, transactionCollectUsage(body.MustPeekRef(i)))
+		_, refs, err := transactionLoadedCellRefs(body)
+		if err != nil {
+			return transactionUsage{}, err
+		}
+		for _, ref := range refs {
+			refUsage, err := transactionCollectUsage(ref)
+			if err != nil {
+				return transactionUsage{}, err
+			}
+			usage = transactionAddUsage(usage, refUsage)
 		}
 	}
-	return usage
+	return usage, nil
 }
 
 func transactionInboundExtraFlags(in *tlb.InternalMessage) uint64 {

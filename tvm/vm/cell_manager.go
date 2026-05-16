@@ -6,11 +6,12 @@ import (
 )
 
 type CellManager struct {
-	state      *State
-	loaded     map[cell.Hash]struct{}
-	pendingErr error
-	trace      *cell.Trace
-	loadTrace  *cell.Trace
+	state              *State
+	loaded             map[cell.Hash]struct{}
+	pendingErr         error
+	trace              *cell.Trace
+	loadTrace          *cell.Trace
+	alreadyLoadedTrace *cell.Trace
 }
 
 func (m *CellManager) Init(state *State) {
@@ -52,8 +53,15 @@ func (m *CellManager) Trace() *cell.Trace {
 }
 
 func (m *CellManager) TraceAlreadyLoaded() *cell.Trace {
+	if m == nil {
+		return nil
+	}
+	if m.alreadyLoadedTrace != nil {
+		return m.alreadyLoadedTrace
+	}
+
 	gasTrace := m.Trace()
-	return cell.NewTrace(cell.TraceHooks{
+	m.alreadyLoadedTrace = cell.NewTrace(cell.TraceHooks{
 		OnCreate: func() {
 			_ = gasTrace.NotifyCreate()
 		},
@@ -62,6 +70,7 @@ func (m *CellManager) TraceAlreadyLoaded() *cell.Trace {
 		},
 		PendingError: gasTrace.PendingError,
 	})
+	return m.alreadyLoadedTrace
 }
 
 func (m *CellManager) LoadTrace() *cell.Trace {
@@ -138,13 +147,13 @@ func (m *CellManager) beginParseWithGasTrace(cl *cell.Cell, alreadyLoaded bool) 
 	var sl *cell.Slice
 	var err error
 	if alreadyLoaded {
-		sl, err = cl.WithTrace(cellTrace).BeginParse()
+		sl, err = cl.BeginParseWithTrace(cellTrace)
 		if err != nil {
 			return nil, err
 		}
 		sl.SetTrace(withGas)
 	} else {
-		sl, err = cl.WithTrace(withGas).BeginParse()
+		sl, err = cl.BeginParseWithTrace(withGas)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +179,7 @@ func (m *CellManager) BeginParseAlreadyLoadedNoCreate(cl *cell.Cell) (*cell.Slic
 	cellTrace := cl.Trace().WithoutTrace(gasTrace).WithoutTrace(loadTrace)
 	withLoad := cell.CombineTraces(cellTrace, loadTrace)
 
-	sl, err := cl.WithTrace(cellTrace).BeginParse()
+	sl, err := cl.BeginParseWithTrace(cellTrace)
 	if err != nil {
 		return nil, err
 	}

@@ -348,7 +348,7 @@ func createPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*
 
 	virtLevel = max(0, min(virtLevel, _DataCellMaxLevel))
 	if !source.IsLazy() && !source.IsVirtualized() && source.Level() <= virtLevel && source.refsCount() == 0 {
-		return materializePrunedBranchBoundary(source), nil
+		return materializePrunedBranchBoundary(source)
 	}
 	return buildPrunedBranchFromCellAtDepth(source, newLevel, virtLevel)
 }
@@ -404,10 +404,6 @@ func oneLevelMask(level int) byte {
 }
 
 func extractBalanceFromDepthBalanceCell(c *Cell) *big.Int {
-	if c == nil {
-		return nil
-	}
-
 	s, err := c.BeginParse()
 	if err != nil {
 		return nil

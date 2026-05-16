@@ -7,37 +7,87 @@ import (
 	"fmt"
 )
 
-func ToBytesToBuffer(buf *bytes.Buffer, data []byte) error {
-	if len(data) == 0 {
-		// fast path for empty slice
-		buf.Write(make([]byte, 4))
-		return nil
+var tlZeroBytes [32]byte
+
+func writeUint32(buf *bytes.Buffer, val uint32) {
+	var tmp [4]byte
+	binary.LittleEndian.PutUint32(tmp[:], val)
+	buf.Write(tmp[:])
+}
+
+func writeUint64(buf *bytes.Buffer, val uint64) {
+	var tmp [8]byte
+	binary.LittleEndian.PutUint64(tmp[:], val)
+	buf.Write(tmp[:])
+}
+
+func writeZeros(buf *bytes.Buffer, n int) {
+	for n > len(tlZeroBytes) {
+		buf.Write(tlZeroBytes[:])
+		n -= len(tlZeroBytes)
 	}
 
-	prevLen := buf.Len()
+	if n > 0 {
+		buf.Write(tlZeroBytes[:n])
+	}
+}
 
-	// store buf length
-	if len(data) >= 0xFE {
-		if len(data) >= 1<<24 {
-			return fmt.Errorf("too big bytes len, TL bytes array limited by 1<<24")
-		}
+func tlBytesEncodedSize(dataLen int) (int, error) {
+	if dataLen >= 1<<24 {
+		return 0, fmt.Errorf("too big bytes len, TL bytes array limited by 1<<24")
+	}
 
-		ln := make([]byte, 4)
-		binary.LittleEndian.PutUint32(ln, uint32(len(data)<<8)|0xFE)
-		buf.Write(ln)
-	} else {
-		buf.WriteByte(byte(len(data)))
+	offset := 1
+	if dataLen >= 0xFE {
+		offset = 4
+	}
+
+	sz := dataLen + offset
+	if pad := sz % 4; pad != 0 {
+		sz += 4 - pad
+	}
+
+	return sz, nil
+}
+
+func ToBytesToBuffer(buf *bytes.Buffer, data []byte) error {
+	pad, err := writeBytesHeader(buf, len(data))
+	if err != nil {
+		return err
 	}
 
 	buf.Write(data)
-
-	// adjust actual length to fit % 4 = 0
-	if round := (buf.Len() - prevLen) % 4; round != 0 {
-		for i := 0; i < 4-round; i++ {
-			buf.WriteByte(0)
-		}
-	}
+	writeZeros(buf, pad)
 	return nil
+}
+
+func toStringToBuffer(buf *bytes.Buffer, data string) error {
+	pad, err := writeBytesHeader(buf, len(data))
+	if err != nil {
+		return err
+	}
+
+	buf.WriteString(data)
+	writeZeros(buf, pad)
+	return nil
+}
+
+func writeBytesHeader(buf *bytes.Buffer, dataLen int) (int, error) {
+	sz, err := tlBytesEncodedSize(dataLen)
+	if err != nil {
+		return 0, err
+	}
+	buf.Grow(sz)
+
+	headerLen := 1
+	if dataLen >= 0xFE {
+		headerLen = 4
+		writeUint32(buf, uint32(dataLen<<8)|0xFE)
+	} else {
+		buf.WriteByte(byte(dataLen))
+	}
+
+	return sz - dataLen - headerLen, nil
 }
 
 func RemapBufferAsSlice(buf *bytes.Buffer, from int) {
@@ -54,11 +104,28 @@ func RemapBufferAsSlice(buf *bytes.Buffer, from int) {
 
 	// bytes array padding
 	if pad := (buf.Len() - from) % 4; pad > 0 {
-		buf.Write(make([]byte, 4-pad))
+		writeZeros(buf, 4-pad)
 	}
 }
 
 func FromBytes(data []byte) (loaded []byte, buffer []byte, err error) {
+	return fromBytes(data, true)
+}
+
+func fromBytesNoCopy(data []byte) (loaded []byte, buffer []byte, err error) {
+	return fromBytes(data, false)
+}
+
+func fromBytesString(data []byte) (loaded string, buffer []byte, err error) {
+	bts, buffer, err := fromBytes(data, false)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return string(bts), buffer, nil
+}
+
+func fromBytes(data []byte, copyPayload bool) (loaded []byte, buffer []byte, err error) {
 	if len(data) == 0 {
 		return nil, nil, errors.New("failed to load length, too short data")
 	}
@@ -84,15 +151,21 @@ func FromBytes(data []byte) (loaded []byte, buffer []byte, err error) {
 		if len(data) < offset+ln {
 			return nil, nil, fmt.Errorf("failed to get payload with len %d, too short data", ln)
 		}
-		res := make([]byte, ln)
-		copy(res, data[offset:])
-		return res, nil, nil
+		return copyBytesResult(data[offset:offset+ln], copyPayload), nil, nil
 	}
 
 	if len(data) < bufSz {
 		return nil, nil, errors.New("failed to get payload, too short data")
 	}
-	res := make([]byte, ln)
-	copy(res, data[offset:])
-	return res, data[bufSz:], nil
+	return copyBytesResult(data[offset:offset+ln], copyPayload), data[bufSz:], nil
+}
+
+func copyBytesResult(data []byte, copyPayload bool) []byte {
+	if !copyPayload {
+		return data
+	}
+
+	res := make([]byte, len(data))
+	copy(res, data)
+	return res
 }

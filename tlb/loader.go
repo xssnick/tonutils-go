@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -23,6 +24,78 @@ type ProofUnmarshaler interface {
 
 type Marshaller interface {
 	ToCell() (*cell.Cell, error)
+}
+
+var tagSettingsCache sync.Map
+
+type magicInfo struct {
+	bits  uint
+	value uint64
+}
+
+var magicCache sync.Map
+var allowedTypesCache sync.Map
+
+func cachedTagSettings(tag reflect.StructTag) []string {
+	if cached, ok := tagSettingsCache.Load(tag); ok {
+		return cached.([]string)
+	}
+
+	value := strings.TrimSpace(tag.Get("tlb"))
+	settings := strings.Split(value, " ")
+	cached, _ := tagSettingsCache.LoadOrStore(tag, settings)
+	return cached.([]string)
+}
+
+func cachedAllowedTypes(settings []string, fieldName string) []string {
+	allowed := settings[0]
+	if len(settings) > 1 {
+		allowed = strings.Join(settings, "")
+	}
+	if cached, ok := allowedTypesCache.Load(allowed); ok {
+		return cached.([]string)
+	}
+
+	if !strings.HasPrefix(allowed, "[") || !strings.HasSuffix(allowed, "]") {
+		panic("corrupted allowed list tag of field " + fieldName + ", should be [a,b,c], got " + allowed)
+	}
+
+	types := strings.Split(allowed[1:len(allowed)-1], ",")
+	cached, _ := allowedTypesCache.LoadOrStore(allowed, types)
+	return cached.([]string)
+}
+
+func cachedMagic(tag string) magicInfo {
+	if cached, ok := magicCache.Load(tag); ok {
+		return cached.(magicInfo)
+	}
+
+	var bits, base int
+	if strings.HasPrefix(tag, "#") {
+		base = 16
+		bits = (len(tag) - 1) * 4
+	} else if strings.HasPrefix(tag, "$") {
+		base = 2
+		bits = len(tag) - 1
+	} else {
+		panic("unknown magic value type in tag: " + tag)
+	}
+
+	if bits > 64 {
+		panic("too big magic value type in tag")
+	}
+
+	magic, err := strconv.ParseUint(tag[1:], base, 64)
+	if err != nil {
+		panic("corrupted magic value in tag")
+	}
+
+	info := magicInfo{
+		bits:  uint(bits),
+		value: magic,
+	}
+	cached, _ := magicCache.LoadOrStore(tag, info)
+	return cached.(magicInfo)
 }
 
 // LoadFromCell automatically parses slice based on struct tags
@@ -120,11 +193,10 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 		loader := slice
 		structField := rv.Type().Field(i)
 		parseType := structField.Type
-		tag := strings.TrimSpace(structField.Tag.Get("tlb"))
-		if tag == "-" {
+		settings := cachedTagSettings(structField.Tag)
+		if len(settings) == 1 && settings[0] == "-" {
 			continue
 		}
-		settings := strings.Split(tag, " ")
 
 		if len(settings) == 0 {
 			continue
@@ -235,16 +307,7 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 		}
 
 		if structField.Type.Kind() == reflect.Interface {
-			allowed := strings.Join(settings, "")
-			if !strings.HasPrefix(allowed, "[") || !strings.HasSuffix(allowed, "]") {
-				panic("corrupted allowed list tag of field " + structField.Name + ", should be [a,b,c], got " + allowed)
-			}
-
-			// cut brackets
-			allowed = allowed[1 : len(allowed)-1]
-			types := strings.Split(allowed, ",")
-
-			for _, typ := range types {
+			for _, typ := range cachedAllowedTypes(settings, structField.Name) {
 				t, ok := registered[typ]
 				if !ok {
 					panic("unregistered type " + typ)
@@ -481,38 +544,19 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			}
 		}
 
-		panic(fmt.Sprintf("cannot deserialize field '%s' as tag '%s'", structField.Name, tag))
+		panic(fmt.Sprintf("cannot deserialize field '%s' as tag '%s'", structField.Name, structField.Tag.Get("tlb")))
 	}
 
 	return nil
 }
 
 func checkMagic(tag string, loader *cell.Slice) bool {
-	var sz, base int
-	if strings.HasPrefix(tag, "#") {
-		base = 16
-		sz = (len(tag) - 1) * 4
-	} else if strings.HasPrefix(tag, "$") {
-		base = 2
-		sz = len(tag) - 1
-	} else {
-		panic("unknown magic value type in tag: " + tag)
-	}
-
-	if sz > 64 {
-		panic("too big magic value type in tag")
-	}
-
-	magic, err := strconv.ParseInt(tag[1:], base, 64)
-	if err != nil {
-		panic("corrupted magic value in tag")
-	}
-
-	ldMagic, err := loader.LoadUInt(uint(sz))
+	magic := cachedMagic(tag)
+	ldMagic, err := loader.LoadUInt(magic.bits)
 	if err != nil {
 		return false
 	}
-	return ldMagic == uint64(magic)
+	return ldMagic == magic.value
 }
 
 func ToCell(v any) (*cell.Cell, error) {
@@ -539,11 +583,10 @@ next:
 		structField := rv.Type().Field(i)
 		parseType := structField.Type
 		fieldVal := rv.Field(i)
-		tag := strings.TrimSpace(structField.Tag.Get("tlb"))
-		if tag == "-" {
+		settings := cachedTagSettings(structField.Tag)
+		if len(settings) == 1 && settings[0] == "-" {
 			continue
 		}
-		settings := strings.Split(tag, " ")
 
 		if len(settings) == 0 {
 			continue
@@ -679,22 +722,13 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 	}
 
 	if structField.Type.Kind() == reflect.Interface {
-		allowed := strings.Join(settings, "")
-		if !strings.HasPrefix(allowed, "[") || !strings.HasSuffix(allowed, "]") {
-			panic("corrupted allowed list tag of field " + structField.Name + ", should be [a,b,c], got " + allowed)
-		}
-
-		// cut brackets
-		allowed = allowed[1 : len(allowed)-1]
-		types := strings.Split(allowed, ",")
-
 		t := fieldVal.Elem().Type()
 		if t.Kind() == reflect.Pointer {
 			t = t.Elem()
 		}
 
 		found := false
-		for _, typ := range types {
+		for _, typ := range cachedAllowedTypes(settings, structField.Name) {
 			if t.Name() == typ {
 				found = true
 				break
@@ -794,28 +828,8 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 			return fmt.Errorf("failed to store array for %s, err: %w", structField.Name, err)
 		}
 	} else if parseType == reflect.TypeOf(Magic{}) {
-		var sz, base int
-		if strings.HasPrefix(settings[0], "#") {
-			base = 16
-			sz = (len(settings[0]) - 1) * 4
-		} else if strings.HasPrefix(settings[0], "$") {
-			base = 2
-			sz = len(settings[0]) - 1
-		} else {
-			panic("unknown magic value type in tag")
-		}
-
-		if sz > 64 {
-			panic("too big magic value type in tag")
-		}
-
-		magic, err := strconv.ParseInt(settings[0][1:], base, 64)
-		if err != nil {
-			panic("corrupted magic value in tag")
-		}
-
-		err = builder.StoreUInt(uint64(magic), uint(sz))
-		if err != nil {
+		magic := cachedMagic(settings[0])
+		if err := builder.StoreUInt(magic.value, magic.bits); err != nil {
 			return fmt.Errorf("failed to store magic: %w", err)
 		}
 	} else if settings[0] == "dict" {

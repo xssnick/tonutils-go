@@ -21,7 +21,7 @@ func CTOS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(sl)
+			return state.Stack.PushOwnedSlice(sl)
 		},
 		Name:      "CTOS",
 		BitPrefix: helpers.BytesPrefix(0xD0),

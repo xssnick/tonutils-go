@@ -17,6 +17,8 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHCTR(0) })
 }
 
+var pushCtrPrefixed = helpers.NewPrefixed(pushCtrPrefixes()...)
+
 func pushCtrPrefixes() []helpers.BitPrefix {
 	prefixes := make([]helpers.BitPrefix, 0, 7)
 	for _, idx := range []uint64{0, 1, 2, 3, 4, 5, 7} {
@@ -27,7 +29,7 @@ func pushCtrPrefixes() []helpers.BitPrefix {
 
 func PUSHCTR(ctrIndex uint8) *OpPUSHCTR {
 	return &OpPUSHCTR{
-		Prefixed: helpers.NewPrefixed(pushCtrPrefixes()...),
+		Prefixed: pushCtrPrefixed,
 		ctrIndex: ctrIndex,
 	}
 }

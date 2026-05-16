@@ -66,7 +66,7 @@ func loadIntCommon(state *vm.State, bits uint, preload, unsigned, quiet bool) er
 			return vmerr.Error(vmerr.CodeCellUnderflow)
 		}
 		if !preload {
-			if pushErr := state.Stack.PushSlice(cs); pushErr != nil {
+			if pushErr := state.Stack.PushOwnedSlice(cs); pushErr != nil {
 				return pushErr
 			}
 		}
@@ -77,7 +77,7 @@ func loadIntCommon(state *vm.State, bits uint, preload, unsigned, quiet bool) er
 		return err
 	}
 	if !preload {
-		if err = state.Stack.PushSlice(cs); err != nil {
+		if err = state.Stack.PushOwnedSlice(cs); err != nil {
 			return err
 		}
 	}
@@ -98,7 +98,7 @@ func loadSliceCommon(state *vm.State, bits uint, preload, quiet bool) error {
 			return vmerr.Error(vmerr.CodeCellUnderflow)
 		}
 		if !preload {
-			if pushErr := state.Stack.PushSlice(cs); pushErr != nil {
+			if pushErr := state.Stack.PushOwnedSlice(cs); pushErr != nil {
 				return pushErr
 			}
 		}
@@ -116,18 +116,18 @@ func loadSliceCommon(state *vm.State, bits uint, preload, quiet bool) error {
 			return vmerr.Error(vmerr.CodeCellUnderflow)
 		}
 		if !preload {
-			if pushErr := state.Stack.PushSlice(cs); pushErr != nil {
+			if pushErr := state.Stack.PushOwnedSlice(cs); pushErr != nil {
 				return pushErr
 			}
 		}
 		return state.Stack.PushBool(false)
 	}
 
-	if err = state.Stack.PushSlice(part); err != nil {
+	if err = state.Stack.PushOwnedSlice(part); err != nil {
 		return err
 	}
 	if !preload {
-		if err = state.Stack.PushSlice(cs); err != nil {
+		if err = state.Stack.PushOwnedSlice(cs); err != nil {
 			return err
 		}
 	}
@@ -256,7 +256,7 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 			if loadBits < actualBits {
 				val.Lsh(val, actualBits-loadBits)
 			}
-			if err = state.Stack.PushSlice(cs); err != nil {
+			if err = state.Stack.PushOwnedSlice(cs); err != nil {
 				return err
 			}
 			return state.Stack.PushInt(val)

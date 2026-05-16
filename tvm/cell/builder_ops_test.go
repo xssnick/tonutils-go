@@ -4,6 +4,7 @@ import "testing"
 
 type builderOpsTrace struct {
 	created int
+	loaded  int
 }
 
 func TestBuilderOpsAndCellMeta(t *testing.T) {
@@ -76,6 +77,58 @@ func TestBuilderOpsAndCellMeta(t *testing.T) {
 		b := BeginCell()
 		if err := b.StoreSameBit(true, 1024); err == nil {
 			t.Fatal("expected overflow for 1024 bits")
+		}
+	})
+
+	t.Run("ToSliceTraceMatchesEndCellBeginParseSetTrace", func(t *testing.T) {
+		tr := &builderOpsTrace{}
+		childLoads := 0
+		childTrace := NewTrace(TraceHooks{OnLoad: func(*Cell) { childLoads++ }})
+		childIdx := -1
+		trace := NewTrace(TraceHooks{
+			OnCreate: func() { tr.created++ },
+			OnLoad:   func(*Cell) { tr.loaded++ },
+			OnChild: func(refIdx int) *Trace {
+				childIdx = refIdx
+				return childTrace
+			},
+		})
+
+		ref := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+		s := BeginCell().
+			SetTrace(trace).
+			MustStoreUInt(0xCD, 8).
+			MustStoreRef(ref).
+			ToSlice()
+
+		if tr.created != 1 {
+			t.Fatalf("expected one create notification, got %d", tr.created)
+		}
+		if tr.loaded != 0 {
+			t.Fatalf("ToSlice should not load-notify its freshly built cell, got %d", tr.loaded)
+		}
+		if s.Trace() != trace {
+			t.Fatal("slice should keep builder trace")
+		}
+		if got := s.MustLoadUInt(8); got != 0xCD {
+			t.Fatalf("unexpected slice bits: %x", got)
+		}
+
+		refCell, err := s.LoadRefCell()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if childIdx != 0 {
+			t.Fatalf("unexpected child trace index: %d", childIdx)
+		}
+		if refCell.Trace() != childTrace {
+			t.Fatal("loaded ref cell should carry child trace")
+		}
+		if _, err = refCell.BeginParse(); err != nil {
+			t.Fatal(err)
+		}
+		if childLoads != 1 {
+			t.Fatalf("expected child load notification after parsing ref, got %d", childLoads)
 		}
 	})
 }

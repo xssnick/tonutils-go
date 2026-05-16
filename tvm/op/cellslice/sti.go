@@ -35,7 +35,7 @@ func STI(sz uint) (op *helpers.AdvancedOP) {
 			if err := b0.StoreBigInt(i1, sz); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(b0)
+			return state.Stack.PushOwnedBuilder(b0)
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d STI", sz)

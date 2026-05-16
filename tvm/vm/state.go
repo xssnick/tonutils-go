@@ -158,6 +158,7 @@ type State struct {
 	Gas                    Gas
 	Cells                  CellManager
 	Libraries              []*cell.Cell
+	libraryCache           map[cell.Hash]*cell.Cell
 	Stack                  *Stack
 	Steps                  uint32
 	StopOnAccept           bool

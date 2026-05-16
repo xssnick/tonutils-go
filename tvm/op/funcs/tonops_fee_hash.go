@@ -792,7 +792,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 				if err = builder.StoreSlice(hash, uint(len(hash)*8)); err != nil {
 					return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
 				}
-				return state.Stack.PushBuilder(builder)
+				return state.Stack.PushOwnedBuilder(builder)
 			}
 			if len(hash) <= 32 {
 				return state.Stack.PushInt(new(big.Int).SetBytes(hash))

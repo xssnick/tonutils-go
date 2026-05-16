@@ -18,20 +18,25 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHCONT(nil) })
 }
 
+var (
+	pushContPrefixed = helpers.NewPrefixed(
+		helpers.UIntPrefix(0x9, 4),
+		helpers.UIntPrefix(0x47, 7),
+		helpers.UIntPrefix(0x8A, 8),
+	)
+	pushRefContPrefixed = helpers.NewPrefixed(helpers.UIntPrefix(0x8A, 8))
+)
+
 func PUSHCONT(cont *cell.Cell) *OpPUSHCONT {
 	return &OpPUSHCONT{
-		Prefixed: helpers.NewPrefixed(
-			helpers.UIntPrefix(0x9, 4),
-			helpers.UIntPrefix(0x47, 7),
-			helpers.UIntPrefix(0x8A, 8),
-		),
-		cont: cont,
+		Prefixed: pushContPrefixed,
+		cont:     cont,
 	}
 }
 
 func PUSHREFCONT(cont *cell.Cell) *OpPUSHCONT {
 	return &OpPUSHCONT{
-		Prefixed: helpers.NewPrefixed(helpers.UIntPrefix(0x8A, 8)),
+		Prefixed: pushRefContPrefixed,
 		cont:     cont,
 		typ:      "REF",
 	}

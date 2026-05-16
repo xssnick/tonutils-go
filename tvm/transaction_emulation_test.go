@@ -12,9 +12,68 @@ import (
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 const transactionTestLogicalTime = int64(1_000_000)
+
+func TestTransactionNormalizeGasUsageCapsOverspend(t *testing.T) {
+	res := &MessageExecutionResult{
+		ExecutionResult: ExecutionResult{
+			ExitCode: ^int64(vmerr.CodeOutOfGas),
+			GasUsed:  2963,
+			Gas:      vmcore.Gas{Base: 2835},
+		},
+		Accepted: true,
+	}
+
+	transactionNormalizeGasUsage(res)
+	if res.GasUsed != 2835 {
+		t.Fatalf("gas used = %d, want capped gas limit", res.GasUsed)
+	}
+}
+
+func TestTransactionPrecompiledGasUsageDoesNotOverrideOutOfGas(t *testing.T) {
+	res := &MessageExecutionResult{
+		ExecutionResult: ExecutionResult{
+			ExitCode: ^int64(vmerr.CodeOutOfGas),
+			GasUsed:  2835,
+			Steps:    65,
+		},
+		Accepted: true,
+	}
+
+	if err := transactionApplyPrecompiledGasUsage(res, big.NewInt(2963)); err != nil {
+		t.Fatal(err)
+	}
+	if res.GasUsed != 2835 {
+		t.Fatalf("gas used = %d, want TVM out-of-gas value", res.GasUsed)
+	}
+	if res.Steps != 65 {
+		t.Fatalf("steps = %d, want original VM steps", res.Steps)
+	}
+}
+
+func TestTransactionPrecompiledGasUsageOverridesSuccessfulTVM(t *testing.T) {
+	res := &MessageExecutionResult{
+		ExecutionResult: ExecutionResult{
+			ExitCode: 0,
+			GasUsed:  120,
+			Steps:    65,
+		},
+		Accepted: true,
+	}
+
+	if err := transactionApplyPrecompiledGasUsage(res, big.NewInt(2963)); err != nil {
+		t.Fatal(err)
+	}
+	if res.GasUsed != 2963 {
+		t.Fatalf("gas used = %d, want precompiled gas", res.GasUsed)
+	}
+	if res.Steps != 0 {
+		t.Fatalf("steps = %d, want hidden VM steps", res.Steps)
+	}
+}
 
 func makeTransactionExternalSuccessCode(t *testing.T, newData *cell.Cell) *cell.Cell {
 	t.Helper()
@@ -706,6 +765,81 @@ func TestEmulateTransactionInternalToNonExistCreatesUninitNoState(t *testing.T) 
 	}
 	if !desc.Aborted || desc.ActionPhase != nil {
 		t.Fatal("skipped compute should abort without action phase")
+	}
+}
+
+func TestEmulateTransactionInternalToSuspendedUninitSkipsSuspended(t *testing.T) {
+	now := uint32(tonopsTestTime.Unix())
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	stateInit := &tlb.StateInit{
+		Code: makeTransactionInternalSuccessCode(t, cell.BeginCell().EndCell()),
+		Data: cell.BeginCell().EndCell(),
+	}
+	stateCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatalf("failed to build state init: %v", err)
+	}
+
+	addr := address.NewAddress(0, 0, stateCell.Hash())
+	shard := buildTransactionTestUninitShardAccount(t, addr, 0, tlb.StorageInfo{
+		StorageExtra: tlb.StorageExtraNone{},
+		LastPaid:     now,
+	})
+
+	suspended := cell.NewDict(288)
+	suspendedKey := cell.BeginCell().
+		MustStoreInt(int64(addr.Workchain()), 32).
+		MustStoreSlice(addr.Data(), 256).
+		EndCell()
+	if err = suspended.Set(suspendedKey, cell.BeginCell().EndCell()); err != nil {
+		t.Fatalf("failed to store suspended address: %v", err)
+	}
+	suspendedCell, err := tlb.ToCell(&tlb.SuspendedAddressList{
+		Addresses:      suspended,
+		SuspendedUntil: now + 60,
+	})
+	if err != nil {
+		t.Fatalf("failed to build suspended address list: %v", err)
+	}
+
+	msgCell, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     internalEmulationSrcAddr,
+		DstAddr:     addr,
+		Amount:      tlb.FromNanoTONU(1_000_000),
+		StateInit:   stateInit,
+		Body:        body,
+	})
+	if err != nil {
+		t.Fatalf("failed to build internal message: %v", err)
+	}
+
+	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+		Address:     addr,
+		Now:         now,
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamSuspendedAddressList: suspendedCell,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("emulate transaction failed: %v", err)
+	}
+
+	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	if !ok {
+		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+	}
+	skipped, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseSkipped)
+	if !ok {
+		t.Fatalf("unexpected compute phase type %T", desc.ComputePhase.Phase)
+	}
+	if skipped.Reason.Type != tlb.ComputeSkipReasonSuspended {
+		t.Fatalf("unexpected skip reason: %s", skipped.Reason.Type)
+	}
+	if res.AccountState.Status != tlb.AccountStatusUninit {
+		t.Fatalf("unexpected committed account status: %s", res.AccountState.Status)
 	}
 }
 

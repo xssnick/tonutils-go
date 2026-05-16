@@ -139,7 +139,7 @@ func loadLEIntOp(mode uint64) *helpers.AdvancedOP {
 					return vmerr.Error(vmerr.CodeCellUnderflow)
 				}
 				if !preload {
-					if pushErr := state.Stack.PushSlice(cs); pushErr != nil {
+					if pushErr := state.Stack.PushOwnedSlice(cs); pushErr != nil {
 						return pushErr
 					}
 				}
@@ -150,7 +150,7 @@ func loadLEIntOp(mode uint64) *helpers.AdvancedOP {
 				return err
 			}
 			if !preload {
-				if err = state.Stack.PushSlice(cs); err != nil {
+				if err = state.Stack.PushOwnedSlice(cs); err != nil {
 					return err
 				}
 			}
@@ -202,7 +202,7 @@ func storeLEIntOp(mode uint64) *helpers.AdvancedOP {
 			if err = builder.StoreSlice(data, uint(bytesLen*8)); err != nil {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			return state.Stack.PushBuilder(builder)
+			return state.Stack.PushOwnedBuilder(builder)
 		},
 	}
 }

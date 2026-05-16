@@ -29,6 +29,12 @@ func NewTupleValue(val ...any) Tuple {
 	return Tuple{data: &tupleData{val: cp}}
 }
 
+// NewTupleOwned builds a tuple from values owned by the caller. The values slice
+// must not be mutated after the call.
+func NewTupleOwned(val []any) Tuple {
+	return Tuple{data: &tupleData{val: val}}
+}
+
 // NewTuple keeps the legacy pointer-returning constructor for compatibility.
 func NewTuple(val ...any) *Tuple {
 	t := NewTupleValue(val...)

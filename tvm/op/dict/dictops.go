@@ -237,17 +237,17 @@ func (op *OpPFXDICTSWITCH) Interpret(state *vm.State) error {
 		return mapDictError(err)
 	}
 	if value == nil {
-		return state.Stack.PushSlice(input)
+		return state.Stack.PushOwnedSlice(input)
 	}
 
 	prefixSlice, err := input.FetchSubslice(matched, 0)
 	if err != nil {
 		return cellUnderflowError(err)
 	}
-	if err = state.Stack.PushSlice(prefixSlice); err != nil {
+	if err = state.Stack.PushOwnedSlice(prefixSlice); err != nil {
 		return cellUnderflowError(err)
 	}
-	if err = state.Stack.PushSlice(input); err != nil {
+	if err = state.Stack.PushOwnedSlice(input); err != nil {
 		return err
 	}
 	return state.Jump(newOrdContinuation(value, state.CP))
@@ -332,7 +332,7 @@ func execStoreDict(state *vm.State) error {
 	if err = builder.StoreMaybeRefUncheckedDepth(dict); err != nil {
 		return cellOverflowError(err)
 	}
-	return state.Stack.PushBuilder(builder)
+	return state.Stack.PushOwnedBuilder(builder)
 }
 
 func execSkipDict(state *vm.State) error {
@@ -347,7 +347,7 @@ func execSkipDict(state *vm.State) error {
 	if err = sl.SkipBitsAndRefs(1, refs); err != nil {
 		return cellUnderflowError(err)
 	}
-	return state.Stack.PushSlice(sl)
+	return state.Stack.PushOwnedSlice(sl)
 }
 
 func execLoadDictSlice(preload bool, quiet bool) func(*vm.State) error {
@@ -362,7 +362,7 @@ func execLoadDictSlice(preload bool, quiet bool) func(*vm.State) error {
 				return vmerr.Error(vmerr.CodeCellUnderflow, "invalid dictionary serialization")
 			}
 			if !preload {
-				if err = state.Stack.PushSlice(sl); err != nil {
+				if err = state.Stack.PushOwnedSlice(sl); err != nil {
 					return err
 				}
 			}
@@ -379,11 +379,11 @@ func execLoadDictSlice(preload bool, quiet bool) func(*vm.State) error {
 			return cellUnderflowError(err)
 		}
 
-		if err = state.Stack.PushSlice(dictSlice); err != nil {
+		if err = state.Stack.PushOwnedSlice(dictSlice); err != nil {
 			return err
 		}
 		if !preload {
-			if err = state.Stack.PushSlice(sl); err != nil {
+			if err = state.Stack.PushOwnedSlice(sl); err != nil {
 				return err
 			}
 		}
@@ -406,7 +406,7 @@ func execLoadDict(preload bool, quiet bool) func(*vm.State) error {
 				return vmerr.Error(vmerr.CodeCellUnderflow, "invalid dictionary serialization")
 			}
 			if !preload {
-				if err = state.Stack.PushSlice(sl); err != nil {
+				if err = state.Stack.PushOwnedSlice(sl); err != nil {
 					return err
 				}
 			}
@@ -427,7 +427,7 @@ func execLoadDict(preload bool, quiet bool) func(*vm.State) error {
 			if err = sl.SkipBitsAndRefs(1, refs); err != nil {
 				return cellUnderflowError(err)
 			}
-			if err = state.Stack.PushSlice(sl); err != nil {
+			if err = state.Stack.PushOwnedSlice(sl); err != nil {
 				return err
 			}
 		}
@@ -476,7 +476,7 @@ func execDictGet(variant dictValueVariant) func(*vm.State) error {
 				}
 				return mapDictError(err)
 			}
-			if err = state.Stack.PushSlice(value); err != nil {
+			if err = state.Stack.PushOwnedSlice(value); err != nil {
 				return err
 			}
 		}
@@ -630,7 +630,6 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 				return err
 			}
 
-			shadow := newPlainDict(root, keyBits)
 			dict := newTracedDict(root, keyBits, state)
 
 			if variant.byRef {
@@ -641,11 +640,12 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 				if keyErr != nil {
 					return keyErr
 				}
-				oldSlice, err := shadow.LoadValue(key)
-				if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
-					return mapDictError(err)
+				valueBuilder := cell.BeginCell()
+				if err = valueBuilder.StoreRefUncheckedDepth(value); err != nil {
+					return err
 				}
-				if _, err = setDictRefValueWithMode(dict, key, value, mode); err != nil {
+				oldSlice, _, err := dict.LoadValueAndSetBuilderWithMode(key, valueBuilder, mode)
+				if err != nil {
 					return mapDictError(err)
 				}
 				oldValue, err := loadSingleRefDictValue(oldSlice)
@@ -665,11 +665,8 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 			if keyErr != nil {
 				return keyErr
 			}
-			oldValue, err := shadow.LoadValue(key)
-			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
-				return mapDictError(err)
-			}
-			if _, err = dict.SetBuilderWithMode(key, value.ToBuilder(), mode); err != nil {
+			oldValue, _, err := dict.LoadValueAndSetBuilderWithMode(key, value.ToBuilder(), mode)
+			if err != nil {
 				return mapDictError(err)
 			}
 			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -703,13 +700,9 @@ func execDictSetGetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*
 				return keyErr
 			}
 
-			shadow := newPlainDict(root, keyBits)
 			dict := newTracedDict(root, keyBits, state)
-			oldValue, err := shadow.LoadValue(key)
-			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
-				return mapDictError(err)
-			}
-			if _, err = dict.SetBuilderWithMode(key, value, mode); err != nil {
+			oldValue, _, err := dict.LoadValueAndSetBuilderWithMode(key, value, mode)
+			if err != nil {
 				return mapDictError(err)
 			}
 			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -722,7 +715,7 @@ func execDictSetGetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*
 
 func pushSetGetResultSlice(state *vm.State, oldValue *cell.Slice, mode cell.DictSetMode) error {
 	if oldValue != nil {
-		if err := state.Stack.PushSlice(oldValue); err != nil {
+		if err := state.Stack.PushOwnedSlice(oldValue); err != nil {
 			return err
 		}
 		return state.Stack.PushBool(mode != cell.DictSetModeAdd)
@@ -888,7 +881,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 		if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
 			return err
 		}
-		if err = state.Stack.PushSlice(value); err != nil {
+		if err = state.Stack.PushOwnedSlice(value); err != nil {
 			return err
 		}
 		return state.Stack.PushBool(true)
@@ -920,12 +913,12 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		dict := newTracedDict(root, keyBits, state)
 		var oldValue *cell.Cell
 		if newValue != nil {
-			shadow := newPlainDict(root, keyBits)
-			oldSlice, err := shadow.LoadValue(key)
-			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
-				return mapDictError(err)
+			valueBuilder := cell.BeginCell()
+			if err = valueBuilder.StoreRefUncheckedDepth(newValue); err != nil {
+				return err
 			}
-			if _, err = setDictRefValueWithMode(dict, key, newValue, cell.DictSetModeSet); err != nil {
+			oldSlice, _, err := dict.LoadValueAndSetBuilderWithMode(key, valueBuilder, cell.DictSetModeSet)
+			if err != nil {
 				return mapDictError(err)
 			}
 			oldValue, err = loadSingleRefDictValue(oldSlice)
@@ -1004,7 +997,7 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 					return err
 				}
 			} else {
-				if err = state.Stack.PushSlice(valSlice); err != nil {
+				if err = state.Stack.PushOwnedSlice(valSlice); err != nil {
 					return err
 				}
 			}
@@ -1144,7 +1137,7 @@ func execPfxDictGet(op int) func(*vm.State) error {
 			if op&1 != 0 {
 				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse a prefix belonging to a given prefix code dictionary")
 			}
-			if err = state.Stack.PushSlice(input); err != nil {
+			if err = state.Stack.PushOwnedSlice(input); err != nil {
 				return err
 			}
 			if op == 0 {
@@ -1157,15 +1150,15 @@ func execPfxDictGet(op int) func(*vm.State) error {
 		if err != nil {
 			return cellUnderflowError(err)
 		}
-		if err = state.Stack.PushSlice(prefixSlice); err != nil {
+		if err = state.Stack.PushOwnedSlice(prefixSlice); err != nil {
 			return err
 		}
 		if op&2 == 0 {
-			if err = state.Stack.PushSlice(value); err != nil {
+			if err = state.Stack.PushOwnedSlice(value); err != nil {
 				return err
 			}
 		}
-		if err = state.Stack.PushSlice(input); err != nil {
+		if err = state.Stack.PushOwnedSlice(input); err != nil {
 			return err
 		}
 
@@ -1254,7 +1247,7 @@ func execDictGetNear(variant dictNearVariant) func(*vm.State) error {
 			}
 		}
 
-		if err = state.Stack.PushSlice(value); err != nil {
+		if err = state.Stack.PushOwnedSlice(value); err != nil {
 			return err
 		}
 		if variant.kind == dictKeySlice {
@@ -1417,7 +1410,7 @@ func pushDictKeyValue(state *vm.State, key *cell.Cell, kind dictKeyKind) error {
 		if err != nil {
 			return cellUnderflowError(err)
 		}
-		return state.Stack.PushSlice(s)
+		return state.Stack.PushOwnedSlice(s)
 	case dictKeySignedInt:
 		s, err := key.BeginParse()
 		if err != nil {

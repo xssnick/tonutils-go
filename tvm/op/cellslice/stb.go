@@ -25,7 +25,7 @@ func STB() *helpers.SimpleOP {
 			if err := b0.StoreBuilderUncheckedDepth(b1); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(b0)
+			return state.Stack.PushOwnedBuilder(b0)
 		},
 		Name:      "STB",
 		BitPrefix: helpers.BytesPrefix(0xCF, 0x13),

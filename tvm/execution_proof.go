@@ -129,7 +129,7 @@ func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[ce
 func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen map[cell.Hash]struct{}) error {
 	node, ok := usageTree.NodeForCell(c)
 	if !ok {
-		loader, err := c.WithTrace(nil).BeginParse()
+		loader, err := c.BeginParseWithTrace(nil)
 		if err != nil {
 			return err
 		}
@@ -145,7 +145,7 @@ func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen ma
 		return nil
 	}
 
-	loader, err := c.WithTrace(usageTree.Trace(node)).BeginParse()
+	loader, err := c.BeginParseWithTrace(usageTree.Trace(node))
 	if err != nil {
 		return err
 	}

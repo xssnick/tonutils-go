@@ -52,6 +52,8 @@ When adding code, keep it at the lowest layer that owns the responsibility. Do n
 - Do not make excessive nil checks.
 - Check only what can really be nil logically. Do not check obvious input values for nil, which are intended to have a value.
 - Do not check obvious value inputs for nil.
+- Do not add defensive nil/self-guard checks for required inputs, even when they are pointers. If a pointer is part of an internal invariant and the caller must provide it, use it directly.
+- Required fields should not get fallback encoding or "just in case" nil handling.
 - Treat low-level code as potentially hot. Add runtime checks only when they protect a real boundary, enforce an invariant that can be violated in normal use, or prevent a meaningful safety issue. Avoid defensive checks that duplicate earlier validation or guard states that cannot happen through the package API.
 
 - Keep code simple and optimized.

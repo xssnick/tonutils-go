@@ -4,9 +4,17 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
+
+type arrayElementBoxKey struct {
+	typ reflect.Type
+	tag string
+}
+
+var arrayElementBoxTypeCache sync.Map
 
 func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Slice, skipProofBranches bool) (reflect.Value, error) {
 	if parseType.Kind() != reflect.Slice && parseType.Kind() != reflect.Array {
@@ -43,7 +51,11 @@ func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Sl
 
 	elemTag := strings.Join(elemSettings, " ")
 	elemType := parseType.Elem()
-	values := reflect.MakeSlice(reflect.SliceOf(elemType), 0, int(ln))
+	valuesType := parseType
+	if parseType.Kind() == reflect.Array {
+		valuesType = reflect.SliceOf(elemType)
+	}
+	values := reflect.MakeSlice(valuesType, 0, int(ln))
 
 	for loaded := 0; loaded < int(ln); {
 		chunk, err := ref.BeginParse()
@@ -210,11 +222,21 @@ func loadArrayElement(elemType reflect.Type, elemTag string, loader *cell.Slice,
 }
 
 func arrayElementBoxType(elemType reflect.Type, elemTag string) reflect.Type {
-	return reflect.StructOf([]reflect.StructField{{
+	key := arrayElementBoxKey{
+		typ: elemType,
+		tag: elemTag,
+	}
+	if cached, ok := arrayElementBoxTypeCache.Load(key); ok {
+		return cached.(reflect.Type)
+	}
+
+	boxType := reflect.StructOf([]reflect.StructField{{
 		Name: "Value",
 		Type: elemType,
 		Tag:  reflect.StructTag(fmt.Sprintf("tlb:%q", elemTag)),
 	}})
+	cached, _ := arrayElementBoxTypeCache.LoadOrStore(key, boxType)
+	return cached.(reflect.Type)
 }
 
 func buildArrayChunks(elems []*cell.Cell) (*cell.Cell, error) {

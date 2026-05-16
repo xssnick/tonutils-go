@@ -52,7 +52,7 @@ func pushStoreIntValue(state *vm.State, x *big.Int) error {
 
 func storeIntQuietFail(state *vm.State, status int64, builder *cell.Builder, x *big.Int, reverse bool) error {
 	if reverse {
-		if err := state.Stack.PushBuilder(builder); err != nil {
+		if err := state.Stack.PushOwnedBuilder(builder); err != nil {
 			return err
 		}
 		if err := pushStoreIntValue(state, x); err != nil {
@@ -62,7 +62,7 @@ func storeIntQuietFail(state *vm.State, status int64, builder *cell.Builder, x *
 		if err := pushStoreIntValue(state, x); err != nil {
 			return err
 		}
-		if err := state.Stack.PushBuilder(builder); err != nil {
+		if err := state.Stack.PushOwnedBuilder(builder); err != nil {
 			return err
 		}
 	}
@@ -127,7 +127,7 @@ func storeIntExtCommon(state *vm.State, bits uint, mode uint8) error {
 		return vmerr.Error(vmerr.CodeRangeCheck, err.Error())
 	}
 
-	if err = state.Stack.PushBuilder(builder); err != nil {
+	if err = state.Stack.PushOwnedBuilder(builder); err != nil {
 		return err
 	}
 	if quiet {

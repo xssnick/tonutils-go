@@ -53,49 +53,39 @@ func buildTransactionCell(params transactionBuildParams) (*cell.Cell, error) {
 
 	outDict := cell.NewDict(15)
 	for i, msgCell := range params.outMsgs {
-		value := cell.BeginCell().MustStoreRef(msgCell).EndCell()
-		if err := outDict.SetIntKey(big.NewInt(int64(i)), value); err != nil {
+		key := cell.BeginCell().MustStoreUInt(uint64(i), 15).EndCell()
+		value := cell.BeginCell().MustStoreRef(msgCell)
+		if err := outDict.SetBuilder(key, value); err != nil {
 			return nil, fmt.Errorf("failed to store outbound message %d: %w", i, err)
 		}
 	}
 
 	ioCell := buildTransactionIOCell(params.inMsg, outDict)
-	origStatusCell, err := params.origStatus.ToCell()
-	if err != nil {
-		return nil, err
-	}
-	endStatusCell, err := params.endStatus.ToCell()
-	if err != nil {
-		return nil, err
-	}
-	totalFeesCell, err := tlb.ToCell(&tlb.CurrencyCollection{Coins: tlb.FromNanoTON(params.totalFees)})
-	if err != nil {
-		return nil, err
-	}
-	stateUpdateCell, err := tlb.ToCell(&tlb.HashUpdate{
-		OldHash: append([]byte(nil), params.oldHash...),
-		NewHash: append([]byte(nil), params.newHash...),
-	})
-	if err != nil {
-		return nil, err
-	}
+	stateUpdateCell := buildTransactionHashUpdateCell(params.oldHash, params.newHash)
 	descriptionCell, err := tlb.ToCell(buildTransactionDescription(params.description))
 	if err != nil {
 		return nil, err
 	}
 
-	return cell.BeginCell().
+	builder := cell.BeginCell().
 		MustStoreUInt(0b0111, 4).
 		MustStoreSlice(params.accountAddr.Data(), 256).
 		MustStoreUInt(params.startLT, 64).
 		MustStoreSlice(transactionBits256(params.prevTxHash), 256).
 		MustStoreUInt(params.prevTxLT, 64).
 		MustStoreUInt(uint64(params.now), 32).
-		MustStoreUInt(uint64(len(params.outMsgs)), 15).
-		MustStoreBuilder(origStatusCell.ToBuilder()).
-		MustStoreBuilder(endStatusCell.ToBuilder()).
-		MustStoreRef(ioCell).
-		MustStoreBuilder(totalFeesCell.ToBuilder()).
+		MustStoreUInt(uint64(len(params.outMsgs)), 15)
+	if err = storeTransactionAccountStatus(builder, params.origStatus); err != nil {
+		return nil, err
+	}
+	if err = storeTransactionAccountStatus(builder, params.endStatus); err != nil {
+		return nil, err
+	}
+	builder.MustStoreRef(ioCell)
+	if err = storeTransactionCurrencyCollection(builder, params.totalFees, nil); err != nil {
+		return nil, err
+	}
+	return builder.
 		MustStoreRef(stateUpdateCell).
 		MustStoreRef(descriptionCell).
 		EndCell(), nil
@@ -106,17 +96,15 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell, acc
 	if err := tlb.Parse(&tx, txCell); err != nil {
 		return fmt.Errorf("failed to decode built transaction: %w", err)
 	}
-	tx.Hash = append([]byte(nil), txCell.Hash()...)
+	txHash := txCell.Hash()
+	tx.Hash = txHash
 
 	nextShard := &tlb.ShardAccount{
 		Account:       accountCell,
-		LastTransHash: append([]byte(nil), txCell.Hash()...),
+		LastTransHash: append([]byte(nil), txHash...),
 		LastTransLT:   startLT,
 	}
-	nextShardCell, err := tlb.ToCell(nextShard)
-	if err != nil {
-		return fmt.Errorf("failed to serialize new shard account: %w", err)
-	}
+	nextShardCell := buildTransactionShardAccountCell(accountCell, txHash, startLT)
 
 	out.Transaction = &tx
 	out.TransactionCell = txCell

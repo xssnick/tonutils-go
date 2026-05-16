@@ -25,7 +25,7 @@ func STGRAMS() *helpers.SimpleOP {
 			if err := b1.StoreBigCoins(i0); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(b1)
+			return state.Stack.PushOwnedBuilder(b1)
 		},
 		Name:      "STGRAMS",
 		BitPrefix: helpers.BytesPrefix(0xFA, 0x02),

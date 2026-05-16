@@ -107,7 +107,7 @@ func (op *OpSDBEGINSCONST) Interpret(state *vm.State) error {
 		if !op.quiet {
 			return vmerr.Error(vmerr.CodeCellUnderflow, "slice does not begin with expected data bits")
 		}
-		if err = state.Stack.PushSlice(cs); err != nil {
+		if err = state.Stack.PushOwnedSlice(cs); err != nil {
 			return err
 		}
 		return state.Stack.PushBool(false)
@@ -115,7 +115,7 @@ func (op *OpSDBEGINSCONST) Interpret(state *vm.State) error {
 	if err = cs.SkipBits(needle.BitsLeft()); err != nil {
 		return vmerr.Error(vmerr.CodeCellUnderflow)
 	}
-	if err = state.Stack.PushSlice(cs); err != nil {
+	if err = state.Stack.PushOwnedSlice(cs); err != nil {
 		return err
 	}
 	if op.quiet {

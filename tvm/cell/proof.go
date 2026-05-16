@@ -156,7 +156,10 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 			}
 		} else {
 			if ref.GetType() == PrunedCellType {
-				next = materializePrunedBranchBoundary(ref)
+				next, err = materializePrunedBranchBoundary(ref)
+				if err != nil {
+					return nil, fmt.Errorf("failed to materialize pruned boundary %d ref: %w", i, err)
+				}
 			} else {
 				next, err = createPrunedBranchFromCell(ref, childDepth+1)
 				if err != nil {
@@ -174,18 +177,32 @@ func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, e
 	return rebuilt, nil
 }
 
-func materializePrunedBranchBoundary(c *Cell) *Cell {
+func materializePrunedBranchBoundary(c *Cell) (*Cell, error) {
 	if c == nil || c.GetType() != PrunedCellType || !c.IsLazy() || c.IsVirtualized() {
-		return c
+		return c, nil
 	}
 
-	cp := c.copy()
-	cp.setLazy(false)
-	if cp.meta != nil {
-		cp.meta.lazyLoader = nil
-		cp.clearMetaIfEmpty()
+	levelMask := c.getLevelMask()
+	data := c.data
+	if levelMask.GetLevel() == 0 {
+		levelMask = LevelMask{Mask: oneLevelMask(1)}
+		data = append([]byte(nil), c.data...)
+		data[1] = levelMask.Mask
 	}
-	return cp
+
+	out := &Cell{
+		bitsSz: c.bitsSz,
+		data:   data,
+	}
+	out.setSpecial(true)
+	out.setLevelMask(levelMask)
+	if err := validateBoundaryCell(out); err != nil {
+		return nil, err
+	}
+	if err := out.calculateHashes(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func createMerkleProofCell(body *Cell) (*Cell, error) {

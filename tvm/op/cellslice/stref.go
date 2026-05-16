@@ -25,7 +25,7 @@ func STREF() *helpers.SimpleOP {
 			if err := b0.StoreRefUncheckedDepth(c1); err != nil {
 				return err
 			}
-			return state.Stack.PushBuilder(b0)
+			return state.Stack.PushOwnedBuilder(b0)
 		},
 		Name:      "STREF",
 		BitPrefix: helpers.BytesPrefix(0xCC),

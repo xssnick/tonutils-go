@@ -26,7 +26,7 @@ func LDGRAMS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(s)
+			return state.Stack.PushOwnedSlice(s)
 		},
 		Name:      "LDGRAMS",
 		BitPrefix: helpers.BytesPrefix(0xFA, 0x00),

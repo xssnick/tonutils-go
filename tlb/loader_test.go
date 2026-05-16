@@ -279,6 +279,48 @@ func TestVarIntTagRoundTrip(t *testing.T) {
 	}
 }
 
+func BenchmarkInterfaceUnionLoad(b *testing.B) {
+	Register(StructA{})
+	Register(StructB{})
+
+	src := testAny{
+		StructAny: StructB{
+			Val: 0xAACC,
+		},
+	}
+	c, err := ToCell(src)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var dst testAny
+		if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkInterfaceUnionStore(b *testing.B) {
+	Register(StructA{})
+	Register(StructB{})
+
+	src := testAny{
+		StructAny: StructB{
+			Val: 0xAACC,
+		},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := ToCell(src); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestVarIntRejectsTooBigValue(t *testing.T) {
 	type smallVarInt struct {
 		Value *big.Int `tlb:"var int 1"`

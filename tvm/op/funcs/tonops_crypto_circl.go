@@ -81,7 +81,7 @@ func init() {
 }
 
 func pushSliceBytes(state *vm.State, data []byte) error {
-	return state.Stack.PushSlice(cell.BeginCell().MustStoreSlice(data, uint(len(data))*8).ToSlice())
+	return state.Stack.PushOwnedSlice(cell.BeginCell().MustStoreSlice(data, uint(len(data))*8).ToSlice())
 }
 
 func blsUnknown(msg string, err error) error {

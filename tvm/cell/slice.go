@@ -19,6 +19,15 @@ type Slice struct {
 	refEnd   uint8
 }
 
+func newSliceFromCell(c *Cell, trace *Trace) *Slice {
+	return &Slice{
+		cell:   c,
+		trace:  trace,
+		bitEnd: c.bitsSz,
+		refEnd: uint8(c.refsCount()),
+	}
+}
+
 func (c *Slice) refCellAt(i int) (*Cell, error) {
 	refView := newCellRefView(c.cell)
 	return refView.boundaryRef(int(c.refStart) + i)
@@ -915,6 +924,17 @@ func (c *Slice) ToBuilder() *Builder {
 
 func (c *Slice) ToCell() (*Cell, error) {
 	left := c.BitsLeft()
+	fullCell := c.bitStart == 0 &&
+		c.bitEnd == c.cell.bitsSz &&
+		c.refStart == 0 &&
+		int(c.refEnd) == c.cell.refsCount()
+	if fullCell && c.trace == nil {
+		if c.cell.Trace() == nil {
+			return c.cell, nil
+		}
+		return c.cell.WithTrace(nil), nil
+	}
+
 	data, err := c.PreloadSlice(left)
 	if err != nil {
 		return nil, err
@@ -930,10 +950,6 @@ func (c *Slice) ToCell() (*Cell, error) {
 		data:   data,
 	}
 	cl.setRefs(refs)
-	fullCell := c.bitStart == 0 &&
-		c.bitEnd == c.cell.bitsSz &&
-		c.refStart == 0 &&
-		int(c.refEnd) == c.cell.refsCount()
 	if c.cell.IsSpecial() && fullCell {
 		cl.setSpecial(true)
 		if err = refreshSpecialCellLevelMask(cl); err != nil {
@@ -973,9 +989,6 @@ func (c *Slice) SetTrace(trace *Trace) *Slice {
 }
 
 func (c *Slice) Trace() *Trace {
-	if c == nil {
-		return nil
-	}
 	return c.trace
 }
 

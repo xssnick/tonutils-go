@@ -18,7 +18,9 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHINT(nil) })
 }
 
-func PUSHINT(value *big.Int) *OpPUSHINT {
+var pushIntPrefixed = buildPushIntPrefixed()
+
+func buildPushIntPrefixed() helpers.Prefixed {
 	prefixes := []helpers.BitPrefix{
 		helpers.UIntPrefix(0x7, 4),
 		helpers.UIntPrefix(0x80, 8),
@@ -27,8 +29,12 @@ func PUSHINT(value *big.Int) *OpPUSHINT {
 	for i := uint64(0); i < 31; i++ {
 		prefixes = append(prefixes, helpers.UIntPrefix(0x82<<5|i, 13))
 	}
+	return helpers.NewPrefixed(prefixes...)
+}
+
+func PUSHINT(value *big.Int) *OpPUSHINT {
 	return &OpPUSHINT{
-		Prefixed: helpers.NewPrefixed(prefixes...),
+		Prefixed: pushIntPrefixed,
 		value:    value,
 	}
 }

@@ -5,6 +5,7 @@ type TraceNode uint32
 type usageTreeNode struct {
 	parent   TraceNode
 	children [4]TraceNode
+	trace    *Trace
 	loaded   bool
 	marked   bool
 	cell     *Cell
@@ -37,6 +38,10 @@ func (t *CellUsageTree) Trace(node TraceNode) *Trace {
 	if t == nil || !t.validNode(node) {
 		return nil
 	}
+	if t.nodes[node].trace != nil {
+		return t.nodes[node].trace
+	}
+
 	trace := NewTrace(TraceHooks{
 		OnLoad: func(c *Cell) {
 			t.OnLoad(node, c)
@@ -48,6 +53,7 @@ func (t *CellUsageTree) Trace(node TraceNode) *Trace {
 	})
 	trace.usageTree = t
 	trace.usageNode = node
+	t.nodes[node].trace = trace
 	return trace
 }
 

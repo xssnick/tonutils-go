@@ -27,10 +27,10 @@ func LDSLICEX() *helpers.SimpleOP {
 			if err != nil {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
-			if err = state.Stack.PushSlice(s); err != nil {
+			if err = state.Stack.PushOwnedSlice(s); err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(s1)
+			return state.Stack.PushOwnedSlice(s1)
 		},
 		Name:      "LDSLICEX",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x18),

@@ -28,7 +28,7 @@ func LDI(sz uint) (op *helpers.AdvancedOP) {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushSlice(s0)
+			return state.Stack.PushOwnedSlice(s0)
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d LDI", sz)

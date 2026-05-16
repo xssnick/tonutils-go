@@ -109,6 +109,12 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		if cp.Int64() != 55 {
 			t.Fatalf("big.Int normalization should copy input, got %d", cp.Int64())
 		}
+		origValue := *big.NewInt(77)
+		cp = normalizeMessageTupleValue(origValue).(*big.Int)
+		origValue.SetInt64(99)
+		if cp.Int64() != 77 {
+			t.Fatalf("big.Int value normalization should copy input, got %d", cp.Int64())
+		}
 		if got := normalizeMessageTupleValue("plain"); got.(string) != "plain" {
 			t.Fatalf("unexpected passthrough value: %v", got)
 		}
