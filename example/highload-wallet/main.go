@@ -24,7 +24,7 @@ func main() {
 		panic(err)
 	}
 
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetryTimeout(3, 5*time.Second)
 
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")

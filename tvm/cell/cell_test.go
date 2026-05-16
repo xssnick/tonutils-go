@@ -154,7 +154,7 @@ func TestVarAddr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		a := c.BeginParse().MustLoadAddr()
+		a := c.MustBeginParse().MustLoadAddr()
 		if a.Type() != addrType {
 			t.Fatal(addrType, a.Type(), "not correct addr type")
 		}
@@ -174,7 +174,9 @@ func BenchmarkHash(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		c.calculateHashes()
+		if err := c.calculateHashes(); err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.StopTimer()
 }
@@ -258,6 +260,35 @@ func TestCell_ShardStateProof(t *testing.T) {
 	}
 }
 
+func TestCell_SpecialTypeRecognition(t *testing.T) {
+	libraryCell, err := BeginCell().
+		MustStoreUInt(uint64(LibraryCellType), 8).
+		MustStoreSlice(make([]byte, 32), 256).
+		EndCellSpecial(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if libraryCell.GetType() != LibraryCellType {
+		t.Fatalf("unexpected library cell type: %v", libraryCell.GetType())
+	}
+	if libraryCell.Depth(0) != 0 {
+		t.Fatalf("unexpected library cell depth: %d", libraryCell.Depth(0))
+	}
+
+	ordinary := BeginCell().
+		MustStoreUInt(uint64(LibraryCellType), 8).
+		MustStoreSlice(make([]byte, 32), 256).
+		EndCell()
+	if ordinary.GetType() != OrdinaryCellType {
+		t.Fatalf("unexpected ordinary cell type: %v", ordinary.GetType())
+	}
+
+	shortSpecial := makeManualCellForTest(true, LevelMask{}, 1, []byte{0x80}, nil)
+	if shortSpecial.GetType() != UnknownCellType {
+		t.Fatalf("unexpected short special cell type: %v", shortSpecial.GetType())
+	}
+}
+
 func TestSameBocIndex(t *testing.T) {
 	r := BeginCell().MustStoreUInt(555, 32).EndCell()
 	c := BeginCell().MustStoreUInt(55, 64).MustStoreRef(r).MustStoreRef(r).MustStoreRef(r.copy()).EndCell()
@@ -285,7 +316,8 @@ func TestCellRecursive(t *testing.T) {
 		log.Fatal("must be err")
 	}
 
-	if !strings.HasSuffix(err.Error(), "recursive reference of cells") {
+	if !strings.HasSuffix(err.Error(), "recursive reference of cells") &&
+		!strings.HasSuffix(err.Error(), "invalid cell index") {
 		log.Fatal("incorrect err:", err.Error())
 	}
 }

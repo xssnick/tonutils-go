@@ -1,0 +1,21 @@
+package cellslice
+
+import (
+	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/vm"
+)
+
+func init() {
+	vm.List = append(vm.List, func() vm.OP { return NEWC() })
+}
+
+func NEWC() *helpers.SimpleOP {
+	return &helpers.SimpleOP{
+		Action: func(state *vm.State) error {
+			return state.Stack.PushOwnedBuilder(cell.BeginCell().SetTrace(state.Cells.Trace()))
+		},
+		Name:      "NEWC",
+		BitPrefix: helpers.BytesPrefix(0xC8),
+	}
+}

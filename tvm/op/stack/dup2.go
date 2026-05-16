@@ -1,0 +1,37 @@
+package stack
+
+import (
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/vm"
+)
+
+func init() {
+	vm.List = append(vm.List, func() vm.OP { return DUP2() })
+}
+
+func DUP2() *helpers.SimpleOP {
+	return &helpers.SimpleOP{
+		Action: func(state *vm.State) error {
+			if err := requireStackDepth(state, 2); err != nil {
+				return err
+			}
+
+			a, err := state.Stack.Get(1)
+			if err != nil {
+				return err
+			}
+			b, err := state.Stack.Get(0)
+			if err != nil {
+				return err
+			}
+
+			if err = state.Stack.PushAny(a); err != nil {
+				return err
+			}
+
+			return state.Stack.PushAny(b)
+		},
+		Name:      "2DUP",
+		BitPrefix: helpers.BytesPrefix(0x5C),
+	}
+}

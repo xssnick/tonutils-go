@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/ton"
 	"log"
 	"sort"
+	"time"
 )
 
 func main() {
@@ -20,7 +21,7 @@ func main() {
 		return
 	}
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry().WithLSInfoInErrors()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetryTimeout(3, 5*time.Second).WithLSInfoInErrors()
 
 	// if we want to route all requests to the same node, we can use it
 	ctx := client.StickyContext(context.Background())
@@ -32,7 +33,7 @@ func main() {
 		return
 	}
 
-	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	addr := address.MustParseAddr("UQDNx_gD2Tm4wbnIsOWYBwEf6ssseVNWyjGAl9KTSo4c4Sdr")
 
 	// we use WaitForBlock to make sure block is ready,
 	// it is optional but escapes us from liteserver block not ready errors

@@ -1,10 +1,8 @@
 package cell
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"strings"
 )
@@ -13,6 +11,8 @@ type Dictionary struct {
 	keySz uint
 
 	root *Cell
+
+	trace *Trace
 }
 
 type HashmapKV struct {
@@ -41,15 +41,19 @@ func (c *Cell) AsDict(keySz uint) *Dictionary {
 }
 
 func (c *Slice) ToDict(keySz uint) (*Dictionary, error) {
-	root, err := c.ToCell()
+	root, err := c.WithoutTrace().ToCell()
 	if err != nil {
 		return nil, err
 	}
 
-	return &Dictionary{
+	if err = validateDictKeySize(keySz); err != nil {
+		return nil, fmt.Errorf("failed to validate dict: %w", err)
+	}
+
+	return (&Dictionary{
 		keySz: keySz,
 		root:  root,
-	}, nil
+	}).SetTrace(c.trace), nil
 }
 
 func (c *Slice) MustLoadDict(keySz uint) *Dictionary {
@@ -61,18 +65,25 @@ func (c *Slice) MustLoadDict(keySz uint) *Dictionary {
 }
 
 func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
-	cl, err := c.LoadMaybeRef()
+	root, has, err := c.loadMaybeRefCell()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load ref for dict, err: %w", err)
 	}
 
-	if cl == nil {
-		return &Dictionary{
+	if !has {
+		return (&Dictionary{
 			keySz: keySz,
-		}, nil
+		}).SetTrace(c.trace), nil
 	}
 
-	return cl.ToDict(keySz)
+	if err = validateDictKeySize(keySz); err != nil {
+		return nil, fmt.Errorf("failed to validate dict: %w", err)
+	}
+
+	return (&Dictionary{
+		keySz: keySz,
+		root:  root,
+	}).SetTrace(root.Trace()), nil
 }
 
 func (d *Dictionary) GetKeySize() uint {
@@ -83,7 +94,21 @@ func (d *Dictionary) Copy() *Dictionary {
 	return &Dictionary{
 		keySz: d.keySz,
 		root:  d.root,
+		trace: d.trace,
 	}
+}
+
+func (d *Dictionary) SetTrace(trace *Trace) *Dictionary {
+	if d == nil {
+		return nil
+	}
+	d.trace = trace
+	d.root = d.root.withTraceCombined(trace)
+	return d
+}
+
+func (d *Dictionary) setRoot(root *Cell) {
+	d.root = root
 }
 
 func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
@@ -91,198 +116,423 @@ func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
 }
 
 func (d *Dictionary) storeLeaf(keyPfx *Slice, value *Builder, keyOffset uint) (*Cell, error) {
-	// process last branch
 	if value == nil {
 		return nil, nil
 	}
+	return storeDictNodeTraced(keyPfx, value, keyOffset, d.trace)
+}
 
-	b := BeginCell()
-	if err := d.storeLabel(b, keyPfx, keyOffset); err != nil {
-		return nil, fmt.Errorf("failed to store label: %w", err)
+func (d *Dictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) (*Cell, error) {
+	b := BeginCell().SetTrace(d.trace)
+	if err := b.StoreRefUncheckedDepth(left); err != nil {
+		return nil, err
+	}
+	if err := b.StoreRefUncheckedDepth(right); err != nil {
+		return nil, err
 	}
 
-	if err := b.StoreBuilder(value); err != nil {
-		return nil, fmt.Errorf("failed to store value: %w", err)
-	}
-
-	return b.EndCell(), nil
+	return storeDictNodeTraced(label, b, keyOffset, d.trace)
 }
 
 func (d *Dictionary) Set(key, value *Cell) error {
-	if key.BitsSize() != d.keySz {
-		return fmt.Errorf("invalid key size")
+	if value == nil {
+		return d.Delete(key)
 	}
 
-	var val *Builder
-	if value != nil {
-		val = value.ToBuilder()
+	_, err := d.SetWithMode(key, value, DictSetModeSet)
+	return err
+}
+
+func (d *Dictionary) SetBuilder(key *Cell, value *Builder) error {
+	_, err := d.SetBuilderWithMode(key, value, DictSetModeSet)
+	return err
+}
+
+func (d *Dictionary) SetWithMode(key, value *Cell, mode DictSetMode) (bool, error) {
+	if value == nil {
+		return false, fmt.Errorf("value is nil")
 	}
 
-	var dive func(branch *Cell, pfx *Slice, keyOffset uint) (*Cell, error)
-	dive = func(branch *Cell, pfx *Slice, keyOffset uint) (*Cell, error) {
-		// branch is exist, we need to check it
-		s := branch.BeginParse()
-		sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load label: %w", err)
-		}
+	return d.SetBuilderWithMode(key, value.ToBuilder(), mode)
+}
 
-		isNewRight, matches := false, true
-		kPartSlice := kPart.ToSlice()
-		var bitsMatches uint
-		for bitsMatches = 0; bitsMatches < sz; bitsMatches++ {
-			vCurr, err := kPartSlice.LoadUInt(1)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load current key bit: %w", err)
-			}
-
-			vNew, err := pfx.LoadUInt(1)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load new key bit: %w", err)
-			}
-
-			if vCurr != vNew {
-				isNewRight = vNew != 0
-				matches = false
-				break
-			}
-		}
-
-		if matches {
-			if pfx.BitsLeft() == 0 {
-				// label is same with our new key, we just need to change value
-				return d.storeLeaf(kPart.ToSlice(), val, keyOffset)
-			}
-
-			// full label is matches part of our key, we need to go deeper
-			refIdx := int(pfx.MustLoadUInt(1))
-			ref, err := branch.PeekRef(refIdx)
-			if err != nil {
-				return nil, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
-			}
-
-			ref, err = dive(ref, pfx, keyOffset-(bitsMatches+1))
-			if err != nil {
-				return nil, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
-			}
-
-			if ref == nil {
-				refIdx = refIdx ^ 1
-				nRef, err := branch.PeekRef(refIdx)
-				if err != nil {
-					return nil, fmt.Errorf("failed to peek neighbour ref %d: %w", refIdx, err)
-				}
-
-				slc := nRef.BeginParse()
-				_, k2Part, err := loadLabel(keyOffset-(bitsMatches+1), slc, BeginCell())
-				if err != nil {
-					return nil, fmt.Errorf("failed to load neighbour label: %w", err)
-				}
-
-				if err = kPart.StoreUInt(uint64(refIdx), 1); err != nil {
-					return nil, fmt.Errorf("failed to store neighbour label part bit: %w", err)
-				}
-
-				if err = kPart.StoreBuilder(k2Part); err != nil {
-					return nil, fmt.Errorf("failed to store neighbour label part: %w", err)
-				}
-
-				// deleted, store neighbour leaf instead of branch
-				return d.storeLeaf(kPart.ToSlice(), slc.ToBuilder(), keyOffset)
-			}
-
-			b := branch.copy()
-			b.refs[refIdx] = ref
-
-			// recalculate hashes after direct modification
-			b.calculateHashes()
-			return b, nil
-		}
-
-		if value == nil {
-			// key is not exists, and want to delete, do nothing
-			return branch, nil
-		}
-
-		b := BeginCell()
-		// label is not matches our key, we need to split it
-		nkPart := kPart.ToSlice().MustLoadSlice(bitsMatches)
-		if err = d.storeLabel(b, BeginCell().MustStoreSlice(nkPart, bitsMatches).ToSlice(), keyOffset); err != nil {
-			return nil, fmt.Errorf("failed to store middle label: %w", err)
-		}
-
-		b1 := BeginCell()
-		if err = d.storeLabel(b1, kPartSlice, keyOffset-(bitsMatches+1)); err != nil {
-			return nil, fmt.Errorf("failed to store middle left label: %w", err)
-		}
-		b1.MustStoreBuilder(s.ToBuilder())
-
-		dRef, err := d.storeLeaf(pfx, val, keyOffset-(bitsMatches+1))
-		if err != nil {
-			return nil, fmt.Errorf("failed to dive into right ref of new branch: %w", err)
-		}
-
-		// place refs according to last not matched bit, it is part of the key
-		if isNewRight {
-			b.refs = append(b.refs, b1.EndCell(), dRef)
-		} else {
-			b.refs = append(b.refs, dRef, b1.EndCell())
-		}
-
-		return b.EndCell(), nil
+func (d *Dictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetMode) (bool, error) {
+	if d == nil {
+		return false, fmt.Errorf("dict is nil")
+	}
+	if key == nil || key.BitsSize() != d.keySz {
+		return false, fmt.Errorf("invalid key size")
+	}
+	if value == nil {
+		return false, fmt.Errorf("value builder is nil")
 	}
 
-	var err error
-	var newRoot *Cell
-	if d.root == nil {
-		newRoot, err = d.storeLeaf(key.BeginParse(), val, d.keySz)
-	} else {
-		newRoot, err = dive(d.root, key.BeginParse(), d.keySz)
-	}
-
+	keySlice, err := key.BeginParse()
 	if err != nil {
-		return fmt.Errorf("failed to set value in dict, err: %w", err)
+		return false, fmt.Errorf("failed to load key: %w", err)
 	}
 
-	d.root = newRoot
-	return nil
+	newRoot, _, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
+	if err != nil {
+		return false, fmt.Errorf("failed to set value in dict, err: %w", err)
+	}
+	if changed {
+		d.setRoot(newRoot)
+	}
+	return changed, nil
+}
+
+func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode) (*Cell, *Slice, bool, error) {
+	if branch == nil {
+		if mode == DictSetModeReplace {
+			return nil, nil, false, nil
+		}
+		leaf, err := d.storeLeaf(pfx, value, keyOffset)
+		return leaf, nil, err == nil, err
+	}
+
+	node, err := parseFixedDictNode(branch, keyOffset)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, nil, false, err
+	}
+
+	bitsMatches, isNewRight, _, err := matchBuilderLabel(node.label, node.labelLen, pfx)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
+	}
+
+	if bitsMatches == node.labelLen {
+		if pfx.BitsLeft() == 0 {
+			if mode == DictSetModeAdd {
+				return node.cell, node.loader, false, nil
+			}
+			leaf, err := d.storeLeaf(node.label.ToSlice(), value, keyOffset)
+			return leaf, node.loader, err == nil, err
+		}
+
+		refIdx := int(pfx.MustLoadUInt(1))
+		ref, err := node.ref(refIdx)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load %d ref: %w", refIdx, err)
+		}
+
+		ref, oldValue, changed, err := d.set(ref, pfx, keyOffset-(bitsMatches+1), value, mode)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
+		}
+		if !changed {
+			return node.cell, oldValue, false, nil
+		}
+
+		cloned, changed, err := node.cloneWithRef(refIdx, ref, d.trace)
+		return cloned, oldValue, changed, err
+	}
+
+	if mode == DictSetModeReplace {
+		return node.cell, nil, false, nil
+	}
+
+	prefixLabel, labelRemainder, err := node.splitLabel(bitsMatches)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to split old child label: %w", err)
+	}
+
+	oldChild := BeginCell().SetTrace(d.trace)
+	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
+		return nil, nil, false, fmt.Errorf("failed to store old child label: %w", err)
+	}
+	if err = oldChild.StoreBuilderUncheckedDepth(node.loader.ToBuilder()); err != nil {
+		return nil, nil, false, fmt.Errorf("failed to store old child payload: %w", err)
+	}
+
+	newChild, err := d.storeLeaf(pfx, value, keyOffset-(bitsMatches+1))
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to store new child leaf: %w", err)
+	}
+
+	oldChildCell, err := oldChild.EndCellSpecial(false)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	left, right := newChild, oldChildCell
+	if isNewRight {
+		left, right = right, left
+	}
+
+	newBranch, err := d.storeFork(prefixLabel, left, right, keyOffset)
+	return newBranch, nil, err == nil, err
+}
+
+func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Slice, *Cell, bool, error) {
+	if branch == nil {
+		return nil, nil, false, nil
+	}
+
+	node, err := parseFixedDictNode(branch, keyOffset)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, nil, false, err
+	}
+
+	bitsMatches, err := consumeCommonPrefix(node.label.ToSlice(), pfx, node.labelLen)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
+	}
+	if bitsMatches < node.labelLen {
+		return nil, nil, false, nil
+	}
+
+	if pfx.BitsLeft() == 0 {
+		return node.loader, nil, true, nil
+	}
+
+	refIdx := int(pfx.MustLoadUInt(1))
+	ref, err := node.ref(refIdx)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to load %d ref: %w", refIdx, err)
+	}
+
+	nextKeyOffset := keyOffset - (bitsMatches + 1)
+	removed, newChild, changed, err := d.lookupDelete(ref, pfx, nextKeyOffset)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
+	}
+	if !changed {
+		return nil, nil, false, nil
+	}
+
+	if newChild == nil {
+		otherIdx := refIdx ^ 1
+		otherRef, err := node.ref(otherIdx)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+		}
+
+		slc, err := otherRef.BeginParse()
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+		}
+
+		_, otherLabel, err := loadLabel(nextKeyOffset, slc, BeginCell())
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
+		}
+
+		if err = node.appendEdgeLabel(uint64(otherIdx), otherLabel, "neighbour"); err != nil {
+			return nil, nil, false, err
+		}
+
+		merged, err := d.storeLeaf(node.label.ToSlice(), slc.ToBuilder(), keyOffset)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		return removed, merged, true, nil
+	}
+
+	cloned, changed, err := node.cloneWithRef(refIdx, newChild, d.trace)
+	return removed, cloned, changed, err
 }
 
 func (d *Dictionary) Delete(key *Cell) error {
-	return d.Set(key, nil)
+	if d == nil {
+		return nil
+	}
+	if key == nil || key.BitsSize() != d.keySz {
+		return fmt.Errorf("incorrect key size")
+	}
+
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return fmt.Errorf("failed to load key: %w", err)
+	}
+
+	_, newRoot, changed, err := d.lookupDelete(d.root, keySlice, d.keySz)
+	if err != nil {
+		return err
+	}
+	if changed {
+		d.setRoot(newRoot)
+	}
+	return nil
 }
 
 func (d *Dictionary) DeleteIntKey(key *big.Int) error {
-	return d.SetIntKey(key, nil)
+	return d.Delete(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
 }
 
-// Deprecated: use LoadValueByIntKey
-func (d *Dictionary) GetByIntKey(key *big.Int) *Cell {
-	return d.Get(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
-}
-
-// LoadValueByIntKey - same as LoadValue, but constructs cell key from int
+// LoadValueByIntKey is the same as LoadValue, but constructs the key cell from int.
 func (d *Dictionary) LoadValueByIntKey(key *big.Int) (*Slice, error) {
 	return d.LoadValue(BeginCell().MustStoreBigInt(key, d.keySz).EndCell())
+}
+
+func (d *Dictionary) LoadMin() (*Cell, *Slice, error) {
+	return d.LoadMinMax(false, false)
+}
+
+func (d *Dictionary) LoadMax() (*Cell, *Slice, error) {
+	return d.LoadMinMax(true, false)
+}
+
+func (d *Dictionary) LoadMinAndDelete() (*Cell, *Slice, error) {
+	return d.LoadMinMaxAndDelete(false, false)
+}
+
+func (d *Dictionary) LoadMaxAndDelete() (*Cell, *Slice, error) {
+	return d.LoadMinMaxAndDelete(true, false)
 }
 
 // LoadValue - searches key in the underline dict cell and returns its value
 //
 //	If key is not found ErrNoSuchKeyInDict will be returned
 func (d *Dictionary) LoadValue(key *Cell) (*Slice, error) {
-	res, _, err := d.LoadValueWithProof(key, nil)
-	return res, err
+	if key == nil || key.BitsSize() != d.keySz {
+		return nil, fmt.Errorf("incorrect key size")
+	}
+
+	return d.findKey(key)
 }
 
-// LoadValueWithProof - searches key in the underline dict cell, constructs proof path and returns leaf
-//
-//	If key is not found ErrNoSuchKeyInDict will be returned,
-//	and path with proof of non-existing key will be attached to skeleton (if passed)
-func (d *Dictionary) LoadValueWithProof(key *Cell, skeleton *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
-	if key.BitsSize() != d.keySz {
-		return nil, nil, fmt.Errorf("incorrect key size")
+func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice, error) {
+	if d == nil || d.root == nil {
+		return nil, nil, ErrNoSuchKeyInDict
 	}
-	return d.findKey(d.root, key, skeleton)
+
+	key := BeginCell()
+	branch := d.root
+	remaining := d.keySz
+
+	for {
+		loader, err := branch.BeginParse()
+		if err != nil {
+			return nil, nil, err
+		}
+		if loader.cell.IsSpecial() {
+			return nil, nil, fmt.Errorf("dict has special cells in tree structure")
+		}
+
+		labelLen, keyBuilder, err := loadLabel(remaining, loader, key)
+		if err != nil {
+			return nil, nil, err
+		}
+		key = keyBuilder
+		remaining -= labelLen
+
+		if remaining == 0 {
+			return key.EndCell(), loader, nil
+		}
+
+		bit := fetchMax
+		if key.BitsUsed() == 0 && invertFirst {
+			bit = !bit
+		}
+
+		if err := key.StoreBoolBit(bit); err != nil {
+			return nil, nil, err
+		}
+
+		refIdx := 0
+		if bit {
+			refIdx = 1
+		}
+		next, err := loader.peekRefCellAt(refIdx)
+		if err != nil {
+			return nil, nil, err
+		}
+		branch = next
+		remaining--
+	}
+}
+
+func (d *Dictionary) LoadMinMaxAndDelete(fetchMax bool, invertFirst bool) (*Cell, *Slice, error) {
+	key, _, err := d.LoadMinMax(fetchMax, invertFirst)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	value, err := d.LoadValueAndDelete(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, value, nil
+}
+
+func (d *Dictionary) LoadValueAndSet(key, value *Cell) (*Slice, bool, error) {
+	return d.LoadValueAndSetWithMode(key, value, DictSetModeSet)
+}
+
+func (d *Dictionary) LoadValueAndSetWithMode(key, value *Cell, mode DictSetMode) (*Slice, bool, error) {
+	if value == nil {
+		return nil, false, fmt.Errorf("value is nil")
+	}
+	return d.LoadValueAndSetBuilderWithMode(key, value.ToBuilder(), mode)
+}
+
+func (d *Dictionary) LoadValueAndSetBuilder(key *Cell, value *Builder) (*Slice, bool, error) {
+	return d.LoadValueAndSetBuilderWithMode(key, value, DictSetModeSet)
+}
+
+func (d *Dictionary) LoadValueAndSetBuilderWithMode(key *Cell, value *Builder, mode DictSetMode) (*Slice, bool, error) {
+	if d == nil {
+		return nil, false, fmt.Errorf("dict is nil")
+	}
+	if key == nil || key.BitsSize() != d.keySz {
+		return nil, false, fmt.Errorf("incorrect key size")
+	}
+	if value == nil {
+		return nil, false, fmt.Errorf("value builder is nil")
+	}
+
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to load key: %w", err)
+	}
+
+	newRoot, oldValue, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to set value in dict, err: %w", err)
+	}
+	if changed {
+		d.setRoot(newRoot)
+	}
+	return oldValue, changed, nil
+}
+
+func (d *Dictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
+	if d == nil {
+		return nil, ErrNoSuchKeyInDict
+	}
+	if key == nil || key.BitsSize() != d.keySz {
+		return nil, fmt.Errorf("incorrect key size")
+	}
+
+	keySlice, err := key.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load key: %w", err)
+	}
+
+	removed, newRoot, changed, err := d.lookupDelete(d.root, keySlice, d.keySz)
+	if err != nil {
+		return nil, err
+	}
+	if !changed || removed == nil || sameDictRoot(d.root, newRoot) {
+		return nil, ErrNoSuchKeyInDict
+	}
+
+	d.setRoot(newRoot)
+	return removed, nil
+}
+
+func sameDictRoot(a, b *Cell) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.HashKey() == b.HashKey()
 }
 
 // Deprecated: use LoadValue
@@ -300,53 +550,39 @@ func (d *Dictionary) Get(key *Cell) *Cell {
 	return c
 }
 
-// Deprecated: use IsEmpty or LoadAll and then len
-func (d *Dictionary) Size() int {
-	if d == nil {
-		return 0
-	}
-	return len(d.All())
-}
-
 func (d *Dictionary) IsEmpty() bool {
 	return d == nil || d.root == nil || (d.root.BitsSize() == 0 && d.root.RefsNum() == 0)
-}
-
-// Deprecated: use LoadAll, dict was reimplemented, so it will be parsed during this call, and it can return error now.
-func (d *Dictionary) All() []*HashmapKV {
-	list, _ := d.LoadAll()
-
-	old := make([]*HashmapKV, len(list))
-	for i := 0; i < len(list); i++ {
-		old[i] = &HashmapKV{
-			Key:   list[i].Key.MustToCell(),
-			Value: list[i].Value.MustToCell(),
-		}
-	}
-
-	return old
 }
 
 func (d *Dictionary) LoadAll(skipPruned ...bool) ([]DictKV, error) {
 	if d == nil || d.root == nil {
 		return []DictKV{}, nil
 	}
-	return d.mapInner(d.keySz, d.keySz, d.root, BeginCell(), len(skipPruned) > 0 && skipPruned[0])
+	return d.mapInner(nil, d.keySz, d.keySz, d.root, BeginCell(), len(skipPruned) > 0 && skipPruned[0])
 }
 
-func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder, skipPruned bool) ([]DictKV, error) {
+func (d *Dictionary) mapInner(out []DictKV, keySz, leftKeySz uint, c *Cell, keyPrefix *Builder, skipPruned bool) ([]DictKV, error) {
 	var err error
 	var sz uint
 
-	if c.special {
+	if c.IsSpecial() && (!c.IsLazy() || skipPruned) {
 		if skipPruned && c.GetType() == PrunedCellType {
 			// ignore pruned keys
-			return []DictKV{}, nil
+			return out, nil
 		}
 		return nil, fmt.Errorf("dict has special cells in tree structure, cannot load some values")
 	}
 
-	loader := c.BeginParse()
+	loader, err := c.BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	if loader.cell.IsSpecial() {
+		if skipPruned && loader.cell.GetType() == PrunedCellType {
+			return out, nil
+		}
+		return nil, fmt.Errorf("dict has special cells in tree structure, cannot load some values")
+	}
 
 	sz, keyPrefix, err = loadLabel(leftKeySz, loader, keyPrefix)
 	if err != nil {
@@ -356,286 +592,92 @@ func (d *Dictionary) mapInner(keySz, leftKeySz uint, c *Cell, keyPrefix *Builder
 	// until key size is not equals we go deeper
 	if keyPrefix.BitsUsed() < keySz {
 		// 0 bit branch
-		left, err := loader.LoadRefCell()
+		left, err := loadDictMapRef(loader, skipPruned)
 		if err != nil {
 			return nil, err
 		}
 
-		keysL, err := d.mapInner(keySz, leftKeySz-(1+sz), left, keyPrefix.Copy().MustStoreUInt(0, 1), skipPruned)
+		out, err = d.mapInner(out, keySz, leftKeySz-(1+sz), left, keyPrefix.Copy().MustStoreUInt(0, 1), skipPruned)
 		if err != nil {
 			return nil, err
 		}
 
 		// 1 bit branch
-		right, err := loader.LoadRefCell()
+		right, err := loadDictMapRef(loader, skipPruned)
 		if err != nil {
 			return nil, err
 		}
-		keysR, err := d.mapInner(keySz, leftKeySz-(1+sz), right, keyPrefix.Copy().MustStoreUInt(1, 1), skipPruned)
-		if err != nil {
-			return nil, err
-		}
-
-		return append(keysL, keysR...), nil
+		return d.mapInner(out, keySz, leftKeySz-(1+sz), right, keyPrefix.Copy().MustStoreUInt(1, 1), skipPruned)
 	}
 
-	return []DictKV{{
+	return append(out, DictKV{
 		Key:   keyPrefix.ToSlice(),
 		Value: loader,
-	}}, nil
+	}), nil
 }
 
-func (d *Dictionary) findKey(branch *Cell, lookupKey *Cell, at *ProofSkeleton) (*Slice, *ProofSkeleton, error) {
+func loadDictMapRef(loader *Slice, skipPruned bool) (*Cell, error) {
+	if skipPruned {
+		return loader.loadBoundaryRefCell()
+	}
+	return loader.LoadRefCell()
+}
+
+func (d *Dictionary) findKey(lookupKey *Cell) (*Slice, error) {
+	branch := d.root
 	if branch == nil {
 		// empty dict
-		return nil, nil, ErrNoSuchKeyInDict
+		return nil, ErrNoSuchKeyInDict
 	}
 
-	var depth int
-	var sk, root *ProofSkeleton
-	if at != nil {
-		root = CreateProofSkeleton()
-		sk = root
+	lKey, err := lookupKey.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load lookup key: %w", err)
 	}
-	lKey := lookupKey.BeginParse()
 
 	// until key size is not equals we go deeper
 	for {
-		branchSlice := branch.BeginParse()
-		sz, keyPrefix, err := loadLabel(lKey.BitsLeft(), branchSlice, BeginCell())
+		branchSlice, err := branch.BeginParse()
 		if err != nil {
-			return nil, nil, err
+			return nil, err
+		}
+		if branchSlice.cell.IsSpecial() {
+			return nil, fmt.Errorf("dict has special cells in tree structure")
+		}
+		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), branchSlice, lKey)
+		if err != nil {
+			return nil, err
 		}
 
-		loadedPfx, err := keyPrefix.ToSlice().LoadSlice(sz)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		pfx, err := lKey.LoadSlice(sz)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if !bytes.Equal(loadedPfx, pfx) {
-			if sk != nil {
-				at.Merge(root)
-			}
-			return nil, nil, ErrNoSuchKeyInDict
+		if matched != sz {
+			return nil, ErrNoSuchKeyInDict
 		}
 
 		if lKey.BitsLeft() == 0 {
-			if sk != nil {
-				if depth == 0 {
-					// key is at the dict root
-					return branchSlice, at, nil
-				}
-				at.Merge(root)
-			}
-			return branchSlice, sk, nil
+			return branchSlice, nil
 		}
 
 		idx, err := lKey.LoadUInt(1)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 
-		depth++
-		branch, err = branch.PeekRef(int(idx))
+		next, err := branchSlice.peekRefCellAt(int(idx))
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-
-		if sk != nil {
-			sk = sk.ProofRef(int(idx))
-		}
+		branch = next
 	}
-}
-
-func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
-	first, err := loader.LoadUInt(1)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	// hml_short$0
-	if first == 0 {
-		// Unary, while 1, add to ln
-		ln := uint(0)
-		for {
-			bit, err := loader.LoadUInt(1)
-			if err != nil {
-				return 0, nil, err
-			}
-
-			if bit == 0 {
-				break
-			}
-			ln++
-		}
-
-		keyBits, err := loader.LoadSlice(ln)
-		if err != nil {
-			return 0, nil, err
-		}
-
-		// add bits to key
-		err = key.StoreSlice(keyBits, ln)
-		if err != nil {
-			return 0, nil, err
-		}
-
-		return ln, key, nil
-	}
-
-	second, err := loader.LoadUInt(1)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	bitsLen := uint(math.Ceil(math.Log2(float64(sz + 1))))
-
-	// hml_long$10
-	if second == 0 {
-		ln, err := loader.LoadUInt(bitsLen)
-		if err != nil {
-			return 0, nil, err
-		}
-
-		keyBits, err := loader.LoadSlice(uint(ln))
-		if err != nil {
-			return 0, nil, err
-		}
-
-		// add bits to key
-		err = key.StoreSlice(keyBits, uint(ln))
-		if err != nil {
-			return 0, nil, err
-		}
-
-		return uint(ln), key, nil
-	}
-
-	// hml_same$11
-	bitType, err := loader.LoadUInt(1)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	ln, err := loader.LoadUInt(bitsLen)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	var toStore []byte
-	if bitType == 1 {
-		// N of ones
-		toStore = bytes.Repeat([]byte{0xFF}, 1+(int(ln)/8))
-	} else {
-		// N of zeroes
-		toStore = bytes.Repeat([]byte{0x00}, 1+(int(ln)/8))
-	}
-
-	err = key.StoreSlice(toStore, uint(ln))
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return uint(ln), key, nil
-}
-
-func (d *Dictionary) storeLabel(b *Builder, data *Slice, keyLen uint) error {
-	ln := uint64(data.BitsLeft())
-	// short unary 0
-	if ln == 0 {
-		if err := b.StoreUInt(0, 2); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	bitsLen := uint64(math.Ceil(math.Log2(float64(keyLen + 1))))
-	_, dataBits, err := data.RestBits()
-	if err != nil {
-		return err
-	}
-
-	longLen := 2 + bitsLen + ln
-	shortLength := 1 + 1 + 2*ln
-	sameLength := 2 + 1 + bitsLen
-
-	if sameLength < longLen && sameLength < shortLength {
-		cmpInt := new(big.Int).SetBytes(dataBits)
-		offset := ln % 8
-		if offset != 0 {
-			cmpInt = cmpInt.Rsh(cmpInt, uint(8-offset))
-		}
-
-		if cmpInt.Cmp(big.NewInt(0)) == 0 { // compare with all zeroes
-			return d.storeSame(b, ln, bitsLen, 0)
-		} else if cmpInt.BitLen() == int(ln) && cmpInt.Cmp(new(big.Int).Sub(new(big.Int).
-			Lsh(big.NewInt(1), uint(ln)),
-			big.NewInt(1))) == 0 { // compare with all ones
-			return d.storeSame(b, ln, bitsLen, 1)
-		}
-	}
-
-	if shortLength <= longLen {
-		return d.storeShort(b, ln, dataBits)
-	}
-	return d.storeLong(b, ln, bitsLen, dataBits)
-}
-
-func (d *Dictionary) storeShort(b *Builder, partSz uint64, bits []byte) error {
-	// magic
-	if err := b.StoreUInt(0b0, 1); err != nil {
-		return err
-	}
-
-	all1s := uint64(1<<(partSz+1) - 1)
-	// all 1s and last 0
-	if err := b.StoreUInt(all1s<<1, uint(partSz+1)); err != nil {
-		return err
-	}
-	return b.StoreSlice(bits, uint(partSz))
-}
-
-func (d *Dictionary) storeSame(b *Builder, partSz, bitsLen uint64, bit uint64) error {
-	// magic
-	if err := b.StoreUInt(0b11, 2); err != nil {
-		return err
-	}
-
-	// bit type
-	if err := b.StoreUInt(bit, 1); err != nil {
-		return err
-	}
-	return b.StoreUInt(partSz, uint(bitsLen))
-}
-
-func (d *Dictionary) storeLong(b *Builder, partSz, bitsLen uint64, bits []byte) error {
-	// magic
-	if err := b.StoreUInt(0b10, 2); err != nil {
-		return err
-	}
-
-	if err := b.StoreUInt(partSz, uint(bitsLen)); err != nil {
-		return err
-	}
-	return b.StoreSlice(bits, uint(partSz))
-}
-
-// Deprecated: use AsCell
-func (d *Dictionary) MustToCell() *Cell {
-	return d.AsCell()
 }
 
 func (d *Dictionary) AsCell() *Cell {
 	return d.root
 }
 
-// Deprecated: use AsCell
 func (d *Dictionary) ToCell() (*Cell, error) {
+	if d == nil {
+		return nil, nil
+	}
 	return d.root, nil
 }
 

@@ -1,0 +1,55 @@
+package stack
+
+import (
+	"fmt"
+
+	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/vm"
+)
+
+func init() {
+	vm.List = append(vm.List, func() vm.OP { return BLKDROP2(0, 0) })
+}
+
+func blkdrop2Prefixes() []helpers.BitPrefix {
+	prefixes := make([]helpers.BitPrefix, 0, 15)
+	for i := uint64(1); i <= 15; i++ {
+		prefixes = append(prefixes, helpers.UIntPrefix((0x6C<<4)|i, 12))
+	}
+	return prefixes
+}
+
+func BLKDROP2(i, j uint8) (op *helpers.AdvancedOP) {
+	op = &helpers.AdvancedOP{
+		FixedSizeBits: 8,
+		Prefixes:      blkdrop2Prefixes(),
+		Action: func(state *vm.State) error {
+			return state.Stack.DropMany(int(i), int(j))
+		},
+		NameSerializer: func() string {
+			return fmt.Sprintf("%d,%d BLKDROP2", i, j)
+		},
+		BitPrefix: helpers.BytesPrefix(0x6C),
+		SerializeSuffix: func() *cell.Builder {
+			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
+		},
+		DeserializeSuffix: func(code *cell.Slice) error {
+			ival, err := code.LoadUInt(4)
+			if err != nil {
+				return err
+			}
+			jval, err := code.LoadUInt(4)
+			if err != nil {
+				return err
+			}
+			if ival == 0 {
+				return vm.ErrCorruptedOpcode
+			}
+			i = uint8(ival)
+			j = uint8(jval)
+			return nil
+		},
+	}
+	return op
+}

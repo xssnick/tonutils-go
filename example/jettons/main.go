@@ -10,6 +10,7 @@ import (
 	"github.com/xssnick/tonutils-go/ton/nft"
 	"log"
 	"strconv"
+	"time"
 )
 
 func main() {
@@ -24,7 +25,7 @@ func main() {
 	ctx := client.StickyContext(context.Background())
 
 	// initialize ton api lite connection wrapper
-	api := ton.NewAPIClient(client).WithRetry()
+	api := ton.NewAPIClient(client).WithRetryTimeout(3, 5*time.Second)
 
 	tokenContract := address.MustParseAddr("EQBCFwW8uFUh-amdRmNY9NyeDEaeDYXd9ggJGsicpqVcHq7B")
 	master := jetton.NewJettonMasterClient(api, tokenContract)

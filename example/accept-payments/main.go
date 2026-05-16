@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/ton/jetton"
 	"log"
+	"time"
 )
 
 func main() {
@@ -27,7 +28,7 @@ func main() {
 	}
 
 	// initialize ton api lite connection wrapper with full proof checks
-	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetry()
+	api := ton.NewAPIClient(client, ton.ProofCheckPolicyFast).WithRetryTimeout(3, 5*time.Second)
 	api.SetTrustedBlockFromConfig(cfg)
 
 	master, err := api.CurrentMasterchainInfo(context.Background()) // we fetch block just to trigger chain proof check
@@ -99,7 +100,7 @@ func main() {
 			// verify that event sender is our jetton wallet
 			if ti.SrcAddr.Equals(treasuryJettonWallet.Address()) {
 				var transfer jetton.TransferNotification
-				if err = tlb.LoadFromCell(&transfer, ti.Body.BeginParse()); err == nil {
+				if err = tlb.Parse(&transfer, ti.Body); err == nil {
 					// convert decimals to 6 for USDT (it can be fetched from jetton details too), default is 9
 					amt := tlb.MustFromNano(transfer.Amount.Nano(), 6)
 

@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/tl"
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -16,28 +17,44 @@ func init() {
 	tl.Register(ConfigAll{}, "liteServer.configInfo mode:# id:tonNode.blockIdExt state_proof:bytes config_proof:bytes = liteServer.ConfigInfo")
 
 	tl.Register(GetLibraries{}, "liteServer.getLibraries library_list:(vector int256) = liteServer.LibraryResult")
+	tl.Register(GetLibrariesWithProof{}, "liteServer.getLibrariesWithProof id:tonNode.blockIdExt mode:# library_list:(vector int256) = liteServer.LibraryResultWithProof")
 	tl.Register(LibraryEntry{}, "liteServer.libraryEntry hash:int256 data:bytes = liteServer.LibraryEntry")
 	tl.Register(LibraryResult{}, "liteServer.libraryResult result:(vector liteServer.libraryEntry) = liteServer.LibraryResult")
+	tl.Register(LibraryResultWithProof{}, "liteServer.libraryResultWithProof id:tonNode.blockIdExt mode:# result:(vector liteServer.libraryEntry) state_proof:bytes data_proof:bytes = liteServer.LibraryResultWithProof")
 }
 
 type GetLibraries struct {
 	LibraryList [][]byte `tl:"vector int256"`
 }
 
+type GetLibrariesWithProof struct {
+	ID          *BlockIDExt `tl:"struct"`
+	Mode        uint32      `tl:"flags"`
+	LibraryList [][]byte    `tl:"vector int256"`
+}
+
 type LibraryEntry struct {
-	Hash []byte     `tl:"int256"`
-	Data *cell.Cell `tl:"cell"`
+	Hash []byte `tl:"int256"`
+	Data []byte `tl:"bytes"`
 }
 
 type LibraryResult struct {
 	Result []*LibraryEntry `tl:"vector struct"`
 }
 
+type LibraryResultWithProof struct {
+	ID         *BlockIDExt     `tl:"struct"`
+	Mode       uint32          `tl:"flags"`
+	Result     []*LibraryEntry `tl:"vector struct"`
+	StateProof []byte          `tl:"bytes"`
+	DataProof  []byte          `tl:"bytes"`
+}
+
 type ConfigAll struct {
 	Mode        int         `tl:"int"`
 	ID          *BlockIDExt `tl:"struct"`
-	StateProof  *cell.Cell  `tl:"cell"`
-	ConfigProof *cell.Cell  `tl:"cell"`
+	StateProof  []byte      `tl:"bytes"`
+	ConfigProof []byte      `tl:"bytes"`
 }
 
 type GetConfigAll struct {
@@ -51,8 +68,31 @@ type GetConfigParams struct {
 	Params  []int32     `tl:"vector int"`
 }
 
-type BlockchainConfig struct {
-	data map[int32]*cell.Cell
+// Deprecated: use tlb.BlockchainConfig.
+type BlockchainConfig = tlb.BlockchainConfig
+
+func unwrapLibraryResultCell(data []byte, hash []byte) *cell.Cell {
+	root, err := cell.FromBOC(data)
+	if err != nil {
+		return nil
+	}
+
+	for root != nil {
+		rootHash := root.HashKey()
+		if bytes.Equal(hash, rootHash[:]) {
+			return root
+		}
+
+		// Some liteservers wrap the actual library root into an empty root cell.
+		// Keep walking that wrapper chain, but only through the canonical 0-bit/1-ref form.
+		if root.BitsSize() != 0 || root.RefsNum() != 1 {
+			return nil
+		}
+
+		root = root.MustPeekRef(0)
+	}
+
+	return nil
 }
 
 func (c *APIClient) GetLibraries(ctx context.Context, hashes ...[]byte) ([]*cell.Cell, error) {
@@ -71,10 +111,12 @@ func (c *APIClient) GetLibraries(ctx context.Context, hashes ...[]byte) ([]*cell
 
 		for i := 0; i < len(hashes); i++ {
 			for _, e := range t.Result {
-				// we are calculating hash by ourselves
-				// to make sure that LS is not cheating
-				if bytes.Equal(hashes[i], e.Data.Hash()) {
-					libList[i] = e.Data
+				// Calculate hashes by ourselves to make sure that LS is not cheating.
+				// Some LS responses wrap the actual library root into an empty root cell,
+				// so we only unwrap that canonical wrapper form before matching.
+				if lib := unwrapLibraryResultCell(e.Data, hashes[i]); lib != nil {
+					libList[i] = lib
+					break
 				}
 			}
 		}
@@ -87,7 +129,7 @@ func (c *APIClient) GetLibraries(ctx context.Context, hashes ...[]byte) ([]*cell
 	return nil, errUnexpectedResponse(resp)
 }
 
-func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error) {
+func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*tlb.BlockchainConfig, error) {
 	var resp tl.Serializable
 	var err error
 	if len(onlyParams) > 0 {
@@ -111,57 +153,45 @@ func (c *APIClient) GetBlockchainConfig(ctx context.Context, block *BlockIDExt, 
 
 	switch t := resp.(type) {
 	case ConfigAll:
-		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{t.StateProof, t.ConfigProof})
+		stateProof, err := cell.FromBOC(t.StateProof)
+		if err != nil {
+			return nil, fmt.Errorf("incorrect state proof: %w", err)
+		}
+		configProof, err := cell.FromBOC(t.ConfigProof)
+		if err != nil {
+			return nil, fmt.Errorf("incorrect config proof: %w", err)
+		}
+		stateExtra, err := CheckShardMcStateExtraProof(block, []*cell.Cell{stateProof, configProof})
 		if err != nil {
 			return nil, fmt.Errorf("incorrect proof: %w", err)
 		}
 
-		result := &BlockchainConfig{data: map[int32]*cell.Cell{}}
-
 		if len(onlyParams) > 0 {
+			dict := cell.NewDict(32)
+
 			// we need it because lite server may add some unwanted keys
 			for _, param := range onlyParams {
-				res := stateExtra.ConfigParams.Config.Params.GetByIntKey(big.NewInt(int64(param)))
-				if res == nil {
+				res, err := stateExtra.ConfigParams.Config.Params.LoadValueByIntKey(big.NewInt(int64(param)))
+				if err != nil {
 					return nil, fmt.Errorf("config param %d not found", param)
 				}
 
-				v, err := res.BeginParse().LoadRef()
+				v, err := res.LoadRefCell()
 				if err != nil {
 					return nil, fmt.Errorf("failed to load config param %d, err: %w", param, err)
 				}
 
-				result.data[param] = v.MustToCell()
-			}
-		} else {
-			kvs, err := stateExtra.ConfigParams.Config.Params.LoadAll()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load config params dict: %w", err)
-			}
-
-			for _, kv := range kvs {
-				v, err := kv.Value.LoadRef()
-				if err != nil {
-					return nil, fmt.Errorf("failed to load config param %d, err: %w", kv.Key.MustLoadInt(32), err)
+				if err = dict.SetIntKey(big.NewInt(int64(param)), cell.BeginCell().MustStoreRef(v).EndCell()); err != nil {
+					return nil, fmt.Errorf("failed to store config param %d: %w", param, err)
 				}
-
-				result.data[int32(kv.Key.MustLoadInt(32))] = v.MustToCell()
 			}
+
+			return &tlb.BlockchainConfig{Root: dict.AsCell()}, nil
 		}
 
-		return result, nil
+		return &tlb.BlockchainConfig{Root: stateExtra.ConfigParams.Config.Params.AsCell()}, nil
 	case LSError:
 		return nil, t
 	}
 	return nil, errUnexpectedResponse(resp)
-}
-
-// TODO: add methods to BlockchainConfig to easily get gas price and etc
-
-func (b *BlockchainConfig) Get(id int32) *cell.Cell {
-	return b.data[id]
-}
-
-func (b *BlockchainConfig) All() map[int32]*cell.Cell {
-	return b.data
 }

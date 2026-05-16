@@ -11,7 +11,7 @@ func TestBlockMaster(t *testing.T) {
 	c, _ := cell.FromBOC(boc)
 
 	var block Block
-	if err := LoadFromCell(&block, c.BeginParse()); err != nil {
+	if err := LoadFromCell(&block, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -21,7 +21,7 @@ func TestBlockNotMaster(t *testing.T) {
 	c, _ := cell.FromBOC(boc)
 
 	var block Block
-	if err := LoadFromCell(&block, c.BeginParse()); err != nil {
+	if err := LoadFromCell(&block, c.MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 }

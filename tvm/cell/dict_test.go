@@ -9,13 +9,55 @@ import (
 	"log"
 	"math"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 )
 
-func TestLoadCell_LoadDict(t *testing.T) {
+func skipTestCurrencyCollectionExtra(loader *Slice) error {
+	if _, err := loader.LoadCoins(); err != nil {
+		return err
+	}
+	_, err := loader.LoadMaybeRef()
+	return err
+}
+
+func skipTestDepthBalanceInfoExtra(loader *Slice) error {
+	if _, err := loader.LoadUInt(5); err != nil {
+		return err
+	}
+	return skipTestCurrencyCollectionExtra(loader)
+}
+
+func TestDictionaryLoadValueAndSetBuilderUsesSingleLookup(t *testing.T) {
+	key := BeginCell().MustStoreUInt(0x42, 8).EndCell()
+	dict := NewDict(8)
+	if _, err := dict.SetBuilderWithMode(key, BeginCell().MustStoreUInt(0xaa, 8), DictSetModeSet); err != nil {
+		t.Fatalf("seed dict: %v", err)
+	}
+
+	loads := 0
+	trace := NewTrace(TraceHooks{OnLoad: func(*Cell) { loads++ }})
+	traced := dict.AsCell().WithTrace(trace).AsDict(8)
+
+	oldValue, changed, err := traced.LoadValueAndSetBuilderWithMode(key, BeginCell().MustStoreUInt(0xbb, 8), DictSetModeSet)
+	if err != nil {
+		t.Fatalf("set/get: %v", err)
+	}
+	if !changed {
+		t.Fatal("set/get should change existing value")
+	}
+	if oldValue == nil || oldValue.MustLoadUInt(8) != 0xaa {
+		t.Fatal("set/get returned unexpected old value")
+	}
+	if loads != 1 {
+		t.Fatalf("set/get should load the dict path once, got %d loads", loads)
+	}
+}
+
+func TestLoadCell_LoadAugDict(t *testing.T) {
 	boc, _ := hex.DecodeString("b5ee9c724102340100062200235b9023afe2ffffff1100000000000000000000000000019db8c60000000162c4845200001aab34c426c6014d575c2001020300480101e5415dd4e865179eb82b1edff31c8408a095e7474e3a1d3d68a061fe03b8ac62000102138209bd22c691124a3630043301d90000000000000000ffffffffffffffff826f48b1a444928d8bb1146f3ef442e4900001aab34b4e484014d575ccf1f8c5fab66850786114e421ecc97a16833bbe2b5a034e49fabcb583022173aafcda01a0c373515a9ff299743ebb7bd974a8f82ce51986a23d2831fb034189d83303130104de91634889251b180506330048010179219a4240635a4ad6f3a6a65275701912edea7893798f57af1b4f9778ca721b021503130101b271de28950272b8070809031301011898a010da960e780a0b0c004801010ab44385631582c1108ad75ebfc884e257b8cf6cdfbbe9155b6c12807f9149e4002a00480101bb06f3506745c5f6a6239d132a70b38439cb60ff95f62e45261ba12e844e889b0001031301007443d8525c3939180d0e0f00480101ae5aa36e6c6acae1db9b2ab1a33cf9859af8ecea96fd2e78b60eb24e0f4f2e53003100480101ec90a44eee02bed840c10e88351163ee9e3613eb9dbe8da760783da449714e2800010213010070971eff39146f88101100480101ee5c34562b83c7c32cb6033f90ce4637a9f59073428032d2be0cb276414b1d50002700480101aaed7ccc3904836f362ae06eb234b71d64e02eb4ba6d6b7869197a9ed5c4b0b800010213010044a99d11861d4b68121300480101596621878c7465344345dcefa4803ee2fb224fcb1cbd6aa09a10f53ab38914e90026021301002f239c10ff1cc72814150048010170c159783d1ae77f702595ce6d7a25acd37ffaaa8c12293ec9e6e81206cc6c310023004801012b5f1d1614fcb15ebd3d3d489b2895f5cda5fdbc48e658556643fd8c10c9c2c30024021301002b46ef1908757d6816170048010115bf77a14a73e704bc99a04417ee8985285a2939bb45211b707d533f57ebc10b001b021100fca881a1128a4c0818190048010113b9aff02e187ceba81ee40ca27df256723a0d8780cab4d94fcd6777b44468ad001d021100fc1790148d13b5281a1b00480101150c62b460866814e89011659974790cbc4490e707066c4c6f464ac63c2e7f41001c021100fc1655ff5d35bd881c1d021100fc15b673f38f9fe81e1f0048010161d2396ee5844f18376658a740d0e64c1574e15435d898b11e6895fb9e366c7e00160048010123a38921c8a3df0be51e86008e789246c5d42acfce14e2f92ae20fd323228b0a0014021100fc14f672784a4108202100480101d064c22bd7b908f0583e76124b8f79cd2ae12a2b6c7f314866841ab69f6d08fd0011021100fc14e70d89bdac28222300480101015cf021221ff8bfe080a84c140f55b7df241dacd892dfae49cd21b9b21838450011021100fc14d960a69113c82425004801012bca1f9584151841c927fb8b9a6bf887c09ba1e0cc5330b9427a96e3aee7b8a00010021100fc14d5376aba99082627004801012e4427dfe24435652c5b10f4d6a533aa22b8c6b3b0cf9564843fb3234aadd95c000d021100fc14d29ab7e9aca82829004801011d4467b1885043dd00b94cd83318975cb2d140fdd722084503c5e4f53d6bdd3e000f021100fc14d275986a11482a2b0048010160f1f53a819b9663e6cf4a7f2ad05f14473c1040cf8625144a425db0e3d1fbe10001021100fc14d2678e94cc082c2d0211503f05347a6cd0c5c22e2f00480101528a31734c0cd0914e0e5b24837094ce137ba183f79df2ba90a97d7909b95e9b00090212680fc14d1e633be2523031004801013fb8e8144a95214d6762cd8d7359fa7d8d7ec2fb6965cb839b8e43d624ab60e8000900480101a034fc34e1f147eb3f9c031c44e890a05e7194d2856e55653466736c40edfd95000a019dba14b98dca6d1cbf2f323117af319a45c09562da3b1d49f86e900e83cc6a00fc14cb1acdbfba4c9832d0d1105cb368bb9f085ac369478347a67b0c52b690cc3902a961c799c2500001aa4cd2961c58320048010155d04ccb9e1eef0374eafb7ce62e26fb6b5d1d17353a9ad12bbbe04406241e6b000100480101b3e9649d10ccb379368e81a3a7e8e49c8eb53f6acc69b0ba2ffa80082f70ee390001ee8406d7")
 	c, err := FromBOC(boc)
 	if err != nil {
@@ -23,12 +65,12 @@ func TestLoadCell_LoadDict(t *testing.T) {
 		return
 	}
 
-	ld := c.BeginParse()
+	ld := c.MustBeginParse()
 	ld.MustLoadRef()
 	ld = ld.MustLoadRef()
 
 	for i := 0; i < 3; i++ {
-		dict, err := ld.LoadDict(256)
+		dict, err := ld.LoadAugDict(256, ReadOnlyAugmentation{SkipExtraFn: skipTestDepthBalanceInfoExtra}, false)
 		if err != nil {
 			t.Fatal(err, i)
 			return
@@ -39,7 +81,7 @@ func TestLoadCell_LoadDict(t *testing.T) {
 		}
 
 		addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
-		data := dict.Get(BeginCell().MustStoreSlice(addr.Data(), 256).EndCell())
+		data := dict.GetWithExtra(BeginCell().MustStoreSlice(addr.Data(), 256).EndCell())
 		if data == nil {
 			t.Fatal("not in dict", i)
 			return
@@ -47,6 +89,15 @@ func TestLoadCell_LoadDict(t *testing.T) {
 
 		if hex.EncodeToString(data.Hash()) != "3ff114a9563416a6fb36b5ec7ec57e2be353af2129a696f66c115a0e7c14a889" {
 			t.Fatal("incorrect value")
+		}
+
+		value, err := dict.LoadValue(BeginCell().MustStoreSlice(addr.Data(), 256).EndCell())
+		if err != nil {
+			t.Fatal(err, i)
+			return
+		}
+		if value.BitsLeft() != 320 || value.RefsNum() != 1 {
+			t.Fatalf("value should not include augmentation extra, got %d bits and %d refs", value.BitsLeft(), value.RefsNum())
 		}
 
 		data = dict.Get(BeginCell().MustStoreSlice(addr.Data(), 32).EndCell())
@@ -62,7 +113,7 @@ func TestLoadCell_LoadDict(t *testing.T) {
 			return
 		}
 
-		ld = BeginCell().MustStoreDict(dict).EndCell().BeginParse()
+		ld = dict.MustToCell().MustBeginParse()
 	}
 }
 
@@ -88,7 +139,7 @@ func TestDictionary_ToCell(t *testing.T) {
 		return
 	}
 
-	d2, err := c.BeginParse().ToDict(47)
+	d2, err := c.MustBeginParse().ToDict(47)
 	if err != nil {
 		t.Fatal("load err:", err)
 		return
@@ -105,19 +156,40 @@ func TestDictionary_ToCell(t *testing.T) {
 	}
 }
 
+func TestDictionary_ToCellNilReceiver(t *testing.T) {
+	var dict *Dictionary
+
+	c, err := dict.ToCell()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != nil {
+		t.Fatal("nil dict should serialize to nil root")
+	}
+}
+
 func TestLoadCell_EmptyDict(t *testing.T) {
 	d := NewDict(256)
 	c := BeginCell().MustStoreDict(d).EndCell()
 
-	s := c.BeginParse().MustLoadMaybeRef()
+	s := c.MustBeginParse().MustLoadMaybeRef()
 	if s != nil {
 		t.Fatal("dict format incorrect")
 	}
 
-	d2 := c.BeginParse().MustLoadDict(256)
+	d2 := c.MustBeginParse().MustLoadDict(256)
 
-	if len(d2.All()) != 0 {
+	if !d2.IsEmpty() {
 		t.Fatal("dict len incorrect")
+	}
+}
+
+func TestLoadCell_TypedNilDictStoresEmpty(t *testing.T) {
+	var d *Dictionary
+
+	c := BeginCell().MustStoreDict(d).EndCell()
+	if c.MustBeginParse().MustLoadMaybeRef() != nil {
+		t.Fatal("typed nil dict should serialize as empty maybe-ref")
 	}
 }
 
@@ -129,7 +201,7 @@ func TestLoadCell_LoadDictEdgeCase(t *testing.T) {
 		return
 	}
 
-	dict, err := c.BeginParse().ToDict(32)
+	dict, err := c.MustBeginParse().ToDict(32)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,10 +214,107 @@ func TestLoadCell_LoadDictEdgeCase(t *testing.T) {
 		36: true, -1001: true, -1000: true,
 	}
 
-	for i, kv := range dict.All() {
-		if !should[kv.Key.BeginParse().MustLoadInt(32)] {
+	items, err := dict.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, kv := range items {
+		if !should[kv.Key.MustLoadInt(32)] {
 			t.Fatal(i, "bad key")
 		}
+	}
+}
+
+func TestLoadCell_LoadDictDefersOverlongLabelValidation(t *testing.T) {
+	root := BeginCell().
+		MustStoreUInt(0, 1).
+		MustStoreUInt(0b110, 3).
+		MustStoreUInt(0, 2).
+		EndCell()
+
+	dict, err := BeginCell().MustStoreMaybeRef(root).EndCell().MustBeginParse().LoadDict(1)
+	if err != nil {
+		t.Fatalf("LoadDict should not recursively validate branches: %v", err)
+	}
+	if dict.ValidateAll() {
+		t.Fatal("explicit validation should reject overlong label")
+	}
+	_, err = dict.LoadValue(BeginCell().MustStoreUInt(0, 1).EndCell())
+	if err == nil || !strings.Contains(err.Error(), "label exceeds remaining key bits") {
+		t.Fatalf("expected overlong label error during lookup, got %v", err)
+	}
+}
+
+func TestLoadCell_LoadDictDefersForkWithExtraBitsValidation(t *testing.T) {
+	leaf0 := BeginCell().MustStoreUInt(0, 2).EndCell()
+	leaf1 := BeginCell().MustStoreUInt(0, 2).EndCell()
+
+	root := BeginCell().
+		MustStoreUInt(0, 2).
+		MustStoreUInt(1, 1).
+		MustStoreRef(leaf0).
+		MustStoreRef(leaf1).
+		EndCell()
+
+	dict, err := BeginCell().MustStoreMaybeRef(root).EndCell().MustBeginParse().LoadDict(1)
+	if err != nil {
+		t.Fatalf("LoadDict should not recursively validate branches: %v", err)
+	}
+	if dict.ValidateAll() {
+		t.Fatal("explicit validation should reject malformed fork")
+	}
+}
+
+func TestLoadCell_LoadDictDefersForkWithWrongRefCountValidation(t *testing.T) {
+	root := BeginCell().
+		MustStoreUInt(0, 2).
+		MustStoreRef(BeginCell().MustStoreUInt(0, 1).EndCell()).
+		EndCell()
+
+	dict, err := BeginCell().MustStoreMaybeRef(root).EndCell().MustBeginParse().LoadDict(1)
+	if err != nil {
+		t.Fatalf("LoadDict should not recursively validate branches: %v", err)
+	}
+	if dict.ValidateAll() {
+		t.Fatal("explicit validation should reject wrong ref count")
+	}
+}
+
+func TestStoreDictLabel_SameBitNonByteAligned(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value uint64
+		bits  uint
+	}{
+		{name: "zeroes", value: 0, bits: 5},
+		{name: "ones", value: 0b11111, bits: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := BeginCell()
+			label := BeginCell().MustStoreUInt(tc.value, tc.bits).ToSlice()
+
+			if err := storeDictLabel(builder, label, tc.bits); err != nil {
+				t.Fatal(err)
+			}
+
+			loader := builder.EndCell().MustBeginParse()
+			if typ := loader.MustLoadUInt(2); typ != 0b11 {
+				t.Fatalf("expected hml_same encoding, got %02b", typ)
+			}
+
+			loader = builder.EndCell().MustBeginParse()
+			labelLen, loaded, err := loadLabel(tc.bits, loader, BeginCell())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if labelLen != tc.bits {
+				t.Fatalf("unexpected label length: %d", labelLen)
+			}
+			if got := mustLoadTestValue(t, loaded.ToSlice(), tc.bits); got != tc.value {
+				t.Fatalf("unexpected label value: %b", got)
+			}
+		})
 	}
 }
 
@@ -161,11 +330,16 @@ func TestLoadCell_DictAll(t *testing.T) {
 	mm.SetIntKey(big.NewInt(255), empty)
 	mm.SetIntKey(big.NewInt(9223372036854775807), empty)
 	mm.SetIntKey(big.NewInt(9223372036854775806), empty)
-	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+	hh, _ := mm.AsCell().MustBeginParse().ToDict(64)
 
-	for _, kv := range mm.All() {
-		if hh.Get(kv.Key) == nil {
-			t.Fatal("invalid key", kv.Key.Dump())
+	items, err := mm.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range items {
+		key := kv.Key.MustToCell()
+		if hh.Get(key) == nil {
+			t.Fatal("invalid key", key.Dump())
 		}
 	}
 }
@@ -178,17 +352,27 @@ func TestLoadCell_DictShuffle(t *testing.T) {
 		_, _ = rand.Read(rnd)
 		_ = mm.SetIntKey(new(big.Int).Mod(new(big.Int).SetBytes(rnd), big.NewInt(65000)), empty)
 	}
-	hh, _ := mm.AsCell().BeginParse().ToDict(64)
+	hh, _ := mm.AsCell().MustBeginParse().ToDict(64)
 
-	for _, kv := range mm.All() {
-		if hh.Get(kv.Key) == nil {
-			t.Fatal("invalid key", kv.Key.Dump())
+	items, err := mm.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range items {
+		key := kv.Key.MustToCell()
+		if hh.Get(key) == nil {
+			t.Fatal("invalid key", key.Dump())
 		}
 	}
 
-	for _, kv := range hh.All() {
-		if mm.Get(kv.Key) == nil {
-			t.Fatal("invalid key 2", kv.Key.Dump())
+	items, err = hh.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range items {
+		key := kv.Key.MustToCell()
+		if mm.Get(key) == nil {
+			t.Fatal("invalid key 2", key.Dump())
 		}
 	}
 }
@@ -196,9 +380,9 @@ func TestLoadCell_DictShuffle(t *testing.T) {
 func TestDict_CornerSame(t *testing.T) {
 	mm := NewDict(64)
 	mm.SetIntKey(big.NewInt(255), BeginCell().EndCell())
-	hh, _ := mm.MustToCell().BeginParse().ToDict(64)
+	hh, _ := mm.AsCell().MustBeginParse().ToDict(64)
 
-	if hh.GetByIntKey(big.NewInt(255)) == nil {
+	if _, err := hh.LoadValueByIntKey(big.NewInt(255)); err != nil {
 		t.Fatal("invalid key")
 	}
 }
@@ -212,15 +396,16 @@ func TestDict_Delete(t *testing.T) {
 	mm.SetIntKey(big.NewInt(331), BeginCell().EndCell())
 	mm.SetIntKey(big.NewInt(1000), BeginCell().EndCell())
 	mm.SetIntKey(big.NewInt(1001), BeginCell().EndCell())
-	hh, _ := mm.AsCell().BeginParse().ToDict(64)
+	hh, _ := mm.AsCell().MustBeginParse().ToDict(64)
 
 	kProof := BeginCell().MustStoreBigInt(big.NewInt(332), 64).EndCell()
-	sk := CreateProofSkeleton()
-	_, _, err := hh.LoadValueWithProof(kProof, sk)
+	pb := NewMerkleProofBuilder(hh.AsCell())
+	observed := pb.Root().AsDict(64)
+	_, err := observed.LoadValue(kProof)
 	if !errors.Is(err, ErrNoSuchKeyInDict) {
 		t.Fatal("no such key")
 	}
-	proof, err := hh.AsCell().CreateProof(sk)
+	proof, err := pb.CreateProof()
 	if err != nil {
 		t.Fatal("failed to proof no key")
 	}
@@ -238,14 +423,132 @@ func TestDict_Delete(t *testing.T) {
 	}
 
 	hh.DeleteIntKey(big.NewInt(255))
-	hh2, _ := hh.MustToCell().BeginParse().ToDict(64)
+	hh2, _ := hh.AsCell().MustBeginParse().ToDict(64)
 
-	if hh2.GetByIntKey(big.NewInt(255)) != nil {
+	if _, err := hh2.LoadValueByIntKey(big.NewInt(255)); err == nil {
 		t.Fatal("invalid key")
 	}
 
-	if hh2.GetByIntKey(big.NewInt(777)) == nil {
+	if _, err := hh2.LoadValueByIntKey(big.NewInt(777)); err != nil {
 		t.Fatal("invalid key")
+	}
+}
+
+func makeProofDictTestKey(bits uint, value uint64) *Cell {
+	return BeginCell().MustStoreUInt(value, bits).EndCell()
+}
+
+func makeProofDictTestValue(value uint64) *Cell {
+	return BeginCell().MustStoreUInt(value, 8).EndCell()
+}
+
+func TestMerkleProofBuilderNestedDictionaryLoadDict(t *testing.T) {
+	inner := NewDict(4)
+	if err := inner.Set(makeProofDictTestKey(4, 0x3), makeProofDictTestValue(0x33)); err != nil {
+		t.Fatalf("set inner key: %v", err)
+	}
+
+	outer := NewDict(4)
+	outerValue := BeginCell().MustStoreMaybeRef(inner.AsCell()).EndCell()
+	if err := outer.Set(makeProofDictTestKey(4, 0x7), outerValue); err != nil {
+		t.Fatalf("set outer key: %v", err)
+	}
+
+	pb := NewMerkleProofBuilder(outer.AsCell())
+	outerValueSlice, err := pb.Root().AsDict(4).LoadValue(makeProofDictTestKey(4, 0x7))
+	if err != nil {
+		t.Fatalf("load outer value: %v", err)
+	}
+	innerDict, err := outerValueSlice.LoadDict(4)
+	if err != nil {
+		t.Fatalf("load inner dict: %v", err)
+	}
+	if _, err = innerDict.LoadValue(makeProofDictTestKey(4, 0x3)); err != nil {
+		t.Fatalf("load inner value: %v", err)
+	}
+
+	proof, err := pb.CreateProof()
+	if err != nil {
+		t.Fatalf("create proof: %v", err)
+	}
+	proofBody, err := UnwrapProof(proof, outer.AsCell().Hash())
+	if err != nil {
+		t.Fatalf("unwrap proof: %v", err)
+	}
+
+	proofOuterValue, err := proofBody.AsDict(4).LoadValue(makeProofDictTestKey(4, 0x7))
+	if err != nil {
+		t.Fatalf("proof outer lookup: %v", err)
+	}
+	proofInnerDict, err := proofOuterValue.LoadDict(4)
+	if err != nil {
+		t.Fatalf("proof inner dict: %v", err)
+	}
+	proofInnerValue, err := proofInnerDict.LoadValue(makeProofDictTestKey(4, 0x3))
+	if err != nil {
+		t.Fatalf("proof inner lookup: %v", err)
+	}
+	if proofInnerValue.MustLoadUInt(8) != 0x33 {
+		t.Fatal("unexpected inner proof value")
+	}
+}
+
+func TestMerkleProofBuilderNestedDictionaryToDict(t *testing.T) {
+	inner := NewDict(4)
+	if err := inner.Set(makeProofDictTestKey(4, 0x4), makeProofDictTestValue(0x44)); err != nil {
+		t.Fatalf("set inner key: %v", err)
+	}
+
+	outer := NewDict(4)
+	outerValue := BeginCell().MustStoreRef(inner.AsCell()).EndCell()
+	if err := outer.Set(makeProofDictTestKey(4, 0x8), outerValue); err != nil {
+		t.Fatalf("set outer key: %v", err)
+	}
+
+	pb := NewMerkleProofBuilder(outer.AsCell())
+	outerValueSlice, err := pb.Root().AsDict(4).LoadValue(makeProofDictTestKey(4, 0x8))
+	if err != nil {
+		t.Fatalf("load outer value: %v", err)
+	}
+	innerRoot, err := outerValueSlice.LoadRef()
+	if err != nil {
+		t.Fatalf("load inner root: %v", err)
+	}
+	innerDict, err := innerRoot.ToDict(4)
+	if err != nil {
+		t.Fatalf("load inner dict: %v", err)
+	}
+	if _, err = innerDict.LoadValue(makeProofDictTestKey(4, 0x4)); err != nil {
+		t.Fatalf("load inner value: %v", err)
+	}
+
+	proof, err := pb.CreateProof()
+	if err != nil {
+		t.Fatalf("create proof: %v", err)
+	}
+	proofBody, err := UnwrapProof(proof, outer.AsCell().Hash())
+	if err != nil {
+		t.Fatalf("unwrap proof: %v", err)
+	}
+
+	proofOuterValue, err := proofBody.AsDict(4).LoadValue(makeProofDictTestKey(4, 0x8))
+	if err != nil {
+		t.Fatalf("proof outer lookup: %v", err)
+	}
+	proofInnerRoot, err := proofOuterValue.LoadRef()
+	if err != nil {
+		t.Fatalf("proof inner root: %v", err)
+	}
+	proofInnerDict, err := proofInnerRoot.ToDict(4)
+	if err != nil {
+		t.Fatalf("proof inner dict: %v", err)
+	}
+	proofInnerValue, err := proofInnerDict.LoadValue(makeProofDictTestKey(4, 0x4))
+	if err != nil {
+		t.Fatalf("proof inner lookup: %v", err)
+	}
+	if proofInnerValue.MustLoadUInt(8) != 0x44 {
+		t.Fatal("unexpected inner proof value")
 	}
 }
 
@@ -285,7 +588,7 @@ func TestDictionary_Make(t *testing.T) {
 		}
 	}
 
-	d2, err := d.AsCell().BeginParse().ToDict(32)
+	d2, err := d.AsCell().MustBeginParse().ToDict(32)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -326,6 +629,450 @@ func Test_ReplaceDict(t *testing.T) {
 	}
 }
 
+func TestDictionary_SetModesAndRefBuilder(t *testing.T) {
+	dict := NewDict(8)
+
+	key1 := BeginCell().MustStoreUInt(0x10, 8).EndCell()
+	key2 := BeginCell().MustStoreUInt(0x11, 8).EndCell()
+	key3 := BeginCell().MustStoreUInt(0x12, 8).EndCell()
+
+	val1 := BeginCell().MustStoreUInt(0xaa, 8).EndCell()
+	val2 := BeginCell().MustStoreUInt(0xbb, 8).EndCell()
+
+	changed, err := dict.SetWithMode(key1, val1, DictSetModeReplace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("replace should not insert a missing key")
+	}
+
+	changed, err = dict.SetWithMode(key1, val1, DictSetModeSet)
+	if err != nil || !changed {
+		t.Fatalf("failed to insert key: changed=%v err=%v", changed, err)
+	}
+
+	changed, err = dict.SetWithMode(key1, val2, DictSetModeAdd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("add should not replace an existing key")
+	}
+
+	changed, err = dict.SetWithMode(key1, val2, DictSetModeReplace)
+	if err != nil || !changed {
+		t.Fatalf("failed to replace key: changed=%v err=%v", changed, err)
+	}
+
+	previous, changed, err := dict.LoadValueAndSetWithMode(key1, val1, DictSetModeReplace)
+	if err != nil || !changed {
+		t.Fatalf("failed to swap key value: changed=%v err=%v", changed, err)
+	}
+	if got := mustLoadTestValue(t, previous, 8); got != 0xbb {
+		t.Fatalf("unexpected previous value: %x", got)
+	}
+
+	value, err := dict.LoadValue(key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, value, 8); got != 0xaa {
+		t.Fatalf("unexpected replaced value: %x", got)
+	}
+
+	refValue := BeginCell().MustStoreUInt(0xfeed, 16).EndCell()
+	changed, err = dict.SetBuilderWithMode(key2, BeginCell().MustStoreRef(refValue), DictSetModeSet)
+	if err != nil || !changed {
+		t.Fatalf("failed to set ref value: changed=%v err=%v", changed, err)
+	}
+
+	loadedRefValue, err := dict.LoadValue(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedRef, err := loadSingleRefValue(loadedRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalCellContents(loadedRef, refValue) {
+		t.Fatal("loaded ref does not match stored ref")
+	}
+
+	nextRefValue := BeginCell().MustStoreUInt(0xbeef, 16).EndCell()
+	previousRefValue, err := dict.LoadValue(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousRef, err := loadSingleRefValue(previousRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err = dict.SetBuilderWithMode(key2, BeginCell().MustStoreRef(nextRefValue), DictSetModeReplace)
+	if err != nil || !changed {
+		t.Fatalf("failed to replace ref value: changed=%v err=%v", changed, err)
+	}
+	if !equalCellContents(previousRef, refValue) {
+		t.Fatal("unexpected previous ref value")
+	}
+
+	builderValue := BeginCell().MustStoreUInt(0x7, 3).MustStoreRef(BeginCell().MustStoreUInt(1, 1).EndCell())
+	builderCell := builderValue.EndCell()
+
+	changed, err = dict.SetBuilderWithMode(key3, builderValue, DictSetModeSet)
+	if err != nil || !changed {
+		t.Fatalf("failed to set builder value: changed=%v err=%v", changed, err)
+	}
+
+	loadedBuilderValue, err := dict.LoadValue(key3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedBuilderCell, err := loadedBuilderValue.ToCell()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalCellContents(loadedBuilderCell, builderCell) {
+		t.Fatal("loaded builder value does not match stored builder")
+	}
+
+	nonRefValue, err := dict.LoadValue(key3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = loadSingleRefValue(nonRefValue); err == nil {
+		t.Fatal("expected single-ref extraction to fail for non-ref value")
+	}
+
+	removed, err := dict.LoadValueAndDelete(key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, removed, 8); got != 0xaa {
+		t.Fatalf("unexpected deleted value: %x", got)
+	}
+
+	removedRefValue, err := dict.LoadValueAndDelete(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedRef, err := loadSingleRefValue(removedRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalCellContents(removedRef, nextRefValue) {
+		t.Fatal("removed ref does not match stored ref")
+	}
+
+	if _, err = dict.LoadValueAndDelete(key1); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatalf("expected ErrNoSuchKeyInDict on second delete, got %v", err)
+	}
+}
+
+func TestDictionary_MinMax(t *testing.T) {
+	dict := NewDict(8)
+
+	values := []struct {
+		key uint64
+		val uint64
+	}{
+		{0x01, 0xa1},
+		{0x7f, 0xb2},
+		{0x80, 0xc3},
+		{0xff, 0xd4},
+	}
+
+	for _, item := range values {
+		if err := dict.Set(
+			BeginCell().MustStoreUInt(item.key, 8).EndCell(),
+			BeginCell().MustStoreUInt(item.val, 8).EndCell(),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertMinMax := func(fetchMax, invertFirst bool, wantKey, wantVal uint64) {
+		t.Helper()
+
+		key, value, err := dict.LoadMinMax(fetchMax, invertFirst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := key.MustBeginParse().MustLoadUInt(8); got != wantKey {
+			t.Fatalf("unexpected key: %x", got)
+		}
+		if got := mustLoadTestValue(t, value, 8); got != wantVal {
+			t.Fatalf("unexpected value: %x", got)
+		}
+	}
+
+	assertMinMax(false, false, 0x01, 0xa1)
+	assertMinMax(true, false, 0xff, 0xd4)
+	assertMinMax(false, true, 0x80, 0xc3)
+	assertMinMax(true, true, 0x7f, 0xb2)
+
+	refDict := NewDict(8)
+	refMin := BeginCell().MustStoreUInt(0x1111, 16).EndCell()
+	refMax := BeginCell().MustStoreUInt(0x2222, 16).EndCell()
+
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0x01, 8).EndCell(), BeginCell().MustStoreRef(refMin)); err != nil {
+		t.Fatal(err)
+	}
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0xfe, 8).EndCell(), BeginCell().MustStoreRef(refMax)); err != nil {
+		t.Fatal(err)
+	}
+
+	key, refValue, err := refDict.LoadMinMax(false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := loadSingleRefValue(refValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0x01 {
+		t.Fatalf("unexpected min ref key: %x", got)
+	}
+	if !equalCellContents(ref, refMin) {
+		t.Fatal("unexpected min ref value")
+	}
+
+	key, value, err := dict.LoadMaxAndDelete()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0xff {
+		t.Fatalf("unexpected deleted max key: %x", got)
+	}
+	if got := mustLoadTestValue(t, value, 8); got != 0xd4 {
+		t.Fatalf("unexpected deleted max value: %x", got)
+	}
+
+	key, refValue, err = refDict.LoadMinMaxAndDelete(true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err = loadSingleRefValue(refValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := key.MustBeginParse().MustLoadUInt(8); got != 0xfe {
+		t.Fatalf("unexpected deleted max ref key: %x", got)
+	}
+	if !equalCellContents(ref, refMax) {
+		t.Fatal("unexpected deleted max ref value")
+	}
+}
+
+func TestDictionary_WrapperCoverage(t *testing.T) {
+	dict := NewDict(8)
+	if dict.GetKeySize() != 8 {
+		t.Fatalf("unexpected key size: %d", dict.GetKeySize())
+	}
+	if !dict.IsEmpty() {
+		t.Fatal("new dict should be empty")
+	}
+	if !dict.IsEmpty() {
+		t.Fatal("unexpected empty dict state")
+	}
+
+	key1 := BeginCell().MustStoreUInt(0x01, 8).EndCell()
+	key2 := BeginCell().MustStoreUInt(0x02, 8).EndCell()
+	key3 := BeginCell().MustStoreUInt(0x03, 8).EndCell()
+
+	if err := dict.SetBuilder(key1, BeginCell().MustStoreUInt(0xAA, 8)); err != nil {
+		t.Fatal(err)
+	}
+
+	refValue := BeginCell().MustStoreUInt(0x1234, 16).EndCell()
+	if err := dict.SetBuilder(key2, BeginCell().MustStoreRef(refValue)); err != nil {
+		t.Fatal(err)
+	}
+
+	prev, changed, err := dict.LoadValueAndSet(key1, BeginCell().MustStoreUInt(0xBB, 8).EndCell())
+	if err != nil || !changed {
+		t.Fatalf("failed to swap direct value: changed=%v err=%v", changed, err)
+	}
+	if got := mustLoadTestValue(t, prev, 8); got != 0xAA {
+		t.Fatalf("unexpected previous direct value: %x", got)
+	}
+
+	prev, changed, err = dict.LoadValueAndSetBuilder(key1, BeginCell().MustStoreUInt(0xCC, 8))
+	if err != nil || !changed {
+		t.Fatalf("failed to swap builder value: changed=%v err=%v", changed, err)
+	}
+	if got := mustLoadTestValue(t, prev, 8); got != 0xBB {
+		t.Fatalf("unexpected previous builder value: %x", got)
+	}
+
+	prevRefValue, err := dict.LoadValue(key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevRef, err := loadSingleRefValue(prevRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err = dict.SetBuilderWithMode(key2, BeginCell().MustStoreRef(BeginCell().MustStoreUInt(0x5678, 16).EndCell()), DictSetModeSet)
+	if err != nil || !changed {
+		t.Fatalf("failed to swap ref value: changed=%v err=%v", changed, err)
+	}
+	if !equalCellContents(prevRef, refValue) {
+		t.Fatal("unexpected previous ref value")
+	}
+
+	loadedRefValue, err := dict.LoadValueByIntKey(big.NewInt(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadedRef, err := loadSingleRefValue(loadedRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loadedRef.MustBeginParse().MustLoadUInt(16) != 0x5678 {
+		t.Fatalf("unexpected loaded ref by int key")
+	}
+
+	copyDict := dict.Copy()
+	if err = copyDict.Set(key3, BeginCell().MustStoreUInt(0xDD, 8).EndCell()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = dict.LoadValue(key3); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatalf("copy should not mutate original dict, got %v", err)
+	}
+
+	items, err := dict.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("unexpected dict size: %d", len(items))
+	}
+	if dict.IsEmpty() {
+		t.Fatal("dict with values should not be empty")
+	}
+
+	deleted, err := dict.LoadValueAndDelete(BeginCell().MustStoreBigInt(big.NewInt(1), dict.GetKeySize()).EndCell())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, deleted, 8); got != 0xCC {
+		t.Fatalf("unexpected deleted direct value: %x", got)
+	}
+
+	deletedRefValue, err := dict.LoadValueAndDelete(BeginCell().MustStoreBigInt(big.NewInt(2), dict.GetKeySize()).EndCell())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedRef, err := loadSingleRefValue(deletedRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deletedRef.MustBeginParse().MustLoadUInt(16) != 0x5678 {
+		t.Fatalf("unexpected deleted ref value")
+	}
+
+	if !dict.IsEmpty() {
+		t.Fatal("dict should be empty after deleting all keys")
+	}
+	items, err = dict.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("unexpected final dict size: %d", len(items))
+	}
+}
+
+func TestDictionary_MinMaxWrappers(t *testing.T) {
+	dict := NewDict(8)
+	for key, val := range map[uint64]uint64{
+		0x01: 0xA1,
+		0x80: 0xB2,
+		0xFF: 0xC3,
+	} {
+		if err := dict.Set(
+			BeginCell().MustStoreUInt(key, 8).EndCell(),
+			BeginCell().MustStoreUInt(val, 8).EndCell(),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	minKey, minValue, err := dict.LoadMin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := minKey.MustBeginParse().MustLoadUInt(8); got != 0x01 {
+		t.Fatalf("unexpected min key: %x", got)
+	}
+	if got := mustLoadTestValue(t, minValue, 8); got != 0xA1 {
+		t.Fatalf("unexpected min value: %x", got)
+	}
+
+	maxKey, maxValue, err := dict.LoadMax()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := maxKey.MustBeginParse().MustLoadUInt(8); got != 0xFF {
+		t.Fatalf("unexpected max key: %x", got)
+	}
+	if got := mustLoadTestValue(t, maxValue, 8); got != 0xC3 {
+		t.Fatalf("unexpected max value: %x", got)
+	}
+
+	removedKey, removedValue, err := dict.LoadMinAndDelete()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := removedKey.MustBeginParse().MustLoadUInt(8); got != 0x01 {
+		t.Fatalf("unexpected removed min key: %x", got)
+	}
+	if got := mustLoadTestValue(t, removedValue, 8); got != 0xA1 {
+		t.Fatalf("unexpected removed min value: %x", got)
+	}
+
+	refDict := NewDict(8)
+	refMin := BeginCell().MustStoreUInt(0x1111, 16).EndCell()
+	refMax := BeginCell().MustStoreUInt(0x2222, 16).EndCell()
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0x02, 8).EndCell(), BeginCell().MustStoreRef(refMin)); err != nil {
+		t.Fatal(err)
+	}
+	if err := refDict.SetBuilder(BeginCell().MustStoreUInt(0xFE, 8).EndCell(), BeginCell().MustStoreRef(refMax)); err != nil {
+		t.Fatal(err)
+	}
+
+	maxRefKey, maxRefValue, err := refDict.LoadMinMax(true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxRef, err := loadSingleRefValue(maxRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := maxRefKey.MustBeginParse().MustLoadUInt(8); got != 0xFE {
+		t.Fatalf("unexpected max ref key: %x", got)
+	}
+	if !equalCellContents(maxRef, refMax) {
+		t.Fatal("unexpected max ref value")
+	}
+
+	minRefKey, minRefValue, err := refDict.LoadMinMaxAndDelete(false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minRef, err := loadSingleRefValue(minRefValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := minRefKey.MustBeginParse().MustLoadUInt(8); got != 0x02 {
+		t.Fatalf("unexpected removed min ref key: %x", got)
+	}
+	if !equalCellContents(minRef, refMin) {
+		t.Fatal("unexpected removed min ref value")
+	}
+}
+
 func TestDict_150KProof(t *testing.T) {
 	const sz = 150000
 	tm := time.Now()
@@ -347,16 +1094,16 @@ func TestDict_150KProof(t *testing.T) {
 	tm = time.Now()
 	proofs := make([]*Cell, sz/10)
 	for i := 0; i < sz/10; i++ {
-		sk := CreateProofSkeleton()
+		pb := NewMerkleProofBuilder(dict.AsCell())
+		observed := pb.Root().AsDict(dict.GetKeySize())
 		for y := 0; y < 10; y++ {
-			_, valSk, err := dict.LoadValueWithProof(keys[i*10+y], sk)
+			_, err := observed.LoadValue(keys[i*10+y])
 			if err != nil {
 				t.Fatal(err.Error())
 			}
-			valSk.SetRecursive() // to leave full value in proof
 		}
 
-		prf, err := dict.AsCell().CreateProof(sk)
+		prf, err := pb.CreateProof()
 		if err != nil {
 			t.Fatal(err.Error())
 		}
@@ -387,7 +1134,11 @@ func TestDictionary_String(t *testing.T) {
 	Key 32[0000000E]: Value 32 bits, 0 refs
 }`
 
-	const lookProof = `{
+	const lookProofExact = `{
+	Key 32[00000007]: Value 32 bits, 0 refs
+}`
+
+	const lookProofWithNeighbor = `{
 	Key 32[00000006]: Value 32 bits, 0 refs
 	Key 32[00000007]: Value 32 bits, 0 refs
 }`
@@ -404,13 +1155,14 @@ func TestDictionary_String(t *testing.T) {
 		}
 	}
 
-	sk := CreateProofSkeleton()
-	_, _, err := dict.LoadValueWithProof(BeginCell().MustStoreUInt(uint64(7), 32).EndCell(), sk)
+	pb := NewMerkleProofBuilder(dict.AsCell())
+	observed := pb.Root().AsDict(dict.GetKeySize())
+	_, err := observed.LoadValue(BeginCell().MustStoreUInt(uint64(7), 32).EndCell())
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	prf, err := dict.AsCell().CreateProof(sk)
+	prf, err := pb.CreateProof()
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -424,9 +1176,11 @@ func TestDictionary_String(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	// 1 more neighbour key could be in proof, it is ok
-	if d := prf.AsDict(32); d.String() != lookProof {
-		t.Fatal(d.String())
+	// One neighbour key can be present in the proof, but it is not required.
+	d := prf.AsDict(32)
+	str := d.String()
+	if str != lookProofExact && str != lookProofWithNeighbor {
+		t.Fatal(str)
 	}
 }
 

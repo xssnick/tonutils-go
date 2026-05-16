@@ -54,3 +54,18 @@ func TestTLBytes(t *testing.T) {
 		t.Fatal("should be error")
 	}
 }
+
+func TestTLFromBytesTerminalPadding(t *testing.T) {
+	loaded, rest, err := FromBytes([]byte{2, 0xFF, 0xAA, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(loaded, []byte{0xFF, 0xAA}) {
+		t.Fatalf("loaded bytes mismatch: %x", loaded)
+	}
+
+	if rest != nil {
+		t.Fatalf("rest should be nil, got %x", rest)
+	}
+}

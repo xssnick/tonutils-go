@@ -30,7 +30,7 @@ var api = func() ton.APIClientWrapped {
 		panic(err)
 	}
 
-	return ton.NewAPIClient(client).WithTimeout(5 * time.Second).WithRetry()
+	return ton.NewAPIClient(client).WithRetryTimeout(0, 5*time.Second)
 }()
 
 var _seed = os.Getenv("WALLET_SEED")
@@ -190,13 +190,13 @@ func getContractCode() *cell.Cell {
 	}
 
 	state := &tlb.StateInit{}
-	err = tlb.LoadFromCell(state, msgCell.BeginParse().MustLoadRef())
+	err = tlb.LoadFromCell(state, msgCell.MustBeginParse().MustLoadRef())
 	if err != nil {
 		panic(err)
 	}
 
 	// we need to load 1 ref of code because its build for external deploy, but we need internal
-	return state.Code.BeginParse().MustLoadRef().MustToCell()
+	return state.Code.MustBeginParse().MustLoadRef().MustToCell()
 }
 
 func getItemCode() *cell.Cell {
@@ -210,11 +210,11 @@ func getItemCode() *cell.Cell {
 	}
 
 	state := &tlb.StateInit{}
-	err = tlb.LoadFromCell(state, msgCell.BeginParse().MustLoadRef())
+	err = tlb.LoadFromCell(state, msgCell.MustBeginParse().MustLoadRef())
 	if err != nil {
 		panic(err)
 	}
 
 	// we need to load 1 ref of code because its build for external deploy, but we need internal
-	return state.Code.BeginParse().MustLoadRef().MustToCell()
+	return state.Code.MustBeginParse().MustLoadRef().MustToCell()
 }

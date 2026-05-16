@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"math/big"
 	"reflect"
 
@@ -25,6 +26,21 @@ type StackNaN struct{}
 
 func NewStack() *Stack {
 	return &Stack{}
+}
+
+func NewStackFromVM(s *vm.Stack) (*Stack, error) {
+	s = s.Copy()
+
+	ns := &Stack{}
+	for range s.Len() {
+		val, err := s.PopAny()
+		if err != nil {
+			return nil, err
+		}
+		ns.Push(val)
+	}
+
+	return ns, nil
 }
 
 func (s *Stack) Depth() uint {
@@ -134,6 +150,8 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 	switch v := val.(type) {
 	case nil:
 		b.MustStoreUInt(0x00, 8)
+	case vm.NaN, *vm.NaN:
+		b.MustStoreSlice([]byte{0x02, 0xFF}, 16)
 	case int, int8, int16, int32, int64, uint8, uint16, uint32:
 		b.MustStoreUInt(0x01, 8)
 
@@ -163,17 +181,23 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 	case *cell.Slice:
 		b.MustStoreUInt(0x04, 8)
 
+		base := v.BaseCell()
+		if base == nil {
+			base = cell.BeginCell().EndCell()
+		}
+		b.MustStoreRef(base)
+		start, end := v.BitRange()
+		startRef, endRef := v.RefRange()
+
 		// start data offset
-		b.MustStoreUInt(0, 10)
+		b.MustStoreUInt(uint64(start), 10)
 		// end data offset
-		b.MustStoreUInt(uint64(v.BitsLeft()), 10)
+		b.MustStoreUInt(uint64(end), 10)
 
 		// start refs offset
-		b.MustStoreUInt(0, 3)
+		b.MustStoreUInt(uint64(startRef), 3)
 		// end refs offset
-		b.MustStoreUInt(uint64(v.RefsNum()), 3)
-
-		b.MustStoreRef(v.MustToCell())
+		b.MustStoreUInt(uint64(endRef), 3)
 	case *cell.Builder:
 		b.MustStoreUInt(0x05, 8)
 		b.MustStoreRef(v.EndCell())
@@ -263,6 +287,11 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 		}
 		return val.MustToCell(), nil
 	case 0x04:
+		val, err := slice.LoadRef()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load cell stack value, err: %w", err)
+		}
+
 		start, err := slice.LoadUInt(10)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load slice stack value's start, err: %w", err)
@@ -286,53 +315,18 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 		if startRef > endRef {
 			return nil, fmt.Errorf("start ref index > end ref index")
 		}
+		if endRef > 4 {
+			return nil, fmt.Errorf("end ref index > 4")
+		}
 
-		val, err := slice.LoadRef()
+		if err = val.SkipBitsAndRefs(uint(start), int(startRef)); err != nil {
+			return nil, fmt.Errorf("failed to skip slice stack value's prefix, err: %w", err)
+		}
+		out, err := val.PreloadSubslice(uint(end-start), int(endRef-startRef))
 		if err != nil {
-			return nil, fmt.Errorf("failed to load cell stack value, err: %w", err)
+			return nil, fmt.Errorf("failed to load slice stack value, err: %w", err)
 		}
-
-		cl := cell.BeginCell()
-
-		if start > 0 {
-			_, err = val.LoadSlice(uint(start))
-			if err != nil {
-				return nil, fmt.Errorf("load prefix err: %w", err)
-			}
-		}
-
-		if end > 0 {
-			sz := uint(end - start)
-			data, err := val.LoadSlice(sz)
-			if err != nil {
-				return nil, fmt.Errorf("load prefix err: %w", err)
-			}
-
-			err = cl.StoreSlice(data, sz)
-			if err != nil {
-				return nil, fmt.Errorf("store slice err: %w", err)
-			}
-		}
-
-		for x := uint64(0); x < startRef; x++ {
-			_, err := val.LoadRef()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load slice stack value's ref, err: %w", err)
-			}
-		}
-
-		for x := uint64(0); x < endRef-startRef; x++ {
-			sliceRef, err := val.LoadRef()
-			if err != nil {
-				return nil, fmt.Errorf("failed to load slice stack value's ref, err: %w", err)
-			}
-
-			err = cl.StoreRef(sliceRef.MustToCell())
-			if err != nil {
-				return nil, fmt.Errorf("failed to store slice stack value's ref, err: %w", err)
-			}
-		}
-		return cl.EndCell().BeginParse(), nil
+		return out, nil
 	case 0x05:
 		val, err := slice.LoadRef()
 		if err != nil {

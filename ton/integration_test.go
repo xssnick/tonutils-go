@@ -18,10 +18,16 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+const (
+	integrationSetupTimeout        = 15 * time.Second
+	integrationRequestTimeout      = 30 * time.Second
+	integrationRetryAttemptTimeout = 3 * time.Second
+)
+
 var apiTestNet = func() APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationSetupTimeout)
 	defer cancel()
 
 	err := client.AddConnection(ctx, "109.236.80.69:49913", "AxFZRHVD1qIO9Fyva52P4vC3tRvk8ac1KKOG0c6IVio=")
@@ -29,13 +35,13 @@ var apiTestNet = func() APIClientWrapped {
 		panic(err)
 	}
 
-	return NewAPIClient(client, ProofCheckPolicySecure)
+	return NewAPIClient(client, ProofCheckPolicyFast)
 }()
 
 var api = func() APIClientWrapped {
 	client := liteclient.NewConnectionPool()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationSetupTimeout)
 	defer cancel()
 
 	cfg, err := liteclient.GetConfigFromUrl(ctx, "https://ton-blockchain.github.io/global.config.json")
@@ -48,7 +54,7 @@ var api = func() APIClientWrapped {
 		panic(err)
 	}
 
-	a := NewAPIClient(client, ProofCheckPolicySecure).WithTimeout(5 * time.Second).WithRetry()
+	a := NewAPIClient(client, ProofCheckPolicyFast).WithRetryTimeout(0, integrationRetryAttemptTimeout)
 	// a.SetTrustedBlockFromConfig(cfg)
 	return a
 }()
@@ -99,6 +105,16 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 		return
 	}
 
+	// TODO: uncomment after aug dict impl
+	/*x, err := tlb.ToCell(mb)
+	if err != nil {
+		t.Fatal("to cell err:", err.Error())
+	}
+
+	if !bytes.Equal(x.Hash(), b.RootHash) {
+		t.Fatal("master hash not eq after serialize")
+	}*/
+
 	shards, err := api.WaitForBlock(b.SeqNo).GetBlockShardsInfo(ctx, b)
 	if err != nil {
 		log.Fatalln("get shards err:", err.Error())
@@ -115,6 +131,29 @@ func TestAPIClient_GetBlockData(t *testing.T) {
 		if err != nil {
 			t.Fatal("Get block parents err:", err.Error())
 			return
+		}
+
+		x, err := tlb.ToCell(data)
+		if err != nil {
+			t.Fatal("to cell err:", err.Error())
+		}
+
+		if !bytes.Equal(x.Hash(), shard.RootHash) {
+			t.Fatal("hash not eq after serialize")
+		}
+
+		var bData tlb.Block
+		if err = tlb.LoadFromCell(&bData, x.MustBeginParse()); err != nil {
+			t.Fatal(err)
+		}
+
+		x2, err := tlb.ToCell(bData)
+		if err != nil {
+			t.Fatal("to cell2 err:", err.Error())
+		}
+
+		if !bytes.Equal(x.Hash(), x2.Hash()) {
+			t.Fatal("hash not eq after serialize/deserialize")
 		}
 	}
 
@@ -139,6 +178,77 @@ func TestAPIClient_GetBlockHeader(t *testing.T) {
 	if hdr.SeqNo != b.SeqNo {
 		t.Fatal("not eq")
 	}
+}
+
+func TestAPIClient_GetOutMsgQueueSizesLive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(apiTestNet.Client().StickyContext(context.Background()), 90*time.Second)
+	defer cancel()
+
+	wc := address.MasterchainID
+	shard := int64(-9223372036854775808)
+	sizes, err := apiTestNet.GetOutMsgQueueSizes(ctx, &wc, &shard)
+	if err != nil {
+		if isIntegrationNodeTimeout(err) {
+			t.Skipf("live liteservers did not answer getOutMsgQueueSizes: %v", err)
+		}
+		t.Fatal("get out msg queue sizes err:", err.Error())
+	}
+	if len(sizes.Shards) == 0 {
+		t.Fatal("expected at least one out msg queue size")
+	}
+	if sizes.Shards[0].ID == nil {
+		t.Fatal("out msg queue size has nil block id")
+	}
+}
+
+func TestAPIClient_OutMsgQueueProofMethods(t *testing.T) {
+	ctx, cancel := context.WithTimeout(apiTestNet.Client().StickyContext(context.Background()), 90*time.Second)
+	defer cancel()
+
+	block, err := apiTestNet.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		t.Fatal("get block err:", err.Error())
+	}
+
+	blockSize, err := apiTestNet.GetBlockOutMsgQueueSize(ctx, block)
+	if err != nil {
+		t.Fatal("get block out msg queue size err:", err.Error())
+	}
+	if blockSize.Proof == nil {
+		t.Fatal("expected block out msg queue size proof")
+	}
+	if blockSize.Size < 0 {
+		t.Fatalf("unexpected negative queue size: %d", blockSize.Size)
+	}
+
+	dispatchInfo, err := apiTestNet.GetDispatchQueueInfo(ctx, block, nil, 1)
+	if err != nil {
+		t.Fatal("get dispatch queue info err:", err.Error())
+	}
+	if dispatchInfo.Proof == nil {
+		t.Fatal("expected dispatch queue info proof")
+	}
+	if len(dispatchInfo.AccountDispatchQueues) > 1 {
+		t.Fatalf("expected at most one dispatch queue account, got %d", len(dispatchInfo.AccountDispatchQueues))
+	}
+
+	zeroAddr := address.NewAddress(0, 0, make([]byte, 32))
+	messages, err := apiTestNet.GetDispatchQueueMessages(ctx, block, zeroAddr, 0, 2, WithDispatchQueueOneAccount(), WithDispatchQueueMessagesBOC())
+	if err != nil {
+		t.Fatal("get dispatch queue messages err:", err.Error())
+	}
+	if messages.Proof == nil {
+		t.Fatal("expected dispatch queue messages proof")
+	}
+	if len(messages.Messages) > 2 {
+		t.Fatalf("expected at most two dispatch queue messages, got %d", len(messages.Messages))
+	}
+}
+
+func isIntegrationNodeTimeout(err error) bool {
+	return errors.Is(err, liteclient.ErrADNLReqTimeout) ||
+		errors.Is(err, liteclient.ErrNoNodesLeft) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 // commented because public archival LS works too bad to test
@@ -213,7 +323,7 @@ func TestAPIClient_GetBlockHeader(t *testing.T) {
 }*/
 
 func Test_RunMethod(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 
 	b, err := api.CurrentMasterchainInfo(ctx)
@@ -222,7 +332,7 @@ func Test_RunMethod(t *testing.T) {
 		return
 	}
 
-	c1 := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().BeginParse()
+	c1 := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 	c2 := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 
 	res, err := api.WaitForBlock(b.SeqNo).RunGetMethod(ctx, b, testContractAddr, "clltst2", c1, c2)
@@ -282,7 +392,7 @@ func Test_ExternalMessage(t *testing.T) { // need to deploy contract on test-net
 }
 
 func Test_Account(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx = api.Client().StickyContext(ctx)
 
@@ -344,7 +454,7 @@ func Test_Account(t *testing.T) {
 }
 
 func Test_AccountMaster(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx = api.Client().StickyContext(ctx)
 
@@ -408,7 +518,7 @@ func Test_AccountMaster(t *testing.T) {
 func Test_AccountHasMethod(t *testing.T) {
 	connectionPool := liteclient.NewConnectionPool()
 
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx := connectionPool.StickyContext(_ctx)
 
@@ -534,7 +644,7 @@ func Test_BlockScan(t *testing.T) {
 }
 
 func Test_GetTime(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 
 	utime, err := api.GetTime(ctx)
@@ -563,9 +673,29 @@ func Test_GetConfigParamsAll(t *testing.T) {
 		t.Fatal("bad config response, too short")
 	}
 
-	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
+	if conf.Get(8).MustBeginParse().MustLoadUInt(8) != 0xC4 {
 		t.Fatal("bad config response for 8 param")
 	}
+
+	for id := range conf.All() {
+		if conf.Get(id) == nil {
+			t.Fatalf("Get(%d) returned nil", id)
+		}
+	}
+
+	root, err := conf.ToCell()
+	if err != nil {
+		t.Fatal("build config root err:", err.Error())
+		return
+	}
+
+	parsedRoot, err := cell.FromBOC(root.ToBOC())
+	if err != nil {
+		t.Fatal("parse config boc err:", err.Error())
+		return
+	}
+
+	testTLBBlockchainConfigCoverage(t, tlb.BlockchainConfig{Root: parsedRoot})
 }
 
 func Test_GetConfigParams8(t *testing.T) {
@@ -587,15 +717,321 @@ func Test_GetConfigParams8(t *testing.T) {
 		t.Fatal("bad config response, bad length")
 	}
 
-	if conf.Get(8).BeginParse().MustLoadUInt(8) != 0xC4 {
+	if conf.Get(8).MustBeginParse().MustLoadUInt(8) != 0xC4 {
 		t.Fatal("bad config response for 8 param")
+	}
+}
+
+func testTLBBlockchainConfigCoverage(t *testing.T, cfg tlb.BlockchainConfig) {
+	t.Helper()
+
+	for _, id := range []uint32{
+		tlb.ConfigParamConfigAddress,
+		tlb.ConfigParamElectorAddress,
+		tlb.ConfigParamMinterAddress,
+		tlb.ConfigParamFeeCollectorAddress,
+		tlb.ConfigParamDNSRootAddress,
+		tlb.ConfigParamBurningConfig,
+		tlb.ConfigParamExtraCurrencyMintPrices,
+		tlb.ConfigParamExtraCurrencyToMint,
+		tlb.ConfigParamGlobalVersion,
+		tlb.ConfigParamMandatoryParams,
+		tlb.ConfigParamCriticalParams,
+		tlb.ConfigParamConfigVotingSetup,
+		tlb.ConfigParamWorkchains,
+		tlb.ConfigParamComplaintPricing,
+		tlb.ConfigParamBlockCreateFees,
+		tlb.ConfigParamValidatorElectionTimings,
+		tlb.ConfigParamValidatorCountLimits,
+		tlb.ConfigParamValidatorStakeLimits,
+		tlb.ConfigParamStoragePrices,
+		tlb.ConfigParamGlobalID,
+		tlb.ConfigParamGasPricesMasterchain,
+		tlb.ConfigParamGasPricesBasechain,
+		tlb.ConfigParamBlockLimitsMasterchain,
+		tlb.ConfigParamBlockLimitsBasechain,
+		tlb.ConfigParamMsgForwardPricesMasterchain,
+		tlb.ConfigParamMsgForwardPricesBasechain,
+		tlb.ConfigParamCatchainConfig,
+		tlb.ConfigParamConsensusConfig,
+		tlb.ConfigParamNewConsensusConfig,
+		tlb.ConfigParamFundamentalSMCAddresses,
+		tlb.ConfigParamPrevValidators,
+		tlb.ConfigParamPrevTempValidators,
+		tlb.ConfigParamCurrentValidators,
+		tlb.ConfigParamCurrentTempValidators,
+		tlb.ConfigParamNextValidators,
+		tlb.ConfigParamNextTempValidators,
+		tlb.ConfigParamValidatorTempKeys,
+		tlb.ConfigParamMisbehaviourPunishment,
+		tlb.ConfigParamSizeLimits,
+		tlb.ConfigParamSuspendedAddressList,
+		tlb.ConfigParamPrecompiledContracts,
+	} {
+		param, err := cfg.GetParam(id)
+		if err != nil {
+			if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) && testTLBBlockchainConfigOptionalParam(id) {
+				continue
+			}
+
+			t.Fatalf("GetParam(%d) failed: %v", id, err)
+		}
+
+		if param == nil {
+			t.Fatalf("GetParam(%d) returned nil cell", id)
+		}
+	}
+
+	testTLBBlockchainConfigMustGet(t, "GetConfigAddress", func() error {
+		_, err := cfg.GetConfigAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetElectorAddress", func() error {
+		_, err := cfg.GetElectorAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMinterAddress", func() error {
+		_, err := cfg.GetMinterAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetFeeCollectorAddress", func() error {
+		_, err := cfg.GetFeeCollectorAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetDNSRootAddress", func() error {
+		_, err := cfg.GetDNSRootAddress()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBurningConfig", func() error {
+		_, err := cfg.GetBurningConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetExtraCurrencyMintPrices", func() error {
+		_, err := cfg.GetExtraCurrencyMintPrices()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetExtraCurrencyToMint", func() error {
+		_, err := cfg.GetExtraCurrencyToMint()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGlobalVersion", func() error {
+		_, err := cfg.GetGlobalVersion()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMandatoryParams", func() error {
+		_, err := cfg.GetMandatoryParams()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetCriticalParams", func() error {
+		_, err := cfg.GetCriticalParams()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetConfigVotingSetup", func() error {
+		_, err := cfg.GetConfigVotingSetup()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetWorkchains", func() error {
+		_, err := cfg.GetWorkchains()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetComplaintPricing", func() error {
+		_, err := cfg.GetComplaintPricing()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBlockCreateFees", func() error {
+		_, err := cfg.GetBlockCreateFees()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetValidatorElectionTimings", func() error {
+		_, err := cfg.GetValidatorElectionTimings()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetValidatorCountLimits", func() error {
+		_, err := cfg.GetValidatorCountLimits()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetValidatorStakeLimits", func() error {
+		_, err := cfg.GetValidatorStakeLimits()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetStoragePrices", func() error {
+		_, err := cfg.GetStoragePrices(0)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGlobalID", func() error {
+		_, err := cfg.GetGlobalID()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGasPrices(masterchain)", func() error {
+		_, err := cfg.GetGasPrices(true)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetGasPrices(basechain)", func() error {
+		_, err := cfg.GetGasPrices(false)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBlockLimits(masterchain)", func() error {
+		_, err := cfg.GetBlockLimits(true)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetBlockLimits(basechain)", func() error {
+		_, err := cfg.GetBlockLimits(false)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMsgForwardPrices(masterchain)", func() error {
+		_, err := cfg.GetMsgForwardPrices(true)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetMsgForwardPrices(basechain)", func() error {
+		_, err := cfg.GetMsgForwardPrices(false)
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetCatchainConfig", func() error {
+		_, err := cfg.GetCatchainConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetConsensusConfig", func() error {
+		_, err := cfg.GetConsensusConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetNewConsensusConfig", func() error {
+		_, err := cfg.GetNewConsensusConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetFundamentalSmartContractAddresses", func() error {
+		_, err := cfg.GetFundamentalSmartContractAddresses()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetPrevValidators", func() error {
+		_, err := cfg.GetPrevValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetPrevTempValidators", func() error {
+		_, err := cfg.GetPrevTempValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetCurrentValidators", func() error {
+		_, err := cfg.GetCurrentValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetCurrentTempValidators", func() error {
+		_, err := cfg.GetCurrentTempValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetNextValidators", func() error {
+		_, err := cfg.GetNextValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetNextTempValidators", func() error {
+		_, err := cfg.GetNextTempValidators()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetValidatorTempKeys", func() error {
+		_, err := cfg.GetValidatorTempKeys()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetMisbehaviourPunishmentConfig", func() error {
+		_, err := cfg.GetMisbehaviourPunishmentConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetSizeLimitsConfig", func() error {
+		_, err := cfg.GetSizeLimitsConfig()
+		return err
+	})
+
+	testTLBBlockchainConfigMaybeAbsent(t, "GetSuspendedAddressList", func() error {
+		_, err := cfg.GetSuspendedAddressList()
+		return err
+	})
+
+	testTLBBlockchainConfigMustGet(t, "GetPrecompiledContractsConfig", func() error {
+		_, err := cfg.GetPrecompiledContractsConfig()
+		return err
+	})
+}
+
+func testTLBBlockchainConfigOptionalParam(id uint32) bool {
+	switch id {
+	case tlb.ConfigParamMinterAddress,
+		tlb.ConfigParamFeeCollectorAddress,
+		tlb.ConfigParamExtraCurrencyMintPrices,
+		tlb.ConfigParamExtraCurrencyToMint,
+		tlb.ConfigParamNewConsensusConfig,
+		tlb.ConfigParamFundamentalSMCAddresses,
+		tlb.ConfigParamPrevValidators,
+		tlb.ConfigParamPrevTempValidators,
+		tlb.ConfigParamCurrentTempValidators,
+		tlb.ConfigParamNextValidators,
+		tlb.ConfigParamNextTempValidators,
+		tlb.ConfigParamValidatorTempKeys,
+		tlb.ConfigParamMisbehaviourPunishment,
+		tlb.ConfigParamSizeLimits,
+		tlb.ConfigParamSuspendedAddressList,
+		tlb.ConfigParamPrecompiledContracts:
+		return true
+	}
+
+	return false
+}
+
+func testTLBBlockchainConfigMustGet(t *testing.T, name string, fn func() error) {
+	t.Helper()
+
+	if err := fn(); err != nil {
+		t.Fatalf("%s failed: %v", name, err)
+	}
+}
+
+func testTLBBlockchainConfigMaybeAbsent(t *testing.T, name string, fn func() error) {
+	t.Helper()
+
+	if err := fn(); err != nil && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
+		t.Fatalf("%s failed: %v", name, err)
 	}
 }
 
 func Test_LSErrorCase(t *testing.T) {
 	connectionPool := liteclient.NewConnectionPool()
 
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ctx, cancel := context.WithTimeout(context.Background(), integrationRequestTimeout)
 	defer cancel()
 	ctx := connectionPool.StickyContext(_ctx)
 
@@ -759,7 +1195,7 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 
 	println(acc.Code.Dump())
 
-	bSnake := acc.Code.BeginParse().MustLoadBinarySnake()
+	bSnake := acc.Code.MustBeginParse().MustLoadBinarySnake()
 
 	resp, err := apiTestNet.GetLibraries(ctx, bSnake[1:], make([]byte, 32), bSnake[1:])
 	if err != nil {
@@ -783,8 +1219,8 @@ func TestAPIClient_GetLibraries(t *testing.T) {
 	}
 }
 
-func TestAPIClient_WithRetry(t *testing.T) {
-	apiTimeout := api.WithTimeout(1 * time.Millisecond)
+func TestAPIClient_WithRetryTimeout(t *testing.T) {
+	apiTimeout := api.WithRetryTimeout(1, 1*time.Millisecond)
 
 	_, err := apiTimeout.GetMasterchainInfo(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {

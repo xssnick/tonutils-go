@@ -4,7 +4,7 @@
 
 [![Based on TON][ton-svg]][ton]
 [![Telegram Channel][tgc-svg]][tg-channel]
-![Coverage](https://img.shields.io/badge/Coverage-74.0%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-74.6%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
@@ -53,9 +53,11 @@ You can find many usage examples in **[example](https://github.com/xssnick/tonut
 - [Cells](#Cells)
   - [Create](#Cells)
   - [Parse](#Cells)
+  - [Dictionary](#Dictionary)
   - [TLB Loader/Serializer](#TLB-Loader)
   - [BoC](#BoC)
   - [Proof creation](#Proofs)
+  - [MerkleProofBuilder](#MerkleProofBuilder)
 - [Network](https://github.com/xssnick/tonutils-go/tree/master/adnl)
   - [ADNL UDP](https://github.com/xssnick/tonutils-go/blob/master/adnl/adnl_test.go)
 - [Custom reconnect policy](#Custom-reconnect-policy)
@@ -81,8 +83,7 @@ err := client.AddConnectionsFromConfigUrl(context.Background(), configUrl)
 if err != nil {
     panic(err)
 }
-api := ton.NewAPIClient(client)
-api = api.WithRetry() // if you want automatic retries with failover to another node
+api := ton.NewAPIClient(client).WithRetryTimeout(0, 5*time.Second) // automatic retries with failover and a per-attempt timeout
 ```
 
 Since `client` implements connection pool, it can be the chance that some block is not yet applied on one of the nodes, so it can lead to errors.
@@ -101,7 +102,12 @@ Example of basic usage:
 ```golang
 words := strings.Split("birth pattern ...", " ")
 
-w, err := wallet.FromSeed(api, words, wallet.V3)
+w, err := wallet.FromSeedWithOptions(api, words, wallet.V3)
+if err != nil {
+    panic(err)
+}
+
+block, err := api.CurrentMasterchainInfo(context.Background())
 if err != nil {
     panic(err)
 }
@@ -152,7 +158,11 @@ if err != nil {
 }
 
 // we are sure that return value is 1 cell, we can directly cast it and parse
-val, err := res.MustCell(0).BeginParse().LoadUInt(64)
+slice, err := res.MustCell(0).BeginParse()
+if err != nil {
+    panic(err)
+}
+val, err := slice.LoadUInt(64)
 if err != nil {
     panic(err)
 }
@@ -174,9 +184,13 @@ data := cell.BeginCell().
 // contract address
 addr := address.MustParseAddr("kQBkh8dcas3_OB0uyFEDdVBBSpAWNEgdQ66OYF76N4cDXAFQ")
 
+msg := &tlb.ExternalMessage{
+    DstAddr: addr,
+    Body:    data,
+}
+
 // send external message, processing fees will be taken from contract
-err = api.SendExternalMessage(context.Background(), addr, data)
-if err != nil {
+if err := api.SendExternalMessage(context.Background(), msg); err != nil {
     panic(err)
 }
 ```
@@ -196,6 +210,12 @@ Example:
 ```golang
 // TON Foundation account
 addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+
+b, err := api.CurrentMasterchainInfo(context.Background())
+if err != nil {
+    log.Fatalln("get block err:", err.Error())
+    return
+}
 
 account, err := api.GetAccount(context.Background(), b, addr)
 if err != nil {
@@ -309,7 +329,12 @@ You can find full example, which also contains transfer, at `example/jettons/mai
 ### DNS
 You can get information about domains, get connected wallet and any other records, transfer domain, edit and do any other nft compatible operations using `dns.Client` like that:
 ```golang
-resolver := dns.NewDNSClient(api, dns.RootContractAddr(api))
+root, err := dns.GetRootContractAddr(context.Background(), api)
+if err != nil {
+    panic(err)
+}
+
+resolver := dns.NewDNSClient(api, root)
 
 domain, err := resolver.Resolve(context.Background(), "alice.ton")
 if err != nil {
@@ -331,7 +356,7 @@ It will generate body cell that you need to send to domain contract from the own
 Example:
 ```golang
 // get root dns address from network config
-root, err := dns.RootContractAddr(api)
+root, err := dns.GetRootContractAddr(ctx, api)
 if err != nil {
     panic(err)
 }
@@ -343,9 +368,9 @@ if err != nil {
 }
 
 // prepare transaction payload cell which will change site address record
-body := domainInfo.BuildSetSiteRecordPayload(adnlAddr)
+body := domainInfo.BuildSetSiteRecordPayload(adnlAddr, false)
 
-// w = wallet.FromSeed("domain owner seed phrase")
+// w = wallet initialized from domain owner seed phrase
 err = w.Send(context.Background(), &wallet.Message{
   Mode: 1, // pay fees separately (from balance, not from amount)
   InternalMessage: &tlb.InternalMessage{
@@ -395,7 +420,10 @@ fmt.Println(result.Dump())
 
 Load from cell:
 ```golang
-slice := someCell.BeginParse()
+slice, err := someCell.BeginParse()
+if err != nil {
+    panic(err)
+}
 wc := slice.MustLoadUInt(8)
 data := slice.MustLoadSlice(256)
 ```
@@ -403,6 +431,65 @@ There are 2 types of methods `Must` and regular. The difference is that in case 
 but regular will just return error, so use `Must` only when you are sure that your data fits max cell size and other conditions
 
 To debug cells you can use `Dump()` and `DumpBits()` methods of cell, they will return string with beautifully formatted cells and their refs tree
+
+##### Dictionary
+
+Dictionary values are stored as ordinary cells, so in most cases you work with them through `LoadValue` and then parse the returned slice.
+
+```golang
+dict := cell.NewDict(32)
+
+key := cell.BeginCell().MustStoreUInt(7, 32).EndCell()
+value := cell.BeginCell().
+    MustStoreUInt(0xAB, 8).
+    MustStoreRef(
+        cell.BeginCell().
+            MustStoreUInt(0xCDEF, 16).
+            EndCell(),
+    ).
+    EndCell()
+
+if err := dict.Set(key, value); err != nil {
+    panic(err)
+}
+
+loaded, err := dict.LoadValue(key)
+if err != nil {
+    panic(err)
+}
+
+firstByte := loaded.MustLoadUInt(8)
+child, err := loaded.LoadRef()
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(firstByte)                     // 171
+fmt.Println(child.MustLoadUInt(16))       // 52719
+```
+
+If you need to iterate over all values, use `LoadAll`:
+
+```golang
+items, err := dict.LoadAll()
+if err != nil {
+    panic(err)
+}
+
+for _, item := range items {
+    keyCell, err := item.Key.ToCell()
+    if err != nil {
+        panic(err)
+    }
+    valueCell, err := item.Value.ToCell()
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println("key:", keyCell.DumpBits())
+    fmt.Println("value:", valueCell.Dump())
+}
+```
 ##### BoC
 
 Sometimes it is needed to import or export cell, for example to transfer over the network, for this, Bag of Cells serialization format is exists.
@@ -413,7 +500,12 @@ You can simply export cell using `ToBOC()` method of cell, and import it using `
 
 ##### Proofs
 
-You can create proof from cell by constructing skeleton of references you want to keep, all other cells not presented in path will be pruned.
+There are 2 ways to create proofs:
+
+1. low-level `ProofSkeleton`, when you know exact refs you want to keep
+2. recommended `MerkleProofBuilder`, when proof should follow real loaded cells
+
+Low-level skeleton example:
 ```golang
 sk := cell.CreateProofSkeleton()
 sk.ProofRef(0).ProofRef(1)
@@ -432,14 +524,196 @@ fmt.Println(merkleProof.Dump())
 
 To check proof you could use `cell.CheckProof(merkleProof, hash)` method, or `cell.UnwrapProof(merkleProof, hash)` if you want to continue to read proof body.
 
-### TLB Loader
-You can also load cells to structures, similar to JSON, using tags. 
-You can find more details in comment-description of `tlb.LoadFromCell` method
+##### MerkleProofBuilder
 
-Example:
+`MerkleProofBuilder` is the easiest way to build proof for data you actually loaded from a dictionary, slice or nested structure.
+
+```golang
+dict := cell.NewDict(32)
+
+key := cell.BeginCell().MustStoreUInt(7, 32).EndCell()
+value := cell.BeginCell().
+    MustStoreUInt(0xAB, 8).
+    MustStoreRef(
+        cell.BeginCell().
+            MustStoreUInt(0xCDEF, 16).
+            EndCell(),
+    ).
+    EndCell()
+
+if err := dict.Set(key, value); err != nil {
+    panic(err)
+}
+
+root := dict.AsCell()
+proofBuilder := cell.NewMerkleProofBuilder(root)
+observed := proofBuilder.Root().AsDict(32)
+
+loaded, err := observed.LoadValue(key)
+if err != nil {
+    panic(err)
+}
+
+// LoadValue marks the dictionary path and the terminal cell with the value as used.
+// LoadRef calls BeginParse on the child ref, so this ref will also stay ordinary in proof.
+_, err = loaded.LoadRef()
+if err != nil {
+    panic(err)
+}
+
+proof, err := proofBuilder.CreateProof()
+if err != nil {
+    panic(err)
+}
+
+proofBody, err := cell.UnwrapProof(proof, root.Hash())
+if err != nil {
+    panic(err)
+}
+
+loadedFromProof, err := proofBody.AsDict(32).LoadValue(key)
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(loadedFromProof.MustLoadUInt(8)) // 171
+
+child, err := loadedFromProof.LoadRef()
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(child.MustLoadUInt(16)) // 52719
+```
+
+If your value contains nested dictionary, tracing continues automatically through `LoadDict`:
+
+```golang
+proofBuilder := cell.NewMerkleProofBuilder(outerRoot)
+outerDict := proofBuilder.Root().AsDict(16)
+
+outerValue, err := outerDict.LoadValue(outerKey)
+if err != nil {
+    panic(err)
+}
+
+innerDict, err := outerValue.LoadDict(16)
+if err != nil {
+    panic(err)
+}
+
+innerValue, err := innerDict.LoadValue(innerKey)
+if err != nil {
+    panic(err)
+}
+
+// LoadValue already keeps the terminal cell with the value.
+// If the value has referenced child cells that should stay readable, parse those refs too.
+valueRef, err := innerValue.LoadRef()
+if err != nil {
+    panic(err)
+}
+
+if err := valueRef.SkipBits(8); err != nil {
+    panic(err)
+}
+
+proof, err := proofBuilder.CreateProof()
+if err != nil {
+    panic(err)
+}
+```
+
+If the nested dictionary is stored as a referenced cell, load that ref from the traced value and continue from it:
+
+```golang
+proofBuilder := cell.NewMerkleProofBuilder(root)
+observed := proofBuilder.Root().AsDict(16)
+
+value, err := observed.LoadValue(key)
+if err != nil {
+    panic(err)
+}
+
+refRoot, err := value.LoadRef()
+if err != nil {
+    panic(err)
+}
+
+subdict, err := refRoot.ToDict(16)
+if err != nil {
+    panic(err)
+}
+
+subval, err := subdict.LoadValue(subkey)
+if err != nil {
+    panic(err)
+}
+
+// Load referenced cells if they should not be replaced by pruned branches.
+subref, err := subval.LoadRef()
+if err != nil {
+    panic(err)
+}
+
+if err := subref.SkipBits(8); err != nil {
+    panic(err)
+}
+
+proof, err := proofBuilder.CreateProof()
+if err != nil {
+    panic(err)
+}
+```
+
+The builder keeps the cells that were actually loaded through the traced root.
+Unloaded branches are pruned automatically.
+
+### TLB Loader
+You can load cells directly into Go structs using TLB tags and serialize them back using the same struct definition.
+
+For most application-level code it is recommended to use TLB structs instead of manual raw cell assembly.
+Raw `cell.BeginCell()` / `Load*` flows are still useful for low-level work, debugging, uncommon layouts and dynamic structures,
+but if payload layout is known in advance, `tlb.Parse` (or `tlb.LoadFromCell` when you already have a `*cell.Slice`) and `tlb.ToCell` are usually simpler, shorter and less error-prone.
+
+Supported tags:
+
+- `tlb:"-"` - skip field completely
+- `tlb:"#deadbeef"` - exact hex magic / constructor prefix for `_ tlb.Magic`
+- `tlb:"$1101"` - exact binary magic / constructor prefix for `_ tlb.Magic`
+- `tlb:"## N"` - fixed-width integer in `N` bits. For small widths regular Go integer types can be used, for large widths use `*big.Int`
+- `tlb:"bits N"` - exactly `N` bits into/from `[]byte`
+- `tlb:"bool"` - one-bit boolean
+- `tlb:"addr"` - TON address, usually `*address.Address`
+- `tlb:"."` - nested struct stored in the current cell
+- `tlb:"^"` - nested value stored in a referenced cell. If the field type is `*cell.Cell`, raw referenced cell is returned without nested parsing
+- `tlb:"maybe <tag>"` - one presence bit followed by nested value only when present. Common examples: `maybe ^`, `maybe .`
+- `tlb:"either X Y"` - one selector bit: `0` means parse/store as `X`, `1` means parse/store as `Y`. During serialization it tries `X` first, then `Y`
+- `tlb:"either leave {bits},{refs} X Y"` - same as `either`, but chosen branch must still leave the requested number of free bits and refs in the current builder after serialization
+- `tlb:"dict N"` - `HashmapE` dictionary with `N`-bit keys
+- `tlb:"dict inline N"` - inline `Hashmap` dictionary with `N`-bit keys
+- `tlb:"?FieldName <tag>"` - conditional field. It is loaded/stored only when previously declared boolean field `FieldName` is `true`
+- `tlb:"[TypeA,TypeB,...]"` - interface/union field resolved by registered magic. Can be combined with other tags, for example `^ [ShardStateUnsplit,ShardStateSplit]`
+
+Tags can be combined. Typical examples:
+
+- `tlb:"maybe ^"` - optional reference
+- `tlb:"maybe ."` - optional inline nested struct
+- `tlb:"?HasValue maybe ^"` - conditional optional reference
+- `tlb:"^ [TypeA,TypeB]"` - referenced union selected by magic
+- `tlb:"dict inline 256"` - inline dictionary with 256-bit keys
+
+Custom parsing/serialization hooks are also supported:
+
+- if a value implements `tlb.Unmarshaler`, its `LoadFromCell` method is used by `tlb.Parse` and `tlb.LoadFromCell`
+- if a value implements `tlb.Marshaller`, `ToCell` calls its custom serializer
+
+For exact behavior and edge cases, see comments on `tlb.Parse`, `tlb.LoadFromCell` and `tlb.ToCell`.
+
+Example of parsing:
 ```golang
 type ShardState struct {
-    _               Magic      `tlb:"#9023afe2"`
+    _               tlb.Magic  `tlb:"#9023afe2"`
     GlobalID        int32      `tlb:"## 32"`
     ShardIdent      ShardIdent `tlb:"."`
     Seqno           uint32     `tlb:"## 32"`
@@ -456,13 +730,92 @@ type ShardIdent struct {
 }
 
 var state ShardState
-if err = tlb.LoadFromCell(&state, cl.BeginParse()); err != nil {
+if err := tlb.Parse(&state, cl); err != nil {
     panic(err)
 }
+
+fmt.Println("global id:", state.GlobalID)
+fmt.Println("seqno:", state.Seqno)
+fmt.Println("accounts dict empty:", state.Accounts.ShardAccounts.IsEmpty())
+```
+
+Example of parsing your own payload:
+```golang
+type ExamplePayload struct {
+    _       tlb.Magic  `tlb:"#a1b2c3d4"`
+    QueryID uint64     `tlb:"## 64"`
+    Flags   uint8      `tlb:"## 8"`
+    Body    *cell.Cell `tlb:"^"`
+}
+
+payloadCell := cell.BeginCell().
+    MustStoreUInt(0xa1b2c3d4, 32).
+    MustStoreUInt(123, 64).
+    MustStoreUInt(7, 8).
+    MustStoreRef(
+        cell.BeginCell().
+            MustStoreUInt(0xCAFE, 16).
+            EndCell(),
+    ).
+    EndCell()
+
+var payload ExamplePayload
+if err := tlb.Parse(&payload, payloadCell); err != nil {
+    panic(err)
+}
+
+fmt.Println(payload.QueryID)                  // 123
+fmt.Println(payload.Flags)                    // 7
+body, err := payload.Body.BeginParse()
+if err != nil {
+    panic(err)
+}
+fmt.Println(body.MustLoadUInt(16)) // 0xCAFE
 ```
 
 #### TLB Serialize
-Its also possible to serialize structures back to cells using `tlb.ToCell`, see [build NFT mint message](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/collection.go#L189) for example.
+You can serialize the same structs back into cells using `tlb.ToCell`.
+
+```golang
+type ExamplePayload struct {
+    _       tlb.Magic  `tlb:"#a1b2c3d4"`
+    QueryID uint64     `tlb:"## 64"`
+    Flags   uint8      `tlb:"## 8"`
+    Body    *cell.Cell `tlb:"^"`
+}
+
+payload := ExamplePayload{
+    QueryID: 123,
+    Flags:   7,
+    Body: cell.BeginCell().
+        MustStoreUInt(0xCAFE, 16).
+        EndCell(),
+}
+
+payloadCell, err := tlb.ToCell(payload)
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(payloadCell.Dump())
+```
+
+Roundtrip example:
+```golang
+payloadCell, err := tlb.ToCell(payload)
+if err != nil {
+    panic(err)
+}
+
+var decoded ExamplePayload
+if err = tlb.Parse(&decoded, payloadCell); err != nil {
+    panic(err)
+}
+
+fmt.Println(decoded.QueryID) // 123
+```
+
+See also [build NFT mint message](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/collection.go#L189) for a real-world serializer example.
 
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.

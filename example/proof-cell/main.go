@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"math/big"
 )
 
 type ExampleStruct struct {
@@ -57,87 +59,146 @@ func prepareExampleCell() (*cell.Cell, *ExampleStruct) {
 }
 
 func main() {
-	exampleCell, data := prepareExampleCell()
+	exampleCell, _ := prepareExampleCell()
 
-	println("Original cell tree structure:")
-	println(exampleCell.Dump())
+	fmt.Println("Original cell tree structure:")
+	fmt.Println(exampleCell.Dump())
 
-	// proof skeleton is a branched tree of references
-	// to cells which will stay untouched in proof
-	sk := cell.CreateProofSkeleton()
-	sk.ProofRef(1) // we want ref with index [1] (DictA field) to be presented in our proof
+	// MerkleProofBuilder follows the actual cells loaded from its root.
+	pb := cell.NewMerkleProofBuilder(exampleCell)
+	root, err := pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	if _, err := root.LoadUInt(24); err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
+	}
+	if _, err := root.LoadRefCell(); err != nil {
+		panic(fmt.Errorf("failed to skip ExampleStruct.Inner ref: %w", err))
+	}
+	if _, err := root.LoadDict(32); err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.DictA: %w", err))
+	}
 
-	proof, err := exampleCell.CreateProof(sk)
+	proof, err := pb.CreateProof()
 	if err != nil {
 		panic(err)
 	}
 
-	////////////////////////////////////////////////////
+	fmt.Println("\n\nProof of `DictA` field access path (dictionary content is still pruned):")
+	fmt.Println(proof.Dump())
 
-	println("\n\nProof of `DictA` field (but content is pruned):")
-	println(proof.Dump())
+	pb = cell.NewMerkleProofBuilder(exampleCell)
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	if _, err = root.LoadUInt(24); err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
+	}
+	innerSlice, err := root.LoadRef()
+	if err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.Inner ref: %w", err))
+	}
 
-	sk = cell.CreateProofSkeleton()
-	// now we want to keep full Inner field content in proof, including its all child cells, so we use SetRecursive()
-	sk.ProofRef(0).SetRecursive()
-
-	proof, err = exampleCell.CreateProof(sk)
+	proof, err = pb.CreateProof()
 	if err != nil {
 		panic(err)
 	}
 
-	////////////////////////////////////////////////////
+	fmt.Println("\n\nProof of `Inner` field (with content):")
+	fmt.Println(proof.Dump())
 
-	println("\n\nProof of `Inner` field (with content):")
-	println(proof.Dump())
-
-	sk = cell.CreateProofSkeleton()
-	// now we want proof of ExampleDeepStruct cell data
-	sk.ProofRef(0).ProofRef(0)
-
-	proof, err = exampleCell.CreateProof(sk)
+	pb = cell.NewMerkleProofBuilder(exampleCell)
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	if _, err = root.LoadUInt(24); err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
+	}
+	innerSlice, err = root.LoadRef()
+	if err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.Inner ref: %w", err))
+	}
+	if _, err = innerSlice.LoadUInt(32); err != nil {
+		panic(err)
+	}
+	deepSlice, err := innerSlice.LoadRef()
+	if err != nil {
+		panic(err)
+	}
+	deepValue, err := deepSlice.LoadBigInt(128)
 	if err != nil {
 		panic(err)
 	}
 
-	println("\n\nProof of `Inner.Deep` field:")
-	println(proof.Dump())
-
-	////////////////////////////////////////////////////
-
-	// Now we build complex proof,
-	// we will proof two keys from two dictionaries on different levels
-	sk = cell.CreateProofSkeleton()
-
-	skDictA := sk.ProofRef(1) // DictA
-	key := cell.BeginCell().MustStoreUInt(778, 32).EndCell()
-	_, skKey, err := data.DictA.LoadValueWithProof(key, skDictA)
-	if err != nil {
-		panic(err)
-	}
-	skKey.SetRecursive() // leave full key+value tree in proof
-
-	skDictB := sk.ProofRef(0).ProofRef(1) // DictB
-	key = cell.BeginCell().MustStoreUInt(333, 128).EndCell()
-	_, skKey2, err := data.Inner.DictB.LoadValueWithProof(key, skDictB)
-	if err != nil {
-		panic(err)
-	}
-	skKey2.SetRecursive() // leave full key+value tree in proof
-
-	proof, err = exampleCell.CreateProof(sk)
+	proof, err = pb.CreateProof()
 	if err != nil {
 		panic(err)
 	}
 
-	println("\n\nProof of 2 keys in 2 dictionaries on diff depth:")
-	println(proof.Dump())
+	fmt.Printf("\n\nProof of `Inner.Deep` field (`C = %s`):\n", deepValue.String())
+	fmt.Println(proof.Dump())
 
-	////////////////////////////////////////////////////
-	///// VERIFY PROOF
-	////////////////////////////////////////////////////
+	// Now we build a complex proof:
+	// we prove two values from two dictionaries on different levels.
+	pb = cell.NewMerkleProofBuilder(exampleCell)
 
-	println("Checking and parsing proof:")
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	if _, err = root.LoadUInt(24); err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
+	}
+	if _, err = root.LoadRefCell(); err != nil {
+		panic(fmt.Errorf("failed to skip ExampleStruct.Inner ref: %w", err))
+	}
+	dictA, err := root.LoadDict(32)
+	if err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.DictA: %w", err))
+	}
+	valA, err := dictA.LoadValueByIntKey(big.NewInt(778))
+	if err != nil {
+		panic(err)
+	}
+
+	root, err = pb.Root().BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	if _, err = root.LoadUInt(24); err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.A: %w", err))
+	}
+	innerSlice, err = root.LoadRef()
+	if err != nil {
+		panic(fmt.Errorf("failed to load ExampleStruct.Inner ref: %w", err))
+	}
+	if _, err = innerSlice.LoadUInt(32); err != nil {
+		panic(err)
+	}
+	if _, err = innerSlice.LoadRefCell(); err != nil {
+		panic(err)
+	}
+	dictB, err := innerSlice.LoadDict(128)
+	if err != nil {
+		panic(err)
+	}
+	valB, err := dictB.LoadValueByIntKey(big.NewInt(333))
+	if err != nil {
+		panic(err)
+	}
+
+	proof, err = pb.CreateProof()
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("\n\nProof of 2 keys in 2 dictionaries on diff depth:")
+	fmt.Println(proof.Dump())
+
+	fmt.Println("Checking and parsing proof:")
 	expectedHash := exampleCell.Hash()
 
 	proofBody, err := cell.UnwrapProof(proof, expectedHash)
@@ -145,21 +206,30 @@ func main() {
 		panic(err)
 	}
 
-	println("proof verified, now we can trust its body and parse it")
+	fmt.Println("proof verified, now we can trust its body and parse it")
 
 	var dataProof ExampleStruct
-	// LoadFromCellAsProof loads only not pruned branches and maps them to struct field, pruned fields stays empty
-	if err = tlb.LoadFromCellAsProof(&dataProof, proofBody.BeginParse()); err != nil {
+	// LoadFromCellAsProof loads only non-pruned branches into the target struct.
+	proofBodyLoader, err := proofBody.BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	if err = tlb.LoadFromCellAsProof(&dataProof, proofBodyLoader); err != nil {
 		panic(err)
 	}
 
-	val, err := dataProof.DictA.LoadValueByIntKey(big.NewInt(778))
+	valA, err = dataProof.DictA.LoadValueByIntKey(big.NewInt(778))
+	if err != nil {
+		panic(err)
+	}
+	valB, err = dataProof.Inner.DictB.LoadValueByIntKey(big.NewInt(333))
 	if err != nil {
 		panic(err)
 	}
 
-	println("Trusted data inside proof mapped to struct:")
-	println("Some struct fields:", dataProof.A, val.String())
-
-	println("Not pruned dict keys:\n", dataProof.DictA.String())
+	fmt.Println("Trusted data inside proof mapped to struct:")
+	fmt.Println("A:", dataProof.A)
+	fmt.Println("DictA[778]:", valA.String())
+	fmt.Println("DictB[333]:", valB.String())
+	fmt.Println("Not pruned dictA keys:\n", dataProof.DictA.String())
 }

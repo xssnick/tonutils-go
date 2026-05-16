@@ -68,22 +68,24 @@ type ComputePhaseSkipped struct {
 }
 
 type ComputePhaseVM struct {
-	_                Magic `tlb:"$1"`
-	Success          bool  `tlb:"bool"`
-	MsgStateUsed     bool  `tlb:"bool"`
-	AccountActivated bool  `tlb:"bool"`
-	GasFees          Coins `tlb:"."`
-	Details          struct {
-		GasUsed          *big.Int `tlb:"var uint 7"`
-		GasLimit         *big.Int `tlb:"var uint 7"`
-		GasCredit        *big.Int `tlb:"maybe var uint 3"`
-		Mode             int8     `tlb:"## 8"`
-		ExitCode         int32    `tlb:"## 32"`
-		ExitArg          *int32   `tlb:"maybe ## 32"`
-		VMSteps          uint32   `tlb:"## 32"`
-		VMInitStateHash  []byte   `tlb:"bits 256"`
-		VMFinalStateHash []byte   `tlb:"bits 256"`
-	} `tlb:"^"`
+	_                Magic                 `tlb:"$1"`
+	Success          bool                  `tlb:"bool"`
+	MsgStateUsed     bool                  `tlb:"bool"`
+	AccountActivated bool                  `tlb:"bool"`
+	GasFees          Coins                 `tlb:"."`
+	Details          ComputePhaseVMDetails `tlb:"^"`
+}
+
+type ComputePhaseVMDetails struct {
+	GasUsed          *big.Int `tlb:"var uint 7"`
+	GasLimit         *big.Int `tlb:"var uint 7"`
+	GasCredit        *big.Int `tlb:"maybe var uint 3"`
+	Mode             int8     `tlb:"## 8"`
+	ExitCode         int32    `tlb:"## 32"`
+	ExitArg          *int32   `tlb:"maybe ## 32"`
+	VMSteps          uint32   `tlb:"## 32"`
+	VMInitStateHash  []byte   `tlb:"bits 256"`
+	VMFinalStateHash []byte   `tlb:"bits 256"`
 }
 
 type ComputePhase struct {
@@ -209,6 +211,67 @@ type HashUpdate struct {
 	NewHash []byte `tlb:"bits 256"`
 }
 
+type TransactionIO struct {
+	In  *Message
+	Out *MessagesList
+}
+
+func (t TransactionIO) ToCell() (*cell.Cell, error) {
+	builder := cell.BeginCell()
+
+	if t.In == nil {
+		builder.MustStoreBoolBit(false)
+	} else {
+		inCell, err := t.In.ToCell()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize input message: %w", err)
+		}
+
+		builder.MustStoreMaybeRef(inCell)
+	}
+
+	var outDict *cell.Dictionary
+	if t.Out != nil {
+		outDict = t.Out.List
+	}
+
+	return builder.
+		MustStoreDict(outDict).
+		EndCell(), nil
+}
+
+func (t *TransactionIO) LoadFromCell(loader *cell.Slice) error {
+	hasIn, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	if hasIn {
+		inMsg, err := loader.LoadRef()
+		if err != nil {
+			return fmt.Errorf("failed to load input message ref: %w", err)
+		}
+
+		var msg Message
+		if err = msg.LoadFromCell(inMsg); err != nil {
+			return fmt.Errorf("failed to parse input message: %w", err)
+		}
+
+		t.In = &msg
+	}
+
+	dict, err := loader.LoadDict(15)
+	if err != nil {
+		return fmt.Errorf("failed to load output messages dict: %w", err)
+	}
+
+	if dict != nil {
+		t.Out = &MessagesList{List: dict}
+	}
+
+	return nil
+}
+
 type Transaction struct {
 	_           Magic         `tlb:"$0111"`
 	AccountAddr []byte        `tlb:"bits 256"`
@@ -229,6 +292,80 @@ type Transaction struct {
 
 	// not in scheme, but will be filled based on request data for flexibility
 	Hash []byte `tlb:"-"`
+}
+
+func (t *Transaction) ToCell() (*cell.Cell, error) {
+	if t == nil {
+		return nil, fmt.Errorf("transaction is nil")
+	}
+
+	if len(t.AccountAddr) != 32 {
+		return nil, fmt.Errorf("transaction account_addr must be 256 bits")
+	}
+
+	ioCell, err := TransactionIO{
+		In:  t.IO.In,
+		Out: t.IO.Out,
+	}.ToCell()
+	if err != nil {
+		return nil, err
+	}
+
+	origStatusCell, err := t.OrigStatus.ToCell()
+	if err != nil {
+		return nil, err
+	}
+
+	endStatusCell, err := t.EndStatus.ToCell()
+	if err != nil {
+		return nil, err
+	}
+
+	totalFeesCell, err := ToCell(&t.TotalFees)
+	if err != nil {
+		return nil, err
+	}
+
+	stateUpdateCell, err := ToCell(&t.StateUpdate)
+	if err != nil {
+		return nil, err
+	}
+
+	descriptionCell, err := ToCell(t.Description)
+	if err != nil {
+		return nil, err
+	}
+
+	return cell.BeginCell().
+		MustStoreUInt(0b0111, 4).
+		MustStoreSlice(t.AccountAddr, 256).
+		MustStoreUInt(t.LT, 64).
+		MustStoreSlice(normalizeTransactionBits256(t.PrevTxHash), 256).
+		MustStoreUInt(t.PrevTxLT, 64).
+		MustStoreUInt(uint64(t.Now), 32).
+		MustStoreUInt(uint64(t.OutMsgCount), 15).
+		MustStoreBuilder(origStatusCell.ToBuilder()).
+		MustStoreBuilder(endStatusCell.ToBuilder()).
+		MustStoreRef(ioCell).
+		MustStoreBuilder(totalFeesCell.ToBuilder()).
+		MustStoreRef(stateUpdateCell).
+		MustStoreRef(descriptionCell).
+		EndCell(), nil
+}
+
+func normalizeTransactionBits256(src []byte) []byte {
+	if len(src) == 32 {
+		return src
+	}
+
+	out := make([]byte, 32)
+	if len(src) >= 32 {
+		copy(out, src[len(src)-32:])
+		return out
+	}
+
+	copy(out[32-len(src):], src)
+	return out
 }
 
 func (t *Transaction) Dump() string {

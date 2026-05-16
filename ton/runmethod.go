@@ -45,10 +45,14 @@ type RunMethodResult struct {
 }
 
 func NewExecutionResult(data []any) *ExecutionResult {
-	return &ExecutionResult{data}
+	return &ExecutionResult{result: data}
 }
 
 func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...any) (*ExecutionResult, error) {
+	return c.RunGetMethodByID(ctx, blockInfo, addr, tlb.MethodNameHash(method), params...)
+}
+
+func (c *APIClient) RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, methodID uint64, params ...any) (*ExecutionResult, error) {
 	var stack tlb.Stack
 	for i := len(params) - 1; i >= 0; i-- {
 		// push args in reverse order
@@ -73,7 +77,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			Workchain: addr.Workchain(),
 			ID:        addr.Data(),
 		},
-		MethodID: tlb.MethodNameHash(method),
+		MethodID: methodID,
 		Params:   req,
 	}, &resp)
 	if err != nil {
@@ -94,7 +98,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 			}
 
 			var shardProof []*cell.Cell
-			var shardHash []byte
+			var shardBlock *BlockIDExt
 			if c.proofCheckPolicy != ProofCheckPolicyUnsafe && addr.Workchain() != address.MasterchainID &&
 				blockInfo.Workchain == address.MasterchainID {
 				if len(t.ShardProof) == 0 {
@@ -103,14 +107,19 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 
 				shardProof = t.ShardProof
 
-				if t.ShardBlock == nil || len(t.ShardBlock.RootHash) != 32 {
+				if t.ShardBlock == nil {
 					return nil, fmt.Errorf("shard block not passed")
 				}
 
-				shardHash = t.ShardBlock.RootHash
+				shardBlock = t.ShardBlock
 			}
 
-			shardAcc, _, err := CheckAccountStateProof(addr, blockInfo, t.Proof, shardProof, shardHash, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			var shardAcc *tlb.ShardAccount
+			if shardBlock != nil {
+				shardAcc, _, err = CheckAccountStateProofForShard(addr, blockInfo, t.Proof, shardProof, shardBlock, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			} else {
+				shardAcc, _, err = CheckAccountStateProof(addr, blockInfo, t.Proof, shardProof, nil, c.proofCheckPolicy == ProofCheckPolicyUnsafe)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("failed to check acc state proof: %w", err)
 			}
@@ -126,7 +135,7 @@ func (c *APIClient) RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, add
 		}
 
 		var resStack tlb.Stack
-		err = resStack.LoadFromCell(t.Result.BeginParse())
+		err = tlb.Parse(&resStack, t.Result)
 		if err != nil {
 			return nil, err
 		}

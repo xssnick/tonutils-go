@@ -1,11 +1,15 @@
 package ton
 
 import (
-	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/tvm/cell"
+	"context"
 	"math/big"
 	"reflect"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/tl"
+	"github.com/xssnick/tonutils-go/tlb"
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 func TestExecutionResult(t *testing.T) {
@@ -13,7 +17,7 @@ func TestExecutionResult(t *testing.T) {
 		big.NewInt(1),
 		cell.BeginCell(),
 		cell.BeginCell().EndCell(),
-		cell.BeginCell().EndCell().BeginParse(),
+		cell.BeginCell().EndCell().MustBeginParse(),
 		[]any{big.NewInt(2), big.NewInt(3)},
 		tlb.StackNaN{},
 		nil,
@@ -99,5 +103,56 @@ func TestExecutionResult(t *testing.T) {
 
 	if v := res.AsTuple(); !reflect.DeepEqual(v, data) {
 		t.Fatal("as tuple wrong")
+	}
+}
+
+func TestRunGetMethodByIDUsesProvidedID(t *testing.T) {
+	const methodID uint64 = 123456
+	var gotMethodID uint64
+
+	api := NewAPIClient(&ValidationMock{
+		Response: RunMethodResult{ExitCode: 0},
+		CheckQuery: func(payload tl.Serializable) error {
+			req, ok := payload.(*RunSmcMethod)
+			if !ok {
+				t.Fatalf("unexpected payload type %T", payload)
+			}
+			gotMethodID = req.MethodID
+			return nil
+		},
+	}, ProofCheckPolicyUnsafe)
+
+	_, err := api.RunGetMethodByID(context.Background(), &BlockIDExt{}, address.MustParseAddr("EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c"), methodID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethodID != methodID {
+		t.Fatalf("method id mismatch: got %d, want %d", gotMethodID, methodID)
+	}
+}
+
+func TestRunGetMethodHashesName(t *testing.T) {
+	const method = "seqno"
+	var gotMethodID uint64
+
+	api := NewAPIClient(&ValidationMock{
+		Response: RunMethodResult{ExitCode: 0},
+		CheckQuery: func(payload tl.Serializable) error {
+			req, ok := payload.(*RunSmcMethod)
+			if !ok {
+				t.Fatalf("unexpected payload type %T", payload)
+			}
+			gotMethodID = req.MethodID
+			return nil
+		},
+	}, ProofCheckPolicyUnsafe)
+
+	_, err := api.RunGetMethod(context.Background(), &BlockIDExt{}, address.MustParseAddr("EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c"), method)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tlb.MethodNameHash(method)
+	if gotMethodID != want {
+		t.Fatalf("method id mismatch: got %d, want %d", gotMethodID, want)
 	}
 }

@@ -52,7 +52,7 @@ func TestShardState_LoadFromCell(t *testing.T) {
 				}
 			}
 
-			err = LoadFromCell(&testShard, tBuilder.EndCell().BeginParse())
+			err = LoadFromCell(&testShard, tBuilder.EndCell().MustBeginParse())
 			if err != nil {
 				t.Fatal(err)
 			}

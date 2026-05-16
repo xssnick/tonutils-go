@@ -21,23 +21,35 @@ import (
 )
 
 type MockGateway struct {
-	reg func(addr string, key ed25519.PublicKey) (adnl.Peer, error)
+	reg         func(addr string, key ed25519.PublicKey) (adnl.Peer, error)
+	addresses   address.List
+	connHandler func(client adnl.Peer) error
+	pub         ed25519.PublicKey
+	id          []byte
 }
 
 func (m *MockGateway) GetID() []byte {
+	if len(m.id) > 0 {
+		return append([]byte{}, m.id...)
+	}
 	return make([]byte, 32)
 }
 
+func (m *MockGateway) GetPublicKey() ed25519.PublicKey {
+	return append(ed25519.PublicKey(nil), m.pub...)
+}
+
 func (m *MockGateway) GetAddressList() address.List {
-	//TODO implement me
-	panic("implement me")
+	return m.addresses
 }
 
 func (m *MockGateway) Close() error {
 	return nil
 }
 
-func (m *MockGateway) SetConnectionHandler(f func(client adnl.Peer) error) {}
+func (m *MockGateway) SetConnectionHandler(f func(client adnl.Peer) error) {
+	m.connHandler = f
+}
 
 func (m *MockGateway) StartServer(listenAddr string) error {
 	return nil
@@ -127,9 +139,9 @@ var cnf = &liteclient.GlobalConfig{
 						Type: "adnl.addressList",
 						Addrs: []liteclient.DHTAddress{
 							{
-								"adnl.address.udp",
-								-1185526007,
-								22096,
+								Type: "adnl.address.udp",
+								IP:   -1185526007,
+								Port: 22096,
 							},
 						}},
 					Version:   -1,
@@ -144,9 +156,9 @@ var cnf = &liteclient.GlobalConfig{
 						Type: "adnl.addressList",
 						Addrs: []liteclient.DHTAddress{
 							{
-								"adnl.address.udp",
-								-1307380860,
-								15888,
+								Type: "adnl.address.udp",
+								IP:   -1307380860,
+								Port: 15888,
 							},
 						}},
 					Version:   -1,
@@ -166,16 +178,34 @@ func makeStrAddress(ip int32, port int) string {
 }
 
 func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
+	return newCorrectNodeWithVersion(a, b, c, d, port, 1671102718)
+}
+
+func newCorrectNodeWithVersion(a byte, b byte, c byte, d byte, port int32, version int32) (*Node, error) {
 	tPubKey, tPrivKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return nil, err
 	}
+	return newCorrectNodeWithKey(a, b, c, d, port, version, tPubKey, tPrivKey)
+}
+
+func newCorrectNodeWithKey(
+	a byte,
+	b byte,
+	c byte,
+	d byte,
+	port int32,
+	version int32,
+	tPubKey ed25519.PublicKey,
+	tPrivKey ed25519.PrivateKey,
+) (*Node, error) {
 	testNode := &Node{
 		keys.PublicKeyED25519{Key: tPubKey},
 		&address.List{
-			Addresses: []*address.UDP{
-				{net.IPv4(a, b, c, d).To4(),
-					port,
+			Addresses: []address.Address{
+				&address.UDP{
+					IP:   net.IPv4(a, b, c, d).To4(),
+					Port: port,
 				},
 			},
 			Version:    0,
@@ -183,7 +213,7 @@ func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
 			Priority:   0,
 			ExpireAt:   0,
 		},
-		1671102718,
+		version,
 		nil,
 	}
 
@@ -318,6 +348,225 @@ func TestClient_FindValue(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClient_FindValueRetriesTimedOutNode(t *testing.T) {
+	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	siteAddr, err := hex.DecodeString(existingValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tValue, err := correctValue(siteAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := newCorrectNode(1, 2, 3, 4, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var findValueCalls int
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				request, ok := req.(tl.Raw)
+				if !ok {
+					return nil
+				}
+
+				var findValue FindValue
+				if _, err = tl.Parse(&findValue, request, true); err == nil {
+					findValueCalls++
+					if findValueCalls == 1 {
+						return context.DeadlineExceeded
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*tValue))
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	dhtCli, err := NewClient(gateway, []*Node{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, _, err := dhtCli.FindValue(context.Background(), &Key{
+		ID:    siteAddr,
+		Name:  []byte("address"),
+		Index: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findValueCalls != 2 {
+		t.Fatalf("expected 2 findValue attempts, got %d", findValueCalls)
+	}
+	if !reflect.DeepEqual(res, &tValue.Value) {
+		t.Fatal("unexpected value returned")
+	}
+}
+
+func TestClient_FindValueRetriesValueNotFound(t *testing.T) {
+	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	siteAddr, err := hex.DecodeString(existingValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tValue, err := correctValue(siteAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := newCorrectNode(1, 2, 3, 4, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var findValueCalls int
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				request, ok := req.(tl.Raw)
+				if !ok {
+					return nil
+				}
+
+				var findValue FindValue
+				if _, err = tl.Parse(&findValue, request, true); err == nil {
+					findValueCalls++
+					if findValueCalls == 1 {
+						reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{List: nil}}))
+						return nil
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*tValue))
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	dhtCli, err := NewClient(gateway, []*Node{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, _, err := dhtCli.FindValue(context.Background(), &Key{
+		ID:    siteAddr,
+		Name:  []byte("address"),
+		Index: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findValueCalls != 2 {
+		t.Fatalf("expected 2 findValue attempts, got %d", findValueCalls)
+	}
+	if !reflect.DeepEqual(res, &tValue.Value) {
+		t.Fatal("unexpected value returned")
+	}
+}
+
+func TestClient_StoreRetriesTimedOutFindNode(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := newCorrectNode(1, 2, 3, 4, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var findNodeCalls int
+	var storeCalls int
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				request, ok := req.(tl.Raw)
+				if !ok {
+					return nil
+				}
+
+				var findNode FindNode
+				if _, err = tl.Parse(&findNode, request, true); err == nil {
+					findNodeCalls++
+					if findNodeCalls == 1 {
+						return context.DeadlineExceeded
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{List: []*Node{node}}))
+					return nil
+				}
+
+				var store Store
+				if _, err = tl.Parse(&store, request, true); err == nil {
+					storeCalls++
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	dhtCli, err := NewClient(gateway, []*Node{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := []byte("hello")
+	stored, _, err := dhtCli.Store(context.Background(), keys.PublicKeyED25519{Key: pub}, []byte("address"), 0, data, UpdateRuleSignature{}, time.Hour, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("expected 1 stored replica, got %d", stored)
+	}
+	if findNodeCalls != 2 {
+		t.Fatalf("expected 2 findNode attempts, got %d", findNodeCalls)
+	}
+	if storeCalls != 1 {
+		t.Fatalf("expected 1 store call, got %d", storeCalls)
+	}
+}
+
+func TestClient_addNodeRejectsTooOldVersion(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := newCorrectNodeWithKey(1, 2, 3, 4, 12345, 10, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := newCorrectNodeWithKey(1, 2, 3, 4, 12345, 9, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := newCorrectNodeWithKey(1, 2, 3, 4, 12345, 11, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := NewClient(&MockGateway{}, []*Node{current})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = cli.addNode(older); err == nil || err.Error() != "too old version" {
+		t.Fatalf("got unexpected error %v", err)
+	}
+
+	if _, err = cli.addNode(newer); err != nil {
+		t.Fatalf("failed to add newer node: %v", err)
 	}
 }
 
@@ -496,18 +745,18 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(nil)
 
 	addrList := address.List{
-		Addresses: []*address.UDP{
-			{
-				net.IPv4(1, 1, 1, 1).To4(),
-				11111,
+		Addresses: []address.Address{
+			&address.UDP{
+				IP:   net.IPv4(1, 1, 1, 1).To4(),
+				Port: 11111,
 			},
-			{
-				net.IPv4(2, 2, 2, 2).To4(),
-				22222,
+			&address.UDP{
+				IP:   net.IPv4(2, 2, 2, 2).To4(),
+				Port: 22222,
 			},
-			{
-				net.IPv4(3, 3, 3, 3).To4(),
-				333333,
+			&address.UDP{
+				IP:   net.IPv4(3, 3, 3, 3).To4(),
+				Port: 333333,
 			},
 		},
 		Version:    0,
@@ -516,7 +765,7 @@ func TestClient_StoreAddressIntegration(t *testing.T) {
 		ExpireAt:   0,
 	}
 
-	_, _, err = dhtClient.StoreAddress(ctx, addrList, 12*time.Minute, key, 3)
+	_, _, err = dhtClient.StoreAddress(ctx, addrList, 12*time.Minute, key)
 	if err != nil {
 		t.Fatal(err)
 	}

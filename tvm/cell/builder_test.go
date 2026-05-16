@@ -53,7 +53,7 @@ func TestCell(t *testing.T) {
 		return
 	}
 
-	lc := cl.BeginParse()
+	lc := cl.MustBeginParse()
 
 	i, err := lc.LoadUInt(1)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestCell24(t *testing.T) {
 		return
 	}
 
-	lc := c.EndCell().BeginParse()
+	lc := c.EndCell().MustBeginParse()
 
 	res, err := lc.LoadSlice(24)
 	if err != nil {
@@ -137,7 +137,7 @@ func TestCell25(t *testing.T) {
 		return
 	}
 
-	lc := c.EndCell().BeginParse()
+	lc := c.EndCell().MustBeginParse()
 
 	res, err := lc.LoadSlice(25)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestCellReadSmall(t *testing.T) {
 		return
 	}
 
-	lc := c.EndCell().BeginParse()
+	lc := c.EndCell().MustBeginParse()
 
 	for i := 0; i < 8; i++ {
 		res, err := lc.LoadUInt(1)
@@ -190,7 +190,7 @@ func TestCellReadSmall(t *testing.T) {
 }
 
 func TestCellReadEmpty(t *testing.T) {
-	c := BeginCell().EndCell().BeginParse()
+	c := BeginCell().EndCell().MustBeginParse()
 	sz, _, err := c.RestBits()
 	if err != nil {
 		t.Fatal(err)
@@ -204,44 +204,67 @@ func TestCellReadEmpty(t *testing.T) {
 }
 
 func TestBuilder_MustStoreUInt(t *testing.T) {
-	val := BeginCell().MustStoreUInt(516783, 23).EndCell().BeginParse().MustLoadUInt(23)
+	val := BeginCell().MustStoreUInt(516783, 23).EndCell().MustBeginParse().MustLoadUInt(23)
 	if val != 516783 {
 		t.Fatal("incorrect", val)
 	}
 
-	val = BeginCell().MustStoreUInt(2, 64).EndCell().BeginParse().MustLoadUInt(64)
+	val = BeginCell().MustStoreUInt(2, 64).EndCell().MustBeginParse().MustLoadUInt(64)
 	if val != 2 {
 		t.Fatal("incorrect2", val)
 	}
 
-	val = BeginCell().MustStoreUInt(0xFFFFFF, 24).EndCell().BeginParse().MustLoadUInt(24)
+	val = BeginCell().MustStoreUInt(0xFFFFFF, 24).EndCell().MustBeginParse().MustLoadUInt(24)
 	if val != 0xFFFFFF {
 		t.Fatal("incorrect3", val)
 	}
 
-	val = BeginCell().MustStoreUInt(0xFFFFFF, 24).EndCell().BeginParse().MustLoadUInt(20)
+	val = BeginCell().MustStoreUInt(0xFFFFFF, 24).EndCell().MustBeginParse().MustLoadUInt(20)
 	if val != 0xFFFFF {
 		t.Fatal("incorrect4", val)
 	}
 
-	val = BeginCell().MustStoreUInt(2, 2).EndCell().BeginParse().MustLoadUInt(2)
+	val = BeginCell().MustStoreUInt(2, 2).EndCell().MustBeginParse().MustLoadUInt(2)
 	if val != 2 {
 		t.Fatal("incorrect5", val)
 	}
 
-	val = BeginCell().MustStoreUInt(1, 1).EndCell().BeginParse().MustLoadUInt(1)
+	val = BeginCell().MustStoreUInt(1, 1).EndCell().MustBeginParse().MustLoadUInt(1)
 	if val != 1 {
 		t.Fatal("incorrect6", val)
 	}
 
-	val = BeginCell().MustStoreUInt(123456789, 70).EndCell().BeginParse().MustLoadUInt(70)
+	val = BeginCell().MustStoreUInt(123456789, 70).EndCell().MustBeginParse().MustLoadUInt(70)
 	if val != 123456789 {
 		t.Fatal("incorrect7", val)
 	}
 
-	val = BeginCell().MustStoreUInt(0xFFFFFFFFFFFFFFFF, 60).EndCell().BeginParse().MustLoadUInt(60)
-	if val != 0xFFFFFFFFFFFFFFF {
-		t.Fatal("incorrect8", val)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected oversized MustStoreUInt to panic")
+		}
+	}()
+	BeginCell().MustStoreUInt(0xFFFFFFFFFFFFFFFF, 60)
+}
+
+func TestBuilder_StoreUIntZeroBits(t *testing.T) {
+	b := BeginCell()
+	if err := b.StoreUInt(0xDEADBEEF, 0); err != ErrTooBigValue {
+		t.Fatalf("expected ErrTooBigValue, got %v", err)
+	}
+	if err := b.StoreUInt(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if b.BitsUsed() != 0 {
+		t.Fatalf("zero-bit store should not consume bits, got %d", b.BitsUsed())
+	}
+
+	s := b.EndCell().MustBeginParse()
+	if got := s.MustLoadUInt(0); got != 0 {
+		t.Fatalf("unexpected zero-bit load result: %d", got)
+	}
+	if s.BitsLeft() != 0 {
+		t.Fatalf("expected empty slice after zero-bit roundtrip, got %d bits", s.BitsLeft())
 	}
 }
 
@@ -260,7 +283,7 @@ func TestBuilder_StoreBigInt(t *testing.T) {
 
 	c.MustStoreBigInt(new(big.Int).SetInt64(-3), 256)
 
-	data := hex.EncodeToString(c.EndCell().BeginParse().MustLoadSlice(256))
+	data := hex.EncodeToString(c.EndCell().MustBeginParse().MustLoadSlice(256))
 	if data != "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd" {
 		t.Fatal("value incorrect, its:", data)
 	}
@@ -286,7 +309,7 @@ func TestBuilder_StoreBigUInt(t *testing.T) {
 
 	c.MustStoreBigUInt(new(big.Int).SetInt64(3), 256)
 
-	data := hex.EncodeToString(c.EndCell().BeginParse().MustLoadSlice(256))
+	data := hex.EncodeToString(c.EndCell().MustBeginParse().MustLoadSlice(256))
 	if data != "0000000000000000000000000000000000000000000000000000000000000003" {
 		t.Fatal("value incorrect, its:", data)
 	}
@@ -335,9 +358,29 @@ func TestBuilder_StoreRef(t *testing.T) {
 func TestBuilder_VarUint(t *testing.T) {
 	for i := uint(3); i <= 18; i++ {
 		c := BeginCell().MustStoreVarUInt(777, i).EndCell()
-		if c.BeginParse().MustLoadVarUInt(i).Uint64() != 777 {
+		if c.MustBeginParse().MustLoadVarUInt(i).Uint64() != 777 {
 			t.Fatal("var uint not eq")
 		}
+	}
+}
+
+func TestBuilder_VarInt(t *testing.T) {
+	for _, value := range []*big.Int{
+		big.NewInt(0),
+		big.NewInt(127),
+		big.NewInt(128),
+		big.NewInt(-1),
+		big.NewInt(-128),
+		big.NewInt(-129),
+	} {
+		c := BeginCell().MustStoreBigVarInt(value, 3).EndCell()
+		if got := c.MustBeginParse().MustLoadVarInt(3); got.Cmp(value) != 0 {
+			t.Fatalf("var int not eq, got %s want %s", got, value)
+		}
+	}
+
+	if err := BeginCell().StoreBigVarInt(big.NewInt(1), 1); err != ErrTooBigValue {
+		t.Fatalf("expected ErrTooBigValue, got %v", err)
 	}
 }
 
@@ -379,6 +422,84 @@ func TestBuilder_StoreBuilder(t *testing.T) {
 	}
 }
 
+func TestBuilder_StoreBigCoinsVarUIntAndString(t *testing.T) {
+	coins := big.NewInt(0).SetUint64(1_000_000)
+	if got := BeginCell().MustStoreBigCoins(coins).EndCell().MustBeginParse().MustLoadBigCoins(); got.Cmp(coins) != 0 {
+		t.Fatalf("unexpected stored coins: got %s want %s", got, coins)
+	}
+
+	varUInt, _ := new(big.Int).SetString("123456789ABCDEF0123456789ABC", 16)
+	if got := BeginCell().MustStoreBigVarUInt(varUInt, 16).EndCell().MustBeginParse().MustLoadVarUInt(16); got.Cmp(varUInt) != 0 {
+		t.Fatalf("unexpected stored varuint: got %s want %s", got, varUInt)
+	}
+
+	if err := BeginCell().StoreBigVarUInt(new(big.Int).Lsh(big.NewInt(1), 16*8), 16); err != ErrTooBigValue {
+		t.Fatalf("expected ErrTooBigValue, got %v", err)
+	}
+
+	b := BeginCell().MustStoreUInt(0xAB, 8)
+	if b.String() != b.EndCell().String() {
+		t.Fatal("builder string should match resulting cell string")
+	}
+}
+
+func TestBuilder_StoreMaybeRefAtomicity(t *testing.T) {
+	ref := BeginCell().EndCell()
+
+	b := BeginCell().
+		MustStoreRef(ref).
+		MustStoreRef(ref).
+		MustStoreRef(ref).
+		MustStoreRef(ref)
+
+	beforeBits := b.BitsUsed()
+	beforeRefs := b.RefsUsed()
+	if err := b.StoreMaybeRef(ref); err != ErrTooMuchRefs {
+		t.Fatalf("expected ErrTooMuchRefs, got %v", err)
+	}
+	if b.BitsUsed() != beforeBits || b.RefsUsed() != beforeRefs {
+		t.Fatalf("store maybe-ref should be atomic on ref overflow, bits=%d refs=%d", b.BitsUsed(), b.RefsUsed())
+	}
+
+	fullBits := BeginCell().MustStoreSlice(data1024, 1023)
+	beforeBits = fullBits.BitsUsed()
+	beforeRefs = fullBits.RefsUsed()
+	if err := fullBits.StoreMaybeRef(ref); err != ErrNotFit1023 {
+		t.Fatalf("expected ErrNotFit1023, got %v", err)
+	}
+	if fullBits.BitsUsed() != beforeBits || fullBits.RefsUsed() != beforeRefs {
+		t.Fatalf("store maybe-ref should be atomic on bit overflow, bits=%d refs=%d", fullBits.BitsUsed(), fullBits.RefsUsed())
+	}
+}
+
+func TestBuilder_StoreDictSuccess(t *testing.T) {
+	dict := NewDict(8)
+	key := BeginCell().MustStoreUInt(0x10, 8).EndCell()
+	value := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+
+	if err := dict.Set(key, value); err != nil {
+		t.Fatal(err)
+	}
+
+	stored := BeginCell()
+	if err := stored.StoreDict(dict); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := stored.EndCell().MustBeginParse().LoadDict(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loaded.LoadValue(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := got.MustLoadUInt(8); value != 0xAB {
+		t.Fatalf("unexpected dict value: %x", value)
+	}
+}
+
 func TestSliceFuzz(t *testing.T) {
 	arr1 := make([]byte, 128)
 	arr2 := make([]byte, 128)
@@ -399,7 +520,7 @@ func TestSliceFuzz(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		s := c.EndCell().BeginParse()
+		s := c.EndCell().MustBeginParse()
 		data1 := s.MustLoadSlice(sz1)
 		data2 := s.MustLoadSlice(sz2)
 

@@ -14,7 +14,7 @@ import (
 )
 
 func emptySlice() *cell.Slice {
-	return cell.BeginCell().EndCell().BeginParse()
+	return cell.BeginCell().EndCell().MustBeginParse()
 }
 
 func malformedOnchainCell() *cell.Cell {

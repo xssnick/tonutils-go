@@ -20,110 +20,158 @@ const (
 	UnknownCellType      Type = 0xFF
 )
 
+type Hash [hashSize]byte
+
 const maxDepth = 1024
+const maxCellDataBytes = 128
 
 type Cell struct {
-	special   bool
-	levelMask LevelMask
-	bitsSz    uint
-	data      []byte
+	data  []byte
+	hash0 Hash
+	refs  [4]*Cell
+	meta  *cellMeta
 
-	hashes      []byte
-	depthLevels []uint16
-
-	refs []*Cell
-}
-
-type RawUnsafeCell struct {
-	IsSpecial bool
-	LevelMask LevelMask
-	BitsSz    uint
-	Data      []byte
-
-	Refs []*Cell
+	bitsSz uint16
+	depth0 uint16
+	flags  uint8
 }
 
 func (c *Cell) copy() *Cell {
-	return &Cell{
-		special:     c.special,
-		levelMask:   c.levelMask,
-		bitsSz:      c.bitsSz,
-		data:        append([]byte{}, c.data...),
-		hashes:      append([]byte{}, c.hashes...),
-		depthLevels: append([]uint16{}, c.depthLevels...),
-		refs:        append([]*Cell{}, c.refs...),
-	}
+	cp := *c
+	cp.meta = cloneCellMeta(c.meta)
+	return &cp
 }
 
-func (c *Cell) BeginParse() *Slice {
-	// copy data
-	data := append([]byte{}, c.data...)
+func (c *Cell) load() (*Cell, error) {
+	return c.loadWithTrace(c.Trace())
+}
 
-	return &Slice{
-		special:   c.special,
-		levelMask: c.levelMask,
-		bitsSz:    c.bitsSz,
-		data:      data,
-		refs:      c.refs,
+func (c *Cell) loadWithTrace(trace *Trace) (*Cell, error) {
+	if c == nil || !c.IsLazy() {
+		return c, nil
 	}
+	return loadLazyPrunedRefWithTrace(c, trace)
+}
+
+func (c *Cell) BeginParse() (*Slice, error) {
+	return c.beginParseWithTrace(c.Trace())
+}
+
+func (c *Cell) BeginParseWithoutTrace() (*Slice, error) {
+	return c.beginParseWithTrace(nil)
+}
+
+// BeginParseWithTrace parses the cell using trace instead of the trace attached
+// to the cell wrapper.
+func (c *Cell) BeginParseWithTrace(trace *Trace) (*Slice, error) {
+	return c.beginParseWithTrace(trace)
+}
+
+func (c *Cell) beginParseWithTrace(trace *Trace) (*Slice, error) {
+	loaded, err := c.loadWithTrace(trace)
+	if err != nil {
+		return nil, err
+	}
+
+	trace.NotifyLoad(loaded)
+	return newSliceFromCell(loaded, trace), nil
+}
+
+func (c *Cell) MustBeginParse() *Slice {
+	s, err := c.BeginParse()
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+func (c *Cell) Trace() *Trace {
+	if c == nil || c.meta == nil {
+		return nil
+	}
+	return c.meta.trace
+}
+
+func (c *Cell) WithTrace(trace *Trace) *Cell {
+	if c == nil {
+		return nil
+	}
+	if c.Trace() == trace {
+		return c
+	}
+	cp := c.copy()
+	if trace != nil {
+		cp.ensureMeta().trace = trace
+		return cp
+	}
+	if cp.meta != nil {
+		cp.meta.trace = nil
+		cp.clearMetaIfEmpty()
+	}
+	return cp
+}
+
+func (c *Cell) WithoutTrace() *Cell {
+	return c.WithTrace(nil)
+}
+
+func (c *Cell) withTraceCombined(trace *Trace) *Cell {
+	if c == nil || trace == nil {
+		return c
+	}
+	current := c.Trace()
+	combined := CombineTraces(current, trace)
+	if combined == current {
+		return c
+	}
+	return c.WithTrace(combined)
 }
 
 func (c *Cell) ToBuilder() *Builder {
-	// copy data
-	data := append([]byte{}, c.data...)
-
-	return &Builder{
-		bitsSz: c.bitsSz,
-		data:   data,
-		refs:   c.refs,
+	refCnt := c.refsCount()
+	var b Builder
+	b.bitsSz = uint(c.bitsSz)
+	copy(b.data[:], c.data)
+	if rem := b.bitsSz % 8; rem != 0 {
+		b.data[b.bitsSz/8] &= byte(0xFF << (8 - rem))
 	}
-}
 
-func (c *Cell) ToRawUnsafe() RawUnsafeCell {
-	return RawUnsafeCell{
-		IsSpecial: c.special,
-		LevelMask: c.levelMask,
-		BitsSz:    c.bitsSz,
-		Data:      c.data,
-		Refs:      c.refs,
-	}
-}
+	b.refsNum = uint8(refCnt)
+	copy(b.refs[:], c.refs[:refCnt])
 
-func FromRawUnsafe(u RawUnsafeCell) *Cell {
-	c := &Cell{
-		special:   u.IsSpecial,
-		levelMask: u.LevelMask,
-		bitsSz:    u.BitsSz,
-		data:      u.Data,
-		refs:      u.Refs,
-	}
-	c.calculateHashes()
-	return c
+	return &b
 }
 
 func (c *Cell) BitsSize() uint {
-	return c.bitsSz
+	return uint(c.bitsSz)
 }
 
 func (c *Cell) RefsNum() uint {
-	return uint(len(c.refs))
+	return uint(c.refsCount())
 }
 
 func (c *Cell) MustPeekRef(i int) *Cell {
-	return c.refs[i]
-}
-
-func (c *Cell) UnsafeModify(levelMask LevelMask, special bool) {
-	c.special = special
-	c.levelMask = levelMask
-	c.calculateHashes()
+	ref, err := c.PeekRef(i)
+	if err != nil {
+		panic(err)
+	}
+	return ref
 }
 
 func (c *Cell) PeekRef(i int) (*Cell, error) {
-	if i >= len(c.refs) {
+	if i >= c.refsCount() {
 		return nil, ErrNoMoreRefs
 	}
-	return c.refs[i], nil
+	if i < 0 {
+		return nil, ErrNegative
+	}
+
+	refView := newCellRefView(c)
+	ref, err := refView.boundaryRef(i)
+	if err != nil || ref == nil || c.Trace() == nil {
+		return ref, err
+	}
+	return ref.WithTrace(c.Trace().Child(i)), nil
 }
 
 func (c *Cell) Dump(limitLength ...int) string {
@@ -145,7 +193,12 @@ func (c *Cell) DumpBits(limitLength ...int) string {
 }
 
 func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
-	sz, data, _ := c.BeginParse().RestBits()
+	s, err := c.WithoutTrace().BeginParse()
+	if err != nil {
+		return strings.Repeat("  ", deep) + "<failed to load cell: " + err.Error() + ">"
+	}
+	base := s.BaseCell()
+	sz, data, _ := s.RestBits()
 
 	builder := strings.Builder{}
 
@@ -180,25 +233,27 @@ func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
 	builder.WriteString(val)
 	builder.WriteByte(']')
 
-	if c.levelMask.GetLevel() > 0 {
+	level := base.getLevelMask().GetLevel()
+	if level > 0 {
 		builder.WriteByte('{')
-		builder.WriteString(strconv.Itoa(c.levelMask.GetLevel()))
+		builder.WriteString(strconv.Itoa(level))
 		builder.WriteByte('}')
 
 	}
-	if c.special {
+	if base.IsSpecial() {
 		builder.WriteByte('*')
 	}
-	if len(c.refs) > 0 {
+	refCnt := base.refsCount()
+	if refCnt > 0 {
 
 		builder.WriteString(" -> {")
 
-		for i, ref := range c.refs {
+		for i, ref := range base.boundaryRefs() {
 
 			builder.WriteByte('\n')
 			builder.WriteString(ref.dump(deep+1, bin, limitLength))
 
-			if i == len(c.refs)-1 {
+			if i == refCnt-1 {
 				builder.WriteByte('\n')
 			} else {
 				builder.WriteByte(',')
@@ -232,6 +287,16 @@ func (c *Cell) Hash(level ...int) []byte {
 	return append([]byte{}, c.getHash(_DataCellMaxLevel)...)
 }
 
+func (c *Cell) HashKey(level ...int) Hash {
+	var key Hash
+	if len(level) > 0 {
+		copy(key[:], c.getHash(level[0]))
+		return key
+	}
+	copy(key[:], c.getHash(_DataCellMaxLevel))
+	return key
+}
+
 func (c *Cell) Depth(level ...int) uint16 {
 	if len(level) > 0 {
 		return c.getDepth(level[0])
@@ -248,7 +313,7 @@ func (c *Cell) Verify(key ed25519.PublicKey, signature []byte) bool {
 }
 
 func (c *Cell) GetType() Type {
-	if !c.special {
+	if !c.IsSpecial() {
 		return OrdinaryCellType
 	}
 	if c.BitsSize() < 8 {
@@ -260,6 +325,9 @@ func (c *Cell) GetType() Type {
 		if c.BitsSize() >= 288 {
 			msk := LevelMask{c.data[1]}
 			lvl := msk.GetLevel()
+			if c.IsLazy() && lvl == 0 && c.RefsNum() == 0 && c.BitsSize() == 16+(256+16) {
+				return PrunedCellType
+			}
 			if lvl > 0 && lvl <= 3 && c.BitsSize() >= 16+(256+16)*(uint(msk.Apply(lvl-1).getHashIndex()+1)) {
 				return PrunedCellType
 			}

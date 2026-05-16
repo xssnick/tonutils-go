@@ -114,7 +114,8 @@ func init() {
 		}
 
 		walletCode[ver] = code
-		walletVersionByCodeHash[string(code.Hash())] = ver
+		codeHash := code.HashKey()
+		walletVersionByCodeHash[string(codeHash[:])] = ver
 	}
 }
 
@@ -612,7 +613,10 @@ func CreateCommentCell(text string) (*cell.Cell, error) {
 const EncryptedCommentOpcode = 0x2167da4b
 
 func DecryptCommentCell(commentCell *cell.Cell, sender *address.Address, ourKey ed25519.PrivateKey, theirKey ed25519.PublicKey) ([]byte, error) {
-	slc := commentCell.BeginParse()
+	slc, err := commentCell.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load comment cell: %w", err)
+	}
 	op, err := slc.LoadUInt(32)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load op code: %w", err)

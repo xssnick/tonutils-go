@@ -32,6 +32,12 @@ func init() {
 	tl.Register(FECCompleted{}, "overlay.fec.completed hash:int256 = overlay.Broadcast")
 }
 
+// BroadcastFlagAnySender matches TON overlay any-sender broadcast flag.
+// When set, broadcast identity is not tied to a specific source key.
+const BroadcastFlagAnySender int32 = 1
+
+const _BroadcastFlagAnySender = BroadcastFlagAnySender
+
 type CheckableCert interface {
 	Check(issuedToId []byte, overlayId []byte, dataSize uint32, isFEC bool) (CertCheckResult, error)
 }
@@ -156,30 +162,7 @@ type BroadcastFEC struct {
 }
 
 func (t *BroadcastFEC) CalcID() ([]byte, error) {
-	typeId, err := tl.Hash(t.FEC)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute fec type id: %w", err)
-	}
-
-	var src = make([]byte, 32)
-	if t.Flags&_BroadcastFlagAnySender == 0 {
-		src, err = tl.Hash(t.Source)
-		if err != nil {
-			return nil, fmt.Errorf("failed to compute source key id: %w", err)
-		}
-	}
-
-	broadcastHash, err := tl.Hash(&BroadcastFECID{
-		Source:   src,
-		Type:     typeId,
-		DataHash: t.DataHash,
-		Size:     t.DataSize,
-		Flags:    t.Flags,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute hash id of the broadcast: %w", err)
-	}
-	return broadcastHash, nil
+	return calcBroadcastFECID(t.Source, t.Flags, t.DataHash, t.DataSize, t.FEC)
 }
 
 type BroadcastFECShort struct {

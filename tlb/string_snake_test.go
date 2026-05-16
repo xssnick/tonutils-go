@@ -17,7 +17,7 @@ func TestStringSnake_LoadFromCell(t *testing.T) {
 	}
 	c := b.EndCell()
 
-	err = s.LoadFromCell(c.BeginParse())
+	err = s.LoadFromCell(c.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestStringSnake_ToCell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	str, err := c.BeginParse().LoadStringSnake()
+	str, err := c.MustBeginParse().LoadStringSnake()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestStringSnake_ToCellAndBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	var s2 StringSnake
-	err = s2.LoadFromCell(c.BeginParse())
+	err = s2.LoadFromCell(c.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestStringSnake_ComplexStructureSerialization(t *testing.T) {
 	}
 
 	var s2 testStruct
-	err = LoadFromCell(&s2, c.BeginParse())
+	err = LoadFromCell(&s2, c.MustBeginParse())
 	if err != nil {
 		t.Fatal(err)
 	}

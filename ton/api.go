@@ -59,15 +59,17 @@ type APIClientWrapped interface {
 	GetLibraries(ctx context.Context, list ...[]byte) ([]*cell.Cell, error)
 	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *BlockIDExt) (*tlb.Block, error)
+	GetBlockDataAsCell(ctx context.Context, block *BlockIDExt) (*cell.Cell, error)
 	GetBlockHeader(ctx context.Context, block *BlockIDExt) (*tlb.BlockHeader, error)
 	GetBlockTransactionsV2(ctx context.Context, block *BlockIDExt, count uint32, after ...*TransactionID3) ([]TransactionShortInfo, bool, error)
 	GetBlockShardsInfo(ctx context.Context, master *BlockIDExt) ([]*BlockIDExt, error)
-	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*BlockchainConfig, error)
+	GetBlockchainConfig(ctx context.Context, block *BlockIDExt, onlyParams ...int32) (*tlb.BlockchainConfig, error)
 	GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
 	GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	SendExternalMessageWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error)
 	RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ExecutionResult, error)
+	RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	GetTransaction(ctx context.Context, block *BlockIDExt, addr *address.Address, lt uint64) (*tlb.Transaction, error)
 	GetBlockProof(ctx context.Context, known, target *BlockIDExt) (*PartialBlockProof, error)
@@ -75,7 +77,10 @@ type APIClientWrapped interface {
 	SubscribeOnTransactions(workerCtx context.Context, addr *address.Address, lastProcessedLT uint64, channel chan<- *tlb.Transaction)
 	VerifyProofChain(ctx context.Context, from, to *BlockIDExt) error
 	WaitForBlock(seqno uint32) APIClientWrapped
+	WithRetryTimeout(maxRetries int, timeout time.Duration) APIClientWrapped
+	// Deprecated: prefer WithRetryTimeout for new code to keep timeout and retry semantics together.
 	WithRetry(maxRetries ...int) APIClientWrapped
+	// Deprecated: prefer WithRetryTimeout for new code when timeout and retry behavior must stay coordinated.
 	WithTimeout(timeout time.Duration) APIClientWrapped
 	WithLSInfoInErrors() APIClientWrapped
 	SetTrustedBlock(block *BlockIDExt)
@@ -89,6 +94,12 @@ type APIClientWrapped interface {
 	GetBlockOutMsgQueueSize(ctx context.Context, block *BlockIDExt) (*BlockOutMsgQueueSize, error)
 	GetDispatchQueueInfo(ctx context.Context, block *BlockIDExt, afterAddr *address.Address, maxAccounts int) (*DispatchQueueInfo, error)
 	GetDispatchQueueMessages(ctx context.Context, block *BlockIDExt, addr *address.Address, afterLT uint64, maxMessages int, options ...func(*GetDispatchQueueMessages)) (*DispatchQueueMessages, error)
+
+	GetAllNonfinalValidatorGroups(ctx context.Context) (*NonfinalValidatorGroups, error)
+	GetNonfinalValidatorGroups(ctx context.Context, wc int32, shard int64) (*NonfinalValidatorGroups, error)
+	GetNonfinalCandidate(ctx context.Context, id *NonfinalCandidateID) (*NonfinalCandidate, error)
+	GetAllNonfinalPendingShardBlocks(ctx context.Context) (*NonfinalPendingShardBlocks, error)
+	GetNonfinalPendingShardBlocks(ctx context.Context, wc int32, shard int64) (*NonfinalPendingShardBlocks, error)
 }
 
 type APIClient struct {
@@ -124,7 +135,11 @@ func NewAPIClient(client LiteClient, proofCheckPolicy ...ProofCheckPolicy) *APIC
 
 // SetTrustedBlock - set starting point to verify master block proofs chain
 func (c *APIClient) SetTrustedBlock(block *BlockIDExt) {
-	c.root().trustedBlock = block.Copy()
+	root := c.root()
+	root.trustedLock.Lock()
+	defer root.trustedLock.Unlock()
+
+	root.trustedBlock = block.Copy()
 }
 
 // SetTrustedBlockFromConfig - same as SetTrustedBlock but takes init block from config
@@ -142,6 +157,28 @@ func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 	}
 }
 
+// WithRetryTimeout adds a per-attempt timeout and retries failed attempts on another node.
+//
+// If maxRetries = 0
+//
+//	Automatically retries requests to another available liteserver
+//	when an attempt times out, or error code 651 or -400 is received.
+//
+// If maxRetries > 0
+//
+//	Limits additional attempts to this number.
+func (c *APIClient) WithRetryTimeout(maxRetries int, timeout time.Duration) APIClientWrapped {
+	return &APIClient{
+		parent: c,
+		client: &retryClient{
+			LiteClient: c.client,
+			maxRetries: maxRetries,
+			timeout:    timeout,
+		},
+		proofCheckPolicy: c.proofCheckPolicy,
+	}
+}
+
 // WithRetry
 // If maxTries = 0
 //
@@ -151,16 +188,14 @@ func (c *APIClient) WaitForBlock(seqno uint32) APIClientWrapped {
 // If maxTries > 0
 //
 //	Limits additional attempts to this number.
+//
+// Deprecated: prefer WithRetryTimeout for new code to keep timeout and retry behavior together.
 func (c *APIClient) WithRetry(maxTries ...int) APIClientWrapped {
 	tries := 0
 	if len(maxTries) > 0 {
 		tries = maxTries[0]
 	}
-	return &APIClient{
-		parent:           c,
-		client:           &retryClient{LiteClient: c.client, maxRetries: tries},
-		proofCheckPolicy: c.proofCheckPolicy,
-	}
+	return c.WithRetryTimeout(tries, 0)
 }
 
 func (c *APIClient) WithLSInfoInErrors() APIClientWrapped {
@@ -172,6 +207,8 @@ func (c *APIClient) WithLSInfoInErrors() APIClientWrapped {
 }
 
 // WithTimeout add timeout to each LiteServer request
+//
+// Deprecated: prefer WithRetryTimeout for new code when timeout and retry behavior must stay coordinated.
 func (c *APIClient) WithTimeout(timeout time.Duration) APIClientWrapped {
 	return &APIClient{
 		parent:           c,
