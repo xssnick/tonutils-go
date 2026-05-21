@@ -4,7 +4,7 @@
 
 [![Based on TON][ton-svg]][ton]
 [![Telegram Channel][tgc-svg]][tg-channel]
-![Coverage](https://img.shields.io/badge/Coverage-74.6%25-brightgreen)
+![Coverage](https://img.shields.io/badge/Coverage-74.1%25-brightgreen)
 
 Golang library for interacting with TON blockchain.
 
@@ -251,6 +251,154 @@ for _, t := range list {
 }
 ```
 You can find extended working example at `example/account-state/main.go`
+
+### TLB Loader
+You can load cells directly into Go structs using TLB tags and serialize them back using the same struct definition.
+
+For most application-level code it is recommended to use TLB structs instead of manual raw cell assembly.
+Raw `cell.BeginCell()` / `Load*` flows are still useful for low-level work, debugging, uncommon layouts and dynamic structures,
+but if payload layout is known in advance, `tlb.Parse` (or `tlb.LoadFromCell` when you already have a `*cell.Slice`) and `tlb.ToCell` are usually simpler, shorter and less error-prone.
+
+Supported tags:
+
+- `tlb:"-"` - skip field completely
+- `tlb:"#deadbeef"` - exact hex magic / constructor prefix for `_ tlb.Magic`
+- `tlb:"$1101"` - exact binary magic / constructor prefix for `_ tlb.Magic`
+- `tlb:"## N"` - fixed-width integer in `N` bits. For small widths regular Go integer types can be used, for large widths use `*big.Int`
+- `tlb:"bits N"` - exactly `N` bits into/from `[]byte`
+- `tlb:"bool"` - one-bit boolean
+- `tlb:"addr"` - TON address, usually `*address.Address`
+- `tlb:"."` - nested struct stored in the current cell
+- `tlb:"^"` - nested value stored in a referenced cell. If the field type is `*cell.Cell`, raw referenced cell is returned without nested parsing
+- `tlb:"maybe <tag>"` - one presence bit followed by nested value only when present. Common examples: `maybe ^`, `maybe .`
+- `tlb:"either X Y"` - one selector bit: `0` means parse/store as `X`, `1` means parse/store as `Y`. During serialization it tries `X` first, then `Y`
+- `tlb:"either leave {bits},{refs} X Y"` - same as `either`, but chosen branch must still leave the requested number of free bits and refs in the current builder after serialization
+- `tlb:"dict N"` - `HashmapE` dictionary with `N`-bit keys
+- `tlb:"dict inline N"` - inline `Hashmap` dictionary with `N`-bit keys
+- `tlb:"?FieldName <tag>"` - conditional field. It is loaded/stored only when previously declared boolean field `FieldName` is `true`
+- `tlb:"[TypeA,TypeB,...]"` - interface/union field resolved by registered magic. Can be combined with other tags, for example `^ [ShardStateUnsplit,ShardStateSplit]`
+
+Tags can be combined. Typical examples:
+
+- `tlb:"maybe ^"` - optional reference
+- `tlb:"maybe ."` - optional inline nested struct
+- `tlb:"?HasValue maybe ^"` - conditional optional reference
+- `tlb:"^ [TypeA,TypeB]"` - referenced union selected by magic
+- `tlb:"dict inline 256"` - inline dictionary with 256-bit keys
+
+Custom parsing/serialization hooks are also supported:
+
+- if a value implements `tlb.Unmarshaler`, its `LoadFromCell` method is used by `tlb.Parse` and `tlb.LoadFromCell`
+- if a value implements `tlb.Marshaller`, `ToCell` calls its custom serializer
+
+For exact behavior and edge cases, see comments on `tlb.Parse`, `tlb.LoadFromCell` and `tlb.ToCell`.
+
+Example of parsing:
+```golang
+type ShardState struct {
+    _               tlb.Magic  `tlb:"#9023afe2"`
+    GlobalID        int32      `tlb:"## 32"`
+    ShardIdent      ShardIdent `tlb:"."`
+    Seqno           uint32     `tlb:"## 32"`
+    OutMsgQueueInfo *cell.Cell `tlb:"^"`
+    Accounts        struct {
+        ShardAccounts *cell.Dictionary `tlb:"dict 256"`
+    } `tlb:"^"`
+}
+
+type ShardIdent struct {
+    PrefixBits  int8   `tlb:"## 6"`
+    WorkchainID int32  `tlb:"## 32"`
+    ShardPrefix uint64 `tlb:"## 64"`
+}
+
+var state ShardState
+if err := tlb.Parse(&state, cl); err != nil {
+    panic(err)
+}
+
+fmt.Println("global id:", state.GlobalID)
+fmt.Println("seqno:", state.Seqno)
+fmt.Println("accounts dict empty:", state.Accounts.ShardAccounts.IsEmpty())
+```
+
+Example of parsing your own payload:
+```golang
+type ExamplePayload struct {
+    _       tlb.Magic  `tlb:"#a1b2c3d4"`
+    QueryID uint64     `tlb:"## 64"`
+    Flags   uint8      `tlb:"## 8"`
+    Body    *cell.Cell `tlb:"^"`
+}
+
+payloadCell := cell.BeginCell().
+    MustStoreUInt(0xa1b2c3d4, 32).
+    MustStoreUInt(123, 64).
+    MustStoreUInt(7, 8).
+    MustStoreRef(
+        cell.BeginCell().
+            MustStoreUInt(0xCAFE, 16).
+            EndCell(),
+    ).
+    EndCell()
+
+var payload ExamplePayload
+if err := tlb.Parse(&payload, payloadCell); err != nil {
+    panic(err)
+}
+
+fmt.Println(payload.QueryID)                  // 123
+fmt.Println(payload.Flags)                    // 7
+body, err := payload.Body.BeginParse()
+if err != nil {
+    panic(err)
+}
+fmt.Println(body.MustLoadUInt(16)) // 0xCAFE
+```
+
+### TLB Serialize
+You can serialize the same structs back into cells using `tlb.ToCell`.
+
+```golang
+type ExamplePayload struct {
+    _       tlb.Magic  `tlb:"#a1b2c3d4"`
+    QueryID uint64     `tlb:"## 64"`
+    Flags   uint8      `tlb:"## 8"`
+    Body    *cell.Cell `tlb:"^"`
+}
+
+payload := ExamplePayload{
+    QueryID: 123,
+    Flags:   7,
+    Body: cell.BeginCell().
+        MustStoreUInt(0xCAFE, 16).
+        EndCell(),
+}
+
+payloadCell, err := tlb.ToCell(payload)
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(payloadCell.Dump())
+```
+
+Roundtrip example:
+```golang
+payloadCell, err := tlb.ToCell(payload)
+if err != nil {
+    panic(err)
+}
+
+var decoded ExamplePayload
+if err = tlb.Parse(&decoded, payloadCell); err != nil {
+    panic(err)
+}
+
+fmt.Println(decoded.QueryID) // 123
+```
+
+See also [build NFT mint message](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/collection.go#L189) for a real-world serializer example.
 
 ### NFT
 You can mint, transfer, and get NFT information using `nft.ItemClient` and `nft.CollectionClient`, like that:
@@ -669,154 +817,6 @@ if err != nil {
 The builder keeps the cells that were actually loaded through the traced root.
 Unloaded branches are pruned automatically.
 
-### TLB Loader
-You can load cells directly into Go structs using TLB tags and serialize them back using the same struct definition.
-
-For most application-level code it is recommended to use TLB structs instead of manual raw cell assembly.
-Raw `cell.BeginCell()` / `Load*` flows are still useful for low-level work, debugging, uncommon layouts and dynamic structures,
-but if payload layout is known in advance, `tlb.Parse` (or `tlb.LoadFromCell` when you already have a `*cell.Slice`) and `tlb.ToCell` are usually simpler, shorter and less error-prone.
-
-Supported tags:
-
-- `tlb:"-"` - skip field completely
-- `tlb:"#deadbeef"` - exact hex magic / constructor prefix for `_ tlb.Magic`
-- `tlb:"$1101"` - exact binary magic / constructor prefix for `_ tlb.Magic`
-- `tlb:"## N"` - fixed-width integer in `N` bits. For small widths regular Go integer types can be used, for large widths use `*big.Int`
-- `tlb:"bits N"` - exactly `N` bits into/from `[]byte`
-- `tlb:"bool"` - one-bit boolean
-- `tlb:"addr"` - TON address, usually `*address.Address`
-- `tlb:"."` - nested struct stored in the current cell
-- `tlb:"^"` - nested value stored in a referenced cell. If the field type is `*cell.Cell`, raw referenced cell is returned without nested parsing
-- `tlb:"maybe <tag>"` - one presence bit followed by nested value only when present. Common examples: `maybe ^`, `maybe .`
-- `tlb:"either X Y"` - one selector bit: `0` means parse/store as `X`, `1` means parse/store as `Y`. During serialization it tries `X` first, then `Y`
-- `tlb:"either leave {bits},{refs} X Y"` - same as `either`, but chosen branch must still leave the requested number of free bits and refs in the current builder after serialization
-- `tlb:"dict N"` - `HashmapE` dictionary with `N`-bit keys
-- `tlb:"dict inline N"` - inline `Hashmap` dictionary with `N`-bit keys
-- `tlb:"?FieldName <tag>"` - conditional field. It is loaded/stored only when previously declared boolean field `FieldName` is `true`
-- `tlb:"[TypeA,TypeB,...]"` - interface/union field resolved by registered magic. Can be combined with other tags, for example `^ [ShardStateUnsplit,ShardStateSplit]`
-
-Tags can be combined. Typical examples:
-
-- `tlb:"maybe ^"` - optional reference
-- `tlb:"maybe ."` - optional inline nested struct
-- `tlb:"?HasValue maybe ^"` - conditional optional reference
-- `tlb:"^ [TypeA,TypeB]"` - referenced union selected by magic
-- `tlb:"dict inline 256"` - inline dictionary with 256-bit keys
-
-Custom parsing/serialization hooks are also supported:
-
-- if a value implements `tlb.Unmarshaler`, its `LoadFromCell` method is used by `tlb.Parse` and `tlb.LoadFromCell`
-- if a value implements `tlb.Marshaller`, `ToCell` calls its custom serializer
-
-For exact behavior and edge cases, see comments on `tlb.Parse`, `tlb.LoadFromCell` and `tlb.ToCell`.
-
-Example of parsing:
-```golang
-type ShardState struct {
-    _               tlb.Magic  `tlb:"#9023afe2"`
-    GlobalID        int32      `tlb:"## 32"`
-    ShardIdent      ShardIdent `tlb:"."`
-    Seqno           uint32     `tlb:"## 32"`
-    OutMsgQueueInfo *cell.Cell `tlb:"^"`
-    Accounts        struct {
-        ShardAccounts *cell.Dictionary `tlb:"dict 256"`
-    } `tlb:"^"`
-}
-
-type ShardIdent struct {
-    PrefixBits  int8   `tlb:"## 6"`
-    WorkchainID int32  `tlb:"## 32"`
-    ShardPrefix uint64 `tlb:"## 64"`
-}
-
-var state ShardState
-if err := tlb.Parse(&state, cl); err != nil {
-    panic(err)
-}
-
-fmt.Println("global id:", state.GlobalID)
-fmt.Println("seqno:", state.Seqno)
-fmt.Println("accounts dict empty:", state.Accounts.ShardAccounts.IsEmpty())
-```
-
-Example of parsing your own payload:
-```golang
-type ExamplePayload struct {
-    _       tlb.Magic  `tlb:"#a1b2c3d4"`
-    QueryID uint64     `tlb:"## 64"`
-    Flags   uint8      `tlb:"## 8"`
-    Body    *cell.Cell `tlb:"^"`
-}
-
-payloadCell := cell.BeginCell().
-    MustStoreUInt(0xa1b2c3d4, 32).
-    MustStoreUInt(123, 64).
-    MustStoreUInt(7, 8).
-    MustStoreRef(
-        cell.BeginCell().
-            MustStoreUInt(0xCAFE, 16).
-            EndCell(),
-    ).
-    EndCell()
-
-var payload ExamplePayload
-if err := tlb.Parse(&payload, payloadCell); err != nil {
-    panic(err)
-}
-
-fmt.Println(payload.QueryID)                  // 123
-fmt.Println(payload.Flags)                    // 7
-body, err := payload.Body.BeginParse()
-if err != nil {
-    panic(err)
-}
-fmt.Println(body.MustLoadUInt(16)) // 0xCAFE
-```
-
-#### TLB Serialize
-You can serialize the same structs back into cells using `tlb.ToCell`.
-
-```golang
-type ExamplePayload struct {
-    _       tlb.Magic  `tlb:"#a1b2c3d4"`
-    QueryID uint64     `tlb:"## 64"`
-    Flags   uint8      `tlb:"## 8"`
-    Body    *cell.Cell `tlb:"^"`
-}
-
-payload := ExamplePayload{
-    QueryID: 123,
-    Flags:   7,
-    Body: cell.BeginCell().
-        MustStoreUInt(0xCAFE, 16).
-        EndCell(),
-}
-
-payloadCell, err := tlb.ToCell(payload)
-if err != nil {
-    panic(err)
-}
-
-fmt.Println(payloadCell.Dump())
-```
-
-Roundtrip example:
-```golang
-payloadCell, err := tlb.ToCell(payload)
-if err != nil {
-    panic(err)
-}
-
-var decoded ExamplePayload
-if err = tlb.Parse(&decoded, payloadCell); err != nil {
-    panic(err)
-}
-
-fmt.Println(decoded.QueryID) // 123
-```
-
-See also [build NFT mint message](https://github.com/xssnick/tonutils-go/blob/master/ton/nft/collection.go#L189) for a real-world serializer example.
-
 ### Custom reconnect policy
 By default, standard reconnect method will be used - `c.DefaultReconnect(3*time.Second, 3)` which will do 3 tries and wait 3 seconds after each.
 
@@ -827,7 +827,7 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 })
 ```
 
-### Features to implement
+### Features
 * ✅ Support cell and slice as arguments to run get method
 * ✅ Reconnect on failure
 * ✅ Get account state method
@@ -844,15 +844,14 @@ client.SetOnDisconnect(func(addr, serverKey string) {
 * ✅ ADNL TCP Client/Server
 * ✅ RLDP Client/Server
 * ✅ TON Sites Client/Server
-* ✅ DHT Client
+* ✅ DHT
 * ✅ Merkle proofs validation and creation
 * ✅ Overlays
 * ✅ TL Parser/Serializer
 * ✅ TL-B Parser/Serializer
 * ✅ Payment channels
 * ✅ Liteserver proofs automatic validation
-* DHT Server
-* TVM (Contract execution emulation)
+* ✅ TVM (Contract execution emulation)
 
 <!-- Badges -->
 [ton-svg]: https://img.shields.io/badge/Based%20on-TON-blue
