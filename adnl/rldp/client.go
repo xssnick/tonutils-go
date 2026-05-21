@@ -176,7 +176,8 @@ var streamDrainEmptyHook func()
 
 const _MTU = 1 << 37
 
-var MinRateBytesSec = int64(1 << 20)
+var MinRateBytesSec = int64(256 << 10)
+var InitialRateBytesSec = int64(1 << 20)
 var MaxRateBytesSec = int64(512 << 20)
 
 func NewClient(a ADNL) *RLDP {
@@ -187,16 +188,17 @@ func NewClient(a ADNL) *RLDP {
 		recvStreams:            map[string]*decoderStream{},
 		expectedTransfers:      map[string]*expectedTransfer{},
 		activateRecoverySender: make(chan bool, 1),
-		rateLimit:              NewTokenBucket(1<<20, a.RemoteAddr()),
+		rateLimit:              NewTokenBucket(InitialRateBytesSec, a.RemoteAddr()),
 	}
 
 	r.rateCtrl = NewBBRv2Controller(r.rateLimit, BBRv2Options{
 		Name:               r.adnl.RemoteAddr(),
 		MinRate:            MinRateBytesSec,
+		InitialRate:        InitialRateBytesSec,
 		MaxRate:            MaxRateBytesSec,
-		HighLoss:           0.25,
-		Beta:               0.9,
-		DefaultRTTMs:       25,
+		HighLoss:           0.08,
+		Beta:               0.85,
+		DefaultRTTMs:       50,
 		BtlBwWindowSec:     10,
 		ProbeBwCycleMs:     200,
 		ProbeRTTDurationMs: 200,

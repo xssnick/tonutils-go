@@ -160,7 +160,7 @@ func (s *Server) StoreOverlayNodes(
 	nodes *overlay.NodesList,
 	ttl time.Duration,
 ) (storedCount int, idKey []byte, err error) {
-	if len(nodes.List) == 0 {
+	if nodes == nil || len(nodes.List) == 0 {
 		return 0, nil, fmt.Errorf("0 nodes in list")
 	}
 

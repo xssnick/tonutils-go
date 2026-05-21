@@ -9,13 +9,77 @@ import (
 	"testing"
 )
 
-func TestFromBOCMultiRootReaderLazyRequiresTrustedHashes(t *testing.T) {
-	root := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	boc := root.ToBOCWithOptions(mode31Options())
+func TestFromBOCMultiRootReaderLazyComputesUntrustedHashes(t *testing.T) {
+	child := BeginCell().MustStoreUInt(0xCD, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(child).EndCell()
 
-	_, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(boc), BOCParseOptions{Lazy: true})
-	if err == nil || !strings.Contains(err.Error(), "trusted hashes") {
-		t.Fatalf("expected trusted hashes error, got %v", err)
+	for name, options := range map[string]BOCSerializeOptions{
+		"with stored hashes": mode31Options(),
+		"without hashes":     {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			boc := root.ToBOCWithOptions(options)
+
+			roots, unique, err := FromBOCMultiRootReader(NewBOCNoCopyReader(boc), BOCParseOptions{
+				Lazy: true,
+			})
+			if err != nil {
+				t.Fatalf("lazy parse with computed hashes: %v", err)
+			}
+			if unique != nil {
+				t.Fatalf("lazy parse should not return eager unique cells, got %d", len(unique))
+			}
+			if len(roots) != 1 {
+				t.Fatalf("unexpected roots count: got %d want 1", len(roots))
+			}
+			if roots[0].HashKey() != root.HashKey() {
+				t.Fatalf("unexpected root hash: got=%x want=%x", roots[0].Hash(), root.Hash())
+			}
+
+			stored := roots[0].rawRefs()
+			if len(stored) != 1 || !stored[0].IsLazy() {
+				t.Fatal("expected root ref to be a lazy indexed boundary")
+			}
+
+			ref, err := roots[0].PeekRef(0)
+			if err != nil {
+				t.Fatalf("load lazy indexed ref: %v", err)
+			}
+			if ref.HashKey() != child.HashKey() {
+				t.Fatalf("unexpected child hash: got=%x want=%x", ref.Hash(), child.Hash())
+			}
+		})
+	}
+}
+
+func TestFromBOCMultiRootReaderLazyValidatesUntrustedSerializedHashes(t *testing.T) {
+	root := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	boc := root.ToBOCWithOptions(BOCSerializeOptions{WithTopHash: true})
+	cellOffset := firstBOCCellOffset(t, boc)
+	if boc[cellOffset]&0b10000 == 0 {
+		t.Fatal("expected serialized root hashes")
+	}
+
+	mutated := append([]byte(nil), boc...)
+	trustedHash := bytes.Repeat([]byte{0x77}, hashSize)
+	copy(mutated[cellOffset+2:cellOffset+2+hashSize], trustedHash)
+
+	if _, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(mutated), BOCParseOptions{Lazy: true}); err == nil || !strings.Contains(err.Error(), "serialized hash mismatch") {
+		t.Fatalf("expected lazy parser to reject mismatched serialized hash, got %v", err)
+	}
+
+	roots, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(mutated), BOCParseOptions{
+		Lazy:          true,
+		TrustedHashes: true,
+	})
+	if err != nil {
+		t.Fatalf("trusted lazy parse failed: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("unexpected roots count: %d", len(roots))
+	}
+	if !bytes.Equal(roots[0].Hash(), trustedHash) {
+		t.Fatalf("trusted hash was not applied: got=%x want=%x", roots[0].Hash(), trustedHash)
 	}
 }
 
@@ -121,6 +185,55 @@ func TestFromBOCMultiRootReaderLazyMode31MultiRootCache(t *testing.T) {
 	}
 	if first.HashKey() != shared.HashKey() {
 		t.Fatalf("unexpected shared hash: got=%x want=%x", first.Hash(), shared.Hash())
+	}
+}
+
+func TestFromBOCMultiRootReaderLazyDisableCache(t *testing.T) {
+	shared := BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	root := BeginCell().
+		MustStoreUInt(0xAB, 8).
+		MustStoreRef(shared).
+		MustStoreRef(shared).
+		EndCell()
+
+	boc := root.ToBOCWithOptions(mode31Options())
+	roots, unique, err := FromBOCMultiRootReader(NewBOCNoCopyReader(boc), BOCParseOptions{
+		Lazy:             true,
+		TrustedHashes:    true,
+		DisableLazyCache: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unique != nil {
+		t.Fatalf("lazy parse should not return eager unique cells, got %d", len(unique))
+	}
+	if len(roots) != 1 {
+		t.Fatalf("unexpected roots count: got %d want 1", len(roots))
+	}
+
+	leftBoundary, err := roots[0].PeekRef(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightBoundary, err := roots[0].PeekRef(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	left, err := leftBoundary.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := rightBoundary.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left == right {
+		t.Fatal("disabled cache should materialize shared lazy refs independently")
+	}
+	if left.HashKey() != shared.HashKey() || right.HashKey() != shared.HashKey() {
+		t.Fatalf("unexpected shared hashes: left=%x right=%x want=%x", left.Hash(), right.Hash(), shared.Hash())
 	}
 }
 

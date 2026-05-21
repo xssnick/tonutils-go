@@ -25,6 +25,53 @@ func newBBR(t *testing.T, initRate int64, opts BBRv2Options) (*BBRv2Controller, 
 	return NewBBRv2Controller(tb, opts), tb
 }
 
+func TestBBR_InitialRateCanExceedMinRate(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:      256 << 10,
+		InitialRate:  1 << 20,
+		DefaultRTTMs: 50,
+		MinSampleMs:  10,
+		HighLoss:     0.08,
+		Beta:         0.85,
+	}
+	tb := NewTokenBucket(opts.InitialRate, "test-peer")
+	bbr := NewBBRv2Controller(tb, opts)
+
+	if got := bbr.pacingRate.Load(); got != opts.InitialRate {
+		t.Fatalf("unexpected initial pacing rate: got=%d want=%d", got, opts.InitialRate)
+	}
+
+	if got := tb.GetRate(); got != opts.InitialRate {
+		t.Fatalf("unexpected token bucket rate: got=%d want=%d", got, opts.InitialRate)
+	}
+}
+
+func TestBBR_HighLossCanDropBelowInitialRate(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:      256 << 10,
+		InitialRate:  1 << 20,
+		DefaultRTTMs: 50,
+		MinSampleMs:  10,
+		HighLoss:     0.08,
+		Beta:         0.85,
+	}
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+
+	for i := 0; i < 8; i++ {
+		bbr.ObserveDelta(200_000, 100_000)
+		time.Sleep(12 * time.Millisecond)
+	}
+
+	got := bbr.pacingRate.Load()
+	if got >= opts.InitialRate {
+		t.Fatalf("expected high loss to lower rate below initial: got=%d initial=%d", got, opts.InitialRate)
+	}
+	if got < opts.MinRate {
+		t.Fatalf("rate fell below MinRate: got=%d min=%d", got, opts.MinRate)
+	}
+}
+
 func TestBBR_StartupIncreasesRate(t *testing.T) {
 	opts := BBRv2Options{
 		MinRate:            20_000,

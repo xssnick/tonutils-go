@@ -57,6 +57,15 @@ func (c *Cell) BeginParse() (*Slice, error) {
 	return c.beginParseWithTrace(c.Trace())
 }
 
+// Prewarm prepares the lazy Cell by loading its data and returns the loaded Cell or an error on failure.
+func (c *Cell) Prewarm() (*Cell, error) {
+	loaded, err := c.loadWithTrace(c.Trace())
+	if err != nil {
+		return nil, err
+	}
+	return loaded, nil
+}
+
 func (c *Cell) BeginParseWithoutTrace() (*Slice, error) {
 	return c.beginParseWithTrace(nil)
 }
