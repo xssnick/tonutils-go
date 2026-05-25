@@ -3,6 +3,10 @@ package toncenter
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -11,7 +15,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"math/big"
 	"os"
-	"testing"
 	"time"
 )
 
@@ -320,6 +323,29 @@ func TestV2(t *testing.T) {
 		}
 	})
 
+}
+
+func TestV2GetAddressStateUsesRelativeMethodPath(t *testing.T) {
+	addr := address.MustParseAddr("EQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqB2N")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/getAddressState" {
+			t.Fatalf("path = %q, want /api/v2/getAddressState", r.URL.Path)
+		}
+		if r.URL.Query().Get("address") != addr.String() {
+			t.Fatalf("address query = %q, want %q", r.URL.Query().Get("address"), addr.String())
+		}
+
+		_, _ = w.Write([]byte(`{"ok":true,"result":"active"}`))
+	}))
+	defer srv.Close()
+
+	state, err := New(srv.URL).V2().GetAddressState(context.Background(), addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != "active" {
+		t.Fatalf("state = %q, want active", state)
+	}
 }
 
 func TestV3(t *testing.T) {

@@ -50,10 +50,13 @@ type BOCParseOptions struct {
 	// NoCopyPayload lets parsed cells reference the BoC payload directly.
 	// The caller must keep the source immutable while returned cells are alive.
 	NoCopyPayload bool
-	// Lazy keeps hash-bearing BoC subtrees behind lazy pruned boundaries.
-	// It requires TrustedHashes because lazy boundaries cannot be verified
-	// without materializing the hidden subtree.
+	// Lazy keeps BoC subtrees behind lazy pruned boundaries. When TrustedHashes
+	// is false, lazy parsing computes hashes/depths from the BoC payload and
+	// validates serialized hashes instead of trusting them.
 	Lazy bool
+	// DisableLazyCache disables lazy BoC materialized-cell caching, even when
+	// the BoC carries cache bits for shared cells.
+	DisableLazyCache bool
 }
 
 const (

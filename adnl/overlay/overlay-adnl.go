@@ -32,10 +32,18 @@ type fecBroadcastStream struct {
 	completedAt   *time.Time
 	lastMessageAt time.Time
 	source        ed25519.PublicKey
+	sourceID      []byte
 	fec           rldp.FECRaptorQ
 	date          uint32
 	trusted       bool
 	mx            sync.Mutex
+}
+
+type BroadcastInfo struct {
+	SourceID  []byte
+	SourceKey ed25519.PublicKey
+	Trusted   bool
+	OverlayID []byte
 }
 
 type ADNLOverlayWrapper struct {
@@ -53,7 +61,8 @@ type ADNLOverlayWrapper struct {
 	broadcastStreams map[string]*fecBroadcastStream
 	streamsMx        sync.RWMutex
 
-	broadcastHandler func(msg tl.Serializable, trusted bool) error
+	broadcastHandler         func(msg tl.Serializable, trusted bool) error
+	broadcastHandlerWithInfo func(msg tl.Serializable, info BroadcastInfo) error
 
 	*ADNLWrapper
 }
@@ -134,6 +143,10 @@ func (a *ADNLOverlayWrapper) SetDisconnectHandler(handler func(addr string, key 
 
 func (a *ADNLOverlayWrapper) SetBroadcastHandler(handler func(msg tl.Serializable, trusted bool) error) {
 	a.broadcastHandler = handler
+}
+
+func (a *ADNLOverlayWrapper) SetBroadcastHandlerWithInfo(handler func(msg tl.Serializable, info BroadcastInfo) error) {
+	a.broadcastHandlerWithInfo = handler
 }
 
 func (a *ADNLOverlayWrapper) Close() {
@@ -294,6 +307,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			parts:         map[uint32][]byte{},
 			lastMessageAt: time.Now(),
 			source:        sourceKey.Key,
+			sourceID:      append([]byte(nil), srcId...),
 			fec:           fec,
 			date:          t.Date,
 			trusted:       checkRes == CertCheckResultTrusted,
@@ -407,7 +421,16 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	}
 
 	if decoded {
-		if bHandler := a.broadcastHandler; bHandler != nil {
+		if bHandler := a.broadcastHandlerWithInfo; bHandler != nil {
+			if err = bHandler(decodedRes, BroadcastInfo{
+				SourceID:  append([]byte(nil), stream.sourceID...),
+				SourceKey: append(ed25519.PublicKey(nil), stream.source...),
+				Trusted:   stream.trusted,
+				OverlayID: append([]byte(nil), a.overlayId...),
+			}); err != nil {
+				return fmt.Errorf("failed to process broadcast message: %w", err)
+			}
+		} else if bHandler := a.broadcastHandler; bHandler != nil {
 			if err = bHandler(decodedRes, stream.trusted); err != nil {
 				return fmt.Errorf("failed to process broadcast message: %w", err)
 			}
