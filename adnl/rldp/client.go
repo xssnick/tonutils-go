@@ -196,7 +196,7 @@ func NewClient(a ADNL) *RLDP {
 		MinRate:            MinRateBytesSec,
 		InitialRate:        InitialRateBytesSec,
 		MaxRate:            MaxRateBytesSec,
-		HighLoss:           0.08,
+		HighLoss:           0.20, // high because of compatibility with old clients, lower values may highly degrade their speed
 		Beta:               0.85,
 		DefaultRTTMs:       50,
 		BtlBwWindowSec:     10,

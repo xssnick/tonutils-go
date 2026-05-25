@@ -599,6 +599,55 @@ func TestNode_checkValue(t *testing.T) {
 	//})
 }
 
+func TestNode_isValueAcceptableOverlayNodesAge(t *testing.T) {
+	now := time.Now().Unix()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		version int64
+		want    bool
+	}{
+		{
+			name:    "fresh within twenty minutes",
+			version: now - _MaxOverlayNodeAgeSec + 1,
+			want:    true,
+		},
+		{
+			name:    "stale after twenty minutes",
+			version: now - _MaxOverlayNodeAgeSec,
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := tl.Serialize(overlay.NodesList{
+				List: []overlay.Node{{
+					ID:      keys.PublicKeyED25519{Key: pub},
+					Version: int32(tt.version),
+				}},
+			}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			value := &Value{
+				KeyDescription: KeyDescription{
+					UpdateRule: UpdateRuleOverlayNodes{},
+				},
+				Data: data,
+			}
+			if got := isValueAcceptable(value); got != tt.want {
+				t.Fatalf("unexpected acceptability: got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func newCorrectOverlayValue(t *testing.T, wrongOverlayID bool) (*Value, []byte) {
 	t.Helper()
 

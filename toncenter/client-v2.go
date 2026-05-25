@@ -158,7 +158,7 @@ func (v *V2) GetAddressBalance(ctx context.Context, addr *address.Address) (*Nan
 
 func (v *V2) GetAddressState(ctx context.Context, addr *address.Address) (string, error) {
 	q := url.Values{"address": []string{addr.String()}}
-	res, err := V2GetCall[string](ctx, v, v.apiBase()+"/getAddressState", q)
+	res, err := V2GetCall[string](ctx, v, "getAddressState", q)
 	if err != nil {
 		return "", err
 	}

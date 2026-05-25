@@ -198,7 +198,7 @@ func (s *Server) Store(
 	s.ourValues[string(idKey)] = cloneValue(&val)
 	s.mx.Unlock()
 
-	storedCount, err = s.storePreparedValue(ctx, &val)
+	storedCount, err = s.storePreparedValue(ctx, &val, idKey)
 	if err != nil {
 		var localErr *localStoreError
 		if errors.As(err, &localErr) {
@@ -211,20 +211,15 @@ func (s *Server) Store(
 	return storedCount, idKey, err
 }
 
-func (s *Server) storePreparedValue(ctx context.Context, val *Value) (storedCount int, err error) {
+func (s *Server) storePreparedValue(ctx context.Context, val *Value, keyID []byte) (storedCount int, err error) {
 	if val == nil {
 		return 0, fmt.Errorf("nil value")
-	}
-
-	keyID, err := tl.Hash(val.KeyDescription.Key)
-	if err != nil {
-		return 0, err
 	}
 
 	nearest := s.collectNearestNodes(ctx, keyID)
 
 	if s.shouldStoreLocally(keyID, nearest) {
-		if err = s.storeIn(val); err != nil {
+		if err = s.storeIn(keyID, val); err != nil {
 			return 0, &localStoreError{err: err}
 		}
 	}
@@ -442,7 +437,7 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 		if err = checkValueWithNetworkID(keyID, q.Value, s.networkID); err != nil {
 			return err
 		}
-		if err = s.storeIn(q.Value); err != nil {
+		if err = s.storeIn(keyID, q.Value); err != nil {
 			return err
 		}
 		return answer(Stored{})
@@ -590,7 +585,7 @@ func (s *Server) getStoredValue(keyID []byte) (*Value, error) {
 	return value, nil
 }
 
-func (s *Server) storeIn(value *Value) error {
+func (s *Server) storeIn(keyID []byte, value *Value) error {
 	if value == nil {
 		return fmt.Errorf("nil value")
 	}
@@ -600,10 +595,6 @@ func (s *Server) storeIn(value *Value) error {
 	}
 	if int64(value.TTL) <= now {
 		return nil
-	}
-	keyID, err := tl.Hash(value.KeyDescription.Key)
-	if err != nil {
-		return err
 	}
 	if s.distance(keyID, s.k+10) >= s.k+10 {
 		return nil
@@ -827,12 +818,8 @@ func (s *Server) republishValues() {
 			continue
 		}
 
-		if _, err := tl.Hash(value.KeyDescription.Key); err != nil {
-			continue
-		}
-
 		ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
-		_, _ = s.storePreparedValue(ctx, value)
+		_, _ = s.storePreparedValue(ctx, value, []byte(keyID))
 		cancel()
 		republished[keyID] = struct{}{}
 	}
@@ -856,7 +843,7 @@ func (s *Server) republishValues() {
 		}
 
 		ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
-		_, _ = s.storePreparedValue(ctx, value)
+		_, _ = s.storePreparedValue(ctx, value, keyID)
 		cancel()
 		return nil
 	})

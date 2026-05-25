@@ -159,14 +159,12 @@ type largeBOCItem struct {
 	hash Hash
 
 	refIdx [4]uint32
-	idx    uint32
 
-	extraIdx uint32
-	bitsSz   uint16
-	depth0   uint16
-	d1       byte
-	wt       byte
-	flags    byte
+	bitsSz uint16
+	depth0 uint16
+	d1     byte
+	wt     byte
+	flags  byte
 }
 
 func (i *largeBOCItem) isSpecial() bool {
@@ -206,10 +204,11 @@ type largeBOCSerializer struct {
 
 	dataBytes uint64
 
-	cellIndex *largeBOCHashIndex
-	cellList  []largeBOCItem
-	extra     []largeBOCExtraMeta
-	roots     []uint32
+	cellIndex   *largeBOCHashIndex
+	cellList    []largeBOCItem
+	extra       []largeBOCExtraMeta
+	extraByHash map[Hash]uint32
+	roots       []uint32
 
 	batchLoad     LargeBOCLoader
 	onePassLoad   LargeBOCOnePassLoader
@@ -462,9 +461,11 @@ func (s *largeBOCSerializer) importRecord(idx uint32, record *LargeBOCMetaRecord
 	item.d1 = record.D1
 	item.bitsSz = record.BitsSz
 	item.depth0 = record.Depths[0]
-	item.extraIdx = ^uint32(0)
 	if largeBOCRecordLevelMask(record).getHashesCount() > 1 {
-		item.extraIdx = uint32(len(s.extra))
+		if s.extraByHash == nil {
+			s.extraByHash = make(map[Hash]uint32)
+		}
+		s.extraByHash[item.hash] = uint32(len(s.extra))
 		s.extra = append(s.extra, largeBOCExtraMeta{
 			hashes: record.Hashes,
 			depths: record.Depths,
@@ -485,10 +486,8 @@ func (s *largeBOCSerializer) addHash(hash Hash) (uint32, bool, error) {
 	}
 
 	s.cellList = append(s.cellList, largeBOCItem{
-		hash:     hash,
-		refIdx:   largeBOCEmptyRefs(),
-		idx:      uint32(idx),
-		extraIdx: ^uint32(0),
+		hash:   hash,
+		refIdx: largeBOCEmptyRefs(),
 	})
 	if s.onePassLoad != nil {
 		s.loadPayloads = append(s.loadPayloads, LargeBOCPayloadRecord{})
@@ -595,33 +594,34 @@ func (s *largeBOCSerializer) reorderCells() {
 		return
 	}
 
-	for i := range s.cellList {
-		s.cellList[i].idx = bocInvalidCellIndex
+	indexes := make([]uint32, len(s.cellList))
+	for i := range indexes {
+		indexes[i] = bocInvalidCellIndex
 	}
 
 	var nextIdx uint32
 	for _, rootIdx := range s.roots {
-		s.revisit(rootIdx, 0, &nextIdx)
-		s.revisit(rootIdx, 1, &nextIdx)
+		s.revisit(indexes, rootIdx, 0, &nextIdx)
+		s.revisit(indexes, rootIdx, 1, &nextIdx)
 	}
 	for i, rootIdx := range s.roots {
-		s.roots[i] = s.revisit(rootIdx, 2, &nextIdx)
+		s.roots[i] = s.revisit(indexes, rootIdx, 2, &nextIdx)
 	}
 
-	s.reorderInPlace()
+	s.reorderInPlace(indexes)
 }
 
-func (s *largeBOCSerializer) revisit(cellIdx uint32, force int, nextIdx *uint32) uint32 {
+func (s *largeBOCSerializer) revisit(indexes []uint32, cellIdx uint32, force int, nextIdx *uint32) uint32 {
 	pos := int(cellIdx)
 	item := &s.cellList[pos]
 
-	if item.idx < bocVisitLinked {
-		return item.idx
+	if indexes[pos] < bocVisitLinked {
+		return indexes[pos]
 	}
 
 	if force == 0 {
-		if item.idx != bocInvalidCellIndex {
-			return item.idx
+		if indexes[pos] != bocInvalidCellIndex {
+			return indexes[pos]
 		}
 
 		for j := item.refsNum() - 1; j >= 0; j-- {
@@ -630,44 +630,45 @@ func (s *largeBOCSerializer) revisit(cellIdx uint32, force int, nextIdx *uint32)
 			if s.cellList[int(childIdx)].isSpecial() {
 				childForce = 1
 			}
-			s.revisit(childIdx, childForce, nextIdx)
+			s.revisit(indexes, childIdx, childForce, nextIdx)
 		}
 
-		item.idx = bocVisitScanned
-		return item.idx
+		indexes[pos] = bocVisitScanned
+		return indexes[pos]
 	}
 
 	if force > 1 {
 		idx := *nextIdx
 		*nextIdx = idx + 1
-		item.idx = idx
+		indexes[pos] = idx
 		return idx
 	}
 
-	if item.idx == bocVisitLinked {
-		return item.idx
+	if indexes[pos] == bocVisitLinked {
+		return indexes[pos]
 	}
 
 	if item.isSpecial() {
-		s.revisit(cellIdx, 0, nextIdx)
+		s.revisit(indexes, cellIdx, 0, nextIdx)
 	}
 
 	for j := item.refsNum() - 1; j >= 0; j-- {
-		s.revisit(item.refIdx[j], 1, nextIdx)
+		s.revisit(indexes, item.refIdx[j], 1, nextIdx)
 	}
 	for j := item.refsNum() - 1; j >= 0; j-- {
-		item.refIdx[j] = s.revisit(item.refIdx[j], 2, nextIdx)
+		item.refIdx[j] = s.revisit(indexes, item.refIdx[j], 2, nextIdx)
 	}
 
-	item.idx = bocVisitLinked
-	return item.idx
+	indexes[pos] = bocVisitLinked
+	return indexes[pos]
 }
 
-func (s *largeBOCSerializer) reorderInPlace() {
+func (s *largeBOCSerializer) reorderInPlace(indexes []uint32) {
 	for i := 0; i < s.cellCount; i++ {
-		for s.cellList[i].idx != uint32(i) {
-			dst := int(s.cellList[i].idx)
+		for indexes[i] != uint32(i) {
+			dst := int(indexes[i])
 			s.cellList[i], s.cellList[dst] = s.cellList[dst], s.cellList[i]
+			indexes[i], indexes[dst] = indexes[dst], indexes[i]
 			if s.onePassLoad != nil {
 				s.loadPayloads[i], s.loadPayloads[dst] = s.loadPayloads[dst], s.loadPayloads[i]
 			}
@@ -986,7 +987,7 @@ func (s *largeBOCSerializer) serializeItemHashesTo(item *largeBOCItem, dst []byt
 		return offset + hashSize
 	}
 
-	extra := &s.extra[item.extraIdx]
+	extra := &s.extra[s.extraByHash[item.hash]]
 	for i := 0; i < hashesCount; i++ {
 		copy(dst[offset:offset+hashSize], extra.hashes[i][:])
 		offset += hashSize
@@ -1000,7 +1001,7 @@ func (s *largeBOCSerializer) serializeItemDepthsTo(item *largeBOCItem, dst []byt
 		return offset + depthSize
 	}
 
-	extra := &s.extra[item.extraIdx]
+	extra := &s.extra[s.extraByHash[item.hash]]
 	for i := 0; i < hashesCount; i++ {
 		binary.BigEndian.PutUint16(dst[offset:offset+depthSize], extra.depths[i])
 		offset += depthSize

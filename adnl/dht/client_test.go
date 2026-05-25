@@ -16,6 +16,7 @@ import (
 	"net"
 	"reflect"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -534,6 +535,323 @@ func TestClient_StoreRetriesTimedOutFindNode(t *testing.T) {
 	}
 	if storeCalls != 1 {
 		t.Fatalf("expected 1 store call, got %d", storeCalls)
+	}
+}
+
+func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := func(v byte) []byte {
+		id := make([]byte, 32)
+		id[31] = v
+		return id
+	}
+
+	findNodeCalls := map[string]int{}
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+				findNodeCalls[addr]++
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	}
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		k:       2,
+		a:       1,
+	}
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(1), client: dhtCli, addr: "1"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(2), client: dhtCli, addr: "2"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(3), client: dhtCli, addr: "3"}, true)
+
+	nodes := dhtCli.collectNearestNodes(context.Background(), keyID)
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nearest nodes, got %d", len(nodes))
+	}
+	if findNodeCalls["1"] != 1 || findNodeCalls["2"] != 1 {
+		t.Fatalf("expected two closest nodes to be queried once, got calls=%v", findNodeCalls)
+	}
+	if findNodeCalls["3"] != 0 {
+		t.Fatalf("third closest node should not be queried, got calls=%v", findNodeCalls)
+	}
+}
+
+func TestClient_collectNearestNodesRetriesAfterOtherPending(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := func(v byte) []byte {
+		id := make([]byte, 32)
+		id[31] = v
+		return id
+	}
+
+	calls := make(chan string, 8)
+	var firstNodeCalls int32
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+				calls <- addr
+				if addr == "1" && atomic.AddInt32(&firstNodeCalls, 1) == 1 {
+					return context.DeadlineExceeded
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	}
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		k:       2,
+		a:       1,
+	}
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(1), client: dhtCli, addr: "1"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(2), client: dhtCli, addr: "2"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(3), client: dhtCli, addr: "3"}, true)
+
+	nodes := dhtCli.collectNearestNodes(context.Background(), keyID)
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nearest nodes, got %d", len(nodes))
+	}
+
+	got := make([]string, 0, len(calls))
+	for {
+		select {
+		case addr := <-calls:
+			got = append(got, addr)
+		default:
+			if len(got) < 3 {
+				t.Fatalf("expected at least 3 findNode calls, got %v", got)
+			}
+			if got[0] != "1" || got[1] != "2" {
+				t.Fatalf("expected timeout retry to wait behind other pending nodes, got calls=%v", got)
+			}
+			return
+		}
+	}
+}
+
+func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := func(v byte) []byte {
+		id := make([]byte, 32)
+		id[31] = v
+		return id
+	}
+
+	started := make(chan string, 8)
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+				started <- addr
+				if addr == "1" {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	}
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		k:       3,
+		a:       1,
+	}
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(1), client: dhtCli, addr: "1"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(2), client: dhtCli, addr: "2"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(3), client: dhtCli, addr: "3"}, true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		dhtCli.collectNearestNodes(ctx, keyID)
+		close(done)
+	}()
+
+	if addr := <-started; addr != "1" {
+		t.Fatalf("expected first lookup to start with closest node, got %s", addr)
+	}
+
+	select {
+	case addr := <-started:
+		if addr != "2" {
+			t.Fatalf("expected hedge lookup to start second closest node, got %s", addr)
+		}
+	case <-time.After(lookupHedgeDelay + time.Second):
+		t.Fatal("hedge lookup was not launched")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("collectNearestNodes did not stop after context cancel")
+	}
+}
+
+func TestClient_collectNearestNodesReturnsBeforeInflightTail(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := func(v byte) []byte {
+		id := make([]byte, 32)
+		id[31] = v
+		return id
+	}
+
+	thirdStarted := make(chan struct{})
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+
+				if addr == "3" {
+					close(thirdStarted)
+					<-ctx.Done()
+					return ctx.Err()
+				}
+
+				<-thirdStarted
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	}
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		k:       2,
+		a:       3,
+	}
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(1), client: dhtCli, addr: "1"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(2), client: dhtCli, addr: "2"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(3), client: dhtCli, addr: "3"}, true)
+
+	done := make(chan []*dhtNode, 1)
+	go func() {
+		done <- dhtCli.collectNearestNodes(context.Background(), keyID)
+	}()
+
+	select {
+	case nodes := <-done:
+		if len(nodes) != 2 {
+			t.Fatalf("expected 2 nearest nodes, got %d", len(nodes))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("collectNearestNodes waited for in-flight tail")
+	}
+}
+
+func TestClient_storeValueToNodesPreparesPayloadOnce(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	val, keyID, err := buildStoreValue(keys.PublicKeyED25519{Key: pub}, []byte("address"), 0, []byte("value"), UpdateRuleSignature{}, time.Hour, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var prefixCalls int32
+	var storeCalls int32
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				request, ok := req.(tl.Raw)
+				if !ok {
+					return fmt.Errorf("unsupported request type %T", req)
+				}
+
+				var store Store
+				if _, err = tl.Parse(&store, request, true); err != nil {
+					return err
+				}
+				if store.Value == nil {
+					return fmt.Errorf("nil store value")
+				}
+
+				atomic.AddInt32(&storeCalls, 1)
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+				return nil
+			},
+		}, nil
+	}
+
+	dhtCli := &Client{
+		gateway: gateway,
+	}
+	dhtCli.queryPrefix = func() ([]byte, error) {
+		atomic.AddInt32(&prefixCalls, 1)
+		return nil, nil
+	}
+
+	nodes := []*dhtNode{
+		{client: dhtCli},
+		{client: dhtCli},
+		{client: dhtCli},
+	}
+	stored, err := dhtCli.storeValueToNodes(context.Background(), keyID, &val, nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != len(nodes) {
+		t.Fatalf("expected %d stored replicas, got %d", len(nodes), stored)
+	}
+	if got := atomic.LoadInt32(&storeCalls); got != int32(len(nodes)) {
+		t.Fatalf("expected %d store calls, got %d", len(nodes), got)
+	}
+	if got := atomic.LoadInt32(&prefixCalls); got != 1 {
+		t.Fatalf("expected one prepared payload, got %d", got)
 	}
 }
 
