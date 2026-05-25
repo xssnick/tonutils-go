@@ -121,7 +121,7 @@ func NewBroadcastFECSender(key ed25519.PrivateKey, certificate any, payload []by
 	if len(payload) == 0 {
 		return nil, fmt.Errorf("payload is empty")
 	}
-	if len(payload) > math.MaxUint32 {
+	if uint64(len(payload)) > math.MaxUint32 {
 		return nil, fmt.Errorf("payload is too large")
 	}
 

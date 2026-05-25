@@ -160,23 +160,17 @@ func (n *dhtNode) getSignedAddressList(ctx context.Context) (*Node, error) {
 }
 
 func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error {
-	if err := checkValueWithNetworkID(id, value, n.clientNetworkID()); err != nil {
-		return fmt.Errorf("corrupted value: %w", err)
+	payload, err := n.client.prepareStoreValuePayload(id, value)
+	if err != nil {
+		return err
 	}
 
-	val, err := tl.Serialize(Store{
-		Value: value,
-	}, true)
-	if err != nil {
-		return fmt.Errorf("failed to serialize dht query: %w", err)
-	}
-	val, err = n.client.applyQueryPrefix(val)
-	if err != nil {
-		return fmt.Errorf("failed to wrap dht query: %w", err)
-	}
+	return n.storePayload(ctx, payload)
+}
 
+func (n *dhtNode) storePayload(ctx context.Context, payload []byte) error {
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	err := n.query(ctx, tl.Raw(payload), &res)
 	if err != nil {
 		return fmt.Errorf("failed to query dht node: %w", err)
 	}
@@ -377,14 +371,13 @@ func isValueAcceptable(value *Value) bool {
 	switch value.KeyDescription.UpdateRule.(type) {
 	case UpdateRuleOverlayNodes:
 		var nodes overlay.NodesList
-
 		if _, err := tl.Parse(&nodes, value.Data, true); err != nil {
 			return false
 		}
 
 		now := time.Now().Unix()
 		for _, node := range nodes.List {
-			if int64(node.Version)+600 > now {
+			if int64(node.Version)+_MaxOverlayNodeAgeSec > now {
 				return true
 			}
 		}

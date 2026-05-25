@@ -266,6 +266,66 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 	}
 }
 
+func TestProcessFECBroadcastHandlerWithInfo(t *testing.T) {
+	w := CreateExtendedADNL(newMockADNL())
+	overlayID := bytes.Repeat([]byte{0x55}, 32)
+	o := w.CreateOverlayWithSettings(overlayID, 4096, true, true)
+
+	_, priv := keyPairFromSeed(35)
+	payloadOverlay := bytes.Repeat([]byte{0x2A}, 32)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: payloadOverlay}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(256))
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	sourceID, err := tl.Hash(ed25519Public(priv))
+	if err != nil {
+		t.Fatalf("source id hash failed: %v", err)
+	}
+
+	oldHandlerCalled := false
+	var gotInfo BroadcastInfo
+	o.SetBroadcastHandler(func(msg tl.Serializable, trusted bool) error {
+		oldHandlerCalled = true
+		return nil
+	})
+	o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) error {
+		got, ok := msg.(Message)
+		if !ok {
+			t.Fatalf("unexpected decoded payload type %T", msg)
+		}
+		if !bytes.Equal(got.Overlay, payloadOverlay) {
+			t.Fatalf("unexpected decoded payload overlay")
+		}
+		gotInfo = info
+		return nil
+	})
+
+	part0, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part 0 build failed: %v", err)
+	}
+	if err = o.processFECBroadcast(part0.full); err != nil {
+		t.Fatalf("process full part 0 failed: %v", err)
+	}
+
+	if oldHandlerCalled {
+		t.Fatalf("legacy handler should not be called when handler with info is set")
+	}
+	if !bytes.Equal(gotInfo.SourceID, sourceID) {
+		t.Fatalf("unexpected source id: %x want %x", gotInfo.SourceID, sourceID)
+	}
+	if !bytes.Equal(gotInfo.SourceKey, priv.Public().(ed25519.PublicKey)) {
+		t.Fatalf("unexpected source key")
+	}
+	if !gotInfo.Trusted {
+		t.Fatalf("expected trusted broadcast info")
+	}
+	if !bytes.Equal(gotInfo.OverlayID, overlayID) {
+		t.Fatalf("unexpected overlay id: %x want %x", gotInfo.OverlayID, overlayID)
+	}
+}
+
 func TestProcessFECBroadcastShort_KnownPartialState(t *testing.T) {
 	w := CreateExtendedADNL(newMockADNL())
 	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x64}, 32), 4096, true, true)

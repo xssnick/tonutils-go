@@ -5,9 +5,16 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"unsafe"
 )
 
 const testLargeBOCLoadBatchSize = 1 << 17
+
+func TestLargeBOCItemSize(t *testing.T) {
+	if got := unsafe.Sizeof(largeBOCItem{}); got != 56 {
+		t.Fatalf("largeBOCItem size = %d, want 56", got)
+	}
+}
 
 type testBatchRecordLoader struct {
 	records map[Hash]testLargeBOCRecord

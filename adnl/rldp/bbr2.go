@@ -62,6 +62,9 @@ type BBRv2Options struct {
 	MinRate int64
 	MaxRate int64 // 0 = no cap
 
+	// Initial pacing rate (bytes/sec). If zero, the token bucket rate is used.
+	InitialRate int64
+
 	// Threshold for "high loss" (fraction)
 	HighLoss float64 // e.g., 0.02..0.1
 
@@ -139,11 +142,6 @@ func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
 	c.lastBtlBwDecay.Store(now)
 	c.lastActive.Store(now)
 
-	if o.MinRate > 0 {
-		c.pacingRate.Store(o.MinRate)
-		l.SetRate(o.MinRate)
-	}
-
 	if o.DefaultRTTMs > 0 {
 		c.minRTT.Store(o.DefaultRTTMs)
 		c.minRTTAt.Store(now)
@@ -154,12 +152,22 @@ func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
 	c.lastRTT.Store(c.minRTT.Load())
 	c.minRTTProvisional.Store(true)
 
-	start := l.GetRate()
+	start := o.InitialRate
+	if start <= 0 {
+		start = l.GetRate()
+	}
 	if start <= 0 {
 		start = max64(o.MinRate, 1024*64)
 	}
+	if start < o.MinRate {
+		start = o.MinRate
+	}
+	if o.MaxRate > 0 && start > o.MaxRate {
+		start = o.MaxRate
+	}
 	c.btlbw.Store(start)
 	c.pacingRate.Store(start)
+	l.SetRate(start)
 	initialInflight := rateToInflight(start, c.minRTT.Load())
 	c.applyInflightLimit(initialInflight)
 	c.hiInflight.Store(c.inflight.Load())
@@ -477,7 +485,7 @@ func (c *BBRv2Controller) CurrentRTT() int64 {
 }
 
 func (c *BBRv2Controller) checkProbeRTT(now int64, ackedBytes int64) {
-	if c.state.Load() != 3 && (now-c.minRTTAt.Load() > c.opts.MinRTTExpiryMs/2 || c.minRTTProvisional.Load()) &&
+	if c.state.Load() != 3 && (now-c.minRTTAt.Load() > c.opts.MinRTTExpiryMs || c.minRTTProvisional.Load()) &&
 		!c.appLimited.Load() && ackedBytes > 0 {
 
 		c.state.Store(3)

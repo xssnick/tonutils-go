@@ -8,6 +8,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"reflect"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,7 @@ import (
 
 const (
 	queryTimeout           = 3000 * time.Millisecond
+	lookupHedgeDelay       = 300 * time.Millisecond
 	retryableQueryAttempts = 2
 )
 
@@ -335,18 +337,13 @@ func (c *Client) Store(
 	if err != nil {
 		return 0, nil, err
 	}
-	storedCount, err = c.storePreparedValue(ctx, &val)
+	storedCount, err = c.storePreparedValue(ctx, &val, keyId)
 	return storedCount, keyId, err
 }
 
-func (c *Client) storePreparedValue(ctx context.Context, val *Value) (storedCount int, err error) {
+func (c *Client) storePreparedValue(ctx context.Context, val *Value, keyId []byte) (storedCount int, err error) {
 	if val == nil {
 		return 0, fmt.Errorf("nil value")
-	}
-
-	keyId, err := tl.Hash(val.KeyDescription.Key)
-	if err != nil {
-		return 0, err
 	}
 
 	nearest := c.collectNearestNodes(ctx, keyId)
@@ -358,6 +355,11 @@ func (c *Client) storePreparedValue(ctx context.Context, val *Value) (storedCoun
 }
 
 func (c *Client) storeValueToNodes(ctx context.Context, keyId []byte, val *Value, nodes []*dhtNode) (storedCount int, err error) {
+	payload, err := c.prepareStoreValuePayload(keyId, val)
+	if err != nil {
+		return 0, err
+	}
+
 	var wg sync.WaitGroup
 	var stored int32
 
@@ -373,7 +375,7 @@ func (c *Client) storeValueToNodes(ctx context.Context, keyId []byte, val *Value
 			ctxStore, cancel := context.WithTimeout(ctx, queryTimeout)
 			defer cancel()
 
-			if err := n.storeValue(ctxStore, keyId, val); err == nil {
+			if err := n.storePayload(ctxStore, payload); err == nil {
 				atomic.AddInt32(&stored, 1)
 			}
 		}(node)
@@ -387,61 +389,373 @@ func (c *Client) storeValueToNodes(ctx context.Context, keyId []byte, val *Value
 	return int(stored), nil
 }
 
+func (c *Client) prepareStoreValuePayload(keyId []byte, val *Value) ([]byte, error) {
+	if err := checkValueWithNetworkID(keyId, val, c.networkID); err != nil {
+		return nil, fmt.Errorf("corrupted value: %w", err)
+	}
+
+	payload, err := tl.Serialize(Store{
+		Value: val,
+	}, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize dht query: %w", err)
+	}
+	payload, err = c.applyQueryPrefix(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to wrap dht query: %w", err)
+	}
+	return payload, nil
+}
+
 func (c *Client) collectNearestNodes(ctx context.Context, keyId []byte) []*dhtNode {
+	baseActive := c.a
+	if baseActive <= 0 {
+		baseActive = 1
+	}
+	activeLimit := baseActive
+
+	maxActive := activeLimit * 2
+	if c.k > activeLimit && maxActive > c.k {
+		maxActive = c.k
+	}
+	if maxActive < activeLimit {
+		maxActive = activeLimit
+	}
+
 	attempts := map[string]int{}
+	search := newNearestNodeSearch(keyId, c.k, c.k*2)
+	c.seedNearestNodeSearch(search)
 
-	final := newPriorityList(c.k, keyId)
+	type queryResult struct {
+		node    *dhtNode
+		nodes   []*Node
+		err     error
+		attempt int
+	}
 
-	for {
-		plist := c.buildPriorityList(keyId)
+	searchCtx, stopSearch := context.WithCancel(ctx)
+	defer stopSearch()
 
-		var wg sync.WaitGroup
-		var expansion int32
-		for {
-			node, _ := plist.Get()
+	result := make(chan queryResult, maxActive)
+	active := 0
+
+	launchQueries := func() {
+		for active < activeLimit {
+			node := search.Next()
 			if node == nil {
 				break
 			}
 
 			nodeID := string(node.adnlId)
 			if attempts[nodeID] >= retryableQueryAttempts {
+				search.Finish(node, false)
 				continue
 			}
 			attempts[nodeID]++
 			attempt := attempts[nodeID]
+			active++
 
-			wg.Add(1)
 			go func(n *dhtNode) {
-				defer wg.Done()
-
-				ctxQuery, cancel := context.WithTimeout(ctx, queryTimeout)
+				ctxQuery, cancel := context.WithTimeout(searchCtx, queryTimeout)
 				defer cancel()
 
 				nodes, err := n.findNodes(ctxQuery, keyId, int32(c.k))
-				if err != nil {
-					if errors.Is(err, context.DeadlineExceeded) && attempt < retryableQueryAttempts {
-						atomic.StoreInt32(&expansion, 1)
-					}
-					return
-				}
-
-				// add responsive nodes
-				final.Add(n)
-
-				for _, newN := range nodes {
-					if an, err := c.addNode(newN); err == nil && affinity(an.adnlId, keyId) >= uint(final.GetBestAffinity()) {
-						atomic.StoreInt32(&expansion, 1)
-					}
+				select {
+				case result <- queryResult{node: n, nodes: nodes, err: err, attempt: attempt}:
+				case <-searchCtx.Done():
 				}
 			}(node)
 		}
-		wg.Wait()
+	}
 
-		if atomic.LoadInt32(&expansion) == 0 {
-			break
+	growActive := func() {
+		if activeLimit >= maxActive {
+			return
+		}
+		activeLimit += baseActive
+		if activeLimit > maxActive {
+			activeLimit = maxActive
 		}
 	}
-	return final.Items()
+
+	stopTimer := func(timer *time.Timer) {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+
+	for {
+		launchQueries()
+		if search.CanReturn() {
+			stopSearch()
+			return search.Results()
+		}
+		if active == 0 {
+			break
+		}
+
+		var hedge *time.Timer
+		var hedgeChan <-chan time.Time
+		if activeLimit < maxActive {
+			hedge = time.NewTimer(lookupHedgeDelay)
+			hedgeChan = hedge.C
+		}
+
+		select {
+		case res := <-result:
+			stopTimer(hedge)
+			active--
+
+			if res.err != nil {
+				search.Finish(res.node, false)
+				if errors.Is(res.err, context.DeadlineExceeded) && res.attempt < retryableQueryAttempts {
+					search.Retry(res.node)
+				}
+			} else {
+				search.Finish(res.node, true)
+				for _, newN := range res.nodes {
+					if an, err := c.addNode(newN); err == nil {
+						search.Add(an)
+					}
+				}
+			}
+
+			if search.ResultCount()+active < search.k && search.k > maxActive {
+				growActive()
+			}
+		case <-hedgeChan:
+			growActive()
+		case <-ctx.Done():
+			stopTimer(hedge)
+			stopSearch()
+			return search.Results()
+		}
+	}
+	return search.Results()
+}
+
+func (c *Client) seedNearestNodeSearch(search *nearestNodeSearch) {
+	var badNodes []*dhtNode
+
+	for i := 255; i >= 0; i-- {
+		for _, node := range c.buckets[i].getNodes() {
+			if node == nil {
+				continue
+			}
+			if atomic.LoadInt32(&node.badScore) == 0 {
+				search.Add(node)
+				continue
+			}
+			badNodes = append(badNodes, node)
+		}
+	}
+
+	for _, node := range badNodes {
+		search.Add(node)
+	}
+}
+
+type nearestNodeState uint8
+
+const (
+	nearestNodePending nearestNodeState = iota
+	nearestNodeInFlight
+	nearestNodeDone
+)
+
+type nearestNodeItem struct {
+	id     string
+	node   *dhtNode
+	state  nearestNodeState
+	retry  bool
+	result bool
+}
+
+type nearestNodeSearch struct {
+	keyID      []byte
+	k          int
+	maxPending int
+	items      []*nearestNodeItem
+	byID       map[string]*nearestNodeItem
+	results    []*nearestNodeItem
+}
+
+func newNearestNodeSearch(keyID []byte, k, maxPending int) *nearestNodeSearch {
+	if maxPending < k {
+		maxPending = k
+	}
+	return &nearestNodeSearch{
+		keyID:      keyID,
+		k:          k,
+		maxPending: maxPending,
+		byID:       map[string]*nearestNodeItem{},
+	}
+}
+
+func (s *nearestNodeSearch) Add(node *dhtNode) bool {
+	if node == nil {
+		return false
+	}
+
+	id := node.id()
+	if _, ok := s.byID[id]; ok {
+		return false
+	}
+
+	item := &nearestNodeItem{
+		id:    id,
+		node:  node,
+		state: nearestNodePending,
+	}
+	s.items = append(s.items, item)
+	s.byID[id] = item
+	s.sortItems()
+	s.trimPending()
+	return true
+}
+
+func (s *nearestNodeSearch) Next() *dhtNode {
+	if node := s.next(false); node != nil {
+		return node
+	}
+	return s.next(true)
+}
+
+func (s *nearestNodeSearch) next(retry bool) *dhtNode {
+	worst := s.worstResult()
+	for _, item := range s.items {
+		if item.state != nearestNodePending {
+			continue
+		}
+		if item.retry != retry {
+			continue
+		}
+		if worst != nil && !xorDistanceLess(s.keyID, item.node.adnlId, worst.node.adnlId) {
+			return nil
+		}
+		item.state = nearestNodeInFlight
+		return item.node
+	}
+	return nil
+}
+
+func (s *nearestNodeSearch) Retry(node *dhtNode) {
+	item := s.item(node)
+	if item == nil || item.result {
+		return
+	}
+	item.state = nearestNodePending
+	item.retry = true
+	s.sortItems()
+	s.trimPending()
+}
+
+func (s *nearestNodeSearch) Finish(node *dhtNode, success bool) {
+	item := s.item(node)
+	if item == nil {
+		return
+	}
+	item.state = nearestNodeDone
+	if !success || item.result {
+		return
+	}
+
+	item.result = true
+	s.results = append(s.results, item)
+	s.sortResults()
+	if len(s.results) > s.k {
+		s.results = s.results[:s.k]
+	}
+}
+
+func (s *nearestNodeSearch) Results() []*dhtNode {
+	res := make([]*dhtNode, 0, len(s.results))
+	for _, item := range s.results {
+		if item != nil && item.node != nil {
+			res = append(res, item.node)
+		}
+	}
+	return res
+}
+
+func (s *nearestNodeSearch) ResultCount() int {
+	return len(s.results)
+}
+
+func (s *nearestNodeSearch) CanReturn() bool {
+	worst := s.worstResult()
+	if worst == nil {
+		return false
+	}
+
+	for _, item := range s.items {
+		if item.state != nearestNodePending {
+			continue
+		}
+		return !xorDistanceLess(s.keyID, item.node.adnlId, worst.node.adnlId)
+	}
+	return true
+}
+
+func (s *nearestNodeSearch) item(node *dhtNode) *nearestNodeItem {
+	if node == nil {
+		return nil
+	}
+	return s.byID[node.id()]
+}
+
+func (s *nearestNodeSearch) worstResult() *nearestNodeItem {
+	if len(s.results) < s.k {
+		return nil
+	}
+	return s.results[len(s.results)-1]
+}
+
+func (s *nearestNodeSearch) sortItems() {
+	sortNearestNodeItems(s.keyID, s.items)
+}
+
+func (s *nearestNodeSearch) sortResults() {
+	sortNearestNodeItems(s.keyID, s.results)
+}
+
+func (s *nearestNodeSearch) trimPending() {
+	pending := 0
+	for _, item := range s.items {
+		if item.state != nearestNodePending {
+			continue
+		}
+		pending++
+		if pending > s.maxPending {
+			item.state = nearestNodeDone
+		}
+	}
+}
+
+func sortNearestNodeItems(keyID []byte, items []*nearestNodeItem) {
+	sort.Slice(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		if left == nil || left.node == nil {
+			return false
+		}
+		if right == nil || right.node == nil {
+			return true
+		}
+		if xorDistanceLess(keyID, left.node.adnlId, right.node.adnlId) {
+			return true
+		}
+		if xorDistanceLess(keyID, right.node.adnlId, left.node.adnlId) {
+			return false
+		}
+		return left.id < right.id
+	})
 }
 
 func buildStoreValue(
