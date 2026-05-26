@@ -11,6 +11,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/keys"
+	"github.com/xssnick/tonutils-go/adnl/overlay"
 	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
@@ -970,6 +971,199 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 			t.Error("invalid address list received")
 		}
 	})
+}
+
+func TestClient_StoreAddressReturnsADNLID(t *testing.T) {
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adnlID, err := tl.Hash(keys.PublicKeyED25519{Key: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dhtKey, err := tl.Hash(Key{
+		ID:    adnlID,
+		Name:  []byte("address"),
+		Index: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := newCorrectNode(1, 2, 3, 4, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	storedKeyID := make(chan []byte, 1)
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				raw, ok := req.(tl.Raw)
+				if !ok {
+					return fmt.Errorf("unsupported request type %T", req)
+				}
+
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, raw, true); err == nil {
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+					return nil
+				}
+
+				var store Store
+				if _, err := tl.Parse(&store, raw, true); err == nil {
+					if store.Value == nil {
+						return fmt.Errorf("nil store value")
+					}
+					storedKeyID <- append([]byte{}, store.Value.KeyDescription.Key.ID...)
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+					return nil
+				}
+
+				return fmt.Errorf("unsupported dht query")
+			},
+		}, nil
+	}
+
+	cli, err := NewClient(gateway, []*Node{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrList := address.List{
+		Addresses: []address.Address{
+			&address.UDP{
+				IP:   net.IPv4(10, 20, 30, 40).To4(),
+				Port: 30303,
+			},
+		},
+	}
+
+	stored, gotID, err := cli.StoreAddress(context.Background(), addrList, time.Minute, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("expected 1 stored replica, got %d", stored)
+	}
+	if !bytes.Equal(gotID, adnlID) {
+		t.Fatalf("expected adnl id %x, got %x", adnlID, gotID)
+	}
+	if bytes.Equal(gotID, dhtKey) {
+		t.Fatalf("StoreAddress returned internal dht key %x", gotID)
+	}
+
+	select {
+	case storedID := <-storedKeyID:
+		if !bytes.Equal(storedID, adnlID) {
+			t.Fatalf("stored value uses key id %x, want %x", storedID, adnlID)
+		}
+	default:
+		t.Fatal("store query was not sent")
+	}
+}
+
+func TestClient_StoreOverlayNodesReturnsOverlayID(t *testing.T) {
+	overlayKey := []byte("test-overlay")
+	nodes, overlayID, dhtKey := newTestOverlayNodes(t, overlayKey)
+
+	node, err := newCorrectNode(1, 2, 3, 4, 12345)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	storedKeyID := make(chan []byte, 1)
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				raw, ok := req.(tl.Raw)
+				if !ok {
+					return fmt.Errorf("unsupported request type %T", req)
+				}
+
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, raw, true); err == nil {
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+					return nil
+				}
+
+				var store Store
+				if _, err := tl.Parse(&store, raw, true); err == nil {
+					if store.Value == nil {
+						return fmt.Errorf("nil store value")
+					}
+					storedKeyID <- append([]byte{}, store.Value.KeyDescription.Key.ID...)
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(Stored{}))
+					return nil
+				}
+
+				return fmt.Errorf("unsupported dht query")
+			},
+		}, nil
+	}
+
+	cli, err := NewClient(gateway, []*Node{node})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stored, gotID, err := cli.StoreOverlayNodes(context.Background(), overlayKey, nodes, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("expected 1 stored replica, got %d", stored)
+	}
+	if !bytes.Equal(gotID, overlayID) {
+		t.Fatalf("expected overlay id %x, got %x", overlayID, gotID)
+	}
+	if bytes.Equal(gotID, dhtKey) {
+		t.Fatalf("StoreOverlayNodes returned internal dht key %x", gotID)
+	}
+
+	select {
+	case storedID := <-storedKeyID:
+		if !bytes.Equal(storedID, overlayID) {
+			t.Fatalf("stored value uses key id %x, want %x", storedID, overlayID)
+		}
+	default:
+		t.Fatal("store query was not sent")
+	}
+}
+
+func newTestOverlayNodes(t *testing.T, overlayKey []byte) (*overlay.NodesList, []byte, []byte) {
+	t.Helper()
+
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	node, err := overlay.NewNode(overlayKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	overlayID, err := tl.Hash(keys.PublicKeyOverlay{Key: overlayKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dhtKey, err := tl.Hash(Key{
+		ID:    overlayID,
+		Name:  []byte("nodes"),
+		Index: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return &overlay.NodesList{List: []overlay.Node{*node}}, overlayID, dhtKey
 }
 
 func TestClient_FindAddressesIntegration(t *testing.T) {

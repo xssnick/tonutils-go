@@ -31,6 +31,9 @@ type ADNLWrapper struct {
 	overlays map[string]*ADNLOverlayWrapper
 	mx       sync.RWMutex
 
+	broadcastControls      map[string]map[uint64]broadcastFECControlHandler
+	nextBroadcastControlID uint64
+
 	rootQueryHandler      func(msg *adnl.MessageQuery) error
 	rootDisconnectHandler func(addr string, key ed25519.PublicKey)
 	rootCustomHandler     func(msg *adnl.MessageCustom) error
@@ -39,20 +42,100 @@ type ADNLWrapper struct {
 	ADNL
 }
 
+type broadcastFECControlHandler func(peerID []byte, msg tl.Serializable) bool
+
+type broadcastFECControlRegistrar interface {
+	registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func()
+}
+
 func (a *ADNLWrapper) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
 	return a.ADNL.GetDisconnectHandler()
 }
 
 func CreateExtendedADNL(adnl ADNL) *ADNLWrapper {
 	w := &ADNLWrapper{
-		ADNL:     adnl,
-		overlays: map[string]*ADNLOverlayWrapper{},
+		ADNL:              adnl,
+		overlays:          map[string]*ADNLOverlayWrapper{},
+		broadcastControls: map[string]map[uint64]broadcastFECControlHandler{},
 	}
 	w.ADNL.SetQueryHandler(w.queryHandler)
 	w.ADNL.SetCustomMessageHandler(w.customHandler)
 	w.ADNL.SetDisconnectHandler(w.disconnectHandler)
 
 	return w
+}
+
+func (a *ADNLWrapper) registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func() {
+	key := string(hash)
+
+	a.mx.Lock()
+	if a.broadcastControls == nil {
+		a.broadcastControls = map[string]map[uint64]broadcastFECControlHandler{}
+	}
+	a.nextBroadcastControlID++
+	id := a.nextBroadcastControlID
+	handlers := a.broadcastControls[key]
+	if handlers == nil {
+		handlers = map[uint64]broadcastFECControlHandler{}
+		a.broadcastControls[key] = handlers
+	}
+	handlers[id] = handler
+	a.mx.Unlock()
+
+	return func() {
+		a.mx.Lock()
+		handlers := a.broadcastControls[key]
+		if handlers != nil {
+			delete(handlers, id)
+			if len(handlers) == 0 {
+				delete(a.broadcastControls, key)
+			}
+		}
+		a.mx.Unlock()
+	}
+}
+
+func broadcastFECControlHash(msg tl.Serializable) []byte {
+	switch t := msg.(type) {
+	case FECReceived:
+		return t.Hash
+	case *FECReceived:
+		return t.Hash
+	case FECCompleted:
+		return t.Hash
+	case *FECCompleted:
+		return t.Hash
+	default:
+		return nil
+	}
+}
+
+func (a *ADNLWrapper) trackBroadcastFECControl(msg tl.Serializable) bool {
+	hash := broadcastFECControlHash(msg)
+	if hash == nil {
+		return false
+	}
+
+	a.mx.RLock()
+	handlersMap := a.broadcastControls[string(hash)]
+	handlers := make([]broadcastFECControlHandler, 0, len(handlersMap))
+	for _, handler := range handlersMap {
+		handlers = append(handlers, handler)
+	}
+	a.mx.RUnlock()
+
+	if len(handlers) == 0 {
+		return false
+	}
+
+	handled := false
+	peerID := a.GetID()
+	for _, handler := range handlers {
+		if handler(peerID, msg) {
+			handled = true
+		}
+	}
+	return handled
 }
 
 func (a *ADNLWrapper) SetQueryHandler(handler func(msg *adnl.MessageQuery) error) {
@@ -151,6 +234,10 @@ func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
 			return nil
 		}
 		return h(&adnl.MessageCustom{Data: obj})
+	}
+
+	if a.trackBroadcastFECControl(msg.Data) {
+		return nil
 	}
 
 	h := a.rootCustomHandler

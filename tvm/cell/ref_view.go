@@ -105,6 +105,7 @@ func (v *cellRefView) cloneWithRefs(refs []*Cell, trace *Trace) (*Cell, bool, er
 	changed := materialize
 	if materialize {
 		cloned = v.cell.copy()
+		cloned.clearVirtualization()
 	}
 	for i, ref := range refs {
 		var oldRef *Cell
@@ -138,6 +139,14 @@ func (v *cellRefView) cloneWithRefs(refs []*Cell, trace *Trace) (*Cell, bool, er
 		return nil, false, err
 	}
 	return cloned, true, nil
+}
+
+// RebuildWithRefs returns a cell with the same bits and special flag as c, but
+// with all references replaced by refs.
+func (c *Cell) RebuildWithRefs(refs []*Cell) (*Cell, error) {
+	refView := newCellRefView(c)
+	rebuilt, _, err := refView.cloneWithRefs(refs, nil)
+	return rebuilt, err
 }
 
 func (c *Cell) refreshLevelMaskForRefs() error {

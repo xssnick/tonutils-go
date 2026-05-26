@@ -584,7 +584,7 @@ func TestMerkleProofBuilderCppGoldenProofBOCShape(t *testing.T) {
 		MustStoreRef(left).
 		MustStoreRef(prunedRight).
 		EndCell()
-	expectedProof, err := createMerkleProofCell(expectedBody)
+	expectedProof, err := CreateMerkleProof(expectedBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +615,7 @@ func TestMerkleProofBuilderCppGoldenDuplicateHashIncludedByVisitedHash(t *testin
 		MustStoreRef(shared).
 		MustStoreRef(shared).
 		EndCell()
-	expectedProof, err := createMerkleProofCell(expectedBody)
+	expectedProof, err := CreateMerkleProof(expectedBody)
 	if err != nil {
 		t.Fatal(err)
 	}

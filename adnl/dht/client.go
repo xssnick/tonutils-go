@@ -276,7 +276,7 @@ func (c *Client) StoreAddress(
 	addresses address.List,
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
-) (storedCount int, idKey []byte, err error) {
+) (storedCount int, adnlID []byte, err error) {
 	for i, addr := range addresses.Addresses {
 		if address.IsZero(addr) {
 			return 0, nil, fmt.Errorf("address %d is zero", i)
@@ -289,7 +289,13 @@ func (c *Client) StoreAddress(
 	}
 
 	id := keys.PublicKeyED25519{Key: ownerKey.Public().(ed25519.PublicKey)}
-	return c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey)
+	adnlID, err = tl.Hash(id)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	storedCount, _, err = c.Store(ctx, id, []byte("address"), 0, data, UpdateRuleSignature{}, ttl, ownerKey)
+	return storedCount, adnlID, err
 }
 
 func (c *Client) StoreOverlayNodes(
@@ -297,12 +303,13 @@ func (c *Client) StoreOverlayNodes(
 	overlayKey []byte,
 	nodes *overlay.NodesList,
 	ttl time.Duration,
-) (storedCount int, idKey []byte, err error) {
+) (storedCount int, overlayID []byte, err error) {
 	if nodes == nil || len(nodes.List) == 0 {
 		return 0, nil, fmt.Errorf("0 nodes in list")
 	}
 
-	overlayID, err := tl.Hash(keys.PublicKeyOverlay{Key: overlayKey})
+	id := keys.PublicKeyOverlay{Key: overlayKey}
+	overlayID, err = tl.Hash(id)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -319,8 +326,8 @@ func (c *Client) StoreOverlayNodes(
 		return 0, nil, err
 	}
 
-	id := keys.PublicKeyOverlay{Key: overlayKey}
-	return c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil)
+	storedCount, _, err = c.Store(ctx, id, []byte("nodes"), 0, data, UpdateRuleOverlayNodes{}, ttl, nil)
+	return storedCount, overlayID, err
 }
 
 func (c *Client) Store(

@@ -96,7 +96,7 @@ func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
 	}
-	return createMerkleProofCell(body)
+	return CreateMerkleProof(body)
 }
 
 func buildProofBody(c *Cell, skeleton *ProofSkeleton, merkleDepth int) (*Cell, error) {
@@ -205,7 +205,9 @@ func materializePrunedBranchBoundary(c *Cell) (*Cell, error) {
 	return out, nil
 }
 
-func createMerkleProofCell(body *Cell) (*Cell, error) {
+// CreateMerkleProof wraps an already-built proof body into a MerkleProof
+// special cell.
+func CreateMerkleProof(body *Cell) (*Cell, error) {
 	builder := BeginCell()
 	if err := builder.StoreUInt(uint64(MerkleProofCellType), 8); err != nil {
 		return nil, fmt.Errorf("failed to store merkle proof type: %w", err)

@@ -18,6 +18,7 @@ import (
 
 const DefaultBroadcastFECSymbolSize uint32 = 768
 const DefaultBroadcastFECBurstSize uint32 = 4
+const DefaultBroadcastFECPartCacheSize uint32 = 256
 const DefaultBroadcastFECTTL = 60 * time.Second
 const DefaultBroadcastFECPace = 10 * time.Millisecond
 
@@ -41,6 +42,7 @@ type BroadcastFECSenderOption func(cfg *broadcastFECSenderConfig)
 type broadcastFECSenderConfig struct {
 	symbolSize uint32
 	burstSize  uint32
+	partCache  uint32
 	ttl        time.Duration
 	pace       time.Duration
 	date       uint32
@@ -57,6 +59,20 @@ type broadcastFECSendPart struct {
 	short *BroadcastFECShort
 }
 
+// BroadcastFECPart contains both full and short wire forms for one FEC seqno.
+type BroadcastFECPart struct {
+	Full  *BroadcastFEC
+	Short *BroadcastFECShort
+}
+
+// Message returns the short wire form after a peer sends FECReceived.
+func (p BroadcastFECPart) Message(useShort bool) tl.Serializable {
+	if useShort {
+		return p.Short
+	}
+	return p.Full
+}
+
 type BroadcastFECSender struct {
 	broadcastHash []byte
 	dataHash      []byte
@@ -69,6 +85,7 @@ type BroadcastFECSender struct {
 	nextSeqno     uint32
 	totalParts    uint32
 	burstSize     uint32
+	partCacheSize uint32
 	ttl           time.Duration
 	pace          time.Duration
 	nextSendAt    time.Time
@@ -76,9 +93,10 @@ type BroadcastFECSender struct {
 	now           func() time.Time
 	signKey       ed25519.PrivateKey
 
-	parts map[uint32]*broadcastFECSendPart
-	peers map[string]*broadcastFECSendPeerState
-	mx    sync.Mutex
+	parts     map[uint32]*broadcastFECSendPart
+	partOrder []uint32
+	peers     map[string]*broadcastFECSendPeerState
+	mx        sync.Mutex
 }
 
 func WithBroadcastFECSymbolSize(symbolSize uint32) BroadcastFECSenderOption {
@@ -90,6 +108,12 @@ func WithBroadcastFECSymbolSize(symbolSize uint32) BroadcastFECSenderOption {
 func WithBroadcastFECBurstSize(burstSize uint32) BroadcastFECSenderOption {
 	return func(cfg *broadcastFECSenderConfig) {
 		cfg.burstSize = burstSize
+	}
+}
+
+func WithBroadcastFECPartCacheSize(partCache uint32) BroadcastFECSenderOption {
+	return func(cfg *broadcastFECSenderConfig) {
+		cfg.partCache = partCache
 	}
 }
 
@@ -128,6 +152,7 @@ func NewBroadcastFECSender(key ed25519.PrivateKey, certificate any, payload []by
 	cfg := broadcastFECSenderConfig{
 		symbolSize: DefaultBroadcastFECSymbolSize,
 		burstSize:  DefaultBroadcastFECBurstSize,
+		partCache:  DefaultBroadcastFECPartCacheSize,
 		ttl:        DefaultBroadcastFECTTL,
 		pace:       DefaultBroadcastFECPace,
 		now:        time.Now,
@@ -196,6 +221,7 @@ func NewBroadcastFECSender(key ed25519.PrivateKey, certificate any, payload []by
 		encoder:       enc,
 		totalParts:    broadcastFECSeqnoLimit(enc.BaseSymbolsNum()),
 		burstSize:     cfg.burstSize,
+		partCacheSize: cfg.partCache,
 		ttl:           cfg.ttl,
 		pace:          cfg.pace,
 		nextSendAt:    now,
@@ -203,6 +229,7 @@ func NewBroadcastFECSender(key ed25519.PrivateKey, certificate any, payload []by
 		now:           cfg.now,
 		signKey:       key,
 		parts:         map[uint32]*broadcastFECSendPart{},
+		partOrder:     make([]uint32, 0, min(uint32(64), cfg.partCache)),
 		peers:         map[string]*broadcastFECSendPeerState{},
 	}, nil
 }
@@ -234,6 +261,14 @@ func (s *BroadcastFECSender) Done() bool {
 	defer s.mx.Unlock()
 
 	return s.nextSeqno >= s.totalParts
+}
+
+// TotalParts returns the exclusive upper bound for FEC part seqno.
+func (s *BroadcastFECSender) TotalParts() uint32 {
+	s.mx.Lock()
+	defer s.mx.Unlock()
+
+	return s.totalParts
 }
 
 func (s *BroadcastFECSender) Expired() bool {
@@ -358,6 +393,20 @@ func (s *BroadcastFECSender) part(seqno uint32) (*broadcastFECSendPart, error) {
 	return s.partLocked(seqno)
 }
 
+// Part returns a cached full/short FEC part pair for custom peer queue schedulers.
+// Callers should treat returned messages as immutable.
+func (s *BroadcastFECSender) Part(seqno uint32) (BroadcastFECPart, error) {
+	part, err := s.part(seqno)
+	if err != nil {
+		return BroadcastFECPart{}, err
+	}
+
+	return BroadcastFECPart{
+		Full:  part.full,
+		Short: part.short,
+	}, nil
+}
+
 func (s *BroadcastFECSender) ensurePeerState(peerID []byte) *broadcastFECSendPeerState {
 	id := string(peerID)
 	state := s.peers[id]
@@ -397,6 +446,10 @@ func (s *BroadcastFECSender) peerState(peerID []byte) broadcastFECSendPeerState 
 }
 
 func (s *BroadcastFECSender) partLocked(seqno uint32) (*broadcastFECSendPart, error) {
+	if seqno >= s.totalParts {
+		return nil, fmt.Errorf("fec part seqno %d is out of range %d", seqno, s.totalParts)
+	}
+
 	if part := s.parts[seqno]; part != nil {
 		return part, nil
 	}
@@ -437,8 +490,23 @@ func (s *BroadcastFECSender) partLocked(seqno uint32) (*broadcastFECSendPart, er
 		full:  full,
 		short: short,
 	}
-	s.parts[seqno] = part
+	s.cachePartLocked(seqno, part)
 	return part, nil
+}
+
+func (s *BroadcastFECSender) cachePartLocked(seqno uint32, part *broadcastFECSendPart) {
+	if s.partCacheSize == 0 {
+		return
+	}
+
+	s.parts[seqno] = part
+	s.partOrder = append(s.partOrder, seqno)
+
+	for uint32(len(s.partOrder)) > s.partCacheSize {
+		delete(s.parts, s.partOrder[0])
+		copy(s.partOrder, s.partOrder[1:])
+		s.partOrder = s.partOrder[:len(s.partOrder)-1]
+	}
 }
 
 func (s *BroadcastFECSender) totalPartsLimit() uint32 {

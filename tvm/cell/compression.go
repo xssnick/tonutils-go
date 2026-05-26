@@ -338,26 +338,20 @@ func cellBits(c *Cell) bitSpan {
 }
 
 func createPrunedBranchFromCell(source *Cell, newLevel int) (*Cell, error) {
-	return createPrunedBranchFromCellAtDepth(source, newLevel, _DataCellMaxLevel)
+	return CreatePrunedBranch(source, newLevel, _DataCellMaxLevel)
 }
 
-func createPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*Cell, error) {
-	if source == nil {
-		return nil, fmt.Errorf("source cell is nil")
-	}
-
-	virtLevel = max(0, min(virtLevel, _DataCellMaxLevel))
-	if !source.IsLazy() && !source.IsVirtualized() && source.Level() <= virtLevel && source.refsCount() == 0 {
+// CreatePrunedBranch returns a pruned-branch boundary for source as seen at
+// virtualLevel and bounded by newLevel. Loaded leaf cells are returned as-is.
+func CreatePrunedBranch(source *Cell, newLevel, virtualLevel int) (*Cell, error) {
+	virtualLevel = max(0, min(virtualLevel, _DataCellMaxLevel))
+	if !source.IsLazy() && !source.IsVirtualized() && source.Level() <= virtualLevel && source.refsCount() == 0 {
 		return materializePrunedBranchBoundary(source)
 	}
-	return buildPrunedBranchFromCellAtDepth(source, newLevel, virtLevel)
+	return buildPrunedBranchFromCellAtDepth(source, newLevel, virtualLevel)
 }
 
 func buildPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*Cell, error) {
-	if source == nil {
-		return nil, fmt.Errorf("source cell is nil")
-	}
-
 	virtLevel = max(0, min(virtLevel, _DataCellMaxLevel))
 	levelMask := source.getLevelMask().Apply(virtLevel)
 	level := levelMask.GetLevel()
