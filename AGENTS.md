@@ -65,6 +65,7 @@ When adding code, keep it at the lowest layer that owns the responsibility. Do n
 - 
 - Beware of fallbacks, each fallback must have a strong reason why it is necessary and commented.
 - Do not leave useless short wrapper methods, less calls are better unless it is big piece of code which is used in many places
+- Do not handle both `T` and `*T` in type switches "just in case". Pick the concrete representation owned by that layer, convert once at a real boundary, and pass that concrete type through the rest of the code. Existing protocol-boundary compatibility helpers are exceptions, not patterns to copy.
 
 ## Protocol types
 

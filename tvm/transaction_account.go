@@ -351,10 +351,6 @@ func transactionStorageExtraDictHash(extra any) []byte {
 		if len(v.DictHash) == 32 {
 			return v.DictHash
 		}
-	case *tlb.StorageExtraInfo:
-		if v != nil && len(v.DictHash) == 32 {
-			return v.DictHash
-		}
 	}
 	return nil
 }

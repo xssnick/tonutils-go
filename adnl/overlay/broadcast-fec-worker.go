@@ -194,12 +194,12 @@ func (b *BroadcastFECBroadcaster) Tick(ctx context.Context) error {
 	return nil
 }
 
-func (b *BroadcastFECBroadcaster) TrackControlMessage(peerID []byte, msg tl.Serializable) bool {
+func (b *BroadcastFECBroadcaster) TrackControlMessage(peerID []byte, control BroadcastFECControl) bool {
 	b.mx.Lock()
 	worker := b.workers[string(peerID)]
 	b.mx.Unlock()
 
-	if !b.sender.TrackControlMessage(peerID, msg) {
+	if !b.sender.TrackControlMessage(peerID, control) {
 		return false
 	}
 
@@ -207,7 +207,7 @@ func (b *BroadcastFECBroadcaster) TrackControlMessage(peerID []byte, msg tl.Seri
 		return true
 	}
 
-	worker.observeControl(msg, b.sender, b.now())
+	worker.observeControl(control, b.sender, b.now())
 	return true
 }
 
@@ -355,20 +355,12 @@ func (w *broadcastFECPeerWorker) syncState(state broadcastFECSendPeerState) {
 	}
 }
 
-func (w *broadcastFECPeerWorker) observeControl(msg tl.Serializable, sender *BroadcastFECSender, now time.Time) {
+func (w *broadcastFECPeerWorker) observeControl(control BroadcastFECControl, sender *BroadcastFECSender, now time.Time) {
 	var unregister func()
 
 	w.mx.Lock()
 
-	switch msg.(type) {
-	case FECReceived:
-		if !w.received {
-			w.observeDeliveredLocked(sender, now)
-			w.shortProbeDelay = int64(broadcastFECShortProbeInitialDelay / time.Millisecond)
-			w.nextShortProbeAt = now.UnixMilli() + w.shortProbeDelay
-		}
-		w.received = true
-	case FECCompleted:
+	if control.Completed {
 		if !w.received {
 			w.observeDeliveredLocked(sender, now)
 		}
@@ -376,7 +368,13 @@ func (w *broadcastFECPeerWorker) observeControl(msg tl.Serializable, sender *Bro
 		w.completed = true
 		unregister = w.unregisterControl
 		w.unregisterControl = nil
-	default:
+	} else {
+		if !w.received {
+			w.observeDeliveredLocked(sender, now)
+			w.shortProbeDelay = int64(broadcastFECShortProbeInitialDelay / time.Millisecond)
+			w.nextShortProbeAt = now.UnixMilli() + w.shortProbeDelay
+		}
+		w.received = true
 	}
 
 	w.mx.Unlock()

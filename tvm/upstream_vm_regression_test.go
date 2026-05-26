@@ -94,7 +94,7 @@ func fingerprintRegressionValue(val any, depth int) string {
 	switch v := val.(type) {
 	case nil:
 		return "nil"
-	case vmcore.NaN, *vmcore.NaN:
+	case vmcore.NaN:
 		return "nan"
 	case *big.Int:
 		if v == nil {

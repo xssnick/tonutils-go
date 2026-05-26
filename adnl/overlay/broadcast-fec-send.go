@@ -65,6 +65,12 @@ type BroadcastFECPart struct {
 	Short *BroadcastFECShort
 }
 
+// BroadcastFECControl is a delivery acknowledgement decoded from FECReceived or FECCompleted.
+type BroadcastFECControl struct {
+	Hash      []byte
+	Completed bool
+}
+
 // Message returns the short wire form after a peer sends FECReceived.
 func (p BroadcastFECPart) Message(useShort bool) tl.Serializable {
 	if useShort {
@@ -278,7 +284,7 @@ func (s *BroadcastFECSender) Expired() bool {
 	return s.expiresAt.Before(s.now())
 }
 
-func (s *BroadcastFECSender) TrackControlMessage(peerID []byte, msg tl.Serializable) bool {
+func (s *BroadcastFECSender) TrackControlMessage(peerID []byte, control BroadcastFECControl) bool {
 	s.mx.Lock()
 	defer s.mx.Unlock()
 
@@ -287,7 +293,7 @@ func (s *BroadcastFECSender) TrackControlMessage(peerID []byte, msg tl.Serializa
 		return false
 	}
 
-	if !s.applyControlMessageLocked(peerID, msg) {
+	if !s.applyControlMessageLocked(peerID, control) {
 		return false
 	}
 
@@ -417,22 +423,15 @@ func (s *BroadcastFECSender) ensurePeerState(peerID []byte) *broadcastFECSendPee
 	return state
 }
 
-func (s *BroadcastFECSender) applyControlMessageLocked(peerID []byte, msg tl.Serializable) bool {
-	state := s.ensurePeerState(peerID)
-	switch t := msg.(type) {
-	case FECReceived:
-		if !bytes.Equal(t.Hash, s.broadcastHash) {
-			return false
-		}
-		state.received = true
-	case FECCompleted:
-		if !bytes.Equal(t.Hash, s.broadcastHash) {
-			return false
-		}
-		state.received = true
-		state.completed = true
-	default:
+func (s *BroadcastFECSender) applyControlMessageLocked(peerID []byte, control BroadcastFECControl) bool {
+	if !bytes.Equal(control.Hash, s.broadcastHash) {
 		return false
+	}
+
+	state := s.ensurePeerState(peerID)
+	state.received = true
+	if control.Completed {
+		state.completed = true
 	}
 	return true
 }

@@ -264,7 +264,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 	switch value.KeyDescription.UpdateRule.(type) {
 	case UpdateRuleAnybody:
 		switch value.KeyDescription.ID.(type) {
-		case keys.PublicKeyED25519, *keys.PublicKeyED25519, keys.PublicKeyOverlay, *keys.PublicKeyOverlay:
+		case keys.PublicKeyED25519, keys.PublicKeyOverlay:
 			return fmt.Errorf("invalid key type for DhtUpdateRuleAnybody")
 		}
 		if len(value.Signature) > 0 {

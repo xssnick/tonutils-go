@@ -568,7 +568,7 @@ func assertMathStackValues(t *testing.T, st *vm.Stack, vals ...any) {
 		switch w := want.(type) {
 		case vm.NaN:
 			switch got.(type) {
-			case vm.NaN, *vm.NaN:
+			case vm.NaN:
 			default:
 				t.Fatalf("stack value %d changed: got=%T want NaN", i, got)
 			}

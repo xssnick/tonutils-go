@@ -43,15 +43,10 @@ func (m *mockBroadcastPeer) registerBroadcastFECControl(hash []byte, handler bro
 	}
 }
 
-func (m *mockBroadcastPeer) sendControl(msg tl.Serializable) bool {
-	hash := broadcastFECControlHash(msg)
-	if hash == nil {
-		return false
-	}
-
+func (m *mockBroadcastPeer) sendControl(control BroadcastFECControl) bool {
 	handled := false
-	for _, control := range m.controls {
-		if control.active && control.hash == string(hash) && control.handler(m.id, msg) {
+	for _, registered := range m.controls {
+		if registered.active && registered.hash == string(control.Hash) && registered.handler(m.id, control) {
 			handled = true
 		}
 	}
@@ -153,10 +148,10 @@ func TestBroadcastFECSenderTracksPeerState(t *testing.T) {
 	}
 
 	hash := sender.BroadcastHash()
-	if !sender.TrackControlMessage(peer1.id, FECReceived{Hash: hash}) {
+	if !sender.TrackControlMessage(peer1.id, BroadcastFECControl{Hash: hash}) {
 		t.Fatalf("expected FECReceived to be tracked")
 	}
-	if sender.TrackControlMessage(peer1.id, FECReceived{Hash: bytes.Repeat([]byte{0x99}, 32)}) {
+	if sender.TrackControlMessage(peer1.id, BroadcastFECControl{Hash: bytes.Repeat([]byte{0x99}, 32)}) {
 		t.Fatalf("wrong hash should not be tracked")
 	}
 
@@ -170,7 +165,7 @@ func TestBroadcastFECSenderTracksPeerState(t *testing.T) {
 		t.Fatalf("expected full part for unconfirmed peer, got %T", peer2.sent[1])
 	}
 
-	if !sender.TrackControlMessage(peer1.id, FECCompleted{Hash: hash}) {
+	if !sender.TrackControlMessage(peer1.id, BroadcastFECControl{Hash: hash, Completed: true}) {
 		t.Fatalf("expected FECCompleted to be tracked")
 	}
 	if sent, err := sender.SendNow(context.Background(), peers, 1); err != nil || sent != 1 {
@@ -338,7 +333,7 @@ func TestBroadcastFECBroadcasterStopsFullAfterReceivedAndProbesShort(t *testing.
 		}
 	}
 
-	if !broadcaster.TrackControlMessage(peer.id, FECReceived{Hash: sender.BroadcastHash()}) {
+	if !broadcaster.TrackControlMessage(peer.id, BroadcastFECControl{Hash: sender.BroadcastHash()}) {
 		t.Fatalf("expected received control to be tracked")
 	}
 
@@ -391,7 +386,7 @@ func TestBroadcastFECBroadcasterTracksRegisteredControl(t *testing.T) {
 	if peer.activeControls() != 1 {
 		t.Fatalf("expected registered control handler")
 	}
-	if !peer.sendControl(FECCompleted{Hash: sender.BroadcastHash()}) {
+	if !peer.sendControl(BroadcastFECControl{Hash: sender.BroadcastHash(), Completed: true}) {
 		t.Fatalf("expected registered completed control to be handled")
 	}
 	if peer.activeControls() != 0 {
@@ -471,7 +466,7 @@ func TestBroadcastFECBroadcasterStopsOnCompleted(t *testing.T) {
 	if err = broadcaster.Tick(context.Background()); err != nil {
 		t.Fatalf("first tick failed: %v", err)
 	}
-	if !broadcaster.TrackControlMessage(peer.id, FECCompleted{Hash: sender.BroadcastHash()}) {
+	if !broadcaster.TrackControlMessage(peer.id, BroadcastFECControl{Hash: sender.BroadcastHash(), Completed: true}) {
 		t.Fatalf("expected completed control to be tracked")
 	}
 

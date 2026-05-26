@@ -201,7 +201,7 @@ func debugValueString(v any) string {
 	switch x := v.(type) {
 	case nil:
 		return "nil [nil]"
-	case vm.NaN, *vm.NaN:
+	case vm.NaN:
 		return "NaN [nan]"
 	case *big.Int:
 		return x.String() + " [int]"

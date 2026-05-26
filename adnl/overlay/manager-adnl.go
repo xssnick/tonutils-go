@@ -42,7 +42,7 @@ type ADNLWrapper struct {
 	ADNL
 }
 
-type broadcastFECControlHandler func(peerID []byte, msg tl.Serializable) bool
+type broadcastFECControlHandler func(peerID []byte, control BroadcastFECControl) bool
 
 type broadcastFECControlRegistrar interface {
 	registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func()
@@ -95,29 +95,9 @@ func (a *ADNLWrapper) registerBroadcastFECControl(hash []byte, handler broadcast
 	}
 }
 
-func broadcastFECControlHash(msg tl.Serializable) []byte {
-	switch t := msg.(type) {
-	case FECReceived:
-		return t.Hash
-	case *FECReceived:
-		return t.Hash
-	case FECCompleted:
-		return t.Hash
-	case *FECCompleted:
-		return t.Hash
-	default:
-		return nil
-	}
-}
-
-func (a *ADNLWrapper) trackBroadcastFECControl(msg tl.Serializable) bool {
-	hash := broadcastFECControlHash(msg)
-	if hash == nil {
-		return false
-	}
-
+func (a *ADNLWrapper) trackBroadcastFECControl(control BroadcastFECControl) bool {
 	a.mx.RLock()
-	handlersMap := a.broadcastControls[string(hash)]
+	handlersMap := a.broadcastControls[string(control.Hash)]
 	handlers := make([]broadcastFECControlHandler, 0, len(handlersMap))
 	for _, handler := range handlersMap {
 		handlers = append(handlers, handler)
@@ -131,7 +111,7 @@ func (a *ADNLWrapper) trackBroadcastFECControl(msg tl.Serializable) bool {
 	handled := false
 	peerID := a.GetID()
 	for _, handler := range handlers {
-		if handler(peerID, msg) {
+		if handler(peerID, control) {
 			handled = true
 		}
 	}
@@ -236,8 +216,15 @@ func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
 		return h(&adnl.MessageCustom{Data: obj})
 	}
 
-	if a.trackBroadcastFECControl(msg.Data) {
-		return nil
+	switch t := msg.Data.(type) {
+	case FECReceived:
+		if a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash}) {
+			return nil
+		}
+	case FECCompleted:
+		if a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash, Completed: true}) {
+			return nil
+		}
 	}
 
 	h := a.rootCustomHandler

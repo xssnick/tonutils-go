@@ -169,16 +169,15 @@ func TestADNLManagerRoutesFECControlInternally(t *testing.T) {
 	hash := bytes.Repeat([]byte{0x92}, 32)
 
 	called := false
-	unregister := w.registerBroadcastFECControl(hash, func(peerID []byte, msg tl.Serializable) bool {
+	unregister := w.registerBroadcastFECControl(hash, func(peerID []byte, control BroadcastFECControl) bool {
 		called = true
 		if !bytes.Equal(peerID, m.id) {
 			t.Fatalf("unexpected peer id")
 		}
-		completed, ok := msg.(FECCompleted)
-		if !ok {
-			t.Fatalf("expected completed control, got %T", msg)
+		if !control.Completed {
+			t.Fatalf("expected completed control")
 		}
-		if !bytes.Equal(completed.Hash, hash) {
+		if !bytes.Equal(control.Hash, hash) {
 			t.Fatalf("unexpected control hash")
 		}
 		return true
