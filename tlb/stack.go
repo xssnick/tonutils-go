@@ -150,7 +150,7 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 	switch v := val.(type) {
 	case nil:
 		b.MustStoreUInt(0x00, 8)
-	case vm.NaN, *vm.NaN:
+	case vm.NaN:
 		b.MustStoreSlice([]byte{0x02, 0xFF}, 16)
 	case int, int8, int16, int32, int64, uint8, uint16, uint32:
 		b.MustStoreUInt(0x01, 8)
@@ -158,22 +158,18 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 		// cast to int64
 		vl := reflect.ValueOf(v).Convert(reflect.TypeOf(int64(0))).Interface().(int64)
 		b.MustStoreInt(vl, 64)
-	case uint, uint64, *big.Int:
+	case uint:
 		// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/vm/stack.cpp#L739
 		b.MustStoreUInt(0x0200/2, 15)
+		b.MustStoreBigInt(new(big.Int).SetUint64(uint64(v)), 257)
+	case uint64:
+		b.MustStoreUInt(0x0200/2, 15)
+		b.MustStoreBigInt(new(big.Int).SetUint64(v), 257)
+	case *big.Int:
+		b.MustStoreUInt(0x0200/2, 15)
+		b.MustStoreBigInt(v, 257)
 
-		var bi *big.Int
-		switch vv := v.(type) {
-		case uint64:
-			bi = new(big.Int).SetUint64(vv)
-		case uint:
-			bi = new(big.Int).SetUint64(uint64(vv))
-		case *big.Int:
-			bi = vv
-		}
-
-		b.MustStoreBigInt(bi, 257)
-	case StackNaN, *StackNaN:
+	case StackNaN:
 		b.MustStoreSlice([]byte{0x02, 0xFF}, 16)
 	case *cell.Cell:
 		b.MustStoreUInt(0x03, 8)

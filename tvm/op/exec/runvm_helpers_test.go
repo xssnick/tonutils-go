@@ -377,8 +377,11 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 	if !sameStackValueType(nil, nil) {
 		t.Fatal("nil values should match")
 	}
-	if !sameStackValueType(vm.NaN{}, &vm.NaN{}) {
+	if !sameStackValueType(vm.NaN{}, vm.NaN{}) {
 		t.Fatal("NaN values should match")
+	}
+	if sameStackValueType(vm.NaN{}, &vm.NaN{}) {
+		t.Fatal("NaN pointer should not match NaN value")
 	}
 	if !sameStackValueType(&testContinuation{name: "x"}, &testContinuation{name: "y"}) {
 		t.Fatal("continuations should match by interface type")

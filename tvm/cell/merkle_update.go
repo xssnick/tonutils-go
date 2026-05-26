@@ -174,7 +174,7 @@ func (t *CellUsageTree) CreateMerkleUpdate(from, to *Cell) (*Cell, error) {
 	if err != nil {
 		return nil, err
 	}
-	return createMerkleUpdateCell(updateFrom, updateTo)
+	return CreateMerkleUpdate(updateFrom, updateTo)
 }
 
 func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, error) {
@@ -311,7 +311,7 @@ func CombineMerkleUpdate(ab, bc *Cell) (*Cell, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to combine merkle updates: %w", err)
 	}
-	return createMerkleUpdateCell(newA, newD)
+	return CreateMerkleUpdate(newA, newD)
 }
 
 func merkleUpdateRootRefs(update *Cell, validate bool) (*Cell, *Cell, error) {
@@ -872,20 +872,15 @@ func (c *merkleUpdateCombiner) doCreateA(cell *Cell, merkleDepth, aMerkleDepth i
 }
 
 func createPrunedBranchForCombine(source *Cell, newLevel, virtLevel int) (*Cell, error) {
-	if source == nil {
-		return nil, fmt.Errorf("source cell is nil")
-	}
 	if !source.IsVirtualized() && source.Level() <= virtLevel && source.refsCount() == 0 {
 		return source, nil
 	}
-	return createPrunedBranchFromCellAtDepth(source, newLevel, virtLevel)
+	return CreatePrunedBranch(source, newLevel, virtLevel)
 }
 
-func createMerkleUpdateCell(left, right *Cell) (*Cell, error) {
-	if left == nil || right == nil {
-		return nil, fmt.Errorf("merkle update cell has nil references")
-	}
-
+// CreateMerkleUpdate wraps already-built old and new update bodies into a
+// MerkleUpdate special cell.
+func CreateMerkleUpdate(left, right *Cell) (*Cell, error) {
 	builder := BeginCell()
 	if err := builder.StoreUInt(uint64(MerkleUpdateCellType), 8); err != nil {
 		return nil, fmt.Errorf("failed to store merkle update type: %w", err)

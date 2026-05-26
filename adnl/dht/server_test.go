@@ -199,6 +199,127 @@ func TestServer_HandleQuery_StoreAndFindValue(t *testing.T) {
 	}
 }
 
+func TestServer_StoreAddressReturnsADNLID(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	node, err := newCorrectNode(1, 2, 3, 4, 17003)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = server.addNodeWithStatus(node, true); err != nil {
+		t.Fatal(err)
+	}
+
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adnlID, err := tl.Hash(keys.PublicKeyED25519{Key: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dhtKey, err := tl.Hash(Key{
+		ID:    adnlID,
+		Name:  []byte("address"),
+		Index: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var storeCalls int32
+	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+
+	addrList := address.List{
+		Addresses: []address.Address{
+			&address.UDP{
+				IP:   net.IPv4(10, 20, 30, 40).To4(),
+				Port: 30303,
+			},
+		},
+	}
+
+	stored, gotID, err := server.StoreAddress(context.Background(), addrList, time.Minute, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("expected 1 stored replica, got %d", stored)
+	}
+	if string(gotID) != string(adnlID) {
+		t.Fatalf("expected adnl id %x, got %x", adnlID, gotID)
+	}
+	if string(gotID) == string(dhtKey) {
+		t.Fatalf("StoreAddress returned internal dht key %x", gotID)
+	}
+
+	server.mx.Lock()
+	_, storedUnderDHTKey := server.ourValues[string(dhtKey)]
+	_, storedUnderADNLID := server.ourValues[string(adnlID)]
+	server.mx.Unlock()
+
+	if !storedUnderDHTKey {
+		t.Fatal("address value was not cached under internal dht key")
+	}
+	if storedUnderADNLID {
+		t.Fatal("address value was cached under adnl id")
+	}
+	if atomic.LoadInt32(&storeCalls) != 1 {
+		t.Fatalf("expected 1 store call, got %d", storeCalls)
+	}
+}
+
+func TestServer_StoreOverlayNodesReturnsOverlayID(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	node, err := newCorrectNode(1, 2, 3, 4, 17003)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = server.addNodeWithStatus(node, true); err != nil {
+		t.Fatal(err)
+	}
+
+	overlayKey := []byte("test-overlay")
+	nodes, overlayID, dhtKey := newTestOverlayNodes(t, overlayKey)
+
+	var storeCalls int32
+	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+
+	stored, gotID, err := server.StoreOverlayNodes(context.Background(), overlayKey, nodes, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("expected 1 stored replica, got %d", stored)
+	}
+	if string(gotID) != string(overlayID) {
+		t.Fatalf("expected overlay id %x, got %x", overlayID, gotID)
+	}
+	if string(gotID) == string(dhtKey) {
+		t.Fatalf("StoreOverlayNodes returned internal dht key %x", gotID)
+	}
+
+	server.mx.Lock()
+	_, storedUnderDHTKey := server.ourValues[string(dhtKey)]
+	_, storedUnderOverlayID := server.ourValues[string(overlayID)]
+	server.mx.Unlock()
+
+	if !storedUnderDHTKey {
+		t.Fatal("overlay value was not cached under internal dht key")
+	}
+	if storedUnderOverlayID {
+		t.Fatal("overlay value was cached under overlay id")
+	}
+	if atomic.LoadInt32(&storeCalls) != 1 {
+		t.Fatalf("expected 1 store call, got %d", storeCalls)
+	}
+}
+
 func TestServer_HandleQuery_StoreRejectsTooLargeTTL(t *testing.T) {
 	server := newTestServer(t)
 	defer server.Close()

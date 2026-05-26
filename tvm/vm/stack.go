@@ -220,8 +220,6 @@ func shareStackValue(val any, trace *cell.Trace) (any, error) {
 		return canonicalStackInt(t), nil
 	case NaN:
 		return NaN{}, nil
-	case *NaN:
-		return NaN{}, nil
 	case *cell.Cell:
 		if t == nil {
 			return nil, nil
@@ -496,7 +494,7 @@ func (s *Stack) PopInt() (*big.Int, error) {
 	}
 
 	switch v := e.(type) {
-	case NaN, *NaN:
+	case NaN:
 		return nil, nil
 	case *big.Int:
 		if isStaticStackInt(v) {
@@ -525,7 +523,7 @@ func (s *Stack) PopBool() (bool, error) {
 		return false, err
 	}
 	switch v := e.(type) {
-	case NaN, *NaN:
+	case NaN:
 		return false, vmerr.Error(vmerr.CodeIntOverflow)
 	case *big.Int:
 		return v.Sign() != 0, nil
@@ -712,7 +710,7 @@ func (s *Stack) String() string {
 		case nil:
 			typ = "nil"
 			val = "nil"
-		case NaN, *NaN:
+		case NaN:
 			typ = "nan"
 			val = "NaN"
 		case *big.Int:

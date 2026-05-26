@@ -162,6 +162,52 @@ func TestADNLManagerCustomRouting(t *testing.T) {
 	}
 }
 
+func TestADNLManagerRoutesFECControlInternally(t *testing.T) {
+	m := newMockADNL()
+	m.id = bytes.Repeat([]byte{0x91}, 32)
+	w := CreateExtendedADNL(m)
+	hash := bytes.Repeat([]byte{0x92}, 32)
+
+	called := false
+	unregister := w.registerBroadcastFECControl(hash, func(peerID []byte, control BroadcastFECControl) bool {
+		called = true
+		if !bytes.Equal(peerID, m.id) {
+			t.Fatalf("unexpected peer id")
+		}
+		if !control.Completed {
+			t.Fatalf("expected completed control")
+		}
+		if !bytes.Equal(control.Hash, hash) {
+			t.Fatalf("unexpected control hash")
+		}
+		return true
+	})
+
+	rootCalled := false
+	w.SetCustomMessageHandler(func(msg *adnl.MessageCustom) error {
+		rootCalled = true
+		return nil
+	})
+
+	if err := w.customHandler(&adnl.MessageCustom{Data: FECCompleted{Hash: hash}}); err != nil {
+		t.Fatalf("control routing failed: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected internal control handler call")
+	}
+	if rootCalled {
+		t.Fatalf("handled FEC control should not reach root handler")
+	}
+
+	unregister()
+	if err := w.customHandler(&adnl.MessageCustom{Data: FECCompleted{Hash: hash}}); err != nil {
+		t.Fatalf("root fallback failed: %v", err)
+	}
+	if !rootCalled {
+		t.Fatalf("unregistered control should reach root handler")
+	}
+}
+
 func TestADNLManagerDisconnectFanOut(t *testing.T) {
 	m := newMockADNL()
 	w := CreateExtendedADNL(m)

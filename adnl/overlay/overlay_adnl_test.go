@@ -192,10 +192,18 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 		t.Fatalf("expected finished stream ack path, got err=%v", err)
 	}
 	if len(m.sendCustomCalls) == 0 {
-		t.Fatalf("expected FEC completed ack to be sent")
+		t.Fatalf("expected FEC ack to be sent")
+	}
+	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECReceived); !ok {
+		t.Fatalf("expected FECReceived while handler is not completed")
+	}
+
+	o.broadcastStreams[string(id)].completedAt = &now
+	if err = o.processFECBroadcast(finished); err != nil {
+		t.Fatalf("expected completed stream ack path, got err=%v", err)
 	}
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
-		t.Fatalf("expected FECCompleted message")
+		t.Fatalf("expected FECCompleted after handler completion")
 	}
 
 	otherPub, otherPriv := keyPairFromSeed(32)
@@ -254,6 +262,20 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 		t.Fatalf("expected FECCompleted after decode, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
 	}
 
+	o.streamsMx.RLock()
+	stream := o.broadcastStreams[string(sender.BroadcastHash())]
+	o.streamsMx.RUnlock()
+	if stream != nil {
+		t.Fatalf("completed broadcast stream should be removed after decode")
+	}
+	stats := o.FECBroadcastStats()
+	if stats.ActiveStreams != 0 || stats.ActiveBytes != 0 {
+		t.Fatalf("expected no active FEC state after decode, got %#v", stats)
+	}
+	if stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("expected delivered broadcast to be cached, got %#v", stats)
+	}
+
 	shortPart, err := sender.part(sender.fec.SymbolsCount)
 	if err != nil {
 		t.Fatalf("repair part build failed: %v", err)
@@ -263,6 +285,102 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 	}
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
 		t.Fatalf("expected FECCompleted on finished short part, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
+	}
+	if stats = o.FECBroadcastStats(); stats.DeliveredCacheHitsTotal != 1 {
+		t.Fatalf("expected delivered cache hit for late short part, got %#v", stats)
+	}
+
+	if err = o.processFECBroadcast(part0.full); err != nil {
+		t.Fatalf("late full part should hit delivered cache: %v", err)
+	}
+	if handled != 1 {
+		t.Fatalf("late full part must not deliver broadcast again, got %d deliveries", handled)
+	}
+	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
+		t.Fatalf("expected FECCompleted on delivered full part, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
+	}
+	if stats = o.FECBroadcastStats(); stats.ActiveStreams != 0 || stats.DeliveredCacheHitsTotal != 2 {
+		t.Fatalf("late full part should not recreate active stream, got %#v", stats)
+	}
+}
+
+func TestProcessFECBroadcastDeliversWhenReceivedAckFails(t *testing.T) {
+	m := newMockADNL()
+	m.sendCustomErr = errors.New("ack send failed")
+	w := CreateExtendedADNL(m)
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x74}, 32), 4096, true, true)
+
+	_, priv := keyPairFromSeed(40)
+	expectedOverlay := bytes.Repeat([]byte{0x75}, 32)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: expectedOverlay}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(256))
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	handled := 0
+	o.SetBroadcastHandler(func(msg tl.Serializable, trusted bool) error {
+		handled++
+		got, ok := msg.(Message)
+		if !ok {
+			t.Fatalf("unexpected decoded payload type %T", msg)
+		}
+		if !bytes.Equal(got.Overlay, expectedOverlay) {
+			t.Fatalf("unexpected decoded payload")
+		}
+		return nil
+	})
+
+	part0, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part 0 build failed: %v", err)
+	}
+	err = o.processFECBroadcast(part0.full)
+	if err == nil || !strings.Contains(err.Error(), "ack send failed") {
+		t.Fatalf("expected ack send error, got %v", err)
+	}
+	if handled != 1 {
+		t.Fatalf("decoded broadcast must be delivered despite ack error, got %d deliveries", handled)
+	}
+}
+
+func TestProcessFECBroadcastShortFinishedButNotCompleted(t *testing.T) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x65}, 32), 4096, true, true)
+
+	_, priv := keyPairFromSeed(38)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x3A}, 32)}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(24))
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	part0, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part 0 build failed: %v", err)
+	}
+
+	now := time.Now()
+	o.broadcastStreams[string(sender.BroadcastHash())] = &fecBroadcastStream{
+		source:        priv.Public().(ed25519.PublicKey),
+		fec:           sender.fec,
+		date:          part0.full.Date,
+		finishedAt:    &now,
+		lastMessageAt: now,
+	}
+
+	if err = o.processFECBroadcastShort(part0.short); err != nil {
+		t.Fatalf("finished short part processing failed: %v", err)
+	}
+	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECReceived); !ok {
+		t.Fatalf("expected FECReceived while handler is not completed, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
+	}
+
+	o.broadcastStreams[string(sender.BroadcastHash())].completedAt = &now
+	if err = o.processFECBroadcastShort(part0.short); err != nil {
+		t.Fatalf("completed short part processing failed: %v", err)
+	}
+	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
+		t.Fatalf("expected FECCompleted after handler completion, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
 	}
 }
 
@@ -353,5 +471,117 @@ func TestProcessFECBroadcastShort_KnownPartialState(t *testing.T) {
 	}
 	if err = o.processFECBroadcastShort(part1.short); err == nil || !strings.Contains(err.Error(), "unfinished broadcast") {
 		t.Fatalf("expected unfinished broadcast error for unseen short part, got: %v", err)
+	}
+}
+
+func TestProcessFECBroadcastDropsWhenBudgetTooSmall(t *testing.T) {
+	w := CreateExtendedADNL(newMockADNL())
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x74}, 32), 4096, true, true)
+	o.SetFECBroadcastLimits(8, 1)
+
+	_, priv := keyPairFromSeed(36)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x49}, 32)}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(24))
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	part0, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part 0 build failed: %v", err)
+	}
+	if err = o.processFECBroadcast(part0.full); err == nil || !strings.Contains(err.Error(), "budget") {
+		t.Fatalf("expected budget error, got: %v", err)
+	}
+
+	stats := o.FECBroadcastStats()
+	if stats.ActiveStreams != 0 || stats.ActiveBytes != 0 || stats.DroppedTotal != 1 {
+		t.Fatalf("unexpected budget stats: %#v", stats)
+	}
+}
+
+func TestProcessFECBroadcastDropsNewStreamWhenLimitReached(t *testing.T) {
+	w := CreateExtendedADNL(newMockADNL())
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x84}, 32), 4096, true, true)
+	o.SetFECBroadcastLimits(1, 1<<20)
+
+	_, firstPriv := keyPairFromSeed(37)
+	firstSender, err := NewBroadcastFECSenderFromTL(firstPriv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x59}, 32)}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(24))
+	if err != nil {
+		t.Fatalf("first sender init failed: %v", err)
+	}
+	firstPart, err := firstSender.part(0)
+	if err != nil {
+		t.Fatalf("first part build failed: %v", err)
+	}
+	if err = o.processFECBroadcast(firstPart.full); err != nil {
+		t.Fatalf("first partial broadcast failed: %v", err)
+	}
+
+	_, secondPriv := keyPairFromSeed(38)
+	secondSender, err := NewBroadcastFECSenderFromTL(secondPriv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x5A}, 32)}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(24))
+	if err != nil {
+		t.Fatalf("second sender init failed: %v", err)
+	}
+	secondPart, err := secondSender.part(0)
+	if err != nil {
+		t.Fatalf("second part build failed: %v", err)
+	}
+	if err = o.processFECBroadcast(secondPart.full); err == nil || !strings.Contains(err.Error(), "budget") {
+		t.Fatalf("expected second partial broadcast to hit budget, got: %v", err)
+	}
+
+	firstHash := string(firstSender.BroadcastHash())
+	secondHash := string(secondSender.BroadcastHash())
+
+	o.streamsMx.RLock()
+	firstStream := o.broadcastStreams[firstHash]
+	secondStream := o.broadcastStreams[secondHash]
+	o.streamsMx.RUnlock()
+
+	if firstStream == nil {
+		t.Fatalf("expected first stream to stay active")
+	}
+	if secondStream != nil {
+		t.Fatalf("expected second stream to be dropped")
+	}
+
+	stats := o.FECBroadcastStats()
+	if stats.ActiveStreams != 1 || stats.EvictedTotal != 0 || stats.DroppedTotal != 1 {
+		t.Fatalf("unexpected budget stats: %#v", stats)
+	}
+}
+
+func TestProcessFECBroadcastCleanupEvictsStaleStream(t *testing.T) {
+	w := CreateExtendedADNL(newMockADNL())
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0x94}, 32), 4096, true, true)
+
+	_, priv := keyPairFromSeed(39)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x69}, 32)}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(24))
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	part0, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part 0 build failed: %v", err)
+	}
+	if err = o.processFECBroadcast(part0.full); err != nil {
+		t.Fatalf("partial broadcast failed: %v", err)
+	}
+
+	hash := string(sender.BroadcastHash())
+	o.streamsMx.Lock()
+	stream := o.broadcastStreams[hash]
+	if stream == nil {
+		o.streamsMx.Unlock()
+		t.Fatalf("expected active stream")
+	}
+	stream.lastMessageAt = time.Now().Add(-fecBroadcastStreamIdleTTL - time.Second)
+	o.cleanupFECBroadcastStreamsLocked(time.Now(), true)
+	o.streamsMx.Unlock()
+
+	stats := o.FECBroadcastStats()
+	if stats.ActiveStreams != 0 || stats.DeliveredBroadcasts != 0 || stats.EvictedTotal != 1 {
+		t.Fatalf("unexpected cleanup stats: %#v", stats)
 	}
 }

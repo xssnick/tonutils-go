@@ -172,9 +172,9 @@ func sameStackValueType(x, y any) bool {
 	switch x.(type) {
 	case nil:
 		return y == nil
-	case vm.NaN, *vm.NaN:
+	case vm.NaN:
 		switch y.(type) {
-		case vm.NaN, *vm.NaN:
+		case vm.NaN:
 			return true
 		default:
 			return false

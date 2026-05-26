@@ -418,8 +418,6 @@ func messageTupleMaybeInt(v *big.Int) any {
 
 func normalizeMessageTupleValue(val any) any {
 	switch v := val.(type) {
-	case big.Int:
-		return new(big.Int).Set(&v)
 	case *big.Int:
 		if v == nil {
 			return nil
@@ -437,12 +435,6 @@ func normalizeMessageTupleValue(val any) any {
 		return v.Copy()
 	case tuple.Tuple:
 		return cloneMessageTuple(v)
-	case *tuple.Tuple:
-		if v == nil {
-			return nil
-		}
-		cloned := cloneMessageTuple(*v)
-		return cloned
 	default:
 		return val
 	}

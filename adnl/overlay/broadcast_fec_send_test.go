@@ -15,6 +15,7 @@ type mockBroadcastPeer struct {
 	sent     []tl.Serializable
 	sendErr  error
 	sendFunc func(ctx context.Context, req tl.Serializable) error
+	controls []mockBroadcastControl
 }
 
 func (m *mockBroadcastPeer) ID() []byte {
@@ -27,6 +28,45 @@ func (m *mockBroadcastPeer) SendCustomMessage(ctx context.Context, req tl.Serial
 		return m.sendFunc(ctx, req)
 	}
 	return m.sendErr
+}
+
+func (m *mockBroadcastPeer) registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func() {
+	m.controls = append(m.controls, mockBroadcastControl{
+		hash:    string(hash),
+		handler: handler,
+		active:  true,
+	})
+	idx := len(m.controls) - 1
+
+	return func() {
+		m.controls[idx].active = false
+	}
+}
+
+func (m *mockBroadcastPeer) sendControl(control BroadcastFECControl) bool {
+	handled := false
+	for _, registered := range m.controls {
+		if registered.active && registered.hash == string(control.Hash) && registered.handler(m.id, control) {
+			handled = true
+		}
+	}
+	return handled
+}
+
+func (m *mockBroadcastPeer) activeControls() int {
+	active := 0
+	for _, control := range m.controls {
+		if control.active {
+			active++
+		}
+	}
+	return active
+}
+
+type mockBroadcastControl struct {
+	hash    string
+	handler broadcastFECControlHandler
+	active  bool
 }
 
 type mockBroadcastPeerSet struct {
@@ -108,10 +148,10 @@ func TestBroadcastFECSenderTracksPeerState(t *testing.T) {
 	}
 
 	hash := sender.BroadcastHash()
-	if !sender.TrackControlMessage(peer1.id, FECReceived{Hash: hash}) {
+	if !sender.TrackControlMessage(peer1.id, BroadcastFECControl{Hash: hash}) {
 		t.Fatalf("expected FECReceived to be tracked")
 	}
-	if sender.TrackControlMessage(peer1.id, FECReceived{Hash: bytes.Repeat([]byte{0x99}, 32)}) {
+	if sender.TrackControlMessage(peer1.id, BroadcastFECControl{Hash: bytes.Repeat([]byte{0x99}, 32)}) {
 		t.Fatalf("wrong hash should not be tracked")
 	}
 
@@ -125,7 +165,7 @@ func TestBroadcastFECSenderTracksPeerState(t *testing.T) {
 		t.Fatalf("expected full part for unconfirmed peer, got %T", peer2.sent[1])
 	}
 
-	if !sender.TrackControlMessage(peer1.id, FECCompleted{Hash: hash}) {
+	if !sender.TrackControlMessage(peer1.id, BroadcastFECControl{Hash: hash, Completed: true}) {
 		t.Fatalf("expected FECCompleted to be tracked")
 	}
 	if sent, err := sender.SendNow(context.Background(), peers, 1); err != nil || sent != 1 {
@@ -136,6 +176,45 @@ func TestBroadcastFECSenderTracksPeerState(t *testing.T) {
 	}
 	if len(peer2.sent) != 3 {
 		t.Fatalf("active peer must keep receiving parts, got %d messages", len(peer2.sent))
+	}
+}
+
+func TestBroadcastFECSenderExposesSharedParts(t *testing.T) {
+	_, priv := keyPairFromSeed(58)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x45}, 32)}, BroadcastFlagAnySender,
+		WithBroadcastFECSymbolSize(24),
+	)
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+	if sender.TotalParts() == 0 {
+		t.Fatalf("expected positive total parts")
+	}
+
+	part, err := sender.Part(0)
+	if err != nil {
+		t.Fatalf("public part build failed: %v", err)
+	}
+	if part.Full == nil || part.Short == nil {
+		t.Fatalf("expected full and short part")
+	}
+	if _, ok := part.Message(false).(*BroadcastFEC); !ok {
+		t.Fatalf("expected full message selector")
+	}
+	if _, ok := part.Message(true).(*BroadcastFECShort); !ok {
+		t.Fatalf("expected short message selector")
+	}
+
+	cached, err := sender.Part(0)
+	if err != nil {
+		t.Fatalf("cached public part failed: %v", err)
+	}
+	if cached.Full != part.Full || cached.Short != part.Short {
+		t.Fatalf("expected public part API to reuse cached part objects")
+	}
+
+	if _, err = sender.Part(sender.TotalParts()); err == nil {
+		t.Fatalf("expected out of range error")
 	}
 }
 
@@ -177,7 +256,52 @@ func TestBroadcastFECSenderRespectsPacingAndExpiry(t *testing.T) {
 	}
 }
 
-func TestBroadcastFECBroadcasterSwitchesToShortRecovery(t *testing.T) {
+func TestBroadcastFECSenderBoundsPartCache(t *testing.T) {
+	_, priv := keyPairFromSeed(56)
+	payload := bytes.Repeat([]byte{0x56}, int(DefaultBroadcastFECPartCacheSize+16)*16)
+	sender, err := NewBroadcastFECSender(priv, CertificateEmpty{}, payload, BroadcastFlagAnySender,
+		WithBroadcastFECSymbolSize(16),
+	)
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	for i := uint32(0); i < DefaultBroadcastFECPartCacheSize+16; i++ {
+		if _, err = sender.part(i); err != nil {
+			t.Fatalf("part %d build failed: %v", i, err)
+		}
+	}
+
+	if got := uint32(len(sender.parts)); got != DefaultBroadcastFECPartCacheSize {
+		t.Fatalf("unexpected cached parts count %d, want %d", got, DefaultBroadcastFECPartCacheSize)
+	}
+	if sender.parts[0] != nil {
+		t.Fatalf("oldest part should be evicted")
+	}
+	if sender.parts[DefaultBroadcastFECPartCacheSize+15] == nil {
+		t.Fatalf("newest part should stay cached")
+	}
+}
+
+func TestBroadcastFECSenderCanDisablePartCache(t *testing.T) {
+	_, priv := keyPairFromSeed(57)
+	sender, err := NewBroadcastFECSender(priv, CertificateEmpty{}, bytes.Repeat([]byte{0x57}, 128), BroadcastFlagAnySender,
+		WithBroadcastFECSymbolSize(16),
+		WithBroadcastFECPartCacheSize(0),
+	)
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	if _, err = sender.part(0); err != nil {
+		t.Fatalf("part build failed: %v", err)
+	}
+	if len(sender.parts) != 0 {
+		t.Fatalf("part cache should stay empty when disabled")
+	}
+}
+
+func TestBroadcastFECBroadcasterStopsFullAfterReceivedAndProbesShort(t *testing.T) {
 	now := time.Unix(3000, 0)
 	_, priv := keyPairFromSeed(54)
 	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x43}, 32)}, BroadcastFlagAnySender,
@@ -209,22 +333,113 @@ func TestBroadcastFECBroadcasterSwitchesToShortRecovery(t *testing.T) {
 		}
 	}
 
-	if !broadcaster.TrackControlMessage(peer.id, FECReceived{Hash: sender.BroadcastHash()}) {
+	if !broadcaster.TrackControlMessage(peer.id, BroadcastFECControl{Hash: sender.BroadcastHash()}) {
 		t.Fatalf("expected received control to be tracked")
 	}
 
 	before := len(peer.sent)
 	now = now.Add(10 * time.Millisecond)
 	if err = broadcaster.Tick(context.Background()); err != nil {
-		t.Fatalf("recovery tick failed: %v", err)
+		t.Fatalf("post-received tick failed: %v", err)
+	}
+	if len(peer.sent) != before {
+		t.Fatalf("full sending should stop immediately after received")
+	}
+
+	now = now.Add(20 * time.Millisecond)
+	if err = broadcaster.Tick(context.Background()); err != nil {
+		t.Fatalf("short probe tick failed: %v", err)
 	}
 	if len(peer.sent) <= before {
-		t.Fatalf("expected recovery messages after control")
+		t.Fatalf("expected sparse short probe after control")
 	}
 	for _, msg := range peer.sent[before:] {
 		if _, ok := msg.(*BroadcastFECShort); !ok {
-			t.Fatalf("expected short recovery message, got %T", msg)
+			t.Fatalf("expected short probe message, got %T", msg)
 		}
+	}
+}
+
+func TestBroadcastFECBroadcasterTracksRegisteredControl(t *testing.T) {
+	now := time.Unix(3500, 0)
+	_, priv := keyPairFromSeed(59)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x46}, 32)}, BroadcastFlagAnySender,
+		WithBroadcastFECSymbolSize(24),
+		withBroadcastFECNow(func() time.Time { return now }),
+	)
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	peer := &mockBroadcastPeer{id: bytes.Repeat([]byte{0x06}, 32)}
+	broadcaster, err := NewBroadcastFECBroadcaster(sender, mockBroadcastPeerSet{peers: []BroadcastPeer{peer}},
+		WithBroadcastFECWorkerMinRate(16<<20),
+		withBroadcastFECWorkerNow(func() time.Time { return now }),
+	)
+	if err != nil {
+		t.Fatalf("broadcaster init failed: %v", err)
+	}
+
+	if err = broadcaster.Tick(context.Background()); err != nil {
+		t.Fatalf("first tick failed: %v", err)
+	}
+	if peer.activeControls() != 1 {
+		t.Fatalf("expected registered control handler")
+	}
+	if !peer.sendControl(BroadcastFECControl{Hash: sender.BroadcastHash(), Completed: true}) {
+		t.Fatalf("expected registered completed control to be handled")
+	}
+	if peer.activeControls() != 0 {
+		t.Fatalf("completed worker should unregister control handler")
+	}
+
+	before := len(peer.sent)
+	now = now.Add(10 * time.Millisecond)
+	if err = broadcaster.Tick(context.Background()); err != nil {
+		t.Fatalf("post-complete tick failed: %v", err)
+	}
+	if len(peer.sent) != before {
+		t.Fatalf("completed peer must not receive more messages")
+	}
+	if !broadcaster.Done() {
+		t.Fatalf("single completed peer should finish broadcaster")
+	}
+}
+
+func TestBroadcastFECBroadcasterPrunesRemovedPeerControl(t *testing.T) {
+	now := time.Unix(3600, 0)
+	_, priv := keyPairFromSeed(60)
+	sender, err := NewBroadcastFECSenderFromTL(priv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x47}, 32)}, BroadcastFlagAnySender,
+		WithBroadcastFECSymbolSize(24),
+		withBroadcastFECNow(func() time.Time { return now }),
+	)
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+
+	peer := &mockBroadcastPeer{id: bytes.Repeat([]byte{0x07}, 32)}
+	peers := mockBroadcastPeerSet{peers: []BroadcastPeer{peer}}
+	broadcaster, err := NewBroadcastFECBroadcaster(sender, &peers,
+		WithBroadcastFECWorkerMinRate(16<<20),
+		withBroadcastFECWorkerNow(func() time.Time { return now }),
+	)
+	if err != nil {
+		t.Fatalf("broadcaster init failed: %v", err)
+	}
+
+	if err = broadcaster.Tick(context.Background()); err != nil {
+		t.Fatalf("first tick failed: %v", err)
+	}
+	if peer.activeControls() != 1 {
+		t.Fatalf("expected active control handler")
+	}
+
+	peers.peers = nil
+	if err = broadcaster.Tick(context.Background()); err != nil {
+		t.Fatalf("prune tick failed: %v", err)
+	}
+	if peer.activeControls() != 0 {
+		t.Fatalf("removed peer control should be unregistered")
 	}
 }
 
@@ -251,7 +466,7 @@ func TestBroadcastFECBroadcasterStopsOnCompleted(t *testing.T) {
 	if err = broadcaster.Tick(context.Background()); err != nil {
 		t.Fatalf("first tick failed: %v", err)
 	}
-	if !broadcaster.TrackControlMessage(peer.id, FECCompleted{Hash: sender.BroadcastHash()}) {
+	if !broadcaster.TrackControlMessage(peer.id, BroadcastFECControl{Hash: sender.BroadcastHash(), Completed: true}) {
 		t.Fatalf("expected completed control to be tracked")
 	}
 

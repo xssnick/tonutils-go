@@ -2,20 +2,23 @@ package overlay
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/xssnick/raptorq"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
-	"maps"
-	"reflect"
-	"sync"
-	"time"
 )
 
 type CertCheckResult int
@@ -24,10 +27,19 @@ const CertCheckResultForbidden CertCheckResult = 0
 const CertCheckResultTrusted CertCheckResult = 1
 const CertCheckResultNeedCheck CertCheckResult = 2
 
+const DefaultFECBroadcastMaxActiveStreams = 128
+const DefaultFECBroadcastMaxActiveBytes = 256 << 20
+const DefaultFECDeliveredCacheSize = 4096
+
+const fecBroadcastStreamIdleTTL = 40 * time.Second
+const fecBroadcastFinishedTTL = 90 * time.Second
+const fecBroadcastCleanupInterval = 5 * time.Second
+const maxFECBroadcastBudgetEstimate = int64(^uint64(0) >> 1)
+
 type fecBroadcastStream struct {
 	decoder       *raptorq.Decoder
-	encoder       *raptorq.Encoder
-	parts         map[uint32][]byte
+	partHashes    map[uint32][32]byte
+	budgetBytes   int64
 	finishedAt    *time.Time
 	completedAt   *time.Time
 	lastMessageAt time.Time
@@ -37,6 +49,16 @@ type fecBroadcastStream struct {
 	date          uint32
 	trusted       bool
 	mx            sync.Mutex
+}
+
+type FECBroadcastStats struct {
+	ActiveStreams           int
+	ActiveBytes             int64
+	DeliveredBroadcasts     int
+	DroppedTotal            uint64
+	EvictedTotal            uint64
+	CompletedTotal          uint64
+	DeliveredCacheHitsTotal uint64
 }
 
 type BroadcastInfo struct {
@@ -59,7 +81,22 @@ type ADNLOverlayWrapper struct {
 	disconnectHandler func(addr string, key ed25519.PublicKey)
 
 	broadcastStreams map[string]*fecBroadcastStream
+	deliveredFEC     map[string]*list.Element
+	deliveredFECList *list.List
 	streamsMx        sync.RWMutex
+
+	fecMaxActiveStreams int
+	fecMaxActiveBytes   int64
+	fecDeliveredMax     int
+	fecActiveBytes      int64
+	fecNextCleanupAt    time.Time
+
+	fecDropped            uint64
+	fecEvicted            uint64
+	fecCompleted          uint64
+	fecDeliveredCacheHits uint64
+	fecCleanupStop        chan struct{}
+	fecCleanupStopOnce    sync.Once
 
 	broadcastHandler         func(msg tl.Serializable, trusted bool) error
 	broadcastHandlerWithInfo func(msg tl.Serializable, info BroadcastInfo) error
@@ -84,14 +121,21 @@ func (a *ADNLWrapper) CreateOverlayWithSettings(id []byte, maxUnauthBroadcastSiz
 		return w
 	}
 	w = &ADNLOverlayWrapper{
-		overlayId:         id,
-		ADNLWrapper:       a,
-		broadcastStreams:  map[string]*fecBroadcastStream{},
-		allowFEC:          allowBroadcastFEC,
-		maxUnauthSize:     maxUnauthBroadcastSize,
-		trustUnauthorized: trustUnauthorizedBroadcast,
+		overlayId:           id,
+		ADNLWrapper:         a,
+		broadcastStreams:    map[string]*fecBroadcastStream{},
+		deliveredFEC:        map[string]*list.Element{},
+		deliveredFECList:    list.New(),
+		allowFEC:            allowBroadcastFEC,
+		maxUnauthSize:       maxUnauthBroadcastSize,
+		trustUnauthorized:   trustUnauthorizedBroadcast,
+		fecMaxActiveStreams: DefaultFECBroadcastMaxActiveStreams,
+		fecMaxActiveBytes:   DefaultFECBroadcastMaxActiveBytes,
+		fecDeliveredMax:     DefaultFECDeliveredCacheSize,
+		fecCleanupStop:      make(chan struct{}),
 	}
 	a.overlays[strId] = w
+	go w.runFECBroadcastCleanup()
 
 	return w
 }
@@ -105,11 +149,58 @@ func (a *ADNLOverlayWrapper) SetAuthorizedKeys(keysWithMaxLen map[string]uint32)
 	maps.Copy(a.authorizedKeys, keysWithMaxLen)
 }
 
+func (a *ADNLOverlayWrapper) SetFECBroadcastLimits(maxActiveStreams int, maxActiveBytes int64) {
+	if maxActiveStreams < 1 {
+		maxActiveStreams = 1
+	}
+	if maxActiveBytes < 1 {
+		maxActiveBytes = 1
+	}
+
+	now := time.Now()
+	a.streamsMx.Lock()
+	a.fecMaxActiveStreams = maxActiveStreams
+	a.fecMaxActiveBytes = maxActiveBytes
+	a.cleanupFECBroadcastStreamsLocked(now, true)
+	a.streamsMx.Unlock()
+}
+
+func (a *ADNLOverlayWrapper) SetFECDeliveredCacheSize(max int) {
+	if max < 0 {
+		max = 0
+	}
+
+	a.streamsMx.Lock()
+	a.fecDeliveredMax = max
+	a.trimFECDeliveredCacheLocked()
+	a.streamsMx.Unlock()
+}
+
+func (a *ADNLOverlayWrapper) FECBroadcastStats() FECBroadcastStats {
+	a.streamsMx.RLock()
+	stats := FECBroadcastStats{
+		ActiveStreams:       len(a.broadcastStreams),
+		ActiveBytes:         a.fecActiveBytes,
+		DeliveredBroadcasts: len(a.deliveredFEC),
+	}
+	a.streamsMx.RUnlock()
+
+	stats.DroppedTotal = atomic.LoadUint64(&a.fecDropped)
+	stats.EvictedTotal = atomic.LoadUint64(&a.fecEvicted)
+	stats.CompletedTotal = atomic.LoadUint64(&a.fecCompleted)
+	stats.DeliveredCacheHitsTotal = atomic.LoadUint64(&a.fecDeliveredCacheHits)
+	return stats
+}
+
 func (a *ADNLWrapper) UnregisterOverlay(id []byte) {
 	a.mx.Lock()
 	defer a.mx.Unlock()
 
-	delete(a.overlays, hex.EncodeToString(id))
+	strID := hex.EncodeToString(id)
+	if w := a.overlays[strID]; w != nil {
+		w.stopFECBroadcastCleanup()
+	}
+	delete(a.overlays, strID)
 }
 
 func (a *ADNLOverlayWrapper) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
@@ -153,6 +244,30 @@ func (a *ADNLOverlayWrapper) Close() {
 	a.ADNLWrapper.UnregisterOverlay(a.overlayId)
 }
 
+func (a *ADNLOverlayWrapper) runFECBroadcastCleanup() {
+	ticker := time.NewTicker(fecBroadcastCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case now := <-ticker.C:
+			a.streamsMx.Lock()
+			a.cleanupFECBroadcastStreamsLocked(now, true)
+			a.streamsMx.Unlock()
+		case <-a.ADNLWrapper.GetCloserCtx().Done():
+			return
+		case <-a.fecCleanupStop:
+			return
+		}
+	}
+}
+
+func (a *ADNLOverlayWrapper) stopFECBroadcastCleanup() {
+	a.fecCleanupStopOnce.Do(func() {
+		close(a.fecCleanupStop)
+	})
+}
+
 func (a *ADNLOverlayWrapper) checkRules(keyId string, dataSize uint32, isFEC bool) CertCheckResult {
 	if dataSize == 0 {
 		return CertCheckResultForbidden
@@ -186,16 +301,138 @@ func broadcastFECSeqnoLimit(symbolsCount uint32) uint32 {
 
 func (a *ADNLOverlayWrapper) cleanupBroadcastStreams(now time.Time) {
 	a.streamsMx.Lock()
-	if len(a.broadcastStreams) > 100 {
-		for sID, s := range a.broadcastStreams {
-			// remove streams that was finished more than 180 sec ago and stuck streams when it was no messages for 60 sec.
-			if s.lastMessageAt.Add(40*time.Second).Before(now) ||
-				(s.finishedAt != nil && s.finishedAt.Add(90*time.Second).Before(now)) {
-				delete(a.broadcastStreams, sID)
-			}
-		}
-	}
+	a.cleanupFECBroadcastStreamsLocked(now, false)
 	a.streamsMx.Unlock()
+}
+
+func (a *ADNLOverlayWrapper) cleanupFECBroadcastStreamsLocked(now time.Time, force bool) {
+	if !force && !a.fecNextCleanupAt.IsZero() && now.Before(a.fecNextCleanupAt) {
+		return
+	}
+	a.fecNextCleanupAt = now.Add(fecBroadcastCleanupInterval)
+
+	for id, stream := range a.broadcastStreams {
+		completed := stream.completedAt != nil
+		stale := stream.lastMessageAt.Add(fecBroadcastStreamIdleTTL).Before(now)
+		expiredFinished := stream.finishedAt != nil && stream.finishedAt.Add(fecBroadcastFinishedTTL).Before(now)
+		if !stale && !expiredFinished {
+			continue
+		}
+
+		a.removeFECBroadcastStreamLocked(id, stream, completed)
+		atomic.AddUint64(&a.fecEvicted, 1)
+	}
+}
+
+func (a *ADNLOverlayWrapper) reserveFECBroadcastBudgetLocked(now time.Time, budgetBytes int64) bool {
+	a.cleanupFECBroadcastStreamsLocked(now, false)
+	if !a.hasFECBroadcastBudgetLocked(1, budgetBytes) {
+		atomic.AddUint64(&a.fecDropped, 1)
+		return false
+	}
+
+	a.fecActiveBytes += budgetBytes
+	return true
+}
+
+func (a *ADNLOverlayWrapper) releaseFECBroadcastBudgetLocked(budgetBytes int64) {
+	a.fecActiveBytes -= budgetBytes
+	if a.fecActiveBytes < 0 {
+		a.fecActiveBytes = 0
+	}
+}
+
+func (a *ADNLOverlayWrapper) hasFECBroadcastBudgetLocked(incomingStreams int, incomingBytes int64) bool {
+	if incomingBytes > a.fecMaxActiveBytes {
+		return false
+	}
+
+	return len(a.broadcastStreams)+incomingStreams <= a.fecMaxActiveStreams && a.fecActiveBytes+incomingBytes <= a.fecMaxActiveBytes
+}
+
+func (a *ADNLOverlayWrapper) removeFECBroadcastStreamLocked(id string, stream *fecBroadcastStream, delivered bool) {
+	if a.broadcastStreams[id] != stream {
+		return
+	}
+
+	delete(a.broadcastStreams, id)
+	a.releaseFECBroadcastBudgetLocked(stream.budgetBytes)
+	if delivered {
+		a.registerFECDeliveredLocked(id)
+	}
+}
+
+func (a *ADNLOverlayWrapper) registerFECDeliveredLocked(id string) {
+	if a.fecDeliveredMax == 0 {
+		return
+	}
+
+	if elem := a.deliveredFEC[id]; elem != nil {
+		a.deliveredFECList.MoveToBack(elem)
+		return
+	}
+
+	a.deliveredFEC[id] = a.deliveredFECList.PushBack(id)
+	a.trimFECDeliveredCacheLocked()
+}
+
+func (a *ADNLOverlayWrapper) isFECDeliveredLocked(id string) bool {
+	elem := a.deliveredFEC[id]
+	if elem == nil {
+		return false
+	}
+
+	a.deliveredFECList.MoveToBack(elem)
+	return true
+}
+
+func (a *ADNLOverlayWrapper) trimFECDeliveredCacheLocked() {
+	for len(a.deliveredFEC) > a.fecDeliveredMax {
+		elem := a.deliveredFECList.Front()
+		if elem == nil {
+			return
+		}
+
+		id := elem.Value.(string)
+		delete(a.deliveredFEC, id)
+		a.deliveredFECList.Remove(elem)
+	}
+}
+
+func estimateFECBroadcastBudgetBytes(fec rldp.FECRaptorQ, partSize int) int64 {
+	payloadBytes := int64(fec.DataSize)
+	symbolBytes := multiplyFECBroadcastBudgetEstimate(fec.SymbolsCount, fec.SymbolSize)
+	if symbolBytes > payloadBytes {
+		payloadBytes = symbolBytes
+	}
+
+	hashBytes := multiplyFECBroadcastBudgetEstimate(fec.SymbolsCount, 64)
+	budgetBytes := addFECBroadcastBudgetEstimate(payloadBytes, hashBytes, int64(partSize), 4096)
+	if budgetBytes < 1 {
+		return 1
+	}
+	return budgetBytes
+}
+
+func multiplyFECBroadcastBudgetEstimate(a uint32, b uint32) int64 {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	if uint64(a) > uint64(maxFECBroadcastBudgetEstimate)/uint64(b) {
+		return maxFECBroadcastBudgetEstimate
+	}
+	return int64(uint64(a) * uint64(b))
+}
+
+func addFECBroadcastBudgetEstimate(values ...int64) int64 {
+	var total int64
+	for _, value := range values {
+		if value > maxFECBroadcastBudgetEstimate-total {
+			return maxFECBroadcastBudgetEstimate
+		}
+		total += value
+	}
+	return total
 }
 
 func (a *ADNLOverlayWrapper) sendFECControlMessage(msg tl.Serializable) error {
@@ -211,23 +448,31 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 		return fmt.Errorf("failed to calc broadcast hash: %w", err)
 	}
 
-	id := string(broadcastHash)
-	a.streamsMx.RLock()
-	stream := a.broadcastStreams[id]
-	a.streamsMx.RUnlock()
-
 	sourceKey, ok := t.Source.(keys.PublicKeyED25519)
 	if !ok {
 		return fmt.Errorf("invalid signer key format")
 	}
 
-	partHash, _, err := calcBroadcastFECPartData(broadcastHash, t.Data, t.Seqno)
+	partHash, partDataHash, err := calcBroadcastFECPartData(broadcastHash, t.Data, t.Seqno)
 	if err != nil {
 		return err
 	}
 	if err = verifyBroadcastFECPartSignature(t.Source, partHash, t.Date, t.Signature); err != nil {
 		return err
 	}
+
+	id := string(broadcastHash)
+	tm := time.Now()
+
+	a.streamsMx.Lock()
+	a.cleanupFECBroadcastStreamsLocked(tm, false)
+	if a.isFECDeliveredLocked(id) {
+		a.streamsMx.Unlock()
+		atomic.AddUint64(&a.fecDeliveredCacheHits, 1)
+		return a.sendFECControlMessage(FECCompleted{Hash: broadcastHash})
+	}
+	stream := a.broadcastStreams[id]
+	a.streamsMx.Unlock()
 
 	if stream == nil {
 		fec, ok := t.FEC.(rldp.FECRaptorQ)
@@ -297,38 +542,74 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			return fmt.Errorf("not allowed")
 		}
 
-		dec, err := raptorq.NewRaptorQ(uint32(fec.SymbolSize)).CreateDecoder(uint32(fec.DataSize))
-		if err != nil {
-			return fmt.Errorf("failed to init raptorq decoder: %w", err)
-		}
-
-		stream = &fecBroadcastStream{
-			decoder:       dec,
-			parts:         map[uint32][]byte{},
-			lastMessageAt: time.Now(),
-			source:        sourceKey.Key,
-			sourceID:      append([]byte(nil), srcId...),
-			fec:           fec,
-			date:          t.Date,
-			trusted:       checkRes == CertCheckResultTrusted,
-		}
+		budgetBytes := estimateFECBroadcastBudgetBytes(fec, len(t.Data))
+		reserved := false
+		delivered := false
 
 		a.streamsMx.Lock()
-		// check again because of possible concurrency
-		if a.broadcastStreams[id] != nil {
-			stream = a.broadcastStreams[id]
+		if a.isFECDeliveredLocked(id) {
+			delivered = true
+		} else if existing := a.broadcastStreams[id]; existing != nil {
+			stream = existing
 		} else {
-			a.broadcastStreams[id] = stream
+			reserved = a.reserveFECBroadcastBudgetLocked(tm, budgetBytes)
 		}
 		a.streamsMx.Unlock()
+
+		if delivered {
+			atomic.AddUint64(&a.fecDeliveredCacheHits, 1)
+			return a.sendFECControlMessage(FECCompleted{Hash: broadcastHash})
+		}
+		if stream == nil && !reserved {
+			return fmt.Errorf("fec broadcast receiver budget exceeded")
+		}
+
+		if stream == nil {
+			dec, err := raptorq.NewRaptorQ(uint32(fec.SymbolSize)).CreateDecoder(uint32(fec.DataSize))
+			if err != nil {
+				a.streamsMx.Lock()
+				a.releaseFECBroadcastBudgetLocked(budgetBytes)
+				a.streamsMx.Unlock()
+				return fmt.Errorf("failed to init raptorq decoder: %w", err)
+			}
+
+			newStream := &fecBroadcastStream{
+				decoder:       dec,
+				partHashes:    map[uint32][32]byte{},
+				budgetBytes:   budgetBytes,
+				lastMessageAt: tm,
+				source:        sourceKey.Key,
+				sourceID:      append([]byte(nil), srcId...),
+				fec:           fec,
+				date:          t.Date,
+				trusted:       checkRes == CertCheckResultTrusted,
+			}
+
+			a.streamsMx.Lock()
+			if a.isFECDeliveredLocked(id) {
+				a.releaseFECBroadcastBudgetLocked(budgetBytes)
+				delivered = true
+			} else if a.broadcastStreams[id] != nil {
+				a.releaseFECBroadcastBudgetLocked(budgetBytes)
+				stream = a.broadcastStreams[id]
+			} else {
+				stream = newStream
+				a.broadcastStreams[id] = stream
+			}
+			a.streamsMx.Unlock()
+
+			if delivered {
+				atomic.AddUint64(&a.fecDeliveredCacheHits, 1)
+				return a.sendFECControlMessage(FECCompleted{Hash: broadcastHash})
+			}
+		}
 	}
 
 	var (
-		decodedRes     any
-		decoded        bool
-		ackReceived    bool
-		ackCompleted   bool
-		cleanupStreams bool
+		decodedRes   any
+		decoded      bool
+		ackReceived  bool
+		ackCompleted bool
 	)
 
 	stream.mx.Lock()
@@ -342,29 +623,32 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	}
 
 	if stream.finishedAt != nil {
-		ackCompleted = true
+		completed := stream.completedAt != nil
 		stream.mx.Unlock()
-		if ackCompleted {
+		if completed {
 			return a.sendFECControlMessage(FECCompleted{Hash: broadcastHash})
 		}
-		return nil
+		return a.sendFECControlMessage(FECReceived{Hash: broadcastHash})
 	}
 
-	tm := time.Now()
+	tm = time.Now()
 	stream.lastMessageAt = tm
 
-	if existing, ok := stream.parts[t.Seqno]; ok {
+	if existing, ok := stream.partHashes[t.Seqno]; ok {
 		stream.mx.Unlock()
-		if !bytes.Equal(existing, t.Data) {
+		if !bytes.Equal(existing[:], partDataHash) {
 			return fmt.Errorf("conflicting data for seqno %d", t.Seqno)
 		}
 		return nil
 	}
-	stream.parts[t.Seqno] = append([]byte(nil), t.Data...)
+
+	var partDataHashValue [32]byte
+	copy(partDataHashValue[:], partDataHash)
+	stream.partHashes[t.Seqno] = partDataHashValue
 
 	canTryDecode, err := stream.decoder.AddSymbol(t.Seqno, t.Data)
 	if err != nil {
-		delete(stream.parts, t.Seqno)
+		delete(stream.partHashes, t.Seqno)
 		stream.mx.Unlock()
 		return fmt.Errorf("failed to add raptorq symbol %d: %w", t.Seqno, err)
 	}
@@ -384,12 +668,6 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 				return fmt.Errorf("incorrect data hash")
 			}
 
-			enc, err := raptorq.NewRaptorQ(uint32(stream.fec.SymbolSize)).CreateEncoder(data)
-			if err != nil {
-				stream.mx.Unlock()
-				return fmt.Errorf("failed to init raptorq encoder: %w", err)
-			}
-
 			var res any
 			_, err = tl.Parse(&res, data, true)
 			if err != nil {
@@ -399,24 +677,19 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 
 			stream.finishedAt = &tm
 			stream.decoder = nil
-			stream.encoder = enc
-			stream.parts = nil
+			stream.partHashes = nil
 			decodedRes = res
 			ackReceived = true
 			decoded = true
-			cleanupStreams = true
 		}
 	}
 
 	stream.mx.Unlock()
 
-	if cleanupStreams {
-		a.cleanupBroadcastStreams(tm)
-	}
-
+	var ackErr error
 	if ackReceived {
 		if err = a.sendFECControlMessage(FECReceived{Hash: broadcastHash}); err != nil {
-			return err
+			ackErr = err
 		}
 	}
 
@@ -440,14 +713,22 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 		stream.mx.Lock()
 		if stream.completedAt == nil {
 			stream.completedAt = &tm
+			atomic.AddUint64(&a.fecCompleted, 1)
 		}
 		stream.mx.Unlock()
+
+		a.streamsMx.Lock()
+		a.removeFECBroadcastStreamLocked(id, stream, true)
+		a.streamsMx.Unlock()
 	}
 
 	if ackCompleted {
 		if err = a.sendFECControlMessage(FECCompleted{Hash: broadcastHash}); err != nil {
 			return err
 		}
+	}
+	if ackErr != nil {
+		return ackErr
 	}
 	return nil
 }
@@ -457,9 +738,18 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 		return fmt.Errorf("invalid seqno")
 	}
 
-	a.streamsMx.RLock()
-	stream := a.broadcastStreams[string(t.BroadcastHash)]
-	a.streamsMx.RUnlock()
+	id := string(t.BroadcastHash)
+	now := time.Now()
+
+	a.streamsMx.Lock()
+	a.cleanupFECBroadcastStreamsLocked(now, false)
+	if a.isFECDeliveredLocked(id) {
+		a.streamsMx.Unlock()
+		atomic.AddUint64(&a.fecDeliveredCacheHits, 1)
+		return a.sendFECControlMessage(FECCompleted{Hash: t.BroadcastHash})
+	}
+	stream := a.broadcastStreams[id]
+	a.streamsMx.Unlock()
 	if stream == nil {
 		return fmt.Errorf("short part of unknown broadcast")
 	}
@@ -470,10 +760,11 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 	}
 
 	var (
-		partData      []byte
-		date          uint32
-		ackCompleted  bool
-		knownPartOnly bool
+		partDataHash [32]byte
+		date         uint32
+		finished     bool
+		completed    bool
+		knownPart    bool
 	)
 
 	stream.mx.Lock()
@@ -489,25 +780,23 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 	}
 
 	date = stream.date
-	stream.lastMessageAt = time.Now()
+	stream.lastMessageAt = now
+	finished = stream.finishedAt != nil
+	completed = stream.completedAt != nil
 
-	if knownPart, ok := stream.parts[seqno]; ok {
-		partData = append([]byte(nil), knownPart...)
-		knownPartOnly = true
-	} else if stream.encoder != nil {
-		partData = stream.encoder.GenSymbol(seqno)
-		if stream.parts != nil {
-			stream.parts[seqno] = append([]byte(nil), partData...)
+	if stream.partHashes != nil {
+		if knownHash, ok := stream.partHashes[seqno]; ok {
+			partDataHash = knownHash
+			knownPart = true
 		}
-	} else {
+	}
+	if !finished && !knownPart {
 		stream.mx.Unlock()
 		return fmt.Errorf("short part of unfinished broadcast")
 	}
-
-	ackCompleted = stream.completedAt != nil
 	stream.mx.Unlock()
 
-	if !bytes.Equal(calcBroadcastFECPartDataHash(partData), t.PartDataHash) {
+	if knownPart && !bytes.Equal(partDataHash[:], t.PartDataHash) {
 		return fmt.Errorf("wrong part data hash")
 	}
 
@@ -515,11 +804,14 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 		return err
 	}
 
-	if ackCompleted {
-		return a.sendFECControlMessage(FECCompleted{Hash: t.BroadcastHash})
+	if finished {
+		if completed {
+			return a.sendFECControlMessage(FECCompleted{Hash: t.BroadcastHash})
+		}
+		return a.sendFECControlMessage(FECReceived{Hash: t.BroadcastHash})
 	}
 
-	if knownPartOnly {
+	if knownPart {
 		return nil
 	}
 

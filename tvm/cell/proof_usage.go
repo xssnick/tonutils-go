@@ -73,7 +73,7 @@ func (c *Cell) CreateUsageProof(usageTree *CellUsageTree) (*Cell, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
 	}
-	return createMerkleProofCell(body)
+	return CreateMerkleProof(body)
 }
 
 type merkleProofPruneFunc func(*Cell) (bool, error)
