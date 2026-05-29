@@ -71,14 +71,31 @@ func cachedOPGetter(op vm.OP) vm.OPGetter {
 }
 
 func (tvm *TVM) SetGlobalVersion(version int) error {
+	if err := validateGlobalVersion(version); err != nil {
+		return err
+	}
+	tvm.globalVersion = version
+	return nil
+}
+
+// WithGlobalVersion returns a shallow TVM copy that shares the opcode trie.
+func (tvm *TVM) WithGlobalVersion(version int) (TVM, error) {
+	if err := validateGlobalVersion(version); err != nil {
+		return TVM{}, err
+	}
+
+	next := *tvm
+	next.globalVersion = version
+	return next, nil
+}
+
+func validateGlobalVersion(version int) error {
 	if version < MinSupportedGlobalVersion {
 		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, MinSupportedGlobalVersion)
 	}
 	if version > MaxSupportedGlobalVersion {
 		return fmt.Errorf("unsupported global version %d, maximum supported is %d", version, MaxSupportedGlobalVersion)
 	}
-
-	tvm.globalVersion = version
 	return nil
 }
 

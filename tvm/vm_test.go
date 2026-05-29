@@ -36,6 +36,32 @@ func TestTVMSetGlobalVersionRejectsOldVersions(t *testing.T) {
 	}
 }
 
+func TestTVMWithGlobalVersionCopiesShallow(t *testing.T) {
+	v := NewTVM()
+
+	next, err := v.WithGlobalVersion(MinSupportedGlobalVersion)
+	if err != nil {
+		t.Fatalf("WithGlobalVersion minimum version: %v", err)
+	}
+
+	if next.globalVersion != MinSupportedGlobalVersion {
+		t.Fatalf("copy global version = %d, want %d", next.globalVersion, MinSupportedGlobalVersion)
+	}
+	if v.globalVersion != vm.DefaultGlobalVersion {
+		t.Fatalf("base global version changed to %d", v.globalVersion)
+	}
+	if next.trie != v.trie {
+		t.Fatal("WithGlobalVersion should share opcode trie")
+	}
+	if next.maxPrefixLen != v.maxPrefixLen {
+		t.Fatalf("copy max prefix len = %d, want %d", next.maxPrefixLen, v.maxPrefixLen)
+	}
+
+	if _, err = v.WithGlobalVersion(MinSupportedGlobalVersion - 1); err == nil {
+		t.Fatal("WithGlobalVersion should reject old global version")
+	}
+}
+
 func TestTVM_Execute(t *testing.T) {
 	v := NewTVM()
 
