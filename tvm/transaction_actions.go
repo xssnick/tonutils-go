@@ -136,6 +136,12 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	if !originalBalance.sub(msgBalance) {
 		originalBalance = remainingBalance.copy()
 	}
+	failedActionMsgBalance := func() *transactionCurrencyBalance {
+		if transactionGlobalVersion(cfg) >= 14 {
+			return msgBalance.copy()
+		}
+		return msgBalanceRemaining.copy()
+	}
 
 	failAction := func(resultCode int32, idx int, bounceOnFail bool, noFunds bool, valid bool) {
 		stateLimitExceeded, stateLimitErr := transactionAccountStateExceedsLimits(acc, acc.code, acc.data, nextLibraries, cfg)
@@ -169,7 +175,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			out.bounce = true
 		}
 		out.nextLibraries = nextLibraries
-		out.msgBalanceRemaining = msgBalanceRemaining.copy()
+		out.msgBalanceRemaining = failedActionMsgBalance()
 		out.actionFine = new(big.Int).Set(actionFine)
 		out.actionFees = new(big.Int).Set(actionFine)
 		out.balance = new(big.Int).Sub(transactionBigOrZero(balanceAfterGas), actionFine)
@@ -288,7 +294,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		out.bounce = true
 		out.actionFine = actionFine
 		out.actionFees = actionFine
-		out.msgBalanceRemaining = msgBalanceRemaining.copy()
+		out.msgBalanceRemaining = failedActionMsgBalance()
 		out.balance = new(big.Int).Sub(transactionBigOrZero(balanceAfterGas), actionFine)
 		if out.balance.Sign() < 0 {
 			out.balance.SetInt64(0)
@@ -465,6 +471,14 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 
 	var suggestedMsg tlb.Message
 	if err := transactionParseCell(&suggestedMsg, act.Msg); err != nil {
+		if mode&2 != 0 {
+			return transactionSendIgnored(out, mode), nil
+		}
+		out.resultCode = 34
+		out.invalid = true
+		return out, nil
+	}
+	if err = transactionValidateMessageStateInitLibs(&suggestedMsg); err != nil {
 		if mode&2 != 0 {
 			return transactionSendIgnored(out, mode), nil
 		}

@@ -10,6 +10,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func makeMsgPricesSlice(lump, bitPrice, cellPrice uint64) *cell.Slice {
@@ -224,12 +225,54 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		if restored, err := st.Stack.PopAny(); err != nil || restored != nil {
 			t.Fatalf("unexpected restored optional value: (%v, %v)", restored, err)
 		}
+
+		for _, tc := range []struct {
+			name        string
+			version     int
+			wantRestore any
+		}{
+			{name: "v13 restores null", version: 13, wantRestore: nil},
+			{name: "v14 keeps invalid value", version: 14, wantRestore: big.NewInt(100)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				st := newFuncTestState(t, nil)
+				st.GlobalVersion = tc.version
+				if err := st.Stack.PushInt(big.NewInt(100)); err != nil {
+					t.Fatalf("PushInt failed: %v", err)
+				}
+				if err := st.Stack.PushBuilder(cell.BeginCell()); err != nil {
+					t.Fatalf("PushBuilder failed: %v", err)
+				}
+				if err := STOPTSTDADDRQ().Interpret(st); err != nil {
+					t.Fatalf("STOPTSTDADDRQ(int) failed: %v", err)
+				}
+				ok, err := st.Stack.PopBool()
+				if err != nil || !ok {
+					t.Fatalf("STOPTSTDADDRQ(int) = (%v, %v), want true", ok, err)
+				}
+				if _, err = st.Stack.PopBuilder(); err != nil {
+					t.Fatalf("PopBuilder failed: %v", err)
+				}
+				restored, err := st.Stack.PopAny()
+				if err != nil {
+					t.Fatalf("PopAny failed: %v", err)
+				}
+				want, _ := tc.wantRestore.(*big.Int)
+				got, _ := restored.(*big.Int)
+				if want == nil {
+					if restored != nil {
+						t.Fatalf("restored value = %v, want nil", restored)
+					}
+				} else if got == nil || got.Cmp(want) != 0 {
+					t.Fatalf("restored value = %v, want %v", restored, want)
+				}
+			})
+		}
 	})
 
-	t.Run("sendmsg uses masterchain prices for masterchain destinations", func(t *testing.T) {
+	t.Run("sendmsg v13 uses user fwd fee lower bound and v14 ignores it", func(t *testing.T) {
 		myAddr := address.NewAddress(0, 0, bytes.Repeat([]byte{0x11}, 32))
-		dest := address.NewAddress(0, 0xFF, bytes.Repeat([]byte{0x22}, 32))
-		st := makeSendMsgEdgeState(t, myAddr, makeMsgPricesSlice(1, 0, 0), makeMsgPricesSlice(777, 0, 0), nil)
+		dest := address.NewAddress(0, 0, bytes.Repeat([]byte{0x22}, 32))
 
 		msgCell, err := tlb.ToCell(&tlb.InternalMessage{
 			IHRDisabled: true,
@@ -243,21 +286,32 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ToCell failed: %v", err)
 		}
-		if err := st.Stack.PushCell(msgCell); err != nil {
-			t.Fatalf("PushCell failed: %v", err)
-		}
-		if err := st.Stack.PushInt(big.NewInt(1024)); err != nil {
-			t.Fatalf("PushInt failed: %v", err)
-		}
-		if err := SENDMSG().Interpret(st); err != nil {
-			t.Fatalf("SENDMSG(masterchain fee-only) failed: %v", err)
-		}
-		fee, err := st.Stack.PopIntFinite()
-		if err != nil {
-			t.Fatalf("PopIntFinite failed: %v", err)
-		}
-		if fee.Cmp(big.NewInt(500)) != 0 {
-			t.Fatalf("SENDMSG should keep the larger user-supplied fwd fee: got %v", fee)
+
+		for _, tc := range []struct {
+			version int
+			want    int64
+		}{
+			{version: 13, want: 500},
+			{version: 14, want: 1},
+		} {
+			st := makeSendMsgEdgeState(t, myAddr, nil, makeMsgPricesSlice(1, 0, 0), nil)
+			st.GlobalVersion = tc.version
+			if err := st.Stack.PushCell(msgCell); err != nil {
+				t.Fatalf("PushCell failed: %v", err)
+			}
+			if err := st.Stack.PushInt(big.NewInt(1024)); err != nil {
+				t.Fatalf("PushInt failed: %v", err)
+			}
+			if err := SENDMSG().Interpret(st); err != nil {
+				t.Fatalf("SENDMSG(version %d fee-only) failed: %v", tc.version, err)
+			}
+			fee, err := st.Stack.PopIntFinite()
+			if err != nil {
+				t.Fatalf("PopIntFinite failed: %v", err)
+			}
+			if fee.Cmp(big.NewInt(tc.want)) != 0 {
+				t.Fatalf("SENDMSG version %d fee = %v, want %d", tc.version, fee, tc.want)
+			}
 		}
 	})
 
@@ -297,6 +351,40 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		}
 		if err := SENDMSG().Interpret(st); err == nil {
 			t.Fatal("SENDMSG should fail when the tail exceeds the configured max cell limit")
+		}
+	})
+
+	t.Run("sendmsg rejects non-internal myaddr", func(t *testing.T) {
+		dest := address.NewAddress(0, 0, bytes.Repeat([]byte{0x44}, 32))
+		msgCell, err := tlb.ToCell(&tlb.InternalMessage{
+			IHRDisabled: true,
+			SrcAddr:     address.NewAddressNone(),
+			DstAddr:     dest,
+			Amount:      tlb.FromNanoTONU(100),
+			Body:        cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
+		})
+		if err != nil {
+			t.Fatalf("ToCell failed: %v", err)
+		}
+
+		for _, myAddr := range []*address.Address{
+			address.NewAddressNone(),
+			address.NewAddressExt(0, 16, []byte{0xAB, 0xCD}),
+		} {
+			st := makeSendMsgEdgeState(t, myAddr, nil, makeMsgPricesSlice(1, 0, 0), nil)
+			for _, version := range []int{13, 14} {
+				st.GlobalVersion = version
+				if err := st.Stack.PushCell(msgCell); err != nil {
+					t.Fatalf("PushCell failed: %v", err)
+				}
+				if err := st.Stack.PushInt(big.NewInt(1024)); err != nil {
+					t.Fatalf("PushInt failed: %v", err)
+				}
+				err := SENDMSG().Interpret(st)
+				if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
+					t.Fatalf("SENDMSG version %d with MYADDR %s exit = (%d, %t), want range_chk", version, myAddr.String(), code, ok)
+				}
+			}
 		}
 	})
 

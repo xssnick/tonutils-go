@@ -749,8 +749,12 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 				if !quiet {
 					return vmerr.Error(vmerr.CodeTypeCheck, "not a cell slice")
 				}
-				// Reference TVM restores a null slice here, not the original raw stack entry.
-				if err = state.Stack.PushAny(nil); err != nil {
+
+				restored := raw
+				if state.GlobalVersion < 14 {
+					restored = nil
+				}
+				if err = state.Stack.PushAny(restored); err != nil {
 					return err
 				}
 				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
@@ -989,7 +993,14 @@ func getMyAddr(state *vm.State) (*address.Address, error) {
 	if !ok {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "invalid param MYADDR")
 	}
-	return addressFromSlice(sl)
+	addr, err := addressFromSlice(sl)
+	if err != nil {
+		return nil, err
+	}
+	if addr.Type() != address.StdAddress && addr.Type() != address.VarAddress {
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "not an internal MsgAddress")
+	}
+	return addr, nil
 }
 
 func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
@@ -1326,7 +1337,7 @@ func SENDMSG() *helpers.SimpleOP {
 
 				fwd = computedFwd
 				ihr = computedIHR
-				if msg.MsgType == tlb.MsgTypeInternal {
+				if msg.MsgType == tlb.MsgTypeInternal && state.GlobalVersion < 14 {
 					fwd = maxBig(fwd, msg.Info.FwdFee)
 					if !ihrDisabled && state.GlobalVersion < 12 {
 						ihr = maxBig(ihr, msg.Info.ExtraFlags)

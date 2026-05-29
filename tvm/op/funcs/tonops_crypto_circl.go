@@ -370,9 +370,17 @@ func rist255BinaryOp(name string, prefix helpers.BitPrefix, quiet bool, op func(
 func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntFinite()
+			n, err := state.Stack.PopInt()
 			if err != nil {
 				return err
+			}
+
+			var x *big.Int
+			if !base {
+				x, err = state.Stack.PopInt()
+				if err != nil {
+					return err
+				}
 			}
 
 			if err = state.ConsumeGas(func() int64 {
@@ -384,36 +392,73 @@ func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) 
 				return err
 			}
 
-			var point circlgroup.Element
-			if !base {
-				x, popErr := state.Stack.PopIntFinite()
-				if popErr != nil {
-					return popErr
+			fail := func(msg string) error {
+				if quiet {
+					return state.Stack.PushBool(false)
 				}
-				point, err = parseRistrettoPoint(x)
-				if err != nil {
-					if quiet {
-						return state.Stack.PushBool(false)
-					}
-					return err
-				}
+				return vmerr.Error(vmerr.CodeRangeCheck, msg)
 			}
 
-			scalar := circlgroup.Ristretto255.NewScalar().SetBigInt(new(big.Int).Mod(new(big.Int).Set(n), ristretto255L))
-			if scalar.IsZero() {
-				if err = pushSmallInt(state, 0); err != nil {
-					return err
+			var scalar circlgroup.Scalar
+			scalarZero := false
+			if n != nil {
+				scalar = circlgroup.Ristretto255.NewScalar().SetBigInt(new(big.Int).Mod(new(big.Int).Set(n), ristretto255L))
+				scalarZero = scalar.IsZero()
+			}
+			if n == nil {
+				return fail("invalid x or n")
+			}
+			if scalarZero {
+				if base && state.GlobalVersion < 14 {
+					return fail("invalid n")
 				}
-				if quiet {
-					return state.Stack.PushBool(true)
-				}
-				return nil
 			}
 
 			result := circlgroup.Ristretto255.NewElement()
 			if base {
+				if scalarZero {
+					if err = pushSmallInt(state, 0); err != nil {
+						return err
+					}
+					if quiet {
+						return state.Stack.PushBool(true)
+					}
+					return nil
+				}
 				result.MulGen(scalar)
 			} else {
+				if scalarZero && state.GlobalVersion < 14 {
+					if err = pushSmallInt(state, 0); err != nil {
+						return err
+					}
+					if quiet {
+						return state.Stack.PushBool(true)
+					}
+					return nil
+				}
+				if x == nil {
+					return fail("invalid x or n")
+				}
+
+				point, parseErr := parseRistrettoPoint(x)
+				if parseErr != nil {
+					if quiet {
+						return state.Stack.PushBool(false)
+					}
+					return parseErr
+				}
+				if state.GlobalVersion < 14 && x.Sign() == 0 {
+					return fail("invalid x or n")
+				}
+				if scalarZero || x.Sign() == 0 {
+					if err = pushSmallInt(state, 0); err != nil {
+						return err
+					}
+					if quiet {
+						return state.Stack.PushBool(true)
+					}
+					return nil
+				}
 				result.Mul(point, scalar)
 			}
 			if err = pushRistrettoPoint(state, result); err != nil {

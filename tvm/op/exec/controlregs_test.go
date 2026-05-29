@@ -73,6 +73,76 @@ func TestSETRETCTRStoresValueInC0Save(t *testing.T) {
 	}
 }
 
+func TestTVM14SetContCtrXDuplicateSaveListWrite(t *testing.T) {
+	oldCont := &testContinuation{name: "old"}
+	newCont := &testContinuation{name: "new"}
+
+	makeTarget := func() vm.Continuation {
+		return &testContinuation{
+			name: "target",
+			data: &vm.ControlData{
+				Save: vm.Register{
+					C: [4]vm.Continuation{oldCont},
+				},
+			},
+		}
+	}
+
+	t.Run("v13 duplicate write is type check", func(t *testing.T) {
+		state := newTestState()
+		state.GlobalVersion = 13
+		if err := state.Stack.PushContinuation(newCont); err != nil {
+			t.Fatalf("push new continuation: %v", err)
+		}
+		if err := state.Stack.PushContinuation(makeTarget()); err != nil {
+			t.Fatalf("push target continuation: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push index: %v", err)
+		}
+		assertVMErrCode(t, SETCONTCTRX().Interpret(state), vmerr.CodeTypeCheck)
+	})
+
+	t.Run("v14 duplicate write is ignored", func(t *testing.T) {
+		state := newTestState()
+		state.GlobalVersion = 14
+		if err := state.Stack.PushContinuation(newCont); err != nil {
+			t.Fatalf("push new continuation: %v", err)
+		}
+		if err := state.Stack.PushContinuation(makeTarget()); err != nil {
+			t.Fatalf("push target continuation: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push index: %v", err)
+		}
+		if err := SETCONTCTRX().Interpret(state); err != nil {
+			t.Fatalf("SETCONTCTRX v14 failed: %v", err)
+		}
+		got, err := state.Stack.PopContinuation()
+		if err != nil {
+			t.Fatalf("pop target continuation: %v", err)
+		}
+		if continuationName(t, got.GetControlData().Save.C[0]) != "old" {
+			t.Fatalf("duplicate write should leave old saved c0 intact, got %v", got.GetControlData().Save.C[0])
+		}
+	})
+
+	t.Run("v14 wrong type is still type check", func(t *testing.T) {
+		state := newTestState()
+		state.GlobalVersion = 14
+		if err := state.Stack.PushInt(big.NewInt(42)); err != nil {
+			t.Fatalf("push wrong value: %v", err)
+		}
+		if err := state.Stack.PushContinuation(makeTarget()); err != nil {
+			t.Fatalf("push target continuation: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push index: %v", err)
+		}
+		assertVMErrCode(t, SETCONTCTRX().Interpret(state), vmerr.CodeTypeCheck)
+	})
+}
+
 func TestPOPSAVECTRSavesPreviousValue(t *testing.T) {
 	state := newTestState()
 	state.Reg.C[0] = &testContinuation{name: "c0"}

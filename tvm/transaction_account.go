@@ -70,7 +70,7 @@ func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *addres
 	return out, nil
 }
 
-func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
+func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg tlb.BlockchainConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
 	extraCurrencies, err := transactionCloneExtraCurrencies(acc.extraCurrencies)
 	if err != nil {
 		return nil, err
@@ -108,6 +108,9 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 		prepared.msgBalance, err = transactionCurrencyFromParts(in.Amount.Nano(), in.ExtraCurrencies)
 		if err != nil {
 			return nil, err
+		}
+		if transactionIsBlackHoleAccount(cfg, acc.addr) {
+			prepared.msgBalance.grams.SetInt64(0)
 		}
 		if prepared.creditFirst {
 			if err = credit(prepared.msgBalance.grams, in.ExtraCurrencies); err != nil {
@@ -155,7 +158,7 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 
 			switch p.status {
 			case tlb.AccountStatusUninit, tlb.AccountStatusFrozen, tlb.AccountStatusNonExist:
-				if due.Cmp(limits.deleteDue) > 0 && transactionExtraDictIsEmpty(acc.extraCurrencies) {
+				if due.Cmp(limits.deleteDue) > 0 && transactionExtraDictIsEmpty(p.extraCurrencies) {
 					p.deleted = true
 					p.status = tlb.AccountStatusNonExist
 					statusChange.Type = tlb.AccStatusChangeDeleted
@@ -935,4 +938,28 @@ func transactionMessageStateInit(msg *tlb.Message) *tlb.StateInit {
 	default:
 		return nil
 	}
+}
+
+func transactionValidateMessageStateInitLibs(msg *tlb.Message) error {
+	state := transactionMessageStateInit(msg)
+	if state == nil || state.Lib == nil || state.Lib.IsEmpty() {
+		return nil
+	}
+
+	items, err := state.Lib.LoadAll()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if _, err = item.Value.LoadBoolBit(); err != nil {
+			return fmt.Errorf("invalid StateInit library entry: %w", err)
+		}
+		if _, err = item.Value.LoadRefCell(); err != nil {
+			return fmt.Errorf("invalid StateInit library entry: %w", err)
+		}
+		if item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+			return errors.New("invalid StateInit library entry")
+		}
+	}
+	return nil
 }

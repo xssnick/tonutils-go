@@ -401,11 +401,27 @@ func chksignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.S
 				return err
 			}
 
+			if state.GlobalVersion >= 14 && isEd25519IdentityPublicKey(keyBytes) {
+				return state.Stack.PushBool(false)
+			}
+
 			return state.Stack.PushBool(ed25519.Verify(ed25519.PublicKey(keyBytes), data, sigBytes))
 		},
 		Name:      name,
 		BitPrefix: prefix,
 	}
+}
+
+func isEd25519IdentityPublicKey(key []byte) bool {
+	if len(key) != ed25519.PublicKeySize || key[0] != 1 {
+		return false
+	}
+	for _, b := range key[1:] {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func CHKSIGNU() *helpers.SimpleOP {
@@ -462,6 +478,9 @@ func ECRECOVER() *helpers.SimpleOP {
 			}
 
 			v := vInt.Int64()
+			if state.GlobalVersion >= 14 && (v == 27 || v == 28) {
+				v -= 27
+			}
 			if v > 3 {
 				return state.Stack.PushBool(false)
 			}

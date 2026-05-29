@@ -5,9 +5,11 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
+	"sync"
+
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
-	"sync"
 )
 
 type RLDP interface {
@@ -17,6 +19,7 @@ type RLDP interface {
 	DoQuery(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error
 	DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
 	SetOnQuery(handler func(transferId []byte, query *rldp.Query) error)
+	SetOnMessage(handler func(id []byte, data []byte) error)
 	SetOnDisconnect(handler func())
 	SendAnswer(ctx context.Context, maxAnswerSize uint64, timeoutAt uint32, queryId, transferId []byte, answer tl.Serializable) error
 }
@@ -40,6 +43,9 @@ func CreateExtendedRLDP(rldp RLDP) *RLDPWrapper {
 	}
 	w.RLDP.SetOnQuery(w.queryHandler)
 	w.GetADNL().SetDisconnectHandler(w.disconnectHandler)
+	if _, ok := w.GetADNL().(*ADNLWrapper); ok {
+		w.RLDP.SetOnMessage(w.messageHandler)
+	}
 
 	return w
 }
@@ -54,6 +60,38 @@ func (r *RLDPWrapper) SetOnUnknownOverlayQuery(handler func(transferId []byte, q
 
 func (r *RLDPWrapper) SetOnDisconnect(handler func()) {
 	r.rootDisconnectHandler = handler
+}
+
+func (r *RLDPWrapper) messageHandler(_ []byte, data []byte) error {
+	adnlWrapper := r.GetADNL().(*ADNLWrapper)
+
+	obj, err := parseRLDPMessagePayload(data)
+	if err != nil {
+		return fmt.Errorf("failed to parse rldp message: %w", err)
+	}
+
+	return adnlWrapper.customHandler(&adnl.MessageCustom{Data: obj})
+}
+
+func parseRLDPMessagePayload(data []byte) (tl.Serializable, error) {
+	list := make([]tl.Serializable, 0, 2)
+	for len(data) > 0 {
+		var obj any
+		rest, err := tl.Parse(&obj, data, true)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, obj)
+		data = rest
+	}
+
+	if len(list) == 0 {
+		return nil, fmt.Errorf("empty payload")
+	}
+	if len(list) == 1 {
+		return list[0], nil
+	}
+	return list, nil
 }
 
 func (r *RLDPWrapper) queryHandler(transferId []byte, query *rldp.Query) error {

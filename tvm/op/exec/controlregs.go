@@ -81,6 +81,48 @@ func setControlRegister(state *vm.State, idx int, val any) error {
 	return nil
 }
 
+func controlRegisterValueHasType(idx int, val any) bool {
+	if idx < 0 {
+		return false
+	}
+	if idx < 4 {
+		c, ok := val.(vm.Continuation)
+		return ok && c != nil
+	}
+	if idx < 6 {
+		c, ok := val.(*cell.Cell)
+		return ok && c != nil
+	}
+	if idx == 7 {
+		c, ok := val.(tuple.Tuple)
+		return ok && !c.IsNull()
+	}
+	return false
+}
+
+func controlRegisterSlotFilled(r *vm.Register, idx int) bool {
+	if idx < 0 {
+		return false
+	}
+	if idx < 4 {
+		return r.C[idx] != nil
+	}
+	if idx < 6 {
+		return r.D[idx-4] != nil
+	}
+	if idx == 7 {
+		return !r.C7.IsNull()
+	}
+	return false
+}
+
+func defineControlRegister(state *vm.State, r *vm.Register, idx int, val any) bool {
+	if r.Define(idx, val) {
+		return true
+	}
+	return state.GlobalVersion >= 14 && controlRegisterSlotFilled(r, idx) && controlRegisterValueHasType(idx, val)
+}
+
 func PUSHCTR(i int) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 4,
@@ -129,7 +171,8 @@ func SETRETCTR(i int) (op *helpers.AdvancedOP) {
 			}
 
 			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
-			if !c0.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
+			data := c0.GetControlData()
+			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			state.Reg.C[0] = c0
@@ -156,7 +199,8 @@ func SETALTCTR(i int) (op *helpers.AdvancedOP) {
 			}
 
 			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
-			if !c1.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
+			data := c1.GetControlData()
+			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			state.Reg.C[1] = c1
@@ -217,7 +261,8 @@ func SAVEALTCTR(i int) (op *helpers.AdvancedOP) {
 		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
 			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
-			if !c1.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i))) {
+			data := c1.GetControlData()
+			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(state.Reg.Get(i))) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			state.Reg.C[1] = c1
@@ -331,7 +376,8 @@ func SETCONTCTRX() *helpers.SimpleOP {
 			}
 
 			cont = vm.ForceControlData(cont)
-			if !cont.GetControlData().Save.Define(i, cloneControlRegisterValue(val)) {
+			data := cont.GetControlData()
+			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			return state.Stack.PushContinuation(cont)

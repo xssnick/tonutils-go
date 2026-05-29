@@ -89,6 +89,9 @@ func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int8, right b
 				return err
 			}
 			if x == nil {
+				if state.GlobalVersion < 14 {
+					return pushSmallInt(state, 0)
+				}
 				return pushNaNOrOverflow(state, true)
 			}
 

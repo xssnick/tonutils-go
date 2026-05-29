@@ -13,6 +13,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/internal/blsmap"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func mustRistrettoInt(t *testing.T, point circlgroup.Element) *big.Int {
@@ -245,6 +246,128 @@ func TestBLSAndRistrettoHelpers(t *testing.T) {
 	if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
 		t.Fatalf("RIST255_QMULBASE value = (%v, %v)", got, err)
 	}
+}
+
+func TestTVM14RistrettoIdentityResults(t *testing.T) {
+	scalarOne := circlgroup.Ristretto255.NewScalar().SetBigInt(big.NewInt(1))
+	basePoint := circlgroup.Ristretto255.NewElement()
+	basePoint.MulGen(scalarOne)
+	basePointInt := mustRistrettoInt(t, basePoint)
+	invalidPoint, ok := new(big.Int).SetString("00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 16)
+	if !ok {
+		t.Fatal("failed to parse invalid ristretto point")
+	}
+
+	t.Run("mulbase zero scalar", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 13
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v13 scalar: %v", err)
+		}
+		if err := RIST255_MULBASE().Interpret(st); err == nil {
+			t.Fatal("RIST255_MULBASE v13 should reject zero scalar")
+		} else if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
+			t.Fatalf("RIST255_MULBASE v13 error = %v, want range check", err)
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v14 scalar: %v", err)
+		}
+		if err := RIST255_MULBASE().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MULBASE v14 failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MULBASE v14 = (%v, %v), want 0", got, err)
+		}
+	})
+
+	t.Run("mul identity point", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 13
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v13 identity point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push v13 scalar: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err == nil {
+			t.Fatal("RIST255_MUL v13 should reject identity result")
+		} else if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
+			t.Fatalf("RIST255_MUL v13 error = %v, want range check", err)
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v14 identity point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push v14 scalar: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MUL v14 failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MUL v14 = (%v, %v), want 0", got, err)
+		}
+	})
+
+	t.Run("mul validates point on zero scalar in v14", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 13
+		if err := st.Stack.PushInt(invalidPoint); err != nil {
+			t.Fatalf("push v13 invalid point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v13 zero scalar: %v", err)
+		}
+		if err := RIST255_QMUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_QMUL v13 failed: %v", err)
+		}
+		if ok, err := st.Stack.PopBool(); err != nil || !ok {
+			t.Fatalf("RIST255_QMUL v13 status = (%v, %v), want true", ok, err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_QMUL v13 result = (%v, %v), want 0", got, err)
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(invalidPoint); err != nil {
+			t.Fatalf("push v14 invalid point: %v", err)
+		}
+		if err := st.Stack.PushInt(new(big.Int).Set(ristretto255L)); err != nil {
+			t.Fatalf("push v14 scalar l: %v", err)
+		}
+		if err := RIST255_QMUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_QMUL v14 failed: %v", err)
+		}
+		if ok, err := st.Stack.PopBool(); err != nil || ok {
+			t.Fatalf("RIST255_QMUL v14 status = (%v, %v), want false", ok, err)
+		}
+		if st.Stack.Len() != 0 {
+			t.Fatalf("RIST255_QMUL v14 failure should leave only status, stack len=%d", st.Stack.Len())
+		}
+	})
+
+	t.Run("mul basepoint by order returns identity in v14", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(basePointInt); err != nil {
+			t.Fatalf("push base point: %v", err)
+		}
+		if err := st.Stack.PushInt(new(big.Int).Set(ristretto255L)); err != nil {
+			t.Fatalf("push scalar l: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MUL v14 by l failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MUL v14 by l = (%v, %v), want 0", got, err)
+		}
+	})
 }
 
 func TestBLSMapAndZeroOps(t *testing.T) {

@@ -85,6 +85,7 @@ func (m *mockADNL) Close() {}
 type mockRLDP struct {
 	adnl          rldp.ADNL
 	onQuery       func(transferId []byte, query *rldp.Query) error
+	onMessage     func(id []byte, data []byte) error
 	onDisconnect  func()
 	doQueryFn     func(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error
 	doQueryAsync  func(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
@@ -123,6 +124,10 @@ func (m *mockRLDP) DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []
 
 func (m *mockRLDP) SetOnQuery(handler func(transferId []byte, query *rldp.Query) error) {
 	m.onQuery = handler
+}
+
+func (m *mockRLDP) SetOnMessage(handler func(id []byte, data []byte) error) {
+	m.onMessage = handler
 }
 
 func (m *mockRLDP) SetOnDisconnect(handler func()) {

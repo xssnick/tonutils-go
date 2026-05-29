@@ -662,8 +662,8 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PopAny failed: %v", err)
 	}
-	if raw != nil {
-		t.Fatalf("quiet invalid STOPTSTDADDR should restore nil, got %T", raw)
+	if got, ok := raw.(*big.Int); !ok || got.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("quiet invalid STOPTSTDADDR should restore original value in v14, got %T %v", raw, raw)
 	}
 
 	st = newFuncTestState(t, nil)

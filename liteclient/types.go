@@ -2,12 +2,15 @@ package liteclient
 
 import (
 	"errors"
+	"fmt"
+
 	"github.com/xssnick/tonutils-go/tl"
 )
 
 func init() {
 	tl.Register(LiteServerQueryPrefix{}, "liteServer.queryPrefix = Object")
 	tl.Register(LiteServerQuery{}, "liteServer.query data:bytes = Object")
+	tl.Register(ServerBusy{}, "liteServer.serverBusy code:int message:string = liteServer.ServerBusy")
 	tl.Register(TCPPing{}, "tcp.ping random_id:long = tcp.Pong")
 	tl.Register(TCPPong{}, "tcp.pong random_id:long = tcp.Pong")
 	tl.Register(TCPAuthenticate{}, "tcp.authentificate nonce:bytes = tcp.Message")
@@ -25,6 +28,15 @@ type LiteServerQueryPrefix struct{}
 
 type LiteServerQuery struct {
 	Data any `tl:"bytes struct boxed"`
+}
+
+type ServerBusy struct {
+	Code int32  `tl:"int"`
+	Text string `tl:"string"`
+}
+
+func (e ServerBusy) Error() string {
+	return fmt.Sprintf("lite server busy, code %d: %s", e.Code, e.Text)
 }
 
 type TCPPing struct {

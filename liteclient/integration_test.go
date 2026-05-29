@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
 	"reflect"
 	"testing"
@@ -142,29 +141,14 @@ func Test_ServerProxy(t *testing.T) {
 
 	pub, key, _ := ed25519.GenerateKey(nil)
 	s := NewServer([]ed25519.PrivateKey{key})
-	s.SetMessageHandler(func(ctx context.Context, sc *ServerClient, msg tl.Serializable) error {
-		switch m := msg.(type) {
-		case adnl.MessageQuery:
-			switch q := m.Data.(type) {
-			case LiteServerQuery:
-				println("PROXYING QUERY:", reflect.TypeOf(q.Data).String())
+	s.SetQueryHandler(func(ctx context.Context, sc *ServerClient, query tl.Serializable) (tl.Serializable, error) {
+		println("PROXYING QUERY:", reflect.TypeOf(query).String())
 
-				var resp tl.Serializable
-				if err = client.QueryLiteserver(context.Background(), q.Data, &resp); err != nil {
-					return err
-				}
-
-				return sc.Send(adnl.MessageAnswer{ID: m.ID, Data: resp})
-			}
-		case TCPAuthenticate:
-			return sc.Send(TCPAuthenticationNonce{make([]byte, 32)})
-		case TCPAuthenticationComplete:
-			return nil
-		case TCPPing:
-			return sc.Send(TCPPong{RandomID: m.RandomID})
+		var resp tl.Serializable
+		if err = client.QueryLiteserver(context.Background(), query, &resp); err != nil {
+			return nil, err
 		}
-
-		return fmt.Errorf("something unknown: %s", reflect.TypeOf(msg).String())
+		return resp, nil
 	})
 	defer s.Close()
 

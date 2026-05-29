@@ -1334,6 +1334,64 @@ func TestEmulateTransactionActionSendMsgNoFundsAbortsWithoutCommit(t *testing.T)
 	}
 }
 
+func TestTVM14ActionFailureRestoresMessageBalanceRemaining(t *testing.T) {
+	msgBalance, err := transactionCurrencyFromParts(big.NewInt(500), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionConfig := func(version uint32) tlb.BlockchainConfig {
+		t.Helper()
+		versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version})
+		if err != nil {
+			t.Fatalf("failed to build global version cell: %v", err)
+		}
+		return tlb.BlockchainConfig{
+			Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+				tlb.ConfigParamGlobalVersion: versionCell,
+			}),
+		}
+	}
+	apply := func(version uint32) *transactionActionApplyResult {
+		t.Helper()
+		actions := buildTransactionActionList(t,
+			tlb.ActionSendMsg{Mode: 64, Msg: buildTransactionOutboundInternalCell(t, 1)},
+			tlb.ActionSendMsg{Mode: 16, Msg: buildTransactionOutboundInternalCell(t, 1000)},
+		)
+		acc := &transactionRuntimeAccount{
+			addr:    tonopsTestAddr,
+			status:  tlb.AccountStatusActive,
+			code:    cell.BeginCell().EndCell(),
+			data:    cell.BeginCell().EndCell(),
+			balance: big.NewInt(1000),
+		}
+		res, err := transactionApplyActions(acc, &MessageExecutionResult{
+			Accepted: true,
+			ExecutionResult: ExecutionResult{
+				ExitCode:  0,
+				Data:      cell.BeginCell().EndCell(),
+				Actions:   actions,
+				Committed: true,
+			},
+		}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), versionConfig(version), big.NewInt(1000), nil, msgBalance, big.NewInt(0))
+		if err != nil {
+			t.Fatalf("apply actions v%d failed: %v", version, err)
+		}
+		if res.phase == nil || res.phase.Success || res.phase.ResultCode != 37 || !res.bounce {
+			t.Fatalf("unexpected action failure v%d: phase=%+v bounce=%t", version, res.phase, res.bounce)
+		}
+		return res
+	}
+
+	v13 := apply(13)
+	if got := v13.msgBalanceRemaining.grams.Int64(); got != 0 {
+		t.Fatalf("v13 message balance remaining = %d, want 0", got)
+	}
+	v14 := apply(14)
+	if got := v14.msgBalanceRemaining.grams.Int64(); got != 500 {
+		t.Fatalf("v14 message balance remaining = %d, want 500", got)
+	}
+}
+
 func TestEmulateTransactionActionBounceRequiresMode16(t *testing.T) {
 	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
 	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
@@ -1789,4 +1847,211 @@ func TestEmulateTransactionNewBounceBodyFormat(t *testing.T) {
 	if got := bounceOK.MsgFees.Nano().Uint64(); got != 51 {
 		t.Fatalf("unexpected collected bounce fee: got=%d want=51", got)
 	}
+}
+
+func TestTransactionBlackholeBurnsInboundGramsBeforeCreditPhase(t *testing.T) {
+	blackhole := address.MustParseRawAddr("-1:1111111111111111111111111111111111111111111111111111111111111111")
+	burningCell, err := tlb.ToCell(&tlb.BurningConfig{
+		BlackholeAddr: blackhole.Data(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build burning config: %v", err)
+	}
+
+	msg := &tlb.Message{
+		MsgType: tlb.MsgTypeInternal,
+		Msg: &tlb.InternalMessage{
+			IHRDisabled: true,
+			SrcAddr:     internalEmulationSrcAddr,
+			DstAddr:     blackhole,
+			Amount:      tlb.FromNanoTONU(777),
+		},
+	}
+	acc := &transactionRuntimeAccount{
+		addr:    blackhole,
+		status:  tlb.AccountStatusActive,
+		balance: big.NewInt(1000),
+		storageInfo: tlb.StorageInfo{
+			StorageExtra: tlb.StorageExtraNone{},
+		},
+	}
+	cfg := tlb.BlockchainConfig{
+		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamBurningConfig: burningCell,
+		}),
+	}
+
+	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), cfg, transactionStorageDueLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.msgBalance.grams.Sign() != 0 {
+		t.Fatalf("message balance grams = %s, want 0", prepared.msgBalance.grams)
+	}
+	if got := prepared.creditPhase.Credit.Coins.Nano(); got.Sign() != 0 {
+		t.Fatalf("credit phase grams = %s, want 0", got)
+	}
+	if prepared.balance.Uint64() != 1000 {
+		t.Fatalf("account balance = %s, want 1000", prepared.balance)
+	}
+}
+
+func TestTransactionStorageDeletionUsesCreditedExtraCurrencies(t *testing.T) {
+	extra := makeTransactionExtraCurrencies(t, 1, 777)
+	msg := &tlb.Message{
+		MsgType: tlb.MsgTypeInternal,
+		Msg: &tlb.InternalMessage{
+			IHRDisabled:     true,
+			SrcAddr:         internalEmulationSrcAddr,
+			DstAddr:         tonopsTestAddr,
+			Amount:          tlb.FromNanoTONU(10),
+			ExtraCurrencies: extra,
+		},
+	}
+	acc := &transactionRuntimeAccount{
+		addr:    tonopsTestAddr,
+		status:  tlb.AccountStatusUninit,
+		balance: big.NewInt(50),
+		storageInfo: tlb.StorageInfo{
+			StorageExtra: tlb.StorageExtraNone{},
+		},
+	}
+
+	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(500), big.NewInt(0), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{}, transactionStorageDueLimits{
+		deleteDue: big.NewInt(100),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.deleted {
+		t.Fatal("account with credited extra currencies should not be deleted")
+	}
+	if prepared.status != tlb.AccountStatusUninit {
+		t.Fatalf("status = %s, want uninit", prepared.status)
+	}
+	if prepared.storagePhase.StatusChange.Type != tlb.AccStatusChangeUnchanged {
+		t.Fatalf("status change = %+v, want unchanged", prepared.storagePhase.StatusChange)
+	}
+}
+
+func TestTransactionBounceErrorsWhenMessageBalanceCannotBeDebited(t *testing.T) {
+	msgBalance := &transactionCurrencyBalance{
+		grams: big.NewInt(100),
+		extra: map[uint32]*big.Int{1: big.NewInt(1)},
+	}
+	msg := &tlb.Message{
+		MsgType: tlb.MsgTypeInternal,
+		Msg: &tlb.InternalMessage{
+			IHRDisabled: true,
+			Bounce:      true,
+			SrcAddr:     internalEmulationSrcAddr,
+			DstAddr:     tonopsTestAddr,
+			Amount:      tlb.FromNanoTONU(100),
+		},
+	}
+
+	_, err := transactionPrepareBouncePhase(msg, big.NewInt(100), nil, msgBalance, big.NewInt(0), big.NewInt(0), uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), 0, tlb.BlockchainConfig{}, nil, nil, nil)
+	if err == nil {
+		t.Fatal("bounce phase should fail when account balance cannot cover message extra currencies")
+	}
+}
+
+func TestTransactionSendActionValidatesStateInitLibraries(t *testing.T) {
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: 13})
+	if err != nil {
+		t.Fatalf("failed to build global version config: %v", err)
+	}
+	cfg := tlb.BlockchainConfig{
+		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamGlobalVersion: versionCell,
+		}),
+	}
+	invalidLib := cell.NewDict(256)
+	if err = invalidLib.SetIntKey(big.NewInt(1), cell.BeginCell().MustStoreBoolBit(true).EndCell()); err != nil {
+		t.Fatalf("failed to build invalid library dict: %v", err)
+	}
+	msgCell, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     address.NewAddressNone(),
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.FromNanoTONU(1),
+		StateInit: &tlb.StateInit{
+			Lib: invalidLib,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to build internal message: %v", err)
+	}
+
+	apply := func(mode uint8) *transactionActionApplyResult {
+		t.Helper()
+		actions := buildTransactionActionList(t, tlb.ActionSendMsg{Mode: mode, Msg: msgCell})
+		res := &MessageExecutionResult{
+			Accepted: true,
+			ExecutionResult: ExecutionResult{
+				ExitCode:  0,
+				Data:      cell.BeginCell().EndCell(),
+				Actions:   actions,
+				Committed: true,
+			},
+		}
+		acc := &transactionRuntimeAccount{
+			addr:    tonopsTestAddr,
+			status:  tlb.AccountStatusActive,
+			code:    cell.BeginCell().EndCell(),
+			data:    cell.BeginCell().EndCell(),
+			balance: big.NewInt(1000),
+		}
+		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	failed := apply(0)
+	if failed.phase == nil || failed.phase.Success || failed.phase.ResultCode != 34 || failed.phase.SkippedActions != 0 {
+		t.Fatalf("unexpected invalid library action phase: %+v", failed.phase)
+	}
+	skipped := apply(2)
+	if skipped.phase == nil || !skipped.phase.Success || skipped.phase.ResultCode != 0 || skipped.phase.SkippedActions != 1 {
+		t.Fatalf("unexpected skipped invalid library action phase: %+v", skipped.phase)
+	}
+}
+
+func TestEmulateTransactionRejectsExternalInAnycastDestination(t *testing.T) {
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: 13})
+	if err != nil {
+		t.Fatalf("failed to build global version config: %v", err)
+	}
+	dst := tonopsTestAddr.WithAnycast(address.NewAnycast(1, []byte{0}))
+	msgCell, err := tlb.ToCell(&tlb.ExternalMessage{
+		SrcAddr: address.NewAddressExt(0, 16, []byte{0xAB, 0xCD}),
+		DstAddr: dst,
+		Body:    cell.BeginCell().EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build external message: %v", err)
+	}
+
+	_, err = NewTVM().EmulateTransaction(buildTransactionTestNoneShardAccount(t), msgCell, TransactionEmulationConfig{
+		Address: dst,
+		Now:     uint32(tonopsTestTime.Unix()),
+		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamGlobalVersion: versionCell,
+		}),
+	})
+	if err == nil {
+		t.Fatal("external inbound message with anycast destination should be rejected")
+	}
+}
+
+func makeTransactionExtraCurrencies(t *testing.T, id uint32, amount uint64) *cell.Dictionary {
+	t.Helper()
+
+	dict := cell.NewDict(32)
+	if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(id)), cell.BeginCell().MustStoreBigVarUInt(new(big.Int).SetUint64(amount), 32).EndCell()); err != nil {
+		t.Fatalf("failed to build extra currencies: %v", err)
+	}
+	return dict
 }

@@ -211,6 +211,26 @@ func TestExecuteDetailedWithAccountProofDoesNotFinalCommitGetMethodData(t *testi
 	}
 }
 
+func TestExecuteGetMethodDetailedWithLibrariesDoesNotFinalCommitData(t *testing.T) {
+	code := cell.BeginCell().MustStoreRef(executionProofCodeTail(t, opexec.RET().Serialize())).EndCell()
+	data := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	proofData := mustUsageProofWithLoadedRoot(t, data)
+
+	res, err := NewTVM().ExecuteGetMethodDetailedWithLibraries(code, proofData, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack())
+	if err != nil {
+		t.Fatalf("get method execution failed: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", res.ExitCode)
+	}
+	if res.Proof != nil {
+		t.Fatal("get method execution without proof should not build account proof")
+	}
+	if res.Data == nil || res.Data.HashKey() != proofData.HashKey() {
+		t.Fatal("get method execution should leave data register unchanged without final commit")
+	}
+}
+
 func TestEmulateExternalMessageWithAccountProofRejectsAddressMismatch(t *testing.T) {
 	code, data := executionProofFixture(t)
 	accountRoot := executionProofAccountRoot(t, code, data)

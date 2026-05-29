@@ -100,14 +100,14 @@ func TestADNLManagerCustomRouting(t *testing.T) {
 	m := newMockADNL()
 	w := CreateExtendedADNL(m)
 	overlayID := bytes.Repeat([]byte{0x71}, 32)
-	payload := Broadcast{}
+	payload := tl.Raw([]byte{0x01})
 
 	ov := w.WithOverlay(overlayID)
 	called := false
 	ov.SetCustomMessageHandler(func(msg *adnl.MessageCustom) error {
 		called = true
-		if _, ok := msg.Data.(Broadcast); !ok {
-			t.Fatalf("expected broadcast payload")
+		if _, ok := msg.Data.(tl.Raw); !ok {
+			t.Fatalf("expected raw payload")
 		}
 		return nil
 	})

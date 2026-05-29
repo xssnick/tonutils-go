@@ -5,25 +5,39 @@ import (
 	"crypto/cipher"
 	"crypto/ed25519"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl/keys"
-	"github.com/xssnick/tonutils-go/tl"
 	"io"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 var Logger = func(v ...any) {}
+
+const (
+	serverQueryQueuePerWorker = 10
+	serverClientSendQueueSize = 32
+	serverWriteDrainMax       = 16
+)
 
 type Server struct {
 	keys     map[string]ed25519.PrivateKey
 	listener net.Listener
 
-	messageHandler func(ctx context.Context, client *ServerClient, msg tl.Serializable) error
+	queryHandler   func(ctx context.Context, client *ServerClient, query tl.Serializable) (tl.Serializable, error)
 	disconnectHook func(client *ServerClient)
 	connectHook    func(client *ServerClient) error
+
+	queryWorkers int
+	queryQueue   chan serverQueryTask
+	workersOnce  sync.Once
 }
 
 type ServerClient struct {
@@ -32,9 +46,18 @@ type ServerClient struct {
 	rCrypt    cipher.Stream
 	serverKey ed25519.PublicKey
 
+	sendQueue chan tl.Serializable
+	inflight  int32
+
 	port uint16
 	ip   string
-	mx   sync.Mutex
+}
+
+type serverQueryTask struct {
+	ctx     context.Context
+	client  *ServerClient
+	queryID []byte
+	query   tl.Serializable
 }
 
 func NewServer(keysList []ed25519.PrivateKey) *Server {
@@ -48,13 +71,16 @@ func NewServer(keysList []ed25519.PrivateKey) *Server {
 		list[string(kid)] = k
 	}
 
+	workers := runtime.GOMAXPROCS(0) * 8
 	return &Server{
-		keys: list,
+		keys:         list,
+		queryWorkers: workers,
+		queryQueue:   make(chan serverQueryTask, workers*serverQueryQueuePerWorker),
 	}
 }
 
-func (s *Server) SetMessageHandler(handler func(ctx context.Context, client *ServerClient, msg tl.Serializable) error) {
-	s.messageHandler = handler
+func (s *Server) SetQueryHandler(handler func(ctx context.Context, client *ServerClient, query tl.Serializable) (tl.Serializable, error)) {
+	s.queryHandler = handler
 }
 
 func (s *Server) SetDisconnectHook(hook func(client *ServerClient)) {
@@ -83,7 +109,14 @@ func (s *Server) Listen(addr string) error {
 	if err != nil {
 		return err
 	}
+
+	return s.listen(listener)
+}
+
+func (s *Server) listen(listener net.Listener) error {
 	s.listener = listener
+
+	s.startQueryWorkers()
 
 	for {
 		conn, err := listener.Accept()
@@ -106,9 +139,10 @@ func (s *Server) Listen(addr string) error {
 		}
 
 		sc := &ServerClient{
-			conn: conn,
-			ip:   ip[:ipSplit],
-			port: uint16(port),
+			conn:      conn,
+			sendQueue: make(chan tl.Serializable, serverClientSendQueueSize),
+			ip:        ip[:ipSplit],
+			port:      uint16(port),
 		}
 
 		if s.connectHook != nil {
@@ -119,6 +153,51 @@ func (s *Server) Listen(addr string) error {
 		}
 
 		go s.serve(sc)
+	}
+}
+
+func (s *Server) startQueryWorkers() {
+	s.workersOnce.Do(func() {
+		workers := s.queryWorkers
+		if workers <= 0 {
+			workers = 1
+		}
+		if s.queryQueue == nil {
+			s.queryQueue = make(chan serverQueryTask, workers*serverQueryQueuePerWorker)
+		}
+
+		for i := 0; i < workers; i++ {
+			go s.queryWorker()
+		}
+	})
+}
+
+func (s *Server) queryWorker() {
+	for task := range s.queryQueue {
+		select {
+		case <-task.ctx.Done():
+			task.client.finishQuery()
+			continue
+		default:
+		}
+
+		resp, err := s.queryHandler(task.ctx, task.client, task.query)
+		if err != nil {
+			Logger("failed to handle query:", err.Error())
+			task.client.finishQuery()
+			continue
+		}
+		if resp == nil {
+			task.client.finishQuery()
+			continue
+		}
+
+		select {
+		case <-task.ctx.Done():
+		default:
+			task.client.enqueue(adnl.MessageAnswer{ID: task.queryID, Data: resp})
+		}
+		task.client.finishQuery()
 	}
 }
 
@@ -159,13 +238,17 @@ func (s *Server) serve(client *ServerClient) {
 				return
 			}
 
-			if err = writeEncrypt(client.conn, client.wCrypt, buf); err != nil {
+			if err = writeEncrypt(client.conn, client.wCrypt, buf.data); err != nil {
+				buf.release()
 				Logger("["+client.conn.RemoteAddr().String()+"]", "cannot write handshake response packet:", err.Error())
 				return
 			}
+			buf.release()
 
 			// remove timeout
 			_ = client.conn.SetReadDeadline(time.Time{})
+
+			go client.writeLoop(clientCtx)
 
 			continue
 		}
@@ -178,15 +261,17 @@ func (s *Server) serve(client *ServerClient) {
 			return
 		}
 
-		data, err := readData(client.conn, client.rCrypt, sz)
+		packet, err := readData(client.conn, client.rCrypt, sz)
 		if err != nil {
 			return
 		}
+		data := packet
 
 		checksum := data[len(data)-32:]
 		data = data[:len(data)-32]
 
 		if err = validatePacket(data, checksum); err != nil {
+			releasePacketBuffer(packet)
 			return
 		}
 
@@ -195,17 +280,54 @@ func (s *Server) serve(client *ServerClient) {
 
 		var msg tl.Serializable
 		if _, err = tl.Parse(&msg, data, true); err != nil {
+			releasePacketBuffer(packet)
 			Logger("failed to parse incoming message:", err.Error())
 			return
 		}
+		releasePacketBuffer(packet)
 
-		if s.messageHandler == nil {
-			Logger("failed to handle message: no handler set")
-			return
-		}
+		switch m := msg.(type) {
+		case adnl.MessageQuery:
+			if s.queryHandler == nil {
+				Logger("failed to handle query: no handler set")
+				return
+			}
 
-		if err = s.messageHandler(clientCtx, client, msg); err != nil {
-			Logger("failed to handle message:", err.Error())
+			query := m.Data
+			if q, ok := m.Data.(LiteServerQuery); ok {
+				query = q.Data
+			}
+
+			if !client.startQuery() {
+				client.enqueue(adnl.MessageAnswer{
+					ID: m.ID,
+					Data: ServerBusy{
+						Code: 429,
+						Text: "server is busy",
+					},
+				})
+				continue
+			}
+
+			select {
+			case s.queryQueue <- serverQueryTask{ctx: clientCtx, client: client, queryID: m.ID, query: query}:
+			default:
+				client.finishQuery()
+				client.enqueue(adnl.MessageAnswer{
+					ID: m.ID,
+					Data: ServerBusy{
+						Code: 429,
+						Text: "server is busy",
+					},
+				})
+			}
+		case TCPAuthenticate:
+			client.enqueue(TCPAuthenticationNonce{Nonce: make([]byte, 32)})
+		case TCPAuthenticationComplete:
+		case TCPPing:
+			client.enqueue(TCPPong{RandomID: m.RandomID})
+		default:
+			Logger("failed to handle message: unsupported type")
 			return
 		}
 	}
@@ -262,21 +384,72 @@ func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stre
 	return serverKey.Public().(ed25519.PublicKey), w, r, nil
 }
 
-func (s *ServerClient) Send(msg tl.Serializable) error {
-	data, err := tl.Serialize(msg, true)
+func (s *ServerClient) startQuery() bool {
+	sendQueueCap := cap(s.sendQueue)
+	if len(s.sendQueue) >= sendQueueCap {
+		return false
+	}
+
+	for {
+		cur := atomic.LoadInt32(&s.inflight)
+		if int(cur)+len(s.sendQueue) >= sendQueueCap {
+			return false
+		}
+		if atomic.CompareAndSwapInt32(&s.inflight, cur, cur+1) {
+			return true
+		}
+	}
+}
+
+func (s *ServerClient) finishQuery() {
+	atomic.AddInt32(&s.inflight, -1)
+}
+
+func (s *ServerClient) enqueue(msg tl.Serializable) bool {
+	select {
+	case s.sendQueue <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *ServerClient) writeLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-s.sendQueue:
+			if err := s.write(msg); err != nil {
+				Logger("failed to write message:", err.Error())
+				s.Close()
+				return
+			}
+		drain:
+			for i := 1; i < serverWriteDrainMax; i++ {
+				select {
+				case msg = <-s.sendQueue:
+					if err := s.write(msg); err != nil {
+						Logger("failed to write message:", err.Error())
+						s.Close()
+						return
+					}
+				default:
+					break drain
+				}
+			}
+		}
+	}
+}
+
+func (s *ServerClient) write(msg tl.Serializable) error {
+	buf, err := buildPacketSerialized(msg)
 	if err != nil {
 		return err
 	}
+	defer buf.release()
 
-	buf, err := buildPacket(data)
-	if err != nil {
-		return err
-	}
-
-	s.mx.Lock()
-	defer s.mx.Unlock()
-
-	return writeEncrypt(s.conn, s.wCrypt, buf)
+	return writeEncrypt(s.conn, s.wCrypt, buf.data)
 }
 
 func (s *ServerClient) Close() {

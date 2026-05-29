@@ -1,6 +1,7 @@
 package tvm
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -93,8 +94,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, err
 	}
 	if !accountBalance.sub(remainingMsgBalance) {
-		accountBalance.grams.SetInt64(0)
-		accountBalance.extra = map[uint32]*big.Int{}
+		return nil, errors.New("cannot debit bounced message balance from account balance")
 	}
 	out.balance = accountBalance.grams
 	out.extraCurrencies, err = accountBalance.extraDict()

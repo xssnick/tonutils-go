@@ -82,6 +82,7 @@ type transactionSizeLimits struct {
 	maxMsgBits                  uint64
 	maxMsgCells                 uint64
 	maxLibraryCells             uint64
+	maxExtMsgDepth              uint16
 	maxAccStateCells            uint64
 	maxMCAccStateCells          uint64
 	maxAccPublicLibraries       uint64
@@ -105,6 +106,9 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	if msg.MsgType == tlb.MsgTypeExternalOut {
 		return nil, errors.New("external outbound messages cannot be used as transaction input")
 	}
+	if err := transactionValidateMessageStateInitLibs(&msg); err != nil {
+		return nil, err
+	}
 
 	var proof *cell.MerkleProofBuilder
 	if cfg.BuildProof {
@@ -127,6 +131,9 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	blockchainCfg := tlb.BlockchainConfig{
 		Root: cfg.ConfigRoot,
 	}
+	if err = transactionValidateInboundExternalMessage(msgCell, &msg, blockchainCfg); err != nil {
+		return nil, err
+	}
 	isSpecial := transactionIsSpecialAccount(blockchainCfg, runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 
@@ -147,7 +154,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 			return nil, err
 		}
 	}
-	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg, storageFee, importFee, now, storageDueLimits)
+	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg, storageFee, importFee, now, blockchainCfg, storageDueLimits)
 	if err != nil {
 		return nil, err
 	}

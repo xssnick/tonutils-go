@@ -103,7 +103,10 @@ type RLDP struct {
 	recvStreams map[string]*decoderStream
 
 	onQuery      func(transferId []byte, query *Query) error
+	onMessage    func(id []byte, data []byte) error
 	onDisconnect func()
+
+	maxUnexpectedTransferSize atomic.Uint64
 
 	mx sync.RWMutex
 
@@ -227,6 +230,21 @@ func (r *RLDP) SetOnQuery(handler func(transferId []byte, query *Query) error) {
 	r.onQuery = handler
 }
 
+func (r *RLDP) SetOnMessage(handler func(id []byte, data []byte) error) {
+	r.onMessage = handler
+}
+
+func (r *RLDP) SetMaxUnexpectedTransferSize(size uint64) {
+	r.maxUnexpectedTransferSize.Store(size)
+}
+
+func (r *RLDP) unexpectedTransferSizeLimit() uint64 {
+	if size := r.maxUnexpectedTransferSize.Load(); size > 0 {
+		return size
+	}
+	return MaxUnexpectedTransferSize
+}
+
 // Deprecated: use GetADNL().SetDisconnectHandler
 // WARNING: it overrides underlying adnl disconnect handler
 func (r *RLDP) SetOnDisconnect(handler func()) {
@@ -339,7 +357,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 			}
 
 			// unexpected transfers limited to this size, for protection
-			var maxTransferSize = MaxUnexpectedTransferSize
+			maxTransferSize := r.unexpectedTransferSizeLimit()
 			if expected != nil {
 				maxTransferSize = expected.maxSize
 			}
@@ -566,6 +584,16 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 											ResultBytes: rVal.Data,
 										}
 									}
+								case Message:
+									handler := r.onMessage
+									if handler != nil {
+										if err = handler(rVal.ID, rVal.Data); err != nil {
+											Logger("failed to handle message: ", err)
+										}
+										break
+									}
+
+									Logger("[RLDP] skipping unwanted rldp message of type", reflect.TypeOf(res).String())
 								default:
 									Logger("[RLDP] skipping unwanted rldp message of type", reflect.TypeOf(res).String())
 								}
@@ -595,10 +623,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 						stream.currentPart.lastConfirmAt.Add(20*time.Millisecond).Before(tm) {
 						var confirm tl.Serializable
 						if isV2 {
+							// RLDP2 ACKs use 1-based seqno, while messagePart.seqno is 0-based.
 							confirm = ConfirmV2{
 								TransferID:    part.TransferID,
 								Part:          part.Part,
-								MaxSeqno:      stream.currentPart.maxSeqno,
+								MaxSeqno:      stream.currentPart.maxSeqno + 1,
 								ReceivedMask:  stream.currentPart.receivedMask,
 								ReceivedCount: stream.currentPart.receivedNum,
 							}
@@ -738,7 +767,15 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					break
 				}
 
-				if tms, ok := part.sendClock.SentAt(m.MaxSeqno); ok {
+				sentSeqno := m.MaxSeqno
+				if isV2 {
+					if m.MaxSeqno == 0 {
+						break
+					}
+					sentSeqno = m.MaxSeqno - 1
+				}
+
+				if tms, ok := part.sendClock.SentAt(sentSeqno); ok {
 					r.rateCtrl.ObserveRTT(time.Now().UnixMilli() - tms)
 				}
 

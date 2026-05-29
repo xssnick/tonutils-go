@@ -422,6 +422,118 @@ func TestTonopsSignatureAndCurveOps(t *testing.T) {
 	}
 }
 
+func TestTVM14ECRecoverAcceptsEthereumRecoveryIDs(t *testing.T) {
+	hash := sha256.Sum256([]byte("secp256k1-v14"))
+	privBytes := make([]byte, 32)
+	privBytes[31] = 11
+	nonceBytes := make([]byte, 32)
+	nonceBytes[31] = 13
+	v, r, s, pubBytes, ok := localec.SignRecoverable(privBytes, nonceBytes, hash[:])
+	if !ok {
+		t.Fatal("SignRecoverable failed")
+	}
+
+	pushArgs := func(st *vm.State, recoveryID byte) {
+		t.Helper()
+		if err := st.Stack.PushInt(new(big.Int).SetBytes(hash[:])); err != nil {
+			t.Fatalf("push hash: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(int64(recoveryID))); err != nil {
+			t.Fatalf("push recovery id: %v", err)
+		}
+		if err := st.Stack.PushInt(r); err != nil {
+			t.Fatalf("push r: %v", err)
+		}
+		if err := st.Stack.PushInt(s); err != nil {
+			t.Fatalf("push s: %v", err)
+		}
+	}
+
+	ethV := v + 27
+	st := newFuncTestState(t, nil)
+	st.GlobalVersion = 13
+	pushArgs(st, ethV)
+	if err := ECRECOVER().Interpret(st); err != nil {
+		t.Fatalf("ECRECOVER v13 failed: %v", err)
+	}
+	if ok, err := st.Stack.PopBool(); err != nil || ok {
+		t.Fatalf("ECRECOVER v13 ethereum id = (%v, %v), want false", ok, err)
+	}
+
+	st = newFuncTestState(t, nil)
+	st.GlobalVersion = 14
+	pushArgs(st, ethV)
+	if err := ECRECOVER().Interpret(st); err != nil {
+		t.Fatalf("ECRECOVER v14 failed: %v", err)
+	}
+	if ok, err := st.Stack.PopBool(); err != nil || !ok {
+		t.Fatalf("ECRECOVER v14 ethereum id = (%v, %v), want true", ok, err)
+	}
+	gotY, err := st.Stack.PopIntFinite()
+	if err != nil {
+		t.Fatalf("pop y: %v", err)
+	}
+	gotX, err := st.Stack.PopIntFinite()
+	if err != nil {
+		t.Fatalf("pop x: %v", err)
+	}
+	gotPrefix, err := st.Stack.PopIntFinite()
+	if err != nil {
+		t.Fatalf("pop prefix: %v", err)
+	}
+	if gotPrefix.Int64() != int64(pubBytes[0]) ||
+		gotX.Cmp(new(big.Int).SetBytes(pubBytes[1:33])) != 0 ||
+		gotY.Cmp(new(big.Int).SetBytes(pubBytes[33:65])) != 0 {
+		t.Fatal("unexpected ECRECOVER v14 output")
+	}
+}
+
+func TestTVM14ChksignRejectsIdentityPublicKey(t *testing.T) {
+	identityKey := new(big.Int).Lsh(big.NewInt(1), 248)
+	forgedSig := make([]byte, ed25519.SignatureSize)
+	forgedSig[0] = 1
+
+	t.Run("CHKSIGNU", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push hash: %v", err)
+		}
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+			t.Fatalf("push signature: %v", err)
+		}
+		if err := st.Stack.PushInt(identityKey); err != nil {
+			t.Fatalf("push key: %v", err)
+		}
+		if err := CHKSIGNU().Interpret(st); err != nil {
+			t.Fatalf("CHKSIGNU failed: %v", err)
+		}
+		if ok, err := st.Stack.PopBool(); err != nil || ok {
+			t.Fatalf("CHKSIGNU identity key = (%v, %v), want false", ok, err)
+		}
+	})
+
+	t.Run("CHKSIGNS", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xAF, 0x82}, 16).ToSlice()); err != nil {
+			t.Fatalf("push data: %v", err)
+		}
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+			t.Fatalf("push signature: %v", err)
+		}
+		if err := st.Stack.PushInt(identityKey); err != nil {
+			t.Fatalf("push key: %v", err)
+		}
+		if err := CHKSIGNS().Interpret(st); err != nil {
+			t.Fatalf("CHKSIGNS failed: %v", err)
+		}
+		if ok, err := st.Stack.PopBool(); err != nil || ok {
+			t.Fatalf("CHKSIGNS identity key = (%v, %v), want false", ok, err)
+		}
+	})
+}
+
 func TestFeeAndParamAliasOps(t *testing.T) {
 	st := makeFeeState(t)
 	if err := st.Stack.PushInt(big.NewInt(13)); err != nil {

@@ -30,7 +30,8 @@ func SETCONTCTR(i int) (op *helpers.AdvancedOP) {
 			}
 
 			cont0 = vm.ForceControlData(cont0)
-			if !cont0.GetControlData().Save.Define(i, cloneControlRegisterValue(v1)) {
+			data := cont0.GetControlData()
+			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(v1)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 

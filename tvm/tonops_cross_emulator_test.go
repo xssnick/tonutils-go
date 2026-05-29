@@ -51,7 +51,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		^uint32(0):                           negativeConfigValue,
 		uint32(tlb.ConfigParamGlobalVersion): globalVersionCell,
 	})
-	version13RefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vm.DefaultGlobalVersion))
+	defaultRefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vm.DefaultGlobalVersion))
 	feeC7 := feeTestC7(t)
 	myCode := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	inMsgParams := tuple.NewTupleValue(
@@ -960,7 +960,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{stdAddrSlice},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ldstdaddrq",
@@ -968,7 +968,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{stdAddrSlice},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ldstdaddrq_var_fail",
@@ -976,7 +976,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{varAddrSlice},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ldoptstdaddr_none",
@@ -984,7 +984,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{addrNoneTail},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ldoptstdaddrq_none",
@@ -992,7 +992,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{addrNoneTail},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ldoptstdaddrq_std",
@@ -1000,7 +1000,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{stdAddrSlice},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ststdaddr",
@@ -1008,7 +1008,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{stdAddrSlice, cell.BeginCell()},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ststdaddrq",
@@ -1016,7 +1016,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{stdAddrSlice, cell.BeginCell()},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "ststdaddrq_var_fail",
@@ -1024,7 +1024,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{varAddrSlice, cell.BeginCell()},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "stoptstdaddr_none",
@@ -1032,7 +1032,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{nil, cell.BeginCell()},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "stoptstdaddrq_none",
@@ -1040,7 +1040,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{nil, cell.BeginCell()},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:   "stoptstdaddr_std",
@@ -1048,7 +1048,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack:  []any{stdAddrSlice, cell.BeginCell()},
 			exit:   0,
 			c7:     feeC7,
-			refCfg: version13RefCfg,
+			refCfg: defaultRefCfg,
 		},
 		{
 			name:  "rawreserve",

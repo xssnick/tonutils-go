@@ -283,7 +283,6 @@ func (a *ADNL) processMessage(message any) error {
 	case MessageAnswer:
 		a.processAnswer(ms.ID, ms.Data)
 	case MessageCreateChannel:
-		Logger("[ADNL DEBUG] recv MessageCreateChannel", hex.EncodeToString(ms.Key))
 		a.mx.Lock()
 		defer a.mx.Unlock()
 

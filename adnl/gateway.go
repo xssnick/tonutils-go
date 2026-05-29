@@ -392,7 +392,10 @@ func (g *Gateway) listen(rootId []byte) {
 
 			err = cli.client.processPacket(packet, false)
 			if err != nil {
-				Logger("failed to process ADNL packet:", err.Error())
+				Logger("failed to process ADNL packet",
+					"peer", hex.EncodeToString(peerId),
+					"from", pk.from.String(),
+					"error", err.Error())
 				continue
 			}
 
@@ -404,13 +407,17 @@ func (g *Gateway) listen(rootId []byte) {
 		g.mx.RUnlock()
 
 		if proc == nil {
-			Logger("[ADNL DEBUG] no processor for packet", hex.EncodeToString(id), "len", len(buf), "from", pk.from.String())
 			continue
 		}
 
 		atomic.StoreInt64(&proc.lastPacketAt, time.Now().Unix())
 		if err := proc.processor(buf); err != nil {
-			Logger("failed to process packet at server:", err)
+			Logger(
+				"failed to process ADNL channel packet",
+				"id", hex.EncodeToString(id),
+				"from", pk.from.String(),
+				"error", err.Error(),
+			)
 		}
 	}
 }

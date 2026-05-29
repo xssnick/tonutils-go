@@ -16,7 +16,8 @@ func SAVECTR(i int) (op *helpers.AdvancedOP) {
 		FixedSizeBits: 4,
 		Action: func(state *vm.State) error {
 			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
-			if !c0.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i))) {
+			data := c0.GetControlData()
+			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(state.Reg.Get(i))) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 

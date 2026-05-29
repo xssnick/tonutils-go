@@ -27,6 +27,58 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
+var packetBufferSizes = [...]int{
+	512,
+	1024,
+	2 << 10,
+	4 << 10,
+	8 << 10,
+	16 << 10,
+	32 << 10,
+	64 << 10,
+	128 << 10,
+}
+
+var packetBufferPools [len(packetBufferSizes)]sync.Pool
+
+type packetBuffer struct {
+	data   []byte
+	pooled []byte
+}
+
+func (p packetBuffer) release() {
+	releasePacketBuffer(p.pooled)
+}
+
+func acquirePacketBuffer(size int) []byte {
+	for i, bucketSize := range packetBufferSizes {
+		if size <= bucketSize {
+			if buf, ok := packetBufferPools[i].Get().([]byte); ok {
+				return buf[:size]
+			}
+			return make([]byte, size, bucketSize)
+		}
+	}
+	return make([]byte, size)
+}
+
+func releasePacketBuffer(buf []byte) {
+	if buf == nil {
+		return
+	}
+
+	for i, bucketSize := range packetBufferSizes {
+		if cap(buf) == bucketSize {
+			packetBufferPools[i].Put(buf[:bucketSize])
+			return
+		}
+	}
+}
+
+func sameBackingBuffer(a, b []byte) bool {
+	return len(a) > 0 && len(b) > 0 && &a[0] == &b[0]
+}
+
 type connection struct {
 	id        uint32
 	addr      string
@@ -456,16 +508,18 @@ listenLoop:
 			break listenLoop
 		}
 
-		var data []byte
-		data, err = readData(n.tcp, n.rCrypt, sz)
+		var packet []byte
+		packet, err = readData(n.tcp, n.rCrypt, sz)
 		if err != nil {
 			break listenLoop
 		}
+		data := packet
 
 		checksum := data[len(data)-32:]
 		data = data[:len(data)-32]
 
 		if err = validatePacket(data, checksum); err != nil {
+			releasePacketBuffer(packet)
 			break listenLoop
 		}
 
@@ -478,11 +532,13 @@ listenLoop:
 				initialized = true
 				sendListenResult(handshakeResult, nil)
 			}
+			releasePacketBuffer(packet)
 			continue
 		}
 
 		var resp tl.Serializable
 		_, err = tl.Parse(&resp, data, true)
+		releasePacketBuffer(packet)
 		if err != nil {
 			log.Println("failed to parse message:", err.Error())
 			break listenLoop
@@ -608,19 +664,19 @@ func (c *ConnectionPool) startPings(every time.Duration) {
 }
 
 func readSize(conn net.Conn, crypt cipher.Stream) (uint32, error) {
-	size := make([]byte, 4)
-	_, err := io.ReadFull(conn, size)
+	var size [4]byte
+	_, err := io.ReadFull(conn, size[:])
 	if err != nil {
 		return 0, err
 	}
 
 	// decrypt packet
-	crypt.XORKeyStream(size, size)
+	crypt.XORKeyStream(size[:], size[:])
 
-	sz := binary.LittleEndian.Uint32(size)
+	sz := binary.LittleEndian.Uint32(size[:])
 
 	if sz > 16<<20 {
-		return 0, fmt.Errorf("too big size of packet: %s", hex.EncodeToString(size))
+		return 0, fmt.Errorf("too big size of packet: %s", hex.EncodeToString(size[:]))
 	}
 
 	return sz, nil
@@ -631,13 +687,14 @@ func readData(conn net.Conn, crypt cipher.Stream, sz uint32) ([]byte, error) {
 		return nil, fmt.Errorf("too big packet")
 	}
 
-	var result = make([]byte, sz)
+	result := acquirePacketBuffer(int(sz))
 
 	// read exact number of bytes requested, blocking operation
 	read := 0
-	for read < cap(result) {
+	for read < len(result) {
 		num, err := conn.Read(result[read:])
 		if err != nil {
+			releasePacketBuffer(result)
 			return nil, err
 		}
 
@@ -664,22 +721,57 @@ func (e NetworkErr) Unwrap() error {
 	return e.error
 }
 
-func buildPacket(data []byte) ([]byte, error) {
-	buf := make([]byte, 4+32, 4+64+len(data))
+func buildPacket(data []byte) (packetBuffer, error) {
+	raw := acquirePacketBuffer(4 + 64 + len(data))
+	buf := raw[:4+32]
 	binary.LittleEndian.PutUint32(buf, uint32(64+len(data)))
 
 	// nonce
 	if _, err := io.ReadFull(rand.Reader, buf[4:4+32]); err != nil {
-		return nil, err
+		releasePacketBuffer(raw)
+		return packetBuffer{}, err
 	}
 	buf = append(buf, data...)
 
-	hash := sha256.New()
-	hash.Write(buf[4:])
-	checksum := hash.Sum(nil)
+	checksum := sha256.Sum256(buf[4:])
 
-	buf = append(buf, checksum...)
-	return buf, nil
+	buf = append(buf, checksum[:]...)
+	return packetBuffer{data: buf, pooled: raw}, nil
+}
+
+func buildPacketSerialized(msg tl.Serializable) (packetBuffer, error) {
+	raw := acquirePacketBuffer(4 + 32 + tl.DefaultSerializeBufferSize + 32)
+	buf := raw[:4+32]
+
+	if _, err := io.ReadFull(rand.Reader, buf[4:4+32]); err != nil {
+		releasePacketBuffer(raw)
+		return packetBuffer{}, err
+	}
+
+	writer := bytes.NewBuffer(buf)
+	if _, err := tl.Serialize(msg, true, writer); err != nil {
+		releasePacketBuffer(raw)
+		return packetBuffer{}, err
+	}
+
+	buf = writer.Bytes()
+	pooled := raw
+	if !sameBackingBuffer(buf, raw) {
+		releasePacketBuffer(raw)
+		pooled = nil
+	}
+
+	payloadLen := len(buf) - (4 + 32)
+	binary.LittleEndian.PutUint32(buf, uint32(64+payloadLen))
+
+	checksum := sha256.Sum256(buf[4:])
+	buf = append(buf, checksum[:]...)
+	if pooled != nil && !sameBackingBuffer(buf, pooled) {
+		releasePacketBuffer(pooled)
+		pooled = nil
+	}
+
+	return packetBuffer{data: buf, pooled: pooled}, nil
 }
 
 func (n *connection) send(data []byte) error {
@@ -687,11 +779,12 @@ func (n *connection) send(data []byte) error {
 	if err != nil {
 		return err
 	}
+	defer buf.release()
 
 	n.wLock.Lock()
 	defer n.wLock.Unlock()
 
-	return writeEncrypt(n.tcp, n.wCrypt, buf)
+	return writeEncrypt(n.tcp, n.wCrypt, buf.data)
 }
 
 func writeEncrypt(conn net.Conn, crypt cipher.Stream, buf []byte) error {
@@ -818,11 +911,9 @@ func validatePacket(data []byte, recvChecksum []byte) error {
 		return errors.New("too small packet")
 	}
 
-	hash := sha256.New()
-	hash.Write(data)
-	checksum := hash.Sum(nil)
+	checksum := sha256.Sum256(data)
 
-	if !bytes.Equal(recvChecksum, checksum) {
+	if !bytes.Equal(recvChecksum, checksum[:]) {
 		return errors.New("checksum packet")
 	}
 

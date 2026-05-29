@@ -347,6 +347,175 @@ func TestRLDP_handleMessage(t *testing.T) {
 	}
 }
 
+func TestRLDP_handleMessageRoutesMessage(t *testing.T) {
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+	messageID := make([]byte, 32)
+	if _, err := rand.Read(messageID); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := []byte{1, 2, 3, 4}
+	message := Message{ID: messageID, Data: payload}
+	data, err := tl.Serialize(message, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	symbolSize := uint32(len(data))
+	enc, err := roundrobin.NewEncoder(data, symbolSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	part := MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   symbolSize,
+			SymbolsCount: 1,
+		},
+		Part:      0,
+		TotalSize: uint64(len(data)),
+		Seqno:     0,
+		Data:      enc.GenSymbol(0),
+	}
+
+	called := false
+	cli := NewClient(MockADNL{
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+	cli.SetOnMessage(func(id []byte, data []byte) error {
+		called = true
+		if !bytes.Equal(id, messageID) {
+			t.Fatalf("unexpected message id")
+		}
+		if !bytes.Equal(data, payload) {
+			t.Fatalf("unexpected message payload")
+		}
+		return nil
+	})
+
+	if err = cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("expected message handler call")
+	}
+}
+
+func TestRLDP_handleMessageSendsV2ConfirmWithOneBasedMaxSeqno(t *testing.T) {
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	data := bytes.Repeat([]byte{0x42}, 1024)
+	enc, err := roundrobin.NewEncoder(data, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	part := MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   512,
+			SymbolsCount: 2,
+		},
+		Part:      0,
+		TotalSize: uint64(len(data)),
+		Seqno:     0,
+		Data:      enc.GenSymbol(0),
+	}
+
+	var sent tl.Serializable
+	cli := NewClient(MockADNL{
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			sent = req
+			return nil
+		},
+	})
+
+	if err = cli.handleMessage(&adnl.MessageCustom{Data: MessagePartV2(part)}); err != nil {
+		t.Fatal(err)
+	}
+
+	confirm, ok := sent.(ConfirmV2)
+	if !ok {
+		t.Fatalf("got confirm type %T, want ConfirmV2", sent)
+	}
+	if confirm.MaxSeqno != 1 {
+		t.Fatalf("got max seqno %d, want 1", confirm.MaxSeqno)
+	}
+	if confirm.ReceivedMask != 1 {
+		t.Fatalf("got received mask %d, want 1", confirm.ReceivedMask)
+	}
+	if confirm.ReceivedCount != 1 {
+		t.Fatalf("got received count %d, want 1", confirm.ReceivedCount)
+	}
+}
+
+func TestRLDP_handleMessageUsesClientUnexpectedTransferLimit(t *testing.T) {
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := Message{ID: bytes.Repeat([]byte{0x44}, 32), Data: bytes.Repeat([]byte{0x55}, int(MaxUnexpectedTransferSize)+1)}
+	data, err := tl.Serialize(payload, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	enc, err := roundrobin.NewEncoder(data, uint32(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	part := MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   uint32(len(data)),
+			SymbolsCount: 1,
+		},
+		Part:      0,
+		TotalSize: uint64(len(data)),
+		Seqno:     0,
+		Data:      enc.GenSymbol(0),
+	}
+
+	called := false
+	cli := NewClient(MockADNL{
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+	cli.SetMaxUnexpectedTransferSize(uint64(len(data)))
+	cli.SetOnMessage(func(id []byte, data []byte) error {
+		called = true
+		if !bytes.Equal(id, payload.ID) {
+			t.Fatalf("unexpected message id")
+		}
+		if !bytes.Equal(data, payload.Data) {
+			t.Fatalf("unexpected message payload")
+		}
+		return nil
+	})
+
+	if err = cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("expected message handler call")
+	}
+}
+
 func TestRLDP_handleMessageNoLostWakeupOnDrainEdge(t *testing.T) {
 	defer func() {
 		streamDrainEmptyHook = nil

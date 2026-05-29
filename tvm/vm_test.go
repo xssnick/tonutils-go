@@ -25,8 +25,14 @@ func TestTVMSetGlobalVersionRejectsOldVersions(t *testing.T) {
 	if err := v.SetGlobalVersion(MinSupportedGlobalVersion - 1); err == nil {
 		t.Fatal("SetGlobalVersion should reject old global version")
 	}
+	if err := v.SetGlobalVersion(MaxSupportedGlobalVersion + 1); err == nil {
+		t.Fatal("SetGlobalVersion should reject new unsupported global version")
+	}
 	if err := v.SetGlobalVersion(MinSupportedGlobalVersion); err != nil {
-		t.Fatalf("SetGlobalVersion default version: %v", err)
+		t.Fatalf("SetGlobalVersion minimum version: %v", err)
+	}
+	if err := v.SetGlobalVersion(MaxSupportedGlobalVersion); err != nil {
+		t.Fatalf("SetGlobalVersion maximum version: %v", err)
 	}
 }
 

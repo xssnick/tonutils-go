@@ -98,6 +98,17 @@ func qInvalidResultCount(d uint8) int {
 	return 1
 }
 
+func qShift256Value(x *big.Int) (uint, bool) {
+	if x == nil || !x.IsInt64() {
+		return 0, false
+	}
+	v := x.Int64()
+	if v < 0 || v > 256 {
+		return 0, false
+	}
+	return uint(v), true
+}
+
 func qCompoundOP(name func(uint8) string, prefix helpers.BitPrefix, args uint8, action func(*vm.State, uint8) error) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 4,
@@ -230,9 +241,13 @@ func qShrModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		shift, err := state.Stack.PopIntRange(0, 256)
+		shift, err := state.Stack.PopInt()
 		if err != nil {
 			return err
+		}
+		shiftValue, shiftValid := qShift256Value(shift)
+		if !shiftValid && state.GlobalVersion < 14 {
+			return vmerr.Error(vmerr.CodeRangeCheck)
 		}
 		var w *big.Int
 		if add {
@@ -246,14 +261,14 @@ func qShrModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		if x == nil || (add && w == nil) {
+		if x == nil || (add && w == nil) || !shiftValid {
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}
 		dividend := new(big.Int).Set(x)
 		if add {
 			dividend.Add(dividend, w)
 		}
-		divider := new(big.Int).Lsh(big.NewInt(1), uint(shift.Uint64()))
+		divider := new(big.Int).Lsh(big.NewInt(1), shiftValue)
 		q, r, err := qRoundDiv(dividend, divider, args)
 		if err != nil {
 			return err

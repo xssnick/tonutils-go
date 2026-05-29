@@ -75,6 +75,95 @@ func mustRoundTripMathAdvanced(t *testing.T, src *helpers.AdvancedOP, dst *helpe
 	}
 }
 
+func requireMathNaN(t *testing.T, got any) {
+	t.Helper()
+	if _, ok := got.(vm.NaN); !ok {
+		t.Fatalf("expected NaN, got %T (%v)", got, got)
+	}
+}
+
+func TestTVM14ImmediateShiftNaN(t *testing.T) {
+	t.Run("v13 legacy nonquiet immediate shift turns NaN into zero", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := LSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("LSHIFT# v13 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("LSHIFT# v13 result = %d, want 0", got)
+		}
+	})
+
+	t.Run("v14 nonquiet immediate shift rejects NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 14
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, RSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("quiet immediate shifts split v13 and v14", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push v13 NaN: %v", err)
+		}
+		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QLSHIFT# v13 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("QLSHIFT# v13 result = %d, want 0", got)
+		}
+
+		st = newMathCoverageState()
+		st.GlobalVersion = 14
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push v14 NaN: %v", err)
+		}
+		if err := QRSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT# v14 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v14 result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
+func TestTVM14QuietShrModInvalidShift(t *testing.T) {
+	t.Run("v13 legacy quiet compound shift throws range check", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		pushMathCoverageInts(t, st, 123)
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push shift NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, qShrModFamily(4).Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v14 quiet compound shift returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 14
+		pushMathCoverageInts(t, st, 123)
+		if err := st.Stack.PushInt(big.NewInt(257)); err != nil {
+			t.Fatalf("push out-of-range shift: %v", err)
+		}
+		if err := qShrModFamily(4).Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT v14 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v14 result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
 func TestMathBasicWrappers(t *testing.T) {
 	tests := []struct {
 		name string

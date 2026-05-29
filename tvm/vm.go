@@ -39,7 +39,10 @@ type TVM struct {
 	globalVersion int
 }
 
-const MinSupportedGlobalVersion = 13
+const (
+	MinSupportedGlobalVersion = 13
+	MaxSupportedGlobalVersion = 14
+)
 
 func NewTVM() *TVM {
 	tvm := &TVM{
@@ -70,6 +73,9 @@ func cachedOPGetter(op vm.OP) vm.OPGetter {
 func (tvm *TVM) SetGlobalVersion(version int) error {
 	if version < MinSupportedGlobalVersion {
 		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, MinSupportedGlobalVersion)
+	}
+	if version > MaxSupportedGlobalVersion {
+		return fmt.Errorf("unsupported global version %d, maximum supported is %d", version, MaxSupportedGlobalVersion)
 	}
 
 	tvm.globalVersion = version
@@ -191,6 +197,23 @@ func (tvm *TVM) ExecuteDetailed(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Ga
 
 func (tvm *TVM) ExecuteDetailedWithLibraries(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
 	res, err := tvm.executeDetailedWithLibrariesRaw(code, data, c7, gas, stack, libraries...)
+	if err != nil {
+		if _, ok := vmerr.ErrorCode(err); ok {
+			return res, nil
+		}
+		return nil, err
+	}
+	return res, nil
+}
+
+func (tvm *TVM) ExecuteGetMethodDetailed(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) (*ExecutionResult, error) {
+	return tvm.ExecuteGetMethodDetailedWithLibraries(code, data, c7, gas, stack)
+}
+
+func (tvm *TVM) ExecuteGetMethodDetailedWithLibraries(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
+	res, err := tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{
+		skipFinalCommit: true,
+	}, libraries...)
 	if err != nil {
 		if _, ok := vmerr.ErrorCode(err); ok {
 			return res, nil

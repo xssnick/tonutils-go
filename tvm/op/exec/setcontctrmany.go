@@ -31,7 +31,7 @@ func setContCtrManyCommon(state *vm.State, mask uint8) error {
 		if mask&(1<<uint(i)) == 0 {
 			continue
 		}
-		if !data.Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i))) {
+		if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(state.Reg.Get(i))) {
 			return vmerr.Error(vmerr.CodeTypeCheck)
 		}
 	}

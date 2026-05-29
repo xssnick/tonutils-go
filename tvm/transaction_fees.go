@@ -442,6 +442,7 @@ func transactionGetSizeLimits(cfg tlb.BlockchainConfig) transactionSizeLimits {
 		maxMsgBits:                  1 << 21,
 		maxMsgCells:                 1 << 13,
 		maxLibraryCells:             1000,
+		maxExtMsgDepth:              512,
 		maxAccStateCells:            1 << 16,
 		maxMCAccStateCells:          1 << 11,
 		maxAccPublicLibraries:       256,
@@ -458,10 +459,12 @@ func transactionGetSizeLimits(cfg tlb.BlockchainConfig) transactionSizeLimits {
 		out.maxMsgBits = uint64(v.MaxMsgBits)
 		out.maxMsgCells = uint64(v.MaxMsgCells)
 		out.maxLibraryCells = uint64(v.MaxLibraryCells)
+		out.maxExtMsgDepth = v.MaxExtMsgDepth
 	case tlb.SizeLimitsConfigV2:
 		out.maxMsgBits = uint64(v.MaxMsgBits)
 		out.maxMsgCells = uint64(v.MaxMsgCells)
 		out.maxLibraryCells = uint64(v.MaxLibraryCells)
+		out.maxExtMsgDepth = v.MaxExtMsgDepth
 		out.maxAccStateCells = uint64(v.MaxAccStateCells)
 		out.maxMCAccStateCells = uint64(v.MaxMCAccStateCells)
 		out.maxAccPublicLibraries = uint64(v.MaxAccPublicLibraries)
@@ -490,6 +493,39 @@ func transactionCheckOutboundMessageSize(cfg tlb.BlockchainConfig, srcAddr, dstA
 	}
 	fine := transactionComputeActionFineForUsage(cfg, srcAddr, dstAddr, usage, available)
 	return 40, fine, nil
+}
+
+func transactionValidateInboundExternalMessage(msgCell *cell.Cell, msg *tlb.Message, cfg tlb.BlockchainConfig) error {
+	if msg == nil || msg.MsgType != tlb.MsgTypeExternalIn || transactionGlobalVersion(cfg) < 10 {
+		return nil
+	}
+
+	dst := msg.AsExternalIn().DstAddr
+	if dst == nil || dst.Type() != address.StdAddress || dst.Anycast() != nil {
+		return errors.New("invalid inbound external message destination")
+	}
+
+	limits := transactionGetSizeLimits(cfg)
+	if msgCell != nil && msgCell.Depth() > limits.maxExtMsgDepth {
+		return errors.New("inbound external message depth exceeds limit")
+	}
+
+	usage, err := transactionMessageTailUsage(msgCell)
+	if err != nil {
+		return err
+	}
+	if usage.bits > limits.maxMsgBits || usage.cells > limits.maxMsgCells {
+		return errors.New("inbound external message size exceeds limit")
+	}
+
+	depth, err := transactionMaxMerkleDepth(msgCell)
+	if err != nil {
+		return err
+	}
+	if depth > 2 {
+		return errors.New("inbound external message merkle depth exceeds limit")
+	}
+	return nil
 }
 
 func transactionComputeActionFine(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell, available *big.Int) (*big.Int, error) {
@@ -701,6 +737,15 @@ func transactionMaxMerkleDepthForRoots(roots ...*cell.Cell) (uint16, error) {
 
 func transactionIsMasterchain(addr *address.Address) bool {
 	return addr != nil && addr.Type() == address.StdAddress && addr.Workchain() == -1
+}
+
+func transactionIsBlackHoleAccount(cfg tlb.BlockchainConfig, addr *address.Address) bool {
+	if !transactionIsMasterchain(addr) || len(addr.Data()) != 32 {
+		return false
+	}
+
+	burning, err := cfg.GetBurningConfig()
+	return err == nil && len(burning.BlackholeAddr) == 32 && bytes.Equal(burning.BlackholeAddr, addr.Data())
 }
 
 func transactionIsSpecialAccount(cfg tlb.BlockchainConfig, addr *address.Address) bool {
