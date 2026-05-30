@@ -22,7 +22,7 @@ func ISZERO() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Sign() == 0)
 		},
-		Name:      "ABS",
+		Name:      "ISZERO",
 		BitPrefix: helpers.BytesPrefix(0xC0, 0x00),
 	}
 }

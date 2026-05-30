@@ -179,6 +179,10 @@ func storeLEIntOp(mode uint64) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			builder, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err

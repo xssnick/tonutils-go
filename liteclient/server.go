@@ -46,7 +46,7 @@ type ServerClient struct {
 	rCrypt    cipher.Stream
 	serverKey ed25519.PublicKey
 
-	sendQueue chan tl.Serializable
+	sendQueue chan packetBuffer
 	inflight  int32
 
 	port uint16
@@ -140,7 +140,7 @@ func (s *Server) listen(listener net.Listener) error {
 
 		sc := &ServerClient{
 			conn:      conn,
-			sendQueue: make(chan tl.Serializable, serverClientSendQueueSize),
+			sendQueue: make(chan packetBuffer, serverClientSendQueueSize),
 			ip:        ip[:ipSplit],
 			port:      uint16(port),
 		}
@@ -174,30 +174,32 @@ func (s *Server) startQueryWorkers() {
 
 func (s *Server) queryWorker() {
 	for task := range s.queryQueue {
-		select {
-		case <-task.ctx.Done():
-			task.client.finishQuery()
-			continue
-		default:
-		}
+		s.handleQueryTask(task)
+	}
+}
 
-		resp, err := s.queryHandler(task.ctx, task.client, task.query)
-		if err != nil {
-			Logger("failed to handle query:", err.Error())
-			task.client.finishQuery()
-			continue
-		}
-		if resp == nil {
-			task.client.finishQuery()
-			continue
-		}
+func (s *Server) handleQueryTask(task serverQueryTask) {
+	defer task.client.finishQuery()
 
-		select {
-		case <-task.ctx.Done():
-		default:
-			task.client.enqueue(adnl.MessageAnswer{ID: task.queryID, Data: resp})
-		}
-		task.client.finishQuery()
+	select {
+	case <-task.ctx.Done():
+		return
+	default:
+	}
+
+	resp, err := s.queryHandler(task.ctx, task.client, task.query)
+	if err != nil {
+		Logger("failed to handle query:", err.Error())
+		return
+	}
+	if resp == nil {
+		return
+	}
+
+	select {
+	case <-task.ctx.Done():
+	default:
+		task.client.enqueue(adnl.MessageAnswer{ID: task.queryID, Data: resp})
 	}
 }
 
@@ -205,7 +207,7 @@ func (s *Server) serve(client *ServerClient) {
 	clientCtx, stopClient := context.WithCancel(context.Background())
 	defer func() {
 		stopClient()
-		_ = client.conn.Close()
+		client.Close()
 		if s.disconnectHook != nil {
 			s.disconnectHook(client)
 		}
@@ -406,50 +408,98 @@ func (s *ServerClient) finishQuery() {
 }
 
 func (s *ServerClient) enqueue(msg tl.Serializable) bool {
+	if len(s.sendQueue) >= cap(s.sendQueue) {
+		return false
+	}
+
+	packet, err := buildPacketSerialized(msg)
+	if err != nil {
+		Logger("failed to build response packet:", err.Error())
+		return false
+	}
+
 	select {
-	case s.sendQueue <- msg:
+	case s.sendQueue <- packet:
 		return true
 	default:
+		packet.release()
 		return false
 	}
 }
 
 func (s *ServerClient) writeLoop(ctx context.Context) {
+	defer s.releaseQueuedPackets()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-s.sendQueue:
-			if err := s.write(msg); err != nil {
-				Logger("failed to write message:", err.Error())
-				s.Close()
-				return
-			}
+		case packet := <-s.sendQueue:
+			var batch [serverWriteDrainMax]packetBuffer
+			batch[0] = packet
+			batchSize := 1
+
 		drain:
-			for i := 1; i < serverWriteDrainMax; i++ {
+			for batchSize < serverWriteDrainMax {
 				select {
-				case msg = <-s.sendQueue:
-					if err := s.write(msg); err != nil {
-						Logger("failed to write message:", err.Error())
-						s.Close()
-						return
-					}
+				case batch[batchSize] = <-s.sendQueue:
+					batchSize++
 				default:
 					break drain
 				}
+			}
+
+			if err := s.writeBatch(batch[:batchSize]); err != nil {
+				Logger("failed to write message:", err.Error())
+				s.Close()
+				return
 			}
 		}
 	}
 }
 
-func (s *ServerClient) write(msg tl.Serializable) error {
-	buf, err := buildPacketSerialized(msg)
-	if err != nil {
-		return err
-	}
-	defer buf.release()
+func (s *ServerClient) writeBatch(packets []packetBuffer) error {
+	defer releasePacketBatch(packets)
 
-	return writeEncrypt(s.conn, s.wCrypt, buf.data)
+	var buffersRaw [serverWriteDrainMax][]byte
+	var total int64
+	for i, packet := range packets {
+		s.wCrypt.XORKeyStream(packet.data, packet.data)
+		buffersRaw[i] = packet.data
+		total += int64(len(packet.data))
+	}
+
+	_ = s.conn.SetWriteDeadline(time.Now().Add(7 * time.Second))
+
+	buffers := net.Buffers(buffersRaw[:len(packets)])
+	written, err := buffers.WriteTo(s.conn)
+	if err != nil {
+		_ = s.conn.Close()
+		return NetworkErr{err}
+	}
+	if written != total {
+		_ = s.conn.Close()
+		return NetworkErr{io.ErrShortWrite}
+	}
+
+	return nil
+}
+
+func releasePacketBatch(packets []packetBuffer) {
+	for _, packet := range packets {
+		packet.release()
+	}
+}
+
+func (s *ServerClient) releaseQueuedPackets() {
+	for {
+		select {
+		case packet := <-s.sendQueue:
+			packet.release()
+		default:
+			return
+		}
+	}
 }
 
 func (s *ServerClient) Close() {

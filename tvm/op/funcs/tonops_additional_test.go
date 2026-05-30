@@ -1014,7 +1014,8 @@ func TestTonActionAndSendMsgOps(t *testing.T) {
 		}
 
 		stat := newStorageStat(10, st)
-		if !addMessageTailStorage(stat, msgCell, 0) {
+		ok, err := addMessageTailStorage(stat, msgCell, 0)
+		if err != nil || !ok {
 			t.Fatalf("addMessageTailStorage should succeed, got %+v", stat)
 		}
 

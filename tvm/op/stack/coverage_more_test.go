@@ -270,7 +270,15 @@ func TestPushSliceInlineForms(t *testing.T) {
 
 func TestPushContRoundTripAndInterpret(t *testing.T) {
 	small := cell.BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
+	smallMax := cell.BeginCell().MustStoreSlice(make([]byte, 15), 15*8).EndCell()
+	bigNoRefs := cell.BeginCell().MustStoreSlice(make([]byte, 16), 16*8).EndCell()
 	big := cell.BeginCell().MustStoreUInt(0xEF, 8).MustStoreRef(cell.BeginCell().MustStoreUInt(0x11, 8).EndCell()).EndCell()
+	fourRefs := cell.BeginCell().
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		EndCell()
 	ref := cell.BeginCell().
 		MustStoreUInt(0xAA, 8).
 		MustStoreRef(cell.BeginCell().EndCell()).
@@ -288,7 +296,10 @@ func TestPushContRoundTripAndInterpret(t *testing.T) {
 		bits     int64
 	}{
 		{name: "Small", cont: small, newOp: PUSHCONT, typ: "SMALL", wantText: "SMALL PUSHCONT", bits: 8},
+		{name: "SmallMax15Bytes", cont: smallMax, newOp: PUSHCONT, typ: "SMALL", wantText: "SMALL PUSHCONT", bits: 8},
+		{name: "BigNoRefs16Bytes", cont: bigNoRefs, newOp: PUSHCONT, typ: "BIG", wantText: "BIG PUSHCONT", bits: 16},
 		{name: "Big", cont: big, newOp: PUSHCONT, typ: "BIG", wantText: "BIG PUSHCONT", bits: 16},
+		{name: "RefByRefs", cont: fourRefs, newOp: PUSHCONT, typ: "REF", wantText: "PUSHREFCONT", bits: 8},
 		{name: "Ref", cont: ref, newOp: PUSHREFCONT, typ: "REF", wantText: "PUSHREFCONT", bits: 8},
 	}
 

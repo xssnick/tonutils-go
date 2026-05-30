@@ -196,6 +196,10 @@ func (op *OpSTSLICECONST) Interpret(state *vm.State) error {
 func ENDCST() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			src, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err

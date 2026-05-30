@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tl"
+	"net"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 func init() {
@@ -145,20 +147,23 @@ func Test_ServerProxy(t *testing.T) {
 		println("PROXYING QUERY:", reflect.TypeOf(query).String())
 
 		var resp tl.Serializable
-		if err = client.QueryLiteserver(context.Background(), query, &resp); err != nil {
+		if err := client.QueryLiteserver(context.Background(), query, &resp); err != nil {
 			return nil, err
 		}
 		return resp, nil
 	})
 	defer s.Close()
 
-	addr := "127.0.0.1:7657"
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal("listen err:", err.Error())
+	}
+	addr := ln.Addr().String()
 	go func() {
-		if err := s.Listen(addr); err != nil {
+		if err := s.listen(ln); err != nil {
 			t.Fatal("listen err:", err.Error())
 		}
 	}()
-	time.Sleep(300 * time.Millisecond)
 
 	clientProxy := NewConnectionPool()
 	if err := clientProxy.AddConnection(context.Background(), addr, base64.StdEncoding.EncodeToString(pub)); err != nil {

@@ -335,7 +335,7 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 		}
 
 		stat := newStorageStat(10, nil)
-		if addMessageTailStorage(stat, cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(), 1) {
+		if ok, err := addMessageTailStorage(stat, cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(), 1); err == nil && ok {
 			t.Fatal("addMessageTailStorage should fail when skipping too many refs")
 		}
 

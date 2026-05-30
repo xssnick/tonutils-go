@@ -36,6 +36,7 @@ func TestTVMCrossEmulatorArithOps(t *testing.T) {
 		{name: "pushpow2dec", code: codeFromBuilders(t, mathop.PUSHPOW2DEC(4).Serialize()), exit: 0},
 		{name: "pushnegpow2", code: codeFromBuilders(t, mathop.PUSHNEGPOW2(4).Serialize()), exit: 0},
 		{name: "pushnan_opcode", code: codeFromOpcodes(t, 0x83FF), exit: 0},
+		{name: "pushpow2_max_constructor_nan", code: codeFromBuilders(t, mathop.PUSHPOW2(255).Serialize()), exit: 0},
 		{name: "addint_negative", code: codeFromBuilders(t, mathop.ADDINT(-5).Serialize()), stack: []any{int64(9)}, exit: 0},
 		{name: "mulint_negative", code: codeFromBuilders(t, mathop.MULINT(-3).Serialize()), stack: []any{int64(7)}, exit: 0},
 		{name: "add_short_stack_nan", code: codeFromBuilders(t, mathop.SUM().Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeStackUnderflow)},
@@ -166,6 +167,56 @@ func TestTVMCrossEmulatorArithOps(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTVMCrossEmulatorArithOpsSignedRoundingEdges(t *testing.T) {
+	maxTVMInt := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	largePositive := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(3))
+	largeNegative := new(big.Int).Neg(new(big.Int).Set(largePositive))
+
+	tests := []arithParityCase{
+		{name: "div_floor_negative_divisor", code: codeFromBuilders(t, mathop.DIV().Serialize()), stack: []any{int64(5), int64(-3)}, exit: 0},
+		{name: "div_floor_negative_dividend", code: codeFromBuilders(t, mathop.DIV().Serialize()), stack: []any{int64(-5), int64(3)}, exit: 0},
+		{name: "divr_tie_positive", code: codeFromBuilders(t, mathop.DIVR().Serialize()), stack: []any{int64(5), int64(2)}, exit: 0},
+		{name: "divr_tie_negative_dividend", code: codeFromBuilders(t, mathop.DIVR().Serialize()), stack: []any{int64(-5), int64(2)}, exit: 0},
+		{name: "divr_tie_negative_divisor", code: codeFromBuilders(t, mathop.DIVR().Serialize()), stack: []any{int64(5), int64(-2)}, exit: 0},
+		{name: "divc_negative_divisor", code: codeFromBuilders(t, mathop.DIVC().Serialize()), stack: []any{int64(5), int64(-3)}, exit: 0},
+		{name: "divmodc_negative_dividend", code: codeFromBuilders(t, mathop.DIVMODC().Serialize()), stack: []any{int64(-5), int64(3)}, exit: 0},
+		{name: "modc_negative_divisor", code: codeFromBuilders(t, mathop.MODC().Serialize()), stack: []any{int64(5), int64(-3)}, exit: 0},
+		{name: "qdivc_negative_divisor", code: arithRawCode(t, 0xb7a906, 24), stack: []any{int64(5), int64(-3)}, exit: 0},
+		{name: "qdivmodr_tie_negative_dividend", code: arithRawCode(t, 0xb7a90d, 24), stack: []any{int64(-5), int64(2)}, exit: 0},
+
+		{name: "rshiftr_tie_negative", code: codeFromBuilders(t, mathop.RSHIFTR().Serialize()), stack: []any{int64(-5), int64(1)}, exit: 0},
+		{name: "rshiftc_negative", code: codeFromBuilders(t, mathop.RSHIFTC().Serialize()), stack: []any{int64(-5), int64(1)}, exit: 0},
+		{name: "modpow2r_tie_negative", code: codeFromBuilders(t, mathop.MODPOW2R().Serialize()), stack: []any{int64(-5), int64(1)}, exit: 0},
+		{name: "modpow2c_negative", code: codeFromBuilders(t, mathop.MODPOW2C().Serialize()), stack: []any{int64(-5), int64(1)}, exit: 0},
+		{name: "rshiftr_code_tie_negative", code: codeFromBuilders(t, mathop.RSHIFTRCODE(1).Serialize()), stack: []any{int64(-5)}, exit: 0},
+		{name: "rshiftc_code_mod_negative", code: codeFromBuilders(t, mathop.RSHIFTCCODEMOD(1).Serialize()), stack: []any{int64(-5)}, exit: 0},
+
+		{name: "adddivmodr_negative_divisor", code: codeFromBuilders(t, mathop.ADDDIVMODR().Serialize()), stack: []any{int64(5), int64(2), int64(-3)}, exit: 0},
+		{name: "muldivr_negative_product", code: codeFromBuilders(t, mathop.MULDIVR().Serialize()), stack: []any{int64(-5), int64(3), int64(2)}, exit: 0},
+		{name: "mulmodc_negative_divisor", code: codeFromBuilders(t, mathop.MULMODC().Serialize()), stack: []any{int64(5), int64(3), int64(-4)}, exit: 0},
+		{name: "mulrshiftrmod_tie_negative", code: codeFromBuilders(t, mathop.MULRSHIFTRMOD_VAR().Serialize()), stack: []any{int64(-5), int64(3), int64(2)}, exit: 0},
+		{name: "mulrshiftr_code_mod_tie_negative", code: codeFromBuilders(t, mathop.MULRSHIFTRCODEMOD(2).Serialize()), stack: []any{int64(-5), int64(3)}, exit: 0},
+		{name: "lshiftdivr_negative_divisor", code: codeFromBuilders(t, mathop.LSHIFTDIVR().Serialize()), stack: []any{int64(5), int64(-3), int64(1)}, exit: 0},
+		{name: "lshiftadddivmodc_negative_dividend", code: codeFromBuilders(t, mathop.LSHIFTADDDIVMODC().Serialize()), stack: []any{int64(-5), int64(1), int64(3), int64(1)}, exit: 0},
+
+		{name: "adddivmod_wide_sum_valid_result", code: codeFromBuilders(t, mathop.ADDDIVMOD().Serialize()), stack: []any{maxTVMInt, int64(1), int64(2)}, exit: 0},
+		{name: "muldiv_wide_product_valid_result", code: codeFromBuilders(t, mathop.MULDIV().Serialize()), stack: []any{maxTVMInt, int64(2), int64(2)}, exit: 0},
+		{name: "lshiftdiv_wide_shift_valid_result", code: codeFromBuilders(t, mathop.LSHIFTDIV().Serialize()), stack: []any{maxTVMInt, int64(2), int64(1)}, exit: 0},
+		{name: "muldiv_wide_product_overflow_result", code: codeFromBuilders(t, mathop.MULDIV().Serialize()), stack: []any{maxTVMInt, int64(2), int64(1)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulrshift_large_negative_round", code: codeFromBuilders(t, mathop.MULRSHIFTR().Serialize()), stack: []any{largeNegative, int64(3), int64(2)}, exit: 0},
+		{name: "mulrshift_large_positive_ceil", code: codeFromBuilders(t, mathop.MULRSHIFTC().Serialize()), stack: []any{largePositive, int64(3), int64(2)}, exit: 0},
+		{name: "pow2_256_overflow", code: codeFromBuilders(t, mathop.POW2().Serialize()), stack: []any{int64(256)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "lshift_max_overflow", code: codeFromBuilders(t, mathop.LSHIFT().Serialize()), stack: []any{maxTVMInt, int64(1)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "qlshift_max_overflow_nan", code: codeFromBuilders(t, mathop.QLSHIFT().Serialize()), stack: []any{maxTVMInt, int64(1)}, exit: 0},
+		{name: "qlshiftdivmod_bad_shift_nan", code: arithRawCode(t, 0xb7a9cc, 24), stack: []any{int64(3), int64(5), int64(257)}, exit: 0},
+		{name: "q_rshiftmod_code_unregistered", code: arithRawCode(t, 0xb7a93c02, 32), exit: int32(vmerr.CodeInvalidOpcode)},
+		{name: "q_mulrshiftmod_code_unregistered", code: arithRawCode(t, 0xb7a9bc02, 32), exit: int32(vmerr.CodeInvalidOpcode)},
+		{name: "q_lshiftdivmod_code_unregistered", code: arithRawCode(t, 0xb7a9dc02, 32), exit: int32(vmerr.CodeInvalidOpcode)},
+	}
+
+	runArithParityCases(t, tests)
 }
 
 type arithParityCase struct {

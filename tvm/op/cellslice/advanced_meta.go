@@ -31,6 +31,10 @@ func sdbeginsXOp(quiet bool) *helpers.SimpleOP {
 
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			needle, err := state.Stack.PopSlice()
 			if err != nil {
 				return err

@@ -24,6 +24,21 @@ func TestTVMCrossEmulatorStackOpsMisc(t *testing.T) {
 	refCell := cell.BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
 	refSlice := cell.BeginCell().MustStoreUInt(0x5, 3).MustStoreRef(refCell).EndCell().MustBeginParse()
 	pushRefContBody := codeFromBuilders(t, stackop.PUSHINT(big.NewInt(77)).Serialize())
+	pushCont16ByteBody := cell.BeginCell().MustStoreSlice(make([]byte, 16), 16*8).EndCell()
+	pushContFourRefsBody := cell.BeginCell().
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		EndCell()
+	negativeLong := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
+	minTVMInt := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
+	maxTVMInt := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	pushIntLongOverflow := cell.BeginCell().
+		MustStoreUInt(0x82, 8).
+		MustStoreUInt(30, 5).
+		MustStoreUInt(1, 2).
+		MustStoreSlice(make([]byte, 33), 257)
 	debugSlice := cell.BeginCell().MustStoreSlice([]byte("debug"), 40).ToSlice()
 
 	tests := []struct {
@@ -45,6 +60,31 @@ func TestTVMCrossEmulatorStackOpsMisc(t *testing.T) {
 			exit:  0,
 		},
 		{
+			name: "pushint_negative_8bit_boundary",
+			code: codeFromBuilders(t, stackop.PUSHINT(big.NewInt(-128)).Serialize()),
+			exit: 0,
+		},
+		{
+			name: "pushint_negative_long_sign_extension",
+			code: codeFromBuilders(t, stackop.PUSHINT(negativeLong).Serialize()),
+			exit: 0,
+		},
+		{
+			name: "pushint_min_tvm_int",
+			code: codeFromBuilders(t, stackop.PUSHINT(minTVMInt).Serialize()),
+			exit: 0,
+		},
+		{
+			name: "pushint_max_tvm_int",
+			code: codeFromBuilders(t, stackop.PUSHINT(maxTVMInt).Serialize()),
+			exit: 0,
+		},
+		{
+			name: "pushint_raw_long_259_noncanonical_overflow",
+			code: codeFromBuilders(t, pushIntLongOverflow),
+			exit: vmerr.CodeIntOverflow,
+		},
+		{
 			name: "pushrefslice_ref_payload",
 			code: codeFromBuilders(t, stackop.PUSHREFSLICE(refSlice).Serialize()),
 			exit: 0,
@@ -58,6 +98,22 @@ func TestTVMCrossEmulatorStackOpsMisc(t *testing.T) {
 			name: "pushrefcont_execute",
 			code: codeFromBuilders(t,
 				stackop.PUSHREFCONT(pushRefContBody).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+			exit: 0,
+		},
+		{
+			name: "pushcont_16_byte_big_form_execute",
+			code: codeFromBuilders(t,
+				stackop.PUSHCONT(pushCont16ByteBody).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+			exit: 0,
+		},
+		{
+			name: "pushcont_four_refs_ref_form_execute",
+			code: codeFromBuilders(t,
+				stackop.PUSHCONT(pushContFourRefsBody).Serialize(),
 				execop.EXECUTE().Serialize(),
 			),
 			exit: 0,

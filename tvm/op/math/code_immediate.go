@@ -4,6 +4,11 @@ import "github.com/xssnick/tonutils-go/tvm/cell"
 
 func newBytePlusOneImmediate(value int8) (get func() int, serialize func() *cell.Builder, deserialize func(*cell.Slice) error) {
 	decoded := int(value)
+	if decoded < 1 {
+		// The byte stores shift-1; keep zero-value registration placeholders
+		// consistent when they are interpreted directly.
+		decoded = 1
+	}
 
 	return func() int {
 			return decoded

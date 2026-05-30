@@ -243,6 +243,28 @@ func TestMathImmediateAndAdvancedAliases(t *testing.T) {
 		}
 	})
 
+	t.Run("BytePlusOneImmediateZeroPlaceholder", func(t *testing.T) {
+		get, serialize, deserialize := newBytePlusOneImmediate(0)
+		if got := get(); got != 1 {
+			t.Fatalf("initial zero placeholder immediate = %d, want 1", got)
+		}
+
+		encoded, err := serialize().EndCell().MustBeginParse().LoadUInt(8)
+		if err != nil {
+			t.Fatalf("load encoded immediate: %v", err)
+		}
+		if encoded != 0 {
+			t.Fatalf("encoded zero placeholder immediate = %d, want 0", encoded)
+		}
+
+		if err := deserialize(vmCellWithByte(t, 255)); err != nil {
+			t.Fatalf("deserialize max immediate: %v", err)
+		}
+		if got := get(); got != 256 {
+			t.Fatalf("decoded max immediate = %d, want 256", got)
+		}
+	})
+
 	t.Run("AdvancedAliasRoundTripAndInterpret", func(t *testing.T) {
 		mustRoundTripMathAdvanced(t, ADDINT(-3), ADDCONST(0), "ADDINT -3")
 		mustRoundTripMathAdvanced(t, MULINT(4), MULCONST(0), "MULINT 4")
@@ -551,6 +573,7 @@ func TestMathAdvancedRoundTripsForQuietAndConstOps(t *testing.T) {
 	mustRoundTripMathAdvanced(t, FITS(3), FITS(0), "FITS 4")
 	mustRoundTripMathAdvanced(t, QFITS(4), QFITS(0), "QFITS 5")
 	mustRoundTripMathAdvanced(t, PUSHPOW2(4), PUSHPOW2(0), "PUSHPOW2 5")
+	mustRoundTripMathAdvanced(t, PUSHPOW2(255), PUSHPOW2(0), "PUSHNAN")
 	mustRoundTripMathAdvanced(t, PUSHPOW2DEC(4), PUSHPOW2DEC(0), "PUSHPOW2DEC 5")
 	mustRoundTripMathAdvanced(t, PUSHNEGPOW2(4), PUSHNEGPOW2(0), "PUSHNEGPOW2 5")
 
@@ -570,4 +593,13 @@ func TestMathAdvancedRoundTripsForQuietAndConstOps(t *testing.T) {
 	if got := popMathCoverageInt(t, st); got != -8 {
 		t.Fatalf("QMULINT result = %d, want -8", got)
 	}
+
+	if err := PUSHPOW2(255).Interpret(st); err != nil {
+		t.Fatalf("PUSHPOW2 max interpret: %v", err)
+	}
+	got, err := st.Stack.PopAny()
+	if err != nil {
+		t.Fatalf("pop PUSHPOW2 max result: %v", err)
+	}
+	requireMathNaN(t, got)
 }

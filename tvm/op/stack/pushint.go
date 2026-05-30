@@ -76,17 +76,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 			return vm.ErrCorruptedOpcode
 		}
 
-		sz := szBytes*8 + 19
-
-		if sz > 257 {
-			_, err = code.LoadUInt(uint(sz - 257)) // kill round bits
-			if err != nil {
-				return err
-			}
-			sz = 257
-		}
-
-		val, err := code.LoadBigInt(uint(sz))
+		val, err := loadPushIntValue(code, uint(szBytes*8+19))
 		if err != nil {
 			return err
 		}
@@ -98,8 +88,45 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 	return vm.ErrCorruptedOpcode
 }
 
+func loadPushIntValue(code *cell.Slice, sz uint) (*big.Int, error) {
+	if sz <= 257 {
+		return code.LoadBigInt(sz)
+	}
+
+	b, err := code.LoadSlice(sz)
+	if err != nil {
+		return nil, err
+	}
+
+	if offset := sz % 8; offset > 0 {
+		for i := len(b) - 1; i >= 0; i-- {
+			b[i] >>= 8 - offset
+			if i > 0 {
+				b[i] += b[i-1] << offset
+			}
+		}
+	}
+
+	val := new(big.Int).SetBytes(b)
+	if val.Bit(int(sz-1)) == 0 {
+		return val, nil
+	}
+
+	return val.Sub(val, new(big.Int).Lsh(big.NewInt(1), sz)), nil
+}
+
+func signedBigIntBits(value *big.Int) int {
+	if value.Sign() >= 0 {
+		return value.BitLen() + 1
+	}
+
+	absMinusOne := new(big.Int).Neg(new(big.Int).Set(value))
+	absMinusOne.Sub(absMinusOne, big.NewInt(1))
+	return absMinusOne.BitLen() + 1
+}
+
 func (op *OpPUSHINT) Serialize() *cell.Builder {
-	bitsSz := op.value.BitLen() + 1 // 1 bit for sign
+	bitsSz := signedBigIntBits(op.value)
 
 	switch {
 	case op.value.IsInt64() && op.value.Int64() >= -5 && op.value.Int64() <= 10:
@@ -125,9 +152,14 @@ func (op *OpPUSHINT) Serialize() *cell.Builder {
 			MustStoreUInt(0x82, 8).
 			MustStoreUInt(l, 5)
 
-		if x > 256 {
-			c.MustStoreUInt(0, uint(x-256))
-			x = 256
+		if x > 257 {
+			padBits := uint(x - 257)
+			if op.value.Sign() < 0 {
+				c.MustStoreUInt((uint64(1)<<padBits)-1, padBits)
+			} else {
+				c.MustStoreUInt(0, padBits)
+			}
+			x = 257
 		}
 
 		c.MustStoreBigInt(op.value, uint(x))
@@ -151,7 +183,7 @@ func (op *OpPUSHINT) InstructionBits() int64 {
 		return 8
 	}
 
-	bitsSz := op.value.BitLen() + 1
+	bitsSz := signedBigIntBits(op.value)
 
 	switch {
 	case op.value.IsInt64() && op.value.Int64() >= -5 && op.value.Int64() <= 10:

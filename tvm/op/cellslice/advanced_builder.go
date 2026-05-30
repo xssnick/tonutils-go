@@ -84,6 +84,10 @@ func endBuilderCell(builder *cell.Builder) (*cell.Cell, error) {
 func STBREF() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			dst, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -112,6 +116,10 @@ func STBREF() *helpers.SimpleOP {
 func STBREFR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			src, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -140,6 +148,10 @@ func STBREFR() *helpers.SimpleOP {
 func STREFR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			cl, err := state.Stack.PopCell()
 			if err != nil {
 				return err
@@ -164,6 +176,10 @@ func STREFR() *helpers.SimpleOP {
 func STREFQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			dst, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -197,6 +213,10 @@ func STREFQ() *helpers.SimpleOP {
 func STBREFQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			dst, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -234,6 +254,10 @@ func STBREFQ() *helpers.SimpleOP {
 func STSLICEQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			dst, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -267,6 +291,10 @@ func STSLICEQ() *helpers.SimpleOP {
 func STBQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			dst, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -300,6 +328,10 @@ func STBQ() *helpers.SimpleOP {
 func STSLICER() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			sl, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
@@ -324,6 +356,10 @@ func STSLICER() *helpers.SimpleOP {
 func STBR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			src, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -348,6 +384,10 @@ func STBR() *helpers.SimpleOP {
 func STBREFRQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			src, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -385,6 +425,10 @@ func STBREFRQ() *helpers.SimpleOP {
 func STREFRQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			cl, err := state.Stack.PopCell()
 			if err != nil {
 				return err
@@ -418,6 +462,10 @@ func STREFRQ() *helpers.SimpleOP {
 func STBRQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			src, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -451,6 +499,10 @@ func STBRQ() *helpers.SimpleOP {
 func STSLICERQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			sl, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
@@ -484,6 +536,10 @@ func STSLICERQ() *helpers.SimpleOP {
 func ENDXC() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			special, err := state.Stack.PopBool()
 			if err != nil {
 				return err

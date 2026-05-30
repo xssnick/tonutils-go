@@ -13,6 +13,12 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
+type testNoopStream struct{}
+
+func (testNoopStream) XORKeyStream(dst, src []byte) {
+	copy(dst, src)
+}
+
 func TestServerQueryQueueReturnsBusy(t *testing.T) {
 	pub, key, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -141,8 +147,10 @@ func waitServerQueueLen(t *testing.T, queue chan serverQueryTask, want int) {
 
 func TestServerClientEnqueueDropsWhenQueueFull(t *testing.T) {
 	sc := &ServerClient{
-		sendQueue: make(chan tl.Serializable, 1),
+		sendQueue: make(chan packetBuffer, 1),
 	}
+	defer sc.releaseQueuedPackets()
+
 	if !sc.enqueue(TCPPong{RandomID: 1}) {
 		t.Fatal("first enqueue failed")
 	}
@@ -157,7 +165,7 @@ func TestServerClientEnqueueDropsWhenQueueFull(t *testing.T) {
 
 func TestServerClientStartQueryLimitsInflight(t *testing.T) {
 	sc := &ServerClient{
-		sendQueue: make(chan tl.Serializable, serverClientSendQueueSize),
+		sendQueue: make(chan packetBuffer, serverClientSendQueueSize),
 	}
 
 	for i := 0; i < serverClientSendQueueSize; i++ {
@@ -177,9 +185,9 @@ func TestServerClientStartQueryLimitsInflight(t *testing.T) {
 
 func TestServerClientStartQueryRejectsFullSendQueue(t *testing.T) {
 	sc := &ServerClient{
-		sendQueue: make(chan tl.Serializable, 1),
+		sendQueue: make(chan packetBuffer, 1),
 	}
-	sc.sendQueue <- TCPPong{RandomID: 1}
+	sc.sendQueue <- packetBuffer{}
 
 	if sc.startQuery() {
 		t.Fatal("query was accepted with full send queue")
@@ -188,9 +196,9 @@ func TestServerClientStartQueryRejectsFullSendQueue(t *testing.T) {
 
 func TestServerClientStartQueryLimitsCombinedPressure(t *testing.T) {
 	sc := &ServerClient{
-		sendQueue: make(chan tl.Serializable, serverClientSendQueueSize),
+		sendQueue: make(chan packetBuffer, serverClientSendQueueSize),
 	}
-	sc.sendQueue <- TCPPong{RandomID: 1}
+	sc.sendQueue <- packetBuffer{}
 
 	for i := 0; i < serverClientSendQueueSize-1; i++ {
 		if !sc.startQuery() {
@@ -200,6 +208,80 @@ func TestServerClientStartQueryLimitsCombinedPressure(t *testing.T) {
 	if sc.startQuery() {
 		t.Fatal("query over combined pressure limit was accepted")
 	}
+}
+
+func TestServerClientWriteBatchWritesPacketsInOrder(t *testing.T) {
+	reader, writer := net.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+
+	packet1, err := buildPacketSerialized(TCPPong{RandomID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet2, err := buildPacketSerialized(TCPPong{RandomID: 2})
+	if err != nil {
+		packet1.release()
+		t.Fatal(err)
+	}
+
+	sc := &ServerClient{
+		conn:   writer,
+		wCrypt: testNoopStream{},
+	}
+
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- sc.writeBatch([]packetBuffer{packet1, packet2})
+	}()
+
+	if got := readTestPong(t, reader); got != 1 {
+		t.Fatalf("first pong id is %d, want 1", got)
+	}
+	if got := readTestPong(t, reader); got != 2 {
+		t.Fatalf("second pong id is %d, want 2", got)
+	}
+
+	if err = <-writeErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readTestPong(t *testing.T, conn net.Conn) int64 {
+	t.Helper()
+
+	sz, err := readSize(conn, testNoopStream{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet, err := readData(conn, testNoopStream{}, sz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := packet
+
+	checksum := data[len(data)-32:]
+	data = data[:len(data)-32]
+
+	if err = validatePacket(data, checksum); err != nil {
+		releasePacketBuffer(packet)
+		t.Fatal(err)
+	}
+
+	data = data[32:]
+
+	var msg tl.Serializable
+	if _, err = tl.Parse(&msg, data, true); err != nil {
+		releasePacketBuffer(packet)
+		t.Fatal(err)
+	}
+	releasePacketBuffer(packet)
+
+	pong, ok := msg.(TCPPong)
+	if !ok {
+		t.Fatalf("unexpected message type %T", msg)
+	}
+	return pong.RandomID
 }
 
 func testMasterchainInfo() MasterchainInfo {

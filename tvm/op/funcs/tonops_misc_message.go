@@ -66,20 +66,20 @@ func newStorageStat(limit uint64, state *vm.State) *storageStat {
 	}
 }
 
-func (s *storageStat) addCell(cl *cell.Cell) bool {
+func (s *storageStat) addCell(cl *cell.Cell) (bool, error) {
 	if cl == nil {
-		return true
+		return true, nil
 	}
 	key := cl.HashKey()
 	if _, ok := s.seen[key]; ok {
-		return true
+		return true, nil
 	}
 	if s.cells >= s.limit {
-		return false
+		return false, nil
 	}
 	if s.state != nil {
 		if err := s.state.Cells.RegisterCellLoadKey(key); err != nil {
-			return false
+			return false, err
 		}
 	}
 	s.seen[key] = struct{}{}
@@ -90,13 +90,13 @@ func (s *storageStat) addCell(cl *cell.Cell) bool {
 		var err error
 		sl, err = s.state.Cells.BeginParseAlreadyLoadedNoCreate(cl)
 		if err != nil {
-			return false
+			return false, err
 		}
 	} else {
 		var err error
 		sl, err = cl.BeginParse()
 		if err != nil {
-			return false
+			return false, err
 		}
 	}
 	s.bits += uint64(sl.BitsLeft())
@@ -104,41 +104,64 @@ func (s *storageStat) addCell(cl *cell.Cell) bool {
 	for i := 0; i < sl.RefsNum(); i++ {
 		ref, err := sl.PeekRefCellAt(i)
 		if err != nil {
-			return false
+			return false, err
 		}
-		if !s.addCell(ref) {
-			return false
+		ok, err := s.addCell(ref)
+		if err != nil || !ok {
+			return ok, err
 		}
 	}
-	return true
+	return true, nil
 }
 
-func (s *storageStat) addSlice(sl *cell.Slice) bool {
+func (s *storageStat) addSlice(sl *cell.Slice) (bool, error) {
 	if sl == nil {
-		return true
+		return true, nil
 	}
 	s.bits += uint64(sl.BitsLeft())
 	s.refs += uint64(sl.RefsNum())
 	for i := 0; i < sl.RefsNum(); i++ {
 		ref, err := sl.PeekRefCellAt(i)
 		if err != nil {
-			return false
+			return false, err
 		}
-		if !s.addCell(ref) {
-			return false
+		ok, err := s.addCell(ref)
+		if err != nil || !ok {
+			return ok, err
 		}
 	}
-	return true
+	return true, nil
 }
 
 func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			bound, err := state.Stack.PopIntFinite()
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
+			bound, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			if bound.Sign() < 0 {
+
+			var cellArg *cell.Cell
+			var sliceArg *cell.Slice
+			if mode&2 != 0 {
+				sl, popErr := state.Stack.PopSlice()
+				if popErr != nil {
+					return popErr
+				}
+				sliceArg = sl
+			} else {
+				cl, popErr := state.Stack.PopMaybeCell()
+				if popErr != nil {
+					return popErr
+				}
+				cellArg = cl
+			}
+
+			if bound == nil || bound.Sign() < 0 {
 				return vmerr.Error(vmerr.CodeRangeCheck, "finite non-negative integer expected")
 			}
 			limit := uint64((1 << 63) - 1)
@@ -147,19 +170,14 @@ func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.Simple
 			}
 
 			stat := newStorageStat(limit, state)
-			ok := true
+			var ok bool
 			if mode&2 != 0 {
-				sl, popErr := state.Stack.PopSlice()
-				if popErr != nil {
-					return popErr
-				}
-				ok = stat.addSlice(sl)
+				ok, err = stat.addSlice(sliceArg)
 			} else {
-				cl, popErr := state.Stack.PopMaybeCell()
-				if popErr != nil {
-					return popErr
-				}
-				ok = stat.addCell(cl)
+				ok, err = stat.addCell(cellArg)
+			}
+			if err != nil {
+				return err
 			}
 
 			if ok {
@@ -1041,30 +1059,30 @@ func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
 	}
 }
 
-func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) bool {
+func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) (bool, error) {
 	var root *cell.Slice
 	if stat.state != nil {
 		if err := stat.state.Cells.RegisterCellLoad(msgCell); err != nil {
-			return false
+			return false, err
 		}
 		var err error
 		root, err = stat.state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
 		if err != nil {
-			return false
+			return false, err
 		}
 	} else {
 		var err error
 		root, err = msgCell.BeginParse()
 		if err != nil {
-			return false
+			return false, err
 		}
 	}
 	if err := root.SkipBits(root.BitsLeft()); err != nil {
-		return false
+		return false, err
 	}
 	if skipFirstRefs > 0 {
 		if err := root.SkipBitsAndRefs(0, skipFirstRefs); err != nil {
-			return false
+			return false, err
 		}
 	}
 	return stat.addSlice(root)
@@ -1303,7 +1321,11 @@ func SENDMSG() *helpers.SimpleOP {
 			if state.GlobalVersion >= 10 && msg.Info.HasExtraCurrencies() {
 				skipRefs = 1
 			}
-			if !addMessageTailStorage(stat, msgCell, skipRefs) {
+			ok, err := addMessageTailStorage(stat, msgCell, skipRefs)
+			if err != nil {
+				return err
+			}
+			if !ok {
 				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
 			}
 

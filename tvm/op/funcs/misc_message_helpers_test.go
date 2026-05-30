@@ -58,23 +58,30 @@ func TestStorageStatsDataSizeAndVarInts(t *testing.T) {
 	root := cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(ref).EndCell()
 
 	stat := newStorageStat(10, nil)
-	if !stat.addCell(root) {
+	ok, err := stat.addCell(root)
+	if err != nil || !ok {
 		t.Fatal("addCell(root) should succeed")
 	}
 	if stat.cells != 2 || stat.bits != 16 || stat.refs != 1 {
 		t.Fatalf("unexpected storage stats: %+v", stat)
 	}
-	if !stat.addCell(root) || stat.cells != 2 {
+	ok, err = stat.addCell(root)
+	if err != nil || !ok || stat.cells != 2 {
 		t.Fatal("duplicate cells should not be counted twice")
 	}
 
 	limited := newStorageStat(1, nil)
-	if limited.addCell(root) {
+	ok, err = limited.addCell(root)
+	if err != nil {
+		t.Fatalf("addCell failed with unexpected error: %v", err)
+	}
+	if ok {
 		t.Fatal("addCell should fail when the cell limit is exceeded")
 	}
 
 	sliceStat := newStorageStat(10, nil)
-	if !sliceStat.addSlice(root.MustBeginParse()) || sliceStat.refs != 1 || sliceStat.bits != 16 || sliceStat.cells != 1 {
+	ok, err = sliceStat.addSlice(root.MustBeginParse())
+	if err != nil || !ok || sliceStat.refs != 1 || sliceStat.bits != 16 || sliceStat.cells != 1 {
 		t.Fatalf("unexpected slice stats: %+v", sliceStat)
 	}
 
@@ -116,7 +123,7 @@ func TestStorageStatsDataSizeAndVarInts(t *testing.T) {
 	if err := CDATASIZEQ().Interpret(st); err != nil {
 		t.Fatalf("CDATASIZEQ failed: %v", err)
 	}
-	ok, err := st.Stack.PopBool()
+	ok, err = st.Stack.PopBool()
 	if err != nil || ok {
 		t.Fatalf("CDATASIZEQ ok = (%v, %v), want false", ok, err)
 	}
@@ -835,7 +842,8 @@ func TestSendMsgAndTailStorage(t *testing.T) {
 	}
 
 	stat := newStorageStat(10, nil)
-	if !addMessageTailStorage(stat, msgCell, 0) {
+	ok, err := addMessageTailStorage(stat, msgCell, 0)
+	if err != nil || !ok {
 		t.Fatalf("unexpected tail storage stats: %+v", stat)
 	}
 
@@ -905,7 +913,8 @@ func TestSendMsgFeeOnlyMovesInlineBodyWhenRewrittenRootOverflows(t *testing.T) {
 	}
 
 	stat := newStorageStat(10, nil)
-	if !addMessageTailStorage(stat, msgCell, 0) {
+	ok, err := addMessageTailStorage(stat, msgCell, 0)
+	if err != nil || !ok {
 		t.Fatalf("unexpected tail storage stats: %+v", stat)
 	}
 	if stat.cells != 0 || stat.bits != 0 {

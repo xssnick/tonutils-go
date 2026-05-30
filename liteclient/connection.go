@@ -39,6 +39,8 @@ var packetBufferSizes = [...]int{
 	128 << 10,
 }
 
+const packetSerializeBufferSize = 4 << 10
+
 var packetBufferPools [len(packetBufferSizes)]sync.Pool
 
 type packetBuffer struct {
@@ -740,7 +742,7 @@ func buildPacket(data []byte) (packetBuffer, error) {
 }
 
 func buildPacketSerialized(msg tl.Serializable) (packetBuffer, error) {
-	raw := acquirePacketBuffer(4 + 32 + tl.DefaultSerializeBufferSize + 32)
+	raw := acquirePacketBuffer(4 + 32 + packetSerializeBufferSize + 32)
 	buf := raw[:4+32]
 
 	if _, err := io.ReadFull(rand.Reader, buf[4:4+32]); err != nil {
