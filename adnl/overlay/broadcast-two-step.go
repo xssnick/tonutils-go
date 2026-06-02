@@ -292,9 +292,16 @@ func (a *ADNLOverlayWrapper) runBroadcastPrecheck(info BroadcastPrecheckInfo) er
 
 func (a *ADNLOverlayWrapper) deliverTwoStepBroadcast(data []byte, info BroadcastInfo) error {
 	var res any
+	parseStarted := time.Time{}
+	if info.DecodeTime > 0 {
+		parseStarted = time.Now()
+	}
 	_, err := tl.Parse(&res, data, true)
 	if err != nil {
 		return fmt.Errorf("failed to parse two-step broadcast message: %w", err)
+	}
+	if !parseStarted.IsZero() {
+		info.DecodeTime += time.Since(parseStarted)
 	}
 
 	if !info.Trusted && a.broadcastCheckHandler != nil {
@@ -324,6 +331,7 @@ func cloneBroadcastInfo(info BroadcastInfo) BroadcastInfo {
 		BroadcastID: append([]byte(nil), info.BroadcastID...),
 		Extra:       append([]byte(nil), info.Extra...),
 		TwoStep:     info.TwoStep,
+		DecodeTime:  info.DecodeTime,
 	}
 }
 
@@ -583,6 +591,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, 
 	var (
 		decodedData    []byte
 		decoded        bool
+		decodeTime     time.Duration
 		rebroadcastNow bool
 		deliverTrusted bool
 	)
@@ -625,6 +634,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, 
 	}
 
 	if canTryDecode {
+		decodeStarted := time.Now()
 		decodedNow, data, decErr := stream.decoder.Decode()
 		if decErr != nil {
 			stream.mx.Unlock()
@@ -640,6 +650,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, 
 			stream.delivered = true
 			stream.decoder = nil
 			decodedData = data
+			decodeTime = time.Since(decodeStarted)
 			decoded = true
 		}
 	}
@@ -657,6 +668,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, 
 		state.mx.Unlock()
 
 		info := a.twoStepBroadcastInfo(sourceID, sourceKey.Key, deliverTrusted, broadcastID, t.Extra)
+		info.DecodeTime = decodeTime
 		if err = a.deliverTwoStepBroadcast(decodedData, info); err != nil {
 			return err
 		}

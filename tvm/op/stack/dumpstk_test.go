@@ -1,7 +1,6 @@
 package stack
 
 import (
-	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -10,19 +9,18 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func captureTrace(t *testing.T, fn func()) string {
+func captureTrace(t *testing.T, stack *vm.Stack, fn func(*vm.State)) string {
 	t.Helper()
 
-	prevHook := vm.TraceHook
 	var lines []string
-	vm.TraceHook = func(format string, args ...any) {
-		lines = append(lines, fmt.Sprintf(format, args...))
+	state := &vm.State{
+		Stack: stack,
+		TraceHook: func(step vm.TraceStep) {
+			lines = append(lines, step.String())
+		},
 	}
-	defer func() {
-		vm.TraceHook = prevHook
-	}()
 
-	fn()
+	fn(state)
 
 	return strings.Join(lines, "\n")
 }
@@ -35,8 +33,8 @@ func TestSTRDUMP_PrintsStringAndDoesNotMutateStack(t *testing.T) {
 		t.Fatalf("push slice failed: %v", err)
 	}
 
-	out := captureTrace(t, func() {
-		if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
+	out := captureTrace(t, st, func(state *vm.State) {
+		if err := STRDUMP().Interpret(state); err != nil {
 			t.Fatalf("STRDUMP failed: %v", err)
 		}
 	})
@@ -63,8 +61,8 @@ func TestSTRDUMP_PrintsStringAndDoesNotMutateStack(t *testing.T) {
 func TestSTRDUMP_CornerCases(t *testing.T) {
 	t.Run("empty stack", func(t *testing.T) {
 		st := vm.NewStack()
-		out := captureTrace(t, func() {
-			if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
+		out := captureTrace(t, st, func(state *vm.State) {
+			if err := STRDUMP().Interpret(state); err != nil {
 				t.Fatalf("STRDUMP failed: %v", err)
 			}
 		})
@@ -79,8 +77,8 @@ func TestSTRDUMP_CornerCases(t *testing.T) {
 			t.Fatalf("push int failed: %v", err)
 		}
 
-		out := captureTrace(t, func() {
-			if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
+		out := captureTrace(t, st, func(state *vm.State) {
+			if err := STRDUMP().Interpret(state); err != nil {
 				t.Fatalf("STRDUMP failed: %v", err)
 			}
 		})
@@ -98,8 +96,8 @@ func TestSTRDUMP_CornerCases(t *testing.T) {
 			t.Fatalf("push slice failed: %v", err)
 		}
 
-		out := captureTrace(t, func() {
-			if err := STRDUMP().Interpret(&vm.State{Stack: st}); err != nil {
+		out := captureTrace(t, st, func(state *vm.State) {
+			if err := STRDUMP().Interpret(state); err != nil {
 				t.Fatalf("STRDUMP failed: %v", err)
 			}
 		})

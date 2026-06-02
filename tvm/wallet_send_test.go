@@ -131,14 +131,11 @@ func emulateWalletSendExternal(t *testing.T, code, data *cell.Cell, addr *addres
 	machine := NewTVM()
 	machine.globalVersion = globalVersion
 
+	var traceHook vmcore.TraceHook
 	if os.Getenv("TVM_TRACE_WALLET_SEND") != "" {
-		prevTrace := vmcore.TraceHook
-		vmcore.TraceHook = func(format string, args ...any) {
-			t.Logf(format, args...)
+		traceHook = func(step vmcore.TraceStep) {
+			t.Log(step.String())
 		}
-		defer func() {
-			vmcore.TraceHook = prevTrace
-		}()
 	}
 
 	return machine.EmulateExternalMessage(code, data, msg, EmulateExternalMessageConfig{
@@ -151,6 +148,7 @@ func emulateWalletSendExternal(t *testing.T, code, data *cell.Cell, addr *addres
 			Limit:  0,
 			Credit: walletSendTestCredit,
 		}),
+		TraceHook: traceHook,
 	})
 }
 

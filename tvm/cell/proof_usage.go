@@ -276,6 +276,7 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	if cached, ok := state.loadedCell(c); ok {
 		loaded = cached
 	}
+	loaded = loaded.WithoutTrace()
 
 	refCnt := loaded.refsCount()
 	if refCnt == 0 {

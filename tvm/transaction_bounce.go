@@ -22,7 +22,7 @@ func transactionShouldBounce(msg *tlb.Message, skipReason *tlb.ComputeSkipReason
 		return false
 	}
 	in := msg.AsInternal()
-	if !in.Bounce || in.Bounced {
+	if !in.Bounce {
 		return false
 	}
 	return skipReason != nil || !computeSuccess || actionBounce
@@ -33,7 +33,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, nil
 	}
 	in := msg.AsInternal()
-	if !in.Bounce || in.Bounced {
+	if !in.Bounce {
 		return nil, nil
 	}
 

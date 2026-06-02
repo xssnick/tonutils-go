@@ -162,6 +162,7 @@ type State struct {
 	Stack                  *Stack
 	Steps                  uint32
 	StopOnAccept           bool
+	TraceHook              TraceHook
 	ChksgnCounter          uint32
 	GetExtraBalanceCounter uint32
 	Committed              CommittedState
@@ -262,6 +263,7 @@ func (s *State) prepareChildForRun(child *State) error {
 		child.GlobalVersion = s.GlobalVersion
 	}
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
+	child.TraceHook = s.TraceHook
 	if len(child.Libraries) == 0 && len(s.Libraries) > 0 {
 		child.Libraries = append([]*cell.Cell{}, s.Libraries...)
 	}

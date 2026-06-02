@@ -162,11 +162,11 @@ func (c *RepeatContinuation) GetControlData() *ControlData {
 
 func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
 	if c.Count <= 0 {
-		trace("finish REPEAT")
+		state.Trace("finish REPEAT")
 		return c.After, nil
 	}
 
-	tracef("iteration REPEAT %d", c.Count)
+	state.Tracef("iteration REPEAT %d", c.Count)
 
 	if cd := c.Body.GetControlData(); cd != nil && cd.Save.C[0] != nil {
 		return c.Body, nil
@@ -229,7 +229,7 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 		}
 
 		if !more {
-			trace("finish WHILE")
+			state.Trace("finish WHILE")
 			return c.After, nil
 		}
 
@@ -282,7 +282,7 @@ func (c *UntilContinuation) Jump(state *State) (Continuation, error) {
 	}
 
 	if end {
-		trace("finish UNTIL")
+		state.Trace("finish UNTIL")
 		return c.After, nil
 	}
 

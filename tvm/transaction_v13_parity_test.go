@@ -204,17 +204,43 @@ func TestTransactionV13PrecompiledGasAboveLimitSkipsCompute(t *testing.T) {
 	}
 }
 
-func TestTransactionV13MalformedRelaxedCurrencyIsNotSkippedByIgnoreErrors(t *testing.T) {
-	badMsg := cell.BeginCell().
-		MustStoreBoolBit(false).
-		MustStoreBoolBit(true).
-		MustStoreBoolBit(false).
-		MustStoreBoolBit(false).
-		MustStoreAddr(address.NewAddressNone()).
-		MustStoreAddr(tonopsTestAddr).
-		MustStoreUInt(1, 4).
-		MustStoreUInt(0, 8).
-		EndCell()
+func TestTransactionHistoricalGasLimitOverride(t *testing.T) {
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: 14})
+	if err != nil {
+		t.Fatalf("build global version: %v", err)
+	}
+	cfg := tlb.BlockchainConfig{
+		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamGlobalVersion: versionCell,
+		}),
+	}
+	prices := &tlb.ConfigGasLimitsPrices{
+		FlatGasLimit: 100,
+		FlatGasPrice: 100,
+		GasPrice:     1,
+		GasLimit:     1_000_000,
+	}
+	addr := address.MustParseRawAddr("0:5E4A5F9DBA638789E6770C990D2959237ACA3BC19D15A734782C26CB19343CC6")
+	balance := big.NewInt(10_000_000_000_000)
+
+	got := transactionGasBoughtForAccount(cfg, prices, balance, addr, 1_710_000_000)
+	if got != 70_000_000 {
+		t.Fatalf("gas limit override = %d, want 70000000", got)
+	}
+
+	got = transactionGasBoughtForAccount(cfg, prices, balance, addr, 1_740_787_200)
+	if got != 1_000_000 {
+		t.Fatalf("expired gas limit override = %d, want default limit", got)
+	}
+}
+
+func TestTransactionV13NonCanonicalRelaxedCurrencyIsNotSkippedByIgnoreErrors(t *testing.T) {
+	badMsg := transactionTestRelaxedInternalMessage(func(b *cell.Builder) {
+		b.MustStoreUInt(4, 4).
+			MustStoreSlice([]byte{0x00, 0x0a, 0xb1, 0x47}, 32)
+	}, func(b *cell.Builder) {
+		b.MustStoreBigCoins(big.NewInt(0))
+	})
 	actions := buildTransactionActionList(t, tlb.ActionSendMsg{Mode: 2, Msg: badMsg})
 	res := &MessageExecutionResult{
 		Accepted: true,
@@ -237,7 +263,7 @@ func TestTransactionV13MalformedRelaxedCurrencyIsNotSkippedByIgnoreErrors(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if actionRes.phase == nil || actionRes.phase.Success || actionRes.phase.ResultCode != 34 || actionRes.phase.SkippedActions != 0 {
+	if actionRes.phase == nil || actionRes.phase.Success || !actionRes.phase.Valid || actionRes.phase.ResultCode != 34 || actionRes.phase.SkippedActions != 0 {
 		t.Fatalf("unexpected action phase: %+v", actionRes.phase)
 	}
 }

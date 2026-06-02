@@ -248,11 +248,13 @@ type executeOptions struct {
 	stopOnAccept    bool
 	proof           *cell.MerkleProofBuilder
 	skipFinalCommit bool
+	traceHook       vm.TraceHook
 }
 
 func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
 	state := vm.NewExecutionState(tvm.globalVersion, gas, data, c7, stack, libraries...)
 	state.StopOnAccept = options.stopOnAccept
+	state.TraceHook = options.traceHook
 	state.SetChildRunner(tvm.runState)
 	state.InitForExecution()
 	currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
@@ -396,7 +398,7 @@ func (tvm *TVM) execute(state *vm.State) (err error) {
 				return err
 			}
 			if state.Reg.C[2] != nil && errors.As(err, &e) && !vm.IsSuccessExitCode(e.Code) {
-				vm.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
+				state.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
 
 				state.Steps++
 				if err = state.ThrowException(big.NewInt(e.Code)); err == nil {
@@ -442,16 +444,15 @@ func (tvm *TVM) stepAny(state *vm.State) error {
 			Code: cc,
 		}
 
-		vm.Tracef("implicit JMPREF")
+		state.TraceOpcode("implicit JMPREF")
 		return state.Jump(c)
 	}
 
 	state.Steps++
-	vm.Tracef("implicit RET")
+	state.TraceOpcode("implicit RET")
 	if err := state.ConsumeGas(vm.ImplicitRetGasPrice); err != nil {
 		return err
 	}
-	vm.Tracef("gas remaining: %d", state.Gas.Remaining)
 
 	return state.Return()
 }
@@ -527,8 +528,8 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 		return err
 	}
 
-	if vm.TraceHook != nil {
-		vm.Tracef("%s", op.SerializeText())
+	if state.TraceEnabled() {
+		state.TraceOpcode(op.SerializeText())
 	}
 
 	stackBefore := state.Stack.Checkpoint()
@@ -544,7 +545,6 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 	if err = state.CheckGas(); err != nil {
 		return err
 	}
-	vm.Tracef("gas remaining: %d", state.Gas.Remaining)
 
 	return nil
 }

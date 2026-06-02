@@ -17,6 +17,8 @@ type crossRunResult struct {
 	stack    *cell.Cell
 }
 
+const referenceRawRunGlobalVersion = 13
+
 func buildCrossStack(values ...any) (*vm.Stack, error) {
 	stack := vm.NewStack()
 	for _, value := range values {
@@ -35,7 +37,7 @@ func runGoCrossCode(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack) (*cr
 }
 
 func runGoCrossCodeWithGas(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack, gasLimit int64) (*crossRunResult, error) {
-	return runGoCrossCodeWithVersionGasAndLibs(code, data, c7, nil, stack, vm.DefaultGlobalVersion, gasLimit)
+	return runGoCrossCodeWithVersionGasAndLibs(code, data, c7, nil, stack, referenceRawRunGlobalVersion, gasLimit)
 }
 
 func runGoCrossCodeWithVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack, globalVersion int) (*crossRunResult, error) {
@@ -43,7 +45,7 @@ func runGoCrossCodeWithVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.
 }
 
 func runGoCrossCodeWithLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack) (*crossRunResult, error) {
-	return runGoCrossCodeWithVersionAndLibs(code, data, c7, libs, stack, vm.DefaultGlobalVersion)
+	return runGoCrossCodeWithVersionAndLibs(code, data, c7, libs, stack, referenceRawRunGlobalVersion)
 }
 
 func runGoCrossCodeWithVersionAndLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack, globalVersion int) (*crossRunResult, error) {

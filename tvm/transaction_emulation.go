@@ -197,7 +197,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 			}
 			if skipReason == nil {
 				var precompiledUsage *big.Int
-				gas, precompiledUsage, skipReason, err = transactionApplyPrecompiledGasConfig(execCfg, blockchainCfg, computeAcc.code, gas)
+				gas, precompiledUsage, skipReason, err = transactionApplyPrecompiledGasConfig(cfg, blockchainCfg, computeAcc.code, gas)
 				if err != nil {
 					return nil, err
 				}
@@ -438,7 +438,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 	execCfg.Balance = new(big.Int).Set(prepared.balance)
 
 	var skipReason *tlb.ComputeSkipReason
-	gas := transactionTickTockGas(execCfg, blockchainCfg, runtimeAcc.addr)
+	gas := transactionTickTockGas(execCfg, blockchainCfg, runtimeAcc.addr, prepared.balance, isSpecial)
 	if prepared.balance.Sign() <= 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	} else if prepared.status != tlb.AccountStatusActive || prepared.deleted || runtimeAcc.code == nil {
@@ -640,7 +640,7 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 
 	libraries := transactionExecutionLibraries(acc, cfg)
 
-	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, libraries...)
+	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, cfg.TraceHook, libraries...)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +675,7 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 
 	libraries := transactionExecutionLibraries(acc, cfg)
 
-	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, libraries...)
+	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, cfg.TraceHook, libraries...)
 	if err != nil {
 		return nil, err
 	}

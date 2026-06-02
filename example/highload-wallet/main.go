@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -29,6 +30,7 @@ func main() {
 	// seed words of account, you can generate them with any wallet or using wallet.NewSeed() method
 	words := strings.Split("birth pattern then forest walnut then phrase walnut fan pumpkin pattern then cluster blossom verify then forest velvet pond fiction pattern collect then then", " ")
 
+	walletAbstractSeqno := uint32(0)
 	// initialize high-load wallet
 	w, err := wallet.FromSeedWithOptions(api, words, wallet.ConfigHighloadV3{
 		MessageTTL: 60 * 5,
@@ -39,10 +41,13 @@ func main() {
 			// hope it will be fixed in the next LS versions
 			createdAt = time.Now().Unix() - 30
 
-			// example query id which will allow you to send 1 tx per second
-			// but you better to implement your own iterator in database, then you can send unlimited
+			// Better to implement your own send id in database, then you can send with more idempotency
 			// but make sure id is less than 1 << 23, when it is higher start from 0 again
-			return uint32(createdAt % (1 << 23)), createdAt, nil
+
+			// example of id to avoid collisions
+			id = uint32((createdAt%(3*60+30))<<15) | atomic.AddUint32(&walletAbstractSeqno, 1)%(1<<15)
+
+			return id, createdAt, nil
 		},
 	})
 	if err != nil {

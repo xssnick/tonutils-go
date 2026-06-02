@@ -261,7 +261,7 @@ func (s *State) JumpArgs(c Continuation, passArgs int) error {
 }
 
 func (s *State) JumpTo(c Continuation) (err error) {
-	traceStack("[JUMP]", s.Stack)
+	s.TraceStack("[JUMP]", s.Stack)
 
 	var iter int
 	for c != nil {
@@ -292,7 +292,7 @@ func (s *State) JumpTo(c Continuation) (err error) {
 }
 
 func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, error) {
-	tracef("ADJUST JUMP CONT: %d", passArgs)
+	s.Tracef("ADJUST JUMP CONT: %d", passArgs)
 
 	plan, err := planContinuationStack(s.Stack, c.GetControlData(), passArgs, continuationActionJump)
 	if err != nil {

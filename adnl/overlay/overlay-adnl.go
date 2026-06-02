@@ -85,6 +85,7 @@ type BroadcastInfo struct {
 	BroadcastID []byte
 	Extra       []byte
 	TwoStep     bool
+	DecodeTime  time.Duration
 }
 
 type BroadcastPrecheckInfo struct {
@@ -849,6 +850,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	var (
 		decodedRes   any
 		decoded      bool
+		decodeTime   time.Duration
 		ackReceived  bool
 		ackCompleted bool
 		relayOps     []broadcastFECRelayOp
@@ -931,6 +933,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 		stream.addReceivedPart(t.Seqno)
 
 		if canTryDecode {
+			decodeStarted := time.Now()
 			decodedNow, data, err := stream.decoder.Decode()
 			if err != nil {
 				stream.mx.Unlock()
@@ -951,6 +954,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 					stream.mx.Unlock()
 					return fmt.Errorf("failed to parse decoded broadcast message: %w", err)
 				}
+				decodeTime = time.Since(decodeStarted)
 
 				stream.finishedAt = &tm
 				stream.decoder = nil
@@ -1004,6 +1008,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			Trusted:     trusted,
 			OverlayID:   append([]byte(nil), a.overlayId...),
 			BroadcastID: append([]byte(nil), broadcastHash...),
+			DecodeTime:  decodeTime,
 		}
 		if !trusted && a.broadcastCheckHandler != nil {
 			if err = a.broadcastCheckHandler(decodedRes, info); err != nil {

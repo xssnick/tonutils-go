@@ -48,6 +48,7 @@ type MessageEmulationConfig struct {
 	BuildProof          bool
 	AccountRoot         *cell.Cell
 	AccountStorageStat  *cell.Cell
+	TraceHook           vm.TraceHook
 }
 
 type EmulateExternalMessageConfig = MessageEmulationConfig
@@ -106,7 +107,7 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, proof, libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, proof, cfg.TraceHook, libraries...)
 }
 
 func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*MessageExecutionResult, error) {
@@ -149,13 +150,14 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, proof, libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, proof, cfg.TraceHook, libraries...)
 }
 
-func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, proof *cell.MerkleProofBuilder, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
+func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, proof *cell.MerkleProofBuilder, traceHook vm.TraceHook, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
 	res, execErr := tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{
 		stopOnAccept: stopOnAccept,
 		proof:        proof,
+		traceHook:    traceHook,
 	}, libraries...)
 	if execErr != nil {
 		if _, ok := vmerr.ErrorCode(execErr); !ok {

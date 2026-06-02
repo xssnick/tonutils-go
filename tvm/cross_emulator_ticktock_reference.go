@@ -39,13 +39,15 @@ type referenceTickTockJSON struct {
 }
 
 type referenceTickTockResult struct {
-	exitCode int64
-	gasUsed  int64
-	accepted bool
-	code     *cell.Cell
-	data     *cell.Cell
-	actions  *cell.Cell
-	vmLog    string
+	exitCode  int64
+	gasUsed   int64
+	accepted  bool
+	txCell    *cell.Cell
+	shardCell *cell.Cell
+	code      *cell.Cell
+	data      *cell.Cell
+	actions   *cell.Cell
+	vmLog     string
 }
 
 var (
@@ -127,13 +129,15 @@ func runReferenceTickTock(code, data *cell.Cell, addr *address.Address, isTock b
 	}
 
 	return &referenceTickTockResult{
-		exitCode: exitCode,
-		gasUsed:  gasUsed,
-		accepted: true,
-		code:     codeCell,
-		data:     dataCell,
-		actions:  actionsCell,
-		vmLog:    referenceVMLog(raw.VMLog),
+		exitCode:  exitCode,
+		gasUsed:   gasUsed,
+		accepted:  true,
+		txCell:    txCell,
+		shardCell: shardCell,
+		code:      codeCell,
+		data:      dataCell,
+		actions:   actionsCell,
+		vmLog:     referenceVMLog(raw.VMLog),
 	}, nil
 }
 

@@ -1579,6 +1579,43 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 			}
 		})
 	}
+
+	oversizedData := cell.BeginCell().
+		MustStoreUInt(0xBEEF, 16).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		EndCell()
+	firstSkipped := cell.BeginCell().
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreUInt(0x0ec3c86d, 32).
+		MustStoreUInt(2, 8).
+		EndCell()
+	skippedOnly := cell.BeginCell().
+		MustStoreRef(firstSkipped).
+		MustStoreUInt(0x0ec3c86d, 32).
+		MustStoreUInt(2, 8).
+		EndCell()
+	res, err := transactionApplyActions(acc, &MessageExecutionResult{
+		Accepted: true,
+		ExecutionResult: ExecutionResult{
+			ExitCode:  0,
+			Data:      oversizedData,
+			Actions:   skippedOnly,
+			Committed: true,
+		},
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{
+		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1),
+		}),
+	}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	if err != nil {
+		t.Fatalf("apply skipped-only state-limit actions failed: %v", err)
+	}
+	if res.phase == nil || res.phase.ResultArg == nil || *res.phase.ResultArg != 1 {
+		t.Fatalf("skipped-only state-limit result arg = %+v, want 1", res.phase)
+	}
+	if res.phase.ResultCode != 50 || res.phase.SkippedActions != 2 || res.phase.MessagesCreated != 0 {
+		t.Fatalf("unexpected skipped-only state-limit phase: %+v", res.phase)
+	}
 }
 
 func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
@@ -1673,6 +1710,36 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 	if limitRes.phase == nil || limitRes.phase.Success || limitRes.phase.ResultCode != 50 || !limitRes.bounce {
 		t.Fatalf("expected state-limit action failure with bounce, got phase=%+v bounce=%t", limitRes.phase, limitRes.bounce)
 	}
+
+	sendThenLimit := buildTransactionActionList(t,
+		tlb.ActionSendMsg{
+			Mode: 1,
+			Msg:  buildTransactionOutboundInternalCell(t, 100),
+		},
+		tlb.ActionSetCode{NewCode: oversizedCode},
+	)
+	sendThenLimitRes, err := transactionApplyActions(acc, &MessageExecutionResult{
+		Accepted: true,
+		ExecutionResult: ExecutionResult{
+			ExitCode:  0,
+			Data:      data,
+			Actions:   sendThenLimit,
+			Committed: true,
+		},
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), tlb.BlockchainConfig{
+		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1),
+		}),
+	}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	if err != nil {
+		t.Fatalf("apply send then state-limit action failed: %v", err)
+	}
+	if sendThenLimitRes.phase == nil || sendThenLimitRes.phase.ResultArg == nil || *sendThenLimitRes.phase.ResultArg != 1 {
+		t.Fatalf("state-limit result arg = %v, want 1", sendThenLimitRes.phase)
+	}
+	if sendThenLimitRes.phase.MessagesCreated != 1 || len(sendThenLimitRes.outMsgs) != 0 {
+		t.Fatalf("state-limit phase should count but not commit message: phase=%+v out=%d", sendThenLimitRes.phase, len(sendThenLimitRes.outMsgs))
+	}
 }
 
 func TestEmulateTransactionBounceableNoStateGeneratesBouncePhase(t *testing.T) {
@@ -1757,6 +1824,56 @@ func TestEmulateTransactionBounceableNoStateGeneratesBouncePhase(t *testing.T) {
 	}
 	if got := bounced.FwdFee.Nano().Uint64(); got != 50 {
 		t.Fatalf("unexpected bounce fwd fee: got=%d want=50", got)
+	}
+}
+
+func TestEmulateTransactionBouncedInboundCanBounceAgain(t *testing.T) {
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionStackUnderflowCode(t), origData, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
+	priceCell := buildTransactionMsgForwardPricesCell(t, 100, 1<<15)
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: 13, Capabilities: 4})
+	if err != nil {
+		t.Fatalf("failed to build global version config: %v", err)
+	}
+
+	msgCell, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		Bounce:      true,
+		Bounced:     true,
+		SrcAddr:     internalEmulationSrcAddr,
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.FromNanoTONU(1000),
+		Body:        body,
+	})
+	if err != nil {
+		t.Fatalf("failed to build internal message: %v", err)
+	}
+
+	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+		Address:     tonopsTestAddr,
+		Now:         uint32(tonopsTestTime.Unix()),
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamGlobalVersion:               versionCell,
+			tlb.ConfigParamMsgForwardPricesBasechain:   priceCell,
+			tlb.ConfigParamMsgForwardPricesMasterchain: priceCell,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("emulate transaction failed: %v", err)
+	}
+
+	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	if !ok {
+		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+	}
+	if desc.BouncePhase == nil {
+		t.Fatal("expected bounced inbound message with bounce flag to produce bounce phase")
+	}
+	if res.Transaction.OutMsgCount != 1 {
+		t.Fatalf("out message count = %d, want 1", res.Transaction.OutMsgCount)
 	}
 }
 
