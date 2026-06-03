@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func (testNoopStream) XORKeyStream(dst, src []byte) {
 	copy(dst, src)
 }
 
-func TestServerQueryQueueReturnsBusy(t *testing.T) {
+func TestServerQueryQueueWaitsForSlot(t *testing.T) {
 	pub, key, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -92,16 +93,11 @@ func TestServerQueryQueueReturnsBusy(t *testing.T) {
 	second := serverQueueTestQuery(client)
 	waitServerQueueLen(t, s.queryQueue, 1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	var resp MasterchainInfo
-	err = client.QueryLiteserver(ctx, GetMasterchainInf{}, &resp)
-	cancel()
-	busy, ok := err.(ServerBusy)
-	if !ok {
-		t.Fatalf("expected ServerBusy, got %T: %v", err, err)
-	}
-	if busy.Code != 429 || busy.Text != "server is busy" {
-		t.Fatalf("unexpected busy response: %+v", busy)
+	third := serverQueueTestQuery(client)
+	select {
+	case err = <-third:
+		t.Fatalf("third query completed before queue slot was released: %v", err)
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	close(release)
@@ -110,6 +106,9 @@ func TestServerQueryQueueReturnsBusy(t *testing.T) {
 	}
 	if err = <-second; err != nil {
 		t.Fatalf("second query err: %v", err)
+	}
+	if err = <-third; err != nil {
+		t.Fatalf("third query err: %v", err)
 	}
 }
 
@@ -163,50 +162,92 @@ func TestServerClientEnqueueDropsWhenQueueFull(t *testing.T) {
 	}
 }
 
-func TestServerClientStartQueryLimitsInflight(t *testing.T) {
-	sc := &ServerClient{
-		sendQueue: make(chan packetBuffer, serverClientSendQueueSize),
-	}
-
-	for i := 0; i < serverClientSendQueueSize; i++ {
-		if !sc.startQuery() {
-			t.Fatalf("query %d was rejected", i)
-		}
-	}
-	if sc.startQuery() {
-		t.Fatal("query over limit was accepted")
-	}
-
-	sc.finishQuery()
-	if !sc.startQuery() {
-		t.Fatal("query after finish was rejected")
+func TestServerClientSendQueueSize(t *testing.T) {
+	if ServerClientSendQueueSize != 100 {
+		t.Fatalf("send queue size is %d, want 100", ServerClientSendQueueSize)
 	}
 }
 
-func TestServerClientStartQueryRejectsFullSendQueue(t *testing.T) {
-	sc := &ServerClient{
-		sendQueue: make(chan packetBuffer, 1),
+func TestServerClientSendQueueSizeOverride(t *testing.T) {
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	sc.sendQueue <- packetBuffer{}
 
-	if sc.startQuery() {
-		t.Fatal("query was accepted with full send queue")
+	prev := ServerClientSendQueueSize
+	ServerClientSendQueueSize = 7
+	defer func() {
+		ServerClientSendQueueSize = prev
+	}()
+
+	s := NewServer([]ed25519.PrivateKey{key})
+	gotQueueSize := make(chan int, 1)
+	s.SetConnectionHook(func(client *ServerClient) error {
+		gotQueueSize <- cap(client.sendQueue)
+		return nil
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listenErr := make(chan error, 1)
+	go func() {
+		listenErr <- s.listen(ln)
+	}()
+	defer func() {
+		_ = s.Close()
+		select {
+		case err := <-listenErr:
+			if err != nil {
+				t.Errorf("listen err: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("server did not stop")
+		}
+	}()
+
+	client := NewConnectionPool()
+	defer client.Stop()
+
+	connectCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	err = client.AddConnection(connectCtx, ln.Addr().String(), base64.StdEncoding.EncodeToString(pub))
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-gotQueueSize:
+		if got != 7 {
+			t.Fatalf("send queue size is %d, want 7", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("connection hook was not called")
 	}
 }
 
-func TestServerClientStartQueryLimitsCombinedPressure(t *testing.T) {
-	sc := &ServerClient{
-		sendQueue: make(chan packetBuffer, serverClientSendQueueSize),
+func TestServerQueryWorkersDefault(t *testing.T) {
+	want := runtime.GOMAXPROCS(0) * 4
+	if ServerQueryWorkers != want {
+		t.Fatalf("query workers is %d, want %d", ServerQueryWorkers, want)
 	}
-	sc.sendQueue <- packetBuffer{}
+}
 
-	for i := 0; i < serverClientSendQueueSize-1; i++ {
-		if !sc.startQuery() {
-			t.Fatalf("query %d was rejected", i)
-		}
-	}
-	if sc.startQuery() {
-		t.Fatal("query over combined pressure limit was accepted")
+func TestServerQueryWorkersOverride(t *testing.T) {
+	prev := ServerQueryWorkers
+	ServerQueryWorkers = 3
+	defer func() {
+		ServerQueryWorkers = prev
+	}()
+
+	s := NewServer(nil)
+	s.startQueryWorkers()
+	defer close(s.queryQueue)
+
+	if cap(s.queryQueue) != 3*serverQueryQueuePerWorker {
+		t.Fatalf("query queue cap is %d, want %d", cap(s.queryQueue), 3*serverQueryQueuePerWorker)
 	}
 }
 

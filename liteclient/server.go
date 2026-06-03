@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/tonutils-go/adnl"
@@ -23,9 +22,16 @@ var Logger = func(v ...any) {}
 
 const (
 	serverQueryQueuePerWorker = 10
-	serverClientSendQueueSize = 32
 	serverWriteDrainMax       = 16
 )
+
+// ServerClientSendQueueSize is a per-client write queue size for new server connections.
+// Set it before starting the server to override the default.
+var ServerClientSendQueueSize = 100
+
+// ServerQueryWorkers is the number of goroutines used by server to handle queued queries.
+// Set it before starting the server to override the default.
+var ServerQueryWorkers = runtime.GOMAXPROCS(0) * 4
 
 type Server struct {
 	keys     map[string]ed25519.PrivateKey
@@ -47,7 +53,8 @@ type ServerClient struct {
 	serverKey ed25519.PublicKey
 
 	sendQueue chan packetBuffer
-	inflight  int32
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	port uint16
 	ip   string
@@ -71,11 +78,8 @@ func NewServer(keysList []ed25519.PrivateKey) *Server {
 		list[string(kid)] = k
 	}
 
-	workers := runtime.GOMAXPROCS(0) * 8
 	return &Server{
-		keys:         list,
-		queryWorkers: workers,
-		queryQueue:   make(chan serverQueryTask, workers*serverQueryQueuePerWorker),
+		keys: list,
 	}
 }
 
@@ -138,16 +142,19 @@ func (s *Server) listen(listener net.Listener) error {
 			port, _ = strconv.ParseUint(ip[ipSplit+1:], 10, 16)
 		}
 
+		clientCtx, cancelClient := context.WithCancel(context.Background())
 		sc := &ServerClient{
 			conn:      conn,
-			sendQueue: make(chan packetBuffer, serverClientSendQueueSize),
+			sendQueue: make(chan packetBuffer, ServerClientSendQueueSize),
+			ctx:       clientCtx,
+			cancel:    cancelClient,
 			ip:        ip[:ipSplit],
 			port:      uint16(port),
 		}
 
 		if s.connectHook != nil {
 			if err = s.connectHook(sc); err != nil {
-				_ = conn.Close()
+				sc.Close()
 				continue
 			}
 		}
@@ -159,6 +166,9 @@ func (s *Server) listen(listener net.Listener) error {
 func (s *Server) startQueryWorkers() {
 	s.workersOnce.Do(func() {
 		workers := s.queryWorkers
+		if workers <= 0 {
+			workers = ServerQueryWorkers
+		}
 		if workers <= 0 {
 			workers = 1
 		}
@@ -179,8 +189,6 @@ func (s *Server) queryWorker() {
 }
 
 func (s *Server) handleQueryTask(task serverQueryTask) {
-	defer task.client.finishQuery()
-
 	select {
 	case <-task.ctx.Done():
 		return
@@ -204,9 +212,7 @@ func (s *Server) handleQueryTask(task serverQueryTask) {
 }
 
 func (s *Server) serve(client *ServerClient) {
-	clientCtx, stopClient := context.WithCancel(context.Background())
 	defer func() {
-		stopClient()
 		client.Close()
 		if s.disconnectHook != nil {
 			s.disconnectHook(client)
@@ -250,7 +256,7 @@ func (s *Server) serve(client *ServerClient) {
 			// remove timeout
 			_ = client.conn.SetReadDeadline(time.Time{})
 
-			go client.writeLoop(clientCtx)
+			go client.writeLoop(client.ctx)
 
 			continue
 		}
@@ -300,28 +306,10 @@ func (s *Server) serve(client *ServerClient) {
 				query = q.Data
 			}
 
-			if !client.startQuery() {
-				client.enqueue(adnl.MessageAnswer{
-					ID: m.ID,
-					Data: ServerBusy{
-						Code: 429,
-						Text: "server is busy",
-					},
-				})
-				continue
-			}
-
 			select {
-			case s.queryQueue <- serverQueryTask{ctx: clientCtx, client: client, queryID: m.ID, query: query}:
-			default:
-				client.finishQuery()
-				client.enqueue(adnl.MessageAnswer{
-					ID: m.ID,
-					Data: ServerBusy{
-						Code: 429,
-						Text: "server is busy",
-					},
-				})
+			case s.queryQueue <- serverQueryTask{ctx: client.ctx, client: client, queryID: m.ID, query: query}:
+			case <-client.ctx.Done():
+				return
 			}
 		case TCPAuthenticate:
 			client.enqueue(TCPAuthenticationNonce{Nonce: make([]byte, 32)})
@@ -384,27 +372,6 @@ func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stre
 	}
 
 	return serverKey.Public().(ed25519.PublicKey), w, r, nil
-}
-
-func (s *ServerClient) startQuery() bool {
-	sendQueueCap := cap(s.sendQueue)
-	if len(s.sendQueue) >= sendQueueCap {
-		return false
-	}
-
-	for {
-		cur := atomic.LoadInt32(&s.inflight)
-		if int(cur)+len(s.sendQueue) >= sendQueueCap {
-			return false
-		}
-		if atomic.CompareAndSwapInt32(&s.inflight, cur, cur+1) {
-			return true
-		}
-	}
-}
-
-func (s *ServerClient) finishQuery() {
-	atomic.AddInt32(&s.inflight, -1)
 }
 
 func (s *ServerClient) enqueue(msg tl.Serializable) bool {
@@ -503,6 +470,9 @@ func (s *ServerClient) releaseQueuedPackets() {
 }
 
 func (s *ServerClient) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	_ = s.conn.Close()
 }
 
