@@ -9,6 +9,8 @@ import (
 
 const bitSizeInvalid = 0x7fffffff
 
+var bigIntOne = big.NewInt(1)
+
 func pushNaNOrOverflow(state *vm.State, quiet bool) error {
 	if quiet {
 		return state.Stack.PushAny(vm.NaN{})
@@ -21,13 +23,13 @@ func pushMaybeInt(state *vm.State, val *big.Int, quiet bool) error {
 		return pushNaNOrOverflow(state, quiet)
 	}
 	if quiet {
-		return state.Stack.PushIntQuiet(val)
+		return state.Stack.PushOwnedIntQuiet(val)
 	}
-	return state.Stack.PushInt(val)
+	return state.Stack.PushOwnedInt(val)
 }
 
 func pushSmallInt(state *vm.State, val int64) error {
-	return state.Stack.PushInt(big.NewInt(val))
+	return state.Stack.PushSmallInt(val)
 }
 
 func checkStackDepth(state *vm.State, depth int) error {

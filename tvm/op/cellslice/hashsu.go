@@ -18,7 +18,8 @@ func HASHSU() *helpers.SimpleOP {
 				return err
 			}
 			cl := s.ToBuilder().EndCell()
-			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash()))
+			hash := cl.HashKey()
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},
 		Name:      "HASHSU",
 		BitPrefix: helpers.BytesPrefix(0xF9, 0x01),

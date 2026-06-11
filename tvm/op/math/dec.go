@@ -20,7 +20,7 @@ func DEC() *helpers.SimpleOP {
 			}
 
 			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
-				return x.Sub(x, big.NewInt(1))
+				return x.Sub(x, bigIntOne)
 			})
 		},
 		Name:      "DEC",

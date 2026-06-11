@@ -21,11 +21,11 @@ func UNTUPLEVAR() *helpers.SimpleOP {
 			if state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			count, err := state.Stack.PopIntRange(0, 255)
+			count, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return execUntuple(state, int(count.Int64()), true)
+			return execUntuple(state, int(count), true)
 		},
 	}
 }
@@ -38,11 +38,11 @@ func UNPACKFIRSTVAR() *helpers.SimpleOP {
 			if state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			count, err := state.Stack.PopIntRange(0, 255)
+			count, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return execUntuple(state, int(count.Int64()), false)
+			return execUntuple(state, int(count), false)
 		},
 	}
 }

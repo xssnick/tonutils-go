@@ -184,11 +184,11 @@ func storeIntVarExtOp(mode uint8) *helpers.AdvancedOP {
 			if mode&1 == 0 {
 				maxBits = 257
 			}
-			bits, err := state.Stack.PopIntRange(0, maxBits)
+			bits, err := state.Stack.PopIntRangeInt64(0, maxBits)
 			if err != nil {
 				return err
 			}
-			return storeIntExtCommon(state, uint(bits.Uint64()), mode)
+			return storeIntExtCommon(state, uint(bits), mode)
 		},
 	}
 }

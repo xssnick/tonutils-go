@@ -10,6 +10,7 @@ import (
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return GTINT(0) })
+	registerInt8Variant(GTINT, 0xC2, 8, 4)
 }
 
 func GTINT(value int8) (op *helpers.AdvancedOP) {

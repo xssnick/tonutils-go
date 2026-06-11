@@ -18,11 +18,11 @@ func INDEXVARQ() *helpers.SimpleOP {
 			if state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			idx, err := state.Stack.PopIntRange(0, 254)
+			idx, err := state.Stack.PopIntRangeInt64(0, 254)
 			if err != nil {
 				return err
 			}
-			return execIndexQuiet(state, int(idx.Int64()))
+			return execIndexQuiet(state, int(idx))
 		},
 	}
 }

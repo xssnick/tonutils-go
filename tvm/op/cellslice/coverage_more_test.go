@@ -153,6 +153,24 @@ func TestSimpleCellSliceOps(t *testing.T) {
 		}
 
 		state = newCellSliceState()
+		large := new(big.Int).SetUint64(1<<63 + 7)
+		pushCellSliceSlice(t, state, cell.BeginCell().MustStoreBigUInt(large, 64).ToSlice())
+		if err := LDU(64).Interpret(state); err != nil {
+			t.Fatalf("LDU 64 failed: %v", err)
+		}
+		sl = popCellSliceSlice(t, state)
+		if sl.BitsLeft() != 0 {
+			t.Fatalf("expected LDU 64 to consume all bits, got %d", sl.BitsLeft())
+		}
+		gotLarge, err := state.Stack.PopIntFinite()
+		if err != nil {
+			t.Fatalf("failed to pop LDU 64 value: %v", err)
+		}
+		if gotLarge.Cmp(large) != 0 {
+			t.Fatalf("unexpected LDU 64 value: %s", gotLarge.String())
+		}
+
+		state = newCellSliceState()
 		pushCellSliceInt(t, state, -2)
 		pushCellSliceBuilder(t, state, cell.BeginCell())
 		if err := STI(8).Interpret(state); err != nil {

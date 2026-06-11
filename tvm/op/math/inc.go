@@ -20,7 +20,7 @@ func INC() *helpers.SimpleOP {
 			}
 
 			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
-				return x.Add(x, big.NewInt(1))
+				return x.Add(x, bigIntOne)
 			})
 		},
 		Name:      "INC",

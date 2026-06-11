@@ -44,16 +44,44 @@ func (s *Stack) RestoreCheckpoint(cp StackCheckpoint) {
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
-var stackIntMinusOne = big.NewInt(-1)
-var stackIntZero = big.NewInt(0)
-var stackIntOne = big.NewInt(1)
+const (
+	defaultStackCapacity = 256
+	stackStaticIntMin    = -5
+	stackStaticIntMax    = 10
+	stackStaticIntCount  = stackStaticIntMax - stackStaticIntMin + 1
+)
+
+var stackStaticInts = makeStackStaticInts()
+
+var stackIntMinusOne = stackStaticInt(-1)
+var stackIntZero = stackStaticInt(0)
+var stackIntOne = stackStaticInt(1)
 
 const maxStackDepth = 1 << 16
 
 func NewStack() *Stack {
+	return newStackWithCap(defaultStackCapacity)
+}
+
+func newStackWithCap(capacity int) *Stack {
 	return &Stack{
-		elems: make([]any, 0, 256),
+		elems: make([]any, 0, capacity),
 	}
+}
+
+func makeStackStaticInts() [stackStaticIntCount]*big.Int {
+	var vals [stackStaticIntCount]*big.Int
+	for i := range vals {
+		vals[i] = big.NewInt(int64(stackStaticIntMin + i))
+	}
+	return vals
+}
+
+func stackStaticInt(val int64) *big.Int {
+	if val < stackStaticIntMin || val > stackStaticIntMax {
+		return nil
+	}
+	return stackStaticInts[val-stackStaticIntMin]
 }
 
 func (s *Stack) SetTrace(trace *cell.Trace) {
@@ -287,8 +315,30 @@ func canonicalStackInt(val *big.Int) *big.Int {
 	return new(big.Int).Set(val)
 }
 
+func canonicalOwnedStackInt(val *big.Int) *big.Int {
+	switch {
+	case val.Sign() == 0:
+		return stackIntZero
+	case val.IsInt64():
+		switch val.Int64() {
+		case -1:
+			return stackIntMinusOne
+		case 1:
+			return stackIntOne
+		}
+	}
+	return val
+}
+
 func isStaticStackInt(val *big.Int) bool {
-	return val == stackIntMinusOne || val == stackIntZero || val == stackIntOne
+	if val == stackIntMinusOne || val == stackIntZero || val == stackIntOne {
+		return true
+	}
+	if val == nil || !val.IsInt64() {
+		return false
+	}
+	static := stackStaticInt(val.Int64())
+	return static != nil && val == static
 }
 
 // PushHostValue accepts values already encoded with TVM stack types.
@@ -364,11 +414,35 @@ func (s *Stack) PushInt(val *big.Int) error {
 	return s.pushStaticInt(canonicalStackInt(val))
 }
 
+// PushOwnedInt pushes an integer the caller no longer shares elsewhere.
+// Unlike PushInt, it keeps non-static values in-place and skips a defensive copy.
+func (s *Stack) PushOwnedInt(val *big.Int) error {
+	if !fitsTVMInt(val) {
+		return vmerr.Error(vmerr.CodeIntOverflow)
+	}
+	return s.pushStaticInt(canonicalOwnedStackInt(val))
+}
+
 func (s *Stack) PushIntQuiet(val *big.Int) error {
 	if !fitsTVMInt(val) {
 		return s.PushAny(NaN{})
 	}
 	return s.pushStaticInt(canonicalStackInt(val))
+}
+
+// PushOwnedIntQuiet is the quiet variant of PushOwnedInt.
+func (s *Stack) PushOwnedIntQuiet(val *big.Int) error {
+	if !fitsTVMInt(val) {
+		return s.PushAny(NaN{})
+	}
+	return s.pushStaticInt(canonicalOwnedStackInt(val))
+}
+
+func (s *Stack) PushSmallInt(val int64) error {
+	if static := stackStaticInt(val); static != nil {
+		return s.pushStaticInt(static)
+	}
+	return s.PushOwnedInt(big.NewInt(val))
 }
 
 func (s *Stack) PushAny(val any) error {
@@ -386,13 +460,22 @@ func (s *Stack) PushAny(val any) error {
 	return nil
 }
 
+// PushOwnedValue pushes a value that was already removed from this VM stack.
+func (s *Stack) PushOwnedValue(val any) error {
+	if len(s.elems) >= maxStackDepth {
+		return vmerr.Error(vmerr.CodeStackOverflow)
+	}
+	s.elems = append(s.elems, val)
+	return nil
+}
+
 func (s *Stack) SplitTop(top, drop int) (*Stack, error) {
 	n := s.Len()
 	if top < 0 || drop < 0 || top > n || drop > n-top {
 		return nil, vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	newStack := NewStack()
+	newStack := newStackWithCap(top)
 	if top != 0 {
 		if err := newStack.MoveFrom(s, top); err != nil {
 			return nil, err
@@ -675,6 +758,29 @@ func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return e, nil
+}
+
+func (s *Stack) PopIntRangeInt64(min, max int64) (int64, error) {
+	e, err := s.PopAny()
+	if err != nil {
+		return 0, err
+	}
+
+	switch v := e.(type) {
+	case NaN:
+		return 0, vmerr.Error(vmerr.CodeRangeCheck)
+	case *big.Int:
+		if !v.IsInt64() {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		val := v.Int64()
+		if val < min || val > max {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		return val, nil
+	default:
+		return 0, vmerr.Error(vmerr.CodeTypeCheck, "not an integer")
+	}
 }
 
 func (s *Stack) Get(at int) (any, error) {

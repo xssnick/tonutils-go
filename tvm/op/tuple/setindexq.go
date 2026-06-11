@@ -59,10 +59,9 @@ func execSetIndexQuiet(state *vm.State, idx int) error {
 		if val == nil {
 			return state.Stack.PushAny(nil)
 		}
-		newTup := tuplepkg.NewTupleSized(idx + 1)
-		if err := (&newTup).Set(idx, val); err != nil {
-			return err
-		}
+		vals := make([]any, idx+1)
+		vals[idx] = val
+		newTup := tuplepkg.NewTupleOwned(vals)
 		return state.PushTupleCharged(newTup)
 	}
 

@@ -4,6 +4,9 @@ package tvm
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/binary"
@@ -11,6 +14,8 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,7 +23,9 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	localec "github.com/xssnick/tonutils-go/tvm/internal/secp256k1"
 	cellsliceop "github.com/xssnick/tonutils-go/tvm/op/cellslice"
+	dictop "github.com/xssnick/tonutils-go/tvm/op/dict"
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	ophelpers "github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -27,6 +34,7 @@ import (
 	tupleop "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 const (
@@ -35,7 +43,402 @@ const (
 	differentialFuzzGasLimit      = referenceDefaultMaxGas
 	parityProgramChunkReserveBits = 32
 	maxSmallIndexForParityProgram = (1 << 30) - 1
+
+	expectedParityOpcodeInventoryEntries      = 823
+	expectedParityOpcodeInventoryUniqueNames  = 809
+	expectedParityDictOpcodeWitnessNames      = 143
+	expectedParityMathOpcodeWitnessNames      = 194
+	expectedParityCellSliceOpcodeWitnessNames = 163
 )
+
+var expectedParityOpcodeCoverageBucketCounts = map[string]int{
+	"dedicated_tuple":           33,
+	"deterministic_exec":        111,
+	"deterministic_ton_crypto":  45,
+	"deterministic_ton_runtime": 66,
+	"random_cell_slice":         166,
+	"random_dict":               143,
+	"random_math":               196,
+	"random_stack":              63,
+}
+
+type parityWitnessManifestExpectation struct {
+	count int
+	hash  string
+}
+
+var expectedParityWitnessManifestExpectations = map[string]parityWitnessManifestExpectation{
+	"requiredActionErrorGapCaseNames":       {12, "6aa8a32672946f60e0c3451fafe282602e934279cb1eeb5129855214355b7bd0"},
+	"requiredActionGapTraceLabels":          {9, "e40427023952f2c0a389754e78ef564442db0eca2f12e3e9173076fa3515a6eb"},
+	"requiredActionModeGapCaseNames":        {17, "8365cb79822a0f0cbdea339c8ff844e10a52db03bab6c11d3221ff93f62185bb"},
+	"requiredCellSliceEdgeGapCaseNames":     {19, "cf9dcb210dead5a5f0d5e9b11e318262dc48d5b82f66eae30f2a8971cd4e95f0"},
+	"requiredCellSliceGapCaseNames":         {27, "8b79ad9e1732e2cd6dee3dc25058fd0212389491f9047f8268518eff73853b14"},
+	"requiredCellSliceProgramTraceLabels":   {7, "e66201bae6c213f6ff20c5cc36ffee6798f18afbf8840af726f10eeb597dded0"},
+	"requiredCellSliceQuietGapCaseNames":    {52, "6dcb64c8f6ef8136f6bd5b79248feb285e5e979a2f7723ee07ce1382770ce363"},
+	"requiredCirclCryptoGapCaseNames":       {39, "4adb641ae42ceb75e8398588f5e736faf19000ae2ffd7e323daa33574fed97f6"},
+	"requiredCryptoEdgeGapCaseNames":        {31, "32764a1ab116f7dd2b603fac6ce2ce0775ade9984dadd45789abac5b44bdf76d"},
+	"requiredCryptoGapCaseNames":            {14, "ff829b1a20a9ca8383acc2735c59107c88fe4b40ababbb2dc5670244edc23585"},
+	"requiredDataSizeGapCaseNames":          {9, "6e3e5199a7456c22f065f6ecef250f0b742136e717abf1c3df54ea0c86a29b90"},
+	"requiredDataSizeProgramTraceLabels":    {4, "df7673fc99960358465d9def9091c79231c02aea6c6ac63418466999b03ca523"},
+	"requiredDictContinuationGapCaseNames":  {18, "1b6c137ac1593b265b2cf2026c03be63886f4cdafce780a862e2d3687cb784a8"},
+	"requiredDictEdgeGapCaseNames":          {10, "88c95d5f5c372ace2e63d93926d5977904f571f88c5e9ec65d6500bde9b0be0f"},
+	"requiredDictGapTraceLabels":            {63, "2c4de0a1b83a8c52d5b80abb180ec705f7de3db124fc6da4618ad87fce251aa5"},
+	"requiredDictMissGapCaseNames":          {34, "321e118658e1202a3e9b5d26d429067073b1b5e3434125793f454dc67aa4dd36"},
+	"requiredDictNearGapTraceLabels":        {12, "062acdf830f1d8c68c2f7d9d734a81e9dfd49c5920d24ab9fed67fac286ec325"},
+	"requiredDictProgramTraceLabels":        {45, "fcba9d15672d65f5126c7af2d15a22babbbea36b91f720545a6201e080672877"},
+	"requiredDictSuccessGapCaseNames":       {14, "6b644430c8fc5a993e89ca3317d1eb4071193577ac39314e9f6d5839789d9bfc"},
+	"requiredExecGapCaseNames":              {168, "e3f2afdab6659571e08a6158fba25d5c231f80cb9ec9dcdf90c934f964bc7aa0"},
+	"requiredExecRefDecodeGapCaseNames":     {12, "ed3d8fbf59ebc2bcf6386f67127489da147ef17b0802c65229dc2991c8c428dc"},
+	"requiredHashGapCaseNames":              {18, "71c3ce00beef98ec25e52faeaafac385f8c835953e7d15e80461366255d165dd"},
+	"requiredInvalidMathGapCaseNames":       {8, "8a0e713afadab04c354be55bfe619f08594acbbde2fbc59d06edc07a449291d7"},
+	"requiredInventoryResidualGapCaseNames": {38, "92e2961cdd5ffda7950683572254cd07c8621d95d37a5c8e069a055a471820df"},
+	"requiredLibraryGapCaseNames":           {7, "9ea4213524f3ec5581b942730b2df340988e25a3648355b378b7695ed9de4e37"},
+	"requiredMathCompoundTraceLabels":       {21, "1693f9bd08e5fec9fa028f1c8e7438621b8c45b8f6896660742f89fe23e6b6f5"},
+	"requiredMathGapTraceLabels":            {36, "8432a060d595ee2bf1e7b1b9774ba2c2c6a5cfb12e28eed7af5f03600fbee2b3"},
+	"requiredMathImmediateGapCaseNames":     {62, "47efebb69d22db471664b905ea4e81796a72ed8a5238c0f49bc030e02518d8a4"},
+	"requiredMathProgramTraceLabels":        {27, "51b3b4dccbcb702beace253c75a4bc0f12dfcb9cb1cfcf95ed35b26db06122cd"},
+	"requiredMathQuietCompoundTraceLabels":  {15, "153ddfe973151d31254587f4433502788ceb53140c0c990b7766f2f73abae367"},
+	"requiredMathQuietLogicTraceLabels":     {29, "9108b5d0e3075f8214be54be56136513053793de3ce838062384fd7fd7859fb1"},
+	"requiredMathShiftTraceLabels":          {20, "fb27bf0bf8d68eec0bfef21a76b062d3a3fe7e26fada87d725f269c365396dbd"},
+	"requiredMsgAddressGapCaseNames":        {21, "49782fdad522ded564bbb166f751f7920860c3e03e88f2d0e517cc0d89639ee9"},
+	"requiredMsgAddressProgramTraceLabels":  {16, "8124966c8519f8c188c963a0fb091532b05627dbd4bcefa3225846e1ffb43472"},
+	"requiredQuietMathErrorGapCaseNames":    {22, "70b6df68d1c7f3ad3974bf01c58dcf268f413ad17677c6989feb31cc4d4d6461"},
+	"requiredRunVMGapCaseNames":             {6, "c54405c34c64c9b24e45360d365e8a7b40bcb5ad89766418b4f5ff7c287f70c0"},
+	"requiredStackDynamicDepthGapCaseNames": {22, "2d9cebaeb34927b478ff010bdcace64ec273ac8e88448bf3ab58b833881795d5"},
+	"requiredStackGapCaseNames":             {30, "a4a03c1a6cd517fdc1ace188cf1e41557a37bc99d096e7f61986f5d63d4c0fb6"},
+	"requiredStackOpcodeSpaceGapCaseNames":  {40, "70689dd0a525c1f92a38f1f5aa95e8220fd200293b2fe5943e23b6eada77a69e"},
+	"requiredTonFuncGapCaseNames":           {49, "2d46a6a608b066c4bb7597eca5ed7d774f71927f528ece2a45e5d9630a73f836"},
+	"requiredTonFuncRuntimeGapCaseNames":    {36, "e3de93a510f951967bba38515810f8ca72725c5f22e3c58033ec855b6102899b"},
+	"requiredTupleDynamicErrorGapCaseNames": {63, "0e05251d912136c1da8fd9ba2cd86f5946911ea61e8b16c840c69d851c2269c4"},
+	"requiredTupleGapCaseNames":             {7, "4947335e7c9372931320769db91024e5a8301e43c49a160f4a239a9daae20b2f"},
+	"requiredTupleGapTraceLabels":           {19, "2f677e5e9808661d9b9720d529b9692266584cb81d7955566b0b1b728fbc1e6d"},
+	"requiredTupleOpcodeSpaceGapCaseNames":  {38, "9f82cbfcc89f332c771cff09e4a9453e8a9a767f8fd1eacee87691baf412de60"},
+	"requiredVarIntGapCaseNames":            {12, "16547fa9229c8370ddd1ce0035497e7e0d821dfd4575de1b77616472a35b2d6f"},
+}
+
+var expectedParityCryptoOpcodeWitnessCases = map[string][]string{
+	"BLS_AGGREGATE":                    {"bls_aggregate"},
+	"BLS_AGGREGATEVERIFY":              {"bls_aggregateverify_distinct_msgs_true"},
+	"BLS_FASTAGGREGATEVERIFY":          {"bls_fastaggregateverify_true"},
+	"BLS_G1_ADD":                       {"bls_g1_add"},
+	"BLS_G1_INGROUP":                   {"bls_g1_ingroup_invalid_false"},
+	"BLS_G1_ISZERO":                    {"bls_g1_iszero"},
+	"BLS_G1_MUL":                       {"bls_g1_mul"},
+	"BLS_G1_MULTIEXP":                  {"bls_g1_multiexp_two_terms"},
+	"BLS_G1_NEG":                       {"bls_g1_neg"},
+	"BLS_G1_SUB":                       {"bls_g1_sub"},
+	"BLS_G1_ZERO":                      {"bls_g1_zero"},
+	"BLS_G2_ADD":                       {"bls_g2_add"},
+	"BLS_G2_INGROUP":                   {"bls_g2_ingroup_invalid_false"},
+	"BLS_G2_ISZERO":                    {"bls_g2_iszero"},
+	"BLS_G2_MUL":                       {"bls_g2_mul"},
+	"BLS_G2_MULTIEXP":                  {"bls_g2_multiexp_two_terms"},
+	"BLS_G2_NEG":                       {"bls_g2_neg"},
+	"BLS_G2_SUB":                       {"bls_g2_sub"},
+	"BLS_G2_ZERO":                      {"bls_g2_zero"},
+	"BLS_MAP_TO_G1":                    {"bls_map_to_g1"},
+	"BLS_MAP_TO_G2":                    {"bls_map_to_g2"},
+	"BLS_PAIRING":                      {"bls_pairing_false"},
+	"BLS_PUSHR":                        {"bls_pushr"},
+	"BLS_VERIFY":                       {"bls_verify_true"},
+	"CHKSIGNS":                         {"chksigns_success"},
+	"CHKSIGNU":                         {"chksignu_success"},
+	"ECRECOVER":                        {"ecrecover_success"},
+	"HASHBU":                           {"hashbu_builder_with_ref"},
+	"HASHEXT 0":                        {"hashext_bit_concat_sha256"},
+	"P256_CHKSIGNS":                    {"p256_chksigns_success"},
+	"P256_CHKSIGNU":                    {"p256_chksignu_success"},
+	"RIST255_ADD":                      {"rist255_add_valid"},
+	"RIST255_FROMHASH":                 {"rist255_fromhash"},
+	"RIST255_MUL":                      {"rist255_mul"},
+	"RIST255_MULBASE":                  {"rist255_mulbase"},
+	"RIST255_PUSHL":                    {"rist255_pushl"},
+	"RIST255_QADD":                     {"rist255_qadd_invalid"},
+	"RIST255_QMUL":                     {"rist255_qmul_invalid"},
+	"RIST255_QMULBASE":                 {"rist255_qmulbase"},
+	"RIST255_QSUB":                     {"rist255_qsub_valid"},
+	"RIST255_QVALIDATE":                {"rist255_qvalidate_invalid"},
+	"RIST255_SUB":                      {"rist255_sub_valid"},
+	"RIST255_VALIDATE":                 {"rist255_validate_valid"},
+	"SECP256K1_XONLY_PUBKEY_TWEAK_ADD": {"secp256k1_xonly_pubkey_tweak_add_success"},
+	"SHA256U":                          {"sha256u_empty"},
+}
+
+var expectedParityRuntimeOpcodeWitnessCases = map[string][]string{
+	"ACCEPT":              {"accept"},
+	"ADDRAND":             {"setrand_addrand_roundtrip"},
+	"BALANCE":             {"balance_myaddr_configroot"},
+	"BLOCKLT":             {"getparam_now_blocklt_ltime_aliases"},
+	"CDATASIZE":           {"cdatasize_success_counts_ref"},
+	"CDATASIZEQ":          {"cdatasizeq_bound_too_small_false"},
+	"CHANGELIB":           {"changelib_mode_0"},
+	"COMMIT":              {"commit"},
+	"CONFIGDICT":          {"configdict"},
+	"CONFIGOPTPARAM":      {"configoptparam_hit"},
+	"CONFIGPARAM":         {"configparam_hit"},
+	"CONFIGROOT":          {"balance_myaddr_configroot"},
+	"DUEPAYMENT":          {"duepayment"},
+	"GASCONSUMED":         {"gasconsumed"},
+	"GETEXTRABALANCE":     {"getextrabalance_hit"},
+	"GETFORWARDFEE":       {"getforwardfee"},
+	"GETFORWARDFEESIMPLE": {"getforwardfeesimple"},
+	"GETGASFEE":           {"getgasfee"},
+	"GETGASFEESIMPLE":     {"getgasfeesimple"},
+	"GETGLOB 1":           {"setglob_getglob_roundtrip"},
+	"GETGLOBVAR":          {"setglobvar_getglobvar_roundtrip"},
+	"GETORIGINALFWDFEE":   {"getoriginalfwdfee"},
+	"GETPARAM 0":          {"getparam_now_blocklt_ltime_aliases"},
+	"GETPARAMLONG 0":      {"getparamlong_randseed"},
+	"GETPRECOMPILEDGAS":   {"getprecompiledgas"},
+	"GETSTORAGEFEE":       {"getstoragefee"},
+	"GLOBALID":            {"globalid"},
+	"INCOMINGVALUE":       {"incomingvalue"},
+	"INMSGPARAM 0":        {"inmsgparam_bounce"},
+	"INMSGPARAMS":         {"inmsgparams"},
+	"INMSG_BOUNCE":        {"inmsg_bounce"},
+	"INMSG_BOUNCED":       {"inmsg_bounced"},
+	"INMSG_FWDFEE":        {"inmsg_fwdfee"},
+	"INMSG_LT":            {"inmsg_lt"},
+	"INMSG_ORIGVALUE":     {"inmsg_origvalue"},
+	"INMSG_SRC":           {"inmsg_src"},
+	"INMSG_STATEINIT":     {"inmsg_stateinit"},
+	"INMSG_UTIME":         {"inmsg_utime"},
+	"INMSG_VALUE":         {"inmsg_value"},
+	"INMSG_VALUEEXTRA":    {"inmsg_valueextra"},
+	"LTIME":               {"getparam_now_blocklt_ltime_aliases"},
+	"MYADDR":              {"balance_myaddr_configroot"},
+	"MYCODE":              {"mycode"},
+	"NOW":                 {"getparam_now_blocklt_ltime_aliases"},
+	"PREVBLOCKSINFOTUPLE": {"prevblocksinfotuple"},
+	"PREVKEYBLOCK":        {"prevkeyblock"},
+	"PREVMCBLOCKS":        {"prevmcblocks"},
+	"PREVMCBLOCKS_100":    {"prevmcblocks_100"},
+	"RAND":                {"rand_bounded_updates_seed"},
+	"RANDSEED":            {"getparamlong_randseed"},
+	"RANDU256":            {"randu256_updates_seed"},
+	"RAWRESERVE":          {"rawreserve_mode_0"},
+	"RAWRESERVEX":         {"rawreservex_mode_0"},
+	"SDATASIZE":           {"sdatasize_success_counts_refs"},
+	"SDATASIZEQ":          {"sdatasizeq_bound_too_small_false"},
+	"SENDMSG":             {"sendmsg_extout_fee_only"},
+	"SENDRAWMSG":          {"action_chain_sendrawmsg_then_rawreserve_hash"},
+	"SETCODE":             {"action_chain_setcode_then_setlibcode_hash"},
+	"SETCPX":              {"setcpx_zero"},
+	"SETGASLIMIT":         {"setgaslimit"},
+	"SETGLOB 1":           {"setglob_getglob_roundtrip"},
+	"SETGLOBVAR":          {"setglobvar_getglobvar_roundtrip"},
+	"SETLIBCODE":          {"setlibcode_mode_0"},
+	"SETRAND":             {"setrand_addrand_roundtrip"},
+	"STORAGEFEES":         {"storagefees"},
+	"UNPACKEDCONFIGTUPLE": {"unpackedconfigtuple"},
+}
+
+var expectedParityTupleOpcodeWitnessCases = map[string][]string{
+	"0 EXPLODE":      {"explode_15"},
+	"EXPLODEVAR":     {"explodevar_4"},
+	"0 INDEX":        {"index_0"},
+	"INDEX2 0,0":     {"index2_0_0"},
+	"INDEX3 0,0,0":   {"index3_0_0_0"},
+	"0 INDEXQ":       {"indexq_15"},
+	"INDEXVAR":       {"indexvar_3"},
+	"INDEXVARQ":      {"indexvarq_3"},
+	"ISNULL":         {"isnull_null"},
+	"ISTUPLE":        {"istuple_tuple"},
+	"LAST":           {"last"},
+	"NULLSWAPIF":     {"NULLSWAPIF"},
+	"NULLSWAPIFNOT":  {"NULLSWAPIFNOT"},
+	"NULLROTRIF":     {"NULLROTRIF"},
+	"NULLROTRIFNOT":  {"NULLROTRIFNOT"},
+	"NULLSWAPIF2":    {"NULLSWAPIF2"},
+	"NULLSWAPIFNOT2": {"NULLSWAPIFNOT2"},
+	"NULLROTRIF2":    {"NULLROTRIF2"},
+	"NULLROTRIFNOT2": {"NULLROTRIFNOT2"},
+	"QTLEN":          {"qtlen_tuple"},
+	"0 SETINDEX":     {"setindex_15"},
+	"0 SETINDEXQ":    {"setindexq_15"},
+	"SETINDEXVAR":    {"setindexvar_3"},
+	"SETINDEXVARQ":   {"setindexvarq_3"},
+	"TLEN":           {"tlen"},
+	"TPOP":           {"tpop"},
+	"TPUSH":          {"tpush"},
+	"0 TUPLE":        {"tuple_0"},
+	"TUPLEVAR":       {"tuplevar_4"},
+	"0 UNTUPLE":      {"untuple_0"},
+	"0 UNPACKFIRST":  {"unpackfirst_15"},
+	"UNTUPLEVAR":     {"untuplevar_4"},
+	"UNPACKFIRSTVAR": {"unpackfirstvar_4"},
+}
+
+var expectedParityStackOpcodeWitnessCases = map[string][]string{
+	"PUSHPOW2 1":       {"pushpow2"},
+	"PUSHNAN":          {"pushnan"},
+	"PUSHPOW2DEC 1":    {"pushpow2dec"},
+	"PUSHNEGPOW2 1":    {"pushnegpow2"},
+	"0 BLKDROP":        {"blkdrop_0"},
+	"0,0 BLKDROP2":     {"blkdrop2_15_15"},
+	"0, 0 BLKPUSH":     {"blkpush_1_0"},
+	"1,1 BLKSWAP":      {"blkswap_1_1"},
+	"BLKSWX":           {"blkswx_2_2"},
+	"CHKDEPTH":         {"chkdepth_1022"},
+	"DEPTH":            {"depth"},
+	"DROP":             {"drop"},
+	"2DROP":            {"2drop"},
+	"DROPX":            {"dropx_0"},
+	"DUMPSTK":          {"dumpstk_noop"},
+	"DUMP s0":          {"dump_s0_noop"},
+	"DEBUG 1":          {"debug_noop"},
+	"DEBUGSTR 00":      {"debugstr_noop"},
+	"STRDUMP":          {"strdump_slice_noop"},
+	"DUP":              {"dup"},
+	"2DUP":             {"2dup"},
+	"0,0,0 XC2PU":      {"xc2pu_15_15_15"},
+	"0,0,0 XCPUXC":     {"xcpuxc_15_15_15"},
+	"0,0,0 XCPU2":      {"xcpu2_15_15_15"},
+	"0,0,0 PUXC2":      {"puxc2_15_15_15"},
+	"0,0,0 PUXCPU":     {"puxcpu_15_15_15"},
+	"0,0,0 PU2XC":      {"pu2xc_15_15_15"},
+	"0,0,0 PUSH3":      {"push3_15_15_15"},
+	"NIP":              {"nip"},
+	"ONLYTOPX":         {"onlytopx_0"},
+	"ONLYX":            {"onlyx_0"},
+	"OVER":             {"over"},
+	"2OVER":            {"2over"},
+	"PICK":             {"pick_0"},
+	"s0 POP":           {"pop_short_15"},
+	"s0 PUSH":          {"push_short_15"},
+	"0,0 PUSH2":        {"push2_15_15"},
+	"<???>  PUSHCONT":  {"pushcont_execute"},
+	"PUSHINT":          {"pushint_small"},
+	"??? PUSHREF":      {"pushref_payload"},
+	"0[] PUSHREFSLICE": {"pushrefslice_payload"},
+	"0[] PUSHSLICE":    {"pushslice_payload"},
+	"PUSHNULL":         {"pushnull"},
+	"0,0 PUXC":         {"puxc_15_15"},
+	"2, 0 REVERSE":     {"reverse_17_15"},
+	"REVX":             {"revx_empty"},
+	"ROLL":             {"roll_0"},
+	"ROLLREV":          {"rollrev_256"},
+	"ROT":              {"rot"},
+	"ROTREV":           {"rotrev"},
+	"SWAP":             {"swap"},
+	"2SWAP":            {"2swap"},
+	"TUCK":             {"tuck"},
+	"s0,s0 XCHG":       {"xchg_1_15"},
+	"0 XCHG0":          {"xchg0_long_255"},
+	"0,0 XCHG2":        {"xchg2_15_15"},
+	"0,0,0 XCHG3":      {"xchg3_short_15_15_15"},
+	"XCHGX":            {"xchgx_0"},
+	"0,0 XCPU":         {"xcpu_15_15"},
+}
+
+var expectedParityExecOpcodeWitnessCases = map[string][]string{
+	"AGAIN":            {"again_throw_bounded"},
+	"AGAINBRK":         {"againbrk_break"},
+	"AGAINEND":         {"againend_throw_bounded"},
+	"AGAINENDBRK":      {"againendbrk_break"},
+	"ATEXIT":           {"atexit_runs"},
+	"ATEXITALT":        {"atexitalt_runs"},
+	"BLESS":            {"bless_execute"},
+	"BLESSARGS 0,-1":   {"blessargs_execute"},
+	"BLESSVARARGS":     {"blessvarargs_execute"},
+	"BOOLAND":          {"booland_composes_return_continuation"},
+	"BOOLEVAL":         {"booleval_false_branch"},
+	"BOOLOR":           {"boolor_composes_alt_continuation"},
+	"CALLCC":           {"callcc_pushes_current_continuation"},
+	"CALLCCARGS 0,-1":  {"callccargs_preserves_arg"},
+	"CALLCCVARARGS":    {"callccvarargs_dynamic"},
+	"CALLDICT 0":       {"calldict_short"},
+	"CALLREF":          {"callref_pushes_value"},
+	"CALLXARGS 0,-1":   {"callxargsp_all_returns"},
+	"CALLXARGS 0,0":    {"callxargs_sum_then_tail"},
+	"CALLXVARARGS":     {"callxvarargs_dynamic"},
+	"COMPOSBOTH":       {"composboth_composes_return_and_alt"},
+	"CONDSEL":          {"condsel_true"},
+	"CONDSELCHK":       {"condselchk_true"},
+	"EXECUTE":          {"execute_non_cont_typecheck"},
+	"IF":               {"if_taken_call"},
+	"IFBITJMP 0":       {"ifbitjmp_taken"},
+	"IFBITJMPREF":      {"ifbitjmpref_taken"},
+	"IFELSE":           {"ifelse_true_branch"},
+	"IFELSEREF":        {"ifelseref_skips_invalid_ref_true_branch"},
+	"IFJMP":            {"ifjmp_taken"},
+	"IFJMPREF":         {"ifjmpref_taken"},
+	"IFNOT":            {"ifnot_taken_call"},
+	"IFNOTJMP":         {"ifnotjmp_taken"},
+	"IFNOTJMPREF":      {"ifnotjmpref_taken"},
+	"IFNOTREF":         {"ifnotref_skips_invalid_ref_true"},
+	"IFNOTRET":         {"ifnotret_taken"},
+	"IFNOTRETALT":      {"ifnotretalt_taken"},
+	"IFREF":            {"ifref_skips_invalid_ref_false"},
+	"IFREFELSE":        {"ifrefelse_skips_invalid_ref_false_branch"},
+	"IFREFELSEREF":     {"ifrefelseref_true_branch"},
+	"IFRET":            {"ifret_taken"},
+	"IFRETALT":         {"ifretalt_taken"},
+	"INVERT":           {"invert_ret"},
+	"JMPDICT 0":        {"jmpdict"},
+	"JMPREF":           {"jmpref_pushes_value"},
+	"JMPREFDATA":       {"jmprefdata_exposes_remaining_code"},
+	"JMPX":             {"jmpx_pushes_value"},
+	"JMPXARGS 0":       {"jmpxargs_two_params"},
+	"JMPXDATA":         {"jmpxdata_valid_remaining_slice"},
+	"JMPXVARARGS":      {"jmpxvarargs_dynamic_params"},
+	"NOP":              {"nop_keeps_stack"},
+	"POPCTRX":          {"popctrx_c7_tuple_roundtrip"},
+	"PREPAREDICT 0":    {"preparedict_execute"},
+	"PUSHCTRX":         {"pushctrx_c6_range"},
+	"REPEAT":           {"repeat_two_iterations"},
+	"REPEATBRK":        {"repeatbrk_break"},
+	"REPEATEND":        {"repeatend_one_iteration"},
+	"REPEATENDBRK":     {"repeatendbrk_break"},
+	"RET":              {"invert_ret"},
+	"RETALT":           {"atexitalt_runs"},
+	"RETARGS 0":        {"callxargs_sum_then_tail"},
+	"RETBOOL":          {"retbool_return_branch"},
+	"RETDATA":          {"retdata_remaining_slice"},
+	"RETURNARGS 0":     {"returnargs_fixed_count"},
+	"RETURNVARARGS":    {"returnvarargs_dynamic_count"},
+	"RETVARARGS":       {"retvarargs_trim"},
+	"RUNVM 0":          {"runvm_c7_return_one"},
+	"RUNVMX":           {"runvmx_gas_bounds_return_one"},
+	"SAMEALT":          {"samealt_copy_is_independent"},
+	"SAMEALTSAVE":      {"samealtsave_preserves_previous_alt"},
+	"SETCONTARGS 0,-1": {"setcontargs_capture_all"},
+	"SETCONTCTRMANY 1": {"setcontctrmany_success"},
+	"SETCONTCTRMANYX":  {"setcontctrmanyx_success"},
+	"SETCONTCTRX":      {"setcontctrx_success"},
+	"SETCONTVARARGS":   {"setcontvarargs_execute"},
+	"SETCP 0":          {"setcp_zero"},
+	"SETEXITALT":       {"setexitalt_runs"},
+	"SETNUMVARARGS":    {"setnumvarargs_execute"},
+	"THENRET":          {"thenret_runs"},
+	"THENRETALT":       {"thenretalt_runs"},
+	"THROW 0":          {"throw_short_uncaught"},
+	"THROWANY":         {"throwany_uncaught"},
+	"THROWARG 0":       {"throwarg_long_uncaught"},
+	"THROWARGIF 0":     {"throwargif_taken"},
+	"THROWARGIFNOT 0":  {"throwargifnot_taken"},
+	"THROWIF 0":        {"throwif_taken"},
+	"THROWIFNOT 0":     {"throwifnot_taken"},
+	"TRY":              {"try_catches_throw"},
+	"TRYARGS 0,0":      {"tryargs_returns_value"},
+	"UNTIL":            {"until_one_iteration"},
+	"UNTILBRK":         {"untilbrk_break"},
+	"UNTILEND":         {"untilend_one_iteration"},
+	"UNTILENDBRK":      {"untilendbrk_break"},
+	"WHILE":            {"while_one_iteration_then_false"},
+	"WHILEBRK":         {"whilebrk_break"},
+	"WHILEEND":         {"whileend_one_iteration_then_false"},
+	"WHILEENDBRK":      {"whileendbrk_break"},
+	"c0 POP":           {"popctr_c0_noncont_typecheck"},
+	"c0 POPSAVE":       {"popsavectr_c0_noncont_typecheck"},
+	"c0 PUSH":          {"pushctr_c0_drop"},
+	"c0 SAVEALTCTR":    {"savealtctr_c4_restore_on_retalt"},
+	"c0 SAVEBOTHCTR":   {"savebothctr_c4_restore_on_ret"},
+	"c0 SAVECTR":       {"savectr_c4_restore_on_ret"},
+	"c0 SETALTCTR":     {"setaltctr_c4_restore_on_retalt"},
+	"c0 SETCONTCTR":    {"setcontctr_success"},
+	"c0 SETRETCTR":     {"setretctr_c4_restore_on_ret"},
+}
 
 type differentialFuzzCase struct {
 	seed     uint64
@@ -45,6 +448,8 @@ type differentialFuzzCase struct {
 	stack    []any
 	gasLimit int64
 	c7       tuple.Tuple
+	refLibs  *cell.Cell
+	goLibs   []*cell.Cell
 }
 
 func TestTVMDifferentialFuzzSeeds(t *testing.T) {
@@ -68,6 +473,9262 @@ func TestTVMDifferentialFuzzSeeds(t *testing.T) {
 			r := rand.New(rand.NewSource(int64(seed)))
 			tc := generateDifferentialFuzzCase(t, r, seed)
 			runDifferentialFuzzCase(t, tc)
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzOpcodeInventoryIsClassified(t *testing.T) {
+	if len(vm.List) == 0 {
+		t.Fatal("vm.List is empty")
+	}
+	if len(vm.List) != expectedParityOpcodeInventoryEntries {
+		t.Fatalf("registered opcode inventory size changed: got %d want %d", len(vm.List), expectedParityOpcodeInventoryEntries)
+	}
+
+	buckets := map[string]int{}
+	seen := map[string]struct{}{}
+	var missing []string
+	for i, getter := range vm.List {
+		op := getter()
+		if op == nil {
+			missing = append(missing, fmt.Sprintf("%03d <nil op>", i))
+			continue
+		}
+
+		name := op.SerializeText()
+		if name == "" {
+			missing = append(missing, fmt.Sprintf("%03d <empty SerializeText>", i))
+			continue
+		}
+
+		bucket, ok := parityOpcodeCoverageBucket(name)
+		if !ok {
+			missing = append(missing, fmt.Sprintf("%03d %s", i, name))
+			continue
+		}
+		buckets[bucket]++
+		seen[name] = struct{}{}
+	}
+
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Fatalf("unclassified TVM opcode inventory entries:\n%s", strings.Join(missing, "\n"))
+	}
+	if len(seen) != expectedParityOpcodeInventoryUniqueNames {
+		t.Fatalf("classified opcode inventory unique name count changed: got %d want %d", len(seen), expectedParityOpcodeInventoryUniqueNames)
+	}
+	if len(buckets) != len(expectedParityOpcodeCoverageBucketCounts) {
+		t.Fatalf("opcode inventory bucket set changed: got %d buckets want %d", len(buckets), len(expectedParityOpcodeCoverageBucketCounts))
+	}
+	for bucket, want := range expectedParityOpcodeCoverageBucketCounts {
+		if got := buckets[bucket]; got != want {
+			t.Fatalf("opcode inventory bucket %s count changed: got %d want %d", bucket, got, want)
+		}
+	}
+	for bucket := range buckets {
+		if _, ok := expectedParityOpcodeCoverageBucketCounts[bucket]; !ok {
+			t.Fatalf("unexpected opcode inventory bucket %s with %d entries", bucket, buckets[bucket])
+		}
+	}
+}
+
+func TestTVMDifferentialFuzzWitnessManifestsAreStable(t *testing.T) {
+	manifests := parityWitnessManifestLists()
+	sourceNames := parityWitnessManifestNamesFromSource(t)
+	if len(manifests) != len(expectedParityWitnessManifestExpectations) {
+		t.Fatalf("witness manifest set size changed: got %d want %d", len(manifests), len(expectedParityWitnessManifestExpectations))
+	}
+
+	var failures []string
+	if len(sourceNames) != len(expectedParityWitnessManifestExpectations) {
+		failures = append(failures, fmt.Sprintf("source manifest set size got %d want %d", len(sourceNames), len(expectedParityWitnessManifestExpectations)))
+	}
+	for name, expected := range expectedParityWitnessManifestExpectations {
+		if _, ok := sourceNames[name]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing from source manifest scan", name))
+		}
+		items, ok := manifests[name]
+		if !ok {
+			failures = append(failures, fmt.Sprintf("%s missing", name))
+			continue
+		}
+		if len(items) != expected.count {
+			failures = append(failures, fmt.Sprintf("%s count got %d want %d", name, len(items), expected.count))
+			continue
+		}
+		if got := parityWitnessManifestHash(items); got != expected.hash {
+			failures = append(failures, fmt.Sprintf("%s hash got %s want %s", name, got, expected.hash))
+		}
+	}
+	for name := range manifests {
+		if _, ok := expectedParityWitnessManifestExpectations[name]; !ok {
+			failures = append(failures, fmt.Sprintf("%s unexpected", name))
+		}
+		if _, ok := sourceNames[name]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing from source manifest declarations", name))
+		}
+	}
+	for name := range sourceNames {
+		if _, ok := expectedParityWitnessManifestExpectations[name]; !ok {
+			failures = append(failures, fmt.Sprintf("%s source manifest missing expectation", name))
+		}
+		if _, ok := manifests[name]; !ok {
+			failures = append(failures, fmt.Sprintf("%s source manifest missing actual list", name))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("witness manifest drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzCryptoOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "deterministic_ton_crypto")
+	if len(inventory) != len(expectedParityCryptoOpcodeWitnessCases) {
+		t.Fatalf("crypto opcode witness inventory size changed: got %d want %d", len(inventory), len(expectedParityCryptoOpcodeWitnessCases))
+	}
+
+	witnessCases := parityNamedWitnessCases(
+		requiredHashGapCaseNames,
+		requiredCryptoGapCaseNames,
+		requiredCryptoEdgeGapCaseNames,
+		requiredCirclCryptoGapCaseNames,
+	)
+
+	var failures []string
+	for opcode, cases := range expectedParityCryptoOpcodeWitnessCases {
+		if _, ok := inventory[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing from crypto opcode inventory", opcode))
+			continue
+		}
+		for _, name := range cases {
+			if _, ok := witnessCases[name]; !ok {
+				failures = append(failures, fmt.Sprintf("%s witness case %s is missing", opcode, name))
+			}
+		}
+	}
+	for opcode := range inventory {
+		if _, ok := expectedParityCryptoOpcodeWitnessCases[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing crypto witness mapping", opcode))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("crypto opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzRuntimeOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "deterministic_ton_runtime")
+	if len(inventory) != len(expectedParityRuntimeOpcodeWitnessCases) {
+		t.Fatalf("runtime opcode witness inventory size changed: got %d want %d", len(inventory), len(expectedParityRuntimeOpcodeWitnessCases))
+	}
+
+	witnessCases := parityNamedWitnessCases(
+		requiredTonFuncGapCaseNames,
+		requiredTonFuncRuntimeGapCaseNames,
+		requiredDataSizeGapCaseNames,
+		requiredActionModeGapCaseNames,
+		requiredActionErrorGapCaseNames,
+		requiredInventoryResidualGapCaseNames,
+	)
+
+	var failures []string
+	for opcode, cases := range expectedParityRuntimeOpcodeWitnessCases {
+		if _, ok := inventory[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing from runtime opcode inventory", opcode))
+			continue
+		}
+		for _, name := range cases {
+			if _, ok := witnessCases[name]; !ok {
+				failures = append(failures, fmt.Sprintf("%s witness case %s is missing", opcode, name))
+			}
+		}
+	}
+	for opcode := range inventory {
+		if _, ok := expectedParityRuntimeOpcodeWitnessCases[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing runtime witness mapping", opcode))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("runtime opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzTupleOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "dedicated_tuple")
+	if len(inventory) != len(expectedParityTupleOpcodeWitnessCases) {
+		t.Fatalf("tuple opcode witness inventory size changed: got %d want %d", len(inventory), len(expectedParityTupleOpcodeWitnessCases))
+	}
+
+	witnessCases := parityNamedWitnessCases(
+		requiredTupleGapCaseNames,
+		requiredTupleOpcodeSpaceGapCaseNames,
+		requiredTupleDynamicErrorGapCaseNames,
+		requiredTupleGapTraceLabels,
+	)
+
+	var failures []string
+	for opcode, cases := range expectedParityTupleOpcodeWitnessCases {
+		if _, ok := inventory[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing from tuple opcode inventory", opcode))
+			continue
+		}
+		for _, name := range cases {
+			if _, ok := witnessCases[name]; !ok {
+				failures = append(failures, fmt.Sprintf("%s witness item %s is missing", opcode, name))
+			}
+		}
+	}
+	for opcode := range inventory {
+		if _, ok := expectedParityTupleOpcodeWitnessCases[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing tuple witness mapping", opcode))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("tuple opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzStackOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "random_stack")
+	witnessCases := parityStackOpcodeWitnessItems()
+
+	var failures []string
+	if len(inventory) != len(expectedParityStackOpcodeWitnessCases) {
+		failures = append(failures, fmt.Sprintf("stack opcode witness inventory size got %d want %d", len(inventory), len(expectedParityStackOpcodeWitnessCases)))
+	}
+	for opcode, cases := range expectedParityStackOpcodeWitnessCases {
+		if _, ok := inventory[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing from stack opcode inventory", opcode))
+			continue
+		}
+		for _, name := range cases {
+			if _, ok := witnessCases[name]; !ok {
+				failures = append(failures, fmt.Sprintf("%s witness item %s is missing", opcode, name))
+			}
+		}
+	}
+	for opcode := range inventory {
+		if _, ok := expectedParityStackOpcodeWitnessCases[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing stack witness mapping", opcode))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("stack opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzExecOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "deterministic_exec")
+	witnessCases := parityExecOpcodeWitnessItems()
+
+	var failures []string
+	if len(inventory) != len(expectedParityExecOpcodeWitnessCases) {
+		failures = append(failures, fmt.Sprintf("exec opcode witness inventory size got %d want %d", len(inventory), len(expectedParityExecOpcodeWitnessCases)))
+	}
+	for opcode, cases := range expectedParityExecOpcodeWitnessCases {
+		if _, ok := inventory[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing from exec opcode inventory", opcode))
+			continue
+		}
+		for _, name := range cases {
+			if _, ok := witnessCases[name]; !ok {
+				failures = append(failures, fmt.Sprintf("%s witness item %s is missing", opcode, name))
+			}
+		}
+	}
+	for opcode := range inventory {
+		if _, ok := expectedParityExecOpcodeWitnessCases[opcode]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing exec witness mapping", opcode))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("exec opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzDictOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "random_dict")
+	witnessItems := parityDictOpcodeWitnessItems(t)
+
+	var failures []string
+	if len(inventory) != expectedParityDictOpcodeWitnessNames {
+		failures = append(failures, fmt.Sprintf("dict opcode witness inventory size got %d want %d", len(inventory), expectedParityDictOpcodeWitnessNames))
+	}
+	for opcode := range inventory {
+		key := parityDictOpcodeInventoryWitnessKey(opcode)
+		if key == "" {
+			failures = append(failures, fmt.Sprintf("%s failed to normalize dict witness key", opcode))
+			continue
+		}
+		if !parityDictOpcodeHasWitness(key, witnessItems) {
+			failures = append(failures, fmt.Sprintf("%s missing dict witness key %s", opcode, key))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("dict opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzCellSliceOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "random_cell_slice")
+	witnessItems := parityCellSliceOpcodeWitnessItems(t)
+
+	var failures []string
+	if len(inventory) != expectedParityCellSliceOpcodeWitnessNames {
+		failures = append(failures, fmt.Sprintf("cell/slice opcode witness inventory size got %d want %d", len(inventory), expectedParityCellSliceOpcodeWitnessNames))
+	}
+	for opcode := range inventory {
+		key := parityCellSliceOpcodeInventoryWitnessKey(opcode)
+		if key == "" {
+			failures = append(failures, fmt.Sprintf("%s failed to normalize cell/slice witness key", opcode))
+			continue
+		}
+		if !parityCellSliceOpcodeHasWitness(key, witnessItems) {
+			failures = append(failures, fmt.Sprintf("%s missing cell/slice witness key %s", opcode, key))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("cell/slice opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func TestTVMDifferentialFuzzMathOpcodeInventoryHasWitnesses(t *testing.T) {
+	inventory := parityOpcodeInventoryNamesByBucket(t, "random_math")
+	witnessKeys := parityMathOpcodeWitnessItems(t)
+
+	var failures []string
+	if len(inventory) != expectedParityMathOpcodeWitnessNames {
+		failures = append(failures, fmt.Sprintf("math opcode witness inventory size got %d want %d", len(inventory), expectedParityMathOpcodeWitnessNames))
+	}
+	for opcode := range inventory {
+		key := parityMathOpcodeInventoryWitnessKey(opcode)
+		if key == "" {
+			failures = append(failures, fmt.Sprintf("%s failed to normalize math witness key", opcode))
+			continue
+		}
+		if _, ok := witnessKeys[key]; !ok {
+			failures = append(failures, fmt.Sprintf("%s missing math witness key %s", opcode, key))
+		}
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		t.Fatalf("math opcode witness drift:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func parityOpcodeInventoryNamesByBucket(t *testing.T, bucket string) map[string]struct{} {
+	t.Helper()
+
+	names := map[string]struct{}{}
+	for i, getter := range vm.List {
+		op := getter()
+		if op == nil {
+			t.Fatalf("vm.List[%d] returned nil op", i)
+		}
+		name := op.SerializeText()
+		gotBucket, ok := parityOpcodeCoverageBucket(name)
+		if !ok {
+			t.Fatalf("vm.List[%d] %q has no coverage bucket", i, name)
+		}
+		if gotBucket == bucket {
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
+func parityNamedWitnessCases(lists ...[]string) map[string]struct{} {
+	cases := map[string]struct{}{}
+	for _, list := range lists {
+		for _, name := range list {
+			cases[name] = struct{}{}
+		}
+	}
+	return cases
+}
+
+func parityStackOpcodeWitnessItems() map[string]struct{} {
+	cases := parityNamedWitnessCases(
+		requiredStackGapCaseNames,
+		requiredStackOpcodeSpaceGapCaseNames,
+		requiredStackDynamicDepthGapCaseNames,
+		requiredInventoryResidualGapCaseNames,
+		requiredMathImmediateGapCaseNames,
+		requiredExecGapCaseNames,
+	)
+	for _, tc := range buildStackOpsOpcodeSpaceCases() {
+		cases[tc.name] = struct{}{}
+	}
+	for _, tc := range buildStackOpsDynamicAndDepthEdgeCases() {
+		cases[tc.name] = struct{}{}
+	}
+	return cases
+}
+
+func parityExecOpcodeWitnessItems() map[string]struct{} {
+	return parityNamedWitnessCases(
+		requiredExecGapCaseNames,
+		requiredExecRefDecodeGapCaseNames,
+		requiredRunVMGapCaseNames,
+		requiredStackGapCaseNames,
+		requiredInventoryResidualGapCaseNames,
+		requiredTonFuncRuntimeGapCaseNames,
+	)
+}
+
+func parityDictOpcodeWitnessItems(t *testing.T) []string {
+	t.Helper()
+
+	lists := [][]string{
+		requiredDictProgramTraceLabels,
+		requiredDictGapTraceLabels,
+		requiredDictNearGapTraceLabels,
+		requiredDictSuccessGapCaseNames,
+		requiredDictMissGapCaseNames,
+		requiredDictEdgeGapCaseNames,
+		requiredDictContinuationGapCaseNames,
+	}
+
+	var items []string
+	for _, list := range lists {
+		items = append(items, list...)
+	}
+	for label := range parityProgramGeneratorLiteralTraceLabelsFromSource(t) {
+		items = append(items, label)
+	}
+	return items
+}
+
+func parityDictOpcodeInventoryWitnessKey(name string) string {
+	fields := strings.Fields(name)
+	if len(fields) == 0 {
+		return ""
+	}
+	for _, field := range fields {
+		field = strings.Trim(field, ",")
+		if strings.HasPrefix(field, "DICT") || strings.HasPrefix(field, "PFXDICT") {
+			return strings.ToUpper(field)
+		}
+	}
+	return strings.ToUpper(fields[0])
+}
+
+func parityDictOpcodeHasWitness(opcode string, items []string) bool {
+	op := strings.ToLower(opcode)
+	for _, item := range items {
+		key := strings.ToLower(item)
+		if idx := strings.IndexByte(key, '('); idx >= 0 {
+			key = key[:idx]
+		}
+		if key == op || strings.HasPrefix(key, op+"_") {
+			return true
+		}
+	}
+	return false
+}
+
+func parityCellSliceOpcodeWitnessItems(t *testing.T) []string {
+	t.Helper()
+
+	lists := [][]string{
+		requiredCellSliceProgramTraceLabels,
+		requiredCellSliceGapCaseNames,
+		requiredCellSliceQuietGapCaseNames,
+		requiredCellSliceEdgeGapCaseNames,
+		requiredDataSizeProgramTraceLabels,
+		requiredDataSizeGapCaseNames,
+		requiredMsgAddressProgramTraceLabels,
+		requiredMsgAddressGapCaseNames,
+		requiredVarIntGapCaseNames,
+		requiredLibraryGapCaseNames,
+		requiredInventoryResidualGapCaseNames,
+		requiredHashGapCaseNames,
+	}
+
+	var items []string
+	for _, list := range lists {
+		items = append(items, list...)
+	}
+	for label := range parityProgramGeneratorLiteralTraceLabelsFromSource(t) {
+		items = append(items, label)
+	}
+	return items
+}
+
+func parityCellSliceOpcodeInventoryWitnessKey(name string) string {
+	fields := strings.Fields(name)
+	for _, field := range fields {
+		field = strings.Trim(field, ",")
+		if field == "" || parityMathOpcodeNumberField(field) || strings.HasPrefix(field, "<") {
+			continue
+		}
+		return parityCellSliceWitnessItemKey(field)
+	}
+	return ""
+}
+
+func parityCellSliceOpcodeHasWitness(opcode string, items []string) bool {
+	op := strings.ToLower(opcode)
+	for _, item := range items {
+		key := strings.ToLower(parityCellSliceWitnessItemKey(item))
+		if key == op || strings.HasPrefix(key, op+"_") {
+			return true
+		}
+		if strings.HasPrefix(key, op) && len(key) > len(op) && key[len(op)] >= '0' && key[len(op)] <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func parityCellSliceWitnessItemKey(item string) string {
+	if idx := strings.IndexByte(item, '('); idx >= 0 {
+		item = item[:idx]
+	}
+	key := strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(item, "-", "_"), " ", "_"), "__", "_"))
+	replacements := []struct {
+		from string
+		to   string
+	}{
+		{"SDBEGINSCONSTQ", "SDBEGINSQ"},
+		{"SDBEGINSCONST", "SDBEGINS"},
+		{"PLDSLICEFIXQ", "PLDSLICEQ"},
+		{"LDSLICEFIXQ", "LDSLICEQ"},
+		{"PLDSLICEFIX", "PLDSLICE"},
+		{"LDSLICEFIX", "LDSLICE"},
+		{"PLDIFIXQ", "PLDIQ"},
+		{"PLDUFIXQ", "PLDUQ"},
+		{"LDIFIXQ", "LDIQ"},
+		{"LDUFIXQ", "LDUQ"},
+		{"PLDIFIX", "PLDI"},
+		{"PLDUFIX", "PLDU"},
+		{"LDIFIX", "LDI"},
+		{"LDUFIX", "LDU"},
+	}
+	for _, repl := range replacements {
+		if strings.HasPrefix(key, repl.from) {
+			return repl.to + strings.TrimPrefix(key, repl.from)
+		}
+	}
+	return key
+}
+
+func parityMathOpcodeWitnessItems(t *testing.T) map[string]struct{} {
+	t.Helper()
+
+	keys := map[string]struct{}{}
+	addItem := func(item string) {
+		for _, key := range parityMathWitnessItemKeys(item) {
+			keys[key] = struct{}{}
+		}
+	}
+
+	for label := range parityProgramGeneratorLiteralTraceLabelsFromSource(t) {
+		addItem(label)
+	}
+
+	for item := range parityNamedWitnessCases(
+		requiredMathProgramTraceLabels,
+		requiredMathCompoundTraceLabels,
+		requiredMathShiftTraceLabels,
+		requiredMathGapTraceLabels,
+		requiredMathQuietLogicTraceLabels,
+		requiredMathQuietCompoundTraceLabels,
+		requiredMathImmediateGapCaseNames,
+		requiredInvalidMathGapCaseNames,
+		requiredQuietMathErrorGapCaseNames,
+	) {
+		addItem(item)
+	}
+
+	return keys
+}
+
+func parityMathOpcodeInventoryWitnessKey(name string) string {
+	fields := strings.Fields(name)
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) > 1 && parityMathOpcodeNumberField(fields[0]) {
+		fields = fields[1:]
+	}
+	if len(fields) > 1 && parityMathOpcodeNumberField(fields[len(fields)-1]) {
+		fields = fields[:len(fields)-1]
+	}
+
+	key := strings.ToUpper(strings.Join(fields, ""))
+	key = strings.ReplaceAll(key, ",", "")
+	key = strings.ReplaceAll(key, "_VAR", "")
+	key = strings.ReplaceAll(key, "<INVALID>", "INVALID")
+	key = strings.ReplaceAll(key, "#", "CODE")
+	key = strings.ReplaceAll(key, "/", "")
+	return key
+}
+
+func parityMathOpcodeNumberField(field string) bool {
+	field = strings.Trim(field, ",")
+	_, err := strconv.Atoi(field)
+	return err == nil
+}
+
+func parityMathWitnessItemKeys(item string) []string {
+	key := parityMathWitnessItemBaseKey(item)
+	if key == "" {
+		return nil
+	}
+	if key == "ISNAN" || key == "CHKNAN" {
+		return []string{key}
+	}
+	if grouped := parityMathGroupedWitnessKey(key); grouped != "" {
+		return []string{grouped}
+	}
+
+	key = parityMathTrimWitnessSuffixes(key)
+	if grouped := parityMathGroupedWitnessKey(key); grouped != "" {
+		return []string{grouped}
+	}
+	if key == "" {
+		return nil
+	}
+	return []string{key}
+}
+
+func parityMathWitnessItemBaseKey(item string) string {
+	if idx := strings.IndexByte(item, '('); idx >= 0 {
+		item = item[:idx]
+	}
+
+	key := strings.ToUpper(item)
+	key = strings.ReplaceAll(key, "_", "")
+	key = strings.ReplaceAll(key, "-", "")
+	key = strings.ReplaceAll(key, " ", "")
+	key = strings.ReplaceAll(key, "<INVALID>", "INVALID")
+	key = strings.ReplaceAll(key, "#", "CODE")
+	key = strings.ReplaceAll(key, "/", "")
+	return key
+}
+
+func parityMathGroupedWitnessKey(key string) string {
+	switch {
+	case strings.HasPrefix(key, "ADDCONST"):
+		return "ADDINT"
+	case strings.HasPrefix(key, "MULCONST"):
+		return "MULINT"
+	case key == "RSHIFTFLOOR":
+		return "RSHIFT"
+	case strings.HasPrefix(key, "QMODPOW2"),
+		strings.HasPrefix(key, "QADDRSHIFTMOD"):
+		return "QADDRSHIFTMOD"
+	case strings.HasPrefix(key, "QDIV"),
+		strings.HasPrefix(key, "QMOD"),
+		strings.HasPrefix(key, "QADDDIVMOD"):
+		return "QADDDIVMOD"
+	case strings.HasPrefix(key, "QMULMODPOW2"),
+		strings.HasPrefix(key, "QMULRSHIFT"),
+		strings.HasPrefix(key, "QMULADDRSHIFTMOD"):
+		return "QMULADDRSHIFTMOD"
+	case strings.HasPrefix(key, "QMULDIV"),
+		strings.HasPrefix(key, "QMULMOD"),
+		strings.HasPrefix(key, "QMULADDDIVMOD"):
+		return "QMULADDDIVMOD"
+	case strings.HasPrefix(key, "QLSHIFTDIV"),
+		strings.HasPrefix(key, "QLSHIFTMOD"),
+		strings.HasPrefix(key, "QLSHIFTADDDIVMOD"):
+		return "QLSHIFTADDDIVMOD"
+	case strings.HasPrefix(key, "QLSHIFTNEGATIVE"),
+		strings.HasPrefix(key, "QLSHIFTCOUNT"):
+		return "QLSHIFT"
+	case strings.HasPrefix(key, "QPOW2OUTOFRANGE"):
+		return "QPOW2"
+	default:
+		return ""
+	}
+}
+
+func parityMathTrimWitnessSuffixes(key string) string {
+	suffixes := []string{
+		"NANALIAS",
+		"IMMEDIATENAN",
+		"IMMEDIATE",
+		"FLOORALT",
+		"CURRENT",
+		"LEGACY",
+		"FLOOR",
+		"ROUND",
+		"CEIL",
+		"TRUE",
+		"FALSE",
+		"NAN",
+		"FAIL",
+	}
+
+	for {
+		trimmed := false
+		for _, suffix := range suffixes {
+			if strings.HasSuffix(key, suffix) && len(key) > len(suffix) {
+				key = strings.TrimSuffix(key, suffix)
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			return key
+		}
+	}
+}
+
+func parityWitnessManifestLists() map[string][]string {
+	return map[string][]string{
+		"requiredActionErrorGapCaseNames":       requiredActionErrorGapCaseNames,
+		"requiredActionGapTraceLabels":          requiredActionGapTraceLabels,
+		"requiredActionModeGapCaseNames":        requiredActionModeGapCaseNames,
+		"requiredCellSliceEdgeGapCaseNames":     requiredCellSliceEdgeGapCaseNames,
+		"requiredCellSliceGapCaseNames":         requiredCellSliceGapCaseNames,
+		"requiredCellSliceProgramTraceLabels":   requiredCellSliceProgramTraceLabels,
+		"requiredCellSliceQuietGapCaseNames":    requiredCellSliceQuietGapCaseNames,
+		"requiredCirclCryptoGapCaseNames":       requiredCirclCryptoGapCaseNames,
+		"requiredCryptoEdgeGapCaseNames":        requiredCryptoEdgeGapCaseNames,
+		"requiredCryptoGapCaseNames":            requiredCryptoGapCaseNames,
+		"requiredDataSizeGapCaseNames":          requiredDataSizeGapCaseNames,
+		"requiredDataSizeProgramTraceLabels":    requiredDataSizeProgramTraceLabels,
+		"requiredDictContinuationGapCaseNames":  requiredDictContinuationGapCaseNames,
+		"requiredDictEdgeGapCaseNames":          requiredDictEdgeGapCaseNames,
+		"requiredDictGapTraceLabels":            requiredDictGapTraceLabels,
+		"requiredDictMissGapCaseNames":          requiredDictMissGapCaseNames,
+		"requiredDictNearGapTraceLabels":        requiredDictNearGapTraceLabels,
+		"requiredDictProgramTraceLabels":        requiredDictProgramTraceLabels,
+		"requiredDictSuccessGapCaseNames":       requiredDictSuccessGapCaseNames,
+		"requiredExecGapCaseNames":              requiredExecGapCaseNames,
+		"requiredExecRefDecodeGapCaseNames":     requiredExecRefDecodeGapCaseNames,
+		"requiredHashGapCaseNames":              requiredHashGapCaseNames,
+		"requiredInvalidMathGapCaseNames":       requiredInvalidMathGapCaseNames,
+		"requiredInventoryResidualGapCaseNames": requiredInventoryResidualGapCaseNames,
+		"requiredLibraryGapCaseNames":           requiredLibraryGapCaseNames,
+		"requiredMathCompoundTraceLabels":       requiredMathCompoundTraceLabels,
+		"requiredMathGapTraceLabels":            requiredMathGapTraceLabels,
+		"requiredMathImmediateGapCaseNames":     requiredMathImmediateGapCaseNames,
+		"requiredMathProgramTraceLabels":        requiredMathProgramTraceLabels,
+		"requiredMathQuietCompoundTraceLabels":  requiredMathQuietCompoundTraceLabels,
+		"requiredMathQuietLogicTraceLabels":     requiredMathQuietLogicTraceLabels,
+		"requiredMathShiftTraceLabels":          requiredMathShiftTraceLabels,
+		"requiredMsgAddressGapCaseNames":        requiredMsgAddressGapCaseNames,
+		"requiredMsgAddressProgramTraceLabels":  requiredMsgAddressProgramTraceLabels,
+		"requiredQuietMathErrorGapCaseNames":    requiredQuietMathErrorGapCaseNames,
+		"requiredRunVMGapCaseNames":             requiredRunVMGapCaseNames,
+		"requiredStackDynamicDepthGapCaseNames": requiredStackDynamicDepthGapCaseNames,
+		"requiredStackGapCaseNames":             requiredStackGapCaseNames,
+		"requiredStackOpcodeSpaceGapCaseNames":  requiredStackOpcodeSpaceGapCaseNames,
+		"requiredTonFuncGapCaseNames":           requiredTonFuncGapCaseNames,
+		"requiredTonFuncRuntimeGapCaseNames":    requiredTonFuncRuntimeGapCaseNames,
+		"requiredTupleDynamicErrorGapCaseNames": requiredTupleDynamicErrorGapCaseNames,
+		"requiredTupleGapCaseNames":             requiredTupleGapCaseNames,
+		"requiredTupleGapTraceLabels":           requiredTupleGapTraceLabels,
+		"requiredTupleOpcodeSpaceGapCaseNames":  requiredTupleOpcodeSpaceGapCaseNames,
+		"requiredVarIntGapCaseNames":            requiredVarIntGapCaseNames,
+	}
+}
+
+func parityWitnessManifestNamesFromSource(t *testing.T) map[string]struct{} {
+	t.Helper()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to resolve current test file")
+	}
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("failed to read current test file: %v", err)
+	}
+
+	names := map[string]struct{}{}
+	for _, line := range strings.Split(string(src), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 4 || fields[0] != "var" || fields[2] != "=" || fields[3] != "[]string{" {
+			continue
+		}
+		name := fields[1]
+		if strings.HasPrefix(name, "required") &&
+			(strings.HasSuffix(name, "CaseNames") || strings.HasSuffix(name, "TraceLabels")) {
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
+func parityWitnessManifestHash(items []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(items, "\n")))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func parityOpcodeCoverageBucket(name string) (string, bool) {
+	tokens := parityOpcodeTokens(name)
+	switch {
+	case parityOpcodeHasTokenPrefix(tokens, "DICT", "PFXDICT") ||
+		parityOpcodeHasToken(tokens, "STDICT", "SKIPDICT", "LDDICTS", "PLDDICTS", "LDDICT", "PLDDICT", "LDDICTQ", "PLDDICTQ"):
+		return "random_dict", true
+	case parityOpcodeHasTokenPrefix(tokens, "c0") && parityOpcodeHasToken(tokens, "PUSH", "POP", "SETRETCTR", "SETALTCTR", "POPSAVE", "SAVEALTCTR", "SAVEBOTHCTR", "SAVECTR", "SETCONTCTR"):
+		return "deterministic_exec", true
+	case parityOpcodeHasToken(tokens,
+		"XCHG", "PUSH", "POP", "DUP", "DROP", "SWAP", "ROT", "ROLL", "OVER", "NIP", "TUCK",
+		"PICK", "BLKDROP", "BLKDROP2", "BLKPUSH", "BLKSWAP", "BLKSWX", "REVERSE", "REVX",
+		"ONLYTOPX", "ONLYX", "DEPTH", "CHKDEPTH", "DUMP", "DUMPSTK", "DEBUG", "DEBUGSTR",
+		"STRDUMP", "XC2PU", "XCPUXC", "XCPU2", "PUXC2", "PUXCPU", "PU2XC", "PUXC", "XCPU",
+		"PUSH2", "PUSH3", "PUSHL", "POPL", "PUSHCONT", "PUSHINT", "PUSHREF", "PUSHREFSLICE",
+		"PUSHSLICE", "PUSHNULL", "PUSHNAN", "PUSHPOW2", "PUSHPOW2DEC", "PUSHNEGPOW2",
+		"PUSHSLICEINLINE", "DICTPUSHCONST", "PUSHCTR", "POPCTR", "2DROP", "DROPX", "2DUP",
+		"2OVER", "ROLLREV", "ROTREV", "2SWAP", "XCHG0", "XCHG2", "XCHG3", "XCHGX",
+	):
+		return "random_stack", true
+	case parityOpcodeHasToken(tokens,
+		"ADD", "SUB", "MUL", "DIV", "MOD", "LSHIFT", "RSHIFT", "POW2", "AND", "OR", "XOR",
+		"NOT", "NEGATE", "INC", "DEC", "ABS", "FITS", "UFITS", "BITSIZE", "MIN", "MAX",
+		"CMP", "EQUAL", "LESS", "LEQ", "GREATER", "GEQ", "NEQ", "ISZERO", "ISPOS", "ISNEG",
+		"ISNPOS", "ISNNEG", "ISNAN", "CHKNAN", "QINT", "QUFITS", "QFITS", "GTINT", "SGN",
+		"ADDINT", "MULINT", "EQINT", "LESSINT", "NEQINT", "QEQINT", "QLESSINT", "QGTINT",
+		"QNEQINT", "QADD", "QSUB", "QSUBR", "QNEGATE", "QINC", "QDEC", "QADDINT",
+		"QMULINT", "QMUL", "QMIN", "QMAX", "QMINMAX", "QABS", "QSGN", "QLESS", "QEQUAL",
+		"QLEQ", "QGREATER", "QNEQ", "QGEQ", "QCMP", "QNOT", "QAND", "QOR", "QXOR",
+		"QLSHIFT", "QRSHIFT", "QPOW2", "DIVR", "DIVC", "DIVMOD", "DIVMODR", "DIVMODC",
+		"MODR", "MODC", "MODPOW2", "MODPOW2R", "MODPOW2C", "MULDIV", "MULDIVR",
+		"MULDIVC", "MULDIVMOD", "MULDIVMODR", "MULDIVMODC", "MULMOD", "MULMODR",
+		"MULMODC", "MULMODPOW2_VAR", "MULMODPOW2R_VAR", "MULMODPOW2C_VAR", "MULRSHIFT",
+		"MULRSHIFTR", "MULRSHIFTC", "MULRSHIFTMOD_VAR", "MULRSHIFTRMOD_VAR",
+		"MULRSHIFTCMOD_VAR", "ADDDIVMOD", "ADDDIVMODR", "ADDDIVMODC", "MULADDDIVMOD",
+		"MULADDDIVMODR", "MULADDDIVMODC", "ADDRSHIFTMOD", "ADDRSHIFTMODR", "ADDRSHIFTMODC",
+		"LSHIFTDIV", "LSHIFTDIVR", "LSHIFTDIVC", "LSHIFTDIVMOD", "LSHIFTDIVMODR",
+		"LSHIFTDIVMODC", "LSHIFTMOD", "LSHIFTMODR", "LSHIFTMODC", "RSHIFTR", "RSHIFTC",
+		"RSHIFTMOD", "RSHIFTMODR", "RSHIFTMODC", "FITSX", "UFITSX", "UBITSIZE", "QFITSX",
+		"QUFITSX", "QBITSIZE", "QUBITSIZE", "LSHIFTADDDIVMOD", "LSHIFTADDDIVMODC",
+		"LSHIFTADDDIVMODR", "MINMAX", "MULADDRSHIFTCMOD", "MULADDRSHIFTMOD",
+		"MULADDRSHIFTRMOD", "QADDDIVMOD", "QADDRSHIFTMOD", "QMULADDDIVMOD",
+		"QMULADDRSHIFTMOD", "QLSHIFTADDDIVMOD", "SUBR",
+	):
+		return "random_math", true
+	case parityOpcodeHasTokenSuffix(tokens, "#", "#MOD") || parityOpcodeHasTokenContains(tokens, "/MOD<invalid>"):
+		return "random_math", true
+	case parityOpcodeHasToken(tokens,
+		"NEWC", "ENDC", "CTOS", "XCTOS", "XLOAD", "ENDS", "ST", "LD", "PLD", "LDU", "LDI",
+		"STU", "STI", "SREFS", "SBITS", "SREMPTY", "SEMPTY", "SDEMPTY", "SDFIRST",
+		"SDLEXCMP", "SDEQ", "SDPFX", "SDPFXREV", "SDPPFX", "SDPPFXREV", "SDSKIP",
+		"SDBEGIN", "SCUTFIRST", "SREMPTY", "BDEPTH", "BBITS", "BREFS", "BCHKBITS",
+		"BCHKREFS", "BCHKBITREFS", "HASHSU", "HASHCU", "CHASHI", "CDEPTHI", "LDGRAMS",
+		"STGRAMS", "LDVAR", "STVAR", "LDMSG", "PARSEMSG", "REWRITESTDADDR",
+		"ENDXC", "BBITREFS", "BTOS", "SPLIT", "SCHKBITS", "SCHKREFS", "SCHKBITREFS",
+		"SBITREFS", "CLEVEL", "CLEVELMASK", "SDCNT", "SDSFX", "SDPSFX", "BREMBITS",
+		"BREMREFS", "BREMBITREFS", "DATASIZE", "SDEPTH", "CDEPTH", "CHASHIX", "CDEPTHIX",
+		"LDREF", "LDREFRTOS", "LDSLICEX", "LDIX", "LDUX", "PLDIX", "PLDUX", "LDIXQ",
+		"LDUXQ", "PLDIXQ", "PLDUXQ", "LDIQ", "LDUQ", "PLDIQ", "PLDUQ", "PLDUZ",
+		"PLDSLICEX", "LDSLICEXQ", "PLDSLICEXQ", "LDSLICE", "PLDSLICE", "LDSLICEQ",
+		"PLDSLICEQ", "LDILE4", "LDULE4", "LDILE8", "LDULE8", "PLDILE4", "PLDULE4",
+		"PLDILE8", "PLDULE8", "LDILE4Q", "LDULE4Q", "LDILE8Q", "LDULE8Q", "PLDILE4Q",
+		"PLDULE4Q", "PLDILE8Q", "PLDULE8Q", "STILE4", "STULE4", "STILE8", "STULE8",
+		"STREF", "STBREF", "STSLICE", "STBREFR", "STREFR", "STSLICER", "STBR", "STREFQ",
+		"STBREFQ", "STSLICEQ", "STBQ", "STREFRQ", "STBREFRQ", "STSLICERQ", "STBRQ",
+		"BCHKBITSQ", "BCHKREFSQ", "BCHKBITREFSQ", "STZEROES", "STONES", "STSAME",
+		"SDCUTFIRST", "SDCUTLAST", "SDSKIPLAST", "SDSUBSTR", "SSKIPFIRST", "SCUTLAST",
+		"SSKIPLAST", "SUBSLICE", "PLDREFVAR", "PLDREFIDX", "LDZEROES", "LDONES", "LDSAME",
+		"SDBEGINSX", "SDBEGINSXQ", "SDBEGINS", "SDSKIPFIRST", "ENDCST", "STREFCONST",
+		"STSLICECONST", "SPLITQ", "XLOADQ", "SCHKBITSQ", "SCHKREFSQ", "SCHKBITREFSQ",
+		"SDCNTLEAD0", "SDCNTLEAD1", "SDCNTTRAIL0", "SDCNTTRAIL1", "SDSFXREV", "SDPSFXREV",
+		"PLDI", "PLDU", "STB", "STIX",
+	):
+		return "random_cell_slice", true
+	case parityOpcodeHasTokenPrefix(tokens, "LDMSGADDR", "PARSEMSGADDR", "REWRITE", "LDSTDADDR", "LDOPTSTDADDR", "STSTDADDR", "STOPTSTDADDR", "LDVAR", "STVAR"):
+		return "random_cell_slice", true
+	case parityOpcodeHasToken(tokens,
+		"EXECUTE", "JMP", "CALL", "RET", "RETURN", "THROW", "TRY", "IF", "WHILE", "UNTIL",
+		"REPEAT", "AGAIN", "BLESS", "SETCONT", "SETNUM", "BOOL", "COMPOS", "ATEXIT",
+		"ATEXITALT", "SETEXITALT", "THENRET", "INVERT", "SAMEALT", "RUNVM", "SETCP",
+		"SAVE", "SAVECTR", "SAVEALTCTR", "SAVEBOTHCTR", "PUSHCTRX", "POPCTRX", "SETALTCTR",
+		"CONDSEL", "CONDSELCHK", "NOP", "JMPX", "JMPXARGS", "JMPXDATA", "JMPXVARARGS",
+		"CALLXARGS", "CALLCC", "CALLCCARGS", "CALLXVARARGS", "CALLCCVARARGS", "RETARGS",
+		"RETVARARGS", "RETURNARGS", "RETURNVARARGS", "RETBOOL", "RETDATA", "RETALT",
+		"IFRET", "IFRETALT", "IFNOTRET", "IFNOTRETALT", "IFJMP", "IFNOTJMP", "IFBITJMP",
+		"IFNBITJMP", "IFBITJMPREF", "IFNBITJMPREF", "IFREF", "IFNOTREF", "IFJMPREF",
+		"IFNOTJMPREF", "IFREFELSE", "IFELSEREF", "IFREFELSEREF", "CALLREF", "JMPREF",
+		"JMPREFDATA", "CALLDICT", "JMPDICT", "PREPAREDICT", "BOOLEVAL", "BOOLAND",
+		"BOOLOR", "COMPOSBOTH", "REPEATBRK", "UNTILBRK", "WHILEBRK", "REPEATENDBRK",
+		"UNTILENDBRK", "WHILEENDBRK", "AGAINBRK", "AGAINENDBRK", "SETCONTARGS",
+		"SETCONTVARARGS", "SETNUMVARARGS", "BLESSVARARGS", "BLESSARGS", "SETCONTCTR",
+		"SETCONTCTRX", "SETCONTCTRMANY", "SETCONTCTRMANYX", "POPSAVE", "AGAINEND",
+		"THENRETALT", "IFELSE", "IFNOT", "REPEATEND", "RUNVMX", "SAMEALTSAVE", "TRYARGS",
+		"UNTILEND", "WHILEEND",
+	):
+		return "deterministic_exec", true
+	case parityOpcodeHasTokenPrefix(tokens, "THROW") || parityOpcodeHasToken(tokens, "THROWANY", "THROWARGANY", "THROWANYIF", "THROWARGANYIF", "THROWANYIFNOT", "THROWARGANYIFNOT"):
+		return "deterministic_exec", true
+	case parityOpcodeHasToken(tokens,
+		"SHA", "HASH", "HASHEXT", "CHKSIG", "ECRECOVER", "P256", "SECP256K1", "RIST255",
+		"BLS", "SHA256U", "HASHEXT", "HASHBU", "CHKSIGNU", "CHKSIGNS",
+	):
+		return "deterministic_ton_crypto", true
+	case parityOpcodeHasTokenPrefix(tokens, "BLS_", "P256_", "RIST255_", "SECP256K1_"):
+		return "deterministic_ton_crypto", true
+	case parityOpcodeHasToken(tokens,
+		"NOW", "BLOCKLT", "LTIME", "RAND", "SETRAND", "ADDRAND", "GETRAND", "GETPARAM",
+		"CONFIG", "MYADDR", "BALANCE", "MYCODE", "INCOMINGVALUE", "STORAGEFEES", "DUEPAYMENT",
+		"GLOBALID", "PREVBLOCK", "PREVMC", "PREVKEY", "GETPRECOMPILEDGAS", "INMSG",
+		"GETSTORAGEFEE", "GETGASFEE", "GETFORWARDFEE", "GETORIGINALFWDFEE", "GETEXTRABALANCE",
+		"SEND", "RAWRESERVE", "SETCODE", "SETLIBCODE", "CHANGELIB", "GETGLOB", "SETGLOB",
+		"ACCEPT", "SETGASLIMIT", "GASCONSUMED", "COMMIT", "SENDRAWMSG", "SENDMSG",
+		"RANDU256", "RANDSEED", "CONFIGROOT", "CONFIGDICT", "CONFIGPARAM", "CONFIGOPTPARAM",
+		"GETGLOBVAR", "SETGLOBVAR", "GETPARAMLONG", "RAWRESERVEX", "PREVBLOCKSINFOTUPLE",
+		"UNPACKEDCONFIGTUPLE", "PREVMCBLOCKS", "PREVKEYBLOCK", "PREVMCBLOCKS_100",
+		"INMSGPARAMS", "INMSG_BOUNCE", "INMSG_BOUNCED", "INMSG_SRC", "INMSG_FWDFEE",
+		"INMSG_LT", "INMSG_UTIME", "INMSG_ORIGVALUE", "INMSG_VALUE", "INMSG_VALUEEXTRA",
+		"INMSG_STATEINIT", "INMSGPARAM", "GETGASFEESIMPLE", "GETFORWARDFEESIMPLE",
+		"SETCPX", "CDATASIZEQ", "CDATASIZE", "SDATASIZEQ", "SDATASIZE",
+	):
+		return "deterministic_ton_runtime", true
+	case parityOpcodeHasToken(tokens,
+		"TUPLE", "UNTUPLE", "INDEX", "SETINDEX", "EXPLODE", "TPUSH", "TPOP", "NULL",
+		"ISNULL", "NULLSWAP", "UNPACKFIRST", "TLEN", "QTLEN", "ISTUPLE", "LAST", "FIRST",
+		"SECOND", "THIRD", "UNPACK", "INDEXVAR", "INDEXVARQ", "SETINDEXVAR", "SETINDEXVARQ",
+		"TUPLEVAR", "UNTUPLEVAR", "UNPACKFIRSTVAR", "EXPLODEVAR", "INDEXQ", "SETINDEXQ",
+		"INDEX2", "INDEX3", "NULLSWAPIF", "NULLSWAPIFNOT", "NULLROTRIF", "NULLROTRIFNOT",
+		"NULLSWAPIF2", "NULLSWAPIFNOT2", "NULLROTRIF2", "NULLROTRIFNOT2",
+	):
+		return "dedicated_tuple", true
+	default:
+		return "", false
+	}
+}
+
+func parityOpcodeTokens(name string) []string {
+	return strings.FieldsFunc(name, func(r rune) bool {
+		switch r {
+		case ' ', ',', '(', ')', '[', ']':
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+func parityOpcodeHasToken(tokens []string, names ...string) bool {
+	for _, token := range tokens {
+		for _, name := range names {
+			if token == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parityOpcodeHasTokenPrefix(tokens []string, prefixes ...string) bool {
+	for _, token := range tokens {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(token, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parityOpcodeHasTokenSuffix(tokens []string, suffixes ...string) bool {
+	for _, token := range tokens {
+		for _, suffix := range suffixes {
+			if strings.HasSuffix(token, suffix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parityOpcodeHasTokenContains(tokens []string, parts ...string) bool {
+	for _, token := range tokens {
+		for _, part := range parts {
+			if strings.Contains(token, part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestTVMDifferentialFuzzProgramGeneratorReachesResidualFamilies(t *testing.T) {
+	const (
+		seeds = 4096
+		steps = 260
+	)
+
+	targets := map[string]struct{}{
+		"NOP":                {},
+		"DROP":               {},
+		"DROP(*":             {},
+		"DUP":                {},
+		"OVER":               {},
+		"SWAP":               {},
+		"ROT":                {},
+		"ROTREV":             {},
+		"DEPTH":              {},
+		"CHKDEPTH":           {},
+		"XCPU(*":             {},
+		"PUXC(*":             {},
+		"XC2PU(*":            {},
+		"XCPUXC(3,4,2)":      {},
+		"XCPU2(4,3,2)":       {},
+		"PUXC2(4,3,2)":       {},
+		"PUXCPU(4,3,2)":      {},
+		"PU2XC(4,3,2)":       {},
+		"2DROP":              {},
+		"2DUP":               {},
+		"2OVER":              {},
+		"2SWAP":              {},
+		"NIP":                {},
+		"TUCK":               {},
+		"PICK":               {},
+		"ROLL":               {},
+		"ROLLREV":            {},
+		"DROPX":              {},
+		"XCHGX":              {},
+		"REVX":               {},
+		"ONLYTOPX":           {},
+		"ONLYX":              {},
+		"BLKSWX":             {},
+		"PUSHINT(*":          {},
+		"PUSHNULL":           {},
+		"PUSHNULL(*":         {},
+		"PUSHNAN":            {},
+		"PUSHNAN(*":          {},
+		"PUSHREF(*":          {},
+		"PUSHSLICE(*":        {},
+		"PUSHPOW2(*":         {},
+		"PUSHPOW2DEC(*":      {},
+		"PUSHNEGPOW2(*":      {},
+		"PUSH(s*":            {},
+		"POP(s*":             {},
+		"XCHG(s*":            {},
+		"REVERSE(*":          {},
+		"BLKDROP(*":          {},
+		"BLKDROP2(*":         {},
+		"BLKPUSH(*":          {},
+		"BLKSWAP(*":          {},
+		"PUSH2(*":            {},
+		"PUSH3(*":            {},
+		"XCHG0(*":            {},
+		"XCHG0L(*":           {},
+		"XCHG2(*":            {},
+		"XCHG3(*":            {},
+		"PUSHL(*":            {},
+		"POPL(*":             {},
+		"PUSHSLICEINLINE":    {},
+		"LDDICT":             {},
+		"PLDDICT":            {},
+		"STDICT":             {},
+		"SKIPDICT":           {},
+		"LDDICTS":            {},
+		"PLDDICTS":           {},
+		"LDDICTQ":            {},
+		"PLDDICTQ":           {},
+		"DICTPUSHCONST":      {},
+		"DICTGET":            {},
+		"DICTGETREF":         {},
+		"DICTIGET":           {},
+		"DICTUGET":           {},
+		"DICTIGETREF":        {},
+		"DICTSET":            {},
+		"DICTISET":           {},
+		"DICTUSET":           {},
+		"DICTSETREF":         {},
+		"DICTISETREF":        {},
+		"DICTUSETREF":        {},
+		"DICTSETGET":         {},
+		"DICTISETGET":        {},
+		"DICTUSETGET":        {},
+		"DICTSETGETREF":      {},
+		"DICTISETGETREF":     {},
+		"DICTUSETGETREF":     {},
+		"DICTREPLACE":        {},
+		"DICTIREPLACE":       {},
+		"DICTUREPLACE":       {},
+		"DICTREPLACEREF":     {},
+		"DICTIREPLACEREF":    {},
+		"DICTUREPLACEREF":    {},
+		"DICTADD":            {},
+		"DICTIADD":           {},
+		"DICTUADD":           {},
+		"DICTADDREF":         {},
+		"DICTIADDREF":        {},
+		"DICTUADDREF":        {},
+		"DICTDEL":            {},
+		"DICTIDEL":           {},
+		"DICTMIN":            {},
+		"DICTMAX":            {},
+		"DICTMINREF":         {},
+		"DICTMAXREF":         {},
+		"DICTIMIN":           {},
+		"DICTUMAX":           {},
+		"DICTIMINREF":        {},
+		"DICTUMAXREF":        {},
+		"DICTREMMIN":         {},
+		"DICTREMMAX":         {},
+		"DICTREMMINREF":      {},
+		"DICTREMMAXREF":      {},
+		"DICTIREMMIN":        {},
+		"DICTUREMMAXREF":     {},
+		"DICTUGETREF":        {},
+		"DICTGETOPTREF":      {},
+		"DICTIGETOPTREF":     {},
+		"DICTUGETOPTREF":     {},
+		"DICTDELGET":         {},
+		"DICTUSETGETOPTREF":  {},
+		"DICTUDELGETREF":     {},
+		"DICTSETB":           {},
+		"DICTUREPLACEB":      {},
+		"DICTIADDB":          {},
+		"DICTSETGETB":        {},
+		"DICTUREPLACEGETB":   {},
+		"DICTIADDGETB":       {},
+		"DICTGETNEXT":        {},
+		"DICTGETNEXTEQ":      {},
+		"DICTGETPREV":        {},
+		"DICTGETPREVEQ":      {},
+		"DICTIGETNEXT":       {},
+		"DICTIGETNEXTEQ":     {},
+		"DICTIGETPREV":       {},
+		"DICTIGETPREVEQ":     {},
+		"DICTUGETNEXT":       {},
+		"DICTUGETNEXTEQ":     {},
+		"DICTUGETPREV":       {},
+		"DICTUGETPREVEQ":     {},
+		"DICTSUBDICTGET":     {},
+		"DICTSUBDICTRPGET":   {},
+		"DICTUSUBDICTGET":    {},
+		"DICTUSUBDICTRPGET":  {},
+		"DICTISUBDICTGET":    {},
+		"DICTISUBDICTRPGET":  {},
+		"DICTREPLACEGET":     {},
+		"DICTIREPLACEGET":    {},
+		"DICTREPLACEGETREF":  {},
+		"DICTIREPLACEGETREF": {},
+		"DICTUREPLACEGETREF": {},
+		"DICTADDGETREF":      {},
+		"DICTIADDGET":        {},
+		"DICTIADDGETREF":     {},
+		"DICTUADDGET":        {},
+		"DICTDELGETREF":      {},
+		"DICTIDELGET":        {},
+		"DICTIDELGETREF":     {},
+		"DICTSETGETOPTREF":   {},
+		"DICTISETGETOPTREF":  {},
+		"DICTIMAX":           {},
+		"DICTIMAXREF":        {},
+		"DICTIREMMAX":        {},
+		"DICTUREMMAX":        {},
+		"DICTIREMMINREF":     {},
+		"DICTIREMMAXREF":     {},
+		"DICTADDB":           {},
+		"DICTISETB":          {},
+		"DICTREPLACEB":       {},
+		"DICTIREPLACEB":      {},
+		"DICTADDGETB":        {},
+		"DICTISETGETB":       {},
+		"DICTUSETGETB":       {},
+		"DICTREPLACEGETB":    {},
+		"DICTIREPLACEGETB":   {},
+		"PFXDICTGET":         {},
+		"PFXDICTGETQ":        {},
+		"PFXDICTREPLACE":     {},
+		"PFXDICTADD":         {},
+		"PFXDICTSET":         {},
+		"PFXDICTDEL":         {},
+
+		"GTINT(3)":                {},
+		"QGTINT(4)":               {},
+		"QGTINT(NaN)":             {},
+		"SGN":                     {},
+		"QSGN":                    {},
+		"QSGN(NaN)":               {},
+		"ISNAN":                   {},
+		"NEGATE":                  {},
+		"INC":                     {},
+		"DEC":                     {},
+		"ABS":                     {},
+		"NOT":                     {},
+		"BITSIZE":                 {},
+		"ISNPOS":                  {},
+		"ISZERO":                  {},
+		"ISPOS":                   {},
+		"ISNEG":                   {},
+		"ADD":                     {},
+		"SUB":                     {},
+		"SUBR":                    {},
+		"MUL":                     {},
+		"AND":                     {},
+		"OR":                      {},
+		"XOR":                     {},
+		"MIN":                     {},
+		"MAX":                     {},
+		"MINMAX":                  {},
+		"LESS":                    {},
+		"LEQ":                     {},
+		"GREATER":                 {},
+		"GEQ":                     {},
+		"EQUAL":                   {},
+		"NEQ":                     {},
+		"CMP":                     {},
+		"ISNNEG(0)":               {},
+		"ISNNEG(-1)":              {},
+		"ADDINT(-5)":              {},
+		"MULINT(-3)":              {},
+		"LESSINT(4)":              {},
+		"EQINT(5)":                {},
+		"NEQINT(8)":               {},
+		"QADD":                    {},
+		"QSUB":                    {},
+		"QSUBR":                   {},
+		"QNEGATE":                 {},
+		"QINC":                    {},
+		"QDEC":                    {},
+		"QADDINT(4)":              {},
+		"QMULINT(-2)":             {},
+		"QMUL":                    {},
+		"QMIN":                    {},
+		"QMAX":                    {},
+		"QMINMAX":                 {},
+		"QABS":                    {},
+		"UBITSIZE":                {},
+		"QBITSIZE":                {},
+		"QUBITSIZE":               {},
+		"FITS(7)":                 {},
+		"UFITS(8)":                {},
+		"FITSX":                   {},
+		"UFITSX":                  {},
+		"POW2":                    {},
+		"LSHIFT":                  {},
+		"RSHIFT":                  {},
+		"DIV":                     {},
+		"MOD":                     {},
+		"DIVMOD":                  {},
+		"ADDCONST(6)":             {},
+		"MULCONST(-4)":            {},
+		"DIVR":                    {},
+		"DIVC":                    {},
+		"MODR":                    {},
+		"MODC":                    {},
+		"DIVMODR":                 {},
+		"DIVMODC":                 {},
+		"MULMOD":                  {},
+		"MULMODR":                 {},
+		"MULMODC":                 {},
+		"MULDIV":                  {},
+		"MULDIVR":                 {},
+		"MULDIVC":                 {},
+		"MULDIVMOD":               {},
+		"MULDIVMODR":              {},
+		"MULDIVMODC":              {},
+		"ADDDIVMOD":               {},
+		"ADDDIVMODR":              {},
+		"ADDDIVMODC":              {},
+		"MULADDDIVMOD":            {},
+		"MULADDDIVMODR":           {},
+		"MULADDDIVMODC":           {},
+		"RSHIFTCODEFLOOR(3)":      {},
+		"RSHIFTFLOOR":             {},
+		"RSHIFTR":                 {},
+		"RSHIFTC":                 {},
+		"MODPOW2":                 {},
+		"MODPOW2R":                {},
+		"MODPOW2C":                {},
+		"MULRSHIFT":               {},
+		"MULRSHIFTR":              {},
+		"MULRSHIFTC":              {},
+		"LSHIFTDIV":               {},
+		"LSHIFTDIVR":              {},
+		"LSHIFTDIVC":              {},
+		"LSHIFTDIVMOD":            {},
+		"LSHIFTADDDIVMOD":         {},
+		"LSHIFTADDDIVMODR":        {},
+		"LSHIFTADDDIVMODC":        {},
+		"MULADDRSHIFTMOD":         {},
+		"MULADDRSHIFTRMOD":        {},
+		"MULADDRSHIFTCMOD":        {},
+		"QNOT":                    {},
+		"QAND":                    {},
+		"QOR":                     {},
+		"QXOR":                    {},
+		"QLSHIFT":                 {},
+		"QRSHIFT":                 {},
+		"QLSHIFTCODE(3)":          {},
+		"QRSHIFTCODE(3)":          {},
+		"QPOW2":                   {},
+		"QLESS":                   {},
+		"QEQUAL":                  {},
+		"QLEQ":                    {},
+		"QGREATER":                {},
+		"QNEQ":                    {},
+		"QGEQ":                    {},
+		"QCMP":                    {},
+		"QEQINT(5)":               {},
+		"QLESSINT(4)":             {},
+		"QNEQINT(4)":              {},
+		"QFITS(6)":                {},
+		"QFITS(3 fail)":           {},
+		"QUFITS(8)":               {},
+		"QFITSX":                  {},
+		"QUFITSX(fail)":           {},
+		"CHKNAN":                  {},
+		"QDIV":                    {},
+		"QMODR":                   {},
+		"QADDDIVMODC":             {},
+		"QMODPOW2R":               {},
+		"QADDRSHIFTMODC":          {},
+		"QMULDIV":                 {},
+		"QMULMODR":                {},
+		"QMULADDDIVMODC":          {},
+		"QMULRSHIFT":              {},
+		"QMULMODPOW2R":            {},
+		"QMULADDRSHIFTMODC":       {},
+		"QLSHIFTDIV":              {},
+		"QLSHIFTMODR":             {},
+		"QLSHIFTADDDIVMODC":       {},
+		"RSHIFTMOD":               {},
+		"RSHIFTMODR":              {},
+		"RSHIFTMODC":              {},
+		"RSHIFTCODEMOD(3)":        {},
+		"RSHIFTRCODEMOD(3)":       {},
+		"RSHIFTCCODEMOD(3)":       {},
+		"LSHIFTMOD":               {},
+		"LSHIFTMODR":              {},
+		"LSHIFTMODC":              {},
+		"LSHIFTDIVMODR":           {},
+		"LSHIFTDIVMODC":           {},
+		"ADDRSHIFTMOD":            {},
+		"ADDRSHIFTMODR":           {},
+		"ADDRSHIFTMODC":           {},
+		"MULMODPOW2":              {},
+		"MULMODPOW2R":             {},
+		"MULMODPOW2C":             {},
+		"MULRSHIFTMOD":            {},
+		"MULRSHIFTRMOD":           {},
+		"MULRSHIFTCMOD":           {},
+		"MULMODPOW2CODE(3)":       {},
+		"MULMODPOW2RCODE(3)":      {},
+		"MULMODPOW2CCODE(3)":      {},
+		"MULRSHIFTCODEMOD(3)":     {},
+		"MULRSHIFTRCODEMOD(3)":    {},
+		"MULRSHIFTCCODEMOD(3)":    {},
+		"ADDRSHIFTCODEMOD(3)":     {},
+		"ADDRSHIFTRCODEMOD(3)":    {},
+		"ADDRSHIFTCCODEMOD(3)":    {},
+		"MULADDRSHIFTCODEMOD(3)":  {},
+		"MULADDRSHIFTRCODEMOD(3)": {},
+		"MULADDRSHIFTCCODEMOD(3)": {},
+
+		"NEWC":                 {},
+		"NEWC(*":               {},
+		"ENDC":                 {},
+		"CTOS":                 {},
+		"ENDS":                 {},
+		"BBITS":                {},
+		"BREFS":                {},
+		"BDEPTH":               {},
+		"LDREF":                {},
+		"HASHCU":               {},
+		"HASHCU(*":             {},
+		"HASHSU":               {},
+		"HASHBU":               {},
+		"HASHEXT(0)":           {},
+		"SHA256U":              {},
+		"SBITS":                {},
+		"SREFS":                {},
+		"SBITREFS":             {},
+		"SDEPTH":               {},
+		"CDEPTH":               {},
+		"CDEPTH(nil)":          {},
+		"BCHKBITSIMM(8)":       {},
+		"CHASHI(0)":            {},
+		"CDEPTHI(0)":           {},
+		"CHASHIX":              {},
+		"CDEPTHIX":             {},
+		"CLEVEL":               {},
+		"CLEVELMASK":           {},
+		"BBITREFS":             {},
+		"BREMBITS":             {},
+		"BREMREFS":             {},
+		"BREMBITREFS":          {},
+		"ENDXC":                {},
+		"BTOS":                 {},
+		"SPLIT":                {},
+		"SPLITQ":               {},
+		"SPLITQ(fail)":         {},
+		"SCHKBITS":             {},
+		"SCHKREFS":             {},
+		"SCHKBITREFS":          {},
+		"SCHKBITSQ":            {},
+		"SCHKREFSQ":            {},
+		"SCHKBITREFSQ":         {},
+		"SCHKBITSQ(fail)":      {},
+		"SCHKREFSQ(fail)":      {},
+		"SCHKBITREFSQ(fail)":   {},
+		"SDCNTLEAD0":           {},
+		"SDCNTLEAD1":           {},
+		"SDCNTTRAIL0":          {},
+		"SDCNTTRAIL1":          {},
+		"SDEMPTY":              {},
+		"SDEQ":                 {},
+		"SDLEXCMP":             {},
+		"SDFIRST":              {},
+		"SDPFX":                {},
+		"SDPFXREV":             {},
+		"SDPPFX":               {},
+		"SDPPFXREV":            {},
+		"SDSFX":                {},
+		"SDSFXREV":             {},
+		"SDPSFX":               {},
+		"SDPSFXREV":            {},
+		"SEMPTY":               {},
+		"SREMPTY":              {},
+		"SDCUTFIRST":           {},
+		"SDSKIPFIRST":          {},
+		"SDCUTLAST":            {},
+		"SDSKIPLAST":           {},
+		"SDSUBSTR":             {},
+		"SCUTFIRST":            {},
+		"SSKIPFIRST":           {},
+		"SCUTLAST":             {},
+		"SSKIPLAST":            {},
+		"SUBSLICE":             {},
+		"LDIX":                 {},
+		"LDI8":                 {},
+		"LDUX":                 {},
+		"LDU8":                 {},
+		"PLDIX":                {},
+		"PLDUX":                {},
+		"LDIXQ":                {},
+		"LDUXQ(fail)":          {},
+		"PLDIXQ":               {},
+		"PLDUXQ(fail)":         {},
+		"LDIFIX(9)":            {},
+		"LDUFIX(9)":            {},
+		"PLDIFIX(9)":           {},
+		"PLDUFIX(9)":           {},
+		"LDIQ":                 {},
+		"PLDIQ":                {},
+		"LDUFIXQ(9)":           {},
+		"PLDUFIXQ(fail)":       {},
+		"LDSLICEX":             {},
+		"PLDSLICEX":            {},
+		"LDSLICEXQ":            {},
+		"LDSLICEXQ(fail)":      {},
+		"PLDSLICEXQ":           {},
+		"PLDSLICEXQ(fail)":     {},
+		"LDSLICE(3)":           {},
+		"LDSLICEFIX(3)":        {},
+		"PLDSLICEFIX(3)":       {},
+		"LDSLICEFIXQ(3)":       {},
+		"LDSLICEFIXQ(fail)":    {},
+		"PLDSLICEFIXQ(3)":      {},
+		"PLDSLICEFIXQ(fail)":   {},
+		"PLDUZ(32)":            {},
+		"LDREFRTOS":            {},
+		"PLDREFVAR":            {},
+		"PLDREFIDX(0)":         {},
+		"PLDREFIDX(1)":         {},
+		"LDZEROES":             {},
+		"LDZEROES(zero)":       {},
+		"LDONES":               {},
+		"LDONES(zero)":         {},
+		"LDSAME":               {},
+		"STI8":                 {},
+		"STIX":                 {},
+		"STU8":                 {},
+		"STREF":                {},
+		"STSLICE":              {},
+		"STSLICE(*":            {},
+		"STBREF":               {},
+		"STBREFR":              {},
+		"STREFR":               {},
+		"STSLICER":             {},
+		"STBR":                 {},
+		"STREFQ":               {},
+		"STREFQ(fail)":         {},
+		"STREFRQ":              {},
+		"STREFRQ(fail)":        {},
+		"STBREFQ":              {},
+		"STBREFQ(fail)":        {},
+		"STBREFRQ":             {},
+		"STBREFRQ(fail)":       {},
+		"STSLICEQ":             {},
+		"STSLICEQ(fail)":       {},
+		"STSLICERQ":            {},
+		"STSLICERQ(fail)":      {},
+		"STBQ":                 {},
+		"STBQ(fail)":           {},
+		"STBRQ":                {},
+		"STBRQ(fail)":          {},
+		"BCHKBITS":             {},
+		"BCHKREFS":             {},
+		"BCHKREFSQ(fail)":      {},
+		"STZEROES":             {},
+		"STONES":               {},
+		"STSAME":               {},
+		"BCHKBITREFS":          {},
+		"BCHKBITREFSQ":         {},
+		"STB":                  {},
+		"STILE4":               {},
+		"STULE4":               {},
+		"STILE8":               {},
+		"STULE8":               {},
+		"LDILE4":               {},
+		"LDULE4":               {},
+		"LDILE8":               {},
+		"LDULE8":               {},
+		"LDILE4Q":              {},
+		"LDULE4Q":              {},
+		"LDILE8Q":              {},
+		"LDULE8Q(fail)":        {},
+		"PLDILE4":              {},
+		"PLDULE4":              {},
+		"PLDILE8":              {},
+		"PLDULE8":              {},
+		"PLDILE4Q":             {},
+		"PLDULE4Q":             {},
+		"PLDILE8Q":             {},
+		"PLDULE8Q(fail)":       {},
+		"XCTOS(ordinary)":      {},
+		"SDBEGINSX":            {},
+		"SDBEGINSXQ":           {},
+		"SDBEGINSXQ(fail)":     {},
+		"SDBEGINSCONST":        {},
+		"SDBEGINSCONSTQ":       {},
+		"SDBEGINSCONSTQ(fail)": {},
+		"LDGRAMS":              {},
+		"STGRAMS":              {},
+		"STREFCONST":           {},
+		"STREF2CONST":          {},
+		"STSLICECONST":         {},
+		"ENDCST":               {},
+		"LDMSGADDR":            {},
+		"LDMSGADDRQ":           {},
+		"LDSTDADDR":            {},
+		"LDSTDADDRQ":           {},
+		"LDOPTSTDADDR":         {},
+		"LDOPTSTDADDRQ":        {},
+		"PARSEMSGADDR":         {},
+		"PARSEMSGADDRQ":        {},
+		"REWRITESTDADDR":       {},
+		"REWRITESTDADDRQ":      {},
+		"REWRITEVARADDR":       {},
+		"REWRITEVARADDRQ":      {},
+		"STSTDADDR":            {},
+		"STSTDADDRQ":           {},
+		"STOPTSTDADDR":         {},
+		"STOPTSTDADDRQ":        {},
+
+		"CTOS(library)":    {},
+		"XLOAD(library)":   {},
+		"XLOADQ(library)":  {},
+		"XCTOS(library)":   {},
+		"XLOADQ(missing)":  {},
+		"XLOADQ(ordinary)": {},
+
+		"DUMPSTK":        {},
+		"DUMP(0)":        {},
+		"DUMP(15)":       {},
+		"DEBUG(42)":      {},
+		"STRDUMP(slice)": {},
+		"STRDUMP(int)":   {},
+		"DEBUGSTR":       {},
+
+		"SHA256U(empty)":    {},
+		"HASHBU(ref)":       {},
+		"HASHEXT(0,concat)": {},
+		"LDVARUINT32(zero)": {},
+		"STVARUINT32(zero)": {},
+		"STVARINT16(zero)":  {},
+
+		"ACCEPT":                       {},
+		"SETGASLIMIT":                  {},
+		"GASCONSUMED":                  {},
+		"COMMIT":                       {},
+		"SETGLOB(20)":                  {},
+		"GETGLOB(20)":                  {},
+		"SETGLOBVAR(21)":               {},
+		"GETGLOBVAR(21)":               {},
+		"PUSHCTR(4)":                   {},
+		"PUSHCTR(5)":                   {},
+		"PUSHCTR(5/*":                  {},
+		"POPCTR(4)":                    {},
+		"POPCTR(5)":                    {},
+		"PUSHCTRX(4)":                  {},
+		"POPCTRX(4)":                   {},
+		"SAVECTR(4)":                   {},
+		"SAVEALTCTR(4)":                {},
+		"SAVEBOTHCTR(4)":               {},
+		"POPSAVECTR(4)":                {},
+		"SETRETCTR(4)":                 {},
+		"SETALTCTR(4)":                 {},
+		"SENDRAWMSG":                   {},
+		"RAWRESERVE":                   {},
+		"RAWRESERVEX":                  {},
+		"SETCODE":                      {},
+		"SETLIBCODE":                   {},
+		"CHANGELIB":                    {},
+		"SENDMSG(fee-only)":            {},
+		"SENDMSG(send)":                {},
+		"SENDMSG(user-fwd-fee)":        {},
+		"CONDSEL":                      {},
+		"CONDSELCHK":                   {},
+		"SETCP(0)":                     {},
+		"SETCPX":                       {},
+		"THROWIF(skip)":                {},
+		"THROWIFNOT(skip)":             {},
+		"INVERT":                       {},
+		"IF(true)":                     {},
+		"IF(false)":                    {},
+		"IFNOT(true)":                  {},
+		"IFNOT(false)":                 {},
+		"IFELSE(true)":                 {},
+		"IFELSE(false)":                {},
+		"EXECUTE(push70)":              {},
+		"EXECUTE(blessed_push80)":      {},
+		"EXECUTE(blessargs)":           {},
+		"PUSHCONT(*":                   {},
+		"CALLREF(push71)":              {},
+		"IFREF(push72,true)":           {},
+		"IFREF(push72,false)":          {},
+		"IFNOTREF(push73,true)":        {},
+		"IFNOTREF(push73,false)":       {},
+		"IFREFELSEREF(true74,false75)": {},
+		"IFREFELSE(true76,false77)":    {},
+		"IFELSEREF(true78,false79)":    {},
+		"BLESS(push80)":                {},
+		"BLESSARGS(1,0)":               {},
+		"REPEAT(one)":                  {},
+		"WHILE(one)":                   {},
+		"UNTIL(one)":                   {},
+		"TRY(caught)":                  {},
+		"TRYARGS(1,1)":                 {},
+		"RUNVM(0)":                     {},
+		"RUNVMX(0)":                    {},
+		"RUNVM(3)":                     {},
+		"RUNVM(256)":                   {},
+		"RUNVM(36)":                    {},
+		"RUNVM(272)":                   {},
+		"RUNVM(128)":                   {},
+
+		"MYCODE":               {},
+		"INCOMINGVALUE":        {},
+		"STORAGEFEES":          {},
+		"DUEPAYMENT":           {},
+		"GLOBALID":             {},
+		"PREVBLOCKSINFOTUPLE":  {},
+		"PREVMCBLOCKS":         {},
+		"PREVKEYBLOCK":         {},
+		"PREVMCBLOCKS_100":     {},
+		"GETPRECOMPILEDGAS":    {},
+		"INMSG_BOUNCE":         {},
+		"INMSG_SRC":            {},
+		"INMSG_VALUE":          {},
+		"GETGASFEE":            {},
+		"GETSTORAGEFEE":        {},
+		"GETFORWARDFEE":        {},
+		"GETORIGINALFWDFEE":    {},
+		"GETGASFEESIMPLE":      {},
+		"GETFORWARDFEESIMPLE":  {},
+		"NOW":                  {},
+		"GETPARAM(3)":          {},
+		"BLOCKLT":              {},
+		"LTIME":                {},
+		"RANDSEED":             {},
+		"BALANCE":              {},
+		"MYADDR":               {},
+		"CONFIGROOT":           {},
+		"CONFIGDICT":           {},
+		"GETPARAMLONG(6)":      {},
+		"CDATASIZE":            {},
+		"CDATASIZEQ":           {},
+		"SDATASIZE":            {},
+		"SDATASIZEQ":           {},
+		"RANDU256":             {},
+		"RAND":                 {},
+		"SETRAND":              {},
+		"ADDRAND":              {},
+		"RAND(0)":              {},
+		"RAND(negative)":       {},
+		"RANDSEED(after_prng)": {},
+		"SETRAND(max)":         {},
+		"LDVARUINT32":          {},
+		"LDVARINT16":           {},
+		"LDVARINT32":           {},
+		"STVARUINT32":          {},
+		"STVARINT16":           {},
+		"STVARINT32":           {},
+
+		"TUPLE(*":        {},
+		"UNTUPLE(*":      {},
+		"UNPACKFIRST(*":  {},
+		"INDEX(*":        {},
+		"INDEXQ(*":       {},
+		"SETINDEX(*":     {},
+		"EXPLODE(*":      {},
+		"ISNULL":         {},
+		"ISTUPLE":        {},
+		"QTLEN":          {},
+		"TLEN":           {},
+		"LAST":           {},
+		"TPUSH":          {},
+		"TPOP":           {},
+		"TUPLEVAR":       {},
+		"INDEXVAR":       {},
+		"INDEXVARQ":      {},
+		"UNTUPLEVAR":     {},
+		"UNPACKFIRSTVAR": {},
+		"EXPLODEVAR":     {},
+		"INDEX2(0,1)":    {},
+		"INDEX3(0,0,1)":  {},
+		"SETINDEXQ(1)":   {},
+		"SETINDEXVAR":    {},
+		"SETINDEXVARQ":   {},
+		"NULLSWAPIF":     {},
+		"NULLSWAPIFNOT":  {},
+		"NULLROTRIF":     {},
+		"NULLSWAPIF2":    {},
+		"NULLROTRIFNOT":  {},
+		"NULLSWAPIFNOT2": {},
+		"NULLROTRIF2":    {},
+		"NULLROTRIFNOT2": {},
+	}
+
+	for seed := uint64(0); seed < seeds && len(targets) > 0; seed++ {
+		g := newParityProgramGenerator(t, rand.New(rand.NewSource(int64(seed))))
+		g.seedInitialStack()
+		for i := 0; i < steps; i++ {
+			if !g.emitRandomOp() {
+				g.emitPushValueOp()
+			}
+		}
+
+		for target := range targets {
+			if parityProgramTraceHasOpcode(g.trace, target) {
+				delete(targets, target)
+			}
+		}
+	}
+
+	if len(targets) == 0 {
+		return
+	}
+
+	missing := make([]string, 0, len(targets))
+	for target := range targets {
+		missing = append(missing, target)
+	}
+	sort.Strings(missing)
+	t.Fatalf("program generator did not reach residual opcode families over %d seeds x %d ops:\n%s",
+		seeds, steps, strings.Join(missing, "\n"))
+}
+
+func parityProgramTraceHasOpcode(trace []string, name string) bool {
+	if strings.HasSuffix(name, "*") {
+		prefix := strings.TrimSuffix(name, "*")
+		for _, entry := range trace {
+			if strings.HasPrefix(entry, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, entry := range trace {
+		if entry == name {
+			return true
+		}
+	}
+	return false
+}
+
+func parityProgramGeneratorLiteralTraceLabelsFromSource(t *testing.T) map[string]struct{} {
+	t.Helper()
+
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to resolve current test file")
+	}
+
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("failed to read current test file: %v", err)
+	}
+
+	labels := map[string]struct{}{}
+	emitNeedles := []string{
+		"g.emit(" + string('"'),
+		"g.emitUnaryIntOp(" + string('"'),
+		"g.emitUnaryIntToSmallOp(" + string('"'),
+		"g.emitBinaryIntOp(" + string('"'),
+		"g.emitBinaryIntToSmallOp(" + string('"'),
+		"g.emitBuilderMetaOp(" + string('"'),
+		"g.emitLoadMsgAddressOp(" + string('"'),
+	}
+	for _, line := range strings.Split(string(src), "\n") {
+		if strings.Contains(line, "string('\"')") {
+			continue
+		}
+		for _, needle := range emitNeedles {
+			if idx := strings.Index(line, needle); idx >= 0 {
+				if label, ok := parityProgramFirstQuotedString(line[idx:]); ok {
+					labels[label] = struct{}{}
+				}
+			}
+		}
+	}
+	return labels
+}
+
+func TestTVMDifferentialFuzzProgramGeneratorLiteralTraceLabelsAreTargeted(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to resolve current test file")
+	}
+
+	src, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("failed to read current test file: %v", err)
+	}
+
+	targets := map[string]struct{}{}
+	emitLabels := map[string]struct{}{}
+	targetStart := "targets := " + "map[string]struct{}{"
+	emitNeedles := []string{
+		"g.emit(" + string('"'),
+		"g.emitUnaryIntOp(" + string('"'),
+		"g.emitUnaryIntToSmallOp(" + string('"'),
+		"g.emitBinaryIntOp(" + string('"'),
+		"g.emitBinaryIntToSmallOp(" + string('"'),
+		"g.emitBuilderMetaOp(" + string('"'),
+		"g.emitLoadMsgAddressOp(" + string('"'),
+	}
+	inTargets := false
+	for _, line := range strings.Split(string(src), "\n") {
+		if strings.Contains(line, "string('\"')") {
+			continue
+		}
+		if strings.Contains(line, targetStart) {
+			inTargets = true
+			continue
+		}
+		if inTargets {
+			if strings.TrimSpace(line) == "}" {
+				inTargets = false
+				continue
+			}
+			if label, ok := parityProgramFirstQuotedString(line); ok {
+				targets[label] = struct{}{}
+			}
+			continue
+		}
+
+		for _, needle := range emitNeedles {
+			if idx := strings.Index(line, needle); idx >= 0 {
+				if label, ok := parityProgramFirstQuotedString(line[idx:]); ok {
+					emitLabels[label] = struct{}{}
+				}
+			}
+		}
+	}
+
+	for _, label := range requiredDictGapTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredDictNearGapTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredDictProgramTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredMathProgramTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredMathCompoundTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredMathShiftTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredMathGapTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredMathQuietLogicTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredMathQuietCompoundTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredMsgAddressProgramTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredDataSizeProgramTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+	for _, label := range requiredCellSliceProgramTraceLabels {
+		emitLabels[label] = struct{}{}
+	}
+
+	if len(targets) == 0 {
+		t.Fatal("failed to parse generator reachability targets")
+	}
+	if len(emitLabels) == 0 {
+		t.Fatal("failed to parse generator trace labels")
+	}
+
+	var missing []string
+	for label := range emitLabels {
+		if !parityProgramTraceLabelIsTargeted(label, targets) {
+			missing = append(missing, label)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Fatalf("generator trace labels are missing reachability targets:\n%s", strings.Join(missing, "\n"))
+	}
+}
+
+func parityProgramFirstQuotedString(line string) (string, bool) {
+	start := strings.IndexByte(line, '"')
+	if start < 0 {
+		return "", false
+	}
+	end := strings.IndexByte(line[start+1:], '"')
+	if end < 0 {
+		return "", false
+	}
+	return line[start+1 : start+1+end], true
+}
+
+func parityProgramTraceLabelIsTargeted(label string, targets map[string]struct{}) bool {
+	if _, ok := targets[label]; ok {
+		return true
+	}
+	for target := range targets {
+		if strings.HasSuffix(target, "*") && strings.HasPrefix(label, strings.TrimSuffix(target, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+var requiredExecGapCaseNames = []string{
+	"jmpx_pushes_value",
+	"try_catches_throw",
+	"tryargs_returns_value",
+	"tryargs_catches_throwarg",
+	"throw_short_uncaught",
+	"throw_long_uncaught",
+	"throwarg_long_uncaught",
+	"throwif_taken",
+	"throwifnot_taken",
+	"throwargif_taken",
+	"throwargif_skip",
+	"throwargifnot_taken",
+	"throwargifnot_skip",
+	"throwany_uncaught",
+	"throwargany_uncaught",
+	"throwanyif_taken",
+	"throwanyif_skip",
+	"throwanyif_skip_invalid_exc_range",
+	"throwarganyif_taken",
+	"throwarganyif_skip",
+	"throwarganyif_skip_invalid_exc_range",
+	"throwanyifnot_taken",
+	"throwanyifnot_skip",
+	"throwanyifnot_skip_invalid_exc_range",
+	"throwarganyifnot_taken",
+	"throwarganyifnot_skip",
+	"throwarganyifnot_skip_invalid_exc_range",
+	"execute_empty_stack_underflow",
+	"execute_non_cont_typecheck",
+	"callxargs_params_underflow",
+	"jmpxargs_params_underflow",
+	"callccvarargs_pass_all_return_all",
+	"callccvarargs_bad_retvals_range",
+	"retvarargs_all_from_called_continuation",
+	"returnvarargs_zero_count_moves_all",
+	"returnvarargs_bad_count_range",
+	"returnargs_closure_overflow",
+	"tryargs_zero_retvals_caught_throwarg",
+	"setcontctr_success",
+	"setcontctrx_success",
+	"setcontctrmany_success",
+	"setcontctrmanyx_success",
+	"setcontctrmany_c6_range",
+	"setcontctrmanyx_c6_range",
+	"popctrx_c7_tuple_roundtrip",
+	"pushctrx_c6_range",
+	"popctrx_c6_range",
+	"popctr_c0_noncont_typecheck",
+	"popsavectr_c0_noncont_typecheck",
+	"setretctr_c4_restore_on_ret",
+	"setaltctr_c4_restore_on_retalt",
+	"savectr_c4_restore_on_ret",
+	"savealtctr_c4_restore_on_retalt",
+	"savebothctr_c4_restore_on_ret",
+	"savebothctr_c4_restore_on_retalt",
+	"popsavectr_c4_restore_on_ret",
+	"setretctr_c7_restore_on_ret",
+	"setaltctr_c7_restore_on_retalt",
+	"savectr_c7_restore_on_ret",
+	"savealtctr_c7_restore_on_retalt",
+	"savebothctr_c7_restore_on_ret",
+	"savebothctr_c7_restore_on_retalt",
+	"popsavectr_c7_restore_on_ret",
+	"booleval_false_branch",
+	"booleval_true_branch_resumes_tail",
+	"invert_ret",
+	"samealt_copy_is_independent",
+	"if_taken_call",
+	"if_not_taken",
+	"ifnot_taken_call",
+	"ifnot_not_taken",
+	"ifelse_true_branch",
+	"ifelse_false_branch",
+	"ifjmp_taken",
+	"ifjmp_not_taken",
+	"ifnotjmp_taken",
+	"ifnotjmp_not_taken",
+	"ifbitjmp_not_taken_preserves_int",
+	"ifbitjmp_taken",
+	"ifbitjmp_high_negative_taken",
+	"ifnbitjmp_taken",
+	"ifnbitjmp_not_taken_preserves_int",
+	"ifnbitjmp_high_negative_not_taken",
+	"ifbitjmpref_taken",
+	"ifbitjmpref_not_taken",
+	"ifnbitjmpref_taken",
+	"ifnbitjmpref_not_taken",
+	"ifnotjmpref_not_taken",
+	"ifref_skips_invalid_ref_false",
+	"ifnotref_skips_invalid_ref_true",
+	"ifjmpref_skips_invalid_ref_false",
+	"ifnotjmpref_skips_invalid_ref_true",
+	"ifrefelse_skips_invalid_ref_false_branch",
+	"ifelseref_skips_invalid_ref_true_branch",
+	"ifrefelseref_true_branch",
+	"ifbitjmpref_skips_invalid_ref_not_taken",
+	"ifretalt_continue",
+	"ifretalt_taken",
+	"ifnotretalt_continue",
+	"ifnotretalt_taken",
+	"repeat_two_iterations",
+	"repeat_negative_count_skips",
+	"repeatend_one_iteration",
+	"while_first_condition_false",
+	"while_one_iteration_then_false",
+	"whileend_one_iteration_then_false",
+	"until_one_iteration",
+	"untilend_one_iteration",
+	"again_throw_bounded",
+	"againend_throw_bounded",
+	"jmpxdata_valid_remaining_slice",
+	"jmpxargs_two_params",
+	"setcontargs_capture_all",
+	"callxargs_trim",
+	"callxargsp_all_returns",
+	"callxargs_sum_then_tail",
+	"callxvarargs_dynamic",
+	"callxvarargs_dynamic_params_and_returns",
+	"jmpxvarargs_dynamic_params",
+	"retvarargs_trim",
+	"retvarargs_from_called_continuation",
+	"returnvarargs_dynamic_count",
+	"returnargs_fixed_count",
+	"retbool_return_branch",
+	"retbool_alt_branch",
+	"retdata_remaining_slice",
+	"ifret_taken",
+	"ifret_continue",
+	"ifnotret_taken",
+	"ifnotret_continue",
+	"callcc_pushes_current_continuation",
+	"callccargs_preserves_arg",
+	"callccvarargs_dynamic",
+	"setcontvarargs_execute",
+	"setnumvarargs_execute",
+	"bless_execute",
+	"blessargs_execute",
+	"blessvarargs_execute",
+	"pushctr_c0_drop",
+	"calldict_short",
+	"calldict_long",
+	"jmpdict",
+	"preparedict_execute",
+	"pushrefcont_execute",
+	"callref_pushes_value",
+	"jmpref_pushes_value",
+	"jmprefdata_exposes_remaining_code",
+	"ifjmpref_taken",
+	"ifjmpref_not_taken",
+	"ifnotjmpref_taken",
+	"atexit_runs",
+	"atexitalt_runs",
+	"setexitalt_runs",
+	"thenret_runs",
+	"thenretalt_runs",
+	"booland_composes_return_continuation",
+	"boolor_composes_alt_continuation",
+	"composboth_composes_return_and_alt",
+	"samealt_copies_return_to_alt",
+	"samealtsave_preserves_previous_alt",
+	"repeatbrk_break",
+	"repeatendbrk_break",
+	"untilbrk_break",
+	"untilendbrk_break",
+	"whilebrk_break",
+	"whileendbrk_break",
+	"againbrk_break",
+	"againendbrk_break",
+}
+
+var requiredExecRefDecodeGapCaseNames = []string{
+	"callref_missing_ref_invalid",
+	"jmpref_missing_ref_invalid",
+	"jmprefdata_missing_ref_invalid",
+	"ifref_missing_ref_invalid",
+	"ifnotref_missing_ref_invalid",
+	"ifjmpref_missing_ref_invalid",
+	"ifnotjmpref_missing_ref_invalid",
+	"ifrefelse_missing_ref_invalid",
+	"ifelseref_missing_ref_invalid",
+	"ifrefelseref_missing_refs_invalid",
+	"ifbitjmpref_missing_ref_invalid",
+	"ifnbitjmpref_missing_ref_invalid",
+}
+
+var requiredRunVMGapCaseNames = []string{
+	"runvm_c7_return_one",
+	"runvmx_gas_bounds_return_one",
+	"runvm_data_actions_and_gas",
+	"runvm_full_inputs_return_data_actions_gas",
+	"runvm_mode512_rangecheck_no_stack",
+	"runvmx_mode512_rangecheck_no_child",
+}
+
+var requiredDictGapTraceLabels = []string{
+	"DICTIGETREF",
+	"DICTUGETREF",
+	"DICTISET",
+	"DICTSETREF",
+	"DICTISETREF",
+	"DICTUSETREF",
+	"DICTISETGET",
+	"DICTUSETGET",
+	"DICTISETGETREF",
+	"DICTUSETGETREF",
+	"DICTIREPLACE",
+	"DICTUREPLACE",
+	"DICTREPLACEREF",
+	"DICTIREPLACEREF",
+	"DICTUREPLACEREF",
+	"DICTIADD",
+	"DICTUADD",
+	"DICTADDREF",
+	"DICTIADDREF",
+	"DICTUADDREF",
+	"DICTIDEL",
+	"DICTIGETOPTREF",
+	"DICTMINREF",
+	"DICTMAXREF",
+	"DICTIMIN",
+	"DICTUMAX",
+	"DICTIMINREF",
+	"DICTUMAXREF",
+	"DICTREMMINREF",
+	"DICTREMMAXREF",
+	"DICTIREMMIN",
+	"DICTUREMMAXREF",
+	"DICTADDB",
+	"DICTADDGETB",
+	"DICTADDGETREF",
+	"DICTDELGETREF",
+	"DICTIADDGET",
+	"DICTIADDGETREF",
+	"DICTIDELGET",
+	"DICTIDELGETREF",
+	"DICTIMAX",
+	"DICTIMAXREF",
+	"DICTIREMMAX",
+	"DICTIREMMAXREF",
+	"DICTIREMMINREF",
+	"DICTIREPLACEB",
+	"DICTIREPLACEGET",
+	"DICTIREPLACEGETB",
+	"DICTIREPLACEGETREF",
+	"DICTISETB",
+	"DICTISETGETB",
+	"DICTISETGETOPTREF",
+	"DICTISUBDICTGET",
+	"DICTISUBDICTRPGET",
+	"DICTREPLACEB",
+	"DICTREPLACEGET",
+	"DICTREPLACEGETB",
+	"DICTREPLACEGETREF",
+	"DICTSETGETOPTREF",
+	"DICTUADDGET",
+	"DICTUREMMAX",
+	"DICTUREPLACEGETREF",
+	"DICTUSETGETB",
+}
+
+var requiredDictNearGapTraceLabels = []string{
+	"DICTGETNEXT",
+	"DICTGETNEXTEQ",
+	"DICTGETPREV",
+	"DICTGETPREVEQ",
+	"DICTIGETNEXT",
+	"DICTIGETNEXTEQ",
+	"DICTIGETPREV",
+	"DICTIGETPREVEQ",
+	"DICTUGETNEXT",
+	"DICTUGETNEXTEQ",
+	"DICTUGETPREV",
+	"DICTUGETPREVEQ",
+}
+
+var requiredDictProgramTraceLabels = []string{
+	"LDDICT",
+	"PLDDICT",
+	"STDICT",
+	"SKIPDICT",
+	"LDDICTS",
+	"PLDDICTS",
+	"LDDICTQ",
+	"PLDDICTQ",
+	"DICTGET",
+	"DICTGETREF",
+	"DICTIGET",
+	"DICTUGET",
+	"DICTSET",
+	"DICTUSET",
+	"DICTDEL",
+	"DICTMIN",
+	"DICTMAX",
+	"DICTGETOPTREF",
+	"DICTUGETOPTREF",
+	"DICTSETGET",
+	"DICTSETGETREF",
+	"DICTREPLACE",
+	"DICTADD",
+	"DICTREMMIN",
+	"DICTREMMAX",
+	"DICTGETNEXTEQ",
+	"DICTSETB",
+	"DICTUREPLACEB",
+	"DICTIADDB",
+	"DICTSETGETB",
+	"DICTUREPLACEGETB",
+	"DICTIADDGETB",
+	"DICTDELGET",
+	"DICTUDELGETREF",
+	"DICTUSETGETOPTREF",
+	"DICTSUBDICTGET",
+	"DICTSUBDICTRPGET",
+	"DICTUSUBDICTGET",
+	"DICTUSUBDICTRPGET",
+	"PFXDICTGET",
+	"PFXDICTGETQ",
+	"PFXDICTREPLACE",
+	"PFXDICTADD",
+	"PFXDICTSET",
+	"PFXDICTDEL",
+}
+
+var requiredMathProgramTraceLabels = []string{
+	"NEGATE",
+	"INC",
+	"DEC",
+	"ABS",
+	"NOT",
+	"BITSIZE",
+	"ISNPOS",
+	"ISZERO",
+	"ISPOS",
+	"ISNEG",
+	"ADD",
+	"SUB",
+	"SUBR",
+	"MUL",
+	"AND",
+	"OR",
+	"XOR",
+	"MIN",
+	"MAX",
+	"MINMAX",
+	"LESS",
+	"LEQ",
+	"GREATER",
+	"GEQ",
+	"EQUAL",
+	"NEQ",
+	"CMP",
+}
+
+var requiredMathCompoundTraceLabels = []string{
+	"DIVR",
+	"DIVC",
+	"MODR",
+	"MODC",
+	"DIVMODR",
+	"DIVMODC",
+	"MULMOD",
+	"MULMODR",
+	"MULMODC",
+	"MULDIV",
+	"MULDIVR",
+	"MULDIVC",
+	"MULDIVMOD",
+	"MULDIVMODR",
+	"MULDIVMODC",
+	"ADDDIVMOD",
+	"ADDDIVMODR",
+	"ADDDIVMODC",
+	"MULADDDIVMOD",
+	"MULADDDIVMODR",
+	"MULADDDIVMODC",
+}
+
+var requiredMathShiftTraceLabels = []string{
+	"RSHIFTFLOOR",
+	"RSHIFTR",
+	"RSHIFTC",
+	"MODPOW2",
+	"MODPOW2R",
+	"MODPOW2C",
+	"RSHIFTCODEFLOOR(3)",
+	"MULRSHIFT",
+	"MULRSHIFTR",
+	"MULRSHIFTC",
+	"LSHIFTDIV",
+	"LSHIFTDIVR",
+	"LSHIFTDIVC",
+	"LSHIFTDIVMOD",
+	"LSHIFTADDDIVMOD",
+	"LSHIFTADDDIVMODR",
+	"LSHIFTADDDIVMODC",
+	"MULADDRSHIFTMOD",
+	"MULADDRSHIFTRMOD",
+	"MULADDRSHIFTCMOD",
+}
+
+var requiredMathGapTraceLabels = []string{
+	"ISNNEG(0)",
+	"ISNNEG(-1)",
+	"ADDCONST(6)",
+	"MULCONST(-4)",
+	"RSHIFTMOD",
+	"RSHIFTMODR",
+	"RSHIFTMODC",
+	"RSHIFTCODEMOD(3)",
+	"RSHIFTRCODEMOD(3)",
+	"RSHIFTCCODEMOD(3)",
+	"LSHIFTMOD",
+	"LSHIFTMODR",
+	"LSHIFTMODC",
+	"LSHIFTDIVMODR",
+	"LSHIFTDIVMODC",
+	"ADDRSHIFTMOD",
+	"ADDRSHIFTMODR",
+	"ADDRSHIFTMODC",
+	"MULMODPOW2",
+	"MULMODPOW2R",
+	"MULMODPOW2C",
+	"MULRSHIFTMOD",
+	"MULRSHIFTRMOD",
+	"MULRSHIFTCMOD",
+	"MULMODPOW2CODE(3)",
+	"MULMODPOW2RCODE(3)",
+	"MULMODPOW2CCODE(3)",
+	"MULRSHIFTCODEMOD(3)",
+	"MULRSHIFTRCODEMOD(3)",
+	"MULRSHIFTCCODEMOD(3)",
+	"ADDRSHIFTCODEMOD(3)",
+	"ADDRSHIFTRCODEMOD(3)",
+	"ADDRSHIFTCCODEMOD(3)",
+	"MULADDRSHIFTCODEMOD(3)",
+	"MULADDRSHIFTRCODEMOD(3)",
+	"MULADDRSHIFTCCODEMOD(3)",
+}
+
+var requiredMathQuietLogicTraceLabels = []string{
+	"QNOT",
+	"QAND",
+	"QOR",
+	"QXOR",
+	"QLSHIFT",
+	"QRSHIFT",
+	"QLSHIFTCODE(3)",
+	"QRSHIFTCODE(3)",
+	"QPOW2",
+	"QSGN",
+	"QLESS",
+	"QEQUAL",
+	"QLEQ",
+	"QGREATER",
+	"QNEQ",
+	"QGEQ",
+	"QCMP",
+	"QEQINT(5)",
+	"QLESSINT(4)",
+	"QGTINT(4)",
+	"QNEQINT(4)",
+	"QFITS(6)",
+	"QFITS(3 fail)",
+	"QUFITS(8)",
+	"QFITSX",
+	"QUFITSX(fail)",
+	"QSGN(NaN)",
+	"QGTINT(NaN)",
+	"CHKNAN",
+}
+
+var requiredMathQuietCompoundTraceLabels = []string{
+	"QDIV",
+	"QMODR",
+	"QADDDIVMODC",
+	"QRSHIFT",
+	"QMODPOW2R",
+	"QADDRSHIFTMODC",
+	"QMULDIV",
+	"QMULMODR",
+	"QMULADDDIVMODC",
+	"QMULRSHIFT",
+	"QMULMODPOW2R",
+	"QMULADDRSHIFTMODC",
+	"QLSHIFTDIV",
+	"QLSHIFTMODR",
+	"QLSHIFTADDDIVMODC",
+}
+
+var requiredDictSuccessGapCaseNames = []string{
+	"dictugetoptref_hit",
+	"dictusetgetoptref_replace_hit",
+	"dictusetgetoptref_delete_hit",
+	"dictmin_slice_hit",
+	"dictumaxref_hit",
+	"dicturemmaxref_hit",
+	"dictusubdictget_success",
+	"dictusubdictrpget_success",
+	"pfxdictget_success",
+	"pfxdictgetq_success",
+	"pfxdictreplace_hit",
+	"pfxdictadd_new",
+	"pfxdictset_new",
+	"pfxdictdel_hit",
+}
+
+var requiredDictMissGapCaseNames = []string{
+	"dictget_miss_slice",
+	"dictuget_miss_invalid_key",
+	"dictugetref_miss",
+	"dictureplace_miss_false",
+	"dictuadd_existing_false",
+	"dictureplaceget_miss_false",
+	"dictaddget_existing_returns_old",
+	"dictuaddgetref_existing_returns_old",
+	"dictudel_miss_false",
+	"dictudelgetref_miss_false",
+	"dictudel_invalid_key_rangecheck",
+	"dictudelget_invalid_key_rangecheck",
+	"dictugetoptref_miss_null",
+	"dictugetoptref_invalid_key_null",
+	"dictusetgetoptref_delete_miss_null",
+	"dictumin_empty_false",
+	"dicturemmin_empty_false",
+	"dictgetprev_miss_false",
+	"dictugetprev_overflow_max",
+	"dictugetnext_negative_returns_min",
+	"dictugetnext_overflow_false",
+	"dictigetprev_miss_false",
+	"dictigetnext_below_min_returns_min",
+	"pfxdictgetq_miss_false",
+	"pfxdictget_miss_cell_underflow",
+	"pfxdictgetjmp_miss_keeps_input",
+	"pfxdictreplace_miss_false",
+	"pfxdictadd_existing_false",
+	"pfxdictdel_miss_false",
+	"pfxdictset_oversized_key_false",
+	"subdictuget_miss_dict_error",
+	"dictureplaceb_miss_false",
+	"dictuaddb_existing_false",
+	"dictuaddgetb_existing_returns_old",
+}
+
+var requiredDictEdgeGapCaseNames = []string{
+	"dictuset_negative_key_bad_value_typecheck_order",
+	"dictusetb_negative_key_bad_builder_typecheck_order",
+	"dictusetgetoptref_negative_key_bad_value_typecheck_order",
+	"dictugetoptref_plain_value_dict_error",
+	"dictudelgetref_plain_value_dict_error",
+	"dictuminref_plain_value_dict_error",
+	"dicturemminref_plain_value_dict_error",
+	"dictusetgetref_old_value_plain_slice",
+	"dictset_library_root_underflow",
+	"pfxdictgetq_input_with_refs_preserved",
+}
+
+var requiredActionGapTraceLabels = []string{
+	"SENDRAWMSG",
+	"RAWRESERVE",
+	"RAWRESERVEX",
+	"SETCODE",
+	"SETLIBCODE",
+	"CHANGELIB",
+	"SENDMSG(fee-only)",
+	"SENDMSG(send)",
+	"SENDMSG(user-fwd-fee)",
+}
+
+var requiredActionModeGapCaseNames = []string{
+	"rawreserve_mode_0",
+	"rawreserve_mode_2",
+	"rawreserve_mode_16",
+	"rawreservex_mode_0",
+	"rawreservex_mode_16",
+	"setlibcode_mode_0",
+	"setlibcode_mode_2",
+	"setlibcode_mode_16",
+	"changelib_mode_0",
+	"changelib_mode_1",
+	"changelib_mode_16",
+	"sendmsg_mode64_incomingvalue",
+	"sendmsg_mode128_balance",
+	"sendmsg_extout_fee_only",
+	"sendmsg_user_fwd_fee_lower_bound_gv13",
+	"action_chain_sendrawmsg_then_rawreserve_hash",
+	"action_chain_setcode_then_setlibcode_hash",
+}
+
+var requiredActionErrorGapCaseNames = []string{
+	"rawreserve_negative_amount_range",
+	"rawreservex_negative_amount_range",
+	"rawreserve_missing_mode_underflow",
+	"rawreservex_missing_extra_underflow",
+	"setlibcode_missing_mode_underflow",
+	"setlibcode_invalid_mode_range",
+	"changelib_missing_mode_underflow",
+	"changelib_negative_hash_range",
+	"sendmsg_missing_mode_underflow",
+	"sendmsg_invalid_mode_range",
+	"sendrawmsg_missing_mode_underflow",
+	"sendrawmsg_invalid_mode_range",
+}
+
+var requiredMathImmediateGapCaseNames = []string{
+	"pushpow2",
+	"pushpow2_nan_alias",
+	"pushpow2dec",
+	"pushnegpow2",
+	"lessint_true",
+	"eqint_true",
+	"gtint_true",
+	"neqint_false",
+	"qaddint",
+	"qmulint",
+	"qeqint_true",
+	"qlessint_true",
+	"qgtint_nan",
+	"qneqint_true",
+	"fits_immediate",
+	"ufits_immediate",
+	"qfits_immediate_nan",
+	"qufits_immediate",
+	"lshift_code",
+	"rshift_code_floor",
+	"rshiftr_code_round",
+	"rshiftc_code_ceil",
+	"rshift_code_floor_alt",
+	"lshift_code_nan_current",
+	"rshift_code_nan_current",
+	"qlshift_code",
+	"qrshift_code",
+	"qlshift_code_nan_current",
+	"qrshift_code_nan_legacy",
+	"rshift_code_mod_floor",
+	"rshiftr_code_mod_round",
+	"rshiftc_code_mod_ceil",
+	"modpow2_code_floor",
+	"modpow2r_code_round",
+	"modpow2c_code_ceil",
+	"mulrshift_code_floor",
+	"mulrshiftr_code_round",
+	"mulrshiftc_code_ceil",
+	"mulrshift_code_mod_floor",
+	"mulrshiftr_code_mod_round",
+	"mulrshiftc_code_mod_ceil",
+	"mulmodpow2_code_floor",
+	"mulmodpow2r_code_round",
+	"mulmodpow2c_code_ceil",
+	"addrshift_code_mod_floor",
+	"addrshiftr_code_mod_round",
+	"addrshiftc_code_mod_ceil",
+	"muladdrshift_code_mod_floor",
+	"muladdrshiftr_code_mod_round",
+	"muladdrshiftc_code_mod_ceil",
+	"lshiftadddivmod_code_floor",
+	"lshiftadddivmodr_code_round",
+	"lshiftadddivmodc_code_ceil",
+	"lshiftdiv_code_floor",
+	"lshiftdivr_code_round",
+	"lshiftdivc_code_ceil",
+	"lshiftmod_code_floor",
+	"lshiftmodr_code_round",
+	"lshiftmodc_code_ceil",
+	"lshiftdivmod_code_floor",
+	"lshiftdivmodr_code_round",
+	"lshiftdivmodc_code_ceil",
+}
+
+var requiredInvalidMathGapCaseNames = []string{
+	"divmod_invalid",
+	"shrmod_invalid",
+	"shrcodemod_invalid",
+	"muldivmod_invalid",
+	"mulshrmod_invalid",
+	"mulshrcodemod_invalid",
+	"shldivmod_invalid",
+	"shldivcodemod_invalid",
+}
+
+var requiredQuietMathErrorGapCaseNames = []string{
+	"qdiv_zero_divisor_nan",
+	"qmod_zero_divisor_nan",
+	"qadddivmod_zero_divisor_double_nan",
+	"qadddivmod_nan_addend_double_nan",
+	"qmod_nan_operand_nan",
+	"qaddrshiftmod_shift_over_256_legacy_rangecheck",
+	"qaddrshiftmod_nan_shift_legacy_rangecheck",
+	"qmuldiv_zero_divisor_nan",
+	"qmuldiv_divisor_slice_typecheck",
+	"qmulmodr_nan_factor_nan",
+	"qmuladddivmod_zero_divisor_double_nan",
+	"qmuladddivmod_nan_addend_double_nan",
+	"qmuladdrshiftmod_negative_shift_double_nan",
+	"qmuladdrshiftmod_nan_addend_double_nan",
+	"qmulrshift_shift_over_256_nan",
+	"qlshiftdiv_zero_divisor_nan",
+	"qlshiftadddivmod_nan_addend_double_nan",
+	"qlshiftadddivmod_negative_shift_double_nan",
+	"qlshiftmod_shift_over_256_nan",
+	"qlshift_negative_shift_nan",
+	"qlshift_count_over_1023_nan",
+	"qpow2_out_of_range_nan",
+}
+
+var requiredCellSliceGapCaseNames = []string{
+	"ldule4q",
+	"ldile8q",
+	"pldule4q",
+	"pldile8q",
+	"bchkbitrefs",
+	"stb",
+	"stile4",
+	"stule4",
+	"stile8",
+	"stule8",
+	"bchkbitrefsq",
+	"xctos_ordinary",
+	"sdsfxrev",
+	"sdpsfxrev",
+	"sdbeginsx",
+	"sdbeginsxq",
+	"sdbeginsconst",
+	"sdbeginsconstq",
+	"ldgrams",
+	"stgrams",
+	"strefconst",
+	"stref2const",
+	"stsliceconst",
+	"endcst",
+	"stix_variable",
+	"ldiq_fixed",
+	"pldiq_fixed",
+}
+
+var requiredCellSliceQuietGapCaseNames = []string{
+	"splitq_fail_preserves",
+	"schkbitsq_true",
+	"schkbitsq_false",
+	"schkrefsq_true",
+	"schkrefsq_false",
+	"schkbitrefsq_true",
+	"schkbitrefsq_false",
+	"pldrefvar_idx1",
+	"pldrefidx0",
+	"pldrefidx1",
+	"ldzeroes_nonzero",
+	"ldzeroes_zero",
+	"ldones_nonzero",
+	"ldones_zero",
+	"ldsame_one",
+	"bchkbitsq_false",
+	"bchkrefsq_false",
+	"bchkbitrefsq_false",
+	"ldixq_fail_preserves_slice",
+	"pldixq_fail_only_flag",
+	"lduxq_fail_preserves_slice",
+	"plduxq_fail_only_flag",
+	"ldslicexq_success",
+	"ldslicexq_fail_preserves_slice",
+	"ldslicexq_zero_width",
+	"pldslicexq_success",
+	"pldslicexq_fail_only_flag",
+	"pldslicexq_zero_width",
+	"ldslicefixq_fail_preserves_slice",
+	"pldslicefixq_fail_only_flag",
+	"ldule8q_fail_preserves_slice",
+	"pldule8q_fail_only_flag",
+	"ldile8q_success",
+	"pldile8q_success",
+	"strefq_success",
+	"strefq_fail_preserves",
+	"strefrq_success",
+	"strefrq_fail_preserves",
+	"stbrefq_success",
+	"stbrefq_fail_preserves",
+	"stbrefqr_success",
+	"stbrefqr_fail_preserves",
+	"stsliceq_success",
+	"stsliceq_fail_preserves",
+	"stslicerq_success",
+	"stslicerq_fail_preserves",
+	"stbq_success",
+	"stbq_fail_preserves",
+	"stbrq_success",
+	"stbrq_fail_preserves",
+	"stuxq_range_fail_status_plus_one",
+	"stuxq_capacity_fail_status_minus_one",
+}
+
+var requiredCellSliceEdgeGapCaseNames = []string{
+	"lduxq_width_257_rangecheck",
+	"plduxq_width_257_rangecheck",
+	"ldixq_width_258_rangecheck",
+	"pldixq_width_258_rangecheck",
+	"schkbitrefsq_refs5_rangecheck",
+	"chashix_short_stack_bad_idx_order",
+	"cdepthix_short_stack_bad_idx_order",
+	"subslice_r2_range_precedes_slice_typecheck",
+	"plduz_256_short_255_zero_extend",
+	"pldrefidx3_four_refs",
+	"pldrefvar_idx3_four_refs",
+	"pldrefidx3_underflow",
+	"ldrefrotos_no_ref_underflow",
+	"bchkbitsimmq_true",
+	"bchkbitsimmq_false",
+	"stsliceconst_with_ref",
+	"stsliceconst_bits_overflow",
+	"stref2const_overflow",
+	"endcst_dst_ref_overflow",
+}
+
+var requiredInventoryResidualGapCaseNames = []string{
+	"nop_keeps_stack",
+	"multi_xc2pu",
+	"multi_xcpuxc",
+	"multi_xcpu2",
+	"multi_puxc2",
+	"multi_puxcpu",
+	"multi_puxc",
+	"multi_xcpu",
+	"gtint_true",
+	"qgtint_nan",
+	"sgn_negative",
+	"qsgn_nan",
+	"endxc_ordinary",
+	"bbitrefs",
+	"btos",
+	"split_valid",
+	"splitq_valid",
+	"schkbits",
+	"schkrefs",
+	"schkbitrefs",
+	"schkbitsq_false",
+	"schkrefsq_false",
+	"schkbitrefsq_false",
+	"clevel",
+	"clevelmask",
+	"sdcntlead0",
+	"sdcntlead1",
+	"sdcnttrail0",
+	"sdcnttrail1",
+	"sdsfx",
+	"sdpsfx",
+	"brembits",
+	"bremrefs",
+	"brembitrefs",
+	"accept",
+	"setgaslimit",
+	"gasconsumed",
+	"commit",
+}
+
+var requiredLibraryGapCaseNames = []string{
+	"ctos_library_resolution",
+	"xload_library_resolution",
+	"xloadq_library_resolution",
+	"xctos_library_resolution",
+	"xctos_library_special",
+	"xload_library_missing_underflow",
+	"xloadq_library_missing_false",
+}
+
+var requiredDictContinuationGapCaseNames = []string{
+	"dictigetjmp_hit",
+	"dictugetjmp_hit",
+	"dictigetexec_hit",
+	"dictugetexec_hit",
+	"dictigetjmpz_hit",
+	"dictugetjmpz_hit",
+	"dictigetexecz_hit",
+	"dictugetexecz_hit",
+	"pfxdictgetjmp_hit",
+	"pfxdictgetexec_hit",
+	"pfxdictswitch_hit",
+	"dictigetjmp_miss_falls_through",
+	"dictugetexec_miss_falls_through",
+	"dictigetjmpz_miss_keeps_index",
+	"dictugetexecz_miss_keeps_index",
+	"pfxdictgetjmp_miss_keeps_input",
+	"pfxdictgetexec_miss_cell_underflow",
+	"pfxdictswitch_miss_keeps_input",
+}
+
+var requiredTonFuncGapCaseNames = []string{
+	"mycode",
+	"incomingvalue",
+	"storagefees",
+	"duepayment",
+	"globalid",
+	"unpackedconfigtuple",
+	"configdict",
+	"configparam_hit",
+	"configoptparam_hit",
+	"configoptparam_miss",
+	"prevblocksinfotuple",
+	"prevmcblocks",
+	"prevkeyblock",
+	"prevmcblocks_100",
+	"getprecompiledgas",
+	"inmsgparams",
+	"inmsgparam_bounce",
+	"inmsgparam_src",
+	"inmsgparam_value",
+	"inmsgparam_valueextra",
+	"inmsgparam_stateinit",
+	"inmsgparam_oob_range_error",
+	"inmsg_bounce",
+	"inmsg_bounced",
+	"inmsg_src",
+	"inmsg_fwdfee",
+	"inmsg_lt",
+	"inmsg_utime",
+	"inmsg_origvalue",
+	"inmsg_value",
+	"inmsg_valueextra",
+	"inmsg_stateinit",
+	"getstoragefee",
+	"getgasfee",
+	"getforwardfee",
+	"getoriginalfwdfee",
+	"getforwardfeesimple",
+	"getgasfeesimple",
+	"getstoragefee_masterchain",
+	"getgasfee_masterchain",
+	"getforwardfee_masterchain",
+	"getoriginalfwdfee_masterchain",
+	"getforwardfeesimple_masterchain",
+	"getgasfeesimple_masterchain",
+	"getextrabalance_hit",
+	"getextrabalance_miss",
+	"getextrabalance_repeated_hit",
+	"getextrabalance_nil_dict",
+	"getextrabalance_malformed_value",
+}
+
+var requiredMsgAddressGapCaseNames = []string{
+	"ldmsgaddrq_short_std",
+	"ldmsgaddr_ext_success_rest",
+	"ldstdaddr_std_success_rest",
+	"ldoptstdaddr_std_success_rest",
+	"ldoptstdaddrq_none_success_rest",
+	"ldstdaddrq_var_fail",
+	"ldoptstdaddrq_short_fail",
+	"parsemsgaddr_std_success",
+	"parsemsgaddr_none_success",
+	"parsemsgaddr_ext_success",
+	"parsemsgaddrq_invalid_anycast",
+	"rewritestdaddr_std_success",
+	"rewritevaraddr_std_success",
+	"rewritevaraddr_var20_fail",
+	"rewritestdaddrq_var_fail",
+	"rewritestdaddrq_var20_fail",
+	"rewritevaraddrq_ext_fail",
+	"ststdaddrq_std_success_status_false",
+	"ststdaddrq_var_fail",
+	"stoptstdaddrq_none",
+	"stoptstdaddrq_std_success_status_false",
+}
+
+var requiredMsgAddressProgramTraceLabels = []string{
+	"LDMSGADDR",
+	"LDMSGADDRQ",
+	"LDSTDADDR",
+	"LDSTDADDRQ",
+	"LDOPTSTDADDR",
+	"LDOPTSTDADDRQ",
+	"PARSEMSGADDR",
+	"PARSEMSGADDRQ",
+	"REWRITESTDADDR",
+	"REWRITESTDADDRQ",
+	"REWRITEVARADDR",
+	"REWRITEVARADDRQ",
+	"STSTDADDR",
+	"STSTDADDRQ",
+	"STOPTSTDADDR",
+	"STOPTSTDADDRQ",
+}
+
+var requiredDataSizeProgramTraceLabels = []string{
+	"CDATASIZE",
+	"CDATASIZEQ",
+	"SDATASIZE",
+	"SDATASIZEQ",
+}
+
+var requiredCellSliceProgramTraceLabels = []string{
+	"BBITS",
+	"BREFS",
+	"BDEPTH",
+	"LDI8",
+	"LDU8",
+	"STI8",
+	"STU8",
+}
+
+var requiredVarIntGapCaseNames = []string{
+	"ldvarint16_zero_len",
+	"ldvarint16_negative_minimal",
+	"ldvaruint32_zero_len",
+	"ldvarint32_negative_two_bytes",
+	"ldvaruint32_short_payload",
+	"stvarint16_zero_len",
+	"stvarint16_negative_minimal",
+	"stvaruint32_zero_len",
+	"stvarint32_negative_minimal",
+	"stvaruint32_max_len",
+	"stvaruint32_negative_rangecheck",
+	"stvarint32_overflow_rangecheck",
+}
+
+var requiredDataSizeGapCaseNames = []string{
+	"cdatasize_nil_success_zero",
+	"cdatasize_success_counts_ref",
+	"cdatasize_shared_ref_counts_once",
+	"cdatasize_negative_bound_rangecheck",
+	"cdatasizeq_bound_too_small_false",
+	"sdatasize_success_counts_refs",
+	"sdatasize_shared_ref_counts_once",
+	"sdatasize_negative_bound_rangecheck",
+	"sdatasizeq_bound_too_small_false",
+}
+
+var requiredTonFuncRuntimeGapCaseNames = []string{
+	"getparam_now_blocklt_ltime_aliases",
+	"getparamlong_randseed",
+	"getparam_missing_params_tuple_range",
+	"getparam_params_not_tuple_typecheck",
+	"balance_myaddr_configroot",
+	"randu256_updates_seed",
+	"randu256_bad_seed_typecheck",
+	"rand_bounded_updates_seed",
+	"rand_zero_bound_updates_seed",
+	"rand_negative_bound_updates_seed",
+	"setrand_addrand_roundtrip",
+	"setrand_max_seed_roundtrip",
+	"setrand_negative_rangecheck",
+	"setrand_c7_params_not_tuple_typecheck",
+	"addrand_negative_rangecheck",
+	"setglob_getglob_roundtrip",
+	"setglobvar_getglobvar_roundtrip",
+	"getglobvar_absent_null",
+	"globalid_unpacked_config_short_tuple_range",
+	"inmsgparam_short_tuple_range",
+	"configparam_negative_key_hit",
+	"configoptparam_negative_key_hit",
+	"configparam_no_root_false",
+	"configoptparam_no_root_null",
+	"configparam_bad_root_type",
+	"configoptparam_bad_root_type",
+	"configparam_out_of_int32_false",
+	"configparam_malformed_value_dict_error",
+	"configoptparam_malformed_value_dict_error",
+	"setcp_zero",
+	"setcp_negative_unsupported",
+	"setcp_positive_unsupported",
+	"setcpx_zero",
+	"setcpx_negative_unsupported",
+	"setcpx_positive_unsupported",
+	"setcpx_high_rangecheck",
+}
+
+var requiredHashGapCaseNames = []string{
+	"sha256u_empty",
+	"hashbu_builder_with_ref",
+	"hashext_bit_concat_sha256",
+	"hashextr_order_sha256",
+	"hashext_dynamic_keccak256",
+	"hashext_dynamic_unknown_hash_id",
+	"hashext_dynamic_hash_id_rangecheck",
+	"hashext_count_rangecheck",
+	"hashext_sha512_tuple",
+	"hashext_blake2b_tuple",
+	"hashext_keccak512_tuple",
+	"hashexta_keccak256_builder_input",
+	"hashexta_append_non_builder_typecheck",
+	"hashexta_dynamic_zero_count_builder_only",
+	"hashextar_dynamic_sha512_append_reverse",
+	"hashext_unaligned_bits_underflow",
+	"sha256u_unaligned_bits_underflow",
+	"hashexta_builder_overflow",
+}
+
+var requiredCryptoGapCaseNames = []string{
+	"chksignu_success",
+	"chksigns_success",
+	"ecrecover_success",
+	"ecrecover_invalid_v",
+	"secp256k1_xonly_pubkey_tweak_add_success",
+	"secp256k1_xonly_pubkey_tweak_add_tweak_ge_n",
+	"p256_chksignu_success",
+	"p256_chksignu_bad_key",
+	"p256_chksigns_success",
+	"p256_chksigns_bad_key",
+	"chksignu_bad_signature_false",
+	"chksigns_bad_signature_false",
+	"p256_chksignu_bad_signature_false",
+	"p256_chksigns_bad_signature_false",
+}
+
+var requiredCirclCryptoGapCaseNames = []string{
+	"rist255_fromhash",
+	"rist255_pushl",
+	"rist255_validate_valid",
+	"rist255_qvalidate_invalid",
+	"rist255_add_valid",
+	"rist255_qadd_invalid",
+	"rist255_sub_valid",
+	"rist255_qsub_valid",
+	"rist255_qsub_invalid",
+	"rist255_mul",
+	"rist255_qmul_invalid",
+	"rist255_mulbase",
+	"rist255_qmulbase",
+	"bls_pushr",
+	"bls_verify_true",
+	"bls_verify_invalid_pub_false",
+	"bls_aggregate",
+	"bls_fastaggregateverify_true",
+	"bls_aggregateverify_distinct_msgs_true",
+	"bls_g1_zero",
+	"bls_g1_add",
+	"bls_g1_sub",
+	"bls_g1_neg",
+	"bls_g1_mul",
+	"bls_g1_multiexp_two_terms",
+	"bls_g1_ingroup_invalid_false",
+	"bls_g1_iszero",
+	"bls_map_to_g1",
+	"bls_g2_zero",
+	"bls_g2_add",
+	"bls_g2_sub",
+	"bls_g2_neg",
+	"bls_g2_mul",
+	"bls_g2_multiexp_two_terms",
+	"bls_g2_ingroup_invalid_false",
+	"bls_g2_iszero",
+	"bls_map_to_g2",
+	"bls_pairing_false",
+	"bls_pairing_invalid",
+}
+
+var requiredCryptoEdgeGapCaseNames = []string{
+	"chksignu_short_signature_underflow",
+	"chksigns_short_signature_underflow",
+	"chksigns_unaligned_message_underflow",
+	"chksignu_negative_hash_range",
+	"chksignu_key_negative_range",
+	"ecrecover_negative_hash_range",
+	"ecrecover_negative_r_range",
+	"ecrecover_v_out_of_uint8_range",
+	"ecrecover_zero_signature_false",
+	"secp256k1_tweak_negative_range",
+	"secp256k1_key_negative_range",
+	"secp256k1_invalid_key_false",
+	"p256_chksigns_unaligned_message_underflow",
+	"p256_chksignu_negative_hash_range",
+	"p256_chksignu_short_signature_underflow",
+	"p256_chksignu_short_key_underflow",
+	"rist255_validate_invalid_range",
+	"rist255_add_invalid_unknown",
+	"bls_verify_short_pub_underflow",
+	"bls_verify_short_sig_underflow",
+	"bls_verify_invalid_sig_false",
+	"bls_fastaggregateverify_empty_false",
+	"bls_aggregateverify_empty_false",
+	"bls_aggregateverify_invalid_sig_false",
+	"bls_aggregate_invalid_signature_unknown",
+	"bls_g1_add_invalid_point_unknown",
+	"bls_g2_add_invalid_point_unknown",
+	"bls_g1_ingroup_short_underflow",
+	"bls_g2_ingroup_short_underflow",
+	"bls_g1_multiexp_invalid_point_unknown",
+	"bls_g2_multiexp_invalid_point_unknown",
+}
+
+var requiredTupleGapCaseNames = []string{
+	"pushnull_isnull_true",
+	"isnull_false",
+	"istuple_true",
+	"istuple_false",
+	"qtlen_tuple",
+	"qtlen_non_tuple",
+	"indexq_oob_null",
+}
+
+const (
+	expectedTupleOpcodeSpaceGapCases  = 243
+	expectedTupleDynamicErrorGapCases = 63
+)
+
+var requiredTupleOpcodeSpaceGapCaseNames = []string{
+	"pushnull",
+	"isnull_null",
+	"isnull_int",
+	"tuple_0",
+	"tuple_15",
+	"index_0",
+	"index_15",
+	"untuple_0",
+	"untuple_15",
+	"unpackfirst_15",
+	"explode_15",
+	"setindex_15",
+	"indexq_15",
+	"setindexq_15",
+	"tuplevar_4",
+	"indexvar_3",
+	"untuplevar_4",
+	"unpackfirstvar_4",
+	"explodevar_4",
+	"setindexvar_3",
+	"indexvarq_3",
+	"setindexvarq_3",
+	"tlen",
+	"qtlen_tuple",
+	"qtlen_non_tuple",
+	"istuple_tuple",
+	"istuple_non_tuple",
+	"last",
+	"tpush",
+	"tpop",
+	"nullop_6fa0_zero",
+	"nullop_6fa0_nonzero",
+	"nullop_6fa7_zero",
+	"nullop_6fa7_nonzero",
+	"index2_0_0",
+	"index2_3_3",
+	"index3_0_0_0",
+	"index3_3_3_3",
+}
+
+var requiredTupleDynamicErrorGapCaseNames = []string{
+	"tuplevar_0",
+	"tuplevar_255",
+	"indexvar_254",
+	"untuplevar_255",
+	"unpackfirstvar_255",
+	"explodevar_255",
+	"setindexvar_254",
+	"indexvarq_254",
+	"setindexvarq_254_nil_tuple_value",
+	"setindexvarq_254_nil_tuple_nil_value",
+	"setindexvarq_254_existing_nil_fill",
+	"indexq_nil_tuple_null",
+	"indexvarq_nil_tuple_null",
+	"setindexq_nil_tuple_allocates",
+	"setindexq_nil_tuple_nil_stays_null",
+	"setindexq_existing_oob_extends",
+	"setindexq_existing_oob_nil_preserves",
+	"isnull_nan_false",
+	"qtlen_nan_minus_one",
+	"indexq_tuple_nan_value",
+	"untuple_nan_null",
+	"indexq_non_tuple",
+	"setindexq_non_tuple",
+	"index_out_of_range",
+	"setindex_out_of_range",
+	"tlen_non_tuple_typecheck",
+	"untuple_wrong_arity",
+	"unpackfirst_too_short",
+	"explode_too_large",
+	"tpush_empty_tuple_value",
+	"tpush_len254_to255",
+	"tpush_too_large",
+	"tpop_singleton_to_empty",
+	"tpop_empty",
+	"last_empty",
+	"index2_outer_oob_range",
+	"index2_final_oob_range",
+	"index2_intermediate_non_tuple",
+	"index2_intermediate_oversized_tuple",
+	"index3_second_level_non_tuple",
+	"index3_final_oob_range",
+	"nullswapif_non_integer",
+	"indexvar_short_stack_preserves_error",
+	"untuplevar_short_stack_preserves_error",
+	"unpackfirstvar_short_stack_preserves_error",
+	"explodevar_short_stack_preserves_error",
+	"setindex_short_stack_preserves_error",
+	"setindexvar_short_stack_preserves_error",
+	"indexvarq_short_stack_nan_idx",
+	"setindexvarq_short_stack_nan_idx",
+	"tpush_short_stack_preserves_error",
+	"tuplevar_256_range",
+	"indexvar_255_range",
+	"untuplevar_256_range",
+	"unpackfirstvar_256_range",
+	"explodevar_256_range",
+	"setindexvar_255_range",
+	"indexvarq_255_range",
+	"setindexvarq_255_range",
+	"invalid_6f8e_gap",
+	"invalid_6f9f_gap",
+	"invalid_6fa8_gap",
+	"invalid_6faf_gap",
+}
+
+var requiredStackGapCaseNames = []string{
+	"xchg0l_depth17",
+	"pushl_depth17",
+	"popl_depth17",
+	"pick_depth4",
+	"roll_depth4",
+	"rollrev_depth4",
+	"dropx_three",
+	"xchgx_depth3",
+	"revx_3_1",
+	"onlytopx_keep3",
+	"onlyx_keep3",
+	"blkswx_2_2",
+	"multi_pu2xc",
+	"push3",
+	"pushint_small",
+	"pushslice_payload",
+	"pushrefslice_payload",
+	"pushref_payload",
+	"pushcont_execute",
+	"pushnull",
+	"pushnan",
+	"dumpstk_noop",
+	"dump_s0_noop",
+	"debug_noop",
+	"debugstr_noop",
+	"strdump_slice_noop",
+	"condsel_true",
+	"condsel_false",
+	"condselchk_true",
+	"condselchk_mixed_int_slice_typecheck",
+}
+
+const (
+	expectedStackOpcodeSpaceGapCases  = 39839
+	expectedStackDynamicDepthGapCases = 22
+)
+
+var requiredStackOpcodeSpaceGapCaseNames = []string{
+	"nop",
+	"swap",
+	"xchg0_short_15",
+	"xchg_1_15",
+	"xchg0_long_255",
+	"xchg1_short_15",
+	"dup",
+	"over",
+	"push_short_15",
+	"drop",
+	"nip",
+	"pop_short_15",
+	"xchg3_short_15_15_15",
+	"xchg2_15_15",
+	"xcpu_15_15",
+	"puxc_15_15",
+	"push2_15_15",
+	"xchg3_ext_15_15_15",
+	"xc2pu_15_15_15",
+	"xcpuxc_15_15_15",
+	"xcpu2_15_15_15",
+	"puxc2_15_15_15",
+	"puxcpu_15_15_15",
+	"pu2xc_15_15_15",
+	"push3_15_15_15",
+	"blkswap_16_16",
+	"push_long_255",
+	"pop_long_255",
+	"rot",
+	"rotrev",
+	"2swap",
+	"2drop",
+	"2dup",
+	"2over",
+	"reverse_17_15",
+	"blkdrop_15",
+	"blkpush_15_15",
+	"tuck",
+	"depth",
+	"blkdrop2_15_15",
+}
+
+var requiredStackDynamicDepthGapCaseNames = []string{
+	"pick_0",
+	"pick_255",
+	"pick_1020",
+	"roll_0",
+	"roll_256",
+	"rollrev_256",
+	"blkswx_empty_left",
+	"blkswx_empty_right",
+	"blkswx_510_511",
+	"revx_empty",
+	"revx_510_511",
+	"dropx_0",
+	"dropx_512",
+	"xchgx_0",
+	"xchgx_255",
+	"xchgx_1021",
+	"depth_1021",
+	"chkdepth_1022",
+	"onlytopx_0",
+	"onlytopx_1022",
+	"onlyx_0",
+	"onlyx_1022",
+}
+
+var requiredTupleGapTraceLabels = []string{
+	"TUPLEVAR",
+	"INDEXVAR",
+	"INDEXVARQ",
+	"UNTUPLEVAR",
+	"UNPACKFIRSTVAR",
+	"EXPLODEVAR",
+	"INDEX2(0,1)",
+	"INDEX3(0,0,1)",
+	"SETINDEXQ(1)",
+	"SETINDEXVAR",
+	"SETINDEXVARQ",
+	"NULLSWAPIF",
+	"NULLSWAPIFNOT",
+	"NULLROTRIF",
+	"NULLSWAPIF2",
+	"NULLROTRIFNOT",
+	"NULLSWAPIFNOT2",
+	"NULLROTRIF2",
+	"NULLROTRIFNOT2",
+}
+
+func requireNamedParityCases(t *testing.T, family string, names []string, required []string) {
+	t.Helper()
+
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		seen[name] = struct{}{}
+	}
+	for _, name := range required {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("required %s parity case %q is missing", family, name)
+		}
+	}
+}
+
+func requireParityTraceLabels(t *testing.T, family string, labels []string, required []string) {
+	t.Helper()
+
+	seen := map[string]struct{}{}
+	for _, label := range labels {
+		seen[label] = struct{}{}
+	}
+	for _, req := range required {
+		if _, ok := seen[req]; !ok {
+			t.Fatalf("required %s parity trace label %q is missing", family, req)
+		}
+	}
+}
+
+func TestTVMDifferentialFuzzMathCompoundOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	var allLabels []string
+	for mode := 0; mode < 21; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitMathCompoundOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "math_compound",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "math_compound", allLabels, requiredMathCompoundTraceLabels)
+}
+
+func TestTVMDifferentialFuzzMathShiftOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	var allLabels []string
+	for mode := 0; mode < 20; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitMathShiftModOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "math_shift",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "math_shift", allLabels, requiredMathShiftTraceLabels)
+}
+
+func TestTVMDifferentialFuzzMathQuietLogicOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	var allLabels []string
+	for mode := 0; mode < 29; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitMathQuietLogicOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "math_quiet_logic",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "math_quiet_logic", allLabels, requiredMathQuietLogicTraceLabels)
+}
+
+func TestTVMDifferentialFuzzMathGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	var allLabels []string
+	for mode := 0; mode < 36; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitMathGapOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "math_gap",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "math_gap", allLabels, requiredMathGapTraceLabels)
+}
+
+func TestTVMDifferentialFuzzMathQuietCompoundOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	var allLabels []string
+	for mode := 0; mode < 15; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitMathQuietCompoundOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "math_quiet_compound",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "math_quiet_compound", allLabels, requiredMathQuietCompoundTraceLabels)
+}
+
+func TestTVMDifferentialFuzzMathImmediateGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	shift := uint8(3)
+	lshiftCodeOp := func(op byte) *cell.Builder {
+		return parityProgramRawOp((0xA9<<16)|(uint64(op)<<8)|uint64(shift-1), 24)
+	}
+	oneArg := []any{big.NewInt(-17)}
+	twoArgs := []any{big.NewInt(-7), big.NewInt(5)}
+	addArgs := []any{big.NewInt(-17), big.NewInt(2)}
+	mulAddArgs := []any{big.NewInt(-7), big.NewInt(5), big.NewInt(2)}
+	lshiftDivCodeArgs := []any{big.NewInt(-7), big.NewInt(5)}
+	lshiftAddDivModCodeArgs := []any{big.NewInt(-7), big.NewInt(2), big.NewInt(5)}
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{"pushpow2", parityProgramCodeCell(mathop.PUSHPOW2(4).Serialize()), nil},
+		{"pushpow2_nan_alias", parityProgramCodeCell(mathop.PUSHPOW2(0xff).Serialize()), nil},
+		{"pushpow2dec", parityProgramCodeCell(mathop.PUSHPOW2DEC(4).Serialize()), nil},
+		{"pushnegpow2", parityProgramCodeCell(mathop.PUSHNEGPOW2(4).Serialize()), nil},
+		{"lessint_true", parityProgramCodeCell(mathop.LESSINT(4).Serialize()), []any{big.NewInt(3)}},
+		{"eqint_true", parityProgramCodeCell(mathop.EQINT(5).Serialize()), []any{big.NewInt(5)}},
+		{"gtint_true", parityProgramCodeCell(mathop.GTINT(3).Serialize()), []any{big.NewInt(8)}},
+		{"neqint_false", parityProgramCodeCell(mathop.NEQINT(8).Serialize()), []any{big.NewInt(8)}},
+		{"qaddint", parityProgramCodeCell(mathop.QADDINT(4).Serialize()), []any{big.NewInt(9)}},
+		{"qmulint", parityProgramCodeCell(mathop.QMULINT(-2).Serialize()), []any{big.NewInt(9)}},
+		{"qeqint_true", parityProgramCodeCell(mathop.QEQINT(5).Serialize()), []any{big.NewInt(5)}},
+		{"qlessint_true", parityProgramCodeCell(mathop.QLESSINT(4).Serialize()), []any{big.NewInt(3)}},
+		{"qgtint_nan", parityProgramCodeCell(mathop.QGTINT(4).Serialize()), []any{vm.NaN{}}},
+		{"qneqint_true", parityProgramCodeCell(mathop.QNEQINT(4).Serialize()), []any{big.NewInt(5)}},
+		{"fits_immediate", parityProgramCodeCell(mathop.FITS(6).Serialize()), []any{big.NewInt(63)}},
+		{"ufits_immediate", parityProgramCodeCell(mathop.UFITS(7).Serialize()), []any{big.NewInt(255)}},
+		{"qfits_immediate_nan", parityProgramCodeCell(mathop.QFITS(2).Serialize()), []any{big.NewInt(8)}},
+		{"qufits_immediate", parityProgramCodeCell(mathop.QUFITS(7).Serialize()), []any{big.NewInt(255)}},
+		{"lshift_code", parityProgramCodeCell(mathop.LSHIFTCODE(int8(shift)).Serialize()), []any{big.NewInt(-3)}},
+		{"rshift_code_floor", parityProgramCodeCell(mathop.RSHIFTCODE(int8(shift)).Serialize()), oneArg},
+		{"rshiftr_code_round", parityProgramCodeCell(mathop.RSHIFTRCODE(int8(shift)).Serialize()), oneArg},
+		{"rshiftc_code_ceil", parityProgramCodeCell(mathop.RSHIFTCCODE(int8(shift)).Serialize()), oneArg},
+		{"rshift_code_floor_alt", parityProgramCodeCell(mathop.RSHIFTCODEFLOOR(int8(shift)).Serialize()), oneArg},
+		{"lshift_code_nan_current", parityProgramCodeCell(mathop.LSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
+		{"rshift_code_nan_current", parityProgramCodeCell(mathop.RSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
+		{"qlshift_code", parityProgramCodeCell(mathop.QLSHIFTCODE(int8(shift)).Serialize()), []any{big.NewInt(3)}},
+		{"qrshift_code", parityProgramCodeCell(mathop.QRSHIFTCODE(int8(shift)).Serialize()), []any{big.NewInt(48)}},
+		{"qlshift_code_nan_current", parityProgramCodeCell(mathop.QLSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
+		{"qrshift_code_nan_legacy", parityProgramCodeCell(mathop.QRSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
+		{"rshift_code_mod_floor", parityProgramCodeCell(mathop.RSHIFTCODEMOD(int8(shift)).Serialize()), oneArg},
+		{"rshiftr_code_mod_round", parityProgramCodeCell(mathop.RSHIFTRCODEMOD(int8(shift)).Serialize()), oneArg},
+		{"rshiftc_code_mod_ceil", parityProgramCodeCell(mathop.RSHIFTCCODEMOD(int8(shift)).Serialize()), oneArg},
+		{"modpow2_code_floor", parityProgramCodeCell(mathop.MODPOW2CODE(int8(shift)).Serialize()), oneArg},
+		{"modpow2r_code_round", parityProgramCodeCell(mathop.MODPOW2RCODE(int8(shift)).Serialize()), oneArg},
+		{"modpow2c_code_ceil", parityProgramCodeCell(mathop.MODPOW2CCODE(int8(shift)).Serialize()), oneArg},
+		{"mulrshift_code_floor", parityProgramCodeCell(mathop.MULRSHIFTCODE(int8(shift)).Serialize()), twoArgs},
+		{"mulrshiftr_code_round", parityProgramCodeCell(mathop.MULRSHIFTRCODE(int8(shift)).Serialize()), twoArgs},
+		{"mulrshiftc_code_ceil", parityProgramCodeCell(mathop.MULRSHIFTCCODE(int8(shift)).Serialize()), twoArgs},
+		{"mulrshift_code_mod_floor", parityProgramCodeCell(mathop.MULRSHIFTCODEMOD(int8(shift)).Serialize()), twoArgs},
+		{"mulrshiftr_code_mod_round", parityProgramCodeCell(mathop.MULRSHIFTRCODEMOD(int8(shift)).Serialize()), twoArgs},
+		{"mulrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.MULRSHIFTCCODEMOD(int8(shift)).Serialize()), twoArgs},
+		{"mulmodpow2_code_floor", parityProgramCodeCell(mathop.MULMODPOW2CODE(int8(shift)).Serialize()), twoArgs},
+		{"mulmodpow2r_code_round", parityProgramCodeCell(mathop.MULMODPOW2RCODE(int8(shift)).Serialize()), twoArgs},
+		{"mulmodpow2c_code_ceil", parityProgramCodeCell(mathop.MULMODPOW2CCODE(int8(shift)).Serialize()), twoArgs},
+		{"addrshift_code_mod_floor", parityProgramCodeCell(mathop.ADDRSHIFTCODEMOD(int8(shift)).Serialize()), addArgs},
+		{"addrshiftr_code_mod_round", parityProgramCodeCell(mathop.ADDRSHIFTRCODEMOD(int8(shift)).Serialize()), addArgs},
+		{"addrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.ADDRSHIFTCCODEMOD(int8(shift)).Serialize()), addArgs},
+		{"muladdrshift_code_mod_floor", parityProgramCodeCell(mathop.MULADDRSHIFTCODEMOD(int8(shift)).Serialize()), mulAddArgs},
+		{"muladdrshiftr_code_mod_round", parityProgramCodeCell(mathop.MULADDRSHIFTRCODEMOD(int8(shift)).Serialize()), mulAddArgs},
+		{"muladdrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.MULADDRSHIFTCCODEMOD(int8(shift)).Serialize()), mulAddArgs},
+		{"lshiftadddivmod_code_floor", parityProgramCodeCell(lshiftCodeOp(0xD0)), lshiftAddDivModCodeArgs},
+		{"lshiftadddivmodr_code_round", parityProgramCodeCell(lshiftCodeOp(0xD1)), lshiftAddDivModCodeArgs},
+		{"lshiftadddivmodc_code_ceil", parityProgramCodeCell(lshiftCodeOp(0xD2)), lshiftAddDivModCodeArgs},
+		{"lshiftdiv_code_floor", parityProgramCodeCell(lshiftCodeOp(0xD4)), lshiftDivCodeArgs},
+		{"lshiftdivr_code_round", parityProgramCodeCell(lshiftCodeOp(0xD5)), lshiftDivCodeArgs},
+		{"lshiftdivc_code_ceil", parityProgramCodeCell(lshiftCodeOp(0xD6)), lshiftDivCodeArgs},
+		{"lshiftmod_code_floor", parityProgramCodeCell(lshiftCodeOp(0xD8)), lshiftDivCodeArgs},
+		{"lshiftmodr_code_round", parityProgramCodeCell(lshiftCodeOp(0xD9)), lshiftDivCodeArgs},
+		{"lshiftmodc_code_ceil", parityProgramCodeCell(lshiftCodeOp(0xDA)), lshiftDivCodeArgs},
+		{"lshiftdivmod_code_floor", parityProgramCodeCell(lshiftCodeOp(0xDC)), lshiftDivCodeArgs},
+		{"lshiftdivmodr_code_round", parityProgramCodeCell(lshiftCodeOp(0xDD)), lshiftDivCodeArgs},
+		{"lshiftdivmodc_code_ceil", parityProgramCodeCell(lshiftCodeOp(0xDE)), lshiftDivCodeArgs},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "math_immediate_gap", caseNames, requiredMathImmediateGapCaseNames)
+
+	empty := testEmptyCell()
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "math_immediate_gap",
+				op:     tc.name,
+				code:   tc.code,
+				stack:  tc.stack,
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzInvalidMathOpcodeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		raw  uint64
+		bits uint
+	}{
+		{"divmod_invalid", 0xA903, 16},
+		{"shrmod_invalid", 0xA927, 16},
+		{"shrcodemod_invalid", 0xA93300, 24},
+		{"muldivmod_invalid", 0xA987, 16},
+		{"mulshrmod_invalid", 0xA9A7, 16},
+		{"mulshrcodemod_invalid", 0xA9B300, 24},
+		{"shldivmod_invalid", 0xA9C7, 16},
+		{"shldivcodemod_invalid", 0xA9D300, 24},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "invalid_math_gap", caseNames, requiredInvalidMathGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "invalid_math_gap",
+				op:     tc.name,
+				code:   parityProgramCodeCell(parityProgramRawOp(tc.raw, tc.bits)),
+				c7:     prepareCrossTestC7(nil, testEmptyCell()),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzQuietMathErrorGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	quietCompoundOp := func(prefix uint64, args uint8) *cell.Cell {
+		return parityProgramCodeCell(parityProgramRawOp((prefix<<4)|uint64(args), 24))
+	}
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "qdiv_zero_divisor_nan",
+			code:  quietCompoundOp(0xB7A90, 4),
+			stack: []any{big.NewInt(-17), big.NewInt(0)},
+		},
+		{
+			name:  "qmod_zero_divisor_nan",
+			code:  quietCompoundOp(0xB7A90, 8),
+			stack: []any{big.NewInt(-17), big.NewInt(0)},
+		},
+		{
+			name:  "qadddivmod_zero_divisor_double_nan",
+			code:  quietCompoundOp(0xB7A90, 0),
+			stack: []any{big.NewInt(-17), big.NewInt(2), big.NewInt(0)},
+		},
+		{
+			name:  "qadddivmod_nan_addend_double_nan",
+			code:  quietCompoundOp(0xB7A90, 0),
+			stack: []any{big.NewInt(-17), vm.NaN{}, big.NewInt(5)},
+		},
+		{
+			name:  "qmod_nan_operand_nan",
+			code:  quietCompoundOp(0xB7A90, 8),
+			stack: []any{vm.NaN{}, big.NewInt(5)},
+		},
+		{
+			name:  "qaddrshiftmod_shift_over_256_legacy_rangecheck",
+			code:  quietCompoundOp(0xB7A92, 0),
+			stack: []any{big.NewInt(-17), big.NewInt(2), big.NewInt(257)},
+		},
+		{
+			name:  "qaddrshiftmod_nan_shift_legacy_rangecheck",
+			code:  quietCompoundOp(0xB7A92, 0),
+			stack: []any{big.NewInt(-17), big.NewInt(2), vm.NaN{}},
+		},
+		{
+			name:  "qmuldiv_zero_divisor_nan",
+			code:  quietCompoundOp(0xB7A98, 4),
+			stack: []any{big.NewInt(-7), big.NewInt(5), big.NewInt(0)},
+		},
+		{
+			name:  "qmuldiv_divisor_slice_typecheck",
+			code:  quietCompoundOp(0xB7A98, 4),
+			stack: []any{big.NewInt(-7), big.NewInt(5), cell.BeginCell().EndCell().MustBeginParse()},
+		},
+		{
+			name:  "qmulmodr_nan_factor_nan",
+			code:  quietCompoundOp(0xB7A98, 9),
+			stack: []any{vm.NaN{}, big.NewInt(5), big.NewInt(4)},
+		},
+		{
+			name:  "qmuladddivmod_zero_divisor_double_nan",
+			code:  quietCompoundOp(0xB7A98, 0),
+			stack: []any{big.NewInt(-7), big.NewInt(5), big.NewInt(2), big.NewInt(0)},
+		},
+		{
+			name:  "qmuladddivmod_nan_addend_double_nan",
+			code:  quietCompoundOp(0xB7A98, 0),
+			stack: []any{big.NewInt(-7), big.NewInt(5), vm.NaN{}, big.NewInt(4)},
+		},
+		{
+			name:  "qmuladdrshiftmod_negative_shift_double_nan",
+			code:  quietCompoundOp(0xB7A9A, 0),
+			stack: []any{big.NewInt(-7), big.NewInt(5), big.NewInt(2), big.NewInt(-1)},
+		},
+		{
+			name:  "qmuladdrshiftmod_nan_addend_double_nan",
+			code:  quietCompoundOp(0xB7A9A, 0),
+			stack: []any{big.NewInt(-7), big.NewInt(5), vm.NaN{}, big.NewInt(2)},
+		},
+		{
+			name:  "qmulrshift_shift_over_256_nan",
+			code:  quietCompoundOp(0xB7A9A, 4),
+			stack: []any{big.NewInt(-7), big.NewInt(5), big.NewInt(257)},
+		},
+		{
+			name:  "qlshiftdiv_zero_divisor_nan",
+			code:  quietCompoundOp(0xB7A9C, 4),
+			stack: []any{big.NewInt(-17), big.NewInt(0), big.NewInt(2)},
+		},
+		{
+			name:  "qlshiftadddivmod_nan_addend_double_nan",
+			code:  quietCompoundOp(0xB7A9C, 0),
+			stack: []any{big.NewInt(-17), vm.NaN{}, big.NewInt(5), big.NewInt(2)},
+		},
+		{
+			name:  "qlshiftadddivmod_negative_shift_double_nan",
+			code:  quietCompoundOp(0xB7A9C, 0),
+			stack: []any{big.NewInt(-17), big.NewInt(2), big.NewInt(5), big.NewInt(-1)},
+		},
+		{
+			name:  "qlshiftmod_shift_over_256_nan",
+			code:  quietCompoundOp(0xB7A9C, 8),
+			stack: []any{big.NewInt(-17), big.NewInt(5), big.NewInt(257)},
+		},
+		{
+			name:  "qlshift_negative_shift_nan",
+			code:  parityProgramCodeCell(mathop.QLSHIFT().Serialize()),
+			stack: []any{big.NewInt(3), big.NewInt(-1)},
+		},
+		{
+			name:  "qlshift_count_over_1023_nan",
+			code:  parityProgramCodeCell(mathop.QLSHIFT().Serialize()),
+			stack: []any{big.NewInt(3), big.NewInt(1024)},
+		},
+		{
+			name:  "qpow2_out_of_range_nan",
+			code:  parityProgramCodeCell(mathop.QPOW2().Serialize()),
+			stack: []any{big.NewInt(1024)},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "quiet_math_error_gap", caseNames, requiredQuietMathErrorGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "quiet_math_error_gap",
+				op:     tc.name,
+				code:   tc.code,
+				stack:  tc.stack,
+				c7:     prepareCrossTestC7(nil, testEmptyCell()),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzDictGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	allLabels := make([]string, 0, 128)
+	for mode := 0; mode < 63; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitDictGapOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "dict_gap",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "dict_gap", allLabels, requiredDictGapTraceLabels)
+}
+
+func TestTVMDifferentialFuzzDictNearGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	allLabels := make([]string, 0, 64)
+	for mode := 0; mode < 12; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitDictNearExtraOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "dict_near_gap",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "dict_near_gap", allLabels, requiredDictNearGapTraceLabels)
+}
+
+func TestTVMDifferentialFuzzDictSuccessGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		emit func(*parityProgramGenerator) bool
+	}{
+		{"dictugetoptref_hit", func(g *parityProgramGenerator) bool { return g.emitDictGetOptRefOp(2) }},
+		{"dictusetgetoptref_replace_hit", func(g *parityProgramGenerator) bool { return g.emitDictSetGetOptRefOp(false, 2) }},
+		{"dictusetgetoptref_delete_hit", func(g *parityProgramGenerator) bool { return g.emitDictSetGetOptRefOp(true, 2) }},
+		{"dictmin_slice_hit", func(g *parityProgramGenerator) bool { return g.emitDictMinMaxOp(false, false, 0) }},
+		{"dictumaxref_hit", func(g *parityProgramGenerator) bool { return g.emitDictMinMaxOp(true, true, 2) }},
+		{"dicturemmaxref_hit", func(g *parityProgramGenerator) bool { return g.emitDictRemMinMaxOp(true, true, 2) }},
+		{"dictusubdictget_success", func(g *parityProgramGenerator) bool { return g.emitSubdictOp(false, 2) }},
+		{"dictusubdictrpget_success", func(g *parityProgramGenerator) bool { return g.emitSubdictOp(true, 2) }},
+		{"pfxdictget_success", func(g *parityProgramGenerator) bool { return g.emitPrefixDictGetOp(false) }},
+		{"pfxdictgetq_success", func(g *parityProgramGenerator) bool { return g.emitPrefixDictGetOp(true) }},
+		{"pfxdictreplace_hit", func(g *parityProgramGenerator) bool { return g.emitPrefixDictReplaceAddOp(false) }},
+		{"pfxdictadd_new", func(g *parityProgramGenerator) bool { return g.emitPrefixDictReplaceAddOp(true) }},
+		{"pfxdictset_new", func(g *parityProgramGenerator) bool { return g.emitPrefixDictSetDelOp(false) }},
+		{"pfxdictdel_hit", func(g *parityProgramGenerator) bool { return g.emitPrefixDictSetDelOp(true) }},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "dict_success_gap", caseNames, requiredDictSuccessGapCaseNames)
+
+	empty := testEmptyCell()
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(i))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !tc.emit(g) {
+				t.Fatalf("%s was not emitted", tc.name)
+			}
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "dict_success_gap",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	plainRoot, _, _ := parityProgramDictRoot(false)
+	refRoot, _, _ := parityProgramDictRoot(true)
+	multiRoot, _ := parityProgramMultiDictRoot()
+	signedRoot, _ := parityProgramSignedDictRoot()
+	prefixRoot, _ := parityProgramPrefixDictRoot()
+	subdictRoot := parityProgramSubdictRoot()
+
+	valueSlice := func(value uint64, bits uint) *cell.Slice {
+		return cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse()
+	}
+	valueBuilder := func(value uint64, bits uint) *cell.Builder {
+		return cell.BeginCell().MustStoreUInt(value, bits)
+	}
+	refValue := func(value uint64, bits uint) *cell.Cell {
+		return cell.BeginCell().MustStoreUInt(value, bits).EndCell()
+	}
+	code := func(raw uint64) *cell.Cell {
+		return parityProgramCodeCell(parityProgramRawOp(raw, 16))
+	}
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "dictget_miss_slice",
+			code:  code(0xF40A),
+			stack: []any{parityProgramKeySlice(0x99, 8), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictuget_miss_invalid_key",
+			code:  code(parityProgramDictValueOpcode(0xF40A, 2, false)),
+			stack: []any{big.NewInt(-1), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictugetref_miss",
+			code:  code(parityProgramDictValueOpcode(0xF40A, 2, true)),
+			stack: []any{int64(0x99), refRoot, int64(8)},
+		},
+		{
+			name:  "dictureplace_miss_false",
+			code:  code(parityProgramDictValueOpcode(0xF422, 2, false)),
+			stack: []any{valueSlice(0x55, 8), int64(0x33), (*cell.Cell)(nil), int64(8)},
+		},
+		{
+			name:  "dictuadd_existing_false",
+			code:  code(parityProgramDictValueOpcode(0xF432, 2, false)),
+			stack: []any{valueSlice(0x99, 8), int64(0x12), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictureplaceget_miss_false",
+			code:  code(parityProgramDictValueOpcode(0xF42A, 2, false)),
+			stack: []any{valueSlice(0x66, 8), int64(0x44), (*cell.Cell)(nil), int64(8)},
+		},
+		{
+			name:  "dictaddget_existing_returns_old",
+			code:  code(parityProgramDictValueOpcode(0xF43A, 0, false)),
+			stack: []any{valueSlice(0x77, 8), parityProgramKeySlice(0x12, 8), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictuaddgetref_existing_returns_old",
+			code:  code(parityProgramDictValueOpcode(0xF43A, 2, true)),
+			stack: []any{refValue(0xBB, 8), int64(0x12), refRoot, int64(8)},
+		},
+		{
+			name:  "dictudel_miss_false",
+			code:  code(parityProgramDictScalarOpcode(0xF459, 2)),
+			stack: []any{int64(0x77), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictudelgetref_miss_false",
+			code:  code(parityProgramDictValueOpcode(0xF462, 2, true)),
+			stack: []any{int64(0x77), refRoot, int64(8)},
+		},
+		{
+			name:  "dictudel_invalid_key_rangecheck",
+			code:  code(parityProgramDictScalarOpcode(0xF459, 2)),
+			stack: []any{big.NewInt(-1), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictudelget_invalid_key_rangecheck",
+			code:  code(parityProgramDictValueOpcode(0xF462, 2, false)),
+			stack: []any{big.NewInt(-1), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictugetoptref_miss_null",
+			code:  code(parityProgramDictScalarOpcode(0xF469, 2)),
+			stack: []any{int64(0x77), refRoot, int64(8)},
+		},
+		{
+			name:  "dictugetoptref_invalid_key_null",
+			code:  code(parityProgramDictScalarOpcode(0xF469, 2)),
+			stack: []any{big.NewInt(-1), refRoot, int64(8)},
+		},
+		{
+			name:  "dictusetgetoptref_delete_miss_null",
+			code:  code(parityProgramDictScalarOpcode(0xF46D, 2)),
+			stack: []any{(*cell.Cell)(nil), int64(0x77), refRoot, int64(8)},
+		},
+		{
+			name:  "dictumin_empty_false",
+			code:  code(parityProgramDictValueOpcode(0xF482, 2, false)),
+			stack: []any{(*cell.Cell)(nil), int64(8)},
+		},
+		{
+			name:  "dicturemmin_empty_false",
+			code:  code(parityProgramDictValueOpcode(0xF492, 2, false)),
+			stack: []any{(*cell.Cell)(nil), int64(8)},
+		},
+		{
+			name:  "dictgetprev_miss_false",
+			code:  code(0xF476),
+			stack: []any{parityProgramKeySlice(0x05, 8), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictugetprev_overflow_max",
+			code:  code(0xF47E),
+			stack: []any{big.NewInt(0x1FF), multiRoot, int64(8)},
+		},
+		{
+			name:  "dictugetnext_negative_returns_min",
+			code:  code(0xF47C),
+			stack: []any{big.NewInt(-1), multiRoot, int64(8)},
+		},
+		{
+			name:  "dictugetnext_overflow_false",
+			code:  code(0xF47C),
+			stack: []any{big.NewInt(0x1FF), multiRoot, int64(8)},
+		},
+		{
+			name:  "dictigetprev_miss_false",
+			code:  code(0xF47A),
+			stack: []any{big.NewInt(-3), signedRoot, int64(8)},
+		},
+		{
+			name:  "dictigetnext_below_min_returns_min",
+			code:  code(0xF478),
+			stack: []any{big.NewInt(-200), signedRoot, int64(8)},
+		},
+		{
+			name:  "pfxdictgetq_miss_false",
+			code:  code(0xF4A8),
+			stack: []any{parityProgramKeySlice(0b0111, 4), prefixRoot, int64(4)},
+		},
+		{
+			name:  "pfxdictget_miss_cell_underflow",
+			code:  code(0xF4A9),
+			stack: []any{parityProgramKeySlice(0b0111, 4), prefixRoot, int64(4)},
+		},
+		{
+			name:  "pfxdictgetjmp_miss_keeps_input",
+			code:  code(0xF4AA),
+			stack: []any{parityProgramKeySlice(0b0111, 4), prefixRoot, int64(4)},
+		},
+		{
+			name:  "pfxdictreplace_miss_false",
+			code:  code(0xF471),
+			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), (*cell.Cell)(nil), int64(4)},
+		},
+		{
+			name:  "pfxdictadd_existing_false",
+			code:  code(0xF472),
+			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b10, 2), prefixRoot, int64(4)},
+		},
+		{
+			name:  "pfxdictdel_miss_false",
+			code:  code(0xF473),
+			stack: []any{parityProgramKeySlice(0b01, 2), prefixRoot, int64(4)},
+		},
+		{
+			name:  "pfxdictset_oversized_key_false",
+			code:  code(0xF470),
+			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), prefixRoot, int64(1)},
+		},
+		{
+			name:  "subdictuget_miss_dict_error",
+			code:  code(parityProgramDictScalarOpcode(0xF4B1, 2)),
+			stack: []any{int64(0b111), int64(3), subdictRoot, int64(8)},
+		},
+		{
+			name:  "dictureplaceb_miss_false",
+			code:  code(parityProgramDictScalarOpcode(0xF449, 2)),
+			stack: []any{valueBuilder(0x77, 8), int64(0x44), (*cell.Cell)(nil), int64(8)},
+		},
+		{
+			name:  "dictuaddb_existing_false",
+			code:  code(parityProgramDictScalarOpcode(0xF451, 2)),
+			stack: []any{valueBuilder(0x88, 8), int64(0x12), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictuaddgetb_existing_returns_old",
+			code:  code(parityProgramDictScalarOpcode(0xF455, 2)),
+			stack: []any{valueBuilder(0x99, 8), int64(0x12), plainRoot, int64(8)},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "dict_miss_gap", caseNames, requiredDictMissGapCaseNames)
+
+	empty := testEmptyCell()
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "dict_miss_gap",
+				op:     tc.name,
+				code:   tc.code,
+				stack:  tc.stack,
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzDictEdgeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	plainRoot, _, _ := parityProgramDictRoot(false)
+	refRoot, _, _ := parityProgramDictRoot(true)
+	prefixRoot, _ := parityProgramPrefixDictRoot()
+	valueSlice := func(value uint64, bits uint) *cell.Slice {
+		return cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse()
+	}
+	prefixInputWithRef := cell.BeginCell().
+		MustStoreUInt(0b1011, 4).
+		MustStoreRef(testEmptyCell()).
+		EndCell().
+		MustBeginParse()
+	code := func(raw uint64) *cell.Cell {
+		return parityProgramCodeCell(parityProgramRawOp(raw, 16))
+	}
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "dictuset_negative_key_bad_value_typecheck_order",
+			code:  code(parityProgramDictValueOpcode(0xF412, 2, false)),
+			stack: []any{int64(1), big.NewInt(-1), (*cell.Cell)(nil), int64(8)},
+		},
+		{
+			name:  "dictusetb_negative_key_bad_builder_typecheck_order",
+			code:  code(parityProgramDictScalarOpcode(0xF441, 2)),
+			stack: []any{int64(1), big.NewInt(-1), (*cell.Cell)(nil), int64(8)},
+		},
+		{
+			name:  "dictusetgetoptref_negative_key_bad_value_typecheck_order",
+			code:  code(parityProgramDictScalarOpcode(0xF46D, 2)),
+			stack: []any{int64(1), big.NewInt(-1), refRoot, int64(8)},
+		},
+		{
+			name:  "dictugetoptref_plain_value_dict_error",
+			code:  code(parityProgramDictScalarOpcode(0xF469, 2)),
+			stack: []any{int64(0x12), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictudelgetref_plain_value_dict_error",
+			code:  code(parityProgramDictValueOpcode(0xF462, 2, true)),
+			stack: []any{int64(0x12), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictuminref_plain_value_dict_error",
+			code:  code(parityProgramDictValueOpcode(0xF482, 2, true)),
+			stack: []any{plainRoot, int64(8)},
+		},
+		{
+			name:  "dicturemminref_plain_value_dict_error",
+			code:  code(parityProgramDictValueOpcode(0xF492, 2, true)),
+			stack: []any{plainRoot, int64(8)},
+		},
+		{
+			name:  "dictusetgetref_old_value_plain_slice",
+			code:  code(parityProgramDictValueOpcode(0xF41A, 2, true)),
+			stack: []any{cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell(), int64(0x12), plainRoot, int64(8)},
+		},
+		{
+			name:  "dictset_library_root_underflow",
+			code:  code(0xF412),
+			stack: []any{valueSlice(0x55, 8), parityProgramKeySlice(0x12, 8), mustLibraryCell(t), int64(8)},
+		},
+		{
+			name:  "pfxdictgetq_input_with_refs_preserved",
+			code:  code(0xF4A8),
+			stack: []any{prefixInputWithRef, prefixRoot, int64(4)},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "dict_edge_gap", caseNames, requiredDictEdgeGapCaseNames)
+
+	empty := testEmptyCell()
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "dict_edge_gap",
+				op:     tc.name,
+				code:   tc.code,
+				stack:  tc.stack,
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzCellSliceGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		emit func(*parityProgramGenerator) bool
+	}{
+		{"ldule4q", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(12) }},
+		{"ldile8q", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(13) }},
+		{"pldule4q", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(14) }},
+		{"pldile8q", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(15) }},
+		{"bchkbitrefs", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(33) }},
+		{"stb", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(34) }},
+		{"stile4", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(16) }},
+		{"stule4", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(17) }},
+		{"stile8", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(18) }},
+		{"stule8", func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(19) }},
+		{"bchkbitrefsq", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(35) }},
+		{"xctos_ordinary", func(g *parityProgramGenerator) bool { return g.emitCellSliceTransformOp(30) }},
+		{"sdsfxrev", func(g *parityProgramGenerator) bool { return g.emitCellSlicePredicateOp(15) }},
+		{"sdpsfxrev", func(g *parityProgramGenerator) bool { return g.emitCellSlicePredicateOp(17) }},
+		{"sdbeginsx", func(g *parityProgramGenerator) bool { return g.emitCellSlicePrefixGramsOp(0) }},
+		{"sdbeginsxq", func(g *parityProgramGenerator) bool { return g.emitCellSlicePrefixGramsOp(1) }},
+		{"sdbeginsconst", func(g *parityProgramGenerator) bool { return g.emitCellSlicePrefixGramsOp(3) }},
+		{"sdbeginsconstq", func(g *parityProgramGenerator) bool { return g.emitCellSlicePrefixGramsOp(4) }},
+		{"ldgrams", func(g *parityProgramGenerator) bool { return g.emitCellSlicePrefixGramsOp(6) }},
+		{"stgrams", func(g *parityProgramGenerator) bool { return g.emitCellSlicePrefixGramsOp(7) }},
+		{"strefconst", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(21) }},
+		{"stref2const", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(22) }},
+		{"stsliceconst", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(23) }},
+		{"endcst", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(24) }},
+		{"stix_variable", func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(36) }},
+		{"ldiq_fixed", func(g *parityProgramGenerator) bool { return g.emitCellSliceLoadFamilyOp(28) }},
+		{"pldiq_fixed", func(g *parityProgramGenerator) bool { return g.emitCellSliceLoadFamilyOp(29) }},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "cellslice_gap", caseNames, requiredCellSliceGapCaseNames)
+
+	empty := testEmptyCell()
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(i))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !tc.emit(g) {
+				t.Fatalf("%s was not emitted", tc.name)
+			}
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "cellslice_gap",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzCellSliceQuietGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	emitTransform := func(mode int) func(*parityProgramGenerator) bool {
+		return func(g *parityProgramGenerator) bool { return g.emitCellSliceTransformOp(mode) }
+	}
+	emitLoadFamily := func(mode int) func(*parityProgramGenerator) bool {
+		return func(g *parityProgramGenerator) bool { return g.emitCellSliceLoadFamilyOp(mode) }
+	}
+	emitLittleEndian := func(mode int) func(*parityProgramGenerator) bool {
+		return func(g *parityProgramGenerator) bool { return g.emitCellSliceLittleEndianOp(mode) }
+	}
+	emitBuilderAdvanced := func(mode int) func(*parityProgramGenerator) bool {
+		return func(g *parityProgramGenerator) bool { return g.emitCellSliceBuilderAdvancedOp(mode) }
+	}
+
+	shortSlice := parityProgramBitsSlice(0b1011, 4)
+	sliceSrc := parityProgramBitsSlice(0b101101, 6)
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+		emit  func(*parityProgramGenerator) bool
+	}{
+		{"splitq_fail_preserves", nil, nil, emitTransform(13)},
+		{"schkbitsq_true", nil, nil, emitTransform(17)},
+		{"schkbitsq_false", nil, nil, emitTransform(26)},
+		{"schkrefsq_true", nil, nil, emitTransform(27)},
+		{"schkrefsq_false", nil, nil, emitTransform(18)},
+		{"schkbitrefsq_true", nil, nil, emitTransform(19)},
+		{"schkbitrefsq_false", nil, nil, emitTransform(20)},
+		{"pldrefvar_idx1", nil, nil, emitTransform(21)},
+		{"pldrefidx0", nil, nil, emitTransform(22)},
+		{"pldrefidx1", nil, nil, emitTransform(28)},
+		{"ldzeroes_nonzero", nil, nil, emitTransform(23)},
+		{"ldzeroes_zero", nil, nil, emitTransform(29)},
+		{"ldones_nonzero", nil, nil, emitTransform(24)},
+		{"ldones_zero", nil, nil, emitTransform(31)},
+		{"ldsame_one", nil, nil, emitTransform(25)},
+		{"bchkbitsq_false", parityProgramCodeCell(cellsliceop.BCHKBITSQ().Serialize()), []any{parityProgramFullBitsBuilder(), int64(1)}, nil},
+		{"bchkrefsq_false", parityProgramCodeCell(cellsliceop.BCHKREFSQ().Serialize()), []any{parityProgramFullRefsBuilder(), int64(1)}, nil},
+		{"bchkbitrefsq_false", parityProgramCodeCell(cellsliceop.BCHKBITREFSQ().Serialize()), []any{parityProgramFullRefsBuilder(), int64(0), int64(1)}, nil},
+		{"ldixq_fail_preserves_slice", parityProgramCodeCell(cellsliceop.LDIXQ().Serialize()), []any{shortSlice.Copy(), int64(8)}, nil},
+		{"pldixq_fail_only_flag", parityProgramCodeCell(cellsliceop.PLDIXQ().Serialize()), []any{shortSlice.Copy(), int64(8)}, nil},
+		{"lduxq_fail_preserves_slice", nil, nil, emitLoadFamily(5)},
+		{"plduxq_fail_only_flag", nil, nil, emitLoadFamily(7)},
+		{"ldslicexq_success", nil, nil, emitLoadFamily(17)},
+		{"ldslicexq_fail_preserves_slice", nil, nil, emitLoadFamily(18)},
+		{"ldslicexq_zero_width", parityProgramCodeCell(cellsliceop.LDSLICEXQ().Serialize()), []any{sliceSrc.Copy(), int64(0)}, nil},
+		{"pldslicexq_success", nil, nil, emitLoadFamily(19)},
+		{"pldslicexq_fail_only_flag", nil, nil, emitLoadFamily(20)},
+		{"pldslicexq_zero_width", parityProgramCodeCell(cellsliceop.PLDSLICEXQ().Serialize()), []any{sliceSrc.Copy(), int64(0)}, nil},
+		{"ldslicefixq_fail_preserves_slice", nil, nil, emitLoadFamily(27)},
+		{"pldslicefixq_fail_only_flag", nil, nil, emitLoadFamily(26)},
+		{"ldule8q_fail_preserves_slice", nil, nil, emitLittleEndian(9)},
+		{"pldule8q_fail_only_flag", nil, nil, emitLittleEndian(11)},
+		{"ldile8q_success", nil, nil, emitLittleEndian(13)},
+		{"pldile8q_success", nil, nil, emitLittleEndian(15)},
+		{"strefq_success", nil, nil, emitBuilderAdvanced(5)},
+		{"strefq_fail_preserves", nil, nil, emitBuilderAdvanced(6)},
+		{"strefrq_success", nil, nil, emitBuilderAdvanced(7)},
+		{"strefrq_fail_preserves", nil, nil, emitBuilderAdvanced(8)},
+		{"stbrefq_success", nil, nil, emitBuilderAdvanced(9)},
+		{"stbrefq_fail_preserves", nil, nil, emitBuilderAdvanced(10)},
+		{"stbrefqr_success", nil, nil, emitBuilderAdvanced(11)},
+		{"stbrefqr_fail_preserves", nil, nil, emitBuilderAdvanced(12)},
+		{"stsliceq_success", nil, nil, emitBuilderAdvanced(13)},
+		{"stsliceq_fail_preserves", nil, nil, emitBuilderAdvanced(14)},
+		{"stslicerq_success", nil, nil, emitBuilderAdvanced(15)},
+		{"stslicerq_fail_preserves", nil, nil, emitBuilderAdvanced(16)},
+		{"stbq_success", nil, nil, emitBuilderAdvanced(17)},
+		{"stbq_fail_preserves", nil, nil, emitBuilderAdvanced(18)},
+		{"stbrq_success", nil, nil, emitBuilderAdvanced(19)},
+		{"stbrq_fail_preserves", nil, nil, emitBuilderAdvanced(20)},
+		{"stuxq_range_fail_status_plus_one", parityProgramCodeCell(parityProgramRawOp(0xCF05, 16)), []any{int64(256), cell.BeginCell(), int64(8)}, nil},
+		{"stuxq_capacity_fail_status_minus_one", parityProgramCodeCell(parityProgramRawOp(0xCF05, 16)), []any{int64(1), parityProgramFullBitsBuilder(), int64(8)}, nil},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "cellslice_quiet_gap", caseNames, requiredCellSliceQuietGapCaseNames)
+
+	empty := testEmptyCell()
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code := tc.code
+			stack := tc.stack
+			op := tc.name
+			if tc.emit != nil {
+				g := &parityProgramGenerator{
+					r:    rand.New(rand.NewSource(int64(i))),
+					seed: append([]byte(nil), crossTestSeed...),
+					regD: [2]*cell.Cell{
+						empty,
+						empty,
+					},
+				}
+				if !tc.emit(g) {
+					t.Fatalf("%s was not emitted", tc.name)
+				}
+				code = parityProgramCodeFromBuilders(t, g.ops...)
+				op = strings.Join(g.trace, " -> ")
+			}
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "cellslice_quiet_gap",
+				op:     op,
+				code:   code,
+				stack:  stack,
+				c7:     prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzCellSliceEdgeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	refA := cell.BeginCell().MustStoreUInt(0xA, 4).EndCell()
+	refB := cell.BeginCell().MustStoreUInt(0xB, 4).EndCell()
+	sliceWithRef := cell.BeginCell().
+		MustStoreUInt(0b1011, 4).
+		MustStoreRef(refA).
+		ToSlice()
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "lduxq_width_257_rangecheck",
+			code:  parityProgramCodeCell(cellsliceop.LDUXQ().Serialize()),
+			stack: []any{matrixSlice(t, 257, 0), int64(257)},
+		},
+		{
+			name:  "plduxq_width_257_rangecheck",
+			code:  parityProgramCodeCell(cellsliceop.PLDUXQ().Serialize()),
+			stack: []any{matrixSlice(t, 257, 0), int64(257)},
+		},
+		{
+			name:  "ldixq_width_258_rangecheck",
+			code:  parityProgramCodeCell(cellsliceop.LDIXQ().Serialize()),
+			stack: []any{matrixSlice(t, 257, 0), int64(258)},
+		},
+		{
+			name:  "pldixq_width_258_rangecheck",
+			code:  parityProgramCodeCell(cellsliceop.PLDIXQ().Serialize()),
+			stack: []any{matrixSlice(t, 257, 0), int64(258)},
+		},
+		{
+			name:  "schkbitrefsq_refs5_rangecheck",
+			code:  parityProgramCodeCell(cellsliceop.SCHKBITREFSQ().Serialize()),
+			stack: []any{matrixSlice(t, 0, 4), int64(0), int64(5)},
+		},
+		{
+			name:  "chashix_short_stack_bad_idx_order",
+			code:  parityProgramCodeCell(cellsliceop.CHASHIX().Serialize()),
+			stack: []any{int64(4)},
+		},
+		{
+			name:  "cdepthix_short_stack_bad_idx_order",
+			code:  parityProgramCodeCell(cellsliceop.CDEPTHIX().Serialize()),
+			stack: []any{int64(4)},
+		},
+		{
+			name:  "subslice_r2_range_precedes_slice_typecheck",
+			code:  parityProgramCodeCell(cellsliceop.SUBSLICE().Serialize()),
+			stack: []any{int64(77), int64(0), int64(0), int64(0), int64(5)},
+		},
+		{
+			name:  "plduz_256_short_255_zero_extend",
+			code:  parityProgramCodeCell(cellsliceop.PLDUZ(256).Serialize()),
+			stack: []any{matrixSlice(t, 255, 0)},
+		},
+		{
+			name:  "pldrefidx3_four_refs",
+			code:  parityProgramCodeCell(cellsliceop.PLDREFIDX(3).Serialize()),
+			stack: []any{matrixSlice(t, 0, 4)},
+		},
+		{
+			name:  "pldrefvar_idx3_four_refs",
+			code:  parityProgramCodeCell(cellsliceop.PLDREFVAR().Serialize()),
+			stack: []any{matrixSlice(t, 0, 4), int64(3)},
+		},
+		{
+			name:  "pldrefidx3_underflow",
+			code:  parityProgramCodeCell(cellsliceop.PLDREFIDX(3).Serialize()),
+			stack: []any{matrixSlice(t, 0, 3)},
+		},
+		{
+			name:  "ldrefrotos_no_ref_underflow",
+			code:  parityProgramCodeCell(cellsliceop.LDREFRTOS().Serialize()),
+			stack: []any{cell.BeginCell().ToSlice()},
+		},
+		{
+			name:  "bchkbitsimmq_true",
+			code:  parityProgramCodeCell(cellsliceop.BCHKBITSIMM(8, true).Serialize()),
+			stack: []any{cell.BeginCell()},
+		},
+		{
+			name:  "bchkbitsimmq_false",
+			code:  parityProgramCodeCell(cellsliceop.BCHKBITSIMM(1, true).Serialize()),
+			stack: []any{parityProgramFullBitsBuilder()},
+		},
+		{
+			name:  "stsliceconst_with_ref",
+			code:  parityProgramCodeCell(cellsliceop.STSLICECONST(sliceWithRef).Serialize()),
+			stack: []any{cell.BeginCell()},
+		},
+		{
+			name:  "stsliceconst_bits_overflow",
+			code:  parityProgramCodeCell(cellsliceop.STSLICECONST(cell.BeginCell().MustStoreUInt(1, 1).ToSlice()).Serialize()),
+			stack: []any{parityProgramFullBitsBuilder()},
+		},
+		{
+			name:  "stref2const_overflow",
+			code:  parityProgramCodeCell(cellsliceop.STREF2CONST(refA, refB).Serialize()),
+			stack: []any{parityProgramFullRefsBuilder()},
+		},
+		{
+			name:  "endcst_dst_ref_overflow",
+			code:  parityProgramCodeCell(cellsliceop.ENDCST().Serialize()),
+			stack: []any{parityProgramFullRefsBuilder(), cell.BeginCell()},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "cellslice_edge_gap", caseNames, requiredCellSliceEdgeGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "cellslice_edge_gap",
+				op:     tc.name,
+				code:   tc.code,
+				stack:  tc.stack,
+				c7:     prepareCrossTestC7(nil, testEmptyCell()),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzInventoryResidualGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	ref := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	builder := func() *cell.Builder {
+		return cell.BeginCell().MustStoreUInt(0xABCD, 16).MustStoreRef(ref)
+	}
+	slice := func() *cell.Slice {
+		return cell.BeginCell().MustStoreUInt(0b00111100, 8).MustStoreRef(ref).ToSlice()
+	}
+	shortSlice := func() *cell.Slice {
+		return cell.BeginCell().MustStoreUInt(0xC, 4).ToSlice()
+	}
+	suffix := func() *cell.Slice {
+		return cell.BeginCell().MustStoreUInt(0xC, 4).ToSlice()
+	}
+	longer := func() *cell.Slice {
+		return cell.BeginCell().MustStoreUInt(0xAC, 8).ToSlice()
+	}
+	ordinaryCell := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "nop_keeps_stack",
+			code: parityProgramCodeCell(stackop.NOP().Serialize()),
+			stack: []any{
+				int64(11),
+			},
+		},
+		{
+			name: "multi_xc2pu",
+			code: parityProgramCodeCell(stackop.XC2PU(1, 2, 0).Serialize()),
+			stack: []any{
+				int64(10),
+				int64(20),
+				int64(30),
+				int64(40),
+			},
+		},
+		{
+			name: "multi_xcpuxc",
+			code: parityProgramCodeCell(stackop.XCPUXC(2, 1, 3).Serialize()),
+			stack: []any{
+				int64(10),
+				int64(20),
+				int64(30),
+				int64(40),
+			},
+		},
+		{
+			name: "multi_xcpu2",
+			code: parityProgramCodeCell(stackop.XCPU2(2, 1, 0).Serialize()),
+			stack: []any{
+				int64(10),
+				int64(20),
+				int64(30),
+				int64(40),
+			},
+		},
+		{
+			name: "multi_puxc2",
+			code: parityProgramCodeCell(stackop.PUXC2(1, 2, 0).Serialize()),
+			stack: []any{
+				int64(10),
+				int64(20),
+				int64(30),
+				int64(40),
+			},
+		},
+		{
+			name: "multi_puxcpu",
+			code: parityProgramCodeCell(stackop.PUXCPU(1, 2, 0).Serialize()),
+			stack: []any{
+				int64(10),
+				int64(20),
+				int64(30),
+				int64(40),
+			},
+		},
+		{
+			name: "multi_puxc",
+			code: parityProgramCodeCell(stackop.PUXC(1, 2).Serialize()),
+			stack: []any{
+				int64(10),
+				int64(20),
+				int64(30),
+				int64(40),
+			},
+		},
+		{
+			name: "multi_xcpu",
+			code: parityProgramCodeCell(stackop.XCPU(2, 1).Serialize()),
+			stack: []any{
+				int64(10),
+				int64(20),
+				int64(30),
+				int64(40),
+			},
+		},
+		{
+			name: "gtint_true",
+			code: parityProgramCodeCell(mathop.GTINT(7).Serialize()),
+			stack: []any{
+				int64(9),
+			},
+		},
+		{
+			name: "qgtint_nan",
+			code: parityProgramCodeCell(mathop.QGTINT(7).Serialize()),
+			stack: []any{
+				vm.NaN{},
+			},
+		},
+		{
+			name: "sgn_negative",
+			code: parityProgramCodeCell(mathop.SGN().Serialize()),
+			stack: []any{
+				int64(-77),
+			},
+		},
+		{
+			name: "qsgn_nan",
+			code: parityProgramCodeCell(mathop.QSGN().Serialize()),
+			stack: []any{
+				vm.NaN{},
+			},
+		},
+		{
+			name: "endxc_ordinary",
+			code: parityProgramCodeCell(cellsliceop.ENDXC().Serialize()),
+			stack: []any{
+				builder(),
+				int64(0),
+			},
+		},
+		{
+			name: "bbitrefs",
+			code: parityProgramCodeCell(cellsliceop.BBITREFS().Serialize()),
+			stack: []any{
+				builder(),
+			},
+		},
+		{
+			name: "btos",
+			code: parityProgramCodeCell(cellsliceop.BTOS().Serialize()),
+			stack: []any{
+				builder(),
+			},
+		},
+		{
+			name: "split_valid",
+			code: parityProgramCodeCell(cellsliceop.SPLIT().Serialize()),
+			stack: []any{
+				slice(),
+				int64(4),
+				int64(1),
+			},
+		},
+		{
+			name: "splitq_valid",
+			code: parityProgramCodeCell(cellsliceop.SPLITQ().Serialize()),
+			stack: []any{
+				slice(),
+				int64(4),
+				int64(1),
+			},
+		},
+		{
+			name: "schkbits",
+			code: parityProgramCodeCell(cellsliceop.SCHKBITS().Serialize()),
+			stack: []any{
+				slice(),
+				int64(8),
+			},
+		},
+		{
+			name: "schkrefs",
+			code: parityProgramCodeCell(cellsliceop.SCHKREFS().Serialize()),
+			stack: []any{
+				slice(),
+				int64(1),
+			},
+		},
+		{
+			name: "schkbitrefs",
+			code: parityProgramCodeCell(cellsliceop.SCHKBITREFS().Serialize()),
+			stack: []any{
+				slice(),
+				int64(8),
+				int64(1),
+			},
+		},
+		{
+			name: "schkbitsq_false",
+			code: parityProgramCodeCell(cellsliceop.SCHKBITSQ().Serialize()),
+			stack: []any{
+				shortSlice(),
+				int64(8),
+			},
+		},
+		{
+			name: "schkrefsq_false",
+			code: parityProgramCodeCell(cellsliceop.SCHKREFSQ().Serialize()),
+			stack: []any{
+				shortSlice(),
+				int64(1),
+			},
+		},
+		{
+			name: "schkbitrefsq_false",
+			code: parityProgramCodeCell(cellsliceop.SCHKBITREFSQ().Serialize()),
+			stack: []any{
+				shortSlice(),
+				int64(8),
+				int64(1),
+			},
+		},
+		{
+			name: "clevel",
+			code: parityProgramCodeCell(cellsliceop.CLEVEL().Serialize()),
+			stack: []any{
+				ordinaryCell,
+			},
+		},
+		{
+			name: "clevelmask",
+			code: parityProgramCodeCell(cellsliceop.CLEVELMASK().Serialize()),
+			stack: []any{
+				ordinaryCell,
+			},
+		},
+		{
+			name: "sdcntlead0",
+			code: parityProgramCodeCell(cellsliceop.SDCNTLEAD0().Serialize()),
+			stack: []any{
+				slice(),
+			},
+		},
+		{
+			name: "sdcntlead1",
+			code: parityProgramCodeCell(cellsliceop.SDCNTLEAD1().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0b11110000, 8).ToSlice(),
+			},
+		},
+		{
+			name: "sdcnttrail0",
+			code: parityProgramCodeCell(cellsliceop.SDCNTTRAIL0().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0b11110000, 8).ToSlice(),
+			},
+		},
+		{
+			name: "sdcnttrail1",
+			code: parityProgramCodeCell(cellsliceop.SDCNTTRAIL1().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0b00001111, 8).ToSlice(),
+			},
+		},
+		{
+			name: "sdsfx",
+			code: parityProgramCodeCell(cellsliceop.SDSFX().Serialize()),
+			stack: []any{
+				suffix(),
+				longer(),
+			},
+		},
+		{
+			name: "sdpsfx",
+			code: parityProgramCodeCell(cellsliceop.SDPSFX().Serialize()),
+			stack: []any{
+				suffix(),
+				longer(),
+			},
+		},
+		{
+			name: "brembits",
+			code: parityProgramCodeCell(cellsliceop.BREMBITS().Serialize()),
+			stack: []any{
+				builder(),
+			},
+		},
+		{
+			name: "bremrefs",
+			code: parityProgramCodeCell(cellsliceop.BREMREFS().Serialize()),
+			stack: []any{
+				builder(),
+			},
+		},
+		{
+			name: "brembitrefs",
+			code: parityProgramCodeCell(cellsliceop.BREMBITREFS().Serialize()),
+			stack: []any{
+				builder(),
+			},
+		},
+		{
+			name: "accept",
+			code: parityProgramCodeCell(funcsop.ACCEPT().Serialize()),
+		},
+		{
+			name: "setgaslimit",
+			code: parityProgramCodeCell(funcsop.SETGASLIMIT().Serialize()),
+			stack: []any{
+				int64(differentialFuzzGasLimit),
+			},
+		},
+		{
+			name: "gasconsumed",
+			code: parityProgramCodeCell(funcsop.GASCONSUMED().Serialize()),
+		},
+		{
+			name: "commit",
+			code: parityProgramCodeCell(funcsop.COMMIT().Serialize()),
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "inventory_residual_gap", caseNames, requiredInventoryResidualGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "inventory_residual_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       prepareCrossTestC7(nil, testEmptyCell()),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzLibraryGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	target := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	libraryRef := mustCrossLibraryCellForHash(t, target.Hash())
+	libraryCollection := mustCrossLibraryCollection(t, target)
+	missingLibraryRef := mustCrossLibraryCellForHash(t, cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell().Hash())
+	cases := []struct {
+		name    string
+		code    *cell.Cell
+		stack   []any
+		refLibs *cell.Cell
+	}{
+		{
+			name:    "ctos_library_resolution",
+			code:    parityProgramCodeCell(cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryRef},
+			refLibs: libraryCollection,
+		},
+		{
+			name:    "xload_library_resolution",
+			code:    parityProgramCodeCell(cellsliceop.XLOAD().Serialize()),
+			stack:   []any{libraryRef},
+			refLibs: libraryCollection,
+		},
+		{
+			name:    "xloadq_library_resolution",
+			code:    parityProgramCodeCell(cellsliceop.XLOADQ().Serialize()),
+			stack:   []any{libraryRef},
+			refLibs: libraryCollection,
+		},
+		{
+			name:    "xctos_library_resolution",
+			code:    parityProgramCodeCell(cellsliceop.XCTOS().Serialize()),
+			stack:   []any{libraryRef},
+			refLibs: libraryCollection,
+		},
+		{
+			name:  "xctos_library_special",
+			code:  parityProgramCodeCell(cellsliceop.XCTOS().Serialize()),
+			stack: []any{libraryRef},
+		},
+		{
+			name:  "xload_library_missing_underflow",
+			code:  parityProgramCodeCell(cellsliceop.XLOAD().Serialize()),
+			stack: []any{missingLibraryRef},
+		},
+		{
+			name:  "xloadq_library_missing_false",
+			code:  parityProgramCodeCell(cellsliceop.XLOADQ().Serialize()),
+			stack: []any{missingLibraryRef},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "library_gap", caseNames, requiredLibraryGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "library_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				refLibs:  tc.refLibs,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzStackGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	values := func(n int) []any {
+		out := make([]any, n)
+		for i := range out {
+			out[i] = int64(i + 1)
+		}
+		return out
+	}
+	withIndex := func(n int, idxs ...int64) []any {
+		out := values(n)
+		for _, idx := range idxs {
+			out = append(out, idx)
+		}
+		return out
+	}
+	refPayload := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	slicePayload := cell.BeginCell().MustStoreUInt(0xCA, 8).ToSlice()
+	refSlicePayload := cell.BeginCell().MustStoreUInt(0xDC, 8).EndCell().MustBeginParse()
+	pushContBody := parityProgramCodeCell(stackop.PUSHINT(big.NewInt(123)).Serialize())
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{"xchg0l_depth17", parityProgramCodeCell(stackop.XCHG0L(17).Serialize()), values(20)},
+		{"pushl_depth17", parityProgramCodeCell(stackop.PUSHL(17).Serialize()), values(20)},
+		{"popl_depth17", parityProgramCodeCell(stackop.POPL(17).Serialize()), values(20)},
+		{"pick_depth4", parityProgramCodeCell(stackop.PICK().Serialize()), withIndex(6, 4)},
+		{"roll_depth4", parityProgramCodeCell(stackop.ROLL().Serialize()), withIndex(6, 4)},
+		{"rollrev_depth4", parityProgramCodeCell(stackop.ROLLREV().Serialize()), withIndex(6, 4)},
+		{"dropx_three", parityProgramCodeCell(stackop.DROPX().Serialize()), withIndex(6, 3)},
+		{"xchgx_depth3", parityProgramCodeCell(stackop.XCHGX().Serialize()), withIndex(6, 3)},
+		{"revx_3_1", parityProgramCodeCell(stackop.REVX().Serialize()), withIndex(6, 3, 1)},
+		{"onlytopx_keep3", parityProgramCodeCell(stackop.ONLYTOPX().Serialize()), withIndex(6, 3)},
+		{"onlyx_keep3", parityProgramCodeCell(stackop.ONLYX().Serialize()), withIndex(6, 3)},
+		{"blkswx_2_2", parityProgramCodeCell(stackop.BLKSWX().Serialize()), withIndex(6, 2, 2)},
+		{"multi_pu2xc", parityProgramCodeCell(stackop.PU2XC(1, 2, 0).Serialize()), values(6)},
+		{"push3", parityProgramCodeCell(stackop.PUSH3(0, 1, 2).Serialize()), values(6)},
+		{"pushint_small", parityProgramCodeCell(stackop.PUSHINT(big.NewInt(42)).Serialize()), nil},
+		{"pushslice_payload", parityProgramCodeCell(stackop.PUSHSLICE(slicePayload).Serialize()), nil},
+		{"pushrefslice_payload", parityProgramCodeCell(stackop.PUSHREFSLICE(refSlicePayload).Serialize()), nil},
+		{"pushref_payload", parityProgramCodeCell(stackop.PUSHREF(refPayload).Serialize()), nil},
+		{"pushcont_execute", parityProgramCodeCell(stackop.PUSHCONT(pushContBody).Serialize(), execop.EXECUTE().Serialize()), nil},
+		{"pushnull", parityProgramCodeCell(tupleop.PUSHNULL().Serialize()), nil},
+		{"pushnan", parityProgramCodeCell(mathop.PUSHNAN().Serialize()), nil},
+		{"dumpstk_noop", parityProgramCodeCell(stackop.DUMPSTK().Serialize()), nil},
+		{"dump_s0_noop", parityProgramCodeCell(stackop.DUMP(0).Serialize()), []any{int64(7)}},
+		{"debug_noop", parityProgramCodeCell(stackop.DEBUG(1).Serialize()), nil},
+		{"debugstr_noop", parityProgramCodeCell(stackop.DEBUGSTR([]byte{0}).Serialize()), nil},
+		{"strdump_slice_noop", parityProgramCodeCell(stackop.STRDUMP().Serialize()), []any{slicePayload}},
+		{"condsel_true", parityProgramCodeCell(stackop.CONDSEL().Serialize()), []any{int64(-1), int64(11), int64(22)}},
+		{"condsel_false", parityProgramCodeCell(stackop.CONDSEL().Serialize()), []any{int64(0), int64(11), int64(22)}},
+		{"condselchk_true", parityProgramCodeCell(execop.CONDSELCHK().Serialize()), []any{int64(-1), int64(11), int64(22)}},
+		{
+			"condselchk_mixed_int_slice_typecheck",
+			parityProgramCodeCell(execop.CONDSELCHK().Serialize()),
+			[]any{int64(-1), int64(11), cell.BeginCell().MustStoreUInt(0xAA, 8).ToSlice()},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "stack_gap", caseNames, requiredStackGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "stack_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       prepareCrossTestC7(nil, testEmptyCell()),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzStackOpcodeSpaceGapManifest(t *testing.T) {
+	cases := buildStackOpsOpcodeSpaceCases()
+	if len(cases) != expectedStackOpcodeSpaceGapCases {
+		t.Fatalf("stack opcode-space parity case count mismatch: got %d want %d", len(cases), expectedStackOpcodeSpaceGapCases)
+	}
+
+	names := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		names = append(names, tc.name)
+	}
+	requireNamedParityCases(t, "stack_opcode_space_gap", names, requiredStackOpcodeSpaceGapCaseNames)
+}
+
+func TestTVMDifferentialFuzzStackDynamicDepthGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := buildStackOpsDynamicAndDepthEdgeCases()
+	if len(cases) != expectedStackDynamicDepthGapCases {
+		t.Fatalf("stack dynamic-depth parity case count mismatch: got %d want %d", len(cases), expectedStackDynamicDepthGapCases)
+	}
+
+	names := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		names = append(names, tc.name)
+	}
+	requireNamedParityCases(t, "stack_dynamic_depth_gap", names, requiredStackDynamicDepthGapCaseNames)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runStackOpDepthParityCase(t, tc)
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzActionGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	empty := testEmptyCell()
+	allLabels := make([]string, 0, 32)
+	for mode := 0; mode < 9; mode++ {
+		t.Run(fmt.Sprintf("mode_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitActionRegisterOp(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(mode),
+				family: "action_gap",
+				op:     strings.Join(g.trace, " -> "),
+				code:   parityProgramCodeFromBuilders(t, g.ops...),
+				c7:     feeTestC7(t),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "action_gap", allLabels, requiredActionGapTraceLabels)
+}
+
+func TestTVMDifferentialFuzzActionModeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	withActionHash := func(ops ...*cell.Builder) *cell.Cell {
+		ops = append(ops, execop.PUSHCTR(5).Serialize(), cellsliceop.HASHCU().Serialize())
+		return parityProgramCodeCell(ops...)
+	}
+	withSendMsgActionHash := func() *cell.Cell {
+		return parityProgramCodeCell(
+			funcsop.SENDMSG().Serialize(),
+			stackop.DROP().Serialize(),
+			execop.PUSHCTR(5).Serialize(),
+			cellsliceop.HASHCU().Serialize(),
+		)
+	}
+
+	internalMsg := parityProgramSendMsgInternalMessage()
+	userFwdFeeMsg := parityProgramSendMsgUserFwdFeeInternalMessage()
+	externalOutMsg := parityProgramSendMsgExternalOutMessage()
+	sendMsgPrices := tlb.ConfigMsgForwardPrices{LumpPrice: 1}
+	sendMsgFeeC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     tonopsCrossSendMsgConfig(t, 13, sendMsgPrices),
+		UnpackedConfig: tonopsCrossSendMsgUnpackedConfig(t, sendMsgPrices),
+	})
+	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	extra := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	hash := new(big.Int).SetBytes(bytes.Repeat([]byte{0x22}, 32))
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+		c7    tuple.Tuple
+	}{
+		{"rawreserve_mode_0", withActionHash(funcsop.RAWRESERVE().Serialize()), []any{int64(777), int64(0)}, tuple.Tuple{}},
+		{"rawreserve_mode_2", withActionHash(funcsop.RAWRESERVE().Serialize()), []any{int64(777), int64(2)}, tuple.Tuple{}},
+		{"rawreserve_mode_16", withActionHash(funcsop.RAWRESERVE().Serialize()), []any{int64(777), int64(16)}, tuple.Tuple{}},
+		{"rawreservex_mode_0", withActionHash(funcsop.RAWRESERVEX().Serialize()), []any{int64(888), extra, int64(0)}, tuple.Tuple{}},
+		{"rawreservex_mode_16", withActionHash(funcsop.RAWRESERVEX().Serialize()), []any{int64(888), extra, int64(16)}, tuple.Tuple{}},
+		{"setlibcode_mode_0", withActionHash(funcsop.SETLIBCODE().Serialize()), []any{code, int64(0)}, tuple.Tuple{}},
+		{"setlibcode_mode_2", withActionHash(funcsop.SETLIBCODE().Serialize()), []any{code, int64(2)}, tuple.Tuple{}},
+		{"setlibcode_mode_16", withActionHash(funcsop.SETLIBCODE().Serialize()), []any{code, int64(16)}, tuple.Tuple{}},
+		{"changelib_mode_0", withActionHash(funcsop.CHANGELIB().Serialize()), []any{hash, int64(0)}, tuple.Tuple{}},
+		{"changelib_mode_1", withActionHash(funcsop.CHANGELIB().Serialize()), []any{hash, int64(1)}, tuple.Tuple{}},
+		{"changelib_mode_16", withActionHash(funcsop.CHANGELIB().Serialize()), []any{hash, int64(16)}, tuple.Tuple{}},
+		{"sendmsg_mode64_incomingvalue", withSendMsgActionHash(), []any{internalMsg, int64(64)}, tuple.Tuple{}},
+		{"sendmsg_mode128_balance", withSendMsgActionHash(), []any{internalMsg, int64(128)}, tuple.Tuple{}},
+		{"sendmsg_extout_fee_only", withSendMsgActionHash(), []any{externalOutMsg, int64(1024)}, tuple.Tuple{}},
+		{"sendmsg_user_fwd_fee_lower_bound_gv13", parityProgramCodeCell(funcsop.SENDMSG().Serialize()), []any{userFwdFeeMsg, int64(1024)}, sendMsgFeeC7},
+		{
+			"action_chain_sendrawmsg_then_rawreserve_hash",
+			withActionHash(funcsop.SENDRAWMSG().Serialize(), funcsop.RAWRESERVE().Serialize()),
+			[]any{int64(777), int64(0), internalMsg, int64(1)},
+			tuple.Tuple{},
+		},
+		{
+			"action_chain_setcode_then_setlibcode_hash",
+			withActionHash(funcsop.SETCODE().Serialize(), funcsop.SETLIBCODE().Serialize()),
+			[]any{extra, int64(1), code},
+			tuple.Tuple{},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "action_mode_gap", caseNames, requiredActionModeGapCaseNames)
+
+	c7 := feeTestC7(t)
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			caseC7 := c7
+			if !tc.c7.IsNull() {
+				caseC7 = tc.c7
+			}
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "action_mode_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       caseC7,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzActionErrorGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	sendMsg := parityProgramSendMsgInternalMessage()
+	codeCell := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	extra := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "rawreserve_negative_amount_range",
+			code:  parityProgramCodeCell(funcsop.RAWRESERVE().Serialize()),
+			stack: []any{big.NewInt(-1), int64(0)},
+		},
+		{
+			name:  "rawreservex_negative_amount_range",
+			code:  parityProgramCodeCell(funcsop.RAWRESERVEX().Serialize()),
+			stack: []any{big.NewInt(-1), extra, int64(0)},
+		},
+		{
+			name:  "rawreserve_missing_mode_underflow",
+			code:  parityProgramCodeCell(funcsop.RAWRESERVE().Serialize()),
+			stack: []any{int64(777)},
+		},
+		{
+			name:  "rawreservex_missing_extra_underflow",
+			code:  parityProgramCodeCell(funcsop.RAWRESERVEX().Serialize()),
+			stack: []any{int64(777), int64(0)},
+		},
+		{
+			name:  "setlibcode_missing_mode_underflow",
+			code:  parityProgramCodeCell(funcsop.SETLIBCODE().Serialize()),
+			stack: []any{codeCell},
+		},
+		{
+			name:  "setlibcode_invalid_mode_range",
+			code:  parityProgramCodeCell(funcsop.SETLIBCODE().Serialize()),
+			stack: []any{codeCell, int64(4)},
+		},
+		{
+			name:  "changelib_missing_mode_underflow",
+			code:  parityProgramCodeCell(funcsop.CHANGELIB().Serialize()),
+			stack: []any{big.NewInt(1)},
+		},
+		{
+			name:  "changelib_negative_hash_range",
+			code:  parityProgramCodeCell(funcsop.CHANGELIB().Serialize()),
+			stack: []any{big.NewInt(-1), int64(0)},
+		},
+		{
+			name:  "sendmsg_missing_mode_underflow",
+			code:  parityProgramCodeCell(funcsop.SENDMSG().Serialize()),
+			stack: []any{sendMsg},
+		},
+		{
+			name:  "sendmsg_invalid_mode_range",
+			code:  parityProgramCodeCell(funcsop.SENDMSG().Serialize()),
+			stack: []any{sendMsg, int64(256)},
+		},
+		{
+			name:  "sendrawmsg_missing_mode_underflow",
+			code:  parityProgramCodeCell(funcsop.SENDRAWMSG().Serialize()),
+			stack: []any{sendMsg},
+		},
+		{
+			name:  "sendrawmsg_invalid_mode_range",
+			code:  parityProgramCodeCell(funcsop.SENDRAWMSG().Serialize()),
+			stack: []any{sendMsg, int64(256)},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "action_error_gap", caseNames, requiredActionErrorGapCaseNames)
+
+	c7 := feeTestC7(t)
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:   uint64(i),
+				family: "action_error_gap",
+				op:     tc.name,
+				code:   tc.code,
+				stack:  tc.stack,
+				c7:     c7,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzDictContinuationGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	signedRoot := parityProgramDictContinuationRoot(true, 70)
+	unsignedRoot := parityProgramDictContinuationRoot(false, 71)
+	prefixRoot := parityProgramPrefixContinuationRoot(72)
+	prefixInput := parityProgramKeySlice(0b1011, 4)
+	prefixMissInput := parityProgramKeySlice(0b0111, 4)
+	empty := testEmptyCell()
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{"dictigetjmp_hit", parityProgramCodeCell(parityProgramRawOp(0xF4A0, 16)), []any{int64(3), signedRoot, int64(8)}},
+		{"dictugetjmp_hit", parityProgramCodeCell(parityProgramRawOp(0xF4A1, 16)), []any{int64(3), unsignedRoot, int64(8)}},
+		{"dictigetexec_hit", parityProgramCodeCell(parityProgramRawOp(0xF4A2, 16)), []any{int64(3), signedRoot, int64(8)}},
+		{"dictugetexec_hit", parityProgramCodeCell(parityProgramRawOp(0xF4A3, 16)), []any{int64(3), unsignedRoot, int64(8)}},
+		{"dictigetjmpz_hit", parityProgramCodeCell(parityProgramRawOp(0xF4BC, 16)), []any{int64(3), signedRoot, int64(8)}},
+		{"dictugetjmpz_hit", parityProgramCodeCell(parityProgramRawOp(0xF4BD, 16)), []any{int64(3), unsignedRoot, int64(8)}},
+		{"dictigetexecz_hit", parityProgramCodeCell(parityProgramRawOp(0xF4BE, 16)), []any{int64(3), signedRoot, int64(8)}},
+		{"dictugetexecz_hit", parityProgramCodeCell(parityProgramRawOp(0xF4BF, 16)), []any{int64(3), unsignedRoot, int64(8)}},
+		{"pfxdictgetjmp_hit", parityProgramCodeCell(parityProgramRawOp(0xF4AA, 16)), []any{prefixInput.Copy(), prefixRoot, int64(4)}},
+		{"pfxdictgetexec_hit", parityProgramCodeCell(parityProgramRawOp(0xF4AB, 16)), []any{prefixInput.Copy(), prefixRoot, int64(4)}},
+		{"pfxdictswitch_hit", parityProgramCodeCell(dictop.PFXDICTSWITCH(prefixRoot, 4).Serialize()), []any{prefixInput.Copy()}},
+		{
+			"dictigetjmp_miss_falls_through",
+			parityProgramCodeCell(
+				parityProgramRawOp(0xF4A0, 16),
+				stackop.PUSHINT(big.NewInt(73)).Serialize(),
+			),
+			[]any{int64(4), signedRoot, int64(8)},
+		},
+		{
+			"dictugetexec_miss_falls_through",
+			parityProgramCodeCell(
+				parityProgramRawOp(0xF4A3, 16),
+				stackop.PUSHINT(big.NewInt(74)).Serialize(),
+			),
+			[]any{int64(4), unsignedRoot, int64(8)},
+		},
+		{"dictigetjmpz_miss_keeps_index", parityProgramCodeCell(parityProgramRawOp(0xF4BC, 16)), []any{int64(4), signedRoot, int64(8)}},
+		{"dictugetexecz_miss_keeps_index", parityProgramCodeCell(parityProgramRawOp(0xF4BF, 16)), []any{int64(4), unsignedRoot, int64(8)}},
+		{"pfxdictgetjmp_miss_keeps_input", parityProgramCodeCell(parityProgramRawOp(0xF4AA, 16)), []any{prefixMissInput.Copy(), prefixRoot, int64(4)}},
+		{"pfxdictgetexec_miss_cell_underflow", parityProgramCodeCell(parityProgramRawOp(0xF4AB, 16)), []any{prefixMissInput.Copy(), prefixRoot, int64(4)}},
+		{"pfxdictswitch_miss_keeps_input", parityProgramCodeCell(dictop.PFXDICTSWITCH(prefixRoot, 4).Serialize()), []any{prefixMissInput.Copy()}},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "dict_continuation_gap", caseNames, requiredDictContinuationGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "dict_continuation_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzExecGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	body := func(builders ...*cell.Builder) *cell.Cell {
+		return parityProgramCodeCell(builders...)
+	}
+	invalidRefBody := body(parityProgramRawOp(0xF2F6, 16))
+	intBody := func(v int64) *cell.Cell {
+		return body(stackop.PUSHINT(big.NewInt(v)).Serialize())
+	}
+	emptyBody := body()
+	retAltBody := body(execop.RETALT().Serialize())
+	sumBody := body(mathop.SUM().Serialize())
+	sumReturnBody := body(
+		mathop.SUM().Serialize(),
+		execop.RETARGS(1).Serialize(),
+	)
+	retVarArgsBody := body(
+		stackop.PUSHINT(big.NewInt(123)).Serialize(),
+		stackop.PUSHINT(big.NewInt(1)).Serialize(),
+		execop.RETVARARGS().Serialize(),
+	)
+	retVarArgsAllBody := body(
+		stackop.PUSHINT(big.NewInt(123)).Serialize(),
+		stackop.PUSHINT(big.NewInt(456)).Serialize(),
+		stackop.PUSHINT(big.NewInt(-1)).Serialize(),
+		execop.RETVARARGS().Serialize(),
+	)
+	returnOverflowBody := body(
+		stackop.PUSHINT(big.NewInt(1)).Serialize(),
+		execop.RETURNARGS(0).Serialize(),
+		execop.RET().Serialize(),
+	)
+	falseCondBody := intBody(0)
+	push99Body := intBody(99)
+	dropThen7Body := body(
+		stackop.DROP().Serialize(),
+		stackop.PUSHINT(big.NewInt(7)).Serialize(),
+	)
+	ifBitJumpBody := body(
+		stackop.DROP().Serialize(),
+		stackop.PUSHINT(big.NewInt(99)).Serialize(),
+	)
+	throwHandlerBody := body(
+		stackop.DROP().Serialize(),
+		stackop.DROP().Serialize(),
+		stackop.PUSHINT(big.NewInt(123)).Serialize(),
+	)
+	tryArgsIncBody := body(
+		mathop.INC().Serialize(),
+		execop.RETARGS(1).Serialize(),
+	)
+	tryArgsThrowArgBody := body(parityProgramRawOp(0xF2C82A, 24))
+	whileCounterCondBody := body(
+		stackop.DUP().Serialize(),
+		stackop.PUSHINT(big.NewInt(0)).Serialize(),
+		mathop.GREATER().Serialize(),
+	)
+	whileCounterBody := body(mathop.DEC().Serialize())
+	controlCellA := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	controlCellB := cell.BeginCell().MustStoreUInt(0xC0DE, 16).EndCell()
+	pushC4Body := body(execop.PUSHCTR(4).Serialize())
+	customC7Inner := tuple.NewTupleSized(4)
+	mustSetTupleValue(t, &customC7Inner, 3, int64(777))
+	customC7 := tuple.NewTupleValue(customC7Inner)
+	otherC7Inner := tuple.NewTupleSized(4)
+	mustSetTupleValue(t, &otherC7Inner, 3, int64(888))
+	otherC7 := tuple.NewTupleValue(otherC7Inner)
+	pushC7ParamBody := body(funcsop.GETPARAM(3).Serialize())
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "jmpxdata_valid_remaining_slice",
+			code: body(
+				stackop.PUSHCONT(body(cellsliceop.SBITS().Serialize())).Serialize(),
+				execop.JMPXDATA().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "jmpxargs_two_params",
+			code: body(
+				stackop.PUSHCONT(sumBody).Serialize(),
+				execop.JMPXARGS(2).Serialize(),
+			),
+			stack: []any{int64(5), int64(6)},
+		},
+		{
+			name: "setcontargs_capture_all",
+			code: body(
+				stackop.PUSHCONT(sumBody).Serialize(),
+				execop.SETCONTARGS(2, -1).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+			stack: []any{int64(5), int64(6)},
+		},
+		{
+			name: "callxargs_trim",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.CALLXARGS(2, 1).Serialize(),
+			),
+			stack: []any{int64(11), int64(22)},
+		},
+		{
+			name: "callxargsp_all_returns",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.CALLXARGSP(1).Serialize(),
+			),
+			stack: []any{int64(55)},
+		},
+		{
+			name: "callxargs_sum_then_tail",
+			code: body(
+				stackop.PUSHCONT(sumReturnBody).Serialize(),
+				execop.CALLXARGS(2, 1).Serialize(),
+				stackop.PUSHINT(big.NewInt(9)).Serialize(),
+			),
+			stack: []any{int64(5), int64(6)},
+		},
+		{
+			name: "callxargs_params_underflow",
+			code: body(
+				stackop.PUSHCONT(sumBody).Serialize(),
+				execop.CALLXARGS(2, 1).Serialize(),
+			),
+			stack: []any{int64(5)},
+		},
+		{
+			name: "callxvarargs_dynamic",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				stackop.XCHG0(2).Serialize(),
+				stackop.XCHG0(1).Serialize(),
+				execop.CALLXVARARGS().Serialize(),
+			),
+			stack: []any{int64(11), int64(22), int64(2), int64(1)},
+		},
+		{
+			name: "callxvarargs_dynamic_params_and_returns",
+			code: body(
+				stackop.PUSHCONT(sumReturnBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(2)).Serialize(),
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+				execop.CALLXVARARGS().Serialize(),
+				stackop.PUSHINT(big.NewInt(9)).Serialize(),
+			),
+			stack: []any{int64(5), int64(6)},
+		},
+		{
+			name: "jmpxvarargs_dynamic_params",
+			code: body(
+				stackop.PUSHCONT(sumReturnBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(2)).Serialize(),
+				execop.JMPXVARARGS().Serialize(),
+			),
+			stack: []any{int64(5), int64(6)},
+		},
+		{
+			name: "jmpxargs_params_underflow",
+			code: body(
+				stackop.PUSHCONT(sumBody).Serialize(),
+				execop.JMPXARGS(2).Serialize(),
+			),
+			stack: []any{int64(5)},
+		},
+		{
+			name: "retvarargs_trim",
+			code: body(execop.RETVARARGS().Serialize()),
+			stack: []any{
+				int64(11),
+				int64(22),
+				int64(1),
+			},
+		},
+		{
+			name: "retvarargs_from_called_continuation",
+			code: body(
+				stackop.PUSHCONT(retVarArgsBody).Serialize(),
+				execop.CALLXARGS(0, 1).Serialize(),
+				stackop.PUSHINT(big.NewInt(66)).Serialize(),
+			),
+		},
+		{
+			name: "retvarargs_all_from_called_continuation",
+			code: body(
+				stackop.PUSHCONT(retVarArgsAllBody).Serialize(),
+				execop.CALLXARGSP(0).Serialize(),
+				stackop.PUSHINT(big.NewInt(66)).Serialize(),
+			),
+		},
+		{
+			name: "returnvarargs_dynamic_count",
+			code: body(
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+				execop.RETURNVARARGS().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+				execop.RET().Serialize(),
+			),
+			stack: []any{
+				int64(11),
+				int64(22),
+				int64(33),
+			},
+		},
+		{
+			name: "returnvarargs_zero_count_moves_all",
+			code: body(
+				stackop.PUSHINT(big.NewInt(0)).Serialize(),
+				execop.RETURNVARARGS().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+				execop.RET().Serialize(),
+			),
+			stack: []any{
+				int64(11),
+				int64(22),
+				int64(33),
+			},
+		},
+		{
+			name: "returnvarargs_bad_count_range",
+			code: body(
+				stackop.PUSHINT(big.NewInt(256)).Serialize(),
+				execop.RETURNVARARGS().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+			stack: []any{
+				int64(11),
+			},
+		},
+		{
+			name: "returnargs_fixed_count",
+			code: body(
+				execop.RETURNARGS(2).Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+				execop.RET().Serialize(),
+			),
+			stack: []any{
+				int64(11),
+				int64(22),
+				int64(33),
+			},
+		},
+		{
+			name: "returnargs_closure_overflow",
+			code: body(
+				stackop.PUSHCONT(returnOverflowBody).Serialize(),
+				execop.CALLXARGS(0, 0).Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+		},
+		{
+			name: "retbool_return_branch",
+			code: body(
+				execop.RETBOOL().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "retbool_alt_branch",
+			code: body(
+				execop.RETBOOL().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "retdata_remaining_slice",
+			code: body(
+				execop.RETDATA().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+		},
+		{
+			name: "ifret_taken",
+			code: body(
+				execop.IFRET().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifret_continue",
+			code: body(
+				execop.IFRET().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotret_taken",
+			code: body(
+				execop.IFNOTRET().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotret_continue",
+			code: body(
+				execop.IFNOTRET().Serialize(),
+				stackop.PUSHINT(big.NewInt(44)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "try_catches_throw",
+			code: body(
+				stackop.PUSHCONT(body(parityProgramRawOp(0xF22A, 16))).Serialize(),
+				stackop.PUSHCONT(throwHandlerBody).Serialize(),
+				execop.TRY().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "tryargs_returns_value",
+			code: body(
+				stackop.PUSHCONT(tryArgsIncBody).Serialize(),
+				stackop.PUSHCONT(throwHandlerBody).Serialize(),
+				execop.TRYARGS(1, 1).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(41)},
+		},
+		{
+			name: "tryargs_catches_throwarg",
+			code: body(
+				stackop.PUSHCONT(tryArgsThrowArgBody).Serialize(),
+				stackop.PUSHCONT(throwHandlerBody).Serialize(),
+				execop.TRYARGS(1, 1).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(777)},
+		},
+		{
+			name: "tryargs_zero_retvals_caught_throwarg",
+			code: body(
+				stackop.PUSHCONT(body(
+					stackop.PUSHINT(big.NewInt(888)).Serialize(),
+					parityProgramRawOp(0xF2C82A, 24),
+				)).Serialize(),
+				stackop.PUSHCONT(body(
+					stackop.DROP().Serialize(),
+					stackop.DROP().Serialize(),
+					stackop.PUSHINT(big.NewInt(77)).Serialize(),
+				)).Serialize(),
+				execop.TRYARGS(0, 0).Serialize(),
+				stackop.PUSHINT(big.NewInt(9)).Serialize(),
+			),
+			stack: []any{int64(11), int64(22)},
+		},
+		{
+			name: "throw_short_uncaught",
+			code: body(parityProgramRawOp(0xF22A, 16)),
+		},
+		{
+			name: "throw_long_uncaught",
+			code: body(parityProgramRawOp(0xF2C055, 24)),
+		},
+		{
+			name:  "throwarg_long_uncaught",
+			code:  body(parityProgramRawOp(0xF2C955, 24)),
+			stack: []any{int64(1234)},
+		},
+		{
+			name:  "throwif_taken",
+			code:  body(parityProgramRawOp(0xF240|42, 16)),
+			stack: []any{int64(-1)},
+		},
+		{
+			name:  "throwifnot_taken",
+			code:  body(parityProgramRawOp(0xF280|42, 16)),
+			stack: []any{int64(0)},
+		},
+		{
+			name:  "throwargif_taken",
+			code:  body(parityProgramRawOp(0xF2D82A, 24)),
+			stack: []any{int64(1234), int64(-1)},
+		},
+		{
+			name:  "throwargif_skip",
+			code:  body(parityProgramRawOp(0xF2D82A, 24), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(1234), int64(0)},
+		},
+		{
+			name:  "throwargifnot_taken",
+			code:  body(parityProgramRawOp(0xF2E82A, 24)),
+			stack: []any{int64(1234), int64(0)},
+		},
+		{
+			name:  "throwargifnot_skip",
+			code:  body(parityProgramRawOp(0xF2E82A, 24), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(1234), int64(-1)},
+		},
+		{
+			name:  "throwany_uncaught",
+			code:  body(parityProgramRawOp(0xF2F0, 16)),
+			stack: []any{int64(42)},
+		},
+		{
+			name:  "throwargany_uncaught",
+			code:  body(parityProgramRawOp(0xF2F1, 16)),
+			stack: []any{int64(1234), int64(42)},
+		},
+		{
+			name:  "throwanyif_taken",
+			code:  body(parityProgramRawOp(0xF2F2, 16)),
+			stack: []any{int64(42), int64(-1)},
+		},
+		{
+			name:  "throwanyif_skip",
+			code:  body(parityProgramRawOp(0xF2F2, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(42), int64(0)},
+		},
+		{
+			name:  "throwanyif_skip_invalid_exc_range",
+			code:  body(parityProgramRawOp(0xF2F2, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(0x10000), int64(0)},
+		},
+		{
+			name:  "throwarganyif_taken",
+			code:  body(parityProgramRawOp(0xF2F3, 16)),
+			stack: []any{int64(1234), int64(42), int64(-1)},
+		},
+		{
+			name:  "throwarganyif_skip",
+			code:  body(parityProgramRawOp(0xF2F3, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(1234), int64(42), int64(0)},
+		},
+		{
+			name:  "throwarganyif_skip_invalid_exc_range",
+			code:  body(parityProgramRawOp(0xF2F3, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(1234), int64(0x10000), int64(0)},
+		},
+		{
+			name:  "throwanyifnot_taken",
+			code:  body(parityProgramRawOp(0xF2F4, 16)),
+			stack: []any{int64(42), int64(0)},
+		},
+		{
+			name:  "throwanyifnot_skip",
+			code:  body(parityProgramRawOp(0xF2F4, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(42), int64(-1)},
+		},
+		{
+			name:  "throwanyifnot_skip_invalid_exc_range",
+			code:  body(parityProgramRawOp(0xF2F4, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(0x10000), int64(-1)},
+		},
+		{
+			name:  "throwarganyifnot_taken",
+			code:  body(parityProgramRawOp(0xF2F5, 16)),
+			stack: []any{int64(1234), int64(42), int64(0)},
+		},
+		{
+			name:  "throwarganyifnot_skip",
+			code:  body(parityProgramRawOp(0xF2F5, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(1234), int64(42), int64(-1)},
+		},
+		{
+			name:  "throwarganyifnot_skip_invalid_exc_range",
+			code:  body(parityProgramRawOp(0xF2F5, 16), stackop.PUSHINT(big.NewInt(7)).Serialize()),
+			stack: []any{int64(1234), int64(0x10000), int64(-1)},
+		},
+		{
+			name: "execute_empty_stack_underflow",
+			code: body(execop.EXECUTE().Serialize()),
+		},
+		{
+			name:  "execute_non_cont_typecheck",
+			code:  body(execop.EXECUTE().Serialize()),
+			stack: []any{int64(1)},
+		},
+		{
+			name: "callcc_pushes_current_continuation",
+			code: body(
+				stackop.PUSHCONT(dropThen7Body).Serialize(),
+				execop.CALLCC().Serialize(),
+			),
+		},
+		{
+			name: "callccargs_preserves_arg",
+			code: body(
+				stackop.PUSHCONT(dropThen7Body).Serialize(),
+				execop.CALLCCARGS(1, 2).Serialize(),
+			),
+			stack: []any{int64(55)},
+		},
+		{
+			name: "callccvarargs_dynamic",
+			code: body(
+				stackop.PUSHCONT(dropThen7Body).Serialize(),
+				stackop.XCHG0(2).Serialize(),
+				stackop.XCHG0(1).Serialize(),
+				execop.CALLCCVARARGS().Serialize(),
+			),
+			stack: []any{int64(55), int64(1), int64(2)},
+		},
+		{
+			name: "callccvarargs_pass_all_return_all",
+			code: body(
+				stackop.PUSHCONT(body(execop.EXECUTE().Serialize())).Serialize(),
+				stackop.PUSHINT(big.NewInt(-1)).Serialize(),
+				stackop.PUSHINT(big.NewInt(-1)).Serialize(),
+				execop.CALLCCVARARGS().Serialize(),
+				stackop.PUSHINT(big.NewInt(70)).Serialize(),
+			),
+			stack: []any{int64(41), int64(42)},
+		},
+		{
+			name: "callccvarargs_bad_retvals_range",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(0)).Serialize(),
+				stackop.PUSHINT(big.NewInt(255)).Serialize(),
+				execop.CALLCCVARARGS().Serialize(),
+				stackop.PUSHINT(big.NewInt(70)).Serialize(),
+			),
+		},
+		{
+			name: "setcontvarargs_execute",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+				stackop.PUSHINT(big.NewInt(0)).Serialize(),
+				execop.SETCONTVARARGS().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+			stack: []any{int64(66)},
+		},
+		{
+			name: "setnumvarargs_execute",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+				execop.SETNUMVARARGS().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+			stack: []any{int64(77)},
+		},
+		{
+			name: "bless_execute",
+			code: body(
+				stackop.PUSHSLICE(intBody(80).MustBeginParse()).Serialize(),
+				execop.BLESS().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "blessargs_execute",
+			code: body(
+				stackop.PUSHINT(big.NewInt(81)).Serialize(),
+				stackop.PUSHSLICE(emptyBody.MustBeginParse()).Serialize(),
+				execop.BLESSARGS(1, 0).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "pushctr_c0_drop",
+			code: body(
+				execop.PUSHCTR(0).Serialize(),
+				stackop.DROP().Serialize(),
+			),
+		},
+		{
+			name: "setcontctrmany_c6_range",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.SETCONTCTRMANY(1<<6).Serialize(),
+			),
+		},
+		{
+			name: "setcontctr_success",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.SETCONTCTR(4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "setcontctrx_success",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				stackop.PUSHINT(big.NewInt(4)).Serialize(),
+				execop.SETCONTCTRX().Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "setcontctrmany_success",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.SETCONTCTRMANY(1<<4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "setcontctrmanyx_success",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				stackop.PUSHINT(big.NewInt(1<<4)).Serialize(),
+				execop.SETCONTCTRMANYX().Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "setcontctrmanyx_c6_range",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(1<<6)).Serialize(),
+				execop.SETCONTCTRMANYX().Serialize(),
+			),
+		},
+		{
+			name: "popctrx_c7_tuple_roundtrip",
+			code: body(
+				execop.POPCTRX().Serialize(),
+				execop.PUSHCTR(7).Serialize(),
+			),
+			stack: []any{tuple.NewTupleValue(big.NewInt(11), big.NewInt(22)), int64(7)},
+		},
+		{
+			name:  "pushctrx_c6_range",
+			code:  body(execop.PUSHCTRX().Serialize()),
+			stack: []any{int64(6)},
+		},
+		{
+			name:  "popctrx_c6_range",
+			code:  body(execop.POPCTRX().Serialize()),
+			stack: []any{cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(), int64(6)},
+		},
+		{
+			name:  "popctr_c0_noncont_typecheck",
+			code:  body(execop.POPCTR(0).Serialize()),
+			stack: []any{int64(1)},
+		},
+		{
+			name:  "popsavectr_c0_noncont_typecheck",
+			code:  body(execop.POPSAVECTR(0).Serialize()),
+			stack: []any{int64(1)},
+		},
+		{
+			name: "setretctr_c4_restore_on_ret",
+			code: body(
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.SETRETCTR(4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.RET().Serialize(),
+			),
+		},
+		{
+			name: "setaltctr_c4_restore_on_retalt",
+			code: body(
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.SETALTCTR(4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "savectr_c4_restore_on_ret",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				execop.SAVECTR(4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.RET().Serialize(),
+			),
+		},
+		{
+			name: "savealtctr_c4_restore_on_retalt",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.SAVEALTCTR(4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "savebothctr_c4_restore_on_ret",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				stackop.PUSHCONT(push99Body).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.SAVEBOTHCTR(4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.RET().Serialize(),
+			),
+		},
+		{
+			name: "savebothctr_c4_restore_on_retalt",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				stackop.PUSHCONT(push99Body).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.SAVEBOTHCTR(4).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "popsavectr_c4_restore_on_ret",
+			code: body(
+				stackop.PUSHREF(controlCellA).Serialize(),
+				execop.POPCTR(4).Serialize(),
+				stackop.PUSHCONT(pushC4Body).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				stackop.PUSHREF(controlCellB).Serialize(),
+				execop.POPSAVECTR(4).Serialize(),
+				execop.RET().Serialize(),
+			),
+		},
+		{
+			name: "setretctr_c7_restore_on_ret",
+			code: body(
+				stackop.PUSHCONT(pushC7ParamBody).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				execop.SETRETCTR(7).Serialize(),
+				execop.RET().Serialize(),
+			),
+			stack: []any{customC7},
+		},
+		{
+			name: "setaltctr_c7_restore_on_retalt",
+			code: body(
+				stackop.PUSHCONT(pushC7ParamBody).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.SETALTCTR(7).Serialize(),
+				execop.RETALT().Serialize(),
+			),
+			stack: []any{customC7},
+		},
+		{
+			name: "savectr_c7_restore_on_ret",
+			code: body(
+				stackop.PUSHCONT(pushC7ParamBody).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.SAVECTR(7).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.RET().Serialize(),
+			),
+			stack: []any{otherC7, customC7},
+		},
+		{
+			name: "savealtctr_c7_restore_on_retalt",
+			code: body(
+				stackop.PUSHCONT(pushC7ParamBody).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.SAVEALTCTR(7).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.RETALT().Serialize(),
+			),
+			stack: []any{otherC7, customC7},
+		},
+		{
+			name: "savebothctr_c7_restore_on_ret",
+			code: body(
+				stackop.PUSHCONT(pushC7ParamBody).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				stackop.PUSHCONT(push99Body).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.SAVEBOTHCTR(7).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.RET().Serialize(),
+			),
+			stack: []any{otherC7, customC7},
+		},
+		{
+			name: "savebothctr_c7_restore_on_retalt",
+			code: body(
+				stackop.PUSHCONT(push99Body).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				stackop.PUSHCONT(pushC7ParamBody).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.SAVEBOTHCTR(7).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.RETALT().Serialize(),
+			),
+			stack: []any{otherC7, customC7},
+		},
+		{
+			name: "popsavectr_c7_restore_on_ret",
+			code: body(
+				stackop.PUSHCONT(pushC7ParamBody).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				execop.POPCTR(7).Serialize(),
+				execop.POPSAVECTR(7).Serialize(),
+				execop.RET().Serialize(),
+			),
+			stack: []any{otherC7, customC7},
+		},
+		{
+			name: "blessvarargs_execute",
+			code: body(
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+				stackop.PUSHINT(big.NewInt(0)).Serialize(),
+				execop.BLESSVARARGS().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+			stack: []any{
+				int64(66),
+				intBody(7).MustBeginParse(),
+			},
+		},
+		{
+			name: "calldict_short",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.POPCTR(3).Serialize(),
+				execop.CALLDICT(5).Serialize(),
+			),
+		},
+		{
+			name: "calldict_long",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.POPCTR(3).Serialize(),
+				execop.CALLDICT(300).Serialize(),
+			),
+		},
+		{
+			name: "jmpdict",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.POPCTR(3).Serialize(),
+				execop.JMPDICT(8).Serialize(),
+			),
+		},
+		{
+			name: "preparedict_execute",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.POPCTR(3).Serialize(),
+				execop.PREPAREDICT(9).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "booleval_false_branch",
+			code: body(
+				stackop.PUSHCONT(body(execop.RETALT().Serialize())).Serialize(),
+				execop.BOOLEVAL().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "booleval_true_branch_resumes_tail",
+			code: body(
+				stackop.PUSHCONT(body(execop.RET().Serialize())).Serialize(),
+				execop.BOOLEVAL().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "while_first_condition_false",
+			code: body(
+				stackop.PUSHCONT(falseCondBody).Serialize(),
+				stackop.PUSHCONT(push99Body).Serialize(),
+				execop.WHILE().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "jmpx_pushes_value",
+			code: body(
+				stackop.PUSHCONT(intBody(110)).Serialize(),
+				execop.JMPX().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "if_taken_call",
+			code: body(
+				stackop.PUSHCONT(intBody(101)).Serialize(),
+				execop.IF().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "if_not_taken",
+			code: body(
+				stackop.PUSHCONT(intBody(101)).Serialize(),
+				execop.IF().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnot_taken_call",
+			code: body(
+				stackop.PUSHCONT(intBody(102)).Serialize(),
+				execop.IFNOT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnot_not_taken",
+			code: body(
+				stackop.PUSHCONT(intBody(102)).Serialize(),
+				execop.IFNOT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifelse_true_branch",
+			code: body(
+				stackop.PUSHCONT(intBody(103)).Serialize(),
+				stackop.PUSHCONT(intBody(104)).Serialize(),
+				execop.IFELSE().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifelse_false_branch",
+			code: body(
+				stackop.PUSHCONT(intBody(103)).Serialize(),
+				stackop.PUSHCONT(intBody(104)).Serialize(),
+				execop.IFELSE().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifjmp_taken",
+			code: body(
+				stackop.PUSHCONT(intBody(105)).Serialize(),
+				execop.IFJMP().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifjmp_not_taken",
+			code: body(
+				stackop.PUSHCONT(intBody(105)).Serialize(),
+				execop.IFJMP().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotjmp_taken",
+			code: body(
+				stackop.PUSHCONT(intBody(106)).Serialize(),
+				execop.IFNOTJMP().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotjmp_not_taken",
+			code: body(
+				stackop.PUSHCONT(intBody(106)).Serialize(),
+				execop.IFNOTJMP().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "repeat_two_iterations",
+			code: body(
+				stackop.PUSHCONT(intBody(111)).Serialize(),
+				execop.REPEAT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(2)},
+		},
+		{
+			name: "while_one_iteration_then_false",
+			code: body(
+				stackop.PUSHCONT(whileCounterCondBody).Serialize(),
+				stackop.PUSHCONT(whileCounterBody).Serialize(),
+				execop.WHILE().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(1)},
+		},
+		{
+			name: "whileend_one_iteration_then_false",
+			code: body(
+				stackop.PUSHCONT(whileCounterCondBody).Serialize(),
+				execop.WHILEEND().Serialize(),
+				mathop.DEC().Serialize(),
+			),
+			stack: []any{int64(1)},
+		},
+		{
+			name: "again_throw_bounded",
+			code: body(
+				stackop.PUSHCONT(body(parityProgramRawOp(0xF22A, 16))).Serialize(),
+				execop.AGAIN().Serialize(),
+			),
+		},
+		{
+			name: "againend_throw_bounded",
+			code: body(
+				execop.AGAINEND().Serialize(),
+				parityProgramRawOp(0xF22A, 16),
+			),
+		},
+		{
+			name: "until_one_iteration",
+			code: body(
+				stackop.PUSHCONT(body(
+					stackop.PUSHINT(big.NewInt(107)).Serialize(),
+					stackop.PUSHINT(big.NewInt(-1)).Serialize(),
+				)).Serialize(),
+				execop.UNTIL().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "untilend_one_iteration",
+			code: body(
+				execop.UNTILEND().Serialize(),
+				stackop.PUSHINT(big.NewInt(108)).Serialize(),
+				stackop.PUSHINT(big.NewInt(-1)).Serialize(),
+			),
+		},
+		{
+			name: "repeatend_one_iteration",
+			code: body(
+				execop.REPEATEND().Serialize(),
+				stackop.PUSHINT(big.NewInt(109)).Serialize(),
+			),
+			stack: []any{int64(1)},
+		},
+		{
+			name: "repeat_negative_count_skips",
+			code: body(
+				stackop.PUSHCONT(push99Body).Serialize(),
+				execop.REPEAT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifbitjmp_not_taken_preserves_int",
+			code: body(
+				stackop.PUSHCONT(ifBitJumpBody).Serialize(),
+				execop.IFBITJMP(1).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifbitjmp_taken",
+			code: body(
+				stackop.PUSHCONT(ifBitJumpBody).Serialize(),
+				execop.IFBITJMP(1).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(2)},
+		},
+		{
+			name: "ifbitjmp_high_negative_taken",
+			code: body(
+				stackop.PUSHCONT(ifBitJumpBody).Serialize(),
+				execop.IFBITJMP(31).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifnbitjmp_taken",
+			code: body(
+				stackop.PUSHCONT(ifBitJumpBody).Serialize(),
+				execop.IFNBITJMP(1).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnbitjmp_not_taken_preserves_int",
+			code: body(
+				stackop.PUSHCONT(ifBitJumpBody).Serialize(),
+				execop.IFNBITJMP(1).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(2)},
+		},
+		{
+			name: "ifnbitjmp_high_negative_not_taken",
+			code: body(
+				stackop.PUSHCONT(ifBitJumpBody).Serialize(),
+				execop.IFNBITJMP(31).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "pushrefcont_execute",
+			code: body(
+				stackop.PUSHREFCONT(intBody(81)).Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "callref_pushes_value",
+			code: body(execop.CALLREF(intBody(82)).Serialize()),
+		},
+		{
+			name: "jmpref_pushes_value",
+			code: body(execop.JMPREF(intBody(83)).Serialize()),
+		},
+		{
+			name: "jmprefdata_exposes_remaining_code",
+			code: body(
+				execop.JMPREFDATA(ifBitJumpBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+		},
+		{
+			name: "ifjmpref_taken",
+			code: body(
+				execop.IFJMPREF(intBody(84)).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifjmpref_not_taken",
+			code: body(
+				execop.IFJMPREF(intBody(85)).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotjmpref_taken",
+			code: body(
+				execop.IFNOTJMPREF(intBody(86)).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotjmpref_not_taken",
+			code: body(
+				execop.IFNOTJMPREF(intBody(86)).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifbitjmpref_taken",
+			code: body(
+				execop.IFBITJMPREF(1, ifBitJumpBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(2)},
+		},
+		{
+			name: "ifbitjmpref_not_taken",
+			code: body(
+				execop.IFBITJMPREF(1, ifBitJumpBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnbitjmpref_taken",
+			code: body(
+				execop.IFNBITJMPREF(1, ifBitJumpBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnbitjmpref_not_taken",
+			code: body(
+				execop.IFNBITJMPREF(1, ifBitJumpBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(2)},
+		},
+		{
+			name: "ifref_skips_invalid_ref_false",
+			code: body(
+				execop.IFREF(invalidRefBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotref_skips_invalid_ref_true",
+			code: body(
+				execop.IFNOTREF(invalidRefBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifjmpref_skips_invalid_ref_false",
+			code: body(
+				execop.IFJMPREF(invalidRefBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifnotjmpref_skips_invalid_ref_true",
+			code: body(
+				execop.IFNOTJMPREF(invalidRefBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifrefelse_skips_invalid_ref_false_branch",
+			code: body(
+				stackop.PUSHCONT(intBody(87)).Serialize(),
+				execop.IFREFELSE(invalidRefBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifelseref_skips_invalid_ref_true_branch",
+			code: body(
+				stackop.PUSHCONT(intBody(88)).Serialize(),
+				execop.IFELSEREF(invalidRefBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifrefelseref_true_branch",
+			code: body(
+				execop.IFREFELSEREF(intBody(89), intBody(90)).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifbitjmpref_skips_invalid_ref_not_taken",
+			code: body(
+				execop.IFBITJMPREF(1, invalidRefBody).Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "atexit_runs",
+			code: body(
+				stackop.PUSHCONT(intBody(90)).Serialize(),
+				execop.ATEXIT().Serialize(),
+			),
+		},
+		{
+			name: "atexitalt_runs",
+			code: body(
+				stackop.PUSHCONT(intBody(91)).Serialize(),
+				execop.ATEXITALT().Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "setexitalt_runs",
+			code: body(
+				stackop.PUSHCONT(intBody(92)).Serialize(),
+				execop.SETEXITALT().Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "thenret_runs",
+			code: body(
+				stackop.PUSHCONT(intBody(93)).Serialize(),
+				execop.ATEXIT().Serialize(),
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.THENRET().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "thenretalt_runs",
+			code: body(
+				stackop.PUSHCONT(intBody(94)).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				execop.THENRETALT().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "booland_composes_return_continuation",
+			code: body(
+				stackop.PUSHCONT(emptyBody).Serialize(),
+				stackop.PUSHCONT(intBody(95)).Serialize(),
+				execop.BOOLAND().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "boolor_composes_alt_continuation",
+			code: body(
+				stackop.PUSHCONT(retAltBody).Serialize(),
+				stackop.PUSHCONT(intBody(96)).Serialize(),
+				execop.BOOLOR().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "composboth_composes_return_and_alt",
+			code: body(
+				stackop.PUSHCONT(retAltBody).Serialize(),
+				stackop.PUSHCONT(intBody(97)).Serialize(),
+				execop.COMPOSBOTH().Serialize(),
+				execop.EXECUTE().Serialize(),
+			),
+		},
+		{
+			name: "invert_ret",
+			code: body(
+				execop.INVERT().Serialize(),
+				execop.RET().Serialize(),
+			),
+		},
+		{
+			name: "samealt_copies_return_to_alt",
+			code: body(
+				stackop.PUSHCONT(intBody(98)).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				execop.SAMEALT().Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "samealt_copy_is_independent",
+			code: body(
+				stackop.PUSHCONT(intBody(98)).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				execop.SAMEALT().Serialize(),
+				stackop.PUSHCONT(intBody(99)).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "samealtsave_preserves_previous_alt",
+			code: body(
+				stackop.PUSHCONT(retAltBody).Serialize(),
+				execop.POPCTR(0).Serialize(),
+				stackop.PUSHCONT(intBody(99)).Serialize(),
+				execop.POPCTR(1).Serialize(),
+				execop.SAMEALTSAVE().Serialize(),
+				execop.RET().Serialize(),
+			),
+		},
+		{
+			name: "repeatbrk_break",
+			code: body(
+				stackop.PUSHCONT(retAltBody).Serialize(),
+				execop.REPEATBRK().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(3)},
+		},
+		{
+			name: "repeatendbrk_break",
+			code: body(
+				execop.REPEATENDBRK().Serialize(),
+				execop.RETALT().Serialize(),
+			),
+			stack: []any{int64(3)},
+		},
+		{
+			name: "untilbrk_break",
+			code: body(
+				stackop.PUSHCONT(retAltBody).Serialize(),
+				execop.UNTILBRK().Serialize(),
+				stackop.PUSHINT(big.NewInt(8)).Serialize(),
+			),
+		},
+		{
+			name: "untilendbrk_break",
+			code: body(
+				execop.UNTILENDBRK().Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "whilebrk_break",
+			code: body(
+				stackop.PUSHCONT(intBody(1)).Serialize(),
+				stackop.PUSHCONT(retAltBody).Serialize(),
+				execop.WHILEBRK().Serialize(),
+				stackop.PUSHINT(big.NewInt(9)).Serialize(),
+			),
+		},
+		{
+			name: "whileendbrk_break",
+			code: body(
+				stackop.PUSHCONT(intBody(1)).Serialize(),
+				execop.WHILEENDBRK().Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "againbrk_break",
+			code: body(
+				stackop.PUSHCONT(retAltBody).Serialize(),
+				execop.AGAINBRK().Serialize(),
+			),
+		},
+		{
+			name: "againendbrk_break",
+			code: body(
+				execop.AGAINENDBRK().Serialize(),
+				execop.RETALT().Serialize(),
+			),
+		},
+		{
+			name: "ifretalt_continue",
+			code: body(
+				execop.IFRETALT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+		{
+			name: "ifretalt_taken",
+			code: body(
+				execop.IFRETALT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifnotretalt_continue",
+			code: body(
+				execop.IFNOTRETALT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+		},
+		{
+			name: "ifnotretalt_taken",
+			code: body(
+				execop.IFNOTRETALT().Serialize(),
+				stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			),
+			stack: []any{int64(0)},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "exec_gap", caseNames, requiredExecGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "exec_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       prepareCrossTestC7(nil, testEmptyCell()),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzExecRefDecodeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := []cellParityCase{
+		{name: "callref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xDB3C, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "jmpref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xDB3D, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "jmprefdata_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xDB3E, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE300, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifnotref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE301, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifjmpref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE302, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifnotjmpref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE303, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifrefelse_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE30D, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifelseref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE30E, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifrefelseref_missing_refs_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE30F, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifbitjmpref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE3C1, 16)), exit: vmerr.CodeInvalidOpcode},
+		{name: "ifnbitjmpref_missing_ref_invalid", code: parityProgramCodeCell(parityProgramRawOp(0xE3E1, 16)), exit: vmerr.CodeInvalidOpcode},
+	}
+
+	names := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		names = append(names, tc.name)
+	}
+	requireNamedParityCases(t, "exec_ref_decode_gap", names, requiredExecRefDecodeGapCaseNames)
+
+	runCellParityCases(t, cases)
+}
+
+func TestTVMDifferentialFuzzRunVMGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	childC7 := tuple.NewTupleValue(tuple.NewTupleValue(big.NewInt(11), big.NewInt(22)))
+	returnedData := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	returnedActions := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	initialData := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+
+	body := func(builders ...*cell.Builder) *cell.Cell {
+		return parityProgramCodeCell(builders...)
+	}
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "runvm_c7_return_one",
+			code: body(execop.RUNVM(16 | 256).Serialize()),
+			stack: []any{
+				int64(0),
+				body(funcsop.GETPARAM(1).Serialize()).MustBeginParse(),
+				int64(1),
+				childC7,
+			},
+		},
+		{
+			name: "runvmx_gas_bounds_return_one",
+			code: body(execop.RUNVMX().Serialize()),
+			stack: []any{
+				int64(0),
+				body(
+					stackop.PUSHINT(big.NewInt(7)).Serialize(),
+					stackop.PUSHINT(big.NewInt(8)).Serialize(),
+				).MustBeginParse(),
+				int64(1),
+				int64(10_000),
+				int64(20_000),
+				int64(8 | 64 | 256),
+			},
+		},
+		{
+			name: "runvm_data_actions_and_gas",
+			code: body(execop.RUNVM(4 | 8 | 32).Serialize()),
+			stack: []any{
+				int64(0),
+				body(
+					stackop.PUSHREF(returnedData).Serialize(),
+					execop.POPCTR(4).Serialize(),
+					stackop.PUSHREF(returnedActions).Serialize(),
+					execop.POPCTR(5).Serialize(),
+				).MustBeginParse(),
+				initialData,
+				int64(10_000),
+			},
+		},
+		{
+			name: "runvm_full_inputs_return_data_actions_gas",
+			code: body(execop.RUNVM(4 | 8 | 16 | 32 | 256).Serialize()),
+			stack: []any{
+				int64(0),
+				body(
+					funcsop.GETPARAM(1).Serialize(),
+					stackop.PUSHREF(returnedData).Serialize(),
+					execop.POPCTR(4).Serialize(),
+					stackop.PUSHREF(returnedActions).Serialize(),
+					execop.POPCTR(5).Serialize(),
+				).MustBeginParse(),
+				int64(1),
+				initialData,
+				childC7,
+				int64(10_000),
+			},
+		},
+		{
+			name:  "runvm_mode512_rangecheck_no_stack",
+			code:  body(execop.RUNVM(512).Serialize()),
+			stack: nil,
+		},
+		{
+			name:  "runvmx_mode512_rangecheck_no_child",
+			code:  body(execop.RUNVMX().Serialize()),
+			stack: []any{int64(512)},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "runvm_gap", caseNames, requiredRunVMGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "runvm_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       prepareCrossTestC7(nil, testEmptyCell()),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzTonFuncGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	configValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.DefaultGlobalVersion})
+	if err != nil {
+		t.Fatalf("failed to build global version config: %v", err)
+	}
+	configRoot := mustConfigDictCell(t, map[uint32]*cell.Cell{
+		7:                                    configValue,
+		uint32(tlb.ConfigParamGlobalVersion): globalVersionCell,
+	})
+
+	extraDict := cell.NewDict(32)
+	if _, err = extraDict.SetBuilderWithMode(
+		cell.BeginCell().MustStoreUInt(7, 32).EndCell(),
+		cell.BeginCell().MustStoreVarUInt(12345, 32),
+		cell.DictSetModeSet,
+	); err != nil {
+		t.Fatalf("failed to seed extra balance dict: %v", err)
+	}
+	malformedExtraDict := cell.NewDict(32)
+	if err = malformedExtraDict.SetIntKey(big.NewInt(7), cell.BeginCell().MustStoreUInt(1, 5).EndCell()); err != nil {
+		t.Fatalf("failed to seed malformed extra balance dict: %v", err)
+	}
+
+	baseC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     configRoot,
+		UnpackedConfig: parityProgramTonFuncUnpackedConfig(t),
+		IncomingValue:  tuple.NewTupleValue(big.NewInt(555), cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()),
+		Balance:        tuple.NewTupleValue(big.NewInt(123456789), extraDict.AsCell()),
+		StorageFees:    tonopsTestStorageFees,
+		ExtraParams: map[int]any{
+			13: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
+			15: int64(444),
+			16: int64(555),
+			17: makeInMsgParamsTuple(),
+		},
+	})
+	nilExtraBalanceC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		Balance: tuple.NewTupleValue(big.NewInt(123456789), nil),
+	})
+	malformedExtraBalanceC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		Balance: tuple.NewTupleValue(big.NewInt(123456789), malformedExtraDict.AsCell()),
+	})
+	feeC7 := feeTestC7(t)
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+		c7    tuple.Tuple
+	}{
+		{"mycode", parityProgramCodeCell(funcsop.MYCODE().Serialize()), nil, baseC7},
+		{"incomingvalue", parityProgramCodeCell(funcsop.INCOMINGVALUE().Serialize()), nil, baseC7},
+		{"storagefees", parityProgramCodeCell(funcsop.STORAGEFEES().Serialize()), nil, baseC7},
+		{"duepayment", parityProgramCodeCell(funcsop.DUEPAYMENT().Serialize()), nil, baseC7},
+		{"globalid", parityProgramCodeCell(funcsop.GLOBALID().Serialize()), nil, baseC7},
+		{"unpackedconfigtuple", parityProgramCodeCell(funcsop.UNPACKEDCONFIGTUPLE().Serialize()), nil, baseC7},
+		{"configdict", parityProgramCodeCell(funcsop.CONFIGDICT().Serialize()), nil, baseC7},
+		{"configparam_hit", parityProgramCodeCell(funcsop.CONFIGPARAM().Serialize()), []any{int64(7)}, baseC7},
+		{"configoptparam_hit", parityProgramCodeCell(funcsop.CONFIGOPTPARAM().Serialize()), []any{int64(7)}, baseC7},
+		{"configoptparam_miss", parityProgramCodeCell(funcsop.CONFIGOPTPARAM().Serialize()), []any{int64(99)}, baseC7},
+		{"prevblocksinfotuple", parityProgramCodeCell(funcsop.PREVBLOCKSINFOTUPLE().Serialize()), nil, baseC7},
+		{"prevmcblocks", parityProgramCodeCell(funcsop.PREVMCBLOCKS().Serialize()), nil, baseC7},
+		{"prevkeyblock", parityProgramCodeCell(funcsop.PREVKEYBLOCK().Serialize()), nil, baseC7},
+		{"prevmcblocks_100", parityProgramCodeCell(funcsop.PREVMCBLOCKS_100().Serialize()), nil, baseC7},
+		{"getprecompiledgas", parityProgramCodeCell(funcsop.GETPRECOMPILEDGAS().Serialize()), nil, baseC7},
+		{"inmsgparams", parityProgramCodeCell(funcsop.INMSGPARAMS().Serialize()), nil, baseC7},
+		{"inmsgparam_bounce", parityProgramCodeCell(funcsop.INMSGPARAM(0).Serialize()), nil, baseC7},
+		{"inmsgparam_src", parityProgramCodeCell(funcsop.INMSGPARAM(2).Serialize()), nil, baseC7},
+		{"inmsgparam_value", parityProgramCodeCell(funcsop.INMSGPARAM(7).Serialize()), nil, baseC7},
+		{"inmsgparam_valueextra", parityProgramCodeCell(funcsop.INMSGPARAM(8).Serialize()), nil, baseC7},
+		{"inmsgparam_stateinit", parityProgramCodeCell(funcsop.INMSGPARAM(9).Serialize()), nil, baseC7},
+		{"inmsgparam_oob_range_error", parityProgramCodeCell(funcsop.INMSGPARAM(10).Serialize()), nil, baseC7},
+		{"inmsg_bounce", parityProgramCodeCell(funcsop.INMSG_BOUNCE().Serialize()), nil, baseC7},
+		{"inmsg_bounced", parityProgramCodeCell(funcsop.INMSG_BOUNCED().Serialize()), nil, baseC7},
+		{"inmsg_src", parityProgramCodeCell(funcsop.INMSG_SRC().Serialize()), nil, baseC7},
+		{"inmsg_fwdfee", parityProgramCodeCell(funcsop.INMSG_FWDFEE().Serialize()), nil, baseC7},
+		{"inmsg_lt", parityProgramCodeCell(funcsop.INMSG_LT().Serialize()), nil, baseC7},
+		{"inmsg_utime", parityProgramCodeCell(funcsop.INMSG_UTIME().Serialize()), nil, baseC7},
+		{"inmsg_origvalue", parityProgramCodeCell(funcsop.INMSG_ORIGVALUE().Serialize()), nil, baseC7},
+		{"inmsg_value", parityProgramCodeCell(funcsop.INMSG_VALUE().Serialize()), nil, baseC7},
+		{"inmsg_valueextra", parityProgramCodeCell(funcsop.INMSG_VALUEEXTRA().Serialize()), nil, baseC7},
+		{"inmsg_stateinit", parityProgramCodeCell(funcsop.INMSG_STATEINIT().Serialize()), nil, baseC7},
+		{"getstoragefee", parityProgramCodeCell(funcsop.GETSTORAGEFEE().Serialize()), []any{int64(2), int64(3), int64(10), int64(0)}, feeC7},
+		{"getgasfee", parityProgramCodeCell(funcsop.GETGASFEE().Serialize()), []any{int64(250), int64(0)}, feeC7},
+		{"getforwardfee", parityProgramCodeCell(funcsop.GETFORWARDFEE().Serialize()), []any{int64(2), int64(8), int64(0)}, feeC7},
+		{"getoriginalfwdfee", parityProgramCodeCell(funcsop.GETORIGINALFWDFEE().Serialize()), []any{big.NewInt(3200), int64(0)}, feeC7},
+		{"getforwardfeesimple", parityProgramCodeCell(funcsop.GETFORWARDFEESIMPLE().Serialize()), []any{int64(2), int64(8), int64(0)}, feeC7},
+		{"getgasfeesimple", parityProgramCodeCell(funcsop.GETGASFEESIMPLE().Serialize()), []any{int64(250), int64(0)}, feeC7},
+		{"getstoragefee_masterchain", parityProgramCodeCell(funcsop.GETSTORAGEFEE().Serialize()), []any{int64(2), int64(3), int64(10), int64(-1)}, feeC7},
+		{"getgasfee_masterchain", parityProgramCodeCell(funcsop.GETGASFEE().Serialize()), []any{int64(250), int64(-1)}, feeC7},
+		{"getforwardfee_masterchain", parityProgramCodeCell(funcsop.GETFORWARDFEE().Serialize()), []any{int64(2), int64(8), int64(-1)}, feeC7},
+		{"getoriginalfwdfee_masterchain", parityProgramCodeCell(funcsop.GETORIGINALFWDFEE().Serialize()), []any{big.NewInt(3200), int64(-1)}, feeC7},
+		{"getforwardfeesimple_masterchain", parityProgramCodeCell(funcsop.GETFORWARDFEESIMPLE().Serialize()), []any{int64(2), int64(8), int64(-1)}, feeC7},
+		{"getgasfeesimple_masterchain", parityProgramCodeCell(funcsop.GETGASFEESIMPLE().Serialize()), []any{int64(250), int64(-1)}, feeC7},
+		{"getextrabalance_hit", parityProgramCodeCell(funcsop.GETEXTRABALANCE().Serialize()), []any{int64(7)}, baseC7},
+		{"getextrabalance_miss", parityProgramCodeCell(funcsop.GETEXTRABALANCE().Serialize()), []any{int64(9)}, baseC7},
+		{"getextrabalance_repeated_hit", parityProgramCodeCell(funcsop.GETEXTRABALANCE().Serialize(), stackop.PUSHINT(big.NewInt(7)).Serialize(), funcsop.GETEXTRABALANCE().Serialize()), []any{int64(7)}, baseC7},
+		{"getextrabalance_nil_dict", parityProgramCodeCell(funcsop.GETEXTRABALANCE().Serialize()), []any{int64(7)}, nilExtraBalanceC7},
+		{"getextrabalance_malformed_value", parityProgramCodeCell(funcsop.GETEXTRABALANCE().Serialize()), []any{int64(7)}, malformedExtraBalanceC7},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "ton_func_gap", caseNames, requiredTonFuncGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "ton_func_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       tc.c7,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzMsgAddressGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	extAddrSlice := cell.BeginCell().MustStoreAddr(address.NewAddressExt(0, 256, bytes.Repeat([]byte{0x33}, 32))).ToSlice()
+	extAddrTailSlice := cell.BeginCell().
+		MustStoreBuilder(extAddrSlice.ToBuilder()).
+		MustStoreUInt(0xA, 4).
+		ToSlice()
+	varAddrSlice := cell.BeginCell().MustStoreAddr(address.NewAddressVar(0, tonopsTestAddr.Workchain(), 256, tonopsTestAddr.Data())).ToSlice()
+	var20AddrSlice := cell.BeginCell().MustStoreAddr(address.NewAddressVar(0, tonopsTestAddr.Workchain(), 20, []byte{0xDE, 0xAD, 0xB0})).ToSlice()
+	shortStdAddrSlice := cell.BeginCell().MustStoreUInt(0b10, 2).ToSlice()
+	invalidAnycast := cell.BeginCell().
+		MustStoreUInt(0b10, 2).
+		MustStoreBoolBit(true).
+		MustStoreUInt(31, 5).
+		MustStoreSlice(bytes.Repeat([]byte{0xFF}, 4), 31).
+		MustStoreInt(int64(tonopsTestAddr.Workchain()), 8).
+		MustStoreSlice(tonopsTestAddr.Data(), 256).
+		ToSlice()
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "ldmsgaddrq_short_std",
+			code:  parityProgramCodeCell(funcsop.LDMSGADDRQ().Serialize()),
+			stack: []any{shortStdAddrSlice.Copy()},
+		},
+		{
+			name:  "ldmsgaddr_ext_success_rest",
+			code:  parityProgramCodeCell(funcsop.LDMSGADDR().Serialize()),
+			stack: []any{extAddrTailSlice.Copy()},
+		},
+		{
+			name:  "ldstdaddr_std_success_rest",
+			code:  parityProgramCodeCell(funcsop.LDSTDADDR().Serialize()),
+			stack: []any{parityProgramStdAddrTailSlice()},
+		},
+		{
+			name:  "ldoptstdaddr_std_success_rest",
+			code:  parityProgramCodeCell(funcsop.LDOPTSTDADDR().Serialize()),
+			stack: []any{parityProgramStdAddrTailSlice()},
+		},
+		{
+			name:  "ldoptstdaddrq_none_success_rest",
+			code:  parityProgramCodeCell(funcsop.LDOPTSTDADDRQ().Serialize()),
+			stack: []any{parityProgramAddrNoneTailSlice()},
+		},
+		{
+			name:  "ldstdaddrq_var_fail",
+			code:  parityProgramCodeCell(funcsop.LDSTDADDRQ().Serialize()),
+			stack: []any{varAddrSlice.Copy()},
+		},
+		{
+			name:  "ldoptstdaddrq_short_fail",
+			code:  parityProgramCodeCell(funcsop.LDOPTSTDADDRQ().Serialize()),
+			stack: []any{cell.BeginCell().MustStoreUInt(1, 1).ToSlice()},
+		},
+		{
+			name:  "parsemsgaddr_std_success",
+			code:  parityProgramCodeCell(funcsop.PARSEMSGADDR().Serialize()),
+			stack: []any{parityProgramStdAddrSlice()},
+		},
+		{
+			name:  "parsemsgaddr_none_success",
+			code:  parityProgramCodeCell(funcsop.PARSEMSGADDR().Serialize()),
+			stack: []any{cell.BeginCell().MustStoreUInt(0, 2).ToSlice()},
+		},
+		{
+			name:  "parsemsgaddr_ext_success",
+			code:  parityProgramCodeCell(funcsop.PARSEMSGADDR().Serialize()),
+			stack: []any{extAddrSlice.Copy()},
+		},
+		{
+			name:  "parsemsgaddrq_invalid_anycast",
+			code:  parityProgramCodeCell(funcsop.PARSEMSGADDRQ().Serialize()),
+			stack: []any{invalidAnycast.Copy()},
+		},
+		{
+			name:  "rewritestdaddr_std_success",
+			code:  parityProgramCodeCell(funcsop.REWRITESTDADDR().Serialize()),
+			stack: []any{parityProgramStdAddrSlice()},
+		},
+		{
+			name:  "rewritevaraddr_std_success",
+			code:  parityProgramCodeCell(funcsop.REWRITEVARADDR().Serialize()),
+			stack: []any{parityProgramStdAddrSlice()},
+		},
+		{
+			name:  "rewritevaraddr_var20_fail",
+			code:  parityProgramCodeCell(funcsop.REWRITEVARADDR().Serialize()),
+			stack: []any{var20AddrSlice.Copy()},
+		},
+		{
+			name:  "rewritestdaddrq_var_fail",
+			code:  parityProgramCodeCell(funcsop.REWRITESTDADDRQ().Serialize()),
+			stack: []any{varAddrSlice.Copy()},
+		},
+		{
+			name:  "rewritestdaddrq_var20_fail",
+			code:  parityProgramCodeCell(funcsop.REWRITESTDADDRQ().Serialize()),
+			stack: []any{var20AddrSlice.Copy()},
+		},
+		{
+			name:  "rewritevaraddrq_ext_fail",
+			code:  parityProgramCodeCell(funcsop.REWRITEVARADDRQ().Serialize()),
+			stack: []any{extAddrSlice.Copy()},
+		},
+		{
+			name:  "ststdaddrq_std_success_status_false",
+			code:  parityProgramCodeCell(funcsop.STSTDADDRQ().Serialize()),
+			stack: []any{parityProgramStdAddrSlice(), cell.BeginCell()},
+		},
+		{
+			name:  "ststdaddrq_var_fail",
+			code:  parityProgramCodeCell(funcsop.STSTDADDRQ().Serialize()),
+			stack: []any{varAddrSlice.Copy(), cell.BeginCell()},
+		},
+		{
+			name:  "stoptstdaddrq_none",
+			code:  parityProgramCodeCell(funcsop.STOPTSTDADDRQ().Serialize()),
+			stack: []any{nil, cell.BeginCell()},
+		},
+		{
+			name:  "stoptstdaddrq_std_success_status_false",
+			code:  parityProgramCodeCell(funcsop.STOPTSTDADDRQ().Serialize()),
+			stack: []any{parityProgramStdAddrSlice(), cell.BeginCell()},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "msg_address_gap", caseNames, requiredMsgAddressGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "msg_address_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       makeTonopsTestC7(t, tonopsTestC7Config{}),
+			})
+		})
+	}
+
+}
+
+func TestTVMDifferentialFuzzVarIntGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	maxUnsigned31Bytes := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 248), big.NewInt(1))
+	signedOverflow31Bytes := new(big.Int).Lsh(big.NewInt(1), 247)
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "ldvarint16_zero_len",
+			code:  parityProgramCodeCell(funcsop.LDVARINT16().Serialize()),
+			stack: []any{cell.BeginCell().MustStoreUInt(0, 4).ToSlice()},
+		},
+		{
+			name: "ldvarint16_negative_minimal",
+			code: parityProgramCodeCell(funcsop.LDVARINT16().Serialize()),
+			stack: []any{
+				cell.BeginCell().
+					MustStoreUInt(1, 4).
+					MustStoreBigInt(big.NewInt(-2), 8).
+					MustStoreUInt(0xA, 4).
+					ToSlice(),
+			},
+		},
+		{
+			name:  "ldvaruint32_zero_len",
+			code:  parityProgramCodeCell(funcsop.LDVARUINT32().Serialize()),
+			stack: []any{cell.BeginCell().MustStoreUInt(0, 5).MustStoreUInt(0xA, 4).ToSlice()},
+		},
+		{
+			name: "ldvarint32_negative_two_bytes",
+			code: parityProgramCodeCell(funcsop.LDVARINT32().Serialize()),
+			stack: []any{
+				cell.BeginCell().
+					MustStoreUInt(2, 5).
+					MustStoreBigInt(big.NewInt(-2), 16).
+					MustStoreUInt(0xA, 4).
+					ToSlice(),
+			},
+		},
+		{
+			name:  "ldvaruint32_short_payload",
+			code:  parityProgramCodeCell(funcsop.LDVARUINT32().Serialize()),
+			stack: []any{cell.BeginCell().MustStoreUInt(2, 5).MustStoreUInt(0xAB, 8).ToSlice()},
+		},
+		{
+			name:  "stvarint16_zero_len",
+			code:  parityProgramCodeCell(funcsop.STVARINT16().Serialize()),
+			stack: []any{cell.BeginCell(), int64(0)},
+		},
+		{
+			name:  "stvarint16_negative_minimal",
+			code:  parityProgramCodeCell(funcsop.STVARINT16().Serialize()),
+			stack: []any{cell.BeginCell(), int64(-2)},
+		},
+		{
+			name:  "stvaruint32_zero_len",
+			code:  parityProgramCodeCell(funcsop.STVARUINT32().Serialize()),
+			stack: []any{cell.BeginCell(), int64(0)},
+		},
+		{
+			name:  "stvarint32_negative_minimal",
+			code:  parityProgramCodeCell(funcsop.STVARINT32().Serialize()),
+			stack: []any{cell.BeginCell(), int64(-2)},
+		},
+		{
+			name:  "stvaruint32_max_len",
+			code:  parityProgramCodeCell(funcsop.STVARUINT32().Serialize()),
+			stack: []any{cell.BeginCell(), maxUnsigned31Bytes},
+		},
+		{
+			name:  "stvaruint32_negative_rangecheck",
+			code:  parityProgramCodeCell(funcsop.STVARUINT32().Serialize()),
+			stack: []any{cell.BeginCell(), int64(-1)},
+		},
+		{
+			name:  "stvarint32_overflow_rangecheck",
+			code:  parityProgramCodeCell(funcsop.STVARINT32().Serialize()),
+			stack: []any{cell.BeginCell(), signedOverflow31Bytes},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "varint_gap", caseNames, requiredVarIntGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "varint_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       makeTonopsTestC7(t, tonopsTestC7Config{}),
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzDataSizeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	root := parityProgramStorageStatCell()
+	sharedRef := cell.BeginCell().MustStoreUInt(0xD, 4).EndCell()
+	sharedRoot := cell.BeginCell().
+		MustStoreRef(sharedRef).
+		MustStoreRef(sharedRef).
+		EndCell()
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name:  "cdatasize_nil_success_zero",
+			code:  parityProgramCodeCell(funcsop.CDATASIZE().Serialize()),
+			stack: []any{(*cell.Cell)(nil), int64(0)},
+		},
+		{
+			name:  "cdatasize_success_counts_ref",
+			code:  parityProgramCodeCell(funcsop.CDATASIZE().Serialize()),
+			stack: []any{root, int64(10)},
+		},
+		{
+			name:  "cdatasize_shared_ref_counts_once",
+			code:  parityProgramCodeCell(funcsop.CDATASIZE().Serialize()),
+			stack: []any{sharedRoot, int64(10)},
+		},
+		{
+			name:  "cdatasize_negative_bound_rangecheck",
+			code:  parityProgramCodeCell(funcsop.CDATASIZE().Serialize()),
+			stack: []any{root, int64(-1)},
+		},
+		{
+			name:  "cdatasizeq_bound_too_small_false",
+			code:  parityProgramCodeCell(funcsop.CDATASIZEQ().Serialize()),
+			stack: []any{root, int64(1)},
+		},
+		{
+			name:  "sdatasize_success_counts_refs",
+			code:  parityProgramCodeCell(funcsop.SDATASIZE().Serialize()),
+			stack: []any{root.MustBeginParse(), int64(10)},
+		},
+		{
+			name:  "sdatasize_shared_ref_counts_once",
+			code:  parityProgramCodeCell(funcsop.SDATASIZE().Serialize()),
+			stack: []any{sharedRoot.MustBeginParse(), int64(10)},
+		},
+		{
+			name:  "sdatasize_negative_bound_rangecheck",
+			code:  parityProgramCodeCell(funcsop.SDATASIZE().Serialize()),
+			stack: []any{root.MustBeginParse(), int64(-1)},
+		},
+		{
+			name:  "sdatasizeq_bound_too_small_false",
+			code:  parityProgramCodeCell(funcsop.SDATASIZEQ().Serialize()),
+			stack: []any{root.MustBeginParse(), int64(0)},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "datasize_gap", caseNames, requiredDataSizeGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "datasize_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzTonFuncRuntimeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	runtimeC7 := makeTonopsTestC7(t, tonopsTestC7Config{})
+	largeConfigIdx := new(big.Int).Lsh(big.NewInt(1), 40)
+	maxRandSeed := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	negativeConfigValue := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	signedConfigRoot := mustConfigDictCell(t, map[uint32]*cell.Cell{
+		^uint32(0): negativeConfigValue,
+	})
+	malformedConfig := cell.NewDict(32)
+	if _, err := malformedConfig.SetBuilderWithMode(
+		cell.BeginCell().MustStoreUInt(23, 32).EndCell(),
+		cell.BeginCell().MustStoreUInt(1, 1).MustStoreRef(testEmptyCell()),
+		cell.DictSetModeSet,
+	); err != nil {
+		t.Fatalf("failed to build malformed config dict: %v", err)
+	}
+	malformedConfigC7 := prepareCrossTestC7(malformedConfig, testEmptyCell())
+	signedConfigC7 := makeTonopsTestC7(t, tonopsTestC7Config{ConfigRoot: signedConfigRoot})
+	badConfigRootC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ExtraParams: map[int]any{
+			9: int64(1),
+		},
+	})
+	missingParamsC7 := tuple.NewTupleValue()
+	paramsNotTupleC7 := tuple.NewTupleValue(big.NewInt(1))
+	badRandSeedC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ExtraParams: map[int]any{
+			6: testEmptyCell(),
+		},
+	})
+	shortUnpackedConfigC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		UnpackedConfig: tuple.NewTupleSized(1),
+	})
+	shortInMsgParamsC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ExtraParams: map[int]any{
+			17: tuple.NewTupleSized(1),
+		},
+	})
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+		c7    tuple.Tuple
+	}{
+		{
+			name: "getparam_now_blocklt_ltime_aliases",
+			code: parityProgramCodeCell(
+				funcsop.GETPARAM(3).Serialize(),
+				funcsop.NOW().Serialize(),
+				funcsop.GETPARAM(4).Serialize(),
+				funcsop.BLOCKLT().Serialize(),
+				funcsop.GETPARAM(5).Serialize(),
+				funcsop.LTIME().Serialize(),
+			),
+			c7: runtimeC7,
+		},
+		{
+			name: "getparamlong_randseed",
+			code: parityProgramCodeCell(
+				funcsop.GETPARAMLONG(6).Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			c7: runtimeC7,
+		},
+		{
+			name: "getparam_missing_params_tuple_range",
+			code: parityProgramCodeCell(
+				funcsop.GETPARAM(3).Serialize(),
+			),
+			c7: missingParamsC7,
+		},
+		{
+			name: "getparam_params_not_tuple_typecheck",
+			code: parityProgramCodeCell(
+				funcsop.GETPARAM(3).Serialize(),
+			),
+			c7: paramsNotTupleC7,
+		},
+		{
+			name: "balance_myaddr_configroot",
+			code: parityProgramCodeCell(
+				funcsop.BALANCE().Serialize(),
+				funcsop.MYADDR().Serialize(),
+				funcsop.CONFIGROOT().Serialize(),
+			),
+			c7: runtimeC7,
+		},
+		{
+			name: "randu256_updates_seed",
+			code: parityProgramCodeCell(
+				funcsop.RANDU256().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			c7: runtimeC7,
+		},
+		{
+			name: "randu256_bad_seed_typecheck",
+			code: parityProgramCodeCell(
+				funcsop.RANDU256().Serialize(),
+			),
+			c7: badRandSeedC7,
+		},
+		{
+			name: "rand_bounded_updates_seed",
+			code: parityProgramCodeCell(
+				funcsop.RAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			stack: []any{int64(1000)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "rand_zero_bound_updates_seed",
+			code: parityProgramCodeCell(
+				funcsop.RAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			stack: []any{int64(0)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "rand_negative_bound_updates_seed",
+			code: parityProgramCodeCell(
+				funcsop.RAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			stack: []any{int64(-7)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setrand_addrand_roundtrip",
+			code: parityProgramCodeCell(
+				funcsop.SETRAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+				stackop.PUSHINT(big.NewInt(0x5678)).Serialize(),
+				funcsop.ADDRAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			stack: []any{big.NewInt(0x1234)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setrand_max_seed_roundtrip",
+			code: parityProgramCodeCell(
+				funcsop.SETRAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			stack: []any{maxRandSeed},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setrand_negative_rangecheck",
+			code: parityProgramCodeCell(
+				funcsop.SETRAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			stack: []any{int64(-1)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setrand_c7_params_not_tuple_typecheck",
+			code: parityProgramCodeCell(
+				funcsop.SETRAND().Serialize(),
+			),
+			stack: []any{big.NewInt(0x1234)},
+			c7:    paramsNotTupleC7,
+		},
+		{
+			name: "addrand_negative_rangecheck",
+			code: parityProgramCodeCell(
+				funcsop.ADDRAND().Serialize(),
+				funcsop.RANDSEED().Serialize(),
+			),
+			stack: []any{int64(-1)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setglob_getglob_roundtrip",
+			code: parityProgramCodeCell(
+				funcsop.SETGLOB(20).Serialize(),
+				funcsop.GETGLOB(20).Serialize(),
+			),
+			stack: []any{int64(1234)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setglobvar_getglobvar_roundtrip",
+			code: parityProgramCodeCell(
+				funcsop.SETGLOBVAR().Serialize(),
+				stackop.PUSHINT(big.NewInt(21)).Serialize(),
+				funcsop.GETGLOBVAR().Serialize(),
+			),
+			stack: []any{int64(1235), int64(21)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "getglobvar_absent_null",
+			code: parityProgramCodeCell(
+				funcsop.GETGLOBVAR().Serialize(),
+			),
+			stack: []any{int64(254)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "globalid_unpacked_config_short_tuple_range",
+			code: parityProgramCodeCell(
+				funcsop.GLOBALID().Serialize(),
+			),
+			c7: shortUnpackedConfigC7,
+		},
+		{
+			name: "inmsgparam_short_tuple_range",
+			code: parityProgramCodeCell(
+				funcsop.INMSGPARAM(9).Serialize(),
+			),
+			c7: shortInMsgParamsC7,
+		},
+		{
+			name:  "configparam_no_root_false",
+			code:  parityProgramCodeCell(funcsop.CONFIGPARAM().Serialize()),
+			stack: []any{int64(7)},
+			c7:    runtimeC7,
+		},
+		{
+			name:  "configparam_negative_key_hit",
+			code:  parityProgramCodeCell(funcsop.CONFIGPARAM().Serialize()),
+			stack: []any{int64(-1)},
+			c7:    signedConfigC7,
+		},
+		{
+			name:  "configoptparam_negative_key_hit",
+			code:  parityProgramCodeCell(funcsop.CONFIGOPTPARAM().Serialize()),
+			stack: []any{int64(-1)},
+			c7:    signedConfigC7,
+		},
+		{
+			name:  "configoptparam_no_root_null",
+			code:  parityProgramCodeCell(funcsop.CONFIGOPTPARAM().Serialize()),
+			stack: []any{int64(7)},
+			c7:    runtimeC7,
+		},
+		{
+			name:  "configparam_bad_root_type",
+			code:  parityProgramCodeCell(funcsop.CONFIGPARAM().Serialize()),
+			stack: []any{int64(7)},
+			c7:    badConfigRootC7,
+		},
+		{
+			name:  "configoptparam_bad_root_type",
+			code:  parityProgramCodeCell(funcsop.CONFIGOPTPARAM().Serialize()),
+			stack: []any{int64(7)},
+			c7:    badConfigRootC7,
+		},
+		{
+			name:  "configparam_out_of_int32_false",
+			code:  parityProgramCodeCell(funcsop.CONFIGPARAM().Serialize()),
+			stack: []any{largeConfigIdx},
+			c7:    runtimeC7,
+		},
+		{
+			name:  "configparam_malformed_value_dict_error",
+			code:  parityProgramCodeCell(funcsop.CONFIGPARAM().Serialize()),
+			stack: []any{int64(23)},
+			c7:    malformedConfigC7,
+		},
+		{
+			name:  "configoptparam_malformed_value_dict_error",
+			code:  parityProgramCodeCell(funcsop.CONFIGOPTPARAM().Serialize()),
+			stack: []any{int64(23)},
+			c7:    malformedConfigC7,
+		},
+		{
+			name: "setcp_zero",
+			code: parityProgramCodeCell(
+				funcsop.SETCP(0).Serialize(),
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+			),
+			c7: runtimeC7,
+		},
+		{
+			name: "setcp_negative_unsupported",
+			code: parityProgramCodeCell(
+				funcsop.SETCP(-1).Serialize(),
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+			),
+			c7: runtimeC7,
+		},
+		{
+			name: "setcp_positive_unsupported",
+			code: parityProgramCodeCell(
+				funcsop.SETCP(1).Serialize(),
+				stackop.PUSHINT(big.NewInt(1)).Serialize(),
+			),
+			c7: runtimeC7,
+		},
+		{
+			name: "setcpx_zero",
+			code: parityProgramCodeCell(
+				funcsop.SETCPX().Serialize(),
+				stackop.PUSHINT(big.NewInt(2)).Serialize(),
+			),
+			stack: []any{int64(0)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setcpx_negative_unsupported",
+			code: parityProgramCodeCell(
+				funcsop.SETCPX().Serialize(),
+				stackop.PUSHINT(big.NewInt(2)).Serialize(),
+			),
+			stack: []any{int64(-1)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setcpx_positive_unsupported",
+			code: parityProgramCodeCell(
+				funcsop.SETCPX().Serialize(),
+				stackop.PUSHINT(big.NewInt(2)).Serialize(),
+			),
+			stack: []any{int64(1)},
+			c7:    runtimeC7,
+		},
+		{
+			name: "setcpx_high_rangecheck",
+			code: parityProgramCodeCell(
+				funcsop.SETCPX().Serialize(),
+				stackop.PUSHINT(big.NewInt(2)).Serialize(),
+			),
+			stack: []any{int64(32768)},
+			c7:    runtimeC7,
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "ton_func_runtime_gap", caseNames, requiredTonFuncRuntimeGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "ton_func_runtime_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+				c7:       tc.c7,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzHashGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	builderWithRef := cell.BeginCell().
+		MustStoreUInt(0xCA, 8).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(0xFE, 8).EndCell())
+	appendDst := cell.BeginCell().MustStoreUInt(0xAA, 8)
+	builderInput := cell.BeginCell().MustStoreSlice([]byte("abc"), 24)
+	crowdedBuilder := cell.BeginCell().MustStoreSlice(bytes.Repeat([]byte{0xAB}, 100), 800)
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "sha256u_empty",
+			code: parityProgramCodeCell(funcsop.SHA256U().Serialize()),
+			stack: []any{
+				cell.BeginCell().ToSlice(),
+			},
+		},
+		{
+			name: "hashbu_builder_with_ref",
+			code: parityProgramCodeCell(funcsop.HASHBU().Serialize()),
+			stack: []any{
+				builderWithRef,
+			},
+		},
+		{
+			name: "hashext_bit_concat_sha256",
+			code: parityProgramCodeCell(funcsop.HASHEXT(0).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0xA, 4).ToSlice(),
+				cell.BeginCell().MustStoreUInt(0xB, 4).ToSlice(),
+				int64(2),
+			},
+		},
+		{
+			name: "hashextr_order_sha256",
+			code: parityProgramCodeCell(funcsop.HASHEXT(1<<8 | 0).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("ab"), 16).ToSlice(),
+				cell.BeginCell().MustStoreSlice([]byte("cd"), 16).ToSlice(),
+				int64(2),
+			},
+		},
+		{
+			name: "hashext_dynamic_keccak256",
+			code: parityProgramCodeCell(funcsop.HASHEXT(255).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(1),
+				int64(3),
+			},
+		},
+		{
+			name: "hashext_dynamic_unknown_hash_id",
+			code: parityProgramCodeCell(funcsop.HASHEXT(255).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(1),
+				int64(5),
+			},
+		},
+		{
+			name: "hashext_dynamic_hash_id_rangecheck",
+			code: parityProgramCodeCell(funcsop.HASHEXT(255).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(1),
+				int64(255),
+			},
+		},
+		{
+			name: "hashext_count_rangecheck",
+			code: parityProgramCodeCell(funcsop.HASHEXT(0).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(2),
+			},
+		},
+		{
+			name: "hashext_sha512_tuple",
+			code: parityProgramCodeCell(funcsop.HASHEXT(1).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(1),
+			},
+		},
+		{
+			name: "hashext_blake2b_tuple",
+			code: parityProgramCodeCell(funcsop.HASHEXT(2).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(1),
+			},
+		},
+		{
+			name: "hashext_keccak512_tuple",
+			code: parityProgramCodeCell(funcsop.HASHEXT(4).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(1),
+			},
+		},
+		{
+			name: "hashexta_keccak256_builder_input",
+			code: parityProgramCodeCell(funcsop.HASHEXT(1<<9 | 3).Serialize()),
+			stack: []any{
+				appendDst,
+				builderInput,
+				int64(1),
+			},
+		},
+		{
+			name: "hashexta_append_non_builder_typecheck",
+			code: parityProgramCodeCell(funcsop.HASHEXT(1 << 9).Serialize()),
+			stack: []any{
+				int64(123),
+				int64(0),
+			},
+		},
+		{
+			name: "hashexta_dynamic_zero_count_builder_only",
+			code: parityProgramCodeCell(funcsop.HASHEXT(1<<9 | 255).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0xAA, 8),
+				int64(0),
+				int64(0),
+			},
+		},
+		{
+			name: "hashextar_dynamic_sha512_append_reverse",
+			code: parityProgramCodeCell(funcsop.HASHEXT(1<<9 | 1<<8 | 255).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0xAA, 8),
+				cell.BeginCell().MustStoreSlice([]byte("ab"), 16).ToSlice(),
+				cell.BeginCell().MustStoreSlice([]byte("cd"), 16).ToSlice(),
+				int64(2),
+				int64(1),
+			},
+		},
+		{
+			name: "hashext_unaligned_bits_underflow",
+			code: parityProgramCodeCell(funcsop.HASHEXT(0).Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0xA, 4).ToSlice(),
+				int64(1),
+			},
+		},
+		{
+			name: "sha256u_unaligned_bits_underflow",
+			code: parityProgramCodeCell(funcsop.SHA256U().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreUInt(0xA, 4).ToSlice(),
+			},
+		},
+		{
+			name: "hashexta_builder_overflow",
+			code: parityProgramCodeCell(funcsop.HASHEXT(1 << 9).Serialize()),
+			stack: []any{
+				crowdedBuilder,
+				cell.BeginCell().MustStoreSlice([]byte("abc"), 24).ToSlice(),
+				int64(1),
+			},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "hash_gap", caseNames, requiredHashGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "hash_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzCryptoGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	edKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x11}, ed25519.SeedSize))
+	edPub := edKey.Public().(ed25519.PublicKey)
+	edHash := bytes.Repeat([]byte{0x44}, 32)
+	edSigU := ed25519.Sign(edKey, edHash)
+	badEdSigU := ed25519.Sign(edKey, bytes.Repeat([]byte{0x45}, 32))
+	edSliceData := []byte("ed25519-signed-slice")
+	edSigS := ed25519.Sign(edKey, edSliceData)
+	badEdSigS := ed25519.Sign(edKey, []byte("different-ed25519-slice"))
+
+	ecrecoverHash := bytes.Repeat([]byte{0x42}, 32)
+	ecrecoverV, ecrecoverR, ecrecoverS, _, ok := localec.SignRecoverable(bytes.Repeat([]byte{0x31}, 32), bytes.Repeat([]byte{0x57}, 32), ecrecoverHash)
+	if !ok {
+		t.Fatal("failed to build secp256k1 recovery fixture")
+	}
+	_, _, _, xonlyBasePub, ok := localec.SignRecoverable(bytes.Repeat([]byte{0x41}, 32), bytes.Repeat([]byte{0x67}, 32), bytes.Repeat([]byte{0x22}, 32))
+	if !ok {
+		t.Fatal("failed to build secp256k1 xonly fixture")
+	}
+	secpXOnlyKey := new(big.Int).SetBytes(xonlyBasePub[1:33])
+	secpTooLargeTweak := new(big.Int).SetBytes(localec.CurveOrderBytes())
+
+	p256D := big.NewInt(7)
+	p256Scalar := p256D.FillBytes(make([]byte, 32))
+	p256Curve := elliptic.P256()
+	p256X, p256Y := p256Curve.ScalarBaseMult(p256Scalar)
+	p256Priv := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: p256Curve,
+			X:     p256X,
+			Y:     p256Y,
+		},
+		D: p256D,
+	}
+	p256HashBytes := bytes.Repeat([]byte{0x55}, 32)
+	p256SigU := mustP256RawSignature(t, p256Priv, p256HashBytes)
+	badP256SigU := mustP256RawSignature(t, p256Priv, bytes.Repeat([]byte{0x56}, 32))
+	p256Pub := elliptic.MarshalCompressed(p256Curve, p256X, p256Y)
+	p256SliceData := []byte("p256-signed-slice")
+	p256SigS := mustP256RawSignature(t, p256Priv, p256SliceData)
+	badP256SigS := mustP256RawSignature(t, p256Priv, []byte("different-p256-slice"))
+	badP256Key := append([]byte{0x05}, bytes.Repeat([]byte{0x01}, 32)...)
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "chksignu_success",
+			code: parityProgramCodeCell(funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(edHash),
+				cell.BeginCell().MustStoreSlice(edSigU, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "chksigns_success",
+			code: parityProgramCodeCell(funcsop.CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(edSliceData, uint(len(edSliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(edSigS, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "chksignu_bad_signature_false",
+			code: parityProgramCodeCell(funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(edHash),
+				cell.BeginCell().MustStoreSlice(badEdSigU, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "chksigns_bad_signature_false",
+			code: parityProgramCodeCell(funcsop.CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(edSliceData, uint(len(edSliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(badEdSigS, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "ecrecover_success",
+			code: parityProgramCodeCell(funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(ecrecoverHash),
+				int64(ecrecoverV),
+				ecrecoverR,
+				ecrecoverS,
+			},
+		},
+		{
+			name: "ecrecover_invalid_v",
+			code: parityProgramCodeCell(funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(ecrecoverHash),
+				int64(4),
+				ecrecoverR,
+				ecrecoverS,
+			},
+		},
+		{
+			name: "secp256k1_xonly_pubkey_tweak_add_success",
+			code: parityProgramCodeCell(funcsop.SECP256K1_XONLY_PUBKEY_TWEAK_ADD().Serialize()),
+			stack: []any{
+				secpXOnlyKey,
+				int64(7),
+			},
+		},
+		{
+			name: "secp256k1_xonly_pubkey_tweak_add_tweak_ge_n",
+			code: parityProgramCodeCell(funcsop.SECP256K1_XONLY_PUBKEY_TWEAK_ADD().Serialize()),
+			stack: []any{
+				secpXOnlyKey,
+				secpTooLargeTweak,
+			},
+		},
+		{
+			name: "p256_chksignu_success",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(p256HashBytes),
+				cell.BeginCell().MustStoreSlice(p256SigU, 512).ToSlice(),
+				cell.BeginCell().MustStoreSlice(p256Pub, 264).ToSlice(),
+			},
+		},
+		{
+			name: "p256_chksignu_bad_key",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(p256HashBytes),
+				cell.BeginCell().MustStoreSlice(p256SigU, 512).ToSlice(),
+				cell.BeginCell().MustStoreSlice(badP256Key, 264).ToSlice(),
+			},
+		},
+		{
+			name: "p256_chksigns_success",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(p256SliceData, uint(len(p256SliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(p256SigS, 512).ToSlice(),
+				cell.BeginCell().MustStoreSlice(p256Pub, 264).ToSlice(),
+			},
+		},
+		{
+			name: "p256_chksigns_bad_key",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(p256SliceData, uint(len(p256SliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(p256SigS, 512).ToSlice(),
+				cell.BeginCell().MustStoreSlice(badP256Key, 264).ToSlice(),
+			},
+		},
+		{
+			name: "p256_chksignu_bad_signature_false",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(p256HashBytes),
+				cell.BeginCell().MustStoreSlice(badP256SigU, 512).ToSlice(),
+				cell.BeginCell().MustStoreSlice(p256Pub, 264).ToSlice(),
+			},
+		},
+		{
+			name: "p256_chksigns_bad_signature_false",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(p256SliceData, uint(len(p256SliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(badP256SigS, 512).ToSlice(),
+				cell.BeginCell().MustStoreSlice(p256Pub, 264).ToSlice(),
+			},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "crypto_gap", caseNames, requiredCryptoGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "crypto_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzCryptoEdgeGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	edKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, ed25519.SeedSize))
+	edPub := edKey.Public().(ed25519.PublicKey)
+	edHash := sha256.Sum256([]byte("crypto-edge-ed25519"))
+	edSig := ed25519.Sign(edKey, edHash[:])
+
+	p256D := big.NewInt(9)
+	p256Scalar := p256D.FillBytes(make([]byte, 32))
+	p256Curve := elliptic.P256()
+	p256X, p256Y := p256Curve.ScalarBaseMult(p256Scalar)
+	p256Pub := elliptic.MarshalCompressed(p256Curve, p256X, p256Y)
+
+	msg := []byte("crypto-edge-bls")
+	pub1 := testBLSPubBytes(3)
+	sig1 := testBLSSigBytes(3, msg)
+	g1a := testBLSG1BytesForScalar(2)
+	g2a := testBLSG2BytesForScalar(2)
+	invalidRist := testInvalidRistrettoInt(t)
+	invalidG1 := testInvalidBLSG1Bytes(t)
+	invalidG2 := testInvalidBLSG2Bytes(t)
+
+	shortSlice := cell.BeginCell().MustStoreUInt(0xAA, 8).ToSlice()
+	unalignedSlice := cell.BeginCell().MustStoreUInt(1, 1).ToSlice()
+	fullSig := cell.BeginCell().MustStoreSlice(bytes.Repeat([]byte{0x11}, 64), 512).ToSlice()
+	p256Key := cell.BeginCell().MustStoreSlice(p256Pub, 264).ToSlice()
+	hashInt := new(big.Int).SetBytes(edHash[:])
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "chksignu_short_signature_underflow",
+			code: parityProgramCodeCell(funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				hashInt,
+				shortSlice,
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "chksigns_unaligned_message_underflow",
+			code: parityProgramCodeCell(funcsop.CHKSIGNS().Serialize()),
+			stack: []any{
+				unalignedSlice,
+				cell.BeginCell().MustStoreSlice(edSig, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "chksigns_short_signature_underflow",
+			code: parityProgramCodeCell(funcsop.CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice([]byte("aligned"), 56).ToSlice(),
+				shortSlice,
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "chksignu_negative_hash_range",
+			code: parityProgramCodeCell(funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				big.NewInt(-1),
+				cell.BeginCell().MustStoreSlice(edSig, 512).ToSlice(),
+				new(big.Int).SetBytes(edPub),
+			},
+		},
+		{
+			name: "chksignu_key_negative_range",
+			code: parityProgramCodeCell(funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				hashInt,
+				cell.BeginCell().MustStoreSlice(edSig, 512).ToSlice(),
+				big.NewInt(-1),
+			},
+		},
+		{
+			name: "ecrecover_negative_hash_range",
+			code: parityProgramCodeCell(funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				big.NewInt(-1),
+				int64(0),
+				int64(0),
+				int64(0),
+			},
+		},
+		{
+			name: "ecrecover_negative_r_range",
+			code: parityProgramCodeCell(funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				hashInt,
+				int64(0),
+				big.NewInt(-1),
+				int64(0),
+			},
+		},
+		{
+			name: "ecrecover_v_out_of_uint8_range",
+			code: parityProgramCodeCell(funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				hashInt,
+				int64(256),
+				int64(0),
+				int64(0),
+			},
+		},
+		{
+			name: "ecrecover_zero_signature_false",
+			code: parityProgramCodeCell(funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				hashInt,
+				int64(0),
+				int64(0),
+				int64(0),
+			},
+		},
+		{
+			name: "secp256k1_tweak_negative_range",
+			code: parityProgramCodeCell(funcsop.SECP256K1_XONLY_PUBKEY_TWEAK_ADD().Serialize()),
+			stack: []any{
+				int64(1),
+				big.NewInt(-1),
+			},
+		},
+		{
+			name: "secp256k1_key_negative_range",
+			code: parityProgramCodeCell(funcsop.SECP256K1_XONLY_PUBKEY_TWEAK_ADD().Serialize()),
+			stack: []any{
+				big.NewInt(-1),
+				int64(0),
+			},
+		},
+		{
+			name: "secp256k1_invalid_key_false",
+			code: parityProgramCodeCell(funcsop.SECP256K1_XONLY_PUBKEY_TWEAK_ADD().Serialize()),
+			stack: []any{
+				int64(0),
+				int64(0),
+			},
+		},
+		{
+			name: "p256_chksigns_unaligned_message_underflow",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNS().Serialize()),
+			stack: []any{
+				unalignedSlice,
+				fullSig,
+				p256Key,
+			},
+		},
+		{
+			name: "p256_chksignu_negative_hash_range",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNU().Serialize()),
+			stack: []any{
+				big.NewInt(-1),
+				fullSig,
+				p256Key,
+			},
+		},
+		{
+			name: "p256_chksignu_short_signature_underflow",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNU().Serialize()),
+			stack: []any{
+				hashInt,
+				shortSlice,
+				p256Key,
+			},
+		},
+		{
+			name: "p256_chksignu_short_key_underflow",
+			code: parityProgramCodeCell(funcsop.P256_CHKSIGNU().Serialize()),
+			stack: []any{
+				hashInt,
+				fullSig,
+				shortSlice,
+			},
+		},
+		{
+			name: "rist255_validate_invalid_range",
+			code: parityProgramCodeCell(funcsop.RIST255_VALIDATE().Serialize()),
+			stack: []any{
+				invalidRist,
+			},
+		},
+		{
+			name: "rist255_add_invalid_unknown",
+			code: parityProgramCodeCell(funcsop.RIST255_ADD().Serialize()),
+			stack: []any{
+				int64(1),
+				int64(1),
+			},
+		},
+		{
+			name: "bls_verify_short_pub_underflow",
+			code: parityProgramCodeCell(funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				shortSlice,
+				testSliceFromBytes(msg),
+				testSliceFromBytes(sig1),
+			},
+		},
+		{
+			name: "bls_verify_short_sig_underflow",
+			code: parityProgramCodeCell(funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg),
+				shortSlice,
+			},
+		},
+		{
+			name: "bls_verify_invalid_sig_false",
+			code: parityProgramCodeCell(funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(invalidG2),
+			},
+		},
+		{
+			name: "bls_fastaggregateverify_empty_false",
+			code: parityProgramCodeCell(funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				int64(0),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(sig1),
+			},
+		},
+		{
+			name: "bls_aggregateverify_empty_false",
+			code: parityProgramCodeCell(funcsop.BLS_AGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				int64(0),
+				testSliceFromBytes(sig1),
+			},
+		},
+		{
+			name: "bls_aggregateverify_invalid_sig_false",
+			code: parityProgramCodeCell(funcsop.BLS_AGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg),
+				int64(1),
+				testSliceFromBytes(invalidG2),
+			},
+		},
+		{
+			name: "bls_aggregate_invalid_signature_unknown",
+			code: parityProgramCodeCell(funcsop.BLS_AGGREGATE().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+				int64(1),
+			},
+		},
+		{
+			name: "bls_g1_add_invalid_point_unknown",
+			code: parityProgramCodeCell(funcsop.BLS_G1_ADD().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				testSliceFromBytes(g1a),
+			},
+		},
+		{
+			name: "bls_g2_add_invalid_point_unknown",
+			code: parityProgramCodeCell(funcsop.BLS_G2_ADD().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+				testSliceFromBytes(g2a),
+			},
+		},
+		{
+			name: "bls_g1_ingroup_short_underflow",
+			code: parityProgramCodeCell(funcsop.BLS_G1_INGROUP().Serialize()),
+			stack: []any{
+				shortSlice,
+			},
+		},
+		{
+			name: "bls_g2_ingroup_short_underflow",
+			code: parityProgramCodeCell(funcsop.BLS_G2_INGROUP().Serialize()),
+			stack: []any{
+				shortSlice,
+			},
+		},
+		{
+			name: "bls_g1_multiexp_invalid_point_unknown",
+			code: parityProgramCodeCell(funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				int64(2),
+				int64(1),
+			},
+		},
+		{
+			name: "bls_g2_multiexp_invalid_point_unknown",
+			code: parityProgramCodeCell(funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+				int64(2),
+				int64(1),
+			},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "crypto_edge_gap", caseNames, requiredCryptoEdgeGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "crypto_edge_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzCirclCryptoGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	msg := []byte("ton-circl-bls-parity")
+	msg2 := []byte("ton-circl-bls-parity-2")
+	pub1 := testBLSPubBytes(3)
+	pub2 := testBLSPubBytes(5)
+	sig1 := testBLSSigBytes(3, msg)
+	sig2 := testBLSSigBytes(5, msg)
+	sig2Msg2 := testBLSSigBytes(5, msg2)
+	aggSig := testBLSAggregateSigBytes(t, sig1, sig2)
+	aggDistinctSig := testBLSAggregateSigBytes(t, sig1, sig2Msg2)
+
+	g1a := testBLSG1BytesForScalar(2)
+	g1b := testBLSG1BytesForScalar(3)
+	g2a := testBLSG2BytesForScalar(2)
+	g2b := testBLSG2BytesForScalar(3)
+	fp := testBLSFPBytes(7)
+	fp2 := testBLSFP2Bytes(11)
+	invalidRist := testInvalidRistrettoInt(t)
+	invalidG1 := testInvalidBLSG1Bytes(t)
+	invalidG2 := testInvalidBLSG2Bytes(t)
+
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "rist255_fromhash",
+			code: parityProgramCodeCell(funcsop.RIST255_FROMHASH().Serialize()),
+			stack: []any{
+				int64(1),
+				int64(2),
+			},
+		},
+		{
+			name: "rist255_pushl",
+			code: parityProgramCodeCell(funcsop.RIST255_PUSHL().Serialize()),
+		},
+		{
+			name: "rist255_validate_valid",
+			code: parityProgramCodeCell(funcsop.RIST255_VALIDATE().Serialize()),
+			stack: []any{
+				testRistrettoMulBaseInt(t, 1),
+			},
+		},
+		{
+			name: "rist255_qvalidate_invalid",
+			code: parityProgramCodeCell(funcsop.RIST255_QVALIDATE().Serialize()),
+			stack: []any{
+				invalidRist,
+			},
+		},
+		{
+			name: "rist255_add_valid",
+			code: parityProgramCodeCell(funcsop.RIST255_ADD().Serialize()),
+			stack: []any{
+				testRistrettoMulBaseInt(t, 1),
+				testRistrettoMulBaseInt(t, 2),
+			},
+		},
+		{
+			name: "rist255_qadd_invalid",
+			code: parityProgramCodeCell(funcsop.RIST255_QADD().Serialize()),
+			stack: []any{
+				testRistrettoMulBaseInt(t, 1),
+				invalidRist,
+			},
+		},
+		{
+			name: "rist255_sub_valid",
+			code: parityProgramCodeCell(funcsop.RIST255_SUB().Serialize()),
+			stack: []any{
+				testRistrettoMulBaseInt(t, 3),
+				testRistrettoMulBaseInt(t, 1),
+			},
+		},
+		{
+			name: "rist255_qsub_valid",
+			code: parityProgramCodeCell(funcsop.RIST255_QSUB().Serialize()),
+			stack: []any{
+				testRistrettoMulBaseInt(t, 3),
+				testRistrettoMulBaseInt(t, 1),
+			},
+		},
+		{
+			name: "rist255_qsub_invalid",
+			code: parityProgramCodeCell(funcsop.RIST255_QSUB().Serialize()),
+			stack: []any{
+				testRistrettoMulBaseInt(t, 3),
+				invalidRist,
+			},
+		},
+		{
+			name: "rist255_mul",
+			code: parityProgramCodeCell(funcsop.RIST255_MUL().Serialize()),
+			stack: []any{
+				testRistrettoMulBaseInt(t, 5),
+				int64(3),
+			},
+		},
+		{
+			name: "rist255_qmul_invalid",
+			code: parityProgramCodeCell(funcsop.RIST255_QMUL().Serialize()),
+			stack: []any{
+				invalidRist,
+				int64(3),
+			},
+		},
+		{
+			name: "rist255_mulbase",
+			code: parityProgramCodeCell(funcsop.RIST255_MULBASE().Serialize()),
+			stack: []any{
+				int64(11),
+			},
+		},
+		{
+			name: "rist255_qmulbase",
+			code: parityProgramCodeCell(funcsop.RIST255_QMULBASE().Serialize()),
+			stack: []any{
+				int64(13),
+			},
+		},
+		{
+			name: "bls_pushr",
+			code: parityProgramCodeCell(funcsop.BLS_PUSHR().Serialize()),
+		},
+		{
+			name: "bls_verify_true",
+			code: parityProgramCodeCell(funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(sig1),
+			},
+		},
+		{
+			name: "bls_verify_invalid_pub_false",
+			code: parityProgramCodeCell(funcsop.BLS_VERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(sig1),
+			},
+		},
+		{
+			name: "bls_aggregate",
+			code: parityProgramCodeCell(funcsop.BLS_AGGREGATE().Serialize()),
+			stack: []any{
+				testSliceFromBytes(sig1),
+				testSliceFromBytes(sig2),
+				int64(2),
+			},
+		},
+		{
+			name: "bls_fastaggregateverify_true",
+			code: parityProgramCodeCell(funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(pub2),
+				int64(2),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(aggSig),
+			},
+		},
+		{
+			name: "bls_aggregateverify_distinct_msgs_true",
+			code: parityProgramCodeCell(funcsop.BLS_AGGREGATEVERIFY().Serialize()),
+			stack: []any{
+				testSliceFromBytes(pub1),
+				testSliceFromBytes(msg),
+				testSliceFromBytes(pub2),
+				testSliceFromBytes(msg2),
+				int64(2),
+				testSliceFromBytes(aggDistinctSig),
+			},
+		},
+		{
+			name: "bls_g1_zero",
+			code: parityProgramCodeCell(funcsop.BLS_G1_ZERO().Serialize()),
+		},
+		{
+			name: "bls_g1_add",
+			code: parityProgramCodeCell(funcsop.BLS_G1_ADD().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+				testSliceFromBytes(g1b),
+			},
+		},
+		{
+			name: "bls_g1_sub",
+			code: parityProgramCodeCell(funcsop.BLS_G1_SUB().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+				testSliceFromBytes(g1b),
+			},
+		},
+		{
+			name: "bls_g1_neg",
+			code: parityProgramCodeCell(funcsop.BLS_G1_NEG().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+			},
+		},
+		{
+			name: "bls_g1_mul",
+			code: parityProgramCodeCell(funcsop.BLS_G1_MUL().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+				int64(7),
+			},
+		},
+		{
+			name: "bls_g1_multiexp_two_terms",
+			code: parityProgramCodeCell(funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g1a),
+				int64(5),
+				testSliceFromBytes(g1b),
+				int64(7),
+				int64(2),
+			},
+		},
+		{
+			name: "bls_g1_ingroup_invalid_false",
+			code: parityProgramCodeCell(funcsop.BLS_G1_INGROUP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+			},
+		},
+		{
+			name: "bls_g1_iszero",
+			code: parityProgramCodeCell(funcsop.BLS_G1_ISZERO().Serialize()),
+			stack: []any{
+				testSliceFromBytes(testBLSG1ZeroBytes()),
+			},
+		},
+		{
+			name: "bls_map_to_g1",
+			code: parityProgramCodeCell(funcsop.BLS_MAP_TO_G1().Serialize()),
+			stack: []any{
+				testSliceFromBytes(fp),
+			},
+		},
+		{
+			name: "bls_g2_zero",
+			code: parityProgramCodeCell(funcsop.BLS_G2_ZERO().Serialize()),
+		},
+		{
+			name: "bls_g2_add",
+			code: parityProgramCodeCell(funcsop.BLS_G2_ADD().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+				testSliceFromBytes(g2b),
+			},
+		},
+		{
+			name: "bls_g2_sub",
+			code: parityProgramCodeCell(funcsop.BLS_G2_SUB().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+				testSliceFromBytes(g2b),
+			},
+		},
+		{
+			name: "bls_g2_neg",
+			code: parityProgramCodeCell(funcsop.BLS_G2_NEG().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+			},
+		},
+		{
+			name: "bls_g2_mul",
+			code: parityProgramCodeCell(funcsop.BLS_G2_MUL().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+				int64(7),
+			},
+		},
+		{
+			name: "bls_g2_multiexp_two_terms",
+			code: parityProgramCodeCell(funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(g2a),
+				int64(5),
+				testSliceFromBytes(g2b),
+				int64(7),
+				int64(2),
+			},
+		},
+		{
+			name: "bls_g2_ingroup_invalid_false",
+			code: parityProgramCodeCell(funcsop.BLS_G2_INGROUP().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG2),
+			},
+		},
+		{
+			name: "bls_g2_iszero",
+			code: parityProgramCodeCell(funcsop.BLS_G2_ISZERO().Serialize()),
+			stack: []any{
+				testSliceFromBytes(testBLSG2ZeroBytes()),
+			},
+		},
+		{
+			name: "bls_map_to_g2",
+			code: parityProgramCodeCell(funcsop.BLS_MAP_TO_G2().Serialize()),
+			stack: []any{
+				testSliceFromBytes(fp2),
+			},
+		},
+		{
+			name: "bls_pairing_false",
+			code: parityProgramCodeCell(funcsop.BLS_PAIRING().Serialize()),
+			stack: []any{
+				testSliceFromBytes(testBLSG1BytesForScalar(1)),
+				testSliceFromBytes(testBLSG2BytesForScalar(1)),
+				int64(1),
+			},
+		},
+		{
+			name: "bls_pairing_invalid",
+			code: parityProgramCodeCell(funcsop.BLS_PAIRING().Serialize()),
+			stack: []any{
+				testSliceFromBytes(invalidG1),
+				testSliceFromBytes(testBLSG2BytesForScalar(1)),
+				int64(1),
+			},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "circl_crypto_gap", caseNames, requiredCirclCryptoGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "circl_crypto_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+			})
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzTupleGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	two := tuple.NewTupleValue(big.NewInt(11), big.NewInt(22))
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "pushnull_isnull_true",
+			code: parityProgramCodeCell(tupleop.PUSHNULL().Serialize(), tupleop.ISNULL().Serialize()),
+		},
+		{
+			name:  "isnull_false",
+			code:  parityProgramCodeCell(tupleop.ISNULL().Serialize()),
+			stack: []any{int64(1)},
+		},
+		{
+			name:  "istuple_true",
+			code:  parityProgramCodeCell(tupleop.ISTUPLE().Serialize()),
+			stack: []any{two},
+		},
+		{
+			name:  "istuple_false",
+			code:  parityProgramCodeCell(tupleop.ISTUPLE().Serialize()),
+			stack: []any{int64(1)},
+		},
+		{
+			name:  "qtlen_tuple",
+			code:  parityProgramCodeCell(tupleop.QTLEN().Serialize()),
+			stack: []any{two},
+		},
+		{
+			name:  "qtlen_non_tuple",
+			code:  parityProgramCodeCell(tupleop.QTLEN().Serialize()),
+			stack: []any{int64(1)},
+		},
+		{
+			name:  "indexq_oob_null",
+			code:  parityProgramCodeCell(tupleop.INDEXQ(3).Serialize()),
+			stack: []any{two},
+		},
+	}
+
+	caseNames := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		caseNames = append(caseNames, tc.name)
+	}
+	requireNamedParityCases(t, "tuple_gap", caseNames, requiredTupleGapCaseNames)
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "tuple_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+			})
+		})
+	}
+
+	empty := testEmptyCell()
+	allLabels := make([]string, 0, 128)
+	for mode := 0; mode < 19; mode++ {
+		t.Run(fmt.Sprintf("extra_%02d", mode), func(t *testing.T) {
+			g := &parityProgramGenerator{
+				r:    rand.New(rand.NewSource(int64(mode))),
+				seed: append([]byte(nil), crossTestSeed...),
+				regD: [2]*cell.Cell{
+					empty,
+					empty,
+				},
+			}
+			if !g.emitTupleExtraOpMode(mode) {
+				t.Fatalf("mode %d was not emitted", mode)
+			}
+			allLabels = append(allLabels, g.trace...)
+
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(len(cases) + mode),
+				family:   "tuple_gap",
+				op:       strings.Join(g.trace, " -> "),
+				code:     parityProgramCodeFromBuilders(t, g.ops...),
+				gasLimit: differentialFuzzGasLimit,
+				c7:       prepareCrossTestC7(nil, empty),
+			})
+		})
+	}
+	requireParityTraceLabels(t, "tuple_gap", allLabels, requiredTupleGapTraceLabels)
+}
+
+func TestTVMDifferentialFuzzTupleOpcodeSpaceGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := buildTupleOpsOpcodeSpaceCases()
+	requireTupleParityCases(t, "tuple_opcode_space_gap", cases, expectedTupleOpcodeSpaceGapCases, requiredTupleOpcodeSpaceGapCaseNames)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runTupleOpParityCase(t, tc)
+		})
+	}
+}
+
+func TestTVMDifferentialFuzzTupleDynamicErrorGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := buildTupleOpsDynamicAndErrorCases()
+	requireTupleParityCases(t, "tuple_dynamic_error_gap", cases, expectedTupleDynamicErrorGapCases, requiredTupleDynamicErrorGapCaseNames)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runTupleOpParityCase(t, tc)
+		})
+	}
+}
+
+func requireTupleParityCases(t *testing.T, family string, cases []tupleOpParityCase, expected int, required []string) {
+	t.Helper()
+
+	if len(cases) != expected {
+		t.Fatalf("%s parity case count mismatch: got %d want %d", family, len(cases), expected)
+	}
+
+	names := make([]string, 0, len(cases))
+	for _, tc := range cases {
+		names = append(names, tc.name)
+	}
+	requireNamedParityCases(t, family, names, required)
+}
+
+func TestTVMDifferentialFuzzDebugGapOps(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	debugSlice := cell.BeginCell().MustStoreSlice([]byte("debug"), 40).ToSlice()
+	refCell := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	cases := []struct {
+		name  string
+		code  *cell.Cell
+		stack []any
+	}{
+		{
+			name: "dumpstk_keeps_mixed_stack",
+			code: parityProgramCodeCell(stackop.DUMPSTK().Serialize()),
+			stack: []any{
+				int64(11),
+				debugSlice.Copy(),
+				refCell,
+			},
+		},
+		{
+			name: "dump_top_keeps_stack",
+			code: parityProgramCodeCell(stackop.DUMP(0).Serialize()),
+			stack: []any{
+				int64(22),
+				refCell,
+			},
+		},
+		{
+			name: "dump_absent_keeps_stack",
+			code: parityProgramCodeCell(stackop.DUMP(5).Serialize()),
+			stack: []any{
+				int64(33),
+			},
+		},
+		{
+			name: "debug_keeps_stack",
+			code: parityProgramCodeCell(stackop.DEBUG(42).Serialize()),
+			stack: []any{
+				int64(44),
+				debugSlice.Copy(),
+			},
+		},
+		{
+			name: "strdump_byte_slice_keeps_stack",
+			code: parityProgramCodeCell(stackop.STRDUMP().Serialize()),
+			stack: []any{
+				debugSlice.Copy(),
+			},
+		},
+		{
+			name: "strdump_non_slice_keeps_stack",
+			code: parityProgramCodeCell(stackop.STRDUMP().Serialize()),
+			stack: []any{
+				int64(55),
+			},
+		},
+		{
+			name: "debugstr_keeps_stack",
+			code: parityProgramCodeCell(stackop.DEBUGSTR([]byte("hello")).Serialize()),
+			stack: []any{
+				refCell,
+			},
+		},
+		{
+			name: "debugstr_truncates_long_literal",
+			code: parityProgramCodeCell(stackop.DEBUGSTR([]byte("0123456789abcdef-extra")).Serialize()),
+		},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDifferentialFuzzCase(t, differentialFuzzCase{
+				seed:     uint64(i),
+				family:   "debug_gap",
+				op:       tc.name,
+				code:     tc.code,
+				stack:    tc.stack,
+				gasLimit: differentialFuzzGasLimit,
+			})
 		})
 	}
 }
@@ -126,11 +9787,16 @@ func runDifferentialFuzzCase(t *testing.T, tc differentialFuzzCase) {
 		c7 = tuple.Tuple{}
 	}
 
-	goRes, err := runGoCrossCodeWithGas(code, testEmptyCell(), c7, goStack, gasLimit)
+	goLibs := tc.goLibs
+	if len(goLibs) == 0 && tc.refLibs != nil {
+		goLibs = []*cell.Cell{tc.refLibs}
+	}
+
+	goRes, err := runGoCrossCodeWithVersionGasAndLibs(code, testEmptyCell(), c7, goLibs, goStack, referenceRawRunGlobalVersion, gasLimit)
 	if err != nil {
 		t.Fatalf("seed=%d family=%s op=%s: go tvm execution failed: %v", tc.seed, tc.family, tc.op, err)
 	}
-	refRes, err := runReferenceCrossCodeWithGas(code, testEmptyCell(), c7, refStack, gasLimit)
+	refRes, err := runReferenceCrossCodeWithLibsAndGas(code, testEmptyCell(), c7, tc.refLibs, refStack, gasLimit)
 	if err != nil {
 		t.Fatalf("seed=%d family=%s op=%s: reference tvm execution failed: %v", tc.seed, tc.family, tc.op, err)
 	}
@@ -363,13 +10029,18 @@ type parityProgramStackValue struct {
 }
 
 type parityProgramGenerator struct {
-	r       *rand.Rand
-	stack   []parityProgramStackValue
-	initial []parityProgramStackValue
-	ops     []*cell.Builder
-	trace   []string
-	seed    []byte
-	regD    [2]*cell.Cell
+	r             *rand.Rand
+	stack         []parityProgramStackValue
+	initial       []parityProgramStackValue
+	ops           []*cell.Builder
+	trace         []string
+	seed          []byte
+	regD          [2]*cell.Cell
+	libTarget     *cell.Cell
+	libRef        *cell.Cell
+	missingLibRef *cell.Cell
+	refLibs       *cell.Cell
+	c7            tuple.Tuple
 }
 
 func generateProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint64) differentialFuzzCase {
@@ -380,15 +10051,7 @@ func generateProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint64) differenti
 		steps = defaultParityProgramOps
 	}
 
-	empty := testEmptyCell()
-	g := &parityProgramGenerator{
-		r:    r,
-		seed: append([]byte(nil), crossTestSeed...),
-		regD: [2]*cell.Cell{
-			empty,
-			empty,
-		},
-	}
+	g := newParityProgramGenerator(t, r)
 	g.seedInitialStack()
 	for i := 0; i < steps; i++ {
 		if !g.emitRandomOp() {
@@ -400,13 +10063,49 @@ func generateProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint64) differenti
 	}
 
 	return differentialFuzzCase{
-		seed:   seed,
-		family: "program",
-		op:     strings.Join(g.trace, " -> "),
-		code:   parityProgramCodeFromBuilders(t, g.ops...),
-		stack:  parityProgramHostStack(g.initial),
-		c7:     prepareCrossTestC7(nil, testEmptyCell()),
+		seed:    seed,
+		family:  "program",
+		op:      strings.Join(g.trace, " -> "),
+		code:    parityProgramCodeFromBuilders(t, g.ops...),
+		stack:   parityProgramHostStack(g.initial),
+		c7:      g.c7,
+		refLibs: g.refLibs,
 	}
+}
+
+func newParityProgramGenerator(t *testing.T, r *rand.Rand) *parityProgramGenerator {
+	t.Helper()
+
+	empty := testEmptyCell()
+	libTarget := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	missingTarget := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	return &parityProgramGenerator{
+		r:             r,
+		seed:          append([]byte(nil), tonopsTestSeed...),
+		libTarget:     libTarget,
+		libRef:        mustCrossLibraryCellForHash(t, libTarget.Hash()),
+		missingLibRef: mustCrossLibraryCellForHash(t, missingTarget.Hash()),
+		refLibs:       mustCrossLibraryCollection(t, libTarget),
+		c7:            parityProgramRichC7(t),
+		regD: [2]*cell.Cell{
+			empty,
+			empty,
+		},
+	}
+}
+
+func parityProgramRichC7(t *testing.T) tuple.Tuple {
+	t.Helper()
+
+	return makeTonopsTestC7(t, tonopsTestC7Config{
+		UnpackedConfig: parityProgramTonFuncUnpackedConfig(t),
+		ExtraParams: map[int]any{
+			13: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
+			15: int64(444),
+			16: int64(555),
+			17: makeInMsgParamsTuple(),
+		},
+	})
 }
 
 func parityProgramCodeFromBuilders(t *testing.T, builders ...*cell.Builder) *cell.Cell {
@@ -524,6 +10223,10 @@ func (g *parityProgramGenerator) emitRandomOp() bool {
 			if g.emitRuntimeControlOp() {
 				return true
 			}
+		case 25:
+			if g.emitRunVMOp() {
+				return true
+			}
 		default:
 			if g.emitTupleOp() {
 				return true
@@ -534,7 +10237,7 @@ func (g *parityProgramGenerator) emitRandomOp() bool {
 }
 
 func (g *parityProgramGenerator) emitCellSliceOp() bool {
-	switch g.r.Intn(24) {
+	switch g.r.Intn(25) {
 	case 0:
 		g.emit("NEWC", cellsliceop.NEWC().Serialize())
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: cell.BeginCell()})
@@ -600,8 +10303,51 @@ func (g *parityProgramGenerator) emitCellSliceOp() bool {
 		return g.emitBuilderMetaOp("BDEPTH", cellsliceop.BDEPTH().Serialize(), func(b *cell.Builder) int64 {
 			return int64(b.Depth())
 		})
+	case 16:
+		return g.emitLibraryResolutionOp(g.r.Intn(6))
 	default:
 		return g.emitCellSliceMetaOp()
+	}
+	return true
+}
+
+func (g *parityProgramGenerator) emitLibraryResolutionOp(mode int) bool {
+	if g.libTarget == nil || g.libRef == nil || g.missingLibRef == nil {
+		return false
+	}
+
+	base := len(g.stack)
+	switch mode {
+	case 0:
+		g.emitPushCell("library_ref_ctos", g.libRef)
+		g.emit("CTOS(library)", cellsliceop.CTOS().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: g.libTarget.MustBeginParse()})
+	case 1:
+		g.emitPushCell("library_ref_xload", g.libRef)
+		g.emit("XLOAD(library)", cellsliceop.XLOAD().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: g.libTarget})
+	case 2:
+		g.emitPushCell("library_ref_xloadq", g.libRef)
+		g.emit("XLOADQ(library)", cellsliceop.XLOADQ().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: g.libTarget}, parityProgramBoolValue(true))
+	case 3:
+		g.emitPushCell("library_ref_xctos", g.libRef)
+		g.emit("XCTOS(library)", cellsliceop.XCTOS().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: g.libTarget.MustBeginParse()}, parityProgramBoolValue(false))
+	case 4:
+		g.emitPushCell("library_ref_missing_xloadq", g.missingLibRef)
+		g.emit("XLOADQ(missing)", cellsliceop.XLOADQ().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramBoolValue(false))
+	default:
+		g.emitPushCell("xloadq_ordinary", g.libTarget)
+		g.emit("XLOADQ(ordinary)", cellsliceop.XLOADQ().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: g.libTarget}, parityProgramBoolValue(true))
 	}
 	return true
 }
@@ -719,16 +10465,16 @@ func (g *parityProgramGenerator) emitCellSliceMetaOp() bool {
 		case 0:
 			return g.emitCellSlicePredicateOp(g.r.Intn(18))
 		case 1:
-			return g.emitCellSliceTransformOp(g.r.Intn(31))
+			return g.emitCellSliceTransformOp(g.r.Intn(32))
 		case 2:
-			return g.emitCellSliceLoadFamilyOp(g.r.Intn(28))
+			return g.emitCellSliceLoadFamilyOp(g.r.Intn(30))
 		case 3:
-			return g.emitCellSliceLittleEndianOp(g.r.Intn(16))
+			return g.emitCellSliceLittleEndianOp(g.r.Intn(20))
 		default:
 			if g.r.Intn(3) == 0 {
 				return g.emitCellSlicePrefixGramsOp(g.r.Intn(8))
 			}
-			return g.emitCellSliceBuilderAdvancedOp(g.r.Intn(34))
+			return g.emitCellSliceBuilderAdvancedOp(g.r.Intn(37))
 		}
 	}
 	return true
@@ -1103,6 +10849,15 @@ func (g *parityProgramGenerator) emitCellSliceTransformOp(mode int) bool {
 			parityProgramIntValue(big.NewInt(int64(count))),
 			parityProgramStackValue{kind: parityProgramSlice, slice: want},
 		)
+	case 30:
+		cl := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+		g.emitPushCell("xctos_ordinary", cl)
+		g.emit("XCTOS(ordinary)", cellsliceop.XCTOS().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack,
+			parityProgramStackValue{kind: parityProgramSlice, slice: cl.MustBeginParse()},
+			parityProgramBoolValue(false),
+		)
 	default:
 		src := parityProgramBitsSlice(0b010111, 6)
 		count := src.CountLeading(true)
@@ -1343,11 +11098,23 @@ func (g *parityProgramGenerator) emitCellSliceLoadFamilyOp(mode int) bool {
 		g.emit("PLDSLICEFIXQ(fail)", cellsliceop.PLDSLICEFIX(7, true, false).Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramBoolValue(false))
-	default:
+	case 27:
 		g.emitPushSlice("ldslicefixq_fail_src", shortSrc)
 		g.emit("LDSLICEFIXQ(fail)", cellsliceop.LDSLICEFIX(7, true, false).Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: shortSrc.Copy()}, parityProgramBoolValue(false))
+	case 28:
+		val, rest := loadInt(intSrc, 9, false, false)
+		g.emitPushSlice("ldiq_src", intSrc)
+		g.emit("LDIQ", cellsliceop.LDIFIX(9, true, false, false).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(val), parityProgramStackValue{kind: parityProgramSlice, slice: rest}, parityProgramBoolValue(true))
+	default:
+		val, _ := loadInt(intSrc, 9, false, true)
+		g.emitPushSlice("pldiq_src", intSrc)
+		g.emit("PLDIQ", cellsliceop.PLDIFIX(9, true, false, false).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(val), parityProgramBoolValue(true))
 	}
 	return true
 }
@@ -1454,6 +11221,30 @@ func (g *parityProgramGenerator) emitCellSliceLittleEndianOp(mode int) bool {
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramBoolValue(false))
 	case 12:
+		val, rest := load(src4, 4, true, false)
+		g.emitPushSlice("ldule4q_src", src4)
+		g.emit("LDULE4Q", cellsliceop.LDULE4Q().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(val), parityProgramStackValue{kind: parityProgramSlice, slice: rest}, parityProgramBoolValue(true))
+	case 13:
+		val, rest := load(src8, 8, false, false)
+		g.emitPushSlice("ldile8q_src", src8)
+		g.emit("LDILE8Q", cellsliceop.LDILE8Q().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(val), parityProgramStackValue{kind: parityProgramSlice, slice: rest}, parityProgramBoolValue(true))
+	case 14:
+		val, _ := load(src4, 4, true, true)
+		g.emitPushSlice("pldule4q_src", src4)
+		g.emit("PLDULE4Q", cellsliceop.PLDULE4Q().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(val), parityProgramBoolValue(true))
+	case 15:
+		val, _ := load(src8, 8, false, true)
+		g.emitPushSlice("pldile8q_src", src8)
+		g.emit("PLDILE8Q", cellsliceop.PLDILE8Q().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(val), parityProgramBoolValue(true))
+	case 16:
 		v := big.NewInt(-2)
 		want := store(v, 4, false)
 		g.emitPushInt("stile4_val", v)
@@ -1461,7 +11252,7 @@ func (g *parityProgramGenerator) emitCellSliceLittleEndianOp(mode int) bool {
 		g.emit("STILE4", cellsliceop.STILE4().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: want})
-	case 13:
+	case 17:
 		v := big.NewInt(0x01020304)
 		want := store(v, 4, true)
 		g.emitPushInt("stule4_val", v)
@@ -1469,7 +11260,7 @@ func (g *parityProgramGenerator) emitCellSliceLittleEndianOp(mode int) bool {
 		g.emit("STULE4", cellsliceop.STULE4().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: want})
-	case 14:
+	case 18:
 		v := big.NewInt(-2)
 		want := store(v, 8, false)
 		g.emitPushInt("stile8_val", v)
@@ -1787,13 +11578,39 @@ func (g *parityProgramGenerator) emitCellSliceBuilderAdvancedOp(mode int) bool {
 		g.emit("STSAME", cellsliceop.STSAME().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: want})
-	default:
+	case 33:
+		g.emitPushBuilder("bchkbitrefs_src", dstBuilder)
+		g.emitPushInt("bchkbitrefs_bits", big.NewInt(8))
+		g.emitPushInt("bchkbitrefs_refs", big.NewInt(1))
+		g.emit("BCHKBITREFS", cellsliceop.BCHKBITREFS().Serialize())
+		g.stack = g.stack[:base]
+	case 34:
+		want := storeBuilder(dstBuilder, srcBuilder)
+		g.emitPushBuilder("stb_src", srcBuilder)
+		g.emitPushBuilder("stb_dst", dstBuilder)
+		g.emit("STB", cellsliceop.STB().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: want})
+	case 35:
 		g.emitPushBuilder("bchkbitrefsq_src", dstBuilder)
 		g.emitPushInt("bchkbitrefsq_bits", big.NewInt(8))
 		g.emitPushInt("bchkbitrefsq_refs", big.NewInt(1))
 		g.emit("BCHKBITREFSQ", cellsliceop.BCHKBITREFSQ().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramBoolValue(true))
+	default:
+		value := big.NewInt(-2)
+		bits := uint(4)
+		want := cell.BeginCell()
+		if err := want.StoreBigInt(value, bits); err != nil {
+			panic(err)
+		}
+		g.emitPushInt("stix_value", value)
+		g.emitPushBuilder("stix_builder", cell.BeginCell())
+		g.emitPushInt("stix_bits", big.NewInt(int64(bits)))
+		g.emit("STIX", parityProgramRawOp(0xCF00, 16))
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: want})
 	}
 	return true
 }
@@ -1873,7 +11690,7 @@ func (g *parityProgramGenerator) emitCellSlicePrefixGramsOp(mode int) bool {
 }
 
 func (g *parityProgramGenerator) emitDictOp() bool {
-	switch g.r.Intn(48) {
+	switch g.r.Intn(57) {
 	case 0:
 		return g.emitLoadDictOp(false)
 	case 1:
@@ -1885,35 +11702,35 @@ func (g *parityProgramGenerator) emitDictOp() bool {
 	case 4:
 		return g.emitDictGetOp(false, true, false)
 	case 5:
-		return g.emitDictGetOp(false, false, true)
+		return g.emitDictGetOp(false, true, true)
 	case 6:
-		return g.emitDictSetOp(false, false)
+		return g.emitDictSetOp(false, 0)
 	case 7:
-		return g.emitDictSetOp(false, true)
+		return g.emitDictSetOp(false, 2)
 	case 8:
-		return g.emitDictDeleteOp(false)
+		return g.emitDictDeleteOp(0)
 	case 9:
-		return g.emitDictMinMaxOp(false)
+		return g.emitDictMinMaxOp(false, false, 0)
 	case 10:
-		return g.emitDictMinMaxOp(true)
+		return g.emitDictMinMaxOp(true, false, 0)
 	case 11:
 		return g.emitPrefixDictGetQOp()
 	case 12:
-		return g.emitDictGetOptRefOp(false)
+		return g.emitDictGetOptRefOp(0)
 	case 13:
-		return g.emitDictGetOptRefOp(true)
+		return g.emitDictGetOptRefOp(2)
 	case 14:
-		return g.emitDictSetGetOp(false)
+		return g.emitDictSetGetOp(false, 0)
 	case 15:
-		return g.emitDictSetGetOp(true)
+		return g.emitDictSetGetOp(true, 0)
 	case 16:
-		return g.emitDictReplaceAddOp(false)
+		return g.emitDictReplaceAddOp(false, false, 0)
 	case 17:
-		return g.emitDictReplaceAddOp(true)
+		return g.emitDictReplaceAddOp(true, false, 0)
 	case 18:
-		return g.emitDictRemMinMaxOp(false)
+		return g.emitDictRemMinMaxOp(false, false, 0)
 	case 19:
-		return g.emitDictRemMinMaxOp(true)
+		return g.emitDictRemMinMaxOp(true, false, 0)
 	case 20:
 		return g.emitDictNearOp()
 	case 21:
@@ -1954,27 +11771,158 @@ func (g *parityProgramGenerator) emitDictOp() bool {
 		return g.emitDictSetGetOptRefOp(false, 2)
 	case 39:
 		return g.emitDictSetGetOptRefOp(true, 2)
-	case 40:
-		return g.emitDictNearExtraOp(0)
-	case 41:
-		return g.emitDictNearExtraOp(1)
-	case 42:
-		return g.emitDictNearExtraOp(2)
-	case 43:
-		return g.emitDictNearExtraOp(3)
+	case 40, 41, 42, 43:
+		return g.emitDictNearExtraOp(g.r.Intn(12))
 	case 44:
 		return g.emitSubdictOp(false, 0)
 	case 45:
 		return g.emitSubdictOp(true, 0)
 	case 46:
 		return g.emitSubdictOp(false, 2)
-	default:
+	case 47:
 		return g.emitPrefixDictSetDelOp(g.r.Intn(2) == 0)
+	case 48:
+		return g.emitSubdictOp(true, 2)
+	default:
+		return g.emitDictGapOp(g.r.Intn(63))
+	}
+}
+
+func (g *parityProgramGenerator) emitDictGapOp(mode int) bool {
+	switch mode {
+	case 0:
+		return g.emitDictGetOp(true, true, false)
+	case 1:
+		return g.emitDictGetOp(true, true, true)
+	case 2:
+		return g.emitDictSetOp(false, 1)
+	case 3:
+		return g.emitDictSetOp(true, 0)
+	case 4:
+		return g.emitDictSetOp(true, 1)
+	case 5:
+		return g.emitDictSetOp(true, 2)
+	case 6:
+		return g.emitDictSetGetOp(false, 1)
+	case 7:
+		return g.emitDictSetGetOp(false, 2)
+	case 8:
+		return g.emitDictSetGetOp(true, 1)
+	case 9:
+		return g.emitDictSetGetOp(true, 2)
+	case 10:
+		return g.emitDictReplaceAddOp(false, false, 1)
+	case 11:
+		return g.emitDictReplaceAddOp(false, false, 2)
+	case 12:
+		return g.emitDictReplaceAddOp(false, true, 0)
+	case 13:
+		return g.emitDictReplaceAddOp(false, true, 1)
+	case 14:
+		return g.emitDictReplaceAddOp(false, true, 2)
+	case 15:
+		return g.emitDictReplaceAddOp(true, false, 1)
+	case 16:
+		return g.emitDictReplaceAddOp(true, false, 2)
+	case 17:
+		return g.emitDictReplaceAddOp(true, true, 0)
+	case 18:
+		return g.emitDictReplaceAddOp(true, true, 1)
+	case 19:
+		return g.emitDictReplaceAddOp(true, true, 2)
+	case 20:
+		return g.emitDictDeleteOp(1)
+	case 21:
+		return g.emitDictGetOptRefOp(1)
+	case 22:
+		return g.emitDictMinMaxOp(false, true, 0)
+	case 23:
+		return g.emitDictMinMaxOp(true, true, 0)
+	case 24:
+		return g.emitDictMinMaxOp(false, false, 1)
+	case 25:
+		return g.emitDictMinMaxOp(true, false, 2)
+	case 26:
+		return g.emitDictMinMaxOp(false, true, 1)
+	case 27:
+		return g.emitDictMinMaxOp(true, true, 2)
+	case 28:
+		return g.emitDictRemMinMaxOp(false, true, 0)
+	case 29:
+		return g.emitDictRemMinMaxOp(true, true, 0)
+	case 30:
+		return g.emitDictRemMinMaxOp(false, false, 1)
+	case 31:
+		return g.emitDictRemMinMaxOp(true, true, 2)
+	case 32:
+		return g.emitDictBuilderSetOp(cell.DictSetModeAdd, 0)
+	case 33:
+		return g.emitDictBuilderSetGetOp(cell.DictSetModeAdd, 0)
+	case 34:
+		return g.emitDictBuilderSetOp(cell.DictSetModeReplace, 0)
+	case 35:
+		return g.emitDictBuilderSetOp(cell.DictSetModeReplace, 1)
+	case 36:
+		return g.emitDictBuilderSetOp(cell.DictSetModeSet, 1)
+	case 37:
+		return g.emitDictBuilderSetGetOp(cell.DictSetModeReplace, 0)
+	case 38:
+		return g.emitDictBuilderSetGetOp(cell.DictSetModeReplace, 1)
+	case 39:
+		return g.emitDictBuilderSetGetOp(cell.DictSetModeSet, 1)
+	case 40:
+		return g.emitDictBuilderSetGetOp(cell.DictSetModeSet, 2)
+	case 41:
+		return g.emitDictReplaceAddGetOp(true, true, 0)
+	case 42:
+		return g.emitDictReplaceAddGetOp(true, false, 1)
+	case 43:
+		return g.emitDictReplaceAddGetOp(true, true, 1)
+	case 44:
+		return g.emitDictReplaceAddGetOp(true, false, 2)
+	case 45:
+		return g.emitDictReplaceAddGetOp(false, false, 0)
+	case 46:
+		return g.emitDictReplaceAddGetOp(false, true, 0)
+	case 47:
+		return g.emitDictReplaceAddGetOp(false, false, 1)
+	case 48:
+		return g.emitDictReplaceAddGetOp(false, true, 1)
+	case 49:
+		return g.emitDictReplaceAddGetOp(false, true, 2)
+	case 50:
+		return g.emitDictDeleteGetOp(true, 0)
+	case 51:
+		return g.emitDictDeleteGetOp(false, 1)
+	case 52:
+		return g.emitDictDeleteGetOp(true, 1)
+	case 53:
+		return g.emitDictSetGetOptRefOp(false, 0)
+	case 54:
+		return g.emitDictSetGetOptRefOp(false, 1)
+	case 55:
+		return g.emitDictMinMaxOp(true, false, 1)
+	case 56:
+		return g.emitDictMinMaxOp(true, true, 1)
+	case 57:
+		return g.emitDictRemMinMaxOp(true, false, 1)
+	case 58:
+		return g.emitDictRemMinMaxOp(true, false, 2)
+	case 59:
+		return g.emitDictRemMinMaxOp(false, true, 1)
+	case 60:
+		return g.emitDictRemMinMaxOp(true, true, 1)
+	case 61:
+		return g.emitSubdictOp(false, 1)
+	case 62:
+		return g.emitSubdictOp(true, 1)
+	default:
+		return false
 	}
 }
 
 func (g *parityProgramGenerator) emitControlOp() bool {
-	switch g.r.Intn(10) {
+	switch g.r.Intn(13) {
 	case 0:
 		return g.emitCondSelectOp(false)
 	case 1:
@@ -1996,8 +11944,109 @@ func (g *parityProgramGenerator) emitControlOp() bool {
 		g.emitPushInt("throwifnot_true", big.NewInt(-1))
 		g.emit("THROWIFNOT(skip)", parityProgramRawOp(0xF280|42, 16))
 		g.stack = g.stack[:base]
+	case 6, 7:
+		return g.emitExecBranchLoopOp(g.r.Intn(11))
+	case 8:
+		g.emit("INVERT", execop.INVERT().Serialize())
 	default:
 		return g.emitContinuationControlOp(g.r.Intn(12))
+	}
+	return true
+}
+
+func (g *parityProgramGenerator) emitExecBranchLoopOp(mode int) bool {
+	base := len(g.stack)
+	intBody := func(v int64) *cell.Cell {
+		return parityProgramCodeCell(stackop.PUSHINT(big.NewInt(v)).Serialize())
+	}
+	boolBody := func(v int64) *cell.Cell {
+		return parityProgramCodeCell(
+			stackop.PUSHINT(big.NewInt(v)).Serialize(),
+			stackop.PUSHINT(big.NewInt(-1)).Serialize(),
+		)
+	}
+	whileCondBody := parityProgramCodeCell(
+		stackop.DUP().Serialize(),
+		stackop.PUSHINT(big.NewInt(0)).Serialize(),
+		mathop.GREATER().Serialize(),
+	)
+	whileBody := parityProgramCodeCell(mathop.DEC().Serialize())
+	throwHandlerBody := parityProgramCodeCell(
+		stackop.DROP().Serialize(),
+		stackop.DROP().Serialize(),
+		stackop.PUSHINT(big.NewInt(128)).Serialize(),
+	)
+	pushResult := func(v int64) {
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(v)))
+	}
+	clearStack := func() {
+		g.stack = g.stack[:base]
+	}
+
+	switch mode {
+	case 0:
+		g.emitPushInt("if_true_cond", big.NewInt(-1))
+		g.emit("PUSHCONT(if_true_120)", stackop.PUSHCONT(intBody(120)).Serialize())
+		g.emit("IF(true)", execop.IF().Serialize())
+		pushResult(120)
+	case 1:
+		g.emitPushInt("if_false_cond", big.NewInt(0))
+		g.emit("PUSHCONT(if_false_120)", stackop.PUSHCONT(intBody(120)).Serialize())
+		g.emit("IF(false)", execop.IF().Serialize())
+		clearStack()
+	case 2:
+		g.emitPushInt("ifnot_true_cond", big.NewInt(0))
+		g.emit("PUSHCONT(ifnot_true_121)", stackop.PUSHCONT(intBody(121)).Serialize())
+		g.emit("IFNOT(true)", execop.IFNOT().Serialize())
+		pushResult(121)
+	case 3:
+		g.emitPushInt("ifnot_false_cond", big.NewInt(-1))
+		g.emit("PUSHCONT(ifnot_false_121)", stackop.PUSHCONT(intBody(121)).Serialize())
+		g.emit("IFNOT(false)", execop.IFNOT().Serialize())
+		clearStack()
+	case 4:
+		g.emitPushInt("ifelse_true_cond", big.NewInt(-1))
+		g.emit("PUSHCONT(ifelse_true_122)", stackop.PUSHCONT(intBody(122)).Serialize())
+		g.emit("PUSHCONT(ifelse_false_123)", stackop.PUSHCONT(intBody(123)).Serialize())
+		g.emit("IFELSE(true)", execop.IFELSE().Serialize())
+		pushResult(122)
+	case 5:
+		g.emitPushInt("ifelse_false_cond", big.NewInt(0))
+		g.emit("PUSHCONT(ifelse_true_122)", stackop.PUSHCONT(intBody(122)).Serialize())
+		g.emit("PUSHCONT(ifelse_false_123)", stackop.PUSHCONT(intBody(123)).Serialize())
+		g.emit("IFELSE(false)", execop.IFELSE().Serialize())
+		pushResult(123)
+	case 6:
+		g.emitPushInt("repeat_one_count", big.NewInt(1))
+		g.emit("PUSHCONT(repeat_one_124)", stackop.PUSHCONT(intBody(124)).Serialize())
+		g.emit("REPEAT(one)", execop.REPEAT().Serialize())
+		pushResult(124)
+	case 7:
+		g.emit("PUSHCONT(until_one_125)", stackop.PUSHCONT(boolBody(125)).Serialize())
+		g.emit("UNTIL(one)", execop.UNTIL().Serialize())
+		pushResult(125)
+	case 8:
+		g.emitPushInt("while_one_counter", big.NewInt(1))
+		g.emit("PUSHCONT(while_one_cond)", stackop.PUSHCONT(whileCondBody).Serialize())
+		g.emit("PUSHCONT(while_one_body)", stackop.PUSHCONT(whileBody).Serialize())
+		g.emit("WHILE(one)", execop.WHILE().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(0)))
+	case 9:
+		g.emit("PUSHCONT(try_throw)", stackop.PUSHCONT(parityProgramCodeCell(parityProgramRawOp(0xF22A, 16))).Serialize())
+		g.emit("PUSHCONT(try_handler)", stackop.PUSHCONT(throwHandlerBody).Serialize())
+		g.emit("TRY(caught)", execop.TRY().Serialize())
+		pushResult(128)
+	default:
+		g.emitPushInt("tryargs_param", big.NewInt(41))
+		g.emit("PUSHCONT(tryargs_inc)", stackop.PUSHCONT(parityProgramCodeCell(
+			mathop.INC().Serialize(),
+			execop.RETARGS(1).Serialize(),
+		)).Serialize())
+		g.emit("PUSHCONT(tryargs_handler)", stackop.PUSHCONT(throwHandlerBody).Serialize())
+		g.emit("TRYARGS(1,1)", execop.TRYARGS(1, 1).Serialize())
+		pushResult(42)
 	}
 	return true
 }
@@ -2074,8 +12123,89 @@ func (g *parityProgramGenerator) emitContinuationControlOp(mode int) bool {
 	return true
 }
 
+func (g *parityProgramGenerator) emitRunVMOp() bool {
+	base := len(g.stack)
+	pushChild := func(name string, builders ...*cell.Builder) {
+		g.emitPushInt(name+"_stack_size", big.NewInt(0))
+		g.emitPushSlice(name+"_code", parityProgramCodeCell(builders...).MustBeginParse())
+	}
+
+	switch g.r.Intn(7) {
+	case 0:
+		pushChild("runvm_basic", stackop.PUSHINT(big.NewInt(90)).Serialize())
+		g.emit("RUNVM(0)", execop.RUNVM(0).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(90)), parityProgramIntValue(big.NewInt(0)))
+	case 1:
+		pushChild("runvmx_basic", stackop.PUSHINT(big.NewInt(91)).Serialize())
+		g.emitPushInt("runvmx_mode", big.NewInt(0))
+		g.emit("RUNVMX(0)", execop.RUNVMX().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(91)), parityProgramIntValue(big.NewInt(0)))
+	case 2:
+		pushChild("runvm_same_c3_push_zero", stackop.DROP().Serialize())
+		g.emit("RUNVM(3)", execop.RUNVM(3).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(0)))
+	case 3:
+		pushChild(
+			"runvm_return_one",
+			stackop.PUSHINT(big.NewInt(92)).Serialize(),
+			stackop.PUSHINT(big.NewInt(93)).Serialize(),
+		)
+		g.emitPushInt("runvm_return_one_count", big.NewInt(1))
+		g.emit("RUNVM(256)", execop.RUNVM(256).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(93)), parityProgramIntValue(big.NewInt(0)))
+	case 4:
+		dataCell := cell.BeginCell().MustStoreUInt(0xCA, 8).EndCell()
+		actionsCell := cell.BeginCell().MustStoreUInt(0xCB, 8).EndCell()
+		pushChild(
+			"runvm_data_actions",
+			stackop.PUSHREF(dataCell).Serialize(),
+			execop.POPCTR(4).Serialize(),
+			stackop.PUSHREF(actionsCell).Serialize(),
+			execop.POPCTR(5).Serialize(),
+			funcsop.COMMIT().Serialize(),
+		)
+		g.emitPushCell("runvm_initial_data", cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell())
+		g.emit("RUNVM(36)", execop.RUNVM(4|32).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack,
+			parityProgramIntValue(big.NewInt(0)),
+			parityProgramStackValue{kind: parityProgramCell, cell: dataCell},
+			parityProgramStackValue{kind: parityProgramCell, cell: actionsCell},
+		)
+	case 5:
+		childC7 := parityProgramStackValue{
+			kind: parityProgramTuple,
+			tuple: []parityProgramStackValue{
+				{
+					kind: parityProgramTuple,
+					tuple: []parityProgramStackValue{
+						parityProgramIntValue(big.NewInt(11)),
+						parityProgramIntValue(big.NewInt(22)),
+					},
+				},
+			},
+		}
+		pushChild("runvm_c7_return_one", funcsop.GETPARAM(1).Serialize())
+		g.emitPushInt("runvm_c7_return_one_count", big.NewInt(1))
+		g.emitPushTuple("runvm_c7_return_one_c7", childC7)
+		g.emit("RUNVM(272)", execop.RUNVM(16|256).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(22)), parityProgramIntValue(big.NewInt(0)))
+	default:
+		pushChild("runvm_isolated", stackop.PUSHINT(big.NewInt(94)).Serialize())
+		g.emit("RUNVM(128)", execop.RUNVM(128).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(94)), parityProgramIntValue(big.NewInt(0)))
+	}
+	return true
+}
+
 func (g *parityProgramGenerator) emitFuncParamOp() bool {
-	switch g.r.Intn(28) {
+	switch g.r.Intn(31) {
 	case 0:
 		g.emit("NOW", funcsop.NOW().Serialize())
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(crossTestTime.Unix())))
@@ -2084,10 +12214,10 @@ func (g *parityProgramGenerator) emitFuncParamOp() bool {
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(crossTestTime.Unix())))
 	case 2:
 		g.emit("BLOCKLT", funcsop.BLOCKLT().Serialize())
-		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(0)))
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(tonopsTestBlockLT)))
 	case 3:
 		g.emit("LTIME", funcsop.LTIME().Serialize())
-		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(0)))
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(tonopsTestLogicalTime)))
 	case 4:
 		g.emit("RANDSEED", funcsop.RANDSEED().Serialize())
 		g.stack = append(g.stack, parityProgramIntValue(new(big.Int).SetBytes(g.seed)))
@@ -2124,23 +12254,141 @@ func (g *parityProgramGenerator) emitFuncParamOp() bool {
 	case 13:
 		return g.emitPrngOp(3)
 	case 14:
-		return g.emitDataSizeProgramOp(false, false)
+		return g.emitPrngOp(4)
 	case 15:
-		return g.emitDataSizeProgramOp(false, true)
+		return g.emitPrngOp(5)
 	case 16:
-		return g.emitDataSizeProgramOp(true, false)
+		return g.emitPrngOp(6)
 	case 17:
-		return g.emitDataSizeProgramOp(true, true)
+		return g.emitDataSizeProgramOp(false, false)
 	case 18:
-		return g.emitRuntimeControlOp()
+		return g.emitDataSizeProgramOp(false, true)
 	case 19:
-		return g.emitGlobalVarOp(false)
+		return g.emitDataSizeProgramOp(true, false)
 	case 20:
-		return g.emitGlobalVarOp(true)
+		return g.emitDataSizeProgramOp(true, true)
 	case 21:
+		return g.emitRuntimeControlOp()
+	case 22:
+		return g.emitGlobalVarOp(false)
+	case 23:
+		return g.emitGlobalVarOp(true)
+	case 24:
 		return g.emitControlRegisterOp(g.r.Intn(12))
+	case 25, 26:
+		return g.emitTonFuncContextOp(g.r.Intn(19))
 	default:
-		return g.emitFuncHashVarIntOp(g.r.Intn(9))
+		return g.emitFuncHashVarIntOp(g.r.Intn(15))
+	}
+	return true
+}
+
+func (g *parityProgramGenerator) emitTonFuncContextOp(mode int) bool {
+	base := len(g.stack)
+	prevBlocks := parityProgramStackValue{
+		kind: parityProgramTuple,
+		tuple: []parityProgramStackValue{
+			parityProgramIntValue(big.NewInt(111)),
+			parityProgramIntValue(big.NewInt(222)),
+			parityProgramIntValue(big.NewInt(333)),
+		},
+	}
+	incomingValue := parityProgramStackValue{
+		kind: parityProgramTuple,
+		tuple: []parityProgramStackValue{
+			parityProgramIntValue(big.NewInt(7777)),
+			{kind: parityProgramNull},
+		},
+	}
+	inMsgSrc := cell.BeginCell().MustStoreAddr(address.MustParseAddr("EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c")).ToSlice()
+	inMsgValue := parityProgramStackValue{
+		kind: parityProgramTuple,
+		tuple: []parityProgramStackValue{
+			parityProgramIntValue(big.NewInt(55)),
+			{kind: parityProgramNull},
+		},
+	}
+
+	switch mode {
+	case 0:
+		g.emit("MYCODE", funcsop.MYCODE().Serialize())
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()})
+	case 1:
+		g.emit("INCOMINGVALUE", funcsop.INCOMINGVALUE().Serialize())
+		g.stack = append(g.stack, incomingValue)
+	case 2:
+		g.emit("STORAGEFEES", funcsop.STORAGEFEES().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(tonopsTestStorageFees)))
+	case 3:
+		g.emit("DUEPAYMENT", funcsop.DUEPAYMENT().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(444)))
+	case 4:
+		g.emit("GLOBALID", funcsop.GLOBALID().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(int64(tonopsTestGlobalID))))
+	case 5:
+		g.emit("PREVBLOCKSINFOTUPLE", funcsop.PREVBLOCKSINFOTUPLE().Serialize())
+		g.stack = append(g.stack, prevBlocks)
+	case 6:
+		g.emit("PREVMCBLOCKS", funcsop.PREVMCBLOCKS().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(111)))
+	case 7:
+		g.emit("PREVKEYBLOCK", funcsop.PREVKEYBLOCK().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(222)))
+	case 8:
+		g.emit("PREVMCBLOCKS_100", funcsop.PREVMCBLOCKS_100().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(333)))
+	case 9:
+		g.emit("GETPRECOMPILEDGAS", funcsop.GETPRECOMPILEDGAS().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(555)))
+	case 10:
+		g.emit("INMSG_BOUNCE", funcsop.INMSG_BOUNCE().Serialize())
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(1)))
+	case 11:
+		g.emit("INMSG_SRC", funcsop.INMSG_SRC().Serialize())
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: inMsgSrc})
+	case 12:
+		g.emit("INMSG_VALUE", funcsop.INMSG_VALUE().Serialize())
+		g.stack = append(g.stack, inMsgValue)
+	case 13:
+		g.emitPushInt("getgasfee_gas", big.NewInt(250))
+		g.emitPushInt("getgasfee_mc", big.NewInt(0))
+		g.emit("GETGASFEE", funcsop.GETGASFEE().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(56)))
+	case 14:
+		g.emitPushInt("getstoragefee_cells", big.NewInt(2))
+		g.emitPushInt("getstoragefee_bits", big.NewInt(3))
+		g.emitPushInt("getstoragefee_delta", big.NewInt(10))
+		g.emitPushInt("getstoragefee_mc", big.NewInt(0))
+		g.emit("GETSTORAGEFEE", funcsop.GETSTORAGEFEE().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(1)))
+	case 15:
+		g.emitPushInt("getforwardfee_cells", big.NewInt(2))
+		g.emitPushInt("getforwardfee_bits", big.NewInt(8))
+		g.emitPushInt("getforwardfee_mc", big.NewInt(0))
+		g.emit("GETFORWARDFEE", funcsop.GETFORWARDFEE().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(901)))
+	case 16:
+		g.emitPushInt("getoriginalfwdfee_fee", big.NewInt(3200))
+		g.emitPushInt("getoriginalfwdfee_mc", big.NewInt(0))
+		g.emit("GETORIGINALFWDFEE", funcsop.GETORIGINALFWDFEE().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(3239)))
+	case 17:
+		g.emitPushInt("getgasfeesimple_gas", big.NewInt(250))
+		g.emitPushInt("getgasfeesimple_mc", big.NewInt(0))
+		g.emit("GETGASFEESIMPLE", funcsop.GETGASFEESIMPLE().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(1)))
+	default:
+		g.emitPushInt("getforwardfeesimple_cells", big.NewInt(2))
+		g.emitPushInt("getforwardfeesimple_bits", big.NewInt(8))
+		g.emitPushInt("getforwardfeesimple_mc", big.NewInt(0))
+		g.emit("GETFORWARDFEESIMPLE", funcsop.GETFORWARDFEESIMPLE().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(1)))
 	}
 	return true
 }
@@ -2166,7 +12414,7 @@ func (g *parityProgramGenerator) emitRuntimeControlOp() bool {
 	case 5:
 		return g.emitGlobalVarOp(true)
 	case 6:
-		return g.emitSendRawMsgRegisterOp()
+		return g.emitActionRegisterOp(g.r.Intn(9))
 	default:
 		return g.emitControlRegisterOp(g.r.Intn(12))
 	}
@@ -2244,25 +12492,141 @@ func (g *parityProgramGenerator) emitControlRegisterOp(mode int) bool {
 }
 
 func (g *parityProgramGenerator) emitSendRawMsgRegisterOp() bool {
+	return g.emitActionRegisterOp(0)
+}
+
+func (g *parityProgramGenerator) emitActionRegisterOp(mode int) bool {
 	base := len(g.stack)
-	mode := uint8(g.r.Intn(4))
-	msg := parityProgramOutboundInternalMessage()
-	nextActions := cell.BeginCell().
-		MustStoreRef(g.regD[1]).
-		MustStoreUInt(0x0ec3c86d, 32).
-		MustStoreUInt(uint64(mode), 8).
-		MustStoreRef(msg).
-		EndCell()
+	nextAction := func(build func(*cell.Builder)) *cell.Cell {
+		b := cell.BeginCell().MustStoreRef(g.regD[1])
+		build(b)
+		return b.EndCell()
+	}
+	pushActionHash := func(name string, nextActions *cell.Cell) {
+		g.emit("PUSHCTR(5/"+name+")", execop.PUSHCTR(5).Serialize())
+		g.emit("HASHCU("+name+"_c5)", cellsliceop.HASHCU().Serialize())
+		g.regD[1] = nextActions
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(new(big.Int).SetBytes(nextActions.Hash())))
+	}
+	storeBigCoins := func(b *cell.Builder, amount *big.Int) {
+		if err := b.StoreBigCoins(amount); err != nil {
+			panic(err)
+		}
+	}
+	storeMaybeRef := func(b *cell.Builder, cl *cell.Cell) {
+		if err := b.StoreMaybeRefUncheckedDepth(cl); err != nil {
+			panic(err)
+		}
+	}
+	storeRef := func(b *cell.Builder, cl *cell.Cell) {
+		if err := b.StoreRefUncheckedDepth(cl); err != nil {
+			panic(err)
+		}
+	}
 
-	g.emitPushCell("sendrawmsg_msg", msg)
-	g.emitPushInt("sendrawmsg_mode", big.NewInt(int64(mode)))
-	g.emit("SENDRAWMSG", funcsop.SENDRAWMSG().Serialize())
-	g.emit("PUSHCTR(5/sendrawmsg)", execop.PUSHCTR(5).Serialize())
-	g.emit("HASHCU(sendrawmsg_c5)", cellsliceop.HASHCU().Serialize())
+	switch mode {
+	case 0:
+		msg := parityProgramOutboundInternalMessage()
+		actionMode := uint8(g.r.Intn(4))
+		nextActions := nextAction(func(b *cell.Builder) {
+			b.MustStoreUInt(0x0ec3c86d, 32).MustStoreUInt(uint64(actionMode), 8)
+			storeRef(b, msg)
+		})
 
-	g.regD[1] = nextActions
-	g.stack = g.stack[:base]
-	g.stack = append(g.stack, parityProgramIntValue(new(big.Int).SetBytes(nextActions.Hash())))
+		g.emitPushCell("sendrawmsg_msg", msg)
+		g.emitPushInt("sendrawmsg_mode", big.NewInt(int64(actionMode)))
+		g.emit("SENDRAWMSG", funcsop.SENDRAWMSG().Serialize())
+		pushActionHash("sendrawmsg", nextActions)
+	case 1:
+		amount := big.NewInt(777)
+		actionMode := uint8(3)
+		nextActions := nextAction(func(b *cell.Builder) {
+			b.MustStoreUInt(0x36e6b809, 32).MustStoreUInt(uint64(actionMode), 8)
+			storeBigCoins(b, amount)
+			storeMaybeRef(b, nil)
+		})
+
+		g.emitPushInt("rawreserve_amount", amount)
+		g.emitPushInt("rawreserve_mode", big.NewInt(int64(actionMode)))
+		g.emit("RAWRESERVE", funcsop.RAWRESERVE().Serialize())
+		pushActionHash("rawreserve", nextActions)
+	case 2:
+		amount := big.NewInt(888)
+		extra := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+		actionMode := uint8(4)
+		nextActions := nextAction(func(b *cell.Builder) {
+			b.MustStoreUInt(0x36e6b809, 32).MustStoreUInt(uint64(actionMode), 8)
+			storeBigCoins(b, amount)
+			storeMaybeRef(b, extra)
+		})
+
+		g.emitPushInt("rawreservex_amount", amount)
+		g.emitPushCell("rawreservex_extra", extra)
+		g.emitPushInt("rawreservex_mode", big.NewInt(int64(actionMode)))
+		g.emit("RAWRESERVEX", funcsop.RAWRESERVEX().Serialize())
+		pushActionHash("rawreservex", nextActions)
+	case 3:
+		code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+		nextActions := nextAction(func(b *cell.Builder) {
+			b.MustStoreUInt(0xAD4DE08E, 32)
+			storeRef(b, code)
+		})
+
+		g.emitPushCell("setcode_code", code)
+		g.emit("SETCODE", funcsop.SETCODE().Serialize())
+		pushActionHash("setcode", nextActions)
+	case 4:
+		code := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+		actionMode := uint8(1)
+		nextActions := nextAction(func(b *cell.Builder) {
+			b.MustStoreUInt(0x26FA1DD4, 32).MustStoreUInt(uint64(actionMode)*2+1, 8)
+			storeRef(b, code)
+		})
+
+		g.emitPushCell("setlibcode_code", code)
+		g.emitPushInt("setlibcode_mode", big.NewInt(int64(actionMode)))
+		g.emit("SETLIBCODE", funcsop.SETLIBCODE().Serialize())
+		pushActionHash("setlibcode", nextActions)
+	case 5:
+		hash := new(big.Int).SetBytes(bytes.Repeat([]byte{0x22}, 32))
+		actionMode := uint8(2)
+		nextActions := nextAction(func(b *cell.Builder) {
+			b.MustStoreUInt(0x26FA1DD4, 32).MustStoreUInt(uint64(actionMode)*2, 8).MustStoreBigUInt(hash, 256)
+		})
+
+		g.emitPushInt("changelib_hash", hash)
+		g.emitPushInt("changelib_mode", big.NewInt(int64(actionMode)))
+		g.emit("CHANGELIB", funcsop.CHANGELIB().Serialize())
+		pushActionHash("changelib", nextActions)
+	case 6:
+		msg := parityProgramSendMsgInternalMessage()
+		g.emitPushCell("sendmsg_fee_msg", msg)
+		g.emitPushInt("sendmsg_fee_mode", big.NewInt(1024))
+		g.emit("SENDMSG(fee-only)", funcsop.SENDMSG().Serialize())
+		g.emit("DROP(sendmsg_fee)", stackop.DROP().Serialize())
+		pushActionHash("sendmsg_fee", g.regD[1])
+	case 7:
+		msg := parityProgramSendMsgInternalMessage()
+		actionMode := uint8(1)
+		nextActions := nextAction(func(b *cell.Builder) {
+			b.MustStoreUInt(0x0ec3c86d, 32).MustStoreUInt(uint64(actionMode), 8)
+			storeRef(b, msg)
+		})
+
+		g.emitPushCell("sendmsg_send_msg", msg)
+		g.emitPushInt("sendmsg_send_mode", big.NewInt(int64(actionMode)))
+		g.emit("SENDMSG(send)", funcsop.SENDMSG().Serialize())
+		g.emit("DROP(sendmsg_send_fee)", stackop.DROP().Serialize())
+		pushActionHash("sendmsg_send", nextActions)
+	default:
+		msg := parityProgramSendMsgLargeUserFwdFeeInternalMessage()
+		g.emitPushCell("sendmsg_user_fwd_fee_msg", msg)
+		g.emitPushInt("sendmsg_user_fwd_fee_mode", big.NewInt(1024))
+		g.emit("SENDMSG(user-fwd-fee)", funcsop.SENDMSG().Serialize())
+		g.emit("DROP(sendmsg_user_fwd_fee)", stackop.DROP().Serialize())
+		pushActionHash("sendmsg_user_fwd_fee", g.regD[1])
+	}
 	return true
 }
 
@@ -2280,9 +12644,96 @@ func parityProgramOutboundInternalMessage() *cell.Cell {
 	return msg
 }
 
+func parityProgramSendMsgInternalMessage() *cell.Cell {
+	msg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     crossTestAddr,
+		DstAddr:     crossTestAddr,
+		Amount:      tlb.FromNanoTONU(1),
+		IHRFee:      tlb.FromNanoTONU(0),
+		FwdFee:      tlb.FromNanoTONU(0),
+		CreatedLT:   1,
+		CreatedAt:   uint32(crossTestTime.Unix()),
+		Body:        cell.BeginCell().MustStoreUInt(0xB1, 8).EndCell(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return msg
+}
+
+func parityProgramSendMsgUserFwdFeeInternalMessage() *cell.Cell {
+	msg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     crossTestAddr,
+		DstAddr:     crossTestAddr,
+		Amount:      tlb.FromNanoTONU(1),
+		IHRFee:      tlb.FromNanoTONU(0),
+		FwdFee:      tlb.FromNanoTONU(500),
+		CreatedLT:   1,
+		CreatedAt:   uint32(crossTestTime.Unix()),
+		Body:        cell.BeginCell().MustStoreUInt(0xB3, 8).EndCell(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return msg
+}
+
+func parityProgramSendMsgLargeUserFwdFeeInternalMessage() *cell.Cell {
+	msg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     crossTestAddr,
+		DstAddr:     crossTestAddr,
+		Amount:      tlb.FromNanoTONU(1),
+		IHRFee:      tlb.FromNanoTONU(0),
+		FwdFee:      tlb.FromNanoTONU(50_000),
+		CreatedLT:   1,
+		CreatedAt:   uint32(crossTestTime.Unix()),
+		Body:        cell.BeginCell().MustStoreUInt(0xB4, 8).EndCell(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return msg
+}
+
+func parityProgramSendMsgExternalOutMessage() *cell.Cell {
+	msg, err := tlb.ToCell(&tlb.ExternalMessageOut{
+		SrcAddr:   crossTestAddr,
+		DstAddr:   address.NewAddressExt(0, 256, bytes.Repeat([]byte{0x33}, 32)),
+		CreatedLT: 1,
+		CreatedAt: uint32(crossTestTime.Unix()),
+		Body:      cell.BeginCell().MustStoreUInt(0xB2, 8).EndCell(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	return msg
+}
+
+func parityProgramTonFuncUnpackedConfig(t *testing.T) tuple.Tuple {
+	t.Helper()
+
+	unpacked := tuple.NewTupleSized(7)
+	mustSetTupleValue(t, &unpacked, 0, makeStoragePricesSlice(100, 3, 5, 7, 11))
+	mustSetTupleValue(t, &unpacked, 1, cell.BeginCell().MustStoreUInt(uint64(uint32(tonopsTestGlobalID)), 32).ToSlice())
+	mustSetTupleValue(t, &unpacked, 2, makeGasPricesSlice(100, 77, 200, 1000, 1200, 50, 2000, 3000, 4000, true))
+	mustSetTupleValue(t, &unpacked, 3, makeGasPricesSlice(100, 55, 150, 900, 900, 40, 1800, 2800, 3800, true))
+	mustSetTupleValue(t, &unpacked, 4, makeMsgPricesSlice(1000, 200, 300, 500, 1000, 2000))
+	mustSetTupleValue(t, &unpacked, 5, makeMsgPricesSlice(900, 120, 220, 400, 800, 1200))
+	mustSetTupleValue(t, &unpacked, 6, makeSizeLimitsSlice(1<<20, 128))
+	return unpacked
+}
+
 func (g *parityProgramGenerator) emitDataSizeProgramOp(sliceArg, quiet bool) bool {
 	base := len(g.stack)
 	root := parityProgramStorageStatCell()
+	cells, bits, refs := int64(2), int64(8), int64(1)
+	if g.r.Intn(3) == 0 {
+		root = parityProgramSharedRefStorageStatCell()
+		cells, bits, refs = 2, 4, 2
+	}
 	if sliceArg {
 		g.emitPushSlice("sdatasize_src", root.MustBeginParse())
 	} else {
@@ -2292,11 +12743,10 @@ func (g *parityProgramGenerator) emitDataSizeProgramOp(sliceArg, quiet bool) boo
 
 	name := "CDATASIZE"
 	op := funcsop.CDATASIZE().Serialize()
-	cells, bits, refs := int64(2), int64(8), int64(1)
 	if sliceArg {
 		name = "SDATASIZE"
 		op = funcsop.SDATASIZE().Serialize()
-		cells = 1
+		cells--
 	}
 	if quiet {
 		name += "Q"
@@ -2344,7 +12794,7 @@ func (g *parityProgramGenerator) emitPrngOp(mode int) bool {
 		g.stack = g.stack[:len(g.stack)-1]
 		g.seed = parityProgramUint256Bytes(seed)
 		g.emitRandSeedProbe()
-	default:
+	case 3:
 		mix := big.NewInt(int64(g.r.Intn(1000)))
 		mixBytes := parityProgramUint256Bytes(mix)
 		buf := make([]byte, 64)
@@ -2355,6 +12805,32 @@ func (g *parityProgramGenerator) emitPrngOp(mode int) bool {
 		g.emit("ADDRAND", funcsop.ADDRAND().Serialize())
 		g.stack = g.stack[:len(g.stack)-1]
 		g.seed = append(g.seed[:0], sum[:]...)
+		g.emitRandSeedProbe()
+	case 4:
+		value := g.nextRandU256()
+		value.Mul(value, big.NewInt(0))
+		value.Rsh(value, 256)
+		g.emitPushInt("rand_zero_bound", big.NewInt(0))
+		g.emit("RAND(0)", funcsop.RAND().Serialize())
+		g.stack = g.stack[:len(g.stack)-1]
+		g.stack = append(g.stack, parityProgramIntValue(value))
+		g.emitRandSeedProbe()
+	case 5:
+		bound := big.NewInt(-7)
+		value := g.nextRandU256()
+		value.Mul(value, bound)
+		value.Rsh(value, 256)
+		g.emitPushInt("rand_negative_bound", bound)
+		g.emit("RAND(negative)", funcsop.RAND().Serialize())
+		g.stack = g.stack[:len(g.stack)-1]
+		g.stack = append(g.stack, parityProgramIntValue(value))
+		g.emitRandSeedProbe()
+	default:
+		seed := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+		g.emitPushInt("setrand_max_seed", seed)
+		g.emit("SETRAND(max)", funcsop.SETRAND().Serialize())
+		g.stack = g.stack[:len(g.stack)-1]
+		g.seed = parityProgramUint256Bytes(seed)
 		g.emitRandSeedProbe()
 	}
 	return true
@@ -2397,27 +12873,50 @@ func (g *parityProgramGenerator) emitFuncHashVarIntOp(mode int) bool {
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramIntValue(new(big.Int).SetBytes(sum[:])))
 	case 3:
+		sum := sha256.Sum256(nil)
+		g.emitPushSlice("sha256u_empty_src", cell.BeginCell().ToSlice())
+		g.emit("SHA256U(empty)", funcsop.SHA256U().Serialize())
+		g.stack = g.stack[:len(g.stack)-1]
+		g.stack = append(g.stack, parityProgramIntValue(new(big.Int).SetBytes(sum[:])))
+	case 4:
+		ref := cell.BeginCell().MustStoreUInt(0x5A, 8).EndCell()
+		builder := cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(ref)
+		hash := builder.Copy().EndCell().Hash()
+		g.emitPushBuilder("hashbu_ref_src", builder)
+		g.emit("HASHBU(ref)", funcsop.HASHBU().Serialize())
+		g.stack = g.stack[:len(g.stack)-1]
+		g.stack = append(g.stack, parityProgramIntValue(new(big.Int).SetBytes(hash)))
+	case 5:
+		sum := sha256.Sum256([]byte{0xAB})
+		base := len(g.stack)
+		g.emitPushSlice("hashext_concat_hi", cell.BeginCell().MustStoreUInt(0xA, 4).ToSlice())
+		g.emitPushSlice("hashext_concat_lo", cell.BeginCell().MustStoreUInt(0xB, 4).ToSlice())
+		g.emitPushInt("hashext_concat_count", big.NewInt(2))
+		g.emit("HASHEXT(0,concat)", funcsop.HASHEXT(0).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(new(big.Int).SetBytes(sum[:])))
+	case 6:
 		src := parityProgramVarIntSlice(big.NewInt(-2), 4, true)
 		base := len(g.stack)
 		g.emitPushSlice("ldvarint16_src", src)
 		g.emit("LDVARINT16", funcsop.LDVARINT16().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(-2)), parityProgramStackValue{kind: parityProgramSlice, slice: cell.BeginCell().EndCell().MustBeginParse()})
-	case 4:
+	case 7:
 		src := parityProgramVarIntSlice(big.NewInt(17), 5, false)
 		base := len(g.stack)
 		g.emitPushSlice("ldvaruint32_src", src)
 		g.emit("LDVARUINT32", funcsop.LDVARUINT32().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(17)), parityProgramStackValue{kind: parityProgramSlice, slice: cell.BeginCell().EndCell().MustBeginParse()})
-	case 5:
+	case 8:
 		src := parityProgramVarIntSlice(big.NewInt(-2), 5, true)
 		base := len(g.stack)
 		g.emitPushSlice("ldvarint32_src", src)
 		g.emit("LDVARINT32", funcsop.LDVARINT32().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(-2)), parityProgramStackValue{kind: parityProgramSlice, slice: cell.BeginCell().EndCell().MustBeginParse()})
-	case 6:
+	case 9:
 		base := len(g.stack)
 		builder := cell.BeginCell()
 		next := builder.Copy()
@@ -2427,7 +12926,7 @@ func (g *parityProgramGenerator) emitFuncHashVarIntOp(mode int) bool {
 		g.emit("STVARINT16", funcsop.STVARINT16().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: next})
-	case 7:
+	case 10:
 		base := len(g.stack)
 		builder := cell.BeginCell()
 		next := builder.Copy()
@@ -2435,6 +12934,33 @@ func (g *parityProgramGenerator) emitFuncHashVarIntOp(mode int) bool {
 		g.emitPushBuilder("stvaruint32_builder", builder)
 		g.emitPushInt("stvaruint32_value", big.NewInt(17))
 		g.emit("STVARUINT32", funcsop.STVARUINT32().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: next})
+	case 11:
+		src := cell.BeginCell().MustStoreUInt(0, 5).MustStoreUInt(0xA, 4).ToSlice()
+		base := len(g.stack)
+		g.emitPushSlice("ldvaruint32_zero_src", src)
+		g.emit("LDVARUINT32(zero)", funcsop.LDVARUINT32().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(0)), parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramTailSlice()})
+	case 12:
+		base := len(g.stack)
+		builder := cell.BeginCell()
+		next := builder.Copy()
+		next.MustStoreUInt(0, 5)
+		g.emitPushBuilder("stvaruint32_zero_builder", builder)
+		g.emitPushInt("stvaruint32_zero_value", big.NewInt(0))
+		g.emit("STVARUINT32(zero)", funcsop.STVARUINT32().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: next})
+	case 13:
+		base := len(g.stack)
+		builder := cell.BeginCell()
+		next := builder.Copy()
+		next.MustStoreUInt(0, 4)
+		g.emitPushBuilder("stvarint16_zero_builder", builder)
+		g.emitPushInt("stvarint16_zero_value", big.NewInt(0))
+		g.emit("STVARINT16(zero)", funcsop.STVARINT16().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramBuilder, builder: next})
 	default:
@@ -2505,6 +13031,37 @@ func (g *parityProgramGenerator) emitLoadMsgAddressOp(name string, op *cell.Buil
 		return true
 	}
 
+	if !stdOnly {
+		switch g.r.Intn(3) {
+		case 0:
+			src := parityProgramAddrNoneTailSlice()
+			g.emitPushSlice(name+"_addr_none", src)
+			g.emit(name, op)
+			g.stack = g.stack[:base]
+			g.stack = append(g.stack,
+				parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramAddrNoneSlice()},
+				parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramTailSlice()},
+			)
+			if quiet {
+				g.stack = append(g.stack, parityProgramIntValue(big.NewInt(-1)))
+			}
+			return true
+		case 1:
+			src := parityProgramExtAddrTailSlice()
+			g.emitPushSlice(name+"_ext", src)
+			g.emit(name, op)
+			g.stack = g.stack[:base]
+			g.stack = append(g.stack,
+				parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramExtAddrSlice()},
+				parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramTailSlice()},
+			)
+			if quiet {
+				g.stack = append(g.stack, parityProgramIntValue(big.NewInt(-1)))
+			}
+			return true
+		}
+	}
+
 	src := parityProgramStdAddrTailSlice()
 	g.emitPushSlice(name+"_std", src)
 	g.emit(name, op)
@@ -2527,10 +13084,21 @@ func (g *parityProgramGenerator) emitParseMsgAddressOp(quiet bool) bool {
 		name = "PARSEMSGADDRQ"
 		op = funcsop.PARSEMSGADDRQ().Serialize()
 	}
-	g.emitPushSlice(name+"_std", parityProgramStdAddrSlice())
+	var parsed parityProgramStackValue
+	switch g.r.Intn(3) {
+	case 0:
+		g.emitPushSlice(name+"_none", parityProgramAddrNoneSlice())
+		parsed = parityProgramParsedNoneAddrTuple()
+	case 1:
+		g.emitPushSlice(name+"_ext", parityProgramExtAddrSlice())
+		parsed = parityProgramParsedExtAddrTuple()
+	default:
+		g.emitPushSlice(name+"_std", parityProgramStdAddrSlice())
+		parsed = parityProgramParsedStdAddrTuple()
+	}
 	g.emit(name, op)
 	g.stack = g.stack[:base]
-	g.stack = append(g.stack, parityProgramParsedStdAddrTuple())
+	g.stack = append(g.stack, parsed)
 	if quiet {
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(-1)))
 	}
@@ -2772,14 +13340,17 @@ func (g *parityProgramGenerator) emitDictGetOp(byRef, intKey, unsigned bool) boo
 
 	key := uint64(0x12)
 	opcode := uint64(0xF40A)
+	kind := 0
 	if byRef {
 		opcode++
 	}
 	switch {
 	case intKey && unsigned:
+		kind = 2
 		opcode += 4
 		g.emitPushInt("dict_key_u", big.NewInt(int64(key)))
 	case intKey:
+		kind = 1
 		opcode += 2
 		g.emitPushInt("dict_key_i", big.NewInt(int64(key)))
 	default:
@@ -2787,7 +13358,7 @@ func (g *parityProgramGenerator) emitDictGetOp(byRef, intKey, unsigned bool) boo
 	}
 	g.emitPushCell("dict_root", root)
 	g.emitPushInt("dict_bits", big.NewInt(8))
-	g.emit("DICTGET", parityProgramRawOp(opcode, 16))
+	g.emit(parityProgramDictValueName(kind, "GET", byRef), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
 	if byRef {
@@ -2799,72 +13370,59 @@ func (g *parityProgramGenerator) emitDictGetOp(byRef, intKey, unsigned bool) boo
 	return true
 }
 
-func (g *parityProgramGenerator) emitDictSetOp(byRef, unsigned bool) bool {
+func (g *parityProgramGenerator) emitDictSetOp(byRef bool, kind int) bool {
 	base := len(g.stack)
 	value := cell.BeginCell().MustStoreUInt(0xA5, 8).EndCell()
 	key := uint64(0x21)
-	opcode := uint64(0xF412)
-	if byRef {
-		opcode++
-	}
-	if unsigned {
-		opcode += 4
-	}
+	opcode := parityProgramDictValueOpcode(0xF412, kind, byRef)
 
 	dict := cell.NewDict(8)
 	var err error
 	if byRef {
 		ref := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
 		g.emitPushCell("dict_set_ref", ref)
-		_, err = dict.SetBuilderWithMode(parityProgramKeyCell(key, 8), cell.BeginCell().MustStoreRef(ref), cell.DictSetModeSet)
+		_, err = dict.SetBuilderWithMode(parityProgramDictKeyCellForKind(kind, key, 8), cell.BeginCell().MustStoreRef(ref), cell.DictSetModeSet)
 	} else {
 		g.emitPushSlice("dict_set_value", value.MustBeginParse())
-		_, err = dict.SetWithMode(parityProgramKeyCell(key, 8), value, cell.DictSetModeSet)
+		_, err = dict.SetWithMode(parityProgramDictKeyCellForKind(kind, key, 8), value, cell.DictSetModeSet)
 	}
 	if err != nil {
 		panic(err)
 	}
-	if unsigned {
-		g.emitPushInt("dict_set_key_u", big.NewInt(int64(key)))
-	} else {
-		g.emitPushSlice("dict_set_key", parityProgramKeySlice(key, 8))
-	}
+	g.emitDictKey("dict_set_key", kind, key, 8)
 	g.emitPushNull("dict_set_root")
 	g.emitPushInt("dict_set_bits", big.NewInt(8))
-	g.emit("DICTSET", parityProgramRawOp(opcode, 16))
+	g.emit(parityProgramDictValueName(kind, "SET", byRef), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack, parityProgramMaybeCellValue(dict.AsCell()))
 	return true
 }
 
-func (g *parityProgramGenerator) emitDictSetGetOp(byRef bool) bool {
+func (g *parityProgramGenerator) emitDictSetGetOp(byRef bool, kind int) bool {
 	root, oldValue, oldRef := parityProgramDictRoot(byRef)
 	base := len(g.stack)
 	newValue := cell.BeginCell().MustStoreUInt(0x99, 8).EndCell()
 	newRef := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
 	key := uint64(0x12)
-	opcode := uint64(0xF41A)
-	if byRef {
-		opcode++
-	}
+	opcode := parityProgramDictValueOpcode(0xF41A, kind, byRef)
 
 	dict := cell.NewDict(8)
 	var err error
 	if byRef {
 		g.emitPushCell("dict_setget_ref", newRef)
-		_, err = dict.SetBuilderWithMode(parityProgramKeyCell(key, 8), cell.BeginCell().MustStoreRef(newRef), cell.DictSetModeSet)
+		_, err = dict.SetBuilderWithMode(parityProgramDictKeyCellForKind(kind, key, 8), cell.BeginCell().MustStoreRef(newRef), cell.DictSetModeSet)
 	} else {
 		g.emitPushSlice("dict_setget_value", newValue.MustBeginParse())
-		_, err = dict.SetWithMode(parityProgramKeyCell(key, 8), newValue, cell.DictSetModeSet)
+		_, err = dict.SetWithMode(parityProgramDictKeyCellForKind(kind, key, 8), newValue, cell.DictSetModeSet)
 	}
 	if err != nil {
 		panic(err)
 	}
-	g.emitPushSlice("dict_setget_key", parityProgramKeySlice(key, 8))
+	g.emitDictKey("dict_setget_key", kind, key, 8)
 	g.emitPushCell("dict_setget_root", root)
 	g.emitPushInt("dict_setget_bits", big.NewInt(8))
-	g.emit("DICTSETGET", parityProgramRawOp(opcode, 16))
+	g.emit(parityProgramDictValueName(kind, "SETGET", byRef), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack, parityProgramMaybeCellValue(dict.AsCell()))
@@ -2877,122 +13435,173 @@ func (g *parityProgramGenerator) emitDictSetGetOp(byRef bool) bool {
 	return true
 }
 
-func (g *parityProgramGenerator) emitDictReplaceAddOp(add bool) bool {
-	root, _, _ := parityProgramDictRoot(false)
+func (g *parityProgramGenerator) emitDictReplaceAddOp(add bool, byRef bool, kind int) bool {
+	root, _, _ := parityProgramDictRoot(byRef)
 	base := len(g.stack)
 	value := cell.BeginCell().MustStoreUInt(0x77, 8).EndCell()
+	ref := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
 	key := uint64(0x12)
 	opcode := uint64(0xF422)
-	name := "DICTREPLACE"
+	name := "REPLACE"
 	if add {
 		key = 0x21
 		opcode = 0xF432
-		name = "DICTADD"
+		name = "ADD"
 	}
+	opcode = parityProgramDictValueOpcode(opcode, kind, byRef)
 
-	dict := cell.NewDict(8)
-	if _, err := dict.SetWithMode(parityProgramKeyCell(0x12, 8), cell.BeginCell().MustStoreUInt(0x34, 8).EndCell(), cell.DictSetModeSet); err != nil {
+	dict := parityProgramRootAsDict(root, 8)
+	var err error
+	if byRef {
+		g.emitPushCell("dict_replace_add_ref", ref)
+		_, err = dict.SetBuilderWithMode(parityProgramDictKeyCellForKind(kind, key, 8), cell.BeginCell().MustStoreRef(ref), cell.DictSetModeSet)
+	} else {
+		g.emitPushSlice("dict_replace_add_value", value.MustBeginParse())
+		_, err = dict.SetWithMode(parityProgramDictKeyCellForKind(kind, key, 8), value, cell.DictSetModeSet)
+	}
+	if err != nil {
 		panic(err)
 	}
-	if _, err := dict.SetWithMode(parityProgramKeyCell(key, 8), value, cell.DictSetModeSet); err != nil {
-		panic(err)
-	}
 
-	g.emitPushSlice("dict_replace_add_value", value.MustBeginParse())
-	g.emitPushSlice("dict_replace_add_key", parityProgramKeySlice(key, 8))
+	g.emitDictKey("dict_replace_add_key", kind, key, 8)
 	g.emitPushCell("dict_replace_add_root", root)
 	g.emitPushInt("dict_replace_add_bits", big.NewInt(8))
-	g.emit(name, parityProgramRawOp(opcode, 16))
+	g.emit(parityProgramDictValueName(kind, name, byRef), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack, parityProgramMaybeCellValue(dict.AsCell()), parityProgramIntValue(big.NewInt(-1)))
 	return true
 }
 
-func (g *parityProgramGenerator) emitDictDeleteOp(unsigned bool) bool {
+func (g *parityProgramGenerator) emitDictReplaceAddGetOp(add bool, byRef bool, kind int) bool {
+	root, oldValue, oldRef := parityProgramDictRoot(byRef)
+	base := len(g.stack)
+	newValue := cell.BeginCell().MustStoreUInt(0x88, 8).EndCell()
+	newRef := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	key := uint64(0x12)
+	name := "REPLACEGET"
+	opcode := uint64(0xF42A)
+	mode := cell.DictSetModeReplace
+	if add {
+		key = 0x21
+		name = "ADDGET"
+		opcode = 0xF43A
+		mode = cell.DictSetModeAdd
+	}
+
+	dict := parityProgramRootAsDict(root, 8)
+	keyCell := parityProgramDictKeyCellForKind(kind, key, 8)
+	var old *cell.Slice
+	var err error
+	if byRef {
+		g.emitPushCell("dict_replace_add_get_ref", newRef)
+		old, _, err = dict.LoadValueAndSetBuilderWithMode(keyCell, cell.BeginCell().MustStoreRef(newRef), mode)
+	} else {
+		g.emitPushSlice("dict_replace_add_get_value", newValue.MustBeginParse())
+		old, _, err = dict.LoadValueAndSetBuilderWithMode(keyCell, newValue.ToBuilder(), mode)
+	}
+	if err != nil {
+		panic(err)
+	}
+
+	g.emitDictKey("dict_replace_add_get_key", kind, key, 8)
+	g.emitPushCell("dict_replace_add_get_root", root)
+	g.emitPushInt("dict_replace_add_get_bits", big.NewInt(8))
+	g.emit(parityProgramDictValueName(kind, name, byRef), parityProgramRawOp(parityProgramDictValueOpcode(opcode, kind, byRef), 16))
+
+	g.stack = g.stack[:base]
+	g.stack = append(g.stack, parityProgramMaybeCellValue(dict.AsCell()))
+	if old != nil {
+		if byRef {
+			g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: oldRef})
+		} else {
+			g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: oldValue.MustBeginParse()})
+		}
+		g.stack = append(g.stack, parityProgramBoolValue(mode != cell.DictSetModeAdd))
+	} else {
+		g.stack = append(g.stack, parityProgramBoolValue(mode == cell.DictSetModeAdd))
+	}
+	return true
+}
+
+func (g *parityProgramGenerator) emitDictDeleteOp(kind int) bool {
 	root, _, _ := parityProgramDictRoot(false)
 	base := len(g.stack)
 	key := uint64(0x12)
-	opcode := uint64(0xF459)
-	if unsigned {
-		opcode += 2
-		g.emitPushInt("dict_del_key_u", big.NewInt(int64(key)))
-	} else {
-		g.emitPushSlice("dict_del_key", parityProgramKeySlice(key, 8))
-	}
+	opcode := parityProgramDictScalarOpcode(0xF459, kind)
+	g.emitDictKey("dict_del_key", kind, key, 8)
 	g.emitPushCell("dict_del_root", root)
 	g.emitPushInt("dict_del_bits", big.NewInt(8))
-	g.emit("DICTDEL", parityProgramRawOp(opcode, 16))
+	g.emit(parityProgramDictScalarName(kind, "DEL"), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNull}, parityProgramIntValue(big.NewInt(-1)))
 	return true
 }
 
-func (g *parityProgramGenerator) emitDictGetOptRefOp(unsigned bool) bool {
+func (g *parityProgramGenerator) emitDictGetOptRefOp(kind int) bool {
 	root, _, ref := parityProgramDictRoot(true)
 	base := len(g.stack)
 	key := uint64(0x12)
-	opcode := uint64(0xF469)
-	if unsigned {
-		opcode += 2
-		g.emitPushInt("dict_getoptref_key_u", big.NewInt(int64(key)))
-	} else {
-		g.emitPushSlice("dict_getoptref_key", parityProgramKeySlice(key, 8))
-	}
+	opcode := parityProgramDictScalarOpcode(0xF469, kind)
+	g.emitDictKey("dict_getoptref_key", kind, key, 8)
 	g.emitPushCell("dict_getoptref_root", root)
 	g.emitPushInt("dict_getoptref_bits", big.NewInt(8))
-	g.emit("DICTGETOPTREF", parityProgramRawOp(opcode, 16))
+	g.emit(parityProgramDictScalarName(kind, "GETOPTREF"), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: ref})
 	return true
 }
 
-func (g *parityProgramGenerator) emitDictMinMaxOp(fetchMax bool) bool {
-	root, value, _ := parityProgramDictRoot(false)
+func (g *parityProgramGenerator) emitDictMinMaxOp(fetchMax bool, byRef bool, kind int) bool {
+	root, value, ref := parityProgramDictRoot(byRef)
 	base := len(g.stack)
 	g.emitPushCell("dict_minmax_root", root)
 	g.emitPushInt("dict_minmax_bits", big.NewInt(8))
-	name := "DICTMIN"
+	name := "MIN"
 	opcode := uint64(0xF482)
 	key := uint64(0x12)
 	if fetchMax {
-		name = "DICTMAX"
+		name = "MAX"
 		opcode = 0xF48A
 	}
-	g.emit(name, parityProgramRawOp(opcode, 16))
+	opcode = parityProgramDictValueOpcode(opcode, kind, byRef)
+	g.emit(parityProgramDictValueName(kind, name, byRef), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
-	g.stack = append(g.stack,
-		parityProgramStackValue{kind: parityProgramSlice, slice: value.MustBeginParse()},
-		parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramKeySlice(key, 8)},
-		parityProgramIntValue(big.NewInt(-1)),
-	)
+	if byRef {
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: ref})
+	} else {
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: value.MustBeginParse()})
+	}
+	g.stack = append(g.stack, parityProgramDictKeyValue(kind, key, 8), parityProgramIntValue(big.NewInt(-1)))
 	return true
 }
 
-func (g *parityProgramGenerator) emitDictRemMinMaxOp(fetchMax bool) bool {
-	root, value, _ := parityProgramDictRoot(false)
+func (g *parityProgramGenerator) emitDictRemMinMaxOp(fetchMax bool, byRef bool, kind int) bool {
+	root, value, ref := parityProgramDictRoot(byRef)
 	base := len(g.stack)
 	g.emitPushCell("dict_rem_minmax_root", root)
 	g.emitPushInt("dict_rem_minmax_bits", big.NewInt(8))
-	name := "DICTREMMIN"
+	name := "REMMIN"
 	opcode := uint64(0xF492)
 	key := uint64(0x12)
 	if fetchMax {
-		name = "DICTREMMAX"
+		name = "REMMAX"
 		opcode = 0xF49A
 	}
-	g.emit(name, parityProgramRawOp(opcode, 16))
+	opcode = parityProgramDictValueOpcode(opcode, kind, byRef)
+	g.emit(parityProgramDictValueName(kind, name, byRef), parityProgramRawOp(opcode, 16))
 
 	g.stack = g.stack[:base]
-	g.stack = append(g.stack,
-		parityProgramStackValue{kind: parityProgramNull},
-		parityProgramStackValue{kind: parityProgramSlice, slice: value.MustBeginParse()},
-		parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramKeySlice(key, 8)},
-		parityProgramIntValue(big.NewInt(-1)),
-	)
+	g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNull})
+	if byRef {
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: ref})
+	} else {
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: value.MustBeginParse()})
+	}
+	g.stack = append(g.stack, parityProgramDictKeyValue(kind, key, 8), parityProgramIntValue(big.NewInt(-1)))
 	return true
 }
 
@@ -3085,11 +13694,7 @@ func (g *parityProgramGenerator) emitDictDeleteGetOp(byRef bool, kind int) bool 
 	g.emitDictKey("dict_delget_key", kind, key, 8)
 	g.emitPushCell("dict_delget_root", root)
 	g.emitPushInt("dict_delget_bits", big.NewInt(8))
-	name := "DICTDELGET"
-	if byRef {
-		name += "REF"
-	}
-	g.emit(name, parityProgramRawOp(parityProgramDictValueOpcode(0xF462, kind, byRef), 16))
+	g.emit(parityProgramDictValueName(kind, "DELGET", byRef), parityProgramRawOp(parityProgramDictValueOpcode(0xF462, kind, byRef), 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNull})
@@ -3122,7 +13727,7 @@ func (g *parityProgramGenerator) emitDictSetGetOptRefOp(del bool, kind int) bool
 	g.emitDictKey("dict_setgetoptref_key", kind, key, 8)
 	g.emitPushCell("dict_setgetoptref_root", root)
 	g.emitPushInt("dict_setgetoptref_bits", big.NewInt(8))
-	g.emit("DICTSETGETOPTREF", parityProgramRawOp(parityProgramDictScalarOpcode(0xF46D, kind), 16))
+	g.emit(parityProgramDictScalarName(kind, "SETGETOPTREF"), parityProgramRawOp(parityProgramDictScalarOpcode(0xF46D, kind), 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack,
@@ -3134,56 +13739,78 @@ func (g *parityProgramGenerator) emitDictSetGetOptRefOp(del bool, kind int) bool
 
 func (g *parityProgramGenerator) emitDictNearExtraOp(mode int) bool {
 	base := len(g.stack)
-	switch mode {
-	case 0:
-		root, values := parityProgramMultiDictRoot()
-		g.emitPushSlice("dict_getnext_key", parityProgramKeySlice(0x20, 8))
-		g.emitPushCell("dict_getnext_root", root)
-		g.emitPushInt("dict_getnext_bits", big.NewInt(8))
-		g.emit("DICTGETNEXT", parityProgramRawOp(0xF474, 16))
-		g.stack = g.stack[:base]
-		g.stack = append(g.stack,
-			parityProgramStackValue{kind: parityProgramSlice, slice: values[0x30].MustBeginParse()},
-			parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramKeySlice(0x30, 8)},
-			parityProgramBoolValue(true),
-		)
-	case 1:
-		root, values := parityProgramMultiDictRoot()
-		g.emitPushSlice("dict_getpreveq_key", parityProgramKeySlice(0x20, 8))
-		g.emitPushCell("dict_getpreveq_root", root)
-		g.emitPushInt("dict_getpreveq_bits", big.NewInt(8))
-		g.emit("DICTGETPREVEQ", parityProgramRawOp(0xF477, 16))
-		g.stack = g.stack[:base]
-		g.stack = append(g.stack,
-			parityProgramStackValue{kind: parityProgramSlice, slice: values[0x20].MustBeginParse()},
-			parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramKeySlice(0x20, 8)},
-			parityProgramBoolValue(true),
-		)
-	case 2:
-		root, values := parityProgramMultiDictRoot()
-		g.emitPushInt("dictu_getnext_key", big.NewInt(0x20))
-		g.emitPushCell("dictu_getnext_root", root)
-		g.emitPushInt("dictu_getnext_bits", big.NewInt(8))
-		g.emit("DICTUGETNEXT", parityProgramRawOp(0xF47C, 16))
-		g.stack = g.stack[:base]
-		g.stack = append(g.stack,
-			parityProgramStackValue{kind: parityProgramSlice, slice: values[0x30].MustBeginParse()},
-			parityProgramIntValue(big.NewInt(0x30)),
-			parityProgramBoolValue(true),
-		)
-	default:
-		root, values := parityProgramSignedDictRoot()
-		g.emitPushInt("dicti_getnext_key", big.NewInt(-1))
-		g.emitPushCell("dicti_getnext_root", root)
-		g.emitPushInt("dicti_getnext_bits", big.NewInt(8))
-		g.emit("DICTIGETNEXT", parityProgramRawOp(0xF478, 16))
-		g.stack = g.stack[:base]
-		g.stack = append(g.stack,
-			parityProgramStackValue{kind: parityProgramSlice, slice: values[3].MustBeginParse()},
-			parityProgramIntValue(big.NewInt(3)),
-			parityProgramBoolValue(true),
-		)
+	variants := []struct {
+		kind      int
+		fetchNext bool
+		allowEq   bool
+	}{
+		{kind: 0, fetchNext: true},
+		{kind: 0, fetchNext: true, allowEq: true},
+		{kind: 0},
+		{kind: 0, allowEq: true},
+		{kind: 1, fetchNext: true},
+		{kind: 1, fetchNext: true, allowEq: true},
+		{kind: 1},
+		{kind: 1, allowEq: true},
+		{kind: 2, fetchNext: true},
+		{kind: 2, fetchNext: true, allowEq: true},
+		{kind: 2},
+		{kind: 2, allowEq: true},
 	}
+	v := variants[mode%len(variants)]
+	inputKey := int64(0x20)
+	wantKey := int64(0x20)
+	var root *cell.Cell
+	var value *cell.Cell
+	if v.kind == 1 {
+		values := map[int64]*cell.Cell{}
+		root, values = parityProgramSignedDictRoot()
+		if v.fetchNext {
+			inputKey = -2
+			wantKey = 3
+			if v.allowEq {
+				wantKey = -2
+			}
+		} else {
+			inputKey = 3
+			wantKey = -2
+			if v.allowEq {
+				wantKey = 3
+			}
+		}
+		value = values[wantKey]
+		g.emitPushInt("dict_near_key", big.NewInt(inputKey))
+	} else {
+		values := map[uint64]*cell.Cell{}
+		root, values = parityProgramMultiDictRoot()
+		if v.fetchNext && !v.allowEq {
+			wantKey = 0x30
+		}
+		if !v.fetchNext && !v.allowEq {
+			wantKey = 0x10
+		}
+		value = values[uint64(wantKey)]
+		if v.kind == 0 {
+			g.emitPushSlice("dict_near_key", parityProgramKeySlice(uint64(inputKey), 8))
+		} else {
+			g.emitPushInt("dict_near_key", big.NewInt(inputKey))
+		}
+	}
+
+	g.emitPushCell("dict_near_root", root)
+	g.emitPushInt("dict_near_bits", big.NewInt(8))
+	g.emit(parityProgramDictNearName(v.kind, v.fetchNext, v.allowEq), parityProgramRawOp(0xF474+uint64(mode%len(variants)), 16))
+
+	wantKeyValue := parityProgramIntValue(big.NewInt(wantKey))
+	if v.kind == 0 {
+		wantKeyValue = parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramKeySlice(uint64(wantKey), 8)}
+	}
+	g.stack = g.stack[:base]
+	g.stack = append(g.stack,
+		parityProgramStackValue{kind: parityProgramSlice, slice: value.MustBeginParse()},
+		wantKeyValue,
+		parityProgramBoolValue(true),
+	)
 	return true
 }
 
@@ -3202,13 +13829,13 @@ func (g *parityProgramGenerator) emitSubdictOp(removePrefix bool, kind int) bool
 	g.emitPushInt("subdict_prefix_bits", big.NewInt(int64(prefixBits)))
 	g.emitPushCell("subdict_root", root)
 	g.emitPushInt("subdict_key_bits", big.NewInt(8))
-	name := "SUBDICTGET"
+	suffix := "SUBDICTGET"
 	opcode := uint64(0xF4B1)
 	if removePrefix {
-		name = "SUBDICTRPGET"
+		suffix = "SUBDICTRPGET"
 		opcode = 0xF4B5
 	}
-	g.emit(name, parityProgramRawOp(parityProgramDictScalarOpcode(opcode, kind), 16))
+	g.emit(parityProgramDictScalarName(kind, suffix), parityProgramRawOp(parityProgramDictScalarOpcode(opcode, kind), 16))
 
 	g.stack = g.stack[:base]
 	g.stack = append(g.stack, parityProgramMaybeCellValue(dict.AsCell()))
@@ -3571,7 +14198,7 @@ func (g *parityProgramGenerator) emitStackOp() bool {
 }
 
 func (g *parityProgramGenerator) emitStackExtraOp() bool {
-	switch g.r.Intn(25) {
+	switch g.r.Intn(30) {
 	case 0:
 		g.emit("DEPTH", stackop.DEPTH().Serialize())
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(int64(len(g.stack)))))
@@ -3803,8 +14430,58 @@ func (g *parityProgramGenerator) emitStackExtraOp() bool {
 		g.swapDepth(2, i)
 		g.swapDepth(1, j)
 		g.swapDepth(0, k)
+	case 24:
+		if len(g.stack) == 0 {
+			return false
+		}
+		i := g.randomStackIndex(256)
+		g.emit(fmt.Sprintf("PUSHL(%d)", i), stackop.PUSHL(uint8(i)).Serialize())
+		g.stack = append(g.stack, parityProgramCloneValue(g.stack[len(g.stack)-1-i]))
+	case 25:
+		if len(g.stack) == 0 {
+			return false
+		}
+		i := g.randomStackIndex(256)
+		g.emit(fmt.Sprintf("POPL(%d)", i), stackop.POPL(uint8(i)).Serialize())
+		g.stack[len(g.stack)-1-i] = parityProgramCloneValue(g.stack[len(g.stack)-1])
+		g.stack = g.stack[:len(g.stack)-1]
+	case 26:
+		src := cell.BeginCell().
+			MustStoreUInt(0xA5, 8).
+			MustStoreRef(cell.BeginCell().MustStoreUInt(0x5A, 8).EndCell()).
+			ToSlice()
+		g.emit("PUSHSLICEINLINE", stackop.PUSHSLICEINLINE(src).Serialize())
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramSlice, slice: src})
+	case 27:
+		root, _, _ := parityProgramDictRoot(false)
+		g.emit("DICTPUSHCONST", stackop.DICTPUSHCONST(root).Serialize())
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramCell, cell: root}, parityProgramIntValue(big.NewInt(0)))
+	case 28:
+		return g.emitDebugOp(g.r.Intn(7))
 	default:
 		return g.emitStackExtraPushExchangeOp()
+	}
+	return true
+}
+
+func (g *parityProgramGenerator) emitDebugOp(mode int) bool {
+	switch mode {
+	case 0:
+		g.emit("DUMPSTK", stackop.DUMPSTK().Serialize())
+	case 1:
+		g.emit("DUMP(0)", stackop.DUMP(0).Serialize())
+	case 2:
+		g.emit("DUMP(15)", stackop.DUMP(15).Serialize())
+	case 3:
+		g.emit("DEBUG(42)", stackop.DEBUG(42).Serialize())
+	case 4:
+		g.emitPushSlice("strdump_slice", cell.BeginCell().MustStoreSlice([]byte("trace"), 40).ToSlice())
+		g.emit("STRDUMP(slice)", stackop.STRDUMP().Serialize())
+	case 5:
+		g.emitPushInt("strdump_int", big.NewInt(7))
+		g.emit("STRDUMP(int)", stackop.STRDUMP().Serialize())
+	default:
+		g.emit("DEBUGSTR", stackop.DEBUGSTR([]byte("parity-fuzz")).Serialize())
 	}
 	return true
 }
@@ -4043,13 +14720,15 @@ func (g *parityProgramGenerator) emitMathExtraOp() bool {
 	base := len(g.stack)
 	switch g.r.Intn(7) {
 	case 0:
-		return g.emitMathCompoundOp(g.r.Intn(18))
+		return g.emitMathCompoundOp(g.r.Intn(21))
 	case 1:
-		return g.emitMathQuietLogicOp(g.r.Intn(27))
+		return g.emitMathQuietLogicOp(g.r.Intn(29))
 	case 2:
-		return g.emitMathShiftModOp(g.r.Intn(14))
+		return g.emitMathShiftModOp(g.r.Intn(20))
 	case 3:
 		return g.emitMathQuietCompoundOp(g.r.Intn(15))
+	case 4:
+		return g.emitMathGapOp(g.r.Intn(36))
 	}
 
 	switch g.r.Intn(32) {
@@ -4236,6 +14915,221 @@ func (g *parityProgramGenerator) emitMathExtraOp() bool {
 	return true
 }
 
+func (g *parityProgramGenerator) emitMathGapOp(mode int) bool {
+	base := len(g.stack)
+	x := big.NewInt(-17)
+	w := big.NewInt(2)
+	y := big.NewInt(5)
+	mx := big.NewInt(-7)
+	my := big.NewInt(5)
+	shift := big.NewInt(2)
+	codeShift := big.NewInt(3)
+	divisor := func(bits *big.Int) *big.Int {
+		return new(big.Int).Lsh(big.NewInt(1), uint(bits.Uint64()))
+	}
+	round := func(v, d *big.Int, rounding int) (*big.Int, *big.Int) {
+		v = new(big.Int).Set(v)
+		d = new(big.Int).Set(d)
+		switch rounding {
+		case 0:
+			return ophelpers.DivFloor(v, d)
+		case 1:
+			q := ophelpers.DivRound(v, d)
+			return q, new(big.Int).Sub(v, new(big.Int).Mul(d, q))
+		default:
+			q := ophelpers.DivCeil(v, d)
+			return q, new(big.Int).Sub(v, new(big.Int).Mul(d, q))
+		}
+	}
+	pushQR := func(q, r *big.Int) {
+		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
+	}
+	pushRShiftMod := func(name string, op *cell.Builder, rounding int) {
+		q, r := round(x, divisor(shift), rounding)
+		g.emitPushInt(name+"_x", x)
+		g.emitPushInt(name+"_shift", shift)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		pushQR(q, r)
+	}
+	pushRShiftCodeMod := func(name string, op *cell.Builder, rounding int) {
+		q, r := round(x, divisor(codeShift), rounding)
+		g.emitPushInt(name+"_x", x)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		pushQR(q, r)
+	}
+	pushLShiftDivMod := func(name string, op *cell.Builder, rounding int, retModOnly bool) {
+		dividend := new(big.Int).Mul(mx, divisor(shift))
+		q, r := round(dividend, y, rounding)
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_y", y)
+		g.emitPushInt(name+"_shift", shift)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		if retModOnly {
+			g.stack = append(g.stack, parityProgramIntValue(r))
+			return
+		}
+		pushQR(q, r)
+	}
+	pushAddRShiftMod := func(name string, op *cell.Builder, rounding int) {
+		dividend := new(big.Int).Add(x, w)
+		q, r := round(dividend, divisor(shift), rounding)
+		g.emitPushInt(name+"_x", x)
+		g.emitPushInt(name+"_w", w)
+		g.emitPushInt(name+"_shift", shift)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		pushQR(q, r)
+	}
+	pushMulPow2Mod := func(name string, op *cell.Builder, rounding int) {
+		dividend := new(big.Int).Mul(mx, my)
+		_, r := round(dividend, divisor(shift), rounding)
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_y", my)
+		g.emitPushInt(name+"_shift", shift)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(r))
+	}
+	pushMulPow2CodeMod := func(name string, op *cell.Builder, rounding int) {
+		dividend := new(big.Int).Mul(mx, my)
+		_, r := round(dividend, divisor(codeShift), rounding)
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_y", my)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(r))
+	}
+	pushMulRShiftMod := func(name string, op *cell.Builder, rounding int) {
+		dividend := new(big.Int).Mul(mx, my)
+		q, r := round(dividend, divisor(shift), rounding)
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_y", my)
+		g.emitPushInt(name+"_shift", shift)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		pushQR(q, r)
+	}
+	pushMulRShiftCodeMod := func(name string, op *cell.Builder, rounding int) {
+		dividend := new(big.Int).Mul(mx, my)
+		q, r := round(dividend, divisor(codeShift), rounding)
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_y", my)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		pushQR(q, r)
+	}
+	pushAddRShiftCodeMod := func(name string, op *cell.Builder, rounding int) {
+		dividend := new(big.Int).Add(x, w)
+		q, r := round(dividend, divisor(codeShift), rounding)
+		g.emitPushInt(name+"_x", x)
+		g.emitPushInt(name+"_w", w)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		pushQR(q, r)
+	}
+	pushMulAddRShiftCodeMod := func(name string, op *cell.Builder, rounding int) {
+		dividend := new(big.Int).Add(new(big.Int).Mul(mx, my), w)
+		q, r := round(dividend, divisor(codeShift), rounding)
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_y", my)
+		g.emitPushInt(name+"_w", w)
+		g.emit(name, op)
+		g.stack = g.stack[:base]
+		pushQR(q, r)
+	}
+
+	switch mode {
+	case 0:
+		g.emitPushInt("isnneg_zero", big.NewInt(0))
+		g.emit("ISNNEG(0)", mathop.ISNNEG().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramBoolValue(true))
+	case 1:
+		g.emitPushInt("isnneg_negative", big.NewInt(-1))
+		g.emit("ISNNEG(-1)", mathop.ISNNEG().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramBoolValue(false))
+	case 2:
+		g.emitPushInt("addconst_x", big.NewInt(11))
+		g.emit("ADDCONST(6)", mathop.ADDCONST(6).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(17)))
+	case 3:
+		g.emitPushInt("mulconst_x", big.NewInt(7))
+		g.emit("MULCONST(-4)", mathop.MULCONST(-4).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(-28)))
+	case 4:
+		pushRShiftMod("RSHIFTMOD", mathop.RSHIFTMOD().Serialize(), 0)
+	case 5:
+		pushRShiftMod("RSHIFTMODR", mathop.RSHIFTMODR().Serialize(), 1)
+	case 6:
+		pushRShiftMod("RSHIFTMODC", mathop.RSHIFTMODC().Serialize(), 2)
+	case 7:
+		pushRShiftCodeMod("RSHIFTCODEMOD(3)", mathop.RSHIFTCODEMOD(3).Serialize(), 0)
+	case 8:
+		pushRShiftCodeMod("RSHIFTRCODEMOD(3)", mathop.RSHIFTRCODEMOD(3).Serialize(), 1)
+	case 9:
+		pushRShiftCodeMod("RSHIFTCCODEMOD(3)", mathop.RSHIFTCCODEMOD(3).Serialize(), 2)
+	case 10:
+		pushLShiftDivMod("LSHIFTMOD", mathop.LSHIFTMOD().Serialize(), 0, true)
+	case 11:
+		pushLShiftDivMod("LSHIFTMODR", mathop.LSHIFTMODR().Serialize(), 1, true)
+	case 12:
+		pushLShiftDivMod("LSHIFTMODC", mathop.LSHIFTMODC().Serialize(), 2, true)
+	case 13:
+		pushLShiftDivMod("LSHIFTDIVMODR", mathop.LSHIFTDIVMODR().Serialize(), 1, false)
+	case 14:
+		pushLShiftDivMod("LSHIFTDIVMODC", mathop.LSHIFTDIVMODC().Serialize(), 2, false)
+	case 15:
+		pushAddRShiftMod("ADDRSHIFTMOD", mathop.ADDRSHIFTMOD().Serialize(), 0)
+	case 16:
+		pushAddRShiftMod("ADDRSHIFTMODR", mathop.ADDRSHIFTMODR().Serialize(), 1)
+	case 17:
+		pushAddRShiftMod("ADDRSHIFTMODC", mathop.ADDRSHIFTMODC().Serialize(), 2)
+	case 18:
+		pushMulPow2Mod("MULMODPOW2", mathop.MULMODPOW2_VAR().Serialize(), 0)
+	case 19:
+		pushMulPow2Mod("MULMODPOW2R", mathop.MULMODPOW2R_VAR().Serialize(), 1)
+	case 20:
+		pushMulPow2Mod("MULMODPOW2C", mathop.MULMODPOW2C_VAR().Serialize(), 2)
+	case 21:
+		pushMulRShiftMod("MULRSHIFTMOD", mathop.MULRSHIFTMOD_VAR().Serialize(), 0)
+	case 22:
+		pushMulRShiftMod("MULRSHIFTRMOD", mathop.MULRSHIFTRMOD_VAR().Serialize(), 1)
+	case 23:
+		pushMulRShiftMod("MULRSHIFTCMOD", mathop.MULRSHIFTCMOD_VAR().Serialize(), 2)
+	case 24:
+		pushMulPow2CodeMod("MULMODPOW2CODE(3)", mathop.MULMODPOW2CODE(3).Serialize(), 0)
+	case 25:
+		pushMulPow2CodeMod("MULMODPOW2RCODE(3)", mathop.MULMODPOW2RCODE(3).Serialize(), 1)
+	case 26:
+		pushMulPow2CodeMod("MULMODPOW2CCODE(3)", mathop.MULMODPOW2CCODE(3).Serialize(), 2)
+	case 27:
+		pushMulRShiftCodeMod("MULRSHIFTCODEMOD(3)", mathop.MULRSHIFTCODEMOD(3).Serialize(), 0)
+	case 28:
+		pushMulRShiftCodeMod("MULRSHIFTRCODEMOD(3)", mathop.MULRSHIFTRCODEMOD(3).Serialize(), 1)
+	case 29:
+		pushMulRShiftCodeMod("MULRSHIFTCCODEMOD(3)", mathop.MULRSHIFTCCODEMOD(3).Serialize(), 2)
+	case 30:
+		pushAddRShiftCodeMod("ADDRSHIFTCODEMOD(3)", mathop.ADDRSHIFTCODEMOD(3).Serialize(), 0)
+	case 31:
+		pushAddRShiftCodeMod("ADDRSHIFTRCODEMOD(3)", mathop.ADDRSHIFTRCODEMOD(3).Serialize(), 1)
+	case 32:
+		pushAddRShiftCodeMod("ADDRSHIFTCCODEMOD(3)", mathop.ADDRSHIFTCCODEMOD(3).Serialize(), 2)
+	case 33:
+		pushMulAddRShiftCodeMod("MULADDRSHIFTCODEMOD(3)", mathop.MULADDRSHIFTCODEMOD(3).Serialize(), 0)
+	case 34:
+		pushMulAddRShiftCodeMod("MULADDRSHIFTRCODEMOD(3)", mathop.MULADDRSHIFTRCODEMOD(3).Serialize(), 1)
+	default:
+		pushMulAddRShiftCodeMod("MULADDRSHIFTCCODEMOD(3)", mathop.MULADDRSHIFTCCODEMOD(3).Serialize(), 2)
+	}
+	return true
+}
+
 func (g *parityProgramGenerator) emitMathCompoundOp(mode int) bool {
 	base := len(g.stack)
 	divResult := func(x, y *big.Int, rounding int) (*big.Int, *big.Int) {
@@ -4397,13 +15291,34 @@ func (g *parityProgramGenerator) emitMathCompoundOp(mode int) bool {
 		g.emit("MULADDDIVMODR", mathop.MULADDDIVMODR().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, qrValues(q, r)...)
-	default:
+	case 17:
 		sum := new(big.Int).Add(new(big.Int).Mul(mx, my), w)
 		q, r := divResult(sum, z, 2)
 		pushMulAddDivArgs(mx, my, w, z)
 		g.emit("MULADDDIVMODC", mathop.MULADDDIVMODC().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, qrValues(q, r)...)
+	case 18:
+		product := new(big.Int).Mul(mx, my)
+		_, r := divResult(product, z, 0)
+		pushMulDivArgs(mx, my, z)
+		g.emit("MULMOD", mathop.MULMOD().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(r))
+	case 19:
+		product := new(big.Int).Mul(mx, my)
+		_, r := divResult(product, z, 1)
+		pushMulDivArgs(mx, my, z)
+		g.emit("MULMODR", mathop.MULMODR().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(r))
+	default:
+		product := new(big.Int).Mul(mx, my)
+		_, r := divResult(product, z, 2)
+		pushMulDivArgs(mx, my, z)
+		g.emit("MULMODC", mathop.MULMODC().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(r))
 	}
 	return true
 }
@@ -4531,7 +15446,7 @@ func (g *parityProgramGenerator) emitMathQuietLogicOp(mode int) bool {
 		g.stack = append(g.stack, parityProgramBoolValue(true))
 	case 21:
 		g.emitPushInt("qfits_x", big.NewInt(63))
-		g.emit("QFITS(7)", mathop.QFITS(6).Serialize())
+		g.emit("QFITS(6)", mathop.QFITS(6).Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramIntValue(big.NewInt(63)))
 	case 22:
@@ -4556,6 +15471,16 @@ func (g *parityProgramGenerator) emitMathQuietLogicOp(mode int) bool {
 		g.emit("QUFITSX(fail)", mathop.QUFITSX().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNaN})
+	case 26:
+		g.emitPushNaN("qsgn_nan")
+		g.emit("QSGN(NaN)", mathop.QSGN().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNaN})
+	case 27:
+		g.emitPushNaN("qgtint_nan")
+		g.emit("QGTINT(NaN)", mathop.QGTINT(4).Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNaN})
 	default:
 		g.emitPushInt("chknan_x", big.NewInt(7))
 		g.emit("CHKNAN", mathop.CHKNAN().Serialize())
@@ -4570,6 +15495,7 @@ func (g *parityProgramGenerator) emitMathShiftModOp(mode int) bool {
 	x := big.NewInt(-17)
 	mx := big.NewInt(-7)
 	my := big.NewInt(5)
+	w := big.NewInt(2)
 	shift := big.NewInt(2)
 	divisor := func(s *big.Int) *big.Int {
 		return new(big.Int).Lsh(big.NewInt(1), uint(s.Uint64()))
@@ -4598,6 +15524,18 @@ func (g *parityProgramGenerator) emitMathShiftModOp(mode int) bool {
 	pushLShiftDiv := func(name string) {
 		g.emitPushInt(name+"_x", mx)
 		g.emitPushInt(name+"_y", my)
+		g.emitPushInt(name+"_shift", shift)
+	}
+	pushLShiftAddDivMod := func(name string) {
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_w", w)
+		g.emitPushInt(name+"_z", my)
+		g.emitPushInt(name+"_shift", shift)
+	}
+	pushMulAddRShiftMod := func(name string) {
+		g.emitPushInt(name+"_x", mx)
+		g.emitPushInt(name+"_y", my)
+		g.emitPushInt(name+"_w", w)
 		g.emitPushInt(name+"_shift", shift)
 	}
 
@@ -4684,11 +15622,53 @@ func (g *parityProgramGenerator) emitMathShiftModOp(mode int) bool {
 		g.emit("LSHIFTDIVC", mathop.LSHIFTDIVC().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramIntValue(q))
-	default:
+	case 13:
 		dividend := new(big.Int).Mul(mx, divisor(shift))
 		q, r := round(dividend, my, 0)
 		pushLShiftDiv("lshiftdivmod")
 		g.emit("LSHIFTDIVMOD", mathop.LSHIFTDIVMOD().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
+	case 14:
+		dividend := new(big.Int).Add(new(big.Int).Mul(mx, divisor(shift)), w)
+		q, r := round(dividend, my, 0)
+		pushLShiftAddDivMod("lshiftadddivmod")
+		g.emit("LSHIFTADDDIVMOD", mathop.LSHIFTADDDIVMOD().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
+	case 15:
+		dividend := new(big.Int).Add(new(big.Int).Mul(mx, divisor(shift)), w)
+		q, r := round(dividend, my, 1)
+		pushLShiftAddDivMod("lshiftadddivmodr")
+		g.emit("LSHIFTADDDIVMODR", mathop.LSHIFTADDDIVMODR().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
+	case 16:
+		dividend := new(big.Int).Add(new(big.Int).Mul(mx, divisor(shift)), w)
+		q, r := round(dividend, my, 2)
+		pushLShiftAddDivMod("lshiftadddivmodc")
+		g.emit("LSHIFTADDDIVMODC", mathop.LSHIFTADDDIVMODC().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
+	case 17:
+		dividend := new(big.Int).Add(new(big.Int).Mul(mx, my), w)
+		q, r := round(dividend, divisor(shift), 0)
+		pushMulAddRShiftMod("muladdrshiftmod")
+		g.emit("MULADDRSHIFTMOD", mathop.MULADDRSHIFTMOD().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
+	case 18:
+		dividend := new(big.Int).Add(new(big.Int).Mul(mx, my), w)
+		q, r := round(dividend, divisor(shift), 1)
+		pushMulAddRShiftMod("muladdrshiftrmod")
+		g.emit("MULADDRSHIFTRMOD", mathop.MULADDRSHIFTRMOD().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
+	default:
+		dividend := new(big.Int).Add(new(big.Int).Mul(mx, my), w)
+		q, r := round(dividend, divisor(shift), 2)
+		pushMulAddRShiftMod("muladdrshiftcmod")
+		g.emit("MULADDRSHIFTCMOD", mathop.MULADDRSHIFTCMOD().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramIntValue(q), parityProgramIntValue(r))
 	}
@@ -5035,6 +16015,10 @@ func (g *parityProgramGenerator) emitTupleOp() bool {
 }
 
 func (g *parityProgramGenerator) emitTupleExtraOp() bool {
+	return g.emitTupleExtraOpMode(g.r.Intn(19))
+}
+
+func (g *parityProgramGenerator) emitTupleExtraOpMode(mode int) bool {
 	base := len(g.stack)
 	two := parityProgramStackValue{
 		kind: parityProgramTuple,
@@ -5052,7 +16036,7 @@ func (g *parityProgramGenerator) emitTupleExtraOp() bool {
 		},
 	}
 
-	switch g.r.Intn(16) {
+	switch mode % 19 {
 	case 0:
 		g.emitPushInt("tuplevar_0", big.NewInt(11))
 		g.emitPushInt("tuplevar_1", big.NewInt(22))
@@ -5157,6 +16141,23 @@ func (g *parityProgramGenerator) emitTupleExtraOp() bool {
 		g.emit("NULLSWAPIF2", tupleop.NULLSWAPIF2().Serialize())
 		g.stack = g.stack[:base]
 		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNull}, parityProgramStackValue{kind: parityProgramNull}, parityProgramIntValue(big.NewInt(1)))
+	case 15:
+		g.emitPushInt("nullrotrifnot_payload", big.NewInt(7))
+		g.emitPushInt("nullrotrifnot_cond", big.NewInt(0))
+		g.emit("NULLROTRIFNOT", tupleop.NULLROTRIFNOT().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNull}, parityProgramIntValue(big.NewInt(7)), parityProgramIntValue(big.NewInt(0)))
+	case 16:
+		g.emitPushInt("nullswapifnot2_cond", big.NewInt(0))
+		g.emit("NULLSWAPIFNOT2", tupleop.NULLSWAPIFNOT2().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNull}, parityProgramStackValue{kind: parityProgramNull}, parityProgramIntValue(big.NewInt(0)))
+	case 17:
+		g.emitPushInt("nullrotrif2_payload", big.NewInt(7))
+		g.emitPushInt("nullrotrif2_cond", big.NewInt(1))
+		g.emit("NULLROTRIF2", tupleop.NULLROTRIF2().Serialize())
+		g.stack = g.stack[:base]
+		g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNull}, parityProgramStackValue{kind: parityProgramNull}, parityProgramIntValue(big.NewInt(7)), parityProgramIntValue(big.NewInt(1)))
 	default:
 		g.emitPushInt("nullrotrifnot2_payload", big.NewInt(7))
 		g.emitPushInt("nullrotrifnot2_cond", big.NewInt(0))
@@ -5219,6 +16220,11 @@ func (g *parityProgramGenerator) emit(name string, op *cell.Builder) {
 func (g *parityProgramGenerator) emitPushInt(name string, v *big.Int) {
 	g.emit(fmt.Sprintf("PUSHINT(%s:%s)", name, v.String()), stackop.PUSHINT(v).Serialize())
 	g.stack = append(g.stack, parityProgramIntValue(v))
+}
+
+func (g *parityProgramGenerator) emitPushNaN(name string) {
+	g.emit("PUSHNAN("+name+")", mathop.PUSHNAN().Serialize())
+	g.stack = append(g.stack, parityProgramStackValue{kind: parityProgramNaN})
 }
 
 func (g *parityProgramGenerator) emitPushNull(name string) {
@@ -5432,6 +16438,30 @@ func parityProgramDictRoot(byRef bool) (*cell.Cell, *cell.Cell, *cell.Cell) {
 	return dict.AsCell(), value, ref
 }
 
+func parityProgramDictContinuationRoot(signed bool, result int64) *cell.Cell {
+	value := parityProgramCodeCell(stackop.PUSHINT(big.NewInt(result)).Serialize())
+	dict := cell.NewDict(8)
+	var err error
+	if signed {
+		err = dict.SetIntKey(big.NewInt(3), value)
+	} else {
+		_, err = dict.SetWithMode(parityProgramKeyCell(3, 8), value, cell.DictSetModeSet)
+	}
+	if err != nil {
+		panic(err)
+	}
+	return dict.AsCell()
+}
+
+func parityProgramPrefixContinuationRoot(result int64) *cell.Cell {
+	value := parityProgramCodeCell(stackop.PUSHINT(big.NewInt(result)).Serialize())
+	dict := cell.NewPrefixDict(4)
+	if _, err := dict.SetWithMode(parityProgramKeyCell(0b10, 2), value, cell.DictSetModeSet); err != nil {
+		panic(err)
+	}
+	return dict.AsCell()
+}
+
 func parityProgramRootAsDict(root *cell.Cell, bits uint) *cell.Dictionary {
 	if root == nil {
 		return cell.NewDict(bits)
@@ -5480,6 +16510,32 @@ func parityProgramDictScalarName(kind int, suffix string) string {
 	default:
 		return "DICT" + suffix
 	}
+}
+
+func parityProgramDictValueName(kind int, suffix string, byRef bool) string {
+	name := parityProgramDictScalarName(kind, suffix)
+	if byRef {
+		name += "REF"
+	}
+	return name
+}
+
+func parityProgramDictNearName(kind int, fetchNext, allowEq bool) string {
+	suffix := "GETPREV"
+	if fetchNext {
+		suffix = "GETNEXT"
+	}
+	if allowEq {
+		suffix += "EQ"
+	}
+	return parityProgramDictScalarName(kind, suffix)
+}
+
+func parityProgramDictKeyValue(kind int, value uint64, bits uint) parityProgramStackValue {
+	if kind == 0 {
+		return parityProgramStackValue{kind: parityProgramSlice, slice: parityProgramKeySlice(value, bits)}
+	}
+	return parityProgramIntValue(big.NewInt(int64(value)))
 }
 
 func parityProgramDictBuilderSetNameOpcode(mode cell.DictSetMode, kind int) (string, uint64) {
@@ -5564,6 +16620,14 @@ func parityProgramStorageStatCell() *cell.Cell {
 		EndCell()
 }
 
+func parityProgramSharedRefStorageStatCell() *cell.Cell {
+	ref := cell.BeginCell().MustStoreUInt(0xD, 4).EndCell()
+	return cell.BeginCell().
+		MustStoreRef(ref).
+		MustStoreRef(ref).
+		EndCell()
+}
+
 func parityProgramMetaBuilder() *cell.Builder {
 	return cell.BeginCell().
 		MustStoreUInt(0xAB, 8).
@@ -5584,6 +16648,25 @@ func parityProgramFullBitsBuilder() *cell.Builder {
 		panic(err)
 	}
 	return builder
+}
+
+func parityProgramAddrNoneSlice() *cell.Slice {
+	return cell.BeginCell().MustStoreUInt(0, 2).ToSlice()
+}
+
+func parityProgramExtAddrSlice() *cell.Slice {
+	return cell.BeginCell().MustStoreAddr(address.NewAddressExt(0, 256, bytes.Repeat([]byte{0x33}, 32))).ToSlice()
+}
+
+func parityProgramExtAddrDataSlice() *cell.Slice {
+	return cell.BeginCell().MustStoreSlice(bytes.Repeat([]byte{0x33}, 32), 256).ToSlice()
+}
+
+func parityProgramExtAddrTailSlice() *cell.Slice {
+	return cell.BeginCell().
+		MustStoreBuilder(parityProgramExtAddrSlice().ToBuilder()).
+		MustStoreUInt(0xA, 4).
+		ToSlice()
 }
 
 func parityProgramStdAddrSlice() *cell.Slice {
@@ -5607,6 +16690,23 @@ func parityProgramStdAddrTailSlice() *cell.Slice {
 
 func parityProgramAddrNoneTailSlice() *cell.Slice {
 	return cell.BeginCell().MustStoreUInt(0, 2).MustStoreUInt(0xA, 4).ToSlice()
+}
+
+func parityProgramParsedNoneAddrTuple() parityProgramStackValue {
+	return parityProgramStackValue{
+		kind:  parityProgramTuple,
+		tuple: []parityProgramStackValue{parityProgramIntValue(big.NewInt(0))},
+	}
+}
+
+func parityProgramParsedExtAddrTuple() parityProgramStackValue {
+	return parityProgramStackValue{
+		kind: parityProgramTuple,
+		tuple: []parityProgramStackValue{
+			parityProgramIntValue(big.NewInt(1)),
+			{kind: parityProgramSlice, slice: parityProgramExtAddrDataSlice()},
+		},
+	}
 }
 
 func parityProgramParsedStdAddrTuple() parityProgramStackValue {

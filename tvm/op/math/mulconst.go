@@ -14,6 +14,7 @@ func init() {
 }
 
 func MULCONST(value int8) (op *helpers.AdvancedOP) {
+	arg := big.NewInt(int64(value))
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
@@ -23,7 +24,7 @@ func MULCONST(value int8) (op *helpers.AdvancedOP) {
 			}
 
 			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
-				return x.Mul(x, big.NewInt(int64(value)))
+				return x.Mul(x, arg)
 			})
 		},
 		BitPrefix: helpers.BytesPrefix(0xA7),
@@ -39,6 +40,7 @@ func MULCONST(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 			value = int8(val)
+			arg.SetInt64(int64(value))
 			return nil
 		},
 	}

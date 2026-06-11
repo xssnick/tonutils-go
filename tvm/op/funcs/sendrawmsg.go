@@ -14,6 +14,10 @@ func init() {
 func SENDRAWMSG() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			i0, err := state.Stack.PopIntRange(0, 255)
 			if err != nil {
 				return err

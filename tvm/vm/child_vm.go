@@ -36,19 +36,25 @@ func copyTopValuesToParent(parent, child *Stack, count int) error {
 		return nil
 	}
 
-	cp := child.Copy()
-	if cp.Len() > count {
-		if err := cp.DropAfter(count); err != nil {
-			return err
-		}
+	start := child.Len() - count
+	if start < 0 {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	for _, val := range cp.elems {
+	for _, val := range child.elems[start:] {
+		val = unbindValueTrace(val, child.trace)
 		if err := parent.PushAny(val); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func unbindCellTrace(cl *cell.Cell, trace *cell.Trace) *cell.Cell {
+	if cl == nil || trace == nil {
+		return cl
+	}
+	return cl.WithTrace(cl.Trace().WithoutTrace(trace))
 }
 
 func pushCommittedResultCell(parent *Stack, committed bool, value *cell.Cell) error {
@@ -181,14 +187,17 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		return err
 	}
 
+	childTrace := child.Cells.Trace()
 	if cfg.ReturnData {
-		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, child.Committed.Data); err != nil {
+		data := unbindCellTrace(child.Committed.Data, childTrace)
+		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, data); err != nil {
 			return err
 		}
 	}
 
 	if cfg.ReturnActions {
-		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, child.Committed.Actions); err != nil {
+		actions := unbindCellTrace(child.Committed.Actions, childTrace)
+		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, actions); err != nil {
 			return err
 		}
 	}

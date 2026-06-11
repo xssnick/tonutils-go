@@ -102,6 +102,32 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to build sendmsg test message: %v", err)
 	}
+	sendMsgUserFwdFeeCell, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     tonopsTestAddr,
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.MustFromNano(big.NewInt(1000), 9),
+		IHRFee:      tlb.MustFromNano(big.NewInt(0), 9),
+		FwdFee:      tlb.MustFromNano(big.NewInt(500), 9),
+		Body:        cell.BeginCell().MustStoreUInt(0xAC, 8).EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build sendmsg fwd-fee test message: %v", err)
+	}
+	sendMsgPrices := tlb.ConfigMsgForwardPrices{LumpPrice: 1}
+	sendMsgVersionConfig := func(version uint32) *cell.Cell {
+		return tonopsCrossSendMsgConfig(t, version, sendMsgPrices)
+	}
+	sendMsgVersionC7 := func(version uint32) tuple.Tuple {
+		root := sendMsgVersionConfig(version)
+		return makeTonopsTestC7(t, tonopsTestC7Config{
+			ConfigRoot:     root,
+			UnpackedConfig: tonopsCrossSendMsgUnpackedConfig(t, sendMsgPrices),
+		})
+	}
+	sendMsgVersionRefCfg := func(version uint32) *referenceGetMethodConfig {
+		return tonopsCrossRefConfig(sendMsgVersionConfig(version))
+	}
 	dataSizeLeaf := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
 	dataSizeRoot := cell.BeginCell().MustStoreRef(dataSizeLeaf).MustStoreRef(dataSizeLeaf).EndCell()
 	stdAddrSlice := cell.BeginCell().MustStoreAddr(tonopsTestAddr).ToSlice()
@@ -172,12 +198,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	}
 
 	type testCase struct {
-		name   string
-		code   *cell.Cell
-		stack  []any
-		exit   int32
-		c7     tuple.Tuple
-		refCfg *referenceGetMethodConfig
+		name          string
+		code          *cell.Cell
+		stack         []any
+		exit          int32
+		c7            tuple.Tuple
+		globalVersion int
+		refCfg        *referenceGetMethodConfig
 	}
 
 	tests := []testCase{
@@ -1142,6 +1169,15 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:          "sendmsg_user_fwd_fee_lower_bound_gv13",
+			code:          codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
+			stack:         []any{sendMsgUserFwdFeeCell, int64(1024)},
+			exit:          0,
+			c7:            sendMsgVersionC7(13),
+			globalVersion: 13,
+			refCfg:        sendMsgVersionRefCfg(13),
+		},
+		{
 			name:  "sendmsg_send",
 			code:  codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
 			stack: []any{sendMsgCell, int64(1)},
@@ -1213,7 +1249,11 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				t.Fatalf("failed to build reference stack: %v", err)
 			}
 
-			goRes, err := runGoCrossCode(code, cell.BeginCell().EndCell(), tt.c7, goStack)
+			globalVersion := tt.globalVersion
+			if globalVersion == 0 {
+				globalVersion = referenceRawRunGlobalVersion
+			}
+			goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), tt.c7, goStack, globalVersion)
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
@@ -1262,6 +1302,60 @@ func tonopsCrossConfigWithGlobalVersion(t *testing.T, version uint32) *cell.Cell
 	return mustConfigDictCell(t, map[uint32]*cell.Cell{
 		uint32(tlb.ConfigParamGlobalVersion): versionCell,
 	})
+}
+
+func tonopsCrossSendMsgConfig(t *testing.T, version uint32, msgPrices tlb.ConfigMsgForwardPrices) *cell.Cell {
+	t.Helper()
+
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version})
+	if err != nil {
+		t.Fatalf("failed to build global version config: %v", err)
+	}
+	msgPricesCell, err := tlb.ToCell(&msgPrices)
+	if err != nil {
+		t.Fatalf("failed to build msg prices config: %v", err)
+	}
+	sizeLimitsCell, err := tlb.ToCell(&tlb.SizeLimitsConfigV1{
+		MaxMsgBits:      1 << 20,
+		MaxMsgCells:     128,
+		MaxLibraryCells: 1000,
+		MaxVMDataDepth:  512,
+		MaxExtMsgSize:   65535,
+		MaxExtMsgDepth:  512,
+	})
+	if err != nil {
+		t.Fatalf("failed to build size limits config: %v", err)
+	}
+	return mustConfigDictCell(t, map[uint32]*cell.Cell{
+		uint32(tlb.ConfigParamGlobalVersion):               versionCell,
+		uint32(tlb.ConfigParamMsgForwardPricesMasterchain): msgPricesCell,
+		uint32(tlb.ConfigParamMsgForwardPricesBasechain):   msgPricesCell,
+		uint32(tlb.ConfigParamSizeLimits):                  sizeLimitsCell,
+	})
+}
+
+func tonopsCrossSendMsgUnpackedConfig(t *testing.T, msgPrices tlb.ConfigMsgForwardPrices) tuple.Tuple {
+	t.Helper()
+
+	unpacked := tuple.NewTupleSized(7)
+	mustSetTupleValue(t, &unpacked, 4, makeMsgPricesSlice(
+		msgPrices.LumpPrice,
+		msgPrices.BitPrice,
+		msgPrices.CellPrice,
+		msgPrices.IHRFactor,
+		msgPrices.FirstFrac,
+		msgPrices.NextFrac,
+	))
+	mustSetTupleValue(t, &unpacked, 5, makeMsgPricesSlice(
+		msgPrices.LumpPrice,
+		msgPrices.BitPrice,
+		msgPrices.CellPrice,
+		msgPrices.IHRFactor,
+		msgPrices.FirstFrac,
+		msgPrices.NextFrac,
+	))
+	mustSetTupleValue(t, &unpacked, 6, makeSizeLimitsSlice(1<<20, 128))
+	return unpacked
 }
 
 func tonopsCrossRefConfig(configRoot *cell.Cell) *referenceGetMethodConfig {

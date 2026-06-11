@@ -557,7 +557,7 @@ func SHA256U() *helpers.SimpleOP {
 				return err
 			}
 			sum := sha256.Sum256(data)
-			return state.Stack.PushInt(new(big.Int).SetBytes(sum[:]))
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(sum[:]))
 		},
 		Name:      "SHA256U",
 		BitPrefix: helpers.BytesPrefix(0xF9, 0x02),
@@ -795,7 +795,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 				return state.Stack.PushOwnedBuilder(builder)
 			}
 			if len(hash) <= 32 {
-				return state.Stack.PushInt(new(big.Int).SetBytes(hash))
+				return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash))
 			}
 			out := tuple.NewTupleSized((len(hash) + 31) / 32)
 			for i := 0; i < out.Len(); i++ {
@@ -821,7 +821,8 @@ func HASHBU() *helpers.SimpleOP {
 				return err
 			}
 			cl := builder.WithoutTrace().EndCell()
-			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash()))
+			hash := cl.HashKey()
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},
 		Name:      "HASHBU",
 		BitPrefix: helpers.BytesPrefix(0xF9, 0x16),

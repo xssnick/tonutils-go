@@ -2,7 +2,6 @@ package cellslice
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -48,7 +47,7 @@ func init() {
 }
 
 func pushBuilderInt(state *vm.State, v int64) error {
-	return state.Stack.PushInt(big.NewInt(v))
+	return state.Stack.PushSmallInt(v)
 }
 
 func pushStoreQuietStatus(state *vm.State, failed bool) error {

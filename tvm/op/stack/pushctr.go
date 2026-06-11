@@ -59,7 +59,11 @@ func (op *OpPUSHCTR) InstructionBits() int64 {
 }
 
 func (op *OpPUSHCTR) Interpret(state *vm.State) error {
-	return state.Stack.PushAny(cloneLegacyControlRegisterValue(state.Reg.Get(int(op.ctrIndex))))
+	val := state.Reg.Get(int(op.ctrIndex))
+	if op.ctrIndex == 4 || op.ctrIndex == 5 {
+		return state.Stack.PushOwnedValue(val)
+	}
+	return state.Stack.PushAny(cloneLegacyControlRegisterValue(val))
 }
 
 func cloneLegacyControlRegisterValue(v any) any {

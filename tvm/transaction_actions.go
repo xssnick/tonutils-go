@@ -1,7 +1,6 @@
 package tvm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -1041,26 +1040,32 @@ func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current 
 		libs = current.Copy()
 	}
 
-	var libHash []byte
+	var libHash cell.Hash
+	var hasLibHash bool
 	var libRef *cell.Cell
 	switch ref := act.LibRef.(type) {
 	case tlb.LibRefHash:
-		libHash = transactionNormalizeBits256(ref.LibHash)
+		rawHash := transactionNormalizeBits256(ref.LibHash)
+		if len(rawHash) == 32 {
+			copy(libHash[:], rawHash)
+			hasLibHash = true
+		}
 	case tlb.LibRefRef:
 		libRef = ref.Library
 		if libRef != nil {
-			libHash = libRef.Hash()
+			libHash = libRef.HashKey()
+			hasLibHash = true
 		}
 	default:
 		out.resultCode = 34
 		return out, nil
 	}
-	if len(libHash) != 32 {
+	if !hasLibHash {
 		out.resultCode = 34
 		return out, nil
 	}
 
-	key := cell.BeginCell().MustStoreSlice(libHash, 256).EndCell()
+	key := cell.BeginCell().MustStoreSlice(libHash[:], 256).EndCell()
 	if mode == 0 {
 		if err := libs.Delete(key); err != nil {
 			out.resultCode = 42
@@ -1073,7 +1078,7 @@ func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current 
 	if existing, err := libs.LoadValue(key); err == nil && existing != nil {
 		isPublic, loadErr := existing.LoadBoolBit()
 		existingRef, refErr := existing.LoadRefCell()
-		if loadErr == nil && refErr == nil && existingRef != nil && bytes.Equal(existingRef.Hash(), libHash) {
+		if loadErr == nil && refErr == nil && existingRef != nil && existingRef.HashKey() == libHash {
 			libRef = existingRef
 			if isPublic == (mode == 2) {
 				out.nextLibraries = libs

@@ -120,6 +120,21 @@ func TestTVMCrossEmulatorRunVM(t *testing.T) {
 			},
 		},
 		{
+			name: "runvm_committed_actions_ctos",
+			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(4|32).Serialize(), cellsliceop.CTOS().Serialize())),
+			stack: []any{
+				int64(0),
+				codeFromBuilders(t,
+					stackop.PUSHREF(returnedData).Serialize(),
+					execop.POPCTR(4).Serialize(),
+					stackop.PUSHREF(returnedActions).Serialize(),
+					execop.POPCTR(5).Serialize(),
+					funcsop.COMMIT().Serialize(),
+				).MustBeginParse(),
+				cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
+			},
+		},
+		{
 			name: "runvm_returns_data_actions_and_gas",
 			code: prependRawMethodDrop(codeFromBuilders(t, execop.RUNVM(4|8|32).Serialize())),
 			stack: []any{

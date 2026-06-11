@@ -129,3 +129,60 @@ func TestDictionary_LoadValueSameBitLabel(t *testing.T) {
 		t.Fatal("expected lookup miss on mismatched same-bit label")
 	}
 }
+
+func TestMatchLabelPrefixConsumesMismatchBit(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxLen      uint
+		labelValue  uint64
+		labelBits   uint
+		keyValue    uint64
+		keyBits     uint
+		wantMatched uint
+		wantLeft    uint
+	}{
+		{
+			name:        "long label",
+			maxLen:      8,
+			labelValue:  0b1010110,
+			labelBits:   7,
+			keyValue:    0b1011111,
+			keyBits:     7,
+			wantMatched: 3,
+			wantLeft:    3,
+		},
+		{
+			name:        "same label",
+			maxLen:      5,
+			labelValue:  0b11111,
+			labelBits:   5,
+			keyValue:    0b11110,
+			keyBits:     5,
+			wantMatched: 4,
+			wantLeft:    0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := BeginCell()
+			if err := storeDictLabel(builder, buildTestLabelSlice(t, tc.labelValue, tc.labelBits), tc.maxLen); err != nil {
+				t.Fatal(err)
+			}
+
+			loader := builder.EndCell().MustBeginParse()
+			key := BeginCell().MustStoreUInt(tc.keyValue, tc.keyBits).ToSlice()
+
+			_, gotMatched, err := matchLabelPrefix(tc.maxLen, loader, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotMatched != tc.wantMatched {
+				t.Fatalf("unexpected matched length: got=%d want=%d", gotMatched, tc.wantMatched)
+			}
+			if left := key.BitsLeft(); left != tc.wantLeft {
+				t.Fatalf("unexpected key bits left: got=%d want=%d", left, tc.wantLeft)
+			}
+		})
+	}
+}

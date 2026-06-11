@@ -146,21 +146,31 @@ func (n fixedDictNode) appendEdgeLabel(bit uint64, label *Builder, name string) 
 
 func matchBuilderLabel(label *Builder, labelLen uint, key *Slice) (matched uint, newRight bool, diverged bool, err error) {
 	labelSlice := label.ToSlice()
-	for matched < labelLen && key.BitsLeft() > 0 {
-		curr, err := labelSlice.LoadUInt(1)
+	limit := min(labelLen, key.BitsLeft())
+	if limit == 0 {
+		return 0, false, false, nil
+	}
+
+	matched, err = commonSlicePrefix(labelSlice, key, limit)
+	if err != nil {
+		return 0, false, false, err
+	}
+
+	consumed := matched
+	if matched < limit {
+		next, err := key.BitAt(matched)
 		if err != nil {
 			return 0, false, false, err
 		}
-
-		next, err := key.LoadUInt(1)
-		if err != nil {
+		consumed++
+		if err = key.SkipBits(consumed); err != nil {
 			return 0, false, false, err
 		}
+		return matched, next != 0, true, nil
+	}
 
-		if curr != next {
-			return matched, next != 0, true, nil
-		}
-		matched++
+	if err = key.SkipBits(consumed); err != nil {
+		return 0, false, false, err
 	}
 	return matched, false, false, nil
 }

@@ -8,12 +8,12 @@ import (
 const maxSmallIndex = (1 << 30) - 1
 
 func popSmallIndex(state *vm.State) (int, error) {
-	val, err := state.Stack.PopIntRange(0, maxSmallIndex)
+	val, err := state.Stack.PopIntRangeInt64(0, maxSmallIndex)
 	if err != nil {
 		return 0, err
 	}
 
-	return int(val.Int64()), nil
+	return int(val), nil
 }
 
 func consumeLargeStackMoveGas(state *vm.State, count int) error {

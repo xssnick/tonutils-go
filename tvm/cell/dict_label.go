@@ -1,8 +1,8 @@
 package cell
 
 import (
-	"bytes"
 	"fmt"
+	"math/bits"
 )
 
 func dictLabelSizeBits(maxLen uint) uint {
@@ -89,38 +89,119 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 		return 0, nil, fmt.Errorf("label exceeds remaining key bits")
 	}
 
-	var toStore []byte
-	if bitType == 1 {
-		toStore = bytes.Repeat([]byte{0xFF}, 1+(int(ln)/8))
-	} else {
-		toStore = bytes.Repeat([]byte{0x00}, 1+(int(ln)/8))
-	}
-
-	if err = key.StoreSlice(toStore, uint(ln)); err != nil {
+	if err = key.StoreSameBit(bitType == 1, uint(ln)); err != nil {
 		return 0, nil, err
 	}
 	return uint(ln), key, nil
 }
 
 func consumeCommonPrefix(label, key *Slice, limit uint) (uint, error) {
+	limit = min(limit, key.BitsLeft())
+	if limit == 0 {
+		return 0, nil
+	}
+
+	matched, err := commonSlicePrefix(label, key, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	consumed := matched
+	if matched < limit {
+		consumed++
+	}
+	if err = label.SkipBits(consumed); err != nil {
+		return 0, err
+	}
+	if err = key.SkipBits(consumed); err != nil {
+		return 0, err
+	}
+
+	return matched, nil
+}
+
+func consumeSameBitPrefix(key *Slice, bit uint64, limit uint) (uint, error) {
+	limit = min(limit, key.BitsLeft())
+	if limit == 0 {
+		return 0, nil
+	}
+
 	matched := uint(0)
-	for matched < limit && key.BitsLeft() > 0 {
-		labelBit, err := label.LoadUInt(1)
+	for matched < limit {
+		chunk := min(uint(64), limit-matched)
+		value, err := preloadSliceUIntAt(key, matched, chunk)
 		if err != nil {
 			return 0, err
 		}
 
-		keyBit, err := key.LoadUInt(1)
-		if err != nil {
-			return 0, err
+		want := sameBitsValue(bit != 0, chunk)
+		if value == want {
+			matched += chunk
+			continue
 		}
 
-		if labelBit != keyBit {
-			return matched, nil
+		matched += chunk - uint(bits.Len64(value^want))
+		if err = key.SkipBits(matched + 1); err != nil {
+			return 0, err
 		}
-		matched++
+		return matched, nil
+	}
+
+	if err := key.SkipBits(matched); err != nil {
+		return 0, err
 	}
 	return matched, nil
+}
+
+func commonSlicePrefix(a, b *Slice, limit uint) (uint, error) {
+	if a.BitsLeft() < limit {
+		return 0, ErrNotEnoughData(int(a.BitsLeft()), int(limit))
+	}
+
+	matched := uint(0)
+	for matched < limit {
+		chunk := min(uint(64), limit-matched)
+		aVal, err := preloadSliceUIntAt(a, matched, chunk)
+		if err != nil {
+			return 0, err
+		}
+		bVal, err := preloadSliceUIntAt(b, matched, chunk)
+		if err != nil {
+			return 0, err
+		}
+
+		if aVal == bVal {
+			matched += chunk
+			continue
+		}
+
+		matched += chunk - uint(bits.Len64(aVal^bVal))
+		return matched, nil
+	}
+	return matched, nil
+}
+
+func preloadSliceUIntAt(src *Slice, offset, sz uint) (uint64, error) {
+	if sz == 0 {
+		return 0, nil
+	}
+	if offset > src.BitsLeft() || src.BitsLeft()-offset < sz {
+		return 0, ErrNotEnoughData(int(src.BitsLeft()-min(offset, src.BitsLeft())), int(sz))
+	}
+
+	cp := *src
+	cp.bitStart += uint16(offset)
+	return cp.loadUintFast(sz, true)
+}
+
+func sameBitsValue(bit bool, sz uint) uint64 {
+	if !bit {
+		return 0
+	}
+	if sz == 64 {
+		return ^uint64(0)
+	}
+	return (uint64(1) << sz) - 1
 }
 
 func matchLabelPrefix(sz uint, loader, key *Slice) (uint, uint, error) {
@@ -179,16 +260,9 @@ func matchLabelPrefix(sz uint, loader, key *Slice) (uint, uint, error) {
 		return 0, 0, fmt.Errorf("label exceeds remaining key bits")
 	}
 
-	matched := uint(0)
-	for matched < uint(ln) && key.BitsLeft() > 0 {
-		keyBit, err := key.LoadUInt(1)
-		if err != nil {
-			return 0, 0, err
-		}
-		if keyBit != bitType {
-			return uint(ln), matched, nil
-		}
-		matched++
+	matched, err := consumeSameBitPrefix(key, bitType, uint(ln))
+	if err != nil {
+		return 0, 0, err
 	}
 	return uint(ln), matched, nil
 }

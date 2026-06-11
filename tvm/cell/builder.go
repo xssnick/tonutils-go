@@ -49,7 +49,7 @@ func (b *Builder) MustStoreCoins(value uint64) *Builder {
 }
 
 func (b *Builder) StoreCoins(value uint64) error {
-	return b.StoreBigCoins(new(big.Int).SetUint64(value))
+	return b.StoreVarUInt(value, 16)
 }
 
 func (b *Builder) MustStoreBigCoins(value *big.Int) *Builder {
@@ -66,7 +66,24 @@ func (b *Builder) StoreBigCoins(value *big.Int) error {
 }
 
 func (b *Builder) StoreVarUInt(val uint64, sz uint) error {
-	return b.StoreBigVarUInt(big.NewInt(0).SetUint64(val), sz)
+	if sz == 0 {
+		return ErrInvalidSize
+	}
+
+	ln := uint((bits.Len64(val) + 7) >> 3)
+	if ln >= sz {
+		return ErrTooBigValue
+	}
+
+	szLen := uint(bits.Len64(uint64(sz - 1)))
+	if b.bitsSz+szLen+(ln*8) >= 1024 {
+		return ErrNotFit1023
+	}
+
+	if err := b.StoreUInt(uint64(ln), szLen); err != nil {
+		return err
+	}
+	return b.StoreUInt(val, ln*8)
 }
 
 func (b *Builder) StoreVarInt(val int64, sz uint) error {
@@ -191,6 +208,33 @@ func (b *Builder) StoreUInt(value uint64, sz uint) error {
 	}
 	if sz < 64 && value>>sz != 0 {
 		return ErrTooBigValue
+	}
+	if sz == 1 {
+		return b.StoreBoolBit(value == 1)
+	}
+	if b.bitsSz%8 == 0 && sz%8 == 0 {
+		if b.bitsSz+sz >= 1024 {
+			return ErrNotFit1023
+		}
+
+		dst := int(b.bitsSz / 8)
+		switch sz {
+		case 8:
+			b.data[dst] = byte(value)
+		case 16:
+			binary.BigEndian.PutUint16(b.data[dst:dst+2], uint16(value))
+		case 32:
+			binary.BigEndian.PutUint32(b.data[dst:dst+4], uint32(value))
+		case 64:
+			binary.BigEndian.PutUint64(b.data[dst:dst+8], value)
+		default:
+			value <<= 64 - sz
+			var buf [8]byte
+			binary.BigEndian.PutUint64(buf[:], value)
+			copy(b.data[dst:dst+int(sz/8)], buf[:int(sz/8)])
+		}
+		b.bitsSz += sz
+		return nil
 	}
 
 	value <<= 64 - sz

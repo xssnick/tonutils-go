@@ -485,12 +485,19 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseExternalParity(t *testing.T) 
 	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
 	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
 	outMsg := buildTransactionOutboundInternalCell(t, 1000)
+	shortVarDestMsg := buildTransactionOutboundInternalCellWithAddresses(t,
+		address.NewAddressNone(),
+		address.NewAddressVar(0, tonopsTestAddr.Workchain(), 255, tonopsTestAddr.Data()),
+		1000,
+		cell.BeginCell().MustStoreUInt(0xB0, 8).EndCell(),
+	)
 
 	tests := []struct {
-		name  string
-		code  *cell.Cell
-		shard *tlb.ShardAccount
-		msg   *cell.Cell
+		name       string
+		code       *cell.Cell
+		shard      *tlb.ShardAccount
+		msg        *cell.Cell
+		wantAction *transactionActionPhaseExpectation
 	}{
 		{
 			name: "accepted_success",
@@ -499,6 +506,28 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseExternalParity(t *testing.T) 
 		{
 			name: "committed_throw_runs_actions",
 			code: makeTransactionExternalCommitThenThrowCode(t, newData, outMsg, 42),
+		},
+		{
+			name: "committed_throw_invalid_dest_action_code36",
+			code: makeTransactionExternalCommitThenThrowCode(t, newData, shortVarDestMsg, 42),
+			wantAction: &transactionActionPhaseExpectation{
+				success:         false,
+				valid:           true,
+				resultCode:      36,
+				skippedActions:  0,
+				messagesCreated: 0,
+			},
+		},
+		{
+			name: "committed_throw_invalid_dest_action_mode2_skip",
+			code: makeTransactionExternalCommitThenThrowCodeWithMode(t, newData, shortVarDestMsg, 2, 42),
+			wantAction: &transactionActionPhaseExpectation{
+				success:         true,
+				valid:           true,
+				resultCode:      0,
+				skippedActions:  1,
+				messagesCreated: 0,
+			},
 		},
 	}
 
@@ -533,7 +562,50 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseExternalParity(t *testing.T) 
 			assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 			assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
 			assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+			if tt.wantAction != nil {
+				assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, *tt.wantAction)
+				assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, *tt.wantAction)
+			}
 		})
+	}
+}
+
+type transactionActionPhaseExpectation struct {
+	success         bool
+	valid           bool
+	resultCode      int32
+	skippedActions  uint16
+	messagesCreated uint16
+}
+
+func assertOrdinaryTransactionActionPhase(t *testing.T, side string, txCell *cell.Cell, want transactionActionPhaseExpectation) {
+	t.Helper()
+
+	var tx tlb.Transaction
+	if err := tlb.LoadFromCell(&tx, txCell.MustBeginParse()); err != nil {
+		t.Fatalf("failed to decode %s transaction: %v", side, err)
+	}
+	desc, ok := tx.Description.(tlb.TransactionDescriptionOrdinary)
+	if !ok {
+		t.Fatalf("%s transaction description = %T, want ordinary", side, tx.Description)
+	}
+	if desc.ActionPhase == nil {
+		t.Fatalf("%s transaction has no action phase", side)
+	}
+	phase := desc.ActionPhase
+	if phase.Success != want.success ||
+		phase.Valid != want.valid ||
+		phase.ResultCode != want.resultCode ||
+		phase.SkippedActions != want.skippedActions ||
+		phase.MessagesCreated != want.messagesCreated {
+		t.Fatalf("%s action phase mismatch: got success=%t valid=%t code=%d skipped=%d messages=%d",
+			side,
+			phase.Success,
+			phase.Valid,
+			phase.ResultCode,
+			phase.SkippedActions,
+			phase.MessagesCreated,
+		)
 	}
 }
 

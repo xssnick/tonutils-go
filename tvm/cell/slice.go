@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
@@ -418,8 +419,19 @@ func (c *Slice) loadUintFast(sz uint, preload bool) (uint64, error) {
 
 	var value uint64
 	if startBitOffset == 0 && sz%8 == 0 {
-		for _, b := range data {
-			value = (value << 8) | uint64(b)
+		switch sz {
+		case 8:
+			value = uint64(data[0])
+		case 16:
+			value = uint64(binary.BigEndian.Uint16(data))
+		case 32:
+			value = uint64(binary.BigEndian.Uint32(data))
+		case 64:
+			value = binary.BigEndian.Uint64(data)
+		default:
+			for _, b := range data {
+				value = (value << 8) | uint64(b)
+			}
 		}
 		if !preload {
 			c.bitStart += uint16(sz)

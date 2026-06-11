@@ -1640,11 +1640,7 @@ func encodeDictIntBits(value *big.Int, bits uint, signed bool) ([]byte, bool) {
 
 	outLen := int((bits + 7) / 8)
 	out := make([]byte, outLen)
-	bytes := unsignedValue.Bytes()
-	if len(bytes) > outLen {
-		return nil, false
-	}
-	copy(out[outLen-len(bytes):], bytes)
+	unsignedValue.FillBytes(out)
 	if rem := bits % 8; rem != 0 {
 		shiftSliceLeft(out, 8-rem)
 	}

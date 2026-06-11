@@ -16,6 +16,23 @@ type AdvancedOP struct {
 	FixedSizeBits     int64
 }
 
+type ReusableAdvancedOP struct {
+	*AdvancedOP
+}
+
+func FullOpcodeVariant(op *AdvancedOP, prefix BitPrefix) vm.OP {
+	op.BitPrefix = prefix
+	op.Prefixes = nil
+	op.SerializeSuffix = nil
+	op.DeserializeSuffix = nil
+	op.FixedSizeBits = 0
+	return &ReusableAdvancedOP{AdvancedOP: op}
+}
+
+func (op *ReusableAdvancedOP) Reusable() bool {
+	return true
+}
+
 func (op *AdvancedOP) GetPrefixes() []*cell.Slice {
 	if len(op.Prefixes) > 0 {
 		return PrefixSlices(op.Prefixes...)
@@ -28,7 +45,7 @@ func (op *AdvancedOP) Deserialize(code *cell.Slice) error {
 }
 
 func (op *AdvancedOP) DeserializeMatched(code *cell.Slice) error {
-	if _, err := code.LoadSlice(op.BitPrefix.Bits); err != nil {
+	if err := code.SkipBits(op.BitPrefix.Bits); err != nil {
 		return err
 	}
 	if op.DeserializeSuffix != nil {

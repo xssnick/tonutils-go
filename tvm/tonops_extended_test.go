@@ -78,17 +78,43 @@ func makeSizeLimitsSlice(maxMsgBits, maxMsgCells uint64) *cell.Slice {
 func makeInMsgParamsTuple() tuple.Tuple {
 	src := cell.BeginCell().MustStoreAddr(address.MustParseAddr("EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c")).ToSlice()
 	return tuple.NewTupleValue(
-		int64(1),
-		int64(0),
+		big.NewInt(1),
+		big.NewInt(0),
 		src,
-		int64(11),
-		int64(22),
-		int64(33),
+		big.NewInt(11),
+		big.NewInt(22),
+		big.NewInt(33),
 		tuple.NewTupleValue(big.NewInt(44), nil),
 		tuple.NewTupleValue(big.NewInt(55), nil),
 		nil,
 		nil,
 	)
+}
+
+func assertCurrencyTupleCoins(t *testing.T, name string, val tuple.Tuple, want int64) {
+	t.Helper()
+
+	if val.Len() != 2 {
+		t.Fatalf("unexpected %s tuple len: %d", name, val.Len())
+	}
+	gotAny, err := val.Index(0)
+	if err != nil {
+		t.Fatalf("failed to read %s coins: %v", name, err)
+	}
+	got, ok := gotAny.(*big.Int)
+	if !ok {
+		t.Fatalf("unexpected %s coins type %T", name, gotAny)
+	}
+	if got.Int64() != want {
+		t.Fatalf("unexpected %s coins: %s, want %d", name, got.String(), want)
+	}
+	extra, err := val.Index(1)
+	if err != nil {
+		t.Fatalf("failed to read %s extra currencies: %v", name, err)
+	}
+	if extra != nil {
+		t.Fatalf("unexpected %s extra currencies type %T", name, extra)
+	}
 }
 
 func feeTestC7(t *testing.T) tuple.Tuple {
@@ -186,19 +212,24 @@ func TestTonOpsExtendedParamsAndPRNG(t *testing.T) {
 	})
 
 	t.Run("InMsgAliases", func(t *testing.T) {
-		code := codeFromBuilders(t, funcsop.INMSG_VALUE().Serialize())
-		st, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion)
+		code := codeFromBuilders(t,
+			funcsop.INMSG_ORIGVALUE().Serialize(),
+			funcsop.INMSG_VALUE().Serialize(),
+		)
+		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion)
 		if err != nil {
-			t.Fatalf("unexpected INMSG_VALUE error: %v", err)
+			t.Fatalf("unexpected in-msg value alias error: %v", err)
 		}
-		val, err := res.Stack.PopTuple()
+		value, err := res.Stack.PopTuple()
 		if err != nil {
 			t.Fatalf("failed to pop INMSG_VALUE: %v", err)
 		}
-		if val.Len() != 2 {
-			t.Fatalf("unexpected INMSG_VALUE tuple len: %d", val.Len())
+		assertCurrencyTupleCoins(t, "INMSG_VALUE", value, 55)
+		origValue, err := res.Stack.PopTuple()
+		if err != nil {
+			t.Fatalf("failed to pop INMSG_ORIGVALUE: %v", err)
 		}
-		_, _ = st, val
+		assertCurrencyTupleCoins(t, "INMSG_ORIGVALUE", origValue, 44)
 	})
 
 	t.Run("RandOpsUpdateSeed", func(t *testing.T) {

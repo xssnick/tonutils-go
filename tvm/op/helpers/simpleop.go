@@ -21,8 +21,7 @@ func (op *SimpleOP) Deserialize(code *cell.Slice) error {
 }
 
 func (op *SimpleOP) DeserializeMatched(code *cell.Slice) error {
-	_, err := code.LoadSlice(op.BitPrefix.Bits)
-	return err
+	return code.SkipBits(op.BitPrefix.Bits)
 }
 
 func (op *SimpleOP) Serialize() *cell.Builder {

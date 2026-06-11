@@ -17,7 +17,8 @@ func HASHCU() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(new(big.Int).SetBytes(c.Hash()))
+			hash := c.HashKey()
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},
 		Name:      "HASHCU",
 		BitPrefix: helpers.BytesPrefix(0xF9, 0x00),

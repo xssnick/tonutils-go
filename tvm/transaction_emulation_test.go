@@ -128,6 +128,11 @@ func makeTransactionExternalAcceptThenFailCode(t *testing.T) *cell.Cell {
 
 func makeTransactionExternalCommitThenThrowCode(t *testing.T, newData, outMsg *cell.Cell, exitCode uint64) *cell.Cell {
 	t.Helper()
+	return makeTransactionExternalCommitThenThrowCodeWithMode(t, newData, outMsg, 0, exitCode)
+}
+
+func makeTransactionExternalCommitThenThrowCodeWithMode(t *testing.T, newData, outMsg *cell.Cell, mode uint8, exitCode uint64) *cell.Cell {
+	t.Helper()
 	return codeFromBuilders(t,
 		stackop.DROP().Serialize(),
 		stackop.DROP().Serialize(),
@@ -136,7 +141,7 @@ func makeTransactionExternalCommitThenThrowCode(t *testing.T, newData, outMsg *c
 		stackop.DROP().Serialize(),
 		funcsop.ACCEPT().Serialize(),
 		stackop.PUSHREF(outMsg).Serialize(),
-		stackop.PUSHINT(big.NewInt(0)).Serialize(),
+		stackop.PUSHINT(new(big.Int).SetUint64(uint64(mode))).Serialize(),
 		funcsop.SENDRAWMSG().Serialize(),
 		stackop.PUSHREF(newData).Serialize(),
 		execop.POPCTR(4).Serialize(),

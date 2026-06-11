@@ -94,7 +94,8 @@ func CHASHI(i int) *helpers.AdvancedOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash(i)))
+			hash := cl.HashKey(i)
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},
 	}
 }

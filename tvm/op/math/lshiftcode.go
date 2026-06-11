@@ -21,7 +21,7 @@ func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 			if x == nil {
-				if state.GlobalVersion >= 14 {
+				if state.GlobalVersion >= 13 {
 					return pushNaNOrOverflow(state, false)
 				}
 				return pushSmallInt(state, 0)

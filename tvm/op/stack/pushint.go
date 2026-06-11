@@ -198,5 +198,11 @@ func (op *OpPUSHINT) InstructionBits() int64 {
 }
 
 func (op *OpPUSHINT) Interpret(state *vm.State) error {
+	if op.value.IsInt64() {
+		val := op.value.Int64()
+		if val >= -5 && val <= 10 {
+			return state.Stack.PushSmallInt(val)
+		}
+	}
 	return state.Stack.PushInt(op.value)
 }

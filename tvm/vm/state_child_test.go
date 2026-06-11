@@ -615,3 +615,41 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 		t.Fatalf("isolated child exit code = %d, want 0", got)
 	}
 }
+
+func TestRunChildVMUnbindsReturnedCellTrace(t *testing.T) {
+	parent := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+	parent.InitForExecution()
+	parent.SetChildRunner(func(child *State) (int64, error) {
+		childTrace := child.Cells.Trace()
+		child.Committed = CommittedState{
+			Data:      cell.BeginCell().MustStoreUInt(0xD0, 8).EndCell().WithTrace(childTrace),
+			Actions:   cell.BeginCell().MustStoreUInt(0xA0, 8).EndCell().WithTrace(childTrace),
+			Committed: true,
+		}
+		return 0, nil
+	})
+
+	if err := parent.RunChildVM(ChildVMConfig{
+		Code:          cell.BeginCell().EndCell().MustBeginParse(),
+		Gas:           GasWithLimit(1_000),
+		ReturnActions: true,
+	}); err != nil {
+		t.Fatalf("run child vm: %v", err)
+	}
+
+	actions, err := parent.Stack.PopCell()
+	if err != nil {
+		t.Fatalf("pop actions: %v", err)
+	}
+	if got := mustPopInt64(t, parent.Stack); got != 0 {
+		t.Fatalf("exit code = %d, want 0", got)
+	}
+
+	before := parent.Gas.Used()
+	if _, err = parent.Cells.BeginParse(actions); err != nil {
+		t.Fatalf("parse returned actions: %v", err)
+	}
+	if got := parent.Gas.Used() - before; got != CellLoadGasPrice {
+		t.Fatalf("returned action cell load gas = %d, want %d", got, CellLoadGasPrice)
+	}
+}

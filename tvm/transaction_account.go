@@ -377,8 +377,11 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 	if dictRoot == nil {
 		return nil, nil
 	}
-	if dictHash != nil && !transactionHashIsZero(dictHash) && !bytes.Equal(dictRoot.Hash(), dictHash) {
-		return nil, errors.New("account storage stat root hash does not match account storage extra")
+	if dictHash != nil && !transactionHashIsZero(dictHash) {
+		rootHash := dictRoot.HashKey()
+		if !bytes.Equal(rootHash[:], dictHash) {
+			return nil, errors.New("account storage stat root hash does not match account storage extra")
+		}
 	}
 
 	totalCells := transactionStorageUsedUint64(storageUsed.CellsUsed)
@@ -644,36 +647,51 @@ func transactionAccountStorageRootRefs(storage *cell.Cell) ([]*cell.Cell, error)
 }
 
 func transactionAccountStorageRootDiff(oldRoots, newRoots []*cell.Cell) (toAdd, toDel []*cell.Cell) {
-	oldRoots = transactionSortedAccountStorageRoots(oldRoots)
-	newRoots = transactionSortedAccountStorageRoots(newRoots)
+	oldSorted := transactionSortedAccountStorageRoots(oldRoots)
+	newSorted := transactionSortedAccountStorageRoots(newRoots)
 
 	var oldIdx, newIdx int
-	for oldIdx < len(oldRoots) && newIdx < len(newRoots) {
-		cmp := bytes.Compare(oldRoots[oldIdx].Hash(), newRoots[newIdx].Hash())
+	for oldIdx < len(oldSorted) && newIdx < len(newSorted) {
+		cmp := bytes.Compare(oldSorted[oldIdx].hash[:], newSorted[newIdx].hash[:])
 		switch {
 		case cmp == 0:
 			oldIdx++
 			newIdx++
 		case cmp < 0:
-			toDel = append(toDel, oldRoots[oldIdx])
+			toDel = append(toDel, oldSorted[oldIdx].root)
 			oldIdx++
 		default:
-			toAdd = append(toAdd, newRoots[newIdx])
+			toAdd = append(toAdd, newSorted[newIdx].root)
 			newIdx++
 		}
 	}
-	toDel = append(toDel, oldRoots[oldIdx:]...)
-	toAdd = append(toAdd, newRoots[newIdx:]...)
+	for ; oldIdx < len(oldSorted); oldIdx++ {
+		toDel = append(toDel, oldSorted[oldIdx].root)
+	}
+	for ; newIdx < len(newSorted); newIdx++ {
+		toAdd = append(toAdd, newSorted[newIdx].root)
+	}
 	return toAdd, toDel
 }
 
-func transactionSortedAccountStorageRoots(roots []*cell.Cell) []*cell.Cell {
+type transactionAccountStorageRootHash struct {
+	root *cell.Cell
+	hash cell.Hash
+}
+
+func transactionSortedAccountStorageRoots(roots []*cell.Cell) []transactionAccountStorageRootHash {
 	if len(roots) == 0 {
 		return nil
 	}
-	out := append([]*cell.Cell(nil), roots...)
+	out := make([]transactionAccountStorageRootHash, len(roots))
+	for i, root := range roots {
+		out[i] = transactionAccountStorageRootHash{
+			root: root,
+			hash: root.HashKey(),
+		}
+	}
 	sort.Slice(out, func(i, j int) bool {
-		return bytes.Compare(out[i].Hash(), out[j].Hash()) < 0
+		return bytes.Compare(out[i].hash[:], out[j].hash[:]) < 0
 	})
 	return out
 }
@@ -691,7 +709,7 @@ func transactionAccountStorageRefsUnchanged(oldStorage, newStorage *cell.Cell) (
 		return false, nil
 	}
 	for i := range oldRefs {
-		if !bytes.Equal(oldRefs[i].Hash(), newRefs[i].Hash()) {
+		if oldRefs[i].HashKey() != newRefs[i].HashKey() {
 			return false, nil
 		}
 	}
@@ -803,7 +821,8 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 			if err != nil {
 				return nil, false, nil, fmt.Errorf("failed to serialize inbound state init: %w", err)
 			}
-			if !bytes.Equal(stateCell.Hash(), acc.addr.Data()) {
+			stateHash := stateCell.HashKey()
+			if !bytes.Equal(stateHash[:], acc.addr.Data()) {
 				return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 			}
 		}
@@ -830,11 +849,13 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		if stateInit.Depth != nil && *stateInit.Depth > transactionGetSizeLimits(cfg).maxAccFixedPrefixLength {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
-		if !transactionStateInitMatchesAddress(stateCell.Hash(), acc.addr, stateInit.Depth) {
+		stateHash := stateCell.HashKey()
+		if !transactionStateInitMatchesAddress(stateHash[:], acc.addr, stateInit.Depth) {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 	case tlb.AccountStatusFrozen:
-		if !bytes.Equal(stateCell.Hash(), acc.stateHash) {
+		stateHash := stateCell.HashKey()
+		if !bytes.Equal(stateHash[:], acc.stateHash) {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 	default:

@@ -2,7 +2,6 @@ package tuple
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -58,5 +57,5 @@ func execExplode(state *vm.State, max int) error {
 		return err
 	}
 
-	return state.Stack.PushInt(big.NewInt(int64(length)))
+	return state.Stack.PushSmallInt(int64(length))
 }

@@ -10,6 +10,7 @@ import (
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return LESSINT(0) })
+	registerInt8Variant(LESSINT, 0xC1, 8, 5)
 }
 
 func LESSINT(value int8) (op *helpers.AdvancedOP) {

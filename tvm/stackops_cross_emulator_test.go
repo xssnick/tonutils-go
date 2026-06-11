@@ -26,6 +26,13 @@ type stackOpParityCase struct {
 	out    int
 }
 
+type stackOpDepthParityCase struct {
+	name   string
+	op     *cell.Builder
+	values []int64
+	base   int
+}
+
 func TestTVMCrossEmulatorStackOpsOpcodeSpace(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
@@ -44,12 +51,27 @@ func TestTVMCrossEmulatorStackOpsDynamicAndDepthEdges(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	tests := []struct {
-		name   string
-		op     *cell.Builder
-		values []int64
-		base   int
-	}{
+	for _, tt := range buildStackOpsDynamicAndDepthEdgeCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			runStackOpDepthParityCase(t, tt)
+		})
+	}
+
+	t.Run("transient_stack_above_1024", func(t *testing.T) {
+		instructions := []*cell.Builder{stackPushInt(1)}
+		for range 1024 {
+			instructions = append(instructions, stackRawOp(0x20, 8))
+		}
+		for range 3 {
+			instructions = append(instructions, stackRawOp(0x30, 8))
+		}
+
+		runStackOpParityProgram(t, buildStackProgram(t, instructions), nil, 0)
+	})
+}
+
+func buildStackOpsDynamicAndDepthEdgeCases() []stackOpDepthParityCase {
+	return []stackOpDepthParityCase{
 		{name: "pick_0", op: stackRawOp(0x60, 8), values: []int64{0}, base: 3},
 		{name: "pick_255", op: stackRawOp(0x60, 8), values: []int64{255}, base: 256},
 		{name: "pick_1020", op: stackRawOp(0x60, 8), values: []int64{1020}, base: 1021},
@@ -73,31 +95,6 @@ func TestTVMCrossEmulatorStackOpsDynamicAndDepthEdges(t *testing.T) {
 		{name: "onlyx_0", op: stackRawOp(0x6b, 8), values: []int64{0}, base: 3},
 		{name: "onlyx_1022", op: stackRawOp(0x6b, 8), values: []int64{1022}, base: 1022},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			initial := sequentialVMStack(t, tt.base)
-			instructions := make([]*cell.Builder, 0, len(tt.values)+1)
-			for _, value := range tt.values {
-				instructions = append(instructions, stackPushInt(value))
-			}
-			instructions = append(instructions, tt.op)
-
-			runStackOpParityProgram(t, buildStackProgram(t, instructions), initial, 0)
-		})
-	}
-
-	t.Run("transient_stack_above_1024", func(t *testing.T) {
-		instructions := []*cell.Builder{stackPushInt(1)}
-		for range 1024 {
-			instructions = append(instructions, stackRawOp(0x20, 8))
-		}
-		for range 3 {
-			instructions = append(instructions, stackRawOp(0x30, 8))
-		}
-
-		runStackOpParityProgram(t, buildStackProgram(t, instructions), nil, 0)
-	})
 }
 
 func buildStackOpsOpcodeSpaceCases() []stackOpParityCase {
@@ -335,6 +332,19 @@ func buildStackProgram(t *testing.T, instructions []*cell.Builder) *cell.Cell {
 	}
 
 	return next
+}
+
+func runStackOpDepthParityCase(t *testing.T, tc stackOpDepthParityCase) {
+	t.Helper()
+
+	initial := sequentialVMStack(t, tc.base)
+	instructions := make([]*cell.Builder, 0, len(tc.values)+1)
+	for _, value := range tc.values {
+		instructions = append(instructions, stackPushInt(value))
+	}
+	instructions = append(instructions, tc.op)
+
+	runStackOpParityProgram(t, buildStackProgram(t, instructions), initial, 0)
 }
 
 func runStackOpParityProgram(t *testing.T, code *cell.Cell, initial *vm.Stack, wantExit int32) {

@@ -17,7 +17,7 @@ func LDSLICEX() *helpers.SimpleOP {
 				return err
 			}
 
-			i0, err := state.Stack.PopIntRange(0, 1023)
+			i0, err := state.Stack.PopIntRangeInt64(0, 1023)
 			if err != nil {
 				return err
 			}
@@ -27,7 +27,7 @@ func LDSLICEX() *helpers.SimpleOP {
 				return err
 			}
 
-			s, err := s1.FetchSubslice(uint(i0.Uint64()), 0)
+			s, err := s1.FetchSubslice(uint(i0), 0)
 			if err != nil {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}

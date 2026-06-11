@@ -72,7 +72,7 @@ func qPushResult(state *vm.State, val *big.Int) error {
 	if val == nil {
 		return state.Stack.PushAny(vm.NaN{})
 	}
-	return state.Stack.PushIntQuiet(val)
+	return state.Stack.PushOwnedIntQuiet(val)
 }
 
 func qPushSelected(state *vm.State, d uint8, q, r *big.Int) error {

@@ -14,11 +14,11 @@ func TUPLEVAR() *helpers.SimpleOP {
 		Name:      "TUPLEVAR",
 		BitPrefix: helpers.BytesPrefix(0x6f, 0x80),
 		Action: func(state *vm.State) error {
-			count, err := state.Stack.PopIntRange(0, 255)
+			count, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return execMakeTuple(state, int(count.Int64()))
+			return execMakeTuple(state, int(count))
 		},
 	}
 }

@@ -845,6 +845,10 @@ func installAction(state *vm.State, build func(*cell.Builder) error) error {
 func RAWRESERVE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			f, err := state.Stack.PopIntRange(0, 31)
 			if err != nil {
 				return err
@@ -877,6 +881,10 @@ func RAWRESERVE() *helpers.SimpleOP {
 func RAWRESERVEX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 3 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			f, err := state.Stack.PopIntRange(0, 31)
 			if err != nil {
 				return err
@@ -943,6 +951,10 @@ func popLibMode(state *vm.State) (*big.Int, error) {
 func SETLIBCODE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			mode, err := popLibMode(state)
 			if err != nil {
 				return err
@@ -969,6 +981,10 @@ func SETLIBCODE() *helpers.SimpleOP {
 func CHANGELIB() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			mode, err := popLibMode(state)
 			if err != nil {
 				return err
@@ -1270,6 +1286,10 @@ func sendMsgTupleAmount(state *vm.State, idx int, name string) (*big.Int, bool, 
 func SENDMSG() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			modeVal, err := state.Stack.PopIntRange(0, 2047)
 			if err != nil {
 				return err

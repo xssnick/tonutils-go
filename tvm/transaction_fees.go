@@ -272,7 +272,8 @@ func transactionPrecompiledGasUsageFromConfig(cfg tlb.BlockchainConfig, code *ce
 		return nil, nil
 	}
 
-	key := cell.BeginCell().MustStoreSlice(code.Hash(), 256).EndCell()
+	codeHash := code.HashKey()
+	key := cell.BeginCell().MustStoreSlice(codeHash[:], 256).EndCell()
 	value, err := precompiled.List.LoadValue(key)
 	if err != nil {
 		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
@@ -743,7 +744,7 @@ func transactionCellEqual(a, b *cell.Cell) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	return bytes.Equal(a.Hash(), b.Hash())
+	return a.HashKey() == b.HashKey()
 }
 
 func transactionDictEqual(a, b *cell.Dictionary) bool {
@@ -753,7 +754,7 @@ func transactionDictEqual(a, b *cell.Dictionary) bool {
 	if b == nil || b.IsEmpty() {
 		return false
 	}
-	return bytes.Equal(a.AsCell().Hash(), b.AsCell().Hash())
+	return a.AsCell().HashKey() == b.AsCell().HashKey()
 }
 
 func transactionCollectUniqueUsage(roots ...*cell.Cell) (transactionUsage, error) {

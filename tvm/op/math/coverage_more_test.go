@@ -82,32 +82,58 @@ func requireMathNaN(t *testing.T, got any) {
 	}
 }
 
-func TestTVM14ImmediateShiftNaN(t *testing.T) {
-	t.Run("v13 legacy nonquiet immediate shift turns NaN into zero", func(t *testing.T) {
+func TestTVMImmediateShiftNaN(t *testing.T) {
+	t.Run("v12 legacy nonquiet immediate shift turns NaN into zero", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := LSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("LSHIFT# v12 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("LSHIFT# v12 result = %d, want 0", got)
+		}
+	})
+
+	t.Run("v13 nonquiet immediate left shift rejects NaN", func(t *testing.T) {
 		st := newMathCoverageState()
 		st.GlobalVersion = 13
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}
-		if err := LSHIFTCODE(0).Interpret(st); err != nil {
-			t.Fatalf("LSHIFT# v13 failed: %v", err)
-		}
-		if got := popMathCoverageInt(t, st); got != 0 {
-			t.Fatalf("LSHIFT# v13 result = %d, want 0", got)
-		}
+		assertMathCoverageVMError(t, LSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
 	})
 
-	t.Run("v14 nonquiet immediate shift rejects NaN", func(t *testing.T) {
+	t.Run("v13 nonquiet immediate right shift keeps legacy zero", func(t *testing.T) {
 		st := newMathCoverageState()
-		st.GlobalVersion = 14
+		st.GlobalVersion = 13
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}
-		assertMathCoverageVMError(t, RSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+		if err := RSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("RSHIFT# v13 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("RSHIFT# v13 result = %d, want 0", got)
+		}
 	})
 
-	t.Run("quiet immediate shifts split v13 and v14", func(t *testing.T) {
+	t.Run("quiet immediate shifts split legacy and v13", func(t *testing.T) {
 		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push v12 NaN: %v", err)
+		}
+		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QLSHIFT# v12 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("QLSHIFT# v12 result = %d, want 0", got)
+		}
+
+		st = newMathCoverageState()
 		st.GlobalVersion = 13
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push v13 NaN: %v", err)
@@ -115,21 +141,35 @@ func TestTVM14ImmediateShiftNaN(t *testing.T) {
 		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
 			t.Fatalf("QLSHIFT# v13 failed: %v", err)
 		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v13 result: %v", err)
+		}
+		requireMathNaN(t, got)
+
+		st = newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push QR v13 NaN: %v", err)
+		}
+		if err := QRSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT# v13 failed: %v", err)
+		}
 		if got := popMathCoverageInt(t, st); got != 0 {
-			t.Fatalf("QLSHIFT# v13 result = %d, want 0", got)
+			t.Fatalf("QRSHIFT# v13 result = %d, want 0", got)
 		}
 
 		st = newMathCoverageState()
 		st.GlobalVersion = 14
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
-			t.Fatalf("push v14 NaN: %v", err)
+			t.Fatalf("push QR v14 NaN: %v", err)
 		}
 		if err := QRSHIFTCODE(0).Interpret(st); err != nil {
 			t.Fatalf("QRSHIFT# v14 failed: %v", err)
 		}
-		got, err := st.Stack.PopAny()
+		got, err = st.Stack.PopAny()
 		if err != nil {
-			t.Fatalf("pop v14 result: %v", err)
+			t.Fatalf("pop QR v14 result: %v", err)
 		}
 		requireMathNaN(t, got)
 	})

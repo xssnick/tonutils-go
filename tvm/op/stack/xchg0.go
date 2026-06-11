@@ -10,6 +10,12 @@ import (
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return XCHG0(0) })
+	for i := uint64(1); i < 16; i++ {
+		value := i
+		vm.List = append(vm.List, func() vm.OP {
+			return helpers.FullOpcodeVariant(XCHG0(uint8(value)), helpers.UIntPrefix(value, 8))
+		})
+	}
 }
 
 func XCHG0(i uint8) (op *helpers.AdvancedOP) {

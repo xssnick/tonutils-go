@@ -2,6 +2,8 @@ package cellslice
 
 import (
 	"fmt"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -18,6 +20,23 @@ func LDU(sz uint) (op *helpers.AdvancedOP) {
 			s0, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
+			}
+
+			if sz <= 64 {
+				v, err := s0.LoadUInt(sz)
+				if err != nil {
+					return err
+				}
+				if v <= 1<<63-1 {
+					err = state.Stack.PushSmallInt(int64(v))
+				} else {
+					err = state.Stack.PushOwnedInt(new(big.Int).SetUint64(v))
+				}
+				if err != nil {
+					return err
+				}
+
+				return state.Stack.PushOwnedSlice(s0)
 			}
 
 			i, err := s0.LoadBigUInt(sz)
