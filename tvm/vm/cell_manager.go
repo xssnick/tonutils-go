@@ -243,7 +243,7 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 					return nil, false, err
 				}
 			}
-			if _, err := libSlice.LoadUInt(8); err != nil {
+			if err := libSlice.SkipBits(8); err != nil {
 				return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
 			}
 

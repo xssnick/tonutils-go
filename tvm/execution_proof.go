@@ -31,7 +31,10 @@ func (tvm *TVM) ExecuteDetailedWithAccountProof(accountRoot *cell.Cell, c7 tuple
 	code := acc.StateInit.Code
 	data := acc.StateInit.Data
 	if acc.StateInit.Lib != nil && acc.StateInit.Lib.AsCell() != nil {
-		libraries = append(append([]*cell.Cell(nil), libraries...), acc.StateInit.Lib.AsCell())
+		nextLibraries := make([]*cell.Cell, len(libraries)+1)
+		copy(nextLibraries, libraries)
+		nextLibraries[len(libraries)] = acc.StateInit.Lib.AsCell()
+		libraries = nextLibraries
 	}
 
 	return tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{
@@ -113,7 +116,8 @@ func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[ce
 	case *cell.Builder:
 		return markExecutionProofCell(v.EndCell(), usageTree, seen)
 	case tuple.Tuple:
-		for i := 0; i < v.Len(); i++ {
+		ln := v.Len()
+		for i := 0; i < ln; i++ {
 			next, err := v.RawIndex(i)
 			if err != nil {
 				return err
@@ -133,7 +137,8 @@ func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen ma
 		if err != nil {
 			return err
 		}
-		for i := 0; i < loader.RefsNum(); i++ {
+		refsNum := loader.RefsNum()
+		for i := 0; i < refsNum; i++ {
 			ref, err := loader.PeekRefCellAt(i)
 			if err != nil {
 				return err
@@ -150,12 +155,14 @@ func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen ma
 		return err
 	}
 	base := loader.BaseCell()
-	if _, ok = seen[base.HashKey()]; ok {
+	key := base.HashKey()
+	if _, ok = seen[key]; ok {
 		return nil
 	}
-	seen[base.HashKey()] = struct{}{}
+	seen[key] = struct{}{}
 
-	for i := 0; i < loader.RefsNum(); i++ {
+	refsNum := loader.RefsNum()
+	for i := 0; i < refsNum; i++ {
 		ref, err := loader.PeekRefCellAt(i)
 		if err != nil {
 			return err

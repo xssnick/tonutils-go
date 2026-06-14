@@ -3,6 +3,8 @@ package vm
 import (
 	"math/big"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 func TestStackPushOwnedIntKeepsOwnedValue(t *testing.T) {
@@ -37,5 +39,27 @@ func TestStackPushOwnedIntCanonicalizesStaticValues(t *testing.T) {
 	}
 	if got.Sign() != 1 || got.Int64() != 1 {
 		t.Fatalf("unexpected static integer value: %s", got)
+	}
+}
+
+func TestStackPushOwnedSliceKeepsOwnedValueAndBindsTrace(t *testing.T) {
+	st := NewStack()
+	trace := cell.NewTrace(cell.TraceHooks{})
+	st.SetTrace(trace)
+
+	value := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
+	if err := st.PushOwnedSlice(value); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.Get(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != value {
+		t.Fatal("owned slice was copied")
+	}
+	if value.Trace() != trace {
+		t.Fatal("owned slice was not bound to stack trace")
 	}
 }

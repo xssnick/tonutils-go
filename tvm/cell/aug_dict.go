@@ -1,7 +1,6 @@
 package cell
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -701,33 +700,17 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
 	}
 
-	isNewRight, matches := false, true
-	kPartSlice := kPart.ToSlice()
-	var bitsMatches uint
-	for bitsMatches = 0; bitsMatches < sz; bitsMatches++ {
-		vCurr, err := kPartSlice.LoadUInt(1)
-		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to load current key bit: %w", err)
-		}
-
-		vNew, err := pfx.LoadUInt(1)
-		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to load new key bit: %w", err)
-		}
-
-		if vCurr != vNew {
-			isNewRight = vNew != 0
-			matches = false
-			break
-		}
+	bitsMatches, isNewRight, diverged, err := matchBuilderLabel(kPart, sz, pfx)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
 
-	if matches {
+	if !diverged {
 		if pfx.BitsLeft() == 0 {
 			if mode == DictSetModeAdd {
 				return branch, nil, false, nil
 			}
-			leaf, extra, err := d.storeLeafWithExtra(kPart.ToSlice(), value, keyOffset)
+			leaf, extra, err := d.storeLeafWithExtra(builderSliceView(kPart), value, keyOffset)
 			return leaf, extra, err == nil, err
 		}
 
@@ -777,7 +760,7 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 			leftExtra = otherExtra
 		}
 
-		newBranch, extra, err := d.storeForkWithExtra(kPart.ToSlice(), left, leftExtra, right, rightExtra, keyOffset)
+		newBranch, extra, err := d.storeForkWithExtra(builderSliceView(kPart), left, leftExtra, right, rightExtra, keyOffset)
 		return newBranch, extra, err == nil, err
 	}
 
@@ -785,14 +768,16 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		return branch, nil, false, nil
 	}
 
-	prefixBits := kPart.ToSlice().MustLoadSlice(bitsMatches)
-	prefixLabel := BeginCell().MustStoreSlice(prefixBits, bitsMatches).ToSlice()
+	prefixLabel, labelRemainder, err := fixedDictNode{label: kPart, labelLen: sz}.splitLabel(bitsMatches)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to split old child label: %w", err)
+	}
 
 	oldChild := BeginCell()
-	if err = storeDictLabel(oldChild, kPartSlice, keyOffset-(bitsMatches+1)); err != nil {
+	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
 		return nil, nil, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
-	if err = oldChild.StoreBuilder(s.ToBuilder()); err != nil {
+	if err = oldChild.StoreBuilderUncheckedDepth(s.ToBuilder()); err != nil {
 		return nil, nil, false, fmt.Errorf("failed to store old child payload: %w", err)
 	}
 	oldExtra, err := extractAugmentedNodeExtra(branch, keyOffset, d.aug.SkipExtra)
@@ -831,7 +816,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint) (
 		return nil, nil, nil, false, fmt.Errorf("failed to load label: %w", err)
 	}
 
-	bitsMatches, err := consumeCommonPrefix(kPart.ToSlice(), pfx, sz)
+	bitsMatches, err := consumeCommonPrefix(builderSliceView(kPart), pfx, sz)
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -886,7 +871,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint) (
 			return nil, nil, nil, false, fmt.Errorf("failed to append neighbour label: %w", err)
 		}
 
-		merged, err := d.storeNode(kPart.ToSlice(), slc.ToBuilder(), keyOffset)
+		merged, err := d.storeNode(builderSliceView(kPart), slc.ToBuilder(), keyOffset)
 		if err != nil {
 			return nil, nil, nil, false, err
 		}
@@ -919,7 +904,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint) (
 		leftExtra = otherExtra
 	}
 
-	newBranch, extra, err := d.storeForkWithExtra(kPart.ToSlice(), left, leftExtra, right, rightExtra, keyOffset)
+	newBranch, extra, err := d.storeForkWithExtra(builderSliceView(kPart), left, leftExtra, right, rightExtra, keyOffset)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
@@ -1227,16 +1212,11 @@ func captureConsumedPrefix(loader *Slice, consume func(*Slice) error) (*Cell, er
 	consumedRefs := beforeRefs - tmp.RefsNum()
 
 	b := BeginCell()
-	var err error
 	if consumedBits > 0 {
-		var bits []byte
-		bits, err = loader.LoadSlice(consumedBits)
-		if err != nil {
+		if err := loader.loadSliceInto(b.data[:], consumedBits, false); err != nil {
 			return nil, err
 		}
-		if err = b.StoreSlice(bits, consumedBits); err != nil {
-			return nil, err
-		}
+		b.bitsSz = consumedBits
 	}
 	for i := 0; i < consumedRefs; i++ {
 		ref, err := loader.LoadRefCell()
@@ -1257,5 +1237,5 @@ func equalCellContents(a, b *Cell) bool {
 	if a.BitsSize() != b.BitsSize() || a.RefsNum() != b.RefsNum() {
 		return false
 	}
-	return bytes.Equal(a.Hash(0), b.Hash(0))
+	return a.HashKey(0) == b.HashKey(0)
 }

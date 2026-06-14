@@ -24,9 +24,9 @@ func init() {
 }
 
 func throwAnyPrefixes() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 6)
+	prefixes := make([]helpers.BitPrefix, 6)
 	for args := uint64(0); args <= 5; args++ {
-		prefixes = append(prefixes, helpers.UIntPrefix(0xF2F0|args, 16))
+		prefixes[args] = helpers.UIntPrefix(0xF2F0|args, 16)
 	}
 	return prefixes
 }
@@ -68,21 +68,24 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 		},
 	}
 
-	op.Action = func(state *vm.State) error {
-		exception := big.NewInt(int64(exc))
-		expected := mode&1 == 1
+	hasCond := mode != 0
+	expected := mode&1 == 1
+	need := 0
+	if withArg {
+		need = 1
+		if hasCond {
+			need = 2
+		}
+	}
 
-		if withArg {
-			need := 1
-			if mode != 0 {
-				need = 2
-			}
+	op.Action = func(state *vm.State) error {
+		if need > 0 {
 			if state.Stack.Len() < need {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 		}
 
-		if mode != 0 {
+		if hasCond {
 			cond, err := state.Stack.PopBool()
 			if err != nil {
 				return err
@@ -98,14 +101,14 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 					return nil
 				}
 
-				return state.ThrowException(exception, arg)
+				return state.ThrowException(big.NewInt(int64(exc)), arg)
 			}
 
 			if cond != expected {
 				return nil
 			}
 
-			return state.ThrowException(exception)
+			return state.ThrowException(big.NewInt(int64(exc)))
 		}
 
 		if withArg {
@@ -114,10 +117,10 @@ func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode in
 				return err
 			}
 
-			return state.ThrowException(exception, arg)
+			return state.ThrowException(big.NewInt(int64(exc)), arg)
 		}
 
-		return state.ThrowException(exception)
+		return state.ThrowException(big.NewInt(int64(exc)))
 	}
 
 	return op
@@ -189,7 +192,7 @@ func newThrowAny() *helpers.AdvancedOP {
 			cond = throwCond
 		}
 
-		exc, err := stack.PopIntRange(0, 0xffff)
+		exc, err := stack.PopIntRangeInt64(0, 0xffff)
 		if err != nil {
 			return err
 		}
@@ -208,10 +211,10 @@ func newThrowAny() *helpers.AdvancedOP {
 			if err != nil {
 				return err
 			}
-			return state.ThrowException(exc, arg)
+			return state.ThrowException(big.NewInt(exc), arg)
 		}
 
-		return state.ThrowException(exc)
+		return state.ThrowException(big.NewInt(exc))
 	}
 
 	return op

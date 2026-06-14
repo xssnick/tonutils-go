@@ -38,11 +38,7 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 			return 0, nil, fmt.Errorf("label exceeds remaining key bits")
 		}
 
-		keyBits, err := loader.LoadSlice(ln)
-		if err != nil {
-			return 0, nil, err
-		}
-		if err = key.StoreSlice(keyBits, ln); err != nil {
+		if err = key.storeSliceFromSlice(loader, ln); err != nil {
 			return 0, nil, err
 		}
 		return ln, key, nil
@@ -65,11 +61,7 @@ func loadLabel(sz uint, loader *Slice, key *Builder) (uint, *Builder, error) {
 			return 0, nil, fmt.Errorf("label exceeds remaining key bits")
 		}
 
-		keyBits, err := loader.LoadSlice(uint(ln))
-		if err != nil {
-			return 0, nil, err
-		}
-		if err = key.StoreSlice(keyBits, uint(ln)); err != nil {
+		if err = key.storeSliceFromSlice(loader, uint(ln)); err != nil {
 			return 0, nil, err
 		}
 		return uint(ln), key, nil
@@ -273,9 +265,28 @@ func dictLabelSameBit(bits []byte, bitLen uint64) (uint64, bool) {
 	}
 
 	bit := uint64((bits[0] >> 7) & 1)
-	for i := uint64(0); i < bitLen; i++ {
-		curr := uint64((bits[i/8] >> (7 - (i % 8))) & 1)
-		if curr != bit {
+	fullBytes := int(bitLen / 8)
+	if bit == 0 {
+		for _, b := range bits[:fullBytes] {
+			if b != 0 {
+				return 0, false
+			}
+		}
+	} else {
+		for _, b := range bits[:fullBytes] {
+			if b != 0xFF {
+				return 0, false
+			}
+		}
+	}
+
+	if rem := bitLen % 8; rem != 0 {
+		mask := byte(0xFF << (8 - rem))
+		want := byte(0)
+		if bit == 1 {
+			want = mask
+		}
+		if bits[fullBytes]&mask != want {
 			return 0, false
 		}
 	}

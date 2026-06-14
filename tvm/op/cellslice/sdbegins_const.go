@@ -54,7 +54,7 @@ func (op *OpSDBEGINSCONST) GetPrefixes() []*cell.Slice {
 }
 
 func (op *OpSDBEGINSCONST) Deserialize(code *cell.Slice) error {
-	if _, err := code.LoadSlice(13); err != nil {
+	if err := code.SkipBits(13); err != nil {
 		return err
 	}
 	arg, err := code.LoadUInt(8)

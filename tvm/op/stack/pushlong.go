@@ -17,9 +17,11 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHL(0) })
 }
 
+var pushLongPrefixed = helpers.SinglePrefixed(helpers.UIntPrefix(0x56, 8))
+
 func PUSHL(index uint8) *OpPUSHL {
 	return &OpPUSHL{
-		Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0x56, 8)),
+		Prefixed:   pushLongPrefixed,
 		stackIndex: index,
 	}
 }

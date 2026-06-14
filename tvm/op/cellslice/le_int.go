@@ -10,6 +10,8 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+var cellsliceBigIntOne = big.NewInt(1)
+
 func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return LDILE4() },
@@ -68,10 +70,13 @@ func fitsSignedBits(x *big.Int, bits uint) bool {
 	if bits == 0 {
 		return x.Sign() == 0
 	}
-	max := new(big.Int).Lsh(big.NewInt(1), bits-1)
-	min := new(big.Int).Neg(new(big.Int).Set(max))
-	max.Sub(max, big.NewInt(1))
-	return x.Cmp(min) >= 0 && x.Cmp(max) <= 0
+	if x.Sign() >= 0 {
+		return x.BitLen() <= int(bits-1)
+	}
+
+	absMinusOne := new(big.Int).Neg(x)
+	absMinusOne.Sub(absMinusOne, cellsliceBigIntOne)
+	return absMinusOne.BitLen() <= int(bits-1)
 }
 
 func encodeLEInt(x *big.Int, bytes int, unsigned bool) ([]byte, error) {

@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -46,7 +44,7 @@ func LSHIFTADDDIVMOD() *helpers.SimpleOP {
 				}
 			}
 
-			dividend := x.Add(y.Mul(x, y.Lsh(big.NewInt(1), uint(y.Uint64()))), w)
+			dividend := x.Add(y.Mul(x, y.Lsh(bigIntOne, uint(y.Uint64()))), w)
 			q, _ := helpers.DivFloor(dividend, z)
 			r := x.Sub(dividend, z.Mul(z, q))
 

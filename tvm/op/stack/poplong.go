@@ -17,9 +17,11 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return POPL(0) })
 }
 
+var popLongPrefixed = helpers.SinglePrefixed(helpers.UIntPrefix(0x57, 8))
+
 func POPL(index uint8) *OpPOPL {
 	return &OpPOPL{
-		Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0x57, 8)),
+		Prefixed:   popLongPrefixed,
 		stackIndex: index,
 	}
 }

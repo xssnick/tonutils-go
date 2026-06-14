@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -33,7 +31,7 @@ func MULRSHIFT() *helpers.SimpleOP {
 				return err
 			}
 
-			q, _ := helpers.DivFloor(x.Mul(x, y), z.Lsh(big.NewInt(1), uint(z.Uint64())))
+			q, _ := helpers.DivFloor(x.Mul(x, y), z.Lsh(bigIntOne, uint(z.Uint64())))
 
 			return state.Stack.PushInt(q)
 		},

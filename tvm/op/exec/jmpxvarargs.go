@@ -17,12 +17,12 @@ func JMPXVARARGS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			paramsVal, err := state.Stack.PopIntRange(-1, 254)
+			paramsVal, err := state.Stack.PopIntRangeInt64(-1, 254)
 			if err != nil {
 				return err
 			}
 
-			params := int(paramsVal.Int64())
+			params := int(paramsVal)
 
 			if params >= 0 && state.Stack.Len() < params+1 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)

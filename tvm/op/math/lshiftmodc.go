@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -42,7 +40,7 @@ func LSHIFTMODC() *helpers.SimpleOP {
 				}
 			}
 
-			q := helpers.DivCeil(x.Mul(x, z.Lsh(big.NewInt(1), uint(z.Uint64()))), y)
+			q := helpers.DivCeil(x.Mul(x, z.Lsh(bigIntOne, uint(z.Uint64()))), y)
 			r := y.Sub(x, y.Mul(q, y))
 
 			return state.Stack.PushInt(r)

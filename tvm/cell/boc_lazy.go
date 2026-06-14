@@ -38,7 +38,9 @@ func parseLazyBOC(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOC
 		return nil, fmt.Errorf("failed to read payload, want %d: %w", dataLen, err)
 	}
 	if !options.NoCopyPayload && r.direct {
-		payload = append([]byte(nil), payload...)
+		payloadCopy := make([]byte, len(payload))
+		copy(payloadCopy, payload)
+		payload = payloadCopy
 	}
 
 	loader := &lazyBOCLoader{
@@ -72,9 +74,7 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32) error {
 	if l.index.hasCacheBits {
 		cacheRefs = make([]uint8, len(l.cells))
 		for _, idx := range rootsIndex {
-			if cacheRefs[idx] < 2 {
-				cacheRefs[idx]++
-			}
+			incBOCCacheRef(cacheRefs, int(idx))
 		}
 	}
 
@@ -84,7 +84,15 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32) error {
 	for i := range l.cells {
 		end := len(l.payload)
 		if indexEnabled {
-			end = l.index.cellEnd(i)
+			if cacheRefs != nil {
+				var cacheBit bool
+				end, cacheBit = l.index.cellEndAndCacheBit(i)
+				if cacheBit {
+					setBOCIndexCacheBit(cacheRefs, i)
+				}
+			} else {
+				end = l.index.cellEnd(i)
+			}
 			if end < offset || end > len(l.payload) {
 				return errors.New("invalid cell index")
 			}
@@ -107,8 +115,8 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32) error {
 			if refIdx < 0 || refIdx >= len(l.cells) {
 				return errors.New("invalid index, out of scope")
 			}
-			if cacheRefs != nil && cacheRefs[refIdx] < 2 {
-				cacheRefs[refIdx]++
+			if cacheRefs != nil {
+				incBOCCacheRef(cacheRefs, refIdx)
 			}
 		}
 
@@ -136,7 +144,7 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32) error {
 
 	if cacheRefs != nil {
 		for i := range l.cells {
-			if shouldCache := cacheRefs[i] > 1; shouldCache != l.index.cacheBit(i) {
+			if shouldCache := bocShouldCache(cacheRefs, i); shouldCache != bocIndexCacheBit(cacheRefs, i) {
 				return fmt.Errorf("invalid cache flag for cell #%d", i)
 			}
 		}
@@ -369,6 +377,11 @@ func (l *lazyBOCLoader) computeRegularCellMeta(idx int, typ Type) error {
 	level := levelMask.GetLevel()
 	isMerkle := typ == MerkleProofCellType || typ == MerkleUpdateCellType
 
+	var refIndexes [4]int
+	for ref := 0; ref < refCnt; ref++ {
+		refIndexes[ref] = info.refIndex(l.payload, ref, l.refSzBytes)
+	}
+
 	hashIndex := 0
 	var hashBuf [2 + maxCellDataBytes + (4 * depthSize) + (4 * hashSize)]byte
 	for levelIndex := 0; levelIndex <= level; levelIndex++ {
@@ -393,8 +406,7 @@ func (l *lazyBOCLoader) computeRegularCellMeta(idx int, typ Type) error {
 
 		var depth uint16
 		for ref := 0; ref < refCnt; ref++ {
-			refIdx := info.refIndex(l.payload, ref, l.refSzBytes)
-			childDepth := l.cellMetaDepth(refIdx, childLevelIndex)
+			childDepth := l.cellMetaDepth(refIndexes[ref], childLevelIndex)
 			binary.BigEndian.PutUint16(hashBuf[bufPos:bufPos+depthSize], childDepth)
 			bufPos += depthSize
 
@@ -410,8 +422,7 @@ func (l *lazyBOCLoader) computeRegularCellMeta(idx int, typ Type) error {
 		}
 
 		for ref := 0; ref < refCnt; ref++ {
-			refIdx := info.refIndex(l.payload, ref, l.refSzBytes)
-			bufPos += copy(hashBuf[bufPos:], l.cellMetaHash(refIdx, childLevelIndex))
+			bufPos += copy(hashBuf[bufPos:], l.cellMetaHash(refIndexes[ref], childLevelIndex))
 		}
 
 		sum := sha256.Sum256(hashBuf[:bufPos])

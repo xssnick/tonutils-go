@@ -200,6 +200,13 @@ func TestExportFeeAndConfigHelpers(t *testing.T) {
 	if want := []byte{0x00, 0x00, 0x12, 0x34}; !bytes.Equal(buf, want) {
 		t.Fatalf("unexpected unsigned export: want %x, got %x", want, buf)
 	}
+	buf, err = exportUnsignedBytes(new(big.Int).SetUint64(0xFFFFFFFF), 4, "range")
+	if err != nil {
+		t.Fatalf("exportUnsignedBytes exact width failed: %v", err)
+	}
+	if want := []byte{0xFF, 0xFF, 0xFF, 0xFF}; !bytes.Equal(buf, want) {
+		t.Fatalf("unexpected exact-width unsigned export: want %x, got %x", want, buf)
+	}
 	if _, err = exportUnsignedBytes(big.NewInt(-1), 4, "negative"); err == nil {
 		t.Fatal("negative integers should fail exportUnsignedBytes")
 	}
@@ -212,6 +219,12 @@ func TestExportFeeAndConfigHelpers(t *testing.T) {
 	}
 	if got := ceilShiftRight(big.NewInt(17), 1); got.Int64() != 9 {
 		t.Fatalf("ceilShiftRight(17,1) = %v, want 9", got)
+	}
+	if got := ceilShiftRight(big.NewInt(16), 4); got.Int64() != 1 {
+		t.Fatalf("ceilShiftRight(16,4) = %v, want 1", got)
+	}
+	if got := ceilShiftRight(big.NewInt(-17), 4); got.Int64() != -1 {
+		t.Fatalf("ceilShiftRight(-17,4) = %v, want -1", got)
 	}
 	if got := maxBig(big.NewInt(5), big.NewInt(7)); got.Int64() != 7 {
 		t.Fatalf("maxBig returned %v, want 7", got)
@@ -401,6 +414,10 @@ func TestHashExtHelpersAndSHA256U(t *testing.T) {
 	if dstBits != 8 || !bytes.Equal(buf, []byte{0xBF}) {
 		t.Fatalf("unexpected appendBits result: bits=%d bytes=%x", dstBits, buf)
 	}
+	buf = appendBits(buf, &dstBits, []byte{0x12, 0x34}, 16)
+	if dstBits != 24 || !bytes.Equal(buf, []byte{0xBF, 0x12, 0x34}) {
+		t.Fatalf("unexpected byte-aligned appendBits result: bits=%d bytes=%x", dstBits, buf)
+	}
 
 	sl := cell.BeginCell().MustStoreSlice([]byte{0xAB, 0xC0}, 10).ToSlice()
 	raw, bits, err := valueBitsForHashExt(sl)
@@ -423,43 +440,6 @@ func TestHashExtHelpersAndSHA256U(t *testing.T) {
 	}
 
 	st := newFuncTestState(t, nil)
-	if err = st.Stack.PushInt(big.NewInt(1)); err != nil {
-		t.Fatalf("PushInt failed: %v", err)
-	}
-	if err = st.Stack.PushInt(big.NewInt(2)); err != nil {
-		t.Fatalf("PushInt failed: %v", err)
-	}
-	items, b, err := collectHashExtItems(st, 2, false, false)
-	if err != nil {
-		t.Fatalf("collectHashExtItems failed: %v", err)
-	}
-	if b != nil {
-		t.Fatal("builder should be nil when appendMode is false")
-	}
-	if items[0].(*big.Int).Int64() != 1 || items[1].(*big.Int).Int64() != 2 {
-		t.Fatalf("unexpected item order: %#v", items)
-	}
-
-	st = newFuncTestState(t, nil)
-	baseBuilder := cell.BeginCell().MustStoreUInt(0xAA, 8)
-	if err = st.Stack.PushBuilder(baseBuilder); err != nil {
-		t.Fatalf("PushBuilder failed: %v", err)
-	}
-	if err = st.Stack.PushInt(big.NewInt(1)); err != nil {
-		t.Fatalf("PushInt failed: %v", err)
-	}
-	if err = st.Stack.PushInt(big.NewInt(2)); err != nil {
-		t.Fatalf("PushInt failed: %v", err)
-	}
-	items, b, err = collectHashExtItems(st, 2, true, true)
-	if err != nil {
-		t.Fatalf("collectHashExtItems(append) failed: %v", err)
-	}
-	if b == nil || items[0].(*big.Int).Int64() != 2 || items[1].(*big.Int).Int64() != 1 {
-		t.Fatalf("unexpected append-mode result: items=%#v builder=%v", items, b)
-	}
-
-	st = newFuncTestState(t, nil)
 	hashInput := cell.BeginCell().MustStoreSlice(data, uint(len(data))*8).ToSlice()
 	if err = st.Stack.PushSlice(hashInput); err != nil {
 		t.Fatalf("PushSlice failed: %v", err)

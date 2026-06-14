@@ -19,10 +19,12 @@ func init() {
 
 var pushCtrPrefixed = helpers.NewPrefixed(pushCtrPrefixes()...)
 
+var pushCtrPrefixIndexes = [...]uint64{0, 1, 2, 3, 4, 5, 7}
+
 func pushCtrPrefixes() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 7)
-	for _, idx := range []uint64{0, 1, 2, 3, 4, 5, 7} {
-		prefixes = append(prefixes, helpers.UIntPrefix(0xED40|idx, 16))
+	prefixes := make([]helpers.BitPrefix, len(pushCtrPrefixIndexes))
+	for i, idx := range pushCtrPrefixIndexes {
+		prefixes[i] = helpers.UIntPrefix(0xED40|idx, 16)
 	}
 	return prefixes
 }

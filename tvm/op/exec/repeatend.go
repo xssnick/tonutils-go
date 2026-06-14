@@ -12,12 +12,11 @@ func init() {
 func REPEATEND() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			countVal, err := state.Stack.PopIntRange(repeatCountMin, repeatCountMax)
+			count, err := state.Stack.PopIntRangeInt64(repeatCountMin, repeatCountMax)
 			if err != nil {
 				return err
 			}
 
-			count := countVal.Int64()
 			if count <= 0 {
 				return state.Return()
 			}

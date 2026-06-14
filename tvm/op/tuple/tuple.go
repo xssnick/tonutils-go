@@ -48,15 +48,11 @@ func execMakeTuple(state *vm.State, count int) error {
 
 	vals := make([]any, count)
 	for i := 0; i < count; i++ {
-		val, err := state.Stack.Get(count - 1 - i)
+		val, err := state.Stack.PopAny()
 		if err != nil {
 			return err
 		}
-		vals[i] = val
-	}
-
-	if err := state.Stack.Drop(count); err != nil {
-		return err
+		vals[count-1-i] = val
 	}
 
 	newTuple := tuplepkg.NewTupleOwned(vals)

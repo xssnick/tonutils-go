@@ -217,7 +217,8 @@ func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecu
 
 	refView := newCellRefView(loaded)
 	refCnt := loaded.refsCount()
-	refs := make([]*Cell, refCnt)
+	var refsBuf [4]*Cell
+	refs := refsBuf[:refCnt]
 	if !unlimited && depth == 0 {
 		for i := range refs {
 			refs[i], err = refView.boundaryRef(i)

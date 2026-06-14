@@ -211,12 +211,37 @@ func getTonStoragePrices(state *vm.State) (*tlb.ConfigStoragePrices, error) {
 
 func ceilShiftRight(x *big.Int, bits uint) *big.Int {
 	if x.Sign() == 0 {
-		return big.NewInt(0)
+		return new(big.Int)
 	}
-	add := new(big.Int).Lsh(big.NewInt(1), bits)
-	add.Sub(add, big.NewInt(1))
-	y := new(big.Int).Add(x, add)
-	return y.Rsh(y, bits)
+	if x.Sign() > 0 {
+		q := new(big.Int).Rsh(x, bits)
+		for i := uint(0); i < bits; i++ {
+			if x.Bit(int(i)) != 0 {
+				q.Add(q, funcsBigIntOne)
+				break
+			}
+		}
+		return q
+	}
+
+	divisor := new(big.Int).Lsh(funcsBigIntOne, bits)
+	return new(big.Int).Quo(x, divisor)
+}
+
+func mulUint64(x, y uint64) *big.Int {
+	if x == 0 || y == 0 {
+		return new(big.Int)
+	}
+	z := new(big.Int).SetUint64(x)
+	return z.Mul(z, new(big.Int).SetUint64(y))
+}
+
+func mulBigUint64(x *big.Int, y uint64) *big.Int {
+	if x.Sign() == 0 || y == 0 {
+		return new(big.Int)
+	}
+	z := new(big.Int).Set(x)
+	return z.Mul(z, new(big.Int).SetUint64(y))
 }
 
 func maxBig(x, y *big.Int) *big.Int {
@@ -348,7 +373,7 @@ func GETSTORAGEFEE() *helpers.SimpleOP {
 				return err
 			}
 			if prices == nil {
-				return state.Stack.PushInt(big.NewInt(0))
+				return state.Stack.PushSmallInt(0)
 			}
 			return state.Stack.PushInt(prices.ComputeStorageFee(isMasterchain, delta, bits, cellsCnt))
 		},
@@ -407,9 +432,9 @@ func GETORIGINALFWDFEE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			num := new(big.Int).Mul(fwdFee, big.NewInt(1<<16))
-			den := big.NewInt(int64((1 << 16) - uint64(prices.FirstFrac)))
-			return state.Stack.PushInt(num.Div(num, den))
+			num := new(big.Int).Lsh(fwdFee, 16)
+			den := new(big.Int).SetUint64((1 << 16) - uint64(prices.FirstFrac))
+			return state.Stack.PushOwnedInt(num.Div(num, den))
 		},
 		Name:      "GETORIGINALFWDFEE",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x3A),
@@ -434,8 +459,8 @@ func GETGASFEESIMPLE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			total := ceilShiftRight(new(big.Int).Mul(new(big.Int).SetUint64(prices.GasPrice), new(big.Int).SetUint64(gas)), 16)
-			return state.Stack.PushInt(total)
+			total := ceilShiftRight(mulUint64(prices.GasPrice, gas), 16)
+			return state.Stack.PushOwnedInt(total)
 		},
 		Name:      "GETGASFEESIMPLE",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x3B),
@@ -464,9 +489,9 @@ func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			part := new(big.Int).Mul(new(big.Int).SetUint64(prices.BitPrice), new(big.Int).SetUint64(bits))
-			part.Add(part, new(big.Int).Mul(new(big.Int).SetUint64(prices.CellPrice), new(big.Int).SetUint64(cellsCnt)))
-			return state.Stack.PushInt(ceilShiftRight(part, 16))
+			part := mulUint64(prices.BitPrice, bits)
+			part.Add(part, mulUint64(prices.CellPrice, cellsCnt))
+			return state.Stack.PushOwnedInt(ceilShiftRight(part, 16))
 		},
 		Name:      "GETFORWARDFEESIMPLE",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x3C),
@@ -476,7 +501,7 @@ func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 func GETEXTRABALANCE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			id, err := state.Stack.PopIntRange(0, (1<<32)-1)
+			id, err := state.Stack.PopIntRangeInt64(0, (1<<32)-1)
 			if err != nil {
 				return err
 			}
@@ -507,7 +532,7 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 				return pushSmallInt(state, 0)
 			}
 
-			key := cell.BeginCell().MustStoreBigUInt(id, 32).EndCell()
+			key := cell.BeginCell().MustStoreUInt(uint64(id), 32).EndCell()
 			trace := state.Cells.Trace()
 			var cheapTrace *getExtraBalanceCheapTrace
 			if cheap {
@@ -626,6 +651,12 @@ func newHashExtHasher(hashID int) (hashExtHasher, error) {
 }
 
 func appendBits(dst []byte, dstBits *int, src []byte, bits int) []byte {
+	if *dstBits%8 == 0 && bits%8 == 0 {
+		dst = append(dst, src[:bits/8]...)
+		*dstBits += bits
+		return dst
+	}
+
 	for i := 0; i < bits; i++ {
 		srcBit := (src[i/8] >> (7 - uint(i%8))) & 1
 		if *dstBits%8 == 0 {
@@ -637,31 +668,6 @@ func appendBits(dst []byte, dstBits *int, src []byte, bits int) []byte {
 		*dstBits++
 	}
 	return dst
-}
-
-func collectHashExtItems(state *vm.State, cnt int, rev, appendMode bool) ([]any, *cell.Builder, error) {
-	items := make([]any, cnt)
-	for i := 0; i < cnt; i++ {
-		val, err := state.Stack.PopAny()
-		if err != nil {
-			return nil, nil, err
-		}
-		items[i] = val
-	}
-	var builder *cell.Builder
-	if appendMode {
-		var err error
-		builder, err = state.Stack.PopBuilder()
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	if !rev {
-		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-			items[i], items[j] = items[j], items[i]
-		}
-	}
-	return items, builder, nil
 }
 
 func valueBitsForHashExt(val any) ([]byte, int, error) {
@@ -724,21 +730,21 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 				if state.Stack.Len() < 2 {
 					return vmerr.Error(vmerr.CodeStackUnderflow)
 				}
-				v, err := state.Stack.PopIntRange(0, 254)
+				v, err := state.Stack.PopIntRangeInt64(0, 254)
 				if err != nil {
 					return err
 				}
-				hashID = int(v.Int64())
+				hashID = int(v)
 			}
 			maxCnt := state.Stack.Len() - 1
 			if appendMode {
 				maxCnt--
 			}
-			cntInt, err := state.Stack.PopIntRange(0, int64(maxCnt))
+			cntInt, err := state.Stack.PopIntRangeInt64(0, int64(maxCnt))
 			if err != nil {
 				return err
 			}
-			cnt := int(cntInt.Int64())
+			cnt := int(cntInt)
 			hasher, err := newHashExtHasher(hashID)
 			if err != nil {
 				return err

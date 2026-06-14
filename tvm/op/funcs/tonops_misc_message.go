@@ -248,22 +248,14 @@ func storeVarInteger(dst *cell.Builder, x *big.Int, lenBits uint, signed, quiet 
 			return false, vmerr.Error(vmerr.CodeRangeCheck)
 		}
 		ln = (x.BitLen() + 7) >> 3
-	} else {
-		ln = 0
-		for ; ln < maxLen; ln++ {
-			if ln == 0 {
-				if x.Sign() == 0 {
-					break
-				}
-				continue
-			}
-			bits := uint(ln * 8)
-			min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), bits-1))
-			max := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bits-1), big.NewInt(1))
-			if x.Cmp(min) >= 0 && x.Cmp(max) <= 0 {
-				break
-			}
+	} else if x.Sign() != 0 {
+		bitLen := x.BitLen() + 1
+		if x.Sign() < 0 {
+			absMinusOne := new(big.Int).Neg(x)
+			absMinusOne.Sub(absMinusOne, funcsBigIntOne)
+			bitLen = absMinusOne.BitLen() + 1
 		}
+		ln = (bitLen + 7) >> 3
 	}
 	if ln >= maxLen {
 		return false, vmerr.Error(vmerr.CodeRangeCheck)
@@ -631,14 +623,14 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 				if err != nil {
 					return err
 				}
-				if err = state.Stack.PushInt(big.NewInt(int64(addr.Workchain))); err != nil {
+				if err = state.Stack.PushSmallInt(int64(addr.Workchain)); err != nil {
 					return err
 				}
-				if err = state.Stack.PushInt(new(big.Int).SetBytes(data)); err != nil {
+				if err = state.Stack.PushOwnedInt(new(big.Int).SetBytes(data)); err != nil {
 					return err
 				}
 			} else {
-				if err = state.Stack.PushInt(big.NewInt(int64(addr.Workchain))); err != nil {
+				if err = state.Stack.PushSmallInt(int64(addr.Workchain)); err != nil {
 					return err
 				}
 				if err = state.Stack.PushOwnedSlice(rewritten); err != nil {
@@ -849,7 +841,7 @@ func RAWRESERVE() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			f, err := state.Stack.PopIntRange(0, 31)
+			f, err := state.Stack.PopIntRangeInt64(0, 31)
 			if err != nil {
 				return err
 			}
@@ -864,7 +856,7 @@ func RAWRESERVE() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x36e6b809, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(f.Uint64(), 8); err != nil {
+				if err = b.StoreUInt(uint64(f), 8); err != nil {
 					return err
 				}
 				if err = b.StoreBigCoins(x); err != nil {
@@ -885,7 +877,7 @@ func RAWRESERVEX() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			f, err := state.Stack.PopIntRange(0, 31)
+			f, err := state.Stack.PopIntRangeInt64(0, 31)
 			if err != nil {
 				return err
 			}
@@ -904,7 +896,7 @@ func RAWRESERVEX() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x36e6b809, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(f.Uint64(), 8); err != nil {
+				if err = b.StoreUInt(uint64(f), 8); err != nil {
 					return err
 				}
 				if err = b.StoreBigCoins(x); err != nil {
@@ -937,13 +929,13 @@ func SETCODE() *helpers.SimpleOP {
 	}
 }
 
-func popLibMode(state *vm.State) (*big.Int, error) {
-	mode, err := state.Stack.PopIntRange(0, 31)
+func popLibMode(state *vm.State) (int64, error) {
+	mode, err := state.Stack.PopIntRangeInt64(0, 31)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	if (mode.Int64() &^ 16) > 2 {
-		return nil, vmerr.Error(vmerr.CodeRangeCheck)
+	if (mode &^ 16) > 2 {
+		return 0, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return mode, nil
 }
@@ -967,7 +959,7 @@ func SETLIBCODE() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x26FA1DD4, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(uint64(mode.Int64()*2+1), 8); err != nil {
+				if err = b.StoreUInt(uint64(mode*2+1), 8); err != nil {
 					return err
 				}
 				return b.StoreRefUncheckedDepth(code)
@@ -1000,7 +992,7 @@ func CHANGELIB() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x26FA1DD4, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(uint64(mode.Int64()*2), 8); err != nil {
+				if err = b.StoreUInt(uint64(mode*2), 8); err != nil {
 					return err
 				}
 				return b.StoreBigUInt(hash, 256)
@@ -1241,7 +1233,7 @@ func sendMsgStoredCoinsBits(value *big.Int) uint {
 
 func sendMsgBigOrZero(value *big.Int) *big.Int {
 	if value == nil {
-		return big.NewInt(0)
+		return new(big.Int)
 	}
 	return new(big.Int).Set(value)
 }
@@ -1290,12 +1282,12 @@ func SENDMSG() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			modeVal, err := state.Stack.PopIntRange(0, 2047)
+			modeVal, err := state.Stack.PopIntRangeInt64(0, 2047)
 			if err != nil {
 				return err
 			}
-			send := modeVal.Int64()&1024 == 0
-			mode := modeVal.Int64() &^ 1024
+			send := modeVal&1024 == 0
+			mode := modeVal &^ 1024
 			if mode >= 256 {
 				return vmerr.Error(vmerr.CodeRangeCheck)
 			}
@@ -1367,14 +1359,14 @@ func SENDMSG() *helpers.SimpleOP {
 				}
 			}
 
-			ihr := big.NewInt(0)
-			fwd := big.NewInt(0)
+			ihr := new(big.Int)
+			fwd := new(big.Int)
 			ihrDisabled := msg.MsgType != tlb.MsgTypeInternal || msg.Info.IHRDisabled || state.GlobalVersion >= 11
 			computeFees := func() {
 				computedFwd := prices.ComputeForwardFee(stat.cells, stat.bits)
-				computedIHR := big.NewInt(0)
+				computedIHR := new(big.Int)
 				if !ihrDisabled {
-					computedIHR = ceilShiftRight(new(big.Int).Mul(computedFwd, new(big.Int).SetUint64(uint64(prices.IHRFactor))), 16)
+					computedIHR = ceilShiftRight(mulBigUint64(computedFwd, uint64(prices.IHRFactor)), 16)
 				}
 
 				fwd = computedFwd
@@ -1401,7 +1393,7 @@ func SENDMSG() *helpers.SimpleOP {
 				if msg.MsgType == tlb.MsgTypeExternalOut {
 					bits = 2 + myAddrBits + destAddrBits + 32 + 64
 				} else {
-					fwdFeeFirst := new(big.Int).Rsh(new(big.Int).Mul(fwd, new(big.Int).SetUint64(uint64(prices.FirstFrac))), 16)
+					fwdFeeFirst := new(big.Int).Rsh(mulBigUint64(fwd, uint64(prices.FirstFrac)), 16)
 					remainingFwdFee := new(big.Int).Sub(fwd, fwdFeeFirst)
 					bits = 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(value) + 1 + 32 + 64
 					bits += sendMsgStoredCoinsBits(remainingFwdFee)

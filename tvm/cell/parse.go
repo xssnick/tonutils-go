@@ -499,8 +499,39 @@ func (idx bocCellIndex) cellEnd(i int) int {
 	return end
 }
 
+func (idx bocCellIndex) cellEndAndCacheBit(i int) (int, bool) {
+	end := idx.rawEnd(i)
+	if !idx.hasCacheBits {
+		return end, false
+	}
+	return end / 2, end&1 == 1
+}
+
 func (idx bocCellIndex) cacheBit(i int) bool {
 	return idx.rawEnd(i)%2 == 1
+}
+
+const (
+	bocCacheRefCountMask = 0x7F
+	bocCacheRefIndexBit  = 0x80
+)
+
+func incBOCCacheRef(cacheRefs []uint8, idx int) {
+	if cacheRefs[idx]&bocCacheRefCountMask < 2 {
+		cacheRefs[idx]++
+	}
+}
+
+func setBOCIndexCacheBit(cacheRefs []uint8, i int) {
+	cacheRefs[i] |= bocCacheRefIndexBit
+}
+
+func bocShouldCache(cacheRefs []uint8, i int) bool {
+	return cacheRefs[i]&bocCacheRefCountMask > 1
+}
+
+func bocIndexCacheBit(cacheRefs []uint8, i int) bool {
+	return cacheRefs[i]&bocCacheRefIndexBit != 0
 }
 
 type bocPayloadArena struct {
@@ -571,9 +602,7 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 	if index.hasCacheBits {
 		cacheRefs = make([]uint8, cellsNum)
 		for _, idx := range rootsIndex {
-			if cacheRefs[idx] < 2 {
-				cacheRefs[idx]++
-			}
+			incBOCCacheRef(cacheRefs, int(idx))
 		}
 	}
 
@@ -595,7 +624,15 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 	for i := 0; i < cellsNum; i++ {
 		cellEnd := dataLen
 		if indexEnabled {
-			cellEnd = index.cellEnd(i)
+			if cacheRefs != nil {
+				var cacheBit bool
+				cellEnd, cacheBit = index.cellEndAndCacheBit(i)
+				if cacheBit {
+					setBOCIndexCacheBit(cacheRefs, i)
+				}
+			} else {
+				cellEnd = index.cellEnd(i)
+			}
 			if cellEnd < offset || cellEnd > dataLen {
 				return nil, nil, errors.New("invalid cell index")
 			}
@@ -702,8 +739,8 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 				}
 
 				cells[i].refs[y] = &cells[id]
-				if cacheRefs != nil && cacheRefs[id] < 2 {
-					cacheRefs[id]++
+				if cacheRefs != nil {
+					incBOCCacheRef(cacheRefs, id)
 				}
 			}
 		}
@@ -747,7 +784,7 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 	}
 	if cacheRefs != nil {
 		for i := 0; i < cellsNum; i++ {
-			if shouldCache := cacheRefs[i] > 1; shouldCache != index.cacheBit(i) {
+			if shouldCache := bocShouldCache(cacheRefs, i); shouldCache != bocIndexCacheBit(cacheRefs, i) {
 				return nil, nil, fmt.Errorf("invalid cache flag for cell #%d", i)
 			}
 		}
@@ -769,9 +806,7 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 	if index.hasCacheBits {
 		cacheRefs = make([]uint8, cellsNum)
 		for _, idx := range rootsIndex {
-			if cacheRefs[idx] < 2 {
-				cacheRefs[idx]++
-			}
+			incBOCCacheRef(cacheRefs, int(idx))
 		}
 	}
 
@@ -780,7 +815,15 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 	for i := range cells {
 		cellEnd := dataLen
 		if indexEnabled {
-			cellEnd = index.cellEnd(i)
+			if cacheRefs != nil {
+				var cacheBit bool
+				cellEnd, cacheBit = index.cellEndAndCacheBit(i)
+				if cacheBit {
+					setBOCIndexCacheBit(cacheRefs, i)
+				}
+			} else {
+				cellEnd = index.cellEnd(i)
+			}
 			if cellEnd < offset || cellEnd > dataLen {
 				return nil, nil, errors.New("invalid cell index")
 			}
@@ -831,8 +874,8 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 			}
 
 			cells[i].refs[ref] = &cells[id]
-			if cacheRefs != nil && cacheRefs[id] < 2 {
-				cacheRefs[id]++
+			if cacheRefs != nil {
+				incBOCCacheRef(cacheRefs, id)
 			}
 		}
 
@@ -847,7 +890,7 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 	}
 	if cacheRefs != nil {
 		for i := range cells {
-			if shouldCache := cacheRefs[i] > 1; shouldCache != index.cacheBit(i) {
+			if shouldCache := bocShouldCache(cacheRefs, i); shouldCache != bocIndexCacheBit(cacheRefs, i) {
 				return nil, nil, fmt.Errorf("invalid cache flag for cell #%d", i)
 			}
 		}

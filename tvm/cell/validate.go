@@ -39,10 +39,11 @@ func validateCell(c *Cell, loadRefs bool) error {
 		if len(c.data) < 2 {
 			return fmt.Errorf("not enough data for a pruned branch special cell")
 		}
-		if c.getLevelMask().Mask != c.data[1] {
+		levelMask := c.getLevelMask()
+		if levelMask.Mask != c.data[1] {
 			return fmt.Errorf("pruned branch level mask mismatch")
 		}
-		level := c.getLevelMask().GetLevel()
+		level := levelMask.GetLevel()
 		if level == 0 && c.IsLazy() {
 			expectedBits := (2 + hashSize + depthSize) * 8
 			if int(c.bitsSz) != expectedBits {
@@ -53,7 +54,7 @@ func validateCell(c *Cell, loadRefs bool) error {
 		if level > _DataCellMaxLevel || level == 0 {
 			return fmt.Errorf("pruned branch has an invalid level")
 		}
-		expectedBits := (2 + c.getLevelMask().Apply(level-1).getHashesCount()*(hashSize+depthSize)) * 8
+		expectedBits := (2 + levelMask.Apply(level-1).getHashesCount()*(hashSize+depthSize)) * 8
 		if int(c.bitsSz) != expectedBits {
 			return fmt.Errorf("not enough data for a pruned branch special cell")
 		}
@@ -119,18 +120,19 @@ func validateCell(c *Cell, loadRefs bool) error {
 
 func specialCellRefs(c *Cell, typ Type, loadRefs bool) ([2]*Cell, error) {
 	var refs [2]*Cell
+	refCnt := c.refsCount()
 
 	switch typ {
 	case PrunedCellType:
-		if c.refsCount() != 0 {
+		if refCnt != 0 {
 			return refs, fmt.Errorf("pruned branch special cell has a cell reference")
 		}
 	case LibraryCellType:
-		if c.refsCount() != 0 {
+		if refCnt != 0 {
 			return refs, fmt.Errorf("library special cell has a cell reference")
 		}
 	case MerkleProofCellType:
-		if c.refsCount() != 1 {
+		if refCnt != 1 {
 			return refs, fmt.Errorf("wrong references count for a merkle proof special cell")
 		}
 		refView := newCellRefView(c)
@@ -146,7 +148,7 @@ func specialCellRefs(c *Cell, typ Type, loadRefs bool) ([2]*Cell, error) {
 		}
 		refs[0] = ref
 	case MerkleUpdateCellType:
-		if c.refsCount() != 2 {
+		if refCnt != 2 {
 			return refs, fmt.Errorf("wrong references count for a merkle update special cell")
 		}
 		refView := newCellRefView(c)

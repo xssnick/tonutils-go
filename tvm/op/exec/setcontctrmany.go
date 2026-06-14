@@ -27,8 +27,8 @@ func setContCtrManyCommon(state *vm.State, mask uint8) error {
 	}
 	cont = vm.ForceControlData(cont)
 	data := cont.GetControlData()
-	for i := 0; i < 8; i++ {
-		if mask&(1<<uint(i)) == 0 {
+	for i, m := 0, mask; m != 0; i, m = i+1, m>>1 {
+		if m&1 == 0 {
 			continue
 		}
 		if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(state.Reg.Get(i))) {
@@ -69,11 +69,11 @@ func SETCONTCTRMANYX() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			mask, err := state.Stack.PopIntRange(0, 255)
+			mask, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return setContCtrManyCommon(state, uint8(mask.Int64()))
+			return setContCtrManyCommon(state, uint8(mask))
 		},
 		Name:      "SETCONTCTRMANYX",
 		BitPrefix: helpers.BytesPrefix(0xED, 0xE4),

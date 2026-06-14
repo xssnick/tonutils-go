@@ -395,7 +395,7 @@ func (s *bocSerializer) reorderCells() {
 	for i := range newIdx {
 		newIdx[i] = bocInvalidCellIndex
 	}
-	s.cellOrder = make([]uint32, 0, s.cellCount)
+	s.cellOrder = make([]uint32, s.cellCount)
 	var nextIdx uint32
 
 	for _, root := range s.roots {
@@ -437,7 +437,7 @@ func (s *bocSerializer) revisit(cellIdx uint32, force int, newIdx []uint32, next
 		idx := *nextIdx
 		*nextIdx = idx + 1
 		newIdx[pos] = idx
-		s.cellOrder = append(s.cellOrder, cellIdx)
+		s.cellOrder[int(idx)] = cellIdx
 		return idx
 	}
 
@@ -936,19 +936,20 @@ func (c *Cell) serializeBOCTo(dst []byte, withHashes bool) int {
 	offset := 2
 	if withHashes {
 		dst[0] |= 16
+		level := levelMask.GetLevel()
 
-		for level := 0; level <= levelMask.GetLevel(); level++ {
-			if !levelMask.IsSignificant(level) {
+		for i := 0; i <= level; i++ {
+			if !levelMask.IsSignificant(i) {
 				continue
 			}
-			copy(dst[offset:offset+hashSize], c.getHash(level))
+			copy(dst[offset:offset+hashSize], c.getHash(i))
 			offset += hashSize
 		}
-		for level := 0; level <= levelMask.GetLevel(); level++ {
-			if !levelMask.IsSignificant(level) {
+		for i := 0; i <= level; i++ {
+			if !levelMask.IsSignificant(i) {
 				continue
 			}
-			binary.BigEndian.PutUint16(dst[offset:offset+depthSize], c.getDepth(level))
+			binary.BigEndian.PutUint16(dst[offset:offset+depthSize], c.getDepth(i))
 			offset += depthSize
 		}
 	}

@@ -75,6 +75,8 @@ var dictNearVariants = []dictNearVariant{
 	{offset: 11, kind: dictKeyUnsignedInt, fetchNext: false, allowEq: true},
 }
 
+var dictBigIntOne = big.NewInt(1)
+
 func init() {
 	registerSimpleExact(0xF400, "STDICT", execStoreDict)
 	registerSimpleExact(0xF401, "SKIPDICT", execSkipDict)
@@ -163,7 +165,7 @@ func PFXDICTSWITCH(root *cell.Cell, bits ...uint64) *OpPFXDICTSWITCH {
 }
 
 func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
-	if _, err := code.LoadSlice(13); err != nil {
+	if err := code.SkipBits(13); err != nil {
 		return err
 	}
 	hasRoot, err := code.LoadBoolBit()
@@ -819,10 +821,11 @@ func execDictDelete(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 			return mapDictError(err)
 		}
-		if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+		newRoot := dict.AsCell()
+		if err = pushMaybeCell(state.Stack, newRoot); err != nil {
 			return err
 		}
-		return state.Stack.PushBool(err == nil && !sameMaybeCell(oldRoot, dict.AsCell()))
+		return state.Stack.PushBool(err == nil && !sameMaybeCell(oldRoot, newRoot))
 	}
 }
 
@@ -1021,7 +1024,7 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 			return vmerr.Error(vmerr.CodeStackUnderflow)
 		}
 
-		n, err := state.Stack.PopIntRange(0, 1023)
+		n, err := state.Stack.PopIntRangeInt64(0, 1023)
 		if err != nil {
 			return err
 		}
@@ -1038,7 +1041,7 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 			return err
 		}
 
-		keyBits := uint(n.Uint64())
+		keyBits := uint(n)
 		if keySlice.BitsLeft() > keyBits {
 			if err = pushMaybeCell(state.Stack, root); err != nil {
 				return err
@@ -1067,7 +1070,7 @@ func execPfxDictDelete(state *vm.State) error {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	n, err := state.Stack.PopIntRange(0, 1023)
+	n, err := state.Stack.PopIntRangeInt64(0, 1023)
 	if err != nil {
 		return err
 	}
@@ -1079,7 +1082,7 @@ func execPfxDictDelete(state *vm.State) error {
 	if err != nil {
 		return err
 	}
-	keyBits := uint(n.Uint64())
+	keyBits := uint(n)
 	if keySlice.BitsLeft() > keyBits {
 		if err = pushMaybeCell(state.Stack, root); err != nil {
 			return err
@@ -1098,10 +1101,11 @@ func execPfxDictDelete(state *vm.State) error {
 	if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 		return mapDictError(err)
 	}
-	if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+	newRoot := dict.AsCell()
+	if err = pushMaybeCell(state.Stack, newRoot); err != nil {
 		return err
 	}
-	return state.Stack.PushBool(err == nil && !sameMaybeCell(oldRoot, dict.AsCell()))
+	return state.Stack.PushBool(err == nil && !sameMaybeCell(oldRoot, newRoot))
 }
 
 func execPfxDictGet(op int) func(*vm.State) error {
@@ -1110,7 +1114,7 @@ func execPfxDictGet(op int) func(*vm.State) error {
 			return vmerr.Error(vmerr.CodeStackUnderflow)
 		}
 
-		n, err := state.Stack.PopIntRange(0, 1023)
+		n, err := state.Stack.PopIntRangeInt64(0, 1023)
 		if err != nil {
 			return err
 		}
@@ -1123,7 +1127,7 @@ func execPfxDictGet(op int) func(*vm.State) error {
 			return err
 		}
 
-		keyBits := uint(n.Uint64())
+		keyBits := uint(n)
 		keyCell, err := prefixDictLookupKeyCell(input, keyBits)
 		if err != nil {
 			return cellUnderflowError(err)
@@ -1307,7 +1311,7 @@ func execSubdict(removePrefix bool) func(dictScalarVariant) func(*vm.State) erro
 				return err
 			}
 
-			n, err := state.Stack.PopIntRange(0, 1023)
+			n, err := state.Stack.PopIntRangeInt64(0, 1023)
 			if err != nil {
 				return err
 			}
@@ -1316,7 +1320,7 @@ func execSubdict(removePrefix bool) func(dictScalarVariant) func(*vm.State) erro
 				return err
 			}
 
-			keyBits := uint(n.Uint64())
+			keyBits := uint(n)
 			_, prefix, err := popSubdictPrefix(state, keyBits, variant.kind)
 			if err != nil {
 				return err
@@ -1337,11 +1341,11 @@ func execSubdict(removePrefix bool) func(dictScalarVariant) func(*vm.State) erro
 func popSubdictPrefix(state *vm.State, keyBits uint, kind dictKeyKind) (uint, *cell.Cell, error) {
 	switch kind {
 	case dictKeySlice:
-		k, err := state.Stack.PopIntRange(0, int64(keyBits))
+		k, err := state.Stack.PopIntRangeInt64(0, int64(keyBits))
 		if err != nil {
 			return 0, nil, err
 		}
-		prefixBits := uint(k.Uint64())
+		prefixBits := uint(k)
 		sl, err := state.Stack.PopSlice()
 		if err != nil {
 			return 0, nil, err
@@ -1349,11 +1353,11 @@ func popSubdictPrefix(state *vm.State, keyBits uint, kind dictKeyKind) (uint, *c
 		prefix, err := sliceKeyCell(sl, prefixBits)
 		return prefixBits, prefix, err
 	case dictKeySignedInt:
-		k, err := state.Stack.PopIntRange(0, int64(minUint(keyBits, 257)))
+		k, err := state.Stack.PopIntRangeInt64(0, int64(minUint(keyBits, 257)))
 		if err != nil {
 			return 0, nil, err
 		}
-		prefixBits := uint(k.Uint64())
+		prefixBits := uint(k)
 		val, err := state.Stack.PopIntFinite()
 		if err != nil {
 			return 0, nil, err
@@ -1364,11 +1368,11 @@ func popSubdictPrefix(state *vm.State, keyBits uint, kind dictKeyKind) (uint, *c
 		}
 		return prefixBits, prefix, nil
 	default:
-		k, err := state.Stack.PopIntRange(0, int64(minUint(keyBits, 256)))
+		k, err := state.Stack.PopIntRangeInt64(0, int64(minUint(keyBits, 256)))
 		if err != nil {
 			return 0, nil, err
 		}
-		prefixBits := uint(k.Uint64())
+		prefixBits := uint(k)
 		val, err := state.Stack.PopIntFinite()
 		if err != nil {
 			return 0, nil, err
@@ -1439,7 +1443,7 @@ func popDictRootAndLen(state *vm.State) (uint, *cell.Cell, error) {
 		return 0, nil, err
 	}
 
-	n, err := state.Stack.PopIntRange(0, 1023)
+	n, err := state.Stack.PopIntRangeInt64(0, 1023)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1447,7 +1451,7 @@ func popDictRootAndLen(state *vm.State) (uint, *cell.Cell, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return uint(n.Uint64()), root, nil
+	return uint(n), root, nil
 }
 
 func popDictMinMaxRootAndLen(state *vm.State, kind dictKeyKind) (uint, *cell.Cell, error) {
@@ -1462,7 +1466,7 @@ func popDictMinMaxRootAndLen(state *vm.State, kind dictKeyKind) (uint, *cell.Cel
 	case dictKeyUnsignedInt:
 		maxBits = 256
 	}
-	n, err := state.Stack.PopIntRange(0, maxBits)
+	n, err := state.Stack.PopIntRangeInt64(0, maxBits)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1470,7 +1474,7 @@ func popDictMinMaxRootAndLen(state *vm.State, kind dictKeyKind) (uint, *cell.Cel
 	if err != nil {
 		return 0, nil, err
 	}
-	return uint(n.Uint64()), root, nil
+	return uint(n), root, nil
 }
 
 func popDictKey(state *vm.State, bits uint, kind dictKeyKind, strict bool) (*cell.Cell, bool, error) {
@@ -1623,16 +1627,19 @@ func encodeDictIntBits(value *big.Int, bits uint, signed bool) ([]byte, bool) {
 		return []byte{}, value.Sign() == 0
 	}
 
-	unsignedValue := new(big.Int).Set(value)
+	unsignedValue := value
 	if signed {
-		limit := new(big.Int).Lsh(big.NewInt(1), bits-1)
-		max := new(big.Int).Sub(limit, big.NewInt(1))
-		min := new(big.Int).Neg(limit)
-		if value.Cmp(min) < 0 || value.Cmp(max) > 0 {
-			return nil, false
-		}
 		if value.Sign() < 0 {
-			unsignedValue = new(big.Int).Add(value, new(big.Int).Lsh(big.NewInt(1), bits))
+			absMinusOne := new(big.Int).Neg(value)
+			absMinusOne.Sub(absMinusOne, dictBigIntOne)
+			if absMinusOne.BitLen() >= int(bits) {
+				return nil, false
+			}
+
+			unsignedValue = new(big.Int).Lsh(dictBigIntOne, bits)
+			unsignedValue.Add(unsignedValue, value)
+		} else if value.BitLen() >= int(bits) {
+			return nil, false
 		}
 	} else if value.Sign() < 0 || value.BitLen() > int(bits) {
 		return nil, false

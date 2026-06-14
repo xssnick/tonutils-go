@@ -152,44 +152,30 @@ func (s *usageProofBuildState) markVisited(c *Cell) {
 	}
 }
 
-func (s *usageProofBuildState) rememberLoaded(boundary, loaded *Cell) {
-	if boundary == nil || loaded == nil {
-		return
-	}
-	s.loaded[boundary.HashKey()] = loaded
-	s.loaded[loaded.HashKey()] = loaded
-}
-
-func (s *usageProofBuildState) isVisited(c *Cell) bool {
-	_, ok := s.visited[c.HashKey()]
-	return ok
-}
-
-func (s *usageProofBuildState) loadedCell(c *Cell) (*Cell, bool) {
-	loaded, ok := s.loaded[c.HashKey()]
-	return loaded, ok
-}
-
 func (s *usageProofBuildState) loadForUsage(c *Cell, usageTree *CellUsageTree, node TraceNode) (*Cell, error) {
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	if loaded, ok := s.loadedCell(c); ok {
+	hash := c.HashKey()
+	if loaded, ok := s.loaded[hash]; ok {
 		return loaded, nil
 	}
 	if loaded, ok := usageTree.loadedCell(node); ok {
 		loaded = loadedForBoundary(c, loaded)
-		if loaded.HashKey() == c.HashKey() {
-			s.rememberLoaded(c, loaded)
+		loadedHash := loaded.HashKey()
+		if loadedHash == hash {
+			s.loaded[hash] = loaded
+			s.loaded[loadedHash] = loaded
 			return loaded, nil
 		}
 	}
-	if loaded, ok := usageTree.loadedCellByHash(c.HashKey()); ok {
-		s.rememberLoaded(c, loaded)
+	if loaded, ok := usageTree.loadedCellByHash(hash); ok {
+		s.loaded[hash] = loaded
+		s.loaded[loaded.HashKey()] = loaded
 		return loaded, nil
 	}
 	if !c.IsLazy() {
-		s.rememberLoaded(c, c)
+		s.loaded[hash] = c
 		return c, nil
 	}
 
@@ -197,7 +183,8 @@ func (s *usageProofBuildState) loadForUsage(c *Cell, usageTree *CellUsageTree, n
 	if err != nil {
 		return nil, err
 	}
-	s.rememberLoaded(c, loaded)
+	s.loaded[hash] = loaded
+	s.loaded[loaded.HashKey()] = loaded
 	return loaded, nil
 }
 
@@ -258,12 +245,13 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	key := usageProofBuildKey{hash: c.HashKey(), merkleDepth: merkleDepth}
+	hash := c.HashKey()
+	key := usageProofBuildKey{hash: hash, merkleDepth: merkleDepth}
 	if built := state.built[key]; built != nil {
 		return built, nil
 	}
 
-	if !state.isVisited(c) {
+	if _, ok := state.visited[hash]; !ok {
 		pruned, err := createPrunedBranchFromCell(c, merkleDepth+1)
 		if err != nil {
 			return nil, err
@@ -273,7 +261,7 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	}
 
 	loaded := c
-	if cached, ok := state.loadedCell(c); ok {
+	if cached, ok := state.loaded[hash]; ok {
 		loaded = cached
 	}
 	loaded = loaded.WithoutTrace()
@@ -295,14 +283,16 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 		}
 
 		next := ref
-		if state.isVisited(ref) {
-			loadedRef, ok := state.loadedCell(ref)
+		refHash := ref.HashKey()
+		if _, ok := state.visited[refHash]; ok {
+			loadedRef, ok := state.loaded[refHash]
 			if !ok {
 				loadedRef, err = ref.load()
 				if err != nil {
 					return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
 				}
-				state.rememberLoaded(ref, loadedRef)
+				state.loaded[refHash] = loadedRef
+				state.loaded[loadedRef.HashKey()] = loadedRef
 			}
 			next, err = buildUsageProofBody(loadedRef, state, childDepth)
 			if err != nil {

@@ -268,7 +268,7 @@ func qShrModFamily(args uint8) *helpers.AdvancedOP {
 		if add {
 			dividend.Add(dividend, w)
 		}
-		divider := new(big.Int).Lsh(big.NewInt(1), shiftValue)
+		divider := new(big.Int).Lsh(bigIntOne, shiftValue)
 		q, r, err := qRoundDiv(dividend, divider, args)
 		if err != nil {
 			return err
@@ -409,7 +409,7 @@ func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		if shift == nil || shift.Sign() < 0 || shift.Cmp(big.NewInt(256)) > 0 ||
+		if shift == nil || shift.Sign() < 0 || shift.Cmp(bigIntMaxCompoundShift) > 0 ||
 			x == nil || y == nil || (add && w == nil) {
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}
@@ -417,7 +417,7 @@ func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
 		if add {
 			dividend.Add(dividend, w)
 		}
-		divider := new(big.Int).Lsh(big.NewInt(1), uint(shift.Uint64()))
+		divider := new(big.Int).Lsh(bigIntOne, uint(shift.Uint64()))
 		q, r, err := qRoundDiv(dividend, divider, args)
 		if err != nil {
 			return err
@@ -483,7 +483,7 @@ func qShlDivModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		if shift == nil || shift.Sign() < 0 || shift.Cmp(big.NewInt(256)) > 0 ||
+		if shift == nil || shift.Sign() < 0 || shift.Cmp(bigIntMaxCompoundShift) > 0 ||
 			x == nil || z == nil || (add && w == nil) || z.Sign() == 0 {
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}

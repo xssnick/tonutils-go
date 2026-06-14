@@ -761,6 +761,11 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 	level := levelMask.GetLevel()
 	isMerkle := typ == MerkleProofCellType || typ == MerkleUpdateCellType
 
+	var refIndexes [4]uint32
+	for ref := 0; ref < refCnt; ref++ {
+		refIndexes[ref] = uint32(info.refIndex(data, ref, int(v.refSize)))
+	}
+
 	hashIndex := 0
 	var hashBuf [2 + maxCellDataBytes + (4 * depthSize) + (4 * hashSize)]byte
 	for levelIndex := 0; levelIndex <= level; levelIndex++ {
@@ -786,8 +791,7 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 
 		var depth uint16
 		for ref := 0; ref < refCnt; ref++ {
-			refIdx := info.refIndex(data, ref, int(v.refSize))
-			childDepth := v.cellMetaDepth(uint32(refIdx), childLevelIndex)
+			childDepth := v.cellMetaDepth(refIndexes[ref], childLevelIndex)
 			binary.BigEndian.PutUint16(hashBuf[bufPos:bufPos+depthSize], childDepth)
 			bufPos += depthSize
 
@@ -803,8 +807,7 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 		}
 
 		for ref := 0; ref < refCnt; ref++ {
-			refIdx := info.refIndex(data, ref, int(v.refSize))
-			hash := v.cellMetaHash(uint32(refIdx), childLevelIndex)
+			hash := v.cellMetaHash(refIndexes[ref], childLevelIndex)
 			bufPos += copy(hashBuf[bufPos:], hash[:])
 		}
 

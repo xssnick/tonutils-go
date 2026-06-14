@@ -209,7 +209,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 			if mode == DictSetModeAdd {
 				return node.cell, node.loader, false, nil
 			}
-			leaf, err := d.storeLeaf(node.label.ToSlice(), value, keyOffset)
+			leaf, err := d.storeLeaf(builderSliceView(node.label), value, keyOffset)
 			return leaf, node.loader, err == nil, err
 		}
 
@@ -280,7 +280,7 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		return nil, nil, false, err
 	}
 
-	bitsMatches, err := consumeCommonPrefix(node.label.ToSlice(), pfx, node.labelLen)
+	bitsMatches, err := consumeCommonPrefix(builderSliceView(node.label), pfx, node.labelLen)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -328,7 +328,7 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 			return nil, nil, false, err
 		}
 
-		merged, err := d.storeLeaf(node.label.ToSlice(), slc.ToBuilder(), keyOffset)
+		merged, err := d.storeLeaf(builderSliceView(node.label), slc.ToBuilder(), keyOffset)
 		if err != nil {
 			return nil, nil, false, err
 		}

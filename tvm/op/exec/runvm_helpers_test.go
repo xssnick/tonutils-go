@@ -327,7 +327,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 		return nil
 	}
 	bindRefCodeOp(op, refA, nil)
-	if op.refs[0] == nil || op.refs[1] != nil {
+	if op.refsNum != 2 || op.refs[0] == nil || op.refs[1] != nil {
 		t.Fatalf("bindRefCodeOp should ignore nil refs")
 	}
 	bindRefCodeOp(op, nil, refB)

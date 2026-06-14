@@ -9,7 +9,11 @@ import (
 
 const bitSizeInvalid = 0x7fffffff
 
-var bigIntOne = big.NewInt(1)
+var (
+	bigIntOne              = big.NewInt(1)
+	bigIntMaxShift         = big.NewInt(1023)
+	bigIntMaxCompoundShift = big.NewInt(256)
+)
 
 func pushNaNOrOverflow(state *vm.State, quiet bool) error {
 	if quiet {
@@ -122,10 +126,13 @@ func signedFitsBits(x *big.Int, bits int) bool {
 		return false
 	}
 
-	limit := new(big.Int).Lsh(big.NewInt(1), uint(bits-1))
-	min := new(big.Int).Neg(new(big.Int).Set(limit))
-	max := new(big.Int).Sub(limit, big.NewInt(1))
-	return x.Cmp(min) >= 0 && x.Cmp(max) <= 0
+	if x.Sign() > 0 {
+		return x.BitLen() < bits
+	}
+
+	t := new(big.Int).Neg(x)
+	t.Sub(t, bigIntOne)
+	return t.BitLen() < bits
 }
 
 func unsignedFitsBits(x *big.Int, bits int) bool {
@@ -139,8 +146,7 @@ func unsignedFitsBits(x *big.Int, bits int) bool {
 		return false
 	}
 
-	limit := new(big.Int).Lsh(big.NewInt(1), uint(bits))
-	return x.Cmp(limit) < 0
+	return x.BitLen() <= bits
 }
 
 func signedBitSize(x *big.Int) int {
@@ -157,7 +163,7 @@ func signedBitSize(x *big.Int) int {
 	// For negative values, TVM uses the minimal signed width such that
 	// x fits in the range [-2^(n-1), 2^(n-1)-1].
 	t := new(big.Int).Neg(x)
-	t.Sub(t, big.NewInt(1))
+	t.Sub(t, bigIntOne)
 	return t.BitLen() + 1
 }
 

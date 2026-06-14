@@ -290,10 +290,13 @@ const _DataCellMaxLevel = 3
 // Hash - calculates a hash of cell recursively
 // Once calculated, it is cached and can be reused cheap.
 func (c *Cell) Hash(level ...int) []byte {
+	hash := make([]byte, hashSize)
 	if len(level) > 0 {
-		return append([]byte{}, c.getHash(level[0])...)
+		copy(hash, c.getHash(level[0]))
+		return hash
 	}
-	return append([]byte{}, c.getHash(_DataCellMaxLevel)...)
+	copy(hash, c.getHash(_DataCellMaxLevel))
+	return hash
 }
 
 func (c *Cell) HashKey(level ...int) Hash {

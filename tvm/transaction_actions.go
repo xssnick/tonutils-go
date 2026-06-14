@@ -106,7 +106,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		NoFunds:        false,
 		StatusChange:   tlb.AccStatusChange{Type: tlb.AccStatusChangeUnchanged},
 		ResultCode:     -1,
-		ActionListHash: append([]byte(nil), actionsRoot.Hash()...),
+		ActionListHash: actionsRoot.Hash(),
 		TotalActions:   loadedActions.totalActions,
 		SkippedActions: loadedActions.skippedActions,
 		TotalMsgSize: tlb.StorageUsedShort{
@@ -138,7 +138,9 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	msgBalanceRemaining := msgBalance.copy()
 	reservedBalance := transactionZeroCurrencyBalance()
 	originalBalance := remainingBalance.copy()
-	originalBalance.grams.Add(originalBalance.grams, transactionBigOrZero(gasFees))
+	if gasFees != nil {
+		originalBalance.grams.Add(originalBalance.grams, gasFees)
+	}
 	if !originalBalance.sub(msgBalance) {
 		originalBalance = remainingBalance.copy()
 	}
@@ -356,42 +358,45 @@ func transactionLoadActions(root *cell.Cell) (*transactionActionLoadResult, erro
 		return out, nil
 	}
 
-	var nodes []*cell.Cell
+	var nodes [256]*cell.Cell
+	nodesNum := 0
 	for cur := root; cur != nil && !transactionCellIsEmpty(cur); {
 		if cur.IsSpecial() {
 			out.resultCode = 32
-			out.resultArg = transactionActionResultArg(len(nodes))
+			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
 		}
 		sl, err := cur.BeginParseWithoutTrace()
 		if err != nil {
 			out.resultCode = 32
-			out.resultArg = transactionActionResultArg(len(nodes))
+			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
 		}
 		if sl.RefsNum() == 0 {
 			out.resultCode = 32
-			out.resultArg = transactionActionResultArg(len(nodes))
+			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
 		}
 		prev, err := sl.LoadRefCell()
 		if err != nil {
 			out.resultCode = 32
-			out.resultArg = transactionActionResultArg(len(nodes))
+			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
 		}
-		nodes = append(nodes, cur)
-		if len(nodes) > 255 {
+		nodes[nodesNum] = cur
+		nodesNum++
+		if nodesNum > 255 {
 			out.resultCode = 33
-			out.resultArg = transactionActionResultArg(len(nodes))
+			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
 		}
 		cur = prev
 	}
 
-	out.totalActions = uint16(len(nodes))
-	actions := make([]transactionActionEntry, 0, len(nodes))
-	for i := len(nodes) - 1; i >= 0; i-- {
+	out.totalActions = uint16(nodesNum)
+	actions := make([]transactionActionEntry, nodesNum)
+	actionIdx := 0
+	for i := nodesNum - 1; i >= 0; i-- {
 		node := nodes[i]
 		var list tlb.OutList
 		if err := transactionParseCell(&list, node); err != nil {
@@ -399,7 +404,8 @@ func transactionLoadActions(root *cell.Cell) (*transactionActionLoadResult, erro
 			if isSend {
 				if mode&2 != 0 {
 					out.skippedActions++
-					actions = append(actions, transactionActionEntry{skipped: true})
+					actions[actionIdx] = transactionActionEntry{skipped: true}
+					actionIdx++
 					continue
 				}
 				if mode&16 != 0 {
@@ -407,10 +413,11 @@ func transactionLoadActions(root *cell.Cell) (*transactionActionLoadResult, erro
 				}
 			}
 			out.resultCode = 34
-			out.resultArg = transactionActionResultArg(len(actions))
+			out.resultArg = transactionActionResultArg(actionIdx)
 			return out, nil
 		}
-		actions = append(actions, transactionActionEntry{action: list.Out})
+		actions[actionIdx] = transactionActionEntry{action: list.Out}
+		actionIdx++
 	}
 	out.actions = actions
 	return out, nil
@@ -843,7 +850,9 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 		clearMsgBalance = true
 		if mode&1 == 0 {
 			req.grams.Sub(req.grams, gasFees)
-			req.grams.Sub(req.grams, transactionBigOrZero(currentActionFine))
+			if currentActionFine != nil {
+				req.grams.Sub(req.grams, currentActionFine)
+			}
 			if req.grams.Sign() < 0 {
 				return transactionSendResultCode(res, mode, 37), layout, nil
 			}
@@ -980,13 +989,19 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBala
 
 	if mode&4 != 0 {
 		if mode&8 != 0 {
-			reserve.grams.Sub(transactionBigOrZero(originalBalance.grams), reserve.grams)
+			if originalBalance.grams == nil {
+				reserve.grams.Neg(reserve.grams)
+			} else {
+				reserve.grams.Sub(originalBalance.grams, reserve.grams)
+			}
 			if reserve.grams.Sign() < 0 {
 				out.resultCode = 34
 				return out, nil
 			}
 		} else {
-			reserve.grams.Add(reserve.grams, transactionBigOrZero(originalBalance.grams))
+			if originalBalance.grams != nil {
+				reserve.grams.Add(reserve.grams, originalBalance.grams)
+			}
 		}
 	} else if mode&8 != 0 {
 		out.resultCode = 34

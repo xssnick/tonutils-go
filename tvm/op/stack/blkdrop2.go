@@ -13,9 +13,9 @@ func init() {
 }
 
 func blkdrop2Prefixes() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 15)
+	prefixes := make([]helpers.BitPrefix, 15)
 	for i := uint64(1); i <= 15; i++ {
-		prefixes = append(prefixes, helpers.UIntPrefix((0x6C<<4)|i, 12))
+		prefixes[i-1] = helpers.UIntPrefix((0x6C<<4)|i, 12)
 	}
 	return prefixes
 }

@@ -37,7 +37,7 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int8, round
 			}
 
 			dividend := new(big.Int).Add(x, w)
-			divider := new(big.Int).Lsh(big.NewInt(1), uint(imm()))
+			divider := new(big.Int).Lsh(bigIntOne, uint(imm()))
 			q, r := round(dividend, divider)
 
 			if err = state.Stack.PushInt(q); err != nil {

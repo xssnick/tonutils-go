@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -808,7 +809,7 @@ func (s *Stack) String() string {
 		return "[empty stack]"
 	}
 
-	var res string
+	var res strings.Builder
 	for i := len(s.elems) - 1; i >= 0; i-- {
 		typ := "???"
 		val := "???"
@@ -833,9 +834,9 @@ func (s *Stack) String() string {
 			val = x.WithoutTrace().Dump()
 		}
 
-		res += fmt.Sprintf("s%d = %s [%s]\n", i, val, typ)
+		fmt.Fprintf(&res, "s%d = %s [%s]\n", i, val, typ)
 	}
-	return res
+	return res.String()
 }
 
 func (s *Stack) Copy() *Stack {

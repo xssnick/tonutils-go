@@ -30,6 +30,14 @@ func mustPointFromUncompressed(t *testing.T, data []byte) point {
 	return p
 }
 
+func modTest(v, m *big.Int) *big.Int {
+	out := new(big.Int).Mod(v, m)
+	if out.Sign() < 0 {
+		out.Add(out, m)
+	}
+	return out
+}
+
 func TestCurveArithmeticHelpers(t *testing.T) {
 	if got := CurveOrderBytes(); len(got) != 32 || !bytes.Equal(got, curveN.FillBytes(make([]byte, 32))) {
 		t.Fatalf("unexpected curve order bytes: %x", got)
@@ -44,7 +52,7 @@ func TestCurveArithmeticHelpers(t *testing.T) {
 }
 
 func TestCurveArithmeticAndSerialization(t *testing.T) {
-	if got := mod(big.NewInt(-1), big.NewInt(7)); got.Int64() != 6 {
+	if got := modTest(big.NewInt(-1), big.NewInt(7)); got.Int64() != 6 {
 		t.Fatalf("unexpected mod result: %v", got)
 	}
 
@@ -100,9 +108,9 @@ func TestCurveArithmeticAndSerialization(t *testing.T) {
 		t.Fatal("scalar multiplication by two should match doubling")
 	}
 
-	square := mod(new(big.Int).Mul(curveG.y, curveG.y), curveP)
+	square := modTest(new(big.Int).Mul(curveG.y, curveG.y), curveP)
 	root := modSqrt(square)
-	if root == nil || mod(new(big.Int).Mul(root, root), curveP).Cmp(square) != 0 {
+	if root == nil || modTest(new(big.Int).Mul(root, root), curveP).Cmp(square) != 0 {
 		t.Fatal("modSqrt should recover a square root for quadratic residues")
 	}
 	if got := modSqrt(new(big.Int).Sub(curveP, big.NewInt(1))); got != nil {

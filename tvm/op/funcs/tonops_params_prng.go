@@ -219,7 +219,7 @@ func getRandSeed(state *vm.State) (*big.Int, error) {
 	if seed.Sign() < 0 || seed.BitLen() > 256 {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck, "random seed out of range")
 	}
-	return new(big.Int).Set(seed), nil
+	return seed, nil
 }
 
 func setRandSeed(state *vm.State, seed *big.Int) error {
@@ -292,7 +292,7 @@ func RANDU256() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(val)
+			return state.Stack.PushOwnedInt(val)
 		},
 		Name:      "RANDU256",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x10),
@@ -312,7 +312,7 @@ func RAND() *helpers.SimpleOP {
 			}
 			res := new(big.Int).Mul(x, y)
 			res.Rsh(res, 256)
-			return state.Stack.PushInt(res)
+			return state.Stack.PushOwnedInt(res)
 		},
 		Name:      "RAND",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x11),
@@ -329,7 +329,7 @@ func setRandOp(name string, opcode byte, mix bool) *helpers.SimpleOP {
 			if x.Sign() < 0 || x.BitLen() > 256 {
 				return vmerr.Error(vmerr.CodeRangeCheck, "new random seed out of range")
 			}
-			next := new(big.Int).Set(x)
+			next := x
 			if mix {
 				seed, seedErr := randSeedBytes(state)
 				if seedErr != nil {
@@ -339,10 +339,10 @@ func setRandOp(name string, opcode byte, mix bool) *helpers.SimpleOP {
 				if exportErr != nil {
 					return exportErr
 				}
-				buf := make([]byte, 64)
-				copy(buf, seed)
+				var buf [64]byte
+				copy(buf[:32], seed)
 				copy(buf[32:], mixBytes)
-				sum := sha256.Sum256(buf)
+				sum := sha256.Sum256(buf[:])
 				next = new(big.Int).SetBytes(sum[:])
 			}
 			return setRandSeed(state, next)

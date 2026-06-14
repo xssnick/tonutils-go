@@ -59,7 +59,7 @@ func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.Si
 			if err != nil {
 				return err
 			}
-			if x == nil || y == nil || y.Sign() < 0 || y.Cmp(big.NewInt(1023)) > 0 {
+			if x == nil || y == nil || y.Sign() < 0 || y.Cmp(bigIntMaxShift) > 0 {
 				return pushNaNOrOverflow(state, true)
 			}
 
@@ -159,10 +159,10 @@ func QPOW2() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			if y == nil || y.Sign() < 0 || y.Cmp(big.NewInt(1023)) > 0 {
+			if y == nil || y.Sign() < 0 || y.Cmp(bigIntMaxShift) > 0 {
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(new(big.Int).Lsh(big.NewInt(1), uint(y.Uint64())))
+			return state.Stack.PushIntQuiet(new(big.Int).Lsh(bigIntOne, uint(y.Uint64())))
 		},
 		Name:      "QPOW2",
 		BitPrefix: helpers.BytesPrefix(0xB7, 0xAE),

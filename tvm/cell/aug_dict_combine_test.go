@@ -3,6 +3,7 @@ package cell
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -331,6 +332,99 @@ func TestAugmentedDictionaryCombineReadOnlyAugmentation(t *testing.T) {
 	}
 }
 
+func TestCommonAugmentedLabelPrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		leftPrefix  string
+		leftBits    string
+		rightPrefix string
+		rightBits   string
+		want        uint
+	}{
+		{
+			name:      "byte aligned mismatch",
+			leftBits:  "1010101011110000",
+			rightBits: "1010101011100000",
+			want:      11,
+		},
+		{
+			name:        "same unaligned offset reaches byte fast path",
+			leftPrefix:  "0",
+			leftBits:    "0000000101010101",
+			rightPrefix: "0",
+			rightBits:   "0000000101010100",
+			want:        15,
+		},
+		{
+			name:        "different unaligned offsets",
+			leftPrefix:  "0",
+			leftBits:    "1010101011",
+			rightPrefix: "11",
+			rightBits:   "1010101000",
+			want:        8,
+		},
+		{
+			name:      "shorter label limits prefix",
+			leftBits:  "11110000",
+			rightBits: "111100001111",
+			want:      8,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			left := mustAugmentedCombineLabelNode(t, tc.leftPrefix, tc.leftBits)
+			right := mustAugmentedCombineLabelNode(t, tc.rightPrefix, tc.rightBits)
+
+			if got := commonAugmentedLabelPrefix(left, right); got != tc.want {
+				t.Fatalf("unexpected common prefix: got %d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAugmentedLabelSlice(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		bits   string
+		length uint
+		want   string
+	}{
+		{
+			name:   "byte aligned full bytes",
+			prefix: "00000000",
+			bits:   "1010101011110000",
+			length: 16,
+			want:   "1010101011110000",
+		},
+		{
+			name:   "byte aligned partial byte masks suffix",
+			prefix: "11111111",
+			bits:   "1010101011111111",
+			length: 9,
+			want:   "101010101",
+		},
+		{
+			name:   "unaligned fallback",
+			prefix: "1",
+			bits:   "010101011",
+			length: 9,
+			want:   "010101011",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			node := mustAugmentedCombineLabelNode(t, tc.prefix, tc.bits)
+			got := mustLoadSliceBitString(t, node.label.slice(uint(len(tc.prefix)), tc.length), tc.length)
+			if got != tc.want {
+				t.Fatalf("unexpected slice bits: got %s want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func BenchmarkAugmentedDictionaryCombine(b *testing.B) {
 	aug := testMetricAugmentation{}
 	const keySz = 16
@@ -385,6 +479,63 @@ func mustNewCombineTestAugDict(tb testing.TB, keySz uint, aug Augmentation) *Aug
 	return dict
 }
 
+func mustAugmentedCombineLabelNode(t *testing.T, prefix, visible string) *augmentedCombineNode {
+	t.Helper()
+
+	allBits := prefix + visible
+	b := BeginCell()
+	for _, bit := range allBits {
+		switch bit {
+		case '0':
+			b.MustStoreUInt(0, 1)
+		case '1':
+			b.MustStoreUInt(1, 1)
+		default:
+			t.Fatalf("invalid test bit %q", bit)
+		}
+	}
+
+	bitLen := uint(len(allBits))
+	data, err := b.ToSlice().LoadSlice(bitLen)
+	if err != nil {
+		t.Fatalf("failed to load label bits: %v", err)
+	}
+
+	return &augmentedCombineNode{
+		view:     augmentedRootView{skip: uint(len(prefix))},
+		label:    augmentedLabel{bits: data, bitLen: bitLen},
+		labelLen: bitLen,
+	}
+}
+
+func mustLoadSliceBitString(t *testing.T, s *Slice, bits uint) string {
+	t.Helper()
+
+	if s.BitsLeft() != bits {
+		t.Fatalf("unexpected bits left: got %d want %d", s.BitsLeft(), bits)
+	}
+
+	var out strings.Builder
+	out.Grow(int(bits))
+	for i := uint(0); i < bits; i++ {
+		bit, err := s.LoadUInt(1)
+		if err != nil {
+			t.Fatalf("failed to load bit %d: %v", i, err)
+		}
+		if bit == 0 {
+			out.WriteByte('0')
+		} else {
+			out.WriteByte('1')
+		}
+	}
+
+	if s.BitsLeft() != 0 {
+		t.Fatalf("slice has %d unread bits", s.BitsLeft())
+	}
+
+	return out.String()
+}
+
 func mustSetCombineTestValue(tb testing.TB, dict *AugmentedDictionary, keySz uint, key uint64, value uint64, valueBits uint) {
 	tb.Helper()
 
@@ -423,7 +574,7 @@ func mustBuildCombineBenchDict(tb testing.TB, keySz uint, start uint64, step uin
 	dict := mustNewCombineTestAugDict(tb, keySz, aug)
 	for i := 0; i < count; i++ {
 		key := start + uint64(i)*step
-		mustSetCombineBenchValue(tb, dict, keySz, key, 16)
+		mustSetCombineBenchValue(tb, dict, keySz, key, 12)
 	}
 
 	return dict

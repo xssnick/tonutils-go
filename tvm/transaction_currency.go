@@ -47,28 +47,6 @@ func transactionLoadedCell(root *cell.Cell) (*cell.Cell, error) {
 	return sl.BaseCell(), nil
 }
 
-func transactionLoadedCellRefs(root *cell.Cell) (*cell.Cell, []*cell.Cell, error) {
-	if root == nil {
-		return nil, nil, nil
-	}
-
-	sl, err := root.BeginParseWithoutTrace()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	loaded := sl.BaseCell()
-	refs := make([]*cell.Cell, sl.RefsNum())
-	for i := range refs {
-		ref, err := sl.LoadRefCell()
-		if err != nil {
-			return nil, nil, err
-		}
-		refs[i] = ref
-	}
-	return loaded, refs, nil
-}
-
 type transactionUsageCollector struct {
 	seen map[cell.Hash]struct{}
 }
@@ -82,10 +60,12 @@ func (c *transactionUsageCollector) addCell(root *cell.Cell, skipRoot bool) (tra
 		return transactionUsage{}, nil
 	}
 
-	loaded, refs, err := transactionLoadedCellRefs(root)
+	sl, err := root.BeginParseWithoutTrace()
 	if err != nil {
 		return transactionUsage{}, err
 	}
+
+	loaded := sl.BaseCell()
 	key := loaded.HashKey()
 	if _, ok := c.seen[key]; ok {
 		return transactionUsage{}, nil
@@ -100,7 +80,12 @@ func (c *transactionUsageCollector) addCell(root *cell.Cell, skipRoot bool) (tra
 		}
 	}
 
-	for _, ref := range refs {
+	for sl.RefsNum() > 0 {
+		ref, err := sl.LoadRefCell()
+		if err != nil {
+			return transactionUsage{}, err
+		}
+
 		usage, err := c.addCell(ref, false)
 		if err != nil {
 			return transactionUsage{}, err
@@ -145,7 +130,7 @@ func (c *transactionCurrencyBalance) copy() *transactionCurrencyBalance {
 	}
 	out := &transactionCurrencyBalance{
 		grams: transactionBigOrZero(c.grams),
-		extra: map[uint32]*big.Int{},
+		extra: make(map[uint32]*big.Int, len(c.extra)),
 	}
 	for id, amount := range c.extra {
 		if amount != nil {
@@ -159,7 +144,9 @@ func (c *transactionCurrencyBalance) add(other *transactionCurrencyBalance) {
 	if c == nil || other == nil {
 		return
 	}
-	c.grams.Add(c.grams, transactionBigOrZero(other.grams))
+	if other.grams != nil {
+		c.grams.Add(c.grams, other.grams)
+	}
 	if c.extra == nil {
 		c.extra = map[uint32]*big.Int{}
 	}
@@ -179,13 +166,15 @@ func (c *transactionCurrencyBalance) sub(other *transactionCurrencyBalance) bool
 	if c == nil || other == nil {
 		return true
 	}
-	if c.grams.Cmp(transactionBigOrZero(other.grams)) < 0 {
+	if other.grams != nil && c.grams.Cmp(other.grams) < 0 {
 		return false
 	}
 	if !c.hasExtra(other.extra) {
 		return false
 	}
-	c.grams.Sub(c.grams, transactionBigOrZero(other.grams))
+	if other.grams != nil {
+		c.grams.Sub(c.grams, other.grams)
+	}
 	for id, amount := range other.extra {
 		if amount == nil || amount.Sign() == 0 {
 			continue
@@ -252,14 +241,15 @@ func (c *transactionCurrencyBalance) extraDict() (*cell.Dictionary, error) {
 }
 
 func transactionLoadExtraCurrencies(dict *cell.Dictionary) (map[uint32]*big.Int, error) {
-	out := map[uint32]*big.Int{}
 	if dict == nil || dict.IsEmpty() {
-		return out, nil
+		return map[uint32]*big.Int{}, nil
 	}
 	items, err := dict.LoadAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load extra currencies: %w", err)
 	}
+
+	out := make(map[uint32]*big.Int, len(items))
 	for _, item := range items {
 		key, err := item.Key.LoadUInt(32)
 		if err != nil {
@@ -318,11 +308,11 @@ func transactionCloneExtraCurrencies(dict *cell.Dictionary) (*cell.Dictionary, e
 }
 
 func transactionAddExtraCurrencies(a, b *cell.Dictionary) (*cell.Dictionary, error) {
-	left, err := transactionCurrencyFromParts(big.NewInt(0), a)
+	left, err := transactionCurrencyFromParts(nil, a)
 	if err != nil {
 		return nil, err
 	}
-	right, err := transactionCurrencyFromParts(big.NewInt(0), b)
+	right, err := transactionCurrencyFromParts(nil, b)
 	if err != nil {
 		return nil, err
 	}

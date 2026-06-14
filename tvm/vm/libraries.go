@@ -1,8 +1,6 @@
 package vm
 
 import (
-	"bytes"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -42,9 +40,9 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 			continue
 		}
 
-		if bytes.Equal(ref.Hash(), hash) {
+		if ref.HashKey() == cacheKey {
 			if s.libraryCache == nil {
-				s.libraryCache = map[cell.Hash]*cell.Cell{}
+				s.libraryCache = make(map[cell.Hash]*cell.Cell, len(s.Libraries))
 			}
 			s.libraryCache[cacheKey] = ref
 			return ref, nil
@@ -90,7 +88,7 @@ func (s *State) ResolveLibraryCell(cl *cell.Cell) (*cell.Cell, error) {
 				return nil, err
 			}
 		}
-		if _, err := libSlice.LoadUInt(8); err != nil {
+		if err := libSlice.SkipBits(8); err != nil {
 			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
 		}
 

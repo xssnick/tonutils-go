@@ -2,7 +2,6 @@ package vm
 
 import (
 	"errors"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -123,7 +122,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 			Code: child.CurrentCode.Copy(),
 		}
 		if cfg.PushZero {
-			if err := child.Stack.PushInt(big.NewInt(0)); err != nil {
+			if err := child.Stack.PushSmallInt(0); err != nil {
 				return err
 			}
 		}
@@ -142,20 +141,22 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if childErr != nil {
 		var vmErr vmerr.VMError
 		var handled HandledException
-		if !errors.As(childErr, &vmErr) && !errors.As(childErr, &handled) {
+		vmErrOk := errors.As(childErr, &vmErr)
+		if !vmErrOk && !errors.As(childErr, &handled) {
 			return childErr
 		}
-		if errors.As(childErr, &vmErr) && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {
+		if vmErrOk && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {
 			exitCode = ^exitCode
 		}
 	}
 
-	used := child.Gas.Used()
+	childGasUsed := child.Gas.Used()
+	chargeGas := childGasUsed
 	maxCharge := child.Gas.Limit + 1
-	if used > maxCharge {
-		used = maxCharge
+	if chargeGas > maxCharge {
+		chargeGas = maxCharge
 	}
-	if err := s.ConsumeGas(used); err != nil {
+	if err := s.ConsumeGas(chargeGas); err != nil {
 		return err
 	}
 
@@ -166,7 +167,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 				retCnt = cfg.ReturnValues
 			} else {
 				exitCode = ^int64(vmerr.CodeStackUnderflow)
-				if err := s.Stack.PushInt(big.NewInt(0)); err != nil {
+				if err := s.Stack.PushSmallInt(0); err != nil {
 					return err
 				}
 			}
@@ -183,7 +184,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if err := copyTopValuesToParent(s.Stack, child.Stack, retCnt); err != nil {
 		return err
 	}
-	if err := s.Stack.PushInt(big.NewInt(exitCode)); err != nil {
+	if err := s.Stack.PushSmallInt(exitCode); err != nil {
 		return err
 	}
 
@@ -203,7 +204,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	}
 
 	if cfg.ReturnGas {
-		if err := s.Stack.PushInt(big.NewInt(child.Gas.Used())); err != nil {
+		if err := s.Stack.PushSmallInt(childGasUsed); err != nil {
 			return err
 		}
 	}

@@ -130,6 +130,33 @@ func TestDictionary_LoadValueSameBitLabel(t *testing.T) {
 	}
 }
 
+func TestDictLabelSameBit(t *testing.T) {
+	tests := []struct {
+		name    string
+		bits    []byte
+		bitLen  uint64
+		wantBit uint64
+		want    bool
+	}{
+		{name: "empty", bits: nil, bitLen: 0, want: true},
+		{name: "all ones full bytes", bits: []byte{0xFF, 0xFF}, bitLen: 16, wantBit: 1, want: true},
+		{name: "all zero full bytes", bits: []byte{0x00, 0x00}, bitLen: 16, want: true},
+		{name: "ones partial byte", bits: []byte{0xFF, 0xE0}, bitLen: 11, wantBit: 1, want: true},
+		{name: "zero partial byte ignores trailing bits", bits: []byte{0x00, 0x1F}, bitLen: 11, want: true},
+		{name: "mismatch in full byte", bits: []byte{0xFF, 0xFE}, bitLen: 16, want: false},
+		{name: "mismatch in partial byte", bits: []byte{0xFF, 0xD0}, bitLen: 11, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotBit, got := dictLabelSameBit(tc.bits, tc.bitLen)
+			if got != tc.want || gotBit != tc.wantBit {
+				t.Fatalf("got bit=%d same=%v, want bit=%d same=%v", gotBit, got, tc.wantBit, tc.want)
+			}
+		})
+	}
+}
+
 func TestMatchLabelPrefixConsumesMismatchBit(t *testing.T) {
 	tests := []struct {
 		name        string

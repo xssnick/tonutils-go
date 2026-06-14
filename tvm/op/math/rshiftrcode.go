@@ -22,7 +22,7 @@ func RSHIFTRCODE(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			res := helpers.DivRound(x, new(big.Int).Lsh(big.NewInt(1), uint(imm())))
+			res := helpers.DivRound(x, new(big.Int).Lsh(bigIntOne, uint(imm())))
 
 			return state.Stack.PushInt(res)
 		},

@@ -7,6 +7,8 @@ import (
 	"math/bits"
 )
 
+var bigIntOne = big.NewInt(1)
+
 type Builder struct {
 	trace   *Trace
 	data    [maxCellDataBytes]byte
@@ -340,18 +342,9 @@ func (b *Builder) StoreBigUInt(value *big.Int, sz uint) error {
 }
 
 func (b *Builder) storeBig(value *big.Int, sz uint) error {
-	bytes := value.Bytes()
-
-	partByte := 0
-	if sz%8 != 0 {
-		partByte = 1
-	}
-	bytesToUse := (int(sz) / 8) + partByte
-
-	if len(bytes) < bytesToUse {
-		// add zero bits to fit requested size
-		bytes = append(make([]byte, bytesToUse-len(bytes)), bytes...)
-	}
+	bytesToUse := int((sz + 7) / 8)
+	var buf [33]byte
+	bytes := value.FillBytes(buf[:bytesToUse])
 
 	// check is value uses full bytes
 	if offset := sz % 8; offset > 0 {
@@ -400,7 +393,7 @@ func (b *Builder) StoreBigInt(value *big.Int, sz uint) error {
 		return ErrTooBigValue
 	}
 
-	encoded := new(big.Int).Lsh(big.NewInt(1), sz)
+	encoded := new(big.Int).Lsh(bigIntOne, sz)
 	encoded.Add(encoded, value)
 	return b.storeBig(encoded, sz)
 }
@@ -571,8 +564,8 @@ func fitsNegativeBigInt(value *big.Int, sz uint) bool {
 		return false
 	}
 
-	absMinusOne := new(big.Int).Neg(new(big.Int).Set(value))
-	absMinusOne.Sub(absMinusOne, big.NewInt(1))
+	absMinusOne := new(big.Int).Neg(value)
+	absMinusOne.Sub(absMinusOne, bigIntOne)
 	return absMinusOne.BitLen() <= int(sz-1)
 }
 
@@ -585,7 +578,7 @@ func varIntBytes(val *big.Int) uint {
 	}
 
 	n := new(big.Int).Neg(val)
-	n.Sub(n, big.NewInt(1))
+	n.Sub(n, bigIntOne)
 	return uint(n.BitLen()+8) >> 3
 }
 
@@ -785,6 +778,14 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	}
 
 	return nil
+}
+
+func (b *Builder) storeSliceFromSlice(slice *Slice, sz uint) error {
+	var data [maxCellDataBytes]byte
+	if err := slice.loadSliceInto(data[:], sz, false); err != nil {
+		return err
+	}
+	return b.StoreSlice(data[:], sz)
 }
 
 func (b *Builder) MustStoreBuilder(builder *Builder) *Builder {

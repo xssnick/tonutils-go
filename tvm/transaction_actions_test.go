@@ -90,6 +90,46 @@ func TestTransactionCollectUsageLoadsLazyRefs(t *testing.T) {
 	}
 }
 
+func TestTransactionCollectUsageDeduplicatesSharedRefs(t *testing.T) {
+	shared := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	root := cell.BeginCell().MustStoreUInt(0xA, 4).
+		MustStoreRef(shared).
+		MustStoreRef(shared).
+		EndCell()
+
+	got, err := transactionCollectUsage(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := transactionUsage{cells: 2, bits: 12}
+	if got != want {
+		t.Fatalf("usage = %+v, want %+v", got, want)
+	}
+}
+
+func TestTransactionMaxMerkleDepthNestedProofs(t *testing.T) {
+	leaf := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	innerProof, err := cell.CreateMerkleProof(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outerBody := cell.BeginCell().MustStoreRef(innerProof).EndCell()
+	outerProof, err := cell.CreateMerkleProof(outerBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := transactionMaxMerkleDepth(outerProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Fatalf("max merkle depth = %d, want 2", got)
+	}
+}
+
 func TestTransactionValidateRelaxedActionMessageCurrencies(t *testing.T) {
 	t.Run("reports non canonical value", func(t *testing.T) {
 		msg := transactionTestRelaxedInternalMessage(func(b *cell.Builder) {

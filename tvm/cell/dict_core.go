@@ -121,16 +121,12 @@ func (n *fixedDictNode) cloneWithRef(i int, ref *Cell, trace *Trace) (*Cell, boo
 }
 
 func (n fixedDictNode) splitLabel(matched uint) (*Slice, *Slice, error) {
-	label := n.label.ToSlice()
-	prefixBits, err := label.LoadSlice(matched)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load label prefix: %w", err)
-	}
-	if err = label.SkipBits(1); err != nil {
+	label := builderSliceView(n.label)
+	if err := label.SkipBits(matched + 1); err != nil {
 		return nil, nil, fmt.Errorf("failed to skip label edge bit: %w", err)
 	}
 
-	prefix := BeginCell().MustStoreSlice(prefixBits, matched).ToSlice()
+	prefix := BeginCell().MustStoreSlice(n.label.data[:], matched).ToSlice()
 	return prefix, label, nil
 }
 
@@ -144,8 +140,15 @@ func (n fixedDictNode) appendEdgeLabel(bit uint64, label *Builder, name string) 
 	return nil
 }
 
+func builderSliceView(b *Builder) *Slice {
+	return &Slice{
+		cell:   &Cell{data: b.data[:b.usedBytes()], bitsSz: uint16(b.bitsSz)},
+		bitEnd: uint16(b.bitsSz),
+	}
+}
+
 func matchBuilderLabel(label *Builder, labelLen uint, key *Slice) (matched uint, newRight bool, diverged bool, err error) {
-	labelSlice := label.ToSlice()
+	labelSlice := builderSliceView(label)
 	limit := min(labelLen, key.BitsLeft())
 	if limit == 0 {
 		return 0, false, false, nil

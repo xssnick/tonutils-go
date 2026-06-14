@@ -2,7 +2,6 @@ package exec
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -45,7 +44,7 @@ func callDictShort(id int) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			if err := state.Stack.PushInt(big.NewInt(int64(id))); err != nil {
+			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
 				return err
 			}
 			cont, err := currentCodeDict(state)
@@ -76,7 +75,7 @@ func callDictLong(id int) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 14,
 		Action: func(state *vm.State) error {
-			if err := state.Stack.PushInt(big.NewInt(int64(id))); err != nil {
+			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
 				return err
 			}
 			cont, err := currentCodeDict(state)
@@ -107,7 +106,7 @@ func jmpDict(id int) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 14,
 		Action: func(state *vm.State) error {
-			if err := state.Stack.PushInt(big.NewInt(int64(id))); err != nil {
+			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
 				return err
 			}
 			cont, err := currentCodeDict(state)
@@ -138,7 +137,7 @@ func prepareDict(id int) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 14,
 		Action: func(state *vm.State) error {
-			if err := state.Stack.PushInt(big.NewInt(int64(id))); err != nil {
+			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
 				return err
 			}
 			cont, err := currentCodeDict(state)

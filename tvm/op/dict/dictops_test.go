@@ -138,6 +138,18 @@ func TestDictHelpers(t *testing.T) {
 	if key, ok := encodeDictIntKey(big.NewInt(-1), 4, true); !ok || key == nil {
 		t.Fatal("signed key should encode")
 	}
+	if _, ok := encodeDictIntKey(big.NewInt(-8), 4, true); !ok {
+		t.Fatal("signed min key should encode")
+	}
+	if _, ok := encodeDictIntKey(big.NewInt(7), 4, true); !ok {
+		t.Fatal("signed max key should encode")
+	}
+	if _, ok := encodeDictIntKey(big.NewInt(-9), 4, true); ok {
+		t.Fatal("below signed min key should fail")
+	}
+	if _, ok := encodeDictIntKey(big.NewInt(8), 4, true); ok {
+		t.Fatal("above signed max key should fail")
+	}
 	if _, ok := encodeDictIntKey(big.NewInt(16), 4, false); ok {
 		t.Fatal("out-of-range unsigned key should fail")
 	}

@@ -375,7 +375,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		if key.BitsLeft() != 0 || mode == DictSetModeAdd {
 			return node.cell, false, nil
 		}
-		leaf, err := d.storePrefixLeaf(node.label.ToSlice(), value, remaining)
+		leaf, err := d.storePrefixLeaf(builderSliceView(node.label), value, remaining)
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to replace leaf: %w", err)
 		}
@@ -429,7 +429,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return nil, nil, false, err
 	}
 
-	bitsMatches, err := consumeCommonPrefix(node.label.ToSlice(), key, node.labelLen)
+	bitsMatches, err := consumeCommonPrefix(builderSliceView(node.label), key, node.labelLen)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -514,7 +514,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return nil, nil, false, err
 	}
 
-	merged, err := d.storePrefixNode(node.label.ToSlice(), survivorSlice.ToBuilder(), remaining)
+	merged, err := d.storePrefixNode(builderSliceView(node.label), survivorSlice.ToBuilder(), remaining)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to merge prefix edges: %w", err)
 	}

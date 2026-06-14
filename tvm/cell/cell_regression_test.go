@@ -46,6 +46,20 @@ func TestSliceToCellRecomputesOrdinaryLevelMask(t *testing.T) {
 	}
 }
 
+func TestSliceToBuilderCopiesUnalignedBits(t *testing.T) {
+	src := BeginCell().MustStoreUInt(0b101101001, 9).EndCell()
+	slice := src.MustBeginParse()
+	if err := slice.SkipBits(3); err != nil {
+		t.Fatal(err)
+	}
+
+	rebuilt := slice.ToBuilder().EndCell()
+	got := rebuilt.MustBeginParse().MustLoadUInt(6)
+	if got != 0b101001 {
+		t.Fatalf("rebuilt bits = %06b, want 101001", got)
+	}
+}
+
 func TestVirtualizedLazyRefLoadsByRawHashAndChecksVisibleHash(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0xCD, 8).EndCell()
 	branch := BeginCell().MustStoreRef(leaf).EndCell()

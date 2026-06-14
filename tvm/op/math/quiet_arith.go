@@ -36,7 +36,7 @@ func quietUnaryIntOp(name string, prefix helpers.BitPrefix, fn func(*big.Int) *b
 			if x == nil {
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(fn(x))
+			return state.Stack.PushOwnedIntQuiet(fn(x))
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -60,7 +60,7 @@ func quietBinaryIntOp(name string, prefix helpers.BitPrefix, fn func(x, y *big.I
 			if x == nil || y == nil {
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(fn(x, y))
+			return state.Stack.PushOwnedIntQuiet(fn(x, y))
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -82,7 +82,7 @@ func quietTinyIntOp(name string, prefix helpers.BitPrefix, value int8, fn func(x
 			if x == nil {
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(fn(x, arg))
+			return state.Stack.PushOwnedIntQuiet(fn(x, arg))
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%s %d", name, value)

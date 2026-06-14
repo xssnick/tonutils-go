@@ -2,7 +2,6 @@ package math
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -37,7 +36,7 @@ func MULADDRSHIFTCODEMOD(value int8) (op *helpers.AdvancedOP) {
 			}
 
 			dividend := x.Add(x.Mul(x, y), w)
-			q, _ := helpers.DivFloor(dividend, y.Lsh(big.NewInt(1), uint(imm())))
+			q, _ := helpers.DivFloor(dividend, y.Lsh(bigIntOne, uint(imm())))
 			r := w.Sub(dividend, y.Mul(y, q))
 
 			err = state.Stack.PushInt(q)

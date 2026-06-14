@@ -28,7 +28,7 @@ type RunSmcMethod struct {
 	ID       *BlockIDExt `tl:"struct"`
 	Account  AccountID   `tl:"struct"`
 	MethodID uint64      `tl:"long"`
-	Params   *cell.Cell  `tl:"cell optional"`
+	Params   []byte      `tl:"bytes"`
 }
 
 type RunMethodResult struct {
@@ -78,7 +78,7 @@ func (c *APIClient) RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt,
 			ID:        addr.Data(),
 		},
 		MethodID: methodID,
-		Params:   req,
+		Params:   req.ToBOCWithOptions(cell.BOCSerializeOptions{WithCRC32C: false}),
 	}, &resp)
 	if err != nil {
 		return nil, err

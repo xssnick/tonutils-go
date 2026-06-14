@@ -459,7 +459,7 @@ func (s *State) SetGasLimit(limit int64) error {
 
 func (s *State) HandleOutOfGas() error {
 	s.Stack.Clear()
-	return s.Stack.PushInt(big.NewInt(s.Gas.Used()))
+	return s.Stack.PushSmallInt(s.Gas.Used())
 }
 
 func (s *State) TryCommitCurrent() bool {
@@ -494,7 +494,7 @@ func (s *State) ThrowException(code *big.Int, arg ...any) error {
 			return err
 		}
 	} else if len(arg) == 0 {
-		if err := s.Stack.PushAny(big.NewInt(0)); err != nil {
+		if err := s.Stack.PushSmallInt(0); err != nil {
 			return err
 		}
 	} else {

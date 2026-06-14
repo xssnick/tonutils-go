@@ -90,12 +90,12 @@ func CALLXVARARGS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			retvalsVal, err := state.Stack.PopIntRange(-1, 254)
+			retvals, err := state.Stack.PopIntRangeInt64(-1, 254)
 			if err != nil {
 				return err
 			}
 
-			paramsVal, err := state.Stack.PopIntRange(-1, 254)
+			params, err := state.Stack.PopIntRangeInt64(-1, 254)
 			if err != nil {
 				return err
 			}
@@ -105,7 +105,7 @@ func CALLXVARARGS() *helpers.SimpleOP {
 				return err
 			}
 
-			return state.CallArgs(cont, int(paramsVal.Int64()), int(retvalsVal.Int64()))
+			return state.CallArgs(cont, int(params), int(retvals))
 		},
 		Name:      "CALLXVARARGS",
 		BitPrefix: helpers.BytesPrefix(0xDB, 0x38),
@@ -115,11 +115,11 @@ func CALLXVARARGS() *helpers.SimpleOP {
 func RETVARARGS() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			retvals, err := state.Stack.PopIntRange(-1, 254)
+			retvals, err := state.Stack.PopIntRangeInt64(-1, 254)
 			if err != nil {
 				return err
 			}
-			return state.Return(int(retvals.Int64()))
+			return state.Return(int(retvals))
 		},
 		Name:      "RETVARARGS",
 		BitPrefix: helpers.BytesPrefix(0xDB, 0x39),
@@ -133,17 +133,17 @@ func CALLCCVARARGS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			retvalsVal, err := state.Stack.PopIntRange(-1, 254)
+			retvals, err := state.Stack.PopIntRangeInt64(-1, 254)
 			if err != nil {
 				return err
 			}
 
-			paramsVal, err := state.Stack.PopIntRange(-1, 254)
+			paramsVal, err := state.Stack.PopIntRangeInt64(-1, 254)
 			if err != nil {
 				return err
 			}
 
-			params := int(paramsVal.Int64())
+			params := int(paramsVal)
 			if params >= 0 && state.Stack.Len() < params+1 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
@@ -153,7 +153,7 @@ func CALLCCVARARGS() *helpers.SimpleOP {
 				return err
 			}
 
-			cc, err := state.ExtractCurrentContinuation(3, params, int(retvalsVal.Int64()))
+			cc, err := state.ExtractCurrentContinuation(3, params, int(retvals))
 			if err != nil {
 				return err
 			}

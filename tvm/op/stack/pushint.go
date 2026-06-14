@@ -18,7 +18,10 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHINT(nil) })
 }
 
-var pushIntPrefixed = buildPushIntPrefixed()
+var (
+	pushIntPrefixed  = buildPushIntPrefixed()
+	pushIntBigIntOne = big.NewInt(1)
+)
 
 func buildPushIntPrefixed() helpers.Prefixed {
 	prefixes := []helpers.BitPrefix{
@@ -112,7 +115,7 @@ func loadPushIntValue(code *cell.Slice, sz uint) (*big.Int, error) {
 		return val, nil
 	}
 
-	return val.Sub(val, new(big.Int).Lsh(big.NewInt(1), sz)), nil
+	return val.Sub(val, new(big.Int).Lsh(pushIntBigIntOne, sz)), nil
 }
 
 func signedBigIntBits(value *big.Int) int {
@@ -120,8 +123,8 @@ func signedBigIntBits(value *big.Int) int {
 		return value.BitLen() + 1
 	}
 
-	absMinusOne := new(big.Int).Neg(new(big.Int).Set(value))
-	absMinusOne.Sub(absMinusOne, big.NewInt(1))
+	absMinusOne := new(big.Int).Neg(value)
+	absMinusOne.Sub(absMinusOne, pushIntBigIntOne)
 	return absMinusOne.BitLen() + 1
 }
 

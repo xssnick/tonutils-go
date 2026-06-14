@@ -28,9 +28,9 @@ func signedStoreFits(x *big.Int, bits uint) bool {
 		return x.BitLen() <= int(bits-1)
 	}
 
-	limit := new(big.Int).Lsh(big.NewInt(1), bits-1)
-	min := new(big.Int).Neg(limit)
-	return x.Cmp(min) >= 0
+	absMinusOne := new(big.Int).Neg(x)
+	absMinusOne.Sub(absMinusOne, cellsliceBigIntOne)
+	return absMinusOne.BitLen() <= int(bits-1)
 }
 
 func unsignedStoreFits(x *big.Int, bits uint) bool {

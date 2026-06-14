@@ -22,7 +22,7 @@ func MODPOW2RCODE(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			divider := new(big.Int).Lsh(big.NewInt(1), uint(imm()))
+			divider := new(big.Int).Lsh(bigIntOne, uint(imm()))
 			q := helpers.DivRound(x, divider)
 			r := x.Sub(x, q.Mul(q, divider))
 

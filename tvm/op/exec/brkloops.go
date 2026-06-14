@@ -19,12 +19,11 @@ func REPEATBRK() *helpers.SimpleOP {
 				return err
 			}
 
-			countVal, err := state.Stack.PopIntRange(repeatCountMin, repeatCountMax)
+			count, err := state.Stack.PopIntRangeInt64(repeatCountMin, repeatCountMax)
 			if err != nil {
 				return err
 			}
 
-			count := countVal.Int64()
 			if count <= 0 {
 				return nil
 			}

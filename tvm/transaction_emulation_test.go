@@ -75,6 +75,39 @@ func TestTransactionPrecompiledGasUsageOverridesSuccessfulTVM(t *testing.T) {
 	}
 }
 
+func transactionTestLibraryDict(tag uint64) (*cell.Dictionary, *cell.Cell) {
+	root := cell.BeginCell().MustStoreUInt(tag, 8).EndCell()
+	return root.AsDict(256), root
+}
+
+func TestTransactionExecutionLibraries(t *testing.T) {
+	cfgLib := cell.BeginCell().MustStoreUInt(0xC7, 8).EndCell()
+	cfg := TransactionEmulationConfig{
+		Libraries: []*cell.Cell{cfgLib},
+	}
+
+	got := transactionExecutionLibraries(&transactionRuntimeAccount{}, cfg)
+	if len(got) != 1 || got[0] != cfgLib {
+		t.Fatalf("libraries without account libs = %v, want cfg library only", got)
+	}
+
+	inMsgDict, inMsgRoot := transactionTestLibraryDict(0xA1)
+	accountDict, accountRoot := transactionTestLibraryDict(0xA2)
+	got = transactionExecutionLibraries(&transactionRuntimeAccount{
+		inMsgLibraries: inMsgDict,
+		libraries:      accountDict,
+	}, cfg)
+	want := []*cell.Cell{inMsgRoot, accountRoot, cfgLib}
+	if len(got) != len(want) {
+		t.Fatalf("libraries len = %d, want %d", len(got), len(want))
+	}
+	for i, lib := range want {
+		if got[i] != lib {
+			t.Fatalf("libraries[%d] = %p, want %p", i, got[i], lib)
+		}
+	}
+}
+
 func makeTransactionExternalSuccessCode(t *testing.T, newData *cell.Cell) *cell.Cell {
 	t.Helper()
 	return codeFromBuilders(t,

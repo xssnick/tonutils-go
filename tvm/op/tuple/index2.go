@@ -38,7 +38,7 @@ func INDEX2(i, j uint8) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
-			return execIndexMulti(state, []int{int(i), int(j)})
+			return execIndex2(state, int(i), int(j))
 		},
 	}
 }
@@ -65,34 +65,64 @@ func INDEX3(i, j, k uint8) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
-			return execIndexMulti(state, []int{int(i), int(j), int(k)})
+			return execIndex3(state, int(i), int(j), int(k))
 		},
 	}
 }
 
-func execIndexMulti(state *vm.State, indices []int) error {
-	tup, err := state.Stack.PopTupleRange(255)
+func execIndex2(state *vm.State, i, j int) error {
+	current, err := state.Stack.PopTupleRange(255)
 	if err != nil {
 		return err
 	}
 
-	current := tup
-	for idx := 0; idx < len(indices)-1; idx++ {
-		val, err := current.Index(indices[idx])
-		if err != nil {
-			return err
-		}
-		nested, ok := val.(tuplepkg.Tuple)
-		if !ok || nested.Len() > 255 {
-			return vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a tuple")
-		}
-		current = nested
+	current, err = indexIntermediateTuple(current, i)
+	if err != nil {
+		return err
 	}
 
-	val, err := current.Index(indices[len(indices)-1])
+	val, err := current.Index(j)
 	if err != nil {
 		return err
 	}
 
 	return state.Stack.PushAny(val)
+}
+
+func execIndex3(state *vm.State, i, j, k int) error {
+	current, err := state.Stack.PopTupleRange(255)
+	if err != nil {
+		return err
+	}
+
+	current, err = indexIntermediateTuple(current, i)
+	if err != nil {
+		return err
+	}
+	current, err = indexIntermediateTuple(current, j)
+	if err != nil {
+		return err
+	}
+
+	val, err := current.Index(k)
+	if err != nil {
+		return err
+	}
+
+	return state.Stack.PushAny(val)
+}
+
+func indexIntermediateTuple(current tuplepkg.Tuple, idx int) (tuplepkg.Tuple, error) {
+	val, err := current.Index(idx)
+	if err != nil {
+		var zero tuplepkg.Tuple
+		return zero, err
+	}
+	nested, ok := val.(tuplepkg.Tuple)
+	if !ok || nested.Len() > 255 {
+		var zero tuplepkg.Tuple
+		return zero, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a tuple")
+	}
+
+	return nested, nil
 }

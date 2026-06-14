@@ -54,7 +54,7 @@ func runGoCrossCodeWithVersionAndLibs(code, data *cell.Cell, c7 tuple.Tuple, lib
 
 func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack, globalVersion int, gasLimit int64) (*crossRunResult, error) {
 	execStack := stack.Copy()
-	if err := execStack.PushInt(big.NewInt(0)); err != nil {
+	if err := execStack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 

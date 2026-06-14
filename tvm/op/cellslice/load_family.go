@@ -46,7 +46,7 @@ func loadIntCommon(state *vm.State, bits uint, preload, unsigned, quiet bool) er
 		return err
 	}
 
-	var val any
+	var val *big.Int
 	if unsigned {
 		if preload {
 			val, err = cs.PreloadBigUInt(bits)
@@ -73,7 +73,7 @@ func loadIntCommon(state *vm.State, bits uint, preload, unsigned, quiet bool) er
 		return state.Stack.PushBool(false)
 	}
 
-	if err = state.Stack.PushAny(val); err != nil {
+	if err = state.Stack.PushOwnedInt(val); err != nil {
 		return err
 	}
 	if !preload {
@@ -246,7 +246,7 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 			if left := cs.BitsLeft(); left < loadBits {
 				loadBits = left
 			}
-			val := big.NewInt(0)
+			val := new(big.Int)
 			if loadBits > 0 {
 				val, err = cs.PreloadBigUInt(loadBits)
 				if err != nil {

@@ -82,7 +82,8 @@ func c1SaveSet(state *vm.State, save bool) {
 type refCodeOp struct {
 	prefix            helpers.BitPrefix
 	name              string
-	refs              []*cell.Cell
+	refs              [4]*cell.Cell
+	refsNum           int
 	fixedBits         int64
 	serializeSuffix   func() *cell.Builder
 	deserializeSuffix func(*cell.Slice) error
@@ -90,17 +91,23 @@ type refCodeOp struct {
 }
 
 func newRefCodeOp(name string, prefix helpers.BitPrefix, refsCount int, action func(*vm.State, []*cell.Cell) error) *refCodeOp {
+	if refsCount < 0 || refsCount > 4 {
+		panic("refCodeOp supports at most 4 references")
+	}
 	return &refCodeOp{
-		prefix: prefix,
-		name:   name,
-		refs:   make([]*cell.Cell, refsCount),
-		action: action,
+		prefix:  prefix,
+		name:    name,
+		refsNum: refsCount,
+		action:  action,
 	}
 }
 
 func bindRefCodeOp(op *refCodeOp, refs ...*cell.Cell) vm.OP {
 	for i, ref := range refs {
-		if i >= len(op.refs) || ref == nil {
+		if i >= op.refsNum {
+			break
+		}
+		if ref == nil {
 			continue
 		}
 		op.refs[i] = ref
@@ -117,7 +124,7 @@ func (op *refCodeOp) Deserialize(code *cell.Slice) error {
 }
 
 func (op *refCodeOp) DeserializeMatched(code *cell.Slice) error {
-	if _, err := code.LoadSlice(op.prefix.Bits); err != nil {
+	if err := code.SkipBits(op.prefix.Bits); err != nil {
 		return err
 	}
 	if op.deserializeSuffix != nil {
@@ -126,11 +133,13 @@ func (op *refCodeOp) DeserializeMatched(code *cell.Slice) error {
 		}
 	}
 
-	for i := range op.refs {
+	for i := 0; i < op.refsNum; i++ {
 		ref, err := code.PeekRefCell()
 		if err != nil {
-			op.refs[i] = nil
-			continue
+			for ; i < op.refsNum; i++ {
+				op.refs[i] = nil
+			}
+			return nil
 		}
 		if err = code.SkipBitsAndRefs(0, 1); err != nil {
 			return err
@@ -145,8 +154,8 @@ func (op *refCodeOp) Serialize() *cell.Builder {
 	if op.serializeSuffix != nil {
 		builder.MustStoreBuilder(op.serializeSuffix())
 	}
-	for _, ref := range op.refs {
-		builder.MustStoreRef(ref)
+	for i := 0; i < op.refsNum; i++ {
+		builder.MustStoreRef(op.refs[i])
 	}
 	return builder
 }
@@ -160,12 +169,12 @@ func (op *refCodeOp) InstructionBits() int64 {
 }
 
 func (op *refCodeOp) Interpret(state *vm.State) error {
-	for _, ref := range op.refs {
-		if ref == nil {
+	for i := 0; i < op.refsNum; i++ {
+		if op.refs[i] == nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("no references left for a %s instruction", op.name))
 		}
 	}
-	return op.action(state, op.refs)
+	return op.action(state, op.refs[:op.refsNum])
 }
 
 func sameStackValueType(x, y any) bool {

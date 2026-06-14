@@ -147,6 +147,33 @@ func TestStorageStatsDataSizeAndVarInts(t *testing.T) {
 	if !ok || val.Int64() != -2 || rest.BitsLeft() != 0 {
 		t.Fatalf("loadVarIntegerFromSlice(signed) = (%v, %v, %v)", val, rest, ok)
 	}
+	for _, tc := range []struct {
+		name    string
+		value   int64
+		wantLen uint64
+	}{
+		{name: "zero", value: 0, wantLen: 0},
+		{name: "min one byte", value: -128, wantLen: 1},
+		{name: "max one byte", value: 127, wantLen: 1},
+		{name: "below one byte", value: -129, wantLen: 2},
+		{name: "above one byte", value: 128, wantLen: 2},
+	} {
+		t.Run("SignedVarIntegerLength/"+tc.name, func(t *testing.T) {
+			b := cell.BeginCell()
+			okStore, err := storeVarInteger(b, big.NewInt(tc.value), 4, true, false)
+			if err != nil || !okStore {
+				t.Fatalf("storeVarInteger(%d) = (%v, %v)", tc.value, okStore, err)
+			}
+			sl := b.ToSlice()
+			if got := sl.MustLoadUInt(4); got != tc.wantLen {
+				t.Fatalf("stored length = %d, want %d", got, tc.wantLen)
+			}
+			val, rest, ok := loadVarIntegerFromSlice(b.ToSlice(), 4, true)
+			if !ok || val.Int64() != tc.value || rest.BitsLeft() != 0 {
+				t.Fatalf("loadVarIntegerFromSlice(%d) = (%v, %v, %v)", tc.value, val, rest, ok)
+			}
+		})
+	}
 
 	if _, _, ok = loadVarIntegerFromSlice(cell.BeginCell().ToSlice(), 4, false); ok {
 		t.Fatal("loading a varint from an empty slice should fail")
@@ -777,7 +804,7 @@ func TestActionInstallAndLibraryOps(t *testing.T) {
 		t.Fatalf("PushInt failed: %v", err)
 	}
 	mode, err := popLibMode(st)
-	if err != nil || mode.Int64() != 2 {
+	if err != nil || mode != 2 {
 		t.Fatalf("popLibMode = (%v, %v)", mode, err)
 	}
 	if err := st.Stack.PushInt(big.NewInt(31)); err != nil {

@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -26,7 +24,7 @@ func MODPOW2C() *helpers.SimpleOP {
 				return err
 			}
 
-			divider := y.Lsh(big.NewInt(1), uint(y.Uint64()))
+			divider := y.Lsh(bigIntOne, uint(y.Uint64()))
 			q := helpers.DivCeil(x, divider)
 			r := x.Sub(x, q.Mul(q, divider))
 

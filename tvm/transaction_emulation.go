@@ -590,10 +590,10 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 
 	switch msg.MsgType {
 	case tlb.MsgTypeExternalIn:
-		if err := stack.PushInt(balance); err != nil {
+		if err := stack.PushOwnedInt(balance); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(big.NewInt(0)); err != nil {
+		if err := stack.PushSmallInt(0); err != nil {
 			return nil, err
 		}
 		if err := stack.PushCell(msgCell); err != nil {
@@ -603,17 +603,17 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 		if err != nil {
 			return nil, err
 		}
-		if err := stack.PushSlice(bodySlice); err != nil {
+		if err := stack.PushOwnedSlice(bodySlice); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(big.NewInt(-1)); err != nil {
+		if err := stack.PushSmallInt(-1); err != nil {
 			return nil, err
 		}
 	case tlb.MsgTypeInternal:
-		if err := stack.PushInt(balance); err != nil {
+		if err := stack.PushOwnedInt(balance); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(transactionBigOrZero(msgBalance)); err != nil {
+		if err := stack.PushOwnedInt(transactionBigOrZero(msgBalance)); err != nil {
 			return nil, err
 		}
 		if err := stack.PushCell(msgCell); err != nil {
@@ -623,10 +623,10 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 		if err != nil {
 			return nil, err
 		}
-		if err := stack.PushSlice(bodySlice); err != nil {
+		if err := stack.PushOwnedSlice(bodySlice); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(big.NewInt(0)); err != nil {
+		if err := stack.PushSmallInt(0); err != nil {
 			return nil, err
 		}
 	default:
@@ -655,16 +655,16 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 
 	stack := vm.NewStack()
 	balance := new(big.Int).Set(cfg.Balance)
-	if err = stack.PushInt(balance); err != nil {
+	if err = stack.PushOwnedInt(balance); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(accAddr); err != nil {
+	if err = stack.PushOwnedInt(accAddr); err != nil {
 		return nil, err
 	}
 	if err = stack.PushBool(isTock); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(-2)); err != nil {
+	if err = stack.PushSmallInt(-2); err != nil {
 		return nil, err
 	}
 
@@ -684,17 +684,42 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 
 func transactionExecutionLibraries(acc *transactionRuntimeAccount, cfg TransactionEmulationConfig) []*cell.Cell {
 	if transactionHasExplicitC7Context(cfg) {
-		return append([]*cell.Cell(nil), cfg.Libraries...)
+		if len(cfg.Libraries) == 0 {
+			return nil
+		}
+		return cfg.Libraries
 	}
 
-	libraries := make([]*cell.Cell, 0, len(cfg.Libraries)+2)
-	if acc.inMsgLibraries != nil && acc.inMsgLibraries.AsCell() != nil {
-		libraries = append(libraries, acc.inMsgLibraries.AsCell())
+	var inMsgLibrary, accountLibrary *cell.Cell
+	if acc.inMsgLibraries != nil {
+		inMsgLibrary = acc.inMsgLibraries.AsCell()
 	}
-	if acc.libraries != nil && acc.libraries.AsCell() != nil {
-		libraries = append(libraries, acc.libraries.AsCell())
+	if acc.libraries != nil {
+		accountLibrary = acc.libraries.AsCell()
 	}
-	libraries = append(libraries, cfg.Libraries...)
+	if inMsgLibrary == nil && accountLibrary == nil && len(cfg.Libraries) > 0 {
+		return cfg.Libraries
+	}
+
+	librariesNum := len(cfg.Libraries)
+	if inMsgLibrary != nil {
+		librariesNum++
+	}
+	if accountLibrary != nil {
+		librariesNum++
+	}
+
+	libraries := make([]*cell.Cell, librariesNum)
+	idx := 0
+	if inMsgLibrary != nil {
+		libraries[idx] = inMsgLibrary
+		idx++
+	}
+	if accountLibrary != nil {
+		libraries[idx] = accountLibrary
+		idx++
+	}
+	copy(libraries[idx:], cfg.Libraries)
 	return libraries
 }
 

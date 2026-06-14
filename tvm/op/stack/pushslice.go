@@ -25,8 +25,7 @@ func PUSHSLICE(value *cell.Slice) *OpPUSHREFSLICE {
 }
 
 func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
-	_, err := code.LoadUInt(8)
-	if err != nil {
+	if err := code.SkipBits(8); err != nil {
 		return err
 	}
 

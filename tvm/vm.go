@@ -369,7 +369,7 @@ func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exit
 		return exitCode, nil
 	}
 	state.Stack.Clear()
-	if stackErr := state.Stack.PushInt(big.NewInt(0)); stackErr != nil {
+	if stackErr := state.Stack.PushSmallInt(0); stackErr != nil {
 		return 0, stackErr
 	}
 	return vmerr.CodeCellOverflow, vmerr.Error(vmerr.CodeCellOverflow, "cannot commit too deep cells as new data/actions")

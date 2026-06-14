@@ -199,12 +199,22 @@ func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell) (tr
 		return usage, nil
 	}
 	if body != nil {
-		_, refs, err := transactionLoadedCellRefs(body)
+		sl, err := body.BeginParseWithoutTrace()
 		if err != nil {
 			return transactionUsage{}, err
 		}
-		for _, ref := range refs {
-			refUsage, err := transactionCollectUsage(ref)
+
+		var refs [4]*cell.Cell
+		refsNum := sl.RefsNum()
+		for i := 0; i < refsNum; i++ {
+			refs[i], err = sl.LoadRefCell()
+			if err != nil {
+				return transactionUsage{}, err
+			}
+		}
+
+		for i := 0; i < refsNum; i++ {
+			refUsage, err := transactionCollectUsage(refs[i])
 			if err != nil {
 				return transactionUsage{}, err
 			}

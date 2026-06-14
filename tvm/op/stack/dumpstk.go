@@ -155,7 +155,7 @@ func (op *debugStrOp) Deserialize(code *cell.Slice) error {
 }
 
 func (op *debugStrOp) DeserializeMatched(code *cell.Slice) error {
-	if _, err := code.LoadSlice(12); err != nil {
+	if err := code.SkipBits(12); err != nil {
 		return err
 	}
 	v, err := code.LoadUInt(4)

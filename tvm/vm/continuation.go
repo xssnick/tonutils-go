@@ -3,7 +3,6 @@ package vm
 import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
 )
 
 type Continuation interface {
@@ -137,7 +136,7 @@ func (c *PushIntContinuation) GetControlData() *ControlData {
 }
 
 func (c *PushIntContinuation) Jump(state *State) (Continuation, error) {
-	if err := state.Stack.PushInt(big.NewInt(c.Int)); err != nil {
+	if err := state.Stack.PushSmallInt(c.Int); err != nil {
 		return nil, err
 	}
 	return c.Next, nil

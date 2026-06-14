@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"sort"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -139,21 +138,20 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 }
 
 func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAccount, storageFee *big.Int, now uint32, limits transactionStorageDueLimits, adjustMsgValue bool) {
-	toPay := transactionBigOrZero(storageFee)
 	collected := big.NewInt(0)
 	due := big.NewInt(0)
 	statusChange := tlb.AccStatusChange{Type: tlb.AccStatusChangeUnchanged}
 
 	p.duePayment = transactionCoinsPtr(transactionCoinsNano(acc.storageInfo.DuePayment))
 	p.lastPaid = now
-	if toPay.Sign() > 0 {
-		if toPay.Cmp(p.balance) <= 0 {
-			collected.Set(toPay)
-			p.balance.Sub(p.balance, toPay)
+	if storageFee != nil && storageFee.Sign() > 0 {
+		if storageFee.Cmp(p.balance) <= 0 {
+			collected.Set(storageFee)
+			p.balance.Sub(p.balance, storageFee)
 			p.duePayment = nil
 		} else {
 			collected.Set(p.balance)
-			due.Sub(toPay, p.balance)
+			due.Sub(storageFee, p.balance)
 			p.balance.SetInt64(0)
 
 			switch p.status {
@@ -367,7 +365,8 @@ type transactionAccountStorageStatEntry struct {
 
 type transactionAccountStorageStat struct {
 	dict       *cell.Dictionary
-	roots      []*cell.Cell
+	roots      [4]*cell.Cell
+	rootsNum   int
 	entries    map[cell.Hash]*transactionAccountStorageStatEntry
 	totalCells uint64
 	totalBits  uint64
@@ -389,13 +388,15 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 		totalCells--
 	}
 	totalBits := transactionStorageUsedUint64(storageUsed.BitsUsed)
-	var roots []*cell.Cell
+	var roots [4]*cell.Cell
+	var rootsNum int
 	if storageCell != nil {
-		loadedStorage, storageRoots, err := transactionLoadedCellRefs(storageCell)
+		loadedStorage, storageRoots, storageRootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
 		if err != nil {
 			return nil, err
 		}
 		roots = storageRoots
+		rootsNum = storageRootsNum
 		rootBits := uint64(loadedStorage.BitsSize())
 		if totalBits < rootBits {
 			return nil, errors.New("account storage used bits is smaller than account storage root")
@@ -406,6 +407,7 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 	return &transactionAccountStorageStat{
 		dict:       dictRoot.AsDict(256),
 		roots:      roots,
+		rootsNum:   rootsNum,
 		entries:    map[cell.Hash]*transactionAccountStorageStatEntry{},
 		totalCells: totalCells,
 		totalBits:  totalBits,
@@ -418,12 +420,13 @@ func transactionComputeAccountStorageStat(storageCell *cell.Cell) (transactionUs
 		entries: map[cell.Hash]*transactionAccountStorageStatEntry{},
 	}
 	if storageCell != nil {
-		loadedStorage, roots, err := transactionLoadedCellRefs(storageCell)
+		loadedStorage, roots, rootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
 		if err != nil {
 			return transactionUsage{}, nil, err
 		}
-		for _, root := range roots {
-			if _, err := stat.addCell(root); err != nil {
+
+		for i := 0; i < rootsNum; i++ {
+			if _, err := stat.addCell(roots[i]); err != nil {
 				return transactionUsage{}, nil, err
 			}
 		}
@@ -447,24 +450,25 @@ func transactionComputeAccountStorageStat(storageCell *cell.Cell) (transactionUs
 }
 
 func (s *transactionAccountStorageStat) replaceStorage(storageCell *cell.Cell) (transactionUsage, *cell.Cell, error) {
-	loadedStorage, newRoots, err := transactionLoadedCellRefs(storageCell)
+	loadedStorage, newRoots, newRootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
 	if err != nil {
 		return transactionUsage{}, nil, err
 	}
 	storageCell = loadedStorage
-	toAdd, toDel := transactionAccountStorageRootDiff(s.roots, newRoots)
+	toAdd, toAddNum, toDel, toDelNum := transactionAccountStorageRootDiff(s.roots, s.rootsNum, newRoots, newRootsNum)
 
-	for _, root := range toAdd {
-		if _, err := s.addCell(root); err != nil {
+	for i := 0; i < toAddNum; i++ {
+		if _, err := s.addCell(toAdd[i]); err != nil {
 			return transactionUsage{}, nil, err
 		}
 	}
-	for _, root := range toDel {
-		if err := s.removeCell(root); err != nil {
+	for i := 0; i < toDelNum; i++ {
+		if err := s.removeCell(toDel[i]); err != nil {
 			return transactionUsage{}, nil, err
 		}
 	}
 	s.roots = newRoots
+	s.rootsNum = newRootsNum
 
 	usage := transactionUsage{cells: s.totalCells, bits: s.totalBits}
 	if storageCell != nil {
@@ -484,9 +488,19 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 		return 0, nil
 	}
 
-	loaded, refs, err := transactionLoadedCellRefs(c)
+	sl, err := c.BeginParseWithoutTrace()
 	if err != nil {
 		return 0, err
+	}
+
+	loaded := sl.BaseCell()
+	var refs [4]*cell.Cell
+	refsNum := sl.RefsNum()
+	for i := 0; i < refsNum; i++ {
+		refs[i], err = sl.LoadRefCell()
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	key := loaded.HashKey()
@@ -504,8 +518,8 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 	}
 
 	var maxDepth uint32
-	for _, ref := range refs {
-		depth, err := s.addCell(ref)
+	for i := 0; i < refsNum; i++ {
+		depth, err := s.addCell(refs[i])
 		if err != nil {
 			return 0, err
 		}
@@ -528,9 +542,19 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 }
 
 func (s *transactionAccountStorageStat) removeCell(c *cell.Cell) error {
-	loaded, refs, err := transactionLoadedCellRefs(c)
+	sl, err := c.BeginParseWithoutTrace()
 	if err != nil {
 		return err
+	}
+
+	loaded := sl.BaseCell()
+	var refs [4]*cell.Cell
+	refsNum := sl.RefsNum()
+	for i := 0; i < refsNum; i++ {
+		refs[i], err = sl.LoadRefCell()
+		if err != nil {
+			return err
+		}
 	}
 
 	key := loaded.HashKey()
@@ -547,8 +571,8 @@ func (s *transactionAccountStorageStat) removeCell(c *cell.Cell) error {
 		return nil
 	}
 
-	for _, ref := range refs {
-		if err = s.removeCell(ref); err != nil {
+	for i := 0; i < refsNum; i++ {
+		if err = s.removeCell(refs[i]); err != nil {
 			return err
 		}
 	}
@@ -625,7 +649,7 @@ func transactionAccountStorageStatRootHash(root *cell.Cell) []byte {
 	if root == nil {
 		return make([]byte, 32)
 	}
-	return append([]byte(nil), root.Hash()...)
+	return root.Hash()
 }
 
 func transactionAccountStorageStatKey(key cell.Hash) *cell.Cell {
@@ -641,37 +665,58 @@ func transactionHashIsZero(hash []byte) bool {
 	return len(hash) > 0
 }
 
-func transactionAccountStorageRootRefs(storage *cell.Cell) ([]*cell.Cell, error) {
-	_, refs, err := transactionLoadedCellRefs(storage)
-	return refs, err
+func transactionLoadAccountStorageRootRefs(storage *cell.Cell) (*cell.Cell, [4]*cell.Cell, int, error) {
+	var refs [4]*cell.Cell
+	if storage == nil {
+		return nil, refs, 0, nil
+	}
+
+	sl, err := storage.BeginParseWithoutTrace()
+	if err != nil {
+		return nil, refs, 0, err
+	}
+
+	loaded := sl.BaseCell()
+	refsNum := sl.RefsNum()
+	for i := 0; i < refsNum; i++ {
+		refs[i], err = sl.LoadRefCell()
+		if err != nil {
+			return nil, refs, 0, err
+		}
+	}
+	return loaded, refs, refsNum, nil
 }
 
-func transactionAccountStorageRootDiff(oldRoots, newRoots []*cell.Cell) (toAdd, toDel []*cell.Cell) {
-	oldSorted := transactionSortedAccountStorageRoots(oldRoots)
-	newSorted := transactionSortedAccountStorageRoots(newRoots)
+func transactionAccountStorageRootDiff(oldRoots [4]*cell.Cell, oldRootsNum int, newRoots [4]*cell.Cell, newRootsNum int) (toAdd [4]*cell.Cell, toAddNum int, toDel [4]*cell.Cell, toDelNum int) {
+	oldSorted := transactionSortedAccountStorageRoots(oldRoots, oldRootsNum)
+	newSorted := transactionSortedAccountStorageRoots(newRoots, newRootsNum)
 
 	var oldIdx, newIdx int
-	for oldIdx < len(oldSorted) && newIdx < len(newSorted) {
+	for oldIdx < oldRootsNum && newIdx < newRootsNum {
 		cmp := bytes.Compare(oldSorted[oldIdx].hash[:], newSorted[newIdx].hash[:])
 		switch {
 		case cmp == 0:
 			oldIdx++
 			newIdx++
 		case cmp < 0:
-			toDel = append(toDel, oldSorted[oldIdx].root)
+			toDel[toDelNum] = oldSorted[oldIdx].root
+			toDelNum++
 			oldIdx++
 		default:
-			toAdd = append(toAdd, newSorted[newIdx].root)
+			toAdd[toAddNum] = newSorted[newIdx].root
+			toAddNum++
 			newIdx++
 		}
 	}
-	for ; oldIdx < len(oldSorted); oldIdx++ {
-		toDel = append(toDel, oldSorted[oldIdx].root)
+	for ; oldIdx < oldRootsNum; oldIdx++ {
+		toDel[toDelNum] = oldSorted[oldIdx].root
+		toDelNum++
 	}
-	for ; newIdx < len(newSorted); newIdx++ {
-		toAdd = append(toAdd, newSorted[newIdx].root)
+	for ; newIdx < newRootsNum; newIdx++ {
+		toAdd[toAddNum] = newSorted[newIdx].root
+		toAddNum++
 	}
-	return toAdd, toDel
+	return toAdd, toAddNum, toDel, toDelNum
 }
 
 type transactionAccountStorageRootHash struct {
@@ -679,36 +724,44 @@ type transactionAccountStorageRootHash struct {
 	hash cell.Hash
 }
 
-func transactionSortedAccountStorageRoots(roots []*cell.Cell) []transactionAccountStorageRootHash {
-	if len(roots) == 0 {
-		return nil
+func transactionSortedAccountStorageRoots(roots [4]*cell.Cell, rootsNum int) [4]transactionAccountStorageRootHash {
+	var out [4]transactionAccountStorageRootHash
+	if rootsNum == 0 {
+		return out
 	}
-	out := make([]transactionAccountStorageRootHash, len(roots))
-	for i, root := range roots {
+
+	for i := 0; i < rootsNum; i++ {
+		root := roots[i]
 		out[i] = transactionAccountStorageRootHash{
 			root: root,
 			hash: root.HashKey(),
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return bytes.Compare(out[i].hash[:], out[j].hash[:]) < 0
-	})
+
+	for i := 1; i < rootsNum; i++ {
+		next := out[i]
+		j := i - 1
+		for ; j >= 0 && bytes.Compare(out[j].hash[:], next.hash[:]) > 0; j-- {
+			out[j+1] = out[j]
+		}
+		out[j+1] = next
+	}
 	return out
 }
 
 func transactionAccountStorageRefsUnchanged(oldStorage, newStorage *cell.Cell) (bool, error) {
-	oldRefs, err := transactionAccountStorageRootRefs(oldStorage)
+	_, oldRefs, oldRefsNum, err := transactionLoadAccountStorageRootRefs(oldStorage)
 	if err != nil {
 		return false, err
 	}
-	newRefs, err := transactionAccountStorageRootRefs(newStorage)
+	_, newRefs, newRefsNum, err := transactionLoadAccountStorageRootRefs(newStorage)
 	if err != nil {
 		return false, err
 	}
-	if oldStorage == nil || newStorage == nil || len(oldRefs) != len(newRefs) {
+	if oldStorage == nil || newStorage == nil || oldRefsNum != newRefsNum {
 		return false, nil
 	}
-	for i := range oldRefs {
+	for i := 0; i < oldRefsNum; i++ {
 		if oldRefs[i].HashKey() != newRefs[i].HashKey() {
 			return false, nil
 		}
@@ -783,7 +836,11 @@ func transactionFinalizeAccountStatus(status tlb.AccountStatus, deleted bool, ba
 }
 
 func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte) (tlb.AccountStatus, []byte, error) {
-	if status != tlb.AccountStatusFrozen || acc.addr == nil || len(acc.addr.Data()) != 32 {
+	if status != tlb.AccountStatusFrozen || acc.addr == nil {
+		return status, stateHash, nil
+	}
+	addrData := acc.addr.Data()
+	if len(addrData) != 32 {
 		return status, stateHash, nil
 	}
 
@@ -801,7 +858,7 @@ func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status
 		}
 		stateHash = stateCell.Hash()
 	}
-	if bytes.Equal(stateHash, acc.addr.Data()) {
+	if bytes.Equal(stateHash, addrData) {
 		return tlb.AccountStatusUninit, nil, nil
 	}
 	return status, stateHash, nil
@@ -918,7 +975,11 @@ func transactionIsAddressSuspended(cfg tlb.BlockchainConfig, now uint32, addr *a
 }
 
 func transactionStateInitMatchesAddress(stateHash []byte, addr *address.Address, fixedPrefixLength *uint64) bool {
-	if addr == nil || len(stateHash) != 32 || len(addr.Data()) != 32 {
+	if addr == nil || len(stateHash) != 32 {
+		return false
+	}
+	addrData := addr.Data()
+	if len(addrData) != 32 {
 		return false
 	}
 	depth := 0
@@ -929,7 +990,7 @@ func transactionStateInitMatchesAddress(stateHash []byte, addr *address.Address,
 		depth = int(*fixedPrefixLength)
 	}
 	for i := depth; i < 256; i++ {
-		if transactionBit(stateHash, i) != transactionBit(addr.Data(), i) {
+		if transactionBit(stateHash, i) != transactionBit(addrData, i) {
 			return false
 		}
 	}

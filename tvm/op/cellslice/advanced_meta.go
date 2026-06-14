@@ -139,7 +139,7 @@ func CHASHIX() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash(int(idx))))
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(cl.Hash(int(idx))))
 		},
 		Name:      "CHASHIX",
 		BitPrefix: helpers.BytesPrefix(0xD7, 0x70),

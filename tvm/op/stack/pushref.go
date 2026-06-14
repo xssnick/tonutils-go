@@ -26,7 +26,7 @@ func PUSHREF(value *cell.Cell) *OpPUSHREF {
 }
 
 func (op *OpPUSHREF) Deserialize(code *cell.Slice) error {
-	if _, err := code.LoadUInt(8); err != nil {
+	if err := code.SkipBits(8); err != nil {
 		return err
 	}
 

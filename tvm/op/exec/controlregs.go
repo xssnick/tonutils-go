@@ -29,10 +29,12 @@ func validControlRegisterIndex(i int) bool {
 	return (i >= 0 && i <= 5) || i == 7
 }
 
+var controlRegisterPrefixIndexes = [...]uint64{0, 1, 2, 3, 4, 5, 7}
+
 func controlRegisterPrefixes(base uint64) []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 7)
-	for _, idx := range []uint64{0, 1, 2, 3, 4, 5, 7} {
-		prefixes = append(prefixes, helpers.UIntPrefix(base|idx, 16))
+	prefixes := make([]helpers.BitPrefix, len(controlRegisterPrefixIndexes))
+	for i, idx := range controlRegisterPrefixIndexes {
+		prefixes[i] = helpers.UIntPrefix(base|idx, 16)
 	}
 	return prefixes
 }
@@ -309,11 +311,11 @@ func PUSHCTRX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Name: "PUSHCTRX",
 		Action: func(state *vm.State) error {
-			idx, err := state.Stack.PopIntRange(0, 16)
+			idx, err := state.Stack.PopIntRangeInt64(0, 16)
 			if err != nil {
 				return err
 			}
-			i := int(idx.Int64())
+			i := int(idx)
 			if !validControlRegisterIndex(i) {
 				return vmerr.Error(vmerr.CodeRangeCheck)
 			}
@@ -331,11 +333,11 @@ func POPCTRX() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			idx, err := state.Stack.PopIntRange(0, 16)
+			idx, err := state.Stack.PopIntRangeInt64(0, 16)
 			if err != nil {
 				return err
 			}
-			i := int(idx.Int64())
+			i := int(idx)
 			if !validControlRegisterIndex(i) {
 				return vmerr.Error(vmerr.CodeRangeCheck)
 			}
@@ -357,11 +359,11 @@ func SETCONTCTRX() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			idx, err := state.Stack.PopIntRange(0, 16)
+			idx, err := state.Stack.PopIntRangeInt64(0, 16)
 			if err != nil {
 				return err
 			}
-			i := int(idx.Int64())
+			i := int(idx)
 			if !validControlRegisterIndex(i) {
 				return vmerr.Error(vmerr.CodeRangeCheck)
 			}

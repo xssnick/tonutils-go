@@ -51,8 +51,10 @@ func init() {
 }
 
 func pushSmallInt(state *vm.State, v int64) error {
-	return state.Stack.PushInt(big.NewInt(v))
+	return state.Stack.PushSmallInt(v)
 }
+
+var funcsBigIntOne = big.NewInt(1)
 
 func pushHostValue(state *vm.State, v any) error {
 	return state.Stack.PushHostValue(v)
@@ -63,8 +65,7 @@ func exportUnsignedBytes(x *big.Int, size int, msg string) ([]byte, error) {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck, msg)
 	}
 	buf := make([]byte, size)
-	raw := x.Bytes()
-	copy(buf[len(buf)-len(raw):], raw)
+	x.FillBytes(buf)
 	return buf, nil
 }
 
@@ -164,12 +165,14 @@ func GETPARAM(idx uint8) *helpers.AdvancedOP {
 }
 
 var getParamLongPrefixes = func() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 254)
+	prefixes := make([]helpers.BitPrefix, 254)
+	idx := 0
 	for i := uint64(0); i < 255; i++ {
 		if i == 17 {
 			continue
 		}
-		prefixes = append(prefixes, helpers.UIntPrefix(0xF88100|i, 24))
+		prefixes[idx] = helpers.UIntPrefix(0xF88100|i, 24)
+		idx++
 	}
 	return prefixes
 }()
@@ -249,9 +252,13 @@ func configRootFromC7(state *vm.State) (*cell.Cell, error) {
 }
 
 func fitsSignedBits(x *big.Int, bits uint) bool {
-	min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), bits-1))
-	max := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bits-1), big.NewInt(1))
-	return x.Cmp(min) >= 0 && x.Cmp(max) <= 0
+	if x.Sign() >= 0 {
+		return x.BitLen() <= int(bits-1)
+	}
+
+	absMinusOne := new(big.Int).Neg(x)
+	absMinusOne.Sub(absMinusOne, funcsBigIntOne)
+	return absMinusOne.BitLen() <= int(bits-1)
 }
 
 func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
@@ -451,7 +458,7 @@ func ECRECOVER() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			vInt, err := state.Stack.PopIntRange(0, 255)
+			v, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
@@ -477,7 +484,6 @@ func ECRECOVER() *helpers.SimpleOP {
 				return err
 			}
 
-			v := vInt.Int64()
 			if state.GlobalVersion >= 14 && (v == 27 || v == 28) {
 				v -= 27
 			}
@@ -639,11 +645,11 @@ func P256_CHKSIGNS() *helpers.SimpleOP {
 func GETGLOBVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			idx, err := state.Stack.PopIntRange(0, 254)
+			idx, err := state.Stack.PopIntRangeInt64(0, 254)
 			if err != nil {
 				return err
 			}
-			v, err := state.GetGlobal(int(idx.Int64()))
+			v, err := state.GetGlobal(int(idx))
 			if err != nil {
 				return err
 			}
@@ -688,7 +694,7 @@ func SETGLOBVAR() *helpers.SimpleOP {
 			if state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			idx, err := state.Stack.PopIntRange(0, 254)
+			idx, err := state.Stack.PopIntRangeInt64(0, 254)
 			if err != nil {
 				return err
 			}
@@ -696,7 +702,7 @@ func SETGLOBVAR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.SetGlobal(int(idx.Int64()), val)
+			return state.SetGlobal(int(idx), val)
 		},
 		Name:      "SETGLOBVAR",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x60),

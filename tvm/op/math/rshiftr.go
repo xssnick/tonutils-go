@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -26,7 +24,7 @@ func RSHIFTR() *helpers.SimpleOP {
 				return err
 			}
 
-			res := helpers.DivRound(x, y.Lsh(big.NewInt(1), uint(y.Uint64())))
+			res := helpers.DivRound(x, y.Lsh(bigIntOne, uint(y.Uint64())))
 
 			return state.Stack.PushInt(res)
 		},

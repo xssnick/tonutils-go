@@ -33,7 +33,7 @@ func MULRSHIFTMOD_VAR() *helpers.SimpleOP {
 				return err
 			}
 
-			q, _ := helpers.DivFloor(x.Mul(x, y), z.Lsh(big.NewInt(1), uint(z.Uint64())))
+			q, _ := helpers.DivFloor(x.Mul(x, y), z.Lsh(bigIntOne, uint(z.Uint64())))
 			r := new(big.Int).Sub(x, z.Mul(q, z))
 
 			err = state.Stack.PushInt(q)

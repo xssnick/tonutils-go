@@ -59,11 +59,11 @@ func SETCPX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Name: "SETCPX",
 		Action: func(state *vm.State) error {
-			cp, err := state.Stack.PopIntRange(-0x8000, 0x7fff)
+			cp, err := state.Stack.PopIntRangeInt64(-0x8000, 0x7fff)
 			if err != nil {
 				return err
 			}
-			return setCodepage(state, int(cp.Int64()))
+			return setCodepage(state, int(cp))
 		},
 		BitPrefix: helpers.BytesPrefix(0xFF, 0xF0),
 	}

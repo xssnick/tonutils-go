@@ -198,18 +198,19 @@ func blsAggregateVerify(pubs [][]byte, msgs [][]byte, sigBytes []byte) bool {
 		return false
 	}
 
-	listG1 := make([]*circlbls.G1, 0, len(pubs)+1)
-	listG2 := make([]*circlbls.G2, 0, len(pubs)+1)
-	signs := make([]int, 0, len(pubs)+1)
+	total := len(pubs) + 1
+	listG1 := make([]*circlbls.G1, total)
+	listG2 := make([]*circlbls.G2, total)
+	signs := make([]int, total)
 
 	for i := range pubs {
 		pub, err := parseBLSG1(pubs[i])
 		if err != nil || pub.IsIdentity() {
 			return false
 		}
-		listG1 = append(listG1, pub)
-		listG2 = append(listG2, blsHashToG2(msgs[i]))
-		signs = append(signs, 1)
+		listG1[i] = pub
+		listG2[i] = blsHashToG2(msgs[i])
+		signs[i] = 1
 	}
 
 	sig, err := parseBLSG2(sigBytes)
@@ -217,9 +218,10 @@ func blsAggregateVerify(pubs [][]byte, msgs [][]byte, sigBytes []byte) bool {
 		return false
 	}
 
-	listG1 = append(listG1, circlbls.G1Generator())
-	listG2 = append(listG2, sig)
-	signs = append(signs, -1)
+	last := len(pubs)
+	listG1[last] = circlbls.G1Generator()
+	listG2[last] = sig
+	signs[last] = -1
 
 	return circlbls.ProdPairFrac(listG1, listG2, signs).IsIdentity()
 }
@@ -241,7 +243,7 @@ func pushRistrettoPoint(state *vm.State, point circlgroup.Element) error {
 	if err != nil {
 		return blsUnknown("failed to encode ristretto255 element", err)
 	}
-	return state.Stack.PushInt(new(big.Int).SetBytes(data))
+	return state.Stack.PushOwnedInt(new(big.Int).SetBytes(data))
 }
 
 func RIST255_FROMHASH() *helpers.SimpleOP {
@@ -276,7 +278,7 @@ func RIST255_FROMHASH() *helpers.SimpleOP {
 			p1.SetElligator(&u1)
 			p2.SetElligator(&u2)
 			out.Add(&p1, &p2)
-			return state.Stack.PushInt(new(big.Int).SetBytes(out.Bytes()))
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(out.Bytes()))
 		},
 		Name:      "RIST255_FROMHASH",
 		BitPrefix: helpers.BytesPrefix(0xF9, 0x20),
@@ -286,7 +288,7 @@ func RIST255_FROMHASH() *helpers.SimpleOP {
 func pushConstIntOp(name string, prefix helpers.BitPrefix, value *big.Int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			return state.Stack.PushInt(new(big.Int).Set(value))
+			return state.Stack.PushOwnedInt(new(big.Int).Set(value))
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -562,11 +564,11 @@ func BLS_VERIFY() *helpers.SimpleOP {
 func BLS_AGGREGATE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(1, int64(state.Stack.Len()))
+			n, err := state.Stack.PopIntRangeInt64(1, int64(state.Stack.Len()))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsAggregateBaseGasPrice + int64(count)*vm.BlsAggregateElementGasPrice); err != nil {
 				return err
 			}
@@ -609,11 +611,11 @@ func BLS_FASTAGGREGATEVERIFY() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()))
+			n, err := state.Stack.PopIntRangeInt64(0, int64(state.Stack.Len()))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsFastAggregateVerifyBaseGasPrice + int64(count)*vm.BlsFastAggregateVerifyElementGasPrice); err != nil {
 				return err
 			}
@@ -649,11 +651,11 @@ func BLS_AGGREGATEVERIFY() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64(state.Stack.Len()/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsAggregateVerifyBaseGasPrice + int64(count)*vm.BlsAggregateVerifyElementGasPrice); err != nil {
 				return err
 			}
@@ -825,11 +827,11 @@ func BLS_G1_ZERO() *helpers.SimpleOP {
 func BLS_G1_MULTIEXP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64(state.Stack.Len()/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(blsCalculateMultiexpGas(
 				count,
 				vm.BlsG1MultiexpBaseGasPrice,
@@ -1109,11 +1111,11 @@ func BLS_G2_ZERO() *helpers.SimpleOP {
 func BLS_G2_MULTIEXP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64(state.Stack.Len()/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(blsCalculateMultiexpGas(
 				count,
 				vm.BlsG2MultiexpBaseGasPrice,
@@ -1258,11 +1260,11 @@ func BLS_G2_ISZERO() *helpers.SimpleOP {
 func BLS_PAIRING() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64(state.Stack.Len()/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsPairingBaseGasPrice + int64(count)*vm.BlsPairingElementGasPrice); err != nil {
 				return err
 			}

@@ -25,7 +25,7 @@ type ValidatorSet struct {
 	UTimeUntil uint32           `tlb:"## 32"`
 	Total      uint16           `tlb:"## 16"`
 	Main       uint16           `tlb:"## 16"`
-	List       *cell.Dictionary `tlb:"dict 16"`
+	List       *cell.Dictionary `tlb:"dict inline 16"`
 }
 
 type ValidatorSetExt struct {

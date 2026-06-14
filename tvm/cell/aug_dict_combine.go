@@ -3,6 +3,7 @@ package cell
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 )
 
 var errAugmentedDictionaryConflict = errors.New("augmented dictionary has duplicate key")
@@ -445,18 +446,14 @@ func augmentedPayloadBuilderForCombine(payload *Slice) (*Builder, error) {
 	b := BeginCell()
 
 	bits := payload.BitsLeft()
-	data, err := payload.PreloadSlice(bits)
-	if err != nil {
+	if err := payload.loadSliceInto(b.data[:], bits, true); err != nil {
 		return nil, err
 	}
-	if err = b.StoreSlice(data, bits); err != nil {
-		return nil, err
-	}
+	b.bitsSz = bits
 
-	refs := payload.Copy()
-	refsCount := refs.RefsNum()
+	refsCount := payload.RefsNum()
 	for i := 0; i < refsCount; i++ {
-		ref, err := refs.LoadRefCell()
+		ref, err := payload.peekRefCellAt(i)
 		if err != nil {
 			return nil, err
 		}
@@ -478,10 +475,30 @@ func commonAugmentedLabelPrefix(left, right *augmentedCombineNode) uint {
 		limit = right.visibleLabelLen()
 	}
 
-	for i := uint(0); i < limit; i++ {
-		if left.visibleLabelBit(i) != right.visibleLabelBit(i) {
+	leftPos := left.view.skip
+	rightPos := right.view.skip
+
+	i := uint(0)
+	for i < limit && ((leftPos+i)%8 != 0 || (rightPos+i)%8 != 0) {
+		if left.label.bit(leftPos+i) != right.label.bit(rightPos+i) {
 			return i
 		}
+		i++
+	}
+
+	for i+8 <= limit {
+		diff := left.label.bits[(leftPos+i)/8] ^ right.label.bits[(rightPos+i)/8]
+		if diff != 0 {
+			return i + uint(bits.LeadingZeros8(diff))
+		}
+		i += 8
+	}
+
+	for i < limit {
+		if left.label.bit(leftPos+i) != right.label.bit(rightPos+i) {
+			return i
+		}
+		i++
 	}
 
 	return limit
@@ -524,13 +541,19 @@ func augmentedLabelFromBuilder(label *Builder, bitLen uint) (augmentedLabel, err
 		return augmentedLabel{}, nil
 	}
 
-	bits, err := label.ToSlice().LoadSlice(bitLen)
-	if err != nil {
-		return augmentedLabel{}, fmt.Errorf("failed to load augmented dictionary label bits: %w", err)
+	if label.bitsSz < bitLen {
+		return augmentedLabel{}, fmt.Errorf("failed to load augmented dictionary label bits: %w", ErrNotEnoughData(int(label.bitsSz), int(bitLen)))
+	}
+
+	usedBytes := int((bitLen + 7) / 8)
+	bits := make([]byte, usedBytes)
+	copy(bits, label.data[:usedBytes])
+	if rem := bitLen % 8; rem != 0 {
+		bits[usedBytes-1] &= byte(0xFF << (8 - rem))
 	}
 
 	return augmentedLabel{
-		bits:   append([]byte(nil), bits...),
+		bits:   bits,
 		bitLen: bitLen,
 	}, nil
 }
@@ -545,6 +568,10 @@ func (l augmentedLabel) bit(bit uint) uint64 {
 func (l augmentedLabel) slice(start, length uint) *Slice {
 	if length == 0 {
 		return BeginCell().ToSlice()
+	}
+
+	if start%8 == 0 {
+		return BeginCell().MustStoreSlice(l.bits[start/8:], length).ToSlice()
 	}
 
 	b := BeginCell()

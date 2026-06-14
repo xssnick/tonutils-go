@@ -503,27 +503,21 @@ func (c *Slice) PreloadBigUInt(sz uint) (*big.Int, error) {
 }
 
 func (c *Slice) loadBigNumber(sz uint) (*big.Int, error) {
-	b, err := c.LoadSlice(sz)
-	if err != nil {
-		return nil, err
-	}
-
-	// check is value is uses full bytes
-	if offset := sz % 8; offset > 0 {
-		// move bits to right side of bytes
-		for i := len(b) - 1; i >= 0; i-- {
-			b[i] >>= 8 - offset // get last bits
-			if i > 0 {
-				b[i] += b[i-1] << offset
-			}
-		}
-	}
-
-	return new(big.Int).SetBytes(b), nil
+	return c.readBigNumber(sz, false)
 }
 
 func (c *Slice) preloadBigNumber(sz uint) (*big.Int, error) {
-	b, err := c.PreloadSlice(sz)
+	return c.readBigNumber(sz, true)
+}
+
+func (c *Slice) readBigNumber(sz uint, preload bool) (*big.Int, error) {
+	if sz == 0 {
+		return new(big.Int), nil
+	}
+
+	var buf [33]byte
+	b := buf[:int((sz+7)/8)]
+	err := c.loadSliceInto(b, sz, preload)
 	if err != nil {
 		return nil, err
 	}
@@ -555,21 +549,8 @@ func (c *Slice) LoadBigInt(sz uint) (*big.Int, error) {
 		return nil, err
 	}
 
-	one := big.NewInt(1)
-
-	// check is last bit = 1
-	isNegative := new(big.Int).And(u, new(big.Int).Lsh(one, sz-1)).Cmp(big.NewInt(0)) != 0
-
-	if isNegative {
-		// get max value of given sz
-		i := new(big.Int).Lsh(one, sz)
-		i = i.Sub(i, one)
-
-		val := u.Sub(u, i)
-
-		// finally, we are subtracting 1, because 0xFF = -1,
-		// and when we do u-i we get value which is +1 from actual
-		return val.Sub(val, one), nil
+	if u.Bit(int(sz-1)) != 0 {
+		return u.Sub(u, new(big.Int).Lsh(bigIntOne, sz)), nil
 	}
 
 	return u, nil
@@ -669,20 +650,33 @@ func (c *Slice) PreloadSlice(sz uint) ([]byte, error) {
 }
 
 func (c *Slice) loadSlice(sz uint, preload bool) ([]byte, error) {
+	if sz == 0 {
+		return []byte{}, nil
+	}
+
+	loadedData := make([]byte, int((sz+7)/8))
+	if err := c.loadSliceInto(loadedData, sz, preload); err != nil {
+		return nil, err
+	}
+
+	return loadedData, nil
+}
+
+func (c *Slice) loadSliceInto(loadedData []byte, sz uint, preload bool) error {
 	left := c.BitsLeft()
 	if left < sz {
-		return nil, ErrNotEnoughData(int(left), int(sz))
+		return ErrNotEnoughData(int(left), int(sz))
 	}
 
 	if sz == 0 {
-		return []byte{}, nil
+		return nil
 	}
 
 	startBit := uint(c.bitStart)
 	startBitOffset := startBit % 8
 	data := c.cell.data[startBit/8:]
 	outLen := int((sz + 7) / 8)
-	loadedData := make([]byte, outLen)
+	loadedData = loadedData[:outLen]
 
 	if startBitOffset == 0 {
 		copy(loadedData, data[:outLen])
@@ -710,7 +704,7 @@ func (c *Slice) loadSlice(sz uint, preload bool) ([]byte, error) {
 		c.bitStart += uint16(sz)
 	}
 
-	return loadedData, nil
+	return nil
 }
 
 func (c *Slice) MustLoadAddr() *address.Address {
@@ -923,7 +917,9 @@ func (c *Slice) ToBuilder() *Builder {
 	b.bitsSz = left
 	b.trace = c.trace
 
-	copy(b.data[:], c.MustPreloadSlice(left))
+	if err := c.loadSliceInto(b.data[:], left, true); err != nil {
+		panic(err)
+	}
 
 	b.refsNum = uint8(c.RefsNum())
 	for i := uint8(0); i < b.refsNum; i++ {

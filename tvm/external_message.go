@@ -1,7 +1,6 @@
 package tvm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -82,10 +81,10 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 
 	stack := vm.NewStack()
 	balance := messageEmulationBalance(cfg.Balance)
-	if err = stack.PushInt(balance); err != nil {
+	if err = stack.PushOwnedInt(balance); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(0)); err != nil {
+	if err = stack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 	if err = stack.PushCell(msgCell); err != nil {
@@ -95,10 +94,10 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 	if err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(bodySlice); err != nil {
+	if err = stack.PushOwnedSlice(bodySlice); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(-1)); err != nil {
+	if err = stack.PushSmallInt(-1); err != nil {
 		return nil, err
 	}
 
@@ -125,10 +124,10 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 
 	stack := vm.NewStack()
 	balance := messageEmulationBalance(cfg.Balance)
-	if err = stack.PushInt(balance); err != nil {
+	if err = stack.PushOwnedInt(balance); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(new(big.Int).SetUint64(amount)); err != nil {
+	if err = stack.PushOwnedInt(new(big.Int).SetUint64(amount)); err != nil {
 		return nil, err
 	}
 	if err = stack.PushCell(msgCell); err != nil {
@@ -138,10 +137,10 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 	if err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(bodySlice); err != nil {
+	if err = stack.PushOwnedSlice(bodySlice); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(0)); err != nil {
+	if err = stack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 
@@ -178,9 +177,8 @@ func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, g
 }
 
 func prepareMessageExecutionProof(code, data *cell.Cell, cfg MessageEmulationConfig, addr *address.Address) (*cell.MerkleProofBuilder, *cell.Cell, *cell.Cell, []*cell.Cell, *address.Address, error) {
-	libraries := append([]*cell.Cell(nil), cfg.Libraries...)
 	if !cfg.BuildProof {
-		return nil, code, data, libraries, addr, nil
+		return nil, code, data, cfg.Libraries, addr, nil
 	}
 	if cfg.AccountRoot == nil {
 		return nil, nil, nil, nil, nil, errors.New("account root is required to build execution proof")
@@ -203,8 +201,9 @@ func prepareMessageExecutionProof(code, data *cell.Cell, cfg MessageEmulationCon
 	if data != nil && !sameCellHash(data, acc.StateInit.Data) {
 		return nil, nil, nil, nil, nil, errors.New("account root data differs from execution data")
 	}
+	libraries := cfg.Libraries
 	if acc.StateInit.Lib != nil && acc.StateInit.Lib.AsCell() != nil {
-		libraries = append(libraries, acc.StateInit.Lib.AsCell())
+		libraries = append(append([]*cell.Cell(nil), libraries...), acc.StateInit.Lib.AsCell())
 	}
 	return proof, acc.StateInit.Code, acc.StateInit.Data, libraries, addr, nil
 }
@@ -226,7 +225,7 @@ func sameCellHash(a, b *cell.Cell) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return bytes.Equal(a.Hash(), b.Hash())
+	return a.HashKey() == b.HashKey()
 }
 
 func messageBodyCell(body *cell.Cell) *cell.Cell {

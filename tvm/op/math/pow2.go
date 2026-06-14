@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -19,7 +17,7 @@ func POW2() *helpers.SimpleOP {
 				return err
 			}
 
-			return state.Stack.PushInt(y.Lsh(big.NewInt(1), uint(y.Uint64())))
+			return state.Stack.PushInt(y.Lsh(bigIntOne, uint(y.Uint64())))
 		},
 		Name:      "POW2",
 		BitPrefix: helpers.BytesPrefix(0xAE),

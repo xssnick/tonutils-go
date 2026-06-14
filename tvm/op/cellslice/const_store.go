@@ -21,15 +21,22 @@ func init() {
 }
 
 type OpSTREFCONST struct {
-	refs []*cell.Cell
+	refs    [2]*cell.Cell
+	refsNum int
 }
 
 func STREFCONST(ref *cell.Cell) *OpSTREFCONST {
-	return &OpSTREFCONST{refs: []*cell.Cell{ref}}
+	return &OpSTREFCONST{
+		refs:    [2]*cell.Cell{ref},
+		refsNum: 1,
+	}
 }
 
 func STREF2CONST(first, second *cell.Cell) *OpSTREFCONST {
-	return &OpSTREFCONST{refs: []*cell.Cell{first, second}}
+	return &OpSTREFCONST{
+		refs:    [2]*cell.Cell{first, second},
+		refsNum: 2,
+	}
 }
 
 func (op *OpSTREFCONST) GetPrefixes() []*cell.Slice {
@@ -45,7 +52,7 @@ func (op *OpSTREFCONST) Deserialize(code *cell.Slice) error {
 		return err
 	}
 	count := int(v) + 1
-	refs := make([]*cell.Cell, count)
+	var refs [2]*cell.Cell
 	for i := 0; i < count; i++ {
 		ref, err := code.PeekRefCell()
 		if err != nil {
@@ -57,24 +64,25 @@ func (op *OpSTREFCONST) Deserialize(code *cell.Slice) error {
 		refs[i] = ref
 	}
 	op.refs = refs
+	op.refsNum = count
 	return nil
 }
 
 func (op *OpSTREFCONST) Serialize() *cell.Builder {
-	if len(op.refs) == 0 || len(op.refs) > 2 {
+	if op.refsNum == 0 || op.refsNum > len(op.refs) {
 		panic("STREFCONST expects 1 or 2 references")
 	}
 	b := cell.BeginCell().
 		MustStoreUInt(0xCF20>>1, 15).
-		MustStoreUInt(uint64(len(op.refs)-1), 1)
-	for _, ref := range op.refs {
-		b.MustStoreRef(ref)
+		MustStoreUInt(uint64(op.refsNum-1), 1)
+	for i := 0; i < op.refsNum; i++ {
+		b.MustStoreRef(op.refs[i])
 	}
 	return b
 }
 
 func (op *OpSTREFCONST) SerializeText() string {
-	if len(op.refs) == 2 {
+	if op.refsNum == 2 {
 		return "STREF2CONST"
 	}
 	return "STREFCONST"
@@ -89,11 +97,11 @@ func (op *OpSTREFCONST) Interpret(state *vm.State) error {
 	if err != nil {
 		return err
 	}
-	if !builder.CanExtendBy(0, uint(len(op.refs))) {
+	if !builder.CanExtendBy(0, uint(op.refsNum)) {
 		return vmerr.Error(vmerr.CodeCellOverflow)
 	}
-	for _, ref := range op.refs {
-		if err = builder.StoreRefUncheckedDepth(ref); err != nil {
+	for i := 0; i < op.refsNum; i++ {
+		if err = builder.StoreRefUncheckedDepth(op.refs[i]); err != nil {
 			return vmerr.Error(vmerr.CodeCellOverflow)
 		}
 	}
