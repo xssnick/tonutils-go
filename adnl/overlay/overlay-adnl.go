@@ -438,13 +438,6 @@ func validateFECBroadcastType(fec rldp.FECRaptorQ) error {
 	return nil
 }
 
-func (a *ADNLOverlayWrapper) cleanupBroadcastStreams(now time.Time) {
-	state := a.activeFECState()
-	state.mx.Lock()
-	state.cleanupLocked(now, false)
-	state.mx.Unlock()
-}
-
 func estimateFECBroadcastBudgetBytes(fec rldp.FECRaptorQ, partSize int) int64 {
 	payloadBytes := int64(fec.DataSize)
 	symbolBytes := multiplyFECBroadcastBudgetEstimate(fec.SymbolsCount, fec.SymbolSize)

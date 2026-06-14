@@ -1016,13 +1016,6 @@ func unwrapPrefixedPayload(data any) (*Node, any) {
 	return nil, data
 }
 
-func senderAddressList(node *Node) *address.List {
-	if node == nil {
-		return nil
-	}
-	return node.AddrList
-}
-
 func compareDistance(a, b, target []byte) int {
 	for i := 0; i < len(target) && i < len(a) && i < len(b); i++ {
 		ax := a[i] ^ target[i]

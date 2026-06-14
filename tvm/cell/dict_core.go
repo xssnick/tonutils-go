@@ -74,20 +74,6 @@ func (n *fixedDictNode) boundaryRef(i int) (*Cell, error) {
 	return n.refView.boundaryRef(i)
 }
 
-func (n *fixedDictNode) refs() (*Cell, *Cell, error) {
-	left, err := n.ref(0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load left ref: %w", err)
-	}
-
-	right, err := n.ref(1)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load right ref: %w", err)
-	}
-
-	return left, right, nil
-}
-
 func (n fixedDictNode) rejectSpecial(kind string) error {
 	if n.cell.IsSpecial() {
 		return fmt.Errorf("%s has special cells in tree structure", kind)
@@ -103,17 +89,6 @@ func (n fixedDictNode) prunedBoundary(kind string) (bool, error) {
 		return true, nil
 	}
 	return false, fmt.Errorf("%s has unsupported special cell in tree structure", kind)
-}
-
-func (n fixedDictNode) requireAugmentedBody(kind string) error {
-	pruned, err := n.prunedBoundary(kind)
-	if err != nil {
-		return err
-	}
-	if pruned {
-		return ErrAugmentationSemanticsUnavailable
-	}
-	return nil
 }
 
 func (n *fixedDictNode) cloneWithRef(i int, ref *Cell, trace *Trace) (*Cell, bool, error) {

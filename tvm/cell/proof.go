@@ -7,8 +7,6 @@ import (
 	"fmt"
 )
 
-type cellHash = []byte
-
 // ProofSkeleton describes the old manual Merkle proof selection tree.
 //
 // Deprecated: use NewMerkleProofBuilder with traced cell loads, or

@@ -81,12 +81,6 @@ func WithBroadcastTwoStepFECThreshold(minBytes uint32, minPeers int) BroadcastTw
 	}
 }
 
-func withBroadcastTwoStepNow(now func() time.Time) BroadcastTwoStepSenderOption {
-	return func(cfg *broadcastTwoStepSenderConfig) {
-		cfg.now = now
-	}
-}
-
 func SendBroadcastTwoStep(ctx context.Context, req BroadcastTwoStepSendRequest, opts ...BroadcastTwoStepSenderOption) (BroadcastTwoStepSendResult, error) {
 	if len(req.Payload) == 0 {
 		return BroadcastTwoStepSendResult{}, fmt.Errorf("payload is empty")

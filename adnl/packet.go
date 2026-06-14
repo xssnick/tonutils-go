@@ -443,23 +443,6 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	return payloadLen, nil
 }
 
-var _FlagsDBG = map[uint32]string{
-	0x1:    "FROM",
-	0x2:    "FROM_SHORT",
-	0x4:    "ONE_MESSAGE",
-	0x8:    "MULT_MESSAGE",
-	0x10:   "ADDRESS",
-	0x20:   "PRIORITY_ADDRESS",
-	0x40:   "SEQNO",
-	0x80:   "CONFIRM_SEQNO",
-	0x100:  "RECV_ADDR_LIST_VER",
-	0x200:  "RECV_PRIORITY_ADDR_VER",
-	0x400:  "REINIT_DATE",
-	0x800:  "SIGNATURE",
-	0x1000: "PRIORITY",
-	0x1fff: "ALL",
-}
-
 func resizeRandForPacket(data []byte) ([]byte, error) {
 	if data[0]&1 > 0 {
 		return data[1:], nil

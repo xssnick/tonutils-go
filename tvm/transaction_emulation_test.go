@@ -212,103 +212,6 @@ func makeTransactionInternalSendCode(t *testing.T, outMsg, newData *cell.Cell, m
 	)
 }
 
-func makeTransactionInternalReserveSendCode(t *testing.T, reserveAmount uint64, reserveMode uint8, outMsg, newData *cell.Cell, sendMode uint8) *cell.Cell {
-	t.Helper()
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHINT(new(big.Int).SetUint64(reserveAmount)).Serialize(),
-		stackop.PUSHINT(new(big.Int).SetUint64(uint64(reserveMode))).Serialize(),
-		funcsop.RAWRESERVE().Serialize(),
-		stackop.PUSHREF(outMsg).Serialize(),
-		stackop.PUSHINT(new(big.Int).SetUint64(uint64(sendMode))).Serialize(),
-		funcsop.SENDRAWMSG().Serialize(),
-		stackop.PUSHREF(newData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-}
-
-func makeTransactionInternalSetCodeCode(t *testing.T, nextCode, newData *cell.Cell) *cell.Cell {
-	t.Helper()
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHREF(nextCode).Serialize(),
-		funcsop.SETCODE().Serialize(),
-		stackop.PUSHREF(newData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-}
-
-func makeTransactionInternalSetLibCode(t *testing.T, libCode, newData *cell.Cell, mode uint8) *cell.Cell {
-	t.Helper()
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHREF(libCode).Serialize(),
-		stackop.PUSHINT(new(big.Int).SetUint64(uint64(mode))).Serialize(),
-		funcsop.SETLIBCODE().Serialize(),
-		stackop.PUSHREF(newData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-}
-
-func makeTransactionInternalChangeLibMissingCode(t *testing.T, newData *cell.Cell, mode uint8) *cell.Cell {
-	t.Helper()
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHINT(big.NewInt(1)).Serialize(),
-		stackop.PUSHINT(new(big.Int).SetUint64(uint64(mode))).Serialize(),
-		funcsop.CHANGELIB().Serialize(),
-		stackop.PUSHREF(newData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-}
-
-func makeTransactionInternalReserveOnlyCode(t *testing.T, reserveAmount uint64, reserveMode uint8, newData *cell.Cell) *cell.Cell {
-	t.Helper()
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHINT(new(big.Int).SetUint64(reserveAmount)).Serialize(),
-		stackop.PUSHINT(new(big.Int).SetUint64(uint64(reserveMode))).Serialize(),
-		funcsop.RAWRESERVE().Serialize(),
-		stackop.PUSHREF(newData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-}
-
-func makeTransactionInternalActionsCode(t *testing.T, actions, newData *cell.Cell) *cell.Cell {
-	t.Helper()
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHREF(actions).Serialize(),
-		execop.POPCTR(5).Serialize(),
-		stackop.PUSHREF(newData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-}
-
 func makeTransactionStackUnderflowCode(t *testing.T) *cell.Cell {
 	t.Helper()
 	return codeFromBuilders(t,
@@ -414,12 +317,6 @@ func buildTransactionTestUninitShardAccount(t *testing.T, addr *address.Address,
 	return buildTransactionTestStoredShardAccount(t, addr, tlb.AccountStatusUninit, balance, storageInfo, nil, nil)
 }
 
-func buildTransactionTestFrozenShardAccount(t *testing.T, addr *address.Address, stateHash []byte, balance uint64, storageInfo tlb.StorageInfo) *tlb.ShardAccount {
-	t.Helper()
-
-	return buildTransactionTestStoredShardAccount(t, addr, tlb.AccountStatusFrozen, balance, storageInfo, nil, stateHash)
-}
-
 func buildTransactionConfigRoot(t *testing.T, params map[uint32]*cell.Cell) *cell.Cell {
 	t.Helper()
 
@@ -513,30 +410,6 @@ func buildTransactionOutboundInternalCellWithAddresses(t *testing.T, src, dst *a
 		t.Fatalf("failed to build outbound internal message: %v", err)
 	}
 	return msgCell
-}
-
-func buildTransactionRepeatedSetCodeActions(t *testing.T, code *cell.Cell, count int) *cell.Cell {
-	t.Helper()
-
-	actions := make([]any, count)
-	for i := range actions {
-		actions[i] = tlb.ActionSetCode{NewCode: code}
-	}
-	return buildTransactionActionList(t, actions...)
-}
-
-func buildTransactionZeroBitsCell(t *testing.T, bits uint) *cell.Cell {
-	t.Helper()
-
-	b := cell.BeginCell()
-	for bits >= 64 {
-		b.MustStoreUInt(0, 64)
-		bits -= 64
-	}
-	if bits > 0 {
-		b.MustStoreUInt(0, bits)
-	}
-	return b.EndCell()
 }
 
 func buildTransactionTestNoneShardAccount(t *testing.T) *tlb.ShardAccount {

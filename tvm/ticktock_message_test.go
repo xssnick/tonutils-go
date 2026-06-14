@@ -55,26 +55,6 @@ func makeTickTockFailureCode(t *testing.T) *cell.Cell {
 	)
 }
 
-func makeTickTockStateOnlyCode(t *testing.T, tickData, tockData *cell.Cell) *cell.Cell {
-	t.Helper()
-
-	tockRef := codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHREF(tockData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		execop.IFJMPREF(tockRef).Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHREF(tickData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
-}
-
 func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*TransactionExecutionResult, *cell.Cell, *cell.Cell, error) {
 	t.Helper()
 

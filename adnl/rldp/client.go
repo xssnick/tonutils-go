@@ -60,8 +60,6 @@ type activeTransferPart struct {
 	fastSeqnoTill    uint32
 	startedAt        time.Time
 	recoveryReady    atomic.Bool
-	lossEWMA         atomic.Uint64
-	drrDeficit       int64
 
 	sendClock *SendClock
 
@@ -102,17 +100,12 @@ type RLDP struct {
 
 	recvStreams map[string]*decoderStream
 
-	onQuery      func(transferId []byte, query *Query) error
-	onMessage    func(id []byte, data []byte) error
-	onDisconnect func()
+	onQuery   func(transferId []byte, query *Query) error
+	onMessage func(id []byte, data []byte) error
 
 	maxUnexpectedTransferSize atomic.Uint64
 
 	mx sync.RWMutex
-
-	lastTrack int64
-	packets   uint64
-	packetsSz uint64
 
 	rateLimit *TokenBucket
 	rateCtrl  *BBRv2Controller
@@ -134,7 +127,6 @@ type decoderStreamPart struct {
 	fecSymbolSize   uint32
 	fecSymbolsCount uint32
 
-	lastCompleteSeqno    uint32
 	maxSeqno             uint32
 	receivedMask         uint32
 	receivedNum          uint32

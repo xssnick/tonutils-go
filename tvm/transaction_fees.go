@@ -147,13 +147,6 @@ func transactionGasBoughtForLimit(prices *tlb.ConfigGasLimitsPrices, nanograms *
 	return remaining.Uint64()
 }
 
-func transactionMaxGasThreshold(prices *tlb.ConfigGasLimitsPrices) *big.Int {
-	if prices == nil {
-		return big.NewInt(0)
-	}
-	return transactionMaxGasThresholdForLimit(prices, prices.GasLimit)
-}
-
 func transactionMaxGasThresholdForLimit(prices *tlb.ConfigGasLimitsPrices, gasLimit uint64) *big.Int {
 	if prices == nil || gasLimit <= prices.FlatGasLimit {
 		return new(big.Int).SetUint64(transactionGasFlatPrice(prices))
@@ -646,11 +639,6 @@ func transactionComputeActionFineForUsageWithPrices(prices *tlb.ConfigMsgForward
 
 	fine := new(big.Int).SetUint64(finePerCell)
 	return fine.Mul(fine, new(big.Int).SetUint64(fineCells))
-}
-
-func transactionActionFineCellLimit(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, maxCells uint64, available *big.Int) (uint64, bool) {
-	prices := transactionGetMsgForwardPrices(cfg, srcAddr, dstAddr)
-	return transactionActionFineCellLimitWithPrices(prices, maxCells, available)
 }
 
 func transactionActionFineCellLimitWithPrices(prices *tlb.ConfigMsgForwardPrices, maxCells uint64, available *big.Int) (uint64, bool) {

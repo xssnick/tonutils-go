@@ -1009,7 +1009,9 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 				return fmt.Errorf("nil cell is not allowed in field %s", field.String())
 			}
 
-			if err := ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithFlags(false)); err != nil {
+			if err := ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithOptions(cell.BOCSerializeOptions{
+				WithCRC32C: false,
+			})); err != nil {
 				return fmt.Errorf("failed to serialize cell field %s: %w", field.String(), err)
 			}
 		case _ExecuteTypeSliceCell:

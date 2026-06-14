@@ -63,7 +63,6 @@ type syncPacket struct {
 type SyncConn struct {
 	conn      net.PacketConn
 	chWrite   chan syncPacket
-	chRead    chan syncPacket
 	closerCtx context.Context
 	closer    context.CancelFunc
 }

@@ -510,10 +510,6 @@ func fixedDictFilterItems(items []DictItem, fn DictFilterFunc) ([]DictItem, int,
 	return out, changes, nil
 }
 
-func extractPrefixSubdictRoot(root *Cell, keySz uint, prefix *Cell, removePrefix bool) (*Cell, bool, error) {
-	return extractPrefixSubdictRootTraced(root, keySz, prefix, removePrefix, nil)
-}
-
 func extractPrefixSubdictRootTraced(root *Cell, keySz uint, prefix *Cell, removePrefix bool, trace *Trace) (*Cell, bool, error) {
 	if root == nil {
 		return nil, false, nil

@@ -1565,13 +1565,6 @@ func newTracedDict(root *cell.Cell, bits uint, state *vm.State) *cell.Dictionary
 	return root.AsDict(bits).SetTrace(state.Cells.Trace())
 }
 
-func newPlainDict(root *cell.Cell, bits uint) *cell.Dictionary {
-	if root == nil {
-		return cell.NewDict(bits)
-	}
-	return root.AsDict(bits)
-}
-
 func newTracedPrefixDict(root *cell.Cell, bits uint, state *vm.State) *cell.PrefixDictionary {
 	return newPrefixDictWithTrace(root, bits, state.Cells.Trace())
 }

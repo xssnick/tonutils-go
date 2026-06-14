@@ -42,8 +42,6 @@ func init() {
 // When set, broadcast identity is not tied to a specific source key.
 const BroadcastFlagAnySender int32 = 1
 
-const _BroadcastFlagAnySender = BroadcastFlagAnySender
-
 // BroadcastFlagNoTwoStep matches TON overlay no-twostep broadcast flag.
 // It is stripped from two-step wire messages by cppnode before signing.
 const BroadcastFlagNoTwoStep int32 = 256

@@ -97,10 +97,6 @@ type Gateway struct {
 	reader         NetManager
 	onChannelOpen  func(ch *Channel)
 	onChannelClose func(id string)
-
-	lastTrack int64
-	packets   uint64
-	packetsSz uint64
 }
 
 func NewGateway(key ed25519.PrivateKey) *Gateway {

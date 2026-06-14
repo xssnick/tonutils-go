@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
@@ -16,7 +15,6 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"reflect"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -171,12 +169,6 @@ var cnf = &liteclient.GlobalConfig{
 	},
 	Liteservers: nil,
 	Validator:   liteclient.ValidatorConfig{},
-}
-
-func makeStrAddress(ip int32, port int) string {
-	_ip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(_ip, uint32(ip))
-	return _ip.String() + ":" + strconv.Itoa(port)
 }
 
 func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {

@@ -130,20 +130,6 @@ func (t *Trace) PendingError() error {
 	return nil
 }
 
-func (t *Trace) flatten() []*Trace {
-	if t == nil {
-		return nil
-	}
-	if len(t.parts) == 0 {
-		return []*Trace{t}
-	}
-	var out []*Trace
-	for _, part := range t.parts {
-		out = append(out, part.flatten()...)
-	}
-	return out
-}
-
 func (t *Trace) usageNodeFor(tree *CellUsageTree) (TraceNode, bool) {
 	if t == nil || tree == nil {
 		return 0, false
