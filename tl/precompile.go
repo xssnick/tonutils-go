@@ -333,8 +333,7 @@ func Serialize(v Serializable, boxed bool, bufOpt ...*bytes.Buffer) ([]byte, err
 			return raw, nil
 		}
 
-		buf = bytes.NewBuffer(nil)
-		buf.Grow(DefaultSerializeBufferSize)
+		return Append(make([]byte, 0, DefaultSerializeBufferSize), v, boxed)
 	}
 
 	if list, ok := v.([]Serializable); ok {
@@ -355,6 +354,32 @@ func Serialize(v Serializable, boxed bool, bufOpt ...*bytes.Buffer) ([]byte, err
 	return buf.Bytes()[startLen:], nil
 }
 
+// Append serializes v and appends the TL bytes to dst.
+func Append(dst []byte, v Serializable, boxed bool) ([]byte, error) {
+	if raw, ok := v.(Raw); ok {
+		return append(dst, raw...), nil
+	}
+
+	if list, ok := v.([]Serializable); ok {
+		for i, v := range list {
+			e := reflect.ValueOf(v)
+			var err error
+			if dst, err = appendStruct(dst, e, boxed, nil); err != nil {
+				return nil, fmt.Errorf("serialization of type %s failed (for slice element %d): %w", e.Type().String(), i, err)
+			}
+		}
+		return dst, nil
+	}
+
+	e := reflect.ValueOf(v)
+	var err error
+	if dst, err = appendStruct(dst, e, boxed, nil); err != nil {
+		return nil, fmt.Errorf("serialization of type %s failed: %w", e.Type().String(), err)
+	}
+
+	return dst, nil
+}
+
 func serializeStruct(v reflect.Value, buf *bytes.Buffer, boxed bool, field *fieldInfo) error {
 	rv, err := addressablePtr(v)
 	if err != nil {
@@ -371,6 +396,24 @@ func serializeStruct(v reflect.Value, buf *bytes.Buffer, boxed bool, field *fiel
 	}
 
 	return serializePrecompiled(rv.UnsafePointer(), si, boxed, buf)
+}
+
+func appendStruct(dst []byte, v reflect.Value, boxed bool, field *fieldInfo) ([]byte, error) {
+	rv, err := addressablePtr(v)
+	if err != nil {
+		return nil, err
+	}
+
+	si := _structInfoTableByType[rv.Type().Elem()]
+	if si == nil {
+		return nil, fmt.Errorf("tl type %s is not compilled", rv.Type().String())
+	}
+
+	if field != nil && !field.checkIsAllowed(si) {
+		return nil, fmt.Errorf("invalid type %s is not allowed at field %s", si.tp.String(), field.String())
+	}
+
+	return appendPrecompiled(dst, rv.UnsafePointer(), si, boxed)
 }
 
 var rawStructInfo = &structInfo{
@@ -408,6 +451,35 @@ func serializePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf *by
 	return nil
 }
 
+func appendPrecompiled(dst []byte, ptr unsafe.Pointer, t *structInfo, boxed bool) ([]byte, error) {
+	if t.raw {
+		return append(dst, *(*Raw)(ptr)...), nil
+	}
+
+	original := dst
+	if boxed {
+		if t.id == nil {
+			panic("boxed while id not defined")
+		}
+		dst = append(dst, t.id...)
+	}
+
+	if t.manualSerialize {
+		buf := bytes.NewBuffer(dst)
+		if err := reflect.NewAt(t.tp, ptr).Interface().(SerializableTL).Serialize(buf); err != nil {
+			return original, fmt.Errorf("failed to serialize %s using manual method: %w", t.tp.String(), err)
+		}
+		return buf.Bytes(), nil
+	}
+
+	var err error
+	if dst, err = executeAppend(dst, ptr, t); err != nil {
+		return original, fmt.Errorf("failed to serialize %s type: %w", t.tp.String(), err)
+	}
+
+	return dst, nil
+}
+
 func parseBoxedType(buf []byte) ([]byte, *structInfo, error) {
 	if len(buf) < 4 {
 		return nil, nil, fmt.Errorf("not enough bytes to parse struct interface")
@@ -420,7 +492,17 @@ func parseBoxedType(buf []byte) ([]byte, *structInfo, error) {
 	return buf[4:], info, nil
 }
 
+// ParseNoCopy parses TL data without copying byte payloads when possible.
+// The caller must keep data immutable and alive while the parsed value is used.
+func ParseNoCopy(v Serializable, data []byte, boxed bool) ([]byte, error) {
+	return parseWithCopyMode(v, data, boxed, true)
+}
+
 func Parse(v Serializable, data []byte, boxed bool) (_ []byte, err error) {
+	return parseWithCopyMode(v, data, boxed, false)
+}
+
+func parseWithCopyMode(v Serializable, data []byte, boxed bool, noCopy bool) (_ []byte, err error) {
 	src := reflect.ValueOf(v)
 	if src.Kind() != reflect.Pointer || src.IsNil() {
 		return nil, fmt.Errorf("v should be a pointer and not nil")
@@ -435,7 +517,7 @@ func Parse(v Serializable, data []byte, boxed bool) (_ []byte, err error) {
 			return nil, fmt.Errorf("tl type %s is not compilled", srcE.Type().String())
 		}
 
-		if data, err = parsePrecompiled(src.UnsafePointer(), info, boxed, data, false); err != nil {
+		if data, err = parsePrecompiled(src.UnsafePointer(), info, boxed, data, noCopy); err != nil {
 			return nil, err
 		}
 	case reflect.Interface:
@@ -448,7 +530,7 @@ func Parse(v Serializable, data []byte, boxed bool) (_ []byte, err error) {
 		}
 
 		e := info.fabric()
-		if data, err = parsePrecompiled(e.UnsafePointer(), info, false, data, false); err != nil {
+		if data, err = parsePrecompiled(e.UnsafePointer(), info, false, data, noCopy); err != nil {
 			return nil, err
 		}
 		srcE.Set(e.Elem())
@@ -462,7 +544,7 @@ func Parse(v Serializable, data []byte, boxed bool) (_ []byte, err error) {
 func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte, noCopy bool) ([]byte, error) {
 	if t.raw {
 		if noCopy {
-			*(*Raw)(ptr) = buf
+			*(*Raw)(ptr) = buf[:len(buf):len(buf)]
 			return nil, nil
 		}
 		*(*Raw)(ptr) = append([]byte{}, buf...)
@@ -482,7 +564,19 @@ func parsePrecompiled(ptr unsafe.Pointer, t *structInfo, boxed bool, buf []byte,
 
 	var err error
 	if t.manualParse {
-		if buf, err = reflect.NewAt(t.tp, ptr).Interface().(ParseableTL).Parse(buf); err != nil {
+		parser := reflect.NewAt(t.tp, ptr).Interface().(ParseableTL)
+		if noCopy {
+			if noCopyParser, ok := parser.(interface {
+				ParseNoCopy(data []byte) ([]byte, error)
+			}); ok {
+				if buf, err = noCopyParser.ParseNoCopy(buf); err != nil {
+					return nil, fmt.Errorf("failed to parse %s using manual method: %w", t.tp.String(), err)
+				}
+				return buf, nil
+			}
+		}
+
+		if buf, err = parser.Parse(buf); err != nil {
 			return nil, fmt.Errorf("failed to parse %s using manual method: %w", t.tp.String(), err)
 		}
 		return buf, nil
@@ -525,6 +619,41 @@ func minVectorElementSize(si *structInfo) int {
 	return 0
 }
 
+func fixedBytesResult(data []byte, noCopy bool) []byte {
+	if noCopy {
+		return data[:len(data):len(data)]
+	}
+
+	res := make([]byte, len(data))
+	copy(res, data)
+	return res
+}
+
+func parseTLCellBOC(data []byte, noCopy bool) (*cell.Cell, error) {
+	if !noCopy {
+		return cell.FromBOC(data)
+	}
+
+	roots, _, err := cell.FromBOCMultiRootReader(cell.NewBOCNoCopyReader(data), cell.BOCParseOptions{NoCopyPayload: true})
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) != 1 {
+		return nil, fmt.Errorf("boc should contain exactly one root, got %d", len(roots))
+	}
+
+	return roots[0], nil
+}
+
+func parseTLCellBOCMultiRoot(data []byte, noCopy bool) ([]*cell.Cell, error) {
+	if !noCopy {
+		return cell.FromBOCMultiRoot(data)
+	}
+
+	roots, _, err := cell.FromBOCMultiRootReader(cell.NewBOCNoCopyReader(data), cell.BOCParseOptions{NoCopyPayload: true})
+	return roots, err
+}
+
 func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) ([]byte, error) {
 	if !si.finalized {
 		return nil, fmt.Errorf("TL struct %s is not registered", si.tp.String())
@@ -559,7 +688,12 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			*(*string)(ptr) = s
 		case _ExecuteTypeBytes:
 			var bts []byte
-			if bts, buf, err = FromBytes(buf); err != nil {
+			if noCopy {
+				bts, buf, err = fromBytesNoCopy(buf)
+			} else {
+				bts, buf, err = FromBytes(buf)
+			}
+			if err != nil {
 				return nil, fmt.Errorf("failed to parse bytes field %s: %w", field.String(), err)
 			}
 			*(*[]byte)(ptr) = bts
@@ -568,8 +702,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				return nil, fmt.Errorf("not enough bytes to parse int256 field %s", field.String())
 			}
 
-			bts := make([]byte, 32)
-			copy(bts, buf)
+			bts := fixedBytesResult(buf[:32], noCopy)
 			*(*[]byte)(ptr) = bts
 			buf = buf[32:]
 		case _ExecuteTypeInt128:
@@ -577,8 +710,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				return nil, fmt.Errorf("not enough bytes to parse int128 field %s", field.String())
 			}
 
-			bts := make([]byte, 16)
-			copy(bts, buf)
+			bts := fixedBytesResult(buf[:16], noCopy)
 			*(*[]byte)(ptr) = bts
 			buf = buf[16:]
 		case _ExecuteTypeInt64Bytes:
@@ -586,8 +718,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				return nil, fmt.Errorf("not enough bytes to parse long field %s", field.String())
 			}
 
-			bts := make([]byte, 8)
-			copy(bts, buf)
+			bts := fixedBytesResult(buf[:8], noCopy)
 			*(*[]byte)(ptr) = bts
 			buf = buf[8:]
 		case _ExecuteTypeInt32Bytes:
@@ -595,8 +726,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				return nil, fmt.Errorf("not enough bytes to parse int field %s", field.String())
 			}
 
-			bts := make([]byte, 4)
-			copy(bts, buf)
+			bts := fixedBytesResult(buf[:4], noCopy)
 			*(*[]byte)(ptr) = bts
 			buf = buf[4:]
 		case _ExecuteTypeIP4:
@@ -613,8 +743,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				return nil, fmt.Errorf("not enough bytes to parse ip v6 field %s", field.String())
 			}
 
-			bts := make([]byte, 16)
-			copy(bts, buf[:16])
+			bts := fixedBytesResult(buf[:16], noCopy)
 			*(*[]byte)(ptr) = bts
 			buf = buf[16:]
 		case _ExecuteTypeSingleCell:
@@ -628,7 +757,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				break
 			}
 
-			c, err := cell.FromBOC(bts)
+			c, err := parseTLCellBOC(bts, noCopy)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse single cell field %s: %w", field.String(), err)
 			}
@@ -645,7 +774,7 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				break
 			}
 
-			c, err := cell.FromBOCMultiRoot(bts)
+			c, err := parseTLCellBOCMultiRoot(bts, noCopy)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse slice cell field %s: %w", field.String(), err)
 			}
@@ -907,6 +1036,84 @@ func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *reflect.Slice
 	return nil
 }
 
+func growAppendVector(dst []byte, field *fieldInfo, hdr *reflect.SliceHeader, elemSize uintptr) ([]byte, error) {
+	if hdr.Len == 0 || len(field.structInfo.fields) != 1 {
+		return dst, nil
+	}
+
+	elemField := field.structInfo.fields[0]
+	total := 4
+	if sz := serializedFixedSize(elemField); sz > 0 {
+		total += hdr.Len * sz
+		return growAppend(dst, total), nil
+	}
+
+	ePtr := unsafe.Pointer(hdr.Data)
+	switch elemField.typ {
+	case _ExecuteTypeString:
+		if hdr.Len < 8 && len(*(*string)(ePtr)) < 4096 {
+			return dst, nil
+		}
+
+		for x := 0; x < hdr.Len; x++ {
+			s := *(*string)(ePtr)
+			sz, err := tlBytesEncodedSize(len(s))
+			if err != nil {
+				return nil, err
+			}
+			total += sz
+			ePtr = unsafe.Add(ePtr, elemSize)
+		}
+	case _ExecuteTypeBytes:
+		if hdr.Len < 8 && len(*(*[]byte)(ePtr)) < 4096 {
+			return dst, nil
+		}
+
+		for x := 0; x < hdr.Len; x++ {
+			b := *(*[]byte)(ePtr)
+			sz, err := tlBytesEncodedSize(len(b))
+			if err != nil {
+				return nil, err
+			}
+			total += sz
+			ePtr = unsafe.Add(ePtr, elemSize)
+		}
+	default:
+		return dst, nil
+	}
+
+	return growAppend(dst, total), nil
+}
+
+func writeCellBOCAsTLBytes(buf *bytes.Buffer, roots []*cell.Cell) error {
+	from := buf.Len()
+	writeZeros(buf, 4)
+
+	b := buf.AvailableBuffer()
+	var err error
+	b, err = cell.AppendBOCWithOptions(b, roots, cell.BOCSerializeOptions{WithCRC32C: false})
+	if err != nil {
+		return err
+	}
+	buf.Write(b)
+
+	RemapBufferAsSlice(buf, from)
+	return nil
+}
+
+func appendCellBOCAsTLBytes(dst []byte, roots []*cell.Cell) ([]byte, error) {
+	from := len(dst)
+	dst = appendZeros(dst, 4)
+
+	var err error
+	dst, err = cell.AppendBOCWithOptions(dst, roots, cell.BOCSerializeOptions{WithCRC32C: false})
+	if err != nil {
+		return nil, err
+	}
+
+	return RemapSliceAsTLBytes(dst, from), nil
+}
+
 func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) error {
 	if !si.finalized {
 		return fmt.Errorf("TL struct %s is not registered", si.tp.String())
@@ -1009,9 +1216,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 				return fmt.Errorf("nil cell is not allowed in field %s", field.String())
 			}
 
-			if err := ToBytesToBuffer(buf, (*(**cell.Cell)(ptr)).ToBOCWithOptions(cell.BOCSerializeOptions{
-				WithCRC32C: false,
-			})); err != nil {
+			if err := writeCellBOCAsTLBytes(buf, []*cell.Cell{c}); err != nil {
 				return fmt.Errorf("failed to serialize cell field %s: %w", field.String(), err)
 			}
 		case _ExecuteTypeSliceCell:
@@ -1027,7 +1232,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			if num > 0 && uint32(len(c)) != num {
 				return fmt.Errorf("incorrect cells len %d in field %s", len(c), field.String())
 			}
-			if err := ToBytesToBuffer(buf, cell.ToBOCWithFlags(c, false)); err != nil {
+			if err := writeCellBOCAsTLBytes(buf, c); err != nil {
 				return fmt.Errorf("failed to serialize slice cell field %s: %w", field.String(), err)
 			}
 		case _ExecuteTypeStruct:
@@ -1159,4 +1364,254 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 	}
 
 	return nil
+}
+
+func executeAppend(dst []byte, base unsafe.Pointer, si *structInfo) ([]byte, error) {
+	if !si.finalized {
+		return nil, fmt.Errorf("TL struct %s is not registered", si.tp.String())
+	}
+
+	defer runtime.KeepAlive((*byte)(base))
+
+	var flags uint32
+	for _, field := range si.fields {
+		if field.hasFlags && (1<<field.flag)&flags == 0 {
+			// skip serialization if flag is not set
+			continue
+		}
+
+		ptr := unsafe.Add(base, field.offset)
+
+		var err error
+		switch t := field.typ; t {
+		case _ExecuteTypeFlags:
+			flags = *(*uint32)(ptr)
+			dst = appendUint32(dst, flags)
+		case _ExecuteTypeString:
+			if dst, err = appendTLString(dst, *(*string)(ptr)); err != nil {
+				return nil, fmt.Errorf("failed to serialize string field %s: %w", field.String(), err)
+			}
+		case _ExecuteTypeBytes:
+			if dst, err = appendTLBytes(dst, *(*[]byte)(ptr)); err != nil {
+				return nil, fmt.Errorf("failed to serialize bytes field %s: %w", field.String(), err)
+			}
+		case _ExecuteTypeInt256:
+			if bts := *(*[]byte)(ptr); len(bts) == 32 {
+				dst = append(dst, bts...)
+			} else if len(bts) == 0 {
+				dst = appendZeros(dst, 32)
+			} else {
+				return nil, fmt.Errorf("invalid int256 size %d in field %s", len(bts), field.String())
+			}
+		case _ExecuteTypeInt128:
+			if bts := *(*[]byte)(ptr); len(bts) == 16 {
+				dst = append(dst, bts...)
+			} else if len(bts) == 0 {
+				dst = appendZeros(dst, 16)
+			} else {
+				return nil, fmt.Errorf("invalid int128 size %d in field %s", len(bts), field.String())
+			}
+		case _ExecuteTypeInt64Bytes:
+			if bts := *(*[]byte)(ptr); len(bts) == 8 {
+				dst = append(dst, bts...)
+			} else if len(bts) == 0 {
+				dst = appendZeros(dst, 8)
+			} else {
+				return nil, fmt.Errorf("invalid int64 size %d in field %s", len(bts), field.String())
+			}
+		case _ExecuteTypeInt32Bytes:
+			if bts := *(*[]byte)(ptr); len(bts) == 4 {
+				dst = append(dst, bts...)
+			} else if len(bts) == 0 {
+				dst = appendZeros(dst, 4)
+			} else {
+				return nil, fmt.Errorf("invalid int32 size %d in field %s", len(bts), field.String())
+			}
+		case _ExecuteTypeIP4:
+			ipBytes := *(*net.IP)(ptr)
+			if len(ipBytes) == net.IPv6len {
+				ipBytes = ipBytes.To4()
+				if ipBytes == nil {
+					return nil, fmt.Errorf("invalid ip v4 in field %s", field.String())
+				}
+			}
+			if len(ipBytes) == net.IPv4len {
+				dst = append(dst, ipBytes[3], ipBytes[2], ipBytes[1], ipBytes[0])
+			} else if len(ipBytes) == 0 {
+				dst = appendZeros(dst, 4)
+			} else {
+				return nil, fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
+			}
+		case _ExecuteTypeIP6:
+			ipBytes := *(*net.IP)(ptr)
+			if len(ipBytes) == net.IPv4len {
+				ipBytes = ipBytes.To16()
+				if ipBytes == nil {
+					return nil, fmt.Errorf("invalid ip v6 in field %s", field.String())
+				}
+			}
+			if len(ipBytes) == net.IPv6len {
+				dst = append(dst, ipBytes...)
+			} else if len(ipBytes) == 0 {
+				dst = appendZeros(dst, 16)
+			} else {
+				return nil, fmt.Errorf("invalid ip size %d in field %s", len(ipBytes), field.String())
+			}
+		case _ExecuteTypeSingleCell:
+			c := *(**cell.Cell)(ptr)
+			if c == nil {
+				if field.meta.(bool) {
+					dst, _ = appendTLBytes(dst, nil)
+					break
+				}
+				return nil, fmt.Errorf("nil cell is not allowed in field %s", field.String())
+			}
+
+			if dst, err = appendCellBOCAsTLBytes(dst, []*cell.Cell{c}); err != nil {
+				return nil, fmt.Errorf("failed to serialize cell field %s: %w", field.String(), err)
+			}
+		case _ExecuteTypeSliceCell:
+			c := *(*[]*cell.Cell)(ptr)
+			flag := field.meta.(uint32)
+			num := flag & 0x7FFFFFFF
+
+			if len(c) == 0 && flag&(1<<31) != 0 {
+				dst, _ = appendTLBytes(dst, nil)
+				break
+			}
+
+			if num > 0 && uint32(len(c)) != num {
+				return nil, fmt.Errorf("incorrect cells len %d in field %s", len(c), field.String())
+			}
+			if dst, err = appendCellBOCAsTLBytes(dst, c); err != nil {
+				return nil, fmt.Errorf("failed to serialize slice cell field %s: %w", field.String(), err)
+			}
+		case _ExecuteTypeStruct:
+			info := field.structInfo
+			structFlags := field.meta.(uint32)
+			var boxed = structFlags&_StructFlagsBoxed != 0
+
+			var asBytes = structFlags&_StructFlagsBytes != 0
+			var remapFrom int
+
+			if asBytes {
+				remapFrom = len(dst)
+				dst = appendZeros(dst, 4)
+			}
+
+			var serialized bool
+			if structFlags&_StructFlagsPointer != 0 { // pointer
+				ptr = *(*unsafe.Pointer)(ptr)
+			} else if structFlags&_StructFlagsInterface != 0 {
+				ifc := *(*Serializable)(ptr)
+				switch v := ifc.(type) {
+				case Raw:
+					ptr = unsafe.Pointer(&v)
+					info = rawStructInfo
+				case []Serializable:
+					// serialize each element and write them as Raw, to pack into main struct after
+					for i, val := range v {
+						e := reflect.ValueOf(val)
+						if dst, err = appendStruct(dst, e, boxed, field); err != nil {
+							return nil, fmt.Errorf("serialization of type %s failed (for interface slice element %d): %w", e.Type().String(), i, err)
+						}
+					}
+					serialized = true
+				default:
+					e, err := addressablePtr(reflect.ValueOf(ifc))
+					if err != nil {
+						return nil, fmt.Errorf("invalid type for interface in field %s: %w", field.String(), err)
+					}
+
+					ptr = e.UnsafePointer()
+					info = _structInfoTableByType[e.Elem().Type()]
+					if info == nil {
+						return nil, fmt.Errorf("unregistered TL type %s for interface in field %s", e.Elem().Type().String(), field.String())
+					}
+
+					if !field.checkIsAllowed(info) {
+						return nil, fmt.Errorf("invalid type %s is not allowed at field %s", info.tp.String(), field.String())
+					}
+				}
+			}
+
+			if !serialized {
+				if info == nil {
+					return nil, fmt.Errorf("unregistered TL type in field %s", field.String())
+				}
+
+				if dst, err = appendPrecompiled(dst, ptr, info, boxed); err != nil {
+					return nil, err
+				}
+			}
+
+			if asBytes {
+				dst = RemapSliceAsTLBytes(dst, remapFrom)
+			}
+		case _ExecuteTypeInt:
+			var val uint32
+			switch field.meta.(reflect.Kind) {
+			case reflect.Uint64, reflect.Int64:
+				val = uint32(*(*uint64)(ptr))
+			case reflect.Int32, reflect.Uint32:
+				val = *(*uint32)(ptr)
+			case reflect.Uint16, reflect.Int16:
+				val = uint32(*(*uint16)(ptr))
+			case reflect.Uint8, reflect.Int8:
+				val = uint32(*(*uint8)(ptr))
+			case reflect.Int, reflect.Uint:
+				val = uint32(*(*uint)(ptr))
+			default:
+				return nil, fmt.Errorf("unsupported number type: %s", field.String())
+			}
+
+			dst = appendUint32(dst, val)
+		case _ExecuteTypeLong:
+			var val uint64
+			switch field.meta.(reflect.Kind) {
+			case reflect.Uint64, reflect.Int64:
+				val = *(*uint64)(ptr)
+			case reflect.Int32, reflect.Uint32:
+				val = uint64(*(*uint32)(ptr))
+			case reflect.Uint16, reflect.Int16:
+				val = uint64(*(*uint16)(ptr))
+			case reflect.Uint8, reflect.Int8:
+				val = uint64(*(*uint8)(ptr))
+			case reflect.Int, reflect.Uint:
+				val = uint64(*(*uint)(ptr))
+			default:
+				return nil, fmt.Errorf("unsupported number type: %s", field.String())
+			}
+
+			dst = appendUint64(dst, val)
+		case _ExecuteTypeBool:
+			if *(*bool)(ptr) {
+				dst = append(dst, _BoolTrue...)
+			} else {
+				dst = append(dst, _BoolFalse...)
+			}
+		case _ExecuteTypeVector:
+			hdr := (*reflect.SliceHeader)(ptr)
+			ln := hdr.Len
+
+			sz := field.structInfo.tp.Elem().Size()
+			if dst, err = growAppendVector(dst, field, hdr, sz); err != nil {
+				return nil, fmt.Errorf("failed to reserve vector field %s: %w", field.String(), err)
+			}
+			dst = appendUint32(dst, uint32(ln))
+
+			ePtr := unsafe.Pointer(hdr.Data)
+
+			for x := 0; x < ln; x++ {
+				if dst, err = executeAppend(dst, ePtr, field.structInfo); err != nil {
+					return nil, fmt.Errorf("failed to serialize %s type, vector element %d: %w", si.tp.String(), x, err)
+				}
+				ePtr = unsafe.Add(ePtr, sz)
+			}
+		default:
+			return nil, fmt.Errorf("unknown type %d for field %s", t, field.String())
+		}
+	}
+
+	return dst, nil
 }

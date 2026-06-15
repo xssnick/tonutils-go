@@ -77,7 +77,7 @@ func parseRLDPMessagePayload(data []byte) (tl.Serializable, error) {
 	list := make([]tl.Serializable, 0, 2)
 	for len(data) > 0 {
 		var obj any
-		rest, err := tl.Parse(&obj, data, true)
+		rest, err := tl.ParseNoCopy(&obj, data, true)
 		if err != nil {
 			return nil, err
 		}

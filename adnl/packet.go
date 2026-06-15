@@ -105,7 +105,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 		}
 
 		var key keys.PublicKeyED25519
-		data, err = tl.Parse(&key, data, true)
+		data, err = tl.ParseNoCopy(&key, data, true)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'from' key, err: %w", err)
 		}
@@ -124,7 +124,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	if flags&_FlagOneMessage != 0 {
 		var msg any
-		data, err = tl.Parse(&msg, data, true)
+		data, err = tl.ParseNoCopy(&msg, data, true)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'message', err: %w", err)
 		}
@@ -142,7 +142,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 		for i := uint32(0); i < num; i++ {
 			var msg any
-			data, err = tl.Parse(&msg, data, true)
+			data, err = tl.ParseNoCopy(&msg, data, true)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse 'messages'[%d], err: %w", i, err)
 			}
@@ -152,7 +152,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	if flags&_FlagAddress != 0 {
 		var list address.List
-		data, err = tl.Parse(&list, data, false)
+		data, err = tl.ParseNoCopy(&list, data, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'address', err: %w", err)
 		}
@@ -165,7 +165,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	if flags&_FlagPriorityAddress != 0 {
 		var list address.List
-		data, err = tl.Parse(&list, data, false)
+		data, err = tl.ParseNoCopy(&list, data, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'priority address', err: %w", err)
 		}

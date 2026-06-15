@@ -587,7 +587,7 @@ func buildSimplexToSignPayload(block *BlockIDExt, sessionID []byte, slot int32, 
 
 func parseSimplexCandidateBlock(candidate []byte) (*BlockIDExt, error) {
 	var ordinary ConsensusCandidateHashDataOrdinary
-	left, errOrdinary := tl.Parse(&ordinary, candidate, true)
+	left, errOrdinary := tl.ParseNoCopy(&ordinary, candidate, true)
 	if errOrdinary == nil {
 		if len(left) > 0 {
 			return nil, fmt.Errorf("unexpected trailing bytes in ordinary candidate")
@@ -596,7 +596,7 @@ func parseSimplexCandidateBlock(candidate []byte) (*BlockIDExt, error) {
 	}
 
 	var empty ConsensusCandidateHashDataEmpty
-	left, errEmpty := tl.Parse(&empty, candidate, true)
+	left, errEmpty := tl.ParseNoCopy(&empty, candidate, true)
 	if errEmpty == nil {
 		if len(left) > 0 {
 			return nil, fmt.Errorf("unexpected trailing bytes in empty candidate")

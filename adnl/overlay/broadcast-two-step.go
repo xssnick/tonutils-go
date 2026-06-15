@@ -296,7 +296,7 @@ func (a *ADNLOverlayWrapper) deliverTwoStepBroadcast(data []byte, info Broadcast
 	if info.DecodeTime > 0 {
 		parseStarted = time.Now()
 	}
-	_, err := tl.Parse(&res, data, true)
+	_, err := tl.ParseNoCopy(&res, data, true)
 	if err != nil {
 		return fmt.Errorf("failed to parse two-step broadcast message: %w", err)
 	}

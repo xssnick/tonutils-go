@@ -27,6 +27,10 @@ func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *addres
 		return nil, fmt.Errorf("failed to decode account state: %w", err)
 	}
 
+	return loadTransactionRuntimeAccountState(shard, &acc, fallbackAddr, true)
+}
+
+func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.AccountState, fallbackAddr *address.Address, buildStorageCell bool) (*transactionRuntimeAccount, error) {
 	out := &transactionRuntimeAccount{
 		addr:            fallbackAddr,
 		status:          tlb.AccountStatusNonExist,
@@ -54,11 +58,13 @@ func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *addres
 	out.extraCurrencies = acc.ExtraCurrencies
 	out.storageLT = acc.LastTransactionLT
 	out.stateHash = append([]byte(nil), acc.StateHash...)
-	storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.Nano(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize original account storage: %w", err)
+	if buildStorageCell {
+		storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.Nano(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize original account storage: %w", err)
+		}
+		out.storageCell = storageCell
 	}
-	out.storageCell = storageCell
 	if acc.StateInit != nil {
 		out.code = acc.StateInit.Code
 		out.data = acc.StateInit.Data

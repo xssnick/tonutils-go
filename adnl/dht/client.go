@@ -234,7 +234,7 @@ func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, contin
 	}
 
 	var nodes overlay.NodesList
-	_, err = tl.Parse(&nodes, vv.Data, true)
+	_, err = tl.ParseNoCopy(&nodes, vv.Data, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse dht data for overlay nodes: %w", err)
 	}
@@ -256,7 +256,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 	}
 
 	var list address.List
-	_, err = tl.Parse(&list, val.Data, true)
+	_, err = tl.ParseNoCopy(&list, val.Data, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse address list: %w", err)
 	}

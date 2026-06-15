@@ -316,7 +316,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 func checkOverlayNodesValue(overlayID, data []byte, ourNetworkID int32) error {
 	var nodes overlay.NodesList
 
-	_, err := tl.Parse(&nodes, data, true)
+	_, err := tl.ParseNoCopy(&nodes, data, true)
 	if err != nil {
 		return fmt.Errorf("unsupported data for overlay nodes rule, err: %s", err.Error())
 	}
@@ -371,7 +371,7 @@ func isValueAcceptable(value *Value) bool {
 	switch value.KeyDescription.UpdateRule.(type) {
 	case UpdateRuleOverlayNodes:
 		var nodes overlay.NodesList
-		if _, err := tl.Parse(&nodes, value.Data, true); err != nil {
+		if _, err := tl.ParseNoCopy(&nodes, value.Data, true); err != nil {
 			return false
 		}
 

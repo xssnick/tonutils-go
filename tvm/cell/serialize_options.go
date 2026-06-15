@@ -99,6 +99,19 @@ func ToBOCWithOptionsErr(roots []*Cell, opts BOCSerializeOptions) ([]byte, error
 	return boc, nil
 }
 
+// AppendBOCWithOptions serializes roots into BoC and appends the result to dst.
+func AppendBOCWithOptions(dst []byte, roots []*Cell, opts BOCSerializeOptions) ([]byte, error) {
+	bag, err := newBOCSerializer(roots)
+	if err != nil {
+		return nil, err
+	}
+	if bag == nil {
+		return dst, nil
+	}
+
+	return bag.appendTo(dst, opts.mode())
+}
+
 // WriteBOCWithOptions serializes roots into BoC and writes the result to w.
 // It avoids allocating the final BoC byte slice, but still performs the normal
 // prepass needed to order cells, resolve lazy refs, deduplicate cells, and build
@@ -132,6 +145,14 @@ func (c *Cell) ToBOCWithOptionsErr(opts BOCSerializeOptions) ([]byte, error) {
 		return nil, fmt.Errorf("cell is nil")
 	}
 	return ToBOCWithOptionsErr([]*Cell{c.rawCell()}, opts)
+}
+
+// AppendBOCWithOptions serializes c into BoC and appends the result to dst.
+func (c *Cell) AppendBOCWithOptions(dst []byte, opts BOCSerializeOptions) ([]byte, error) {
+	if c == nil {
+		return nil, fmt.Errorf("cell is nil")
+	}
+	return AppendBOCWithOptions(dst, []*Cell{c.rawCell()}, opts)
 }
 
 func ComputeFileHash(root *Cell) []byte {
@@ -538,12 +559,35 @@ func (s *bocSerializer) itemByIndex(idx int) *bocSerializeItem {
 }
 
 func (s *bocSerializer) serialize(mode int) []byte {
-	info, ok := s.estimateSerializedSize(mode)
-	if !ok {
+	data, err := s.appendTo(nil, mode)
+	if err != nil {
 		return nil
 	}
+	return data
+}
 
-	data := make([]byte, info.totalSize)
+func (s *bocSerializer) appendTo(dst []byte, mode int) ([]byte, error) {
+	info, ok := s.estimateSerializedSize(mode)
+	if !ok {
+		return nil, fmt.Errorf("failed to serialize boc")
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if info.totalSize > uint64(maxInt-len(dst)) {
+		return nil, fmt.Errorf("boc is too big")
+	}
+
+	start := len(dst)
+	end := start + int(info.totalSize)
+	if cap(dst) < end {
+		next := make([]byte, end)
+		copy(next, dst)
+		dst = next
+	} else {
+		dst = dst[:end]
+	}
+
+	data := dst[start:end]
 	pos := 0
 
 	storeUint := func(value uint64, sz int) {
@@ -611,7 +655,7 @@ func (s *bocSerializer) serialize(mode int) []byte {
 		binary.LittleEndian.PutUint32(data[pos:], crc)
 	}
 
-	return data
+	return dst, nil
 }
 
 const bocStreamBufferSize = 64 << 10

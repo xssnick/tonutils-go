@@ -934,12 +934,12 @@ func needRepublish(value *Value) bool {
 
 func mergeOverlayNodesData(currentData, incomingData []byte) ([]byte, error) {
 	var currentNodes overlay.NodesList
-	if _, err := tl.Parse(&currentNodes, currentData, true); err != nil {
+	if _, err := tl.ParseNoCopy(&currentNodes, currentData, true); err != nil {
 		return nil, err
 	}
 
 	var incomingNodes overlay.NodesList
-	if _, err := tl.Parse(&incomingNodes, incomingData, true); err != nil {
+	if _, err := tl.ParseNoCopy(&incomingNodes, incomingData, true); err != nil {
 		return nil, err
 	}
 

@@ -33,13 +33,17 @@ var MaxBOCCells = 1 << 20
 const maxSerializedBOCCellBytes = 2 + maxCellDataBytes + 4*4 + (hashSize+depthSize)*4
 
 func maxBOCPayloadBytes() int {
-	if MaxBOCCells <= 0 {
+	return maxBOCPayloadBytesForCells(MaxBOCCells)
+}
+
+func maxBOCPayloadBytesForCells(maxCells int) int {
+	if maxCells <= 0 {
 		return 0
 	}
-	if MaxBOCCells > math.MaxInt/maxSerializedBOCCellBytes {
+	if maxCells > math.MaxInt/maxSerializedBOCCellBytes {
 		return math.MaxInt
 	}
-	return MaxBOCCells * maxSerializedBOCCellBytes
+	return maxCells * maxSerializedBOCCellBytes
 }
 
 // BOCParseOptions configures BoC parsing.
@@ -57,6 +61,9 @@ type BOCParseOptions struct {
 	// DisableLazyCache disables lazy BoC materialized-cell caching, even when
 	// the BoC carries cache bits for shared cells.
 	DisableLazyCache bool
+	// MaxCells limits how many cells may be decoded from this BoC payload.
+	// Zero or a negative value uses the package-level MaxBOCCells limit.
+	MaxCells int
 }
 
 const (
@@ -259,7 +266,11 @@ func (r *BOCNoCopyReader) leftLen() (int, bool) {
 }
 
 func FromBOC(data []byte) (*Cell, error) {
-	cells, err := FromBOCMultiRoot(data)
+	return FromBOCWithOptions(data, BOCParseOptions{})
+}
+
+func FromBOCWithOptions(data []byte, options BOCParseOptions) (*Cell, error) {
+	cells, err := FromBOCMultiRootWithOptions(data, options)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +282,11 @@ func FromBOC(data []byte) (*Cell, error) {
 }
 
 func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
-	cells, _, err := parseBOCMultiRoot(NewBOCNoCopyReader(data), BOCParseOptions{})
+	return FromBOCMultiRootWithOptions(data, BOCParseOptions{})
+}
+
+func FromBOCMultiRootWithOptions(data []byte, options BOCParseOptions) ([]*Cell, error) {
+	cells, _, err := parseBOCMultiRoot(NewBOCNoCopyReader(data), options)
 	return cells, err
 }
 
@@ -350,8 +365,12 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 	if legacyIndexed && rootsNum != 1 {
 		return nil, nil, errors.New("invalid boc counters")
 	}
-	if MaxBOCCells > 0 && cellsNum > MaxBOCCells {
-		return nil, nil, fmt.Errorf("too many cells in boc: %d > %d", cellsNum, MaxBOCCells)
+	maxCells := options.MaxCells
+	if maxCells <= 0 {
+		maxCells = MaxBOCCells
+	}
+	if maxCells > 0 && cellsNum > maxCells {
+		return nil, nil, fmt.Errorf("too many cells in boc: %d > %d", cellsNum, maxCells)
 	}
 	if MaxBOCRoots > 0 && rootsNum > MaxBOCRoots {
 		return nil, nil, fmt.Errorf("too many roots in boc: %d > %d", rootsNum, MaxBOCRoots)
@@ -373,7 +392,7 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 	if dataLen < cellsNum*2 {
 		return nil, nil, errors.New("invalid boc cells data size")
 	}
-	maxPayloadBytes := maxBOCPayloadBytes()
+	maxPayloadBytes := maxBOCPayloadBytesForCells(maxCells)
 	if maxPayloadBytes > 0 && dataLen > maxPayloadBytes {
 		return nil, nil, fmt.Errorf("boc cells data size is too big: %d > %d", dataLen, maxPayloadBytes)
 	}

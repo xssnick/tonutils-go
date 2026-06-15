@@ -538,7 +538,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 								stream.partsSize = 0
 
 								var res any
-								if _, err = tl.Parse(&res, buf, true); err != nil {
+								if _, err = tl.ParseNoCopy(&res, buf, true); err != nil {
 									return fmt.Errorf("failed to parse custom message: %w", err)
 								}
 
@@ -1292,7 +1292,7 @@ func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize uint64, query, result 
 	select {
 	case resp := <-res:
 		var ans any
-		if _, err = tl.Parse(&ans, resp.ResultBytes, true); err != nil {
+		if _, err = tl.ParseNoCopy(&ans, resp.ResultBytes, true); err != nil {
 			return fmt.Errorf("failed to parse query response: %w", err)
 		}
 

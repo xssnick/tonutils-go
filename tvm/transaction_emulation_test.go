@@ -623,6 +623,84 @@ func TestEmulateTransactionExternalStopOnAccept(t *testing.T) {
 	}
 }
 
+func TestCheckExternalMessageAcceptedMatchesTransactionAccept(t *testing.T) {
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	code := makeTransactionExternalAcceptThenFailCode(t)
+	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
+
+	msg := &tlb.ExternalMessage{
+		DstAddr: tonopsTestAddr,
+		Body:    body,
+	}
+	msgCell, err := tlb.ToCell(msg)
+	if err != nil {
+		t.Fatalf("failed to build external message: %v", err)
+	}
+
+	var account tlb.AccountState
+	if err = tlb.Parse(&account, shard.Account); err != nil {
+		t.Fatalf("failed to parse account: %v", err)
+	}
+
+	txCfg := TransactionEmulationConfig{
+		Address:      tonopsTestAddr,
+		Now:          uint32(tonopsTestTime.Unix()),
+		BlockLT:      transactionTestLogicalTime,
+		LogicalTime:  transactionTestLogicalTime,
+		StopOnAccept: true,
+	}
+	checkCfg := CheckExternalMessageAcceptedConfig{
+		Now:         txCfg.Now,
+		BlockLT:     txCfg.BlockLT,
+		LogicalTime: txCfg.LogicalTime,
+	}
+
+	full, err := NewTVM().EmulateTransaction(shard, msgCell, txCfg)
+	if err != nil {
+		t.Fatalf("emulate transaction failed: %v", err)
+	}
+	accepted, err := NewTVM().CheckExternalMessageAccepted(shard, &account, msgCell, msg, checkCfg)
+	if err != nil {
+		t.Fatalf("check external message accepted failed: %v", err)
+	}
+	if accepted != full.Accepted {
+		t.Fatalf("accepted = %t, want %t", accepted, full.Accepted)
+	}
+}
+
+func TestCheckExternalMessageAcceptedRejectsWithoutAccept(t *testing.T) {
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionStackUnderflowCode(t), origData, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
+
+	msg := &tlb.ExternalMessage{
+		DstAddr: tonopsTestAddr,
+		Body:    body,
+	}
+	msgCell, err := tlb.ToCell(msg)
+	if err != nil {
+		t.Fatalf("failed to build external message: %v", err)
+	}
+
+	var account tlb.AccountState
+	if err = tlb.Parse(&account, shard.Account); err != nil {
+		t.Fatalf("failed to parse account: %v", err)
+	}
+
+	accepted, err := NewTVM().CheckExternalMessageAccepted(shard, &account, msgCell, msg, CheckExternalMessageAcceptedConfig{
+		Now:         uint32(tonopsTestTime.Unix()),
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+	})
+	if err != nil {
+		t.Fatalf("check external message accepted failed: %v", err)
+	}
+	if accepted {
+		t.Fatal("expected message without accept to be rejected")
+	}
+}
+
 func TestEmulateTransactionInternalToNonExistCreatesUninitNoState(t *testing.T) {
 	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
 	shard := buildTransactionTestNoneShardAccount(t)

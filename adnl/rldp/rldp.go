@@ -79,7 +79,7 @@ func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 	copy(transfer, data)
 
 	var fecAny any
-	data, err := tl.Parse(&fecAny, data[32:], true)
+	data, err := tl.ParseNoCopy(&fecAny, data[32:], true)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (m *MessagePartV2) Parse(data []byte) ([]byte, error) {
 	copy(transfer, data)
 
 	var fecAny any
-	data, err := tl.Parse(&fecAny, data[32:], true)
+	data, err := tl.ParseNoCopy(&fecAny, data[32:], true)
 	if err != nil {
 		return nil, err
 	}

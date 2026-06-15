@@ -380,7 +380,7 @@ func (a *ADNL) processMessage(message any) error {
 			}
 
 			var msg any
-			_, err = tl.Parse(&msg, data, true)
+			_, err = tl.ParseNoCopy(&msg, data, true)
 			if err != nil {
 				return fmt.Errorf("failed to parse message answer from parts: %w", err)
 			}

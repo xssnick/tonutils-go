@@ -642,7 +642,7 @@ func (a *ADNLOverlayWrapper) processBroadcast(t *Broadcast, sourcePeerID []byte)
 	state.mx.Unlock()
 
 	var res any
-	_, err = tl.Parse(&res, t.Data, true)
+	_, err = tl.ParseNoCopy(&res, t.Data, true)
 	if err != nil {
 		return fmt.Errorf("failed to parse broadcast message: %w", err)
 	}
@@ -942,7 +942,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 				}
 
 				var res any
-				_, err = tl.Parse(&res, data, true)
+				_, err = tl.ParseNoCopy(&res, data, true)
 				if err != nil {
 					stream.mx.Unlock()
 					return fmt.Errorf("failed to parse decoded broadcast message: %w", err)

@@ -3,6 +3,7 @@ package ton
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -200,6 +201,22 @@ type ConsensusCandidateHashDataEmpty struct {
 type Object struct{}
 type True struct{}
 
+func (o Object) Serialize(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (o *Object) Parse(data []byte) ([]byte, error) {
+	return data, nil
+}
+
+func (t True) Serialize(buf *bytes.Buffer) error {
+	return nil
+}
+
+func (t *True) Parse(data []byte) ([]byte, error) {
+	return data, nil
+}
+
 type BlockIDExt struct {
 	Workchain int32  `tl:"int"`
 	Shard     int64  `tl:"long"`
@@ -331,6 +348,24 @@ type BlockInfoShort struct {
 type WaitMasterchainSeqno struct {
 	Seqno   int32 `tl:"int"`
 	Timeout int32 `tl:"int"`
+}
+
+func (w WaitMasterchainSeqno) Serialize(buf *bytes.Buffer) error {
+	var tmp [8]byte
+	binary.LittleEndian.PutUint32(tmp[:4], uint32(w.Seqno))
+	binary.LittleEndian.PutUint32(tmp[4:], uint32(w.Timeout))
+	buf.Write(tmp[:])
+	return nil
+}
+
+func (w *WaitMasterchainSeqno) Parse(data []byte) ([]byte, error) {
+	if len(data) < 8 {
+		return nil, fmt.Errorf("wait masterchain seqno is too short")
+	}
+
+	w.Seqno = int32(binary.LittleEndian.Uint32(data))
+	w.Timeout = int32(binary.LittleEndian.Uint32(data[4:]))
+	return data[8:], nil
 }
 
 type GetAllShardsInfo struct {
