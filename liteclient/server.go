@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -38,6 +39,7 @@ type Server struct {
 	listener net.Listener
 
 	queryHandler   func(ctx context.Context, client *ServerClient, query tl.Serializable) (tl.Serializable, error)
+	queryPrecheck  func(ctx context.Context, client *ServerClient) (tl.Serializable, bool)
 	disconnectHook func(client *ServerClient)
 	connectHook    func(client *ServerClient) error
 
@@ -59,6 +61,8 @@ type ServerClient struct {
 	port uint16
 	ip   string
 }
+
+var adnlMessageQueryID = tl.CRC("adnl.message.query query_id:int256 query:bytes = adnl.Message")
 
 type serverQueryTask struct {
 	ctx     context.Context
@@ -85,6 +89,10 @@ func NewServer(keysList []ed25519.PrivateKey) *Server {
 
 func (s *Server) SetQueryHandler(handler func(ctx context.Context, client *ServerClient, query tl.Serializable) (tl.Serializable, error)) {
 	s.queryHandler = handler
+}
+
+func (s *Server) SetQueryPrecheck(handler func(ctx context.Context, client *ServerClient) (tl.Serializable, bool)) {
+	s.queryPrecheck = handler
 }
 
 func (s *Server) SetDisconnectHook(hook func(client *ServerClient)) {
@@ -286,6 +294,18 @@ func (s *Server) serve(client *ServerClient) {
 		// skip nonce
 		data = data[32:]
 
+		if s.queryPrecheck != nil {
+			if queryID, ok := rawADNLMessageQueryID(data); ok {
+				if resp, stop := s.queryPrecheck(client.ctx, client); stop {
+					if resp != nil {
+						client.enqueue(adnl.MessageAnswer{ID: append([]byte(nil), queryID...), Data: resp})
+					}
+					releasePacketBuffer(packet)
+					continue
+				}
+			}
+		}
+
 		var msg tl.Serializable
 		if _, err = tl.Parse(&msg, data, true); err != nil {
 			releasePacketBuffer(packet)
@@ -321,6 +341,17 @@ func (s *Server) serve(client *ServerClient) {
 			return
 		}
 	}
+}
+
+func rawADNLMessageQueryID(data []byte) ([]byte, bool) {
+	if len(data) < 4+32 {
+		return nil, false
+	}
+	if binary.LittleEndian.Uint32(data[:4]) != adnlMessageQueryID {
+		return nil, false
+	}
+
+	return data[4 : 4+32], true
 }
 
 func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stream, cipher.Stream, error) {
