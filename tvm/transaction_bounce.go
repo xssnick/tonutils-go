@@ -28,7 +28,7 @@ func transactionShouldBounce(msg *tlb.Message, skipReason *tlb.ComputeSkipReason
 	return skipReason != nil || !computeSuccess || actionBounce
 }
 
-func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg tlb.BlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
+func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg transactionConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
 	if msg == nil || msg.MsgType != tlb.MsgTypeInternal {
 		return nil, nil
 	}
@@ -37,7 +37,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, nil
 	}
 
-	bounceDstAddr, ok := transactionValidateAndNormalizeBounceDestAddr(in.SrcAddr, cfg)
+	bounceDstAddr, ok := transactionValidateAndNormalizeBounceDestAddr(in.SrcAddr, cfg, in.DstAddr)
 	if !ok {
 		return nil, nil
 	}
@@ -45,7 +45,10 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	if err != nil {
 		return nil, err
 	}
-	extraFlags := transactionInboundExtraFlags(in)
+	extraFlags := uint64(0)
+	if cfg.globalVersion() >= 12 {
+		extraFlags = transactionInboundExtraFlags(in)
+	}
 	preliminary := &tlb.InternalMessage{
 		IHRDisabled:     true,
 		Bounce:          false,
@@ -64,7 +67,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, fmt.Errorf("failed to serialize preliminary bounce message: %w", err)
 	}
 
-	msgSize, err := transactionBounceMessageUsage(in, bounceBody)
+	msgSize, err := transactionBounceMessageUsage(in, bounceBody, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +133,15 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	return out, nil
 }
 
-func transactionBuildBounceBody(in *tlb.InternalMessage, cfg tlb.BlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*cell.Cell, error) {
+func transactionBuildBounceBody(in *tlb.InternalMessage, cfg transactionConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*cell.Cell, error) {
 	if in == nil {
 		return cell.BeginCell().EndCell(), nil
 	}
 
-	flags := transactionInboundExtraFlags(in)
+	flags := uint64(0)
+	if cfg.globalVersion() >= 12 {
+		flags = transactionInboundExtraFlags(in)
+	}
 	if flags&1 != 0 {
 		body := cell.BeginCell().MustStoreUInt(0xFFFFFFFE, 32)
 		originalBody, err := transactionBounceOriginalBody(in.Body, flags&2 != 0)
@@ -171,7 +177,7 @@ func transactionBuildBounceBody(in *tlb.InternalMessage, cfg tlb.BlockchainConfi
 		return body.EndCell(), nil
 	}
 
-	if !transactionHasCapability(cfg, 4) {
+	if !cfg.hasCapability(4) {
 		return cell.BeginCell().EndCell(), nil
 	}
 
@@ -193,10 +199,19 @@ func transactionBuildBounceBody(in *tlb.InternalMessage, cfg tlb.BlockchainConfi
 	return body.EndCell(), nil
 }
 
-func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell) (transactionUsage, error) {
+func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell, cfg transactionConfig) (transactionUsage, error) {
 	usage := transactionUsage{}
 	if in == nil {
 		return usage, nil
+	}
+
+	collector := newTransactionUsageCollector()
+	if cfg.globalVersion() < 13 && in.ExtraCurrencies != nil && !in.ExtraCurrencies.IsEmpty() {
+		extraUsage, err := collector.addCell(in.ExtraCurrencies.AsCell(), false)
+		if err != nil {
+			return transactionUsage{}, err
+		}
+		usage = transactionAddUsage(usage, extraUsage)
 	}
 	if body != nil {
 		sl, err := body.BeginParseWithoutTrace()
@@ -214,7 +229,7 @@ func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell) (tr
 		}
 
 		for i := 0; i < refsNum; i++ {
-			refUsage, err := transactionCollectUsage(refs[i])
+			refUsage, err := collector.addCell(refs[i], false)
 			if err != nil {
 				return transactionUsage{}, err
 			}

@@ -14,6 +14,7 @@ type AdvancedOP struct {
 	DeserializeSuffix func(code *cell.Slice) error
 	BaseGasPrice      int64
 	FixedSizeBits     int64
+	MinVersion        int
 }
 
 type ReusableAdvancedOP struct {
@@ -68,6 +69,10 @@ func (op *AdvancedOP) SerializeText() string {
 
 func (op *AdvancedOP) InstructionBits() int64 {
 	return int64(op.BitPrefix.Bits) + op.FixedSizeBits
+}
+
+func (op *AdvancedOP) MinGlobalVersion() int {
+	return op.MinVersion
 }
 
 func (op *AdvancedOP) Interpret(state *vm.State) error {

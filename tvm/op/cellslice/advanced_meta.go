@@ -78,6 +78,7 @@ func CHASHI(i int) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.UIntPrefix(0xD768>>2, 14),
 		FixedSizeBits: 2,
+		MinVersion:    6,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 2)
 		},
@@ -107,6 +108,7 @@ func CDEPTHI(i int) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.UIntPrefix(0xD76C>>2, 14),
 		FixedSizeBits: 2,
+		MinVersion:    6,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 2)
 		},
@@ -141,8 +143,9 @@ func CHASHIX() *helpers.SimpleOP {
 			}
 			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(cl.Hash(int(idx))))
 		},
-		Name:      "CHASHIX",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x70),
+		Name:       "CHASHIX",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x70),
+		MinVersion: 6,
 	}
 }
 
@@ -159,7 +162,8 @@ func CDEPTHIX() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(cl.Depth(int(idx))))
 		},
-		Name:      "CDEPTHIX",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x71),
+		Name:       "CDEPTHIX",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x71),
+		MinVersion: 6,
 	}
 }

@@ -160,6 +160,46 @@ func BenchmarkTVMReplayFatBlockExecuteOnly(b *testing.B) {
 	b.ReportMetric(float64(txs)/float64(b.N), "tx/op")
 }
 
+func BenchmarkTLBParseFatBlockTransactions(b *testing.B) {
+	raw, err := os.ReadFile(fatBlockReplayFixturePath)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	var fixture fatBlockReplayFixture
+	if err = json.Unmarshal(raw, &fixture); err != nil {
+		b.Fatal(err)
+	}
+
+	blockRoot := fatBlockCell(b, fixture.BlockBOCBase64)
+	var block tlb.Block
+	if err = tlb.Parse(&block, blockRoot); err != nil {
+		b.Fatal(err)
+	}
+
+	txs, err := block.ListTransactions()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(txs) != fixture.Transactions {
+		b.Fatalf("loaded %d transactions, want %d", len(txs), fixture.Transactions)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	var parsed int
+	for i := 0; i < b.N; i++ {
+		txs, err = block.ListTransactions()
+		if err != nil {
+			b.Fatal(err)
+		}
+		parsed += len(txs)
+	}
+	benchmarkFatBlockReplayTransactions = parsed
+	b.ReportMetric(float64(parsed)/float64(b.N), "tx/op")
+}
+
 func prepareFatBlockReplayFixture(tb testing.TB) *preparedFatBlockReplay {
 	tb.Helper()
 

@@ -17,9 +17,12 @@ func RSHIFTRCODE(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
 				return err
+			}
+			if x == nil {
+				return pushSmallInt(state, 0)
 			}
 
 			res := helpers.DivRound(x, new(big.Int).Lsh(bigIntOne, uint(imm())))

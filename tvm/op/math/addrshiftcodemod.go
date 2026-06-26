@@ -20,6 +20,7 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int8, round
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
+		MinVersion:    4,
 		Action: func(state *vm.State) error {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err

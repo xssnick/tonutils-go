@@ -94,119 +94,36 @@ func parseTonMsgPrices(sl *cell.Slice) (*tlb.ConfigMsgForwardPrices, error) {
 	return &prices, nil
 }
 
-func blockchainConfigFromC7(state *vm.State) (tlb.BlockchainConfig, error) {
-	root, err := configRootFromC7(state)
-	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return tlb.BlockchainConfig{}, nil
-		}
-		return tlb.BlockchainConfig{}, err
-	}
-	return tlb.BlockchainConfig{Root: root}, nil
-}
-
-func configNowFromC7(state *vm.State) (uint32, error) {
-	v, err := state.GetParam(3)
-	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return 0, nil
-		}
-		return 0, err
-	}
-	if v == nil {
-		return 0, err
-	}
-
-	now, ok := v.(*big.Int)
-	if !ok {
-		return 0, vmerr.Error(vmerr.CodeTypeCheck)
-	}
-	if now.Sign() < 0 || now.BitLen() > 32 {
-		return 0, vmerr.Error(vmerr.CodeRangeCheck)
-	}
-	return uint32(now.Uint64()), nil
-}
-
 func getTonGasPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigGasLimitsPrices, error) {
-	cfg, err := blockchainConfigFromC7(state)
+	idx := 3
+	if isMasterchain {
+		idx = 2
+	}
+	sl, err := unpackedConfigSlice(state, idx)
 	if err != nil {
 		return nil, err
 	}
-
-	prices, err := cfg.GetGasPrices(isMasterchain)
-	if err != nil {
-		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
-		}
-
-		idx := 3
-		if isMasterchain {
-			idx = 2
-		}
-		sl, unpackErr := unpackedConfigSlice(state, idx)
-		if unpackErr != nil {
-			return nil, unpackErr
-		}
-		return parseTonGasPrices(sl)
-	}
-	if prices == nil {
-		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
-	}
-	return prices, nil
+	return parseTonGasPrices(sl)
 }
 
 func getTonMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
-	cfg, err := blockchainConfigFromC7(state)
+	idx := 5
+	if isMasterchain {
+		idx = 4
+	}
+	sl, err := unpackedConfigSlice(state, idx)
 	if err != nil {
 		return nil, err
 	}
-
-	prices, err := cfg.GetMsgForwardPrices(isMasterchain)
-	if err != nil {
-		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
-		}
-
-		idx := 5
-		if isMasterchain {
-			idx = 4
-		}
-		sl, unpackErr := unpackedConfigSlice(state, idx)
-		if unpackErr != nil {
-			return nil, unpackErr
-		}
-		return parseTonMsgPrices(sl)
-	}
-	if prices == nil {
-		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
-	}
-	return prices, nil
+	return parseTonMsgPrices(sl)
 }
 
 func getTonStoragePrices(state *vm.State) (*tlb.ConfigStoragePrices, error) {
-	cfg, err := blockchainConfigFromC7(state)
+	sl, err := unpackedConfigSlice(state, 0)
 	if err != nil {
 		return nil, err
 	}
-
-	now, err := configNowFromC7(state)
-	if err != nil {
-		return nil, err
-	}
-
-	prices, err := cfg.GetStoragePrices(now)
-	if err != nil {
-		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
-		}
-
-		sl, unpackErr := unpackedConfigSlice(state, 0)
-		if unpackErr != nil {
-			return nil, unpackErr
-		}
-		return parseTonStoragePrices(sl)
-	}
-	return prices, nil
+	return parseTonStoragePrices(sl)
 }
 
 func ceilShiftRight(x *big.Int, bits uint) *big.Int {
@@ -324,7 +241,7 @@ func (o *getExtraBalanceCheapTrace) PendingError() error {
 func GETGASFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -341,15 +258,16 @@ func GETGASFEE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(prices.ComputeGasPrice(gas))
 		},
-		Name:      "GETGASFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x36),
+		Name:       "GETGASFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x36),
+		MinVersion: 6,
 	}
 }
 
 func GETSTORAGEFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 4 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 4 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -377,15 +295,16 @@ func GETSTORAGEFEE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(prices.ComputeStorageFee(isMasterchain, delta, bits, cellsCnt))
 		},
-		Name:      "GETSTORAGEFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x37),
+		Name:       "GETSTORAGEFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x37),
+		MinVersion: 6,
 	}
 }
 
 func GETFORWARDFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 3 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 3 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -406,15 +325,16 @@ func GETFORWARDFEE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(prices.ComputeForwardFee(cellsCnt, bits))
 		},
-		Name:      "GETFORWARDFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x38),
+		Name:       "GETFORWARDFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x38),
+		MinVersion: 6,
 	}
 }
 
 func GETORIGINALFWDFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -436,15 +356,16 @@ func GETORIGINALFWDFEE() *helpers.SimpleOP {
 			den := new(big.Int).SetUint64((1 << 16) - uint64(prices.FirstFrac))
 			return state.Stack.PushOwnedInt(num.Div(num, den))
 		},
-		Name:      "GETORIGINALFWDFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x3A),
+		Name:       "GETORIGINALFWDFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x3A),
+		MinVersion: 6,
 	}
 }
 
 func GETGASFEESIMPLE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -462,15 +383,16 @@ func GETGASFEESIMPLE() *helpers.SimpleOP {
 			total := ceilShiftRight(mulUint64(prices.GasPrice, gas), 16)
 			return state.Stack.PushOwnedInt(total)
 		},
-		Name:      "GETGASFEESIMPLE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x3B),
+		Name:       "GETGASFEESIMPLE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x3B),
+		MinVersion: 6,
 	}
 }
 
 func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 3 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 3 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -493,8 +415,9 @@ func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 			part.Add(part, mulUint64(prices.CellPrice, cellsCnt))
 			return state.Stack.PushOwnedInt(ceilShiftRight(part, 16))
 		},
-		Name:      "GETFORWARDFEESIMPLE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x3C),
+		Name:       "GETFORWARDFEESIMPLE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x3C),
+		MinVersion: 6,
 	}
 }
 
@@ -562,8 +485,9 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(amount)
 		},
-		Name:      "GETEXTRABALANCE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x80),
+		Name:       "GETEXTRABALANCE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x80),
+		MinVersion: 10,
 	}
 }
 
@@ -711,6 +635,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.UIntPrefix(0x3E41, 14),
 		FixedSizeBits: 10,
+		MinVersion:    4,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(args), 10)
 		},
@@ -727,7 +652,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 			appendMode := (args>>9)&1 != 0
 			hashID := int(args & 0xFF)
 			if hashID == 255 {
-				if state.Stack.Len() < 2 {
+				if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 					return vmerr.Error(vmerr.CodeStackUnderflow)
 				}
 				v, err := state.Stack.PopIntRangeInt64(0, 254)
@@ -737,7 +662,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 				hashID = int(v)
 			}
 			maxCnt := state.Stack.Len() - 1
-			if appendMode {
+			if state.GlobalVersion >= 9 && appendMode {
 				maxCnt--
 			}
 			cntInt, err := state.Stack.PopIntRangeInt64(0, int64(maxCnt))
@@ -830,7 +755,8 @@ func HASHBU() *helpers.SimpleOP {
 			hash := cl.HashKey()
 			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},
-		Name:      "HASHBU",
-		BitPrefix: helpers.BytesPrefix(0xF9, 0x16),
+		Name:       "HASHBU",
+		BitPrefix:  helpers.BytesPrefix(0xF9, 0x16),
+		MinVersion: 12,
 	}
 }

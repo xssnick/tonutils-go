@@ -25,7 +25,7 @@ func TestNewTVMRegistersTupleOpcodes(t *testing.T) {
 		"ISTUPLE":  false,
 	}
 
-	markRegistered(machine.trie, want)
+	markRegistered(machine.dispatches[MaxSupportedGlobalVersion].root, want)
 
 	for name, ok := range want {
 		if !ok {

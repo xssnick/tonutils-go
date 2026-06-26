@@ -59,6 +59,7 @@ func TestSimpleOPLifecycle(t *testing.T) {
 		BitPrefix:    UIntPrefix(0x1A, 5),
 		Name:         "SIMPLE",
 		BaseGasPrice: 3,
+		MinVersion:   13,
 	}
 
 	if len(op.GetPrefixes()) != 1 {
@@ -75,6 +76,12 @@ func TestSimpleOPLifecycle(t *testing.T) {
 	}
 	if op.InstructionBits() != 5 {
 		t.Fatalf("unexpected instruction bits: %d", op.InstructionBits())
+	}
+	if op.MinGlobalVersion() != 13 {
+		t.Fatalf("unexpected min version: %d", op.MinGlobalVersion())
+	}
+	if !op.Reusable() {
+		t.Fatal("expected simple op to be reusable")
 	}
 
 	if err := op.Deserialize(encoded.MustBeginParse()); err != nil {
@@ -150,6 +157,7 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 		},
 		BaseGasPrice:  4,
 		FixedSizeBits: 3,
+		MinVersion:    21,
 	}
 
 	if len(op.GetPrefixes()) != 1 {
@@ -160,6 +168,9 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 	}
 	if op.InstructionBits() != 7 {
 		t.Fatalf("unexpected instruction bits: %d", op.InstructionBits())
+	}
+	if op.MinGlobalVersion() != 21 {
+		t.Fatalf("unexpected min version: %d", op.MinGlobalVersion())
 	}
 
 	serialized := op.Serialize().EndCell()
@@ -195,6 +206,50 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 	}
 	if err := plain.Deserialize(plain.Serialize().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("plain deserialize failed: %v", err)
+	}
+
+	multiPrefix := &AdvancedOP{
+		BitPrefix: BytesPrefix(0x82),
+		Prefixes: []BitPrefix{
+			BytesPrefix(0x83),
+			SlicePrefix(4, []byte{0x90}),
+		},
+	}
+	prefixes := multiPrefix.GetPrefixes()
+	if len(prefixes) != 2 {
+		t.Fatalf("unexpected multi prefix count: %d", len(prefixes))
+	}
+	if got := prefixes[0].MustLoadUInt(8); got != 0x83 {
+		t.Fatalf("unexpected first multi prefix: %#x", got)
+	}
+	if got := prefixes[1].MustLoadUInt(4); got != 0x9 {
+		t.Fatalf("unexpected second multi prefix: %#x", got)
+	}
+
+	variant := FullOpcodeVariant(&AdvancedOP{
+		Action:            func(*vm.State) error { return nil },
+		BitPrefix:         BytesPrefix(0x84),
+		Prefixes:          []BitPrefix{BytesPrefix(0x85)},
+		NameSerializer:    func() string { return "VARIANT" },
+		SerializeSuffix:   func() *cell.Builder { return cell.BeginCell().MustStoreUInt(0x7, 3) },
+		DeserializeSuffix: func(*cell.Slice) error { t.Fatal("variant suffix should be cleared"); return nil },
+		FixedSizeBits:     3,
+		MinVersion:        31,
+	}, UIntPrefix(0x12, 6))
+	if !variant.(interface{ Reusable() bool }).Reusable() {
+		t.Fatal("expected full opcode variant to be reusable")
+	}
+	if got := variant.(interface{ MinGlobalVersion() int }).MinGlobalVersion(); got != 31 {
+		t.Fatalf("unexpected variant min version: %d", got)
+	}
+	if got := variant.(interface{ InstructionBits() int64 }).InstructionBits(); got != 6 {
+		t.Fatalf("unexpected variant instruction bits: %d", got)
+	}
+	if got := variant.Serialize().EndCell().MustBeginParse().MustLoadUInt(6); got != 0x12 {
+		t.Fatalf("unexpected variant prefix: %#x", got)
+	}
+	if err := variant.Deserialize(variant.Serialize().EndCell().MustBeginParse()); err != nil {
+		t.Fatalf("variant deserialize failed: %v", err)
 	}
 
 	state = &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(1)}

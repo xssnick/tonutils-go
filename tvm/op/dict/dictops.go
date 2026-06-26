@@ -1020,7 +1020,7 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 
 func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 	return func(state *vm.State) error {
-		if state.Stack.Len() < 4 {
+		if state.GlobalVersion >= 9 && state.Stack.Len() < 4 {
 			return vmerr.Error(vmerr.CodeStackUnderflow)
 		}
 
@@ -1066,7 +1066,7 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 }
 
 func execPfxDictDelete(state *vm.State) error {
-	if state.Stack.Len() < 3 {
+	if state.GlobalVersion >= 9 && state.Stack.Len() < 3 {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 

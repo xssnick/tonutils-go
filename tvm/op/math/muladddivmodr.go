@@ -51,7 +51,8 @@ func MULADDDIVMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "MULADDDIVMODR",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0x81),
+		Name:       "MULADDDIVMODR",
+		BitPrefix:  helpers.BytesPrefix(0xA9, 0x81),
+		MinVersion: 4,
 	}
 }

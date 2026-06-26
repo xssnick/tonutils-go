@@ -6,6 +6,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestBreakLoopOps(t *testing.T) {
@@ -335,6 +336,165 @@ func TestBreakLoopOps(t *testing.T) {
 		}
 		if state.CurrentCode.MustLoadUInt(8) != 0xCC {
 			t.Fatalf("expected current code to restart from extracted body")
+		}
+	})
+}
+
+func TestBreakLoopErrorStackEffects(t *testing.T) {
+	t.Run("RepeatBrkBadBodyConsumesTopOnly", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(3)); err != nil {
+			t.Fatalf("push count: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push bad body: %v", err)
+		}
+
+		assertVMErrCode(t, REPEATBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad body to be consumed only, stack len=%d", state.Stack.Len())
+		}
+		count, err := state.Stack.PopIntFinite()
+		if err != nil || count.Int64() != 3 {
+			t.Fatalf("unexpected remaining count: %v err=%v", count, err)
+		}
+	})
+
+	t.Run("RepeatBrkBadCountConsumesBodyAndCount", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad count: %v", err)
+		}
+		if err := state.Stack.PushContinuation(&testContinuation{name: "body"}); err != nil {
+			t.Fatalf("push body: %v", err)
+		}
+
+		assertVMErrCode(t, REPEATBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected body and bad count to be consumed, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("RepeatBrkRangeConsumesBodyAndCount", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(1 << 31)); err != nil {
+			t.Fatalf("push bad count: %v", err)
+		}
+		if err := state.Stack.PushContinuation(&testContinuation{name: "body"}); err != nil {
+			t.Fatalf("push body: %v", err)
+		}
+
+		assertVMErrCode(t, REPEATBRK().Interpret(state), vmerr.CodeRangeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected body and bad count to be consumed, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("UntilBrkBadBodyConsumesTopOnly", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push residual: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(22)); err != nil {
+			t.Fatalf("push bad body: %v", err)
+		}
+
+		assertVMErrCode(t, UNTILBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad body to be consumed only, stack len=%d", state.Stack.Len())
+		}
+		residual, err := state.Stack.PopIntFinite()
+		if err != nil || residual.Int64() != 11 {
+			t.Fatalf("unexpected residual: %v err=%v", residual, err)
+		}
+	})
+
+	t.Run("WhileBrkBadBodyConsumesTopOnly", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushContinuation(&testContinuation{name: "cond"}); err != nil {
+			t.Fatalf("push cond: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push bad body: %v", err)
+		}
+
+		assertVMErrCode(t, WHILEBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad body to be consumed only, stack len=%d", state.Stack.Len())
+		}
+		cont, err := state.Stack.PopContinuation()
+		if err != nil {
+			t.Fatalf("pop cond: %v", err)
+		}
+		if continuationName(t, cont) != "cond" {
+			t.Fatalf("unexpected remaining condition")
+		}
+	})
+
+	t.Run("WhileBrkBadCondConsumesBoth", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push bad cond: %v", err)
+		}
+		if err := state.Stack.PushContinuation(&testContinuation{name: "body"}); err != nil {
+			t.Fatalf("push body: %v", err)
+		}
+
+		assertVMErrCode(t, WHILEBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected body and bad condition to be consumed, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("RepeatEndBrkBadCountConsumesCount", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad count: %v", err)
+		}
+
+		assertVMErrCode(t, REPEATENDBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected bad count to be consumed, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("WhileEndBrkBadCondConsumesTopOnly", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push residual: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(22)); err != nil {
+			t.Fatalf("push bad cond: %v", err)
+		}
+
+		assertVMErrCode(t, WHILEENDBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad condition to be consumed only, stack len=%d", state.Stack.Len())
+		}
+		residual, err := state.Stack.PopIntFinite()
+		if err != nil || residual.Int64() != 11 {
+			t.Fatalf("unexpected residual: %v err=%v", residual, err)
+		}
+	})
+
+	t.Run("AgainBrkBadBodyConsumesTopAndCapturesC1", func(t *testing.T) {
+		state := newTestState()
+		state.Reg.C[0] = &testContinuation{name: "after"}
+		state.Reg.C[1] = &testContinuation{name: "alt"}
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push bad body: %v", err)
+		}
+
+		assertVMErrCode(t, AGAINBRK().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected bad body to be consumed, stack len=%d", state.Stack.Len())
+		}
+		save := state.Reg.C[1].GetControlData().Save
+		if continuationName(t, save.C[0]) != "after" {
+			t.Fatalf("expected c1 capture to save old c0")
+		}
+		if continuationName(t, save.C[1]) != "alt" {
+			t.Fatalf("expected c1 capture to save old c1")
 		}
 	})
 }

@@ -453,9 +453,13 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 	}
 
 	successParent := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+	successParent.ChksigAlwaysSucceed = true
 	successParent.SetChildRunner(func(child *State) (int64, error) {
 		if child.Stack.Len() != 1 {
 			t.Fatalf("child stack len before execution = %d, want 1", child.Stack.Len())
+		}
+		if !child.ChksigAlwaysSucceed {
+			t.Fatal("child should inherit chksig-always-succeed flag")
 		}
 		if mustPopInt64(t, child.Stack) != 0 {
 			t.Fatal("child stack should receive zero when PushZero is set")
@@ -614,6 +618,170 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 	if got := mustPopInt64(t, isolatedParent.Stack); got != 0 {
 		t.Fatalf("isolated child exit code = %d, want 0", got)
 	}
+}
+
+func TestRunChildVMVersionedGasClamp(t *testing.T) {
+	tests := []struct {
+		name      string
+		version   int
+		wantLimit int64
+		wantMax   int64
+	}{
+		{
+			name:      "v9_keeps_child_gas",
+			version:   9,
+			wantLimit: 120,
+			wantMax:   150,
+		},
+		{
+			name:      "v10_clamps_to_parent_remaining",
+			version:   10,
+			wantLimit: 40,
+			wantMax:   40,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			observed := runChildVMObservedGas(t, tt.version, GasWithLimit(40), GasWithLimit(120, 150))
+			if observed.Limit != tt.wantLimit {
+				t.Fatalf("child gas limit = %d, want %d", observed.Limit, tt.wantLimit)
+			}
+			if observed.Max != tt.wantMax {
+				t.Fatalf("child gas max = %d, want %d", observed.Max, tt.wantMax)
+			}
+			if observed.Base != tt.wantLimit {
+				t.Fatalf("child gas base = %d, want %d", observed.Base, tt.wantLimit)
+			}
+			if observed.Remaining != observed.Base {
+				t.Fatalf("child gas remaining = %d, want base %d", observed.Remaining, observed.Base)
+			}
+		})
+	}
+}
+
+func FuzzRunChildVMVersionedGasClamp(f *testing.F) {
+	for version := uint8(0); version <= uint8(DefaultGlobalVersion); version++ {
+		f.Add(version, uint16(40), uint16(120), uint16(150))
+		f.Add(version, uint16(80), uint16(20), uint16(70))
+	}
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawParentLimit, rawChildLimit, rawChildMax uint16) {
+		version := int(rawVersion % uint8(DefaultGlobalVersion+1))
+		parentLimit := int64(rawParentLimit%200) + 1
+		childLimit := int64(rawChildLimit%300) + 1
+		childMax := int64(rawChildMax%300) + 1
+		if childMax < childLimit {
+			childMax = childLimit
+		}
+
+		observed := runChildVMObservedGas(t, version, GasWithLimit(parentLimit), GasWithLimit(childLimit, childMax))
+
+		wantLimit := childLimit
+		wantMax := childMax
+		if version >= 10 {
+			if wantLimit > parentLimit {
+				wantLimit = parentLimit
+			}
+			if wantMax > parentLimit {
+				wantMax = parentLimit
+			}
+			if wantMax < wantLimit {
+				wantMax = wantLimit
+			}
+		}
+
+		if observed.Limit != wantLimit {
+			t.Fatalf("v%d parent=%d child=%d/%d child gas limit = %d, want %d", version, parentLimit, childLimit, childMax, observed.Limit, wantLimit)
+		}
+		if observed.Max != wantMax {
+			t.Fatalf("v%d parent=%d child=%d/%d child gas max = %d, want %d", version, parentLimit, childLimit, childMax, observed.Max, wantMax)
+		}
+		if observed.Base != wantLimit {
+			t.Fatalf("v%d parent=%d child=%d/%d child gas base = %d, want %d", version, parentLimit, childLimit, childMax, observed.Base, wantLimit)
+		}
+		if observed.Remaining != observed.Base {
+			t.Fatalf("v%d child gas remaining = %d, want base %d", version, observed.Remaining, observed.Base)
+		}
+	})
+}
+
+func FuzzChildResultRegisterValueVersionBoundary(f *testing.F) {
+	for version := uint8(0); version <= uint8(DefaultGlobalVersion); version++ {
+		f.Add(version, false, false, false)
+		f.Add(version, false, true, false)
+		f.Add(version, false, false, true)
+		f.Add(version, true, false, false)
+		f.Add(version, true, true, false)
+		f.Add(version, true, false, true)
+	}
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, committed, hasCommittedValue, hasCurrentValue bool) {
+		version := int(rawVersion % uint8(DefaultGlobalVersion+1))
+
+		var committedValue *cell.Cell
+		if hasCommittedValue {
+			committedValue = cell.BeginCell().MustStoreUInt(0xC0, 8).EndCell()
+		}
+		var currentValue *cell.Cell
+		if hasCurrentValue {
+			currentValue = cell.BeginCell().MustStoreUInt(0xD0, 8).EndCell()
+		}
+
+		child := NewExecutionStateWithGlobalVersion(version, NewGas(), nil, tuple.Tuple{}, NewStack())
+		child.Committed.Committed = committed
+
+		got := childResultRegisterValue(child, committedValue, currentValue)
+		var want *cell.Cell
+		if committed {
+			want = committedValue
+		} else if version < 11 {
+			want = currentValue
+		}
+
+		if got != want {
+			t.Fatalf("v%d committed=%v hasCommitted=%v hasCurrent=%v result = %p, want %p", version, committed, hasCommittedValue, hasCurrentValue, got, want)
+		}
+	})
+}
+
+func TestRunChildVMInheritsExplicitZeroGlobalVersion(t *testing.T) {
+	parent := NewExecutionStateWithGlobalVersion(0, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+	parent.SetChildRunner(func(child *State) (int64, error) {
+		if child.GlobalVersion != 0 {
+			t.Fatalf("child global version = %d, want explicit 0", child.GlobalVersion)
+		}
+		if !child.GlobalVersionConfigured {
+			t.Fatal("child global version should stay explicitly configured")
+		}
+		return 0, nil
+	})
+
+	if err := parent.RunChildVM(ChildVMConfig{
+		Code: cell.BeginCell().EndCell().MustBeginParse(),
+		Gas:  GasWithLimit(1_000),
+	}); err != nil {
+		t.Fatalf("run child vm: %v", err)
+	}
+}
+
+func runChildVMObservedGas(t *testing.T, version int, parentGas, childGas Gas) Gas {
+	t.Helper()
+
+	parent := NewExecutionStateWithGlobalVersion(version, parentGas, nil, tuple.Tuple{}, NewStack())
+	var observed Gas
+	parent.SetChildRunner(func(child *State) (int64, error) {
+		observed = child.Gas
+		return 0, nil
+	})
+
+	if err := parent.RunChildVM(ChildVMConfig{
+		Code: cell.BeginCell().EndCell().MustBeginParse(),
+		Gas:  childGas,
+	}); err != nil {
+		t.Fatalf("run child vm: %v", err)
+	}
+	return observed
 }
 
 func TestRunChildVMUnbindsReturnedCellTrace(t *testing.T) {

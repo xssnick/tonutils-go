@@ -42,6 +42,34 @@ func makeExtraBalanceDict(t *testing.T, entries map[uint32]uint64) *cell.Cell {
 	return dict.AsCell()
 }
 
+func makeFeeUnpackedConfig(t *testing.T, storage *cell.Cell, gas, msg *cell.Slice) tuple.Tuple {
+	t.Helper()
+
+	cfg := tuple.NewTupleSized(6)
+	if storage != nil {
+		if err := cfg.Set(0, storage.MustBeginParse()); err != nil {
+			t.Fatalf("failed to set unpacked storage config: %v", err)
+		}
+	}
+	if gas != nil {
+		if err := cfg.Set(2, gas.Copy()); err != nil {
+			t.Fatalf("failed to set unpacked masterchain gas config: %v", err)
+		}
+		if err := cfg.Set(3, gas.Copy()); err != nil {
+			t.Fatalf("failed to set unpacked workchain gas config: %v", err)
+		}
+	}
+	if msg != nil {
+		if err := cfg.Set(4, msg.Copy()); err != nil {
+			t.Fatalf("failed to set unpacked masterchain msg config: %v", err)
+		}
+		if err := cfg.Set(5, msg.Copy()); err != nil {
+			t.Fatalf("failed to set unpacked workchain msg config: %v", err)
+		}
+	}
+	return cfg
+}
+
 func makeFeeState(t *testing.T) *vm.State {
 	t.Helper()
 
@@ -83,7 +111,8 @@ func makeFeeState(t *testing.T) *vm.State {
 			20: gasSlice.MustToCell(),
 			25: msgSlice.MustToCell(),
 		}),
-		7: balance,
+		paramIdxUnpackedConfig: makeFeeUnpackedConfig(t, storageCell, gasSlice, msgSlice),
+		7:                      balance,
 	})
 	st.InitForExecution()
 	return st
@@ -192,6 +221,23 @@ func TestTonopsGasConfigAndGlobals(t *testing.T) {
 	}
 	if got, err := st.Stack.PopIntFinite(); err != nil || got.Int64() != -1 {
 		t.Fatalf("GLOBALID = (%v, %v)", got, err)
+	}
+
+	st = newFuncTestState(t, map[int]any{
+		9: makeConfigRootRefDict(t, map[uint32]*cell.Cell{
+			19: cell.BeginCell().MustStoreUInt(0xFFFFFFFD, 32).EndCell(),
+		}),
+		19: makeConfigRootRefDict(t, map[uint32]*cell.Cell{
+			19: cell.BeginCell().MustStoreUInt(0xFFFFFFFE, 32).EndCell(),
+		}),
+		14: tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(1, 32).ToSlice()),
+	})
+	st.GlobalVersion = 5
+	if err := GLOBALID().Interpret(st); err != nil {
+		t.Fatalf("pre-v6 GLOBALID failed: %v", err)
+	}
+	if got, err := st.Stack.PopIntFinite(); err != nil || got.Int64() != -2 {
+		t.Fatalf("pre-v6 GLOBALID = (%v, %v), want -2", got, err)
 	}
 
 	st = newFuncTestState(t, map[int]any{
@@ -422,13 +468,13 @@ func TestTonopsSignatureAndCurveOps(t *testing.T) {
 	}
 }
 
-func TestTVM14ECRecoverAcceptsEthereumRecoveryIDs(t *testing.T) {
+func TestECRecoverEthereumRecoveryIDsStartAtV14(t *testing.T) {
 	hash := sha256.Sum256([]byte("secp256k1-v14"))
 	privBytes := make([]byte, 32)
 	privBytes[31] = 11
 	nonceBytes := make([]byte, 32)
 	nonceBytes[31] = 13
-	v, r, s, pubBytes, ok := localec.SignRecoverable(privBytes, nonceBytes, hash[:])
+	v, r, s, pub, ok := localec.SignRecoverable(privBytes, nonceBytes, hash[:])
 	if !ok {
 		t.Fatal("SignRecoverable failed")
 	}
@@ -469,67 +515,198 @@ func TestTVM14ECRecoverAcceptsEthereumRecoveryIDs(t *testing.T) {
 	if ok, err := st.Stack.PopBool(); err != nil || !ok {
 		t.Fatalf("ECRECOVER v14 ethereum id = (%v, %v), want true", ok, err)
 	}
-	gotY, err := st.Stack.PopIntFinite()
+	y, err := st.Stack.PopIntFinite()
 	if err != nil {
-		t.Fatalf("pop y: %v", err)
+		t.Fatalf("pop v14 ECRECOVER y: %v", err)
 	}
-	gotX, err := st.Stack.PopIntFinite()
+	x, err := st.Stack.PopIntFinite()
 	if err != nil {
-		t.Fatalf("pop x: %v", err)
+		t.Fatalf("pop v14 ECRECOVER x: %v", err)
 	}
-	gotPrefix, err := st.Stack.PopIntFinite()
+	prefix, err := st.Stack.PopIntFinite()
 	if err != nil {
-		t.Fatalf("pop prefix: %v", err)
+		t.Fatalf("pop v14 ECRECOVER prefix: %v", err)
 	}
-	if gotPrefix.Int64() != int64(pubBytes[0]) ||
-		gotX.Cmp(new(big.Int).SetBytes(pubBytes[1:33])) != 0 ||
-		gotY.Cmp(new(big.Int).SetBytes(pubBytes[33:65])) != 0 {
-		t.Fatal("unexpected ECRECOVER v14 output")
+	if prefix.Int64() != int64(pub[0]) ||
+		x.Cmp(new(big.Int).SetBytes(pub[1:33])) != 0 ||
+		y.Cmp(new(big.Int).SetBytes(pub[33:65])) != 0 {
+		t.Fatal("unexpected v14 ECRECOVER output")
 	}
 }
 
-func TestTVM14ChksignRejectsIdentityPublicKey(t *testing.T) {
+func TestChksignRejectsZeroAndIdentityPublicKeyV14(t *testing.T) {
+	zeroKey := big.NewInt(0)
 	identityKey := new(big.Int).Lsh(big.NewInt(1), 248)
 	forgedSig := make([]byte, ed25519.SignatureSize)
 	forgedSig[0] = 1
 
-	t.Run("CHKSIGNU", func(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     *big.Int
+		version int
+		always  bool
+		want    bool
+	}{
+		{name: "v13 identity", key: identityKey, version: 13, want: true},
+		{name: "v14 identity", key: identityKey, version: 14},
+		{name: "v14 zero", key: zeroKey, version: 14},
+		{name: "v14 identity always", key: identityKey, version: 14, always: true, want: true},
+		{name: "v14 zero always", key: zeroKey, version: 14, always: true, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/CHKSIGNU", func(t *testing.T) {
+			st := newFuncTestState(t, nil)
+			st.GlobalVersion = tt.version
+			st.ChksigAlwaysSucceed = tt.always
+			if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+				t.Fatalf("push hash: %v", err)
+			}
+			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+				t.Fatalf("push signature: %v", err)
+			}
+			if err := st.Stack.PushInt(tt.key); err != nil {
+				t.Fatalf("push key: %v", err)
+			}
+			if err := CHKSIGNU().Interpret(st); err != nil {
+				t.Fatalf("CHKSIGNU failed: %v", err)
+			}
+			if ok, err := st.Stack.PopBool(); err != nil || ok != tt.want {
+				t.Fatalf("CHKSIGNU key = (%v, %v), want %v", ok, err, tt.want)
+			}
+		})
+
+		t.Run(tt.name+"/CHKSIGNS", func(t *testing.T) {
+			st := newFuncTestState(t, nil)
+			st.GlobalVersion = tt.version
+			st.ChksigAlwaysSucceed = tt.always
+			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xAF, 0x82}, 16).ToSlice()); err != nil {
+				t.Fatalf("push data: %v", err)
+			}
+			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+				t.Fatalf("push signature: %v", err)
+			}
+			if err := st.Stack.PushInt(tt.key); err != nil {
+				t.Fatalf("push key: %v", err)
+			}
+			if err := CHKSIGNS().Interpret(st); err != nil {
+				t.Fatalf("CHKSIGNS failed: %v", err)
+			}
+			if ok, err := st.Stack.PopBool(); err != nil || ok != tt.want {
+				t.Fatalf("CHKSIGNS key = (%v, %v), want %v", ok, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestChksignAlwaysSucceed(t *testing.T) {
+	identityKey := new(big.Int).Lsh(big.NewInt(1), 248)
+	nonIdentityKey := big.NewInt(2)
+	forgedSig := make([]byte, ed25519.SignatureSize)
+	forgedSig[0] = 1
+	forgedP256Key := bytes.Repeat([]byte{0}, 33)
+	forgedP256Sig := bytes.Repeat([]byte{1}, 64)
+
+	tests := []struct {
+		name    string
+		version int
+		key     *big.Int
+	}{
+		{
+			name:    "invalid signature",
+			version: 13,
+			key:     nonIdentityKey,
+		},
+		{
+			name:    "v14 identity key",
+			version: 14,
+			key:     identityKey,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/CHKSIGNU", func(t *testing.T) {
+			st := newFuncTestState(t, nil)
+			st.GlobalVersion = tt.version
+			st.ChksigAlwaysSucceed = true
+			if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+				t.Fatalf("push hash: %v", err)
+			}
+			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+				t.Fatalf("push signature: %v", err)
+			}
+			if err := st.Stack.PushInt(tt.key); err != nil {
+				t.Fatalf("push key: %v", err)
+			}
+			if err := CHKSIGNU().Interpret(st); err != nil {
+				t.Fatalf("CHKSIGNU failed: %v", err)
+			}
+			if ok, err := st.Stack.PopBool(); err != nil || !ok {
+				t.Fatalf("CHKSIGNU always succeed = (%v, %v), want true", ok, err)
+			}
+		})
+
+		t.Run(tt.name+"/CHKSIGNS", func(t *testing.T) {
+			st := newFuncTestState(t, nil)
+			st.GlobalVersion = tt.version
+			st.ChksigAlwaysSucceed = true
+			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xAF, 0x82}, 16).ToSlice()); err != nil {
+				t.Fatalf("push data: %v", err)
+			}
+			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+				t.Fatalf("push signature: %v", err)
+			}
+			if err := st.Stack.PushInt(tt.key); err != nil {
+				t.Fatalf("push key: %v", err)
+			}
+			if err := CHKSIGNS().Interpret(st); err != nil {
+				t.Fatalf("CHKSIGNS failed: %v", err)
+			}
+			if ok, err := st.Stack.PopBool(); err != nil || !ok {
+				t.Fatalf("CHKSIGNS always succeed = (%v, %v), want true", ok, err)
+			}
+		})
+	}
+
+	t.Run("P256_CHKSIGNU", func(t *testing.T) {
 		st := newFuncTestState(t, nil)
-		st.GlobalVersion = 14
+		st.GlobalVersion = 4
+		st.ChksigAlwaysSucceed = true
 		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
 			t.Fatalf("push hash: %v", err)
 		}
-		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedP256Sig, 512).ToSlice()); err != nil {
 			t.Fatalf("push signature: %v", err)
 		}
-		if err := st.Stack.PushInt(identityKey); err != nil {
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedP256Key, 264).ToSlice()); err != nil {
 			t.Fatalf("push key: %v", err)
 		}
-		if err := CHKSIGNU().Interpret(st); err != nil {
-			t.Fatalf("CHKSIGNU failed: %v", err)
+		if err := P256_CHKSIGNU().Interpret(st); err != nil {
+			t.Fatalf("P256_CHKSIGNU failed: %v", err)
 		}
-		if ok, err := st.Stack.PopBool(); err != nil || ok {
-			t.Fatalf("CHKSIGNU identity key = (%v, %v), want false", ok, err)
+		if ok, err := st.Stack.PopBool(); err != nil || !ok {
+			t.Fatalf("P256_CHKSIGNU always succeed = (%v, %v), want true", ok, err)
 		}
 	})
 
-	t.Run("CHKSIGNS", func(t *testing.T) {
+	t.Run("P256_CHKSIGNS", func(t *testing.T) {
 		st := newFuncTestState(t, nil)
-		st.GlobalVersion = 14
+		st.GlobalVersion = 4
+		st.ChksigAlwaysSucceed = true
 		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xAF, 0x82}, 16).ToSlice()); err != nil {
 			t.Fatalf("push data: %v", err)
 		}
-		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedSig, 512).ToSlice()); err != nil {
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedP256Sig, 512).ToSlice()); err != nil {
 			t.Fatalf("push signature: %v", err)
 		}
-		if err := st.Stack.PushInt(identityKey); err != nil {
+		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice(forgedP256Key, 264).ToSlice()); err != nil {
 			t.Fatalf("push key: %v", err)
 		}
-		if err := CHKSIGNS().Interpret(st); err != nil {
-			t.Fatalf("CHKSIGNS failed: %v", err)
+		if err := P256_CHKSIGNS().Interpret(st); err != nil {
+			t.Fatalf("P256_CHKSIGNS failed: %v", err)
 		}
-		if ok, err := st.Stack.PopBool(); err != nil || ok {
-			t.Fatalf("CHKSIGNS identity key = (%v, %v), want false", ok, err)
+		if ok, err := st.Stack.PopBool(); err != nil || !ok {
+			t.Fatalf("P256_CHKSIGNS always succeed = (%v, %v), want true", ok, err)
 		}
 	})
 }
@@ -831,6 +1008,28 @@ func TestAdvancedOpSerializationAndCodepages(t *testing.T) {
 		t.Fatalf("GETGLOB = (%v, %v)", got, err)
 	}
 
+	st = newFuncTestState(t, nil)
+	if err := st.Stack.PushInt(big.NewInt(789)); err != nil {
+		t.Fatalf("PushInt failed: %v", err)
+	}
+	if err := setGlob.Interpret(st); err != nil {
+		t.Fatalf("direct SETGLOB interpreted failed: %v", err)
+	}
+	gotAny, err := st.GetGlobal(5)
+	if err != nil {
+		t.Fatalf("GetGlobal(5) after direct SETGLOB failed: %v", err)
+	}
+	gotInt, ok := gotAny.(*big.Int)
+	if !ok || gotInt.Int64() != 789 {
+		t.Fatalf("direct SETGLOB stored %v (%T), want 789 at masked index", gotAny, gotAny)
+	}
+	if err := getGlob.Interpret(st); err != nil {
+		t.Fatalf("direct GETGLOB interpreted failed: %v", err)
+	}
+	if got, err := st.Stack.PopIntFinite(); err != nil || got.Int64() != 789 {
+		t.Fatalf("direct GETGLOB = (%v, %v)", got, err)
+	}
+
 	inMsgParam := INMSGPARAM(18)
 	if inMsgParam.SerializeText() != "INMSGPARAM 2" {
 		t.Fatalf("unexpected INMSGPARAM text: %q", inMsgParam.SerializeText())
@@ -847,6 +1046,16 @@ func TestAdvancedOpSerializationAndCodepages(t *testing.T) {
 	}
 	if got, err := st.Stack.PopIntFinite(); err != nil || got.Int64() != 321 {
 		t.Fatalf("INMSGPARAM = (%v, %v)", got, err)
+	}
+
+	st = newFuncTestState(t, map[int]any{
+		paramIdxInMsgParams: tuple.NewTupleValue(nil, nil, big.NewInt(654)),
+	})
+	if err := inMsgParam.Interpret(st); err != nil {
+		t.Fatalf("direct INMSGPARAM interpreted failed: %v", err)
+	}
+	if got, err := st.Stack.PopIntFinite(); err != nil || got.Int64() != 654 {
+		t.Fatalf("direct INMSGPARAM = (%v, %v)", got, err)
 	}
 }
 

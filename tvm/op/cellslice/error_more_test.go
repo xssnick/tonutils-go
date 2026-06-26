@@ -73,6 +73,12 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("SDEQChecksUnderflowBeforeType", func(t *testing.T) {
+		st := newCellSliceState()
+		pushCellSliceBuilder(t, st, cell.BeginCell())
+		assertCellSliceVMErrorCode(t, SDEQ().Interpret(st), vmerr.CodeStackUnderflow)
+	})
+
 	t.Run("VirtualizedLoadPathsReturnExit14", func(t *testing.T) {
 		body, pruned := mustVirtualizedProofBodyAndPrunedRef(t)
 
@@ -115,6 +121,19 @@ func TestAdditionalCellSliceErrorAndSpecialBranches(t *testing.T) {
 			t.Fatal("expected XLOAD on virtualized pruned cell to fail")
 		} else {
 			assertCellSliceVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+		}
+
+		st = newCellSliceState()
+		st.GlobalVersion = 4
+		pushCellSliceCell(t, st, pruned)
+		if err := XLOADQ().Interpret(st); err != nil {
+			t.Fatalf("pre-v5 XLOADQ should keep special cell without loading: %v", err)
+		}
+		if !popCellSliceBool(t, st) {
+			t.Fatal("pre-v5 XLOADQ should report success")
+		}
+		if !sameCellHash(popCellSliceCell(t, st), pruned) {
+			t.Fatal("pre-v5 XLOADQ should return the original cell")
 		}
 	})
 

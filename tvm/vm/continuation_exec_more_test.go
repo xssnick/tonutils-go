@@ -222,6 +222,129 @@ func TestLoopContinuations(t *testing.T) {
 	}
 }
 
+func TestJumpToVersionedNestedGasAndAdjust(t *testing.T) {
+	for _, version := range []int{8, 9} {
+		t.Run("nested_gas", func(t *testing.T) {
+			state := newVersionedJumpTestState(version)
+			if err := state.JumpTo(makeNestedJumpChain(FreeNestedContJump + 2)); err != nil {
+				t.Fatalf("JumpTo nested chain: %v", err)
+			}
+
+			wantGas := int64(0)
+			if version >= 9 {
+				wantGas = 2
+			}
+			if got := state.Gas.Used(); got != wantGas {
+				t.Fatalf("v%d nested jump gas = %d, want %d", version, got, wantGas)
+			}
+		})
+
+		t.Run("nested_adjust", func(t *testing.T) {
+			state := newVersionedJumpTestState(version)
+			pushInts(t, state.Stack, 1, 2, 3)
+			target := &OrdinaryContinuation{
+				Data: ControlData{NumArgs: 1, CP: CP},
+				Code: cell.BeginCell().EndCell().MustBeginParse(),
+			}
+
+			if err := state.JumpTo(&nestedJumpContinuation{next: target}); err != nil {
+				t.Fatalf("JumpTo nested target: %v", err)
+			}
+
+			wantLen := 3
+			if version >= 9 {
+				wantLen = 1
+			}
+			if state.Stack.Len() != wantLen {
+				t.Fatalf("v%d stack len after nested jump = %d, want %d", version, state.Stack.Len(), wantLen)
+			}
+		})
+	}
+}
+
+func FuzzJumpToVersionedNestedGasAndAdjust(f *testing.F) {
+	for version := uint8(0); version <= uint8(DefaultGlobalVersion); version++ {
+		f.Add(version, uint8(1), uint8(0))
+		f.Add(version, uint8(FreeNestedContJump+2), uint8(1))
+		f.Add(version, uint8(FreeNestedContJump+5), uint8(3))
+	}
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawDepth, rawArgs uint8) {
+		version := int(rawVersion % uint8(DefaultGlobalVersion+1))
+		depth := int(rawDepth%20) + 1
+
+		state := newVersionedJumpTestState(version)
+		if err := state.JumpTo(makeNestedJumpChain(depth)); err != nil {
+			t.Fatalf("v%d depth=%d JumpTo nested chain: %v", version, depth, err)
+		}
+
+		wantGas := int64(0)
+		if version >= 9 && depth > FreeNestedContJump {
+			wantGas = int64(depth - FreeNestedContJump)
+		}
+		if got := state.Gas.Used(); got != wantGas {
+			t.Fatalf("v%d depth=%d nested jump gas = %d, want %d", version, depth, got, wantGas)
+		}
+
+		state = newVersionedJumpTestState(version)
+		pushInts(t, state.Stack, 1, 2, 3, 4)
+		args := int(rawArgs % 4)
+		target := &OrdinaryContinuation{
+			Data: ControlData{NumArgs: args, CP: CP},
+			Code: cell.BeginCell().EndCell().MustBeginParse(),
+		}
+		if err := state.JumpTo(&nestedJumpContinuation{next: target}); err != nil {
+			t.Fatalf("v%d args=%d JumpTo nested target: %v", version, args, err)
+		}
+
+		wantLen := 4
+		if version >= 9 {
+			wantLen = args
+		}
+		if state.Stack.Len() != wantLen {
+			t.Fatalf("v%d args=%d stack len after nested jump = %d, want %d", version, args, state.Stack.Len(), wantLen)
+		}
+	})
+}
+
+func newVersionedJumpTestState(version int) *State {
+	return &State{
+		GlobalVersion:           version,
+		GlobalVersionConfigured: true,
+		Gas:                     GasWithLimit(1000),
+		CurrentCode:             cell.BeginCell().EndCell().MustBeginParse(),
+		Stack:                   NewStack(),
+	}
+}
+
+func makeNestedJumpChain(depth int) Continuation {
+	var next Continuation
+	for i := 0; i < depth; i++ {
+		next = &nestedJumpContinuation{next: next}
+	}
+	return next
+}
+
+type nestedJumpContinuation struct {
+	next Continuation
+	data *ControlData
+}
+
+func (c *nestedJumpContinuation) GetControlData() *ControlData {
+	return c.data
+}
+
+func (c *nestedJumpContinuation) Jump(*State) (Continuation, error) {
+	return c.next, nil
+}
+
+func (c *nestedJumpContinuation) Copy() Continuation {
+	return &nestedJumpContinuation{
+		next: c.next,
+		data: c.data,
+	}
+}
+
 func TestExecHelpers(t *testing.T) {
 	state := &State{
 		CurrentCode: cell.BeginCell().MustStoreUInt(0x11, 8).EndCell().MustBeginParse(),

@@ -28,7 +28,7 @@ func init() {
 
 func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int8) *helpers.AdvancedOP {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	return &helpers.AdvancedOP{
+	out := &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
 			required := 2
@@ -91,6 +91,10 @@ func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int8) *he
 		},
 		DeserializeSuffix: deserializeImmediate,
 	}
+	if d == 0 {
+		out.MinVersion = 4
+	}
+	return out
 }
 
 func roundDivMod(x, y *big.Int, roundMode int) (*big.Int, *big.Int) {

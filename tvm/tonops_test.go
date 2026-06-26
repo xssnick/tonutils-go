@@ -233,8 +233,10 @@ func runRawCodeWithEnv(t *testing.T, code, data *cell.Cell, c7 tuple.Tuple, glob
 	}
 
 	machine := NewTVM()
-	machine.globalVersion = globalVersion
-	res, err := machine.ExecuteDetailed(code, data, c7, vmcore.GasWithLimit(1_000_000), stack)
+	if err := machine.SetGlobalVersion(globalVersion); err != nil {
+		t.Fatalf("set global version %d: %v", globalVersion, err)
+	}
+	res, err := machine.Execute(code, data, c7, vmcore.GasWithLimit(1_000_000), stack, ExecutionConfig{})
 	return stack, res, err
 }
 

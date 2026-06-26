@@ -55,7 +55,8 @@ func LSHIFTADDDIVMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "LSHIFTADDDIVMODR",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0xC1),
+		Name:       "LSHIFTADDDIVMODR",
+		BitPrefix:  helpers.BytesPrefix(0xA9, 0xC1),
+		MinVersion: 4,
 	}
 }

@@ -63,6 +63,16 @@ func pushCommittedResultCell(parent *Stack, committed bool, value *cell.Cell) er
 	return pushMaybeCell(parent, value)
 }
 
+func childResultRegisterValue(child *State, committedValue, currentValue *cell.Cell) *cell.Cell {
+	if child.Committed.Committed {
+		return committedValue
+	}
+	if child.effectiveGlobalVersion() < 11 {
+		return currentValue
+	}
+	return nil
+}
+
 func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if cfg.Code == nil {
 		return vmerr.Error(vmerr.CodeTypeCheck, "child code is nil")
@@ -79,7 +89,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	childC7 := unbindTupleTrace(cfg.C7, parentTrace)
 	childCode := cfg.Code.Copy().SetTrace(cfg.Code.Trace().WithoutTrace(parentTrace))
 
-	child := NewExecutionState(s.GlobalVersion, cfg.Gas, cfg.Data, childC7, childStack)
+	child := NewExecutionStateWithGlobalVersion(s.effectiveGlobalVersion(), cfg.Gas, cfg.Data, childC7, childStack)
 	child.CurrentCode = childCode
 
 	if cfg.IsolateGas {
@@ -97,21 +107,23 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.Gas.FreeConsumed = s.Gas.FreeConsumed
 
-	remaining := s.Gas.Remaining
-	if child.Gas.Limit > remaining {
-		child.Gas.Limit = remaining
+	if s.effectiveGlobalVersion() >= 10 {
+		remaining := s.Gas.Remaining
+		if child.Gas.Limit > remaining {
+			child.Gas.Limit = remaining
+		}
+		if child.Gas.Max > remaining {
+			child.Gas.Max = remaining
+		}
+		if child.Gas.Limit < 0 {
+			child.Gas.Limit = 0
+		}
+		if child.Gas.Max < child.Gas.Limit {
+			child.Gas.Max = child.Gas.Limit
+		}
+		child.Gas.Base = child.Gas.Limit
+		child.Gas.Remaining = child.Gas.Base
 	}
-	if child.Gas.Max > remaining {
-		child.Gas.Max = remaining
-	}
-	if child.Gas.Limit < 0 {
-		child.Gas.Limit = 0
-	}
-	if child.Gas.Max < child.Gas.Limit {
-		child.Gas.Max = child.Gas.Limit
-	}
-	child.Gas.Base = child.Gas.Limit
-	child.Gas.Remaining = child.Gas.Base
 
 	if cfg.SameC3 {
 		child.Reg.C[3] = &OrdinaryContinuation{
@@ -190,15 +202,17 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 
 	childTrace := child.Cells.Trace()
 	if cfg.ReturnData {
-		data := unbindCellTrace(child.Committed.Data, childTrace)
-		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, data); err != nil {
+		data := childResultRegisterValue(child, child.Committed.Data, child.Reg.D[0])
+		data = unbindCellTrace(data, childTrace)
+		if err := pushMaybeCell(s.Stack, data); err != nil {
 			return err
 		}
 	}
 
 	if cfg.ReturnActions {
-		actions := unbindCellTrace(child.Committed.Actions, childTrace)
-		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, actions); err != nil {
+		actions := childResultRegisterValue(child, child.Committed.Actions, child.Reg.D[1])
+		actions = unbindCellTrace(actions, childTrace)
+		if err := pushMaybeCell(s.Stack, actions); err != nil {
 			return err
 		}
 	}

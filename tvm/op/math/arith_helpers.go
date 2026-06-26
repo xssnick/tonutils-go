@@ -8,9 +8,13 @@ import (
 )
 
 const bitSizeInvalid = 0x7fffffff
+const cppBigIntWordBits = 64
+const cppBigIntMaxLeftShiftWords = 5
+const cppBigIntWordShift = 52
 
 var (
 	bigIntOne              = big.NewInt(1)
+	bigIntMinusOne         = big.NewInt(-1)
 	bigIntMaxShift         = big.NewInt(1023)
 	bigIntMaxCompoundShift = big.NewInt(256)
 )
@@ -30,6 +34,33 @@ func pushMaybeInt(state *vm.State, val *big.Int, quiet bool) error {
 		return state.Stack.PushOwnedIntQuiet(val)
 	}
 	return state.Stack.PushOwnedInt(val)
+}
+
+func leftShiftResult(x *big.Int, shift uint64) *big.Int {
+	if x == nil {
+		return nil
+	}
+	if x.Sign() == 0 && shift >= cppBigIntMaxLeftShiftWords*cppBigIntWordShift {
+		return nil
+	}
+	return new(big.Int).Lsh(x, uint(shift))
+}
+
+func legacyShiftNaNResult(globalVersion int, shift uint64, right bool) *big.Int {
+	if globalVersion >= 13 || shift == 0 {
+		return nil
+	}
+	if right {
+		if shift > cppBigIntWordBits-cppBigIntWordShift {
+			return new(big.Int).Set(bigIntMinusOne)
+		}
+		return new(big.Int)
+	}
+	q := shift / cppBigIntWordShift
+	if q == 0 || q > cppBigIntMaxLeftShiftWords {
+		return nil
+	}
+	return new(big.Int)
 }
 
 func pushSmallInt(state *vm.State, val int64) error {
@@ -80,6 +111,26 @@ func binaryIntResult(x, y *big.Int, fn func(*big.Int, *big.Int) *big.Int) *big.I
 		return nil
 	}
 	return fn(x, y)
+}
+
+func versionedAndResult(globalVersion int, x, y *big.Int) *big.Int {
+	if x == nil || y == nil {
+		if globalVersion < 13 && ((x != nil && x.Sign() == 0) || (y != nil && y.Sign() == 0)) {
+			return new(big.Int)
+		}
+		return nil
+	}
+	return new(big.Int).And(x, y)
+}
+
+func versionedOrResult(globalVersion int, x, y *big.Int) *big.Int {
+	if x == nil || y == nil {
+		if globalVersion < 13 && ((x != nil && x.Cmp(bigIntMinusOne) == 0) || (y != nil && y.Cmp(bigIntMinusOne) == 0)) {
+			return new(big.Int).Set(bigIntMinusOne)
+		}
+		return nil
+	}
+	return new(big.Int).Or(x, y)
 }
 
 func pushUnaryIntResult(state *vm.State, x *big.Int, fn func(*big.Int) *big.Int) error {

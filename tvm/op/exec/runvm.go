@@ -141,6 +141,7 @@ func RUNVM(mode int) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.SlicePrefix(12, []byte{0xDB, 0x40}),
 		FixedSizeBits: 12,
+		MinVersion:    4,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(mode), 12)
 		},
@@ -160,8 +161,9 @@ func RUNVM(mode int) *helpers.AdvancedOP {
 
 func RUNVMX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:      "RUNVMX",
-		BitPrefix: helpers.BytesPrefix(0xDB, 0x50),
+		Name:       "RUNVMX",
+		BitPrefix:  helpers.BytesPrefix(0xDB, 0x50),
+		MinVersion: 4,
 		Action: func(state *vm.State) error {
 			val, err := state.Stack.PopIntRangeInt64(0, 4095)
 			if err != nil {

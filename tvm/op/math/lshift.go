@@ -19,12 +19,15 @@ func LSHIFT() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
 				return err
 			}
+			if x == nil {
+				return pushMaybeInt(state, legacyShiftNaNResult(state.GlobalVersion, y.Uint64(), false), false)
+			}
 
-			return state.Stack.PushInt(x.Lsh(x, uint(y.Uint64())))
+			return pushMaybeInt(state, leftShiftResult(x, y.Uint64()), false)
 		},
 		Name:      "LSHIFT",
 		BitPrefix: helpers.BytesPrefix(0xAC),

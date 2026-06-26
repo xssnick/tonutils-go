@@ -453,6 +453,16 @@ func xloadOp(quiet bool) *helpers.SimpleOP {
 				return err
 			}
 
+			if state.GlobalVersion < 5 {
+				if err = state.Stack.PushCell(cl); err != nil {
+					return err
+				}
+				if quiet {
+					return state.Stack.PushBool(true)
+				}
+				return nil
+			}
+
 			resolved, err := state.ResolveLibraryCell(cl)
 			if err != nil {
 				if quiet {
@@ -807,8 +817,9 @@ func CLEVEL() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(cl.Level()))
 		},
-		Name:      "CLEVEL",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x66),
+		Name:       "CLEVEL",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x66),
+		MinVersion: 6,
 	}
 }
 
@@ -821,7 +832,8 @@ func CLEVELMASK() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(cl.LevelMask().Mask))
 		},
-		Name:      "CLEVELMASK",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x67),
+		Name:       "CLEVELMASK",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x67),
+		MinVersion: 6,
 	}
 }

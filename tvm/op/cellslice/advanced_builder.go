@@ -805,7 +805,8 @@ func BTOS() *helpers.SimpleOP {
 			}
 			return state.Stack.PushOwnedSlice(s)
 		},
-		Name:      "BTOS",
-		BitPrefix: helpers.BytesPrefix(0xCF, 0x50),
+		Name:       "BTOS",
+		BitPrefix:  helpers.BytesPrefix(0xCF, 0x50),
+		MinVersion: 12,
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"math/big"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tlb"
@@ -26,6 +27,25 @@ type superContractStep struct {
 	name    string
 	builder *cell.Builder
 }
+
+type superContractVersionedPrefixCase struct {
+	name    string
+	steps   []superContractStep
+	through string
+	c7      func(*testing.T, int) tuple.Tuple
+}
+
+type superContractC7PrefixSuite struct {
+	name  string
+	steps func(*testing.T) []superContractStep
+	c7    func(*testing.T, int) tuple.Tuple
+}
+
+const (
+	superContractAddressPrefixCaseCount          = 36
+	superContractC7PrefixSuiteCount              = 3
+	superContractNegativeQuietVersionedCaseCount = 6
+)
 
 func TestTVMCrossEmulatorSupercontractByPrefixes(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
@@ -54,6 +74,234 @@ func TestTVMCrossEmulatorSupercontractByPrefixes(t *testing.T) {
 	runSuperContractPrefixes(t, buildFeeSuperContractSteps(t), feeTestC7(t))
 	runSuperContractPrefixes(t, buildExtraBalanceSuperContractSteps(t), feeExtraBalanceTestC7(t))
 	runSuperContractPrefixes(t, buildActionSuperContractSteps(t), feeTestC7(t))
+}
+
+func TestTVMCrossEmulatorSupercontractVersionedPrefixes(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	tests := superContractVersionedPrefixCases(t)
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_VERSION_AUDIT")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			for _, version := range versions {
+				version := version
+				t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+					runSuperContractVersionedPrefixCase(t, tt, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorSupercontractVersionedPrefixes(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%superContractVersionedPrefixCaseCount))
+	}
+	for i := 0; i < superContractVersionedPrefixCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		tests := superContractVersionedPrefixCases(t)
+		if len(tests) != superContractVersionedPrefixCaseCount {
+			t.Fatalf("supercontract versioned prefix case count = %d, want %d", len(tests), superContractVersionedPrefixCaseCount)
+		}
+		tt := tests[int(rawCase)%len(tests)]
+		runSuperContractVersionedPrefixCase(t, tt, version)
+	})
+}
+
+const superContractVersionedPrefixCaseCount = 11
+
+func TestTVMCrossEmulatorSupercontractCorePrefixesAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	steps := superContractCorePrefixSteps(t)
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_CORE_PREFIX_VERSION_AUDIT")
+	for _, version := range versions {
+		version := version
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			for idx, step := range steps {
+				idx := idx
+				t.Run(strconv.Itoa(idx+1)+"_"+step.name, func(t *testing.T) {
+					runSuperContractNoC7PrefixVersionCase(t, steps, idx, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorSupercontractCorePrefixesGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version))
+	}
+	for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
+		f.Add(uint8(MaxSupportedGlobalVersion), rawPrefix)
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawPrefix uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		steps := superContractCorePrefixSteps(t)
+		runSuperContractNoC7PrefixVersionCase(t, steps, int(rawPrefix)%len(steps), version)
+	})
+}
+
+func TestTVMCrossEmulatorSupercontractTonopsPrefixesAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	steps := superContractTonopsPrefixSteps(t)
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_TONOPS_PREFIX_VERSION_AUDIT")
+	for _, version := range versions {
+		version := version
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			c7 := superContractStepsC7WithGlobalVersion(t, version)
+			for idx, step := range steps {
+				idx := idx
+				t.Run(strconv.Itoa(idx+1)+"_"+step.name, func(t *testing.T) {
+					runSuperContractRawC7PrefixVersionCase(t, steps, idx, c7, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorSupercontractTonopsPrefixesGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version))
+	}
+	for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
+		f.Add(uint8(MaxSupportedGlobalVersion), rawPrefix)
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawPrefix uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		steps := superContractTonopsPrefixSteps(t)
+		c7 := superContractStepsC7WithGlobalVersion(t, version)
+		runSuperContractRawC7PrefixVersionCase(t, steps, int(rawPrefix)%len(steps), c7, version)
+	})
+}
+
+func TestTVMCrossEmulatorSupercontractC7PrefixesAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	suites := superContractC7PrefixSuites(t)
+	if len(suites) != superContractC7PrefixSuiteCount {
+		t.Fatalf("supercontract c7 prefix suite count = %d, want %d", len(suites), superContractC7PrefixSuiteCount)
+	}
+
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_C7_PREFIX_VERSION_AUDIT")
+	for _, suite := range suites {
+		suite := suite
+		t.Run(suite.name, func(t *testing.T) {
+			steps := suite.steps(t)
+			for _, version := range versions {
+				version := version
+				t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+					c7 := suite.c7(t, version)
+					for idx, step := range steps {
+						idx := idx
+						t.Run(strconv.Itoa(idx+1)+"_"+step.name, func(t *testing.T) {
+							runSuperContractRawC7PrefixVersionCase(t, steps, idx, c7, version)
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorSupercontractC7PrefixesGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%superContractC7PrefixSuiteCount), uint8(version))
+	}
+	for suiteIdx := 0; suiteIdx < superContractC7PrefixSuiteCount; suiteIdx++ {
+		for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
+			f.Add(uint8(MaxSupportedGlobalVersion), uint8(suiteIdx), rawPrefix)
+		}
+	}
+	f.Add(uint8(255), uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawSuite, rawPrefix uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		suites := superContractC7PrefixSuites(t)
+		if len(suites) != superContractC7PrefixSuiteCount {
+			t.Fatalf("supercontract c7 prefix suite count = %d, want %d", len(suites), superContractC7PrefixSuiteCount)
+		}
+
+		suite := suites[int(rawSuite)%len(suites)]
+		steps := suite.steps(t)
+		c7 := suite.c7(t, version)
+		runSuperContractRawC7PrefixVersionCase(t, steps, int(rawPrefix)%len(steps), c7, version)
+	})
+}
+
+func TestTVMCrossEmulatorSupercontractCryptoPrefixesAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	steps := superContractCryptoPrefixSteps(t)
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_CRYPTO_PREFIX_VERSION_AUDIT")
+	for _, version := range versions {
+		version := version
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			for idx, step := range steps {
+				idx := idx
+				t.Run(strconv.Itoa(idx+1)+"_"+step.name, func(t *testing.T) {
+					runSuperContractNoC7PrefixVersionCase(t, steps, idx, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorSupercontractCryptoPrefixesGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version))
+	}
+	for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
+		f.Add(uint8(MaxSupportedGlobalVersion), rawPrefix)
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawPrefix uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		steps := superContractCryptoPrefixSteps(t)
+		runSuperContractNoC7PrefixVersionCase(t, steps, int(rawPrefix)%len(steps), version)
+	})
 }
 
 func TestTVMCrossEmulatorSupercontractAddressByPrefixes(t *testing.T) {
@@ -121,6 +369,53 @@ func TestTVMCrossEmulatorSupercontractAddressByPrefixes(t *testing.T) {
 			t.Fatalf("stack mismatch at step %d (%s):\ngo=%s\nreference=%s", i+1, steps[i].name, goStackCell.Dump(), refStackCell.Dump())
 		}
 	}
+}
+
+func TestTVMCrossEmulatorSupercontractAddressByPrefixesAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	steps := buildAddressSuperContractSteps(t)
+	if len(steps) != superContractAddressPrefixCaseCount {
+		t.Fatalf("supercontract address prefix case count = %d, want %d", len(steps), superContractAddressPrefixCaseCount)
+	}
+
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_ADDRESS_VERSION_AUDIT")
+	for _, version := range versions {
+		version := version
+		t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+			for idx, step := range steps {
+				idx := idx
+				t.Run(strconv.Itoa(idx+1)+"_"+step.name, func(t *testing.T) {
+					runSuperContractAddressPrefixVersionCase(t, steps, idx, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorSupercontractAddressByPrefixesGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%superContractAddressPrefixCaseCount))
+	}
+	for idx := 0; idx < superContractAddressPrefixCaseCount; idx++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(idx))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawPrefix uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		steps := buildAddressSuperContractSteps(t)
+		if len(steps) != superContractAddressPrefixCaseCount {
+			t.Fatalf("supercontract address prefix case count = %d, want %d", len(steps), superContractAddressPrefixCaseCount)
+		}
+		runSuperContractAddressPrefixVersionCase(t, steps, int(rawPrefix)%len(steps), version)
+	})
 }
 
 func TestTVMCrossEmulatorSupercontractNegativeQuiet(t *testing.T) {
@@ -566,6 +861,326 @@ func TestTVMCrossEmulatorSupercontractNegativeQuiet(t *testing.T) {
 	}
 }
 
+func runSuperContractAddressPrefixVersionCase(t *testing.T, steps []superContractStep, prefixIdx int, version int) {
+	t.Helper()
+
+	builders := make([]*cell.Builder, 0, prefixIdx+1)
+	for _, step := range steps[:prefixIdx+1] {
+		builders = append(builders, step.builder)
+	}
+	code := prependRawMethodDropBuilders(t, builders...)
+	goStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build go stack at step %d: %v", prefixIdx+1, err)
+	}
+	refStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build reference stack at step %d: %v", prefixIdx+1, err)
+	}
+
+	c7 := superContractFeeC7WithGlobalVersion(t, version)
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+	goRes, err := runGoCrossCodeWithVersion(code, testEmptyCell(), c7, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	refRes, err := runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit code mismatch at step %d (%s): go=%d reference=%d", prefixIdx+1, steps[prefixIdx].name, goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch at step %d (%s): go=%d reference=%d", prefixIdx+1, steps[prefixIdx].name, goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch at step %d (%s):\ngo=%s\nreference=%s", prefixIdx+1, steps[prefixIdx].name, goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func TestTVMCrossEmulatorSupercontractNegativeQuietGlobalVersion(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_NEGATIVE_VERSION_AUDIT")
+	for caseIdx := 0; caseIdx < superContractNegativeQuietVersionedCaseCount; caseIdx++ {
+		caseIdx := caseIdx
+		name, _, _, _, _ := superContractNegativeQuietVersionedCase(t, uint8(caseIdx), MaxSupportedGlobalVersion)
+		t.Run(name, func(t *testing.T) {
+			for _, version := range versions {
+				version := version
+				t.Run("v"+strconv.Itoa(version), func(t *testing.T) {
+					runSuperContractNegativeQuietVersionedCase(t, uint8(caseIdx), version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorSupercontractNegativeQuietGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%superContractNegativeQuietVersionedCaseCount))
+	}
+	for caseIdx := 0; caseIdx < superContractNegativeQuietVersionedCaseCount; caseIdx++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(caseIdx))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		runSuperContractNegativeQuietVersionedCase(t, rawCase, version)
+	})
+}
+
+func superContractCryptoPrefixSteps(t *testing.T) []superContractStep {
+	t.Helper()
+
+	steps, _ := buildSuperContractSteps(t)
+	cryptoStart := superContractStepIndex(t, steps, "push ecrecover hash")
+	return steps[cryptoStart:]
+}
+
+func superContractCorePrefixSteps(t *testing.T) []superContractStep {
+	t.Helper()
+
+	steps, _ := buildSuperContractSteps(t)
+	tonopsStart := superContractStepIndex(t, steps, "getparam 2")
+	return steps[:tonopsStart]
+}
+
+func superContractTonopsPrefixSteps(t *testing.T) []superContractStep {
+	t.Helper()
+
+	steps, _ := buildSuperContractSteps(t)
+	tonopsStart := superContractStepIndex(t, steps, "getparam 2")
+	cryptoStart := superContractStepIndex(t, steps, "push ecrecover hash")
+	return steps[tonopsStart:cryptoStart]
+}
+
+func runSuperContractNoC7PrefixVersionCase(t *testing.T, steps []superContractStep, prefixIdx int, version int) {
+	t.Helper()
+
+	builders := make([]*cell.Builder, 0, prefixIdx+1)
+	for _, step := range steps[:prefixIdx+1] {
+		builders = append(builders, step.builder)
+	}
+	code := prependRawMethodDropBuilders(t, builders...)
+	goStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build go stack at step %d: %v", prefixIdx+1, err)
+	}
+	refStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build reference stack at step %d: %v", prefixIdx+1, err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, testEmptyCell(), tuple.Tuple{}, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+	refRes, err := runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit code mismatch at step %d (%s): go=%d reference=%d", prefixIdx+1, steps[prefixIdx].name, goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch at step %d (%s): go=%d reference=%d", prefixIdx+1, steps[prefixIdx].name, goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch at step %d (%s):\ngo=%s\nreference=%s", prefixIdx+1, steps[prefixIdx].name, goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func runSuperContractRawC7PrefixVersionCase(t *testing.T, steps []superContractStep, prefixIdx int, c7 tuple.Tuple, version int) {
+	t.Helper()
+
+	builders := make([]*cell.Builder, 0, prefixIdx+1)
+	for _, step := range steps[:prefixIdx+1] {
+		builders = append(builders, step.builder)
+	}
+	code := prependRawMethodDropBuilders(t, builders...)
+	goStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build go stack at step %d: %v", prefixIdx+1, err)
+	}
+	refStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build reference stack at step %d: %v", prefixIdx+1, err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, testEmptyCell(), c7, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	refRes, err := runReferenceCrossCode(code, testEmptyCell(), c7, refStack)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit code mismatch at step %d (%s): go=%d reference=%d", prefixIdx+1, steps[prefixIdx].name, goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch at step %d (%s): go=%d reference=%d", prefixIdx+1, steps[prefixIdx].name, goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack at step %d (%s): %v", prefixIdx+1, steps[prefixIdx].name, err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch at step %d (%s):\ngo=%s\nreference=%s", prefixIdx+1, steps[prefixIdx].name, goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func runSuperContractNegativeQuietVersionedCase(t *testing.T, rawCase uint8, version int) {
+	t.Helper()
+
+	_, body, stackValues, c7, refCfg := superContractNegativeQuietVersionedCase(t, rawCase, version)
+	code := prependRawMethodDrop(body)
+	goStack, err := buildCrossStack(stackValues...)
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack(stackValues...)
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, testEmptyCell(), c7, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refRes, err := runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func superContractNegativeQuietVersionedCase(t *testing.T, rawCase uint8, version int) (string, *cell.Cell, []any, tuple.Tuple, *referenceGetMethodConfig) {
+	t.Helper()
+
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+	switch rawCase % superContractNegativeQuietVersionedCaseCount {
+	case 0:
+		return "rist255_qvalidate_invalid",
+			codeFromBuilders(t, funcsop.RIST255_QVALIDATE().Serialize()),
+			[]any{testInvalidRistrettoInt(t)},
+			tuple.Tuple{},
+			refCfg
+	case 1:
+		msg := []byte("ton-circl-bls-cross")
+		return "bls_verify_invalid_pub_false",
+			codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			[]any{testSliceFromBytes(testInvalidBLSG1Bytes(t)), testSliceFromBytes(msg), testSliceFromBytes(testBLSSigBytes(3, msg))},
+			tuple.Tuple{},
+			refCfg
+	case 2:
+		p256Curve := elliptic.P256()
+		p256D := big.NewInt(123456789)
+		p256X, p256Y := p256Curve.ScalarBaseMult(p256D.Bytes())
+		p256Priv := &ecdsa.PrivateKey{
+			PublicKey: ecdsa.PublicKey{
+				Curve: p256Curve,
+				X:     p256X,
+				Y:     p256Y,
+			},
+			D: p256D,
+		}
+		p256SliceData := []byte("p256-signed-slice")
+		p256SliceDigest := sha256.Sum256(p256SliceData)
+		p256SliceR, p256SliceS, err := ecdsa.Sign(bytes.NewReader(bytes.Repeat([]byte{0x24}, 1024)), p256Priv, p256SliceDigest[:])
+		if err != nil {
+			t.Fatalf("failed to sign p256 slice fixture: %v", err)
+		}
+		p256SigS := make([]byte, 64)
+		copy(p256SigS[32-len(p256SliceR.Bytes()):32], p256SliceR.Bytes())
+		copy(p256SigS[64-len(p256SliceS.Bytes()):64], p256SliceS.Bytes())
+		badP256Key := append([]byte{0x05}, bytes.Repeat([]byte{0x01}, 32)...)
+
+		return "p256_chksigns_unaligned_slice",
+			codeFromBuilders(t, funcsop.P256_CHKSIGNS().Serialize()),
+			[]any{cell.BeginCell().MustStoreUInt(0x7F, 7).ToSlice(), cell.BeginCell().MustStoreSlice(p256SigS, 512).ToSlice(), cell.BeginCell().MustStoreSlice(badP256Key, 264).ToSlice()},
+			tuple.Tuple{},
+			refCfg
+	case 3:
+		return "getgasfee_negative",
+			codeFromBuilders(t, funcsop.GETGASFEE().Serialize()),
+			[]any{int64(-1), int64(0)},
+			superContractFeeC7WithGlobalVersion(t, version),
+			refCfg
+	case 4:
+		return "getextrabalance_negative_id",
+			codeFromBuilders(t, funcsop.GETEXTRABALANCE().Serialize()),
+			[]any{int64(-1)},
+			superContractExtraBalanceC7WithGlobalVersion(t, version),
+			refCfg
+	default:
+		sendMsgPrices := tlb.ConfigMsgForwardPrices{LumpPrice: 1}
+		sendMsgConfig := tonopsCrossSendMsgConfig(t, uint32(version), sendMsgPrices)
+		return "sendmsg_invalid_message",
+			codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
+			[]any{cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell(), int64(1)},
+			makeTonopsTestC7(t, tonopsTestC7Config{
+				ConfigRoot:     sendMsgConfig,
+				UnpackedConfig: tonopsCrossSendMsgUnpackedConfig(t, sendMsgPrices),
+			}),
+			tonopsCrossRefConfig(sendMsgConfig)
+	}
+}
+
 func runSuperContractPrefixes(t *testing.T, steps []superContractStep, c7 tuple.Tuple) {
 	t.Helper()
 
@@ -616,16 +1231,178 @@ func runSuperContractPrefixes(t *testing.T, steps []superContractStep, c7 tuple.
 	}
 }
 
-func buildSuperContractSteps(t *testing.T) ([]superContractStep, tuple.Tuple) {
+func superContractC7PrefixSuites(t *testing.T) []superContractC7PrefixSuite {
+	t.Helper()
+
+	return []superContractC7PrefixSuite{
+		{
+			name:  "fee",
+			steps: buildFeeSuperContractSteps,
+			c7: func(t *testing.T, version int) tuple.Tuple {
+				return superContractFeeC7WithGlobalVersion(t, version)
+			},
+		},
+		{
+			name:  "extra_balance",
+			steps: buildExtraBalanceSuperContractSteps,
+			c7: func(t *testing.T, version int) tuple.Tuple {
+				return superContractExtraBalanceC7WithGlobalVersion(t, version)
+			},
+		},
+		{
+			name:  "actions",
+			steps: buildActionSuperContractSteps,
+			c7: func(t *testing.T, version int) tuple.Tuple {
+				return superContractFeeC7WithGlobalVersion(t, version)
+			},
+		},
+	}
+}
+
+func superContractVersionedPrefixCases(t *testing.T) []superContractVersionedPrefixCase {
+	t.Helper()
+
+	steps, _ := buildSuperContractSteps(t)
+	cryptoStart := superContractStepIndex(t, steps, "push ecrecover hash")
+	cryptoSteps := steps[cryptoStart:]
+	addressSteps := buildAddressSuperContractSteps(t)
+	feeSteps := buildFeeSuperContractSteps(t)
+	extraBalanceSteps := buildExtraBalanceSuperContractSteps(t)
+	actionSteps := buildActionSuperContractSteps(t)
+
+	return []superContractVersionedPrefixCase{
+		{name: "core_btos", steps: steps, through: "btos"},
+		{name: "core_bls_pairing", steps: steps, through: "bls_pairing"},
+		{name: "crypto_p256", steps: cryptoSteps, through: "p256_chksigns"},
+		{name: "crypto_globals", steps: cryptoSteps, through: "getglobvar 5"},
+		{name: "address_ldstdaddr", steps: addressSteps, through: "ldstdaddr"},
+		{name: "address_stoptstdaddrq", steps: addressSteps, through: "stoptstdaddrq"},
+		{name: "fee_getgasfee", steps: feeSteps, through: "getgasfee", c7: func(t *testing.T, version int) tuple.Tuple {
+			return superContractFeeC7WithGlobalVersion(t, version)
+		}},
+		{name: "fee_hashext", steps: feeSteps, through: "hashext", c7: func(t *testing.T, version int) tuple.Tuple {
+			return superContractFeeC7WithGlobalVersion(t, version)
+		}},
+		{name: "fee_rewritevaraddrq", steps: feeSteps, through: "rewritevaraddrq", c7: func(t *testing.T, version int) tuple.Tuple {
+			return superContractFeeC7WithGlobalVersion(t, version)
+		}},
+		{name: "extra_balance", steps: extraBalanceSteps, through: "getextrabalance miss", c7: func(t *testing.T, version int) tuple.Tuple {
+			return superContractExtraBalanceC7WithGlobalVersion(t, version)
+		}},
+		{name: "actions_sendmsg", steps: actionSteps, through: "sendmsg send", c7: func(t *testing.T, version int) tuple.Tuple {
+			return superContractFeeC7WithGlobalVersion(t, version)
+		}},
+	}
+}
+
+func runSuperContractVersionedPrefixCase(t *testing.T, tt superContractVersionedPrefixCase, version int) {
+	t.Helper()
+
+	builders := superContractBuildersThrough(t, tt.steps, tt.through)
+	var c7 tuple.Tuple
+	if tt.c7 != nil {
+		c7 = tt.c7(t, version)
+	}
+	runSuperContractVersionedPrefix(t, builders, c7, version)
+}
+
+func runSuperContractVersionedPrefix(t *testing.T, builders []*cell.Builder, c7 tuple.Tuple, version int) {
+	t.Helper()
+
+	code := prependRawMethodDropBuilders(t, builders...)
+	goStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, testEmptyCell(), c7, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+
+	var refRes *crossRunResult
+	if c7.Len() > 0 {
+		refRes, err = runReferenceCrossCode(code, testEmptyCell(), c7, refStack)
+	} else {
+		refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+		refRes, err = runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, *refCfg)
+	}
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func superContractBuildersThrough(t *testing.T, steps []superContractStep, name string) []*cell.Builder {
+	t.Helper()
+
+	idx := superContractStepIndex(t, steps, name)
+	builders := make([]*cell.Builder, 0, idx+1)
+	for _, step := range steps[:idx+1] {
+		builders = append(builders, step.builder)
+	}
+	return builders
+}
+
+func superContractStepIndex(t *testing.T, steps []superContractStep, name string) int {
+	t.Helper()
+
+	for i, step := range steps {
+		if step.name == name {
+			return i
+		}
+	}
+	t.Fatalf("failed to find supercontract step %q", name)
+	return -1
+}
+
+func superContractStepsConfigRoot(t *testing.T, version int) *cell.Cell {
 	t.Helper()
 
 	configValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
-	configRoot := mustConfigDictCell(t, map[uint32]*cell.Cell{
+	values := map[uint32]*cell.Cell{
 		7: configValue,
-	})
-	myCode := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
-	incomingValue := tuple.NewTupleValue(big.NewInt(555), cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell())
-	balance := tuple.NewTupleValue(big.NewInt(123456789), cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell())
+	}
+	if version >= 0 {
+		versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: uint32(version)})
+		if err != nil {
+			t.Fatalf("failed to build global version config: %v", err)
+		}
+		values[uint32(tlb.ConfigParamGlobalVersion)] = versionCell
+	}
+	return mustConfigDictCell(t, values)
+}
+
+func superContractStepsC7WithGlobalVersion(t *testing.T, version int) tuple.Tuple {
+	t.Helper()
+
+	return superContractStepsC7(t, superContractStepsConfigRoot(t, version))
+}
+
+func superContractStepsC7(t *testing.T, configRoot *cell.Cell) tuple.Tuple {
+	t.Helper()
 
 	unpacked := tuple.NewTupleSized(7)
 	mustSetTupleValue(t, &unpacked, 0, makeStoragePricesSlice(100, 3, 5, 7, 11))
@@ -636,11 +1413,11 @@ func buildSuperContractSteps(t *testing.T) ([]superContractStep, tuple.Tuple) {
 	mustSetTupleValue(t, &unpacked, 5, makeMsgPricesSlice(900, 120, 220, 400, 800, 1200))
 	mustSetTupleValue(t, &unpacked, 6, makeSizeLimitsSlice(1<<20, 128))
 
-	c7 := makeTonopsTestC7(t, tonopsTestC7Config{
+	return makeTonopsTestC7(t, tonopsTestC7Config{
 		ConfigRoot:     configRoot,
-		MyCode:         myCode,
-		IncomingValue:  incomingValue,
-		Balance:        balance,
+		MyCode:         cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell(),
+		IncomingValue:  tuple.NewTupleValue(big.NewInt(555), cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()),
+		Balance:        tuple.NewTupleValue(big.NewInt(123456789), cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()),
 		StorageFees:    tonopsTestStorageFees,
 		UnpackedConfig: unpacked,
 		Globals: map[int]any{
@@ -655,6 +1432,12 @@ func buildSuperContractSteps(t *testing.T) ([]superContractStep, tuple.Tuple) {
 			17: makeInMsgParamsTuple(),
 		},
 	})
+}
+
+func buildSuperContractSteps(t *testing.T) ([]superContractStep, tuple.Tuple) {
+	t.Helper()
+
+	c7 := superContractStepsC7(t, superContractStepsConfigRoot(t, -1))
 
 	msg := []byte("supertrace")
 	pub1 := testBLSPubBytes(3)
@@ -1138,8 +1921,8 @@ func buildExtraBalanceSuperContractSteps(t *testing.T) []superContractStep {
 
 func buildSuperContractStepsC7ForNegative(t *testing.T) tuple.Tuple {
 	t.Helper()
-	_, c7 := buildSuperContractSteps(t)
-	return c7
+
+	return superContractStepsC7(t, superContractStepsConfigRoot(t, -1))
 }
 
 func buildActionSuperContractSteps(t *testing.T) []superContractStep {
@@ -1189,6 +1972,33 @@ func buildActionSuperContractSteps(t *testing.T) []superContractStep {
 func feeExtraBalanceTestC7(t *testing.T) tuple.Tuple {
 	t.Helper()
 
+	return superContractExtraBalanceC7(t, nil)
+}
+
+func superContractFeeC7WithGlobalVersion(t *testing.T, version int) tuple.Tuple {
+	t.Helper()
+
+	return makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     tonopsCrossConfigWithGlobalVersion(t, uint32(version)),
+		UnpackedConfig: feeTestUnpackedConfig(t),
+		ExtraParams: map[int]any{
+			13: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
+			15: int64(444),
+			16: int64(555),
+			17: makeInMsgParamsTuple(),
+		},
+	})
+}
+
+func superContractExtraBalanceC7WithGlobalVersion(t *testing.T, version int) tuple.Tuple {
+	t.Helper()
+
+	return superContractExtraBalanceC7(t, tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+}
+
+func superContractExtraBalanceC7(t *testing.T, configRoot *cell.Cell) tuple.Tuple {
+	t.Helper()
+
 	extraDict := cell.NewDict(32)
 	if _, err := extraDict.SetBuilderWithMode(
 		cell.BeginCell().MustStoreUInt(7, 32).EndCell(),
@@ -1207,6 +2017,7 @@ func feeExtraBalanceTestC7(t *testing.T) tuple.Tuple {
 	mustSetTupleValue(t, &unpacked, 6, makeSizeLimitsSlice(1<<20, 128))
 
 	return makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     configRoot,
 		Balance:        tuple.NewTupleValue(new(big.Int).Set(tonopsTestBalance), extraDict.AsCell()),
 		UnpackedConfig: unpacked,
 		ExtraParams: map[int]any{

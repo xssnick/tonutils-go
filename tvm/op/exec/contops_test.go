@@ -234,4 +234,72 @@ func TestCONDSELCHKReturnsSelectedValue(t *testing.T) {
 	if got.Int64() != 11 {
 		t.Fatalf("expected selected value 11, got %s", got.String())
 	}
+
+	state = &vm.State{Stack: vm.NewStack()}
+	if err := state.Stack.PushBool(false); err != nil {
+		t.Fatalf("push cond: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+		t.Fatalf("push x: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(22)); err != nil {
+		t.Fatalf("push y: %v", err)
+	}
+
+	if err := CONDSELCHK().Interpret(state); err != nil {
+		t.Fatalf("condselchk failed: %v", err)
+	}
+
+	got, err = state.Stack.PopIntFinite()
+	if err != nil {
+		t.Fatalf("pop false result: %v", err)
+	}
+	if got.Int64() != 22 {
+		t.Fatalf("expected selected value 22, got %s", got.String())
+	}
+}
+
+func TestCONDSELCHKConditionAndUnderflowEdges(t *testing.T) {
+	t.Run("NonIntegerConditionPopsCheckedArgs", func(t *testing.T) {
+		state := &vm.State{Stack: vm.NewStack()}
+		condCell := cell.BeginCell().EndCell()
+		if err := state.Stack.PushCell(condCell); err != nil {
+			t.Fatalf("push cond: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push x: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(22)); err != nil {
+			t.Fatalf("push y: %v", err)
+		}
+
+		err := CONDSELCHK().Interpret(state)
+		var vmErr vmerr.VMError
+		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeTypeCheck {
+			t.Fatalf("expected type check, got %v", err)
+		}
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected condition and checked args to be consumed, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("UnderflowPreservesStack", func(t *testing.T) {
+		state := &vm.State{Stack: vm.NewStack()}
+		if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push first: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
+			t.Fatalf("push second: %v", err)
+		}
+
+		before := state.Stack.String()
+		err := CONDSELCHK().Interpret(state)
+		var vmErr vmerr.VMError
+		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeStackUnderflow {
+			t.Fatalf("expected stack underflow, got %v", err)
+		}
+		if after := state.Stack.String(); after != before {
+			t.Fatalf("underflow mutated stack:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+	})
 }

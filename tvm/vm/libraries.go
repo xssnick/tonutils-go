@@ -19,6 +19,9 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 	copy(cacheKey[:], hash)
 	if s.libraryCache != nil {
 		if cached := s.libraryCache[cacheKey]; cached != nil {
+			if err := s.consumeLegacyLibraryLookupGas(cached, true); err != nil {
+				return nil, err
+			}
 			return cached, nil
 		}
 	}
@@ -41,6 +44,9 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 		}
 
 		if ref.HashKey() == cacheKey {
+			if err := s.consumeLegacyLibraryLookupGas(ref, false); err != nil {
+				return nil, err
+			}
 			if s.libraryCache == nil {
 				s.libraryCache = make(map[cell.Hash]*cell.Cell, len(s.Libraries))
 			}
@@ -50,6 +56,25 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 	}
 
 	return nil, nil
+}
+
+func (s *State) consumeLegacyLibraryLookupGas(ref *cell.Cell, cached bool) error {
+	if s.GlobalVersion >= 5 {
+		return nil
+	}
+
+	if err := s.Cells.RegisterCellLoad(ref); err != nil {
+		return err
+	}
+
+	if s.GlobalVersion < 4 {
+		if cached {
+			return s.ConsumeGas(CellReloadGasPrice)
+		}
+		return s.ConsumeGas(CellLoadGasPrice)
+	}
+
+	return nil
 }
 
 func (s *State) ResolveLibraryCell(cl *cell.Cell) (*cell.Cell, error) {

@@ -107,7 +107,7 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseParity(t *testing.T) {
 		MustStoreUInt(2, 8).
 		EndCell()
 	tightStateConfig := referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
-		int32(tlb.ConfigParamSizeLimits): buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1),
+		int32(tlb.ConfigParamSizeLimits): buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
 	})
 	tightStorageConfig := referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
 		int32(tlb.ConfigParamGasPricesBasechain):   buildTransactionGasLimitsCell(t, 100, 500),
@@ -474,15 +474,70 @@ func transactionPhaseInternalMessage(t *testing.T, body *cell.Cell, amount uint6
 	})
 }
 
-func TestTVMCrossEmulatorTransactionNonComputePhaseExternalParity(t *testing.T) {
+func TestTVMCrossEmulatorTransactionNonComputePhaseExternalParityGlobalVersion(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	configRoot := mustReferenceTransactionConfigRoot(t)
-	now := uint32(tonopsTestTime.Unix())
+	fixture := transactionNonComputePhaseExternalFixture(t)
+	for _, version := range transactionVersionCrossEmulatorVersions(t) {
+		version := version
+		t.Run(fmt.Sprintf("global_v%d", version), func(t *testing.T) {
+			for _, tt := range fixture.cases {
+				tt := tt
+				t.Run(tt.name, func(t *testing.T) {
+					runTransactionNonComputePhaseExternalVersionCase(t, fixture, tt, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorTransactionNonComputePhaseExternalGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%transactionNonComputePhaseExternalCaseCount))
+	}
+	for i := 0; i < transactionNonComputePhaseExternalCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := uint32(tvmFuzzGlobalVersionByte(rawVersion))
+		fixture := transactionNonComputePhaseExternalFixture(t)
+		if len(fixture.cases) != transactionNonComputePhaseExternalCaseCount {
+			t.Fatalf("external transaction case count = %d, want %d", len(fixture.cases), transactionNonComputePhaseExternalCaseCount)
+		}
+		tt := fixture.cases[int(rawCase)%len(fixture.cases)]
+		runTransactionNonComputePhaseExternalVersionCase(t, fixture, tt, version)
+	})
+}
+
+const transactionNonComputePhaseExternalCaseCount = 4
+
+type transactionNonComputePhaseExternalCase struct {
+	name              string
+	code              *cell.Cell
+	wantAction        *transactionActionPhaseExpectation
+	wantActionVersion func(uint32) transactionActionPhaseExpectation
+}
+
+type transactionNonComputePhaseExternalFixtureData struct {
+	baseConfigRoot *cell.Cell
+	now            uint32
+	origData       *cell.Cell
+	msg            *cell.Cell
+	cases          []transactionNonComputePhaseExternalCase
+}
+
+func transactionNonComputePhaseExternalFixture(t *testing.T) transactionNonComputePhaseExternalFixtureData {
+	t.Helper()
+
 	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
-	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
 	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
 	outMsg := buildTransactionOutboundInternalCell(t, 1000)
 	shortVarDestMsg := buildTransactionOutboundInternalCellWithAddresses(t,
@@ -491,82 +546,98 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseExternalParity(t *testing.T) 
 		1000,
 		cell.BeginCell().MustStoreUInt(0xB0, 8).EndCell(),
 	)
+	msgCell, err := tlb.ToCell(&tlb.ExternalMessage{
+		DstAddr: tonopsTestAddr,
+		Body:    body,
+	})
+	if err != nil {
+		t.Fatalf("failed to build external message: %v", err)
+	}
 
-	tests := []struct {
-		name       string
-		code       *cell.Cell
-		shard      *tlb.ShardAccount
-		msg        *cell.Cell
-		wantAction *transactionActionPhaseExpectation
-	}{
-		{
-			name: "accepted_success",
-			code: makeTransactionExternalSuccessCode(t, newData),
-		},
-		{
-			name: "committed_throw_runs_actions",
-			code: makeTransactionExternalCommitThenThrowCode(t, newData, outMsg, 42),
-		},
-		{
-			name: "committed_throw_invalid_dest_action_code36",
-			code: makeTransactionExternalCommitThenThrowCode(t, newData, shortVarDestMsg, 42),
-			wantAction: &transactionActionPhaseExpectation{
-				success:         false,
-				valid:           true,
-				resultCode:      36,
-				skippedActions:  0,
-				messagesCreated: 0,
+	return transactionNonComputePhaseExternalFixtureData{
+		baseConfigRoot: mustReferenceTransactionConfigRoot(t),
+		now:            uint32(tonopsTestTime.Unix()),
+		origData:       cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell(),
+		msg:            msgCell,
+		cases: []transactionNonComputePhaseExternalCase{
+			{
+				name: "accepted_success",
+				code: makeTransactionExternalSuccessCode(t, newData),
 			},
-		},
-		{
-			name: "committed_throw_invalid_dest_action_mode2_skip",
-			code: makeTransactionExternalCommitThenThrowCodeWithMode(t, newData, shortVarDestMsg, 2, 42),
-			wantAction: &transactionActionPhaseExpectation{
-				success:         true,
-				valid:           true,
-				resultCode:      0,
-				skippedActions:  1,
-				messagesCreated: 0,
+			{
+				name: "committed_throw_runs_actions",
+				code: makeTransactionExternalCommitThenThrowCode(t, newData, outMsg, 42),
+			},
+			{
+				name: "committed_throw_invalid_dest_action_code36",
+				code: makeTransactionExternalCommitThenThrowCode(t, newData, shortVarDestMsg, 42),
+				wantAction: &transactionActionPhaseExpectation{
+					success:         false,
+					valid:           true,
+					resultCode:      36,
+					skippedActions:  0,
+					messagesCreated: 0,
+				},
+			},
+			{
+				name: "committed_throw_invalid_dest_action_mode2_skip",
+				code: makeTransactionExternalCommitThenThrowCodeWithMode(t, newData, shortVarDestMsg, 2, 42),
+				wantActionVersion: func(version uint32) transactionActionPhaseExpectation {
+					skipped := uint16(1)
+					if version < 8 {
+						skipped = 0
+					}
+					return transactionActionPhaseExpectation{
+						success:         true,
+						valid:           true,
+						resultCode:      0,
+						skippedActions:  skipped,
+						messagesCreated: 0,
+					}
+				},
 			},
 		},
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			msgCell, err := tlb.ToCell(&tlb.ExternalMessage{
-				DstAddr: tonopsTestAddr,
-				Body:    body,
-			})
-			if err != nil {
-				t.Fatalf("failed to build external message: %v", err)
-			}
-			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, tt.code, origData, walletSendTestBalance, now)
+func runTransactionNonComputePhaseExternalVersionCase(t *testing.T, fixture transactionNonComputePhaseExternalFixtureData, tt transactionNonComputePhaseExternalCase, version uint32) {
+	t.Helper()
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
-				Address:     tonopsTestAddr,
-				Now:         now,
-				BlockLT:     transactionTestLogicalTime,
-				LogicalTime: transactionTestLogicalTime,
-				RandSeed:    append([]byte(nil), tonopsTestSeed...),
-				ConfigRoot:  configRoot,
-			})
-			if err != nil {
-				t.Fatalf("go transaction emulation failed: %v", err)
-			}
+	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, fixture.baseConfigRoot, version)
+	machine, err := NewTVM().WithGlobalVersion(int(version))
+	if err != nil {
+		t.Fatalf("failed to create v%d TVM: %v", version, err)
+	}
+	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, tt.code, fixture.origData, walletSendTestBalance, fixture.now)
 
-			refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msgCell, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
-			if err != nil {
-				t.Fatalf("reference transaction emulation failed: %v", err)
-			}
+	goRes, err := machine.EmulateTransaction(shard, fixture.msg, TransactionEmulationConfig{
+		Address:     tonopsTestAddr,
+		Now:         fixture.now,
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  configRoot,
+	})
+	if err != nil {
+		t.Fatalf("go transaction emulation failed: %v", err)
+	}
 
-			assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
-			assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-			assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
-			if tt.wantAction != nil {
-				assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, *tt.wantAction)
-				assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, *tt.wantAction)
-			}
-		})
+	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, fixture.msg, fixture.now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
+	if err != nil {
+		t.Fatalf("reference transaction emulation failed: %v", err)
+	}
+
+	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
+	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
+	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	if tt.wantAction != nil {
+		assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, *tt.wantAction)
+		assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, *tt.wantAction)
+	}
+	if tt.wantActionVersion != nil {
+		want := tt.wantActionVersion(version)
+		assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
+		assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 	}
 }
 
@@ -609,14 +680,67 @@ func assertOrdinaryTransactionActionPhase(t *testing.T, side string, txCell *cel
 	}
 }
 
-func TestTVMCrossEmulatorTransactionNonComputePhaseTickTockParity(t *testing.T) {
+func TestTVMCrossEmulatorTransactionNonComputePhaseTickTockParityGlobalVersion(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	configRoot := mustReferenceTransactionConfigRoot(t)
-	now := uint32(tonopsTestTime.Unix())
-	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	fixture := buildTransactionNonComputePhaseTickTockFixture(t)
+	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_TICKTOCK_VERSION_AUDIT") {
+		version := version
+		t.Run(fmt.Sprintf("global_v%d", version), func(t *testing.T) {
+			for _, tt := range fixture.cases {
+				tt := tt
+				t.Run(tt.name, func(t *testing.T) {
+					runTransactionNonComputePhaseTickTockVersionCase(t, fixture, tt, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorTransactionNonComputePhaseTickTockGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%transactionNonComputePhaseTickTockCaseCount))
+	}
+	for i := 0; i < transactionNonComputePhaseTickTockCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		fixture := buildTransactionNonComputePhaseTickTockFixture(t)
+		if len(fixture.cases) != transactionNonComputePhaseTickTockCaseCount {
+			t.Fatalf("tick/tock transaction case count = %d, want %d", len(fixture.cases), transactionNonComputePhaseTickTockCaseCount)
+		}
+		tt := fixture.cases[int(rawCase)%len(fixture.cases)]
+		runTransactionNonComputePhaseTickTockVersionCase(t, fixture, tt, version)
+	})
+}
+
+const transactionNonComputePhaseTickTockCaseCount = 5
+
+type transactionNonComputePhaseTickTockCase struct {
+	name   string
+	code   *cell.Cell
+	isTock bool
+}
+
+type transactionNonComputePhaseTickTockFixtureData struct {
+	baseConfigRoot *cell.Cell
+	now            uint32
+	origData       *cell.Cell
+	cases          []transactionNonComputePhaseTickTockCase
+}
+
+func buildTransactionNonComputePhaseTickTockFixture(t *testing.T) transactionNonComputePhaseTickTockFixtureData {
+	t.Helper()
+
 	tickData := cell.BeginCell().MustStoreUInt(0x1111, 16).EndCell()
 	tockData := cell.BeginCell().MustStoreUInt(0x2222, 16).EndCell()
 	tickBody := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
@@ -629,48 +753,56 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseTickTockParity(t *testing.T) 
 	if err != nil {
 		t.Fatalf("failed to build tock message: %v", err)
 	}
+
 	stateOnlyCode := makeTickTockStateOnlyCode(t, tickData, tockData)
 	actionCode := makeTickTockSuccessCode(t, tickData, tockData, tickMsg, tockMsg)
 	failCode := makeTickTockFailureCode(t)
 
-	tests := []struct {
-		name   string
-		code   *cell.Cell
-		isTock bool
-	}{
-		{name: "tick_state_only_success", code: stateOnlyCode},
-		{name: "tock_state_only_success", code: stateOnlyCode, isTock: true},
-		{name: "tick_action_success", code: actionCode},
-		{name: "tock_action_success", code: actionCode, isTock: true},
-		{name: "tick_failure", code: failCode},
+	return transactionNonComputePhaseTickTockFixtureData{
+		baseConfigRoot: mustReferenceTransactionConfigRoot(t),
+		now:            uint32(tonopsTestTime.Unix()),
+		origData:       cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell(),
+		cases: []transactionNonComputePhaseTickTockCase{
+			{name: "tick_state_only_success", code: stateOnlyCode},
+			{name: "tock_state_only_success", code: stateOnlyCode, isTock: true},
+			{name: "tick_action_success", code: actionCode},
+			{name: "tock_action_success", code: actionCode, isTock: true},
+			{name: "tick_failure", code: failCode},
+		},
+	}
+}
+
+func runTransactionNonComputePhaseTickTockVersionCase(t *testing.T, fixture transactionNonComputePhaseTickTockFixtureData, tt transactionNonComputePhaseTickTockCase, version int) {
+	t.Helper()
+
+	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, fixture.baseConfigRoot, uint32(version))
+	machine, err := NewTVM().WithGlobalVersion(version)
+	if err != nil {
+		t.Fatalf("failed to create v%d TVM: %v", version, err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, tt.code, origData, tickTockTestBalance)
-			if err != nil {
-				t.Fatalf("failed to build tick/tock shard: %v", err)
-			}
-			goRes, err := NewTVM().EmulateTickTockTransaction(shard, tt.isTock, TransactionEmulationConfig{
-				Now:        now,
-				Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-				RandSeed:   append([]byte(nil), tonopsTestSeed...),
-				ConfigRoot: configRoot,
-			})
-			if err != nil {
-				t.Fatalf("go tick/tock emulation failed: %v", err)
-			}
-
-			refRes, err := runReferenceTickTock(tt.code, origData, tickTockTestAddr, tt.isTock, now, tickTockTestBalance, tonopsTestSeed)
-			if err != nil {
-				t.Fatalf("reference tick/tock emulation failed: %v", err)
-			}
-
-			assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
-			assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-			assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
-		})
+	shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, tt.code, fixture.origData, tickTockTestBalance)
+	if err != nil {
+		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
+	goRes, err := machine.EmulateTickTockTransaction(shard, tt.isTock, TransactionEmulationConfig{
+		Now:        fixture.now,
+		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
+		RandSeed:   append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot: configRoot,
+	})
+	if err != nil {
+		t.Fatalf("go tick/tock emulation failed: %v", err)
+	}
+
+	refRes, err := runReferenceTickTockWithConfigRoot(tt.code, fixture.origData, tickTockTestAddr, tt.isTock, fixture.now, tickTockTestBalance, tonopsTestSeed, configRoot)
+	if err != nil {
+		t.Fatalf("reference tick/tock emulation failed: %v", err)
+	}
+
+	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
+	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
+	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
 }
 
 func assertShardAccountNonComputeParity(t *testing.T, goCell, refCell *cell.Cell) {
@@ -824,79 +956,227 @@ func mustNormalizeTransactionComputePhase(t *testing.T, txCell *cell.Cell) *cell
 	return normalized
 }
 
-func TestTVMCrossEmulatorTransactionNonComputePhaseParityV13(t *testing.T) {
+func TestTVMCrossEmulatorTransactionNonComputePhaseParityGlobalVersion(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	baseConfigRoot := mustReferenceTransactionConfigRoot(t)
-	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, 13)
+	fixture := transactionNonComputePhaseVersionFixture(t)
+	for _, version := range transactionVersionCrossEmulatorVersions(t) {
+		version := version
+		t.Run(fmt.Sprintf("global_v%d", version), func(t *testing.T) {
+			for _, tt := range fixture.cases {
+				if tt.minVersion != 0 && version < tt.minVersion {
+					continue
+				}
+				tt := tt
+				t.Run(tt.name, func(t *testing.T) {
+					runTransactionNonComputePhaseVersionCase(t, fixture, tt, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorTransactionNonComputePhaseGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%transactionNonComputePhaseVersionCaseCount))
+	}
+	for i := 0; i < transactionNonComputePhaseVersionCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := uint32(tvmFuzzGlobalVersionByte(rawVersion))
+		fixture := transactionNonComputePhaseVersionFixture(t)
+		if len(fixture.cases) != transactionNonComputePhaseVersionCaseCount {
+			t.Fatalf("transaction non-compute case count = %d, want %d", len(fixture.cases), transactionNonComputePhaseVersionCaseCount)
+		}
+		tt := transactionNonComputePhaseVersionCaseForFuzz(t, fixture.cases, version, rawCase)
+		runTransactionNonComputePhaseVersionCase(t, fixture, tt, version)
+	})
+}
+
+const transactionNonComputePhaseVersionCaseCount = 8
+
+type transactionNonComputePhaseVersionCase struct {
+	name       string
+	shard      *tlb.ShardAccount
+	msg        *cell.Cell
+	minVersion uint32
+	configRoot func(*testing.T, *cell.Cell) *cell.Cell
+}
+
+type transactionNonComputePhaseVersionFixtureData struct {
+	baseConfigRoot *cell.Cell
+	now            uint32
+	cases          []transactionNonComputePhaseVersionCase
+}
+
+func transactionNonComputePhaseVersionFixture(t *testing.T) transactionNonComputePhaseVersionFixtureData {
+	t.Helper()
+
 	now := uint32(tonopsTestTime.Unix())
 	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	largeBody := buildTransactionZeroBitsCell(t, 520)
 	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
 	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	nextCode := cell.BeginCell().MustStoreUInt(0xD00D, 16).EndCell()
 	outMsg := buildTransactionOutboundInternalCell(t, 1000)
 	overspendMsg := buildTransactionOutboundInternalCell(t, 2_000_000_000)
 	precompiledCode := makeTransactionInternalSuccessCode(t, newData)
-	precompiledConfigRoot := referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
-		int32(tlb.ConfigParamPrecompiledContracts): buildTransactionV13PrecompiledConfig(t, precompiledCode, 7),
-	})
-
-	machine, err := NewTVM().WithGlobalVersion(13)
-	if err != nil {
-		t.Fatalf("failed to create v13 TVM: %v", err)
+	storageDebtOverDeleteLimit := tlb.StorageInfo{
+		StorageUsed: tlb.StorageUsed{
+			CellsUsed: big.NewInt(0),
+			BitsUsed:  big.NewInt(0),
+		},
+		StorageExtra: tlb.StorageExtraNone{},
+		LastPaid:     now - 60,
+		DuePayment:   transactionCoinsPtr(big.NewInt(501)),
 	}
-
-	tests := []struct {
-		name       string
-		shard      *tlb.ShardAccount
-		msg        *cell.Cell
-		configRoot *cell.Cell
-	}{
-		{
-			name:  "send_success",
-			shard: buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalSendCode(t, outMsg, newData, 1), origData, walletSendTestBalance, now),
-			msg:   transactionPhaseInternalMessage(t, body, 1_000_000_000, false, 0),
+	storageDebtLarge := tlb.StorageInfo{
+		StorageUsed: tlb.StorageUsed{
+			CellsUsed: big.NewInt(0),
+			BitsUsed:  big.NewInt(0),
 		},
-		{
-			name:  "action_failure_bounce_keeps_v13_message_balance",
-			shard: buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalSendCode(t, overspendMsg, newData, 16), origData, 500, now),
-			msg:   transactionPhaseInternalMessage(t, body, 1_000_000_000, true, 0),
-		},
-		{
-			name:       "precompiled_config_overrides_gas_usage",
-			shard:      buildTransactionTestShardAccount(t, tonopsTestAddr, precompiledCode, origData, walletSendTestBalance, now),
-			msg:        transactionPhaseInternalMessage(t, body, 1_000_000_000, false, 0),
-			configRoot: precompiledConfigRoot,
-		},
+		StorageExtra: tlb.StorageExtraNone{},
+		LastPaid:     now - 60,
+		DuePayment:   transactionCoinsPtr(big.NewInt(1000)),
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testConfigRoot := configRoot
-			if tt.configRoot != nil {
-				testConfigRoot = tt.configRoot
-			}
+	tightStorageConfig := func(t *testing.T, configRoot *cell.Cell) *cell.Cell {
+		t.Helper()
 
-			goRes, err := machine.EmulateTransaction(tt.shard, tt.msg, TransactionEmulationConfig{
-				Address:     tonopsTestAddr,
-				Now:         now,
-				BlockLT:     transactionTestLogicalTime,
-				LogicalTime: transactionTestLogicalTime,
-				RandSeed:    append([]byte(nil), tonopsTestSeed...),
-				ConfigRoot:  testConfigRoot,
-			})
-			if err != nil {
-				t.Fatalf("go transaction emulation failed: %v", err)
-			}
-
-			refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(tt.shard, tt.msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, testConfigRoot)
-			if err != nil {
-				t.Fatalf("reference transaction emulation failed: %v", err)
-			}
-
-			assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
-			assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-			assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+		return referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
+			int32(tlb.ConfigParamGasPricesBasechain):   buildTransactionGasLimitsCell(t, 100, 500),
+			int32(tlb.ConfigParamGasPricesMasterchain): buildTransactionGasLimitsCell(t, 100, 500),
 		})
 	}
+	tightStateConfig := func(t *testing.T, configRoot *cell.Cell) *cell.Cell {
+		t.Helper()
+
+		return referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
+			int32(tlb.ConfigParamSizeLimits): buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
+		})
+	}
+
+	return transactionNonComputePhaseVersionFixtureData{
+		baseConfigRoot: mustReferenceTransactionConfigRoot(t),
+		now:            now,
+		cases: []transactionNonComputePhaseVersionCase{
+			{
+				name:  "send_success",
+				shard: buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalSendCode(t, outMsg, newData, 1), origData, walletSendTestBalance, now),
+				msg:   transactionPhaseInternalMessage(t, body, 1_000_000_000, false, 0),
+			},
+			{
+				name:  "action_failure_bounce_message_balance",
+				shard: buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalSendCode(t, overspendMsg, newData, 16), origData, 500, now),
+				msg:   transactionPhaseInternalMessage(t, body, 1_000_000_000, true, 0),
+			},
+			{
+				name:  "compute_failure_bounce_large_body",
+				shard: buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionStackUnderflowCode(t), origData, walletSendTestBalance, now),
+				msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
+					IHRDisabled: true,
+					Bounce:      true,
+					SrcAddr:     internalEmulationSrcAddr,
+					DstAddr:     tonopsTestAddr,
+					Amount:      tlb.FromNanoTONU(1_000_000_000),
+					IHRFee:      tlb.FromNanoTONU(1),
+					Body:        largeBody,
+				}),
+			},
+			{
+				name:  "non_bounceable_no_state_rich_value",
+				shard: buildTransactionTestNoneShardAccount(t),
+				msg:   transactionPhaseInternalMessage(t, body, 1_000_000_000, false, 0),
+			},
+			{
+				name:       "storage_debt_freezes_active",
+				shard:      buildTransactionTestShardAccountWithStorageInfo(t, tonopsTestAddr, makeTransactionInternalSuccessCode(t, newData), origData, 50, storageDebtLarge),
+				msg:        transactionPhaseInternalMessage(t, body, 0, false, 0),
+				configRoot: tightStorageConfig,
+			},
+			{
+				name:       "storage_due_over_delete_limit_deletes_uninit",
+				shard:      buildTransactionTestUninitShardAccount(t, tonopsTestAddr, 0, storageDebtOverDeleteLimit),
+				msg:        transactionPhaseInternalMessage(t, body, 0, false, 0),
+				configRoot: tightStorageConfig,
+			},
+			{
+				name:       "action_state_limit_failure_rolls_back_state",
+				shard:      buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalSetCodeCode(t, nextCode, newData), origData, walletSendTestBalance, now),
+				msg:        transactionPhaseInternalMessage(t, body, 1_000_000_000, false, 0),
+				configRoot: tightStateConfig,
+			},
+			{
+				name:       "precompiled_config_overrides_gas_usage",
+				shard:      buildTransactionTestShardAccount(t, tonopsTestAddr, precompiledCode, origData, walletSendTestBalance, now),
+				msg:        transactionPhaseInternalMessage(t, body, 1_000_000_000, false, 0),
+				minVersion: 13,
+				configRoot: func(t *testing.T, configRoot *cell.Cell) *cell.Cell {
+					t.Helper()
+
+					return referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
+						int32(tlb.ConfigParamPrecompiledContracts): buildTransactionV13PrecompiledConfig(t, precompiledCode, 7),
+					})
+				},
+			},
+		},
+	}
+}
+
+func transactionNonComputePhaseVersionCaseForFuzz(t *testing.T, cases []transactionNonComputePhaseVersionCase, version uint32, rawCase uint8) transactionNonComputePhaseVersionCase {
+	t.Helper()
+
+	start := int(rawCase) % len(cases)
+	for i := 0; i < len(cases); i++ {
+		tt := cases[(start+i)%len(cases)]
+		if tt.minVersion == 0 || version >= tt.minVersion {
+			return tt
+		}
+	}
+	t.Fatalf("no transaction non-compute cases are available for v%d", version)
+	return transactionNonComputePhaseVersionCase{}
+}
+
+func runTransactionNonComputePhaseVersionCase(t *testing.T, fixture transactionNonComputePhaseVersionFixtureData, tt transactionNonComputePhaseVersionCase, version uint32) {
+	t.Helper()
+
+	versionConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, fixture.baseConfigRoot, version)
+	testConfigRoot := versionConfigRoot
+	if tt.configRoot != nil {
+		testConfigRoot = tt.configRoot(t, versionConfigRoot)
+	}
+
+	machine, err := NewTVM().WithGlobalVersion(int(version))
+	if err != nil {
+		t.Fatalf("failed to create v%d TVM: %v", version, err)
+	}
+
+	goRes, err := machine.EmulateTransaction(tt.shard, tt.msg, TransactionEmulationConfig{
+		Address:     tonopsTestAddr,
+		Now:         fixture.now,
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  testConfigRoot,
+	})
+	if err != nil {
+		t.Fatalf("go transaction emulation failed: %v", err)
+	}
+
+	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(tt.shard, tt.msg, fixture.now, uint64(transactionTestLogicalTime), tonopsTestSeed, testConfigRoot)
+	if err != nil {
+		t.Fatalf("reference transaction emulation failed: %v", err)
+	}
+
+	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
+	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
+	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
 }

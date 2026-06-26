@@ -340,6 +340,7 @@ func TestExportFeeAndConfigHelpers(t *testing.T) {
 			20: gasSlice.MustToCell(),
 			25: msgConfigSlice.MustToCell(),
 		}),
+		paramIdxUnpackedConfig: makeFeeUnpackedConfig(t, storageCell, gasSlice, msgConfigSlice),
 	})
 	if parsed, err := getTonGasPrices(st, true); err != nil || parsed.FlatGasLimit != 10 {
 		t.Fatalf("getTonGasPrices(masterchain) = (%+v, %v)", parsed, err)

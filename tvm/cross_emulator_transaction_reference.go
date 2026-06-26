@@ -200,18 +200,21 @@ func mustReferenceTransactionConfigRoot(t testingT) *cell.Cell {
 }
 
 func referenceTransactionConfigRootWithGlobalVersion(t testingT, base *cell.Cell, version uint32) *cell.Cell {
-	params := tlb.BlockchainConfig{Root: base}.All()
-	if params == nil {
-		t.Fatalf("failed to load reference config params")
-	}
-
 	globalVersion, err := tlb.BlockchainConfig{Root: base}.GetGlobalVersion()
 	if err != nil {
 		t.Fatalf("failed to load reference global version: %v", err)
 	}
+	return referenceTransactionConfigRootWithGlobalVersionAndCapabilities(t, base, version, globalVersion.Capabilities)
+}
+
+func referenceTransactionConfigRootWithGlobalVersionAndCapabilities(t testingT, base *cell.Cell, version uint32, capabilities uint64) *cell.Cell {
+	params := tlb.BlockchainConfig{Root: base}.All()
+	if params == nil {
+		t.Fatalf("failed to load reference config params")
+	}
 	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{
 		Version:      version,
-		Capabilities: globalVersion.Capabilities,
+		Capabilities: capabilities,
 	})
 	if err != nil {
 		t.Fatalf("failed to build global version config: %v", err)

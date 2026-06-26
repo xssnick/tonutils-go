@@ -271,13 +271,13 @@ func (s *State) JumpTo(c Continuation) (err error) {
 		}
 		iter++
 
-		if iter > FreeNestedContJump {
+		if s.GlobalVersion >= 9 && iter > FreeNestedContJump {
 			if err = s.ConsumeGas(1); err != nil {
 				return err
 			}
 		}
 
-		if c != nil {
+		if c != nil && s.GlobalVersion >= 9 {
 			if data := c.GetControlData(); data != nil && (data.Stack != nil || data.NumArgs >= 0) {
 				// if cont has non-empty stack or expects fixed number of arguments, jump is not simple
 				c, err = s.adjustJumpCont(c, -1)

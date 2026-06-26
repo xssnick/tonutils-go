@@ -4,6 +4,7 @@ package tvm
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"testing"
 
@@ -14,10 +15,83 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+const advancedCellOpsParityCaseCount = 81
+
+type advancedCellOpsParityCase struct {
+	name  string
+	code  *cell.Cell
+	stack []any
+	exit  int32
+	c7    tuple.Tuple
+	libs  *cell.Cell
+}
+
 func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
+
+	tests := advancedCellOpsParityCases(t)
+	if len(tests) != advancedCellOpsParityCaseCount {
+		t.Fatalf("advanced cellops parity case count = %d, want %d", len(tests), advancedCellOpsParityCaseCount)
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			runAdvancedCellOpsParityCase(t, tt)
+		})
+	}
+}
+
+func TestTVMCrossEmulatorAdvancedCellOpsAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	tests := advancedCellOpsParityCases(t)
+	if len(tests) != advancedCellOpsParityCaseCount {
+		t.Fatalf("advanced cellops parity case count = %d, want %d", len(tests), advancedCellOpsParityCaseCount)
+	}
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_ADVANCED_CELLOPS_CORE_VERSION_AUDIT")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			for _, version := range versions {
+				version := version
+				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+					runAdvancedCellOpsVersionedParityCaseWithoutExpected(t, tt, version)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorAdvancedCellOpsGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%advancedCellOpsParityCaseCount))
+	}
+	for i := 0; i < advancedCellOpsParityCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		tests := advancedCellOpsParityCases(t)
+		if len(tests) != advancedCellOpsParityCaseCount {
+			t.Fatalf("advanced cellops parity case count = %d, want %d", len(tests), advancedCellOpsParityCaseCount)
+		}
+		tt := tests[int(rawCase)%len(tests)]
+		runAdvancedCellOpsVersionedParityCaseWithoutExpected(t, tt, version)
+	})
+}
+
+func advancedCellOpsParityCases(t *testing.T) []advancedCellOpsParityCase {
+	t.Helper()
 
 	libraryCell := mustLibraryCell(t)
 	libraryBuilder := mustLibraryBuilder(t)
@@ -82,16 +156,7 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 	storeBuilderDst := cell.BeginCell().MustStoreUInt(0xB, 4)
 	storeSlice := cell.BeginCell().MustStoreUInt(0xC, 4).MustStoreRef(refCell).EndCell().MustBeginParse()
 
-	type testCase struct {
-		name  string
-		code  *cell.Cell
-		stack []any
-		exit  int32
-		c7    tuple.Tuple
-		libs  *cell.Cell
-	}
-
-	tests := []testCase{
+	return []advancedCellOpsParityCase{
 		{
 			name: "pushref",
 			code: codeFromBuilders(t, stackop.PUSHREF(refCell).Serialize()),
@@ -588,55 +653,89 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			code := prependRawMethodDrop(tt.code)
-			goStack, err := buildCrossStack(tt.stack...)
-			if err != nil {
-				t.Fatalf("failed to build go stack: %v", err)
-			}
-			refStack, err := buildCrossStack(tt.stack...)
-			if err != nil {
-				t.Fatalf("failed to build reference stack: %v", err)
-			}
+}
 
-			var goLibs []*cell.Cell
-			if tt.libs != nil {
-				goLibs = []*cell.Cell{tt.libs}
-			}
-			goRes, err := runGoCrossCodeWithLibs(code, cell.BeginCell().EndCell(), tt.c7, goLibs, goStack)
-			if err != nil {
-				t.Fatalf("go tvm execution failed: %v", err)
-			}
+func runAdvancedCellOpsParityCase(t *testing.T, tt advancedCellOpsParityCase) {
+	t.Helper()
 
-			refRes, err := runReferenceCrossCodeWithLibs(code, cell.BeginCell().EndCell(), tt.c7, tt.libs, refStack)
-			if err != nil {
-				t.Fatalf("reference tvm execution failed: %v", err)
-			}
+	runAdvancedCellOpsParityCaseWithExpected(t, tt, 0, false, &tt.exit)
+}
 
-			if goRes.exitCode != tt.exit || refRes.exitCode != tt.exit {
-				t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, tt.exit)
-			}
-			if goRes.exitCode != refRes.exitCode {
-				t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
-			}
-			if goRes.gasUsed != refRes.gasUsed {
-				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
-			}
+func runAdvancedCellOpsVersionedParityCaseWithoutExpected(t *testing.T, tt advancedCellOpsParityCase, version int) {
+	t.Helper()
 
-			goStackCell, err := normalizeStackCell(goRes.stack)
-			if err != nil {
-				t.Fatalf("failed to normalize go stack: %v", err)
-			}
-			refStackCell, err := normalizeStackCell(refRes.stack)
-			if err != nil {
-				t.Fatalf("failed to normalize reference stack: %v", err)
-			}
-			if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
-				t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
-			}
-		})
+	runAdvancedCellOpsParityCaseWithExpected(t, tt, version, true, nil)
+}
+
+func runAdvancedCellOpsParityCaseWithExpected(t *testing.T, tt advancedCellOpsParityCase, version int, versioned bool, wantExit *int32) {
+	t.Helper()
+
+	code := prependRawMethodDrop(tt.code)
+	goStack, err := buildCrossStack(tt.stack...)
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
 	}
+	refStack, err := buildCrossStack(tt.stack...)
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	var goLibs []*cell.Cell
+	if tt.libs != nil {
+		goLibs = []*cell.Cell{tt.libs}
+	}
+
+	var goRes *crossRunResult
+	var refRes *crossRunResult
+	if versioned {
+		goRes, err = runGoCrossCodeWithVersionAndLibs(code, cell.BeginCell().EndCell(), tt.c7, goLibs, goStack, version)
+	} else {
+		goRes, err = runGoCrossCodeWithLibs(code, cell.BeginCell().EndCell(), tt.c7, goLibs, goStack)
+	}
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+
+	if versioned {
+		refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+		refCfg.Libs = tt.libs
+		refRes, err = runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
+	} else {
+		refRes, err = runReferenceCrossCodeWithLibs(code, cell.BeginCell().EndCell(), tt.c7, tt.libs, refStack)
+	}
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if wantExit != nil && (goRes.exitCode != *wantExit || refRes.exitCode != *wantExit) {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, *wantExit)
+	}
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func TestTVMCrossEmulatorAdvancedCellOpsLibraryResolution(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	refCell := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
 
 	t.Run("xload_library_resolution", func(t *testing.T) {
 		target := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
@@ -812,6 +911,576 @@ func TestTVMCrossEmulatorAdvancedCellOps(t *testing.T) {
 			t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
 		}
 	})
+}
+
+func TestTVMCrossEmulatorAdvancedCellOpsVersionedEdges(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	target := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	libraryCell := mustCrossLibraryCellForHash(t, target.Hash())
+	libraries := mustCrossLibraryCollection(t, target)
+	missingLibraryCell := mustCrossLibraryCellForHash(t, cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell().Hash())
+	shortSlice := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
+	withRefSlice := cell.BeginCell().
+		MustStoreUInt(0xAB, 8).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()).
+		EndCell().
+		MustBeginParse()
+	builderToSlice := cell.BeginCell().
+		MustStoreUInt(0xABCD, 16).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(0xEF, 8).EndCell())
+	hashDepthCell := cell.BeginCell().
+		MustStoreUInt(1, 1).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).
+		EndCell()
+
+	tests := []advancedCellVersionedCase{
+		{
+			name:    "v4_xload_library_keeps_special_cell",
+			version: 4,
+			code:    codeFromBuilders(t, cellsliceop.XLOAD().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v5_xload_library_resolves",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.XLOAD().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v0_ctos_library_resolves",
+			version: 0,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v1_ctos_library_resolves",
+			version: 1,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v2_ctos_library_resolves",
+			version: 2,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v3_ctos_library_resolves",
+			version: 3,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v4_ctos_library_resolves",
+			version: 4,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v0_ctos_code_ref_library_resolves",
+			version: 0,
+			code: codeFromBuilders(t,
+				stackop.PUSHREF(libraryCell).Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			libs: libraries,
+			exit: 0,
+		},
+		{
+			name:    "v4_ctos_code_ref_library_resolves",
+			version: 4,
+			code: codeFromBuilders(t,
+				stackop.PUSHREF(libraryCell).Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			libs: libraries,
+			exit: 0,
+		},
+		{
+			name:    "v5_ctos_code_ref_library_resolves",
+			version: 5,
+			code: codeFromBuilders(t,
+				stackop.PUSHREF(libraryCell).Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			libs: libraries,
+			exit: 0,
+		},
+		{
+			name:    "v0_ctos_library_resolves_twice",
+			version: 0,
+			code: codeFromBuilders(t,
+				cellsliceop.CTOS().Serialize(),
+				stackop.DROP().Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			stack: []any{libraryCell, libraryCell},
+			libs:  libraries,
+			exit:  0,
+		},
+		{
+			name:    "v4_ctos_library_resolves_twice",
+			version: 4,
+			code: codeFromBuilders(t,
+				cellsliceop.CTOS().Serialize(),
+				stackop.DROP().Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			stack: []any{libraryCell, libraryCell},
+			libs:  libraries,
+			exit:  0,
+		},
+		{
+			name:    "v5_ctos_library_resolves_twice",
+			version: 5,
+			code: codeFromBuilders(t,
+				cellsliceop.CTOS().Serialize(),
+				stackop.DROP().Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			stack: []any{libraryCell, libraryCell},
+			libs:  libraries,
+			exit:  0,
+		},
+		{
+			name:    "v5_ctos_library_resolves",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v13_ctos_library_resolves",
+			version: 13,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    "v4_xload_missing_library_still_succeeds",
+			version: 4,
+			code:    codeFromBuilders(t, cellsliceop.XLOAD().Serialize()),
+			stack:   []any{missingLibraryCell},
+			exit:    0,
+		},
+		{
+			name:    "v5_xload_missing_library_underflow",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.XLOAD().Serialize()),
+			stack:   []any{missingLibraryCell},
+			exit:    vmerr.CodeCellUnderflow,
+		},
+		{
+			name:    "v5_xloadq_missing_library_false",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.XLOADQ().Serialize()),
+			stack:   []any{missingLibraryCell},
+			exit:    0,
+		},
+		{
+			name:    "v11_btos_rejected",
+			version: 11,
+			code:    codeFromBuilders(t, cellsliceop.BTOS().Serialize()),
+			stack:   []any{builderToSlice},
+			exit:    vmerr.CodeInvalidOpcode,
+		},
+		{
+			name:    "v12_btos_allowed",
+			version: 12,
+			code:    codeFromBuilders(t, cellsliceop.BTOS().Serialize()),
+			stack:   []any{builderToSlice},
+			exit:    0,
+		},
+		{
+			name:    "v5_clevel_rejected",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.CLEVEL().Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    vmerr.CodeInvalidOpcode,
+		},
+		{
+			name:    "v6_clevel_allowed",
+			version: 6,
+			code:    codeFromBuilders(t, cellsliceop.CLEVEL().Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    0,
+		},
+		{
+			name:    "v5_clevelmask_rejected",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.CLEVELMASK().Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    vmerr.CodeInvalidOpcode,
+		},
+		{
+			name:    "v6_clevelmask_allowed",
+			version: 6,
+			code:    codeFromBuilders(t, cellsliceop.CLEVELMASK().Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    0,
+		},
+		{
+			name:    "v5_chashi_rejected",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.CHASHI(0).Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    vmerr.CodeInvalidOpcode,
+		},
+		{
+			name:    "v6_chashi_allowed",
+			version: 6,
+			code:    codeFromBuilders(t, cellsliceop.CHASHI(0).Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    0,
+		},
+		{
+			name:    "v5_cdepthi_rejected",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.CDEPTHI(0).Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    vmerr.CodeInvalidOpcode,
+		},
+		{
+			name:    "v6_cdepthi_allowed",
+			version: 6,
+			code:    codeFromBuilders(t, cellsliceop.CDEPTHI(0).Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    0,
+		},
+		{
+			name:    "v5_chashix_rejected",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.CHASHIX().Serialize()),
+			stack:   []any{hashDepthCell, int64(0)},
+			exit:    vmerr.CodeInvalidOpcode,
+		},
+		{
+			name:    "v6_chashix_allowed",
+			version: 6,
+			code:    codeFromBuilders(t, cellsliceop.CHASHIX().Serialize()),
+			stack:   []any{hashDepthCell, int64(0)},
+			exit:    0,
+		},
+		{
+			name:    "v5_cdepthix_rejected",
+			version: 5,
+			code:    codeFromBuilders(t, cellsliceop.CDEPTHIX().Serialize()),
+			stack:   []any{hashDepthCell, int64(0)},
+			exit:    vmerr.CodeInvalidOpcode,
+		},
+		{
+			name:    "v6_cdepthix_allowed",
+			version: 6,
+			code:    codeFromBuilders(t, cellsliceop.CDEPTHIX().Serialize()),
+			stack:   []any{hashDepthCell, int64(0)},
+			exit:    0,
+		},
+		{
+			name:    "v0_schkbitsq_false",
+			version: 0,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITSQ().Serialize()),
+			stack:   []any{shortSlice, int64(16)},
+			exit:    0,
+		},
+		{
+			name:    "v0_schkbits_nonquiet_underflow",
+			version: 0,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITS().Serialize()),
+			stack:   []any{shortSlice, int64(16)},
+			exit:    vmerr.CodeCellUnderflow,
+		},
+		{
+			name:    "v0_schkbitrefsq_refs_range",
+			version: 0,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITREFSQ().Serialize()),
+			stack:   []any{withRefSlice, int64(8), int64(5)},
+			exit:    vmerr.CodeRangeCheck,
+		},
+		{
+			name:    "v13_schkbitrefsq_success",
+			version: 13,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITREFSQ().Serialize()),
+			stack:   []any{withRefSlice, int64(8), int64(1)},
+			exit:    0,
+		},
+	}
+	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_ADVANCED_CELLOPS_VERSION_AUDIT") {
+		tests = append(tests, advancedCellOpsGeneratedVersionCases(t, version)...)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runAdvancedCellVersionedParityCase(t, tt)
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorAdvancedCellOpsGeneratedGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%advancedCellOpsGeneratedVersionCaseCount))
+	}
+	for i := 0; i < advancedCellOpsGeneratedVersionCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		tests := advancedCellOpsGeneratedVersionCases(t, version)
+		if len(tests) != advancedCellOpsGeneratedVersionCaseCount {
+			t.Fatalf("advanced cellops generated case count = %d, want %d", len(tests), advancedCellOpsGeneratedVersionCaseCount)
+		}
+		tt := tests[int(rawCase)%len(tests)]
+		runAdvancedCellVersionedParityCase(t, tt)
+	})
+}
+
+const advancedCellOpsGeneratedVersionCaseCount = 17
+
+type advancedCellVersionedCase struct {
+	name    string
+	version int
+	code    *cell.Cell
+	stack   []any
+	libs    *cell.Cell
+	exit    int32
+}
+
+func advancedCellOpsGeneratedVersionCases(t *testing.T, version int) []advancedCellVersionedCase {
+	t.Helper()
+
+	target := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	libraryCell := mustCrossLibraryCellForHash(t, target.Hash())
+	libraries := mustCrossLibraryCollection(t, target)
+	missingLibraryCell := mustCrossLibraryCellForHash(t, cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell().Hash())
+	shortSlice := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
+	withRefSlice := cell.BeginCell().
+		MustStoreUInt(0xAB, 8).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()).
+		EndCell().
+		MustBeginParse()
+	builderToSlice := cell.BeginCell().
+		MustStoreUInt(0xABCD, 16).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(0xEF, 8).EndCell())
+	hashDepthCell := cell.BeginCell().
+		MustStoreUInt(1, 1).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(2, 2).EndCell()).
+		EndCell()
+
+	versionExit := func(minVersion int) int32 {
+		if version < minVersion {
+			return int32(vmerr.CodeInvalidOpcode)
+		}
+		return 0
+	}
+	xloadMissingExit := int32(0)
+	if version >= 5 {
+		xloadMissingExit = int32(vmerr.CodeCellUnderflow)
+	}
+
+	return []advancedCellVersionedCase{
+		{
+			name:    fmt.Sprintf("xload_library_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.XLOAD().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    fmt.Sprintf("ctos_library_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.CTOS().Serialize()),
+			stack:   []any{libraryCell},
+			libs:    libraries,
+			exit:    0,
+		},
+		{
+			name:    fmt.Sprintf("ctos_code_ref_library_v%d", version),
+			version: version,
+			code: codeFromBuilders(t,
+				stackop.PUSHREF(libraryCell).Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			libs: libraries,
+			exit: 0,
+		},
+		{
+			name:    fmt.Sprintf("ctos_library_twice_v%d", version),
+			version: version,
+			code: codeFromBuilders(t,
+				cellsliceop.CTOS().Serialize(),
+				stackop.DROP().Serialize(),
+				cellsliceop.CTOS().Serialize(),
+			),
+			stack: []any{libraryCell, libraryCell},
+			libs:  libraries,
+			exit:  0,
+		},
+		{
+			name:    fmt.Sprintf("xload_missing_library_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.XLOAD().Serialize()),
+			stack:   []any{missingLibraryCell},
+			exit:    xloadMissingExit,
+		},
+		{
+			name:    fmt.Sprintf("xloadq_missing_library_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.XLOADQ().Serialize()),
+			stack:   []any{missingLibraryCell},
+			exit:    0,
+		},
+		{
+			name:    fmt.Sprintf("btos_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.BTOS().Serialize()),
+			stack:   []any{builderToSlice},
+			exit:    versionExit(12),
+		},
+		{
+			name:    fmt.Sprintf("clevel_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.CLEVEL().Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    versionExit(6),
+		},
+		{
+			name:    fmt.Sprintf("clevelmask_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.CLEVELMASK().Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    versionExit(6),
+		},
+		{
+			name:    fmt.Sprintf("chashi_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.CHASHI(0).Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    versionExit(6),
+		},
+		{
+			name:    fmt.Sprintf("cdepthi_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.CDEPTHI(0).Serialize()),
+			stack:   []any{hashDepthCell},
+			exit:    versionExit(6),
+		},
+		{
+			name:    fmt.Sprintf("chashix_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.CHASHIX().Serialize()),
+			stack:   []any{hashDepthCell, int64(0)},
+			exit:    versionExit(6),
+		},
+		{
+			name:    fmt.Sprintf("cdepthix_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.CDEPTHIX().Serialize()),
+			stack:   []any{hashDepthCell, int64(0)},
+			exit:    versionExit(6),
+		},
+		{
+			name:    fmt.Sprintf("schkbitsq_false_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITSQ().Serialize()),
+			stack:   []any{shortSlice, int64(16)},
+			exit:    0,
+		},
+		{
+			name:    fmt.Sprintf("schkbits_nonquiet_underflow_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITS().Serialize()),
+			stack:   []any{shortSlice, int64(16)},
+			exit:    int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name:    fmt.Sprintf("schkbitrefsq_refs_range_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITREFSQ().Serialize()),
+			stack:   []any{withRefSlice, int64(8), int64(5)},
+			exit:    int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name:    fmt.Sprintf("schkbitrefsq_success_v%d", version),
+			version: version,
+			code:    codeFromBuilders(t, cellsliceop.SCHKBITREFSQ().Serialize()),
+			stack:   []any{withRefSlice, int64(8), int64(1)},
+			exit:    0,
+		},
+	}
+}
+
+func runAdvancedCellVersionedParityCase(t *testing.T, tt advancedCellVersionedCase) {
+	t.Helper()
+
+	code := prependRawMethodDrop(tt.code)
+	goStack, err := buildCrossStack(tt.stack...)
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack(tt.stack...)
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	var goLibs []*cell.Cell
+	if tt.libs != nil {
+		goLibs = []*cell.Cell{tt.libs}
+	}
+	goRes, err := runGoCrossCodeWithVersionAndLibs(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goLibs, goStack, tt.version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(tt.version)))
+	refCfg.Libs = tt.libs
+	refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != tt.exit || refRes.exitCode != tt.exit {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, tt.exit)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
 }
 
 func mustLibraryBuilder(t *testing.T) *cell.Builder {

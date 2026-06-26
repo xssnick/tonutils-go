@@ -48,7 +48,8 @@ func MULADDRSHIFTRMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "MULADDRSHIFTRMOD",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0xA1),
+		Name:       "MULADDRSHIFTRMOD",
+		BitPrefix:  helpers.BytesPrefix(0xA9, 0xA1),
+		MinVersion: 4,
 	}
 }

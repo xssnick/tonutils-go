@@ -221,7 +221,7 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 	arg := uint64(bits>>5) - 1
 	return &helpers.AdvancedOP{
 		NameSerializer: func() string {
-			return fmt.Sprintf("PLDUZ %d", bits)
+			return fmt.Sprintf("PLDUZ %d", (arg+1)<<5)
 		},
 		BitPrefix:     helpers.UIntPrefix(0xD710>>3, 13),
 		FixedSizeBits: 3,

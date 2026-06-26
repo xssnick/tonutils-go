@@ -15,6 +15,7 @@ func MULADDRSHIFTCODEMOD(value int8) (op *helpers.AdvancedOP) {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
+		MinVersion:    4,
 		Action: func(state *vm.State) error {
 			if err := checkStackDepth(state, 3); err != nil {
 				return err

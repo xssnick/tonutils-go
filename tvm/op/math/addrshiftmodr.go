@@ -42,7 +42,8 @@ func ADDRSHIFTMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "ADDRSHIFTMODR",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0x21),
+		Name:       "ADDRSHIFTMODR",
+		BitPrefix:  helpers.BytesPrefix(0xA9, 0x21),
+		MinVersion: 4,
 	}
 }

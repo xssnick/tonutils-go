@@ -5,6 +5,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestAdvancedBuilderStoreOps(t *testing.T) {
@@ -416,6 +417,33 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 		}
 	})
 
+	t.Run("BuilderMetricsStackTypeEdges", func(t *testing.T) {
+		for _, tt := range []struct {
+			name string
+			op   interface{ Interpret(*vm.State) error }
+		}{
+			{name: "BDEPTH", op: BDEPTH()},
+			{name: "BBITS", op: BBITS()},
+			{name: "BREFS", op: BREFS()},
+			{name: "BBITREFS", op: BBITREFS()},
+		} {
+			t.Run(tt.name+"StackUnderflow", func(t *testing.T) {
+				assertCellSliceVMErrorCode(t, tt.op.Interpret(newCellSliceState()), vmerr.CodeStackUnderflow)
+			})
+
+			t.Run(tt.name+"TypeCheck", func(t *testing.T) {
+				state := newCellSliceState()
+				pushCellSliceCell(t, state, cell.BeginCell().EndCell())
+				assertCellSliceVMErrorCode(t, tt.op.Interpret(state), vmerr.CodeTypeCheck)
+			})
+		}
+
+		state := newCellSliceState()
+		fillAdvancedBuilderStack(t, state, 1)
+		pushCellSliceBuilder(t, state, cell.BeginCell().MustStoreUInt(1, 1))
+		assertCellSliceVMErrorCode(t, BBITREFS().Interpret(state), vmerr.CodeStackOverflow)
+	})
+
 	t.Run("BuilderChecksAndSameBits", func(t *testing.T) {
 		decodedImm := BCHKBITSIMM(1, false)
 		if err := decodedImm.Deserialize(BCHKBITSIMM(8, false).Serialize().EndCell().MustBeginParse()); err != nil {
@@ -546,4 +574,21 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 			t.Fatalf("unexpected STSAME bits: %b", got)
 		}
 	})
+}
+
+func fillAdvancedBuilderStack(t *testing.T, st *vm.State, spare int) {
+	t.Helper()
+
+	for {
+		err := st.Stack.PushSmallInt(0)
+		if err != nil {
+			assertCellSliceVMErrorCode(t, err, vmerr.CodeStackOverflow)
+			break
+		}
+	}
+	for i := 0; i < spare; i++ {
+		if _, err := st.Stack.PopAny(); err != nil {
+			t.Fatalf("failed to free stack slot: %v", err)
+		}
+	}
 }

@@ -41,6 +41,7 @@ func setContCtrManyCommon(state *vm.State, mask uint8) error {
 func SETCONTCTRMANY(mask uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
+		MinVersion:    9,
 		Action: func(state *vm.State) error {
 			return setContCtrManyCommon(state, mask)
 		},
@@ -75,7 +76,8 @@ func SETCONTCTRMANYX() *helpers.SimpleOP {
 			}
 			return setContCtrManyCommon(state, uint8(mask))
 		},
-		Name:      "SETCONTCTRMANYX",
-		BitPrefix: helpers.BytesPrefix(0xED, 0xE4),
+		Name:       "SETCONTCTRMANYX",
+		BitPrefix:  helpers.BytesPrefix(0xED, 0xE4),
+		MinVersion: 9,
 	}
 }

@@ -12,6 +12,9 @@ func init() {
 func SDEQ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
 			s0, err := state.Stack.PopSlice()
 			if err != nil {
 				return err

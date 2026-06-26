@@ -87,6 +87,96 @@ func TestThrowFixedSerialization(t *testing.T) {
 	})
 }
 
+func TestThrowFixedDecodeAndErrorStackEffects(t *testing.T) {
+	t.Run("ConstructorGuards", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			fn   func()
+		}{
+			{
+				name: "too many immediate bits",
+				fn: func() {
+					newThrowFixed("BAD", []byte{0}, 1, 64, 0, false)
+				},
+			},
+			{
+				name: "non-zero immediate bits",
+				fn: func() {
+					newThrowFixed("BAD", []byte{1}, 8, 1, 0, false)
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("expected constructor to panic")
+					}
+				}()
+				tc.fn()
+			})
+		}
+	})
+
+	t.Run("TruncatedSuffix", func(t *testing.T) {
+		op := newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false)
+		prefixOnly := cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits).EndCell()
+		if err := op.DeserializeMatched(prefixOnly.MustBeginParse()); err == nil {
+			t.Fatal("expected truncated THROW suffix to fail")
+		}
+	})
+
+	t.Run("BadConditionConsumesConditionOnly", func(t *testing.T) {
+		op := newThrowFixed("THROWIF", []byte{0xF2, 0x40}, 10, 6, 3, false)
+		setThrowImmediate(t, op, 6, 0x21)
+
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push residual: %v", err)
+		}
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad condition: %v", err)
+		}
+
+		assertThrowVMError(t, op.Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad condition to be consumed, stack len=%d", state.Stack.Len())
+		}
+		residual, err := state.Stack.PopIntFinite()
+		if err != nil || residual.Int64() != 11 {
+			t.Fatalf("unexpected residual: %v err=%v", residual, err)
+		}
+	})
+
+	t.Run("BadArgConditionLeavesArg", func(t *testing.T) {
+		op := newThrowFixed("THROWARGIF", []byte{0xF2, 0xD8, 0x00}, 13, 11, 3, true)
+		setThrowImmediate(t, op, 11, 0x155)
+
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push residual: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(22)); err != nil {
+			t.Fatalf("push arg: %v", err)
+		}
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad condition: %v", err)
+		}
+
+		assertThrowVMError(t, op.Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 2 {
+			t.Fatalf("expected bad condition to be consumed only, stack len=%d", state.Stack.Len())
+		}
+		arg, err := state.Stack.PopIntFinite()
+		if err != nil || arg.Int64() != 22 {
+			t.Fatalf("unexpected arg: %v err=%v", arg, err)
+		}
+		residual, err := state.Stack.PopIntFinite()
+		if err != nil || residual.Int64() != 11 {
+			t.Fatalf("unexpected residual: %v err=%v", residual, err)
+		}
+	})
+}
+
 func TestThrowUnconditional(t *testing.T) {
 	op := newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false)
 	setThrowImmediate(t, op, 6, 0x12)
@@ -574,6 +664,95 @@ func TestThrowAnyConditional(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestThrowAnyDecodeAndErrorStackEffects(t *testing.T) {
+	t.Run("SerializeSuffix", func(t *testing.T) {
+		op := newThrowAny()
+		setThrowImmediate(t, op, 3, 5)
+
+		raw := op.Serialize().EndCell().MustBeginParse().MustLoadUInt(16)
+		if raw != 0xF2F5 {
+			t.Fatalf("unexpected THROWARGANYIFNOT encoding: %#x", raw)
+		}
+	})
+
+	t.Run("TruncatedSuffix", func(t *testing.T) {
+		op := newThrowAny()
+		prefixOnly := cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits).EndCell()
+		if err := op.DeserializeMatched(prefixOnly.MustBeginParse()); err == nil {
+			t.Fatal("expected truncated THROWANY suffix to fail")
+		}
+	})
+
+	t.Run("BadConditionConsumesConditionOnly", func(t *testing.T) {
+		op := newThrowAny()
+		setThrowImmediate(t, op, 3, 2)
+
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(0x222)); err != nil {
+			t.Fatalf("push exception: %v", err)
+		}
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad condition: %v", err)
+		}
+
+		assertThrowVMError(t, op.Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad condition to be consumed, stack len=%d", state.Stack.Len())
+		}
+		exc, err := state.Stack.PopIntFinite()
+		if err != nil || exc.Int64() != 0x222 {
+			t.Fatalf("unexpected exception: %v err=%v", exc, err)
+		}
+	})
+
+	t.Run("BadExceptionConsumesConditionAndException", func(t *testing.T) {
+		op := newThrowAny()
+		setThrowImmediate(t, op, 3, 2)
+
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push residual: %v", err)
+		}
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad exception: %v", err)
+		}
+		if err := state.Stack.PushBool(true); err != nil {
+			t.Fatalf("push condition: %v", err)
+		}
+
+		assertThrowVMError(t, op.Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected condition and bad exception to be consumed, stack len=%d", state.Stack.Len())
+		}
+		residual, err := state.Stack.PopIntFinite()
+		if err != nil || residual.Int64() != 11 {
+			t.Fatalf("unexpected residual: %v err=%v", residual, err)
+		}
+	})
+
+	t.Run("ExceptionRangeConsumesException", func(t *testing.T) {
+		op := newThrowAny()
+		setThrowImmediate(t, op, 3, 0)
+
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push residual: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(0x10000)); err != nil {
+			t.Fatalf("push bad exception: %v", err)
+		}
+
+		assertThrowVMError(t, op.Interpret(state), vmerr.CodeRangeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad exception to be consumed, stack len=%d", state.Stack.Len())
+		}
+		residual, err := state.Stack.PopIntFinite()
+		if err != nil || residual.Int64() != 11 {
+			t.Fatalf("unexpected residual: %v err=%v", residual, err)
+		}
+	})
 }
 
 func TestThrowUnderflowDoesNotConsumeOperands(t *testing.T) {

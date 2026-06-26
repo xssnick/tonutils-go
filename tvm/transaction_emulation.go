@@ -69,6 +69,7 @@ type transactionPreparedPhases struct {
 	storagePhase    *tlb.StoragePhase
 	status          tlb.AccountStatus
 	deleted         bool
+	destroyed       bool
 	duePayment      *tlb.Coins
 	lastPaid        uint32
 }
@@ -128,9 +129,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 		now = uint32(time.Now().Unix())
 	}
 
-	blockchainCfg := tlb.BlockchainConfig{
-		Root: cfg.ConfigRoot,
-	}
+	blockchainCfg := newTransactionConfig(cfg.ConfigRoot)
 	if err = transactionValidateInboundExternalMessage(msgCell, &msg, blockchainCfg); err != nil {
 		return nil, err
 	}
@@ -166,6 +165,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	execCfg.Address = runtimeAcc.addr
 	execCfg.Now = now
 	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, execCfg.LogicalTime), &msg)
+	explicitC7 := transactionHasExplicitC7Context(execCfg)
 	transactionPrepareExecutionConfig(&execCfg, runtimeAcc, &msg, prepared, startLT)
 	execCfg.Balance = new(big.Int).Set(prepared.balance)
 
@@ -211,7 +211,11 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	var msgRes *MessageExecutionResult
 	accountActivated := false
 	if skipReason == nil {
-		msgRes, err = tvm.executeTransactionMessage(computeAcc, msgCell, &msg, execCfg, gas, prepared.msgBalance.grams, proof)
+		globalVersion, err := transactionExecutionGlobalVersion(execCfg, blockchainCfg, tvm.globalVersion)
+		if err != nil {
+			return nil, err
+		}
+		msgRes, err = tvm.executeTransactionMessage(computeAcc, msgCell, &msg, execCfg, gas, prepared.msgBalance.grams, proof, explicitC7, globalVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -223,6 +227,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 			accountActivated = true
 			prepared.status = tlb.AccountStatusActive
 			prepared.deleted = false
+			prepared.destroyed = false
 		}
 	}
 
@@ -313,23 +318,29 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 
 	if actionDeleted {
 		prepared.deleted = true
+		prepared.destroyed = true
 	}
 	finalStatus := transactionFinalizeAccountStatus(prepared.status, prepared.deleted, finalBalance, nextExtraCurrencies, accountActivated)
 	nextStateHash := runtimeAcc.stateHash
 	if finalStatus == tlb.AccountStatusFrozen && (runtimeAcc.status == tlb.AccountStatusActive || accountActivated) {
 		nextStateHash = nil
 	}
-	finalStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(computeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash)
+	accountStatus := finalStatus
+	finalStatus, accountStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(computeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg)
 	if err != nil {
 		return nil, err
 	}
-	nextAccountCell, nextAccountState, nextAccountStorageStat, err := buildTransactionAccountCell(computeAcc, finalStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, cfg.AccountStorageStat)
+	nextAccountCell, nextAccountState, nextAccountStorageStat, err := buildTransactionAccountCell(computeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, cfg.AccountStorageStat)
 	if err != nil {
 		return nil, err
 	}
 
+	txAccountAddr, err := transactionAccountIDAddr(runtimeAcc.addr)
+	if err != nil {
+		return nil, err
+	}
 	txCell, err := buildTransactionCell(transactionBuildParams{
-		accountAddr: runtimeAcc.addr,
+		accountAddr: txAccountAddr,
 		startLT:     startLT,
 		prevTxHash:  runtimeAcc.prevTxHash,
 		prevTxLT:    runtimeAcc.prevTxLT,
@@ -354,7 +365,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 			skipReason:    skipReason,
 			msgStateUsed:  msgStateUsed && runtimeAcc.status != tlb.AccountStatusActive,
 			activated:     accountActivated && runtimeAcc.status != tlb.AccountStatusActive,
-			destroyed:     prepared.deleted,
+			destroyed:     prepared.destroyed,
 		},
 	})
 	if err != nil {
@@ -399,9 +410,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 		now = uint32(time.Now().Unix())
 	}
 
-	blockchainCfg := tlb.BlockchainConfig{
-		Root: cfg.ConfigRoot,
-	}
+	blockchainCfg := newTransactionConfig(cfg.ConfigRoot)
 	isSpecial := transactionIsSpecialAccount(blockchainCfg, runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 	storageDueLimits := transactionGetStorageDueLimits(blockchainCfg, runtimeAcc.addr)
@@ -425,7 +434,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 		duePayment:      transactionCoinsPtr(transactionCoinsNano(runtimeAcc.storageInfo.DuePayment)),
 		lastPaid:        runtimeAcc.storageInfo.LastPaid,
 	}
-	prepared.applyStoragePhase(runtimeAcc, storageFee, now, storageDueLimits, false)
+	prepared.applyStoragePhase(runtimeAcc, storageFee, now, blockchainCfg.globalVersion(), storageDueLimits, false)
 	if isSpecial {
 		prepared.lastPaid = 0
 	}
@@ -434,6 +443,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 	execCfg.Address = runtimeAcc.addr
 	execCfg.Now = now
 	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, execCfg.LogicalTime), nil)
+	explicitC7 := transactionHasExplicitC7Context(execCfg)
 	transactionPrepareExecutionConfig(&execCfg, runtimeAcc, nil, prepared, startLT)
 	execCfg.Balance = new(big.Int).Set(prepared.balance)
 
@@ -449,7 +459,11 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 
 	var msgRes *MessageExecutionResult
 	if skipReason == nil {
-		msgRes, err = tvm.executeTickTockTransaction(runtimeAcc, isTock, execCfg, gas, proof)
+		globalVersion, err := transactionExecutionGlobalVersion(execCfg, blockchainCfg, tvm.globalVersion)
+		if err != nil {
+			return nil, err
+		}
+		msgRes, err = tvm.executeTickTockTransaction(runtimeAcc, isTock, execCfg, gas, proof, explicitC7, globalVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -517,23 +531,29 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 
 	if actionDeleted {
 		prepared.deleted = true
+		prepared.destroyed = true
 	}
 	finalStatus := transactionFinalizeAccountStatus(prepared.status, prepared.deleted, finalBalance, nextExtraCurrencies, false)
 	nextStateHash := runtimeAcc.stateHash
 	if finalStatus == tlb.AccountStatusFrozen && runtimeAcc.status == tlb.AccountStatusActive {
 		nextStateHash = nil
 	}
-	finalStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(runtimeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash)
+	accountStatus := finalStatus
+	finalStatus, accountStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(runtimeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg)
 	if err != nil {
 		return nil, err
 	}
-	nextAccountCell, nextAccountState, nextAccountStorageStat, err := buildTransactionAccountCell(runtimeAcc, finalStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, cfg.AccountStorageStat)
+	nextAccountCell, nextAccountState, nextAccountStorageStat, err := buildTransactionAccountCell(runtimeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, cfg.AccountStorageStat)
 	if err != nil {
 		return nil, err
 	}
 
+	txAccountAddr, err := transactionAccountIDAddr(runtimeAcc.addr)
+	if err != nil {
+		return nil, err
+	}
 	txCell, err := buildTransactionCell(transactionBuildParams{
-		accountAddr: runtimeAcc.addr,
+		accountAddr: txAccountAddr,
 		startLT:     startLT,
 		prevTxHash:  runtimeAcc.prevTxHash,
 		prevTxLT:    runtimeAcc.prevTxLT,
@@ -553,7 +573,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 			gasFees:       gasFees,
 			actionPhase:   actionPhase,
 			skipReason:    skipReason,
-			destroyed:     prepared.deleted,
+			destroyed:     prepared.destroyed,
 		},
 	})
 	if err != nil {
@@ -566,6 +586,18 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 func transactionNormalizeGasUsage(res *MessageExecutionResult) {
 	if res.GasUsed > res.Gas.Base {
 		res.GasUsed = res.Gas.Base
+	}
+}
+
+func transactionNoCodeExecutionResult(code, data *cell.Cell, gas vm.Gas) *MessageExecutionResult {
+	return &MessageExecutionResult{
+		ExecutionResult: ExecutionResult{
+			ExitCode: -vmerr.CodeOutOfGas,
+			Gas:      gas,
+			Code:     code,
+			Data:     data,
+		},
+		Accepted: gas.Credit == 0,
 	}
 }
 
@@ -583,7 +615,7 @@ func transactionApplyPrecompiledGasUsage(res *MessageExecutionResult, value *big
 	return nil
 }
 
-func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCell *cell.Cell, msg *tlb.Message, cfg TransactionEmulationConfig, gas vm.Gas, msgBalance *big.Int, proof *cell.MerkleProofBuilder) (*MessageExecutionResult, error) {
+func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCell *cell.Cell, msg *tlb.Message, cfg TransactionEmulationConfig, gas vm.Gas, msgBalance *big.Int, proof *cell.MerkleProofBuilder, explicitC7 bool, globalVersion int) (*MessageExecutionResult, error) {
 	body := messageBodyCell(msg.Msg.Payload())
 	stack := vm.NewStack()
 	balance := new(big.Int).Set(cfg.Balance)
@@ -633,21 +665,24 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCel
 		return nil, fmt.Errorf("unsupported input message type %s", msg.MsgType)
 	}
 
-	c7, err := buildTransactionEmulationC7(acc.addr, acc.code, cfg, balance)
+	if acc.code == nil {
+		return transactionNoCodeExecutionResult(acc.code, acc.data, gas), nil
+	}
+	c7, err := buildTransactionEmulationC7(acc.addr, acc.code, cfg, balance, uint32(globalVersion), explicitC7)
 	if err != nil {
 		return nil, err
 	}
 
-	libraries := transactionExecutionLibraries(acc, cfg)
+	libraries := transactionExecutionLibraries(acc, cfg, explicitC7)
 
-	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, cfg.TraceHook, libraries...)
+	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, cfg.ChksigAlwaysSucceed, proof, cfg.TraceHook, globalVersion, libraries...)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, cfg TransactionEmulationConfig, gas vm.Gas, proof *cell.MerkleProofBuilder) (*MessageExecutionResult, error) {
+func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, cfg TransactionEmulationConfig, gas vm.Gas, proof *cell.MerkleProofBuilder, explicitC7 bool, globalVersion int) (*MessageExecutionResult, error) {
 	accAddr, err := messageEmulationAccountAddr(acc.addr)
 	if err != nil {
 		return nil, err
@@ -668,22 +703,22 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 		return nil, err
 	}
 
-	c7, err := buildTransactionEmulationC7(acc.addr, acc.code, cfg, balance)
+	c7, err := buildTransactionEmulationC7(acc.addr, acc.code, cfg, balance, uint32(globalVersion), explicitC7)
 	if err != nil {
 		return nil, err
 	}
 
-	libraries := transactionExecutionLibraries(acc, cfg)
+	libraries := transactionExecutionLibraries(acc, cfg, explicitC7)
 
-	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, cfg.TraceHook, libraries...)
+	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, cfg.ChksigAlwaysSucceed, proof, cfg.TraceHook, globalVersion, libraries...)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func transactionExecutionLibraries(acc *transactionRuntimeAccount, cfg TransactionEmulationConfig) []*cell.Cell {
-	if transactionHasExplicitC7Context(cfg) {
+func transactionExecutionLibraries(acc *transactionRuntimeAccount, cfg TransactionEmulationConfig, explicitC7 bool) []*cell.Cell {
+	if explicitC7 {
 		if len(cfg.Libraries) == 0 {
 			return nil
 		}
@@ -783,67 +818,19 @@ func (c *transactionCurrencyBalance) asTuple() tuple.Tuple {
 	return tuple.NewTupleValue(transactionBigOrZero(c.grams), extra.AsCell())
 }
 
-func buildTransactionEmulationC7(addr *address.Address, code *cell.Cell, cfg MessageEmulationConfig, balance *big.Int) (tuple.Tuple, error) {
-	seed, err := transactionEmulationSeedForConfig(cfg, addr)
+func buildTransactionEmulationC7(addr *address.Address, code *cell.Cell, cfg MessageEmulationConfig, balance *big.Int, globalVersion uint32, explicitC7 bool) (tuple.Tuple, error) {
+	seed, err := transactionEmulationSeedForConfig(cfg, addr, globalVersion, explicitC7)
 	if err != nil {
 		return tuple.Tuple{}, err
 	}
-
-	now := cfg.Now
-	if now == 0 {
-		now = uint32(time.Now().Unix())
-	}
-
-	myAddr := cell.BeginCell().MustStoreAddr(addr).ToSlice()
-	values := []any{
-		messageTupleUint(0x076ef1ea),
-		messageTupleInt(0),
-		messageTupleInt(0),
-		messageTupleUint(uint64(now)),
-		messageTupleInt(cfg.BlockLT),
-		messageTupleInt(cfg.LogicalTime),
-		seed,
-		tuple.NewTupleValue(new(big.Int).Set(balance), nil),
-		myAddr,
-		cfg.ConfigRoot,
-		code,
-		messageIncomingValue(cfg.IncomingValue),
-		messageTupleInt(cfg.StorageFees),
-		cfg.PrevBlocks,
-		messageUnpackedConfig(cfg),
-		cfg.DuePayment,
-		messageTupleMaybeInt(cfg.PrecompiledGasUsage),
-		messageInMsgParams(cfg.InMsgParams),
-	}
-
-	for i, val := range values {
-		values[i] = normalizeMessageTupleValue(val)
-	}
-
-	inner := tuple.NewTupleOwned(values)
-	topLen := 1
-	for idx := range cfg.Globals {
-		if idx <= 0 {
-			return tuple.Tuple{}, errors.New("c7 global index 0 is reserved")
-		}
-		if idx+1 > topLen {
-			topLen = idx + 1
-		}
-	}
-
-	top := make([]any, topLen)
-	top[0] = inner
-	for idx, val := range cfg.Globals {
-		top[idx] = normalizeMessageTupleValue(val)
-	}
-	return tuple.NewTupleOwned(top), nil
+	return buildEmulationC7(addr, code, cfg, balance, seed, globalVersion)
 }
 
-func transactionEmulationSeedForConfig(cfg MessageEmulationConfig, addr *address.Address) (*big.Int, error) {
-	if transactionHasExplicitC7Context(cfg) {
+func transactionEmulationSeedForConfig(cfg MessageEmulationConfig, addr *address.Address, globalVersion uint32, explicitC7 bool) (*big.Int, error) {
+	if explicitC7 {
 		return messageEmulationSeed(cfg.RandSeed)
 	}
-	return transactionEmulationSeed(cfg.RandSeed, addr)
+	return transactionEmulationSeed(cfg.RandSeed, addr, globalVersion)
 }
 
 func transactionHasExplicitC7Context(cfg MessageEmulationConfig) bool {
@@ -853,18 +840,51 @@ func transactionHasExplicitC7Context(cfg MessageEmulationConfig) bool {
 		cfg.PrevBlocks != nil
 }
 
-func transactionEmulationSeed(blockSeed []byte, addr *address.Address) (*big.Int, error) {
+func transactionEmulationSeed(blockSeed []byte, addr *address.Address, globalVersion uint32) (*big.Int, error) {
 	if len(blockSeed) == 0 {
 		return big.NewInt(0), nil
 	}
-	if addr == nil || addr.Type() != address.StdAddress || len(addr.Data()) != 32 {
-		return nil, errors.New("transaction rand seed requires std 256-bit account address")
+	addrData, err := transactionRewrittenAccountAddressData(addr)
+	if err != nil {
+		return nil, err
 	}
 
 	h := sha256.New()
 	h.Write(transactionBits256(blockSeed))
-	h.Write(addr.Data())
+	if globalVersion < 8 {
+		h.Write(addrData[:4])
+		h.Write(addrData[:28])
+		return new(big.Int).SetBytes(h.Sum(nil)), nil
+	}
+	h.Write(addrData)
 	return new(big.Int).SetBytes(h.Sum(nil)), nil
+}
+
+func transactionRewrittenAccountAddressData(addr *address.Address) ([]byte, error) {
+	if addr == nil || addr.Type() != address.StdAddress || len(addr.Data()) != 32 {
+		return nil, errors.New("transaction rand seed requires std 256-bit account address")
+	}
+
+	data := append([]byte(nil), addr.Data()...)
+	anycast := addr.Anycast()
+	if anycast == nil {
+		return data, nil
+	}
+
+	depth := anycast.Depth()
+	prefix := anycast.Prefix()
+	if depth == 0 || depth > 30 || uint(len(prefix)*8) < depth {
+		return nil, errors.New("transaction rand seed requires valid account anycast")
+	}
+	for i := uint(0); i < depth; i++ {
+		mask := byte(1 << (7 - i%8))
+		if transactionBit(prefix, int(i)) == 1 {
+			data[i/8] |= mask
+		} else {
+			data[i/8] &^= mask
+		}
+	}
+	return data, nil
 }
 
 func transactionBuildInMsgParams(msg *tlb.Message, msgBalance *transactionCurrencyBalance) tuple.Tuple {

@@ -21,13 +21,10 @@ func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 			if x == nil {
-				if state.GlobalVersion >= 13 {
-					return pushNaNOrOverflow(state, false)
-				}
-				return pushSmallInt(state, 0)
+				return pushNaNOrOverflow(state, false)
 			}
 
-			return state.Stack.PushInt(x.Lsh(x, uint(imm())))
+			return pushMaybeInt(state, leftShiftResult(x, uint64(imm())), false)
 		},
 		BitPrefix:       helpers.BytesPrefix(0xAA),
 		SerializeSuffix: serializeImmediate,

@@ -151,22 +151,24 @@ type CommittedState struct {
 }
 
 type State struct {
-	GlobalVersion          int
-	CP                     int
-	CurrentCode            *cell.Slice
-	Reg                    Register
-	Gas                    Gas
-	Cells                  CellManager
-	Libraries              []*cell.Cell
-	libraryCache           map[cell.Hash]*cell.Cell
-	Stack                  *Stack
-	Steps                  uint32
-	StopOnAccept           bool
-	TraceHook              TraceHook
-	ChksgnCounter          uint32
-	GetExtraBalanceCounter uint32
-	Committed              CommittedState
-	childRunner            ChildRunner
+	GlobalVersion           int
+	GlobalVersionConfigured bool
+	CP                      int
+	CurrentCode             *cell.Slice
+	Reg                     Register
+	Gas                     Gas
+	Cells                   CellManager
+	Libraries               []*cell.Cell
+	libraryCache            map[cell.Hash]*cell.Cell
+	Stack                   *Stack
+	Steps                   uint32
+	StopOnAccept            bool
+	TraceHook               TraceHook
+	ChksigAlwaysSucceed     bool
+	ChksgnCounter           uint32
+	GetExtraBalanceCounter  uint32
+	Committed               CommittedState
+	childRunner             ChildRunner
 }
 
 var ErrStopOnAccept = errors.New("stop on accept")
@@ -182,6 +184,14 @@ func IsSuccessExitCode(code int64) bool {
 }
 
 func NewExecutionState(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
+	return newExecutionState(globalVersion, globalVersion != 0, gas, data, c7, stack, libraries...)
+}
+
+func NewExecutionStateWithGlobalVersion(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
+	return newExecutionState(globalVersion, true, gas, data, c7, stack, libraries...)
+}
+
+func newExecutionState(globalVersion int, globalVersionConfigured bool, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
 	if data == nil {
 		data = emptyCell()
 	}
@@ -190,8 +200,9 @@ func NewExecutionState(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tup
 	}
 
 	return &State{
-		GlobalVersion: globalVersion,
-		Gas:           gas,
+		GlobalVersion:           globalVersion,
+		GlobalVersionConfigured: globalVersionConfigured,
+		Gas:                     gas,
 		Reg: Register{
 			C: [4]Continuation{
 				&QuitContinuation{ExitCode: 0},
@@ -214,6 +225,9 @@ type OPGetter func() OP
 type GasPricedOp interface {
 	InstructionBits() int64
 }
+type VersionedOp interface {
+	MinGlobalVersion() int
+}
 type OP interface {
 	GetPrefixes() []*cell.Slice
 	Deserialize(code *cell.Slice) error
@@ -229,14 +243,22 @@ var ErrCorruptedOpcode = errors.New("corrupted opcode")
 const MaxDataDepth = 512
 
 func (s *State) InitForExecution() {
-	if s.GlobalVersion == 0 {
+	if !s.GlobalVersionConfigured {
 		s.GlobalVersion = DefaultGlobalVersion
+		s.GlobalVersionConfigured = true
 	}
 	s.Cells.Init(s)
 	if s.Stack != nil {
 		s.Stack.SetTrace(s.Cells.Trace())
 	}
 	s.Reg.C7 = bindTupleTrace(s.Reg.C7, s.Cells.Trace())
+}
+
+func (s *State) effectiveGlobalVersion() int {
+	if !s.GlobalVersionConfigured {
+		return DefaultGlobalVersion
+	}
+	return s.GlobalVersion
 }
 
 func (s *State) PrepareExecution(code *cell.Slice) {
@@ -259,11 +281,13 @@ func (s *State) prepareChildForRun(child *State) error {
 	if s.childRunner == nil {
 		return vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
 	}
-	if child.GlobalVersion == 0 {
-		child.GlobalVersion = s.GlobalVersion
+	if !child.GlobalVersionConfigured {
+		child.GlobalVersion = s.effectiveGlobalVersion()
+		child.GlobalVersionConfigured = true
 	}
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.TraceHook = s.TraceHook
+	child.ChksigAlwaysSucceed = s.ChksigAlwaysSucceed
 	if len(child.Libraries) == 0 && len(s.Libraries) > 0 {
 		child.Libraries = append([]*cell.Cell{}, s.Libraries...)
 	}
@@ -297,7 +321,22 @@ func (s *State) RunChild(child *State) (int64, error) {
 }
 
 func (s *State) ConsumeGas(amount int64) error {
+	if !s.checkGasOnConsume() {
+		s.Gas.Remaining -= amount
+		return nil
+	}
 	return s.Gas.Consume(amount)
+}
+
+func (s *State) consumeGasChecked(amount int64) error {
+	return s.Gas.Consume(amount)
+}
+
+func (s *State) checkGasOnConsume() bool {
+	if !s.GlobalVersionConfigured && s.GlobalVersion == 0 {
+		return true
+	}
+	return s.GlobalVersion >= 4
 }
 
 func (s *State) CheckGas() error {
@@ -316,6 +355,10 @@ func (s *State) FlushFreeGas() error {
 }
 
 func (s *State) RegisterChksgnCall() error {
+	if !s.checkGasOnConsume() {
+		return nil
+	}
+
 	s.ChksgnCounter++
 	if s.ChksgnCounter > ChksgnFreeCount {
 		return s.ConsumeGas(ChksgnGasPrice)
@@ -506,7 +549,7 @@ func (s *State) ThrowException(code *big.Int, arg ...any) error {
 	}
 
 	s.CurrentCode = cell.BeginCell().ToSlice()
-	if err := s.ConsumeGas(ExceptionGasPrice); err != nil {
+	if err := s.consumeGasChecked(ExceptionGasPrice); err != nil {
 		return err
 	}
 

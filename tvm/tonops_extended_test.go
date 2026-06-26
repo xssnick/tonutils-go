@@ -117,8 +117,9 @@ func assertCurrencyTupleCoins(t *testing.T, name string, val tuple.Tuple, want i
 	}
 }
 
-func feeTestC7(t *testing.T) tuple.Tuple {
+func feeTestUnpackedConfig(t *testing.T) tuple.Tuple {
 	t.Helper()
+
 	unpacked := tuple.NewTupleSized(7)
 	mustSetTupleValue(t, &unpacked, 0, makeStoragePricesSlice(100, 3, 5, 7, 11))
 	mustSetTupleValue(t, &unpacked, 2, makeGasPricesSlice(100, 77, 200, 1000, 1200, 50, 2000, 3000, 4000, true))
@@ -126,9 +127,13 @@ func feeTestC7(t *testing.T) tuple.Tuple {
 	mustSetTupleValue(t, &unpacked, 4, makeMsgPricesSlice(1000, 200, 300, 500, 1000, 2000))
 	mustSetTupleValue(t, &unpacked, 5, makeMsgPricesSlice(900, 120, 220, 400, 800, 1200))
 	mustSetTupleValue(t, &unpacked, 6, makeSizeLimitsSlice(1<<20, 128))
+	return unpacked
+}
 
+func feeTestC7(t *testing.T) tuple.Tuple {
+	t.Helper()
 	return makeTonopsTestC7(t, tonopsTestC7Config{
-		UnpackedConfig: unpacked,
+		UnpackedConfig: feeTestUnpackedConfig(t),
 		ExtraParams: map[int]any{
 			13: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
 			15: int64(444),
@@ -727,7 +732,8 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to pop STOPTSTDADDRQ restored value: %v", err)
 		}
-		if builder.BitsUsed() != 0 || builder.RefsUsed() != 0 || raw != nil {
+		restoredInt, ok := raw.(*big.Int)
+		if builder.BitsUsed() != 0 || builder.RefsUsed() != 0 || !ok || restoredInt.Int64() != 7 {
 			t.Fatalf("unexpected STOPTSTDADDRQ restored values")
 		}
 

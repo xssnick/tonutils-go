@@ -41,43 +41,48 @@ var (
 
 func init() {
 	vm.List = append(vm.List,
-		func() vm.OP { return RIST255_FROMHASH() },
-		func() vm.OP { return RIST255_VALIDATE() },
-		func() vm.OP { return RIST255_ADD() },
-		func() vm.OP { return RIST255_SUB() },
-		func() vm.OP { return RIST255_MUL() },
-		func() vm.OP { return RIST255_MULBASE() },
-		func() vm.OP { return RIST255_PUSHL() },
-		func() vm.OP { return RIST255_QVALIDATE() },
-		func() vm.OP { return RIST255_QADD() },
-		func() vm.OP { return RIST255_QSUB() },
-		func() vm.OP { return RIST255_QMUL() },
-		func() vm.OP { return RIST255_QMULBASE() },
-		func() vm.OP { return BLS_VERIFY() },
-		func() vm.OP { return BLS_AGGREGATE() },
-		func() vm.OP { return BLS_FASTAGGREGATEVERIFY() },
-		func() vm.OP { return BLS_AGGREGATEVERIFY() },
-		func() vm.OP { return BLS_G1_ADD() },
-		func() vm.OP { return BLS_G1_SUB() },
-		func() vm.OP { return BLS_G1_NEG() },
-		func() vm.OP { return BLS_G1_MUL() },
-		func() vm.OP { return BLS_G1_MULTIEXP() },
-		func() vm.OP { return BLS_G1_ZERO() },
-		func() vm.OP { return BLS_MAP_TO_G1() },
-		func() vm.OP { return BLS_G1_INGROUP() },
-		func() vm.OP { return BLS_G1_ISZERO() },
-		func() vm.OP { return BLS_G2_ADD() },
-		func() vm.OP { return BLS_G2_SUB() },
-		func() vm.OP { return BLS_G2_NEG() },
-		func() vm.OP { return BLS_G2_MUL() },
-		func() vm.OP { return BLS_G2_MULTIEXP() },
-		func() vm.OP { return BLS_G2_ZERO() },
-		func() vm.OP { return BLS_MAP_TO_G2() },
-		func() vm.OP { return BLS_G2_INGROUP() },
-		func() vm.OP { return BLS_G2_ISZERO() },
-		func() vm.OP { return BLS_PAIRING() },
-		func() vm.OP { return BLS_PUSHR() },
+		func() vm.OP { return tonCryptoV4(RIST255_FROMHASH()) },
+		func() vm.OP { return tonCryptoV4(RIST255_VALIDATE()) },
+		func() vm.OP { return tonCryptoV4(RIST255_ADD()) },
+		func() vm.OP { return tonCryptoV4(RIST255_SUB()) },
+		func() vm.OP { return tonCryptoV4(RIST255_MUL()) },
+		func() vm.OP { return tonCryptoV4(RIST255_MULBASE()) },
+		func() vm.OP { return tonCryptoV4(RIST255_PUSHL()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QVALIDATE()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QADD()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QSUB()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QMUL()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QMULBASE()) },
+		func() vm.OP { return tonCryptoV4(BLS_VERIFY()) },
+		func() vm.OP { return tonCryptoV4(BLS_AGGREGATE()) },
+		func() vm.OP { return tonCryptoV4(BLS_FASTAGGREGATEVERIFY()) },
+		func() vm.OP { return tonCryptoV4(BLS_AGGREGATEVERIFY()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_ADD()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_SUB()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_NEG()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_MUL()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_MULTIEXP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_ZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_MAP_TO_G1()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_INGROUP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_ISZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_ADD()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_SUB()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_NEG()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_MUL()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_MULTIEXP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_ZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_MAP_TO_G2()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_INGROUP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_ISZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_PAIRING()) },
+		func() vm.OP { return tonCryptoV4(BLS_PUSHR()) },
 	)
+}
+
+func tonCryptoV4(op *helpers.SimpleOP) *helpers.SimpleOP {
+	op.MinVersion = 4
+	return op
 }
 
 func pushSliceBytes(state *vm.State, data []byte) error {
@@ -400,6 +405,15 @@ func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) 
 				}
 				return vmerr.Error(vmerr.CodeRangeCheck, msg)
 			}
+			pushZero := func() error {
+				if err = pushSmallInt(state, 0); err != nil {
+					return err
+				}
+				if quiet {
+					return state.Stack.PushBool(true)
+				}
+				return nil
+			}
 
 			var scalar circlgroup.Scalar
 			scalarZero := false
@@ -410,36 +424,33 @@ func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) 
 			if n == nil {
 				return fail("invalid x or n")
 			}
-			if scalarZero {
-				if base && state.GlobalVersion < 14 {
-					return fail("invalid n")
-				}
-			}
 
 			result := circlgroup.Ristretto255.NewElement()
 			if base {
 				if scalarZero {
-					if err = pushSmallInt(state, 0); err != nil {
-						return err
-					}
-					if quiet {
-						return state.Stack.PushBool(true)
-					}
-					return nil
+					return pushZero()
 				}
 				result.MulGen(scalar)
 			} else {
-				if scalarZero && state.GlobalVersion < 14 {
-					if err = pushSmallInt(state, 0); err != nil {
-						return err
-					}
-					if quiet {
-						return state.Stack.PushBool(true)
-					}
-					return nil
+				if state.GlobalVersion < 14 && scalarZero {
+					return pushZero()
 				}
 				if x == nil {
 					return fail("invalid x or n")
+				}
+				if state.GlobalVersion >= 14 {
+					if x.Sign() == 0 {
+						return pushZero()
+					}
+					if scalarZero {
+						if _, parseErr := parseRistrettoPoint(x); parseErr != nil {
+							if quiet {
+								return state.Stack.PushBool(false)
+							}
+							return parseErr
+						}
+						return pushZero()
+					}
 				}
 
 				point, parseErr := parseRistrettoPoint(x)
@@ -449,17 +460,8 @@ func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) 
 					}
 					return parseErr
 				}
-				if state.GlobalVersion < 14 && x.Sign() == 0 {
+				if x.Sign() == 0 {
 					return fail("invalid x or n")
-				}
-				if scalarZero || x.Sign() == 0 {
-					if err = pushSmallInt(state, 0); err != nil {
-						return err
-					}
-					if quiet {
-						return state.Stack.PushBool(true)
-					}
-					return nil
 				}
 				result.Mul(point, scalar)
 			}

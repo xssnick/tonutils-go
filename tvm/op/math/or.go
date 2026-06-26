@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -26,9 +24,7 @@ func OR() *helpers.SimpleOP {
 				return err
 			}
 
-			return pushBinaryIntResult(state, i0, i1, func(x, y *big.Int) *big.Int {
-				return x.Or(x, y)
-			})
+			return pushMaybeInt(state, versionedOrResult(state.GlobalVersion, i0, i1), false)
 		},
 		Name:      "OR",
 		BitPrefix: helpers.BytesPrefix(0xB1),

@@ -50,12 +50,14 @@ func init() {
 }
 
 type storageStat struct {
-	limit uint64
-	cells uint64
-	bits  uint64
-	refs  uint64
-	seen  map[cell.Hash]struct{}
-	state *vm.State
+	limit           uint64
+	cells           uint64
+	bits            uint64
+	refs            uint64
+	seen            map[cell.Hash]struct{}
+	state           *vm.State
+	deferLoadGasErr bool
+	loadGasErr      error
 }
 
 func newStorageStat(limit uint64, state *vm.State) *storageStat {
@@ -79,7 +81,16 @@ func (s *storageStat) addCell(cl *cell.Cell) (bool, error) {
 	}
 	if s.state != nil {
 		if err := s.state.Cells.RegisterCellLoadKey(key); err != nil {
-			return false, err
+			if !s.deferLoadGasErr {
+				return false, err
+			}
+			code, ok := vmerr.ErrorCode(err)
+			if !ok || code != vmerr.CodeOutOfGas {
+				return false, err
+			}
+			if s.loadGasErr == nil {
+				s.loadGasErr = err
+			}
 		}
 	}
 	s.seen[key] = struct{}{}
@@ -170,6 +181,7 @@ func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.Simple
 			}
 
 			stat := newStorageStat(limit, state)
+			stat.deferLoadGasErr = state.GlobalVersion <= 3
 			var ok bool
 			if mode&2 != 0 {
 				ok, err = stat.addSlice(sliceArg)
@@ -180,6 +192,12 @@ func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.Simple
 				return err
 			}
 
+			if !ok && mode&1 == 0 {
+				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
+			}
+			if stat.loadGasErr != nil {
+				return stat.loadGasErr
+			}
 			if ok {
 				if err = pushSmallInt(state, int64(stat.cells)); err != nil {
 					return err
@@ -190,8 +208,6 @@ func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.Simple
 				if err = pushSmallInt(state, int64(stat.refs)); err != nil {
 					return err
 				}
-			} else if mode&1 == 0 {
-				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
 			}
 			if mode&1 != 0 {
 				return state.Stack.PushBool(ok)
@@ -361,7 +377,7 @@ func loadSliceBits(sl *cell.Slice, bits uint) (*cell.Slice, error) {
 	return cell.BeginCell().MustStoreSlice(data, bits).ToSlice(), nil
 }
 
-func parseMaybeAnycast(sl *cell.Slice) (*cell.Slice, bool) {
+func parseMaybeAnycast(sl *cell.Slice, globalVersion int) (*cell.Slice, bool) {
 	has, err := sl.LoadBoolBit()
 	if err != nil {
 		return nil, false
@@ -369,10 +385,21 @@ func parseMaybeAnycast(sl *cell.Slice) (*cell.Slice, bool) {
 	if !has {
 		return nil, true
 	}
-	return nil, false
+	if globalVersion >= 10 {
+		return nil, false
+	}
+	depth, err := sl.LoadUInt(5)
+	if err != nil || depth < 1 || depth > 30 {
+		return nil, false
+	}
+	pfx, err := loadSliceBits(sl, uint(depth))
+	if err != nil {
+		return nil, false
+	}
+	return pfx, true
 }
 
-func parseMessageAddress(src *cell.Slice) (*parsedMsgAddress, *cell.Slice, bool) {
+func parseMessageAddress(src *cell.Slice, globalVersion int) (*parsedMsgAddress, *cell.Slice, bool) {
 	work := src.Copy()
 	typ, err := work.LoadUInt(2)
 	if err != nil {
@@ -392,7 +419,7 @@ func parseMessageAddress(src *cell.Slice) (*parsedMsgAddress, *cell.Slice, bool)
 		}
 		return &parsedMsgAddress{Kind: 1, Addr: addrBits}, work, true
 	case 2:
-		pfx, ok := parseMaybeAnycast(work)
+		pfx, ok := parseMaybeAnycast(work, globalVersion)
 		if !ok {
 			return nil, src, false
 		}
@@ -406,7 +433,26 @@ func parseMessageAddress(src *cell.Slice) (*parsedMsgAddress, *cell.Slice, bool)
 		}
 		return &parsedMsgAddress{Kind: 2, Anycast: pfx, Workchain: int32(wc), Addr: addrBits}, work, true
 	case 3:
-		return nil, src, false
+		if globalVersion >= 10 {
+			return nil, src, false
+		}
+		pfx, ok := parseMaybeAnycast(work, globalVersion)
+		if !ok {
+			return nil, src, false
+		}
+		ln, err := work.LoadUInt(9)
+		if err != nil {
+			return nil, src, false
+		}
+		wc, err := work.LoadInt(32)
+		if err != nil {
+			return nil, src, false
+		}
+		addrBits, err := loadSliceBits(work, uint(ln))
+		if err != nil {
+			return nil, src, false
+		}
+		return &parsedMsgAddress{Kind: 3, Anycast: pfx, Workchain: int32(wc), Addr: addrBits}, work, true
 	default:
 		return nil, src, false
 	}
@@ -505,7 +551,7 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 					return nil
 				}
 			}
-			addr, rest, ok := parseMessageAddress(src)
+			addr, rest, ok := parseMessageAddress(src, state.GlobalVersion)
 			if ok && stdOnly && addr.Kind != 2 {
 				ok = false
 			}
@@ -538,6 +584,11 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 	}
 }
 
+func stdAddrV12(op *helpers.SimpleOP) *helpers.SimpleOP {
+	op.MinVersion = 12
+	return op
+}
+
 func LDMSGADDR() *helpers.SimpleOP {
 	return loadMessageAddrOp("LDMSGADDR", helpers.BytesPrefix(0xFA, 0x40), false, false, false)
 }
@@ -545,16 +596,16 @@ func LDMSGADDRQ() *helpers.SimpleOP {
 	return loadMessageAddrOp("LDMSGADDRQ", helpers.BytesPrefix(0xFA, 0x41), false, true, false)
 }
 func LDSTDADDR() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDSTDADDR", helpers.BytesPrefix(0xFA, 0x48), true, false, false)
+	return stdAddrV12(loadMessageAddrOp("LDSTDADDR", helpers.BytesPrefix(0xFA, 0x48), true, false, false))
 }
 func LDSTDADDRQ() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDSTDADDRQ", helpers.BytesPrefix(0xFA, 0x49), true, true, false)
+	return stdAddrV12(loadMessageAddrOp("LDSTDADDRQ", helpers.BytesPrefix(0xFA, 0x49), true, true, false))
 }
 func LDOPTSTDADDR() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x50), true, false, true)
+	return stdAddrV12(loadMessageAddrOp("LDOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x50), true, false, true))
 }
 func LDOPTSTDADDRQ() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x51), true, true, true)
+	return stdAddrV12(loadMessageAddrOp("LDOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x51), true, true, true))
 }
 
 func parseMsgAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
@@ -564,7 +615,7 @@ func parseMsgAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 			if err != nil {
 				return err
 			}
-			addr, rest, ok := parseMessageAddress(src)
+			addr, rest, ok := parseMessageAddress(src, state.GlobalVersion)
 			if !ok || rest.BitsLeft() != 0 || rest.RefsNum() != 0 {
 				if quiet {
 					return state.Stack.PushBool(false)
@@ -598,7 +649,7 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 			if err != nil {
 				return err
 			}
-			addr, rest, ok := parseMessageAddress(src)
+			addr, rest, ok := parseMessageAddress(src, state.GlobalVersion)
 			if !ok || rest.BitsLeft() != 0 || rest.RefsNum() != 0 || (addr.Kind != 2 && addr.Kind != 3) {
 				if quiet {
 					return state.Stack.PushBool(false)
@@ -611,6 +662,11 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 					return state.Stack.PushBool(false)
 				}
 				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot rewrite address in a MsgAddressInt")
+			}
+			if allowVar && addr.Anycast != nil && addr.Anycast.BitsLeft() > 0 && addr.Anycast.BitsLeft() < addr.Addr.BitsLeft() {
+				if err = state.ConsumeGas(vm.CellCreateGasPrice + vm.CellLoadGasPrice); err != nil {
+					return err
+				}
 			}
 			if !allowVar {
 				if rewritten.BitsLeft() != 256 {
@@ -660,8 +716,8 @@ func REWRITEVARADDRQ() *helpers.SimpleOP {
 	return rewriteMsgAddrOp("REWRITEVARADDRQ", helpers.BytesPrefix(0xFA, 0x47), true, true)
 }
 
-func isValidStdMsgAddr(sl *cell.Slice) bool {
-	addr, rest, ok := parseMessageAddress(sl)
+func isValidStdMsgAddr(sl *cell.Slice, globalVersion int) bool {
+	addr, rest, ok := parseMessageAddress(sl, globalVersion)
 	return ok && addr.Kind == 2 && rest.BitsLeft() == 0 && rest.RefsNum() == 0 && addr.Addr.BitsLeft() == 256
 }
 
@@ -676,7 +732,7 @@ func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 			if err != nil {
 				return err
 			}
-			isStd := isValidStdMsgAddr(addrSlice)
+			isStd := isValidStdMsgAddr(addrSlice, state.GlobalVersion)
 			if !builder.CanExtendBy(uint(addrSlice.BitsLeft()), uint(addrSlice.RefsNum())) || !isStd {
 				if !quiet {
 					if !isStd {
@@ -713,10 +769,10 @@ func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 }
 
 func STSTDADDR() *helpers.SimpleOP {
-	return storeStdAddrOp("STSTDADDR", helpers.BytesPrefix(0xFA, 0x52), false)
+	return stdAddrV12(storeStdAddrOp("STSTDADDR", helpers.BytesPrefix(0xFA, 0x52), false))
 }
 func STSTDADDRQ() *helpers.SimpleOP {
-	return storeStdAddrOp("STSTDADDRQ", helpers.BytesPrefix(0xFA, 0x53), true)
+	return stdAddrV12(storeStdAddrOp("STSTDADDRQ", helpers.BytesPrefix(0xFA, 0x53), true))
 }
 
 func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
@@ -760,11 +816,7 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 					return vmerr.Error(vmerr.CodeTypeCheck, "not a cell slice")
 				}
 
-				restored := raw
-				if state.GlobalVersion < 14 {
-					restored = nil
-				}
-				if err = state.Stack.PushAny(restored); err != nil {
+				if err = state.Stack.PushAny(raw); err != nil {
 					return err
 				}
 				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
@@ -772,7 +824,7 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 				}
 				return state.Stack.PushBool(true)
 			}
-			isStd := isValidStdMsgAddr(addrSlice)
+			isStd := isValidStdMsgAddr(addrSlice, state.GlobalVersion)
 			if !builder.CanExtendBy(uint(addrSlice.BitsLeft()), uint(addrSlice.RefsNum())) || !isStd {
 				if !quiet {
 					if !isStd {
@@ -809,10 +861,10 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 }
 
 func STOPTSTDADDR() *helpers.SimpleOP {
-	return storeOptStdAddrOp("STOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x54), false)
+	return stdAddrV12(storeOptStdAddrOp("STOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x54), false))
 }
 func STOPTSTDADDRQ() *helpers.SimpleOP {
-	return storeOptStdAddrOp("STOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x55), true)
+	return stdAddrV12(storeOptStdAddrOp("STOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x55), true))
 }
 
 func installAction(state *vm.State, build func(*cell.Builder) error) error {
@@ -841,7 +893,11 @@ func RAWRESERVE() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			f, err := state.Stack.PopIntRangeInt64(0, 31)
+			maxMode := int64(31)
+			if state.GlobalVersion < 4 {
+				maxMode = 15
+			}
+			f, err := state.Stack.PopIntRangeInt64(0, maxMode)
 			if err != nil {
 				return err
 			}
@@ -877,7 +933,11 @@ func RAWRESERVEX() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			f, err := state.Stack.PopIntRangeInt64(0, 31)
+			maxMode := int64(31)
+			if state.GlobalVersion < 4 {
+				maxMode = 15
+			}
+			f, err := state.Stack.PopIntRangeInt64(0, maxMode)
 			if err != nil {
 				return err
 			}
@@ -930,11 +990,15 @@ func SETCODE() *helpers.SimpleOP {
 }
 
 func popLibMode(state *vm.State) (int64, error) {
-	mode, err := state.Stack.PopIntRangeInt64(0, 31)
+	maxMode := int64(31)
+	if state.GlobalVersion < 4 {
+		maxMode = 2
+	}
+	mode, err := state.Stack.PopIntRangeInt64(0, maxMode)
 	if err != nil {
 		return 0, err
 	}
-	if (mode &^ 16) > 2 {
+	if state.GlobalVersion >= 4 && (mode&^16) > 2 {
 		return 0, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return mode, nil
@@ -1030,6 +1094,10 @@ func getMyAddr(state *vm.State) (*address.Address, error) {
 }
 
 func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
+	if state.GlobalVersion < 6 {
+		return 1 << 13, nil
+	}
+
 	sl, err := unpackedConfigSlice(state, 6)
 	if err != nil {
 		return 0, err
@@ -1065,6 +1133,29 @@ func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
 	default:
 		return 0, vmerr.Error(vmerr.CodeCellUnderflow, "configuration parameter 43 is invalid")
 	}
+}
+
+func getSendMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
+	if state.GlobalVersion >= 6 {
+		return getTonMsgPrices(state, isMasterchain)
+	}
+
+	param := tlb.ConfigParamMsgForwardPricesBasechain
+	if isMasterchain {
+		param = tlb.ConfigParamMsgForwardPricesMasterchain
+	}
+	pricesCell, err := loadConfigValue(state, new(big.Int).SetUint64(uint64(param)))
+	if err != nil {
+		return nil, err
+	}
+	if pricesCell == nil {
+		return nil, vmerr.Error(vmerr.CodeUnknown, "invalid prices config")
+	}
+	pricesSlice, err := pricesCell.BeginParse()
+	if err != nil {
+		return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
+	}
+	return parseTonMsgPrices(pricesSlice)
 }
 
 func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) (bool, error) {
@@ -1320,7 +1411,7 @@ func SENDMSG() *helpers.SimpleOP {
 			if msg.MsgType == tlb.MsgTypeInternal && msg.Info.DstAddr != nil && msg.Info.DstAddr.Workchain() == -1 {
 				isMasterchain = true
 			}
-			prices, err := getTonMsgPrices(state, isMasterchain)
+			prices, err := getSendMsgPrices(state, isMasterchain)
 			if err != nil {
 				return err
 			}
@@ -1465,7 +1556,8 @@ func SENDMSG() *helpers.SimpleOP {
 				return b.StoreRefUncheckedDepth(msgCell)
 			})
 		},
-		Name:      "SENDMSG",
-		BitPrefix: helpers.BytesPrefix(0xFB, 0x08),
+		Name:       "SENDMSG",
+		BitPrefix:  helpers.BytesPrefix(0xFB, 0x08),
+		MinVersion: 4,
 	}
 }

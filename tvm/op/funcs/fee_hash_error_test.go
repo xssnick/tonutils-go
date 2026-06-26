@@ -46,10 +46,13 @@ func TestFeeHashAdditionalPaths(t *testing.T) {
 			t.Fatal("invalid main gas tag after D1 should fail")
 		}
 
+		cfg := tuple.NewTupleSized(4)
+		if err := cfg.Set(3, ddGas.Copy()); err != nil {
+			t.Fatalf("failed to set workchain gas config: %v", err)
+		}
 		st := newFuncTestState(t, map[int]any{
-			9: makeConfigRootRefDict(t, map[uint32]*cell.Cell{
-				21: ddGas.MustToCell(),
-			}),
+			9:                      "bad-config-root",
+			paramIdxUnpackedConfig: cfg,
 		})
 		got, err := getTonGasPrices(st, false)
 		if err != nil || got.GasLimit != 100 {
@@ -173,19 +176,41 @@ func TestFeeHashAdditionalPaths(t *testing.T) {
 			MustStoreUInt(15, 16).
 			MustStoreUInt(16, 16).
 			EndCell()
+		cfg := tuple.NewTupleSized(5)
+		if err := cfg.Set(4, msgCfg.MustBeginParse()); err != nil {
+			t.Fatalf("failed to set masterchain msg config: %v", err)
+		}
 		st = newFuncTestState(t, map[int]any{
-			9: makeConfigRootRefDict(t, map[uint32]*cell.Cell{
-				24: msgCfg,
-			}),
+			9:                      "bad-config-root",
+			paramIdxUnpackedConfig: cfg,
 		})
 		gotMsg, err := getTonMsgPrices(st, true)
 		if err != nil || gotMsg.LumpPrice != 11 {
 			t.Fatalf("getTonMsgPrices(masterchain) = (%+v, %v)", gotMsg, err)
 		}
 
-		st = newFuncTestState(t, map[int]any{9: "bad-config-root"})
+		storageCfg := cell.BeginCell().
+			MustStoreUInt(0xCC, 8).
+			MustStoreUInt(17, 32).
+			MustStoreUInt(18, 64).
+			MustStoreUInt(19, 64).
+			MustStoreUInt(20, 64).
+			MustStoreUInt(21, 64).
+			EndCell()
+		st = newFuncTestState(t, map[int]any{
+			9:                      "bad-config-root",
+			paramIdxUnpackedConfig: tuple.NewTupleValue(storageCfg.MustBeginParse()),
+		})
+		gotStorage, err := getTonStoragePrices(st)
+		if err != nil || gotStorage.ValidSince != 17 {
+			t.Fatalf("getTonStoragePrices = (%+v, %v)", gotStorage, err)
+		}
+
+		st = newFuncTestState(t, map[int]any{
+			paramIdxUnpackedConfig: tuple.NewTupleValue(cell.BeginCell().MustStoreUInt(0x03, 8).ToSlice()),
+		})
 		if _, err := getTonStoragePrices(st); err == nil {
-			t.Fatal("getTonStoragePrices should reject invalid config roots")
+			t.Fatal("getTonStoragePrices should reject invalid unpacked config")
 		}
 	})
 
@@ -365,4 +390,68 @@ func TestFeeHashAdditionalPaths(t *testing.T) {
 			t.Fatal("GETFORWARDFEESIMPLE should reject negative bit counts")
 		}
 	})
+}
+
+func TestFeeOpsUnderflowPrecheckStartsAtV9(t *testing.T) {
+	st := &vm.State{
+		GlobalVersion: 8,
+		Stack:         vm.NewStack(),
+	}
+	if err := st.Stack.PushBool(false); err != nil {
+		t.Fatalf("PushBool failed: %v", err)
+	}
+	err := GETFORWARDFEESIMPLE().Interpret(st)
+	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeStackUnderflow {
+		t.Fatalf("v8 GETFORWARDFEESIMPLE error = %v, want stack underflow", err)
+	}
+	if st.Stack.Len() != 0 {
+		t.Fatalf("v8 GETFORWARDFEESIMPLE stack len = %d, want partial pop", st.Stack.Len())
+	}
+
+	st = &vm.State{
+		GlobalVersion: 9,
+		Stack:         vm.NewStack(),
+	}
+	if err = st.Stack.PushBool(false); err != nil {
+		t.Fatalf("PushBool failed: %v", err)
+	}
+	err = GETFORWARDFEESIMPLE().Interpret(st)
+	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeStackUnderflow {
+		t.Fatalf("v9 GETFORWARDFEESIMPLE error = %v, want stack underflow", err)
+	}
+	if st.Stack.Len() != 1 {
+		t.Fatalf("v9 GETFORWARDFEESIMPLE stack len = %d, want precheck to keep stack", st.Stack.Len())
+	}
+}
+
+func TestHashExtUnderflowPrecheckStartsAtV9(t *testing.T) {
+	st := &vm.State{
+		GlobalVersion: 8,
+		Stack:         vm.NewStack(),
+	}
+	if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+		t.Fatalf("PushInt hash id failed: %v", err)
+	}
+	err := HASHEXT(255).Interpret(st)
+	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeStackUnderflow {
+		t.Fatalf("v8 dynamic HASHEXT error = %v, want stack underflow", err)
+	}
+	if st.Stack.Len() != 0 {
+		t.Fatalf("v8 dynamic HASHEXT stack len = %d, want partial pop", st.Stack.Len())
+	}
+
+	st = &vm.State{
+		GlobalVersion: 9,
+		Stack:         vm.NewStack(),
+	}
+	if err = st.Stack.PushInt(big.NewInt(0)); err != nil {
+		t.Fatalf("PushInt hash id failed: %v", err)
+	}
+	err = HASHEXT(255).Interpret(st)
+	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeStackUnderflow {
+		t.Fatalf("v9 dynamic HASHEXT error = %v, want stack underflow", err)
+	}
+	if st.Stack.Len() != 1 {
+		t.Fatalf("v9 dynamic HASHEXT stack len = %d, want precheck to keep stack", st.Stack.Len())
+	}
 }

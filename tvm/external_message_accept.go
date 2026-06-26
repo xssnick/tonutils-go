@@ -22,6 +22,9 @@ type CheckExternalMessageAcceptedConfig struct {
 	DuePayment          any
 	PrecompiledGasUsage *big.Int
 	Libraries           []*cell.Cell
+	GlobalVersion       int
+	GlobalVersionSet    bool
+	ChksigAlwaysSucceed bool
 	TraceHook           vm.TraceHook
 }
 
@@ -60,7 +63,10 @@ func transactionConfigForExternalMessageAccepted(cfg CheckExternalMessageAccepte
 		DuePayment:          cfg.DuePayment,
 		PrecompiledGasUsage: cfg.PrecompiledGasUsage,
 		Libraries:           cfg.Libraries,
+		GlobalVersion:       cfg.GlobalVersion,
+		GlobalVersionSet:    cfg.GlobalVersionSet,
 		StopOnAccept:        true,
+		ChksigAlwaysSucceed: cfg.ChksigAlwaysSucceed,
 		TraceHook:           cfg.TraceHook,
 	}
 }
@@ -71,9 +77,7 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 		now = uint32(time.Now().Unix())
 	}
 
-	blockchainCfg := tlb.BlockchainConfig{
-		Root: cfg.ConfigRoot,
-	}
+	blockchainCfg := newTransactionConfig(cfg.ConfigRoot)
 	if err := transactionValidateInboundExternalMessage(msgCell, msg, blockchainCfg); err != nil {
 		return nil, err
 	}
@@ -112,6 +116,7 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 	execCfg.Address = runtimeAcc.addr
 	execCfg.Now = now
 	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, execCfg.LogicalTime), msg)
+	explicitC7 := transactionHasExplicitC7Context(execCfg)
 	transactionPrepareExecutionConfig(&execCfg, runtimeAcc, msg, prepared, startLT)
 	execCfg.Balance = new(big.Int).Set(prepared.balance)
 
@@ -153,7 +158,11 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 		return nil, nil
 	}
 
-	msgRes, err := tvm.executeTransactionMessage(computeAcc, msgCell, msg, execCfg, gas, prepared.msgBalance.grams, nil)
+	globalVersion, err := transactionExecutionGlobalVersion(execCfg, blockchainCfg, tvm.globalVersion)
+	if err != nil {
+		return nil, err
+	}
+	msgRes, err := tvm.executeTransactionMessage(computeAcc, msgCell, msg, execCfg, gas, prepared.msgBalance.grams, nil, explicitC7, globalVersion)
 	if err != nil {
 		return nil, err
 	}

@@ -59,8 +59,10 @@ func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, 
 	}
 
 	machine := NewTVM()
-	machine.globalVersion = globalVersion
-	res, err := machine.ExecuteDetailedWithLibraries(code, data, c7, vm.GasWithLimit(gasLimit), execStack, libs...)
+	if err := machine.SetGlobalVersion(globalVersion); err != nil {
+		return nil, err
+	}
+	res, err := machine.Execute(code, data, c7, vm.GasWithLimit(gasLimit), execStack, ExecutionConfig{Libraries: libs})
 	if err != nil {
 		return nil, err
 	}

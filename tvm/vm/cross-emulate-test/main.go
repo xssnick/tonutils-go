@@ -162,7 +162,7 @@ func main() {
 	log.Println("C CALL COMPLETED")
 
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash(name))))
-	err = vmx.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s)
+	_, err = vmx.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, tvm.ExecutionConfig{})
 	if err != nil {
 		panic(err.Error())
 	}

@@ -270,6 +270,11 @@ func transactionLoadExtraCurrencies(dict *cell.Dictionary) (map[uint32]*big.Int,
 }
 
 func transactionStoreExtraCurrencies(extra map[uint32]*big.Int) (*cell.Dictionary, error) {
+	for _, amount := range extra {
+		if amount != nil && amount.Sign() < 0 {
+			return nil, errors.New("negative extra currency amount")
+		}
+	}
 	if transactionExtraCount(extra) == 0 {
 		return nil, nil
 	}
@@ -277,9 +282,6 @@ func transactionStoreExtraCurrencies(extra map[uint32]*big.Int) (*cell.Dictionar
 	for id, amount := range extra {
 		if amount == nil || amount.Sign() == 0 {
 			continue
-		}
-		if amount.Sign() < 0 {
-			return nil, errors.New("negative extra currency amount")
 		}
 		value := cell.BeginCell().MustStoreBigVarUInt(amount, 32).EndCell()
 		if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(id)), value); err != nil {

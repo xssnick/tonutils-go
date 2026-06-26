@@ -36,6 +36,7 @@ type transactionSendActionResult struct {
 	resultCode      int32
 	clearMsgBalance bool
 	skipped         bool
+	ignored         bool
 	invalid         bool
 	bounceOnFail    bool
 	deleteAccount   bool
@@ -59,10 +60,19 @@ type transactionActionEntry struct {
 
 var errTransactionInvalidRelaxedActionMessage = errors.New("invalid relaxed action message")
 
+type transactionNormalizedOutboundMessage struct {
+	cell   *cell.Cell
+	msg    tlb.Message
+	layout transactionOutboundLayout
+	stats  transactionMessageStatsResult
+}
+
 type transactionRelaxedActionMessageValidation struct {
 	valueCanonical      bool
 	extraFlagsCanonical bool
 	fwdFeeCanonical     bool
+	layout              transactionOutboundLayout
+	layoutKnown         bool
 }
 
 type transactionActionLoadResult struct {
@@ -74,7 +84,7 @@ type transactionActionLoadResult struct {
 	bounce         bool
 }
 
-func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg tlb.BlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int) (*transactionActionApplyResult, error) {
+func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg transactionConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int) (*transactionActionApplyResult, error) {
 	computeSuccess := transactionComputeSucceeded(res)
 	endLT := startLT + 1
 	out := &transactionActionApplyResult{
@@ -96,7 +106,8 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		actionsRoot = cell.BeginCell().EndCell()
 	}
 
-	loadedActions, err := transactionLoadActions(actionsRoot)
+	globalVersion := cfg.actionGlobalVersion()
+	loadedActions, err := transactionLoadActions(actionsRoot, globalVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +156,10 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		originalBalance = remainingBalance.copy()
 	}
 	lastProcessedActionIdx := -1
+	msgBalanceBeforeActions := msgBalanceRemaining.copy()
 	failedActionMsgBalance := func() *transactionCurrencyBalance {
-		if transactionGlobalVersion(cfg) >= 14 {
-			return msgBalance.copy()
+		if globalVersion >= 14 {
+			return msgBalanceBeforeActions.copy()
 		}
 		return msgBalanceRemaining.copy()
 	}
@@ -171,10 +183,11 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		actionPhase.SpecActions = specActions
 		actionPhase.MessagesCreated = uint16(len(outMsgs))
 		actionPhase.TotalFwdFees = transactionCoinsPtr(totalFwdFees)
-		if actionFine.Sign() > 0 {
+		failureActionFees := new(big.Int).Set(totalActionFees)
+		if noFunds || resultCode == 50 {
 			actionPhase.TotalActionFees = transactionCoinsPtr(actionFine)
 		} else {
-			actionPhase.TotalActionFees = nil
+			actionPhase.TotalActionFees = transactionCoinsPtr(failureActionFees)
 		}
 		actionPhase.TotalMsgSize = tlb.StorageUsedShort{
 			Cells: new(big.Int).SetUint64(totalUsage.cells),
@@ -200,7 +213,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		lastProcessedActionIdx = i
 		switch act := action.action.(type) {
 		case tlb.ActionSendMsg:
-			sendRes, err := transactionProcessSendAction(acc, act, startLT+1+uint64(len(outMsgs)), now, cfg, remainingBalance, msgBalanceRemaining, gasFees, actionFine)
+			sendRes, err := transactionProcessSendAction(acc, act, startLT+1+uint64(len(outMsgs)), now, cfg, globalVersion, remainingBalance, msgBalanceRemaining, gasFees, actionFine)
 			if err != nil {
 				return nil, err
 			}
@@ -212,6 +225,9 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			}
 			if sendRes.skipped {
 				actionPhase.SkippedActions++
+				continue
+			}
+			if sendRes.ignored {
 				continue
 			}
 			if sendRes.resultCode != 0 {
@@ -242,7 +258,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			specActions++
 			nextCode = act.NewCode
 		case tlb.ActionReserveCurrency:
-			reserveRes, err := transactionProcessReserveAction(act, originalBalance, remainingBalance, reservedBalance)
+			reserveRes, err := transactionProcessReserveAction(act, originalBalance, remainingBalance, reservedBalance, globalVersion)
 			if err != nil {
 				return nil, err
 			}
@@ -255,7 +271,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			}
 			specActions++
 		case tlb.ActionChangeLibrary:
-			libRes, err := transactionProcessChangeLibraryAction(act, nextLibraries, cfg)
+			libRes, err := transactionProcessChangeLibraryAction(act, nextLibraries, cfg, globalVersion)
 			if err != nil {
 				return nil, err
 			}
@@ -349,7 +365,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	return out, nil
 }
 
-func transactionLoadActions(root *cell.Cell) (*transactionActionLoadResult, error) {
+func transactionLoadActions(root *cell.Cell, globalVersion uint32) (*transactionActionLoadResult, error) {
 	out := &transactionActionLoadResult{}
 	if root == nil {
 		return out, nil
@@ -402,13 +418,13 @@ func transactionLoadActions(root *cell.Cell) (*transactionActionLoadResult, erro
 		if err := transactionParseCell(&list, node); err != nil {
 			mode, isSend := transactionMalformedSendMode(node)
 			if isSend {
-				if mode&2 != 0 {
+				if globalVersion >= 8 && mode&2 != 0 {
 					out.skippedActions++
 					actions[actionIdx] = transactionActionEntry{skipped: true}
 					actionIdx++
 					continue
 				}
-				if mode&16 != 0 {
+				if globalVersion >= 4 && mode&16 != 0 {
 					out.bounce = true
 				}
 			}
@@ -463,7 +479,7 @@ func transactionMalformedSendMode(node *cell.Cell) (uint8, bool) {
 	return uint8(mode), true
 }
 
-func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.ActionSendMsg, createdLT uint64, now uint32, cfg tlb.BlockchainConfig, remainingBalance, msgBalanceRemaining *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, error) {
+func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.ActionSendMsg, createdLT uint64, now uint32, cfg transactionConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, error) {
 	out := &transactionSendActionResult{
 		debit:           transactionZeroCurrencyBalance(),
 		totalFwdFees:    big.NewInt(0),
@@ -472,154 +488,154 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 	}
 
 	mode := act.Mode
-	if mode&16 != 0 {
+	if globalVersion >= 4 && mode&16 != 0 {
 		mode &^= 16
 		out.bounceOnFail = true
 	}
 
 	if transactionSendModeInvalid(mode) {
-		return transactionSendResultCode(out, mode, 34), nil
+		if globalVersion >= 13 {
+			return transactionSendResultCode(out, mode, 34, globalVersion), nil
+		}
+		out.resultCode = 34
+		return out, nil
 	}
 
 	msgValidation, err := transactionValidateRelaxedActionMessageCurrencies(act.Msg)
 	if err != nil {
 		if errors.Is(err, errTransactionInvalidRelaxedActionMessage) {
-			return transactionSendPrepassInvalid(out, mode), nil
+			return transactionSendPrepassInvalid(out, mode, globalVersion), nil
 		}
 		out.resultCode = 34
 		return out, nil
 	}
-	if !msgValidation.valueCanonical || !msgValidation.fwdFeeCanonical {
+	if !msgValidation.valueCanonical || (globalVersion < 8 && (!msgValidation.extraFlagsCanonical || !msgValidation.fwdFeeCanonical)) {
 		out.resultCode = 34
 		return out, nil
 	}
 
 	var suggestedMsg tlb.Message
 	if err := transactionParseCell(&suggestedMsg, act.Msg); err != nil {
-		return transactionSendPrepassInvalid(out, mode), nil
+		return transactionSendPrepassInvalid(out, mode, globalVersion), nil
 	}
 	if err = transactionValidateMessageStateInitLibs(&suggestedMsg); err != nil {
-		return transactionSendPrepassInvalid(out, mode), nil
+		return transactionSendPrepassInvalidV13(out, mode, globalVersion), nil
 	}
+	var normalizedInternalDst *address.Address
 	switch suggestedMsg.MsgType {
 	case tlb.MsgTypeInternal:
 		intMsg := suggestedMsg.AsInternal()
 		if !transactionOutboundSourceValid(intMsg.SrcAddr, acc.addr) {
-			return transactionSendInvalidSource(out, mode), nil
+			return transactionSendInvalidSource(out, mode, globalVersion), nil
 		}
 		if !transactionOutboundInternalDestTypeValid(intMsg.DstAddr) {
-			return transactionSendPrepassInvalid(out, mode), nil
+			return transactionSendPrepassInvalid(out, mode, globalVersion), nil
 		}
-		if !transactionOutboundInternalDestValid(intMsg.DstAddr, cfg) {
-			return transactionSendInvalidDestination(out, mode), nil
+		var ok bool
+		normalizedInternalDst, ok = transactionValidateAndNormalizeInternalDestAddr(intMsg.DstAddr, cfg, acc.addr)
+		if !ok {
+			return transactionSendInvalidDestination(out, mode, globalVersion), nil
 		}
 	case tlb.MsgTypeExternalOut:
 		if !transactionOutboundSourceValid(suggestedMsg.AsExternalOut().SrcAddr, acc.addr) {
-			return transactionSendInvalidSource(out, mode), nil
+			return transactionSendInvalidSource(out, mode, globalVersion), nil
 		}
 	default:
-		return transactionSendPrepassInvalid(out, mode), nil
+		return transactionSendPrepassInvalid(out, mode, globalVersion), nil
 	}
 
-	layout, err := transactionOutboundMessageLayout(act.Msg)
-	if err != nil {
-		return transactionSendPrepassInvalid(out, mode), nil
+	layout := msgValidation.layout
+	if !msgValidation.layoutKnown {
+		layout, err = transactionOutboundMessageLayout(act.Msg)
+		if err != nil {
+			return transactionSendPrepassInvalid(out, mode, globalVersion), nil
+		}
 	}
 
-	msgCell, err := transactionNormalizeOutboundMessage(act.Msg, acc.addr, createdLT, now, cfg)
+	normalized, err := transactionPrepareNormalizedOutboundMessage(&suggestedMsg, layout, normalizedInternalDst, acc.addr, createdLT, now, cfg)
 	if err != nil {
 		if errors.Is(err, errTransactionInvalidDestination) {
-			return transactionSendInvalidDestination(out, mode), nil
+			return transactionSendInvalidDestination(out, mode, globalVersion), nil
 		}
 		out.resultCode = 34
 		return out, nil
 	}
 
-	var msg tlb.Message
-	if err = transactionParseCell(&msg, msgCell); err != nil {
-		out.resultCode = 34
-		return out, nil
-	}
+	msgCell := normalized.cell
+	msg := normalized.msg
 
 	switch msg.MsgType {
 	case tlb.MsgTypeExternalOut:
 		extMsg := msg.AsExternalOut()
 		if extMsg.DstAddr != nil && extMsg.DstAddr.Type() != address.NoneAddress && extMsg.DstAddr.Type() != address.ExtAddress {
-			return transactionSendPrepassInvalid(out, mode), nil
+			return transactionSendPrepassInvalid(out, mode, globalVersion), nil
 		}
 		if mode&^uint8(3) != 0 {
 			out.resultCode = 34
 			return out, nil
 		}
-		sizeCode, fine, err := transactionCheckOutboundMessageSize(cfg, acc.addr, msg.Msg.DestAddr(), msgCell, remainingBalance.grams, acc.isSpecial)
-		if err != nil {
-			return nil, err
-		}
+		actionFineEnabled := globalVersion >= 4
+		sizeCode, fine := transactionCheckOutboundMessageStatsSize(cfg, acc.addr, msg.Msg.DestAddr(), normalized.stats, remainingBalance.grams, acc.isSpecial, actionFineEnabled)
 		if sizeCode != 0 {
-			out.actionFine = fine
-			return transactionSendResultCode(out, mode, sizeCode), nil
+			if actionFineEnabled {
+				out.actionFine = fine
+			}
+			return transactionSendResultCode(out, mode, sizeCode, globalVersion), nil
 		}
-		fwdFee, err := transactionComputeForwardFeeForMessage(cfg, acc.addr, msg.Msg.DestAddr(), msgCell)
-		if err != nil {
-			return nil, err
-		}
+		fwdFee := transactionComputeForwardFeeForUsage(cfg, acc.addr, msg.Msg.DestAddr(), normalized.stats.usage)
 		if acc.isSpecial {
 			fwdFee.SetInt64(0)
 		}
 		if remainingBalance.grams.Cmp(fwdFee) < 0 {
-			if !acc.isSpecial {
-				out.actionFine, err = transactionComputeActionFine(cfg, acc.addr, msg.Msg.DestAddr(), msgCell, remainingBalance.grams)
-				if err != nil {
-					return nil, err
-				}
+			if actionFineEnabled && !acc.isSpecial {
+				out.actionFine = transactionComputeActionFineForUsage(cfg, acc.addr, msg.Msg.DestAddr(), normalized.stats.usage, remainingBalance.grams)
 			}
-			return transactionSendResultCode(out, mode, 37), nil
+			return transactionSendResultCode(out, mode, 37, globalVersion), nil
 		}
 		out.msgCell = msgCell
-		out.usage, err = transactionCollectUsage(msgCell)
-		if err != nil {
-			return nil, err
-		}
+		out.usage = normalized.stats.totalUsage
 		out.debit.grams = fwdFee
 		out.totalFwdFees = fwdFee
 		out.totalActionFees = fwdFee
 		return out, nil
 	case tlb.MsgTypeInternal:
 		intMsg := *msg.AsInternal()
-		intMsg.IHRDisabled = true
+		if globalVersion >= 11 {
+			intMsg.IHRDisabled = true
+		}
 		extraFlags := transactionBigOrZero(intMsg.IHRFee.Nano())
-		if !msgValidation.extraFlagsCanonical || !extraFlags.IsUint64() || extraFlags.Uint64()&^uint64(3) != 0 {
-			return transactionSendResultCode(out, mode, 45), nil
+		if globalVersion >= 12 && (!msgValidation.extraFlagsCanonical || !extraFlags.IsUint64() || extraFlags.Uint64()&^uint64(3) != 0) {
+			return transactionSendResultCode(out, mode, 45, globalVersion), nil
 		}
 
 		req, err := transactionCurrencyFromParts(intMsg.Amount.Nano(), intMsg.ExtraCurrencies)
 		if err != nil {
-			return transactionSendResultCode(out, mode, 37), nil
+			return transactionSendResultCode(out, mode, 37, globalVersion), nil
 		}
 		req.removeZeroExtra()
 		if transactionExtraCount(req.extra) > transactionGetSizeLimits(cfg).maxMsgExtraCurrencies {
-			return transactionSendResultCode(out, mode, 44), nil
+			return transactionSendResultCode(out, mode, 44, globalVersion), nil
 		}
 		fineFunds, ok := transactionSendActionFineFunds(remainingBalance.grams, msgBalanceRemaining.grams, req.grams, gasFees, currentActionFine, mode)
 		if !ok {
-			return transactionSendResultCode(out, mode, 37), nil
+			return transactionSendResultCode(out, mode, 37, globalVersion), nil
 		}
-		sizeCode, fine, err := transactionCheckOutboundMessageSize(cfg, acc.addr, intMsg.DstAddr, msgCell, fineFunds, acc.isSpecial)
-		if err != nil {
-			return nil, err
-		}
+		actionFineEnabled := globalVersion >= 4
+		sizeCode, fine := transactionCheckOutboundMessageStatsSize(cfg, acc.addr, intMsg.DstAddr, normalized.stats, fineFunds, acc.isSpecial, actionFineEnabled)
 		if sizeCode != 0 {
-			out.actionFine = fine
-			return transactionSendResultCode(out, mode, sizeCode), nil
+			if actionFineEnabled {
+				out.actionFine = fine
+			}
+			return transactionSendResultCode(out, mode, sizeCode, globalVersion), nil
 		}
 
 		baseReq := req.copy()
 		sendMode := mode
-		layoutForFees := layout
+		layoutForFees := normalized.layout
 		for attempt := 0; attempt < 3; attempt++ {
 			prepared, usedLayout, err := transactionPrepareInternalSendAction(
 				out, acc, &intMsg, layoutForFees, sendMode, extraFlags, cfg,
-				remainingBalance, msgBalanceRemaining, baseReq, gasFees, currentActionFine,
+				globalVersion, remainingBalance, msgBalanceRemaining, baseReq, gasFees, currentActionFine,
 			)
 			if err != nil {
 				return nil, err
@@ -697,9 +713,12 @@ func transactionValidateRelaxedActionMessageCurrencies(root *cell.Cell) (transac
 	if err != nil {
 		return out, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
-	if err = transactionValidateRelaxedActionMessageTail(sl); err != nil {
+	layout, err := transactionValidateRelaxedActionMessageTail(sl)
+	if err != nil {
 		return out, err
 	}
+	out.layout = layout
+	out.layoutKnown = true
 	return out, nil
 }
 
@@ -765,48 +784,51 @@ func transactionLoadRelaxedVarUIntCanonical(sl *cell.Slice, size uint, positive 
 	return true, nil
 }
 
-func transactionValidateRelaxedActionMessageTail(sl *cell.Slice) error {
+func transactionValidateRelaxedActionMessageTail(sl *cell.Slice) (transactionOutboundLayout, error) {
+	var layout transactionOutboundLayout
 	if err := sl.SkipBitsAndRefs(96, 0); err != nil {
-		return fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
+		return layout, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
 
 	hasInit, err := sl.LoadBoolBit()
 	if err != nil {
-		return fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
+		return layout, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
 	if hasInit {
 		initInRef, err := sl.LoadBoolBit()
 		if err != nil {
-			return fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
+			return layout, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 		}
+		layout.stateInitInRef = initInRef
 		if initInRef {
 			if _, err = sl.LoadRefCell(); err != nil {
-				return fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
+				return layout, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 			}
 		} else {
 			var init tlb.StateInit
 			if err = tlb.LoadFromCell(&init, sl); err != nil {
-				return fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
+				return layout, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 			}
 		}
 	}
 
 	bodyInRef, err := sl.LoadBoolBit()
 	if err != nil {
-		return fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
+		return layout, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
+	layout.bodyInRef = bodyInRef
 	if bodyInRef {
 		if _, err = sl.LoadRefCell(); err != nil {
-			return fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
+			return layout, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 		}
 		if sl.BitsLeft() != 0 || sl.RefsNum() != 0 {
-			return fmt.Errorf("%w: trailing data after body reference", errTransactionInvalidRelaxedActionMessage)
+			return layout, fmt.Errorf("%w: trailing data after body reference", errTransactionInvalidRelaxedActionMessage)
 		}
 	}
-	return nil
+	return layout, nil
 }
 
-func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc *transactionRuntimeAccount, intMsg *tlb.InternalMessage, layout transactionOutboundLayout, sendMode uint8, extraFlags *big.Int, cfg tlb.BlockchainConfig, remainingBalance, msgBalanceRemaining, baseReq *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, transactionOutboundLayout, error) {
+func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc *transactionRuntimeAccount, intMsg *tlb.InternalMessage, layout transactionOutboundLayout, sendMode uint8, extraFlags *big.Int, cfg transactionConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining, baseReq *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, transactionOutboundLayout, error) {
 	res := &transactionSendActionResult{
 		debit:           transactionZeroCurrencyBalance(),
 		totalFwdFees:    big.NewInt(0),
@@ -822,17 +844,24 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	actionFine := big.NewInt(0)
 	maxFineCells := transactionGetSizeLimits(cfg).maxMsgCells
 	fineLimitedByFunds := false
-	if !acc.isSpecial {
+	if globalVersion >= 4 && !acc.isSpecial {
 		actionFine, maxFineCells, fineLimitedByFunds = transactionComputeSendActionFineForUsage(cfg, acc.addr, intMsg.DstAddr, feeUsage, remainingBalance.grams, msgBalanceRemaining.grams, baseReq.grams, gasFees, currentActionFine, sendMode)
 	}
 	computedFwdFee := transactionComputeForwardFeeForUsage(cfg, acc.addr, intMsg.DstAddr, feeUsage)
+	computedIHRFee := transactionComputeIHRFee(cfg, acc.addr, intMsg.DstAddr, computedFwdFee, intMsg.IHRDisabled)
 	if acc.isSpecial {
 		computedFwdFee.SetInt64(0)
+		computedIHRFee.SetInt64(0)
 	}
 	fwdFee := computedFwdFee
-	ihrFee := transactionComputeIHRFee(cfg, acc.addr, intMsg.DstAddr, computedFwdFee, intMsg.IHRDisabled)
-	if acc.isSpecial {
-		ihrFee.SetInt64(0)
+	ihrFee := computedIHRFee
+	if globalVersion < 8 {
+		if suggestedFwdFee := transactionBigOrZero(intMsg.FwdFee.Nano()); suggestedFwdFee.Cmp(fwdFee) > 0 {
+			fwdFee = suggestedFwdFee
+		}
+		if !intMsg.IHRDisabled && extraFlags.Cmp(ihrFee) > 0 {
+			ihrFee = new(big.Int).Set(extraFlags)
+		}
 	}
 	totalFees := new(big.Int).Add(fwdFee, ihrFee)
 	collectedFwdFee := transactionFirstPartForwardFee(cfg, acc.addr, intMsg.DstAddr, fwdFee)
@@ -854,13 +883,13 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 				req.grams.Sub(req.grams, currentActionFine)
 			}
 			if req.grams.Sign() < 0 {
-				return transactionSendResultCode(res, mode, 37), layout, nil
+				return transactionSendResultCode(res, mode, 37, globalVersion), layout, nil
 			}
 		}
 	}
 	if fineLimitedByFunds && feeUsage.cells > maxFineCells {
 		res.actionFine = actionFine
-		return transactionSendResultCode(res, mode, 40), layout, nil
+		return transactionSendResultCode(res, mode, 40, globalVersion), layout, nil
 	}
 
 	debit := req.copy()
@@ -870,20 +899,20 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	} else {
 		if msgAmount.Cmp(totalFees) < 0 {
 			res.actionFine = actionFine
-			return transactionSendResultCode(res, mode, 37), layout, nil
+			return transactionSendResultCode(res, mode, 37, globalVersion), layout, nil
 		}
 		msgAmount.Sub(msgAmount, totalFees)
 	}
 	if remainingBalance.grams.Cmp(debit.grams) < 0 {
 		res.actionFine = actionFine
-		return transactionSendResultCode(res, mode, 37), layout, nil
+		return transactionSendResultCode(res, mode, 37, globalVersion), layout, nil
 	}
 	if !remainingBalance.hasExtra(debit.extra) {
 		res.actionFine = actionFine
-		return transactionSendResultCode(res, mode, 38), layout, nil
+		return transactionSendResultCode(res, mode, 38, globalVersion), layout, nil
 	}
 	if transactionExtraCount(req.extra) > transactionGetSizeLimits(cfg).maxMsgExtraCurrencies {
-		return transactionSendResultCode(res, mode, 44), layout, nil
+		return transactionSendResultCode(res, mode, 44, globalVersion), layout, nil
 	}
 
 	outMsg := *intMsg
@@ -893,14 +922,18 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 		return nil, layout, err
 	}
 	outMsg.FwdFee = tlb.FromNanoTON(remainingFwdFee)
-	outMsg.IHRFee = tlb.FromNanoTON(extraFlags)
+	if globalVersion < 12 {
+		outMsg.IHRFee = tlb.FromNanoTON(ihrFee)
+	} else {
+		outMsg.IHRFee = tlb.FromNanoTON(extraFlags)
+	}
 	msgCell, usedLayout, err := transactionInternalMessageToCellWithLayout(&outMsg, layout)
 	if err != nil {
 		return nil, layout, fmt.Errorf("failed to serialize outbound internal message: %w", err)
 	}
 
 	res.msgCell = msgCell
-	res.usage, err = transactionCollectUsage(msgCell)
+	res.usage, err = transactionOutboundInternalMessageActionUsage(cfg, &outMsg, msgCell, usedLayout)
 	if err != nil {
 		return nil, layout, err
 	}
@@ -928,13 +961,8 @@ func transactionOutboundSourceValid(src, account *address.Address) bool {
 	return src.Equals(account)
 }
 
-func transactionOutboundInternalDestValid(dst *address.Address, cfg tlb.BlockchainConfig) bool {
-	_, ok := transactionValidateAndNormalizeInternalDestAddr(dst, cfg)
-	return ok
-}
-
-func transactionSendInvalidSource(out *transactionSendActionResult, mode uint8) *transactionSendActionResult {
-	if mode&2 != 0 {
+func transactionSendInvalidSource(out *transactionSendActionResult, mode uint8, globalVersion uint32) *transactionSendActionResult {
+	if globalVersion >= 13 && mode&2 != 0 {
 		out.skipped = true
 		return out
 	}
@@ -942,12 +970,21 @@ func transactionSendInvalidSource(out *transactionSendActionResult, mode uint8) 
 	return out
 }
 
-func transactionSendInvalidDestination(out *transactionSendActionResult, mode uint8) *transactionSendActionResult {
-	return transactionSendResultCode(out, mode, 36)
+func transactionSendInvalidDestination(out *transactionSendActionResult, mode uint8, globalVersion uint32) *transactionSendActionResult {
+	if mode&2 != 0 {
+		if globalVersion < 8 {
+			out.ignored = true
+			return out
+		}
+		out.skipped = true
+		return out
+	}
+	out.resultCode = 36
+	return out
 }
 
-func transactionSendResultCode(out *transactionSendActionResult, mode uint8, code int32) *transactionSendActionResult {
-	if mode&2 != 0 {
+func transactionSendResultCode(out *transactionSendActionResult, mode uint8, code int32, globalVersion uint32) *transactionSendActionResult {
+	if globalVersion >= 8 && mode&2 != 0 {
 		out.skipped = true
 		return out
 	}
@@ -955,8 +992,8 @@ func transactionSendResultCode(out *transactionSendActionResult, mode uint8, cod
 	return out
 }
 
-func transactionSendPrepassInvalid(out *transactionSendActionResult, mode uint8) *transactionSendActionResult {
-	if mode&2 != 0 {
+func transactionSendPrepassInvalid(out *transactionSendActionResult, mode uint8, globalVersion uint32) *transactionSendActionResult {
+	if globalVersion >= 8 && mode&2 != 0 {
 		out.skipped = true
 		return out
 	}
@@ -965,10 +1002,20 @@ func transactionSendPrepassInvalid(out *transactionSendActionResult, mode uint8)
 	return out
 }
 
-func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBalance, remainingBalance, reservedBalance *transactionCurrencyBalance) (*transactionReserveActionResult, error) {
+func transactionSendPrepassInvalidV13(out *transactionSendActionResult, mode uint8, globalVersion uint32) *transactionSendActionResult {
+	if globalVersion >= 13 && mode&2 != 0 {
+		out.skipped = true
+		return out
+	}
+	out.resultCode = 34
+	out.invalid = true
+	return out
+}
+
+func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBalance, remainingBalance, reservedBalance *transactionCurrencyBalance, globalVersion uint32) (*transactionReserveActionResult, error) {
 	out := &transactionReserveActionResult{}
 	mode := act.Mode
-	if mode&16 != 0 {
+	if globalVersion >= 4 && mode&16 != 0 {
 		mode &^= 16
 		out.bounceOnFail = true
 	}
@@ -982,14 +1029,21 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBala
 		out.resultCode = 34
 		return out, nil
 	}
-	if !reserve.extraEmpty() {
+	if globalVersion >= 10 && !reserve.extraEmpty() {
 		out.resultCode = 34
 		return out, nil
 	}
 
 	if mode&4 != 0 {
 		if mode&8 != 0 {
-			if originalBalance.grams == nil {
+			if globalVersion < 10 {
+				nextReserve := originalBalance.copy()
+				if !nextReserve.sub(reserve) {
+					out.resultCode = 34
+					return out, nil
+				}
+				reserve = nextReserve
+			} else if originalBalance.grams == nil {
 				reserve.grams.Neg(reserve.grams)
 			} else {
 				reserve.grams.Sub(originalBalance.grams, reserve.grams)
@@ -999,7 +1053,9 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBala
 				return out, nil
 			}
 		} else {
-			if originalBalance.grams != nil {
+			if globalVersion < 10 {
+				reserve.add(originalBalance)
+			} else if originalBalance.grams != nil {
 				reserve.grams.Add(reserve.grams, originalBalance.grams)
 			}
 		}
@@ -1013,7 +1069,11 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBala
 		return out, nil
 	}
 	if mode&2 != 0 {
-		reserve.clamp(remainingBalance)
+		if globalVersion >= 9 {
+			reserve.clamp(remainingBalance)
+		} else if reserve.grams.Cmp(remainingBalance.grams) > 0 {
+			reserve.grams.Set(remainingBalance.grams)
+		}
 	}
 	if reserve.grams.Cmp(remainingBalance.grams) > 0 {
 		out.resultCode = 37
@@ -1030,7 +1090,11 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBala
 		return out, nil
 	}
 	if mode&1 != 0 {
-		newBalance.grams, reserve.grams = reserve.grams, newBalance.grams
+		if globalVersion >= 10 {
+			newBalance.grams, reserve.grams = reserve.grams, newBalance.grams
+		} else {
+			newBalance, reserve = reserve, newBalance
+		}
 	}
 
 	*remainingBalance = *newBalance
@@ -1038,10 +1102,10 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBala
 	return out, nil
 }
 
-func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current *cell.Dictionary, cfg tlb.BlockchainConfig) (*transactionChangeLibraryActionResult, error) {
+func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current *cell.Dictionary, cfg transactionConfig, globalVersion uint32) (*transactionChangeLibraryActionResult, error) {
 	out := &transactionChangeLibraryActionResult{}
 	mode := act.Mode
-	if mode&16 != 0 {
+	if globalVersion >= 4 && mode&16 != 0 {
 		mode &^= 16
 		out.bounceOnFail = true
 	}
@@ -1106,15 +1170,11 @@ func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current 
 		return out, nil
 	}
 
-	usage, err := transactionCollectUsage(libRef)
+	stats, err := transactionCellStatsForRoots(libRef)
 	if err != nil {
 		return nil, err
 	}
-	depth, err := transactionMaxMerkleDepth(libRef)
-	if err != nil {
-		return nil, err
-	}
-	if usage.cells > transactionGetSizeLimits(cfg).maxLibraryCells || depth > 2 {
+	if stats.usage.cells > transactionGetSizeLimits(cfg).maxLibraryCells || stats.merkleDepth > 2 {
 		out.resultCode = 43
 		return out, nil
 	}
@@ -1137,7 +1197,26 @@ func transactionActionResultArg(i int) *int32 {
 
 var errTransactionInvalidDestination = errors.New("invalid outbound destination address")
 
-func transactionNormalizeOutboundMessage(msgCell *cell.Cell, srcAddr *address.Address, createdLT uint64, now uint32, cfg tlb.BlockchainConfig) (*cell.Cell, error) {
+func transactionPrepareNormalizedOutboundMessage(msg *tlb.Message, layout transactionOutboundLayout, normalizedInternalDst, srcAddr *address.Address, createdLT uint64, now uint32, cfg transactionConfig) (transactionNormalizedOutboundMessage, error) {
+	msgCell, normalizedMsg, err := transactionNormalizeParsedOutboundMessage(msg, layout, normalizedInternalDst, srcAddr, createdLT, now, cfg)
+	if err != nil {
+		return transactionNormalizedOutboundMessage{}, err
+	}
+
+	stats, err := transactionMessageStats(msgCell)
+	if err != nil {
+		return transactionNormalizedOutboundMessage{}, err
+	}
+
+	return transactionNormalizedOutboundMessage{
+		cell:   msgCell,
+		msg:    normalizedMsg,
+		layout: layout,
+		stats:  stats,
+	}, nil
+}
+
+func transactionNormalizeOutboundMessage(msgCell *cell.Cell, srcAddr *address.Address, createdLT uint64, now uint32, cfg transactionConfig) (*cell.Cell, error) {
 	if msgCell == nil {
 		return nil, errors.New("outbound message cell is nil")
 	}
@@ -1152,27 +1231,44 @@ func transactionNormalizeOutboundMessage(msgCell *cell.Cell, srcAddr *address.Ad
 		return nil, fmt.Errorf("failed to decode outbound message: %w", err)
 	}
 
+	normalized, _, err := transactionNormalizeParsedOutboundMessage(&msg, layout, nil, srcAddr, createdLT, now, cfg)
+	return normalized, err
+}
+
+func transactionNormalizeParsedOutboundMessage(msg *tlb.Message, layout transactionOutboundLayout, normalizedInternalDst, srcAddr *address.Address, createdLT uint64, now uint32, cfg transactionConfig) (*cell.Cell, tlb.Message, error) {
 	switch msg.MsgType {
 	case tlb.MsgTypeInternal:
 		out := *msg.AsInternal()
 		out.SrcAddr = srcAddr
 		out.Bounced = false
-		dst, ok := transactionValidateAndNormalizeInternalDestAddr(out.DstAddr, cfg)
-		if !ok {
-			return nil, errTransactionInvalidDestination
+		if normalizedInternalDst != nil {
+			out.DstAddr = normalizedInternalDst
+		} else {
+			dst, ok := transactionValidateAndNormalizeInternalDestAddr(out.DstAddr, cfg, srcAddr)
+			if !ok {
+				return nil, tlb.Message{}, errTransactionInvalidDestination
+			}
+			out.DstAddr = dst
 		}
-		out.DstAddr = dst
 		out.CreatedLT = createdLT
 		out.CreatedAt = now
-		return transactionInternalMessageToCell(&out, layout)
+		msgCell, err := transactionInternalMessageToCell(&out, layout)
+		if err != nil {
+			return nil, tlb.Message{}, err
+		}
+		return msgCell, tlb.Message{MsgType: tlb.MsgTypeInternal, Msg: &out}, nil
 	case tlb.MsgTypeExternalOut:
 		out := *msg.AsExternalOut()
 		out.SrcAddr = srcAddr
 		out.CreatedLT = createdLT
 		out.CreatedAt = now
-		return transactionExternalOutMessageToCell(&out, layout)
+		msgCell, err := transactionExternalOutMessageToCell(&out, layout)
+		if err != nil {
+			return nil, tlb.Message{}, err
+		}
+		return msgCell, tlb.Message{MsgType: tlb.MsgTypeExternalOut, Msg: &out}, nil
 	default:
-		return nil, fmt.Errorf("unsupported outbound message type %s", msg.MsgType)
+		return nil, tlb.Message{}, fmt.Errorf("unsupported outbound message type %s", msg.MsgType)
 	}
 }
 
@@ -1319,15 +1415,15 @@ func transactionStoreMessageBody(builder *cell.Builder, body *cell.Cell, inRef b
 	return builder.StoreBuilder(body.ToBuilder())
 }
 
-func transactionValidateAndNormalizeInternalDestAddr(addr *address.Address, cfg tlb.BlockchainConfig) (*address.Address, bool) {
-	return transactionValidateAndNormalizeInternalAddr(addr, cfg, false)
+func transactionValidateAndNormalizeInternalDestAddr(addr *address.Address, cfg transactionConfig, srcAddr *address.Address) (*address.Address, bool) {
+	return transactionValidateAndNormalizeInternalAddr(addr, cfg, cfg.globalVersion() < 10, srcAddr)
 }
 
-func transactionValidateAndNormalizeBounceDestAddr(addr *address.Address, cfg tlb.BlockchainConfig) (*address.Address, bool) {
-	return transactionValidateAndNormalizeInternalAddr(addr, cfg, true)
+func transactionValidateAndNormalizeBounceDestAddr(addr *address.Address, cfg transactionConfig, accountAddr *address.Address) (*address.Address, bool) {
+	return transactionValidateAndNormalizeInternalAddr(addr, cfg, true, accountAddr)
 }
 
-func transactionValidateAndNormalizeInternalAddr(addr *address.Address, cfg tlb.BlockchainConfig, allowAnycast bool) (*address.Address, bool) {
+func transactionValidateAndNormalizeInternalAddr(addr *address.Address, cfg transactionConfig, allowAnycast bool, rewriteBase *address.Address) (*address.Address, bool) {
 	if addr == nil {
 		return nil, false
 	}
@@ -1349,11 +1445,46 @@ func transactionValidateAndNormalizeInternalAddr(addr *address.Address, cfg tlb.
 		}
 	}
 
-	if !allowAnycast && addr.Anycast() != nil {
-		return nil, false
+	if anycast := addr.Anycast(); anycast != nil {
+		if !allowAnycast {
+			return nil, false
+		}
+		var ok bool
+		addr, ok = transactionRewriteAnycastPrefix(addr, anycast, rewriteBase)
+		if !ok {
+			return nil, false
+		}
 	}
 
 	return transactionNormalizeInternalDestAddr(addr), true
+}
+
+func transactionRewriteAnycastPrefix(addr *address.Address, anycast *address.Anycast, base *address.Address) (*address.Address, bool) {
+	depth := anycast.Depth()
+	if depth == 0 || depth > 30 || base == nil {
+		return nil, false
+	}
+	baseData := base.Data()
+	prefix := anycast.Prefix()
+	if len(baseData) != 32 || uint(len(prefix)*8) < depth {
+		return nil, false
+	}
+	for i := uint(0); i < depth; i++ {
+		if transactionBit(prefix, int(i)) != transactionBit(baseData, int(i)) {
+			next := addr.Copy()
+			next.SetAnycast(address.NewAnycast(depth, transactionAddressPrefix(baseData, depth)))
+			return next, true
+		}
+	}
+	return addr, true
+}
+
+func transactionAddressPrefix(data []byte, depth uint) []byte {
+	out := append([]byte(nil), data[:(depth+7)/8]...)
+	if rem := depth % 8; rem != 0 {
+		out[len(out)-1] &= 0xFF << (8 - rem)
+	}
+	return out
 }
 
 func transactionOutboundInternalDestTypeValid(addr *address.Address) bool {

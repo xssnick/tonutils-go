@@ -13,6 +13,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 type debugMismatchReport struct {
@@ -376,7 +377,7 @@ func debugActionsSummary(root *cell.Cell) string {
 	if root == nil {
 		return "nil"
 	}
-	loaded, err := transactionLoadActions(root)
+	loaded, err := transactionLoadActions(root, vmcore.DefaultGlobalVersion)
 	if err != nil {
 		return err.Error()
 	}

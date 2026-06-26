@@ -431,3 +431,75 @@ func TestLoadLibraryByHashReturnsNilForMissingEntry(t *testing.T) {
 		t.Fatalf("load other missing library = (%v, %v), want (nil, nil)", got, err)
 	}
 }
+
+func FuzzLoadLibraryByHashVersionedLookupGas(f *testing.F) {
+	for version := uint8(0); version <= uint8(DefaultGlobalVersion); version++ {
+		f.Add(version, uint8(0), uint8(1), uint16(version))
+		f.Add(version, uint8(1), uint8(2), uint16(version)<<8|1)
+		f.Add(version, uint8(2), uint8(3), uint16(version)<<8|2)
+		f.Add(version, uint8(3), uint8(2), uint16(version)<<8|3)
+	}
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawCase, rawLookups uint8, rawSeed uint16) {
+		version := int(rawVersion % uint8(DefaultGlobalVersion+1))
+		lookups := int(rawLookups%3) + 1
+		lib := cell.BeginCell().
+			MustStoreUInt(uint64(rawSeed), 16).
+			MustStoreUInt(uint64(rawCase), 8).
+			EndCell()
+
+		var hash []byte
+		var roots []*cell.Cell
+		found := false
+		switch rawCase % 4 {
+		case 0:
+			hash = []byte{byte(rawSeed), byte(rawSeed >> 8)}
+		case 1:
+			hash = bytes.Repeat([]byte{byte(rawSeed)}, 32)
+			roots = []*cell.Cell{nil, makeLibraryRoot(t, lib)}
+		case 2:
+			hash = lib.Hash()
+			roots = []*cell.Cell{makeLibraryRoot(t, lib)}
+			found = true
+		default:
+			hash = lib.Hash()
+			roots = []*cell.Cell{nil, makeLibraryRoot(t, lib), nil}
+			found = true
+		}
+
+		st := NewExecutionStateWithGlobalVersion(version, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+		st.InitForExecution()
+		st.SetLibraries(roots...)
+
+		var got *cell.Cell
+		var err error
+		for i := 0; i < lookups; i++ {
+			got, err = st.LoadLibraryByHash(hash)
+			if err != nil {
+				t.Fatalf("v%d case=%d lookup=%d load library: %v", version, rawCase%4, i, err)
+			}
+			if found && (got == nil || got.HashKey() != lib.HashKey()) {
+				t.Fatalf("v%d case=%d lookup=%d got library %v, want %x", version, rawCase%4, i, got, lib.Hash())
+			}
+			if !found && got != nil {
+				t.Fatalf("v%d case=%d lookup=%d got library %x, want nil", version, rawCase%4, i, got.Hash())
+			}
+		}
+
+		wantGas := expectedVersionedLibraryLookupGas(version, found, lookups)
+		if gotGas := st.Gas.Used(); gotGas != wantGas {
+			t.Fatalf("v%d case=%d found=%v lookups=%d gas = %d, want %d", version, rawCase%4, found, lookups, gotGas, wantGas)
+		}
+	})
+}
+
+func expectedVersionedLibraryLookupGas(version int, found bool, lookups int) int64 {
+	if !found || version >= 5 {
+		return 0
+	}
+
+	if version >= 4 {
+		return CellLoadGasPrice + int64(lookups-1)*CellReloadGasPrice
+	}
+	return 2*CellLoadGasPrice + int64(lookups-1)*2*CellReloadGasPrice
+}

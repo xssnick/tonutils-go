@@ -2,12 +2,14 @@ package funcs
 
 import (
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/sha512"
 	"errors"
 	"fmt"
 	"math/big"
+
+	"filippo.io/edwards25519"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	localec "github.com/xssnick/tonutils-go/tvm/internal/secp256k1"
@@ -121,8 +123,9 @@ func GASCONSUMED() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return pushSmallInt(state, state.Gas.Used())
 		},
-		Name:      "GASCONSUMED",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x07),
+		Name:       "GASCONSUMED",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x07),
+		MinVersion: 4,
 	}
 }
 
@@ -185,6 +188,7 @@ func GETPARAMLONG(idx uint8) *helpers.AdvancedOP {
 		BitPrefix:     helpers.BytesPrefix(0xF8, 0x81),
 		Prefixes:      getParamLongPrefixes,
 		FixedSizeBits: 8,
+		MinVersion:    11,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(idx), 8)
 		},
@@ -273,7 +277,10 @@ func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
 	if root == nil {
 		return nil, nil
 	}
+	return loadConfigValueFromRoot(state, root, idx)
+}
 
+func loadConfigValueFromRoot(state *vm.State, root *cell.Cell, idx *big.Int) (*cell.Cell, error) {
 	key := cell.BeginCell().MustStoreBigInt(idx, 32).EndCell()
 	val, err := root.AsDict(32).SetTrace(state.Cells.Trace()).LoadValue(key)
 	if err != nil {
@@ -337,6 +344,32 @@ func CONFIGOPTPARAM() *helpers.SimpleOP {
 func GLOBALID() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.GlobalVersion < 6 {
+				rootAny, err := state.GetParam(19)
+				if err != nil {
+					return err
+				}
+				root, ok := rootAny.(*cell.Cell)
+				if !ok || root == nil {
+					return vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a cell")
+				}
+				cl, err := loadConfigValueFromRoot(state, root, big.NewInt(19))
+				if err != nil {
+					return err
+				}
+				if cl == nil {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid global-id config")
+				}
+				cs, err := cl.BeginParse()
+				if err != nil {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid global-id config")
+				}
+				if cs.BitsLeft() < 32 {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid global-id config")
+				}
+				return pushSmallInt(state, int64(int32(cs.MustLoadUInt(32))))
+			}
+
 			cfg, err := state.GetUnpackedConfigTuple()
 			if err != nil {
 				return err
@@ -354,8 +387,9 @@ func GLOBALID() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(int32(cs.MustPreloadUInt(32))))
 		},
-		Name:      "GLOBALID",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x35),
+		Name:       "GLOBALID",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x35),
+		MinVersion: 4,
 	}
 }
 
@@ -407,28 +441,60 @@ func chksignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.S
 			if err = state.RegisterChksgnCall(); err != nil {
 				return err
 			}
-
-			if state.GlobalVersion >= 14 && isEd25519IdentityPublicKey(keyBytes) {
-				return state.Stack.PushBool(false)
+			if state.GlobalVersion >= 14 && tvmEd25519RejectedPublicKeyV14(keyBytes) {
+				return state.Stack.PushBool(state.ChksigAlwaysSucceed)
 			}
 
-			return state.Stack.PushBool(ed25519.Verify(ed25519.PublicKey(keyBytes), data, sigBytes))
+			return state.Stack.PushBool(tvmEd25519Verify(keyBytes, data, sigBytes) || state.ChksigAlwaysSucceed)
 		},
 		Name:      name,
 		BitPrefix: prefix,
 	}
 }
 
-func isEd25519IdentityPublicKey(key []byte) bool {
-	if len(key) != ed25519.PublicKeySize || key[0] != 1 {
+func tvmEd25519RejectedPublicKeyV14(key []byte) bool {
+	if len(key) != 32 || (key[0] != 0 && key[0] != 1) {
 		return false
 	}
-	for _, b := range key[1:] {
-		if b != 0 {
+	for i := 1; i < len(key); i++ {
+		if key[i] != 0 {
 			return false
 		}
 	}
 	return true
+}
+
+func tvmEd25519Verify(key, data, sig []byte) bool {
+	if len(key) != 32 || len(sig) != 64 {
+		return false
+	}
+
+	publicKey, err := new(edwards25519.Point).SetBytes(key)
+	if err != nil {
+		return false
+	}
+	signatureR, err := new(edwards25519.Point).SetBytes(sig[:32])
+	if err != nil {
+		return false
+	}
+	signatureS, err := new(edwards25519.Scalar).SetCanonicalBytes(sig[32:])
+	if err != nil {
+		return false
+	}
+
+	hash := sha512.New()
+	_, _ = hash.Write(sig[:32])
+	_, _ = hash.Write(key)
+	_, _ = hash.Write(data)
+	challenge, err := new(edwards25519.Scalar).SetUniformBytes(hash.Sum(nil))
+	if err != nil {
+		return false
+	}
+
+	left := new(edwards25519.Point).ScalarBaseMult(signatureS)
+	right := new(edwards25519.Point).ScalarMult(challenge, publicKey)
+	right.Add(signatureR, right)
+	return left.Equal(right) == 1
 }
 
 func CHKSIGNU() *helpers.SimpleOP {
@@ -510,8 +576,9 @@ func ECRECOVER() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBool(true)
 		},
-		Name:      "ECRECOVER",
-		BitPrefix: helpers.BytesPrefix(0xF9, 0x12),
+		Name:       "ECRECOVER",
+		BitPrefix:  helpers.BytesPrefix(0xF9, 0x12),
+		MinVersion: 4,
 	}
 }
 
@@ -559,8 +626,9 @@ func SECP256K1_XONLY_PUBKEY_TWEAK_ADD() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBool(true)
 		},
-		Name:      "SECP256K1_XONLY_PUBKEY_TWEAK_ADD",
-		BitPrefix: helpers.BytesPrefix(0xF9, 0x13),
+		Name:       "SECP256K1_XONLY_PUBKEY_TWEAK_ADD",
+		BitPrefix:  helpers.BytesPrefix(0xF9, 0x13),
+		MinVersion: 9,
 	}
 }
 
@@ -612,6 +680,9 @@ func p256CheckSignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *hel
 			if err = state.ConsumeGas(vm.P256ChksgnGasPrice); err != nil {
 				return err
 			}
+			if state.ChksigAlwaysSucceed {
+				return state.Stack.PushBool(true)
+			}
 
 			x, y := elliptic.UnmarshalCompressed(elliptic.P256(), keyBytes)
 			if x == nil || y == nil {
@@ -629,8 +700,9 @@ func p256CheckSignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *hel
 
 			return state.Stack.PushBool(ok)
 		},
-		Name:      name,
-		BitPrefix: prefix,
+		Name:       name,
+		BitPrefix:  prefix,
+		MinVersion: 4,
 	}
 }
 
@@ -679,7 +751,7 @@ func GETGLOB(idx uint8) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
-			v, err := state.GetGlobal(int(idx))
+			v, err := state.GetGlobal(int(idx & 31))
 			if err != nil {
 				return err
 			}
@@ -732,7 +804,7 @@ func SETGLOB(idx uint8) *helpers.AdvancedOP {
 			if err != nil {
 				return err
 			}
-			return state.SetGlobal(int(idx), val)
+			return state.SetGlobal(int(idx&31), val)
 		},
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"fmt"
 	"math/big"
 	"os"
 	"testing"
@@ -25,6 +26,39 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+func tonOpsVersionCrossEmulatorVersions(t *testing.T) []int {
+	t.Helper()
+
+	return crossEmulatorVersionAuditVersions(t, "TVM_TONOPS_VERSION_AUDIT")
+}
+
+func TestTVMCrossEmulatorTonOpsVersionAuditShardSelection(t *testing.T) {
+	t.Setenv("TVM_TONOPS_VERSION_AUDIT_SHARDS", "")
+	t.Setenv("TVM_TONOPS_VERSION_AUDIT_SHARD", "")
+
+	all := tonOpsVersionCrossEmulatorVersions(t)
+	wantLen := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	if len(all) != wantLen {
+		t.Fatalf("default version selection len = %d, want %d", len(all), wantLen)
+	}
+	if all[0] != MinSupportedGlobalVersion || all[len(all)-1] != MaxSupportedGlobalVersion {
+		t.Fatalf("default version selection = %v, want range %d..%d", all, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+	}
+
+	t.Setenv("TVM_TONOPS_VERSION_AUDIT_SHARDS", "4")
+	t.Setenv("TVM_TONOPS_VERSION_AUDIT_SHARD", "3")
+	got := tonOpsVersionCrossEmulatorVersions(t)
+	want := []int{3, 7, 11}
+	if len(got) != len(want) {
+		t.Fatalf("sharded version selection = %v, want %v", got, want)
+	}
+	for i, version := range want {
+		if got[i] != version {
+			t.Fatalf("sharded version selection = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
@@ -36,8 +70,8 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	// compare different environments.
 
 	configValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
-	// The raw C++ harness takes c7 directly, but version-gated opcodes still
-	// read global version from config param 8 inside that c7.
+	// Config param 8 is part of the C7 fixtures for config-reading tonops.
+	// The raw reference runner itself stays on referenceRawRunGlobalVersion.
 	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.DefaultGlobalVersion})
 	if err != nil {
 		t.Fatalf("failed to build global version config: %v", err)
@@ -53,6 +87,10 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	})
 	defaultRefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vm.DefaultGlobalVersion))
 	feeC7 := feeTestC7(t)
+	conflictingRootFeeC7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     tonopsCrossConflictingFeeConfig(t, globalVersionCell),
+		UnpackedConfig: feeTestUnpackedConfig(t),
+	})
 	myCode := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	inMsgParams := tuple.NewTupleValue(
 		big.NewInt(1),
@@ -128,6 +166,21 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	sendMsgVersionRefCfg := func(version uint32) *referenceGetMethodConfig {
 		return tonopsCrossRefConfig(sendMsgVersionConfig(version))
 	}
+	sendMsgRootPrices := tlb.ConfigMsgForwardPrices{LumpPrice: 11}
+	sendMsgUnpackedPrices := tlb.ConfigMsgForwardPrices{LumpPrice: 99}
+	sendMsgConflictingConfig := func(version uint32) *cell.Cell {
+		return tonopsCrossSendMsgConfig(t, version, sendMsgRootPrices)
+	}
+	sendMsgConflictingC7 := func(version uint32) tuple.Tuple {
+		root := sendMsgConflictingConfig(version)
+		return makeTonopsTestC7(t, tonopsTestC7Config{
+			ConfigRoot:     root,
+			UnpackedConfig: tonopsCrossSendMsgUnpackedConfig(t, sendMsgUnpackedPrices),
+		})
+	}
+	sendMsgConflictingRefCfg := func(version uint32) *referenceGetMethodConfig {
+		return tonopsCrossRefConfig(sendMsgConflictingConfig(version))
+	}
 	dataSizeLeaf := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
 	dataSizeRoot := cell.BeginCell().MustStoreRef(dataSizeLeaf).MustStoreRef(dataSizeLeaf).EndCell()
 	stdAddrSlice := cell.BeginCell().MustStoreAddr(tonopsTestAddr).ToSlice()
@@ -144,11 +197,29 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		MustStoreInt(int64(tonopsTestAddr.Workchain()), 8).
 		MustStoreSlice(tonopsTestAddr.Data(), 256).
 		ToSlice()
+	shortAnycastVarAddrSlice := cell.BeginCell().
+		MustStoreUInt(0b11, 2).
+		MustStoreBoolBit(true).
+		MustStoreUInt(4, 5).
+		MustStoreUInt(0b1010, 4).
+		MustStoreUInt(2, 9).
+		MustStoreInt(0, 32).
+		MustStoreUInt(0, 2).
+		ToSlice()
 
 	ecrecoverHash := bytes.Repeat([]byte{0x42}, 32)
-	ecrecoverV, ecrecoverR, ecrecoverS, _, ok := localec.SignRecoverable(bytes.Repeat([]byte{0x31}, 32), bytes.Repeat([]byte{0x57}, 32), ecrecoverHash)
+	ecrecoverV, ecrecoverR, ecrecoverS, ecrecoverPub, ok := localec.SignRecoverable(bytes.Repeat([]byte{0x31}, 32), bytes.Repeat([]byte{0x57}, 32), ecrecoverHash)
 	if !ok {
 		t.Fatal("failed to build secp256k1 recovery fixture")
+	}
+	ecrecoverEthV := ecrecoverV + 27
+	ecrecoverSuccessGoStack := func() []any {
+		return []any{
+			int64(ecrecoverPub[0]),
+			new(big.Int).SetBytes(ecrecoverPub[1:33]),
+			new(big.Int).SetBytes(ecrecoverPub[33:65]),
+			int64(-1),
+		}
 	}
 	_, _, _, xonlyBasePub, ok := localec.SignRecoverable(bytes.Repeat([]byte{0x41}, 32), bytes.Repeat([]byte{0x67}, 32), bytes.Repeat([]byte{0x22}, 32))
 	if !ok {
@@ -188,6 +259,10 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	edSigU := ed25519.Sign(edKey, edHash)
 	edSliceData := []byte("ed25519-signed-slice")
 	edSigS := ed25519.Sign(edKey, edSliceData)
+	edZeroKey := big.NewInt(0)
+	edIdentityKey := new(big.Int).Lsh(big.NewInt(1), 248)
+	forgedEdSig := make([]byte, ed25519.SignatureSize)
+	forgedEdSig[0] = 1
 	extraCurrency := cell.NewDict(32)
 	if _, err = extraCurrency.SetBuilderWithMode(
 		cell.BeginCell().MustStoreUInt(7, 32).EndCell(),
@@ -198,13 +273,46 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	}
 
 	type testCase struct {
-		name          string
-		code          *cell.Cell
-		stack         []any
-		exit          int32
-		c7            tuple.Tuple
-		globalVersion int
-		refCfg        *referenceGetMethodConfig
+		name             string
+		code             *cell.Cell
+		stack            []any
+		exit             int32
+		c7               tuple.Tuple
+		globalVersion    int
+		globalVersionSet bool
+		refCfg           *referenceGetMethodConfig
+		skipReference    string
+		goStack          []any
+	}
+	ecrecoverEthereumReferenceSkip := func(version int) string {
+		if version >= 14 {
+			return "bundled reference emulator predates upstream ECRECOVER v=27/28 support"
+		}
+		return ""
+	}
+	sendMsgUserFwdFeeReferenceSkip := func(version int) string {
+		if version >= 14 {
+			return "bundled reference emulator predates upstream SENDMSG v14 user fwd fee handling"
+		}
+		return ""
+	}
+	ed25519ChksigRejectedKeyReferenceSkip := func(version int) string {
+		if version >= 14 {
+			return "bundled reference emulator predates upstream CHKSIG v14 zero/identity public-key rejection"
+		}
+		return ""
+	}
+	ed25519ChksigRejectedKeyGoStack := func(version int) []any {
+		if version >= 14 {
+			return []any{int64(0)}
+		}
+		return nil
+	}
+	sendMsgUserFwdFeeGoStack := func(version int) []any {
+		if version >= 14 {
+			return []any{int64(1)}
+		}
+		return nil
 	}
 
 	tests := []testCase{
@@ -229,6 +337,34 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				ecrecoverS,
 			},
 			exit: 0,
+		},
+		{
+			name: "ecrecover_ethereum_v_rejected_v13",
+			code: codeFromBuilders(t, funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(ecrecoverHash),
+				int64(ecrecoverEthV),
+				ecrecoverR,
+				ecrecoverS,
+			},
+			exit:          0,
+			globalVersion: 13,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 13)),
+		},
+		{
+			name: "ecrecover_ethereum_v_accepted_v14",
+			code: codeFromBuilders(t, funcsop.ECRECOVER().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(ecrecoverHash),
+				int64(ecrecoverEthV),
+				ecrecoverR,
+				ecrecoverS,
+			},
+			exit:          0,
+			globalVersion: 14,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
+			skipReference: ecrecoverEthereumReferenceSkip(14),
+			goStack:       ecrecoverSuccessGoStack(),
 		},
 		{
 			name: "secp256k1_xonly_pubkey_tweak_add_success",
@@ -278,6 +414,34 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit: 0,
 		},
 		{
+			name: "chksignu_identity_key_rejected_v14",
+			code: codeFromBuilders(t, funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(edHash),
+				cell.BeginCell().MustStoreSlice(forgedEdSig, 512).ToSlice(),
+				edIdentityKey,
+			},
+			exit:          0,
+			globalVersion: 14,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
+			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
+			goStack:       ed25519ChksigRejectedKeyGoStack(14),
+		},
+		{
+			name: "chksignu_zero_key_rejected_v14",
+			code: codeFromBuilders(t, funcsop.CHKSIGNU().Serialize()),
+			stack: []any{
+				new(big.Int).SetBytes(edHash),
+				cell.BeginCell().MustStoreSlice(forgedEdSig, 512).ToSlice(),
+				edZeroKey,
+			},
+			exit:          0,
+			globalVersion: 14,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
+			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
+			goStack:       ed25519ChksigRejectedKeyGoStack(14),
+		},
+		{
 			name: "chksigns_success",
 			code: codeFromBuilders(t, funcsop.CHKSIGNS().Serialize()),
 			stack: []any{
@@ -286,6 +450,34 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				new(big.Int).SetBytes(edPub),
 			},
 			exit: 0,
+		},
+		{
+			name: "chksigns_identity_key_rejected_v14",
+			code: codeFromBuilders(t, funcsop.CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(edSliceData, uint(len(edSliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(forgedEdSig, 512).ToSlice(),
+				edIdentityKey,
+			},
+			exit:          0,
+			globalVersion: 14,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
+			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
+			goStack:       ed25519ChksigRejectedKeyGoStack(14),
+		},
+		{
+			name: "chksigns_zero_key_rejected_v14",
+			code: codeFromBuilders(t, funcsop.CHKSIGNS().Serialize()),
+			stack: []any{
+				cell.BeginCell().MustStoreSlice(edSliceData, uint(len(edSliceData))*8).ToSlice(),
+				cell.BeginCell().MustStoreSlice(forgedEdSig, 512).ToSlice(),
+				edZeroKey,
+			},
+			exit:          0,
+			globalVersion: 14,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
+			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
+			goStack:       ed25519ChksigRejectedKeyGoStack(14),
 		},
 		{
 			name: "p256_chksignu_success",
@@ -708,6 +900,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "getstoragefee_uses_unpacked_config",
+			code:  codeFromBuilders(t, funcsop.GETSTORAGEFEE().Serialize()),
+			stack: []any{int64(2), int64(3), int64(10), int64(0)},
+			exit:  0,
+			c7:    conflictingRootFeeC7,
+		},
+		{
 			name:  "getgasfee",
 			code:  codeFromBuilders(t, funcsop.GETGASFEE().Serialize()),
 			stack: []any{int64(250), int64(0)},
@@ -715,11 +914,25 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:  "getgasfee_uses_unpacked_config",
+			code:  codeFromBuilders(t, funcsop.GETGASFEE().Serialize()),
+			stack: []any{int64(250), int64(0)},
+			exit:  0,
+			c7:    conflictingRootFeeC7,
+		},
+		{
 			name:  "getforwardfee",
 			code:  codeFromBuilders(t, funcsop.GETFORWARDFEE().Serialize()),
 			stack: []any{int64(2), int64(8), int64(0)},
 			exit:  0,
 			c7:    feeC7,
+		},
+		{
+			name:  "getforwardfee_uses_unpacked_config",
+			code:  codeFromBuilders(t, funcsop.GETFORWARDFEE().Serialize()),
+			stack: []any{int64(2), int64(8), int64(0)},
+			exit:  0,
+			c7:    conflictingRootFeeC7,
 		},
 		{
 			name:  "getoriginalfwdfee",
@@ -982,6 +1195,26 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:             "rewritevaraddr_short_anycast_prefix_v9",
+			code:             codeFromBuilders(t, funcsop.REWRITEVARADDR().Serialize()),
+			stack:            []any{shortAnycastVarAddrSlice},
+			exit:             int32(vmerr.CodeCellUnderflow),
+			c7:               feeC7,
+			globalVersion:    9,
+			globalVersionSet: true,
+			refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 9)),
+		},
+		{
+			name:             "rewritevaraddrq_short_anycast_prefix_v9",
+			code:             codeFromBuilders(t, funcsop.REWRITEVARADDRQ().Serialize()),
+			stack:            []any{shortAnycastVarAddrSlice},
+			exit:             0,
+			c7:               feeC7,
+			globalVersion:    9,
+			globalVersionSet: true,
+			refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 9)),
+		},
+		{
 			name:   "ldstdaddr",
 			code:   codeFromBuilders(t, funcsop.LDSTDADDR().Serialize()),
 			stack:  []any{stdAddrSlice},
@@ -1092,6 +1325,22 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:          "rawreserve_mode_16_rejected_v3",
+			code:          codeFromBuilders(t, funcsop.RAWRESERVE().Serialize()),
+			stack:         []any{big.NewInt(777), int64(16)},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 3,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 3)),
+		},
+		{
+			name:          "rawreserve_mode_16_allowed_v4",
+			code:          codeFromBuilders(t, funcsop.RAWRESERVE().Serialize()),
+			stack:         []any{big.NewInt(777), int64(16)},
+			exit:          0,
+			globalVersion: 4,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 4)),
+		},
+		{
 			name:  "rawreserve_negative_range",
 			code:  codeFromBuilders(t, funcsop.RAWRESERVE().Serialize()),
 			stack: []any{big.NewInt(-1), int64(0)},
@@ -1113,6 +1362,22 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:          "rawreservex_mode_16_rejected_v3",
+			code:          codeFromBuilders(t, funcsop.RAWRESERVEX().Serialize()),
+			stack:         []any{big.NewInt(777), extraCurrency.AsCell(), int64(16)},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 3,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 3)),
+		},
+		{
+			name:          "rawreservex_mode_16_allowed_v4",
+			code:          codeFromBuilders(t, funcsop.RAWRESERVEX().Serialize()),
+			stack:         []any{big.NewInt(777), extraCurrency.AsCell(), int64(16)},
+			exit:          0,
+			globalVersion: 4,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 4)),
+		},
+		{
 			name:  "setcode",
 			code:  codeFromBuilders(t, funcsop.SETCODE().Serialize()),
 			stack: []any{sendMsgCell},
@@ -1132,6 +1397,22 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			stack: []any{sendMsgCell, int64(0)},
 			exit:  0,
 			c7:    feeC7,
+		},
+		{
+			name:          "setlibcode_mode_16_rejected_v3",
+			code:          codeFromBuilders(t, funcsop.SETLIBCODE().Serialize()),
+			stack:         []any{sendMsgCell, int64(16)},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 3,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 3)),
+		},
+		{
+			name:          "setlibcode_mode_16_allowed_v4",
+			code:          codeFromBuilders(t, funcsop.SETLIBCODE().Serialize()),
+			stack:         []any{sendMsgCell, int64(16)},
+			exit:          0,
+			globalVersion: 4,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 4)),
 		},
 		{
 			name:  "setlibcode_invalid_mode",
@@ -1162,11 +1443,36 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 		{
+			name:          "changelib_mode_16_rejected_v3",
+			code:          codeFromBuilders(t, funcsop.CHANGELIB().Serialize()),
+			stack:         []any{big.NewInt(1), int64(16)},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 3,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 3)),
+		},
+		{
+			name:          "changelib_mode_16_allowed_v4",
+			code:          codeFromBuilders(t, funcsop.CHANGELIB().Serialize()),
+			stack:         []any{big.NewInt(1), int64(16)},
+			exit:          0,
+			globalVersion: 4,
+			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 4)),
+		},
+		{
 			name:  "sendmsg_fee_only",
 			code:  codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
 			stack: []any{sendMsgCell, int64(1024)},
 			exit:  0,
 			c7:    feeC7,
+		},
+		{
+			name:          "sendmsg_legacy_root_prices_with_conflicting_c7",
+			code:          codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
+			stack:         []any{sendMsgCell, int64(1024)},
+			exit:          0,
+			c7:            sendMsgConflictingC7(5),
+			globalVersion: 5,
+			refCfg:        sendMsgConflictingRefCfg(5),
 		},
 		{
 			name:          "sendmsg_user_fwd_fee_lower_bound_gv13",
@@ -1236,6 +1542,500 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			c7:    feeC7,
 		},
 	}
+	versionedExit := func(version, min int, exit int32) int32 {
+		if version < min {
+			return int32(vmerr.CodeInvalidOpcode)
+		}
+		return exit
+	}
+	versionedParamsC7 := func(version int) tuple.Tuple {
+		configRoot := tonopsCrossConfigWithGlobalVersion(t, uint32(version))
+		return makeTonopsTestC7(t, tonopsTestC7Config{
+			ConfigRoot: configRoot,
+			ExtraParams: map[int]any{
+				13:  tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),
+				15:  int64(444),
+				16:  int64(555),
+				17:  inMsgParams,
+				200: int64(20042),
+			},
+		})
+	}
+	versionedFeeC7 := func(version int) tuple.Tuple {
+		return makeTonopsTestC7(t, tonopsTestC7Config{
+			ConfigRoot:     tonopsCrossConfigWithGlobalVersion(t, uint32(version)),
+			UnpackedConfig: feeTestUnpackedConfig(t),
+			Balance:        tuple.NewTupleValue(new(big.Int).Set(tonopsTestBalance), extraCurrency.AsCell()),
+		})
+	}
+	for _, version := range tonOpsVersionCrossEmulatorVersions(t) {
+		changelibExit := int32(0)
+		if version < 4 {
+			changelibExit = int32(vmerr.CodeRangeCheck)
+		}
+		sendMsgExit := int32(0)
+		if version < 4 {
+			sendMsgExit = int32(vmerr.CodeInvalidOpcode)
+		}
+		paramsC7 := versionedParamsC7(version)
+		feeVersionC7 := versionedFeeC7(version)
+		versionRefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+		tests = append(tests,
+			testCase{
+				name:             fmt.Sprintf("changelib_mode_16_v%d", version),
+				code:             codeFromBuilders(t, funcsop.CHANGELIB().Serialize()),
+				stack:            []any{big.NewInt(1), int64(16)},
+				exit:             changelibExit,
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+			},
+			testCase{
+				name:             fmt.Sprintf("sendmsg_user_fwd_fee_lower_bound_v%d", version),
+				code:             codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
+				stack:            []any{sendMsgUserFwdFeeCell, int64(1024)},
+				exit:             sendMsgExit,
+				c7:               sendMsgVersionC7(uint32(version)),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           sendMsgVersionRefCfg(uint32(version)),
+				skipReference:    sendMsgUserFwdFeeReferenceSkip(version),
+				goStack:          sendMsgUserFwdFeeGoStack(version),
+			},
+			testCase{
+				name:             fmt.Sprintf("sendmsg_mode128_balance_fee_only_v%d", version),
+				code:             codeFromBuilders(t, funcsop.SENDMSG().Serialize()),
+				stack:            []any{sendMsgCell, int64(1024 + 128)},
+				exit:             sendMsgExit,
+				c7:               sendMsgVersionC7(uint32(version)),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           sendMsgVersionRefCfg(uint32(version)),
+			},
+			testCase{
+				name:             fmt.Sprintf("gasconsumed_after_push_v%d", version),
+				code:             codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize(), funcsop.GASCONSUMED().Serialize()),
+				exit:             versionedExit(version, 4, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getparamlong_randseed_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETPARAMLONG(6).Serialize()),
+				exit:             versionedExit(version, 11, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getparamlong_high_index_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETPARAMLONG(200).Serialize()),
+				exit:             versionedExit(version, 11, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("prevblocksinfotuple_v%d", version),
+				code:             codeFromBuilders(t, funcsop.PREVBLOCKSINFOTUPLE().Serialize()),
+				exit:             0,
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("prevmcblocks_v%d", version),
+				code:             codeFromBuilders(t, funcsop.PREVMCBLOCKS().Serialize()),
+				exit:             versionedExit(version, 4, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("prevkeyblock_v%d", version),
+				code:             codeFromBuilders(t, funcsop.PREVKEYBLOCK().Serialize()),
+				exit:             versionedExit(version, 4, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("prevmcblocks_100_v%d", version),
+				code:             codeFromBuilders(t, funcsop.PREVMCBLOCKS_100().Serialize()),
+				exit:             versionedExit(version, 9, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getprecompiledgas_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETPRECOMPILEDGAS().Serialize()),
+				exit:             versionedExit(version, 6, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("inmsgparams_v%d", version),
+				code:             codeFromBuilders(t, funcsop.INMSGPARAMS().Serialize()),
+				exit:             versionedExit(version, 11, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("inmsgparam_long_src_v%d", version),
+				code:             codeFromBuilders(t, funcsop.INMSGPARAM(2).Serialize()),
+				exit:             versionedExit(version, 11, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("inmsg_value_alias_v%d", version),
+				code:             codeFromBuilders(t, funcsop.INMSG_VALUE().Serialize()),
+				exit:             versionedExit(version, 11, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("inmsg_stateinit_alias_v%d", version),
+				code:             codeFromBuilders(t, funcsop.INMSG_STATEINIT().Serialize()),
+				exit:             versionedExit(version, 11, 0),
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("randu256_then_randseed_v%d", version),
+				code:             codeFromBuilders(t, funcsop.RANDU256().Serialize(), funcsop.RANDSEED().Serialize()),
+				exit:             0,
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("rand_then_randseed_v%d", version),
+				code:             codeFromBuilders(t, funcsop.RAND().Serialize(), funcsop.RANDSEED().Serialize()),
+				stack:            []any{int64(7)},
+				exit:             0,
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("setrand_then_randseed_v%d", version),
+				code:             codeFromBuilders(t, funcsop.SETRAND().Serialize(), funcsop.RANDSEED().Serialize()),
+				stack:            []any{big.NewInt(7)},
+				exit:             0,
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("addrand_then_randseed_v%d", version),
+				code:             codeFromBuilders(t, funcsop.ADDRAND().Serialize(), funcsop.RANDSEED().Serialize()),
+				stack:            []any{big.NewInt(7)},
+				exit:             0,
+				c7:               paramsC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getstoragefee_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETSTORAGEFEE().Serialize()),
+				stack:            []any{int64(2), int64(3), int64(10), int64(0)},
+				exit:             versionedExit(version, 6, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getgasfee_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETGASFEE().Serialize()),
+				stack:            []any{int64(250), int64(0)},
+				exit:             versionedExit(version, 6, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getforwardfee_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETFORWARDFEE().Serialize()),
+				stack:            []any{int64(2), int64(8), int64(0)},
+				exit:             versionedExit(version, 6, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getoriginalfwdfee_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETORIGINALFWDFEE().Serialize()),
+				stack:            []any{big.NewInt(3200), int64(0)},
+				exit:             versionedExit(version, 6, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getgasfeesimple_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETGASFEESIMPLE().Serialize()),
+				stack:            []any{int64(250), int64(0)},
+				exit:             versionedExit(version, 6, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getforwardfeesimple_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETFORWARDFEESIMPLE().Serialize()),
+				stack:            []any{int64(2), int64(8), int64(0)},
+				exit:             versionedExit(version, 6, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getextrabalance_hit_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETEXTRABALANCE().Serialize()),
+				stack:            []any{int64(7)},
+				exit:             versionedExit(version, 10, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("getextrabalance_miss_v%d", version),
+				code:             codeFromBuilders(t, funcsop.GETEXTRABALANCE().Serialize()),
+				stack:            []any{int64(8)},
+				exit:             versionedExit(version, 10, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("hashext_sha256_v%d", version),
+				code:             codeFromBuilders(t, funcsop.HASHEXT(0).Serialize()),
+				stack:            []any{cell.BeginCell().MustStoreSlice([]byte("hello world"), 88).ToSlice(), int64(1)},
+				exit:             versionedExit(version, 4, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("hashext_dynamic_sha512_v%d", version),
+				code:             codeFromBuilders(t, funcsop.HASHEXT(255).Serialize()),
+				stack:            []any{cell.BeginCell().MustStoreSlice([]byte("hello world"), 88).ToSlice(), int64(1), int64(1)},
+				exit:             versionedExit(version, 4, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("hashexta_dynamic_sha256_v%d", version),
+				code:             codeFromBuilders(t, funcsop.HASHEXT(1<<9|255).Serialize()),
+				stack:            []any{cell.BeginCell().MustStoreUInt(0x11, 8), cell.BeginCell().MustStoreUInt(0xABCD, 16), int64(1), int64(0)},
+				exit:             versionedExit(version, 4, 0),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("hashext_unaligned_total_v%d", version),
+				code:             codeFromBuilders(t, funcsop.HASHEXT(0).Serialize()),
+				stack:            []any{cell.BeginCell().MustStoreUInt(0x7F, 7).ToSlice(), int64(1)},
+				exit:             versionedExit(version, 4, int32(vmerr.CodeCellUnderflow)),
+				c7:               feeVersionC7,
+				globalVersion:    version,
+				globalVersionSet: true,
+			},
+			testCase{
+				name:             fmt.Sprintf("ldstdaddr_std_v%d", version),
+				code:             codeFromBuilders(t, funcsop.LDSTDADDR().Serialize()),
+				stack:            []any{stdAddrSlice},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name:             fmt.Sprintf("ldstdaddrq_var_fail_v%d", version),
+				code:             codeFromBuilders(t, funcsop.LDSTDADDRQ().Serialize()),
+				stack:            []any{varAddrSlice},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name:             fmt.Sprintf("ldoptstdaddr_none_v%d", version),
+				code:             codeFromBuilders(t, funcsop.LDOPTSTDADDR().Serialize()),
+				stack:            []any{addrNoneTail},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name:             fmt.Sprintf("ldoptstdaddrq_short_fail_v%d", version),
+				code:             codeFromBuilders(t, funcsop.LDOPTSTDADDRQ().Serialize()),
+				stack:            []any{shortStdAddrSlice},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name:             fmt.Sprintf("ststdaddr_std_v%d", version),
+				code:             codeFromBuilders(t, funcsop.STSTDADDR().Serialize()),
+				stack:            []any{stdAddrSlice, cell.BeginCell()},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name:             fmt.Sprintf("ststdaddrq_var_fail_v%d", version),
+				code:             codeFromBuilders(t, funcsop.STSTDADDRQ().Serialize()),
+				stack:            []any{varAddrSlice, cell.BeginCell()},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name:             fmt.Sprintf("stoptstdaddr_none_v%d", version),
+				code:             codeFromBuilders(t, funcsop.STOPTSTDADDR().Serialize()),
+				stack:            []any{nil, cell.BeginCell()},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name:             fmt.Sprintf("stoptstdaddrq_std_v%d", version),
+				code:             codeFromBuilders(t, funcsop.STOPTSTDADDRQ().Serialize()),
+				stack:            []any{stdAddrSlice, cell.BeginCell()},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           versionRefCfg,
+			},
+			testCase{
+				name: fmt.Sprintf("ecrecover_success_v%d", version),
+				code: codeFromBuilders(t, funcsop.ECRECOVER().Serialize()),
+				stack: []any{
+					new(big.Int).SetBytes(ecrecoverHash),
+					int64(ecrecoverV),
+					ecrecoverR,
+					ecrecoverS,
+				},
+				exit:             versionedExit(version, 4, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+			},
+			testCase{
+				name: fmt.Sprintf("ecrecover_ethereum_v_%s_v%d", map[bool]string{false: "rejected", true: "accepted"}[version >= 14], version),
+				code: codeFromBuilders(t, funcsop.ECRECOVER().Serialize()),
+				stack: []any{
+					new(big.Int).SetBytes(ecrecoverHash),
+					int64(ecrecoverEthV),
+					ecrecoverR,
+					ecrecoverS,
+				},
+				exit:             versionedExit(version, 4, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+				skipReference:    ecrecoverEthereumReferenceSkip(version),
+				goStack:          ecrecoverSuccessGoStack(),
+			},
+			testCase{
+				name: fmt.Sprintf("secp256k1_xonly_pubkey_tweak_add_success_v%d", version),
+				code: codeFromBuilders(t, funcsop.SECP256K1_XONLY_PUBKEY_TWEAK_ADD().Serialize()),
+				stack: []any{
+					secpXOnlyKey,
+					int64(7),
+				},
+				exit:             versionedExit(version, 9, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+			},
+			testCase{
+				name: fmt.Sprintf("chksignu_identity_key_v%d", version),
+				code: codeFromBuilders(t, funcsop.CHKSIGNU().Serialize()),
+				stack: []any{
+					new(big.Int).SetBytes(edHash),
+					cell.BeginCell().MustStoreSlice(forgedEdSig, 512).ToSlice(),
+					edIdentityKey,
+				},
+				exit:             0,
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+				skipReference:    ed25519ChksigRejectedKeyReferenceSkip(version),
+				goStack:          ed25519ChksigRejectedKeyGoStack(version),
+			},
+			testCase{
+				name: fmt.Sprintf("chksigns_identity_key_v%d", version),
+				code: codeFromBuilders(t, funcsop.CHKSIGNS().Serialize()),
+				stack: []any{
+					cell.BeginCell().MustStoreSlice(edSliceData, uint(len(edSliceData))*8).ToSlice(),
+					cell.BeginCell().MustStoreSlice(forgedEdSig, 512).ToSlice(),
+					edIdentityKey,
+				},
+				exit:             0,
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+				skipReference:    ed25519ChksigRejectedKeyReferenceSkip(version),
+				goStack:          ed25519ChksigRejectedKeyGoStack(version),
+			},
+			testCase{
+				name: fmt.Sprintf("p256_chksignu_success_v%d", version),
+				code: codeFromBuilders(t, funcsop.P256_CHKSIGNU().Serialize()),
+				stack: []any{
+					new(big.Int).SetBytes(p256HashBytes),
+					cell.BeginCell().MustStoreSlice(p256SigU, 512).ToSlice(),
+					cell.BeginCell().MustStoreSlice(p256Pub, 264).ToSlice(),
+				},
+				exit:             versionedExit(version, 4, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+			},
+			testCase{
+				name: fmt.Sprintf("p256_chksigns_unaligned_slice_v%d", version),
+				code: codeFromBuilders(t, funcsop.P256_CHKSIGNS().Serialize()),
+				stack: []any{
+					cell.BeginCell().MustStoreUInt(0x7F, 7).ToSlice(),
+					cell.BeginCell().MustStoreSlice(p256SigS, 512).ToSlice(),
+					cell.BeginCell().MustStoreSlice(p256Pub, 264).ToSlice(),
+				},
+				exit:             versionedExit(version, 4, int32(vmerr.CodeCellUnderflow)),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+			},
+			testCase{
+				name: fmt.Sprintf("hashbu_builder_with_ref_v%d", version),
+				code: codeFromBuilders(t, funcsop.HASHBU().Serialize()),
+				stack: []any{
+					cell.BeginCell().
+						MustStoreUInt(0xCA, 8).
+						MustStoreRef(cell.BeginCell().MustStoreUInt(0xFE, 8).EndCell()),
+				},
+				exit:             versionedExit(version, 12, 0),
+				globalVersion:    version,
+				globalVersionSet: true,
+				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
+			},
+		)
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1250,12 +2050,19 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			}
 
 			globalVersion := tt.globalVersion
-			if globalVersion == 0 {
+			if !tt.globalVersionSet && globalVersion == 0 {
 				globalVersion = referenceRawRunGlobalVersion
 			}
 			goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), tt.c7, goStack, globalVersion)
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
+			}
+			if tt.skipReference != "" {
+				if goRes.exitCode != tt.exit {
+					t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, tt.exit)
+				}
+				assertCrossSkippedGoStack(t, goRes.stack, tt.goStack)
+				t.Skip(tt.skipReference)
 			}
 			var refRes *crossRunResult
 			if tt.refCfg != nil {
@@ -1292,6 +2099,662 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	}
 }
 
+func TestTVMCrossEmulatorTonOpsSendMsgVersionedFeeEdges(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for _, version := range tonOpsVersionCrossEmulatorVersions(t) {
+		for rawCase := uint8(0); rawCase < tonOpsSendMsgVersionedFeeCaseCount; rawCase++ {
+			rawCase := rawCase
+			t.Run(fmt.Sprintf("%s_v%d", tonOpsSendMsgVersionedFeeCaseName(rawCase), version), func(t *testing.T) {
+				runTonOpsSendMsgVersionedFeeEdge(t, version, rawCase, uint16(0xA500+uint16(version)), uint64(version+1))
+			})
+		}
+	}
+}
+
+func FuzzTVMCrossEmulatorTonOpsSendMsgVersionedFeeEdges(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%tonOpsSendMsgVersionedFeeCaseCount), uint16(0xB500+version), uint64(version+1))
+	}
+	for rawCase := uint8(0); rawCase < tonOpsSendMsgVersionedFeeCaseCount; rawCase++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), rawCase, uint16(0xC500+uint16(rawCase)), uint64(100+rawCase))
+	}
+	f.Add(uint8(255), uint8(255), uint16(0xFFFF), uint64(1<<20+17))
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawCase uint8, bodyTag uint16, rawAmount uint64) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		runTonOpsSendMsgVersionedFeeEdge(t, version, rawCase, bodyTag, rawAmount)
+	})
+}
+
+const tonOpsSendMsgVersionedFeeCaseCount = 2
+
+func tonOpsSendMsgVersionedFeeCaseName(rawCase uint8) string {
+	switch rawCase % tonOpsSendMsgVersionedFeeCaseCount {
+	case 0:
+		return "sendmsg_extra_currency_fee"
+	default:
+		return "sendmsg_ihr_enabled_fee"
+	}
+}
+
+func runTonOpsSendMsgVersionedFeeEdge(t *testing.T, version int, rawCase uint8, bodyTag uint16, rawAmount uint64) {
+	t.Helper()
+
+	msg, c7, refCfg := tonOpsSendMsgVersionedFeeFixture(t, version, rawCase, bodyTag, rawAmount)
+	wantExit := int32(0)
+	if version < 4 {
+		wantExit = int32(vmerr.CodeInvalidOpcode)
+	}
+
+	code := prependRawMethodDrop(codeFromBuilders(t, funcsop.SENDMSG().Serialize()))
+	goStack, err := buildCrossStack(msg, int64(1024))
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack(msg, int64(1024))
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), c7, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != wantExit || refRes.exitCode != wantExit {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, wantExit)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func tonOpsSendMsgVersionedFeeFixture(t *testing.T, version int, rawCase uint8, bodyTag uint16, rawAmount uint64) (*cell.Cell, tuple.Tuple, *referenceGetMethodConfig) {
+	t.Helper()
+
+	prices := tlb.ConfigMsgForwardPrices{
+		LumpPrice: 1,
+		BitPrice:  1 << 16,
+		CellPrice: 3 << 16,
+		FirstFrac: 1 << 15,
+	}
+	msg := tonOpsSendMsgExtraCurrencyFeeMessage(t, bodyTag, rawAmount)
+	if rawCase%tonOpsSendMsgVersionedFeeCaseCount == 1 {
+		prices.IHRFactor = 1 << 16
+		msg = tonOpsSendMsgIHREnabledFeeMessage(t, bodyTag, rawAmount)
+	}
+
+	configRoot := tonopsCrossSendMsgConfig(t, uint32(version), prices)
+	c7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     configRoot,
+		UnpackedConfig: tonopsCrossSendMsgUnpackedConfig(t, prices),
+	})
+	return msg, c7, tonopsCrossRefConfig(configRoot)
+}
+
+func tonOpsSendMsgExtraCurrencyFeeMessage(t *testing.T, bodyTag uint16, rawAmount uint64) *cell.Cell {
+	t.Helper()
+
+	extra := cell.NewDict(32)
+	if _, err := extra.SetBuilderWithMode(
+		cell.BeginCell().MustStoreUInt(uint64(rawAmount%31)+1, 32).EndCell(),
+		cell.BeginCell().MustStoreVarUInt(rawAmount%1_000_000+1, 32),
+		cell.DictSetModeSet,
+	); err != nil {
+		t.Fatalf("failed to seed extra currency dict: %v", err)
+	}
+
+	msg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled:     true,
+		SrcAddr:         tonopsTestAddr,
+		DstAddr:         tonopsTestAddr,
+		Amount:          tlb.FromNanoTONU(rawAmount%10_000 + 1),
+		ExtraCurrencies: extra,
+		IHRFee:          tlb.FromNanoTONU(0),
+		FwdFee:          tlb.FromNanoTONU(0),
+		CreatedLT:       1,
+		CreatedAt:       uint32(tonopsTestTime.Unix()),
+		Body:            cell.BeginCell().MustStoreUInt(uint64(bodyTag), 16).EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build extra-currency SENDMSG fixture: %v", err)
+	}
+	return msg
+}
+
+func tonOpsSendMsgIHREnabledFeeMessage(t *testing.T, bodyTag uint16, rawAmount uint64) *cell.Cell {
+	t.Helper()
+
+	msg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: false,
+		SrcAddr:     tonopsTestAddr,
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.FromNanoTONU(rawAmount%10_000 + 1),
+		IHRFee:      tlb.FromNanoTONU(rawAmount%50_000 + 1),
+		FwdFee:      tlb.FromNanoTONU(0),
+		CreatedLT:   1,
+		CreatedAt:   uint32(tonopsTestTime.Unix()),
+		Body:        cell.BeginCell().MustStoreUInt(uint64(bodyTag), 16).EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build IHR-enabled SENDMSG fixture: %v", err)
+	}
+	return msg
+}
+
+func TestTVMCrossEmulatorTonOpsSendMsgExtraFlagsRootSizeGlobalVersion(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for _, version := range tonOpsVersionCrossEmulatorVersions(t) {
+		for _, bodyBits := range []uint{340, 360, 380} {
+			for _, extraFlags := range []uint64{0, 256, 65535} {
+				bodyBits, extraFlags := bodyBits, extraFlags
+				t.Run(fmt.Sprintf("v%d_body%d_extra%d", version, bodyBits, extraFlags), func(t *testing.T) {
+					runTonOpsSendMsgExtraFlagsRootSizeGlobalVersion(t, version, bodyBits, extraFlags, uint16(0xD000+uint16(version)))
+				})
+			}
+		}
+	}
+}
+
+func FuzzTVMCrossEmulatorTonOpsSendMsgExtraFlagsRootSizeGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint16(340), uint64(0), uint16(0xD100+uint16(version)))
+		f.Add(uint8(version), uint16(360), uint64(256), uint16(0xD200+uint16(version)))
+		f.Add(uint8(version), uint16(380), uint64(65535), uint16(0xD300+uint16(version)))
+	}
+	f.Add(uint8(255), uint16(419), uint64((1<<48)+17), uint16(0xFFFF))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawBodyBits uint16, rawExtraFlags uint64, bodyTag uint16) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		bodyBits := uint(rawBodyBits % 420)
+		extraFlags := rawExtraFlags % 65536
+		runTonOpsSendMsgExtraFlagsRootSizeGlobalVersion(t, version, bodyBits, extraFlags, bodyTag)
+	})
+}
+
+func runTonOpsSendMsgExtraFlagsRootSizeGlobalVersion(t *testing.T, version int, bodyBits uint, extraFlags uint64, bodyTag uint16) {
+	t.Helper()
+
+	msg, c7, refCfg := tonOpsSendMsgExtraFlagsRootSizeFixture(t, version, bodyBits, extraFlags, bodyTag)
+	wantExit := int32(0)
+	if version < funcsop.SENDMSG().MinGlobalVersion() {
+		wantExit = int32(vmerr.CodeInvalidOpcode)
+	}
+
+	code := prependRawMethodDrop(codeFromBuilders(t, funcsop.SENDMSG().Serialize()))
+	goStack, err := buildCrossStack(msg, int64(1024))
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack(msg, int64(1024))
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), c7, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != wantExit || refRes.exitCode != wantExit {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, wantExit)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func tonOpsSendMsgExtraFlagsRootSizeFixture(t *testing.T, version int, bodyBits uint, extraFlags uint64, bodyTag uint16) (*cell.Cell, tuple.Tuple, *referenceGetMethodConfig) {
+	t.Helper()
+
+	body := cell.BeginCell()
+	if bodyBits > 0 && bodyBits <= 16 {
+		body.MustStoreUInt(uint64(bodyTag)>>(16-bodyBits), bodyBits)
+	} else if bodyBits > 16 {
+		body.MustStoreUInt(uint64(bodyTag), 16)
+		body.MustStoreSlice(bytes.Repeat([]byte{byte(extraFlags)}, int((bodyBits-16+7)/8)), bodyBits-16)
+	}
+	msg, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     address.NewAddressNone(),
+		DstAddr:     tonopsTestAddr,
+		Amount:      tlb.FromNanoTONU(100),
+		IHRFee:      tlb.FromNanoTONU(extraFlags),
+		FwdFee:      tlb.FromNanoTONU(0),
+		CreatedLT:   1,
+		CreatedAt:   uint32(tonopsTestTime.Unix()),
+		Body:        body.EndCell(),
+	})
+	if err != nil {
+		t.Fatalf("failed to build extra-flags SENDMSG fixture: %v", err)
+	}
+
+	prices := tlb.ConfigMsgForwardPrices{
+		CellPrice: 1 << 16,
+	}
+	configRoot := tonopsCrossSendMsgConfig(t, uint32(version), prices)
+	c7 := makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     configRoot,
+		UnpackedConfig: tonopsCrossSendMsgUnpackedConfig(t, prices),
+	})
+	return msg, c7, tonopsCrossRefConfig(configRoot)
+}
+
+func TestTVMCrossEmulatorTonOpsUnderflowPrecheckGlobalVersion(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	tests := tonOpsUnderflowPrecheckCases(t)
+	versions := tonOpsVersionCrossEmulatorVersions(t)
+	for _, tt := range tests {
+		tt := tt
+		for _, version := range versions {
+			version := version
+			t.Run(fmt.Sprintf("%s_v%d", tt.name, version), func(t *testing.T) {
+				runTonOpsUnderflowPrecheckVersionCase(t, tt, version)
+			})
+		}
+	}
+}
+
+func FuzzTVMCrossEmulatorTonOpsUnderflowPrecheckGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%tonOpsUnderflowPrecheckCaseCount))
+	}
+	for i := 0; i < tonOpsUnderflowPrecheckCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		tests := tonOpsUnderflowPrecheckCases(t)
+		if len(tests) != tonOpsUnderflowPrecheckCaseCount {
+			t.Fatalf("tonops underflow precheck case count = %d, want %d", len(tests), tonOpsUnderflowPrecheckCaseCount)
+		}
+		tt := tests[int(rawCase)%len(tests)]
+		runTonOpsUnderflowPrecheckVersionCase(t, tt, version)
+	})
+}
+
+const tonOpsUnderflowPrecheckCaseCount = 8
+
+type tonOpsUnderflowPrecheckCase struct {
+	name  string
+	code  *cell.Cell
+	stack []any
+	exit  func(int) int32
+}
+
+func tonOpsUnderflowPrecheckCases(t *testing.T) []tonOpsUnderflowPrecheckCase {
+	t.Helper()
+
+	return []tonOpsUnderflowPrecheckCase{
+		{
+			name:  "getgasfee",
+			code:  codeFromBuilders(t, funcsop.GETGASFEE().Serialize()),
+			stack: []any{int64(0)},
+			exit: func(version int) int32 {
+				if version < 6 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+		{
+			name:  "getstoragefee",
+			code:  codeFromBuilders(t, funcsop.GETSTORAGEFEE().Serialize()),
+			stack: []any{int64(0), int64(1)},
+			exit: func(version int) int32 {
+				if version < 6 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+		{
+			name:  "getforwardfee",
+			code:  codeFromBuilders(t, funcsop.GETFORWARDFEE().Serialize()),
+			stack: []any{int64(0)},
+			exit: func(version int) int32 {
+				if version < 6 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+		{
+			name:  "getoriginalfwdfee",
+			code:  codeFromBuilders(t, funcsop.GETORIGINALFWDFEE().Serialize()),
+			stack: []any{int64(0)},
+			exit: func(version int) int32 {
+				if version < 6 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+		{
+			name:  "getgasfeesimple",
+			code:  codeFromBuilders(t, funcsop.GETGASFEESIMPLE().Serialize()),
+			stack: []any{int64(0)},
+			exit: func(version int) int32 {
+				if version < 6 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+		{
+			name:  "getforwardfeesimple",
+			code:  codeFromBuilders(t, funcsop.GETFORWARDFEESIMPLE().Serialize()),
+			stack: []any{int64(0)},
+			exit: func(version int) int32 {
+				if version < 6 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+		{
+			name: "getextrabalance",
+			code: codeFromBuilders(t, funcsop.GETEXTRABALANCE().Serialize()),
+			exit: func(version int) int32 {
+				if version < 10 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+		{
+			name:  "hashext_dynamic",
+			code:  codeFromBuilders(t, funcsop.HASHEXT(255).Serialize()),
+			stack: []any{int64(0)},
+			exit: func(version int) int32 {
+				if version < 4 {
+					return int32(vmerr.CodeInvalidOpcode)
+				}
+				return int32(vmerr.CodeStackUnderflow)
+			},
+		},
+	}
+}
+
+func runTonOpsUnderflowPrecheckVersionCase(t *testing.T, tt tonOpsUnderflowPrecheckCase, version int) {
+	t.Helper()
+
+	code := prependRawMethodDrop(tt.code)
+	goStack, err := buildCrossStack(tt.stack...)
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack(tt.stack...)
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+	refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	wantExit := tt.exit(version)
+	if goRes.exitCode != wantExit || refRes.exitCode != wantExit {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, wantExit)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func TestTVMCrossEmulatorDataSizeLowGasGlobalVersion(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	fixture := tonOpsDataSizeLowGasFixture(t)
+
+	for _, version := range tonOpsVersionCrossEmulatorVersions(t) {
+		tests := tonOpsDataSizeLowGasCases()
+		for _, tt := range tests {
+			tt := tt
+			version := version
+			t.Run(fmt.Sprintf("%s_v%d", tt.name, version), func(t *testing.T) {
+				runTonOpsDataSizeLowGasVersionCase(t, fixture, tt, version)
+			})
+		}
+	}
+}
+
+func FuzzTVMCrossEmulatorDataSizeLowGasGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%tonOpsDataSizeLowGasCaseCount))
+	}
+	for i := 0; i < tonOpsDataSizeLowGasCaseCount; i++ {
+		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		fixture := tonOpsDataSizeLowGasFixture(t)
+		tests := tonOpsDataSizeLowGasCases()
+		if len(tests) != tonOpsDataSizeLowGasCaseCount {
+			t.Fatalf("tonops datasize low-gas case count = %d, want %d", len(tests), tonOpsDataSizeLowGasCaseCount)
+		}
+		tt := tests[int(rawCase)%len(tests)]
+		runTonOpsDataSizeLowGasVersionCase(t, fixture, tt, version)
+	})
+}
+
+const tonOpsDataSizeLowGasCaseCount = 5
+
+type tonOpsDataSizeLowGasFixtureData struct {
+	root       *cell.Cell
+	cdataSize  *cell.Cell
+	cdataSizeQ *cell.Cell
+	sdataSize  *cell.Cell
+	sdataSizeQ *cell.Cell
+}
+
+type tonOpsDataSizeLowGasCase struct {
+	name      string
+	code      func(tonOpsDataSizeLowGasFixtureData) *cell.Cell
+	stackArg  func(tonOpsDataSizeLowGasFixtureData) any
+	bound     int64
+	legacyGas int64
+	modernGas int64
+}
+
+func tonOpsDataSizeLowGasFixture(t *testing.T) tonOpsDataSizeLowGasFixtureData {
+	t.Helper()
+
+	first := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
+	second := cell.BeginCell().MustStoreUInt(2, 2).EndCell()
+	root := cell.BeginCell().MustStoreRef(first).MustStoreRef(second).EndCell()
+
+	return tonOpsDataSizeLowGasFixtureData{
+		root:       root,
+		cdataSize:  prependRawMethodDrop(codeFromBuilders(t, funcsop.CDATASIZE().Serialize())),
+		cdataSizeQ: prependRawMethodDrop(codeFromBuilders(t, funcsop.CDATASIZEQ().Serialize())),
+		sdataSize:  prependRawMethodDrop(codeFromBuilders(t, funcsop.SDATASIZE().Serialize())),
+		sdataSizeQ: prependRawMethodDrop(codeFromBuilders(t, funcsop.SDATASIZEQ().Serialize())),
+	}
+}
+
+func tonOpsDataSizeLowGasCases() []tonOpsDataSizeLowGasCase {
+	cellArg := func(fixture tonOpsDataSizeLowGasFixtureData) any {
+		return fixture.root
+	}
+	sliceArg := func(fixture tonOpsDataSizeLowGasFixtureData) any {
+		return fixture.root.MustBeginParse()
+	}
+	return []tonOpsDataSizeLowGasCase{
+		{
+			name: "cdatasize_walks_refs_after_out_of_gas",
+			code: func(fixture tonOpsDataSizeLowGasFixtureData) *cell.Cell {
+				return fixture.cdataSize
+			},
+			stackArg:  cellArg,
+			bound:     10,
+			legacyGas: 344,
+			modernGas: 144,
+		},
+		{
+			name: "cdatasize_bound_overflow_adds_exception_gas",
+			code: func(fixture tonOpsDataSizeLowGasFixtureData) *cell.Cell {
+				return fixture.cdataSize
+			},
+			stackArg:  cellArg,
+			bound:     1,
+			legacyGas: 194,
+			modernGas: 144,
+		},
+		{
+			name: "cdatasizeq_walks_refs_after_out_of_gas",
+			code: func(fixture tonOpsDataSizeLowGasFixtureData) *cell.Cell {
+				return fixture.cdataSizeQ
+			},
+			stackArg:  cellArg,
+			bound:     10,
+			legacyGas: 344,
+			modernGas: 144,
+		},
+		{
+			name: "sdatasize_walks_refs_after_out_of_gas",
+			code: func(fixture tonOpsDataSizeLowGasFixtureData) *cell.Cell {
+				return fixture.sdataSize
+			},
+			stackArg:  sliceArg,
+			bound:     10,
+			legacyGas: 244,
+			modernGas: 144,
+		},
+		{
+			name: "sdatasizeq_walks_refs_after_out_of_gas",
+			code: func(fixture tonOpsDataSizeLowGasFixtureData) *cell.Cell {
+				return fixture.sdataSizeQ
+			},
+			stackArg:  sliceArg,
+			bound:     10,
+			legacyGas: 244,
+			modernGas: 144,
+		},
+	}
+}
+
+func runTonOpsDataSizeLowGasVersionCase(t *testing.T, fixture tonOpsDataSizeLowGasFixtureData, tt tonOpsDataSizeLowGasCase, version int) {
+	t.Helper()
+
+	goStack, err := buildCrossStack(tt.stackArg(fixture), tt.bound)
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack(tt.stackArg(fixture), tt.bound)
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	code := tt.code(fixture)
+	goRes, err := runGoCrossCodeWithVersionGasAndLibs(code, testEmptyCell(), tuple.Tuple{}, nil, goStack, version, 120)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refCfg := *tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+	refCfg.GasLimit = 120
+	refRes, err := runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != int32(^vmerr.CodeOutOfGas) || refRes.exitCode != int32(^vmerr.CodeOutOfGas) {
+		t.Fatalf("unexpected exit code: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	wantGas := tt.legacyGas
+	if version >= 4 {
+		wantGas = tt.modernGas
+	}
+	if goRes.gasUsed != wantGas {
+		t.Fatalf("gas used = %d, want %d", goRes.gasUsed, wantGas)
+	}
+}
+
 func tonopsCrossConfigWithGlobalVersion(t *testing.T, version uint32) *cell.Cell {
 	t.Helper()
 
@@ -1301,6 +2764,24 @@ func tonopsCrossConfigWithGlobalVersion(t *testing.T, version uint32) *cell.Cell
 	}
 	return mustConfigDictCell(t, map[uint32]*cell.Cell{
 		uint32(tlb.ConfigParamGlobalVersion): versionCell,
+	})
+}
+
+func tonopsCrossConflictingFeeConfig(t *testing.T, globalVersionCell *cell.Cell) *cell.Cell {
+	t.Helper()
+
+	storagePrices := cell.NewDict(32)
+	if err := storagePrices.SetIntKey(big.NewInt(1), makeStoragePricesSlice(1, 99, 99, 99, 99).MustToCell()); err != nil {
+		t.Fatalf("failed to seed conflicting storage prices: %v", err)
+	}
+
+	return mustConfigDictCell(t, map[uint32]*cell.Cell{
+		uint32(tlb.ConfigParamGlobalVersion):               globalVersionCell,
+		uint32(tlb.ConfigParamStoragePrices):               storagePrices.AsCell(),
+		uint32(tlb.ConfigParamGasPricesMasterchain):        makeGasPricesSlice(1, 1, 9, 9, 9, 1, 9, 9, 9, true).MustToCell(),
+		uint32(tlb.ConfigParamGasPricesBasechain):          makeGasPricesSlice(1, 1, 9, 9, 9, 1, 9, 9, 9, true).MustToCell(),
+		uint32(tlb.ConfigParamMsgForwardPricesMasterchain): makeMsgPricesSlice(9, 9, 9, 9, 9, 9).MustToCell(),
+		uint32(tlb.ConfigParamMsgForwardPricesBasechain):   makeMsgPricesSlice(9, 9, 9, 9, 9, 9).MustToCell(),
 	})
 }
 

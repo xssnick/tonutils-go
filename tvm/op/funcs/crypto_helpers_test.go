@@ -264,10 +264,11 @@ func TestTVM14RistrettoIdentityResults(t *testing.T) {
 		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
 			t.Fatalf("push v13 scalar: %v", err)
 		}
-		if err := RIST255_MULBASE().Interpret(st); err == nil {
-			t.Fatal("RIST255_MULBASE v13 should reject zero scalar")
-		} else if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
-			t.Fatalf("RIST255_MULBASE v13 error = %v, want range check", err)
+		if err := RIST255_MULBASE().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MULBASE v13 failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MULBASE v13 = (%v, %v), want 0", got, err)
 		}
 
 		st = newFuncTestState(t, nil)
@@ -307,14 +308,14 @@ func TestTVM14RistrettoIdentityResults(t *testing.T) {
 			t.Fatalf("push v14 scalar: %v", err)
 		}
 		if err := RIST255_MUL().Interpret(st); err != nil {
-			t.Fatalf("RIST255_MUL v14 failed: %v", err)
+			t.Fatalf("RIST255_MUL v14 identity failed: %v", err)
 		}
 		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
-			t.Fatalf("RIST255_MUL v14 = (%v, %v), want 0", got, err)
+			t.Fatalf("RIST255_MUL v14 identity = (%v, %v), want 0", got, err)
 		}
 	})
 
-	t.Run("mul validates point on zero scalar in v14", func(t *testing.T) {
+	t.Run("mul zero scalar validates invalid point in v14", func(t *testing.T) {
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = 13
 		if err := st.Stack.PushInt(invalidPoint); err != nil {
@@ -348,7 +349,21 @@ func TestTVM14RistrettoIdentityResults(t *testing.T) {
 			t.Fatalf("RIST255_QMUL v14 status = (%v, %v), want false", ok, err)
 		}
 		if st.Stack.Len() != 0 {
-			t.Fatalf("RIST255_QMUL v14 failure should leave only status, stack len=%d", st.Stack.Len())
+			t.Fatalf("RIST255_QMUL v14 left %d stack values, want 0", st.Stack.Len())
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(invalidPoint); err != nil {
+			t.Fatalf("push v14 invalid point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v14 zero scalar: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err == nil {
+			t.Fatal("RIST255_MUL v14 should reject invalid point with zero scalar")
+		} else if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
+			t.Fatalf("RIST255_MUL v14 error = %v, want range check", err)
 		}
 	})
 

@@ -19,9 +19,15 @@ func RSHIFTR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
 				return err
+			}
+			if x == nil {
+				if y.Sign() == 0 {
+					return pushNaNOrOverflow(state, false)
+				}
+				return pushSmallInt(state, 0)
 			}
 
 			res := helpers.DivRound(x, y.Lsh(bigIntOne, uint(y.Uint64())))
