@@ -12,6 +12,7 @@ func TestListRoundtripMixedUDPAndUDP6(t *testing.T) {
 		Addresses: []Address{
 			&UDP{IP: net.IPv4(127, 0, 0, 1).To4(), Port: 30303},
 			&UDP6{IP: net.ParseIP("2001:db8::1").To16(), Port: 40404},
+			&QUIC{IP: net.IPv4(10, 0, 0, 1).To4(), Port: 50443},
 		},
 		Version:    10,
 		ReinitDate: 11,
@@ -29,7 +30,7 @@ func TestListRoundtripMixedUDPAndUDP6(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(got.Addresses) != 2 {
+	if len(got.Addresses) != 3 {
 		t.Fatalf("unexpected addresses count: %d", len(got.Addresses))
 	}
 
@@ -39,6 +40,18 @@ func TestListRoundtripMixedUDPAndUDP6(t *testing.T) {
 
 	if ip := IPValue(got.Addresses[1]); !ip.Equal(net.ParseIP("2001:db8::1")) {
 		t.Fatalf("unexpected second address ip: %v", ip)
+	}
+
+	switch got.Addresses[2].(type) {
+	case QUIC, *QUIC:
+	default:
+		t.Fatalf("expected quic address, got %T", got.Addresses[2])
+	}
+	if ip := IPValue(got.Addresses[2]); !ip.Equal(net.IPv4(10, 0, 0, 1).To4()) {
+		t.Fatalf("unexpected third address ip: %v", ip)
+	}
+	if port := PortValue(got.Addresses[2]); port != 50443 {
+		t.Fatalf("unexpected third address port: %d", port)
 	}
 
 	if got.Version != src.Version || got.ReinitDate != src.ReinitDate || got.Priority != src.Priority || got.ExpireAt != src.ExpireAt {
@@ -74,5 +87,12 @@ func TestDialStringIPv6(t *testing.T) {
 
 	if got != "[2001:db8::7]:1000" {
 		t.Fatalf("unexpected dial string: %s", got)
+	}
+}
+
+func TestDialStringQUICUnsupported(t *testing.T) {
+	_, err := DialString(&QUIC{IP: net.IPv4(127, 0, 0, 1).To4(), Port: 4433})
+	if err == nil {
+		t.Fatal("quic address should not be dialable yet")
 	}
 }

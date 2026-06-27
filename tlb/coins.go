@@ -23,6 +23,8 @@ type Coins struct {
 
 var ZeroCoins = MustFromTON("0")
 
+var zeroCoinsInt = new(big.Int)
+
 // Deprecated: use String
 func (g Coins) TON() string {
 	return g.String()
@@ -215,17 +217,59 @@ func FromDecimal(val string, decimals int) (Coins, error) {
 }
 
 func (g *Coins) LoadFromCell(loader *cell.Slice) error {
-	coins, err := loader.LoadBigCoins()
+	coins, err := loadCoins(loader)
 	if err != nil {
 		return err
 	}
-	g.decimals = 9
-	g.val = coins
+	*g = coins
 	return nil
 }
 
 func (g Coins) ToCell() (*cell.Cell, error) {
-	return cell.BeginCell().MustStoreBigCoins(g.Nano()).EndCell(), nil
+	builder := cell.BeginCell()
+	if err := storeCoins(builder, g); err != nil {
+		return nil, err
+	}
+	return builder.EndCell(), nil
+}
+
+func loadCoins(loader *cell.Slice) (Coins, error) {
+	ln, err := loader.LoadUInt(4)
+	if err != nil {
+		return Coins{}, err
+	}
+	if ln >= 16 {
+		return Coins{}, cell.ErrTooBigValue
+	}
+	if ln == 0 {
+		return Coins{decimals: 9, val: zeroCoinsInt}, nil
+	}
+	if ln <= 8 {
+		coins, err := loader.LoadUInt(uint(ln * 8))
+		if err != nil {
+			return Coins{}, err
+		}
+		return Coins{decimals: 9, val: new(big.Int).SetUint64(coins)}, nil
+	}
+
+	coins, err := loader.LoadBigUInt(uint(ln * 8))
+	if err != nil {
+		return Coins{}, err
+	}
+	return Coins{decimals: 9, val: coins}, nil
+}
+
+func storeCoins(builder *cell.Builder, coins Coins) error {
+	switch {
+	case coins.val == nil:
+		return builder.StoreCoins(0)
+	case coins.val.Sign() < 0:
+		return cell.ErrNegative
+	case coins.val.IsUint64():
+		return builder.StoreCoins(coins.val.Uint64())
+	default:
+		return builder.StoreBigCoins(coins.val)
+	}
 }
 
 func (g Coins) MarshalJSON() ([]byte, error) {

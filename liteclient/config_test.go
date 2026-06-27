@@ -119,6 +119,45 @@ func TestDHTAddressUDP6Unmarshal(t *testing.T) {
 	}
 }
 
+func TestDHTAddressQUICUnmarshal(t *testing.T) {
+	var addr DHTAddress
+	err := addr.UnmarshalJSON([]byte(`{
+		"@type":"adnl.address.quic",
+		"ip":2130706433,
+		"port":4433
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if addr.Type != "adnl.address.quic" {
+		t.Fatalf("unexpected type %q", addr.Type)
+	}
+	if addr.IP != 2130706433 {
+		t.Fatalf("unexpected ip %d", addr.IP)
+	}
+	if addr.Port != 4433 {
+		t.Fatalf("unexpected port %d", addr.Port)
+	}
+
+	adnlAddr, err := addr.ToADNLAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := adnlAddr.(*address.QUIC); !ok {
+		t.Fatalf("expected quic address, got %T", adnlAddr)
+	}
+	if !address.IPValue(adnlAddr).Equal(net.IPv4(127, 0, 0, 1).To4()) {
+		t.Fatalf("unexpected adnl quic ip %v", address.IPValue(adnlAddr))
+	}
+	if address.PortValue(adnlAddr) != 4433 {
+		t.Fatalf("unexpected adnl quic port %d", address.PortValue(adnlAddr))
+	}
+	if _, err = address.DialString(adnlAddr); err == nil {
+		t.Fatal("quic address should not be dialable yet")
+	}
+}
+
 func getMockClient(response string) *httptest.Server {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(response))
