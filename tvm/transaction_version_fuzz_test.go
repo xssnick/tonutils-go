@@ -1404,7 +1404,7 @@ func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
-		effectiveVersion := uint32(machineVersion)
+		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
 
 		var configRoot *cell.Cell
 		if useConfigRoot {
@@ -1475,14 +1475,14 @@ func FuzzTransactionEmulationGlobalVersionPerRun(f *testing.F) {
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
+			ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    walletSendTestGasMax,
 				Credit: walletSendTestCredit,
 			}),
 		}
 		versionCfg := baseCfg
-		versionCfg.GlobalVersion = int(version)
-		versionCfg.GlobalVersionSet = true
+		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
 
 		res, err := machine.EmulateTransaction(shard, msgCell, versionCfg)
 		if err != nil {
@@ -1512,7 +1512,7 @@ func FuzzTickTockGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot, isTock bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
-		effectiveVersion := uint32(machineVersion)
+		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
 
 		var configRoot *cell.Cell
 		if useConfigRoot {
@@ -1565,17 +1565,17 @@ func FuzzTickTockGlobalVersionPerRun(f *testing.F) {
 			t.Fatalf("failed to build tick/tock shard: %v", err)
 		}
 		baseCfg := TransactionEmulationConfig{
-			Now:      uint32(tonopsTestTime.Unix()),
-			Balance:  new(big.Int).SetUint64(tickTockTestBalance),
-			RandSeed: append([]byte(nil), tonopsTestSeed...),
+			Now:        uint32(tonopsTestTime.Unix()),
+			Balance:    new(big.Int).SetUint64(tickTockTestBalance),
+			RandSeed:   append([]byte(nil), tonopsTestSeed...),
+			ConfigRoot: transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultTickTockTransactionGasMax,
 				Limit: DefaultTickTockTransactionGasMax,
 			}),
 		}
 		versionCfg := baseCfg
-		versionCfg.GlobalVersion = int(version)
-		versionCfg.GlobalVersionSet = true
+		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
 
 		res, err := machine.EmulateTickTockTransaction(shard, isTock, versionCfg)
 		if err != nil {
@@ -1605,7 +1605,7 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionFallbackAndConfigOverride(f *t
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
-		effectiveVersion := uint32(machineVersion)
+		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
 
 		var configRoot *cell.Cell
 		if useConfigRoot {
@@ -1677,10 +1677,10 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionPerRun(f *testing.F) {
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
+			ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
 		}
 		versionCfg := baseCfg
-		versionCfg.GlobalVersion = int(version)
-		versionCfg.GlobalVersionSet = true
+		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
 
 		accepted, err := machine.CheckExternalMessageAccepted(shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, versionCfg)
 		if err != nil {
@@ -1911,8 +1911,7 @@ func FuzzMessageEmulationGlobalVersionPerRun(f *testing.F) {
 			}),
 		}
 		versionCfg := baseCfg
-		versionCfg.GlobalVersion = int(version)
-		versionCfg.GlobalVersionSet = true
+		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
 
 		configured := runMessageGlobalVersionPath(t, &machine, rawPath, code, data, body, versionCfg, tt)
 		if int(version) < tt.minVersion {
@@ -2496,22 +2495,21 @@ func FuzzTransactionActionGlobalVersionFallbackInvalidSource(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, rawConfigKind, rawVersion byte, ignoreErrors bool, payload byte) {
 		version := uint32(transactionFuzzGlobalVersion(rawVersion))
-		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
 		var cfg transactionConfig
 
 		switch rawConfigKind % 4 {
 		case 0:
-			cfg = transactionConfig{}
+			cfg = newTransactionConfig(nil)
 		case 1:
 			cfg = transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})})
 		case 2:
-			effectiveVersion = version
 			cfg = transactionTestConfigWithGlobalVersion(t, version)
 		default:
 			cfg = transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 				tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(uint64(payload&1), 1).EndCell(),
 			})})
 		}
+		effectiveVersion := cfg.globalVersion()
 
 		mode := uint8(0)
 		if ignoreErrors {

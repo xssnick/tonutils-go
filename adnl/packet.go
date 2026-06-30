@@ -86,7 +86,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	var packet PacketContent
 
-	packet.Rand1, data, err = tl.FromBytes(data)
+	packet.Rand1, data, err = tl.FromBytesNoCopy(data)
 	if err != nil {
 		return nil, err
 	}
@@ -233,14 +233,14 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	signatureStart, signatureEnd := -1, -1
 	if flags&_FlagSignature != 0 {
 		signatureStart = len(orig) - len(data)
-		packet.Signature, data, err = tl.FromBytes(data)
+		packet.Signature, data, err = tl.FromBytesNoCopy(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse signature: %w", err)
 		}
 		signatureEnd = len(orig) - len(data)
 	}
 
-	packet.Rand2, data, err = tl.FromBytes(data)
+	packet.Rand2, data, err = tl.FromBytesNoCopy(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse rand2: %w", err)
 	}
@@ -249,7 +249,9 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 		return nil, fmt.Errorf("too much data in packet")
 	}
 
-	packet.toSign = buildPacketToSign(orig, flagsOffset, flags, signatureStart, signatureEnd)
+	if signatureStart >= 0 {
+		packet.toSign = buildPacketToSign(orig, flagsOffset, flags, signatureStart, signatureEnd)
+	}
 
 	return &packet, nil
 }
@@ -301,9 +303,9 @@ func (p *PacketContent) verifySignature(pub ed25519.PublicKey) error {
 
 func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	// adnl.packetContents id
-	tmp := make([]byte, 4)
-	binary.LittleEndian.PutUint32(tmp, _PacketContentID)
-	buf.Write(tmp)
+	var tmp [8]byte
+	binary.LittleEndian.PutUint32(tmp[:4], _PacketContentID)
+	buf.Write(tmp[:4])
 
 	_ = tl.ToBytesToBuffer(buf, p.Rand1)
 
@@ -345,9 +347,8 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 		flags |= _FlagOneMessage
 	}
 
-	flagsBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(flagsBytes, flags)
-	buf.Write(flagsBytes)
+	binary.LittleEndian.PutUint32(tmp[:4], flags)
+	buf.Write(tmp[:4])
 
 	if p.From != nil {
 		_, err := tl.Serialize(p.From, true, buf)
@@ -362,9 +363,8 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 
 	var payloadLen = buf.Len()
 	if len(p.Messages) > 1 {
-		msgsNumBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(msgsNumBytes, uint32(len(p.Messages)))
-		buf.Write(msgsNumBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(len(p.Messages)))
+		buf.Write(tmp[:4])
 
 		for i, msg := range p.Messages {
 			_, err := tl.Serialize(msg, true, buf)
@@ -397,41 +397,35 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	}
 
 	if p.Seqno != nil {
-		seqnoBytes := make([]byte, 8)
-		binary.LittleEndian.PutUint64(seqnoBytes, uint64(*p.Seqno))
-		buf.Write(seqnoBytes)
+		binary.LittleEndian.PutUint64(tmp[:8], uint64(*p.Seqno))
+		buf.Write(tmp[:8])
 	}
 
 	if p.ConfirmSeqno != nil {
-		confirmSeqnoBytes := make([]byte, 8)
-		binary.LittleEndian.PutUint64(confirmSeqnoBytes, uint64(*p.ConfirmSeqno))
-		buf.Write(confirmSeqnoBytes)
+		binary.LittleEndian.PutUint64(tmp[:8], uint64(*p.ConfirmSeqno))
+		buf.Write(tmp[:8])
 	}
 
 	if p.RecvAddrListVersion != nil {
-		recvAddrListBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(recvAddrListBytes, uint32(*p.RecvAddrListVersion))
-		buf.Write(recvAddrListBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.RecvAddrListVersion))
+		buf.Write(tmp[:4])
 	}
 
 	if p.RecvPriorityAddrListVersion != nil {
-		recvAddrListBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(recvAddrListBytes, uint32(*p.RecvPriorityAddrListVersion))
-		buf.Write(recvAddrListBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.RecvPriorityAddrListVersion))
+		buf.Write(tmp[:4])
 	}
 
 	if p.ReinitDate != nil {
-		reinitDateBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(reinitDateBytes, uint32(*p.ReinitDate))
-		buf.Write(reinitDateBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.ReinitDate))
+		buf.Write(tmp[:4])
 
 		if p.DstReinitDate == nil {
 			return 0, fmt.Errorf("dst reinit could not be nil when reinit is specified")
 		}
 
-		dstReinitDateBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(dstReinitDateBytes, uint32(*p.DstReinitDate))
-		buf.Write(dstReinitDateBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.DstReinitDate))
+		buf.Write(tmp[:4])
 	}
 
 	if p.Signature != nil {

@@ -506,10 +506,7 @@ func TestNode_checkValue(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		testVal, testKeyID, err := buildStoreValue(keys.PublicKeyED25519{Key: pub}, []byte("test"), 0, []byte("value"), UpdateRuleAnybody{}, time.Minute, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testVal, testKeyID := newUnsignedTestValue(t, keys.PublicKeyED25519{Key: pub}, UpdateRuleAnybody{})
 		err = checkValue(testKeyID, &testVal)
 		if err == nil {
 			t.Fatal("got error nil, want error not nil")
@@ -520,10 +517,7 @@ func TestNode_checkValue(t *testing.T) {
 	})
 
 	t.Run("anybody rule rejects overlay key", func(t *testing.T) {
-		testVal, testKeyID, err := buildStoreValue(keys.PublicKeyOverlay{Key: []byte("overlay")}, []byte("test"), 0, []byte("value"), UpdateRuleAnybody{}, time.Minute, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testVal, testKeyID := newUnsignedTestValue(t, keys.PublicKeyOverlay{Key: []byte("overlay")}, UpdateRuleAnybody{})
 		err = checkValue(testKeyID, &testVal)
 		if err == nil {
 			t.Fatal("got error nil, want error not nil")
@@ -587,6 +581,64 @@ func TestNode_checkValue(t *testing.T) {
 		}
 	})
 
+	t.Run("nil key description id", func(t *testing.T) {
+		testVal := &Value{
+			KeyDescription: KeyDescription{
+				Key: Key{
+					ID:    bytes.Repeat([]byte{1}, 32),
+					Name:  []byte("test"),
+					Index: 0,
+				},
+				UpdateRule: UpdateRuleAnybody{},
+			},
+			TTL: int32(time.Now().Add(time.Minute).Unix()),
+		}
+		testKeyID, err := tl.Hash(testVal.KeyDescription.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = checkValue(testKeyID, testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "unsupported value key type") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("nil update rule", func(t *testing.T) {
+		id := keys.PublicKeyUnEnc{Key: []byte("test")}
+		idKey, err := tl.Hash(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testVal := &Value{
+			KeyDescription: KeyDescription{
+				Key: Key{
+					ID:    idKey,
+					Name:  []byte("test"),
+					Index: 0,
+				},
+				ID: id,
+			},
+			TTL: int32(time.Now().Add(time.Minute).Unix()),
+		}
+		testKeyID, err := tl.Hash(testVal.KeyDescription.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = checkValue(testKeyID, testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "update rule type") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
 	//t.Run("corrupted value: bad value description sign", func(t *testing.T) {
 	//	val.KeyDescription.ID = []byte("qewrgheau;igqn41463[8u9y1436h1[iu1gh[8935]988hg]q5")
 	//	err = checkValue(kId, &val)
@@ -646,6 +698,75 @@ func TestNode_isValueAcceptableOverlayNodesAge(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildStoreValueRejectsMalformedInput(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		id   any
+		rule any
+		key  ed25519.PrivateKey
+	}{
+		{
+			name: "nil id",
+			rule: UpdateRuleAnybody{},
+		},
+		{
+			name: "nil rule",
+			id:   keys.PublicKeyUnEnc{Key: []byte("test")},
+		},
+		{
+			name: "invalid ed25519 public key",
+			id:   keys.PublicKeyED25519{Key: ed25519.PublicKey{1}},
+			rule: UpdateRuleSignature{},
+		},
+		{
+			name: "signature rule without private key",
+			id:   keys.PublicKeyED25519{Key: pub},
+			rule: UpdateRuleSignature{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := buildStoreValue(tt.id, []byte("test"), 0, []byte("value"), tt.rule, time.Minute, tt.key)
+			if err == nil {
+				t.Fatal("got error nil, want error not nil")
+			}
+		})
+	}
+}
+
+func newUnsignedTestValue(t *testing.T, id any, rule any) (Value, []byte) {
+	t.Helper()
+
+	idKey, err := tl.Hash(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := Value{
+		KeyDescription: KeyDescription{
+			Key: Key{
+				ID:    idKey,
+				Name:  []byte("test"),
+				Index: 0,
+			},
+			ID:         id,
+			UpdateRule: rule,
+		},
+		Data: []byte("value"),
+		TTL:  int32(time.Now().Add(time.Minute).Unix()),
+	}
+	keyID, err := tl.Hash(value.KeyDescription.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value, keyID
 }
 
 func newCorrectOverlayValue(t *testing.T, wrongOverlayID bool) (*Value, []byte) {

@@ -33,7 +33,11 @@ type ADNL interface {
 
 var Logger = func(a ...any) {}
 
-var PartSize = uint32(256<<10) + 1024
+// C++ rldp2 peers use a fixed 2,000,000 byte part size and reject
+// non-final inbound parts with a different FEC data size.
+var PartSize = uint32(2_000_000)
+
+const maxInitialFastSymbols = 32
 
 var MultiFECMode = false // TODO: activate after some versions
 var RoundRobinFECLimit = 50 * DefaultSymbolSize
@@ -1240,7 +1244,11 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 	isV2 := r.useV2.Load()
 
 	seqno := uint32(0)
-	batch := r.rateLimit.ConsumePackets(int(part.fastSeqnoTill), int(part.fecSymbolSize))
+	batchLimit := int(part.fastSeqnoTill)
+	if batchLimit > maxInitialFastSymbols {
+		batchLimit = maxInitialFastSymbols
+	}
+	batch := r.rateLimit.ConsumePackets(batchLimit, int(part.fecSymbolSize))
 	now := time.Now().UnixMilli()
 
 	for i := 0; i < batch; i++ {

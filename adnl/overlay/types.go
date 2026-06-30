@@ -15,6 +15,8 @@ func init() {
 	tl.Register(NodeToSign{}, "overlay.node.toSign id:adnl.id.short overlay:int256 version:int = overlay.node.ToSign")
 	tl.Register(NodesList{}, "overlay.nodes nodes:(vector overlay.node) = overlay.Nodes")
 	tl.Register(GetRandomPeers{}, "overlay.getRandomPeers peers:overlay.nodes = overlay.Nodes")
+	tl.Register(Pong{}, "overlay.pong = overlay.Pong")
+	tl.Register(Ping{}, "overlay.ping = overlay.Pong")
 	tl.Register(Query{}, "overlay.query overlay:int256 = True")
 	tl.Register(Message{}, "overlay.message overlay:int256 = overlay.Message")
 	tl.Register(Certificate{}, "overlay.certificate issued_by:PublicKey expire_at:int max_size:int signature:bytes = overlay.Certificate")
@@ -274,6 +276,9 @@ type NodesList struct {
 type GetRandomPeers struct {
 	List NodesList `tl:"struct"`
 }
+
+type Pong struct{}
+type Ping struct{}
 
 type Query struct {
 	Overlay []byte `tl:"int256"`

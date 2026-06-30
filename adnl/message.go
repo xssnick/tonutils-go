@@ -53,7 +53,7 @@ func (m *MessageCustom) Parse(data []byte) ([]byte, error) {
 
 func (m *MessageCustom) ParseNoCopy(data []byte) ([]byte, error) {
 	var err error
-	m.Data, data, err = parseBoxedPayload(data, true)
+	m.Data, data, err = parseBoxedPayloadOwned(data)
 	return data, err
 }
 
@@ -90,10 +90,10 @@ func (m *MessageQuery) ParseNoCopy(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("message query is too short")
 	}
 
-	m.ID = data[:32:32]
+	m.ID = append([]byte(nil), data[:32]...)
 
 	var err error
-	m.Data, data, err = parseBoxedPayload(data[32:], true)
+	m.Data, data, err = parseBoxedPayloadOwned(data[32:])
 	return data, err
 }
 
@@ -101,7 +101,8 @@ func (m MessageQuery) Serialize(buf *bytes.Buffer) error {
 	if len(m.ID) == 32 {
 		buf.Write(m.ID)
 	} else if len(m.ID) == 0 {
-		buf.Write(make([]byte, 32))
+		var zero [32]byte
+		buf.Write(zero[:])
 	} else {
 		return fmt.Errorf("invalid query id size %d", len(m.ID))
 	}
@@ -132,10 +133,10 @@ func (m *MessageAnswer) ParseNoCopy(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("message answer is too short")
 	}
 
-	m.ID = data[:32:32]
+	m.ID = append([]byte(nil), data[:32]...)
 
 	var err error
-	m.Data, data, err = parseBoxedPayload(data[32:], true)
+	m.Data, data, err = parseBoxedPayloadOwned(data[32:])
 	return data, err
 }
 
@@ -143,7 +144,8 @@ func (m MessageAnswer) Serialize(buf *bytes.Buffer) error {
 	if len(m.ID) == 32 {
 		buf.Write(m.ID)
 	} else if len(m.ID) == 0 {
-		buf.Write(make([]byte, 32))
+		var zero [32]byte
+		buf.Write(zero[:])
 	} else {
 		return fmt.Errorf("invalid answer id size %d", len(m.ID))
 	}
@@ -177,7 +179,40 @@ func parseBoxedPayload(data []byte, noCopy bool) (tl.Serializable, []byte, error
 		return nil, nil, err
 	}
 
+	return parseBoxedPayloadSource(source, rest, noCopy)
+}
+
+func parseBoxedPayloadOwned(data []byte) (tl.Serializable, []byte, error) {
+	source, rest, err := tl.FromBytesNoCopy(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	source = append([]byte(nil), source...)
+	return parseBoxedPayloadSource(source, rest, true)
+}
+
+func parseBoxedPayloadSource(source []byte, rest []byte, noCopy bool) (tl.Serializable, []byte, error) {
+	if len(source) == 0 {
+		return nil, nil, fmt.Errorf("empty bytes slice cannot be parsed as boxed payload")
+	}
+
+	var first any
+	var err error
+	if noCopy {
+		source, err = tl.ParseNoCopy(&first, source, true)
+	} else {
+		source, err = tl.Parse(&first, source, true)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(source) == 0 {
+		return first, rest, nil
+	}
+
 	list := make([]tl.Serializable, 0, 2)
+	list = append(list, first)
 	for len(source) > 0 {
 		var obj any
 		if noCopy {
@@ -191,14 +226,7 @@ func parseBoxedPayload(data []byte, noCopy bool) (tl.Serializable, []byte, error
 		list = append(list, obj)
 	}
 
-	switch len(list) {
-	case 1:
-		return list[0], rest, nil
-	case 0:
-		return nil, nil, fmt.Errorf("empty bytes slice cannot be parsed as boxed payload")
-	default:
-		return list, rest, nil
-	}
+	return list, rest, nil
 }
 
 type partitionedMessage struct {

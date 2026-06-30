@@ -431,13 +431,12 @@ func assertTickTockBuildProofLibrariesGlobalVersionOverrideParity(t *testing.T, 
 	accountHash := shard.Account.Hash()
 
 	goRes, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
-		Now:              now,
-		Balance:          new(big.Int).SetUint64(tickTockTestBalance),
-		RandSeed:         append([]byte(nil), tonopsTestSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
-		BuildProof:       true,
-		Libraries:        []*cell.Cell{libs},
+		Now:        now,
+		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
+		RandSeed:   append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot: refConfigRoot,
+		BuildProof: true,
+		Libraries:  []*cell.Cell{libs},
 	})
 	if err != nil {
 		t.Fatalf("go tick/tock build-proof libraries global-version override machine_v=%d effective_v=%d is_tock=%t failed: %v", machineVersion, version, isTock, err)
@@ -586,12 +585,11 @@ func assertTickTockBuildProofGlobalVersionOverrideParity(t *testing.T, version, 
 	accountHash := shard.Account.Hash()
 
 	goRes, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
-		Now:              now,
-		Balance:          new(big.Int).SetUint64(tickTockTestBalance),
-		RandSeed:         append([]byte(nil), tonopsTestSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
-		BuildProof:       true,
+		Now:        now,
+		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
+		RandSeed:   append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot: refConfigRoot,
+		BuildProof: true,
 	})
 	if err != nil {
 		t.Fatalf("go tick/tock build-proof global-version override machine_v=%d effective_v=%d is_tock=%t failed: %v", machineVersion, version, isTock, err)
@@ -711,11 +709,10 @@ func assertTickTockGlobalVersionOverrideParity(t *testing.T, version, machineVer
 	}
 
 	goRes, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
-		Now:              now,
-		Balance:          new(big.Int).SetUint64(tickTockTestBalance),
-		RandSeed:         append([]byte(nil), tonopsTestSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
+		Now:        now,
+		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
+		RandSeed:   append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot: refConfigRoot,
 	})
 	if err != nil {
 		t.Fatalf("go tick/tock global-version override machine_v=%d effective_v=%d is_tock=%t failed: %v", machineVersion, version, isTock, err)

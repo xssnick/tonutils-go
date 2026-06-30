@@ -74,7 +74,9 @@ func (s *SingleNetManager) InitConnection(gate *Gateway, addr string) error {
 				default:
 				}
 
-				Logger("failed to read packet:", err)
+				if Logger != nil {
+					Logger("failed to read packet:", err)
+				}
 				continue
 			}
 
@@ -163,7 +165,9 @@ func NewMultiNetReader(conn net.PacketConn) *MultiNetManager {
 				default:
 				}
 
-				Logger("failed to read packet from multi manager:", err)
+				if Logger != nil {
+					Logger("failed to read packet from multi manager:", err)
+				}
 				continue
 			}
 

@@ -3,6 +3,7 @@ package dht
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"net"
 	"reflect"
@@ -33,6 +34,7 @@ func (m *mockPeer) GetDisconnectHandler() func(addr string, key ed25519.PublicKe
 }
 func (m *mockPeer) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {}
 func (m *mockPeer) SendCustomMessage(ctx context.Context, req tl.Serializable) error      { return nil }
+func (m *mockPeer) SendNop(ctx context.Context) error                                     { return nil }
 func (m *mockPeer) Query(ctx context.Context, req, result tl.Serializable) error          { return nil }
 func (m *mockPeer) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
 	m.answeredQueryID = append([]byte{}, queryID...)
@@ -130,6 +132,58 @@ func TestServer_HandleQuery_Ping(t *testing.T) {
 	}
 	if res.ID != 77 {
 		t.Fatalf("unexpected pong id %d", res.ID)
+	}
+}
+
+func TestServer_HandleQuery_ReverseQueriesDisabled(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	node, err := newCorrectNode(1, 2, 3, 4, 17002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := newMockPeerFromNode(t, node, "1.2.3.4:17002")
+
+	err = server.handleQuery(peer, &adnl.MessageQuery{
+		ID:   make([]byte, 32),
+		Data: RegisterReverseConnection{},
+	})
+	if !errors.Is(err, errReverseConnectionsDisabled) {
+		t.Fatalf("unexpected register reverse connection error: %v", err)
+	}
+	if peer.answered != nil {
+		t.Fatalf("reverse connection query was answered with %T", peer.answered)
+	}
+
+	err = server.handleQuery(peer, &adnl.MessageQuery{
+		ID:   make([]byte, 32),
+		Data: RequestReversePing{},
+	})
+	if !errors.Is(err, errReverseConnectionsDisabled) {
+		t.Fatalf("unexpected request reverse ping error: %v", err)
+	}
+	if peer.answered != nil {
+		t.Fatalf("reverse ping query was answered with %T", peer.answered)
+	}
+}
+
+func TestServer_HandleMessage_ReversePingContIgnored(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+		t.Fatalf("unexpected outgoing reverse ping to %s", addr)
+		return nil, nil
+	}
+
+	err := server.handleMessage(&mockPeer{}, &adnl.MessageCustom{
+		Data: RequestReversePingCont{
+			Client: append([]byte{}, server.selfID...),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -272,6 +326,129 @@ func TestServer_StoreAddressReturnsADNLID(t *testing.T) {
 	}
 }
 
+func TestServer_StoreAddressSucceedsWithOnlyLocalStore(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+		t.Fatalf("unexpected outgoing DHT connection to %s", addr)
+		return nil, nil
+	}
+
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adnlID, err := tl.Hash(keys.PublicKeyED25519{Key: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dhtKey, err := tl.Hash(Key{
+		ID:    adnlID,
+		Name:  []byte("address"),
+		Index: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrList := address.List{
+		Addresses: []address.Address{
+			&address.UDP{
+				IP:   net.IPv4(10, 20, 30, 41).To4(),
+				Port: 30304,
+			},
+		},
+	}
+
+	stored, gotID, err := server.StoreAddress(context.Background(), addrList, time.Minute, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("expected 1 local replica, got %d", stored)
+	}
+	if string(gotID) != string(adnlID) {
+		t.Fatalf("expected adnl id %x, got %x", adnlID, gotID)
+	}
+
+	server.mx.RLock()
+	_, cached := server.ourValues[string(dhtKey)]
+	server.mx.RUnlock()
+	if !cached {
+		t.Fatal("address value was not cached under internal dht key")
+	}
+
+	value, err := server.store.Get(dhtKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value == nil {
+		t.Fatal("address value was not stored locally")
+	}
+
+	var storedList address.List
+	if _, err = tl.ParseNoCopy(&storedList, value.Data, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(storedList.Addresses) != 1 {
+		t.Fatalf("expected 1 stored address, got %d", len(storedList.Addresses))
+	}
+
+	foundList, foundPub, err := server.FindAddresses(context.Background(), adnlID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(foundList.Addresses) != 1 {
+		t.Fatalf("expected 1 found address, got %d", len(foundList.Addresses))
+	}
+	if string(foundPub) != string(pub) {
+		t.Fatalf("expected found public key %x, got %x", pub, foundPub)
+	}
+}
+
+func TestServer_StoreOverlayNodesSucceedsWithOnlyLocalStore(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+		t.Fatalf("unexpected outgoing DHT connection to %s", addr)
+		return nil, nil
+	}
+
+	overlayKey := []byte("test-overlay-local")
+	nodes, overlayID, _ := newTestOverlayNodes(t, overlayKey)
+
+	stored, gotID, err := server.StoreOverlayNodes(context.Background(), overlayKey, nodes, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Fatalf("expected 1 local replica, got %d", stored)
+	}
+	if string(gotID) != string(overlayID) {
+		t.Fatalf("expected overlay id %x, got %x", overlayID, gotID)
+	}
+
+	found, cont, err := server.FindOverlayNodes(context.Background(), overlayKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found.List) != len(nodes.List) {
+		t.Fatalf("expected %d found overlay nodes, got %d", len(nodes.List), len(found.List))
+	}
+	if cont == nil || !cont.checkedLocal {
+		t.Fatal("expected local lookup to update continuation")
+	}
+
+	_, _, err = server.FindOverlayNodes(context.Background(), overlayKey, cont)
+	if !errors.Is(err, ErrDHTValueIsNotFound) {
+		t.Fatalf("expected continuation to skip local value, got %v", err)
+	}
+}
+
 func TestServer_StoreOverlayNodesReturnsOverlayID(t *testing.T) {
 	server := newTestServer(t)
 	defer server.Close()
@@ -341,12 +518,13 @@ func TestServer_HandleQuery_StoreRejectsTooLargeTTL(t *testing.T) {
 		0,
 		[]byte("value"),
 		UpdateRuleSignature{},
-		time.Duration(_MaxValueTTLSec+1)*time.Second,
+		time.Minute,
 		key,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	val.TTL = int32(time.Now().Add(time.Duration(_MaxValueTTLSec+1) * time.Second).Unix())
 
 	err = server.handleQuery(peer, &adnl.MessageQuery{
 		ID:   make([]byte, 32),

@@ -111,6 +111,14 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 }
 
 func TestTransactionGlobalVersionFallbackContracts(t *testing.T) {
+	noRoot := newTransactionConfig(nil)
+	if got := noRoot.globalVersion(); got != uint32(vmcore.DefaultGlobalVersion) {
+		t.Fatalf("no-root transaction global version = %d, want default v%d", got, vmcore.DefaultGlobalVersion)
+	}
+	if !noRoot.hasGlobalVersion {
+		t.Fatal("no-root transaction config should expose default global version")
+	}
+
 	for _, cfg := range []transactionConfig{
 		{},
 		transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
@@ -125,9 +133,6 @@ func TestTransactionGlobalVersionFallbackContracts(t *testing.T) {
 		}
 		if cfg.specialGasFull() {
 			t.Fatal("missing global version should not enable v5 special-gas-full")
-		}
-		if got := cfg.actionGlobalVersion(); got != uint32(vmcore.DefaultGlobalVersion) {
-			t.Fatalf("transaction action global version fallback = %d, want default v%d", got, vmcore.DefaultGlobalVersion)
 		}
 	}
 }

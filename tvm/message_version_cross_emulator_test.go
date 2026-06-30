@@ -427,12 +427,11 @@ func assertDirectMessageGlobalVersionOverrideParity(t *testing.T, version, machi
 	code := makeDirectMessageInMsgParamsCode(t, newData, !internal)
 
 	cfg := MessageEmulationConfig{
-		Address:          tonopsTestAddr,
-		Now:              now,
-		Balance:          balance,
-		RandSeed:         append([]byte(nil), referenceDefaultWalletSendSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
+		Address:    tonopsTestAddr,
+		Now:        now,
+		Balance:    balance,
+		RandSeed:   append([]byte(nil), referenceDefaultWalletSendSeed...),
+		ConfigRoot: refConfigRoot,
 	}
 
 	var goRes *MessageExecutionResult
@@ -598,14 +597,13 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 	})
 
 	cfg := MessageEmulationConfig{
-		Now:              now,
-		Balance:          balance,
-		RandSeed:         append([]byte(nil), referenceDefaultWalletSendSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
-		BuildProof:       true,
-		AccountRoot:      accountRoot,
-		Libraries:        []*cell.Cell{libs},
+		Now:         now,
+		Balance:     balance,
+		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
+		ConfigRoot:  refConfigRoot,
+		BuildProof:  true,
+		AccountRoot: accountRoot,
+		Libraries:   []*cell.Cell{libs},
 	}
 
 	var goRes *MessageExecutionResult
@@ -879,14 +877,13 @@ func assertDirectMessageBuildProofGlobalVersionOverrideParity(t *testing.T, vers
 	})
 
 	cfg := MessageEmulationConfig{
-		Address:          tonopsTestAddr,
-		Now:              now,
-		Balance:          balance,
-		RandSeed:         append([]byte(nil), referenceDefaultWalletSendSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
-		BuildProof:       true,
-		AccountRoot:      accountRoot,
+		Address:     tonopsTestAddr,
+		Now:         now,
+		Balance:     balance,
+		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
+		ConfigRoot:  refConfigRoot,
+		BuildProof:  true,
+		AccountRoot: accountRoot,
 	}
 
 	var goRes *MessageExecutionResult
@@ -1162,12 +1159,11 @@ func assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t *testing.T,
 	account := mustParseTransactionTestAccount(t, shard)
 
 	accepted, err := machine.CheckExternalMessageAccepted(shard, account, msgCell, msg, CheckExternalMessageAcceptedConfig{
-		Now:              now,
-		BlockLT:          transactionTestLogicalTime,
-		LogicalTime:      transactionTestLogicalTime,
-		RandSeed:         append([]byte(nil), tonopsTestSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
+		Now:         now,
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  refConfigRoot,
 	})
 	if err != nil {
 		t.Fatalf("check external message accepted machine_v=%d effective_v=%d program=%d failed: %v", machineVersion, version, rawProgram%2, err)

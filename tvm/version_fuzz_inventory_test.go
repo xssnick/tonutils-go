@@ -24,8 +24,8 @@ const (
 	expectedSupportedRangePartialVersionFuzzHash    = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	expectedNonCrossVersionNamedFuzzerCount         = 87
 	expectedNonCrossVersionNamedFuzzerHash          = "8b2bf1f0da20eebf1fafbfaed61141de8cd14a4fa7bd578a93ecdd036389dc36"
-	expectedNonCrossVersionNamedTestCount           = 36
-	expectedNonCrossVersionNamedTestHash            = "3c64b487b7a3afbd95df532eccdeb3c54d3fbb19e14213debde21d8a81397bc1"
+	expectedNonCrossVersionNamedTestCount           = 35
+	expectedNonCrossVersionNamedTestHash            = "4c0b3269bb62944ecc2e3b40d7d03a47b87b5dfb4cca5c73707cf27f5ca65f88"
 	expectedPackageLocalVersionMapperShapeCount     = 7
 	expectedPackageLocalVersionMapperShapeHash      = "62c61884b8d5ee64ea57c5936f1a6f673d794af551a45e52942233d417c81074"
 )

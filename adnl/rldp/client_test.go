@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -99,6 +100,98 @@ type testResponse struct {
 type testHeader struct {
 	Name  string `tl:"string"`
 	Value string `tl:"string"`
+}
+
+func TestRLDPPrepareNextPartUsesCppCompatiblePartSize(t *testing.T) {
+	if PartSize != 2_000_000 {
+		t.Fatalf("unexpected default part size %d", PartSize)
+	}
+
+	oldMultiFEC := MultiFECMode
+	MultiFECMode = false
+	defer func() {
+		MultiFECMode = oldMultiFEC
+	}()
+
+	payload := bytes.Repeat([]byte{0x5a}, int(PartSize)+123)
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x01}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	ok, err := transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected first part")
+	}
+
+	first := transfer.getCurrentPart()
+	if first.fec.GetDataSize() != PartSize {
+		t.Fatalf("unexpected first part size %d", first.fec.GetDataSize())
+	}
+
+	ok, err = transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected second part")
+	}
+
+	second := transfer.getCurrentPart()
+	if second.fec.GetDataSize() != 123 {
+		t.Fatalf("unexpected second part size %d", second.fec.GetDataSize())
+	}
+}
+
+func TestRLDPSendFastSymbolsCapsInitialBurst(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x5a}, int(PartSize))
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x02}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	ok, err := transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected first part")
+	}
+
+	var sent atomic.Int64
+	rl := &RLDP{
+		adnl: MockADNL{
+			sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+				sent.Add(1)
+				return nil
+			},
+		},
+		rateLimit:              NewTokenBucket(1<<30, "peer"),
+		activateRecoverySender: make(chan bool, 1),
+	}
+	rl.rateCtrl = NewBBRv2Controller(rl.rateLimit, BBRv2Options{
+		MinRate:      MinRateBytesSec,
+		InitialRate:  InitialRateBytesSec,
+		MaxRate:      MaxRateBytesSec,
+		DefaultRTTMs: 50,
+	})
+	rl.rateLimit.SetCapacityBytes(1 << 30)
+	rl.rateLimit.AddTokens(1 << 30)
+
+	if err := rl.sendFastSymbols(context.Background(), transfer); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sent.Load(); got != maxInitialFastSymbols {
+		t.Fatalf("sent initial symbols=%d want %d", got, maxInitialFastSymbols)
+	}
 }
 
 func TestRLDP_handleMessage(t *testing.T) {

@@ -57,7 +57,7 @@ var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11
 
 const (
 	expectedRuntimeGlobalVersionDynamicGateCount = 2
-	expectedRuntimeGlobalVersionDynamicGateHash  = "539b491c33664eebed15a9e36460b57e44f5d9b40075a512ad75074612c5ef8e"
+	expectedRuntimeGlobalVersionDynamicGateHash  = "aa604ec0f1bae01efc939305d5d16b2021c54c33cf69d25139b2d5ecbbc55f1d"
 
 	expectedTransactionGlobalVersionDynamicGateCount = 1
 )
@@ -449,12 +449,10 @@ func globalVersionGateShapeFixture(globalVersion int, version int, state *State,
 	_ = state.GlobalVersion <= 6
 	_ = s.GlobalVersion > 7
 	_ = cfg.globalVersion() >= 8
-	_ = cfg.actionGlobalVersion() < 9
 	_ = state.effectiveGlobalVersion() >= 10
 	_ = version.Version == 11
-	_ = cfg.GlobalVersion >= 12
 }
-`, 0)
+	`, 0)
 	if err != nil {
 		t.Fatalf("parse global-version gate shape fixture: %v", err)
 	}
@@ -472,13 +470,13 @@ func globalVersionGateShapeFixture(globalVersion int, version int, state *State,
 		return true
 	})
 
-	want := []int{4, 5, 6, 7, 8, 9, 10, 11}
+	want := []int{4, 5, 6, 7, 8, 10, 11}
 	if len(thresholds) != len(want) {
 		t.Fatalf("global-version gate shape thresholds = %v, want %v", thresholds, want)
 	}
 	for i, want := range want {
 		if thresholds[i] != want {
-			t.Fatalf("global-version gate shape thresholds = %v, want %v", thresholds, []int{4, 5, 6, 7, 8, 9, 10, 11})
+			t.Fatalf("global-version gate shape thresholds = %v, want %v", thresholds, []int{4, 5, 6, 7, 8, 10, 11})
 		}
 	}
 }
@@ -1279,7 +1277,7 @@ func runtimeGlobalVersionGateCandidateExpr(expr ast.Expr) bool {
 	switch expr := expr.(type) {
 	case *ast.Ident:
 		switch expr.Name {
-		case "globalVersion", "version", "transactionGlobalVersion", "transactionActionGlobalVersion":
+		case "globalVersion", "version", "transactionGlobalVersion":
 			return true
 		default:
 			return false
@@ -1288,7 +1286,7 @@ func runtimeGlobalVersionGateCandidateExpr(expr ast.Expr) bool {
 		if expr.Sel.Name == "effectiveGlobalVersion" {
 			return true
 		}
-		if expr.Sel.Name == "GlobalVersion" || expr.Sel.Name == "globalVersion" || expr.Sel.Name == "actionGlobalVersion" {
+		if expr.Sel.Name == "GlobalVersion" || expr.Sel.Name == "globalVersion" {
 			return true
 		}
 		if expr.Sel.Name == "Version" {
@@ -1342,9 +1340,9 @@ func runtimeGlobalVersionGateExpr(expr ast.Expr) bool {
 	case *ast.CallExpr:
 		switch name := expr.Fun.(type) {
 		case *ast.Ident:
-			return name.Name == "transactionGlobalVersion" || name.Name == "transactionActionGlobalVersion"
+			return name.Name == "transactionGlobalVersion"
 		case *ast.SelectorExpr:
-			return name.Sel.Name == "effectiveGlobalVersion" || name.Sel.Name == "globalVersion" || name.Sel.Name == "actionGlobalVersion"
+			return name.Sel.Name == "effectiveGlobalVersion" || name.Sel.Name == "globalVersion"
 		default:
 			return false
 		}

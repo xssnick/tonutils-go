@@ -41,8 +41,6 @@ type MessageEmulationConfig struct {
 	InMsgParams         tuple.Tuple
 	Globals             map[int]any
 	GlobalID            int32
-	GlobalVersion       int
-	GlobalVersionSet    bool
 	Libraries           []*cell.Cell
 	Gas                 vm.Gas
 	StopOnAccept        bool
@@ -342,9 +340,6 @@ func buildEmulationC7(addr *address.Address, code *cell.Cell, cfg MessageEmulati
 
 func messageExecutionGlobalVersion(cfg MessageEmulationConfig, fallback int) (int, error) {
 	version := fallback
-	if cfg.GlobalVersionSet {
-		version = cfg.GlobalVersion
-	}
 	if cfg.ConfigRoot != nil {
 		globalVersion, err := (tlb.BlockchainConfig{Root: cfg.ConfigRoot}).GetGlobalVersion()
 		if err != nil {

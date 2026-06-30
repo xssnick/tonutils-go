@@ -22,8 +22,6 @@ type CheckExternalMessageAcceptedConfig struct {
 	DuePayment          any
 	PrecompiledGasUsage *big.Int
 	Libraries           []*cell.Cell
-	GlobalVersion       int
-	GlobalVersionSet    bool
 	ChksigAlwaysSucceed bool
 	TraceHook           vm.TraceHook
 }
@@ -63,8 +61,6 @@ func transactionConfigForExternalMessageAccepted(cfg CheckExternalMessageAccepte
 		DuePayment:          cfg.DuePayment,
 		PrecompiledGasUsage: cfg.PrecompiledGasUsage,
 		Libraries:           cfg.Libraries,
-		GlobalVersion:       cfg.GlobalVersion,
-		GlobalVersionSet:    cfg.GlobalVersionSet,
 		StopOnAccept:        true,
 		ChksigAlwaysSucceed: cfg.ChksigAlwaysSucceed,
 		TraceHook:           cfg.TraceHook,
@@ -158,7 +154,7 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 		return nil, nil
 	}
 
-	globalVersion, err := transactionExecutionGlobalVersion(execCfg, blockchainCfg, tvm.globalVersion)
+	globalVersion, err := transactionExecutionGlobalVersion(blockchainCfg)
 	if err != nil {
 		return nil, err
 	}

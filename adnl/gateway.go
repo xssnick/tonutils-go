@@ -2,6 +2,7 @@ package adnl
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
@@ -25,6 +26,7 @@ type Peer interface {
 	GetDisconnectHandler() func(addr string, key ed25519.PublicKey)
 	SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey))
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
+	SendNop(ctx context.Context) error
 	Query(ctx context.Context, req, result tl.Serializable) error
 	Answer(ctx context.Context, queryID []byte, result tl.Serializable) error
 	Ping(ctx context.Context) (time.Duration, error)
@@ -44,11 +46,13 @@ type adnlClient interface {
 }
 
 type peerConn struct {
-	addr      unsafe.Pointer
-	channelId string
-	clientId  string
-	server    *Gateway
-	client    adnlClient
+	addr         unsafe.Pointer
+	channelId    string
+	clientId     string
+	lastPacketAt int64
+	pendingElem  *list.Element
+	server       *Gateway
+	client       adnlClient
 }
 
 func (p *peerConn) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
@@ -67,6 +71,10 @@ func (p *peerConn) Ping(ctx context.Context) (time.Duration, error) {
 	return p.client.Ping(ctx)
 }
 
+func (p *peerConn) SendNop(ctx context.Context) error {
+	return p.client.SendNop(ctx)
+}
+
 type srvProcessor struct {
 	lastPacketAt int64
 	processor    func(buf []byte) error
@@ -80,11 +88,12 @@ type UDPPacket struct {
 }
 
 type Gateway struct {
-	addrList   unsafe.Pointer
-	id         []byte
-	key        ed25519.PrivateKey
-	processors map[string]*srvProcessor
-	peers      map[string]*peerConn
+	addrList     unsafe.Pointer
+	id           []byte
+	key          ed25519.PrivateKey
+	processors   map[string]*srvProcessor
+	peers        map[string]*peerConn
+	pendingPeers *list.List
 
 	connHandler unsafe.Pointer // func(client Peer) error
 
@@ -97,6 +106,9 @@ type Gateway struct {
 	reader         NetManager
 	onChannelOpen  func(ch *Channel)
 	onChannelClose func(id string)
+
+	maxPendingPeers int
+	pendingPeerTTL  time.Duration
 }
 
 func NewGateway(key ed25519.PrivateKey) *Gateway {
@@ -119,14 +131,19 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 		key:             key,
 		processors:      map[string]*srvProcessor{},
 		peers:           map[string]*peerConn{},
+		pendingPeers:    list.New(),
 		globalCtx:       ctx,
 		globalCtxCancel: cancel,
 		reader:          reader,
+		maxPendingPeers: DefaultMaxPendingPeers,
+		pendingPeerTTL:  DefaultPendingPeerTTL,
 	}
 }
 
 var PacketsBufferSize = 128 * 1024
 var DefaultUDPBufferSize = 32 << 20
+var DefaultMaxPendingPeers = 8192
+var DefaultPendingPeerTTL = 30 * time.Second
 
 var DefaultListener = func(addr string) (net.PacketConn, error) {
 	lp, err := net.ListenPacket("udp", addr)
@@ -136,10 +153,14 @@ var DefaultListener = func(addr string) (net.PacketConn, error) {
 
 	if conn, ok := lp.(*net.UDPConn); ok {
 		if err := conn.SetReadBuffer(DefaultUDPBufferSize); err != nil {
-			Logger("[ADNL] failed to set read buffer:", err)
+			if Logger != nil {
+				Logger("[ADNL] failed to set read buffer:", err)
+			}
 		}
 		if err := conn.SetWriteBuffer(DefaultUDPBufferSize); err != nil {
-			Logger("[ADNL] failed to set write buffer:", err)
+			if Logger != nil {
+				Logger("[ADNL] failed to set write buffer:", err)
+			}
 		}
 	}
 
@@ -317,29 +338,37 @@ func (g *Gateway) listen(rootId []byte) {
 				continue
 			}
 
-			Logger("[ADNL DEBUG] gateway root packet", "len", len(buf), "from", pk.from.String())
+			if Logger != nil {
+				Logger("[ADNL DEBUG] gateway root packet", "len", len(buf), "from", pk.from.String())
+			}
 
 			data, err := decodePacket(g.key, buf)
 			if err != nil {
-				Logger("failed to decode packet:", err.Error())
+				if Logger != nil {
+					Logger("failed to decode packet:", err.Error())
+				}
 				continue
 			}
 
 			packet, err := parsePacket(data)
 			if err != nil {
-				Logger("failed to parse packet:", err.Error())
+				if Logger != nil {
+					Logger("failed to parse packet:", err.Error())
+				}
 				continue
 			}
-			Logger(
-				"[ADNL DEBUG] gateway parsed root packet",
-				"from_full", packet.From != nil,
-				"from_short", packet.FromIDShort != nil,
-				"msgs", len(packet.Messages),
-				"seqno", packet.SeqnoValue(),
-				"confirm_seqno", packet.ConfirmSeqnoValue(),
-				"reinit", packet.ReinitDateValue(),
-				"dst_reinit", packet.DstReinitDateValue(),
-			)
+			if Logger != nil {
+				Logger(
+					"[ADNL DEBUG] gateway parsed root packet",
+					"from_full", packet.From != nil,
+					"from_short", packet.FromIDShort != nil,
+					"msgs", len(packet.Messages),
+					"seqno", packet.SeqnoValue(),
+					"confirm_seqno", packet.ConfirmSeqnoValue(),
+					"reinit", packet.ReinitDateValue(),
+					"dst_reinit", packet.DstReinitDateValue(),
+				)
+			}
 
 			var (
 				cli     *peerConn
@@ -350,7 +379,9 @@ func (g *Gateway) listen(rootId []byte) {
 				peerKey = append(ed25519.PublicKey(nil), packet.From.Key...)
 				peerId, err = tl.Hash(keys.PublicKeyED25519{Key: peerKey})
 				if err != nil {
-					Logger("invalid peer id, err:", err.Error())
+					if Logger != nil {
+						Logger("invalid peer id, err:", err.Error())
+					}
 					continue
 				}
 			} else if packet.FromIDShort != nil {
@@ -372,26 +403,33 @@ func (g *Gateway) listen(rootId []byte) {
 			}
 
 			if err = packet.verifySignature(peerKey); err != nil {
-				Logger("failed to verify packet signature:", err.Error())
+				if Logger != nil {
+					Logger("failed to verify packet signature:", err.Error())
+				}
 				continue
 			}
 
 			if cli == nil {
 				cli, err = g.registerClient(pk.from, peerKey, string(peerId))
 				if err != nil {
-					Logger("failed to register client:", err.Error())
+					if Logger != nil {
+						Logger("failed to register client:", err.Error())
+					}
 					continue
 				}
 			} else {
+				atomic.StoreInt64(&cli.lastPacketAt, time.Now().UnixNano())
 				cli.checkUpdateAddr(pk.from)
 			}
 
 			err = cli.client.processPacket(packet, false)
 			if err != nil {
-				Logger("failed to process ADNL packet",
-					"peer", hex.EncodeToString(peerId),
-					"from", pk.from.String(),
-					"error", err.Error())
+				if Logger != nil {
+					Logger("failed to process ADNL packet",
+						"peer", hex.EncodeToString(peerId),
+						"from", pk.from.String(),
+						"error", err.Error())
+				}
 				continue
 			}
 
@@ -403,17 +441,26 @@ func (g *Gateway) listen(rootId []byte) {
 		g.mx.RUnlock()
 
 		if proc == nil {
+			if Logger != nil {
+				Logger(
+					"failed to find ADNL channel processor",
+					"id", hex.EncodeToString(id),
+					"from", pk.from.String(),
+				)
+			}
 			continue
 		}
 
 		atomic.StoreInt64(&proc.lastPacketAt, time.Now().Unix())
 		if err := proc.processor(buf); err != nil {
-			Logger(
-				"failed to process ADNL channel packet",
-				"id", hex.EncodeToString(id),
-				"from", pk.from.String(),
-				"error", err.Error(),
-			)
+			if Logger != nil {
+				Logger(
+					"failed to process ADNL channel packet",
+					"id", hex.EncodeToString(id),
+					"from", pk.from.String(),
+					"error", err.Error(),
+				)
+			}
 		}
 	}
 }
@@ -423,6 +470,71 @@ func (p *peerConn) checkUpdateAddr(addr net.Addr) {
 	currentAddr := *(*net.Addr)(atomic.LoadPointer(&p.addr))
 	if currentAddr.String() != addr.String() {
 		atomic.StorePointer(&p.addr, unsafe.Pointer(&addr))
+	}
+}
+
+func (g *Gateway) touchPendingPeerLocked(peer *peerConn, now int64) {
+	atomic.StoreInt64(&peer.lastPacketAt, now)
+	if peer.pendingElem != nil {
+		g.pendingPeers.MoveToBack(peer.pendingElem)
+	}
+}
+
+func (g *Gateway) removePendingPeerLocked(peer *peerConn) {
+	if peer.pendingElem == nil {
+		return
+	}
+
+	g.pendingPeers.Remove(peer.pendingElem)
+	peer.pendingElem = nil
+}
+
+func (g *Gateway) dropPeerLocked(peer *peerConn) bool {
+	g.removePendingPeerLocked(peer)
+	if g.peers[peer.clientId] != peer {
+		return false
+	}
+
+	delete(g.peers, peer.clientId)
+	return true
+}
+
+func (g *Gateway) evictPendingPeersLocked() []*peerConn {
+	if g.maxPendingPeers <= 0 {
+		return nil
+	}
+
+	var evicted []*peerConn
+	for g.pendingPeers.Len() > g.maxPendingPeers {
+		peer := g.pendingPeers.Front().Value.(*peerConn)
+		if g.dropPeerLocked(peer) {
+			evicted = append(evicted, peer)
+		}
+	}
+	return evicted
+}
+
+func (g *Gateway) collectIdlePendingPeersLocked(now int64) []*peerConn {
+	if g.pendingPeerTTL <= 0 {
+		return nil
+	}
+
+	var idle []*peerConn
+	ttl := g.pendingPeerTTL.Nanoseconds()
+	for e := g.pendingPeers.Front(); e != nil; {
+		next := e.Next()
+		peer := e.Value.(*peerConn)
+		if now-atomic.LoadInt64(&peer.lastPacketAt) > ttl && g.dropPeerLocked(peer) {
+			idle = append(idle, peer)
+		}
+		e = next
+	}
+	return idle
+}
+
+func closePeers(peers []*peerConn) {
+	for _, peer := range peers {
+		peer.client.Close()
 	}
 }
 
@@ -437,12 +549,13 @@ func (g *Gateway) startOldPeersChecker() {
 		case <-t.C:
 		}
 
-		now := time.Now().Unix()
+		now := time.Now()
 
 		var prc []*srvProcessor
+		var peers []*peerConn
 		g.mx.Lock()
 		for k, pr := range g.processors {
-			if now-atomic.LoadInt64(&pr.lastPacketAt) > 10*60 {
+			if now.Unix()-atomic.LoadInt64(&pr.lastPacketAt) > 10*60 {
 				prc = append(prc, pr)
 				delete(g.processors, k)
 
@@ -451,6 +564,7 @@ func (g *Gateway) startOldPeersChecker() {
 				}
 			}
 		}
+		peers = g.collectIdlePendingPeersLocked(now.UnixNano())
 		g.mx.Unlock()
 
 		if len(prc) > 0 {
@@ -458,6 +572,7 @@ func (g *Gateway) startOldPeersChecker() {
 				pr.closer()
 			}
 		}
+		closePeers(peers)
 	}
 }
 
@@ -481,17 +596,20 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	}
 
 	g.mx.Lock()
+	now := time.Now().UnixNano()
 	peer := g.peers[id]
 	if peer != nil {
+		g.touchPendingPeerLocked(peer, now)
 		g.mx.Unlock()
 		peer.checkUpdateAddr(addr)
 		return peer, nil
 	}
 
 	peer = &peerConn{
-		addr:     unsafe.Pointer(&addr),
-		clientId: id,
-		server:   g,
+		addr:         unsafe.Pointer(&addr),
+		clientId:     id,
+		lastPacketAt: now,
+		server:       g,
 	}
 
 	addrList := *(*address.List)(atomic.LoadPointer(&g.addrList))
@@ -500,6 +618,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 
 	peerId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
 	if err != nil {
+		g.mx.Unlock()
 		return nil, err
 	}
 
@@ -507,6 +626,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	a.peerKey = key
 	a.peerKeyX25519, err = keys.Ed25519PubToX25519(key)
 	if err != nil {
+		g.mx.Unlock()
 		return nil, err
 	}
 
@@ -520,17 +640,25 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	peer.client = a
 
 	g.peers[id] = peer
+	peer.pendingElem = g.pendingPeers.PushBack(peer)
+	evicted := g.evictPendingPeersLocked()
 
 	// setup basic disconnect handler to auto-cleanup processors list
 	peer.SetDisconnectHandler(nil)
 
 	a.SetChannelReadyHandler(func(ch *Channel) {
-		oldId := peer.channelId
-
 		chID := string(ch.id)
-		peer.channelId = chID
 
 		g.mx.Lock()
+		if g.peers[peer.clientId] != peer {
+			g.mx.Unlock()
+			return
+		}
+
+		oldId := peer.channelId
+		peer.channelId = chID
+		g.removePendingPeerLocked(peer)
+
 		if oldId != "" {
 			delete(g.processors, oldId)
 
@@ -551,6 +679,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 
 	connHandler := atomic.LoadPointer(&g.connHandler)
 	g.mx.Unlock()
+	closePeers(evicted)
 
 	if connHandler != nil {
 		type handlerFunc func(client Peer) error
@@ -592,14 +721,19 @@ func (g *Gateway) Close() error {
 	peers := make([]*peerConn, 0, len(g.peers))
 	for _, peer := range g.peers {
 		peers = append(peers, peer)
+		g.removePendingPeerLocked(peer)
 	}
 	g.peers = map[string]*peerConn{}
-	g.processors = map[string]*srvProcessor{}
+	g.pendingPeers.Init()
 	g.mx.Unlock()
 
 	for _, peer := range peers {
 		peer.client.Close()
 	}
+
+	g.mx.Lock()
+	g.processors = map[string]*srvProcessor{}
+	g.mx.Unlock()
 
 	g.reader.CloseConnection(g)
 	return nil
@@ -645,10 +779,14 @@ func (p *peerConn) SetQueryHandler(handler func(msg *MessageQuery) error) {
 func (p *peerConn) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
 	p.client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
 		p.server.mx.Lock()
-		delete(p.server.processors, p.channelId)
+		p.server.removePendingPeerLocked(p)
 		delete(p.server.peers, p.clientId)
-		if p.server.onChannelClose != nil {
-			p.server.onChannelClose(p.channelId)
+		if p.channelId != "" {
+			_, ok := p.server.processors[p.channelId]
+			delete(p.server.processors, p.channelId)
+			if ok && p.server.onChannelClose != nil {
+				p.server.onChannelClose(p.channelId)
+			}
 		}
 		p.server.mx.Unlock()
 

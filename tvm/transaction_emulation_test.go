@@ -78,7 +78,7 @@ func TestTransactionPrecompiledGasUsageOverridesSuccessfulTVM(t *testing.T) {
 	}
 }
 
-func TestTransactionConfigForExternalMessageAcceptedCopiesGlobalVersionAndRuntimeFields(t *testing.T) {
+func TestTransactionConfigForExternalMessageAcceptedCopiesRuntimeFields(t *testing.T) {
 	library := cell.BeginCell().MustStoreUInt(0xA5, 8).EndCell()
 	configRoot := cell.BeginCell().MustStoreUInt(0xC0FE, 16).EndCell()
 	prevBlocks := &struct{ tag uint32 }{tag: 0xAA}
@@ -98,8 +98,6 @@ func TestTransactionConfigForExternalMessageAcceptedCopiesGlobalVersionAndRuntim
 		DuePayment:          duePayment,
 		PrecompiledGasUsage: precompiledGasUsage,
 		Libraries:           []*cell.Cell{library},
-		GlobalVersion:       9,
-		GlobalVersionSet:    true,
 		ChksigAlwaysSucceed: true,
 		TraceHook:           traceHook,
 	}
@@ -120,9 +118,6 @@ func TestTransactionConfigForExternalMessageAcceptedCopiesGlobalVersionAndRuntim
 	}
 	if len(got.Libraries) != 1 || got.Libraries[0] != cfg.Libraries[0] {
 		t.Fatal("libraries were not copied")
-	}
-	if got.GlobalVersion != cfg.GlobalVersion || got.GlobalVersionSet != cfg.GlobalVersionSet {
-		t.Fatalf("global version = %d/%t, want %d/%t", got.GlobalVersion, got.GlobalVersionSet, cfg.GlobalVersion, cfg.GlobalVersionSet)
 	}
 	if !got.StopOnAccept {
 		t.Fatal("StopOnAccept should be forced for acceptance checks")
@@ -2135,6 +2130,7 @@ func TestEmulateTransactionActionSendMsgNoFundsAbortsWithoutCommit(t *testing.T)
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas:         vmcore.NewGas(vmcore.GasConfig{Max: 1_000_000, Limit: 1_000_000}),
 	})
 	if err != nil {
@@ -2287,6 +2283,7 @@ func TestEmulateTransactionActionBounceRequiresMode16(t *testing.T) {
 				Now:         uint32(tonopsTestTime.Unix()),
 				BlockLT:     transactionTestLogicalTime,
 				LogicalTime: transactionTestLogicalTime,
+				ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 				Gas:         vmcore.NewGas(vmcore.GasConfig{Max: 1_000_000, Limit: 1_000_000}),
 			})
 			if err != nil {
@@ -2337,7 +2334,7 @@ func TestTransactionApplyActionsReserveCurrencyAffectsLaterSends(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply actions failed: %v", err)
 	}
@@ -2384,7 +2381,7 @@ func TestTransactionApplyActionsSendMode2SkipsInvalidExtraFlags(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply actions failed: %v", err)
 	}
@@ -2429,7 +2426,7 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 					Actions:   malformed,
 					Committed: true,
 				},
-			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 			if err != nil {
 				t.Fatalf("apply actions failed: %v", err)
 			}

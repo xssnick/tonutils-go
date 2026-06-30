@@ -18,6 +18,7 @@ type mockADNL struct {
 
 	sendCustomCalls []tl.Serializable
 	queryCalls      []tl.Serializable
+	answerCalls     []tl.Serializable
 
 	queryErr       error
 	queryResponder func(req tl.Serializable, result tl.Serializable) error
@@ -65,6 +66,7 @@ func (m *mockADNL) Query(ctx context.Context, req, result tl.Serializable) error
 }
 
 func (m *mockADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
+	m.answerCalls = append(m.answerCalls, result)
 	return nil
 }
 

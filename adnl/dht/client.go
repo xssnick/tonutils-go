@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/liteclient"
-	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -59,6 +58,7 @@ type Client struct {
 // Can be used in case of everything is offline in single DHT node, to check another values.
 type Continuation struct {
 	checkedNodes []*dhtNode
+	checkedLocal bool
 }
 
 type NodeInfo struct {
@@ -66,7 +66,7 @@ type NodeInfo struct {
 	Key     ed25519.PublicKey
 }
 
-var Logger = func(v ...any) {}
+var Logger func(v ...any)
 
 func NewClientFromConfigUrl(ctx context.Context, gateway Gateway, cfgUrl string) (*Client, error) {
 	cfg, err := liteclient.GetConfigFromUrl(ctx, cfgUrl)
@@ -123,7 +123,9 @@ func newClient(gateway Gateway, nodes []*Node, networkID int32, k, a int) (*Clie
 			if node != nil {
 				logAddr = describeNodeAddress(node.AddrList)
 			}
-			Logger("failed to add DHT node", logAddr, " from config, err:", err.Error())
+			if Logger != nil {
+				Logger("failed to add DHT node", logAddr, " from config, err:", err.Error())
+			}
 			continue
 		}
 	}
@@ -169,7 +171,10 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 
 	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
-		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
+		return nil, fmt.Errorf("unsupported id type %T", node.ID)
+	}
+	if len(pub.Key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid ed25519 public key")
 	}
 
 	kid, err := tl.Hash(pub)
@@ -263,7 +268,7 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 
 	keyID, ok := val.KeyDescription.ID.(keys.PublicKeyED25519)
 	if !ok {
-		return nil, nil, fmt.Errorf("unsupported key type %s", reflect.TypeOf(val.KeyDescription.ID))
+		return nil, nil, fmt.Errorf("unsupported key type %T", val.KeyDescription.ID)
 	}
 
 	return &list, keyID.Key, nil
@@ -774,6 +779,13 @@ func buildStoreValue(
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
 ) (Value, []byte, error) {
+	if err := checkValuePublicKey(id); err != nil {
+		return Value{}, nil, err
+	}
+	if err := checkValueUpdateRule(rule); err != nil {
+		return Value{}, nil, err
+	}
+
 	idKey, err := tl.Hash(id)
 	if err != nil {
 		return Value{}, nil, err
@@ -795,6 +807,9 @@ func buildStoreValue(
 
 	switch rule.(type) {
 	case UpdateRuleSignature:
+		if len(ownerKey) != ed25519.PrivateKeySize {
+			return Value{}, nil, fmt.Errorf("invalid ed25519 private key")
+		}
 		val.KeyDescription.Signature, err = signTL(val.KeyDescription, ownerKey)
 		if err != nil {
 			return Value{}, nil, fmt.Errorf("failed to sign key description: %w", err)
@@ -807,6 +822,9 @@ func buildStoreValue(
 
 	keyId, err := tl.Hash(val.KeyDescription.Key)
 	if err != nil {
+		return Value{}, nil, err
+	}
+	if err = checkValue(keyId, &val); err != nil {
 		return Value{}, nil, err
 	}
 	return val, keyId, nil

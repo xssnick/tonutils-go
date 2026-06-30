@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"reflect"
@@ -23,17 +22,11 @@ import (
 const (
 	serverMaintenanceInterval = 10 * time.Second
 	serverRepublishInterval   = 10 * time.Second
-	serverReverseTTL          = 5 * time.Minute
 	serverRefreshWorkers      = 16
 	defaultMemoryStoreMaxKeys = 4096
 )
 
-type reverseConnection struct {
-	addr     string
-	key      ed25519.PublicKey
-	keyID    []byte
-	expireAt time.Time
-}
+var errReverseConnectionsDisabled = errors.New("dht reverse connections are disabled")
 
 type localStoreError struct {
 	err error
@@ -55,10 +48,8 @@ type Server struct {
 	store ValueStore
 	done  chan struct{}
 
-	mx                 sync.RWMutex
-	ourValues          map[string]*Value
-	reverseConnections map[string]reverseConnection
-	ourReverseClients  map[string]struct{}
+	mx        sync.RWMutex
+	ourValues map[string]*Value
 }
 
 func NewServer(gateway Gateway, key ed25519.PrivateKey, nodes []*Node, store ValueStore) (*Server, error) {
@@ -87,15 +78,12 @@ func newServer(gateway Gateway, key ed25519.PrivateKey, nodes []*Node, k, a int,
 	}
 
 	s := &Server{
-		Client:             client,
-		key:                key,
-		store:              store,
-		done:               make(chan struct{}),
-		ourValues:          map[string]*Value{},
-		reverseConnections: map[string]reverseConnection{},
-		ourReverseClients:  map[string]struct{}{},
+		Client:    client,
+		key:       key,
+		store:     store,
+		done:      make(chan struct{}),
+		ourValues: map[string]*Value{},
 	}
-	s.ourReverseClients[string(client.selfID)] = struct{}{}
 
 	s.Client.queryPrefix = s.queryPrefix
 	gateway.SetConnectionHandler(s.handlePeer)
@@ -191,6 +179,84 @@ func (s *Server) StoreOverlayNodes(
 	return storedCount, overlayID, err
 }
 
+func (s *Server) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
+	keyHash, err := tl.Hash(keys.PublicKeyOverlay{
+		Key: overlayKey,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get key for overlay: %w", err)
+	}
+
+	vv, cont, err := s.FindValue(ctx, &Key{
+		ID:    keyHash,
+		Name:  []byte("nodes"),
+		Index: 0,
+	}, continuation...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to find dht key for overlay: %w", err)
+	}
+
+	var nodes overlay.NodesList
+	_, err = tl.ParseNoCopy(&nodes, vv.Data, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse dht data for overlay nodes: %w", err)
+	}
+	return &nodes, cont, nil
+}
+
+func (s *Server) FindAddresses(ctx context.Context, key []byte) (*address.List, ed25519.PublicKey, error) {
+	if len(key) != 32 {
+		return nil, nil, fmt.Errorf("key should have 256 bits")
+	}
+
+	val, _, err := s.FindValue(ctx, &Key{
+		ID:    key,
+		Name:  []byte("address"),
+		Index: 0,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var list address.List
+	_, err = tl.ParseNoCopy(&list, val.Data, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse address list: %w", err)
+	}
+
+	keyID, ok := val.KeyDescription.ID.(keys.PublicKeyED25519)
+	if !ok {
+		return nil, nil, fmt.Errorf("unsupported key type %T", val.KeyDescription.ID)
+	}
+
+	return &list, keyID.Key, nil
+}
+
+func (s *Server) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
+	id, err := tl.Hash(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	cont := &Continuation{}
+	if len(continuation) > 0 && continuation[0] != nil {
+		cont = continuation[0]
+	}
+
+	if !cont.checkedLocal {
+		cont.checkedLocal = true
+		value, err := s.getStoredValue(id)
+		if err != nil {
+			return nil, nil, err
+		}
+		if value != nil && isValueAcceptable(value) {
+			return value, cont, nil
+		}
+	}
+
+	return s.Client.FindValue(ctx, key, cont)
+}
+
 func (s *Server) Store(
 	ctx context.Context,
 	id any,
@@ -230,12 +296,17 @@ func (s *Server) storePreparedValue(ctx context.Context, val *Value, keyID []byt
 
 	nearest := s.collectNearestNodes(ctx, keyID)
 
+	storedLocally := false
 	if s.shouldStoreLocally(keyID, nearest) {
 		if err = s.storeIn(keyID, val); err != nil {
 			return 0, &localStoreError{err: err}
 		}
+		storedLocally = true
 	}
 	if len(nearest) == 0 {
+		if storedLocally {
+			return 1, nil
+		}
 		return 0, fmt.Errorf("no alive nodes found to store this key")
 	}
 
@@ -264,111 +335,11 @@ func (s *Server) shouldStoreLocally(keyID []byte, nearest []*dhtNode) bool {
 }
 
 func (s *Server) RegisterReverseConnection(ctx context.Context) error {
-	pub := s.gateway.GetPublicKey()
-	if len(pub) == 0 {
-		return fmt.Errorf("gateway public key is not available")
-	}
-
-	clientID := append([]byte{}, s.selfID...)
-	ttl := int32(time.Now().Add(serverReverseTTL).Unix())
-	signature := ed25519.Sign(s.key, registerReverseConnectionToSign(clientID, s.selfID, ttl))
-	req := RegisterReverseConnection{
-		Node:      keys.PublicKeyED25519{Key: pub},
-		TTL:       ttl,
-		Signature: signature,
-	}
-
-	s.mx.Lock()
-	s.ourReverseClients[string(clientID)] = struct{}{}
-	s.mx.Unlock()
-
-	keyID := reverseConnectionKeyID(clientID)
-	nodes := s.collectNearestNodes(ctx, keyID)
-	if len(nodes) == 0 {
-		return fmt.Errorf("no alive nodes found to register reverse connection")
-	}
-
-	var stored int
-	for _, node := range nodes {
-		if node == nil {
-			continue
-		}
-
-		res, err := s.queryNode(ctx, node, req)
-		if err != nil {
-			continue
-		}
-		if _, ok := res.(Stored); ok {
-			stored++
-		}
-	}
-
-	if stored == 0 {
-		return fmt.Errorf("failed to register reverse connection")
-	}
-	return nil
+	return errReverseConnectionsDisabled
 }
 
 func (s *Server) RequestReversePing(ctx context.Context, clientID []byte) error {
-	target, err := s.selfADNLNode()
-	if err != nil {
-		return err
-	}
-
-	targetCopy := *target
-	targetCopy.Signature = nil
-	dataToSign, err := tl.Serialize(targetCopy, true)
-	if err != nil {
-		return err
-	}
-
-	req := &RequestReversePing{
-		Target:    *target,
-		Signature: ed25519.Sign(s.key, dataToSign),
-		Client:    append([]byte{}, clientID...),
-		K:         int32(s.k),
-	}
-
-	if res, err := s.requestReversePing(req); err == nil {
-		if _, ok := res.(ReversePingOKResult); ok {
-			return nil
-		}
-	}
-
-	keyID := reverseConnectionKeyID(clientID)
-	queue := s.collectNearestNodes(ctx, keyID)
-	checked := map[string]struct{}{}
-
-	for len(queue) > 0 {
-		node := queue[0]
-		queue = queue[1:]
-		if node == nil {
-			continue
-		}
-		if _, ok := checked[node.id()]; ok {
-			continue
-		}
-		checked[node.id()] = struct{}{}
-
-		res, err := s.queryNode(ctx, node, *req)
-		if err != nil {
-			continue
-		}
-
-		switch r := res.(type) {
-		case ReversePingOKResult:
-			return nil
-		case ClientNotFoundResult:
-			for _, newNode := range r.Nodes.List {
-				an, err := s.addNode(newNode)
-				if err == nil && an != nil {
-					queue = append(queue, an)
-				}
-			}
-		}
-	}
-
-	return fmt.Errorf("reverse ping path was not found")
+	return errReverseConnectionsDisabled
 }
 
 func (s *Server) handlePeer(peer adnl.Peer) error {
@@ -410,7 +381,9 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 	s.absorbSenderNode(peer, sender)
 
 	answer := func(result tl.Serializable) error {
-		adnl.Logger("[DHT DEBUG] answering", reflect.TypeOf(result), "qid", fmt.Sprintf("%x", msg.ID))
+		if Logger != nil {
+			Logger("[DHT DEBUG] answering", reflect.TypeOf(result), "qid", fmt.Sprintf("%x", msg.ID))
+		}
 		return peer.Answer(context.Background(), msg.ID, result)
 	}
 
@@ -420,24 +393,32 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 	case FindNode:
 		return answer(NodesList{List: s.getNearestNodes(q.Key, s.limitK(q.K))})
 	case FindValue:
-		adnl.Logger("[DHT DEBUG] findValue query", fmt.Sprintf("%x", q.Key), "qid", fmt.Sprintf("%x", msg.ID))
+		if Logger != nil {
+			Logger("[DHT DEBUG] findValue query", fmt.Sprintf("%x", q.Key), "qid", fmt.Sprintf("%x", msg.ID))
+		}
 		value, err := s.getStoredValue(q.Key)
 		if err != nil {
-			adnl.Logger("[DHT DEBUG] findValue getStoredValue err", err, "qid", fmt.Sprintf("%x", msg.ID))
+			if Logger != nil {
+				Logger("[DHT DEBUG] findValue getStoredValue err", err, "qid", fmt.Sprintf("%x", msg.ID))
+			}
 			return err
 		}
 		if value != nil {
-			adnl.Logger(
-				"[DHT DEBUG] findValue hit",
-				"name", string(value.KeyDescription.Key.Name),
-				"idx", value.KeyDescription.Key.Index,
-				"ttl", value.TTL,
-				"data_len", len(value.Data),
-				"qid", fmt.Sprintf("%x", msg.ID),
-			)
+			if Logger != nil {
+				Logger(
+					"[DHT DEBUG] findValue hit",
+					"name", string(value.KeyDescription.Key.Name),
+					"idx", value.KeyDescription.Key.Index,
+					"ttl", value.TTL,
+					"data_len", len(value.Data),
+					"qid", fmt.Sprintf("%x", msg.ID),
+				)
+			}
 			return answer(ValueFoundResult{Value: *value})
 		}
-		adnl.Logger("[DHT DEBUG] findValue miss", "qid", fmt.Sprintf("%x", msg.ID))
+		if Logger != nil {
+			Logger("[DHT DEBUG] findValue miss", "qid", fmt.Sprintf("%x", msg.ID))
+		}
 		return answer(ValueNotFoundResult{
 			Nodes: NodesList{List: s.getNearestNodes(q.Key, s.limitK(q.K))},
 		})
@@ -460,16 +441,9 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 		}
 		return answer(*node)
 	case RegisterReverseConnection:
-		if err := s.registerReverseConnection(peer, &q); err != nil {
-			return err
-		}
-		return answer(Stored{})
+		return errReverseConnectionsDisabled
 	case RequestReversePing:
-		result, err := s.requestReversePing(&q)
-		if err != nil {
-			return err
-		}
-		return answer(result)
+		return errReverseConnectionsDisabled
 	default:
 		return fmt.Errorf("unsupported dht query type %s", reflect.TypeOf(payload))
 	}
@@ -479,9 +453,9 @@ func (s *Server) handleMessage(peer adnl.Peer, msg *adnl.MessageCustom) error {
 	sender, payload := unwrapPrefixedPayload(msg.Data)
 	s.absorbSenderNode(peer, sender)
 
-	switch q := payload.(type) {
+	switch payload.(type) {
 	case RequestReversePingCont:
-		return s.handleReversePingCont(&q)
+		return nil
 	default:
 		return fmt.Errorf("unsupported dht message type %s", reflect.TypeOf(payload))
 	}
@@ -504,24 +478,6 @@ func (s *Server) selfNode() (*Node, error) {
 		s.networkID,
 		s.key,
 	)
-}
-
-func (s *Server) selfADNLNode() (*adnl.Node, error) {
-	addrList := s.gateway.GetAddressList()
-	node := &adnl.Node{
-		ID:       keys.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)},
-		AddrList: cloneAddressList(&addrList),
-		Version:  int32(time.Now().Unix()),
-	}
-
-	nodeCopy := *node
-	nodeCopy.Signature = nil
-	data, err := tl.Serialize(nodeCopy, true)
-	if err != nil {
-		return nil, err
-	}
-	node.Signature = ed25519.Sign(s.key, data)
-	return node, nil
 }
 
 func (s *Server) absorbSenderNode(peer adnl.Peer, node *Node) {
@@ -601,6 +557,9 @@ func (s *Server) storeIn(keyID []byte, value *Value) error {
 	if value == nil {
 		return fmt.Errorf("nil value")
 	}
+	if err := checkValueWithNetworkID(keyID, value, s.networkID); err != nil {
+		return err
+	}
 	now := time.Now().Unix()
 	if err := checkValueTTLAt(value.TTL, now); err != nil {
 		return err
@@ -646,95 +605,6 @@ func (s *Server) distance(keyID []byte, max int) int {
 		}
 	}
 	return count
-}
-
-func (s *Server) registerReverseConnection(peer adnl.Peer, query *RegisterReverseConnection) error {
-	now := time.Now()
-	expiresAt := time.Unix(int64(query.TTL), 0)
-	if !expiresAt.After(now) {
-		return nil
-	}
-
-	clientID, err := tl.Hash(query.Node)
-	if err != nil {
-		return err
-	}
-
-	toSign := registerReverseConnectionToSign(clientID, s.selfID, query.TTL)
-	pub, ok := query.Node.(keys.PublicKeyED25519)
-	if !ok {
-		return fmt.Errorf("unsupported reverse connection node type %T", query.Node)
-	}
-	if !ed25519.Verify(pub.Key, toSign, query.Signature) {
-		return fmt.Errorf("invalid reverse connection signature")
-	}
-
-	s.mx.Lock()
-	s.reverseConnections[string(clientID)] = reverseConnection{
-		addr:     peer.RemoteAddr(),
-		key:      peer.GetPubKey(),
-		keyID:    reverseConnectionKeyID(clientID),
-		expireAt: expiresAt,
-	}
-	s.mx.Unlock()
-	return nil
-}
-
-func (s *Server) requestReversePing(query *RequestReversePing) (any, error) {
-	if err := query.Target.CheckSignature(); err != nil {
-		return nil, err
-	}
-
-	s.mx.RLock()
-	rc, ok := s.reverseConnections[string(query.Client)]
-	s.mx.RUnlock()
-
-	if ok && time.Now().Before(rc.expireAt) {
-		peer, err := s.gateway.RegisterClient(rc.addr, rc.key)
-		if err != nil {
-			return nil, err
-		}
-		if err = peer.SendCustomMessage(context.Background(), RequestReversePingCont{
-			Target:    query.Target,
-			Signature: append([]byte{}, query.Signature...),
-			Client:    append([]byte{}, query.Client...),
-		}); err != nil {
-			return nil, err
-		}
-		return ReversePingOKResult{}, nil
-	}
-
-	return ClientNotFoundResult{
-		Nodes: NodesList{List: s.getNearestNodes(reverseConnectionKeyID(query.Client), s.limitK(query.K))},
-	}, nil
-}
-
-func (s *Server) handleReversePingCont(query *RequestReversePingCont) error {
-	if _, ok := s.ourReverseClients[string(query.Client)]; !ok {
-		return nil
-	}
-
-	if err := query.Target.CheckSignature(); err != nil {
-		return err
-	}
-
-	pub, ok := query.Target.ID.(keys.PublicKeyED25519)
-	if !ok {
-		return fmt.Errorf("unsupported reverse ping target key %T", query.Target.ID)
-	}
-	if query.Target.AddrList == nil || len(query.Target.AddrList.Addresses) == 0 {
-		return fmt.Errorf("reverse ping target has no addresses")
-	}
-
-	_, addr, err := firstDialAddress(query.Target.AddrList.Addresses)
-	if err != nil {
-		return fmt.Errorf("reverse ping target has no dialable addresses")
-	}
-	peer, err := s.gateway.RegisterClient(addr, pub.Key)
-	if err != nil {
-		return err
-	}
-	return peer.SendCustomMessage(context.Background(), tl.Raw(nil))
 }
 
 func (s *Server) maintenanceLoop() {
@@ -885,11 +755,6 @@ func (s *Server) cleanup() {
 			delete(s.ourValues, keyID)
 		}
 	}
-	for clientID, conn := range s.reverseConnections {
-		if !conn.expireAt.After(now) {
-			delete(s.reverseConnections, clientID)
-		}
-	}
 	s.mx.Unlock()
 }
 
@@ -1038,23 +903,6 @@ func (s *Server) limitK(k int32) int {
 		return s.k
 	}
 	return int(k)
-}
-
-func registerReverseConnectionToSign(clientID, dhtID []byte, ttl int32) []byte {
-	buf := make([]byte, 32+32+4)
-	copy(buf[:32], clientID)
-	copy(buf[32:64], dhtID)
-	binary.LittleEndian.PutUint32(buf[64:], uint32(ttl))
-	return buf
-}
-
-func reverseConnectionKeyID(clientID []byte) []byte {
-	keyID, _ := tl.Hash(Key{
-		ID:    clientID,
-		Name:  []byte("address"),
-		Index: 0,
-	})
-	return keyID
 }
 
 func xorBit(a, b []byte, bit int) bool {

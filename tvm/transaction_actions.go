@@ -106,7 +106,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		actionsRoot = cell.BeginCell().EndCell()
 	}
 
-	globalVersion := cfg.actionGlobalVersion()
+	globalVersion := cfg.globalVersion()
 	loadedActions, err := transactionLoadActions(actionsRoot, globalVersion)
 	if err != nil {
 		return nil, err

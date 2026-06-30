@@ -153,6 +153,11 @@ func (a *ADNLWrapper) queryHandler(msg *adnl.MessageQuery) error {
 			return fmt.Errorf("got query for unregistered overlay with id: %s", id)
 		}
 
+		switch obj.(type) {
+		case Ping, *Ping:
+			return a.Answer(context.Background(), msg.ID, Pong{})
+		}
+
 		h := o.queryHandler
 		if h == nil {
 			return nil

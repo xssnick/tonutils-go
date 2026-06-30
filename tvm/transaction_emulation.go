@@ -211,7 +211,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	var msgRes *MessageExecutionResult
 	accountActivated := false
 	if skipReason == nil {
-		globalVersion, err := transactionExecutionGlobalVersion(execCfg, blockchainCfg, tvm.globalVersion)
+		globalVersion, err := transactionExecutionGlobalVersion(blockchainCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -459,7 +459,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 
 	var msgRes *MessageExecutionResult
 	if skipReason == nil {
-		globalVersion, err := transactionExecutionGlobalVersion(execCfg, blockchainCfg, tvm.globalVersion)
+		globalVersion, err := transactionExecutionGlobalVersion(blockchainCfg)
 		if err != nil {
 			return nil, err
 		}

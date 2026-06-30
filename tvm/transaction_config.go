@@ -35,6 +35,14 @@ func transactionConfigFromBlockchainConfig(blockchainCfg tlb.BlockchainConfig) t
 		prices:           &transactionConfigPrices{},
 	}
 
+	// No-root emulation is a legacy local mode without blockchain config; keep
+	// it on the VM default without reintroducing a separate runtime override.
+	if blockchainCfg.Root == nil {
+		cfg.version = uint32(vmcore.DefaultGlobalVersion)
+		cfg.hasGlobalVersion = true
+		return cfg
+	}
+
 	version, err := blockchainCfg.GetGlobalVersion()
 	if err != nil {
 		cfg.globalVersionErr = err
@@ -51,13 +59,6 @@ func (cfg transactionConfig) globalVersion() uint32 {
 	return cfg.version
 }
 
-func (cfg transactionConfig) actionGlobalVersion() uint32 {
-	if !cfg.hasGlobalVersion {
-		return uint32(vmcore.DefaultGlobalVersion)
-	}
-	return cfg.version
-}
-
 func (cfg transactionConfig) hasCapability(capability uint64) bool {
 	return cfg.hasGlobalVersion && cfg.capabilities&capability != 0
 }
@@ -66,17 +67,11 @@ func (cfg transactionConfig) specialGasFull() bool {
 	return cfg.hasGlobalVersion && cfg.globalVersion() >= 5
 }
 
-func transactionExecutionGlobalVersion(cfg MessageEmulationConfig, blockchainCfg transactionConfig, fallback int) (int, error) {
-	version := fallback
-	if cfg.GlobalVersionSet {
-		version = cfg.GlobalVersion
+func transactionExecutionGlobalVersion(blockchainCfg transactionConfig) (int, error) {
+	if !blockchainCfg.hasGlobalVersion {
+		return 0, blockchainCfg.globalVersionErr
 	}
-	if cfg.ConfigRoot != nil {
-		if !blockchainCfg.hasGlobalVersion {
-			return 0, blockchainCfg.globalVersionErr
-		}
-		version = int(blockchainCfg.version)
-	}
+	version := int(blockchainCfg.version)
 	if err := validateGlobalVersion(version); err != nil {
 		return 0, err
 	}

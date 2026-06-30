@@ -905,15 +905,14 @@ func assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t *testing.
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
 	goRes, err := machine.EmulateTransaction(shard, msg, TransactionEmulationConfig{
-		Address:          tonopsTestAddr,
-		Now:              now,
-		BlockLT:          transactionTestLogicalTime,
-		LogicalTime:      transactionTestLogicalTime,
-		RandSeed:         append([]byte(nil), tonopsTestSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
-		BuildProof:       true,
-		Libraries:        []*cell.Cell{libs},
+		Address:     tonopsTestAddr,
+		Now:         now,
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  refConfigRoot,
+		BuildProof:  true,
+		Libraries:   []*cell.Cell{libs},
 	})
 	if err != nil {
 		t.Fatalf("go transaction build-proof libraries global-version override machine_v=%d effective_v=%d failed: %v", machineVersion, version, err)
@@ -1136,14 +1135,13 @@ func assertTransactionBuildProofComputeGlobalVersionOverrideParity(t *testing.T,
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
 	goRes, err := machine.EmulateTransaction(shard, msg, TransactionEmulationConfig{
-		Address:          tonopsTestAddr,
-		Now:              now,
-		BlockLT:          transactionTestLogicalTime,
-		LogicalTime:      transactionTestLogicalTime,
-		RandSeed:         append([]byte(nil), tonopsTestSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
-		BuildProof:       true,
+		Address:     tonopsTestAddr,
+		Now:         now,
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  refConfigRoot,
+		BuildProof:  true,
 	})
 	if err != nil {
 		t.Fatalf("go transaction build-proof global-version override machine_v=%d effective_v=%d program=%d failed: %v", machineVersion, version, rawProgram%2, err)
@@ -1294,13 +1292,12 @@ func assertTransactionComputeGlobalVersionOverrideParity(t *testing.T, version, 
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
 	goRes, err := machine.EmulateTransaction(shard, msg, TransactionEmulationConfig{
-		Address:          tonopsTestAddr,
-		Now:              now,
-		BlockLT:          transactionTestLogicalTime,
-		LogicalTime:      transactionTestLogicalTime,
-		RandSeed:         append([]byte(nil), tonopsTestSeed...),
-		GlobalVersion:    version,
-		GlobalVersionSet: true,
+		Address:     tonopsTestAddr,
+		Now:         now,
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  refConfigRoot,
 	})
 	if err != nil {
 		t.Fatalf("go transaction compute global-version override machine_v=%d effective_v=%d program=%d failed: %v", machineVersion, version, rawProgram%2, err)

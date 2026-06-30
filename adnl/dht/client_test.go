@@ -101,6 +101,10 @@ func (m MockADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) er
 	return nil
 }
 
+func (m MockADNL) SendNop(ctx context.Context) error {
+	return nil
+}
+
 func (m MockADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
 	return nil
 }
@@ -878,6 +882,71 @@ func TestClient_addNodeRejectsTooOldVersion(t *testing.T) {
 
 	if _, err = cli.addNode(newer); err != nil {
 		t.Fatalf("failed to add newer node: %v", err)
+	}
+}
+
+func TestClient_addNodeRejectsMalformedSerializableFields(t *testing.T) {
+	selfPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfID, err := tl.Hash(keys.PublicKeyED25519{Key: selfPub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := NewClient(&MockGateway{id: selfID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrList := &address.List{
+		Addresses: []address.Address{
+			&address.UDP{
+				IP:   net.IPv4(127, 0, 0, 1).To4(),
+				Port: 12345,
+			},
+		},
+	}
+	tests := []struct {
+		name string
+		node *Node
+	}{
+		{
+			name: "nil id",
+			node: &Node{
+				AddrList:  addrList,
+				Version:   int32(time.Now().Unix()),
+				Signature: make([]byte, ed25519.SignatureSize),
+			},
+		},
+		{
+			name: "unsupported address",
+			node: &Node{
+				ID: keys.PublicKeyED25519{Key: pub},
+				AddrList: &address.List{
+					Addresses: []address.Address{struct{}{}},
+				},
+				Version:   int32(time.Now().Unix()),
+				Signature: make([]byte, ed25519.SignatureSize),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err = cli.addNode(tt.node); err == nil {
+				t.Fatal("got error nil, want error not nil")
+			}
+			for _, bucket := range cli.buckets {
+				if len(bucket.getNodes()) != 0 {
+					t.Fatal("malformed node entered bucket")
+				}
+			}
+		})
 	}
 }
 

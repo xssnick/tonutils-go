@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"math/bits"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -129,7 +128,7 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 		return r.List, nil
 	}
 
-	return nil, fmt.Errorf("failed to find nodes, unexpected response type %s", reflect.TypeOf(res).String())
+	return nil, fmt.Errorf("failed to find nodes, unexpected response type %T", res)
 }
 
 func (n *dhtNode) getSignedAddressList(ctx context.Context) (*Node, error) {
@@ -156,7 +155,7 @@ func (n *dhtNode) getSignedAddressList(ctx context.Context) (*Node, error) {
 		return cloneNode(&r), nil
 	}
 
-	return nil, fmt.Errorf("failed to get signed address list, unexpected response type %s", reflect.TypeOf(res).String())
+	return nil, fmt.Errorf("failed to get signed address list, unexpected response type %T", res)
 }
 
 func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error {
@@ -180,7 +179,7 @@ func (n *dhtNode) storePayload(ctx context.Context, payload []byte) error {
 		return nil
 	}
 
-	return fmt.Errorf("failed to find nodes, unexpected response type %s", reflect.TypeOf(res).String())
+	return fmt.Errorf("failed to find nodes, unexpected response type %T", res)
 }
 
 func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any, err error) {
@@ -221,7 +220,7 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 		return &r.Value, nil
 	}
 
-	return nil, fmt.Errorf("failed to find value, unexpected response type %s", reflect.TypeOf(res).String())
+	return nil, fmt.Errorf("failed to find value, unexpected response type %T", res)
 }
 
 func checkValue(id []byte, value *Value) error {
@@ -252,6 +251,13 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		return fmt.Errorf("unwanted key received")
 	}
 
+	if err := checkValuePublicKey(value.KeyDescription.ID); err != nil {
+		return err
+	}
+	if err := checkValueUpdateRule(value.KeyDescription.UpdateRule); err != nil {
+		return err
+	}
+
 	idPub, err := tl.Hash(value.KeyDescription.ID)
 	if err != nil {
 		return err
@@ -273,7 +279,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 	case UpdateRuleSignature:
 		pub, ok := value.KeyDescription.ID.(keys.PublicKeyED25519)
 		if !ok {
-			return fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(value.KeyDescription.ID).String())
+			return fmt.Errorf("unsupported value's key type: %T", value.KeyDescription.ID)
 		}
 
 		// we need it to safely check data without touching original fields
@@ -301,6 +307,9 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		}
 
 	case UpdateRuleOverlayNodes:
+		if _, ok := value.KeyDescription.ID.(keys.PublicKeyOverlay); !ok {
+			return fmt.Errorf("invalid key type for DhtUpdateRuleOverlayNodes")
+		}
 		if len(value.Signature) > 0 {
 			return fmt.Errorf("cannot have signature in DhtUpdateRuleOverlayNodes")
 		}
@@ -308,9 +317,36 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 			return err
 		}
 	default:
-		return fmt.Errorf("update rule type %s is not supported yet", reflect.TypeOf(value.KeyDescription.UpdateRule))
+		return fmt.Errorf("update rule type %T is not supported yet", value.KeyDescription.UpdateRule)
 	}
 	return nil
+}
+
+func checkValuePublicKey(id any) error {
+	switch pub := id.(type) {
+	case keys.PublicKeyED25519:
+		if len(pub.Key) != ed25519.PublicKeySize {
+			return fmt.Errorf("invalid ed25519 public key")
+		}
+	case keys.PublicKeyAES:
+		if len(pub.Key) != ed25519.PublicKeySize {
+			return fmt.Errorf("invalid aes public key")
+		}
+	case keys.PublicKeyUnEnc:
+	case keys.PublicKeyOverlay:
+	default:
+		return fmt.Errorf("unsupported value key type %T", id)
+	}
+	return nil
+}
+
+func checkValueUpdateRule(rule any) error {
+	switch rule.(type) {
+	case UpdateRuleAnybody, UpdateRuleSignature, UpdateRuleOverlayNodes:
+		return nil
+	default:
+		return fmt.Errorf("update rule type %T is not supported yet", rule)
+	}
 }
 
 func checkOverlayNodesValue(overlayID, data []byte, ourNetworkID int32) error {
@@ -340,7 +376,10 @@ func checkOverlayNode(node *overlay.Node, overlayID []byte, ourNetworkID int32) 
 
 	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
-		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
+		return fmt.Errorf("unsupported id type %T", node.ID)
+	}
+	if len(pub.Key) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid ed25519 public key")
 	}
 
 	signature, err := splitNodeSignature(node.Signature, ourNetworkID)
