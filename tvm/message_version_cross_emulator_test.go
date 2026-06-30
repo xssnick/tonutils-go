@@ -4,6 +4,7 @@ package tvm
 
 import (
 	"bytes"
+	"errors"
 	"math/big"
 	"os"
 	"strconv"
@@ -388,6 +389,12 @@ func assertDirectMessageFallbackVersionParity(t *testing.T, machineVersion, conf
 			Body:    body,
 		}, cfg)
 	}
+	if !useConfigRoot {
+		if !errors.Is(err, errConfigRootRequired) {
+			t.Fatalf("go direct message fallback without config root machine_v=%d internal=%t error = %v, want %v", machineVersion, internal, err, errConfigRootRequired)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("go direct message fallback emulation machine_v=%d config_v=%d use_config=%t internal=%t failed: %v", machineVersion, configVersion, useConfigRoot, internal, err)
 	}
@@ -738,6 +745,12 @@ func assertDirectMessageBuildProofFallbackVersionParity(t *testing.T, machineVer
 			DstAddr: tonopsTestAddr,
 			Body:    body,
 		}, cfg)
+	}
+	if !useConfigRoot {
+		if !errors.Is(err, errConfigRootRequired) {
+			t.Fatalf("go direct message build-proof fallback without config root machine_v=%d internal=%t explicit_addr=%t error = %v, want %v", machineVersion, internal, explicitAddress, err, errConfigRootRequired)
+		}
+		return
 	}
 	if err != nil {
 		t.Fatalf("go direct message build-proof fallback emulation machine_v=%d config_v=%d use_config=%t internal=%t explicit_addr=%t failed: %v", machineVersion, configVersion, useConfigRoot, internal, explicitAddress, err)
@@ -1109,6 +1122,12 @@ func assertCheckExternalMessageAcceptedFallbackVersionParity(t *testing.T, machi
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot:  goConfigRoot,
 	})
+	if !useConfigRoot {
+		if !errors.Is(err, errConfigRootRequired) {
+			t.Fatalf("check external message accepted without config root machine_v=%d program=%d error = %v, want %v", machineVersion, rawProgram%2, err, errConfigRootRequired)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("check external message accepted machine_v=%d config_v=%d use_config=%t program=%d failed: %v", machineVersion, configVersion, useConfigRoot, rawProgram%2, err)
 	}

@@ -1,10 +1,13 @@
 package tvm
 
 import (
+	"errors"
+
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
 )
+
+var errConfigRootRequired = errors.New("config root is required")
 
 type transactionConfig struct {
 	tlb.BlockchainConfig
@@ -24,8 +27,11 @@ type transactionConfigPrices struct {
 	msgFwdLoaded [2]bool
 }
 
-func newTransactionConfig(root *cell.Cell) transactionConfig {
-	return transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: root})
+func newTransactionConfig(root *cell.Cell) (transactionConfig, error) {
+	if root == nil {
+		return transactionConfig{}, errConfigRootRequired
+	}
+	return transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: root}), nil
 }
 
 func transactionConfigFromBlockchainConfig(blockchainCfg tlb.BlockchainConfig) transactionConfig {
@@ -35,11 +41,8 @@ func transactionConfigFromBlockchainConfig(blockchainCfg tlb.BlockchainConfig) t
 		prices:           &transactionConfigPrices{},
 	}
 
-	// No-root emulation is a legacy local mode without blockchain config; keep
-	// it on the VM default without reintroducing a separate runtime override.
 	if blockchainCfg.Root == nil {
-		cfg.version = uint32(vmcore.DefaultGlobalVersion)
-		cfg.hasGlobalVersion = true
+		cfg.globalVersionErr = errConfigRootRequired
 		return cfg
 	}
 

@@ -844,6 +844,7 @@ func TestEmulateTransactionExternalCommit(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -930,6 +931,7 @@ func TestEmulateTransactionCommittedThrowRunsActionPhase(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -985,6 +987,7 @@ func TestEmulateTransactionExternalStopOnAccept(t *testing.T) {
 		BlockLT:      transactionTestLogicalTime,
 		LogicalTime:  transactionTestLogicalTime,
 		StopOnAccept: true,
+		ConfigRoot:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -1033,11 +1036,13 @@ func TestCheckExternalMessageAcceptedMatchesTransactionAccept(t *testing.T) {
 		BlockLT:      transactionTestLogicalTime,
 		LogicalTime:  transactionTestLogicalTime,
 		StopOnAccept: true,
+		ConfigRoot:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 	}
 	checkCfg := CheckExternalMessageAcceptedConfig{
 		Now:         txCfg.Now,
 		BlockLT:     txCfg.BlockLT,
 		LogicalTime: txCfg.LogicalTime,
+		ConfigRoot:  txCfg.ConfigRoot,
 	}
 
 	full, err := NewTVM().EmulateTransaction(shard, msgCell, txCfg)
@@ -1076,6 +1081,7 @@ func TestCheckExternalMessageAcceptedRejectsWithoutAccept(t *testing.T) {
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 	})
 	if err != nil {
 		t.Fatalf("check external message accepted failed: %v", err)
@@ -1263,6 +1269,7 @@ func TestCheckExternalMessageAcceptedNoGasSkipAndAutoNow(t *testing.T) {
 	accepted, err := NewTVM().CheckExternalMessageAccepted(noGasShard, mustParseTransactionTestAccount(t, noGasShard), msgCell, msg, CheckExternalMessageAcceptedConfig{
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 	})
 	if err != nil {
 		t.Fatalf("no-gas check external message accepted failed: %v", err)
@@ -1275,6 +1282,7 @@ func TestCheckExternalMessageAcceptedNoGasSkipAndAutoNow(t *testing.T) {
 	accepted, err = NewTVM().CheckExternalMessageAccepted(fundedShard, mustParseTransactionTestAccount(t, fundedShard), msgCell, msg, CheckExternalMessageAcceptedConfig{
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 	})
 	if err != nil {
 		t.Fatalf("auto-now check external message accepted failed: %v", err)
@@ -1304,6 +1312,7 @@ func TestEmulateTransactionInternalToNonExistCreatesUninitNoState(t *testing.T) 
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 	})
 	if err != nil {
 		t.Fatalf("emulate transaction failed: %v", err)
@@ -1530,6 +1539,7 @@ func TestEmulateTransactionInternalCreditsBalance(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -1914,6 +1924,7 @@ func TestEmulateTransactionAdvancesLastPaidWithoutStoragePricing(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,

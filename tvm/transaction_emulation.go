@@ -129,7 +129,10 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 		now = uint32(time.Now().Unix())
 	}
 
-	blockchainCfg := newTransactionConfig(cfg.ConfigRoot)
+	blockchainCfg, err := newTransactionConfig(cfg.ConfigRoot)
+	if err != nil {
+		return nil, err
+	}
 	if err = transactionValidateInboundExternalMessage(msgCell, &msg, blockchainCfg); err != nil {
 		return nil, err
 	}
@@ -410,7 +413,10 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 		now = uint32(time.Now().Unix())
 	}
 
-	blockchainCfg := newTransactionConfig(cfg.ConfigRoot)
+	blockchainCfg, err := newTransactionConfig(cfg.ConfigRoot)
+	if err != nil {
+		return nil, err
+	}
 	isSpecial := transactionIsSpecialAccount(blockchainCfg, runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 	storageDueLimits := transactionGetStorageDueLimits(blockchainCfg, runtimeAcc.addr)

@@ -102,7 +102,7 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 		return nil, err
 	}
 
-	globalVersion, err := messageExecutionGlobalVersion(cfg, tvm.globalVersion)
+	globalVersion, err := messageExecutionGlobalVersion(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 		return nil, err
 	}
 
-	globalVersion, err := messageExecutionGlobalVersion(cfg, tvm.globalVersion)
+	globalVersion, err := messageExecutionGlobalVersion(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -338,15 +338,16 @@ func buildEmulationC7(addr *address.Address, code *cell.Cell, cfg MessageEmulati
 	return tuple.NewTupleOwned(top), nil
 }
 
-func messageExecutionGlobalVersion(cfg MessageEmulationConfig, fallback int) (int, error) {
-	version := fallback
-	if cfg.ConfigRoot != nil {
-		globalVersion, err := (tlb.BlockchainConfig{Root: cfg.ConfigRoot}).GetGlobalVersion()
-		if err != nil {
-			return 0, err
-		}
-		version = int(globalVersion.Version)
+func messageExecutionGlobalVersion(cfg MessageEmulationConfig) (int, error) {
+	if cfg.ConfigRoot == nil {
+		return 0, errConfigRootRequired
 	}
+
+	globalVersion, err := (tlb.BlockchainConfig{Root: cfg.ConfigRoot}).GetGlobalVersion()
+	if err != nil {
+		return 0, err
+	}
+	version := int(globalVersion.Version)
 	if err := validateGlobalVersion(version); err != nil {
 		return 0, err
 	}

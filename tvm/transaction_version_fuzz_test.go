@@ -905,7 +905,13 @@ func FuzzMessageEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 			res, err = machine.EmulateInternalMessage(code, data, body, uint64(rawConfigVersion)+1, cfg)
 		}
 		if err != nil {
+			if !useConfigRoot && errors.Is(err, errConfigRootRequired) {
+				return
+			}
 			t.Fatalf("message emulation machine_v=%d config_v=%d use_config=%t external=%t failed: %v", machineVersion, configVersion, useConfigRoot, external, err)
+		}
+		if !useConfigRoot {
+			t.Fatalf("message emulation machine_v=%d config_v=%d external=%t succeeded without config root", machineVersion, configVersion, external)
 		}
 
 		if effectiveVersion < 4 {
@@ -986,7 +992,13 @@ func FuzzMessageEmulationBuildProofGlobalVersionFallbackAndConfigOverride(f *tes
 			res, err = machine.EmulateInternalMessage(nil, nil, body, uint64(rawConfigVersion)+1, cfg)
 		}
 		if err != nil {
+			if !useConfigRoot && errors.Is(err, errConfigRootRequired) {
+				return
+			}
 			t.Fatalf("message proof emulation machine_v=%d config_v=%d use_config=%t external=%t failed: %v", machineVersion, configVersion, useConfigRoot, external, err)
+		}
+		if !useConfigRoot {
+			t.Fatalf("message proof emulation machine_v=%d config_v=%d external=%t succeeded without config root", machineVersion, configVersion, external)
 		}
 		if res.Proof == nil {
 			t.Fatalf("message proof emulation effective v%d proof is nil", effectiveVersion)
@@ -1440,7 +1452,13 @@ func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F
 			}),
 		})
 		if err != nil {
+			if !useConfigRoot && errors.Is(err, errConfigRootRequired) {
+				return
+			}
 			t.Fatalf("transaction emulation machine_v=%d config_v=%d use_config=%t failed: %v", machineVersion, configVersion, useConfigRoot, err)
+		}
+		if !useConfigRoot {
+			t.Fatalf("transaction emulation machine_v=%d config_v=%d succeeded without config root", machineVersion, configVersion)
 		}
 
 		assertGasConsumedVersionResult(t, "transaction", effectiveVersion, res.ExitCode, res.Stack)
@@ -1540,7 +1558,13 @@ func FuzzTickTockGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 			}),
 		})
 		if err != nil {
+			if !useConfigRoot && errors.Is(err, errConfigRootRequired) {
+				return
+			}
 			t.Fatalf("tick/tock emulation machine_v=%d config_v=%d use_config=%t is_tock=%t failed: %v", machineVersion, configVersion, useConfigRoot, isTock, err)
+		}
+		if !useConfigRoot {
+			t.Fatalf("tick/tock emulation machine_v=%d config_v=%d is_tock=%t succeeded without config root", machineVersion, configVersion, isTock)
 		}
 
 		assertGasConsumedVersionResult(t, "tick/tock", effectiveVersion, res.ExitCode, res.Stack)
@@ -1638,7 +1662,13 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionFallbackAndConfigOverride(f *t
 			ConfigRoot:  configRoot,
 		})
 		if err != nil {
+			if !useConfigRoot && errors.Is(err, errConfigRootRequired) {
+				return
+			}
 			t.Fatalf("check external accepted machine_v=%d config_v=%d use_config=%t failed: %v", machineVersion, configVersion, useConfigRoot, err)
+		}
+		if !useConfigRoot {
+			t.Fatalf("check external accepted machine_v=%d config_v=%d succeeded without config root", machineVersion, configVersion)
 		}
 
 		want := effectiveVersion >= 4
@@ -1904,6 +1934,7 @@ func FuzzMessageEmulationGlobalVersionPerRun(f *testing.F) {
 			Now:                 uint32(tonopsTestTime.Unix()),
 			Balance:             new(big.Int).Set(tonopsTestBalance),
 			RandSeed:            append([]byte(nil), tonopsTestSeed...),
+			ConfigRoot:          transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
 			ChksigAlwaysSucceed: true,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
@@ -2499,7 +2530,7 @@ func FuzzTransactionActionGlobalVersionFallbackInvalidSource(f *testing.F) {
 
 		switch rawConfigKind % 4 {
 		case 0:
-			cfg = newTransactionConfig(nil)
+			cfg = transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{})
 		case 1:
 			cfg = transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})})
 		case 2:

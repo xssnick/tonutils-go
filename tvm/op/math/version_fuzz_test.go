@@ -830,6 +830,7 @@ func FuzzTVMQuietCompoundRelations(f *testing.F) {
 		args := (d << 2) | round
 
 		st := newMathCoverageState()
+		st.GlobalVersion = 4
 		op, dividend, divisor := quietCompoundFuzzOpAndInputs(t, st, family, d, args, x, y, w, z, shift)
 
 		err := op.Interpret(st)

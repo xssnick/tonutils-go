@@ -1,6 +1,7 @@
 package tvm
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -677,24 +678,20 @@ func TestBuildMessageEmulationC7RejectsReservedGlobalIndex(t *testing.T) {
 	}
 }
 
-func TestMessageExecutionGlobalVersionFallbackConfigRootAndErrors(t *testing.T) {
-	got, err := messageExecutionGlobalVersion(MessageEmulationConfig{}, 6)
-	if err != nil {
-		t.Fatalf("fallback global version failed: %v", err)
-	}
-	if got != 6 {
-		t.Fatalf("fallback global version = %d, want 6", got)
+func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.T) {
+	if _, err := messageExecutionGlobalVersion(MessageEmulationConfig{}); !errors.Is(err, errConfigRootRequired) {
+		t.Fatalf("missing config root error = %v, want %v", err, errConfigRootRequired)
 	}
 
 	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: 4})
 	if err != nil {
 		t.Fatalf("build global version cell: %v", err)
 	}
-	got, err = messageExecutionGlobalVersion(MessageEmulationConfig{
+	got, err := messageExecutionGlobalVersion(MessageEmulationConfig{
 		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: versionCell,
 		}),
-	}, MaxSupportedGlobalVersion)
+	})
 	if err != nil {
 		t.Fatalf("config global version failed: %v", err)
 	}
@@ -704,16 +701,12 @@ func TestMessageExecutionGlobalVersionFallbackConfigRootAndErrors(t *testing.T) 
 
 	got, err = messageExecutionGlobalVersion(MessageEmulationConfig{
 		ConfigRoot: messageExecutionGlobalVersionConfigRoot(t, 4),
-	}, 3)
+	})
 	if err != nil {
-		t.Fatalf("config global version with fallback failed: %v", err)
+		t.Fatalf("config global version failed: %v", err)
 	}
 	if got != 4 {
-		t.Fatalf("config global version with fallback = %d, want 4", got)
-	}
-
-	if _, err = messageExecutionGlobalVersion(MessageEmulationConfig{}, MaxSupportedGlobalVersion+1); err == nil {
-		t.Fatal("unsupported fallback global version should fail")
+		t.Fatalf("config global version = %d, want 4", got)
 	}
 
 	unsupportedVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: uint32(MaxSupportedGlobalVersion + 1)})
@@ -724,29 +717,28 @@ func TestMessageExecutionGlobalVersionFallbackConfigRootAndErrors(t *testing.T) 
 		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: unsupportedVersionCell,
 		}),
-	}, 4); err == nil {
+	}); err == nil {
 		t.Fatal("unsupported config global version should fail")
 	}
 
 	malformedRoot := buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 8).EndCell(),
 	})
-	if _, err = messageExecutionGlobalVersion(MessageEmulationConfig{ConfigRoot: malformedRoot}, 4); err == nil {
+	if _, err = messageExecutionGlobalVersion(MessageEmulationConfig{ConfigRoot: malformedRoot}); err == nil {
 		t.Fatal("malformed config global version should fail")
 	}
 }
 
 func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		f.Add(uint16(version), uint16(MaxSupportedGlobalVersion-version), uint8(0))
-		f.Add(uint16(MaxSupportedGlobalVersion+1), uint16(version), uint8(1))
-		f.Add(uint16(version), uint16(version), uint8(2))
-		f.Add(uint16(version), uint16(MaxSupportedGlobalVersion+1), uint8(3))
-		f.Add(uint16(version), uint16(version), uint8(4))
+		f.Add(uint16(version), uint8(0))
+		f.Add(uint16(version), uint8(1))
+		f.Add(uint16(version), uint8(2))
+		f.Add(uint16(MaxSupportedGlobalVersion+1), uint8(3))
+		f.Add(uint16(version), uint8(4))
 	}
 
-	f.Fuzz(func(t *testing.T, rawFallback, rawConfig uint16, rawCase uint8) {
-		fallback := int(rawFallback % uint16(MaxSupportedGlobalVersion+3))
+	f.Fuzz(func(t *testing.T, rawConfig uint16, rawCase uint8) {
 		cfg := MessageEmulationConfig{}
 
 		var want int
@@ -754,16 +746,10 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 		caseIdx := rawCase % 5
 		switch caseIdx {
 		case 0:
-			want = fallback
-			wantErr = fallback > MaxSupportedGlobalVersion
+			wantErr = true
 		case 1:
 			cfg.ConfigRoot = buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})
-			if cfg.ConfigRoot == nil {
-				want = fallback
-				wantErr = fallback > MaxSupportedGlobalVersion
-			} else {
-				want = 0
-			}
+			wantErr = true
 		case 2:
 			version := tvmFuzzGlobalVersionUint32(uint32(rawConfig))
 			cfg.ConfigRoot = messageExecutionGlobalVersionConfigRoot(t, version)
@@ -779,18 +765,18 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 			wantErr = true
 		}
 
-		got, err := messageExecutionGlobalVersion(cfg, fallback)
+		got, err := messageExecutionGlobalVersion(cfg)
 		if wantErr {
 			if err == nil {
-				t.Fatalf("case=%d fallback=%d config=%d got version %d, want error", caseIdx, fallback, rawConfig, got)
+				t.Fatalf("case=%d config=%d got version %d, want error", caseIdx, rawConfig, got)
 			}
 			return
 		}
 		if err != nil {
-			t.Fatalf("case=%d fallback=%d config=%d unexpected error: %v", caseIdx, fallback, rawConfig, err)
+			t.Fatalf("case=%d config=%d unexpected error: %v", caseIdx, rawConfig, err)
 		}
 		if got != want {
-			t.Fatalf("case=%d fallback=%d config=%d version = %d, want %d", caseIdx, fallback, rawConfig, got, want)
+			t.Fatalf("case=%d config=%d version = %d, want %d", caseIdx, rawConfig, got, want)
 		}
 	})
 }

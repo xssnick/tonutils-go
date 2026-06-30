@@ -162,7 +162,7 @@ func main() {
 	log.Println("C CALL COMPLETED")
 
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash(name))))
-	_, err = vmx.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, tvm.ExecutionConfig{})
+	goRes, err := vmx.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, tvm.ExecutionConfig{})
 	if err != nil {
 		panic(err.Error())
 	}
@@ -178,11 +178,12 @@ func main() {
 		panic(5)
 	}
 
-	if bytes.Equal(lst.Hash(), rst.Hash()) {
+	if int64(res.ExitCode) == goRes.ExitCode && bytes.Equal(lst.Hash(), rst.Hash()) {
 		log.Println("OK, SAME", f.Depth())
 		return
 	}
 
+	log.Println("CPP EXIT", res.ExitCode)
 	log.Println("CPP")
 	for resStack.Depth() > 0 {
 		v, err := resStack.Pop()
@@ -193,6 +194,7 @@ func main() {
 	}
 
 	log.Println()
+	log.Println("GO EXIT", goRes.ExitCode)
 	log.Println("GO")
 	for f.Depth() > 0 {
 		v, err := f.Pop()

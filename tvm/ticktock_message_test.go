@@ -105,9 +105,10 @@ func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*
 	}
 
 	cfg := TransactionEmulationConfig{
-		Now:      uint32(tonopsTestTime.Unix()),
-		Balance:  new(big.Int).SetUint64(tickTockTestBalance),
-		RandSeed: append([]byte(nil), tonopsTestSeed...),
+		Now:        uint32(tonopsTestTime.Unix()),
+		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
+		RandSeed:   append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot: transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultTickTockTransactionGasMax,
 			Limit: DefaultTickTockTransactionGasMax,

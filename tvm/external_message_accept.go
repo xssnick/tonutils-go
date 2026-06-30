@@ -73,7 +73,10 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 		now = uint32(time.Now().Unix())
 	}
 
-	blockchainCfg := newTransactionConfig(cfg.ConfigRoot)
+	blockchainCfg, err := newTransactionConfig(cfg.ConfigRoot)
+	if err != nil {
+		return nil, err
+	}
 	if err := transactionValidateInboundExternalMessage(msgCell, msg, blockchainCfg); err != nil {
 		return nil, err
 	}
@@ -83,7 +86,6 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 
 	storageDueLimits := transactionGetStorageDueLimits(blockchainCfg, runtimeAcc.addr)
 	storageFee := big.NewInt(0)
-	var err error
 	storageFee, err = transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
 	if err != nil {
 		return nil, err

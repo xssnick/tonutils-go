@@ -106,11 +106,21 @@ func buildOpcodeDispatches() [MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 		if reusable, ok := op.(reusableOP); ok && reusable.Reusable() {
 			getter = cachedOPGetter(op)
 		}
+		prefixes := op.GetPrefixes()
 		minVersion := opcodeMinVersion(op)
 		if minVersion < MinSupportedGlobalVersion {
 			minVersion = MinSupportedGlobalVersion
 		}
-		for _, s := range op.GetPrefixes() {
+		var invalidGetter vm.OPGetter
+		for _, s := range prefixes {
+			if minVersion > MinSupportedGlobalVersion && opcodeIsHistoricalQuietCompoundPrefix(s) {
+				if invalidGetter == nil {
+					invalidGetter = historicalInvalidOpcodeGetter(op)
+				}
+				for ver := MinSupportedGlobalVersion; ver < minVersion && ver <= MaxSupportedGlobalVersion; ver++ {
+					dispatches[ver].addPrefix(s, invalidGetter)
+				}
+			}
 			for ver := minVersion; ver <= MaxSupportedGlobalVersion; ver++ {
 				dispatches[ver].addPrefix(s, getter)
 			}
@@ -133,6 +143,76 @@ func opcodeMinVersion(op vm.OP) int {
 		return versioned.MinGlobalVersion()
 	}
 	return MinSupportedGlobalVersion
+}
+
+func opcodeIsHistoricalQuietCompoundPrefix(prefix *cell.Slice) bool {
+	if prefix == nil || prefix.BitsLeft() != 24 {
+		return false
+	}
+
+	value, err := prefix.PreloadUInt(24)
+	if err != nil {
+		return false
+	}
+
+	args := uint8(value & 0x0f)
+	if args&3 == 3 || (args>>2)&3 != 0 {
+		return false
+	}
+
+	switch value >> 4 {
+	case 0xb7a90, 0xb7a92, 0xb7a98, 0xb7a9a, 0xb7a9c:
+		return true
+	default:
+		return false
+	}
+}
+
+type historicalInvalidOpcode struct {
+	op vm.OP
+}
+
+func historicalInvalidOpcodeGetter(op vm.OP) vm.OPGetter {
+	invalid := historicalInvalidOpcode{op: op}
+	if _, ok := op.(vm.GasPricedOp); ok {
+		return cachedOPGetter(historicalInvalidOpcodeGas{historicalInvalidOpcode: invalid})
+	}
+	return cachedOPGetter(invalid)
+}
+
+func (op historicalInvalidOpcode) GetPrefixes() []*cell.Slice {
+	return op.op.GetPrefixes()
+}
+
+func (op historicalInvalidOpcode) Deserialize(code *cell.Slice) error {
+	return op.op.Deserialize(code)
+}
+
+func (op historicalInvalidOpcode) DeserializeMatched(code *cell.Slice) error {
+	if matched, ok := op.op.(matchedDeserializer); ok {
+		return matched.DeserializeMatched(code)
+	}
+	return op.op.Deserialize(code)
+}
+
+func (op historicalInvalidOpcode) Serialize() *cell.Builder {
+	return op.op.Serialize()
+}
+
+func (op historicalInvalidOpcode) SerializeText() string {
+	return op.op.SerializeText()
+}
+
+func (op historicalInvalidOpcode) Interpret(state *vm.State) error {
+	return vmerr.Error(vmerr.CodeInvalidOpcode)
+}
+
+type historicalInvalidOpcodeGas struct {
+	historicalInvalidOpcode
+}
+
+func (op historicalInvalidOpcodeGas) InstructionBits() int64 {
+	return op.op.(vm.GasPricedOp).InstructionBits()
 }
 
 func (tvm *TVM) SetGlobalVersion(version int) error {
@@ -762,7 +842,6 @@ func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err
 			return err
 		}
 	}
-
 	if state.TraceEnabled() {
 		state.TraceOpcode(op.SerializeText())
 	}

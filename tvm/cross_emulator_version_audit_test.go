@@ -137,7 +137,7 @@ const (
 	expectedCrossEmulatorReferenceMismatchUseHash  = "312c8057852d591fc73f86c4271898887bef3d7b6feda741f29d009cf1d0ba06"
 
 	expectedCrossEmulatorDirectKnownReferenceSkipCount = 15
-	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "2f586af5d61b2750dd363742009be3f988ba35c33e9f13f56c63b38262f40535"
+	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "5e42f5a80416a3a31da602d6bf0c9072da0132aea5bd820d3844bac205fd6774"
 
 	expectedCrossEmulatorSkipReferenceUseCount = 25
 	expectedCrossEmulatorSkipReferenceUseHash  = "440b673550f7514e57abcbce6c6505cb5a3463ac289fb8164a10ac433774b95d"

@@ -4,6 +4,7 @@ package tvm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -654,6 +655,12 @@ func assertTickTockFallbackVersionParity(t *testing.T, machineVersion, configVer
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: goConfigRoot,
 	})
+	if !useConfigRoot {
+		if !errors.Is(err, errConfigRootRequired) {
+			t.Fatalf("go tick/tock fallback without config root machine_v=%d is_tock=%t error = %v, want %v", machineVersion, isTock, err, errConfigRootRequired)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("go tick/tock fallback machine_v=%d config_v=%d use_config=%t is_tock=%t failed: %v", machineVersion, configVersion, useConfigRoot, isTock, err)
 	}

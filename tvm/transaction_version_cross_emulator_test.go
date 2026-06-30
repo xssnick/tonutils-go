@@ -4,6 +4,7 @@ package tvm
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -1221,6 +1222,12 @@ func assertTransactionComputeFallbackVersionParity(t *testing.T, machineVersion,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot:  goConfigRoot,
 	})
+	if !useConfigRoot {
+		if !errors.Is(err, errConfigRootRequired) {
+			t.Fatalf("go transaction compute fallback without config root machine_v=%d program=%d error = %v, want %v", machineVersion, rawProgram%2, err, errConfigRootRequired)
+		}
+		return
+	}
 	if err != nil {
 		t.Fatalf("go transaction compute fallback machine_v=%d config_v=%d use_config=%t program=%d failed: %v", machineVersion, configVersion, useConfigRoot, rawProgram%2, err)
 	}
@@ -5367,7 +5374,7 @@ func assertTransactionStateInitFixedPrefixVersionParity(t *testing.T, version ui
 	})
 
 	wantAccount := tlb.AccountStatus(tlb.AccountStatusActive)
-	if rawMismatch%3 == 2 || (version >= 10 && depth > transactionGetSizeLimits(newTransactionConfig(nil)).maxAccFixedPrefixLength) {
+	if rawMismatch%3 == 2 || (version >= 10 && depth > transactionDefaultSizeLimits().maxAccFixedPrefixLength) {
 		wantAccount = tlb.AccountStatusUninit
 	}
 

@@ -43,10 +43,11 @@ func emulateInternalForTest(t *testing.T, code, data, body *cell.Cell) (*Message
 	t.Helper()
 
 	return NewTVM().EmulateInternalMessage(code, data, body, internalMessageTestAmount, EmulateInternalMessageConfig{
-		Address:  tonopsTestAddr,
-		Now:      uint32(tonopsTestTime.Unix()),
-		Balance:  new(big.Int).Set(tonopsTestBalance),
-		RandSeed: append([]byte(nil), tonopsTestSeed...),
+		Address:    tonopsTestAddr,
+		Now:        uint32(tonopsTestTime.Unix()),
+		Balance:    new(big.Int).Set(tonopsTestBalance),
+		RandSeed:   append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot: transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    DefaultInternalMessageGasMax,
 			Limit:  int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -160,6 +161,7 @@ func TestEmulateInternalMessageWithAccountProofUsesAccountRoot(t *testing.T) {
 		Now:         uint32(tonopsTestTime.Unix()),
 		Balance:     new(big.Int).Set(tonopsTestBalance),
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -209,6 +211,7 @@ func TestEmulateInternalMessageChksigAlwaysSucceedPerRun(t *testing.T) {
 				Now:                 uint32(tonopsTestTime.Unix()),
 				Balance:             new(big.Int).Set(tonopsTestBalance),
 				RandSeed:            append([]byte(nil), tonopsTestSeed...),
+				ConfigRoot:          transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
 				ChksigAlwaysSucceed: tt.always,
 				Gas: vmcore.NewGas(vmcore.GasConfig{
 					Max:   DefaultInternalMessageGasMax,

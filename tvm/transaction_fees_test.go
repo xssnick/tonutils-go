@@ -1,6 +1,7 @@
 package tvm
 
 import (
+	"errors"
 	"math"
 	"math/big"
 	"testing"
@@ -8,7 +9,6 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestTransactionCeilShiftRight(t *testing.T) {
@@ -111,12 +111,16 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 }
 
 func TestTransactionGlobalVersionFallbackContracts(t *testing.T) {
-	noRoot := newTransactionConfig(nil)
-	if got := noRoot.globalVersion(); got != uint32(vmcore.DefaultGlobalVersion) {
-		t.Fatalf("no-root transaction global version = %d, want default v%d", got, vmcore.DefaultGlobalVersion)
+	if _, err := newTransactionConfig(nil); !errors.Is(err, errConfigRootRequired) {
+		t.Fatalf("new transaction config without root error = %v, want %v", err, errConfigRootRequired)
 	}
-	if !noRoot.hasGlobalVersion {
-		t.Fatal("no-root transaction config should expose default global version")
+
+	noRoot := transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{})
+	if noRoot.hasGlobalVersion {
+		t.Fatal("no-root transaction config should not expose global version")
+	}
+	if !errors.Is(noRoot.globalVersionErr, errConfigRootRequired) {
+		t.Fatalf("no-root transaction config global version error = %v, want %v", noRoot.globalVersionErr, errConfigRootRequired)
 	}
 
 	for _, cfg := range []transactionConfig{

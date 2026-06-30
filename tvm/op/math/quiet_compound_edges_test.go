@@ -308,6 +308,7 @@ func TestQuietCompoundRuntimeErrorAndNaNEdges(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			st := newMathCoverageState()
+			st.GlobalVersion = 4
 			if tt.globalVersion != 0 {
 				st.GlobalVersion = tt.globalVersion
 			}

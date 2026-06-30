@@ -26,7 +26,7 @@ var expectedGlobalVersionConfigCoverageAnchors = map[string]globalVersionConfigC
 	"execution_config_fuzz_test.go:FuzzExecutionConfigGlobalVersionPerRunEntrypoints":                         {fullRangeFuzz: true},
 	"execution_config_fuzz_test.go:TestExecutionConfigGlobalVersionValidatesRange":                            {},
 	"execution_proof_test.go:FuzzExecuteDetailedWithAccountProofConfigGlobalVersionPerRun":                    {fullRangeFuzz: true},
-	"external_message_helpers_test.go:TestMessageExecutionGlobalVersionFallbackConfigRootAndErrors":           {},
+	"external_message_helpers_test.go:TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates":        {},
 	"external_message_helpers_test.go:FuzzMessageExecutionGlobalVersionSelection":                             {fullRangeFuzz: true},
 	"transaction_emulation_test.go:TestEmulateTransactionConfigGlobalVersionControlsOpcodeDispatch":           {},
 	"transaction_fees_test.go:TestTransactionGlobalVersionFallbackContracts":                                  {},

@@ -14,6 +14,8 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
+	configRoot := mustReferenceTransactionConfigRoot(t)
+
 	t.Run("InitialSendMatchesReference", func(t *testing.T) {
 		fx := makeWalletV5SendFixture(t, walletSendInitialSeqno)
 
@@ -21,7 +23,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reference send_external failed: %v", err)
 		}
-		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion, nil)
+		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion, configRoot)
 		if err != nil {
 			t.Fatalf("go send_external failed: %v", err)
 		}
@@ -35,7 +37,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reference first send_external failed: %v", err)
 		}
-		goFirst, err := emulateWalletSendExternal(t, fx1.code, fx1.data, fx1.address, fx1.body, fx1.now, walletSendCrossVersion, nil)
+		goFirst, err := emulateWalletSendExternal(t, fx1.code, fx1.data, fx1.address, fx1.body, fx1.now, walletSendCrossVersion, configRoot)
 		if err != nil {
 			t.Fatalf("go first send_external failed: %v", err)
 		}
@@ -46,7 +48,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reference second send_external failed: %v", err)
 		}
-		goSecond, err := emulateWalletSendExternal(t, fx2.code, goFirst.Data, fx2.address, fx2.body, fx2.now, walletSendCrossVersion, nil)
+		goSecond, err := emulateWalletSendExternal(t, fx2.code, goFirst.Data, fx2.address, fx2.body, fx2.now, walletSendCrossVersion, configRoot)
 		if err != nil {
 			t.Fatalf("go second send_external failed: %v", err)
 		}
@@ -56,7 +58,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 	t.Run("StaleSeqnoRejectMatchesReference", func(t *testing.T) {
 		fx := makeWalletV5SendFixture(t, walletSendSecondSeqno)
 
-		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion, nil)
+		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion, configRoot)
 		if err != nil {
 			t.Fatalf("go stale send_external failed: %v", err)
 		}

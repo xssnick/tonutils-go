@@ -789,10 +789,10 @@ func TestTVMVersionGateGasByOpcodeFamily(t *testing.T) {
 			wantGas: vm.InstructionBaseGasPrice + 16 + vm.ExceptionGasPrice,
 		},
 		{
-			name:    "b7a9 quiet math future opcode uses historical trie",
+			name:    "b7a9 quiet math d0 family charges instruction bits",
 			code:    testOpcodeCell(t, "b7a900"),
 			version: 3,
-			wantGas: vm.InstructionBaseGasPrice + vm.ExceptionGasPrice,
+			wantGas: vm.InstructionBaseGasPrice + 24 + vm.ExceptionGasPrice,
 		},
 		{
 			name:    "ordinary long ton family charges base only",

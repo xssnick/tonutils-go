@@ -46,10 +46,10 @@ const (
 	parityProgramChunkReserveBits  = 32
 	maxSmallIndexForParityProgram  = (1 << 30) - 1
 
-	expectedParityOpcodeInventoryEntries      = 840
-	expectedParityOpcodeInventoryUniqueNames  = 826
+	expectedParityOpcodeInventoryEntries      = 915
+	expectedParityOpcodeInventoryUniqueNames  = 885
 	expectedParityDictOpcodeWitnessNames      = 143
-	expectedParityMathOpcodeWitnessNames      = 196
+	expectedParityMathOpcodeWitnessNames      = 255
 	expectedParityCellSliceOpcodeWitnessNames = 163
 
 	expectedSupportedDifferentialFuzzFamilyCount     = 28
@@ -67,7 +67,7 @@ var expectedParityOpcodeCoverageBucketCounts = map[string]int{
 	"deterministic_ton_runtime": 66,
 	"random_cell_slice":         166,
 	"random_dict":               143,
-	"random_math":               198,
+	"random_math":               273,
 	"random_stack":              78,
 }
 
@@ -2089,6 +2089,13 @@ func parityMathOpcodeInventoryWitnessKey(name string) string {
 	key = strings.ReplaceAll(key, "<INVALID>", "INVALID")
 	key = strings.ReplaceAll(key, "#", "CODE")
 	key = strings.ReplaceAll(key, "/", "")
+	if key == "ISNAN" || key == "CHKNAN" {
+		return key
+	}
+	key = parityMathTrimWitnessSuffixes(key)
+	if grouped := parityMathGroupedWitnessKey(key); grouped != "" {
+		return grouped
+	}
 	return key
 }
 
@@ -2144,13 +2151,17 @@ func parityMathGroupedWitnessKey(key string) string {
 	case key == "RSHIFTFLOOR":
 		return "RSHIFT"
 	case strings.HasPrefix(key, "QMODPOW2"),
+		strings.HasPrefix(key, "QSHRMOD"),
 		strings.HasPrefix(key, "QADDRSHIFTMOD"):
 		return "QADDRSHIFTMOD"
+	case strings.HasPrefix(key, "QRSHIFT"):
+		return "QRSHIFT"
 	case strings.HasPrefix(key, "QDIV"),
 		strings.HasPrefix(key, "QMOD"),
 		strings.HasPrefix(key, "QADDDIVMOD"):
 		return "QADDDIVMOD"
 	case strings.HasPrefix(key, "QMULMODPOW2"),
+		strings.HasPrefix(key, "QMULSHRMOD"),
 		strings.HasPrefix(key, "QMULRSHIFT"),
 		strings.HasPrefix(key, "QMULADDRSHIFTMOD"):
 		return "QMULADDRSHIFTMOD"
@@ -2329,6 +2340,12 @@ func parityOpcodeCoverageBucket(name string) (string, bool) {
 		"LSHIFTADDDIVMODR", "MINMAX", "MULADDRSHIFTCMOD", "MULADDRSHIFTMOD",
 		"MULADDRSHIFTRMOD", "QADDDIVMOD", "QADDRSHIFTMOD", "QMULADDDIVMOD",
 		"QMULADDRSHIFTMOD", "QLSHIFTADDDIVMOD", "SUBR",
+	):
+		return "random_math", true
+	case parityOpcodeHasTokenPrefix(tokens,
+		"QDIV", "QMOD", "QADDDIVMOD", "QSHRMOD", "QRSHIFT", "QMODPOW2", "QADDRSHIFTMOD",
+		"QMULDIV", "QMULMOD", "QMULADDDIVMOD", "QMULSHRMOD", "QMULRSHIFT", "QMULMODPOW2",
+		"QMULADDRSHIFTMOD", "QLSHIFTDIV", "QLSHIFTMOD", "QLSHIFTADDDIVMOD",
 	):
 		return "random_math", true
 	case parityOpcodeHasTokenSuffix(tokens, "#", "#MOD") || parityOpcodeHasTokenContains(tokens, "/MOD<invalid>"):
