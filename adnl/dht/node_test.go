@@ -144,7 +144,7 @@ func TestNode_findNodes(t *testing.T) {
 		}
 	})
 
-	t.Run("untrusted nodes list response", func(t *testing.T) {
+	t.Run("untrusted nodes list response is filtered", func(t *testing.T) {
 		badNode := *tNode
 		badNode.Signature = []byte("bad-signature")
 
@@ -165,7 +165,7 @@ func TestNode_findNodes(t *testing.T) {
 						}
 
 						if bytes.Equal(kId, _req.Key) {
-							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{&badNode}}))
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{&badNode, tNode}}))
 						} else {
 							t.Fatal("bad request received")
 						}
@@ -178,12 +178,15 @@ func TestNode_findNodes(t *testing.T) {
 		}
 
 		tDhtNode.client = client
-		_, err := tDhtNode.findNodes(context.Background(), kId, 10)
-		if err == nil {
-			t.Fatal("got error nil, want error not nil")
+		nodes, err := tDhtNode.findNodes(context.Background(), kId, 10)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(err.Error(), "untrusted nodes list response") {
-			t.Fatalf("got unexpected error %q", err.Error())
+		if len(nodes) != 1 {
+			t.Fatalf("expected 1 valid node, got %d", len(nodes))
+		}
+		if !reflect.DeepEqual(nodes[0], tNode) {
+			t.Fatal("bad node was not filtered from response")
 		}
 	})
 }
@@ -431,6 +434,66 @@ func TestNode_findValue(t *testing.T) {
 				t.Fatal("test error: unsupported test name")
 			}
 		})
+	}
+}
+
+func TestNode_findValueFiltersBadNodesListResponse(t *testing.T) {
+	tDhtNode, err := newCorrectDhtNode(1, 2, 3, 4, "12356")
+	if err != nil {
+		t.Fatal("failed to prepare test dht node, err: ", err)
+	}
+
+	keyID := make([]byte, 32)
+	goodNode, err := newCorrectNode(8, 8, 8, 8, 12345)
+	if err != nil {
+		t.Fatal("failed creating test node, err: ", err.Error())
+	}
+	badNode := *goodNode
+	badNode.Signature = []byte("bad-signature")
+
+	gateway := &MockGateway{}
+	client := &Client{
+		gateway:   gateway,
+		networkID: _UnknownNetworkID,
+	}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				switch request := req.(type) {
+				case tl.Raw:
+					var findValue FindValue
+					if _, err := tl.Parse(&findValue, request, true); err != nil {
+						t.Fatal("failed to prepare test data, err", err)
+					}
+					if !bytes.Equal(keyID, findValue.Key) {
+						t.Fatal("bad request received")
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{
+						Nodes: NodesList{List: []*Node{&badNode, goodNode}},
+					}))
+				default:
+					return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	tDhtNode.client = client
+	res, err := tDhtNode.findValue(context.Background(), keyID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodes, ok := res.([]*Node)
+	if !ok {
+		t.Fatalf("expected nodes list result, got %T", res)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 valid node, got %d", len(nodes))
+	}
+	if !reflect.DeepEqual(nodes[0], goodNode) {
+		t.Fatal("bad node was not filtered from value response")
 	}
 }
 

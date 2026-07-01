@@ -120,12 +120,7 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 
 	switch r := res.(type) {
 	case NodesList:
-		for _, node := range r.List {
-			if err = node.validate(0, n.clientNetworkID()); err != nil {
-				return nil, fmt.Errorf("untrusted nodes list response: %w", err)
-			}
-		}
-		return r.List, nil
+		return filterValidNodes(r.List, n.clientNetworkID()), nil
 	}
 
 	return nil, fmt.Errorf("failed to find nodes, unexpected response type %T", res)
@@ -203,13 +198,7 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 
 	switch r := res.(type) {
 	case ValueNotFoundResult:
-		for _, node := range r.Nodes.List {
-			err = node.validate(0, n.clientNetworkID())
-			if err != nil {
-				return nil, fmt.Errorf("untrusted nodes list response: %s", err.Error())
-			}
-		}
-		return r.Nodes.List, nil
+		return filterValidNodes(r.Nodes.List, n.clientNetworkID()), nil
 	case ValueFoundResult:
 		if err = checkValueWithNetworkID(id, &r.Value, n.clientNetworkID()); err != nil {
 			return nil, fmt.Errorf("corrupted value: %w", err)
@@ -221,6 +210,20 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 	}
 
 	return nil, fmt.Errorf("failed to find value, unexpected response type %T", res)
+}
+
+func filterValidNodes(nodes []*Node, networkID int32) []*Node {
+	valid := make([]*Node, 0, len(nodes))
+	for _, node := range nodes {
+		if err := node.validate(0, networkID); err != nil {
+			if Logger != nil {
+				Logger("bad dht node:", err.Error())
+			}
+			continue
+		}
+		valid = append(valid, node)
+	}
+	return valid
 }
 
 func checkValue(id []byte, value *Value) error {

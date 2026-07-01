@@ -88,7 +88,10 @@ func NewClientFromConfig(gateway Gateway, cfg *liteclient.GlobalConfig) (*Client
 		networkID = *cfg.DHT.NetworkID
 	}
 
-	k, a := normalizeKA(cfg.DHT.K, cfg.DHT.A)
+	k, a, err := configKA(cfg.DHT.K, cfg.DHT.A)
+	if err != nil {
+		return nil, err
+	}
 	return newClient(gateway, nodes, networkID, k, a)
 }
 
@@ -153,6 +156,17 @@ func normalizeKA(k, a int) (int, int) {
 		a = _maxA
 	}
 	return k, a
+}
+
+func configKA(k, a int) (int, int, error) {
+	if k > _maxK {
+		return 0, 0, fmt.Errorf("bad value k=%d", k)
+	}
+	if a > _maxA {
+		return 0, 0, fmt.Errorf("bad value a=%d", a)
+	}
+	k, a = normalizeKA(k, a)
+	return k, a, nil
 }
 
 func (c *Client) Close() {

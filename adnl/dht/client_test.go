@@ -15,6 +15,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,6 +58,40 @@ func (m *MockGateway) StartServer(listenAddr string) error {
 
 func (m *MockGateway) RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 	return m.reg(addr, key)
+}
+
+func TestNewClientFromConfigRejectsTooLargeKA(t *testing.T) {
+	tests := []struct {
+		name string
+		k    int
+		a    int
+		want string
+	}{
+		{
+			name: "too large k",
+			k:    _maxK + 1,
+			want: "bad value k=11",
+		},
+		{
+			name: "too large a",
+			a:    _maxA + 1,
+			want: "bad value a=11",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewClientFromConfig(&MockGateway{}, &liteclient.GlobalConfig{
+				DHT: liteclient.DHTConfig{
+					K: tt.k,
+					A: tt.a,
+				},
+			})
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("got error %v, want %q", err, tt.want)
+			}
+		})
+	}
 }
 
 type MockADNL struct {
@@ -882,6 +917,56 @@ func TestClient_addNodeRejectsTooOldVersion(t *testing.T) {
 
 	if _, err = cli.addNode(newer); err != nil {
 		t.Fatalf("failed to add newer node: %v", err)
+	}
+}
+
+func TestClient_addNodeRejectsZeroVersion(t *testing.T) {
+	node, err := newCorrectNodeWithVersion(1, 2, 3, 4, 12345, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := NewClient(&MockGateway{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = cli.addNode(node); err == nil || err.Error() != "zero version" {
+		t.Fatalf("got unexpected error %v", err)
+	}
+	for _, bucket := range cli.buckets {
+		if len(bucket.getNodes()) != 0 {
+			t.Fatal("zero-version node entered bucket")
+		}
+	}
+}
+
+func TestClient_addNodeRejectsTooLargeAddressList(t *testing.T) {
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrList := &address.List{}
+	for i := 0; i < 16; i++ {
+		addrList.Addresses = append(addrList.Addresses, &address.UDP{
+			IP:   net.IPv4(1, 2, 3, byte(10+i)).To4(),
+			Port: int32(10000 + i),
+		})
+	}
+	node, err := buildSignedNode(keys.PublicKeyED25519{Key: pub}, addrList, 1, _UnknownNetworkID, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := NewClient(&MockGateway{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = cli.addNode(node)
+	if err == nil || !strings.Contains(err.Error(), "too big addr list") {
+		t.Fatalf("got unexpected error %v", err)
 	}
 }
 

@@ -1,8 +1,11 @@
 package dht
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -15,6 +18,7 @@ import (
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/keys"
+	"github.com/xssnick/tonutils-go/liteclient"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
@@ -106,6 +110,156 @@ func newTestServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	return server
+}
+
+func TestNewServerUsesLargeDefaultMemoryStore(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	store, ok := server.store.(*MemoryValueStore)
+	if !ok {
+		t.Fatalf("unexpected default store type %T", server.store)
+	}
+	if store.maxKeys != defaultMemoryStoreMaxKeys {
+		t.Fatalf("expected default store max keys %d, got %d", defaultMemoryStoreMaxKeys, store.maxKeys)
+	}
+	if store.maxKeys != 100000 {
+		t.Fatalf("expected default store max keys 100000, got %d", store.maxKeys)
+	}
+}
+
+func TestNewServerFromConfigAppliesNetworkIDBeforeStaticNodes(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := key.Public().(ed25519.PublicKey)
+	id, err := tl.Hash(keys.PublicKeyED25519{Key: pub})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodePub, nodeKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeNetworkID := int32(17)
+	cfgNetworkID := int32(18)
+	nodeAddr := net.IPv4(1, 2, 3, 4).To4()
+	node, err := buildSignedNode(
+		keys.PublicKeyED25519{Key: nodePub},
+		&address.List{
+			Addresses: []address.Address{
+				&address.UDP{
+					IP:   nodeAddr,
+					Port: 17556,
+				},
+			},
+		},
+		1,
+		nodeNetworkID,
+		nodeKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &liteclient.GlobalConfig{
+		DHT: liteclient.DHTConfig{
+			K:         1,
+			A:         1,
+			NetworkID: &cfgNetworkID,
+			StaticNodes: liteclient.DHTNodes{
+				Nodes: []liteclient.DHTNode{
+					{
+						ID: liteclient.ServerID{
+							Type: "pub.ed25519",
+							Key:  base64.StdEncoding.EncodeToString(nodePub),
+						},
+						AddrList: liteclient.DHTAddressList{
+							Addrs: []liteclient.DHTAddress{
+								{
+									Type: "adnl.address.udp",
+									IP:   int(int32(binary.BigEndian.Uint32(nodeAddr))),
+									Port: 17556,
+								},
+							},
+						},
+						Version:   int(node.Version),
+						Signature: base64.StdEncoding.EncodeToString(node.Signature),
+					},
+				},
+			},
+		},
+	}
+
+	server, err := NewServerFromConfig(&MockGateway{pub: pub, id: id}, key, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	if server.networkID != cfgNetworkID {
+		t.Fatalf("expected network id %d, got %d", cfgNetworkID, server.networkID)
+	}
+	for _, bucket := range server.buckets {
+		if len(bucket.getNodes()) != 0 {
+			t.Fatal("wrong-network static node entered bucket")
+		}
+	}
+}
+
+func TestNewServerFromConfigRequiresNetworkID(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewServerFromConfig(&MockGateway{}, key, &liteclient.GlobalConfig{}, nil)
+	if err == nil || err.Error() != "dht config network id is required" {
+		t.Fatalf("got unexpected error %v", err)
+	}
+}
+
+func TestNewServerFromConfigRejectsTooLargeKA(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkID := int32(17)
+
+	tests := []struct {
+		name string
+		k    int
+		a    int
+		want string
+	}{
+		{
+			name: "too large k",
+			k:    _maxK + 1,
+			want: "bad value k=11",
+		},
+		{
+			name: "too large a",
+			a:    _maxA + 1,
+			want: "bad value a=11",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewServerFromConfig(&MockGateway{}, key, &liteclient.GlobalConfig{
+				DHT: liteclient.DHTConfig{
+					K:         tt.k,
+					A:         tt.a,
+					NetworkID: &networkID,
+				},
+			}, nil)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("got error %v, want %q", err, tt.want)
+			}
+		})
+	}
 }
 
 func TestServer_HandleQuery_Ping(t *testing.T) {
@@ -250,6 +404,85 @@ func TestServer_HandleQuery_StoreAndFindValue(t *testing.T) {
 	}
 	if !reflect.DeepEqual(res.Value, val) {
 		t.Fatalf("unexpected stored value")
+	}
+}
+
+func TestServer_StoreHookRejectsIncomingStore(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	pubNode, err := newCorrectNode(1, 2, 3, 4, 17002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := newMockPeerFromNode(t, pubNode, "1.2.3.4:17002")
+
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrList := address.List{
+		Addresses: []address.Address{
+			&address.UDP{
+				IP:   net.IPv4(9, 9, 9, 9).To4(),
+				Port: 9999,
+			},
+		},
+	}
+	data, err := tl.Serialize(addrList, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	val, keyID, err := buildStoreValue(
+		keys.PublicKeyED25519{Key: pub},
+		[]byte("address"),
+		0,
+		data,
+		UpdateRuleSignature{},
+		time.Minute,
+		key,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rejectErr := errors.New("store rejected")
+	var hookCalled bool
+	server.SetStoreHook(func(gotPeer adnl.Peer, gotKeyID []byte, gotValue *Value) error {
+		hookCalled = true
+		if gotPeer.RemoteAddr() != peer.RemoteAddr() {
+			t.Fatalf("expected peer addr %s, got %s", peer.RemoteAddr(), gotPeer.RemoteAddr())
+		}
+		if !bytes.Equal(gotKeyID, keyID) {
+			t.Fatalf("expected key id %x, got %x", keyID, gotKeyID)
+		}
+		if !reflect.DeepEqual(gotValue, &val) {
+			t.Fatal("unexpected value passed to hook")
+		}
+		return rejectErr
+	})
+
+	err = server.handleQuery(peer, &adnl.MessageQuery{
+		ID:   make([]byte, 32),
+		Data: Store{Value: &val},
+	})
+	if !errors.Is(err, rejectErr) {
+		t.Fatalf("expected hook error, got %v", err)
+	}
+	if !hookCalled {
+		t.Fatal("store hook was not called")
+	}
+	if peer.answered != nil {
+		t.Fatalf("rejected store was answered with %T", peer.answered)
+	}
+	value, err := server.getStoredValue(keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != nil {
+		t.Fatal("rejected value was stored")
 	}
 }
 
@@ -617,6 +850,156 @@ func TestServer_RepublishStoredSignatureValueWhenClosest(t *testing.T) {
 	}
 }
 
+func TestServer_RepublishStoredValuesIncrementally(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	firstValue, firstKeyID := newSignedTestValue(t)
+	secondValue, secondKeyID := newSignedTestValue(t)
+	bit := firstSharedDistanceBit(t, server.selfID, false, firstKeyID, secondKeyID)
+	addActiveTestNodeInBucket(t, server, bit)
+	if dist := server.distance(firstKeyID, server.k+10); dist != 0 {
+		t.Fatalf("test setup error: expected self to be closest to first value, dist=%d", dist)
+	}
+	if dist := server.distance(secondKeyID, server.k+10); dist != 0 {
+		t.Fatalf("test setup error: expected self to be closest to second value, dist=%d", dist)
+	}
+
+	var storeCalls int32
+	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+
+	if err := server.store.Put(firstKeyID, &firstValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.store.Put(secondKeyID, &secondValue); err != nil {
+		t.Fatal(err)
+	}
+
+	server.republishValues()
+	if got := atomic.LoadInt32(&storeCalls); got != 1 {
+		t.Fatalf("expected 1 stored value republished after first tick, got %d", got)
+	}
+
+	server.republishValues()
+	if got := atomic.LoadInt32(&storeCalls); got != 2 {
+		t.Fatalf("expected 2 stored values republished after second tick, got %d", got)
+	}
+}
+
+func TestServer_RepublishStoredSkipsFarValuesWithoutStarvingTick(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	nearValue, nearKeyID := newSignedTestValue(t)
+	farKeyID := append([]byte{}, server.selfID...)
+	for _, bit := range sharedDistanceBits(t, server.selfID, server.k+10, nearKeyID) {
+		farKeyID[bit/8] ^= byte(1 << uint(7-(bit%8)))
+		addActiveTestNodeInBucket(t, server, bit)
+	}
+	if dist := server.distance(farKeyID, server.k+10); dist < server.k+10 {
+		t.Fatalf("test setup error: expected far value distance >= %d, got %d", server.k+10, dist)
+	}
+	if dist := server.distance(nearKeyID, server.k+10); dist != 0 {
+		t.Fatalf("test setup error: expected self to be closest to near value, dist=%d", dist)
+	}
+
+	var storeCalls int32
+	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+
+	if err := server.store.Put(farKeyID, &nearValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.store.Put(nearKeyID, &nearValue); err != nil {
+		t.Fatal(err)
+	}
+
+	server.republishStoreKeys = [][]byte{farKeyID, nearKeyID}
+	server.republishStoreIndex = 0
+	server.republishValues()
+
+	if got := atomic.LoadInt32(&storeCalls); got == 0 {
+		t.Fatal("near value was not republished in same tick")
+	}
+	value, err := server.store.Get(farKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != nil {
+		t.Fatal("far value was not deleted")
+	}
+}
+
+func TestServer_FillBucketsRunsFindNode(t *testing.T) {
+	server := newTestServer(t)
+	defer server.Close()
+
+	node, err := newCorrectNode(1, 2, 3, 4, 18001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = server.addNodeWithStatus(node, true); err != nil {
+		t.Fatal(err)
+	}
+
+	var findNodeCalls int32
+	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				raw, ok := req.(tl.Raw)
+				if !ok {
+					return fmt.Errorf("unexpected request type %T", req)
+				}
+
+				payload := []byte(raw)
+				var prefix Query
+				if rest, err := tl.Parse(&prefix, raw, true); err == nil {
+					payload = rest
+				}
+
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, payload, true); err != nil {
+					return err
+				}
+				atomic.AddInt32(&findNodeCalls, 1)
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	}
+
+	server.fillBuckets()
+	if got := atomic.LoadInt32(&findNodeCalls); got == 0 {
+		t.Fatal("fillBuckets did not send findNode query")
+	}
+}
+
+func TestServer_JitteredIntervalBounds(t *testing.T) {
+	base := 10 * time.Second
+	jitter := time.Second
+	for i := 0; i < 100; i++ {
+		got := jitteredInterval(base, jitter)
+		if got < base || got >= base+jitter {
+			t.Fatalf("got jittered interval %s outside [%s, %s)", got, base, base+jitter)
+		}
+	}
+	if got := jitteredInterval(base, 0); got != base {
+		t.Fatalf("expected base interval without jitter, got %s", got)
+	}
+}
+
+func TestServer_RandomBucketFillKeyCopiesFirstSelfBit(t *testing.T) {
+	selfID := bytes.Repeat([]byte{0x80}, 32)
+	for i := 0; i < 100; i++ {
+		keyID := randomBucketFillKey(selfID)
+		if len(keyID) != 32 {
+			t.Fatalf("expected 32-byte key, got %d", len(keyID))
+		}
+		if !bitAt(keyID, 0) {
+			t.Fatal("fill key did not copy first self bit")
+		}
+	}
+}
+
 func newSignedTestValue(t *testing.T) (Value, []byte) {
 	t.Helper()
 
@@ -650,6 +1033,47 @@ func firstDistanceBit(t *testing.T, keyID, selfID []byte, wantDifferent bool) in
 	}
 	t.Fatal("failed to find suitable distance bit")
 	return 0
+}
+
+func firstSharedDistanceBit(t *testing.T, selfID []byte, wantDifferent bool, keyIDs ...[]byte) int {
+	t.Helper()
+
+	for bit := 0; bit < 256; bit++ {
+		ok := true
+		for _, keyID := range keyIDs {
+			if xorBit(keyID, selfID, bit) != wantDifferent {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return bit
+		}
+	}
+	t.Fatal("failed to find suitable shared distance bit")
+	return 0
+}
+
+func sharedDistanceBits(t *testing.T, selfID []byte, count int, keyIDs ...[]byte) []int {
+	t.Helper()
+
+	bits := make([]int, 0, count)
+	for bit := 0; bit < 256 && len(bits) < count; bit++ {
+		ok := true
+		for _, keyID := range keyIDs {
+			if xorBit(keyID, selfID, bit) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			bits = append(bits, bit)
+		}
+	}
+	if len(bits) != count {
+		t.Fatalf("failed to find %d shared distance bits, got %d", count, len(bits))
+	}
+	return bits
 }
 
 func addActiveTestNodeInBucket(t *testing.T, server *Server, bit int) {

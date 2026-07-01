@@ -107,3 +107,52 @@ func TestMemoryValueStore_UpdateRefreshesEvictionOrder(t *testing.T) {
 		t.Fatal("key a was not refreshed correctly")
 	}
 }
+
+func TestMemoryValueStore_DeleteExpired(t *testing.T) {
+	store := NewMemoryValueStore(3)
+	now := time.Now().Unix()
+
+	if err := store.Put([]byte("expired"), &Value{TTL: int32(now - 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put([]byte("live"), &Value{TTL: int32(now + 60)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteExpired(now); err != nil {
+		t.Fatal(err)
+	}
+
+	value, err := store.Get([]byte("expired"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != nil {
+		t.Fatal("expired key was not deleted")
+	}
+
+	value, err = store.Get([]byte("live"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value == nil || value.TTL != int32(now+60) {
+		t.Fatal("live key was unexpectedly deleted")
+	}
+
+	if err := store.Put([]byte("new-a"), &Value{TTL: int32(now + 61)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put([]byte("new-b"), &Value{TTL: int32(now + 62)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put([]byte("new-c"), &Value{TTL: int32(now + 63)}); err != nil {
+		t.Fatal(err)
+	}
+
+	value, err = store.Get([]byte("live"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != nil {
+		t.Fatal("live key should be evicted as the oldest remaining key")
+	}
+}

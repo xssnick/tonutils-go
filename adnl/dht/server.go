@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	rand "math/rand/v2"
 	"reflect"
 	"sort"
 	"sync"
@@ -21,9 +22,16 @@ import (
 
 const (
 	serverMaintenanceInterval = 10 * time.Second
-	serverRepublishInterval   = 10 * time.Second
+	serverMaintenanceJitter   = 10 * time.Second
+	serverRepublishInterval   = time.Second
+	serverRepublishJitter     = time.Second
+	serverCleanupInterval     = time.Second
+	serverCleanupJitter       = time.Second
+	serverBucketFillInterval  = 10 * time.Second
+	serverBucketFillJitter    = 10 * time.Second
 	serverRefreshWorkers      = 16
-	defaultMemoryStoreMaxKeys = 4096
+	defaultMemoryStoreMaxKeys = 100000
+	serverRepublishScanLimit  = 64
 )
 
 var errReverseConnectionsDisabled = errors.New("dht reverse connections are disabled")
@@ -40,6 +48,9 @@ func (l *localStoreError) Unwrap() error {
 	return l.err
 }
 
+// StoreHook is called before an incoming dht.store value is saved locally.
+type StoreHook func(peer adnl.Peer, keyID []byte, value *Value) error
+
 type Server struct {
 	*Client
 
@@ -50,14 +61,23 @@ type Server struct {
 
 	mx        sync.RWMutex
 	ourValues map[string]*Value
+
+	storeHookMx sync.RWMutex
+	storeHook   StoreHook
+
+	republishMx         sync.Mutex
+	republishOwnKeys    [][]byte
+	republishOwnIndex   int
+	republishStoreKeys  [][]byte
+	republishStoreIndex int
 }
 
 func NewServer(gateway Gateway, key ed25519.PrivateKey, nodes []*Node, store ValueStore) (*Server, error) {
 	k, a := normalizeKA(0, 0)
-	return newServer(gateway, key, nodes, k, a, store)
+	return newServer(gateway, key, nodes, _UnknownNetworkID, k, a, store)
 }
 
-func newServer(gateway Gateway, key ed25519.PrivateKey, nodes []*Node, k, a int, store ValueStore) (*Server, error) {
+func newServer(gateway Gateway, key ed25519.PrivateKey, nodes []*Node, networkID int32, k, a int, store ValueStore) (*Server, error) {
 	if key == nil {
 		return nil, fmt.Errorf("nil dht server key")
 	}
@@ -68,7 +88,7 @@ func newServer(gateway Gateway, key ed25519.PrivateKey, nodes []*Node, k, a int,
 		return nil, fmt.Errorf("dht key must match gateway key")
 	}
 
-	client, err := newClient(gateway, nodes, _UnknownNetworkID, k, a)
+	client, err := newClient(gateway, nodes, networkID, k, a)
 	if err != nil {
 		return nil, err
 	}
@@ -93,21 +113,34 @@ func newServer(gateway Gateway, key ed25519.PrivateKey, nodes []*Node, k, a int,
 }
 
 func NewServerFromConfig(gateway Gateway, key ed25519.PrivateKey, cfg *liteclient.GlobalConfig, store ValueStore) (*Server, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	if cfg.DHT.NetworkID == nil {
+		return nil, fmt.Errorf("dht config network id is required")
+	}
+
 	nodes, err := nodesFromConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	k, a := normalizeKA(cfg.DHT.K, cfg.DHT.A)
-	server, err := newServer(gateway, key, nodes, k, a, store)
+	k, a, err := configKA(cfg.DHT.K, cfg.DHT.A)
 	if err != nil {
 		return nil, err
 	}
-
-	if cfg != nil && cfg.DHT.NetworkID != nil {
-		server.networkID = *cfg.DHT.NetworkID
+	server, err := newServer(gateway, key, nodes, *cfg.DHT.NetworkID, k, a, store)
+	if err != nil {
+		return nil, err
 	}
 	return server, nil
+}
+
+// SetStoreHook sets a hook for incoming dht.store queries. Passing nil disables it.
+func (s *Server) SetStoreHook(hook StoreHook) {
+	s.storeHookMx.Lock()
+	s.storeHook = hook
+	s.storeHookMx.Unlock()
 }
 
 func (s *Server) Close() error {
@@ -430,6 +463,9 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 		if err = checkValueWithNetworkID(keyID, q.Value, s.networkID); err != nil {
 			return err
 		}
+		if err = s.callStoreHook(peer, keyID, q.Value); err != nil {
+			return err
+		}
 		if err = s.storeIn(keyID, q.Value); err != nil {
 			return err
 		}
@@ -495,6 +531,16 @@ func (s *Server) absorbSenderNode(peer adnl.Peer, node *Node) {
 	_, _ = s.addNodeWithStatus(node, true)
 }
 
+func (s *Server) callStoreHook(peer adnl.Peer, keyID []byte, value *Value) error {
+	s.storeHookMx.RLock()
+	hook := s.storeHook
+	s.storeHookMx.RUnlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(peer, append([]byte{}, keyID...), cloneValue(value))
+}
+
 func (s *Server) getNearestNodes(key []byte, k int) []*Node {
 	if k <= 0 {
 		return nil
@@ -508,9 +554,11 @@ func (s *Server) getNearestNodes(key []byte, k int) []*Node {
 			return
 		}
 
-		sort.Slice(nodes, func(i, j int) bool {
-			return compareDistance(nodes[i].adnlId, nodes[j].adnlId, key) < 0
-		})
+		if len(nodes) > 1 {
+			sort.Slice(nodes, func(i, j int) bool {
+				return compareDistance(nodes[i].adnlId, nodes[j].adnlId, key) < 0
+			})
+		}
 
 		for _, node := range nodes {
 			if node == nil || node.node == nil {
@@ -610,25 +658,75 @@ func (s *Server) distance(keyID []byte, max int) int {
 func (s *Server) maintenanceLoop() {
 	defer close(s.done)
 
-	nodeTicker := time.NewTicker(serverMaintenanceInterval)
-	republishTicker := time.NewTicker(serverRepublishInterval)
-	cleanupTicker := time.NewTicker(time.Second)
-	defer nodeTicker.Stop()
-	defer republishTicker.Stop()
-	defer cleanupTicker.Stop()
+	now := time.Now()
+	nextRefresh := now.Add(jitteredInterval(serverMaintenanceInterval, serverMaintenanceJitter))
+	nextRepublish := now.Add(jitteredInterval(serverRepublishInterval, serverRepublishJitter))
+	nextCleanup := now.Add(jitteredInterval(serverCleanupInterval, serverCleanupJitter))
+	nextFill := now.Add(jitteredInterval(serverBucketFillInterval, serverBucketFillJitter))
+
+	timer := time.NewTimer(time.Until(earliestTime(nextRefresh, nextRepublish, nextCleanup, nextFill)))
+	defer timer.Stop()
 
 	for {
+		resetTimer(timer, time.Until(earliestTime(nextRefresh, nextRepublish, nextCleanup, nextFill)))
+
 		select {
 		case <-s.globalCtx.Done():
 			return
-		case <-nodeTicker.C:
+		case <-timer.C:
+		}
+
+		now = time.Now()
+		if !now.Before(nextRefresh) {
 			s.refreshNodes()
-		case <-republishTicker.C:
+			nextRefresh = time.Now().Add(jitteredInterval(serverMaintenanceInterval, serverMaintenanceJitter))
+		}
+		now = time.Now()
+		if !now.Before(nextRepublish) {
 			s.republishValues()
-		case <-cleanupTicker.C:
+			nextRepublish = time.Now().Add(jitteredInterval(serverRepublishInterval, serverRepublishJitter))
+		}
+		now = time.Now()
+		if !now.Before(nextCleanup) {
 			s.cleanup()
+			nextCleanup = time.Now().Add(jitteredInterval(serverCleanupInterval, serverCleanupJitter))
+		}
+		now = time.Now()
+		if !now.Before(nextFill) {
+			s.fillBuckets()
+			nextFill = time.Now().Add(jitteredInterval(serverBucketFillInterval, serverBucketFillJitter))
 		}
 	}
+}
+
+func resetTimer(timer *time.Timer, d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(d)
+}
+
+func earliestTime(first time.Time, rest ...time.Time) time.Time {
+	earliest := first
+	for _, t := range rest {
+		if t.Before(earliest) {
+			earliest = t
+		}
+	}
+	return earliest
+}
+
+func jitteredInterval(base, jitter time.Duration) time.Duration {
+	if jitter <= 0 {
+		return base
+	}
+	return base + time.Duration(rand.Int64N(int64(jitter)))
 }
 
 func (s *Server) refreshNodes() {
@@ -684,63 +782,193 @@ func (s *Server) refreshNodes() {
 	}
 }
 
+func (s *Server) fillBuckets() {
+	keyID := randomBucketFillKey(s.selfID)
+	ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
+	s.collectNearestNodes(ctx, keyID)
+	cancel()
+}
+
+func randomBucketFillKey(selfID []byte) []byte {
+	keyID := make([]byte, 32)
+	for i := range keyID {
+		keyID[i] = byte(rand.UintN(256))
+	}
+
+	sameBits := 64 - rand.IntN(1<<uint(rand.IntN(7)))
+	if max := len(selfID) * 8; sameBits > max {
+		sameBits = max
+	}
+	for bit := 0; bit < sameBits; bit++ {
+		setBit(keyID, bit, bitAt(selfID, bit))
+	}
+	return keyID
+}
+
 func (s *Server) republishValues() {
+	s.republishMx.Lock()
+	defer s.republishMx.Unlock()
+
 	now := time.Now().Unix()
+	ownedKey := s.republishOwnedValue(now)
+	s.republishStoredValue(now, ownedKey)
+}
+
+func (s *Server) republishOwnedValue(now int64) []byte {
+	s.ensureOwnedRepublishKeys()
+	for i := 0; i < serverRepublishScanLimit && s.republishOwnIndex < len(s.republishOwnKeys); i++ {
+		keyID, value := s.nextOwnedRepublishValue(now)
+		if value == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
+		_, _ = s.storePreparedValue(ctx, value, keyID)
+		cancel()
+		return keyID
+	}
+	return nil
+}
+
+func (s *Server) ensureOwnedRepublishKeys() {
+	if s.republishOwnIndex >= len(s.republishOwnKeys) {
+		s.republishOwnKeys = s.ownedValueKeys()
+		s.republishOwnIndex = 0
+	}
+}
+
+func (s *Server) nextOwnedRepublishValue(now int64) ([]byte, *Value) {
+	keyID := s.republishOwnKeys[s.republishOwnIndex]
+	s.republishOwnIndex++
 
 	s.mx.RLock()
-	values := make(map[string]*Value, len(s.ourValues))
-	for keyID, value := range s.ourValues {
-		values[keyID] = cloneValue(value)
+	value := cloneValue(s.ourValues[string(keyID)])
+	s.mx.RUnlock()
+	if value == nil || int64(value.TTL) <= now+60 {
+		return keyID, nil
+	}
+	return keyID, value
+}
+
+func (s *Server) ownedValueKeys() [][]byte {
+	s.mx.RLock()
+	keys := make([][]byte, 0, len(s.ourValues))
+	for keyID := range s.ourValues {
+		keys = append(keys, []byte(keyID))
 	}
 	s.mx.RUnlock()
 
-	republished := map[string]struct{}{}
-	for keyID, value := range values {
-		if value == nil || int64(value.TTL) <= now+60 {
-			continue
-		}
+	sortKeyBytes(keys)
+	return keys
+}
 
-		ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
-		_, _ = s.storePreparedValue(ctx, value, []byte(keyID))
-		cancel()
-		republished[keyID] = struct{}{}
+func (s *Server) republishStoredValue(now int64, ownedKey []byte) {
+	if !s.ensureStoredRepublishKeys() {
+		return
 	}
 
-	var forget [][]byte
-	_ = s.store.ForEach(func(keyID []byte, value *Value) error {
-		if value == nil || int64(value.TTL) <= now+60 {
-			return nil
+	for i := 0; i < serverRepublishScanLimit && s.republishStoreIndex < len(s.republishStoreKeys); i++ {
+		keyID, value := s.nextStoredRepublishValue(now)
+		if keyID == nil {
+			return
 		}
-
+		if value == nil {
+			continue
+		}
 		dist := s.distance(keyID, s.k+10)
 		if dist >= s.k+10 {
-			forget = append(forget, append([]byte{}, keyID...))
-			return nil
+			_ = s.store.Delete(keyID)
+			continue
 		}
 		if dist != 0 || !needRepublish(value) {
-			return nil
+			continue
 		}
-		if _, ok := republished[string(keyID)]; ok {
-			return nil
+		if ownedKey != nil && bytes.Equal(ownedKey, keyID) {
+			continue
 		}
 
 		ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
 		_, _ = s.storePreparedValue(ctx, value, keyID)
 		cancel()
-		return nil
-	})
-
-	for _, keyID := range forget {
-		_ = s.store.Delete(keyID)
+		return
 	}
 }
 
-func (s *Server) cleanup() {
-	now := time.Now()
-	var expiredKeys [][]byte
+func (s *Server) ensureStoredRepublishKeys() bool {
+	if s.republishStoreIndex >= len(s.republishStoreKeys) {
+		keys, err := s.storedValueKeys()
+		if err != nil || len(keys) == 0 {
+			return false
+		}
+		s.republishStoreKeys = keys
+		s.republishStoreIndex = 0
+	}
+	return true
+}
 
+func (s *Server) nextStoredRepublishValue(now int64) ([]byte, *Value) {
+	if s.republishStoreIndex >= len(s.republishStoreKeys) {
+		return nil, nil
+	}
+	keyID := s.republishStoreKeys[s.republishStoreIndex]
+	s.republishStoreIndex++
+
+	value, err := s.store.Get(keyID)
+	if err != nil || value == nil || int64(value.TTL) <= now+60 {
+		return keyID, nil
+	}
+	return keyID, value
+}
+
+func (s *Server) storedValueKeys() ([][]byte, error) {
+	if lister, ok := s.store.(valueStoreKeyLister); ok {
+		keys, err := lister.Keys()
+		if err != nil {
+			return nil, err
+		}
+		sortKeyBytes(keys)
+		return keys, nil
+	}
+
+	var keys [][]byte
+	err := s.store.ForEach(func(keyID []byte, value *Value) error {
+		keys = append(keys, append([]byte{}, keyID...))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sortKeyBytes(keys)
+	return keys, nil
+}
+
+func sortKeyBytes(keys [][]byte) {
+	sort.Slice(keys, func(i, j int) bool {
+		return bytes.Compare(keys[i], keys[j]) < 0
+	})
+}
+
+func (s *Server) cleanup() {
+	now := time.Now().Unix()
+	s.cleanupStore(now)
+
+	s.mx.Lock()
+	for keyID, value := range s.ourValues {
+		if value == nil || int64(value.TTL) <= now {
+			delete(s.ourValues, keyID)
+		}
+	}
+	s.mx.Unlock()
+}
+
+func (s *Server) cleanupStore(now int64) {
+	if cleaner, ok := s.store.(valueStoreExpiredCleaner); ok {
+		_ = cleaner.DeleteExpired(now)
+		return
+	}
+
+	var expiredKeys [][]byte
 	_ = s.store.ForEach(func(keyID []byte, value *Value) error {
-		if value != nil && int64(value.TTL) <= now.Unix() {
+		if value != nil && int64(value.TTL) <= now {
 			expiredKeys = append(expiredKeys, append([]byte{}, keyID...))
 		}
 		return nil
@@ -748,14 +976,6 @@ func (s *Server) cleanup() {
 	for _, keyID := range expiredKeys {
 		_ = s.store.Delete(keyID)
 	}
-
-	s.mx.Lock()
-	for keyID, value := range s.ourValues {
-		if value == nil || int64(value.TTL) <= now.Unix() {
-			delete(s.ourValues, keyID)
-		}
-	}
-	s.mx.Unlock()
 }
 
 func mergeValue(current, incoming *Value) (*Value, bool, error) {
@@ -911,6 +1131,26 @@ func xorBit(a, b []byte, bit int) bool {
 	}
 	mask := byte(1 << uint(7-(bit%8)))
 	return (a[bit/8] & mask) != (b[bit/8] & mask)
+}
+
+func bitAt(data []byte, bit int) bool {
+	if bit < 0 || bit >= len(data)*8 {
+		return false
+	}
+	mask := byte(1 << uint(7-(bit%8)))
+	return data[bit/8]&mask != 0
+}
+
+func setBit(data []byte, bit int, value bool) {
+	if bit < 0 || bit >= len(data)*8 {
+		return
+	}
+	mask := byte(1 << uint(7-(bit%8)))
+	if value {
+		data[bit/8] |= mask
+		return
+	}
+	data[bit/8] &^= mask
 }
 
 func xorDistanceLess(key, a, b []byte) bool {

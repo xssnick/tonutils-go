@@ -18,6 +18,7 @@ const (
 	_MaxValueSize         = 768
 	_MaxValueTTLSec       = 3600 + 60
 	_MaxOverlayNodeAgeSec = 10 * 60
+	_MaxAddressListSize   = 128
 )
 
 func checkValueTTLAt(ttl int32, now int64) error {
@@ -167,6 +168,9 @@ func (n *Node) validate(currentVersion, ourNetworkID int32) error {
 	if n == nil {
 		return fmt.Errorf("nil node")
 	}
+	if n.Version == 0 {
+		return fmt.Errorf("zero version")
+	}
 	if currentVersion != 0 && n.Version <= currentVersion {
 		return fmt.Errorf("too old version")
 	}
@@ -194,6 +198,13 @@ func (n *Node) checkSerializableFields(ourNetworkID int32) error {
 		if err := checkSerializableAddress(addr); err != nil {
 			return fmt.Errorf("invalid dht node address %d: %w", i, err)
 		}
+	}
+	addrList, err := tl.Serialize(n.AddrList, true)
+	if err != nil {
+		return fmt.Errorf("failed to serialize dht node address list: %w", err)
+	}
+	if len(addrList) > _MaxAddressListSize {
+		return fmt.Errorf("too big addr list: size=%d", len(addrList))
 	}
 	if _, err := splitNodeSignature(n.Signature, ourNetworkID); err != nil {
 		return err
