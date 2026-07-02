@@ -201,6 +201,40 @@ func TestInboundCustomRespondsWithRateLimitedNop(t *testing.T) {
 	}
 }
 
+func TestMessagePartRejectsTooManyIncompleteMessages(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := NewGateway(key).initADNL()
+	for i := 0; i < maxIncompleteMultipartMessages; i++ {
+		hash := make([]byte, 32)
+		binary.LittleEndian.PutUint32(hash, uint32(i))
+		err = a.processMessage(MessagePart{
+			Hash:      hash,
+			TotalSize: 2,
+			Offset:    0,
+			Data:      []byte{1},
+		})
+		if err != nil {
+			t.Fatalf("message part %d failed: %v", i, err)
+		}
+	}
+
+	hash := make([]byte, 32)
+	binary.LittleEndian.PutUint32(hash, uint32(maxIncompleteMultipartMessages))
+	err = a.processMessage(MessagePart{
+		Hash:      hash,
+		TotalSize: 2,
+		Offset:    0,
+		Data:      []byte{1},
+	})
+	if err == nil || !strings.Contains(err.Error(), "too many incomplete messages") {
+		t.Fatalf("expected too many incomplete messages error, got %v", err)
+	}
+}
+
 func TestInboundCreateChannelCustomRespondsWithConfirmAndNop(t *testing.T) {
 	_, ourPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	rand "math/rand/v2"
+	"net"
+	"net/netip"
 	"reflect"
 	"sort"
 	"sync"
@@ -29,6 +31,10 @@ const (
 	serverCleanupJitter       = time.Second
 	serverBucketFillInterval  = 10 * time.Second
 	serverBucketFillJitter    = 10 * time.Second
+	serverBucketFillTargets   = 4
+	serverBucketFillWorkers   = 2
+	serverStartupFillTargets  = 24
+	serverStartupFillWorkers  = 4
 	serverRefreshWorkers      = 16
 	defaultMemoryStoreMaxKeys = 100000
 	serverRepublishScanLimit  = 64
@@ -51,6 +57,12 @@ func (l *localStoreError) Unwrap() error {
 // StoreHook is called before an incoming dht.store value is saved locally.
 type StoreHook func(peer adnl.Peer, keyID []byte, value *Value) error
 
+// QueryHook is called after an incoming DHT query is handled.
+type QueryHook func(method string, err error)
+
+// QueryAdmissionHook is called before an incoming DHT query is handled.
+type QueryAdmissionHook func(peer adnl.Peer, method string) error
+
 type Server struct {
 	*Client
 
@@ -64,6 +76,14 @@ type Server struct {
 
 	storeHookMx sync.RWMutex
 	storeHook   StoreHook
+
+	queryHookMx sync.RWMutex
+	queryHook   QueryHook
+
+	queryAdmissionHookMx sync.RWMutex
+	queryAdmissionHook   QueryAdmissionHook
+
+	fillBucketCursor int
 
 	republishMx         sync.Mutex
 	republishOwnKeys    [][]byte
@@ -116,20 +136,22 @@ func NewServerFromConfig(gateway Gateway, key ed25519.PrivateKey, cfg *liteclien
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
-	if cfg.DHT.NetworkID == nil {
-		return nil, fmt.Errorf("dht config network id is required")
-	}
 
 	nodes, err := nodesFromConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 
+	networkID := _UnknownNetworkID
+	if cfg.DHT.NetworkID != nil {
+		networkID = *cfg.DHT.NetworkID
+	}
+
 	k, a, err := configKA(cfg.DHT.K, cfg.DHT.A)
 	if err != nil {
 		return nil, err
 	}
-	server, err := newServer(gateway, key, nodes, *cfg.DHT.NetworkID, k, a, store)
+	server, err := newServer(gateway, key, nodes, networkID, k, a, store)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +163,21 @@ func (s *Server) SetStoreHook(hook StoreHook) {
 	s.storeHookMx.Lock()
 	s.storeHook = hook
 	s.storeHookMx.Unlock()
+}
+
+// SetQueryHook sets a hook for incoming DHT queries. Passing nil disables it.
+func (s *Server) SetQueryHook(hook QueryHook) {
+	s.queryHookMx.Lock()
+	s.queryHook = hook
+	s.queryHookMx.Unlock()
+}
+
+// SetQueryAdmissionHook sets a hook called before incoming DHT queries are handled.
+// Returning an error rejects the query. Passing nil disables it.
+func (s *Server) SetQueryAdmissionHook(hook QueryAdmissionHook) {
+	s.queryAdmissionHookMx.Lock()
+	s.queryAdmissionHook = hook
+	s.queryAdmissionHookMx.Unlock()
 }
 
 func (s *Server) Close() error {
@@ -409,13 +446,28 @@ func (s *Server) queryNode(ctx context.Context, node *dhtNode, req tl.Serializab
 	return res, nil
 }
 
-func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
+func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) (err error) {
 	sender, payload := unwrapPrefixedPayload(msg.Data)
+	method := queryMethod(payload)
+	defer func() {
+		s.callQueryHook(method, err)
+	}()
+	if err = s.callQueryAdmissionHook(peer, method); err != nil {
+		return err
+	}
 	s.absorbSenderNode(peer, sender)
 
+	clientIP := peerRemoteIP(peer)
+	queryType := reflect.TypeOf(payload)
 	answer := func(result tl.Serializable) error {
 		if Logger != nil {
-			Logger("[DHT DEBUG] answering", reflect.TypeOf(result), "qid", fmt.Sprintf("%x", msg.ID))
+			Logger(
+				"[DHT DEBUG] answering",
+				reflect.TypeOf(result),
+				"to", queryType,
+				"client_ip", clientIP,
+				"qid", fmt.Sprintf("%x", msg.ID),
+			)
 		}
 		return peer.Answer(context.Background(), msg.ID, result)
 	}
@@ -427,12 +479,22 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 		return answer(NodesList{List: s.getNearestNodes(q.Key, s.limitK(q.K))})
 	case FindValue:
 		if Logger != nil {
-			Logger("[DHT DEBUG] findValue query", fmt.Sprintf("%x", q.Key), "qid", fmt.Sprintf("%x", msg.ID))
+			Logger(
+				"[DHT DEBUG] findValue query",
+				fmt.Sprintf("%x", q.Key),
+				"client_ip", clientIP,
+				"qid", fmt.Sprintf("%x", msg.ID),
+			)
 		}
 		value, err := s.getStoredValue(q.Key)
 		if err != nil {
 			if Logger != nil {
-				Logger("[DHT DEBUG] findValue getStoredValue err", err, "qid", fmt.Sprintf("%x", msg.ID))
+				Logger(
+					"[DHT DEBUG] findValue getStoredValue err",
+					err,
+					"client_ip", clientIP,
+					"qid", fmt.Sprintf("%x", msg.ID),
+				)
 			}
 			return err
 		}
@@ -444,13 +506,18 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 					"idx", value.KeyDescription.Key.Index,
 					"ttl", value.TTL,
 					"data_len", len(value.Data),
+					"client_ip", clientIP,
 					"qid", fmt.Sprintf("%x", msg.ID),
 				)
 			}
 			return answer(ValueFoundResult{Value: *value})
 		}
 		if Logger != nil {
-			Logger("[DHT DEBUG] findValue miss", "qid", fmt.Sprintf("%x", msg.ID))
+			Logger(
+				"[DHT DEBUG] findValue miss",
+				"client_ip", clientIP,
+				"qid", fmt.Sprintf("%x", msg.ID),
+			)
 		}
 		return answer(ValueNotFoundResult{
 			Nodes: NodesList{List: s.getNearestNodes(q.Key, s.limitK(q.K))},
@@ -485,6 +552,45 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) error {
 	}
 }
 
+func peerRemoteIP(peer adnl.Peer) string {
+	remote := peer.RemoteAddr()
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return remote
+	}
+	return host
+}
+
+func sameDialAddress(left, right string) bool {
+	leftAddr, leftErr := netip.ParseAddrPort(left)
+	rightAddr, rightErr := netip.ParseAddrPort(right)
+	if leftErr == nil && rightErr == nil {
+		return leftAddr.Addr().Unmap() == rightAddr.Addr().Unmap() && leftAddr.Port() == rightAddr.Port()
+	}
+	return left == right
+}
+
+func queryMethod(payload any) string {
+	switch payload.(type) {
+	case Ping:
+		return "ping"
+	case FindNode:
+		return "findNode"
+	case FindValue:
+		return "findValue"
+	case Store:
+		return "store"
+	case SignedAddressListQuery:
+		return "getSignedAddressList"
+	case RegisterReverseConnection:
+		return "registerReverseConnection"
+	case RequestReversePing:
+		return "requestReversePing"
+	default:
+		return "unknown"
+	}
+}
+
 func (s *Server) handleMessage(peer adnl.Peer, msg *adnl.MessageCustom) error {
 	sender, payload := unwrapPrefixedPayload(msg.Data)
 	s.absorbSenderNode(peer, sender)
@@ -507,7 +613,7 @@ func (s *Server) queryPrefix() ([]byte, error) {
 
 func (s *Server) selfNode() (*Node, error) {
 	addrList := s.gateway.GetAddressList()
-	return buildSignedNode(
+	return BuildSignedNode(
 		keys.PublicKeyED25519{Key: s.key.Public().(ed25519.PublicKey)},
 		cloneAddressList(&addrList),
 		int32(time.Now().Unix()),
@@ -528,6 +634,12 @@ func (s *Server) absorbSenderNode(peer adnl.Peer, node *Node) {
 	if err != nil || !bytes.Equal(id, peer.GetID()) {
 		return
 	}
+
+	_, addr, err := firstDialAddressFromList(node.AddrList)
+	if err != nil || !sameDialAddress(addr, peer.RemoteAddr()) {
+		return
+	}
+
 	_, _ = s.addNodeWithStatus(node, true)
 }
 
@@ -539,6 +651,26 @@ func (s *Server) callStoreHook(peer adnl.Peer, keyID []byte, value *Value) error
 		return nil
 	}
 	return hook(peer, append([]byte{}, keyID...), cloneValue(value))
+}
+
+func (s *Server) callQueryAdmissionHook(peer adnl.Peer, method string) error {
+	s.queryAdmissionHookMx.RLock()
+	hook := s.queryAdmissionHook
+	s.queryAdmissionHookMx.RUnlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(peer, method)
+}
+
+func (s *Server) callQueryHook(method string, err error) {
+	s.queryHookMx.RLock()
+	hook := s.queryHook
+	s.queryHookMx.RUnlock()
+	if hook == nil {
+		return
+	}
+	hook(method, err)
 }
 
 func (s *Server) getNearestNodes(key []byte, k int) []*Node {
@@ -657,6 +789,8 @@ func (s *Server) distance(keyID []byte, max int) int {
 
 func (s *Server) maintenanceLoop() {
 	defer close(s.done)
+
+	s.startupFillBuckets()
 
 	now := time.Now()
 	nextRefresh := now.Add(jitteredInterval(serverMaintenanceInterval, serverMaintenanceJitter))
@@ -777,16 +911,196 @@ func (s *Server) refreshNodes() {
 	close(jobs)
 	wg.Wait()
 
+	s.promoteReadyNodes()
+}
+
+func (s *Server) promoteReadyNodes() {
 	for i := range s.buckets {
 		s.buckets[i].promoteReady()
 	}
 }
 
+func (s *Server) startupFillBuckets() {
+	targets := serverStartupFillTargets
+	if targets <= 0 {
+		return
+	}
+
+	workers := serverStartupFillWorkers
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > targets {
+		workers = targets
+	}
+
+	jobs := make(chan []byte, workers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for keyID := range jobs {
+				ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
+				s.collectNearestNodes(ctx, keyID)
+				cancel()
+			}
+		}()
+	}
+
+	for i := 0; i < targets; i++ {
+		keyID := bucketFillKey(s.selfID, startupFillBucketBit(i, targets))
+		select {
+		case <-s.globalCtx.Done():
+			close(jobs)
+			wg.Wait()
+			return
+		case jobs <- keyID:
+		}
+	}
+
+	close(jobs)
+	wg.Wait()
+	s.promoteReadyNodes()
+}
+
 func (s *Server) fillBuckets() {
-	keyID := randomBucketFillKey(s.selfID)
-	ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
-	s.collectNearestNodes(ctx, keyID)
-	cancel()
+	s.promoteReadyNodes()
+	keys := s.bucketFillKeys(serverBucketFillTargets)
+	if len(keys) == 0 {
+		return
+	}
+
+	workers := serverBucketFillWorkers
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(keys) {
+		workers = len(keys)
+	}
+
+	jobs := make(chan []byte, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for keyID := range jobs {
+				ctx, cancel := context.WithTimeout(s.globalCtx, queryTimeout)
+				s.collectNearestNodes(ctx, keyID)
+				cancel()
+			}
+		}()
+	}
+
+	for _, keyID := range keys {
+		select {
+		case <-s.globalCtx.Done():
+			close(jobs)
+			wg.Wait()
+			return
+		case jobs <- keyID:
+		}
+	}
+
+	close(jobs)
+	wg.Wait()
+	s.promoteReadyNodes()
+}
+
+func (s *Server) bucketFillKeys(max int) [][]byte {
+	if max <= 0 {
+		return nil
+	}
+
+	keys := make([][]byte, 0, max)
+	used := make(map[int]struct{}, max)
+	for len(keys) < max {
+		bit, ok := s.nextFillBucket(used)
+		if !ok {
+			break
+		}
+		used[bit] = struct{}{}
+		keys = append(keys, bucketFillKey(s.selfID, bit))
+	}
+	if len(keys) == 0 {
+		keys = append(keys, randomBucketFillKey(s.selfID))
+	}
+	return keys
+}
+
+func (s *Server) nextFillBucket(skip map[int]struct{}) (int, bool) {
+	start := s.fillBucketCursor % len(s.buckets)
+	if bit, ok := s.findBucketFrom(start, skip, func(active, backup int) bool {
+		return active == 0
+	}); ok {
+		s.fillBucketCursor = (bit + 1) % len(s.buckets)
+		return bit, true
+	}
+	if bit, ok := s.findBucketFrom(start, skip, func(active, backup int) bool {
+		return active < s.k
+	}); ok {
+		s.fillBucketCursor = (bit + 1) % len(s.buckets)
+		return bit, true
+	}
+	return 0, false
+}
+
+func (s *Server) findBucketFrom(start int, skip map[int]struct{}, match func(active, backup int) bool) (int, bool) {
+	for offset := 0; offset < len(s.buckets); offset++ {
+		bit := (start + offset) % len(s.buckets)
+		if _, ok := skip[bit]; ok {
+			continue
+		}
+		active, backup := s.buckets[bit].nodeCounts()
+		if match(active, backup) {
+			return bit, true
+		}
+	}
+	return 0, false
+}
+
+func startupFillBucketBit(idx, total int) int {
+	if total <= 1 {
+		return 0
+	}
+	bit := idx * 255 / (total - 1)
+	if bit < 0 {
+		return 0
+	}
+	if bit > 255 {
+		return 255
+	}
+	return bit
+}
+
+func bucketFillKey(selfID []byte, bucketBit int) []byte {
+	keyID := make([]byte, 32)
+	for i := range keyID {
+		keyID[i] = byte(rand.UintN(256))
+	}
+
+	maxBits := len(selfID) * 8
+	if maxBits > len(keyID)*8 {
+		maxBits = len(keyID) * 8
+	}
+	if maxBits == 0 {
+		return keyID
+	}
+	if bucketBit < 0 {
+		bucketBit = 0
+	} else if bucketBit >= maxBits {
+		bucketBit = maxBits - 1
+	}
+
+	for bit := 0; bit < bucketBit; bit++ {
+		setBit(keyID, bit, bitAt(selfID, bit))
+	}
+	setBit(keyID, bucketBit, !bitAt(selfID, bucketBit))
+	return keyID
 }
 
 func randomBucketFillKey(selfID []byte) []byte {

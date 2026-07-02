@@ -66,6 +66,14 @@ type NodeInfo struct {
 	Key     ed25519.PublicKey
 }
 
+// RoutingTableStats describes current DHT routing bucket occupancy.
+type RoutingTableStats struct {
+	ActiveNodes   int
+	BackupNodes   int
+	FilledBuckets int
+	TotalBuckets  int
+}
+
 var Logger func(v ...any)
 
 func NewClientFromConfigUrl(ctx context.Context, gateway Gateway, cfgUrl string) (*Client, error) {
@@ -172,6 +180,36 @@ func configKA(k, a int) (int, int, error) {
 func (c *Client) Close() {
 	c.globalCtxCancel()
 	_ = c.gateway.Close()
+}
+
+// ActiveNodesCount returns the number of active DHT nodes in routing buckets.
+func (c *Client) ActiveNodesCount() int {
+	return c.RoutingTableStats().ActiveNodes
+}
+
+// RoutingTableStats returns current DHT routing bucket occupancy.
+func (c *Client) RoutingTableStats() RoutingTableStats {
+	stats := RoutingTableStats{
+		TotalBuckets: len(c.buckets),
+	}
+	for i := range c.buckets {
+		active, backup := c.buckets[i].nodeCounts()
+		stats.ActiveNodes += active
+		stats.BackupNodes += backup
+		if active > 0 {
+			stats.FilledBuckets++
+		}
+	}
+	return stats
+}
+
+// RoutingNodes returns a snapshot of active DHT nodes currently known in routing buckets.
+func (c *Client) RoutingNodes() []*Node {
+	nodes := make([]*Node, 0, c.k*len(c.buckets))
+	for i := range c.buckets {
+		nodes = append(nodes, c.buckets[i].routingNodes(c.k)...)
+	}
+	return nodes
 }
 
 func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {

@@ -317,7 +317,9 @@ func cloneNode(node *Node) *Node {
 	}
 }
 
-func buildSignedNode(id any, list *address.List, version, networkID int32, key ed25519.PrivateKey) (*Node, error) {
+// BuildSignedNode creates a signed DHT node description for use in DHT queries
+// and static global config nodes.
+func BuildSignedNode(id any, list *address.List, version, networkID int32, key ed25519.PrivateKey) (*Node, error) {
 	node := &Node{
 		ID:       id,
 		AddrList: cloneAddressList(list),

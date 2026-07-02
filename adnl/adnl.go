@@ -40,6 +40,7 @@ const (
 
 const BasePayloadMTU = 1024
 const HugePacketMaxSz = 1024*8 + 128
+const maxIncompleteMultipartMessages = 512
 const respondWithNopDelay = 1500 * time.Millisecond
 const idleReinitTimeout = 120 * time.Second
 const idleReinitSilence = 5 * time.Second
@@ -399,7 +400,7 @@ func (a *ADNL) processMessage(message any) error {
 		a.mx.Lock()
 		p, ok := a.msgParts[msgID]
 		if !ok {
-			if len(a.msgParts) > 100 {
+			if len(a.msgParts) >= maxIncompleteMultipartMessages {
 				// cleanup old stuck messages
 				tm := time.Now().Add(-7 * time.Second)
 				for s, pt := range a.msgParts {
@@ -408,7 +409,7 @@ func (a *ADNL) processMessage(message any) error {
 					}
 				}
 
-				if len(a.msgParts) > 16*1024 {
+				if len(a.msgParts) >= maxIncompleteMultipartMessages {
 					a.mx.Unlock()
 					return fmt.Errorf("too many incomplete messages")
 				}

@@ -57,6 +57,9 @@ func (m *MockGateway) StartServer(listenAddr string) error {
 }
 
 func (m *MockGateway) RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	if m.reg == nil {
+		return nil, fmt.Errorf("mock register client is not configured")
+	}
 	return m.reg(addr, key)
 }
 
@@ -954,7 +957,7 @@ func TestClient_addNodeRejectsTooLargeAddressList(t *testing.T) {
 			Port: int32(10000 + i),
 		})
 	}
-	node, err := buildSignedNode(keys.PublicKeyED25519{Key: pub}, addrList, 1, _UnknownNetworkID, key)
+	node, err := BuildSignedNode(keys.PublicKeyED25519{Key: pub}, addrList, 1, _UnknownNetworkID, key)
 	if err != nil {
 		t.Fatal(err)
 	}

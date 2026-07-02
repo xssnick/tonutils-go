@@ -41,10 +41,36 @@ func (b *Bucket) getActiveNodes() dhtNodeList {
 	return append(dhtNodeList{}, b.active...)
 }
 
+func (b *Bucket) routingNodes(max int) []*Node {
+	b.mx.RLock()
+	defer b.mx.RUnlock()
+
+	limit := len(b.active)
+	if max > 0 && limit > max {
+		limit = max
+	}
+	nodes := make([]*Node, 0, limit)
+	for _, node := range b.active {
+		if len(nodes) >= limit {
+			return nodes
+		}
+		if exported := node.asNode(); exported != nil {
+			nodes = append(nodes, exported)
+		}
+	}
+	return nodes
+}
+
 func (b *Bucket) activeCount() int {
 	b.mx.RLock()
 	defer b.mx.RUnlock()
 	return len(b.active)
+}
+
+func (b *Bucket) nodeCounts() (active, backup int) {
+	b.mx.RLock()
+	defer b.mx.RUnlock()
+	return len(b.active), len(b.backup)
 }
 
 func (b *Bucket) findNode(id []byte) *dhtNode {

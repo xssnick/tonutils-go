@@ -96,6 +96,12 @@ func (n *dhtNode) absorb(other *dhtNode) {
 }
 
 func (n *dhtNode) asNode() *Node {
+	if n == nil {
+		return nil
+	}
+	n.mx.Lock()
+	defer n.mx.Unlock()
+
 	return cloneNode(n.node)
 }
 
