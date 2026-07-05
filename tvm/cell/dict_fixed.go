@@ -92,30 +92,30 @@ func compareKeyCells(a, b *Cell, invertFirst bool) int {
 		}
 	}
 
-	aSlice, err := a.BeginParse()
-	if err != nil {
+	var aSlice, bSlice Slice
+	if err := a.BeginParseInto(&aSlice); err != nil {
 		panic(err)
 	}
-	bSlice, err := b.BeginParse()
-	if err != nil {
+	if err := b.BeginParseInto(&bSlice); err != nil {
 		panic(err)
 	}
-	limit := aSlice.BitsLeft()
-	if bSlice.BitsLeft() < limit {
-		limit = bSlice.BitsLeft()
+	limit := min(aSlice.BitsLeft(), bSlice.BitsLeft())
+
+	matched, err := commonSlicePrefix(&aSlice, &bSlice, limit)
+	if err != nil {
+		panic(err)
 	}
 
-	for i := uint(0); i < limit; i++ {
-		av := aSlice.MustLoadUInt(1) != 0
-		bv := bSlice.MustLoadUInt(1) != 0
-		if invertFirst && i == 0 {
-			av = !av
-			bv = !bv
+	if matched < limit {
+		av, err := aSlice.BitAt(matched)
+		if err != nil {
+			panic(err)
 		}
-		if av == bv {
-			continue
+		if invertFirst && matched == 0 {
+			// inverting both first bits flips the comparison outcome
+			av ^= 1
 		}
-		if av {
+		if av != 0 {
 			return 1
 		}
 		return -1
@@ -139,20 +139,20 @@ func cellHasPrefix(key, prefix *Cell) (bool, error) {
 		return false, nil
 	}
 
-	keySlice, err := key.BeginParse()
+	var keySlice, prefixSlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return false, err
+	}
+	if err := prefix.BeginParseInto(&prefixSlice); err != nil {
+		return false, err
+	}
+
+	limit := prefixSlice.BitsLeft()
+	matched, err := commonSlicePrefix(&keySlice, &prefixSlice, limit)
 	if err != nil {
 		return false, err
 	}
-	prefixSlice, err := prefix.BeginParse()
-	if err != nil {
-		return false, err
-	}
-	for prefixSlice.BitsLeft() > 0 {
-		if keySlice.MustLoadUInt(1) != prefixSlice.MustLoadUInt(1) {
-			return false, nil
-		}
-	}
-	return true, nil
+	return matched == limit, nil
 }
 
 func cellPrefix(key *Cell, bits uint) (*Cell, error) {
@@ -190,7 +190,12 @@ func fixedDictCommonPrefix(root *Cell, keySz uint, limit uint) (*Cell, error) {
 	if labelLen > limit {
 		labelLen = limit
 	}
-	return cellPrefix(node.label.EndCell(), labelLen)
+	ls := node.labelSlice()
+	pb := BeginCell()
+	if err = pb.storeSliceFromSlice(&ls, labelLen); err != nil {
+		return nil, err
+	}
+	return pb.EndCell(), nil
 }
 
 func fixedDictHasCommonPrefix(root *Cell, keySz uint, prefix *Cell) (bool, error) {
@@ -221,14 +226,18 @@ func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefi
 		return err
 	}
 
-	keyPrefix := prefix.Copy()
-	if err = keyPrefix.StoreBuilder(node.label); err != nil {
+	// the walk shares one key builder: append bits, descend, roll back
+	saved := prefix.BitsUsed()
+	defer prefix.truncateBits(saved)
+
+	nodeLabel := node.labelSlice()
+	if err = prefix.storeSliceFromSlice(&nodeLabel, node.labelLen); err != nil {
 		return err
 	}
 
 	if node.isLeaf(remaining) {
 		*items = append(*items, DictItem{
-			Key:   keyPrefix.EndCell(),
+			Key:   prefix.EndCell(),
 			Value: node.loader,
 		})
 		return nil
@@ -244,20 +253,22 @@ func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefi
 		first, second = 1, 0
 	}
 
+	afterLabel := prefix.BitsUsed()
 	nextRemaining := node.nextKeyBits(remaining)
 	firstRef, err := node.ref(first)
 	if err != nil {
 		return err
 	}
-	if err = appendFixedDictEntries(items, firstRef, nextRemaining, keyPrefix.Copy().MustStoreUInt(uint64(first), 1), rev, invertFirst, false); err != nil {
+	if err = appendFixedDictEntries(items, firstRef, nextRemaining, prefix.MustStoreUInt(uint64(first), 1), rev, invertFirst, false); err != nil {
 		return err
 	}
+	prefix.truncateBits(afterLabel)
 
 	secondRef, err := node.ref(second)
 	if err != nil {
 		return err
 	}
-	return appendFixedDictEntries(items, secondRef, nextRemaining, keyPrefix.Copy().MustStoreUInt(uint64(second), 1), rev, invertFirst, false)
+	return appendFixedDictEntries(items, secondRef, nextRemaining, prefix.MustStoreUInt(uint64(second), 1), rev, invertFirst, false)
 }
 
 func fixedDictRange(root *Cell, keySz uint, rev bool, invertFirst bool) ([]DictItem, error) {
@@ -302,17 +313,21 @@ func fixedDictKeyBits(key *Cell, keySz uint) ([]uint8, error) {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	loader, err := key.BeginParse()
-	if err != nil {
+	var loader Slice
+	if err := key.BeginParseInto(&loader); err != nil {
 		return nil, fmt.Errorf("failed to load key: %w", err)
 	}
 	bits := make([]uint8, keySz)
-	for i := uint(0); i < keySz; i++ {
-		bit, err := loader.LoadUInt(1)
+	for off := uint(0); off < keySz; {
+		chunk := min(uint(64), keySz-off)
+		v, err := preloadSliceUIntAt(&loader, off, chunk)
 		if err != nil {
 			return nil, err
 		}
-		bits[i] = uint8(bit)
+		for i := uint(0); i < chunk; i++ {
+			bits[off+i] = uint8((v >> (chunk - 1 - i)) & 1)
+		}
+		off += chunk
 	}
 	return bits, nil
 }
@@ -328,7 +343,8 @@ func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, tar
 
 	basePrefix := prefix.Copy()
 	prefix = prefix.Copy()
-	label := builderSliceView(node.label)
+	nodeLabel := node.labelSlice()
+	label := &nodeLabel
 	for i := uint(0); i < node.labelLen; i++ {
 		bit, err := label.LoadUInt(1)
 		if err != nil {
@@ -414,7 +430,11 @@ func fixedDictBoundary(root *Cell, remaining uint, prefix *Builder, max bool, in
 		return DictItem{}, false, err
 	}
 
-	prefix = prefix.Copy().MustStoreBuilder(node.label)
+	prefix = prefix.Copy()
+	nodeLabel := node.labelSlice()
+	if err = prefix.storeSliceFromSlice(&nodeLabel, node.labelLen); err != nil {
+		return DictItem{}, false, err
+	}
 	if node.isLeaf(remaining) {
 		return DictItem{Key: prefix.EndCell(), Value: cloneSlice(node.loader)}, true, nil
 	}
@@ -556,7 +576,8 @@ func extractPrefixSubdictRootTraced(root *Cell, keySz uint, prefix *Cell, remove
 			toMatch = node.labelLen
 		}
 
-		matched, err := consumeCommonPrefix(builderSliceView(node.label), prefixSlice, toMatch)
+		nodeLabel := node.labelSlice()
+		matched, err := consumeCommonPrefix(&nodeLabel, prefixSlice, toMatch)
 		if err != nil {
 			return nil, false, err
 		}
@@ -593,14 +614,16 @@ func extractPrefixSubdictRootTraced(root *Cell, keySz uint, prefix *Cell, remove
 			}
 			combined.bitsSz = consumed
 
-			if err = combined.StoreBuilder(node.label); err != nil {
+			combinedLabel := node.labelSlice()
+			if err = combined.storeSliceFromSlice(&combinedLabel, node.labelLen); err != nil {
 				return nil, false, err
 			}
 			subdict, err := storeDictNodeTraced(builderSliceView(combined), node.loader.ToBuilder(), keySz, trace)
 			return subdict, true, err
 		}
 
-		suffix := builderSliceView(node.label)
+		suffixLabel := node.labelSlice()
+		suffix := &suffixLabel
 		if prefixLen > consumed {
 			if err := suffix.SkipBits(prefixLen - consumed); err != nil {
 				return nil, false, err

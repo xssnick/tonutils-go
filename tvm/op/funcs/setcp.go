@@ -24,35 +24,56 @@ func setCodepage(state *vm.State, cp int) error {
 	return nil
 }
 
-func SETCP(cp int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("SETCP %d", cp)
-		},
-		BitPrefix:     helpers.BytesPrefix(0xFF),
-		FixedSizeBits: 8,
-		SerializeSuffix: func() *cell.Builder {
-			var raw uint8
-			if cp >= 0 {
-				raw = uint8(cp)
-			} else {
-				raw = uint8(cp + 256)
-			}
-			return cell.BeginCell().MustStoreUInt(uint64(raw), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(8)
-			if err != nil {
-				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
-			}
-			cp = int((v + 0x10) & 0xFF)
-			cp -= 0x10
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return setCodepage(state, cp)
-		},
+// OpSETCP is a struct-based opcode: one allocation per executed instruction
+// instead of an AdvancedOP carrying per-instance closures.
+type OpSETCP struct {
+	cp int
+}
+
+var setcpPrefix = helpers.BytesPrefix(0xFF)
+
+func SETCP(cp int) *OpSETCP {
+	return &OpSETCP{cp: cp}
+}
+
+func (op *OpSETCP) GetPrefixes() []*cell.Slice {
+	return helpers.PrefixSlices(setcpPrefix)
+}
+
+func (op *OpSETCP) Deserialize(code *cell.Slice) error {
+	if err := code.SkipBits(setcpPrefix.Bits); err != nil {
+		return err
 	}
+	v, err := code.LoadUInt(8)
+	if err != nil {
+		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
+	}
+	op.cp = int((v+0x10)&0xFF) - 0x10
+	return nil
+}
+
+func (op *OpSETCP) Serialize() *cell.Builder {
+	var raw uint8
+	if op.cp >= 0 {
+		raw = uint8(op.cp)
+	} else {
+		raw = uint8(op.cp + 256)
+	}
+	return cell.BeginCell().
+		MustStoreSlice(setcpPrefix.Data, setcpPrefix.Bits).
+		MustStoreUInt(uint64(raw), 8)
+}
+
+func (op *OpSETCP) SerializeText() string {
+	return fmt.Sprintf("SETCP %d", op.cp)
+}
+
+func (op *OpSETCP) InstructionBits() int64 {
+	return int64(setcpPrefix.Bits) + 8
+}
+
+func (op *OpSETCP) Interpret(state *vm.State) error {
+	return setCodepage(state, op.cp)
 }
 
 func SETCPX() *helpers.SimpleOP {

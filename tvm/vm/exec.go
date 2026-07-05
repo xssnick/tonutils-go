@@ -26,7 +26,7 @@ func (s *State) ReturnAlt(args ...int) error {
 }
 
 func (s *State) returnTo(regIdx int, exitCode int64, args ...int) error {
-	cont := Continuation(&QuitContinuation{ExitCode: exitCode})
+	cont := Continuation(quitContinuation(exitCode))
 	s.Reg.C[regIdx], cont = cont, s.Reg.C[regIdx]
 	if len(args) == 1 {
 		return s.JumpArgs(cont, args[0])
@@ -292,7 +292,9 @@ func (s *State) JumpTo(c Continuation) (err error) {
 }
 
 func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, error) {
-	s.Tracef("ADJUST JUMP CONT: %d", passArgs)
+	if s.TraceEnabled() {
+		s.Tracef("ADJUST JUMP CONT: %d", passArgs)
+	}
 
 	plan, err := planContinuationStack(s.Stack, c.GetControlData(), passArgs, continuationActionJump)
 	if err != nil {
@@ -342,11 +344,11 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 		cData := cc.GetControlData()
 		if saveCR&1 != 0 {
 			cData.Save.C[0] = copyContinuation(s.Reg.C[0])
-			s.Reg.C[0] = &QuitContinuation{ExitCode: 0}
+			s.Reg.C[0] = quitCont0
 		}
 		if saveCR&2 != 0 {
 			cData.Save.C[1] = copyContinuation(s.Reg.C[1])
-			s.Reg.C[1] = &QuitContinuation{ExitCode: 1}
+			s.Reg.C[1] = quitCont1
 		}
 		if saveCR&4 != 0 {
 			cData.Save.C[2] = copyContinuation(s.Reg.C[2])
@@ -355,9 +357,14 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 	return cc, nil
 }
 
+// copyContinuation is used when the current control registers are captured
+// into a continuation's Save area. Continuations are shared here instead of
+// deep-copied: every mutation site in the codebase clones the continuation
+// first (cloneContinuation / control-register reads go through
+// cloneControlRegisterValue, stack pushes go through shareStackValue), so a
+// continuation reachable from a register or a Save slot is never mutated in
+// place. Deep-copying here used to duplicate the whole return chain on every
+// call.
 func copyContinuation(cont Continuation) Continuation {
-	if cont == nil {
-		return nil
-	}
-	return cont.Copy()
+	return cont
 }

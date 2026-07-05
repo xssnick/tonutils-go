@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,31 +20,22 @@ import (
 
 var Logger = func(v ...any) {}
 
-const (
-	serverQueryQueuePerWorker = 10
-	serverWriteDrainMax       = 16
-)
+const serverWriteDrainMax = 16
 
 // ServerClientSendQueueSize is a per-client write queue size for new server connections.
 // Set it before starting the server to override the default.
 var ServerClientSendQueueSize = 100
 
-// ServerQueryWorkers is the number of goroutines used by server to handle queued queries.
-// Set it before starting the server to override the default.
-var ServerQueryWorkers = runtime.GOMAXPROCS(0) * 4
-
 type Server struct {
-	keys     map[string]ed25519.PrivateKey
+	keys map[string]ed25519.PrivateKey
+
+	mx       sync.Mutex
 	listener net.Listener
 
-	queryHandler   func(ctx context.Context, client *ServerClient, query tl.Serializable) (tl.Serializable, error)
+	queryHandler   func(ctx context.Context, client *ServerClient, queryID []byte, query tl.Serializable)
 	queryPrecheck  func(ctx context.Context, client *ServerClient) (tl.Serializable, bool)
 	disconnectHook func(client *ServerClient)
 	connectHook    func(client *ServerClient) error
-
-	queryWorkers int
-	queryQueue   chan serverQueryTask
-	workersOnce  sync.Once
 }
 
 type ServerClient struct {
@@ -64,13 +54,6 @@ type ServerClient struct {
 
 var adnlMessageQueryID = tl.CRC("adnl.message.query query_id:int256 query:bytes = adnl.Message")
 
-type serverQueryTask struct {
-	ctx     context.Context
-	client  *ServerClient
-	queryID []byte
-	query   tl.Serializable
-}
-
 func NewServer(keysList []ed25519.PrivateKey) *Server {
 	list := map[string]ed25519.PrivateKey{}
 	for _, k := range keysList {
@@ -87,7 +70,12 @@ func NewServer(keysList []ed25519.PrivateKey) *Server {
 	}
 }
 
-func (s *Server) SetQueryHandler(handler func(ctx context.Context, client *ServerClient, query tl.Serializable) (tl.Serializable, error)) {
+// SetQueryHandler sets the query handler. It is called synchronously from the
+// connection read loop, so it must not block: hand slow work to a goroutine or
+// a pool owned by the application. Respond with client.Answer(queryID, resp),
+// either inline or later from another goroutine; concurrency and its limits
+// are fully owned by the application.
+func (s *Server) SetQueryHandler(handler func(ctx context.Context, client *ServerClient, queryID []byte, query tl.Serializable)) {
 	s.queryHandler = handler
 }
 
@@ -104,16 +92,22 @@ func (s *Server) SetConnectionHook(hook func(client *ServerClient) error) {
 }
 
 func (s *Server) Close() error {
-	if s.listener != nil {
-		lis := s.listener
-		s.listener = nil
+	s.mx.Lock()
+	lis := s.listener
+	s.listener = nil
+	s.mx.Unlock()
+
+	if lis != nil {
 		return lis.Close()
 	}
 	return nil
 }
 
 func (s *Server) Listen(addr string) error {
-	if s.listener != nil {
+	s.mx.Lock()
+	started := s.listener != nil
+	s.mx.Unlock()
+	if started {
 		return fmt.Errorf("already started")
 	}
 
@@ -126,14 +120,17 @@ func (s *Server) Listen(addr string) error {
 }
 
 func (s *Server) listen(listener net.Listener) error {
+	s.mx.Lock()
 	s.listener = listener
-
-	s.startQueryWorkers()
+	s.mx.Unlock()
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if listener != s.listener {
+			s.mx.Lock()
+			closed := listener != s.listener
+			s.mx.Unlock()
+			if closed {
 				return nil
 			}
 
@@ -168,54 +165,6 @@ func (s *Server) listen(listener net.Listener) error {
 		}
 
 		go s.serve(sc)
-	}
-}
-
-func (s *Server) startQueryWorkers() {
-	s.workersOnce.Do(func() {
-		workers := s.queryWorkers
-		if workers <= 0 {
-			workers = ServerQueryWorkers
-		}
-		if workers <= 0 {
-			workers = 1
-		}
-		if s.queryQueue == nil {
-			s.queryQueue = make(chan serverQueryTask, workers*serverQueryQueuePerWorker)
-		}
-
-		for i := 0; i < workers; i++ {
-			go s.queryWorker()
-		}
-	})
-}
-
-func (s *Server) queryWorker() {
-	for task := range s.queryQueue {
-		s.handleQueryTask(task)
-	}
-}
-
-func (s *Server) handleQueryTask(task serverQueryTask) {
-	select {
-	case <-task.ctx.Done():
-		return
-	default:
-	}
-
-	resp, err := s.queryHandler(task.ctx, task.client, task.query)
-	if err != nil {
-		Logger("failed to handle query:", err.Error())
-		return
-	}
-	if resp == nil {
-		return
-	}
-
-	select {
-	case <-task.ctx.Done():
-	default:
-		task.client.enqueue(adnl.MessageAnswer{ID: task.queryID, Data: resp})
 	}
 }
 
@@ -326,11 +275,7 @@ func (s *Server) serve(client *ServerClient) {
 				query = q.Data
 			}
 
-			select {
-			case s.queryQueue <- serverQueryTask{ctx: client.ctx, client: client, queryID: m.ID, query: query}:
-			case <-client.ctx.Done():
-				return
-			}
+			s.queryHandler(client.ctx, client, m.ID, query)
 		case TCPAuthenticate:
 			client.enqueue(TCPAuthenticationNonce{Nonce: make([]byte, 32)})
 		case TCPAuthenticationComplete:
@@ -403,6 +348,18 @@ func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stre
 	}
 
 	return serverKey.Public().(ed25519.PublicKey), w, r, nil
+}
+
+// Answer sends a response to a query received by the query handler. It can be
+// called from any goroutine and never blocks: when the client send queue is
+// full or the connection is closed, the answer is dropped and false is returned.
+func (s *ServerClient) Answer(queryID []byte, resp tl.Serializable) bool {
+	select {
+	case <-s.ctx.Done():
+		return false
+	default:
+	}
+	return s.enqueue(adnl.MessageAnswer{ID: queryID, Data: resp})
 }
 
 func (s *ServerClient) enqueue(msg tl.Serializable) bool {

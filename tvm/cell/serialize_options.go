@@ -32,6 +32,10 @@ type BOCSerializeOptions struct {
 	WithCacheBits bool
 	WithTopHash   bool
 	WithIntHashes bool
+	// CellsCountHint pre-sizes serializer dedup structures for the expected
+	// number of unique cells, avoiding rehash and regrow work on large BoCs.
+	// Zero or a negative value uses default sizing.
+	CellsCountHint int
 }
 
 func (o BOCSerializeOptions) mode() int {
@@ -54,7 +58,7 @@ func (o BOCSerializeOptions) mode() int {
 	return mode
 }
 
-func newBOCSerializer(roots []*Cell) (*bocSerializer, error) {
+func newBOCSerializer(roots []*Cell, cellsCountHint int) (*bocSerializer, error) {
 	if len(roots) == 0 {
 		return nil, nil
 	}
@@ -62,7 +66,10 @@ func newBOCSerializer(roots []*Cell) (*bocSerializer, error) {
 	bag := &bocSerializer{
 		roots:     make([]bocRoot, len(roots)),
 		maxDepth:  maxDepth,
-		cellIndex: &bocHashIndex{},
+		cellIndex: newBOCHashIndex(cellsCountHint),
+	}
+	if cellsCountHint > 0 {
+		bag.cellList = make([]bocSerializeItem, 0, cellsCountHint)
 	}
 	for i, root := range roots {
 		bag.roots[i] = bocRoot{cell: root, idx: bocInvalidCellIndex}
@@ -84,7 +91,7 @@ func ToBOCWithOptions(roots []*Cell, opts BOCSerializeOptions) []byte {
 }
 
 func ToBOCWithOptionsErr(roots []*Cell, opts BOCSerializeOptions) ([]byte, error) {
-	bag, err := newBOCSerializer(roots)
+	bag, err := newBOCSerializer(roots, opts.CellsCountHint)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +108,7 @@ func ToBOCWithOptionsErr(roots []*Cell, opts BOCSerializeOptions) ([]byte, error
 
 // AppendBOCWithOptions serializes roots into BoC and appends the result to dst.
 func AppendBOCWithOptions(dst []byte, roots []*Cell, opts BOCSerializeOptions) ([]byte, error) {
-	bag, err := newBOCSerializer(roots)
+	bag, err := newBOCSerializer(roots, opts.CellsCountHint)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +128,7 @@ func WriteBOCWithOptions(w io.Writer, roots []*Cell, opts BOCSerializeOptions) e
 		return fmt.Errorf("writer is nil")
 	}
 
-	bag, err := newBOCSerializer(roots)
+	bag, err := newBOCSerializer(roots, opts.CellsCountHint)
 	if err != nil {
 		return err
 	}
@@ -168,7 +175,7 @@ func ComputeFileHash(root *Cell) []byte {
 		WithIntHashes: true,
 	}
 
-	bag, err := newBOCSerializer([]*Cell{root})
+	bag, err := newBOCSerializer([]*Cell{root}, opts.CellsCountHint)
 	if err != nil || bag == nil {
 		return nil
 	}

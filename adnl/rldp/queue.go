@@ -35,13 +35,3 @@ func (q *Queue) Dequeue() (*MessagePart, bool) {
 		return nil, false
 	}
 }
-
-func (q *Queue) Drain() {
-	for {
-		select {
-		case <-q.ch:
-		default:
-			return
-		}
-	}
-}

@@ -57,7 +57,7 @@ var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11
 
 const (
 	expectedRuntimeGlobalVersionDynamicGateCount = 2
-	expectedRuntimeGlobalVersionDynamicGateHash  = "b2ae587fe7facfa1a397df658f5b744ef454fc96fe1d345398ec064486fcd95c"
+	expectedRuntimeGlobalVersionDynamicGateHash  = "9db10de7cc1dd33bec9f44f62ec9ece044d572a393eda2b03eb97cd86ab664c8"
 
 	expectedTransactionGlobalVersionDynamicGateCount = 1
 )

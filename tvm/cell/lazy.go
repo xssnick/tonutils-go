@@ -52,6 +52,7 @@ func CreateWithLazyRefsUnsafe(descriptors uint16, data, hashes []byte, depths []
 	c.setSpecial(dsc1&0b1000 != 0)
 	c.setLevelMask(levelMask)
 	c.setRefsCount(refCnt)
+	c.resolveType()
 	if err = setTrustedHashesDepths(c, levelMask, hashes, depths); err != nil {
 		return nil, err
 	}

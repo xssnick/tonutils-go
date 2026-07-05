@@ -75,7 +75,15 @@ func (s *State) Tracef(format string, args ...any) {
 }
 
 func (s *State) Trace(msg string) {
-	s.Tracef("%s", msg)
+	if !s.TraceEnabled() {
+		return
+	}
+
+	s.TraceHook(TraceStep{
+		Step:         s.Steps,
+		GasRemaining: s.Gas.Remaining,
+		Message:      msg,
+	})
 }
 
 func (s *State) TraceStack(prefix string, stack *Stack) {

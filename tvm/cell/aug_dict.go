@@ -695,12 +695,12 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		return nil, nil, false, fmt.Errorf("failed to load branch: %w", err)
 	}
 
-	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
+	sz, kPart, err := readLabelView(keyOffset, s)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
 	}
 
-	bitsMatches, isNewRight, diverged, err := matchBuilderLabel(kPart, sz, pfx)
+	bitsMatches, isNewRight, diverged, err := matchLabelView(kPart, sz, pfx)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -710,7 +710,8 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 			if mode == DictSetModeAdd {
 				return branch, nil, false, nil
 			}
-			leaf, extra, err := d.storeLeafWithExtra(builderSliceView(kPart), value, keyOffset)
+			kPartView := kPart
+			leaf, extra, err := d.storeLeafWithExtra(&kPartView, value, keyOffset)
 			return leaf, extra, err == nil, err
 		}
 
@@ -760,7 +761,8 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 			leftExtra = otherExtra
 		}
 
-		newBranch, extra, err := d.storeForkWithExtra(builderSliceView(kPart), left, leftExtra, right, rightExtra, keyOffset)
+		kPartView := kPart
+		newBranch, extra, err := d.storeForkWithExtra(&kPartView, left, leftExtra, right, rightExtra, keyOffset)
 		return newBranch, extra, err == nil, err
 	}
 

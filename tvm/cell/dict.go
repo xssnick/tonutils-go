@@ -199,7 +199,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		return nil, nil, false, err
 	}
 
-	bitsMatches, isNewRight, _, err := matchBuilderLabel(node.label, node.labelLen, pfx)
+	bitsMatches, isNewRight, _, err := matchLabelView(node.label, node.labelLen, pfx)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -209,7 +209,8 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 			if mode == DictSetModeAdd {
 				return node.cell, node.loader, false, nil
 			}
-			leaf, err := d.storeLeaf(builderSliceView(node.label), value, keyOffset)
+			nodeLabel := node.labelSlice()
+			leaf, err := d.storeLeaf(&nodeLabel, value, keyOffset)
 			return leaf, node.loader, err == nil, err
 		}
 
@@ -280,7 +281,8 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		return nil, nil, false, err
 	}
 
-	bitsMatches, err := consumeCommonPrefix(builderSliceView(node.label), pfx, node.labelLen)
+	nodeLabel := node.labelSlice()
+	bitsMatches, err := consumeCommonPrefix(&nodeLabel, pfx, node.labelLen)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -324,11 +326,12 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 			return nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
 		}
 
-		if err = node.appendEdgeLabel(uint64(otherIdx), otherLabel, "neighbour"); err != nil {
+		mergedLabel, err := node.mergedEdgeLabel(uint64(otherIdx), otherLabel, "neighbour")
+		if err != nil {
 			return nil, nil, false, err
 		}
 
-		merged, err := d.storeLeaf(builderSliceView(node.label), slc.ToBuilder(), keyOffset)
+		merged, err := d.storeLeaf(mergedLabel, slc.ToBuilder(), keyOffset)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -407,16 +410,17 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 	branch := d.root
 	remaining := d.keySz
 
+	// the descent reuses a value slice, only the found value escapes
+	var loader Slice
 	for {
-		loader, err := branch.BeginParse()
-		if err != nil {
+		if err := branch.BeginParseInto(&loader); err != nil {
 			return nil, nil, err
 		}
 		if loader.cell.IsSpecial() {
-			return nil, nil, fmt.Errorf("dict has special cells in tree structure")
+			return nil, nil, fmt.Errorf("dict %w", ErrDictHasSpecialCells)
 		}
 
-		labelLen, keyBuilder, err := loadLabel(remaining, loader, key)
+		labelLen, keyBuilder, err := loadLabel(remaining, &loader, key)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -424,7 +428,8 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 		remaining -= labelLen
 
 		if remaining == 0 {
-			return key.EndCell(), loader, nil
+			value := loader
+			return key.EndCell(), &value, nil
 		}
 
 		bit := fetchMax
@@ -570,49 +575,57 @@ func (d *Dictionary) mapInner(out []DictKV, keySz, leftKeySz uint, c *Cell, keyP
 			// ignore pruned keys
 			return out, nil
 		}
-		return nil, fmt.Errorf("dict has special cells in tree structure, cannot load some values")
+		return nil, fmt.Errorf("dict %w, cannot load some values", ErrDictHasSpecialCells)
 	}
 
-	loader, err := c.BeginParse()
-	if err != nil {
+	// the walk reuses a value slice, only leaf values escape
+	var loader Slice
+	if err = c.BeginParseInto(&loader); err != nil {
 		return nil, err
 	}
 	if loader.cell.IsSpecial() {
 		if skipPruned && loader.cell.GetType() == PrunedCellType {
 			return out, nil
 		}
-		return nil, fmt.Errorf("dict has special cells in tree structure, cannot load some values")
+		return nil, fmt.Errorf("dict %w, cannot load some values", ErrDictHasSpecialCells)
 	}
 
-	sz, keyPrefix, err = loadLabel(leftKeySz, loader, keyPrefix)
+	sz, keyPrefix, err = loadLabel(leftKeySz, &loader, keyPrefix)
 	if err != nil {
 		return nil, err
 	}
 
 	// until key size is not equals we go deeper
 	if keyPrefix.BitsUsed() < keySz {
+		// the walk shares one key builder: append a bit, descend, roll back
+		saved := keyPrefix.BitsUsed()
+
 		// 0 bit branch
-		left, err := loadDictMapRef(loader, skipPruned)
+		left, err := loadDictMapRef(&loader, skipPruned)
 		if err != nil {
 			return nil, err
 		}
 
-		out, err = d.mapInner(out, keySz, leftKeySz-(1+sz), left, keyPrefix.Copy().MustStoreUInt(0, 1), skipPruned)
+		out, err = d.mapInner(out, keySz, leftKeySz-(1+sz), left, keyPrefix.MustStoreUInt(0, 1), skipPruned)
 		if err != nil {
 			return nil, err
 		}
+		keyPrefix.truncateBits(saved)
 
 		// 1 bit branch
-		right, err := loadDictMapRef(loader, skipPruned)
+		right, err := loadDictMapRef(&loader, skipPruned)
 		if err != nil {
 			return nil, err
 		}
-		return d.mapInner(out, keySz, leftKeySz-(1+sz), right, keyPrefix.Copy().MustStoreUInt(1, 1), skipPruned)
+		out, err = d.mapInner(out, keySz, leftKeySz-(1+sz), right, keyPrefix.MustStoreUInt(1, 1), skipPruned)
+		keyPrefix.truncateBits(saved)
+		return out, err
 	}
 
+	value := loader
 	return append(out, DictKV{
 		Key:   keyPrefix.ToSlice(),
-		Value: loader,
+		Value: &value,
 	}), nil
 }
 
@@ -630,21 +643,21 @@ func (d *Dictionary) findKey(lookupKey *Cell) (*Slice, error) {
 		return nil, ErrNoSuchKeyInDict
 	}
 
-	lKey, err := lookupKey.BeginParse()
-	if err != nil {
+	// the descent reuses value slices, only the found value escapes
+	var lKey, branchSlice Slice
+	if err := lookupKey.BeginParseInto(&lKey); err != nil {
 		return nil, fmt.Errorf("failed to load lookup key: %w", err)
 	}
 
 	// until key size is not equals we go deeper
 	for {
-		branchSlice, err := branch.BeginParse()
-		if err != nil {
+		if err := branch.BeginParseInto(&branchSlice); err != nil {
 			return nil, err
 		}
 		if branchSlice.cell.IsSpecial() {
-			return nil, fmt.Errorf("dict has special cells in tree structure")
+			return nil, fmt.Errorf("dict %w", ErrDictHasSpecialCells)
 		}
-		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), branchSlice, lKey)
+		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), &branchSlice, &lKey)
 		if err != nil {
 			return nil, err
 		}
@@ -654,7 +667,8 @@ func (d *Dictionary) findKey(lookupKey *Cell) (*Slice, error) {
 		}
 
 		if lKey.BitsLeft() == 0 {
-			return branchSlice, nil
+			value := branchSlice
+			return &value, nil
 		}
 
 		idx, err := lKey.LoadUInt(1)

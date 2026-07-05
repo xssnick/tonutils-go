@@ -304,7 +304,7 @@ func (c *Slice) LoadUInt(sz uint) (uint64, error) {
 		return c.loadUintFast(sz, false)
 	}
 
-	cp := c.Copy()
+	cp := *c
 	res, err := cp.LoadBigUInt(sz)
 	if err != nil {
 		return 0, err
@@ -345,7 +345,7 @@ func (c *Slice) LoadInt(sz uint) (int64, error) {
 		return c.loadIntFast(sz)
 	}
 
-	cp := c.Copy()
+	cp := *c
 	res, err := cp.LoadBigInt(sz)
 	if err != nil {
 		return 0, err
@@ -561,7 +561,7 @@ func (c *Slice) PreloadBigInt(sz uint) (*big.Int, error) {
 		return nil, ErrTooBigSize
 	}
 
-	cp := c.Copy()
+	cp := *c
 	return cp.LoadBigInt(sz)
 }
 
@@ -686,13 +686,23 @@ func (c *Slice) loadSliceInto(loadedData []byte, sz uint, preload bool) error {
 		last := outLen - 1
 		sourceBytesNeeded := int((startBitOffset + sz + 7) / 8)
 
-		for i := 0; i < last; i++ {
+		// word-wise path: each step consumes 8 source bytes plus one byte of
+		// lookahead; intermediate bytes use the same formula as the tail loop
+		i := 0
+		for ; i+8 <= outLen && i+9 <= sourceBytesNeeded; i += 8 {
+			v := binary.BigEndian.Uint64(data[i:])<<shift | uint64(data[i+8])>>invShift
+			binary.BigEndian.PutUint64(loadedData[i:], v)
+		}
+
+		for ; i < last; i++ {
 			loadedData[i] = data[i]<<shift | data[i+1]>>invShift
 		}
 
-		loadedData[last] = data[last] << shift
-		if sourceBytesNeeded > outLen {
-			loadedData[last] |= data[last+1] >> invShift
+		if i == last {
+			loadedData[last] = data[last] << shift
+			if sourceBytesNeeded > outLen {
+				loadedData[last] |= data[last+1] >> invShift
+			}
 		}
 	}
 
@@ -769,7 +779,11 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 			return nil, fmt.Errorf("failed to load addr data: %w", err)
 		}
 
-		return address.NewAddress(0, byte(workchain), data).WithAnycast(anycast), nil
+		addr := address.NewAddress(0, byte(workchain), data)
+		if anycast == nil {
+			return addr, nil
+		}
+		return addr.WithAnycast(anycast), nil
 	case 3:
 		var anycast *address.Anycast
 		isAnycast, err := c.LoadBoolBit()
@@ -808,7 +822,11 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 			return nil, fmt.Errorf("failed to load addr data: %w", err)
 		}
 
-		return address.NewAddressVar(0, int32(workchain), uint(ln), data).WithAnycast(anycast), nil
+		addr := address.NewAddressVar(0, int32(workchain), uint(ln), data)
+		if anycast == nil {
+			return addr, nil
+		}
+		return addr.WithAnycast(anycast), nil
 	default:
 		return nil, errors.New("not supported type of address")
 	}

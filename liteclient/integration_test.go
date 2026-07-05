@@ -143,14 +143,17 @@ func Test_ServerProxy(t *testing.T) {
 
 	pub, key, _ := ed25519.GenerateKey(nil)
 	s := NewServer([]ed25519.PrivateKey{key})
-	s.SetQueryHandler(func(ctx context.Context, sc *ServerClient, query tl.Serializable) (tl.Serializable, error) {
+	s.SetQueryHandler(func(ctx context.Context, sc *ServerClient, queryID []byte, query tl.Serializable) {
 		println("PROXYING QUERY:", reflect.TypeOf(query).String())
 
-		var resp tl.Serializable
-		if err := client.QueryLiteserver(context.Background(), query, &resp); err != nil {
-			return nil, err
-		}
-		return resp, nil
+		go func() {
+			var resp tl.Serializable
+			if err := client.QueryLiteserver(context.Background(), query, &resp); err != nil {
+				println("PROXY QUERY ERR:", err.Error())
+				return
+			}
+			sc.Answer(queryID, resp)
+		}()
 	})
 	defer s.Close()
 
@@ -161,7 +164,7 @@ func Test_ServerProxy(t *testing.T) {
 	addr := ln.Addr().String()
 	go func() {
 		if err := s.listen(ln); err != nil {
-			t.Fatal("listen err:", err.Error())
+			t.Error("listen err:", err.Error())
 		}
 	}()
 

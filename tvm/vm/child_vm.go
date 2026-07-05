@@ -1,8 +1,6 @@
 package vm
 
 import (
-	"errors"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -151,10 +149,8 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	s.Gas.FreeConsumed = child.Gas.FreeConsumed
 
 	if childErr != nil {
-		var vmErr vmerr.VMError
-		var handled HandledException
-		vmErrOk := errors.As(childErr, &vmErr)
-		if !vmErrOk && !errors.As(childErr, &handled) {
+		vmErr, vmErrOk := vmerr.AsVMError(childErr)
+		if !vmErrOk && !IsHandledException(childErr) {
 			return childErr
 		}
 		if vmErrOk && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {

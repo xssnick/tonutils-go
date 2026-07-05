@@ -123,21 +123,22 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 	branch := d.root
 	remaining := d.keySz
 	matched := uint(0)
-	keySlice, err := key.BeginParse()
-	if err != nil {
+
+	// the descent reuses value slices, only the found value escapes
+	var keySlice, branchSlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
 		return nil, 0, fmt.Errorf("failed to load key: %w", err)
 	}
 
 	for {
-		branchSlice, err := branch.BeginParse()
-		if err != nil {
+		if err := branch.BeginParseInto(&branchSlice); err != nil {
 			return nil, matched, fmt.Errorf("failed to load prefix dict branch: %w", err)
 		}
 		if branchSlice.cell.IsSpecial() {
-			return nil, matched, fmt.Errorf("prefix dict has special cells in tree structure")
+			return nil, matched, fmt.Errorf("prefix dict %w", ErrDictHasSpecialCells)
 		}
 
-		labelLen, commonPrefix, err := matchLabelPrefix(remaining, branchSlice, keySlice)
+		labelLen, commonPrefix, err := matchLabelPrefix(remaining, &branchSlice, &keySlice)
 		if err != nil {
 			return nil, matched, err
 		}
@@ -155,7 +156,8 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 		}
 
 		if !isFork {
-			return branchSlice, matched, nil
+			value := branchSlice
+			return &value, matched, nil
 		}
 
 		if remaining == 0 {
@@ -327,7 +329,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		return nil, false, err
 	}
 
-	bitsMatches, isNewRight, diverged, err := matchBuilderLabel(node.label, node.labelLen, key)
+	bitsMatches, isNewRight, diverged, err := matchLabelView(node.label, node.labelLen, key)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -375,7 +377,8 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		if key.BitsLeft() != 0 || mode == DictSetModeAdd {
 			return node.cell, false, nil
 		}
-		leaf, err := d.storePrefixLeaf(builderSliceView(node.label), value, remaining)
+		nodeLabel := node.labelSlice()
+		leaf, err := d.storePrefixLeaf(&nodeLabel, value, remaining)
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to replace leaf: %w", err)
 		}
@@ -429,7 +432,8 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return nil, nil, false, err
 	}
 
-	bitsMatches, err := consumeCommonPrefix(builderSliceView(node.label), key, node.labelLen)
+	nodeLabel := node.labelSlice()
+	bitsMatches, err := consumeCommonPrefix(&nodeLabel, key, node.labelLen)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
@@ -510,11 +514,12 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return nil, nil, false, fmt.Errorf("failed to load survivor label: %w", err)
 	}
 
-	if err = node.appendEdgeLabel(uint64(survivorBit), survivorLabel, "survivor"); err != nil {
+	mergedLabel, err := node.mergedEdgeLabel(uint64(survivorBit), survivorLabel, "survivor")
+	if err != nil {
 		return nil, nil, false, err
 	}
 
-	merged, err := d.storePrefixNode(builderSliceView(node.label), survivorSlice.ToBuilder(), remaining)
+	merged, err := d.storePrefixNode(mergedLabel, survivorSlice.ToBuilder(), remaining)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to merge prefix edges: %w", err)
 	}

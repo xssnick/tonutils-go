@@ -148,6 +148,35 @@ func TestRLDPPrepareNextPartUsesCppCompatiblePartSize(t *testing.T) {
 	}
 }
 
+func TestRLDPPrepareNextPartSymbolsCountIsCeil(t *testing.T) {
+	oldMultiFEC := MultiFECMode
+	MultiFECMode = false
+	defer func() {
+		MultiFECMode = oldMultiFEC
+	}()
+
+	// exact multiple of the symbol size, reference C++ nodes require ceil here, not ceil+1
+	payload := bytes.Repeat([]byte{0x5a}, int(DefaultSymbolSize)*3)
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x03}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	ok, err := transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected part")
+	}
+
+	if cnt := transfer.getCurrentPart().fec.GetSymbolsCount(); cnt != 3 {
+		t.Fatalf("got symbols count %d, want 3", cnt)
+	}
+}
+
 func TestRLDPSendFastSymbolsCapsInitialBurst(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x5a}, int(PartSize))
 	transfer := &activeTransfer{
@@ -402,7 +431,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to execute handleMessage func, err: ", err)
 			}
-			if cli.recvStreams[string(tId)].currentPart.lastCompleteAt.IsZero() {
+			if cli.recvStreams[string(tId)].lastCompleteAt.IsZero() {
 				t.Error("got lastCompleteAt == nil, want != nil")
 			}
 		})
@@ -565,22 +594,11 @@ func TestRLDP_handleMessageUsesClientUnexpectedTransferLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	enc, err := roundrobin.NewEncoder(data, uint32(len(data)))
+	symbolSize := uint32(1024)
+	symbolsCount := uint32((len(data) + int(symbolSize) - 1) / int(symbolSize))
+	enc, err := roundrobin.NewEncoder(data, symbolSize)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	part := MessagePart{
-		TransferID: transferID,
-		FecType: FECRoundRobin{
-			DataSize:     uint32(len(data)),
-			SymbolSize:   uint32(len(data)),
-			SymbolsCount: 1,
-		},
-		Part:      0,
-		TotalSize: uint64(len(data)),
-		Seqno:     0,
-		Data:      enc.GenSymbol(0),
 	}
 
 	called := false
@@ -601,9 +619,25 @@ func TestRLDP_handleMessageUsesClientUnexpectedTransferLimit(t *testing.T) {
 		return nil
 	})
 
-	if err = cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
-		t.Fatal(err)
+	for seqno := uint32(0); seqno < symbolsCount; seqno++ {
+		part := MessagePart{
+			TransferID: transferID,
+			FecType: FECRoundRobin{
+				DataSize:     uint32(len(data)),
+				SymbolSize:   symbolSize,
+				SymbolsCount: symbolsCount,
+			},
+			Part:      0,
+			TotalSize: uint64(len(data)),
+			Seqno:     seqno,
+			Data:      enc.GenSymbol(seqno),
+		}
+
+		if err = cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
+			t.Fatal(err)
+		}
 	}
+
 	if !called {
 		t.Fatal("expected message handler call")
 	}
@@ -1069,11 +1103,8 @@ func TestRLDP_RecvStreamsCleanupWithoutCompletedTransfer(t *testing.T) {
 		lastMessageAt: staleAt,
 		startedAt:     staleAt,
 		msgBuf:        NewQueue(1),
-		currentPart: decoderStreamPart{
-			index:     0,
-			startedAt: staleAt,
-		},
-		totalSize: 64,
+		activeParts:   map[uint32]*decoderStreamPart{},
+		totalSize:     64,
 	}
 	cli.mx.Unlock()
 

@@ -4,10 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"fmt"
 	"net"
-	"runtime"
-	"sync"
 	"testing"
 	"time"
 
@@ -20,36 +17,96 @@ func (testNoopStream) XORKeyStream(dst, src []byte) {
 	copy(dst, src)
 }
 
-func TestServerQueryQueueWaitsForSlot(t *testing.T) {
+func TestServerHandlerAnswersInline(t *testing.T) {
 	pub, key, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	s := NewServer([]ed25519.PrivateKey{key})
-	s.queryWorkers = 1
-	s.queryQueue = make(chan serverQueryTask, 1)
+	s.SetQueryHandler(func(ctx context.Context, sc *ServerClient, queryID []byte, query tl.Serializable) {
+		if _, ok := query.(GetMasterchainInf); !ok {
+			t.Errorf("unexpected query type %T", query)
+			return
+		}
+		if !sc.Answer(queryID, testMasterchainInfo()) {
+			t.Error("inline answer was dropped")
+		}
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listenErr := make(chan error, 1)
+	go func() {
+		listenErr <- s.listen(ln)
+	}()
+	defer func() {
+		_ = s.Close()
+		select {
+		case err := <-listenErr:
+			if err != nil {
+				t.Errorf("listen err: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("server did not stop")
+		}
+	}()
+
+	client := NewConnectionPool()
+	defer client.Stop()
+
+	connectCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	err = client.AddConnection(connectCtx, ln.Addr().String(), base64.StdEncoding.EncodeToString(pub))
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = <-serverQueueTestQuery(client); err != nil {
+		t.Fatalf("query err: %v", err)
+	}
+}
+
+// TestServerHandlerConcurrentPerConnection proves that queries from a single
+// connection are processed concurrently when the handler dispatches work to
+// goroutines: the first query is answered only after the second one completes,
+// which would deadlock if the read loop serialized handling.
+func TestServerHandlerConcurrentPerConnection(t *testing.T) {
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewServer([]ed25519.PrivateKey{key})
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	var startedOnce sync.Once
-
-	s.SetQueryHandler(func(ctx context.Context, sc *ServerClient, query tl.Serializable) (tl.Serializable, error) {
+	var queries int
+	s.SetQueryHandler(func(ctx context.Context, sc *ServerClient, queryID []byte, query tl.Serializable) {
 		if _, ok := query.(GetMasterchainInf); !ok {
-			return nil, fmt.Errorf("unexpected query type %T", query)
+			t.Errorf("unexpected query type %T", query)
+			return
 		}
 
-		startedOnce.Do(func() {
+		queries++
+		if queries == 1 {
 			close(started)
-		})
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-release:
+			go func() {
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return
+				}
+				sc.Answer(queryID, testMasterchainInfo())
+			}()
+			return
 		}
 
-		return testMasterchainInfo(), nil
+		sc.Answer(queryID, testMasterchainInfo())
+		close(release)
 	})
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -91,24 +148,11 @@ func TestServerQueryQueueWaitsForSlot(t *testing.T) {
 	}
 
 	second := serverQueueTestQuery(client)
-	waitServerQueueLen(t, s.queryQueue, 1)
-
-	third := serverQueueTestQuery(client)
-	select {
-	case err = <-third:
-		t.Fatalf("third query completed before queue slot was released: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	close(release)
-	if err = <-first; err != nil {
-		t.Fatalf("first query err: %v", err)
-	}
 	if err = <-second; err != nil {
 		t.Fatalf("second query err: %v", err)
 	}
-	if err = <-third; err != nil {
-		t.Fatalf("third query err: %v", err)
+	if err = <-first; err != nil {
+		t.Fatalf("first query err: %v", err)
 	}
 }
 
@@ -122,26 +166,6 @@ func serverQueueTestQuery(client *ConnectionPool) <-chan error {
 		res <- client.QueryLiteserver(ctx, GetMasterchainInf{}, &resp)
 	}()
 	return res
-}
-
-func waitServerQueueLen(t *testing.T, queue chan serverQueryTask, want int) {
-	t.Helper()
-
-	deadline := time.After(3 * time.Second)
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-
-	for {
-		if len(queue) == want {
-			return
-		}
-
-		select {
-		case <-deadline:
-			t.Fatalf("queue len is %d, want %d", len(queue), want)
-		case <-tick.C:
-		}
-	}
 }
 
 func TestServerClientEnqueueDropsWhenQueueFull(t *testing.T) {
@@ -225,29 +249,6 @@ func TestServerClientSendQueueSizeOverride(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("connection hook was not called")
-	}
-}
-
-func TestServerQueryWorkersDefault(t *testing.T) {
-	want := runtime.GOMAXPROCS(0) * 4
-	if ServerQueryWorkers != want {
-		t.Fatalf("query workers is %d, want %d", ServerQueryWorkers, want)
-	}
-}
-
-func TestServerQueryWorkersOverride(t *testing.T) {
-	prev := ServerQueryWorkers
-	ServerQueryWorkers = 3
-	defer func() {
-		ServerQueryWorkers = prev
-	}()
-
-	s := NewServer(nil)
-	s.startQueryWorkers()
-	defer close(s.queryQueue)
-
-	if cap(s.queryQueue) != 3*serverQueryQueuePerWorker {
-		t.Fatalf("query queue cap is %d, want %d", cap(s.queryQueue), 3*serverQueryQueuePerWorker)
 	}
 }
 

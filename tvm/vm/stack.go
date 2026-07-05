@@ -153,13 +153,30 @@ func bindValueTrace(val any, trace *cell.Trace) any {
 	}
 
 	switch x := val.(type) {
+	case *big.Int:
+		// normalize typed nils coming from user-built tuples
+		if x == nil {
+			return nil
+		}
+		return x
+	case *cell.Cell:
+		if x == nil {
+			return nil
+		}
+		return x
 	case *cell.Slice:
+		if x == nil {
+			return nil
+		}
 		combined := cell.CombineTraces(x.Trace(), trace)
 		if combined == x.Trace() {
 			return x
 		}
 		return x.Copy().SetTrace(combined)
 	case *cell.Builder:
+		if x == nil {
+			return nil
+		}
 		combined := cell.CombineTraces(x.Trace(), trace)
 		if combined == x.Trace() {
 			return x
@@ -206,14 +223,23 @@ func unbindValueTrace(val any, trace *cell.Trace) any {
 
 	switch x := val.(type) {
 	case *cell.Cell:
+		if x == nil {
+			return nil
+		}
 		return x.WithTrace(x.Trace().WithoutTrace(trace))
 	case *cell.Slice:
+		if x == nil {
+			return nil
+		}
 		next := x.Trace().WithoutTrace(trace)
 		if next == x.Trace() {
 			return x
 		}
 		return x.Copy().SetTrace(next)
 	case *cell.Builder:
+		if x == nil {
+			return nil
+		}
 		next := x.Trace().WithoutTrace(trace)
 		if next == x.Trace() {
 			return x
@@ -592,6 +618,38 @@ func (s *Stack) PopInt() (*big.Int, error) {
 
 func (s *Stack) PopIntFinite() (*big.Int, error) {
 	e, err := s.PopInt()
+	if err != nil {
+		return nil, err
+	}
+	if e == nil { // nil = non valid (NaN)
+		return nil, vmerr.Error(vmerr.CodeIntOverflow)
+	}
+	return e, nil
+}
+
+// PopIntRead pops an integer for read-only use: shared static instances are
+// returned as-is instead of a defensive copy, so the caller must not mutate
+// the result. nil result means NaN.
+func (s *Stack) PopIntRead() (*big.Int, error) {
+	e, err := s.PopAny()
+	if err != nil {
+		return nil, err
+	}
+
+	switch v := e.(type) {
+	case NaN:
+		return nil, nil
+	case *big.Int:
+		return v, nil
+	default:
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not an integer")
+	}
+}
+
+// PopIntFiniteRead is the finite variant of PopIntRead: the caller must not
+// mutate the result.
+func (s *Stack) PopIntFiniteRead() (*big.Int, error) {
+	e, err := s.PopIntRead()
 	if err != nil {
 		return nil, err
 	}

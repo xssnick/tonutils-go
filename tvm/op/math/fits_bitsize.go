@@ -30,7 +30,7 @@ func fitTinyOp(name string, prefix helpers.BitPrefix, bits uint8, unsigned, quie
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popIntOperand(state, quiet)
+			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -76,7 +76,7 @@ func fitStackOp(name string, prefix helpers.BitPrefix, unsigned, quiet bool) *he
 			if err != nil {
 				return err
 			}
-			x, err := popIntOperand(state, quiet)
+			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -102,7 +102,7 @@ func fitStackOp(name string, prefix helpers.BitPrefix, unsigned, quiet bool) *he
 func bitSizeOp(name string, prefix helpers.BitPrefix, signed, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := popIntOperand(state, quiet)
+			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}

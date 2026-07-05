@@ -276,6 +276,15 @@ type fieldInfo struct {
 	fieldType    reflect.Type
 }
 
+// sliceHeader mirrors the runtime slice layout with Data typed as
+// unsafe.Pointer instead of uintptr, so the GC sees the reference and
+// stores through it get write barriers (unlike reflect.SliceHeader)
+type sliceHeader struct {
+	Data unsafe.Pointer
+	Len  int
+	Cap  int
+}
+
 func (f *fieldInfo) checkIsAllowed(si *structInfo) bool {
 	if len(f.allowedTypes) == 0 {
 		return true
@@ -942,23 +951,23 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 
 			sl := reflect.MakeSlice(field.structInfo.tp, ln, ln)
 
-			ePtr := unsafe.Pointer(sl.Pointer())
+			ePtr := sl.UnsafePointer()
 
+			// element pointers are derived per index: a running pointer would step
+			// one past the end of the allocation on the last iteration, which is
+			// invalid unsafe.Pointer arithmetic (caught by -race checkptr)
 			for x := 0; x < ln; x++ {
-				buf, err = executeParse(buf, ePtr, field.structInfo, noCopy)
+				buf, err = executeParse(buf, unsafe.Add(ePtr, uintptr(x)*sz), field.structInfo, noCopy)
 				if err != nil {
 					return nil, fmt.Errorf("failed to parse %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
-
-				ePtr = unsafe.Add(ePtr, sz)
 			}
 
-			*(*reflect.SliceHeader)(ptr) = reflect.SliceHeader{
-				Data: sl.Pointer(),
+			*(*sliceHeader)(ptr) = sliceHeader{
+				Data: sl.UnsafePointer(),
 				Len:  ln,
 				Cap:  ln,
 			}
-			runtime.KeepAlive(sl)
 		default:
 			return nil, fmt.Errorf("unknown type %d for field %s", t, field.String())
 		}
@@ -981,7 +990,7 @@ func serializedFixedSize(field *fieldInfo) int {
 	}
 }
 
-func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *reflect.SliceHeader, elemSize uintptr) error {
+func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *sliceHeader, elemSize uintptr) error {
 	if hdr.Len == 0 || len(field.structInfo.fields) != 1 {
 		return nil
 	}
@@ -996,7 +1005,7 @@ func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *reflect.Slice
 		return nil
 	}
 
-	ePtr := unsafe.Pointer(hdr.Data)
+	ePtr := hdr.Data
 	switch elemField.typ {
 	case _ExecuteTypeString:
 		if hdr.Len < 8 && len(*(*string)(ePtr)) < 4096 {
@@ -1004,13 +1013,12 @@ func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *reflect.Slice
 		}
 
 		for x := 0; x < hdr.Len; x++ {
-			s := *(*string)(ePtr)
+			s := *(*string)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(s))
 			if err != nil {
 				return err
 			}
 			total += sz
-			ePtr = unsafe.Add(ePtr, elemSize)
 		}
 	case _ExecuteTypeBytes:
 		if hdr.Len < 8 && len(*(*[]byte)(ePtr)) < 4096 {
@@ -1018,13 +1026,12 @@ func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *reflect.Slice
 		}
 
 		for x := 0; x < hdr.Len; x++ {
-			b := *(*[]byte)(ePtr)
+			b := *(*[]byte)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(b))
 			if err != nil {
 				return err
 			}
 			total += sz
-			ePtr = unsafe.Add(ePtr, elemSize)
 		}
 	default:
 		return nil
@@ -1036,7 +1043,7 @@ func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *reflect.Slice
 	return nil
 }
 
-func growAppendVector(dst []byte, field *fieldInfo, hdr *reflect.SliceHeader, elemSize uintptr) ([]byte, error) {
+func growAppendVector(dst []byte, field *fieldInfo, hdr *sliceHeader, elemSize uintptr) ([]byte, error) {
 	if hdr.Len == 0 || len(field.structInfo.fields) != 1 {
 		return dst, nil
 	}
@@ -1048,7 +1055,7 @@ func growAppendVector(dst []byte, field *fieldInfo, hdr *reflect.SliceHeader, el
 		return growAppend(dst, total), nil
 	}
 
-	ePtr := unsafe.Pointer(hdr.Data)
+	ePtr := hdr.Data
 	switch elemField.typ {
 	case _ExecuteTypeString:
 		if hdr.Len < 8 && len(*(*string)(ePtr)) < 4096 {
@@ -1056,13 +1063,12 @@ func growAppendVector(dst []byte, field *fieldInfo, hdr *reflect.SliceHeader, el
 		}
 
 		for x := 0; x < hdr.Len; x++ {
-			s := *(*string)(ePtr)
+			s := *(*string)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(s))
 			if err != nil {
 				return nil, err
 			}
 			total += sz
-			ePtr = unsafe.Add(ePtr, elemSize)
 		}
 	case _ExecuteTypeBytes:
 		if hdr.Len < 8 && len(*(*[]byte)(ePtr)) < 4096 {
@@ -1070,13 +1076,12 @@ func growAppendVector(dst []byte, field *fieldInfo, hdr *reflect.SliceHeader, el
 		}
 
 		for x := 0; x < hdr.Len; x++ {
-			b := *(*[]byte)(ePtr)
+			b := *(*[]byte)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(b))
 			if err != nil {
 				return nil, err
 			}
 			total += sz
-			ePtr = unsafe.Add(ePtr, elemSize)
 		}
 	default:
 		return dst, nil
@@ -1341,7 +1346,7 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 				buf.Write(_BoolFalse)
 			}
 		case _ExecuteTypeVector:
-			hdr := (*reflect.SliceHeader)(ptr)
+			hdr := (*sliceHeader)(ptr)
 			ln := hdr.Len
 
 			sz := field.structInfo.tp.Elem().Size()
@@ -1350,13 +1355,12 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			}
 			writeUint32(buf, uint32(ln))
 
-			ePtr := unsafe.Pointer(hdr.Data)
+			ePtr := hdr.Data
 
 			for x := 0; x < ln; x++ {
-				if err := executeSerialize(buf, ePtr, field.structInfo); err != nil {
+				if err := executeSerialize(buf, unsafe.Add(ePtr, uintptr(x)*sz), field.structInfo); err != nil {
 					return fmt.Errorf("failed to serialize %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
-				ePtr = unsafe.Add(ePtr, sz)
 			}
 		default:
 			return fmt.Errorf("unknown type %d for field %s", t, field.String())
@@ -1591,7 +1595,7 @@ func executeAppend(dst []byte, base unsafe.Pointer, si *structInfo) ([]byte, err
 				dst = append(dst, _BoolFalse...)
 			}
 		case _ExecuteTypeVector:
-			hdr := (*reflect.SliceHeader)(ptr)
+			hdr := (*sliceHeader)(ptr)
 			ln := hdr.Len
 
 			sz := field.structInfo.tp.Elem().Size()
@@ -1600,13 +1604,12 @@ func executeAppend(dst []byte, base unsafe.Pointer, si *structInfo) ([]byte, err
 			}
 			dst = appendUint32(dst, uint32(ln))
 
-			ePtr := unsafe.Pointer(hdr.Data)
+			ePtr := hdr.Data
 
 			for x := 0; x < ln; x++ {
-				if dst, err = executeAppend(dst, ePtr, field.structInfo); err != nil {
+				if dst, err = executeAppend(dst, unsafe.Add(ePtr, uintptr(x)*sz), field.structInfo); err != nil {
 					return nil, fmt.Errorf("failed to serialize %s type, vector element %d: %w", si.tp.String(), x, err)
 				}
-				ePtr = unsafe.Add(ePtr, sz)
 			}
 		default:
 			return nil, fmt.Errorf("unknown type %d for field %s", t, field.String())

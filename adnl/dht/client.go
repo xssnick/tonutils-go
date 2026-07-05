@@ -272,6 +272,16 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 	return bucket.addNode(kNode, setActive), nil
 }
 
+func (c *Client) markNodeReady(node *dhtNode) {
+	affinity := affinity(node.adnlId, c.selfID)
+	if affinity >= uint(len(c.buckets)) {
+		return
+	}
+
+	node.markPingSuccess()
+	c.buckets[affinity].addNode(node, true)
+}
+
 func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
 	keyHash, err := tl.Hash(keys.PublicKeyOverlay{
 		Key: overlayKey,
@@ -583,6 +593,7 @@ func (c *Client) collectNearestNodes(ctx context.Context, keyId []byte) []*dhtNo
 				}
 			} else {
 				search.Finish(res.node, true)
+				c.markNodeReady(res.node)
 				for _, newN := range res.nodes {
 					if an, err := c.addNode(newN); err == nil {
 						search.Add(an)
@@ -971,6 +982,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 				}
 				continue
 			}
+			c.markNodeReady(node)
 
 			switch v := val.(type) {
 			case *Value:

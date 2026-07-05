@@ -65,7 +65,7 @@ func assertMathCoverageVMError(t *testing.T, err error, code int64) {
 	}
 }
 
-func mustRoundTripMathAdvanced(t *testing.T, src *helpers.AdvancedOP, dst *helpers.AdvancedOP, wantText string) {
+func mustRoundTripMathAdvanced(t *testing.T, src vm.OP, dst vm.OP, wantText string) {
 	t.Helper()
 	if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize advanced op: %v", err)

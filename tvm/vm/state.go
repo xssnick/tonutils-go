@@ -205,10 +205,10 @@ func newExecutionState(globalVersion int, globalVersionConfigured bool, gas Gas,
 		Gas:                     gas,
 		Reg: Register{
 			C: [4]Continuation{
-				&QuitContinuation{ExitCode: 0},
-				&QuitContinuation{ExitCode: 1},
+				quitCont0,
+				quitCont1,
 				&ExcQuitContinuation{},
-				&QuitContinuation{ExitCode: vmerr.CodeUnknown},
+				quitContUnknown,
 			},
 			D: [2]*cell.Cell{
 				data,

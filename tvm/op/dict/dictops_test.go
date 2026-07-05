@@ -180,7 +180,7 @@ func TestDictHelpers(t *testing.T) {
 	if err := mapDictError(cell.ErrTooMuchRefs); !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellOverflow {
 		t.Fatalf("expected cell overflow for too many refs, got %v", err)
 	}
-	if err := mapDictError(errors.New("not enough data in reader")); !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellUnderflow {
+	if err := mapDictError(cell.ErrNotEnoughData(0, 4)); !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellUnderflow {
 		t.Fatalf("expected reader underflow mapping, got %v", err)
 	}
 	origErr := vmerr.Error(vmerr.CodeRangeCheck)

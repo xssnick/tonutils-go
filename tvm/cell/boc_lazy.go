@@ -6,7 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sync"
+	"runtime"
+	"sync/atomic"
 )
 
 type bocPayloadCellInfo struct {
@@ -28,8 +29,7 @@ type lazyBOCLoader struct {
 	refSzBytes    int
 	trustedHashes bool
 
-	mu    sync.Mutex
-	cache []*Cell
+	cache []atomic.Pointer[Cell]
 }
 
 func parseLazyBOC(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNoCopyReader, index bocCellIndex, options BOCParseOptions) ([]*Cell, error) {
@@ -51,7 +51,7 @@ func parseLazyBOC(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOC
 		trustedHashes: options.TrustedHashes,
 	}
 	if !options.DisableLazyCache {
-		loader.cache = make([]*Cell, cellsNum)
+		loader.cache = make([]atomic.Pointer[Cell], cellsNum)
 	}
 	if err = loader.init(rootsIndex); err != nil {
 		return nil, err
@@ -81,6 +81,7 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32) error {
 	offset := 0
 	indexEnabled := l.index.enabled()
 	computedHashesCount := 0
+	computedCellsCount := 0
 	for i := range l.cells {
 		end := len(l.payload)
 		if indexEnabled {
@@ -130,6 +131,7 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32) error {
 			}
 			l.metaOffsets[i] = uint32(computedHashesCount)
 			computedHashesCount += hashesCount
+			computedCellsCount++
 		}
 
 		offset = nextOffset
@@ -153,18 +155,71 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32) error {
 	if computedHashesCount > 0 {
 		l.metaHashes = make([]byte, computedHashesCount*hashSize)
 		l.metaDepths = make([]uint16, computedHashesCount)
-		for idx := len(l.cells) - 1; idx >= 0; idx-- {
-			if !l.needsComputedMeta(l.cells[idx]) {
-				continue
-			}
-
-			if err := l.computeCellMeta(idx); err != nil {
-				return fmt.Errorf("invalid cell #%d: %w", idx, err)
-			}
+		if err := l.computeAllCellMeta(computedCellsCount); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func (l *lazyBOCLoader) computeAllCellMeta(computedCells int) error {
+	if threshold := ParallelBOCMinCells; threshold > 0 && computedCells >= threshold {
+		if workers := runtime.GOMAXPROCS(0); workers > 1 {
+			return l.computeAllCellMetaParallel(workers)
+		}
+	}
+
+	for idx := len(l.cells) - 1; idx >= 0; idx-- {
+		if !l.needsComputedMeta(l.cells[idx]) {
+			continue
+		}
+
+		if err := l.computeCellMeta(idx); err != nil {
+			return fmt.Errorf("invalid cell #%d: %w", idx, err)
+		}
+	}
+	return nil
+}
+
+// computeAllCellMetaParallel hashes cells wave by wave, same as parallel
+// parsed-cell finalization: cells of equal subtree height never depend on
+// each other's meta, while children always land in an earlier wave.
+func (l *lazyBOCLoader) computeAllCellMetaParallel(workers int) error {
+	heights := make([]uint16, len(l.cells))
+	maxHeight := 0
+	for idx := len(l.cells) - 1; idx >= 0; idx-- {
+		info := l.cells[idx]
+		var height uint16
+		refCnt := info.refsCount()
+		for ref := 0; ref < refCnt; ref++ {
+			refIdx := info.refIndex(l.payload, ref, l.refSzBytes)
+			if h := heights[refIdx] + 1; h > height {
+				height = h
+			}
+		}
+		// cell depth is at least the structural height at every level, so
+		// deeper chains cannot pass depth validation anyway
+		if height > maxDepth {
+			return fmt.Errorf("invalid cell #%d: %w", idx, ErrCellDepthLimit)
+		}
+		heights[idx] = height
+		if int(height) > maxHeight {
+			maxHeight = int(height)
+		}
+	}
+
+	return runCellWavesParallel(len(l.cells), maxHeight, workers,
+		func(i int) uint16 { return heights[i] },
+		func(idx int) error {
+			if !l.needsComputedMeta(l.cells[idx]) {
+				return nil
+			}
+			if err := l.computeCellMeta(idx); err != nil {
+				return fmt.Errorf("invalid cell #%d: %w", idx, err)
+			}
+			return nil
+		})
 }
 
 func (l *lazyBOCLoader) trustStoredMeta(info bocPayloadCellInfo) bool {
@@ -248,10 +303,7 @@ func (l *lazyBOCLoader) loadDataCell(idx int) (*Cell, error) {
 	}
 
 	if l.cache != nil {
-		l.mu.Lock()
-		cached := l.cache[idx]
-		l.mu.Unlock()
-		if cached != nil {
+		if cached := l.cache[idx].Load(); cached != nil {
 			return cached, nil
 		}
 	}
@@ -265,14 +317,10 @@ func (l *lazyBOCLoader) loadDataCell(idx int) (*Cell, error) {
 		return cell, nil
 	}
 
-	l.mu.Lock()
-	if cached := l.cache[idx]; cached != nil {
-		l.mu.Unlock()
-		return cached, nil
+	// keep the pointer identity stable for concurrent loaders
+	if !l.cache[idx].CompareAndSwap(nil, cell) {
+		return l.cache[idx].Load(), nil
 	}
-	l.cache[idx] = cell
-	l.mu.Unlock()
-
 	return cell, nil
 }
 
@@ -299,6 +347,7 @@ func (l *lazyBOCLoader) deserializeDataCell(idx int) (*Cell, error) {
 		c.refs[ref] = loaded
 	}
 
+	c.resolveType()
 	if err := l.setCellHashesDepths(c, idx); err != nil {
 		return nil, err
 	}
@@ -313,6 +362,14 @@ func (l *lazyBOCLoader) deserializeDataCell(idx int) (*Cell, error) {
 }
 
 func (l *lazyBOCLoader) createLazyCell(idx int) (*Cell, error) {
+	if l.cache != nil {
+		// already materialized shared cells are cheaper and behave the same,
+		// no reason to build a fresh lazy placeholder for them
+		if cached := l.cache[idx].Load(); cached != nil {
+			return cached, nil
+		}
+	}
+
 	info := l.cells[idx]
 	levelMask := info.levelMask()
 	hashesCount := levelMask.getHashesCount()

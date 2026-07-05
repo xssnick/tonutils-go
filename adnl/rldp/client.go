@@ -123,8 +123,6 @@ type fecDecoder interface {
 }
 
 type decoderStreamPart struct {
-	index uint32
-
 	decoder fecDecoder
 
 	fecDataSize     uint32
@@ -137,23 +135,28 @@ type decoderStreamPart struct {
 	receivedFastNum      uint32
 	receivedNumConfirmed uint32
 
-	lastConfirmAt  time.Time
-	lastCompleteAt time.Time
-	startedAt      time.Time
+	lastConfirmAt time.Time
+	startedAt     time.Time
 }
 
 type decoderStream struct {
 	finishedAt    *time.Time
 	lastMessageAt time.Time
 	startedAt     time.Time
-	currentPart   decoderStreamPart
+
+	// active (not yet decoded) parts, like InboundTransfer in reference C++ rldp2;
+	// parts are created strictly in order, but decoded in any order
+	activeParts    map[uint32]*decoderStreamPart
+	nextPartIndex  uint32
+	partsOffset    uint64 // sum of fec data sizes of all created parts
+	lastCompleteAt time.Time
 
 	/// messages chan *MessagePart
 	msgBuf *Queue
 
 	totalSize uint64
 
-	parts     [][]byte
+	dataParts [][]byte // decoded data of each part, by part index
 	partsSize uint64
 
 	pending    atomic.Bool
@@ -164,6 +167,10 @@ type decoderStream struct {
 var MaxUnexpectedTransferSize uint64 = 64 << 10 // 64 KB
 var MaxFECDataSize uint32 = 2 << 20             // 2 MB
 var DefaultSymbolSize uint32 = 768
+var MaxSymbolSize uint32 = 1 << 11 // same limit as in reference C++ fec validation
+
+// reference C++ rldp2 InboundTransfer decodes at most 20 parts of a transfer concurrently
+const maxActiveStreamParts = 20
 
 const (
 	_recvStreamIdleTimeout     = 30 * time.Second
@@ -376,11 +383,8 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					lastMessageAt: tm,
 					startedAt:     tm,
 					msgBuf:        NewQueue(qsz),
-					currentPart: decoderStreamPart{
-						index:     0,
-						startedAt: tm,
-					},
-					totalSize: m.TotalSize,
+					activeParts:   map[uint32]*decoderStreamPart{},
+					totalSize:     m.TotalSize,
 				}
 
 				r.recvStreams[id] = stream
@@ -407,244 +411,7 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 					break
 				}
 
-				err := func() error {
-					if stream.finishedAt != nil || stream.currentPart.index > part.Part {
-						if stream.currentPart.lastCompleteAt.Add(10 * time.Millisecond).Before(tm) { // to not send completions too often
-							var complete tl.Serializable = Complete{
-								TransferID: part.TransferID,
-								Part:       part.Part,
-							}
-
-							if isV2 {
-								complete = CompleteV2(complete.(Complete))
-							}
-
-							// got packet for a finished part, let them know that it is completed, again
-							err := r.adnl.SendCustomMessage(context.Background(), complete)
-							if err != nil {
-								return fmt.Errorf("failed to send rldp complete message: %w", err)
-							}
-							stream.currentPart.lastCompleteAt = tm
-						}
-						return nil
-					}
-
-					if part.Part > stream.currentPart.index {
-						return fmt.Errorf("received out of order part %d, expected %d", part.Part, stream.currentPart.index)
-					}
-					if part.TotalSize != stream.totalSize {
-						return fmt.Errorf("received part with bad total size %d, expected %d", part.TotalSize, stream.totalSize)
-					}
-
-					if stream.currentPart.decoder == nil {
-						var decoderType uint32
-						switch m.FecType.(type) {
-						case FECRaptorQ:
-							decoderType = 0
-						case FECRoundRobin:
-							decoderType = 1
-						default:
-							return fmt.Errorf("not supported fec type")
-						}
-
-						if m.TotalSize < uint64(m.FecType.GetDataSize()) {
-							return fmt.Errorf("bad rldp total size %d, expected at least %d", m.TotalSize, m.FecType.GetDataSize())
-						}
-
-						if uint64(m.FecType.GetDataSize()) > stream.totalSize || m.FecType.GetDataSize() > MaxFECDataSize ||
-							m.FecType.GetSymbolSize() == 0 || m.FecType.GetSymbolsCount() == 0 {
-							return fmt.Errorf("invalid fec")
-						}
-
-						var err error
-						var dec fecDecoder
-						if decoderType == 0 {
-							dec, err = raptorq.NewRaptorQ(m.FecType.GetSymbolSize()).CreateDecoder(m.FecType.GetDataSize())
-							if err != nil {
-								return fmt.Errorf("failed to init raptorq decoder: %w", err)
-							}
-						} else {
-							dec, err = roundrobin.NewDecoder(m.FecType.GetSymbolSize(), m.FecType.GetDataSize())
-							if err != nil {
-								return fmt.Errorf("failed to init round robin decoder: %w", err)
-							}
-						}
-
-						stream.currentPart.fecDataSize = m.FecType.GetDataSize()
-						stream.currentPart.fecSymbolSize = m.FecType.GetSymbolSize()
-						stream.currentPart.fecSymbolsCount = m.FecType.GetSymbolsCount()
-						stream.currentPart.decoder = dec
-
-						Logger("[ID]", hex.EncodeToString(part.TransferID), "[RLDP] created decoder for part:", part.Part, "data size:", stream.currentPart.fecDataSize, "symbol size:", stream.currentPart.fecSymbolSize, "symbols:", stream.currentPart.fecSymbolsCount)
-					}
-
-					canTryDecode, err := stream.currentPart.decoder.AddSymbol(part.Seqno, part.Data)
-					if err != nil {
-						return fmt.Errorf("failed to add raptorq symbol %d: %w", part.Seqno, err)
-					}
-
-					stream.lastMessageAt = tm
-					stream.currentPart.receivedNum++
-					if part.Seqno < stream.currentPart.fecSymbolsCount {
-						stream.currentPart.receivedFastNum++
-					}
-
-					if canTryDecode {
-						tmd := time.Now()
-						decoded, data, err := stream.currentPart.decoder.Decode()
-						if err != nil {
-							return fmt.Errorf("failed to decode raptorq packet: %w", err)
-						}
-
-						// it may not be decoded due to an unsolvable math system, it means we need more symbols
-						if decoded {
-							took := tmd.Sub(stream.currentPart.startedAt)
-							Logger("[RLDP] v2:", isV2, "part", part.Part, "part sz", stream.currentPart.fecDataSize, "decoded on seqno", part.Seqno, "symbols:", stream.currentPart.fecSymbolsCount, "received:", stream.currentPart.receivedNum, "fast", stream.currentPart.receivedFastNum,
-								"decode took", time.Since(tmd).String(), "took", took.String())
-
-							stream.currentPart = decoderStreamPart{
-								index:     stream.currentPart.index + 1,
-								startedAt: tmd,
-							}
-
-							if len(data) > 0 {
-								stream.parts = append(stream.parts, data)
-								stream.partsSize += uint64(len(data))
-							}
-
-							var complete tl.Serializable = Complete{
-								TransferID: part.TransferID,
-								Part:       part.Part,
-							}
-
-							// drop unprocessed messages related to this part
-							stream.msgBuf.Drain()
-
-							if isV2 {
-								complete = CompleteV2(complete.(Complete))
-							}
-							_ = r.adnl.SendCustomMessage(context.Background(), complete)
-
-							if stream.partsSize >= stream.totalSize {
-								stream.finishedAt = &tmd
-								stream.currentPart.decoder = nil
-								r.cleanupRecvStreams(tm, stream)
-
-								if stream.partsSize > stream.totalSize {
-									return fmt.Errorf("received more data than expected, expected %d, got %d", stream.totalSize, stream.partsSize)
-								}
-								buf := make([]byte, stream.totalSize)
-								off := 0
-								for _, p := range stream.parts {
-									off += copy(buf[off:], p)
-								}
-								stream.parts = nil
-								stream.partsSize = 0
-
-								var res any
-								if _, err = tl.ParseNoCopy(&res, buf, true); err != nil {
-									return fmt.Errorf("failed to parse custom message: %w", err)
-								}
-
-								Logger("[RLDP] stream finished and parsed, processing transfer data", hex.EncodeToString(part.TransferID))
-
-								switch rVal := res.(type) {
-								case Query:
-									handler := r.onQuery
-									if handler != nil {
-										transferId := make([]byte, 32)
-										copy(transferId, part.TransferID)
-
-										if err = handler(transferId, &rVal); err != nil {
-											Logger("failed to handle query: ", err)
-										}
-									}
-								case Answer:
-									qid := string(rVal.ID)
-
-									r.mx.Lock()
-									req := r.activeRequests[qid]
-									if req != nil {
-										delete(r.activeRequests, qid)
-										delete(r.expectedTransfers, id)
-									}
-									r.mx.Unlock()
-
-									if req != nil {
-										queryId := make([]byte, 32)
-										copy(queryId, rVal.ID)
-
-										// if a channel is full, we sacrifice processing speed, responses better
-										req.result <- AsyncQueryResult{
-											QueryID:     queryId,
-											ResultBytes: rVal.Data,
-										}
-									}
-								case Message:
-									handler := r.onMessage
-									if handler != nil {
-										if err = handler(rVal.ID, rVal.Data); err != nil {
-											Logger("failed to handle message: ", err)
-										}
-										break
-									}
-
-									Logger("[RLDP] skipping unwanted rldp message of type", reflect.TypeOf(res).String())
-								default:
-									Logger("[RLDP] skipping unwanted rldp message of type", reflect.TypeOf(res).String())
-								}
-							}
-							return nil
-						} else {
-							Logger("[RLDP] part ", part.Part, "decode attempt failure on seqno", part.Seqno, "symbols:", stream.currentPart.fecSymbolsCount, "decode took", time.Since(tmd).String())
-						}
-					}
-
-					if part.Seqno > stream.currentPart.maxSeqno {
-						diff := part.Seqno - stream.currentPart.maxSeqno
-						if diff >= 32 {
-							stream.currentPart.receivedMask = 0
-						} else {
-							stream.currentPart.receivedMask <<= diff
-						}
-						stream.currentPart.maxSeqno = part.Seqno
-					}
-
-					if offset := stream.currentPart.maxSeqno - part.Seqno; offset < 32 {
-						stream.currentPart.receivedMask |= 1 << offset
-					}
-
-					// send confirm for each 10 packets or after 20 ms
-					if stream.currentPart.receivedNum-stream.currentPart.receivedNumConfirmed >= 10 ||
-						stream.currentPart.lastConfirmAt.Add(20*time.Millisecond).Before(tm) {
-						var confirm tl.Serializable
-						if isV2 {
-							// RLDP2 ACKs use 1-based seqno, while messagePart.seqno is 0-based.
-							confirm = ConfirmV2{
-								TransferID:    part.TransferID,
-								Part:          part.Part,
-								MaxSeqno:      stream.currentPart.maxSeqno + 1,
-								ReceivedMask:  stream.currentPart.receivedMask,
-								ReceivedCount: stream.currentPart.receivedNum,
-							}
-						} else {
-							confirm = Confirm{
-								TransferID: part.TransferID,
-								Part:       part.Part,
-								Seqno:      stream.currentPart.maxSeqno,
-							}
-						}
-						// we don't care in case of error, not so critical
-						err = r.adnl.SendCustomMessage(context.Background(), confirm)
-						if err == nil {
-							stream.currentPart.receivedNumConfirmed = stream.currentPart.receivedNum
-							stream.currentPart.lastConfirmAt = tm
-						}
-					}
-
-					return nil
-				}()
-				if err != nil {
+				if err := r.processStreamMessagePart(stream, part, tm, isV2); err != nil {
 					Logger("[RLDP] transfer", hex.EncodeToString(part.TransferID), "process msg part:", part.Part, "error:", err.Error())
 				}
 			}
@@ -824,6 +591,267 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 	}
 
 	return nil
+}
+
+// processStreamMessagePart consumes a single message part of an inbound transfer, stream.mx must be held.
+// Parts are created strictly in order, but up to maxActiveStreamParts of them are decoded
+// concurrently and may complete in any order, same as InboundTransfer in reference C++ rldp2.
+func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart, tm time.Time, isV2 bool) error {
+	if stream.finishedAt != nil || (part.Part < stream.nextPartIndex && stream.activeParts[part.Part] == nil) {
+		if stream.lastCompleteAt.Add(10 * time.Millisecond).Before(tm) { // to not send completions too often
+			var complete tl.Serializable = Complete{
+				TransferID: part.TransferID,
+				Part:       part.Part,
+			}
+
+			if isV2 {
+				complete = CompleteV2(complete.(Complete))
+			}
+
+			// got packet for a finished part, let them know that it is completed, again
+			err := r.adnl.SendCustomMessage(context.Background(), complete)
+			if err != nil {
+				return fmt.Errorf("failed to send rldp complete message: %w", err)
+			}
+			stream.lastCompleteAt = tm
+		}
+		return nil
+	}
+
+	if part.TotalSize != stream.totalSize {
+		return fmt.Errorf("received part with bad total size %d, expected %d", part.TotalSize, stream.totalSize)
+	}
+
+	cur := stream.activeParts[part.Part]
+	if cur == nil {
+		// parts are created strictly in order, symbols of further parts are
+		// ignored, sender will retransmit them when its parts window moves
+		if part.Part != stream.nextPartIndex || len(stream.activeParts) >= maxActiveStreamParts {
+			return nil
+		}
+
+		dec, err := createFECDecoder(part.FecType, stream.totalSize-stream.partsOffset)
+		if err != nil {
+			return fmt.Errorf("failed to create decoder for part %d: %w", part.Part, err)
+		}
+
+		cur = &decoderStreamPart{
+			decoder:         dec,
+			fecDataSize:     part.FecType.GetDataSize(),
+			fecSymbolSize:   part.FecType.GetSymbolSize(),
+			fecSymbolsCount: part.FecType.GetSymbolsCount(),
+			startedAt:       tm,
+		}
+
+		stream.activeParts[part.Part] = cur
+		stream.dataParts = append(stream.dataParts, nil)
+		stream.partsOffset += uint64(cur.fecDataSize)
+		stream.nextPartIndex++
+
+		Logger("[ID]", hex.EncodeToString(part.TransferID), "[RLDP] created decoder for part:", part.Part, "data size:", cur.fecDataSize, "symbol size:", cur.fecSymbolSize, "symbols:", cur.fecSymbolsCount)
+	}
+
+	canTryDecode, err := cur.decoder.AddSymbol(part.Seqno, part.Data)
+	if err != nil {
+		return fmt.Errorf("failed to add raptorq symbol %d: %w", part.Seqno, err)
+	}
+
+	stream.lastMessageAt = tm
+	cur.receivedNum++
+	if part.Seqno < cur.fecSymbolsCount {
+		cur.receivedFastNum++
+	}
+
+	if canTryDecode {
+		tmd := time.Now()
+		decoded, data, err := cur.decoder.Decode()
+		if err != nil {
+			return fmt.Errorf("failed to decode raptorq packet: %w", err)
+		}
+
+		// it may not be decoded due to an unsolvable math system, it means we need more symbols
+		if decoded {
+			Logger("[RLDP] v2:", isV2, "part", part.Part, "part sz", cur.fecDataSize, "decoded on seqno", part.Seqno, "symbols:", cur.fecSymbolsCount, "received:", cur.receivedNum, "fast", cur.receivedFastNum,
+				"decode took", time.Since(tmd).String(), "took", tmd.Sub(cur.startedAt).String())
+
+			delete(stream.activeParts, part.Part)
+			stream.dataParts[part.Part] = data
+			stream.partsSize += uint64(len(data))
+
+			var complete tl.Serializable = Complete{
+				TransferID: part.TransferID,
+				Part:       part.Part,
+			}
+
+			if isV2 {
+				complete = CompleteV2(complete.(Complete))
+			}
+			_ = r.adnl.SendCustomMessage(context.Background(), complete)
+			stream.lastCompleteAt = tmd
+
+			if stream.partsSize < stream.totalSize {
+				return nil
+			}
+
+			stream.finishedAt = &tmd
+			r.cleanupRecvStreams(tm, stream)
+
+			if stream.partsSize > stream.totalSize {
+				return fmt.Errorf("received more data than expected, expected %d, got %d", stream.totalSize, stream.partsSize)
+			}
+
+			buf := make([]byte, stream.totalSize)
+			off := 0
+			for _, p := range stream.dataParts {
+				off += copy(buf[off:], p)
+			}
+			stream.dataParts = nil
+			stream.partsSize = 0
+
+			var res any
+			if _, err = tl.ParseNoCopy(&res, buf, true); err != nil {
+				return fmt.Errorf("failed to parse custom message: %w", err)
+			}
+
+			Logger("[RLDP] stream finished and parsed, processing transfer data", hex.EncodeToString(part.TransferID))
+
+			switch rVal := res.(type) {
+			case Query:
+				handler := r.onQuery
+				if handler != nil {
+					transferId := make([]byte, 32)
+					copy(transferId, part.TransferID)
+
+					if err = handler(transferId, &rVal); err != nil {
+						Logger("failed to handle query: ", err)
+					}
+				}
+			case Answer:
+				qid := string(rVal.ID)
+
+				r.mx.Lock()
+				req := r.activeRequests[qid]
+				if req != nil {
+					delete(r.activeRequests, qid)
+					delete(r.expectedTransfers, string(part.TransferID))
+				}
+				r.mx.Unlock()
+
+				if req != nil {
+					queryId := make([]byte, 32)
+					copy(queryId, rVal.ID)
+
+					// if a channel is full, we sacrifice processing speed, responses better
+					req.result <- AsyncQueryResult{
+						QueryID:     queryId,
+						ResultBytes: rVal.Data,
+					}
+				}
+			case Message:
+				handler := r.onMessage
+				if handler != nil {
+					if err = handler(rVal.ID, rVal.Data); err != nil {
+						Logger("failed to handle message: ", err)
+					}
+					break
+				}
+
+				Logger("[RLDP] skipping unwanted rldp message of type", reflect.TypeOf(res).String())
+			default:
+				Logger("[RLDP] skipping unwanted rldp message of type", reflect.TypeOf(res).String())
+			}
+			return nil
+		}
+
+		Logger("[RLDP] part ", part.Part, "decode attempt failure on seqno", part.Seqno, "symbols:", cur.fecSymbolsCount, "decode took", time.Since(tmd).String())
+	}
+
+	if part.Seqno > cur.maxSeqno {
+		diff := part.Seqno - cur.maxSeqno
+		if diff >= 32 {
+			cur.receivedMask = 0
+		} else {
+			cur.receivedMask <<= diff
+		}
+		cur.maxSeqno = part.Seqno
+	}
+
+	if offset := cur.maxSeqno - part.Seqno; offset < 32 {
+		cur.receivedMask |= 1 << offset
+	}
+
+	// send confirm for each 10 packets or after 20 ms
+	if cur.receivedNum-cur.receivedNumConfirmed >= 10 ||
+		cur.lastConfirmAt.Add(20*time.Millisecond).Before(tm) {
+		var confirm tl.Serializable
+		if isV2 {
+			// RLDP2 ACKs use 1-based seqno, while messagePart.seqno is 0-based.
+			confirm = ConfirmV2{
+				TransferID:    part.TransferID,
+				Part:          part.Part,
+				MaxSeqno:      cur.maxSeqno + 1,
+				ReceivedMask:  cur.receivedMask,
+				ReceivedCount: cur.receivedNum,
+			}
+		} else {
+			confirm = Confirm{
+				TransferID: part.TransferID,
+				Part:       part.Part,
+				Seqno:      cur.maxSeqno,
+			}
+		}
+		// we don't care in case of error, not so critical
+		err = r.adnl.SendCustomMessage(context.Background(), confirm)
+		if err == nil {
+			cur.receivedNumConfirmed = cur.receivedNum
+			cur.lastConfirmAt = tm
+		}
+	}
+
+	return nil
+}
+
+// createFECDecoder validates fec parameters of an inbound transfer part the same way
+// the reference C++ node does (fec::FecType::create) and initializes a decoder.
+// maxDataSize is the space not yet occupied by previous parts of the transfer.
+func createFECDecoder(fec FEC, maxDataSize uint64) (fecDecoder, error) {
+	dataSize, symbolSize, symbolsCount := fec.GetDataSize(), fec.GetSymbolSize(), fec.GetSymbolsCount()
+
+	if symbolSize == 0 || symbolSize > MaxSymbolSize {
+		return nil, fmt.Errorf("invalid fec symbol size %d", symbolSize)
+	}
+
+	if dataSize == 0 || dataSize > MaxFECDataSize || uint64(dataSize) > maxDataSize {
+		return nil, fmt.Errorf("invalid fec data size %d", dataSize)
+	}
+
+	if uint64(dataSize) > uint64(symbolSize)<<24 {
+		return nil, fmt.Errorf("too many fec symbols")
+	}
+
+	// symbols count must correspond to data and symbol sizes; older tonutils-go
+	// senders report ceil+1 when data size is a multiple of symbol size, allow it too
+	minSymbols := (uint64(dataSize) + uint64(symbolSize) - 1) / uint64(symbolSize)
+	if c := uint64(symbolsCount); c < minSymbols || c > minSymbols+1 {
+		return nil, fmt.Errorf("invalid fec symbols count %d, data size %d, symbol size %d", symbolsCount, dataSize, symbolSize)
+	}
+
+	switch fec.(type) {
+	case FECRaptorQ:
+		dec, err := raptorq.NewRaptorQ(symbolSize).CreateDecoder(dataSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to init raptorq decoder: %w", err)
+		}
+		return dec, nil
+	case FECRoundRobin:
+		dec, err := roundrobin.NewDecoder(symbolSize, dataSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to init round robin decoder: %w", err)
+		}
+		return dec, nil
+	default:
+		return nil, fmt.Errorf("not supported fec type")
+	}
 }
 
 func (r *RLDP) GetRateInfo() (left int64, total int64) {
@@ -1166,7 +1194,8 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 	}
 	remaining := t.data[len(payload):]
 
-	cnt := uint32(len(payload))/DefaultSymbolSize + 1
+	// ceil, reference C++ nodes drop parts with symbols count not matching data and symbol sizes
+	cnt := uint32((uint64(len(payload)) + uint64(DefaultSymbolSize) - 1) / uint64(DefaultSymbolSize))
 
 	var err error
 	var enc fecEncoder

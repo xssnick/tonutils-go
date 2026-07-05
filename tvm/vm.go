@@ -17,7 +17,6 @@ import (
 	"math/big"
 	"os"
 	"runtime/debug"
-	"strings"
 	"sync"
 )
 
@@ -632,8 +631,7 @@ func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exit
 	if err = tvm.execute(state); err != nil {
 		if code, ok := vmerr.ErrorCode(err); ok {
 			exitCode = code
-			var handled vm.HandledException
-			if exitCode == vmerr.CodeOutOfGas && !errors.As(err, &handled) {
+			if exitCode == vmerr.CodeOutOfGas && !vm.IsHandledException(err) {
 				exitCode = ^exitCode
 			}
 			if !vm.IsSuccessExitCode(exitCode) {
@@ -674,30 +672,30 @@ func (tvm *TVM) handleStepError(state *vm.State, err error) (bool, error) {
 	if errors.Is(err, vm.ErrStopOnAccept) {
 		return false, nil
 	}
-	var e vmerr.VMError
-	var virt vmerr.VirtualizationError
-	var handled vm.HandledException
-	if errors.As(err, &handled) {
+	if vm.IsHandledException(err) {
 		return false, err
 	}
-	if errors.As(err, &e) && e.Code == vmerr.CodeOutOfGas {
+	e, isVMErr := vmerr.AsVMError(err)
+	if isVMErr && e.Code == vmerr.CodeOutOfGas {
 		state.Steps++
 		if stackErr := state.HandleOutOfGas(); stackErr != nil {
 			return false, stackErr
 		}
 		return false, err
 	}
-	if errors.As(err, &virt) {
+	if _, isVirt := vmerr.AsVirtualization(err); isVirt {
 		return false, err
 	}
-	if state.Reg.C[2] != nil && errors.As(err, &e) && !vm.IsSuccessExitCode(e.Code) {
-		state.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
+	if state.Reg.C[2] != nil && isVMErr && !vm.IsSuccessExitCode(e.Code) {
+		if state.TraceEnabled() {
+			state.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
+		}
 
 		state.Steps++
 		if err = state.ThrowException(big.NewInt(e.Code)); err == nil {
 			return true, nil
 		}
-		if errors.As(err, &e) && e.Code == vmerr.CodeOutOfGas {
+		if e, isVMErr = vmerr.AsVMError(err); isVMErr && e.Code == vmerr.CodeOutOfGas {
 			state.Steps++
 			if stackErr := state.HandleOutOfGas(); stackErr != nil {
 				return false, stackErr
@@ -775,7 +773,7 @@ func normalizeCellError(err error) error {
 	}
 
 	switch {
-	case strings.Contains(err.Error(), "not enough data"),
+	case cell.IsNotEnoughDataError(err),
 		errors.Is(err, cell.ErrNoMoreRefs),
 		errors.Is(err, cell.ErrSmallSlice):
 		return vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
@@ -802,7 +800,7 @@ func normalizeOpcodeDeserializeError(err error, op vm.OP) error {
 	if errors.Is(err, vm.ErrCorruptedOpcode) ||
 		errors.Is(err, cell.ErrNoMoreRefs) ||
 		errors.Is(err, cell.ErrSmallSlice) ||
-		strings.Contains(err.Error(), "not enough data") {
+		cell.IsNotEnoughDataError(err) {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("deserialize opcode [%s] failed", op.SerializeText()))
 	}
 	return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
@@ -849,8 +847,7 @@ func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err
 	stackBefore := state.Stack.Checkpoint()
 	err = op.Interpret(state)
 	if err != nil {
-		var handled vm.HandledException
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow && !errors.As(err, &handled) {
+		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow && !vm.IsHandledException(err) {
 			state.Stack.RestoreCheckpoint(stackBefore)
 		}
 		err = normalizeCellError(err)

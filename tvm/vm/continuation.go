@@ -15,15 +15,35 @@ type QuitContinuation struct {
 	ExitCode int64
 }
 
+// shared instances for the exit codes produced on every call/return
+var (
+	quitCont0       = &QuitContinuation{ExitCode: 0}
+	quitCont1       = &QuitContinuation{ExitCode: 1}
+	quitContUnknown = &QuitContinuation{ExitCode: vmerr.CodeUnknown}
+)
+
+// quitContinuation returns a shared instance for hot exit codes;
+// QuitContinuation is immutable, so sharing is safe.
+func quitContinuation(exitCode int64) *QuitContinuation {
+	switch exitCode {
+	case 0:
+		return quitCont0
+	case 1:
+		return quitCont1
+	}
+	return &QuitContinuation{ExitCode: exitCode}
+}
+
 func (c *QuitContinuation) GetControlData() *ControlData {
 	return nil
 }
 
 func (c *QuitContinuation) Jump(state *State) (Continuation, error) {
-	return nil, vmerr.Error(c.ExitCode)
+	return nil, vmerr.Err(c.ExitCode)
 }
 
 func (c *QuitContinuation) Copy() Continuation {
+	// real copy: ExitCode is exported, callers may mutate the copy
 	cont := *c
 	return &cont
 }
@@ -40,6 +60,29 @@ func (e HandledException) Error() string {
 
 func (e HandledException) Unwrap() error {
 	return e.VMError
+}
+
+// IsHandledException is an allocation-free errors.As for HandledException.
+func IsHandledException(err error) bool {
+	for err != nil {
+		if _, ok := err.(HandledException); ok {
+			return true
+		}
+		switch x := err.(type) {
+		case interface{ Unwrap() error }:
+			err = x.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, sub := range x.Unwrap() {
+				if IsHandledException(sub) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (c *ExcQuitContinuation) GetControlData() *ControlData {
@@ -60,8 +103,8 @@ func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 }
 
 func (c *ExcQuitContinuation) Copy() Continuation {
-	cont := *c
-	return &cont
+	// stateless, sharing is safe
+	return c
 }
 
 type OrdinaryContinuation struct {
@@ -165,7 +208,9 @@ func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
 		return c.After, nil
 	}
 
-	state.Tracef("iteration REPEAT %d", c.Count)
+	if state.TraceEnabled() {
+		state.Tracef("iteration REPEAT %d", c.Count)
+	}
 
 	if cd := c.Body.GetControlData(); cd != nil && cd.Save.C[0] != nil {
 		return c.Body, nil

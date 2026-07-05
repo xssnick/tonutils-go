@@ -640,6 +640,9 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 	payloadArena := newBOCPayloadArena(dataLen)
 	storedArena := newBOCPayloadArena(dataLen)
 	indexEnabled := index.enabled()
+	// declared outside the loop so they escape to the heap at most once
+	var header [2]byte
+	var refBuf [4 * 4]byte
 	for i := 0; i < cellsNum; i++ {
 		cellEnd := dataLen
 		if indexEnabled {
@@ -662,7 +665,6 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 			return nil, nil, errors.New("failed to parse cell header, corrupted data")
 		}
 
-		var header [2]byte
 		if err := readFull(header[:]); err != nil {
 			return nil, nil, fmt.Errorf("failed to read cell header: %w", err)
 		}
@@ -716,7 +718,6 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 		}
 		refsSize := refsNum * refSzBytes
 		if refsSize > 0 {
-			var refBuf [4 * 4]byte
 			if err := readFull(refBuf[:refsSize]); err != nil {
 				return nil, nil, fmt.Errorf("failed to read cell refs: %w", err)
 			}
@@ -918,47 +919,6 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 	return finalizeParsedCells(cells, rootsIndex, stored, options)
 }
 
-func finalizeParsedCells(cells []Cell, rootsIndex []uint32, stored []storedHashesDepths, options BOCParseOptions) ([]*Cell, []Cell, error) {
-	roots := make([]*Cell, len(rootsIndex))
-
-	storedIdx := len(stored) - 1
-	for idx := len(cells) - 1; idx >= 0; idx-- {
-		var storedMeta storedHashesDepths
-		hasStoredHashes := false
-		if storedIdx >= 0 && stored[storedIdx].cellIndex == idx {
-			storedMeta = stored[storedIdx]
-			hasStoredHashes = true
-			storedIdx--
-		}
-
-		if options.TrustedHashes && hasStoredHashes {
-			if err := applyTrustedStoredHashesDepths(&cells[idx], storedMeta); err != nil {
-				return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-			}
-		} else {
-			if err := cells[idx].calculateHashes(); err != nil {
-				return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-			}
-			if hasStoredHashes {
-				if err := validateStoredHashesDepths(&cells[idx], storedMeta); err != nil {
-					return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-				}
-			}
-		}
-		if cells[idx].IsSpecial() {
-			if err := validateLoadedCell(&cells[idx]); err != nil {
-				return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-			}
-		}
-	}
-
-	for i, idx := range rootsIndex {
-		roots[i] = &cells[idx]
-	}
-
-	return roots, cells, nil
-}
-
 func applyTrustedStoredHashesDepths(c *Cell, stored storedHashesDepths) error {
 	levelMask := c.LevelMask()
 	expected := levelMask.getHashesCount()
@@ -969,7 +929,7 @@ func applyTrustedStoredHashesDepths(c *Cell, stored storedHashesDepths) error {
 		return errors.New("invalid serialized hashes/depth metadata")
 	}
 
-	if c.GetType() == PrunedCellType {
+	if c.resolveType() == PrunedCellType {
 		hashOff := (expected - 1) * hashSize
 		depthOff := (expected - 1) * depthSize
 		c.setHashAt(0, stored.hashes[hashOff:hashOff+hashSize])

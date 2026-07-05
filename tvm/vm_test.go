@@ -304,7 +304,7 @@ func TestTVMErrorNormalizationExitCodes(t *testing.T) {
 		err  error
 		code int64
 	}{
-		{name: "text underflow", err: errors.New("not enough data in slice"), code: vmerr.CodeCellUnderflow},
+		{name: "text underflow", err: cell.ErrNotEnoughData(1, 8), code: vmerr.CodeCellUnderflow},
 		{name: "no more refs", err: cell.ErrNoMoreRefs, code: vmerr.CodeCellUnderflow},
 		{name: "small slice", err: cell.ErrSmallSlice, code: vmerr.CodeCellUnderflow},
 		{name: "not fit", err: cell.ErrNotFit1023, code: vmerr.CodeCellOverflow},
@@ -342,7 +342,7 @@ func TestTVMOpcodeDeserializeErrorNormalization(t *testing.T) {
 		{name: "corrupted opcode", err: vm.ErrCorruptedOpcode},
 		{name: "no more refs", err: cell.ErrNoMoreRefs},
 		{name: "small slice", err: cell.ErrSmallSlice},
-		{name: "text underflow", err: errors.New("not enough data while loading suffix")},
+		{name: "text underflow", err: cell.ErrNotEnoughData(0, 8)},
 	}
 	for _, tt := range invalidCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1128,7 +1128,7 @@ func errorNormalizationFuzzCase(rawGroup, rawVariant byte) (error, int64) {
 	case 0:
 		switch rawVariant % 3 {
 		case 0:
-			return errors.New("not enough data in fuzz slice"), vmerr.CodeCellUnderflow
+			return cell.ErrNotEnoughData(3, 8), vmerr.CodeCellUnderflow
 		case 1:
 			return cell.ErrNoMoreRefs, vmerr.CodeCellUnderflow
 		default:

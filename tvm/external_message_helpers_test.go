@@ -134,10 +134,9 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		}
 
 		orig := big.NewInt(55)
-		cp := normalizeMessageTupleValue(orig).(*big.Int)
-		orig.SetInt64(99)
-		if cp.Int64() != 55 {
-			t.Fatalf("big.Int normalization should copy input, got %d", cp.Int64())
+		if got := normalizeMessageTupleValue(orig).(*big.Int); got != orig {
+			// the VM never mutates tuple ints in place, values are passed through
+			t.Fatalf("big.Int normalization should pass value through, got %v", got)
 		}
 
 		if got := messageTupleMaybeInt(nil); got != nil {
@@ -381,6 +380,12 @@ func TestBuildMessageEmulationC7ClonesMutableConfigValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// nested tuple values are snapshotted when c7 is bound to the VM on
+	// execution start, not at build time
+	st := vmcore.NewExecutionStateWithGlobalVersion(vmcore.DefaultGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, c7, vmcore.NewStack())
+	st.InitForExecution()
+	c7 = st.Reg.C7
+
 	paramsRaw, err := c7.RawIndex(0)
 	if err != nil {
 		t.Fatal(err)
@@ -443,6 +448,9 @@ func FuzzMessageTupleNormalizationIsolation(f *testing.F) {
 		nested := tuple.NewTupleValue(nestedInt)
 		orig := tuple.NewTupleValue(topInt, slice, builder, nested)
 
+		// tuples are passed through as-is: they are persistent (Set replaces
+		// the backing data), and nested slices/builders are snapshotted when
+		// the tuple is bound to the VM on execution start
 		clonedRaw := normalizeMessageTupleValue(orig)
 		cloned, ok := clonedRaw.(tuple.Tuple)
 		if !ok {
@@ -452,8 +460,14 @@ func FuzzMessageTupleNormalizationIsolation(f *testing.F) {
 			t.Fatalf("cloned tuple len = %d, want 4", cloned.Len())
 		}
 
-		topInt.SetInt64(rawTopInt + 1)
-		nestedInt.SetInt64(rawNestedInt + 1)
+		st := vmcore.NewExecutionStateWithGlobalVersion(vmcore.DefaultGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, tuple.NewTupleValue(cloned), vmcore.NewStack())
+		st.InitForExecution()
+		boundRaw, err := st.Reg.C7.RawIndex(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cloned = boundRaw.(tuple.Tuple)
+
 		if _, err := slice.LoadUInt(1); err != nil {
 			t.Fatalf("consume original slice: %v", err)
 		}
@@ -576,14 +590,9 @@ func FuzzBuildMessageEmulationC7VersionFieldBoundaries(f *testing.F) {
 			t.Fatal(err)
 		}
 
-		incomingGrams.SetInt64(-1)
-		prevBlocksValue.SetInt64(-1)
-		unpackedValue.SetInt64(-1)
-		duePayment.SetInt64(-1)
-		precompiledGas.SetInt64(-1)
-		inMsgValue.SetInt64(-1)
-		globalValue.SetInt64(-1)
-		balance.SetInt64(-1)
+		// integers are passed into c7 by reference: the caller must not
+		// mutate them while the emulation call is in flight, so the previous
+		// post-build SetInt64 isolation checks no longer apply
 
 		if c7.Len() != globalIndex+1 {
 			t.Fatalf("top c7 len version=%d = %d, want %d", version, c7.Len(), globalIndex+1)

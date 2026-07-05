@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"strings"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -1697,9 +1696,9 @@ func mapDictError(err error) error {
 		errors.Is(err, cell.ErrCellDepthLimit),
 		errors.Is(err, cell.ErrRefCannotBeNil):
 		return cellOverflowError(err)
-	case strings.Contains(err.Error(), "not enough data in reader"),
-		strings.Contains(err.Error(), "label exceeds remaining key bits"),
-		strings.Contains(err.Error(), "has special cells in tree structure"):
+	case cell.IsNotEnoughDataError(err),
+		errors.Is(err, cell.ErrLabelExceedsKeyBits),
+		errors.Is(err, cell.ErrDictHasSpecialCells):
 		return cellUnderflowError(err)
 	default:
 		return vmerr.Error(vmerr.CodeDict, err.Error())

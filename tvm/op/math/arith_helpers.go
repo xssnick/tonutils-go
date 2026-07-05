@@ -99,6 +99,12 @@ func popIntOperand(state *vm.State, quiet bool) (*big.Int, error) {
 	return state.Stack.PopInt()
 }
 
+// popIntOperandRead pops an operand for read-only use; the result may be a
+// shared instance and must not be mutated.
+func popIntOperandRead(state *vm.State, quiet bool) (*big.Int, error) {
+	return state.Stack.PopIntRead()
+}
+
 func unaryIntResult(x *big.Int, fn func(*big.Int) *big.Int) *big.Int {
 	if x == nil {
 		return nil

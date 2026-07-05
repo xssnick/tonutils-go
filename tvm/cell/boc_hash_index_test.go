@@ -43,7 +43,7 @@ func TestBOCHashIndexSerializationRoundTrip(t *testing.T) {
 	right := BeginCell().MustStoreUInt(0x22, 8).MustStoreRef(shared).EndCell()
 	root := BeginCell().MustStoreRef(left).MustStoreRef(right).EndCell()
 
-	bag, err := newBOCSerializer([]*Cell{root})
+	bag, err := newBOCSerializer([]*Cell{root}, 0)
 	if err != nil {
 		t.Fatalf("failed to import cells: %v", err)
 	}

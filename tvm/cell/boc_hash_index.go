@@ -11,6 +11,26 @@ type bocHashIndex struct {
 	growAt       int
 }
 
+func newBOCHashIndex(capacityHint int) *bocHashIndex {
+	m := &bocHashIndex{}
+	if capacityHint <= 0 {
+		return m
+	}
+	if capacityHint > 1<<30 {
+		capacityHint = 1 << 30
+	}
+
+	capacity := bocHashIndexInitialCapacity
+	for capacityHint*4 > capacity*3 {
+		capacity *= 2
+	}
+
+	m.fingerprints = make([]uint64, capacity)
+	m.indexes = make([]uint32, capacity)
+	m.growAt = capacity * 3 / 4
+	return m
+}
+
 func (m *bocHashIndex) get(fp uint64, hash []byte, cell *Cell, items []bocSerializeItem) (uint32, bool) {
 	if len(m.indexes) == 0 {
 		return 0, false

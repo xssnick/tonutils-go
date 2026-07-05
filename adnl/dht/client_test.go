@@ -605,6 +605,7 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       2,
 		a:       1,
 	}
@@ -621,6 +622,59 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 	}
 	if findNodeCalls["3"] != 0 {
 		t.Fatalf("third closest node should not be queried, got calls=%v", findNodeCalls)
+	}
+}
+
+func TestClient_collectNearestNodesPromotesSuccessfulBackup(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := make([]byte, 32)
+	nodeID[31] = 1
+
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	}
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		selfID:  make([]byte, 32),
+		k:       1,
+		a:       1,
+	}
+
+	bucketID := affinity(nodeID, dhtCli.selfID)
+	bucket := buckets[bucketID]
+	bucket.addNode(&dhtNode{adnlId: nodeID, client: dhtCli, addr: "1"}, false)
+
+	active, backup := bucket.nodeCounts()
+	if active != 0 || backup != 1 {
+		t.Fatalf("initial bucket counts active=%d backup=%d, want 0/1", active, backup)
+	}
+
+	nodes := dhtCli.collectNearestNodes(context.Background(), keyID)
+	if len(nodes) != 1 {
+		t.Fatalf("expected one nearest node, got %d", len(nodes))
+	}
+
+	active, backup = bucket.nodeCounts()
+	if active != 1 || backup != 0 {
+		t.Fatalf("bucket counts after lookup active=%d backup=%d, want 1/0", active, backup)
 	}
 }
 
@@ -661,6 +715,7 @@ func TestClient_collectNearestNodesRetriesAfterOtherPending(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       2,
 		a:       1,
 	}
@@ -727,6 +782,7 @@ func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       3,
 		a:       1,
 	}
@@ -803,6 +859,7 @@ func TestClient_collectNearestNodesReturnsBeforeInflightTail(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       2,
 		a:       3,
 	}

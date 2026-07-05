@@ -239,11 +239,31 @@ func (b *Builder) StoreUInt(value uint64, sz uint) error {
 		return nil
 	}
 
-	value <<= 64 - sz
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], value)
+	if b.bitsSz+sz >= 1024 {
+		return ErrNotFit1023
+	}
 
-	return b.StoreSlice(buf[:], sz)
+	idx := b.bitsSz / 8
+	if idx+8 > uint(len(b.data)) {
+		// too close to the array end for a word-wide write
+		value <<= 64 - sz
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], value)
+		return b.StoreSlice(buf[:], sz)
+	}
+
+	// single read-modify-write of the destination word: bits past bitsSz are
+	// zero by the builder invariant, so OR places the value in one shot
+	off := b.bitsSz % 8
+	v := value << (64 - sz)
+	cur := binary.BigEndian.Uint64(b.data[idx:])
+	binary.BigEndian.PutUint64(b.data[idx:], cur|v>>off)
+	if off+sz > 64 {
+		b.data[idx+8] = byte(v << (64 - off) >> 56)
+	}
+
+	b.bitsSz += sz
+	return nil
 }
 
 func (b *Builder) MustStoreInt(value int64, sz uint) *Builder {
@@ -763,7 +783,18 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	} else {
 		shift := dstBitOffset
 		invShift := 8 - dstBitOffset
-		for i := 0; i < bytesNeeded; i++ {
+
+		// word-wise path: 8 source bytes per step; the last byte of each
+		// written word is partial and is completed by the next step or by
+		// the tail loop below
+		i := 0
+		for ; i+8 <= bytesNeeded && uint((i+7)*8)+invShift < sz && dstByte+i+9 <= len(b.data); i += 8 {
+			v := binary.BigEndian.Uint64(bytes[i:])
+			b.data[dstByte+i] |= byte(v >> (56 + shift))
+			binary.BigEndian.PutUint64(b.data[dstByte+i+1:], v<<invShift)
+		}
+
+		for ; i < bytesNeeded; i++ {
 			src := bytes[i]
 			b.data[dstByte+i] |= src >> shift
 			if sz > uint(i*8)+invShift {
@@ -841,6 +872,27 @@ func (b *Builder) BitsLeft() uint {
 
 func (b *Builder) RefsLeft() uint {
 	return 4 - uint(b.refsNum)
+}
+
+// truncateBits rolls the builder back to an earlier length for backtracking
+// tree walks. The whole rolled-back range is zeroed to restore the builder
+// invariant that bits past bitsSz are zero: stores rely on it by extending
+// partially written bytes with OR.
+func (b *Builder) truncateBits(sz uint) {
+	if sz >= b.bitsSz {
+		return
+	}
+
+	from := sz / 8
+	if rem := sz % 8; rem != 0 {
+		b.data[from] &= byte(0xFF << (8 - rem))
+		from++
+	}
+	to := (b.bitsSz + 7) / 8
+	if from < to {
+		clear(b.data[from:to])
+	}
+	b.bitsSz = sz
 }
 
 func (b *Builder) Copy() *Builder {

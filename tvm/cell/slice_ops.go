@@ -1,5 +1,9 @@
 package cell
 
+import (
+	mathbits "math/bits"
+)
+
 func (c *Slice) PeekRefCellAt(i int) (*Cell, error) {
 	return c.peekRefCellAt(i)
 }
@@ -64,10 +68,20 @@ func (c *Slice) HasPrefix(prefix *Slice) bool {
 }
 
 func (c *Slice) bitsEqualAt(other *Slice, offset, otherOffset, bits uint) bool {
-	for i := uint(0); i < bits; i++ {
-		if c.bitAt(offset+i) != other.bitAt(otherOffset+i) {
+	for done := uint(0); done < bits; {
+		chunk := min(uint(64), bits-done)
+		a, err := preloadSliceUIntAt(c, offset+done, chunk)
+		if err != nil {
 			return false
 		}
+		b, err := preloadSliceUIntAt(other, otherOffset+done, chunk)
+		if err != nil {
+			return false
+		}
+		if a != b {
+			return false
+		}
+		done += chunk
 	}
 	return true
 }
@@ -87,15 +101,21 @@ func (c *Slice) LexCompare(other *Slice) int {
 		limit = right
 	}
 
-	for i := uint(0); i < limit; i++ {
-		a := c.bitAt(i)
-		b := other.bitAt(i)
-		if a < b {
-			return -1
+	// big-endian chunks compare the same way the bit stream does
+	for done := uint(0); done < limit; {
+		chunk := min(uint(64), limit-done)
+		a, errA := preloadSliceUIntAt(c, done, chunk)
+		b, errB := preloadSliceUIntAt(other, done, chunk)
+		if errA != nil || errB != nil {
+			break
 		}
-		if a > b {
+		if a != b {
+			if a < b {
+				return -1
+			}
 			return 1
 		}
+		done += chunk
 	}
 
 	switch {
@@ -155,15 +175,18 @@ func (c *Slice) CountLeading(bit bool) int {
 		return 0
 	}
 
-	var want byte
-	if bit {
-		want = 1
-	}
-
-	for i := uint(0); i < bits; i++ {
-		if c.bitAt(i) != want {
-			return int(i)
+	for done := uint(0); done < bits; {
+		chunk := min(uint(64), bits-done)
+		v, err := preloadSliceUIntAt(c, done, chunk)
+		if err != nil {
+			return int(done)
 		}
+		want := sameBitsValue(bit, chunk)
+		if v != want {
+			// first mismatching bit within the chunk window
+			return int(done) + mathbits.LeadingZeros64((v^want)<<(64-chunk))
+		}
+		done += chunk
 	}
 	return int(bits)
 }
@@ -174,15 +197,18 @@ func (c *Slice) CountTrailing(bit bool) int {
 		return 0
 	}
 
-	var want byte
-	if bit {
-		want = 1
-	}
-
-	for i := int(bits) - 1; i >= 0; i-- {
-		if c.bitAt(uint(i)) != want {
-			return int(bits) - 1 - i
+	for done := uint(0); done < bits; {
+		chunk := min(uint(64), bits-done)
+		v, err := preloadSliceUIntAt(c, bits-done-chunk, chunk)
+		if err != nil {
+			return int(done)
 		}
+		want := sameBitsValue(bit, chunk)
+		if v != want {
+			// last mismatching bit is the lowest xor bit of the chunk
+			return int(done) + mathbits.TrailingZeros64(v^want)
+		}
+		done += chunk
 	}
 	return int(bits)
 }

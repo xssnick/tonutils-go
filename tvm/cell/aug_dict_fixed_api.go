@@ -306,7 +306,7 @@ func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, pr
 		return nil, nil, err
 	}
 	if loader.cell.IsSpecial() {
-		return nil, nil, fmt.Errorf("augmented dict has special cells in tree structure")
+		return nil, nil, fmt.Errorf("augmented dict %w", ErrDictHasSpecialCells)
 	}
 	labelLen, prefixKey, err := loadLabel(remaining, loader, prefix)
 	if err != nil {

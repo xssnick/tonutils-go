@@ -527,13 +527,18 @@ func messageTupleMaybeInt(v *big.Int) any {
 	return new(big.Int).Set(v)
 }
 
+// normalizeMessageTupleValue snapshots mutable cursor values (slices and
+// builders track a read/write position). Tuples and integers are passed
+// through as-is: the VM never mutates them in place, and binding the tuple to
+// the VM gas trace on execution copies every nested slice anyway, so a deep
+// defensive clone here would only duplicate that work for each transaction.
 func normalizeMessageTupleValue(val any) any {
 	switch v := val.(type) {
 	case *big.Int:
 		if v == nil {
 			return nil
 		}
-		return new(big.Int).Set(v)
+		return v
 	case *cell.Slice:
 		if v == nil {
 			return nil
@@ -544,25 +549,7 @@ func normalizeMessageTupleValue(val any) any {
 			return nil
 		}
 		return v.Copy()
-	case tuple.Tuple:
-		return cloneMessageTuple(v)
 	default:
 		return val
 	}
-}
-
-func cloneMessageTuple(value tuple.Tuple) tuple.Tuple {
-	if value.Len() == 0 {
-		return tuple.Tuple{}
-	}
-
-	items := make([]any, value.Len())
-	for i := range items {
-		item, err := value.RawIndex(i)
-		if err != nil {
-			return tuple.Tuple{}
-		}
-		items[i] = normalizeMessageTupleValue(item)
-	}
-	return tuple.NewTupleOwned(items)
 }

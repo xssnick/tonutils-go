@@ -34,6 +34,8 @@ type Cell struct {
 	bitsSz uint16
 	depth0 uint16
 	flags  uint8
+	// typ caches the resolved cell type in the struct padding, see resolveType.
+	typ uint8
 }
 
 func (c *Cell) copy() *Cell {
@@ -84,6 +86,27 @@ func (c *Cell) beginParseWithTrace(trace *Trace) (*Slice, error) {
 
 	trace.NotifyLoad(loaded)
 	return newSliceFromCell(loaded, trace), nil
+}
+
+// BeginParseInto is the value-form of BeginParse for tight descent loops:
+// the caller owns dst and reuses it across iterations, so parsing does not
+// allocate a new Slice per visited cell. Traces attached to the cell are
+// honored the same way BeginParse does.
+func (c *Cell) BeginParseInto(dst *Slice) error {
+	trace := c.Trace()
+	loaded, err := c.loadWithTrace(trace)
+	if err != nil {
+		return err
+	}
+
+	trace.NotifyLoad(loaded)
+	*dst = Slice{
+		cell:   loaded,
+		trace:  trace,
+		bitEnd: loaded.bitsSz,
+		refEnd: uint8(loaded.refsCount()),
+	}
+	return nil
 }
 
 func (c *Cell) MustBeginParse() *Slice {
@@ -325,6 +348,22 @@ func (c *Cell) Verify(key ed25519.PublicKey, signature []byte) bool {
 }
 
 func (c *Cell) GetType() Type {
+	if t := c.typ; t != cellTypeCacheNone {
+		return decodeCellTypeCache(t)
+	}
+	return c.computeType()
+}
+
+// resolveType computes the cell type and caches it. It must only be called
+// while the cell is exclusively owned (during finalization), never on cells
+// already shared for parallel reads.
+func (c *Cell) resolveType() Type {
+	t := c.computeType()
+	c.typ = encodeCellTypeCache(t)
+	return t
+}
+
+func (c *Cell) computeType() Type {
 	if !c.IsSpecial() {
 		return OrdinaryCellType
 	}
