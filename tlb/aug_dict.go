@@ -16,6 +16,11 @@ type ShardAccountBlocksAugDict struct {
 
 type AccountTransactionsAugDict struct {
 	*cell.AugmentedDictionary
+
+	// wrapped reports that the underlying dictionary was created in the
+	// HashmapAugE-style wrapped form (constructor) rather than parsed from the
+	// inline HashmapAug 64 representation of an AccountBlock.
+	wrapped bool
 }
 
 type OldMcBlocksInfoAugDict struct {
@@ -32,7 +37,7 @@ type ShardFeeCreated struct {
 }
 
 func (d *ShardAccountsAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipDepthBalanceInfoBoundary}, false)
+	dict, err := loader.LoadAugDict(256, AugShardAccounts{}, false)
 	if err != nil {
 		return err
 	}
@@ -41,7 +46,7 @@ func (d *ShardAccountsAugDict) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (d *ShardAccountsAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipDepthBalanceInfoBoundary}, true)
+	dict, err := loader.LoadAugDict(256, AugShardAccounts{}, true)
 	if err != nil {
 		return err
 	}
@@ -54,7 +59,7 @@ func (d *ShardAccountsAugDict) ToCell() (*cell.Cell, error) {
 }
 
 func (d *ShardAccountBlocksAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipCurrencyCollectionBoundary}, false)
+	dict, err := loader.LoadAugDict(256, AugShardAccountBlocks{}, false)
 	if err != nil {
 		return err
 	}
@@ -63,7 +68,7 @@ func (d *ShardAccountBlocksAugDict) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (d *ShardAccountBlocksAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipCurrencyCollectionBoundary}, true)
+	dict, err := loader.LoadAugDict(256, AugShardAccountBlocks{}, true)
 	if err != nil {
 		return err
 	}
@@ -76,16 +81,50 @@ func (d *ShardAccountBlocksAugDict) ToCell() (*cell.Cell, error) {
 }
 
 func (d *AccountTransactionsAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.ToAugDictWithValue(64, skipCurrencyCollectionBoundary, skipAugRefValue)
+	dict, err := loader.ToAugDictWithValueAndAugmentation(64, AugAccountTransactions{}, skipAugRefValue)
 	if err != nil {
 		return err
 	}
 	d.AugmentedDictionary = dict
+	d.wrapped = false
 	return nil
 }
 
 func (d *AccountTransactionsAugDict) ToCell() (*cell.Cell, error) {
 	return augDictToCell(d)
+}
+
+// InlineCell returns the dictionary in the inline HashmapAug 64 form used
+// inside an AccountBlock. A TLB Hashmap (unlike HashmapE) has no empty
+// representation, so an empty dictionary cannot be serialized inline and
+// returns an error.
+func (d *AccountTransactionsAugDict) InlineCell() (*cell.Cell, error) {
+	if d == nil || d.AugmentedDictionary == nil {
+		return nil, fmt.Errorf("augmented dict is nil")
+	}
+	if d.IsEmpty() {
+		return nil, fmt.Errorf("inline HashmapAug 64 of AccountBlock cannot be empty: TLB Hashmap (non-E) has no empty representation")
+	}
+
+	root, err := d.AugmentedDictionary.ToCell()
+	if err != nil {
+		return nil, err
+	}
+	if !d.wrapped {
+		// parsed inline dictionaries serialize back to the inline root directly
+		return root, nil
+	}
+
+	// constructor-created dictionaries serialize in the HashmapAugE wrapped
+	// form: root flag bit, root ref, root extra
+	s, err := root.BeginParse()
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.LoadBoolBit(); err != nil {
+		return nil, err
+	}
+	return s.LoadRefCell()
 }
 
 func (d *OldMcBlocksInfoAugDict) LoadFromCell(loader *cell.Slice) error {
@@ -111,7 +150,7 @@ func (d *OldMcBlocksInfoAugDict) ToCell() (*cell.Cell, error) {
 }
 
 func (d *ShardFeesAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(96, cell.ReadOnlyAugmentation{SkipExtraFn: skipShardFeeCreatedBoundary}, false)
+	dict, err := loader.LoadAugDict(96, AugShardFees{}, false)
 	if err != nil {
 		return err
 	}
@@ -120,7 +159,7 @@ func (d *ShardFeesAugDict) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (d *ShardFeesAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(96, cell.ReadOnlyAugmentation{SkipExtraFn: skipShardFeeCreatedBoundary}, true)
+	dict, err := loader.LoadAugDict(96, AugShardFees{}, true)
 	if err != nil {
 		return err
 	}

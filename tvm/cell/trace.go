@@ -68,6 +68,10 @@ func (t *Trace) NotifyLoad(c *Cell) {
 		}
 		return
 	}
+	if t.usageTree != nil {
+		t.usageTree.OnLoad(t.usageNode, c)
+		return
+	}
 	if t.onLoad != nil {
 		t.onLoad(c)
 	}
@@ -105,6 +109,9 @@ func (t *Trace) Child(refIdx int) *Trace {
 			return t
 		}
 		return combinedTraceFromFlat(children)
+	}
+	if t.usageTree != nil {
+		return t.usageTree.Trace(t.usageTree.CreateChild(t.usageNode, refIdx))
 	}
 	if t.onChild != nil {
 		return t.onChild(refIdx)

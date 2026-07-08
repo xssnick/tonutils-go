@@ -1,92 +1,54 @@
 package tvm
 
 import (
-	"fmt"
+	"errors"
 	"math/big"
-	"time"
 
 	"github.com/xssnick/tonutils-go/tlb"
-	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-type CheckExternalMessageAcceptedConfig struct {
-	Now                 uint32
-	BlockLT             int64
-	LogicalTime         int64
-	RandSeed            []byte
-	ConfigRoot          *cell.Cell
-	PrevBlocks          any
-	UnpackedConfig      tuple.Tuple
-	DuePayment          any
-	PrecompiledGasUsage *big.Int
-	Libraries           []*cell.Cell
-	ChksigAlwaysSucceed bool
-	TraceHook           vm.TraceHook
-}
-
 // CheckExternalMessageAccepted runs only the transaction compute path needed to
 // decide whether an inbound external message reaches accept.
-func (tvm *TVM) CheckExternalMessageAccepted(shard *tlb.ShardAccount, account *tlb.AccountState, msgCell *cell.Cell, msg *tlb.ExternalMessage, cfg CheckExternalMessageAcceptedConfig) (bool, error) {
-	wrapped := tlb.Message{
-		MsgType: tlb.MsgTypeExternalIn,
-		Msg:     msg,
+func (tvm *TVM) CheckExternalMessageAccepted(block *BlockContext, acc *PreparedAccount, msg *PreparedMessage, opts TransactionOptions) (bool, error) {
+	if block == nil {
+		return false, errors.New("block context is required")
 	}
-	if err := transactionValidateMessageStateInitLibs(&wrapped); err != nil {
-		return false, err
+	if acc == nil {
+		return false, errors.New("prepared account is required")
+	}
+	if msg == nil {
+		return false, errors.New("prepared message is required")
+	}
+	if msg.msg.MsgType != tlb.MsgTypeExternalIn {
+		return false, errors.New("accept check requires an inbound external message")
 	}
 
-	runtimeAcc, err := loadTransactionRuntimeAccountState(shard, account, msg.DstAddr, false)
-	if err != nil {
-		return false, err
-	}
-
-	result, err := tvm.checkExternalMessageAccepted(runtimeAcc, msgCell, &wrapped, transactionConfigForExternalMessageAccepted(cfg))
+	result, err := tvm.checkExternalMessageAccepted(block, acc, msg, &opts)
 	if err != nil {
 		return false, err
 	}
 	return result != nil && result.Accepted, nil
 }
 
-func transactionConfigForExternalMessageAccepted(cfg CheckExternalMessageAcceptedConfig) TransactionEmulationConfig {
-	return TransactionEmulationConfig{
-		Now:                 cfg.Now,
-		BlockLT:             cfg.BlockLT,
-		LogicalTime:         cfg.LogicalTime,
-		RandSeed:            cfg.RandSeed,
-		ConfigRoot:          cfg.ConfigRoot,
-		PrevBlocks:          cfg.PrevBlocks,
-		UnpackedConfig:      cfg.UnpackedConfig,
-		DuePayment:          cfg.DuePayment,
-		PrecompiledGasUsage: cfg.PrecompiledGasUsage,
-		Libraries:           cfg.Libraries,
-		StopOnAccept:        true,
-		ChksigAlwaysSucceed: cfg.ChksigAlwaysSucceed,
-		TraceHook:           cfg.TraceHook,
-	}
-}
+func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedAccount, msg *PreparedMessage, opts *TransactionOptions) (*MessageExecutionResult, error) {
+	blockchainCfg := block.cfg
+	now := block.now
 
-func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccount, msgCell *cell.Cell, msg *tlb.Message, cfg TransactionEmulationConfig) (*MessageExecutionResult, error) {
-	now := cfg.Now
-	if now == 0 {
-		now = uint32(time.Now().Unix())
-	}
-
-	blockchainCfg, err := newTransactionConfig(cfg.ConfigRoot)
+	runtimeAcc, _, err := acc.runtimeForExecution(false)
 	if err != nil {
 		return nil, err
 	}
-	if err := transactionValidateInboundExternalMessage(msgCell, msg, blockchainCfg); err != nil {
+
+	if err := transactionValidateInboundExternalMessage(msg.cell, &msg.msg, blockchainCfg); err != nil {
 		return nil, err
 	}
 
-	isSpecial := transactionIsSpecialAccount(blockchainCfg, runtimeAcc.addr)
+	isSpecial := blockchainCfg.isSpecialAccount(runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 
-	storageDueLimits := transactionGetStorageDueLimits(blockchainCfg, runtimeAcc.addr)
-	storageFee := big.NewInt(0)
-	storageFee, err = transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
+	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
+	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
 	if err != nil {
 		return nil, err
 	}
@@ -96,13 +58,13 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 
 	importFee := big.NewInt(0)
 	if !isSpecial {
-		importFee, err = transactionComputeImportFee(blockchainCfg, runtimeAcc.addr, msg, msgCell)
+		importFee, err = transactionComputeImportFee(blockchainCfg, runtimeAcc.addr, &msg.msg, msg.cell)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	prepared, err := transactionPrepareInitialPhases(runtimeAcc, msg, storageFee, importFee, now, blockchainCfg, storageDueLimits)
+	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg.msg, storageFee, importFee, now, blockchainCfg, storageDueLimits)
 	if err != nil {
 		return nil, err
 	}
@@ -110,13 +72,9 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 		prepared.lastPaid = 0
 	}
 
-	execCfg := cfg
-	execCfg.Address = runtimeAcc.addr
-	execCfg.Now = now
-	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, execCfg.LogicalTime), msg)
-	explicitC7 := transactionHasExplicitC7Context(execCfg)
-	transactionPrepareExecutionConfig(&execCfg, runtimeAcc, msg, prepared, startLT)
-	execCfg.Balance = new(big.Int).Set(prepared.balance)
+	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, opts.LogicalTime), &msg.msg)
+	env := newTransactionExecEnv(block, opts, runtimeAcc, &msg.msg, msg.cell, prepared, startLT)
+	env.stopOnAccept = true
 
 	computeAcc := runtimeAcc
 	var skipReason *tlb.ComputeSkipReason
@@ -124,31 +82,21 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 	if prepared.balance.Sign() <= 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	} else {
-		gas = transactionMessageGas(execCfg, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.MsgType, isSpecial)
+		gas = transactionMessageGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.msg.MsgType, isSpecial)
 		if gas.Limit == 0 && gas.Credit == 0 {
 			skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 		} else {
 			addressSuspended := false
-			if !prepared.deleted && (prepared.status == tlb.AccountStatusUninit || prepared.status == tlb.AccountStatusNonExist) && transactionMessageStateInit(msg) != nil {
-				addressSuspended, err = transactionIsAddressSuspended(blockchainCfg, now, runtimeAcc.addr)
-				if err != nil {
-					return nil, fmt.Errorf("check suspended address: %w", err)
-				}
+			if !prepared.deleted && (prepared.status == tlb.AccountStatusUninit || prepared.status == tlb.AccountStatusNonExist) && transactionMessageStateInit(&msg.msg) != nil {
+				addressSuspended = blockchainCfg.isAddressSuspended(now, runtimeAcc.addr)
 			}
 
-			computeAcc, _, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, msg, addressSuspended, blockchainCfg)
+			computeAcc, _, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, &msg.msg, addressSuspended, blockchainCfg)
 			if err != nil {
 				return nil, err
 			}
 			if skipReason == nil {
-				var precompiledUsage *big.Int
-				gas, precompiledUsage, skipReason, err = transactionApplyPrecompiledGasConfig(cfg, blockchainCfg, computeAcc.code, gas)
-				if err != nil {
-					return nil, err
-				}
-				if precompiledUsage != nil {
-					execCfg.PrecompiledGasUsage = precompiledUsage
-				}
+				gas, skipReason = transactionApplyPrecompiledGasConfig(blockchainCfg, computeAcc.code, gas, env)
 			}
 		}
 	}
@@ -156,16 +104,12 @@ func (tvm *TVM) checkExternalMessageAccepted(runtimeAcc *transactionRuntimeAccou
 		return nil, nil
 	}
 
-	globalVersion, err := transactionExecutionGlobalVersion(blockchainCfg)
-	if err != nil {
-		return nil, err
-	}
-	msgRes, err := tvm.executeTransactionMessage(computeAcc, msgCell, msg, execCfg, gas, prepared.msgBalance.grams, nil, explicitC7, globalVersion)
+	msgRes, err := tvm.executeTransactionMessage(computeAcc, env, gas, prepared.msgBalance.grams)
 	if err != nil {
 		return nil, err
 	}
 	transactionNormalizeGasUsage(msgRes)
-	if err = transactionApplyPrecompiledGasUsage(msgRes, execCfg.PrecompiledGasUsage); err != nil {
+	if err = transactionApplyPrecompiledGasUsage(msgRes, env.precompiledGasUsage); err != nil {
 		return nil, err
 	}
 	return msgRes, nil

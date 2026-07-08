@@ -1,29 +1,76 @@
 package cell
 
+import (
+	"sync"
+	"sync/atomic"
+)
+
 type TraceNode uint32
 
+const (
+	usageTreeChunkBits = 10
+	usageTreeChunkSize = 1 << usageTreeChunkBits
+	usageTreeChunkMask = usageTreeChunkSize - 1
+)
+
+type usageTreeChunk [usageTreeChunkSize]usageTreeNode
+
+// usageTreeNode is a slot in the tree arena. Nodes are published to other
+// goroutines either as the root or through a CompareAndSwap on the parent's
+// children entry, which orders the plain field writes done at allocation time
+// (trace, parent) before any concurrent reader can obtain the node id.
 type usageTreeNode struct {
+	// trace is the usage-tree trace of this node, embedded to avoid a
+	// per-node allocation. Its address is stable: chunks are never moved
+	// once allocated, only the chunk directory is copied on growth.
+	trace    Trace
 	parent   TraceNode
-	children [4]TraceNode
-	trace    *Trace
-	loaded   bool
-	marked   bool
-	cell     *Cell
+	children [4]atomic.Uint32
+	cell     atomic.Pointer[Cell]
+	loaded   atomic.Bool
+	// marked is only read/written by the single-threaded proof/update build
+	// phases (SetMark, MarkPath, IsLoaded with useMark), never during
+	// concurrent load tracking.
+	marked bool
 }
 
+// CellUsageTree records which cells were loaded through traced wrappers so
+// that Merkle proofs and updates can later be built from the visited paths.
+//
+// Concurrent cell loads through traces of one tree are safe: node creation,
+// load marking and loaded-cell caching are lock-free or briefly locked.
+// The proof/update building phase (CreateUsageProof, CreateMerkleUpdate,
+// SetMark/MarkPath/SetUseMarkForIsLoaded) is not synchronized against
+// concurrent loads and must run after all traced readers are done.
 type CellUsageTree struct {
-	nodes       []usageTreeNode
+	chunks   atomic.Pointer[[]*usageTreeChunk]
+	nextNode atomic.Uint32
+	growMu   sync.Mutex
+
+	loadedMu    sync.Mutex
 	loadedCells map[Hash]*Cell
+
 	useMark     bool
-	ignoreLoads int
+	ignoreLoads atomic.Int32
 	onLoadFn    func(*Cell)
 }
 
 func NewCellUsageTree() *CellUsageTree {
-	return &CellUsageTree{
-		nodes:       make([]usageTreeNode, 2),
+	t := &CellUsageTree{
 		loadedCells: map[Hash]*Cell{},
 	}
+	chunks := []*usageTreeChunk{new(usageTreeChunk)}
+	t.chunks.Store(&chunks)
+	t.nextNode.Store(2)
+	root := t.node(1)
+	root.trace.usageTree = t
+	root.trace.usageNode = 1
+	return t
+}
+
+func (t *CellUsageTree) node(id TraceNode) *usageTreeNode {
+	chunks := *t.chunks.Load()
+	return &chunks[id>>usageTreeChunkBits][id&usageTreeChunkMask]
 }
 
 func (t *CellUsageTree) RootNode() TraceNode {
@@ -38,34 +85,29 @@ func (t *CellUsageTree) Trace(node TraceNode) *Trace {
 	if t == nil || !t.validNode(node) {
 		return nil
 	}
-	if t.nodes[node].trace != nil {
-		return t.nodes[node].trace
-	}
-
-	trace := NewTrace(TraceHooks{
-		OnLoad: func(c *Cell) {
-			t.OnLoad(node, c)
-		},
-		OnChild: func(refIdx int) *Trace {
-			child := t.CreateChild(node, refIdx)
-			return t.Trace(child)
-		},
-	})
-	trace.usageTree = t
-	trace.usageNode = node
-	t.nodes[node].trace = trace
-	return trace
+	return &t.node(node).trace
 }
 
+// SetCellLoadCallback registers fn to be called on the first load of every
+// node. It must be set before loads start; fn may be called concurrently when
+// traced readers run on multiple goroutines.
 func (t *CellUsageTree) SetCellLoadCallback(fn func(*Cell)) {
 	t.onLoadFn = fn
 }
 
 func (t *CellUsageTree) SetIgnoreLoads(ignore bool) {
 	if ignore {
-		t.ignoreLoads++
-	} else if t.ignoreLoads > 0 {
-		t.ignoreLoads--
+		t.ignoreLoads.Add(1)
+		return
+	}
+	for {
+		cur := t.ignoreLoads.Load()
+		if cur <= 0 {
+			return
+		}
+		if t.ignoreLoads.CompareAndSwap(cur, cur-1) {
+			return
+		}
 	}
 }
 
@@ -88,17 +130,15 @@ func (t *CellUsageTree) NodeForTrace(trace *Trace) (TraceNode, bool) {
 }
 
 func (t *CellUsageTree) OnLoad(node TraceNode, c *Cell) {
-	if t == nil || t.ignoreLoads > 0 || !t.validNode(node) {
+	if t == nil || t.ignoreLoads.Load() > 0 || !t.validNode(node) {
 		return
 	}
 
-	wasLoaded := t.nodes[node].loaded
-	t.storeLoadedCell(node, c)
-	if wasLoaded {
+	n := t.node(node)
+	t.storeLoadedCell(n, c)
+	if n.loaded.Load() || n.loaded.Swap(true) {
 		return
 	}
-
-	t.nodes[node].loaded = true
 	if t.onLoadFn != nil {
 		t.onLoadFn(c)
 	}
@@ -108,27 +148,33 @@ func (t *CellUsageTree) loadedCell(node TraceNode) (*Cell, bool) {
 	if t == nil || !t.validNode(node) {
 		return nil, false
 	}
-	c := t.nodes[node].cell
+	c := t.node(node).cell.Load()
 	return c, c != nil
 }
 
 func (t *CellUsageTree) loadedCellByHash(hash Hash) (*Cell, bool) {
-	if t == nil || t.loadedCells == nil {
+	if t == nil {
 		return nil, false
 	}
+	t.loadedMu.Lock()
 	c := t.loadedCells[hash]
+	t.loadedMu.Unlock()
 	return c, c != nil
 }
 
-func (t *CellUsageTree) storeLoadedCell(node TraceNode, c *Cell) {
-	if c == nil || c.IsLazy() {
+func (t *CellUsageTree) storeLoadedCell(n *usageTreeNode, c *Cell) {
+	if c == nil || c.IsLazy() || n.cell.Load() != nil {
 		return
 	}
-	t.nodes[node].cell = c
+	if !n.cell.CompareAndSwap(nil, c) {
+		return
+	}
+	t.loadedMu.Lock()
 	if t.loadedCells == nil {
 		t.loadedCells = map[Hash]*Cell{}
 	}
 	t.loadedCells[c.HashKey()] = c
+	t.loadedMu.Unlock()
 }
 
 func (t *CellUsageTree) IsLoaded(node TraceNode) bool {
@@ -136,65 +182,116 @@ func (t *CellUsageTree) IsLoaded(node TraceNode) bool {
 		return false
 	}
 	if t.useMark {
-		return t.nodes[node].marked
+		return t.node(node).marked
 	}
-	return t.nodes[node].loaded
+	return t.node(node).loaded.Load()
 }
 
 func (t *CellUsageTree) HasMark(node TraceNode) bool {
 	if t == nil || !t.validNode(node) {
 		return false
 	}
-	return t.nodes[node].marked
+	return t.node(node).marked
 }
 
 func (t *CellUsageTree) SetMark(node TraceNode, mark bool) {
 	if t == nil || !t.validNode(node) {
 		return
 	}
-	t.nodes[node].marked = mark
+	t.node(node).marked = mark
 }
 
 func (t *CellUsageTree) MarkPath(node TraceNode) bool {
 	if t == nil || !t.validNode(node) {
 		return false
 	}
-	for cur := t.nodes[node].parent; cur != 0; cur = t.nodes[cur].parent {
-		if t.nodes[cur].marked {
+	for cur := t.node(node).parent; cur != 0; cur = t.node(cur).parent {
+		n := t.node(cur)
+		if n.marked {
 			break
 		}
-		t.nodes[cur].marked = true
+		n.marked = true
 	}
 	return true
+}
+
+func (t *CellUsageTree) marksSnapshot() []bool {
+	total := t.nextNode.Load()
+	out := make([]bool, total)
+	for id := TraceNode(1); id < TraceNode(total); id++ {
+		out[id] = t.node(id).marked
+	}
+	return out
+}
+
+func (t *CellUsageTree) restoreMarks(prev []bool) {
+	total := t.nextNode.Load()
+	for id := TraceNode(1); id < TraceNode(total); id++ {
+		t.node(id).marked = int(id) < len(prev) && prev[id]
+	}
 }
 
 func (t *CellUsageTree) Parent(node TraceNode) TraceNode {
 	if t == nil || !t.validNode(node) {
 		return 0
 	}
-	return t.nodes[node].parent
+	return t.node(node).parent
 }
 
 func (t *CellUsageTree) GetChild(node TraceNode, refIdx int) TraceNode {
 	if t == nil || !t.validNode(node) || refIdx < 0 || refIdx >= 4 {
 		return 0
 	}
-	return t.nodes[node].children[refIdx]
+	return TraceNode(t.node(node).children[refIdx].Load())
 }
 
 func (t *CellUsageTree) CreateChild(node TraceNode, refIdx int) TraceNode {
 	if t == nil || !t.validNode(node) || refIdx < 0 || refIdx >= 4 {
 		return 0
 	}
-	if child := t.nodes[node].children[refIdx]; child != 0 {
+	n := t.node(node)
+	if child := n.children[refIdx].Load(); child != 0 {
+		return TraceNode(child)
+	}
+
+	child := t.allocNode(node)
+	if n.children[refIdx].CompareAndSwap(0, uint32(child)) {
 		return child
 	}
-	child := TraceNode(len(t.nodes))
-	t.nodes = append(t.nodes, usageTreeNode{parent: node})
-	t.nodes[node].children[refIdx] = child
-	return child
+	// Another goroutine created this child concurrently; the slot allocated
+	// above stays unused in the arena.
+	return TraceNode(n.children[refIdx].Load())
+}
+
+func (t *CellUsageTree) allocNode(parent TraceNode) TraceNode {
+	id := TraceNode(t.nextNode.Add(1) - 1)
+	t.ensureChunk(id)
+	n := t.node(id)
+	n.parent = parent
+	n.trace.usageTree = t
+	n.trace.usageNode = id
+	return id
+}
+
+func (t *CellUsageTree) ensureChunk(id TraceNode) {
+	chunkIdx := int(id >> usageTreeChunkBits)
+	if chunkIdx < len(*t.chunks.Load()) {
+		return
+	}
+	t.growMu.Lock()
+	defer t.growMu.Unlock()
+	cur := *t.chunks.Load()
+	if chunkIdx < len(cur) {
+		return
+	}
+	next := make([]*usageTreeChunk, len(cur), chunkIdx+1)
+	copy(next, cur)
+	for len(next) <= chunkIdx {
+		next = append(next, new(usageTreeChunk))
+	}
+	t.chunks.Store(&next)
 }
 
 func (t *CellUsageTree) validNode(node TraceNode) bool {
-	return node != 0 && int(node) < len(t.nodes)
+	return node != 0 && uint32(node) < t.nextNode.Load()
 }

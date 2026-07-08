@@ -67,10 +67,10 @@ func TestTransactionBounceMessageUsageExtraCurrenciesBeforeV13(t *testing.T) {
 }
 
 func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
-	if res, err := transactionPrepareBouncePhase(nil, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, transactionConfig{}, nil, nil, nil); err != nil || res != nil {
+	if res, err := transactionPrepareBouncePhase(nil, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("nil message bounce = %+v err=%v, want nil nil", res, err)
 	}
-	if res, err := transactionPrepareBouncePhase(&tlb.Message{MsgType: tlb.MsgTypeExternalIn, Msg: &tlb.ExternalMessage{}}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, transactionConfig{}, nil, nil, nil); err != nil || res != nil {
+	if res, err := transactionPrepareBouncePhase(&tlb.Message{MsgType: tlb.MsgTypeExternalIn, Msg: &tlb.ExternalMessage{}}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("external message bounce = %+v err=%v, want nil nil", res, err)
 	}
 	if res, err := transactionPrepareBouncePhase(&tlb.Message{
@@ -79,7 +79,7 @@ func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
 			SrcAddr: internalEmulationSrcAddr,
 			DstAddr: tonopsTestAddr,
 		},
-	}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, transactionConfig{}, nil, nil, nil); err != nil || res != nil {
+	}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("non-bounce message bounce = %+v err=%v, want nil nil", res, err)
 	}
 	if res, err := transactionPrepareBouncePhase(&tlb.Message{
@@ -88,7 +88,7 @@ func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
 			Bounce:  true,
 			DstAddr: tonopsTestAddr,
 		},
-	}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, transactionConfig{}, nil, nil, nil); err != nil || res != nil {
+	}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("invalid source bounce = %+v err=%v, want nil nil", res, err)
 	}
 
@@ -130,7 +130,7 @@ func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
 }
 
 func TestTransactionBuildBounceBodyLegacyCapabilityAndOriginalLimits(t *testing.T) {
-	if body, err := transactionBuildBounceBody(nil, transactionConfig{}, nil, nil, nil); err != nil || body.BitsSize() != 0 || body.RefsNum() != 0 {
+	if body, err := transactionBuildBounceBody(nil, emptyPreparedTestConfig(), nil, nil, nil); err != nil || body.BitsSize() != 0 || body.RefsNum() != 0 {
 		t.Fatalf("nil bounce body = %s err=%v, want empty", body.Dump(), err)
 	}
 
@@ -193,7 +193,7 @@ func TestTransactionInboundExtraFlagsBoundaries(t *testing.T) {
 	}
 }
 
-func transactionTestConfigWithGlobalVersionAndCapabilities(t *testing.T, version uint32, capabilities uint64) transactionConfig {
+func transactionTestConfigWithGlobalVersionAndCapabilities(t *testing.T, version uint32, capabilities uint64) *PreparedConfig {
 	t.Helper()
 
 	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version, Capabilities: capabilities})

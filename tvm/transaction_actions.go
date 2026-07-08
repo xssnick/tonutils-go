@@ -12,7 +12,7 @@ import (
 )
 
 type transactionActionApplyResult struct {
-	outMsgs             []*cell.Cell
+	outMsgs             []OutMessage
 	phase               *tlb.ActionPhase
 	nextCode            *cell.Cell
 	nextLibraries       *cell.Dictionary
@@ -28,6 +28,7 @@ type transactionActionApplyResult struct {
 
 type transactionSendActionResult struct {
 	msgCell         *cell.Cell
+	msg             *tlb.Message
 	usage           transactionUsage
 	debit           *transactionCurrencyBalance
 	totalFwdFees    *big.Int
@@ -84,7 +85,7 @@ type transactionActionLoadResult struct {
 	bounce         bool
 }
 
-func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg transactionConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int) (*transactionActionApplyResult, error) {
+func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int) (*transactionActionApplyResult, error) {
 	computeSuccess := transactionComputeSucceeded(res)
 	endLT := startLT + 1
 	out := &transactionActionApplyResult{
@@ -134,7 +135,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	}
 
 	actions := loadedActions.actions
-	outMsgs := make([]*cell.Cell, 0, len(actions))
+	outMsgs := make([]OutMessage, 0, len(actions))
 	totalUsage := transactionUsage{}
 	totalFwdFees := big.NewInt(0)
 	totalActionFees := big.NewInt(0)
@@ -247,7 +248,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			if sendRes.clearMsgBalance {
 				msgBalanceRemaining.grams.SetInt64(0)
 			}
-			outMsgs = append(outMsgs, sendRes.msgCell)
+			outMsgs = append(outMsgs, OutMessage{Cell: sendRes.msgCell, Msg: sendRes.msg})
 			totalUsage = transactionAddUsage(totalUsage, sendRes.usage)
 			totalFwdFees.Add(totalFwdFees, sendRes.totalFwdFees)
 			totalActionFees.Add(totalActionFees, sendRes.totalActionFees)
@@ -479,7 +480,7 @@ func transactionMalformedSendMode(node *cell.Cell) (uint8, bool) {
 	return uint8(mode), true
 }
 
-func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.ActionSendMsg, createdLT uint64, now uint32, cfg transactionConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, error) {
+func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.ActionSendMsg, createdLT uint64, now uint32, cfg *PreparedConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, error) {
 	out := &transactionSendActionResult{
 		debit:           transactionZeroCurrencyBalance(),
 		totalFwdFees:    big.NewInt(0),
@@ -593,6 +594,7 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 			return transactionSendResultCode(out, mode, 37, globalVersion), nil
 		}
 		out.msgCell = msgCell
+		out.msg = &msg
 		out.usage = normalized.stats.totalUsage
 		out.debit.grams = fwdFee
 		out.totalFwdFees = fwdFee
@@ -828,7 +830,7 @@ func transactionValidateRelaxedActionMessageTail(sl *cell.Slice) (transactionOut
 	return layout, nil
 }
 
-func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc *transactionRuntimeAccount, intMsg *tlb.InternalMessage, layout transactionOutboundLayout, sendMode uint8, extraFlags *big.Int, cfg transactionConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining, baseReq *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, transactionOutboundLayout, error) {
+func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc *transactionRuntimeAccount, intMsg *tlb.InternalMessage, layout transactionOutboundLayout, sendMode uint8, extraFlags *big.Int, cfg *PreparedConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining, baseReq *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, transactionOutboundLayout, error) {
 	res := &transactionSendActionResult{
 		debit:           transactionZeroCurrencyBalance(),
 		totalFwdFees:    big.NewInt(0),
@@ -933,6 +935,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	}
 
 	res.msgCell = msgCell
+	res.msg = &tlb.Message{MsgType: tlb.MsgTypeInternal, Msg: &outMsg}
 	res.usage, err = transactionOutboundInternalMessageActionUsage(cfg, &outMsg, msgCell, usedLayout)
 	if err != nil {
 		return nil, layout, err
@@ -1102,7 +1105,7 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, originalBala
 	return out, nil
 }
 
-func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current *cell.Dictionary, cfg transactionConfig, globalVersion uint32) (*transactionChangeLibraryActionResult, error) {
+func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current *cell.Dictionary, cfg *PreparedConfig, globalVersion uint32) (*transactionChangeLibraryActionResult, error) {
 	out := &transactionChangeLibraryActionResult{}
 	mode := act.Mode
 	if globalVersion >= 4 && mode&16 != 0 {
@@ -1197,7 +1200,7 @@ func transactionActionResultArg(i int) *int32 {
 
 var errTransactionInvalidDestination = errors.New("invalid outbound destination address")
 
-func transactionPrepareNormalizedOutboundMessage(msg *tlb.Message, layout transactionOutboundLayout, normalizedInternalDst, srcAddr *address.Address, createdLT uint64, now uint32, cfg transactionConfig) (transactionNormalizedOutboundMessage, error) {
+func transactionPrepareNormalizedOutboundMessage(msg *tlb.Message, layout transactionOutboundLayout, normalizedInternalDst, srcAddr *address.Address, createdLT uint64, now uint32, cfg *PreparedConfig) (transactionNormalizedOutboundMessage, error) {
 	msgCell, normalizedMsg, err := transactionNormalizeParsedOutboundMessage(msg, layout, normalizedInternalDst, srcAddr, createdLT, now, cfg)
 	if err != nil {
 		return transactionNormalizedOutboundMessage{}, err
@@ -1216,7 +1219,7 @@ func transactionPrepareNormalizedOutboundMessage(msg *tlb.Message, layout transa
 	}, nil
 }
 
-func transactionNormalizeOutboundMessage(msgCell *cell.Cell, srcAddr *address.Address, createdLT uint64, now uint32, cfg transactionConfig) (*cell.Cell, error) {
+func transactionNormalizeOutboundMessage(msgCell *cell.Cell, srcAddr *address.Address, createdLT uint64, now uint32, cfg *PreparedConfig) (*cell.Cell, error) {
 	if msgCell == nil {
 		return nil, errors.New("outbound message cell is nil")
 	}
@@ -1235,7 +1238,7 @@ func transactionNormalizeOutboundMessage(msgCell *cell.Cell, srcAddr *address.Ad
 	return normalized, err
 }
 
-func transactionNormalizeParsedOutboundMessage(msg *tlb.Message, layout transactionOutboundLayout, normalizedInternalDst, srcAddr *address.Address, createdLT uint64, now uint32, cfg transactionConfig) (*cell.Cell, tlb.Message, error) {
+func transactionNormalizeParsedOutboundMessage(msg *tlb.Message, layout transactionOutboundLayout, normalizedInternalDst, srcAddr *address.Address, createdLT uint64, now uint32, cfg *PreparedConfig) (*cell.Cell, tlb.Message, error) {
 	switch msg.MsgType {
 	case tlb.MsgTypeInternal:
 		out := *msg.AsInternal()
@@ -1415,15 +1418,15 @@ func transactionStoreMessageBody(builder *cell.Builder, body *cell.Cell, inRef b
 	return builder.StoreBuilder(body.ToBuilder())
 }
 
-func transactionValidateAndNormalizeInternalDestAddr(addr *address.Address, cfg transactionConfig, srcAddr *address.Address) (*address.Address, bool) {
+func transactionValidateAndNormalizeInternalDestAddr(addr *address.Address, cfg *PreparedConfig, srcAddr *address.Address) (*address.Address, bool) {
 	return transactionValidateAndNormalizeInternalAddr(addr, cfg, cfg.globalVersion() < 10, srcAddr)
 }
 
-func transactionValidateAndNormalizeBounceDestAddr(addr *address.Address, cfg transactionConfig, accountAddr *address.Address) (*address.Address, bool) {
+func transactionValidateAndNormalizeBounceDestAddr(addr *address.Address, cfg *PreparedConfig, accountAddr *address.Address) (*address.Address, bool) {
 	return transactionValidateAndNormalizeInternalAddr(addr, cfg, true, accountAddr)
 }
 
-func transactionValidateAndNormalizeInternalAddr(addr *address.Address, cfg transactionConfig, allowAnycast bool, rewriteBase *address.Address) (*address.Address, bool) {
+func transactionValidateAndNormalizeInternalAddr(addr *address.Address, cfg *PreparedConfig, allowAnycast bool, rewriteBase *address.Address) (*address.Address, bool) {
 	if addr == nil {
 		return nil, false
 	}
@@ -1437,10 +1440,10 @@ func transactionValidateAndNormalizeInternalAddr(addr *address.Address, cfg tran
 			return nil, false
 		}
 	} else {
-		descr, err := cfg.GetWorkchainDescr(addr.Workchain())
-		if errors.Is(err, tlb.ErrBlockchainConfigRootNil) || errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			// Emulation configs are often partial; keep legacy behavior and skip workchain-specific checks when the param is absent.
-		} else if err != nil || !descr.AcceptMessages() || !descr.ValidAddressLength(addrLen) {
+		// When config param 12 is absent (partial emulation configs), keep the
+		// legacy behavior and skip the workchain-specific checks.
+		descr, found, checksEnabled := cfg.workchainDescr(addr.Workchain())
+		if checksEnabled && (!found || !descr.AcceptMessages() || !descr.ValidAddressLength(addrLen)) {
 			return nil, false
 		}
 	}

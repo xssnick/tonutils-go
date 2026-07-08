@@ -13,7 +13,6 @@ import (
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
-	"github.com/xssnick/tonutils-go/tvm/tuple"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -82,7 +81,7 @@ func FuzzTransactionVersionedAnycastAccountSerialization(f *testing.F) {
 			t.Fatalf("account id addr mismatch: anycast=%v data=%x want %x", idAddr.Anycast(), idAddr.Data(), rewritten)
 		}
 
-		seed, err := transactionEmulationSeed(bytes.Repeat([]byte{0x44}, 32), addr, 8)
+		seed, err := transactionEmulationSeedForTest(bytes.Repeat([]byte{0x44}, 32), addr, 8)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -474,21 +473,21 @@ func FuzzTransactionVersionedBasicSuccessAcrossGlobalVersions(f *testing.F) {
 		cfg := transactionTestConfigWithGlobalVersion(t, version)
 		shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-		res, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+		res, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 			Address:     tonopsTestAddr,
 			Now:         now,
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  cfg.Root,
+			Config:      cfg,
 		})
 		if err != nil {
 			t.Fatalf("v%d transaction emulation failed: %v", version, err)
 		}
-		if res.TransactionCell == nil || res.ShardAccountCell == nil || res.AccountState == nil {
+		if res.TransactionCell == nil || res.NextAccount.ShardAccountCell() == nil || testResultAccountState(res) == nil {
 			t.Fatalf("v%d transaction result has nil cells/state: %+v", version, res)
 		}
-		if res.AccountState.StateInit == nil || res.AccountState.StateInit.Data == nil || !bytes.Equal(res.AccountState.StateInit.Data.Hash(), newData.Hash()) {
+		if testResultAccountState(res).StateInit == nil || testResultAccountState(res).StateInit.Data == nil || !bytes.Equal(testResultAccountState(res).StateInit.Data.Hash(), newData.Hash()) {
 			t.Fatalf("v%d final data mismatch", version)
 		}
 
@@ -593,23 +592,22 @@ func FuzzTransactionVersionedTickTockSuccessAcrossGlobalVersions(f *testing.F) {
 			t.Fatalf("v%d failed to build tick/tock shard: %v", version, err)
 		}
 
-		res, err := NewTVM().EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
-			Now:        now,
-			Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-			RandSeed:   append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot: cfg.Root,
+		res, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, testTxParams{
+			Now:      now,
+			RandSeed: append([]byte(nil), tonopsTestSeed...),
+			Config:   cfg,
 		})
 		if err != nil {
 			t.Fatalf("v%d tick/tock emulation failed: %v", version, err)
 		}
-		if res.AccountState == nil || res.AccountState.StateInit == nil || res.AccountState.StateInit.Data == nil {
+		if testResultAccountState(res) == nil || testResultAccountState(res).StateInit == nil || testResultAccountState(res).StateInit.Data == nil {
 			t.Fatalf("v%d tick/tock result has nil account state: %+v", version, res)
 		}
 		wantData := tickData
 		if isTock {
 			wantData = tockData
 		}
-		if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), wantData.Hash()) {
+		if !bytes.Equal(testResultAccountState(res).StateInit.Data.Hash(), wantData.Hash()) {
 			t.Fatalf("v%d tick/tock final data mismatch", version)
 		}
 
@@ -678,11 +676,10 @@ func FuzzTickTockBuildProofLibraryCodeCellStartupV9Boundary(f *testing.F) {
 func runTickTockBuildProofLibraryStartup(t *testing.T, version uint32, shard *tlb.ShardAccount, isTock bool, libraries ...*cell.Cell) *TransactionExecutionResult {
 	t.Helper()
 
-	res, err := NewTVM().EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
-		Now:        uint32(tonopsTestTime.Unix()),
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-		RandSeed:   append([]byte(nil), tonopsTestSeed...),
-		ConfigRoot: transactionTestConfigWithGlobalVersion(t, version).Root,
+	res, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, testTxParams{
+		Now:      uint32(tonopsTestTime.Unix()),
+		RandSeed: append([]byte(nil), tonopsTestSeed...),
+		Config:   transactionTestConfigWithGlobalVersion(t, version),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultTickTockTransactionGasMax,
 			Limit: DefaultTickTockTransactionGasMax,
@@ -729,11 +726,10 @@ func FuzzTickTockChksigAlwaysSucceedPerRun(f *testing.F) {
 		if err != nil {
 			t.Fatalf("failed to build tick/tock shard: %v", err)
 		}
-		cfg := TransactionEmulationConfig{
-			Now:        uint32(tonopsTestTime.Unix()),
-			Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-			RandSeed:   append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot: transactionTestConfigWithGlobalVersion(t, version).Root,
+		cfg := testTxParams{
+			Now:      uint32(tonopsTestTime.Unix()),
+			RandSeed: append([]byte(nil), tonopsTestSeed...),
+			Config:   transactionTestConfigWithGlobalVersion(t, version),
 		}
 
 		if tt.minVersion > 0 && version < uint32(tt.minVersion) {
@@ -798,20 +794,18 @@ func FuzzMessageEmulationVersionedInMsgParamsDirectMessages(f *testing.F) {
 				DstAddr: tonopsTestAddr,
 				Body:    body,
 			}, EmulateExternalMessageConfig{
-				Address:    tonopsTestAddr,
-				Now:        now,
-				Balance:    new(big.Int).SetUint64(walletSendTestBalance),
-				RandSeed:   append([]byte(nil), walletSendTestSeed...),
-				ConfigRoot: cfg.Root,
+				Address:  tonopsTestAddr,
+				Now:      now,
+				RandSeed: append([]byte(nil), walletSendTestSeed...),
+				Config:   cfg,
 			})
 		} else {
 			amount := uint64(bodyTag) + 1
 			res, err = NewTVM().EmulateInternalMessage(code, origData, body, amount, EmulateInternalMessageConfig{
-				Address:    tonopsTestAddr,
-				Now:        now,
-				Balance:    new(big.Int).SetUint64(walletSendTestBalance),
-				RandSeed:   append([]byte(nil), walletSendTestSeed...),
-				ConfigRoot: cfg.Root,
+				Address:  tonopsTestAddr,
+				Now:      now,
+				RandSeed: append([]byte(nil), walletSendTestSeed...),
+				Config:   cfg,
 				Gas: vmcore.NewGas(vmcore.GasConfig{
 					Max:   DefaultInternalMessageGasMax,
 					Limit: int64(amount) * InternalMessageGasAmountFactor,
@@ -873,9 +867,9 @@ func FuzzMessageEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
 		effectiveVersion := machineVersion
 
-		var configRoot *cell.Cell
+		var preparedCfg *PreparedConfig
 		if useConfigRoot {
-			configRoot = transactionTestConfigWithGlobalVersion(t, configVersion).Root
+			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = int(configVersion)
 		}
 
@@ -888,11 +882,10 @@ func FuzzMessageEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 		data := cell.BeginCell().EndCell()
 		body := cell.BeginCell().MustStoreUInt(uint64(rawMachineVersion)^uint64(rawConfigVersion), 8).EndCell()
 		cfg := MessageEmulationConfig{
-			Address:    tonopsTestAddr,
-			Now:        uint32(tonopsTestTime.Unix()),
-			Balance:    new(big.Int).SetUint64(walletSendTestBalance),
-			RandSeed:   append([]byte(nil), walletSendTestSeed...),
-			ConfigRoot: configRoot,
+			Address:  tonopsTestAddr,
+			Now:      uint32(tonopsTestTime.Unix()),
+			RandSeed: append([]byte(nil), walletSendTestSeed...),
+			Config:   preparedCfg,
 		}
 
 		var res *MessageExecutionResult
@@ -946,9 +939,9 @@ func FuzzMessageEmulationBuildProofGlobalVersionFallbackAndConfigOverride(f *tes
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
 		effectiveVersion := uint32(machineVersion)
 
-		var configRoot *cell.Cell
+		var preparedCfg *PreparedConfig
 		if useConfigRoot {
-			configRoot = transactionTestConfigWithGlobalVersion(t, configVersion).Root
+			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
@@ -975,9 +968,8 @@ func FuzzMessageEmulationBuildProofGlobalVersionFallbackAndConfigOverride(f *tes
 		body := cell.BeginCell().MustStoreUInt(uint64(rawMachineVersion)^uint64(rawConfigVersion)^0xA5, 8).EndCell()
 		cfg := MessageEmulationConfig{
 			Now:         uint32(tonopsTestTime.Unix()),
-			Balance:     new(big.Int).SetUint64(walletSendTestBalance),
 			RandSeed:    append([]byte(nil), walletSendTestSeed...),
-			ConfigRoot:  configRoot,
+			Config:      preparedCfg,
 			BuildProof:  true,
 			AccountRoot: accountRoot,
 		}
@@ -1076,9 +1068,8 @@ func runMessageBuildProofLibraryStartup(t *testing.T, version uint32, external b
 
 	cfg := MessageEmulationConfig{
 		Now:         uint32(tonopsTestTime.Unix()),
-		Balance:     new(big.Int).SetUint64(walletSendTestBalance),
 		RandSeed:    append([]byte(nil), walletSendTestSeed...),
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, version).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, version),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   libraries,
@@ -1175,13 +1166,13 @@ func FuzzTransactionEmulationBuildProofLibraryCodeCellStartupV9Boundary(f *testi
 func runTransactionBuildProofLibraryStartup(t *testing.T, version uint32, shard *tlb.ShardAccount, msgCell *cell.Cell, libraries ...*cell.Cell) *TransactionExecutionResult {
 	t.Helper()
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, version).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, version),
 		BuildProof:  true,
 		Libraries:   libraries,
 	})
@@ -1206,10 +1197,10 @@ func assertTransactionBuildProofLibraryStartupResult(t *testing.T, name string, 
 	if res.ExitCode != 0 {
 		t.Fatalf("%s transaction proof library startup exit = %d, want success", name, res.ExitCode)
 	}
-	if res.AccountState == nil || res.AccountState.StateInit == nil || res.AccountState.StateInit.Data == nil {
+	if testResultAccountState(res) == nil || testResultAccountState(res).StateInit == nil || testResultAccountState(res).StateInit.Data == nil {
 		t.Fatalf("%s transaction proof library startup missing account data", name)
 	}
-	if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), wantData.Hash()) {
+	if !bytes.Equal(testResultAccountState(res).StateInit.Data.Hash(), wantData.Hash()) {
 		t.Fatalf("%s transaction proof library startup data mismatch", name)
 	}
 }
@@ -1249,9 +1240,8 @@ func FuzzMessageEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 		body := cell.BeginCell().MustStoreUInt(uint64(sigTag), 8).EndCell()
 		cfg := MessageEmulationConfig{
 			Now:         uint32(tonopsTestTime.Unix()),
-			Balance:     new(big.Int).SetUint64(walletSendTestBalance),
 			RandSeed:    append([]byte(nil), walletSendTestSeed...),
-			ConfigRoot:  transactionTestConfigWithGlobalVersion(t, version).Root,
+			Config:      transactionTestConfigWithGlobalVersion(t, version),
 			BuildProof:  true,
 			AccountRoot: accountRoot,
 		}
@@ -1339,13 +1329,13 @@ func FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		cfg := TransactionEmulationConfig{
+		cfg := testTxParams{
 			Address:     tonopsTestAddr,
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  transactionTestConfigWithGlobalVersion(t, version).Root,
+			Config:      transactionTestConfigWithGlobalVersion(t, version),
 			BuildProof:  true,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    walletSendTestGasMax,
@@ -1369,12 +1359,12 @@ func FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 	})
 }
 
-func runTransactionBuildProofChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg TransactionEmulationConfig, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
+func runTransactionBuildProofChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
 	t.Helper()
 
 	accountHash := shard.Account.Hash()
 	cfg.ChksigAlwaysSucceed = always
-	res, err := machine.EmulateTransaction(shard, msgCell, cfg)
+	res, err := testEmulateTransaction(machine, shard, msgCell, cfg)
 	var execRes *ExecutionResult
 	if res != nil {
 		execRes = &res.ExecutionResult
@@ -1418,9 +1408,9 @@ func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
 		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
 
-		var configRoot *cell.Cell
+		var preparedCfg *PreparedConfig
 		if useConfigRoot {
-			configRoot = transactionTestConfigWithGlobalVersion(t, configVersion).Root
+			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
@@ -1439,13 +1429,13 @@ func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		res, err := machine.EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+		res, err := testEmulateTransaction(&machine, shard, msgCell, testTxParams{
 			Address:     tonopsTestAddr,
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  configRoot,
+			Config:      preparedCfg,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    walletSendTestGasMax,
 				Credit: walletSendTestCredit,
@@ -1487,28 +1477,28 @@ func FuzzTransactionEmulationGlobalVersionPerRun(f *testing.F) {
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		baseCfg := TransactionEmulationConfig{
+		baseCfg := testTxParams{
 			Address:     tonopsTestAddr,
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
+			Config:      transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    walletSendTestGasMax,
 				Credit: walletSendTestCredit,
 			}),
 		}
 		versionCfg := baseCfg
-		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
+		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
-		res, err := machine.EmulateTransaction(shard, msgCell, versionCfg)
+		res, err := testEmulateTransaction(&machine, shard, msgCell, versionCfg)
 		if err != nil {
 			t.Fatalf("transaction emulation per-run v%d failed: %v", version, err)
 		}
 		assertGasConsumedVersionResult(t, "transaction per-run", version, res.ExitCode, res.Stack)
 
-		leakCheck, err := machine.EmulateTransaction(shard, msgCell, baseCfg)
+		leakCheck, err := testEmulateTransaction(&machine, shard, msgCell, baseCfg)
 		if err != nil {
 			t.Fatalf("transaction emulation leak-check failed: %v", err)
 		}
@@ -1532,9 +1522,9 @@ func FuzzTickTockGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
 		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
 
-		var configRoot *cell.Cell
+		var preparedCfg *PreparedConfig
 		if useConfigRoot {
-			configRoot = transactionTestConfigWithGlobalVersion(t, configVersion).Root
+			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
@@ -1547,11 +1537,10 @@ func FuzzTickTockGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 		if err != nil {
 			t.Fatalf("failed to build tick/tock shard: %v", err)
 		}
-		res, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
-			Now:        uint32(tonopsTestTime.Unix()),
-			Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-			RandSeed:   append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot: configRoot,
+		res, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
+			Now:      uint32(tonopsTestTime.Unix()),
+			RandSeed: append([]byte(nil), tonopsTestSeed...),
+			Config:   preparedCfg,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultTickTockTransactionGasMax,
 				Limit: DefaultTickTockTransactionGasMax,
@@ -1588,26 +1577,25 @@ func FuzzTickTockGlobalVersionPerRun(f *testing.F) {
 		if err != nil {
 			t.Fatalf("failed to build tick/tock shard: %v", err)
 		}
-		baseCfg := TransactionEmulationConfig{
-			Now:        uint32(tonopsTestTime.Unix()),
-			Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-			RandSeed:   append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot: transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
+		baseCfg := testTxParams{
+			Now:      uint32(tonopsTestTime.Unix()),
+			RandSeed: append([]byte(nil), tonopsTestSeed...),
+			Config:   transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultTickTockTransactionGasMax,
 				Limit: DefaultTickTockTransactionGasMax,
 			}),
 		}
 		versionCfg := baseCfg
-		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
+		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
-		res, err := machine.EmulateTickTockTransaction(shard, isTock, versionCfg)
+		res, err := testEmulateTickTockTransaction(&machine, shard, isTock, versionCfg)
 		if err != nil {
 			t.Fatalf("tick/tock emulation per-run v%d is_tock=%t failed: %v", version, isTock, err)
 		}
 		assertGasConsumedVersionResult(t, "tick/tock per-run", version, res.ExitCode, res.Stack)
 
-		leakCheck, err := machine.EmulateTickTockTransaction(shard, isTock, baseCfg)
+		leakCheck, err := testEmulateTickTockTransaction(&machine, shard, isTock, baseCfg)
 		if err != nil {
 			t.Fatalf("tick/tock emulation leak-check is_tock=%t failed: %v", isTock, err)
 		}
@@ -1631,9 +1619,9 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionFallbackAndConfigOverride(f *t
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
 		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
 
-		var configRoot *cell.Cell
+		var preparedCfg *PreparedConfig
 		if useConfigRoot {
-			configRoot = transactionTestConfigWithGlobalVersion(t, configVersion).Root
+			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
@@ -1654,12 +1642,12 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionFallbackAndConfigOverride(f *t
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		accepted, err := machine.CheckExternalMessageAccepted(shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, CheckExternalMessageAcceptedConfig{
+		accepted, err := testCheckExternalAccepted(&machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, testTxParams{
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  configRoot,
+			Config:      preparedCfg,
 		})
 		if err != nil {
 			if !useConfigRoot && errors.Is(err, errConfigRootRequired) {
@@ -1702,17 +1690,17 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionPerRun(f *testing.F) {
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		baseCfg := CheckExternalMessageAcceptedConfig{
+		baseCfg := testTxParams{
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
+			Config:      transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
 		}
 		versionCfg := baseCfg
-		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
+		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
-		accepted, err := machine.CheckExternalMessageAccepted(shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, versionCfg)
+		accepted, err := testCheckExternalAccepted(&machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, versionCfg)
 		if err != nil {
 			t.Fatalf("check external accepted per-run v%d failed: %v", version, err)
 		}
@@ -1720,7 +1708,7 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionPerRun(f *testing.F) {
 			t.Fatalf("check external accepted per-run v%d accepted=%t, want %t", version, accepted, want)
 		}
 
-		accepted, err = machine.CheckExternalMessageAccepted(shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, baseCfg)
+		accepted, err = testCheckExternalAccepted(&machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, baseCfg)
 		if err != nil {
 			t.Fatalf("check external accepted leak-check failed: %v", err)
 		}
@@ -1757,12 +1745,12 @@ func FuzzCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(f *testing.F) {
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		cfg := CheckExternalMessageAcceptedConfig{
+		cfg := testTxParams{
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  transactionTestConfigWithGlobalVersion(t, version).Root,
+			Config:      transactionTestConfigWithGlobalVersion(t, version),
 		}
 		account := mustParseTransactionTestAccount(t, shard)
 		machine := NewTVM()
@@ -1788,11 +1776,11 @@ func FuzzCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(f *testing.F) {
 	})
 }
 
-func runCheckExternalAcceptedChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, account *tlb.AccountState, msgCell *cell.Cell, msg *tlb.ExternalMessage, cfg CheckExternalMessageAcceptedConfig, tt executionConfigSignatureCase, always bool) bool {
+func runCheckExternalAcceptedChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, account *tlb.AccountState, msgCell *cell.Cell, msg *tlb.ExternalMessage, cfg testTxParams, tt executionConfigSignatureCase, always bool) bool {
 	t.Helper()
 
 	cfg.ChksigAlwaysSucceed = always
-	accepted, err := machine.CheckExternalMessageAccepted(shard, account, msgCell, msg, cfg)
+	accepted, err := testCheckExternalAccepted(machine, shard, account, msgCell, msg, cfg)
 	if err != nil {
 		t.Fatalf("CheckExternalMessageAccepted %s always=%t failed: %v", tt.name, always, err)
 	}
@@ -1876,11 +1864,10 @@ func FuzzMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 		data := cell.BeginCell().EndCell()
 		body := cell.BeginCell().MustStoreUInt(uint64(sigTag), 8).EndCell()
 		cfg := EmulateExternalMessageConfig{
-			Address:    tonopsTestAddr,
-			Now:        uint32(tonopsTestTime.Unix()),
-			Balance:    new(big.Int).SetUint64(walletSendTestBalance),
-			RandSeed:   append([]byte(nil), walletSendTestSeed...),
-			ConfigRoot: transactionTestConfigWithGlobalVersion(t, version).Root,
+			Address:  tonopsTestAddr,
+			Now:      uint32(tonopsTestTime.Unix()),
+			RandSeed: append([]byte(nil), walletSendTestSeed...),
+			Config:   transactionTestConfigWithGlobalVersion(t, version),
 		}
 		msg := &tlb.ExternalMessage{
 			DstAddr: tonopsTestAddr,
@@ -1934,7 +1921,7 @@ func FuzzMessageEmulationGlobalVersionPerRun(f *testing.F) {
 			Now:                 uint32(tonopsTestTime.Unix()),
 			Balance:             new(big.Int).Set(tonopsTestBalance),
 			RandSeed:            append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:          transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)).Root,
+			Config:              transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
 			ChksigAlwaysSucceed: true,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
@@ -1942,7 +1929,7 @@ func FuzzMessageEmulationGlobalVersionPerRun(f *testing.F) {
 			}),
 		}
 		versionCfg := baseCfg
-		versionCfg.ConfigRoot = transactionTestConfigWithGlobalVersion(t, version).Root
+		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
 		configured := runMessageGlobalVersionPath(t, &machine, rawPath, code, data, body, versionCfg, tt)
 		if int(version) < tt.minVersion {
@@ -1975,11 +1962,11 @@ func FuzzInternalMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 		data := cell.BeginCell().EndCell()
 		body := cell.BeginCell().MustStoreUInt(uint64(sigTag), 8).EndCell()
 		cfg := EmulateInternalMessageConfig{
-			Address:    tonopsTestAddr,
-			Now:        uint32(tonopsTestTime.Unix()),
-			Balance:    new(big.Int).Set(tonopsTestBalance),
-			RandSeed:   append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot: transactionTestConfigWithGlobalVersion(t, version).Root,
+			Address:  tonopsTestAddr,
+			Now:      uint32(tonopsTestTime.Unix()),
+			Balance:  new(big.Int).Set(tonopsTestBalance),
+			RandSeed: append([]byte(nil), tonopsTestSeed...),
+			Config:   transactionTestConfigWithGlobalVersion(t, version),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
 				Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -2168,12 +2155,12 @@ func FuzzCheckExternalMessageAcceptedVersionedInMsgParams(f *testing.F) {
 			t.Fatalf("v%d failed to parse account: %v", version, err)
 		}
 
-		accepted, err := NewTVM().CheckExternalMessageAccepted(shard, &account, msgCell, msg, CheckExternalMessageAcceptedConfig{
+		accepted, err := testCheckExternalAccepted(NewTVM(), shard, &account, msgCell, msg, testTxParams{
 			Now:         now,
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  cfg.Root,
+			Config:      cfg,
 		})
 		if err != nil {
 			t.Fatalf("v%d check external message accepted failed: %v", version, err)
@@ -2182,17 +2169,16 @@ func FuzzCheckExternalMessageAcceptedVersionedInMsgParams(f *testing.F) {
 			t.Fatalf("v%d accepted = %t, want %t", version, accepted, version >= 11)
 		}
 
-		full, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
-			Address:      tonopsTestAddr,
-			Now:          now,
-			BlockLT:      transactionTestLogicalTime,
-			LogicalTime:  transactionTestLogicalTime,
-			RandSeed:     append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:   cfg.Root,
-			StopOnAccept: true,
+		full, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
+			Address:     tonopsTestAddr,
+			Now:         now,
+			BlockLT:     transactionTestLogicalTime,
+			LogicalTime: transactionTestLogicalTime,
+			RandSeed:    append([]byte(nil), tonopsTestSeed...),
+			Config:      cfg,
 		})
 		if err != nil {
-			t.Fatalf("v%d stop-on-accept transaction failed: %v", version, err)
+			t.Fatalf("v%d full transaction failed: %v", version, err)
 		}
 		if accepted != full.Accepted {
 			t.Fatalf("v%d check accepted = %t, full transaction accepted = %t", version, accepted, full.Accepted)
@@ -2244,12 +2230,12 @@ func FuzzCheckExternalMessageAcceptedInboundDestinationVersionGate(f *testing.F)
 			t.Fatalf("v%d failed to build external message: %v", version, err)
 		}
 
-		accepted, err := NewTVM().CheckExternalMessageAccepted(shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, CheckExternalMessageAcceptedConfig{
+		accepted, err := testCheckExternalAccepted(NewTVM(), shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, testTxParams{
 			Now:         now,
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			ConfigRoot:  cfg.Root,
+			Config:      cfg,
 		})
 		if version >= 10 && !validFromV10 {
 			if err == nil {
@@ -2431,7 +2417,7 @@ func FuzzTransactionVersionedCustomFeeLowerBoundStopsAtV8(f *testing.F) {
 			}
 
 			var outMsg tlb.Message
-			if err = transactionParseCell(&outMsg, res.outMsgs[0]); err != nil {
+			if err = transactionParseCell(&outMsg, res.outMsgs[0].Cell); err != nil {
 				t.Fatalf("v%d parse outbound message: %v", tc.version, err)
 			}
 			internal := outMsg.AsInternal()
@@ -2495,7 +2481,7 @@ func FuzzTransactionVersionedSendExtraFlagsBoundaries(f *testing.F) {
 			transactionZeroCurrencyBalance(),
 		)
 		checkTransactionFuzzSendExtraFlagsPhase(t, 11, mode, v11, true, false)
-		checkTransactionFuzzSendExtraFlagsOutMsg(t, 11, v11.outMsgs[0], 0)
+		checkTransactionFuzzSendExtraFlagsOutMsg(t, 11, v11.outMsgs[0].Cell, 0)
 
 		v12 := applyTransactionSendActionForTestWithParams(t,
 			tlb.ActionSendMsg{Mode: mode, Msg: msgCell},
@@ -2510,7 +2496,7 @@ func FuzzTransactionVersionedSendExtraFlagsBoundaries(f *testing.F) {
 		}
 
 		checkTransactionFuzzSendExtraFlagsPhase(t, 12, mode, v12, true, false)
-		checkTransactionFuzzSendExtraFlagsOutMsg(t, 12, v12.outMsgs[0], wantV12Flag)
+		checkTransactionFuzzSendExtraFlagsOutMsg(t, 12, v12.outMsgs[0].Cell, wantV12Flag)
 	})
 }
 
@@ -2526,20 +2512,29 @@ func FuzzTransactionActionGlobalVersionFallbackInvalidSource(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, rawConfigKind, rawVersion byte, ignoreErrors bool, payload byte) {
 		version := uint32(transactionFuzzGlobalVersion(rawVersion))
-		var cfg transactionConfig
 
+		// Configs without a valid global version are rejected eagerly by
+		// PrepareConfig; only well-formed configs reach execution.
 		switch rawConfigKind % 4 {
 		case 0:
-			cfg = transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{})
+			if _, err := PrepareConfig(nil); err == nil {
+				t.Fatal("nil config root should fail to prepare")
+			}
+			return
 		case 1:
-			cfg = transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})})
-		case 2:
-			cfg = transactionTestConfigWithGlobalVersion(t, version)
-		default:
-			cfg = transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+				t.Fatal("config without global version should fail to prepare")
+			}
+			return
+		case 3:
+			if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 				tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(uint64(payload&1), 1).EndCell(),
-			})})
+			})); err == nil {
+				t.Fatal("config with malformed global version should fail to prepare")
+			}
+			return
 		}
+		cfg := transactionTestConfigWithGlobalVersion(t, version)
 		effectiveVersion := cfg.globalVersion()
 
 		mode := uint8(0)
@@ -2875,7 +2870,7 @@ func FuzzTransactionVersionedGasLimitBoundaries(f *testing.F) {
 			}
 
 			cfg := transactionFuzzGasConfig(t, version, specialGasCell)
-			gas := transactionMessageGas(TransactionEmulationConfig{}, cfg, tonopsTestAddr, big.NewInt(10_000), msgBalance, tlb.MsgTypeInternal, true)
+			gas := transactionMessageGas(vmcore.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(10_000), msgBalance, tlb.MsgTypeInternal, true)
 			if gas.Max != transactionGasInt(specialPrices.SpecialGasLimit) || gas.Limit != want || gas.Remaining != want {
 				t.Fatalf("special v%d gas = %+v, want max=%d limit=%d", version, gas, specialPrices.SpecialGasLimit, want)
 			}
@@ -2952,11 +2947,11 @@ func FuzzTransactionVersionedTickTockGasBoundaries(f *testing.F) {
 			Base:      int64(rawFlatPrice % 1000),
 			Remaining: int64(rawGasPrice % 1000),
 		}
-		if got := transactionTickTockGas(TransactionEmulationConfig{Gas: explicit}, transactionConfig{}, tonopsTestAddr, big.NewInt(0), false); got != explicit {
+		if got := transactionTickTockGas(explicit, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), false); got != explicit {
 			t.Fatalf("explicit ticktock gas = %+v, want %+v", got, explicit)
 		}
 
-		fallback := transactionTickTockGas(TransactionEmulationConfig{}, transactionConfig{}, tonopsTestAddr, big.NewInt(0), false)
+		fallback := transactionTickTockGas(vmcore.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), false)
 		if fallback.Max != DefaultTickTockTransactionGasMax || fallback.Limit != DefaultTickTockTransactionGasMax || fallback.Credit != 0 || fallback.Remaining != DefaultTickTockTransactionGasMax {
 			t.Fatalf("fallback ticktock gas = %+v", fallback)
 		}
@@ -3006,12 +3001,12 @@ func FuzzTransactionVersionedTickTockGasBoundaries(f *testing.F) {
 				limit = override.limit
 			}
 			wantLimit := transactionGasBoughtForLimit(prices, balance, limit)
-			got := transactionTickTockGas(TransactionEmulationConfig{Now: now}, cfg, addr, balance, false)
+			got := transactionTickTockGas(vmcore.Gas{}, now, cfg, addr, balance, false)
 			if got.Max != transactionGasInt(wantLimit) || got.Limit != transactionGasInt(wantLimit) || got.Credit != 0 || got.Remaining != transactionGasInt(wantLimit) {
 				t.Fatalf("v%d ticktock gas = %+v, want limit %d", version, got, wantLimit)
 			}
 
-			got = transactionTickTockGas(TransactionEmulationConfig{Now: now}, cfg, addr, balance, true)
+			got = transactionTickTockGas(vmcore.Gas{}, now, cfg, addr, balance, true)
 			wantSpecial := transactionGasInt(prices.SpecialGasLimit)
 			if got.Max != wantSpecial || got.Limit != wantSpecial || got.Credit != 0 || got.Remaining != wantSpecial {
 				t.Fatalf("v%d special ticktock gas = %+v, want %d", version, got, wantSpecial)
@@ -3052,10 +3047,9 @@ func FuzzTransactionVersionedPrecompiledGasConfig(f *testing.F) {
 			gas.Credit = 1
 		}
 
-		nextGas, gotUsage, skip, err := transactionApplyPrecompiledGasConfig(TransactionEmulationConfig{}, cfg, code, gas)
-		if err != nil {
-			t.Fatal(err)
-		}
+		env := &transactionExecEnv{}
+		nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, gas, env)
+		gotUsage := env.precompiledGasUsage
 		if gotUsage == nil || gotUsage.Uint64() != usage {
 			t.Fatalf("v%d precompiled usage = %v, want %d", version, gotUsage, usage)
 		}
@@ -3130,45 +3124,46 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 				t.Fatal("overflow precompiled usage should fail")
 			}
 		case 4:
-			nextGas, gotUsage, skip, err := transactionApplyPrecompiledGasConfig(TransactionEmulationConfig{
-				IncomingValue: tuple.NewTupleValue(big.NewInt(1), nil),
-			}, cfg, code, gas)
-			if err != nil || gotUsage != nil || skip != nil || nextGas != gas {
-				t.Fatalf("explicit C7 precompiled config = gas %+v usage %v skip %v err %v, want untouched", nextGas, gotUsage, skip, err)
+			env := &transactionExecEnv{}
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, vmcore.Gas{Max: usage + 50, Limit: usage, Base: usage, Remaining: usage}, env)
+			if env.precompiledGasUsage == nil || env.precompiledGasUsage.Int64() != usage || skip != nil {
+				t.Fatalf("config precompiled usage = %v skip %v, want %d nil", env.precompiledGasUsage, skip, usage)
+			}
+			if nextGas.Limit != usage+50 || nextGas.Max != usage+50 {
+				t.Fatalf("config precompiled fallback gas = %+v, want max/limit %d", nextGas, usage+50)
 			}
 		case 5:
-			nextGas, gotUsage, skip, err := transactionApplyPrecompiledGasConfig(TransactionEmulationConfig{}, cfg, nil, gas)
-			if err != nil || gotUsage != nil || skip != nil || nextGas != gas {
-				t.Fatalf("nil-code precompiled config = gas %+v usage %v skip %v err %v, want untouched", nextGas, gotUsage, skip, err)
+			env := &transactionExecEnv{}
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, nil, gas, env)
+			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
+				t.Fatalf("nil-code precompiled config = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
 		case 6:
-			nextGas, gotUsage, skip, err := transactionApplyPrecompiledGasConfig(TransactionEmulationConfig{}, cfg, otherCode, gas)
-			if err != nil || gotUsage != nil || skip != nil || nextGas != gas {
-				t.Fatalf("missing-code precompiled config = gas %+v usage %v skip %v err %v, want untouched", nextGas, gotUsage, skip, err)
+			env := &transactionExecEnv{}
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, otherCode, gas, env)
+			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
+				t.Fatalf("missing-code precompiled config = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
 		case 7:
-			if _, gotUsage, skip, err := transactionApplyPrecompiledGasConfig(TransactionEmulationConfig{
-				PrecompiledGasUsage: big.NewInt(-usage),
-			}, cfg, code, gas); err == nil || gotUsage == nil || skip != nil {
-				t.Fatalf("negative explicit usage = usage %v skip %v err %v, want error with usage", gotUsage, skip, err)
+			env := &transactionExecEnv{}
+			smallGas := vmcore.Gas{Max: usage - 1, Limit: usage - 1, Base: usage - 1, Remaining: usage - 1}
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, smallGas, env)
+			if env.precompiledGasUsage == nil || env.precompiledGasUsage.Int64() != usage {
+				t.Fatalf("config precompiled usage = %v, want %d", env.precompiledGasUsage, usage)
+			}
+			if skip == nil || skip.Type != tlb.ComputeSkipReasonNoGas || nextGas != smallGas {
+				t.Fatalf("above-limit precompiled config = gas %+v skip %v, want no_gas untouched", nextGas, skip)
 			}
 		case 8:
-			if _, gotUsage, skip, err := transactionApplyPrecompiledGasConfig(TransactionEmulationConfig{
-				PrecompiledGasUsage: new(big.Int).Lsh(big.NewInt(1), 80),
-			}, cfg, code, gas); err == nil || gotUsage == nil || skip != nil {
-				t.Fatalf("overflow explicit usage = usage %v skip %v err %v, want error with usage", gotUsage, skip, err)
+			env := &transactionExecEnv{}
+			emptyCfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{})
+			nextGas, skip := transactionApplyPrecompiledGasConfig(emptyCfg, code, gas, env)
+			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
+				t.Fatalf("absent precompiled param = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
 		case 9:
-			explicit := big.NewInt(limit + 1)
-			nextGas, gotUsage, skip, err := transactionApplyPrecompiledGasConfig(TransactionEmulationConfig{
-				PrecompiledGasUsage: explicit,
-			}, cfg, code, gas)
-			if err != nil || gotUsage != explicit || skip == nil || skip.Type != tlb.ComputeSkipReasonNoGas || nextGas != gas {
-				t.Fatalf("explicit no-gas usage = gas %+v usage %v skip %v err %v", nextGas, gotUsage, skip, err)
-			}
-
 			res := &MessageExecutionResult{ExecutionResult: ExecutionResult{ExitCode: 0, GasUsed: 5, Steps: 7}}
-			if err = transactionApplyPrecompiledGasUsage(res, big.NewInt(usage)); err != nil {
+			if err := transactionApplyPrecompiledGasUsage(res, big.NewInt(usage)); err != nil {
 				t.Fatalf("apply precompiled usage failed: %v", err)
 			}
 			if res.GasUsed != usage || res.Steps != 0 {
@@ -3176,7 +3171,7 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 			}
 
 			outOfGas := &MessageExecutionResult{ExecutionResult: ExecutionResult{ExitCode: ^int64(vmerr.CodeOutOfGas), GasUsed: 5, Steps: 7}}
-			if err = transactionApplyPrecompiledGasUsage(outOfGas, big.NewInt(usage)); err != nil {
+			if err := transactionApplyPrecompiledGasUsage(outOfGas, big.NewInt(usage)); err != nil {
 				t.Fatalf("apply out-of-gas precompiled usage failed: %v", err)
 			}
 			if outOfGas.GasUsed != 5 || outOfGas.Steps != 7 {
@@ -3884,7 +3879,7 @@ func FuzzTransactionVersionedReserveOriginalExtraSendBoundary(f *testing.F) {
 			}
 
 			var msg tlb.Message
-			if err := transactionParseCell(&msg, res.outMsgs[0]); err != nil {
+			if err := transactionParseCell(&msg, res.outMsgs[0].Cell); err != nil {
 				t.Fatalf("failed to parse v%d outbound message: %v", version, err)
 			}
 			gotExtra, err := transactionLoadExtraCurrencies(msg.AsInternal().ExtraCurrencies)
@@ -4536,7 +4531,7 @@ func FuzzTransactionVersionedStorageExtraDictHash(f *testing.F) {
 		}
 
 		cfg := transactionFuzzStorageDictConfig(t, version, threshold)
-		accountCell, accountState, _, err := buildTransactionAccountCell(
+		built, err := buildTransactionAccountCell(
 			&transactionRuntimeAccount{
 				addr:    tonopsTestAddr,
 				status:  tlb.AccountStatusActive,
@@ -4559,11 +4554,12 @@ func FuzzTransactionVersionedStorageExtraDictHash(f *testing.F) {
 			t.Fatal(err)
 		}
 
+		accountState := built.state
 		wantInfo := version >= 11 && accountState.StorageInfo.StorageUsed.CellsUsed.Uint64() >= uint64(threshold)
 		checkTransactionFuzzStorageExtra(t, version, "state", accountState.StorageInfo.StorageExtra, wantInfo)
 
 		var parsed tlb.AccountState
-		if err = tlb.Parse(&parsed, accountCell); err != nil {
+		if err = tlb.Parse(&parsed, built.cell); err != nil {
 			t.Fatal(err)
 		}
 		checkTransactionFuzzStorageExtra(t, version, "serialized", parsed.StorageInfo.StorageExtra, wantInfo)
@@ -4669,7 +4665,7 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 			return
 		}
 
-		wantBadState := mismatchKind == 2 || (version >= 10 && depth > transactionGetSizeLimits(transactionConfig{}).maxAccFixedPrefixLength)
+		wantBadState := mismatchKind == 2 || (version >= 10 && depth > transactionGetSizeLimits(emptyPreparedTestConfig()).maxAccFixedPrefixLength)
 		checkTransactionComputeBoundaryResult(t, version, usedState, skip, !wantBadState, tlb.ComputeSkipReasonBadState)
 	})
 }
@@ -4689,7 +4685,7 @@ func FuzzTransactionVersionedStateInitDepthPersistence(f *testing.F) {
 		tlb.AccountStatusUninit,
 		tlb.AccountStatusNonExist,
 	}
-	maxDepth := transactionGetSizeLimits(transactionConfig{}).maxAccFixedPrefixLength
+	maxDepth := transactionGetSizeLimits(emptyPreparedTestConfig()).maxAccFixedPrefixLength
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawStatus, rawDepth, rawPrefix byte, codeTag, dataTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -5771,7 +5767,7 @@ func assertTransactionFuzzMessageBalanceUnchanged(t *testing.T, got, want *trans
 	}
 }
 
-func transactionFuzzSendExtraFlagsConfig(t *testing.T, version uint32) transactionConfig {
+func transactionFuzzSendExtraFlagsConfig(t *testing.T, version uint32) *PreparedConfig {
 	t.Helper()
 
 	priceCell := buildTransactionMsgForwardPricesCell(t, 0, 0)
@@ -5782,7 +5778,7 @@ func transactionFuzzSendExtraFlagsConfig(t *testing.T, version uint32) transacti
 	})
 }
 
-func transactionFuzzWorkchainConfig(t *testing.T, version uint32, workchain int32, acceptMessages bool) transactionConfig {
+func transactionFuzzWorkchainConfig(t *testing.T, version uint32, workchain int32, acceptMessages bool) *PreparedConfig {
 	t.Helper()
 
 	workchains := cell.NewDict(32)
@@ -5908,7 +5904,7 @@ func transactionFuzzNestedMerkleProofs(count int, payload byte) (*cell.Cell, err
 	return root, nil
 }
 
-func transactionFuzzInboundExternalConfig(t *testing.T, version uint32, maxMsgBits, maxMsgCells uint32, maxExtMsgDepth uint16) transactionConfig {
+func transactionFuzzInboundExternalConfig(t *testing.T, version uint32, maxMsgBits, maxMsgCells uint32, maxExtMsgDepth uint16) *PreparedConfig {
 	t.Helper()
 
 	sizeLimits, err := tlb.ToCell(&tlb.SizeLimitsConfigV2{
@@ -5936,7 +5932,7 @@ func transactionFuzzInboundExternalConfig(t *testing.T, version uint32, maxMsgBi
 	})
 }
 
-func transactionFuzzStorageDictConfig(t *testing.T, version uint32, accStateCellsForStorageDict uint32) transactionConfig {
+func transactionFuzzStorageDictConfig(t *testing.T, version uint32, accStateCellsForStorageDict uint32) *PreparedConfig {
 	t.Helper()
 
 	sizeLimits, err := tlb.ToCell(&tlb.SizeLimitsConfigV2{
@@ -5964,7 +5960,7 @@ func transactionFuzzStorageDictConfig(t *testing.T, version uint32, accStateCell
 	})
 }
 
-func transactionFuzzGasConfig(t *testing.T, version uint32, gasCell *cell.Cell) transactionConfig {
+func transactionFuzzGasConfig(t *testing.T, version uint32, gasCell *cell.Cell) *PreparedConfig {
 	t.Helper()
 
 	return transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
@@ -5981,7 +5977,7 @@ func flipTransactionFuzzBit(data []byte, bit uint64) {
 func checkAccountSerializationVersion(t *testing.T, addr *address.Address, rawData, rewrittenData []byte, depth uint, version uint32) {
 	t.Helper()
 
-	accountCell, accountState, _, err := buildTransactionAccountCell(
+	built, err := buildTransactionAccountCell(
 		&transactionRuntimeAccount{
 			addr:    addr,
 			status:  tlb.AccountStatusActive,
@@ -6005,7 +6001,7 @@ func checkAccountSerializationVersion(t *testing.T, addr *address.Address, rawDa
 	}
 
 	var parsed tlb.AccountState
-	if err = tlb.Parse(&parsed, accountCell); err != nil {
+	if err = tlb.Parse(&parsed, built.cell); err != nil {
 		t.Fatal(err)
 	}
 
@@ -6020,7 +6016,7 @@ func checkAccountSerializationVersion(t *testing.T, addr *address.Address, rawDa
 		wantAnycast = false
 	}
 
-	for _, account := range []*tlb.AccountState{accountState, &parsed} {
+	for _, account := range []*tlb.AccountState{built.state, &parsed} {
 		if !bytes.Equal(account.Address.Data(), wantData) {
 			t.Fatalf("v%d account data = %x, want %x", version, account.Address.Data(), wantData)
 		}

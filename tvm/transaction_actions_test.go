@@ -182,7 +182,7 @@ func TestTransactionExternalOutMessageToCellRetriesRefs(t *testing.T) {
 }
 
 func TestTransactionOutboundMessageLayoutRejectsInvalidInputs(t *testing.T) {
-	if _, err := transactionNormalizeOutboundMessage(nil, tonopsTestAddr, 1, uint32(tonopsTestTime.Unix()), transactionConfig{}); err == nil {
+	if _, err := transactionNormalizeOutboundMessage(nil, tonopsTestAddr, 1, uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig()); err == nil {
 		t.Fatal("nil outbound message should fail")
 	}
 
@@ -196,7 +196,7 @@ func TestTransactionOutboundMessageLayoutRejectsInvalidInputs(t *testing.T) {
 	if _, err = transactionOutboundMessageLayout(inbound); err == nil {
 		t.Fatal("inbound external message should not have outbound layout")
 	}
-	if _, err = transactionNormalizeOutboundMessage(inbound, tonopsTestAddr, 1, uint32(tonopsTestTime.Unix()), transactionConfig{}); err == nil {
+	if _, err = transactionNormalizeOutboundMessage(inbound, tonopsTestAddr, 1, uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig()); err == nil {
 		t.Fatal("normalizing inbound external message should fail")
 	}
 
@@ -840,7 +840,7 @@ func TestTransactionCustomForwardFeesDisabledFromV8(t *testing.T) {
 			}
 
 			var outMsg tlb.Message
-			if err := tlb.Parse(&outMsg, res.outMsgs[0]); err != nil {
+			if err := tlb.Parse(&outMsg, res.outMsgs[0].Cell); err != nil {
 				t.Fatalf("failed to parse outbound message: %v", err)
 			}
 			internal := outMsg.AsInternal()
@@ -938,7 +938,7 @@ func TestTransactionExternalOutActionSuccessAndFees(t *testing.T) {
 	}
 
 	var outMsg tlb.Message
-	if err := transactionParseCell(&outMsg, out.outMsgs[0]); err != nil {
+	if err := transactionParseCell(&outMsg, out.outMsgs[0].Cell); err != nil {
 		t.Fatalf("failed to parse external outbound message: %v", err)
 	}
 	ext := outMsg.AsExternalOut()
@@ -1612,7 +1612,7 @@ func applyTransactionSendActionForTest(t *testing.T, mode uint8, msg *cell.Cell)
 	return applyTransactionSendActionForTestWithParams(t, tlb.ActionSendMsg{Mode: mode, Msg: msg}, transactionTestConfigWithGlobalVersion(t, 13), big.NewInt(1_000_000_000), nil, transactionZeroCurrencyBalance())
 }
 
-func applyTransactionSendActionForTestWithParams(t *testing.T, act tlb.ActionSendMsg, cfg transactionConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
+func applyTransactionSendActionForTestWithParams(t *testing.T, act tlb.ActionSendMsg, cfg *PreparedConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
 	t.Helper()
 
 	return applyTransactionActionsForTestWithParams(t, []any{act}, cfg, balance, extra, msgBalance)
@@ -1632,7 +1632,7 @@ func buildTransactionExternalOutCell(t *testing.T, dst *address.Address) *cell.C
 	return msg
 }
 
-func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg transactionConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
+func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *PreparedConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
 	t.Helper()
 
 	data := cell.BeginCell().EndCell()
@@ -1659,7 +1659,7 @@ func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg t
 	return out
 }
 
-func transactionTestConfigWithGlobalVersion(t *testing.T, version uint32) transactionConfig {
+func transactionTestConfigWithGlobalVersion(t *testing.T, version uint32) *PreparedConfig {
 	t.Helper()
 
 	return transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
@@ -1667,15 +1667,13 @@ func transactionTestConfigWithGlobalVersion(t *testing.T, version uint32) transa
 	})
 }
 
-func transactionTestConfigWithParams(t *testing.T, params map[uint32]*cell.Cell) transactionConfig {
+func transactionTestConfigWithParams(t *testing.T, params map[uint32]*cell.Cell) *PreparedConfig {
 	t.Helper()
 
 	if _, ok := params[tlb.ConfigParamGlobalVersion]; !ok {
 		params[tlb.ConfigParamGlobalVersion] = transactionTestGlobalVersionCell(t, 13)
 	}
-	return transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{
-		Root: buildTransactionConfigRoot(t, params),
-	})
+	return MustPrepareConfig(buildTransactionConfigRoot(t, params))
 }
 
 func transactionTestGlobalVersionCell(t *testing.T, version uint32) *cell.Cell {

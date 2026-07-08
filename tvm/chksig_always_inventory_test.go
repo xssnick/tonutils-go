@@ -19,39 +19,38 @@ type chksigAlwaysCoverageAnchor struct {
 }
 
 var expectedChksigAlwaysCoverageAnchors = map[string]chksigAlwaysCoverageAnchor{
-	"execution_config_fuzz_test.go:FuzzExecutionConfigGlobalVersionPerRunEntrypoints":                  {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
-	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedRawEntrypoints":               {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
-	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedSignatureVariants":            {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
-	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedMalformedOperands":            {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
-	"execution_config_fuzz_test.go:FuzzExecutionConfigLibrariesAndChksigAlwaysSucceed":                 {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
-	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedRunVMChild":                   {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
-	"execution_proof_test.go:TestExecuteDetailedWithAccountProofChksigAlwaysSucceedPerRun":             {path: "execution_proof_test.go"},
-	"internal_message_test.go:TestEmulateInternalMessageChksigAlwaysSucceedPerRun":                     {path: "internal_message_test.go"},
-	"op/funcs/tonops_ops_test.go:TestChksignAlwaysSucceed":                                             {path: "op/funcs/tonops_ops_test.go"},
-	"op/funcs/tonops_ops_test.go:TestChksignRejectsZeroAndIdentityPublicKeyV14":                        {path: "op/funcs/tonops_ops_test.go"},
-	"op/funcs/version_fuzz_test.go:FuzzTVMVersionedCryptoV14Edges":                                     {path: "op/funcs/version_fuzz_test.go", fullRangeFuzz: true},
-	"runvm_test.go:FuzzRunVMChksigAlwaysSucceedPerRun":                                                 {path: "runvm_test.go", fullRangeFuzz: true},
-	"runvm_test.go:FuzzRunVMXChksigAlwaysSucceedPerRun":                                                {path: "runvm_test.go", fullRangeFuzz: true},
-	"runvm_test.go:TestRunVMChksigAlwaysSucceedPerRun":                                                 {path: "runvm_test.go"},
-	"ticktock_message_test.go:TestEmulateTickTockTransactionChksigAlwaysSucceedPerRun":                 {path: "ticktock_message_test.go"},
-	"transaction_emulation_test.go:TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun":          {path: "transaction_emulation_test.go"},
-	"transaction_emulation_test.go:TestEmulateTransactionChksigAlwaysSucceedPerRun":                    {path: "transaction_emulation_test.go"},
-	"transaction_emulation_test.go:TestTransactionConfigForExternalMessageAcceptedCopiesRuntimeFields": {path: "transaction_emulation_test.go"},
-	"transaction_version_fuzz_test.go:FuzzCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun":       {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
-	"transaction_version_fuzz_test.go:FuzzInternalMessageEmulationChksigAlwaysSucceedPerRun":           {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
-	"transaction_version_fuzz_test.go:FuzzMessageEmulationBuildProofChksigAlwaysSucceedPerRun":         {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
-	"transaction_version_fuzz_test.go:FuzzMessageEmulationChksigAlwaysSucceedPerRun":                   {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
-	"transaction_version_fuzz_test.go:FuzzMessageEmulationGlobalVersionPerRun":                         {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
-	"transaction_version_fuzz_test.go:FuzzTickTockChksigAlwaysSucceedPerRun":                           {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
-	"transaction_version_fuzz_test.go:FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun":     {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
-	"vm_test.go:TestTVMExecuteConfigChksigAlwaysSucceedPerRun":                                         {path: "vm_test.go"},
-	"vm/state_child_test.go:TestChildVMHelpersAndExecution":                                            {path: "vm/state_child_test.go"},
-	"vm/state_more_test.go:TestStateRunChildAndParamHelpers":                                           {path: "vm/state_more_test.go"},
+	"execution_config_fuzz_test.go:FuzzExecutionConfigGlobalVersionPerRunEntrypoints":              {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
+	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedRawEntrypoints":           {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
+	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedSignatureVariants":        {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
+	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedMalformedOperands":        {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
+	"execution_config_fuzz_test.go:FuzzExecutionConfigLibrariesAndChksigAlwaysSucceed":             {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
+	"execution_config_fuzz_test.go:FuzzExecutionConfigChksigAlwaysSucceedRunVMChild":               {path: "execution_config_fuzz_test.go", fullRangeFuzz: true},
+	"execution_proof_test.go:TestExecuteDetailedWithAccountProofChksigAlwaysSucceedPerRun":         {path: "execution_proof_test.go"},
+	"internal_message_test.go:TestEmulateInternalMessageChksigAlwaysSucceedPerRun":                 {path: "internal_message_test.go"},
+	"op/funcs/tonops_ops_test.go:TestChksignAlwaysSucceed":                                         {path: "op/funcs/tonops_ops_test.go"},
+	"op/funcs/tonops_ops_test.go:TestChksignRejectsZeroAndIdentityPublicKeyV14":                    {path: "op/funcs/tonops_ops_test.go"},
+	"op/funcs/version_fuzz_test.go:FuzzTVMVersionedCryptoV14Edges":                                 {path: "op/funcs/version_fuzz_test.go", fullRangeFuzz: true},
+	"runvm_test.go:FuzzRunVMChksigAlwaysSucceedPerRun":                                             {path: "runvm_test.go", fullRangeFuzz: true},
+	"runvm_test.go:FuzzRunVMXChksigAlwaysSucceedPerRun":                                            {path: "runvm_test.go", fullRangeFuzz: true},
+	"runvm_test.go:TestRunVMChksigAlwaysSucceedPerRun":                                             {path: "runvm_test.go"},
+	"ticktock_message_test.go:TestEmulateTickTockTransactionChksigAlwaysSucceedPerRun":             {path: "ticktock_message_test.go"},
+	"transaction_emulation_test.go:TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun":      {path: "transaction_emulation_test.go"},
+	"transaction_emulation_test.go:TestEmulateTransactionChksigAlwaysSucceedPerRun":                {path: "transaction_emulation_test.go"},
+	"transaction_version_fuzz_test.go:FuzzCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun":   {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
+	"transaction_version_fuzz_test.go:FuzzInternalMessageEmulationChksigAlwaysSucceedPerRun":       {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
+	"transaction_version_fuzz_test.go:FuzzMessageEmulationBuildProofChksigAlwaysSucceedPerRun":     {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
+	"transaction_version_fuzz_test.go:FuzzMessageEmulationChksigAlwaysSucceedPerRun":               {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
+	"transaction_version_fuzz_test.go:FuzzMessageEmulationGlobalVersionPerRun":                     {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
+	"transaction_version_fuzz_test.go:FuzzTickTockChksigAlwaysSucceedPerRun":                       {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
+	"transaction_version_fuzz_test.go:FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun": {path: "transaction_version_fuzz_test.go", fullRangeFuzz: true},
+	"vm_test.go:TestTVMExecuteConfigChksigAlwaysSucceedPerRun":                                     {path: "vm_test.go"},
+	"vm/state_child_test.go:TestChildVMHelpersAndExecution":                                        {path: "vm/state_child_test.go"},
+	"vm/state_more_test.go:TestStateRunChildAndParamHelpers":                                       {path: "vm/state_more_test.go"},
 }
 
 const (
-	expectedChksigAlwaysProductionTouchCount = 14
-	expectedChksigAlwaysProductionTouchHash  = "1ea8efb842506ae8f742226d392e59b8ca6d960bf86a88acfa0eb6d872b72e18"
+	expectedChksigAlwaysProductionTouchCount = 13
+	expectedChksigAlwaysProductionTouchHash  = "0cad3ff63e3c59ddb182f38a236f5c079d4093f961fcac335fb01bbce0dd768c"
 	expectedChksigAlwaysStateWriterCount     = 2
 	expectedChksigAlwaysStateWriterHash      = "362178a87042e084f7cf70c2412e488f69c7393e77c93c9ddfafcefba8e3fa8f"
 )

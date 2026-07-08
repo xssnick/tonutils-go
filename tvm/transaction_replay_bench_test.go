@@ -9,8 +9,10 @@ import (
 	"math/big"
 	"os"
 	"sort"
+	"sync"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -87,18 +89,12 @@ type preparedFatBlockReplay struct {
 	machine  *TVM
 	block    *tlb.Block
 	accounts []fatBlockAccountWork
-	config   fatBlockPreparedConfig
-}
-
-type fatBlockPreparedConfig struct {
-	configRoot     *cell.Cell
-	prevBlocks     tuple.Tuple
-	unpackedConfig tuple.Tuple
-	libraries      []*cell.Cell
+	blockCtx *BlockContext
 }
 
 type fatBlockAccountWork struct {
 	account  []byte
+	addr     *address.Address
 	id       string
 	expected []byte
 	previous *tlb.ShardAccount
@@ -110,7 +106,7 @@ type fatBlockTransactionWork struct {
 	inMsgCell *cell.Cell
 	parsed    *tlb.Transaction
 	hash      []byte
-	cfg       TransactionEmulationConfig
+	opts      TransactionOptions
 }
 
 func TestTVMReplayFatBlockFixture(t *testing.T) {
@@ -121,6 +117,33 @@ func TestTVMReplayFatBlockFixture(t *testing.T) {
 	}
 	if txs != prepared.fixture.Transactions {
 		t.Fatalf("replayed %d transactions, want %d", txs, prepared.fixture.Transactions)
+	}
+}
+
+// TestTVMReplayFatBlockFixtureConcurrentLanes replays the fat block with one
+// account lane per goroutine, all sharing a single PreparedConfig/BlockContext,
+// mirroring the collator's parallel per-account execution.
+func TestTVMReplayFatBlockFixtureConcurrentLanes(t *testing.T) {
+	prepared := prepareFatBlockReplayFixture(t)
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(prepared.accounts))
+	sem := make(chan struct{}, 8)
+	for i := range prepared.accounts {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			errs[idx] = prepared.replayAccount(&prepared.accounts[idx], true)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("lane %s: %v", prepared.accounts[i].id, err)
+		}
 	}
 }
 
@@ -240,13 +263,8 @@ func prepareFatBlockReplayFixture(tb testing.TB) *preparedFatBlockReplay {
 	}
 	fatBlockAttachPreviousAccounts(tb, fixture.Block.Workchain, accounts, accountByID)
 
-	config := fatBlockPreparedConfig{
-		configRoot:     fatBlockCell(tb, fixture.Config.ConfigRootBOCBase64),
-		prevBlocks:     fatBlockTuple(tb, fixture.Config.PrevBlocksStackBOCBase64),
-		unpackedConfig: fatBlockTuple(tb, fixture.Config.UnpackedConfigStackBOCBase64),
-		libraries:      fatBlockCells(tb, fixture.Config.LibrariesBOCBase64),
-	}
-	txConfigByID := fatBlockPreparedTransactionConfigs(tb, fixture.TransactionConfigs, config)
+	blockCtx := fatBlockBlockContext(tb, fixture)
+	txConfigByID := fatBlockPreparedTransactionConfigs(tb, fixture.TransactionConfigs)
 	fatBlockAttachTransactionConfigs(tb, fixture.Block.Workchain, accounts, txConfigByID)
 
 	machine := NewTVM()
@@ -259,109 +277,181 @@ func prepareFatBlockReplayFixture(tb testing.TB) *preparedFatBlockReplay {
 		machine:  machine,
 		block:    &block,
 		accounts: accounts,
-		config:   config,
+		blockCtx: blockCtx,
 	}
+}
+
+// fatBlockBlockContext builds the per-block execution context from the fixture
+// config. The fixture stores the block-uniform now/block-lt on every
+// transaction record; uniformity is asserted here.
+func fatBlockBlockContext(tb testing.TB, fixture fatBlockReplayFixture) *BlockContext {
+	tb.Helper()
+
+	if len(fixture.TransactionConfigs) == 0 {
+		tb.Fatal("fixture has no transaction configs")
+	}
+	now := fixture.TransactionConfigs[0].Now
+	blockLT := fixture.TransactionConfigs[0].BlockLT
+	for _, tx := range fixture.TransactionConfigs {
+		if tx.Now != now || tx.BlockLT != blockLT {
+			tb.Fatalf("fixture transaction configs are not block-uniform: now=%d/%d block_lt=%d/%d", tx.Now, now, tx.BlockLT, blockLT)
+		}
+	}
+
+	cfg, err := PrepareConfig(fatBlockCell(tb, fixture.Config.ConfigRootBOCBase64))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	blockCtx, err := cfg.NewBlockContext(BlockOptions{
+		Now:        now,
+		BlockLT:    blockLT,
+		PrevBlocks: fatBlockTuple(tb, fixture.Config.PrevBlocksStackBOCBase64),
+		Libraries:  fatBlockCells(tb, fixture.Config.LibrariesBOCBase64),
+	})
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	fatBlockAssertUnpackedConfig(tb, blockCtx, fatBlockTuple(tb, fixture.Config.UnpackedConfigStackBOCBase64))
+	return blockCtx
+}
+
+// fatBlockAssertUnpackedConfig verifies that the unpacked config tuple built by
+// BlockContext matches the tuple captured from the reference validator.
+func fatBlockAssertUnpackedConfig(tb testing.TB, blockCtx *BlockContext, captured tuple.Tuple) {
+	tb.Helper()
+
+	built, ok := blockCtx.UnpackedConfig()
+	if !ok {
+		tb.Fatal("block context has no unpacked config")
+	}
+	builtCell := cell.BeginCell()
+	if err := tlb.SerializeStackValue(builtCell, fatBlockTupleToStackValue(built)); err != nil {
+		tb.Fatal(err)
+	}
+	capturedCell := cell.BeginCell()
+	if err := tlb.SerializeStackValue(capturedCell, fatBlockTupleToStackValue(captured)); err != nil {
+		tb.Fatal(err)
+	}
+	if !bytes.Equal(builtCell.EndCell().Hash(), capturedCell.EndCell().Hash()) {
+		tb.Fatalf("derived unpacked config differs from captured reference tuple")
+	}
+}
+
+func fatBlockTupleToStackValue(v any) any {
+	t, ok := v.(tuple.Tuple)
+	if !ok {
+		return v
+	}
+	out := make([]any, t.Len())
+	for i := 0; i < t.Len(); i++ {
+		raw, err := t.RawIndex(i)
+		if err != nil {
+			panic(err)
+		}
+		out[i] = fatBlockTupleToStackValue(raw)
+	}
+	return out
 }
 
 func (p *preparedFatBlockReplay) replay(validate bool) (int, error) {
 	var txs int
-	for _, account := range p.accounts {
-		current := account.previous
-
-		var accountStorageStat *cell.Cell
-		for _, tx := range account.txs {
-			txs++
-
-			cfg := tx.cfg
-			cfg.AccountStorageStat = accountStorageStat
-
-			var res *TransactionExecutionResult
-			var err error
-			if tx.parsed.IO.In == nil || tx.inMsgCell == nil {
-				desc, ok := tx.parsed.Description.(tlb.TransactionDescriptionTickTock)
-				if !ok {
-					return txs, fmt.Errorf("transaction %s lt=%d has no input message", account.id, tx.parsed.LT)
-				}
-				res, err = p.machine.EmulateTickTockTransaction(current, desc.IsTock, cfg)
-			} else {
-				res, err = p.machine.EmulateTransaction(current, tx.inMsgCell, cfg)
-			}
-			if err != nil {
-				return txs, fmt.Errorf("emulate transaction %s lt=%d: %w", account.id, tx.parsed.LT, err)
-			}
-			if res == nil || res.TransactionCell == nil || res.ShardAccount == nil {
-				return txs, fmt.Errorf("emulate transaction %s lt=%d returned incomplete result", account.id, tx.parsed.LT)
-			}
-			if validate {
-				gotHash := res.TransactionCell.Hash()
-				if !bytes.Equal(gotHash, tx.hash) {
-					currentHash := []byte(nil)
-					if current != nil && current.Account != nil {
-						currentHash = current.Account.Hash()
-					}
-					return txs, fmt.Errorf("transaction hash mismatch %s lt=%d: got=%x want=%x current_account=%x block_account_new=%x tx_old=%x tx_new=%x res_account=%x", account.id, tx.parsed.LT, gotHash, tx.hash, currentHash, account.expected, tx.parsed.StateUpdate.OldHash, tx.parsed.StateUpdate.NewHash, res.ShardAccount.Account.Hash())
-				}
-			}
-
-			current = res.ShardAccount
-			accountStorageStat = res.AccountStorageStat
+	for i := range p.accounts {
+		if err := p.replayAccount(&p.accounts[i], validate); err != nil {
+			return txs, err
 		}
-
-		if current == nil || current.Account == nil {
-			return txs, fmt.Errorf("missing final account %s", account.id)
-		}
-		if validate {
-			gotHash := current.Account.Hash()
-			if !bytes.Equal(gotHash, account.expected) {
-				return txs, fmt.Errorf("account hash mismatch %s: got=%x want=%x", account.id, gotHash, account.expected)
-			}
-		}
+		txs += len(p.accounts[i].txs)
 	}
 	return txs, nil
 }
 
-func fatBlockTransactionConfig(raw fatBlockReplayTransactionC7, config fatBlockPreparedConfig) (TransactionEmulationConfig, error) {
+func (p *preparedFatBlockReplay) replayAccount(account *fatBlockAccountWork, validate bool) error {
+	current, err := PrepareAccount(account.previous, account.addr)
+	if err != nil {
+		return fmt.Errorf("prepare account %s: %w", account.id, err)
+	}
+
+	var accountStorageStat *cell.Cell
+	for _, tx := range account.txs {
+		opts := tx.opts
+		opts.AccountStorageStat = accountStorageStat
+
+		var res *TransactionExecutionResult
+		if tx.parsed.IO.In == nil || tx.inMsgCell == nil {
+			desc, ok := tx.parsed.Description.(tlb.TransactionDescriptionTickTock)
+			if !ok {
+				return fmt.Errorf("transaction %s lt=%d has no input message", account.id, tx.parsed.LT)
+			}
+			res, err = p.machine.EmulateTickTockTransaction(p.blockCtx, current, desc.IsTock, opts)
+		} else {
+			var msg *PreparedMessage
+			msg, err = PrepareMessage(tx.inMsgCell)
+			if err != nil {
+				return fmt.Errorf("prepare message %s lt=%d: %w", account.id, tx.parsed.LT, err)
+			}
+			res, err = p.machine.EmulateTransaction(p.blockCtx, current, msg, opts)
+		}
+		if err != nil {
+			return fmt.Errorf("emulate transaction %s lt=%d: %w", account.id, tx.parsed.LT, err)
+		}
+		if res == nil || res.TransactionCell == nil || res.NextAccount == nil {
+			return fmt.Errorf("emulate transaction %s lt=%d returned incomplete result", account.id, tx.parsed.LT)
+		}
+		if validate {
+			gotHash := res.TransactionCell.Hash()
+			if !bytes.Equal(gotHash, tx.hash) {
+				currentHash := []byte(nil)
+				if shard := current.ShardAccount(); shard != nil && shard.Account != nil {
+					currentHash = shard.Account.Hash()
+				}
+				return fmt.Errorf("transaction hash mismatch %s lt=%d: got=%x want=%x current_account=%x block_account_new=%x tx_old=%x tx_new=%x res_account=%x", account.id, tx.parsed.LT, gotHash, tx.hash, currentHash, account.expected, tx.parsed.StateUpdate.OldHash, tx.parsed.StateUpdate.NewHash, res.NextAccount.ShardAccount().Account.Hash())
+			}
+			if res.EndLT <= tx.parsed.LT {
+				return fmt.Errorf("transaction %s lt=%d returned invalid end lt %d", account.id, tx.parsed.LT, res.EndLT)
+			}
+			if len(res.OutMessages) != int(tx.parsed.OutMsgCount) {
+				return fmt.Errorf("transaction %s lt=%d returned %d out messages, want %d", account.id, tx.parsed.LT, len(res.OutMessages), tx.parsed.OutMsgCount)
+			}
+		}
+
+		current = res.NextAccount
+		accountStorageStat = res.AccountStorageStat
+	}
+
+	if current == nil || current.ShardAccount().Account == nil {
+		return fmt.Errorf("missing final account %s", account.id)
+	}
+	if validate {
+		gotHash := current.ShardAccount().Account.Hash()
+		if !bytes.Equal(gotHash, account.expected) {
+			return fmt.Errorf("account hash mismatch %s: got=%x want=%x", account.id, gotHash, account.expected)
+		}
+	}
+	return nil
+}
+
+func fatBlockTransactionOptions(raw fatBlockReplayTransactionC7) (TransactionOptions, error) {
 	randSeed, err := base64.StdEncoding.DecodeString(raw.RandSeedBase64)
 	if err != nil {
-		return TransactionEmulationConfig{}, err
+		return TransactionOptions{}, err
 	}
 
-	var due any
-	if raw.DuePaymentNano != "" {
-		duePayment, ok := new(big.Int).SetString(raw.DuePaymentNano, 10)
-		if !ok {
-			return TransactionEmulationConfig{}, fmt.Errorf("invalid due payment %q", raw.DuePaymentNano)
-		}
-		due = duePayment
-	}
-
-	return TransactionEmulationConfig{
-		Now:                 raw.Now,
-		BlockLT:             raw.BlockLT,
-		LogicalTime:         raw.LogicalTime,
-		RandSeed:            randSeed,
-		ConfigRoot:          config.configRoot,
-		PrevBlocks:          config.prevBlocks,
-		UnpackedConfig:      config.unpackedConfig,
-		IncomingValue:       fatBlockTupleFromStack(raw.IncomingValueStackBOCBase64),
-		StorageFees:         raw.StorageFees,
-		DuePayment:          due,
-		PrecompiledGasUsage: fatBlockBigIntFromStack(raw.PrecompiledGasStackBOCBase64),
-		InMsgParams:         fatBlockTupleFromStack(raw.InMsgParamsStackBOCBase64),
-		Libraries:           config.libraries,
+	return TransactionOptions{
+		LogicalTime: raw.LogicalTime,
+		RandSeed:    randSeed,
 	}, nil
 }
 
-func fatBlockPreparedTransactionConfigs(tb testing.TB, raw []fatBlockReplayTransactionC7, config fatBlockPreparedConfig) map[string]TransactionEmulationConfig {
+func fatBlockPreparedTransactionConfigs(tb testing.TB, raw []fatBlockReplayTransactionC7) map[string]TransactionOptions {
 	tb.Helper()
 
-	out := make(map[string]TransactionEmulationConfig, len(raw))
+	out := make(map[string]TransactionOptions, len(raw))
 	for _, item := range raw {
-		cfg, err := fatBlockTransactionConfig(item, config)
+		opts, err := fatBlockTransactionOptions(item)
 		if err != nil {
 			tb.Fatal(err)
 		}
-		out[fatBlockTxConfigKey(item.Account, item.LT)] = cfg
+		out[fatBlockTxConfigKey(item.Account, item.LT)] = opts
 	}
 	return out
 }
@@ -376,11 +466,12 @@ func fatBlockAttachPreviousAccounts(tb testing.TB, workchain int32, accounts []f
 			tb.Fatalf("previous account fixture is missing for %s", accountID)
 		}
 		accounts[idx].id = accountID
+		accounts[idx].addr = address.NewAddress(0, byte(int8(workchain)), accounts[idx].account)
 		accounts[idx].previous = shard
 	}
 }
 
-func fatBlockAttachTransactionConfigs(tb testing.TB, workchain int32, accounts []fatBlockAccountWork, configs map[string]TransactionEmulationConfig) {
+func fatBlockAttachTransactionConfigs(tb testing.TB, workchain int32, accounts []fatBlockAccountWork, configs map[string]TransactionOptions) {
 	tb.Helper()
 
 	for accountIdx := range accounts {
@@ -390,11 +481,11 @@ func fatBlockAttachTransactionConfigs(tb testing.TB, workchain int32, accounts [
 		}
 		for txIdx := range accounts[accountIdx].txs {
 			tx := &accounts[accountIdx].txs[txIdx]
-			cfg, ok := configs[fatBlockTxConfigKey(accountID, tx.parsed.LT)]
+			opts, ok := configs[fatBlockTxConfigKey(accountID, tx.parsed.LT)]
 			if !ok {
 				tb.Fatalf("transaction config not found for %s lt=%d", accountID, tx.parsed.LT)
 			}
-			tx.cfg = cfg
+			tx.opts = opts
 		}
 	}
 }

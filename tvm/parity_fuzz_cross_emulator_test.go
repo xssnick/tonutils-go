@@ -11705,11 +11705,18 @@ func differentialFuzzC7FromRefConfig(t *testing.T, code *cell.Cell, cfg referenc
 		seed = referenceDefaultTonopsSeed
 	}
 
-	c7, err := buildEmulationC7(cfg.Address, code, MessageEmulationConfig{
-		Now:        cfg.Now,
-		ConfigRoot: cfg.ConfigRoot,
-		PrevBlocks: cfg.PrevBlocks,
-	}, balance, new(big.Int).SetBytes(seed), uint32(globalVersion))
+	prepared := MustPrepareConfig(cfg.ConfigRoot)
+	c7, err := buildEmulationC7(emulationC7Input{
+		addr:           cfg.Address,
+		code:           code,
+		now:            cfg.Now,
+		balance:        balance,
+		seed:           new(big.Int).SetBytes(seed),
+		configRoot:     prepared.Root(),
+		prevBlocks:     cfg.PrevBlocks,
+		unpackedConfig: messageUnpackedConfig(MessageEmulationConfig{Config: prepared, PrevBlocks: cfg.PrevBlocks}, cfg.Now),
+		globalVersion:  uint32(globalVersion),
+	})
 	if err != nil {
 		t.Fatalf("failed to build Go c7 from reference config: %v", err)
 	}

@@ -183,15 +183,10 @@ func (t *CellUsageTree) CreateMerkleUpdate(from, to *Cell) (*Cell, error) {
 
 func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, error) {
 	prevUseMark := t.useMark
-	prevMarks := make([]bool, len(t.nodes))
-	for i := range t.nodes {
-		prevMarks[i] = t.nodes[i].marked
-	}
+	prevMarks := t.marksSnapshot()
 	defer func() {
 		t.useMark = prevUseMark
-		for i := range t.nodes {
-			t.nodes[i].marked = i < len(prevMarks) && prevMarks[i]
-		}
+		t.restoreMarks(prevMarks)
 	}()
 
 	updateTo, err := buildMerkleProofBodyByPruneFunc(to, func(c *Cell) (bool, error) {

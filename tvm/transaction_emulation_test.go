@@ -13,7 +13,6 @@ import (
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
-	"github.com/xssnick/tonutils-go/tvm/tuple"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -78,72 +77,18 @@ func TestTransactionPrecompiledGasUsageOverridesSuccessfulTVM(t *testing.T) {
 	}
 }
 
-func TestTransactionConfigForExternalMessageAcceptedCopiesRuntimeFields(t *testing.T) {
-	library := cell.BeginCell().MustStoreUInt(0xA5, 8).EndCell()
-	configRoot := cell.BeginCell().MustStoreUInt(0xC0FE, 16).EndCell()
-	prevBlocks := &struct{ tag uint32 }{tag: 0xAA}
-	duePayment := &struct{ tag uint32 }{tag: 0xBB}
-	precompiledGasUsage := big.NewInt(2963)
-	unpackedConfigValue := big.NewInt(7)
-	traceHook := func(vmcore.TraceStep) {}
-
-	cfg := CheckExternalMessageAcceptedConfig{
-		Now:                 17,
-		BlockLT:             31,
-		LogicalTime:         43,
-		RandSeed:            []byte{1, 2, 3},
-		ConfigRoot:          configRoot,
-		PrevBlocks:          prevBlocks,
-		UnpackedConfig:      tuple.NewTupleValue(unpackedConfigValue),
-		DuePayment:          duePayment,
-		PrecompiledGasUsage: precompiledGasUsage,
-		Libraries:           []*cell.Cell{library},
-		ChksigAlwaysSucceed: true,
-		TraceHook:           traceHook,
-	}
-
-	got := transactionConfigForExternalMessageAccepted(cfg)
-	if got.Now != cfg.Now || got.BlockLT != cfg.BlockLT || got.LogicalTime != cfg.LogicalTime {
-		t.Fatalf("time fields were not copied: got %d/%d/%d", got.Now, got.BlockLT, got.LogicalTime)
-	}
-	if !bytes.Equal(got.RandSeed, cfg.RandSeed) || got.ConfigRoot != cfg.ConfigRoot {
-		t.Fatal("random seed or config root was not copied")
-	}
-	if got.PrevBlocks != cfg.PrevBlocks || got.DuePayment != cfg.DuePayment || got.PrecompiledGasUsage != cfg.PrecompiledGasUsage {
-		t.Fatal("transaction context pointers were not copied")
-	}
-	gotUnpacked, err := got.UnpackedConfig.RawIndex(0)
-	if err != nil || got.UnpackedConfig.Len() != 1 || gotUnpacked != unpackedConfigValue {
-		t.Fatalf("unpacked config = %v, want %v", got.UnpackedConfig, cfg.UnpackedConfig)
-	}
-	if len(got.Libraries) != 1 || got.Libraries[0] != cfg.Libraries[0] {
-		t.Fatal("libraries were not copied")
-	}
-	if !got.StopOnAccept {
-		t.Fatal("StopOnAccept should be forced for acceptance checks")
-	}
-	if got.ChksigAlwaysSucceed != cfg.ChksigAlwaysSucceed {
-		t.Fatal("ChksigAlwaysSucceed was not copied")
-	}
-	if got.TraceHook == nil {
-		t.Fatal("TraceHook was not copied")
-	}
-}
-
 func transactionTestLibraryDict(tag uint64) (*cell.Dictionary, *cell.Cell) {
 	root := cell.BeginCell().MustStoreUInt(tag, 8).EndCell()
 	return root.AsDict(256), root
 }
 
 func TestTransactionExecutionLibraries(t *testing.T) {
-	cfgLib := cell.BeginCell().MustStoreUInt(0xC7, 8).EndCell()
-	cfg := TransactionEmulationConfig{
-		Libraries: []*cell.Cell{cfgLib},
-	}
+	blockLib := cell.BeginCell().MustStoreUInt(0xC7, 8).EndCell()
+	blockLibraries := []*cell.Cell{blockLib}
 
-	got := transactionExecutionLibraries(&transactionRuntimeAccount{}, cfg, false)
-	if len(got) != 1 || got[0] != cfgLib {
-		t.Fatalf("libraries without account libs = %v, want cfg library only", got)
+	got := transactionExecutionLibraries(&transactionRuntimeAccount{}, blockLibraries)
+	if len(got) != 1 || got[0] != blockLib {
+		t.Fatalf("libraries without account libs = %v, want block library only", got)
 	}
 
 	inMsgDict, inMsgRoot := transactionTestLibraryDict(0xA1)
@@ -151,8 +96,8 @@ func TestTransactionExecutionLibraries(t *testing.T) {
 	got = transactionExecutionLibraries(&transactionRuntimeAccount{
 		inMsgLibraries: inMsgDict,
 		libraries:      accountDict,
-	}, cfg, false)
-	want := []*cell.Cell{inMsgRoot, accountRoot, cfgLib}
+	}, blockLibraries)
+	want := []*cell.Cell{inMsgRoot, accountRoot, blockLib}
 	if len(got) != len(want) {
 		t.Fatalf("libraries len = %d, want %d", len(got), len(want))
 	}
@@ -566,22 +511,22 @@ func TestTransactionAccountAddressAnycastSerializationDisabledFromV10(t *testing
 				status:  tlb.AccountStatusActive,
 				balance: big.NewInt(1000),
 			}
-			accountCell, accountState, _, err := buildTransactionAccountCell(acc, tlb.AccountStatusActive, big.NewInt(1000), nil, 1, uint32(tonopsTestTime.Unix()), nil, cell.BeginCell().EndCell(), nil, nil, nil, transactionTestConfigWithGlobalVersion(t, tc.version), nil)
+			built, err := buildTransactionAccountCell(acc, tlb.AccountStatusActive, big.NewInt(1000), nil, 1, uint32(tonopsTestTime.Unix()), nil, cell.BeginCell().EndCell(), nil, nil, nil, transactionTestConfigWithGlobalVersion(t, tc.version), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (accountState.Address.Anycast() != nil) != tc.wantAnycast {
-				t.Fatalf("result account anycast = %v, want present=%t", accountState.Address.Anycast(), tc.wantAnycast)
+			if (built.state.Address.Anycast() != nil) != tc.wantAnycast {
+				t.Fatalf("result account anycast = %v, want present=%t", built.state.Address.Anycast(), tc.wantAnycast)
 			}
-			if !bytes.Equal(accountState.Address.Data(), tc.wantData) {
-				t.Fatalf("result account data = %x, want %x", accountState.Address.Data(), tc.wantData)
+			if !bytes.Equal(built.state.Address.Data(), tc.wantData) {
+				t.Fatalf("result account data = %x, want %x", built.state.Address.Data(), tc.wantData)
 			}
-			if !transactionUint64PtrEqual(accountState.StateInit.Depth, tc.wantDepth) {
-				t.Fatalf("result state depth = %v, want %v", accountState.StateInit.Depth, tc.wantDepth)
+			if !transactionUint64PtrEqual(built.state.StateInit.Depth, tc.wantDepth) {
+				t.Fatalf("result state depth = %v, want %v", built.state.StateInit.Depth, tc.wantDepth)
 			}
 
 			var parsed tlb.AccountState
-			if err = tlb.Parse(&parsed, accountCell); err != nil {
+			if err = tlb.Parse(&parsed, built.cell); err != nil {
 				t.Fatalf("failed to parse account cell: %v", err)
 			}
 			if (parsed.Address.Anycast() != nil) != tc.wantAnycast {
@@ -815,7 +760,7 @@ func TestTransactionSpecialGasFullStartsAtV5(t *testing.T) {
 				tlb.ConfigParamGlobalVersion:      transactionTestGlobalVersionCell(t, tc.version),
 				tlb.ConfigParamGasPricesBasechain: gasCell,
 			})
-			gas := transactionMessageGas(TransactionEmulationConfig{}, cfg, tonopsTestAddr, big.NewInt(10_000), big.NewInt(200), tlb.MsgTypeInternal, true)
+			gas := transactionMessageGas(vmcore.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(10_000), big.NewInt(200), tlb.MsgTypeInternal, true)
 			if gas.Max != 1_000 || gas.Limit != tc.wantLimit || gas.Remaining != tc.wantLimit {
 				t.Fatalf("gas = %+v, want max=1000 limit=%d", gas, tc.wantLimit)
 			}
@@ -838,13 +783,13 @@ func TestEmulateTransactionExternalCommit(t *testing.T) {
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -856,40 +801,40 @@ func TestEmulateTransactionExternalCommit(t *testing.T) {
 	if !res.Accepted {
 		t.Fatal("expected external transaction to be accepted")
 	}
-	if res.Transaction == nil || res.TransactionCell == nil {
+	if testResultTransaction(t, res) == nil || res.TransactionCell == nil {
 		t.Fatal("expected serialized transaction result")
 	}
-	if res.AccountState == nil || res.AccountCell == nil || res.ShardAccount == nil || res.ShardAccountCell == nil {
+	if testResultAccountState(res) == nil || testResultShardAccount(res).Account == nil || testResultShardAccount(res) == nil || res.NextAccount.ShardAccountCell() == nil {
 		t.Fatal("expected committed account state")
 	}
-	if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), newData.Hash()) {
-		t.Fatalf("unexpected committed data:\nwant=%s\ngot=%s", newData.Dump(), res.AccountState.StateInit.Data.Dump())
+	if !bytes.Equal(testResultAccountState(res).StateInit.Data.Hash(), newData.Hash()) {
+		t.Fatalf("unexpected committed data:\nwant=%s\ngot=%s", newData.Dump(), testResultAccountState(res).StateInit.Data.Dump())
 	}
-	if res.Transaction.LT != uint64(transactionTestLogicalTime) {
-		t.Fatalf("unexpected transaction lt: %d", res.Transaction.LT)
+	if testResultTransaction(t, res).LT != uint64(transactionTestLogicalTime) {
+		t.Fatalf("unexpected transaction lt: %d", testResultTransaction(t, res).LT)
 	}
-	if res.AccountState.LastTransactionLT != res.Transaction.LT+1 {
-		t.Fatalf("unexpected committed account lt: got=%d want=%d", res.AccountState.LastTransactionLT, res.Transaction.LT+1)
+	if testResultAccountState(res).LastTransactionLT != testResultTransaction(t, res).LT+1 {
+		t.Fatalf("unexpected committed account lt: got=%d want=%d", testResultAccountState(res).LastTransactionLT, testResultTransaction(t, res).LT+1)
 	}
-	if res.ShardAccount.LastTransLT != res.Transaction.LT {
-		t.Fatalf("unexpected shard lt: got=%d want=%d", res.ShardAccount.LastTransLT, res.Transaction.LT)
+	if testResultShardAccount(res).LastTransLT != testResultTransaction(t, res).LT {
+		t.Fatalf("unexpected shard lt: got=%d want=%d", testResultShardAccount(res).LastTransLT, testResultTransaction(t, res).LT)
 	}
-	if !bytes.Equal(res.ShardAccount.LastTransHash, res.TransactionCell.Hash()) {
+	if !bytes.Equal(testResultShardAccount(res).LastTransHash, res.TransactionCell.Hash()) {
 		t.Fatal("shard last tx hash should match transaction hash")
 	}
-	if !bytes.Equal(res.Transaction.StateUpdate.OldHash, shard.Account.Hash()) {
+	if !bytes.Equal(testResultTransaction(t, res).StateUpdate.OldHash, shard.Account.Hash()) {
 		t.Fatal("state update old hash should match original account hash")
 	}
-	if !bytes.Equal(res.Transaction.StateUpdate.NewHash, res.AccountCell.Hash()) {
+	if !bytes.Equal(testResultTransaction(t, res).StateUpdate.NewHash, testResultShardAccount(res).Account.Hash()) {
 		t.Fatal("state update new hash should match committed account hash")
 	}
-	if res.Transaction.TotalFees.Coins.Nano().Sign() != 0 {
-		t.Fatalf("expected zero total fees without config pricing, got %s", res.Transaction.TotalFees.Coins.String())
+	if testResultTransaction(t, res).TotalFees.Coins.Nano().Sign() != 0 {
+		t.Fatalf("expected zero total fees without config pricing, got %s", testResultTransaction(t, res).TotalFees.Coins.String())
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if !desc.CreditFirst {
 		t.Fatal("external transaction should have credit_first=true")
@@ -925,13 +870,13 @@ func TestEmulateTransactionCommittedThrowRunsActionPhase(t *testing.T) {
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -947,9 +892,9 @@ func TestEmulateTransactionCommittedThrowRunsActionPhase(t *testing.T) {
 		t.Fatalf("exit code = %d, want 304", res.ExitCode)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected transaction description %T", res.Transaction.Description)
+		t.Fatalf("unexpected transaction description %T", testResultTransaction(t, res).Description)
 	}
 	compute, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseVM)
 	if !ok {
@@ -958,55 +903,11 @@ func TestEmulateTransactionCommittedThrowRunsActionPhase(t *testing.T) {
 	if !compute.Success || desc.ActionPhase == nil || !desc.ActionPhase.Success || desc.Aborted {
 		t.Fatalf("committed throw should run successful action phase: compute=%+v action=%+v aborted=%t", compute, desc.ActionPhase, desc.Aborted)
 	}
-	if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), newData.Hash()) {
-		t.Fatalf("unexpected committed data:\nwant=%s\ngot=%s", newData.Dump(), res.AccountState.StateInit.Data.Dump())
+	if !bytes.Equal(testResultAccountState(res).StateInit.Data.Hash(), newData.Hash()) {
+		t.Fatalf("unexpected committed data:\nwant=%s\ngot=%s", newData.Dump(), testResultAccountState(res).StateInit.Data.Dump())
 	}
-	if res.Transaction.OutMsgCount != 1 {
-		t.Fatalf("out msg count = %d, want 1", res.Transaction.OutMsgCount)
-	}
-}
-
-func TestEmulateTransactionExternalStopOnAccept(t *testing.T) {
-	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
-	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
-	code := makeTransactionExternalAcceptThenFailCode(t)
-	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
-
-	msgCell, err := tlb.ToCell(&tlb.ExternalMessage{
-		DstAddr: tonopsTestAddr,
-		Body:    body,
-	})
-	if err != nil {
-		t.Fatalf("failed to build external message: %v", err)
-	}
-
-	machine := NewTVM()
-	res, err := machine.EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
-		Address:      tonopsTestAddr,
-		Now:          uint32(tonopsTestTime.Unix()),
-		BlockLT:      transactionTestLogicalTime,
-		LogicalTime:  transactionTestLogicalTime,
-		StopOnAccept: true,
-		ConfigRoot:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
-		Gas: vmcore.NewGas(vmcore.GasConfig{
-			Max:    walletSendTestGasMax,
-			Credit: walletSendTestCredit,
-		}),
-	})
-	if err != nil {
-		t.Fatalf("emulate transaction failed: %v", err)
-	}
-	if !res.Accepted {
-		t.Fatal("expected external transaction to be accepted")
-	}
-	if res.ExitCode != 0 {
-		t.Fatalf("exit code = %d, want 0", res.ExitCode)
-	}
-	if res.Transaction == nil || res.TransactionCell == nil {
-		t.Fatal("expected transaction after accept")
-	}
-	if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), origData.Hash()) {
-		t.Fatal("stop on accept should leave original data committed")
+	if testResultTransaction(t, res).OutMsgCount != 1 {
+		t.Fatalf("out msg count = %d, want 1", testResultTransaction(t, res).OutMsgCount)
 	}
 }
 
@@ -1030,26 +931,25 @@ func TestCheckExternalMessageAcceptedMatchesTransactionAccept(t *testing.T) {
 		t.Fatalf("failed to parse account: %v", err)
 	}
 
-	txCfg := TransactionEmulationConfig{
-		Address:      tonopsTestAddr,
-		Now:          uint32(tonopsTestTime.Unix()),
-		BlockLT:      transactionTestLogicalTime,
-		LogicalTime:  transactionTestLogicalTime,
-		StopOnAccept: true,
-		ConfigRoot:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+	txCfg := testTxParams{
+		Address:     tonopsTestAddr,
+		Now:         uint32(tonopsTestTime.Unix()),
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 	}
-	checkCfg := CheckExternalMessageAcceptedConfig{
+	checkCfg := testTxParams{
 		Now:         txCfg.Now,
 		BlockLT:     txCfg.BlockLT,
 		LogicalTime: txCfg.LogicalTime,
-		ConfigRoot:  txCfg.ConfigRoot,
+		Config:      txCfg.Config,
 	}
 
-	full, err := NewTVM().EmulateTransaction(shard, msgCell, txCfg)
+	full, err := testEmulateTransaction(NewTVM(), shard, msgCell, txCfg)
 	if err != nil {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
-	accepted, err := NewTVM().CheckExternalMessageAccepted(shard, &account, msgCell, msg, checkCfg)
+	accepted, err := testCheckExternalAccepted(NewTVM(), shard, &account, msgCell, msg, checkCfg)
 	if err != nil {
 		t.Fatalf("check external message accepted failed: %v", err)
 	}
@@ -1077,11 +977,11 @@ func TestCheckExternalMessageAcceptedRejectsWithoutAccept(t *testing.T) {
 		t.Fatalf("failed to parse account: %v", err)
 	}
 
-	accepted, err := NewTVM().CheckExternalMessageAccepted(shard, &account, msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err := testCheckExternalAccepted(NewTVM(), shard, &account, msgCell, msg, testTxParams{
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("check external message accepted failed: %v", err)
@@ -1132,11 +1032,11 @@ func TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(t *testing.T) {
 					} {
 						want := tt.want && version >= sigCase.minVersion
 						t.Run(tt.name, func(t *testing.T) {
-							accepted, err := machine.CheckExternalMessageAccepted(shard, &account, msgCell, msg, CheckExternalMessageAcceptedConfig{
+							accepted, err := testCheckExternalAccepted(machine, shard, &account, msgCell, msg, testTxParams{
 								Now:                 uint32(tonopsTestTime.Unix()),
 								BlockLT:             transactionTestLogicalTime,
 								LogicalTime:         transactionTestLogicalTime,
-								ConfigRoot:          transactionTestConfigWithGlobalVersion(t, uint32(version)).Root,
+								Config:              transactionTestConfigWithGlobalVersion(t, uint32(version)),
 								ChksigAlwaysSucceed: tt.always,
 							})
 							if err != nil {
@@ -1205,7 +1105,7 @@ func TestCheckExternalMessageAcceptedRejectsInvalidStateInitLibraries(t *testing
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	accepted, err := NewTVM().CheckExternalMessageAccepted(shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err := testCheckExternalAccepted(NewTVM(), shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, testTxParams{
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
@@ -1235,7 +1135,7 @@ func TestCheckExternalMessageAcceptedRejectsInvalidDestinationFromGlobalV10(t *t
 	if err != nil {
 		t.Fatalf("failed to build global version cell: %v", err)
 	}
-	accepted, err := NewTVM().CheckExternalMessageAccepted(shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err := testCheckExternalAccepted(NewTVM(), shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, testTxParams{
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
@@ -1266,10 +1166,10 @@ func TestCheckExternalMessageAcceptedNoGasSkipAndAutoNow(t *testing.T) {
 	}
 
 	noGasShard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, 0, 0)
-	accepted, err := NewTVM().CheckExternalMessageAccepted(noGasShard, mustParseTransactionTestAccount(t, noGasShard), msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err := testCheckExternalAccepted(NewTVM(), noGasShard, mustParseTransactionTestAccount(t, noGasShard), msgCell, msg, testTxParams{
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("no-gas check external message accepted failed: %v", err)
@@ -1279,10 +1179,10 @@ func TestCheckExternalMessageAcceptedNoGasSkipAndAutoNow(t *testing.T) {
 	}
 
 	fundedShard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, 0)
-	accepted, err = NewTVM().CheckExternalMessageAccepted(fundedShard, mustParseTransactionTestAccount(t, fundedShard), msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err = testCheckExternalAccepted(NewTVM(), fundedShard, mustParseTransactionTestAccount(t, fundedShard), msgCell, msg, testTxParams{
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("auto-now check external message accepted failed: %v", err)
@@ -1307,35 +1207,35 @@ func TestEmulateTransactionInternalToNonExistCreatesUninitNoState(t *testing.T) 
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
-	if res.Transaction == nil || res.AccountState == nil {
+	if testResultTransaction(t, res) == nil || testResultAccountState(res) == nil {
 		t.Fatal("expected internal message to non-existing account to create a transaction")
 	}
-	if res.Transaction.OrigStatus != tlb.AccountStatusNonExist {
-		t.Fatalf("unexpected original status: %s", res.Transaction.OrigStatus)
+	if testResultTransaction(t, res).OrigStatus != tlb.AccountStatusNonExist {
+		t.Fatalf("unexpected original status: %s", testResultTransaction(t, res).OrigStatus)
 	}
-	if res.Transaction.EndStatus != tlb.AccountStatusUninit {
-		t.Fatalf("unexpected end status: %s", res.Transaction.EndStatus)
+	if testResultTransaction(t, res).EndStatus != tlb.AccountStatusUninit {
+		t.Fatalf("unexpected end status: %s", testResultTransaction(t, res).EndStatus)
 	}
-	if res.AccountState.Status != tlb.AccountStatusUninit {
-		t.Fatalf("unexpected committed account status: %s", res.AccountState.Status)
+	if testResultAccountState(res).Status != tlb.AccountStatusUninit {
+		t.Fatalf("unexpected committed account status: %s", testResultAccountState(res).Status)
 	}
-	if got := res.AccountState.Balance.Nano().Uint64(); got != 123 {
+	if got := testResultAccountState(res).Balance.Nano().Uint64(); got != 123 {
 		t.Fatalf("unexpected committed balance: got=%d want=123", got)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	skipped, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseSkipped)
 	if !ok {
@@ -1395,7 +1295,7 @@ func TestEmulateTransactionInternalToSuspendedUninitSkipsSuspended(t *testing.T)
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1408,9 +1308,9 @@ func TestEmulateTransactionInternalToSuspendedUninitSkipsSuspended(t *testing.T)
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	skipped, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseSkipped)
 	if !ok {
@@ -1419,8 +1319,8 @@ func TestEmulateTransactionInternalToSuspendedUninitSkipsSuspended(t *testing.T)
 	if skipped.Reason.Type != tlb.ComputeSkipReasonSuspended {
 		t.Fatalf("unexpected skip reason: %s", skipped.Reason.Type)
 	}
-	if res.AccountState.Status != tlb.AccountStatusUninit {
-		t.Fatalf("unexpected committed account status: %s", res.AccountState.Status)
+	if testResultAccountState(res).Status != tlb.AccountStatusUninit {
+		t.Fatalf("unexpected committed account status: %s", testResultAccountState(res).Status)
 	}
 }
 
@@ -1452,7 +1352,7 @@ func TestEmulateTransactionStorageDebtFreezesActiveAndRecordsDue(t *testing.T) {
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -1466,20 +1366,20 @@ func TestEmulateTransactionStorageDebtFreezesActiveAndRecordsDue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
-	if res.Transaction.EndStatus != tlb.AccountStatusFrozen {
-		t.Fatalf("unexpected end status: %s", res.Transaction.EndStatus)
+	if testResultTransaction(t, res).EndStatus != tlb.AccountStatusFrozen {
+		t.Fatalf("unexpected end status: %s", testResultTransaction(t, res).EndStatus)
 	}
-	if res.AccountState.Status != tlb.AccountStatusFrozen {
-		t.Fatalf("unexpected committed account status: %s", res.AccountState.Status)
+	if testResultAccountState(res).Status != tlb.AccountStatusFrozen {
+		t.Fatalf("unexpected committed account status: %s", testResultAccountState(res).Status)
 	}
-	if got := res.Transaction.TotalFees.Coins.Nano().Uint64(); got != 50 {
+	if got := testResultTransaction(t, res).TotalFees.Coins.Nano().Uint64(); got != 50 {
 		t.Fatalf("unexpected total fees: got=%d want=50", got)
 	}
-	if got := res.AccountState.Balance.Nano().Uint64(); got != 0 {
+	if got := testResultAccountState(res).Balance.Nano().Uint64(); got != 0 {
 		t.Fatalf("unexpected committed balance: got=%d want=0", got)
 	}
-	if res.AccountState.StorageInfo.DuePayment == nil || res.AccountState.StorageInfo.DuePayment.Nano().Uint64() != 950 {
-		t.Fatalf("unexpected due payment: %v", res.AccountState.StorageInfo.DuePayment)
+	if testResultAccountState(res).StorageInfo.DuePayment == nil || testResultAccountState(res).StorageInfo.DuePayment.Nano().Uint64() != 950 {
+		t.Fatalf("unexpected due payment: %v", testResultAccountState(res).StorageInfo.DuePayment)
 	}
 
 	stateInitCell, err := tlb.ToCell(&tlb.StateInit{
@@ -1489,13 +1389,13 @@ func TestEmulateTransactionStorageDebtFreezesActiveAndRecordsDue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to build state init: %v", err)
 	}
-	if !bytes.Equal(res.AccountState.StateHash, stateInitCell.Hash()) {
+	if !bytes.Equal(testResultAccountState(res).StateHash, stateInitCell.Hash()) {
 		t.Fatal("frozen state hash should match original active state")
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if desc.StoragePhase.StatusChange.Type != tlb.AccStatusChangeFrozen {
 		t.Fatalf("unexpected storage status change: %s", desc.StoragePhase.StatusChange.Type)
@@ -1533,13 +1433,13 @@ func TestEmulateTransactionInternalCreditsBalance(t *testing.T) {
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -1553,16 +1453,16 @@ func TestEmulateTransactionInternalCreditsBalance(t *testing.T) {
 	}
 
 	wantBalance := new(big.Int).SetUint64(walletSendTestBalance + internalMessageTestAmount)
-	if got := res.AccountState.Balance.Nano(); got.Cmp(wantBalance) != 0 {
+	if got := testResultAccountState(res).Balance.Nano(); got.Cmp(wantBalance) != 0 {
 		t.Fatalf("unexpected committed balance: got=%s want=%s", got.String(), wantBalance.String())
 	}
-	if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), newData.Hash()) {
-		t.Fatalf("unexpected committed data:\nwant=%s\ngot=%s", newData.Dump(), res.AccountState.StateInit.Data.Dump())
+	if !bytes.Equal(testResultAccountState(res).StateInit.Data.Hash(), newData.Hash()) {
+		t.Fatalf("unexpected committed data:\nwant=%s\ngot=%s", newData.Dump(), testResultAccountState(res).StateInit.Data.Dump())
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if !desc.CreditFirst {
 		t.Fatal("bounce-disabled internal message should credit before compute")
@@ -1573,8 +1473,8 @@ func TestEmulateTransactionInternalCreditsBalance(t *testing.T) {
 	if got := desc.CreditPhase.Credit.Coins.Nano().Uint64(); got != internalMessageTestAmount {
 		t.Fatalf("unexpected credited amount: %d", got)
 	}
-	if res.Transaction.TotalFees.Coins.Nano().Sign() != 0 {
-		t.Fatalf("expected zero total fees without pricing config, got %s", res.Transaction.TotalFees.Coins.String())
+	if testResultTransaction(t, res).TotalFees.Coins.Nano().Sign() != 0 {
+		t.Fatalf("expected zero total fees without pricing config, got %s", testResultTransaction(t, res).TotalFees.Coins.String())
 	}
 }
 
@@ -1607,7 +1507,7 @@ func TestEmulateTransactionCollectsDuePaymentAndClearsIt(t *testing.T) {
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -1625,26 +1525,26 @@ func TestEmulateTransactionCollectsDuePaymentAndClearsIt(t *testing.T) {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	if got := res.Transaction.TotalFees.Coins.Nano().Uint64(); got != 77 {
+	if got := testResultTransaction(t, res).TotalFees.Coins.Nano().Uint64(); got != 77 {
 		t.Fatalf("unexpected total fees: got=%d want=77", got)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if got := desc.StoragePhase.StorageFeesCollected.Nano().Uint64(); got != 77 {
 		t.Fatalf("unexpected storage fees collected: got=%d want=77", got)
 	}
-	if res.AccountState.StorageInfo.DuePayment != nil {
+	if testResultAccountState(res).StorageInfo.DuePayment != nil {
 		t.Fatal("expected due_payment to be cleared after collection")
 	}
-	if got := res.AccountState.StorageInfo.LastPaid; got != uint32(tonopsTestTime.Unix()) {
+	if got := testResultAccountState(res).StorageInfo.LastPaid; got != uint32(tonopsTestTime.Unix()) {
 		t.Fatalf("unexpected last_paid: got=%d want=%d", got, uint32(tonopsTestTime.Unix()))
 	}
 
 	wantBalance := new(big.Int).SetUint64(walletSendTestBalance - 77)
-	if got := res.AccountState.Balance.Nano(); got.Cmp(wantBalance) != 0 {
+	if got := testResultAccountState(res).Balance.Nano(); got.Cmp(wantBalance) != 0 {
 		t.Fatalf("unexpected committed balance: got=%s want=%s", got.String(), wantBalance.String())
 	}
 }
@@ -1800,12 +1700,12 @@ func TestEmulateTransactionConfigGlobalVersionControlsOpcodeDispatch(t *testing.
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, 3).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, 3),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -1844,12 +1744,12 @@ func TestEmulateTransactionChksigAlwaysSucceedPerRun(t *testing.T) {
 			for version := uint32(MinSupportedGlobalVersion); version <= uint32(MaxSupportedGlobalVersion); version++ {
 				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 					shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, data, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
-					cfg := TransactionEmulationConfig{
+					cfg := testTxParams{
 						Address:     tonopsTestAddr,
 						Now:         uint32(tonopsTestTime.Unix()),
 						BlockLT:     transactionTestLogicalTime,
 						LogicalTime: transactionTestLogicalTime,
-						ConfigRoot:  transactionTestConfigWithGlobalVersion(t, version).Root,
+						Config:      transactionTestConfigWithGlobalVersion(t, version),
 						Gas: vmcore.NewGas(vmcore.GasConfig{
 							Max:    walletSendTestGasMax,
 							Credit: walletSendTestCredit,
@@ -1873,11 +1773,11 @@ func TestEmulateTransactionChksigAlwaysSucceedPerRun(t *testing.T) {
 	}
 }
 
-func runTransactionChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg TransactionEmulationConfig, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
+func runTransactionChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
 	t.Helper()
 
 	cfg.ChksigAlwaysSucceed = always
-	res, err := machine.EmulateTransaction(shard, msgCell, cfg)
+	res, err := testEmulateTransaction(machine, shard, msgCell, cfg)
 	var execRes *ExecutionResult
 	if res != nil {
 		execRes = &res.ExecutionResult
@@ -1918,13 +1818,13 @@ func TestEmulateTransactionAdvancesLastPaidWithoutStoragePricing(t *testing.T) {
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -1934,7 +1834,7 @@ func TestEmulateTransactionAdvancesLastPaidWithoutStoragePricing(t *testing.T) {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	if got := res.AccountState.StorageInfo.LastPaid; got != uint32(tonopsTestTime.Unix()) {
+	if got := testResultAccountState(res).StorageInfo.LastPaid; got != uint32(tonopsTestTime.Unix()) {
 		t.Fatalf("unexpected last_paid: got=%d want=%d", got, uint32(tonopsTestTime.Unix()))
 	}
 }
@@ -1961,7 +1861,7 @@ func TestEmulateTransactionRejectsTimeBeforeLastPaid(t *testing.T) {
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	if _, err = NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	if _, err = testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -1995,7 +1895,7 @@ func TestEmulateTransactionActionSendMsgAccountsForwardFees(t *testing.T) {
 		t.Fatalf("failed to build inbound message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, inMsg, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, inMsg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -2010,16 +1910,16 @@ func TestEmulateTransactionActionSendMsgAccountsForwardFees(t *testing.T) {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	if got := res.AccountState.Balance.Nano().Uint64(); got != 9000 {
+	if got := testResultAccountState(res).Balance.Nano().Uint64(); got != 9000 {
 		t.Fatalf("unexpected committed balance: got=%d want=9000", got)
 	}
-	if got := res.Transaction.TotalFees.Coins.Nano().Uint64(); got != 50 {
+	if got := testResultTransaction(t, res).TotalFees.Coins.Nano().Uint64(); got != 50 {
 		t.Fatalf("unexpected total fees: got=%d want=50", got)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if desc.Aborted {
 		t.Fatal("successful action phase should not abort")
@@ -2037,7 +1937,7 @@ func TestEmulateTransactionActionSendMsgAccountsForwardFees(t *testing.T) {
 		t.Fatalf("unexpected messages created: %d", desc.ActionPhase.MessagesCreated)
 	}
 
-	out, err := res.Transaction.IO.Out.ToSlice()
+	out, err := testResultTransaction(t, res).IO.Out.ToSlice()
 	if err != nil {
 		t.Fatalf("failed to read outbound messages: %v", err)
 	}
@@ -2091,7 +1991,7 @@ func TestEmulateTransactionActionSendMsgClearsOutboundBouncedFlag(t *testing.T) 
 		t.Fatalf("failed to build inbound message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, inMsg, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, inMsg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -2106,7 +2006,7 @@ func TestEmulateTransactionActionSendMsgClearsOutboundBouncedFlag(t *testing.T) 
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	out, err := res.Transaction.IO.Out.ToSlice()
+	out, err := testResultTransaction(t, res).IO.Out.ToSlice()
 	if err != nil {
 		t.Fatalf("failed to read outbound messages: %v", err)
 	}
@@ -2136,31 +2036,31 @@ func TestEmulateTransactionActionSendMsgNoFundsAbortsWithoutCommit(t *testing.T)
 		t.Fatalf("failed to build inbound message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, inMsg, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, inMsg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 		Gas:         vmcore.NewGas(vmcore.GasConfig{Max: 1_000_000, Limit: 1_000_000}),
 	})
 	if err != nil {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	if got := res.AccountState.Balance.Nano().Uint64(); got != 500 {
+	if got := testResultAccountState(res).Balance.Nano().Uint64(); got != 500 {
 		t.Fatalf("unexpected committed balance: got=%d want=500", got)
 	}
-	if !bytes.Equal(res.AccountState.StateInit.Data.Hash(), origData.Hash()) {
+	if !bytes.Equal(testResultAccountState(res).StateInit.Data.Hash(), origData.Hash()) {
 		t.Fatal("action failure should not commit computed data")
 	}
-	if res.Transaction.OutMsgCount != 0 {
-		t.Fatalf("unexpected outbound message count: %d", res.Transaction.OutMsgCount)
+	if testResultTransaction(t, res).OutMsgCount != 0 {
+		t.Fatalf("unexpected outbound message count: %d", testResultTransaction(t, res).OutMsgCount)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if !desc.Aborted {
 		t.Fatal("no-funds action failure should abort transaction")
@@ -2178,17 +2078,15 @@ func TestTVM14ActionFailureRestoresConsumedMessageBalanceRemaining(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	versionConfig := func(version uint32) transactionConfig {
+	versionConfig := func(version uint32) *PreparedConfig {
 		t.Helper()
 		versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version})
 		if err != nil {
 			t.Fatalf("failed to build global version cell: %v", err)
 		}
-		return transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{
-			Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-				tlb.ConfigParamGlobalVersion: versionCell,
-			}),
-		})
+		return MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			tlb.ConfigParamGlobalVersion: versionCell,
+		}))
 	}
 	apply := func(version uint32) *transactionActionApplyResult {
 		t.Helper()
@@ -2289,26 +2187,26 @@ func TestEmulateTransactionActionBounceRequiresMode16(t *testing.T) {
 				t.Fatalf("failed to build inbound message: %v", err)
 			}
 
-			res, err := NewTVM().EmulateTransaction(shard, inMsg, TransactionEmulationConfig{
+			res, err := testEmulateTransaction(NewTVM(), shard, inMsg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         uint32(tonopsTestTime.Unix()),
 				BlockLT:     transactionTestLogicalTime,
 				LogicalTime: transactionTestLogicalTime,
-				ConfigRoot:  transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+				Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 				Gas:         vmcore.NewGas(vmcore.GasConfig{Max: 1_000_000, Limit: 1_000_000}),
 			})
 			if err != nil {
 				t.Fatalf("emulate transaction failed: %v", err)
 			}
 
-			desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+			desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 			if !ok {
-				t.Fatalf("unexpected description type %T", res.Transaction.Description)
+				t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 			}
 			if desc.BouncePhase != nil != tc.wantBounce {
 				t.Fatalf("unexpected bounce phase: got=%v want=%t", desc.BouncePhase, tc.wantBounce)
 			}
-			if got := res.Transaction.OutMsgCount; got != map[bool]uint16{false: 0, true: 1}[tc.wantBounce] {
+			if got := testResultTransaction(t, res).OutMsgCount; got != map[bool]uint16{false: 0, true: 1}[tc.wantBounce] {
 				t.Fatalf("unexpected outbound count: got=%d", got)
 			}
 		})
@@ -2472,12 +2370,10 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 			Actions:   skippedOnly,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{
-		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-			tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, 13),
-			tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-		}),
-	}), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, 13),
+		tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
+	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply skipped-only state-limit actions failed: %v", err)
 	}
@@ -2513,7 +2409,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply library action failed: %v", err)
 	}
@@ -2549,7 +2445,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   failAfterLib,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfig{}, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply failing action list failed: %v", err)
 	}
@@ -2570,11 +2466,9 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   limitActions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{
-		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-			tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-		}),
-	}), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
+	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply state-limit action failed: %v", err)
 	}
@@ -2597,11 +2491,9 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   sendThenLimit,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{
-		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-			tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-		}),
-	}), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
+	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply send then state-limit action failed: %v", err)
 	}
@@ -2692,7 +2584,7 @@ func TestEmulateTransactionBounceableNoStateGeneratesBouncePhase(t *testing.T) {
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -2706,16 +2598,16 @@ func TestEmulateTransactionBounceableNoStateGeneratesBouncePhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
-	if res.Transaction.EndStatus != tlb.AccountStatusNonExist {
-		t.Fatalf("unexpected end status: %s", res.Transaction.EndStatus)
+	if testResultTransaction(t, res).EndStatus != tlb.AccountStatusNonExist {
+		t.Fatalf("unexpected end status: %s", testResultTransaction(t, res).EndStatus)
 	}
-	if got := res.Transaction.TotalFees.Coins.Nano().Uint64(); got != 50 {
+	if got := testResultTransaction(t, res).TotalFees.Coins.Nano().Uint64(); got != 50 {
 		t.Fatalf("unexpected total fees: got=%d want=50", got)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if !desc.Aborted || desc.ActionPhase != nil || desc.BouncePhase == nil {
 		t.Fatalf("unexpected transaction phases: aborted=%t action=%v bounce=%v", desc.Aborted, desc.ActionPhase, desc.BouncePhase)
@@ -2731,7 +2623,7 @@ func TestEmulateTransactionBounceableNoStateGeneratesBouncePhase(t *testing.T) {
 		t.Fatalf("unexpected bounce fwd fees: got=%d want=50", got)
 	}
 
-	out, err := res.Transaction.IO.Out.ToSlice()
+	out, err := testResultTransaction(t, res).IO.Out.ToSlice()
 	if err != nil {
 		t.Fatalf("failed to read outbound messages: %v", err)
 	}
@@ -2779,7 +2671,7 @@ func TestEmulateTransactionBouncedInboundCanBounceAgain(t *testing.T) {
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -2794,15 +2686,15 @@ func TestEmulateTransactionBouncedInboundCanBounceAgain(t *testing.T) {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	if desc.BouncePhase == nil {
 		t.Fatal("expected bounced inbound message with bounce flag to produce bounce phase")
 	}
-	if res.Transaction.OutMsgCount != 1 {
-		t.Fatalf("out message count = %d, want 1", res.Transaction.OutMsgCount)
+	if testResultTransaction(t, res).OutMsgCount != 1 {
+		t.Fatalf("out message count = %d, want 1", testResultTransaction(t, res).OutMsgCount)
 	}
 }
 
@@ -2842,7 +2734,7 @@ func TestEmulateTransactionNewBounceBodyFormat(t *testing.T) {
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	res, err := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -2857,7 +2749,7 @@ func TestEmulateTransactionNewBounceBodyFormat(t *testing.T) {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	out, err := res.Transaction.IO.Out.ToSlice()
+	out, err := testResultTransaction(t, res).IO.Out.ToSlice()
 	if err != nil {
 		t.Fatalf("failed to read outbound messages: %v", err)
 	}
@@ -2882,9 +2774,9 @@ func TestEmulateTransactionNewBounceBodyFormat(t *testing.T) {
 	if bounced.ExtraCurrencies == nil {
 		t.Fatal("bounce should preserve extra currencies in message value")
 	}
-	desc, ok := res.Transaction.Description.(tlb.TransactionDescriptionOrdinary)
+	desc, ok := testResultTransaction(t, res).Description.(tlb.TransactionDescriptionOrdinary)
 	if !ok {
-		t.Fatalf("unexpected description type %T", res.Transaction.Description)
+		t.Fatalf("unexpected description type %T", testResultTransaction(t, res).Description)
 	}
 	bounceOK, ok := desc.BouncePhase.Phase.(tlb.BouncePhaseOk)
 	if !ok {
@@ -2928,7 +2820,7 @@ func TestEmulateTransactionLegacyBounceClearsExtraFlagsBeforeV12(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create v11 TVM: %v", err)
 	}
-	res, err := machine.EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	res, err := testEmulateTransaction(&machine, shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -2943,7 +2835,7 @@ func TestEmulateTransactionLegacyBounceClearsExtraFlagsBeforeV12(t *testing.T) {
 		t.Fatalf("emulate transaction failed: %v", err)
 	}
 
-	out, err := res.Transaction.IO.Out.ToSlice()
+	out, err := testResultTransaction(t, res).IO.Out.ToSlice()
 	if err != nil {
 		t.Fatalf("failed to read outbound messages: %v", err)
 	}
@@ -2993,11 +2885,9 @@ func TestTransactionBlackholeBurnsInboundGramsBeforeCreditPhase(t *testing.T) {
 			StorageExtra: tlb.StorageExtraNone{},
 		},
 	}
-	cfg := transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{
-		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-			tlb.ConfigParamBurningConfig: burningCell,
-		}),
-	})
+	cfg := MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamBurningConfig: burningCell,
+	}))
 
 	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), cfg, transactionStorageDueLimits{})
 	if err != nil {
@@ -3035,7 +2925,7 @@ func TestTransactionStorageDeletionUsesCreditedExtraCurrencies(t *testing.T) {
 		},
 	}
 
-	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(500), big.NewInt(0), uint32(tonopsTestTime.Unix()), transactionConfig{}, transactionStorageDueLimits{
+	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(500), big.NewInt(0), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), transactionStorageDueLimits{
 		deleteDue: big.NewInt(100),
 	})
 	if err != nil {
@@ -3162,7 +3052,7 @@ func TestTransactionBounceErrorsWhenMessageBalanceCannotBeDebited(t *testing.T) 
 		},
 	}
 
-	_, err := transactionPrepareBouncePhase(msg, big.NewInt(100), nil, msgBalance, big.NewInt(0), big.NewInt(0), uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), 0, transactionConfig{}, nil, nil, nil)
+	_, err := transactionPrepareBouncePhase(msg, big.NewInt(100), nil, msgBalance, big.NewInt(0), big.NewInt(0), uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), 0, emptyPreparedTestConfig(), nil, nil, nil)
 	if err == nil {
 		t.Fatal("bounce phase should fail when account balance cannot cover message extra currencies")
 	}
@@ -3173,11 +3063,9 @@ func TestTransactionSendActionValidatesStateInitLibraries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to build global version config: %v", err)
 	}
-	cfg := transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{
-		Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-			tlb.ConfigParamGlobalVersion: versionCell,
-		}),
-	})
+	cfg := MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion: versionCell,
+	}))
 	invalidLib := cell.NewDict(256)
 	if err = invalidLib.SetIntKey(big.NewInt(1), cell.BeginCell().MustStoreBoolBit(true).EndCell()); err != nil {
 		t.Fatalf("failed to build invalid library dict: %v", err)
@@ -3246,7 +3134,7 @@ func TestEmulateTransactionRejectsExternalInAnycastDestination(t *testing.T) {
 		t.Fatalf("failed to build external message: %v", err)
 	}
 
-	_, err = NewTVM().EmulateTransaction(buildTransactionTestNoneShardAccount(t), msgCell, TransactionEmulationConfig{
+	_, err = testEmulateTransaction(NewTVM(), buildTransactionTestNoneShardAccount(t), msgCell, testTxParams{
 		Address: dst,
 		Now:     uint32(tonopsTestTime.Unix()),
 		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{

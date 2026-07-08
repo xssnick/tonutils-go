@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math/big"
 	"os"
 	"testing"
 
@@ -329,9 +328,8 @@ func assertTickTockVersionParity(t *testing.T, version int, isTock bool, origTag
 		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
 
-	goRes, err := NewTVM().EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: configRoot,
 	})
@@ -364,9 +362,8 @@ func assertTickTockBuildProofLibrariesVersionParity(t *testing.T, version int, i
 	}
 	accountHash := shard.Account.Hash()
 
-	goRes, err := NewTVM().EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: configRoot,
 		BuildProof: true,
@@ -404,8 +401,8 @@ func assertTickTockBuildProofLibrariesVersionParity(t *testing.T, version int, i
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -431,9 +428,8 @@ func assertTickTockBuildProofLibrariesGlobalVersionOverrideParity(t *testing.T, 
 	}
 	accountHash := shard.Account.Hash()
 
-	goRes, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: refConfigRoot,
 		BuildProof: true,
@@ -485,9 +481,8 @@ func assertTickTockBuildProofVersionParity(t *testing.T, version int, isTock boo
 	}
 	accountHash := shard.Account.Hash()
 
-	goRes, err := NewTVM().EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: configRoot,
 		BuildProof: true,
@@ -505,8 +500,8 @@ func assertTickTockBuildProofVersionParity(t *testing.T, version int, isTock boo
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 	if goRes.Proof == nil {
 		t.Fatal("tick/tock execution proof should be available")
@@ -529,9 +524,8 @@ func assertTickTockBuildProofBoundaryVersionParity(t *testing.T, version int, is
 	}
 	accountHash := shard.Account.Hash()
 
-	goRes, err := NewTVM().EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: configRoot,
 		BuildProof: true,
@@ -556,8 +550,8 @@ func assertTickTockBuildProofBoundaryVersionParity(t *testing.T, version int, is
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 	if goRes.Proof == nil {
 		t.Fatal("tick/tock execution proof should be available")
@@ -585,9 +579,8 @@ func assertTickTockBuildProofGlobalVersionOverrideParity(t *testing.T, version, 
 	}
 	accountHash := shard.Account.Hash()
 
-	goRes, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: refConfigRoot,
 		BuildProof: true,
@@ -649,9 +642,8 @@ func assertTickTockFallbackVersionParity(t *testing.T, machineVersion, configVer
 		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
 
-	goRes, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: goConfigRoot,
 	})
@@ -693,8 +685,8 @@ func assertTickTockFallbackVersionParity(t *testing.T, machineVersion, configVer
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -715,9 +707,8 @@ func assertTickTockGlobalVersionOverrideParity(t *testing.T, version, machineVer
 		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
 
-	goRes, err := machine.EmulateTickTockTransaction(shard, isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
 		Now:        now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: refConfigRoot,
 	})

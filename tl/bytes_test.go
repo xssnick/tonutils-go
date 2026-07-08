@@ -55,6 +55,29 @@ func TestTLBytes(t *testing.T) {
 	}
 }
 
+func TestAppendBytesMatchesBuffer(t *testing.T) {
+	for _, data := range [][]byte{
+		nil,
+		{0xFF, 0xAA},
+		{0xFF, 0xAA, 0xCC},
+		bytes.Repeat([]byte{0xFF}, 254),
+		bytes.Repeat([]byte{0xAB}, 1217),
+	} {
+		var buf bytes.Buffer
+		if err := ToBytesToBuffer(&buf, data); err != nil {
+			t.Fatalf("ToBytesToBuffer len=%d: %v", len(data), err)
+		}
+
+		appended, err := AppendBytes(nil, data)
+		if err != nil {
+			t.Fatalf("AppendBytes len=%d: %v", len(data), err)
+		}
+		if !bytes.Equal(appended, buf.Bytes()) {
+			t.Fatalf("AppendBytes len=%d mismatch", len(data))
+		}
+	}
+}
+
 func TestTLFromBytesTerminalPadding(t *testing.T) {
 	loaded, rest, err := FromBytes([]byte{2, 0xFF, 0xAA, 0})
 	if err != nil {

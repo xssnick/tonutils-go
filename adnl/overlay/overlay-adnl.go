@@ -1108,11 +1108,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 	)
 	seqno := uint32(t.Seqno)
 	relayCfg := a.broadcastFECRelayConfig()
-	relayPeers := []BroadcastPeer(nil)
 	sourcePeerID := a.GetID()
-	if relayCfg.enabled {
-		relayPeers = relayCfg.peerSet.Peers()
-	}
 
 	stream.mx.Lock()
 	if stream.flags&BroadcastFlagAnySender == 0 && !bytes.Equal(stream.source, sourceKey.Key) {
@@ -1168,6 +1164,13 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 		FEC:         stream.fec,
 		Date:        date,
 		Signature:   t.Signature,
+	}
+
+	// Fetched only after the duplicate/validity early-outs above: peer sets
+	// may be expensive to build and this handler runs for every short part.
+	relayPeers := []BroadcastPeer(nil)
+	if relayCfg.enabled {
+		relayPeers = relayCfg.peerSet.Peers()
 	}
 
 	stream.mx.Lock()

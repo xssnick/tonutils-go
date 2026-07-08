@@ -11,6 +11,7 @@ import (
 
 type transactionBounceResult struct {
 	outMsg          *cell.Cell
+	outMsgParsed    *tlb.Message
 	phase           *tlb.BouncePhase
 	balance         *big.Int
 	extraCurrencies *cell.Dictionary
@@ -28,7 +29,7 @@ func transactionShouldBounce(msg *tlb.Message, skipReason *tlb.ComputeSkipReason
 	return skipReason != nil || !computeSuccess || actionBounce
 }
 
-func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg transactionConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
+func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg *PreparedConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
 	if msg == nil || msg.MsgType != tlb.MsgTypeInternal {
 		return nil, nil
 	}
@@ -121,6 +122,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	}
 
 	out.outMsg = bounceCell
+	out.outMsgParsed = &tlb.Message{MsgType: tlb.MsgTypeInternal, Msg: preliminary}
 	out.msgFees = collectedFwdFee
 	out.phase = &tlb.BouncePhase{Phase: tlb.BouncePhaseOk{
 		MsgSize: tlb.StorageUsedShort{
@@ -133,7 +135,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	return out, nil
 }
 
-func transactionBuildBounceBody(in *tlb.InternalMessage, cfg transactionConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*cell.Cell, error) {
+func transactionBuildBounceBody(in *tlb.InternalMessage, cfg *PreparedConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*cell.Cell, error) {
 	if in == nil {
 		return cell.BeginCell().EndCell(), nil
 	}
@@ -199,7 +201,7 @@ func transactionBuildBounceBody(in *tlb.InternalMessage, cfg transactionConfig, 
 	return body.EndCell(), nil
 }
 
-func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell, cfg transactionConfig) (transactionUsage, error) {
+func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell, cfg *PreparedConfig) (transactionUsage, error) {
 	usage := transactionUsage{}
 	if in == nil {
 		return usage, nil

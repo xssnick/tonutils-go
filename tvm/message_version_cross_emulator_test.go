@@ -293,11 +293,11 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 	var err error
 	if internal {
 		goRes, err = NewTVM().EmulateInternalMessage(code, origData, body, internalMessageTestAmount, EmulateInternalMessageConfig{
-			Address:    tonopsTestAddr,
-			Now:        now,
-			Balance:    balance,
-			RandSeed:   append([]byte(nil), referenceDefaultWalletSendSeed...),
-			ConfigRoot: configRoot,
+			Address:  tonopsTestAddr,
+			Now:      now,
+			Balance:  balance,
+			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
+			Config:   MustPrepareConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
 				Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -308,11 +308,11 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 			DstAddr: tonopsTestAddr,
 			Body:    body,
 		}, EmulateExternalMessageConfig{
-			Address:    tonopsTestAddr,
-			Now:        now,
-			Balance:    balance,
-			RandSeed:   append([]byte(nil), referenceDefaultWalletSendSeed...),
-			ConfigRoot: configRoot,
+			Address:  tonopsTestAddr,
+			Now:      now,
+			Balance:  balance,
+			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
+			Config:   MustPrepareConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    DefaultExternalMessageGasMax,
 				Credit: DefaultExternalMessageGasCredit,
@@ -365,11 +365,11 @@ func assertDirectMessageFallbackVersionParity(t *testing.T, machineVersion, conf
 	code := makeDirectMessageInMsgParamsCode(t, newData, !internal)
 
 	cfg := MessageEmulationConfig{
-		Address:    tonopsTestAddr,
-		Now:        now,
-		Balance:    balance,
-		RandSeed:   append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot: goConfigRoot,
+		Address:  tonopsTestAddr,
+		Now:      now,
+		Balance:  balance,
+		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
+		Config:   mustPrepareConfigOrNil(goConfigRoot),
 	}
 
 	var goRes *MessageExecutionResult
@@ -434,11 +434,11 @@ func assertDirectMessageGlobalVersionOverrideParity(t *testing.T, version, machi
 	code := makeDirectMessageInMsgParamsCode(t, newData, !internal)
 
 	cfg := MessageEmulationConfig{
-		Address:    tonopsTestAddr,
-		Now:        now,
-		Balance:    balance,
-		RandSeed:   append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot: refConfigRoot,
+		Address:  tonopsTestAddr,
+		Now:      now,
+		Balance:  balance,
+		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
+		Config:   MustPrepareConfig(refConfigRoot),
 	}
 
 	var goRes *MessageExecutionResult
@@ -510,7 +510,7 @@ func assertDirectMessageBuildProofLibrariesVersionParity(t *testing.T, version i
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot:  configRoot,
+		Config:      MustPrepareConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
@@ -607,7 +607,7 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot:  refConfigRoot,
+		Config:      MustPrepareConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
@@ -721,7 +721,7 @@ func assertDirectMessageBuildProofFallbackVersionParity(t *testing.T, machineVer
 		Now:         now,
 		Balance:     new(big.Int).SetUint64(referenceDefaultWalletSendBalance),
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot:  goConfigRoot,
+		Config:      mustPrepareConfigOrNil(goConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
@@ -809,7 +809,7 @@ func assertDirectMessageBuildProofVersionParity(t *testing.T, version int, inter
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot:  configRoot,
+		Config:      MustPrepareConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
@@ -894,7 +894,7 @@ func assertDirectMessageBuildProofGlobalVersionOverrideParity(t *testing.T, vers
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot:  refConfigRoot,
+		Config:      MustPrepareConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
@@ -1052,7 +1052,7 @@ func assertCheckExternalMessageAcceptedVersionParity(t *testing.T, version int, 
 		t.Fatalf("failed to parse account: %v", err)
 	}
 
-	accepted, err := NewTVM().CheckExternalMessageAccepted(shard, &account, msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err := testCheckExternalAccepted(NewTVM(), shard, &account, msgCell, msg, testTxParams{
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
@@ -1115,7 +1115,7 @@ func assertCheckExternalMessageAcceptedFallbackVersionParity(t *testing.T, machi
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 	account := mustParseTransactionTestAccount(t, shard)
 
-	accepted, err := machine.CheckExternalMessageAccepted(shard, account, msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err := testCheckExternalAccepted(&machine, shard, account, msgCell, msg, testTxParams{
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
@@ -1177,7 +1177,7 @@ func assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t *testing.T,
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 	account := mustParseTransactionTestAccount(t, shard)
 
-	accepted, err := machine.CheckExternalMessageAccepted(shard, account, msgCell, msg, CheckExternalMessageAcceptedConfig{
+	accepted, err := testCheckExternalAccepted(&machine, shard, account, msgCell, msg, testTxParams{
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,

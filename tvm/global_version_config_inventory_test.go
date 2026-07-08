@@ -65,8 +65,7 @@ var expectedGlobalVersionConfigCoverageAnchors = map[string]globalVersionConfigC
 
 var expectedGlobalVersionConfigProductionReaders = map[string]int{
 	"cross_emulator_transaction_reference.go:referenceTransactionConfigRootWithGlobalVersion": 1,
-	"external_message.go:messageExecutionGlobalVersion":                                       1,
-	"transaction_config.go:transactionConfigFromBlockchainConfig":                             1,
+	"transaction_config.go:PrepareConfig":                                                     1,
 }
 
 var expectedGlobalVersionConfigCapabilityGates = map[string]int{
@@ -155,9 +154,9 @@ func TestTVMGlobalVersionConfigProductionReaderInventory(t *testing.T) {
 		}
 	}
 
-	fn := globalVersionConfigProductionReaderFunction(t, "external_message.go:messageExecutionGlobalVersion")
+	fn := globalVersionConfigProductionReaderFunction(t, "transaction_config.go:PrepareConfig")
 	if !globalVersionConfigFunctionCalls(fn, "validateGlobalVersion") {
-		t.Fatal("messageExecutionGlobalVersion must validate config/fallback global version before execution")
+		t.Fatal("PrepareConfig must validate the config global version eagerly")
 	}
 }
 

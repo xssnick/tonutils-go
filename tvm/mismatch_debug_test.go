@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"os"
 	"reflect"
 	"strconv"
@@ -71,17 +70,17 @@ func TestEmulateTransactionMismatchRegressionFixtures(t *testing.T) {
 			expectedTx := debugMismatchCell(t, item.FirstTx.ExpectedTxBOCBase64)
 			expectedAccountHash := debugMismatchExpectedAccountHash(t, expectedTx)
 
-			if result == nil || result.TransactionCell == nil || result.ShardAccount == nil {
+			if result == nil || result.TransactionCell == nil || testResultShardAccount(result) == nil {
 				t.Fatal("emulation returned incomplete result")
 			}
 			if !bytes.Equal(result.TransactionCell.Hash(), expectedTx.Hash()) {
 				t.Fatalf("transaction hash mismatch: got %x, want %x", result.TransactionCell.Hash(), expectedTx.Hash())
 			}
-			if !bytes.Equal(result.ShardAccount.Account.Hash(), expectedAccountHash) {
-				t.Fatalf("account root hash mismatch: got %x, want %x", result.ShardAccount.Account.Hash(), expectedAccountHash)
+			if !bytes.Equal(testResultShardAccount(result).Account.Hash(), expectedAccountHash) {
+				t.Fatalf("account root hash mismatch: got %x, want %x", testResultShardAccount(result).Account.Hash(), expectedAccountHash)
 			}
-			if !bytes.Equal(result.ShardAccount.LastTransHash, expectedTx.Hash()) {
-				t.Fatalf("last transaction hash mismatch: got %x, want %x", result.ShardAccount.LastTransHash, expectedTx.Hash())
+			if !bytes.Equal(testResultShardAccount(result).LastTransHash, expectedTx.Hash()) {
+				t.Fatalf("last transaction hash mismatch: got %x, want %x", testResultShardAccount(result).LastTransHash, expectedTx.Hash())
 			}
 		})
 	}
@@ -113,18 +112,18 @@ func BenchmarkTVMReplayMismatchBigAccount(b *testing.B) {
 			if err := machine.SetGlobalVersion(replay.globalVersion); err != nil {
 				b.Fatal(err)
 			}
-			result, err := machine.EmulateTransaction(replay.from, replay.inMsg, replay.config)
+			result, err := testEmulateTransaction(machine, replay.from, replay.inMsg, replay.config)
 			if err != nil {
 				b.Fatal(err)
 			}
-			if result == nil || result.TransactionCell == nil || result.ShardAccount == nil {
+			if result == nil || result.TransactionCell == nil || testResultShardAccount(result) == nil {
 				b.Fatal("emulation returned incomplete result")
 			}
 			if !bytes.Equal(result.TransactionCell.Hash(), replay.txHash) {
 				b.Fatalf("transaction hash mismatch: got %x, want %x", result.TransactionCell.Hash(), replay.txHash)
 			}
-			if !bytes.Equal(result.ShardAccount.Account.Hash(), replay.accountHash) {
-				b.Fatalf("account root hash mismatch: got %x, want %x", result.ShardAccount.Account.Hash(), replay.accountHash)
+			if !bytes.Equal(testResultShardAccount(result).Account.Hash(), replay.accountHash) {
+				b.Fatalf("account root hash mismatch: got %x, want %x", testResultShardAccount(result).Account.Hash(), replay.accountHash)
 			}
 			txs++
 		}
@@ -201,17 +200,17 @@ func TestDebugReplayAllMismatches(t *testing.T) {
 			expectedTx := debugMismatchCell(t, item.FirstTx.ExpectedTxBOCBase64)
 			expectedAccountHash := debugMismatchExpectedAccountHash(t, expectedTx)
 
-			if result == nil || result.TransactionCell == nil || result.ShardAccount == nil {
+			if result == nil || result.TransactionCell == nil || testResultShardAccount(result) == nil {
 				t.Fatal("emulation returned incomplete result")
 			}
 			if !bytes.Equal(result.TransactionCell.Hash(), expectedTx.Hash()) {
 				t.Fatalf("transaction hash mismatch: got %x, want %x", result.TransactionCell.Hash(), expectedTx.Hash())
 			}
-			if !bytes.Equal(result.ShardAccount.Account.Hash(), expectedAccountHash) {
-				t.Fatalf("account root hash mismatch: got %x, want %x", result.ShardAccount.Account.Hash(), expectedAccountHash)
+			if !bytes.Equal(testResultShardAccount(result).Account.Hash(), expectedAccountHash) {
+				t.Fatalf("account root hash mismatch: got %x, want %x", testResultShardAccount(result).Account.Hash(), expectedAccountHash)
 			}
-			if !bytes.Equal(result.ShardAccount.LastTransHash, expectedTx.Hash()) {
-				t.Fatalf("last transaction hash mismatch: got %x, want %x", result.ShardAccount.LastTransHash, expectedTx.Hash())
+			if !bytes.Equal(testResultShardAccount(result).LastTransHash, expectedTx.Hash()) {
+				t.Fatalf("last transaction hash mismatch: got %x, want %x", testResultShardAccount(result).LastTransHash, expectedTx.Hash())
 			}
 		})
 	}
@@ -241,8 +240,8 @@ func debugReplayMismatch(t *testing.T, item debugMismatchAccount) {
 	replayCell := res.TransactionCell
 	t.Logf("replay hash=%x want=%s equal=%v", replayCell.Hash(), tx.ExpectedTxHash, fmt.Sprintf("%x", replayCell.Hash()) == tx.ExpectedTxHash)
 	t.Logf("replay diff: %s", debugFirstCellDiff(debugMismatchCell(t, tx.ExpectedTxBOCBase64), replayCell, "tx", 0))
-	t.Logf("replay desc: %s", debugDescSummary(res.Transaction.Description))
-	t.Logf("replay io: %s", debugIOSummary(res.Transaction.IO.Out))
+	t.Logf("replay desc: %s", debugDescSummary(testResultTransaction(t, res).Description))
+	t.Logf("replay io: %s", debugIOSummary(testResultTransaction(t, res).IO.Out))
 	t.Logf("replay raw io: %s", debugRawIOSummary(replayCell))
 	t.Logf("replay gas=%d action_phase=%s actions=%s", res.GasUsed, debugActionPhase(debugResultActionPhase(res)), debugActionsSummary(res.Actions))
 	if expectedRawIn != nil && !bytes.Equal(inMsg.Hash(), expectedRawIn.Hash()) {
@@ -269,7 +268,7 @@ func debugEmulateMismatchWithInput(t testing.TB, item debugMismatchAccount, inMs
 	if err := machine.SetGlobalVersion(tx.Config.GlobalVersion); err != nil {
 		t.Fatal(err)
 	}
-	res, err := machine.EmulateTransaction(from, inMsg, cfg)
+	res, err := testEmulateTransaction(machine, from, inMsg, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +279,7 @@ type debugPreparedMismatchReplay struct {
 	globalVersion int
 	from          *tlb.ShardAccount
 	inMsg         *cell.Cell
-	config        TransactionEmulationConfig
+	config        testTxParams
 	txHash        []byte
 	accountHash   []byte
 }
@@ -314,7 +313,7 @@ func debugMismatchExpectedAccountHash(tb testing.TB, expectedTx *cell.Cell) []by
 	return append([]byte(nil), tx.StateUpdate.NewHash...)
 }
 
-func debugMismatchEmulationConfig(t testing.TB, tx debugMismatchFirstTx) TransactionEmulationConfig {
+func debugMismatchEmulationConfig(t testing.TB, tx debugMismatchFirstTx) testTxParams {
 	t.Helper()
 
 	randSeed, err := base64.StdEncoding.DecodeString(tx.Config.RandSeedBase64)
@@ -322,29 +321,14 @@ func debugMismatchEmulationConfig(t testing.TB, tx debugMismatchFirstTx) Transac
 		t.Fatal(err)
 	}
 
-	var due any
-	if tx.Config.DuePaymentNano != "" {
-		parsed, ok := new(big.Int).SetString(tx.Config.DuePaymentNano, 10)
-		if !ok {
-			t.Fatalf("bad due payment %q", tx.Config.DuePaymentNano)
-		}
-		due = parsed
-	}
-
-	return TransactionEmulationConfig{
-		Now:                 tx.Config.Now,
-		BlockLT:             tx.Config.BlockLT,
-		LogicalTime:         tx.Config.LogicalTime,
-		RandSeed:            randSeed,
-		ConfigRoot:          debugMismatchCell(t, tx.Config.ConfigRootBOCBase64),
-		PrevBlocks:          fatBlockTuple(t, tx.Config.PrevBlocksStackBOCBase64),
-		UnpackedConfig:      fatBlockTuple(t, tx.Config.UnpackedConfigStackBOCBase64),
-		IncomingValue:       fatBlockTupleFromStack(tx.Config.IncomingValueStackBOCBase64),
-		StorageFees:         tx.Config.StorageFees,
-		DuePayment:          due,
-		PrecompiledGasUsage: fatBlockBigIntFromStack(tx.Config.PrecompiledGasStackBOCBase64),
-		InMsgParams:         fatBlockTupleFromStack(tx.Config.InMsgParamsStackBOCBase64),
-		Libraries:           fatBlockCells(t, tx.Config.LibrariesBOCBase64),
+	return testTxParams{
+		Now:             tx.Config.Now,
+		BlockLT:         tx.Config.BlockLT,
+		LogicalTime:     tx.Config.LogicalTime,
+		AccountRandSeed: randSeed,
+		ConfigRoot:      debugMismatchCell(t, tx.Config.ConfigRootBOCBase64),
+		PrevBlocks:      fatBlockTuple(t, tx.Config.PrevBlocksStackBOCBase64),
+		Libraries:       fatBlockCells(t, tx.Config.LibrariesBOCBase64),
 	}
 }
 
@@ -360,10 +344,14 @@ func debugMismatchShardAccount(t testing.TB, encoded string) *tlb.ShardAccount {
 }
 
 func debugResultActionPhase(res *TransactionExecutionResult) *tlb.ActionPhase {
-	if res == nil || res.Transaction == nil {
+	if res == nil {
 		return nil
 	}
-	switch d := res.Transaction.Description.(type) {
+	tx, err := res.ParseTransaction()
+	if err != nil {
+		return nil
+	}
+	switch d := tx.Description.(type) {
 	case tlb.TransactionDescriptionOrdinary:
 		return d.ActionPhase
 	case tlb.TransactionDescriptionTickTock:

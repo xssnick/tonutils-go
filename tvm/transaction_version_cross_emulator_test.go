@@ -407,7 +407,7 @@ func assertTransactionBasicSuccessVersionParity(t *testing.T, version uint32, or
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -429,14 +429,14 @@ func assertTransactionBasicSuccessVersionParity(t *testing.T, version uint32, or
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, transactionActionPhaseExpectation{success: true, valid: true})
@@ -468,7 +468,7 @@ func assertTransactionC7OptionsVersionParity(t *testing.T, version uint32, rawCa
 		goLibs = []*cell.Cell{opts.libs}
 	}
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -496,8 +496,8 @@ func assertTransactionC7OptionsVersionParity(t *testing.T, version uint32, rawCa
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -562,7 +562,7 @@ func assertTransactionMalformedActionsVersionParity(t *testing.T, version uint32
 	})
 
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -588,8 +588,8 @@ func assertTransactionMalformedActionsVersionParity(t *testing.T, version uint32
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, wantAction)
@@ -642,7 +642,7 @@ func assertTransactionRawReserveActionsVersionParity(t *testing.T, version uint3
 	})
 
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -668,8 +668,8 @@ func assertTransactionRawReserveActionsVersionParity(t *testing.T, version uint3
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -738,7 +738,7 @@ func assertTransactionChangeLibraryActionsVersionParity(t *testing.T, version ui
 	})
 
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -765,12 +765,12 @@ func assertTransactionChangeLibraryActionsVersionParity(t *testing.T, version ui
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -821,7 +821,7 @@ func assertTransactionBuildProofLibrariesVersionParity(t *testing.T, version uin
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -843,11 +843,11 @@ func assertTransactionBuildProofLibrariesVersionParity(t *testing.T, version uin
 	if goRes.ExitCode != 0 {
 		t.Fatalf("unexpected go exit code: got=%d expected=0", goRes.ExitCode)
 	}
-	if goRes.AccountState == nil || goRes.AccountState.StateInit == nil || goRes.AccountState.StateInit.Data == nil {
+	if testResultAccountState(goRes) == nil || testResultAccountState(goRes).StateInit == nil || testResultAccountState(goRes).StateInit.Data == nil {
 		t.Fatalf("go transaction account state has no data")
 	}
-	if !bytes.Equal(goRes.AccountState.StateInit.Data.Hash(), newData.Hash()) {
-		t.Fatalf("go data mismatch after library execution:\ngo=%s\nwant=%s", goRes.AccountState.StateInit.Data.Dump(), newData.Dump())
+	if !bytes.Equal(testResultAccountState(goRes).StateInit.Data.Hash(), newData.Hash()) {
+		t.Fatalf("go data mismatch after library execution:\ngo=%s\nwant=%s", testResultAccountState(goRes).StateInit.Data.Dump(), newData.Dump())
 	}
 	if version >= 9 {
 		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
@@ -865,14 +865,14 @@ func assertTransactionBuildProofLibrariesVersionParity(t *testing.T, version uin
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, transactionActionPhaseExpectation{success: true, valid: true})
@@ -905,7 +905,7 @@ func assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t *testing.
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := machine.EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -927,11 +927,11 @@ func assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t *testing.
 	if goRes.ExitCode != 0 {
 		t.Fatalf("unexpected go exit code: got=%d expected=0", goRes.ExitCode)
 	}
-	if goRes.AccountState == nil || goRes.AccountState.StateInit == nil || goRes.AccountState.StateInit.Data == nil {
+	if testResultAccountState(goRes) == nil || testResultAccountState(goRes).StateInit == nil || testResultAccountState(goRes).StateInit.Data == nil {
 		t.Fatalf("go transaction account state has no data")
 	}
-	if !bytes.Equal(goRes.AccountState.StateInit.Data.Hash(), newData.Hash()) {
-		t.Fatalf("go data mismatch after library execution:\ngo=%s\nwant=%s", goRes.AccountState.StateInit.Data.Dump(), newData.Dump())
+	if !bytes.Equal(testResultAccountState(goRes).StateInit.Data.Hash(), newData.Hash()) {
+		t.Fatalf("go data mismatch after library execution:\ngo=%s\nwant=%s", testResultAccountState(goRes).StateInit.Data.Dump(), newData.Dump())
 	}
 	if version >= 9 {
 		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
@@ -951,7 +951,7 @@ func assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t *testing.
 		t.Fatalf("gas mismatch machine_v=%d effective_v=%d: go=%d reference=%d", machineVersion, version, goRes.GasUsed, refRes.gasUsed)
 	}
 	wantData := []byte{byte(newTag >> 8), byte(newTag)}
-	assertShardAccountDataBytes(t, "go", goRes.ShardAccountCell, wantData)
+	assertShardAccountDataBytes(t, "go", goRes.NextAccount.ShardAccountCell(), wantData)
 	assertShardAccountDataBytes(t, "reference", refRes.shardCell, wantData)
 
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, transactionActionPhaseExpectation{success: true, valid: true})
@@ -978,7 +978,7 @@ func assertTransactionBuildProofBasicSuccessVersionParity(t *testing.T, version 
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1001,14 +1001,14 @@ func assertTransactionBuildProofBasicSuccessVersionParity(t *testing.T, version 
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 	if goRes.Proof == nil {
 		t.Fatal("transaction execution proof should be available")
@@ -1054,7 +1054,7 @@ func assertTransactionBuildProofComputeBoundaryVersionParity(t *testing.T, versi
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1083,12 +1083,12 @@ func assertTransactionBuildProofComputeBoundaryVersionParity(t *testing.T, versi
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 	if goRes.Proof == nil {
 		t.Fatal("transaction execution proof should be available")
@@ -1135,7 +1135,7 @@ func assertTransactionBuildProofComputeGlobalVersionOverrideParity(t *testing.T,
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := machine.EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1214,7 +1214,7 @@ func assertTransactionComputeFallbackVersionParity(t *testing.T, machineVersion,
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := machine.EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1252,12 +1252,12 @@ func assertTransactionComputeFallbackVersionParity(t *testing.T, machineVersion,
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -1298,7 +1298,7 @@ func assertTransactionComputeGlobalVersionOverrideParity(t *testing.T, version, 
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := machine.EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1381,7 +1381,7 @@ func assertTransactionOldVersionActionModeParity(t *testing.T, version uint32) {
 	code := makeTransactionInternalActionsCode(t, actions, newData)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1403,14 +1403,14 @@ func assertTransactionOldVersionActionModeParity(t *testing.T, version uint32) {
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -1475,7 +1475,7 @@ func assertTransactionInvalidSendModeVersionParity(t *testing.T, version uint32,
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1499,12 +1499,12 @@ func assertTransactionInvalidSendModeVersionParity(t *testing.T, version uint32,
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -1566,7 +1566,7 @@ func TestTVMCrossEmulatorTransactionActionFineGlobalVersion(t *testing.T) {
 			code := makeTransactionInternalSendCode(t, outMsg, newData, 0)
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, 11, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -1588,12 +1588,12 @@ func TestTVMCrossEmulatorTransactionActionFineGlobalVersion(t *testing.T) {
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 
 			assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
@@ -1664,7 +1664,7 @@ func assertTransactionActionFineVersionParity(t *testing.T, version uint32, rawR
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, remaining+1, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1696,12 +1696,12 @@ func assertTransactionActionFineVersionParity(t *testing.T, version uint32, rawR
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -2045,7 +2045,7 @@ func TestTVMCrossEmulatorTransactionRandSeedGlobalVersion(t *testing.T) {
 			configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 			shard := buildTransactionTestShardAccount(t, anycastAddr, code, origData, walletSendTestBalance, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     anycastAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -2065,18 +2065,18 @@ func TestTVMCrossEmulatorTransactionRandSeedGlobalVersion(t *testing.T) {
 			if goRes.GasUsed != refRes.gasUsed {
 				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.GasUsed, refRes.gasUsed)
 			}
-			assertShardAccountAnycastAddressVersion(t, "go", goRes.ShardAccountCell, version, anycastAddr.Data(), rewrittenData, 3)
+			assertShardAccountAnycastAddressVersion(t, "go", goRes.NextAccount.ShardAccountCell(), version, anycastAddr.Data(), rewrittenData, 3)
 			assertShardAccountAnycastAddressVersion(t, "reference", refRes.shardCell, version, anycastAddr.Data(), rewrittenData, 3)
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -2138,7 +2138,7 @@ func assertTransactionRandSeedVersionParity(t *testing.T, version uint32, rawDep
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := buildTransactionTestShardAccount(t, anycastAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     anycastAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -2158,27 +2158,27 @@ func assertTransactionRandSeedVersionParity(t *testing.T, version uint32, rawDep
 	if goRes.GasUsed != refRes.gasUsed {
 		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.GasUsed, refRes.gasUsed)
 	}
-	assertShardAccountAnycastAddressVersion(t, "go", goRes.ShardAccountCell, version, anycastAddr.Data(), rewrittenData, depth)
+	assertShardAccountAnycastAddressVersion(t, "go", goRes.NextAccount.ShardAccountCell(), version, anycastAddr.Data(), rewrittenData, depth)
 	assertShardAccountAnycastAddressVersion(t, "reference", refRes.shardCell, version, anycastAddr.Data(), rewrittenData, depth)
 	if version >= uint32(funcsop.RANDSEED().MinGlobalVersion()) {
-		wantSeed, err := transactionEmulationSeed(seed, anycastAddr, version)
+		wantSeed, err := transactionEmulationSeedForTest(seed, anycastAddr, version)
 		if err != nil {
 			t.Fatalf("failed to build expected seed: %v", err)
 		}
 		wantData := transactionBits256(wantSeed.Bytes())
-		assertShardAccountDataBytes(t, "go", goRes.ShardAccountCell, wantData)
+		assertShardAccountDataBytes(t, "go", goRes.NextAccount.ShardAccountCell(), wantData)
 		assertShardAccountDataBytes(t, "reference", refRes.shardCell, wantData)
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -2295,7 +2295,7 @@ func TestTVMCrossEmulatorTransactionInboundExternalValidationGlobalVersion(t *te
 		t.Run("anycast_destination_global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
 			configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
-			goRes, goErr := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+			goRes, goErr := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -2332,14 +2332,14 @@ func TestTVMCrossEmulatorTransactionInboundExternalValidationGlobalVersion(t *te
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -2360,7 +2360,7 @@ func TestTVMCrossEmulatorTransactionInboundExternalValidationGlobalVersion(t *te
 				int32(tlb.ConfigParamSizeLimits): sizeLimits,
 			})
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
-			_, goErr := NewTVM().EmulateTransaction(shard, largeMsgCell, TransactionEmulationConfig{
+			_, goErr := testEmulateTransaction(NewTVM(), shard, largeMsgCell, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -2443,7 +2443,7 @@ func TestTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion(t *t
 					code := makeTransactionInternalSendCode(t, outMsg, newData, tt.mode)
 					shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-					goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+					goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 						Address:     tonopsTestAddr,
 						Now:         now,
 						BlockLT:     transactionTestLogicalTime,
@@ -2465,7 +2465,7 @@ func TestTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion(t *t
 					assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 					assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 					assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-					assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+					assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 				})
 			}
 		})
@@ -2532,7 +2532,7 @@ func assertTransactionOutboundAnycastDestinationVersionParity(t *testing.T, vers
 	code := makeTransactionInternalSendCode(t, outMsg, newData, mode)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -2552,7 +2552,7 @@ func assertTransactionOutboundAnycastDestinationVersionParity(t *testing.T, vers
 	assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 }
 
 func transactionCrossAnycastPrefix(raw uint32, depth uint) []byte {
@@ -2620,7 +2620,7 @@ func TestTVMCrossEmulatorTransactionOutboundVarDestinationGlobalVersion(t *testi
 					})
 					shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-					goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+					goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 						Address:     tonopsTestAddr,
 						Now:         now,
 						BlockLT:     transactionTestLogicalTime,
@@ -2648,12 +2648,12 @@ func TestTVMCrossEmulatorTransactionOutboundVarDestinationGlobalVersion(t *testi
 					}
 					if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 						t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 						t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 					}
-					if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-						t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+					if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+						t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 					}
 				})
 			}
@@ -2739,7 +2739,7 @@ func assertTransactionOutboundVarDestinationVersionParity(t *testing.T, version 
 		Body:        body,
 	})
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -2762,12 +2762,12 @@ func assertTransactionOutboundVarDestinationVersionParity(t *testing.T, version 
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -2813,7 +2813,7 @@ func assertTransactionInboundExternalValidationVersionParity(t *testing.T, versi
 
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
-	goRes, goErr := NewTVM().EmulateTransaction(shard, msgCell, TransactionEmulationConfig{
+	goRes, goErr := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -2850,14 +2850,14 @@ func assertTransactionInboundExternalValidationVersionParity(t *testing.T, versi
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -2896,7 +2896,7 @@ func TestTVMCrossEmulatorTransactionSendMsgCustomFwdFeeGlobalVersion(t *testing.
 			code := makeTransactionInternalActionsCode(t, actions, newData)
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -2918,14 +2918,14 @@ func TestTVMCrossEmulatorTransactionSendMsgCustomFwdFeeGlobalVersion(t *testing.
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -2993,7 +2993,7 @@ func assertTransactionSendMsgCustomFwdFeeVersionParity(t *testing.T, version uin
 	code := makeTransactionInternalActionsCode(t, actions, newData)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -3017,14 +3017,14 @@ func assertTransactionSendMsgCustomFwdFeeVersionParity(t *testing.T, version uin
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -3144,7 +3144,7 @@ func TestTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion(t *testing.T)
 					configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 					shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-					goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+					goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 						Address:     tonopsTestAddr,
 						Now:         now,
 						BlockLT:     transactionTestLogicalTime,
@@ -3169,14 +3169,14 @@ func TestTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion(t *testing.T)
 					}
 					if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 						t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-						t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+						t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 						t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 					}
-					if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-						t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-						t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+					if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+						t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+						t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 					}
 				})
 			}
@@ -3233,7 +3233,7 @@ func assertTransactionSendMsgExtraFlagsVersionParity(t *testing.T, version uint3
 	code := makeTransactionInternalActionsCode(t, actions, newData)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -3256,14 +3256,14 @@ func assertTransactionSendMsgExtraFlagsVersionParity(t *testing.T, version uint3
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -3350,7 +3350,7 @@ func TestTVMCrossEmulatorTransactionInvalidSourceMode2GlobalVersion(t *testing.T
 			configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -3374,12 +3374,12 @@ func TestTVMCrossEmulatorTransactionInvalidSourceMode2GlobalVersion(t *testing.T
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -3434,7 +3434,7 @@ func assertTransactionInvalidSourceDestinationMode2VersionParity(t *testing.T, v
 	code := makeTransactionInternalActionsCode(t, actions, newData)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -3457,14 +3457,14 @@ func assertTransactionInvalidSourceDestinationMode2VersionParity(t *testing.T, v
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -3614,7 +3614,7 @@ func assertTransactionExternalOutActionVersionParity(t *testing.T, version uint3
 	code := makeTransactionInternalSendCode(t, outMsg, newData, mode)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -3635,14 +3635,14 @@ func assertTransactionExternalOutActionVersionParity(t *testing.T, version uint3
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -3710,7 +3710,7 @@ func TestTVMCrossEmulatorTransactionInboundIHRFeeGlobalVersion(t *testing.T) {
 			code := makeTransactionInternalSuccessCode(t, newData)
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -3732,14 +3732,14 @@ func TestTVMCrossEmulatorTransactionInboundIHRFeeGlobalVersion(t *testing.T) {
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -3792,7 +3792,7 @@ func assertTransactionInboundIHRFeeVersionParity(t *testing.T, version uint32, r
 	code := makeTransactionInternalSuccessCode(t, newData)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -3815,14 +3815,14 @@ func assertTransactionInboundIHRFeeVersionParity(t *testing.T, version uint32, r
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -3913,7 +3913,7 @@ func assertTransactionReserveOriginalBalanceVersionParity(t *testing.T, version 
 		DuePayment:   &duePayment,
 	})
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -3935,14 +3935,14 @@ func assertTransactionReserveOriginalBalanceVersionParity(t *testing.T, version 
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.ShardAccountCell), transactionCrossShardAccountDataDump(t, refRes.shardCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go data=%s\nreference data=%s", transactionCrossShardAccountDataDump(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountDataDump(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -3986,7 +3986,7 @@ func TestTVMCrossEmulatorTransactionReserveExtraCurrencyGlobalVersion(t *testing
 			configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 			shard := transactionVersionShardAccountWithExtra(t, tonopsTestAddr, code, origData, walletSendTestBalance, extra, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -4010,12 +4010,12 @@ func TestTVMCrossEmulatorTransactionReserveExtraCurrencyGlobalVersion(t *testing
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -4080,7 +4080,7 @@ func assertTransactionReserveExtraCurrencyVersionParity(t *testing.T, version ui
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := transactionVersionShardAccountWithExtra(t, tonopsTestAddr, code, origData, walletSendTestBalance, extra, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -4103,12 +4103,12 @@ func assertTransactionReserveExtraCurrencyVersionParity(t *testing.T, version ui
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -4161,7 +4161,7 @@ func TestTVMCrossEmulatorTransactionReserveOriginalExtraCurrencyGlobalVersion(t 
 			})
 			shard := transactionVersionShardAccountWithExtra(t, tonopsTestAddr, code, origData, walletSendTestBalance, extra, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -4185,12 +4185,12 @@ func TestTVMCrossEmulatorTransactionReserveOriginalExtraCurrencyGlobalVersion(t 
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -4264,7 +4264,7 @@ func assertTransactionReserveOriginalExtraCurrencyVersionParity(t *testing.T, ve
 	})
 	shard := transactionVersionShardAccountWithExtra(t, tonopsTestAddr, code, origData, walletSendTestBalance, extra, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -4287,12 +4287,12 @@ func assertTransactionReserveOriginalExtraCurrencyVersionParity(t *testing.T, ve
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -4337,7 +4337,7 @@ func TestTVMCrossEmulatorTransactionSendExtraCurrencySizeGlobalVersion(t *testin
 			})
 			shard := transactionVersionShardAccountWithExtra(t, tonopsTestAddr, code, origData, walletSendTestBalance, extra, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -4364,12 +4364,12 @@ func TestTVMCrossEmulatorTransactionSendExtraCurrencySizeGlobalVersion(t *testin
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -4434,7 +4434,7 @@ func assertTransactionSendExtraCurrencySizeVersionParity(t *testing.T, version u
 	})
 	shard := transactionVersionShardAccountWithExtra(t, tonopsTestAddr, code, origData, walletSendTestBalance, extra, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -4460,12 +4460,12 @@ func assertTransactionSendExtraCurrencySizeVersionParity(t *testing.T, version u
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -4540,7 +4540,7 @@ func TestTVMCrossEmulatorTransactionStorageDuePaymentGlobalVersion(t *testing.T)
 				})
 				shard := buildTransactionTestShardAccountWithStorageInfo(t, tonopsTestAddr, code, origData, tc.balance, storageInfo)
 
-				goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+				goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 					Address:     tonopsTestAddr,
 					Now:         now,
 					BlockLT:     transactionTestLogicalTime,
@@ -4557,7 +4557,7 @@ func TestTVMCrossEmulatorTransactionStorageDuePaymentGlobalVersion(t *testing.T)
 					t.Fatalf("reference transaction emulation failed: %v", err)
 				}
 
-				goDue := transactionCrossShardDuePayment(t, goRes.ShardAccountCell)
+				goDue := transactionCrossShardDuePayment(t, goRes.NextAccount.ShardAccountCell())
 				refDue := transactionCrossShardDuePayment(t, refRes.shardCell)
 				if goDue != wantDue || refDue != wantDue {
 					t.Fatalf("due payment mismatch: go=%d reference=%d want=%d", goDue, refDue, wantDue)
@@ -4567,12 +4567,12 @@ func TestTVMCrossEmulatorTransactionStorageDuePaymentGlobalVersion(t *testing.T)
 				}
 				if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 					t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-					t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+					t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 					t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 				}
-				if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-					t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-					t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+				if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+					t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+					t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 				}
 			})
 		}
@@ -4667,7 +4667,7 @@ func assertTransactionStorageDuePaymentVersionParity(t *testing.T, version uint3
 	})
 	shard := buildTransactionTestShardAccountWithStorageInfo(t, tonopsTestAddr, code, origData, balance, storageInfo)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -4683,7 +4683,7 @@ func assertTransactionStorageDuePaymentVersionParity(t *testing.T, version uint3
 		t.Fatalf("reference transaction emulation failed: %v", err)
 	}
 
-	goDue := transactionCrossShardDuePayment(t, goRes.ShardAccountCell)
+	goDue := transactionCrossShardDuePayment(t, goRes.NextAccount.ShardAccountCell())
 	refDue := transactionCrossShardDuePayment(t, refRes.shardCell)
 	if goDue != wantDue || refDue != wantDue {
 		t.Fatalf("due payment mismatch: go=%d reference=%d want=%d", goDue, refDue, wantDue)
@@ -4693,12 +4693,12 @@ func assertTransactionStorageDuePaymentVersionParity(t *testing.T, version uint3
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -4753,7 +4753,7 @@ func TestTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion(t *test
 			})
 			shard := buildTransactionTestShardAccountWithStorageInfo(t, addr, code, origData, 50, storageInfo)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     addr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -4772,7 +4772,7 @@ func TestTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion(t *test
 
 			goTxStatus := transactionCrossEndStatus(t, goRes.TransactionCell)
 			refTxStatus := transactionCrossEndStatus(t, refRes.txCell)
-			goAccountStatus := transactionCrossShardStatus(t, goRes.ShardAccountCell)
+			goAccountStatus := transactionCrossShardStatus(t, goRes.NextAccount.ShardAccountCell())
 			refAccountStatus := transactionCrossShardStatus(t, refRes.shardCell)
 			if goTxStatus != wantTxStatus || refTxStatus != wantTxStatus {
 				t.Fatalf("tx status mismatch: go=%s reference=%s want=%s", goTxStatus, refTxStatus, wantTxStatus)
@@ -4785,12 +4785,12 @@ func TestTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion(t *test
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -4869,7 +4869,7 @@ func assertTransactionFrozenHashEqualsAddressVersionParity(t *testing.T, version
 		LastPaid:     now - 1,
 	})
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -4888,7 +4888,7 @@ func assertTransactionFrozenHashEqualsAddressVersionParity(t *testing.T, version
 
 	goTxStatus := transactionCrossEndStatus(t, goRes.TransactionCell)
 	refTxStatus := transactionCrossEndStatus(t, refRes.txCell)
-	goAccountStatus := transactionCrossShardStatus(t, goRes.ShardAccountCell)
+	goAccountStatus := transactionCrossShardStatus(t, goRes.NextAccount.ShardAccountCell())
 	refAccountStatus := transactionCrossShardStatus(t, refRes.shardCell)
 	if goTxStatus != wantTxStatus || refTxStatus != wantTxStatus {
 		t.Fatalf("tx status mismatch: go=%s reference=%s want=%s mismatch=%t", goTxStatus, refTxStatus, wantTxStatus, mismatch)
@@ -4901,12 +4901,12 @@ func assertTransactionFrozenHashEqualsAddressVersionParity(t *testing.T, version
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -4985,7 +4985,7 @@ func assertTransactionFrozenExternalStateHashVersionParity(t *testing.T, version
 		LastPaid:     now,
 	})
 
-	goRes, goErr := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, goErr := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -5000,7 +5000,7 @@ func assertTransactionFrozenExternalStateHashVersionParity(t *testing.T, version
 		if goErr != nil {
 			t.Fatalf("go rejected external state init with error: %v", goErr)
 		}
-		if goRes == nil || goRes.Accepted || goRes.TransactionCell != nil || goRes.ShardAccountCell != nil {
+		if goRes == nil || goRes.Accepted || goRes.TransactionCell != nil || goRes.NextAccount.ShardAccountCell() != nil {
 			t.Fatalf("go external state init rejection result = %+v, want no accepted transaction", goRes)
 		}
 		if refErr == nil {
@@ -5024,16 +5024,16 @@ func assertTransactionFrozenExternalStateHashVersionParity(t *testing.T, version
 	if goRes.GasUsed != refRes.gasUsed {
 		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.GasUsed, refRes.gasUsed)
 	}
-	assertTransactionFrozenExternalStateHashAccepted(t, "go", goRes.TransactionCell, goRes.ShardAccountCell)
+	assertTransactionFrozenExternalStateHashAccepted(t, "go", goRes.TransactionCell, goRes.NextAccount.ShardAccountCell())
 	assertTransactionFrozenExternalStateHashAccepted(t, "reference", refRes.txCell, refRes.shardCell)
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -5105,7 +5105,7 @@ func TestTVMCrossEmulatorTransactionStateInitFixedPrefixGlobalVersion(t *testing
 				int32(tlb.ConfigParamSizeLimits): transactionVersionSizeLimitsCell(t, 2),
 			})
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     addr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -5122,7 +5122,7 @@ func TestTVMCrossEmulatorTransactionStateInitFixedPrefixGlobalVersion(t *testing
 				t.Fatalf("reference transaction emulation failed: %v", err)
 			}
 
-			goAccountStatus := transactionCrossShardStatus(t, goRes.ShardAccountCell)
+			goAccountStatus := transactionCrossShardStatus(t, goRes.NextAccount.ShardAccountCell())
 			refAccountStatus := transactionCrossShardStatus(t, refRes.shardCell)
 			if goAccountStatus != wantAccount || refAccountStatus != wantAccount {
 				t.Fatalf("account status mismatch: go=%s reference=%s want=%s", goAccountStatus, refAccountStatus, wantAccount)
@@ -5132,12 +5132,12 @@ func TestTVMCrossEmulatorTransactionStateInitFixedPrefixGlobalVersion(t *testing
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -5212,7 +5212,7 @@ func assertTransactionNoStateSkipReasonVersionParity(t *testing.T, version uint3
 	}
 
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -5233,7 +5233,7 @@ func assertTransactionNoStateSkipReasonVersionParity(t *testing.T, version uint3
 	assertOrdinaryTransactionComputeSkipped(t, "reference", refRes.txCell, wantSkip)
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 }
 
 func FuzzTVMCrossEmulatorTransactionStateInitNoCodeGlobalVersion(f *testing.F) {
@@ -5289,7 +5289,7 @@ func assertTransactionStateInitNoCodeVersionParity(t *testing.T, version uint32,
 	}
 
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -5317,15 +5317,15 @@ func assertTransactionStateInitNoCodeVersionParity(t *testing.T, version uint32,
 	}
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -5383,7 +5383,7 @@ func assertTransactionStateInitFixedPrefixVersionParity(t *testing.T, version ui
 		int32(tlb.ConfigParamSizeLimits): transactionVersionSizeLimitsCell(t, 2),
 	})
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -5399,7 +5399,7 @@ func assertTransactionStateInitFixedPrefixVersionParity(t *testing.T, version ui
 		t.Fatalf("reference transaction emulation failed: %v", err)
 	}
 
-	goAccountStatus := transactionCrossShardStatus(t, goRes.ShardAccountCell)
+	goAccountStatus := transactionCrossShardStatus(t, goRes.NextAccount.ShardAccountCell())
 	refAccountStatus := transactionCrossShardStatus(t, refRes.shardCell)
 	if goAccountStatus != wantAccount || refAccountStatus != wantAccount {
 		t.Fatalf("account status mismatch: go=%s reference=%s want=%s", goAccountStatus, refAccountStatus, wantAccount)
@@ -5409,12 +5409,12 @@ func assertTransactionStateInitFixedPrefixVersionParity(t *testing.T, version ui
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -5479,7 +5479,7 @@ func assertTransactionMasterchainPublicLibrariesDeployVersionParity(t *testing.T
 	})
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -5503,12 +5503,12 @@ func assertTransactionMasterchainPublicLibrariesDeployVersionParity(t *testing.T
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -5574,7 +5574,7 @@ func assertTransactionPrecompiledNoGasVersionParity(t *testing.T, version uint32
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -5598,12 +5598,12 @@ func assertTransactionPrecompiledNoGasVersionParity(t *testing.T, version uint32
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -5669,7 +5669,7 @@ func TestTVMCrossEmulatorTransactionStorageDeletionDestroyedGlobalVersion(t *tes
 				DuePayment:   transactionCoinsPtr(big.NewInt(501)),
 			})
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -5696,12 +5696,12 @@ func TestTVMCrossEmulatorTransactionStorageDeletionDestroyedGlobalVersion(t *tes
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -5765,7 +5765,7 @@ func assertTransactionStorageDeletionDestroyedVersionParity(t *testing.T, versio
 		DuePayment:   transactionCoinsPtr(new(big.Int).SetUint64(duePayment)),
 	}, extra)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -5786,7 +5786,7 @@ func assertTransactionStorageDeletionDestroyedVersionParity(t *testing.T, versio
 	if goDestroyed != wantDestroyed || refDestroyed != wantDestroyed {
 		t.Fatalf("destroyed mismatch: go=%t reference=%t want=%t", goDestroyed, refDestroyed, wantDestroyed)
 	}
-	goAccountStatus := transactionCrossShardStatus(t, goRes.ShardAccountCell)
+	goAccountStatus := transactionCrossShardStatus(t, goRes.NextAccount.ShardAccountCell())
 	refAccountStatus := transactionCrossShardStatus(t, refRes.shardCell)
 	if goAccountStatus != wantAccount || refAccountStatus != wantAccount {
 		t.Fatalf("account status mismatch: go=%s reference=%s want=%s", goAccountStatus, refAccountStatus, wantAccount)
@@ -5796,12 +5796,12 @@ func assertTransactionStorageDeletionDestroyedVersionParity(t *testing.T, versio
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -5887,7 +5887,7 @@ func TestTVMCrossEmulatorTransactionStorageExtraDictHashGlobalVersion(t *testing
 				LastPaid:     now,
 			})
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -5904,7 +5904,7 @@ func TestTVMCrossEmulatorTransactionStorageExtraDictHashGlobalVersion(t *testing
 				t.Fatalf("reference transaction emulation failed: %v", err)
 			}
 
-			goHasStorageExtra := transactionStorageExtraIsInfo(t, transactionCrossShardStorageExtra(t, goRes.ShardAccountCell))
+			goHasStorageExtra := transactionStorageExtraIsInfo(t, transactionCrossShardStorageExtra(t, goRes.NextAccount.ShardAccountCell()))
 			refHasStorageExtra := transactionStorageExtraIsInfo(t, transactionCrossShardStorageExtra(t, refRes.shardCell))
 			if goHasStorageExtra != wantStorage || refHasStorageExtra != wantStorage {
 				t.Fatalf("storage extra info mismatch: go=%t reference=%t want=%t", goHasStorageExtra, refHasStorageExtra, wantStorage)
@@ -5914,12 +5914,12 @@ func TestTVMCrossEmulatorTransactionStorageExtraDictHashGlobalVersion(t *testing
 			}
 			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 				t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 			}
-			if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 			}
 		})
 	}
@@ -5991,7 +5991,7 @@ func assertTransactionStorageExtraDictHashVersionParity(t *testing.T, version ui
 		LastPaid:     now,
 	})
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -6008,15 +6008,15 @@ func assertTransactionStorageExtraDictHashVersionParity(t *testing.T, version ui
 		t.Fatalf("reference transaction emulation failed: %v", err)
 	}
 
-	goCells := transactionCrossShardStorageUsedCells(t, goRes.ShardAccountCell)
+	goCells := transactionCrossShardStorageUsedCells(t, goRes.NextAccount.ShardAccountCell())
 	refCells := transactionCrossShardStorageUsedCells(t, refRes.shardCell)
 	if goCells != refCells {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("storage cells mismatch: go=%d reference=%d", goCells, refCells)
 	}
 
 	wantStorage := version >= 11 && !masterchain && goCells >= uint64(threshold)
-	goHasStorageExtra := transactionStorageExtraIsInfo(t, transactionCrossShardStorageExtra(t, goRes.ShardAccountCell))
+	goHasStorageExtra := transactionStorageExtraIsInfo(t, transactionCrossShardStorageExtra(t, goRes.NextAccount.ShardAccountCell()))
 	refHasStorageExtra := transactionStorageExtraIsInfo(t, transactionCrossShardStorageExtra(t, refRes.shardCell))
 	if goHasStorageExtra != wantStorage || refHasStorageExtra != wantStorage {
 		t.Fatalf("storage extra info mismatch: go=%t reference=%t want=%t cells=%d threshold=%d masterchain=%t", goHasStorageExtra, refHasStorageExtra, wantStorage, goCells, threshold, masterchain)
@@ -6026,12 +6026,12 @@ func assertTransactionStorageExtraDictHashVersionParity(t *testing.T, version ui
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 }
 
@@ -6115,7 +6115,7 @@ func transactionStorageExtraCurrencyUsageRun(t *testing.T, version uint32, extra
 	code := makeTransactionInternalSuccessCode(t, newData)
 	shard := transactionVersionShardAccountWithExtra(t, tonopsTestAddr, code, origData, walletSendTestBalance, extra, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -6132,10 +6132,10 @@ func transactionStorageExtraCurrencyUsageRun(t *testing.T, version uint32, extra
 		t.Fatalf("reference transaction emulation failed: %v", err)
 	}
 
-	goUsage := transactionCrossShardStorageUsed(t, goRes.ShardAccountCell)
+	goUsage := transactionCrossShardStorageUsed(t, goRes.NextAccount.ShardAccountCell())
 	refUsage := transactionCrossShardStorageUsed(t, refRes.shardCell)
 	if goUsage != refUsage {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("storage usage mismatch: go=%+v reference=%+v", goUsage, refUsage)
 	}
 	if goRes.GasUsed != refRes.gasUsed {
@@ -6143,12 +6143,12 @@ func transactionStorageExtraCurrencyUsageRun(t *testing.T, version uint32, extra
 	}
 	if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 	return goUsage
 }
@@ -6206,7 +6206,7 @@ func TestTVMCrossEmulatorTransactionSpecialGasFullGlobalVersion(t *testing.T) {
 			code := makeTransactionInternalSuccessCode(t, newData)
 			shard := buildTransactionTestShardAccount(t, specialAddr, code, origData, walletSendTestBalance, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     specialAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -6225,7 +6225,7 @@ func TestTVMCrossEmulatorTransactionSpecialGasFullGlobalVersion(t *testing.T) {
 
 			assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 			assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-			assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+			assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 			assertOrdinaryTransactionGasLimit(t, "go", goRes.TransactionCell, wantGasLimit)
 			assertOrdinaryTransactionGasLimit(t, "reference", refRes.txCell, wantGasLimit)
 		})
@@ -6308,7 +6308,7 @@ func assertTransactionSpecialGasFullVersionParity(t *testing.T, version uint32, 
 	code := makeTransactionInternalSuccessCode(t, newData)
 	shard := buildTransactionTestShardAccount(t, specialAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     specialAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -6327,7 +6327,7 @@ func assertTransactionSpecialGasFullVersionParity(t *testing.T, version uint32, 
 
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 	if _, ok := mustTransactionComputePhase(t, goRes.TransactionCell).Phase.(tlb.ComputePhaseVM); ok {
 		assertOrdinaryTransactionGasLimit(t, "go", goRes.TransactionCell, wantGasLimit)
 		assertOrdinaryTransactionGasLimit(t, "reference", refRes.txCell, wantGasLimit)
@@ -6405,7 +6405,7 @@ func TestTVMCrossEmulatorTransactionHistoricalGasLimitOverrideGlobalVersion(t *t
 					code := makeTransactionInternalSuccessCode(t, newData)
 					shard := buildTransactionTestShardAccount(t, overrideAddr, code, origData, 10_000_000_000_000, tc.now)
 
-					goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+					goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 						Address:     overrideAddr,
 						Now:         tc.now,
 						BlockLT:     transactionTestLogicalTime,
@@ -6425,7 +6425,7 @@ func TestTVMCrossEmulatorTransactionHistoricalGasLimitOverrideGlobalVersion(t *t
 					wantGasLimit := tc.want(version)
 					assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 					assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-					assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+					assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 					assertOrdinaryTransactionGasLimit(t, "go", goRes.TransactionCell, wantGasLimit)
 					assertOrdinaryTransactionGasLimit(t, "reference", refRes.txCell, wantGasLimit)
 				})
@@ -6497,7 +6497,7 @@ func assertTransactionHistoricalGasLimitOverrideVersionParity(t *testing.T, vers
 	code := makeTransactionInternalSuccessCode(t, newData)
 	shard := buildTransactionTestShardAccount(t, addr, code, origData, 10_000_000_000_000, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -6515,7 +6515,7 @@ func assertTransactionHistoricalGasLimitOverrideVersionParity(t *testing.T, vers
 
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 	assertOrdinaryTransactionGasLimit(t, "go", goRes.TransactionCell, wantGasLimit)
 	assertOrdinaryTransactionGasLimit(t, "reference", refRes.txCell, wantGasLimit)
 }
@@ -6602,7 +6602,7 @@ func assertTransactionMasterchainStateLimitVersionParity(t *testing.T, version u
 	})
 	shard := buildTransactionTestShardAccount(t, masterAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     masterAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -6623,7 +6623,7 @@ func assertTransactionMasterchainStateLimitVersionParity(t *testing.T, version u
 	assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 }
 
 func transactionMasterchainLimitSafeAddrTag(raw uint8) byte {
@@ -6711,7 +6711,7 @@ func assertTransactionMasterchainPublicLibraryLimitVersionParity(t *testing.T, v
 	})
 	shard := buildTransactionTestShardAccount(t, addr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     addr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -6732,7 +6732,7 @@ func assertTransactionMasterchainPublicLibraryLimitVersionParity(t *testing.T, v
 	assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 }
 
 func TestTVMCrossEmulatorTransactionFailedActionMessageBalanceGlobalVersion(t *testing.T) {
@@ -6781,7 +6781,7 @@ func TestTVMCrossEmulatorTransactionFailedActionMessageBalanceGlobalVersion(t *t
 			configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-			goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 				Address:     tonopsTestAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -6808,7 +6808,7 @@ func TestTVMCrossEmulatorTransactionFailedActionMessageBalanceGlobalVersion(t *t
 			assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, wantAction)
 			assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 			assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-			assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+			assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 			assertOrdinaryTransactionBouncePhase(t, "reference", refRes.txCell, wantBounceKind, wantOutCount)
 		})
 	}
@@ -6880,7 +6880,7 @@ func assertTransactionFailedActionMessageBalanceVersionParity(t *testing.T, vers
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -6907,7 +6907,7 @@ func assertTransactionFailedActionMessageBalanceVersionParity(t *testing.T, vers
 	assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, wantAction)
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 	assertOrdinaryTransactionBouncePhase(t, "reference", refRes.txCell, wantBounceKind, wantOutCount)
 }
 
@@ -6978,7 +6978,7 @@ func TestTVMCrossEmulatorTransactionBounceFormatGlobalVersion(t *testing.T) {
 						Body:            body,
 					})
 
-					goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+					goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 						Address:     tonopsTestAddr,
 						Now:         now,
 						BlockLT:     transactionTestLogicalTime,
@@ -7001,9 +7001,9 @@ func TestTVMCrossEmulatorTransactionBounceFormatGlobalVersion(t *testing.T) {
 						t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
 						t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 					}
-					if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-						t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+					if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+						t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+						t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 					}
 
 					goDetails := transactionCrossBounceDetailsForTx(t, "go", goRes.TransactionCell)
@@ -7082,7 +7082,7 @@ func assertTransactionBounceFormatVersionParity(t *testing.T, version uint32, ra
 		capabilities = 4
 	}
 	configRoot := referenceTransactionConfigRootWithGlobalVersionAndCapabilities(t, baseConfigRoot, version, capabilities)
-	goRes, err := NewTVM().EmulateTransaction(shard, msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -7105,9 +7105,9 @@ func assertTransactionBounceFormatVersionParity(t *testing.T, version uint32, ra
 		t.Logf("go summary=%s\nreference summary=%s", transactionCrossTxSummary(t, goRes.TransactionCell), transactionCrossTxSummary(t, refRes.txCell))
 		t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
 	}
-	if !bytes.Equal(goRes.ShardAccountCell.Hash(), refRes.shardCell.Hash()) {
-		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.ShardAccountCell), transactionCrossShardAccountSummary(t, refRes.shardCell))
-		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.ShardAccountCell.Dump(), refRes.shardCell.Dump())
+	if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+		t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+		t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
 	}
 
 	wantRefs := 0

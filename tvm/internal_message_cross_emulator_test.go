@@ -279,11 +279,11 @@ func assertInternalMessageVersionParity(t *testing.T, version int, rawProgram ui
 
 	balance := new(big.Int).SetUint64(referenceDefaultWalletSendBalance)
 	goRes, err := NewTVM().EmulateInternalMessage(code, origData, body, internalMessageTestAmount, EmulateInternalMessageConfig{
-		Address:    tonopsTestAddr,
-		Now:        now,
-		Balance:    balance,
-		RandSeed:   append([]byte(nil), referenceDefaultWalletSendSeed...),
-		ConfigRoot: configRoot,
+		Address:  tonopsTestAddr,
+		Now:      now,
+		Balance:  balance,
+		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
+		Config:   MustPrepareConfig(configRoot),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,

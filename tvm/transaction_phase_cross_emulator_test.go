@@ -433,7 +433,7 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseParity(t *testing.T) {
 				testAddr = tt.addr
 			}
 
-			goRes, err := NewTVM().EmulateTransaction(tt.shard, tt.msg, TransactionEmulationConfig{
+			goRes, err := testEmulateTransaction(NewTVM(), tt.shard, tt.msg, testTxParams{
 				Address:     testAddr,
 				Now:         now,
 				BlockLT:     transactionTestLogicalTime,
@@ -444,7 +444,7 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("go transaction emulation failed: %v", err)
 			}
-			if goRes.TransactionCell == nil || goRes.ShardAccountCell == nil {
+			if goRes.TransactionCell == nil || goRes.NextAccount.ShardAccountCell() == nil {
 				t.Fatal("go transaction emulation did not produce cells")
 			}
 
@@ -455,7 +455,7 @@ func TestTVMCrossEmulatorTransactionNonComputePhaseParity(t *testing.T) {
 
 			assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 			assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-			assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+			assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 		})
 	}
 }
@@ -610,7 +610,7 @@ func runTransactionNonComputePhaseExternalVersionCase(t *testing.T, fixture tran
 	}
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, tt.code, fixture.origData, walletSendTestBalance, fixture.now)
 
-	goRes, err := machine.EmulateTransaction(shard, fixture.msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(&machine, shard, fixture.msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         fixture.now,
 		BlockLT:     transactionTestLogicalTime,
@@ -629,7 +629,7 @@ func runTransactionNonComputePhaseExternalVersionCase(t *testing.T, fixture tran
 
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 	if tt.wantAction != nil {
 		assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, *tt.wantAction)
 		assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, *tt.wantAction)
@@ -785,9 +785,8 @@ func runTransactionNonComputePhaseTickTockVersionCase(t *testing.T, fixture tran
 	if err != nil {
 		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
-	goRes, err := machine.EmulateTickTockTransaction(shard, tt.isTock, TransactionEmulationConfig{
+	goRes, err := testEmulateTickTockTransaction(&machine, shard, tt.isTock, testTxParams{
 		Now:        fixture.now,
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: configRoot,
 	})
@@ -802,7 +801,7 @@ func runTransactionNonComputePhaseTickTockVersionCase(t *testing.T, fixture tran
 
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 }
 
 func assertShardAccountNonComputeParity(t *testing.T, goCell, refCell *cell.Cell) {
@@ -1159,7 +1158,7 @@ func runTransactionNonComputePhaseVersionCase(t *testing.T, fixture transactionN
 		t.Fatalf("failed to create v%d TVM: %v", version, err)
 	}
 
-	goRes, err := machine.EmulateTransaction(tt.shard, tt.msg, TransactionEmulationConfig{
+	goRes, err := testEmulateTransaction(&machine, tt.shard, tt.msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         fixture.now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1178,5 +1177,5 @@ func runTransactionNonComputePhaseVersionCase(t *testing.T, fixture transactionN
 
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
-	assertShardAccountNonComputeParity(t, goRes.ShardAccountCell, refRes.shardCell)
+	assertShardAccountNonComputeParity(t, goRes.NextAccount.ShardAccountCell(), refRes.shardCell)
 }

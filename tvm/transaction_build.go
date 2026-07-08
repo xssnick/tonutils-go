@@ -21,7 +21,7 @@ type transactionBuildParams struct {
 	origStatus  tlb.AccountStatus
 	endStatus   tlb.AccountStatus
 	inMsg       *cell.Cell
-	outMsgs     []*cell.Cell
+	outMsgs     []OutMessage
 	totalFees   *big.Int
 	oldHash     []byte
 	newHash     []byte
@@ -52,9 +52,9 @@ func buildTransactionCell(params transactionBuildParams) (*cell.Cell, error) {
 	}
 
 	outDict := cell.NewDict(15)
-	for i, msgCell := range params.outMsgs {
+	for i, outMsg := range params.outMsgs {
 		key := cell.BeginCell().MustStoreUInt(uint64(i), 15).EndCell()
-		value := cell.BeginCell().MustStoreRef(msgCell)
+		value := cell.BeginCell().MustStoreRef(outMsg.Cell)
 		if err := outDict.SetBuilder(key, value); err != nil {
 			return nil, fmt.Errorf("failed to store outbound message %d: %w", i, err)
 		}
@@ -91,28 +91,22 @@ func buildTransactionCell(params transactionBuildParams) (*cell.Cell, error) {
 		EndCell(), nil
 }
 
-func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell, accountCell *cell.Cell, accountState *tlb.AccountState, accountStorageStat *cell.Cell, startLT uint64) error {
-	var tx tlb.Transaction
-	if err := tlb.Parse(&tx, txCell); err != nil {
-		return fmt.Errorf("failed to decode built transaction: %w", err)
-	}
-	txHash := txCell.Hash()
-	tx.Hash = txHash
-
+func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cell.Cell, prev *PreparedAccount, next *builtTransactionAccount, outMessages []OutMessage, startLT, endLT uint64) error {
 	nextShard := &tlb.ShardAccount{
-		Account:       accountCell,
-		LastTransHash: append([]byte(nil), txHash...),
+		Account:       next.cell,
+		LastTransHash: append([]byte(nil), txCell.Hash()...),
 		LastTransLT:   startLT,
 	}
-	nextShardCell := buildTransactionShardAccountCell(accountCell, txHash, startLT)
+	nextAccount, err := prepareAccountFromState(nextShard, next.state, prev.Address(), next.storageCell)
+	if err != nil {
+		return fmt.Errorf("failed to prepare next account state: %w", err)
+	}
 
-	out.Transaction = &tx
 	out.TransactionCell = txCell
-	out.AccountState = accountState
-	out.AccountCell = accountCell
-	out.ShardAccount = nextShard
-	out.ShardAccountCell = nextShardCell
-	out.AccountStorageStat = accountStorageStat
+	out.NextAccount = nextAccount
+	out.OutMessages = outMessages
+	out.EndLT = endLT
+	out.AccountStorageStat = next.storageStat
 	return nil
 }
 

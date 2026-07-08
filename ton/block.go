@@ -921,6 +921,12 @@ func (c *APIClient) GetBlockProof(ctx context.Context, known, target *BlockIDExt
 }
 
 func GetParentBlocks(h *tlb.BlockHeader) ([]*BlockIDExt, error) {
+	if h.PrevRef.Pruned {
+		// the prev references were pruned away in the Merkle proof this header
+		// was parsed from, there is no parent data to return
+		return nil, fmt.Errorf("prev block references are pruned in this block header proof")
+	}
+
 	var parents []*BlockIDExt
 	workchain, shard := tlb.ConvertShardIdentToShard(h.Shard)
 

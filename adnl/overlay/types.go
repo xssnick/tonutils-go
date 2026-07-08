@@ -84,7 +84,7 @@ func (c Certificate) Check(issuedToId []byte, overlayId []byte, dataSize uint32,
 		return CertCheckResultForbidden, fmt.Errorf("unsupported issuer key format")
 	}
 
-	if !ed25519.Verify(issuer.Key, toSign, c.Signature) {
+	if !verifyCertSignatureCached(issuer.Key, toSign, c.Signature) {
 		return CertCheckResultForbidden, fmt.Errorf("incorrect cert signature")
 	}
 	return CertCheckResultTrusted, nil
@@ -140,7 +140,7 @@ func (c CertificateV2) Check(issuedToId []byte, overlayId []byte, dataSize uint3
 		return CertCheckResultForbidden, fmt.Errorf("unsupported issuer key format")
 	}
 
-	if !ed25519.Verify(issuer.Key, toSign, c.Signature) {
+	if !verifyCertSignatureCached(issuer.Key, toSign, c.Signature) {
 		return CertCheckResultForbidden, fmt.Errorf("incorrect cert signature")
 	}
 	if (c.Flags & _CertFlagTrusted) == 0 {

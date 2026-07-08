@@ -187,6 +187,16 @@ type GlobalVersion struct {
 type BlkPrevInfo struct {
 	Prev1 ExtBlkRef
 	Prev2 *ExtBlkRef
+
+	// Pruned reports that the prev-block references were pruned away in the
+	// Merkle proof this header was parsed from, so Prev1/Prev2 carry NO data.
+	// Block proofs may legally prune the prev cells (C++ never parses pruned
+	// prev refs: block::unpack_block_prev_blk_ext fails with "cannot unpack
+	// previous block reference..." when they are unreadable,
+	// ton/crypto/block/block.cpp:1912-1925, and proof checks like
+	// check_block_header simply never read them). Callers that need parent
+	// block ids MUST check this flag before using Prev1/Prev2.
+	Pruned bool
 }
 
 func (h BlockHeader) ToCell() (*cell.Cell, error) {
@@ -301,8 +311,13 @@ func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) 
 	var res BlkPrevInfo
 
 	if loader.IsSpecial() {
-		// TODO: rewrite BlockHeader to pure tlb loader
-		// if it is a proof we skip load
+		// The prev cell was pruned away in a Merkle proof: the references are
+		// unavailable, which is legal for proofs (C++ proof checks never read
+		// them, and non-proof paths fail explicitly instead:
+		// block::unpack_block_prev_blk_ext, ton/crypto/block/block.cpp:1912-1925).
+		// Instead of silently returning zeroed refs, mark the result so callers
+		// cannot mistake it for real data.
+		res.Pruned = true
 		return &res, nil
 	}
 
@@ -316,6 +331,8 @@ func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) 
 		return &res, nil
 	}
 
+	// prev_blks_info$_ prev1:^ExtBlkRef prev2:^ExtBlkRef = BlkPrevInfo 1;
+	// the two ExtBlkRef refs may themselves be pruned in a proof.
 	var blkRef1, blkRef2 ExtBlkRef
 	prev1, err := loader.LoadRef()
 	if err != nil {
@@ -325,6 +342,12 @@ func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) 
 	if err != nil {
 		return nil, err
 	}
+
+	if prev1.IsSpecial() || prev2.IsSpecial() {
+		res.Pruned = true
+		return &res, nil
+	}
+
 	err = LoadFromCell(&blkRef1, prev1)
 	if err != nil {
 		return nil, err
@@ -340,6 +363,9 @@ func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) 
 }
 
 func storeBlkPrevInfo(info *BlkPrevInfo, b *cell.Builder, afterMerge bool) error {
+	if info.Pruned {
+		return fmt.Errorf("cannot serialize pruned prev block info: the original references were pruned away in a proof")
+	}
 	if !afterMerge {
 		c, err := ToCell(info.Prev1)
 		if err != nil {

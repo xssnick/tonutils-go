@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestTransactionCeilShiftRight(t *testing.T) {
@@ -66,7 +67,7 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 	if got := transactionGasBoughtFor(nil, big.NewInt(100)); got != 0 {
 		t.Fatalf("nil gas prices bought = %d, want 0", got)
 	}
-	if got := transactionGasBoughtForAccount(transactionConfig{}, nil, big.NewInt(100), tonopsTestAddr, 0); got != 0 {
+	if got := transactionGasBoughtForAccount(emptyPreparedTestConfig(), nil, big.NewInt(100), tonopsTestAddr, 0); got != 0 {
 		t.Fatalf("nil account gas prices bought = %d, want 0", got)
 	}
 	if got := transactionGasBoughtForLimit(prices, nil, prices.GasLimit); got != 0 {
@@ -91,12 +92,12 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 		t.Fatalf("flat max gas threshold = %s, want %d", got, prices.FlatGasPrice)
 	}
 
-	fallback := transactionMessageGas(TransactionEmulationConfig{}, transactionConfig{}, tonopsTestAddr, big.NewInt(0), nil, tlb.MsgTypeInternal, false)
+	fallback := transactionMessageGas(vm.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), nil, tlb.MsgTypeInternal, false)
 	if fallback.Limit != 0 || fallback.Remaining != 0 {
 		t.Fatalf("nil internal message balance gas = %+v, want zero limit fallback", fallback)
 	}
 	hugeBalance := new(big.Int).Lsh(big.NewInt(1), 70)
-	fallback = transactionMessageGas(TransactionEmulationConfig{}, transactionConfig{}, tonopsTestAddr, big.NewInt(0), hugeBalance, tlb.MsgTypeInternal, false)
+	fallback = transactionMessageGas(vm.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), hugeBalance, tlb.MsgTypeInternal, false)
 	if fallback.Limit != 0 || fallback.Remaining != 0 {
 		t.Fatalf("oversized internal message balance gas = %+v, want zero limit fallback", fallback)
 	}
@@ -104,40 +105,37 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGasPricesBasechain: transactionFeesGasPricesCell(t, *prices),
 	})
-	gas := transactionMessageGas(TransactionEmulationConfig{}, cfg, tonopsTestAddr, big.NewInt(1000), big.NewInt(1000), tlb.MsgTypeExternalIn, true)
+	gas := transactionMessageGas(vm.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(1000), big.NewInt(1000), tlb.MsgTypeExternalIn, true)
 	if gas.Credit != transactionGasInt(prices.SpecialGasLimit) || gas.Limit != transactionGasInt(prices.SpecialGasLimit) {
 		t.Fatalf("special external gas = %+v, want credit/limit clamped to special limit", gas)
 	}
 }
 
 func TestTransactionGlobalVersionFallbackContracts(t *testing.T) {
-	if _, err := newTransactionConfig(nil); !errors.Is(err, errConfigRootRequired) {
-		t.Fatalf("new transaction config without root error = %v, want %v", err, errConfigRootRequired)
+	if _, err := PrepareConfig(nil); !errors.Is(err, errConfigRootRequired) {
+		t.Fatalf("prepare config without root error = %v, want %v", err, errConfigRootRequired)
 	}
 
-	noRoot := transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{})
-	if noRoot.hasGlobalVersion {
-		t.Fatal("no-root transaction config should not expose global version")
+	if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+		t.Fatal("prepare config without global version param should fail")
 	}
-	if !errors.Is(noRoot.globalVersionErr, errConfigRootRequired) {
-		t.Fatalf("no-root transaction config global version error = %v, want %v", noRoot.globalVersionErr, errConfigRootRequired)
+	if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 1).EndCell(),
+	})); err == nil {
+		t.Fatal("prepare config with malformed global version should fail")
 	}
 
-	for _, cfg := range []transactionConfig{
-		{},
-		transactionConfigFromBlockchainConfig(tlb.BlockchainConfig{Root: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-			tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 1).EndCell(),
-		})}),
-	} {
-		if got := cfg.globalVersion(); got != 0 {
-			t.Fatalf("transaction global version fallback = %d, want legacy v0", got)
-		}
-		if cfg.hasCapability(1) {
-			t.Fatal("missing global version should not expose capabilities")
-		}
-		if cfg.specialGasFull() {
-			t.Fatal("missing global version should not enable v5 special-gas-full")
-		}
+	// The zero-value prepared config used by unit tests keeps the legacy v0
+	// contract for helpers operating below the config layer.
+	cfg := emptyPreparedTestConfig()
+	if got := cfg.globalVersion(); got != 0 {
+		t.Fatalf("zero config global version = %d, want legacy v0", got)
+	}
+	if cfg.hasCapability(1) {
+		t.Fatal("zero config should not expose capabilities")
+	}
+	if cfg.specialGasFull() {
+		t.Fatal("zero config should not enable v5 special-gas-full")
 	}
 }
 
@@ -173,7 +171,7 @@ func TestTransactionMessageTailAndActionUsageEdges(t *testing.T) {
 	if usage != (transactionUsage{}) {
 		t.Fatalf("nil tail usage = %+v, want zero", usage)
 	}
-	usage, err = transactionOutboundInternalMessageActionUsage(transactionConfig{}, &tlb.InternalMessage{}, nil, transactionOutboundLayout{})
+	usage, err = transactionOutboundInternalMessageActionUsage(emptyPreparedTestConfig(), &tlb.InternalMessage{}, nil, transactionOutboundLayout{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +237,7 @@ func TestTransactionActionFineAndPublicLibrariesEdges(t *testing.T) {
 	}
 
 	fine, maxCells, limited := transactionComputeSendActionFineForUsage(
-		transactionConfig{},
+		emptyPreparedTestConfig(),
 		address.NewAddressNone(),
 		tonopsTestAddr,
 		transactionUsage{cells: 5},
@@ -250,7 +248,7 @@ func TestTransactionActionFineAndPublicLibrariesEdges(t *testing.T) {
 		nil,
 		0x40,
 	)
-	if fine.Sign() != 0 || maxCells != transactionGetSizeLimits(transactionConfig{}).maxMsgCells || limited {
+	if fine.Sign() != 0 || maxCells != transactionGetSizeLimits(emptyPreparedTestConfig()).maxMsgCells || limited {
 		t.Fatalf("send fine without prices = %s/%d/%t, want zero/default/false", fine, maxCells, limited)
 	}
 

@@ -72,7 +72,7 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		}
 
 		fromRoot := messageUnpackedConfig(MessageEmulationConfig{
-			ConfigRoot: messageUnpackedConfigRoot(t),
+			Config: MustPrepareConfig(messageUnpackedConfigRoot(t)),
 		}, 150).(tuple.Tuple)
 		if fromRoot.Len() != 7 {
 			t.Fatalf("unexpected root unpacked config len: %d", fromRoot.Len())
@@ -212,6 +212,7 @@ func messageUnpackedConfigRoot(t *testing.T) *cell.Cell {
 	}
 
 	return mustConfigDictCell(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion:               mustGlobalVersionCell(t, 13),
 		tlb.ConfigParamStoragePrices:               storageDict.AsCell(),
 		tlb.ConfigParamGlobalID:                    cell.BeginCell().MustStoreUInt(0x55667788, 32).EndCell(),
 		tlb.ConfigParamGasPricesMasterchain:        makeGasPricesSlice(100, 77, 200, 1000, 1200, 50, 2000, 3000, 4000, true).MustToCell(),
@@ -283,7 +284,7 @@ func TestBuildMessageEmulationC7CopiesGlobals(t *testing.T) {
 		Now:                 12345,
 		BlockLT:             77,
 		LogicalTime:         88,
-		ConfigRoot:          cell.BeginCell().MustStoreUInt(1, 1).EndCell(),
+		Config:              testSyntheticConfig(cell.BeginCell().MustStoreUInt(1, 1).EndCell()),
 		IncomingValue:       tuple.NewTupleValue(big.NewInt(9), nil),
 		StorageFees:         11,
 		PrevBlocks:          "prev",
@@ -370,7 +371,7 @@ func TestBuildMessageEmulationC7ClonesMutableConfigValues(t *testing.T) {
 	unpackedSlice := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
 	prevSlice := cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell().MustBeginParse()
 	cfg := MessageEmulationConfig{
-		ConfigRoot:     cell.BeginCell().MustStoreUInt(1, 1).EndCell(),
+		Config:         testSyntheticConfig(cell.BeginCell().MustStoreUInt(1, 1).EndCell()),
 		PrevBlocks:     tuple.NewTupleValue(prevSlice),
 		UnpackedConfig: tuple.NewTupleValue(unpackedSlice),
 	}
@@ -574,7 +575,7 @@ func FuzzBuildMessageEmulationC7VersionFieldBoundaries(f *testing.F) {
 			BlockLT:             base + 2,
 			LogicalTime:         base + 3,
 			RandSeed:            []byte{byte(base), byte(base >> 8), byte(base >> 16)},
-			ConfigRoot:          cell.BeginCell().MustStoreUInt(uint64(base)&1, 1).EndCell(),
+			Config:              testSyntheticConfig(cell.BeginCell().MustStoreUInt(uint64(base)&1, 1).EndCell()),
 			IncomingValue:       tuple.NewTupleValue(incomingGrams, nil),
 			StorageFees:         base + 4,
 			PrevBlocks:          tuple.NewTupleValue(prevBlocksValue),
@@ -689,6 +690,9 @@ func TestBuildMessageEmulationC7RejectsReservedGlobalIndex(t *testing.T) {
 
 func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.T) {
 	if _, err := messageExecutionGlobalVersion(MessageEmulationConfig{}); !errors.Is(err, errConfigRootRequired) {
+		t.Fatalf("missing config error = %v, want %v", err, errConfigRootRequired)
+	}
+	if _, err := PrepareConfig(nil); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("missing config root error = %v, want %v", err, errConfigRootRequired)
 	}
 
@@ -697,9 +701,9 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 		t.Fatalf("build global version cell: %v", err)
 	}
 	got, err := messageExecutionGlobalVersion(MessageEmulationConfig{
-		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		Config: MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: versionCell,
-		}),
+		})),
 	})
 	if err != nil {
 		t.Fatalf("config global version failed: %v", err)
@@ -709,7 +713,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	}
 
 	got, err = messageExecutionGlobalVersion(MessageEmulationConfig{
-		ConfigRoot: messageExecutionGlobalVersionConfigRoot(t, 4),
+		Config: MustPrepareConfig(messageExecutionGlobalVersionConfigRoot(t, 4)),
 	})
 	if err != nil {
 		t.Fatalf("config global version failed: %v", err)
@@ -722,18 +726,20 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	if err != nil {
 		t.Fatalf("build unsupported global version cell: %v", err)
 	}
-	if _, err = messageExecutionGlobalVersion(MessageEmulationConfig{
-		ConfigRoot: buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
-			tlb.ConfigParamGlobalVersion: unsupportedVersionCell,
-		}),
-	}); err == nil {
+	if _, err = PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion: unsupportedVersionCell,
+	})); err == nil {
 		t.Fatal("unsupported config global version should fail")
+	}
+
+	if _, err = PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+		t.Fatal("absent config global version should fail")
 	}
 
 	malformedRoot := buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 8).EndCell(),
 	})
-	if _, err = messageExecutionGlobalVersion(MessageEmulationConfig{ConfigRoot: malformedRoot}); err == nil {
+	if _, err = PrepareConfig(malformedRoot); err == nil {
 		t.Fatal("malformed config global version should fail")
 	}
 }
@@ -748,7 +754,7 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, rawConfig uint16, rawCase uint8) {
-		cfg := MessageEmulationConfig{}
+		var root *cell.Cell
 
 		var want int
 		wantErr := false
@@ -757,30 +763,34 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 		case 0:
 			wantErr = true
 		case 1:
-			cfg.ConfigRoot = buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})
+			root = buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})
 			wantErr = true
 		case 2:
 			version := tvmFuzzGlobalVersionUint32(uint32(rawConfig))
-			cfg.ConfigRoot = messageExecutionGlobalVersionConfigRoot(t, version)
+			root = messageExecutionGlobalVersionConfigRoot(t, version)
 			want = int(version)
 		case 3:
 			version := uint32(MaxSupportedGlobalVersion + 1 + int(rawConfig%3))
-			cfg.ConfigRoot = messageExecutionGlobalVersionConfigRoot(t, version)
+			root = messageExecutionGlobalVersionConfigRoot(t, version)
 			wantErr = true
 		case 4:
-			cfg.ConfigRoot = buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			root = buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 				tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(uint64(rawConfig&0xff), 8).EndCell(),
 			})
 			wantErr = true
 		}
 
-		got, err := messageExecutionGlobalVersion(cfg)
+		prepared, err := PrepareConfig(root)
 		if wantErr {
 			if err == nil {
-				t.Fatalf("case=%d config=%d got version %d, want error", caseIdx, rawConfig, got)
+				t.Fatalf("case=%d config=%d prepared config version %d, want error", caseIdx, rawConfig, prepared.GlobalVersion())
 			}
 			return
 		}
+		if err != nil {
+			t.Fatalf("case=%d config=%d unexpected error: %v", caseIdx, rawConfig, err)
+		}
+		got, err := messageExecutionGlobalVersion(MessageEmulationConfig{Config: prepared})
 		if err != nil {
 			t.Fatalf("case=%d config=%d unexpected error: %v", caseIdx, rawConfig, err)
 		}
@@ -789,7 +799,6 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 		}
 	})
 }
-
 func messageExecutionGlobalVersionConfigRoot(t *testing.T, version uint32) *cell.Cell {
 	t.Helper()
 

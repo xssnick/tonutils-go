@@ -279,10 +279,15 @@ func TestTransactionBuildComputeSkippedPhase(t *testing.T) {
 	}
 }
 
-func TestFillTransactionExecutionResultRejectsMalformedTransactionCell(t *testing.T) {
+func TestParseTransactionRejectsMalformedTransactionCell(t *testing.T) {
 	malformed := cell.BeginCell().MustStoreUInt(0, 1).EndCell()
-	if err := fillTransactionExecutionResult(&TransactionExecutionResult{}, malformed, nil, nil, nil, 1); err == nil {
+	res := &TransactionExecutionResult{TransactionCell: malformed}
+	if _, err := res.ParseTransaction(); err == nil {
 		t.Fatal("expected malformed transaction cell error")
+	}
+	var empty *TransactionExecutionResult
+	if _, err := empty.ParseTransaction(); err == nil {
+		t.Fatal("expected error for missing transaction cell")
 	}
 }
 

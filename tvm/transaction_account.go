@@ -12,22 +12,119 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *address.Address, proof *cell.MerkleProofBuilder) (*transactionRuntimeAccount, error) {
+// PreparedAccount is an account state parsed once into the representation the
+// transaction executor needs. Build it with PrepareAccount at lane start; each
+// TransactionExecutionResult carries the follow-up PreparedAccount so
+// consecutive transactions of one account never re-parse state.
+type PreparedAccount struct {
+	shard   *tlb.ShardAccount
+	state   *tlb.AccountState
+	runtime transactionRuntimeAccount
+}
+
+// PrepareAccount parses the shard account state exactly once. addr is the
+// account address used for non-existing accounts (a lane always knows its
+// account); it may be nil for existing accounts, whose address comes from the
+// parsed state.
+func PrepareAccount(shard *tlb.ShardAccount, addr *address.Address) (*PreparedAccount, error) {
+	if shard == nil {
+		return nil, errors.New("shard account is required")
+	}
 	if shard.Account == nil {
 		return nil, errors.New("shard account root is nil")
 	}
 
-	accountRoot := shard.Account
-	if proof != nil {
-		accountRoot = proof.Root()
-	}
-
-	var acc tlb.AccountState
-	if err := tlb.Parse(&acc, accountRoot); err != nil {
+	var state tlb.AccountState
+	if err := tlb.Parse(&state, shard.Account); err != nil {
 		return nil, fmt.Errorf("failed to decode account state: %w", err)
 	}
+	return prepareAccountFromState(shard, &state, addr, nil)
+}
 
-	return loadTransactionRuntimeAccountState(shard, &acc, fallbackAddr, true)
+// PrepareParsedAccount wraps an already-parsed shard account state; state must
+// be the parsed form of shard.Account.
+func PrepareParsedAccount(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address) (*PreparedAccount, error) {
+	if shard == nil {
+		return nil, errors.New("shard account is required")
+	}
+	if state == nil {
+		return nil, errors.New("parsed account state is required")
+	}
+	return prepareAccountFromState(shard, state, addr, nil)
+}
+
+func prepareAccountFromState(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address, storageCell *cell.Cell) (*PreparedAccount, error) {
+	runtime, err := loadTransactionRuntimeAccountState(shard, state, addr, storageCell == nil)
+	if err != nil {
+		return nil, err
+	}
+	if storageCell != nil {
+		runtime.storageCell = storageCell
+	}
+	return &PreparedAccount{
+		shard:   shard,
+		state:   state,
+		runtime: *runtime,
+	}, nil
+}
+
+// ShardAccount returns the shard account this state was prepared from
+// (for results: the post-transaction shard account).
+func (a *PreparedAccount) ShardAccount() *tlb.ShardAccount {
+	if a == nil {
+		return nil
+	}
+	return a.shard
+}
+
+// ShardAccountCell serializes the shard account into a cell.
+func (a *PreparedAccount) ShardAccountCell() *cell.Cell {
+	if a == nil || a.shard == nil {
+		return nil
+	}
+	return buildTransactionShardAccountCell(a.shard.Account, a.shard.LastTransHash, a.shard.LastTransLT)
+}
+
+// State returns the parsed account state.
+func (a *PreparedAccount) State() *tlb.AccountState {
+	if a == nil {
+		return nil
+	}
+	return a.state
+}
+
+// Address returns the resolved account address.
+func (a *PreparedAccount) Address() *address.Address {
+	if a == nil {
+		return nil
+	}
+	return a.runtime.addr
+}
+
+// runtimeForExecution returns the runtime account view for one emulation. The
+// hot path hands out a copy of the pre-parsed representation; the proof path
+// re-reads the account through a fresh usage-traced root so that state loads
+// are recorded in the proof.
+func (a *PreparedAccount) runtimeForExecution(buildProof bool) (*transactionRuntimeAccount, *cell.MerkleProofBuilder, error) {
+	if !buildProof {
+		runtime := a.runtime
+		return &runtime, nil, nil
+	}
+
+	if a.shard.Account == nil {
+		return nil, nil, errors.New("shard account root is nil")
+	}
+	proof := cell.NewMerkleProofBuilder(a.shard.Account)
+
+	var state tlb.AccountState
+	if err := tlb.Parse(&state, proof.Root()); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode account state: %w", err)
+	}
+	runtime, err := loadTransactionRuntimeAccountState(a.shard, &state, a.runtime.addr, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return runtime, proof, nil
 }
 
 func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.AccountState, fallbackAddr *address.Address, buildStorageCell bool) (*transactionRuntimeAccount, error) {
@@ -75,7 +172,7 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 	return out, nil
 }
 
-func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg transactionConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
+func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
 	globalVersion := cfg.globalVersion()
 	extraCurrencies, err := transactionCloneExtraCurrencies(acc.extraCurrencies)
 	if err != nil {
@@ -118,7 +215,7 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 		if globalVersion < 12 {
 			prepared.msgBalance.grams.Add(prepared.msgBalance.grams, transactionBigOrZero(in.IHRFee.Nano()))
 		}
-		if transactionIsBlackHoleAccount(cfg, acc.addr) {
+		if cfg.isBlackHoleAccount(acc.addr) {
 			prepared.msgBalance.grams.SetInt64(0)
 		}
 		if prepared.creditFirst {
@@ -196,7 +293,18 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 		StatusChange:         statusChange,
 	}
 }
-func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg transactionConfig, accountStorageStat *cell.Cell) (*cell.Cell, *tlb.AccountState, *cell.Cell, error) {
+
+// builtTransactionAccount is the serialized post-transaction account state
+// along with its parsed form and the pieces needed to prepare the follow-up
+// account without re-parsing.
+type builtTransactionAccount struct {
+	cell        *cell.Cell
+	state       *tlb.AccountState
+	storageStat *cell.Cell
+	storageCell *cell.Cell
+}
+
+func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
 	if status == tlb.AccountStatusNonExist {
 		accountState := &tlb.AccountState{
 			IsValid: false,
@@ -205,7 +313,10 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 				Balance: tlb.FromNanoTON(big.NewInt(0)),
 			},
 		}
-		return cell.BeginCell().MustStoreBoolBit(false).EndCell(), accountState, nil, nil
+		return &builtTransactionAccount{
+			cell:  cell.BeginCell().MustStoreBoolBit(false).EndCell(),
+			state: accountState,
+		}, nil
 	}
 
 	stateDepth := transactionCloneUint64(acc.stateDepth)
@@ -235,23 +346,23 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		if len(stateHash) == 0 {
 			stateInitCell, err := buildTransactionStateInitCell(stateInit)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to serialize frozen state init: %w", err)
+				return nil, fmt.Errorf("failed to serialize frozen state init: %w", err)
 			}
 			stateHash = stateInitCell.Hash()
 		}
 		accountStorage.StateHash = append([]byte(nil), stateHash...)
 	case tlb.AccountStatusUninit:
 	default:
-		return nil, nil, nil, fmt.Errorf("unsupported final account status %s", status)
+		return nil, fmt.Errorf("unsupported final account status %s", status)
 	}
 
 	accountAddr, err := transactionAccountSerializationAddr(acc.addr, cfg)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	storageBuilder, err := buildTransactionAccountStorageBuilder(status, endLT, balance, extraCurrencies, accountStorage.StateInit, accountStorage.StateHash)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to serialize account storage: %w", err)
+		return nil, fmt.Errorf("failed to serialize account storage: %w", err)
 	}
 	storageCell := storageBuilder.EndCell()
 
@@ -259,13 +370,13 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 	if cfg.globalVersion() >= 10 {
 		storageCellForStat, err = buildTransactionAccountStorageCell(status, endLT, balance, nil, accountStorage.StateInit, accountStorage.StateHash)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 	}
 
 	usage, storageExtra, storageExtraDictHash, nextStorageStat, err := transactionAccountStorageInfo(acc, storageCellForStat, cfg, accountStorageStat)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	storageInfo := tlb.StorageInfo{
@@ -287,13 +398,18 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 
 	accountCell, err := buildTransactionAccountStateCell(accountAddr, storageInfo.StorageUsed, storageExtraDictHash, lastPaid, duePayment, storageBuilder)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to serialize account state: %w", err)
+		return nil, fmt.Errorf("failed to serialize account state: %w", err)
 	}
 
-	return accountCell, accountState, nextStorageStat, nil
+	return &builtTransactionAccount{
+		cell:        accountCell,
+		state:       accountState,
+		storageStat: nextStorageStat,
+		storageCell: storageCell,
+	}, nil
 }
 
-func transactionAccountSerializationAddr(addr *address.Address, cfg transactionConfig) (*address.Address, error) {
+func transactionAccountSerializationAddr(addr *address.Address, cfg *PreparedConfig) (*address.Address, error) {
 	if addr == nil || addr.Anycast() == nil {
 		return addr, nil
 	}
@@ -328,7 +444,7 @@ func transactionAccountIDAddr(addr *address.Address) (*address.Address, error) {
 	return out, nil
 }
 
-func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg transactionConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, error) {
+func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, error) {
 	version := cfg.globalVersion()
 	storeStorageDictHash := version >= 11 && !transactionIsMasterchain(acc.addr)
 
@@ -895,7 +1011,7 @@ func transactionFinalizeAccountStatus(status tlb.AccountStatus, deleted bool, ba
 	return status
 }
 
-func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg transactionConfig) (tlb.AccountStatus, tlb.AccountStatus, []byte, error) {
+func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedConfig) (tlb.AccountStatus, tlb.AccountStatus, []byte, error) {
 	if status != tlb.AccountStatusFrozen || acc.addr == nil {
 		return status, status, stateHash, nil
 	}
@@ -927,7 +1043,7 @@ func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status
 	return status, status, stateHash, nil
 }
 
-func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg transactionConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
+func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg *PreparedConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
 	stateInit := transactionMessageStateInit(msg)
 	if deleted {
 		return acc, false, &tlb.ComputeSkipReason{Type: transactionNoStateSkipReason(stateInit)}, nil
@@ -1007,37 +1123,6 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 	next.tickTock = stateInit.TickTock
 	next.stateHash = nil
 	return &next, true, nil, nil
-}
-
-func transactionIsAddressSuspended(cfg transactionConfig, now uint32, addr *address.Address) (bool, error) {
-	if addr.Type() != address.StdAddress {
-		return false, nil
-	}
-
-	list, err := cfg.GetSuspendedAddressList()
-	if err != nil {
-		if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) || errors.Is(err, tlb.ErrBlockchainConfigRootNil) {
-			return false, nil
-		}
-		return false, err
-	}
-	if list.SuspendedUntil <= now {
-		return false, nil
-	}
-
-	key := cell.BeginCell().
-		MustStoreInt(int64(addr.Workchain()), 32).
-		MustStoreSlice(addr.Data(), 256).
-		EndCell()
-	_, err = list.Addresses.LoadValue(key)
-	if err != nil {
-		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
 }
 
 func transactionStateInitMatchesAddress(stateHash []byte, addr *address.Address, fixedPrefixLength *uint64) bool {

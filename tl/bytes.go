@@ -101,6 +101,11 @@ func ToBytesToBuffer(buf *bytes.Buffer, data []byte) error {
 	return nil
 }
 
+// AppendBytes appends data as a TL bytes field.
+func AppendBytes(dst []byte, data []byte) ([]byte, error) {
+	return appendTLBytes(dst, data)
+}
+
 func appendTLBytes(dst []byte, data []byte) ([]byte, error) {
 	pad, dst, err := appendBytesHeader(dst, len(data))
 	if err != nil {

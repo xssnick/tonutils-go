@@ -182,11 +182,11 @@ func TestTransactionAccountStatusAndStorageHelperEdges(t *testing.T) {
 
 func TestTransactionAddressSuspensionAndStateInitEdges(t *testing.T) {
 	now := uint32(100)
-	if suspended, err := transactionIsAddressSuspended(transactionConfig{}, now, address.NewAddressExt(0, 8, []byte{0xAB})); err != nil || suspended {
-		t.Fatalf("external address suspended = %t, err=%v, want false nil", suspended, err)
+	if suspended := emptyPreparedTestConfig().isAddressSuspended(now, address.NewAddressExt(0, 8, []byte{0xAB})); suspended {
+		t.Fatalf("external address suspended = %t, want false", suspended)
 	}
-	if suspended, err := transactionIsAddressSuspended(transactionConfig{}, now, tonopsTestAddr); err != nil || suspended {
-		t.Fatalf("missing suspended config = %t, err=%v, want false nil", suspended, err)
+	if suspended := emptyPreparedTestConfig().isAddressSuspended(now, tonopsTestAddr); suspended {
+		t.Fatalf("missing suspended config = %t, want false", suspended)
 	}
 
 	suspendedDict := cell.NewDict(288)
@@ -218,14 +218,14 @@ func TestTransactionAddressSuspensionAndStateInitEdges(t *testing.T) {
 	expiredCfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamSuspendedAddressList: expiredList,
 	})
-	if suspended, err := transactionIsAddressSuspended(expiredCfg, now, tonopsTestAddr); err != nil || suspended {
-		t.Fatalf("expired suspended list = %t, err=%v, want false nil", suspended, err)
+	if suspended := expiredCfg.isAddressSuspended(now, tonopsTestAddr); suspended {
+		t.Fatalf("expired suspended list = %t, want false", suspended)
 	}
-	if suspended, err := transactionIsAddressSuspended(activeCfg, now, address.NewAddress(0, byte(tonopsTestAddr.Workchain()), bytesWithFirstBitFlipped(tonopsTestAddr.Data()))); err != nil || suspended {
-		t.Fatalf("missing address suspended = %t, err=%v, want false nil", suspended, err)
+	if suspended := activeCfg.isAddressSuspended(now, address.NewAddress(0, byte(tonopsTestAddr.Workchain()), bytesWithFirstBitFlipped(tonopsTestAddr.Data()))); suspended {
+		t.Fatalf("missing address suspended = %t, want false", suspended)
 	}
-	if suspended, err := transactionIsAddressSuspended(activeCfg, now, tonopsTestAddr); err != nil || !suspended {
-		t.Fatalf("listed address suspended = %t, err=%v, want true nil", suspended, err)
+	if suspended := activeCfg.isAddressSuspended(now, tonopsTestAddr); !suspended {
+		t.Fatalf("listed address suspended = %t, want true", suspended)
 	}
 
 	depth := uint64(31)

@@ -104,18 +104,17 @@ func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*
 		return nil, nil, nil, err
 	}
 
-	cfg := TransactionEmulationConfig{
-		Now:        uint32(tonopsTestTime.Unix()),
-		Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-		RandSeed:   append([]byte(nil), tonopsTestSeed...),
-		ConfigRoot: transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)).Root,
+	cfg := testTxParams{
+		Now:      uint32(tonopsTestTime.Unix()),
+		RandSeed: append([]byte(nil), tonopsTestSeed...),
+		Config:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultTickTockTransactionGasMax,
 			Limit: DefaultTickTockTransactionGasMax,
 		}),
 	}
 
-	res, err := NewTVM().EmulateTickTockTransaction(shard, isTock, cfg)
+	res, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, cfg)
 	return res, tickMsg, tockMsg, err
 }
 
@@ -179,11 +178,10 @@ func TestEmulateTickTockTransactionChksigAlwaysSucceedPerRun(t *testing.T) {
 							if err != nil {
 								t.Fatalf("failed to build tick/tock shard: %v", err)
 							}
-							cfg := TransactionEmulationConfig{
-								Now:        uint32(tonopsTestTime.Unix()),
-								Balance:    new(big.Int).SetUint64(tickTockTestBalance),
-								RandSeed:   append([]byte(nil), tonopsTestSeed...),
-								ConfigRoot: transactionTestConfigWithGlobalVersion(t, version).Root,
+							cfg := testTxParams{
+								Now:      uint32(tonopsTestTime.Unix()),
+								RandSeed: append([]byte(nil), tonopsTestSeed...),
+								Config:   transactionTestConfigWithGlobalVersion(t, version),
 								Gas: vmcore.NewGas(vmcore.GasConfig{
 									Max:   DefaultTickTockTransactionGasMax,
 									Limit: DefaultTickTockTransactionGasMax,
@@ -218,11 +216,11 @@ func TestEmulateTickTockTransactionChksigAlwaysSucceedPerRun(t *testing.T) {
 	}
 }
 
-func runTickTockChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, isTock bool, cfg TransactionEmulationConfig, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
+func runTickTockChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, isTock bool, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
 	t.Helper()
 
 	cfg.ChksigAlwaysSucceed = always
-	res, err := machine.EmulateTickTockTransaction(shard, isTock, cfg)
+	res, err := testEmulateTickTockTransaction(machine, shard, isTock, cfg)
 	var execRes *ExecutionResult
 	if res != nil {
 		execRes = &res.ExecutionResult
@@ -342,7 +340,7 @@ func TestEmulateTickTockTransaction(t *testing.T) {
 	})
 
 	t.Run("RequiresShardAccount", func(t *testing.T) {
-		_, err := NewTVM().EmulateTickTockTransaction(nil, false, TransactionEmulationConfig{})
+		_, err := testEmulateTickTockTransaction(NewTVM(), nil, false, testTxParams{})
 		if err == nil {
 			t.Fatal("expected missing shard account to fail")
 		}
