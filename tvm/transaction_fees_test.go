@@ -112,14 +112,14 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 }
 
 func TestTransactionGlobalVersionFallbackContracts(t *testing.T) {
-	if _, err := PrepareConfig(nil); !errors.Is(err, errConfigRootRequired) {
+	if _, err := PrepareBlockchainConfig(nil); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("prepare config without root error = %v, want %v", err, errConfigRootRequired)
 	}
 
-	if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+	if _, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
 		t.Fatal("prepare config without global version param should fail")
 	}
-	if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	if _, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 1).EndCell(),
 	})); err == nil {
 		t.Fatal("prepare config with malformed global version should fail")

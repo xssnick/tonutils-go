@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -15,11 +16,19 @@ func fuzzExecutionConfigVersion(raw byte) int {
 	return tvmFuzzGlobalVersionByte(raw)
 }
 
-func TestFuzzExecutionConfigVersionCoversSupportedRange(t *testing.T) {
-	if MaxSupportedGlobalVersion > 255 {
-		t.Fatalf("execution config fuzz raw byte cannot cover max global version %d", MaxSupportedGlobalVersion)
+func executionConfigForGlobalVersion(t *testing.T, version int, always bool) ExecutionConfig {
+	t.Helper()
+	return ExecutionConfig{
+		Config:                      testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+		SignatureCheckAlwaysSucceed: always,
 	}
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+}
+
+func TestFuzzExecutionConfigVersionCoversSupportedRange(t *testing.T) {
+	if vm.MaxSupportedGlobalVersion > 255 {
+		t.Fatalf("execution config fuzz raw byte cannot cover max global version %d", vm.MaxSupportedGlobalVersion)
+	}
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzExecutionConfigVersion(byte(version)); got != version {
 			t.Fatalf("version seed %d mapped to %d, want %d", version, got, version)
 		}
@@ -27,7 +36,7 @@ func TestFuzzExecutionConfigVersionCoversSupportedRange(t *testing.T) {
 }
 
 func FuzzExecutionConfigGlobalVersionPerRunEntrypoints(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+	for version := byte(0); version <= byte(vm.MaxSupportedGlobalVersion); version++ {
 		for entrypoint := byte(0); entrypoint < 3; entrypoint++ {
 			f.Add(version, entrypoint, version^entrypoint^0x71)
 		}
@@ -42,18 +51,14 @@ func FuzzExecutionConfigGlobalVersionPerRunEntrypoints(f *testing.F) {
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
 
-		machine, err := NewTVM().WithGlobalVersion(MaxSupportedGlobalVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", MaxSupportedGlobalVersion, err)
-		}
+		machine := *NewTVM()
 
-		baseCfg := ExecutionConfig{ChksigAlwaysSucceed: true}
+		baseCfg := executionConfigForGlobalVersion(t, vm.MaxSupportedGlobalVersion, true)
 		defaultRes := runExecutionConfigSignatureEntrypointWithConfig(t, machine, code, tt, signature, entrypoint, baseCfg)
-		assertExecutionConfigSignatureBool(t, tt, MaxSupportedGlobalVersion, entrypoint, true, defaultRes, true)
+		assertExecutionConfigSignatureBool(t, tt, vm.MaxSupportedGlobalVersion, entrypoint, true, defaultRes, true)
 
 		versionCfg := baseCfg
-		versionCfg.GlobalVersion = version
-		versionCfg.GlobalVersionSet = true
+		versionCfg.Config = testPreparedBlockchainConfigWithVersion(t, uint32(version))
 		configuredRes := runExecutionConfigSignatureEntrypointWithConfig(t, machine, code, tt, signature, entrypoint, versionCfg)
 		if version < tt.minVersion {
 			if configuredRes.exit != vmerr.CodeInvalidOpcode {
@@ -64,36 +69,45 @@ func FuzzExecutionConfigGlobalVersionPerRunEntrypoints(f *testing.F) {
 		}
 
 		leakCheck := runExecutionConfigSignatureEntrypointWithConfig(t, machine, code, tt, signature, entrypoint, baseCfg)
-		assertExecutionConfigSignatureBool(t, tt, MaxSupportedGlobalVersion, entrypoint, true, leakCheck, true)
+		assertExecutionConfigSignatureBool(t, tt, vm.MaxSupportedGlobalVersion, entrypoint, true, leakCheck, true)
 	})
 }
 
 func TestExecutionConfigGlobalVersionValidatesRange(t *testing.T) {
-	code := testOpcodeCell(t, "f910")
-	data := cell.BeginCell().EndCell()
-	machine := NewTVM()
+	unsupportedVersion := uint32(vm.MaxSupportedGlobalVersion + 1)
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: unsupportedVersion})
+	if err != nil {
+		t.Fatalf("build global version cell: %v", err)
+	}
+	dict := cell.NewDict(32)
+	value := cell.BeginCell().MustStoreRef(versionCell).EndCell()
+	if err = dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
+		t.Fatalf("store global version config param: %v", err)
+	}
+	root := dict.AsCell()
+	if _, err = PrepareBlockchainConfig(root); err == nil {
+		t.Fatalf("PrepareBlockchainConfig accepted unsupported global version %d", unsupportedVersion)
+	}
 
-	for _, version := range []int{MinSupportedGlobalVersion - 1, MaxSupportedGlobalVersion + 1} {
-		cfg := ExecutionConfig{GlobalVersion: version, GlobalVersionSet: true}
-		stack := executionConfigChksigStack(t, make([]byte, 64))
-		if _, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg); err == nil {
-			t.Fatalf("ExecuteWithConfig accepted unsupported global version %d", version)
-		}
+	t.Run("allow higher version clamps to latest", func(t *testing.T) {
+		testSetAllowHigherVersionExecUsingLatest(t, true)
 
-		res, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), executionConfigChksigStack(t, make([]byte, 64)), cfg)
-		if err == nil || res != nil {
-			t.Fatalf("ExecuteDetailedWithConfig version %d result=%v err=%v, want validation error without result", version, res, err)
+		cfg, err := PrepareBlockchainConfig(root)
+		if err != nil {
+			t.Fatalf("PrepareBlockchainConfig rejected allowed future global version %d: %v", unsupportedVersion, err)
 		}
+		if got := cfg.GlobalVersion(); got != uint32(vm.MaxSupportedGlobalVersion) {
+			t.Fatalf("prepared effective global version = %d, want %d", got, vm.MaxSupportedGlobalVersion)
+		}
+	})
 
-		res, err = machine.ExecuteGetMethod(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), executionConfigChksigStack(t, make([]byte, 64)), cfg)
-		if err == nil || res != nil {
-			t.Fatalf("ExecuteGetMethodDetailedWithConfig version %d result=%v err=%v, want validation error without result", version, res, err)
-		}
+	if _, err = PrepareBlockchainConfig(root); err == nil {
+		t.Fatalf("PrepareBlockchainConfig accepted unsupported global version %d after allow flag cleanup", unsupportedVersion)
 	}
 }
 
-func FuzzExecutionConfigChksigAlwaysSucceedRawEntrypoints(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzExecutionConfigSignatureCheckAlwaysSucceedRawEntrypoints(f *testing.F) {
+	for version := byte(0); version <= byte(vm.MaxSupportedGlobalVersion); version++ {
 		for entrypoint := byte(0); entrypoint < 3; entrypoint++ {
 			f.Add(version, entrypoint, version^entrypoint^0x5a)
 		}
@@ -106,20 +120,17 @@ func FuzzExecutionConfigChksigAlwaysSucceedRawEntrypoints(f *testing.F) {
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-		}
+		machine := *NewTVM()
 		code := testOpcodeCell(t, "f910")
 
-		if got := runExecutionConfigChksigEntrypoint(t, machine, code, signature, entrypoint, false); got {
+		if got := runExecutionConfigSignatureCheckEntrypoint(t, machine, version, code, signature, entrypoint, false); got {
 			t.Fatalf("v%d entrypoint=%d default run accepted forged CHKSIGNU", version, entrypoint)
 		}
-		if got := runExecutionConfigChksigEntrypoint(t, machine, code, signature, entrypoint, true); !got {
+		if got := runExecutionConfigSignatureCheckEntrypoint(t, machine, version, code, signature, entrypoint, true); !got {
 			t.Fatalf("v%d entrypoint=%d configured run rejected forged CHKSIGNU", version, entrypoint)
 		}
-		if got := runExecutionConfigChksigEntrypoint(t, machine, code, signature, entrypoint, false); got {
-			t.Fatalf("v%d entrypoint=%d ChksigAlwaysSucceed leaked into next run", version, entrypoint)
+		if got := runExecutionConfigSignatureCheckEntrypoint(t, machine, version, code, signature, entrypoint, false); got {
+			t.Fatalf("v%d entrypoint=%d SignatureCheckAlwaysSucceed leaked into next run", version, entrypoint)
 		}
 	})
 }
@@ -139,8 +150,8 @@ var executionConfigSignatureCases = []executionConfigSignatureCase{
 	{name: "P256_CHKSIGNS", code: "f915", minVersion: 4, fromSlice: true, p256: true},
 }
 
-func FuzzExecutionConfigChksigAlwaysSucceedSignatureVariants(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzExecutionConfigSignatureCheckAlwaysSucceedSignatureVariants(f *testing.F) {
+	for version := byte(0); version <= byte(vm.MaxSupportedGlobalVersion); version++ {
 		for entrypoint := byte(0); entrypoint < 3; entrypoint++ {
 			for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 				f.Add(version, entrypoint, kind, version^entrypoint^kind^0x33)
@@ -157,15 +168,12 @@ func FuzzExecutionConfigChksigAlwaysSucceedSignatureVariants(f *testing.F) {
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-		}
+		machine := *NewTVM()
 		code := testOpcodeCell(t, tt.code)
 
 		if version < tt.minVersion {
 			for _, always := range []bool{false, true} {
-				res := runExecutionConfigSignatureEntrypoint(t, machine, code, tt, signature, entrypoint, always)
+				res := runExecutionConfigSignatureEntrypoint(t, machine, version, code, tt, signature, entrypoint, always)
 				if res.exit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s v%d entrypoint=%d always=%t exit=%d, want invalid opcode", tt.name, version, entrypoint, always, res.exit)
 				}
@@ -173,19 +181,19 @@ func FuzzExecutionConfigChksigAlwaysSucceedSignatureVariants(f *testing.F) {
 			return
 		}
 
-		defaultRes := runExecutionConfigSignatureEntrypoint(t, machine, code, tt, signature, entrypoint, false)
+		defaultRes := runExecutionConfigSignatureEntrypoint(t, machine, version, code, tt, signature, entrypoint, false)
 		assertExecutionConfigSignatureBool(t, tt, version, entrypoint, false, defaultRes, false)
 
-		configuredRes := runExecutionConfigSignatureEntrypoint(t, machine, code, tt, signature, entrypoint, true)
+		configuredRes := runExecutionConfigSignatureEntrypoint(t, machine, version, code, tt, signature, entrypoint, true)
 		assertExecutionConfigSignatureBool(t, tt, version, entrypoint, true, configuredRes, true)
 
-		leakCheck := runExecutionConfigSignatureEntrypoint(t, machine, code, tt, signature, entrypoint, false)
+		leakCheck := runExecutionConfigSignatureEntrypoint(t, machine, version, code, tt, signature, entrypoint, false)
 		assertExecutionConfigSignatureBool(t, tt, version, entrypoint, false, leakCheck, false)
 	})
 }
 
-func FuzzExecutionConfigChksigAlwaysSucceedMalformedOperands(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzExecutionConfigSignatureCheckAlwaysSucceedMalformedOperands(f *testing.F) {
+	for version := byte(0); version <= byte(vm.MaxSupportedGlobalVersion); version++ {
 		for entrypoint := byte(0); entrypoint < 3; entrypoint++ {
 			for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 				f.Add(version, entrypoint, kind, byte(0), uint16(version)^uint16(entrypoint)<<4)
@@ -200,15 +208,12 @@ func FuzzExecutionConfigChksigAlwaysSucceedMalformedOperands(f *testing.F) {
 		entrypoint := rawEntrypoint % 3
 		tt := executionConfigSignatureCases[int(rawKind)%len(executionConfigSignatureCases)]
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-		}
+		machine := *NewTVM()
 		code := testOpcodeCell(t, tt.code)
 
 		for _, always := range []bool{false, true} {
 			stack := executionConfigMalformedSignatureStack(t, tt, rawMalformed, rawBits)
-			res := runExecutionConfigSignatureStackEntrypoint(t, machine, code, stack, entrypoint, always)
+			res := runExecutionConfigSignatureStackEntrypoint(t, machine, version, code, stack, entrypoint, always)
 			wantExit := int64(vmerr.CodeCellUnderflow)
 			if version < tt.minVersion {
 				wantExit = vmerr.CodeInvalidOpcode
@@ -220,8 +225,8 @@ func FuzzExecutionConfigChksigAlwaysSucceedMalformedOperands(f *testing.F) {
 	})
 }
 
-func FuzzExecutionConfigLibrariesAndChksigAlwaysSucceed(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzExecutionConfigLibrariesAndSignatureCheckAlwaysSucceed(f *testing.F) {
+	for version := byte(0); version <= byte(vm.MaxSupportedGlobalVersion); version++ {
 		for entrypoint := byte(0); entrypoint < 3; entrypoint++ {
 			f.Add(version, entrypoint, version^entrypoint^0xa7)
 		}
@@ -234,32 +239,30 @@ func FuzzExecutionConfigLibrariesAndChksigAlwaysSucceed(f *testing.F) {
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-		}
+		machine := *NewTVM()
 
 		target := testOpcodeCell(t, "f910")
 		code := mustLibraryCellForHash(t, target.Hash())
 		libraries := []*cell.Cell{mustLibraryCollection(t, target)}
-		cfg := ExecutionConfig{Libraries: libraries}
+		cfg := executionConfigForGlobalVersion(t, version, false)
+		cfg.Libraries = libraries
 
-		if got := runExecutionConfigChksigEntrypointWithConfig(t, machine, code, signature, entrypoint, cfg); got {
+		if got := runExecutionConfigSignatureCheckEntrypointWithConfig(t, machine, code, signature, entrypoint, cfg); got {
 			t.Fatalf("v%d entrypoint=%d library run accepted forged CHKSIGNU without flag", version, entrypoint)
 		}
-		cfg.ChksigAlwaysSucceed = true
-		if got := runExecutionConfigChksigEntrypointWithConfig(t, machine, code, signature, entrypoint, cfg); !got {
+		cfg.SignatureCheckAlwaysSucceed = true
+		if got := runExecutionConfigSignatureCheckEntrypointWithConfig(t, machine, code, signature, entrypoint, cfg); !got {
 			t.Fatalf("v%d entrypoint=%d library run rejected forged CHKSIGNU with flag", version, entrypoint)
 		}
-		cfg.ChksigAlwaysSucceed = false
-		if got := runExecutionConfigChksigEntrypointWithConfig(t, machine, code, signature, entrypoint, cfg); got {
-			t.Fatalf("v%d entrypoint=%d library run leaked ChksigAlwaysSucceed into next run", version, entrypoint)
+		cfg.SignatureCheckAlwaysSucceed = false
+		if got := runExecutionConfigSignatureCheckEntrypointWithConfig(t, machine, code, signature, entrypoint, cfg); got {
+			t.Fatalf("v%d entrypoint=%d library run leaked SignatureCheckAlwaysSucceed into next run", version, entrypoint)
 		}
 	})
 }
 
-func FuzzExecutionConfigChksigAlwaysSucceedRunVMChild(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzExecutionConfigSignatureCheckAlwaysSucceedRunVMChild(f *testing.F) {
+	for version := byte(0); version <= byte(vm.MaxSupportedGlobalVersion); version++ {
 		for entrypoint := byte(0); entrypoint < 3; entrypoint++ {
 			for modeKind := byte(0); modeKind < 4; modeKind++ {
 				f.Add(version, entrypoint, modeKind, version^entrypoint^modeKind^0x4d)
@@ -280,14 +283,11 @@ func FuzzExecutionConfigChksigAlwaysSucceedRunVMChild(f *testing.F) {
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-		}
+		machine := *NewTVM()
 
-		defaultRes := runExecutionConfigRunVMChildChksig(t, machine, signature, entrypoint, dynamicMode, mode, false)
-		configuredRes := runExecutionConfigRunVMChildChksig(t, machine, signature, entrypoint, dynamicMode, mode, true)
-		leakCheck := runExecutionConfigRunVMChildChksig(t, machine, signature, entrypoint, dynamicMode, mode, false)
+		defaultRes := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, false)
+		configuredRes := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, true)
+		leakCheck := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, false)
 		if version < execop.RUNVM(0).MinGlobalVersion() {
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, defaultRes)
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, configuredRes)
@@ -301,44 +301,42 @@ func FuzzExecutionConfigChksigAlwaysSucceedRunVMChild(f *testing.F) {
 	})
 }
 
-func runExecutionConfigChksigEntrypoint(t *testing.T, machine TVM, code *cell.Cell, signature []byte, entrypoint byte, always bool) bool {
+func runExecutionConfigSignatureCheckEntrypoint(t *testing.T, machine TVM, version int, code *cell.Cell, signature []byte, entrypoint byte, always bool) bool {
 	t.Helper()
 
-	return runExecutionConfigChksigEntrypointWithConfig(t, machine, code, signature, entrypoint, ExecutionConfig{
-		ChksigAlwaysSucceed: always,
-	})
+	return runExecutionConfigSignatureCheckEntrypointWithConfig(t, machine, code, signature, entrypoint, executionConfigForGlobalVersion(t, version, always))
 }
 
-func runExecutionConfigChksigEntrypointWithConfig(t *testing.T, machine TVM, code *cell.Cell, signature []byte, entrypoint byte, cfg ExecutionConfig) bool {
+func runExecutionConfigSignatureCheckEntrypointWithConfig(t *testing.T, machine TVM, code *cell.Cell, signature []byte, entrypoint byte, cfg ExecutionConfig) bool {
 	t.Helper()
 
 	data := cell.BeginCell().EndCell()
-	stack := executionConfigChksigStack(t, signature)
+	stack := executionConfigSignatureCheckStack(t, signature)
 
 	switch entrypoint {
 	case 0:
 		if _, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg); err != nil {
-			t.Fatalf("ExecuteWithConfig always=%t failed: %v", cfg.ChksigAlwaysSucceed, err)
+			t.Fatalf("ExecuteWithConfig always=%t failed: %v", cfg.SignatureCheckAlwaysSucceed, err)
 		}
-		return popExecutionConfigChksigResult(t, stack)
+		return popExecutionConfigSignatureCheckResult(t, stack)
 	case 1:
 		res, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg)
 		if err != nil {
-			t.Fatalf("ExecuteDetailedWithConfig always=%t failed: %v", cfg.ChksigAlwaysSucceed, err)
+			t.Fatalf("ExecuteDetailedWithConfig always=%t failed: %v", cfg.SignatureCheckAlwaysSucceed, err)
 		}
 		if !vm.IsSuccessExitCode(res.ExitCode) {
-			t.Fatalf("ExecuteDetailedWithConfig always=%t exit code = %d", cfg.ChksigAlwaysSucceed, res.ExitCode)
+			t.Fatalf("ExecuteDetailedWithConfig always=%t exit code = %d", cfg.SignatureCheckAlwaysSucceed, res.ExitCode)
 		}
-		return popExecutionConfigChksigResult(t, res.Stack)
+		return popExecutionConfigSignatureCheckResult(t, res.Stack)
 	default:
 		res, err := machine.ExecuteGetMethod(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg)
 		if err != nil {
-			t.Fatalf("ExecuteGetMethodDetailedWithConfig always=%t failed: %v", cfg.ChksigAlwaysSucceed, err)
+			t.Fatalf("ExecuteGetMethodDetailedWithConfig always=%t failed: %v", cfg.SignatureCheckAlwaysSucceed, err)
 		}
 		if !vm.IsSuccessExitCode(res.ExitCode) {
-			t.Fatalf("ExecuteGetMethodDetailedWithConfig always=%t exit code = %d", cfg.ChksigAlwaysSucceed, res.ExitCode)
+			t.Fatalf("ExecuteGetMethodDetailedWithConfig always=%t exit code = %d", cfg.SignatureCheckAlwaysSucceed, res.ExitCode)
 		}
-		return popExecutionConfigChksigResult(t, res.Stack)
+		return popExecutionConfigSignatureCheckResult(t, res.Stack)
 	}
 }
 
@@ -348,7 +346,7 @@ type executionConfigRunVMChildRunResult struct {
 	ok        bool
 }
 
-func runExecutionConfigRunVMChildChksig(t *testing.T, machine TVM, signature []byte, entrypoint byte, dynamicMode bool, mode int, always bool) executionConfigRunVMChildRunResult {
+func runExecutionConfigRunVMChildSignatureCheck(t *testing.T, machine TVM, version int, signature []byte, entrypoint byte, dynamicMode bool, mode int, always bool) executionConfigRunVMChildRunResult {
 	t.Helper()
 
 	code := codeFromBuilders(t, execop.RUNVM(mode).Serialize())
@@ -357,7 +355,7 @@ func runExecutionConfigRunVMChildChksig(t *testing.T, machine TVM, signature []b
 	}
 	data := cell.BeginCell().EndCell()
 	stack := executionConfigRunVMChildStack(t, signature, dynamicMode, mode)
-	cfg := ExecutionConfig{ChksigAlwaysSucceed: always}
+	cfg := executionConfigForGlobalVersion(t, version, always)
 
 	switch entrypoint {
 	case 0:
@@ -387,7 +385,7 @@ func runExecutionConfigRunVMChildChksig(t *testing.T, machine TVM, signature []b
 func executionConfigRunVMChildStack(t *testing.T, signature []byte, dynamicMode bool, mode int) *vm.Stack {
 	t.Helper()
 
-	stack := executionConfigChksigStack(t, signature)
+	stack := executionConfigSignatureCheckStack(t, signature)
 	if err := stack.PushInt(big.NewInt(3)); err != nil {
 		t.Fatalf("push child stack size: %v", err)
 	}
@@ -412,7 +410,7 @@ func popExecutionConfigRunVMChildResult(t *testing.T, stack *vm.Stack) execution
 	return executionConfigRunVMChildRunResult{
 		exit:      0,
 		childExit: childExit.Int64(),
-		ok:        popExecutionConfigChksigResult(t, stack),
+		ok:        popExecutionConfigSignatureCheckResult(t, stack),
 	}
 }
 
@@ -447,11 +445,11 @@ type executionConfigSignatureRunResult struct {
 	ok   bool
 }
 
-func runExecutionConfigSignatureStackEntrypoint(t *testing.T, machine TVM, code *cell.Cell, stack *vm.Stack, entrypoint byte, always bool) executionConfigSignatureRunResult {
+func runExecutionConfigSignatureStackEntrypoint(t *testing.T, machine TVM, version int, code *cell.Cell, stack *vm.Stack, entrypoint byte, always bool) executionConfigSignatureRunResult {
 	t.Helper()
 
 	data := cell.BeginCell().EndCell()
-	cfg := ExecutionConfig{ChksigAlwaysSucceed: always}
+	cfg := executionConfigForGlobalVersion(t, version, always)
 	switch entrypoint {
 	case 0:
 		res, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg)
@@ -477,12 +475,10 @@ func runExecutionConfigSignatureStackEntrypoint(t *testing.T, machine TVM, code 
 	}
 }
 
-func runExecutionConfigSignatureEntrypoint(t *testing.T, machine TVM, code *cell.Cell, tt executionConfigSignatureCase, signature []byte, entrypoint byte, always bool) executionConfigSignatureRunResult {
+func runExecutionConfigSignatureEntrypoint(t *testing.T, machine TVM, version int, code *cell.Cell, tt executionConfigSignatureCase, signature []byte, entrypoint byte, always bool) executionConfigSignatureRunResult {
 	t.Helper()
 
-	return runExecutionConfigSignatureEntrypointWithConfig(t, machine, code, tt, signature, entrypoint, ExecutionConfig{
-		ChksigAlwaysSucceed: always,
-	})
+	return runExecutionConfigSignatureEntrypointWithConfig(t, machine, code, tt, signature, entrypoint, executionConfigForGlobalVersion(t, version, always))
 }
 
 func runExecutionConfigSignatureEntrypointWithConfig(t *testing.T, machine TVM, code *cell.Cell, tt executionConfigSignatureCase, signature []byte, entrypoint byte, cfg ExecutionConfig) executionConfigSignatureRunResult {
@@ -496,32 +492,32 @@ func runExecutionConfigSignatureEntrypointWithConfig(t *testing.T, machine TVM, 
 		res, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg)
 		exit := exitCodeFromResult(res, err)
 		if exit == -1 {
-			t.Fatalf("ExecuteWithConfig %s always=%t failed: %v", tt.name, cfg.ChksigAlwaysSucceed, err)
+			t.Fatalf("ExecuteWithConfig %s always=%t failed: %v", tt.name, cfg.SignatureCheckAlwaysSucceed, err)
 		}
 		if !vm.IsSuccessExitCode(exit) {
 			return executionConfigSignatureRunResult{exit: exit}
 		}
-		return executionConfigSignatureRunResult{exit: exit, ok: popExecutionConfigChksigResult(t, stack)}
+		return executionConfigSignatureRunResult{exit: exit, ok: popExecutionConfigSignatureCheckResult(t, stack)}
 	case 1:
 		res, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg)
 		exit := exitCodeFromResult(res, err)
 		if exit == -1 {
-			t.Fatalf("ExecuteDetailedWithConfig %s always=%t failed: %v", tt.name, cfg.ChksigAlwaysSucceed, err)
+			t.Fatalf("ExecuteDetailedWithConfig %s always=%t failed: %v", tt.name, cfg.SignatureCheckAlwaysSucceed, err)
 		}
 		if !vm.IsSuccessExitCode(exit) {
 			return executionConfigSignatureRunResult{exit: exit}
 		}
-		return executionConfigSignatureRunResult{exit: exit, ok: popExecutionConfigChksigResult(t, res.Stack)}
+		return executionConfigSignatureRunResult{exit: exit, ok: popExecutionConfigSignatureCheckResult(t, res.Stack)}
 	default:
 		res, err := machine.ExecuteGetMethod(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, cfg)
 		exit := exitCodeFromResult(res, err)
 		if exit == -1 {
-			t.Fatalf("ExecuteGetMethodDetailedWithConfig %s always=%t failed: %v", tt.name, cfg.ChksigAlwaysSucceed, err)
+			t.Fatalf("ExecuteGetMethodDetailedWithConfig %s always=%t failed: %v", tt.name, cfg.SignatureCheckAlwaysSucceed, err)
 		}
 		if !vm.IsSuccessExitCode(exit) {
 			return executionConfigSignatureRunResult{exit: exit}
 		}
-		return executionConfigSignatureRunResult{exit: exit, ok: popExecutionConfigChksigResult(t, res.Stack)}
+		return executionConfigSignatureRunResult{exit: exit, ok: popExecutionConfigSignatureCheckResult(t, res.Stack)}
 	}
 }
 
@@ -615,7 +611,7 @@ func executionConfigZeroSlice(bits uint) *cell.Slice {
 	return cell.BeginCell().MustStoreSlice(raw, bits).ToSlice()
 }
 
-func executionConfigChksigStack(t *testing.T, signature []byte) *vm.Stack {
+func executionConfigSignatureCheckStack(t *testing.T, signature []byte) *vm.Stack {
 	t.Helper()
 
 	stack := vm.NewStack()
@@ -631,7 +627,7 @@ func executionConfigChksigStack(t *testing.T, signature []byte) *vm.Stack {
 	return stack
 }
 
-func popExecutionConfigChksigResult(t *testing.T, stack *vm.Stack) bool {
+func popExecutionConfigSignatureCheckResult(t *testing.T, stack *vm.Stack) bool {
 	t.Helper()
 
 	got, err := stack.PopBool()

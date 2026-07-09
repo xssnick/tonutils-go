@@ -111,7 +111,10 @@ func TestExecuteDetailedWithAccountProofBuildsLiteserverStyleUsageProof(t *testi
 	code, data := executionProofFixture(t)
 	accountRoot := executionProofAccountRoot(t, code, data)
 
-	res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{AccountRoot: accountRoot})
+	res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{
+		AccountRoot: accountRoot,
+		Config:      testPreparedBlockchainConfig(t),
+	})
 	if err != nil {
 		t.Fatalf("execution with proof failed: %v", err)
 	}
@@ -166,7 +169,7 @@ func TestExecuteDetailedWithAccountProofBuildsLiteserverStyleUsageProof(t *testi
 		t.Fatalf("failed to decode virtualized account proof: %v", err)
 	}
 
-	proofRes, err := NewTVM().Execute(virtualState.StateInit.Code, virtualState.StateInit.Data, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{})
+	proofRes, err := NewTVM().Execute(virtualState.StateInit.Code, virtualState.StateInit.Data, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), testExecutionConfig(t))
 	if err != nil {
 		t.Fatalf("execution from proof failed: %v", err)
 	}
@@ -272,7 +275,10 @@ func TestExecuteDetailedWithAccountProofNonExecutableAccountsReturnProof(t *test
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			stack := vm.NewStack()
-			res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, gas, stack, ExecutionConfig{AccountRoot: tt.root})
+			res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, gas, stack, ExecutionConfig{
+				AccountRoot: tt.root,
+				Config:      testPreparedBlockchainConfig(t),
+			})
 			if err != nil {
 				t.Fatalf("execution proof for non-executable account: %v", err)
 			}
@@ -293,7 +299,10 @@ func TestExecuteDetailedWithAccountProofMarksResultStackCells(t *testing.T) {
 	code, data := executionProofResultSliceFixture(t)
 	accountRoot := executionProofAccountRoot(t, code, data)
 
-	res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{AccountRoot: accountRoot})
+	res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{
+		AccountRoot: accountRoot,
+		Config:      testPreparedBlockchainConfig(t),
+	})
 	if err != nil {
 		t.Fatalf("execution with proof failed: %v", err)
 	}
@@ -427,7 +436,10 @@ func TestExecuteDetailedWithAccountProofDoesNotFinalCommitGetMethodData(t *testi
 	proofData := mustUsageProofWithLoadedRoot(t, data)
 	accountRoot := executionProofAccountRoot(t, code, proofData)
 
-	res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{AccountRoot: accountRoot})
+	res, err := NewTVM().ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{
+		AccountRoot: accountRoot,
+		Config:      testPreparedBlockchainConfig(t),
+	})
 	if err != nil {
 		t.Fatalf("execution with proof failed: %v", err)
 	}
@@ -439,7 +451,7 @@ func TestExecuteDetailedWithAccountProofDoesNotFinalCommitGetMethodData(t *testi
 	}
 }
 
-func TestExecuteDetailedWithAccountProofChksigAlwaysSucceedPerRun(t *testing.T) {
+func TestExecuteDetailedWithAccountProofSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
 	signature := make([]byte, 64)
 	signature[0] = 1
 	signature[63] = 2
@@ -448,19 +460,16 @@ func TestExecuteDetailedWithAccountProofChksigAlwaysSucceedPerRun(t *testing.T) 
 
 	for _, sigCase := range executionConfigSignatureCases {
 		t.Run(sigCase.name, func(t *testing.T) {
-			code := makeExecutionProofChksigAlwaysVariantCode(t, sigCase, signature)
+			code := makeExecutionProofSignatureCheckAlwaysVariantCode(t, sigCase, signature)
 			accountRoot := executionProofAccountRoot(t, code, data)
 
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 				t.Run("v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
-					machine, err := baseMachine.WithGlobalVersion(version)
-					if err != nil {
-						t.Fatalf("with global version: %v", err)
-					}
+					machine := *baseMachine
 
 					if version < sigCase.minVersion {
 						for _, always := range []bool{false, true} {
-							res := runExecutionProofChksigAlwaysVariant(t, machine, accountRoot, sigCase, always)
+							res := runExecutionProofSignatureCheckAlwaysVariant(t, machine, version, accountRoot, sigCase, always)
 							if res.exit != vmerr.CodeInvalidOpcode {
 								t.Fatalf("%s v%d always=%t exit=%d, want invalid opcode", sigCase.name, version, always, res.exit)
 							}
@@ -478,7 +487,7 @@ func TestExecuteDetailedWithAccountProofChksigAlwaysSucceedPerRun(t *testing.T) 
 						{name: "next_default_rejects", always: false, want: false},
 					} {
 						t.Run(tt.name, func(t *testing.T) {
-							res := runExecutionProofChksigAlwaysVariant(t, machine, accountRoot, sigCase, tt.always)
+							res := runExecutionProofSignatureCheckAlwaysVariant(t, machine, version, accountRoot, sigCase, tt.always)
 							if !vm.IsSuccessExitCode(res.exit) {
 								t.Fatalf("%s v%d always=%t exit=%d, want success", sigCase.name, version, tt.always, res.exit)
 							}
@@ -493,7 +502,7 @@ func TestExecuteDetailedWithAccountProofChksigAlwaysSucceedPerRun(t *testing.T) 
 	}
 }
 
-func makeExecutionProofChksigAlwaysVariantCode(t *testing.T, tt executionConfigSignatureCase, signature []byte) *cell.Cell {
+func makeExecutionProofSignatureCheckAlwaysVariantCode(t *testing.T, tt executionConfigSignatureCase, signature []byte) *cell.Cell {
 	t.Helper()
 
 	builders := []*cell.Builder{
@@ -514,16 +523,16 @@ func makeExecutionProofChksigAlwaysVariantCode(t *testing.T, tt executionConfigS
 		builders = append(builders, opstack.PUSHINT(big.NewInt(2)).Serialize())
 	}
 
-	builders = append(builders, chksigAlwaysVariantOpcode(t, tt))
+	builders = append(builders, signatureCheckAlwaysVariantOpcode(t, tt))
 	return codeFromBuilders(t, builders...)
 }
 
-type executionProofChksigAlwaysVariantResult struct {
+type executionProofSignatureCheckAlwaysVariantResult struct {
 	exit int64
 	ok   bool
 }
 
-func runExecutionProofChksigAlwaysVariant(t *testing.T, machine TVM, accountRoot *cell.Cell, tt executionConfigSignatureCase, always bool) executionProofChksigAlwaysVariantResult {
+func runExecutionProofSignatureCheckAlwaysVariant(t *testing.T, machine TVM, version int, accountRoot *cell.Cell, tt executionConfigSignatureCase, always bool) executionProofSignatureCheckAlwaysVariantResult {
 	t.Helper()
 
 	stack := vm.NewStack()
@@ -532,8 +541,9 @@ func runExecutionProofChksigAlwaysVariant(t *testing.T, machine TVM, accountRoot
 	}
 
 	res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, ExecutionConfig{
-		AccountRoot:         accountRoot,
-		ChksigAlwaysSucceed: always,
+		AccountRoot:                 accountRoot,
+		Config:                      testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+		SignatureCheckAlwaysSucceed: always,
 	})
 	exit := exitCodeFromResult(res, err)
 	if exit == -1 {
@@ -549,18 +559,18 @@ func runExecutionProofChksigAlwaysVariant(t *testing.T, machine TVM, accountRoot
 		t.Fatalf("account execution proof is invalid: %v", err)
 	}
 	if !vm.IsSuccessExitCode(exit) {
-		return executionProofChksigAlwaysVariantResult{exit: exit}
+		return executionProofSignatureCheckAlwaysVariantResult{exit: exit}
 	}
 
 	got, err := res.Stack.PopBool()
 	if err != nil {
 		t.Fatalf("pop %s result: %v", tt.name, err)
 	}
-	return executionProofChksigAlwaysVariantResult{exit: exit, ok: got}
+	return executionProofSignatureCheckAlwaysVariantResult{exit: exit, ok: got}
 }
 
 func FuzzExecuteDetailedWithAccountProofGlobalVersionBoundary(f *testing.F) {
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(byte(version))
 	}
 
@@ -577,11 +587,11 @@ func FuzzExecuteDetailedWithAccountProofGlobalVersionBoundary(f *testing.F) {
 			t.Fatalf("push method id: %v", err)
 		}
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("v%d WithGlobalVersion failed: %v", version, err)
-		}
-		res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, ExecutionConfig{AccountRoot: accountRoot})
+		machine := NewTVM()
+		res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, ExecutionConfig{
+			AccountRoot: accountRoot,
+			Config:      testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+		})
 		if err != nil {
 			t.Fatalf("v%d execution with proof failed: %v", version, err)
 		}
@@ -608,7 +618,7 @@ func FuzzExecuteDetailedWithAccountProofGlobalVersionBoundary(f *testing.F) {
 }
 
 func FuzzExecuteDetailedWithAccountProofConfigGlobalVersionPerRun(f *testing.F) {
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(byte(version))
 	}
 
@@ -621,15 +631,11 @@ func FuzzExecuteDetailedWithAccountProofConfigGlobalVersionPerRun(f *testing.F) 
 		data := cell.BeginCell().EndCell()
 		accountRoot := executionProofAccountRoot(t, code, data)
 
-		machine, err := NewTVM().WithGlobalVersion(MaxSupportedGlobalVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", MaxSupportedGlobalVersion, err)
-		}
+		machine := NewTVM()
 
 		res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(100_000), executionProofMethodStack(t), ExecutionConfig{
-			AccountRoot:      accountRoot,
-			GlobalVersion:    version,
-			GlobalVersionSet: true,
+			AccountRoot: accountRoot,
+			Config:      testPreparedBlockchainConfigWithVersion(t, uint32(version)),
 		})
 		if err != nil {
 			t.Fatalf("v%d execution with proof config failed: %v", version, err)
@@ -643,7 +649,10 @@ func FuzzExecuteDetailedWithAccountProofConfigGlobalVersionPerRun(f *testing.F) 
 			assertExecutionProofGasConsumedSuccess(t, res, "configured")
 		}
 
-		leakCheck, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(100_000), executionProofMethodStack(t), ExecutionConfig{AccountRoot: accountRoot})
+		leakCheck, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(100_000), executionProofMethodStack(t), ExecutionConfig{
+			AccountRoot: accountRoot,
+			Config:      testPreparedBlockchainConfig(t),
+		})
 		if err != nil {
 			t.Fatalf("leak-check execution with proof failed: %v", err)
 		}
@@ -721,13 +730,11 @@ func FuzzExecuteDetailedWithAccountProofLibraryCodeCellStartupV9Boundary(f *test
 func executeExecutionProofLibraryStartupTarget(t *testing.T, version int, accountRoot *cell.Cell, libraries ...*cell.Cell) *ExecutionResult {
 	t.Helper()
 
-	machine, err := NewTVM().WithGlobalVersion(version)
-	if err != nil {
-		t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-	}
+	machine := NewTVM()
 	res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{
 		AccountRoot: accountRoot,
 		Libraries:   libraries,
+		Config:      testPreparedBlockchainConfigWithVersion(t, uint32(version)),
 	})
 	if err != nil {
 		t.Fatalf("ExecuteDetailedWithAccountProofWithConfig v%d: %v", version, err)
@@ -749,7 +756,7 @@ func TestExecuteGetMethodDetailedWithLibrariesDoesNotFinalCommitData(t *testing.
 	data := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 	proofData := mustUsageProofWithLoadedRoot(t, data)
 
-	res, err := NewTVM().ExecuteGetMethod(code, proofData, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), ExecutionConfig{})
+	res, err := NewTVM().ExecuteGetMethod(code, proofData, tuple.Tuple{}, vm.GasWithLimit(1000000), vm.NewStack(), testExecutionConfig(t))
 	if err != nil {
 		t.Fatalf("get method execution failed: %v", err)
 	}
@@ -775,6 +782,7 @@ func TestEmulateExternalMessageWithAccountProofRejectsAddressMismatch(t *testing
 	_, err := NewTVM().EmulateExternalMessage(code, data, msg, EmulateExternalMessageConfig{
 		BuildProof:  true,
 		AccountRoot: accountRoot,
+		Config:      testPreparedBlockchainConfig(t),
 	})
 	if err == nil {
 		t.Fatal("expected account proof address mismatch")

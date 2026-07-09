@@ -44,7 +44,7 @@ func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
 	vm := NewTVM()
 	code := cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell()
 
-	res, err := vm.Execute(code, nil, tuple.Tuple{}, vmcore.NewGas(), vmcore.NewStack(), ExecutionConfig{})
+	res, err := vm.Execute(code, nil, tuple.Tuple{}, vmcore.NewGas(), vmcore.NewStack(), testExecutionConfig(t))
 	if err == nil {
 		t.Fatal("expected fatal error")
 	}

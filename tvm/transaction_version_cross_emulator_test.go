@@ -18,6 +18,7 @@ import (
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -32,17 +33,24 @@ func transactionVersionCrossEmulatorVersions(t *testing.T) []uint32 {
 	return out
 }
 
+func transactionV15LibraryReferenceSkip(version uint32) string {
+	if version >= 15 {
+		return "bundled reference emulator predates upstream transaction v15 library action restrictions"
+	}
+	return ""
+}
+
 func TestTVMCrossEmulatorTransactionVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_TRANSACTION_VERSION_AUDIT_SHARDS", "")
 	t.Setenv("TVM_TRANSACTION_VERSION_AUDIT_SHARD", "")
 
 	all := transactionVersionCrossEmulatorVersions(t)
-	wantLen := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	wantLen := vm.MaxSupportedGlobalVersion - 0 + 1
 	if len(all) != wantLen {
 		t.Fatalf("default version selection len = %d, want %d", len(all), wantLen)
 	}
-	if all[0] != uint32(MinSupportedGlobalVersion) || all[len(all)-1] != uint32(MaxSupportedGlobalVersion) {
-		t.Fatalf("default version selection = %v, want range %d..%d", all, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+	if all[0] != uint32(0) || all[len(all)-1] != uint32(vm.MaxSupportedGlobalVersion) {
+		t.Fatalf("default version selection = %v, want range %d..%d", all, 0, vm.MaxSupportedGlobalVersion)
 	}
 
 	t.Setenv("TVM_TRANSACTION_VERSION_AUDIT_SHARDS", "4")
@@ -88,7 +96,7 @@ func FuzzTVMCrossEmulatorTransactionBasicSuccessGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(0xAAAA), uint16(0xBEEF), uint16(0xCAFE))
 	}
 	f.Add(uint8(255), uint16(0), uint16(0xffff), uint16(0x1234))
@@ -104,7 +112,7 @@ func FuzzTVMCrossEmulatorTransactionBuildProofBasicSuccessGlobalVersion(f *testi
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(0xAAAA), uint16(0xBEEF), uint16(0xCAFE))
 	}
 	f.Add(uint8(255), uint16(0), uint16(0xffff), uint16(0x1234))
@@ -120,7 +128,7 @@ func FuzzTVMCrossEmulatorTransactionBuildProofLibrariesGlobalVersion(f *testing.
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(0xA400+version), uint16(0xB400+version), uint16(0xC400+version))
 	}
 	f.Add(uint8(255), uint16(0), uint16(0xffff), uint16(0x1234))
@@ -138,7 +146,7 @@ func TestTVMCrossEmulatorTransactionBuildProofLibrariesGlobalVersionOverrideAllG
 
 	for _, version := range transactionVersionCrossEmulatorVersions(t) {
 		t.Run("global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
-			assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t, int(version), MaxSupportedGlobalVersion-int(version), uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
+			assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t, int(version), vm.MaxSupportedGlobalVersion-int(version), uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
 		})
 	}
 }
@@ -148,8 +156,8 @@ func FuzzTVMCrossEmulatorTransactionBuildProofLibrariesGlobalVersionOverride(f *
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
 	}
 	f.Add(uint8(255), uint8(0), uint16(0), uint16(0xffff), uint16(0x1234))
@@ -166,7 +174,7 @@ func FuzzTVMCrossEmulatorTransactionBuildProofComputeGlobalVersionBoundaries(f *
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint16(0xD400+version), uint16(0xE400+version), uint16(0xF400+version))
 		f.Add(uint8(version), uint8(1), uint16(0xD500+version), uint16(0xE500+version), uint16(0xF500+version))
 	}
@@ -185,10 +193,10 @@ func TestTVMCrossEmulatorTransactionBuildProofComputeGlobalVersionOverrideAllGlo
 
 	for _, version := range transactionVersionCrossEmulatorVersions(t) {
 		t.Run(fmt.Sprintf("gasconsumed_global_v%d", version), func(t *testing.T) {
-			assertTransactionBuildProofComputeGlobalVersionOverrideParity(t, int(version), MaxSupportedGlobalVersion-int(version), 0, uint16(0xD800+version), uint16(0xE800+version), uint16(0xF800+version))
+			assertTransactionBuildProofComputeGlobalVersionOverrideParity(t, int(version), vm.MaxSupportedGlobalVersion-int(version), 0, uint16(0xD800+version), uint16(0xE800+version), uint16(0xF800+version))
 		})
 		t.Run(fmt.Sprintf("inmsgparams_global_v%d", version), func(t *testing.T) {
-			assertTransactionBuildProofComputeGlobalVersionOverrideParity(t, int(version), MaxSupportedGlobalVersion-int(version), 1, uint16(0xD900+version), uint16(0xE900+version), uint16(0xF900+version))
+			assertTransactionBuildProofComputeGlobalVersionOverrideParity(t, int(version), vm.MaxSupportedGlobalVersion-int(version), 1, uint16(0xD900+version), uint16(0xE900+version), uint16(0xF900+version))
 		})
 	}
 }
@@ -198,8 +206,8 @@ func FuzzTVMCrossEmulatorTransactionBuildProofComputeGlobalVersionOverride(f *te
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), uint8(0), uint16(0xD800+version), uint16(0xE800+version), uint16(0xF800+version))
 		f.Add(uint8(version), uint8(opposite), uint8(1), uint16(0xD900+version), uint16(0xE900+version), uint16(0xF900+version))
 	}
@@ -217,8 +225,8 @@ func FuzzTVMCrossEmulatorTransactionComputeGlobalVersionFallbackAndConfigOverrid
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint8(0), uint16(0xAC00+version), uint16(0xBC00+version), uint16(0xCC00+version))
 		f.Add(uint8(version), uint8(opposite), false, uint8(1), uint16(0xAD00+version), uint16(0xBD00+version), uint16(0xCD00+version))
 		f.Add(uint8(opposite), uint8(version), true, uint8(0), uint16(0xAE00+version), uint16(0xBE00+version), uint16(0xCE00+version))
@@ -240,10 +248,10 @@ func TestTVMCrossEmulatorTransactionComputeGlobalVersionOverrideAllGlobalVersion
 
 	for _, version := range transactionVersionCrossEmulatorVersions(t) {
 		t.Run(fmt.Sprintf("gasconsumed_global_v%d", version), func(t *testing.T) {
-			assertTransactionComputeGlobalVersionOverrideParity(t, int(version), MaxSupportedGlobalVersion-int(version), 0, uint16(0xB000+version), uint16(0xC000+version), uint16(0xD000+version))
+			assertTransactionComputeGlobalVersionOverrideParity(t, int(version), vm.MaxSupportedGlobalVersion-int(version), 0, uint16(0xB000+version), uint16(0xC000+version), uint16(0xD000+version))
 		})
 		t.Run(fmt.Sprintf("inmsgparams_global_v%d", version), func(t *testing.T) {
-			assertTransactionComputeGlobalVersionOverrideParity(t, int(version), MaxSupportedGlobalVersion-int(version), 1, uint16(0xB100+version), uint16(0xC100+version), uint16(0xD100+version))
+			assertTransactionComputeGlobalVersionOverrideParity(t, int(version), vm.MaxSupportedGlobalVersion-int(version), 1, uint16(0xB100+version), uint16(0xC100+version), uint16(0xD100+version))
 		})
 	}
 }
@@ -253,8 +261,8 @@ func FuzzTVMCrossEmulatorTransactionComputeGlobalVersionOverride(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), uint8(0), uint16(0xB000+version), uint16(0xC000+version), uint16(0xD000+version))
 		f.Add(uint8(version), uint8(opposite), uint8(1), uint16(0xB100+version), uint16(0xC100+version), uint16(0xD100+version))
 	}
@@ -286,7 +294,7 @@ func FuzzTVMCrossEmulatorTransactionC7OptionsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint16(0xA000+version), uint16(0xC000+version), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(1), uint16(0xA100+version), uint16(0xC100+version), uint16(0xB100+version))
 	}
@@ -318,7 +326,7 @@ func FuzzTVMCrossEmulatorTransactionMalformedActionsGlobalVersion(f *testing.F) 
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version))
 		f.Add(uint8(version), uint8(1), uint16(0xA100+version), uint16(0xB100+version), uint16(0xC100+version))
 		f.Add(uint8(version), uint8(2), uint16(0xA200+version), uint16(0xB200+version), uint16(0xC200+version))
@@ -352,7 +360,7 @@ func FuzzTVMCrossEmulatorTransactionRawReserveActionsGlobalVersion(f *testing.F)
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version), uint64(10_800_000_000), uint64(1000))
 		f.Add(uint8(version), uint8(1), uint16(0xA100+version), uint16(0xB100+version), uint16(0xC100+version), uint64(20_000_000_000), uint64(1000))
 		f.Add(uint8(version), uint8(2), uint16(0xA200+version), uint16(0xB200+version), uint16(0xC200+version), uint64(5_000_000), uint64(0))
@@ -374,7 +382,7 @@ func FuzzTVMCrossEmulatorTransactionChangeLibraryActionsGlobalVersion(f *testing
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		for rawCase := uint8(0); rawCase < 5; rawCase++ {
 			f.Add(uint8(version), rawCase, uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version), uint16(0xD000+version))
 		}
@@ -750,12 +758,16 @@ func assertTransactionChangeLibraryActionsVersionParity(t *testing.T, version ui
 		t.Fatalf("go transaction emulation failed: %v", err)
 	}
 
+	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
+	if reason := transactionV15LibraryReferenceSkip(version); reason != "" {
+		t.Skip(reason)
+	}
+
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
 	if err != nil {
 		t.Fatalf("reference transaction emulation failed: %v", err)
 	}
 
-	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
 	assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 	if goRes.ExitCode != refRes.exitCode {
 		t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.ExitCode, refRes.exitCode)
@@ -795,6 +807,9 @@ func transactionChangeLibraryActionCase(t *testing.T, version uint32, rawCase ui
 	}
 	if version < 4 {
 		want = transactionActionPhaseExpectation{valid: true, resultCode: 34}
+	}
+	if version >= 15 && rawCase%5 != 2 {
+		want = transactionActionPhaseExpectation{valid: true, resultCode: 46}
 	}
 	return action, want
 }
@@ -883,10 +898,7 @@ func assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t *testing.
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -905,7 +917,7 @@ func assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t *testing.
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
+	goRes, err := testEmulateTransaction(machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1102,10 +1114,7 @@ func assertTransactionBuildProofComputeGlobalVersionOverrideParity(t *testing.T,
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -1135,7 +1144,7 @@ func assertTransactionBuildProofComputeGlobalVersionOverrideParity(t *testing.T,
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
+	goRes, err := testEmulateTransaction(machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1181,10 +1190,7 @@ func assertTransactionComputeFallbackVersionParity(t *testing.T, machineVersion,
 	}
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(effectiveVersion))
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -1214,7 +1220,7 @@ func assertTransactionComputeFallbackVersionParity(t *testing.T, machineVersion,
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
+	goRes, err := testEmulateTransaction(machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1265,10 +1271,7 @@ func assertTransactionComputeGlobalVersionOverrideParity(t *testing.T, version, 
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -1298,7 +1301,7 @@ func assertTransactionComputeGlobalVersionOverrideParity(t *testing.T, version, 
 	})
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 
-	goRes, err := testEmulateTransaction(&machine, shard, msg, testTxParams{
+	goRes, err := testEmulateTransaction(machine, shard, msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
@@ -1343,7 +1346,7 @@ func FuzzTVMCrossEmulatorTransactionOldVersionActionModes(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version))
 	}
 	f.Add(uint8(255))
@@ -1433,7 +1436,7 @@ func FuzzTVMCrossEmulatorTransactionInvalidSendModeGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint16(0xA900+version), uint16(0xB900+version), uint16(0xC900+version))
 		f.Add(uint8(version), uint8(1), uint16(0xD900+version), uint16(0xE900+version), uint16(0xF900+version))
 	}
@@ -1609,7 +1612,7 @@ func FuzzTVMCrossEmulatorTransactionActionFineGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint64(10), uint8(6), uint16(0xA000+version), uint16(0xB000+version))
 		f.Add(uint8(version), uint64(1), uint8(1), uint16(0xC000+version), uint16(0xD000+version))
 		f.Add(uint8(version), uint64(32), uint8(31), uint16(0xE000+version), uint16(0xF000+version))
@@ -2087,7 +2090,7 @@ func FuzzTVMCrossEmulatorTransactionRandSeedGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(3), uint8(0xA0), uint64(0x1111111111111111), uint64(0x2222222222222222), uint16(0xAAAA), uint16(0xCAFE))
 		f.Add(uint8(version), uint8(1), uint8(0x80), uint64(0), uint64(0), uint16(0xBBBB), uint16(0xD00D))
 		f.Add(uint8(version), uint8(8), uint8(0x5A), uint64(0x0123456789ABCDEF), uint64(0xFEDCBA9876543210), uint16(0xCCCC), uint16(0xBEEF))
@@ -2477,7 +2480,7 @@ func FuzzTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion(f *t
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(1), uint32(0x00000000), uint16(0xA000+version), uint64(1000))
 		f.Add(uint8(version), uint8(1), uint8(3), uint32(0xE0000000), uint16(0xB000+version), uint64(777))
 		f.Add(uint8(version), uint8(0), uint8(30), uint32(0xFFFFFFFC), uint16(0xC000+version), uint64(1))
@@ -2666,7 +2669,7 @@ func FuzzTVMCrossEmulatorTransactionOutboundVarDestinationGlobalVersion(f *testi
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(0), uint16(256), uint8(0x11), uint16(0xA000+version), uint64(1000))
 		f.Add(uint8(version), uint8(1), uint8(0), uint16(256), uint8(0x22), uint16(0xB000+version), uint64(777))
 		f.Add(uint8(version), uint8(2), uint8(0), uint16(255), uint8(0x33), uint16(0xC000+version), uint64(1))
@@ -2776,7 +2779,7 @@ func FuzzTVMCrossEmulatorTransactionInboundExternalValidationGlobalVersion(f *te
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(16), uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version))
 		f.Add(uint8(version), uint8(3), uint8(24), uint16(0xD000+version), uint16(0xE000+version), uint16(0xF000+version))
 		f.Add(uint8(version), uint8(29), uint8(64), uint16(0xA100+version), uint16(0xB100+version), uint16(0xC100+version))
@@ -2936,7 +2939,7 @@ func FuzzTVMCrossEmulatorTransactionSendMsgCustomFwdFeeGlobalVersion(f *testing.
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(0), uint16(0xA000+version), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(1), uint8(1), uint16(0xC000+version), uint16(0xD000+version))
 		f.Add(uint8(version), uint8(0), uint8(3), uint16(0xE000+version), uint16(0xF000+version))
@@ -3189,7 +3192,7 @@ func FuzzTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion(f *testing.F)
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(0), uint8(3), uint16(0xA000+version), uint64(1_000_000_000))
 		f.Add(uint8(version), uint8(1), uint8(0), uint8(4), uint16(0xB000+version), uint64(777))
 		f.Add(uint8(version), uint8(2), uint8(1), uint8(0), uint16(0xC000+version), uint64(1))
@@ -3390,7 +3393,7 @@ func FuzzTVMCrossEmulatorTransactionInvalidSourceDestinationMode2GlobalVersion(f
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(0), uint8(0), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(0), uint8(1), uint8(1), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(1), uint8(0), uint8(2), uint16(0xC000+version))
@@ -3570,7 +3573,7 @@ func FuzzTVMCrossEmulatorTransactionExternalOutActionsGlobalVersion(f *testing.F
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(0), uint8(15), uint16(0xE100+version))
 		f.Add(uint8(version), uint8(0), uint8(1), uint8(255), uint16(0xE200+version))
 		f.Add(uint8(version), uint8(1), uint8(0), uint8(31), uint16(0xE300+version))
@@ -3750,7 +3753,7 @@ func FuzzTVMCrossEmulatorTransactionInboundIHRFeeGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint64(0), uint64(0), uint16(0xA000+version))
 		f.Add(uint8(version), uint64(100), uint64(23), uint16(0xB000+version))
 		f.Add(uint8(version), uint64(999_999), uint64(999_999), uint16(0xC000+version))
@@ -3863,7 +3866,7 @@ func FuzzTVMCrossEmulatorTransactionReserveOriginalBalanceGlobalVersion(f *testi
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint64(0), uint64(1), uint16(0xA000+version))
 		f.Add(uint8(version), uint64(500), uint64(1_000), uint16(0xB000+version))
 		f.Add(uint8(version), uint64(9_999), uint64(99), uint16(0xC000+version))
@@ -4026,7 +4029,7 @@ func FuzzTVMCrossEmulatorTransactionReserveExtraCurrencyGlobalVersion(f *testing
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(7), uint64(10), uint64(1), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(1), uint64(1), uint64(1), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(31), uint64(999), uint64(100), uint16(0xC000+version))
@@ -4201,7 +4204,7 @@ func FuzzTVMCrossEmulatorTransactionReserveOriginalExtraCurrencyGlobalVersion(f 
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(7), uint64(3), uint64(1), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(1), uint64(1), uint64(1), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(31), uint64(999), uint64(500), uint16(0xC000+version))
@@ -4380,7 +4383,7 @@ func FuzzTVMCrossEmulatorTransactionSendExtraCurrencySizeGlobalVersion(f *testin
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(7), uint64(3), uint64(1), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(1), uint64(1), uint64(1), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(31), uint64(999), uint64(500), uint16(0xC000+version))
@@ -4584,7 +4587,7 @@ func FuzzTVMCrossEmulatorTransactionStorageDuePaymentGlobalVersion(f *testing.F)
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint64(50), uint64(100), uint64(0), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(0), uint64(1), uint64(2), uint64(17), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(1), uint64(1_000), uint64(77), uint64(77), uint16(0xC000+version))
@@ -4801,7 +4804,7 @@ func FuzzTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion(f *test
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version), uint8(0), uint8(0))
 		f.Add(uint8(version), true, uint16(0xD000+version), uint16(0xE000+version), uint16(0xF000+version), uint8(17), uint8(23))
 	}
@@ -4929,7 +4932,7 @@ func FuzzTVMCrossEmulatorTransactionFrozenExternalStateHashGlobalVersion(f *test
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xA800+version), uint16(0xB800+version), uint16(0xC800+version))
 		f.Add(uint8(version), true, uint16(0xD800+version), uint16(0xE800+version), uint16(0xF800+version))
 	}
@@ -5148,7 +5151,7 @@ func FuzzTVMCrossEmulatorTransactionStateInitFixedPrefixGlobalVersion(f *testing
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(7), uint8(0), uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version))
 		f.Add(uint8(version), uint8(9), uint8(1), uint16(0xA100+version), uint16(0xB100+version), uint16(0xC100+version))
 		f.Add(uint8(version), uint8(9), uint8(2), uint16(0xA200+version), uint16(0xB200+version), uint16(0xC200+version))
@@ -5167,7 +5170,7 @@ func FuzzTVMCrossEmulatorTransactionNoStateSkipReasonGlobalVersion(f *testing.F)
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint64(1), uint64(0), uint16(0xA000+version), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(1), uint64(7), uint64(11), uint16(0xC000+version), uint16(0xD000+version))
 	}
@@ -5241,7 +5244,7 @@ func FuzzTVMCrossEmulatorTransactionStateInitNoCodeGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint64(1), uint64(0), uint16(0xA000+version), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(3), uint64(7), uint64(11), uint16(0xC000+version), uint16(0xD000+version))
 		f.Add(uint8(version), uint8(6), uint64(13), uint64(17), uint16(0xE000+version), uint16(0xF000+version))
@@ -5436,7 +5439,7 @@ func FuzzTVMCrossEmulatorTransactionMasterchainPublicLibrariesDeployGlobalVersio
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0xA2), uint16(0xAAAA), uint16(0xBEEF), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(0xE5), uint16(0x1000+version), uint16(0x2000+version), uint16(0xB000+version))
 	}
@@ -5530,7 +5533,7 @@ func FuzzTVMCrossEmulatorTransactionPrecompiledNoGasGlobalVersion(f *testing.F) 
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(0xCAFE+version))
 	}
 	f.Add(uint8(255), uint16(0xffff))
@@ -5712,7 +5715,7 @@ func FuzzTVMCrossEmulatorTransactionStorageDeletionDestroyedGlobalVersion(f *tes
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint64(500), false, uint16(0xA000+version))
 		f.Add(uint8(version), uint8(1), uint64(500), false, uint16(0xB000+version))
 		f.Add(uint8(version), uint8(2), uint64(500), false, uint16(0xC000+version))
@@ -5930,7 +5933,7 @@ func FuzzTVMCrossEmulatorTransactionStorageExtraDictHashGlobalVersion(f *testing
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(1), uint8(0), false, uint16(0xA000+version))
 		f.Add(uint8(version), uint8(2), uint8(2), false, uint16(0xB000+version))
 		f.Add(uint8(version), uint8(2), uint8(4), true, uint16(0xC000+version))
@@ -6052,7 +6055,7 @@ func FuzzTVMCrossEmulatorTransactionStorageExtraCurrencyUsageGlobalVersion(f *te
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(1), uint64(1), uint8(0), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(7), uint64(11), uint8(2), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(31), uint64(999), uint8(4), uint16(0xC000+version))
@@ -6237,7 +6240,7 @@ func FuzzTVMCrossEmulatorTransactionSpecialGasFullGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(100), uint8(10), uint16(100), uint16(1_000), uint8(0x42), uint16(0xA000+version))
 		f.Add(uint8(version), uint16(0), uint8(1), uint16(1), uint16(64), uint8(0x43), uint16(0xB000+version))
 		f.Add(uint8(version), uint16(4_000), uint8(20), uint16(250), uint16(500), uint8(0x44), uint16(0xC000+version))
@@ -6439,7 +6442,7 @@ func FuzzTVMCrossEmulatorTransactionHistoricalGasLimitOverrideGlobalVersion(f *t
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), false, uint8(0), uint32(0), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(0), true, uint8(0), uint32(1), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(1), false, uint8(1), uint32(0), uint16(0xC000+version))
@@ -6556,7 +6559,7 @@ func FuzzTVMCrossEmulatorTransactionMasterchainStateLimitGlobalVersion(f *testin
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0x45), uint8(0xDD), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(0x7F), uint8(0xA1), uint16(0xB000+version))
 	}
@@ -6614,12 +6617,16 @@ func assertTransactionMasterchainStateLimitVersionParity(t *testing.T, version u
 		t.Fatalf("go transaction emulation failed: %v", err)
 	}
 
+	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
+	if reason := transactionV15LibraryReferenceSkip(version); reason != "" {
+		t.Skip(reason)
+	}
+
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
 	if err != nil {
 		t.Fatalf("reference transaction emulation failed: %v", err)
 	}
 
-	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
 	assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
@@ -6667,7 +6674,7 @@ func FuzzTVMCrossEmulatorTransactionMasterchainPublicLibraryLimitGlobalVersion(f
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(0x66), uint8(0xCC), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(1), uint8(0x68), uint8(0xE1), uint16(0xB000+version))
 	}
@@ -6689,6 +6696,9 @@ func assertTransactionMasterchainPublicLibraryLimitVersionParity(t *testing.T, v
 	if rawCase%2 == 0 {
 		workchain = 0xFF
 		want = transactionActionPhaseExpectation{valid: true, resultCode: 50}
+	}
+	if version >= 15 {
+		want = transactionActionPhaseExpectation{valid: true, resultCode: 46}
 	}
 	addrTag = transactionMasterchainLimitSafeAddrTag(addrTag)
 	addr := address.NewAddress(0, workchain, bytes.Repeat([]byte{addrTag}, 32))
@@ -6723,12 +6733,16 @@ func assertTransactionMasterchainPublicLibraryLimitVersionParity(t *testing.T, v
 		t.Fatalf("go transaction emulation failed: %v", err)
 	}
 
+	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
+	if reason := transactionV15LibraryReferenceSkip(version); reason != "" {
+		t.Skip(reason)
+	}
+
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
 	if err != nil {
 		t.Fatalf("reference transaction emulation failed: %v", err)
 	}
 
-	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
 	assertOrdinaryTransactionActionPhase(t, "reference", refRes.txCell, want)
 	assertTransactionNonComputeParity(t, goRes.TransactionCell, refRes.txCell)
 	assertTransactionComputePhaseParity(t, goRes.TransactionCell, refRes.txCell)
@@ -6819,7 +6833,7 @@ func FuzzTVMCrossEmulatorTransactionFailedActionMessageBalanceGlobalVersion(f *t
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint64(0), uint64(0), uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version))
 		f.Add(uint8(version), uint8(1), uint64(500), uint64(1), uint16(0xD000+version), uint16(0xE000+version), uint16(0xF000+version))
 		f.Add(uint8(version), uint8(2), uint64(777), uint64(9), uint16(0xA100+version), uint16(0xB100+version), uint16(0xC100+version))
@@ -7035,7 +7049,7 @@ func FuzzTVMCrossEmulatorTransactionBounceFormatGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0), uint8(0), uint8(0), uint16(32), uint64(0))
 		f.Add(uint8(version), uint8(0), uint8(0), uint8(1), uint16(32), uint64(0))
 		f.Add(uint8(version), uint8(1), uint8(1), uint8(0), uint16(520), uint64(11))

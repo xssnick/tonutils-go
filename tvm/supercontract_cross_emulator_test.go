@@ -21,6 +21,7 @@ import (
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	tupleop "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 type superContractStep struct {
@@ -101,11 +102,11 @@ func FuzzTVMCrossEmulatorSupercontractVersionedPrefixes(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%superContractVersionedPrefixCaseCount))
 	}
 	for i := 0; i < superContractVersionedPrefixCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -147,11 +148,11 @@ func FuzzTVMCrossEmulatorSupercontractCorePrefixesGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version))
 	}
 	for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
-		f.Add(uint8(MaxSupportedGlobalVersion), rawPrefix)
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), rawPrefix)
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -188,11 +189,11 @@ func FuzzTVMCrossEmulatorSupercontractTonopsPrefixesGlobalVersion(f *testing.F) 
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version))
 	}
 	for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
-		f.Add(uint8(MaxSupportedGlobalVersion), rawPrefix)
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), rawPrefix)
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -240,12 +241,12 @@ func FuzzTVMCrossEmulatorSupercontractC7PrefixesGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%superContractC7PrefixSuiteCount), uint8(version))
 	}
 	for suiteIdx := 0; suiteIdx < superContractC7PrefixSuiteCount; suiteIdx++ {
 		for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
-			f.Add(uint8(MaxSupportedGlobalVersion), uint8(suiteIdx), rawPrefix)
+			f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(suiteIdx), rawPrefix)
 		}
 	}
 	f.Add(uint8(255), uint8(255), uint8(255))
@@ -289,11 +290,11 @@ func FuzzTVMCrossEmulatorSupercontractCryptoPrefixesGlobalVersion(f *testing.F) 
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version))
 	}
 	for _, rawPrefix := range []uint8{0, 1, 2, 3, 7, 15, 31, 63, 127, 255} {
-		f.Add(uint8(MaxSupportedGlobalVersion), rawPrefix)
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), rawPrefix)
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -400,11 +401,11 @@ func FuzzTVMCrossEmulatorSupercontractAddressByPrefixesGlobalVersion(f *testing.
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%superContractAddressPrefixCaseCount))
 	}
 	for idx := 0; idx < superContractAddressPrefixCaseCount; idx++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(idx))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(idx))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -917,7 +918,7 @@ func TestTVMCrossEmulatorSupercontractNegativeQuietGlobalVersion(t *testing.T) {
 	versions := crossEmulatorVersionAuditVersions(t, "TVM_SUPERCONTRACT_NEGATIVE_VERSION_AUDIT")
 	for caseIdx := 0; caseIdx < superContractNegativeQuietVersionedCaseCount; caseIdx++ {
 		caseIdx := caseIdx
-		name, _, _, _, _ := superContractNegativeQuietVersionedCase(t, uint8(caseIdx), MaxSupportedGlobalVersion)
+		name, _, _, _, _ := superContractNegativeQuietVersionedCase(t, uint8(caseIdx), vm.MaxSupportedGlobalVersion)
 		t.Run(name, func(t *testing.T) {
 			for _, version := range versions {
 				version := version
@@ -934,11 +935,11 @@ func FuzzTVMCrossEmulatorSupercontractNegativeQuietGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%superContractNegativeQuietVersionedCaseCount))
 	}
 	for caseIdx := 0; caseIdx < superContractNegativeQuietVersionedCaseCount; caseIdx++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(caseIdx))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(caseIdx))
 	}
 	f.Add(uint8(255), uint8(255))
 

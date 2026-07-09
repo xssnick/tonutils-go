@@ -1,6 +1,10 @@
 package tvm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/vm"
+)
 
 func markRegistered(node *trieNode, want map[string]bool) {
 	if node == nil {
@@ -25,7 +29,7 @@ func TestNewTVMRegistersTupleOpcodes(t *testing.T) {
 		"ISTUPLE":  false,
 	}
 
-	markRegistered(machine.dispatches[MaxSupportedGlobalVersion].root, want)
+	markRegistered(machine.dispatches[vm.MaxSupportedGlobalVersion].root, want)
 
 	for name, ok := range want {
 		if !ok {

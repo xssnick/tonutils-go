@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 const (
@@ -36,8 +38,8 @@ func TestOpcodeMinGlobalVersionSourceLiteralsAreRepresented(t *testing.T) {
 	}
 
 	for _, literal := range opcodeMinVersionSourceLiterals(t) {
-		if literal <= MinSupportedGlobalVersion || literal > MaxSupportedGlobalVersion {
-			t.Fatalf("opcode MinVersion source literal %d outside (%d, %d]", literal, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if literal <= 0 || literal > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("opcode MinVersion source literal %d outside (%d, %d]", literal, 0, vm.MaxSupportedGlobalVersion)
 		}
 		if _, ok := registryVersions[literal]; !ok {
 			t.Fatalf("opcode MinVersion source literal %d has no representative in opcode min-version registry", literal)

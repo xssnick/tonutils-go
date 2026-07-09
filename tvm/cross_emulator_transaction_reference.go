@@ -196,7 +196,7 @@ func mustReferenceTransactionConfigRoot(t testingT) *cell.Cell {
 	if err != nil {
 		t.Fatalf("failed to decode reference config fixture: %v", err)
 	}
-	return referenceTransactionConfigRootWithGlobalVersion(t, root, vm.DefaultGlobalVersion)
+	return referenceTransactionConfigRootWithGlobalVersion(t, root, vm.MaxSupportedGlobalVersion)
 }
 
 func referenceTransactionConfigRootWithGlobalVersion(t testingT, base *cell.Cell, version uint32) *cell.Cell {

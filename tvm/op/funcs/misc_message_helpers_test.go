@@ -334,11 +334,11 @@ func TestStorageStatsDataSizeAndVarInts(t *testing.T) {
 }
 
 func TestMessageAddressHelpersAndOps(t *testing.T) {
-	if bits, ok := parseMaybeAnycast(cell.BeginCell().MustStoreUInt(0, 1).ToSlice(), vm.DefaultGlobalVersion); !ok || bits != nil {
+	if bits, ok := parseMaybeAnycast(cell.BeginCell().MustStoreUInt(0, 1).ToSlice(), vm.MaxSupportedGlobalVersion); !ok || bits != nil {
 		t.Fatalf("parseMaybeAnycast(false) = (%v, %v)", bits, ok)
 	}
 	anycast := cell.BeginCell().MustStoreUInt(1, 1).MustStoreUInt(3, 5).MustStoreUInt(0b101, 3).ToSlice()
-	if _, ok := parseMaybeAnycast(anycast.Copy(), vm.DefaultGlobalVersion); ok {
+	if _, ok := parseMaybeAnycast(anycast.Copy(), vm.MaxSupportedGlobalVersion); ok {
 		t.Fatal("parseMaybeAnycast(true) should fail on current global versions")
 	}
 	if bits, ok := parseMaybeAnycast(anycast.Copy(), 9); !ok || bits == nil || bits.BitsLeft() != 3 {
@@ -349,19 +349,19 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	_, extAddr := mustExtAddrSlice(t)
 	noneAddr := cell.BeginCell().MustStoreAddr(address.NewAddressNone()).ToSlice()
 
-	parsed, rest, ok := parseMessageAddress(noneAddr, vm.DefaultGlobalVersion)
+	parsed, rest, ok := parseMessageAddress(noneAddr, vm.MaxSupportedGlobalVersion)
 	if !ok || parsed.Kind != 0 || rest.BitsLeft() != 0 {
 		t.Fatalf("parseMessageAddress(none) = (%+v, %v, %v)", parsed, rest, ok)
 	}
 
-	parsed, rest, ok = parseMessageAddress(extAddr, vm.DefaultGlobalVersion)
+	parsed, rest, ok = parseMessageAddress(extAddr, vm.MaxSupportedGlobalVersion)
 	if !ok || parsed.Kind != 1 || parsed.Addr.BitsLeft() != 16 || rest.BitsLeft() != 0 {
 		t.Fatalf("parseMessageAddress(ext) = (%+v, %v, %v)", parsed, rest, ok)
 	}
 
 	builder := cell.BeginCell().MustStoreAddr(address.NewAddress(0, 0, stdData)).MustStoreUInt(0xA, 4)
 	src := builder.ToSlice()
-	parsed, rest, ok = parseMessageAddress(src, vm.DefaultGlobalVersion)
+	parsed, rest, ok = parseMessageAddress(src, vm.MaxSupportedGlobalVersion)
 	if !ok || parsed.Kind != 2 || parsed.Workchain != 0 || rest.BitsLeft() != 4 {
 		t.Fatalf("parseMessageAddress(std) = (%+v, %v, %v)", parsed, rest, ok)
 	}
@@ -529,7 +529,7 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consumedPrefixSlice failed: %v", err)
 	}
-	if !isValidStdMsgAddr(consumed, vm.DefaultGlobalVersion) {
+	if !isValidStdMsgAddr(consumed, vm.MaxSupportedGlobalVersion) {
 		t.Fatal("consumed std address should validate as MsgAddressInt")
 	}
 
@@ -570,7 +570,7 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PopSlice(addr) failed: %v", err)
 	}
-	if restAfterLoad.BitsLeft() != 4 || !isValidStdMsgAddr(addrSlice, vm.DefaultGlobalVersion) {
+	if restAfterLoad.BitsLeft() != 4 || !isValidStdMsgAddr(addrSlice, vm.MaxSupportedGlobalVersion) {
 		t.Fatalf("unexpected LDMSGADDR result: restBits=%d", restAfterLoad.BitsLeft())
 	}
 
@@ -593,7 +593,7 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PopSlice(addr) failed: %v", err)
 	}
-	if restAfterLoad.BitsLeft() != 4 || !isValidStdMsgAddr(addrSlice, vm.DefaultGlobalVersion) {
+	if restAfterLoad.BitsLeft() != 4 || !isValidStdMsgAddr(addrSlice, vm.MaxSupportedGlobalVersion) {
 		t.Fatalf("unexpected LDMSGADDRQ result: restBits=%d", restAfterLoad.BitsLeft())
 	}
 
@@ -612,7 +612,7 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PopSlice(addr) failed: %v", err)
 	}
-	if restAfterLoad.BitsLeft() != 4 || !isValidStdMsgAddr(addrSlice, vm.DefaultGlobalVersion) {
+	if restAfterLoad.BitsLeft() != 4 || !isValidStdMsgAddr(addrSlice, vm.MaxSupportedGlobalVersion) {
 		t.Fatalf("unexpected LDSTDADDR result: restBits=%d", restAfterLoad.BitsLeft())
 	}
 

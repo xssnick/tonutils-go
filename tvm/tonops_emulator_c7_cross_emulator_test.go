@@ -23,7 +23,7 @@ func TestTVMCrossEmulatorTonOpsEmulatorC7Path(t *testing.T) {
 	for _, tt := range tonOpsEmulatorC7Cases(t) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			runTonOpsEmulatorC7PathVersionCase(t, tt, vm.DefaultGlobalVersion)
+			runTonOpsEmulatorC7PathVersionCase(t, tt, vm.MaxSupportedGlobalVersion)
 		})
 	}
 }
@@ -52,11 +52,11 @@ func FuzzTVMCrossEmulatorTonOpsEmulatorC7PathGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%tonOpsEmulatorC7CaseCount))
 	}
 	for i := 0; i < tonOpsEmulatorC7CaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -217,7 +217,7 @@ func runTonOpsEmulatorC7PathVersionCase(t *testing.T, tt tonOpsEmulatorC7Case, v
 		Now:        uint32(tonopsTestTime.Unix()),
 		Balance:    new(big.Int).Set(tonopsTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
-		Config:     MustPrepareConfig(configRoot),
+		Config:     MustPrepareBlockchainConfig(configRoot),
 		GlobalID:   tonopsTestGlobalID,
 		PrevBlocks: tt.prevBlocks,
 	}, new(big.Int).Set(tonopsTestBalance), uint32(version))

@@ -1513,7 +1513,7 @@ func TestTransactionProcessReserveCurrencyV13DoesNotReserveOriginalExtraCurrenci
 				Currency: tlb.CurrencyCollection{
 					Coins: tlb.FromNanoTONU(tc.amount),
 				},
-			}, original, remaining, reserved, vmcore.DefaultGlobalVersion)
+			}, original, remaining, reserved, vmcore.MaxSupportedGlobalVersion)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1578,6 +1578,104 @@ func TestTransactionApplyActionsActionFineStartsAtV4(t *testing.T) {
 	}
 }
 
+func TestTransactionApplyActionsV15ChargesSuccessfulMessageFineOnLaterFailure(t *testing.T) {
+	priceCell, err := tlb.ToCell(&tlb.ConfigMsgForwardPrices{CellPrice: 4 << 16})
+	if err != nil {
+		t.Fatalf("failed to build msg prices: %v", err)
+	}
+	body := transactionTestCellChain(3)
+
+	for _, tt := range []struct {
+		name     string
+		version  uint32
+		wantFine bool
+	}{
+		{name: "v14 no successful message fine on later failure", version: 14},
+		{name: "v15 charges successful message fine on later failure", version: 15, wantFine: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+				tlb.ConfigParamGlobalVersion:               transactionTestGlobalVersionCell(t, tt.version),
+				tlb.ConfigParamMsgForwardPricesBasechain:   priceCell,
+				tlb.ConfigParamMsgForwardPricesMasterchain: priceCell,
+			})
+			out := applyTransactionActionsForTestWithParams(t, []any{
+				tlb.ActionSendMsg{
+					Mode: 1,
+					Msg:  buildTransactionOutboundInternalCellWithBody(t, 1_000, body),
+				},
+				tlb.ActionChangeLibrary{
+					Mode:   3,
+					LibRef: tlb.LibRefHash{LibHash: make([]byte, 32)},
+				},
+			}, cfg, big.NewInt(1_000_000), nil, transactionZeroCurrencyBalance())
+
+			if out.phase == nil || out.phase.Success || out.phase.ResultCode != 34 || out.phase.MessagesCreated != 1 {
+				t.Fatalf("unexpected action phase: %+v", out.phase)
+			}
+			gotFine := out.actionFine.Sign() > 0
+			if gotFine != tt.wantFine {
+				t.Fatalf("charged action fine = %s, want positive=%t", out.actionFine, tt.wantFine)
+			}
+		})
+	}
+}
+
+func TestTransactionV15ChangeLibraryRestrictions(t *testing.T) {
+	lib := cell.BeginCell().MustStoreUInt(0xA6, 8).EndCell()
+	cfg := transactionTestConfigWithGlobalVersion(t, 15)
+
+	for _, tt := range []struct {
+		name      string
+		action    tlb.ActionChangeLibrary
+		current   *cell.Dictionary
+		isSpecial bool
+		wantCode  int32
+		wantStore bool
+	}{
+		{
+			name:     "non-special cannot remove library",
+			action:   tlb.ActionChangeLibrary{Mode: 0, LibRef: tlb.LibRefHash{LibHash: lib.Hash()}},
+			current:  buildTransactionV13LibraryDict(t, lib, true),
+			wantCode: 46,
+		},
+		{
+			name:     "non-special cannot add public library",
+			action:   tlb.ActionChangeLibrary{Mode: 2, LibRef: tlb.LibRefRef{Library: lib}},
+			wantCode: 46,
+		},
+		{
+			name:      "special cannot add private library",
+			action:    tlb.ActionChangeLibrary{Mode: 1, LibRef: tlb.LibRefRef{Library: lib}},
+			isSpecial: true,
+			wantCode:  46,
+		},
+		{
+			name:      "special can add public library",
+			action:    tlb.ActionChangeLibrary{Mode: 2, LibRef: tlb.LibRefRef{Library: lib}},
+			isSpecial: true,
+			wantStore: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := transactionProcessChangeLibraryAction(tt.action, tt.current, cfg, 15, tt.isSpecial)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.resultCode != tt.wantCode {
+				t.Fatalf("result code = %d, want %d", res.resultCode, tt.wantCode)
+			}
+			if !tt.wantStore {
+				if res.nextLibraries != nil {
+					t.Fatalf("next libraries present on failure: %v", res.nextLibraries)
+				}
+				return
+			}
+			assertTransactionLibraryStored(t, res.nextLibraries, lib, true)
+		})
+	}
+}
+
 func TestTransactionFailedActionKeepsPreviousActionFeesBeforeV4(t *testing.T) {
 	priceCell := buildTransactionMsgForwardPricesCell(t, 400000, 21845)
 	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
@@ -1606,13 +1704,44 @@ func TestTransactionFailedActionKeepsPreviousActionFeesBeforeV4(t *testing.T) {
 	}
 }
 
+func assertTransactionLibraryStored(t *testing.T, libs *cell.Dictionary, lib *cell.Cell, wantPublic bool) {
+	t.Helper()
+
+	if libs == nil {
+		t.Fatal("next libraries are nil")
+	}
+	hash := lib.HashKey()
+	key := cell.BeginCell().MustStoreSlice(hash[:], 256).EndCell()
+	value, err := libs.LoadValue(key)
+	if err != nil {
+		t.Fatalf("failed to load library value: %v", err)
+	}
+	if value == nil {
+		t.Fatal("library value is missing")
+	}
+	isPublic, err := value.LoadBoolBit()
+	if err != nil {
+		t.Fatalf("failed to load library public flag: %v", err)
+	}
+	if isPublic != wantPublic {
+		t.Fatalf("library public flag = %t, want %t", isPublic, wantPublic)
+	}
+	ref, err := value.LoadRefCell()
+	if err != nil {
+		t.Fatalf("failed to load library ref: %v", err)
+	}
+	if ref == nil || ref.HashKey() != hash {
+		t.Fatal("library ref hash mismatch")
+	}
+}
+
 func applyTransactionSendActionForTest(t *testing.T, mode uint8, msg *cell.Cell) *transactionActionApplyResult {
 	t.Helper()
 
 	return applyTransactionSendActionForTestWithParams(t, tlb.ActionSendMsg{Mode: mode, Msg: msg}, transactionTestConfigWithGlobalVersion(t, 13), big.NewInt(1_000_000_000), nil, transactionZeroCurrencyBalance())
 }
 
-func applyTransactionSendActionForTestWithParams(t *testing.T, act tlb.ActionSendMsg, cfg *PreparedConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
+func applyTransactionSendActionForTestWithParams(t *testing.T, act tlb.ActionSendMsg, cfg *PreparedBlockchainConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
 	t.Helper()
 
 	return applyTransactionActionsForTestWithParams(t, []any{act}, cfg, balance, extra, msgBalance)
@@ -1632,7 +1761,7 @@ func buildTransactionExternalOutCell(t *testing.T, dst *address.Address) *cell.C
 	return msg
 }
 
-func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *PreparedConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
+func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *PreparedBlockchainConfig, balance *big.Int, extra *cell.Dictionary, msgBalance *transactionCurrencyBalance) *transactionActionApplyResult {
 	t.Helper()
 
 	data := cell.BeginCell().EndCell()
@@ -1659,7 +1788,7 @@ func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *
 	return out
 }
 
-func transactionTestConfigWithGlobalVersion(t *testing.T, version uint32) *PreparedConfig {
+func transactionTestConfigWithGlobalVersion(t *testing.T, version uint32) *PreparedBlockchainConfig {
 	t.Helper()
 
 	return transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
@@ -1667,13 +1796,13 @@ func transactionTestConfigWithGlobalVersion(t *testing.T, version uint32) *Prepa
 	})
 }
 
-func transactionTestConfigWithParams(t *testing.T, params map[uint32]*cell.Cell) *PreparedConfig {
+func transactionTestConfigWithParams(t *testing.T, params map[uint32]*cell.Cell) *PreparedBlockchainConfig {
 	t.Helper()
 
 	if _, ok := params[tlb.ConfigParamGlobalVersion]; !ok {
 		params[tlb.ConfigParamGlobalVersion] = transactionTestGlobalVersionCell(t, 13)
 	}
-	return MustPrepareConfig(buildTransactionConfigRoot(t, params))
+	return MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, params))
 }
 
 func transactionTestGlobalVersionCell(t *testing.T, version uint32) *cell.Cell {

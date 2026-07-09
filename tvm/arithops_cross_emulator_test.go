@@ -521,11 +521,11 @@ func FuzzTVMCrossEmulatorArithOpsSignedRoundingEdgesGlobalVersion(f *testing.F) 
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%arithSignedRoundingEdgeCaseCount))
 	}
 	for idx := 0; idx < arithSignedRoundingEdgeCaseCount; idx++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(idx))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(idx))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -709,7 +709,7 @@ func FuzzTVMCrossEmulatorArithOpsVersionedQuietEdges(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		for op := uint8(0); op < 7; op++ {
 			f.Add(uint8(version), op, int64(7), int16(1024), true, false, uint8(0))
 			f.Add(uint8(version), op, int64(-1), int16(-1), false, false, uint8(1))
@@ -927,7 +927,7 @@ func FuzzTVMCrossEmulatorArithOpsOpcodeCoverageGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		for _, rawCase := range []uint16{0, 1, 2, 7, 31, 63, 127, 255, 511} {
 			f.Add(uint8(version), rawCase)
 		}

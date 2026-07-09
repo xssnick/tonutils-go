@@ -73,11 +73,11 @@ func FuzzTVMCrossEmulatorStackOpsOpcodeSpaceGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%stackOpsOpcodeSpaceFuzzClassCount), uint16(version), uint16(version*17), uint16(version*31))
 	}
 	for class := 0; class < stackOpsOpcodeSpaceFuzzClassCount; class++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(class), uint16(class*13), uint16(class*19), uint16(class*23))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(class), uint16(class*13), uint16(class*19), uint16(class*23))
 	}
 	f.Add(uint8(255), uint8(255), uint16(65535), uint16(32768), uint16(1))
 
@@ -142,11 +142,11 @@ func FuzzTVMCrossEmulatorStackOpsDynamicAndDepthEdgesGlobalVersion(f *testing.F)
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%stackOpsDynamicAndDepthFuzzCaseCount))
 	}
 	for i := 0; i < stackOpsDynamicAndDepthFuzzCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -187,11 +187,11 @@ func FuzzTVMCrossEmulatorStackOpsVersionedDynamicEdges(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%stackOpsVersionedDynamicEdgeCaseCount))
 	}
 	for i := 0; i < stackOpsVersionedDynamicEdgeCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 

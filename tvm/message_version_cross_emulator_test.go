@@ -29,12 +29,12 @@ func TestTVMCrossEmulatorMessageVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_MESSAGE_VERSION_AUDIT_SHARD", "")
 
 	all := messageVersionCrossEmulatorVersions(t)
-	wantLen := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	wantLen := vmcore.MaxSupportedGlobalVersion - 0 + 1
 	if len(all) != wantLen {
 		t.Fatalf("default version selection len = %d, want %d", len(all), wantLen)
 	}
-	if all[0] != MinSupportedGlobalVersion || all[len(all)-1] != MaxSupportedGlobalVersion {
-		t.Fatalf("default version selection = %v, want range %d..%d", all, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+	if all[0] != 0 || all[len(all)-1] != vmcore.MaxSupportedGlobalVersion {
+		t.Fatalf("default version selection = %v, want range %d..%d", all, 0, vmcore.MaxSupportedGlobalVersion)
 	}
 
 	t.Setenv("TVM_MESSAGE_VERSION_AUDIT_SHARDS", "4")
@@ -88,7 +88,7 @@ func FuzzTVMCrossEmulatorDirectMessageGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xAAAA), uint16(0xB0E0+version), uint16(0xCAFE))
 		f.Add(uint8(version), true, uint16(0xAAAA), uint16(0xD0E0+version), uint16(0xCAFE))
 	}
@@ -105,8 +105,8 @@ func FuzzTVMCrossEmulatorDirectMessageGlobalVersionFallbackAndConfigOverride(f *
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		opposite := vmcore.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, false, uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version))
 		f.Add(uint8(version), uint8(opposite), false, true, uint16(0xA100+version), uint16(0xB100+version), uint16(0xC100+version))
 		f.Add(uint8(opposite), uint8(version), true, false, uint16(0xA200+version), uint16(0xB200+version), uint16(0xC200+version))
@@ -128,10 +128,10 @@ func TestTVMCrossEmulatorDirectMessageGlobalVersionOverrideAllGlobalVersions(t *
 
 	for _, version := range messageVersionCrossEmulatorVersions(t) {
 		t.Run("external_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertDirectMessageGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, false, uint16(0xAC00+version), uint16(0xBC00+version), uint16(0xCC00+version))
+			assertDirectMessageGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, false, uint16(0xAC00+version), uint16(0xBC00+version), uint16(0xCC00+version))
 		})
 		t.Run("internal_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertDirectMessageGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, true, uint16(0xAD00+version), uint16(0xBD00+version), uint16(0xCD00+version))
+			assertDirectMessageGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, true, uint16(0xAD00+version), uint16(0xBD00+version), uint16(0xCD00+version))
 		})
 	}
 }
@@ -141,8 +141,8 @@ func FuzzTVMCrossEmulatorDirectMessageGlobalVersionOverride(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		opposite := vmcore.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint16(0xAC00+version), uint16(0xBC00+version), uint16(0xCC00+version))
 		f.Add(uint8(version), uint8(opposite), true, uint16(0xAD00+version), uint16(0xBD00+version), uint16(0xCD00+version))
 	}
@@ -160,7 +160,7 @@ func FuzzTVMCrossEmulatorDirectMessageBuildProofGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xAAAA), uint16(0xB0E0+version), uint16(0xCAFE))
 		f.Add(uint8(version), true, uint16(0xAAAA), uint16(0xD0E0+version), uint16(0xCAFE))
 	}
@@ -179,10 +179,10 @@ func TestTVMCrossEmulatorDirectMessageBuildProofGlobalVersionOverrideAllGlobalVe
 
 	for _, version := range messageVersionCrossEmulatorVersions(t) {
 		t.Run("external_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertDirectMessageBuildProofGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, false, uint16(0xB800+version), uint16(0xC800+version), uint16(0xD800+version))
+			assertDirectMessageBuildProofGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, false, uint16(0xB800+version), uint16(0xC800+version), uint16(0xD800+version))
 		})
 		t.Run("internal_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertDirectMessageBuildProofGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, true, uint16(0xB900+version), uint16(0xC900+version), uint16(0xD900+version))
+			assertDirectMessageBuildProofGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, true, uint16(0xB900+version), uint16(0xC900+version), uint16(0xD900+version))
 		})
 	}
 }
@@ -192,8 +192,8 @@ func FuzzTVMCrossEmulatorDirectMessageBuildProofGlobalVersionOverride(f *testing
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		opposite := vmcore.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint16(0xB800+version), uint16(0xC800+version), uint16(0xD800+version))
 		f.Add(uint8(version), uint8(opposite), true, uint16(0xB900+version), uint16(0xC900+version), uint16(0xD900+version))
 	}
@@ -211,7 +211,7 @@ func FuzzTVMCrossEmulatorDirectMessageBuildProofLibrariesGlobalVersion(f *testin
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xA400+version), uint16(0xB400+version), uint16(0xC400+version))
 		f.Add(uint8(version), true, uint16(0xA500+version), uint16(0xB500+version), uint16(0xC500+version))
 	}
@@ -230,10 +230,10 @@ func TestTVMCrossEmulatorDirectMessageBuildProofLibrariesGlobalVersionOverrideAl
 
 	for _, version := range messageVersionCrossEmulatorVersions(t) {
 		t.Run("external_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, false, uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
+			assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, false, uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
 		})
 		t.Run("internal_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, true, uint16(0xE500+version), uint16(0xF500+version), uint16(0xA900+version))
+			assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, true, uint16(0xE500+version), uint16(0xF500+version), uint16(0xA900+version))
 		})
 	}
 }
@@ -243,8 +243,8 @@ func FuzzTVMCrossEmulatorDirectMessageBuildProofLibrariesGlobalVersionOverride(f
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		opposite := vmcore.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
 		f.Add(uint8(version), uint8(opposite), true, uint16(0xE500+version), uint16(0xF500+version), uint16(0xA900+version))
 	}
@@ -262,8 +262,8 @@ func FuzzTVMCrossEmulatorDirectMessageBuildProofGlobalVersionFallbackAndConfigOv
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		opposite := vmcore.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, false, false, uint16(0xA400+version), uint16(0xB400+version), uint16(0xC400+version))
 		f.Add(uint8(version), uint8(opposite), false, true, true, uint16(0xA500+version), uint16(0xB500+version), uint16(0xC500+version))
 		f.Add(uint8(opposite), uint8(version), true, false, true, uint16(0xA600+version), uint16(0xB600+version), uint16(0xC600+version))
@@ -297,7 +297,7 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 			Now:      now,
 			Balance:  balance,
 			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-			Config:   MustPrepareConfig(configRoot),
+			Config:   MustPrepareBlockchainConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
 				Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -312,7 +312,7 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 			Now:      now,
 			Balance:  balance,
 			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-			Config:   MustPrepareConfig(configRoot),
+			Config:   MustPrepareBlockchainConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    DefaultExternalMessageGasMax,
 				Credit: DefaultExternalMessageGasCredit,
@@ -352,10 +352,7 @@ func assertDirectMessageFallbackVersionParity(t *testing.T, machineVersion, conf
 	}
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(effectiveVersion))
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -369,10 +366,11 @@ func assertDirectMessageFallbackVersionParity(t *testing.T, machineVersion, conf
 		Now:      now,
 		Balance:  balance,
 		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:   mustPrepareConfigOrNil(goConfigRoot),
+		Config:   mustPrepareBlockchainConfigOrNil(goConfigRoot),
 	}
 
 	var goRes *MessageExecutionResult
+	var err error
 	if internal {
 		cfg.Gas = vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
@@ -421,10 +419,7 @@ func assertDirectMessageGlobalVersionOverrideParity(t *testing.T, version, machi
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -438,10 +433,11 @@ func assertDirectMessageGlobalVersionOverrideParity(t *testing.T, version, machi
 		Now:      now,
 		Balance:  balance,
 		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:   MustPrepareConfig(refConfigRoot),
+		Config:   MustPrepareBlockchainConfig(refConfigRoot),
 	}
 
 	var goRes *MessageExecutionResult
+	var err error
 	if internal {
 		cfg.Gas = vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
@@ -510,7 +506,7 @@ func assertDirectMessageBuildProofLibrariesVersionParity(t *testing.T, version i
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareConfig(configRoot),
+		Config:      MustPrepareBlockchainConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
@@ -576,10 +572,7 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -607,13 +600,14 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareConfig(refConfigRoot),
+		Config:      MustPrepareBlockchainConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
 	}
 
 	var goRes *MessageExecutionResult
+	var err error
 	if internal {
 		cfg.Gas = vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
@@ -693,10 +687,7 @@ func assertDirectMessageBuildProofFallbackVersionParity(t *testing.T, machineVer
 	}
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(effectiveVersion))
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -721,7 +712,7 @@ func assertDirectMessageBuildProofFallbackVersionParity(t *testing.T, machineVer
 		Now:         now,
 		Balance:     new(big.Int).SetUint64(referenceDefaultWalletSendBalance),
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      mustPrepareConfigOrNil(goConfigRoot),
+		Config:      mustPrepareBlockchainConfigOrNil(goConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
@@ -730,6 +721,7 @@ func assertDirectMessageBuildProofFallbackVersionParity(t *testing.T, machineVer
 	}
 
 	var goRes *MessageExecutionResult
+	var err error
 	if internal {
 		cfg.Gas = vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
@@ -809,7 +801,7 @@ func assertDirectMessageBuildProofVersionParity(t *testing.T, version int, inter
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareConfig(configRoot),
+		Config:      MustPrepareBlockchainConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
@@ -864,10 +856,7 @@ func assertDirectMessageBuildProofGlobalVersionOverrideParity(t *testing.T, vers
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -894,12 +883,13 @@ func assertDirectMessageBuildProofGlobalVersionOverrideParity(t *testing.T, vers
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareConfig(refConfigRoot),
+		Config:      MustPrepareBlockchainConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
 
 	var goRes *MessageExecutionResult
+	var err error
 	if internal {
 		cfg.Gas = vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
@@ -961,7 +951,7 @@ func FuzzTVMCrossEmulatorCheckExternalMessageAcceptedGlobalVersion(f *testing.F)
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(0xAAAA), uint16(0xC0DE+version), uint16(0xCAFE))
 	}
 	f.Add(uint8(255), uint16(0), uint16(0xffff), uint16(0x1234))
@@ -977,8 +967,8 @@ func FuzzTVMCrossEmulatorCheckExternalMessageAcceptedGlobalVersionFallbackAndCon
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		opposite := vmcore.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint8(0), uint16(0xA800+version), uint16(0xB800+version), uint16(0xC800+version))
 		f.Add(uint8(version), uint8(opposite), false, uint8(1), uint16(0xA900+version), uint16(0xB900+version), uint16(0xC900+version))
 		f.Add(uint8(opposite), uint8(version), true, uint8(0), uint16(0xAA00+version), uint16(0xBA00+version), uint16(0xCA00+version))
@@ -1000,10 +990,10 @@ func TestTVMCrossEmulatorCheckExternalMessageAcceptedGlobalVersionOverrideAllGlo
 
 	for _, version := range messageVersionCrossEmulatorVersions(t) {
 		t.Run("gasconsumed_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, 0, uint16(0xAE00+version), uint16(0xBE00+version), uint16(0xCE00+version))
+			assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, 0, uint16(0xAE00+version), uint16(0xBE00+version), uint16(0xCE00+version))
 		})
 		t.Run("inmsgparams_global_v"+strconv.Itoa(version), func(t *testing.T) {
-			assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, 1, uint16(0xAF00+version), uint16(0xBF00+version), uint16(0xCF00+version))
+			assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t, version, vmcore.MaxSupportedGlobalVersion-version, 1, uint16(0xAF00+version), uint16(0xBF00+version), uint16(0xCF00+version))
 		})
 	}
 }
@@ -1013,8 +1003,8 @@ func FuzzTVMCrossEmulatorCheckExternalMessageAcceptedGlobalVersionOverride(f *te
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		opposite := vmcore.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), uint8(0), uint16(0xAE00+version), uint16(0xBE00+version), uint16(0xCE00+version))
 		f.Add(uint8(version), uint8(opposite), uint8(1), uint16(0xAF00+version), uint16(0xBF00+version), uint16(0xCF00+version))
 	}
@@ -1087,10 +1077,7 @@ func assertCheckExternalMessageAcceptedFallbackVersionParity(t *testing.T, machi
 	}
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(effectiveVersion))
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -1115,7 +1102,7 @@ func assertCheckExternalMessageAcceptedFallbackVersionParity(t *testing.T, machi
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 	account := mustParseTransactionTestAccount(t, shard)
 
-	accepted, err := testCheckExternalAccepted(&machine, shard, account, msgCell, msg, testTxParams{
+	accepted, err := testCheckExternalAccepted(machine, shard, account, msgCell, msg, testTxParams{
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
@@ -1149,10 +1136,7 @@ func assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t *testing.T,
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -1177,7 +1161,7 @@ func assertCheckExternalMessageAcceptedGlobalVersionOverrideParity(t *testing.T,
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, now)
 	account := mustParseTransactionTestAccount(t, shard)
 
-	accepted, err := testCheckExternalAccepted(&machine, shard, account, msgCell, msg, testTxParams{
+	accepted, err := testCheckExternalAccepted(machine, shard, account, msgCell, msg, testTxParams{
 		Now:         now,
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,

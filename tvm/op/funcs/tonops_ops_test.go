@@ -534,7 +534,7 @@ func TestECRecoverEthereumRecoveryIDsStartAtV14(t *testing.T) {
 	}
 }
 
-func TestChksignRejectsZeroAndIdentityPublicKeyV14(t *testing.T) {
+func TestSignatureCheckRejectsZeroAndIdentityPublicKeyV14(t *testing.T) {
 	zeroKey := big.NewInt(0)
 	identityKey := new(big.Int).Lsh(big.NewInt(1), 248)
 	forgedSig := make([]byte, ed25519.SignatureSize)
@@ -558,7 +558,7 @@ func TestChksignRejectsZeroAndIdentityPublicKeyV14(t *testing.T) {
 		t.Run(tt.name+"/CHKSIGNU", func(t *testing.T) {
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = tt.version
-			st.ChksigAlwaysSucceed = tt.always
+			st.SignatureCheckAlwaysSucceed = tt.always
 			if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
 				t.Fatalf("push hash: %v", err)
 			}
@@ -579,7 +579,7 @@ func TestChksignRejectsZeroAndIdentityPublicKeyV14(t *testing.T) {
 		t.Run(tt.name+"/CHKSIGNS", func(t *testing.T) {
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = tt.version
-			st.ChksigAlwaysSucceed = tt.always
+			st.SignatureCheckAlwaysSucceed = tt.always
 			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xAF, 0x82}, 16).ToSlice()); err != nil {
 				t.Fatalf("push data: %v", err)
 			}
@@ -599,7 +599,7 @@ func TestChksignRejectsZeroAndIdentityPublicKeyV14(t *testing.T) {
 	}
 }
 
-func TestChksignAlwaysSucceed(t *testing.T) {
+func TestSignatureCheckAlwaysSucceed(t *testing.T) {
 	identityKey := new(big.Int).Lsh(big.NewInt(1), 248)
 	nonIdentityKey := big.NewInt(2)
 	forgedSig := make([]byte, ed25519.SignatureSize)
@@ -628,7 +628,7 @@ func TestChksignAlwaysSucceed(t *testing.T) {
 		t.Run(tt.name+"/CHKSIGNU", func(t *testing.T) {
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = tt.version
-			st.ChksigAlwaysSucceed = true
+			st.SignatureCheckAlwaysSucceed = true
 			if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
 				t.Fatalf("push hash: %v", err)
 			}
@@ -649,7 +649,7 @@ func TestChksignAlwaysSucceed(t *testing.T) {
 		t.Run(tt.name+"/CHKSIGNS", func(t *testing.T) {
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = tt.version
-			st.ChksigAlwaysSucceed = true
+			st.SignatureCheckAlwaysSucceed = true
 			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xAF, 0x82}, 16).ToSlice()); err != nil {
 				t.Fatalf("push data: %v", err)
 			}
@@ -671,7 +671,7 @@ func TestChksignAlwaysSucceed(t *testing.T) {
 	t.Run("P256_CHKSIGNU", func(t *testing.T) {
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = 4
-		st.ChksigAlwaysSucceed = true
+		st.SignatureCheckAlwaysSucceed = true
 		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
 			t.Fatalf("push hash: %v", err)
 		}
@@ -692,7 +692,7 @@ func TestChksignAlwaysSucceed(t *testing.T) {
 	t.Run("P256_CHKSIGNS", func(t *testing.T) {
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = 4
-		st.ChksigAlwaysSucceed = true
+		st.SignatureCheckAlwaysSucceed = true
 		if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{0xAF, 0x82}, 16).ToSlice()); err != nil {
 			t.Fatalf("push data: %v", err)
 		}

@@ -85,7 +85,7 @@ func TestTVMMatchesF88111AsInMsgParams(t *testing.T) {
 
 func TestTVMOpcodeMatcherSlowPathLongestPrefix(t *testing.T) {
 	machine := &TVM{}
-	machine.dispatches[MaxSupportedGlobalVersion] = newOpcodeDispatch()
+	machine.dispatches[vm.MaxSupportedGlobalVersion] = newOpcodeDispatch()
 	shortPrefix := cell.BeginCell().MustStoreUInt(0xa5, 8).EndCell().MustBeginParse()
 	longPrefix := cell.BeginCell().
 		MustStoreUInt(0xa5, 8).
@@ -96,8 +96,8 @@ func TestTVMOpcodeMatcherSlowPathLongestPrefix(t *testing.T) {
 
 	machine.addTriePrefix(shortPrefix, trieDispatchTestGetter("short"))
 	machine.addTriePrefix(longPrefix, trieDispatchTestGetter("long"))
-	if machine.dispatches[MaxSupportedGlobalVersion].maxPrefixLen <= 64 {
-		t.Fatalf("max prefix len = %d, want slow matcher path", machine.dispatches[MaxSupportedGlobalVersion].maxPrefixLen)
+	if machine.dispatches[vm.MaxSupportedGlobalVersion].maxPrefixLen <= 64 {
+		t.Fatalf("max prefix len = %d, want slow matcher path", machine.dispatches[vm.MaxSupportedGlobalVersion].maxPrefixLen)
 	}
 
 	longCode := cell.BeginCell().

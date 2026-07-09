@@ -12,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	dictop "github.com/xssnick/tonutils-go/tvm/op/dict"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -70,11 +71,11 @@ func FuzzTVMCrossEmulatorDictOpsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%dictOpsParityCaseCount))
 	}
 	for i := 0; i < dictOpsParityCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -299,11 +300,11 @@ func FuzzTVMCrossEmulatorDictOpsVersionedPrefixUnderflow(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%dictVersionedPrefixUnderflowCaseCount))
 	}
 	for i := 0; i < dictVersionedPrefixUnderflowCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 

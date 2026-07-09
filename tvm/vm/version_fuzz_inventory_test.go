@@ -20,10 +20,10 @@ const (
 	expectedVMFullRangeVersionFuzzerHash   = "1f72b7048c86f34ac60a06229f218ddee96b4ea2e20da7a6b3f14fb544f14ed9"
 	expectedVMPartialVersionFuzzerCount    = 0
 	expectedVMPartialVersionFuzzerHash     = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	expectedVMStateGlobalVersionWriters    = 6
-	expectedVMStateGlobalVersionWriterHash = "c876fa9c2f05ffb9e247f5efd81c9d123ccb4eb9e6219dbd22db338ec57f0eba"
+	expectedVMStateGlobalVersionWriters    = 2
+	expectedVMStateGlobalVersionWriterHash = "100e34d1ef68518f532d9b4c02afb80de2942f2e08aaca298d34593b4d3f9f10"
 	expectedVMFreeGasCounterWriters        = 11
-	expectedVMFreeGasCounterWriterHash     = "5808512f002bda401c7c41e3e0a68abc17f282016465493600e240db5f81363e"
+	expectedVMFreeGasCounterWriterHash     = "517b2a44e8a6946ae8a2b5b7cd73dafbad0b695f474c5142c8a0fe17231df847"
 )
 
 type vmVersionFuzzer struct {
@@ -261,7 +261,7 @@ func vmFreeGasCounterSelector(expr ast.Expr) string {
 }
 
 func vmFreeGasCounterField(name string) bool {
-	return name == "ChksgnCounter" || name == "GetExtraBalanceCounter"
+	return name == "SignatureCheckCounter" || name == "GetExtraBalanceCounter"
 }
 
 func vmFreeGasCounterWriterHash(writers []string) string {
@@ -308,7 +308,7 @@ func vmStateGlobalVersionSelector(expr ast.Expr) string {
 }
 
 func vmStateGlobalVersionField(name string) bool {
-	return name == "GlobalVersion" || name == "GlobalVersionConfigured"
+	return name == "GlobalVersion"
 }
 
 func vmStateCompositeLit(lit *ast.CompositeLit) bool {
@@ -381,7 +381,7 @@ func vmDefaultVersionForLoopVar(stmt *ast.ForStmt) string {
 	}
 
 	cond, ok := stmt.Cond.(*ast.BinaryExpr)
-	if !ok || cond.Op != token.LEQ || !vmExprContainsIdent(cond.X, ident.Name) || !vmExprContainsDefaultGlobalVersion(cond.Y) {
+	if !ok || cond.Op != token.LEQ || !vmExprContainsIdent(cond.X, ident.Name) || !vmExprContainsMaxSupportedGlobalVersion(cond.Y) {
 		return ""
 	}
 
@@ -430,11 +430,11 @@ func vmExprIsZero(expr ast.Expr) bool {
 	}
 }
 
-func vmExprContainsDefaultGlobalVersion(expr ast.Expr) bool {
+func vmExprContainsMaxSupportedGlobalVersion(expr ast.Expr) bool {
 	found := false
 	ast.Inspect(expr, func(node ast.Node) bool {
 		ident, ok := node.(*ast.Ident)
-		if ok && ident.Name == "DefaultGlobalVersion" {
+		if ok && ident.Name == "MaxSupportedGlobalVersion" {
 			found = true
 			return false
 		}

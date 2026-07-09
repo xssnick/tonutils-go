@@ -289,7 +289,10 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("push library cell: %v", err)
 		}
 
-		res, err := NewTVM().Execute(codeFromOpcodes(t, 0xD73A), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(1_000_000), stack, ExecutionConfig{Libraries: []*cell.Cell{libraries}})
+		res, err := NewTVM().Execute(codeFromOpcodes(t, 0xD73A), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(1_000_000), stack, ExecutionConfig{
+			Libraries: []*cell.Cell{libraries},
+			Config:    testPreparedBlockchainConfig(t),
+		})
 		if err != nil {
 			t.Fatalf("xload with libraries unexpected error: %v", err)
 		}
@@ -310,7 +313,10 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 			t.Fatalf("push library cell for xloadq: %v", err)
 		}
 
-		res, err = NewTVM().Execute(codeFromOpcodes(t, 0xD73B), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(1_000_000), stack, ExecutionConfig{Libraries: []*cell.Cell{libraries}})
+		res, err = NewTVM().Execute(codeFromOpcodes(t, 0xD73B), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(1_000_000), stack, ExecutionConfig{
+			Libraries: []*cell.Cell{libraries},
+			Config:    testPreparedBlockchainConfig(t),
+		})
 		if err != nil {
 			t.Fatalf("xloadq with libraries unexpected error: %v", err)
 		}
@@ -478,7 +484,7 @@ func TestAdvancedCellOpsGoSemantics(t *testing.T) {
 		if err = btStack.PushBuilder(cell.BeginCell().MustStoreUInt(0xAB, 8)); err != nil {
 			t.Fatalf("btos push builder: %v", err)
 		}
-		res, err = NewTVM().Execute(codeFromOpcodes(t, 0xCF50), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(1_000_000), btStack, ExecutionConfig{})
+		res, err = NewTVM().Execute(codeFromOpcodes(t, 0xCF50), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(1_000_000), btStack, testExecutionConfig(t))
 		if err != nil {
 			t.Fatalf("btos unexpected error: %v", err)
 		}

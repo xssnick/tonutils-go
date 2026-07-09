@@ -36,7 +36,7 @@ type BlockOptions struct {
 // immutable after construction and safe to share between concurrently
 // executing account lanes.
 type BlockContext struct {
-	cfg        *PreparedConfig
+	cfg        *PreparedBlockchainConfig
 	now        uint32
 	blockLT    int64
 	randSeed   []byte
@@ -48,7 +48,7 @@ type BlockContext struct {
 }
 
 // NewBlockContext builds the immutable per-block execution context.
-func (c *PreparedConfig) NewBlockContext(opts BlockOptions) (*BlockContext, error) {
+func (c *PreparedBlockchainConfig) NewBlockContext(opts BlockOptions) (*BlockContext, error) {
 	if c == nil {
 		return nil, errConfigRootRequired
 	}
@@ -71,7 +71,7 @@ func (c *PreparedConfig) NewBlockContext(opts BlockOptions) (*BlockContext, erro
 }
 
 // Config returns the prepared per-epoch config this context was built from.
-func (b *BlockContext) Config() *PreparedConfig {
+func (b *BlockContext) Config() *PreparedBlockchainConfig {
 	return b.cfg
 }
 
@@ -95,7 +95,7 @@ func (b *BlockContext) UnpackedConfig() (tuple.Tuple, bool) {
 
 // buildUnpackedConfig assembles the c7 unpacked config tuple (global version 6+)
 // from prepared param roots without any config dictionary access.
-func buildUnpackedConfig(cfg *PreparedConfig, now uint32, globalIDOverride int32) any {
+func buildUnpackedConfig(cfg *PreparedBlockchainConfig, now uint32, globalIDOverride int32) any {
 	values := make([]any, 7)
 	if prices := cfg.currentStoragePricesSlice(now); prices != nil {
 		values[0] = prices

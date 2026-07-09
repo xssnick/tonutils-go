@@ -15,6 +15,7 @@ import (
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	tupleop "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -162,11 +163,11 @@ func FuzzTVMCrossEmulatorFixedSizeBitsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%fixedSizeBitsVersionedCaseCount), uint16(7+version))
 	}
 	for i := 0; i < fixedSizeBitsVersionedCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i), uint16(0x20+i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i), uint16(0x20+i))
 	}
 	f.Add(uint8(255), uint8(255), uint16(0xffff))
 

@@ -31,12 +31,12 @@ func TestTVMCrossEmulatorRunVMVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_RUNVM_VERSION_AUDIT_SHARD", "")
 
 	all := runVMVersionCrossEmulatorVersions(t)
-	wantLen := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	wantLen := vmcore.MaxSupportedGlobalVersion - 0 + 1
 	if len(all) != wantLen {
 		t.Fatalf("default version selection len = %d, want %d", len(all), wantLen)
 	}
-	if all[0] != MinSupportedGlobalVersion || all[len(all)-1] != MaxSupportedGlobalVersion {
-		t.Fatalf("default version selection = %v, want range %d..%d", all, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+	if all[0] != 0 || all[len(all)-1] != vmcore.MaxSupportedGlobalVersion {
+		t.Fatalf("default version selection = %v, want range %d..%d", all, 0, vmcore.MaxSupportedGlobalVersion)
 	}
 
 	t.Setenv("TVM_RUNVM_VERSION_AUDIT_SHARDS", "4")
@@ -970,7 +970,7 @@ func FuzzTVMCrossEmulatorRunVMChildGlobalVersionInheritance(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version))
 	}
 	f.Add(uint8(255))
@@ -1044,11 +1044,11 @@ func FuzzTVMCrossEmulatorRunVMFailedDataActionsVersionMatrix(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%runVMFailedDataActionsVersionCaseCount))
 	}
 	for i := 0; i < runVMFailedDataActionsVersionCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vmcore.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -1178,13 +1178,13 @@ func FuzzTVMCrossEmulatorRunVMVersionedChildOpcodeMatrix(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%runvmVersionedChildCaseCount), false)
 		f.Add(uint8(version), uint8(version%runvmVersionedChildCaseCount), true)
 	}
 	for i := 0; i < runvmVersionedChildCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i), false)
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i), true)
+		f.Add(uint8(vmcore.MaxSupportedGlobalVersion), uint8(i), false)
+		f.Add(uint8(vmcore.MaxSupportedGlobalVersion), uint8(i), true)
 	}
 	f.Add(uint8(255), uint8(255), true)
 

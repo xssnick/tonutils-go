@@ -299,7 +299,7 @@ func TestFeeHashMoreBranches(t *testing.T) {
 			_, err := child.Stack.PopIntFinite()
 			return 0, err
 		})
-		child := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
+		child := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
 		exitCode, err := parent.RunChild(child)
 		if err != nil || exitCode != 0 {
 			t.Fatalf("child GETEXTRABALANCE run = (%d, %v)", exitCode, err)

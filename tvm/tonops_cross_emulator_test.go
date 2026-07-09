@@ -37,18 +37,18 @@ func TestTVMCrossEmulatorTonOpsVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_TONOPS_VERSION_AUDIT_SHARD", "")
 
 	all := tonOpsVersionCrossEmulatorVersions(t)
-	wantLen := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	wantLen := vm.MaxSupportedGlobalVersion - 0 + 1
 	if len(all) != wantLen {
 		t.Fatalf("default version selection len = %d, want %d", len(all), wantLen)
 	}
-	if all[0] != MinSupportedGlobalVersion || all[len(all)-1] != MaxSupportedGlobalVersion {
-		t.Fatalf("default version selection = %v, want range %d..%d", all, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+	if all[0] != 0 || all[len(all)-1] != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("default version selection = %v, want range %d..%d", all, 0, vm.MaxSupportedGlobalVersion)
 	}
 
 	t.Setenv("TVM_TONOPS_VERSION_AUDIT_SHARDS", "4")
 	t.Setenv("TVM_TONOPS_VERSION_AUDIT_SHARD", "3")
 	got := tonOpsVersionCrossEmulatorVersions(t)
-	want := []int{3, 7, 11}
+	want := []int{3, 7, 11, 15}
 	if len(got) != len(want) {
 		t.Fatalf("sharded version selection = %v, want %v", got, want)
 	}
@@ -72,7 +72,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 	configValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
 	// Config param 8 is part of the C7 fixtures for config-reading tonops.
 	// The raw reference runner itself stays on referenceRawRunGlobalVersion.
-	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.DefaultGlobalVersion})
+	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.MaxSupportedGlobalVersion})
 	if err != nil {
 		t.Fatalf("failed to build global version config: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		^uint32(0):                           negativeConfigValue,
 		uint32(tlb.ConfigParamGlobalVersion): globalVersionCell,
 	})
-	defaultRefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vm.DefaultGlobalVersion))
+	defaultRefCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vm.MaxSupportedGlobalVersion))
 	feeC7 := feeTestC7(t)
 	conflictingRootFeeC7 := makeTonopsTestC7(t, tonopsTestC7Config{
 		ConfigRoot:     tonopsCrossConflictingFeeConfig(t, globalVersionCell),
@@ -279,7 +279,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		exit             int32
 		c7               tuple.Tuple
 		globalVersion    int
-		globalVersionSet bool
+		hasGlobalVersion bool
 		refCfg           *referenceGetMethodConfig
 		skipReference    string
 		goStack          []any
@@ -296,13 +296,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		}
 		return ""
 	}
-	ed25519ChksigRejectedKeyReferenceSkip := func(version int) string {
+	ed25519SignatureCheckRejectedKeyReferenceSkip := func(version int) string {
 		if version >= 14 {
 			return "bundled reference emulator predates upstream CHKSIG v14 zero/identity public-key rejection"
 		}
 		return ""
 	}
-	ed25519ChksigRejectedKeyGoStack := func(version int) []any {
+	ed25519SignatureCheckRejectedKeyGoStack := func(version int) []any {
 		if version >= 14 {
 			return []any{int64(0)}
 		}
@@ -424,8 +424,8 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
-			goStack:       ed25519ChksigRejectedKeyGoStack(14),
+			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
+			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "chksignu_zero_key_rejected_v14",
@@ -438,8 +438,8 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
-			goStack:       ed25519ChksigRejectedKeyGoStack(14),
+			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
+			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "chksigns_success",
@@ -462,8 +462,8 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
-			goStack:       ed25519ChksigRejectedKeyGoStack(14),
+			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
+			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "chksigns_zero_key_rejected_v14",
@@ -476,8 +476,8 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519ChksigRejectedKeyReferenceSkip(14),
-			goStack:       ed25519ChksigRejectedKeyGoStack(14),
+			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
+			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "p256_chksignu_success",
@@ -1201,7 +1201,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:             int32(vmerr.CodeCellUnderflow),
 			c7:               feeC7,
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 			refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 9)),
 		},
 		{
@@ -1211,7 +1211,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:             0,
 			c7:               feeC7,
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 			refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 9)),
 		},
 		{
@@ -1587,7 +1587,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{big.NewInt(1), int64(16)},
 				exit:             changelibExit,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 			},
 			testCase{
@@ -1597,7 +1597,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             sendMsgExit,
 				c7:               sendMsgVersionC7(uint32(version)),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           sendMsgVersionRefCfg(uint32(version)),
 				skipReference:    sendMsgUserFwdFeeReferenceSkip(version),
 				goStack:          sendMsgUserFwdFeeGoStack(version),
@@ -1609,7 +1609,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             sendMsgExit,
 				c7:               sendMsgVersionC7(uint32(version)),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           sendMsgVersionRefCfg(uint32(version)),
 			},
 			testCase{
@@ -1618,7 +1618,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 4, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getparamlong_randseed_v%d", version),
@@ -1626,7 +1626,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 11, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getparamlong_high_index_v%d", version),
@@ -1634,7 +1634,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 11, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("prevblocksinfotuple_v%d", version),
@@ -1642,7 +1642,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             0,
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("prevmcblocks_v%d", version),
@@ -1650,7 +1650,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 4, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("prevkeyblock_v%d", version),
@@ -1658,7 +1658,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 4, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("prevmcblocks_100_v%d", version),
@@ -1666,7 +1666,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 9, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getprecompiledgas_v%d", version),
@@ -1674,7 +1674,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 6, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("inmsgparams_v%d", version),
@@ -1682,7 +1682,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 11, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("inmsgparam_long_src_v%d", version),
@@ -1690,7 +1690,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 11, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("inmsg_value_alias_v%d", version),
@@ -1698,7 +1698,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 11, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("inmsg_stateinit_alias_v%d", version),
@@ -1706,7 +1706,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 11, 0),
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("randu256_then_randseed_v%d", version),
@@ -1714,7 +1714,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             0,
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("rand_then_randseed_v%d", version),
@@ -1723,7 +1723,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             0,
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("setrand_then_randseed_v%d", version),
@@ -1732,7 +1732,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             0,
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("addrand_then_randseed_v%d", version),
@@ -1741,7 +1741,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             0,
 				c7:               paramsC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getstoragefee_v%d", version),
@@ -1750,7 +1750,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 6, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getgasfee_v%d", version),
@@ -1759,7 +1759,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 6, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getforwardfee_v%d", version),
@@ -1768,7 +1768,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 6, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getoriginalfwdfee_v%d", version),
@@ -1777,7 +1777,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 6, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getgasfeesimple_v%d", version),
@@ -1786,7 +1786,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 6, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getforwardfeesimple_v%d", version),
@@ -1795,7 +1795,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 6, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getextrabalance_hit_v%d", version),
@@ -1804,7 +1804,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 10, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("getextrabalance_miss_v%d", version),
@@ -1813,7 +1813,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 10, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("hashext_sha256_v%d", version),
@@ -1822,7 +1822,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 4, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("hashext_dynamic_sha512_v%d", version),
@@ -1831,7 +1831,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 4, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("hashexta_dynamic_sha256_v%d", version),
@@ -1840,7 +1840,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 4, 0),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("hashext_unaligned_total_v%d", version),
@@ -1849,7 +1849,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				exit:             versionedExit(version, 4, int32(vmerr.CodeCellUnderflow)),
 				c7:               feeVersionC7,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 			},
 			testCase{
 				name:             fmt.Sprintf("ldstdaddr_std_v%d", version),
@@ -1857,7 +1857,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{stdAddrSlice},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1866,7 +1866,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{varAddrSlice},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1875,7 +1875,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{addrNoneTail},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1884,7 +1884,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{shortStdAddrSlice},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1893,7 +1893,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{stdAddrSlice, cell.BeginCell()},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1902,7 +1902,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{varAddrSlice, cell.BeginCell()},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1911,7 +1911,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{nil, cell.BeginCell()},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1920,7 +1920,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				stack:            []any{stdAddrSlice, cell.BeginCell()},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           versionRefCfg,
 			},
 			testCase{
@@ -1934,7 +1934,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             versionedExit(version, 4, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 			},
 			testCase{
@@ -1948,7 +1948,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             versionedExit(version, 4, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 				skipReference:    ecrecoverEthereumReferenceSkip(version),
 				goStack:          ecrecoverSuccessGoStack(),
@@ -1962,7 +1962,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             versionedExit(version, 9, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 			},
 			testCase{
@@ -1975,10 +1975,10 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             0,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
-				skipReference:    ed25519ChksigRejectedKeyReferenceSkip(version),
-				goStack:          ed25519ChksigRejectedKeyGoStack(version),
+				skipReference:    ed25519SignatureCheckRejectedKeyReferenceSkip(version),
+				goStack:          ed25519SignatureCheckRejectedKeyGoStack(version),
 			},
 			testCase{
 				name: fmt.Sprintf("chksigns_identity_key_v%d", version),
@@ -1990,10 +1990,10 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             0,
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
-				skipReference:    ed25519ChksigRejectedKeyReferenceSkip(version),
-				goStack:          ed25519ChksigRejectedKeyGoStack(version),
+				skipReference:    ed25519SignatureCheckRejectedKeyReferenceSkip(version),
+				goStack:          ed25519SignatureCheckRejectedKeyGoStack(version),
 			},
 			testCase{
 				name: fmt.Sprintf("p256_chksignu_success_v%d", version),
@@ -2005,7 +2005,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             versionedExit(version, 4, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 			},
 			testCase{
@@ -2018,7 +2018,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             versionedExit(version, 4, int32(vmerr.CodeCellUnderflow)),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 			},
 			testCase{
@@ -2031,7 +2031,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				},
 				exit:             versionedExit(version, 12, 0),
 				globalVersion:    version,
-				globalVersionSet: true,
+				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 			},
 		)
@@ -2050,7 +2050,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			}
 
 			globalVersion := tt.globalVersion
-			if !tt.globalVersionSet && globalVersion == 0 {
+			if !tt.hasGlobalVersion && globalVersion == 0 {
 				globalVersion = referenceRawRunGlobalVersion
 			}
 			goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), tt.c7, goStack, globalVersion)
@@ -2119,11 +2119,11 @@ func FuzzTVMCrossEmulatorTonOpsSendMsgVersionedFeeEdges(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%tonOpsSendMsgVersionedFeeCaseCount), uint16(0xB500+version), uint64(version+1))
 	}
 	for rawCase := uint8(0); rawCase < tonOpsSendMsgVersionedFeeCaseCount; rawCase++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), rawCase, uint16(0xC500+uint16(rawCase)), uint64(100+rawCase))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), rawCase, uint16(0xC500+uint16(rawCase)), uint64(100+rawCase))
 	}
 	f.Add(uint8(255), uint8(255), uint16(0xFFFF), uint64(1<<20+17))
 
@@ -2287,7 +2287,7 @@ func FuzzTVMCrossEmulatorTonOpsSendMsgExtraFlagsRootSizeGlobalVersion(f *testing
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(340), uint64(0), uint16(0xD100+uint16(version)))
 		f.Add(uint8(version), uint16(360), uint64(256), uint16(0xD200+uint16(version)))
 		f.Add(uint8(version), uint16(380), uint64(65535), uint16(0xD300+uint16(version)))
@@ -2409,11 +2409,11 @@ func FuzzTVMCrossEmulatorTonOpsUnderflowPrecheckGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%tonOpsUnderflowPrecheckCaseCount))
 	}
 	for i := 0; i < tonOpsUnderflowPrecheckCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -2599,11 +2599,11 @@ func FuzzTVMCrossEmulatorDataSizeLowGasGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%tonOpsDataSizeLowGasCaseCount))
 	}
 	for i := 0; i < tonOpsDataSizeLowGasCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 

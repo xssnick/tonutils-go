@@ -47,35 +47,20 @@ type reusableOP interface {
 }
 
 type TVM struct {
-	dispatches [MaxSupportedGlobalVersion + 1]*opcodeDispatch
-	dispatch   *opcodeDispatch
-
-	globalVersion int
+	dispatches [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
 }
-
-const (
-	MinSupportedGlobalVersion = 0
-	MaxSupportedGlobalVersion = 14
-)
 
 var (
 	sharedOpcodeDispatchesOnce sync.Once
-	sharedOpcodeDispatches     [MaxSupportedGlobalVersion + 1]*opcodeDispatch
+	sharedOpcodeDispatches     [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
 	sharedOpcodeDispatchesLen  int
 )
 
 func NewTVM() *TVM {
-	tvm := &TVM{
-		dispatches:    getOpcodeDispatches(),
-		globalVersion: vm.DefaultGlobalVersion,
-	}
-
-	tvm.dispatch = tvm.dispatches[tvm.globalVersion]
-
-	return tvm
+	return &TVM{dispatches: getOpcodeDispatches()}
 }
 
-func getOpcodeDispatches() [MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+func getOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 	dispatches := getSharedOpcodeDispatches()
 	if len(vm.List) == sharedOpcodeDispatchesLen {
 		return dispatches
@@ -83,7 +68,7 @@ func getOpcodeDispatches() [MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 	return buildOpcodeDispatches()
 }
 
-func getSharedOpcodeDispatches() [MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 	sharedOpcodeDispatchesOnce.Do(buildSharedOpcodeDispatches)
 	return sharedOpcodeDispatches
 }
@@ -93,9 +78,9 @@ func buildSharedOpcodeDispatches() {
 	sharedOpcodeDispatchesLen = len(vm.List)
 }
 
-func buildOpcodeDispatches() [MaxSupportedGlobalVersion + 1]*opcodeDispatch {
-	var dispatches [MaxSupportedGlobalVersion + 1]*opcodeDispatch
-	for ver := MinSupportedGlobalVersion; ver <= MaxSupportedGlobalVersion; ver++ {
+func buildOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+	var dispatches [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
+	for ver := 0; ver <= vm.MaxSupportedGlobalVersion; ver++ {
 		dispatches[ver] = newOpcodeDispatch()
 	}
 
@@ -107,25 +92,25 @@ func buildOpcodeDispatches() [MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 		}
 		prefixes := op.GetPrefixes()
 		minVersion := opcodeMinVersion(op)
-		if minVersion < MinSupportedGlobalVersion {
-			minVersion = MinSupportedGlobalVersion
+		if minVersion < 0 {
+			minVersion = 0
 		}
 		var invalidGetter vm.OPGetter
 		for _, s := range prefixes {
-			if minVersion > MinSupportedGlobalVersion && opcodeIsHistoricalQuietCompoundPrefix(s) {
+			if minVersion > 0 && opcodeIsHistoricalQuietCompoundPrefix(s) {
 				if invalidGetter == nil {
 					invalidGetter = historicalInvalidOpcodeGetter(op)
 				}
-				for ver := MinSupportedGlobalVersion; ver < minVersion && ver <= MaxSupportedGlobalVersion; ver++ {
+				for ver := 0; ver < minVersion && ver <= vm.MaxSupportedGlobalVersion; ver++ {
 					dispatches[ver].addPrefix(s, invalidGetter)
 				}
 			}
-			for ver := minVersion; ver <= MaxSupportedGlobalVersion; ver++ {
+			for ver := minVersion; ver <= vm.MaxSupportedGlobalVersion; ver++ {
 				dispatches[ver].addPrefix(s, getter)
 			}
 		}
 	}
-	for ver := MinSupportedGlobalVersion; ver <= MaxSupportedGlobalVersion; ver++ {
+	for ver := 0; ver <= vm.MaxSupportedGlobalVersion; ver++ {
 		dispatches[ver].buildFastTable()
 	}
 	return dispatches
@@ -141,7 +126,7 @@ func opcodeMinVersion(op vm.OP) int {
 	if versioned, ok := op.(vm.VersionedOp); ok {
 		return versioned.MinGlobalVersion()
 	}
-	return MinSupportedGlobalVersion
+	return 0
 }
 
 func opcodeIsHistoricalQuietCompoundPrefix(prefix *cell.Slice) bool {
@@ -214,35 +199,26 @@ func (op historicalInvalidOpcodeGas) InstructionBits() int64 {
 	return op.op.(vm.GasPricedOp).InstructionBits()
 }
 
-func (tvm *TVM) SetGlobalVersion(version int) error {
-	if err := validateGlobalVersion(version); err != nil {
-		return err
-	}
-	tvm.globalVersion = version
-	tvm.dispatch = tvm.dispatches[version]
-	return nil
-}
-
-// WithGlobalVersion returns a shallow TVM copy that shares opcode dispatch tables.
-func (tvm *TVM) WithGlobalVersion(version int) (TVM, error) {
-	if err := validateGlobalVersion(version); err != nil {
-		return TVM{}, err
-	}
-
-	next := *tvm
-	next.globalVersion = version
-	next.dispatch = next.dispatches[version]
-	return next, nil
-}
+// AllowHigherVersionExecUsingLatest allows preparing configs with a global
+// version higher than vm.MaxSupportedGlobalVersion. When enabled, execution
+// uses the latest supported version.
+var AllowHigherVersionExecUsingLatest bool
 
 func validateGlobalVersion(version int) error {
-	if version < MinSupportedGlobalVersion {
-		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, MinSupportedGlobalVersion)
+	if version < 0 {
+		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, 0)
 	}
-	if version > MaxSupportedGlobalVersion {
-		return fmt.Errorf("unsupported global version %d, maximum supported is %d", version, MaxSupportedGlobalVersion)
+	if version > vm.MaxSupportedGlobalVersion && !AllowHigherVersionExecUsingLatest {
+		return fmt.Errorf("unsupported global version %d, maximum supported is %d", version, vm.MaxSupportedGlobalVersion)
 	}
 	return nil
+}
+
+func effectiveGlobalVersion(version uint32) uint32 {
+	if version > uint32(vm.MaxSupportedGlobalVersion) {
+		return uint32(vm.MaxSupportedGlobalVersion)
+	}
+	return version
 }
 
 type ExecutionResult struct {
@@ -259,11 +235,10 @@ type ExecutionResult struct {
 }
 
 type ExecutionConfig struct {
-	AccountRoot         *cell.Cell
-	Libraries           []*cell.Cell
-	ChksigAlwaysSucceed bool
-	GlobalVersion       int
-	GlobalVersionSet    bool
+	AccountRoot                 *cell.Cell
+	Libraries                   []*cell.Cell
+	SignatureCheckAlwaysSucceed bool
+	Config                      *PreparedBlockchainConfig
 }
 
 func bitAt(data []byte, bit uint) uint8 {
@@ -275,7 +250,7 @@ func newOpcodeDispatch() *opcodeDispatch {
 }
 
 func (tvm *TVM) addTriePrefix(prefix *cell.Slice, op vm.OPGetter) {
-	dispatch := tvm.dispatches[MaxSupportedGlobalVersion]
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
 	dispatch.addPrefix(prefix, op)
 	dispatch.buildFastTable()
 }
@@ -324,17 +299,17 @@ func (dispatch *opcodeDispatch) buildFastTable() {
 }
 
 func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
-	dispatch := tvm.dispatches[MaxSupportedGlobalVersion]
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
 	return matchOpcode(dispatch, code)
 }
 
 func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) vm.OPGetter {
-	dispatch := tvm.dispatches[MaxSupportedGlobalVersion]
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
 	return matchOpcodeFast(dispatch, code, available)
 }
 
 func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) vm.OPGetter {
-	dispatch := tvm.dispatches[MaxSupportedGlobalVersion]
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
 	return matchOpcodeSlow(dispatch.root, dispatch.maxPrefixLen, code, available)
 }
 
@@ -449,6 +424,10 @@ func (tvm *TVM) ExecuteGetMethod(code, data *cell.Cell, c7 tuple.Tuple, gas vm.G
 }
 
 func (tvm *TVM) executeWithConfig(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg ExecutionConfig, options executeOptions) (*ExecutionResult, error) {
+	if cfg.Config == nil {
+		return nil, errConfigRootRequired
+	}
+
 	libraries := cfg.Libraries
 	if cfg.AccountRoot != nil {
 		var res *ExecutionResult
@@ -459,7 +438,7 @@ func (tvm *TVM) executeWithConfig(code, data *cell.Cell, c7 tuple.Tuple, gas vm.
 		}
 	}
 
-	res, err := tvm.executeWithOptions(code, data, c7, gas, stack, options, libraries...)
+	res, err := tvm.executeWithOptions(code, data, c7, gas, stack, cfg.Config, options, libraries...)
 	return finishExecutionResult(res, err)
 }
 
@@ -474,35 +453,28 @@ func finishExecutionResult(res *ExecutionResult, err error) (*ExecutionResult, e
 }
 
 type executeOptions struct {
-	stopOnAccept        bool
-	proof               *cell.MerkleProofBuilder
-	skipFinalCommit     bool
-	traceHook           vm.TraceHook
-	globalVersion       int
-	globalVersionSet    bool
-	chksigAlwaysSucceed bool
+	stopOnAccept                bool
+	proof                       *cell.MerkleProofBuilder
+	skipFinalCommit             bool
+	traceHook                   vm.TraceHook
+	signatureCheckAlwaysSucceed bool
 }
 
 func executeOptionsFromConfig(cfg ExecutionConfig) executeOptions {
 	return executeOptions{
-		globalVersion:       cfg.GlobalVersion,
-		globalVersionSet:    cfg.GlobalVersionSet,
-		chksigAlwaysSucceed: cfg.ChksigAlwaysSucceed,
+		signatureCheckAlwaysSucceed: cfg.SignatureCheckAlwaysSucceed,
 	}
 }
 
-func (tvm *TVM) executeWithOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
-	globalVersion := tvm.globalVersion
-	if options.globalVersionSet {
-		if err := validateGlobalVersion(options.globalVersion); err != nil {
-			return nil, err
-		}
-		globalVersion = options.globalVersion
+func (tvm *TVM) executeWithOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg *PreparedBlockchainConfig, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
+	if cfg == nil {
+		return nil, errConfigRootRequired
 	}
-	state := vm.NewExecutionStateWithGlobalVersion(globalVersion, gas, data, c7, stack, libraries...)
+
+	state := vm.NewExecutionState(int(cfg.GlobalVersion()), gas, data, c7, stack, libraries...)
 	state.StopOnAccept = options.stopOnAccept
 	state.TraceHook = options.traceHook
-	state.ChksigAlwaysSucceed = options.chksigAlwaysSucceed
+	state.SignatureCheckAlwaysSucceed = options.signatureCheckAlwaysSucceed
 	state.SetChildRunner(tvm.runState)
 	state.InitForExecution()
 	currentCode, err := tvm.convertExecutionCodeCell(state, code)
@@ -708,9 +680,6 @@ func (tvm *TVM) handleStepError(state *vm.State, err error) (bool, error) {
 }
 
 func (tvm *TVM) dispatchForVersion(version int) *opcodeDispatch {
-	if version == tvm.globalVersion && tvm.dispatch != nil {
-		return tvm.dispatch
-	}
 	return tvm.dispatches[version]
 }
 

@@ -197,7 +197,7 @@ func FuzzTVMCrossEmulatorMethodHarnessGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0))
 		f.Add(uint8(version), uint8(1))
 	}
@@ -211,7 +211,7 @@ func FuzzTVMCrossEmulatorMethodHarnessGlobalVersion(f *testing.F) {
 }
 
 func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args ...int64) (*crossRunResult, error) {
-	return runGoCrossMethodWithVersion(code, data, c7, vm.DefaultGlobalVersion, method, args...)
+	return runGoCrossMethodWithVersion(code, data, c7, vm.MaxSupportedGlobalVersion, method, args...)
 }
 
 func runGoCrossMethodWithVersion(code, data *cell.Cell, c7 tuple.Tuple, globalVersion int, method string, args ...int64) (*crossRunResult, error) {
@@ -226,12 +226,13 @@ func runGoCrossMethodWithVersion(code, data *cell.Cell, c7 tuple.Tuple, globalVe
 		return nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(globalVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := machine.Execute(code, data, c7, vm.GasWithLimit(crossTestMaxGas), stack, ExecutionConfig{})
+	res, err := machine.Execute(code, data, c7, vm.GasWithLimit(crossTestMaxGas), stack, ExecutionConfig{Config: cfg})
 	if err != nil {
 		return nil, err
 	}

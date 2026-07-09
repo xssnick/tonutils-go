@@ -172,7 +172,7 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 	return out, nil
 }
 
-func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
+func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedBlockchainConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
 	globalVersion := cfg.globalVersion()
 	extraCurrencies, err := transactionCloneExtraCurrencies(acc.extraCurrencies)
 	if err != nil {
@@ -304,7 +304,7 @@ type builtTransactionAccount struct {
 	storageCell *cell.Cell
 }
 
-func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
+func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
 	if status == tlb.AccountStatusNonExist {
 		accountState := &tlb.AccountState{
 			IsValid: false,
@@ -409,7 +409,7 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 	}, nil
 }
 
-func transactionAccountSerializationAddr(addr *address.Address, cfg *PreparedConfig) (*address.Address, error) {
+func transactionAccountSerializationAddr(addr *address.Address, cfg *PreparedBlockchainConfig) (*address.Address, error) {
 	if addr == nil || addr.Anycast() == nil {
 		return addr, nil
 	}
@@ -444,7 +444,7 @@ func transactionAccountIDAddr(addr *address.Address) (*address.Address, error) {
 	return out, nil
 }
 
-func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, error) {
+func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, error) {
 	version := cfg.globalVersion()
 	storeStorageDictHash := version >= 11 && !transactionIsMasterchain(acc.addr)
 
@@ -1011,7 +1011,7 @@ func transactionFinalizeAccountStatus(status tlb.AccountStatus, deleted bool, ba
 	return status
 }
 
-func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedConfig) (tlb.AccountStatus, tlb.AccountStatus, []byte, error) {
+func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedBlockchainConfig) (tlb.AccountStatus, tlb.AccountStatus, []byte, error) {
 	if status != tlb.AccountStatusFrozen || acc.addr == nil {
 		return status, status, stateHash, nil
 	}
@@ -1043,7 +1043,7 @@ func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status
 	return status, status, stateHash, nil
 }
 
-func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg *PreparedConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
+func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg *PreparedBlockchainConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
 	stateInit := transactionMessageStateInit(msg)
 	if deleted {
 		return acc, false, &tlb.ComputeSkipReason{Type: transactionNoStateSkipReason(stateInit)}, nil
@@ -1099,6 +1099,9 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		}
 	default:
 		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoState}, nil
+	}
+	if cfg.globalVersion() >= 15 && (status == tlb.AccountStatusUninit || status == tlb.AccountStatusNonExist) && stateInit.Lib != nil && !stateInit.Lib.IsEmpty() {
+		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 	}
 	if status == tlb.AccountStatusUninit && transactionIsMasterchain(acc.addr) && transactionPublicLibrariesCount(stateInit.Lib) > 0 {
 		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil

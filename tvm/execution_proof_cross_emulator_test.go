@@ -80,7 +80,7 @@ func FuzzExecutionProofCrossEmulatorGlobalVersionBoundary(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(0))
 	}
 	f.Add(uint8(255), uint16(0xffff))
@@ -98,7 +98,7 @@ func TestExecutionProofCrossEmulatorExecutionConfigGlobalVersionOverrideAllGloba
 
 	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_EXECUTION_PROOF_VERSION_AUDIT") {
 		t.Run("global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
-			assertExecutionProofGlobalVersionOverride(t, version, MaxSupportedGlobalVersion-version, 0)
+			assertExecutionProofGlobalVersionOverride(t, version, vm.MaxSupportedGlobalVersion-version, 0)
 		})
 	}
 }
@@ -108,8 +108,8 @@ func FuzzExecutionProofCrossEmulatorExecutionConfigGlobalVersionOverride(f *test
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), uint16(0xA000+version))
 	}
 	f.Add(uint8(255), uint8(0), uint16(0xffff))
@@ -126,7 +126,7 @@ func FuzzExecutionProofCrossEmulatorResultStackGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0xAB))
 	}
 	f.Add(uint8(255), uint8(0))
@@ -155,7 +155,7 @@ func FuzzExecutionProofCrossEmulatorExecutionConfigLibrariesGlobalVersion(f *tes
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(13+version))
 	}
 	f.Add(uint8(255), uint8(0))
@@ -174,7 +174,7 @@ func TestExecutionProofCrossEmulatorExecutionConfigLibrariesGlobalVersionOverrid
 
 	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_EXECUTION_PROOF_VERSION_AUDIT") {
 		t.Run("global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
-			assertExecutionProofLibrariesGlobalVersionOverride(t, version, MaxSupportedGlobalVersion-version, 23)
+			assertExecutionProofLibrariesGlobalVersionOverride(t, version, vm.MaxSupportedGlobalVersion-version, 23)
 		})
 	}
 }
@@ -184,8 +184,8 @@ func FuzzExecutionProofCrossEmulatorExecutionConfigLibrariesGlobalVersionOverrid
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), uint8(23+version))
 	}
 	f.Add(uint8(255), uint8(0), uint8(0))
@@ -496,11 +496,15 @@ func runGoCrossCodeWithExecutionProofVersion(accountRoot *cell.Cell, stack *vm.S
 		return nil, nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(globalVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, nil, err
 	}
-	res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{AccountRoot: accountRoot})
+	res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{
+		AccountRoot: accountRoot,
+		Config:      cfg,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -521,25 +525,25 @@ func runGoCrossCodeWithExecutionProofVersion(accountRoot *cell.Cell, stack *vm.S
 	}, res.Proof, nil
 }
 
-func runGoCrossCodeWithExecutionProofConfigOverride(accountRoot *cell.Cell, stack *vm.Stack, machineVersion, globalVersion int) (*crossRunResult, *cell.Cell, error) {
-	return runGoCrossCodeWithExecutionProofConfigOverrideAndLibraries(accountRoot, stack, machineVersion, globalVersion, nil)
+func runGoCrossCodeWithExecutionProofConfigOverride(accountRoot *cell.Cell, stack *vm.Stack, _, globalVersion int) (*crossRunResult, *cell.Cell, error) {
+	return runGoCrossCodeWithExecutionProofConfigOverrideAndLibraries(accountRoot, stack, 0, globalVersion, nil)
 }
 
-func runGoCrossCodeWithExecutionProofConfigOverrideAndLibraries(accountRoot *cell.Cell, stack *vm.Stack, machineVersion, globalVersion int, libs []*cell.Cell) (*crossRunResult, *cell.Cell, error) {
+func runGoCrossCodeWithExecutionProofConfigOverrideAndLibraries(accountRoot *cell.Cell, stack *vm.Stack, _ int, globalVersion int, libs []*cell.Cell) (*crossRunResult, *cell.Cell, error) {
 	execStack := stack.Copy()
 	if err := execStack.PushInt(big.NewInt(0)); err != nil {
 		return nil, nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, nil, err
 	}
 	res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{
-		AccountRoot:      accountRoot,
-		GlobalVersion:    globalVersion,
-		GlobalVersionSet: true,
-		Libraries:        libs,
+		AccountRoot: accountRoot,
+		Libraries:   libs,
+		Config:      cfg,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -567,13 +571,15 @@ func runGoCrossCodeWithExecutionProofConfigVersion(accountRoot *cell.Cell, stack
 		return nil, nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(globalVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, nil, err
 	}
 	res, err := machine.ExecuteGetMethod(nil, nil, tuple.Tuple{}, vm.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{
 		AccountRoot: accountRoot,
 		Libraries:   libs,
+		Config:      cfg,
 	})
 	if err != nil {
 		return nil, nil, err

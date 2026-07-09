@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	expectedRegisteredOpcodeAvailabilityFuzzSeedCount = 585
-	expectedRegisteredOpcodeAvailabilityFuzzSeedHash  = "0f0f274b312796c46f95171a2689040f2d8ffff4e366d5a43f00f6d5b3f588f2"
+	expectedRegisteredOpcodeAvailabilityFuzzSeedCount = 624
+	expectedRegisteredOpcodeAvailabilityFuzzSeedHash  = "490262f557532e51e99799f26c1ba976c5d97aa23b5d4eb3a1d89235f0989092"
 )
 
 func TestTVMCrossEmulatorOpcodeMinGlobalVersionBoundaries(t *testing.T) {
@@ -32,7 +32,7 @@ func TestTVMCrossEmulatorOpcodeMinGlobalVersionBoundaries(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assertCrossOpcodeVersionBoundary(t, tt, tt.min-1, true)
 			assertCrossOpcodeVersionBoundary(t, tt, tt.min, false)
-			if tt.min < MaxSupportedGlobalVersion {
+			if tt.min < vm.MaxSupportedGlobalVersion {
 				assertCrossOpcodeVersionBoundary(t, tt, tt.min+1, false)
 			}
 		})
@@ -86,8 +86,8 @@ func FuzzTVMCrossEmulatorOpcodeMinGlobalVersionBoundaries(f *testing.F) {
 	if len(cases) == 0 {
 		f.Fatal("opcode min-version boundary case list is empty")
 	}
-	f.Add(uint16(0), uint8(MinSupportedGlobalVersion))
-	f.Add(uint16(0), uint8(MaxSupportedGlobalVersion))
+	f.Add(uint16(0), uint8(0))
+	f.Add(uint16(0), uint8(vm.MaxSupportedGlobalVersion))
 	for _, seed := range opcodeMinGlobalVersionBoundaryFuzzSeeds(cases) {
 		f.Add(uint16(seed.caseIdx), uint8(seed.version))
 	}
@@ -118,8 +118,8 @@ func TestTVMCrossEmulatorOpcodeMinGlobalVersionFuzzSeedAuditInventory(t *testing
 		if seed.caseIdx < 0 || seed.caseIdx >= len(cases) {
 			t.Fatalf("opcode min-version boundary fuzz seed case index %d outside [0, %d)", seed.caseIdx, len(cases))
 		}
-		if seed.version < MinSupportedGlobalVersion || seed.version > MaxSupportedGlobalVersion {
-			t.Fatalf("opcode min-version boundary fuzz seed %s version %d outside [%d, %d]", cases[seed.caseIdx].name, seed.version, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if seed.version < 0 || seed.version > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("opcode min-version boundary fuzz seed %s version %d outside [%d, %d]", cases[seed.caseIdx].name, seed.version, 0, vm.MaxSupportedGlobalVersion)
 		}
 		if seen[seed.caseIdx] == nil {
 			seen[seed.caseIdx] = make(map[int]struct{})
@@ -168,7 +168,7 @@ func TestTVMCrossEmulatorOpcodeMinGlobalVersionAuditInventory(t *testing.T) {
 	t.Setenv("TVM_OPCODE_VERSION_AUDIT_SHARDS", "")
 	t.Setenv("TVM_OPCODE_VERSION_AUDIT_SHARD", "")
 	runs := opcodeMinGlobalVersionAuditRuns(t, cases)
-	wantRuns := len(cases) * (MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1)
+	wantRuns := len(cases) * (vm.MaxSupportedGlobalVersion - 0 + 1)
 	if len(runs) != wantRuns {
 		t.Fatalf("opcode min-version audit runs = %d, want %d", len(runs), wantRuns)
 	}
@@ -230,7 +230,7 @@ func TestTVMCrossEmulatorRegisteredOpcodeAvailabilityAuditInventory(t *testing.T
 	assertRegisteredOpcodeAvailabilityAuditInventory(t)
 
 	cases := registeredOpcodeAvailabilityAuditCases()
-	versions := []int{MinSupportedGlobalVersion, MaxSupportedGlobalVersion}
+	versions := []int{0, vm.MaxSupportedGlobalVersion}
 	t.Setenv("TVM_OPCODE_VERSION_AUDIT_SHARDS", "")
 	t.Setenv("TVM_OPCODE_VERSION_AUDIT_SHARD", "")
 	runs := registeredOpcodeAvailabilityAuditRuns(t, cases, versions)
@@ -373,8 +373,8 @@ type opcodeMinGlobalVersionAuditRun struct {
 }
 
 func registeredOpcodeAvailabilityAuditVersions() []int {
-	versions := make([]int, 0, MaxSupportedGlobalVersion-MinSupportedGlobalVersion+1)
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	versions := make([]int, 0, vm.MaxSupportedGlobalVersion-0+1)
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		versions = append(versions, version)
 	}
 	return versions
@@ -410,12 +410,12 @@ func registeredOpcodeAvailabilityAuditRuns(t *testing.T, cases []registeredOpcod
 func opcodeMinGlobalVersionAuditRuns(t *testing.T, cases []opcodeMinGlobalVersionCase) []opcodeMinGlobalVersionAuditRun {
 	t.Helper()
 
-	runs := make([]opcodeMinGlobalVersionAuditRun, 0, len(cases)*(MaxSupportedGlobalVersion-MinSupportedGlobalVersion+1))
+	runs := make([]opcodeMinGlobalVersionAuditRun, 0, len(cases)*(vm.MaxSupportedGlobalVersion-0+1))
 	for _, tt := range cases {
 		if tt.min == 0 {
 			continue
 		}
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			runs = append(runs, opcodeMinGlobalVersionAuditRun{
 				opcodeMinGlobalVersionCase: tt,
 				version:                    version,
@@ -538,7 +538,8 @@ func runGoRegisteredOpcodeAvailability(code *cell.Cell, version int) (int32, err
 	}
 
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(version); err != nil {
+	cfg, err := crossRunPreparedBlockchainConfig(version)
+	if err != nil {
 		return 0, err
 	}
 	res, err := machine.Execute(
@@ -546,7 +547,8 @@ func runGoRegisteredOpcodeAvailability(code *cell.Cell, version int) (int32, err
 		cell.BeginCell().EndCell(),
 		tuple.Tuple{},
 		vm.GasWithLimit(registeredOpcodeAvailabilityAuditGasLimit),
-		stack, ExecutionConfig{})
+		stack,
+		ExecutionConfig{Config: cfg})
 
 	if err != nil {
 		return 0, err

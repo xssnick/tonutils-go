@@ -73,7 +73,7 @@ func FuzzTVMCrossEmulatorAllGlobalVersionsSmoke(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%crossAllGlobalVersionSmokeCaseCount), int16(7), int16(35))
 		f.Add(uint8(version), uint8(1), int16(-6), int16(7))
 		f.Add(uint8(version), uint8(2), int16(50), int16(8))
@@ -103,8 +103,8 @@ func FuzzTVMCrossEmulatorExecutionConfigGlobalVersionOverride(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		f.Add(uint8(version), uint8(MaxSupportedGlobalVersion-version))
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(vmcore.MaxSupportedGlobalVersion-version))
 	}
 	f.Add(uint8(255), uint8(0))
 
@@ -118,7 +118,7 @@ func FuzzTVMCrossEmulatorExecutionConfigGlobalVersionOverride(f *testing.F) {
 func assertExecutionConfigGlobalVersionOverride(t *testing.T, version int) {
 	t.Helper()
 
-	machineVersion := MaxSupportedGlobalVersion - version
+	machineVersion := vmcore.MaxSupportedGlobalVersion - version
 	assertExecutionConfigGlobalVersionOverrideWithMachine(t, version, machineVersion)
 }
 
@@ -208,7 +208,7 @@ func FuzzTVMCrossEmulatorLibraryCodeCellStartupGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(7+version))
 	}
 	f.Add(uint8(255), uint8(0))
@@ -289,7 +289,7 @@ func FuzzTVMCrossEmulatorLibraryLookupGasGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(1), uint16(0xA000+version))
 		f.Add(uint8(version), uint8(2), uint16(0xB000+version))
 		f.Add(uint8(version), uint8(3), uint16(0xC000+version))
@@ -429,7 +429,7 @@ func FuzzTVMCrossEmulatorExecutionConfigLibrariesGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(9+version))
 	}
 	f.Add(uint8(255), uint8(0))
@@ -448,7 +448,7 @@ func TestTVMCrossEmulatorExecutionConfigLibrariesGlobalVersionOverrideAllGlobalV
 
 	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_GLOBAL_VERSION_AUDIT") {
 		t.Run("global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
-			assertExecutionConfigLibrariesGlobalVersionOverride(t, version, MaxSupportedGlobalVersion-version, 17)
+			assertExecutionConfigLibrariesGlobalVersionOverride(t, version, vmcore.MaxSupportedGlobalVersion-version, 17)
 		})
 	}
 }
@@ -458,8 +458,8 @@ func FuzzTVMCrossEmulatorExecutionConfigLibrariesGlobalVersionOverride(f *testin
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		f.Add(uint8(version), uint8(MaxSupportedGlobalVersion-version), uint8(17+version))
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(vmcore.MaxSupportedGlobalVersion-version), uint8(17+version))
 	}
 	f.Add(uint8(255), uint8(0), uint8(0))
 	f.Add(uint8(0), uint8(255), uint8(255))
@@ -588,7 +588,7 @@ func FuzzTVMCrossEmulatorGetMethodGlobalVersionBoundary(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version))
 	}
 	f.Add(uint8(255))
@@ -609,11 +609,8 @@ func assertGetMethodGlobalVersionBoundary(t *testing.T, version int) {
 		t.Fatalf("push method id: %v", err)
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(version)
-	if err != nil {
-		t.Fatalf("with global version: %v", err)
-	}
-	goRes, err := machine.ExecuteGetMethod(code, data, tuple.Tuple{}, vmcore.GasWithLimit(referenceDefaultMaxGas), goStack, ExecutionConfig{})
+	machine := NewTVM()
+	goRes, err := machine.ExecuteGetMethod(code, data, tuple.Tuple{}, vmcore.GasWithLimit(referenceDefaultMaxGas), goStack, testExecutionConfigWithVersion(t, uint32(version)))
 	if err != nil {
 		t.Fatalf("go get method failed: %v", err)
 	}
@@ -667,8 +664,8 @@ func FuzzTVMCrossEmulatorGetMethodExecutionConfigGlobalVersionOverride(f *testin
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		f.Add(uint8(version), uint8(MaxSupportedGlobalVersion-version))
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(vmcore.MaxSupportedGlobalVersion-version))
 	}
 	f.Add(uint8(255), uint8(0))
 
@@ -682,7 +679,7 @@ func FuzzTVMCrossEmulatorGetMethodExecutionConfigGlobalVersionOverride(f *testin
 func assertGetMethodExecutionConfigGlobalVersionOverride(t *testing.T, version int) {
 	t.Helper()
 
-	machineVersion := MaxSupportedGlobalVersion - version
+	machineVersion := vmcore.MaxSupportedGlobalVersion - version
 	assertGetMethodExecutionConfigGlobalVersionOverrideWithMachine(t, version, machineVersion)
 }
 
@@ -745,7 +742,7 @@ func FuzzTVMCrossEmulatorGetMethodExecutionConfigLibrariesGlobalVersion(f *testi
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(11+version))
 	}
 	f.Add(uint8(255), uint8(0))
@@ -764,7 +761,7 @@ func TestTVMCrossEmulatorGetMethodExecutionConfigLibrariesGlobalVersionOverrideA
 
 	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_GLOBAL_VERSION_AUDIT") {
 		t.Run("global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
-			assertGetMethodExecutionConfigLibrariesGlobalVersionOverride(t, version, MaxSupportedGlobalVersion-version, 19)
+			assertGetMethodExecutionConfigLibrariesGlobalVersionOverride(t, version, vmcore.MaxSupportedGlobalVersion-version, 19)
 		})
 	}
 }
@@ -774,8 +771,8 @@ func FuzzTVMCrossEmulatorGetMethodExecutionConfigLibrariesGlobalVersionOverride(
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		f.Add(uint8(version), uint8(MaxSupportedGlobalVersion-version), uint8(19+version))
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(vmcore.MaxSupportedGlobalVersion-version), uint8(19+version))
 	}
 	f.Add(uint8(255), uint8(0), uint8(0))
 	f.Add(uint8(0), uint8(255), uint8(255))
@@ -937,12 +934,14 @@ func runGoCrossCodeWithVersionExecutionConfig(code, data *cell.Cell, c7 tuple.Tu
 		return nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(globalVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, err
 	}
 	res, err := machine.Execute(code, data, c7, vmcore.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{
 		Libraries: libs,
+		Config:    cfg,
 	})
 
 	if err != nil {
@@ -965,24 +964,24 @@ func runGoCrossCodeWithVersionExecutionConfig(code, data *cell.Cell, c7 tuple.Tu
 	}, nil
 }
 
-func runGoCrossCodeWithExecutionConfigGlobalVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vmcore.Stack, machineVersion, globalVersion int) (*crossRunResult, error) {
-	return runGoCrossCodeWithExecutionConfigGlobalVersionAndLibraries(code, data, c7, nil, stack, machineVersion, globalVersion)
+func runGoCrossCodeWithExecutionConfigGlobalVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vmcore.Stack, _, globalVersion int) (*crossRunResult, error) {
+	return runGoCrossCodeWithExecutionConfigGlobalVersionAndLibraries(code, data, c7, nil, stack, 0, globalVersion)
 }
 
-func runGoCrossCodeWithExecutionConfigGlobalVersionAndLibraries(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vmcore.Stack, machineVersion, globalVersion int) (*crossRunResult, error) {
+func runGoCrossCodeWithExecutionConfigGlobalVersionAndLibraries(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vmcore.Stack, _ int, globalVersion int) (*crossRunResult, error) {
 	execStack := stack.Copy()
 	if err := execStack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, err
 	}
 	res, err := machine.Execute(code, data, c7, vmcore.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{
-		GlobalVersion:    globalVersion,
-		GlobalVersionSet: true,
-		Libraries:        libs,
+		Libraries: libs,
+		Config:    cfg,
 	})
 
 	if err != nil {
@@ -1011,12 +1010,14 @@ func runGoCrossGetMethodWithVersionExecutionConfig(code, data *cell.Cell, c7 tup
 		return nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(globalVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, err
 	}
 	res, err := machine.ExecuteGetMethod(code, data, c7, vmcore.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{
 		Libraries: libs,
+		Config:    cfg,
 	})
 
 	if err != nil {
@@ -1039,24 +1040,24 @@ func runGoCrossGetMethodWithVersionExecutionConfig(code, data *cell.Cell, c7 tup
 	}, nil
 }
 
-func runGoCrossGetMethodWithExecutionConfigGlobalVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vmcore.Stack, machineVersion, globalVersion int) (*crossRunResult, error) {
-	return runGoCrossGetMethodWithExecutionConfigGlobalVersionAndLibraries(code, data, c7, nil, stack, machineVersion, globalVersion)
+func runGoCrossGetMethodWithExecutionConfigGlobalVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vmcore.Stack, _, globalVersion int) (*crossRunResult, error) {
+	return runGoCrossGetMethodWithExecutionConfigGlobalVersionAndLibraries(code, data, c7, nil, stack, 0, globalVersion)
 }
 
-func runGoCrossGetMethodWithExecutionConfigGlobalVersionAndLibraries(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vmcore.Stack, machineVersion, globalVersion int) (*crossRunResult, error) {
+func runGoCrossGetMethodWithExecutionConfigGlobalVersionAndLibraries(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vmcore.Stack, _ int, globalVersion int) (*crossRunResult, error) {
 	execStack := stack.Copy()
 	if err := execStack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
 	if err != nil {
 		return nil, err
 	}
 	res, err := machine.ExecuteGetMethod(code, data, c7, vmcore.GasWithLimit(referenceDefaultMaxGas), execStack, ExecutionConfig{
-		GlobalVersion:    globalVersion,
-		GlobalVersionSet: true,
-		Libraries:        libs,
+		Libraries: libs,
+		Config:    cfg,
 	})
 
 	if err != nil {

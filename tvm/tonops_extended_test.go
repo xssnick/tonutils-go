@@ -188,7 +188,7 @@ func TestTonOpsExtendedParamsAndPRNG(t *testing.T) {
 			funcsop.DUEPAYMENT().Serialize(),
 			funcsop.GETPRECOMPILEDGAS().Serialize(),
 		)
-		st, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion)
+		st, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -221,7 +221,7 @@ func TestTonOpsExtendedParamsAndPRNG(t *testing.T) {
 			funcsop.INMSG_ORIGVALUE().Serialize(),
 			funcsop.INMSG_VALUE().Serialize(),
 		)
-		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion)
+		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion)
 		if err != nil {
 			t.Fatalf("unexpected in-msg value alias error: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestTonOpsExtendedParamsAndPRNG(t *testing.T) {
 	})
 
 	t.Run("RandOpsUpdateSeed", func(t *testing.T) {
-		state := newTonopsState(t, vmcore.DefaultGlobalVersion, c7)
+		state := newTonopsState(t, vmcore.MaxSupportedGlobalVersion, c7)
 		if err := funcsop.RANDU256().Interpret(state); err != nil {
 			t.Fatalf("RANDU256 failed: %v", err)
 		}
@@ -259,7 +259,7 @@ func TestTonOpsExtendedParamsAndPRNG(t *testing.T) {
 			t.Fatalf("unexpected updated seed")
 		}
 
-		state = newTonopsState(t, vmcore.DefaultGlobalVersion, c7, big.NewInt(7))
+		state = newTonopsState(t, vmcore.MaxSupportedGlobalVersion, c7, big.NewInt(7))
 		if err := funcsop.ADDRAND().Interpret(state); err != nil {
 			t.Fatalf("ADDRAND failed: %v", err)
 		}
@@ -296,7 +296,7 @@ func TestTonOpsExtendedFeesAndHashing(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				_, res, err := runRawCodeWithEnv(t, tt.code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, tt.args...)
+				_, res, err := runRawCodeWithEnv(t, tt.code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, tt.args...)
 				if err != nil {
 					t.Fatalf("unexpected %s error: %v", tt.name, err)
 				}
@@ -314,7 +314,7 @@ func TestTonOpsExtendedFeesAndHashing(t *testing.T) {
 			codeFromBuilders(t, funcsop.GETGASFEE().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(-1),
 			int64(0),
 		)
@@ -326,7 +326,7 @@ func TestTonOpsExtendedFeesAndHashing(t *testing.T) {
 			codeFromBuilders(t, funcsop.GETGASFEESIMPLE().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(-1),
 			int64(0),
 		)
@@ -342,7 +342,7 @@ func TestTonOpsExtendedFeesAndHashing(t *testing.T) {
 			codeFromBuilders(t, funcsop.SHA256U().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			cell.BeginCell().MustStoreSlice(data, uint(len(data)*8)).ToSlice(),
 		)
 		if err != nil {
@@ -357,7 +357,7 @@ func TestTonOpsExtendedFeesAndHashing(t *testing.T) {
 			codeFromBuilders(t, funcsop.HASHEXT(0).Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			cell.BeginCell().MustStoreSlice(data, uint(len(data)*8)).ToSlice(),
 			int64(1),
 		)
@@ -372,7 +372,7 @@ func TestTonOpsExtendedFeesAndHashing(t *testing.T) {
 
 	t.Run("HASHBU", func(t *testing.T) {
 		builder := cell.BeginCell().MustStoreUInt(0xAB, 8)
-		state := newTonopsState(t, vmcore.DefaultGlobalVersion, c7, builder)
+		state := newTonopsState(t, vmcore.MaxSupportedGlobalVersion, c7, builder)
 		if err := funcsop.HASHBU().Interpret(state); err != nil {
 			t.Fatalf("HASHBU failed: %v", err)
 		}
@@ -447,7 +447,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		leaf := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
 		root := cell.BeginCell().MustStoreRef(leaf).MustStoreRef(leaf).EndCell()
 		code := codeFromBuilders(t, funcsop.CDATASIZE().Serialize())
-		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, root, int64(10))
+		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, root, int64(10))
 		if err != nil {
 			t.Fatalf("unexpected CDATASIZE error: %v", err)
 		}
@@ -460,7 +460,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.CDATASIZEQ().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, root, int64(1))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, root, int64(1))
 		if err != nil {
 			t.Fatalf("unexpected CDATASIZEQ error: %v", err)
 		}
@@ -478,7 +478,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 			codeFromBuilders(t, funcsop.LDVARINT16().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			cell.BeginCell().MustStoreUInt(1, 4).MustStoreInt(-17, 8).ToSlice(),
 		)
 		if err != nil {
@@ -494,7 +494,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 			codeFromBuilders(t, funcsop.LDVARINT16().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			cell.BeginCell().MustStoreUInt(2, 4).MustStoreInt(-1, 16).ToSlice(),
 		)
 		if err != nil {
@@ -510,7 +510,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 			codeFromBuilders(t, funcsop.LDMSGADDR().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			msgAddr,
 		)
 		if err != nil {
@@ -532,7 +532,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 			codeFromBuilders(t, funcsop.PARSEMSGADDR().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			msgAddr,
 		)
 		if err != nil {
@@ -550,7 +550,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 			codeFromBuilders(t, funcsop.REWRITESTDADDR().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			msgAddr,
 		)
 		if err != nil {
@@ -619,7 +619,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 	t.Run("QuietAddrFailureAndMessageActions", func(t *testing.T) {
 		invalid := cell.BeginCell().MustStoreUInt(0b11, 2).ToSlice()
 		code := codeFromBuilders(t, funcsop.LDMSGADDRQ().Serialize())
-		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, invalid)
+		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, invalid)
 		if err != nil {
 			t.Fatalf("unexpected LDMSGADDRQ error: %v", err)
 		}
@@ -631,7 +631,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 
 		addrNoneTail := cell.BeginCell().MustStoreUInt(0, 2).MustStoreUInt(0xA, 4).ToSlice()
 		code = codeFromBuilders(t, funcsop.LDSTDADDRQ().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, addrNoneTail)
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, addrNoneTail)
 		if err != nil {
 			t.Fatalf("unexpected LDSTDADDRQ error: %v", err)
 		}
@@ -650,7 +650,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 
 		shortSlice := cell.BeginCell().MustStoreUInt(1, 1).ToSlice()
 		code = codeFromBuilders(t, funcsop.LDOPTSTDADDRQ().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, shortSlice)
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, shortSlice)
 		if err != nil {
 			t.Fatalf("unexpected LDOPTSTDADDRQ short error: %v", err)
 		}
@@ -668,7 +668,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.REWRITESTDADDRQ().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, addrNoneTail)
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, addrNoneTail)
 		if err != nil {
 			t.Fatalf("unexpected REWRITESTDADDRQ error: %v", err)
 		}
@@ -683,7 +683,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 			code,
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			addrNoneTail,
 			cell.BeginCell(),
 		)
@@ -752,7 +752,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.SENDMSG().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, msgCell, int64(1024))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, msgCell, int64(1024))
 		if err != nil {
 			t.Fatalf("unexpected SENDMSG fee-only error: %v", err)
 		}
@@ -766,7 +766,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.SETCODE().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, msgCell)
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, msgCell)
 		if err != nil {
 			t.Fatalf("unexpected SETCODE error: %v", err)
 		}
@@ -781,7 +781,7 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 
 		code = codeFromBuilders(t, funcsop.RAWRESERVEX().Serialize())
 		extra := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, big.NewInt(777), extra, int64(3))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, big.NewInt(777), extra, int64(3))
 		if err != nil {
 			t.Fatalf("unexpected RAWRESERVEX error: %v", err)
 		}
@@ -797,19 +797,19 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.RAWRESERVE().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, int64(-1), int64(0))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, int64(-1), int64(0))
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeRangeCheck {
 			t.Fatalf("unexpected RAWRESERVE negative exit code: %d", code)
 		}
 
 		code = codeFromBuilders(t, funcsop.RAWRESERVEX().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, int64(-1), extra, int64(0))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, int64(-1), extra, int64(0))
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeRangeCheck {
 			t.Fatalf("unexpected RAWRESERVEX negative exit code: %d", code)
 		}
 
 		code = codeFromBuilders(t, funcsop.SETLIBCODE().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, msgCell, int64(1))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, msgCell, int64(1))
 		if err != nil {
 			t.Fatalf("unexpected SETLIBCODE error: %v", err)
 		}
@@ -824,13 +824,13 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.SETLIBCODE().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, msgCell, int64(4))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, msgCell, int64(4))
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeRangeCheck {
 			t.Fatalf("unexpected SETLIBCODE invalid-mode exit code: %d", code)
 		}
 
 		code = codeFromBuilders(t, funcsop.CHANGELIB().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, big.NewInt(1), int64(1))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, big.NewInt(1), int64(1))
 		if err != nil {
 			t.Fatalf("unexpected CHANGELIB error: %v", err)
 		}
@@ -845,13 +845,13 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.CHANGELIB().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, big.NewInt(-1), int64(1))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, big.NewInt(-1), int64(1))
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeRangeCheck {
 			t.Fatalf("unexpected CHANGELIB negative-hash exit code: %d", code)
 		}
 
 		code = codeFromBuilders(t, funcsop.SENDMSG().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, msgCell, int64(1))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, msgCell, int64(1))
 		if err != nil {
 			t.Fatalf("unexpected SENDMSG send error: %v", err)
 		}
@@ -873,14 +873,14 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		}
 
 		code = codeFromBuilders(t, funcsop.SENDMSG().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, msgCell, int64(256))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, msgCell, int64(256))
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeRangeCheck {
 			t.Fatalf("unexpected SENDMSG invalid-mode exit code: %d", code)
 		}
 
 		invalidMsgCell := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 		code = codeFromBuilders(t, funcsop.SENDMSG().Serialize())
-		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, invalidMsgCell, int64(1))
+		_, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, invalidMsgCell, int64(1))
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeUnknown {
 			t.Fatalf("unexpected SENDMSG invalid-message exit code: %d", code)
 		}

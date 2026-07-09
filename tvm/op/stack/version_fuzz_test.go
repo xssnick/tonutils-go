@@ -10,7 +10,7 @@ import (
 )
 
 func fuzzStackVersion(raw int64) int {
-	version := int(raw % int64(vm.DefaultGlobalVersion+1))
+	version := int(raw % int64(vm.MaxSupportedGlobalVersion+1))
 	if version < 0 {
 		version = -version
 	}
@@ -18,24 +18,24 @@ func fuzzStackVersion(raw int64) int {
 }
 
 func TestFuzzStackVersionCoversDefaultRange(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzStackVersion(int64(version)); got != version {
 			t.Fatalf("seed version %d mapped to %d", version, got)
 		}
 	}
-	if got := fuzzStackVersion(-int64(vm.DefaultGlobalVersion)); got != vm.DefaultGlobalVersion {
-		t.Fatalf("negative default version mapped to %d, want %d", got, vm.DefaultGlobalVersion)
+	if got := fuzzStackVersion(-int64(vm.MaxSupportedGlobalVersion)); got != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("negative default version mapped to %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
 	for _, raw := range []int64{
 		-1,
-		-int64(vm.DefaultGlobalVersion) - 1,
-		-int64(vm.DefaultGlobalVersion) - 2,
+		-int64(vm.MaxSupportedGlobalVersion) - 1,
+		-int64(vm.MaxSupportedGlobalVersion) - 2,
 		-123456789,
 		123456789,
 	} {
 		got := fuzzStackVersion(raw)
-		if got < 0 || got > vm.DefaultGlobalVersion {
-			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.DefaultGlobalVersion)
+		if got < 0 || got > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
@@ -107,10 +107,10 @@ func fuzzStackIndexState(t *testing.T, version int, indices ...int64) *vm.State 
 		}
 	}
 	return &vm.State{
-		GlobalVersion:           version,
-		GlobalVersionConfigured: true,
-		Stack:                   st,
-		Gas:                     vm.GasWithLimit(10_000),
+		GlobalVersion: version,
+
+		Stack: st,
+		Gas:   vm.GasWithLimit(10_000),
 	}
 }
 
@@ -131,7 +131,7 @@ func FuzzTVMVersionedDynamicStackIndexLimits(f *testing.F) {
 	f.Add(int64(4), int64(maxSmallIndex), uint8(0))
 	f.Add(int64(4), int64(maxSmallIndex)+1, uint8(0))
 	f.Add(int64(3), int64(-1), uint8(1))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 12; opKind++ {
 			f.Add(version, int64(255), opKind)
 			f.Add(version, int64(256), opKind)
@@ -257,15 +257,15 @@ func fuzzStackBlockState(t *testing.T, version int, depth int, x, y int64) *vm.S
 	}
 
 	return &vm.State{
-		GlobalVersion:           version,
-		GlobalVersionConfigured: true,
-		Stack:                   st,
-		Gas:                     vm.GasWithLimit(100_000),
+		GlobalVersion: version,
+
+		Stack: st,
+		Gas:   vm.GasWithLimit(100_000),
 	}
 }
 
 func FuzzTVMVersionedBLKSWXLargeMoveGas(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for _, counts := range [][2]int64{
 			{0, 300},
 			{1, 254},

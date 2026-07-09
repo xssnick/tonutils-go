@@ -12,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	dictop "github.com/xssnick/tonutils-go/tvm/op/dict"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -73,11 +74,11 @@ func FuzzTVMCrossEmulatorDictOpsMatrixGlobalVersion(f *testing.F) {
 	}
 
 	cases := dictMatrixAllCases()
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(version%len(cases)))
 	}
 	for i := range cases {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint16(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint16(i))
 	}
 	f.Add(uint8(255), uint16(0xffff))
 

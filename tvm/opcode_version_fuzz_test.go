@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount = 585
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash  = "0f0f274b312796c46f95171a2689040f2d8ffff4e366d5a43f00f6d5b3f588f2"
+	expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount = 624
+	expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash  = "490262f557532e51e99799f26c1ba976c5d97aa23b5d4eb3a1d89235f0989092"
 )
 
 func fuzzOpcodeVersion(raw int64) int {
@@ -23,13 +23,13 @@ func fuzzOpcodeVersion(raw int64) int {
 }
 
 func TestFuzzOpcodeVersionCoversSupportedRange(t *testing.T) {
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzOpcodeVersion(int64(version)); got != version {
 			t.Fatalf("version seed %d mapped to %d, want %d", version, got, version)
 		}
 	}
-	if got := fuzzOpcodeVersion(-int64(MaxSupportedGlobalVersion)); got != MaxSupportedGlobalVersion {
-		t.Fatalf("negative max version mapped to %d, want %d", got, MaxSupportedGlobalVersion)
+	if got := fuzzOpcodeVersion(-int64(vmcore.MaxSupportedGlobalVersion)); got != vmcore.MaxSupportedGlobalVersion {
+		t.Fatalf("negative max version mapped to %d, want %d", got, vmcore.MaxSupportedGlobalVersion)
 	}
 }
 
@@ -44,19 +44,19 @@ func TestTVMRegisteredOpcodeAvailabilityNonSerializableInventory(t *testing.T) {
 func TestTVMRegisteredOpcodeAvailabilityAllGlobalVersions(t *testing.T) {
 	cases := registeredOpcodeAvailabilityAuditCases()
 	for _, tt := range cases {
-		baseExit, err := runGoRegisteredOpcodeAvailabilityCase(tt, MinSupportedGlobalVersion)
+		baseExit, err := runGoRegisteredOpcodeAvailabilityCase(t, tt, 0)
 		if err != nil {
-			t.Fatalf("%s v%d execution failed: %v", tt.name, MinSupportedGlobalVersion, err)
+			t.Fatalf("%s v%d execution failed: %v", tt.name, 0, err)
 		}
 		baseInvalid := baseExit == vmerr.CodeInvalidOpcode
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-			exit, err := runGoRegisteredOpcodeAvailabilityCase(tt, version)
+		for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
+			exit, err := runGoRegisteredOpcodeAvailabilityCase(t, tt, version)
 			if err != nil {
 				t.Fatalf("%s v%d execution failed: %v", tt.name, version, err)
 			}
 			invalid := exit == vmerr.CodeInvalidOpcode
 			if invalid != baseInvalid {
-				t.Fatalf("%s invalid-opcode classification changed at v%d: got %v, v%d got %v", tt.name, version, invalid, MinSupportedGlobalVersion, baseInvalid)
+				t.Fatalf("%s invalid-opcode classification changed at v%d: got %v, v%d got %v", tt.name, version, invalid, 0, baseInvalid)
 			}
 			if invalid && registeredOpcodeAvailabilityCaseShouldBeValid(tt) {
 				t.Fatalf("%s v%d decoded as invalid opcode", tt.name, version)
@@ -82,7 +82,7 @@ func TestTVMRegisteredOpcodeAvailabilityPartitionsVersionedOpcodes(t *testing.T)
 		_, inStableAudit := stableAuditNames[name]
 
 		versioned, isVersioned := op.(vmcore.VersionedOp)
-		if isVersioned && versioned.MinGlobalVersion() > MinSupportedGlobalVersion {
+		if isVersioned && versioned.MinGlobalVersion() > 0 {
 			if inStableAudit {
 				t.Errorf("versioned opcode %s min=%d is present in stable availability audit", name, versioned.MinGlobalVersion())
 			}
@@ -123,15 +123,12 @@ func FuzzTVMVersionedOpcodeAvailabilityBoundaries(f *testing.F) {
 		version := fuzzOpcodeVersion(rawVersion)
 
 		machine := NewTVM()
-		if err := machine.SetGlobalVersion(version); err != nil {
-			t.Fatalf("set global version %d: %v", version, err)
-		}
 		res, err := machine.Execute(
 			opcodeMinVersionInstructionCode(tt),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
 			vmcore.GasWithLimit(1_000_000),
-			vmcore.NewStack(), ExecutionConfig{})
+			vmcore.NewStack(), testExecutionConfigWithVersion(t, uint32(version)))
 
 		gotInvalid := exitCodeFromResult(res, err) == vmerr.CodeInvalidOpcode
 		wantInvalid := version < tt.min
@@ -143,7 +140,7 @@ func FuzzTVMVersionedOpcodeAvailabilityBoundaries(f *testing.F) {
 
 func FuzzTVMStableOpcodesAcrossGlobalVersions(f *testing.F) {
 	for rawCase := uint8(0); rawCase < 5; rawCase++ {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 			f.Add(rawCase, int64(version))
 		}
 	}
@@ -153,15 +150,12 @@ func FuzzTVMStableOpcodesAcrossGlobalVersions(f *testing.F) {
 		code, stack, want := stableOpcodeVersionFuzzCase(t, rawCase)
 
 		machine := NewTVM()
-		if err := machine.SetGlobalVersion(version); err != nil {
-			t.Fatalf("set global version %d: %v", version, err)
-		}
 		res, err := machine.Execute(
 			code,
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
 			vmcore.GasWithLimit(1_000_000),
-			stack, ExecutionConfig{})
+			stack, testExecutionConfigWithVersion(t, uint32(version)))
 
 		if err != nil {
 			t.Fatalf("execute version %d case %d: %v", version, rawCase, err)
@@ -190,18 +184,18 @@ func FuzzTVMRegisteredOpcodeAvailabilityAcrossGlobalVersions(f *testing.F) {
 		tt := cases[int(rawCase)%len(cases)]
 		version := fuzzOpcodeVersion(rawVersion)
 
-		exit, err := runGoRegisteredOpcodeAvailabilityCase(tt, version)
+		exit, err := runGoRegisteredOpcodeAvailabilityCase(t, tt, version)
 		if err != nil {
 			t.Fatalf("%s v%d execution failed: %v", tt.name, version, err)
 		}
-		baseExit, err := runGoRegisteredOpcodeAvailabilityCase(tt, MinSupportedGlobalVersion)
+		baseExit, err := runGoRegisteredOpcodeAvailabilityCase(t, tt, 0)
 		if err != nil {
-			t.Fatalf("%s v%d execution failed: %v", tt.name, MinSupportedGlobalVersion, err)
+			t.Fatalf("%s v%d execution failed: %v", tt.name, 0, err)
 		}
 		invalid := exit == vmerr.CodeInvalidOpcode
 		baseInvalid := baseExit == vmerr.CodeInvalidOpcode
 		if invalid != baseInvalid {
-			t.Fatalf("%s invalid-opcode classification changed at v%d: got %v, v%d got %v", tt.name, version, invalid, MinSupportedGlobalVersion, baseInvalid)
+			t.Fatalf("%s invalid-opcode classification changed at v%d: got %v, v%d got %v", tt.name, version, invalid, 0, baseInvalid)
 		}
 		if invalid && registeredOpcodeAvailabilityCaseShouldBeValid(tt) {
 			t.Fatalf("%s v%d decoded as invalid opcode", tt.name, version)
@@ -229,22 +223,21 @@ func registeredOpcodeAvailabilityCaseShouldBeValid(tt registeredOpcodeAvailabili
 	return ok
 }
 
-func runGoRegisteredOpcodeAvailabilityCase(tt registeredOpcodeAvailabilityAuditCase, version int) (int64, error) {
+func runGoRegisteredOpcodeAvailabilityCase(t testing.TB, tt registeredOpcodeAvailabilityAuditCase, version int) (int64, error) {
+	t.Helper()
+
 	stack := vmcore.NewStack()
 	if err := stack.PushSmallInt(0); err != nil {
 		return 0, err
 	}
 
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(version); err != nil {
-		return 0, err
-	}
 	res, err := machine.Execute(
 		tt.code,
 		cell.BeginCell().EndCell(),
 		tuple.Tuple{},
 		vmcore.GasWithLimit(registeredOpcodeAvailabilityAuditGasLimit),
-		stack, ExecutionConfig{})
+		stack, testExecutionConfigWithVersion(t, uint32(version)))
 
 	if err != nil {
 		if _, ok := vmerr.ErrorCode(err); !ok {

@@ -263,14 +263,14 @@ func TestJumpToVersionedNestedGasAndAdjust(t *testing.T) {
 }
 
 func FuzzJumpToVersionedNestedGasAndAdjust(f *testing.F) {
-	for version := uint8(0); version <= uint8(DefaultGlobalVersion); version++ {
+	for version := uint8(0); version <= uint8(MaxSupportedGlobalVersion); version++ {
 		f.Add(version, uint8(1), uint8(0))
 		f.Add(version, uint8(FreeNestedContJump+2), uint8(1))
 		f.Add(version, uint8(FreeNestedContJump+5), uint8(3))
 	}
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawDepth, rawArgs uint8) {
-		version := int(rawVersion % uint8(DefaultGlobalVersion+1))
+		version := int(rawVersion % uint8(MaxSupportedGlobalVersion+1))
 		depth := int(rawDepth%20) + 1
 
 		state := newVersionedJumpTestState(version)
@@ -309,11 +309,11 @@ func FuzzJumpToVersionedNestedGasAndAdjust(f *testing.F) {
 
 func newVersionedJumpTestState(version int) *State {
 	return &State{
-		GlobalVersion:           version,
-		GlobalVersionConfigured: true,
-		Gas:                     GasWithLimit(1000),
-		CurrentCode:             cell.BeginCell().EndCell().MustBeginParse(),
-		Stack:                   NewStack(),
+		GlobalVersion: version,
+
+		Gas:         GasWithLimit(1000),
+		CurrentCode: cell.BeginCell().EndCell().MustBeginParse(),
+		Stack:       NewStack(),
 	}
 }
 

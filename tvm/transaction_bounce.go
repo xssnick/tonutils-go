@@ -29,7 +29,7 @@ func transactionShouldBounce(msg *tlb.Message, skipReason *tlb.ComputeSkipReason
 	return skipReason != nil || !computeSuccess || actionBounce
 }
 
-func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg *PreparedConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
+func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg *PreparedBlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
 	if msg == nil || msg.MsgType != tlb.MsgTypeInternal {
 		return nil, nil
 	}
@@ -135,7 +135,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	return out, nil
 }
 
-func transactionBuildBounceBody(in *tlb.InternalMessage, cfg *PreparedConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*cell.Cell, error) {
+func transactionBuildBounceBody(in *tlb.InternalMessage, cfg *PreparedBlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*cell.Cell, error) {
 	if in == nil {
 		return cell.BeginCell().EndCell(), nil
 	}
@@ -201,7 +201,7 @@ func transactionBuildBounceBody(in *tlb.InternalMessage, cfg *PreparedConfig, sk
 	return body.EndCell(), nil
 }
 
-func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell, cfg *PreparedConfig) (transactionUsage, error) {
+func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell, cfg *PreparedBlockchainConfig) (transactionUsage, error) {
 	usage := transactionUsage{}
 	if in == nil {
 		return usage, nil

@@ -164,7 +164,7 @@ func makeRunvmSameC3PrepareDictChild(t *testing.T, id, tail int64) *cell.Cell {
 	)
 }
 
-func makeRunvmChksigAlwaysVariantChildCode(t *testing.T, tt executionConfigSignatureCase, signature []byte) *cell.Cell {
+func makeRunvmSignatureCheckAlwaysVariantChildCode(t *testing.T, tt executionConfigSignatureCase, signature []byte) *cell.Cell {
 	t.Helper()
 
 	builders := make([]*cell.Builder, 0, 4)
@@ -183,29 +183,26 @@ func makeRunvmChksigAlwaysVariantChildCode(t *testing.T, tt executionConfigSigna
 		builders = append(builders, stackop.PUSHINT(big.NewInt(2)).Serialize())
 	}
 
-	builders = append(builders, chksigAlwaysVariantOpcode(t, tt))
+	builders = append(builders, signatureCheckAlwaysVariantOpcode(t, tt))
 	return codeFromBuilders(t, builders...)
 }
 
-type runvmChksigAlwaysResult struct {
+type runvmSignatureCheckAlwaysResult struct {
 	parentExit int64
 	childExit  int64
 	ok         bool
 }
 
-func runRunvmChksigAlwaysVariant(t *testing.T, version int, childCode *cell.Cell, always bool) runvmChksigAlwaysResult {
+func runRunvmSignatureCheckAlwaysVariant(t *testing.T, version int, childCode *cell.Cell, always bool) runvmSignatureCheckAlwaysResult {
 	t.Helper()
 
-	machine, err := NewTVM().WithGlobalVersion(version)
-	if err != nil {
-		t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-	}
+	machine := NewTVM()
 
 	stack := vmcore.NewStack()
-	if err = stack.PushInt(big.NewInt(0)); err != nil {
+	if err := stack.PushInt(big.NewInt(0)); err != nil {
 		t.Fatalf("push child stack size: %v", err)
 	}
-	if err = stack.PushSlice(childCode.MustBeginParse()); err != nil {
+	if err := stack.PushSlice(childCode.MustBeginParse()); err != nil {
 		t.Fatalf("push child code: %v", err)
 	}
 
@@ -215,43 +212,43 @@ func runRunvmChksigAlwaysVariant(t *testing.T, version int, childCode *cell.Cell
 		tuple.Tuple{},
 		vmcore.GasWithLimit(100_000),
 		stack,
-		ExecutionConfig{ChksigAlwaysSucceed: always})
+		ExecutionConfig{
+			Config:                      testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+			SignatureCheckAlwaysSucceed: always,
+		})
 
 	parentExit := exitCodeFromResult(res, err)
 	if parentExit == -1 {
 		t.Fatalf("RUNVM parent always=%v failed: %v", always, err)
 	}
 	if !vmcore.IsSuccessExitCode(parentExit) {
-		return runvmChksigAlwaysResult{parentExit: parentExit}
+		return runvmSignatureCheckAlwaysResult{parentExit: parentExit}
 	}
 
 	childExit := popInt64(t, res.Stack)
 	if !vmcore.IsSuccessExitCode(childExit) {
-		return runvmChksigAlwaysResult{parentExit: parentExit, childExit: childExit}
+		return runvmSignatureCheckAlwaysResult{parentExit: parentExit, childExit: childExit}
 	}
 	got, err := res.Stack.PopBool()
 	if err != nil {
-		t.Fatalf("pop child chksig result always=%v: %v", always, err)
+		t.Fatalf("pop child signature check result always=%v: %v", always, err)
 	}
-	return runvmChksigAlwaysResult{parentExit: parentExit, childExit: childExit, ok: got}
+	return runvmSignatureCheckAlwaysResult{parentExit: parentExit, childExit: childExit, ok: got}
 }
 
-func runRunvmXChksigAlwaysVariant(t *testing.T, version int, childCode *cell.Cell, always bool) runvmChksigAlwaysResult {
+func runRunvmXSignatureCheckAlwaysVariant(t *testing.T, version int, childCode *cell.Cell, always bool) runvmSignatureCheckAlwaysResult {
 	t.Helper()
 
-	machine, err := NewTVM().WithGlobalVersion(version)
-	if err != nil {
-		t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-	}
+	machine := NewTVM()
 
 	stack := vmcore.NewStack()
-	if err = stack.PushInt(big.NewInt(0)); err != nil {
+	if err := stack.PushInt(big.NewInt(0)); err != nil {
 		t.Fatalf("push child stack size: %v", err)
 	}
-	if err = stack.PushSlice(childCode.MustBeginParse()); err != nil {
+	if err := stack.PushSlice(childCode.MustBeginParse()); err != nil {
 		t.Fatalf("push child code: %v", err)
 	}
-	if err = stack.PushInt(big.NewInt(0)); err != nil {
+	if err := stack.PushInt(big.NewInt(0)); err != nil {
 		t.Fatalf("push RUNVMX mode: %v", err)
 	}
 
@@ -261,28 +258,31 @@ func runRunvmXChksigAlwaysVariant(t *testing.T, version int, childCode *cell.Cel
 		tuple.Tuple{},
 		vmcore.GasWithLimit(100_000),
 		stack,
-		ExecutionConfig{ChksigAlwaysSucceed: always})
+		ExecutionConfig{
+			Config:                      testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+			SignatureCheckAlwaysSucceed: always,
+		})
 
 	parentExit := exitCodeFromResult(res, err)
 	if parentExit == -1 {
 		t.Fatalf("RUNVMX parent always=%v failed: %v", always, err)
 	}
 	if !vmcore.IsSuccessExitCode(parentExit) {
-		return runvmChksigAlwaysResult{parentExit: parentExit}
+		return runvmSignatureCheckAlwaysResult{parentExit: parentExit}
 	}
 
 	childExit := popInt64(t, res.Stack)
 	if !vmcore.IsSuccessExitCode(childExit) {
-		return runvmChksigAlwaysResult{parentExit: parentExit, childExit: childExit}
+		return runvmSignatureCheckAlwaysResult{parentExit: parentExit, childExit: childExit}
 	}
 	got, err := res.Stack.PopBool()
 	if err != nil {
-		t.Fatalf("pop RUNVMX child chksig result always=%v: %v", always, err)
+		t.Fatalf("pop RUNVMX child signature check result always=%v: %v", always, err)
 	}
-	return runvmChksigAlwaysResult{parentExit: parentExit, childExit: childExit, ok: got}
+	return runvmSignatureCheckAlwaysResult{parentExit: parentExit, childExit: childExit, ok: got}
 }
 
-func assertRunvmChksigAlwaysVariant(t *testing.T, tt executionConfigSignatureCase, version int, always bool, res runvmChksigAlwaysResult, want bool) {
+func assertRunvmSignatureCheckAlwaysVariant(t *testing.T, tt executionConfigSignatureCase, version int, always bool, res runvmSignatureCheckAlwaysResult, want bool) {
 	t.Helper()
 
 	if !vmcore.IsSuccessExitCode(res.parentExit) {
@@ -296,7 +296,7 @@ func assertRunvmChksigAlwaysVariant(t *testing.T, tt executionConfigSignatureCas
 	}
 }
 
-func TestRunVMChksigAlwaysSucceedPerRun(t *testing.T) {
+func TestRunVMSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
 	signature := make([]byte, 64)
 	signature[0] = 0x7A
 	signature[31] = 0xA7
@@ -304,13 +304,13 @@ func TestRunVMChksigAlwaysSucceedPerRun(t *testing.T) {
 
 	for _, tt := range executionConfigSignatureCases {
 		t.Run(tt.name, func(t *testing.T) {
-			childCode := makeRunvmChksigAlwaysVariantChildCode(t, tt, signature)
+			childCode := makeRunvmSignatureCheckAlwaysVariantChildCode(t, tt, signature)
 
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 					if version < 4 {
 						for _, always := range []bool{false, true, false} {
-							res := runRunvmChksigAlwaysVariant(t, version, childCode, always)
+							res := runRunvmSignatureCheckAlwaysVariant(t, version, childCode, always)
 							if res.parentExit != vmerr.CodeInvalidOpcode {
 								t.Fatalf("%s v%d always=%t parent exit=%d, want invalid opcode", tt.name, version, always, res.parentExit)
 							}
@@ -318,17 +318,17 @@ func TestRunVMChksigAlwaysSucceedPerRun(t *testing.T) {
 						return
 					}
 
-					assertRunvmChksigAlwaysVariant(t, tt, version, false, runRunvmChksigAlwaysVariant(t, version, childCode, false), false)
-					assertRunvmChksigAlwaysVariant(t, tt, version, true, runRunvmChksigAlwaysVariant(t, version, childCode, true), true)
-					assertRunvmChksigAlwaysVariant(t, tt, version, false, runRunvmChksigAlwaysVariant(t, version, childCode, false), false)
+					assertRunvmSignatureCheckAlwaysVariant(t, tt, version, false, runRunvmSignatureCheckAlwaysVariant(t, version, childCode, false), false)
+					assertRunvmSignatureCheckAlwaysVariant(t, tt, version, true, runRunvmSignatureCheckAlwaysVariant(t, version, childCode, true), true)
+					assertRunvmSignatureCheckAlwaysVariant(t, tt, version, false, runRunvmSignatureCheckAlwaysVariant(t, version, childCode, false), false)
 				})
 			}
 		})
 	}
 }
 
-func FuzzRunVMChksigAlwaysSucceedPerRun(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+func FuzzRunVMSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 			f.Add(version, kind, byte(version)^kind^0x5C)
 		}
@@ -343,10 +343,10 @@ func FuzzRunVMChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature[31] = sigTag ^ 0x66
 		signature[63] = sigTag ^ 0xff
 
-		childCode := makeRunvmChksigAlwaysVariantChildCode(t, tt, signature)
+		childCode := makeRunvmSignatureCheckAlwaysVariantChildCode(t, tt, signature)
 		if version < 4 {
 			for _, always := range []bool{false, true, false} {
-				res := runRunvmChksigAlwaysVariant(t, version, childCode, always)
+				res := runRunvmSignatureCheckAlwaysVariant(t, version, childCode, always)
 				if res.parentExit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s v%d always=%t parent exit=%d, want invalid opcode", tt.name, version, always, res.parentExit)
 				}
@@ -354,14 +354,14 @@ func FuzzRunVMChksigAlwaysSucceedPerRun(f *testing.F) {
 			return
 		}
 
-		assertRunvmChksigAlwaysVariant(t, tt, version, false, runRunvmChksigAlwaysVariant(t, version, childCode, false), false)
-		assertRunvmChksigAlwaysVariant(t, tt, version, true, runRunvmChksigAlwaysVariant(t, version, childCode, true), true)
-		assertRunvmChksigAlwaysVariant(t, tt, version, false, runRunvmChksigAlwaysVariant(t, version, childCode, false), false)
+		assertRunvmSignatureCheckAlwaysVariant(t, tt, version, false, runRunvmSignatureCheckAlwaysVariant(t, version, childCode, false), false)
+		assertRunvmSignatureCheckAlwaysVariant(t, tt, version, true, runRunvmSignatureCheckAlwaysVariant(t, version, childCode, true), true)
+		assertRunvmSignatureCheckAlwaysVariant(t, tt, version, false, runRunvmSignatureCheckAlwaysVariant(t, version, childCode, false), false)
 	})
 }
 
-func FuzzRunVMXChksigAlwaysSucceedPerRun(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+func FuzzRunVMXSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 			f.Add(version, kind, byte(version)^kind^0xA9)
 		}
@@ -376,10 +376,10 @@ func FuzzRunVMXChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature[31] = sigTag ^ 0x66
 		signature[63] = sigTag ^ 0xff
 
-		childCode := makeRunvmChksigAlwaysVariantChildCode(t, tt, signature)
+		childCode := makeRunvmSignatureCheckAlwaysVariantChildCode(t, tt, signature)
 		if version < 4 {
 			for _, always := range []bool{false, true, false} {
-				res := runRunvmXChksigAlwaysVariant(t, version, childCode, always)
+				res := runRunvmXSignatureCheckAlwaysVariant(t, version, childCode, always)
 				if res.parentExit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s RUNVMX v%d always=%t parent exit=%d, want invalid opcode", tt.name, version, always, res.parentExit)
 				}
@@ -387,9 +387,9 @@ func FuzzRunVMXChksigAlwaysSucceedPerRun(f *testing.F) {
 			return
 		}
 
-		assertRunvmChksigAlwaysVariant(t, tt, version, false, runRunvmXChksigAlwaysVariant(t, version, childCode, false), false)
-		assertRunvmChksigAlwaysVariant(t, tt, version, true, runRunvmXChksigAlwaysVariant(t, version, childCode, true), true)
-		assertRunvmChksigAlwaysVariant(t, tt, version, false, runRunvmXChksigAlwaysVariant(t, version, childCode, false), false)
+		assertRunvmSignatureCheckAlwaysVariant(t, tt, version, false, runRunvmXSignatureCheckAlwaysVariant(t, version, childCode, false), false)
+		assertRunvmSignatureCheckAlwaysVariant(t, tt, version, true, runRunvmXSignatureCheckAlwaysVariant(t, version, childCode, true), true)
+		assertRunvmSignatureCheckAlwaysVariant(t, tt, version, false, runRunvmXSignatureCheckAlwaysVariant(t, version, childCode, false), false)
 	})
 }
 
@@ -400,7 +400,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(0).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			child.MustBeginParse(),
 		)
@@ -423,7 +423,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVMX().Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			child.MustBeginParse(),
 			int64(0),
@@ -448,7 +448,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(3).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			dropCode.MustBeginParse(),
 		)
@@ -464,7 +464,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(2).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			dropCode.MustBeginParse(),
 		)
@@ -482,7 +482,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(3).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			makeRunvmSameC3CallDictChild(t, 5, 9).MustBeginParse(),
 		)
@@ -504,7 +504,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(3).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			makeRunvmSameC3JmpDictChild(t, 8).MustBeginParse(),
 		)
@@ -526,7 +526,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(3).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			makeRunvmSameC3PrepareDictChild(t, 9, 11).MustBeginParse(),
 		)
@@ -551,7 +551,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(16).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			codeFromBuilders(t, funcsop.GETPARAM(1).Serialize()).MustBeginParse(),
 			childC7,
@@ -585,7 +585,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(4|32).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			child.MustBeginParse(),
 			initialData,
@@ -617,7 +617,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(256).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			child.MustBeginParse(),
 			int64(1),
@@ -643,7 +643,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(256).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			child.MustBeginParse(),
 			int64(2),
@@ -666,7 +666,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(512).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			codeFromBuilders(t).MustBeginParse(),
 		)
@@ -688,7 +688,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(4|8).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			child.MustBeginParse(),
 			cell.BeginCell().EndCell(),
@@ -720,7 +720,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 			codeFromBuilders(t, execop.RUNVM(8|64).Serialize()),
 			cell.BeginCell().EndCell(),
 			tuple.Tuple{},
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(0),
 			child.MustBeginParse(),
 			int64(0),
@@ -756,11 +756,11 @@ func TestRunVMGoSemantics(t *testing.T) {
 			)
 		}
 
-		_, baseRes, err := runRawCodeWithEnv(t, makeCode(0), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.DefaultGlobalVersion)
+		_, baseRes, err := runRawCodeWithEnv(t, makeCode(0), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.MaxSupportedGlobalVersion)
 		if err != nil {
 			t.Fatalf("non-isolated unexpected error: %v", err)
 		}
-		_, isoRes, err := runRawCodeWithEnv(t, makeCode(128), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.DefaultGlobalVersion)
+		_, isoRes, err := runRawCodeWithEnv(t, makeCode(128), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.MaxSupportedGlobalVersion)
 		if err != nil {
 			t.Fatalf("isolated unexpected error: %v", err)
 		}
@@ -782,7 +782,7 @@ func TestRunVMGoSemantics(t *testing.T) {
 }
 
 func FuzzRunVMFailedChildDataActionsGlobalVersion(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, byte(version)^0x34)
 		f.Add(version, true, byte(version)^0xC3)
 	}
@@ -1017,7 +1017,7 @@ func assertRunVMModeEquivalenceStackEmpty(t *testing.T, label string, stack *vmc
 }
 
 func FuzzRunVMXDynamicModeMatchesStaticRUNVM(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < 9; kind++ {
 			f.Add(version, kind, version*31+int64(kind))
 		}
@@ -1082,7 +1082,7 @@ func runVMInvalidFlagsMode(rawMode int64) int {
 }
 
 func FuzzRunVMInvalidFlagsReturnsExceptionArg(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for _, mode := range []int64{512, 513, 1023, 2048, 4095} {
 			f.Add(version, mode)
 		}
@@ -1159,7 +1159,7 @@ func runVMReturnCountValidationCases(rawSeed int64) []runVMReturnCountValidation
 }
 
 func FuzzRunVMReturnCountValidationReturnsExceptionArg(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < 5; kind++ {
 			f.Add(version, kind, false, version*59+int64(kind))
 			f.Add(version, kind, true, version*67+int64(kind))
@@ -1244,7 +1244,7 @@ func runVMStackSizeValidationCases(rawSeed int64) []runVMStackSizeValidationCase
 }
 
 func FuzzRunVMStackSizeValidationReturnsExceptionArg(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < 5; kind++ {
 			f.Add(version, kind, false, version*71+int64(kind))
 			f.Add(version, kind, true, version*73+int64(kind))
@@ -1343,7 +1343,7 @@ func runVMGasValidationStackValues(t *testing.T, target byte, invalid any) (int,
 }
 
 func FuzzRunVMGasOperandValidationReturnsExceptionArg(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < 5; kind++ {
 			for target := byte(0); target < 3; target++ {
 				f.Add(version, kind, target, false, version*79+int64(kind)*3+int64(target))
@@ -1434,7 +1434,7 @@ func runVMXInvalidModeCases(rawSeed int64) []runVMXInvalidModeCase {
 }
 
 func FuzzRunVMXInvalidModeReturnsExceptionArg(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < 6; kind++ {
 			f.Add(version, kind, version*43+int64(kind))
 		}
@@ -1482,7 +1482,7 @@ func assertRunVMTopLevelExceptionArg(t *testing.T, label string, stack *vmcore.S
 }
 
 func FuzzRunVMChildGlobalVersionInheritance(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(version)
 	}
 
@@ -1654,7 +1654,7 @@ func runvmVersionedChildCases(t *testing.T) []runvmVersionedChildCase {
 }
 
 func FuzzRunVMVersionedChildOpcodeMatrix(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < runvmVersionedChildCaseCount; kind++ {
 			f.Add(version, kind)
 		}
@@ -1666,7 +1666,7 @@ func FuzzRunVMVersionedChildOpcodeMatrix(f *testing.F) {
 }
 
 func FuzzRunVMXVersionedChildOpcodeMatrix(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < runvmVersionedChildCaseCount; kind++ {
 			f.Add(version, kind)
 		}

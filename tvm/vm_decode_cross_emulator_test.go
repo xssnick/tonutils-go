@@ -10,6 +10,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -274,11 +275,11 @@ func FuzzTVMCrossEmulatorDecodeFailuresGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%decodeVersionedCaseCount), uint16(version))
 	}
 	for i := 0; i < decodeVersionedCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i), uint16(0x20+i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i), uint16(0x20+i))
 	}
 	f.Add(uint8(255), uint8(255), uint16(0xffff))
 

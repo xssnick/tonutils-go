@@ -87,21 +87,21 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	childC7 := unbindTupleTrace(cfg.C7, parentTrace)
 	childCode := cfg.Code.Copy().SetTrace(cfg.Code.Trace().WithoutTrace(parentTrace))
 
-	child := NewExecutionStateWithGlobalVersion(s.effectiveGlobalVersion(), cfg.Gas, cfg.Data, childC7, childStack)
+	child := NewExecutionState(s.effectiveGlobalVersion(), cfg.Gas, cfg.Data, childC7, childStack)
 	child.CurrentCode = childCode
 
 	if cfg.IsolateGas {
 		if err := s.FlushFreeGas(); err != nil {
 			return err
 		}
-		s.ChksgnCounter = 0
+		s.SignatureCheckCounter = 0
 		s.GetExtraBalanceCounter = 0
 		s.Gas.FreeConsumed = 0
 	} else {
 		child.Cells.loaded = s.Cells.loaded
 	}
 
-	child.ChksgnCounter = s.ChksgnCounter
+	child.SignatureCheckCounter = s.SignatureCheckCounter
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.Gas.FreeConsumed = s.Gas.FreeConsumed
 
@@ -144,7 +144,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if !cfg.IsolateGas {
 		s.Cells.loaded = child.Cells.loaded
 	}
-	s.ChksgnCounter = child.ChksgnCounter
+	s.SignatureCheckCounter = child.SignatureCheckCounter
 	s.GetExtraBalanceCounter = child.GetExtraBalanceCounter
 	s.Gas.FreeConsumed = child.Gas.FreeConsumed
 

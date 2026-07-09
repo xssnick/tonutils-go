@@ -298,11 +298,11 @@ func TestV2(t *testing.T) {
 		}
 
 		resp, err := cli.V2().EstimateFee(context.Background(), EstimateFeeRequest{
-			Address:      w.WalletAddress(),
-			Body:         msg.Body,
-			InitCode:     msg.StateInit.Code,
-			InitData:     msg.StateInit.Data,
-			IgnoreChkSig: true,
+			Address:              w.WalletAddress(),
+			Body:                 msg.Body,
+			InitCode:             msg.StateInit.Code,
+			InitData:             msg.StateInit.Data,
+			IgnoreSignatureCheck: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -398,11 +398,11 @@ func TestV3(t *testing.T) {
 		}
 
 		resp, err := cli.V3().EstimateFee(context.Background(), EstimateFeeRequest{
-			Address:      w.WalletAddress(),
-			Body:         msg.Body,
-			InitCode:     msg.StateInit.Code,
-			InitData:     msg.StateInit.Data,
-			IgnoreChkSig: true,
+			Address:              w.WalletAddress(),
+			Body:                 msg.Body,
+			InitCode:             msg.StateInit.Code,
+			InitData:             msg.StateInit.Data,
+			IgnoreSignatureCheck: true,
 		})
 		if err != nil {
 			t.Fatal(err)

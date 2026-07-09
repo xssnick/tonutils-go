@@ -10,6 +10,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 const (
@@ -56,11 +57,11 @@ func FuzzTVMCrossEmulatorUpstreamVMRegressionsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%upstreamVMRegressionCrossCaseCount), uint16(upstreamVMRegressionCrossGasLimit))
 	}
 	for i := 0; i < upstreamVMRegressionCrossCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i), uint16(upstreamVMRegressionCrossGasLimit))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i), uint16(upstreamVMRegressionCrossGasLimit))
 	}
 	f.Add(uint8(255), uint8(255), uint16(1))
 

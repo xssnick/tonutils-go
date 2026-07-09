@@ -18,12 +18,12 @@ const (
 	expectedOpcodeMinGlobalVersionBoundaryCases               = expectedOpcodeMinGlobalVersionBaseCases + expectedOpcodeMinGlobalVersionGetParamLongCases + expectedOpcodeMinGlobalVersionInMsgParamAliasCases
 	expectedOpcodeMinGlobalVersionRepresentativeCases         = 34
 	expectedOpcodeMinGlobalVersionBoundaryFuzzSeedCount       = 1950
-	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedCount = 510
+	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedCount = 544
 	expectedOpcodeMinGlobalVersionBaseHash                    = "42caf868cd1412ee24ed83beea2d073563c58c4d693ce88febf097eb86918fb5"
 	expectedOpcodeMinGlobalVersionBoundaryHash                = "c9918390911ab415ee3f85fc4b1568ee49fb679bf23bc41c914dd0409e39dea5"
 	expectedOpcodeMinGlobalVersionRepresentativeHash          = "4c266821ed0219dd68b8d9df618a9b950dba2ebc669fea2eaf31febdc2e3d170"
-	expectedOpcodeMinGlobalVersionBoundaryFuzzSeedHash        = "d7053247cf2d0dff5b465bbe0f2aad8ca29f62966a8cb77ac51e41468e33d310"
-	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedHash  = "cf2d1c9c778b8547f6dc46a67758ac58bc314e8dcf8f5fb5ba312f7d383c71bb"
+	expectedOpcodeMinGlobalVersionBoundaryFuzzSeedHash        = "61054b96b59fca7d05f62aa52157e09488a33368529431b504caad1519e31974"
+	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedHash  = "40f3b3908d08b94e5febeb8753e0c7799aaf12a458f80054cc50e3906a81da63"
 )
 
 type opcodeMinGlobalVersionCase struct {
@@ -306,8 +306,8 @@ func assertOpcodeMinGlobalVersionInventory(t testing.TB) {
 		if tt.bits < 64 && tt.opcode >= uint64(1)<<tt.bits {
 			t.Fatalf("%s opcode %#x does not fit into %d bits", tt.name, tt.opcode, tt.bits)
 		}
-		if tt.min <= MinSupportedGlobalVersion || tt.min > MaxSupportedGlobalVersion {
-			t.Fatalf("%s min global version = %d, want within (%d, %d]", tt.name, tt.min, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if tt.min <= 0 || tt.min > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("%s min global version = %d, want within (%d, %d]", tt.name, tt.min, 0, vm.MaxSupportedGlobalVersion)
 		}
 		minVersions[tt.min] = struct{}{}
 
@@ -423,8 +423,8 @@ func TestOpcodeMinGlobalVersionBoundaryFuzzSeedInventory(t *testing.T) {
 		if seed.caseIdx < 0 || seed.caseIdx >= len(cases) {
 			t.Fatalf("opcode min-version boundary fuzz seed case index %d outside [0, %d)", seed.caseIdx, len(cases))
 		}
-		if seed.version < MinSupportedGlobalVersion || seed.version > MaxSupportedGlobalVersion {
-			t.Fatalf("opcode min-version boundary fuzz seed %s version %d outside [%d, %d]", cases[seed.caseIdx].name, seed.version, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if seed.version < 0 || seed.version > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("opcode min-version boundary fuzz seed %s version %d outside [%d, %d]", cases[seed.caseIdx].name, seed.version, 0, vm.MaxSupportedGlobalVersion)
 		}
 		if seen[seed.caseIdx] == nil {
 			seen[seed.caseIdx] = make(map[int]struct{})
@@ -480,8 +480,8 @@ func TestOpcodeMinGlobalVersionRepresentativeFuzzSeedInventory(t *testing.T) {
 		if _, ok := representatives[tt.name]; !ok {
 			t.Fatalf("opcode min-version representative fuzz seed covers non-representative %s", tt.name)
 		}
-		if seed.version < MinSupportedGlobalVersion || seed.version > MaxSupportedGlobalVersion {
-			t.Fatalf("opcode min-version representative fuzz seed %s version %d outside [%d, %d]", tt.name, seed.version, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if seed.version < 0 || seed.version > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("opcode min-version representative fuzz seed %s version %d outside [%d, %d]", tt.name, seed.version, 0, vm.MaxSupportedGlobalVersion)
 		}
 		if seen[seed.caseIdx] == nil {
 			seen[seed.caseIdx] = make(map[int]struct{})
@@ -500,7 +500,7 @@ func TestOpcodeMinGlobalVersionRepresentativeFuzzSeedInventory(t *testing.T) {
 		if len(versions) != tvmFuzzGlobalVersionCount() {
 			t.Fatalf("opcode min-version representative fuzz seeds cover %s with %d versions, want %d", tt.name, len(versions), tvmFuzzGlobalVersionCount())
 		}
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			if _, ok := versions[version]; !ok {
 				t.Fatalf("opcode min-version representative fuzz seeds do not cover %s v%d", tt.name, version)
 			}
@@ -527,8 +527,8 @@ func TestOpcodeMinGlobalVersionRegistryCoversRegisteredVersionedOps(t *testing.T
 		if !ok || versioned.MinGlobalVersion() == 0 {
 			continue
 		}
-		if versioned.MinGlobalVersion() <= MinSupportedGlobalVersion || versioned.MinGlobalVersion() > MaxSupportedGlobalVersion {
-			t.Errorf("versioned opcode %s min global version = %d, want within (%d, %d]", op.SerializeText(), versioned.MinGlobalVersion(), MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if versioned.MinGlobalVersion() <= 0 || versioned.MinGlobalVersion() > vm.MaxSupportedGlobalVersion {
+			t.Errorf("versioned opcode %s min global version = %d, want within (%d, %d]", op.SerializeText(), versioned.MinGlobalVersion(), 0, vm.MaxSupportedGlobalVersion)
 		}
 
 		key := opcodeVersionKeyFromRegisteredOp(t, op)
@@ -563,7 +563,7 @@ func opcodeMinGlobalVersionRepresentativeFuzzSeeds(cases []opcodeMinGlobalVersio
 		if _, ok := representatives[tt.name]; !ok {
 			continue
 		}
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			seeds = append(seeds, opcodeMinGlobalVersionBoundaryFuzzSeed{
 				caseIdx: i,
 				version: version,
@@ -576,8 +576,8 @@ func opcodeMinGlobalVersionRepresentativeFuzzSeeds(cases []opcodeMinGlobalVersio
 func opcodeMinGlobalVersionRequiredBoundarySeedVersions(tt opcodeMinGlobalVersionCase) []int {
 	seen := make(map[int]struct{}, 5)
 	versions := make([]int, 0, 5)
-	for _, version := range []int{MinSupportedGlobalVersion, tt.min - 1, tt.min, tt.min + 1, MaxSupportedGlobalVersion} {
-		if version < MinSupportedGlobalVersion || version > MaxSupportedGlobalVersion {
+	for _, version := range []int{0, tt.min - 1, tt.min, tt.min + 1, vm.MaxSupportedGlobalVersion} {
+		if version < 0 || version > vm.MaxSupportedGlobalVersion {
 			continue
 		}
 		if _, ok := seen[version]; ok {

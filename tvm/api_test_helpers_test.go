@@ -26,23 +26,23 @@ type testTxParams struct {
 	// AccountRandSeed is the raw per-account c7 seed (overrides derivation).
 	AccountRandSeed []byte
 	// ConfigRoot is prepared on the fly; set Config to reuse a prepared one.
-	ConfigRoot          *cell.Cell
-	Config              *PreparedConfig
-	PrevBlocks          tuple.Tuple
-	GlobalID            int32
-	Libraries           []*cell.Cell
-	Gas                 vm.Gas
-	ChksigAlwaysSucceed bool
-	BuildProof          bool
-	AccountStorageStat  *cell.Cell
-	TraceHook           vm.TraceHook
+	ConfigRoot                  *cell.Cell
+	Config                      *PreparedBlockchainConfig
+	PrevBlocks                  tuple.Tuple
+	GlobalID                    int32
+	Libraries                   []*cell.Cell
+	Gas                         vm.Gas
+	SignatureCheckAlwaysSucceed bool
+	BuildProof                  bool
+	AccountStorageStat          *cell.Cell
+	TraceHook                   vm.TraceHook
 }
 
 func (p testTxParams) blockContext() (*BlockContext, error) {
 	cfg := p.Config
 	if cfg == nil {
 		var err error
-		cfg, err = PrepareConfig(p.ConfigRoot)
+		cfg, err = PrepareBlockchainConfig(p.ConfigRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -59,13 +59,13 @@ func (p testTxParams) blockContext() (*BlockContext, error) {
 
 func (p testTxParams) txOptions() TransactionOptions {
 	return TransactionOptions{
-		LogicalTime:         p.LogicalTime,
-		RandSeed:            p.AccountRandSeed,
-		Gas:                 p.Gas,
-		AccountStorageStat:  p.AccountStorageStat,
-		BuildProof:          p.BuildProof,
-		ChksigAlwaysSucceed: p.ChksigAlwaysSucceed,
-		TraceHook:           p.TraceHook,
+		LogicalTime:                 p.LogicalTime,
+		RandSeed:                    p.AccountRandSeed,
+		Gas:                         p.Gas,
+		AccountStorageStat:          p.AccountStorageStat,
+		BuildProof:                  p.BuildProof,
+		SignatureCheckAlwaysSucceed: p.SignatureCheckAlwaysSucceed,
+		TraceHook:                   p.TraceHook,
 	}
 }
 
@@ -131,8 +131,8 @@ func testResultAccountState(res *TransactionExecutionResult) *tlb.AccountState {
 
 // emptyPreparedTestConfig mirrors the legacy zero-value internal transaction
 // config used by unit tests: default size limits, no prices, global version 0.
-func emptyPreparedTestConfig() *PreparedConfig {
-	return &PreparedConfig{sizeLimits: transactionDefaultSizeLimits()}
+func emptyPreparedTestConfig() *PreparedBlockchainConfig {
+	return &PreparedBlockchainConfig{sizeLimits: transactionDefaultSizeLimits()}
 }
 
 func testCheckExternalAccepted(machine *TVM, shard *tlb.ShardAccount, account *tlb.AccountState, msgCell *cell.Cell, msg *tlb.ExternalMessage, p testTxParams) (bool, error) {
@@ -153,8 +153,8 @@ func testCheckExternalAccepted(machine *TVM, shard *tlb.ShardAccount, account *t
 
 // testSyntheticConfig wraps an arbitrary cell as the c7 config root without
 // deriving anything from it (legacy raw-root behavior for c7 assertions).
-func testSyntheticConfig(root *cell.Cell) *PreparedConfig {
-	return &PreparedConfig{root: root, sizeLimits: transactionDefaultSizeLimits()}
+func testSyntheticConfig(root *cell.Cell) *PreparedBlockchainConfig {
+	return &PreparedBlockchainConfig{root: root, sizeLimits: transactionDefaultSizeLimits()}
 }
 
 func mustGlobalVersionCell(t testing.TB, version uint32) *cell.Cell {
@@ -165,6 +165,57 @@ func mustGlobalVersionCell(t testing.TB, version uint32) *cell.Cell {
 		t.Fatalf("failed to build global version cell: %v", err)
 	}
 	return versionCell
+}
+
+func testPreparedBlockchainConfig(t testing.TB) *PreparedBlockchainConfig {
+	t.Helper()
+	return testPreparedBlockchainConfigWithVersion(t, uint32(vm.MaxSupportedGlobalVersion))
+}
+
+func mustTestPreparedBlockchainConfig() *PreparedBlockchainConfig {
+	return mustTestPreparedBlockchainConfigWithVersion(uint32(vm.MaxSupportedGlobalVersion))
+}
+
+func testPreparedBlockchainConfigWithVersion(t testing.TB, version uint32) *PreparedBlockchainConfig {
+	t.Helper()
+	return mustTestPreparedBlockchainConfigWithVersion(version)
+}
+
+func mustTestPreparedBlockchainConfigWithVersion(version uint32) *PreparedBlockchainConfig {
+	dict := cell.NewDict(32)
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version})
+	if err != nil {
+		panic(err)
+	}
+	value := cell.BeginCell().MustStoreRef(versionCell).EndCell()
+	if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
+		panic(err)
+	}
+	return MustPrepareBlockchainConfig(dict.AsCell())
+}
+
+func testSetAllowHigherVersionExecUsingLatest(t testing.TB, allow bool) {
+	t.Helper()
+
+	prev := AllowHigherVersionExecUsingLatest
+	AllowHigherVersionExecUsingLatest = allow
+	t.Cleanup(func() {
+		AllowHigherVersionExecUsingLatest = prev
+	})
+}
+
+func mustTestExecutionConfig() ExecutionConfig {
+	return ExecutionConfig{Config: mustTestPreparedBlockchainConfig()}
+}
+
+func testExecutionConfig(t testing.TB) ExecutionConfig {
+	t.Helper()
+	return ExecutionConfig{Config: testPreparedBlockchainConfig(t)}
+}
+
+func testExecutionConfigWithVersion(t testing.TB, version uint32) ExecutionConfig {
+	t.Helper()
+	return ExecutionConfig{Config: testPreparedBlockchainConfigWithVersion(t, version)}
 }
 
 func transactionEmulationSeedForTest(blockSeed []byte, addr *address.Address, globalVersion uint32) (*big.Int, error) {
@@ -178,13 +229,13 @@ func transactionEmulationSeedForTest(blockSeed []byte, addr *address.Address, gl
 	return new(big.Int).SetBytes(seed), nil
 }
 
-// mustPrepareConfigOrNil prepares the config when a root is present; nil roots
+// mustPrepareBlockchainConfigOrNil prepares the config when a root is present; nil roots
 // map to a nil config (the entry points then fail with errConfigRootRequired).
-func mustPrepareConfigOrNil(root *cell.Cell) *PreparedConfig {
+func mustPrepareBlockchainConfigOrNil(root *cell.Cell) *PreparedBlockchainConfig {
 	if root == nil {
 		return nil
 	}
-	return MustPrepareConfig(root)
+	return MustPrepareBlockchainConfig(root)
 }
 
 // testResultTransaction parses the built transaction of a result, failing the

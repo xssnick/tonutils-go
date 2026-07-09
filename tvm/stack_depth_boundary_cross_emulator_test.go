@@ -11,6 +11,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestTVMCrossEmulatorStackDepthBoundary64K(t *testing.T) {
@@ -46,7 +47,7 @@ func FuzzTVMCrossEmulatorStackDepthBoundary64KGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(0))
 		f.Add(uint8(version), uint8(1))
 	}

@@ -89,7 +89,7 @@ func BenchmarkTVMRunGetMethodRealistic(b *testing.B) {
 					b.Fatal(err)
 				}
 
-				res, err := machine.Execute(tt.code, tt.data, c7, vm.GasWithLimit(1_000_000_000), stack, ExecutionConfig{})
+				res, err := machine.Execute(tt.code, tt.data, c7, vm.GasWithLimit(1_000_000_000), stack, testExecutionConfig(b))
 				if err != nil {
 					b.Fatal(err)
 				}

@@ -89,6 +89,7 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 	}
 
 	configRoot := mustReferenceTransactionConfigRoot(t)
+	configRootV14 := referenceTransactionConfigRootWithGlobalVersion(t, configRoot, 14)
 	now := uint32(tonopsTestTime.Unix())
 	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
 	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
@@ -533,8 +534,9 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 			}),
 		},
 		{
-			name:  "setlib_private_success",
-			shard: buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalSetLibCode(t, libCode, newData, 1), origData, walletSendTestBalance, now),
+			name:       "setlib_private_success",
+			shard:      buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalSetLibCode(t, libCode, newData, 1), origData, walletSendTestBalance, now),
+			configRoot: configRootV14,
 			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
 				IHRDisabled: true,
 				SrcAddr:     internalEmulationSrcAddr,
@@ -544,8 +546,9 @@ func TestTVMCrossEmulatorTransactionEdges(t *testing.T) {
 			}),
 		},
 		{
-			name:  "changelib_missing_hash",
-			shard: buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalChangeLibMissingCode(t, newData, 1), origData, walletSendTestBalance, now),
+			name:       "changelib_missing_hash",
+			shard:      buildTransactionTestShardAccount(t, tonopsTestAddr, makeTransactionInternalChangeLibMissingCode(t, newData, 1), origData, walletSendTestBalance, now),
+			configRoot: configRootV14,
 			msg: mustTransactionMsgCell(t, &tlb.InternalMessage{
 				IHRDisabled: true,
 				SrcAddr:     internalEmulationSrcAddr,

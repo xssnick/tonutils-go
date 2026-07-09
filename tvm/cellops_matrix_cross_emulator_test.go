@@ -12,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	cellsliceop "github.com/xssnick/tonutils-go/tvm/op/cellslice"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -540,11 +541,11 @@ func FuzzTVMCrossEmulatorCellOpsMatrixGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(version%cellOpsMatrixCaseCount))
 	}
 	for i := 0; i < cellOpsMatrixCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint16(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint16(i))
 	}
 	f.Add(uint8(255), uint16(0xffff))
 

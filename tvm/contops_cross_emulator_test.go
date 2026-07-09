@@ -13,6 +13,7 @@ import (
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -79,11 +80,11 @@ func FuzzTVMCrossEmulatorContOpsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(version%contOpsParityCaseCount))
 	}
 	for i := 0; i < contOpsParityCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint16(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint16(i))
 	}
 	f.Add(uint8(255), uint16(0xffff))
 
@@ -1811,11 +1812,11 @@ func FuzzTVMCrossEmulatorContOpsVersionedEdges(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%contOpsVersionedEdgeCaseCount))
 	}
 	for i := 0; i < contOpsVersionedEdgeCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 

@@ -22,106 +22,6 @@ var MainContractCode = func() *cell.Cell {
 	return code
 }()
 
-func TestTVMSetGlobalVersionValidatesRange(t *testing.T) {
-	v := NewTVM()
-
-	for _, version := range []int{MinSupportedGlobalVersion - 1, MaxSupportedGlobalVersion + 1} {
-		if err := v.SetGlobalVersion(version); err == nil {
-			t.Fatalf("SetGlobalVersion accepted unsupported global version %d", version)
-		}
-		if v.globalVersion != vm.DefaultGlobalVersion {
-			t.Fatalf("SetGlobalVersion(%d) changed version to %d", version, v.globalVersion)
-		}
-	}
-
-	if err := v.SetGlobalVersion(MinSupportedGlobalVersion); err != nil {
-		t.Fatalf("SetGlobalVersion minimum version: %v", err)
-	}
-	if v.globalVersion != MinSupportedGlobalVersion {
-		t.Fatalf("global version = %d, want minimum %d", v.globalVersion, MinSupportedGlobalVersion)
-	}
-	if err := v.SetGlobalVersion(MaxSupportedGlobalVersion + 1); err == nil {
-		t.Fatal("SetGlobalVersion should reject new unsupported global version")
-	}
-	if v.globalVersion != MinSupportedGlobalVersion {
-		t.Fatalf("unsupported high version changed version to %d", v.globalVersion)
-	}
-
-	if err := v.SetGlobalVersion(MaxSupportedGlobalVersion); err != nil {
-		t.Fatalf("SetGlobalVersion maximum version: %v", err)
-	}
-	if v.globalVersion != MaxSupportedGlobalVersion {
-		t.Fatalf("global version = %d, want maximum %d", v.globalVersion, MaxSupportedGlobalVersion)
-	}
-	if err := v.SetGlobalVersion(MinSupportedGlobalVersion - 1); err == nil {
-		t.Fatal("SetGlobalVersion should reject old unsupported global version")
-	}
-	if v.globalVersion != MaxSupportedGlobalVersion {
-		t.Fatalf("unsupported low version changed version to %d", v.globalVersion)
-	}
-}
-
-func TestTVMGlobalVersionConstantsStayAligned(t *testing.T) {
-	if MinSupportedGlobalVersion != 0 {
-		t.Fatalf("min supported global version = %d, want 0", MinSupportedGlobalVersion)
-	}
-	if MaxSupportedGlobalVersion != vm.DefaultGlobalVersion {
-		t.Fatalf("max supported global version = %d, default VM global version = %d", MaxSupportedGlobalVersion, vm.DefaultGlobalVersion)
-	}
-}
-
-func TestTVMWithGlobalVersionCopiesShallow(t *testing.T) {
-	v := NewTVM()
-	baseVersion := MinSupportedGlobalVersion
-	if MinSupportedGlobalVersion < MaxSupportedGlobalVersion {
-		baseVersion = MinSupportedGlobalVersion + 1
-	}
-	if err := v.SetGlobalVersion(baseVersion); err != nil {
-		t.Fatalf("SetGlobalVersion(%d): %v", baseVersion, err)
-	}
-
-	next, err := v.WithGlobalVersion(MinSupportedGlobalVersion)
-	if err != nil {
-		t.Fatalf("WithGlobalVersion minimum version: %v", err)
-	}
-
-	if next.globalVersion != MinSupportedGlobalVersion {
-		t.Fatalf("copy global version = %d, want %d", next.globalVersion, MinSupportedGlobalVersion)
-	}
-	if v.globalVersion != baseVersion {
-		t.Fatalf("base global version changed to %d", v.globalVersion)
-	}
-	if next.dispatches != v.dispatches {
-		t.Fatal("WithGlobalVersion should share opcode dispatch tables")
-	}
-	if next.dispatch != next.dispatches[MinSupportedGlobalVersion] {
-		t.Fatal("WithGlobalVersion should point copy to requested dispatch")
-	}
-
-	maxCopy, err := v.WithGlobalVersion(MaxSupportedGlobalVersion)
-	if err != nil {
-		t.Fatalf("WithGlobalVersion maximum version: %v", err)
-	}
-	if maxCopy.globalVersion != MaxSupportedGlobalVersion {
-		t.Fatalf("copy global version = %d, want %d", maxCopy.globalVersion, MaxSupportedGlobalVersion)
-	}
-	if maxCopy.dispatches != v.dispatches {
-		t.Fatal("WithGlobalVersion maximum copy should share opcode dispatch tables")
-	}
-	if maxCopy.dispatch != maxCopy.dispatches[MaxSupportedGlobalVersion] {
-		t.Fatal("WithGlobalVersion maximum copy should point to maximum dispatch")
-	}
-
-	for _, version := range []int{MinSupportedGlobalVersion - 1, MaxSupportedGlobalVersion + 1} {
-		if _, err = v.WithGlobalVersion(version); err == nil {
-			t.Fatalf("WithGlobalVersion accepted unsupported global version %d", version)
-		}
-		if v.globalVersion != baseVersion {
-			t.Fatalf("WithGlobalVersion(%d) changed base version to %d", version, v.globalVersion)
-		}
-	}
-}
-
 func TestTVMPreV4InstructionGasCommitsBeforeOutOfGas(t *testing.T) {
 	code := codeFromBuilders(t, funcsop.COMMIT().Serialize())
 	data := cell.BeginCell().MustStoreUInt(0xCA, 8).EndCell()
@@ -136,12 +36,8 @@ func TestTVMPreV4InstructionGasCommitsBeforeOutOfGas(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("v%d", tt.version), func(t *testing.T) {
-			machine, err := NewTVM().WithGlobalVersion(tt.version)
-			if err != nil {
-				t.Fatalf("set global version: %v", err)
-			}
-
-			res, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(1), vm.NewStack(), ExecutionConfig{})
+			machine := NewTVM()
+			res, err := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(1), vm.NewStack(), testExecutionConfigWithVersion(t, uint32(tt.version)))
 			if err != nil {
 				t.Fatalf("execute detailed: %v", err)
 			}
@@ -156,7 +52,7 @@ func TestTVMPreV4InstructionGasCommitsBeforeOutOfGas(t *testing.T) {
 }
 
 func FuzzTVMVersionedInstructionGasCommitBoundary(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, int64(1))
 		f.Add(version, int64(vm.InstructionBaseGasPrice+16))
 	}
@@ -169,14 +65,11 @@ func FuzzTVMVersionedInstructionGasCommitBoundary(f *testing.F) {
 		}
 		gasLimit++
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("set global version: %v", err)
-		}
+		machine := NewTVM()
 
 		code := codeFromBuilders(t, funcsop.COMMIT().Serialize())
 		data := cell.BeginCell().MustStoreUInt(0xCA, 8).EndCell()
-		res, _ := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(gasLimit), vm.NewStack(), ExecutionConfig{})
+		res, _ := machine.Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(gasLimit), vm.NewStack(), testExecutionConfigWithVersion(t, uint32(version)))
 
 		commitInstructionGas := vm.InstructionBaseGasPrice + int64(16)
 		wantCommitted := gasLimit >= commitInstructionGas || version < 4
@@ -196,7 +89,7 @@ func TestTVMEarlyCodeLoadErrorReturnsExecutionResult(t *testing.T) {
 	}
 	data := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 
-	res, err := NewTVM().Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(1000), vm.NewStack(), ExecutionConfig{})
+	res, err := NewTVM().Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(1000), vm.NewStack(), testExecutionConfig(t))
 	if err != nil {
 		t.Fatalf("early VM error should be returned as execution result, got err %v", err)
 	}
@@ -211,6 +104,41 @@ func TestTVMEarlyCodeLoadErrorReturnsExecutionResult(t *testing.T) {
 	}
 }
 
+func TestTVMExecuteFutureConfigWithLatestOptIn(t *testing.T) {
+	futureVersion := uint32(vm.MaxSupportedGlobalVersion + 2)
+	root := buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion: mustGlobalVersionCell(t, futureVersion),
+	})
+	if _, err := PrepareBlockchainConfig(root); err == nil {
+		t.Fatalf("PrepareBlockchainConfig accepted future global version %d without opt-in", futureVersion)
+	}
+
+	testSetAllowHigherVersionExecUsingLatest(t, true)
+	cfg, err := PrepareBlockchainConfig(root)
+	if err != nil {
+		t.Fatalf("PrepareBlockchainConfig rejected allowed future global version %d: %v", futureVersion, err)
+	}
+	if got := cfg.GlobalVersion(); got != uint32(vm.MaxSupportedGlobalVersion) {
+		t.Fatalf("prepared effective global version = %d, want %d", got, vm.MaxSupportedGlobalVersion)
+	}
+
+	code := codeFromBuilders(t, stackop.PUSHINT(big.NewInt(7)).Serialize())
+	res, err := NewTVM().Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1000), vm.NewStack(), ExecutionConfig{Config: cfg})
+	if err != nil {
+		t.Fatalf("execute with allowed future global version: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want success", res.ExitCode)
+	}
+	got, err := res.Stack.PopIntFinite()
+	if err != nil {
+		t.Fatalf("pop result: %v", err)
+	}
+	if got.Int64() != 7 {
+		t.Fatalf("result = %d, want 7", got.Int64())
+	}
+}
+
 func TestTVMLibraryCodeCellStartupConversionChangesAtV9(t *testing.T) {
 	target := codeFromBuilders(t,
 		stackop.PUSHINT(big.NewInt(7)).Serialize(),
@@ -221,11 +149,11 @@ func TestTVMLibraryCodeCellStartupConversionChangesAtV9(t *testing.T) {
 	run := func(version int) *ExecutionResult {
 		t.Helper()
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-		}
-		res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{Libraries: []*cell.Cell{libraries}})
+		machine := NewTVM()
+		res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{
+			Libraries: []*cell.Cell{libraries},
+			Config:    testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+		})
 		if err != nil {
 			t.Fatalf("ExecuteDetailedWithLibraries v%d: %v", version, err)
 		}
@@ -377,7 +305,7 @@ func FuzzTVMErrorNormalizationGroups(f *testing.F) {
 	})
 }
 
-func TestTVMExecuteConfigChksigAlwaysSucceedPerRun(t *testing.T) {
+func TestTVMExecuteConfigSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
 	code := testOpcodeCell(t, "f910")
 	data := cell.BeginCell().EndCell()
 	signature := make([]byte, 64)
@@ -398,7 +326,8 @@ func TestTVMExecuteConfigChksigAlwaysSucceedPerRun(t *testing.T) {
 		}
 
 		res, err := NewTVM().Execute(code, data, tuple.Tuple{}, vm.GasWithLimit(100_000), stack, ExecutionConfig{
-			ChksigAlwaysSucceed: always,
+			SignatureCheckAlwaysSucceed: always,
+			Config:                      testPreparedBlockchainConfig(t),
 		})
 
 		if err != nil {
@@ -714,10 +643,7 @@ func TestTVMVersionedOpcodeAvailability(t *testing.T) {
 	for _, tt := range versionedOpcodeAvailabilityCases {
 		t.Run(tt.name, func(t *testing.T) {
 			machine := NewTVM()
-			if err := machine.SetGlobalVersion(tt.minVersion - 1); err != nil {
-				t.Fatalf("set low global version: %v", err)
-			}
-			res, err := machine.Execute(testOpcodeCell(t, tt.code), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+			res, err := machine.Execute(testOpcodeCell(t, tt.code), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, uint32(tt.minVersion-1)))
 			if err != nil {
 				t.Fatalf("execute low global version: %v", err)
 			}
@@ -726,10 +652,7 @@ func TestTVMVersionedOpcodeAvailability(t *testing.T) {
 			}
 
 			machine = NewTVM()
-			if err = machine.SetGlobalVersion(tt.minVersion); err != nil {
-				t.Fatalf("set minimum global version: %v", err)
-			}
-			res, err = machine.Execute(testOpcodeCell(t, tt.code), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+			res, err = machine.Execute(testOpcodeCell(t, tt.code), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, uint32(tt.minVersion)))
 			if err != nil {
 				t.Fatalf("execute minimum global version: %v", err)
 			}
@@ -742,11 +665,7 @@ func TestTVMVersionedOpcodeAvailability(t *testing.T) {
 
 func TestTVMVersionedOpcodeDynamicSuffixAvailability(t *testing.T) {
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(3); err != nil {
-		t.Fatalf("set global version: %v", err)
-	}
-
-	res, err := machine.Execute(testOpcodeCell(t, "b7a900"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+	res, err := machine.Execute(testOpcodeCell(t, "b7a900"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, 3))
 	if err != nil {
 		t.Fatalf("execute QADDDIVMOD: %v", err)
 	}
@@ -754,7 +673,7 @@ func TestTVMVersionedOpcodeDynamicSuffixAvailability(t *testing.T) {
 		t.Fatalf("QADDDIVMOD v3 exit code = %d, want invalid opcode", res.ExitCode)
 	}
 
-	res, err = machine.Execute(testOpcodeCell(t, "b7a904"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+	res, err = machine.Execute(testOpcodeCell(t, "b7a904"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, 3))
 	if err != nil {
 		t.Fatalf("execute QDIV: %v", err)
 	}
@@ -811,11 +730,7 @@ func TestTVMVersionGateGasByOpcodeFamily(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			machine := NewTVM()
-			if err := machine.SetGlobalVersion(tt.version); err != nil {
-				t.Fatalf("set global version: %v", err)
-			}
-
-			res, err := machine.Execute(tt.code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+			res, err := machine.Execute(tt.code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, uint32(tt.version)))
 			if err != nil {
 				t.Fatalf("execute low global version: %v", err)
 			}
@@ -831,11 +746,7 @@ func TestTVMVersionGateGasByOpcodeFamily(t *testing.T) {
 
 func TestTVMExplicitGlobalVersionZeroDoesNotDefault(t *testing.T) {
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(0); err != nil {
-		t.Fatalf("set global version 0: %v", err)
-	}
-
-	res, err := machine.Execute(testOpcodeCell(t, "f807"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+	res, err := machine.Execute(testOpcodeCell(t, "f807"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, 0))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -846,7 +757,7 @@ func TestTVMExplicitGlobalVersionZeroDoesNotDefault(t *testing.T) {
 
 func FuzzTVMVersionedOpcodeAvailability(f *testing.F) {
 	for i := range versionedOpcodeAvailabilityCases {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			f.Add(uint8(i), int64(version))
 		}
 	}
@@ -855,10 +766,7 @@ func FuzzTVMVersionedOpcodeAvailability(f *testing.F) {
 		version := tvmFuzzGlobalVersion(rawVersion)
 
 		machine := NewTVM()
-		if err := machine.SetGlobalVersion(version); err != nil {
-			t.Fatalf("set global version %d: %v", version, err)
-		}
-		res, err := machine.Execute(testOpcodeCell(t, tt.code), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+		res, err := machine.Execute(testOpcodeCell(t, tt.code), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, uint32(version)))
 		if err != nil {
 			t.Fatalf("execute version %d opcode %s: %v", version, tt.code, err)
 		}
@@ -874,7 +782,7 @@ func FuzzTVMVersionedOpcodeAvailability(f *testing.F) {
 func FuzzTVMVersionedOpcodeTruncatedDispatchBoundary(f *testing.F) {
 	for i, tt := range versionedOpcodeAvailabilityCases {
 		fullBits := uint16(len(tt.code) * 4)
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			f.Add(uint8(i), int64(version), fullBits)
 		}
 		f.Add(uint8(i), int64(tt.minVersion-1), uint16(1))
@@ -882,7 +790,7 @@ func FuzzTVMVersionedOpcodeTruncatedDispatchBoundary(f *testing.F) {
 		f.Add(uint8(i), int64(tt.minVersion-1), fullBits-1)
 		f.Add(uint8(i), int64(tt.minVersion), fullBits-1)
 		f.Add(uint8(i), int64(tt.minVersion), fullBits)
-		f.Add(uint8(i), int64(MaxSupportedGlobalVersion), fullBits)
+		f.Add(uint8(i), int64(vm.MaxSupportedGlobalVersion), fullBits)
 	}
 
 	f.Fuzz(func(t *testing.T, idx uint8, rawVersion int64, rawBits uint16) {
@@ -908,10 +816,7 @@ func FuzzTVMVersionedOpcodeTruncatedDispatchBoundary(f *testing.F) {
 
 		version := tvmFuzzGlobalVersion(rawVersion)
 		machine := NewTVM()
-		if err := machine.SetGlobalVersion(version); err != nil {
-			t.Fatalf("set global version %d: %v", version, err)
-		}
-		res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), ExecutionConfig{})
+		res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(1_000), vm.NewStack(), testExecutionConfigWithVersion(t, uint32(version)))
 		if err != nil {
 			t.Fatalf("execute version %d opcode %s/%d bits: %v", version, tt.code, bits, err)
 		}
@@ -932,23 +837,20 @@ func FuzzTVMVersionedOpcodeTruncatedDispatchBoundary(f *testing.F) {
 }
 
 func FuzzTVMGetMethodGlobalVersionBoundary(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version)
 	}
 
 	f.Fuzz(func(t *testing.T, rawVersion int64) {
 		version := tvmFuzzGlobalVersion(rawVersion)
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("with global version %d: %v", version, err)
-		}
+		machine := NewTVM()
 		stack := vm.NewStack()
-		if err = stack.PushSmallInt(0); err != nil {
+		if err := stack.PushSmallInt(0); err != nil {
 			t.Fatalf("push method id: %v", err)
 		}
 
-		res, err := machine.ExecuteGetMethod(testOpcodeCell(t, "30f807"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(100_000), stack, ExecutionConfig{})
+		res, err := machine.ExecuteGetMethod(testOpcodeCell(t, "30f807"), cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(100_000), stack, testExecutionConfigWithVersion(t, uint32(version)))
 		if err != nil {
 			t.Fatalf("execute get method version %d: %v", version, err)
 		}
@@ -969,7 +871,7 @@ func FuzzTVMGetMethodGlobalVersionBoundary(f *testing.F) {
 }
 
 func FuzzTVMLibraryCodeCellStartupConversion(f *testing.F) {
-	for version := int64(MinSupportedGlobalVersion); version <= int64(MaxSupportedGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, true)
 		f.Add(version, false)
 	}
@@ -986,11 +888,11 @@ func FuzzTVMLibraryCodeCellStartupConversion(f *testing.F) {
 			libraries = []*cell.Cell{mustLibraryCollection(t, target)}
 		}
 
-		machine, err := NewTVM().WithGlobalVersion(version)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-		}
-		res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{Libraries: libraries})
+		machine := NewTVM()
+		res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{
+			Libraries: libraries,
+			Config:    testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+		})
 		if err != nil {
 			t.Fatalf("ExecuteDetailedWithLibraries v%d withLibrary=%t: %v", version, withLibrary, err)
 		}
@@ -1057,11 +959,11 @@ func fuzzLibraryStartupTarget(t *testing.T, rawSeed uint64, rawCount uint8) (*ce
 func executeLibraryStartupTarget(t *testing.T, version int, code, libraries *cell.Cell) *ExecutionResult {
 	t.Helper()
 
-	machine, err := NewTVM().WithGlobalVersion(version)
-	if err != nil {
-		t.Fatalf("WithGlobalVersion(%d): %v", version, err)
-	}
-	res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{Libraries: []*cell.Cell{libraries}})
+	machine := NewTVM()
+	res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{
+		Libraries: []*cell.Cell{libraries},
+		Config:    testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+	})
 	if err != nil {
 		t.Fatalf("ExecuteDetailedWithLibraries v%d: %v", version, err)
 	}
@@ -1181,7 +1083,7 @@ func TestTVM_Execute(t *testing.T) {
 	s := vm.NewStack()
 	_ = s.PushInt(big.NewInt(85143))
 
-	_, err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1194,7 +1096,7 @@ func TestTVM_ExecuteRetAltIsSuccessful(t *testing.T) {
 
 	code := cell.BeginCell().MustStoreSlice([]byte{0xDB, 0x31}, 16).EndCell()
 
-	_, err := v.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), vm.NewStack(), ExecutionConfig{})
+	_, err := v.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), vm.NewStack(), testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1212,7 +1114,7 @@ func TestTVM_ExecuteJetton(t *testing.T) {
 	s := vm.NewStack()
 	_ = s.PushInt(big.NewInt(115562))
 
-	_, err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1234,7 +1136,7 @@ func TestTVM_ExecuteTvmTests(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(id)))
 
-	_, err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(code, data, tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1283,7 +1185,7 @@ func TestTVM_ExecuteTvmTestLoops(t *testing.T) {
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("tryRepeatWhileUntil"))))
 
 	tm := time.Now()
-	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1306,7 +1208,7 @@ func TestTVM_ExecuteTvmTestSimpleRepeat(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleRepeat"))))
 
-	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1328,7 +1230,7 @@ func TestTVM_ExecuteTvmTestSimpleRepeatWhile(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleRepeatWhile"))))
 
-	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1350,7 +1252,7 @@ func TestTVM_ExecuteTvmTestSimpleUntilWhile(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleUntilWhile"))))
 
-	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1372,7 +1274,7 @@ func TestTVM_ExecuteTvmTestSimpleRepeatUntil(t *testing.T) {
 	_ = s.PushInt(big.NewInt(2))
 	_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash("simpleRepeatUntil"))))
 
-	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+	_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1454,7 +1356,7 @@ func TestTVM_SuperContract(t *testing.T) {
 			_ = s.PushInt(big.NewInt(tt.args.input))
 			_ = s.PushInt(big.NewInt(int64(tlb.MethodNameHash(tt.args.name))))
 
-			_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, ExecutionConfig{})
+			_, err := v.Execute(MainContractCode, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.NewGas(), s, testExecutionConfig(t))
 			if err != nil {
 				if tt.wantErr >= 1 {
 					var e vmerr.VMError

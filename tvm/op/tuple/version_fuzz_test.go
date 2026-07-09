@@ -10,7 +10,7 @@ import (
 )
 
 func fuzzTupleVersion(raw int64) int {
-	version := int(raw % int64(vm.DefaultGlobalVersion+1))
+	version := int(raw % int64(vm.MaxSupportedGlobalVersion+1))
 	if version < 0 {
 		version = -version
 	}
@@ -18,24 +18,24 @@ func fuzzTupleVersion(raw int64) int {
 }
 
 func TestFuzzTupleVersionCoversDefaultRange(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzTupleVersion(int64(version)); got != version {
 			t.Fatalf("seed version %d mapped to %d", version, got)
 		}
 	}
-	if got := fuzzTupleVersion(-int64(vm.DefaultGlobalVersion)); got != vm.DefaultGlobalVersion {
-		t.Fatalf("negative default version mapped to %d, want %d", got, vm.DefaultGlobalVersion)
+	if got := fuzzTupleVersion(-int64(vm.MaxSupportedGlobalVersion)); got != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("negative default version mapped to %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
 	for _, raw := range []int64{
 		-1,
-		-int64(vm.DefaultGlobalVersion) - 1,
-		-int64(vm.DefaultGlobalVersion) - 2,
+		-int64(vm.MaxSupportedGlobalVersion) - 1,
+		-int64(vm.MaxSupportedGlobalVersion) - 2,
 		-123456789,
 		123456789,
 	} {
 		got := fuzzTupleVersion(raw)
-		if got < 0 || got > vm.DefaultGlobalVersion {
-			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.DefaultGlobalVersion)
+		if got < 0 || got > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
@@ -43,7 +43,6 @@ func TestFuzzTupleVersionCoversDefaultRange(t *testing.T) {
 func newTupleVersionedState(version int) *vm.State {
 	state := newState()
 	state.GlobalVersion = version
-	state.GlobalVersionConfigured = true
 	return state
 }
 
@@ -78,7 +77,7 @@ func assertTupleFuzzInt(t *testing.T, val any, want int64) {
 }
 
 func FuzzTVMVersionedTupleInvariantEdges(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 8; kind++ {
 			f.Add(version, kind, uint64(version)<<8|uint64(kind))
 		}
@@ -287,7 +286,7 @@ func assertTupleQuietSetIndexResult(t *testing.T, state *vm.State, nilTuple, nil
 }
 
 func FuzzTVMVersionedTupleQuietSetIndexBoundaries(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for _, seed := range []struct {
 			dynamic  bool
 			index    uint16

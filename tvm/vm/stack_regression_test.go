@@ -361,7 +361,7 @@ func TestStateUpdateC7DoesNotAliasOriginalTuple(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state := NewExecutionState(DefaultGlobalVersion, NewGas(), cell.BeginCell().EndCell(), c7, NewStack())
+	state := NewExecutionState(MaxSupportedGlobalVersion, NewGas(), cell.BeginCell().EndCell(), c7, NewStack())
 	state.InitForExecution()
 
 	if err := state.UpdateC7(func(t tuple.Tuple) (tuple.Tuple, error) {

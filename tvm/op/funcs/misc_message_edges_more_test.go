@@ -383,10 +383,10 @@ func TestSendMsgSizingHelpersEdges(t *testing.T) {
 
 func fuzzSendMsgSupportedVersion(raw uint8) int {
 	version := int(raw)
-	if version >= 4 && version <= vm.DefaultGlobalVersion {
+	if version >= 4 && version <= vm.MaxSupportedGlobalVersion {
 		return version
 	}
-	return 4 + int(raw%uint8(vm.DefaultGlobalVersion-3))
+	return 4 + int(raw%uint8(vm.MaxSupportedGlobalVersion-3))
 }
 
 func TestFuzzSendMsgVersionedUserFwdFeeCoversSupportedRange(t *testing.T) {
@@ -396,13 +396,13 @@ func TestFuzzSendMsgVersionedUserFwdFeeCoversSupportedRange(t *testing.T) {
 	}
 	seen[fuzzSendMsgSupportedVersion(255)] = true
 
-	for version := 4; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 4; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if !seen[version] {
 			t.Fatalf("SENDMSG user fwd fee fuzz does not cover version %d", version)
 		}
 	}
 
-	for version := 4; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 4; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzSendMsgSupportedVersion(uint8(version)); got != version {
 			t.Fatalf("fuzzSendMsgSupportedVersion(%d) = %d, want %d", version, got, version)
 		}
@@ -719,7 +719,7 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		if restoredBuilder, err := st.Stack.PopBuilder(); err != nil || restoredBuilder.ToSlice().BitsLeft() != 1023 {
 			t.Fatalf("unexpected restored builder: (%v, %v)", restoredBuilder, err)
 		}
-		if restoredAddr, err := st.Stack.PopSlice(); err != nil || !isValidStdMsgAddr(restoredAddr, vm.DefaultGlobalVersion) {
+		if restoredAddr, err := st.Stack.PopSlice(); err != nil || !isValidStdMsgAddr(restoredAddr, vm.MaxSupportedGlobalVersion) {
 			t.Fatalf("unexpected restored addr: (%v, %v)", restoredAddr, err)
 		}
 

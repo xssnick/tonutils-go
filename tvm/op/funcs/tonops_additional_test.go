@@ -781,7 +781,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to pop LDSTDADDR addr: %v", err)
 		}
-		if rest.BitsLeft() != 3 || !isValidStdMsgAddr(addrSlice, vm.DefaultGlobalVersion) {
+		if rest.BitsLeft() != 3 || !isValidStdMsgAddr(addrSlice, vm.MaxSupportedGlobalVersion) {
 			t.Fatalf("unexpected LDSTDADDR result: rest=%d", rest.BitsLeft())
 		}
 

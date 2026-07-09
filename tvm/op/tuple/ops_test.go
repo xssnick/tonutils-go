@@ -11,8 +11,9 @@ import (
 
 func newState() *vm.State {
 	return &vm.State{
-		Stack: vm.NewStack(),
-		Gas:   vm.NewGas(),
+		Stack:         vm.NewStack(),
+		Gas:           vm.NewGas(),
+		GlobalVersion: vm.MaxSupportedGlobalVersion,
 	}
 }
 

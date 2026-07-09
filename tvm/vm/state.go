@@ -151,24 +151,23 @@ type CommittedState struct {
 }
 
 type State struct {
-	GlobalVersion           int
-	GlobalVersionConfigured bool
-	CP                      int
-	CurrentCode             *cell.Slice
-	Reg                     Register
-	Gas                     Gas
-	Cells                   CellManager
-	Libraries               []*cell.Cell
-	libraryCache            map[cell.Hash]*cell.Cell
-	Stack                   *Stack
-	Steps                   uint32
-	StopOnAccept            bool
-	TraceHook               TraceHook
-	ChksigAlwaysSucceed     bool
-	ChksgnCounter           uint32
-	GetExtraBalanceCounter  uint32
-	Committed               CommittedState
-	childRunner             ChildRunner
+	GlobalVersion               int
+	CP                          int
+	CurrentCode                 *cell.Slice
+	Reg                         Register
+	Gas                         Gas
+	Cells                       CellManager
+	Libraries                   []*cell.Cell
+	libraryCache                map[cell.Hash]*cell.Cell
+	Stack                       *Stack
+	Steps                       uint32
+	StopOnAccept                bool
+	TraceHook                   TraceHook
+	SignatureCheckAlwaysSucceed bool
+	SignatureCheckCounter       uint32
+	GetExtraBalanceCounter      uint32
+	Committed                   CommittedState
+	childRunner                 ChildRunner
 }
 
 var ErrStopOnAccept = errors.New("stop on accept")
@@ -184,14 +183,6 @@ func IsSuccessExitCode(code int64) bool {
 }
 
 func NewExecutionState(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
-	return newExecutionState(globalVersion, globalVersion != 0, gas, data, c7, stack, libraries...)
-}
-
-func NewExecutionStateWithGlobalVersion(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
-	return newExecutionState(globalVersion, true, gas, data, c7, stack, libraries...)
-}
-
-func newExecutionState(globalVersion int, globalVersionConfigured bool, gas Gas, data *cell.Cell, c7 tuple.Tuple, stack *Stack, libraries ...*cell.Cell) *State {
 	if data == nil {
 		data = emptyCell()
 	}
@@ -200,9 +191,8 @@ func newExecutionState(globalVersion int, globalVersionConfigured bool, gas Gas,
 	}
 
 	return &State{
-		GlobalVersion:           globalVersion,
-		GlobalVersionConfigured: globalVersionConfigured,
-		Gas:                     gas,
+		GlobalVersion: globalVersion,
+		Gas:           gas,
 		Reg: Register{
 			C: [4]Continuation{
 				quitCont0,
@@ -243,10 +233,6 @@ var ErrCorruptedOpcode = errors.New("corrupted opcode")
 const MaxDataDepth = 512
 
 func (s *State) InitForExecution() {
-	if !s.GlobalVersionConfigured {
-		s.GlobalVersion = DefaultGlobalVersion
-		s.GlobalVersionConfigured = true
-	}
 	s.Cells.Init(s)
 	if s.Stack != nil {
 		s.Stack.SetTrace(s.Cells.Trace())
@@ -255,9 +241,6 @@ func (s *State) InitForExecution() {
 }
 
 func (s *State) effectiveGlobalVersion() int {
-	if !s.GlobalVersionConfigured {
-		return DefaultGlobalVersion
-	}
 	return s.GlobalVersion
 }
 
@@ -281,13 +264,10 @@ func (s *State) prepareChildForRun(child *State) error {
 	if s.childRunner == nil {
 		return vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
 	}
-	if !child.GlobalVersionConfigured {
-		child.GlobalVersion = s.effectiveGlobalVersion()
-		child.GlobalVersionConfigured = true
-	}
+	child.GlobalVersion = s.GlobalVersion
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.TraceHook = s.TraceHook
-	child.ChksigAlwaysSucceed = s.ChksigAlwaysSucceed
+	child.SignatureCheckAlwaysSucceed = s.SignatureCheckAlwaysSucceed
 	if len(child.Libraries) == 0 && len(s.Libraries) > 0 {
 		child.Libraries = append([]*cell.Cell{}, s.Libraries...)
 	}
@@ -333,9 +313,6 @@ func (s *State) consumeGasChecked(amount int64) error {
 }
 
 func (s *State) checkGasOnConsume() bool {
-	if !s.GlobalVersionConfigured && s.GlobalVersion == 0 {
-		return true
-	}
 	return s.GlobalVersion >= 4
 }
 
@@ -354,16 +331,16 @@ func (s *State) FlushFreeGas() error {
 	return s.Gas.FlushFree()
 }
 
-func (s *State) RegisterChksgnCall() error {
+func (s *State) RegisterSignatureCheckCall() error {
 	if !s.checkGasOnConsume() {
 		return nil
 	}
 
-	s.ChksgnCounter++
-	if s.ChksgnCounter > ChksgnFreeCount {
-		return s.ConsumeGas(ChksgnGasPrice)
+	s.SignatureCheckCounter++
+	if s.SignatureCheckCounter > SignatureCheckFreeCount {
+		return s.ConsumeGas(SignatureCheckGasPrice)
 	}
-	s.ConsumeFreeGas(ChksgnGasPrice)
+	s.ConsumeFreeGas(SignatureCheckGasPrice)
 	return nil
 }
 

@@ -41,9 +41,10 @@ func (t *testContinuation) Copy() vm.Continuation {
 
 func newTestState() *vm.State {
 	st := &vm.State{
-		Stack:       vm.NewStack(),
-		CurrentCode: cell.BeginCell().EndCell().MustBeginParse(),
-		Gas:         vm.NewGas(),
+		Stack:         vm.NewStack(),
+		CurrentCode:   cell.BeginCell().EndCell().MustBeginParse(),
+		Gas:           vm.NewGas(),
+		GlobalVersion: vm.MaxSupportedGlobalVersion,
 	}
 	st.Reg.C[0] = &vm.QuitContinuation{ExitCode: 0}
 	return st

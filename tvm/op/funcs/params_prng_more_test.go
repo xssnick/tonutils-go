@@ -49,14 +49,14 @@ func TestParamsPRNGMoreEdges(t *testing.T) {
 			t.Fatalf("failed to build malformed c7: %v", err)
 		}
 
-		st := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, c7, vm.NewStack())
+		st := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, c7, vm.NewStack())
 		st.InitForExecution()
 		if err := setRandSeed(st, big.NewInt(1)); err == nil {
 			t.Fatal("setRandSeed should reject non-tuple params slots")
 		}
 
 		emptyC7 := tuple.NewTupleSized(0)
-		st = vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, emptyC7, vm.NewStack())
+		st = vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, emptyC7, vm.NewStack())
 		st.InitForExecution()
 		if err := setRandSeed(st, big.NewInt(1)); err == nil {
 			t.Fatal("setRandSeed should reject missing params slots")

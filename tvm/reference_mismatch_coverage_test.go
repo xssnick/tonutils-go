@@ -12,15 +12,17 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 const knownReferenceMismatchPrefix = "bundled reference emulator " + "predates upstream "
 
 const (
-	expectedKnownReferenceMismatchLocalAnchorCount = 15
-	expectedKnownReferenceMismatchLocalAnchorHash  = "9bd1562f95ba7561a219d6ecd7e977fc8b7ada7bddc9db19ff425746b929dd7b"
-	expectedKnownReferenceMismatchBoundaryCount    = 20
-	expectedKnownReferenceMismatchBoundaryHash     = "8a62a22d89152532ee63b948f85365476eb281e5b4da104e8b65777d2e5f5eb5"
+	expectedKnownReferenceMismatchLocalAnchorCount = 17
+	expectedKnownReferenceMismatchLocalAnchorHash  = "f40e8f90689f9d41f9e0756db13543bd41fa1eb6c2bf6ae99b27d2e878d432d6"
+	expectedKnownReferenceMismatchBoundaryCount    = 22
+	expectedKnownReferenceMismatchBoundaryHash     = "4ddbc9049ab3a1e326808f9194c264f4ed0fd6d685508d152a9f8b7c40499c51"
 )
 
 var knownReferenceMismatchLocalAnchors = map[string][]string{
@@ -51,6 +53,10 @@ var knownReferenceMismatchLocalAnchors = map[string][]string{
 	"transaction v14 failed-action message-balance restore": {
 		"FuzzTransactionVersionedFailedActionMessageBalance",
 		"FuzzTransactionVersionedStateLimitFailureMessageBalance",
+	},
+	"transaction v15 library action restrictions": {
+		"FuzzTransactionVersionedChangeLibraryActionBoundaries",
+		"TestTransactionV15ChangeLibraryRestrictions",
 	},
 	"v9 direct startup library code loading": {
 		"FuzzTVMLibraryCodeCellStartupV9BoundaryCosts",
@@ -97,6 +103,10 @@ var knownReferenceMismatchBoundaryVersions = map[string][]int{
 	"transaction v14 failed-action message-balance restore": {
 		13,
 		14,
+	},
+	"transaction v15 library action restrictions": {
+		14,
+		15,
 	},
 	"v9 direct startup library code loading": {
 		8,
@@ -148,8 +158,8 @@ func TestTVMKnownReferenceMismatchLocalCoverageTouchesBoundaryVersions(t *testin
 			t.Fatalf("known reference mismatch boundary suffix %q has no local anchors", suffix)
 		}
 		for _, version := range versions {
-			if version < MinSupportedGlobalVersion || version > MaxSupportedGlobalVersion {
-				t.Fatalf("known reference mismatch suffix %q boundary version %d is outside supported range [%d, %d]", suffix, version, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+			if version < 0 || version > vm.MaxSupportedGlobalVersion {
+				t.Fatalf("known reference mismatch suffix %q boundary version %d is outside supported range [%d, %d]", suffix, version, 0, vm.MaxSupportedGlobalVersion)
 			}
 
 			covered := false
@@ -486,7 +496,7 @@ func knownReferenceMismatchVersionLiteral(expr ast.Expr) (int, bool) {
 			return 0, false
 		}
 		version, err := strconv.ParseInt(expr.Value, 0, 64)
-		if err != nil || version < int64(MinSupportedGlobalVersion) || version > int64(MaxSupportedGlobalVersion) {
+		if err != nil || version < int64(0) || version > int64(vm.MaxSupportedGlobalVersion) {
 			return 0, false
 		}
 		return int(version), true

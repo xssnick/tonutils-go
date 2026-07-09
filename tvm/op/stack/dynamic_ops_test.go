@@ -257,7 +257,7 @@ func TestLargeDynamicStackOpsChargeParityGas(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &vm.State{
-				GlobalVersion: vm.DefaultGlobalVersion,
+				GlobalVersion: vm.MaxSupportedGlobalVersion,
 				Stack:         tt.st,
 				Gas:           vm.GasWithLimit(10_000),
 			}
@@ -313,7 +313,7 @@ func TestLargeDynamicStackOpsOutOfGasBeforeMutation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &vm.State{
-				GlobalVersion: vm.DefaultGlobalVersion,
+				GlobalVersion: vm.MaxSupportedGlobalVersion,
 				Stack:         tt.st,
 				Gas: vm.Gas{
 					Limit:     tt.remaining,
@@ -341,13 +341,13 @@ func TestLargeDynamicStackOpsOutOfGasBeforeMutation(t *testing.T) {
 }
 
 func TestDynamicStackOpsPreV4IndexLimit(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			state := &vm.State{
-				GlobalVersion:           version,
-				GlobalVersionConfigured: true,
-				Stack:                   newStackWithIndex(300, 256),
-				Gas:                     vm.GasWithLimit(10_000),
+				GlobalVersion: version,
+
+				Stack: newStackWithIndex(300, 256),
+				Gas:   vm.GasWithLimit(10_000),
 			}
 
 			err := PICK().Interpret(state)
@@ -366,13 +366,13 @@ func TestDynamicStackOpsPreV4IndexLimit(t *testing.T) {
 }
 
 func TestBLKSWXPreV4SkipsLargeMoveGas(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			state := &vm.State{
-				GlobalVersion:           version,
-				GlobalVersionConfigured: true,
-				Stack:                   newStackWithCounts(300, 200, 60),
-				Gas:                     vm.GasWithLimit(10_000),
+				GlobalVersion: version,
+
+				Stack: newStackWithCounts(300, 200, 60),
+				Gas:   vm.GasWithLimit(10_000),
 			}
 			if err := BLKSWX().Interpret(state); err != nil {
 				t.Fatalf("BLKSWX failed: %v", err)

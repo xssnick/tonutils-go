@@ -121,7 +121,7 @@ func TestTVMReplayFatBlockFixture(t *testing.T) {
 }
 
 // TestTVMReplayFatBlockFixtureConcurrentLanes replays the fat block with one
-// account lane per goroutine, all sharing a single PreparedConfig/BlockContext,
+// account lane per goroutine, all sharing a single PreparedBlockchainConfig/BlockContext,
 // mirroring the collator's parallel per-account execution.
 func TestTVMReplayFatBlockFixtureConcurrentLanes(t *testing.T) {
 	prepared := prepareFatBlockReplayFixture(t)
@@ -268,9 +268,6 @@ func prepareFatBlockReplayFixture(tb testing.TB) *preparedFatBlockReplay {
 	fatBlockAttachTransactionConfigs(tb, fixture.Block.Workchain, accounts, txConfigByID)
 
 	machine := NewTVM()
-	if err = machine.SetGlobalVersion(fixture.Config.GlobalVersion); err != nil {
-		tb.Fatal(err)
-	}
 
 	return &preparedFatBlockReplay{
 		fixture:  fixture,
@@ -298,7 +295,7 @@ func fatBlockBlockContext(tb testing.TB, fixture fatBlockReplayFixture) *BlockCo
 		}
 	}
 
-	cfg, err := PrepareConfig(fatBlockCell(tb, fixture.Config.ConfigRootBOCBase64))
+	cfg, err := PrepareBlockchainConfig(fatBlockCell(tb, fixture.Config.ConfigRootBOCBase64))
 	if err != nil {
 		tb.Fatal(err)
 	}

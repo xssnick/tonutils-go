@@ -47,7 +47,7 @@ func emulateInternalForTest(t *testing.T, code, data, body *cell.Cell) (*Message
 		Now:      uint32(tonopsTestTime.Unix()),
 		Balance:  new(big.Int).Set(tonopsTestBalance),
 		RandSeed: append([]byte(nil), tonopsTestSeed...),
-		Config:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    DefaultInternalMessageGasMax,
 			Limit:  int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -161,7 +161,7 @@ func TestEmulateInternalMessageWithAccountProofUsesAccountRoot(t *testing.T) {
 		Now:         uint32(tonopsTestTime.Unix()),
 		Balance:     new(big.Int).Set(tonopsTestBalance),
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -187,11 +187,11 @@ func TestEmulateInternalMessageWithAccountProofUsesAccountRoot(t *testing.T) {
 	}
 }
 
-func TestEmulateInternalMessageChksigAlwaysSucceedPerRun(t *testing.T) {
+func TestEmulateInternalMessageSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
 	signature := make([]byte, 64)
 	signature[0] = 1
 	signature[63] = 2
-	code := makeMessageChksigAlwaysCode(t, signature)
+	code := makeMessageSignatureCheckAlwaysCode(t, signature)
 	data := cell.BeginCell().EndCell()
 	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
 	machine := NewTVM()
@@ -207,12 +207,12 @@ func TestEmulateInternalMessageChksigAlwaysSucceedPerRun(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			res, err := machine.EmulateInternalMessage(code, data, body, internalMessageTestAmount, EmulateInternalMessageConfig{
-				Address:             tonopsTestAddr,
-				Now:                 uint32(tonopsTestTime.Unix()),
-				Balance:             new(big.Int).Set(tonopsTestBalance),
-				RandSeed:            append([]byte(nil), tonopsTestSeed...),
-				Config:              transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
-				ChksigAlwaysSucceed: tt.always,
+				Address:                     tonopsTestAddr,
+				Now:                         uint32(tonopsTestTime.Unix()),
+				Balance:                     new(big.Int).Set(tonopsTestBalance),
+				RandSeed:                    append([]byte(nil), tonopsTestSeed...),
+				Config:                      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
+				SignatureCheckAlwaysSucceed: tt.always,
 				Gas: vmcore.NewGas(vmcore.GasConfig{
 					Max:   DefaultInternalMessageGasMax,
 					Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,

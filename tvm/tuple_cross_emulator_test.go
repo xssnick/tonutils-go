@@ -215,11 +215,11 @@ func FuzzTVMCrossEmulatorTupleOpsOpcodeSpaceGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint16(version%tupleOpsOpcodeSpaceCaseCount))
 	}
 	for caseIdx := 0; caseIdx < tupleOpsOpcodeSpaceCaseCount; caseIdx++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint16(caseIdx))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint16(caseIdx))
 	}
 	f.Add(uint8(255), uint16(65535))
 
@@ -275,11 +275,11 @@ func FuzzTVMCrossEmulatorTupleOpsDynamicAndErrorsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%tupleOpsDynamicAndErrorCaseCount))
 	}
 	for caseIdx := 0; caseIdx < tupleOpsDynamicAndErrorCaseCount; caseIdx++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(caseIdx))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(caseIdx))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -342,11 +342,11 @@ func FuzzTVMCrossEmulatorTupleOpsLowGasStackEffectsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%tupleOpsLowGasStackEffectCaseCount), uint8(25))
 	}
 	for caseIdx := 0; caseIdx < tupleOpsLowGasStackEffectCaseCount; caseIdx++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(caseIdx), uint8(25))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(caseIdx), uint8(25))
 	}
 	f.Add(uint8(255), uint8(255), uint8(255))
 
@@ -516,11 +516,11 @@ func FuzzTVMCrossEmulatorTupleOpsVersionInvariance(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%tupleOpsVersionInvarianceCaseCount))
 	}
 	for i := 0; i < tupleOpsVersionInvarianceCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 

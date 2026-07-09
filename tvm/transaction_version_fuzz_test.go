@@ -18,8 +18,8 @@ import (
 )
 
 var transactionFuzzAllVersions = func() []uint32 {
-	versions := make([]uint32, 0, MaxSupportedGlobalVersion-MinSupportedGlobalVersion+1)
-	for version := uint32(MinSupportedGlobalVersion); version <= uint32(MaxSupportedGlobalVersion); version++ {
+	versions := make([]uint32, 0, vmcore.MaxSupportedGlobalVersion-0+1)
+	for version := uint32(0); version <= uint32(vmcore.MaxSupportedGlobalVersion); version++ {
 		versions = append(versions, version)
 	}
 	return versions
@@ -30,16 +30,16 @@ func transactionFuzzGlobalVersion(raw byte) uint32 {
 }
 
 func TestTransactionFuzzGlobalVersionCoversSupportedRange(t *testing.T) {
-	wantLen := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	wantLen := vmcore.MaxSupportedGlobalVersion - 0 + 1
 	if len(transactionFuzzAllVersions) != wantLen {
 		t.Fatalf("transaction fuzz versions len = %d, want %d", len(transactionFuzzAllVersions), wantLen)
 	}
-	if MaxSupportedGlobalVersion > 255 {
-		t.Fatalf("transaction fuzz raw byte cannot cover max global version %d", MaxSupportedGlobalVersion)
+	if vmcore.MaxSupportedGlobalVersion > 255 {
+		t.Fatalf("transaction fuzz raw byte cannot cover max global version %d", vmcore.MaxSupportedGlobalVersion)
 	}
 
 	for i, got := range transactionFuzzAllVersions {
-		want := uint32(MinSupportedGlobalVersion + i)
+		want := uint32(0 + i)
 		if got != want {
 			t.Fatalf("transaction fuzz version[%d] = %d, want %d", i, got, want)
 		}
@@ -102,11 +102,11 @@ func FuzzTransactionVersionedOutboundAnycastDestination(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(1), []byte{0x80})
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(1), []byte{0x00})
+	f.Add(byte(0), byte(1), []byte{0x00})
 	f.Add(byte(9), byte(1), []byte{0x00})
 	f.Add(byte(9), byte(3), []byte{0xE0})
 	f.Add(byte(10), byte(1), []byte{0x80})
-	f.Add(byte(MaxSupportedGlobalVersion), byte(30), []byte{0xFF, 0xFF, 0xFF, 0xFC})
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(30), []byte{0xFF, 0xFF, 0xFF, 0xFC})
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawDepth byte, rawPrefix []byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -158,7 +158,7 @@ func FuzzTransactionVersionedInternalAndBounceAnycastValidation(f *testing.F) {
 	f.Add(byte(0), byte(1), []byte{0x00})
 	f.Add(byte(9), byte(3), []byte{0xE0})
 	f.Add(byte(10), byte(1), []byte{0x80})
-	f.Add(byte(MaxSupportedGlobalVersion), byte(30), []byte{0xFF, 0xFF, 0xFF, 0xFC})
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(30), []byte{0xFF, 0xFF, 0xFF, 0xFC})
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawDepth byte, rawPrefix []byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -451,7 +451,7 @@ func FuzzTransactionVersionedBasicSuccessAcrossGlobalVersions(f *testing.F) {
 	}
 	f.Add(byte(0), byte(0x11), byte(0x22))
 	f.Add(byte(7), byte(0x33), byte(0x44))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0x55), byte(0x66))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0x55), byte(0x66))
 
 	f.Fuzz(func(t *testing.T, rawVersion, dataTag, bodyTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -577,7 +577,7 @@ func FuzzTransactionVersionedTickTockSuccessAcrossGlobalVersions(f *testing.F) {
 	}
 	f.Add(byte(0), false, byte(0x11), byte(0x22))
 	f.Add(byte(7), true, byte(0x33), byte(0x44))
-	f.Add(byte(MaxSupportedGlobalVersion), false, byte(0x55), byte(0x66))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), false, byte(0x55), byte(0x66))
 
 	f.Fuzz(func(t *testing.T, rawVersion byte, isTock bool, dataTag, bodyTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -702,7 +702,7 @@ func runTickTockBuildProofLibraryStartup(t *testing.T, version uint32, shard *tl
 	return res
 }
 
-func FuzzTickTockChksigAlwaysSucceedPerRun(f *testing.F) {
+func FuzzTickTockSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), false, byte(0), byte(0x11))
 		f.Add(byte(version), true, byte(1), byte(0x22))
@@ -710,7 +710,7 @@ func FuzzTickTockChksigAlwaysSucceedPerRun(f *testing.F) {
 	f.Add(byte(0), false, byte(0), byte(0x11))
 	f.Add(byte(3), true, byte(2), byte(0x22))
 	f.Add(byte(4), false, byte(3), byte(0x33))
-	f.Add(byte(MaxSupportedGlobalVersion), true, byte(1), byte(0x44))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), true, byte(1), byte(0x44))
 
 	f.Fuzz(func(t *testing.T, rawVersion byte, isTock bool, rawKind, sigTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -721,7 +721,7 @@ func FuzzTickTockChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature[31] = sigTag ^ 0x55
 		signature[63] = sigTag ^ 0xff
 
-		code := makeTickTockChksigAlwaysVariantCode(t, tt, signature)
+		code := makeTickTockSignatureCheckAlwaysVariantCode(t, tt, signature)
 		shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, code, cell.BeginCell().EndCell(), tickTockTestBalance)
 		if err != nil {
 			t.Fatalf("failed to build tick/tock shard: %v", err)
@@ -734,7 +734,7 @@ func FuzzTickTockChksigAlwaysSucceedPerRun(f *testing.F) {
 
 		if tt.minVersion > 0 && version < uint32(tt.minVersion) {
 			for _, always := range []bool{false, true, false} {
-				res := runTickTockChksigAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, always)
+				res := runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, always)
 				if res.exit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s v%d always=%t exit=%d, want invalid opcode", tt.name, version, always, res.exit)
 				}
@@ -742,9 +742,9 @@ func FuzzTickTockChksigAlwaysSucceedPerRun(f *testing.F) {
 			return
 		}
 
-		assertMessageChksigAlwaysVariant(t, tt, version, false, runTickTockChksigAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, false), false)
-		assertMessageChksigAlwaysVariant(t, tt, version, true, runTickTockChksigAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, true), true)
-		assertMessageChksigAlwaysVariant(t, tt, version, false, runTickTockChksigAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, false), false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, false), false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, true), true)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, false), false)
 	})
 }
 
@@ -776,7 +776,7 @@ func FuzzMessageEmulationVersionedInMsgParamsDirectMessages(f *testing.F) {
 	f.Add(byte(0), true, byte(0x11), byte(0x22))
 	f.Add(byte(10), true, byte(0x33), byte(0x44))
 	f.Add(byte(11), false, byte(0x55), byte(0x66))
-	f.Add(byte(MaxSupportedGlobalVersion), false, byte(0x77), byte(0x88))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), false, byte(0x77), byte(0x88))
 
 	f.Fuzz(func(t *testing.T, rawVersion byte, external bool, dataTag, bodyTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -860,23 +860,20 @@ func FuzzMessageEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 	f.Add(byte(14), byte(3), true, true)
 	f.Add(byte(3), byte(14), true, false)
 	f.Add(byte(0), byte(4), true, true)
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0), false, false)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0), false, false)
 
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot bool, external bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
 		effectiveVersion := machineVersion
 
-		var preparedCfg *PreparedConfig
+		var preparedCfg *PreparedBlockchainConfig
 		if useConfigRoot {
 			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = int(configVersion)
 		}
 
-		machine, err := NewTVM().WithGlobalVersion(machineVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", machineVersion, err)
-		}
+		machine := NewTVM()
 
 		code := makeMessageGasConsumedCode(t)
 		data := cell.BeginCell().EndCell()
@@ -889,6 +886,7 @@ func FuzzMessageEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 		}
 
 		var res *MessageExecutionResult
+		var err error
 		if external {
 			res, err = machine.EmulateExternalMessage(code, data, &tlb.ExternalMessage{
 				DstAddr: tonopsTestAddr,
@@ -932,23 +930,20 @@ func FuzzMessageEmulationBuildProofGlobalVersionFallbackAndConfigOverride(f *tes
 	f.Add(byte(14), byte(3), true, true)
 	f.Add(byte(3), byte(14), true, false)
 	f.Add(byte(4), byte(0), false, false)
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0), true, true)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0), true, true)
 
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot, external bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
 		effectiveVersion := uint32(machineVersion)
 
-		var preparedCfg *PreparedConfig
+		var preparedCfg *PreparedBlockchainConfig
 		if useConfigRoot {
 			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
-		machine, err := NewTVM().WithGlobalVersion(machineVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", machineVersion, err)
-		}
+		machine := NewTVM()
 
 		code := makeMessageGasConsumedCode(t)
 		data := cell.BeginCell().EndCell()
@@ -975,6 +970,7 @@ func FuzzMessageEmulationBuildProofGlobalVersionFallbackAndConfigOverride(f *tes
 		}
 
 		var res *MessageExecutionResult
+		var err error
 		if external {
 			res, err = machine.EmulateExternalMessage(nil, nil, &tlb.ExternalMessage{
 				DstAddr: tonopsTestAddr,
@@ -1205,8 +1201,8 @@ func assertTransactionBuildProofLibraryStartupResult(t *testing.T, name string, 
 	}
 }
 
-func FuzzMessageEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzMessageEmulationBuildProofSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 			f.Add(version, kind, version^kind^0x71, false)
 			f.Add(version, kind, version^kind^0x8E, true)
@@ -1222,7 +1218,7 @@ func FuzzMessageEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature[31] = sigTag ^ 0x33
 		signature[63] = sigTag ^ 0xff
 
-		code := makeMessageChksigAlwaysVariantCode(t, tt, signature)
+		code := makeMessageSignatureCheckAlwaysVariantCode(t, tt, signature)
 		data := cell.BeginCell().EndCell()
 		accountRoot := executionProofAccountStateRoot(t, tlb.AccountState{
 			IsValid:     true,
@@ -1248,7 +1244,7 @@ func FuzzMessageEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 
 		if int(version) < tt.minVersion {
 			for _, always := range []bool{false, true, false} {
-				res := runMessageBuildProofChksigAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, always)
+				res := runMessageBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, always)
 				if res.exit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s proof v%d external=%t always=%t exit=%d, want invalid opcode", tt.name, version, external, always, res.exit)
 				}
@@ -1256,16 +1252,16 @@ func FuzzMessageEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 			return
 		}
 
-		assertMessageChksigAlwaysVariant(t, tt, version, false, runMessageBuildProofChksigAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, false), false)
-		assertMessageChksigAlwaysVariant(t, tt, version, true, runMessageBuildProofChksigAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, true), true)
-		assertMessageChksigAlwaysVariant(t, tt, version, false, runMessageBuildProofChksigAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, false), false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runMessageBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, false), false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, runMessageBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, true), true)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runMessageBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), accountRoot, body, cfg, tt, external, false), false)
 	})
 }
 
-func runMessageBuildProofChksigAlwaysVariant(t *testing.T, machine *TVM, accountRoot, body *cell.Cell, cfg MessageEmulationConfig, tt executionConfigSignatureCase, external bool, always bool) messageChksigAlwaysVariantResult {
+func runMessageBuildProofSignatureCheckAlwaysVariant(t *testing.T, machine *TVM, accountRoot, body *cell.Cell, cfg MessageEmulationConfig, tt executionConfigSignatureCase, external bool, always bool) messageSignatureCheckAlwaysVariantResult {
 	t.Helper()
 
-	cfg.ChksigAlwaysSucceed = always
+	cfg.SignatureCheckAlwaysSucceed = always
 	var res *MessageExecutionResult
 	var err error
 	if external {
@@ -1294,17 +1290,17 @@ func runMessageBuildProofChksigAlwaysVariant(t *testing.T, machine *TVM, account
 		t.Fatalf("message proof %s external=%t always=%t proof is invalid: %v", tt.name, external, always, err)
 	}
 	if !vmcore.IsSuccessExitCode(exit) {
-		return messageChksigAlwaysVariantResult{exit: exit}
+		return messageSignatureCheckAlwaysVariantResult{exit: exit}
 	}
 	got, err := res.Stack.PopBool()
 	if err != nil {
 		t.Fatalf("pop message proof %s external=%t always=%t result: %v", tt.name, external, always, err)
 	}
-	return messageChksigAlwaysVariantResult{exit: exit, ok: got}
+	return messageSignatureCheckAlwaysVariantResult{exit: exit, ok: got}
 }
 
-func FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzTransactionEmulationBuildProofSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 			f.Add(version, kind, version^kind^0x42)
 		}
@@ -1319,7 +1315,7 @@ func FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature[31] = sigTag ^ 0x33
 		signature[63] = sigTag ^ 0xff
 
-		code := makeMessageChksigAlwaysVariantCode(t, tt, signature)
+		code := makeMessageSignatureCheckAlwaysVariantCode(t, tt, signature)
 		shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, cell.BeginCell().EndCell(), walletSendTestBalance, uint32(tonopsTestTime.Unix()))
 		msgCell, err := tlb.ToCell(&tlb.ExternalMessage{
 			DstAddr: tonopsTestAddr,
@@ -1345,7 +1341,7 @@ func FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 
 		if int(version) < tt.minVersion {
 			for _, always := range []bool{false, true, false} {
-				res := runTransactionBuildProofChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, always)
+				res := runTransactionBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, always)
 				if res.exit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s transaction proof v%d always=%t exit=%d, want invalid opcode", tt.name, version, always, res.exit)
 				}
@@ -1353,17 +1349,17 @@ func FuzzTransactionEmulationBuildProofChksigAlwaysSucceedPerRun(f *testing.F) {
 			return
 		}
 
-		assertMessageChksigAlwaysVariant(t, tt, version, false, runTransactionBuildProofChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
-		assertMessageChksigAlwaysVariant(t, tt, version, true, runTransactionBuildProofChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, true), true)
-		assertMessageChksigAlwaysVariant(t, tt, version, false, runTransactionBuildProofChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTransactionBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, runTransactionBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, true), true)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTransactionBuildProofSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
 	})
 }
 
-func runTransactionBuildProofChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
+func runTransactionBuildProofSignatureCheckAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageSignatureCheckAlwaysVariantResult {
 	t.Helper()
 
 	accountHash := shard.Account.Hash()
-	cfg.ChksigAlwaysSucceed = always
+	cfg.SignatureCheckAlwaysSucceed = always
 	res, err := testEmulateTransaction(machine, shard, msgCell, cfg)
 	var execRes *ExecutionResult
 	if res != nil {
@@ -1383,13 +1379,13 @@ func runTransactionBuildProofChksigAlwaysVariant(t *testing.T, machine *TVM, sha
 		t.Fatalf("transaction proof %s always=%t proof is invalid: %v", tt.name, always, err)
 	}
 	if !vmcore.IsSuccessExitCode(exit) {
-		return messageChksigAlwaysVariantResult{exit: exit}
+		return messageSignatureCheckAlwaysVariantResult{exit: exit}
 	}
 	got, err := res.Stack.PopBool()
 	if err != nil {
 		t.Fatalf("pop transaction proof %s result always=%t: %v", tt.name, always, err)
 	}
-	return messageChksigAlwaysVariantResult{exit: exit, ok: got}
+	return messageSignatureCheckAlwaysVariantResult{exit: exit, ok: got}
 }
 
 func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F) {
@@ -1401,23 +1397,20 @@ func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F
 	f.Add(byte(14), byte(3), true)
 	f.Add(byte(3), byte(14), true)
 	f.Add(byte(4), byte(0), false)
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0), true)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0), true)
 
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
-		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
+		effectiveVersion := uint32(vmcore.MaxSupportedGlobalVersion)
 
-		var preparedCfg *PreparedConfig
+		var preparedCfg *PreparedBlockchainConfig
 		if useConfigRoot {
 			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
-		machine, err := NewTVM().WithGlobalVersion(machineVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", machineVersion, err)
-		}
+		machine := NewTVM()
 
 		code := makeMessageGasConsumedCode(t)
 		shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, cell.BeginCell().EndCell(), walletSendTestBalance, uint32(tonopsTestTime.Unix()))
@@ -1429,7 +1422,7 @@ func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		res, err := testEmulateTransaction(&machine, shard, msgCell, testTxParams{
+		res, err := testEmulateTransaction(machine, shard, msgCell, testTxParams{
 			Address:     tonopsTestAddr,
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
@@ -1456,16 +1449,13 @@ func FuzzTransactionEmulationGlobalVersionFallbackAndConfigOverride(f *testing.F
 }
 
 func FuzzTransactionEmulationGlobalVersionPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, version^0x5c)
 	}
 
 	f.Fuzz(func(t *testing.T, rawVersion, bodyTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
-		machine, err := NewTVM().WithGlobalVersion(MaxSupportedGlobalVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", MaxSupportedGlobalVersion, err)
-		}
+		machine := NewTVM()
 
 		code := makeMessageGasConsumedCode(t)
 		shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, cell.BeginCell().EndCell(), walletSendTestBalance, uint32(tonopsTestTime.Unix()))
@@ -1483,7 +1473,7 @@ func FuzzTransactionEmulationGlobalVersionPerRun(f *testing.F) {
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			Config:      transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
+			Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    walletSendTestGasMax,
 				Credit: walletSendTestCredit,
@@ -1492,17 +1482,17 @@ func FuzzTransactionEmulationGlobalVersionPerRun(f *testing.F) {
 		versionCfg := baseCfg
 		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
-		res, err := testEmulateTransaction(&machine, shard, msgCell, versionCfg)
+		res, err := testEmulateTransaction(machine, shard, msgCell, versionCfg)
 		if err != nil {
 			t.Fatalf("transaction emulation per-run v%d failed: %v", version, err)
 		}
 		assertGasConsumedVersionResult(t, "transaction per-run", version, res.ExitCode, res.Stack)
 
-		leakCheck, err := testEmulateTransaction(&machine, shard, msgCell, baseCfg)
+		leakCheck, err := testEmulateTransaction(machine, shard, msgCell, baseCfg)
 		if err != nil {
 			t.Fatalf("transaction emulation leak-check failed: %v", err)
 		}
-		assertGasConsumedVersionResult(t, "transaction leak-check", MaxSupportedGlobalVersion, leakCheck.ExitCode, leakCheck.Stack)
+		assertGasConsumedVersionResult(t, "transaction leak-check", vmcore.MaxSupportedGlobalVersion, leakCheck.ExitCode, leakCheck.Stack)
 	})
 }
 
@@ -1515,29 +1505,26 @@ func FuzzTickTockGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 	f.Add(byte(14), byte(3), true, true)
 	f.Add(byte(3), byte(14), true, true)
 	f.Add(byte(4), byte(0), false, false)
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0), true, false)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0), true, false)
 
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot, isTock bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
-		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
+		effectiveVersion := uint32(vmcore.MaxSupportedGlobalVersion)
 
-		var preparedCfg *PreparedConfig
+		var preparedCfg *PreparedBlockchainConfig
 		if useConfigRoot {
 			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
-		machine, err := NewTVM().WithGlobalVersion(machineVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", machineVersion, err)
-		}
+		machine := NewTVM()
 
 		shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, makeTickTockGasConsumedCode(t), cell.BeginCell().EndCell(), tickTockTestBalance)
 		if err != nil {
 			t.Fatalf("failed to build tick/tock shard: %v", err)
 		}
-		res, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
+		res, err := testEmulateTickTockTransaction(machine, shard, isTock, testTxParams{
 			Now:      uint32(tonopsTestTime.Unix()),
 			RandSeed: append([]byte(nil), tonopsTestSeed...),
 			Config:   preparedCfg,
@@ -1561,17 +1548,14 @@ func FuzzTickTockGlobalVersionFallbackAndConfigOverride(f *testing.F) {
 }
 
 func FuzzTickTockGlobalVersionPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false)
 		f.Add(version, true)
 	}
 
 	f.Fuzz(func(t *testing.T, rawVersion byte, isTock bool) {
 		version := transactionFuzzGlobalVersion(rawVersion)
-		machine, err := NewTVM().WithGlobalVersion(MaxSupportedGlobalVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", MaxSupportedGlobalVersion, err)
-		}
+		machine := NewTVM()
 
 		shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, makeTickTockGasConsumedCode(t), cell.BeginCell().EndCell(), tickTockTestBalance)
 		if err != nil {
@@ -1580,7 +1564,7 @@ func FuzzTickTockGlobalVersionPerRun(f *testing.F) {
 		baseCfg := testTxParams{
 			Now:      uint32(tonopsTestTime.Unix()),
 			RandSeed: append([]byte(nil), tonopsTestSeed...),
-			Config:   transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
+			Config:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultTickTockTransactionGasMax,
 				Limit: DefaultTickTockTransactionGasMax,
@@ -1589,17 +1573,17 @@ func FuzzTickTockGlobalVersionPerRun(f *testing.F) {
 		versionCfg := baseCfg
 		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
-		res, err := testEmulateTickTockTransaction(&machine, shard, isTock, versionCfg)
+		res, err := testEmulateTickTockTransaction(machine, shard, isTock, versionCfg)
 		if err != nil {
 			t.Fatalf("tick/tock emulation per-run v%d is_tock=%t failed: %v", version, isTock, err)
 		}
 		assertGasConsumedVersionResult(t, "tick/tock per-run", version, res.ExitCode, res.Stack)
 
-		leakCheck, err := testEmulateTickTockTransaction(&machine, shard, isTock, baseCfg)
+		leakCheck, err := testEmulateTickTockTransaction(machine, shard, isTock, baseCfg)
 		if err != nil {
 			t.Fatalf("tick/tock emulation leak-check is_tock=%t failed: %v", isTock, err)
 		}
-		assertGasConsumedVersionResult(t, "tick/tock leak-check", MaxSupportedGlobalVersion, leakCheck.ExitCode, leakCheck.Stack)
+		assertGasConsumedVersionResult(t, "tick/tock leak-check", vmcore.MaxSupportedGlobalVersion, leakCheck.ExitCode, leakCheck.Stack)
 	})
 }
 
@@ -1612,23 +1596,20 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionFallbackAndConfigOverride(f *t
 	f.Add(byte(14), byte(3), true)
 	f.Add(byte(3), byte(14), true)
 	f.Add(byte(4), byte(0), false)
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0), true)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0), true)
 
 	f.Fuzz(func(t *testing.T, rawMachineVersion, rawConfigVersion byte, useConfigRoot bool) {
 		machineVersion := int(transactionFuzzGlobalVersion(rawMachineVersion))
 		configVersion := transactionFuzzGlobalVersion(rawConfigVersion)
-		effectiveVersion := uint32(vmcore.DefaultGlobalVersion)
+		effectiveVersion := uint32(vmcore.MaxSupportedGlobalVersion)
 
-		var preparedCfg *PreparedConfig
+		var preparedCfg *PreparedBlockchainConfig
 		if useConfigRoot {
 			preparedCfg = transactionTestConfigWithGlobalVersion(t, configVersion)
 			effectiveVersion = configVersion
 		}
 
-		machine, err := NewTVM().WithGlobalVersion(machineVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", machineVersion, err)
-		}
+		machine := NewTVM()
 
 		code := makeCheckExternalAcceptedGasConsumedCode(t)
 		origData := cell.BeginCell().EndCell()
@@ -1642,7 +1623,7 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionFallbackAndConfigOverride(f *t
 			t.Fatalf("failed to build external message: %v", err)
 		}
 
-		accepted, err := testCheckExternalAccepted(&machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, testTxParams{
+		accepted, err := testCheckExternalAccepted(machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, testTxParams{
 			Now:         uint32(tonopsTestTime.Unix()),
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
@@ -1667,16 +1648,13 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionFallbackAndConfigOverride(f *t
 }
 
 func FuzzCheckExternalMessageAcceptedGlobalVersionPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, version^0x9d)
 	}
 
 	f.Fuzz(func(t *testing.T, rawVersion, bodyTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
-		machine, err := NewTVM().WithGlobalVersion(MaxSupportedGlobalVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", MaxSupportedGlobalVersion, err)
-		}
+		machine := NewTVM()
 
 		code := makeCheckExternalAcceptedGasConsumedCode(t)
 		origData := cell.BeginCell().EndCell()
@@ -1695,12 +1673,12 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionPerRun(f *testing.F) {
 			BlockLT:     transactionTestLogicalTime,
 			LogicalTime: transactionTestLogicalTime,
 			RandSeed:    append([]byte(nil), tonopsTestSeed...),
-			Config:      transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
+			Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		}
 		versionCfg := baseCfg
 		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
-		accepted, err := testCheckExternalAccepted(&machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, versionCfg)
+		accepted, err := testCheckExternalAccepted(machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, versionCfg)
 		if err != nil {
 			t.Fatalf("check external accepted per-run v%d failed: %v", version, err)
 		}
@@ -1708,7 +1686,7 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionPerRun(f *testing.F) {
 			t.Fatalf("check external accepted per-run v%d accepted=%t, want %t", version, accepted, want)
 		}
 
-		accepted, err = testCheckExternalAccepted(&machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, baseCfg)
+		accepted, err = testCheckExternalAccepted(machine, shard, mustParseTransactionTestAccount(t, shard), msgCell, msg, baseCfg)
 		if err != nil {
 			t.Fatalf("check external accepted leak-check failed: %v", err)
 		}
@@ -1718,8 +1696,8 @@ func FuzzCheckExternalMessageAcceptedGlobalVersionPerRun(f *testing.F) {
 	})
 }
 
-func FuzzCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzCheckExternalMessageAcceptedSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 			f.Add(version, kind, version^kind^0xC3)
 		}
@@ -1734,7 +1712,7 @@ func FuzzCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature[31] = sigTag ^ 0x33
 		signature[63] = sigTag ^ 0xff
 
-		code := makeCheckExternalAcceptedChksigAlwaysCode(t, tt, signature, codeFromBuilders(t, funcsop.ACCEPT().Serialize()))
+		code := makeCheckExternalAcceptedSignatureCheckAlwaysCode(t, tt, signature, codeFromBuilders(t, funcsop.ACCEPT().Serialize()))
 		shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, cell.BeginCell().EndCell(), walletSendTestBalance, uint32(tonopsTestTime.Unix()))
 		msg := &tlb.ExternalMessage{
 			DstAddr: tonopsTestAddr,
@@ -1757,29 +1735,29 @@ func FuzzCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(f *testing.F) {
 
 		if int(version) < tt.minVersion {
 			for _, always := range []bool{false, true, false} {
-				if accepted := runCheckExternalAcceptedChksigAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, always); accepted {
+				if accepted := runCheckExternalAcceptedSignatureCheckAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, always); accepted {
 					t.Fatalf("%s check accepted v%d always=%t accepted=true, want false before opcode activation", tt.name, version, always)
 				}
 			}
 			return
 		}
 
-		if accepted := runCheckExternalAcceptedChksigAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, false); accepted {
+		if accepted := runCheckExternalAcceptedSignatureCheckAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, false); accepted {
 			t.Fatalf("%s check accepted v%d always=false accepted=true, want false", tt.name, version)
 		}
-		if accepted := runCheckExternalAcceptedChksigAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, true); !accepted {
+		if accepted := runCheckExternalAcceptedSignatureCheckAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, true); !accepted {
 			t.Fatalf("%s check accepted v%d always=true accepted=false, want true", tt.name, version)
 		}
-		if accepted := runCheckExternalAcceptedChksigAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, false); accepted {
+		if accepted := runCheckExternalAcceptedSignatureCheckAlwaysVariant(t, machine, shard, account, msgCell, msg, cfg, tt, false); accepted {
 			t.Fatalf("%s check accepted v%d always=false accepted=true after configured run", tt.name, version)
 		}
 	})
 }
 
-func runCheckExternalAcceptedChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, account *tlb.AccountState, msgCell *cell.Cell, msg *tlb.ExternalMessage, cfg testTxParams, tt executionConfigSignatureCase, always bool) bool {
+func runCheckExternalAcceptedSignatureCheckAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, account *tlb.AccountState, msgCell *cell.Cell, msg *tlb.ExternalMessage, cfg testTxParams, tt executionConfigSignatureCase, always bool) bool {
 	t.Helper()
 
-	cfg.ChksigAlwaysSucceed = always
+	cfg.SignatureCheckAlwaysSucceed = always
 	accepted, err := testCheckExternalAccepted(machine, shard, account, msgCell, msg, cfg)
 	if err != nil {
 		t.Fatalf("CheckExternalMessageAccepted %s always=%t failed: %v", tt.name, always, err)
@@ -1847,8 +1825,8 @@ func assertGasConsumedVersionResult(t *testing.T, name string, effectiveVersion 
 	}
 }
 
-func FuzzMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzMessageEmulationSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 			f.Add(version, kind, version^kind^0x11)
 		}
@@ -1860,7 +1838,7 @@ func FuzzMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature := make([]byte, 64)
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
-		code := makeMessageChksigAlwaysVariantCode(t, tt, signature)
+		code := makeMessageSignatureCheckAlwaysVariantCode(t, tt, signature)
 		data := cell.BeginCell().EndCell()
 		body := cell.BeginCell().MustStoreUInt(uint64(sigTag), 8).EndCell()
 		cfg := EmulateExternalMessageConfig{
@@ -1877,7 +1855,7 @@ func FuzzMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 
 		if int(version) < tt.minVersion {
 			for _, always := range []bool{false, true} {
-				res := runMessageChksigAlwaysVariant(t, machine, code, data, msg, cfg, tt, always)
+				res := runMessageSignatureCheckAlwaysVariant(t, machine, code, data, msg, cfg, tt, always)
 				if res.exit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s v%d always=%t exit=%d, want invalid opcode", tt.name, version, always, res.exit)
 				}
@@ -1885,19 +1863,19 @@ func FuzzMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 			return
 		}
 
-		defaultRes := runMessageChksigAlwaysVariant(t, machine, code, data, msg, cfg, tt, false)
-		assertMessageChksigAlwaysVariant(t, tt, version, false, defaultRes, false)
+		defaultRes := runMessageSignatureCheckAlwaysVariant(t, machine, code, data, msg, cfg, tt, false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, defaultRes, false)
 
-		configuredRes := runMessageChksigAlwaysVariant(t, machine, code, data, msg, cfg, tt, true)
-		assertMessageChksigAlwaysVariant(t, tt, version, true, configuredRes, true)
+		configuredRes := runMessageSignatureCheckAlwaysVariant(t, machine, code, data, msg, cfg, tt, true)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, configuredRes, true)
 
-		leakCheck := runMessageChksigAlwaysVariant(t, machine, code, data, msg, cfg, tt, false)
-		assertMessageChksigAlwaysVariant(t, tt, version, false, leakCheck, false)
+		leakCheck := runMessageSignatureCheckAlwaysVariant(t, machine, code, data, msg, cfg, tt, false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, leakCheck, false)
 	})
 }
 
 func FuzzMessageEmulationGlobalVersionPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, byte(0), version^0x28)
 		f.Add(version, byte(1), version^0x82)
 	}
@@ -1908,21 +1886,18 @@ func FuzzMessageEmulationGlobalVersionPerRun(f *testing.F) {
 		signature := make([]byte, 64)
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
-		code := makeMessageChksigAlwaysVariantCode(t, tt, signature)
+		code := makeMessageSignatureCheckAlwaysVariantCode(t, tt, signature)
 		data := cell.BeginCell().EndCell()
 		body := cell.BeginCell().MustStoreUInt(uint64(sigTag), 8).EndCell()
-		machine, err := NewTVM().WithGlobalVersion(MaxSupportedGlobalVersion)
-		if err != nil {
-			t.Fatalf("WithGlobalVersion(%d): %v", MaxSupportedGlobalVersion, err)
-		}
+		machine := NewTVM()
 
 		baseCfg := MessageEmulationConfig{
-			Address:             tonopsTestAddr,
-			Now:                 uint32(tonopsTestTime.Unix()),
-			Balance:             new(big.Int).Set(tonopsTestBalance),
-			RandSeed:            append([]byte(nil), tonopsTestSeed...),
-			Config:              transactionTestConfigWithGlobalVersion(t, uint32(MaxSupportedGlobalVersion)),
-			ChksigAlwaysSucceed: true,
+			Address:                     tonopsTestAddr,
+			Now:                         uint32(tonopsTestTime.Unix()),
+			Balance:                     new(big.Int).Set(tonopsTestBalance),
+			RandSeed:                    append([]byte(nil), tonopsTestSeed...),
+			Config:                      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
+			SignatureCheckAlwaysSucceed: true,
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
 				Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -1931,22 +1906,22 @@ func FuzzMessageEmulationGlobalVersionPerRun(f *testing.F) {
 		versionCfg := baseCfg
 		versionCfg.Config = transactionTestConfigWithGlobalVersion(t, version)
 
-		configured := runMessageGlobalVersionPath(t, &machine, rawPath, code, data, body, versionCfg, tt)
+		configured := runMessageGlobalVersionPath(t, machine, rawPath, code, data, body, versionCfg, tt)
 		if int(version) < tt.minVersion {
 			if configured.exit != vmerr.CodeInvalidOpcode {
 				t.Fatalf("%s message path=%d per-run v%d exit=%d, want invalid opcode", tt.name, rawPath%2, version, configured.exit)
 			}
 		} else {
-			assertMessageChksigAlwaysVariant(t, tt, version, true, configured, true)
+			assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, configured, true)
 		}
 
-		leakCheck := runMessageGlobalVersionPath(t, &machine, rawPath, code, data, body, baseCfg, tt)
-		assertMessageChksigAlwaysVariant(t, tt, uint32(MaxSupportedGlobalVersion), true, leakCheck, true)
+		leakCheck := runMessageGlobalVersionPath(t, machine, rawPath, code, data, body, baseCfg, tt)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, uint32(vmcore.MaxSupportedGlobalVersion), true, leakCheck, true)
 	})
 }
 
-func FuzzInternalMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
-	for version := byte(MinSupportedGlobalVersion); version <= byte(MaxSupportedGlobalVersion); version++ {
+func FuzzInternalMessageEmulationSignatureCheckAlwaysSucceedPerRun(f *testing.F) {
+	for version := byte(0); version <= byte(vmcore.MaxSupportedGlobalVersion); version++ {
 		for kind := byte(0); kind < byte(len(executionConfigSignatureCases)); kind++ {
 			f.Add(version, kind, version^kind^0x44)
 		}
@@ -1958,7 +1933,7 @@ func FuzzInternalMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 		signature := make([]byte, 64)
 		signature[0] = sigTag
 		signature[63] = sigTag ^ 0xff
-		code := makeMessageChksigAlwaysVariantCode(t, tt, signature)
+		code := makeMessageSignatureCheckAlwaysVariantCode(t, tt, signature)
 		data := cell.BeginCell().EndCell()
 		body := cell.BeginCell().MustStoreUInt(uint64(sigTag), 8).EndCell()
 		cfg := EmulateInternalMessageConfig{
@@ -1976,7 +1951,7 @@ func FuzzInternalMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 
 		if int(version) < tt.minVersion {
 			for _, always := range []bool{false, true} {
-				res := runInternalMessageChksigAlwaysVariant(t, machine, code, data, body, cfg, tt, always)
+				res := runInternalMessageSignatureCheckAlwaysVariant(t, machine, code, data, body, cfg, tt, always)
 				if res.exit != vmerr.CodeInvalidOpcode {
 					t.Fatalf("%s internal v%d always=%t exit=%d, want invalid opcode", tt.name, version, always, res.exit)
 				}
@@ -1984,24 +1959,24 @@ func FuzzInternalMessageEmulationChksigAlwaysSucceedPerRun(f *testing.F) {
 			return
 		}
 
-		defaultRes := runInternalMessageChksigAlwaysVariant(t, machine, code, data, body, cfg, tt, false)
-		assertMessageChksigAlwaysVariant(t, tt, version, false, defaultRes, false)
+		defaultRes := runInternalMessageSignatureCheckAlwaysVariant(t, machine, code, data, body, cfg, tt, false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, defaultRes, false)
 
-		configuredRes := runInternalMessageChksigAlwaysVariant(t, machine, code, data, body, cfg, tt, true)
-		assertMessageChksigAlwaysVariant(t, tt, version, true, configuredRes, true)
+		configuredRes := runInternalMessageSignatureCheckAlwaysVariant(t, machine, code, data, body, cfg, tt, true)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, configuredRes, true)
 
-		leakCheck := runInternalMessageChksigAlwaysVariant(t, machine, code, data, body, cfg, tt, false)
-		assertMessageChksigAlwaysVariant(t, tt, version, false, leakCheck, false)
+		leakCheck := runInternalMessageSignatureCheckAlwaysVariant(t, machine, code, data, body, cfg, tt, false)
+		assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, leakCheck, false)
 	})
 }
 
-func makeMessageChksigAlwaysCode(t *testing.T, signature []byte) *cell.Cell {
+func makeMessageSignatureCheckAlwaysCode(t *testing.T, signature []byte) *cell.Cell {
 	t.Helper()
 
-	return makeMessageChksigAlwaysVariantCode(t, executionConfigSignatureCases[0], signature)
+	return makeMessageSignatureCheckAlwaysVariantCode(t, executionConfigSignatureCases[0], signature)
 }
 
-func makeMessageChksigAlwaysVariantCode(t *testing.T, tt executionConfigSignatureCase, signature []byte) *cell.Cell {
+func makeMessageSignatureCheckAlwaysVariantCode(t *testing.T, tt executionConfigSignatureCase, signature []byte) *cell.Cell {
 	t.Helper()
 
 	builders := []*cell.Builder{
@@ -2026,11 +2001,11 @@ func makeMessageChksigAlwaysVariantCode(t *testing.T, tt executionConfigSignatur
 		builders = append(builders, stackop.PUSHINT(big.NewInt(2)).Serialize())
 	}
 
-	builders = append(builders, chksigAlwaysVariantOpcode(t, tt))
+	builders = append(builders, signatureCheckAlwaysVariantOpcode(t, tt))
 	return codeFromBuilders(t, builders...)
 }
 
-func chksigAlwaysVariantOpcode(t *testing.T, tt executionConfigSignatureCase) *cell.Builder {
+func signatureCheckAlwaysVariantOpcode(t *testing.T, tt executionConfigSignatureCase) *cell.Builder {
 	t.Helper()
 
 	switch tt.name {
@@ -2048,15 +2023,15 @@ func chksigAlwaysVariantOpcode(t *testing.T, tt executionConfigSignatureCase) *c
 	}
 }
 
-type messageChksigAlwaysVariantResult struct {
+type messageSignatureCheckAlwaysVariantResult struct {
 	exit int64
 	ok   bool
 }
 
-func runMessageChksigAlwaysVariant(t *testing.T, machine *TVM, code, data *cell.Cell, msg *tlb.ExternalMessage, cfg EmulateExternalMessageConfig, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
+func runMessageSignatureCheckAlwaysVariant(t *testing.T, machine *TVM, code, data *cell.Cell, msg *tlb.ExternalMessage, cfg EmulateExternalMessageConfig, tt executionConfigSignatureCase, always bool) messageSignatureCheckAlwaysVariantResult {
 	t.Helper()
 
-	cfg.ChksigAlwaysSucceed = always
+	cfg.SignatureCheckAlwaysSucceed = always
 	res, err := machine.EmulateExternalMessage(code, data, msg, cfg)
 	var execRes *ExecutionResult
 	if res != nil {
@@ -2067,19 +2042,19 @@ func runMessageChksigAlwaysVariant(t *testing.T, machine *TVM, code, data *cell.
 		t.Fatalf("EmulateExternalMessage %s always=%v failed: %v", tt.name, always, err)
 	}
 	if !vmcore.IsSuccessExitCode(exit) {
-		return messageChksigAlwaysVariantResult{exit: exit}
+		return messageSignatureCheckAlwaysVariantResult{exit: exit}
 	}
 	got, err := res.Stack.PopBool()
 	if err != nil {
 		t.Fatalf("pop %s result always=%v: %v", tt.name, always, err)
 	}
-	return messageChksigAlwaysVariantResult{exit: exit, ok: got}
+	return messageSignatureCheckAlwaysVariantResult{exit: exit, ok: got}
 }
 
-func runInternalMessageChksigAlwaysVariant(t *testing.T, machine *TVM, code, data, body *cell.Cell, cfg EmulateInternalMessageConfig, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
+func runInternalMessageSignatureCheckAlwaysVariant(t *testing.T, machine *TVM, code, data, body *cell.Cell, cfg EmulateInternalMessageConfig, tt executionConfigSignatureCase, always bool) messageSignatureCheckAlwaysVariantResult {
 	t.Helper()
 
-	cfg.ChksigAlwaysSucceed = always
+	cfg.SignatureCheckAlwaysSucceed = always
 	res, err := machine.EmulateInternalMessage(code, data, body, internalMessageTestAmount, cfg)
 	var execRes *ExecutionResult
 	if res != nil {
@@ -2090,16 +2065,16 @@ func runInternalMessageChksigAlwaysVariant(t *testing.T, machine *TVM, code, dat
 		t.Fatalf("EmulateInternalMessage %s always=%v failed: %v", tt.name, always, err)
 	}
 	if !vmcore.IsSuccessExitCode(exit) {
-		return messageChksigAlwaysVariantResult{exit: exit}
+		return messageSignatureCheckAlwaysVariantResult{exit: exit}
 	}
 	got, err := res.Stack.PopBool()
 	if err != nil {
 		t.Fatalf("pop internal %s result always=%v: %v", tt.name, always, err)
 	}
-	return messageChksigAlwaysVariantResult{exit: exit, ok: got}
+	return messageSignatureCheckAlwaysVariantResult{exit: exit, ok: got}
 }
 
-func runMessageGlobalVersionPath(t *testing.T, machine *TVM, rawPath byte, code, data, body *cell.Cell, cfg MessageEmulationConfig, tt executionConfigSignatureCase) messageChksigAlwaysVariantResult {
+func runMessageGlobalVersionPath(t *testing.T, machine *TVM, rawPath byte, code, data, body *cell.Cell, cfg MessageEmulationConfig, tt executionConfigSignatureCase) messageSignatureCheckAlwaysVariantResult {
 	t.Helper()
 
 	if rawPath%2 == 0 {
@@ -2107,12 +2082,12 @@ func runMessageGlobalVersionPath(t *testing.T, machine *TVM, rawPath byte, code,
 			DstAddr: tonopsTestAddr,
 			Body:    body,
 		}
-		return runMessageChksigAlwaysVariant(t, machine, code, data, msg, cfg, tt, cfg.ChksigAlwaysSucceed)
+		return runMessageSignatureCheckAlwaysVariant(t, machine, code, data, msg, cfg, tt, cfg.SignatureCheckAlwaysSucceed)
 	}
-	return runInternalMessageChksigAlwaysVariant(t, machine, code, data, body, cfg, tt, cfg.ChksigAlwaysSucceed)
+	return runInternalMessageSignatureCheckAlwaysVariant(t, machine, code, data, body, cfg, tt, cfg.SignatureCheckAlwaysSucceed)
 }
 
-func assertMessageChksigAlwaysVariant(t *testing.T, tt executionConfigSignatureCase, version uint32, always bool, res messageChksigAlwaysVariantResult, want bool) {
+func assertMessageSignatureCheckAlwaysVariant(t *testing.T, tt executionConfigSignatureCase, version uint32, always bool, res messageSignatureCheckAlwaysVariantResult, want bool) {
 	t.Helper()
 
 	if !vmcore.IsSuccessExitCode(res.exit) {
@@ -2130,7 +2105,7 @@ func FuzzCheckExternalMessageAcceptedVersionedInMsgParams(f *testing.F) {
 	f.Add(byte(0), byte(0x11), byte(0x22))
 	f.Add(byte(10), byte(0x33), byte(0x44))
 	f.Add(byte(11), byte(0x55), byte(0x66))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0x77), byte(0x88))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0x77), byte(0x88))
 
 	f.Fuzz(func(t *testing.T, rawVersion, dataTag, bodyTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -2195,7 +2170,7 @@ func FuzzCheckExternalMessageAcceptedInboundDestinationVersionGate(f *testing.F)
 	f.Add(byte(9), byte(1), byte(0x22))
 	f.Add(byte(10), byte(1), byte(0x33))
 	f.Add(byte(10), byte(2), byte(0x44))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(3), byte(0x55))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(3), byte(0x55))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawDest, bodyTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -2508,26 +2483,26 @@ func FuzzTransactionActionGlobalVersionFallbackInvalidSource(f *testing.F) {
 	f.Add(byte(1), byte(0), true, byte(0x22))
 	f.Add(byte(2), byte(12), true, byte(0x33))
 	f.Add(byte(2), byte(13), true, byte(0x44))
-	f.Add(byte(2), byte(MaxSupportedGlobalVersion), false, byte(0x55))
+	f.Add(byte(2), byte(vmcore.MaxSupportedGlobalVersion), false, byte(0x55))
 
 	f.Fuzz(func(t *testing.T, rawConfigKind, rawVersion byte, ignoreErrors bool, payload byte) {
 		version := uint32(transactionFuzzGlobalVersion(rawVersion))
 
 		// Configs without a valid global version are rejected eagerly by
-		// PrepareConfig; only well-formed configs reach execution.
+		// PrepareBlockchainConfig; only well-formed configs reach execution.
 		switch rawConfigKind % 4 {
 		case 0:
-			if _, err := PrepareConfig(nil); err == nil {
+			if _, err := PrepareBlockchainConfig(nil); err == nil {
 				t.Fatal("nil config root should fail to prepare")
 			}
 			return
 		case 1:
-			if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+			if _, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
 				t.Fatal("config without global version should fail to prepare")
 			}
 			return
 		case 3:
-			if _, err := PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			if _, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 				tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(uint64(payload&1), 1).EndCell(),
 			})); err == nil {
 				t.Fatal("config with malformed global version should fail to prepare")
@@ -2576,11 +2551,11 @@ func FuzzTransactionVersionedInvalidSourceMode2(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), version >= 13)
 	}
-	f.Add(byte(MinSupportedGlobalVersion), false)
+	f.Add(byte(0), false)
 	f.Add(byte(12), false)
 	f.Add(byte(12), true)
 	f.Add(byte(13), true)
-	f.Add(byte(MaxSupportedGlobalVersion), true)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), true)
 
 	f.Fuzz(func(t *testing.T, rawVersion byte, ignoreErrors bool) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -2623,12 +2598,12 @@ func FuzzTransactionVersionedInvalidDestinationMode2(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(1), true)
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(0), true)
+	f.Add(byte(0), byte(0), true)
 	f.Add(byte(7), byte(0), true)
 	f.Add(byte(7), byte(1), true)
 	f.Add(byte(8), byte(0), true)
 	f.Add(byte(12), byte(1), false)
-	f.Add(byte(MaxSupportedGlobalVersion), byte(1), true)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(1), true)
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawCase byte, ignoreErrors bool) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -2685,8 +2660,8 @@ func FuzzTransactionVersionedVarDestinationNormalization(f *testing.F) {
 	f.Add(byte(0), int32(0), uint16(256), byte(0x11))
 	f.Add(byte(9), int32(-128), uint16(256), byte(0x22))
 	f.Add(byte(10), int32(127), uint16(256), byte(0x33))
-	f.Add(byte(MaxSupportedGlobalVersion), int32(128), uint16(256), byte(0x44))
-	f.Add(byte(MaxSupportedGlobalVersion), int32(0), uint16(255), byte(0x55))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), int32(128), uint16(256), byte(0x44))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), int32(0), uint16(255), byte(0x55))
 
 	f.Fuzz(func(t *testing.T, rawVersion byte, workchain int32, rawBits uint16, fill byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -2741,7 +2716,7 @@ func FuzzTransactionVersionedInternalAddressWorkchainDescriptors(f *testing.F) {
 	f.Add(byte(0), byte(0), uint16(256), byte(0x11))
 	f.Add(byte(9), byte(1), uint16(255), byte(0x22))
 	f.Add(byte(10), byte(2), uint16(256), byte(0x33))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(3), uint16(255), byte(0x44))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(3), uint16(255), byte(0x44))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawCase byte, rawBits uint16, fill byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -3019,11 +2994,11 @@ func FuzzTransactionVersionedPrecompiledGasConfig(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), uint64(7), uint64(10), false)
 	}
-	f.Add(byte(MinSupportedGlobalVersion), uint64(7), uint64(10), false)
+	f.Add(byte(0), uint64(7), uint64(10), false)
 	f.Add(byte(13), uint64(7), uint64(10), false)
 	f.Add(byte(13), uint64(11), uint64(10), false)
-	f.Add(byte(MaxSupportedGlobalVersion), uint64(10), uint64(10), true)
-	f.Add(byte(MaxSupportedGlobalVersion), uint64(0), uint64(0), false)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), uint64(10), uint64(10), true)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), uint64(0), uint64(0), false)
 
 	f.Fuzz(func(t *testing.T, rawVersion byte, rawUsage, rawLimit uint64, credit bool) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -3259,7 +3234,7 @@ func FuzzTransactionVersionedFailedActionMessageBalance(f *testing.F) {
 }
 
 func FuzzTransactionVersionedStateLimitFailureMessageBalance(f *testing.F) {
-	for version := uint32(MinSupportedGlobalVersion); version <= uint32(MaxSupportedGlobalVersion); version++ {
+	for version := uint32(0); version <= uint32(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(uint8(version), uint8(0), uint64(500), uint64(1), false, uint64(0))
 		f.Add(uint8(version), uint8(1), uint64(777), uint64(9), true, uint64(11))
 		f.Add(uint8(version), uint8(2), uint64(999), uint64(5), true, uint64(23))
@@ -3339,7 +3314,7 @@ func FuzzTransactionVersionedStateLimitFailureMessageBalance(f *testing.F) {
 }
 
 func FuzzTransactionApplyActionsMessageBalanceInputIsolation(f *testing.F) {
-	for version := uint32(MinSupportedGlobalVersion); version <= uint32(MaxSupportedGlobalVersion); version++ {
+	for version := uint32(0); version <= uint32(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(uint8(version), byte(0), uint64(500), false, uint64(0))
 		f.Add(uint8(version), byte(1), uint64(501), true, uint64(11))
 		f.Add(uint8(version), byte(2), uint64(502), true, uint64(23))
@@ -3720,8 +3695,13 @@ func FuzzTransactionVersionedChangeLibraryActionBoundaries(f *testing.F) {
 				wantStored = false
 				wantDeleted = false
 			}
+			privateAdd := rawCase%7 == 1 || rawCase%7 == 4
+			if version >= 15 && privateAdd {
+				wantCode = 46
+				wantStored = false
+			}
 
-			res, err := transactionProcessChangeLibraryAction(action, current, transactionTestConfigWithGlobalVersion(t, version), version)
+			res, err := transactionProcessChangeLibraryAction(action, current, transactionTestConfigWithGlobalVersion(t, version), version, true)
 			if err != nil {
 				t.Fatalf("v%d change library failed: %v", version, err)
 			}
@@ -3806,6 +3786,7 @@ func FuzzTransactionVersionedLibraryHashNormalizationAndDictEquality(f *testing.
 				libs,
 				transactionTestConfigWithGlobalVersion(t, version),
 				version,
+				true,
 			)
 			if err != nil {
 				t.Fatalf("v%d long-hash change library failed: %v", version, err)
@@ -3934,7 +3915,7 @@ func FuzzTransactionVersionedOutboundFeeUsageLayout(f *testing.F) {
 	f.Add(byte(0), byte(0), uint64(1), uint64(7))
 	f.Add(byte(9), byte(3), uint64(2), uint64(11))
 	f.Add(byte(10), byte(2), uint64(3), uint64(13))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(7), uint64(4), uint64(17))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(7), uint64(4), uint64(17))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawFlags byte, rawCells, rawExtra uint64) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -4097,14 +4078,14 @@ func FuzzTransactionVersionedBounceMessageUsage(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(1), byte(0), byte(0), byte(2), byte(8), byte(4))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(1), byte(0), byte(0), byte(2), byte(8), byte(4))
+	f.Add(byte(0), byte(1), byte(0), byte(0), byte(2), byte(8), byte(4))
 	f.Add(byte(12), byte(1), byte(0), byte(0), byte(2), byte(8), byte(4))
 	f.Add(byte(13), byte(1), byte(0), byte(0), byte(2), byte(8), byte(4))
 	f.Add(byte(12), byte(1), byte(0x07), byte(0xAB), byte(7), byte(9), byte(3))
 	f.Add(byte(13), byte(1), byte(0x07), byte(0xAB), byte(7), byte(9), byte(3))
 	f.Add(byte(12), byte(2), byte(0x0F), byte(0x55), byte(5), byte(6), byte(7))
 	f.Add(byte(13), byte(2), byte(0x0F), byte(0x55), byte(5), byte(6), byte(7))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(2), byte(0x0F), byte(0x55), byte(5), byte(6), byte(7))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(2), byte(0x0F), byte(0x55), byte(5), byte(6), byte(7))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawExtra, rawRefs, rawPayload, rawLeafBits, rawBranchBits, rawExtraAmount byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -4160,11 +4141,11 @@ func FuzzTransactionVersionedBounceExtraFlags(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(1), byte(0))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(1), byte(0))
+	f.Add(byte(0), byte(1), byte(0))
 	f.Add(byte(11), byte(1), byte(0))
 	f.Add(byte(12), byte(1), byte(1))
 	f.Add(byte(13), byte(3), byte(2))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(7), byte(3))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(7), byte(3))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawIHRFee, rawBody byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -4230,7 +4211,7 @@ func FuzzTransactionVersionedDetailedBounceBodyPhaseExit(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(1), byte(0), byte(0), int32(13), uint32(5), uint32(7), byte(16), byte(0xAA))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(1), byte(0), byte(0), int32(13), uint32(5), uint32(7), byte(16), byte(0xAA))
+	f.Add(byte(0), byte(1), byte(0), byte(0), int32(13), uint32(5), uint32(7), byte(16), byte(0xAA))
 	f.Add(byte(11), byte(0), byte(1), byte(0), int32(13), uint32(5), uint32(7), byte(16), byte(0xAA))
 	f.Add(byte(11), byte(1), byte(1), byte(0), int32(13), uint32(5), uint32(7), byte(16), byte(0xAB))
 	f.Add(byte(12), byte(0), byte(1), byte(0), int32(13), uint32(5), uint32(7), byte(16), byte(0xAC))
@@ -4240,7 +4221,7 @@ func FuzzTransactionVersionedDetailedBounceBodyPhaseExit(f *testing.F) {
 	f.Add(byte(12), byte(1), byte(0), byte(2), int32(13), uint32(5), uint32(7), byte(16), byte(0xA2))
 	f.Add(byte(12), byte(3), byte(1), byte(3), int32(-14), uint32(9), uint32(11), byte(17), byte(0xBB))
 	f.Add(byte(13), byte(1), byte(0), byte(4), int32(0), uint32(1), uint32(2), byte(5), byte(0xCC))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(3), byte(1), byte(5), int32(42), uint32(99), uint32(100), byte(31), byte(0xDD))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(3), byte(1), byte(5), int32(42), uint32(99), uint32(100), byte(31), byte(0xDD))
 	f.Add(byte(12), byte(1), byte(0), byte(6), int32(37), uint32(123), uint32(45), byte(7), byte(0xEE))
 	f.Add(byte(12), byte(1), byte(0), byte(7), int32(0), uint32(11), uint32(22), byte(9), byte(0x77))
 	f.Add(byte(12), byte(1), byte(0), byte(8), int32(34), uint32(0), uint32(0), byte(0), byte(0x11))
@@ -4302,14 +4283,14 @@ func FuzzTransactionVersionedStoragePhaseLifecycle(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(0), uint64(1000), uint64(77), uint64(77), uint64(1000), uint64(1000), false, false, uint64(0))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(0), uint64(1000), uint64(77), uint64(77), uint64(1000), uint64(1000), false, false, uint64(0))
+	f.Add(byte(0), byte(0), uint64(1000), uint64(77), uint64(77), uint64(1000), uint64(1000), false, false, uint64(0))
 	f.Add(byte(1), byte(0), uint64(1000), uint64(77), uint64(77), uint64(1000), uint64(1000), false, false, uint64(0))
 	f.Add(byte(4), byte(0), uint64(1000), uint64(77), uint64(77), uint64(1000), uint64(1000), false, false, uint64(0))
 	f.Add(byte(2), byte(0), uint64(50), uint64(100), uint64(0), uint64(1_000_000), uint64(1_000_000), false, false, uint64(0))
 	f.Add(byte(6), byte(1), uint64(50), uint64(500), uint64(0), uint64(1_000_000), uint64(100), false, false, uint64(0))
 	f.Add(byte(6), byte(1), uint64(50), uint64(500), uint64(0), uint64(1_000_000), uint64(100), true, false, uint64(0))
 	f.Add(byte(7), byte(0), uint64(0), uint64(50), uint64(0), uint64(10), uint64(1_000_000), false, true, uint64(100))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0), uint64(0), uint64(50), uint64(0), uint64(10), uint64(1_000_000), false, true, uint64(100))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0), uint64(0), uint64(50), uint64(0), uint64(10), uint64(1_000_000), false, true, uint64(100))
 
 	statuses := []tlb.AccountStatus{
 		tlb.AccountStatusActive,
@@ -4441,12 +4422,12 @@ func FuzzTransactionVersionedFrozenFinalStateNormalization(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(0), byte(0), byte(0x11), byte(0x22))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(0), byte(0), byte(0x11), byte(0x22))
+	f.Add(byte(0), byte(0), byte(0), byte(0x11), byte(0x22))
 	f.Add(byte(12), byte(0), byte(0), byte(0x11), byte(0x22))
 	f.Add(byte(13), byte(0), byte(0), byte(0x33), byte(0x44))
 	f.Add(byte(13), byte(1), byte(0), byte(0x55), byte(0x66))
 	f.Add(byte(12), byte(2), byte(5), byte(0x77), byte(0x88))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(3), byte(8), byte(0x99), byte(0xaa))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(3), byte(8), byte(0x99), byte(0xaa))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawCase, rawDepth, codeTag, dataTag byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -4515,11 +4496,11 @@ func FuzzTransactionVersionedStorageExtraDictHash(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(2), byte(0))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(2), byte(0))
+	f.Add(byte(0), byte(2), byte(0))
 	f.Add(byte(10), byte(2), byte(0))
 	f.Add(byte(11), byte(2), byte(2))
 	f.Add(byte(12), byte(6), byte(4))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(6), byte(4))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(6), byte(4))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawThreshold, rawRefs byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -4570,7 +4551,7 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(0), byte(9), byte(0), false, false, false, byte(0x11), byte(0x22))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(0), byte(9), byte(0), false, false, false, byte(0x11), byte(0x22))
+	f.Add(byte(0), byte(0), byte(9), byte(0), false, false, false, byte(0x11), byte(0x22))
 	f.Add(byte(9), byte(0), byte(9), byte(0), false, false, false, byte(0x11), byte(0x22))
 	f.Add(byte(10), byte(0), byte(9), byte(0), false, false, false, byte(0x11), byte(0x22))
 	f.Add(byte(10), byte(1), byte(8), byte(0), false, false, false, byte(0x33), byte(0x44))
@@ -4579,7 +4560,7 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 	f.Add(byte(7), byte(2), byte(0), byte(0), false, true, true, byte(0x77), byte(0x88))
 	f.Add(byte(8), byte(2), byte(0), byte(0), false, true, true, byte(0x77), byte(0x88))
 	f.Add(byte(8), byte(2), byte(0), byte(0), false, false, true, byte(0x99), byte(0xaa))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(2), byte(0), byte(0), false, false, true, byte(0x99), byte(0xaa))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(2), byte(0), byte(0), false, false, true, byte(0x99), byte(0xaa))
 
 	statuses := []tlb.AccountStatus{
 		tlb.AccountStatusUninit,
@@ -4674,12 +4655,12 @@ func FuzzTransactionVersionedStateInitDepthPersistence(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(0), byte(0), byte(0), byte(0x11), byte(0x22))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(0), byte(0), byte(0), byte(0x11), byte(0x22))
+	f.Add(byte(0), byte(0), byte(0), byte(0), byte(0x11), byte(0x22))
 	f.Add(byte(9), byte(0), byte(0), byte(0), byte(0x11), byte(0x22))
 	f.Add(byte(9), byte(1), byte(5), byte(1), byte(0x33), byte(0x44))
 	f.Add(byte(10), byte(0), byte(0), byte(0), byte(0x55), byte(0x66))
 	f.Add(byte(10), byte(1), byte(5), byte(1), byte(0x77), byte(0x88))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0), byte(8), byte(1), byte(0x99), byte(0xaa))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0), byte(8), byte(1), byte(0x99), byte(0xaa))
 
 	statuses := []tlb.AccountStatus{
 		tlb.AccountStatusUninit,
@@ -4743,7 +4724,7 @@ func FuzzTransactionVersionedNoStateSkipReasonBoundaries(f *testing.F) {
 	f.Add(byte(4), byte(1), byte(1), true, byte(0x33), byte(0x44))
 	f.Add(byte(8), byte(2), byte(2), true, byte(0x55), byte(0x66))
 	f.Add(byte(13), byte(3), byte(0), false, byte(0x77), byte(0x88))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(3), byte(0), false, byte(0x77), byte(0x88))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(3), byte(0), false, byte(0x77), byte(0x88))
 
 	statuses := []tlb.AccountStatus{
 		tlb.AccountStatusActive,
@@ -4853,7 +4834,7 @@ func FuzzTransactionVersionedStateInitLibraryValidation(f *testing.F) {
 	f.Add(byte(1), byte(2), byte(2), true)
 	f.Add(byte(7), byte(3), byte(1), false)
 	f.Add(byte(13), byte(4), byte(2), true)
-	f.Add(byte(MaxSupportedGlobalVersion), byte(4), byte(2), true)
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(4), byte(2), true)
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawLibCase, rawMsgKind byte, ignoreErrors bool) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -4956,10 +4937,10 @@ func FuzzTransactionVersionedMasterchainPublicLibraryDeploy(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(0x03), byte(0xA2), byte(0x11), byte(0x22))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(0x03), byte(0xA2), byte(0x11), byte(0x22))
+	f.Add(byte(0), byte(0x03), byte(0xA2), byte(0x11), byte(0x22))
 	f.Add(byte(12), byte(0x03), byte(0xA2), byte(0x11), byte(0x22))
 	f.Add(byte(13), byte(0x03), byte(0xB3), byte(0x33), byte(0x44))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0x01), byte(0xC4), byte(0x55), byte(0x66))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0x01), byte(0xC4), byte(0x55), byte(0x66))
 	f.Add(byte(13), byte(0x02), byte(0xD5), byte(0x77), byte(0x88))
 	f.Add(byte(13), byte(0x07), byte(0xE6), byte(0x99), byte(0xAA))
 	f.Add(byte(13), byte(0x0B), byte(0xF7), byte(0xBB), byte(0xCC))
@@ -5005,7 +4986,9 @@ func FuzzTransactionVersionedMasterchainPublicLibraryDeploy(f *testing.F) {
 			t.Fatal(err)
 		}
 
-		wantActive := !(status == tlb.AccountStatusUninit && isMasterchain && isPublicLibrary)
+		rejectsLibraries := version >= 15 && (status == tlb.AccountStatusUninit || status == tlb.AccountStatusNonExist)
+		rejectsMasterchainPublic := version < 15 && status == tlb.AccountStatusUninit && isMasterchain && isPublicLibrary
+		wantActive := !(rejectsLibraries || rejectsMasterchainPublic)
 		checkTransactionComputeBoundaryResult(t, version, usedState, skip, wantActive, tlb.ComputeSkipReasonBadState)
 	})
 }
@@ -5014,14 +4997,14 @@ func FuzzTransactionVersionedAccountStateLimitBoundaries(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(1), byte(2), byte(1), byte(4), byte(1), byte(0), byte(1))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(1), byte(2), byte(1), byte(4), byte(1), byte(0), byte(1))
+	f.Add(byte(0), byte(1), byte(2), byte(1), byte(4), byte(1), byte(0), byte(1))
 	f.Add(byte(11), byte(1), byte(2), byte(1), byte(4), byte(1), byte(0), byte(1))
 	f.Add(byte(12), byte(1), byte(2), byte(1), byte(4), byte(1), byte(0), byte(1))
 	f.Add(byte(12), byte(0), byte(2), byte(1), byte(1), byte(4), byte(0), byte(1))
 	f.Add(byte(12), byte(3), byte(3), byte(2), byte(0), byte(0), byte(0), byte(1))
 	f.Add(byte(12), byte(13), byte(1), byte(1), byte(4), byte(4), byte(1), byte(0))
 	f.Add(byte(12), byte(5), byte(1), byte(1), byte(4), byte(4), byte(1), byte(0))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(5), byte(1), byte(1), byte(4), byte(4), byte(1), byte(0))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(5), byte(1), byte(1), byte(4), byte(4), byte(1), byte(0))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawFlags, rawCodeCells, rawDataCells, rawMaxAcc, rawMaxMC, rawLibCells, rawMaxPublic byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -5092,11 +5075,11 @@ func FuzzTransactionVersionedAccountStateLimitShortCircuits(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(0x04), byte(3), byte(2), byte(0), byte(0), byte(0))
 	}
-	f.Add(byte(MinSupportedGlobalVersion), byte(0x04), byte(3), byte(2), byte(0), byte(0), byte(0))
+	f.Add(byte(0), byte(0x04), byte(3), byte(2), byte(0), byte(0), byte(0))
 	f.Add(byte(11), byte(0x04), byte(3), byte(2), byte(0), byte(0), byte(0))
 	f.Add(byte(12), byte(0x05), byte(3), byte(2), byte(0), byte(0), byte(0))
 	f.Add(byte(12), byte(0x02), byte(3), byte(2), byte(0), byte(0), byte(0))
-	f.Add(byte(MaxSupportedGlobalVersion), byte(0x19), byte(1), byte(1), byte(1), byte(0), byte(0))
+	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(0x19), byte(1), byte(1), byte(1), byte(0), byte(0))
 
 	f.Fuzz(func(t *testing.T, rawVersion, rawFlags, rawCodeCells, rawDataCells, rawMaxAcc, rawMaxMC, rawMaxPublic byte) {
 		version := transactionFuzzGlobalVersion(rawVersion)
@@ -5767,7 +5750,7 @@ func assertTransactionFuzzMessageBalanceUnchanged(t *testing.T, got, want *trans
 	}
 }
 
-func transactionFuzzSendExtraFlagsConfig(t *testing.T, version uint32) *PreparedConfig {
+func transactionFuzzSendExtraFlagsConfig(t *testing.T, version uint32) *PreparedBlockchainConfig {
 	t.Helper()
 
 	priceCell := buildTransactionMsgForwardPricesCell(t, 0, 0)
@@ -5778,7 +5761,7 @@ func transactionFuzzSendExtraFlagsConfig(t *testing.T, version uint32) *Prepared
 	})
 }
 
-func transactionFuzzWorkchainConfig(t *testing.T, version uint32, workchain int32, acceptMessages bool) *PreparedConfig {
+func transactionFuzzWorkchainConfig(t *testing.T, version uint32, workchain int32, acceptMessages bool) *PreparedBlockchainConfig {
 	t.Helper()
 
 	workchains := cell.NewDict(32)
@@ -5904,7 +5887,7 @@ func transactionFuzzNestedMerkleProofs(count int, payload byte) (*cell.Cell, err
 	return root, nil
 }
 
-func transactionFuzzInboundExternalConfig(t *testing.T, version uint32, maxMsgBits, maxMsgCells uint32, maxExtMsgDepth uint16) *PreparedConfig {
+func transactionFuzzInboundExternalConfig(t *testing.T, version uint32, maxMsgBits, maxMsgCells uint32, maxExtMsgDepth uint16) *PreparedBlockchainConfig {
 	t.Helper()
 
 	sizeLimits, err := tlb.ToCell(&tlb.SizeLimitsConfigV2{
@@ -5932,7 +5915,7 @@ func transactionFuzzInboundExternalConfig(t *testing.T, version uint32, maxMsgBi
 	})
 }
 
-func transactionFuzzStorageDictConfig(t *testing.T, version uint32, accStateCellsForStorageDict uint32) *PreparedConfig {
+func transactionFuzzStorageDictConfig(t *testing.T, version uint32, accStateCellsForStorageDict uint32) *PreparedBlockchainConfig {
 	t.Helper()
 
 	sizeLimits, err := tlb.ToCell(&tlb.SizeLimitsConfigV2{
@@ -5960,7 +5943,7 @@ func transactionFuzzStorageDictConfig(t *testing.T, version uint32, accStateCell
 	})
 }
 
-func transactionFuzzGasConfig(t *testing.T, version uint32, gasCell *cell.Cell) *PreparedConfig {
+func transactionFuzzGasConfig(t *testing.T, version uint32, gasCell *cell.Cell) *PreparedBlockchainConfig {
 	t.Helper()
 
 	return transactionTestConfigWithParams(t, map[uint32]*cell.Cell{

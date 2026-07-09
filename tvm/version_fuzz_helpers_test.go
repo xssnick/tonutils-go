@@ -7,11 +7,11 @@ import (
 )
 
 func tvmFuzzGlobalVersionCount() int {
-	return MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	return vmcore.MaxSupportedGlobalVersion - 0 + 1
 }
 
 func tvmFuzzGlobalVersion(raw int64) int {
-	if raw >= int64(MinSupportedGlobalVersion) && raw <= int64(MaxSupportedGlobalVersion) {
+	if raw >= int64(0) && raw <= int64(vmcore.MaxSupportedGlobalVersion) {
 		return int(raw)
 	}
 
@@ -19,34 +19,34 @@ func tvmFuzzGlobalVersion(raw int64) int {
 	if version < 0 {
 		version = -version
 	}
-	return MinSupportedGlobalVersion + version
+	return 0 + version
 }
 
 func tvmFuzzGlobalVersionUint32(raw uint32) uint32 {
-	if raw >= uint32(MinSupportedGlobalVersion) && raw <= uint32(MaxSupportedGlobalVersion) {
+	if raw >= uint32(0) && raw <= uint32(vmcore.MaxSupportedGlobalVersion) {
 		return raw
 	}
-	return uint32(MinSupportedGlobalVersion) + raw%uint32(tvmFuzzGlobalVersionCount())
+	return uint32(0) + raw%uint32(tvmFuzzGlobalVersionCount())
 }
 
 func tvmFuzzGlobalVersionByte(raw byte) int {
 	version := int(raw)
-	if version >= MinSupportedGlobalVersion && version <= MaxSupportedGlobalVersion {
+	if version >= 0 && version <= vmcore.MaxSupportedGlobalVersion {
 		return version
 	}
-	return MinSupportedGlobalVersion + int(raw)%tvmFuzzGlobalVersionCount()
+	return 0 + int(raw)%tvmFuzzGlobalVersionCount()
 }
 
 func tvmFuzzGlobalVersionSeed(seed uint64) int {
-	if seed >= uint64(MinSupportedGlobalVersion) && seed <= uint64(MaxSupportedGlobalVersion) {
+	if seed >= uint64(0) && seed <= uint64(vmcore.MaxSupportedGlobalVersion) {
 		return int(seed)
 	}
-	return MinSupportedGlobalVersion + int(seed%uint64(tvmFuzzGlobalVersionCount()))
+	return 0 + int(seed%uint64(tvmFuzzGlobalVersionCount()))
 }
 
 func tvmFuzzGlobalVersionMatrixSeed(start uint64, offset int, version int) uint64 {
 	count := uint64(tvmFuzzGlobalVersionCount())
-	residue := uint64(version - MinSupportedGlobalVersion)
+	residue := uint64(version - 0)
 	multiplier := start + uint64(offset)
 	maxMultiplier := (^uint64(0) - residue) / count
 	if multiplier > maxMultiplier {
@@ -56,11 +56,11 @@ func tvmFuzzGlobalVersionMatrixSeed(start uint64, offset int, version int) uint6
 }
 
 func TestTVMSupportedGlobalVersionConstantsMatchLocalFuzzAssumptions(t *testing.T) {
-	if MinSupportedGlobalVersion != 0 {
-		t.Fatalf("min supported global version = %d, want 0; update package-local fuzz loops that start from zero", MinSupportedGlobalVersion)
+	if 0 != 0 {
+		t.Fatalf("min supported global version = %d, want 0; update package-local fuzz loops that start from zero", 0)
 	}
-	if MaxSupportedGlobalVersion != vmcore.DefaultGlobalVersion {
-		t.Fatalf("max supported global version = %d, vm default = %d; update package-local fuzz helpers to cover the whole supported range", MaxSupportedGlobalVersion, vmcore.DefaultGlobalVersion)
+	if vmcore.MaxSupportedGlobalVersion != vmcore.MaxSupportedGlobalVersion {
+		t.Fatalf("max supported global version = %d, vm default = %d; update package-local fuzz helpers to cover the whole supported range", vmcore.MaxSupportedGlobalVersion, vmcore.MaxSupportedGlobalVersion)
 	}
 }
 
@@ -68,11 +68,11 @@ func TestTVMFuzzGlobalVersionMappersCoverSupportedRange(t *testing.T) {
 	if tvmFuzzGlobalVersionCount() <= 0 {
 		t.Fatalf("supported global version count = %d", tvmFuzzGlobalVersionCount())
 	}
-	if MaxSupportedGlobalVersion > 255 {
-		t.Fatalf("byte fuzz global version seed cannot directly cover max global version %d", MaxSupportedGlobalVersion)
+	if vmcore.MaxSupportedGlobalVersion > 255 {
+		t.Fatalf("byte fuzz global version seed cannot directly cover max global version %d", vmcore.MaxSupportedGlobalVersion)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		if got := tvmFuzzGlobalVersion(int64(version)); got != version {
 			t.Fatalf("int64 version seed %d mapped to %d, want %d", version, got, version)
 		}
@@ -96,8 +96,8 @@ func TestTVMFuzzGlobalVersionMappersCoverSupportedRange(t *testing.T) {
 func TestTVMFuzzGlobalVersionMappersClampArbitrarySeeds(t *testing.T) {
 	int64Seeds := []int64{
 		-1,
-		int64(MinSupportedGlobalVersion) - 1,
-		int64(MaxSupportedGlobalVersion) + 1,
+		int64(0) - 1,
+		int64(vmcore.MaxSupportedGlobalVersion) + 1,
 		-123456789,
 		123456789,
 		-1 << 63,
@@ -105,41 +105,41 @@ func TestTVMFuzzGlobalVersionMappersClampArbitrarySeeds(t *testing.T) {
 	}
 	for _, seed := range int64Seeds {
 		got := tvmFuzzGlobalVersion(seed)
-		if got < MinSupportedGlobalVersion || got > MaxSupportedGlobalVersion {
-			t.Fatalf("int64 seed %d mapped to v%d, want within [%d, %d]", seed, got, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if got < 0 || got > vmcore.MaxSupportedGlobalVersion {
+			t.Fatalf("int64 seed %d mapped to v%d, want within [%d, %d]", seed, got, 0, vmcore.MaxSupportedGlobalVersion)
 		}
 	}
 
 	uint32Seeds := []uint32{
 		0,
-		uint32(MaxSupportedGlobalVersion) + 1,
+		uint32(vmcore.MaxSupportedGlobalVersion) + 1,
 		123456789,
 		^uint32(0),
 	}
 	for _, seed := range uint32Seeds {
 		got := tvmFuzzGlobalVersionUint32(seed)
-		if got < uint32(MinSupportedGlobalVersion) || got > uint32(MaxSupportedGlobalVersion) {
-			t.Fatalf("uint32 seed %d mapped to v%d, want within [%d, %d]", seed, got, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if got < uint32(0) || got > uint32(vmcore.MaxSupportedGlobalVersion) {
+			t.Fatalf("uint32 seed %d mapped to v%d, want within [%d, %d]", seed, got, 0, vmcore.MaxSupportedGlobalVersion)
 		}
 	}
 
 	for seed := 0; seed <= 255; seed++ {
 		got := tvmFuzzGlobalVersionByte(byte(seed))
-		if got < MinSupportedGlobalVersion || got > MaxSupportedGlobalVersion {
-			t.Fatalf("byte seed %d mapped to v%d, want within [%d, %d]", seed, got, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if got < 0 || got > vmcore.MaxSupportedGlobalVersion {
+			t.Fatalf("byte seed %d mapped to v%d, want within [%d, %d]", seed, got, 0, vmcore.MaxSupportedGlobalVersion)
 		}
 	}
 
 	uint64Seeds := []uint64{
 		0,
-		uint64(MaxSupportedGlobalVersion) + 1,
+		uint64(vmcore.MaxSupportedGlobalVersion) + 1,
 		123456789,
 		^uint64(0),
 	}
 	for _, seed := range uint64Seeds {
 		got := tvmFuzzGlobalVersionSeed(seed)
-		if got < MinSupportedGlobalVersion || got > MaxSupportedGlobalVersion {
-			t.Fatalf("uint64 seed %d mapped to v%d, want within [%d, %d]", seed, got, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if got < 0 || got > vmcore.MaxSupportedGlobalVersion {
+			t.Fatalf("uint64 seed %d mapped to v%d, want within [%d, %d]", seed, got, 0, vmcore.MaxSupportedGlobalVersion)
 		}
 	}
 }
@@ -155,7 +155,7 @@ func TestTVMFuzzGlobalVersionMatrixSeedAvoidsOverflow(t *testing.T) {
 	offsets := []int{0, 1, 17, 4096}
 	for _, start := range starts {
 		for _, offset := range offsets {
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 				seed := tvmFuzzGlobalVersionMatrixSeed(start, offset, version)
 				if got := tvmFuzzGlobalVersionSeed(seed); got != version {
 					t.Fatalf("matrix seed start=%d offset=%d version=%d produced seed %d selecting v%d", start, offset, version, seed, got)

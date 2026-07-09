@@ -14,9 +14,9 @@ import (
 
 const (
 	expectedTransactionVersionFuzzerCount              = 66
-	expectedTransactionVersionFuzzerHash               = "600e24950eacd091df42919c836ee68cfd8bd0418ba95fd3da7af205562e4d0f"
+	expectedTransactionVersionFuzzerHash               = "358d6cff1d2a28c28d4c58e8f9db1f33bc793713607bf88d674eaf0223f0e2ff"
 	expectedTransactionFullRangeVersionFuzzerCount     = 55
-	expectedTransactionFullRangeVersionFuzzerHash      = "ec52255ff533802d88df9cd432ddde738e64335c020e7b2b359664a8f70659db"
+	expectedTransactionFullRangeVersionFuzzerHash      = "2ea4005802355c1c9679fee19a9b85c595fc8c76f88aeaaa55682dd50653cd44"
 	expectedTransactionTargetedRangeVersionFuzzerCount = 11
 	expectedTransactionTargetedRangeVersionFuzzerHash  = "13f956599d5192c4b06b22a60bdcdb8f35ff6e214a729da84d695b3c24833df9"
 	expectedTransactionTargetedBoundaryInventoryCount  = 21

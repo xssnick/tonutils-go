@@ -10,7 +10,7 @@ import (
 )
 
 func fuzzDictVersion(raw int64) int {
-	version := int(raw % int64(vm.DefaultGlobalVersion+1))
+	version := int(raw % int64(vm.MaxSupportedGlobalVersion+1))
 	if version < 0 {
 		version = -version
 	}
@@ -18,30 +18,30 @@ func fuzzDictVersion(raw int64) int {
 }
 
 func TestFuzzDictVersionCoversDefaultRange(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzDictVersion(int64(version)); got != version {
 			t.Fatalf("seed version %d mapped to %d", version, got)
 		}
 	}
-	if got := fuzzDictVersion(-int64(vm.DefaultGlobalVersion)); got != vm.DefaultGlobalVersion {
-		t.Fatalf("negative default version mapped to %d, want %d", got, vm.DefaultGlobalVersion)
+	if got := fuzzDictVersion(-int64(vm.MaxSupportedGlobalVersion)); got != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("negative default version mapped to %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
 	for _, raw := range []int64{
 		-1,
-		-int64(vm.DefaultGlobalVersion) - 1,
-		-int64(vm.DefaultGlobalVersion) - 2,
+		-int64(vm.MaxSupportedGlobalVersion) - 1,
+		-int64(vm.MaxSupportedGlobalVersion) - 2,
 		-123456789,
 		123456789,
 	} {
 		got := fuzzDictVersion(raw)
-		if got < 0 || got > vm.DefaultGlobalVersion {
-			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.DefaultGlobalVersion)
+		if got < 0 || got > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
 
 func FuzzTVMVersionedPrefixDictUnderflowPrecheck(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, uint8(0))
 		f.Add(version, uint8(1))
 	}
@@ -50,9 +50,9 @@ func FuzzTVMVersionedPrefixDictUnderflowPrecheck(f *testing.F) {
 		version := fuzzDictVersion(rawVersion)
 		opKind := rawOp % 2
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		var (
@@ -115,7 +115,7 @@ func pushPfxDictShortStackArgs(t *testing.T, state *vm.State, length int) {
 }
 
 func FuzzTVMVersionedPrefixDictShortStackPrecheckMatrix(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for op := uint8(0); op < 4; op++ {
 			for length := uint8(0); length <= 3; length++ {
 				f.Add(version, op, length)
@@ -134,9 +134,9 @@ func FuzzTVMVersionedPrefixDictShortStackPrecheckMatrix(f *testing.F) {
 		length := int(rawLen % (maxShortLen + 1))
 
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		pushPfxDictShortStackArgs(t, state, length)
 
@@ -164,7 +164,7 @@ func FuzzTVMVersionedPrefixDictShortStackPrecheckMatrix(f *testing.F) {
 }
 
 func FuzzTVMVersionedPrefixDictGetNilRootMiss(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for op := uint8(0); op < 4; op++ {
 			f.Add(version, op)
 		}
@@ -174,9 +174,9 @@ func FuzzTVMVersionedPrefixDictGetNilRootMiss(f *testing.F) {
 		version := fuzzDictVersion(rawVersion)
 		op := int(rawOp % 4)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0b1011, 4).ToSlice()); err != nil {
 			t.Fatalf("push input: %v", err)
@@ -219,7 +219,7 @@ func FuzzTVMVersionedPrefixDictGetNilRootMiss(f *testing.F) {
 }
 
 func FuzzTVMVersionedPrefixDictOversizedKeyMiss(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for op := uint8(0); op < 4; op++ {
 			f.Add(version, op, false)
 			f.Add(version, op, true)
@@ -240,9 +240,9 @@ func FuzzTVMVersionedPrefixDictOversizedKeyMiss(f *testing.F) {
 		}
 
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		key := cell.BeginCell().MustStoreUInt(0b11, 2).ToSlice()
 		var err error
@@ -301,7 +301,7 @@ func pushPrefixDictOversizedKeyMissArgs(t *testing.T, state *vm.State, key *cell
 }
 
 func FuzzTVMVersionedPfxDictSwitchNilRootFlagWithRef(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, uint16(4), uint16(0b1011), uint8(4))
 		f.Add(version, uint16(0), uint16(0), uint8(0))
 		f.Add(version, uint16(1023), uint16(0xff), uint8(8))
@@ -331,9 +331,9 @@ func FuzzTVMVersionedPfxDictSwitchNilRootFlagWithRef(f *testing.F) {
 		}
 
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		input := cell.BeginCell().MustStoreUInt(inputValue, inputBits).ToSlice()
 		if err := state.Stack.PushSlice(input.Copy()); err != nil {
@@ -359,7 +359,7 @@ func FuzzTVMVersionedPfxDictSwitchNilRootFlagWithRef(f *testing.F) {
 }
 
 func FuzzTVMVersionedSubdictPrefixErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 3; kind++ {
 			f.Add(version, kind, false, false, uint8(0))
 			f.Add(version, kind, true, false, uint8(1))
@@ -372,9 +372,9 @@ func FuzzTVMVersionedSubdictPrefixErrors(f *testing.F) {
 		version := fuzzDictVersion(rawVersion)
 		kind := dictKeyKind(rawKind % 3)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		keyBits := int64(8)
@@ -432,7 +432,7 @@ func FuzzTVMVersionedSubdictPrefixErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedSignedDeleteGetRangeErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint16(0))
 		f.Add(version, true, false, uint16(1))
 		f.Add(version, false, true, uint16(2))
@@ -442,9 +442,9 @@ func FuzzTVMVersionedSignedDeleteGetRangeErrors(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion int64, byRef bool, below bool, delta uint16) {
 		version := fuzzDictVersion(rawVersion)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		key := big.NewInt(128 + int64(delta%32))
@@ -470,7 +470,7 @@ func FuzzTVMVersionedSignedDeleteGetRangeErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedSignedGetRangeMisses(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint16(0))
 		f.Add(version, true, false, uint16(1))
 		f.Add(version, false, true, uint16(2))
@@ -480,9 +480,9 @@ func FuzzTVMVersionedSignedGetRangeMisses(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion int64, byRef bool, below bool, delta uint16) {
 		version := fuzzDictVersion(rawVersion)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		key := big.NewInt(128 + int64(delta%32))
@@ -513,7 +513,7 @@ func FuzzTVMVersionedSignedGetRangeMisses(f *testing.F) {
 }
 
 func FuzzTVMVersionedSignedGetOptRefRangeNulls(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, uint16(0))
 		f.Add(version, true, uint16(1))
 	}
@@ -521,9 +521,9 @@ func FuzzTVMVersionedSignedGetOptRefRangeNulls(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion int64, below bool, delta uint16) {
 		version := fuzzDictVersion(rawVersion)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		key := big.NewInt(128 + int64(delta%32))
@@ -554,7 +554,7 @@ func FuzzTVMVersionedSignedGetOptRefRangeNulls(f *testing.F) {
 }
 
 func FuzzTVMVersionedSignedSetGetOptRefRangeErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint16(0))
 		f.Add(version, true, false, uint16(1))
 		f.Add(version, false, true, uint16(2))
@@ -564,9 +564,9 @@ func FuzzTVMVersionedSignedSetGetOptRefRangeErrors(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion int64, below bool, delete bool, delta uint16) {
 		version := fuzzDictVersion(rawVersion)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		if delete {
@@ -606,7 +606,7 @@ func FuzzTVMVersionedSignedSetGetOptRefRangeErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedUnsignedSetGetOptRefRangeErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint16(0))
 		f.Add(version, true, false, uint16(1))
 		f.Add(version, false, true, uint16(2))
@@ -616,9 +616,9 @@ func FuzzTVMVersionedUnsignedSetGetOptRefRangeErrors(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion int64, below bool, delete bool, delta uint16) {
 		version := fuzzDictVersion(rawVersion)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		if delete {
@@ -658,7 +658,7 @@ func FuzzTVMVersionedUnsignedSetGetOptRefRangeErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedSetGetOptRefShortSliceKey(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, uint8(0))
 		f.Add(version, true, uint8(1))
 	}
@@ -666,9 +666,9 @@ func FuzzTVMVersionedSetGetOptRefShortSliceKey(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion int64, delete bool, rawBits uint8) {
 		version := fuzzDictVersion(rawVersion)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		if delete {
@@ -701,7 +701,7 @@ func FuzzTVMVersionedSetGetOptRefShortSliceKey(f *testing.F) {
 }
 
 func FuzzTVMVersionedSetGetOptRefPlainOldValueErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, uint16(0))
 		f.Add(version, true, uint16(1))
 	}
@@ -716,9 +716,9 @@ func FuzzTVMVersionedSetGetOptRefPlainOldValueErrors(f *testing.F) {
 		}
 
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		if delete {
 			if err := state.Stack.PushAny(nil); err != nil {
@@ -749,7 +749,7 @@ func FuzzTVMVersionedSetGetOptRefPlainOldValueErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedMinMaxRefPlainValueErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint8(0), uint16(0))
 		f.Add(version, true, false, uint8(1), uint16(1))
 		f.Add(version, false, true, uint8(2), uint16(2))
@@ -766,9 +766,9 @@ func FuzzTVMVersionedMinMaxRefPlainValueErrors(f *testing.F) {
 		}
 
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		if err := state.Stack.PushCell(dict.AsCell()); err != nil {
 			t.Fatalf("push root: %v", err)
@@ -787,7 +787,7 @@ func FuzzTVMVersionedMinMaxRefPlainValueErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedMinMaxKeyBitsRangeErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint8(0), uint16(0))
 		f.Add(version, true, false, uint8(1), uint16(1))
 		f.Add(version, false, true, uint8(2), uint16(2))
@@ -808,9 +808,9 @@ func FuzzTVMVersionedMinMaxKeyBitsRangeErrors(f *testing.F) {
 
 		root := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		if err := state.Stack.PushCell(root); err != nil {
 			t.Fatalf("push root: %v", err)
@@ -832,7 +832,7 @@ func FuzzTVMVersionedMinMaxKeyBitsRangeErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedNearKeyBitsRangeErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint8(0), uint16(0))
 		f.Add(version, true, false, uint8(1), uint16(1))
 		f.Add(version, false, true, uint8(2), uint16(2))
@@ -853,9 +853,9 @@ func FuzzTVMVersionedNearKeyBitsRangeErrors(f *testing.F) {
 
 		root := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		if kind == dictKeySlice {
 			if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0, 1).ToSlice()); err != nil {
@@ -902,7 +902,7 @@ func FuzzTVMVersionedNearKeyBitsRangeErrors(f *testing.F) {
 }
 
 func FuzzTVMVersionedNearShortSliceKeyUnderflow(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, false, uint8(0))
 		f.Add(version, true, false, uint8(1))
 		f.Add(version, false, true, uint8(2))
@@ -915,9 +915,9 @@ func FuzzTVMVersionedNearShortSliceKeyUnderflow(f *testing.F) {
 		shortBits := uint(rawBits % uint8(keyBits))
 
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0, shortBits).ToSlice()); err != nil {
 			t.Fatalf("push key: %v", err)
@@ -938,7 +938,7 @@ func FuzzTVMVersionedNearShortSliceKeyUnderflow(f *testing.F) {
 }
 
 func FuzzTVMVersionedSignedDeleteRangeErrors(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, uint16(0))
 		f.Add(version, true, uint16(1))
 	}
@@ -946,9 +946,9 @@ func FuzzTVMVersionedSignedDeleteRangeErrors(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion int64, below bool, delta uint16) {
 		version := fuzzDictVersion(rawVersion)
 		state := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		key := big.NewInt(128 + int64(delta%32))

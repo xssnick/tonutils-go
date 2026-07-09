@@ -18,7 +18,7 @@ import (
 )
 
 func fuzzFuncsVersion(raw int64) int {
-	version := int(raw % int64(vm.DefaultGlobalVersion+1))
+	version := int(raw % int64(vm.MaxSupportedGlobalVersion+1))
 	if version < 0 {
 		version = -version
 	}
@@ -26,24 +26,24 @@ func fuzzFuncsVersion(raw int64) int {
 }
 
 func TestFuzzFuncsVersionCoversDefaultRange(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzFuncsVersion(int64(version)); got != version {
 			t.Fatalf("seed version %d mapped to %d", version, got)
 		}
 	}
-	if got := fuzzFuncsVersion(-int64(vm.DefaultGlobalVersion)); got != vm.DefaultGlobalVersion {
-		t.Fatalf("negative default version mapped to %d, want %d", got, vm.DefaultGlobalVersion)
+	if got := fuzzFuncsVersion(-int64(vm.MaxSupportedGlobalVersion)); got != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("negative default version mapped to %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
 	for _, raw := range []int64{
 		-1,
-		-int64(vm.DefaultGlobalVersion) - 1,
-		-int64(vm.DefaultGlobalVersion) - 2,
+		-int64(vm.MaxSupportedGlobalVersion) - 1,
+		-int64(vm.MaxSupportedGlobalVersion) - 2,
 		-123456789,
 		123456789,
 	} {
 		got := fuzzFuncsVersion(raw)
-		if got < 0 || got > vm.DefaultGlobalVersion {
-			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.DefaultGlobalVersion)
+		if got < 0 || got > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
@@ -103,10 +103,10 @@ func FuzzTVMVersionedMessageAddressParsing(f *testing.F) {
 	f.Add(int64(9), uint8(1), false, uint8(1), uint32(0x1234), uint16(257))
 	f.Add(int64(10), uint8(1), false, uint8(1), uint32(0x1234), uint16(257))
 	f.Add(int64(10), uint8(1), true, uint8(7), uint32(0xfeed), uint16(64))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(0), false, uint8(1), uint32(0x1234), uint16(256))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(0), true, uint8(3), uint32(0xa5), uint16(256))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(1), false, uint8(1), uint32(0x1234), uint16(257))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(0), false, uint8(1), uint32(0x1234), uint16(256))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(0), true, uint8(3), uint32(0xa5), uint16(256))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(1), false, uint8(1), uint32(0x1234), uint16(257))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 2; kind++ {
 			f.Add(version, kind, false, uint8(1), uint32(0x1234), uint16(256))
 			f.Add(version, kind, true, uint8(3), uint32(0xa5), uint16(257))
@@ -164,8 +164,8 @@ func FuzzTVMVersionedRewriteAddressAnycastBoundaries(f *testing.F) {
 	f.Add(int64(9), uint8(1), true, uint8(3), uint32(0xa5))
 	f.Add(int64(10), uint8(0), true, uint8(3), uint32(0xa5))
 	f.Add(int64(10), uint8(2), true, uint8(3), uint32(0xa5))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(3), false, uint8(1), uint32(0x1234))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(3), false, uint8(1), uint32(0x1234))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 4; opKind++ {
 			f.Add(version, opKind, false, uint8(1), uint32(0x1000)+uint32(opKind))
 			f.Add(version, opKind, true, uint8(3), uint32(0x2000)+uint32(opKind))
@@ -181,7 +181,6 @@ func FuzzTVMVersionedRewriteAddressAnycastBoundaries(f *testing.F) {
 		addr := fuzzFuncsMessageAddr(0, anycast, rawDepth, seed, 256)
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 		if err := st.Stack.PushSlice(addr); err != nil {
 			t.Fatalf("push std addr: %v", err)
 		}
@@ -273,7 +272,7 @@ func FuzzTVMVersionedStdAddrQuietOps(f *testing.F) {
 	f.Add(int64(10), uint8(0), true, uint8(3), uint32(0xa5), uint16(256))
 	f.Add(int64(12), uint8(1), false, uint8(1), uint32(0x5678), uint16(257))
 	f.Add(int64(14), uint8(5), false, uint8(1), uint32(0), uint16(0))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 6; kind++ {
 			f.Add(version, kind, false, uint8(1), uint32(0x1000)+uint32(kind), uint16(256))
 			f.Add(version, kind, true, uint8(3), uint32(0x2000)+uint32(kind), uint16(257))
@@ -287,7 +286,6 @@ func FuzzTVMVersionedStdAddrQuietOps(f *testing.F) {
 		nonStdAddr := fuzzFuncsMessageAddr(1, anycast, rawDepth, seed, rawBits)
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 
 		switch kind {
 		case 0:
@@ -442,7 +440,7 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 	f.Add(int64(12), uint8(6), uint64(0xca))
 	f.Add(int64(13), uint8(7), uint64(0))
 	f.Add(int64(14), uint8(7), uint64(0))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 8; kind++ {
 			f.Add(version, kind, uint64(kind))
 		}
@@ -455,7 +453,6 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 		case 0:
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
 			if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
 				t.Fatalf("push scalar: %v", err)
 			}
@@ -469,7 +466,6 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 		case 1:
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
 			if err := st.Stack.PushInt(fuzzFuncsInvalidRistrettoPoint(seed)); err != nil {
 				t.Fatalf("push point: %v", err)
 			}
@@ -501,8 +497,7 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 		case 2:
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
-			st.ChksigAlwaysSucceed = seed&1 != 0
+			st.SignatureCheckAlwaysSucceed = seed&1 != 0
 			sig := make([]byte, ed25519.SignatureSize)
 			sig[0] = byte(seed)
 			identityKey := new(big.Int).Lsh(big.NewInt(1), 248)
@@ -527,24 +522,23 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 			if version >= 14 && tvmEd25519RejectedPublicKeyV14(keyBytes) {
 				want = false
 			}
-			want = want || st.ChksigAlwaysSucceed
+			want = want || st.SignatureCheckAlwaysSucceed
 			if got != want {
-				t.Fatalf("CHKSIGNU identity version=%d always=%v got=%v want=%v", version, st.ChksigAlwaysSucceed, got, want)
+				t.Fatalf("CHKSIGNU identity version=%d always=%v got=%v want=%v", version, st.SignatureCheckAlwaysSucceed, got, want)
 			}
 			wantCounter := uint32(0)
 			wantFreeGas := int64(0)
 			if version >= 4 {
 				wantCounter = 1
-				wantFreeGas = vm.ChksgnGasPrice
+				wantFreeGas = vm.SignatureCheckGasPrice
 			}
-			if st.ChksgnCounter != wantCounter || st.Gas.FreeConsumed != wantFreeGas {
-				t.Fatalf("CHKSIGNU identity version=%d chksgn counter/free = %d/%d, want %d/%d", version, st.ChksgnCounter, st.Gas.FreeConsumed, wantCounter, wantFreeGas)
+			if st.SignatureCheckCounter != wantCounter || st.Gas.FreeConsumed != wantFreeGas {
+				t.Fatalf("CHKSIGNU identity version=%d signature check counter/free = %d/%d, want %d/%d", version, st.SignatureCheckCounter, st.Gas.FreeConsumed, wantCounter, wantFreeGas)
 			}
 		case 3:
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
-			st.ChksigAlwaysSucceed = true
+			st.SignatureCheckAlwaysSucceed = true
 			sig := make([]byte, ed25519.SignatureSize)
 			sig[0] = byte(seed)
 			if err := st.Stack.PushSlice(cell.BeginCell().MustStoreSlice([]byte{byte(seed), byte(seed >> 8)}, 16).ToSlice()); err != nil {
@@ -566,15 +560,14 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 			wantFreeGas := int64(0)
 			if version >= 4 {
 				wantCounter = 1
-				wantFreeGas = vm.ChksgnGasPrice
+				wantFreeGas = vm.SignatureCheckGasPrice
 			}
-			if st.ChksgnCounter != wantCounter || st.Gas.FreeConsumed != wantFreeGas {
-				t.Fatalf("CHKSIGNS always version=%d chksgn counter/free = %d/%d, want %d/%d", version, st.ChksgnCounter, st.Gas.FreeConsumed, wantCounter, wantFreeGas)
+			if st.SignatureCheckCounter != wantCounter || st.Gas.FreeConsumed != wantFreeGas {
+				t.Fatalf("CHKSIGNS always version=%d signature check counter/free = %d/%d, want %d/%d", version, st.SignatureCheckCounter, st.Gas.FreeConsumed, wantCounter, wantFreeGas)
 			}
 		case 4:
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
 			key := bytes.Repeat([]byte{0xFF}, 32)
 			key[31] = byte(seed)
 			if err := st.Stack.PushInt(new(big.Int).SetBytes(key)); err != nil {
@@ -592,7 +585,6 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 		case 5:
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
 			badKey := append([]byte{0x05}, bytes.Repeat([]byte{byte(seed)}, 32)...)
 			sig := bytes.Repeat([]byte{byte(seed >> 8)}, 64)
 			if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
@@ -613,7 +605,6 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 		case 6:
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
 			builder := cell.BeginCell().
 				MustStoreUInt(seed&0xff, 8).
 				MustStoreRef(cell.BeginCell().MustStoreUInt((seed>>8)&0xff, 8).EndCell())
@@ -644,7 +635,6 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 
 			st := newFuncTestState(t, nil)
 			st.GlobalVersion = version
-			st.GlobalVersionConfigured = true
 			if err := st.Stack.PushInt(new(big.Int).SetBytes(hash[:])); err != nil {
 				t.Fatalf("push ECRECOVER hash: %v", err)
 			}
@@ -743,7 +733,7 @@ func fuzzFuncsAssertRistrettoQuietFailure(t *testing.T, st *vm.State, context st
 }
 
 func FuzzTVMRistrettoIdentityAndZeroScalarV14Boundary(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 6; opKind++ {
 			f.Add(version, opKind, uint64(version)<<8|uint64(opKind))
 		}
@@ -753,7 +743,6 @@ func FuzzTVMRistrettoIdentityAndZeroScalarV14Boundary(f *testing.F) {
 		version := fuzzFuncsVersion(rawVersion)
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 		context := "version=" + big.NewInt(int64(version)).String()
 
 		switch rawOp % 6 {
@@ -890,7 +879,6 @@ func fuzzFuncsRunEcrecoverEthereumCase(t *testing.T, version int, tc fuzzFuncsEc
 
 	st := newFuncTestState(t, nil)
 	st.GlobalVersion = version
-	st.GlobalVersionConfigured = true
 	if err := st.Stack.PushInt(new(big.Int).SetBytes(tc.hash[:])); err != nil {
 		t.Fatalf("push ECRECOVER hash: %v", err)
 	}
@@ -962,7 +950,7 @@ func TestTVMEcrecoverEthereumRecoveryIDsStartAtV14BothIDs(t *testing.T) {
 }
 
 func FuzzTVMEcrecoverEthereumRecoveryIDsV14Boundary(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, uint8(0), uint64(version))
 		f.Add(version, uint8(1), uint64(version+1))
 	}
@@ -1011,7 +999,7 @@ func FuzzTVMVersionedSendMsgTupleAmountExtraSlot(f *testing.F) {
 	f.Add(int64(10), uint8(0), int64(123), uint8(2))
 	f.Add(int64(9), uint8(1), int64(-456), uint8(1))
 	f.Add(int64(10), uint8(1), int64(-456), uint8(1))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for idxKind := uint8(0); idxKind < 2; idxKind++ {
 			for form := uint8(0); form < 5; form++ {
 				f.Add(version, idxKind, int64(version*17), form)
@@ -1046,7 +1034,6 @@ func FuzzTVMVersionedSendMsgTupleAmountExtraSlot(f *testing.F) {
 
 		st := newFuncTestState(t, map[int]any{idx: param})
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 
 		amount, hasExtra, err := sendMsgTupleAmount(st, idx, name)
 		switch {
@@ -1088,7 +1075,7 @@ func FuzzTVMVersionedSendMsgSizeLimitConfigBoundary(f *testing.F) {
 	f.Add(int64(5), uint8(3), uint32(0), uint32(0))
 	f.Add(int64(6), uint8(3), uint32(0), uint32(0))
 	f.Add(int64(6), uint8(4), uint32(0), uint32(0))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for form := uint8(0); form < 5; form++ {
 			f.Add(version, form, uint32(version+1), uint32((version+1)*17))
 		}
@@ -1130,7 +1117,6 @@ func FuzzTVMVersionedSendMsgSizeLimitConfigBoundary(f *testing.F) {
 		}
 		st := newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: cfg})
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 
 		got, err := getSizeLimitsMaxMsgCells(st)
 		if version < 6 || form == 0 {
@@ -1160,7 +1146,7 @@ func FuzzTVMVersionedSendMsgPricesSourceBoundary(f *testing.F) {
 	f.Add(int64(6), false, uint8(1), uint64(13), uint64(97))
 	f.Add(int64(5), true, uint8(2), uint64(14), uint64(96))
 	f.Add(int64(6), true, uint8(2), uint64(14), uint64(96))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for sourceForm := uint8(0); sourceForm < 3; sourceForm++ {
 			f.Add(version, false, sourceForm, uint64(version+1), uint64((version+1)*10))
 			f.Add(version, true, sourceForm, uint64(version+2), uint64((version+2)*10))
@@ -1199,7 +1185,6 @@ func FuzzTVMVersionedSendMsgPricesSourceBoundary(f *testing.F) {
 			paramIdxUnpackedConfig: unpacked,
 		})
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 
 		prices, err := getSendMsgPrices(st, masterchain)
 		switch {
@@ -1242,11 +1227,11 @@ func FuzzTVMVersionedActionModeBoundaries(f *testing.F) {
 	f.Add(int64(3), uint8(2), uint8(16))
 	f.Add(int64(4), uint8(2), uint8(18))
 	f.Add(int64(4), uint8(2), uint8(19))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(0), uint8(32))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(3), uint8(32))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(1), uint8(31))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(2), uint8(19))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(0), uint8(32))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(3), uint8(32))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(1), uint8(31))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(2), uint8(19))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 4; kind++ {
 			for _, mode := range []uint8{2, 15, 16, 18, 19, 31, 32} {
 				f.Add(version, kind, mode)
@@ -1262,7 +1247,6 @@ func FuzzTVMVersionedActionModeBoundaries(f *testing.F) {
 		st := newFuncTestState(t, nil)
 		st.InitForExecution()
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 
 		var err error
 		switch kind {
@@ -1317,7 +1301,7 @@ func FuzzTVMVersionedActionModeBoundaries(f *testing.F) {
 }
 
 func FuzzTVMVersionedDataSizeLowGasDeferral(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 4; kind++ {
 			f.Add(version, kind, uint8(1), uint8(version), uint8(kind+1))
 			f.Add(version, kind, uint8(3), uint8(version+7), uint8(kind+5))
@@ -1347,7 +1331,7 @@ func FuzzTVMVersionedDataSizeLowGasDeferral(f *testing.F) {
 		}
 		rootCell := root.EndCell()
 
-		st := vm.NewExecutionStateWithGlobalVersion(version, vm.GasWithLimit(50), nil, tuple.Tuple{}, vm.NewStack())
+		st := vm.NewExecutionState(version, vm.GasWithLimit(50), nil, tuple.Tuple{}, vm.NewStack())
 		st.InitForExecution()
 		if kind < 2 {
 			if err := st.Stack.PushCell(rootCell); err != nil {
@@ -1431,7 +1415,7 @@ func FuzzTVMVersionedFeeHashUnderflowPrecheck(f *testing.F) {
 	f.Add(int64(9), uint8(6), false, uint8(0))
 	f.Add(int64(14), uint8(4), true, uint8(0))
 	f.Add(int64(14), uint8(6), false, uint8(254))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 7; kind++ {
 			f.Add(version, kind, false, uint8(0))
 			f.Add(version, kind, true, uint8(254))
@@ -1442,9 +1426,9 @@ func FuzzTVMVersionedFeeHashUnderflowPrecheck(f *testing.F) {
 		version := fuzzFuncsVersion(rawVersion)
 		kind := rawKind % 7
 		st := &vm.State{
-			GlobalVersion:           version,
-			GlobalVersionConfigured: true,
-			Stack:                   vm.NewStack(),
+			GlobalVersion: version,
+
+			Stack: vm.NewStack(),
 		}
 
 		var err error
@@ -1573,7 +1557,6 @@ func fuzzFuncsFeeState(t *testing.T, version int, seed uint64) (*vm.State, uint6
 		14: unpacked,
 	})
 	st.GlobalVersion = version
-	st.GlobalVersionConfigured = true
 	return st, extraAmount
 }
 
@@ -1582,7 +1565,7 @@ func FuzzTVMVersionedFeeHashRuntimeEdges(f *testing.F) {
 	f.Add(int64(9), uint8(1), uint64(1))
 	f.Add(int64(10), uint8(2), uint64(2))
 	f.Add(int64(14), uint8(3), uint64(3))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 6; kind++ {
 			f.Add(version, kind, uint64(version)<<8|uint64(kind))
 		}
@@ -1827,7 +1810,7 @@ func fuzzFuncsWantBLSG2MultiExp(t *testing.T, g2a []byte, scalarA *big.Int, g2b 
 }
 
 func FuzzTVMVersionedBLSRuntimeEdges(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 8; kind++ {
 			f.Add(version, kind, uint64(version)<<8|uint64(kind))
 		}
@@ -1838,7 +1821,6 @@ func FuzzTVMVersionedBLSRuntimeEdges(f *testing.F) {
 		kind := rawKind % 8
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 
 		msg := fuzzFuncsBLSMessage(seed)
 		msg2 := fuzzFuncsBLSMessage(seed ^ 0xA5A5)
@@ -2059,7 +2041,7 @@ func fuzzFuncsC7Params(t *testing.T, seed uint64) tuple.Tuple {
 func newFuzzFuncsVersionedState(t *testing.T, version int, c7 tuple.Tuple) *vm.State {
 	t.Helper()
 
-	st := vm.NewExecutionStateWithGlobalVersion(version, vm.NewGas(), nil, c7, vm.NewStack())
+	st := vm.NewExecutionState(version, vm.NewGas(), nil, c7, vm.NewStack())
 	st.InitForExecution()
 	return st
 }
@@ -2144,9 +2126,9 @@ func FuzzTVMVersionedGlobalOpsEdges(f *testing.F) {
 	f.Add(int64(4), uint8(2), int16(-1), uint8(1), uint64(0x44))
 	f.Add(int64(6), uint8(3), int16(255), uint8(3), uint64(0x55))
 	f.Add(int64(6), uint8(4), int16(37), uint8(4), uint64(0x66))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(4), int16(-1), uint8(5), uint64(0x77))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(5), int16(31), uint8(0), uint64(0x88))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(4), int16(-1), uint8(5), uint64(0x77))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(5), int16(31), uint8(0), uint64(0x88))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 6; kind++ {
 			f.Add(version, kind, int16(kind)-1, kind, uint64(version)<<16|uint64(kind))
 			f.Add(version, kind, int16(254+kind), kind+1, uint64(version)<<24|uint64(kind)<<8)
@@ -2263,8 +2245,8 @@ func FuzzTVMVersionedC7ParamsPRNGEdges(f *testing.F) {
 	f.Add(int64(6), uint8(2), uint64(0x2222))
 	f.Add(int64(9), uint8(3), uint64(0x3333))
 	f.Add(int64(11), uint8(4), uint64(0x4444))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(5), uint64(0x5555))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(5), uint64(0x5555))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for kind := uint8(0); kind < 8; kind++ {
 			f.Add(version, kind, uint64(version)<<8|uint64(kind))
 		}
@@ -2386,9 +2368,9 @@ func FuzzTVMVersionedC7ParamsPRNGEdges(f *testing.F) {
 func FuzzTVMVersionedInMsgParamDirectConstructorMask(f *testing.F) {
 	f.Add(int64(0), uint8(16), uint64(0))
 	f.Add(int64(11), uint8(18), uint64(0x1111))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(31), uint64(0x2222))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(255), uint64(0x3333))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(31), uint64(0x2222))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(255), uint64(0x3333))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for _, idx := range []uint8{0, 1, 2, 15, 16, 31, 255} {
 			f.Add(version, idx, uint64(version)<<16|uint64(idx))
 		}

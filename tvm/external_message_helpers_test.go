@@ -47,8 +47,8 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 			t.Fatalf("unexpected incoming grams: %d", got)
 		}
 
-		if got := messageUnpackedConfig(MessageEmulationConfig{}, 0); got != nil {
-			t.Fatalf("zero config should not synthesize unpacked config, got %T", got)
+		if got := messageUnpackedConfig(MessageEmulationConfig{Config: testPreparedBlockchainConfig(t)}, 0); got != nil {
+			t.Fatalf("empty prepared config should not synthesize unpacked config, got %T", got)
 		}
 
 		cfgTuple := tuple.NewTupleValue("cfg")
@@ -59,7 +59,10 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 			t.Fatalf("explicit unpacked config should pass through, got %T", got)
 		}
 
-		synth := messageUnpackedConfig(MessageEmulationConfig{GlobalID: 0x11223344}, 0).(tuple.Tuple)
+		synth := messageUnpackedConfig(MessageEmulationConfig{
+			Config:   testPreparedBlockchainConfig(t),
+			GlobalID: 0x11223344,
+		}, 0).(tuple.Tuple)
 		if synth.Len() != 7 {
 			t.Fatalf("unexpected synthesized unpacked config len: %d", synth.Len())
 		}
@@ -72,7 +75,7 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		}
 
 		fromRoot := messageUnpackedConfig(MessageEmulationConfig{
-			Config: MustPrepareConfig(messageUnpackedConfigRoot(t)),
+			Config: MustPrepareBlockchainConfig(messageUnpackedConfigRoot(t)),
 		}, 150).(tuple.Tuple)
 		if fromRoot.Len() != 7 {
 			t.Fatalf("unexpected root unpacked config len: %d", fromRoot.Len())
@@ -299,7 +302,7 @@ func TestBuildMessageEmulationC7CopiesGlobals(t *testing.T) {
 
 	balance := big.NewInt(321)
 	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
-	c7, err := buildMessageEmulationC7(tonopsTestAddr, code, cfg, balance, vmcore.DefaultGlobalVersion)
+	c7, err := buildMessageEmulationC7(tonopsTestAddr, code, cfg, balance, vmcore.MaxSupportedGlobalVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +351,9 @@ func TestBuildMessageEmulationC7CopiesGlobals(t *testing.T) {
 }
 
 func TestBuildMessageEmulationC7UsesRealNilForAbsentPrecompiledGas(t *testing.T) {
-	c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), MessageEmulationConfig{}, big.NewInt(0), vmcore.DefaultGlobalVersion)
+	c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), MessageEmulationConfig{
+		Config: testPreparedBlockchainConfig(t),
+	}, big.NewInt(0), vmcore.MaxSupportedGlobalVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,14 +381,14 @@ func TestBuildMessageEmulationC7ClonesMutableConfigValues(t *testing.T) {
 		UnpackedConfig: tuple.NewTupleValue(unpackedSlice),
 	}
 
-	c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), cfg, big.NewInt(0), vmcore.DefaultGlobalVersion)
+	c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), cfg, big.NewInt(0), vmcore.MaxSupportedGlobalVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// nested tuple values are snapshotted when c7 is bound to the VM on
 	// execution start, not at build time
-	st := vmcore.NewExecutionStateWithGlobalVersion(vmcore.DefaultGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, c7, vmcore.NewStack())
+	st := vmcore.NewExecutionState(vmcore.MaxSupportedGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, c7, vmcore.NewStack())
 	st.InitForExecution()
 	c7 = st.Reg.C7
 
@@ -461,7 +466,7 @@ func FuzzMessageTupleNormalizationIsolation(f *testing.F) {
 			t.Fatalf("cloned tuple len = %d, want 4", cloned.Len())
 		}
 
-		st := vmcore.NewExecutionStateWithGlobalVersion(vmcore.DefaultGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, tuple.NewTupleValue(cloned), vmcore.NewStack())
+		st := vmcore.NewExecutionState(vmcore.MaxSupportedGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, tuple.NewTupleValue(cloned), vmcore.NewStack())
 		st.InitForExecution()
 		boundRaw, err := st.Reg.C7.RawIndex(0)
 		if err != nil {
@@ -533,7 +538,9 @@ func TestBuildMessageEmulationC7GlobalVersionLength(t *testing.T) {
 		{version: 14, wantLen: 18},
 	} {
 		t.Run(big.NewInt(int64(tc.version)).String(), func(t *testing.T) {
-			c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), MessageEmulationConfig{}, big.NewInt(0), tc.version)
+			c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), MessageEmulationConfig{
+				Config: testPreparedBlockchainConfigWithVersion(t, tc.version),
+			}, big.NewInt(0), tc.version)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -551,7 +558,7 @@ func TestBuildMessageEmulationC7GlobalVersionLength(t *testing.T) {
 }
 
 func FuzzBuildMessageEmulationC7VersionFieldBoundaries(f *testing.F) {
-	for version := uint32(MinSupportedGlobalVersion); version <= uint32(MaxSupportedGlobalVersion); version++ {
+	for version := uint32(0); version <= uint32(vmcore.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, uint8(version), uint64(0x1000)+uint64(version))
 	}
 
@@ -681,8 +688,9 @@ func assertMessageC7TupleIntAt(t *testing.T, tup tuple.Tuple, idx, tupleIdx int,
 
 func TestBuildMessageEmulationC7RejectsReservedGlobalIndex(t *testing.T) {
 	_, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), MessageEmulationConfig{
+		Config:  testPreparedBlockchainConfig(t),
 		Globals: map[int]any{0: 1},
-	}, big.NewInt(0), vmcore.DefaultGlobalVersion)
+	}, big.NewInt(0), vmcore.MaxSupportedGlobalVersion)
 	if err == nil {
 		t.Fatal("expected reserved global index to fail")
 	}
@@ -692,7 +700,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	if _, err := messageExecutionGlobalVersion(MessageEmulationConfig{}); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("missing config error = %v, want %v", err, errConfigRootRequired)
 	}
-	if _, err := PrepareConfig(nil); !errors.Is(err, errConfigRootRequired) {
+	if _, err := PrepareBlockchainConfig(nil); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("missing config root error = %v, want %v", err, errConfigRootRequired)
 	}
 
@@ -701,7 +709,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 		t.Fatalf("build global version cell: %v", err)
 	}
 	got, err := messageExecutionGlobalVersion(MessageEmulationConfig{
-		Config: MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		Config: MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: versionCell,
 		})),
 	})
@@ -713,7 +721,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	}
 
 	got, err = messageExecutionGlobalVersion(MessageEmulationConfig{
-		Config: MustPrepareConfig(messageExecutionGlobalVersionConfigRoot(t, 4)),
+		Config: MustPrepareBlockchainConfig(messageExecutionGlobalVersionConfigRoot(t, 4)),
 	})
 	if err != nil {
 		t.Fatalf("config global version failed: %v", err)
@@ -722,34 +730,34 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 		t.Fatalf("config global version = %d, want 4", got)
 	}
 
-	unsupportedVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: uint32(MaxSupportedGlobalVersion + 1)})
+	unsupportedVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: uint32(vmcore.MaxSupportedGlobalVersion + 1)})
 	if err != nil {
 		t.Fatalf("build unsupported global version cell: %v", err)
 	}
-	if _, err = PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	if _, err = PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: unsupportedVersionCell,
 	})); err == nil {
 		t.Fatal("unsupported config global version should fail")
 	}
 
-	if _, err = PrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+	if _, err = PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
 		t.Fatal("absent config global version should fail")
 	}
 
 	malformedRoot := buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 8).EndCell(),
 	})
-	if _, err = PrepareConfig(malformedRoot); err == nil {
+	if _, err = PrepareBlockchainConfig(malformedRoot); err == nil {
 		t.Fatal("malformed config global version should fail")
 	}
 }
 
 func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint16(version), uint8(0))
 		f.Add(uint16(version), uint8(1))
 		f.Add(uint16(version), uint8(2))
-		f.Add(uint16(MaxSupportedGlobalVersion+1), uint8(3))
+		f.Add(uint16(vmcore.MaxSupportedGlobalVersion+1), uint8(3))
 		f.Add(uint16(version), uint8(4))
 	}
 
@@ -770,7 +778,7 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 			root = messageExecutionGlobalVersionConfigRoot(t, version)
 			want = int(version)
 		case 3:
-			version := uint32(MaxSupportedGlobalVersion + 1 + int(rawConfig%3))
+			version := uint32(vmcore.MaxSupportedGlobalVersion + 1 + int(rawConfig%3))
 			root = messageExecutionGlobalVersionConfigRoot(t, version)
 			wantErr = true
 		case 4:
@@ -780,7 +788,7 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 			wantErr = true
 		}
 
-		prepared, err := PrepareConfig(root)
+		prepared, err := PrepareBlockchainConfig(root)
 		if wantErr {
 			if err == nil {
 				t.Fatalf("case=%d config=%d prepared config version %d, want error", caseIdx, rawConfig, prepared.GlobalVersion())

@@ -324,7 +324,7 @@ func TestTupleNestedIndexAndGasErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("ExplodeOutOfGasLeavesPushedItems", func(t *testing.T) {
-		state := &vm.State{Stack: vm.NewStack(), Gas: vm.Gas{}}
+		state := &vm.State{Stack: vm.NewStack(), Gas: vm.Gas{}, GlobalVersion: vm.MaxSupportedGlobalVersion}
 		mustPushTupleValue(t, state, big.NewInt(4), big.NewInt(5))
 
 		assertTupleVMError(t, EXPLODE(2).Interpret(state), vmerr.CodeOutOfGas)
@@ -338,7 +338,7 @@ func TestTupleNestedIndexAndGasErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("UntupleOutOfGasLeavesPushedItems", func(t *testing.T) {
-		state := &vm.State{Stack: vm.NewStack(), Gas: vm.Gas{}}
+		state := &vm.State{Stack: vm.NewStack(), Gas: vm.Gas{}, GlobalVersion: vm.MaxSupportedGlobalVersion}
 		mustPushTupleValue(t, state, big.NewInt(6), big.NewInt(7))
 
 		assertTupleVMError(t, UNTUPLE(2).Interpret(state), vmerr.CodeOutOfGas)
@@ -379,8 +379,9 @@ func TestTupleTailAndNullOpEdges(t *testing.T) {
 
 	t.Run("TPushFailsWhenTupleGasCannotBeCharged", func(t *testing.T) {
 		state := &vm.State{
-			Stack: vm.NewStack(),
-			Gas:   vm.Gas{},
+			Stack:         vm.NewStack(),
+			Gas:           vm.Gas{},
+			GlobalVersion: vm.MaxSupportedGlobalVersion,
 		}
 		mustPushTupleValue(t, state, big.NewInt(1))
 		if err := state.Stack.PushInt(big.NewInt(2)); err != nil {

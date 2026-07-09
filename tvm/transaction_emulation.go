@@ -15,7 +15,7 @@ import (
 )
 
 // TransactionOptions carries the genuinely per-transaction execution inputs.
-// Everything else lives in BlockContext (per block) and PreparedConfig (per
+// Everything else lives in BlockContext (per block) and PreparedBlockchainConfig (per
 // config epoch).
 type TransactionOptions struct {
 	// LogicalTime is the minimal logical time of the transaction. The
@@ -34,9 +34,9 @@ type TransactionOptions struct {
 	// BuildProof builds a Merkle usage proof over the account state covering
 	// the compute-phase reads (returned in ExecutionResult.Proof).
 	BuildProof bool
-	// ChksigAlwaysSucceed makes signature checks succeed unconditionally
+	// SignatureCheckAlwaysSucceed makes signature checks succeed unconditionally
 	// (fee estimation flows).
-	ChksigAlwaysSucceed bool
+	SignatureCheckAlwaysSucceed bool
 	// TraceHook observes VM execution.
 	TraceHook vm.TraceHook
 }
@@ -204,7 +204,7 @@ type transactionSizeLimits struct {
 // block context plus derived phase values feeding the c7 tuple.
 type transactionExecEnv struct {
 	block *BlockContext
-	cfg   *PreparedConfig
+	cfg   *PreparedBlockchainConfig
 	opts  *TransactionOptions
 
 	acc     *transactionRuntimeAccount
@@ -296,9 +296,13 @@ func transactionMaybeBigValue(v *big.Int) any {
 }
 
 // transactionExecutionLibraries combines the compute-phase library collections
-// the reference implementation uses: message state-init libraries, account
-// libraries and the block-level libraries.
-func transactionExecutionLibraries(acc *transactionRuntimeAccount, blockLibraries []*cell.Cell) []*cell.Cell {
+// the reference implementation uses. Since global version 15, account-private
+// and inbound StateInit libraries are excluded from the VM context.
+func transactionExecutionLibraries(acc *transactionRuntimeAccount, blockLibraries []*cell.Cell, globalVersion uint32) []*cell.Cell {
+	if globalVersion >= 15 {
+		return blockLibraries
+	}
+
 	var inMsgLibrary, accountLibrary *cell.Cell
 	if acc.inMsgLibraries != nil {
 		inMsgLibrary = acc.inMsgLibraries.AsCell()
@@ -863,8 +867,8 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, env *t
 		return nil, err
 	}
 
-	libraries := transactionExecutionLibraries(acc, env.block.libraries)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, env.stopOnAccept, env.opts.ChksigAlwaysSucceed, env.proof, env.opts.TraceHook, int(env.cfg.version), libraries...)
+	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, libraries...)
 }
 
 func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, env *transactionExecEnv, gas vm.Gas) (*MessageExecutionResult, error) {
@@ -893,8 +897,8 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 		return nil, err
 	}
 
-	libraries := transactionExecutionLibraries(acc, env.block.libraries)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, false, env.opts.ChksigAlwaysSucceed, env.proof, env.opts.TraceHook, int(env.cfg.version), libraries...)
+	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, false, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, libraries...)
 }
 
 const transactionLTAlignment = uint64(1_000_000)

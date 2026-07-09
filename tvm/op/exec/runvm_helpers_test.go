@@ -50,7 +50,7 @@ func TestRUNVMSerializeDeserialize(t *testing.T) {
 
 func TestRUNVMWrapperErrorStackEffects(t *testing.T) {
 	t.Run("RUNVMActionBadCodeConsumesCodeOnly", func(t *testing.T) {
-		state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+		state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
 			t.Fatalf("push residual: %v", err)
 		}
@@ -69,7 +69,7 @@ func TestRUNVMWrapperErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("RUNVMXBadModeConsumesMode", func(t *testing.T) {
-		state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+		state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
 			t.Fatalf("push bad mode: %v", err)
 		}
@@ -81,7 +81,7 @@ func TestRUNVMWrapperErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("RUNVMXInvalidFlagsPreservesOperands", func(t *testing.T) {
-		state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+		state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 		code := cell.BeginCell().EndCell().MustBeginParse()
 		if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
 			t.Fatalf("push stack size: %v", err)
@@ -108,7 +108,7 @@ func TestRUNVMWrapperErrorStackEffects(t *testing.T) {
 }
 
 func TestRunChildVMWithModeRejectsInvalidFlags(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
 	err := runChildVMWithMode(state, 512)
 	if err == nil {
 		t.Fatal("expected invalid flag error")
@@ -236,7 +236,7 @@ func TestRunChildVMWithModeOperandErrors(t *testing.T) {
 			if gas.Remaining == 0 && tt.code != vmerr.CodeOutOfGas {
 				gas = vm.GasWithLimit(100)
 			}
-			state := vm.NewExecutionState(vm.DefaultGlobalVersion, gas, nil, tuple.Tuple{}, vm.NewStack())
+			state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, gas, nil, tuple.Tuple{}, vm.NewStack())
 			tt.setup(t, state.Stack)
 
 			assertVMErrCode(t, runChildVMWithMode(state, tt.mode), tt.code)
@@ -248,7 +248,7 @@ func TestRunChildVMWithModeOperandErrors(t *testing.T) {
 }
 
 func TestRunChildVMWithModeSuccess(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xFE, 8).EndCell().MustBeginParse()
 
 	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
@@ -370,7 +370,7 @@ func TestRunChildVMWithModeSuccess(t *testing.T) {
 }
 
 func TestRunChildVMWithModeRejectsInvalidStackSize(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
 		t.Fatalf("push stack size: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestRunChildVMWithModeRejectsInvalidStackSize(t *testing.T) {
 }
 
 func TestRUNVMXUsesDynamicMode(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 	state.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 	state.SetChildRunner(func(child *vm.State) (int64, error) {
 		child.Stack.Clear()

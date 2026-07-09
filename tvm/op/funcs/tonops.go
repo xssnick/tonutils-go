@@ -393,7 +393,7 @@ func GLOBALID() *helpers.SimpleOP {
 	}
 }
 
-func chksignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.SimpleOP {
+func signatureCheckOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			keyInt, err := state.Stack.PopIntFinite()
@@ -438,14 +438,14 @@ func chksignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.S
 				return err
 			}
 
-			if err = state.RegisterChksgnCall(); err != nil {
+			if err = state.RegisterSignatureCheckCall(); err != nil {
 				return err
 			}
 			if state.GlobalVersion >= 14 && tvmEd25519RejectedPublicKeyV14(keyBytes) {
-				return state.Stack.PushBool(state.ChksigAlwaysSucceed)
+				return state.Stack.PushBool(state.SignatureCheckAlwaysSucceed)
 			}
 
-			return state.Stack.PushBool(tvmEd25519Verify(keyBytes, data, sigBytes) || state.ChksigAlwaysSucceed)
+			return state.Stack.PushBool(tvmEd25519Verify(keyBytes, data, sigBytes) || state.SignatureCheckAlwaysSucceed)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -498,11 +498,11 @@ func tvmEd25519Verify(key, data, sig []byte) bool {
 }
 
 func CHKSIGNU() *helpers.SimpleOP {
-	return chksignOp("CHKSIGNU", helpers.BytesPrefix(0xF9, 0x10), false)
+	return signatureCheckOp("CHKSIGNU", helpers.BytesPrefix(0xF9, 0x10), false)
 }
 
 func CHKSIGNS() *helpers.SimpleOP {
-	return chksignOp("CHKSIGNS", helpers.BytesPrefix(0xF9, 0x11), true)
+	return signatureCheckOp("CHKSIGNS", helpers.BytesPrefix(0xF9, 0x11), true)
 }
 
 func preloadFixedBytes(sl *cell.Slice, bits uint, msg string) ([]byte, error) {
@@ -677,10 +677,10 @@ func p256CheckSignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *hel
 				return err
 			}
 
-			if err = state.ConsumeGas(vm.P256ChksgnGasPrice); err != nil {
+			if err = state.ConsumeGas(vm.P256SignatureCheckGasPrice); err != nil {
 				return err
 			}
-			if state.ChksigAlwaysSucceed {
+			if state.SignatureCheckAlwaysSucceed {
 				return state.Stack.PushBool(true)
 			}
 

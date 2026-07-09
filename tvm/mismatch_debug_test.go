@@ -109,9 +109,6 @@ func BenchmarkTVMReplayMismatchBigAccount(b *testing.B) {
 	var txs int
 	for i := 0; i < b.N; i++ {
 		for _, replay := range prepared {
-			if err := machine.SetGlobalVersion(replay.globalVersion); err != nil {
-				b.Fatal(err)
-			}
 			result, err := testEmulateTransaction(machine, replay.from, replay.inMsg, replay.config)
 			if err != nil {
 				b.Fatal(err)
@@ -265,9 +262,6 @@ func debugEmulateMismatchWithInput(t testing.TB, item debugMismatchAccount, inMs
 	cfg := debugMismatchEmulationConfig(t, tx)
 
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(tx.Config.GlobalVersion); err != nil {
-		t.Fatal(err)
-	}
 	res, err := testEmulateTransaction(machine, from, inMsg, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -365,7 +359,7 @@ func debugActionsSummary(root *cell.Cell) string {
 	if root == nil {
 		return "nil"
 	}
-	loaded, err := transactionLoadActions(root, vmcore.DefaultGlobalVersion)
+	loaded, err := transactionLoadActions(root, vmcore.MaxSupportedGlobalVersion)
 	if err != nil {
 		return err.Error()
 	}

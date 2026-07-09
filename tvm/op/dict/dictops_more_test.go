@@ -21,12 +21,12 @@ func assertDictVMErrorCode(t *testing.T, err error, code int64) {
 }
 
 func TestPrefixDictUnderflowPrecheckStartsAtV9(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		t.Run(fmt.Sprintf("pfxdictdel_v%d", version), func(t *testing.T) {
 			state := &vm.State{
-				GlobalVersion:           version,
-				GlobalVersionConfigured: true,
-				Stack:                   vm.NewStack(),
+				GlobalVersion: version,
+
+				Stack: vm.NewStack(),
 			}
 			if err := state.Stack.PushInt(big.NewInt(4)); err != nil {
 				t.Fatalf("PushInt failed: %v", err)
@@ -44,9 +44,9 @@ func TestPrefixDictUnderflowPrecheckStartsAtV9(t *testing.T) {
 
 		t.Run(fmt.Sprintf("pfxdictset_v%d", version), func(t *testing.T) {
 			state := &vm.State{
-				GlobalVersion:           version,
-				GlobalVersionConfigured: true,
-				Stack:                   vm.NewStack(),
+				GlobalVersion: version,
+
+				Stack: vm.NewStack(),
 			}
 			key := cell.BeginCell().MustStoreUInt(0b10, 2).ToSlice()
 			if err := state.Stack.PushSlice(key); err != nil {

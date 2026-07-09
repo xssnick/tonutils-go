@@ -11,7 +11,7 @@ import (
 )
 
 func fuzzMathVersion(raw int64) int {
-	version := int(raw % int64(vm.DefaultGlobalVersion+1))
+	version := int(raw % int64(vm.MaxSupportedGlobalVersion+1))
 	if version < 0 {
 		version = -version
 	}
@@ -19,24 +19,24 @@ func fuzzMathVersion(raw int64) int {
 }
 
 func TestFuzzMathVersionCoversDefaultRange(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzMathVersion(int64(version)); got != version {
 			t.Fatalf("seed version %d mapped to %d", version, got)
 		}
 	}
-	if got := fuzzMathVersion(-int64(vm.DefaultGlobalVersion)); got != vm.DefaultGlobalVersion {
-		t.Fatalf("negative default version mapped to %d, want %d", got, vm.DefaultGlobalVersion)
+	if got := fuzzMathVersion(-int64(vm.MaxSupportedGlobalVersion)); got != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("negative default version mapped to %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
 	for _, raw := range []int64{
 		-1,
-		-int64(vm.DefaultGlobalVersion) - 1,
-		-int64(vm.DefaultGlobalVersion) - 2,
+		-int64(vm.MaxSupportedGlobalVersion) - 1,
+		-int64(vm.MaxSupportedGlobalVersion) - 2,
 		-123456789,
 		123456789,
 	} {
 		got := fuzzMathVersion(raw)
-		if got < 0 || got > vm.DefaultGlobalVersion {
-			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.DefaultGlobalVersion)
+		if got < 0 || got > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
@@ -133,10 +133,10 @@ func FuzzTVMVersionedQuietDynamicShiftRanges(f *testing.F) {
 	f.Add(int64(13), int64(7), int64(-1), uint8(1))
 	f.Add(int64(12), int64(0), int64(1024), uint8(2))
 	f.Add(int64(13), int64(0), int64(1024), uint8(2))
-	f.Add(int64(vm.DefaultGlobalVersion), int64(7), int64(1024), uint8(0))
-	f.Add(int64(vm.DefaultGlobalVersion), int64(7), int64(-1), uint8(1))
-	f.Add(int64(vm.DefaultGlobalVersion), int64(0), int64(1024), uint8(2))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(7), int64(1024), uint8(0))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(7), int64(-1), uint8(1))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(0), int64(1024), uint8(2))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 3; opKind++ {
 			f.Add(version, int64(7), int64(1024), opKind)
 			f.Add(version, int64(7), int64(-1), opKind)
@@ -148,7 +148,6 @@ func FuzzTVMVersionedQuietDynamicShiftRanges(f *testing.F) {
 		shift := fuzzMathSmallShift(rawShift)
 		st := newMathCoverageState()
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 
 		opKind := rawOp % 3
 		if opKind == 2 {
@@ -205,13 +204,13 @@ func FuzzTVMVersionedLogicNaNRules(f *testing.F) {
 	f.Add(int64(13), int64(-1), uint8(1), false, true)
 	f.Add(int64(12), int64(1), uint8(2), false, true)
 	f.Add(int64(13), int64(1), uint8(2), false, true)
-	f.Add(int64(vm.DefaultGlobalVersion), int64(0), uint8(0), true, true)
-	f.Add(int64(vm.DefaultGlobalVersion), int64(-1), uint8(1), true, true)
-	f.Add(int64(vm.DefaultGlobalVersion), int64(1), uint8(2), true, true)
-	f.Add(int64(vm.DefaultGlobalVersion), int64(0), uint8(0), false, true)
-	f.Add(int64(vm.DefaultGlobalVersion), int64(-1), uint8(1), false, true)
-	f.Add(int64(vm.DefaultGlobalVersion), int64(1), uint8(2), false, true)
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(0), uint8(0), true, true)
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(-1), uint8(1), true, true)
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(1), uint8(2), true, true)
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(0), uint8(0), false, true)
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(-1), uint8(1), false, true)
+	f.Add(int64(vm.MaxSupportedGlobalVersion), int64(1), uint8(2), false, true)
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 3; opKind++ {
 			for _, nanAtBottom := range []bool{true, false} {
 				f.Add(version, int64(0), opKind, true, nanAtBottom)
@@ -237,7 +236,6 @@ func FuzzTVMVersionedLogicNaNRules(f *testing.F) {
 
 		st := newMathCoverageState()
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 		if nanAtBottom {
 			if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push NaN: %v", err)
@@ -303,7 +301,7 @@ func FuzzTVMVersionedLogicNaNRules(f *testing.F) {
 }
 
 func FuzzTVMVersionedImmediateShiftNaNRules(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 4; opKind++ {
 			f.Add(version, opKind, uint8(0))
 			f.Add(version, opKind, uint8(255))
@@ -314,7 +312,6 @@ func FuzzTVMVersionedImmediateShiftNaNRules(f *testing.F) {
 		version := fuzzMathVersion(rawVersion)
 		st := newMathCoverageState()
 		st.GlobalVersion = version
-		st.GlobalVersionConfigured = true
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}

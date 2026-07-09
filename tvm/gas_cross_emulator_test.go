@@ -15,6 +15,7 @@ import (
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	tupleop "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -335,12 +336,12 @@ func FuzzTVMCrossEmulatorGasGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%gasVersionedParityCaseCount), uint16(0xAB+version), uint32(1000))
 	}
 	defaultCases := gasVersionedParityCasesForSeeds()
 	for i, gasLimit := range defaultCases {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i), uint16(0x20+i), uint32(gasLimit))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i), uint16(0x20+i), uint32(gasLimit))
 	}
 	f.Add(uint8(255), uint8(255), uint16(0xffff), uint32(1))
 

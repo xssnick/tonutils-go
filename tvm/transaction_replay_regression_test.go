@@ -73,9 +73,6 @@ func TestEmulateTransactionReplayRegressionFixtures(t *testing.T) {
 			}
 
 			machine := NewTVM()
-			if err := machine.SetGlobalVersion(report.Config.GlobalVersion); err != nil {
-				t.Fatal(err)
-			}
 
 			result, err := testEmulateTransaction(machine, from, inMsg, replayRegressionEmulationConfig(t, report.Config, account.FirstTx))
 			if err != nil {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -110,7 +111,7 @@ func FuzzTVMCrossEmulatorTickTockGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xAAAA), uint16(0x1111), uint16(0x2222))
 		f.Add(uint8(version), true, uint16(0xAAAA), uint16(0x1111), uint16(0x2222))
 	}
@@ -127,7 +128,7 @@ func FuzzTVMCrossEmulatorTickTockBuildProofGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xAAAA), uint16(0x1111), uint16(0x2222))
 		f.Add(uint8(version), true, uint16(0xAAAA), uint16(0x1111), uint16(0x2222))
 	}
@@ -144,7 +145,7 @@ func FuzzTVMCrossEmulatorTickTockBuildProofLibrariesGlobalVersion(f *testing.F) 
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xA400+version), uint16(0xB400+version), uint16(0xC400+version))
 		f.Add(uint8(version), true, uint16(0xA500+version), uint16(0xB500+version), uint16(0xC500+version))
 	}
@@ -170,7 +171,7 @@ func TestTVMCrossEmulatorTickTockBuildProofLibrariesGlobalVersionOverrideAllGlob
 		t.Run(name, func(t *testing.T) {
 			for _, version := range versions {
 				t.Run(fmt.Sprintf("global_v%d", version), func(t *testing.T) {
-					assertTickTockBuildProofLibrariesGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, isTock, uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
+					assertTickTockBuildProofLibrariesGlobalVersionOverrideParity(t, version, vm.MaxSupportedGlobalVersion-version, isTock, uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
 				})
 			}
 		})
@@ -182,8 +183,8 @@ func FuzzTVMCrossEmulatorTickTockBuildProofLibrariesGlobalVersionOverride(f *tes
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint16(0xE400+version), uint16(0xF400+version), uint16(0xA800+version))
 		f.Add(uint8(version), uint8(opposite), true, uint16(0xE500+version), uint16(0xF500+version), uint16(0xA900+version))
 	}
@@ -201,7 +202,7 @@ func FuzzTVMCrossEmulatorTickTockBuildProofGlobalVersionBoundary(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), false, uint16(0xD600+version))
 		f.Add(uint8(version), true, uint16(0xD700+version))
 	}
@@ -227,7 +228,7 @@ func TestTVMCrossEmulatorTickTockBuildProofGlobalVersionOverrideAllGlobalVersion
 		t.Run(name, func(t *testing.T) {
 			for _, version := range versions {
 				t.Run(fmt.Sprintf("global_v%d", version), func(t *testing.T) {
-					assertTickTockBuildProofGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, isTock, uint16(0xD800+version))
+					assertTickTockBuildProofGlobalVersionOverrideParity(t, version, vm.MaxSupportedGlobalVersion-version, isTock, uint16(0xD800+version))
 				})
 			}
 		})
@@ -239,8 +240,8 @@ func FuzzTVMCrossEmulatorTickTockBuildProofGlobalVersionOverride(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint16(0xD800+version))
 		f.Add(uint8(version), uint8(opposite), true, uint16(0xD900+version))
 	}
@@ -258,8 +259,8 @@ func FuzzTVMCrossEmulatorTickTockGlobalVersionFallbackAndConfigOverride(f *testi
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, false, uint16(0xD000+version))
 		f.Add(uint8(version), uint8(opposite), false, true, uint16(0xD100+version))
 		f.Add(uint8(opposite), uint8(version), true, false, uint16(0xD200+version))
@@ -288,7 +289,7 @@ func TestTVMCrossEmulatorTickTockGlobalVersionOverrideAllGlobalVersions(t *testi
 		t.Run(name, func(t *testing.T) {
 			for _, version := range versions {
 				t.Run(fmt.Sprintf("global_v%d", version), func(t *testing.T) {
-					assertTickTockGlobalVersionOverrideParity(t, version, MaxSupportedGlobalVersion-version, isTock, uint16(0xD400+version))
+					assertTickTockGlobalVersionOverrideParity(t, version, vm.MaxSupportedGlobalVersion-version, isTock, uint16(0xD400+version))
 				})
 			}
 		})
@@ -300,8 +301,8 @@ func FuzzTVMCrossEmulatorTickTockGlobalVersionOverride(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
-		opposite := MaxSupportedGlobalVersion - version
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		opposite := vm.MaxSupportedGlobalVersion - version
 		f.Add(uint8(version), uint8(opposite), false, uint16(0xD400+version))
 		f.Add(uint8(version), uint8(opposite), true, uint16(0xD500+version))
 	}
@@ -410,10 +411,7 @@ func assertTickTockBuildProofLibrariesGlobalVersionOverrideParity(t *testing.T, 
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	origData := cell.BeginCell().MustStoreUInt(uint64(origTag), 16).EndCell()
@@ -428,7 +426,7 @@ func assertTickTockBuildProofLibrariesGlobalVersionOverrideParity(t *testing.T, 
 	}
 	accountHash := shard.Account.Hash()
 
-	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
+	goRes, err := testEmulateTickTockTransaction(machine, shard, isTock, testTxParams{
 		Now:        now,
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: refConfigRoot,
@@ -565,10 +563,7 @@ func assertTickTockBuildProofGlobalVersionOverrideParity(t *testing.T, version, 
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	code := makeTickTockGasConsumedCode(t)
@@ -579,7 +574,7 @@ func assertTickTockBuildProofGlobalVersionOverrideParity(t *testing.T, version, 
 	}
 	accountHash := shard.Account.Hash()
 
-	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
+	goRes, err := testEmulateTickTockTransaction(machine, shard, isTock, testTxParams{
 		Now:        now,
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: refConfigRoot,
@@ -629,10 +624,7 @@ func assertTickTockFallbackVersionParity(t *testing.T, machineVersion, configVer
 	}
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(effectiveVersion))
 
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	code := makeTickTockGasConsumedCode(t)
@@ -642,7 +634,7 @@ func assertTickTockFallbackVersionParity(t *testing.T, machineVersion, configVer
 		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
 
-	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
+	goRes, err := testEmulateTickTockTransaction(machine, shard, isTock, testTxParams{
 		Now:        now,
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: goConfigRoot,
@@ -694,10 +686,7 @@ func assertTickTockGlobalVersionOverrideParity(t *testing.T, version, machineVer
 	t.Helper()
 
 	refConfigRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(machineVersion)
-	if err != nil {
-		t.Fatalf("with global version %d: %v", machineVersion, err)
-	}
+	machine := NewTVM()
 
 	now := uint32(tonopsTestTime.Unix())
 	code := makeTickTockGasConsumedCode(t)
@@ -707,7 +696,7 @@ func assertTickTockGlobalVersionOverrideParity(t *testing.T, version, machineVer
 		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
 
-	goRes, err := testEmulateTickTockTransaction(&machine, shard, isTock, testTxParams{
+	goRes, err := testEmulateTickTockTransaction(machine, shard, isTock, testTxParams{
 		Now:        now,
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: refConfigRoot,

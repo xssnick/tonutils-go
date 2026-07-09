@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 const (
@@ -25,8 +27,8 @@ const (
 	expectedCrossEmulatorFullRangeVersionFuzzerCount = 129
 	expectedCrossEmulatorFullRangeVersionFuzzerHash  = "625bf3d68e3ab49bf47981e34096d3caeb33fb8af7aa01daf358630aa81f1b2f"
 
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 4
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "be8567c92088edc86cdc877242001d982aefa32ce73c0166fa20472924b5321c"
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 6
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "a1c658ae5323ed3b66832da88e97a9c75cad13202f85885aa990eff9b1b251d2"
 
 	expectedCrossEmulatorTransactionVersionTestCount = 46
 	expectedCrossEmulatorTransactionVersionTestHash  = "a81aa79410833955c13415a0c9b5c9f82b26b0a1c40f12b2f691e459d6ff3547"
@@ -133,11 +135,11 @@ const (
 	expectedCrossEmulatorDifferentialMatrixVersionFuzzCount = 1
 	expectedCrossEmulatorDifferentialMatrixVersionFuzzHash  = "eb1af974ef27c8111bbdf1062c58671a61d2c76ed60290b1e0da5b0b2d9b900e"
 
-	expectedCrossEmulatorReferenceMismatchUseCount = 26
-	expectedCrossEmulatorReferenceMismatchUseHash  = "312c8057852d591fc73f86c4271898887bef3d7b6feda741f29d009cf1d0ba06"
+	expectedCrossEmulatorReferenceMismatchUseCount = 27
+	expectedCrossEmulatorReferenceMismatchUseHash  = "f2802f8fd0f0333c371a17b0d54655796178836fae5f0a7ef2259cd266127d8a"
 
 	expectedCrossEmulatorDirectKnownReferenceSkipCount = 15
-	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "34895d0f8ed844cc92d8d948fe0ef97d03256fce96a9000495ed31da136e3196"
+	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "7aec3b0e5ea8958c5ded3af87174bbdf4bf39af96414c03daa271baf5890b1b5"
 
 	expectedCrossEmulatorSkipReferenceUseCount = 25
 	expectedCrossEmulatorSkipReferenceUseHash  = "440b673550f7514e57abcbce6c6505cb5a3463ac289fb8164a10ac433774b95d"
@@ -164,6 +166,7 @@ var expectedCrossEmulatorReferenceMismatchReasons = map[string]int{
 	"bundled reference emulator predates upstream SENDMSG v14 user fwd fee handling":                      1,
 	"bundled reference emulator predates upstream control-register v14 silent duplicate save-list writes": 2,
 	"bundled reference emulator predates upstream transaction v14 failed-action message-balance restore":  2,
+	"bundled reference emulator predates upstream transaction v15 library action restrictions":            1,
 	"bundled reference emulator predates upstream v9 direct startup library code loading":                 13,
 }
 
@@ -202,13 +205,26 @@ var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmul
 			"FuzzTVMCrossEmulatorTonOpsCryptoCirclVersionedRuntimeEdges",
 		},
 	},
+	"tonops_emulator_c7_cross_emulator_test.go:TestTVMCrossEmulatorTonOpsEmulatorC7Path": {
+		reason: "broad emulator C7 smoke pins maximum version; dedicated C7 version tests and fuzzers own exhaustive version coverage",
+		versionAnchors: []string{
+			"TestTVMCrossEmulatorTonOpsEmulatorC7PathAllGlobalVersions",
+			"FuzzTVMCrossEmulatorTonOpsEmulatorC7PathGlobalVersion",
+		},
+	},
+	"transaction_cross_emulator_test.go:TestTVMCrossEmulatorTransactionEdges": {
+		reason: "broad transaction edge suite pins pre-v15 library-action cases to v14; dedicated transaction global-version fuzzers own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionChangeLibraryActionsGlobalVersion",
+		},
+	},
 }
 
 func crossEmulatorVersionAuditVersions(t *testing.T, envPrefix string) []int {
 	t.Helper()
 
-	versions := make([]int, 0, MaxSupportedGlobalVersion-MinSupportedGlobalVersion+1)
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	versions := make([]int, 0, vm.MaxSupportedGlobalVersion-0+1)
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		versions = append(versions, version)
 	}
 
@@ -249,12 +265,12 @@ func TestTVMCrossEmulatorVersionAuditShardSelection(t *testing.T) {
 	t.Setenv(prefix+"_SHARD", "")
 
 	all := crossEmulatorVersionAuditVersions(t, prefix)
-	wantLen := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	wantLen := vm.MaxSupportedGlobalVersion - 0 + 1
 	if len(all) != wantLen {
 		t.Fatalf("default version selection len = %d, want %d", len(all), wantLen)
 	}
-	if all[0] != MinSupportedGlobalVersion || all[len(all)-1] != MaxSupportedGlobalVersion {
-		t.Fatalf("default version selection = %v, want range %d..%d", all, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+	if all[0] != 0 || all[len(all)-1] != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("default version selection = %v, want range %d..%d", all, 0, vm.MaxSupportedGlobalVersion)
 	}
 
 	t.Setenv(prefix+"_SHARDS", "4")
@@ -279,7 +295,7 @@ func TestTVMCrossEmulatorVersionAuditShardSelection(t *testing.T) {
 				seen[version]++
 			}
 		}
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			if seen[version] != 1 {
 				t.Fatalf("%d-way shard partition covered v%d %d times; seen=%v", shards, version, seen[version], seen)
 			}
@@ -445,8 +461,8 @@ func TestTVMCrossEmulatorSkipReferenceKnownReasonClassifierRejectsLookalikes(t *
 			want: true,
 		},
 		{
-			name: "versioned chksig helper call",
-			use:  "test.go:Test:case:ed25519ChksigRejectedKeyReferenceSkip(version)",
+			name: "versioned signature check helper call",
+			use:  "test.go:Test:case:ed25519SignatureCheckRejectedKeyReferenceSkip(version)",
 			want: true,
 		},
 		{
@@ -1582,10 +1598,10 @@ func TestTVMCrossEmulatorFuzzSeedScannerCoversFullRangeHelpers(t *testing.T) {
 	}
 
 	func FuzzCrossEmulatorMappedArgFixture(f *testing.F) {
-		f.Add(uint8(MinSupportedGlobalVersion), uint8(99))
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(99))
-		f.Add(uint8(99), uint8(MinSupportedGlobalVersion))
-		f.Add(uint8(99), uint8(MaxSupportedGlobalVersion))
+		f.Add(uint8(0), uint8(99))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(99))
+		f.Add(uint8(99), uint8(0))
+		f.Add(uint8(99), uint8(vm.MaxSupportedGlobalVersion))
 
 		f.Fuzz(func(t *testing.T, rawVersion uint8, payload uint8) {
 			_ = tvmFuzzGlobalVersionByte(rawVersion)
@@ -1593,8 +1609,8 @@ func TestTVMCrossEmulatorFuzzSeedScannerCoversFullRangeHelpers(t *testing.T) {
 	}
 
 	func FuzzCrossEmulatorMappedArgNegativeFixture(f *testing.F) {
-		f.Add(uint8(MinSupportedGlobalVersion), uint8(99))
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(99))
+		f.Add(uint8(0), uint8(99))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(99))
 
 		f.Fuzz(func(t *testing.T, payload uint8, rawVersion uint8) {
 			_ = tvmFuzzGlobalVersionByte(rawVersion)
@@ -1764,10 +1780,10 @@ func crossEmulatorFuzzFunctionSeedsSupportedRange(fn *ast.FuncDecl) (baseline, m
 						continue
 					}
 				}
-				if astExprContainsIdent(arg, "MinSupportedGlobalVersion") {
+				if versionFuzzExprContainsSupportedMin(arg) {
 					min = true
 				}
-				if astExprContainsIdent(arg, "MaxSupportedGlobalVersion") {
+				if versionFuzzExprContainsSupportedMax(arg) {
 					max = true
 				}
 			}
@@ -1840,12 +1856,12 @@ func crossEmulatorSupportedRangeForLoopVar(stmt *ast.ForStmt) string {
 		return ""
 	}
 	ident, ok := init.Lhs[0].(*ast.Ident)
-	if !ok || !astExprContainsIdent(init.Rhs[0], "MinSupportedGlobalVersion") {
+	if !ok || !versionFuzzExprContainsSupportedMin(init.Rhs[0]) {
 		return ""
 	}
 
 	cond, ok := stmt.Cond.(*ast.BinaryExpr)
-	if !ok || cond.Op != token.LEQ || !astExprContainsIdent(cond.X, ident.Name) || !astExprContainsIdent(cond.Y, "MaxSupportedGlobalVersion") {
+	if !ok || cond.Op != token.LEQ || !astExprContainsIdent(cond.X, ident.Name) || !versionFuzzExprContainsSupportedMax(cond.Y) {
 		return ""
 	}
 
@@ -2347,14 +2363,14 @@ func crossEmulatorSkipReferenceUseHasKnownReason(use string) bool {
 }
 
 var crossEmulatorKnownReferenceSkipReferenceExpressions = map[string]bool{
-	"contOpsDuplicateSaveReferenceSkip":              true,
-	"ecrecoverEthereumReferenceSkip(14)":             true,
-	"ecrecoverEthereumReferenceSkip(version)":        true,
-	"ed25519ChksigRejectedKeyReferenceSkip(14)":      true,
-	"ed25519ChksigRejectedKeyReferenceSkip(version)": true,
-	"qrshiftCodeSkipReference":                       true,
-	"rshiftCodeSkipReference":                        true,
-	"sendMsgUserFwdFeeReferenceSkip(version)":        true,
+	"contOpsDuplicateSaveReferenceSkip":                      true,
+	"ecrecoverEthereumReferenceSkip(14)":                     true,
+	"ecrecoverEthereumReferenceSkip(version)":                true,
+	"ed25519SignatureCheckRejectedKeyReferenceSkip(14)":      true,
+	"ed25519SignatureCheckRejectedKeyReferenceSkip(version)": true,
+	"qrshiftCodeSkipReference":                               true,
+	"rshiftCodeSkipReference":                                true,
+	"sendMsgUserFwdFeeReferenceSkip(version)":                true,
 }
 
 func crossEmulatorCompositeLiteralField(lit *ast.CompositeLit, key string) ast.Expr {
@@ -3068,8 +3084,8 @@ func crossEmulatorTestBodyUsesSupportedVersionSelection(body string) bool {
 	if crossEmulatorTestBodyUsesShardedVersionSelection(body) {
 		return true
 	}
-	return strings.Contains(body, "MinSupportedGlobalVersion") &&
-		strings.Contains(body, "MaxSupportedGlobalVersion")
+	return strings.Contains(body, "version := 0") &&
+		strings.Contains(body, "vm.MaxSupportedGlobalVersion")
 }
 
 func crossEmulatorTestBodyUsesShardedVersionSelection(body string) bool {
@@ -3115,15 +3131,14 @@ func crossEmulatorVersionFunctionNameClassified(name string) bool {
 }
 
 func crossEmulatorFunctionBodyUsesExplicitVersion(body string) bool {
-	return strings.Contains(body, "WithGlobalVersion") ||
-		strings.Contains(body, "GlobalVersion:") ||
-		strings.Contains(body, "GlobalVersionSet") ||
+	return strings.Contains(body, "GlobalVersion:") ||
 		strings.Contains(body, "tonopsCrossConfigWithGlobalVersion") ||
 		strings.Contains(body, "referenceTransactionConfigRootWithGlobalVersion") ||
 		strings.Contains(body, "transactionTestConfigWithGlobalVersion") ||
+		strings.Contains(body, "testPreparedBlockchainConfigWithVersion") ||
+		strings.Contains(body, "crossRunPreparedBlockchainConfig") ||
 		strings.Contains(body, "crossEmulatorVersionAuditVersions") ||
 		strings.Contains(body, "tvmFuzzGlobalVersion") ||
-		strings.Contains(body, "MinSupportedGlobalVersion") ||
 		strings.Contains(body, "MaxSupportedGlobalVersion") ||
 		strings.Contains(body, "referenceRawRunGlobalVersion")
 }

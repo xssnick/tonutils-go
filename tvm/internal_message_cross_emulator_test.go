@@ -252,7 +252,7 @@ func FuzzTVMCrossEmulatorInternalMessageGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 		for program := uint8(0); program < internalMessageVersionProgramCount; program++ {
 			f.Add(uint8(version), program, uint16(0xCA00+uint16(version)*internalMessageVersionProgramCount+uint16(program)))
 		}
@@ -283,7 +283,7 @@ func assertInternalMessageVersionParity(t *testing.T, version int, rawProgram ui
 		Now:      now,
 		Balance:  balance,
 		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:   MustPrepareConfig(configRoot),
+		Config:   MustPrepareBlockchainConfig(configRoot),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,

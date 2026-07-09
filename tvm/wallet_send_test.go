@@ -120,7 +120,7 @@ func walletV5SeqnoFromData(t *testing.T, data *cell.Cell) uint32 {
 	return uint32(seqno)
 }
 
-func emulateWalletSendExternal(t *testing.T, code, data *cell.Cell, addr *address.Address, body *cell.Cell, now uint32, globalVersion int, preparedCfg *PreparedConfig) (*MessageExecutionResult, error) {
+func emulateWalletSendExternal(t *testing.T, code, data *cell.Cell, addr *address.Address, body *cell.Cell, now uint32, preparedCfg *PreparedBlockchainConfig) (*MessageExecutionResult, error) {
 	t.Helper()
 
 	msg := &tlb.ExternalMessage{
@@ -129,9 +129,6 @@ func emulateWalletSendExternal(t *testing.T, code, data *cell.Cell, addr *addres
 	}
 
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(globalVersion); err != nil {
-		return nil, err
-	}
 
 	var traceHook vmcore.TraceHook
 	if os.Getenv("TVM_TRACE_WALLET_SEND") != "" {
@@ -178,9 +175,9 @@ func mustSingleActionCell(t *testing.T, msg *walletpkg.Message) *cell.Cell {
 func TestWalletV5SendExternalGo(t *testing.T) {
 	t.Run("AcceptsAndCommitsOutgoingMessage", func(t *testing.T) {
 		fx := makeWalletV5SendFixture(t, walletSendInitialSeqno)
-		preparedCfg := transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion))
+		preparedCfg := transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion))
 
-		res, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, vmcore.DefaultGlobalVersion, preparedCfg)
+		res, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("wallet send failed: %v", err)
 		}
@@ -205,8 +202,8 @@ func TestWalletV5SendExternalGo(t *testing.T) {
 
 	t.Run("SecondSendUsesUpdatedData", func(t *testing.T) {
 		fx1 := makeWalletV5SendFixture(t, walletSendInitialSeqno)
-		preparedCfg := transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion))
-		first, err := emulateWalletSendExternal(t, fx1.code, fx1.data, fx1.address, fx1.body, fx1.now, vmcore.DefaultGlobalVersion, preparedCfg)
+		preparedCfg := transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion))
+		first, err := emulateWalletSendExternal(t, fx1.code, fx1.data, fx1.address, fx1.body, fx1.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("first wallet send failed: %v", err)
 		}
@@ -215,7 +212,7 @@ func TestWalletV5SendExternalGo(t *testing.T) {
 		}
 
 		fx2 := makeWalletV5SendFixture(t, walletSendSecondSeqno)
-		second, err := emulateWalletSendExternal(t, fx2.code, first.Data, fx2.address, fx2.body, fx2.now, vmcore.DefaultGlobalVersion, preparedCfg)
+		second, err := emulateWalletSendExternal(t, fx2.code, first.Data, fx2.address, fx2.body, fx2.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("second wallet send failed: %v", err)
 		}
@@ -229,9 +226,9 @@ func TestWalletV5SendExternalGo(t *testing.T) {
 
 	t.Run("RejectsStaleSeqnoWithoutCommit", func(t *testing.T) {
 		fx := makeWalletV5SendFixture(t, walletSendSecondSeqno)
-		preparedCfg := transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion))
+		preparedCfg := transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion))
 
-		res, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, vmcore.DefaultGlobalVersion, preparedCfg)
+		res, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("stale seqno emulation returned setup error: %v", err)
 		}
@@ -250,7 +247,7 @@ func TestWalletV5SendExternalGo(t *testing.T) {
 func TestWalletV5RunSeqnoGo(t *testing.T) {
 	fx := makeWalletV5SendFixture(t, walletSendInitialSeqno)
 	preparedCfg := transactionTestConfigWithGlobalVersion(t, uint32(walletSendCrossVersion))
-	first, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion, preparedCfg)
+	first, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, preparedCfg)
 	if err != nil {
 		t.Fatalf("prepare wallet data: %v", err)
 	}
@@ -266,12 +263,10 @@ func TestWalletV5RunSeqnoGo(t *testing.T) {
 	}
 
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(walletSendCrossVersion); err != nil {
-		t.Fatalf("set global version %d: %v", walletSendCrossVersion, err)
-	}
 	c7, err := buildMessageEmulationC7(fx.address, codeRef, MessageEmulationConfig{
 		Now:      fx.now,
 		RandSeed: walletSendTestSeed,
+		Config:   preparedCfg,
 	}, new(big.Int).SetUint64(walletSendTestBalance), walletSendCrossVersion)
 	if err != nil {
 		t.Fatalf("build c7: %v", err)
@@ -282,7 +277,10 @@ func TestWalletV5RunSeqnoGo(t *testing.T) {
 		first.Data,
 		c7,
 		vmcore.GasWithLimit(1_000_000_000),
-		stack, ExecutionConfig{Libraries: []*cell.Cell{libs}})
+		stack, ExecutionConfig{
+			Libraries: []*cell.Cell{libs},
+			Config:    preparedCfg,
+		})
 
 	if err != nil {
 		t.Fatalf("run seqno failed: %v", err)

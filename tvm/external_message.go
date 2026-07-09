@@ -29,29 +29,29 @@ var internalEmulationSrcAddr = address.MustParseRawAddr("-1:00000000000000000000
 // caller-controlled synthetic c7 context. Config must be a prepared config;
 // the remaining c7 fields override the derived values when set.
 type MessageEmulationConfig struct {
-	Address             *address.Address
-	Now                 uint32
-	BlockLT             int64
-	LogicalTime         int64
-	Balance             *big.Int
-	RandSeed            []byte
-	Config              *PreparedConfig
-	IncomingValue       tuple.Tuple
-	StorageFees         int64
-	PrevBlocks          any
-	UnpackedConfig      tuple.Tuple
-	DuePayment          any
-	PrecompiledGasUsage *big.Int
-	InMsgParams         tuple.Tuple
-	Globals             map[int]any
-	GlobalID            int32
-	Libraries           []*cell.Cell
-	Gas                 vm.Gas
-	StopOnAccept        bool
-	ChksigAlwaysSucceed bool
-	BuildProof          bool
-	AccountRoot         *cell.Cell
-	TraceHook           vm.TraceHook
+	Address                     *address.Address
+	Now                         uint32
+	BlockLT                     int64
+	LogicalTime                 int64
+	Balance                     *big.Int
+	RandSeed                    []byte
+	Config                      *PreparedBlockchainConfig
+	IncomingValue               tuple.Tuple
+	StorageFees                 int64
+	PrevBlocks                  any
+	UnpackedConfig              tuple.Tuple
+	DuePayment                  any
+	PrecompiledGasUsage         *big.Int
+	InMsgParams                 tuple.Tuple
+	Globals                     map[int]any
+	GlobalID                    int32
+	Libraries                   []*cell.Cell
+	Gas                         vm.Gas
+	StopOnAccept                bool
+	SignatureCheckAlwaysSucceed bool
+	BuildProof                  bool
+	AccountRoot                 *cell.Cell
+	TraceHook                   vm.TraceHook
 }
 
 type EmulateExternalMessageConfig = MessageEmulationConfig
@@ -63,6 +63,10 @@ type MessageExecutionResult struct {
 }
 
 func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalMessage, cfg EmulateExternalMessageConfig) (*MessageExecutionResult, error) {
+	if cfg.Config == nil {
+		return nil, errConfigRootRequired
+	}
+
 	addr := cfg.Address
 	if addr == nil {
 		addr = msg.DstAddr
@@ -114,10 +118,14 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.ChksigAlwaysSucceed, proof, cfg.TraceHook, globalVersion, libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.SignatureCheckAlwaysSucceed, proof, cfg.TraceHook, cfg.Config, libraries...)
 }
 
 func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*MessageExecutionResult, error) {
+	if cfg.Config == nil {
+		return nil, errConfigRootRequired
+	}
+
 	addr := cfg.Address
 	proof, code, data, libraries, addr, err := prepareMessageExecutionProof(code, data, cfg, addr)
 	if err != nil {
@@ -161,17 +169,15 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, cfg.ChksigAlwaysSucceed, proof, cfg.TraceHook, globalVersion, libraries...)
+	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, cfg.SignatureCheckAlwaysSucceed, proof, cfg.TraceHook, cfg.Config, libraries...)
 }
 
-func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, chksigAlwaysSucceed bool, proof *cell.MerkleProofBuilder, traceHook vm.TraceHook, globalVersion int, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
-	res, execErr := tvm.executeWithOptions(code, data, c7, gas, stack, executeOptions{
-		stopOnAccept:        stopOnAccept,
-		proof:               proof,
-		traceHook:           traceHook,
-		globalVersion:       globalVersion,
-		globalVersionSet:    true,
-		chksigAlwaysSucceed: chksigAlwaysSucceed,
+func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, signatureCheckAlwaysSucceed bool, proof *cell.MerkleProofBuilder, traceHook vm.TraceHook, cfg *PreparedBlockchainConfig, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
+	res, execErr := tvm.executeWithOptions(code, data, c7, gas, stack, cfg, executeOptions{
+		stopOnAccept:                stopOnAccept,
+		proof:                       proof,
+		traceHook:                   traceHook,
+		signatureCheckAlwaysSucceed: signatureCheckAlwaysSucceed,
 	}, libraries...)
 	if execErr != nil {
 		if _, ok := vmerr.ErrorCode(execErr); !ok {
@@ -470,15 +476,7 @@ func messageUnpackedConfig(cfg MessageEmulationConfig, now uint32) any {
 	if cfg.UnpackedConfig.Len() > 0 {
 		return cfg.UnpackedConfig
 	}
-	if cfg.Config != nil {
-		return buildUnpackedConfig(cfg.Config, now, cfg.GlobalID)
-	}
-	if cfg.GlobalID != 0 {
-		values := make([]any, 7)
-		values[1] = cell.BeginCell().MustStoreUInt(uint64(uint32(cfg.GlobalID)), 32).ToSlice()
-		return tuple.NewTupleOwned(values)
-	}
-	return nil
+	return buildUnpackedConfig(cfg.Config, now, cfg.GlobalID)
 }
 
 func messageInMsgParams(params tuple.Tuple) tuple.Tuple {

@@ -9,7 +9,7 @@ import (
 )
 
 func fuzzCellSliceVersion(raw int64) int {
-	version := int(raw % int64(vm.DefaultGlobalVersion+1))
+	version := int(raw % int64(vm.MaxSupportedGlobalVersion+1))
 	if version < 0 {
 		version = -version
 	}
@@ -17,24 +17,24 @@ func fuzzCellSliceVersion(raw int64) int {
 }
 
 func TestFuzzCellSliceVersionCoversDefaultRange(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzCellSliceVersion(int64(version)); got != version {
 			t.Fatalf("seed version %d mapped to %d", version, got)
 		}
 	}
-	if got := fuzzCellSliceVersion(-int64(vm.DefaultGlobalVersion)); got != vm.DefaultGlobalVersion {
-		t.Fatalf("negative default version mapped to %d, want %d", got, vm.DefaultGlobalVersion)
+	if got := fuzzCellSliceVersion(-int64(vm.MaxSupportedGlobalVersion)); got != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("negative default version mapped to %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
 	for _, raw := range []int64{
 		-1,
-		-int64(vm.DefaultGlobalVersion) - 1,
-		-int64(vm.DefaultGlobalVersion) - 2,
+		-int64(vm.MaxSupportedGlobalVersion) - 1,
+		-int64(vm.MaxSupportedGlobalVersion) - 2,
 		-123456789,
 		123456789,
 	} {
 		got := fuzzCellSliceVersion(raw)
-		if got < 0 || got > vm.DefaultGlobalVersion {
-			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.DefaultGlobalVersion)
+		if got < 0 || got > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
@@ -48,12 +48,12 @@ func FuzzTVMVersionedCellSliceLoadAndCheckEdges(f *testing.F) {
 	f.Add(int64(0), uint8(2), uint16(1024), uint16(0))
 	f.Add(int64(13), uint8(3), uint16(16), uint16(0))
 	f.Add(int64(13), uint8(4), uint16(8), uint16(5))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(0), uint16(8), uint16(1))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(1), uint16(8), uint16(1))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(2), uint16(1024), uint16(0))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(3), uint16(16), uint16(0))
-	f.Add(int64(vm.DefaultGlobalVersion), uint8(4), uint16(8), uint16(5))
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(0), uint16(8), uint16(1))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(1), uint16(8), uint16(1))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(2), uint16(1024), uint16(0))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(3), uint16(16), uint16(0))
+	f.Add(int64(vm.MaxSupportedGlobalVersion), uint8(4), uint16(8), uint16(5))
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 5; opKind++ {
 			f.Add(version, opKind, uint16(8), uint16(1))
 			f.Add(version, opKind, uint16(1024), uint16(5))
@@ -86,7 +86,6 @@ func fuzzXLoadVersioned(t *testing.T, version int, quiet bool) {
 
 	state := newCellSliceState()
 	state.GlobalVersion = version
-	state.GlobalVersionConfigured = true
 	lib := mustLibraryCell(t)
 	pushCellSliceCell(t, state, lib)
 
@@ -134,7 +133,6 @@ func fuzzSChkBitsQVersioned(t *testing.T, version int, bits int64) {
 
 	state := newCellSliceState()
 	state.GlobalVersion = version
-	state.GlobalVersionConfigured = true
 	pushCellSliceSlice(t, state, cell.BeginCell().MustStoreUInt(0xAB, 8).ToSlice())
 	pushCellSliceInt(t, state, bits)
 
@@ -160,7 +158,6 @@ func fuzzSChkBitsVersioned(t *testing.T, version int, bits int64) {
 
 	state := newCellSliceState()
 	state.GlobalVersion = version
-	state.GlobalVersionConfigured = true
 	pushCellSliceSlice(t, state, cell.BeginCell().MustStoreUInt(0xAB, 8).ToSlice())
 	pushCellSliceInt(t, state, bits)
 
@@ -192,7 +189,6 @@ func fuzzSChkBitRefsQVersioned(t *testing.T, version int, bits, refs int64) {
 
 	state := newCellSliceState()
 	state.GlobalVersion = version
-	state.GlobalVersionConfigured = true
 	ref := cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()
 	pushCellSliceSlice(t, state, cell.BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(ref).ToSlice())
 	pushCellSliceInt(t, state, bits)
@@ -268,7 +264,7 @@ func fuzzCellSliceLibraryRoot(t *testing.T, target *cell.Cell) *cell.Cell {
 }
 
 func FuzzTVMVersionedXLoadLibraryResolution(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		f.Add(version, false, uint64(version), uint16(0), uint8(0))
 		f.Add(version, true, uint64(version+1), uint16(16), uint8(1))
 		f.Add(version, false, uint64(version+2), uint16(127), uint8(3))
@@ -281,7 +277,6 @@ func FuzzTVMVersionedXLoadLibraryResolution(f *testing.F) {
 
 		state := newCellSliceState()
 		state.GlobalVersion = version
-		state.GlobalVersionConfigured = true
 		state.SetLibraries(fuzzCellSliceLibraryRoot(t, target))
 		pushCellSliceCell(t, state, libraryCell)
 

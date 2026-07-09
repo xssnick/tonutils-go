@@ -13,7 +13,7 @@ import (
 var fuzzExecControlRegisterIndexes = [...]int{0, 1, 2, 3, 4, 5, 7}
 
 func fuzzExecVersion(raw int64) int {
-	version := int(raw % int64(vm.DefaultGlobalVersion+1))
+	version := int(raw % int64(vm.MaxSupportedGlobalVersion+1))
 	if version < 0 {
 		version = -version
 	}
@@ -21,30 +21,30 @@ func fuzzExecVersion(raw int64) int {
 }
 
 func TestFuzzExecVersionCoversDefaultRange(t *testing.T) {
-	for version := 0; version <= vm.DefaultGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if got := fuzzExecVersion(int64(version)); got != version {
 			t.Fatalf("seed version %d mapped to %d", version, got)
 		}
 	}
-	if got := fuzzExecVersion(-int64(vm.DefaultGlobalVersion)); got != vm.DefaultGlobalVersion {
-		t.Fatalf("negative default version mapped to %d, want %d", got, vm.DefaultGlobalVersion)
+	if got := fuzzExecVersion(-int64(vm.MaxSupportedGlobalVersion)); got != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("negative default version mapped to %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
 	for _, raw := range []int64{
 		-1,
-		-int64(vm.DefaultGlobalVersion) - 1,
-		-int64(vm.DefaultGlobalVersion) - 2,
+		-int64(vm.MaxSupportedGlobalVersion) - 1,
+		-int64(vm.MaxSupportedGlobalVersion) - 2,
 		-123456789,
 		123456789,
 	} {
 		got := fuzzExecVersion(raw)
-		if got < 0 || got > vm.DefaultGlobalVersion {
-			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.DefaultGlobalVersion)
+		if got < 0 || got > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("raw version %d mapped to %d, want within [0, %d]", raw, got, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
 
 func FuzzTVMVersionedControlRegisterDuplicateSaveWrites(f *testing.F) {
-	for version := int64(0); version <= int64(vm.DefaultGlobalVersion); version++ {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for opKind := uint8(0); opKind < 9; opKind++ {
 			for rawIndex := range fuzzExecControlRegisterIndexes {
 				f.Add(version, opKind, uint8(rawIndex), false)
@@ -68,7 +68,6 @@ func FuzzTVMVersionedControlRegisterDuplicateSaveWrites(f *testing.F) {
 		newTuple := tuple.NewTupleValue(big.NewInt(0xBB), big.NewInt(0xCC))
 		state := newTestState()
 		state.GlobalVersion = version
-		state.GlobalVersionConfigured = true
 
 		makeTarget := func() vm.Continuation {
 			save := vm.Register{}

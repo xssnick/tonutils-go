@@ -37,7 +37,7 @@ func newFuncTestState(t *testing.T, params map[int]any) *vm.State {
 		t.Fatalf("failed to set c7 params: %v", err)
 	}
 
-	st := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, c7, vm.NewStack())
+	st := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, c7, vm.NewStack())
 	st.InitForExecution()
 	return st
 }

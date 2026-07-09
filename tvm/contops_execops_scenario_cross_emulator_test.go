@@ -15,6 +15,7 @@ import (
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	tupleop "github.com/xssnick/tonutils-go/tvm/op/tuple"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -952,11 +953,11 @@ func FuzzTVMCrossEmulatorContExecScenariosGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%contExecScenarioVersionCaseCount))
 	}
 	for i := 0; i < contExecScenarioVersionCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 

@@ -289,11 +289,11 @@ func FuzzTVMCrossEmulatorStackOpsMiscGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%stackOpsMiscVersionedCaseCount), uint16(77+version))
 	}
 	for i := 0; i < stackOpsMiscVersionedCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i), uint16(0x30+i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i), uint16(0x30+i))
 	}
 	f.Add(uint8(255), uint8(255), uint16(0xffff))
 

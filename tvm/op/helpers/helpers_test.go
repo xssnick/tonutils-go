@@ -93,7 +93,7 @@ func TestSimpleOPLifecycle(t *testing.T) {
 		t.Fatal("expected deserialize underflow")
 	}
 
-	state := &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(10)}
+	state := &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(10), GlobalVersion: vm.MaxSupportedGlobalVersion}
 	if err := op.Interpret(state); err != nil {
 		t.Fatalf("interpret failed: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSimpleOPLifecycle(t *testing.T) {
 		Name:         "NOPE",
 		BaseGasPrice: 2,
 	}
-	state = &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(1)}
+	state = &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(1), GlobalVersion: vm.MaxSupportedGlobalVersion}
 	if err := noGas.Interpret(state); err == nil {
 		t.Fatal("expected out of gas")
 	}
@@ -184,7 +184,7 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 		t.Fatalf("unexpected decoded suffix: %d", decoded)
 	}
 
-	state := &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(10)}
+	state := &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(10), GlobalVersion: vm.MaxSupportedGlobalVersion}
 	if err := op.Interpret(state); err != nil {
 		t.Fatalf("interpret failed: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 		t.Fatalf("variant deserialize failed: %v", err)
 	}
 
-	state = &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(1)}
+	state = &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(1), GlobalVersion: vm.MaxSupportedGlobalVersion}
 	failing := &AdvancedOP{
 		Action:         func(*vm.State) error { t.Fatal("action should not run"); return nil },
 		BitPrefix:      BytesPrefix(0x81),

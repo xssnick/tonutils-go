@@ -86,7 +86,7 @@ func TestTransactionExecutionLibraries(t *testing.T) {
 	blockLib := cell.BeginCell().MustStoreUInt(0xC7, 8).EndCell()
 	blockLibraries := []*cell.Cell{blockLib}
 
-	got := transactionExecutionLibraries(&transactionRuntimeAccount{}, blockLibraries)
+	got := transactionExecutionLibraries(&transactionRuntimeAccount{}, blockLibraries, 14)
 	if len(got) != 1 || got[0] != blockLib {
 		t.Fatalf("libraries without account libs = %v, want block library only", got)
 	}
@@ -96,7 +96,7 @@ func TestTransactionExecutionLibraries(t *testing.T) {
 	got = transactionExecutionLibraries(&transactionRuntimeAccount{
 		inMsgLibraries: inMsgDict,
 		libraries:      accountDict,
-	}, blockLibraries)
+	}, blockLibraries, 14)
 	want := []*cell.Cell{inMsgRoot, accountRoot, blockLib}
 	if len(got) != len(want) {
 		t.Fatalf("libraries len = %d, want %d", len(got), len(want))
@@ -105,6 +105,14 @@ func TestTransactionExecutionLibraries(t *testing.T) {
 		if got[i] != lib {
 			t.Fatalf("libraries[%d] = %p, want %p", i, got[i], lib)
 		}
+	}
+
+	got = transactionExecutionLibraries(&transactionRuntimeAccount{
+		inMsgLibraries: inMsgDict,
+		libraries:      accountDict,
+	}, blockLibraries, 15)
+	if len(got) != 1 || got[0] != blockLib {
+		t.Fatalf("v15 libraries = %v, want block library only", got)
 	}
 }
 
@@ -789,7 +797,7 @@ func TestEmulateTransactionExternalCommit(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -876,7 +884,7 @@ func TestEmulateTransactionCommittedThrowRunsActionPhase(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -936,7 +944,7 @@ func TestCheckExternalMessageAcceptedMatchesTransactionAccept(t *testing.T) {
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 	}
 	checkCfg := testTxParams{
 		Now:         txCfg.Now,
@@ -981,7 +989,7 @@ func TestCheckExternalMessageAcceptedRejectsWithoutAccept(t *testing.T) {
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("check external message accepted failed: %v", err)
@@ -991,7 +999,7 @@ func TestCheckExternalMessageAcceptedRejectsWithoutAccept(t *testing.T) {
 	}
 }
 
-func TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(t *testing.T) {
+func TestCheckExternalMessageAcceptedSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
 	signature := make([]byte, 64)
 	signature[0] = 1
 	signature[63] = 2
@@ -1002,7 +1010,7 @@ func TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(t *testing.T) {
 	machine := NewTVM()
 	for _, sigCase := range executionConfigSignatureCases {
 		t.Run(sigCase.name, func(t *testing.T) {
-			code := makeCheckExternalAcceptedChksigAlwaysCode(t, sigCase, signature, acceptBody)
+			code := makeCheckExternalAcceptedSignatureCheckAlwaysCode(t, sigCase, signature, acceptBody)
 			shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, origData, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
 
 			msg := &tlb.ExternalMessage{
@@ -1019,7 +1027,7 @@ func TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(t *testing.T) {
 				t.Fatalf("failed to parse account: %v", err)
 			}
 
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vmcore.MaxSupportedGlobalVersion; version++ {
 				t.Run("v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
 					for _, tt := range []struct {
 						name   string
@@ -1033,11 +1041,11 @@ func TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(t *testing.T) {
 						want := tt.want && version >= sigCase.minVersion
 						t.Run(tt.name, func(t *testing.T) {
 							accepted, err := testCheckExternalAccepted(machine, shard, &account, msgCell, msg, testTxParams{
-								Now:                 uint32(tonopsTestTime.Unix()),
-								BlockLT:             transactionTestLogicalTime,
-								LogicalTime:         transactionTestLogicalTime,
-								Config:              transactionTestConfigWithGlobalVersion(t, uint32(version)),
-								ChksigAlwaysSucceed: tt.always,
+								Now:                         uint32(tonopsTestTime.Unix()),
+								BlockLT:                     transactionTestLogicalTime,
+								LogicalTime:                 transactionTestLogicalTime,
+								Config:                      transactionTestConfigWithGlobalVersion(t, uint32(version)),
+								SignatureCheckAlwaysSucceed: tt.always,
 							})
 							if err != nil {
 								t.Fatalf("check external message accepted failed: %v", err)
@@ -1053,7 +1061,7 @@ func TestCheckExternalMessageAcceptedChksigAlwaysSucceedPerRun(t *testing.T) {
 	}
 }
 
-func makeCheckExternalAcceptedChksigAlwaysCode(t *testing.T, tt executionConfigSignatureCase, signature []byte, acceptBody *cell.Cell) *cell.Cell {
+func makeCheckExternalAcceptedSignatureCheckAlwaysCode(t *testing.T, tt executionConfigSignatureCase, signature []byte, acceptBody *cell.Cell) *cell.Cell {
 	t.Helper()
 
 	builders := []*cell.Builder{
@@ -1078,7 +1086,7 @@ func makeCheckExternalAcceptedChksigAlwaysCode(t *testing.T, tt executionConfigS
 		builders = append(builders, stackop.PUSHINT(big.NewInt(2)).Serialize())
 	}
 
-	builders = append(builders, chksigAlwaysVariantOpcode(t, tt), execop.IFJMPREF(acceptBody).Serialize())
+	builders = append(builders, signatureCheckAlwaysVariantOpcode(t, tt), execop.IFJMPREF(acceptBody).Serialize())
 	return codeFromBuilders(t, builders...)
 }
 
@@ -1169,7 +1177,7 @@ func TestCheckExternalMessageAcceptedNoGasSkipAndAutoNow(t *testing.T) {
 	accepted, err := testCheckExternalAccepted(NewTVM(), noGasShard, mustParseTransactionTestAccount(t, noGasShard), msgCell, msg, testTxParams{
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("no-gas check external message accepted failed: %v", err)
@@ -1182,7 +1190,7 @@ func TestCheckExternalMessageAcceptedNoGasSkipAndAutoNow(t *testing.T) {
 	accepted, err = testCheckExternalAccepted(NewTVM(), fundedShard, mustParseTransactionTestAccount(t, fundedShard), msgCell, msg, testTxParams{
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("auto-now check external message accepted failed: %v", err)
@@ -1212,7 +1220,7 @@ func TestEmulateTransactionInternalToNonExistCreatesUninitNoState(t *testing.T) 
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 	})
 	if err != nil {
 		t.Fatalf("emulate transaction failed: %v", err)
@@ -1439,7 +1447,7 @@ func TestEmulateTransactionInternalCreditsBalance(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -1722,7 +1730,7 @@ func TestEmulateTransactionConfigGlobalVersionControlsOpcodeDispatch(t *testing.
 	}
 }
 
-func TestEmulateTransactionChksigAlwaysSucceedPerRun(t *testing.T) {
+func TestEmulateTransactionSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
 	data := cell.BeginCell().EndCell()
 	body := cell.BeginCell().EndCell()
 	msgCell, err := tlb.ToCell(&tlb.ExternalMessage{
@@ -1739,9 +1747,9 @@ func TestEmulateTransactionChksigAlwaysSucceedPerRun(t *testing.T) {
 
 	for _, tt := range executionConfigSignatureCases {
 		t.Run(tt.name, func(t *testing.T) {
-			code := makeMessageChksigAlwaysVariantCode(t, tt, signature)
+			code := makeMessageSignatureCheckAlwaysVariantCode(t, tt, signature)
 
-			for version := uint32(MinSupportedGlobalVersion); version <= uint32(MaxSupportedGlobalVersion); version++ {
+			for version := uint32(0); version <= uint32(vmcore.MaxSupportedGlobalVersion); version++ {
 				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 					shard := buildTransactionTestShardAccount(t, tonopsTestAddr, code, data, walletSendTestBalance, uint32(tonopsTestTime.Unix()))
 					cfg := testTxParams{
@@ -1757,26 +1765,26 @@ func TestEmulateTransactionChksigAlwaysSucceedPerRun(t *testing.T) {
 					}
 
 					if tt.minVersion > 0 && version < uint32(tt.minVersion) {
-						res := runTransactionChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, true)
+						res := runTransactionSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, true)
 						if res.exit != vmerr.CodeInvalidOpcode {
 							t.Fatalf("%s v%d always=true exit=%d, want invalid opcode", tt.name, version, res.exit)
 						}
 						return
 					}
 
-					assertMessageChksigAlwaysVariant(t, tt, version, false, runTransactionChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
-					assertMessageChksigAlwaysVariant(t, tt, version, true, runTransactionChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, true), true)
-					assertMessageChksigAlwaysVariant(t, tt, version, false, runTransactionChksigAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
+					assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTransactionSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
+					assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, runTransactionSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, true), true)
+					assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTransactionSignatureCheckAlwaysVariant(t, NewTVM(), shard, msgCell, cfg, tt, false), false)
 				})
 			}
 		})
 	}
 }
 
-func runTransactionChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageChksigAlwaysVariantResult {
+func runTransactionSignatureCheckAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, msgCell *cell.Cell, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageSignatureCheckAlwaysVariantResult {
 	t.Helper()
 
-	cfg.ChksigAlwaysSucceed = always
+	cfg.SignatureCheckAlwaysSucceed = always
 	res, err := testEmulateTransaction(machine, shard, msgCell, cfg)
 	var execRes *ExecutionResult
 	if res != nil {
@@ -1787,13 +1795,13 @@ func runTransactionChksigAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.Sh
 		t.Fatalf("EmulateTransaction %s always=%v failed: %v", tt.name, always, err)
 	}
 	if !vmcore.IsSuccessExitCode(exit) {
-		return messageChksigAlwaysVariantResult{exit: exit}
+		return messageSignatureCheckAlwaysVariantResult{exit: exit}
 	}
 	got, err := res.Stack.PopBool()
 	if err != nil {
 		t.Fatalf("pop transaction %s result always=%v: %v", tt.name, always, err)
 	}
-	return messageChksigAlwaysVariantResult{exit: exit, ok: got}
+	return messageSignatureCheckAlwaysVariantResult{exit: exit, ok: got}
 }
 
 func TestEmulateTransactionAdvancesLastPaidWithoutStoragePricing(t *testing.T) {
@@ -1824,7 +1832,7 @@ func TestEmulateTransactionAdvancesLastPaidWithoutStoragePricing(t *testing.T) {
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
 		RandSeed:    append([]byte(nil), tonopsTestSeed...),
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    walletSendTestGasMax,
 			Credit: walletSendTestCredit,
@@ -2041,7 +2049,7 @@ func TestEmulateTransactionActionSendMsgNoFundsAbortsWithoutCommit(t *testing.T)
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
 		LogicalTime: transactionTestLogicalTime,
-		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas:         vmcore.NewGas(vmcore.GasConfig{Max: 1_000_000, Limit: 1_000_000}),
 	})
 	if err != nil {
@@ -2078,13 +2086,13 @@ func TestTVM14ActionFailureRestoresConsumedMessageBalanceRemaining(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	versionConfig := func(version uint32) *PreparedConfig {
+	versionConfig := func(version uint32) *PreparedBlockchainConfig {
 		t.Helper()
 		versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version})
 		if err != nil {
 			t.Fatalf("failed to build global version cell: %v", err)
 		}
-		return MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		return MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: versionCell,
 		}))
 	}
@@ -2192,7 +2200,7 @@ func TestEmulateTransactionActionBounceRequiresMode16(t *testing.T) {
 				Now:         uint32(tonopsTestTime.Unix()),
 				BlockLT:     transactionTestLogicalTime,
 				LogicalTime: transactionTestLogicalTime,
-				Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)),
+				Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 				Gas:         vmcore.NewGas(vmcore.GasConfig{Max: 1_000_000, Limit: 1_000_000}),
 			})
 			if err != nil {
@@ -2243,7 +2251,7 @@ func TestTransactionApplyActionsReserveCurrencyAffectsLaterSends(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply actions failed: %v", err)
 	}
@@ -2290,7 +2298,7 @@ func TestTransactionApplyActionsSendMode2SkipsInvalidExtraFlags(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
 		t.Fatalf("apply actions failed: %v", err)
 	}
@@ -2335,7 +2343,7 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 					Actions:   malformed,
 					Committed: true,
 				},
-			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.DefaultGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 			if err != nil {
 				t.Fatalf("apply actions failed: %v", err)
 			}
@@ -2370,7 +2378,7 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 			Actions:   skippedOnly,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, 13),
 		tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
 	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
@@ -2466,7 +2474,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   limitActions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
 	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
@@ -2491,7 +2499,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   sendThenLimit,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
 	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
 	if err != nil {
@@ -2816,11 +2824,8 @@ func TestEmulateTransactionLegacyBounceClearsExtraFlagsBeforeV12(t *testing.T) {
 		t.Fatalf("failed to build internal message: %v", err)
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(11)
-	if err != nil {
-		t.Fatalf("failed to create v11 TVM: %v", err)
-	}
-	res, err := testEmulateTransaction(&machine, shard, msgCell, testTxParams{
+	machine := NewTVM()
+	res, err := testEmulateTransaction(machine, shard, msgCell, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         uint32(tonopsTestTime.Unix()),
 		BlockLT:     transactionTestLogicalTime,
@@ -2885,7 +2890,7 @@ func TestTransactionBlackholeBurnsInboundGramsBeforeCreditPhase(t *testing.T) {
 			StorageExtra: tlb.StorageExtraNone{},
 		},
 	}
-	cfg := MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	cfg := MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamBurningConfig: burningCell,
 	}))
 
@@ -3063,7 +3068,7 @@ func TestTransactionSendActionValidatesStateInitLibraries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to build global version config: %v", err)
 	}
-	cfg := MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	cfg := MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: versionCell,
 	}))
 	invalidLib := cell.NewDict(256)

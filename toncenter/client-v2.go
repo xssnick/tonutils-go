@@ -544,11 +544,11 @@ func (v *V2) SendBoc(ctx context.Context, data []byte) error {
 }
 
 type EstimateFeeRequest struct {
-	Address      *address.Address `json:"address"`
-	Body         *cell.Cell       `json:"body"`
-	InitCode     *cell.Cell       `json:"init_code,omitempty"`
-	InitData     *cell.Cell       `json:"init_data,omitempty"`
-	IgnoreChkSig bool             `json:"ignore_chksig"`
+	Address              *address.Address `json:"address"`
+	Body                 *cell.Cell       `json:"body"`
+	InitCode             *cell.Cell       `json:"init_code,omitempty"`
+	InitData             *cell.Cell       `json:"init_data,omitempty"`
+	IgnoreSignatureCheck bool             `json:"ignore_chksig"`
 }
 
 type Fee struct {

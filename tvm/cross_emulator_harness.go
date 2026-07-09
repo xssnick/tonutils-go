@@ -59,10 +59,14 @@ func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, 
 	}
 
 	machine := NewTVM()
-	if err := machine.SetGlobalVersion(globalVersion); err != nil {
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
+	if err != nil {
 		return nil, err
 	}
-	res, err := machine.Execute(code, data, c7, vm.GasWithLimit(gasLimit), execStack, ExecutionConfig{Libraries: libs})
+	res, err := machine.Execute(code, data, c7, vm.GasWithLimit(gasLimit), execStack, ExecutionConfig{
+		Libraries: libs,
+		Config:    cfg,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +85,20 @@ func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, 
 		gasUsed:  res.GasUsed,
 		stack:    stackCell,
 	}, nil
+}
+
+func crossRunPreparedBlockchainConfig(globalVersion int) (*PreparedBlockchainConfig, error) {
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: uint32(globalVersion)})
+	if err != nil {
+		return nil, err
+	}
+
+	dict := cell.NewDict(32)
+	value := cell.BeginCell().MustStoreRef(versionCell).EndCell()
+	if err = dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
+		return nil, err
+	}
+	return PrepareBlockchainConfig(dict.AsCell())
 }
 
 func tupleToStackCell(v tuple.Tuple) (*cell.Cell, error) {

@@ -13,6 +13,7 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestTVMCrossEmulatorTransactionNonComputePhaseParity(t *testing.T) {
@@ -498,11 +499,11 @@ func FuzzTVMCrossEmulatorTransactionNonComputePhaseExternalGlobalVersion(f *test
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%transactionNonComputePhaseExternalCaseCount))
 	}
 	for i := 0; i < transactionNonComputePhaseExternalCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -604,13 +605,10 @@ func runTransactionNonComputePhaseExternalVersionCase(t *testing.T, fixture tran
 	t.Helper()
 
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, fixture.baseConfigRoot, version)
-	machine, err := NewTVM().WithGlobalVersion(int(version))
-	if err != nil {
-		t.Fatalf("failed to create v%d TVM: %v", version, err)
-	}
+	machine := NewTVM()
 	shard := buildTransactionTestShardAccount(t, tonopsTestAddr, tt.code, fixture.origData, walletSendTestBalance, fixture.now)
 
-	goRes, err := testEmulateTransaction(&machine, shard, fixture.msg, testTxParams{
+	goRes, err := testEmulateTransaction(machine, shard, fixture.msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         fixture.now,
 		BlockLT:     transactionTestLogicalTime,
@@ -704,11 +702,11 @@ func FuzzTVMCrossEmulatorTransactionNonComputePhaseTickTockGlobalVersion(f *test
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%transactionNonComputePhaseTickTockCaseCount))
 	}
 	for i := 0; i < transactionNonComputePhaseTickTockCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -776,16 +774,13 @@ func runTransactionNonComputePhaseTickTockVersionCase(t *testing.T, fixture tran
 	t.Helper()
 
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, fixture.baseConfigRoot, uint32(version))
-	machine, err := NewTVM().WithGlobalVersion(version)
-	if err != nil {
-		t.Fatalf("failed to create v%d TVM: %v", version, err)
-	}
+	machine := NewTVM()
 
 	shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, tt.code, fixture.origData, tickTockTestBalance)
 	if err != nil {
 		t.Fatalf("failed to build tick/tock shard: %v", err)
 	}
-	goRes, err := testEmulateTickTockTransaction(&machine, shard, tt.isTock, testTxParams{
+	goRes, err := testEmulateTickTockTransaction(machine, shard, tt.isTock, testTxParams{
 		Now:        fixture.now,
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
 		ConfigRoot: configRoot,
@@ -982,11 +977,11 @@ func FuzzTVMCrossEmulatorTransactionNonComputePhaseGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		f.Add(uint8(version), uint8(version%transactionNonComputePhaseVersionCaseCount))
 	}
 	for i := 0; i < transactionNonComputePhaseVersionCaseCount; i++ {
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(i))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
 	}
 	f.Add(uint8(255), uint8(255))
 
@@ -1153,12 +1148,9 @@ func runTransactionNonComputePhaseVersionCase(t *testing.T, fixture transactionN
 		testConfigRoot = tt.configRoot(t, versionConfigRoot)
 	}
 
-	machine, err := NewTVM().WithGlobalVersion(int(version))
-	if err != nil {
-		t.Fatalf("failed to create v%d TVM: %v", version, err)
-	}
+	machine := NewTVM()
 
-	goRes, err := testEmulateTransaction(&machine, tt.shard, tt.msg, testTxParams{
+	goRes, err := testEmulateTransaction(machine, tt.shard, tt.msg, testTxParams{
 		Address:     tonopsTestAddr,
 		Now:         fixture.now,
 		BlockLT:     transactionTestLogicalTime,

@@ -39,11 +39,11 @@ var preparedUnpackedParamIDs = [6]uint32{
 	tlb.ConfigParamSizeLimits,
 }
 
-// PreparedConfig is the per-config-epoch execution context: everything the
+// PreparedBlockchainConfig is the per-config-epoch execution context: everything the
 // transaction executor needs from the blockchain config, derived once from the
-// config root. It is immutable after PrepareConfig returns and safe to share
+// config root. It is immutable after PrepareBlockchainConfig returns and safe to share
 // between concurrently executing account lanes.
-type PreparedConfig struct {
+type PreparedBlockchainConfig struct {
 	root         *cell.Cell
 	version      uint32
 	capabilities uint64
@@ -72,10 +72,10 @@ type PreparedConfig struct {
 	unpackedParams [6]*cell.Cell
 }
 
-// PrepareConfig derives the immutable per-epoch execution context from a
+// PrepareBlockchainConfig derives the immutable per-epoch execution context from a
 // blockchain config root. The global version (config param 8) must be present
-// and within the supported range.
-func PrepareConfig(configRoot *cell.Cell) (*PreparedConfig, error) {
+// and within the supported range unless AllowHigherVersionExecUsingLatest is enabled.
+func PrepareBlockchainConfig(configRoot *cell.Cell) (*PreparedBlockchainConfig, error) {
 	if configRoot == nil {
 		return nil, errConfigRootRequired
 	}
@@ -89,9 +89,9 @@ func PrepareConfig(configRoot *cell.Cell) (*PreparedConfig, error) {
 		return nil, err
 	}
 
-	out := &PreparedConfig{
+	out := &PreparedBlockchainConfig{
 		root:         configRoot,
-		version:      globalVersion.Version,
+		version:      effectiveGlobalVersion(globalVersion.Version),
 		capabilities: globalVersion.Capabilities,
 		sizeLimits:   transactionLoadSizeLimits(bc),
 	}
@@ -122,9 +122,9 @@ func PrepareConfig(configRoot *cell.Cell) (*PreparedConfig, error) {
 	return out, nil
 }
 
-// MustPrepareConfig is PrepareConfig that panics on error.
-func MustPrepareConfig(configRoot *cell.Cell) *PreparedConfig {
-	out, err := PrepareConfig(configRoot)
+// MustPrepareBlockchainConfig is PrepareBlockchainConfig that panics on error.
+func MustPrepareBlockchainConfig(configRoot *cell.Cell) *PreparedBlockchainConfig {
+	out, err := PrepareBlockchainConfig(configRoot)
 	if err != nil {
 		panic(err)
 	}
@@ -132,32 +132,29 @@ func MustPrepareConfig(configRoot *cell.Cell) *PreparedConfig {
 }
 
 // Root returns the raw config root the context was prepared from.
-func (c *PreparedConfig) Root() *cell.Cell {
-	if c == nil {
-		return nil
-	}
+func (c *PreparedBlockchainConfig) Root() *cell.Cell {
 	return c.root
 }
 
-// GlobalVersion returns the validated global version (config param 8).
-func (c *PreparedConfig) GlobalVersion() uint32 {
+// GlobalVersion returns the effective global version used for execution.
+func (c *PreparedBlockchainConfig) GlobalVersion() uint32 {
 	return c.version
 }
 
 // Capabilities returns the capability bit set of config param 8.
-func (c *PreparedConfig) Capabilities() uint64 {
+func (c *PreparedBlockchainConfig) Capabilities() uint64 {
 	return c.capabilities
 }
 
-func (c *PreparedConfig) globalVersion() uint32 {
+func (c *PreparedBlockchainConfig) globalVersion() uint32 {
 	return c.version
 }
 
-func (c *PreparedConfig) hasCapability(capability uint64) bool {
+func (c *PreparedBlockchainConfig) hasCapability(capability uint64) bool {
 	return c.capabilities&capability != 0
 }
 
-func (c *PreparedConfig) specialGasFull() bool {
+func (c *PreparedBlockchainConfig) specialGasFull() bool {
 	return c.globalVersion() >= 5
 }
 
@@ -168,19 +165,19 @@ func transactionConfigMasterchainIndex(masterchain bool) int {
 	return 0
 }
 
-func (c *PreparedConfig) gasPricesFor(masterchain bool) *tlb.ConfigGasLimitsPrices {
+func (c *PreparedBlockchainConfig) gasPricesFor(masterchain bool) *tlb.ConfigGasLimitsPrices {
 	return c.gasPrices[transactionConfigMasterchainIndex(masterchain)]
 }
 
-func (c *PreparedConfig) msgForwardPricesFor(masterchain bool) *tlb.ConfigMsgForwardPrices {
+func (c *PreparedBlockchainConfig) msgForwardPricesFor(masterchain bool) *tlb.ConfigMsgForwardPrices {
 	return c.fwdPrices[transactionConfigMasterchainIndex(masterchain)]
 }
 
-func (c *PreparedConfig) storageDueLimitsFor(masterchain bool) transactionStorageDueLimits {
+func (c *PreparedBlockchainConfig) storageDueLimitsFor(masterchain bool) transactionStorageDueLimits {
 	return c.dueLimits[transactionConfigMasterchainIndex(masterchain)]
 }
 
-func (c *PreparedConfig) prepareStoragePrices(bc tlb.BlockchainConfig) error {
+func (c *PreparedBlockchainConfig) prepareStoragePrices(bc tlb.BlockchainConfig) error {
 	param, err := bc.GetParam(tlb.ConfigParamStoragePrices)
 	if err != nil {
 		if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
@@ -219,7 +216,7 @@ func (c *PreparedConfig) prepareStoragePrices(bc tlb.BlockchainConfig) error {
 	return nil
 }
 
-func (c *PreparedConfig) prepareGlobalID(bc tlb.BlockchainConfig) {
+func (c *PreparedBlockchainConfig) prepareGlobalID(bc tlb.BlockchainConfig) {
 	globalID, err := bc.GetGlobalID()
 	if err != nil {
 		return
@@ -228,7 +225,7 @@ func (c *PreparedConfig) prepareGlobalID(bc tlb.BlockchainConfig) {
 	c.hasGlobalID = true
 }
 
-func (c *PreparedConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) {
+func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) {
 	c.specialAccounts = map[preparedAddr256]struct{}{}
 	if configAddr, err := bc.GetConfigAddress(); err == nil && len(configAddr) == 32 {
 		c.specialAccounts[preparedAddr256(configAddr)] = struct{}{}
@@ -251,7 +248,7 @@ func (c *PreparedConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) {
 	}
 }
 
-func (c *PreparedConfig) prepareBlackhole(bc tlb.BlockchainConfig) {
+func (c *PreparedBlockchainConfig) prepareBlackhole(bc tlb.BlockchainConfig) {
 	burning, err := bc.GetBurningConfig()
 	if err != nil || len(burning.BlackholeAddr) != 32 {
 		return
@@ -260,7 +257,7 @@ func (c *PreparedConfig) prepareBlackhole(bc tlb.BlockchainConfig) {
 	c.blackholeAddr = &blackhole
 }
 
-func (c *PreparedConfig) prepareSuspended(bc tlb.BlockchainConfig) error {
+func (c *PreparedBlockchainConfig) prepareSuspended(bc tlb.BlockchainConfig) error {
 	list, err := bc.GetSuspendedAddressList()
 	if err != nil {
 		if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
@@ -295,7 +292,7 @@ func (c *PreparedConfig) prepareSuspended(bc tlb.BlockchainConfig) error {
 	return nil
 }
 
-func (c *PreparedConfig) preparePrecompiled(bc tlb.BlockchainConfig) error {
+func (c *PreparedBlockchainConfig) preparePrecompiled(bc tlb.BlockchainConfig) error {
 	precompiled, err := bc.GetPrecompiledContractsConfig()
 	if err != nil {
 		if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
@@ -326,7 +323,7 @@ func (c *PreparedConfig) preparePrecompiled(bc tlb.BlockchainConfig) error {
 	return nil
 }
 
-func (c *PreparedConfig) prepareWorkchains(bc tlb.BlockchainConfig) {
+func (c *PreparedBlockchainConfig) prepareWorkchains(bc tlb.BlockchainConfig) {
 	workchains, err := bc.GetWorkchains()
 	if err != nil || workchains == nil || workchains.Workchains == nil {
 		return
@@ -354,7 +351,7 @@ func (c *PreparedConfig) prepareWorkchains(bc tlb.BlockchainConfig) {
 // workchainDescr resolves a workchain descriptor from config param 12.
 // checksEnabled is false when the param is absent, which keeps the legacy
 // lenient behavior for partial emulation configs.
-func (c *PreparedConfig) workchainDescr(workchain int32) (descr *tlb.WorkchainDescr, found, checksEnabled bool) {
+func (c *PreparedBlockchainConfig) workchainDescr(workchain int32) (descr *tlb.WorkchainDescr, found, checksEnabled bool) {
 	if !c.hasWorkchains {
 		return nil, false, false
 	}
@@ -362,7 +359,7 @@ func (c *PreparedConfig) workchainDescr(workchain int32) (descr *tlb.WorkchainDe
 	return descr, found, true
 }
 
-func (c *PreparedConfig) isSpecialAccount(addr *address.Address) bool {
+func (c *PreparedBlockchainConfig) isSpecialAccount(addr *address.Address) bool {
 	if len(c.specialAccounts) == 0 || !transactionIsMasterchain(addr) {
 		return false
 	}
@@ -374,7 +371,7 @@ func (c *PreparedConfig) isSpecialAccount(addr *address.Address) bool {
 	return ok
 }
 
-func (c *PreparedConfig) isBlackHoleAccount(addr *address.Address) bool {
+func (c *PreparedBlockchainConfig) isBlackHoleAccount(addr *address.Address) bool {
 	if c.blackholeAddr == nil || !transactionIsMasterchain(addr) {
 		return false
 	}
@@ -382,7 +379,7 @@ func (c *PreparedConfig) isBlackHoleAccount(addr *address.Address) bool {
 	return len(addrData) == 32 && preparedAddr256(addrData) == *c.blackholeAddr
 }
 
-func (c *PreparedConfig) isAddressSuspended(now uint32, addr *address.Address) bool {
+func (c *PreparedBlockchainConfig) isAddressSuspended(now uint32, addr *address.Address) bool {
 	if len(c.suspended) == 0 || c.suspendedUntil <= now || addr.Type() != address.StdAddress {
 		return false
 	}
@@ -399,7 +396,7 @@ func (c *PreparedConfig) isAddressSuspended(now uint32, addr *address.Address) b
 
 // precompiledGasUsage returns the configured gas usage for a precompiled
 // contract code hash (config param 45), or nil when not precompiled.
-func (c *PreparedConfig) precompiledGasUsage(code *cell.Cell) *big.Int {
+func (c *PreparedBlockchainConfig) precompiledGasUsage(code *cell.Cell) *big.Int {
 	if code == nil || len(c.precompiled) == 0 {
 		return nil
 	}
@@ -413,7 +410,7 @@ func (c *PreparedConfig) precompiledGasUsage(code *cell.Cell) *big.Int {
 // currentStoragePricesSlice returns the raw dict value slice of the
 // storage-prices entry active at now (the latest entry with ValidSince <= now),
 // or nil when none applies.
-func (c *PreparedConfig) currentStoragePricesSlice(now uint32) *cell.Slice {
+func (c *PreparedBlockchainConfig) currentStoragePricesSlice(now uint32) *cell.Slice {
 	var best *cell.Slice
 	for i := range c.storagePrices {
 		if now != 0 && c.storagePrices[i].price.ValidSince > now {
@@ -429,7 +426,7 @@ func (c *PreparedConfig) currentStoragePricesSlice(now uint32) *cell.Slice {
 
 // computeStorageFee accrues the storage fee over [lastPaid, now) across all
 // active storage-price windows, mirroring tlb.BlockchainConfig.ComputeStorageFee.
-func (c *PreparedConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64) *big.Int {
+func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64) *big.Int {
 	if now <= lastPaid || lastPaid == 0 {
 		return big.NewInt(0)
 	}

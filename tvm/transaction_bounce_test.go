@@ -193,7 +193,7 @@ func TestTransactionInboundExtraFlagsBoundaries(t *testing.T) {
 	}
 }
 
-func transactionTestConfigWithGlobalVersionAndCapabilities(t *testing.T, version uint32, capabilities uint64) *PreparedConfig {
+func transactionTestConfigWithGlobalVersionAndCapabilities(t *testing.T, version uint32, capabilities uint64) *PreparedBlockchainConfig {
 	t.Helper()
 
 	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: version, Capabilities: capabilities})

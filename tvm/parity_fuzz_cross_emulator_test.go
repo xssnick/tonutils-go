@@ -471,7 +471,7 @@ type differentialFuzzCase struct {
 	code             *cell.Cell
 	stack            []any
 	globalVersion    int
-	globalVersionSet bool
+	hasGlobalVersion bool
 	rawC7Versioned   bool
 	gasLimit         int64
 	c7               tuple.Tuple
@@ -703,16 +703,16 @@ func TestTVMDifferentialFuzzVersionMatrixAudit(t *testing.T) {
 	shard, shards := parityFuzzShardEnv(t, "TVM_PARITY_VERSION_AUDIT_SHARD", "TVM_PARITY_VERSION_AUDIT_SHARDS")
 
 	families := differentialFuzzFamiliesFromEnv(t, "TVM_PARITY_VERSION_AUDIT_FAMILIES", versionMatrixDifferentialFuzzFamilies())
-	versionCount := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	versionCount := vm.MaxSupportedGlobalVersion - 0 + 1
 	runCount := 0
 	for familyIdx, family := range families {
 		familyIdx, family := familyIdx, family
 		t.Run(family, func(t *testing.T) {
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 				version := version
 				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 					for i := 0; i < seeds; i++ {
-						globalIdx := (familyIdx*versionCount+version-MinSupportedGlobalVersion)*seeds + i
+						globalIdx := (familyIdx*versionCount+version-0)*seeds + i
 						if shards > 0 && globalIdx%shards != shard {
 							continue
 						}
@@ -725,7 +725,7 @@ func TestTVMDifferentialFuzzVersionMatrixAudit(t *testing.T) {
 							if got := differentialFuzzSeedVersion(seed); got != version {
 								t.Fatalf("version matrix seed selected v%d, want v%d", got, version)
 							}
-							if !tc.globalVersionSet {
+							if !tc.hasGlobalVersion {
 								t.Fatalf("version matrix family %q generated case without explicit global version", family)
 							}
 							if tc.globalVersion != version {
@@ -847,7 +847,7 @@ func TestTVMDifferentialFuzzFamilyInventory(t *testing.T) {
 func TestTVMDifferentialFuzzVersionMatrixSeedsSelectRequestedVersion(t *testing.T) {
 	for start := uint64(0); start < 5; start++ {
 		for offset := 0; offset < 5; offset++ {
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 				seed := differentialFuzzVersionMatrixSeed(start, offset, version)
 				if got := differentialFuzzSeedVersion(seed); got != version {
 					t.Fatalf("seed start=%d offset=%d version=%d selected v%d", start, offset, version, got)
@@ -864,7 +864,7 @@ func TestTVMDifferentialFuzzVersionMatrixAuditSeedsIncludeFamily(t *testing.T) {
 	}
 
 	const seeds = 3
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		seen := make(map[uint64]string, len(families)*seeds)
 		for familyIdx, family := range families {
 			for seedIdx := 0; seedIdx < seeds; seedIdx++ {
@@ -887,13 +887,13 @@ func TestTVMDifferentialFuzzVersionMatrixFamiliesSetExplicitVersions(t *testing.
 	for _, family := range versionMatrixDifferentialFuzzFamilies() {
 		family := family
 		t.Run(family, func(t *testing.T) {
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 				version := version
 				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 					seed := differentialFuzzVersionMatrixSeed(0, 0, version)
 					r := rand.New(rand.NewSource(int64(seed)))
 					tc := generateDifferentialFuzzCaseWithFamily(t, r, seed, family)
-					if !tc.globalVersionSet {
+					if !tc.hasGlobalVersion {
 						t.Fatalf("%s generated case without explicit global version", family)
 					}
 					if tc.globalVersion != version {
@@ -965,7 +965,7 @@ func TestTVMDifferentialFuzzVersionMatrixC7ParamFamiliesUseComparableContext(t *
 	for family := range c7Families {
 		family := family
 		t.Run(family, func(t *testing.T) {
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 				seed := differentialFuzzVersionMatrixSeed(0, 0, version)
 				r := rand.New(rand.NewSource(int64(seed)))
 				tc := generateDifferentialFuzzCaseWithFamily(t, r, seed, family)
@@ -979,7 +979,7 @@ func TestTVMDifferentialFuzzVersionMatrixC7ParamFamiliesUseComparableContext(t *
 	for _, family := range versionMatrixDifferentialFuzzFamilies() {
 		family := family
 		t.Run("trace_"+family, func(t *testing.T) {
-			for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+			for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 				for offset := 0; offset < 32; offset++ {
 					seed := differentialFuzzVersionMatrixSeed(0, offset, version)
 					r := rand.New(rand.NewSource(int64(seed)))
@@ -1142,10 +1142,10 @@ func TestTVMDifferentialFuzzVersionMatrixAuditShardPartition(t *testing.T) {
 	}
 
 	const seeds = 5
-	versionCount := MaxSupportedGlobalVersion - MinSupportedGlobalVersion + 1
+	versionCount := vm.MaxSupportedGlobalVersion - 0 + 1
 	want := make(map[string]struct{}, len(families)*versionCount*seeds)
 	for familyIdx, family := range families {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			for seedIdx := 0; seedIdx < seeds; seedIdx++ {
 				want[fmt.Sprintf("%03d/%s/v%d/seed_%d", familyIdx, family, version, seedIdx)] = struct{}{}
 			}
@@ -1156,9 +1156,9 @@ func TestTVMDifferentialFuzzVersionMatrixAuditShardPartition(t *testing.T) {
 		seen := make(map[string]int, len(want))
 		for shard := 0; shard < shards; shard++ {
 			for familyIdx, family := range families {
-				for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+				for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 					for seedIdx := 0; seedIdx < seeds; seedIdx++ {
-						globalIdx := (familyIdx*versionCount+version-MinSupportedGlobalVersion)*seeds + seedIdx
+						globalIdx := (familyIdx*versionCount+version-0)*seeds + seedIdx
 						if globalIdx%shards != shard {
 							continue
 						}
@@ -1185,7 +1185,7 @@ func TestTVMDifferentialFuzzVersionMatrixFamiliesGenerateConfiguredVersions(t *t
 	}
 
 	for familyIdx, family := range families {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			for seedOffset := 0; seedOffset < 3; seedOffset++ {
 				seed := differentialFuzzVersionMatrixSeed(uint64(familyIdx+1)*32, seedOffset, version)
 				r := rand.New(rand.NewSource(int64(seed)))
@@ -1194,7 +1194,7 @@ func TestTVMDifferentialFuzzVersionMatrixFamiliesGenerateConfiguredVersions(t *t
 				if got := differentialFuzzSeedVersion(seed); got != version {
 					t.Fatalf("%s seed %d selected v%d, want v%d", family, seed, got, version)
 				}
-				if !tc.globalVersionSet {
+				if !tc.hasGlobalVersion {
 					t.Fatalf("%s seed %d generated case without explicit global version", family, seed)
 				}
 				if tc.globalVersion != version {
@@ -1272,12 +1272,12 @@ func TestTVMDifferentialFuzzFamiliesCrossEmulatorSmoke(t *testing.T) {
 			continue
 		}
 
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			seed := tvmFuzzGlobalVersionMatrixSeed(uint64(familyIdx)*16, 0, version)
 			t.Run(fmt.Sprintf("%s/v%d/seed_%d", family, version, seed), func(t *testing.T) {
 				r := rand.New(rand.NewSource(int64(seed)))
 				tc := generateDifferentialFuzzCaseWithFamily(t, r, seed, family)
-				if !tc.globalVersionSet {
+				if !tc.hasGlobalVersion {
 					t.Fatalf("%s generated case without explicit global version", family)
 				}
 				if tc.globalVersion != version {
@@ -1317,7 +1317,7 @@ type differentialFuzzVersionMatrixProgramSeed struct {
 func differentialFuzzVersionMatrixProgramSeeds(families []string) []differentialFuzzVersionMatrixProgramSeed {
 	seeds := make([]differentialFuzzVersionMatrixProgramSeed, 0, len(families)*tvmFuzzGlobalVersionCount()+1)
 	for familyIdx := range families {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			seeds = append(seeds, differentialFuzzVersionMatrixProgramSeed{
 				familyRaw:  uint16(familyIdx),
 				versionRaw: uint8(version),
@@ -1352,13 +1352,13 @@ func TestTVMDifferentialVersionMatrixProgramFuzzerSeedsCoverVersionsAndFamilies(
 		familyVersionSeen[familyIdx][version] = struct{}{}
 	}
 
-	for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		if _, ok := versionSeen[version]; !ok {
 			t.Fatalf("version matrix fuzzer baseline seeds do not cover v%d", version)
 		}
 	}
 	for familyIdx, family := range families {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			if _, ok := familyVersionSeen[familyIdx][version]; !ok {
 				t.Fatalf("version matrix fuzzer baseline seeds do not cover %s v%d", family, version)
 			}
@@ -1399,7 +1399,7 @@ func differentialFuzzVersionMatrixProgramCase(t *testing.T, families []string, s
 	if got := differentialFuzzSeedVersion(matrixSeed); got != version {
 		t.Fatalf("version matrix fuzzer seed selected v%d, want v%d", got, version)
 	}
-	if !tc.globalVersionSet {
+	if !tc.hasGlobalVersion {
 		t.Fatalf("version matrix fuzzer seed generated %s without explicit global version", families[familyIdx])
 	}
 	if tc.globalVersion != version {
@@ -1444,8 +1444,8 @@ func TestTVMDifferentialFuzzExplicitGlobalVersionZero(t *testing.T) {
 		code:   codeFromBuilders(t, cellsliceop.CHASHI(0).Serialize()),
 		stack:  []any{testEmptyCell()},
 	}, 0)
-	if !tc.globalVersionSet || tc.globalVersion != 0 {
-		t.Fatalf("explicit v0 case lost global version: set=%v version=%d", tc.globalVersionSet, tc.globalVersion)
+	if !tc.hasGlobalVersion || tc.globalVersion != 0 {
+		t.Fatalf("explicit v0 case lost global version: set=%v version=%d", tc.hasGlobalVersion, tc.globalVersion)
 	}
 	if tc.refCfg == nil {
 		t.Fatal("explicit v0 case must use config-aware reference runner")
@@ -1466,7 +1466,7 @@ func TestTVMDifferentialFuzzRawRichC7ExplicitGlobalVersionZero(t *testing.T) {
 		code:             codeFromBuilders(t, cellsliceop.CHASHI(0).Serialize()),
 		stack:            []any{testEmptyCell()},
 		globalVersion:    0,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		rawC7Versioned:   true,
 		c7:               parityProgramVersionedRichC7(t, 0),
 	})
@@ -5408,7 +5408,7 @@ func TestTVMDifferentialFuzzMathImmediateGapOps(t *testing.T) {
 				code:             tc.code,
 				stack:            tc.stack,
 				globalVersion:    globalVersion,
-				globalVersionSet: globalVersion != 0,
+				hasGlobalVersion: globalVersion != 0,
 				refCfg:           differentialFuzzOptionalVersionRefConfig(t, globalVersion),
 			})
 		})
@@ -9166,7 +9166,7 @@ func TestTVMDifferentialFuzzTonFuncGapOps(t *testing.T) {
 	}
 
 	configValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
-	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.DefaultGlobalVersion})
+	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.MaxSupportedGlobalVersion})
 	if err != nil {
 		t.Fatalf("failed to build global version config: %v", err)
 	}
@@ -9366,7 +9366,7 @@ func TestTVMDifferentialFuzzMsgAddressGapOps(t *testing.T) {
 		code             *cell.Cell
 		stack            []any
 		globalVersion    int
-		globalVersionSet bool
+		hasGlobalVersion bool
 	}{
 		{
 			name:  "ldmsgaddrq_short_std",
@@ -9423,14 +9423,14 @@ func TestTVMDifferentialFuzzMsgAddressGapOps(t *testing.T) {
 			code:             parityProgramCodeCell(funcsop.PARSEMSGADDR().Serialize()),
 			stack:            []any{varAddrSlice.Copy()},
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "parsemsgaddr_var_v10_fail",
 			code:             parityProgramCodeCell(funcsop.PARSEMSGADDR().Serialize()),
 			stack:            []any{varAddrSlice.Copy()},
 			globalVersion:    10,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:  "parsemsgaddrq_invalid_anycast",
@@ -9457,35 +9457,35 @@ func TestTVMDifferentialFuzzMsgAddressGapOps(t *testing.T) {
 			code:             parityProgramCodeCell(funcsop.REWRITEVARADDRQ().Serialize()),
 			stack:            []any{shortAnycastVarAddrSlice.Copy()},
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "rewritevaraddr_short_anycast_var_v9_underflow",
 			code:             parityProgramCodeCell(funcsop.REWRITEVARADDR().Serialize()),
 			stack:            []any{shortAnycastVarAddrSlice.Copy()},
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "rewritestdaddrq_anycast_std_v9_success",
 			code:             parityProgramCodeCell(funcsop.REWRITESTDADDRQ().Serialize()),
 			stack:            []any{anycastStdAddrSlice.Copy()},
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "rewritevaraddrq_anycast_std_v9_success",
 			code:             parityProgramCodeCell(funcsop.REWRITEVARADDRQ().Serialize()),
 			stack:            []any{anycastStdAddrSlice.Copy()},
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "rewritestdaddrq_anycast_std_v10_false",
 			code:             parityProgramCodeCell(funcsop.REWRITESTDADDRQ().Serialize()),
 			stack:            []any{anycastStdAddrSlice.Copy()},
 			globalVersion:    10,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:  "rewritestdaddrq_var_fail",
@@ -9522,21 +9522,21 @@ func TestTVMDifferentialFuzzMsgAddressGapOps(t *testing.T) {
 			code:             parityProgramCodeCell(funcsop.STOPTSTDADDRQ().Serialize(), stackop.DROP().Serialize(), stackop.DROP().Serialize(), tupleop.ISNULL().Serialize()),
 			stack:            []any{int64(100), cell.BeginCell().MustStoreUInt(0xAB, 8)},
 			globalVersion:    12,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "stoptstdaddrq_non_slice_v13_restores_value",
 			code:             parityProgramCodeCell(funcsop.STOPTSTDADDRQ().Serialize(), stackop.DROP().Serialize(), stackop.DROP().Serialize(), tupleop.ISNULL().Serialize()),
 			stack:            []any{int64(100), cell.BeginCell().MustStoreUInt(0xAB, 8)},
 			globalVersion:    13,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "stoptstdaddrq_non_slice_v14_restores_value",
 			code:             parityProgramCodeCell(funcsop.STOPTSTDADDRQ().Serialize(), stackop.DROP().Serialize(), stackop.DROP().Serialize(), tupleop.ISNULL().Serialize()),
 			stack:            []any{int64(100), cell.BeginCell().MustStoreUInt(0xAB, 8)},
 			globalVersion:    14,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:  "stoptstdaddrq_std_success_status_false",
@@ -9562,7 +9562,7 @@ func TestTVMDifferentialFuzzMsgAddressGapOps(t *testing.T) {
 				gasLimit: differentialFuzzGasLimit,
 				c7:       makeTonopsTestC7(t, tonopsTestC7Config{}),
 			}
-			if tc.globalVersionSet {
+			if tc.hasGlobalVersion {
 				fuzzCase.c7 = tuple.Tuple{}
 				fuzzCase = differentialFuzzWithGlobalVersion(t, fuzzCase, tc.globalVersion)
 			}
@@ -10140,7 +10140,7 @@ func TestTVMDifferentialFuzzHashGapOps(t *testing.T) {
 		code             *cell.Cell
 		stack            []any
 		globalVersion    int
-		globalVersionSet bool
+		hasGlobalVersion bool
 	}{
 		{
 			name: "sha256u_empty",
@@ -10214,14 +10214,14 @@ func TestTVMDifferentialFuzzHashGapOps(t *testing.T) {
 			code:             parityProgramCodeCell(funcsop.HASHEXT(255).Serialize()),
 			stack:            []any{int64(0)},
 			globalVersion:    8,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name:             "hashext_dynamic_missing_count_v9_precheck",
 			code:             parityProgramCodeCell(funcsop.HASHEXT(255).Serialize()),
 			stack:            []any{int64(0)},
 			globalVersion:    9,
-			globalVersionSet: true,
+			hasGlobalVersion: true,
 		},
 		{
 			name: "hashext_sha512_tuple",
@@ -10326,7 +10326,7 @@ func TestTVMDifferentialFuzzHashGapOps(t *testing.T) {
 				stack:    tc.stack,
 				gasLimit: differentialFuzzGasLimit,
 			}
-			if tc.globalVersionSet {
+			if tc.hasGlobalVersion {
 				fuzzCase = differentialFuzzWithGlobalVersion(t, fuzzCase, tc.globalVersion)
 			}
 			runDifferentialFuzzCase(t, fuzzCase)
@@ -11582,7 +11582,7 @@ func runDifferentialFuzzCase(t *testing.T, tc differentialFuzzCase) {
 	}
 
 	globalVersion := tc.globalVersion
-	if !tc.globalVersionSet && globalVersion == 0 {
+	if !tc.hasGlobalVersion && globalVersion == 0 {
 		globalVersion = referenceRawRunGlobalVersion
 	}
 	if globalVersion != referenceRawRunGlobalVersion && tc.refCfg == nil && !tc.rawC7Versioned {
@@ -11705,7 +11705,7 @@ func differentialFuzzC7FromRefConfig(t *testing.T, code *cell.Cell, cfg referenc
 		seed = referenceDefaultTonopsSeed
 	}
 
-	prepared := MustPrepareConfig(cfg.ConfigRoot)
+	prepared := MustPrepareBlockchainConfig(cfg.ConfigRoot)
 	c7, err := buildEmulationC7(emulationC7Input{
 		addr:           cfg.Address,
 		code:           code,
@@ -11748,7 +11748,7 @@ func differentialFuzzWithGlobalVersion(t *testing.T, tc differentialFuzzCase, ve
 	t.Helper()
 
 	tc.globalVersion = version
-	tc.globalVersionSet = true
+	tc.hasGlobalVersion = true
 	tc.refCfg = differentialFuzzExplicitVersionRefConfig(t, version)
 	tc.op = fmt.Sprintf("%s/v%d", tc.op, version)
 	return tc
@@ -12213,7 +12213,7 @@ func generateVersionedProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint64) d
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12246,7 +12246,7 @@ func generateVersionedDataSizeProgramFuzzCase(t *testing.T, r *rand.Rand, seed u
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12279,7 +12279,7 @@ func generateVersionedLibrariesProgramFuzzCase(t *testing.T, r *rand.Rand, seed 
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12314,7 +12314,7 @@ func generateVersionedMessageAddressProgramFuzzCase(t *testing.T, r *rand.Rand, 
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           refCfg,
 		refLibs:          g.refLibs,
 	}
@@ -12347,7 +12347,7 @@ func generateVersionedHashVarIntProgramFuzzCase(t *testing.T, r *rand.Rand, seed
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12382,7 +12382,7 @@ func generateVersionedPRNGProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint6
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           refCfg,
 		refLibs:          g.refLibs,
 	}
@@ -12415,7 +12415,7 @@ func generateVersionedMathProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint6
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12448,7 +12448,7 @@ func generateVersionedCellSliceProgramFuzzCase(t *testing.T, r *rand.Rand, seed 
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12481,7 +12481,7 @@ func generateVersionedControlProgramFuzzCase(t *testing.T, r *rand.Rand, seed ui
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12514,7 +12514,7 @@ func generateVersionedExecProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint6
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12547,7 +12547,7 @@ func generateVersionedDictProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint6
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12580,7 +12580,7 @@ func generateVersionedStackProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12613,7 +12613,7 @@ func generateVersionedTupleProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12646,7 +12646,7 @@ func generateVersionedRunVMProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
 		refLibs:          g.refLibs,
 	}
@@ -12682,7 +12682,7 @@ func generateVersionedRunVMRichC7ProgramFuzzCase(t *testing.T, r *rand.Rand, see
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		rawC7Versioned:   true,
 		c7:               g.c7,
 		refLibs:          g.refLibs,
@@ -12719,7 +12719,7 @@ func generateVersionedRuntimeProgramFuzzCase(t *testing.T, r *rand.Rand, seed ui
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		rawC7Versioned:   true,
 		c7:               g.c7,
 		refLibs:          g.refLibs,
@@ -12756,7 +12756,7 @@ func generateVersionedActionsProgramFuzzCase(t *testing.T, r *rand.Rand, seed ui
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		rawC7Versioned:   true,
 		c7:               g.c7,
 		refLibs:          g.refLibs,
@@ -12792,7 +12792,7 @@ func generateVersionedC7ProgramFuzzCase(t *testing.T, r *rand.Rand, seed uint64)
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		refCfg:           refCfg,
 		refLibs:          g.refLibs,
 	}
@@ -12828,7 +12828,7 @@ func generateVersionedRichC7ProgramFuzzCase(t *testing.T, r *rand.Rand, seed uin
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		rawC7Versioned:   true,
 		c7:               g.c7,
 		refLibs:          g.refLibs,
@@ -12865,7 +12865,7 @@ func generateVersionedSupercontractProgramFuzzCase(t *testing.T, r *rand.Rand, s
 		code:             parityProgramCodeFromBuilders(t, g.ops...),
 		stack:            parityProgramHostStack(g.initial),
 		globalVersion:    version,
-		globalVersionSet: true,
+		hasGlobalVersion: true,
 		rawC7Versioned:   true,
 		c7:               g.c7,
 		refLibs:          g.refLibs,

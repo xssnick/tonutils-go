@@ -181,6 +181,65 @@ func TestTransactionV13RejectsDeployStateInitPublicLibrariesInMasterchain(t *tes
 	}
 }
 
+func TestTransactionV15RejectsDeployStateInitLibraries(t *testing.T) {
+	lib := cell.BeginCell().MustStoreUInt(0xA5, 8).EndCell()
+	libs := buildTransactionV13LibraryDict(t, lib, false)
+	stateInit := &tlb.StateInit{
+		Code: cell.BeginCell().EndCell(),
+		Data: cell.BeginCell().EndCell(),
+		Lib:  libs,
+	}
+	stateCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := tlb.Message{
+		MsgType: tlb.MsgTypeInternal,
+		Msg: &tlb.InternalMessage{
+			StateInit: stateInit,
+		},
+	}
+
+	for _, tt := range []struct {
+		name    string
+		version uint32
+		status  tlb.AccountStatus
+		wantBad bool
+	}{
+		{name: "v14 uninit allows basechain private libs", version: 14, status: tlb.AccountStatusUninit},
+		{name: "v15 uninit rejects libs", version: 15, status: tlb.AccountStatusUninit, wantBad: true},
+		{name: "v15 nonexist rejects libs", version: 15, status: tlb.AccountStatusNonExist, wantBad: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := &transactionRuntimeAccount{
+				addr:   address.NewAddress(0, 0, stateCell.Hash()),
+				status: tt.status,
+			}
+
+			_, used, skip, err := transactionPrepareComputeAccount(
+				acc,
+				tt.status,
+				false,
+				&msg,
+				false,
+				transactionTestConfigWithGlobalVersion(t, tt.version),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantBad {
+				if used || skip == nil || skip.Type != tlb.ComputeSkipReasonBadState {
+					t.Fatalf("deploy libs should be bad_state, used=%t skip=%v", used, skip)
+				}
+				return
+			}
+			if !used || skip != nil {
+				t.Fatalf("deploy libs should activate before v15, used=%t skip=%v", used, skip)
+			}
+		})
+	}
+}
+
 func TestTransactionV13RejectsDeployStateInitFixedPrefixAboveLimit(t *testing.T) {
 	depth := uint64(9)
 	stateInit := &tlb.StateInit{
@@ -214,7 +273,7 @@ func TestTransactionV13RejectsDeployStateInitFixedPrefixAboveLimit(t *testing.T)
 
 func TestTransactionV13PrecompiledGasLoadedFromConfig(t *testing.T) {
 	code := cell.BeginCell().MustStoreUInt(0xA3, 8).EndCell()
-	cfg := MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	cfg := MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamPrecompiledContracts: buildTransactionV13PrecompiledConfig(t, code, 7),
 	}))
 	gas := vmcore.Gas{Max: 100, Limit: 10, Base: 10, Remaining: 10}
@@ -234,7 +293,7 @@ func TestTransactionV13PrecompiledGasLoadedFromConfig(t *testing.T) {
 
 func TestTransactionV13PrecompiledGasAboveLimitSkipsCompute(t *testing.T) {
 	code := cell.BeginCell().MustStoreUInt(0xA4, 8).EndCell()
-	cfg := MustPrepareConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	cfg := MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamPrecompiledContracts: buildTransactionV13PrecompiledConfig(t, code, 11),
 	}))
 	gas := vmcore.Gas{Max: 100, Limit: 10, Base: 10, Remaining: 10}

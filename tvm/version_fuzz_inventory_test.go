@@ -17,15 +17,15 @@ const (
 	expectedPackageLocalVersionFuzzerCount          = 45
 	expectedPackageLocalVersionFuzzerHash           = "699abeaefe17fb239299b7e2c09a91f9e2bd7c64fc5ed41664d0e73611c6b61a"
 	expectedSupportedRangeVersionFuzzerCount        = 77
-	expectedSupportedRangeVersionFuzzerHash         = "0daec337c1bc64ad2d1267aa7960af5e2a44d38312f2574fd9f4ffcea0c18b06"
+	expectedSupportedRangeVersionFuzzerHash         = "b78317c241bf59e89458afa7305a7a6287c3f498c610af5b93bea7ed398404fa"
 	expectedSupportedRangeFullRangeVersionFuzzCount = 77
-	expectedSupportedRangeFullRangeVersionFuzzHash  = "0daec337c1bc64ad2d1267aa7960af5e2a44d38312f2574fd9f4ffcea0c18b06"
+	expectedSupportedRangeFullRangeVersionFuzzHash  = "b78317c241bf59e89458afa7305a7a6287c3f498c610af5b93bea7ed398404fa"
 	expectedSupportedRangePartialVersionFuzzCount   = 0
 	expectedSupportedRangePartialVersionFuzzHash    = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	expectedNonCrossVersionNamedFuzzerCount         = 87
-	expectedNonCrossVersionNamedFuzzerHash          = "8b2bf1f0da20eebf1fafbfaed61141de8cd14a4fa7bd578a93ecdd036389dc36"
-	expectedNonCrossVersionNamedTestCount           = 35
-	expectedNonCrossVersionNamedTestHash            = "a1bc559521ff1b623daf00e1233b128844994b8d3549f91a39580161e4381a0d"
+	expectedNonCrossVersionNamedFuzzerHash          = "6c56f47e3118ca93ab2c44044683456d6373b53500749c4a24e59d35f22bd45a"
+	expectedNonCrossVersionNamedTestCount           = 31
+	expectedNonCrossVersionNamedTestHash            = "7bb6f87db60ae39775589458d653da6cb02ddb909e8c5631b86bf398de89574c"
 	expectedPackageLocalVersionMapperShapeCount     = 7
 	expectedPackageLocalVersionMapperShapeHash      = "62c61884b8d5ee64ea57c5936f1a6f673d794af551a45e52942233d417c81074"
 )
@@ -198,29 +198,13 @@ func TestTVMPackageLocalVersionMapperShapeInventory(t *testing.T) {
 	}
 }
 
-func TestTVMPackageLocalVersionFuzzStatesConfigureExplicitGlobalVersion(t *testing.T) {
-	missing := packageLocalVersionFuzzFunctionsWithoutConfiguredState(t)
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		t.Fatalf("package-local version fuzz helpers set explicit GlobalVersion without GlobalVersionConfigured:\n%s", strings.Join(missing, "\n"))
-	}
-}
-
-func TestTVMOpVersionStateLiteralsConfigureExplicitGlobalVersion(t *testing.T) {
-	missing := opVersionStateLiteralsWithoutConfigured(t)
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		t.Fatalf("op tests build versioned vm.State literals without GlobalVersionConfigured:\n%s", strings.Join(missing, "\n"))
-	}
-}
-
 func TestTVMOpVersionStateLiteralScannerCoversExplicitZero(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "op/stack/fixture_test.go", `
 package stack
 
 func stateLiteralScannerFixture(version int) {
 	_ = &vm.State{GlobalVersion: 0}
-	_ = &vm.State{GlobalVersion: 0, GlobalVersionConfigured: true}
+	_ = &vm.State{GlobalVersion: 0}
 	_ = &vm.State{GlobalVersion: version}
 }
 `, 0)
@@ -228,20 +212,17 @@ func stateLiteralScannerFixture(version int) {
 		t.Fatalf("parse state literal scanner fixture: %v", err)
 	}
 
-	var explicit, configured int
+	var explicit int
 	ast.Inspect(file, func(node ast.Node) bool {
 		lit, ok := node.(*ast.CompositeLit)
 		if !ok || !opVersionStateLiteral(lit) || !opVersionStateLiteralUsesExplicitVersion(lit) {
 			return true
 		}
 		explicit++
-		if opVersionStateLiteralConfiguresExplicitVersion(lit) {
-			configured++
-		}
 		return true
 	})
-	if explicit != 3 || configured != 1 {
-		t.Fatalf("state literal scanner explicit/configured = %d/%d, want 3/1", explicit, configured)
+	if explicit != 3 {
+		t.Fatalf("state literal scanner explicit = %d, want 3", explicit)
 	}
 }
 
@@ -252,7 +233,6 @@ package stack
 func stateAssignmentScannerFixture(st *vm.State, version int) {
 	st.GlobalVersion = 0
 	st.GlobalVersion = version
-	st.GlobalVersionConfigured = true
 }
 `, 0)
 	if err != nil {
@@ -271,9 +251,6 @@ func stateAssignmentScannerFixture(st *vm.State, version int) {
 	}
 	if !versionFuzzFunctionWritesExplicitGlobalVersion(fn) {
 		t.Fatal("state assignment scanner did not detect explicit global version writes")
-	}
-	if !versionFuzzFunctionWritesGlobalVersionConfigured(fn) {
-		t.Fatal("state assignment scanner did not detect GlobalVersionConfigured write")
 	}
 }
 
@@ -347,10 +324,10 @@ func TestTVMSupportedRangeVersionFuzzerScannerCoversHelperSeedSources(t *testing
 	}
 
 	func FuzzSupportedRangeMappedArgFixture(f *testing.F) {
-		f.Add(uint8(MinSupportedGlobalVersion), uint8(99))
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(99))
-		f.Add(uint8(99), uint8(MinSupportedGlobalVersion))
-		f.Add(uint8(99), uint8(MaxSupportedGlobalVersion))
+		f.Add(uint8(0), uint8(99))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(99))
+		f.Add(uint8(99), uint8(0))
+		f.Add(uint8(99), uint8(vm.MaxSupportedGlobalVersion))
 
 		f.Fuzz(func(t *testing.T, rawVersion uint8, payload uint8) {
 			_ = tvmFuzzGlobalVersionByte(rawVersion)
@@ -358,8 +335,8 @@ func TestTVMSupportedRangeVersionFuzzerScannerCoversHelperSeedSources(t *testing
 	}
 
 	func FuzzSupportedRangeMappedArgNegativeFixture(f *testing.F) {
-		f.Add(uint8(MinSupportedGlobalVersion), uint8(99))
-		f.Add(uint8(MaxSupportedGlobalVersion), uint8(99))
+		f.Add(uint8(0), uint8(99))
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(99))
 
 		f.Fuzz(func(t *testing.T, payload uint8, rawVersion uint8) {
 			_ = tvmFuzzGlobalVersionByte(rawVersion)
@@ -367,7 +344,7 @@ func TestTVMSupportedRangeVersionFuzzerScannerCoversHelperSeedSources(t *testing
 	}
 
 	func FuzzSupportedRangeMappedLoopFixture(f *testing.F) {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			f.Add(uint8(version), uint8(99))
 		}
 
@@ -377,7 +354,7 @@ func TestTVMSupportedRangeVersionFuzzerScannerCoversHelperSeedSources(t *testing
 	}
 
 	func FuzzSupportedRangeMappedLoopNegativeFixture(f *testing.F) {
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			f.Add(uint8(version), uint8(99))
 		}
 
@@ -659,85 +636,6 @@ func packageLocalVersionMapperShapeInventoryHash(inventory []string) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func packageLocalVersionFuzzFunctionsWithoutConfiguredState(t *testing.T) []string {
-	t.Helper()
-
-	var missing []string
-	fset := token.NewFileSet()
-	err := filepath.WalkDir("op", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, "version_fuzz_test.go") {
-			return nil
-		}
-
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || !versionFuzzFunctionWritesExplicitGlobalVersion(fn) {
-				continue
-			}
-			if versionFuzzFunctionWritesGlobalVersionConfigured(fn) {
-				continue
-			}
-			pos := fset.Position(fn.Pos())
-			missing = append(missing, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(path), pos.Line, fn.Name.Name))
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan package-local version fuzz state configuration: %v", err)
-	}
-	return missing
-}
-
-func opVersionStateLiteralsWithoutConfigured(t *testing.T) []string {
-	t.Helper()
-
-	var missing []string
-	fset := token.NewFileSet()
-	err := filepath.WalkDir("op", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			lit, ok := node.(*ast.CompositeLit)
-			if !ok || !opVersionStateLiteral(lit) || !opVersionStateLiteralUsesExplicitVersion(lit) {
-				return true
-			}
-			if opVersionStateLiteralConfiguresExplicitVersion(lit) {
-				return true
-			}
-			pos := fset.Position(lit.Pos())
-			missing = append(missing, fmt.Sprintf("%s:%d", filepath.ToSlash(path), pos.Line))
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan op versioned state literals: %v", err)
-	}
-	return missing
-}
-
 func opVersionStateLiteral(lit *ast.CompositeLit) bool {
 	sel, ok := lit.Type.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "State" {
@@ -758,19 +656,6 @@ func opVersionStateLiteralUsesExplicitVersion(lit *ast.CompositeLit) bool {
 	return false
 }
 
-func opVersionStateLiteralConfiguresExplicitVersion(lit *ast.CompositeLit) bool {
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if !ok || versionFuzzFieldName(kv.Key) != "GlobalVersionConfigured" {
-			continue
-		}
-		if versionFuzzExprIsTrue(kv.Value) {
-			return true
-		}
-	}
-	return false
-}
-
 func versionFuzzFunctionWritesExplicitGlobalVersion(fn *ast.FuncDecl) bool {
 	found := false
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
@@ -782,26 +667,6 @@ func versionFuzzFunctionWritesExplicitGlobalVersion(fn *ast.FuncDecl) bool {
 			}
 		case *ast.KeyValueExpr:
 			if versionFuzzFieldName(node.Key) == "GlobalVersion" && versionFuzzExprIsExplicitGlobalVersion(node.Value) {
-				found = true
-				return false
-			}
-		}
-		return true
-	})
-	return found
-}
-
-func versionFuzzFunctionWritesGlobalVersionConfigured(fn *ast.FuncDecl) bool {
-	found := false
-	ast.Inspect(fn.Body, func(node ast.Node) bool {
-		switch node := node.(type) {
-		case *ast.AssignStmt:
-			if versionFuzzAssignmentWritesTrueField(node, "GlobalVersionConfigured") {
-				found = true
-				return false
-			}
-		case *ast.KeyValueExpr:
-			if versionFuzzFieldName(node.Key) == "GlobalVersionConfigured" && versionFuzzExprIsTrue(node.Value) {
 				found = true
 				return false
 			}
@@ -947,7 +812,7 @@ func packageLocalVersionMapperAssign(stmt ast.Stmt) (versionVar, rawVar string, 
 	if !ok || packageLocalVersionMapperCallName(divisor.Fun) != "int64" || len(divisor.Args) != 1 {
 		return "", "", false
 	}
-	if !packageLocalVersionMapperDefaultGlobalVersionPlusOne(divisor.Args[0]) {
+	if !packageLocalVersionMapperMaxSupportedGlobalVersionPlusOne(divisor.Args[0]) {
 		return "", "", false
 	}
 	return version.Name, raw.Name, true
@@ -976,17 +841,17 @@ func packageLocalVersionMapperReturn(stmt ast.Stmt, versionVar string) bool {
 	return ok && len(ret.Results) == 1 && packageLocalVersionMapperIdent(ret.Results[0], versionVar)
 }
 
-func packageLocalVersionMapperDefaultGlobalVersionPlusOne(expr ast.Expr) bool {
+func packageLocalVersionMapperMaxSupportedGlobalVersionPlusOne(expr ast.Expr) bool {
 	add, ok := expr.(*ast.BinaryExpr)
 	if !ok || add.Op != token.ADD || !packageLocalVersionMapperOne(add.Y) {
 		return false
 	}
-	return packageLocalVersionMapperDefaultGlobalVersion(add.X)
+	return packageLocalVersionMapperMaxSupportedGlobalVersion(add.X)
 }
 
-func packageLocalVersionMapperDefaultGlobalVersion(expr ast.Expr) bool {
+func packageLocalVersionMapperMaxSupportedGlobalVersion(expr ast.Expr) bool {
 	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "DefaultGlobalVersion" {
+	if !ok || sel.Sel.Name != "MaxSupportedGlobalVersion" {
 		return false
 	}
 	ident, ok := sel.X.(*ast.Ident)
@@ -1414,7 +1279,7 @@ func versionFuzzFunctionUsesSupportedRangeMapper(fn *ast.FuncDecl) bool {
 			return false
 		}
 		expr, ok := node.(ast.Expr)
-		if !ok || !versionFuzzExprUsesDefaultGlobalVersionModulo(expr) {
+		if !ok || !versionFuzzExprUsesMaxSupportedGlobalVersionModulo(expr) {
 			return true
 		}
 		found = true
@@ -1442,7 +1307,7 @@ func versionFuzzSupportedRangeMapperCall(expr ast.Expr) bool {
 	}
 }
 
-func versionFuzzExprUsesDefaultGlobalVersionModulo(expr ast.Expr) bool {
+func versionFuzzExprUsesMaxSupportedGlobalVersionModulo(expr ast.Expr) bool {
 	bin, ok := expr.(*ast.BinaryExpr)
 	if !ok || bin.Op != token.REM {
 		return false
@@ -1484,9 +1349,6 @@ func transactionFuzzAllVersionsRangeLoopVar(stmt *ast.RangeStmt) string {
 }
 
 func versionFuzzExprContainsSupportedMin(expr ast.Expr) bool {
-	if packageLocalExprContainsIdent(expr, "MinSupportedGlobalVersion") {
-		return true
-	}
 	return versionFuzzExprIsZeroLiteral(expr)
 }
 
@@ -1494,14 +1356,11 @@ func versionFuzzExprContainsSupportedMax(expr ast.Expr) bool {
 	if packageLocalExprContainsIdent(expr, "MaxSupportedGlobalVersion") {
 		return true
 	}
-	if packageLocalExprContainsIdent(expr, "DefaultGlobalVersion") {
-		return true
-	}
 
 	found := false
 	ast.Inspect(expr, func(node ast.Node) bool {
 		sel, ok := node.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "DefaultGlobalVersion" {
+		if !ok || sel.Sel.Name != "MaxSupportedGlobalVersion" {
 			return true
 		}
 		ident, ok := sel.X.(*ast.Ident)
@@ -1536,7 +1395,7 @@ func packageLocalDefaultVersionForLoopVar(stmt *ast.ForStmt) string {
 	}
 
 	cond, ok := stmt.Cond.(*ast.BinaryExpr)
-	if !ok || cond.Op != token.LEQ || !packageLocalExprContainsIdent(cond.X, ident.Name) || !packageLocalExprContainsDefaultGlobalVersion(cond.Y) {
+	if !ok || cond.Op != token.LEQ || !packageLocalExprContainsIdent(cond.X, ident.Name) || !packageLocalExprContainsMaxSupportedGlobalVersion(cond.Y) {
 		return ""
 	}
 
@@ -1594,11 +1453,11 @@ func packageLocalExprIsZero(expr ast.Expr) bool {
 	}
 }
 
-func packageLocalExprContainsDefaultGlobalVersion(expr ast.Expr) bool {
+func packageLocalExprContainsMaxSupportedGlobalVersion(expr ast.Expr) bool {
 	found := false
 	ast.Inspect(expr, func(node ast.Node) bool {
 		sel, ok := node.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "DefaultGlobalVersion" {
+		if !ok || sel.Sel.Name != "MaxSupportedGlobalVersion" {
 			return true
 		}
 		ident, ok := sel.X.(*ast.Ident)

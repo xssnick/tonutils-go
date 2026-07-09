@@ -55,7 +55,7 @@ func registeredOpcodeAvailabilityAuditCases() []registeredOpcodeAvailabilityAudi
 	var cases []registeredOpcodeAvailabilityAuditCase
 	for idx, opGetter := range vm.List {
 		op := opGetter()
-		if versioned, ok := op.(vm.VersionedOp); ok && versioned.MinGlobalVersion() > MinSupportedGlobalVersion {
+		if versioned, ok := op.(vm.VersionedOp); ok && versioned.MinGlobalVersion() > 0 {
 			continue
 		}
 
@@ -261,7 +261,7 @@ func registeredOpcodeAvailabilityFuzzSeeds(cases []registeredOpcodeAvailabilityA
 		if _, ok := required[tt.name]; !ok && !strings.HasPrefix(tt.name, "supplemental_") && i%97 != 0 {
 			continue
 		}
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			seeds = append(seeds, registeredOpcodeAvailabilityFuzzSeed{
 				caseIdx: i,
 				version: version,
@@ -290,8 +290,8 @@ func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []r
 		if seed.caseIdx < 0 || seed.caseIdx >= len(cases) {
 			t.Fatalf("registered opcode availability fuzz seed case index %d outside [0, %d)", seed.caseIdx, len(cases))
 		}
-		if seed.version < MinSupportedGlobalVersion || seed.version > MaxSupportedGlobalVersion {
-			t.Fatalf("registered opcode availability fuzz seed %s version %d outside [%d, %d]", cases[seed.caseIdx].name, seed.version, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if seed.version < 0 || seed.version > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("registered opcode availability fuzz seed %s version %d outside [%d, %d]", cases[seed.caseIdx].name, seed.version, 0, vm.MaxSupportedGlobalVersion)
 		}
 		if seen[seed.caseIdx] == nil {
 			seen[seed.caseIdx] = make(map[int]struct{})
@@ -311,7 +311,7 @@ func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []r
 		if strings.HasPrefix(tt.name, "supplemental_") && len(versions) == 0 {
 			t.Fatalf("registered opcode availability fuzz seeds do not cover supplemental case %s", tt.name)
 		}
-		for version := MinSupportedGlobalVersion; version <= MaxSupportedGlobalVersion; version++ {
+		for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 			if _, ok := versions[version]; len(versions) > 0 && !ok {
 				t.Fatalf("registered opcode availability fuzz seeds do not cover %s v%d", tt.name, version)
 			}

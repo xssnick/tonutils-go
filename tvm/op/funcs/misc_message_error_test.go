@@ -137,10 +137,10 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 			t.Fatal("LDSTDADDR should reject non-standard addresses")
 		}
 
-		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b11, 2).ToSlice(), vm.DefaultGlobalVersion); ok || parsed != nil {
+		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b11, 2).ToSlice(), vm.MaxSupportedGlobalVersion); ok || parsed != nil {
 			t.Fatalf("parseMessageAddress(type=3) = (%v, %v), want failure", parsed, ok)
 		}
-		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b10, 2).MustStoreUInt(1, 1).ToSlice(), vm.DefaultGlobalVersion); ok || parsed != nil {
+		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b10, 2).MustStoreUInt(1, 1).ToSlice(), vm.MaxSupportedGlobalVersion); ok || parsed != nil {
 			t.Fatalf("parseMessageAddress(anycast) = (%v, %v), want failure", parsed, ok)
 		}
 
@@ -195,7 +195,7 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PopSlice failed: %v", err)
 		}
-		if !isValidStdMsgAddr(restored, vm.DefaultGlobalVersion) {
+		if !isValidStdMsgAddr(restored, vm.MaxSupportedGlobalVersion) {
 			t.Fatalf("STSTDADDRQ should restore the source address, got %x", mustSliceData(t, restored))
 		}
 
@@ -419,7 +419,7 @@ func TestDataSizeLegacyLowGasRefAccounting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			st := vm.NewExecutionStateWithGlobalVersion(tt.version, vm.GasWithLimit(50), nil, tuple.Tuple{}, vm.NewStack())
+			st := vm.NewExecutionState(tt.version, vm.GasWithLimit(50), nil, tuple.Tuple{}, vm.NewStack())
 			st.InitForExecution()
 			if err := st.Stack.PushCell(root); err != nil {
 				t.Fatalf("PushCell failed: %v", err)

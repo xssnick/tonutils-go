@@ -17,7 +17,7 @@ type dictPrefixEntry struct {
 }
 
 func newDictTestState() *vm.State {
-	st := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
+	st := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
 	st.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 	st.InitForExecution()
 	return st

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 var expectedRuntimeGlobalVersionGateCounts = map[string]int{
@@ -29,35 +31,35 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 	"op/math/rshiftcode.go":                1,
 	"op/stack/blkswx.go":                   1,
 	"op/stack/internal.go":                 1,
-	"transaction_account.go":               13,
-	"transaction_actions.go":               26,
+	"transaction_account.go":               14,
+	"transaction_actions.go":               32,
 	"transaction_bounce.go":                3,
 	"transaction_config.go":                1,
-	"transaction_emulation.go":             1,
+	"transaction_emulation.go":             2,
 	"transaction_fees.go":                  4,
 	"vm/child_vm.go":                       2,
 	"vm/exec.go":                           2,
 	"vm/libraries.go":                      2,
 	"vm.go":                                6,
-	"vm/state.go":                          3,
+	"vm/state.go":                          1,
 }
 
-var expectedRuntimeGlobalVersionGateThresholds = []int{0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+var expectedRuntimeGlobalVersionGateThresholds = []int{0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 var expectedTransactionGlobalVersionGateCounts = map[string]int{
-	"transaction_account.go":   13,
-	"transaction_actions.go":   26,
+	"transaction_account.go":   14,
+	"transaction_actions.go":   32,
 	"transaction_bounce.go":    3,
 	"transaction_config.go":    1,
-	"transaction_emulation.go": 1,
+	"transaction_emulation.go": 2,
 	"transaction_fees.go":      4,
 }
 
-var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11, 12, 13, 14}
+var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 const (
 	expectedRuntimeGlobalVersionDynamicGateCount = 2
-	expectedRuntimeGlobalVersionDynamicGateHash  = "9db10de7cc1dd33bec9f44f62ec9ece044d572a393eda2b03eb97cd86ab664c8"
+	expectedRuntimeGlobalVersionDynamicGateHash  = "4c92c5481fb684066c5bef38d10d33c66ca03bf0565679a65dfd0e08b6c7d5b5"
 
 	expectedTransactionGlobalVersionDynamicGateCount = 1
 )
@@ -300,10 +302,7 @@ var expectedTransactionGlobalVersionGateCrossEmulatorAnchors = map[string][]stri
 	},
 }
 
-var expectedTVMGlobalVersionFieldWriters = map[string]int{
-	"vm.go:SetGlobalVersion":  1,
-	"vm.go:WithGlobalVersion": 1,
-}
+var expectedTVMGlobalVersionFieldWriters = map[string]int{}
 
 var expectedTVMTestGlobalVersionFieldWriters = map[string]int{
 	"parity_fuzz_cross_emulator_test.go:differentialFuzzWithGlobalVersion": 1,
@@ -393,8 +392,8 @@ func TestTVMRuntimeGlobalVersionGateThresholdsStaySupported(t *testing.T) {
 		if gate.threshold < 0 {
 			continue
 		}
-		if gate.threshold < MinSupportedGlobalVersion || gate.threshold > MaxSupportedGlobalVersion {
-			t.Fatalf("runtime global-version gate %s uses threshold outside supported range [%d, %d]", runtimeGlobalVersionGateString(gate), MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+		if gate.threshold < 0 || gate.threshold > vm.MaxSupportedGlobalVersion {
+			t.Fatalf("runtime global-version gate %s uses threshold outside supported range [%d, %d]", runtimeGlobalVersionGateString(gate), 0, vm.MaxSupportedGlobalVersion)
 		}
 	}
 }
@@ -414,8 +413,8 @@ func TestTVMRuntimeGlobalVersionGateLiteralScannerCoversSupportedConstants(t *te
 package tvm
 
 func globalVersionGateLiteralFixture(version int) {
-	_ = version < MinSupportedGlobalVersion
-	_ = version > MaxSupportedGlobalVersion
+	_ = version < 0
+	_ = version > vm.MaxSupportedGlobalVersion
 }
 `, 0)
 	if err != nil {
@@ -434,8 +433,8 @@ func globalVersionGateLiteralFixture(version int) {
 		}
 		return true
 	})
-	if len(thresholds) != 2 || thresholds[0] != MinSupportedGlobalVersion || thresholds[1] != MaxSupportedGlobalVersion {
-		t.Fatalf("global-version gate constant thresholds = %v, want [%d %d]", thresholds, MinSupportedGlobalVersion, MaxSupportedGlobalVersion)
+	if len(thresholds) != 2 || thresholds[0] != 0 || thresholds[1] != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("global-version gate constant thresholds = %v, want [%d %d]", thresholds, 0, vm.MaxSupportedGlobalVersion)
 	}
 }
 
@@ -481,7 +480,7 @@ func globalVersionGateShapeFixture(globalVersion int, version int, state *State,
 	}
 }
 
-func TestTVMGlobalVersionFieldWritesStayValidated(t *testing.T) {
+func TestTVMGlobalVersionFieldWritesStayInStateConstruction(t *testing.T) {
 	writers := tvmGlobalVersionFieldWriters(t)
 	if len(writers) != len(expectedTVMGlobalVersionFieldWriters) {
 		t.Fatalf("TVM.globalVersion writer count = %d, want %d; got:\n%s", len(writers), len(expectedTVMGlobalVersionFieldWriters), tvmGlobalVersionFieldWriterList(writers))
@@ -495,12 +494,12 @@ func TestTVMGlobalVersionFieldWritesStayValidated(t *testing.T) {
 	}
 	for key := range writers {
 		if _, ok := expectedTVMGlobalVersionFieldWriters[key]; !ok {
-			t.Fatalf("unexpected direct TVM.globalVersion writer %s; use SetGlobalVersion or WithGlobalVersion", key)
+			t.Fatalf("unexpected direct TVM.globalVersion writer %s; global version must come from PreparedBlockchainConfig", key)
 		}
 	}
 }
 
-func TestTVMTestsUseGlobalVersionSetterForMachines(t *testing.T) {
+func TestTVMTestsKeepGlobalVersionMetadataInventory(t *testing.T) {
 	writers := tvmTestGlobalVersionFieldWriters(t)
 	if len(writers) != len(expectedTVMTestGlobalVersionFieldWriters) {
 		t.Fatalf("test globalVersion writer count = %d, want %d; got:\n%s", len(writers), len(expectedTVMTestGlobalVersionFieldWriters), tvmGlobalVersionFieldWriterList(writers))
@@ -514,7 +513,7 @@ func TestTVMTestsUseGlobalVersionSetterForMachines(t *testing.T) {
 	}
 	for key := range writers {
 		if _, ok := expectedTVMTestGlobalVersionFieldWriters[key]; !ok {
-			t.Fatalf("unexpected test globalVersion writer %s; use SetGlobalVersion/WithGlobalVersion for TVM machines or add explicit metadata inventory", key)
+			t.Fatalf("unexpected test globalVersion metadata writer %s; add explicit metadata inventory", key)
 		}
 	}
 }
@@ -543,47 +542,6 @@ func writesMachine(machine *TVM, tv *TVM, tc *caseMeta) {
 		return
 	}
 	t.Fatal("global version writer fixture has no function")
-}
-
-func TestTVMProductionExecutionStateConstructorsUseExplicitGlobalVersion(t *testing.T) {
-	var calls []string
-	fset := token.NewFileSet()
-	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if path == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		file, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok || !runtimeGlobalVersionLegacyStateConstructor(call.Fun) {
-				return true
-			}
-			pos := fset.Position(call.Pos())
-			calls = append(calls, fmt.Sprintf("%s:%d:%d", filepath.ToSlash(path), pos.Line, pos.Column))
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan execution state constructors: %v", err)
-	}
-	if len(calls) > 0 {
-		sort.Strings(calls)
-		t.Fatalf("production code uses legacy NewExecutionState; use NewExecutionStateWithGlobalVersion on runtime paths so explicit v0 is preserved:\n%s", strings.Join(calls, "\n"))
-	}
 }
 
 func tvmGlobalVersionFieldWriters(t *testing.T) map[string]int {
@@ -626,9 +584,6 @@ func tvmGlobalVersionFieldWriters(t *testing.T) map[string]int {
 	})
 	if err != nil {
 		t.Fatalf("scan TVM.globalVersion writers: %v", err)
-	}
-	if len(writers) == 0 {
-		t.Fatal("TVM.globalVersion writer inventory is empty")
 	}
 	return writers
 }
@@ -1203,18 +1158,7 @@ func runtimeGlobalVersionDefaultRangeForLoopVar(stmt *ast.ForStmt) string {
 
 func runtimeGlobalVersionDefaultRangeMaxExpr(expr ast.Expr) bool {
 	return versionFuzzExprContainsSupportedMax(expr) ||
-		packageLocalExprContainsIdent(expr, "DefaultGlobalVersion")
-}
-
-func runtimeGlobalVersionLegacyStateConstructor(expr ast.Expr) bool {
-	switch fn := expr.(type) {
-	case *ast.Ident:
-		return fn.Name == "NewExecutionState"
-	case *ast.SelectorExpr:
-		return fn.Sel.Name == "NewExecutionState"
-	default:
-		return false
-	}
+		packageLocalExprContainsIdent(expr, "MaxSupportedGlobalVersion")
 }
 
 func runtimeGlobalVersionGateCandidatesFromSource(t *testing.T) []runtimeGlobalVersionGate {
@@ -1364,10 +1308,13 @@ func runtimeGlobalVersionGateLiteral(expr ast.Expr) int {
 		return val
 	case *ast.Ident:
 		switch expr.Name {
-		case "MinSupportedGlobalVersion":
-			return MinSupportedGlobalVersion
 		case "MaxSupportedGlobalVersion":
-			return MaxSupportedGlobalVersion
+			return vm.MaxSupportedGlobalVersion
+		}
+	case *ast.SelectorExpr:
+		ident, ok := expr.X.(*ast.Ident)
+		if ok && (ident.Name == "vm" || ident.Name == "vmcore") && expr.Sel.Name == "MaxSupportedGlobalVersion" {
+			return vm.MaxSupportedGlobalVersion
 		}
 	}
 	return -1
