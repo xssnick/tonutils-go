@@ -9,34 +9,42 @@ type AugDictItem struct {
 }
 
 type AugDictIterator struct {
-	items []AugDictItem
-	idx   int
+	raw     *DictIterator
+	dict    *AugmentedDictionary
+	current AugDictItem
+	err     error
 }
 
 type AugDictForeachFunc func(value, extra *Slice, key *Cell) (bool, error)
 type AugDictFilterFunc func(value, extra *Slice, key *Cell) (DictFilterAction, error)
 type AugDictTraverseFunc func(keyPrefix *Cell, extra *Slice, value *Slice) (int, error)
 
-func newAugDictIterator(items []AugDictItem) *AugDictIterator {
-	return &AugDictIterator{
-		items: items,
-		idx:   -1,
-	}
+func newAugDictIterator(raw *DictIterator, dict *AugmentedDictionary) *AugDictIterator {
+	return &AugDictIterator{raw: raw, dict: dict}
 }
 
 func (it *AugDictIterator) Next() bool {
-	if it == nil || it.idx+1 >= len(it.items) {
+	if it == nil || it.err != nil || it.raw == nil || !it.raw.Next() {
+		if it != nil && it.raw != nil {
+			it.err = it.raw.Err()
+		}
 		return false
 	}
-	it.idx++
+	raw := it.raw.Item()
+	value, extra, err := it.dict.decomposeValueExtra(raw.Value)
+	if err != nil {
+		it.err = err
+		return false
+	}
+	it.current = AugDictItem{Key: raw.Key, Value: value, Extra: extra}
 	return true
 }
 
 func (it *AugDictIterator) Item() AugDictItem {
-	if it == nil || it.idx < 0 || it.idx >= len(it.items) {
+	if it == nil {
 		return AugDictItem{}
 	}
-	return it.items[it.idx]
+	return it.current
 }
 
 func (it *AugDictIterator) Key() *Cell {
@@ -55,19 +63,19 @@ func (it *AugDictIterator) Reset() {
 	if it == nil {
 		return
 	}
-	it.idx = -1
+	it.current = AugDictItem{}
+	it.err = nil
+	if it.raw != nil {
+		it.raw.Reset()
+		it.err = it.raw.Err()
+	}
 }
 
-func cloneAugDictItems(items []AugDictItem) []AugDictItem {
-	out := make([]AugDictItem, len(items))
-	for i, item := range items {
-		out[i] = AugDictItem{
-			Key:   item.Key,
-			Value: cloneSlice(item.Value),
-			Extra: cloneSlice(item.Extra),
-		}
+func (it *AugDictIterator) Err() error {
+	if it == nil {
+		return nil
 	}
-	return out
+	return it.err
 }
 
 func validateAugmentedDictionary(d *AugmentedDictionary) error {
@@ -93,39 +101,6 @@ func validateAugmentedDictionary(d *AugmentedDictionary) error {
 	return err
 }
 
-func rebuildAugmentedDict(d *AugmentedDictionary, items []DictItem) (*Cell, *Cell, error) {
-	if err := d.ensureWritable(); err != nil {
-		return nil, nil, err
-	}
-
-	tmp := d.Copy()
-	tmp.root = nil
-	tmp.rootExtra = nil
-
-	for _, item := range items {
-		if item.Key == nil || item.Key.BitsSize() != d.keySz {
-			return nil, nil, fmt.Errorf("invalid key size")
-		}
-		value, _, err := d.decomposeValueExtra(item.Value)
-		if err != nil {
-			return nil, nil, err
-		}
-		if _, err = tmp.SetBuilderWithMode(item.Key, value.ToBuilder(), DictSetModeSet); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	if tmp.root == nil && tmp.wrapped {
-		extra, err := d.aug.EmptyExtra()
-		if err != nil {
-			return nil, nil, err
-		}
-		tmp.rootExtra = extra
-	}
-
-	return tmp.root, tmp.rootExtra, nil
-}
-
 func (d *AugmentedDictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if d == nil {
 		return []DictItem{}, nil
@@ -134,15 +109,24 @@ func (d *AugmentedDictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cloneDictItems(items), nil
+	return items, nil
 }
 
-func (d *AugmentedDictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
-	items, err := d.Range(rev, sgnd)
-	if err != nil {
-		return nil, err
+// Count returns the number of dictionary leaves without materializing keys or values.
+func (d *AugmentedDictionary) Count() (int, error) {
+	if d == nil || d.root == nil {
+		return 0, nil
 	}
-	return newDictIterator(items), nil
+	return countFixedDictLeaves(d.root, d.keySz)
+}
+
+// Iterator creates a lazy depth-first raw value+extra iterator. Inspect Err
+// after Next returns false to catch failures discovered in deeper children.
+func (d *AugmentedDictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
+	if d == nil {
+		return newDictIterator(nil, 0, rev, sgnd, nil)
+	}
+	return newDictIterator(d.root, d.keySz, rev, sgnd, d.trace)
 }
 
 func (d *AugmentedDictionary) RangeExtra(rev bool, sgnd bool) ([]AugDictItem, error) {
@@ -166,12 +150,14 @@ func (d *AugmentedDictionary) RangeExtra(rev bool, sgnd bool) ([]AugDictItem, er
 	return items, nil
 }
 
+// IteratorExtra creates a lazy depth-first decomposed iterator. Inspect Err
+// after Next returns false to catch traversal or extra-decoding failures.
 func (d *AugmentedDictionary) IteratorExtra(rev bool, sgnd bool) (*AugDictIterator, error) {
-	items, err := d.RangeExtra(rev, sgnd)
+	raw, err := d.Iterator(rev, sgnd)
 	if err != nil {
 		return nil, err
 	}
-	return newAugDictIterator(items), nil
+	return newAugDictIterator(raw, d), nil
 }
 
 func (d *AugmentedDictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
@@ -244,6 +230,26 @@ func (d *AugmentedDictionary) CheckForEach(fn DictForeachFunc, invertFirst bool,
 	if d == nil {
 		return true, nil
 	}
+	if fn == nil {
+		return true, nil
+	}
+	if !shuffle {
+		it, err := d.Iterator(false, invertFirst)
+		if err != nil {
+			return false, err
+		}
+		for it.Next() {
+			item := it.Item()
+			ok, err := fn(item.Value, item.Key)
+			if err != nil || !ok {
+				return ok, err
+			}
+		}
+		if err = it.Err(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	items, err := fixedDictRange(d.root, d.keySz, false, invertFirst)
 	if err != nil {
 		return false, err
@@ -266,15 +272,19 @@ func (d *AugmentedDictionary) CheckForEachExtra(fn AugDictForeachFunc, invertFir
 	if d == nil || fn == nil {
 		return true, nil
 	}
-	items, err := d.RangeExtra(false, invertFirst)
+	it, err := d.IteratorExtra(false, invertFirst)
 	if err != nil {
 		return false, err
 	}
-	for _, item := range items {
-		ok, err := fn(cloneSlice(item.Value), cloneSlice(item.Extra), item.Key)
+	for it.Next() {
+		item := it.Item()
+		ok, err := fn(item.Value, item.Extra, item.Key)
 		if err != nil || !ok {
 			return ok, err
 		}
+	}
+	if err = it.Err(); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -384,67 +394,159 @@ func (d *AugmentedDictionary) Filter(fn AugDictFilterFunc) (int, error) {
 	if d == nil || d.root == nil {
 		return 0, nil
 	}
+	if fn == nil {
+		return 0, nil
+	}
 	if err := d.ensureWritable(); err != nil {
 		return 0, err
 	}
 
-	items, err := d.Range(false, false)
+	state := augmentedDictFilterState{dict: d, fn: fn}
+	result, err := filterAugmentedDictNode(d.root, d.keySz, &state)
 	if err != nil {
 		return 0, err
 	}
-
-	out := make([]DictItem, 0, len(items))
-	changes := 0
-	for i, item := range items {
-		value, extra, err := d.decomposeValueExtra(item.Value)
-		if err != nil {
-			return 0, err
-		}
-		action, err := fn(cloneSlice(value), cloneSlice(extra), item.Key)
-		if err != nil {
-			return 0, err
-		}
-		switch action {
-		case DictFilterKeep:
-			out = append(out, item)
-		case DictFilterRemove:
-			changes++
-		case DictFilterKeepRest:
-			out = append(out, item)
-			out = append(out, items[i+1:]...)
-			root, rootExtra, err := rebuildAugmentedDict(d, out)
-			if err != nil {
-				return 0, err
-			}
-			if err = d.setRootWithExtra(root, rootExtra); err != nil {
-				return 0, err
-			}
-			return changes, nil
-		case DictFilterRemoveRest:
-			changes += len(items) - i
-			root, rootExtra, err := rebuildAugmentedDict(d, out)
-			if err != nil {
-				return 0, err
-			}
-			if err = d.setRootWithExtra(root, rootExtra); err != nil {
-				return 0, err
-			}
-			return changes, nil
-		default:
-			return 0, fmt.Errorf("unknown dict filter action")
-		}
-	}
-
-	if changes == 0 {
+	if state.changes == 0 {
 		return 0, nil
 	}
 
-	root, rootExtra, err := rebuildAugmentedDict(d, out)
+	var rootExtra *Cell
+	if result.root != nil {
+		rootExtra, err = result.extra.ToCell()
+		if err != nil {
+			return 0, err
+		}
+	}
+	if err = d.setRootWithExtra(result.root, rootExtra); err != nil {
+		return 0, err
+	}
+	return state.changes, nil
+}
+
+type augmentedDictFilterState struct {
+	dict       *AugmentedDictionary
+	fn         AugDictFilterFunc
+	prefix     Builder
+	changes    int
+	keepRest   bool
+	removeRest bool
+}
+
+type augmentedDictFilterResult struct {
+	root    *Cell
+	extra   Slice
+	changed bool
+}
+
+func filterAugmentedDictNode(root *Cell, remaining uint, state *augmentedDictFilterState) (augmentedDictFilterResult, error) {
+	if state.removeRest {
+		count, err := countFixedDictLeaves(root, remaining)
+		if err != nil {
+			return augmentedDictFilterResult{}, err
+		}
+		state.changes += count
+		return augmentedDictFilterResult{changed: count != 0}, nil
+	}
+
+	node, err := parseFixedDictNode(root, remaining)
 	if err != nil {
-		return 0, err
+		return augmentedDictFilterResult{}, err
 	}
-	if err = d.setRootWithExtra(root, rootExtra); err != nil {
-		return 0, err
+	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return augmentedDictFilterResult{}, err
 	}
-	return changes, nil
+	nodeExtra, err := augmentedNodeExtraView(node, remaining, state.dict.aug.SkipExtra)
+	if err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+	if state.keepRest {
+		return augmentedDictFilterResult{root: root, extra: nodeExtra}, nil
+	}
+
+	saved := state.prefix.BitsUsed()
+	defer state.prefix.truncateBits(saved)
+	label := node.labelSlice()
+	if err = state.prefix.storeSliceFromSlice(&label, node.labelLen); err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+
+	if node.isLeaf(remaining) {
+		value, extra, err := state.dict.decomposeValueExtra(node.value())
+		if err != nil {
+			return augmentedDictFilterResult{}, err
+		}
+		action, err := state.fn(value, extra, state.prefix.EndCell())
+		if err != nil {
+			return augmentedDictFilterResult{}, err
+		}
+		switch action {
+		case DictFilterKeep:
+			return augmentedDictFilterResult{root: root, extra: nodeExtra}, nil
+		case DictFilterRemove:
+			state.changes++
+			return augmentedDictFilterResult{changed: true}, nil
+		case DictFilterKeepRest:
+			state.keepRest = true
+			return augmentedDictFilterResult{root: root, extra: nodeExtra}, nil
+		case DictFilterRemoveRest:
+			state.removeRest = true
+			state.changes++
+			return augmentedDictFilterResult{changed: true}, nil
+		default:
+			return augmentedDictFilterResult{}, fmt.Errorf("unknown dict filter action")
+		}
+	}
+
+	afterLabel := state.prefix.BitsUsed()
+	childRemaining := node.nextKeyBits(remaining)
+	left, err := node.ref(0)
+	if err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+	if err = state.prefix.StoreUInt(0, 1); err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+	newLeft, err := filterAugmentedDictNode(left, childRemaining, state)
+	if err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+
+	state.prefix.truncateBits(afterLabel)
+	right, err := node.ref(1)
+	if err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+	if err = state.prefix.StoreUInt(1, 1); err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+	newRight, err := filterAugmentedDictNode(right, childRemaining, state)
+	if err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+
+	if !newLeft.changed && !newRight.changed {
+		return augmentedDictFilterResult{root: root, extra: nodeExtra}, nil
+	}
+	if newLeft.root == nil && newRight.root == nil {
+		return augmentedDictFilterResult{changed: true}, nil
+	}
+	if newLeft.root == nil {
+		merged, err := mergeFixedDictSurvivor(node, 1, newRight.root, remaining, state.dict.trace)
+		return augmentedDictFilterResult{root: merged, extra: newRight.extra, changed: true}, err
+	}
+	if newRight.root == nil {
+		merged, err := mergeFixedDictSurvivor(node, 0, newLeft.root, remaining, state.dict.trace)
+		return augmentedDictFilterResult{root: merged, extra: newLeft.extra, changed: true}, err
+	}
+
+	parentLabel := node.labelSlice()
+	rebuilt, extraCell, err := state.dict.storeForkWithExtraSlices(&parentLabel, newLeft.root, &newLeft.extra, newRight.root, &newRight.extra, remaining)
+	if err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+	var extra Slice
+	if err = extraCell.BeginParseInto(&extra); err != nil {
+		return augmentedDictFilterResult{}, err
+	}
+	return augmentedDictFilterResult{root: rebuilt, extra: extra, changed: true}, nil
 }

@@ -124,6 +124,19 @@ func BenchmarkGatewayGetID(b *testing.B) {
 	}
 }
 
+func BenchmarkPeerStats(b *testing.B) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	peer := NewGateway(key).initADNL()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = peer.Stats()
+	}
+}
+
 func BenchmarkADNLQueryRegistryKey(b *testing.B) {
 	id := make([]byte, 32)
 	for i := range id {

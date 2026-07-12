@@ -61,7 +61,9 @@ func TestFeeHashAdditionalPaths(t *testing.T) {
 	})
 
 	t.Run("StorageAndExtraBalance", func(t *testing.T) {
-		st := newFuncTestState(t, nil)
+		st := newFuncTestState(t, map[int]any{
+			paramIdxUnpackedConfig: tuple.NewTupleValue(nil),
+		})
 		if err := st.Stack.PushInt(big.NewInt(10)); err != nil {
 			t.Fatalf("PushInt(cells) failed: %v", err)
 		}

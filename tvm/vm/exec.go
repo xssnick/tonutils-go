@@ -206,6 +206,8 @@ func (s *State) Call(c Continuation) error {
 	}
 	ret.Data.Save.C[0] = copyContinuation(s.Reg.C[0])
 	s.Reg.C[0] = ret
+	// ret captured the CurrentCode pointer, the next jump must not overwrite it
+	s.currentCodeOwned = false
 
 	return s.JumpTo(c)
 }
@@ -238,6 +240,8 @@ func (s *State) CallArgs(c Continuation, passArgs, retArgs int) error {
 		Code: s.CurrentCode,
 	}
 	ret.Data.Save.C[0] = copyContinuation(s.Reg.C[0])
+	// ret captured the CurrentCode pointer, the next jump must not overwrite it
+	s.currentCodeOwned = false
 
 	s.Stack = newStack
 	s.Reg.C[0] = ret
@@ -312,8 +316,8 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 	var newStack *Stack
 	var capturedStack *Stack
 	if stackCopy < 0 || stackCopy == s.Stack.Len() {
+		// the whole stack moves along as the current stack; cc captures nothing
 		newStack = s.Stack
-		s.Stack = NewStack()
 	} else if stackCopy > 0 {
 		ns, err := s.Stack.SplitTop(stackCopy, 0)
 		if err != nil {
@@ -338,6 +342,8 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 		},
 		Code: s.CurrentCode,
 	}
+	// cc captured the CurrentCode pointer, the next jump must not overwrite it
+	s.currentCodeOwned = false
 	s.Stack = newStack
 
 	if saveCR&7 != 0 {

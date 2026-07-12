@@ -146,9 +146,8 @@ func registerSimpleExact(opcode uint16, name string, action func(*vm.State) erro
 
 type OpPFXDICTSWITCH struct {
 	helpers.Prefixed
-	root       *cell.Cell
-	bits       uint64
-	rootLoaded bool
+	root *cell.Cell
+	bits uint64
 }
 
 func PFXDICTSWITCH(root *cell.Cell, bits ...uint64) *OpPFXDICTSWITCH {
@@ -171,7 +170,6 @@ func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
-	var root *cell.Slice
 	rootCell, err := code.PeekRefCell()
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
@@ -179,18 +177,13 @@ func (op *OpPFXDICTSWITCH) Deserialize(code *cell.Slice) error {
 	if err = code.SkipBitsAndRefs(0, 1); err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
-	root, err = rootCell.BeginParse()
-	if err != nil {
-		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
-	}
-	op.rootLoaded = true
 	bits, err := code.LoadUInt(10)
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
 	op.bits = bits
-	if hasRoot && root != nil {
-		op.root = root.WithoutTrace().MustToCell()
+	if hasRoot {
+		op.root = rootCell
 	} else {
 		op.root = nil
 	}
@@ -228,12 +221,11 @@ func (op *OpPFXDICTSWITCH) Interpret(state *vm.State) error {
 		return cellUnderflowError(err)
 	}
 
-	trace := state.Cells.Trace()
-	if op.rootLoaded && state.Cells.IsCellLoaded(op.root) {
-		trace = state.Cells.TraceAlreadyLoaded()
-	}
-	dict := newPrefixDictWithTrace(op.root, uint(op.bits), trace)
+	dict := newPrefixDictWithTrace(op.root, uint(op.bits), state.Cells.Trace())
 	value, matched, err := dict.LookupPrefix(keyCell)
+	if gasErr := state.Cells.PendingError(); gasErr != nil {
+		return gasErr
+	}
 	if err != nil {
 		return mapDictError(err)
 	}
@@ -322,6 +314,10 @@ func dictNearName(variant dictNearVariant) string {
 }
 
 func execStoreDict(state *vm.State) error {
+	if err := checkDictStackDepth(state, 2); err != nil {
+		return err
+	}
+
 	builder, err := state.Stack.PopBuilder()
 	if err != nil {
 		return err
@@ -1019,8 +1015,12 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 
 func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 	return func(state *vm.State) error {
-		if state.GlobalVersion >= 9 && state.Stack.Len() < 4 {
-			return vmerr.Error(vmerr.CodeStackUnderflow)
+		required := 3
+		if state.GlobalVersion >= 9 {
+			required = 4
+		}
+		if err := checkDictStackDepth(state, required); err != nil {
+			return err
 		}
 
 		n, err := state.Stack.PopIntRangeInt64(0, 1023)
@@ -1065,8 +1065,12 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 }
 
 func execPfxDictDelete(state *vm.State) error {
-	if state.GlobalVersion >= 9 && state.Stack.Len() < 3 {
-		return vmerr.Error(vmerr.CodeStackUnderflow)
+	required := 2
+	if state.GlobalVersion >= 9 {
+		required = 3
+	}
+	if err := checkDictStackDepth(state, required); err != nil {
+		return err
 	}
 
 	n, err := state.Stack.PopIntRangeInt64(0, 1023)

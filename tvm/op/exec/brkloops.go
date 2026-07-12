@@ -14,6 +14,10 @@ func init() {
 func REPEATBRK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			body, err := state.Stack.PopContinuation()
 			if err != nil {
 				return err
@@ -76,6 +80,10 @@ func UNTILBRK() *helpers.SimpleOP {
 func WHILEBRK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			body, err := state.Stack.PopContinuation()
 			if err != nil {
 				return err

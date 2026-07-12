@@ -1,6 +1,8 @@
 package cell
 
 import (
+	"bytes"
+	"math/big"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -103,7 +105,7 @@ func BenchmarkBitopsPreloadSliceInto(b *testing.B) {
 			b.SetBytes(int64(tc.bits / 8))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := sl.loadSliceInto(out[:], tc.bits, true); err != nil {
+				if err := sl.PreloadSliceInto(out[:], tc.bits); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -127,6 +129,24 @@ func BenchmarkBitopsPreloadBigUInt(b *testing.B) {
 		}
 		benchmarkBigIntSink = v
 	}
+}
+
+func BenchmarkBitopsPreloadBigUIntInto(b *testing.B) {
+	bd := BeginCell()
+	bd.MustStoreUInt(0, 3) // misalign
+	bd.MustStoreBigUInt(benchBigUInt256, 256)
+	sl := bd.EndCell().MustBeginParse()
+	sl.MustLoadUInt(3)
+	dst := new(big.Int).Set(benchBigUInt256)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := sl.PreloadBigUIntInto(dst, 256); err != nil {
+			b.Fatal(err)
+		}
+	}
+	benchmarkBigIntSink = dst
 }
 
 func BenchmarkBitopsLexCompare(b *testing.B) {
@@ -165,20 +185,69 @@ func BenchmarkBitopsCountLeading(b *testing.B) {
 }
 
 func BenchmarkBitopsBitsEqual(b *testing.B) {
-	mk := func() *Slice {
+	mk := func(payload []byte, offset uint) *Slice {
 		bd := BeginCell()
-		bd.MustStoreUInt(0, 3)
-		bd.MustStoreSlice(benchPayload768, 768)
+		bd.MustStoreUInt(0, offset)
+		bd.MustStoreSlice(payload, 768)
 		sl := bd.EndCell().MustBeginParse()
-		sl.MustLoadUInt(3)
+		sl.MustLoadUInt(offset)
 		return sl
 	}
-	a, c := mk(), mk()
+	a, c := mk(benchPayload768, 3), mk(benchPayload768, 3)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if !a.BitsEqual(c) {
+			b.Fatal("expected equal")
+		}
+	}
+}
+
+func BenchmarkBitopsBitsEqualMismatch(b *testing.B) {
+	mk := func(payload []byte) *Slice {
+		bd := BeginCell().MustStoreUInt(0, 3).MustStoreSlice(payload, 768)
+		sl := bd.EndCell().MustBeginParse()
+		sl.MustLoadUInt(3)
+		return sl
+	}
+	left := mk(benchPayload768)
+
+	for _, tc := range []struct {
+		name string
+		bit  uint
+	}{
+		{name: "First", bit: 0},
+		{name: "Middle", bit: 384},
+		{name: "Last", bit: 767},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			payload := bytes.Clone(benchPayload768)
+			payload[tc.bit/8] ^= 1 << (7 - tc.bit%8)
+			right := mk(payload)
+
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if left.BitsEqual(right) {
+					b.Fatal("expected mismatch")
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkBitopsBitsEqualDifferentOffsets(b *testing.B) {
+	mk := func(offset uint) *Slice {
+		bd := BeginCell().MustStoreUInt(0, offset).MustStoreSlice(benchPayload768, 768)
+		sl := bd.EndCell().MustBeginParse()
+		sl.MustLoadUInt(offset)
+		return sl
+	}
+	left, right := mk(3), mk(5)
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if !left.BitsEqual(right) {
 			b.Fatal("expected equal")
 		}
 	}

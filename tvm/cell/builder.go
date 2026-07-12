@@ -619,46 +619,125 @@ func (b *Builder) MustStoreBinarySnake(data []byte) *Builder {
 }
 
 func (b *Builder) StoreStringSnake(str string) error {
-	return b.StoreBinarySnake([]byte(str))
-}
-
-func (b *Builder) StoreBinarySnake(data []byte) error {
-	var makeSnake func(data []byte, space int) (*Builder, error)
-	makeSnake = func(data []byte, space int) (*Builder, error) {
-		if len(data) < space {
-			space = len(data)
-		}
-
-		c := BeginCell()
-		if err := c.StoreSlice(data[:space], uint(space)*8); err != nil {
-			return nil, err
-		}
-
-		if len(data) > space {
-			ref, err := makeSnake(data[space:], 127)
-			if err != nil {
-				return nil, err
-			}
-
-			child, err := ref.EndCellSpecial(false)
-			if err != nil {
-				return nil, err
-			}
-
-			if err = c.StoreRef(child); err != nil {
-				return nil, err
-			}
-		}
-
-		return c, nil
-	}
-
-	snake, err := makeSnake(data, int(b.BitsLeft()/8))
-	if err != nil {
+	first := min(len(str), int(b.BitsLeft()/8))
+	if err := preflightSnake(b, len(str)-first); err != nil {
 		return err
 	}
 
-	return b.StoreBuilder(snake)
+	tmp := *b
+	if err := tmp.storeStringBytes(str[:first]); err != nil {
+		return err
+	}
+	if first < len(str) {
+		child, err := buildStringSnakeTail(str[first:])
+		if err != nil {
+			return err
+		}
+		if err = tmp.StoreRef(child); err != nil {
+			return err
+		}
+	}
+
+	*b = tmp
+	return nil
+}
+
+func (b *Builder) StoreBinarySnake(data []byte) error {
+	first := min(len(data), int(b.BitsLeft()/8))
+	if err := preflightSnake(b, len(data)-first); err != nil {
+		return err
+	}
+
+	tmp := *b
+	if err := tmp.StoreSlice(data[:first], uint(first)*8); err != nil {
+		return err
+	}
+	if first < len(data) {
+		child, err := buildBinarySnakeTail(data[first:])
+		if err != nil {
+			return err
+		}
+		if err = tmp.StoreRef(child); err != nil {
+			return err
+		}
+	}
+
+	*b = tmp
+	return nil
+}
+
+func preflightSnake(b *Builder, tailBytes int) error {
+	if tailBytes == 0 {
+		return nil
+	}
+	if b.refsNum >= 4 {
+		return ErrTooMuchRefs
+	}
+
+	// Every tail cell stores at most 127 bytes. The last cell has depth zero,
+	// hence a chain with n cells is a reference of depth n-1.
+	cells := (tailBytes-1)/127 + 1
+	if cells-1 >= maxDepth {
+		return ErrCellDepthLimit
+	}
+	return nil
+}
+
+func buildBinarySnakeTail(data []byte) (*Cell, error) {
+	var child *Cell
+	for end := len(data); end > 0; {
+		start := max(0, end-127)
+		part := BeginCell()
+		if err := part.StoreSlice(data[start:end], uint(end-start)*8); err != nil {
+			return nil, err
+		}
+		if child != nil {
+			if err := part.StoreRef(child); err != nil {
+				return nil, err
+			}
+		}
+
+		var err error
+		child, err = part.EndCellSpecial(false)
+		if err != nil {
+			return nil, err
+		}
+		end = start
+	}
+	return child, nil
+}
+
+func buildStringSnakeTail(str string) (*Cell, error) {
+	var child *Cell
+	for end := len(str); end > 0; {
+		start := max(0, end-127)
+		part := BeginCell()
+		if err := part.storeStringBytes(str[start:end]); err != nil {
+			return nil, err
+		}
+		if child != nil {
+			if err := part.StoreRef(child); err != nil {
+				return nil, err
+			}
+		}
+
+		var err error
+		child, err = part.EndCellSpecial(false)
+		if err != nil {
+			return nil, err
+		}
+		end = start
+	}
+	return child, nil
+}
+
+func (b *Builder) storeStringBytes(str string) error {
+	if len(str) == 0 {
+		return nil
+	}
+	var data [127]byte
+	copy(data[:], str)
+	return b.StoreSlice(data[:len(str)], uint(len(str))*8)
 }
 
 func (b *Builder) MustStoreDict(dict SerializableToCell) *Builder {
@@ -850,10 +929,8 @@ func (b *Builder) storeBuilder(builder *Builder, checkDepth bool) error {
 		}
 	}
 
-	for _, ref := range refs {
-		b.refs[b.refsNum] = ref
-		b.refsNum++
-	}
+	copy(b.refs[b.refsNum:], refs)
+	b.refsNum += builder.refsNum
 
 	return b.StoreSlice(builder.dataSlice(), builder.bitsSz)
 }

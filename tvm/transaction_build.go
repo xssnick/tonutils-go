@@ -62,9 +62,9 @@ func buildTransactionCell(params transactionBuildParams) (*cell.Cell, error) {
 
 	ioCell := buildTransactionIOCell(params.inMsg, outDict)
 	stateUpdateCell := buildTransactionHashUpdateCell(params.oldHash, params.newHash)
-	descriptionCell, err := tlb.ToCell(buildTransactionDescription(params.description))
+	descriptionCell, err := buildTransactionDescription(params.description).ToCell()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to serialize transaction description: %w", err)
 	}
 
 	builder := cell.BeginCell().
@@ -97,7 +97,7 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cel
 		LastTransHash: append([]byte(nil), txCell.Hash()...),
 		LastTransLT:   startLT,
 	}
-	nextAccount, err := prepareAccountFromState(nextShard, next.state, prev.Address(), next.storageCell)
+	nextAccount, err := prepareAccountFromState(nextShard, next.state, prev.Address(), next.storageCell, next.storageCellForStat)
 	if err != nil {
 		return fmt.Errorf("failed to prepare next account state: %w", err)
 	}
@@ -133,7 +133,7 @@ func transactionBits256(src []byte) []byte {
 	return out
 }
 
-func buildTransactionDescription(params transactionBuildDescriptionParams) any {
+func buildTransactionDescription(params transactionBuildDescriptionParams) tlb.Marshaller {
 	if params.tickTock {
 		storagePhase := tlb.StoragePhase{}
 		if params.storagePhase != nil {

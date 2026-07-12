@@ -14,6 +14,19 @@ var (
 	ErrBlockchainConfigParamAbsent = errors.New("blockchain config param is absent")
 )
 
+// configParamAbsentError reports an absent config param without allocating on the miss path:
+// the message is formatted lazily, and errors.Is matching against
+// ErrBlockchainConfigParamAbsent is preserved via Is.
+type configParamAbsentError uint32
+
+func (e configParamAbsentError) Error() string {
+	return fmt.Sprintf("%s: %d", ErrBlockchainConfigParamAbsent, uint32(e))
+}
+
+func (e configParamAbsentError) Is(target error) bool {
+	return target == ErrBlockchainConfigParamAbsent
+}
+
 type BlockchainConfig struct {
 	Root *cell.Cell
 }
@@ -73,10 +86,10 @@ func (c BlockchainConfig) GetParam(id uint32) (*cell.Cell, error) {
 		return nil, ErrBlockchainConfigRootNil
 	}
 
-	val, err := c.Root.AsDict(32).LoadValueByIntKey(new(big.Int).SetUint64(uint64(id)))
+	val, err := c.Root.AsDict(32).LoadValueByUintKey(uint64(id))
 	if err != nil {
 		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-			return nil, fmt.Errorf("%w: %d", ErrBlockchainConfigParamAbsent, id)
+			return nil, configParamAbsentError(id)
 		}
 		return nil, fmt.Errorf("failed to load config param %d: %w", id, err)
 	}

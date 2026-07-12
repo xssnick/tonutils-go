@@ -33,6 +33,10 @@ func SETINDEXQ(n uint8) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			return execSetIndexQuiet(state, int(n))
 		},
 	}

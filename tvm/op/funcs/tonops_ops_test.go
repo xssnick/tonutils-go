@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"math/big"
+	"math/rand"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -45,7 +46,9 @@ func makeExtraBalanceDict(t *testing.T, entries map[uint32]uint64) *cell.Cell {
 func makeFeeUnpackedConfig(t *testing.T, storage *cell.Cell, gas, msg *cell.Slice) tuple.Tuple {
 	t.Helper()
 
-	cfg := tuple.NewTupleSized(6)
+	// The unpacked config tuple has a size-limits slot at index 6 even when the
+	// value is absent. A shorter tuple is malformed and must raise RangeCheck.
+	cfg := tuple.NewTupleSized(7)
 	if storage != nil {
 		if err := cfg.Set(0, storage.MustBeginParse()); err != nil {
 			t.Fatalf("failed to set unpacked storage config: %v", err)
@@ -286,6 +289,66 @@ func TestTonopsGasConfigAndGlobals(t *testing.T) {
 
 	if err := SETCP(0).Interpret(st); err != nil {
 		t.Fatalf("SETCP failed: %v", err)
+	}
+}
+
+func TestTvmEd25519Verify(t *testing.T) {
+	seed := bytes.Repeat([]byte{0x7A}, ed25519.SeedSize)
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub := []byte(priv.Public().(ed25519.PublicKey))
+	msg := []byte("tvm ed25519 verify")
+	sig := ed25519.Sign(priv, msg)
+
+	if !tvmEd25519Verify(pub, msg, sig) {
+		t.Fatal("valid signature rejected")
+	}
+
+	tamperedR := bytes.Clone(sig)
+	tamperedR[0] ^= 1
+	if tvmEd25519Verify(pub, msg, tamperedR) {
+		t.Fatal("signature with tampered R accepted")
+	}
+
+	tamperedS := bytes.Clone(sig)
+	tamperedS[32] ^= 1
+	if tvmEd25519Verify(pub, msg, tamperedS) {
+		t.Fatal("signature with tampered S accepted")
+	}
+
+	if tvmEd25519Verify(pub, []byte("other message"), sig) {
+		t.Fatal("signature accepted for different message")
+	}
+
+	otherPub := []byte(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x7B}, ed25519.SeedSize)).Public().(ed25519.PublicKey))
+	if tvmEd25519Verify(otherPub, msg, sig) {
+		t.Fatal("signature accepted for different key")
+	}
+
+	if tvmEd25519Verify(pub[:31], msg, sig) {
+		t.Fatal("short key accepted")
+	}
+	if tvmEd25519Verify(pub, msg, sig[:63]) {
+		t.Fatal("short signature accepted")
+	}
+
+	rnd := rand.New(rand.NewSource(1))
+	for i := 0; i < 64; i++ {
+		caseSeed := make([]byte, ed25519.SeedSize)
+		rnd.Read(caseSeed)
+		casePriv := ed25519.NewKeyFromSeed(caseSeed)
+		casePub := []byte(casePriv.Public().(ed25519.PublicKey))
+		caseMsg := make([]byte, 1+rnd.Intn(64))
+		rnd.Read(caseMsg)
+		caseSig := ed25519.Sign(casePriv, caseMsg)
+
+		if rnd.Intn(2) == 1 {
+			caseSig[rnd.Intn(len(caseSig))] ^= byte(1 + rnd.Intn(255))
+		}
+
+		want := ed25519.Verify(casePub, caseMsg, caseSig)
+		if got := tvmEd25519Verify(casePub, caseMsg, caseSig); got != want {
+			t.Fatalf("case %d: tvmEd25519Verify = %v, crypto/ed25519.Verify = %v", i, got, want)
+		}
 	}
 }
 

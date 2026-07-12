@@ -54,6 +54,7 @@ func (m *mockPeer) SetAddresses(addresses address.List) {}
 func (m *mockPeer) RemoteAddr() string                  { return m.remoteAddr }
 func (m *mockPeer) GetID() []byte                       { return append([]byte{}, m.id...) }
 func (m *mockPeer) GetPubKey() ed25519.PublicKey        { return append(ed25519.PublicKey(nil), m.pub...) }
+func (m *mockPeer) Stats() adnl.PeerStats               { return adnl.PeerStats{} }
 func (m *mockPeer) Reinit()                             {}
 func (m *mockPeer) Close()                              {}
 

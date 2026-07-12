@@ -8,11 +8,10 @@ import (
 	"testing"
 
 	ristretto "github.com/bwesterb/go-ristretto"
-	circlbls "github.com/cloudflare/circl/ecc/bls12381"
 	circlgroup "github.com/cloudflare/circl/group"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/internal/blsmap"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -387,7 +386,7 @@ func TestTVM14RistrettoIdentityResults(t *testing.T) {
 
 func TestBLSMapAndZeroOps(t *testing.T) {
 	g1Input := bytes.Repeat([]byte{0x42}, 48)
-	g1Expected, err := blsmap.MapToG1(g1Input)
+	g1Expected, err := circlbls.MapToG1(g1Input)
 	if err != nil {
 		t.Fatalf("MapToG1 failed: %v", err)
 	}
@@ -407,7 +406,7 @@ func TestBLSMapAndZeroOps(t *testing.T) {
 	}
 
 	g2Input := bytes.Repeat([]byte{0x24}, 96)
-	g2Expected, err := blsmap.MapToG2(g2Input)
+	g2Expected, err := circlbls.MapToG2(g2Input)
 	if err != nil {
 		t.Fatalf("MapToG2 failed: %v", err)
 	}

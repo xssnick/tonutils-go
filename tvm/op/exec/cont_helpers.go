@@ -2,6 +2,7 @@ package exec
 
 import (
 	"fmt"
+	"math/big"
 	"reflect"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -183,7 +184,14 @@ func sameStackValueType(x, y any) bool {
 		return y == nil
 	case vm.NaN:
 		switch y.(type) {
-		case vm.NaN:
+		case vm.NaN, *big.Int:
+			return true
+		default:
+			return false
+		}
+	case *big.Int:
+		switch y.(type) {
+		case vm.NaN, *big.Int:
 			return true
 		default:
 			return false

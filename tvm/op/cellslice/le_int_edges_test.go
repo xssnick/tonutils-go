@@ -180,7 +180,7 @@ func TestLittleEndianLoadStoreStackTypeAndQuietEdges(t *testing.T) {
 			t.Fatalf("push NaN: %v", err)
 		}
 		pushCellSliceBuilder(t, st, cell.BeginCell())
-		assertCellSliceVMErrorCode(t, STILE4().Interpret(st), vmerr.CodeIntOverflow)
+		assertCellSliceVMErrorCode(t, STILE4().Interpret(st), vmerr.CodeRangeCheck)
 
 		st = newCellSliceState()
 		pushCellSliceInt(t, st, -1)

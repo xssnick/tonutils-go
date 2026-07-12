@@ -22,37 +22,13 @@ func init() {
 	)
 }
 
-func quietBinaryLogicOp(name string, prefix helpers.BitPrefix, fn func(x, y *big.Int) *big.Int) *helpers.SimpleOP {
-	return &helpers.SimpleOP{
-		Action: func(state *vm.State) error {
-			if err := checkStackDepth(state, 2); err != nil {
-				return err
-			}
-			y, err := state.Stack.PopInt()
-			if err != nil {
-				return err
-			}
-			x, err := state.Stack.PopInt()
-			if err != nil {
-				return err
-			}
-			if x == nil || y == nil {
-				return pushNaNOrOverflow(state, true)
-			}
-			return state.Stack.PushIntQuiet(fn(x, y))
-		},
-		Name:      name,
-		BitPrefix: prefix,
-	}
-}
-
 func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -60,7 +36,7 @@ func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.Si
 			if !shiftValid && state.GlobalVersion < 13 {
 				return vmerr.Error(vmerr.CodeRangeCheck)
 			}
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -71,11 +47,11 @@ func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.Si
 				return pushMaybeInt(state, legacyShiftNaNResult(state.GlobalVersion, y.Uint64(), right), true)
 			}
 
-			res := new(big.Int).Set(x)
+			var res *big.Int
 			if right {
-				res.Rsh(res, uint(y.Uint64()))
+				res = new(big.Int).Rsh(x, uint(y.Uint64()))
 			} else {
-				res = leftShiftResult(res, y.Uint64())
+				res = leftShiftResult(x, y.Uint64())
 			}
 			return pushMaybeInt(state, res, true)
 		},
@@ -92,25 +68,19 @@ func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int8, right b
 			if err := checkStackDepth(state, 1); err != nil {
 				return err
 			}
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 			if x == nil {
-				if right {
-					if state.GlobalVersion >= 14 {
-						return pushNaNOrOverflow(state, true)
-					}
-					return pushSmallInt(state, 0)
-				}
-				return pushNaNOrOverflow(state, true)
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), right), true)
 			}
 
-			res := new(big.Int).Set(x)
+			var res *big.Int
 			if right {
-				res.Rsh(res, uint(imm()))
+				res = new(big.Int).Rsh(x, uint(imm()))
 			} else {
-				res = leftShiftResult(res, uint64(imm()))
+				res = leftShiftResult(x, uint64(imm()))
 			}
 			return pushMaybeInt(state, res, true)
 		},
@@ -129,11 +99,11 @@ func QAND() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -150,11 +120,11 @@ func QOR() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -166,9 +136,35 @@ func QOR() *helpers.SimpleOP {
 }
 
 func QXOR() *helpers.SimpleOP {
-	return quietBinaryLogicOp("QXOR", helpers.BytesPrefix(0xB7, 0xB2), func(x, y *big.Int) *big.Int {
-		return x.Xor(x, y)
-	})
+	return &helpers.SimpleOP{
+		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+			y, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			x, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			if x == nil || y == nil {
+				return pushNaNOrOverflow(state, true)
+			}
+
+			// int64 fast path: XOR of two int64 values stays within int64,
+			// operands (possibly shared statics) are never mutated.
+			if x.IsInt64() && y.IsInt64() {
+				return state.Stack.PushSmallInt(x.Int64() ^ y.Int64())
+			}
+
+			// XOR never leaves the 257-bit range, so the quiet push cannot NaN.
+			return state.Stack.PushOwnedIntQuiet(new(big.Int).Xor(x, y))
+		},
+		Name:      "QXOR",
+		BitPrefix: helpers.BytesPrefix(0xB7, 0xB2),
+	}
 }
 
 func QLSHIFT() *helpers.SimpleOP {
@@ -193,7 +189,7 @@ func QPOW2() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 1); err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}

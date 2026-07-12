@@ -10,6 +10,28 @@ func (s *State) SetLibraries(libs ...*cell.Cell) {
 	s.libraryCache = nil
 }
 
+// checkLibraryLoadLimit enforces max_transaction_library_loads (see
+// VmState::load_library in the reference C++ vm.cpp): unique hashes are
+// counted, a repeat of an already-seen hash is always free, and the slot is
+// consumed on the attempt itself, before the lookup below runs.
+func (s *State) checkLibraryLoadLimit(hash cell.Hash) bool {
+	if !s.hasMaxLibraryLoads {
+		return true
+	}
+	if _, seen := s.loadedLibraries[hash]; seen {
+		return true
+	}
+	if uint32(len(s.loadedLibraries)) >= s.maxLibraryLoads {
+		return false
+	}
+
+	if s.loadedLibraries == nil {
+		s.loadedLibraries = make(map[cell.Hash]struct{})
+	}
+	s.loadedLibraries[hash] = struct{}{}
+	return true
+}
+
 func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 	if len(hash) != 32 {
 		return nil, nil
@@ -17,6 +39,11 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 
 	var cacheKey cell.Hash
 	copy(cacheKey[:], hash)
+
+	if !s.checkLibraryLoadLimit(cacheKey) {
+		return nil, nil
+	}
+
 	if s.libraryCache != nil {
 		if cached := s.libraryCache[cacheKey]; cached != nil {
 			if err := s.consumeLegacyLibraryLookupGas(cached, true); err != nil {

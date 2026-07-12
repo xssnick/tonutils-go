@@ -11,7 +11,10 @@ import (
 type OpPUSHCONT struct {
 	helpers.Prefixed
 	cont *cell.Cell
-	typ  string
+	// window is the decoded SMALL/BIG continuation body as a sub-slice of the
+	// original code cell; no cell is materialized on the hot decode path.
+	window cell.Slice
+	typ    string
 }
 
 func init() {
@@ -81,12 +84,15 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
-		data, err := code.LoadSlice(uint(szBytes * 8))
+		body, err := code.FetchSubslice(uint(szBytes*8), 0)
 		if err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
-		op.cont = cell.BeginCell().MustStoreSlice(data, uint(szBytes*8)).EndCell()
+		// the trace is stripped so the continuation code behaves exactly like
+		// the previously materialized cell did: nil trace here, the gas trace
+		// is re-attached on every jump
+		op.window = *body.SetTrace(nil)
 		return nil
 	case "BIG":
 		refsNum, err := code.LoadUInt(2)
@@ -99,29 +105,12 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
-		data, err := code.LoadSlice(uint(szBytes * 8))
+		body, err := code.FetchSubslice(uint(szBytes*8), int(refsNum))
 		if err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
-		cn := cell.BeginCell().MustStoreSlice(data, uint(szBytes*8))
-
-		for i := 0; i < int(refsNum); i++ {
-			ref, err := code.PeekRefCell()
-			if err != nil {
-				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
-			}
-			if err = code.SkipBitsAndRefs(0, 1); err != nil {
-				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
-			}
-
-			err = cn.StoreRef(ref)
-			if err != nil {
-				return err
-			}
-		}
-
-		op.cont = cn.EndCell()
+		op.window = *body.SetTrace(nil)
 		return nil
 	case "REF":
 		ref, err := code.PeekRefCell()
@@ -139,7 +128,19 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 	return vm.ErrCorruptedOpcode
 }
 
+// contCell returns the continuation body as a cell, materializing it from the
+// decoded window when needed. Only the cold assembler/trace paths use it; the
+// execution path works on the window directly.
+func (op *OpPUSHCONT) contCell() *cell.Cell {
+	if op.cont == nil && op.window.BaseCell() != nil {
+		op.cont = op.window.MustToCell()
+	}
+	return op.cont
+}
+
 func (op *OpPUSHCONT) Serialize() *cell.Builder {
+	op.contCell()
+
 	var b *cell.Builder
 	switch {
 	case op.typ == "REF" || op.cont.BitsSize()%8 != 0 || op.cont.BitsSize() > 127*8 || op.cont.RefsNum() > 3:
@@ -187,8 +188,8 @@ func (op *OpPUSHCONT) Serialize() *cell.Builder {
 
 func (op *OpPUSHCONT) SerializeText() string {
 	str := "???"
-	if op.cont != nil {
-		str = op.cont.Dump()
+	if cont := op.contCell(); cont != nil {
+		str = cont.Dump()
 	}
 	if op.typ == "REF" {
 		return fmt.Sprintf("<%s> PUSHREFCONT", str)
@@ -212,14 +213,15 @@ func (op *OpPUSHCONT) InstructionBits() int64 {
 func (op *OpPUSHCONT) Interpret(state *vm.State) error {
 	var code *cell.Slice
 	if op.typ == "REF" {
-		if err := state.Cells.RegisterCellLoad(op.cont); err != nil {
-			return err
-		}
 		var err error
-		code, err = state.Cells.BeginParseAlreadyLoadedRaw(op.cont)
+		code, err = beginPushRefCell(state, op.cont)
 		if err != nil {
 			return err
 		}
+	} else if op.cont == nil && op.window.BaseCell() != nil {
+		// decoded SMALL/BIG: the body is a window over the original code cell;
+		// sharing is safe, continuation code is never advanced in place
+		code = &op.window
 	} else {
 		var err error
 		code, err = op.cont.BeginParse()

@@ -115,6 +115,9 @@ func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[ce
 	case *cell.Cell:
 		return markExecutionProofCell(v, usageTree, seen)
 	case *cell.Slice:
+		if v == nil {
+			return nil
+		}
 		return markExecutionProofCell(v.BaseCell(), usageTree, seen)
 	case *cell.Builder:
 		return markExecutionProofCell(v.EndCell(), usageTree, seen)

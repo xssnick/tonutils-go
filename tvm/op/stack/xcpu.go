@@ -12,6 +12,9 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return XCPU(0, 0) })
 }
 
+// constant prefix, computed once instead of on every decode
+var xcpuPrefix = helpers.BytesPrefix(0x51)
+
 func XCPU(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
@@ -32,7 +35,7 @@ func XCPU(i, j uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d XCPU", i, j)
 		},
-		BitPrefix: helpers.BytesPrefix(0x51),
+		BitPrefix: xcpuPrefix,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
 		},

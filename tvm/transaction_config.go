@@ -9,6 +9,7 @@ import (
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 var errConfigRootRequired = errors.New("config root is required")
@@ -520,6 +521,7 @@ func transactionDefaultSizeLimits() transactionSizeLimits {
 		maxMsgExtraCurrencies:       2,
 		maxAccFixedPrefixLength:     8,
 		accStateCellsForStorageDict: 26,
+		maxVMDataDepth:              vm.MaxDataDepth,
 	}
 }
 
@@ -536,17 +538,23 @@ func transactionLoadSizeLimits(blockchainCfg tlb.BlockchainConfig) transactionSi
 		out.maxMsgCells = uint64(v.MaxMsgCells)
 		out.maxLibraryCells = uint64(v.MaxLibraryCells)
 		out.maxExtMsgDepth = v.MaxExtMsgDepth
+		out.maxVMDataDepth = v.MaxVMDataDepth
 	case tlb.SizeLimitsConfigV2:
 		out.maxMsgBits = uint64(v.MaxMsgBits)
 		out.maxMsgCells = uint64(v.MaxMsgCells)
 		out.maxLibraryCells = uint64(v.MaxLibraryCells)
 		out.maxExtMsgDepth = v.MaxExtMsgDepth
+		out.maxVMDataDepth = v.MaxVMDataDepth
 		out.maxAccStateCells = uint64(v.MaxAccStateCells)
 		out.maxMCAccStateCells = uint64(v.MaxMCAccStateCells)
 		out.maxAccPublicLibraries = uint64(v.MaxAccPublicLibraries)
 		out.maxMsgExtraCurrencies = uint64(v.MaxMsgExtraCurrencies)
 		out.maxAccFixedPrefixLength = uint64(v.MaxAccFixedPrefixLength)
 		out.accStateCellsForStorageDict = uint64(v.AccStateCellsForStorageDict)
+		if v.MaxTransactionLibraryLoads != nil {
+			limit := *v.MaxTransactionLibraryLoads
+			out.maxTransactionLibraryLoads = &limit
+		}
 	}
 	return out
 }

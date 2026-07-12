@@ -634,12 +634,12 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 		if globalVersion >= 11 {
 			intMsg.IHRDisabled = true
 		}
-		extraFlags := transactionBigOrZero(intMsg.IHRFee.Nano())
+		extraFlags := intMsg.IHRFee.Nano()
 		if globalVersion >= 12 && (!msgValidation.extraFlagsCanonical || !extraFlags.IsUint64() || extraFlags.Uint64()&^uint64(3) != 0) {
 			return transactionSendResultCode(out, mode, 45, globalVersion), nil
 		}
 
-		req, err := transactionCurrencyFromParts(intMsg.Amount.Nano(), intMsg.ExtraCurrencies)
+		req, err := transactionCurrencyFromOwnedParts(intMsg.Amount.Nano(), intMsg.ExtraCurrencies)
 		if err != nil {
 			return transactionSendResultCode(out, mode, 37, globalVersion), nil
 		}
@@ -888,7 +888,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	fwdFee := computedFwdFee
 	ihrFee := computedIHRFee
 	if globalVersion < 8 {
-		if suggestedFwdFee := transactionBigOrZero(intMsg.FwdFee.Nano()); suggestedFwdFee.Cmp(fwdFee) > 0 {
+		if suggestedFwdFee := intMsg.FwdFee.Nano(); suggestedFwdFee.Cmp(fwdFee) > 0 {
 			fwdFee = suggestedFwdFee
 		}
 		if !intMsg.IHRDisabled && extraFlags.Cmp(ihrFee) > 0 {
@@ -1354,10 +1354,10 @@ func transactionInternalMessageToCellWithLayout(msg *tlb.InternalMessage, layout
 			MustStoreBoolBit(msg.Bounced).
 			MustStoreAddr(msg.SrcAddr).
 			MustStoreAddr(msg.DstAddr).
-			MustStoreBigCoins(transactionBigOrZero(msg.Amount.Nano())).
+			MustStoreBigCoins(msg.Amount.Nano()).
 			MustStoreDict(msg.ExtraCurrencies).
-			MustStoreBigCoins(transactionBigOrZero(msg.IHRFee.Nano())).
-			MustStoreBigCoins(transactionBigOrZero(msg.FwdFee.Nano())).
+			MustStoreBigCoins(msg.IHRFee.Nano()).
+			MustStoreBigCoins(msg.FwdFee.Nano()).
 			MustStoreUInt(msg.CreatedLT, 64).
 			MustStoreUInt(uint64(msg.CreatedAt), 32)
 		if err := transactionStoreStateInit(builder, msg.StateInit, next.stateInitInRef); err != nil {

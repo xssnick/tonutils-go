@@ -21,10 +21,7 @@ func RSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 			if x == nil {
-				if state.GlobalVersion >= 14 {
-					return pushNaNOrOverflow(state, false)
-				}
-				return pushSmallInt(state, 0)
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), true), false)
 			}
 
 			return state.Stack.PushInt(x.Rsh(x, uint(imm())))

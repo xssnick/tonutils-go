@@ -8,9 +8,9 @@ import (
 	"math/big"
 	"testing"
 
-	circlbls "github.com/cloudflare/circl/ecc/bls12381"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	localec "github.com/xssnick/tonutils-go/tvm/internal/secp256k1"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -411,6 +411,14 @@ func FuzzTVMVersionedStdAddrQuietOps(f *testing.F) {
 			if err != nil {
 				t.Fatalf("pop STOPTSTDADDRQ restored value: %v", err)
 			}
+			if version < 14 {
+				legacy, ok := restored.(*cell.Slice)
+				if !ok || legacy != nil {
+					t.Fatalf("STOPTSTDADDRQ non-slice version=%d restored %T %v, want legacy null cell slice", version, restored, restored)
+				}
+				return
+			}
+
 			got, ok := restored.(*big.Int)
 			if !ok || got.Cmp(raw) != 0 {
 				t.Fatalf("STOPTSTDADDRQ non-slice version=%d restored %T %v, want %v", version, restored, restored, raw)
@@ -1001,7 +1009,7 @@ func FuzzTVMVersionedSendMsgTupleAmountExtraSlot(f *testing.F) {
 	f.Add(int64(10), uint8(1), int64(-456), uint8(1))
 	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
 		for idxKind := uint8(0); idxKind < 2; idxKind++ {
-			for form := uint8(0); form < 5; form++ {
+			for form := uint8(0); form < 6; form++ {
 				f.Add(version, idxKind, int64(version*17), form)
 			}
 		}
@@ -1017,7 +1025,7 @@ func FuzzTVMVersionedSendMsgTupleAmountExtraSlot(f *testing.F) {
 		}
 		amountValue := rawAmount % 1_000_000
 
-		form := rawForm % 5
+		form := rawForm % 6
 		var param tuple.Tuple
 		switch form {
 		case 0:
@@ -1028,14 +1036,16 @@ func FuzzTVMVersionedSendMsgTupleAmountExtraSlot(f *testing.F) {
 			param = tuple.NewTupleValue(big.NewInt(amountValue))
 		case 3:
 			param = tuple.NewTupleValue()
-		default:
+		case 4:
 			param = tuple.NewTupleValue("bad-amount", nil)
+		default:
+			param = tuple.NewTupleValue(vm.NaN{}, nil)
 		}
 
 		st := newFuncTestState(t, map[int]any{idx: param})
 		st.GlobalVersion = version
 
-		amount, hasExtra, err := sendMsgTupleAmount(st, idx, name)
+		amount, amountNaN, hasExtra, err := sendMsgTupleAmount(st, idx, name)
 		switch {
 		case form == 3:
 			if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
@@ -1057,7 +1067,10 @@ func FuzzTVMVersionedSendMsgTupleAmountExtraSlot(f *testing.F) {
 		if err != nil {
 			t.Fatalf("version=%d idx=%d form=%d sendMsgTupleAmount failed: %v", version, idx, form, err)
 		}
-		if amount.Cmp(big.NewInt(amountValue)) != 0 {
+		if amountNaN != (form == 5) {
+			t.Fatalf("version=%d idx=%d form=%d amountNaN=%v", version, idx, form, amountNaN)
+		}
+		if !amountNaN && amount.Cmp(big.NewInt(amountValue)) != 0 {
 			t.Fatalf("version=%d idx=%d amount=%s want %d", version, idx, amount, amountValue)
 		}
 		wantExtra := version < 10 && form == 1

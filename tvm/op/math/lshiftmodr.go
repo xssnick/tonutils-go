@@ -28,6 +28,7 @@ func LSHIFTMODR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
+			x = legacyLeftShiftOperand(state.GlobalVersion, x, z.Uint64())
 			if err = requireFiniteInts(y, x); err != nil {
 				return err
 			}

@@ -20,9 +20,9 @@ import (
 // e.g. PUSHCONT code, deserialize/serialize helpers), so the inventory below
 // is pinned: adding a new direct parse requires a conscious decision instead
 // of silently skipping gas accounting.
-const expectedOpcodeDirectCellParseCount = 14
+const expectedOpcodeDirectCellParseCount = 12
 
-const expectedOpcodeDirectCellParseHash = "c135d7748080fbbecddd7ff07376d14e6befcb442a03c83405eed8ae8a6c2a76"
+const expectedOpcodeDirectCellParseHash = "323f7b4c1159433bb56567836fe15f4d4283a54fa5513894c8978029e945324b"
 
 func TestOpcodeDirectCellParsesStayInventoried(t *testing.T) {
 	sites := opcodeDirectCellParseSites(t)

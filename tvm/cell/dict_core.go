@@ -1,6 +1,19 @@
 package cell
 
-import "fmt"
+import (
+	"fmt"
+	"math/big"
+)
+
+func initIntKeyCell(key *big.Int, bits uint, builder *Builder, cell *Cell) {
+	if err := builder.StoreBigInt(key, bits); err != nil {
+		panic(err)
+	}
+	*cell = Cell{
+		data:   builder.data[:builder.usedBytes()],
+		bitsSz: uint16(builder.bitsSz),
+	}
+}
 
 func (c *Slice) loadMaybeRefCell() (*Cell, bool, error) {
 	has, err := c.LoadBoolBit()
@@ -18,7 +31,7 @@ func (c *Slice) loadMaybeRefCell() (*Cell, bool, error) {
 type fixedDictNode struct {
 	cell     *Cell
 	refView  cellRefView
-	loader   *Slice
+	loader   Slice
 	label    Slice
 	labelLen uint
 }
@@ -109,15 +122,15 @@ func labelDataView(loader *Slice, ln uint) (uint, Slice, error) {
 }
 
 func parseFixedDictNode(branch *Cell, remaining uint) (fixedDictNode, error) {
-	loader, err := branch.BeginParse()
-	if err != nil {
+	var loader Slice
+	if err := branch.BeginParseInto(&loader); err != nil {
 		return fixedDictNode{}, err
 	}
 	refView := newCellRefView(loader.cell)
 	if loader.cell.IsSpecial() {
 		return fixedDictNode{cell: loader.cell, refView: refView, loader: loader}, nil
 	}
-	labelLen, label, err := readLabelView(remaining, loader)
+	labelLen, label, err := readLabelView(remaining, &loader)
 	if err != nil {
 		return fixedDictNode{}, err
 	}
@@ -136,6 +149,13 @@ func (n *fixedDictNode) labelSlice() Slice {
 	return n.label
 }
 
+func (c Slice) slice(start, length uint) *Slice {
+	c.bitStart += uint16(start)
+	c.bitEnd = c.bitStart + uint16(length)
+	c.refEnd = c.refStart
+	return &c
+}
+
 func (n fixedDictNode) isLeaf(remaining uint) bool {
 	return n.labelLen == remaining
 }
@@ -145,23 +165,25 @@ func (n fixedDictNode) nextKeyBits(remaining uint) uint {
 }
 
 func (n *fixedDictNode) ref(i int) (*Cell, error) {
-	if n.loader != nil {
-		return n.loader.peekRefCellAt(i)
-	}
-	return n.refView.boundaryRef(i)
+	return n.loader.peekRefCellAt(i)
 }
 
 func (n *fixedDictNode) boundaryRef(i int) (*Cell, error) {
-	if n.loader != nil {
-		if i < 0 {
-			return nil, ErrNegative
-		}
-		if i >= n.loader.RefsNum() {
-			return nil, ErrNoMoreRefs
-		}
-		return n.loader.withChildTrace(n.loader.boundaryRefCellAt(i), int(n.loader.refStart)+i), nil
+	if i < 0 {
+		return nil, ErrNegative
 	}
-	return n.refView.boundaryRef(i)
+	if i >= n.loader.RefsNum() {
+		return nil, ErrNoMoreRefs
+	}
+	return n.loader.withChildTrace(n.loader.boundaryRefCellAt(i), int(n.loader.refStart)+i), nil
+}
+
+// value returns the only heap-owned slice created while walking a node. The
+// parser and fork descent keep Slice values inline; a copy escapes only when a
+// leaf value is handed to the caller.
+func (n fixedDictNode) value() *Slice {
+	value := n.loader
+	return &value
 }
 
 func (n fixedDictNode) rejectSpecial(kind string) error {

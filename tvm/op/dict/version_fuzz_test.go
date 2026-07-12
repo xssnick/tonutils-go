@@ -66,7 +66,7 @@ func FuzzTVMVersionedPrefixDictUnderflowPrecheck(f *testing.F) {
 				t.Fatalf("push key bits: %v", err)
 			}
 			err = execPfxDictDelete(state)
-			legacyLen = 0
+			legacyLen = 1
 			precheckLen = 1
 		default:
 			if err = state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0b10, 2).ToSlice()); err != nil {
@@ -153,8 +153,15 @@ func FuzzTVMVersionedPrefixDictShortStackPrecheckMatrix(f *testing.F) {
 		}
 
 		assertDictVMErrorCode(t, err, vmerr.CodeStackUnderflow)
-		wantLen := 0
+		required := 2
+		if set {
+			required = 3
+		}
 		if version >= 9 {
+			required++
+		}
+		wantLen := 0
+		if length < required {
 			wantLen = length
 		}
 		if state.Stack.Len() != wantLen {
@@ -326,8 +333,8 @@ func FuzzTVMVersionedPfxDictSwitchNilRootFlagWithRef(f *testing.F) {
 		if err := op.Deserialize(code.MustBeginParse()); err != nil {
 			t.Fatalf("deserialize nil-root switch version=%d bits=%d: %v", version, bits, err)
 		}
-		if !op.rootLoaded || op.root != nil || op.bits != bits {
-			t.Fatalf("decoded switch version=%d rootLoaded=%t root=%v bits=%d want %d", version, op.rootLoaded, op.root, op.bits, bits)
+		if op.root != nil || op.bits != bits {
+			t.Fatalf("decoded switch version=%d root=%v bits=%d want %d", version, op.root, op.bits, bits)
 		}
 
 		state := &vm.State{

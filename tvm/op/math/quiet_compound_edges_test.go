@@ -183,14 +183,14 @@ func TestQuietCompoundRuntimeErrorAndNaNEdges(t *testing.T) {
 			pushMathCoverageNonInt(t, st)
 			pushMathCoverageInts(t, st, 1)
 		}},
-		{name: "QADDRSHIFTMOD_nan_w", op: qShrModFamily(0), wantNaNs: 2, push: func(t *testing.T, st *vm.State) {
+		{name: "QADDRSHIFTMOD_nan_w", op: qShrModFamily(0), wantNaNs: 2, globalVersion: 14, push: func(t *testing.T, st *vm.State) {
 			pushMathCoverageInts(t, st, 7)
 			if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push NaN w: %v", err)
 			}
 			pushMathCoverageInts(t, st, 1)
 		}},
-		{name: "QRSHIFT_nan_x", op: qShrModFamily(4), wantNaNs: 1, push: func(t *testing.T, st *vm.State) {
+		{name: "QRSHIFT_nan_x", op: qShrModFamily(4), wantNaNs: 1, globalVersion: 14, push: func(t *testing.T, st *vm.State) {
 			if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push NaN x: %v", err)
 			}

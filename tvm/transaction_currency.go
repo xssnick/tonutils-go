@@ -13,7 +13,7 @@ func transactionCoinsNano(coins *tlb.Coins) *big.Int {
 	if coins == nil {
 		return nil
 	}
-	return new(big.Int).Set(coins.Nano())
+	return coins.Nano()
 }
 
 func transactionCoinsPtr(nano *big.Int) *tlb.Coins {
@@ -60,8 +60,8 @@ func (c *transactionUsageCollector) addCell(root *cell.Cell, skipRoot bool) (tra
 		return transactionUsage{}, nil
 	}
 
-	sl, err := root.BeginParseWithoutTrace()
-	if err != nil {
+	var sl cell.Slice
+	if err := root.BeginParseIntoWithoutTrace(&sl); err != nil {
 		return transactionUsage{}, err
 	}
 
@@ -110,16 +110,22 @@ func transactionZeroCurrencyBalance() *transactionCurrencyBalance {
 }
 
 func transactionCurrencyFromCollection(cc tlb.CurrencyCollection) (*transactionCurrencyBalance, error) {
-	return transactionCurrencyFromParts(cc.Coins.Nano(), cc.ExtraCurrencies)
+	return transactionCurrencyFromOwnedParts(cc.Coins.Nano(), cc.ExtraCurrencies)
 }
 
 func transactionCurrencyFromParts(grams *big.Int, extraDict *cell.Dictionary) (*transactionCurrencyBalance, error) {
+	return transactionCurrencyFromOwnedParts(transactionBigOrZero(grams), extraDict)
+}
+
+// transactionCurrencyFromOwnedParts takes ownership of grams (must be non-nil);
+// the caller must not retain or mutate it afterwards.
+func transactionCurrencyFromOwnedParts(grams *big.Int, extraDict *cell.Dictionary) (*transactionCurrencyBalance, error) {
 	extra, err := transactionLoadExtraCurrencies(extraDict)
 	if err != nil {
 		return nil, err
 	}
 	return &transactionCurrencyBalance{
-		grams: transactionBigOrZero(grams),
+		grams: grams,
 		extra: extra,
 	}, nil
 }
@@ -130,11 +136,13 @@ func (c *transactionCurrencyBalance) copy() *transactionCurrencyBalance {
 	}
 	out := &transactionCurrencyBalance{
 		grams: transactionBigOrZero(c.grams),
-		extra: make(map[uint32]*big.Int, len(c.extra)),
 	}
-	for id, amount := range c.extra {
-		if amount != nil {
-			out.extra[id] = new(big.Int).Set(amount)
+	if len(c.extra) > 0 {
+		out.extra = make(map[uint32]*big.Int, len(c.extra))
+		for id, amount := range c.extra {
+			if amount != nil {
+				out.extra[id] = new(big.Int).Set(amount)
+			}
 		}
 	}
 	return out

@@ -2,18 +2,52 @@ package cell
 
 import "fmt"
 
+// cellWithBuf* combine a finalized Cell and its data into one size-classed
+// allocation, halving the allocation count of EndCell. Cells are immutable
+// after finalization and nothing grows c.data (the slice is capped to its
+// length, so any append reallocates), which makes the data aliasing a larger
+// allocation safe — BoC parsing already aliases cell data into shared payload
+// buffers the same way.
+type cellWithBuf24 struct {
+	c   Cell
+	buf [24]byte
+}
+
+type cellWithBuf56 struct {
+	c   Cell
+	buf [56]byte
+}
+
+type cellWithBuf128 struct {
+	c   Cell
+	buf [maxCellDataBytes]byte
+}
+
 func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 	refs := builder.rawRefs()
-	var data []byte
-	if usedBytes := builder.usedBytes(); usedBytes > 0 {
-		data = make([]byte, usedBytes)
-		copy(data, builder.data[:usedBytes])
+
+	var c *Cell
+	switch usedBytes := builder.usedBytes(); {
+	case usedBytes == 0:
+		c = &Cell{}
+	case usedBytes <= 24:
+		x := new(cellWithBuf24)
+		copy(x.buf[:], builder.data[:usedBytes])
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		c = &x.c
+	case usedBytes <= 56:
+		x := new(cellWithBuf56)
+		copy(x.buf[:], builder.data[:usedBytes])
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		c = &x.c
+	default:
+		x := new(cellWithBuf128)
+		copy(x.buf[:], builder.data[:usedBytes])
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		c = &x.c
 	}
 
-	c := &Cell{
-		bitsSz: uint16(builder.bitsSz),
-		data:   data,
-	}
+	c.bitsSz = uint16(builder.bitsSz)
 	c.setSpecial(special)
 	copy(c.refs[:], refs)
 	c.setRefsCount(len(refs))

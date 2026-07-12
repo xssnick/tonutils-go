@@ -12,6 +12,12 @@ const cppBigIntWordBits = 64
 const cppBigIntMaxLeftShiftWords = 5
 const cppBigIntWordShift = 52
 
+const (
+	cppRoundFloor   = -1
+	cppRoundNearest = 0
+	cppRoundCeil    = 1
+)
+
 var (
 	bigIntOne              = big.NewInt(1)
 	bigIntMinusOne         = big.NewInt(-1)
@@ -47,20 +53,51 @@ func leftShiftResult(x *big.Int, shift uint64) *big.Int {
 }
 
 func legacyShiftNaNResult(globalVersion int, shift uint64, right bool) *big.Int {
-	if globalVersion >= 13 || shift == 0 {
+	return legacyShiftNaNResultThreshold(globalVersion, 13, shift, right)
+}
+
+// legacyShiftNaNResultThreshold generalizes legacyShiftNaNResult for opcode
+// families whose modern (NaN-preserving) behavior starts at a global version
+// other than 13, such as the immediate RSHIFT#/LSHIFT# opcodes (0xAA/0xAB
+// and their quiet 0xB7AA/0xB7AB forms), which only gained NaN preservation at
+// global version 14.
+func legacyShiftNaNResultThreshold(globalVersion int, threshold int, shift uint64, right bool) *big.Int {
+	if globalVersion >= threshold || shift == 0 {
 		return nil
 	}
 	if right {
-		if shift > cppBigIntWordBits-cppBigIntWordShift {
-			return new(big.Int).Set(bigIntMinusOne)
-		}
-		return new(big.Int)
+		return legacyRShiftNaNResultThreshold(globalVersion, threshold, shift, cppRoundFloor)
 	}
 	q := shift / cppBigIntWordShift
 	if q == 0 || q > cppBigIntMaxLeftShiftWords {
 		return nil
 	}
 	return new(big.Int)
+}
+
+func legacyRShiftNaNResult(globalVersion int, shift uint64, roundMode int) *big.Int {
+	return legacyRShiftNaNResultThreshold(globalVersion, 13, shift, roundMode)
+}
+
+// Before the version gate, cppnode feeds invalid BigInts into rshift_any.
+// A non-zero shift resurrects them as a finite value determined by rounding.
+func legacyRShiftNaNResultThreshold(globalVersion int, threshold int, shift uint64, roundMode int) *big.Int {
+	if globalVersion >= threshold || shift == 0 {
+		return nil
+	}
+	if roundMode == cppRoundFloor && shift > cppBigIntWordBits-cppBigIntWordShift {
+		return new(big.Int).Set(bigIntMinusOne)
+	}
+	return new(big.Int)
+}
+
+// The legacy SHLDIV path shifts before validating its operands, so a large
+// enough left shift can turn an invalid dividend into a finite zero.
+func legacyLeftShiftOperand(globalVersion int, value *big.Int, shift uint64) *big.Int {
+	if value != nil {
+		return value
+	}
+	return legacyShiftNaNResult(globalVersion, shift, false)
 }
 
 func pushSmallInt(state *vm.State, val int64) error {
@@ -84,6 +121,12 @@ func popIntRange(state *vm.State, min, max int64) (*big.Int, error) {
 
 func popInt(state *vm.State) (*big.Int, error) {
 	return state.Stack.PopInt()
+}
+
+// popIntRead pops an integer for read-only use; the result may be a shared
+// static instance and must not be mutated or pushed back as an owned value.
+func popIntRead(state *vm.State) (*big.Int, error) {
+	return state.Stack.PopIntRead()
 }
 
 func requireFiniteInts(values ...*big.Int) error {

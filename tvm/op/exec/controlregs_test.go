@@ -391,7 +391,7 @@ func TestControlRegisterAdvancedOpRoundTrips(t *testing.T) {
 	}
 
 	short := PUSHCTR(0)
-	if err := short.DeserializeMatched(cell.BeginCell().MustStoreSlice(short.BitPrefix.Data, short.BitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
+	if err := short.Deserialize(cell.BeginCell().MustStoreSlice(pushCtrBitPrefix.Data, pushCtrBitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
 		t.Fatal("expected short control register suffix decode error")
 	}
 }

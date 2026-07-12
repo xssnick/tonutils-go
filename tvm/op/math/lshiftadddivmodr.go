@@ -32,6 +32,7 @@ func LSHIFTADDDIVMODR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
+			x = legacyLeftShiftOperand(state.GlobalVersion, x, y.Uint64())
 			if err = requireFiniteInts(z, w, x); err != nil {
 				return err
 			}

@@ -86,6 +86,7 @@ func TestSendMsgTupleAmountVersionedExtraSemantics(t *testing.T) {
 		version    int
 		param      any
 		wantAmount int64
+		wantNaN    bool
 		wantExtra  bool
 		wantErr    bool
 		wantCode   int64
@@ -101,6 +102,12 @@ func TestSendMsgTupleAmountVersionedExtraSemantics(t *testing.T) {
 			name:       "legacy nil extra is empty",
 			version:    9,
 			param:      tuple.NewTupleValue(big.NewInt(124), nil),
+			wantAmount: 124,
+		},
+		{
+			name:       "legacy non-cell extra is empty",
+			version:    9,
+			param:      tuple.NewTupleValue(big.NewInt(124), big.NewInt(1)),
 			wantAmount: 124,
 		},
 		{
@@ -141,6 +148,19 @@ func TestSendMsgTupleAmountVersionedExtraSemantics(t *testing.T) {
 			param:      tuple.NewTupleValue(big.NewInt(127)),
 			wantAmount: 127,
 		},
+		{
+			name:      "legacy accepts NaN integer tag",
+			version:   9,
+			param:     tuple.NewTupleValue(vm.NaN{}, nil),
+			wantNaN:   true,
+			wantExtra: false,
+		},
+		{
+			name:    "v10 accepts NaN integer tag",
+			version: 10,
+			param:   tuple.NewTupleValue(vm.NaN{}),
+			wantNaN: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -148,7 +168,7 @@ func TestSendMsgTupleAmountVersionedExtraSemantics(t *testing.T) {
 			st := newFuncTestState(t, map[int]any{7: tc.param})
 			st.GlobalVersion = tc.version
 
-			amount, hasExtra, err := sendMsgTupleAmount(st, 7, "BALANCE")
+			amount, amountNaN, hasExtra, err := sendMsgTupleAmount(st, 7, "BALANCE")
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("sendMsgTupleAmount should fail")
@@ -163,8 +183,11 @@ func TestSendMsgTupleAmountVersionedExtraSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("sendMsgTupleAmount failed: %v", err)
 			}
-			if amount.Int64() != tc.wantAmount || hasExtra != tc.wantExtra {
-				t.Fatalf("sendMsgTupleAmount = (%s, %t), want (%d, %t)", amount, hasExtra, tc.wantAmount, tc.wantExtra)
+			if amountNaN != tc.wantNaN || hasExtra != tc.wantExtra {
+				t.Fatalf("sendMsgTupleAmount = (%v, NaN=%t, extra=%t), want (NaN=%t, extra=%t)", amount, amountNaN, hasExtra, tc.wantNaN, tc.wantExtra)
+			}
+			if !amountNaN && amount.Int64() != tc.wantAmount {
+				t.Fatalf("sendMsgTupleAmount amount = %s, want %d", amount, tc.wantAmount)
 			}
 		})
 	}
@@ -172,7 +195,7 @@ func TestSendMsgTupleAmountVersionedExtraSemantics(t *testing.T) {
 	t.Run("missing param", func(t *testing.T) {
 		st := newFuncTestState(t, nil)
 		st.GlobalVersion = 9
-		if _, _, err := sendMsgTupleAmount(st, 7, "BALANCE"); err == nil {
+		if _, _, _, err := sendMsgTupleAmount(st, 7, "BALANCE"); err == nil {
 			t.Fatal("sendMsgTupleAmount should fail when the c7 slot is absent")
 		}
 	})
@@ -351,14 +374,20 @@ func TestLoadSendMsgLayoutMalformedEdges(t *testing.T) {
 }
 
 func TestSendMsgSizingHelpersEdges(t *testing.T) {
-	if got := sendMsgStoredCoinsBits(nil); got != 4 {
+	if got := sendMsgStoredCoinsBits(nil, false); got != 4 {
 		t.Fatalf("sendMsgStoredCoinsBits(nil) = %d, want 4", got)
 	}
-	if got := sendMsgStoredCoinsBits(big.NewInt(0)); got != 4 {
+	if got := sendMsgStoredCoinsBits(big.NewInt(0), false); got != 4 {
 		t.Fatalf("sendMsgStoredCoinsBits(0) = %d, want 4", got)
 	}
-	if got := sendMsgStoredCoinsBits(big.NewInt(256)); got != 20 {
+	if got := sendMsgStoredCoinsBits(big.NewInt(256), false); got != 20 {
 		t.Fatalf("sendMsgStoredCoinsBits(256) = %d, want 20", got)
+	}
+	if got := sendMsgStoredCoinsBits(nil, true); got != sendMsgInvalidStoredCoinsBits {
+		t.Fatalf("sendMsgStoredCoinsBits(NaN) = %#x, want %#x", got, sendMsgInvalidStoredCoinsBits)
+	}
+	if got := sendMsgStoredCoinsBits(big.NewInt(-1), false); got != sendMsgInvalidStoredCoinsBits {
+		t.Fatalf("sendMsgStoredCoinsBits(-1) = %#x, want %#x", got, sendMsgInvalidStoredCoinsBits)
 	}
 
 	zero := sendMsgBigOrZero(nil)
@@ -578,12 +607,12 @@ func FuzzSendMsgVersionedExtraFlagsRootSizeBoundary(f *testing.F) {
 		if err != nil {
 			t.Fatalf("dest bits: %v", err)
 		}
-		extraBits := sendMsgStoredCoinsBits(big.NewInt(0))
+		extraBits := sendMsgStoredCoinsBits(big.NewInt(0), false)
 		if version >= 12 {
 			extraBits = layout.extraFlagsBits
 		}
-		rootBits := 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(big.NewInt(100)) + 1 + 32 + 64
-		rootBits += sendMsgStoredCoinsBits(big.NewInt(0)) + extraBits
+		rootBits := 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(big.NewInt(100), false) + 1 + 32 + 64
+		rootBits += sendMsgStoredCoinsBits(big.NewInt(0), false) + extraBits
 		rootBits++ // no state init
 		rootBits++ // inline body selector
 		rootBits += layout.bodyBits - 1
@@ -779,13 +808,13 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		}
 
 		for _, tc := range []struct {
-			name        string
-			version     int
-			wantRestore any
+			name       string
+			version    int
+			wantLegacy bool
 		}{
-			{name: "v12 keeps invalid value", version: 12, wantRestore: big.NewInt(100)},
-			{name: "v13 keeps invalid value", version: 13, wantRestore: big.NewInt(100)},
-			{name: "v14 keeps invalid value", version: 14, wantRestore: big.NewInt(100)},
+			{name: "v12 returns legacy null slice", version: 12, wantLegacy: true},
+			{name: "v13 returns legacy null slice", version: 13, wantLegacy: true},
+			{name: "v14 keeps invalid value", version: 14},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				st := newFuncTestState(t, nil)
@@ -814,14 +843,17 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 				if err != nil {
 					t.Fatalf("PopAny failed: %v", err)
 				}
-				want, _ := tc.wantRestore.(*big.Int)
-				got, _ := restored.(*big.Int)
-				if want == nil {
-					if restored != nil {
-						t.Fatalf("restored value = %v, want nil", restored)
+				if tc.wantLegacy {
+					legacy, ok := restored.(*cell.Slice)
+					if !ok || legacy != nil {
+						t.Fatalf("restored value = %T %v, want legacy null cell slice", restored, restored)
 					}
-				} else if got == nil || got.Cmp(want) != 0 {
-					t.Fatalf("restored value = %v, want %v", restored, want)
+					return
+				}
+
+				got, ok := restored.(*big.Int)
+				if !ok || got.Cmp(big.NewInt(100)) != 0 {
+					t.Fatalf("restored value = %T %v, want 100", restored, restored)
 				}
 			})
 		}
@@ -1025,7 +1057,7 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("sendmsg enforces size limits after skipping extra-currency refs", func(t *testing.T) {
+	t.Run("sendmsg caps statistics at the size limit", func(t *testing.T) {
 		myAddr := address.NewAddress(0, 0, bytes.Repeat([]byte{0x33}, 32))
 		dest := address.NewAddress(0, 0, bytes.Repeat([]byte{0x44}, 32))
 		sizeLimit := cell.BeginCell().
@@ -1059,8 +1091,15 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 		if err := st.Stack.PushInt(big.NewInt(1024)); err != nil {
 			t.Fatalf("PushInt failed: %v", err)
 		}
-		if err := SENDMSG().Interpret(st); err == nil {
-			t.Fatal("SENDMSG should fail when the tail exceeds the configured max cell limit")
+		if err := SENDMSG().Interpret(st); err != nil {
+			t.Fatalf("SENDMSG should use capped statistics: %v", err)
+		}
+		fee, err := st.Stack.PopIntFinite()
+		if err != nil {
+			t.Fatalf("PopIntFinite failed: %v", err)
+		}
+		if fee.Cmp(big.NewInt(1)) != 0 {
+			t.Fatalf("capped SENDMSG fee = %s, want 1", fee)
 		}
 	})
 

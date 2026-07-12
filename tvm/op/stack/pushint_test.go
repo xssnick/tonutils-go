@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestPUSHINTTinyFormMatchesReferenceRange(t *testing.T) {
@@ -37,6 +38,48 @@ func TestPUSHINTTinyFormMatchesReferenceRange(t *testing.T) {
 		}
 		if decoded.value.Int64() != tc.value {
 			t.Fatalf("unexpected decoded value for %d: got %d", tc.value, decoded.value.Int64())
+		}
+	}
+}
+
+func TestPUSHINTTinyFormSharedImmediatesStayImmutable(t *testing.T) {
+	st := vm.NewStack()
+
+	for prefix := uint64(0x70); prefix <= 0x7F; prefix++ {
+		want := int64(((prefix + 5) & 0xF) - 5)
+
+		op := PUSHINT(nil)
+		code := cell.BeginCell().MustStoreUInt(prefix, 8).EndCell().MustBeginParse()
+		if err := op.Deserialize(code); err != nil {
+			t.Fatalf("failed to decode 0x%x: %v", prefix, err)
+		}
+		if op.value.Int64() != want {
+			t.Fatalf("unexpected decoded value for 0x%x: got %d want %d", prefix, op.value.Int64(), want)
+		}
+
+		if err := op.Interpret(&vm.State{Stack: st}); err != nil {
+			t.Fatalf("failed to interpret 0x%x: %v", prefix, err)
+		}
+		popped, err := st.PopInt()
+		if err != nil {
+			t.Fatalf("failed to pop for 0x%x: %v", prefix, err)
+		}
+		if popped.Int64() != want {
+			t.Fatalf("unexpected stack value for 0x%x: got %d want %d", prefix, popped.Int64(), want)
+		}
+
+		encoded := op.Serialize().EndCell()
+		wantCell := cell.BeginCell().MustStoreUInt(prefix, 8).EndCell()
+		if encoded.Dump() != wantCell.Dump() {
+			t.Fatalf("unexpected re-encoding for 0x%x: got %s want %s", prefix, encoded.Dump(), wantCell.Dump())
+		}
+	}
+
+	// after all interpret/serialize round-trips the shared immediates must be intact
+	for i, val := range pushIntSmallImmediates {
+		want := int64(((i + 5) & 0xF) - 5)
+		if val.Int64() != want {
+			t.Fatalf("shared immediate %d mutated: got %d want %d", i, val.Int64(), want)
 		}
 	}
 }

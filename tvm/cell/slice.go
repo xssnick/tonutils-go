@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"math/bits"
 
@@ -41,18 +42,31 @@ func (c *Slice) boundaryRefCellAt(i int) *Cell {
 }
 
 func (c *Slice) peekRefCellAt(i int) (*Cell, error) {
+	ref, trace, err := c.refAndTraceAt(i)
+	if err != nil || c.trace == nil {
+		return ref, err
+	}
+	return ref.WithTrace(trace), nil
+}
+
+func (c *Slice) refAndTraceAt(i int) (*Cell, *Trace, error) {
 	if i < 0 {
-		return nil, ErrNegative
+		return nil, nil, ErrNegative
 	}
 	if i >= c.RefsNum() {
-		return nil, ErrNoMoreRefs
+		return nil, nil, ErrNoMoreRefs
 	}
 
 	ref, err := c.refCellAt(i)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return c.withChildTrace(ref, int(c.refStart)+i), nil
+
+	trace := ref.Trace()
+	if c.trace != nil {
+		trace = c.trace.Child(int(c.refStart) + i)
+	}
+	return ref, trace, nil
 }
 
 func (c *Slice) withChildTrace(ref *Cell, refIdx int) *Cell {
@@ -74,16 +88,16 @@ func (c *Slice) loadRefCell(advance bool) (*Cell, error) {
 	return ref, nil
 }
 
-func (c *Slice) loadBoundaryRefCell() (*Cell, error) {
-	if c.RefsNum() < 1 {
-		return nil, ErrNoMoreRefs
+func (c *Slice) loadRefInto(dst *Slice, advance bool) error {
+	ref, trace, err := c.refAndTraceAt(0)
+	if err != nil {
+		return err
 	}
 
-	refIdx := int(c.refStart)
-	ref := c.withChildTrace(c.boundaryRefCellAt(0), refIdx)
-
-	c.refStart++
-	return ref, nil
+	if advance {
+		c.refStart++
+	}
+	return ref.beginParseIntoWithTrace(dst, trace)
 }
 
 func (c *Slice) MustLoadRef() *Slice {
@@ -95,19 +109,19 @@ func (c *Slice) MustLoadRef() *Slice {
 }
 
 func (c *Slice) LoadRef() (*Slice, error) {
-	ref, err := c.loadRefCell(true)
-	if err != nil {
+	ref := new(Slice)
+	if err := c.loadRefInto(ref, true); err != nil {
 		return nil, err
 	}
-	return ref.BeginParse()
+	return ref, nil
 }
 
 func (c *Slice) PreloadRef() (*Slice, error) {
-	ref, err := c.loadRefCell(false)
-	if err != nil {
+	ref := new(Slice)
+	if err := c.loadRefInto(ref, false); err != nil {
 		return nil, err
 	}
-	return ref.BeginParse()
+	return ref, nil
 }
 
 func (c *Slice) LoadRefCell() (*Cell, error) {
@@ -140,12 +154,11 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 		return nil, nil
 	}
 
-	ref, err := c.loadRefCell(true)
-	if err != nil {
+	ref := new(Slice)
+	if err := c.loadRefInto(ref, true); err != nil {
 		return nil, err
 	}
-
-	return ref.BeginParse()
+	return ref, nil
 }
 
 func (c *Slice) RefsNum() int {
@@ -190,24 +203,12 @@ func (c *Slice) SkipBitsAndRefs(bits uint, refs int) error {
 }
 
 func (c *Slice) FetchSubslice(bits uint, refs int) (*Slice, error) {
-	if refs < 0 || c.RefsNum() < refs {
-		return nil, ErrNoMoreRefs
+	out, err := c.PreloadSubslice(bits, refs)
+	if err != nil {
+		return nil, err
 	}
-
-	left := c.BitsLeft()
-	if left < bits {
-		return nil, ErrNotEnoughData(int(left), int(bits))
-	}
-	out := &Slice{
-		cell:     c.cell,
-		trace:    c.trace,
-		bitStart: c.bitStart,
-		bitEnd:   c.bitStart + uint16(bits),
-		refStart: c.refStart,
-		refEnd:   c.refStart + uint8(refs),
-	}
-	c.bitStart += uint16(bits)
-	c.refStart += uint8(refs)
+	c.bitStart = out.bitEnd
+	c.refStart = out.refEnd
 	return out, nil
 }
 
@@ -491,7 +492,7 @@ func (c *Slice) LoadBigUInt(sz uint) (*big.Int, error) {
 		return nil, ErrTooBigSize
 	}
 
-	return c.loadBigNumber(sz)
+	return c.readBigNumber(sz, false)
 }
 
 func (c *Slice) PreloadBigUInt(sz uint) (*big.Int, error) {
@@ -499,41 +500,61 @@ func (c *Slice) PreloadBigUInt(sz uint) (*big.Int, error) {
 		return nil, ErrTooBigSize
 	}
 
-	return c.preloadBigNumber(sz)
-}
-
-func (c *Slice) loadBigNumber(sz uint) (*big.Int, error) {
-	return c.readBigNumber(sz, false)
-}
-
-func (c *Slice) preloadBigNumber(sz uint) (*big.Int, error) {
 	return c.readBigNumber(sz, true)
 }
 
+// LoadBigUIntInto decodes sz bits into dst and advances the slice. Reusing dst
+// avoids the allocation performed by LoadBigUInt. On error, neither dst nor
+// the slice cursor is changed.
+func (c *Slice) LoadBigUIntInto(dst *big.Int, sz uint) error {
+	if sz > 256 {
+		return ErrTooBigSize
+	}
+	return c.readBigNumberInto(dst, sz, false)
+}
+
+// PreloadBigUIntInto decodes sz bits into dst without advancing the slice.
+// Reusing dst avoids the allocation performed by PreloadBigUInt. On error,
+// dst is not changed.
+func (c *Slice) PreloadBigUIntInto(dst *big.Int, sz uint) error {
+	if sz > 256 {
+		return ErrTooBigSize
+	}
+	return c.readBigNumberInto(dst, sz, true)
+}
+
 func (c *Slice) readBigNumber(sz uint, preload bool) (*big.Int, error) {
+	value := new(big.Int)
+	if err := c.readBigNumberInto(value, sz, preload); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+func (c *Slice) readBigNumberInto(dst *big.Int, sz uint, preload bool) error {
 	if sz == 0 {
-		return new(big.Int), nil
+		dst.SetUint64(0)
+		return nil
 	}
 
 	var buf [33]byte
 	b := buf[:int((sz+7)/8)]
-	err := c.loadSliceInto(b, sz, preload)
-	if err != nil {
-		return nil, err
+	if err := c.loadSliceInto(b, sz, preload); err != nil {
+		return err
 	}
 
-	// check is value is uses full bytes
+	// Shift partial-byte values down before converting the buffer to an integer.
 	if offset := sz % 8; offset > 0 {
-		// move bits to right side of bytes
 		for i := len(b) - 1; i >= 0; i-- {
-			b[i] >>= 8 - offset // get last bits
+			b[i] >>= 8 - offset
 			if i > 0 {
 				b[i] += b[i-1] << offset
 			}
 		}
 	}
 
-	return new(big.Int).SetBytes(b), nil
+	dst.SetBytes(b)
+	return nil
 }
 
 func (c *Slice) LoadBigInt(sz uint) (*big.Int, error) {
@@ -544,7 +565,7 @@ func (c *Slice) LoadBigInt(sz uint) (*big.Int, error) {
 		return big.NewInt(0), nil
 	}
 
-	u, err := c.loadBigNumber(sz)
+	u, err := c.readBigNumber(sz, false)
 	if err != nil {
 		return nil, err
 	}
@@ -649,6 +670,21 @@ func (c *Slice) PreloadSlice(sz uint) ([]byte, error) {
 	return c.loadSlice(sz, true)
 }
 
+// LoadSliceInto copies sz bits into dst and advances the slice. The copied
+// bits are left-aligned in dst, matching LoadSlice. It returns io.ErrShortBuffer
+// when dst cannot hold the result and leaves the slice cursor unchanged on
+// every error.
+func (c *Slice) LoadSliceInto(dst []byte, sz uint) error {
+	return c.loadSliceInto(dst, sz, false)
+}
+
+// PreloadSliceInto copies sz bits into dst without advancing the slice. The
+// copied bits are left-aligned in dst, matching PreloadSlice. It returns
+// io.ErrShortBuffer when dst cannot hold the result.
+func (c *Slice) PreloadSliceInto(dst []byte, sz uint) error {
+	return c.loadSliceInto(dst, sz, true)
+}
+
 func (c *Slice) loadSlice(sz uint, preload bool) ([]byte, error) {
 	if sz == 0 {
 		return []byte{}, nil
@@ -668,6 +704,10 @@ func (c *Slice) loadSliceInto(loadedData []byte, sz uint, preload bool) error {
 		return ErrNotEnoughData(int(left), int(sz))
 	}
 
+	outLen := int((sz + 7) / 8)
+	if len(loadedData) < outLen {
+		return io.ErrShortBuffer
+	}
 	if sz == 0 {
 		return nil
 	}
@@ -675,7 +715,6 @@ func (c *Slice) loadSliceInto(loadedData []byte, sz uint, preload bool) error {
 	startBit := uint(c.bitStart)
 	startBitOffset := startBit % 8
 	data := c.cell.data[startBit/8:]
-	outLen := int((sz + 7) / 8)
 	loadedData = loadedData[:outLen]
 
 	if startBitOffset == 0 {
@@ -860,25 +899,27 @@ func (c *Slice) LoadBinarySnake() ([]byte, error) {
 	var data []byte
 
 	ref := c
-	for ref != nil {
-		b, err := ref.LoadSlice(ref.BitsLeft())
-		if err != nil {
+	var next Slice
+	for {
+		bits := ref.BitsLeft()
+		start := len(data)
+		data = append(data, make([]byte, (bits+7)/8)...)
+		if err := ref.loadSliceInto(data[start:], bits, false); err != nil {
 			return nil, err
 		}
-		data = append(data, b...)
 
 		if ref.RefsNum() > 1 {
 			return nil, fmt.Errorf("more than one ref, it is not snake string")
 		}
 
-		if ref.RefsNum() == 1 {
-			ref = ref.MustLoadRef()
-			continue
+		if ref.RefsNum() == 0 {
+			return data, nil
 		}
-		ref = nil
+		if err := ref.loadRefInto(&next, true); err != nil {
+			return nil, err
+		}
+		ref = &next
 	}
-
-	return data, nil
 }
 
 func (c *Slice) IsSpecial() bool {
@@ -904,14 +945,8 @@ func (c *Slice) MustToCell() *Cell {
 }
 
 func (c *Slice) Copy() *Slice {
-	return &Slice{
-		cell:     c.cell,
-		trace:    c.trace,
-		bitStart: c.bitStart,
-		bitEnd:   c.bitEnd,
-		refStart: c.refStart,
-		refEnd:   c.refEnd,
-	}
+	cp := *c
+	return &cp
 }
 
 func (c *Slice) BaseCell() *Cell {

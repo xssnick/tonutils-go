@@ -27,6 +27,7 @@ type mockADNL struct {
 	id        []byte
 	remote    string
 	closerCtx context.Context
+	stats     adnl.PeerStats
 }
 
 func newMockADNL() *mockADNL {
@@ -82,6 +83,10 @@ func (m *mockADNL) GetID() []byte {
 	return m.id
 }
 
+func (m *mockADNL) Stats() adnl.PeerStats {
+	return m.stats
+}
+
 func (m *mockADNL) Close() {}
 
 type mockRLDP struct {
@@ -105,6 +110,10 @@ func (m *mockRLDP) GetADNL() rldp.ADNL {
 
 func (m *mockRLDP) GetRateInfo() (left int64, total int64) {
 	return 0, 0
+}
+
+func (m *mockRLDP) Stats() rldp.Stats {
+	return rldp.Stats{}
 }
 
 func (m *mockRLDP) Close() {}

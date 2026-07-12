@@ -1,6 +1,9 @@
 package cell
 
-import "fmt"
+import (
+	"fmt"
+	"math/big"
+)
 
 type PrefixDictionary struct {
 	keySz uint
@@ -201,6 +204,15 @@ func (d *PrefixDictionary) LoadValue(key *Cell) (*Slice, error) {
 	return value, nil
 }
 
+// LoadValueByIntKey loads a full-width prefix-dictionary key without
+// finalizing and hashing an intermediate key cell.
+func (d *PrefixDictionary) LoadValueByIntKey(key *big.Int) (*Slice, error) {
+	var builder Builder
+	var cell Cell
+	initIntKeyCell(key, d.keySz, &builder, &cell)
+	return d.LoadValue(&cell)
+}
+
 func (d *PrefixDictionary) Get(key *Cell) *Cell {
 	slc, err := d.LoadValue(key)
 	if err != nil {
@@ -220,6 +232,14 @@ func (d *PrefixDictionary) Set(key, value *Cell) error {
 	}
 	_, err := d.SetWithMode(key, value, DictSetModeSet)
 	return err
+}
+
+// SetIntKey stores a full-width prefix-dictionary key.
+func (d *PrefixDictionary) SetIntKey(key *big.Int, value *Cell) error {
+	var builder Builder
+	var cell Cell
+	initIntKeyCell(key, d.keySz, &builder, &cell)
+	return d.Set(&cell, value)
 }
 
 func (d *PrefixDictionary) SetBuilder(key *Cell, value *Builder) error {
@@ -288,6 +308,14 @@ func (d *PrefixDictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 func (d *PrefixDictionary) Delete(key *Cell) error {
 	_, err := d.LoadValueAndDelete(key)
 	return err
+}
+
+// DeleteIntKey removes a full-width prefix-dictionary key.
+func (d *PrefixDictionary) DeleteIntKey(key *big.Int) error {
+	var builder Builder
+	var cell Cell
+	initIntKeyCell(key, d.keySz, &builder, &cell)
+	return d.Delete(&cell)
 }
 
 func (d *PrefixDictionary) MustToCell() *Cell {
@@ -451,7 +479,7 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		if key.BitsLeft() != 0 {
 			return nil, nil, false, nil
 		}
-		return node.loader, nil, true, nil
+		return node.value(), nil, true, nil
 	}
 
 	if remaining == node.labelLen {

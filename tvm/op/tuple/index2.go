@@ -17,9 +17,15 @@ func init() {
 	)
 }
 
+// constant prefixes, computed once instead of on every decode
+var (
+	index2Prefix = helpers.UIntPrefix(0x6fb, 12)
+	index3Prefix = helpers.UIntPrefix(0x6fc>>2, 10)
+)
+
 func INDEX2(i, j uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6fb, 12),
+		BitPrefix:     index2Prefix,
 		FixedSizeBits: 4,
 		NameSerializer: func() string {
 			return fmt.Sprintf("INDEX2 %d,%d", i, j)
@@ -45,7 +51,7 @@ func INDEX2(i, j uint8) *helpers.AdvancedOP {
 
 func INDEX3(i, j, k uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6fc>>2, 10),
+		BitPrefix:     index3Prefix,
 		FixedSizeBits: 6,
 		NameSerializer: func() string {
 			return fmt.Sprintf("INDEX3 %d,%d,%d", i, j, k)

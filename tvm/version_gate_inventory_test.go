@@ -24,11 +24,14 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 	"op/funcs/tonops.go":                   3,
 	"op/funcs/tonops_crypto_circl.go":      2,
 	"op/funcs/tonops_fee_hash.go":          8,
-	"op/funcs/tonops_misc_message.go":      15,
-	"op/math/arith_helpers.go":             3,
-	"op/math/quiet_compound.go":            4,
-	"op/math/quiet_logic.go":               3,
-	"op/math/rshiftcode.go":                1,
+	"op/funcs/tonops_misc_message.go":      16,
+	"op/math/arith_helpers.go":             4,
+	"op/math/quiet_compound.go":            6,
+	"op/math/quiet_logic.go":               2,
+	"op/math/rshiftc.go":                   1,
+	"op/math/rshiftccode.go":               1,
+	"op/math/rshiftr.go":                   1,
+	"op/math/rshiftrcode.go":               1,
 	"op/stack/blkswx.go":                   1,
 	"op/stack/internal.go":                 1,
 	"transaction_account.go":               14,
@@ -58,8 +61,8 @@ var expectedTransactionGlobalVersionGateCounts = map[string]int{
 var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 const (
-	expectedRuntimeGlobalVersionDynamicGateCount = 2
-	expectedRuntimeGlobalVersionDynamicGateHash  = "4c92c5481fb684066c5bef38d10d33c66ca03bf0565679a65dfd0e08b6c7d5b5"
+	expectedRuntimeGlobalVersionDynamicGateCount = 4
+	expectedRuntimeGlobalVersionDynamicGateHash  = "d902760d75f73a15e67504223b02ea194573f768933c71ae5401e0bab1210522"
 
 	expectedTransactionGlobalVersionDynamicGateCount = 1
 )
@@ -103,8 +106,17 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 	"op/math/quiet_logic.go": {
 		"FuzzTVMVersionedLogicNaNRules",
 	},
-	"op/math/rshiftcode.go": {
-		"FuzzTVMVersionedImmediateShiftNaNRules",
+	"op/math/rshiftc.go": {
+		"FuzzTVMVersionedShrModRoundCeilNaNRules",
+	},
+	"op/math/rshiftccode.go": {
+		"FuzzTVMVersionedShrModRoundCeilNaNRules",
+	},
+	"op/math/rshiftr.go": {
+		"FuzzTVMVersionedShrModRoundCeilNaNRules",
+	},
+	"op/math/rshiftrcode.go": {
+		"FuzzTVMVersionedShrModRoundCeilNaNRules",
 	},
 	"op/stack/blkswx.go": {
 		"FuzzTVMVersionedBLKSWXLargeMoveGas",
@@ -194,7 +206,16 @@ var expectedRuntimeGlobalVersionGateCrossEmulatorAnchors = map[string][]string{
 	"op/math/quiet_logic.go": {
 		"FuzzTVMCrossEmulatorArithOpsVersionedQuietEdges",
 	},
-	"op/math/rshiftcode.go": {
+	"op/math/rshiftc.go": {
+		"FuzzTVMCrossEmulatorArithOpsSignedRoundingEdgesGlobalVersion",
+	},
+	"op/math/rshiftccode.go": {
+		"FuzzTVMCrossEmulatorArithOpsSignedRoundingEdgesGlobalVersion",
+	},
+	"op/math/rshiftr.go": {
+		"FuzzTVMCrossEmulatorArithOpsSignedRoundingEdgesGlobalVersion",
+	},
+	"op/math/rshiftrcode.go": {
 		"FuzzTVMCrossEmulatorArithOpsSignedRoundingEdgesGlobalVersion",
 	},
 	"op/stack/blkswx.go": {

@@ -23,7 +23,7 @@ const (
 	expectedVMStateGlobalVersionWriters    = 2
 	expectedVMStateGlobalVersionWriterHash = "100e34d1ef68518f532d9b4c02afb80de2942f2e08aaca298d34593b4d3f9f10"
 	expectedVMFreeGasCounterWriters        = 11
-	expectedVMFreeGasCounterWriterHash     = "517b2a44e8a6946ae8a2b5b7cd73dafbad0b695f474c5142c8a0fe17231df847"
+	expectedVMFreeGasCounterWriterHash     = "e0df6d34fab43f52f528ff588a02814a4ba05be7acf7b52925616192b003e564"
 )
 
 type vmVersionFuzzer struct {

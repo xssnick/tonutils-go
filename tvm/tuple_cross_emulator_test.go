@@ -676,7 +676,7 @@ func buildTupleOpsDynamicAndErrorCases() []tupleOpParityCase {
 		{name: "unpackfirstvar_short_stack_preserves_error", op: tupleRawOp(0x6f83, 16), stack: []any{int64(3)}, exit: int32(vmerr.CodeStackUnderflow)},
 		{name: "explodevar_short_stack_preserves_error", op: tupleRawOp(0x6f84, 16), stack: []any{int64(3)}, exit: int32(vmerr.CodeStackUnderflow)},
 		{name: "setindex_short_stack_preserves_error", op: tupleRawOp(0x6f50, 16), stack: []any{int64(7)}, exit: int32(vmerr.CodeStackUnderflow)},
-		{name: "setindexq_short_stack_consumes_value", op: tupleRawOp(0x6f70, 16), stack: []any{int64(7)}, exit: int32(vmerr.CodeStackUnderflow)},
+		{name: "setindexq_short_stack_preserves_value", op: tupleRawOp(0x6f70, 16), stack: []any{int64(7)}, exit: int32(vmerr.CodeStackUnderflow)},
 		{name: "setindexvar_short_stack_preserves_error", op: tupleRawOp(0x6f85, 16), stack: []any{int64(7), int64(0)}, exit: int32(vmerr.CodeStackUnderflow)},
 		{name: "indexvarq_short_stack_nan_idx", op: tupleRawOp(0x6f86, 16), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeStackUnderflow)},
 		{name: "setindexvarq_short_stack_nan_idx", op: tupleRawOp(0x6f87, 16), stack: []any{int64(777), vm.NaN{}}, exit: int32(vmerr.CodeStackUnderflow)},

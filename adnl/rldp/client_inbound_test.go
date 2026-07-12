@@ -85,6 +85,9 @@ func TestRLDP_handleMessageRejectsBadFECBeforeDecoder(t *testing.T) {
 	if stream == nil {
 		t.Fatal("expected stream to be created")
 	}
+	if stats := cli.Stats(); stats.Inbound.ProcessingErrors != 1 {
+		t.Fatalf("processing errors=%d want=1", stats.Inbound.ProcessingErrors)
+	}
 
 	stream.mx.Lock()
 	defer stream.mx.Unlock()
@@ -225,6 +228,17 @@ func TestRLDP_handleMessageOutOfOrderParts(t *testing.T) {
 	}
 	if completes[len(completes)-1].Part != 0 {
 		t.Fatalf("expected completion of part 0, got %v", completes)
+	}
+
+	stats := cli.Stats()
+	if stats.Inbound.TransfersStarted != 1 || stats.Inbound.TransfersCompleted != 1 {
+		t.Fatalf("unexpected inbound transfers: %+v", stats.Inbound)
+	}
+	if stats.Inbound.SymbolsReceived != 5 || stats.Inbound.RepairSymbolsReceived != 0 {
+		t.Fatalf("unexpected inbound symbols: %+v", stats.Inbound)
+	}
+	if stats.Inbound.PayloadBytesDecoded != uint64(len(data)) || stats.Inbound.LastCompleteAt.IsZero() {
+		t.Fatalf("unexpected decoded payload stats: %+v", stats.Inbound)
 	}
 
 	stream.mx.Lock()

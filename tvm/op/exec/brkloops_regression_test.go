@@ -341,6 +341,30 @@ func TestBreakLoopOps(t *testing.T) {
 }
 
 func TestBreakLoopErrorStackEffects(t *testing.T) {
+	t.Run("RepeatBrkShortStackDoesNotConsumeValue", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+
+		assertVMErrCode(t, REPEATBRK().Interpret(state), vmerr.CodeStackUnderflow)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected short stack to remain unchanged, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("WhileBrkShortStackDoesNotConsumeValue", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+
+		assertVMErrCode(t, WHILEBRK().Interpret(state), vmerr.CodeStackUnderflow)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected short stack to remain unchanged, stack len=%d", state.Stack.Len())
+		}
+	})
+
 	t.Run("RepeatBrkBadBodyConsumesTopOnly", func(t *testing.T) {
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(3)); err != nil {

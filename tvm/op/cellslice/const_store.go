@@ -39,8 +39,14 @@ func STREF2CONST(first, second *cell.Cell) *OpSTREFCONST {
 	}
 }
 
+// constant prefixes, computed once instead of on every use
+var (
+	stRefConstPrefix   = helpers.UIntPrefix(0xCF20>>1, 15)
+	stSliceConstPrefix = helpers.UIntPrefix(0xCF80>>7, 9)
+)
+
 func (op *OpSTREFCONST) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(helpers.UIntPrefix(0xCF20>>1, 15))
+	return helpers.PrefixSlices(stRefConstPrefix)
 }
 
 func (op *OpSTREFCONST) Deserialize(code *cell.Slice) error {
@@ -141,7 +147,7 @@ func encodeConstStoreSlicePayload(value *cell.Slice, totalBits uint) *cell.Build
 }
 
 func (op *OpSTSLICECONST) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(helpers.UIntPrefix(0xCF80>>7, 9))
+	return helpers.PrefixSlices(stSliceConstPrefix)
 }
 
 func (op *OpSTSLICECONST) Deserialize(code *cell.Slice) error {

@@ -363,6 +363,63 @@ func FuzzTVMVersionedImmediateShiftNaNRules(f *testing.F) {
 	})
 }
 
+func FuzzTVMVersionedShrModRoundCeilNaNRules(f *testing.F) {
+	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
+		for opKind := uint8(0); opKind < 4; opKind++ {
+			f.Add(version, opKind, uint8(1))
+			f.Add(version, opKind, uint8(100))
+		}
+	}
+
+	f.Fuzz(func(t *testing.T, rawVersion int64, rawOp, rawShift uint8) {
+		version := fuzzMathVersion(rawVersion)
+		shift := int64(rawShift) + 1
+		st := newMathCoverageState()
+		st.GlobalVersion = version
+
+		var err error
+		switch rawOp % 4 {
+		case 0:
+			if err = st.Stack.PushAny(vm.NaN{}); err != nil {
+				t.Fatalf("push NaN: %v", err)
+			}
+			if err = st.Stack.PushInt(big.NewInt(shift)); err != nil {
+				t.Fatalf("push shift: %v", err)
+			}
+			err = RSHIFTR().Interpret(st)
+		case 1:
+			if err = st.Stack.PushAny(vm.NaN{}); err != nil {
+				t.Fatalf("push NaN: %v", err)
+			}
+			if err = st.Stack.PushInt(big.NewInt(shift)); err != nil {
+				t.Fatalf("push shift: %v", err)
+			}
+			err = RSHIFTC().Interpret(st)
+		case 2:
+			if err = st.Stack.PushAny(vm.NaN{}); err != nil {
+				t.Fatalf("push NaN: %v", err)
+			}
+			err = RSHIFTRCODE(int8(rawShift)).Interpret(st)
+		default:
+			if err = st.Stack.PushAny(vm.NaN{}); err != nil {
+				t.Fatalf("push NaN: %v", err)
+			}
+			err = RSHIFTCCODE(int8(rawShift)).Interpret(st)
+		}
+
+		if version >= 14 {
+			fuzzMathExpectVMError(t, err, vmerr.CodeIntOverflow)
+			return
+		}
+		if err != nil {
+			t.Fatalf("shrmod round/ceil op version=%d kind=%d shift=%d failed: %v", version, rawOp%4, shift, err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("shrmod round/ceil op version=%d kind=%d shift=%d result = %d, want 0", version, rawOp%4, shift, got)
+		}
+	})
+}
+
 func FuzzTVMRShiftFloorRelations(f *testing.F) {
 	for _, x := range []int64{-1025, -7, -1, 0, 1, 7, 1025} {
 		for _, shift := range []uint16{0, 1, 2, 255, 256, 257, 299} {

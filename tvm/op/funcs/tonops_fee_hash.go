@@ -36,23 +36,17 @@ func init() {
 func unpackedConfigSlice(state *vm.State, idx int) (*cell.Slice, error) {
 	cfg, err := state.GetUnpackedConfigTuple()
 	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return nil, nil
-		}
 		return nil, err
 	}
 	v, err := cfg.Index(idx)
 	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return nil, nil
-		}
 		return nil, err
 	}
 	if v == nil {
 		return nil, nil
 	}
 	sl, ok := v.(*cell.Slice)
-	if !ok {
+	if !ok || sl == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return sl.Copy(), nil
@@ -434,7 +428,7 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 				return err
 			}
 			balance, ok := balanceAny.(tuple.Tuple)
-			if !ok || balance.Len() < 2 {
+			if !ok {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 
@@ -597,6 +591,9 @@ func appendBits(dst []byte, dstBits *int, src []byte, bits int) []byte {
 func valueBitsForHashExt(val any) ([]byte, int, error) {
 	switch x := val.(type) {
 	case *cell.Slice:
+		if x == nil {
+			return nil, 0, vmerr.Error(vmerr.CodeTypeCheck, "expected slice or builder")
+		}
 		data, err := x.PreloadSlice(x.BitsLeft())
 		if err != nil {
 			return nil, 0, err

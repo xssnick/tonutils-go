@@ -35,7 +35,7 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 	})
 
 	t.Run("TupleDefaults", func(t *testing.T) {
-		incoming := messageIncomingValue(tuple.Tuple{})
+		incoming := messageIncomingValue(tuple.Tuple{}, nil)
 		if incoming.Len() != 2 {
 			t.Fatalf("unexpected incoming value len: %d", incoming.Len())
 		}
@@ -89,7 +89,7 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		assertMessageTupleSliceUInt(t, fromRoot, 5, 8, 0xEA, "basechain message prices tag")
 		assertMessageTupleSliceUInt(t, fromRoot, 6, 8, 0x01, "size limits tag")
 
-		params := messageInMsgParams(tuple.Tuple{})
+		params := messageInMsgParams(tuple.Tuple{}, nil)
 		if params.Len() != 10 {
 			t.Fatalf("unexpected default in_msg_params len: %d", params.Len())
 		}
@@ -119,27 +119,35 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 			t.Fatalf("unexpected seed value: got %s want %s", seed.String(), want.String())
 		}
 
-		if got := normalizeMessageTupleValue(int16(-7)); got != int16(-7) {
+		// build-time c7 binding replaced the old normalization pass: it
+		// snapshots mutable cursor values and collapses typed nil pointers,
+		// except the observable legacy null-slice tag
+		st := vmcore.NewExecutionState(vmcore.MaxSupportedGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, tuple.Tuple{}, vmcore.NewStack())
+		trace := st.Cells.Trace()
+
+		if got := vmcore.BindValueTrace(int16(-7), trace); got != int16(-7) {
 			t.Fatalf("host ints should not be normalized to TVM ints, got %T %v", got, got)
 		}
 
 		var nilInt *big.Int
 		var nilSlice *cell.Slice
 		var nilBuilder *cell.Builder
-		if got := normalizeMessageTupleValue(nilInt); got != nil {
-			t.Fatalf("nil big.Int pointer should normalize to nil, got %T", got)
+		if got := vmcore.BindValueTrace(nilInt, trace); got != nil {
+			t.Fatalf("nil big.Int pointer should bind to nil, got %T", got)
 		}
-		if got := normalizeMessageTupleValue(nilSlice); got != nil {
-			t.Fatalf("nil slice pointer should normalize to nil, got %T", got)
+		gotNullSlice := vmcore.BindValueTrace(nilSlice, trace)
+		boundNullSlice, ok := gotNullSlice.(*cell.Slice)
+		if !ok || boundNullSlice != nil {
+			t.Fatalf("nil slice pointer should retain its slice tag, got %T %v", gotNullSlice, gotNullSlice)
 		}
-		if got := normalizeMessageTupleValue(nilBuilder); got != nil {
-			t.Fatalf("nil builder pointer should normalize to nil, got %T", got)
+		if got := vmcore.BindValueTrace(nilBuilder, trace); got != nil {
+			t.Fatalf("nil builder pointer should bind to nil, got %T", got)
 		}
 
 		orig := big.NewInt(55)
-		if got := normalizeMessageTupleValue(orig).(*big.Int); got != orig {
+		if got := vmcore.BindValueTrace(orig, trace).(*big.Int); got != orig {
 			// the VM never mutates tuple ints in place, values are passed through
-			t.Fatalf("big.Int normalization should pass value through, got %v", got)
+			t.Fatalf("big.Int binding should pass value through, got %v", got)
 		}
 
 		if got := messageTupleMaybeInt(nil); got != nil {
@@ -153,22 +161,22 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		}
 
 		slice := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
-		sliceCopy := normalizeMessageTupleValue(slice).(*cell.Slice)
+		sliceCopy := vmcore.BindValueTrace(slice, trace).(*cell.Slice)
 		if _, err := slice.LoadUInt(1); err != nil {
 			t.Fatal(err)
 		}
 		if sliceCopy.BitsLeft() != 8 {
-			t.Fatalf("slice normalization should copy input, bits left %d", sliceCopy.BitsLeft())
+			t.Fatalf("slice binding should copy input, bits left %d", sliceCopy.BitsLeft())
 		}
 
 		builder := cell.BeginCell().MustStoreUInt(0xA, 4)
-		builderCopy := normalizeMessageTupleValue(builder).(*cell.Builder)
+		builderCopy := vmcore.BindValueTrace(builder, trace).(*cell.Builder)
 		builder.MustStoreUInt(1, 1)
 		if builderCopy.BitsUsed() != 4 {
-			t.Fatalf("builder normalization should copy input, bits used %d", builderCopy.BitsUsed())
+			t.Fatalf("builder binding should copy input, bits used %d", builderCopy.BitsUsed())
 		}
 
-		if got := normalizeMessageTupleValue("plain"); got.(string) != "plain" {
+		if got := vmcore.BindValueTrace("plain", trace); got.(string) != "plain" {
 			t.Fatalf("unexpected passthrough value: %v", got)
 		}
 	})
@@ -280,6 +288,17 @@ func TestSameCellHashBoundaries(t *testing.T) {
 	if sameCellHash(cellA, cellB) {
 		t.Fatal("cells with different hashes should not match")
 	}
+}
+
+// buildMessageEmulationC7 keeps the historical test entry point: it resolves
+// the c7 input the same way the emulation entry points do and builds the
+// tuple unbound; the VM binds it to the gas trace on execution start.
+func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg MessageEmulationConfig, balance *big.Int, globalVersion uint32) (tuple.Tuple, error) {
+	in, err := messageEmulationC7Input(addr, code, cfg, balance, globalVersion)
+	if err != nil {
+		return tuple.Tuple{}, err
+	}
+	return buildEmulationC7(in, nil)
 }
 
 func TestBuildMessageEmulationC7CopiesGlobals(t *testing.T) {
@@ -437,10 +456,6 @@ func FuzzMessageTupleNormalizationIsolation(f *testing.F) {
 	f.Add(uint64(0xDEADBEEF), byte(32), int64(1<<31-1), int64(-1<<31))
 
 	f.Fuzz(func(t *testing.T, rawPayload uint64, rawBits byte, rawTopInt, rawNestedInt int64) {
-		if empty := normalizeMessageTupleValue(tuple.Tuple{}).(tuple.Tuple); empty.Len() != 0 {
-			t.Fatalf("empty tuple normalized len = %d, want 0", empty.Len())
-		}
-
 		bits := uint(rawBits%63) + 1
 		payload := rawPayload
 		if bits < 64 {
@@ -454,14 +469,10 @@ func FuzzMessageTupleNormalizationIsolation(f *testing.F) {
 		nested := tuple.NewTupleValue(nestedInt)
 		orig := tuple.NewTupleValue(topInt, slice, builder, nested)
 
-		// tuples are passed through as-is: they are persistent (Set replaces
-		// the backing data), and nested slices/builders are snapshotted when
-		// the tuple is bound to the VM on execution start
-		clonedRaw := normalizeMessageTupleValue(orig)
-		cloned, ok := clonedRaw.(tuple.Tuple)
-		if !ok {
-			t.Fatalf("normalized tuple = %T, want tuple.Tuple", clonedRaw)
-		}
+		// tuples are passed through to c7 as-is: they are persistent (Set
+		// replaces the backing data), and nested slices/builders are
+		// snapshotted when the tuple is bound to the VM on execution start
+		cloned := orig
 		if cloned.Len() != 4 {
 			t.Fatalf("cloned tuple len = %d, want 4", cloned.Len())
 		}
@@ -734,10 +745,18 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	if err != nil {
 		t.Fatalf("build unsupported global version cell: %v", err)
 	}
-	if _, err = PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	futureConfig, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: unsupportedVersionCell,
-	})); err == nil {
-		t.Fatal("unsupported config global version should fail")
+	}))
+	if err != nil {
+		t.Fatalf("future config global version should be allowed by default: %v", err)
+	}
+	got, err = messageExecutionGlobalVersion(MessageEmulationConfig{Config: futureConfig})
+	if err != nil {
+		t.Fatalf("future config global version failed: %v", err)
+	}
+	if got != vmcore.MaxSupportedGlobalVersion {
+		t.Fatalf("future config global version = %d, want %d", got, vmcore.MaxSupportedGlobalVersion)
 	}
 
 	if _, err = PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
@@ -780,7 +799,7 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 		case 3:
 			version := uint32(vmcore.MaxSupportedGlobalVersion + 1 + int(rawConfig%3))
 			root = messageExecutionGlobalVersionConfigRoot(t, version)
-			wantErr = true
+			want = vmcore.MaxSupportedGlobalVersion
 		case 4:
 			root = buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 				tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(uint64(rawConfig&0xff), 8).EndCell(),

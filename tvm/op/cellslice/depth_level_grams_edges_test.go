@@ -78,11 +78,17 @@ func TestDepthLevelAndStoreGramsEdges(t *testing.T) {
 
 		st := newCellSliceState()
 		pushCellSliceBuilder(t, st, cell.BeginCell())
-		assertCellSliceVMErrorCode(t, STGRAMS().Interpret(st), vmerr.CodeTypeCheck)
+		assertCellSliceVMErrorCode(t, STGRAMS().Interpret(st), vmerr.CodeStackUnderflow)
+		if st.Stack.Len() != 1 {
+			t.Fatalf("STGRAMS short stack consumed builder, stack len=%d", st.Stack.Len())
+		}
 
 		st = newCellSliceState()
 		pushCellSliceInt(t, st, 1)
 		assertCellSliceVMErrorCode(t, STGRAMS().Interpret(st), vmerr.CodeStackUnderflow)
+		if st.Stack.Len() != 1 {
+			t.Fatalf("STGRAMS short stack consumed integer, stack len=%d", st.Stack.Len())
+		}
 
 		st = newCellSliceState()
 		pushCellSliceCell(t, st, cell.BeginCell().EndCell())

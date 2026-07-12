@@ -129,11 +129,28 @@ func (c *OrdinaryContinuation) GetControlData() *ControlData {
 
 func (c *OrdinaryContinuation) Jump(state *State) (Continuation, error) {
 	state.Reg.AdjustWith(&c.Data.Save)
-	state.CurrentCode = c.Code.Copy().SetTrace(cell.CombineTraces(c.Code.Trace(), state.Cells.Trace()))
+	state.adoptCurrentCode(c.Code)
 	if err := applyContinuationCodepage(state, c.Data.CP); err != nil {
 		return nil, err
 	}
 	return nil, nil
+}
+
+// adoptCurrentCode installs code as the executing code window without
+// touching code itself, so re-entering the same continuation always starts
+// from the same position. CurrentCode is advanced during execution, so the
+// State keeps its own slice: it is overwritten in place while exclusively
+// owned and reallocated only after the pointer escaped into a continuation.
+func (s *State) adoptCurrentCode(code *cell.Slice) {
+	trace := cell.CombineTraces(code.Trace(), s.Cells.Trace())
+
+	if s.currentCodeOwned {
+		*s.CurrentCode = *code
+	} else {
+		s.CurrentCode = code.Copy()
+		s.currentCodeOwned = true
+	}
+	s.CurrentCode.SetTrace(trace)
 }
 
 func (c *OrdinaryContinuation) Copy() Continuation {
@@ -259,6 +276,11 @@ type WhileContinuation struct {
 	Body      Continuation
 	Cond      Continuation
 	After     Continuation
+
+	// flip is the opposite-phase twin of this loop continuation, allocated
+	// lazily and reused across iterations instead of allocating a fresh
+	// value-identical WhileContinuation on every cond<->body transition.
+	flip *WhileContinuation
 }
 
 func (c *WhileContinuation) GetControlData() *ControlData {
@@ -278,27 +300,34 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 		}
 
 		if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
-			state.Reg.C[0] = &WhileContinuation{
-				CheckCond: false,
-				Body:      c.Body,
-				Cond:      c.Cond,
-				After:     c.After,
-			}
+			state.Reg.C[0] = c.flipped()
 		}
 
 		return c.Body, nil
 	}
 
 	if cd := c.Cond.GetControlData(); cd == nil || cd.Save.C[0] == nil {
-		state.Reg.C[0] = &WhileContinuation{
-			CheckCond: true,
-			Body:      c.Body,
-			Cond:      c.Cond,
-			After:     c.After,
-		}
+		state.Reg.C[0] = c.flipped()
 	}
 
 	return c.Cond, nil
+}
+
+// flipped returns the opposite-phase continuation of this loop, like
+// UntilContinuation reuses itself. Body/Cond/After never change after
+// construction, so the cached twin is value-identical to a freshly
+// allocated one on every iteration.
+func (c *WhileContinuation) flipped() *WhileContinuation {
+	if c.flip == nil {
+		c.flip = &WhileContinuation{
+			CheckCond: !c.CheckCond,
+			Body:      c.Body,
+			Cond:      c.Cond,
+			After:     c.After,
+			flip:      c,
+		}
+	}
+	return c.flip
 }
 
 func (c *WhileContinuation) Copy() Continuation {

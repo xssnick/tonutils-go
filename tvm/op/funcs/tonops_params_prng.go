@@ -182,7 +182,7 @@ func getPrevBlocksTuple(state *vm.State) (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	tup, ok := v.(tuple.Tuple)
-	if !ok {
+	if !ok || tup.Len() > 255 {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return tup, nil
@@ -216,6 +216,9 @@ func getRandSeed(state *vm.State) (*big.Int, error) {
 	v, err := state.GetParam(paramIdxRandomSeed)
 	if err != nil {
 		return nil, err
+	}
+	if _, ok := v.(vm.NaN); ok {
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "random seed out of range")
 	}
 	seed, ok := v.(*big.Int)
 	if !ok {

@@ -111,11 +111,12 @@ func TestPushHostValueAndSmallInt(t *testing.T) {
 	}
 
 	nilCases := []struct {
-		name  string
-		value any
+		name          string
+		value         any
+		wantNullSlice bool
 	}{
 		{name: "nil cell", value: (*cell.Cell)(nil)},
-		{name: "nil slice", value: (*cell.Slice)(nil)},
+		{name: "nil slice", value: (*cell.Slice)(nil), wantNullSlice: true},
 		{name: "nil builder", value: (*cell.Builder)(nil)},
 	}
 	for _, tc := range nilCases {
@@ -127,6 +128,13 @@ func TestPushHostValueAndSmallInt(t *testing.T) {
 			val, err := st.Stack.PopAny()
 			if err != nil {
 				t.Fatalf("PopAny failed: %v", err)
+			}
+			if tc.wantNullSlice {
+				sl, ok := val.(*cell.Slice)
+				if !ok || sl != nil {
+					t.Fatalf("expected null slice reference, got %T %v", val, val)
+				}
+				return
 			}
 			if val != nil {
 				t.Fatalf("expected nil, got %T", val)

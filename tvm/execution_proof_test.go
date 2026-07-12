@@ -428,6 +428,17 @@ func TestMarkExecutionProofStackNoopsAndPrimitiveValues(t *testing.T) {
 	if err := markExecutionProofValue(tuple.NewTupleValue(), cell.NewCellUsageTree(), map[cell.Hash]struct{}{}); err != nil {
 		t.Fatalf("empty tuple should be ignored: %v", err)
 	}
+	var nullSlice *cell.Slice
+	if err := markExecutionProofValue(nullSlice, cell.NewCellUsageTree(), map[cell.Hash]struct{}{}); err != nil {
+		t.Fatalf("null slice reference should be ignored: %v", err)
+	}
+	stack = vm.NewStack()
+	if err := stack.PushOwnedSlice(nullSlice); err != nil {
+		t.Fatalf("push null slice reference: %v", err)
+	}
+	if err := markExecutionProofStack(stack, cell.NewCellUsageTree(), nil); err != nil {
+		t.Fatalf("mark stack with null slice reference: %v", err)
+	}
 }
 
 func TestExecuteDetailedWithAccountProofDoesNotFinalCommitGetMethodData(t *testing.T) {

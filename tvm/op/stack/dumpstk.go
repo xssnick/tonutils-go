@@ -105,7 +105,7 @@ func STRDUMP() *helpers.SimpleOP {
 			}
 
 			sl, ok := val.(*cell.Slice)
-			if !ok {
+			if !ok || sl == nil {
 				state.Tracef("#DEBUG#: is not a slice")
 				return nil
 			}
@@ -206,6 +206,9 @@ func debugValueString(v any) string {
 	case *big.Int:
 		return x.String() + " [int]"
 	case *cell.Slice:
+		if x == nil {
+			return "null [slice]"
+		}
 		return x.WithoutTrace().MustToCell().Dump() + " [slice]"
 	case *cell.Builder:
 		return x.WithoutTrace().EndCell().Dump() + " [builder]"

@@ -27,8 +27,8 @@ func MULRSHIFTRCODE(value int8) (op *helpers.AdvancedOP) {
 			if err != nil {
 				return err
 			}
-			if err = requireFiniteInts(y, x); err != nil {
-				return err
+			if x == nil || y == nil {
+				return pushMaybeInt(state, legacyRShiftNaNResult(state.GlobalVersion, uint64(imm()), cppRoundNearest), false)
 			}
 
 			q := helpers.DivRound(x.Mul(x, y), y.Lsh(bigIntOne, uint(imm())))

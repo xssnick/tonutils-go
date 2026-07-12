@@ -110,6 +110,10 @@ func (m MockADNL) GetPubKey() ed25519.PublicKey {
 	return ed25519.PublicKey{}
 }
 
+func (m MockADNL) Stats() adnl.PeerStats {
+	return adnl.PeerStats{}
+}
+
 func (m MockADNL) Reinit() {
 }
 

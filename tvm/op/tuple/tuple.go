@@ -14,9 +14,12 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return TUPLE(0) })
 }
 
+// constant prefix, computed once instead of on every decode
+var tuplePrefix = helpers.UIntPrefix(0x6f0, 12)
+
 func TUPLE(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6f0, 12),
+		BitPrefix:     tuplePrefix,
 		FixedSizeBits: 4,
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d TUPLE", n)

@@ -8,6 +8,10 @@ import (
 func DICTIGETJMPZ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			i0, err := state.Stack.PopIntRangeInt64(0, 1023)
 			if err != nil {
 				return err

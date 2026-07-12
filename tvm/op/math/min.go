@@ -15,11 +15,11 @@ func MIN() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			i0, err := popInt(state)
+			i0, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
-			i1, err := popInt(state)
+			i1, err := popIntRead(state)
 			if err != nil {
 				return err
 			}

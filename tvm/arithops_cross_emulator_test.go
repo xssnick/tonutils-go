@@ -379,11 +379,16 @@ func TestTVMCrossEmulatorArithOps(t *testing.T) {
 				t.Fatalf("failed to build reference stack: %v", err)
 			}
 
-			goRes, err := runGoCrossCode(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack)
+			// Pin both engines to referenceRawRunGlobalVersion explicitly (through the
+			// same versioned harness the ArithOpsVersionedQuietEdges test uses) instead
+			// of relying on the reference emulator's implicit SUPPORTED_VERSION default,
+			// which drifts whenever the bundled reference binary is rebuilt.
+			goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack, referenceRawRunGlobalVersion)
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
-			refRes, err := runReferenceCrossCode(code, cell.BeginCell().EndCell(), tuple.Tuple{}, refStack)
+			refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(referenceRawRunGlobalVersion)))
+			refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
 			if err != nil {
 				t.Fatalf("reference tvm execution failed: %v", err)
 			}
@@ -586,21 +591,150 @@ func TestTVMCrossEmulatorArithOpsVersionedQuietEdges(t *testing.T) {
 		{arithParityCase{name: "v13_lshift_code_nan_overflow", code: codeFromBuilders(t, mathop.LSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)}, 13},
 		{arithParityCase{name: "v14_lshift_code_nan_overflow", code: codeFromBuilders(t, mathop.LSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)}, 14},
 		{arithParityCase{name: "v13_rshift_code_nan_zero", code: codeFromBuilders(t, mathop.RSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
-		{arithParityCase{name: "v14_rshift_code_nan_overflow", code: codeFromBuilders(t, mathop.RSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow), skipReference: "bundled reference emulator predates upstream RSHIFT# v14 NaN preservation", goStack: []any{int64(0)}}, 14},
+		{arithParityCase{name: "v14_rshift_code_nan_overflow", code: codeFromBuilders(t, mathop.RSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)}, 14},
 		{arithParityCase{name: "v13_qlshift_code_nan_nan", code: codeFromBuilders(t, mathop.QLSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
 		{arithParityCase{name: "v14_qlshift_code_nan_nan", code: codeFromBuilders(t, mathop.QLSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 14},
 		{arithParityCase{name: "v13_qrshift_code_nan_zero", code: codeFromBuilders(t, mathop.QRSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
-		{arithParityCase{name: "v14_qrshift_code_nan_nan", code: codeFromBuilders(t, mathop.QRSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: 0, skipReference: "bundled reference emulator predates upstream QRSHIFT# v14 NaN preservation", goStack: []any{vm.NaN{}}}, 14},
+		{arithParityCase{name: "v14_qrshift_code_nan_nan", code: codeFromBuilders(t, mathop.QRSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 14},
+		// Immediate shift > 12 exercises the other half of the legacy word-shift
+		// quirk (-1 instead of 0); RSHIFTCODE(13) encodes a shift of 13.
+		{arithParityCase{name: "v13_rshift_code_wide_shift_nan_minus_one", code: codeFromBuilders(t, mathop.RSHIFTCODE(13).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
+		{arithParityCase{name: "v14_rshift_code_wide_shift_nan_overflow", code: codeFromBuilders(t, mathop.RSHIFTCODE(13).Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)}, 14},
+		{arithParityCase{name: "v13_qrshift_code_wide_shift_nan_minus_one", code: codeFromBuilders(t, mathop.QRSHIFTCODE(13).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
+		{arithParityCase{name: "v14_qrshift_code_wide_shift_nan_nan", code: codeFromBuilders(t, mathop.QRSHIFTCODE(13).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 14},
+		{arithParityCase{name: "v13_lshift_code_nan_shift51_overflow", code: codeFromBuilders(t, mathop.LSHIFTCODE(51).Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)}, 13},
+		{arithParityCase{name: "v13_lshift_code_nan_shift52_zero", code: codeFromBuilders(t, mathop.LSHIFTCODE(52).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
+		{arithParityCase{name: "v13_lshift_code_nan_shift256_zero", code: arithRawCode(t, 0xaaff, 16), stack: []any{vm.NaN{}}, exit: 0}, 13},
+		{arithParityCase{name: "v14_lshift_code_nan_shift52_overflow", code: codeFromBuilders(t, mathop.LSHIFTCODE(52).Serialize()), stack: []any{vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)}, 14},
+		{arithParityCase{name: "v13_qlshift_code_nan_shift51_nan", code: codeFromBuilders(t, mathop.QLSHIFTCODE(51).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
+		{arithParityCase{name: "v13_qlshift_code_nan_shift52_zero", code: codeFromBuilders(t, mathop.QLSHIFTCODE(52).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 13},
+		{arithParityCase{name: "v13_qlshift_code_nan_shift256_zero", code: arithRawCode(t, 0xb7aaff, 24), stack: []any{vm.NaN{}}, exit: 0}, 13},
+		{arithParityCase{name: "v14_qlshift_code_nan_shift52_nan", code: codeFromBuilders(t, mathop.QLSHIFTCODE(52).Serialize()), stack: []any{vm.NaN{}}, exit: 0}, 14},
+		{arithParityCase{name: "v13_lshiftdiv_nan_shift52_overflow", code: codeFromBuilders(t, mathop.LSHIFTDIV().Serialize()), stack: []any{vm.NaN{}, int64(3), int64(52)}, exit: int32(vmerr.CodeIntOverflow)}, 13},
+		{arithParityCase{name: "v12_mulrshift_nan_shift13_minus_one", code: codeFromBuilders(t, mathop.MULRSHIFT().Serialize()), stack: []any{vm.NaN{}, int64(2), int64(13)}, exit: 0}, 12},
+		{arithParityCase{name: "v12_mulrshiftr_nan_shift13_zero", code: codeFromBuilders(t, mathop.MULRSHIFTR().Serialize()), stack: []any{vm.NaN{}, int64(2), int64(13)}, exit: 0}, 12},
+		{arithParityCase{name: "v12_mulrshiftc_nan_shift13_zero", code: codeFromBuilders(t, mathop.MULRSHIFTC().Serialize()), stack: []any{vm.NaN{}, int64(2), int64(13)}, exit: 0}, 12},
+		{arithParityCase{name: "v13_mulrshiftr_nan_shift13_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTR().Serialize()), stack: []any{vm.NaN{}, int64(2), int64(13)}, exit: int32(vmerr.CodeIntOverflow)}, 13},
+		{arithParityCase{name: "v12_mulrshift_code_nan_shift13_minus_one", code: codeFromBuilders(t, mathop.MULRSHIFTCODE(13).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: 0}, 12},
+		{arithParityCase{name: "v12_mulrshiftr_code_nan_shift13_zero", code: codeFromBuilders(t, mathop.MULRSHIFTRCODE(13).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: 0}, 12},
+		{arithParityCase{name: "v12_mulrshiftc_code_nan_shift13_zero", code: codeFromBuilders(t, mathop.MULRSHIFTCCODE(13).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: 0}, 12},
+		{arithParityCase{name: "v14_qrshift_compound_nan_shift13_nan", code: arithRawCode(t, 0xb7a924, 24), stack: []any{vm.NaN{}, int64(13)}, exit: 0}, 14},
+		{arithParityCase{name: "v13_qmulrshiftr_compound_nan_shift13_nan", code: arithRawCode(t, 0xb7a9a5, 24), stack: []any{vm.NaN{}, int64(2), int64(13)}, exit: 0}, 13},
 	}
 	add := func(version int, c arithParityCase) {
 		tests = append(tests, versionedArithCase{arithParityCase: c, version: version})
 	}
+
+	// Every LSHIFT{ADD}{DIV,MOD,DIVMOD}{R,C} form shared the same
+	// pre-v13 NaN resurrection bug. Cover both variable and immediate forms.
+	lshiftCompoundOps := []struct {
+		name   string
+		suffix uint64
+		addend bool
+	}{
+		{name: "lshiftadddivmod", suffix: 0, addend: true},
+		{name: "lshiftadddivmodr", suffix: 1, addend: true},
+		{name: "lshiftadddivmodc", suffix: 2, addend: true},
+		{name: "lshiftdiv", suffix: 4},
+		{name: "lshiftdivr", suffix: 5},
+		{name: "lshiftdivc", suffix: 6},
+		{name: "lshiftmod", suffix: 8},
+		{name: "lshiftmodr", suffix: 9},
+		{name: "lshiftmodc", suffix: 10},
+		{name: "lshiftdivmod", suffix: 12},
+		{name: "lshiftdivmodr", suffix: 13},
+		{name: "lshiftdivmodc", suffix: 14},
+	}
+	for _, op := range lshiftCompoundOps {
+		stack := []any{vm.NaN{}, int64(3), int64(52)}
+		immediateStack := []any{vm.NaN{}, int64(3)}
+		if op.addend {
+			stack = []any{vm.NaN{}, int64(7), int64(3), int64(52)}
+			immediateStack = []any{vm.NaN{}, int64(7), int64(3)}
+		}
+
+		add(12, arithParityCase{
+			name:  "v12_" + op.name + "_nan_shift52",
+			code:  arithRawCode(t, 0xa9c0|op.suffix, 16),
+			stack: stack,
+			exit:  0,
+		})
+		add(12, arithParityCase{
+			name:  "v12_" + op.name + "_code_nan_shift52",
+			code:  arithRawCode(t, ((0xa9d0|op.suffix)<<8)|0x33, 24),
+			stack: immediateStack,
+			exit:  0,
+		})
+	}
+
+	// The pre-v14 quiet right-shift compound operations resurrected NaN in
+	// every quotient-producing form, with a rounding-dependent finite value.
+	qShiftCompoundOps := []struct {
+		name   string
+		suffix uint64
+		addend bool
+	}{
+		{name: "qaddrshiftmod", suffix: 0, addend: true},
+		{name: "qaddrshiftmodr", suffix: 1, addend: true},
+		{name: "qaddrshiftmodc", suffix: 2, addend: true},
+		{name: "qrshift", suffix: 4},
+		{name: "qrshiftr", suffix: 5},
+		{name: "qrshiftc", suffix: 6},
+		{name: "qrshiftmod", suffix: 12},
+		{name: "qrshiftmodr", suffix: 13},
+		{name: "qrshiftmodc", suffix: 14},
+	}
+	for _, op := range qShiftCompoundOps {
+		stack := []any{vm.NaN{}, int64(13)}
+		if op.addend {
+			stack = []any{vm.NaN{}, int64(7), int64(13)}
+		}
+
+		add(13, arithParityCase{
+			name:  "v13_" + op.name + "_compound_nan_shift13",
+			code:  arithRawCode(t, 0xb7a920|op.suffix, 24),
+			stack: stack,
+			exit:  0,
+		})
+	}
+
+	// Before v13, the rounded and ceiling quotient forms of quiet multiply
+	// right-shifts also returned a finite zero for a NaN product.
+	qMulShiftCompoundOps := []struct {
+		name   string
+		suffix uint64
+		addend bool
+	}{
+		{name: "qmuladdrshiftr", suffix: 1, addend: true},
+		{name: "qmuladdrshiftc", suffix: 2, addend: true},
+		{name: "qmulrshiftr", suffix: 5},
+		{name: "qmulrshiftc", suffix: 6},
+		{name: "qmulrshiftmodr", suffix: 13},
+		{name: "qmulrshiftmodc", suffix: 14},
+	}
+	for _, op := range qMulShiftCompoundOps {
+		stack := []any{vm.NaN{}, int64(2), int64(13)}
+		if op.addend {
+			stack = []any{vm.NaN{}, int64(2), int64(7), int64(13)}
+		}
+
+		add(12, arithParityCase{
+			name:  "v12_" + op.name + "_compound_nan_shift13",
+			code:  arithRawCode(t, 0xb7a9a0|op.suffix, 24),
+			stack: stack,
+			exit:  0,
+		})
+	}
+
 	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_ARITHOPS_VERSION_AUDIT") {
 		quietShiftExit := int32(0)
 		if version < 13 {
 			quietShiftExit = int32(vmerr.CodeRangeCheck)
 		}
-		qrShiftModExit := int32(vmerr.CodeRangeCheck)
+		qrShiftModExit := int32(0)
+		if version < 14 {
+			qrShiftModExit = int32(vmerr.CodeRangeCheck)
+		}
 		legacyShift52Exit := int32(0)
 		if version >= 13 {
 			legacyShift52Exit = int32(vmerr.CodeIntOverflow)
@@ -666,20 +800,23 @@ func TestTVMCrossEmulatorArithOpsVersionedQuietEdges(t *testing.T) {
 			exit:  int32(vmerr.CodeIntOverflow),
 		})
 		rshiftCodeExit := int32(0)
-		rshiftCodeSkipReference := ""
-		qrshiftCodeSkipReference := ""
 		if version >= 14 {
 			rshiftCodeExit = int32(vmerr.CodeIntOverflow)
-			rshiftCodeSkipReference = "bundled reference emulator predates upstream RSHIFT# v14 NaN preservation"
-			qrshiftCodeSkipReference = "bundled reference emulator predates upstream QRSHIFT# v14 NaN preservation"
 		}
 		add(version, arithParityCase{
-			name:          fmt.Sprintf("rshift_code_nan_v%d", version),
-			code:          codeFromBuilders(t, mathop.RSHIFTCODE(1).Serialize()),
-			stack:         []any{vm.NaN{}},
-			exit:          rshiftCodeExit,
-			skipReference: rshiftCodeSkipReference,
-			goStack:       arithSkippedRShiftCodeNaNGoStack(version),
+			name:  fmt.Sprintf("rshift_code_nan_v%d", version),
+			code:  codeFromBuilders(t, mathop.RSHIFTCODE(1).Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  rshiftCodeExit,
+		})
+		// Immediate shift 13 (> 12) selects the other half of the legacy
+		// word-shift quirk (-1 instead of 0) for versions below the RSHIFT#
+		// NaN-preservation threshold (14).
+		add(version, arithParityCase{
+			name:  fmt.Sprintf("rshift_code_wide_shift_nan_v%d", version),
+			code:  codeFromBuilders(t, mathop.RSHIFTCODE(13).Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  rshiftCodeExit,
 		})
 		add(version, arithParityCase{
 			name:  fmt.Sprintf("qlshift_code_nan_v%d", version),
@@ -688,12 +825,16 @@ func TestTVMCrossEmulatorArithOpsVersionedQuietEdges(t *testing.T) {
 			exit:  0,
 		})
 		add(version, arithParityCase{
-			name:          fmt.Sprintf("qrshift_code_nan_v%d", version),
-			code:          codeFromBuilders(t, mathop.QRSHIFTCODE(1).Serialize()),
-			stack:         []any{vm.NaN{}},
-			exit:          0,
-			skipReference: qrshiftCodeSkipReference,
-			goStack:       arithSkippedQRShiftCodeNaNGoStack(version),
+			name:  fmt.Sprintf("qrshift_code_nan_v%d", version),
+			code:  codeFromBuilders(t, mathop.QRSHIFTCODE(1).Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  0,
+		})
+		add(version, arithParityCase{
+			name:  fmt.Sprintf("qrshift_code_wide_shift_nan_v%d", version),
+			code:  codeFromBuilders(t, mathop.QRSHIFTCODE(13).Serialize()),
+			stack: []any{vm.NaN{}},
+			exit:  0,
 		})
 	}
 
@@ -734,20 +875,6 @@ type arithParityCase struct {
 	exit          int32
 	skipReference string
 	goStack       []any
-}
-
-func arithSkippedQRShiftCodeNaNGoStack(version int) []any {
-	if version >= 14 {
-		return []any{vm.NaN{}}
-	}
-	return nil
-}
-
-func arithSkippedRShiftCodeNaNGoStack(version int) []any {
-	if version >= 14 {
-		return []any{int64(0)}
-	}
-	return nil
 }
 
 func arithOpcodeCoverageCases(t *testing.T) []arithParityCase {

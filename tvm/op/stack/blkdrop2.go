@@ -20,17 +20,23 @@ func blkdrop2Prefixes() []helpers.BitPrefix {
 	return prefixes
 }
 
+// constant prefixes, computed once instead of on every decode
+var (
+	blkdrop2BitPrefix  = helpers.BytesPrefix(0x6C)
+	blkdrop2PrefixList = blkdrop2Prefixes()
+)
+
 func BLKDROP2(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
-		Prefixes:      blkdrop2Prefixes(),
+		Prefixes:      blkdrop2PrefixList,
 		Action: func(state *vm.State) error {
 			return state.Stack.DropMany(int(i), int(j))
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d BLKDROP2", i, j)
 		},
-		BitPrefix: helpers.BytesPrefix(0x6C),
+		BitPrefix: blkdrop2BitPrefix,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
 		},

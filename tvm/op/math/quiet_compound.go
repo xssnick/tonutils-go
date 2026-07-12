@@ -101,9 +101,9 @@ func qInvalidResultCount(d uint8) int {
 	return 1
 }
 
-func qPushLegacyShiftModNaN(state *vm.State, d uint8, shift uint, right bool) error {
+func qPushLegacyShiftModNaN(state *vm.State, d uint8, shift uint, threshold, roundMode int) error {
 	if d&1 != 0 {
-		if err := pushMaybeInt(state, legacyShiftNaNResult(state.GlobalVersion, uint64(shift), right), true); err != nil {
+		if err := pushMaybeInt(state, legacyRShiftNaNResultThreshold(state.GlobalVersion, threshold, uint64(shift), roundMode), true); err != nil {
 			return err
 		}
 	}
@@ -199,18 +199,18 @@ func qDivModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		y, err := state.Stack.PopInt()
+		y, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
@@ -267,27 +267,33 @@ func qShrModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		shift, err := state.Stack.PopInt()
+		shift, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 		shiftValue, shiftValid := qShift256Value(shift)
-		if !shiftValid {
+		if !shiftValid && state.GlobalVersion < 14 {
 			return vmerr.Error(vmerr.CodeRangeCheck)
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 
-		if x == nil || (add && w == nil) || !shiftValid {
+		if !shiftValid {
+			return qPushNaNs(state, qInvalidResultCount(d))
+		}
+		if x == nil || (add && w == nil) {
+			if state.GlobalVersion < 14 {
+				return qPushLegacyShiftModNaN(state, d, shiftValue, 14, int(args&3)-1)
+			}
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}
 		dividend := new(big.Int).Set(x)
@@ -343,22 +349,22 @@ func qMulDivModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		z, err := state.Stack.PopInt()
+		z, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		y, err := state.Stack.PopInt()
+		y, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
@@ -415,7 +421,7 @@ func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		shift, err := state.Stack.PopInt()
+		shift, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
@@ -425,16 +431,16 @@ func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		y, err := state.Stack.PopInt()
+		y, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
@@ -444,7 +450,7 @@ func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
 		}
 		if x == nil || y == nil || (add && w == nil) {
 			if state.GlobalVersion < 13 {
-				return qPushLegacyShiftModNaN(state, d, shiftValue, true)
+				return qPushLegacyShiftModNaN(state, d, shiftValue, 13, int(args&3)-1)
 			}
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}
@@ -498,7 +504,7 @@ func qShlDivModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		shift, err := state.Stack.PopInt()
+		shift, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
@@ -506,18 +512,18 @@ func qShlDivModFamily(args uint8) *helpers.AdvancedOP {
 		if !shiftValid && state.GlobalVersion < 13 {
 			return vmerr.Error(vmerr.CodeRangeCheck)
 		}
-		z, err := state.Stack.PopInt()
+		z, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}

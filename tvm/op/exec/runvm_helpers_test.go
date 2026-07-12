@@ -617,6 +617,9 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 	if !sameStackValueType(vm.NaN{}, vm.NaN{}) {
 		t.Fatal("NaN values should match")
 	}
+	if !sameStackValueType(vm.NaN{}, big.NewInt(1)) || !sameStackValueType(big.NewInt(1), vm.NaN{}) {
+		t.Fatal("NaN and finite integers should share the TVM integer type")
+	}
 	if sameStackValueType(vm.NaN{}, &vm.NaN{}) {
 		t.Fatal("NaN pointer should not match NaN value")
 	}

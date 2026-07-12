@@ -255,7 +255,7 @@ func loadVarIntegerFromSlice(src *cell.Slice, lenBits uint, signed bool) (*big.I
 
 func storeVarInteger(dst *cell.Builder, x *big.Int, lenBits uint, signed, quiet bool) (bool, error) {
 	if x == nil {
-		return false, vmerr.Error(vmerr.CodeTypeCheck)
+		return false, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	maxLen := 1 << lenBits
 	var ln int
@@ -306,7 +306,7 @@ func loadVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed bo
 			}
 			val, rest, ok := loadVarIntegerFromSlice(src, lenBits, signed)
 			if !ok {
-				return vmerr.Error(vmerr.CodeCellUnderflow)
+				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot deserialize a variable-length integer")
 			}
 			if err = state.Stack.PushInt(val); err != nil {
 				return err
@@ -321,7 +321,11 @@ func loadVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed bo
 func storeVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -562,7 +566,11 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 					}
 					return state.Stack.PushBool(false)
 				}
-				return vmerr.Error(vmerr.CodeCellUnderflow)
+				msg := "cannot load a MsgAddress"
+				if stdOnly {
+					msg = "cannot load a MsgAddressInt"
+				}
+				return vmerr.Error(vmerr.CodeCellUnderflow, msg)
 			}
 			addrSlice, err := consumedPrefixSlice(src, rest)
 			if err != nil {
@@ -650,7 +658,13 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 				return err
 			}
 			addr, rest, ok := parseMessageAddress(src, state.GlobalVersion)
-			if !ok || rest.BitsLeft() != 0 || rest.RefsNum() != 0 || (addr.Kind != 2 && addr.Kind != 3) {
+			if !ok || rest.BitsLeft() != 0 || rest.RefsNum() != 0 {
+				if quiet {
+					return state.Stack.PushBool(false)
+				}
+				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse a MsgAddress")
+			}
+			if addr.Kind != 2 && addr.Kind != 3 {
 				if quiet {
 					return state.Stack.PushBool(false)
 				}
@@ -724,6 +738,10 @@ func isValidStdMsgAddr(sl *cell.Slice, globalVersion int) bool {
 func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			builder, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -778,6 +796,10 @@ func STSTDADDRQ() *helpers.SimpleOP {
 func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			builder, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -811,12 +833,18 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 				return state.Stack.PushOwnedBuilder(builder)
 			}
 			addrSlice, ok := raw.(*cell.Slice)
-			if !ok {
+			if !ok || addrSlice == nil {
 				if !quiet {
 					return vmerr.Error(vmerr.CodeTypeCheck, "not a cell slice")
 				}
 
-				if err = state.Stack.PushAny(raw); err != nil {
+				if state.GlobalVersion >= 14 {
+					err = state.Stack.PushOwnedValue(raw)
+				} else {
+					// Legacy TVM stored a slice-typed null reference rather than the original value.
+					err = state.Stack.PushOwnedValue((*cell.Slice)(nil))
+				}
+				if err != nil {
 					return err
 				}
 				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
@@ -1080,7 +1108,7 @@ func getMyAddr(state *vm.State) (*address.Address, error) {
 		return nil, err
 	}
 	sl, ok := v.(*cell.Slice)
-	if !ok {
+	if !ok || sl == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "invalid param MYADDR")
 	}
 	addr, err := addressFromSlice(sl)
@@ -1315,7 +1343,14 @@ func loadSendMsgInitBodyLayout(root *cell.Slice, layout sendMsgLayout) (sendMsgL
 	return layout, nil
 }
 
-func sendMsgStoredCoinsBits(value *big.Int) uint {
+const sendMsgInvalidStoredCoinsBits uint = 0x80000004
+
+func sendMsgStoredCoinsBits(value *big.Int, nan bool) uint {
+	if nan || value != nil && value.Sign() < 0 {
+		// BigInt256::bit_size(false) returns INT_MAX for an invalid or negative
+		// integer. SENDMSG then performs this unsigned byte rounding.
+		return sendMsgInvalidStoredCoinsBits
+	}
 	if value == nil {
 		return 4
 	}
@@ -1337,33 +1372,40 @@ func sendMsgAddressBits(addr *address.Address) (uint, error) {
 	return builder.BitsUsed(), nil
 }
 
-func sendMsgTupleAmount(state *vm.State, idx int, name string) (*big.Int, bool, error) {
+func sendMsgTupleAmount(state *vm.State, idx int, name string) (*big.Int, bool, bool, error) {
 	v, err := state.GetParam(idx)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	balance, ok := v.(tuple.Tuple)
 	if !ok {
-		return nil, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
+		return nil, false, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
 	}
 	amountAny, err := balance.Index(0)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	amount, ok := amountAny.(*big.Int)
-	if !ok {
-		return nil, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
+	var amount *big.Int
+	amountNaN := false
+	switch x := amountAny.(type) {
+	case *big.Int:
+		amount = x
+	case vm.NaN:
+		amountNaN = true
+	default:
+		return nil, false, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
 	}
 
 	hasExtra := false
 	if state.GlobalVersion < 10 {
 		extraAny, err := balance.Index(1)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
-		hasExtra = extraAny != nil
+		extra, ok := extraAny.(*cell.Cell)
+		hasExtra = ok && extra != nil
 	}
-	return amount, hasExtra, nil
+	return amount, amountNaN, hasExtra, nil
 }
 
 func SENDMSG() *helpers.SimpleOP {
@@ -1424,28 +1466,33 @@ func SENDMSG() *helpers.SimpleOP {
 			if state.GlobalVersion >= 10 && msg.Info.HasExtraCurrencies() {
 				skipRefs = 1
 			}
-			ok, err := addMessageTailStorage(stat, msgCell, skipRefs)
+			_, err = addMessageTailStorage(stat, msgCell, skipRefs)
 			if err != nil {
 				return err
 			}
-			if !ok {
-				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
-			}
+			// A false result means the configured cell limit was reached. TVM still
+			// computes the fee from the statistics collected up to that limit.
 
 			value := sendMsgBigOrZero(msg.Info.Amount)
+			valueNaN := false
 			haveExtraCurrencies := msg.Info.HasExtraCurrencies()
 			if msg.MsgType == tlb.MsgTypeInternal {
 				if mode&128 != 0 {
-					value, haveExtraCurrencies, err = sendMsgTupleAmount(state, 7, "BALANCE")
+					value, valueNaN, haveExtraCurrencies, err = sendMsgTupleAmount(state, 7, "BALANCE")
 					if err != nil {
 						return err
 					}
 				} else if mode&64 != 0 {
-					incomingValue, incomingHasExtra, err := sendMsgTupleAmount(state, 11, "INCOMINGVALUE")
+					incomingValue, incomingNaN, incomingHasExtra, err := sendMsgTupleAmount(state, 11, "INCOMINGVALUE")
 					if err != nil {
 						return err
 					}
-					value = new(big.Int).Add(value, incomingValue)
+					if valueNaN || incomingNaN {
+						value = nil
+						valueNaN = true
+					} else {
+						value = new(big.Int).Add(value, incomingValue)
+					}
 					haveExtraCurrencies = haveExtraCurrencies || incomingHasExtra
 				}
 			}
@@ -1486,12 +1533,12 @@ func SENDMSG() *helpers.SimpleOP {
 				} else {
 					fwdFeeFirst := new(big.Int).Rsh(mulBigUint64(fwd, uint64(prices.FirstFrac)), 16)
 					remainingFwdFee := new(big.Int).Sub(fwd, fwdFeeFirst)
-					bits = 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(value) + 1 + 32 + 64
-					bits += sendMsgStoredCoinsBits(remainingFwdFee)
+					bits = 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(value, valueNaN) + 1 + 32 + 64
+					bits += sendMsgStoredCoinsBits(remainingFwdFee, false)
 					if state.GlobalVersion >= 12 {
 						bits += layout.extraFlagsBits
 					} else {
-						bits += sendMsgStoredCoinsBits(ihr)
+						bits += sendMsgStoredCoinsBits(ihr, false)
 					}
 				}
 				bits++

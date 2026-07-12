@@ -426,8 +426,8 @@ func transactionMessageStats(root *cell.Cell) (transactionMessageStatsResult, er
 			return nil
 		}
 
-		sl, err := c.BeginParseWithoutTrace()
-		if err != nil {
+		var sl cell.Slice
+		if err := c.BeginParseIntoWithoutTrace(&sl); err != nil {
 			return err
 		}
 
@@ -814,50 +814,65 @@ type transactionCellStatsResult struct {
 
 func transactionCellStatsForRoots(roots ...*cell.Cell) (transactionCellStatsResult, error) {
 	var stats transactionCellStatsResult
-	seenUsage := make(map[cell.Hash]struct{})
+	// seen memoizes each cell's subtree max merkle depth (merkle cells on the
+	// deepest path within the subtree, including the cell itself). The value
+	// is path-independent, so a cell reached again via another path just
+	// contributes its memoized depth without re-walking the shared subtree —
+	// the same technique transactionAccountStorageStat.addCell uses. Usage is
+	// counted on first visit only, exactly as before.
+	seen := make(map[cell.Hash]uint16, 64)
 
-	var walk func(c *cell.Cell, depth uint16) error
-	walk = func(c *cell.Cell, depth uint16) error {
+	var walk func(c *cell.Cell) (uint16, error)
+	walk = func(c *cell.Cell) (uint16, error) {
 		if c == nil {
-			return nil
+			return 0, nil
 		}
 
-		sl, err := c.BeginParseWithoutTrace()
-		if err != nil {
-			return err
+		var sl cell.Slice
+		if err := c.BeginParseIntoWithoutTrace(&sl); err != nil {
+			return 0, err
 		}
 
 		loaded := sl.BaseCell()
-		switch loaded.GetType() {
-		case cell.MerkleProofCellType, cell.MerkleUpdateCellType:
-			depth++
-			if depth > stats.merkleDepth {
-				stats.merkleDepth = depth
-			}
-		}
-
 		key := loaded.HashKey()
-		if _, ok := seenUsage[key]; !ok {
-			seenUsage[key] = struct{}{}
-			stats.usage.cells++
-			stats.usage.bits += uint64(loaded.BitsSize())
+		if depth, ok := seen[key]; ok {
+			return depth, nil
 		}
 
+		stats.usage.cells++
+		stats.usage.bits += uint64(loaded.BitsSize())
+
+		var depth uint16
 		for sl.RefsNum() > 0 {
 			ref, err := sl.LoadRefCell()
 			if err != nil {
-				return err
+				return 0, err
 			}
 
-			if err := walk(ref, depth); err != nil {
-				return err
+			refDepth, err := walk(ref)
+			if err != nil {
+				return 0, err
+			}
+			if refDepth > depth {
+				depth = refDepth
 			}
 		}
-		return nil
+
+		switch loaded.GetType() {
+		case cell.MerkleProofCellType, cell.MerkleUpdateCellType:
+			depth++
+		}
+
+		seen[key] = depth
+		return depth, nil
 	}
 	for _, root := range roots {
-		if err := walk(root, 0); err != nil {
+		depth, err := walk(root)
+		if err != nil {
 			return transactionCellStatsResult{}, err
+		}
+		if depth > stats.merkleDepth {
+			stats.merkleDepth = depth
 		}
 	}
 	return stats, nil

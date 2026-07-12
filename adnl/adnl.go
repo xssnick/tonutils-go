@@ -102,12 +102,15 @@ type ADNL struct {
 	onChannel            func(ch *Channel)
 
 	mx sync.RWMutex
+
+	stats *peerStats
 }
 
 var Logger func(v ...any)
 
 func (g *Gateway) initADNL() *ADNL {
-	tm := int32(time.Now().Unix())
+	now := time.Now()
+	tm := int32(now.Unix())
 	closerCtx, closeFn := context.WithCancel(context.Background())
 	return &ADNL{
 		ourAddresses: unsafe.Pointer(&address.List{
@@ -121,6 +124,7 @@ func (g *Gateway) initADNL() *ADNL {
 		msgParts:      make(map[string]*partitionedMessage, 128),
 		activePings:   make(map[int64]chan MessagePong),
 		activeQueries: map[queryID]chan tl.Serializable{},
+		stats:         newPeerStats(now),
 	}
 }
 
@@ -159,16 +163,20 @@ func (c *Channel) process(buf []byte) error {
 
 	data, err := c.decodePacket(buf)
 	if err != nil {
+		c.adnl.noteInboundError(time.Now())
 		return fmt.Errorf("failed to decode packet: %w", err)
 	}
 
 	packet, err := parsePacket(data)
 	if err != nil {
+		c.adnl.noteInboundError(time.Now())
 		return fmt.Errorf("failed to parse packet: %w", err)
 	}
+	c.adnl.noteInboundPacket(len(buf) + 32)
 
 	err = c.adnl.processPacket(packet, true)
 	if err != nil {
+		c.adnl.noteInboundError(time.Now())
 		return fmt.Errorf("failed to process packet: %w", err)
 	}
 	return nil
@@ -251,6 +259,9 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 	var seqno int64
 	if packet.Seqno != nil {
 		seqno = *packet.Seqno
+	}
+	if packet.ConfirmSeqno != nil {
+		atomicMaxInt64(&a.stats.peerConfirmSeqno, *packet.ConfirmSeqno)
 	}
 
 	for { // to guarantee swap to highest
@@ -509,8 +520,10 @@ func (a *ADNL) applyPeerReinit(date int32) {
 
 	a.resetChannelAfterPeerReinit()
 	atomic.StoreInt64(&a.confirmSeqno, 0)
+	a.stats.peerConfirmSeqno.Store(0)
 	atomic.StoreInt32(&a.ourAddrVerOnPeerSide, 0)
 	atomic.StoreInt32(&a.ourPriorityAddrVerOnPeerSide, 0)
+	a.stats.notePeerReinit(time.Now())
 }
 
 func (a *ADNL) resetChannelAfterPeerReinit() {
@@ -552,6 +565,18 @@ func atomicMaxInt32(ptr *int32, value int32) {
 			return
 		}
 		if atomic.CompareAndSwapInt32(ptr, current, value) {
+			return
+		}
+	}
+}
+
+func atomicMaxInt64(ptr *atomic.Int64, value int64) {
+	for {
+		current := ptr.Load()
+		if value <= current {
+			return
+		}
+		if ptr.CompareAndSwap(current, value) {
 			return
 		}
 	}
@@ -944,6 +969,7 @@ func (a *ADNL) send(buf []byte) error {
 	}
 
 	if n, err := a.writer.Write(buf, time.Time{}); err != nil {
+		a.stats.noteOutboundError(time.Now())
 		// not close on io timeout because it can be triggered by network overload
 		if !strings.Contains(err.Error(), "i/o timeout") {
 			// it should trigger disconnect handler in read routine
@@ -951,10 +977,13 @@ func (a *ADNL) send(buf []byte) error {
 		}
 		return err
 	} else if n != len(buf) {
+		a.stats.noteOutboundError(time.Now())
 		return fmt.Errorf("not full packet was written")
 	}
 
-	atomic.StoreInt64(&a.respondWithNopAfter, time.Now().Add(respondWithNopDelay).UnixNano())
+	now := time.Now()
+	a.stats.noteOutboundPacket(len(buf), now)
+	atomic.StoreInt64(&a.respondWithNopAfter, now.Add(respondWithNopDelay).UnixNano())
 	return nil
 }
 
@@ -1018,6 +1047,7 @@ func (a *ADNL) Reinit() {
 	atomic.StoreInt32(&a.dstReinit, 0)
 	atomic.StoreInt64(&a.seqno, 0)
 	atomic.StoreInt64(&a.confirmSeqno, 0)
+	a.stats.peerConfirmSeqno.Store(0)
 	atomic.StoreInt64(&a.lastReceivedPacket, 0)
 	atomic.StoreInt64(&a.tryReinitAt, 0)
 	atomic.StoreInt64(&a.dropAddrListAt, 0)
@@ -1157,6 +1187,7 @@ func (a *ADNL) rootReinitOptions(now time.Time) (bool, rootPacketOptions) {
 	if !atomic.CompareAndSwapInt64(&a.tryReinitAt, tryAt, next) {
 		return false, rootPacketOptions{}
 	}
+	a.stats.noteRootRecovery(now)
 
 	return true, rootPacketOptions{
 		forceAddress:          true,

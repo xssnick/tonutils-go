@@ -308,6 +308,27 @@ func TestBBR_LossSampleTracked(t *testing.T) {
 	if math.Abs(rate-expected) > 1e-3 {
 		t.Fatalf("loss rate mismatch: want %.4f got %.4f (total=%d lost=%d)", expected, rate, total, lost)
 	}
+
+	stats := bbr.stats()
+	if !stats.RTTObserved || stats.LatestRTT != time.Duration(opts.DefaultRTTMs)*time.Millisecond {
+		t.Fatalf("unexpected RTT stats: %+v", stats)
+	}
+	if stats.DeliveryRateBytesPerSecond <= 0 || stats.LossSampleBytes != total || stats.LossSampleLostBytes != lost {
+		t.Fatalf("unexpected congestion stats: %+v", stats)
+	}
+	if math.Abs(stats.LossRatio-rate) > 1e-3 {
+		t.Fatalf("stats loss rate mismatch: want %.4f got %.4f", rate, stats.LossRatio)
+	}
+}
+
+func TestBBR_IgnoresNonPositiveRTT(t *testing.T) {
+	bbr, _ := newBBR(t, 60_000, BBRv2Options{MinRate: 60_000})
+
+	bbr.ObserveRTT(0)
+	bbr.ObserveRTT(-1)
+	if stats := bbr.stats(); stats.RTTObserved || stats.LatestRTT != 0 || stats.MinRTT != 0 {
+		t.Fatalf("unexpected RTT stats: %+v", stats)
+	}
 }
 
 func TestBBR_InflightAllowance(t *testing.T) {

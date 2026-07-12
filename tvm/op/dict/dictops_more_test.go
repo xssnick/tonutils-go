@@ -20,7 +20,7 @@ func assertDictVMErrorCode(t *testing.T, err error, code int64) {
 	}
 }
 
-func TestPrefixDictUnderflowPrecheckStartsAtV9(t *testing.T) {
+func TestPrefixDictUnderflowDepthByVersion(t *testing.T) {
 	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
 		t.Run(fmt.Sprintf("pfxdictdel_v%d", version), func(t *testing.T) {
 			state := &vm.State{
@@ -33,12 +33,27 @@ func TestPrefixDictUnderflowPrecheckStartsAtV9(t *testing.T) {
 			}
 
 			assertDictVMErrorCode(t, execPfxDictDelete(state), vmerr.CodeStackUnderflow)
-			wantLen := 0
-			if version >= 9 {
-				wantLen = 1
+			if state.Stack.Len() != 1 {
+				t.Fatalf("PFXDICTDEL stack len = %d, want 1", state.Stack.Len())
 			}
-			if state.Stack.Len() != wantLen {
-				t.Fatalf("PFXDICTDEL stack len = %d, want %d", state.Stack.Len(), wantLen)
+		})
+
+		t.Run(fmt.Sprintf("pfxdictset_below_legacy_min_v%d", version), func(t *testing.T) {
+			state := &vm.State{
+				GlobalVersion: version,
+
+				Stack: vm.NewStack(),
+			}
+			if err := state.Stack.PushAny(nil); err != nil {
+				t.Fatalf("push PFXDICTSET root: %v", err)
+			}
+			if err := state.Stack.PushInt(big.NewInt(4)); err != nil {
+				t.Fatalf("push PFXDICTSET key bits: %v", err)
+			}
+
+			assertDictVMErrorCode(t, execPfxDictSet(cell.DictSetModeSet)(state), vmerr.CodeStackUnderflow)
+			if state.Stack.Len() != 2 {
+				t.Fatalf("short PFXDICTSET stack len = %d, want 2", state.Stack.Len())
 			}
 		})
 

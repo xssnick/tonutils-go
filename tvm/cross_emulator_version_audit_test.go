@@ -27,8 +27,8 @@ const (
 	expectedCrossEmulatorFullRangeVersionFuzzerCount = 129
 	expectedCrossEmulatorFullRangeVersionFuzzerHash  = "625bf3d68e3ab49bf47981e34096d3caeb33fb8af7aa01daf358630aa81f1b2f"
 
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 6
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "a1c658ae5323ed3b66832da88e97a9c75cad13202f85885aa990eff9b1b251d2"
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 11
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "60768f0f16d4f649c39e5d869b44945ca156d0aef6e9e32bdaaebf315096d8f5"
 
 	expectedCrossEmulatorTransactionVersionTestCount = 46
 	expectedCrossEmulatorTransactionVersionTestHash  = "a81aa79410833955c13415a0c9b5c9f82b26b0a1c40f12b2f691e459d6ff3547"
@@ -135,14 +135,14 @@ const (
 	expectedCrossEmulatorDifferentialMatrixVersionFuzzCount = 1
 	expectedCrossEmulatorDifferentialMatrixVersionFuzzHash  = "eb1af974ef27c8111bbdf1062c58671a61d2c76ed60290b1e0da5b0b2d9b900e"
 
-	expectedCrossEmulatorReferenceMismatchUseCount = 27
-	expectedCrossEmulatorReferenceMismatchUseHash  = "f2802f8fd0f0333c371a17b0d54655796178836fae5f0a7ef2259cd266127d8a"
+	expectedCrossEmulatorReferenceMismatchUseCount = 23
+	expectedCrossEmulatorReferenceMismatchUseHash  = "943cfd6a3532f91841ef012818350e782c30ddb53cf30ed60a9a0a6d065ceada"
 
 	expectedCrossEmulatorDirectKnownReferenceSkipCount = 15
-	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "7aec3b0e5ea8958c5ded3af87174bbdf4bf39af96414c03daa271baf5890b1b5"
+	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "b1b1aa6c5bb487aae4e5751917c50b91e9de95dba47629bc32c574cc45541fe9"
 
-	expectedCrossEmulatorSkipReferenceUseCount = 25
-	expectedCrossEmulatorSkipReferenceUseHash  = "440b673550f7514e57abcbce6c6505cb5a3463ac289fb8164a10ac433774b95d"
+	expectedCrossEmulatorSkipReferenceUseCount = 21
+	expectedCrossEmulatorSkipReferenceUseHash  = "358db66918077d580bb131338492c1482c2f886953f3b452db827fdedc992834"
 
 	expectedCrossEmulatorVersionAuditPrefixUseCount = 66
 	expectedCrossEmulatorVersionAuditPrefixUseHash  = "32a7f48dde592274da61ff256ef52317bfe828e1ede925d9fcc396bbb81f25c4"
@@ -159,10 +159,8 @@ const (
 var expectedCrossEmulatorReferenceMismatchReasons = map[string]int{
 	"bundled reference emulator predates upstream ECRECOVER v=27/28 support":                              1,
 	"bundled reference emulator predates upstream CHKSIG v14 zero/identity public-key rejection":          1,
-	"bundled reference emulator predates upstream QRSHIFT# v14 NaN preservation":                          2,
 	"bundled reference emulator predates upstream RIST255 v14 identity support":                           1,
 	"bundled reference emulator predates upstream RIST255 v14 zero-scalar validation":                     1,
-	"bundled reference emulator predates upstream RSHIFT# v14 NaN preservation":                           2,
 	"bundled reference emulator predates upstream SENDMSG v14 user fwd fee handling":                      1,
 	"bundled reference emulator predates upstream control-register v14 silent duplicate save-list writes": 2,
 	"bundled reference emulator predates upstream transaction v14 failed-action message-balance restore":  2,
@@ -176,6 +174,30 @@ type crossEmulatorUnclassifiedExplicitVersionUser struct {
 }
 
 var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmulatorUnclassifiedExplicitVersionUser{
+	"bls_order_cross_emulator_test.go:TestTVMCrossEmulatorBLSValidationOrder": {
+		reason: "BLS validation-order parity pins global version 13 for a version-independent pop/size/decode order; dedicated crypto global-version fuzzers own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTonOpsCryptoCirclVersionedRuntimeEdges",
+		},
+	},
+	"bls_off_subgroup_cross_emulator_test.go:TestTVMCrossEmulatorBLSOffSubgroupParity": {
+		reason: "off-subgroup BLS parity pins global version 13 for a version-independent property (blst subgroup handling is identical across all TVM versions that expose these opcodes); dedicated crypto global-version fuzzers own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTonOpsCryptoCirclVersionedRuntimeEdges",
+		},
+	},
+	"arithops_cross_emulator_test.go:TestTVMCrossEmulatorArithOps": {
+		reason: "base arith-ops parity suite pins referenceRawRunGlobalVersion explicitly on both engines; dedicated versioned quiet-edge cases own version-sensitive coverage",
+		versionAnchors: []string{
+			"TestTVMCrossEmulatorArithOpsVersionedQuietEdges",
+		},
+	},
+	"crypto_precheck_cross_emulator_test.go:TestTVMCrossEmulatorCryptoPrecheckParity": {
+		reason: "default-version config and crypto precheck matrix pins the raw reference version; dedicated crypto versioned runtime cases own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTonOpsCryptoCirclVersionedRuntimeEdges",
+		},
+	},
 	"parity_fuzz_cross_emulator_test.go:TestTVMDifferentialFuzzFamiliesCrossEmulatorSmoke": {
 		reason: "mixed differential smoke covers default and version-matrix families; dedicated version matrix fuzzers own exhaustive version seeding",
 		versionAnchors: []string{
@@ -188,6 +210,12 @@ var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmul
 			"FuzzTVMCrossEmulatorRunVMChildGlobalVersionInheritance",
 			"FuzzTVMCrossEmulatorRunVMFailedDataActionsVersionMatrix",
 			"FuzzTVMCrossEmulatorRunVMVersionedChildOpcodeMatrix",
+		},
+	},
+	"sendmsg_integer_cross_emulator_test.go:TestTVMCrossEmulatorSENDMSGIntegerAmountParity": {
+		reason: "SENDMSG NaN integer-tag parity pins global version 13 for the version-independent C7 amount and root-layout behavior; dedicated SENDMSG global-version fuzzers own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTonOpsSendMsgVersionedFeeEdges",
 		},
 	},
 	"tonops_cross_emulator_test.go:TestTVMCrossEmulatorTonOps": {

@@ -104,19 +104,19 @@ func TestTVMEarlyCodeLoadErrorReturnsExecutionResult(t *testing.T) {
 	}
 }
 
-func TestTVMExecuteFutureConfigWithLatestOptIn(t *testing.T) {
+func TestTVMExecuteFutureConfigWithLatestDefault(t *testing.T) {
 	futureVersion := uint32(vm.MaxSupportedGlobalVersion + 2)
 	root := buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: mustGlobalVersionCell(t, futureVersion),
 	})
-	if _, err := PrepareBlockchainConfig(root); err == nil {
-		t.Fatalf("PrepareBlockchainConfig accepted future global version %d without opt-in", futureVersion)
+
+	if !AllowHigherVersionExecUsingLatest {
+		t.Fatal("AllowHigherVersionExecUsingLatest default = false, want true")
 	}
 
-	testSetAllowHigherVersionExecUsingLatest(t, true)
 	cfg, err := PrepareBlockchainConfig(root)
 	if err != nil {
-		t.Fatalf("PrepareBlockchainConfig rejected allowed future global version %d: %v", futureVersion, err)
+		t.Fatalf("PrepareBlockchainConfig rejected future global version %d by default: %v", futureVersion, err)
 	}
 	if got := cfg.GlobalVersion(); got != uint32(vm.MaxSupportedGlobalVersion) {
 		t.Fatalf("prepared effective global version = %d, want %d", got, vm.MaxSupportedGlobalVersion)

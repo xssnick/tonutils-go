@@ -159,6 +159,10 @@ type State struct {
 	Cells                       CellManager
 	Libraries                   []*cell.Cell
 	libraryCache                map[cell.Hash]*cell.Cell
+	maxLibraryLoads             uint32
+	hasMaxLibraryLoads          bool
+	loadedLibraries             map[cell.Hash]struct{}
+	maxDataDepth                uint16
 	Stack                       *Stack
 	Steps                       uint32
 	StopOnAccept                bool
@@ -168,6 +172,13 @@ type State struct {
 	GetExtraBalanceCounter      uint32
 	Committed                   CommittedState
 	childRunner                 ChildRunner
+
+	// currentCodeOwned reports that CurrentCode points at a slice owned
+	// exclusively by this State: a scratch reused across continuation jumps.
+	// It must be false whenever the pointer escaped into a continuation
+	// (Call/CallArgs/ExtractCurrentContinuation) or came from a caller, so
+	// the next jump allocates a fresh slice instead of overwriting in place.
+	currentCodeOwned bool
 }
 
 var ErrStopOnAccept = errors.New("stop on accept")
@@ -193,6 +204,7 @@ func NewExecutionState(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tup
 	return &State{
 		GlobalVersion: globalVersion,
 		Gas:           gas,
+		maxDataDepth:  MaxDataDepth,
 		Reg: Register{
 			C: [4]Continuation{
 				quitCont0,
@@ -232,6 +244,15 @@ var ErrCorruptedOpcode = errors.New("corrupted opcode")
 
 const MaxDataDepth = 512
 
+func (s *State) SetMaxLibraryLoads(limit uint32) {
+	s.maxLibraryLoads = limit
+	s.hasMaxLibraryLoads = true
+}
+
+func (s *State) SetMaxDataDepth(depth uint16) {
+	s.maxDataDepth = depth
+}
+
 func (s *State) InitForExecution() {
 	s.Cells.Init(s)
 	if s.Stack != nil {
@@ -248,6 +269,8 @@ func (s *State) PrepareExecution(code *cell.Slice) {
 	s.InitForExecution()
 	if code != nil {
 		s.CurrentCode = code.SetTrace(cell.CombineTraces(code.Trace(), s.Cells.Trace()))
+		// the caller may keep a reference to code, it is not ours to overwrite
+		s.currentCodeOwned = false
 	}
 }
 
@@ -270,6 +293,15 @@ func (s *State) prepareChildForRun(child *State) error {
 	child.SignatureCheckAlwaysSucceed = s.SignatureCheckAlwaysSucceed
 	if len(child.Libraries) == 0 && len(s.Libraries) > 0 {
 		child.Libraries = append([]*cell.Cell{}, s.Libraries...)
+	}
+	child.maxLibraryLoads = s.maxLibraryLoads
+	child.hasMaxLibraryLoads = s.hasMaxLibraryLoads
+	child.maxDataDepth = s.maxDataDepth
+	if s.hasMaxLibraryLoads {
+		if s.loadedLibraries == nil {
+			s.loadedLibraries = make(map[cell.Hash]struct{})
+		}
+		child.loadedLibraries = s.loadedLibraries
 	}
 	child.childRunner = s.childRunner
 	child.PrepareExecution(child.CurrentCode)
@@ -486,7 +518,7 @@ func (s *State) TryCommitCurrent() bool {
 	if s.Reg.D[0] == nil || s.Reg.D[1] == nil {
 		return false
 	}
-	if s.Reg.D[0].Depth() > MaxDataDepth || s.Reg.D[1].Depth() > MaxDataDepth {
+	if s.Reg.D[0].Depth() > s.maxDataDepth || s.Reg.D[1].Depth() > s.maxDataDepth {
 		return false
 	}
 	if s.Reg.D[0].Level() != 0 || s.Reg.D[1].Level() != 0 {

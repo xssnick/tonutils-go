@@ -38,7 +38,7 @@ func PrepareAccount(shard *tlb.ShardAccount, addr *address.Address) (*PreparedAc
 	if err := tlb.Parse(&state, shard.Account); err != nil {
 		return nil, fmt.Errorf("failed to decode account state: %w", err)
 	}
-	return prepareAccountFromState(shard, &state, addr, nil)
+	return prepareAccountFromState(shard, &state, addr, nil, nil)
 }
 
 // PrepareParsedAccount wraps an already-parsed shard account state; state must
@@ -50,16 +50,17 @@ func PrepareParsedAccount(shard *tlb.ShardAccount, state *tlb.AccountState, addr
 	if state == nil {
 		return nil, errors.New("parsed account state is required")
 	}
-	return prepareAccountFromState(shard, state, addr, nil)
+	return prepareAccountFromState(shard, state, addr, nil, nil)
 }
 
-func prepareAccountFromState(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address, storageCell *cell.Cell) (*PreparedAccount, error) {
+func prepareAccountFromState(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address, storageCell, storageCellForStat *cell.Cell) (*PreparedAccount, error) {
 	runtime, err := loadTransactionRuntimeAccountState(shard, state, addr, storageCell == nil)
 	if err != nil {
 		return nil, err
 	}
 	if storageCell != nil {
 		runtime.storageCell = storageCell
+		runtime.storageCellForStat = storageCellForStat
 	}
 	return &PreparedAccount{
 		shard:   shard,
@@ -208,12 +209,12 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 	case tlb.MsgTypeInternal:
 		in := msg.AsInternal()
 		prepared.creditFirst = !in.Bounce
-		prepared.msgBalance, err = transactionCurrencyFromParts(in.Amount.Nano(), in.ExtraCurrencies)
+		prepared.msgBalance, err = transactionCurrencyFromOwnedParts(in.Amount.Nano(), in.ExtraCurrencies)
 		if err != nil {
 			return nil, err
 		}
 		if globalVersion < 12 {
-			prepared.msgBalance.grams.Add(prepared.msgBalance.grams, transactionBigOrZero(in.IHRFee.Nano()))
+			prepared.msgBalance.grams.Add(prepared.msgBalance.grams, in.IHRFee.Nano())
 		}
 		if cfg.isBlackHoleAccount(acc.addr) {
 			prepared.msgBalance.grams.SetInt64(0)
@@ -298,10 +299,11 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 // along with its parsed form and the pieces needed to prepare the follow-up
 // account without re-parsing.
 type builtTransactionAccount struct {
-	cell        *cell.Cell
-	state       *tlb.AccountState
-	storageStat *cell.Cell
-	storageCell *cell.Cell
+	cell               *cell.Cell
+	state              *tlb.AccountState
+	storageStat        *cell.Cell
+	storageCell        *cell.Cell
+	storageCellForStat *cell.Cell
 }
 
 func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
@@ -367,7 +369,11 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 	storageCell := storageBuilder.EndCell()
 
 	storageCellForStat := storageCell
-	if cfg.globalVersion() >= 10 {
+	extraCurrencyV2 := cfg.globalVersion() >= 10
+	if extraCurrencyV2 && extraCurrencies != nil && extraCurrencies.AsCell() != nil {
+		// The stat form differs from storageCell only when an extra-currency
+		// dict is actually stored: with no dict both serializations store the
+		// same maybe-bit 0, so storageCell is reused as is.
 		storageCellForStat, err = buildTransactionAccountStorageCell(status, endLT, balance, nil, accountStorage.StateInit, accountStorage.StateHash)
 		if err != nil {
 			return nil, err
@@ -401,12 +407,18 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		return nil, fmt.Errorf("failed to serialize account state: %w", err)
 	}
 
-	return &builtTransactionAccount{
+	built := &builtTransactionAccount{
 		cell:        accountCell,
 		state:       accountState,
 		storageStat: nextStorageStat,
 		storageCell: storageCell,
-	}, nil
+	}
+	if extraCurrencyV2 {
+		// Thread the extra-currency-free storage forward so the next
+		// transaction of this account gets it without another probe/rebuild.
+		built.storageCellForStat = storageCellForStat
+	}
+	return built, nil
 }
 
 func transactionAccountSerializationAddr(addr *address.Address, cfg *PreparedBlockchainConfig) (*address.Address, error) {
@@ -504,6 +516,37 @@ func transactionOldAccountStorageForStat(acc *transactionRuntimeAccount, extraCu
 		return nil, nil
 	}
 	if !extraCurrencyV2 {
+		return acc.storageCell, nil
+	}
+	if acc.storageCellForStat != nil {
+		return acc.storageCellForStat, nil
+	}
+
+	// acc.storageCell is always this emulator's own canonical serialization
+	// (loadTransactionRuntimeAccountState or the previous transaction), so
+	// probe the account_storage layout with raw bit reads: last_trans_lt
+	// (64 bits), Grams (4-bit byte length + bytes), then the extra-currency
+	// dict maybe-bit. Bit 0 means the cell already equals its serialization
+	// without extra currencies, no rebuild needed.
+	var sl cell.Slice
+	if err := acc.storageCell.BeginParseIntoWithoutTrace(&sl); err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	if err := sl.SkipBits(64); err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	gramsLen, err := sl.LoadUInt(4)
+	if err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	if err = sl.SkipBits(uint(gramsLen) * 8); err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	hasExtraCurrencies, err := sl.LoadBoolBit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	if !hasExtraCurrencies {
 		return acc.storageCell, nil
 	}
 
@@ -664,7 +707,8 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 		return 0, nil
 	}
 
-	sl, err := c.BeginParseWithoutTrace()
+	var sl cell.Slice
+	err := c.BeginParseIntoWithoutTrace(&sl)
 	if err != nil {
 		return 0, err
 	}
@@ -718,7 +762,8 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 }
 
 func (s *transactionAccountStorageStat) removeCell(c *cell.Cell) error {
-	sl, err := c.BeginParseWithoutTrace()
+	var sl cell.Slice
+	err := c.BeginParseIntoWithoutTrace(&sl)
 	if err != nil {
 		return err
 	}
@@ -776,7 +821,7 @@ func (s *transactionAccountStorageStat) entry(key cell.Hash) (*transactionAccoun
 		return entry, nil
 	}
 
-	value, err := s.dict.LoadValue(transactionAccountStorageStatKey(key))
+	value, err := s.dict.LoadValueByBytesKey(key[:])
 	if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 		return entry, nil
 	}
@@ -795,16 +840,16 @@ func (s *transactionAccountStorageStat) entry(key cell.Hash) (*transactionAccoun
 }
 
 func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
-	if s.dict == nil {
-		s.dict = cell.NewDict(256)
+	if s.dict == nil || s.dict.IsEmpty() {
+		return s.dictRootFromScratch()
 	}
+
 	for key, entry := range s.entries {
 		if !entry.dirty {
 			continue
 		}
-		keyCell := transactionAccountStorageStatKey(key)
 		if entry.refCount == 0 {
-			if err := s.dict.Delete(keyCell); err != nil {
+			if err := s.dict.DeleteByBytesKey(key[:]); err != nil {
 				return nil, err
 			}
 			entry.dirty = false
@@ -813,11 +858,39 @@ func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
 		value := cell.BeginCell().
 			MustStoreUInt(uint64(entry.refCount), 32).
 			MustStoreUInt(uint64(entry.maxMerkleDepth), 2)
-		if err := s.dict.SetBuilder(keyCell, value); err != nil {
+		if err := s.dict.SetBuilderByBytesKey(key[:], value); err != nil {
 			return nil, err
 		}
 		entry.dirty = false
 	}
+	return s.dict.AsCell(), nil
+}
+
+// dictRootFromScratch serializes all live entries in one bottom-up bulk build:
+// with an empty dict every entry has to be inserted anyway, and the bulk build
+// finalizes (hashes) each tree node exactly once instead of re-hashing the
+// whole insert path per entry.
+func (s *transactionAccountStorageStat) dictRootFromScratch() (*cell.Cell, error) {
+	keys := make([]cell.Hash, 0, len(s.entries))
+	items := make([]cell.DictBulkKV, 0, len(s.entries))
+	for key, entry := range s.entries {
+		entry.dirty = false
+		if entry.refCount == 0 {
+			continue
+		}
+
+		keys = append(keys, key)
+		value := cell.BeginCell().
+			MustStoreUInt(uint64(entry.refCount), 32).
+			MustStoreUInt(uint64(entry.maxMerkleDepth), 2)
+		items = append(items, cell.DictBulkKV{Key: keys[len(keys)-1][:], Value: value})
+	}
+
+	dict, err := cell.NewDictFromItems(256, items)
+	if err != nil {
+		return nil, err
+	}
+	s.dict = dict
 	return s.dict.AsCell(), nil
 }
 
@@ -826,10 +899,6 @@ func transactionAccountStorageStatRootHash(root *cell.Cell) []byte {
 		return make([]byte, 32)
 	}
 	return root.Hash()
-}
-
-func transactionAccountStorageStatKey(key cell.Hash) *cell.Cell {
-	return cell.BeginCell().MustStoreSlice(key[:], 256).EndCell()
 }
 
 func transactionHashIsZero(hash []byte) bool {
@@ -847,7 +916,8 @@ func transactionLoadAccountStorageRootRefs(storage *cell.Cell) (*cell.Cell, [4]*
 		return nil, refs, 0, nil
 	}
 
-	sl, err := storage.BeginParseWithoutTrace()
+	var sl cell.Slice
+	err := storage.BeginParseIntoWithoutTrace(&sl)
 	if err != nil {
 		return nil, refs, 0, err
 	}

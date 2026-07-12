@@ -64,6 +64,7 @@ func TestMulRShiftDynamicErrorEdges(t *testing.T) {
 
 		t.Run(op.name+"_y_nan", func(t *testing.T) {
 			st := newMathCoverageState()
+			st.GlobalVersion = 13
 			pushMathCoverageInts(t, st, 2)
 			if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push y NaN: %v", err)
@@ -74,6 +75,7 @@ func TestMulRShiftDynamicErrorEdges(t *testing.T) {
 
 		t.Run(op.name+"_x_nan", func(t *testing.T) {
 			st := newMathCoverageState()
+			st.GlobalVersion = 13
 			if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push x NaN: %v", err)
 			}
@@ -159,6 +161,7 @@ func TestMulRShiftCodeErrorEdges(t *testing.T) {
 
 		t.Run(op.name+"_y_nan", func(t *testing.T) {
 			st := newMathCoverageState()
+			st.GlobalVersion = 13
 			pushMathCoverageInts(t, st, 2)
 			if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push y NaN: %v", err)
@@ -168,6 +171,7 @@ func TestMulRShiftCodeErrorEdges(t *testing.T) {
 
 		t.Run(op.name+"_x_nan", func(t *testing.T) {
 			st := newMathCoverageState()
+			st.GlobalVersion = 13
 			if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push x NaN: %v", err)
 			}
@@ -257,6 +261,7 @@ func FuzzTVMMulRShiftNaNRangeAndOverflowRules(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawOp uint8, rawX, rawY int64, rawShift uint16, nanX, nanY, nanShift bool) {
 		opKind := rawOp % 6
 		st := newMathCoverageState()
+		st.GlobalVersion = 13
 
 		x := big.NewInt(rawX % 1_000_000)
 		y := big.NewInt(rawY % 1_000_000)

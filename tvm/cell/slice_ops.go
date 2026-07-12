@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"bytes"
 	mathbits "math/bits"
 )
 
@@ -68,6 +69,17 @@ func (c *Slice) HasPrefix(prefix *Slice) bool {
 }
 
 func (c *Slice) bitsEqualAt(other *Slice, offset, otherOffset, bits uint) bool {
+	start := uint(c.bitStart) + offset
+	otherStart := uint(other.bitStart) + otherOffset
+	if start%8 == otherStart%8 {
+		return bitsEqualSameOffset(
+			c.cell.data[start/8:],
+			other.cell.data[otherStart/8:],
+			start%8,
+			bits,
+		)
+	}
+
 	for done := uint(0); done < bits; {
 		chunk := min(uint(64), bits-done)
 		a, err := preloadSliceUIntAt(c, offset+done, chunk)
@@ -84,6 +96,39 @@ func (c *Slice) bitsEqualAt(other *Slice, offset, otherOffset, bits uint) bool {
 		done += chunk
 	}
 	return true
+}
+
+func bitsEqualSameOffset(left, right []byte, offset, bits uint) bool {
+	if bits == 0 {
+		return true
+	}
+
+	if offset != 0 {
+		headBits := min(bits, 8-offset)
+		mask := byte(0xFF>>offset) & byte(0xFF<<(8-offset-headBits))
+		if left[0]&mask != right[0]&mask {
+			return false
+		}
+
+		bits -= headBits
+		if bits == 0 {
+			return true
+		}
+		left = left[1:]
+		right = right[1:]
+	}
+
+	wholeBytes := bits / 8
+	if !bytes.Equal(left[:wholeBytes], right[:wholeBytes]) {
+		return false
+	}
+
+	tailBits := bits % 8
+	if tailBits == 0 {
+		return true
+	}
+	mask := byte(0xFF << (8 - tailBits))
+	return left[wholeBytes]&mask == right[wholeBytes]&mask
 }
 
 func (c *Slice) LexCompare(other *Slice) int {

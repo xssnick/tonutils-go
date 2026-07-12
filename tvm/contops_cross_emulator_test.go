@@ -17,7 +17,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-const contOpsParityCaseCount = 213
+const contOpsParityCaseCount = 215
 
 type contOpsParityCase struct {
 	name          string
@@ -1152,6 +1152,12 @@ func contOpsParityCases(t *testing.T) []contOpsParityCase {
 			exit:  0,
 		},
 		{
+			name:  "repeatbrk_short_stack_underflow",
+			code:  codeFromBuilders(t, execop.REPEATBRK().Serialize()),
+			stack: []any{int64(11)},
+			exit:  vmerr.CodeStackUnderflow,
+		},
+		{
 			name:  "repeatbrk_bad_body_consumes_top_only",
 			code:  codeFromBuilders(t, execop.REPEATBRK().Serialize()),
 			stack: []any{int64(3), int64(11)},
@@ -1216,6 +1222,12 @@ func contOpsParityCases(t *testing.T) []contOpsParityCase {
 				stackop.PUSHINT(big.NewInt(9)).Serialize(),
 			),
 			exit: 0,
+		},
+		{
+			name:  "whilebrk_short_stack_underflow",
+			code:  codeFromBuilders(t, execop.WHILEBRK().Serialize()),
+			stack: []any{int64(11)},
+			exit:  vmerr.CodeStackUnderflow,
 		},
 		{
 			name:  "whilebrk_bad_body_consumes_top_only",
@@ -1743,50 +1755,19 @@ func contOpsParityCases(t *testing.T) []contOpsParityCase {
 
 }
 
+// runContParityCase exercises the default/"current" behavior of a contOpsParityCase.
+// It pins both engines to referenceRawRunGlobalVersion explicitly (through the same
+// versioned harness used by TestTVMCrossEmulatorContOpsAllGlobalVersions) instead of
+// relying on the reference emulator's implicit SUPPORTED_VERSION default, which drifts
+// whenever the bundled reference binary is rebuilt against a newer upstream checkout.
 func runContParityCase(t *testing.T, tt contOpsParityCase) {
 	t.Helper()
 
-	code := prependRawMethodDrop(tt.code)
-	goStack, err := buildCrossStack(tt.stack...)
-	if err != nil {
-		t.Fatalf("failed to build go stack: %v", err)
+	skipReference := ""
+	if tt.skipReference != nil {
+		skipReference = tt.skipReference(referenceRawRunGlobalVersion)
 	}
-	refStack, err := buildCrossStack(tt.stack...)
-	if err != nil {
-		t.Fatalf("failed to build reference stack: %v", err)
-	}
-
-	goRes, err := runGoCrossCode(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack)
-	if err != nil {
-		t.Fatalf("go tvm execution failed: %v", err)
-	}
-
-	refRes, err := runReferenceCrossCode(code, cell.BeginCell().EndCell(), tuple.Tuple{}, refStack)
-	if err != nil {
-		t.Fatalf("reference tvm execution failed: %v", err)
-	}
-
-	if goRes.exitCode != tt.exit || refRes.exitCode != tt.exit {
-		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, tt.exit)
-	}
-	if goRes.exitCode != refRes.exitCode {
-		t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
-	}
-	if goRes.gasUsed != refRes.gasUsed {
-		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
-	}
-
-	goStackCell, err := normalizeStackCell(goRes.stack)
-	if err != nil {
-		t.Fatalf("failed to normalize go stack: %v", err)
-	}
-	refStackCell, err := normalizeStackCell(refRes.stack)
-	if err != nil {
-		t.Fatalf("failed to normalize reference stack: %v", err)
-	}
-	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
-		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
-	}
+	runContVersionedParityCase(t, tt.code, tt.stack, referenceRawRunGlobalVersion, tt.exit, skipReference, tt.goStack)
 }
 
 func TestTVMCrossEmulatorContOpsVersionedEdges(t *testing.T) {

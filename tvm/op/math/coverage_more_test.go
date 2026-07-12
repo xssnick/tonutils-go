@@ -215,14 +215,21 @@ func TestTVM14QuietShrModInvalidShift(t *testing.T) {
 		assertMathCoverageVMError(t, qShrModFamily(4).Interpret(st), vmerr.CodeRangeCheck)
 	})
 
-	t.Run("v14 quiet compound shift keeps range check", func(t *testing.T) {
+	t.Run("v14 quiet compound shift returns NaN", func(t *testing.T) {
 		st := newMathCoverageState()
 		st.GlobalVersion = 14
 		pushMathCoverageInts(t, st, 123)
 		if err := st.Stack.PushInt(big.NewInt(257)); err != nil {
 			t.Fatalf("push out-of-range shift: %v", err)
 		}
-		assertMathCoverageVMError(t, qShrModFamily(4).Interpret(st), vmerr.CodeRangeCheck)
+		if err := qShrModFamily(4).Interpret(st); err != nil {
+			t.Fatalf("QRSHIFTMOD v14 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v14 result: %v", err)
+		}
+		requireMathNaN(t, got)
 	})
 }
 

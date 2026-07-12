@@ -19,12 +19,12 @@ func RSHIFTR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			x, err := popInt(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
 			if x == nil {
-				if y.Sign() == 0 {
+				if y.Sign() == 0 || state.GlobalVersion >= 14 {
 					return pushNaNOrOverflow(state, false)
 				}
 				return pushSmallInt(state, 0)

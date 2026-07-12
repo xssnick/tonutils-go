@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	expectedPackageLocalVersionFuzzerCount          = 45
-	expectedPackageLocalVersionFuzzerHash           = "699abeaefe17fb239299b7e2c09a91f9e2bd7c64fc5ed41664d0e73611c6b61a"
+	expectedPackageLocalVersionFuzzerCount          = 46
+	expectedPackageLocalVersionFuzzerHash           = "17de0266cf8bef94294759a156da1ec80b5529fe6b84ce91e2b0ba6f5907d8bd"
 	expectedSupportedRangeVersionFuzzerCount        = 77
 	expectedSupportedRangeVersionFuzzerHash         = "b78317c241bf59e89458afa7305a7a6287c3f498c610af5b93bea7ed398404fa"
 	expectedSupportedRangeFullRangeVersionFuzzCount = 77
@@ -40,7 +40,7 @@ var expectedPackageLocalVersionFuzzerPackages = map[string]packageLocalVersionFu
 	"dict":      {count: 18, hash: "b47af0650907696abd685b6d53cb50dedac4c6372c225166af23e9a022f00575"},
 	"exec":      {count: 1, hash: "fcb1bdc057000b657e3e7d72570ad6a088ce6414d0fb222ba95bb13f8fc7a20d"},
 	"funcs":     {count: 17, hash: "e059578c366c8848ff5fec7fc081971ea34e2adc2a58a75de592c33425250773"},
-	"math":      {count: 3, hash: "e3b8d157e2f259f6c73476443b9a8e4731eb5c377b12678c8c2bad92f76ca4eb"},
+	"math":      {count: 4, hash: "bd39197439ca90005e8ce9afbf67f4488d216b34f50d367b6bb582b155ca7ea0"},
 	"stack":     {count: 2, hash: "8ebec44e5496c2f557e93ece43b881c3ea36566ab8b2f8b92c122a5c41fbb51d"},
 	"tuple":     {count: 2, hash: "23d1dd347ad1df0b3b66464eb844b53e2d1627cdb036ff832483ef795f5921ee"},
 }

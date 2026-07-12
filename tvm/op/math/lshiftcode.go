@@ -16,12 +16,12 @@ func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popInt(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
 			if x == nil {
-				return pushNaNOrOverflow(state, false)
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), false), false)
 			}
 
 			return pushMaybeInt(state, leftShiftResult(x, uint64(imm())), false)

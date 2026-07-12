@@ -19,10 +19,10 @@ import (
 const knownReferenceMismatchPrefix = "bundled reference emulator " + "predates upstream "
 
 const (
-	expectedKnownReferenceMismatchLocalAnchorCount = 17
-	expectedKnownReferenceMismatchLocalAnchorHash  = "f40e8f90689f9d41f9e0756db13543bd41fa1eb6c2bf6ae99b27d2e878d432d6"
-	expectedKnownReferenceMismatchBoundaryCount    = 22
-	expectedKnownReferenceMismatchBoundaryHash     = "4ddbc9049ab3a1e326808f9194c264f4ed0fd6d685508d152a9f8b7c40499c51"
+	expectedKnownReferenceMismatchLocalAnchorCount = 15
+	expectedKnownReferenceMismatchLocalAnchorHash  = "a90c9c9a733b4457989071ffbf569178cd0d646a134cd6d67fbac6c09dc2445a"
+	expectedKnownReferenceMismatchBoundaryCount    = 18
+	expectedKnownReferenceMismatchBoundaryHash     = "c74adb3e03d42f915f91d5dc7e664c84fe481248307d871c3b52132d8eecc212"
 )
 
 var knownReferenceMismatchLocalAnchors = map[string][]string{
@@ -32,17 +32,11 @@ var knownReferenceMismatchLocalAnchors = map[string][]string{
 	"ECRECOVER v=27/28 support": {
 		"FuzzTVMEcrecoverEthereumRecoveryIDsV14Boundary",
 	},
-	"QRSHIFT# v14 NaN preservation": {
-		"FuzzTVMVersionedImmediateShiftNaNRules",
-	},
 	"RIST255 v14 identity support": {
 		"FuzzTVMRistrettoIdentityAndZeroScalarV14Boundary",
 	},
 	"RIST255 v14 zero-scalar validation": {
 		"FuzzTVMRistrettoIdentityAndZeroScalarV14Boundary",
-	},
-	"RSHIFT# v14 NaN preservation": {
-		"FuzzTVMVersionedImmediateShiftNaNRules",
 	},
 	"SENDMSG v14 user fwd fee handling": {
 		"FuzzSendMsgVersionedUserFwdFeeLowerBound",
@@ -76,19 +70,11 @@ var knownReferenceMismatchBoundaryVersions = map[string][]int{
 		13,
 		14,
 	},
-	"QRSHIFT# v14 NaN preservation": {
-		13,
-		14,
-	},
 	"RIST255 v14 identity support": {
 		13,
 		14,
 	},
 	"RIST255 v14 zero-scalar validation": {
-		13,
-		14,
-	},
-	"RSHIFT# v14 NaN preservation": {
 		13,
 		14,
 	},

@@ -9,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	circlbls "github.com/cloudflare/circl/ecc/bls12381"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	"github.com/xssnick/tonutils-go/tvm/tuple"

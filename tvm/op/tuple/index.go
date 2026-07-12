@@ -12,9 +12,12 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return INDEX(0) })
 }
 
+// constant prefix, computed once instead of on every decode
+var indexPrefix = helpers.UIntPrefix(0x6f1, 12)
+
 func INDEX(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6f1, 12),
+		BitPrefix:     indexPrefix,
 		FixedSizeBits: 4,
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d INDEX", n)

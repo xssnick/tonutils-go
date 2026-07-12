@@ -25,52 +25,86 @@ func (m *CellManager) PendingError() error {
 	return m.pendingErr
 }
 
+// OnLoad implements cell.TraceListener for the gas trace: it charges cell
+// load gas, latching the first gas error so later events keep the original
+// failure.
+func (m *CellManager) OnLoad(c *cell.Cell) {
+	if m.pendingErr != nil {
+		return
+	}
+	m.pendingErr = m.RegisterCellLoad(c)
+}
+
+// OnCreate implements cell.TraceListener for the gas trace, charging cell
+// create gas with the same sticky-error semantics as OnLoad.
+func (m *CellManager) OnCreate() {
+	if m.pendingErr != nil {
+		return
+	}
+	m.pendingErr = m.RegisterCellCreate()
+}
+
+// ChildTrace implements cell.TraceListener for the gas trace: children stay
+// on the same gas trace.
+func (m *CellManager) ChildTrace(int) *cell.Trace {
+	return m.Trace()
+}
+
 func (m *CellManager) Trace() *cell.Trace {
 	if m == nil {
 		return nil
 	}
 	if m.trace == nil {
-		m.trace = cell.NewTrace(cell.TraceHooks{
-			OnLoad: func(c *cell.Cell) {
-				if m.pendingErr != nil {
-					return
-				}
-				m.pendingErr = m.RegisterCellLoad(c)
-			},
-			OnCreate: func() {
-				if m.pendingErr != nil {
-					return
-				}
-				m.pendingErr = m.RegisterCellCreate()
-			},
-			OnChild: func(int) *cell.Trace {
-				return m.Trace()
-			},
-			PendingError: m.PendingError,
-		})
+		m.trace = cell.NewTraceForListener(m)
 	}
 	return m.trace
+}
+
+// cellManagerAlreadyLoadedTrace adapts CellManager as the trace listener for
+// cells whose load has already been charged: creates and children forward to
+// the gas trace, loads are not re-registered.
+type cellManagerAlreadyLoadedTrace CellManager
+
+func (m *cellManagerAlreadyLoadedTrace) OnLoad(*cell.Cell) {}
+
+func (m *cellManagerAlreadyLoadedTrace) OnCreate() {
+	(*CellManager)(m).OnCreate()
+}
+
+func (m *cellManagerAlreadyLoadedTrace) ChildTrace(int) *cell.Trace {
+	return (*CellManager)(m).Trace()
+}
+
+func (m *cellManagerAlreadyLoadedTrace) PendingError() error {
+	return (*CellManager)(m).pendingErr
 }
 
 func (m *CellManager) TraceAlreadyLoaded() *cell.Trace {
 	if m == nil {
 		return nil
 	}
-	if m.alreadyLoadedTrace != nil {
-		return m.alreadyLoadedTrace
+	if m.alreadyLoadedTrace == nil {
+		m.alreadyLoadedTrace = cell.NewTraceForListener((*cellManagerAlreadyLoadedTrace)(m))
 	}
-
-	gasTrace := m.Trace()
-	m.alreadyLoadedTrace = cell.NewTrace(cell.TraceHooks{
-		OnCreate: func() {
-			_ = gasTrace.NotifyCreate()
-		},
-		OnChild: func(refIdx int) *cell.Trace {
-			return gasTrace.Child(refIdx)
-		},
-		PendingError: gasTrace.PendingError,
-	})
 	return m.alreadyLoadedTrace
+}
+
+// cellManagerLoadTrace adapts CellManager as the load-only trace listener: it
+// registers cell loads but never charges create gas.
+type cellManagerLoadTrace CellManager
+
+func (m *cellManagerLoadTrace) OnLoad(c *cell.Cell) {
+	(*CellManager)(m).OnLoad(c)
+}
+
+func (m *cellManagerLoadTrace) OnCreate() {}
+
+func (m *cellManagerLoadTrace) ChildTrace(int) *cell.Trace {
+	return (*CellManager)(m).LoadTrace()
+}
+
+func (m *cellManagerLoadTrace) PendingError() error {
+	return (*CellManager)(m).pendingErr
 }
 
 func (m *CellManager) LoadTrace() *cell.Trace {
@@ -78,18 +112,7 @@ func (m *CellManager) LoadTrace() *cell.Trace {
 		return nil
 	}
 	if m.loadTrace == nil {
-		m.loadTrace = cell.NewTrace(cell.TraceHooks{
-			OnLoad: func(c *cell.Cell) {
-				if m.pendingErr != nil {
-					return
-				}
-				m.pendingErr = m.RegisterCellLoad(c)
-			},
-			OnChild: func(int) *cell.Trace {
-				return m.LoadTrace()
-			},
-			PendingError: m.PendingError,
-		})
+		m.loadTrace = cell.NewTraceForListener((*cellManagerLoadTrace)(m))
 	}
 	return m.loadTrace
 }

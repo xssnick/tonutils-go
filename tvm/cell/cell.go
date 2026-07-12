@@ -3,7 +3,6 @@ package cell
 import (
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -79,22 +78,17 @@ func (c *Cell) BeginParseWithTrace(trace *Trace) (*Slice, error) {
 }
 
 func (c *Cell) beginParseWithTrace(trace *Trace) (*Slice, error) {
-	loaded, err := c.loadWithTrace(trace)
-	if err != nil {
+	s := new(Slice)
+	if err := c.beginParseIntoWithTrace(s, trace); err != nil {
 		return nil, err
 	}
-
-	trace.NotifyLoad(loaded)
-	return newSliceFromCell(loaded, trace), nil
+	return s, nil
 }
 
-// BeginParseInto is the value-form of BeginParse for tight descent loops:
-// the caller owns dst and reuses it across iterations, so parsing does not
-// allocate a new Slice per visited cell. Traces attached to the cell are
-// honored the same way BeginParse does.
-func (c *Cell) BeginParseInto(dst *Slice) error {
-	trace := c.Trace()
-	loaded, err := c.loadWithTrace(trace)
+func (c *Cell) beginParseIntoWithTrace(dst *Slice, trace *Trace) error {
+	// Keep the active trace on the Slice so reference descent does not clone
+	// otherwise immutable cells just to attach trace metadata.
+	loaded, err := c.loadWithTrace(nil)
 	if err != nil {
 		return err
 	}
@@ -107,6 +101,20 @@ func (c *Cell) BeginParseInto(dst *Slice) error {
 		refEnd: uint8(loaded.refsCount()),
 	}
 	return nil
+}
+
+// BeginParseInto is the value-form of BeginParse for tight descent loops:
+// the caller owns dst and reuses it across iterations, so parsing does not
+// allocate a new Slice per visited cell. Traces attached to the cell are
+// honored the same way BeginParse does.
+func (c *Cell) BeginParseInto(dst *Slice) error {
+	return c.beginParseIntoWithTrace(dst, c.Trace())
+}
+
+// BeginParseIntoWithoutTrace is the value-form of BeginParseWithoutTrace:
+// like BeginParseInto, but without attaching any trace to the parsed Slice.
+func (c *Cell) BeginParseIntoWithoutTrace(dst *Slice) error {
+	return c.beginParseIntoWithTrace(dst, nil)
 }
 
 func (c *Cell) MustBeginParse() *Slice {
@@ -200,112 +208,182 @@ func (c *Cell) PeekRef(i int) (*Cell, error) {
 
 	refView := newCellRefView(c)
 	ref, err := refView.boundaryRef(i)
-	if err != nil || ref == nil || c.Trace() == nil {
+	trace := c.Trace()
+	if err != nil || ref == nil || trace == nil {
 		return ref, err
 	}
-	return ref.WithTrace(c.Trace().Child(i)), nil
+	return ref.WithTrace(trace.Child(i)), nil
 }
 
+const defaultDumpLimit = uint64(16 << 30)
+
 func (c *Cell) Dump(limitLength ...int) string {
-	var lim = uint64(1024<<20) * 16
+	lim := defaultDumpLimit
 	if len(limitLength) > 0 {
-		// 16 MB default lim
 		lim = uint64(limitLength[0])
 	}
 	return c.dump(0, false, lim)
 }
 
 func (c *Cell) DumpBits(limitLength ...int) string {
-	var lim = uint64(1024<<20) * 16
+	lim := defaultDumpLimit
 	if len(limitLength) > 0 {
-		// 16 MB default lim
 		lim = uint64(limitLength[0])
 	}
 	return c.dump(0, true, lim)
 }
 
 func (c *Cell) dump(deep int, bin bool, limitLength uint64) string {
-	s, err := c.WithoutTrace().BeginParse()
-	if err != nil {
-		return strings.Repeat("  ", deep) + "<failed to load cell: " + err.Error() + ">"
+	w := dumpWriter{limit: limitLength}
+	c.writeDump(&w, deep, bin)
+	return w.builder.String()
+}
+
+type dumpWriter struct {
+	builder strings.Builder
+	limit   uint64
+}
+
+func (w *dumpWriter) done() bool {
+	return uint64(w.builder.Len()) >= w.limit
+}
+
+func (w *dumpWriter) writeByte(v byte) bool {
+	if w.done() {
+		return false
 	}
-	base := s.BaseCell()
-	sz, data, _ := s.RestBits()
+	w.builder.WriteByte(v)
+	return !w.done()
+}
 
-	builder := strings.Builder{}
+func (w *dumpWriter) writeString(v string) bool {
+	if w.done() {
+		return false
+	}
 
+	left := w.limit - uint64(w.builder.Len())
+	if uint64(len(v)) > left {
+		w.builder.WriteString(v[:int(left)])
+		return false
+	}
+	w.builder.WriteString(v)
+	return !w.done()
+}
+
+func (w *dumpWriter) writeIndent(deep int) bool {
+	const spaces = "                                                                "
+
+	left := deep * 2
+	for left > 0 {
+		chunk := min(left, len(spaces))
+		if !w.writeString(spaces[:chunk]) {
+			return false
+		}
+		left -= chunk
+	}
+	return true
+}
+
+func (c *Cell) writeDump(w *dumpWriter, deep int, bin bool) {
+	var s Slice
+	if err := c.beginParseIntoWithTrace(&s, nil); err != nil {
+		// Keep the legacy root-error behavior: the limit historically applied
+		// only after a cell was loaded successfully.
+		if deep == 0 && w.builder.Len() == 0 {
+			w.builder.WriteString("<failed to load cell: " + err.Error() + ">")
+			return
+		}
+		w.writeIndent(deep)
+		w.writeString("<failed to load cell: " + err.Error() + ">")
+		return
+	}
+	base := s.cell
+	sz := s.BitsLeft()
+
+	if !w.writeIndent(deep) ||
+		!w.writeString(strconv.FormatUint(uint64(sz), 10)) ||
+		!w.writeByte('[') {
+		return
+	}
 	if bin {
-		for _, n := range data {
-			builder.WriteString(fmt.Sprintf("%08b", n))
+		for bit := uint(0); bit < sz; bit++ {
+			value := (base.data[bit/8] >> (7 - bit%8)) & 1
+			if !w.writeByte('0' + value) {
+				return
+			}
 		}
-		if sz%8 != 0 {
-			tmp := builder.String()
-			builder.Reset()
-			builder.WriteString(tmp[:uint(len(tmp))-(8-(sz%8))])
-		}
-	} else {
-		tmp := make([]byte, len(data)*2)
-		hex.Encode(tmp, data)
-		builder.WriteString(strings.ToUpper(string(tmp)))
-
-		if sz%8 <= 4 && sz%8 > 0 {
-			tmp := builder.String()
-			builder.Reset()
-			builder.WriteString(tmp[:len(tmp)-1])
-			builder.WriteByte('_')
-
-		}
+	} else if !writeDumpHex(w, base.data, sz) {
+		return
 	}
-
-	val := builder.String()
-	builder.Reset()
-	builder.WriteString(strings.Repeat("  ", deep))
-	builder.WriteString(strconv.FormatUint(uint64(sz), 10))
-	builder.WriteByte('[')
-	builder.WriteString(val)
-	builder.WriteByte(']')
+	if !w.writeByte(']') {
+		return
+	}
 
 	level := base.getLevelMask().GetLevel()
 	if level > 0 {
-		builder.WriteByte('{')
-		builder.WriteString(strconv.Itoa(level))
-		builder.WriteByte('}')
-
-	}
-	if base.IsSpecial() {
-		builder.WriteByte('*')
-	}
-	refCnt := base.refsCount()
-	if refCnt > 0 {
-
-		builder.WriteString(" -> {")
-
-		for i, ref := range base.boundaryRefs() {
-
-			builder.WriteByte('\n')
-			builder.WriteString(ref.dump(deep+1, bin, limitLength))
-
-			if i == refCnt-1 {
-				builder.WriteByte('\n')
-			} else {
-				builder.WriteByte(',')
-			}
-
-			if uint64(builder.Len()) > limitLength {
-				break
-			}
+		if !w.writeByte('{') || !w.writeString(strconv.Itoa(level)) || !w.writeByte('}') {
+			return
 		}
-		builder.WriteString(strings.Repeat("  ", deep))
-		builder.WriteByte('}')
+	}
+	if base.IsSpecial() && !w.writeByte('*') {
+		return
 	}
 
-	if uint64(builder.Len()) > limitLength {
-		tmp := builder.String()
-		builder.Reset()
-		builder.WriteString(tmp[:limitLength])
+	refCnt := base.refsCount()
+	if refCnt == 0 || !w.writeString(" -> {") {
+		return
 	}
 
-	return builder.String()
+	refs := newCellRefView(base)
+	for i := 0; i < refCnt; i++ {
+		if !w.writeByte('\n') {
+			return
+		}
+		ref, err := refs.boundaryRef(i)
+		if err != nil {
+			return
+		}
+		ref.writeDump(w, deep+1, bin)
+		if w.done() {
+			return
+		}
+
+		if i == refCnt-1 {
+			if !w.writeByte('\n') {
+				return
+			}
+		} else if !w.writeByte(',') {
+			return
+		}
+	}
+	w.writeIndent(deep)
+	w.writeByte('}')
+}
+
+func writeDumpHex(w *dumpWriter, data []byte, bits uint) bool {
+	const alphabet = "0123456789ABCDEF"
+
+	bytesLen := (bits + 7) / 8
+	rem := bits % 8
+	for i := uint(0); i < bytesLen; i++ {
+		value := data[i]
+		if i == bytesLen-1 && rem != 0 {
+			value &= byte(0xFF << (8 - rem))
+		}
+		if !w.writeByte(alphabet[value>>4]) {
+			return false
+		}
+		if i == bytesLen-1 && rem > 0 && rem <= 4 {
+			if !w.writeByte('_') {
+				return false
+			}
+			continue
+		}
+		if !w.writeByte(alphabet[value&0x0F]) {
+			return false
+		}
+	}
+	return true
 }
 
 const _DataCellMaxLevel = 3

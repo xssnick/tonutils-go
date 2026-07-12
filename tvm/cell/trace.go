@@ -7,7 +7,18 @@ type TraceHooks struct {
 	PendingError func() error
 }
 
+// TraceListener receives the same events as TraceHooks through interface
+// dispatch, letting a single object back a Trace without allocating a closure
+// per hook.
+type TraceListener interface {
+	OnLoad(*Cell)
+	OnCreate()
+	ChildTrace(refIdx int) *Trace
+	PendingError() error
+}
+
 type Trace struct {
+	listener     TraceListener
 	onLoad       func(*Cell)
 	onCreate     func()
 	onChild      func(refIdx int) *Trace
@@ -27,6 +38,15 @@ func NewTrace(hooks TraceHooks) *Trace {
 		onChild:      hooks.OnChild,
 		pendingError: hooks.PendingError,
 	}
+}
+
+// NewTraceForListener wires a Trace directly to the listener, allocating only
+// the Trace itself.
+func NewTraceForListener(l TraceListener) *Trace {
+	if l == nil {
+		return nil
+	}
+	return &Trace{listener: l}
 }
 
 func CombineTraces(traces ...*Trace) *Trace {
@@ -72,6 +92,10 @@ func (t *Trace) NotifyLoad(c *Cell) {
 		t.usageTree.OnLoad(t.usageNode, c)
 		return
 	}
+	if t.listener != nil {
+		t.listener.OnLoad(c)
+		return
+	}
 	if t.onLoad != nil {
 		t.onLoad(c)
 	}
@@ -88,6 +112,10 @@ func (t *Trace) NotifyCreate() error {
 			}
 		}
 		return nil
+	}
+	if t.listener != nil {
+		t.listener.OnCreate()
+		return t.listener.PendingError()
 	}
 	if t.onCreate != nil {
 		t.onCreate()
@@ -113,6 +141,9 @@ func (t *Trace) Child(refIdx int) *Trace {
 	if t.usageTree != nil {
 		return t.usageTree.Trace(t.usageTree.CreateChild(t.usageNode, refIdx))
 	}
+	if t.listener != nil {
+		return t.listener.ChildTrace(refIdx)
+	}
 	if t.onChild != nil {
 		return t.onChild(refIdx)
 	}
@@ -130,6 +161,9 @@ func (t *Trace) PendingError() error {
 			}
 		}
 		return nil
+	}
+	if t.listener != nil {
+		return t.listener.PendingError()
 	}
 	if t.pendingError != nil {
 		return t.pendingError()

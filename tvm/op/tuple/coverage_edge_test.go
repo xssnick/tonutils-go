@@ -247,13 +247,13 @@ func TestTupleSetIndexErrorStackEffects(t *testing.T) {
 			wantLen: 0,
 		},
 		{
-			name: "SetIndexQuietSingleValueUnderflowConsumesValue",
+			name: "SetIndexQuietSingleValueUnderflowPreservesValue",
 			setup: func(t *testing.T, state *vm.State) {
 				pushInts(t, state, 7)
 			},
 			run:     func(state *vm.State) error { return SETINDEXQ(0).Interpret(state) },
 			code:    vmerr.CodeStackUnderflow,
-			wantLen: 0,
+			wantLen: 1,
 		},
 		{
 			name: "SetIndexQuietNonTupleConsumesOperands",

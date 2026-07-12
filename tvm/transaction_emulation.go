@@ -152,10 +152,14 @@ type transactionRuntimeAccount struct {
 	stateHash       []byte
 	storageLT       uint64
 	storageCell     *cell.Cell
-	prevTxHash      []byte
-	prevTxLT        uint64
-	originalCell    *cell.Cell
-	isSpecial       bool
+	// storageCellForStat is storageCell without the extra-currency dict (the
+	// extra-currency v2 stat form), threaded from the previous transaction of
+	// the account so it is not re-derived per transaction; nil when unknown.
+	storageCellForStat *cell.Cell
+	prevTxHash         []byte
+	prevTxLT           uint64
+	originalCell       *cell.Cell
+	isSpecial          bool
 }
 
 type transactionUsage struct {
@@ -198,6 +202,8 @@ type transactionSizeLimits struct {
 	maxMsgExtraCurrencies       uint64
 	maxAccFixedPrefixLength     uint64
 	accStateCellsForStorageDict uint64
+	maxTransactionLibraryLoads  *uint32
+	maxVMDataDepth              uint16
 }
 
 // transactionExecEnv is the assembled per-transaction execution environment:
@@ -247,12 +253,12 @@ func newTransactionExecEnv(block *BlockContext, opts *TransactionOptions, acc *t
 	return env
 }
 
-func (env *transactionExecEnv) buildC7(code *cell.Cell, balance *big.Int) (tuple.Tuple, error) {
+func (env *transactionExecEnv) c7Input(code *cell.Cell, balance *big.Int) (emulationC7Input, error) {
 	seed, err := transactionSeed(env.block, env.opts, env.acc.addr)
 	if err != nil {
-		return tuple.Tuple{}, err
+		return emulationC7Input{}, err
 	}
-	return buildEmulationC7(emulationC7Input{
+	return emulationC7Input{
 		addr:                env.acc.addr,
 		code:                code,
 		now:                 env.block.now,
@@ -269,7 +275,7 @@ func (env *transactionExecEnv) buildC7(code *cell.Cell, balance *big.Int) (tuple
 		precompiledGasUsage: env.precompiledGasUsage,
 		inMsgParams:         env.inMsgParams,
 		globalVersion:       env.cfg.version,
-	})
+	}, nil
 }
 
 // transactionSeed resolves the c7 rand seed: the explicit per-account seed
@@ -862,13 +868,13 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, env *t
 	if acc.code == nil {
 		return transactionNoCodeExecutionResult(acc.code, acc.data, gas), nil
 	}
-	c7, err := env.buildC7(acc.code, balance)
+	c7In, err := env.c7Input(acc.code, balance)
 	if err != nil {
 		return nil, err
 	}
 
 	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, libraries...)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
 }
 
 func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, env *transactionExecEnv, gas vm.Gas) (*MessageExecutionResult, error) {
@@ -892,13 +898,13 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 		return nil, err
 	}
 
-	c7, err := env.buildC7(acc.code, balance)
+	c7In, err := env.c7Input(acc.code, balance)
 	if err != nil {
 		return nil, err
 	}
 
 	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, false, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, libraries...)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, false, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
 }
 
 const transactionLTAlignment = uint64(1_000_000)
@@ -938,7 +944,7 @@ func (c *transactionCurrencyBalance) asTuple() tuple.Tuple {
 
 func transactionBuildInMsgParams(msg *tlb.Message, msgBalance *transactionCurrencyBalance) tuple.Tuple {
 	if msg == nil {
-		return messageInMsgParams(tuple.Tuple{})
+		return messageInMsgParams(tuple.Tuple{}, nil)
 	}
 
 	stateInitCell := transactionMaybeStateInitCell(transactionMessageStateInit(msg))
@@ -951,10 +957,10 @@ func transactionBuildInMsgParams(msg *tlb.Message, msgBalance *transactionCurren
 			messageTupleBool(in.Bounce),
 			messageTupleBool(in.Bounced),
 			cell.BeginCell().MustStoreAddr(in.SrcAddr).ToSlice(),
-			transactionBigOrZero(in.FwdFee.Nano()),
+			in.FwdFee.Nano(),
 			messageTupleUint(in.CreatedLT),
 			messageTupleUint(uint64(in.CreatedAt)),
-			transactionBigOrZero(in.Amount.Nano()),
+			in.Amount.Nano(),
 			value,
 			valueExtra,
 			stateInitCell,
@@ -974,7 +980,7 @@ func transactionBuildInMsgParams(msg *tlb.Message, msgBalance *transactionCurren
 			stateInitCell,
 		)
 	default:
-		return messageInMsgParams(tuple.Tuple{})
+		return messageInMsgParams(tuple.Tuple{}, nil)
 	}
 }
 

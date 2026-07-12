@@ -46,7 +46,7 @@ var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewIn
 var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
 const (
-	defaultStackCapacity = 256
+	defaultStackCapacity = 16
 	stackStaticIntMin    = -5
 	stackStaticIntMax    = 10
 	stackStaticIntCount  = stackStaticIntMax - stackStaticIntMin + 1
@@ -91,7 +91,7 @@ func (s *Stack) SetTrace(trace *cell.Trace) {
 		return
 	}
 	for i, val := range s.elems {
-		s.elems[i] = bindValueTrace(val, trace)
+		s.elems[i] = BindValueTrace(val, trace)
 	}
 }
 
@@ -109,7 +109,7 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		if err != nil {
 			panic(err)
 		}
-		bound := bindValueTrace(val, trace)
+		bound := BindValueTrace(val, trace)
 		if vals == nil && sameStackValue(bound, val) {
 			continue
 		}
@@ -122,8 +122,7 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 	if vals == nil {
 		return t.WithBindingID(trace)
 	}
-	bound := tuple.NewTupleOwned(vals)
-	return bound.WithBindingID(trace)
+	return tuple.NewTupleOwnedBound(vals, trace)
 }
 
 func sameStackValue(a, b any) bool {
@@ -147,7 +146,13 @@ func copyTuplePrefix(dst []any, src tuple.Tuple, end int) {
 	}
 }
 
-func bindValueTrace(val any, trace *cell.Trace) any {
+// BindValueTrace returns val ready to live on a stack or in c7 bound to the
+// given cell trace: slices and builders are copied with the trace attached
+// (snapshotting their cursor), tuples are rebound recursively and typed nil
+// pointers collapse to plain nil, except a null slice reference whose slice
+// tag is observable in legacy TVM behavior. Values that already carry the
+// trace are returned as-is. A nil trace returns val unchanged.
+func BindValueTrace(val any, trace *cell.Trace) any {
 	if trace == nil {
 		return val
 	}
@@ -166,7 +171,7 @@ func bindValueTrace(val any, trace *cell.Trace) any {
 		return x
 	case *cell.Slice:
 		if x == nil {
-			return nil
+			return x
 		}
 		combined := cell.CombineTraces(x.Trace(), trace)
 		if combined == x.Trace() {
@@ -229,7 +234,7 @@ func unbindValueTrace(val any, trace *cell.Trace) any {
 		return x.WithTrace(x.Trace().WithoutTrace(trace))
 	case *cell.Slice:
 		if x == nil {
-			return nil
+			return x
 		}
 		next := x.Trace().WithoutTrace(trace)
 		if next == x.Trace() {
@@ -291,7 +296,7 @@ func shareStackValue(val any, trace *cell.Trace) (any, error) {
 		return cp, nil
 	case *cell.Slice:
 		if t == nil {
-			return nil, nil
+			return t, nil
 		}
 		cp := t.Copy()
 		if trace != nil {
@@ -412,7 +417,7 @@ func (s *Stack) PushOwnedSlice(val *cell.Slice) error {
 		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 	if val == nil {
-		s.elems = append(s.elems, nil)
+		s.elems = append(s.elems, val)
 		return nil
 	}
 	if s.trace != nil {
@@ -730,7 +735,7 @@ func (s *Stack) PopSlice() (*cell.Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v, ok := e.(*cell.Slice); !ok {
+	if v, ok := e.(*cell.Slice); !ok || v == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
@@ -883,7 +888,11 @@ func (s *Stack) String() string {
 			val = x.String()
 		case *cell.Slice:
 			typ = "slice"
-			val = x.WithoutTrace().MustToCell().Dump()
+			if x == nil {
+				val = "null"
+			} else {
+				val = x.WithoutTrace().MustToCell().Dump()
+			}
 		case *cell.Builder:
 			typ = "builder"
 			val = x.WithoutTrace().EndCell().Dump()

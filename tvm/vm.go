@@ -202,7 +202,7 @@ func (op historicalInvalidOpcodeGas) InstructionBits() int64 {
 // AllowHigherVersionExecUsingLatest allows preparing configs with a global
 // version higher than vm.MaxSupportedGlobalVersion. When enabled, execution
 // uses the latest supported version.
-var AllowHigherVersionExecUsingLatest bool
+var AllowHigherVersionExecUsingLatest = true
 
 func validateGlobalVersion(version int) error {
 	if version < 0 {
@@ -458,12 +458,32 @@ type executeOptions struct {
 	skipFinalCommit             bool
 	traceHook                   vm.TraceHook
 	signatureCheckAlwaysSucceed bool
+	maxVMDataDepth              uint16
+	libraryLoadLimit            *uint32
 }
 
 func executeOptionsFromConfig(cfg ExecutionConfig) executeOptions {
 	return executeOptions{
 		signatureCheckAlwaysSucceed: cfg.SignatureCheckAlwaysSucceed,
+		maxVMDataDepth:              vm.MaxDataDepth,
 	}
+}
+
+// dryRunLibraryLoadLimit implements the tonlib SmartContract get-method /
+// external-message / internal-message dry-run policy (max_smc_library_loads
+// in crypto/smc-envelope/SmartContract.cpp): the cap always starts at 8 and
+// the blockchain config can only lower it, never raise or remove it.
+func dryRunLibraryLoadLimit(cfg *PreparedBlockchainConfig) uint32 {
+	const maxSmcLibraryLoads = 8
+	limit := uint32(maxSmcLibraryLoads)
+	if cfg != nil && cfg.sizeLimits.maxTransactionLibraryLoads != nil && *cfg.sizeLimits.maxTransactionLibraryLoads < limit {
+		limit = *cfg.sizeLimits.maxTransactionLibraryLoads
+	}
+	return limit
+}
+
+func ptrTo[T any](v T) *T {
+	return &v
 }
 
 func (tvm *TVM) executeWithOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg *PreparedBlockchainConfig, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
@@ -471,11 +491,25 @@ func (tvm *TVM) executeWithOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm
 		return nil, errConfigRootRequired
 	}
 
+	options.maxVMDataDepth = cfg.sizeLimits.maxVMDataDepth
+	options.libraryLoadLimit = ptrTo(dryRunLibraryLoadLimit(cfg))
+
 	state := vm.NewExecutionState(int(cfg.GlobalVersion()), gas, data, c7, stack, libraries...)
+	return tvm.executeState(state, code, data, options)
+}
+
+// executeState runs an already-constructed execution state. Message emulation
+// enters here directly with a c7 pre-bound to the state's gas trace, so the
+// c7 bind in InitForExecution hits the fast path.
+func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options executeOptions) (*ExecutionResult, error) {
 	state.StopOnAccept = options.stopOnAccept
 	state.TraceHook = options.traceHook
 	state.SignatureCheckAlwaysSucceed = options.signatureCheckAlwaysSucceed
 	state.SetChildRunner(tvm.runState)
+	state.SetMaxDataDepth(options.maxVMDataDepth)
+	if options.libraryLoadLimit != nil {
+		state.SetMaxLibraryLoads(*options.libraryLoadLimit)
+	}
 	state.InitForExecution()
 	currentCode, err := tvm.convertExecutionCodeCell(state, code)
 	if err != nil {

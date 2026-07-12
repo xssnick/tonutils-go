@@ -39,16 +39,46 @@ func controlRegisterPrefixes(base uint64) []helpers.BitPrefix {
 	return prefixes
 }
 
+// constant per-op prefixes, computed once instead of on every decode
+var (
+	pushCtrBitPrefix     = helpers.SlicePrefix(12, []byte{0xED, 0x40})
+	pushCtrPrefixes      = controlRegisterPrefixes(0xED40)
+	popCtrBitPrefix      = helpers.SlicePrefix(12, []byte{0xED, 0x50})
+	popCtrPrefixes       = controlRegisterPrefixes(0xED50)
+	setContCtrBitPrefix  = helpers.SlicePrefix(12, []byte{0xED, 0x60})
+	setContCtrPrefixes   = controlRegisterPrefixes(0xED60)
+	setRetCtrBitPrefix   = helpers.SlicePrefix(12, []byte{0xED, 0x70})
+	setRetCtrPrefixes    = controlRegisterPrefixes(0xED70)
+	setAltCtrBitPrefix   = helpers.SlicePrefix(12, []byte{0xED, 0x80})
+	setAltCtrPrefixes    = controlRegisterPrefixes(0xED80)
+	popSaveCtrBitPrefix  = helpers.SlicePrefix(12, []byte{0xED, 0x90})
+	popSaveCtrPrefixes   = controlRegisterPrefixes(0xED90)
+	saveCtrBitPrefix     = helpers.SlicePrefix(12, []byte{0xED, 0xA0})
+	saveCtrPrefixes      = controlRegisterPrefixes(0xEDA0)
+	saveAltCtrBitPrefix  = helpers.SlicePrefix(12, []byte{0xED, 0xB0})
+	saveAltCtrPrefixes   = controlRegisterPrefixes(0xEDB0)
+	saveBothCtrBitPrefix = helpers.SlicePrefix(12, []byte{0xED, 0xC0})
+	saveBothCtrPrefixes  = controlRegisterPrefixes(0xEDC0)
+)
+
+func loadControlRegisterIndex(code *cell.Slice) (int, error) {
+	val, err := code.LoadUInt(4)
+	if err != nil {
+		return 0, err
+	}
+
+	idx := int(val)
+	if !validControlRegisterIndex(idx) {
+		return 0, vm.ErrCorruptedOpcode
+	}
+	return idx, nil
+}
+
 func deserializeControlRegisterIndex(dst *int) func(*cell.Slice) error {
 	return func(code *cell.Slice) error {
-		val, err := code.LoadUInt(4)
+		idx, err := loadControlRegisterIndex(code)
 		if err != nil {
 			return err
-		}
-
-		idx := int(val)
-		if !validControlRegisterIndex(idx) {
-			return vm.ErrCorruptedOpcode
 		}
 
 		*dst = idx
@@ -125,42 +155,98 @@ func defineControlRegister(state *vm.State, r *vm.Register, idx int, val any) bo
 	return state.GlobalVersion >= 14 && controlRegisterSlotFilled(r, idx) && controlRegisterValueHasType(idx, val)
 }
 
-func PUSHCTR(i int) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			return state.Stack.PushAny(cloneControlRegisterValue(state.Reg.Get(i)))
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("c%d PUSH", i)
-		},
-		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x40}),
-		Prefixes:          controlRegisterPrefixes(0xED40),
-		SerializeSuffix:   serializeControlRegisterIndex(&i),
-		DeserializeSuffix: deserializeControlRegisterIndex(&i),
-	}
-	return op
+// OpPUSHCTR is a struct-based opcode: one allocation per executed instruction
+// instead of an AdvancedOP carrying per-instance closures.
+type OpPUSHCTR struct {
+	i int
 }
 
-func POPCTR(i int) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			val, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-			return setControlRegister(state, i, val)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("c%d POP", i)
-		},
-		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x50}),
-		Prefixes:          controlRegisterPrefixes(0xED50),
-		SerializeSuffix:   serializeControlRegisterIndex(&i),
-		DeserializeSuffix: deserializeControlRegisterIndex(&i),
+func PUSHCTR(i int) *OpPUSHCTR {
+	return &OpPUSHCTR{i: i}
+}
+
+func (op *OpPUSHCTR) GetPrefixes() []*cell.Slice {
+	return helpers.PrefixSlices(pushCtrPrefixes...)
+}
+
+func (op *OpPUSHCTR) Deserialize(code *cell.Slice) error {
+	if err := code.SkipBits(pushCtrBitPrefix.Bits); err != nil {
+		return err
 	}
-	return op
+
+	idx, err := loadControlRegisterIndex(code)
+	if err != nil {
+		return err
+	}
+	op.i = idx
+	return nil
+}
+
+func (op *OpPUSHCTR) Serialize() *cell.Builder {
+	return cell.BeginCell().
+		MustStoreSlice(pushCtrBitPrefix.Data, pushCtrBitPrefix.Bits).
+		MustStoreUInt(uint64(op.i), 4)
+}
+
+func (op *OpPUSHCTR) SerializeText() string {
+	return fmt.Sprintf("c%d PUSH", op.i)
+}
+
+func (op *OpPUSHCTR) InstructionBits() int64 {
+	return int64(pushCtrBitPrefix.Bits) + 4
+}
+
+func (op *OpPUSHCTR) Interpret(state *vm.State) error {
+	return state.Stack.PushAny(cloneControlRegisterValue(state.Reg.Get(op.i)))
+}
+
+// OpPOPCTR is a struct-based opcode: one allocation per executed instruction
+// instead of an AdvancedOP carrying per-instance closures.
+type OpPOPCTR struct {
+	i int
+}
+
+func POPCTR(i int) *OpPOPCTR {
+	return &OpPOPCTR{i: i}
+}
+
+func (op *OpPOPCTR) GetPrefixes() []*cell.Slice {
+	return helpers.PrefixSlices(popCtrPrefixes...)
+}
+
+func (op *OpPOPCTR) Deserialize(code *cell.Slice) error {
+	if err := code.SkipBits(popCtrBitPrefix.Bits); err != nil {
+		return err
+	}
+
+	idx, err := loadControlRegisterIndex(code)
+	if err != nil {
+		return err
+	}
+	op.i = idx
+	return nil
+}
+
+func (op *OpPOPCTR) Serialize() *cell.Builder {
+	return cell.BeginCell().
+		MustStoreSlice(popCtrBitPrefix.Data, popCtrBitPrefix.Bits).
+		MustStoreUInt(uint64(op.i), 4)
+}
+
+func (op *OpPOPCTR) SerializeText() string {
+	return fmt.Sprintf("c%d POP", op.i)
+}
+
+func (op *OpPOPCTR) InstructionBits() int64 {
+	return int64(popCtrBitPrefix.Bits) + 4
+}
+
+func (op *OpPOPCTR) Interpret(state *vm.State) error {
+	val, err := state.Stack.PopAny()
+	if err != nil {
+		return err
+	}
+	return setControlRegister(state, op.i, val)
 }
 
 func SETRETCTR(i int) (op *helpers.AdvancedOP) {
@@ -183,8 +269,8 @@ func SETRETCTR(i int) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("c%d SETRETCTR", i)
 		},
-		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x70}),
-		Prefixes:          controlRegisterPrefixes(0xED70),
+		BitPrefix:         setRetCtrBitPrefix,
+		Prefixes:          setRetCtrPrefixes,
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -211,8 +297,8 @@ func SETALTCTR(i int) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("c%d SETALTCTR", i)
 		},
-		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x80}),
-		Prefixes:          controlRegisterPrefixes(0xED80),
+		BitPrefix:         setAltCtrBitPrefix,
+		Prefixes:          setAltCtrPrefixes,
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -250,8 +336,8 @@ func POPSAVECTR(i int) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("c%d POPSAVE", i)
 		},
-		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0x90}),
-		Prefixes:          controlRegisterPrefixes(0xED90),
+		BitPrefix:         popSaveCtrBitPrefix,
+		Prefixes:          popSaveCtrPrefixes,
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -273,8 +359,8 @@ func SAVEALTCTR(i int) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("c%d SAVEALTCTR", i)
 		},
-		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0xB0}),
-		Prefixes:          controlRegisterPrefixes(0xEDB0),
+		BitPrefix:         saveAltCtrBitPrefix,
+		Prefixes:          saveAltCtrPrefixes,
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}
@@ -299,8 +385,8 @@ func SAVEBOTHCTR(i int) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("c%d SAVEBOTHCTR", i)
 		},
-		BitPrefix:         helpers.SlicePrefix(12, []byte{0xED, 0xC0}),
-		Prefixes:          controlRegisterPrefixes(0xEDC0),
+		BitPrefix:         saveBothCtrBitPrefix,
+		Prefixes:          saveBothCtrPrefixes,
 		SerializeSuffix:   serializeControlRegisterIndex(&i),
 		DeserializeSuffix: deserializeControlRegisterIndex(&i),
 	}

@@ -21,6 +21,13 @@ func init() {
 var (
 	pushIntPrefixed  = buildPushIntPrefixed()
 	pushIntBigIntOne = big.NewInt(1)
+
+	// pushIntSmallImmediates holds the tiny-form (0x70..0x7F) immediates -5..10,
+	// indexed by the low 4 bits of the prefix. Deserialize reuses these instead of
+	// allocating per decode; they must never be mutated. Interpret routes -5..10
+	// through PushSmallInt, which pushes the vm package statics, so these values
+	// never reach the stack.
+	pushIntSmallImmediates = buildPushIntSmallImmediates()
 )
 
 func buildPushIntPrefixed() helpers.Prefixed {
@@ -33,6 +40,14 @@ func buildPushIntPrefixed() helpers.Prefixed {
 		prefixes = append(prefixes, helpers.UIntPrefix(0x82<<5|i, 13))
 	}
 	return helpers.NewPrefixed(prefixes...)
+}
+
+func buildPushIntSmallImmediates() [16]*big.Int {
+	var vals [16]*big.Int
+	for i := range vals {
+		vals[i] = big.NewInt(int64(((i + 5) & 0xF) - 5))
+	}
+	return vals
 }
 
 func PUSHINT(value *big.Int) *OpPUSHINT {
@@ -50,7 +65,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 
 	switch prefix {
 	case 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f:
-		op.value = big.NewInt(int64(((prefix + 5) & 0xF) - 5))
+		op.value = pushIntSmallImmediates[prefix&0xF]
 		op.instructionBits = 8
 		return nil
 	case 0x80:

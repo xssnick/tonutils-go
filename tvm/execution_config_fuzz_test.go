@@ -74,8 +74,8 @@ func FuzzExecutionConfigGlobalVersionPerRunEntrypoints(f *testing.F) {
 }
 
 func TestExecutionConfigGlobalVersionValidatesRange(t *testing.T) {
-	unsupportedVersion := uint32(vm.MaxSupportedGlobalVersion + 1)
-	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: unsupportedVersion})
+	futureVersion := uint32(vm.MaxSupportedGlobalVersion + 1)
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: futureVersion})
 	if err != nil {
 		t.Fatalf("build global version cell: %v", err)
 	}
@@ -85,25 +85,26 @@ func TestExecutionConfigGlobalVersionValidatesRange(t *testing.T) {
 		t.Fatalf("store global version config param: %v", err)
 	}
 	root := dict.AsCell()
-	if _, err = PrepareBlockchainConfig(root); err == nil {
-		t.Fatalf("PrepareBlockchainConfig accepted unsupported global version %d", unsupportedVersion)
+
+	if !AllowHigherVersionExecUsingLatest {
+		t.Fatal("AllowHigherVersionExecUsingLatest default = false, want true")
 	}
 
-	t.Run("allow higher version clamps to latest", func(t *testing.T) {
-		testSetAllowHigherVersionExecUsingLatest(t, true)
+	cfg, err := PrepareBlockchainConfig(root)
+	if err != nil {
+		t.Fatalf("PrepareBlockchainConfig rejected future global version %d by default: %v", futureVersion, err)
+	}
+	if got := cfg.GlobalVersion(); got != uint32(vm.MaxSupportedGlobalVersion) {
+		t.Fatalf("prepared effective global version = %d, want %d", got, vm.MaxSupportedGlobalVersion)
+	}
 
-		cfg, err := PrepareBlockchainConfig(root)
-		if err != nil {
-			t.Fatalf("PrepareBlockchainConfig rejected allowed future global version %d: %v", unsupportedVersion, err)
-		}
-		if got := cfg.GlobalVersion(); got != uint32(vm.MaxSupportedGlobalVersion) {
-			t.Fatalf("prepared effective global version = %d, want %d", got, vm.MaxSupportedGlobalVersion)
+	t.Run("strict mode rejects future version", func(t *testing.T) {
+		testSetAllowHigherVersionExecUsingLatest(t, false)
+
+		if _, err = PrepareBlockchainConfig(root); err == nil {
+			t.Fatalf("PrepareBlockchainConfig accepted future global version %d in strict mode", futureVersion)
 		}
 	})
-
-	if _, err = PrepareBlockchainConfig(root); err == nil {
-		t.Fatalf("PrepareBlockchainConfig accepted unsupported global version %d after allow flag cleanup", unsupportedVersion)
-	}
 }
 
 func FuzzExecutionConfigSignatureCheckAlwaysSucceedRawEntrypoints(f *testing.F) {

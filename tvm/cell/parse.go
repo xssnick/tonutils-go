@@ -767,18 +767,11 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 
 		bitsSz := sz * 8
 		if int(ln)%2 != 0 {
-			last := payload[len(payload)-1]
-			terminatorBit := -1
-			for y := 0; y < 7; y++ {
-				if (last>>y)&1 == 1 {
-					terminatorBit = y
-					break
-				}
-			}
-			if terminatorBit < 0 {
+			decodedBits, ok := cellBodyBitsSizeFromLast(sz, payload[len(payload)-1])
+			if !ok {
 				return nil, nil, errors.New("overlong cell bits encoding")
 			}
-			bitsSz = (sz-1)*8 + 7 - terminatorBit
+			bitsSz = int(decodedBits)
 		}
 		bodyBytes := (bitsSz + 7) / 8
 

@@ -27,8 +27,8 @@ func MULRSHIFT() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			if err = requireFiniteInts(y, x); err != nil {
-				return err
+			if x == nil || y == nil {
+				return pushMaybeInt(state, legacyRShiftNaNResult(state.GlobalVersion, z.Uint64(), cppRoundFloor), false)
 			}
 
 			q, _ := helpers.DivFloor(x.Mul(x, y), z.Lsh(bigIntOne, uint(z.Uint64())))

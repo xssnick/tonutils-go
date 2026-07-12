@@ -24,6 +24,7 @@ type ADNL interface {
 	GetCloserCtx() context.Context
 	RemoteAddr() string
 	GetID() []byte
+	Stats() adnl.PeerStats
 	Close()
 }
 

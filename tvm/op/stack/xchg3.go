@@ -13,12 +13,18 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return xchg3Ext(0, 0, 0) })
 }
 
+// constant prefixes, computed once instead of on every decode
+var (
+	xchg3Prefix    = helpers.UIntPrefix(0x4, 4)
+	xchg3ExtPrefix = helpers.UIntPrefix(0x540, 12)
+)
+
 func XCHG3(i, j, k uint8) (op *helpers.AdvancedOP) {
-	return xchg3(helpers.UIntPrefix(0x4, 4), i, j, k)
+	return xchg3(xchg3Prefix, i, j, k)
 }
 
 func xchg3Ext(i, j, k uint8) *helpers.AdvancedOP {
-	return xchg3(helpers.UIntPrefix(0x540, 12), i, j, k)
+	return xchg3(xchg3ExtPrefix, i, j, k)
 }
 
 func xchg3(prefix helpers.BitPrefix, i, j, k uint8) (op *helpers.AdvancedOP) {

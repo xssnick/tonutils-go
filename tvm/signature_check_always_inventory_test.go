@@ -49,9 +49,9 @@ var expectedSignatureCheckAlwaysCoverageAnchors = map[string]signatureCheckAlway
 
 const (
 	expectedSignatureCheckAlwaysProductionTouchCount = 13
-	expectedSignatureCheckAlwaysProductionTouchHash  = "c19450bc4afadea545c8cd70241820cbe57d1c7462cc2135e22e0547d4f176ae"
+	expectedSignatureCheckAlwaysProductionTouchHash  = "1f0f1dbb7a1666e05b22c70be16b729c227191401552986c3b78afcf1658af97"
 	expectedSignatureCheckAlwaysStateWriterCount     = 2
-	expectedSignatureCheckAlwaysStateWriterHash      = "362178a87042e084f7cf70c2412e488f69c7393e77c93c9ddfafcefba8e3fa8f"
+	expectedSignatureCheckAlwaysStateWriterHash      = "35fc135f7c827dcb767d637c88c0c213b64e60d43ce61d0809fbc3c1ea7fbffb"
 )
 
 func TestTVMSignatureCheckAlwaysSucceedCoverageInventory(t *testing.T) {
@@ -126,7 +126,7 @@ func TestTVMSignatureCheckAlwaysSucceedStateWritersStayPerRun(t *testing.T) {
 func TestTVMSignatureCheckAlwaysSucceedStateWriterSourcesStayPerRun(t *testing.T) {
 	sources := signatureCheckAlwaysStateWriterSourceScopes(t)
 	want := []string{
-		"vm.go:func:executeWithOptions:state.SignatureCheckAlwaysSucceed=options.signatureCheckAlwaysSucceed",
+		"vm.go:func:executeState:state.SignatureCheckAlwaysSucceed=options.signatureCheckAlwaysSucceed",
 		"vm/state.go:func:prepareChildForRun:child.SignatureCheckAlwaysSucceed=s.SignatureCheckAlwaysSucceed",
 	}
 

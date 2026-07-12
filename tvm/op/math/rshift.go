@@ -21,7 +21,7 @@ func RSHIFT() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			x, err := popInt(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}

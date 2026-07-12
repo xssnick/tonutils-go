@@ -65,3 +65,13 @@ func (op *OpPUSHREF) Interpret(state *vm.State) error {
 func PUSHREFSLICE(value *cell.Slice) *OpPUSHREFSLICE {
 	return PUSHSLICE(value)
 }
+
+func beginPushRefCell(state *vm.State, ref *cell.Cell) (*cell.Slice, error) {
+	if !ref.IsLazy() && !ref.IsSpecial() {
+		if err := state.Cells.RegisterCellLoad(ref); err != nil {
+			return nil, err
+		}
+		return state.Cells.BeginParseAlreadyLoadedRaw(ref)
+	}
+	return state.Cells.BeginParse(ref)
+}

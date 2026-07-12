@@ -118,7 +118,7 @@ var expectedParityWitnessManifestExpectations = map[string]parityWitnessManifest
 	"requiredStackOpcodeSpaceGapCaseNames":  {40, "70689dd0a525c1f92a38f1f5aa95e8220fd200293b2fe5943e23b6eada77a69e"},
 	"requiredTonFuncGapCaseNames":           {61, "5896d8237e6110637cc6f3b51ff4d7cdf18ed81d5853c472e63167aef48d3e28"},
 	"requiredTonFuncRuntimeGapCaseNames":    {36, "e3de93a510f951967bba38515810f8ca72725c5f22e3c58033ec855b6102899b"},
-	"requiredTupleDynamicErrorGapCaseNames": {64, "bf62b52abce8b41114e2c3dc45de9a5f2036a14940af6b0bf3bc5696735169ac"},
+	"requiredTupleDynamicErrorGapCaseNames": {64, "b9916db25bbafcc139fa3736daffd0f3aa7a514b31db2974a8544adc3ba0698b"},
 	"requiredTupleGapCaseNames":             {7, "4947335e7c9372931320769db91024e5a8301e43c49a160f4a239a9daae20b2f"},
 	"requiredTupleGapTraceLabels":           {19, "2f677e5e9808661d9b9720d529b9692266584cb81d7955566b0b1b728fbc1e6d"},
 	"requiredTupleOpcodeSpaceGapCaseNames":  {38, "9f82cbfcc89f332c771cff09e4a9453e8a9a767f8fd1eacee87691baf412de60"},
@@ -4957,7 +4957,7 @@ var requiredTupleDynamicErrorGapCaseNames = []string{
 	"unpackfirstvar_short_stack_preserves_error",
 	"explodevar_short_stack_preserves_error",
 	"setindex_short_stack_preserves_error",
-	"setindexq_short_stack_consumes_value",
+	"setindexq_short_stack_preserves_value",
 	"setindexvar_short_stack_preserves_error",
 	"indexvarq_short_stack_nan_idx",
 	"setindexvarq_short_stack_nan_idx",
@@ -5397,8 +5397,20 @@ func TestTVMDifferentialFuzzMathImmediateGapOps(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			globalVersion := 0
 			switch tc.name {
-			case "lshift_code_nan_current", "qlshift_code_nan_current":
+			case "lshift_code_nan_current", "qlshift_code_nan_current", "rshift_code_nan_current":
+				// RSHIFTCODE/QRSHIFTCODE/LSHIFTCODE only gained NaN-preserving
+				// ("current") behavior at global version 14 (see
+				// legacyShiftNaNResultThreshold); pin explicitly so the reference
+				// side doesn't fall back to its bundled SUPPORTED_VERSION default.
 				globalVersion = 14
+			case "qrshift_code_nan_legacy":
+				// Exercises the pre-v14 legacy NaN-shift result. Pin to a version
+				// below the v14 threshold that is NOT referenceRawRunGlobalVersion
+				// (13), so differentialFuzzOptionalVersionRefConfig builds an
+				// explicit reference config instead of silently falling back to
+				// the raw harness path (whose implicit default now tracks the
+				// bundled reference binary's SUPPORTED_VERSION, not 13).
+				globalVersion = 12
 			}
 
 			runDifferentialFuzzCase(t, differentialFuzzCase{
@@ -5588,13 +5600,31 @@ func TestTVMDifferentialFuzzQuietMathErrorGapOps(t *testing.T) {
 
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// qaddrshiftmod_*_legacy_rangecheck exercise the pre-v14 legacy range-check
+			// error path (see the "state.GlobalVersion < 14" guard in qShrModFamily).
+			// Pin them to an explicit legacy version below that threshold instead of
+			// relying on the raw harness's implicit reference-side default, which now
+			// tracks the bundled reference binary's SUPPORTED_VERSION rather than 13.
+			// The version is threaded through the c7-embedded config (rather than
+			// refCfg) because this test already uses a non-empty raw c7.
+			c7 := prepareCrossTestC7(nil, testEmptyCell())
+			globalVersion := 0
+			switch tc.name {
+			case "qaddrshiftmod_shift_over_256_legacy_rangecheck", "qaddrshiftmod_nan_shift_legacy_rangecheck":
+				globalVersion = 12
+				c7 = prepareCrossTestC7WithConfigRoot(tonopsCrossConfigWithGlobalVersion(t, uint32(globalVersion)), testEmptyCell())
+			}
+
 			runDifferentialFuzzCase(t, differentialFuzzCase{
-				seed:   uint64(i),
-				family: "quiet_math_error_gap",
-				op:     tc.name,
-				code:   tc.code,
-				stack:  tc.stack,
-				c7:     prepareCrossTestC7(nil, testEmptyCell()),
+				seed:             uint64(i),
+				family:           "quiet_math_error_gap",
+				op:               tc.name,
+				code:             tc.code,
+				stack:            tc.stack,
+				c7:               c7,
+				globalVersion:    globalVersion,
+				hasGlobalVersion: globalVersion != 0,
+				rawC7Versioned:   globalVersion != 0,
 			})
 		})
 	}
@@ -11716,7 +11746,7 @@ func differentialFuzzC7FromRefConfig(t *testing.T, code *cell.Cell, cfg referenc
 		prevBlocks:     cfg.PrevBlocks,
 		unpackedConfig: messageUnpackedConfig(MessageEmulationConfig{Config: prepared, PrevBlocks: cfg.PrevBlocks}, cfg.Now),
 		globalVersion:  uint32(globalVersion),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("failed to build Go c7 from reference config: %v", err)
 	}
@@ -13015,7 +13045,12 @@ func newParityProgramGenerator(t *testing.T, r *rand.Rand) *parityProgramGenerat
 func parityProgramRichC7(t *testing.T) tuple.Tuple {
 	t.Helper()
 
+	// ConfigRoot embeds an explicit global version (referenceRawRunGlobalVersion) so
+	// the reference emulator's try_fetch_config_from_c7 resolves the same version Go
+	// uses for this family's raw (non-versioned) execution, instead of silently
+	// falling back to the bundled reference binary's SUPPORTED_VERSION default.
 	return makeTonopsTestC7(t, tonopsTestC7Config{
+		ConfigRoot:     tonopsCrossConfigWithGlobalVersion(t, uint32(referenceRawRunGlobalVersion)),
 		UnpackedConfig: parityProgramTonFuncUnpackedConfig(t),
 		ExtraParams: map[int]any{
 			13: tuple.NewTupleValue(big.NewInt(111), big.NewInt(222), big.NewInt(333)),

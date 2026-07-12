@@ -279,66 +279,75 @@ func matchLabelPrefix(sz uint, loader, key *Slice) (uint, uint, error) {
 	return uint(ln), matched, nil
 }
 
-func dictLabelSameBit(bits []byte, bitLen uint64) (uint64, bool) {
+func dictLabelSliceSameBit(data *Slice, bitLen uint) (uint64, bool, error) {
 	if bitLen == 0 {
-		return 0, true
+		return 0, true, nil
 	}
 
-	bit := uint64((bits[0] >> 7) & 1)
-	fullBytes := int(bitLen / 8)
-	if bit == 0 {
-		for _, b := range bits[:fullBytes] {
-			if b != 0 {
-				return 0, false
-			}
-		}
-	} else {
-		for _, b := range bits[:fullBytes] {
-			if b != 0xFF {
-				return 0, false
-			}
-		}
+	first, err := data.BitAt(0)
+	if err != nil {
+		return 0, false, err
 	}
-
-	if rem := bitLen % 8; rem != 0 {
-		mask := byte(0xFF << (8 - rem))
-		want := byte(0)
-		if bit == 1 {
-			want = mask
+	wantBit := first != 0
+	for offset := uint(0); offset < bitLen; {
+		chunk := min(uint(64), bitLen-offset)
+		value, err := preloadSliceUIntAt(data, offset, chunk)
+		if err != nil {
+			return 0, false, err
 		}
-		if bits[fullBytes]&mask != want {
-			return 0, false
+		if value != sameBitsValue(wantBit, chunk) {
+			return 0, false, nil
 		}
+		offset += chunk
 	}
-	return bit, true
+	return uint64(first), true, nil
 }
 
 func storeDictLabel(b *Builder, data *Slice, keyLen uint) error {
-	ln := uint64(data.BitsLeft())
+	ln := data.BitsLeft()
 	if ln == 0 {
 		return b.StoreUInt(0, 2)
 	}
 
-	bitsLen := uint64(dictLabelSizeBits(keyLen))
-	_, dataBits, err := data.RestBits()
-	if err != nil {
-		return err
-	}
+	bitsLen := dictLabelSizeBits(keyLen)
 
-	longLen := 2 + bitsLen + ln
-	shortLength := 2 + 2*ln
-	sameLength := 3 + bitsLen
+	longLen := uint(2) + bitsLen + ln
+	shortLength := uint(2) + 2*ln
+	sameLength := uint(3) + bitsLen
 
 	if sameLength < longLen && sameLength < shortLength {
-		if bit, same := dictLabelSameBit(dataBits, ln); same {
-			return storeDictSame(b, ln, bitsLen, bit)
+		bit, same, err := dictLabelSliceSameBit(data, ln)
+		if err != nil {
+			return err
+		}
+		if same {
+			if err = storeDictSame(b, uint64(ln), uint64(bitsLen), bit); err != nil {
+				return err
+			}
+			return data.SkipBits(ln)
 		}
 	}
 
 	if shortLength <= longLen {
-		return storeDictShort(b, ln, dataBits)
+		if err := b.StoreUInt(0, 1); err != nil {
+			return err
+		}
+		if err := b.StoreSameBit(true, ln); err != nil {
+			return err
+		}
+		if err := b.StoreUInt(0, 1); err != nil {
+			return err
+		}
+		return b.storeSliceFromSlice(data, ln)
 	}
-	return storeDictLong(b, ln, bitsLen, dataBits)
+
+	if err := b.StoreUInt(0b10, 2); err != nil {
+		return err
+	}
+	if err := b.StoreUInt(uint64(ln), bitsLen); err != nil {
+		return err
+	}
+	return b.storeSliceFromSlice(data, ln)
 }
 
 func storeDictNode(label *Slice, payload *Builder, keyLen uint) (*Cell, error) {
@@ -363,19 +372,6 @@ func storeDictNodeTraced(label *Slice, payload *Builder, keyLen uint, trace *Tra
 	return b.EndCellSpecial(false)
 }
 
-func storeDictShort(b *Builder, partSz uint64, bits []byte) error {
-	if err := b.StoreUInt(0b0, 1); err != nil {
-		return err
-	}
-	if err := b.StoreSameBit(true, uint(partSz)); err != nil {
-		return err
-	}
-	if err := b.StoreUInt(0, 1); err != nil {
-		return err
-	}
-	return b.StoreSlice(bits, uint(partSz))
-}
-
 func storeDictSame(b *Builder, partSz, bitsLen uint64, bit uint64) error {
 	if err := b.StoreUInt(0b11, 2); err != nil {
 		return err
@@ -384,14 +380,4 @@ func storeDictSame(b *Builder, partSz, bitsLen uint64, bit uint64) error {
 		return err
 	}
 	return b.StoreUInt(partSz, uint(bitsLen))
-}
-
-func storeDictLong(b *Builder, partSz, bitsLen uint64, bits []byte) error {
-	if err := b.StoreUInt(0b10, 2); err != nil {
-		return err
-	}
-	if err := b.StoreUInt(partSz, uint(bitsLen)); err != nil {
-		return err
-	}
-	return b.StoreSlice(bits, uint(partSz))
 }

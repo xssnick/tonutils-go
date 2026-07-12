@@ -39,23 +39,24 @@ func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int8) *he
 				return err
 			}
 
-			z, err := popInt(state)
+			z, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
 
 			var w *big.Int
 			if d == 0 {
-				w, err = popInt(state)
+				w, err = popIntRead(state)
 				if err != nil {
 					return err
 				}
 			}
 
-			x, err := popInt(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
+			x = legacyLeftShiftOperand(state.GlobalVersion, x, uint64(imm()))
 			if d == 0 {
 				if err = requireFiniteInts(z, w, x); err != nil {
 					return err

@@ -27,6 +27,16 @@ func TestCreateExtendedADNLInitializesHandlers(t *testing.T) {
 	}
 }
 
+func TestADNLWrapperExposesPeerStats(t *testing.T) {
+	m := newMockADNL()
+	m.stats.Inbound.Packets = 7
+
+	w := CreateExtendedADNL(m)
+	if got := w.Stats().Inbound.Packets; got != 7 {
+		t.Fatalf("inbound packets=%d want=7", got)
+	}
+}
+
 func TestADNLManagerQueryRouting(t *testing.T) {
 	m := newMockADNL()
 	w := CreateExtendedADNL(m)

@@ -496,14 +496,11 @@ func mustAugmentedCombineLabelNode(t *testing.T, prefix, visible string) *augmen
 	}
 
 	bitLen := uint(len(allBits))
-	data, err := b.ToSlice().LoadSlice(bitLen)
-	if err != nil {
-		t.Fatalf("failed to load label bits: %v", err)
-	}
+	label := b.ToSlice()
 
 	return &augmentedCombineNode{
 		view:     augmentedRootView{skip: uint(len(prefix))},
-		label:    augmentedLabel{bits: data, bitLen: bitLen},
+		label:    *label,
 		labelLen: bitLen,
 	}
 }

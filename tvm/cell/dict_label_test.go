@@ -130,7 +130,7 @@ func TestDictionary_LoadValueSameBitLabel(t *testing.T) {
 	}
 }
 
-func TestDictLabelSameBit(t *testing.T) {
+func TestDictLabelSliceSameBit(t *testing.T) {
 	tests := []struct {
 		name    string
 		bits    []byte
@@ -149,7 +149,12 @@ func TestDictLabelSameBit(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotBit, got := dictLabelSameBit(tc.bits, tc.bitLen)
+			cell := &Cell{data: tc.bits, bitsSz: uint16(tc.bitLen)}
+			slice := Slice{cell: cell, bitEnd: cell.bitsSz}
+			gotBit, got, err := dictLabelSliceSameBit(&slice, uint(tc.bitLen))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got != tc.want || gotBit != tc.wantBit {
 				t.Fatalf("got bit=%d same=%v, want bit=%d same=%v", gotBit, got, tc.wantBit, tc.want)
 			}

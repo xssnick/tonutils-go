@@ -36,6 +36,7 @@ type Peer interface {
 	RemoteAddr() string
 	GetID() []byte
 	GetPubKey() ed25519.PublicKey
+	Stats() PeerStats
 	Reinit()
 	Close()
 }
@@ -43,6 +44,8 @@ type Peer interface {
 type adnlClient interface {
 	Peer
 	processPacket(packet *PacketContent, fromChannel bool) (err error)
+	noteInboundPacket(size int)
+	noteInboundError(now time.Time)
 }
 
 type peerConn struct {
@@ -421,9 +424,11 @@ func (g *Gateway) listen(rootId []byte) {
 				atomic.StoreInt64(&cli.lastPacketAt, time.Now().UnixNano())
 				cli.checkUpdateAddr(pk.from)
 			}
+			cli.client.noteInboundPacket(pk.n)
 
 			err = cli.client.processPacket(packet, false)
 			if err != nil {
+				cli.client.noteInboundError(time.Now())
 				if Logger != nil {
 					Logger("failed to process ADNL packet",
 						"peer", hex.EncodeToString(peerId),
@@ -766,6 +771,10 @@ func (p *peerConn) Reinit() {
 
 func (p *peerConn) GetPubKey() ed25519.PublicKey {
 	return p.client.GetPubKey()
+}
+
+func (p *peerConn) Stats() PeerStats {
+	return p.client.Stats()
 }
 
 func (p *peerConn) SetCustomMessageHandler(handler func(msg *MessageCustom) error) {

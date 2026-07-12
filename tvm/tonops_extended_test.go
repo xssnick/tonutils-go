@@ -732,8 +732,8 @@ func TestTonOpsExtendedDataSizeVarintAddressAndMessages(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to pop STOPTSTDADDRQ restored value: %v", err)
 		}
-		restoredInt, ok := raw.(*big.Int)
-		if builder.BitsUsed() != 0 || builder.RefsUsed() != 0 || !ok || restoredInt.Int64() != 7 {
+		legacySlice, ok := raw.(*cell.Slice)
+		if builder.BitsUsed() != 0 || builder.RefsUsed() != 0 || !ok || legacySlice != nil {
 			t.Fatalf("unexpected STOPTSTDADDRQ restored values")
 		}
 
