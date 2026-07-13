@@ -64,6 +64,19 @@ type BOCParseOptions struct {
 	// MaxCells limits how many cells may be decoded from this BoC payload.
 	// Zero or a negative value uses the package-level MaxBOCCells limit.
 	MaxCells int
+
+	// refGraphSink, when set, captures the raw cell reference graph (indices
+	// into the flat parsed cell array) so a re-serialization can reuse it
+	// without rediscovering cell identity. Internal, incompatible with Lazy.
+	refGraphSink *bocRefGraphSink
+}
+
+// bocRefGraphSink collects the parsed BoC reference graph: graph[i] holds the
+// flat-array indices of cell i's references (edges always point forward), and
+// rootIndexes are the root positions in the same array.
+type bocRefGraphSink struct {
+	graph       [][4]int
+	rootIndexes []int
 }
 
 const (
@@ -450,6 +463,14 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 		return cll, nil, nil
 	}
 
+	if sink := options.refGraphSink; sink != nil {
+		sink.graph = make([][4]int, cellsNum)
+		sink.rootIndexes = make([]int, len(rootsIndex))
+		for i, idx := range rootsIndex {
+			sink.rootIndexes[i] = int(idx)
+		}
+	}
+
 	cll, unique, err := parseCells(rootsIndex, cellsNum, cellNumSizeBytes, dataLen, r, cellIndex, options)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse payload: %w", err)
@@ -759,6 +780,9 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 				}
 
 				cells[i].refs[y] = &cells[id]
+				if options.refGraphSink != nil {
+					options.refGraphSink.graph[i][y] = id
+				}
 				if cacheRefs != nil {
 					incBOCCacheRef(cacheRefs, id)
 				}
@@ -887,6 +911,9 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 			}
 
 			cells[i].refs[ref] = &cells[id]
+			if options.refGraphSink != nil {
+				options.refGraphSink.graph[i][ref] = id
+			}
 			if cacheRefs != nil {
 				incBOCCacheRef(cacheRefs, id)
 			}

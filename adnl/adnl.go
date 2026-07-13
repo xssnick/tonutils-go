@@ -1042,8 +1042,31 @@ func (a *ADNL) GetPubKey() ed25519.PublicKey {
 }
 
 func (a *ADNL) Reinit() {
+	tm := int32(time.Now().Unix())
+
+	// The advertised address list must carry the same reinit epoch as the
+	// packets: C++ overwrites the list's reinit date with the local epoch on
+	// every local list update (AdnlLocalId), and its update_addr_list drops
+	// any received list whose reinit date is older than the epoch it already
+	// learned from packet headers. Without this refresh a peer that saw our
+	// new packet epoch would reject every address list we send afterwards.
+	for {
+		current := (*address.List)(atomic.LoadPointer(&a.ourAddresses))
+		refreshed := address.CloneList(current)
+		if refreshed == nil {
+			refreshed = &address.List{}
+		}
+		refreshed.ReinitDate = tm
+		if refreshed.Version < tm {
+			refreshed.Version = tm
+		}
+		if atomic.CompareAndSwapPointer(&a.ourAddresses, unsafe.Pointer(current), unsafe.Pointer(refreshed)) {
+			break
+		}
+	}
+
 	atomic.StorePointer(&a.channelPtr, nil)
-	atomic.StoreInt32(&a.reinitTime, int32(time.Now().Unix()))
+	atomic.StoreInt32(&a.reinitTime, tm)
 	atomic.StoreInt32(&a.dstReinit, 0)
 	atomic.StoreInt64(&a.seqno, 0)
 	atomic.StoreInt64(&a.confirmSeqno, 0)

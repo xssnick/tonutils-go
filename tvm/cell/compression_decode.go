@@ -91,8 +91,8 @@ func (d *decompressDeferredHasher) flush() error {
 	}
 
 	workers := runtime.GOMAXPROCS(0)
-	if workers > 16 {
-		workers = 16
+	if workers > 8 {
+		workers = 8
 	}
 
 	var firstErr atomic.Pointer[error]
@@ -338,6 +338,38 @@ func DecompressBOCSerialized(data []byte, maxSize int, state *Cell, opts BOCSeri
 		return nil, nil, err
 	}
 	return graph.roots(), boc, nil
+}
+
+// ReserializeBOC parses a BoC and serializes the same cells with opts in one
+// go, feeding the serializer the parser's reference graph directly so the
+// generic per-cell hash-dedup import pass is skipped. For deduplicated inputs
+// (the only kind standard serializers produce) the output is byte-identical
+// to ToBOCWithOptions over the parsed roots; inputs carrying duplicate cells
+// keep their duplicates, so callers that verify an exact file hash should
+// fall back to ToBOCWithOptions on mismatch.
+func ReserializeBOC(data []byte, opts BOCSerializeOptions) ([]*Cell, []byte, error) {
+	sink := &bocRefGraphSink{}
+	roots, flat, err := parseBOCMultiRoot(NewBOCNoCopyReader(data), BOCParseOptions{refGraphSink: sink})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	nodes := make([]*Cell, len(flat))
+	refsCnt := make([]int, len(flat))
+	for i := range flat {
+		nodes[i] = &flat[i]
+		refsCnt[i] = flat[i].refsCount()
+	}
+	boc, err := serializeDecompressedGraph(&decompressedBOCGraph{
+		nodes:       nodes,
+		graph:       sink.graph,
+		refsCnt:     refsCnt,
+		rootIndexes: sink.rootIndexes,
+	}, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	return roots, boc, nil
 }
 
 // serializeDecompressedGraph builds the BoC serializer cell list straight
