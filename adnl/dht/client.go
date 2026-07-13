@@ -242,7 +242,7 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 
 	var currentVersion int32
 	if existing := bucket.findNode(kid); existing != nil {
-		currentVersion = existing.version
+		currentVersion = existing.snapshot().version
 	}
 	if err := node.validate(currentVersion, c.networkID); err != nil {
 		return nil, err
@@ -260,7 +260,8 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 	}
 
 	if hf := bucket.findNode(kid); hf != nil {
-		if hf.addr == addr && hf.version == node.Version {
+		snapshot := hf.snapshot()
+		if snapshot.addr == addr && snapshot.version == node.Version {
 			return nil, fmt.Errorf("node already exists")
 		}
 		// updated address otherwise

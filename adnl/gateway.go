@@ -51,6 +51,7 @@ type adnlClient interface {
 type peerConn struct {
 	addr         unsafe.Pointer
 	channelId    string
+	channel      *Channel
 	clientId     string
 	lastPacketAt int64
 	pendingElem  *list.Element
@@ -80,6 +81,7 @@ func (p *peerConn) SendNop(ctx context.Context) error {
 
 type srvProcessor struct {
 	lastPacketAt int64
+	channel      *Channel
 	processor    func(buf []byte) error
 	closer       func()
 }
@@ -651,7 +653,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 	// setup basic disconnect handler to auto-cleanup processors list
 	peer.SetDisconnectHandler(nil)
 
-	a.SetChannelReadyHandler(func(ch *Channel) {
+	a.channelReady = func(ch *Channel) {
 		chID := string(ch.id)
 
 		g.mx.Lock()
@@ -661,26 +663,53 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 		}
 
 		oldId := peer.channelId
+		oldChannel := peer.channel
 		peer.channelId = chID
+		peer.channel = ch
 		g.removePendingPeerLocked(peer)
 
-		if oldId != "" {
-			delete(g.processors, oldId)
-
-			if g.onChannelClose != nil {
-				g.onChannelClose(oldId)
+		closedOld := false
+		if oldId != "" && oldChannel != ch {
+			if processor := g.processors[oldId]; processor != nil && processor.channel == oldChannel {
+				delete(g.processors, oldId)
+				closedOld = true
 			}
 		}
 		g.processors[chID] = &srvProcessor{
 			processor:    ch.process,
+			channel:      ch,
 			lastPacketAt: time.Now().Unix(),
 			closer:       ch.adnl.Close,
+		}
+		if closedOld && g.onChannelClose != nil {
+			g.onChannelClose(oldId)
 		}
 		if g.onChannelOpen != nil {
 			g.onChannelOpen(ch)
 		}
 		g.mx.Unlock()
-	})
+	}
+	a.channelClosed = func(ch *Channel) {
+		chID := string(ch.id)
+
+		g.mx.Lock()
+		if g.peers[peer.clientId] != peer || peer.channel != ch {
+			g.mx.Unlock()
+			return
+		}
+
+		peer.channelId = ""
+		peer.channel = nil
+		processor := g.processors[chID]
+		closed := processor != nil && processor.channel == ch
+		if closed {
+			delete(g.processors, chID)
+		}
+		if closed && g.onChannelClose != nil {
+			g.onChannelClose(chID)
+		}
+		g.mx.Unlock()
+	}
 
 	connHandler := atomic.LoadPointer(&g.connHandler)
 	g.mx.Unlock()
@@ -790,9 +819,12 @@ func (p *peerConn) SetDisconnectHandler(handler func(addr string, key ed25519.Pu
 		p.server.mx.Lock()
 		p.server.removePendingPeerLocked(p)
 		delete(p.server.peers, p.clientId)
-		if p.channelId != "" {
-			_, ok := p.server.processors[p.channelId]
-			delete(p.server.processors, p.channelId)
+		if p.channelId != "" && p.channel != nil {
+			processor := p.server.processors[p.channelId]
+			ok := processor != nil && processor.channel == p.channel
+			if ok {
+				delete(p.server.processors, p.channelId)
+			}
 			if ok && p.server.onChannelClose != nil {
 				p.server.onChannelClose(p.channelId)
 			}

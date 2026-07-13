@@ -1008,9 +1008,7 @@ func TestServer_HandleQuery_StoreRejectsTooLargeTTL(t *testing.T) {
 }
 
 func TestServer_ShouldStoreLocallyMatchesCppRule(t *testing.T) {
-	server := newTestServer(t)
-	defer server.Close()
-	server.k = 2
+	server := &Server{Client: &Client{k: 2}}
 
 	keyID := make([]byte, 32)
 	id := func(v byte) []byte {

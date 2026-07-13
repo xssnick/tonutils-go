@@ -191,6 +191,97 @@ func TestNode_findNodes(t *testing.T) {
 	})
 }
 
+type signedAddressListCallResult struct {
+	node *Node
+	err  error
+}
+
+func TestNode_getSignedAddressListUsesQueriedSnapshot(t *testing.T) {
+	oldKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := newCorrectNodeWithVersion(1, 2, 3, 4, 12345, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queryStarted := make(chan struct{})
+	releaseQuery := make(chan struct{})
+	gateway := &MockGateway{}
+	node := &dhtNode{
+		addr:      "old-address",
+		serverKey: oldKey,
+		version:   1,
+		client: &Client{
+			gateway:   gateway,
+			networkID: _UnknownNetworkID,
+		},
+	}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		if addr != "old-address" {
+			return nil, fmt.Errorf("queried address %q, want old-address", addr)
+		}
+		if !bytes.Equal(peerKey, oldKey) {
+			return nil, fmt.Errorf("queried unexpected server key")
+		}
+
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				close(queryStarted)
+				select {
+				case <-releaseQuery:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*response))
+				return nil
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan signedAddressListCallResult, 1)
+	go func() {
+		res, queryErr := node.getSignedAddressList(ctx)
+		result <- signedAddressListCallResult{node: res, err: queryErr}
+	}()
+
+	select {
+	case <-queryStarted:
+	case res := <-result:
+		t.Fatalf("query finished before starting: %v", res.err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	node.absorb(&dhtNode{
+		addr:      "new-address",
+		serverKey: newKey,
+		version:   response.Version,
+		node:      response,
+	})
+	close(releaseQuery)
+
+	select {
+	case res := <-result:
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if !reflect.DeepEqual(res.node, response) {
+			t.Fatal("unexpected signed address list response")
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
 func TestNode_CheckSignatureExtendedNetworkID(t *testing.T) {
 	node, err := newCorrectNode(1, 2, 3, 4, 12345)
 	if err != nil {

@@ -54,6 +54,25 @@ type CustomMessageHandler func(msg *MessageCustom) error
 type QueryHandler func(msg *MessageQuery) error
 type DisconnectHandler func(addr string, key ed25519.PublicKey)
 
+type channelLifecycleHandler func(ch *Channel)
+
+type inboundPacketState struct {
+	localReinit      int32
+	lifecycleVersion uint64
+	channel          *Channel
+}
+
+type packetPreparation struct {
+	state         inboundPacketState
+	respondReinit bool
+	stop          bool
+}
+
+type lifecycleMessageResult struct {
+	notify func()
+	stale  bool
+}
+
 type PacketWriter interface {
 	Write(b []byte, deadline time.Time) (n int, err error)
 	Close() error
@@ -100,13 +119,20 @@ type ADNL struct {
 	queryHandler         unsafe.Pointer // QueryHandler
 	onDisconnect         unsafe.Pointer // DisconnectHandler
 	onChannel            func(ch *Channel)
+	channelReady         channelLifecycleHandler
+	channelClosed        channelLifecycleHandler
 
-	mx sync.RWMutex
+	lifecycleMx      sync.RWMutex
+	lifecycleVersion uint64
+	mx               sync.RWMutex
 
 	stats *peerStats
 }
 
 var Logger func(v ...any)
+
+var errStaleChannel = errors.New("stale ADNL channel")
+var errStaleInboundPacket = errors.New("stale ADNL inbound packet")
 
 func (g *Gateway) initADNL() *ADNL {
 	now := time.Now()
@@ -156,9 +182,8 @@ func (a *ADNL) GetCloserCtx() context.Context {
 }
 
 func (c *Channel) process(buf []byte) error {
-	if c.wantConfirm.Load() {
-		// we got message in channel, no more confirmations required
-		c.wantConfirm.Store(false)
+	if !c.adnl.isCurrentChannel(c) {
+		return nil
 	}
 
 	data, err := c.decodePacket(buf)
@@ -172,22 +197,108 @@ func (c *Channel) process(buf []byte) error {
 		c.adnl.noteInboundError(time.Now())
 		return fmt.Errorf("failed to parse packet: %w", err)
 	}
-	c.adnl.noteInboundPacket(len(buf) + 32)
 
-	err = c.adnl.processPacket(packet, true)
+	err = c.adnl.processChannelPacket(c, packet, len(buf)+32)
 	if err != nil {
+		if errors.Is(err, errStaleChannel) {
+			return nil
+		}
 		c.adnl.noteInboundError(time.Now())
 		return fmt.Errorf("failed to process packet: %w", err)
 	}
 	return nil
 }
 
-func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error) {
+func (a *ADNL) isCurrentChannel(ch *Channel) bool {
+	a.lifecycleMx.RLock()
+	current := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+	valid := current == ch && ch.ready.Load()
+	a.lifecycleMx.RUnlock()
+
+	return valid
+}
+
+func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) error {
+	return a.processInboundPacket(packet, fromChannel, nil, 0)
+}
+
+func (a *ADNL) processChannelPacket(ch *Channel, packet *PacketContent, packetSize int) error {
+	return a.processInboundPacket(packet, true, ch, packetSize)
+}
+
+func (a *ADNL) processInboundPacket(packet *PacketContent, fromChannel bool, ch *Channel, packetSize int) error {
+	a.lifecycleMx.Lock()
+	if ch != nil {
+		current := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+		if current != ch || !ch.ready.Load() {
+			a.lifecycleMx.Unlock()
+			return errStaleChannel
+		}
+
+		ch.wantConfirm.Store(false)
+		a.noteInboundPacket(packetSize)
+	}
 	a.noteReceivedPacket()
 
+	preparation, err := a.preparePacketLocked(packet, fromChannel, ch)
+	a.lifecycleMx.Unlock()
+	if err != nil {
+		return err
+	}
+
+	if preparation.respondReinit {
+		a.lifecycleMx.RLock()
+		seqno := atomic.AddInt64(&a.seqno, 1)
+		buf, buildErr := a.createPacketWithOptions(seqno, rootPacketOptions{
+			forceAddress:          true,
+			resetPeerAddrVersions: true,
+		}, MessageNop{})
+		a.lifecycleMx.RUnlock()
+		if buildErr != nil {
+			return fmt.Errorf("failed to create packet: %w", buildErr)
+		}
+		if err = a.send(buf); err != nil {
+			return fmt.Errorf("failed to send ping reinit: %w", err)
+		}
+	}
+	if preparation.stop {
+		return nil
+	}
+
+	for i, message := range packet.Messages {
+		if isLifecycleMessage(message) {
+			result, msgErr := a.processLifecycleMessage(&preparation.state, message)
+			if result.notify != nil {
+				result.notify()
+			}
+			if result.stale {
+				return nil
+			}
+			if msgErr != nil {
+				return fmt.Errorf("failed to process message %d %s: %v", i, reflect.TypeOf(message), msgErr)
+			}
+			continue
+		}
+
+		if !a.inboundStateCurrent(&preparation.state) {
+			return nil
+		}
+		if err = a.processMessageWithState(&preparation.state, message); errors.Is(err, errStaleInboundPacket) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("failed to process message %d %s: %v", i, reflect.TypeOf(message), err)
+		}
+	}
+
+	return nil
+}
+
+func (a *ADNL) preparePacketLocked(packet *PacketContent, fromChannel bool, ch *Channel) (packetPreparation, error) {
+	preparation := packetPreparation{}
+
 	if !fromChannel && packet.From != nil {
-		if err = a.learnPeerSource(packet.From.Key); err != nil {
-			return err
+		if err := a.learnPeerSource(packet.From.Key); err != nil {
+			return preparation, err
 		}
 	}
 
@@ -201,7 +312,8 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 				"our_reinit", ourReinit,
 			)
 		}
-		return nil
+		preparation.stop = true
+		return preparation, nil
 	}
 	if packet.ReinitDate != nil && *packet.ReinitDate > int32(time.Now().Unix()+60) {
 		if Logger != nil {
@@ -211,10 +323,11 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 				"packet_dst_reinit", packet.DstReinitDateValue(),
 			)
 		}
-		return nil
+		preparation.stop = true
+		return preparation, nil
 	}
 	if packet.ReinitDate != nil && *packet.ReinitDate > atomic.LoadInt32(&a.dstReinit) {
-		a.applyPeerReinit(*packet.ReinitDate)
+		a.applyPeerReinitLocked(*packet.ReinitDate)
 	}
 	if packet.ReinitDate != nil && *packet.ReinitDate > 0 && *packet.ReinitDate < atomic.LoadInt32(&a.dstReinit) {
 		if Logger != nil {
@@ -224,7 +337,8 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 				"peer_reinit", atomic.LoadInt32(&a.dstReinit),
 			)
 		}
-		return nil
+		preparation.stop = true
+		return preparation, nil
 	}
 
 	if packet.DstReinitDate != nil && *packet.DstReinitDate > 0 && *packet.DstReinitDate < atomic.LoadInt32(&a.reinitTime) {
@@ -236,24 +350,15 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 				"our_reinit", atomic.LoadInt32(&a.reinitTime),
 			)
 		}
-		if packet.ReinitDate != nil {
+		if packet.ReinitDate != nil && atomic.LoadInt32(&a.dstReinit) != *packet.ReinitDate {
 			atomic.StoreInt32(&a.dstReinit, *packet.ReinitDate)
+			a.lifecycleVersion++
 		}
 		a.notePeerAddressList(packet)
 
-		seqno := atomic.AddInt64(&a.seqno, 1)
-		buf, err := a.createPacketWithOptions(seqno, rootPacketOptions{
-			forceAddress:          true,
-			resetPeerAddrVersions: true,
-		}, MessageNop{})
-		if err != nil {
-			return fmt.Errorf("failed to create packet: %w", err)
-		}
-		if err = a.send(buf); err != nil {
-			return fmt.Errorf("failed to send ping reinit: %w", err)
-		}
-
-		return nil
+		preparation.respondReinit = true
+		preparation.stop = true
+		return preparation, nil
 	}
 
 	var seqno int64
@@ -264,7 +369,7 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 		atomicMaxInt64(&a.stats.peerConfirmSeqno, *packet.ConfirmSeqno)
 	}
 
-	for { // to guarantee swap to highest
+	for {
 		if conf := atomic.LoadInt64(&a.confirmSeqno); seqno > conf {
 			if !atomic.CompareAndSwapInt64(&a.confirmSeqno, conf, seqno) {
 				continue
@@ -276,17 +381,193 @@ func (a *ADNL) processPacket(packet *PacketContent, fromChannel bool) (err error
 	a.noteAddressListVersions(packet)
 	a.notePeerAddressList(packet)
 
-	for i, message := range packet.Messages {
-		err = a.processMessage(message)
+	preparation.state = inboundPacketState{
+		localReinit:      atomic.LoadInt32(&a.reinitTime),
+		lifecycleVersion: a.lifecycleVersion,
+	}
+	if ch != nil {
+		preparation.state.channel = (*Channel)(atomic.LoadPointer(&a.channelPtr))
+	}
+
+	return preparation, nil
+}
+
+func (a *ADNL) inboundStateCurrent(state *inboundPacketState) bool {
+	a.lifecycleMx.RLock()
+	current := a.inboundStateCurrentLocked(state)
+	a.lifecycleMx.RUnlock()
+
+	return current
+}
+
+func (a *ADNL) inboundStateCurrentLocked(state *inboundPacketState) bool {
+	if atomic.LoadInt32(&a.reinitTime) != state.localReinit || a.lifecycleVersion != state.lifecycleVersion {
+		return false
+	}
+	if state.channel != nil && (*Channel)(atomic.LoadPointer(&a.channelPtr)) != state.channel {
+		return false
+	}
+
+	return true
+}
+
+func (a *ADNL) processLifecycleMessage(state *inboundPacketState, message any) (lifecycleMessageResult, error) {
+	result := lifecycleMessageResult{}
+
+	a.lifecycleMx.Lock()
+	if state != nil && !a.inboundStateCurrentLocked(state) {
+		result.stale = true
+		a.lifecycleMx.Unlock()
+		return result, nil
+	}
+
+	var err error
+	switch ms := message.(type) {
+	case MessageCreateChannel:
+		result.notify, err = a.processCreateChannelLocked(ms)
+	case MessageConfirmChannel:
+		result.notify, err = a.processConfirmChannelLocked(ms)
+	case MessageReinit:
+		a.applyPeerReinitLocked(ms.Date)
+	}
+
+	if err == nil && state != nil {
+		state.localReinit = atomic.LoadInt32(&a.reinitTime)
+		state.lifecycleVersion = a.lifecycleVersion
+		if state.channel != nil {
+			state.channel = (*Channel)(atomic.LoadPointer(&a.channelPtr))
+		}
+	}
+	a.lifecycleMx.Unlock()
+
+	return result, err
+}
+
+func (a *ADNL) processCreateChannelLocked(ms MessageCreateChannel) (func(), error) {
+	a.mx.Lock()
+	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+
+	var err error
+	var key ed25519.PrivateKey
+	initDate := int32(time.Now().Unix())
+	if ch != nil {
+		if bytes.Equal(ch.peerKey, ms.Key) {
+			a.mx.Unlock()
+			return nil, nil
+		}
+		if ch.peerDate > 0 && ms.Date <= ch.peerDate {
+			a.mx.Unlock()
+			return nil, nil
+		}
+		key = ch.key
+		initDate = ch.initDate
+	} else {
+		_, key, err = ed25519.GenerateKey(nil)
 		if err != nil {
-			return fmt.Errorf("failed to process message %d %s: %v", i, reflect.TypeOf(message), err)
+			a.mx.Unlock()
+			return nil, err
 		}
 	}
 
-	return nil
+	newChan := &Channel{
+		adnl:     a,
+		key:      key,
+		initDate: initDate,
+		peerDate: ms.Date,
+	}
+	newChan.wantConfirm.Store(true)
+	if err = newChan.setup(ms.Key); err != nil {
+		a.mx.Unlock()
+		return nil, fmt.Errorf("failed to setup channel: %w", err)
+	}
+
+	atomic.StorePointer(&a.channelPtr, unsafe.Pointer(newChan))
+	a.lifecycleVersion++
+	onChannel := a.onChannel
+	a.mx.Unlock()
+
+	return a.channelPublishedLocked(ch, newChan, onChannel), nil
+}
+
+func (a *ADNL) processConfirmChannelLocked(ms MessageConfirmChannel) (func(), error) {
+	a.mx.Lock()
+	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+
+	if ch == nil || !bytes.Equal(ch.key.Public().(ed25519.PublicKey), ms.PeerKey) {
+		a.mx.Unlock()
+		return nil, fmt.Errorf("confirmation for unknown channel %s", hex.EncodeToString(ms.PeerKey))
+	}
+	if bytes.Equal(ch.peerKey, ms.Key) && ch.ready.Load() {
+		a.mx.Unlock()
+		return nil, nil
+	}
+	if !bytes.Equal(ch.peerKey, ms.Key) && ch.peerDate > 0 && ms.Date <= ch.peerDate {
+		a.mx.Unlock()
+		return nil, nil
+	}
+
+	newChan := &Channel{
+		adnl:     a,
+		key:      ch.key,
+		initDate: ch.initDate,
+		peerDate: ms.Date,
+	}
+	if err := newChan.setup(ms.Key); err != nil {
+		a.mx.Unlock()
+		return nil, fmt.Errorf("failed to setup channel: %w", err)
+	}
+
+	atomic.StorePointer(&a.channelPtr, unsafe.Pointer(newChan))
+	a.lifecycleVersion++
+	onChannel := a.onChannel
+	a.mx.Unlock()
+
+	return a.channelPublishedLocked(ch, newChan, onChannel), nil
+}
+
+func (a *ADNL) channelPublishedLocked(old, current *Channel, onChannel func(ch *Channel)) func() {
+	if old != nil && old.ready.Load() && a.channelClosed != nil {
+		a.channelClosed(old)
+	}
+	if a.channelReady != nil {
+		a.channelReady(current)
+	}
+	if onChannel == nil {
+		return nil
+	}
+
+	return func() {
+		if a.isCurrentChannel(current) {
+			onChannel(current)
+		}
+	}
+}
+
+func isLifecycleMessage(message any) bool {
+	switch message.(type) {
+	case MessageCreateChannel, MessageConfirmChannel, MessageReinit:
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *ADNL) processMessage(message any) error {
+	return a.processMessageWithState(nil, message)
+}
+
+func (a *ADNL) processMessageWithState(state *inboundPacketState, message any) error {
+	if isLifecycleMessage(message) {
+		result, err := a.processLifecycleMessage(state, message)
+		if result.notify != nil {
+			result.notify()
+		}
+		if result.stale {
+			return errStaleInboundPacket
+		}
+		return err
+	}
+
 	switch ms := message.(type) {
 	case MessagePong:
 		a.pingMx.RLock()
@@ -322,85 +603,6 @@ func (a *ADNL) processMessage(message any) error {
 	case MessageAnswer:
 		a.tryRespondWithNop()
 		a.processAnswer(ms.ID, ms.Data)
-	case MessageCreateChannel:
-		a.mx.Lock()
-		defer a.mx.Unlock()
-
-		ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
-
-		var err error
-		var key ed25519.PrivateKey
-		initDate := int32(time.Now().Unix())
-		if ch != nil {
-			if bytes.Equal(ch.peerKey, ms.Key) {
-				// already initialized on our side, but client missed confirmation,
-				// channel is already known, so more confirmations will be sent in the next packets
-				return nil
-			}
-			if ch.peerDate > 0 && ms.Date <= ch.peerDate {
-				return nil
-			}
-			// looks like channel was lost on the other side, we will reinit it
-			key = ch.key
-			initDate = ch.initDate
-		} else {
-			_, key, err = ed25519.GenerateKey(nil)
-			if err != nil {
-				return err
-			}
-		}
-
-		newChan := &Channel{
-			adnl:     a,
-			key:      key,
-			initDate: initDate,
-			peerDate: ms.Date,
-		}
-		newChan.wantConfirm.Store(true)
-
-		if err = newChan.setup(ms.Key); err != nil {
-			return fmt.Errorf("failed to setup channel: %w", err)
-		}
-
-		atomic.StorePointer(&a.channelPtr, unsafe.Pointer(newChan))
-	case MessageConfirmChannel:
-		a.mx.Lock()
-		defer a.mx.Unlock()
-
-		ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
-
-		if ch == nil || !bytes.Equal(ch.key.Public().(ed25519.PublicKey), ms.PeerKey) {
-			return fmt.Errorf("confirmation for unknown channel %s", hex.EncodeToString(ms.PeerKey))
-		}
-
-		if bytes.Equal(ch.peerKey, ms.Key) && ch.ready.Load() {
-			// not required confirmation, skip it
-			return nil
-		}
-		if !bytes.Equal(ch.peerKey, ms.Key) && ch.peerDate > 0 && ms.Date <= ch.peerDate {
-			return nil
-		}
-
-		if !bytes.Equal(ch.peerKey, ms.Key) {
-			newChan := &Channel{
-				adnl:     a,
-				key:      ch.key,
-				initDate: ch.initDate,
-				peerDate: ms.Date,
-			}
-			if err := newChan.setup(ms.Key); err != nil {
-				return fmt.Errorf("failed to setup channel: %w", err)
-			}
-			atomic.StorePointer(&a.channelPtr, unsafe.Pointer(newChan))
-			return nil
-		}
-
-		ch.peerDate = ms.Date
-		if err := ch.setup(ms.Key); err != nil {
-			return fmt.Errorf("failed to setup channel: %w", err)
-		}
-	case MessageReinit:
-		a.applyPeerReinit(ms.Date)
 	case MessagePart:
 		a.tryRespondWithNop()
 		msgID := string(ms.Hash)
@@ -457,7 +659,7 @@ func (a *ADNL) processMessage(message any) error {
 				return fmt.Errorf("message part cant be inside another part")
 			}
 
-			err = a.processMessage(msg)
+			err = a.processMessageWithState(state, msg)
 			if err != nil {
 				return fmt.Errorf("failed to process message built from parts: %w", err)
 			}
@@ -502,42 +704,38 @@ func (a *ADNL) learnPeerSource(key ed25519.PublicKey) error {
 	return nil
 }
 
-func (a *ADNL) applyPeerReinit(date int32) {
+func (a *ADNL) applyPeerReinitLocked(date int32) {
 	if date <= 0 {
 		return
 	}
 
-	for {
-		current := atomic.LoadInt32(&a.dstReinit)
-		if current >= date {
-			return
-		}
-		if !atomic.CompareAndSwapInt32(&a.dstReinit, current, date) {
-			continue
-		}
-		break
+	if atomic.LoadInt32(&a.dstReinit) >= date {
+		return
 	}
+	atomic.StoreInt32(&a.dstReinit, date)
 
-	a.resetChannelAfterPeerReinit()
+	a.mx.Lock()
+	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+	if ch != nil {
+		pending := &Channel{
+			adnl:     a,
+			key:      ch.key,
+			initDate: ch.initDate,
+		}
+		atomic.StorePointer(&a.channelPtr, unsafe.Pointer(pending))
+	}
+	a.mx.Unlock()
+
+	a.lifecycleVersion++
 	atomic.StoreInt64(&a.confirmSeqno, 0)
 	a.stats.peerConfirmSeqno.Store(0)
 	atomic.StoreInt32(&a.ourAddrVerOnPeerSide, 0)
 	atomic.StoreInt32(&a.ourPriorityAddrVerOnPeerSide, 0)
 	a.stats.notePeerReinit(time.Now())
-}
 
-func (a *ADNL) resetChannelAfterPeerReinit() {
-	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
-	if ch == nil {
-		return
+	if ch != nil && ch.ready.Load() && a.channelClosed != nil {
+		a.channelClosed(ch)
 	}
-
-	pending := &Channel{
-		adnl:     a,
-		key:      ch.key,
-		initDate: ch.initDate,
-	}
-	atomic.StorePointer(&a.channelPtr, unsafe.Pointer(pending))
 }
 
 func (a *ADNL) noteAddressListVersions(packet *PacketContent) {
@@ -611,7 +809,9 @@ func (a *ADNL) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
 }
 
 func (a *ADNL) SetChannelReadyHandler(handler func(ch *Channel)) {
+	a.mx.Lock()
 	a.onChannel = handler
+	a.mx.Unlock()
 }
 
 func (a *ADNL) RemoteAddr() string {
@@ -890,8 +1090,12 @@ func (a *ADNL) buildRequestMaySplit(req tl.Serializable, useBase bool) (packet [
 }
 
 func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
-	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
+	a.lifecycleMx.RLock()
+	defer a.lifecycleMx.RUnlock()
+
 	seqno := atomic.AddInt64(&a.seqno, 1)
+
+	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
 	channelReady := ch != nil && ch.ready.Load()
 	forceRoot := false
 	rootOpts := rootPacketOptions{}
@@ -932,18 +1136,22 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 
 	// if it is not exists, we will create it,
 	if ch == nil {
-		_, key, err := ed25519.GenerateKey(nil)
-		if err != nil {
-			return nil, err
-		}
-
 		a.mx.Lock()
-		ch = &Channel{
-			adnl:     a,
-			key:      key,
-			initDate: int32(time.Now().Unix()),
+		ch = (*Channel)(atomic.LoadPointer(&a.channelPtr))
+		if ch == nil {
+			_, key, keyErr := ed25519.GenerateKey(nil)
+			if keyErr != nil {
+				a.mx.Unlock()
+				return nil, keyErr
+			}
+
+			ch = &Channel{
+				adnl:     a,
+				key:      key,
+				initDate: int32(time.Now().Unix()),
+			}
+			atomic.StorePointer(&a.channelPtr, unsafe.Pointer(ch))
 		}
-		atomic.StorePointer(&a.channelPtr, unsafe.Pointer(ch))
 		a.mx.Unlock()
 	}
 
@@ -1042,7 +1250,13 @@ func (a *ADNL) GetPubKey() ed25519.PublicKey {
 }
 
 func (a *ADNL) Reinit() {
+	a.lifecycleMx.Lock()
 	tm := int32(time.Now().Unix())
+	if current := atomic.LoadInt32(&a.reinitTime); tm <= current {
+		// Resetting seqnos without advancing the epoch makes the peer reject
+		// the new low seqnos as duplicates.
+		tm = current + 1
+	}
 
 	// The advertised address list must carry the same reinit epoch as the
 	// packets: C++ overwrites the list's reinit date with the local epoch on
@@ -1065,7 +1279,12 @@ func (a *ADNL) Reinit() {
 		}
 	}
 
+	a.mx.Lock()
+	ch := (*Channel)(atomic.LoadPointer(&a.channelPtr))
 	atomic.StorePointer(&a.channelPtr, nil)
+	a.mx.Unlock()
+
+	a.lifecycleVersion++
 	atomic.StoreInt32(&a.reinitTime, tm)
 	atomic.StoreInt32(&a.dstReinit, 0)
 	atomic.StoreInt64(&a.seqno, 0)
@@ -1076,6 +1295,11 @@ func (a *ADNL) Reinit() {
 	atomic.StoreInt64(&a.dropAddrListAt, 0)
 	atomic.StoreInt32(&a.ourAddrVerOnPeerSide, 0)
 	atomic.StoreInt32(&a.ourPriorityAddrVerOnPeerSide, 0)
+
+	if ch != nil && ch.ready.Load() && a.channelClosed != nil {
+		a.channelClosed(ch)
+	}
+	a.lifecycleMx.Unlock()
 }
 
 type rootPacketOptions struct {

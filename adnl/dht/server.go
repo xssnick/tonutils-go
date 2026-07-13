@@ -440,7 +440,7 @@ func (s *Server) queryNode(ctx context.Context, node *dhtNode, req tl.Serializab
 	ctxQuery, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 
-	if err = node.query(ctxQuery, tl.Raw(payload), &res); err != nil {
+	if _, err = node.query(ctxQuery, tl.Raw(payload), &res); err != nil {
 		return nil, err
 	}
 	return res, nil
@@ -693,10 +693,14 @@ func (s *Server) getNearestNodes(key []byte, k int) []*Node {
 		}
 
 		for _, node := range nodes {
-			if node == nil || node.node == nil {
+			if node == nil {
 				continue
 			}
-			result = append(result, node.asNode())
+			exported := node.asNode()
+			if exported == nil {
+				continue
+			}
+			result = append(result, exported)
 			if len(result) >= k {
 				return
 			}

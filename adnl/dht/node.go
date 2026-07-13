@@ -42,7 +42,14 @@ type dhtNode struct {
 	failedFrom  int64
 	pingEvery   int64
 
-	mx sync.Mutex
+	mx sync.RWMutex
+}
+
+type dhtNodeSnapshot struct {
+	addr      string
+	serverKey ed25519.PublicKey
+	version   int32
+	node      *Node
 }
 
 type dhtNodeList []*dhtNode
@@ -85,24 +92,36 @@ func (n *dhtNode) absorb(other *dhtNode) {
 	if n == nil || other == nil {
 		return
 	}
+	snapshot := other.snapshot()
+	serverKey := append(ed25519.PublicKey(nil), snapshot.serverKey...)
+	node := cloneNode(snapshot.node)
 
 	n.mx.Lock()
-	defer n.mx.Unlock()
+	n.addr = snapshot.addr
+	n.serverKey = serverKey
+	n.version = snapshot.version
+	n.node = node
+	n.mx.Unlock()
+}
 
-	n.addr = other.addr
-	n.serverKey = append(ed25519.PublicKey(nil), other.serverKey...)
-	n.version = other.version
-	n.node = cloneNode(other.node)
+func (n *dhtNode) snapshot() dhtNodeSnapshot {
+	n.mx.RLock()
+	snapshot := dhtNodeSnapshot{
+		addr:      n.addr,
+		serverKey: n.serverKey,
+		version:   n.version,
+		node:      n.node,
+	}
+	n.mx.RUnlock()
+
+	return snapshot
 }
 
 func (n *dhtNode) asNode() *Node {
 	if n == nil {
 		return nil
 	}
-	n.mx.Lock()
-	defer n.mx.Unlock()
-
-	return cloneNode(n.node)
+	return cloneNode(n.snapshot().node)
 }
 
 func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*Node, err error) {
@@ -119,7 +138,7 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	_, err = n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dht node: %w", err)
 	}
@@ -143,14 +162,14 @@ func (n *dhtNode) getSignedAddressList(ctx context.Context) (*Node, error) {
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	target, err := n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dht node: %w", err)
 	}
 
 	switch r := res.(type) {
 	case Node:
-		if err = r.validate(n.version, n.clientNetworkID()); err != nil {
+		if err = r.validate(target.version, n.clientNetworkID()); err != nil {
 			return nil, fmt.Errorf("untrusted signed address list response: %w", err)
 		}
 		return cloneNode(&r), nil
@@ -170,7 +189,7 @@ func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error
 
 func (n *dhtNode) storePayload(ctx context.Context, payload []byte) error {
 	var res any
-	err := n.query(ctx, tl.Raw(payload), &res)
+	_, err := n.query(ctx, tl.Raw(payload), &res)
 	if err != nil {
 		return fmt.Errorf("failed to query dht node: %w", err)
 	}
@@ -197,7 +216,7 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	_, err = n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to do query to dht node: %w", err)
 	}
@@ -442,22 +461,23 @@ func (n *dhtNode) clientNetworkID() int32 {
 	return n.client.networkID
 }
 
-func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
+func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) (dhtNodeSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		// if context is canceled we are not trying to query
-		return err
+		return dhtNodeSnapshot{}, err
 	}
+	target := n.snapshot()
 
 	atomic.AddInt32(&n.inFlyQueries, 1)
 
-	peer, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
+	peer, err := n.client.gateway.RegisterClient(target.addr, target.serverKey)
 	if err != nil {
 		atomic.AddInt32(&n.inFlyQueries, -1)
-		return err
+		return target, err
 	}
 
 	defer func() {
-		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.badScore > 1 {
+		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && atomic.LoadInt32(&n.badScore) > 1 {
 			peer.Reinit()
 		}
 	}()
@@ -470,14 +490,14 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 			// to not report good nodes, because of our short deadline
 			n.updateStatus(false)
 		}
-		return err
+		return target, err
 	}
 	ping := time.Since(t)
 	atomic.StoreInt64(&n.ping, int64(ping))
 
 	n.updateStatus(true)
 
-	return nil
+	return target, nil
 }
 
 func (n *dhtNode) isReady() bool {

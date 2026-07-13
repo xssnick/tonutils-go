@@ -909,8 +909,8 @@ func TestClient_storeValueToNodesPreparesPayloadOnce(t *testing.T) {
 				}
 
 				var store Store
-				if _, err = tl.Parse(&store, request, true); err != nil {
-					return err
+				if _, parseErr := tl.Parse(&store, request, true); parseErr != nil {
+					return parseErr
 				}
 				if store.Value == nil {
 					return fmt.Errorf("nil store value")

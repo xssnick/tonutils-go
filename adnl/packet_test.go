@@ -11,7 +11,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -322,6 +324,76 @@ func TestQueryRetryRebuildsPacketWithFreshSeqno(t *testing.T) {
 	secondID := queryIDFromPacket(t, second)
 	if !bytes.Equal(firstID, secondID) {
 		t.Fatal("retry changed query id")
+	}
+}
+
+func TestBuildRequestConcurrentChannelInitializationUsesSingleKey(t *testing.T) {
+	const workers = 32
+
+	a, peerPriv := testADNLWithPeer(t)
+	packets := make([][]byte, workers)
+	errs := make([]error, workers)
+
+	a.mx.Lock()
+
+	var wg sync.WaitGroup
+	for i := range workers {
+		i := i
+		wg.Go(func() {
+			packets[i], errs[i] = a.buildRequest(MessageNop{})
+		})
+	}
+
+	allStarted := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt64(&a.seqno) == workers {
+			allStarted = true
+			break
+		}
+		runtime.Gosched()
+	}
+
+	a.mx.Unlock()
+	wg.Wait()
+
+	if !allStarted {
+		t.Fatalf("started %d of %d concurrent requests", atomic.LoadInt64(&a.seqno), workers)
+	}
+
+	var channelKey ed25519.PublicKey
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("request %d failed: %v", i, err)
+		}
+
+		packet := parseRootPacketFromBytes(t, peerPriv, packets[i])
+		var createChannel MessageCreateChannel
+		found := false
+		for _, message := range packet.Messages {
+			if createChannel, found = message.(MessageCreateChannel); found {
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("request %d does not contain createChannel", i)
+		}
+
+		if channelKey == nil {
+			channelKey = append(ed25519.PublicKey(nil), createChannel.Key...)
+			continue
+		}
+		if !bytes.Equal(channelKey, createChannel.Key) {
+			t.Fatalf("request %d uses a different channel key", i)
+		}
+	}
+
+	ch := currentTestChannel(a)
+	if ch == nil {
+		t.Fatal("channel was not initialized")
+	}
+	if !bytes.Equal(channelKey, ch.key.Public().(ed25519.PublicKey)) {
+		t.Fatal("stored channel key differs from the announced key")
 	}
 }
 
