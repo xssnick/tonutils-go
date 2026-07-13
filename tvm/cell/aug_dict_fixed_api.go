@@ -120,6 +120,24 @@ func (d *AugmentedDictionary) Count() (int, error) {
 	return countFixedDictLeaves(d.root, d.keySz)
 }
 
+// ForEachValueExtra visits every leaf's decomposed value and extra in key
+// order without materializing key cells — cheaper than IteratorExtra when
+// keys are not needed. fn returns false to stop the walk early.
+func (d *AugmentedDictionary) ForEachValueExtra(fn func(value, extra *Slice) (bool, error)) error {
+	if d == nil || d.root == nil || fn == nil {
+		return nil
+	}
+	root := d.root.withTraceCombined(d.trace)
+	_, err := forEachDictLeafValue(root, d.keySz, func(leaf *Slice) (bool, error) {
+		value, extra, err := d.decomposeValueExtra(leaf)
+		if err != nil {
+			return false, err
+		}
+		return fn(value, extra)
+	})
+	return err
+}
+
 // Iterator creates a lazy depth-first raw value+extra iterator. Inspect Err
 // after Next returns false to catch failures discovered in deeper children.
 func (d *AugmentedDictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
@@ -154,6 +172,26 @@ func (d *AugmentedDictionary) RangeExtra(rev bool, sgnd bool) ([]AugDictItem, er
 // after Next returns false to catch traversal or extra-decoding failures.
 func (d *AugmentedDictionary) IteratorExtra(rev bool, sgnd bool) (*AugDictIterator, error) {
 	raw, err := d.Iterator(rev, sgnd)
+	if err != nil {
+		return nil, err
+	}
+	return newAugDictIterator(raw, d), nil
+}
+
+// IteratorAt creates a lazy raw iterator positioned at the nearest key to
+// `key` in iteration order: for rev=false the first item is the smallest key
+// >= key (> key when allowEq is false), for rev=true the largest key <= key
+// (< key). Reset rewinds to the full range, not to the seek position.
+func (d *AugmentedDictionary) IteratorAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*DictIterator, error) {
+	if d == nil {
+		return newDictIterator(nil, 0, rev, sgnd, nil)
+	}
+	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, d.trace)
+}
+
+// IteratorExtraAt is IteratorAt with values decomposed into value and extra.
+func (d *AugmentedDictionary) IteratorExtraAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*AugDictIterator, error) {
+	raw, err := d.IteratorAt(key, rev, sgnd, allowEq)
 	if err != nil {
 		return nil, err
 	}

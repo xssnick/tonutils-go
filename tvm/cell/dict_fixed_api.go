@@ -22,6 +22,17 @@ func (d *Dictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
 	return newDictIterator(d.root, d.keySz, rev, sgnd, d.trace)
 }
 
+// IteratorAt creates a lazy iterator positioned at the nearest key to `key`
+// in iteration order: for rev=false the first item is the smallest key >= key
+// (> key when allowEq is false), for rev=true the largest key <= key (< key).
+// Reset rewinds to the full range, not to the seek position.
+func (d *Dictionary) IteratorAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*DictIterator, error) {
+	if d == nil {
+		return newDictIterator(nil, 0, rev, sgnd, nil)
+	}
+	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, d.trace)
+}
+
 func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
 	if d == nil || d.root == nil {
 		return nil, nil, ErrNoSuchKeyInDict

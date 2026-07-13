@@ -24,6 +24,21 @@ type cellWithBuf128 struct {
 }
 
 func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
+	c, err := buildCellShellFromBuilder(builder, special)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.calculateHashes(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// buildCellShellFromBuilder performs every finalization step except hash
+// computation: the returned cell has data, refs, level mask and boundary
+// validation done, but no hashes yet. Callers must compute hashes before the
+// cell is shared.
+func buildCellShellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 	refs := builder.rawRefs()
 
 	var c *Cell
@@ -64,9 +79,6 @@ func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 	}
 
 	if err := validateBoundaryCell(c); err != nil {
-		return nil, err
-	}
-	if err := c.calculateHashes(); err != nil {
 		return nil, err
 	}
 	return c, nil

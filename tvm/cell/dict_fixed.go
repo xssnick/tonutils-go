@@ -41,6 +41,12 @@ type dictIteratorFrame struct {
 	nextChild        uint8
 }
 
+// dictIteratorInitialStackDepth keeps freshly built iterators cheap: a frame
+// is ~128 bytes and short-lived iterators over small dicts are created in
+// bulk on hot paths, so start small and let append grow the stack for the
+// rare deep tree.
+const dictIteratorInitialStackDepth = 4
+
 type DictForeachFunc func(value *Slice, key *Cell) (bool, error)
 
 type DictFilterAction uint8
@@ -66,7 +72,7 @@ func newDictIterator(root *Cell, keySz uint, rev, invertFirst bool, trace *Trace
 		return it, nil
 	}
 
-	it.stack = make([]dictIteratorFrame, 0, min(int(keySz)+1, 64))
+	it.stack = make([]dictIteratorFrame, 0, min(int(keySz)+1, dictIteratorInitialStackDepth))
 	it.root = root.withTraceCombined(trace)
 	if err := it.push(it.root, keySz, true); err != nil {
 		return nil, err
@@ -169,10 +175,13 @@ func (it *DictIterator) push(root *Cell, remaining uint, rootLevel bool) error {
 	if err = node.rejectSpecial("dict"); err != nil {
 		return err
 	}
+	return it.pushNode(node, remaining, rootLevel)
+}
 
+func (it *DictIterator) pushNode(node fixedDictNode, remaining uint, rootLevel bool) error {
 	before := it.prefix.BitsUsed()
 	label := node.labelSlice()
-	if err = it.prefix.storeSliceFromSlice(&label, node.labelLen); err != nil {
+	if err := it.prefix.storeSliceFromSlice(&label, node.labelLen); err != nil {
 		return err
 	}
 
@@ -195,6 +204,115 @@ func (it *DictIterator) push(root *Cell, remaining uint, rootLevel bool) error {
 		second:           second,
 	})
 	return nil
+}
+
+// newDictIteratorAt builds an iterator positioned at the nearest key to target
+// in iteration order: for rev=false the first yielded key is the smallest key
+// >= target (> target when allowEq is false), for rev=true the largest key
+// <= target (< target). Keys preceding the position are skipped without their
+// subtrees being visited, so a positioned iterator loads the same cells a
+// LookupNearestKey descent would.
+func newDictIteratorAt(root *Cell, keySz uint, key *Cell, rev, invertFirst, allowEq bool, trace *Trace) (*DictIterator, error) {
+	it := &DictIterator{
+		root:        root,
+		keySz:       keySz,
+		rev:         rev,
+		invertFirst: invertFirst,
+		trace:       trace,
+	}
+	if root == nil {
+		return it, nil
+	}
+	if key == nil || key.BitsSize() != keySz {
+		return nil, fmt.Errorf("incorrect key size")
+	}
+
+	it.stack = make([]dictIteratorFrame, 0, min(int(keySz)+1, dictIteratorInitialStackDepth))
+	it.root = root.withTraceCombined(trace)
+
+	var target Slice
+	if err := key.BeginParseInto(&target); err != nil {
+		return nil, fmt.Errorf("failed to load key: %w", err)
+	}
+	if err := it.push(it.root, keySz, true); err != nil {
+		return nil, err
+	}
+	if err := it.seekFromTop(&target, allowEq); err != nil {
+		return nil, err
+	}
+	return it, nil
+}
+
+// seekFromTop repositions an iterator whose stack holds exactly the root frame
+// so Next yields the first key at-or-after target in iteration order (an exact
+// match is skipped when allowEq is false). The frames left on the stack mirror
+// what a plain walk would hold at that position, so Next continues seamlessly.
+func (it *DictIterator) seekFromTop(target *Slice, allowEq bool) error {
+	for {
+		frame := &it.stack[len(it.stack)-1]
+		node := &frame.node
+
+		targetLabel := *target
+		if err := targetLabel.SkipBits(frame.prefixBefore); err != nil {
+			return err
+		}
+		matched, err := commonSlicePrefix(&node.label, &targetLabel, node.labelLen)
+		if err != nil {
+			return err
+		}
+		if matched < node.labelLen {
+			pos := frame.prefixBefore + matched
+			bit, err := node.label.BitAt(matched)
+			if err != nil {
+				return err
+			}
+			targetBit, err := target.BitAt(pos)
+			if err != nil {
+				return err
+			}
+			bitOrder := fixedDictOrderBit(uint8(bit), pos, it.invertFirst)
+			targetOrder := fixedDictOrderBit(uint8(targetBit), pos, it.invertFirst)
+			subtreeAfter := bitOrder > targetOrder
+			if it.rev {
+				subtreeAfter = bitOrder < targetOrder
+			}
+			if !subtreeAfter {
+				// every key of this subtree precedes target in iteration order
+				it.pop()
+			}
+			// otherwise the whole subtree follows target: enumerate it fully
+			return nil
+		}
+
+		if node.isLeaf(frame.remaining) {
+			// full label match at leaf depth means the exact target key
+			if !allowEq {
+				it.pop()
+			}
+			return nil
+		}
+
+		targetBit, err := target.BitAt(frame.prefixAfterLabel)
+		if err != nil {
+			return err
+		}
+		child := int(targetBit)
+		if child == frame.first {
+			frame.nextChild = 1
+		} else {
+			frame.nextChild = 2
+		}
+		ref, err := node.ref(child)
+		if err != nil {
+			return err
+		}
+		if err = it.prefix.StoreUInt(uint64(child), 1); err != nil {
+			return err
+		}
+		if err = it.push(ref, node.nextKeyBits(frame.remaining), false); err != nil {
+			return err
+		}
+	}
 }
 
 func (it *DictIterator) pop() {
@@ -745,6 +863,80 @@ func filterFixedDictNode(root *Cell, remaining uint, state *fixedDictFilterState
 	parentLabel := node.labelSlice()
 	rebuilt, err := storeDictNodeTraced(&parentLabel, payload, remaining, state.trace)
 	return rebuilt, true, err
+}
+
+// CountInlineDictLeaves counts the leaves of a non-empty Hashmap/HashmapAug
+// whose root node is serialized inline at the slice's current position, like
+// the transactions dict of an AccountBlock. Neither keys nor values are
+// materialized and the slice is not advanced. Fork children occupy the first
+// two refs in both plain and augmented dictionaries, so no augmentation
+// knowledge is needed.
+func (c *Slice) CountInlineDictLeaves(keySz uint) (int, error) {
+	if err := validateDictKeySize(keySz); err != nil {
+		return 0, fmt.Errorf("failed to validate dict: %w", err)
+	}
+	if c.cell.IsSpecial() {
+		return 0, fmt.Errorf("dict %w", ErrDictHasSpecialCells)
+	}
+
+	view := *c
+	labelLen, _, err := readLabelView(keySz, &view)
+	if err != nil {
+		return 0, err
+	}
+	if labelLen == keySz {
+		return 1, nil
+	}
+
+	childRemaining := keySz - labelLen - 1
+	left, err := view.peekRefCellAt(0)
+	if err != nil {
+		return 0, err
+	}
+	leftCount, err := countFixedDictLeaves(left, childRemaining)
+	if err != nil {
+		return 0, err
+	}
+	right, err := view.peekRefCellAt(1)
+	if err != nil {
+		return 0, err
+	}
+	rightCount, err := countFixedDictLeaves(right, childRemaining)
+	if err != nil {
+		return 0, err
+	}
+	return leftCount + rightCount, nil
+}
+
+// forEachDictLeafValue walks the leaves in key order handing each raw leaf
+// value (extra included for augmented dicts) to fn, without building key
+// cells. fn returns false to stop the walk early.
+func forEachDictLeafValue(branch *Cell, remaining uint, fn func(value *Slice) (bool, error)) (bool, error) {
+	node, err := parseFixedDictNode(branch, remaining)
+	if err != nil {
+		return false, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return false, err
+	}
+	if node.isLeaf(remaining) {
+		return fn(node.value())
+	}
+
+	childRemaining := node.nextKeyBits(remaining)
+	left, err := node.ref(0)
+	if err != nil {
+		return false, err
+	}
+	cont, err := forEachDictLeafValue(left, childRemaining, fn)
+	if err != nil || !cont {
+		return cont, err
+	}
+	right, err := node.ref(1)
+	if err != nil {
+		return false, err
+	}
+	return forEachDictLeafValue(right, childRemaining, fn)
 }
 
 func countFixedDictLeaves(root *Cell, remaining uint) (int, error) {
