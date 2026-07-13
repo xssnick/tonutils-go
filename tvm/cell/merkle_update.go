@@ -219,7 +219,7 @@ func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, err
 	}
 
 	t.SetUseMarkForIsLoaded(true)
-	state := newUsageProofBuildState()
+	state := newUsageProofBuildState(t.NodeCount())
 	if err = collectUsageProofHashes(from, t, t.RootNode(), state); err != nil {
 		return nil, nil, fmt.Errorf("failed to collect merkle update source proof: %w", err)
 	}

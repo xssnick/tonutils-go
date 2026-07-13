@@ -77,6 +77,16 @@ func (t *CellUsageTree) RootNode() TraceNode {
 	return 1
 }
 
+// NodeCount returns the number of arena nodes allocated so far — an upper
+// bound on the distinct cells a proof built from this tree can include,
+// useful for presizing build state.
+func (t *CellUsageTree) NodeCount() int {
+	if t == nil {
+		return 0
+	}
+	return int(t.nextNode.Load()) - 1
+}
+
 func (t *CellUsageTree) RootTrace() *Trace {
 	return t.Trace(t.RootNode())
 }
