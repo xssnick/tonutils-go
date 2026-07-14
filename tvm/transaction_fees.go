@@ -13,20 +13,20 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func transactionMessageGas(cfg TransactionEmulationConfig, blockchainCfg tlb.BlockchainConfig, addr *address.Address, balance, msgBalance *big.Int, msgType tlb.MsgType, isSpecial bool) vm.Gas {
-	if transactionGasConfigured(cfg.Gas) {
-		return cfg.Gas
+func transactionMessageGas(gasOverride vm.Gas, now uint32, blockchainCfg *PreparedBlockchainConfig, addr *address.Address, balance, msgBalance *big.Int, msgType tlb.MsgType, isSpecial bool) vm.Gas {
+	if transactionGasConfigured(gasOverride) {
+		return gasOverride
 	}
 
-	prices, err := blockchainCfg.GetGasPrices(transactionIsMasterchain(addr))
-	if err == nil && prices != nil && prices.GasLimit > 0 {
+	prices := blockchainCfg.gasPricesFor(transactionIsMasterchain(addr))
+	if prices != nil && prices.GasLimit > 0 {
 		if isSpecial && prices.SpecialGasLimit > 0 {
 			limit := transactionGasInt(prices.SpecialGasLimit)
 			credit := int64(0)
 			if msgType == tlb.MsgTypeExternalIn && prices.GasCredit > 0 {
 				credit = min(transactionGasInt(prices.GasCredit), limit)
 			}
-			if !transactionSpecialGasFull(blockchainCfg) {
+			if !blockchainCfg.specialGasFull() {
 				msgLimit := transactionGasInt(min(transactionGasBoughtFor(prices, msgBalance), prices.SpecialGasLimit))
 				return vm.Gas{
 					Max:       limit,
@@ -45,13 +45,13 @@ func transactionMessageGas(cfg TransactionEmulationConfig, blockchainCfg tlb.Blo
 			}
 		}
 
-		gasMax := transactionGasBoughtFor(prices, balance)
+		gasMax := transactionGasBoughtForAccount(blockchainCfg, prices, balance, addr, now)
 		gasLimit := uint64(0)
 		gasCredit := uint64(0)
 		if msgType == tlb.MsgTypeExternalIn {
 			gasCredit = min(prices.GasCredit, gasMax)
 		} else {
-			gasLimit = min(transactionGasBoughtFor(prices, msgBalance), gasMax)
+			gasLimit = min(transactionGasBoughtForAccount(blockchainCfg, prices, msgBalance, addr, now), gasMax)
 		}
 		return transactionGasFromLimits(gasMax, gasLimit, gasCredit)
 	}
@@ -65,20 +65,19 @@ func transactionMessageGas(cfg TransactionEmulationConfig, blockchainCfg tlb.Blo
 	return defaultExternalMessageGas(vm.Gas{})
 }
 
-func transactionTickTockGas(cfg TransactionEmulationConfig, blockchainCfg tlb.BlockchainConfig, addr *address.Address) vm.Gas {
-	if transactionGasConfigured(cfg.Gas) {
-		return cfg.Gas
+func transactionTickTockGas(gasOverride vm.Gas, now uint32, blockchainCfg *PreparedBlockchainConfig, addr *address.Address, balance *big.Int, isSpecial bool) vm.Gas {
+	if transactionGasConfigured(gasOverride) {
+		return gasOverride
 	}
 
-	prices, err := blockchainCfg.GetGasPrices(transactionIsMasterchain(addr))
-	if err == nil && prices != nil && prices.SpecialGasLimit > 0 {
-		limit := transactionGasInt(prices.SpecialGasLimit)
-		return vm.Gas{
-			Max:       limit,
-			Limit:     limit,
-			Base:      limit,
-			Remaining: limit,
+	prices := blockchainCfg.gasPricesFor(transactionIsMasterchain(addr))
+	if prices != nil && prices.GasLimit > 0 {
+		if isSpecial && prices.SpecialGasLimit > 0 {
+			limit := prices.SpecialGasLimit
+			return transactionGasFromLimits(limit, limit, 0)
 		}
+		limit := transactionGasBoughtForAccount(blockchainCfg, prices, balance, addr, now)
+		return transactionGasFromLimits(limit, limit, 0)
 	}
 	return defaultTickTockTransactionGas(vm.Gas{})
 }
@@ -104,40 +103,95 @@ func transactionGasInt(v uint64) int64 {
 }
 
 func transactionGasBoughtFor(prices *tlb.ConfigGasLimitsPrices, nanograms *big.Int) uint64 {
+	if prices == nil {
+		return 0
+	}
+	return transactionGasBoughtForLimit(prices, nanograms, prices.GasLimit)
+}
+
+func transactionGasBoughtForAccount(cfg *PreparedBlockchainConfig, prices *tlb.ConfigGasLimitsPrices, nanograms *big.Int, addr *address.Address, now uint32) uint64 {
+	if prices == nil {
+		return 0
+	}
+	if limit, ok := transactionGasLimitOverride(cfg, addr, now); ok {
+		return transactionGasBoughtForLimit(prices, nanograms, limit)
+	}
+	return transactionGasBoughtForLimit(prices, nanograms, prices.GasLimit)
+}
+
+func transactionGasBoughtForLimit(prices *tlb.ConfigGasLimitsPrices, nanograms *big.Int, gasLimit uint64) uint64 {
 	if prices == nil || nanograms == nil || nanograms.Sign() < 0 {
 		return 0
 	}
 
-	threshold := transactionMaxGasThreshold(prices)
+	threshold := transactionMaxGasThresholdForLimit(prices, gasLimit)
 	if nanograms.Cmp(threshold) >= 0 {
-		return prices.GasLimit
+		return gasLimit
 	}
-	if nanograms.Cmp(new(big.Int).SetUint64(prices.FlatGasPrice)) < 0 {
+
+	flatGasPrice := new(big.Int).SetUint64(prices.FlatGasPrice)
+	if nanograms.Cmp(flatGasPrice) < 0 {
 		return 0
 	}
 	if prices.GasPrice == 0 {
-		return prices.GasLimit
+		return gasLimit
 	}
 
-	remaining := new(big.Int).Sub(new(big.Int).Set(nanograms), new(big.Int).SetUint64(prices.FlatGasPrice))
+	remaining := new(big.Int).Sub(nanograms, flatGasPrice)
 	remaining.Lsh(remaining, 16)
 	remaining.Div(remaining, new(big.Int).SetUint64(prices.GasPrice))
 	remaining.Add(remaining, new(big.Int).SetUint64(prices.FlatGasLimit))
-	if !remaining.IsUint64() || remaining.Uint64() > prices.GasLimit {
-		return prices.GasLimit
+	if !remaining.IsUint64() || remaining.Uint64() > gasLimit {
+		return gasLimit
 	}
 	return remaining.Uint64()
 }
 
-func transactionMaxGasThreshold(prices *tlb.ConfigGasLimitsPrices) *big.Int {
-	if prices == nil || prices.GasLimit <= prices.FlatGasLimit {
+func transactionMaxGasThresholdForLimit(prices *tlb.ConfigGasLimitsPrices, gasLimit uint64) *big.Int {
+	if prices == nil || gasLimit <= prices.FlatGasLimit {
 		return new(big.Int).SetUint64(transactionGasFlatPrice(prices))
 	}
 
-	units := new(big.Int).SetUint64(prices.GasLimit - prices.FlatGasLimit)
-	total := new(big.Int).Mul(new(big.Int).SetUint64(prices.GasPrice), units)
+	total := new(big.Int).SetUint64(prices.GasPrice)
+	total.Mul(total, new(big.Int).SetUint64(gasLimit-prices.FlatGasLimit))
 	total = transactionCeilShiftRight(total, 16)
 	return total.Add(total, new(big.Int).SetUint64(prices.FlatGasPrice))
+}
+
+type transactionGasLimitOverrideEntry struct {
+	addr        *address.Address
+	limit       uint64
+	fromVersion uint32
+	until       uint32
+}
+
+var transactionGasLimitOverrides = []transactionGasLimitOverrideEntry{
+	{addr: address.MustParseRawAddr("0:FFBFD8F5AE5B2E1C7C3614885CB02145483DFAEE575F0DD08A72C366369211CD"), limit: 70_000_000, fromVersion: 5, until: 1_709_164_800},
+	{addr: address.MustParseRawAddr("0:5E4A5F9DBA638789E6770C990D2959237ACA3BC19D15A734782C26CB19343CC6"), limit: 70_000_000, fromVersion: 9, until: 1_740_787_200},
+	{addr: address.MustParseRawAddr("0:B755C43EE37925C30F547E2991E7C4C18C1CE4EC63EEA5743708DBAD868369FA"), limit: 70_000_000, fromVersion: 9, until: 1_740_787_200},
+	{addr: address.MustParseRawAddr("0:61C016FC8EFA241AF7EB787451A1E571236DFB3EB389832AEC0212C0FB8AC10B"), limit: 70_000_000, fromVersion: 9, until: 1_740_787_200},
+	{addr: address.MustParseRawAddr("0:A4A11A78384F92154A0C12761F2F7BC5E374F703335F5BC8F24C2E32CE4F1C26"), limit: 70_000_000, fromVersion: 9, until: 1_740_787_200},
+	{addr: address.MustParseRawAddr("0:4DE480AB6ACEFD53C158126EF5C2CDF89FE64D210D0B44DA5C90E52C215DCE79"), limit: 70_000_000, fromVersion: 9, until: 1_740_787_200},
+	{addr: address.MustParseRawAddr("0:436A76C2794A88E3FBFEC6B9C0374FC8DB046F10868B835420D9937973A665D4"), limit: 225_000_000, fromVersion: 9, until: 1_740_787_200},
+}
+
+func transactionGasLimitOverride(cfg *PreparedBlockchainConfig, addr *address.Address, now uint32) (uint64, bool) {
+	if addr == nil || addr.Type() != address.StdAddress {
+		return 0, false
+	}
+	addrData := addr.Data()
+	if len(addrData) != 32 {
+		return 0, false
+	}
+
+	version := cfg.globalVersion()
+	workchain := addr.Workchain()
+	for _, override := range transactionGasLimitOverrides {
+		if version >= override.fromVersion && now < override.until && workchain == override.addr.Workchain() && bytes.Equal(addrData, override.addr.Data()) {
+			return override.limit, true
+		}
+	}
+	return 0, false
 }
 
 func transactionGasFlatPrice(prices *tlb.ConfigGasLimitsPrices) uint64 {
@@ -149,12 +203,23 @@ func transactionGasFlatPrice(prices *tlb.ConfigGasLimitsPrices) uint64 {
 
 func transactionCeilShiftRight(x *big.Int, bits uint) *big.Int {
 	if x == nil || x.Sign() == 0 {
-		return big.NewInt(0)
+		return new(big.Int)
 	}
 
-	add := new(big.Int).Lsh(big.NewInt(1), bits)
-	add.Sub(add, big.NewInt(1))
-	return new(big.Int).Rsh(new(big.Int).Add(x, add), bits)
+	out := new(big.Int).Rsh(x, bits)
+	if transactionLowBitsNonZero(x, bits) {
+		out.Add(out, big.NewInt(1))
+	}
+	return out
+}
+
+func transactionLowBitsNonZero(x *big.Int, bits uint) bool {
+	for i := uint(0); i < bits; i++ {
+		if x.Bit(int(i)) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func transactionGasConfigured(g vm.Gas) bool {
@@ -174,64 +239,25 @@ func transactionPrecompiledGasUsage(value *big.Int) (int64, bool, error) {
 	return value.Int64(), true, nil
 }
 
-func transactionApplyPrecompiledGasConfig(execCfg TransactionEmulationConfig, blockchainCfg tlb.BlockchainConfig, code *cell.Cell, gas vm.Gas) (vm.Gas, *big.Int, *tlb.ComputeSkipReason, error) {
-	usage := execCfg.PrecompiledGasUsage
-	derived := false
+// transactionApplyPrecompiledGasConfig resolves the precompiled-contract gas
+// usage for code from the prepared config (param 45) and adjusts the compute
+// gas accordingly. The resolved usage is stored in env for the c7 tuple and
+// the final gas accounting.
+func transactionApplyPrecompiledGasConfig(blockchainCfg *PreparedBlockchainConfig, code *cell.Cell, gas vm.Gas, env *transactionExecEnv) (vm.Gas, *tlb.ComputeSkipReason) {
+	usage := blockchainCfg.precompiledGasUsage(code)
 	if usage == nil {
-		if transactionHasExplicitC7Context(execCfg) {
-			return gas, nil, nil, nil
-		}
-		var err error
-		usage, err = transactionPrecompiledGasUsageFromConfig(blockchainCfg, code)
-		if err != nil {
-			return gas, nil, nil, err
-		}
-		derived = usage != nil
+		return gas, nil
 	}
+	env.precompiledGasUsage = usage
 
 	precompiledGas, ok, err := transactionPrecompiledGasUsage(usage)
 	if err != nil || !ok {
-		return gas, usage, nil, err
+		return gas, nil
 	}
 	if precompiledGas > gas.Limit {
-		return gas, usage, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}, nil
+		return gas, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	}
-	if derived {
-		gas = transactionPrecompiledFallbackGas(gas)
-	}
-	return gas, usage, nil, nil
-}
-
-func transactionPrecompiledGasUsageFromConfig(cfg tlb.BlockchainConfig, code *cell.Cell) (*big.Int, error) {
-	if code == nil {
-		return nil, nil
-	}
-
-	precompiled, err := cfg.GetPrecompiledContractsConfig()
-	if err != nil {
-		if errors.Is(err, tlb.ErrBlockchainConfigRootNil) || errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if precompiled.List == nil || precompiled.List.IsEmpty() {
-		return nil, nil
-	}
-
-	key := cell.BeginCell().MustStoreSlice(code.Hash(), 256).EndCell()
-	value, err := precompiled.List.LoadValue(key)
-	if err != nil {
-		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var smc tlb.PrecompiledSmc
-	if err = tlb.LoadFromCell(&smc, value); err != nil {
-		return nil, err
-	}
-	return new(big.Int).SetUint64(smc.GasUsage), nil
+	return transactionPrecompiledFallbackGas(gas), nil
 }
 
 func transactionPrecompiledFallbackGas(gas vm.Gas) vm.Gas {
@@ -256,20 +282,7 @@ func transactionPrecompiledFallbackGas(gas vm.Gas) vm.Gas {
 	}
 }
 
-func transactionHasCapability(cfg tlb.BlockchainConfig, capability uint64) bool {
-	version, err := cfg.GetGlobalVersion()
-	return err == nil && version.Capabilities&capability != 0
-}
-
-func transactionGlobalVersion(cfg tlb.BlockchainConfig) uint32 {
-	version, err := cfg.GetGlobalVersion()
-	if err != nil {
-		return 0
-	}
-	return version.Version
-}
-
-func transactionComputeForwardFeeForMessage(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell) (*big.Int, error) {
+func transactionComputeForwardFeeForMessage(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell) (*big.Int, error) {
 	usage, err := transactionMessageTailUsage(msgCell)
 	if err != nil {
 		return nil, err
@@ -277,7 +290,7 @@ func transactionComputeForwardFeeForMessage(cfg tlb.BlockchainConfig, srcAddr, d
 	return transactionComputeForwardFeeForUsage(cfg, srcAddr, dstAddr, usage), nil
 }
 
-func transactionComputeForwardFeeForUsage(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, usage transactionUsage) *big.Int {
+func transactionComputeForwardFeeForUsage(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, usage transactionUsage) *big.Int {
 	prices := transactionGetMsgForwardPrices(cfg, srcAddr, dstAddr)
 	if prices == nil {
 		return big.NewInt(0)
@@ -285,7 +298,7 @@ func transactionComputeForwardFeeForUsage(cfg tlb.BlockchainConfig, srcAddr, dst
 	return prices.ComputeForwardFee(usage.cells, usage.bits)
 }
 
-func transactionComputeIHRFee(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, fwdFee *big.Int, ihrDisabled bool) *big.Int {
+func transactionComputeIHRFee(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, fwdFee *big.Int, ihrDisabled bool) *big.Int {
 	if ihrDisabled || fwdFee == nil || fwdFee.Sign() == 0 {
 		return big.NewInt(0)
 	}
@@ -293,10 +306,13 @@ func transactionComputeIHRFee(cfg tlb.BlockchainConfig, srcAddr, dstAddr *addres
 	if prices == nil || prices.IHRFactor == 0 {
 		return big.NewInt(0)
 	}
-	return new(big.Int).Rsh(new(big.Int).Mul(fwdFee, new(big.Int).SetUint64(uint64(prices.IHRFactor))), 16)
+
+	fee := new(big.Int).SetUint64(uint64(prices.IHRFactor))
+	fee.Mul(fee, fwdFee)
+	return fee.Rsh(fee, 16)
 }
 
-func transactionFirstPartForwardFee(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, fwdFee *big.Int) *big.Int {
+func transactionFirstPartForwardFee(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, fwdFee *big.Int) *big.Int {
 	if fwdFee == nil || fwdFee.Sign() == 0 {
 		return big.NewInt(0)
 	}
@@ -304,18 +320,17 @@ func transactionFirstPartForwardFee(cfg tlb.BlockchainConfig, srcAddr, dstAddr *
 	if prices == nil || prices.FirstFrac == 0 {
 		return big.NewInt(0)
 	}
-	return new(big.Int).Rsh(new(big.Int).Mul(fwdFee, new(big.Int).SetUint64(uint64(prices.FirstFrac))), 16)
+
+	fee := new(big.Int).SetUint64(uint64(prices.FirstFrac))
+	fee.Mul(fee, fwdFee)
+	return fee.Rsh(fee, 16)
 }
 
-func transactionGetMsgForwardPrices(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address) *tlb.ConfigMsgForwardPrices {
-	prices, err := cfg.GetMsgForwardPrices(transactionIsMasterchain(srcAddr) || transactionIsMasterchain(dstAddr))
-	if err != nil {
-		return nil
-	}
-	return prices
+func transactionGetMsgForwardPrices(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address) *tlb.ConfigMsgForwardPrices {
+	return cfg.msgForwardPricesFor(transactionIsMasterchain(srcAddr) || transactionIsMasterchain(dstAddr))
 }
 
-func transactionOutboundInternalMessageFeeUsage(cfg tlb.BlockchainConfig, msg *tlb.InternalMessage, layout transactionOutboundLayout) (transactionUsage, error) {
+func transactionOutboundInternalMessageFeeUsage(cfg *PreparedBlockchainConfig, msg *tlb.InternalMessage, layout transactionOutboundLayout) (transactionUsage, error) {
 	collector := newTransactionUsageCollector()
 	usage := transactionUsage{}
 
@@ -337,7 +352,7 @@ func transactionOutboundInternalMessageFeeUsage(cfg tlb.BlockchainConfig, msg *t
 		}
 		usage = transactionAddUsage(usage, bodyUsage)
 	}
-	if transactionGlobalVersion(cfg) < 10 && msg.ExtraCurrencies != nil {
+	if cfg.globalVersion() < 10 && msg.ExtraCurrencies != nil {
 		extraUsage, err := collector.addCell(msg.ExtraCurrencies.AsCell(), false)
 		if err != nil {
 			return transactionUsage{}, err
@@ -346,6 +361,25 @@ func transactionOutboundInternalMessageFeeUsage(cfg tlb.BlockchainConfig, msg *t
 	}
 
 	return usage, nil
+}
+
+func transactionOutboundInternalMessageActionUsage(cfg *PreparedBlockchainConfig, msg *tlb.InternalMessage, msgCell *cell.Cell, layout transactionOutboundLayout) (transactionUsage, error) {
+	root, err := transactionLoadedCell(msgCell)
+	if err != nil {
+		return transactionUsage{}, err
+	}
+	if root == nil {
+		return transactionUsage{}, nil
+	}
+
+	tailUsage, err := transactionOutboundInternalMessageFeeUsage(cfg, msg, layout)
+	if err != nil {
+		return transactionUsage{}, err
+	}
+	return transactionAddUsage(transactionUsage{
+		cells: 1,
+		bits:  uint64(root.BitsSize()),
+	}, tailUsage), nil
 }
 
 func transactionMessageTailUsage(root *cell.Cell) (transactionUsage, error) {
@@ -371,22 +405,98 @@ func transactionMessageTailUsage(root *cell.Cell) (transactionUsage, error) {
 	return usage, nil
 }
 
-func transactionComputeGasFee(cfg tlb.BlockchainConfig, addr *address.Address, gasUsed uint64) *big.Int {
-	prices, err := cfg.GetGasPrices(transactionIsMasterchain(addr))
-	if err != nil || prices == nil {
+type transactionMessageStatsResult struct {
+	usage       transactionUsage
+	totalUsage  transactionUsage
+	merkleDepth uint16
+}
+
+func transactionMessageStats(root *cell.Cell) (transactionMessageStatsResult, error) {
+	var stats transactionMessageStatsResult
+	if root == nil {
+		return stats, nil
+	}
+
+	seenUsage := make(map[cell.Hash]struct{})
+	var rootBits uint64
+	rootSeen := false
+	var walk func(c *cell.Cell, depth uint16, isRoot bool) error
+	walk = func(c *cell.Cell, depth uint16, isRoot bool) error {
+		if c == nil {
+			return nil
+		}
+
+		var sl cell.Slice
+		if err := c.BeginParseIntoWithoutTrace(&sl); err != nil {
+			return err
+		}
+
+		loaded := sl.BaseCell()
+		if isRoot {
+			rootBits = uint64(loaded.BitsSize())
+		}
+		switch loaded.GetType() {
+		case cell.MerkleProofCellType, cell.MerkleUpdateCellType:
+			depth++
+			if depth > stats.merkleDepth {
+				stats.merkleDepth = depth
+			}
+		}
+
+		key := loaded.HashKey()
+		if _, ok := seenUsage[key]; !ok {
+			seenUsage[key] = struct{}{}
+			stats.totalUsage.cells++
+			stats.totalUsage.bits += uint64(loaded.BitsSize())
+			if isRoot {
+				rootSeen = true
+			}
+		}
+
+		for sl.RefsNum() > 0 {
+			ref, err := sl.LoadRefCell()
+			if err != nil {
+				return err
+			}
+
+			if err := walk(ref, depth, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(root, 0, true); err != nil {
+		return transactionMessageStatsResult{}, err
+	}
+
+	stats.usage = stats.totalUsage
+	if rootSeen && stats.usage.cells > 0 {
+		stats.usage.cells--
+		if stats.usage.bits >= rootBits {
+			stats.usage.bits -= rootBits
+		} else {
+			stats.usage.bits = 0
+		}
+	}
+	return stats, nil
+}
+
+func transactionComputeGasFee(cfg *PreparedBlockchainConfig, addr *address.Address, gasUsed uint64) *big.Int {
+	prices := cfg.gasPricesFor(transactionIsMasterchain(addr))
+	if prices == nil {
 		return big.NewInt(0)
 	}
 
 	return prices.ComputeGasPrice(gasUsed)
 }
 
-func transactionComputeImportFee(cfg tlb.BlockchainConfig, addr *address.Address, msg *tlb.Message, msgCell *cell.Cell) (*big.Int, error) {
+func transactionComputeImportFee(cfg *PreparedBlockchainConfig, addr *address.Address, msg *tlb.Message, msgCell *cell.Cell) (*big.Int, error) {
 	if msg.MsgType != tlb.MsgTypeExternalIn {
 		return big.NewInt(0), nil
 	}
 
-	prices, err := cfg.GetMsgForwardPrices(transactionIsMasterchain(addr))
-	if err != nil || prices == nil {
+	prices := cfg.msgForwardPricesFor(transactionIsMasterchain(addr))
+	if prices == nil {
 		return big.NewInt(0), nil
 	}
 
@@ -398,7 +508,7 @@ func transactionComputeImportFee(cfg tlb.BlockchainConfig, addr *address.Address
 	return prices.ComputeForwardFee(usage.cells, usage.bits), nil
 }
 
-func transactionComputeStorageFee(cfg tlb.BlockchainConfig, acc *transactionRuntimeAccount, now uint32) (*big.Int, error) {
+func transactionComputeStorageFee(cfg *PreparedBlockchainConfig, acc *transactionRuntimeAccount, now uint32) (*big.Int, error) {
 	if now < acc.storageInfo.LastPaid {
 		return nil, fmt.Errorf("transaction unix time %d is before account last_paid %d", now, acc.storageInfo.LastPaid)
 	}
@@ -413,86 +523,75 @@ func transactionComputeStorageFee(cfg tlb.BlockchainConfig, acc *transactionRunt
 		return total, nil
 	}
 
-	fee, err := cfg.ComputeStorageFee(transactionIsMasterchain(acc.addr), acc.storageInfo.LastPaid, now, usage.BitsUsed.Uint64(), usage.CellsUsed.Uint64())
-	if err != nil {
-		if errors.Is(err, tlb.ErrBlockchainConfigRootNil) || errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return total, nil
-		}
-		return nil, err
-	}
+	fee := cfg.computeStorageFee(transactionIsMasterchain(acc.addr), acc.storageInfo.LastPaid, now, usage.BitsUsed.Uint64(), usage.CellsUsed.Uint64())
 	total.Add(total, fee)
 	return total, nil
 }
 
-func transactionGetStorageDueLimits(cfg tlb.BlockchainConfig, addr *address.Address) transactionStorageDueLimits {
-	limits := transactionStorageDueLimits{
-		freezeDue: big.NewInt(0),
-		deleteDue: big.NewInt(0),
-	}
-	prices, err := cfg.GetGasPrices(transactionIsMasterchain(addr))
-	if err != nil || prices == nil {
-		return limits
-	}
-	limits.freezeDue = new(big.Int).SetUint64(prices.FreezeDueLimit)
-	limits.deleteDue = new(big.Int).SetUint64(prices.DeleteDueLimit)
-	return limits
-}
-func transactionGetSizeLimits(cfg tlb.BlockchainConfig) transactionSizeLimits {
-	out := transactionSizeLimits{
-		maxMsgBits:                  1 << 21,
-		maxMsgCells:                 1 << 13,
-		maxLibraryCells:             1000,
-		maxAccStateCells:            1 << 16,
-		maxMCAccStateCells:          1 << 11,
-		maxAccPublicLibraries:       256,
-		maxMsgExtraCurrencies:       2,
-		maxAccFixedPrefixLength:     8,
-		accStateCellsForStorageDict: 26,
-	}
-	limits, err := cfg.GetSizeLimitsConfig()
-	if err != nil {
-		return out
-	}
-	switch v := limits.Config.(type) {
-	case tlb.SizeLimitsConfigV1:
-		out.maxMsgBits = uint64(v.MaxMsgBits)
-		out.maxMsgCells = uint64(v.MaxMsgCells)
-		out.maxLibraryCells = uint64(v.MaxLibraryCells)
-	case tlb.SizeLimitsConfigV2:
-		out.maxMsgBits = uint64(v.MaxMsgBits)
-		out.maxMsgCells = uint64(v.MaxMsgCells)
-		out.maxLibraryCells = uint64(v.MaxLibraryCells)
-		out.maxAccStateCells = uint64(v.MaxAccStateCells)
-		out.maxMCAccStateCells = uint64(v.MaxMCAccStateCells)
-		out.maxAccPublicLibraries = uint64(v.MaxAccPublicLibraries)
-		out.maxMsgExtraCurrencies = uint64(v.MaxMsgExtraCurrencies)
-		out.maxAccFixedPrefixLength = uint64(v.MaxAccFixedPrefixLength)
-		out.accStateCellsForStorageDict = uint64(v.AccStateCellsForStorageDict)
-	}
-	return out
+func transactionGetSizeLimits(cfg *PreparedBlockchainConfig) transactionSizeLimits {
+	return cfg.sizeLimits
 }
 
-func transactionCheckOutboundMessageSize(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell, available *big.Int, isSpecial bool) (int32, *big.Int, error) {
+func transactionCheckOutboundMessageSize(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell, available *big.Int, isSpecial, actionFineEnabled bool) (int32, *big.Int, error) {
+	stats, err := transactionMessageStats(msgCell)
+	if err != nil {
+		return 0, nil, err
+	}
+	code, fine := transactionCheckOutboundMessageStatsSize(cfg, srcAddr, dstAddr, stats, available, isSpecial, actionFineEnabled)
+	return code, fine, nil
+}
+
+func transactionCheckOutboundMessageStatsSize(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, stats transactionMessageStatsResult, available *big.Int, isSpecial, actionFineEnabled bool) (int32, *big.Int) {
 	limits := transactionGetSizeLimits(cfg)
-	usage, err := transactionMessageTailUsage(msgCell)
-	if err != nil {
-		return 0, nil, err
+	if isSpecial || !actionFineEnabled {
+		if stats.usage.bits <= limits.maxMsgBits && stats.usage.cells <= limits.maxMsgCells && stats.merkleDepth <= 2 {
+			return 0, big.NewInt(0)
+		}
+		return 40, big.NewInt(0)
 	}
-	depth, err := transactionMaxMerkleDepth(msgCell)
-	if err != nil {
-		return 0, nil, err
+
+	prices := transactionGetMsgForwardPrices(cfg, srcAddr, dstAddr)
+	fine := transactionComputeActionFineForUsageWithPrices(prices, stats.usage, available)
+	maxCells, limitedByFunds := transactionActionFineCellLimitWithPrices(prices, limits.maxMsgCells, available)
+	if stats.usage.bits <= limits.maxMsgBits && stats.usage.cells <= maxCells && stats.merkleDepth <= 2 {
+		return 0, big.NewInt(0)
 	}
-	if usage.bits <= limits.maxMsgBits && usage.cells <= limits.maxMsgCells && depth <= 2 {
-		return 0, big.NewInt(0), nil
+	if limitedByFunds && stats.usage.cells > maxCells {
+		return 40, fine
 	}
-	if isSpecial {
-		return 40, big.NewInt(0), nil
-	}
-	fine := transactionComputeActionFineForUsage(cfg, srcAddr, dstAddr, usage, available)
-	return 40, fine, nil
+	return 40, fine
 }
 
-func transactionComputeActionFine(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell, available *big.Int) (*big.Int, error) {
+func transactionValidateInboundExternalMessage(msgCell *cell.Cell, msg *tlb.Message, cfg *PreparedBlockchainConfig) error {
+	if msg == nil || msg.MsgType != tlb.MsgTypeExternalIn {
+		return nil
+	}
+
+	dst := msg.AsExternalIn().DstAddr
+	if cfg.globalVersion() >= 10 && (dst == nil || dst.Type() != address.StdAddress || dst.Anycast() != nil) {
+		return errors.New("invalid inbound external message destination")
+	}
+
+	limits := transactionGetSizeLimits(cfg)
+	if msgCell != nil && msgCell.Depth() > limits.maxExtMsgDepth {
+		return errors.New("inbound external message depth exceeds limit")
+	}
+
+	stats, err := transactionMessageStats(msgCell)
+	if err != nil {
+		return err
+	}
+	if stats.usage.bits > limits.maxMsgBits || stats.usage.cells > limits.maxMsgCells {
+		return errors.New("inbound external message size exceeds limit")
+	}
+
+	if stats.merkleDepth > 2 {
+		return errors.New("inbound external message merkle depth exceeds limit")
+	}
+	return nil
+}
+
+func transactionComputeActionFine(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell, available *big.Int) (*big.Int, error) {
 	usage, err := transactionMessageTailUsage(msgCell)
 	if err != nil {
 		return nil, err
@@ -500,8 +599,12 @@ func transactionComputeActionFine(cfg tlb.BlockchainConfig, srcAddr, dstAddr *ad
 	return transactionComputeActionFineForUsage(cfg, srcAddr, dstAddr, usage, available), nil
 }
 
-func transactionComputeActionFineForUsage(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, usage transactionUsage, available *big.Int) *big.Int {
+func transactionComputeActionFineForUsage(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, usage transactionUsage, available *big.Int) *big.Int {
 	prices := transactionGetMsgForwardPrices(cfg, srcAddr, dstAddr)
+	return transactionComputeActionFineForUsageWithPrices(prices, usage, available)
+}
+
+func transactionComputeActionFineForUsageWithPrices(prices *tlb.ConfigMsgForwardPrices, usage transactionUsage, available *big.Int) *big.Int {
 	if prices == nil {
 		return big.NewInt(0)
 	}
@@ -511,67 +614,108 @@ func transactionComputeActionFineForUsage(cfg tlb.BlockchainConfig, srcAddr, dst
 	}
 
 	fineCells := usage.cells
-	if available != nil {
-		maxCells := new(big.Int).Div(transactionBigOrZero(available), new(big.Int).SetUint64(finePerCell))
-		if !maxCells.IsUint64() {
-			fineCells = 0
-		} else if fineCells > maxCells.Uint64() {
-			fineCells = maxCells.Uint64()
-		}
+	maxCells, _ := transactionActionFineCellLimitWithPrices(prices, usage.cells, available)
+	if fineCells > maxCells {
+		fineCells = maxCells
 	}
-	return new(big.Int).Mul(new(big.Int).SetUint64(finePerCell), new(big.Int).SetUint64(fineCells))
+
+	fine := new(big.Int).SetUint64(finePerCell)
+	return fine.Mul(fine, new(big.Int).SetUint64(fineCells))
 }
 
-func transactionComputeSendActionFineForUsage(cfg tlb.BlockchainConfig, srcAddr, dstAddr *address.Address, usage transactionUsage, remaining, msgBalance, messageValue, gasFees, currentActionFine *big.Int, mode uint8) *big.Int {
-	prices := transactionGetMsgForwardPrices(cfg, srcAddr, dstAddr)
-	if prices == nil {
-		return big.NewInt(0)
+func transactionActionFineCellLimitWithPrices(prices *tlb.ConfigMsgForwardPrices, maxCells uint64, available *big.Int) (uint64, bool) {
+	if prices == nil || available == nil {
+		return maxCells, false
 	}
 	finePerCell := (prices.CellPrice >> 16) / 4
 	if finePerCell == 0 {
-		return big.NewInt(0)
+		return maxCells, false
+	}
+
+	finePerCellInt := new(big.Int).SetUint64(finePerCell)
+	maxFine := new(big.Int).SetUint64(maxCells)
+	maxFine.Mul(maxFine, finePerCellInt)
+	if available.Cmp(maxFine) >= 0 {
+		return maxCells, false
+	}
+	cells := new(big.Int).Div(available, finePerCellInt)
+	if !cells.IsUint64() {
+		return 0, true
+	}
+	return cells.Uint64(), true
+}
+
+func transactionSendActionFineFunds(remaining, msgBalance, messageValue, gasFees, currentActionFine *big.Int, mode uint8) (*big.Int, bool) {
+	funds := transactionBigOrZero(remaining)
+	if mode&0x80 != 0 || mode&1 != 0 {
+		return funds, true
+	}
+
+	valueFunds := transactionBigOrZero(messageValue)
+	if mode&0x40 != 0 {
+		if msgBalance != nil {
+			valueFunds.Add(valueFunds, msgBalance)
+		}
+		if gasFees != nil {
+			valueFunds.Sub(valueFunds, gasFees)
+		}
+		if currentActionFine != nil {
+			valueFunds.Sub(valueFunds, currentActionFine)
+		}
+		if valueFunds.Sign() < 0 {
+			return nil, false
+		}
+	}
+	if valueFunds.Cmp(funds) < 0 {
+		funds = valueFunds
+	}
+	return funds, true
+}
+
+func transactionComputeSendActionFineForUsage(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, usage transactionUsage, remaining, msgBalance, messageValue, gasFees, currentActionFine *big.Int, mode uint8) (*big.Int, uint64, bool) {
+	prices := transactionGetMsgForwardPrices(cfg, srcAddr, dstAddr)
+	if prices == nil {
+		return big.NewInt(0), transactionGetSizeLimits(cfg).maxMsgCells, false
+	}
+	finePerCell := (prices.CellPrice >> 16) / 4
+	if finePerCell == 0 {
+		return big.NewInt(0), transactionGetSizeLimits(cfg).maxMsgCells, false
 	}
 
 	limits := transactionGetSizeLimits(cfg)
 	maxCells := limits.maxMsgCells
-	funds := transactionBigOrZero(remaining)
-	if mode&0x80 == 0 && mode&1 == 0 {
-		valueFunds := transactionBigOrZero(messageValue)
-		if mode&0x40 != 0 {
-			valueFunds.Add(valueFunds, transactionBigOrZero(msgBalance))
-			valueFunds.Sub(valueFunds, transactionBigOrZero(gasFees))
-			valueFunds.Sub(valueFunds, transactionBigOrZero(currentActionFine))
-			if valueFunds.Sign() < 0 {
-				valueFunds.SetInt64(0)
-			}
-		}
-		if valueFunds.Cmp(funds) < 0 {
-			funds = valueFunds
-		}
+	limitedByFunds := false
+	funds, ok := transactionSendActionFineFunds(remaining, msgBalance, messageValue, gasFees, currentActionFine, mode)
+	if !ok {
+		funds = big.NewInt(0)
 	}
 
-	maxFine := new(big.Int).Mul(new(big.Int).SetUint64(maxCells), new(big.Int).SetUint64(finePerCell))
+	finePerCellInt := new(big.Int).SetUint64(finePerCell)
+	maxFine := new(big.Int).SetUint64(maxCells)
+	maxFine.Mul(maxFine, finePerCellInt)
 	if funds.Cmp(maxFine) < 0 {
-		cells := new(big.Int).Div(funds, new(big.Int).SetUint64(finePerCell))
+		cells := new(big.Int).Div(funds, finePerCellInt)
 		if cells.IsUint64() {
 			maxCells = cells.Uint64()
 		} else {
 			maxCells = 0
 		}
+		limitedByFunds = true
 	}
 
 	fineCells := usage.cells
 	if fineCells > maxCells {
 		fineCells = maxCells
 	}
-	fine := new(big.Int).Mul(new(big.Int).SetUint64(finePerCell), new(big.Int).SetUint64(fineCells))
+	fine := new(big.Int).Set(finePerCellInt)
+	fine.Mul(fine, new(big.Int).SetUint64(fineCells))
 	if remaining != nil && fine.Cmp(remaining) > 0 {
 		fine.Set(remaining)
 	}
-	return fine
+	return fine, maxCells, limitedByFunds
 }
 
-func transactionAccountStateExceedsLimits(acc *transactionRuntimeAccount, code, data *cell.Cell, libs *cell.Dictionary, cfg tlb.BlockchainConfig) (bool, error) {
+func transactionAccountStateExceedsLimits(acc *transactionRuntimeAccount, code, data *cell.Cell, libs *cell.Dictionary, cfg *PreparedBlockchainConfig) (bool, error) {
 	if acc.isSpecial {
 		return false, nil
 	}
@@ -581,7 +725,7 @@ func transactionAccountStateExceedsLimits(acc *transactionRuntimeAccount, code, 
 
 	limits := transactionGetSizeLimits(cfg)
 	maxCells := limits.maxAccStateCells
-	if transactionIsMasterchain(acc.addr) {
+	if transactionIsMasterchain(acc.addr) && cfg.globalVersion() >= 12 {
 		maxCells = limits.maxMCAccStateCells
 	}
 
@@ -590,19 +734,14 @@ func transactionAccountStateExceedsLimits(acc *transactionRuntimeAccount, code, 
 		libCell = libs.AsCell()
 	}
 
-	usage, err := transactionCollectUniqueUsage(code, data, libCell)
+	stats, err := transactionCellStatsForRoots(code, data, libCell)
 	if err != nil {
 		return false, err
 	}
-	if usage.cells > maxCells {
+	if stats.usage.cells > maxCells {
 		return true, nil
 	}
-
-	depth, err := transactionMaxMerkleDepthForRoots(code, data, libCell)
-	if err != nil {
-		return false, err
-	}
-	if depth > 2 {
+	if stats.merkleDepth > 2 {
 		return true, nil
 	}
 
@@ -617,7 +756,7 @@ func transactionCellEqual(a, b *cell.Cell) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	return bytes.Equal(a.Hash(), b.Hash())
+	return a.HashKey() == b.HashKey()
 }
 
 func transactionDictEqual(a, b *cell.Dictionary) bool {
@@ -627,20 +766,15 @@ func transactionDictEqual(a, b *cell.Dictionary) bool {
 	if b == nil || b.IsEmpty() {
 		return false
 	}
-	return bytes.Equal(a.AsCell().Hash(), b.AsCell().Hash())
+	return a.AsCell().HashKey() == b.AsCell().HashKey()
 }
 
 func transactionCollectUniqueUsage(roots ...*cell.Cell) (transactionUsage, error) {
-	collector := newTransactionUsageCollector()
-	out := transactionUsage{}
-	for _, root := range roots {
-		usage, err := collector.addCell(root, false)
-		if err != nil {
-			return transactionUsage{}, err
-		}
-		out = transactionAddUsage(out, usage)
+	stats, err := transactionCellStatsForRoots(roots...)
+	if err != nil {
+		return transactionUsage{}, err
 	}
-	return out, nil
+	return stats.usage, nil
 }
 
 func transactionPublicLibrariesCount(libs *cell.Dictionary) uint64 {
@@ -666,64 +800,84 @@ func transactionMaxMerkleDepth(root *cell.Cell) (uint16, error) {
 }
 
 func transactionMaxMerkleDepthForRoots(roots ...*cell.Cell) (uint16, error) {
-	var maxDepth uint16
-	var walk func(c *cell.Cell, depth uint16) error
-	walk = func(c *cell.Cell, depth uint16) error {
+	stats, err := transactionCellStatsForRoots(roots...)
+	if err != nil {
+		return 0, err
+	}
+	return stats.merkleDepth, nil
+}
+
+type transactionCellStatsResult struct {
+	usage       transactionUsage
+	merkleDepth uint16
+}
+
+func transactionCellStatsForRoots(roots ...*cell.Cell) (transactionCellStatsResult, error) {
+	var stats transactionCellStatsResult
+	// seen memoizes each cell's subtree max merkle depth (merkle cells on the
+	// deepest path within the subtree, including the cell itself). The value
+	// is path-independent, so a cell reached again via another path just
+	// contributes its memoized depth without re-walking the shared subtree —
+	// the same technique transactionAccountStorageStat.addCell uses. Usage is
+	// counted on first visit only, exactly as before.
+	seen := make(map[cell.Hash]uint16, 64)
+
+	var walk func(c *cell.Cell) (uint16, error)
+	walk = func(c *cell.Cell) (uint16, error) {
 		if c == nil {
-			return nil
+			return 0, nil
 		}
 
-		loaded, refs, err := transactionLoadedCellRefs(c)
-		if err != nil {
-			return err
+		var sl cell.Slice
+		if err := c.BeginParseIntoWithoutTrace(&sl); err != nil {
+			return 0, err
 		}
+
+		loaded := sl.BaseCell()
+		key := loaded.HashKey()
+		if depth, ok := seen[key]; ok {
+			return depth, nil
+		}
+
+		stats.usage.cells++
+		stats.usage.bits += uint64(loaded.BitsSize())
+
+		var depth uint16
+		for sl.RefsNum() > 0 {
+			ref, err := sl.LoadRefCell()
+			if err != nil {
+				return 0, err
+			}
+
+			refDepth, err := walk(ref)
+			if err != nil {
+				return 0, err
+			}
+			if refDepth > depth {
+				depth = refDepth
+			}
+		}
+
 		switch loaded.GetType() {
 		case cell.MerkleProofCellType, cell.MerkleUpdateCellType:
 			depth++
-			if depth > maxDepth {
-				maxDepth = depth
-			}
 		}
-		for _, ref := range refs {
-			if err := walk(ref, depth); err != nil {
-				return err
-			}
-		}
-		return nil
+
+		seen[key] = depth
+		return depth, nil
 	}
 	for _, root := range roots {
-		if err := walk(root, 0); err != nil {
-			return 0, err
+		depth, err := walk(root)
+		if err != nil {
+			return transactionCellStatsResult{}, err
+		}
+		if depth > stats.merkleDepth {
+			stats.merkleDepth = depth
 		}
 	}
-	return maxDepth, nil
+	return stats, nil
 }
 
 func transactionIsMasterchain(addr *address.Address) bool {
 	return addr != nil && addr.Type() == address.StdAddress && addr.Workchain() == -1
-}
-
-func transactionIsSpecialAccount(cfg tlb.BlockchainConfig, addr *address.Address) bool {
-	if !transactionIsMasterchain(addr) || len(addr.Data()) != 32 {
-		return false
-	}
-
-	configAddr, err := cfg.GetConfigAddress()
-	if err == nil && bytes.Equal(configAddr, addr.Data()) {
-		return true
-	}
-
-	fundamental, err := cfg.GetFundamentalSmartContractAddresses()
-	if err != nil || fundamental.Addresses == nil {
-		return false
-	}
-
-	key := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
-	_, err = fundamental.Addresses.LoadValue(key)
-	return err == nil
-}
-
-func transactionSpecialGasFull(cfg tlb.BlockchainConfig) bool {
-	version, err := cfg.GetGlobalVersion()
-	return err == nil && version.Version >= 5
 }

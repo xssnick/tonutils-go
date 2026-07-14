@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"math/big"
@@ -1181,6 +1182,47 @@ func TestDictionary_String(t *testing.T) {
 	str := d.String()
 	if str != lookProofExact && str != lookProofWithNeighbor {
 		t.Fatal(str)
+	}
+}
+
+func TestDictionary_LoadValueByUintKey(t *testing.T) {
+	for _, keySz := range []uint{7, 32, 64, 256} {
+		t.Run(fmt.Sprintf("key size %d", keySz), func(t *testing.T) {
+			maxKey := uint64(math.MaxUint64)
+			if keySz < 64 {
+				maxKey = 1<<keySz - 1
+			}
+
+			keys := []uint64{0, 1, 5, maxKey}
+
+			d := NewDict(keySz)
+			for i, k := range keys {
+				err := d.SetIntKey(new(big.Int).SetUint64(k), BeginCell().MustStoreUInt(uint64(i)+1000, 32).EndCell())
+				if err != nil {
+					t.Fatalf("failed to set key %d: %v", k, err)
+				}
+			}
+
+			for _, k := range keys {
+				want, err := d.LoadValueByIntKey(new(big.Int).SetUint64(k))
+				if err != nil {
+					t.Fatalf("int key %d lookup failed: %v", k, err)
+				}
+
+				got, err := d.LoadValueByUintKey(k)
+				if err != nil {
+					t.Fatalf("uint key %d lookup failed: %v", k, err)
+				}
+
+				if wantVal, gotVal := want.MustLoadUInt(32), got.MustLoadUInt(32); gotVal != wantVal {
+					t.Fatalf("uint key %d value mismatch: got %d, want %d", k, gotVal, wantVal)
+				}
+			}
+
+			if _, err := d.LoadValueByUintKey(2); !errors.Is(err, ErrNoSuchKeyInDict) {
+				t.Fatalf("expected ErrNoSuchKeyInDict for missing key, got %v", err)
+			}
+		})
 	}
 }
 

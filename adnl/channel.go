@@ -27,6 +27,7 @@ type Channel struct {
 	decKey []byte
 
 	initDate int32
+	peerDate int32
 }
 
 func (c *Channel) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
@@ -57,7 +58,7 @@ func (c *Channel) decodePacket(packet []byte) ([]byte, error) {
 }
 
 func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
-	c.peerKey = theirKey
+	c.peerKey = append(ed25519.PublicKey(nil), theirKey...)
 	c.decKey, err = keys.SharedKey(c.key, c.peerKey)
 	if err != nil {
 		return err
@@ -95,18 +96,13 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		return err
 	}
 
-	h := c.adnl.onChannel
-	if h != nil {
-		h(c)
-	}
-
 	c.ready.Store(true)
 	return nil
 }
 
 func (c *Channel) createPacket(seqno int64, msgs ...any) ([]byte, error) {
-	data := make([]byte, 32)
-	_, err := rand.Read(data)
+	var data [32]byte
+	_, err := rand.Read(data[:])
 	if err != nil {
 		return nil, err
 	}

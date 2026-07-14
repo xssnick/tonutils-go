@@ -1,8 +1,6 @@
 package tuple
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -22,9 +20,9 @@ func QTLEN() *helpers.SimpleOP {
 				return err
 			}
 			if tup, ok := val.(tuplepkg.Tuple); ok {
-				return state.Stack.PushInt(big.NewInt(int64(tup.Len())))
+				return state.Stack.PushSmallInt(int64(tup.Len()))
 			}
-			return state.Stack.PushInt(big.NewInt(-1))
+			return state.Stack.PushSmallInt(-1)
 		},
 	}
 }

@@ -18,9 +18,12 @@ func init() {
 	)
 }
 
-func pushPowConst(name string, prefix byte, value uint8, fn func(int) *big.Int) *helpers.AdvancedOP {
+func pushPowConst(name string, prefix byte, value uint8, nanAtMax bool, fn func(int) *big.Int) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		NameSerializer: func() string {
+			if nanAtMax && value == 0xff {
+				return "PUSHNAN"
+			}
 			return fmt.Sprintf("%s %d", name, int(value)+1)
 		},
 		BitPrefix:     helpers.BytesPrefix(prefix),
@@ -37,26 +40,29 @@ func pushPowConst(name string, prefix byte, value uint8, fn func(int) *big.Int) 
 			return nil
 		},
 		Action: func(state *vm.State) error {
+			if nanAtMax && value == 0xff {
+				return state.Stack.PushAny(vm.NaN{})
+			}
 			return state.Stack.PushInt(fn(int(value) + 1))
 		},
 	}
 }
 
 func PUSHPOW2(value uint8) *helpers.AdvancedOP {
-	return pushPowConst("PUSHPOW2", 0x83, value, func(x int) *big.Int {
-		return new(big.Int).Lsh(big.NewInt(1), uint(x))
+	return pushPowConst("PUSHPOW2", 0x83, value, true, func(x int) *big.Int {
+		return new(big.Int).Lsh(bigIntOne, uint(x))
 	})
 }
 
 func PUSHPOW2DEC(value uint8) *helpers.AdvancedOP {
-	return pushPowConst("PUSHPOW2DEC", 0x84, value, func(x int) *big.Int {
-		return new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), uint(x)), big.NewInt(1))
+	return pushPowConst("PUSHPOW2DEC", 0x84, value, false, func(x int) *big.Int {
+		return new(big.Int).Sub(new(big.Int).Lsh(bigIntOne, uint(x)), bigIntOne)
 	})
 }
 
 func PUSHNEGPOW2(value uint8) *helpers.AdvancedOP {
-	return pushPowConst("PUSHNEGPOW2", 0x85, value, func(x int) *big.Int {
-		return new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), uint(x)))
+	return pushPowConst("PUSHNEGPOW2", 0x85, value, false, func(x int) *big.Int {
+		return new(big.Int).Neg(new(big.Int).Lsh(bigIntOne, uint(x)))
 	})
 }
 

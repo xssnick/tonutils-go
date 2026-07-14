@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -33,7 +31,7 @@ func MULMODPOW2C_VAR() *helpers.SimpleOP {
 				return err
 			}
 
-			q := helpers.DivCeil(x.Mul(x, y), z.Lsh(big.NewInt(1), uint(z.Uint64())))
+			q := helpers.DivCeil(x.Mul(x, y), z.Lsh(bigIntOne, uint(z.Uint64())))
 			r := y.Sub(x, z.Mul(z, q))
 
 			return state.Stack.PushInt(r)

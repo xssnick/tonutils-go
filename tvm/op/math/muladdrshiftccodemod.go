@@ -2,7 +2,6 @@ package math
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -16,6 +15,7 @@ func MULADDRSHIFTCCODEMOD(value int8) (op *helpers.AdvancedOP) {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
+		MinVersion:    4,
 		Action: func(state *vm.State) error {
 			if err := checkStackDepth(state, 3); err != nil {
 				return err
@@ -37,7 +37,7 @@ func MULADDRSHIFTCCODEMOD(value int8) (op *helpers.AdvancedOP) {
 			}
 
 			dividend := x.Add(x.Mul(x, y), w)
-			q := helpers.DivCeil(dividend, y.Lsh(big.NewInt(1), uint(imm())))
+			q := helpers.DivCeil(dividend, y.Lsh(bigIntOne, uint(imm())))
 			r := w.Sub(dividend, y.Mul(y, q))
 
 			err = state.Stack.PushInt(q)

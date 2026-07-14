@@ -73,32 +73,29 @@ func TestEmulateTransactionReplayRegressionFixtures(t *testing.T) {
 			}
 
 			machine := NewTVM()
-			if err := machine.SetGlobalVersion(report.Config.GlobalVersion); err != nil {
-				t.Fatal(err)
-			}
 
-			result, err := machine.EmulateTransaction(from, inMsg, replayRegressionEmulationConfig(t, report.Config, account.FirstTx))
+			result, err := testEmulateTransaction(machine, from, inMsg, replayRegressionEmulationConfig(t, report.Config, account.FirstTx))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result == nil || result.TransactionCell == nil || result.ShardAccount == nil {
+			if result == nil || result.TransactionCell == nil || testResultShardAccount(result) == nil {
 				t.Fatal("emulation returned no transaction")
 			}
 
 			if !bytes.Equal(result.TransactionCell.Hash(), expectedTx.Hash()) {
 				t.Fatalf("transaction hash mismatch: got %x, want %x", result.TransactionCell.Hash(), expectedTx.Hash())
 			}
-			if !bytes.Equal(result.ShardAccount.Account.Hash(), expectedShard.Account.Hash()) {
-				t.Fatalf("account root hash mismatch: got %x, want %x", result.ShardAccount.Account.Hash(), expectedShard.Account.Hash())
+			if !bytes.Equal(testResultShardAccount(result).Account.Hash(), expectedShard.Account.Hash()) {
+				t.Fatalf("account root hash mismatch: got %x, want %x", testResultShardAccount(result).Account.Hash(), expectedShard.Account.Hash())
 			}
-			if !bytes.Equal(result.ShardAccount.LastTransHash, expectedTx.Hash()) {
-				t.Fatalf("last transaction hash mismatch: got %x, want %x", result.ShardAccount.LastTransHash, expectedTx.Hash())
+			if !bytes.Equal(testResultShardAccount(result).LastTransHash, expectedTx.Hash()) {
+				t.Fatalf("last transaction hash mismatch: got %x, want %x", testResultShardAccount(result).LastTransHash, expectedTx.Hash())
 			}
 		})
 	}
 }
 
-func replayRegressionEmulationConfig(t *testing.T, shared replayRegressionSharedConfig, tx replayRegressionTx) TransactionEmulationConfig {
+func replayRegressionEmulationConfig(t *testing.T, shared replayRegressionSharedConfig, tx replayRegressionTx) testTxParams {
 	t.Helper()
 
 	randSeed, err := base64.StdEncoding.DecodeString(tx.RandSeedBase64)
@@ -106,29 +103,14 @@ func replayRegressionEmulationConfig(t *testing.T, shared replayRegressionShared
 		t.Fatal(err)
 	}
 
-	var due any
-	if tx.DuePaymentNano != "" {
-		duePayment, ok := new(big.Int).SetString(tx.DuePaymentNano, 10)
-		if !ok {
-			t.Fatalf("invalid due payment %q", tx.DuePaymentNano)
-		}
-		due = duePayment
-	}
-
-	return TransactionEmulationConfig{
-		Now:                 tx.Now,
-		BlockLT:             tx.BlockLT,
-		LogicalTime:         tx.LogicalTime,
-		RandSeed:            randSeed,
-		ConfigRoot:          replayRegressionCell(t, shared.ConfigRootBOCBase64),
-		PrevBlocks:          replayRegressionTuple(t, shared.PrevBlocksStackBOCBase64),
-		UnpackedConfig:      replayRegressionTuple(t, shared.UnpackedConfigStackBOCBase64),
-		PrecompiledGasUsage: replayRegressionBigInt(t, tx.PrecompiledGasStackBOCBase64),
-		IncomingValue:       replayRegressionTuple(t, tx.IncomingValueStackBOCBase64),
-		StorageFees:         tx.StorageFees,
-		DuePayment:          due,
-		InMsgParams:         replayRegressionTuple(t, tx.InMsgParamsStackBOCBase64),
-		Libraries:           replayRegressionCells(t, shared.LibrariesBOCBase64),
+	return testTxParams{
+		Now:             tx.Now,
+		BlockLT:         tx.BlockLT,
+		LogicalTime:     tx.LogicalTime,
+		AccountRandSeed: randSeed,
+		ConfigRoot:      replayRegressionCell(t, shared.ConfigRootBOCBase64),
+		PrevBlocks:      replayRegressionTuple(t, shared.PrevBlocksStackBOCBase64),
+		Libraries:       replayRegressionCells(t, shared.LibrariesBOCBase64),
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"math/bits"
-	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,7 +42,14 @@ type dhtNode struct {
 	failedFrom  int64
 	pingEvery   int64
 
-	mx sync.Mutex
+	mx sync.RWMutex
+}
+
+type dhtNodeSnapshot struct {
+	addr      string
+	serverKey ed25519.PublicKey
+	version   int32
+	node      *Node
 }
 
 type dhtNodeList []*dhtNode
@@ -86,18 +92,36 @@ func (n *dhtNode) absorb(other *dhtNode) {
 	if n == nil || other == nil {
 		return
 	}
+	snapshot := other.snapshot()
+	serverKey := append(ed25519.PublicKey(nil), snapshot.serverKey...)
+	node := cloneNode(snapshot.node)
 
 	n.mx.Lock()
-	defer n.mx.Unlock()
+	n.addr = snapshot.addr
+	n.serverKey = serverKey
+	n.version = snapshot.version
+	n.node = node
+	n.mx.Unlock()
+}
 
-	n.addr = other.addr
-	n.serverKey = append(ed25519.PublicKey(nil), other.serverKey...)
-	n.version = other.version
-	n.node = cloneNode(other.node)
+func (n *dhtNode) snapshot() dhtNodeSnapshot {
+	n.mx.RLock()
+	snapshot := dhtNodeSnapshot{
+		addr:      n.addr,
+		serverKey: n.serverKey,
+		version:   n.version,
+		node:      n.node,
+	}
+	n.mx.RUnlock()
+
+	return snapshot
 }
 
 func (n *dhtNode) asNode() *Node {
-	return cloneNode(n.node)
+	if n == nil {
+		return nil
+	}
+	return cloneNode(n.snapshot().node)
 }
 
 func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*Node, err error) {
@@ -114,22 +138,17 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	_, err = n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dht node: %w", err)
 	}
 
 	switch r := res.(type) {
 	case NodesList:
-		for _, node := range r.List {
-			if err = node.validate(0, n.clientNetworkID()); err != nil {
-				return nil, fmt.Errorf("untrusted nodes list response: %w", err)
-			}
-		}
-		return r.List, nil
+		return filterValidNodes(r.List, n.clientNetworkID()), nil
 	}
 
-	return nil, fmt.Errorf("failed to find nodes, unexpected response type %s", reflect.TypeOf(res).String())
+	return nil, fmt.Errorf("failed to find nodes, unexpected response type %T", res)
 }
 
 func (n *dhtNode) getSignedAddressList(ctx context.Context) (*Node, error) {
@@ -143,20 +162,20 @@ func (n *dhtNode) getSignedAddressList(ctx context.Context) (*Node, error) {
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	target, err := n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dht node: %w", err)
 	}
 
 	switch r := res.(type) {
 	case Node:
-		if err = r.validate(n.version, n.clientNetworkID()); err != nil {
+		if err = r.validate(target.version, n.clientNetworkID()); err != nil {
 			return nil, fmt.Errorf("untrusted signed address list response: %w", err)
 		}
 		return cloneNode(&r), nil
 	}
 
-	return nil, fmt.Errorf("failed to get signed address list, unexpected response type %s", reflect.TypeOf(res).String())
+	return nil, fmt.Errorf("failed to get signed address list, unexpected response type %T", res)
 }
 
 func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error {
@@ -170,7 +189,7 @@ func (n *dhtNode) storeValue(ctx context.Context, id []byte, value *Value) error
 
 func (n *dhtNode) storePayload(ctx context.Context, payload []byte) error {
 	var res any
-	err := n.query(ctx, tl.Raw(payload), &res)
+	_, err := n.query(ctx, tl.Raw(payload), &res)
 	if err != nil {
 		return fmt.Errorf("failed to query dht node: %w", err)
 	}
@@ -180,7 +199,7 @@ func (n *dhtNode) storePayload(ctx context.Context, payload []byte) error {
 		return nil
 	}
 
-	return fmt.Errorf("failed to find nodes, unexpected response type %s", reflect.TypeOf(res).String())
+	return fmt.Errorf("failed to find nodes, unexpected response type %T", res)
 }
 
 func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any, err error) {
@@ -197,20 +216,14 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 	}
 
 	var res any
-	err = n.query(ctx, tl.Raw(val), &res)
+	_, err = n.query(ctx, tl.Raw(val), &res)
 	if err != nil {
 		return nil, fmt.Errorf("failed to do query to dht node: %w", err)
 	}
 
 	switch r := res.(type) {
 	case ValueNotFoundResult:
-		for _, node := range r.Nodes.List {
-			err = node.validate(0, n.clientNetworkID())
-			if err != nil {
-				return nil, fmt.Errorf("untrusted nodes list response: %s", err.Error())
-			}
-		}
-		return r.Nodes.List, nil
+		return filterValidNodes(r.Nodes.List, n.clientNetworkID()), nil
 	case ValueFoundResult:
 		if err = checkValueWithNetworkID(id, &r.Value, n.clientNetworkID()); err != nil {
 			return nil, fmt.Errorf("corrupted value: %w", err)
@@ -221,7 +234,21 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 		return &r.Value, nil
 	}
 
-	return nil, fmt.Errorf("failed to find value, unexpected response type %s", reflect.TypeOf(res).String())
+	return nil, fmt.Errorf("failed to find value, unexpected response type %T", res)
+}
+
+func filterValidNodes(nodes []*Node, networkID int32) []*Node {
+	valid := make([]*Node, 0, len(nodes))
+	for _, node := range nodes {
+		if err := node.validate(0, networkID); err != nil {
+			if Logger != nil {
+				Logger("bad dht node:", err.Error())
+			}
+			continue
+		}
+		valid = append(valid, node)
+	}
+	return valid
 }
 
 func checkValue(id []byte, value *Value) error {
@@ -252,6 +279,13 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		return fmt.Errorf("unwanted key received")
 	}
 
+	if err := checkValuePublicKey(value.KeyDescription.ID); err != nil {
+		return err
+	}
+	if err := checkValueUpdateRule(value.KeyDescription.UpdateRule); err != nil {
+		return err
+	}
+
 	idPub, err := tl.Hash(value.KeyDescription.ID)
 	if err != nil {
 		return err
@@ -273,7 +307,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 	case UpdateRuleSignature:
 		pub, ok := value.KeyDescription.ID.(keys.PublicKeyED25519)
 		if !ok {
-			return fmt.Errorf("unsupported value's key type: %s", reflect.ValueOf(value.KeyDescription.ID).String())
+			return fmt.Errorf("unsupported value's key type: %T", value.KeyDescription.ID)
 		}
 
 		// we need it to safely check data without touching original fields
@@ -301,6 +335,9 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		}
 
 	case UpdateRuleOverlayNodes:
+		if _, ok := value.KeyDescription.ID.(keys.PublicKeyOverlay); !ok {
+			return fmt.Errorf("invalid key type for DhtUpdateRuleOverlayNodes")
+		}
 		if len(value.Signature) > 0 {
 			return fmt.Errorf("cannot have signature in DhtUpdateRuleOverlayNodes")
 		}
@@ -308,15 +345,42 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 			return err
 		}
 	default:
-		return fmt.Errorf("update rule type %s is not supported yet", reflect.TypeOf(value.KeyDescription.UpdateRule))
+		return fmt.Errorf("update rule type %T is not supported yet", value.KeyDescription.UpdateRule)
 	}
 	return nil
+}
+
+func checkValuePublicKey(id any) error {
+	switch pub := id.(type) {
+	case keys.PublicKeyED25519:
+		if len(pub.Key) != ed25519.PublicKeySize {
+			return fmt.Errorf("invalid ed25519 public key")
+		}
+	case keys.PublicKeyAES:
+		if len(pub.Key) != ed25519.PublicKeySize {
+			return fmt.Errorf("invalid aes public key")
+		}
+	case keys.PublicKeyUnEnc:
+	case keys.PublicKeyOverlay:
+	default:
+		return fmt.Errorf("unsupported value key type %T", id)
+	}
+	return nil
+}
+
+func checkValueUpdateRule(rule any) error {
+	switch rule.(type) {
+	case UpdateRuleAnybody, UpdateRuleSignature, UpdateRuleOverlayNodes:
+		return nil
+	default:
+		return fmt.Errorf("update rule type %T is not supported yet", rule)
+	}
 }
 
 func checkOverlayNodesValue(overlayID, data []byte, ourNetworkID int32) error {
 	var nodes overlay.NodesList
 
-	_, err := tl.Parse(&nodes, data, true)
+	_, err := tl.ParseNoCopy(&nodes, data, true)
 	if err != nil {
 		return fmt.Errorf("unsupported data for overlay nodes rule, err: %s", err.Error())
 	}
@@ -340,7 +404,10 @@ func checkOverlayNode(node *overlay.Node, overlayID []byte, ourNetworkID int32) 
 
 	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
-		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
+		return fmt.Errorf("unsupported id type %T", node.ID)
+	}
+	if len(pub.Key) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid ed25519 public key")
 	}
 
 	signature, err := splitNodeSignature(node.Signature, ourNetworkID)
@@ -371,7 +438,7 @@ func isValueAcceptable(value *Value) bool {
 	switch value.KeyDescription.UpdateRule.(type) {
 	case UpdateRuleOverlayNodes:
 		var nodes overlay.NodesList
-		if _, err := tl.Parse(&nodes, value.Data, true); err != nil {
+		if _, err := tl.ParseNoCopy(&nodes, value.Data, true); err != nil {
 			return false
 		}
 
@@ -394,22 +461,23 @@ func (n *dhtNode) clientNetworkID() int32 {
 	return n.client.networkID
 }
 
-func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
+func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) (dhtNodeSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		// if context is canceled we are not trying to query
-		return err
+		return dhtNodeSnapshot{}, err
 	}
+	target := n.snapshot()
 
 	atomic.AddInt32(&n.inFlyQueries, 1)
 
-	peer, err := n.client.gateway.RegisterClient(n.addr, n.serverKey)
+	peer, err := n.client.gateway.RegisterClient(target.addr, target.serverKey)
 	if err != nil {
 		atomic.AddInt32(&n.inFlyQueries, -1)
-		return err
+		return target, err
 	}
 
 	defer func() {
-		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && n.badScore > 1 {
+		if atomic.AddInt32(&n.inFlyQueries, -1) == 0 && atomic.LoadInt32(&n.badScore) > 1 {
 			peer.Reinit()
 		}
 	}()
@@ -422,14 +490,14 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) error {
 			// to not report good nodes, because of our short deadline
 			n.updateStatus(false)
 		}
-		return err
+		return target, err
 	}
 	ping := time.Since(t)
 	atomic.StoreInt64(&n.ping, int64(ping))
 
 	n.updateStatus(true)
 
-	return nil
+	return target, nil
 }
 
 func (n *dhtNode) isReady() bool {

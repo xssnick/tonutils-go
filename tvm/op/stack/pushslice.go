@@ -2,6 +2,7 @@ package stack
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -10,7 +11,7 @@ import (
 
 type OpPUSHREFSLICE struct {
 	helpers.Prefixed
-	value *cell.Slice
+	ref *cell.Cell
 }
 
 func init() {
@@ -20,13 +21,12 @@ func init() {
 func PUSHSLICE(value *cell.Slice) *OpPUSHREFSLICE {
 	return &OpPUSHREFSLICE{
 		Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x89, 8)),
-		value:    value.Copy(),
+		ref:      value.Copy().MustToCell(),
 	}
 }
 
 func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
-	_, err := code.LoadUInt(8)
-	if err != nil {
+	if err := code.SkipBits(8); err != nil {
 		return err
 	}
 
@@ -38,22 +38,18 @@ func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
 		return err
 	}
 
-	op.value, err = refCell.BeginParse()
-	if err != nil {
-		return err
-	}
+	op.ref = refCell
 	return nil
 }
 
 func (op *OpPUSHREFSLICE) Serialize() *cell.Builder {
-	return cell.BeginCell().
-		MustStoreUInt(0x89, 8).MustStoreRef(op.value.MustToCell())
+	return cell.BeginCell().MustStoreUInt(0x89, 8).MustStoreRef(op.ref)
 }
 
 func (op *OpPUSHREFSLICE) SerializeText() string {
 	str := "???"
-	if op.value != nil {
-		str = op.value.WithoutTrace().MustToCell().Dump()
+	if op.ref != nil {
+		str = op.ref.WithoutTrace().Dump()
 	}
 	return fmt.Sprintf("%s PUSHREFSLICE", str)
 }
@@ -63,11 +59,9 @@ func (op *OpPUSHREFSLICE) InstructionBits() int64 {
 }
 
 func (op *OpPUSHREFSLICE) Interpret(state *vm.State) error {
-	value := op.value.WithoutTrace().MustToCell()
-	if !state.Cells.IsCellLoaded(value) {
-		if err := state.Cells.RegisterCellLoad(value); err != nil {
-			return err
-		}
+	value, err := beginPushRefCell(state, op.ref)
+	if err != nil {
+		return err
 	}
-	return state.Stack.PushSlice(op.value)
+	return state.Stack.PushOwnedSlice(value)
 }

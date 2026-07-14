@@ -2,11 +2,12 @@ package tvm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/big"
 	"testing"
 
 	ristretto "github.com/bwesterb/go-ristretto"
-	circlbls "github.com/cloudflare/circl/ecc/bls12381"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	circlgroup "github.com/cloudflare/circl/group"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -90,6 +91,68 @@ func testBLSG2ZeroBytes() []byte {
 	var zero circlbls.G2
 	zero.SetIdentity()
 	return zero.BytesCompressed()
+}
+
+// testBLSG1OffSubgroupBytes returns the compressed encoding of a point that is
+// on the G1 curve but NOT in the r-torsion subgroup. Such a point is rejected by
+// circl's full SetBytes but must be accepted by the raw TON BLS opcodes (which
+// only check on-curve membership, matching cppnode's blst_p1_deserialize).
+func testBLSG1OffSubgroupBytes(t *testing.T) []byte {
+	t.Helper()
+
+	for i := uint64(1); i < 1_000_000; i++ {
+		enc := make([]byte, 48)
+		binary.BigEndian.PutUint64(enc[40:], i)
+		enc[0] = (enc[0] & 0x1F) | 0x80 // compressed, finite, canonical y-sign
+
+		var oc circlbls.G1
+		if oc.SetBytesOnCurve(enc) != nil {
+			continue // x is not the abscissa of a curve point
+		}
+		var full circlbls.G1
+		if full.SetBytes(enc) == nil {
+			continue // in-subgroup, keep looking
+		}
+		return oc.BytesCompressed()
+	}
+
+	t.Fatal("failed to find an on-curve off-subgroup G1 encoding")
+	return nil
+}
+
+func testBLSG2OffSubgroupBytes(t *testing.T) []byte {
+	t.Helper()
+
+	for i := uint64(1); i < 1_000_000; i++ {
+		enc := make([]byte, 96)
+		binary.BigEndian.PutUint64(enc[88:], i)
+		enc[0] = (enc[0] & 0x1F) | 0x80
+
+		var oc circlbls.G2
+		if oc.SetBytesOnCurve(enc) != nil {
+			continue
+		}
+		var full circlbls.G2
+		if full.SetBytes(enc) == nil {
+			continue
+		}
+		return oc.BytesCompressed()
+	}
+
+	t.Fatal("failed to find an on-curve off-subgroup G2 encoding")
+	return nil
+}
+
+// testBLSG1NegBytes returns compressed(-a).
+func testBLSG1NegBytes(t *testing.T, a []byte) []byte {
+	t.Helper()
+
+	var pa circlbls.G1
+	if err := pa.SetBytesOnCurve(a); err != nil {
+		t.Fatalf("failed to parse G1 a: %v", err)
+	}
+	pa.Neg()
+	return pa.BytesCompressed()
 }
 
 func testInvalidBLSG1Bytes(t *testing.T) []byte {

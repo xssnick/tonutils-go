@@ -533,7 +533,7 @@ func runRawCodeWithGas(code *cell.Cell, gasLimit int64, values ...any) (*vmcore.
 		}
 	}
 
-	res, err := NewTVM().ExecuteDetailed(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(gasLimit), stack)
+	res, err := NewTVM().Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(gasLimit), stack, mustTestExecutionConfig())
 	return stack, res, err
 }
 

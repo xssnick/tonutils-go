@@ -7,6 +7,8 @@ import (
 	"math/bits"
 )
 
+var bigIntOne = big.NewInt(1)
+
 type Builder struct {
 	trace   *Trace
 	data    [maxCellDataBytes]byte
@@ -49,7 +51,7 @@ func (b *Builder) MustStoreCoins(value uint64) *Builder {
 }
 
 func (b *Builder) StoreCoins(value uint64) error {
-	return b.StoreBigCoins(new(big.Int).SetUint64(value))
+	return b.StoreVarUInt(value, 16)
 }
 
 func (b *Builder) MustStoreBigCoins(value *big.Int) *Builder {
@@ -66,7 +68,24 @@ func (b *Builder) StoreBigCoins(value *big.Int) error {
 }
 
 func (b *Builder) StoreVarUInt(val uint64, sz uint) error {
-	return b.StoreBigVarUInt(big.NewInt(0).SetUint64(val), sz)
+	if sz == 0 {
+		return ErrInvalidSize
+	}
+
+	ln := uint((bits.Len64(val) + 7) >> 3)
+	if ln >= sz {
+		return ErrTooBigValue
+	}
+
+	szLen := uint(bits.Len64(uint64(sz - 1)))
+	if b.bitsSz+szLen+(ln*8) >= 1024 {
+		return ErrNotFit1023
+	}
+
+	if err := b.StoreUInt(uint64(ln), szLen); err != nil {
+		return err
+	}
+	return b.StoreUInt(val, ln*8)
 }
 
 func (b *Builder) StoreVarInt(val int64, sz uint) error {
@@ -192,12 +211,59 @@ func (b *Builder) StoreUInt(value uint64, sz uint) error {
 	if sz < 64 && value>>sz != 0 {
 		return ErrTooBigValue
 	}
+	if sz == 1 {
+		return b.StoreBoolBit(value == 1)
+	}
+	if b.bitsSz%8 == 0 && sz%8 == 0 {
+		if b.bitsSz+sz >= 1024 {
+			return ErrNotFit1023
+		}
 
-	value <<= 64 - sz
-	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], value)
+		dst := int(b.bitsSz / 8)
+		switch sz {
+		case 8:
+			b.data[dst] = byte(value)
+		case 16:
+			binary.BigEndian.PutUint16(b.data[dst:dst+2], uint16(value))
+		case 32:
+			binary.BigEndian.PutUint32(b.data[dst:dst+4], uint32(value))
+		case 64:
+			binary.BigEndian.PutUint64(b.data[dst:dst+8], value)
+		default:
+			value <<= 64 - sz
+			var buf [8]byte
+			binary.BigEndian.PutUint64(buf[:], value)
+			copy(b.data[dst:dst+int(sz/8)], buf[:int(sz/8)])
+		}
+		b.bitsSz += sz
+		return nil
+	}
 
-	return b.StoreSlice(buf[:], sz)
+	if b.bitsSz+sz >= 1024 {
+		return ErrNotFit1023
+	}
+
+	idx := b.bitsSz / 8
+	if idx+8 > uint(len(b.data)) {
+		// too close to the array end for a word-wide write
+		value <<= 64 - sz
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], value)
+		return b.StoreSlice(buf[:], sz)
+	}
+
+	// single read-modify-write of the destination word: bits past bitsSz are
+	// zero by the builder invariant, so OR places the value in one shot
+	off := b.bitsSz % 8
+	v := value << (64 - sz)
+	cur := binary.BigEndian.Uint64(b.data[idx:])
+	binary.BigEndian.PutUint64(b.data[idx:], cur|v>>off)
+	if off+sz > 64 {
+		b.data[idx+8] = byte(v << (64 - off) >> 56)
+	}
+
+	b.bitsSz += sz
+	return nil
 }
 
 func (b *Builder) MustStoreInt(value int64, sz uint) *Builder {
@@ -296,18 +362,9 @@ func (b *Builder) StoreBigUInt(value *big.Int, sz uint) error {
 }
 
 func (b *Builder) storeBig(value *big.Int, sz uint) error {
-	bytes := value.Bytes()
-
-	partByte := 0
-	if sz%8 != 0 {
-		partByte = 1
-	}
-	bytesToUse := (int(sz) / 8) + partByte
-
-	if len(bytes) < bytesToUse {
-		// add zero bits to fit requested size
-		bytes = append(make([]byte, bytesToUse-len(bytes)), bytes...)
-	}
+	bytesToUse := int((sz + 7) / 8)
+	var buf [33]byte
+	bytes := value.FillBytes(buf[:bytesToUse])
 
 	// check is value uses full bytes
 	if offset := sz % 8; offset > 0 {
@@ -356,7 +413,7 @@ func (b *Builder) StoreBigInt(value *big.Int, sz uint) error {
 		return ErrTooBigValue
 	}
 
-	encoded := new(big.Int).Lsh(big.NewInt(1), sz)
+	encoded := new(big.Int).Lsh(bigIntOne, sz)
 	encoded.Add(encoded, value)
 	return b.storeBig(encoded, sz)
 }
@@ -527,8 +584,8 @@ func fitsNegativeBigInt(value *big.Int, sz uint) bool {
 		return false
 	}
 
-	absMinusOne := new(big.Int).Neg(new(big.Int).Set(value))
-	absMinusOne.Sub(absMinusOne, big.NewInt(1))
+	absMinusOne := new(big.Int).Neg(value)
+	absMinusOne.Sub(absMinusOne, bigIntOne)
 	return absMinusOne.BitLen() <= int(sz-1)
 }
 
@@ -541,7 +598,7 @@ func varIntBytes(val *big.Int) uint {
 	}
 
 	n := new(big.Int).Neg(val)
-	n.Sub(n, big.NewInt(1))
+	n.Sub(n, bigIntOne)
 	return uint(n.BitLen()+8) >> 3
 }
 
@@ -562,46 +619,125 @@ func (b *Builder) MustStoreBinarySnake(data []byte) *Builder {
 }
 
 func (b *Builder) StoreStringSnake(str string) error {
-	return b.StoreBinarySnake([]byte(str))
-}
-
-func (b *Builder) StoreBinarySnake(data []byte) error {
-	var makeSnake func(data []byte, space int) (*Builder, error)
-	makeSnake = func(data []byte, space int) (*Builder, error) {
-		if len(data) < space {
-			space = len(data)
-		}
-
-		c := BeginCell()
-		if err := c.StoreSlice(data[:space], uint(space)*8); err != nil {
-			return nil, err
-		}
-
-		if len(data) > space {
-			ref, err := makeSnake(data[space:], 127)
-			if err != nil {
-				return nil, err
-			}
-
-			child, err := ref.EndCellSpecial(false)
-			if err != nil {
-				return nil, err
-			}
-
-			if err = c.StoreRef(child); err != nil {
-				return nil, err
-			}
-		}
-
-		return c, nil
-	}
-
-	snake, err := makeSnake(data, int(b.BitsLeft()/8))
-	if err != nil {
+	first := min(len(str), int(b.BitsLeft()/8))
+	if err := preflightSnake(b, len(str)-first); err != nil {
 		return err
 	}
 
-	return b.StoreBuilder(snake)
+	tmp := *b
+	if err := tmp.storeStringBytes(str[:first]); err != nil {
+		return err
+	}
+	if first < len(str) {
+		child, err := buildStringSnakeTail(str[first:])
+		if err != nil {
+			return err
+		}
+		if err = tmp.StoreRef(child); err != nil {
+			return err
+		}
+	}
+
+	*b = tmp
+	return nil
+}
+
+func (b *Builder) StoreBinarySnake(data []byte) error {
+	first := min(len(data), int(b.BitsLeft()/8))
+	if err := preflightSnake(b, len(data)-first); err != nil {
+		return err
+	}
+
+	tmp := *b
+	if err := tmp.StoreSlice(data[:first], uint(first)*8); err != nil {
+		return err
+	}
+	if first < len(data) {
+		child, err := buildBinarySnakeTail(data[first:])
+		if err != nil {
+			return err
+		}
+		if err = tmp.StoreRef(child); err != nil {
+			return err
+		}
+	}
+
+	*b = tmp
+	return nil
+}
+
+func preflightSnake(b *Builder, tailBytes int) error {
+	if tailBytes == 0 {
+		return nil
+	}
+	if b.refsNum >= 4 {
+		return ErrTooMuchRefs
+	}
+
+	// Every tail cell stores at most 127 bytes. The last cell has depth zero,
+	// hence a chain with n cells is a reference of depth n-1.
+	cells := (tailBytes-1)/127 + 1
+	if cells-1 >= maxDepth {
+		return ErrCellDepthLimit
+	}
+	return nil
+}
+
+func buildBinarySnakeTail(data []byte) (*Cell, error) {
+	var child *Cell
+	for end := len(data); end > 0; {
+		start := max(0, end-127)
+		part := BeginCell()
+		if err := part.StoreSlice(data[start:end], uint(end-start)*8); err != nil {
+			return nil, err
+		}
+		if child != nil {
+			if err := part.StoreRef(child); err != nil {
+				return nil, err
+			}
+		}
+
+		var err error
+		child, err = part.EndCellSpecial(false)
+		if err != nil {
+			return nil, err
+		}
+		end = start
+	}
+	return child, nil
+}
+
+func buildStringSnakeTail(str string) (*Cell, error) {
+	var child *Cell
+	for end := len(str); end > 0; {
+		start := max(0, end-127)
+		part := BeginCell()
+		if err := part.storeStringBytes(str[start:end]); err != nil {
+			return nil, err
+		}
+		if child != nil {
+			if err := part.StoreRef(child); err != nil {
+				return nil, err
+			}
+		}
+
+		var err error
+		child, err = part.EndCellSpecial(false)
+		if err != nil {
+			return nil, err
+		}
+		end = start
+	}
+	return child, nil
+}
+
+func (b *Builder) storeStringBytes(str string) error {
+	if len(str) == 0 {
+		return nil
+	}
+	var data [127]byte
+	copy(data[:], str)
+	return b.StoreSlice(data[:len(str)], uint(len(str))*8)
 }
 
 func (b *Builder) MustStoreDict(dict SerializableToCell) *Builder {
@@ -726,7 +862,18 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	} else {
 		shift := dstBitOffset
 		invShift := 8 - dstBitOffset
-		for i := 0; i < bytesNeeded; i++ {
+
+		// word-wise path: 8 source bytes per step; the last byte of each
+		// written word is partial and is completed by the next step or by
+		// the tail loop below
+		i := 0
+		for ; i+8 <= bytesNeeded && uint((i+7)*8)+invShift < sz && dstByte+i+9 <= len(b.data); i += 8 {
+			v := binary.BigEndian.Uint64(bytes[i:])
+			b.data[dstByte+i] |= byte(v >> (56 + shift))
+			binary.BigEndian.PutUint64(b.data[dstByte+i+1:], v<<invShift)
+		}
+
+		for ; i < bytesNeeded; i++ {
 			src := bytes[i]
 			b.data[dstByte+i] |= src >> shift
 			if sz > uint(i*8)+invShift {
@@ -741,6 +888,14 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	}
 
 	return nil
+}
+
+func (b *Builder) storeSliceFromSlice(slice *Slice, sz uint) error {
+	var data [maxCellDataBytes]byte
+	if err := slice.loadSliceInto(data[:], sz, false); err != nil {
+		return err
+	}
+	return b.StoreSlice(data[:], sz)
 }
 
 func (b *Builder) MustStoreBuilder(builder *Builder) *Builder {
@@ -774,10 +929,8 @@ func (b *Builder) storeBuilder(builder *Builder, checkDepth bool) error {
 		}
 	}
 
-	for _, ref := range refs {
-		b.refs[b.refsNum] = ref
-		b.refsNum++
-	}
+	copy(b.refs[b.refsNum:], refs)
+	b.refsNum += builder.refsNum
 
 	return b.StoreSlice(builder.dataSlice(), builder.bitsSz)
 }
@@ -796,6 +949,27 @@ func (b *Builder) BitsLeft() uint {
 
 func (b *Builder) RefsLeft() uint {
 	return 4 - uint(b.refsNum)
+}
+
+// truncateBits rolls the builder back to an earlier length for backtracking
+// tree walks. The whole rolled-back range is zeroed to restore the builder
+// invariant that bits past bitsSz are zero: stores rely on it by extending
+// partially written bytes with OR.
+func (b *Builder) truncateBits(sz uint) {
+	if sz >= b.bitsSz {
+		return
+	}
+
+	from := sz / 8
+	if rem := sz % 8; rem != 0 {
+		b.data[from] &= byte(0xFF << (8 - rem))
+		from++
+	}
+	to := (b.bitsSz + 7) / 8
+	if from < to {
+		clear(b.data[from:to])
+	}
+	b.bitsSz = sz
 }
 
 func (b *Builder) Copy() *Builder {

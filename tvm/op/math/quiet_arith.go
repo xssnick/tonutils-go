@@ -36,7 +36,7 @@ func quietUnaryIntOp(name string, prefix helpers.BitPrefix, fn func(*big.Int) *b
 			if x == nil {
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(fn(x))
+			return state.Stack.PushOwnedIntQuiet(fn(x))
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -60,14 +60,15 @@ func quietBinaryIntOp(name string, prefix helpers.BitPrefix, fn func(x, y *big.I
 			if x == nil || y == nil {
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(fn(x, y))
+			return state.Stack.PushOwnedIntQuiet(fn(x, y))
 		},
 		Name:      name,
 		BitPrefix: prefix,
 	}
 }
 
-func quietTinyIntOp(name string, prefix helpers.BitPrefix, value int8, fn func(x *big.Int, arg int64) *big.Int) *helpers.AdvancedOP {
+func quietTinyIntOp(name string, prefix helpers.BitPrefix, value int8, fn func(x, arg *big.Int) *big.Int) *helpers.AdvancedOP {
+	arg := big.NewInt(int64(value))
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
@@ -81,7 +82,7 @@ func quietTinyIntOp(name string, prefix helpers.BitPrefix, value int8, fn func(x
 			if x == nil {
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(fn(x, int64(value)))
+			return state.Stack.PushOwnedIntQuiet(fn(x, arg))
 		},
 		NameSerializer: func() string {
 			return fmt.Sprintf("%s %d", name, value)
@@ -96,6 +97,7 @@ func quietTinyIntOp(name string, prefix helpers.BitPrefix, value int8, fn func(x
 				return err
 			}
 			value = int8(v)
+			arg.SetInt64(int64(value))
 			return nil
 		},
 	}
@@ -127,25 +129,25 @@ func QNEGATE() *helpers.SimpleOP {
 
 func QINC() *helpers.SimpleOP {
 	return quietUnaryIntOp("QINC", helpers.BytesPrefix(0xB7, 0xA4), func(x *big.Int) *big.Int {
-		return x.Add(x, big.NewInt(1))
+		return x.Add(x, bigIntOne)
 	})
 }
 
 func QDEC() *helpers.SimpleOP {
 	return quietUnaryIntOp("QDEC", helpers.BytesPrefix(0xB7, 0xA5), func(x *big.Int) *big.Int {
-		return x.Sub(x, big.NewInt(1))
+		return x.Sub(x, bigIntOne)
 	})
 }
 
 func QADDINT(value int8) *helpers.AdvancedOP {
-	return quietTinyIntOp("QADDINT", helpers.BytesPrefix(0xB7, 0xA6), value, func(x *big.Int, arg int64) *big.Int {
-		return x.Add(x, big.NewInt(arg))
+	return quietTinyIntOp("QADDINT", helpers.BytesPrefix(0xB7, 0xA6), value, func(x, arg *big.Int) *big.Int {
+		return x.Add(x, arg)
 	})
 }
 
 func QMULINT(value int8) *helpers.AdvancedOP {
-	return quietTinyIntOp("QMULINT", helpers.BytesPrefix(0xB7, 0xA7), value, func(x *big.Int, arg int64) *big.Int {
-		return x.Mul(x, big.NewInt(arg))
+	return quietTinyIntOp("QMULINT", helpers.BytesPrefix(0xB7, 0xA7), value, func(x, arg *big.Int) *big.Int {
+		return x.Mul(x, arg)
 	})
 }
 

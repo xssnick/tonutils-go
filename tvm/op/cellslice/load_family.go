@@ -46,7 +46,7 @@ func loadIntCommon(state *vm.State, bits uint, preload, unsigned, quiet bool) er
 		return err
 	}
 
-	var val any
+	var val *big.Int
 	if unsigned {
 		if preload {
 			val, err = cs.PreloadBigUInt(bits)
@@ -73,7 +73,7 @@ func loadIntCommon(state *vm.State, bits uint, preload, unsigned, quiet bool) er
 		return state.Stack.PushBool(false)
 	}
 
-	if err = state.Stack.PushAny(val); err != nil {
+	if err = state.Stack.PushOwnedInt(val); err != nil {
 		return err
 	}
 	if !preload {
@@ -158,11 +158,11 @@ func loadIntXOp(name string, mode uint64) *helpers.AdvancedOP {
 				return err
 			}
 
-			bits, err := state.Stack.PopIntRange(0, 257-int64(mode&1))
+			bits, err := state.Stack.PopIntRangeInt64(0, 257-int64(mode&1))
 			if err != nil {
 				return err
 			}
-			return loadIntCommon(state, uint(bits.Uint64()), mode&2 != 0, mode&1 != 0, mode&4 != 0)
+			return loadIntCommon(state, uint(bits), mode&2 != 0, mode&1 != 0, mode&4 != 0)
 		},
 	}
 }
@@ -221,7 +221,7 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 	arg := uint64(bits>>5) - 1
 	return &helpers.AdvancedOP{
 		NameSerializer: func() string {
-			return fmt.Sprintf("PLDUZ %d", bits)
+			return fmt.Sprintf("PLDUZ %d", (arg+1)<<5)
 		},
 		BitPrefix:     helpers.UIntPrefix(0xD710>>3, 13),
 		FixedSizeBits: 3,
@@ -246,7 +246,7 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 			if left := cs.BitsLeft(); left < loadBits {
 				loadBits = left
 			}
-			val := big.NewInt(0)
+			val := new(big.Int)
 			if loadBits > 0 {
 				val, err = cs.PreloadBigUInt(loadBits)
 				if err != nil {
@@ -259,7 +259,7 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 			if err = state.Stack.PushOwnedSlice(cs); err != nil {
 				return err
 			}
-			return state.Stack.PushInt(val)
+			return state.Stack.PushOwnedInt(val)
 		},
 	}
 }
@@ -285,11 +285,11 @@ func loadSliceXOp(name string, mode uint64) *helpers.AdvancedOP {
 				return err
 			}
 
-			bits, err := state.Stack.PopIntRange(0, 1023)
+			bits, err := state.Stack.PopIntRangeInt64(0, 1023)
 			if err != nil {
 				return err
 			}
-			return loadSliceCommon(state, uint(bits.Uint64()), mode&1 != 0, mode&2 != 0)
+			return loadSliceCommon(state, uint(bits), mode&1 != 0, mode&2 != 0)
 		},
 	}
 }

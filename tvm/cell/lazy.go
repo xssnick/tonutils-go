@@ -3,6 +3,7 @@ package cell
 import (
 	"encoding/binary"
 	"errors"
+	"math/bits"
 )
 
 var ErrLazyLoaderNotSet = errors.New("lazy pruned ref loader is not set")
@@ -52,6 +53,7 @@ func CreateWithLazyRefsUnsafe(descriptors uint16, data, hashes []byte, depths []
 	c.setSpecial(dsc1&0b1000 != 0)
 	c.setLevelMask(levelMask)
 	c.setRefsCount(refCnt)
+	c.resolveType()
 	if err = setTrustedHashesDepths(c, levelMask, hashes, depths); err != nil {
 		return nil, err
 	}
@@ -75,14 +77,19 @@ func cellBodyBitsSize(dsc2 byte, data []byte) (uint16, error) {
 		return uint16(payloadSize * 8), nil
 	}
 
-	last := data[payloadSize-1]
-	for i := 0; i < 7; i++ {
-		if (last>>i)&1 == 1 {
-			return uint16((payloadSize-1)*8 + 7 - i), nil
-		}
+	bitsSz, ok := cellBodyBitsSizeFromLast(payloadSize, data[payloadSize-1])
+	if !ok {
+		return 0, errors.New("invalid cell payload")
 	}
+	return bitsSz, nil
+}
 
-	return 0, errors.New("invalid cell payload")
+func cellBodyBitsSizeFromLast(payloadSize int, last byte) (uint16, bool) {
+	terminatorBit := bits.TrailingZeros8(last)
+	if terminatorBit >= 7 {
+		return 0, false
+	}
+	return uint16((payloadSize-1)*8 + 7 - terminatorBit), true
 }
 
 func createLazyPrunedRef(ref LazyRef, loader LazyCellLoader) (*Cell, error) {
@@ -217,7 +224,8 @@ func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecu
 
 	refView := newCellRefView(loaded)
 	refCnt := loaded.refsCount()
-	refs := make([]*Cell, refCnt)
+	var refsBuf [4]*Cell
+	refs := refsBuf[:refCnt]
 	if !unlimited && depth == 0 {
 		for i := range refs {
 			refs[i], err = refView.boundaryRef(i)

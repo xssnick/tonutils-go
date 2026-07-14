@@ -5,13 +5,18 @@ package tvm
 import (
 	"bytes"
 	"os"
+	"strconv"
 	"testing"
+
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
+
+	preparedCfg := MustPrepareBlockchainConfig(mustReferenceTransactionConfigRoot(t))
 
 	t.Run("InitialSendMatchesReference", func(t *testing.T) {
 		fx := makeWalletV5SendFixture(t, walletSendInitialSeqno)
@@ -20,7 +25,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reference send_external failed: %v", err)
 		}
-		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion)
+		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("go send_external failed: %v", err)
 		}
@@ -34,7 +39,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reference first send_external failed: %v", err)
 		}
-		goFirst, err := emulateWalletSendExternal(t, fx1.code, fx1.data, fx1.address, fx1.body, fx1.now, walletSendCrossVersion)
+		goFirst, err := emulateWalletSendExternal(t, fx1.code, fx1.data, fx1.address, fx1.body, fx1.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("go first send_external failed: %v", err)
 		}
@@ -45,7 +50,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reference second send_external failed: %v", err)
 		}
-		goSecond, err := emulateWalletSendExternal(t, fx2.code, goFirst.Data, fx2.address, fx2.body, fx2.now, walletSendCrossVersion)
+		goSecond, err := emulateWalletSendExternal(t, fx2.code, goFirst.Data, fx2.address, fx2.body, fx2.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("go second send_external failed: %v", err)
 		}
@@ -55,7 +60,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 	t.Run("StaleSeqnoRejectMatchesReference", func(t *testing.T) {
 		fx := makeWalletV5SendFixture(t, walletSendSecondSeqno)
 
-		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, walletSendCrossVersion)
+		goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, preparedCfg)
 		if err != nil {
 			t.Fatalf("go stale send_external failed: %v", err)
 		}
@@ -66,6 +71,128 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 
 		assertMessageSendMatchesReference(t, goRes, refRes)
 	})
+}
+
+func TestTVMCrossEmulatorWalletV5SendExternalAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for _, version := range crossEmulatorVersionAuditVersions(t, "TVM_WALLET_SEND_VERSION_AUDIT") {
+		t.Run("initial_global_v"+strconv.Itoa(version), func(t *testing.T) {
+			assertWalletV5SendExternalVersionParity(t, version, false)
+		})
+
+		t.Run("stale_global_v"+strconv.Itoa(version), func(t *testing.T) {
+			assertWalletV5SendExternalVersionParity(t, version, true)
+		})
+
+		t.Run("sequential_global_v"+strconv.Itoa(version), func(t *testing.T) {
+			assertWalletV5SendExternalSequentialVersionParity(t, version)
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorWalletV5SendExternalGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), false)
+		f.Add(uint8(version), true)
+	}
+	f.Add(uint8(255), false)
+	f.Add(uint8(255), true)
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, stale bool) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		assertWalletV5SendExternalVersionParity(t, version, stale)
+	})
+}
+
+func assertWalletV5SendExternalVersionParity(t *testing.T, version int, stale bool) {
+	t.Helper()
+
+	seqno := walletSendInitialSeqno
+	if stale {
+		seqno = walletSendSecondSeqno
+	}
+	fx := makeWalletV5SendFixture(t, seqno)
+	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
+
+	refRes, err := runReferenceSendMessageWithConfig(fx.code, fx.data, fx.body, 0, false, referenceSendMessageConfig{
+		address:    fx.address,
+		now:        fx.now,
+		balance:    referenceDefaultWalletSendBalance,
+		randSeed:   referenceDefaultWalletSendSeed,
+		configRoot: configRoot,
+	})
+	if err != nil {
+		t.Fatalf("reference send_external v%d stale=%t failed: %v", version, stale, err)
+	}
+	goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, MustPrepareBlockchainConfig(configRoot))
+	if err != nil {
+		t.Fatalf("go send_external v%d stale=%t failed: %v", version, stale, err)
+	}
+
+	assertMessageSendMatchesReference(t, goRes, refRes)
+}
+
+func FuzzTVMCrossEmulatorWalletV5SendExternalSequentialGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version))
+	}
+	f.Add(uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		assertWalletV5SendExternalSequentialVersionParity(t, version)
+	})
+}
+
+func assertWalletV5SendExternalSequentialVersionParity(t *testing.T, version int) {
+	t.Helper()
+
+	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
+	preparedCfg := MustPrepareBlockchainConfig(configRoot)
+	fx1 := makeWalletV5SendFixture(t, walletSendInitialSeqno)
+	refFirst, err := runReferenceSendMessageWithConfig(fx1.code, fx1.data, fx1.body, 0, false, referenceSendMessageConfig{
+		address:    fx1.address,
+		now:        fx1.now,
+		balance:    referenceDefaultWalletSendBalance,
+		randSeed:   referenceDefaultWalletSendSeed,
+		configRoot: configRoot,
+	})
+	if err != nil {
+		t.Fatalf("reference first send_external v%d failed: %v", version, err)
+	}
+	goFirst, err := emulateWalletSendExternal(t, fx1.code, fx1.data, fx1.address, fx1.body, fx1.now, preparedCfg)
+	if err != nil {
+		t.Fatalf("go first send_external v%d failed: %v", version, err)
+	}
+	assertMessageSendMatchesReference(t, goFirst, refFirst)
+
+	fx2 := makeWalletV5SendFixture(t, walletSendSecondSeqno)
+	refSecond, err := runReferenceSendMessageWithConfig(fx2.code, refFirst.data, fx2.body, 0, false, referenceSendMessageConfig{
+		address:    fx2.address,
+		now:        fx2.now,
+		balance:    referenceDefaultWalletSendBalance,
+		randSeed:   referenceDefaultWalletSendSeed,
+		configRoot: configRoot,
+	})
+	if err != nil {
+		t.Fatalf("reference second send_external v%d failed: %v", version, err)
+	}
+	goSecond, err := emulateWalletSendExternal(t, fx2.code, goFirst.Data, fx2.address, fx2.body, fx2.now, preparedCfg)
+	if err != nil {
+		t.Fatalf("go second send_external v%d failed: %v", version, err)
+	}
+	assertMessageSendMatchesReference(t, goSecond, refSecond)
 }
 
 func assertMessageSendMatchesReference(t *testing.T, goRes *MessageExecutionResult, refRes *referenceSendMessageResult) {

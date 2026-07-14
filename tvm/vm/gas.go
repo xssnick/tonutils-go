@@ -4,8 +4,8 @@ import "github.com/xssnick/tonutils-go/tvm/vmerr"
 
 // Gas prices constants.
 const (
-	GasInfinite          int64 = 1<<63 - 1
-	DefaultGlobalVersion       = 13
+	GasInfinite               int64 = 1<<63 - 1
+	MaxSupportedGlobalVersion       = 15
 
 	CellLoadGasPrice           = 100
 	CellReloadGasPrice         = 25
@@ -31,9 +31,9 @@ const (
 
 	EcrecoverGasPrice                    = 1500
 	Secp256k1XonlyPubkeyTweakAddGasPrice = 1250
-	ChksgnFreeCount                      = 10
-	ChksgnGasPrice                       = 4000
-	P256ChksgnGasPrice                   = 3500
+	SignatureCheckFreeCount              = 10
+	SignatureCheckGasPrice               = 4000
+	P256SignatureCheckGasPrice           = 3500
 
 	BlsVerifyGasPrice                     = 61000
 	BlsAggregateBaseGasPrice              = -2650

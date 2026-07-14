@@ -17,12 +17,25 @@ import (
 	"math/big"
 	"os"
 	"runtime/debug"
-	"strings"
+	"sync"
 )
 
 type trieNode struct {
 	next [2]*trieNode
 	op   vm.OPGetter
+}
+
+const opcodeDispatchIndexBits = 16
+
+type opcodeDispatch struct {
+	root         *trieNode
+	maxPrefixLen uint
+	index        [1 << opcodeDispatchIndexBits]opcodeDispatchPrefix
+}
+
+type opcodeDispatchPrefix struct {
+	node    *trieNode
+	matched vm.OPGetter
 }
 
 type matchedDeserializer interface {
@@ -34,17 +47,41 @@ type reusableOP interface {
 }
 
 type TVM struct {
-	trie          *trieNode
-	maxPrefixLen  uint
-	globalVersion int
+	dispatches [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
 }
 
-const MinSupportedGlobalVersion = 13
+var (
+	sharedOpcodeDispatchesOnce sync.Once
+	sharedOpcodeDispatches     [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
+	sharedOpcodeDispatchesLen  int
+)
 
 func NewTVM() *TVM {
-	tvm := &TVM{
-		trie:          &trieNode{},
-		globalVersion: vm.DefaultGlobalVersion,
+	return &TVM{dispatches: getOpcodeDispatches()}
+}
+
+func getOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+	dispatches := getSharedOpcodeDispatches()
+	if len(vm.List) == sharedOpcodeDispatchesLen {
+		return dispatches
+	}
+	return buildOpcodeDispatches()
+}
+
+func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+	sharedOpcodeDispatchesOnce.Do(buildSharedOpcodeDispatches)
+	return sharedOpcodeDispatches
+}
+
+func buildSharedOpcodeDispatches() {
+	sharedOpcodeDispatches = buildOpcodeDispatches()
+	sharedOpcodeDispatchesLen = len(vm.List)
+}
+
+func buildOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+	var dispatches [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
+	for ver := 0; ver <= vm.MaxSupportedGlobalVersion; ver++ {
+		dispatches[ver] = newOpcodeDispatch()
 	}
 
 	for _, opGetter := range vm.List {
@@ -53,12 +90,30 @@ func NewTVM() *TVM {
 		if reusable, ok := op.(reusableOP); ok && reusable.Reusable() {
 			getter = cachedOPGetter(op)
 		}
-		for _, s := range op.GetPrefixes() {
-			tvm.addTriePrefix(s, getter)
+		prefixes := op.GetPrefixes()
+		minVersion := opcodeMinVersion(op)
+		if minVersion < 0 {
+			minVersion = 0
+		}
+		var invalidGetter vm.OPGetter
+		for _, s := range prefixes {
+			if minVersion > 0 && opcodeIsHistoricalQuietCompoundPrefix(s) {
+				if invalidGetter == nil {
+					invalidGetter = historicalInvalidOpcodeGetter(op)
+				}
+				for ver := 0; ver < minVersion && ver <= vm.MaxSupportedGlobalVersion; ver++ {
+					dispatches[ver].addPrefix(s, invalidGetter)
+				}
+			}
+			for ver := minVersion; ver <= vm.MaxSupportedGlobalVersion; ver++ {
+				dispatches[ver].addPrefix(s, getter)
+			}
 		}
 	}
-
-	return tvm
+	for ver := 0; ver <= vm.MaxSupportedGlobalVersion; ver++ {
+		dispatches[ver].buildFastTable()
+	}
+	return dispatches
 }
 
 func cachedOPGetter(op vm.OP) vm.OPGetter {
@@ -67,13 +122,103 @@ func cachedOPGetter(op vm.OP) vm.OPGetter {
 	}
 }
 
-func (tvm *TVM) SetGlobalVersion(version int) error {
-	if version < MinSupportedGlobalVersion {
-		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, MinSupportedGlobalVersion)
+func opcodeMinVersion(op vm.OP) int {
+	if versioned, ok := op.(vm.VersionedOp); ok {
+		return versioned.MinGlobalVersion()
+	}
+	return 0
+}
+
+func opcodeIsHistoricalQuietCompoundPrefix(prefix *cell.Slice) bool {
+	if prefix == nil || prefix.BitsLeft() != 24 {
+		return false
 	}
 
-	tvm.globalVersion = version
+	value, err := prefix.PreloadUInt(24)
+	if err != nil {
+		return false
+	}
+
+	args := uint8(value & 0x0f)
+	if args&3 == 3 || (args>>2)&3 != 0 {
+		return false
+	}
+
+	switch value >> 4 {
+	case 0xb7a90, 0xb7a92, 0xb7a98, 0xb7a9a, 0xb7a9c:
+		return true
+	default:
+		return false
+	}
+}
+
+type historicalInvalidOpcode struct {
+	op vm.OP
+}
+
+func historicalInvalidOpcodeGetter(op vm.OP) vm.OPGetter {
+	invalid := historicalInvalidOpcode{op: op}
+	if _, ok := op.(vm.GasPricedOp); ok {
+		return cachedOPGetter(historicalInvalidOpcodeGas{historicalInvalidOpcode: invalid})
+	}
+	return cachedOPGetter(invalid)
+}
+
+func (op historicalInvalidOpcode) GetPrefixes() []*cell.Slice {
+	return op.op.GetPrefixes()
+}
+
+func (op historicalInvalidOpcode) Deserialize(code *cell.Slice) error {
+	return op.op.Deserialize(code)
+}
+
+func (op historicalInvalidOpcode) DeserializeMatched(code *cell.Slice) error {
+	if matched, ok := op.op.(matchedDeserializer); ok {
+		return matched.DeserializeMatched(code)
+	}
+	return op.op.Deserialize(code)
+}
+
+func (op historicalInvalidOpcode) Serialize() *cell.Builder {
+	return op.op.Serialize()
+}
+
+func (op historicalInvalidOpcode) SerializeText() string {
+	return op.op.SerializeText()
+}
+
+func (op historicalInvalidOpcode) Interpret(state *vm.State) error {
+	return vmerr.Error(vmerr.CodeInvalidOpcode)
+}
+
+type historicalInvalidOpcodeGas struct {
+	historicalInvalidOpcode
+}
+
+func (op historicalInvalidOpcodeGas) InstructionBits() int64 {
+	return op.op.(vm.GasPricedOp).InstructionBits()
+}
+
+// AllowHigherVersionExecUsingLatest allows preparing configs with a global
+// version higher than vm.MaxSupportedGlobalVersion. When enabled, execution
+// uses the latest supported version.
+var AllowHigherVersionExecUsingLatest = true
+
+func validateGlobalVersion(version int) error {
+	if version < 0 {
+		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, 0)
+	}
+	if version > vm.MaxSupportedGlobalVersion && !AllowHigherVersionExecUsingLatest {
+		return fmt.Errorf("unsupported global version %d, maximum supported is %d", version, vm.MaxSupportedGlobalVersion)
+	}
 	return nil
+}
+
+func effectiveGlobalVersion(version uint32) uint32 {
+	if version > uint32(vm.MaxSupportedGlobalVersion) {
+		return uint32(vm.MaxSupportedGlobalVersion)
+	}
+	return version
 }
 
 type ExecutionResult struct {
@@ -89,17 +234,34 @@ type ExecutionResult struct {
 	Proof     *cell.Cell
 }
 
+type ExecutionConfig struct {
+	AccountRoot                 *cell.Cell
+	Libraries                   []*cell.Cell
+	SignatureCheckAlwaysSucceed bool
+	Config                      *PreparedBlockchainConfig
+}
+
 func bitAt(data []byte, bit uint) uint8 {
 	return (data[bit/8] >> (7 - (bit % 8))) & 1
 }
 
+func newOpcodeDispatch() *opcodeDispatch {
+	return &opcodeDispatch{root: &trieNode{}}
+}
+
 func (tvm *TVM) addTriePrefix(prefix *cell.Slice, op vm.OPGetter) {
-	n := tvm.trie
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
+	dispatch.addPrefix(prefix, op)
+	dispatch.buildFastTable()
+}
+
+func (dispatch *opcodeDispatch) addPrefix(prefix *cell.Slice, op vm.OPGetter) {
+	n := dispatch.root
 	bits := prefix.BitsLeft()
 	raw := prefix.MustPreloadSlice(bits)
 
-	if bits > tvm.maxPrefixLen {
-		tvm.maxPrefixLen = bits
+	if bits > dispatch.maxPrefixLen {
+		dispatch.maxPrefixLen = bits
 	}
 
 	for i := uint(0); i < bits; i++ {
@@ -113,20 +275,65 @@ func (tvm *TVM) addTriePrefix(prefix *cell.Slice, op vm.OPGetter) {
 	n.op = op
 }
 
+func (dispatch *opcodeDispatch) buildFastTable() {
+	for raw := range dispatch.index {
+		n := dispatch.root
+		var matched vm.OPGetter
+
+		for bit := uint(0); bit < opcodeDispatchIndexBits; bit++ {
+			b := uint8((uint(raw) >> (opcodeDispatchIndexBits - 1 - bit)) & 1)
+			n = n.next[b]
+			if n == nil {
+				break
+			}
+			if n.op != nil {
+				matched = n.op
+			}
+		}
+
+		dispatch.index[raw] = opcodeDispatchPrefix{
+			node:    n,
+			matched: matched,
+		}
+	}
+}
+
 func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
+	return matchOpcode(dispatch, code)
+}
+
+func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) vm.OPGetter {
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
+	return matchOpcodeFast(dispatch, code, available)
+}
+
+func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) vm.OPGetter {
+	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
+	return matchOpcodeSlow(dispatch.root, dispatch.maxPrefixLen, code, available)
+}
+
+func (dispatch *opcodeDispatch) match(code *cell.Slice) vm.OPGetter {
+	return matchOpcode(dispatch, code)
+}
+
+func matchOpcode(dispatch *opcodeDispatch, code *cell.Slice) vm.OPGetter {
 	available := code.BitsLeft()
 	if available == 0 {
 		return nil
 	}
 
-	if tvm.maxPrefixLen <= 64 {
-		return tvm.matchOpcodeFast(code, available)
+	maxPrefixLen := dispatch.maxPrefixLen
+	if maxPrefixLen <= 64 {
+		return matchOpcodeFast(dispatch, code, available)
 	}
-	return tvm.matchOpcodeSlow(code, available)
+	return matchOpcodeSlow(dispatch.root, maxPrefixLen, code, available)
 }
 
-func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) vm.OPGetter {
-	preloadBits := tvm.maxPrefixLen
+func matchOpcodeFast(dispatch *opcodeDispatch, code *cell.Slice, available uint) vm.OPGetter {
+	maxPrefixLen := dispatch.maxPrefixLen
+	indexBits := uint(opcodeDispatchIndexBits)
+	preloadBits := indexBits
 	if available < preloadBits {
 		preloadBits = available
 	}
@@ -135,10 +342,32 @@ func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) vm.OPGetter {
 		return nil
 	}
 
-	n := tvm.trie
-	var matched vm.OPGetter
+	var idx uint64
+	if preloadBits >= indexBits {
+		idx = raw & ((1 << opcodeDispatchIndexBits) - 1)
+	} else {
+		idx = raw << (indexBits - preloadBits)
+	}
 
-	for i := uint(0); i < tvm.maxPrefixLen; i++ {
+	entry := dispatch.index[idx]
+	n := entry.node
+	matched := entry.matched
+	if n == nil {
+		return matched
+	}
+
+	if available > preloadBits && maxPrefixLen > preloadBits {
+		preloadBits = maxPrefixLen
+		if available < preloadBits {
+			preloadBits = available
+		}
+		raw, err = code.PreloadUInt(preloadBits)
+		if err != nil {
+			return nil
+		}
+	}
+
+	for i := indexBits; i < maxPrefixLen; i++ {
 		bit := uint8(0)
 		if i < preloadBits {
 			bit = uint8((raw >> (preloadBits - 1 - i)) & 1)
@@ -155,11 +384,15 @@ func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) vm.OPGetter {
 	return matched
 }
 
-func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) vm.OPGetter {
-	n := tvm.trie
+func (dispatch *opcodeDispatch) matchSlow(code *cell.Slice, available uint) vm.OPGetter {
+	return matchOpcodeSlow(dispatch.root, dispatch.maxPrefixLen, code, available)
+}
+
+func matchOpcodeSlow(root *trieNode, maxPrefixLen uint, code *cell.Slice, available uint) vm.OPGetter {
+	n := root
 	var matched vm.OPGetter
 
-	for i := uint(0); i < tvm.maxPrefixLen; i++ {
+	for i := uint(0); i < maxPrefixLen; i++ {
 		bit := uint8(0)
 		if i < available {
 			var err error
@@ -180,17 +413,36 @@ func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) vm.OPGetter {
 	return matched
 }
 
-func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) error {
-	_, err := tvm.executeDetailedWithLibrariesRaw(code, data, c7, gas, stack)
-	return err
+func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg ExecutionConfig) (*ExecutionResult, error) {
+	return tvm.executeWithConfig(code, data, c7, gas, stack, cfg, executeOptionsFromConfig(cfg))
 }
 
-func (tvm *TVM) ExecuteDetailed(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack) (*ExecutionResult, error) {
-	return tvm.ExecuteDetailedWithLibraries(code, data, c7, gas, stack)
+func (tvm *TVM) ExecuteGetMethod(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg ExecutionConfig) (*ExecutionResult, error) {
+	options := executeOptionsFromConfig(cfg)
+	options.skipFinalCommit = true
+	return tvm.executeWithConfig(code, data, c7, gas, stack, cfg, options)
 }
 
-func (tvm *TVM) ExecuteDetailedWithLibraries(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
-	res, err := tvm.executeDetailedWithLibrariesRaw(code, data, c7, gas, stack, libraries...)
+func (tvm *TVM) executeWithConfig(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg ExecutionConfig, options executeOptions) (*ExecutionResult, error) {
+	if cfg.Config == nil {
+		return nil, errConfigRootRequired
+	}
+
+	libraries := cfg.Libraries
+	if cfg.AccountRoot != nil {
+		var res *ExecutionResult
+		var err error
+		code, data, libraries, options.proof, res, err = prepareAccountExecution(code, data, gas, stack, cfg)
+		if err != nil || res != nil {
+			return res, err
+		}
+	}
+
+	res, err := tvm.executeWithOptions(code, data, c7, gas, stack, cfg.Config, options, libraries...)
+	return finishExecutionResult(res, err)
+}
+
+func finishExecutionResult(res *ExecutionResult, err error) (*ExecutionResult, error) {
 	if err != nil {
 		if _, ok := vmerr.ErrorCode(err); ok {
 			return res, nil
@@ -200,22 +452,66 @@ func (tvm *TVM) ExecuteDetailedWithLibraries(code, data *cell.Cell, c7 tuple.Tup
 	return res, nil
 }
 
-func (tvm *TVM) executeDetailedWithLibrariesRaw(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
-	return tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{}, libraries...)
-}
-
 type executeOptions struct {
-	stopOnAccept    bool
-	proof           *cell.MerkleProofBuilder
-	skipFinalCommit bool
+	stopOnAccept                bool
+	proof                       *cell.MerkleProofBuilder
+	skipFinalCommit             bool
+	traceHook                   vm.TraceHook
+	signatureCheckAlwaysSucceed bool
+	maxVMDataDepth              uint16
+	libraryLoadLimit            *uint32
 }
 
-func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
-	state := vm.NewExecutionState(tvm.globalVersion, gas, data, c7, stack, libraries...)
+func executeOptionsFromConfig(cfg ExecutionConfig) executeOptions {
+	return executeOptions{
+		signatureCheckAlwaysSucceed: cfg.SignatureCheckAlwaysSucceed,
+		maxVMDataDepth:              vm.MaxDataDepth,
+	}
+}
+
+// dryRunLibraryLoadLimit implements the tonlib SmartContract get-method /
+// external-message / internal-message dry-run policy (max_smc_library_loads
+// in crypto/smc-envelope/SmartContract.cpp): the cap always starts at 8 and
+// the blockchain config can only lower it, never raise or remove it.
+func dryRunLibraryLoadLimit(cfg *PreparedBlockchainConfig) uint32 {
+	const maxSmcLibraryLoads = 8
+	limit := uint32(maxSmcLibraryLoads)
+	if cfg != nil && cfg.sizeLimits.maxTransactionLibraryLoads != nil && *cfg.sizeLimits.maxTransactionLibraryLoads < limit {
+		limit = *cfg.sizeLimits.maxTransactionLibraryLoads
+	}
+	return limit
+}
+
+func ptrTo[T any](v T) *T {
+	return &v
+}
+
+func (tvm *TVM) executeWithOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg *PreparedBlockchainConfig, options executeOptions, libraries ...*cell.Cell) (*ExecutionResult, error) {
+	if cfg == nil {
+		return nil, errConfigRootRequired
+	}
+
+	options.maxVMDataDepth = cfg.sizeLimits.maxVMDataDepth
+	options.libraryLoadLimit = ptrTo(dryRunLibraryLoadLimit(cfg))
+
+	state := vm.NewExecutionState(int(cfg.GlobalVersion()), gas, data, c7, stack, libraries...)
+	return tvm.executeState(state, code, data, options)
+}
+
+// executeState runs an already-constructed execution state. Message emulation
+// enters here directly with a c7 pre-bound to the state's gas trace, so the
+// c7 bind in InitForExecution hits the fast path.
+func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options executeOptions) (*ExecutionResult, error) {
 	state.StopOnAccept = options.stopOnAccept
+	state.TraceHook = options.traceHook
+	state.SignatureCheckAlwaysSucceed = options.signatureCheckAlwaysSucceed
 	state.SetChildRunner(tvm.runState)
+	state.SetMaxDataDepth(options.maxVMDataDepth)
+	if options.libraryLoadLimit != nil {
+		state.SetMaxLibraryLoads(*options.libraryLoadLimit)
+	}
 	state.InitForExecution()
-	currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
+	currentCode, err := tvm.convertExecutionCodeCell(state, code)
 	if err != nil {
 		res := executionResultFromState(vmerrCode(err), state, code, data)
 		if proofErr := attachExecutionProof(res, state, options.proof); proofErr != nil {
@@ -256,6 +552,39 @@ func (tvm *TVM) executeDetailedWithLibrariesRawOptions(code, data *cell.Cell, c7
 		return res, proofErr
 	}
 	return res, err
+}
+
+func (tvm *TVM) convertExecutionCodeCell(state *vm.State, code *cell.Cell) (*cell.Slice, error) {
+	if code == nil {
+		return state.Cells.BeginParseAlreadyLoaded(code)
+	}
+
+	if state.GlobalVersion >= 9 {
+		currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
+		if err == nil {
+			return currentCode, nil
+		}
+		if _, ok := vmerr.ErrorCode(err); !ok {
+			return nil, err
+		}
+		return state.Cells.BeginParseAlreadyLoaded(executionCodeRefWrapper(code))
+	}
+
+	if !code.IsSpecial() {
+		currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
+		if err == nil {
+			return currentCode, nil
+		}
+		if _, ok := vmerr.ErrorCode(err); !ok {
+			return nil, err
+		}
+	}
+
+	return state.Cells.BeginParseAlreadyLoaded(executionCodeRefWrapper(code))
+}
+
+func executionCodeRefWrapper(code *cell.Cell) *cell.Cell {
+	return cell.BeginCell().MustStoreRef(code).EndCell()
 }
 
 func executionResultFromState(exitCode int64, state *vm.State, code, data *cell.Cell) *ExecutionResult {
@@ -308,8 +637,7 @@ func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exit
 	if err = tvm.execute(state); err != nil {
 		if code, ok := vmerr.ErrorCode(err); ok {
 			exitCode = code
-			var handled vm.HandledException
-			if exitCode == vmerr.CodeOutOfGas && !errors.As(err, &handled) {
+			if exitCode == vmerr.CodeOutOfGas && !vm.IsHandledException(err) {
 				exitCode = ^exitCode
 			}
 			if !vm.IsSuccessExitCode(exitCode) {
@@ -327,71 +655,95 @@ func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exit
 		return exitCode, nil
 	}
 	state.Stack.Clear()
-	if stackErr := state.Stack.PushInt(big.NewInt(0)); stackErr != nil {
+	if stackErr := state.Stack.PushSmallInt(0); stackErr != nil {
 		return 0, stackErr
 	}
 	return vmerr.CodeCellOverflow, vmerr.Error(vmerr.CodeCellOverflow, "cannot commit too deep cells as new data/actions")
 }
 
-func (tvm *TVM) execute(state *vm.State) (err error) {
+func (tvm *TVM) execute(state *vm.State) error {
+	dispatch := tvm.dispatchForVersion(state.GlobalVersion)
 	for {
-		if err = tvm.stepAny(state); err != nil {
-			if errors.Is(err, vm.ErrStopOnAccept) {
-				return nil
+		if err := tvm.stepAnyWithDispatch(dispatch, state); err != nil {
+			retry, err := tvm.handleStepError(state, err)
+			if retry {
+				continue
 			}
-			var e vmerr.VMError
-			var virt vmerr.VirtualizationError
-			var handled vm.HandledException
-			if errors.As(err, &handled) {
-				return err
-			}
-			if errors.As(err, &e) && e.Code == vmerr.CodeOutOfGas {
-				state.Steps++
-				if stackErr := state.HandleOutOfGas(); stackErr != nil {
-					return stackErr
-				}
-				return err
-			}
-			if errors.As(err, &virt) {
-				return err
-			}
-			if state.Reg.C[2] != nil && errors.As(err, &e) && !vm.IsSuccessExitCode(e.Code) {
-				vm.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
-
-				state.Steps++
-				if err = state.ThrowException(big.NewInt(e.Code)); err == nil {
-					continue
-				}
-				if errors.As(err, &e) && e.Code == vmerr.CodeOutOfGas {
-					state.Steps++
-					if stackErr := state.HandleOutOfGas(); stackErr != nil {
-						return stackErr
-					}
-					return err
-				}
-			}
-
 			return err
 		}
 	}
 }
 
+func (tvm *TVM) handleStepError(state *vm.State, err error) (bool, error) {
+	if errors.Is(err, vm.ErrStopOnAccept) {
+		return false, nil
+	}
+	if vm.IsHandledException(err) {
+		return false, err
+	}
+	e, isVMErr := vmerr.AsVMError(err)
+	if isVMErr && e.Code == vmerr.CodeOutOfGas {
+		state.Steps++
+		if stackErr := state.HandleOutOfGas(); stackErr != nil {
+			return false, stackErr
+		}
+		return false, err
+	}
+	if _, isVirt := vmerr.AsVirtualization(err); isVirt {
+		return false, err
+	}
+	if state.Reg.C[2] != nil && isVMErr && !vm.IsSuccessExitCode(e.Code) {
+		if state.TraceEnabled() {
+			state.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
+		}
+
+		state.Steps++
+		if err = state.ThrowException(big.NewInt(e.Code)); err == nil {
+			return true, nil
+		}
+		if e, isVMErr = vmerr.AsVMError(err); isVMErr && e.Code == vmerr.CodeOutOfGas {
+			state.Steps++
+			if stackErr := state.HandleOutOfGas(); stackErr != nil {
+				return false, stackErr
+			}
+			return false, err
+		}
+	}
+
+	return false, err
+}
+
+func (tvm *TVM) dispatchForVersion(version int) *opcodeDispatch {
+	return tvm.dispatches[version]
+}
+
 func (tvm *TVM) stepAny(state *vm.State) error {
+	return tvm.stepAnyWithDispatch(tvm.dispatchForVersion(state.GlobalVersion), state)
+}
+
+func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) error {
 	if state.CurrentCode.BitsLeft() > 0 {
 		state.Steps++
-		return tvm.step(state)
+		return tvm.stepWithDispatch(dispatch, state)
 	}
 
 	if state.CurrentCode.RefsNum() > 0 {
 		state.Steps++
 
-		if err := state.ConsumeGas(vm.ImplicitJmprefGasPrice); err != nil {
+		if err := state.Gas.Consume(vm.ImplicitJmprefGasPrice); err != nil {
 			return err
 		}
 
 		cc, err := state.Cells.LoadRef(state.CurrentCode)
 		if err != nil {
 			return err
+		}
+		if state.GlobalVersion < 4 {
+			// Pre-v4 gas checks are usually deferred, but the reference VM
+			// checks after loading the implicit JMPREF target before executing it.
+			if err := state.CheckGas(); err != nil {
+				return err
+			}
 		}
 
 		c := &vm.OrdinaryContinuation{
@@ -402,16 +754,15 @@ func (tvm *TVM) stepAny(state *vm.State) error {
 			Code: cc,
 		}
 
-		vm.Tracef("implicit JMPREF")
+		state.TraceOpcode("implicit JMPREF")
 		return state.Jump(c)
 	}
 
 	state.Steps++
-	vm.Tracef("implicit RET")
-	if err := state.ConsumeGas(vm.ImplicitRetGasPrice); err != nil {
+	state.TraceOpcode("implicit RET")
+	if err := state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
 		return err
 	}
-	vm.Tracef("gas remaining: %d", state.Gas.Remaining)
 
 	return state.Return()
 }
@@ -425,7 +776,7 @@ func normalizeCellError(err error) error {
 	}
 
 	switch {
-	case strings.Contains(err.Error(), "not enough data"),
+	case cell.IsNotEnoughDataError(err),
 		errors.Is(err, cell.ErrNoMoreRefs),
 		errors.Is(err, cell.ErrSmallSlice):
 		return vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
@@ -452,14 +803,18 @@ func normalizeOpcodeDeserializeError(err error, op vm.OP) error {
 	if errors.Is(err, vm.ErrCorruptedOpcode) ||
 		errors.Is(err, cell.ErrNoMoreRefs) ||
 		errors.Is(err, cell.ErrSmallSlice) ||
-		strings.Contains(err.Error(), "not enough data") {
+		cell.IsNotEnoughDataError(err) {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("deserialize opcode [%s] failed", op.SerializeText()))
 	}
 	return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeText(), err)
 }
 
 func (tvm *TVM) step(state *vm.State) (err error) {
-	px := tvm.matchOpcode(state.CurrentCode)
+	return tvm.stepWithDispatch(tvm.dispatchForVersion(state.GlobalVersion), state)
+}
+
+func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err error) {
+	px := matchOpcode(dispatch, state.CurrentCode)
 	if px == nil {
 		if err = state.ConsumeGas(vm.InstructionBaseGasPrice); err != nil {
 			return err
@@ -483,19 +838,19 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 	if err = consumeInstructionGas(state, op); err != nil {
 		return err
 	}
-	if err = state.CheckGas(); err != nil {
-		return err
+	if state.GlobalVersion >= 4 {
+		if err = state.CheckGas(); err != nil {
+			return err
+		}
 	}
-
-	if vm.TraceHook != nil {
-		vm.Tracef("%s", op.SerializeText())
+	if state.TraceEnabled() {
+		state.TraceOpcode(op.SerializeText())
 	}
 
 	stackBefore := state.Stack.Checkpoint()
 	err = op.Interpret(state)
 	if err != nil {
-		var handled vm.HandledException
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow && !errors.As(err, &handled) {
+		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow && !vm.IsHandledException(err) {
 			state.Stack.RestoreCheckpoint(stackBefore)
 		}
 		err = normalizeCellError(err)
@@ -504,7 +859,6 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 	if err = state.CheckGas(); err != nil {
 		return err
 	}
-	vm.Tracef("gas remaining: %d", state.Gas.Remaining)
 
 	return nil
 }

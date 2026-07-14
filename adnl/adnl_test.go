@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -441,4 +442,44 @@ func connHandler(client Peer) error {
 	client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
 	})
 	return nil
+}
+
+func TestADNL_ReinitRefreshesAdvertisedAddressListEpoch(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g := NewGateway(key)
+	a := g.initADNL()
+
+	addr, err := address.NewAddress(net.ParseIP("127.0.0.1"), 9166)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := int32(time.Now().Unix() - 3600)
+	a.SetAddresses(address.List{
+		Addresses:  []address.Address{addr},
+		Version:    stale,
+		ReinitDate: stale,
+	})
+
+	before := int32(time.Now().Unix())
+	a.Reinit()
+
+	list := a.GetAddressList()
+	if list.ReinitDate < before {
+		t.Fatalf("address list reinit date was not refreshed: got %d want >= %d", list.ReinitDate, before)
+	}
+	if got := atomic.LoadInt32(&a.reinitTime); got != list.ReinitDate {
+		// C++ peers treat the list reinit date as the same epoch as the
+		// packet header one and drop lists that lag behind it.
+		t.Fatalf("packet reinit epoch %d diverges from address list reinit date %d", got, list.ReinitDate)
+	}
+	if list.Version < list.ReinitDate {
+		t.Fatalf("address list version %d was not raised to the new epoch %d", list.Version, list.ReinitDate)
+	}
+	if len(list.Addresses) != 1 {
+		t.Fatalf("addresses were lost on reinit: %d", len(list.Addresses))
+	}
 }

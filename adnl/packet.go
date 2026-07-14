@@ -86,7 +86,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	var packet PacketContent
 
-	packet.Rand1, data, err = tl.FromBytes(data)
+	packet.Rand1, data, err = tl.FromBytesNoCopy(data)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 		}
 
 		var key keys.PublicKeyED25519
-		data, err = tl.Parse(&key, data, true)
+		data, err = tl.ParseNoCopy(&key, data, true)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'from' key, err: %w", err)
 		}
@@ -124,7 +124,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	if flags&_FlagOneMessage != 0 {
 		var msg any
-		data, err = tl.Parse(&msg, data, true)
+		data, err = tl.ParseNoCopy(&msg, data, true)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'message', err: %w", err)
 		}
@@ -142,7 +142,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 		for i := uint32(0); i < num; i++ {
 			var msg any
-			data, err = tl.Parse(&msg, data, true)
+			data, err = tl.ParseNoCopy(&msg, data, true)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse 'messages'[%d], err: %w", i, err)
 			}
@@ -152,7 +152,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	if flags&_FlagAddress != 0 {
 		var list address.List
-		data, err = tl.Parse(&list, data, false)
+		data, err = tl.ParseNoCopy(&list, data, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'address', err: %w", err)
 		}
@@ -165,7 +165,7 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 
 	if flags&_FlagPriorityAddress != 0 {
 		var list address.List
-		data, err = tl.Parse(&list, data, false)
+		data, err = tl.ParseNoCopy(&list, data, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'priority address', err: %w", err)
 		}
@@ -233,14 +233,14 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	signatureStart, signatureEnd := -1, -1
 	if flags&_FlagSignature != 0 {
 		signatureStart = len(orig) - len(data)
-		packet.Signature, data, err = tl.FromBytes(data)
+		packet.Signature, data, err = tl.FromBytesNoCopy(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse signature: %w", err)
 		}
 		signatureEnd = len(orig) - len(data)
 	}
 
-	packet.Rand2, data, err = tl.FromBytes(data)
+	packet.Rand2, data, err = tl.FromBytesNoCopy(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse rand2: %w", err)
 	}
@@ -249,7 +249,9 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 		return nil, fmt.Errorf("too much data in packet")
 	}
 
-	packet.toSign = buildPacketToSign(orig, flagsOffset, flags, signatureStart, signatureEnd)
+	if signatureStart >= 0 {
+		packet.toSign = buildPacketToSign(orig, flagsOffset, flags, signatureStart, signatureEnd)
+	}
 
 	return &packet, nil
 }
@@ -301,9 +303,9 @@ func (p *PacketContent) verifySignature(pub ed25519.PublicKey) error {
 
 func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	// adnl.packetContents id
-	tmp := make([]byte, 4)
-	binary.LittleEndian.PutUint32(tmp, _PacketContentID)
-	buf.Write(tmp)
+	var tmp [8]byte
+	binary.LittleEndian.PutUint32(tmp[:4], _PacketContentID)
+	buf.Write(tmp[:4])
 
 	_ = tl.ToBytesToBuffer(buf, p.Rand1)
 
@@ -345,9 +347,8 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 		flags |= _FlagOneMessage
 	}
 
-	flagsBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(flagsBytes, flags)
-	buf.Write(flagsBytes)
+	binary.LittleEndian.PutUint32(tmp[:4], flags)
+	buf.Write(tmp[:4])
 
 	if p.From != nil {
 		_, err := tl.Serialize(p.From, true, buf)
@@ -362,9 +363,8 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 
 	var payloadLen = buf.Len()
 	if len(p.Messages) > 1 {
-		msgsNumBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(msgsNumBytes, uint32(len(p.Messages)))
-		buf.Write(msgsNumBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(len(p.Messages)))
+		buf.Write(tmp[:4])
 
 		for i, msg := range p.Messages {
 			_, err := tl.Serialize(msg, true, buf)
@@ -397,41 +397,35 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	}
 
 	if p.Seqno != nil {
-		seqnoBytes := make([]byte, 8)
-		binary.LittleEndian.PutUint64(seqnoBytes, uint64(*p.Seqno))
-		buf.Write(seqnoBytes)
+		binary.LittleEndian.PutUint64(tmp[:8], uint64(*p.Seqno))
+		buf.Write(tmp[:8])
 	}
 
 	if p.ConfirmSeqno != nil {
-		confirmSeqnoBytes := make([]byte, 8)
-		binary.LittleEndian.PutUint64(confirmSeqnoBytes, uint64(*p.ConfirmSeqno))
-		buf.Write(confirmSeqnoBytes)
+		binary.LittleEndian.PutUint64(tmp[:8], uint64(*p.ConfirmSeqno))
+		buf.Write(tmp[:8])
 	}
 
 	if p.RecvAddrListVersion != nil {
-		recvAddrListBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(recvAddrListBytes, uint32(*p.RecvAddrListVersion))
-		buf.Write(recvAddrListBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.RecvAddrListVersion))
+		buf.Write(tmp[:4])
 	}
 
 	if p.RecvPriorityAddrListVersion != nil {
-		recvAddrListBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(recvAddrListBytes, uint32(*p.RecvPriorityAddrListVersion))
-		buf.Write(recvAddrListBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.RecvPriorityAddrListVersion))
+		buf.Write(tmp[:4])
 	}
 
 	if p.ReinitDate != nil {
-		reinitDateBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(reinitDateBytes, uint32(*p.ReinitDate))
-		buf.Write(reinitDateBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.ReinitDate))
+		buf.Write(tmp[:4])
 
 		if p.DstReinitDate == nil {
 			return 0, fmt.Errorf("dst reinit could not be nil when reinit is specified")
 		}
 
-		dstReinitDateBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(dstReinitDateBytes, uint32(*p.DstReinitDate))
-		buf.Write(dstReinitDateBytes)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(*p.DstReinitDate))
+		buf.Write(tmp[:4])
 	}
 
 	if p.Signature != nil {
@@ -441,23 +435,6 @@ func (p *PacketContent) Serialize(buf *bytes.Buffer) (int, error) {
 	_ = tl.ToBytesToBuffer(buf, p.Rand2)
 
 	return payloadLen, nil
-}
-
-var _FlagsDBG = map[uint32]string{
-	0x1:    "FROM",
-	0x2:    "FROM_SHORT",
-	0x4:    "ONE_MESSAGE",
-	0x8:    "MULT_MESSAGE",
-	0x10:   "ADDRESS",
-	0x20:   "PRIORITY_ADDRESS",
-	0x40:   "SEQNO",
-	0x80:   "CONFIRM_SEQNO",
-	0x100:  "RECV_ADDR_LIST_VER",
-	0x200:  "RECV_PRIORITY_ADDR_VER",
-	0x400:  "REINIT_DATE",
-	0x800:  "SIGNATURE",
-	0x1000: "PRIORITY",
-	0x1fff: "ALL",
 }
 
 func resizeRandForPacket(data []byte) ([]byte, error) {

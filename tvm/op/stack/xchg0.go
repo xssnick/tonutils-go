@@ -10,7 +10,16 @@ import (
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return XCHG0(0) })
+	for i := uint64(1); i < 16; i++ {
+		value := i
+		vm.List = append(vm.List, func() vm.OP {
+			return helpers.FullOpcodeVariant(XCHG0(uint8(value)), helpers.UIntPrefix(value, 8))
+		})
+	}
 }
+
+// constant prefix, computed once instead of on every decode
+var xchg0Prefix = helpers.SlicePrefix(4, []byte{0x0})
 
 func XCHG0(i uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
@@ -21,7 +30,7 @@ func XCHG0(i uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d XCHG0", i)
 		},
-		BitPrefix: helpers.SlicePrefix(4, []byte{0x0}),
+		BitPrefix: xchg0Prefix,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4)
 		},

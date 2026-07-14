@@ -57,7 +57,7 @@ func TestVirtualizationErrorsBypassC2(t *testing.T) {
 	tvm := NewTVM()
 
 	run := func(cl *cell.Cell) (int64, error) {
-		state := vmcore.NewExecutionState(vmcore.DefaultGlobalVersion, vmcore.GasWithLimit(100_000), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.NewStack())
+		state := vmcore.NewExecutionState(vmcore.MaxSupportedGlobalVersion, vmcore.GasWithLimit(100_000), cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.NewStack())
 		state.Reg.C[2] = &vmcore.QuitContinuation{ExitCode: 0}
 		if err := state.Stack.PushCell(cl); err != nil {
 			t.Fatalf("push cell: %v", err)

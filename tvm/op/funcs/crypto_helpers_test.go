@@ -8,11 +8,11 @@ import (
 	"testing"
 
 	ristretto "github.com/bwesterb/go-ristretto"
-	circlbls "github.com/cloudflare/circl/ecc/bls12381"
 	circlgroup "github.com/cloudflare/circl/group"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/internal/blsmap"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func mustRistrettoInt(t *testing.T, point circlgroup.Element) *big.Int {
@@ -247,9 +247,146 @@ func TestBLSAndRistrettoHelpers(t *testing.T) {
 	}
 }
 
+func TestTVM14RistrettoIdentityResults(t *testing.T) {
+	scalarOne := circlgroup.Ristretto255.NewScalar().SetBigInt(big.NewInt(1))
+	basePoint := circlgroup.Ristretto255.NewElement()
+	basePoint.MulGen(scalarOne)
+	basePointInt := mustRistrettoInt(t, basePoint)
+	invalidPoint, ok := new(big.Int).SetString("00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 16)
+	if !ok {
+		t.Fatal("failed to parse invalid ristretto point")
+	}
+
+	t.Run("mulbase zero scalar", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 13
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v13 scalar: %v", err)
+		}
+		if err := RIST255_MULBASE().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MULBASE v13 failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MULBASE v13 = (%v, %v), want 0", got, err)
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v14 scalar: %v", err)
+		}
+		if err := RIST255_MULBASE().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MULBASE v14 failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MULBASE v14 = (%v, %v), want 0", got, err)
+		}
+	})
+
+	t.Run("mul identity point", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 13
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v13 identity point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push v13 scalar: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err == nil {
+			t.Fatal("RIST255_MUL v13 should reject identity result")
+		} else if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
+			t.Fatalf("RIST255_MUL v13 error = %v, want range check", err)
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v14 identity point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push v14 scalar: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MUL v14 identity failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MUL v14 identity = (%v, %v), want 0", got, err)
+		}
+	})
+
+	t.Run("mul zero scalar validates invalid point in v14", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 13
+		if err := st.Stack.PushInt(invalidPoint); err != nil {
+			t.Fatalf("push v13 invalid point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v13 zero scalar: %v", err)
+		}
+		if err := RIST255_QMUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_QMUL v13 failed: %v", err)
+		}
+		if ok, err := st.Stack.PopBool(); err != nil || !ok {
+			t.Fatalf("RIST255_QMUL v13 status = (%v, %v), want true", ok, err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_QMUL v13 result = (%v, %v), want 0", got, err)
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(invalidPoint); err != nil {
+			t.Fatalf("push v14 invalid point: %v", err)
+		}
+		if err := st.Stack.PushInt(new(big.Int).Set(ristretto255L)); err != nil {
+			t.Fatalf("push v14 scalar l: %v", err)
+		}
+		if err := RIST255_QMUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_QMUL v14 failed: %v", err)
+		}
+		if ok, err := st.Stack.PopBool(); err != nil || ok {
+			t.Fatalf("RIST255_QMUL v14 status = (%v, %v), want false", ok, err)
+		}
+		if st.Stack.Len() != 0 {
+			t.Fatalf("RIST255_QMUL v14 left %d stack values, want 0", st.Stack.Len())
+		}
+
+		st = newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(invalidPoint); err != nil {
+			t.Fatalf("push v14 invalid point: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push v14 zero scalar: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err == nil {
+			t.Fatal("RIST255_MUL v14 should reject invalid point with zero scalar")
+		} else if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeRangeCheck {
+			t.Fatalf("RIST255_MUL v14 error = %v, want range check", err)
+		}
+	})
+
+	t.Run("mul basepoint by order returns identity in v14", func(t *testing.T) {
+		st := newFuncTestState(t, nil)
+		st.GlobalVersion = 14
+		if err := st.Stack.PushInt(basePointInt); err != nil {
+			t.Fatalf("push base point: %v", err)
+		}
+		if err := st.Stack.PushInt(new(big.Int).Set(ristretto255L)); err != nil {
+			t.Fatalf("push scalar l: %v", err)
+		}
+		if err := RIST255_MUL().Interpret(st); err != nil {
+			t.Fatalf("RIST255_MUL v14 by l failed: %v", err)
+		}
+		if got, err := st.Stack.PopIntFinite(); err != nil || got.Sign() != 0 {
+			t.Fatalf("RIST255_MUL v14 by l = (%v, %v), want 0", got, err)
+		}
+	})
+}
+
 func TestBLSMapAndZeroOps(t *testing.T) {
 	g1Input := bytes.Repeat([]byte{0x42}, 48)
-	g1Expected, err := blsmap.MapToG1(g1Input)
+	g1Expected, err := circlbls.MapToG1(g1Input)
 	if err != nil {
 		t.Fatalf("MapToG1 failed: %v", err)
 	}
@@ -269,7 +406,7 @@ func TestBLSMapAndZeroOps(t *testing.T) {
 	}
 
 	g2Input := bytes.Repeat([]byte{0x24}, 96)
-	g2Expected, err := blsmap.MapToG2(g2Input)
+	g2Expected, err := circlbls.MapToG2(g2Input)
 	if err != nil {
 		t.Fatalf("MapToG2 failed: %v", err)
 	}

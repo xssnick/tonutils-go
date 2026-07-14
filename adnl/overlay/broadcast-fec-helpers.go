@@ -10,7 +10,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
-func broadcastFECSourceID(source any, flags int32) ([]byte, error) {
+func broadcastSourceID(source any, flags int32) ([]byte, error) {
 	src := make([]byte, 32)
 	if flags&BroadcastFlagAnySender != 0 {
 		return src, nil
@@ -29,7 +29,7 @@ func calcBroadcastFECID(source any, flags int32, dataHash []byte, dataSize uint3
 		return nil, fmt.Errorf("failed to compute fec type id: %w", err)
 	}
 
-	src, err := broadcastFECSourceID(source, flags)
+	src, err := broadcastSourceID(source, flags)
 	if err != nil {
 		return nil, err
 	}

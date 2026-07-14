@@ -16,6 +16,10 @@ func STI(sz uint) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			b0, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err

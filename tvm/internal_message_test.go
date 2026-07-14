@@ -47,6 +47,7 @@ func emulateInternalForTest(t *testing.T, code, data, body *cell.Cell) (*Message
 		Now:      uint32(tonopsTestTime.Unix()),
 		Balance:  new(big.Int).Set(tonopsTestBalance),
 		RandSeed: append([]byte(nil), tonopsTestSeed...),
+		Config:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:    DefaultInternalMessageGasMax,
 			Limit:  int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -129,4 +130,108 @@ func TestEmulateInternalMessage(t *testing.T) {
 			t.Fatal("failed internal execution should not produce actions")
 		}
 	})
+}
+
+func TestEmulateInternalMessageWithAccountProofUsesAccountRoot(t *testing.T) {
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	wantMsg, err := buildInternalMessageForEmulation(tonopsTestAddr, body, internalMessageTestAmount)
+	if err != nil {
+		t.Fatalf("failed to build expected internal message: %v", err)
+	}
+	code := makeInternalMessageSuccessCode(t, newData, wantMsg)
+	accountRoot := executionProofAccountStateRoot(t, tlb.AccountState{
+		IsValid:     true,
+		Address:     tonopsTestAddr,
+		StorageInfo: executionProofStorageInfo(),
+		AccountStorage: tlb.AccountStorage{
+			Status:  tlb.AccountStatusActive,
+			Balance: tlb.FromNanoTONU(0),
+			StateInit: &tlb.StateInit{
+				Code: code,
+				Data: origData,
+			},
+		},
+	})
+
+	res, err := NewTVM().EmulateInternalMessage(nil, nil, body, internalMessageTestAmount, EmulateInternalMessageConfig{
+		BuildProof:  true,
+		AccountRoot: accountRoot,
+		Now:         uint32(tonopsTestTime.Unix()),
+		Balance:     new(big.Int).Set(tonopsTestBalance),
+		RandSeed:    append([]byte(nil), tonopsTestSeed...),
+		Config:      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
+		Gas: vmcore.NewGas(vmcore.GasConfig{
+			Max:   DefaultInternalMessageGasMax,
+			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("emulate internal with account proof failed: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatal("expected internal message to be accepted")
+	}
+	if res.Proof == nil {
+		t.Fatal("expected execution proof")
+	}
+	if _, err = cell.UnwrapProof(res.Proof, accountRoot.Hash()); err != nil {
+		t.Fatalf("account execution proof is invalid: %v", err)
+	}
+	if !bytes.Equal(res.Code.Hash(), code.Hash()) {
+		t.Fatal("result code should come from account root")
+	}
+	if !bytes.Equal(res.Data.Hash(), newData.Hash()) {
+		t.Fatal("result data should come from execution over account root data")
+	}
+}
+
+func TestEmulateInternalMessageSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
+	signature := make([]byte, 64)
+	signature[0] = 1
+	signature[63] = 2
+	code := makeMessageSignatureCheckAlwaysCode(t, signature)
+	data := cell.BeginCell().EndCell()
+	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
+	machine := NewTVM()
+
+	for _, tt := range []struct {
+		name   string
+		always bool
+		want   bool
+	}{
+		{name: "default_rejects", always: false, want: false},
+		{name: "configured_accepts", always: true, want: true},
+		{name: "next_default_rejects", always: false, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := machine.EmulateInternalMessage(code, data, body, internalMessageTestAmount, EmulateInternalMessageConfig{
+				Address:                     tonopsTestAddr,
+				Now:                         uint32(tonopsTestTime.Unix()),
+				Balance:                     new(big.Int).Set(tonopsTestBalance),
+				RandSeed:                    append([]byte(nil), tonopsTestSeed...),
+				Config:                      transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
+				SignatureCheckAlwaysSucceed: tt.always,
+				Gas: vmcore.NewGas(vmcore.GasConfig{
+					Max:   DefaultInternalMessageGasMax,
+					Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
+				}),
+			})
+			if err != nil {
+				t.Fatalf("emulate internal failed: %v", err)
+			}
+			if !vmcore.IsSuccessExitCode(res.ExitCode) {
+				t.Fatalf("exit code = %d, want success", res.ExitCode)
+			}
+
+			got, err := res.Stack.PopBool()
+			if err != nil {
+				t.Fatalf("pop CHKSIGNU result: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("CHKSIGNU result = %t, want %t", got, tt.want)
+			}
+		})
+	}
 }

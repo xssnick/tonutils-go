@@ -2,7 +2,6 @@ package math
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -28,11 +27,11 @@ func MULRSHIFTCCODE(value int8) (op *helpers.AdvancedOP) {
 			if err != nil {
 				return err
 			}
-			if err = requireFiniteInts(y, x); err != nil {
-				return err
+			if x == nil || y == nil {
+				return pushMaybeInt(state, legacyRShiftNaNResult(state.GlobalVersion, uint64(imm()), cppRoundCeil), false)
 			}
 
-			q := helpers.DivCeil(x.Mul(x, y), y.Lsh(big.NewInt(1), uint(imm())))
+			q := helpers.DivCeil(x.Mul(x, y), y.Lsh(bigIntOne, uint(imm())))
 
 			return state.Stack.PushInt(q)
 		},

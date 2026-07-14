@@ -16,34 +16,10 @@ func SWAP2() *helpers.SimpleOP {
 				return err
 			}
 
-			d, err := state.Stack.PopAny()
-			if err != nil {
+			if err := state.Stack.Exchange(3, 1); err != nil {
 				return err
 			}
-			c, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-			b, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-			a, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-
-			if err = state.Stack.PushAny(c); err != nil {
-				return err
-			}
-			if err = state.Stack.PushAny(d); err != nil {
-				return err
-			}
-			if err = state.Stack.PushAny(a); err != nil {
-				return err
-			}
-
-			return state.Stack.PushAny(b)
+			return state.Stack.Exchange(2, 0)
 		},
 		Name:      "2SWAP",
 		BitPrefix: helpers.BytesPrefix(0x5A),

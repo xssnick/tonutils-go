@@ -13,6 +13,14 @@ type ValueStore interface {
 	Close() error
 }
 
+type valueStoreKeyLister interface {
+	Keys() ([][]byte, error)
+}
+
+type valueStoreExpiredCleaner interface {
+	DeleteExpired(now int64) error
+}
+
 type MemoryValueStore struct {
 	mx      sync.RWMutex
 	maxKeys int
@@ -96,24 +104,51 @@ func (m *MemoryValueStore) Delete(keyID []byte) error {
 
 func (m *MemoryValueStore) ForEach(fn func(keyID []byte, value *Value) error) error {
 	m.mx.RLock()
-	items := make([]struct {
-		keyID string
-		value *Value
-	}, 0, len(m.values))
-	for keyID, item := range m.values {
-		items = append(items, struct {
-			keyID string
-			value *Value
-		}{
-			keyID: keyID,
-			value: cloneValue(item.value),
-		})
+	keys := make([]string, 0, len(m.values))
+	for keyID := range m.values {
+		keys = append(keys, keyID)
 	}
 	m.mx.RUnlock()
 
-	for _, item := range items {
-		if err := fn([]byte(item.keyID), item.value); err != nil {
+	for _, keyID := range keys {
+		m.mx.RLock()
+		item := m.values[keyID]
+		var value *Value
+		if item != nil {
+			value = cloneValue(item.value)
+		}
+		m.mx.RUnlock()
+		if item == nil {
+			continue
+		}
+		if err := fn([]byte(keyID), value); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (m *MemoryValueStore) Keys() ([][]byte, error) {
+	m.mx.RLock()
+	defer m.mx.RUnlock()
+
+	keys := make([][]byte, 0, len(m.values))
+	for keyID := range m.values {
+		keys = append(keys, []byte(keyID))
+	}
+	return keys, nil
+}
+
+func (m *MemoryValueStore) DeleteExpired(now int64) error {
+	m.mx.Lock()
+	defer m.mx.Unlock()
+
+	for keyID, item := range m.values {
+		if item == nil || item.value == nil || int64(item.value.TTL) <= now {
+			delete(m.values, keyID)
+			if item != nil && item.elem != nil {
+				m.order.Remove(item.elem)
+			}
 		}
 	}
 	return nil

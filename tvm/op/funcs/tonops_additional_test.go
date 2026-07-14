@@ -781,7 +781,7 @@ func TestTonWrapperAndMessageOpVariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to pop LDSTDADDR addr: %v", err)
 		}
-		if rest.BitsLeft() != 3 || !isValidStdMsgAddr(addrSlice) {
+		if rest.BitsLeft() != 3 || !isValidStdMsgAddr(addrSlice, vm.MaxSupportedGlobalVersion) {
 			t.Fatalf("unexpected LDSTDADDR result: rest=%d", rest.BitsLeft())
 		}
 
@@ -1014,7 +1014,8 @@ func TestTonActionAndSendMsgOps(t *testing.T) {
 		}
 
 		stat := newStorageStat(10, st)
-		if !addMessageTailStorage(stat, msgCell, 0) {
+		ok, err := addMessageTailStorage(stat, msgCell, 0)
+		if err != nil || !ok {
 			t.Fatalf("addMessageTailStorage should succeed, got %+v", stat)
 		}
 

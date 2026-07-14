@@ -5,27 +5,48 @@ import "encoding/binary"
 const bocHashIndexInitialCapacity = 64
 
 type bocHashIndex struct {
-	fingerprints []uint64
-	indexes      []uint32
-	used         int
-	growAt       int
+	// Each entry packs a 32-bit hash fingerprint and index+1. A zero low
+	// half marks an empty slot; matching fingerprints still verify full hashes.
+	entries []uint64
+	used    int
+	growAt  int
 }
 
-func (m *bocHashIndex) get(fp uint64, hash []byte, cell *Cell, items []bocSerializeItem) (uint32, bool) {
-	if len(m.indexes) == 0 {
+func newBOCHashIndex(capacityHint int) *bocHashIndex {
+	m := &bocHashIndex{}
+	if capacityHint <= 0 {
+		return m
+	}
+	if capacityHint > 1<<30 {
+		capacityHint = 1 << 30
+	}
+
+	capacity := bocHashIndexInitialCapacity
+	for capacityHint*4 > capacity*3 {
+		capacity *= 2
+	}
+
+	m.entries = make([]uint64, capacity)
+	m.growAt = capacity * 3 / 4
+	return m
+}
+
+func (m *bocHashIndex) get(fp uint32, hash []byte, cell *Cell, items []bocSerializeItem) (uint32, bool) {
+	if len(m.entries) == 0 {
 		return 0, false
 	}
 
-	mask := uint64(len(m.indexes) - 1)
+	mask := uint32(len(m.entries) - 1)
 	pos := fp & mask
 	for {
-		idxPlusOne := m.indexes[pos]
+		entry := m.entries[pos]
+		idxPlusOne := uint32(entry)
 		if idxPlusOne == 0 {
 			return 0, false
 		}
 
 		idx := idxPlusOne - 1
-		if m.fingerprints[pos] == fp {
+		if uint32(entry>>32) == fp {
 			itemCell := items[idx].cell
 			if itemCell == cell || bocCellHashEqual(itemCell, hash) {
 				return idx, true
@@ -42,13 +63,13 @@ func (m *bocHashIndex) reserve() {
 	}
 }
 
-func (m *bocHashIndex) set(fp uint64, idx uint32) {
+func (m *bocHashIndex) set(fp uint32, idx uint32) {
 	m.reserve()
 	m.insert(fp, idx)
 }
 
 func (m *bocHashIndex) grow() {
-	capacity := len(m.indexes) * 2
+	capacity := len(m.entries) * 2
 	if capacity == 0 {
 		capacity = bocHashIndexInitialCapacity
 	}
@@ -56,39 +77,37 @@ func (m *bocHashIndex) grow() {
 		capacity *= 2
 	}
 
-	oldFingerprints := m.fingerprints
-	oldIndexes := m.indexes
-	m.fingerprints = make([]uint64, capacity)
-	m.indexes = make([]uint32, capacity)
+	oldEntries := m.entries
+	m.entries = make([]uint64, capacity)
 	m.growAt = capacity * 3 / 4
 
-	if len(oldIndexes) == 0 {
+	if len(oldEntries) == 0 {
 		return
 	}
 
 	m.used = 0
-	for i, idxPlusOne := range oldIndexes {
+	for _, entry := range oldEntries {
+		idxPlusOne := uint32(entry)
 		if idxPlusOne == 0 {
 			continue
 		}
-		m.insert(oldFingerprints[i], idxPlusOne-1)
+		m.insert(uint32(entry>>32), idxPlusOne-1)
 	}
 }
 
-func (m *bocHashIndex) insert(fp uint64, idx uint32) {
-	mask := uint64(len(m.indexes) - 1)
+func (m *bocHashIndex) insert(fp uint32, idx uint32) {
+	mask := uint32(len(m.entries) - 1)
 	pos := fp & mask
-	for m.indexes[pos] != 0 {
+	for uint32(m.entries[pos]) != 0 {
 		pos = (pos + 1) & mask
 	}
 
-	m.fingerprints[pos] = fp
-	m.indexes[pos] = idx + 1
+	m.entries[pos] = uint64(fp)<<32 | uint64(idx+1)
 	m.used++
 }
 
-func bocHashFingerprint(hash []byte) uint64 {
-	return binary.LittleEndian.Uint64(hash[:8])
+func bocHashFingerprint(hash []byte) uint32 {
+	return binary.LittleEndian.Uint32(hash[:4])
 }
 
 func bocCellHashEqual(cell *Cell, hash []byte) bool {

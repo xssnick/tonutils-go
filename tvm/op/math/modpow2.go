@@ -26,7 +26,7 @@ func MODPOW2() *helpers.SimpleOP {
 				return err
 			}
 
-			divider := y.Lsh(big.NewInt(1), uint(y.Uint64()))
+			divider := y.Lsh(bigIntOne, uint(y.Uint64()))
 			q := new(big.Int).Div(x, divider)
 			r := x.Sub(x, q.Mul(q, divider))
 

@@ -38,7 +38,7 @@ func MULADDRSHIFTCMOD() *helpers.SimpleOP {
 			}
 
 			dividend := new(big.Int).Add(x.Mul(x, y), w)
-			q := helpers.DivCeil(dividend, z.Lsh(big.NewInt(1), uint(z.Uint64())))
+			q := helpers.DivCeil(dividend, z.Lsh(bigIntOne, uint(z.Uint64())))
 			r := y.Sub(dividend, w.Mul(z, q))
 
 			err = state.Stack.PushInt(q)
@@ -48,7 +48,8 @@ func MULADDRSHIFTCMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "MULADDRSHIFTCMOD",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0xA2),
+		Name:       "MULADDRSHIFTCMOD",
+		BitPrefix:  helpers.BytesPrefix(0xA9, 0xA2),
+		MinVersion: 4,
 	}
 }

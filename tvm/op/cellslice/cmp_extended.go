@@ -24,6 +24,10 @@ func binarySliceBoolOp(name string, prefix helpers.BitPrefix, fn func(a, b *cell
 	return &helpers.SimpleOP{
 		Name: name,
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			cs2, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
@@ -42,6 +46,10 @@ func binarySliceIntOp(name string, prefix helpers.BitPrefix, fn func(a, b *cell.
 	return &helpers.SimpleOP{
 		Name: name,
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			cs2, err := state.Stack.PopSlice()
 			if err != nil {
 				return err

@@ -19,6 +19,23 @@ func TestTonopsAdditionalErrorPaths(t *testing.T) {
 		if err != nil || val != nil {
 			t.Fatalf("loadConfigValue(nil root) = (%v, %v)", val, err)
 		}
+		signed32Min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 31))
+		signed32Max := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 31), big.NewInt(1))
+		belowSigned32Min := new(big.Int).Sub(new(big.Int).Set(signed32Min), big.NewInt(1))
+		aboveSigned32Max := new(big.Int).Lsh(big.NewInt(1), 31)
+
+		if !fitsSignedBits(signed32Min, 32) {
+			t.Fatal("fitsSignedBits should accept signed 32-bit min")
+		}
+		if !fitsSignedBits(signed32Max, 32) {
+			t.Fatal("fitsSignedBits should accept signed 32-bit max")
+		}
+		if fitsSignedBits(belowSigned32Min, 32) {
+			t.Fatal("fitsSignedBits should reject below signed 32-bit min")
+		}
+		if fitsSignedBits(aboveSigned32Max, 32) {
+			t.Fatal("fitsSignedBits should reject above signed 32-bit max")
+		}
 
 		if _, err := preloadFixedBytes(cell.BeginCell().MustStoreUInt(0xAA, 8).ToSlice(), 16, "need 16 bits"); err == nil {
 			t.Fatal("preloadFixedBytes should reject short slices")

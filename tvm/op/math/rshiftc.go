@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -21,12 +19,18 @@ func RSHIFTC() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
+			if x == nil {
+				if y.Sign() == 0 || state.GlobalVersion >= 14 {
+					return pushNaNOrOverflow(state, false)
+				}
+				return pushSmallInt(state, 0)
+			}
 
-			res := helpers.DivCeil(x, y.Lsh(big.NewInt(1), uint(y.Uint64())))
+			res := helpers.DivCeil(x, y.Lsh(bigIntOne, uint(y.Uint64())))
 
 			return state.Stack.PushInt(res)
 		},

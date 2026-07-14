@@ -233,8 +233,7 @@ func runRawCodeWithEnv(t *testing.T, code, data *cell.Cell, c7 tuple.Tuple, glob
 	}
 
 	machine := NewTVM()
-	machine.globalVersion = globalVersion
-	res, err := machine.ExecuteDetailed(code, data, c7, vmcore.GasWithLimit(1_000_000), stack)
+	res, err := machine.Execute(code, data, c7, vmcore.GasWithLimit(1_000_000), stack, testExecutionConfigWithVersion(t, uint32(globalVersion)))
 	return stack, res, err
 }
 
@@ -245,7 +244,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 			funcsop.SETGASLIMIT().Serialize(),
 		)
 
-		stack, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.DefaultGlobalVersion)
+		stack, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.MaxSupportedGlobalVersion)
 		if code := exitCodeFromResult(res, err); code != ^vmerr.CodeOutOfGas {
 			t.Fatalf("expected out of gas exit, got %d", code)
 		}
@@ -277,7 +276,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 			cell.BeginCell().MustStoreUInt(0xF205, 16),
 		)
 
-		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.DefaultGlobalVersion)
+		_, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.MaxSupportedGlobalVersion)
 		if code := exitCodeFromResult(res, err); code != 5 {
 			t.Fatalf("expected exception 5, got %d", code)
 		}
@@ -303,7 +302,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 
 	t.Run("CommitRejectsTooDeepData", func(t *testing.T) {
 		code := codeFromBuilders(t, funcsop.COMMIT().Serialize())
-		_, res, err := runRawCodeWithEnv(t, code, mustDeepCell(t, vmcore.MaxDataDepth+1), tuple.Tuple{}, vmcore.DefaultGlobalVersion)
+		_, res, err := runRawCodeWithEnv(t, code, mustDeepCell(t, vmcore.MaxDataDepth+1), tuple.Tuple{}, vmcore.MaxSupportedGlobalVersion)
 		if code := exitCodeFromResult(res, err); code != vmerr.CodeCellOverflow {
 			t.Fatalf("expected cell overflow, got %d", code)
 		}
@@ -319,7 +318,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 			codeFromBuilders(t, funcsop.CONFIGPARAM().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(7),
 		)
 		if err != nil {
@@ -348,7 +347,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 			codeFromBuilders(t, funcsop.CONFIGPARAM().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(8),
 		)
 		if err != nil {
@@ -367,7 +366,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 			codeFromBuilders(t, funcsop.CONFIGOPTPARAM().Serialize()),
 			cell.BeginCell().EndCell(),
 			c7,
-			vmcore.DefaultGlobalVersion,
+			vmcore.MaxSupportedGlobalVersion,
 			int64(8),
 		)
 		if err != nil {
@@ -392,7 +391,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 			funcsop.SETGLOB(2).Serialize(),
 			funcsop.GETGLOB(2).Serialize(),
 		)
-		stack, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, int64(456))
+		stack, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, int64(456))
 		if err != nil {
 			t.Fatalf("setglob/getglob unexpected error: %v", err)
 		}
@@ -410,7 +409,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 			stackop.PUSHINT(big.NewInt(10)).Serialize(),
 			funcsop.GETGLOBVAR().Serialize(),
 		)
-		stack, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, nil, int64(10))
+		stack, res, err = runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, nil, int64(10))
 		if err != nil {
 			t.Fatalf("setglobvar noop unexpected error: %v", err)
 		}
@@ -430,7 +429,7 @@ func TestTonOpsGoSemantics(t *testing.T) {
 		})
 
 		code := codeFromBuilders(t, funcsop.GETPARAMLONG(18).Serialize())
-		stack, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion)
+		stack, res, err := runRawCodeWithEnv(t, code, cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion)
 		if err != nil {
 			t.Fatalf("getparamlong unexpected error: %v", err)
 		}
@@ -466,7 +465,7 @@ func TestTonOpsCHKSIGN(t *testing.T) {
 		}
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -481,7 +480,7 @@ func TestTonOpsCHKSIGN(t *testing.T) {
 		if !ok {
 			t.Fatal("expected signature verification to succeed")
 		}
-		if state.Gas.FreeConsumed != vmcore.ChksgnGasPrice {
+		if state.Gas.FreeConsumed != vmcore.SignatureCheckGasPrice {
 			t.Fatalf("unexpected deferred gas: %d", state.Gas.FreeConsumed)
 		}
 	})
@@ -500,7 +499,7 @@ func TestTonOpsCHKSIGN(t *testing.T) {
 		_ = st.PushInt(new(big.Int).SetBytes(pub))
 
 		if err := funcsop.CHKSIGNU().Interpret(&vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}); err != nil {
@@ -529,7 +528,7 @@ func TestTonOpsCHKSIGN(t *testing.T) {
 		_ = st.PushInt(new(big.Int).SetBytes(pub))
 
 		err := funcsop.CHKSIGNS().Interpret(&vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		})
@@ -565,7 +564,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		}
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -617,7 +616,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushInt(big.NewInt(1))
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -654,7 +653,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushInt(big.NewInt(7))
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -702,7 +701,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushInt(big.NewInt(1))
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -733,7 +732,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushInt(new(big.Int).SetBytes(localec.CurveOrderBytes()))
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -762,7 +761,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushInt(big.NewInt(1))
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -793,7 +792,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushSlice(cell.BeginCell().MustStoreSlice(pub, 264).ToSlice())
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -807,7 +806,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		if !ok {
 			t.Fatal("expected p256 verification to succeed")
 		}
-		if state.Gas.Used() != vmcore.P256ChksgnGasPrice {
+		if state.Gas.Used() != vmcore.P256SignatureCheckGasPrice {
 			t.Fatalf("unexpected gas used: %d", state.Gas.Used())
 		}
 	})
@@ -823,7 +822,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushSlice(cell.BeginCell().MustStoreSlice(badKey, 264).ToSlice())
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -837,7 +836,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		if ok {
 			t.Fatal("expected malformed key verification to fail")
 		}
-		if state.Gas.Used() != vmcore.P256ChksgnGasPrice {
+		if state.Gas.Used() != vmcore.P256SignatureCheckGasPrice {
 			t.Fatalf("unexpected gas used: %d", state.Gas.Used())
 		}
 	})
@@ -856,7 +855,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 		_ = st.PushSlice(cell.BeginCell().MustStoreSlice(pub, 264).ToSlice())
 
 		state := &vmcore.State{
-			GlobalVersion: vmcore.DefaultGlobalVersion,
+			GlobalVersion: vmcore.MaxSupportedGlobalVersion,
 			Stack:         st,
 			Gas:           vmcore.NewGas(),
 		}
@@ -875,7 +874,7 @@ func TestTonOpsCryptoPrimitives(t *testing.T) {
 
 func TestTonOpsErrorsRemainVMErrors(t *testing.T) {
 	c7 := makeTonopsTestC7(t, tonopsTestC7Config{})
-	_, _, err := runRawCodeWithEnv(t, codeFromBuilders(t, funcsop.CONFIGPARAM().Serialize()), cell.BeginCell().EndCell(), c7, vmcore.DefaultGlobalVersion, "not-an-int")
+	_, _, err := runRawCodeWithEnv(t, codeFromBuilders(t, funcsop.CONFIGPARAM().Serialize()), cell.BeginCell().EndCell(), c7, vmcore.MaxSupportedGlobalVersion, "not-an-int")
 	var vmErr vmerr.VMError
 	if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeTypeCheck {
 		t.Fatalf("expected type check, got %v", err)

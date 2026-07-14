@@ -2,11 +2,11 @@ package stack
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
 )
 
 type OpDICTPUSHCONST struct {
@@ -19,19 +19,21 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return DICTPUSHCONST(nil) })
 }
 
+var dictPushConstPrefixed = helpers.SinglePrefixed(helpers.SlicePrefix(13, []byte{0xF4, 0xA4}))
+
 func DICTPUSHCONST(cont *cell.Cell) *OpDICTPUSHCONST {
 	return &OpDICTPUSHCONST{
-		Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(13, []byte{0xF4, 0xA4})),
+		Prefixed: dictPushConstPrefixed,
 		cont:     cont,
 	}
 }
 
 func (op *OpDICTPUSHCONST) Deserialize(code *cell.Slice) error {
-	_, err := code.LoadSlice(13)
-	if err != nil {
+	if err := code.SkipBits(13); err != nil {
 		return err
 	}
 
+	var err error
 	if _, err := code.LoadBoolBit(); err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 	}
@@ -78,5 +80,5 @@ func (op *OpDICTPUSHCONST) Interpret(state *vm.State) error {
 	if err := state.Stack.PushCell(op.cont); err != nil {
 		return err
 	}
-	return state.Stack.PushInt(new(big.Int).SetUint64(op.pfx))
+	return state.Stack.PushSmallInt(int64(op.pfx))
 }

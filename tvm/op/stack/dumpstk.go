@@ -23,7 +23,7 @@ func init() {
 func DUMPSTK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			vm.Tracef("#DEBUG#: stack(%d values)\n%s", state.Stack.Len(), state.Stack.String())
+			state.Tracef("#DEBUG#: stack(%d values)\n%s", state.Stack.Len(), state.Stack.String())
 			return nil
 		},
 		Name:      "DUMPSTK",
@@ -35,7 +35,7 @@ func DUMP(idx uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		Action: func(state *vm.State) error {
 			if int(idx) >= state.Stack.Len() {
-				vm.Tracef("#DEBUG#: s%d is absent", idx)
+				state.Tracef("#DEBUG#: s%d is absent", idx)
 				return nil
 			}
 
@@ -44,7 +44,7 @@ func DUMP(idx uint8) *helpers.AdvancedOP {
 				return nil
 			}
 
-			vm.Tracef("#DEBUG#: s%d = %s", idx, debugValueString(val))
+			state.Tracef("#DEBUG#: s%d = %s", idx, debugValueString(val))
 			return nil
 		},
 		NameSerializer: func() string {
@@ -69,7 +69,7 @@ func DUMP(idx uint8) *helpers.AdvancedOP {
 func DEBUG(arg uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		Action: func(state *vm.State) error {
-			vm.Tracef("DEBUG %d", arg)
+			state.Tracef("DEBUG %d", arg)
 			return nil
 		},
 		NameSerializer: func() string {
@@ -95,7 +95,7 @@ func STRDUMP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			if state.Stack.Len() == 0 {
-				vm.Tracef("#DEBUG#: s0 is absent")
+				state.Tracef("#DEBUG#: s0 is absent")
 				return nil
 			}
 
@@ -105,24 +105,24 @@ func STRDUMP() *helpers.SimpleOP {
 			}
 
 			sl, ok := val.(*cell.Slice)
-			if !ok {
-				vm.Tracef("#DEBUG#: is not a slice")
+			if !ok || sl == nil {
+				state.Tracef("#DEBUG#: is not a slice")
 				return nil
 			}
 
 			if sl.BitsLeft()%8 != 0 {
-				vm.Tracef("#DEBUG#: slice contains not valid bits count")
+				state.Tracef("#DEBUG#: slice contains not valid bits count")
 				return nil
 			}
 
 			cp := sl.Copy()
 			data, err := cp.LoadSlice(cp.BitsLeft())
 			if err != nil {
-				vm.Tracef("#DEBUG#: failed to load slice")
+				state.Tracef("#DEBUG#: failed to load slice")
 				return nil
 			}
 
-			vm.Tracef("#DEBUG#: %s", string(data))
+			state.Tracef("#DEBUG#: %s", string(data))
 			return nil
 		},
 		Name:      "STRDUMP",
@@ -155,7 +155,7 @@ func (op *debugStrOp) Deserialize(code *cell.Slice) error {
 }
 
 func (op *debugStrOp) DeserializeMatched(code *cell.Slice) error {
-	if _, err := code.LoadSlice(12); err != nil {
+	if err := code.SkipBits(12); err != nil {
 		return err
 	}
 	v, err := code.LoadUInt(4)
@@ -189,7 +189,7 @@ func (op *debugStrOp) SerializeText() string {
 }
 
 func (op *debugStrOp) Interpret(state *vm.State) error {
-	vm.Tracef("DEBUGSTR %X", op.data)
+	state.Tracef("DEBUGSTR %X", op.data)
 	return nil
 }
 
@@ -206,6 +206,9 @@ func debugValueString(v any) string {
 	case *big.Int:
 		return x.String() + " [int]"
 	case *cell.Slice:
+		if x == nil {
+			return "null [slice]"
+		}
 		return x.WithoutTrace().MustToCell().Dump() + " [slice]"
 	case *cell.Builder:
 		return x.WithoutTrace().EndCell().Dump() + " [builder]"

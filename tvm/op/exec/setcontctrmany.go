@@ -27,11 +27,11 @@ func setContCtrManyCommon(state *vm.State, mask uint8) error {
 	}
 	cont = vm.ForceControlData(cont)
 	data := cont.GetControlData()
-	for i := 0; i < 8; i++ {
-		if mask&(1<<uint(i)) == 0 {
+	for i, m := 0, mask; m != 0; i, m = i+1, m>>1 {
+		if m&1 == 0 {
 			continue
 		}
-		if !data.Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i))) {
+		if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(state.Reg.Get(i))) {
 			return vmerr.Error(vmerr.CodeTypeCheck)
 		}
 	}
@@ -41,6 +41,7 @@ func setContCtrManyCommon(state *vm.State, mask uint8) error {
 func SETCONTCTRMANY(mask uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
+		MinVersion:    9,
 		Action: func(state *vm.State) error {
 			return setContCtrManyCommon(state, mask)
 		},
@@ -69,13 +70,14 @@ func SETCONTCTRMANYX() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			mask, err := state.Stack.PopIntRange(0, 255)
+			mask, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return setContCtrManyCommon(state, uint8(mask.Int64()))
+			return setContCtrManyCommon(state, uint8(mask))
 		},
-		Name:      "SETCONTCTRMANYX",
-		BitPrefix: helpers.BytesPrefix(0xED, 0xE4),
+		Name:       "SETCONTCTRMANYX",
+		BitPrefix:  helpers.BytesPrefix(0xED, 0xE4),
+		MinVersion: 9,
 	}
 }

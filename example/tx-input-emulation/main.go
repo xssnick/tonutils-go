@@ -60,6 +60,10 @@ func main() {
 	if !acc.IsActive || acc.Code == nil {
 		log.Fatalln("account is not active or has no code")
 	}
+	cfg, err := loadPreparedBlockchainConfig(ctx, api)
+	if err != nil {
+		log.Fatalln("get config err: ", err.Error())
+	}
 
 	state := trackedState{
 		code:    acc.Code,
@@ -83,7 +87,7 @@ func main() {
 			continue
 		}
 
-		res, err := emulateInboundTx(addr, tx, state)
+		res, err := emulateInboundTx(addr, tx, state, cfg)
 		if err != nil {
 			log.Printf("emulation failed for tx %d: %v", tx.LT, err)
 			if err = resyncTrackedState(ctx, api, addr, &state); err != nil {
@@ -123,12 +127,13 @@ func main() {
 	}
 }
 
-func emulateInboundTx(addr *address.Address, tx *tlb.Transaction, state trackedState) (*tvm.MessageExecutionResult, error) {
+func emulateInboundTx(addr *address.Address, tx *tlb.Transaction, state trackedState, preparedCfg *tvm.PreparedBlockchainConfig) (*tvm.MessageExecutionResult, error) {
 	machine := tvm.NewTVM()
 	cfg := tvm.MessageEmulationConfig{
 		Address: addr,
 		Now:     tx.Now,
 		Balance: new(big.Int).Set(state.balance),
+		Config:  preparedCfg,
 	}
 
 	tm := time.Now()
@@ -156,6 +161,18 @@ func loadLatestAccount(ctx context.Context, api ton.APIClientWrapped, addr *addr
 		return nil, err
 	}
 	return api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, addr)
+}
+
+func loadPreparedBlockchainConfig(ctx context.Context, api ton.APIClientWrapped) (*tvm.PreparedBlockchainConfig, error) {
+	block, err := api.CurrentMasterchainInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := api.WaitForBlock(block.SeqNo).GetBlockchainConfig(ctx, block)
+	if err != nil {
+		return nil, err
+	}
+	return tvm.PrepareBlockchainConfig(cfg.Root)
 }
 
 func resyncTrackedState(ctx context.Context, api ton.APIClientWrapped, addr *address.Address, state *trackedState) error {

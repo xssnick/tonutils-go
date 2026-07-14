@@ -11,6 +11,7 @@ import (
 func init() {
 	tl.Register(UDP{}, "adnl.address.udp ip:int port:int = adnl.Address")
 	tl.Register(UDP6{}, "adnl.address.udp6 ip:int128 port:int = adnl.Address")
+	tl.Register(QUIC{}, "adnl.address.quic ip:int port:int = adnl.Address")
 	tl.Register(List{}, "adnl.addressList addrs:(vector adnl.Address) version:int reinit_date:int priority:int expire_at:int = adnl.AddressList")
 }
 
@@ -24,6 +25,11 @@ type UDP struct {
 
 type UDP6 struct {
 	IP   net.IP `tl:"int128"`
+	Port int32  `tl:"int"`
+}
+
+type QUIC struct {
+	IP   net.IP `tl:"int"`
 	Port int32  `tl:"int"`
 }
 
@@ -41,6 +47,13 @@ func IPValue(addr Address) net.IP {
 	case UDP6:
 		return net.IP(a.IP)
 	case *UDP6:
+		if a == nil {
+			return nil
+		}
+		return net.IP(a.IP)
+	case QUIC:
+		return net.IP(a.IP)
+	case *QUIC:
 		if a == nil {
 			return nil
 		}
@@ -68,13 +81,20 @@ func PortValue(addr Address) int32 {
 			return 0
 		}
 		return a.Port
+	case QUIC:
+		return a.Port
+	case *QUIC:
+		if a == nil {
+			return 0
+		}
+		return a.Port
 	default:
 		return 0
 	}
 }
 
 type List struct {
-	Addresses  []Address `tl:"vector struct boxed [adnl.address.udp,adnl.address.udp6]"`
+	Addresses  []Address `tl:"vector struct boxed [adnl.address.udp,adnl.address.udp6,adnl.address.quic]"`
 	Version    int32     `tl:"int"`
 	ReinitDate int32     `tl:"int"`
 	Priority   int32     `tl:"int"`
@@ -133,6 +153,19 @@ func Clone(addr Address) Address {
 			IP:   append(net.IP(nil), a.IP...),
 			Port: a.Port,
 		}
+	case QUIC:
+		return &QUIC{
+			IP:   append(net.IP(nil), a.IP...),
+			Port: a.Port,
+		}
+	case *QUIC:
+		if a == nil {
+			return nil
+		}
+		return &QUIC{
+			IP:   append(net.IP(nil), a.IP...),
+			Port: a.Port,
+		}
 	default:
 		return nil
 	}
@@ -164,6 +197,12 @@ func CloneList(list *List) *List {
 func DialString(addr Address) (string, error) {
 	if addr == nil {
 		return "", fmt.Errorf("address is nil")
+	}
+
+	switch addr.(type) {
+	case UDP, *UDP, UDP6, *UDP6:
+	default:
+		return "", fmt.Errorf("address type %T is not dialable", addr)
 	}
 
 	ip := IPValue(addr)

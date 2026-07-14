@@ -24,6 +24,7 @@ type ADNL interface {
 	GetCloserCtx() context.Context
 	RemoteAddr() string
 	GetID() []byte
+	Stats() adnl.PeerStats
 	Close()
 }
 
@@ -102,16 +103,21 @@ func (a *ADNLWrapper) trackBroadcastFECControl(control BroadcastFECControl) bool
 	for _, handler := range handlersMap {
 		handlers = append(handlers, handler)
 	}
-	a.mx.RUnlock()
-
-	if len(handlers) == 0 {
-		return false
+	overlays := make([]*ADNLOverlayWrapper, 0, len(a.overlays))
+	for _, overlay := range a.overlays {
+		overlays = append(overlays, overlay)
 	}
+	a.mx.RUnlock()
 
 	handled := false
 	peerID := a.GetID()
 	for _, handler := range handlers {
 		if handler(peerID, control) {
+			handled = true
+		}
+	}
+	for _, overlay := range overlays {
+		if overlay.trackBroadcastFECRelayControl(peerID, control) {
 			handled = true
 		}
 	}
@@ -146,6 +152,11 @@ func (a *ADNLWrapper) queryHandler(msg *adnl.MessageQuery) error {
 				return h(msg)
 			}
 			return fmt.Errorf("got query for unregistered overlay with id: %s", id)
+		}
+
+		switch obj.(type) {
+		case Ping, *Ping:
+			return a.Answer(context.Background(), msg.ID, Pong{})
 		}
 
 		h := o.queryHandler
@@ -197,6 +208,26 @@ func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
 
 		switch t := obj.(type) {
 		case Broadcast:
+			if err := o.processBroadcast(&t, a.GetID()); err != nil {
+				return fmt.Errorf("failed to process broadcast: %w", err)
+			}
+			return nil
+		case BroadcastTwoStepSimple:
+			if !o.isBroadcastTwoStepEnabled() {
+				return nil
+			}
+			if err := o.processBroadcastTwoStepSimple(&t, a.GetID()); err != nil {
+				return fmt.Errorf("failed to process two-step simple broadcast: %w", err)
+			}
+			return nil
+		case BroadcastTwoStepFEC:
+			if !o.isBroadcastTwoStepEnabled() {
+				return nil
+			}
+			if err := o.processBroadcastTwoStepFEC(&t, a.GetID()); err != nil {
+				return fmt.Errorf("failed to process two-step FEC broadcast: %w", err)
+			}
+			return nil
 		case BroadcastFECShort:
 			if err := o.processFECBroadcastShort(&t); err != nil {
 				return fmt.Errorf("failed to process short FEC broadcast: %w", err)

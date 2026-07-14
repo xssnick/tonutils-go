@@ -1,6 +1,7 @@
 package tlb
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -36,6 +37,19 @@ func TestBlockchainConfigGetParam(t *testing.T) {
 	}
 	if missing != nil {
 		t.Fatal("expected missing param to return nil cell")
+	}
+
+	if !errors.Is(err, ErrBlockchainConfigParamAbsent) {
+		t.Fatalf("expected ErrBlockchainConfigParamAbsent, got %v", err)
+	}
+	if err.Error() != "blockchain config param is absent: 18" {
+		t.Fatalf("unexpected absent error message: %q", err.Error())
+	}
+
+	if allocs := testing.AllocsPerRun(100, func() {
+		_, _ = cfg.GetParam(18)
+	}); allocs != 0 {
+		t.Fatalf("GetParam miss should not allocate, got %v allocs per run", allocs)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestAgainOps(t *testing.T) {
@@ -192,6 +193,87 @@ func TestCompositionOps(t *testing.T) {
 	if _, ok := state.Reg.C[1].(*vm.PushIntContinuation); !ok {
 		t.Fatalf("expected c1 to hold PushIntContinuation, got %T", state.Reg.C[1])
 	}
+}
+
+func TestCompositionErrorStackEffects(t *testing.T) {
+	t.Run("ComposeShortStackPreservesTop", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushContinuation(&testContinuation{name: "base"}); err != nil {
+			t.Fatalf("push base: %v", err)
+		}
+
+		before := state.Stack.String()
+		assertVMErrCode(t, BOOLAND().Interpret(state), vmerr.CodeStackUnderflow)
+		if after := state.Stack.String(); after != before {
+			t.Fatalf("BOOLAND short-stack path mutated stack:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+	})
+
+	t.Run("ComposeBadTopContinuationConsumesTopOnly", func(t *testing.T) {
+		state := newTestState()
+		base := &testContinuation{name: "base"}
+		if err := state.Stack.PushContinuation(base); err != nil {
+			t.Fatalf("push base: %v", err)
+		}
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad continuation: %v", err)
+		}
+
+		assertVMErrCode(t, BOOLAND().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected bad top continuation to be consumed only, stack len=%d", state.Stack.Len())
+		}
+		got, err := state.Stack.PopContinuation()
+		if err != nil {
+			t.Fatalf("pop base: %v", err)
+		}
+		if continuationName(t, got) != "base" {
+			t.Fatal("unexpected remaining base continuation")
+		}
+	})
+
+	t.Run("ComposeBadBaseContinuationConsumesBoth", func(t *testing.T) {
+		state := newTestState()
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad base: %v", err)
+		}
+		if err := state.Stack.PushContinuation(&testContinuation{name: "value"}); err != nil {
+			t.Fatalf("push value continuation: %v", err)
+		}
+
+		assertVMErrCode(t, COMPOSBOTH().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected bad base continuation to consume both inputs, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("UnaryBadContinuationConsumesTop", func(t *testing.T) {
+		cases := []struct {
+			name string
+			op   vm.OP
+		}{
+			{name: "ATEXIT", op: ATEXIT()},
+			{name: "ATEXITALT", op: ATEXITALT()},
+			{name: "SETEXITALT", op: SETEXITALT()},
+			{name: "THENRET", op: THENRET()},
+			{name: "THENRETALT", op: THENRETALT()},
+			{name: "BOOLEVAL", op: BOOLEVAL()},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				state := newTestState()
+				if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+					t.Fatalf("push bad continuation: %v", err)
+				}
+
+				assertVMErrCode(t, tc.op.Interpret(state), vmerr.CodeTypeCheck)
+				if state.Stack.Len() != 0 {
+					t.Fatalf("%s bad continuation should consume top, stack len=%d", tc.name, state.Stack.Len())
+				}
+			})
+		}
+	})
 }
 
 func TestCallIfAndExecuteOps(t *testing.T) {
@@ -558,6 +640,48 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 	if decoded.SerializeText() != "IFBITJMP 2" {
 		t.Fatalf("unexpected decoded name: %q", decoded.SerializeText())
 	}
+	if err := decoded.DeserializeMatched(cell.BeginCell().MustStoreSlice(decoded.BitPrefix.Data, decoded.BitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
+		t.Fatal("expected short IFBITJMP suffix decode error")
+	}
+
+	state = newTestState()
+	if err := state.Stack.PushInt(big.NewInt(0b100)); err != nil {
+		t.Fatalf("push not-taken source: %v", err)
+	}
+	if err := state.Stack.PushContinuation(body); err != nil {
+		t.Fatalf("push not-taken body: %v", err)
+	}
+	if err := IFBITJMP(1).Interpret(state); err != nil {
+		t.Fatalf("ifbitjmp not-taken failed: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("IFBITJMP should not jump when bit is not set, got %d calls", calls)
+	}
+	back, err = state.Stack.PopIntFinite()
+	if err != nil || back.Int64() != 0b100 {
+		t.Fatalf("expected source integer after not-taken IFBITJMP: %v err=%v", back, err)
+	}
+
+	state = newTestState()
+	assertVMErrCode(t, IFBITJMP(1).Interpret(state), vmerr.CodeStackUnderflow)
+
+	state = newTestState()
+	if err := state.Stack.PushInt(big.NewInt(0b10)); err != nil {
+		t.Fatalf("push source before bad continuation: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(33)); err != nil {
+		t.Fatalf("push bad continuation: %v", err)
+	}
+	assertVMErrCode(t, IFBITJMP(1).Interpret(state), vmerr.CodeTypeCheck)
+
+	state = newTestState()
+	if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+		t.Fatalf("push bad integer: %v", err)
+	}
+	if err := state.Stack.PushContinuation(body); err != nil {
+		t.Fatalf("push body before bad integer: %v", err)
+	}
+	assertVMErrCode(t, IFBITJMP(1).Interpret(state), vmerr.CodeTypeCheck)
 
 	state = newTestState()
 	if err := state.Stack.PushInt(big.NewInt(0b001)); err != nil {
@@ -572,6 +696,14 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("expected IFNBITJMP to jump once more, got %d", calls)
 	}
+	negated := IFNBITJMP(31)
+	negatedDecoded := IFBITJMP(0)
+	if err := negatedDecoded.Deserialize(negated.Serialize().EndCell().MustBeginParse()); err != nil {
+		t.Fatalf("deserialize ifnbitjmp failed: %v", err)
+	}
+	if negatedDecoded.SerializeText() != "IFNBITJMP 31" {
+		t.Fatalf("unexpected negated decoded name: %q", negatedDecoded.SerializeText())
+	}
 
 	refCode := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 	state = newTestState()
@@ -584,6 +716,50 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 	}
 	if state.CurrentCode.MustLoadUInt(8) != 0xAA {
 		t.Fatalf("expected IFBITJMPREF to jump into referenced code")
+	}
+
+	state = newTestState()
+	state.InitForExecution()
+	state.CurrentCode = cell.BeginCell().MustStoreUInt(0x44, 8).EndCell().MustBeginParse()
+	if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
+		t.Fatalf("push ref not-taken source: %v", err)
+	}
+	if err := IFBITJMPREF(2, refCode).Interpret(state); err != nil {
+		t.Fatalf("ifbitjmpref not-taken failed: %v", err)
+	}
+	if state.CurrentCode.MustLoadUInt(8) != 0x44 {
+		t.Fatalf("expected IFBITJMPREF not-taken path to keep current code")
+	}
+	back, err = state.Stack.PopIntFinite()
+	if err != nil || back.Int64() != 0 {
+		t.Fatalf("expected source integer after IFBITJMPREF not-taken: %v err=%v", back, err)
+	}
+
+	state = newTestState()
+	if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+		t.Fatalf("push bad ref integer: %v", err)
+	}
+	assertVMErrCode(t, IFBITJMPREF(2, refCode).Interpret(state), vmerr.CodeTypeCheck)
+
+	state = newTestState()
+	state.InitForExecution()
+	if err := state.Stack.PushInt(big.NewInt(0b100)); err != nil {
+		t.Fatalf("push unresolved ref source: %v", err)
+	}
+	assertVMErrCode(t, IFBITJMPREF(2, unresolvedLibraryCell(t)).Interpret(state), vmerr.CodeCellUnderflow)
+
+	directRefOp := newIfBitJmpRefOp(2, false, refCode)
+	if directRefOp.refs[0] != refCode {
+		t.Fatalf("expected direct ref helper to bind ref")
+	}
+	if err := directRefOp.Deserialize(directRefOp.Serialize().EndCell().MustBeginParse()); err != nil {
+		t.Fatalf("deserialize ifbitjmpref failed: %v", err)
+	}
+	if directRefOp.SerializeText() != "IFBITJMPREF" {
+		t.Fatalf("unexpected direct ref op name after round-trip: %q", directRefOp.SerializeText())
+	}
+	if err := directRefOp.DeserializeMatched(cell.BeginCell().MustStoreSlice(directRefOp.prefix.Data, directRefOp.prefix.Bits).EndCell().MustBeginParse()); err == nil {
+		t.Fatal("expected short IFBITJMPREF suffix decode error")
 	}
 
 	refOp := IFNBITJMPREF(1, refCode)

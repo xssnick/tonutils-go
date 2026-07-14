@@ -12,6 +12,28 @@ const (
 	cellFlagRefsNumMask   uint8 = 0b111 << cellFlagRefsNumShift
 )
 
+// Cell.typ cache encoding: 0 means "not resolved yet" (the zero value), other
+// values store the resolved Type shifted by one, with UnknownCellType mapped
+// to a dedicated slot since Type(0xFF)+1 would wrap to the unresolved marker.
+const (
+	cellTypeCacheNone    uint8 = 0
+	cellTypeCacheUnknown uint8 = 6
+)
+
+func encodeCellTypeCache(t Type) uint8 {
+	if t == UnknownCellType {
+		return cellTypeCacheUnknown
+	}
+	return uint8(t) + 1
+}
+
+func decodeCellTypeCache(v uint8) Type {
+	if v == cellTypeCacheUnknown {
+		return UnknownCellType
+	}
+	return Type(v - 1)
+}
+
 type cellMeta struct {
 	extraHashes *[3]Hash
 	viewOf      *Cell
@@ -44,6 +66,7 @@ func (c *Cell) IsSpecial() bool {
 }
 
 func (c *Cell) setSpecial(special bool) {
+	c.typ = cellTypeCacheNone
 	if special {
 		c.flags |= cellFlagSpecial
 		return
@@ -56,6 +79,7 @@ func (c *Cell) IsLazy() bool {
 }
 
 func (c *Cell) setLazy(lazy bool) {
+	c.typ = cellTypeCacheNone
 	if lazy {
 		c.flags |= cellFlagLazy
 		return
@@ -68,6 +92,7 @@ func (c *Cell) getLevelMask() LevelMask {
 }
 
 func (c *Cell) setLevelMask(mask LevelMask) {
+	c.typ = cellTypeCacheNone
 	c.flags &^= cellFlagLevelMaskMask
 	c.flags |= (mask.Mask & 0b111) << cellFlagLevelMaskShift
 }
@@ -81,6 +106,7 @@ func (c *Cell) setRefsCount(refs int) {
 		panic("invalid refs count")
 	}
 
+	c.typ = cellTypeCacheNone
 	c.flags &^= cellFlagRefsNumMask
 	c.flags |= uint8(refs) << cellFlagRefsNumShift
 }

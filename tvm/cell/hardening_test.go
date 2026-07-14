@@ -584,6 +584,21 @@ func TestFromBOCRejectsConfiguredCellLimit(t *testing.T) {
 	}
 }
 
+func TestFromBOCWithOptionsRejectsCellLimit(t *testing.T) {
+	root := BeginCell().
+		MustStoreUInt(0xAB, 8).
+		MustStoreRef(BeginCell().MustStoreUInt(0xCD, 8).EndCell()).
+		EndCell()
+	boc := root.ToBOCWithOptions(BOCSerializeOptions{})
+
+	if _, err := FromBOC(boc); err != nil {
+		t.Fatalf("default parse failed: %v", err)
+	}
+	if _, err := FromBOCWithOptions(boc, BOCParseOptions{MaxCells: 1}); err == nil {
+		t.Fatal("expected per-call cell-limit violation to fail")
+	}
+}
+
 func TestFromBOCRejectsTrailingDataAfterPayload(t *testing.T) {
 	boc := BeginCell().MustStoreUInt(0xAB, 8).EndCell().ToBOCWithOptions(BOCSerializeOptions{})
 	boc = append(boc, 0x00, 0x01)

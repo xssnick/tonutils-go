@@ -17,11 +17,11 @@ func EQUAL() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			i0, err := state.Stack.PopInt()
+			i0, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
-			i1, err := state.Stack.PopInt()
+			i1, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}

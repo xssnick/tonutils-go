@@ -195,17 +195,14 @@ func TestSETCONTCTRMANYVersionAndMaskChecks(t *testing.T) {
 		vmErr vmerr.VMError
 	)
 
+	if got := SETCONTCTRMANY(1).MinGlobalVersion(); got != 9 {
+		t.Fatalf("SETCONTCTRMANY min global version = %d, want 9", got)
+	}
+	if got := SETCONTCTRMANYX().MinGlobalVersion(); got != 9 {
+		t.Fatalf("SETCONTCTRMANYX min global version = %d, want 9", got)
+	}
+
 	state := newTestState()
-	state.GlobalVersion = 8
-	if err := state.Stack.PushContinuation(&testContinuation{name: "body"}); err != nil {
-		t.Fatalf("push continuation: %v", err)
-	}
-
-	if err := SETCONTCTRMANY(1).Interpret(state); err != nil {
-		t.Fatalf("setcontctrmany should be available before version 9, got %v", err)
-	}
-
-	state = newTestState()
 	state.GlobalVersion = 9
 	if err := state.Stack.PushContinuation(&testContinuation{name: "body"}); err != nil {
 		t.Fatalf("push continuation: %v", err)

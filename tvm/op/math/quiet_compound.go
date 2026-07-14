@@ -10,13 +10,16 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return qDivModFamily(0) },
-		func() vm.OP { return qShrModFamily(0) },
-		func() vm.OP { return qMulDivModFamily(0) },
-		func() vm.OP { return qMulShrModFamily(0) },
-		func() vm.OP { return qShlDivModFamily(0) },
-	)
+	for args := uint8(0); args < 16; args++ {
+		a := args
+		vm.List = append(vm.List,
+			func() vm.OP { return qDivModFamily(a) },
+			func() vm.OP { return qShrModFamily(a) },
+			func() vm.OP { return qMulDivModFamily(a) },
+			func() vm.OP { return qMulShrModFamily(a) },
+			func() vm.OP { return qShlDivModFamily(a) },
+		)
+	}
 
 	// B7A93*, B7A9B*, and B7A9D* quiet immediate variants are listed in
 	// docs.ton.org, but upstream C++ node keeps their registrations commented out
@@ -72,7 +75,7 @@ func qPushResult(state *vm.State, val *big.Int) error {
 	if val == nil {
 		return state.Stack.PushAny(vm.NaN{})
 	}
-	return state.Stack.PushIntQuiet(val)
+	return state.Stack.PushOwnedIntQuiet(val)
 }
 
 func qPushSelected(state *vm.State, d uint8, q, r *big.Int) error {
@@ -98,28 +101,62 @@ func qInvalidResultCount(d uint8) int {
 	return 1
 }
 
+func qPushLegacyShiftModNaN(state *vm.State, d uint8, shift uint, threshold, roundMode int) error {
+	if d&1 != 0 {
+		if err := pushMaybeInt(state, legacyRShiftNaNResultThreshold(state.GlobalVersion, threshold, uint64(shift), roundMode), true); err != nil {
+			return err
+		}
+	}
+	if d&2 != 0 {
+		return state.Stack.PushAny(vm.NaN{})
+	}
+	return nil
+}
+
+func qShift256Value(x *big.Int) (uint, bool) {
+	if x == nil || !x.IsInt64() {
+		return 0, false
+	}
+	v := x.Int64()
+	if v < 0 || v > 256 {
+		return 0, false
+	}
+	return uint(v), true
+}
+
 func qCompoundOP(name func(uint8) string, prefix helpers.BitPrefix, args uint8, action func(*vm.State, uint8) error) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		FixedSizeBits: 4,
+		MinVersion: qCompoundMinVersion(args),
 		Action: func(state *vm.State) error {
 			return action(state, args)
 		},
 		NameSerializer: func() string {
 			return name(args)
 		},
-		BitPrefix: prefix,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(args), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			args = uint8(val)
-			return nil
-		},
+		BitPrefix: qCompoundFullPrefix(prefix, args),
 	}
+}
+
+func qCompoundFullPrefix(prefix helpers.BitPrefix, args uint8) helpers.BitPrefix {
+	b := cell.BeginCell().
+		MustStoreSlice(prefix.Data, prefix.Bits).
+		MustStoreUInt(uint64(args), 4)
+
+	bits := prefix.Bits + 4
+	return helpers.BitPrefix{
+		Bits: bits,
+		Data: b.ToSlice().MustPreloadSlice(bits),
+	}
+}
+
+func qCompoundMinVersion(args uint8) int {
+	if args&3 == 3 {
+		return 0
+	}
+	if (args>>2)&3 == 0 {
+		return 4
+	}
+	return 0
 }
 
 func qDivModName(args uint8) string {
@@ -162,18 +199,18 @@ func qDivModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		y, err := state.Stack.PopInt()
+		y, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
@@ -230,30 +267,40 @@ func qShrModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		shift, err := state.Stack.PopIntRange(0, 256)
+		shift, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
+		shiftValue, shiftValid := qShift256Value(shift)
+		if !shiftValid && state.GlobalVersion < 14 {
+			return vmerr.Error(vmerr.CodeRangeCheck)
+		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 
+		if !shiftValid {
+			return qPushNaNs(state, qInvalidResultCount(d))
+		}
 		if x == nil || (add && w == nil) {
+			if state.GlobalVersion < 14 {
+				return qPushLegacyShiftModNaN(state, d, shiftValue, 14, int(args&3)-1)
+			}
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}
 		dividend := new(big.Int).Set(x)
 		if add {
 			dividend.Add(dividend, w)
 		}
-		divider := new(big.Int).Lsh(big.NewInt(1), uint(shift.Uint64()))
+		divider := new(big.Int).Lsh(bigIntOne, shiftValue)
 		q, r, err := qRoundDiv(dividend, divider, args)
 		if err != nil {
 			return err
@@ -302,22 +349,22 @@ func qMulDivModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		z, err := state.Stack.PopInt()
+		z, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		y, err := state.Stack.PopInt()
+		y, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
@@ -374,35 +421,44 @@ func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		shift, err := state.Stack.PopInt()
+		shift, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
+		shiftValue, shiftValid := qShift256Value(shift)
+		if !shiftValid && state.GlobalVersion < 13 {
+			return vmerr.Error(vmerr.CodeRangeCheck)
+		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		y, err := state.Stack.PopInt()
+		y, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 
-		if shift == nil || shift.Sign() < 0 || shift.Cmp(big.NewInt(256)) > 0 ||
-			x == nil || y == nil || (add && w == nil) {
+		if !shiftValid {
+			return qPushNaNs(state, qInvalidResultCount(d))
+		}
+		if x == nil || y == nil || (add && w == nil) {
+			if state.GlobalVersion < 13 {
+				return qPushLegacyShiftModNaN(state, d, shiftValue, 13, int(args&3)-1)
+			}
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}
 		dividend := new(big.Int).Mul(new(big.Int).Set(x), y)
 		if add {
 			dividend.Add(dividend, w)
 		}
-		divider := new(big.Int).Lsh(big.NewInt(1), uint(shift.Uint64()))
+		divider := new(big.Int).Lsh(bigIntOne, shiftValue)
 		q, r, err := qRoundDiv(dividend, divider, args)
 		if err != nil {
 			return err
@@ -448,31 +504,50 @@ func qShlDivModFamily(args uint8) *helpers.AdvancedOP {
 			return err
 		}
 
-		shift, err := state.Stack.PopInt()
+		shift, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
-		z, err := state.Stack.PopInt()
+		shiftValue, shiftValid := qShift256Value(shift)
+		if !shiftValid && state.GlobalVersion < 13 {
+			return vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		z, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 		var w *big.Int
 		if add {
-			w, err = state.Stack.PopInt()
+			w, err = state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 		}
-		x, err := state.Stack.PopInt()
+		x, err := state.Stack.PopIntRead()
 		if err != nil {
 			return err
 		}
 
-		if shift == nil || shift.Sign() < 0 || shift.Cmp(big.NewInt(256)) > 0 ||
-			x == nil || z == nil || (add && w == nil) || z.Sign() == 0 {
+		if !shiftValid || z == nil || z.Sign() == 0 {
 			return qPushNaNs(state, qInvalidResultCount(d))
 		}
-		dividend := new(big.Int).Lsh(new(big.Int).Set(x), uint(shift.Uint64()))
+		if x == nil || (add && w == nil) {
+			if state.GlobalVersion < 13 && x == nil && (!add || w != nil) {
+				dividend := legacyShiftNaNResult(state.GlobalVersion, uint64(shiftValue), false)
+				if dividend != nil {
+					if add {
+						dividend.Add(dividend, w)
+					}
+					q, r, err := qRoundDiv(dividend, z, args)
+					if err != nil {
+						return err
+					}
+					return qPushSelected(state, d, q, r)
+				}
+			}
+			return qPushNaNs(state, qInvalidResultCount(d))
+		}
+		dividend := new(big.Int).Lsh(new(big.Int).Set(x), shiftValue)
 		if add {
 			dividend.Add(dividend, w)
 		}

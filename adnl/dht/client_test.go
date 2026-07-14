@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
@@ -16,7 +15,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"reflect"
-	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,7 +57,44 @@ func (m *MockGateway) StartServer(listenAddr string) error {
 }
 
 func (m *MockGateway) RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	if m.reg == nil {
+		return nil, fmt.Errorf("mock register client is not configured")
+	}
 	return m.reg(addr, key)
+}
+
+func TestNewClientFromConfigRejectsTooLargeKA(t *testing.T) {
+	tests := []struct {
+		name string
+		k    int
+		a    int
+		want string
+	}{
+		{
+			name: "too large k",
+			k:    _maxK + 1,
+			want: "bad value k=11",
+		},
+		{
+			name: "too large a",
+			a:    _maxA + 1,
+			want: "bad value a=11",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewClientFromConfig(&MockGateway{}, &liteclient.GlobalConfig{
+				DHT: liteclient.DHTConfig{
+					K: tt.k,
+					A: tt.a,
+				},
+			})
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("got error %v, want %q", err, tt.want)
+			}
+		})
+	}
 }
 
 type MockADNL struct {
@@ -72,6 +108,10 @@ func (m MockADNL) Ping(ctx context.Context) (time.Duration, error) {
 
 func (m MockADNL) GetPubKey() ed25519.PublicKey {
 	return ed25519.PublicKey{}
+}
+
+func (m MockADNL) Stats() adnl.PeerStats {
+	return adnl.PeerStats{}
 }
 
 func (m MockADNL) Reinit() {
@@ -100,6 +140,10 @@ func (m MockADNL) SetQueryHandler(handler func(msg *adnl.MessageQuery) error) {
 }
 
 func (m MockADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return nil
+}
+
+func (m MockADNL) SendNop(ctx context.Context) error {
 	return nil
 }
 
@@ -171,12 +215,6 @@ var cnf = &liteclient.GlobalConfig{
 	},
 	Liteservers: nil,
 	Validator:   liteclient.ValidatorConfig{},
-}
-
-func makeStrAddress(ip int32, port int) string {
-	_ip := make(net.IP, 4)
-	binary.BigEndian.PutUint32(_ip, uint32(ip))
-	return _ip.String() + ":" + strconv.Itoa(port)
 }
 
 func newCorrectNode(a byte, b byte, c byte, d byte, port int32) (*Node, error) {
@@ -571,6 +609,7 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       2,
 		a:       1,
 	}
@@ -587,6 +626,59 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 	}
 	if findNodeCalls["3"] != 0 {
 		t.Fatalf("third closest node should not be queried, got calls=%v", findNodeCalls)
+	}
+}
+
+func TestClient_collectNearestNodesPromotesSuccessfulBackup(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := make([]byte, 32)
+	nodeID[31] = 1
+
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	}
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		selfID:  make([]byte, 32),
+		k:       1,
+		a:       1,
+	}
+
+	bucketID := affinity(nodeID, dhtCli.selfID)
+	bucket := buckets[bucketID]
+	bucket.addNode(&dhtNode{adnlId: nodeID, client: dhtCli, addr: "1"}, false)
+
+	active, backup := bucket.nodeCounts()
+	if active != 0 || backup != 1 {
+		t.Fatalf("initial bucket counts active=%d backup=%d, want 0/1", active, backup)
+	}
+
+	nodes := dhtCli.collectNearestNodes(context.Background(), keyID)
+	if len(nodes) != 1 {
+		t.Fatalf("expected one nearest node, got %d", len(nodes))
+	}
+
+	active, backup = bucket.nodeCounts()
+	if active != 1 || backup != 0 {
+		t.Fatalf("bucket counts after lookup active=%d backup=%d, want 1/0", active, backup)
 	}
 }
 
@@ -627,6 +719,7 @@ func TestClient_collectNearestNodesRetriesAfterOtherPending(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       2,
 		a:       1,
 	}
@@ -693,6 +786,7 @@ func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       3,
 		a:       1,
 	}
@@ -769,6 +863,7 @@ func TestClient_collectNearestNodesReturnsBeforeInflightTail(t *testing.T) {
 	dhtCli := &Client{
 		buckets: buckets,
 		gateway: gateway,
+		selfID:  make([]byte, 32),
 		k:       2,
 		a:       3,
 	}
@@ -814,8 +909,8 @@ func TestClient_storeValueToNodesPreparesPayloadOnce(t *testing.T) {
 				}
 
 				var store Store
-				if _, err = tl.Parse(&store, request, true); err != nil {
-					return err
+				if _, parseErr := tl.Parse(&store, request, true); parseErr != nil {
+					return parseErr
 				}
 				if store.Value == nil {
 					return fmt.Errorf("nil store value")
@@ -886,6 +981,121 @@ func TestClient_addNodeRejectsTooOldVersion(t *testing.T) {
 
 	if _, err = cli.addNode(newer); err != nil {
 		t.Fatalf("failed to add newer node: %v", err)
+	}
+}
+
+func TestClient_addNodeRejectsZeroVersion(t *testing.T) {
+	node, err := newCorrectNodeWithVersion(1, 2, 3, 4, 12345, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := NewClient(&MockGateway{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = cli.addNode(node); err == nil || err.Error() != "zero version" {
+		t.Fatalf("got unexpected error %v", err)
+	}
+	for _, bucket := range cli.buckets {
+		if len(bucket.getNodes()) != 0 {
+			t.Fatal("zero-version node entered bucket")
+		}
+	}
+}
+
+func TestClient_addNodeRejectsTooLargeAddressList(t *testing.T) {
+	pub, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	addrList := &address.List{}
+	for i := 0; i < 16; i++ {
+		addrList.Addresses = append(addrList.Addresses, &address.UDP{
+			IP:   net.IPv4(1, 2, 3, byte(10+i)).To4(),
+			Port: int32(10000 + i),
+		})
+	}
+	node, err := BuildSignedNode(keys.PublicKeyED25519{Key: pub}, addrList, 1, _UnknownNetworkID, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cli, err := NewClient(&MockGateway{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = cli.addNode(node)
+	if err == nil || !strings.Contains(err.Error(), "too big addr list") {
+		t.Fatalf("got unexpected error %v", err)
+	}
+}
+
+func TestClient_addNodeRejectsMalformedSerializableFields(t *testing.T) {
+	selfPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selfID, err := tl.Hash(keys.PublicKeyED25519{Key: selfPub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := NewClient(&MockGateway{id: selfID}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrList := &address.List{
+		Addresses: []address.Address{
+			&address.UDP{
+				IP:   net.IPv4(127, 0, 0, 1).To4(),
+				Port: 12345,
+			},
+		},
+	}
+	tests := []struct {
+		name string
+		node *Node
+	}{
+		{
+			name: "nil id",
+			node: &Node{
+				AddrList:  addrList,
+				Version:   int32(time.Now().Unix()),
+				Signature: make([]byte, ed25519.SignatureSize),
+			},
+		},
+		{
+			name: "unsupported address",
+			node: &Node{
+				ID: keys.PublicKeyED25519{Key: pub},
+				AddrList: &address.List{
+					Addresses: []address.Address{struct{}{}},
+				},
+				Version:   int32(time.Now().Unix()),
+				Signature: make([]byte, ed25519.SignatureSize),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err = cli.addNode(tt.node); err == nil {
+				t.Fatal("got error nil, want error not nil")
+			}
+			for _, bucket := range cli.buckets {
+				if len(bucket.getNodes()) != 0 {
+					t.Fatal("malformed node entered bucket")
+				}
+			}
+		})
 	}
 }
 

@@ -46,6 +46,24 @@ func parseBoxedForTest(t *testing.T, v tl.Serializable) tl.Serializable {
 	return parsed
 }
 
+func TestLiteServerBaseFastCodecs(t *testing.T) {
+	wait := parseBoxedForTest(t, WaitMasterchainSeqno{
+		Seqno:   123,
+		Timeout: 456,
+	}).(WaitMasterchainSeqno)
+	if wait.Seqno != 123 || wait.Timeout != 456 {
+		t.Fatalf("waitMasterchainSeqno mismatch: %+v", wait)
+	}
+
+	if _, ok := parseBoxedForTest(t, True{}).(True); !ok {
+		t.Fatal("true marker mismatch")
+	}
+
+	if _, ok := parseBoxedForTest(t, Object{}).(Object); !ok {
+		t.Fatal("object marker mismatch")
+	}
+}
+
 func TestLiteServerTransactionIDMetadataTL(t *testing.T) {
 	hash := bytes.Repeat([]byte{0x11}, 32)
 	tx := TransactionID{

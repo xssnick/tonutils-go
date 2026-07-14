@@ -17,12 +17,18 @@ func RSHIFTCCODE(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popIntFinite(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
+			if x == nil {
+				if state.GlobalVersion >= 14 {
+					return pushNaNOrOverflow(state, false)
+				}
+				return pushSmallInt(state, 0)
+			}
 
-			res := helpers.DivCeil(x, new(big.Int).Lsh(big.NewInt(1), uint(imm())))
+			res := helpers.DivCeil(x, new(big.Int).Lsh(bigIntOne, uint(imm())))
 
 			return state.Stack.PushInt(res)
 		},

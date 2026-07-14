@@ -117,4 +117,47 @@ func TestStackGuardAndDeserializeErrors(t *testing.T) {
 			t.Fatal("expected DICTPUSHCONST without ref to fail")
 		}
 	})
+
+	t.Run("DictPushConstDeserializeEdgeFailures", func(t *testing.T) {
+		tests := []struct {
+			name string
+			code *cell.Cell
+		}{
+			{
+				name: "short_prefix",
+				code: cell.BeginCell().EndCell(),
+			},
+			{
+				name: "missing_root_flag",
+				code: cell.BeginCell().
+					MustStoreSlice([]byte{0xF4, 0xA4}, 13).
+					EndCell(),
+			},
+			{
+				name: "missing_prefix_bits",
+				code: cell.BeginCell().
+					MustStoreSlice([]byte{0xF4, 0xA4}, 13).
+					MustStoreBoolBit(true).
+					MustStoreRef(cell.BeginCell().EndCell()).
+					EndCell(),
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if err := DICTPUSHCONST(nil).Deserialize(tt.code.MustBeginParse()); err == nil {
+					t.Fatal("expected DICTPUSHCONST deserialize to fail")
+				}
+			})
+		}
+	})
+
+	t.Run("DictPushConstSerializeWithoutRefPanics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected DICTPUSHCONST serialize without ref to panic")
+			}
+		}()
+		_ = DICTPUSHCONST(nil).Serialize()
+	})
 }

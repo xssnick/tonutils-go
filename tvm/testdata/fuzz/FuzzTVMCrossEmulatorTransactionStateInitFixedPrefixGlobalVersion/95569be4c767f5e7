@@ -1,0 +1,7 @@
+go test fuzz v1
+byte('\n')
+byte('\x1a')
+byte('!')
+uint16(40919)
+uint16(45069)
+uint16(49165)

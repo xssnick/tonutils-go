@@ -1,7 +1,6 @@
 package tvm
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -25,29 +24,34 @@ const (
 
 var internalEmulationSrcAddr = address.MustParseRawAddr("-1:0000000000000000000000000000000000000000000000000000000000000000")
 
+// MessageEmulationConfig drives the direct message-emulation entry points
+// (EmulateExternalMessage/EmulateInternalMessage): code is executed with a
+// caller-controlled synthetic c7 context. Config must be a prepared config;
+// the remaining c7 fields override the derived values when set.
 type MessageEmulationConfig struct {
-	Address             *address.Address
-	Now                 uint32
-	BlockLT             int64
-	LogicalTime         int64
-	Balance             *big.Int
-	RandSeed            []byte
-	ConfigRoot          *cell.Cell
-	IncomingValue       tuple.Tuple
-	StorageFees         int64
-	PrevBlocks          any
-	UnpackedConfig      tuple.Tuple
-	DuePayment          any
-	PrecompiledGasUsage *big.Int
-	InMsgParams         tuple.Tuple
-	Globals             map[int]any
-	GlobalID            int32
-	Libraries           []*cell.Cell
-	Gas                 vm.Gas
-	StopOnAccept        bool
-	BuildProof          bool
-	AccountRoot         *cell.Cell
-	AccountStorageStat  *cell.Cell
+	Address                     *address.Address
+	Now                         uint32
+	BlockLT                     int64
+	LogicalTime                 int64
+	Balance                     *big.Int
+	RandSeed                    []byte
+	Config                      *PreparedBlockchainConfig
+	IncomingValue               tuple.Tuple
+	StorageFees                 int64
+	PrevBlocks                  any
+	UnpackedConfig              tuple.Tuple
+	DuePayment                  any
+	PrecompiledGasUsage         *big.Int
+	InMsgParams                 tuple.Tuple
+	Globals                     map[int]any
+	GlobalID                    int32
+	Libraries                   []*cell.Cell
+	Gas                         vm.Gas
+	StopOnAccept                bool
+	SignatureCheckAlwaysSucceed bool
+	BuildProof                  bool
+	AccountRoot                 *cell.Cell
+	TraceHook                   vm.TraceHook
 }
 
 type EmulateExternalMessageConfig = MessageEmulationConfig
@@ -59,6 +63,10 @@ type MessageExecutionResult struct {
 }
 
 func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalMessage, cfg EmulateExternalMessageConfig) (*MessageExecutionResult, error) {
+	if cfg.Config == nil {
+		return nil, errConfigRootRequired
+	}
+
 	addr := cfg.Address
 	if addr == nil {
 		addr = msg.DstAddr
@@ -81,10 +89,10 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 
 	stack := vm.NewStack()
 	balance := messageEmulationBalance(cfg.Balance)
-	if err = stack.PushInt(balance); err != nil {
+	if err = stack.PushOwnedInt(balance); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(0)); err != nil {
+	if err = stack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 	if err = stack.PushCell(msgCell); err != nil {
@@ -94,22 +102,30 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 	if err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(bodySlice); err != nil {
+	if err = stack.PushOwnedSlice(bodySlice); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(-1)); err != nil {
+	if err = stack.PushSmallInt(-1); err != nil {
 		return nil, err
 	}
 
-	c7, err := buildMessageEmulationC7(addr, code, cfg, balance)
+	globalVersion, err := messageExecutionGlobalVersion(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c7In, err := messageEmulationC7Input(addr, code, cfg, balance, uint32(globalVersion))
 	if err != nil {
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, proof, libraries...)
+	return tvm.executeMessageEmulation(code, data, c7In, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.SignatureCheckAlwaysSucceed, proof, cfg.TraceHook, cfg.Config, ptrTo(dryRunLibraryLoadLimit(cfg.Config)), libraries...)
 }
 
 func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*MessageExecutionResult, error) {
+	if cfg.Config == nil {
+		return nil, errConfigRootRequired
+	}
+
 	addr := cfg.Address
 	proof, code, data, libraries, addr, err := prepareMessageExecutionProof(code, data, cfg, addr)
 	if err != nil {
@@ -124,10 +140,10 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 
 	stack := vm.NewStack()
 	balance := messageEmulationBalance(cfg.Balance)
-	if err = stack.PushInt(balance); err != nil {
+	if err = stack.PushOwnedInt(balance); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(new(big.Int).SetUint64(amount)); err != nil {
+	if err = stack.PushOwnedInt(new(big.Int).SetUint64(amount)); err != nil {
 		return nil, err
 	}
 	if err = stack.PushCell(msgCell); err != nil {
@@ -137,26 +153,44 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 	if err != nil {
 		return nil, err
 	}
-	if err = stack.PushSlice(bodySlice); err != nil {
+	if err = stack.PushOwnedSlice(bodySlice); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(0)); err != nil {
+	if err = stack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 
-	c7, err := buildMessageEmulationC7(addr, code, cfg, balance)
+	globalVersion, err := messageExecutionGlobalVersion(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c7In, err := messageEmulationC7Input(addr, code, cfg, balance, uint32(globalVersion))
 	if err != nil {
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, proof, libraries...)
+	return tvm.executeMessageEmulation(code, data, c7In, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, cfg.SignatureCheckAlwaysSucceed, proof, cfg.TraceHook, cfg.Config, ptrTo(dryRunLibraryLoadLimit(cfg.Config)), libraries...)
 }
 
-func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, proof *cell.MerkleProofBuilder, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
-	res, execErr := tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{
-		stopOnAccept: stopOnAccept,
-		proof:        proof,
-	}, libraries...)
+func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7In emulationC7Input, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, signatureCheckAlwaysSucceed bool, proof *cell.MerkleProofBuilder, traceHook vm.TraceHook, cfg *PreparedBlockchainConfig, libraryLoadLimit *uint32, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
+	// the state is created before c7 so the context tuple can be built
+	// already bound to the state's gas trace: InitForExecution then skips the
+	// per-execution deep rebuild of c7
+	state := vm.NewExecutionState(int(cfg.GlobalVersion()), gas, data, tuple.Tuple{}, stack, libraries...)
+	c7, err := buildEmulationC7(c7In, state.Cells.Trace())
+	if err != nil {
+		return nil, err
+	}
+	state.Reg.C7 = c7
+
+	res, execErr := tvm.executeState(state, code, data, executeOptions{
+		stopOnAccept:                stopOnAccept,
+		proof:                       proof,
+		traceHook:                   traceHook,
+		signatureCheckAlwaysSucceed: signatureCheckAlwaysSucceed,
+		maxVMDataDepth:              cfg.sizeLimits.maxVMDataDepth,
+		libraryLoadLimit:            libraryLoadLimit,
+	})
 	if execErr != nil {
 		if _, ok := vmerr.ErrorCode(execErr); !ok {
 			return nil, execErr
@@ -176,9 +210,8 @@ func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7 tuple.Tuple, g
 }
 
 func prepareMessageExecutionProof(code, data *cell.Cell, cfg MessageEmulationConfig, addr *address.Address) (*cell.MerkleProofBuilder, *cell.Cell, *cell.Cell, []*cell.Cell, *address.Address, error) {
-	libraries := append([]*cell.Cell(nil), cfg.Libraries...)
 	if !cfg.BuildProof {
-		return nil, code, data, libraries, addr, nil
+		return nil, code, data, cfg.Libraries, addr, nil
 	}
 	if cfg.AccountRoot == nil {
 		return nil, nil, nil, nil, nil, errors.New("account root is required to build execution proof")
@@ -201,8 +234,9 @@ func prepareMessageExecutionProof(code, data *cell.Cell, cfg MessageEmulationCon
 	if data != nil && !sameCellHash(data, acc.StateInit.Data) {
 		return nil, nil, nil, nil, nil, errors.New("account root data differs from execution data")
 	}
+	libraries := cfg.Libraries
 	if acc.StateInit.Lib != nil && acc.StateInit.Lib.AsCell() != nil {
-		libraries = append(libraries, acc.StateInit.Lib.AsCell())
+		libraries = append(append([]*cell.Cell(nil), libraries...), acc.StateInit.Lib.AsCell())
 	}
 	return proof, acc.StateInit.Code, acc.StateInit.Data, libraries, addr, nil
 }
@@ -224,7 +258,7 @@ func sameCellHash(a, b *cell.Cell) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return bytes.Equal(a.Hash(), b.Hash())
+	return a.HashKey() == b.HashKey()
 }
 
 func messageBodyCell(body *cell.Cell) *cell.Cell {
@@ -241,46 +275,123 @@ func messageEmulationBalance(balance *big.Int) *big.Int {
 	return new(big.Int).Set(balance)
 }
 
-func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg MessageEmulationConfig, balance *big.Int) (tuple.Tuple, error) {
+// emulationC7Input carries the resolved values of the c7 smart-contract
+// context tuple; both the transaction executor and the direct message
+// emulation entry points feed buildEmulationC7 through it.
+type emulationC7Input struct {
+	addr                *address.Address
+	code                *cell.Cell
+	now                 uint32
+	blockLT             int64
+	logicalTime         int64
+	balance             *big.Int
+	seed                *big.Int
+	configRoot          *cell.Cell
+	incomingValue       tuple.Tuple
+	storageFees         int64
+	prevBlocks          any
+	unpackedConfig      any
+	duePayment          any
+	precompiledGasUsage *big.Int
+	inMsgParams         tuple.Tuple
+	globals             map[int]any
+	globalVersion       uint32
+}
+
+func messageEmulationC7Input(addr *address.Address, code *cell.Cell, cfg MessageEmulationConfig, balance *big.Int, globalVersion uint32) (emulationC7Input, error) {
 	seed, err := messageEmulationSeed(cfg.RandSeed)
 	if err != nil {
-		return tuple.Tuple{}, err
+		return emulationC7Input{}, err
 	}
 
 	now := cfg.Now
 	if now == 0 {
 		now = uint32(time.Now().Unix())
 	}
+	return emulationC7Input{
+		addr:                addr,
+		code:                code,
+		now:                 now,
+		blockLT:             cfg.BlockLT,
+		logicalTime:         cfg.LogicalTime,
+		balance:             balance,
+		seed:                seed,
+		configRoot:          cfg.Config.Root(),
+		incomingValue:       cfg.IncomingValue,
+		storageFees:         cfg.StorageFees,
+		prevBlocks:          cfg.PrevBlocks,
+		unpackedConfig:      messageUnpackedConfig(cfg, now),
+		duePayment:          cfg.DuePayment,
+		precompiledGasUsage: cfg.PrecompiledGasUsage,
+		inMsgParams:         cfg.InMsgParams,
+		globals:             cfg.Globals,
+		globalVersion:       globalVersion,
+	}, nil
+}
 
-	myAddr := cell.BeginCell().MustStoreAddr(addr).ToSlice()
-	values := []any{
-		messageTupleUint(0x076ef1ea),
-		messageTupleInt(0),
-		messageTupleInt(0),
-		messageTupleUint(uint64(now)),
-		messageTupleInt(cfg.BlockLT),
-		messageTupleInt(cfg.LogicalTime),
-		seed,
-		tuple.NewTupleValue(new(big.Int).Set(balance), nil),
-		myAddr,
-		cfg.ConfigRoot,
-		code,
-		messageIncomingValue(cfg.IncomingValue),
-		messageTupleInt(cfg.StorageFees),
-		cfg.PrevBlocks,
-		messageUnpackedConfig(cfg),
-		cfg.DuePayment,
-		messageTupleMaybeInt(cfg.PrecompiledGasUsage),
-		messageInMsgParams(cfg.InMsgParams),
+// buildEmulationC7 assembles the c7 tuple bound to the execution state's gas
+// trace: internally-built slices and tuples are created carrying the trace,
+// caller-supplied values are bound through vm.BindValueTrace, which also
+// snapshots mutable cursor values (slices and builders track a read/write
+// position). Binding at build time lets the state's c7 bind hit the
+// binding-ID fast path instead of deep-rebuilding the tuple tree. A nil trace
+// (tests) leaves values unbound; the VM then binds them on execution start.
+func buildEmulationC7(in emulationC7Input, trace *cell.Trace) (tuple.Tuple, error) {
+	globalVersion := in.globalVersion
+	myAddr := cell.BeginCell().MustStoreAddr(in.addr).ToSlice().SetTrace(trace)
+	values := make([]any, 18)
+	idx := 0
+	values[idx] = messageTupleUint(0x076ef1ea)
+	idx++
+	values[idx] = messageTupleInt(0)
+	idx++
+	values[idx] = messageTupleInt(0)
+	idx++
+	values[idx] = messageTupleUint(uint64(in.now))
+	idx++
+	values[idx] = messageTupleInt(in.blockLT)
+	idx++
+	values[idx] = messageTupleInt(in.logicalTime)
+	idx++
+	values[idx] = in.seed
+	idx++
+	values[idx] = messageBoundTuple([]any{new(big.Int).Set(in.balance), nil}, trace)
+	idx++
+	values[idx] = myAddr
+	idx++
+	values[idx] = in.configRoot
+	idx++
+	if globalVersion >= 4 {
+		values[idx] = in.code
+		idx++
+		values[idx] = messageIncomingValue(in.incomingValue, trace)
+		idx++
+		values[idx] = messageTupleInt(in.storageFees)
+		idx++
+		values[idx] = in.prevBlocks
+		idx++
 	}
+	if globalVersion >= 6 {
+		values[idx] = in.unpackedConfig
+		idx++
+		values[idx] = in.duePayment
+		idx++
+		values[idx] = messageTupleMaybeInt(in.precompiledGasUsage)
+		idx++
+	}
+	if globalVersion >= 11 {
+		values[idx] = messageInMsgParams(in.inMsgParams, trace)
+		idx++
+	}
+	values = values[:idx]
 
 	for i, val := range values {
-		values[i] = normalizeMessageTupleValue(val)
+		values[i] = vm.BindValueTrace(val, trace)
 	}
 
-	inner := tuple.NewTupleOwned(values)
+	inner := messageBoundTuple(values, trace)
 	topLen := 1
-	for idx := range cfg.Globals {
+	for idx := range in.globals {
 		if idx <= 0 {
 			return tuple.Tuple{}, errors.New("c7 global index 0 is reserved")
 		}
@@ -291,10 +402,26 @@ func buildMessageEmulationC7(addr *address.Address, code *cell.Cell, cfg Message
 
 	top := make([]any, topLen)
 	top[0] = inner
-	for idx, val := range cfg.Globals {
-		top[idx] = normalizeMessageTupleValue(val)
+	for idx, val := range in.globals {
+		top[idx] = vm.BindValueTrace(val, trace)
 	}
-	return tuple.NewTupleOwned(top), nil
+	return messageBoundTuple(top, trace), nil
+}
+
+// messageBoundTuple builds an owned tuple already carrying the trace binding
+// ID; every value must be bound to the trace by the caller.
+func messageBoundTuple(vals []any, trace *cell.Trace) tuple.Tuple {
+	if trace == nil {
+		return tuple.NewTupleOwned(vals)
+	}
+	return tuple.NewTupleOwnedBound(vals, trace)
+}
+
+func messageExecutionGlobalVersion(cfg MessageEmulationConfig) (int, error) {
+	if cfg.Config == nil {
+		return 0, errConfigRootRequired
+	}
+	return int(cfg.Config.GlobalVersion()), nil
 }
 
 func buildInternalMessageForEmulation(addr *address.Address, body *cell.Cell, amount uint64) (*cell.Cell, error) {
@@ -366,31 +493,28 @@ func messageEmulationAccountAddr(addr *address.Address) (*big.Int, error) {
 	return new(big.Int).SetBytes(addr.Data()), nil
 }
 
-func messageIncomingValue(value tuple.Tuple) tuple.Tuple {
+func messageIncomingValue(value tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 	if value.Len() == 0 {
-		return tuple.NewTupleValue(big.NewInt(0), nil)
+		return messageBoundTuple([]any{big.NewInt(0), nil}, trace)
 	}
 	return value
 }
 
-func messageUnpackedConfig(cfg MessageEmulationConfig) any {
+func messageUnpackedConfig(cfg MessageEmulationConfig, now uint32) any {
 	if cfg.UnpackedConfig.Len() > 0 {
 		return cfg.UnpackedConfig
 	}
-	if cfg.GlobalID == 0 {
-		return nil
-	}
-	return tuple.NewTupleValue(nil, cell.BeginCell().MustStoreUInt(uint64(uint32(cfg.GlobalID)), 32).ToSlice())
+	return buildUnpackedConfig(cfg.Config, now, cfg.GlobalID)
 }
 
-func messageInMsgParams(params tuple.Tuple) tuple.Tuple {
+func messageInMsgParams(params tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 	if params.Len() > 0 {
 		return params
 	}
-	return tuple.NewTupleValue(
+	return messageBoundTuple([]any{
 		messageTupleInt(0),
 		messageTupleInt(0),
-		cell.BeginCell().MustStoreUInt(0, 2).ToSlice(),
+		cell.BeginCell().MustStoreUInt(0, 2).ToSlice().SetTrace(trace),
 		messageTupleInt(0),
 		messageTupleInt(0),
 		messageTupleInt(0),
@@ -398,7 +522,7 @@ func messageInMsgParams(params tuple.Tuple) tuple.Tuple {
 		messageTupleInt(0),
 		nil,
 		nil,
-	)
+	}, trace)
 }
 
 func messageTupleInt(v int64) *big.Int {
@@ -414,44 +538,4 @@ func messageTupleMaybeInt(v *big.Int) any {
 		return nil
 	}
 	return new(big.Int).Set(v)
-}
-
-func normalizeMessageTupleValue(val any) any {
-	switch v := val.(type) {
-	case *big.Int:
-		if v == nil {
-			return nil
-		}
-		return new(big.Int).Set(v)
-	case *cell.Slice:
-		if v == nil {
-			return nil
-		}
-		return v.Copy()
-	case *cell.Builder:
-		if v == nil {
-			return nil
-		}
-		return v.Copy()
-	case tuple.Tuple:
-		return cloneMessageTuple(v)
-	default:
-		return val
-	}
-}
-
-func cloneMessageTuple(value tuple.Tuple) tuple.Tuple {
-	if value.Len() == 0 {
-		return tuple.Tuple{}
-	}
-
-	items := make([]any, value.Len())
-	for i := range items {
-		item, err := value.RawIndex(i)
-		if err != nil {
-			return tuple.Tuple{}
-		}
-		items[i] = normalizeMessageTupleValue(item)
-	}
-	return tuple.NewTupleOwned(items)
 }

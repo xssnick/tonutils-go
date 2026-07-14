@@ -65,7 +65,7 @@ func assertMathCoverageVMError(t *testing.T, err error, code int64) {
 	}
 }
 
-func mustRoundTripMathAdvanced(t *testing.T, src *helpers.AdvancedOP, dst *helpers.AdvancedOP, wantText string) {
+func mustRoundTripMathAdvanced(t *testing.T, src vm.OP, dst vm.OP, wantText string) {
 	t.Helper()
 	if err := dst.Deserialize(src.Serialize().EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize advanced op: %v", err)
@@ -73,6 +73,554 @@ func mustRoundTripMathAdvanced(t *testing.T, src *helpers.AdvancedOP, dst *helpe
 	if got := dst.SerializeText(); got != wantText {
 		t.Fatalf("serialize text = %q, want %q", got, wantText)
 	}
+}
+
+func requireMathNaN(t *testing.T, got any) {
+	t.Helper()
+	if _, ok := got.(vm.NaN); !ok {
+		t.Fatalf("expected NaN, got %T (%v)", got, got)
+	}
+}
+
+func TestTVMImmediateShiftNaN(t *testing.T) {
+	t.Run("v12 nonquiet immediate left shift rejects NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, LSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("v13 nonquiet immediate left shift rejects NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, LSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("v14 nonquiet immediate left shift rejects NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 14
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, LSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("v13 nonquiet immediate right shift keeps legacy zero", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := RSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("RSHIFT# v13 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("RSHIFT# v13 result = %d, want 0", got)
+		}
+	})
+
+	t.Run("v14 nonquiet immediate right shift rejects NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 14
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, RSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("quiet immediate left shifts keep NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push v12 NaN: %v", err)
+		}
+		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QLSHIFT# v12 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v12 result: %v", err)
+		}
+		requireMathNaN(t, got)
+
+		st = newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push v13 NaN: %v", err)
+		}
+		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QLSHIFT# v13 failed: %v", err)
+		}
+		got, err = st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v13 result: %v", err)
+		}
+		requireMathNaN(t, got)
+
+		st = newMathCoverageState()
+		st.GlobalVersion = 14
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push v14 NaN: %v", err)
+		}
+		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QLSHIFT# v14 failed: %v", err)
+		}
+		got, err = st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v14 result: %v", err)
+		}
+		requireMathNaN(t, got)
+
+		st = newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push QR v13 NaN: %v", err)
+		}
+		if err := QRSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT# v13 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("QRSHIFT# v13 result = %d, want 0", got)
+		}
+
+		st = newMathCoverageState()
+		st.GlobalVersion = 14
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push QR v14 NaN: %v", err)
+		}
+		if err := QRSHIFTCODE(0).Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT# v14 failed: %v", err)
+		}
+		got, err = st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QR v14 result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
+func TestTVM14QuietShrModInvalidShift(t *testing.T) {
+	t.Run("v13 legacy quiet compound shift throws range check", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		pushMathCoverageInts(t, st, 123)
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push shift NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, qShrModFamily(4).Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v14 quiet compound shift returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 14
+		pushMathCoverageInts(t, st, 123)
+		if err := st.Stack.PushInt(big.NewInt(257)); err != nil {
+			t.Fatalf("push out-of-range shift: %v", err)
+		}
+		if err := qShrModFamily(4).Interpret(st); err != nil {
+			t.Fatalf("QRSHIFTMOD v14 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v14 result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
+func TestTVM13QuietMulShrAndShlDivInvalidShift(t *testing.T) {
+	t.Run("v12 quiet mul-shr shift throws range check", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		pushMathCoverageInts(t, st, 2, 3, 257)
+		assertMathCoverageVMError(t, qMulShrModFamily(4).Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v13 quiet mul-shr shift returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		pushMathCoverageInts(t, st, 2, 3, 257)
+		if err := qMulShrModFamily(4).Interpret(st); err != nil {
+			t.Fatalf("QMULRSHIFT v13 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v13 result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+
+	t.Run("v12 quiet shl-div shift throws range check", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		pushMathCoverageInts(t, st, 2, 3, 257)
+		assertMathCoverageVMError(t, qShlDivModFamily(4).Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v13 quiet shl-div shift returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		pushMathCoverageInts(t, st, 2, 3, 257)
+		if err := qShlDivModFamily(4).Interpret(st); err != nil {
+			t.Fatalf("QLSHIFTDIV v13 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop v13 result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
+func TestTVM13AndOrNaNLegacyRules(t *testing.T) {
+	t.Run("v12 AND with NaN and zero returns zero", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push zero: %v", err)
+		}
+		if err := AND().Interpret(st); err != nil {
+			t.Fatalf("AND v12 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("AND v12 result = %d, want 0", got)
+		}
+	})
+
+	t.Run("v13 AND with NaN and zero overflows", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push zero: %v", err)
+		}
+		assertMathCoverageVMError(t, AND().Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("v12 QAND with NaN and zero returns zero", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push zero: %v", err)
+		}
+		if err := QAND().Interpret(st); err != nil {
+			t.Fatalf("QAND v12 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("QAND v12 result = %d, want 0", got)
+		}
+	})
+
+	t.Run("v13 QAND with NaN and zero returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push zero: %v", err)
+		}
+		if err := QAND().Interpret(st); err != nil {
+			t.Fatalf("QAND v13 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QAND result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+
+	t.Run("v12 OR with NaN and minus one returns minus one", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push minus one: %v", err)
+		}
+		if err := OR().Interpret(st); err != nil {
+			t.Fatalf("OR v12 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != -1 {
+			t.Fatalf("OR v12 result = %d, want -1", got)
+		}
+	})
+
+	t.Run("v13 OR with NaN and minus one overflows", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push minus one: %v", err)
+		}
+		assertMathCoverageVMError(t, OR().Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("v12 QOR with NaN and minus one returns minus one", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push minus one: %v", err)
+		}
+		if err := QOR().Interpret(st); err != nil {
+			t.Fatalf("QOR v12 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != -1 {
+			t.Fatalf("QOR v12 result = %d, want -1", got)
+		}
+	})
+
+	t.Run("v13 QOR with NaN and minus one returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push minus one: %v", err)
+		}
+		if err := QOR().Interpret(st); err != nil {
+			t.Fatalf("QOR v13 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QOR result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
+func TestTVM13QuietDynamicShiftInvalidRange(t *testing.T) {
+	t.Run("v12 QLSHIFT invalid shift throws range check", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		pushMathCoverageInts(t, st, 7, 1024)
+		assertMathCoverageVMError(t, QLSHIFT().Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v13 QLSHIFT invalid shift returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		pushMathCoverageInts(t, st, 7, 1024)
+		if err := QLSHIFT().Interpret(st); err != nil {
+			t.Fatalf("QLSHIFT v13 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QLSHIFT result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+
+	t.Run("v12 QRSHIFT NaN shift throws range check", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		pushMathCoverageInts(t, st, 7)
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push shift NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, QRSHIFT().Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v12 QLSHIFT invalid shift beats bad value type", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushBuilder(cell.BeginCell()); err != nil {
+			t.Fatalf("push builder: %v", err)
+		}
+		pushMathCoverageInts(t, st, 1024)
+		assertMathCoverageVMError(t, QLSHIFT().Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v12 QRSHIFT NaN shift beats null value type", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(nil); err != nil {
+			t.Fatalf("push null: %v", err)
+		}
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push shift NaN: %v", err)
+		}
+		assertMathCoverageVMError(t, QRSHIFT().Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v13 QRSHIFT NaN shift returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		pushMathCoverageInts(t, st, 7)
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push shift NaN: %v", err)
+		}
+		if err := QRSHIFT().Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT v13 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QRSHIFT result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+
+	t.Run("v12 QPOW2 invalid exponent throws range check", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		pushMathCoverageInts(t, st, 1024)
+		assertMathCoverageVMError(t, QPOW2().Interpret(st), vmerr.CodeRangeCheck)
+	})
+
+	t.Run("v13 QPOW2 invalid exponent returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		pushMathCoverageInts(t, st, 1024)
+		if err := QPOW2().Interpret(st); err != nil {
+			t.Fatalf("QPOW2 v13 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QPOW2 result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
+func TestLeftShiftZeroOverflowBoundary(t *testing.T) {
+	t.Run("nonquiet zero shift 259 succeeds", func(t *testing.T) {
+		st := newMathCoverageState()
+		pushMathCoverageInts(t, st, 0, 259)
+		if err := LSHIFT().Interpret(st); err != nil {
+			t.Fatalf("LSHIFT zero by 259 failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("LSHIFT zero by 259 result = %d, want 0", got)
+		}
+	})
+
+	t.Run("nonquiet zero shift 260 overflows", func(t *testing.T) {
+		st := newMathCoverageState()
+		pushMathCoverageInts(t, st, 0, 260)
+		assertMathCoverageVMError(t, LSHIFT().Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("quiet zero shift 260 returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		pushMathCoverageInts(t, st, 0, 260)
+		if err := QLSHIFT().Interpret(st); err != nil {
+			t.Fatalf("QLSHIFT zero by 260 failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QLSHIFT result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
+}
+
+func TestLegacyDynamicShiftNaNResult(t *testing.T) {
+	t.Run("v12 LSHIFT NaN by 52 returns zero", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		pushMathCoverageInts(t, st, 52)
+		if err := LSHIFT().Interpret(st); err != nil {
+			t.Fatalf("LSHIFT legacy NaN failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("LSHIFT legacy NaN result = %d, want 0", got)
+		}
+	})
+
+	t.Run("v12 LSHIFT NaN by 312 overflows", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		pushMathCoverageInts(t, st, 312)
+		assertMathCoverageVMError(t, LSHIFT().Interpret(st), vmerr.CodeIntOverflow)
+	})
+
+	t.Run("v12 RSHIFT NaN by 12 returns zero", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		pushMathCoverageInts(t, st, 12)
+		if err := RSHIFT().Interpret(st); err != nil {
+			t.Fatalf("RSHIFT legacy NaN failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != 0 {
+			t.Fatalf("RSHIFT legacy NaN result = %d, want 0", got)
+		}
+	})
+
+	t.Run("v12 RSHIFT NaN by 13 returns minus one", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		pushMathCoverageInts(t, st, 13)
+		if err := RSHIFT().Interpret(st); err != nil {
+			t.Fatalf("RSHIFT legacy NaN failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != -1 {
+			t.Fatalf("RSHIFT legacy NaN result = %d, want -1", got)
+		}
+	})
+
+	t.Run("v12 QRSHIFT NaN by 13 returns minus one", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 12
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		pushMathCoverageInts(t, st, 13)
+		if err := QRSHIFT().Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT legacy NaN failed: %v", err)
+		}
+		if got := popMathCoverageInt(t, st); got != -1 {
+			t.Fatalf("QRSHIFT legacy NaN result = %d, want -1", got)
+		}
+	})
+
+	t.Run("v13 QRSHIFT NaN by 13 returns NaN", func(t *testing.T) {
+		st := newMathCoverageState()
+		st.GlobalVersion = 13
+		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
+			t.Fatalf("push NaN: %v", err)
+		}
+		pushMathCoverageInts(t, st, 13)
+		if err := QRSHIFT().Interpret(st); err != nil {
+			t.Fatalf("QRSHIFT v13 NaN failed: %v", err)
+		}
+		got, err := st.Stack.PopAny()
+		if err != nil {
+			t.Fatalf("pop QRSHIFT result: %v", err)
+		}
+		requireMathNaN(t, got)
+	})
 }
 
 func TestMathBasicWrappers(t *testing.T) {
@@ -151,6 +699,28 @@ func TestMathImmediateAndAdvancedAliases(t *testing.T) {
 		}
 		if got := get(); got != 10 {
 			t.Fatalf("decoded immediate = %d, want 10", got)
+		}
+	})
+
+	t.Run("BytePlusOneImmediateZeroPlaceholder", func(t *testing.T) {
+		get, serialize, deserialize := newBytePlusOneImmediate(0)
+		if got := get(); got != 1 {
+			t.Fatalf("initial zero placeholder immediate = %d, want 1", got)
+		}
+
+		encoded, err := serialize().EndCell().MustBeginParse().LoadUInt(8)
+		if err != nil {
+			t.Fatalf("load encoded immediate: %v", err)
+		}
+		if encoded != 0 {
+			t.Fatalf("encoded zero placeholder immediate = %d, want 0", encoded)
+		}
+
+		if err := deserialize(vmCellWithByte(t, 255)); err != nil {
+			t.Fatalf("deserialize max immediate: %v", err)
+		}
+		if got := get(); got != 256 {
+			t.Fatalf("decoded max immediate = %d, want 256", got)
 		}
 	})
 
@@ -462,6 +1032,7 @@ func TestMathAdvancedRoundTripsForQuietAndConstOps(t *testing.T) {
 	mustRoundTripMathAdvanced(t, FITS(3), FITS(0), "FITS 4")
 	mustRoundTripMathAdvanced(t, QFITS(4), QFITS(0), "QFITS 5")
 	mustRoundTripMathAdvanced(t, PUSHPOW2(4), PUSHPOW2(0), "PUSHPOW2 5")
+	mustRoundTripMathAdvanced(t, PUSHPOW2(255), PUSHPOW2(0), "PUSHNAN")
 	mustRoundTripMathAdvanced(t, PUSHPOW2DEC(4), PUSHPOW2DEC(0), "PUSHPOW2DEC 5")
 	mustRoundTripMathAdvanced(t, PUSHNEGPOW2(4), PUSHNEGPOW2(0), "PUSHNEGPOW2 5")
 
@@ -480,5 +1051,123 @@ func TestMathAdvancedRoundTripsForQuietAndConstOps(t *testing.T) {
 	}
 	if got := popMathCoverageInt(t, st); got != -8 {
 		t.Fatalf("QMULINT result = %d, want -8", got)
+	}
+
+	if err := PUSHPOW2(255).Interpret(st); err != nil {
+		t.Fatalf("PUSHPOW2 max interpret: %v", err)
+	}
+	got, err := st.Stack.PopAny()
+	if err != nil {
+		t.Fatalf("pop PUSHPOW2 max result: %v", err)
+	}
+	requireMathNaN(t, got)
+}
+
+func TestQuietCompoundNamesMinVersionsAndInvalidSuffix(t *testing.T) {
+	type quietCompoundCase struct {
+		args uint8
+		text string
+		min  int
+	}
+	type quietCompoundFamily struct {
+		name  string
+		make  func(uint8) *helpers.AdvancedOP
+		cases []quietCompoundCase
+	}
+
+	families := []quietCompoundFamily{
+		{
+			name: "QDivMod",
+			make: qDivModFamily,
+			cases: []quietCompoundCase{
+				{args: 0, text: "QADDDIVMOD", min: 4},
+				{args: 1, text: "QADDDIVMODR", min: 4},
+				{args: 2, text: "QADDDIVMODC", min: 4},
+				{args: 3, text: "QDIVMOD<invalid>"},
+				{args: 4, text: "QDIV"},
+				{args: 8, text: "QMOD"},
+				{args: 12, text: "QDIVMOD"},
+			},
+		},
+		{
+			name: "QShrMod",
+			make: qShrModFamily,
+			cases: []quietCompoundCase{
+				{args: 0, text: "QADDRSHIFTMOD", min: 4},
+				{args: 1, text: "QADDRSHIFTMODR", min: 4},
+				{args: 2, text: "QADDRSHIFTMODC", min: 4},
+				{args: 3, text: "QSHRMOD<invalid>"},
+				{args: 4, text: "QRSHIFT"},
+				{args: 8, text: "QMODPOW2"},
+				{args: 12, text: "QRSHIFTMOD"},
+			},
+		},
+		{
+			name: "QMulDivMod",
+			make: qMulDivModFamily,
+			cases: []quietCompoundCase{
+				{args: 0, text: "QMULADDDIVMOD", min: 4},
+				{args: 1, text: "QMULADDDIVMODR", min: 4},
+				{args: 2, text: "QMULADDDIVMODC", min: 4},
+				{args: 3, text: "QMULDIVMOD<invalid>"},
+				{args: 4, text: "QMULDIV"},
+				{args: 8, text: "QMULMOD"},
+				{args: 12, text: "QMULDIVMOD"},
+			},
+		},
+		{
+			name: "QMulShrMod",
+			make: qMulShrModFamily,
+			cases: []quietCompoundCase{
+				{args: 0, text: "QMULADDRSHIFTMOD", min: 4},
+				{args: 1, text: "QMULADDRSHIFTMODR", min: 4},
+				{args: 2, text: "QMULADDRSHIFTMODC", min: 4},
+				{args: 3, text: "QMULSHRMOD<invalid>"},
+				{args: 4, text: "QMULRSHIFT"},
+				{args: 8, text: "QMULMODPOW2"},
+				{args: 12, text: "QMULRSHIFTMOD"},
+			},
+		},
+		{
+			name: "QShlDivMod",
+			make: qShlDivModFamily,
+			cases: []quietCompoundCase{
+				{args: 0, text: "QLSHIFTADDDIVMOD", min: 4},
+				{args: 1, text: "QLSHIFTADDDIVMODR", min: 4},
+				{args: 2, text: "QLSHIFTADDDIVMODC", min: 4},
+				{args: 3, text: "QLSHIFTDIVMOD<invalid>"},
+				{args: 4, text: "QLSHIFTDIV"},
+				{args: 8, text: "QLSHIFTMOD"},
+				{args: 12, text: "QLSHIFTDIVMOD"},
+			},
+		},
+	}
+
+	for _, family := range families {
+		t.Run(family.name, func(t *testing.T) {
+			for _, tc := range family.cases {
+				op := family.make(tc.args)
+				if got := op.SerializeText(); got != tc.text {
+					t.Fatalf("args=%d text = %q, want %q", tc.args, got, tc.text)
+				}
+				if got := op.MinGlobalVersion(); got != tc.min {
+					t.Fatalf("args=%d min version = %d, want %d", tc.args, got, tc.min)
+				}
+
+				dst := family.make(tc.args)
+				if err := dst.Deserialize(op.Serialize().EndCell().MustBeginParse()); err != nil {
+					t.Fatalf("args=%d deserialize: %v", tc.args, err)
+				}
+				if got := dst.SerializeText(); got != tc.text {
+					t.Fatalf("args=%d round-trip text = %q, want %q", tc.args, got, tc.text)
+				}
+				if got := dst.MinGlobalVersion(); got != tc.min {
+					t.Fatalf("args=%d round-trip min version = %d, want %d", tc.args, got, tc.min)
+				}
+			}
+
+			st := newMathCoverageState()
+			assertMathCoverageVMError(t, family.make(3).Interpret(st), vmerr.CodeInvalidOpcode)
+		})
 	}
 }

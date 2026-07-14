@@ -10,6 +10,8 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+var cellsliceBigIntOne = big.NewInt(1)
+
 func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return LDILE4() },
@@ -68,35 +70,62 @@ func fitsSignedBits(x *big.Int, bits uint) bool {
 	if bits == 0 {
 		return x.Sign() == 0
 	}
-	max := new(big.Int).Lsh(big.NewInt(1), bits-1)
-	min := new(big.Int).Neg(new(big.Int).Set(max))
-	max.Sub(max, big.NewInt(1))
-	return x.Cmp(min) >= 0 && x.Cmp(max) <= 0
+	if x.Sign() >= 0 {
+		return x.BitLen() <= int(bits-1)
+	}
+
+	absMinusOne := new(big.Int).Neg(x)
+	absMinusOne.Sub(absMinusOne, cellsliceBigIntOne)
+	return absMinusOne.BitLen() <= int(bits-1)
 }
 
 func encodeLEInt(x *big.Int, bytes int, unsigned bool) ([]byte, error) {
 	out := make([]byte, bytes)
-	bits := uint(bytes * 8)
-	if unsigned {
-		if !fitsUnsignedBits(x, bits) {
-			return nil, vmerr.Error(vmerr.CodeRangeCheck)
-		}
-		if bytes == 4 {
-			binary.LittleEndian.PutUint32(out, uint32(x.Uint64()))
-		} else {
-			binary.LittleEndian.PutUint64(out, x.Uint64())
-		}
-		return out, nil
-	}
-	if !fitsSignedBits(x, bits) {
+	if !writeLEInt(out, x, unsigned) {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck)
 	}
-	if bytes == 4 {
-		binary.LittleEndian.PutUint32(out, uint32(int32(x.Int64())))
-	} else {
-		binary.LittleEndian.PutUint64(out, uint64(x.Int64()))
-	}
 	return out, nil
+}
+
+func writeLEInt(out []byte, x *big.Int, unsigned bool) bool {
+	if unsigned {
+		if x.Sign() < 0 {
+			return false
+		}
+
+		switch len(out) {
+		case 4:
+			if x.BitLen() > 32 {
+				return false
+			}
+			binary.LittleEndian.PutUint32(out, uint32(x.Uint64()))
+		case 8:
+			if x.BitLen() > 64 {
+				return false
+			}
+			binary.LittleEndian.PutUint64(out, x.Uint64())
+		default:
+			return false
+		}
+		return true
+	}
+
+	if !x.IsInt64() {
+		return false
+	}
+	value := x.Int64()
+	switch len(out) {
+	case 4:
+		if int64(int32(value)) != value {
+			return false
+		}
+		binary.LittleEndian.PutUint32(out, uint32(int32(value)))
+	case 8:
+		binary.LittleEndian.PutUint64(out, uint64(value))
+	default:
+		return false
+	}
+	return true
 }
 
 func loadLEIntOp(mode uint64) *helpers.AdvancedOP {
@@ -179,11 +208,15 @@ func storeLEIntOp(mode uint64) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			builder, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -195,11 +228,15 @@ func storeLEIntOp(mode uint64) *helpers.AdvancedOP {
 			if !builder.CanExtendBy(uint(bytesLen*8), 0) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			data, err := encodeLEInt(x, bytesLen, mode&1 != 0)
-			if err != nil {
-				return err
+			if x == nil {
+				return vmerr.Error(vmerr.CodeRangeCheck)
 			}
-			if err = builder.StoreSlice(data, uint(bytesLen*8)); err != nil {
+			var data [8]byte
+			encoded := data[:bytesLen]
+			if !writeLEInt(encoded, x, mode&1 != 0) {
+				return vmerr.Error(vmerr.CodeRangeCheck)
+			}
+			if err = builder.StoreSlice(encoded, uint(bytesLen*8)); err != nil {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
 			return state.Stack.PushOwnedBuilder(builder)

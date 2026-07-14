@@ -71,13 +71,6 @@ func (c *Cell) Virtualize(effectiveLevel uint8) *Cell {
 	return vc
 }
 
-func (c *Cell) childEffectiveLevel() uint8 {
-	if c.meta == nil || c.meta.viewLevel == 0 {
-		return childEffectiveLevelFor(c, 0)
-	}
-	return childEffectiveLevelFor(c, c.meta.viewLevel-1)
-}
-
 func (c *Cell) boundaryRefs() []*Cell {
 	refCnt := c.refsCount()
 	if refCnt == 0 {

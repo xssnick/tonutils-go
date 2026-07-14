@@ -41,10 +41,74 @@ func TestRUNVMSerializeDeserialize(t *testing.T) {
 	if got := parsed.Serialize().EndCell().MustBeginParse().MustLoadUInt(24); got != serialized.MustBeginParse().MustLoadUInt(24) {
 		t.Fatalf("unexpected round-trip encoding: %#x", got)
 	}
+
+	truncated := RUNVM(0)
+	if err := truncated.DeserializeMatched(cell.BeginCell().MustStoreSlice(truncated.BitPrefix.Data, truncated.BitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
+		t.Fatal("expected short RUNVM suffix error")
+	}
+}
+
+func TestRUNVMWrapperErrorStackEffects(t *testing.T) {
+	t.Run("RUNVMActionBadCodeConsumesCodeOnly", func(t *testing.T) {
+		state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
+			t.Fatalf("push residual: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push bad code: %v", err)
+		}
+
+		assertVMErrCode(t, RUNVM(0).Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("expected RUNVM bad code to consume code only, stack len=%d", state.Stack.Len())
+		}
+		residual, err := state.Stack.PopIntFinite()
+		if err != nil || residual.Int64() != 11 {
+			t.Fatalf("unexpected residual: %v err=%v", residual, err)
+		}
+	})
+
+	t.Run("RUNVMXBadModeConsumesMode", func(t *testing.T) {
+		state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push bad mode: %v", err)
+		}
+
+		assertVMErrCode(t, RUNVMX().Interpret(state), vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("expected RUNVMX bad mode to consume top, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("RUNVMXInvalidFlagsPreservesOperands", func(t *testing.T) {
+		state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+		code := cell.BeginCell().EndCell().MustBeginParse()
+		if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
+			t.Fatalf("push stack size: %v", err)
+		}
+		if err := state.Stack.PushSlice(code); err != nil {
+			t.Fatalf("push code: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(512)); err != nil {
+			t.Fatalf("push invalid mode: %v", err)
+		}
+
+		assertVMErrCode(t, RUNVMX().Interpret(state), vmerr.CodeRangeCheck)
+		if state.Stack.Len() != 2 {
+			t.Fatalf("expected RUNVMX invalid flags to consume mode only, stack len=%d", state.Stack.Len())
+		}
+		if _, err := state.Stack.PopSlice(); err != nil {
+			t.Fatalf("expected code slice to remain: %v", err)
+		}
+		stackSize, err := state.Stack.PopIntFinite()
+		if err != nil || stackSize.Int64() != 0 {
+			t.Fatalf("unexpected remaining stack size: %v err=%v", stackSize, err)
+		}
+	})
 }
 
 func TestRunChildVMWithModeRejectsInvalidFlags(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
 	err := runChildVMWithMode(state, 512)
 	if err == nil {
 		t.Fatal("expected invalid flag error")
@@ -56,8 +120,135 @@ func TestRunChildVMWithModeRejectsInvalidFlags(t *testing.T) {
 	}
 }
 
+func TestRunChildVMWithModeOperandErrors(t *testing.T) {
+	emptyCode := func() *cell.Slice {
+		return cell.BeginCell().EndCell().MustBeginParse()
+	}
+	pushInt := func(t *testing.T, st *vm.Stack, v int64) {
+		t.Helper()
+		if err := st.PushInt(big.NewInt(v)); err != nil {
+			t.Fatalf("push int: %v", err)
+		}
+	}
+	pushCell := func(t *testing.T, st *vm.Stack) {
+		t.Helper()
+		if err := st.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push cell: %v", err)
+		}
+	}
+	pushSlice := func(t *testing.T, st *vm.Stack) {
+		t.Helper()
+		if err := st.PushSlice(emptyCode()); err != nil {
+			t.Fatalf("push slice: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mode   int
+		gas    vm.Gas
+		setup  func(t *testing.T, st *vm.Stack)
+		code   int64
+		leftOn int
+	}{
+		{
+			name:   "out of gas before operands",
+			mode:   0,
+			gas:    vm.Gas{},
+			setup:  func(*testing.T, *vm.Stack) {},
+			code:   vmerr.CodeOutOfGas,
+			leftOn: 0,
+		},
+		{
+			name: "bad gas max",
+			mode: 64,
+			setup: func(t *testing.T, st *vm.Stack) {
+				pushCell(t, st)
+			},
+			code: vmerr.CodeTypeCheck,
+		},
+		{
+			name: "bad gas limit",
+			mode: 8,
+			setup: func(t *testing.T, st *vm.Stack) {
+				pushCell(t, st)
+			},
+			code: vmerr.CodeTypeCheck,
+		},
+		{
+			name: "bad c7",
+			mode: 16,
+			setup: func(t *testing.T, st *vm.Stack) {
+				pushInt(t, st, 7)
+			},
+			code: vmerr.CodeTypeCheck,
+		},
+		{
+			name: "bad data",
+			mode: 4,
+			setup: func(t *testing.T, st *vm.Stack) {
+				pushInt(t, st, 1)
+			},
+			code: vmerr.CodeTypeCheck,
+		},
+		{
+			name: "bad return count",
+			mode: 256,
+			setup: func(t *testing.T, st *vm.Stack) {
+				pushCell(t, st)
+			},
+			code: vmerr.CodeTypeCheck,
+		},
+		{
+			name: "bad code",
+			mode: 0,
+			setup: func(t *testing.T, st *vm.Stack) {
+				pushInt(t, st, 0)
+			},
+			code: vmerr.CodeTypeCheck,
+		},
+		{
+			name: "missing stack size after code",
+			mode: 0,
+			setup: func(t *testing.T, st *vm.Stack) {
+				pushSlice(t, st)
+			},
+			code: vmerr.CodeStackUnderflow,
+		},
+		{
+			name: "child stack gas out of gas",
+			mode: 0,
+			gas:  vm.GasWithLimit(vm.RunvmGasPrice),
+			setup: func(t *testing.T, st *vm.Stack) {
+				for i := int64(0); i < vm.FreeStackDepth+1; i++ {
+					pushInt(t, st, i)
+				}
+				pushInt(t, st, vm.FreeStackDepth+1)
+				pushSlice(t, st)
+			},
+			code: vmerr.CodeOutOfGas,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gas := tt.gas
+			if gas.Remaining == 0 && tt.code != vmerr.CodeOutOfGas {
+				gas = vm.GasWithLimit(100)
+			}
+			state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, gas, nil, tuple.Tuple{}, vm.NewStack())
+			tt.setup(t, state.Stack)
+
+			assertVMErrCode(t, runChildVMWithMode(state, tt.mode), tt.code)
+			if state.Stack.Len() != tt.leftOn {
+				t.Fatalf("stack len after error = %d, want %d", state.Stack.Len(), tt.leftOn)
+			}
+		})
+	}
+}
+
 func TestRunChildVMWithModeSuccess(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xFE, 8).EndCell().MustBeginParse()
 
 	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
@@ -179,7 +370,7 @@ func TestRunChildVMWithModeSuccess(t *testing.T) {
 }
 
 func TestRunChildVMWithModeRejectsInvalidStackSize(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
 		t.Fatalf("push stack size: %v", err)
 	}
@@ -194,7 +385,7 @@ func TestRunChildVMWithModeRejectsInvalidStackSize(t *testing.T) {
 }
 
 func TestRUNVMXUsesDynamicMode(t *testing.T) {
-	state := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
+	state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.GasWithLimit(100), nil, tuple.Tuple{}, vm.NewStack())
 	state.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 	state.SetChildRunner(func(child *vm.State) (int64, error) {
 		child.Stack.Clear()
@@ -327,7 +518,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 		return nil
 	}
 	bindRefCodeOp(op, refA, nil)
-	if op.refs[0] == nil || op.refs[1] != nil {
+	if op.refsNum != 2 || op.refs[0] == nil || op.refs[1] != nil {
 		t.Fatalf("bindRefCodeOp should ignore nil refs")
 	}
 	bindRefCodeOp(op, nil, refB)
@@ -374,11 +565,60 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 		t.Fatal("expected missing refs error")
 	}
 
+	if cloneContinuation(nil) != nil {
+		t.Fatal("nil continuation clone should stay nil")
+	}
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected ref count panic")
+			}
+		}()
+		_ = newRefCodeOp("BADREFS", vmPrefixForTest(), 5, func(*vm.State, []*cell.Cell) error { return nil })
+	}()
+
+	oneRef := newRefCodeOp("ONEREF", vmPrefixForTest(), 1, func(*vm.State, []*cell.Cell) error { return nil })
+	bindRefCodeOp(oneRef, refA, refB)
+	if oneRef.refs[0] != refA || oneRef.refs[1] != nil {
+		t.Fatal("bindRefCodeOp should ignore references past refsNum")
+	}
+
+	shortPrefix := newRefCodeOp("SHORT", vmPrefixForTest(), 0, func(*vm.State, []*cell.Cell) error { return nil })
+	if err = shortPrefix.DeserializeMatched(cell.BeginCell().EndCell().MustBeginParse()); err == nil {
+		t.Fatal("expected short prefix deserialize error")
+	}
+
+	suffixErr := errors.New("suffix")
+	badSuffix := newRefCodeOp("BADSUFFIX", vmPrefixForTest(), 0, func(*vm.State, []*cell.Cell) error { return nil })
+	badSuffix.deserializeSuffix = func(*cell.Slice) error {
+		return suffixErr
+	}
+	err = badSuffix.DeserializeMatched(cell.BeginCell().MustStoreSlice(vmPrefixForTest().Data, vmPrefixForTest().Bits).EndCell().MustBeginParse())
+	if !errors.Is(err, suffixErr) {
+		t.Fatalf("expected suffix error, got %v", err)
+	}
+
+	partialRefs := newRefCodeOp("PARTIALREFS", vmPrefixForTest(), 2, func(*vm.State, []*cell.Cell) error { return nil })
+	partialRefs.refs[1] = refB
+	partialCell := cell.BeginCell().
+		MustStoreSlice(vmPrefixForTest().Data, vmPrefixForTest().Bits).
+		MustStoreRef(refA).
+		EndCell()
+	if err = partialRefs.DeserializeMatched(partialCell.MustBeginParse()); err != nil {
+		t.Fatalf("partial refs deserialize failed: %v", err)
+	}
+	if partialRefs.refs[0] != refA || partialRefs.refs[1] != nil {
+		t.Fatal("partial refs deserialize should keep decoded refs and clear missing refs")
+	}
+
 	if !sameStackValueType(nil, nil) {
 		t.Fatal("nil values should match")
 	}
 	if !sameStackValueType(vm.NaN{}, vm.NaN{}) {
 		t.Fatal("NaN values should match")
+	}
+	if !sameStackValueType(vm.NaN{}, big.NewInt(1)) || !sameStackValueType(big.NewInt(1), vm.NaN{}) {
+		t.Fatal("NaN and finite integers should share the TVM integer type")
 	}
 	if sameStackValueType(vm.NaN{}, &vm.NaN{}) {
 		t.Fatal("NaN pointer should not match NaN value")

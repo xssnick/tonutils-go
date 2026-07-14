@@ -18,7 +18,17 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHINT(nil) })
 }
 
-var pushIntPrefixed = buildPushIntPrefixed()
+var (
+	pushIntPrefixed  = buildPushIntPrefixed()
+	pushIntBigIntOne = big.NewInt(1)
+
+	// pushIntSmallImmediates holds the tiny-form (0x70..0x7F) immediates -5..10,
+	// indexed by the low 4 bits of the prefix. Deserialize reuses these instead of
+	// allocating per decode; they must never be mutated. Interpret routes -5..10
+	// through PushSmallInt, which pushes the vm package statics, so these values
+	// never reach the stack.
+	pushIntSmallImmediates = buildPushIntSmallImmediates()
+)
 
 func buildPushIntPrefixed() helpers.Prefixed {
 	prefixes := []helpers.BitPrefix{
@@ -30,6 +40,14 @@ func buildPushIntPrefixed() helpers.Prefixed {
 		prefixes = append(prefixes, helpers.UIntPrefix(0x82<<5|i, 13))
 	}
 	return helpers.NewPrefixed(prefixes...)
+}
+
+func buildPushIntSmallImmediates() [16]*big.Int {
+	var vals [16]*big.Int
+	for i := range vals {
+		vals[i] = big.NewInt(int64(((i + 5) & 0xF) - 5))
+	}
+	return vals
 }
 
 func PUSHINT(value *big.Int) *OpPUSHINT {
@@ -47,7 +65,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 
 	switch prefix {
 	case 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f:
-		op.value = big.NewInt(int64(((prefix + 5) & 0xF) - 5))
+		op.value = pushIntSmallImmediates[prefix&0xF]
 		op.instructionBits = 8
 		return nil
 	case 0x80:
@@ -76,17 +94,7 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 			return vm.ErrCorruptedOpcode
 		}
 
-		sz := szBytes*8 + 19
-
-		if sz > 257 {
-			_, err = code.LoadUInt(uint(sz - 257)) // kill round bits
-			if err != nil {
-				return err
-			}
-			sz = 257
-		}
-
-		val, err := code.LoadBigInt(uint(sz))
+		val, err := loadPushIntValue(code, uint(szBytes*8+19))
 		if err != nil {
 			return err
 		}
@@ -98,8 +106,45 @@ func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 	return vm.ErrCorruptedOpcode
 }
 
+func loadPushIntValue(code *cell.Slice, sz uint) (*big.Int, error) {
+	if sz <= 257 {
+		return code.LoadBigInt(sz)
+	}
+
+	b, err := code.LoadSlice(sz)
+	if err != nil {
+		return nil, err
+	}
+
+	if offset := sz % 8; offset > 0 {
+		for i := len(b) - 1; i >= 0; i-- {
+			b[i] >>= 8 - offset
+			if i > 0 {
+				b[i] += b[i-1] << offset
+			}
+		}
+	}
+
+	val := new(big.Int).SetBytes(b)
+	if val.Bit(int(sz-1)) == 0 {
+		return val, nil
+	}
+
+	return val.Sub(val, new(big.Int).Lsh(pushIntBigIntOne, sz)), nil
+}
+
+func signedBigIntBits(value *big.Int) int {
+	if value.Sign() >= 0 {
+		return value.BitLen() + 1
+	}
+
+	absMinusOne := new(big.Int).Neg(value)
+	absMinusOne.Sub(absMinusOne, pushIntBigIntOne)
+	return absMinusOne.BitLen() + 1
+}
+
 func (op *OpPUSHINT) Serialize() *cell.Builder {
-	bitsSz := op.value.BitLen() + 1 // 1 bit for sign
+	bitsSz := signedBigIntBits(op.value)
 
 	switch {
 	case op.value.IsInt64() && op.value.Int64() >= -5 && op.value.Int64() <= 10:
@@ -125,9 +170,14 @@ func (op *OpPUSHINT) Serialize() *cell.Builder {
 			MustStoreUInt(0x82, 8).
 			MustStoreUInt(l, 5)
 
-		if x > 256 {
-			c.MustStoreUInt(0, uint(x-256))
-			x = 256
+		if x > 257 {
+			padBits := uint(x - 257)
+			if op.value.Sign() < 0 {
+				c.MustStoreUInt((uint64(1)<<padBits)-1, padBits)
+			} else {
+				c.MustStoreUInt(0, padBits)
+			}
+			x = 257
 		}
 
 		c.MustStoreBigInt(op.value, uint(x))
@@ -151,7 +201,7 @@ func (op *OpPUSHINT) InstructionBits() int64 {
 		return 8
 	}
 
-	bitsSz := op.value.BitLen() + 1
+	bitsSz := signedBigIntBits(op.value)
 
 	switch {
 	case op.value.IsInt64() && op.value.Int64() >= -5 && op.value.Int64() <= 10:
@@ -166,5 +216,11 @@ func (op *OpPUSHINT) InstructionBits() int64 {
 }
 
 func (op *OpPUSHINT) Interpret(state *vm.State) error {
+	if op.value.IsInt64() {
+		val := op.value.Int64()
+		if val >= -5 && val <= 10 {
+			return state.Stack.PushSmallInt(val)
+		}
+	}
 	return state.Stack.PushInt(op.value)
 }

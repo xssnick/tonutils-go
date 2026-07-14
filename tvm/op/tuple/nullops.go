@@ -79,7 +79,7 @@ func makeNullOp(name string, prefix uint64, cond bool, depth, count int) *helper
 				}
 			}
 
-			return state.Stack.PushInt(x)
+			return state.Stack.PushOwnedInt(x)
 		},
 	}
 }

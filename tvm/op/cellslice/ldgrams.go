@@ -3,6 +3,7 @@ package cellslice
 import (
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -19,7 +20,7 @@ func LDGRAMS() *helpers.SimpleOP {
 
 			coins, err := s.LoadBigCoins()
 			if err != nil {
-				return err
+				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot deserialize a variable-length integer")
 			}
 
 			err = state.Stack.PushInt(coins)

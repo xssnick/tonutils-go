@@ -16,12 +16,15 @@ func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popIntFinite(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
+			if x == nil {
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), false), false)
+			}
 
-			return state.Stack.PushInt(x.Lsh(x, uint(imm())))
+			return pushMaybeInt(state, leftShiftResult(x, uint64(imm())), false)
 		},
 		BitPrefix:       helpers.BytesPrefix(0xAA),
 		SerializeSuffix: serializeImmediate,

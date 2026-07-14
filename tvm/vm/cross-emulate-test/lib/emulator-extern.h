@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+
 #include "emulator_export.h"
 
 #ifdef __cplusplus
@@ -15,6 +16,13 @@ extern "C" {
  * @return Pointer to TransactionEmulator or nullptr in case of error
  */
 EMULATOR_EXPORT void *transaction_emulator_create(const char *config_params_boc, int vm_log_verbosity);
+
+/**
+ * @brief Creates Config object from base64 encoded BoC
+ * @param config_params_boc Base64 encoded BoC serialized Config dictionary (Hashmap 32 ^Cell)
+ * @return Pointer to Config object or nullptr in case of error
+ */
+EMULATOR_EXPORT void *emulator_config_create(const char *config_params_boc);
 
 /**
  * @brief Set unixtime for emulation
@@ -38,7 +46,7 @@ EMULATOR_EXPORT bool transaction_emulator_set_lt(void *transaction_emulator, uin
  * @param rand_seed_hex Hex string of length 64
  * @return true in case of success, false in case of error
  */
-EMULATOR_EXPORT bool transaction_emulator_set_rand_seed(void *transaction_emulator, const char* rand_seed_hex);
+EMULATOR_EXPORT bool transaction_emulator_set_rand_seed(void *transaction_emulator, const char *rand_seed_hex);
 
 /**
  * @brief Set ignore_chksig flag for emulation
@@ -49,20 +57,28 @@ EMULATOR_EXPORT bool transaction_emulator_set_rand_seed(void *transaction_emulat
 EMULATOR_EXPORT bool transaction_emulator_set_ignore_chksig(void *transaction_emulator, bool ignore_chksig);
 
 /**
- * @brief Set unixtime for emulation
+ * @brief Set config for emulation
  * @param transaction_emulator Pointer to TransactionEmulator object
  * @param config_boc Base64 encoded BoC serialized Config dictionary (Hashmap 32 ^Cell)
  * @return true in case of success, false in case of error
  */
-EMULATOR_EXPORT bool transaction_emulator_set_config(void *transaction_emulator, const char* config_boc);
+EMULATOR_EXPORT bool transaction_emulator_set_config(void *transaction_emulator, const char *config_boc);
 
 /**
- * @brief Set unixtime for emulation
+ * @brief Set config for emulation
+ * @param transaction_emulator Pointer to TransactionEmulator object
+ * @param config Pointer to Config object
+ * @return true in case of success, false in case of error
+ */
+EMULATOR_EXPORT bool transaction_emulator_set_config_object(void *transaction_emulator, void *config);
+
+/**
+ * @brief Set libraries for emulation
  * @param transaction_emulator Pointer to TransactionEmulator object
  * @param libs_boc Base64 encoded BoC serialized shared libraries dictionary (HashmapE 256 ^Cell).
  * @return true in case of success, false in case of error
  */
-EMULATOR_EXPORT bool transaction_emulator_set_libs(void *transaction_emulator, const char* libs_boc);
+EMULATOR_EXPORT bool transaction_emulator_set_libs(void *transaction_emulator, const char *libs_boc);
 
 /**
  * @brief Enable or disable TVM debug primitives
@@ -78,7 +94,7 @@ EMULATOR_EXPORT bool transaction_emulator_set_debug_enabled(void *transaction_em
  * @param info_boc Base64 encoded BoC serialized TVM tuple (VmStackValue).
  * @return true in case of success, false in case of error
  */
-EMULATOR_EXPORT bool transaction_emulator_set_prev_blocks_info(void *transaction_emulator, const char* info_boc);
+EMULATOR_EXPORT bool transaction_emulator_set_prev_blocks_info(void *transaction_emulator, const char *info_boc);
 
 /**
  * @brief Emulate transaction
@@ -102,7 +118,9 @@ EMULATOR_EXPORT bool transaction_emulator_set_prev_blocks_info(void *transaction
  *   "elapsed_time": 0.02
  * }
  */
-EMULATOR_EXPORT const char *transaction_emulator_emulate_transaction(void *transaction_emulator, const char *shard_account_boc, const char *message_boc);
+EMULATOR_EXPORT const char *transaction_emulator_emulate_transaction(void *transaction_emulator,
+                                                                     const char *shard_account_boc,
+                                                                     const char *message_boc);
 
 /**
  * @brief Emulate tick tock transaction
@@ -125,7 +143,9 @@ EMULATOR_EXPORT const char *transaction_emulator_emulate_transaction(void *trans
  *   "elapsed_time": 0.02
  * }
  */
-EMULATOR_EXPORT const char *transaction_emulator_emulate_tick_tock_transaction(void *transaction_emulator, const char *shard_account_boc, bool is_tock);
+EMULATOR_EXPORT const char *transaction_emulator_emulate_tick_tock_transaction(void *transaction_emulator,
+                                                                               const char *shard_account_boc,
+                                                                               bool is_tock);
 
 /**
  * @brief Destroy TransactionEmulator object
@@ -165,7 +185,24 @@ EMULATOR_EXPORT bool tvm_emulator_set_libraries(void *tvm_emulator, const char *
  * @param config Base64 encoded BoC serialized Config dictionary (Hashmap 32 ^Cell). Optional.
  * @return true in case of success, false in case of error
  */
-EMULATOR_EXPORT bool tvm_emulator_set_c7(void *tvm_emulator, const char *address, uint32_t unixtime, uint64_t balance, const char *rand_seed_hex, const char *config);
+EMULATOR_EXPORT bool tvm_emulator_set_c7(void *tvm_emulator, const char *address, uint32_t unixtime, uint64_t balance,
+                                         const char *rand_seed_hex, const char *config);
+
+/**
+ * @brief Set extra currencies balance
+ * @param tvm_emulator Pointer to TVM emulator
+ * @param extra_currencies String with extra currencies balance in format "currency_id1=balance1 currency_id2=balance2 ..."
+ * @return true in case of success, false in case of error
+ */
+EMULATOR_EXPORT bool tvm_emulator_set_extra_currencies(void *tvm_emulator, const char *extra_currencies);
+
+/**
+ * @brief Set config for TVM emulator
+ * @param tvm_emulator Pointer to TVM emulator
+ * @param config Pointer to Config object
+ * @return true in case of success, false in case of error
+ */
+EMULATOR_EXPORT bool tvm_emulator_set_config_object(void *tvm_emulator, void *config);
 
 /**
  * @brief Set tuple of previous blocks (13th element of c7)
@@ -173,7 +210,7 @@ EMULATOR_EXPORT bool tvm_emulator_set_c7(void *tvm_emulator, const char *address
  * @param info_boc Base64 encoded BoC serialized TVM tuple (VmStackValue).
  * @return true in case of success, false in case of error
  */
-EMULATOR_EXPORT bool tvm_emulator_set_prev_blocks_info(void *tvm_emulator, const char* info_boc);
+EMULATOR_EXPORT bool tvm_emulator_set_prev_blocks_info(void *tvm_emulator, const char *info_boc);
 
 /**
  * @brief Set TVM gas limit
@@ -224,6 +261,27 @@ EMULATOR_EXPORT const char *tvm_emulator_run_get_method(void *tvm_emulator, int 
 EMULATOR_EXPORT const char *tvm_emulator_emulate_run_method(uint32_t len, const char *params_boc, int64_t gas_limit);
 
 /**
+ * @brief Optimized version of "run get method" with all passed parameters in a single call. Also returns log.
+ * @param len Length of params_boc buffer
+ * @param params_boc BoC serialized parameters, scheme: request$_ code:^Cell data:^Cell stack:^VmStack params:^[c7:^VmStack libs:^Cell] method_id:(## 32)
+ * @param gas_limit Gas limit
+ * @return Pointer to struct with two fields:
+ * - response: Char* with first 4 bytes defining length, and the rest BoC serialized result
+ *         Scheme: result$_ exit_code:(## 32) gas_used:(## 32) stack:^VmStack
+ * - log: Char* with VM log string
+ */
+EMULATOR_EXPORT void *tvm_emulator_emulate_run_method_detailed(uint32_t len, const char *params_boc, int64_t gas_limit);
+
+/**
+ * @brief Destroy detailed result of "tvm_emulator_emulate_run_method_detailed"
+ * @param detailed_result Pointer to detailed result struct returned by "tvm_emulator_emulate_run_method_detailed"
+ *
+ * Caller should not use string_destroy() for fields of this struct,
+ * as they are already freed in this function.
+ */
+EMULATOR_EXPORT void run_method_detailed_result_destroy(void *detailed_result);
+
+/**
  * @brief Send external message
  * @param tvm_emulator Pointer to TVM emulator
  * @param message_body_boc Base64 encoded BoC serialized message body cell.
@@ -270,13 +328,34 @@ EMULATOR_EXPORT const char *tvm_emulator_send_external_message(void *tvm_emulato
  *   "actions": "Base64 boc decoded actions cell of type (OutList n)"
  * }
  */
-EMULATOR_EXPORT const char *tvm_emulator_send_internal_message(void *tvm_emulator, const char *message_body_boc, uint64_t amount);
+EMULATOR_EXPORT const char *tvm_emulator_send_internal_message(void *tvm_emulator, const char *message_body_boc,
+                                                               uint64_t amount);
 
 /**
  * @brief Destroy TVM emulator object
  * @param tvm_emulator Pointer to TVM emulator object
  */
 EMULATOR_EXPORT void tvm_emulator_destroy(void *tvm_emulator);
+
+/**
+ * @brief Destroy Config object
+ * @param tvm_emulator Pointer to Config object
+ */
+EMULATOR_EXPORT void emulator_config_destroy(void *config);
+
+/**
+ * @brief Destroy string created by emulator library
+ * @param string Pointer to string to destroy
+ *
+ * This function should be used to free strings returned by emulator library functions.
+ * It is not safe to use caller's free() on them, as they may have been allocated using a different allocator.
+ */
+EMULATOR_EXPORT void string_destroy(const char *string);
+
+/**
+ * @brief Get git commit hash and date of the library
+ */
+EMULATOR_EXPORT const char *emulator_version();
 
 #ifdef __cplusplus
 }  // extern "C"

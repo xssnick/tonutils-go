@@ -21,6 +21,18 @@ func writeUint64(buf *bytes.Buffer, val uint64) {
 	buf.Write(tmp[:])
 }
 
+func appendUint32(dst []byte, val uint32) []byte {
+	dst = append(dst, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[len(dst)-4:], val)
+	return dst
+}
+
+func appendUint64(dst []byte, val uint64) []byte {
+	dst = append(dst, 0, 0, 0, 0, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint64(dst[len(dst)-8:], val)
+	return dst
+}
+
 func writeZeros(buf *bytes.Buffer, n int) {
 	for n > len(tlZeroBytes) {
 		buf.Write(tlZeroBytes[:])
@@ -30,6 +42,34 @@ func writeZeros(buf *bytes.Buffer, n int) {
 	if n > 0 {
 		buf.Write(tlZeroBytes[:n])
 	}
+}
+
+func growAppend(dst []byte, n int) []byte {
+	if n <= cap(dst)-len(dst) {
+		return dst
+	}
+
+	next := make([]byte, len(dst), len(dst)+n)
+	copy(next, dst)
+	return next
+}
+
+func appendZeros(dst []byte, n int) []byte {
+	if n <= 0 {
+		return dst
+	}
+
+	oldLen := len(dst)
+	newLen := oldLen + n
+	if cap(dst) < newLen {
+		next := make([]byte, newLen)
+		copy(next, dst)
+		return next
+	}
+
+	dst = dst[:newLen]
+	clear(dst[oldLen:])
+	return dst
 }
 
 func tlBytesEncodedSize(dataLen int) (int, error) {
@@ -61,6 +101,33 @@ func ToBytesToBuffer(buf *bytes.Buffer, data []byte) error {
 	return nil
 }
 
+// AppendBytes appends data as a TL bytes field.
+func AppendBytes(dst []byte, data []byte) ([]byte, error) {
+	return appendTLBytes(dst, data)
+}
+
+func appendTLBytes(dst []byte, data []byte) ([]byte, error) {
+	pad, dst, err := appendBytesHeader(dst, len(data))
+	if err != nil {
+		return nil, err
+	}
+
+	dst = append(dst, data...)
+	dst = appendZeros(dst, pad)
+	return dst, nil
+}
+
+func appendTLString(dst []byte, data string) ([]byte, error) {
+	pad, dst, err := appendBytesHeader(dst, len(data))
+	if err != nil {
+		return nil, err
+	}
+
+	dst = append(dst, data...)
+	dst = appendZeros(dst, pad)
+	return dst, nil
+}
+
 func toStringToBuffer(buf *bytes.Buffer, data string) error {
 	pad, err := writeBytesHeader(buf, len(data))
 	if err != nil {
@@ -90,6 +157,24 @@ func writeBytesHeader(buf *bytes.Buffer, dataLen int) (int, error) {
 	return sz - dataLen - headerLen, nil
 }
 
+func appendBytesHeader(dst []byte, dataLen int) (int, []byte, error) {
+	sz, err := tlBytesEncodedSize(dataLen)
+	if err != nil {
+		return 0, nil, err
+	}
+	dst = growAppend(dst, sz)
+
+	headerLen := 1
+	if dataLen >= 0xFE {
+		headerLen = 4
+		dst = appendUint32(dst, uint32(dataLen<<8)|0xFE)
+	} else {
+		dst = append(dst, byte(dataLen))
+	}
+
+	return sz - dataLen - headerLen, dst, nil
+}
+
 func RemapBufferAsSlice(buf *bytes.Buffer, from int) {
 	serializedLen := buf.Len() - (from + 4)
 
@@ -108,8 +193,31 @@ func RemapBufferAsSlice(buf *bytes.Buffer, from int) {
 	}
 }
 
+func RemapSliceAsTLBytes(dst []byte, from int) []byte {
+	serializedLen := len(dst) - (from + 4)
+
+	if serializedLen >= 0xFE {
+		binary.LittleEndian.PutUint32(dst[from:], uint32(serializedLen<<8)|0xFE)
+	} else {
+		dst[from] = byte(serializedLen)
+		copy(dst[from+1:], dst[from+4:])
+		dst = dst[:len(dst)-3]
+	}
+
+	if pad := (len(dst) - from) % 4; pad > 0 {
+		dst = appendZeros(dst, 4-pad)
+	}
+	return dst
+}
+
 func FromBytes(data []byte) (loaded []byte, buffer []byte, err error) {
 	return fromBytes(data, true)
+}
+
+// FromBytesNoCopy reads TL bytes and returns a slice pointing into data.
+// The caller must keep data immutable and alive while loaded is used.
+func FromBytesNoCopy(data []byte) (loaded []byte, buffer []byte, err error) {
+	return fromBytes(data, false)
 }
 
 func fromBytesNoCopy(data []byte) (loaded []byte, buffer []byte, err error) {
@@ -162,7 +270,7 @@ func fromBytes(data []byte, copyPayload bool) (loaded []byte, buffer []byte, err
 
 func copyBytesResult(data []byte, copyPayload bool) []byte {
 	if !copyPayload {
-		return data
+		return data[:len(data):len(data)]
 	}
 
 	res := make([]byte, len(data))

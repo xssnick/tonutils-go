@@ -1,13 +1,16 @@
 package stack
 
 import (
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func newStackState(values ...int64) *vm.State {
@@ -270,7 +273,15 @@ func TestPushSliceInlineForms(t *testing.T) {
 
 func TestPushContRoundTripAndInterpret(t *testing.T) {
 	small := cell.BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
+	smallMax := cell.BeginCell().MustStoreSlice(make([]byte, 15), 15*8).EndCell()
+	bigNoRefs := cell.BeginCell().MustStoreSlice(make([]byte, 16), 16*8).EndCell()
 	big := cell.BeginCell().MustStoreUInt(0xEF, 8).MustStoreRef(cell.BeginCell().MustStoreUInt(0x11, 8).EndCell()).EndCell()
+	fourRefs := cell.BeginCell().
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		EndCell()
 	ref := cell.BeginCell().
 		MustStoreUInt(0xAA, 8).
 		MustStoreRef(cell.BeginCell().EndCell()).
@@ -288,7 +299,10 @@ func TestPushContRoundTripAndInterpret(t *testing.T) {
 		bits     int64
 	}{
 		{name: "Small", cont: small, newOp: PUSHCONT, typ: "SMALL", wantText: "SMALL PUSHCONT", bits: 8},
+		{name: "SmallMax15Bytes", cont: smallMax, newOp: PUSHCONT, typ: "SMALL", wantText: "SMALL PUSHCONT", bits: 8},
+		{name: "BigNoRefs16Bytes", cont: bigNoRefs, newOp: PUSHCONT, typ: "BIG", wantText: "BIG PUSHCONT", bits: 16},
 		{name: "Big", cont: big, newOp: PUSHCONT, typ: "BIG", wantText: "BIG PUSHCONT", bits: 16},
+		{name: "RefByRefs", cont: fourRefs, newOp: PUSHCONT, typ: "REF", wantText: "PUSHREFCONT", bits: 8},
 		{name: "Ref", cont: ref, newOp: PUSHREFCONT, typ: "REF", wantText: "PUSHREFCONT", bits: 8},
 	}
 
@@ -358,6 +372,91 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 		}
 		if string(mustCellHash(t, got)) != string(mustCellHash(t, ref)) {
 			t.Fatal("unexpected register value")
+		}
+	})
+
+	t.Run("PushCtrCopiesLegacyContinuation", func(t *testing.T) {
+		original := &vm.OrdinaryContinuation{
+			Data: vm.ControlData{
+				CP:    3,
+				Stack: newStack(1, 2),
+			},
+			Code: cell.BeginCell().MustStoreUInt(0x44, 8).ToSlice(),
+		}
+		state := &vm.State{
+			Stack: vm.NewStack(),
+			Gas:   vm.NewGas(),
+		}
+		state.Reg.C[0] = original
+
+		if err := PUSHCTR(0).Interpret(state); err != nil {
+			t.Fatalf("PUSHCTR c0 failed: %v", err)
+		}
+		pushed, err := state.Stack.PopContinuation()
+		if err != nil {
+			t.Fatalf("pop pushed continuation: %v", err)
+		}
+		got, ok := pushed.(*vm.OrdinaryContinuation)
+		if !ok {
+			t.Fatalf("unexpected continuation type: %T", pushed)
+		}
+		if got == original {
+			t.Fatal("PUSHCTR c0 returned original continuation instead of a copy")
+		}
+		if got.Data.Stack == original.Data.Stack {
+			t.Fatal("PUSHCTR c0 copied continuation but shared control stack")
+		}
+
+		original.Data.CP = 9
+		if err := original.Data.Stack.PushInt(big.NewInt(3)); err != nil {
+			t.Fatalf("mutate original continuation stack: %v", err)
+		}
+		if got.Data.CP != 3 || got.Data.Stack.Len() != 2 {
+			t.Fatalf("pushed continuation changed after mutating original: cp=%d stack=%d", got.Data.CP, got.Data.Stack.Len())
+		}
+	})
+
+	t.Run("PushCtrCopiesC7TupleValue", func(t *testing.T) {
+		state := &vm.State{
+			Stack: vm.NewStack(),
+			Gas:   vm.NewGas(),
+			Reg: vm.Register{
+				C7: tuple.NewTupleValue(big.NewInt(7)),
+			},
+		}
+
+		if err := PUSHCTR(7).Interpret(state); err != nil {
+			t.Fatalf("PUSHCTR c7 failed: %v", err)
+		}
+		pushed, err := state.Stack.PopTuple()
+		if err != nil {
+			t.Fatalf("pop pushed tuple: %v", err)
+		}
+		if err := state.Reg.C7.Set(0, big.NewInt(9)); err != nil {
+			t.Fatalf("mutate c7 tuple: %v", err)
+		}
+		got, err := pushed.RawIndex(0)
+		if err != nil {
+			t.Fatalf("read pushed tuple: %v", err)
+		}
+		if got.(*big.Int).Int64() != 7 {
+			t.Fatalf("pushed c7 tuple changed after mutating register: %v", got)
+		}
+	})
+
+	t.Run("CloneLegacyControlRegisterScalarPassthrough", func(t *testing.T) {
+		scalar := big.NewInt(11)
+		if got := cloneLegacyControlRegisterValue(scalar); got != scalar {
+			t.Fatalf("scalar control register value was unexpectedly copied: %T", got)
+		}
+	})
+
+	t.Run("PushCtrDeserializeRejectsInvalidControlRegisters", func(t *testing.T) {
+		for _, raw := range []uint64{0xED46, 0xED48} {
+			op := PUSHCTR(0)
+			if err := op.Deserialize(cell.BeginCell().MustStoreUInt(raw, 16).EndCell().MustBeginParse()); err == nil {
+				t.Fatalf("expected PUSHCTR %#x to fail", raw)
+			}
 		}
 	})
 
@@ -719,6 +818,46 @@ func TestMultiOpsAndAliases(t *testing.T) {
 	})
 }
 
+func TestMultiOpsDeserializeTruncatedSuffixes(t *testing.T) {
+	tests := []struct {
+		name       string
+		op         *helpers.AdvancedOP
+		prefix     uint64
+		prefixBits uint
+		suffixBits []uint
+	}{
+		{name: "PUXC", op: PUXC(0, 0), prefix: 0x52, prefixBits: 8, suffixBits: []uint{0, 4}},
+		{name: "XC2PU", op: XC2PU(0, 0, 0), prefix: 0x541, prefixBits: 12, suffixBits: []uint{0, 4, 8}},
+		{name: "XCPUXC", op: XCPUXC(0, 0, 0), prefix: 0x542, prefixBits: 12, suffixBits: []uint{0, 4, 8}},
+		{name: "XCPU2", op: XCPU2(0, 0, 0), prefix: 0x543, prefixBits: 12, suffixBits: []uint{0, 4, 8}},
+		{name: "PUXC2", op: PUXC2(0, 0, 0), prefix: 0x544, prefixBits: 12, suffixBits: []uint{0, 4, 8}},
+		{name: "PUXCPU", op: PUXCPU(0, 0, 0), prefix: 0x545, prefixBits: 12, suffixBits: []uint{0, 4, 8}},
+		{name: "PU2XC", op: PU2XC(0, 0, 0), prefix: 0x546, prefixBits: 12, suffixBits: []uint{0, 4, 8}},
+		{name: "PUSH3", op: PUSH3(0, 0, 0), prefix: 0x547, prefixBits: 12, suffixBits: []uint{0, 4, 8}},
+	}
+
+	for _, tt := range tests {
+		for _, suffixBits := range tt.suffixBits {
+			suffixName := "0"
+			switch suffixBits {
+			case 4:
+				suffixName = "4"
+			case 8:
+				suffixName = "8"
+			}
+			t.Run(tt.name+"_"+suffixName+"_bits", func(t *testing.T) {
+				code := cell.BeginCell().MustStoreUInt(tt.prefix, tt.prefixBits)
+				if suffixBits > 0 {
+					code.MustStoreUInt(0, suffixBits)
+				}
+				if err := tt.op.Deserialize(code.EndCell().MustBeginParse()); err == nil {
+					t.Fatal("expected truncated suffix to fail")
+				}
+			})
+		}
+	}
+}
+
 func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 	simExchange := func(vals []int64, a, b int) {
 		vals[a], vals[b] = vals[b], vals[a]
@@ -923,6 +1062,146 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 			t.Fatal("expected BLKSWX underflow")
 		}
 	})
+}
+
+func TestBLKSWXErrorStackEffects(t *testing.T) {
+	expectErrCode := func(t *testing.T, err error, code int64) {
+		t.Helper()
+		var tvmErr vmerr.VMError
+		if !errors.As(err, &tvmErr) || tvmErr.Code != code {
+			t.Fatalf("error = %v, want code %d", err, code)
+		}
+	}
+
+	t.Run("NegativeYLeavesXOnStack", func(t *testing.T) {
+		state := newStackState(1, 2, 3)
+		if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
+			t.Fatalf("push x: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push y: %v", err)
+		}
+
+		expectErrCode(t, BLKSWX().Interpret(state), vmerr.CodeRangeCheck)
+		if got := popInts(t, state.Stack, 4); !equalInts(got, []int64{2, 3, 2, 1}) {
+			t.Fatalf("unexpected stack after negative y: %v", got)
+		}
+	})
+
+	t.Run("NegativeXConsumesYAndX", func(t *testing.T) {
+		state := newStackState(1, 2, 3)
+		if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push x: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push y: %v", err)
+		}
+
+		expectErrCode(t, BLKSWX().Interpret(state), vmerr.CodeRangeCheck)
+		if got := popInts(t, state.Stack, 3); !equalInts(got, []int64{3, 2, 1}) {
+			t.Fatalf("unexpected stack after negative x: %v", got)
+		}
+	})
+
+	t.Run("TypeCheckXConsumesYAndX", func(t *testing.T) {
+		state := newStackState(1, 2, 3)
+		if err := state.Stack.PushCell(cell.BeginCell().EndCell()); err != nil {
+			t.Fatalf("push x: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("push y: %v", err)
+		}
+
+		expectErrCode(t, BLKSWX().Interpret(state), vmerr.CodeTypeCheck)
+		if got := popInts(t, state.Stack, 3); !equalInts(got, []int64{3, 2, 1}) {
+			t.Fatalf("unexpected stack after x type-check: %v", got)
+		}
+	})
+
+	t.Run("TooLargeCountsConsumeBothCounts", func(t *testing.T) {
+		state := newStackState(1, 2, 3)
+		if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
+			t.Fatalf("push x: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
+			t.Fatalf("push y: %v", err)
+		}
+
+		expectErrCode(t, BLKSWX().Interpret(state), vmerr.CodeStackUnderflow)
+		if got := popInts(t, state.Stack, 3); !equalInts(got, []int64{3, 2, 1}) {
+			t.Fatalf("unexpected stack after too-large counts: %v", got)
+		}
+	})
+}
+
+func TestCopyOpsStackOverflowEffects(t *testing.T) {
+	full := newFullStack(t)
+	depth := full.Len()
+
+	expectOverflow := func(t *testing.T, err error) {
+		t.Helper()
+		var tvmErr vmerr.VMError
+		if !errors.As(err, &tvmErr) || tvmErr.Code != vmerr.CodeStackOverflow {
+			t.Fatalf("error = %v, want stack overflow", err)
+		}
+	}
+	top := func(st *vm.Stack, count int) []int64 {
+		return popInts(t, st.Copy(), count)
+	}
+
+	tests := []struct {
+		name string
+		op   vm.OP
+		want []int64
+	}{
+		{name: "DUP2", op: DUP2(), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
+		{name: "OVER2", op: OVER2(), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2), int64(depth - 3)}},
+		{name: "TUCK", op: TUCK(), want: []int64{int64(depth - 1), int64(depth), int64(depth - 2)}},
+		{name: "PUXC", op: PUXC(2, 1), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
+		{name: "PUSH2", op: PUSH2(1, 2), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
+		{name: "XC2PU", op: XC2PU(2, 3, 0), want: []int64{int64(depth - 3), int64(depth - 2), int64(depth - 1), int64(depth)}},
+		{name: "XCPUXC", op: XCPUXC(2, 1, 0), want: []int64{int64(depth), int64(depth - 2), int64(depth - 1)}},
+		{name: "XCPU2", op: XCPU2(2, 0, 0), want: []int64{int64(depth - 2), int64(depth - 1), int64(depth)}},
+		{name: "PUXC2", op: PUXC2(2, 1, 3), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
+		{name: "PUXCPU", op: PUXCPU(2, 1, 0), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
+		{name: "PU2XC", op: PU2XC(2, 1, 3), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
+		{name: "PUSH3", op: PUSH3(0, 1, 2), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &vm.State{
+				Stack: full.Copy(),
+				Gas:   vm.NewGas(),
+			}
+
+			expectOverflow(t, tt.op.Interpret(state))
+			if state.Stack.Len() != depth {
+				t.Fatalf("stack depth changed after overflow: got %d want %d", state.Stack.Len(), depth)
+			}
+			if got := top(state.Stack, len(tt.want)); !equalInts(got, tt.want) {
+				t.Fatalf("unexpected top values after overflow: %v", got)
+			}
+		})
+	}
+}
+
+func newFullStack(t *testing.T) *vm.Stack {
+	t.Helper()
+
+	st := vm.NewStack()
+	for {
+		err := st.PushInt(big.NewInt(int64(st.Len() + 1)))
+		if err == nil {
+			continue
+		}
+
+		var tvmErr vmerr.VMError
+		if errors.As(err, &tvmErr) && tvmErr.Code == vmerr.CodeStackOverflow {
+			return st
+		}
+		t.Fatalf("failed to fill stack: %v", err)
+	}
 }
 
 func equalInts(a, b []int64) bool {

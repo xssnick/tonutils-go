@@ -5,11 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"net"
+
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/address"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
-	"reflect"
 )
 
 const (
@@ -17,6 +18,7 @@ const (
 	_MaxValueSize         = 768
 	_MaxValueTTLSec       = 3600 + 60
 	_MaxOverlayNodeAgeSec = 10 * 60
+	_MaxAddressListSize   = 128
 )
 
 func checkValueTTLAt(ttl int32, now int64) error {
@@ -166,26 +168,56 @@ func (n *Node) validate(currentVersion, ourNetworkID int32) error {
 	if n == nil {
 		return fmt.Errorf("nil node")
 	}
+	if n.Version == 0 {
+		return fmt.Errorf("zero version")
+	}
 	if currentVersion != 0 && n.Version <= currentVersion {
 		return fmt.Errorf("too old version")
+	}
+	if err := n.checkSerializableFields(ourNetworkID); err != nil {
+		return err
+	}
+	return n.CheckSignatureWithNetworkID(ourNetworkID)
+}
+
+func (n *Node) checkSerializableFields(ourNetworkID int32) error {
+	if n == nil {
+		return fmt.Errorf("nil node")
+	}
+	pub, ok := n.ID.(keys.PublicKeyED25519)
+	if !ok {
+		return fmt.Errorf("unsupported id type %T", n.ID)
+	}
+	if len(pub.Key) != ed25519.PublicKeySize {
+		return fmt.Errorf("invalid ed25519 public key")
 	}
 	if n.AddrList == nil || len(n.AddrList.Addresses) == 0 {
 		return fmt.Errorf("dht node must have >0 addresses")
 	}
 	for i, addr := range n.AddrList.Addresses {
-		if addr == nil {
-			return fmt.Errorf("dht node address %d is nil", i)
+		if err := checkSerializableAddress(addr); err != nil {
+			return fmt.Errorf("invalid dht node address %d: %w", i, err)
 		}
 	}
-	return n.CheckSignatureWithNetworkID(ourNetworkID)
+	addrList, err := tl.Serialize(n.AddrList, true)
+	if err != nil {
+		return fmt.Errorf("failed to serialize dht node address list: %w", err)
+	}
+	if len(addrList) > _MaxAddressListSize {
+		return fmt.Errorf("too big addr list: size=%d", len(addrList))
+	}
+	if _, err := splitNodeSignature(n.Signature, ourNetworkID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (n *Node) checkSignature(ourNetworkID int32) error {
-	pub, ok := n.ID.(keys.PublicKeyED25519)
-	if !ok {
-		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(n.ID).String())
+	if err := n.checkSerializableFields(ourNetworkID); err != nil {
+		return err
 	}
 
+	pub := n.ID.(keys.PublicKeyED25519)
 	signature, err := splitNodeSignature(n.Signature, ourNetworkID)
 	if err != nil {
 		return err
@@ -199,6 +231,56 @@ func (n *Node) checkSignature(ourNetworkID int32) error {
 	}
 	if !ed25519.Verify(pub.Key, toVerify, signature) {
 		return fmt.Errorf("bad signature for node: %s", hex.EncodeToString(pub.Key))
+	}
+	return nil
+}
+
+func checkSerializableAddress(addr address.Address) error {
+	switch a := addr.(type) {
+	case nil:
+		return fmt.Errorf("nil")
+	case address.UDP:
+		return checkIPv4Address(a.IP, a.Port)
+	case *address.UDP:
+		if a == nil {
+			return fmt.Errorf("nil")
+		}
+		return checkIPv4Address(a.IP, a.Port)
+	case address.UDP6:
+		return checkIPv6Address(a.IP, a.Port)
+	case *address.UDP6:
+		if a == nil {
+			return fmt.Errorf("nil")
+		}
+		return checkIPv6Address(a.IP, a.Port)
+	case address.QUIC:
+		return checkIPv4Address(a.IP, a.Port)
+	case *address.QUIC:
+		if a == nil {
+			return fmt.Errorf("nil")
+		}
+		return checkIPv4Address(a.IP, a.Port)
+	default:
+		return fmt.Errorf("unsupported type %T", addr)
+	}
+}
+
+func checkIPv4Address(ip []byte, port int32) error {
+	if port <= 0 {
+		return fmt.Errorf("invalid port")
+	}
+	if len(net.IP(ip).To4()) != 4 {
+		return fmt.Errorf("invalid ipv4")
+	}
+	return nil
+}
+
+func checkIPv6Address(ip []byte, port int32) error {
+	if port <= 0 {
+		return fmt.Errorf("invalid port")
+	}
+	if len(net.IP(ip).To16()) != 16 {
+		return fmt.Errorf("invalid ipv6")
 	}
 	return nil
 }
@@ -235,7 +317,9 @@ func cloneNode(node *Node) *Node {
 	}
 }
 
-func buildSignedNode(id any, list *address.List, version, networkID int32, key ed25519.PrivateKey) (*Node, error) {
+// BuildSignedNode creates a signed DHT node description for use in DHT queries
+// and static global config nodes.
+func BuildSignedNode(id any, list *address.List, version, networkID int32, key ed25519.PrivateKey) (*Node, error) {
 	node := &Node{
 		ID:       id,
 		AddrList: cloneAddressList(list),

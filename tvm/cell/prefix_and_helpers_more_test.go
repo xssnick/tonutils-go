@@ -179,34 +179,6 @@ func TestDictFixedSliceValidateAndCompatHelpers(t *testing.T) {
 		t.Fatalf("unexpected shuffled foreach result: ok=%v err=%v seen=%d", ok, err, seen)
 	}
 
-	filtered, changes, err := fixedDictFilterItems(items, nil)
-	if err != nil || changes != 0 || len(filtered) != len(items) {
-		t.Fatalf("unexpected nil-filter result: len=%d changes=%d err=%v", len(filtered), changes, err)
-	}
-	filtered, changes, err = fixedDictFilterItems(items, func(_ *Slice, key *Cell) (DictFilterAction, error) {
-		if key.MustBeginParse().MustLoadUInt(8) == 0x10 {
-			return DictFilterKeepRest, nil
-		}
-		return DictFilterRemove, nil
-	})
-	if err != nil || changes != 0 || len(filtered) != len(items) {
-		t.Fatalf("unexpected keep-rest filter result: len=%d changes=%d err=%v", len(filtered), changes, err)
-	}
-	filtered, changes, err = fixedDictFilterItems(items, func(_ *Slice, key *Cell) (DictFilterAction, error) {
-		if key.MustBeginParse().MustLoadUInt(8) == 0x20 {
-			return DictFilterRemoveRest, nil
-		}
-		return DictFilterKeep, nil
-	})
-	if err != nil || changes != 2 || len(filtered) != 1 {
-		t.Fatalf("unexpected remove-rest filter result: len=%d changes=%d err=%v", len(filtered), changes, err)
-	}
-	if _, _, err = fixedDictFilterItems(items, func(_ *Slice, _ *Cell) (DictFilterAction, error) {
-		return DictFilterAction(255), nil
-	}); err == nil {
-		t.Fatal("fixedDictFilterItems should reject unknown actions")
-	}
-
 	refA := BeginCell().MustStoreUInt(0xa, 4).EndCell()
 	refB := BeginCell().MustStoreUInt(0xb, 4).EndCell()
 	sl := mustBitSlice(t, "101100", refA, refB)
@@ -373,21 +345,6 @@ func TestDictionaryFixedAPI_NilAndErrorBranches(t *testing.T) {
 	}
 	if _, _, err := nilDict.LookupNearestKey(mustDictKey(t, 1, 8), false, false, false); !errors.Is(err, ErrNoSuchKeyInDict) {
 		t.Fatalf("nil LookupNearestKey should fail with ErrNoSuchKeyInDict, got %v", err)
-	}
-
-	if _, err := rebuildPlainDict(8, []DictItem{{Key: mustDictKey(t, 1, 7), Value: mustBitSlice(t, "1")}}); err == nil {
-		t.Fatal("rebuildPlainDict should reject invalid key size")
-	}
-	if _, err := rebuildPlainDict(8, []DictItem{{Key: mustDictKey(t, 1, 8), Value: nil}}); err == nil {
-		t.Fatal("rebuildPlainDict should reject nil values")
-	}
-
-	root, err := rebuildPlainDict(8, []DictItem{
-		{Key: mustDictKey(t, 1, 8), Value: mustPrefixValue(t, 0xaa, 8).MustBeginParse()},
-		{Key: mustDictKey(t, 2, 8), Value: mustPrefixValue(t, 0xbb, 8).MustBeginParse()},
-	})
-	if err != nil || root == nil {
-		t.Fatalf("rebuildPlainDict should rebuild a root: root=%v err=%v", root, err)
 	}
 
 	dict := NewDict(8)

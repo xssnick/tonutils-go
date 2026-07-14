@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
 )
@@ -99,6 +100,40 @@ func TestRLDPManagerQueryRouting(t *testing.T) {
 	err = w.queryHandler([]byte{0xAA}, &rldp.Query{ID: queryID, Data: payload})
 	if !errors.Is(err, rootSentinel) || !rootCalled {
 		t.Fatalf("expected root query handler call, got: %v", err)
+	}
+}
+
+func TestRLDPManagerRoutesMessagesThroughADNLOverlay(t *testing.T) {
+	baseADNL := newMockADNL()
+	adnlWrapper := CreateExtendedADNL(baseADNL)
+	rMock := newMockRLDP(adnlWrapper)
+	CreateExtendedRLDP(rMock)
+	if rMock.onMessage == nil {
+		t.Fatal("expected message handler to be set")
+	}
+
+	overlayID := bytes.Repeat([]byte{0x9B}, 32)
+	payload := GetRandomPeers{}
+
+	o := adnlWrapper.WithOverlay(overlayID)
+	called := false
+	o.SetCustomMessageHandler(func(msg *adnl.MessageCustom) error {
+		called = true
+		if _, ok := msg.Data.(GetRandomPeers); !ok {
+			t.Fatalf("payload was not routed through overlay custom handler: %T", msg.Data)
+		}
+		return nil
+	})
+
+	data, err := tl.Serialize(WrapMessage(overlayID, payload), true)
+	if err != nil {
+		t.Fatalf("message serialize failed: %v", err)
+	}
+	if err = rMock.onMessage(bytes.Repeat([]byte{0x9C}, 32), data); err != nil {
+		t.Fatalf("message routing failed: %v", err)
+	}
+	if !called {
+		t.Fatal("expected overlay custom handler call")
 	}
 }
 

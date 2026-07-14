@@ -15,18 +15,13 @@ type augmentedRootView struct {
 
 type augmentedCombineNode struct {
 	view     augmentedRootView
-	label    augmentedLabel
+	label    Slice
 	labelLen uint
-	payload  *Slice
+	payload  Slice
 	extra    *Cell
 	left     *Cell
 	right    *Cell
 	leaf     bool
-}
-
-type augmentedLabel struct {
-	bits   []byte
-	bitLen uint
 }
 
 // CombineWith structurally merges other into d.
@@ -289,14 +284,14 @@ func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*au
 		return nil, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", view.cell.GetType())
 	}
 
-	loader, err := view.cell.BeginParse()
-	if err != nil {
+	var loader Slice
+	if err := view.cell.BeginParseInto(&loader); err != nil {
 		return nil, err
 	}
 	if loader.cell.IsSpecial() {
 		return nil, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", loader.cell.GetType())
 	}
-	labelLen, labelBuilder, err := loadLabel(view.keySz, loader, BeginCell())
+	labelLen, label, err := readLabelView(view.keySz, &loader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dictionary label: %w", err)
 	}
@@ -304,12 +299,7 @@ func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*au
 		return nil, fmt.Errorf("invalid augmented dictionary label skip %d for label length %d", view.skip, labelLen)
 	}
 
-	label, err := augmentedLabelFromBuilder(labelBuilder, labelLen)
-	if err != nil {
-		return nil, err
-	}
-
-	payload := loader.Copy()
+	payload := loader
 	node := &augmentedCombineNode{
 		view:     view,
 		label:    label,
@@ -319,7 +309,8 @@ func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*au
 	}
 
 	if node.leaf {
-		extra, err := captureConsumedPrefix(payload.Copy(), aug.SkipExtra)
+		payloadCopy := payload
+		extra, err := captureConsumedPrefix(&payloadCopy, aug.SkipExtra)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load augmented dictionary leaf extra: %w", err)
 		}
@@ -335,7 +326,7 @@ func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*au
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dictionary right fork: %w", err)
 	}
-	extra, err := captureConsumedPrefix(loader, aug.SkipExtra)
+	extra, err := captureConsumedPrefix(&loader, aug.SkipExtra)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dictionary fork extra: %w", err)
 	}
@@ -434,7 +425,7 @@ func materializeAugmentedNodeForCombine(node *augmentedCombineNode, keySz uint) 
 }
 
 func materializeAugmentedNodeSuffixForCombine(node *augmentedCombineNode, skip uint, keySz uint) (*Cell, error) {
-	payload, err := augmentedPayloadBuilderForCombine(node.payload)
+	payload, err := augmentedPayloadBuilderForCombine(&node.payload)
 	if err != nil {
 		return nil, err
 	}
@@ -445,18 +436,14 @@ func augmentedPayloadBuilderForCombine(payload *Slice) (*Builder, error) {
 	b := BeginCell()
 
 	bits := payload.BitsLeft()
-	data, err := payload.PreloadSlice(bits)
-	if err != nil {
+	if err := payload.loadSliceInto(b.data[:], bits, true); err != nil {
 		return nil, err
 	}
-	if err = b.StoreSlice(data, bits); err != nil {
-		return nil, err
-	}
+	b.bitsSz = bits
 
-	refs := payload.Copy()
-	refsCount := refs.RefsNum()
+	refsCount := payload.RefsNum()
 	for i := 0; i < refsCount; i++ {
-		ref, err := refs.LoadRefCell()
+		ref, err := payload.peekRefCellAt(i)
 		if err != nil {
 			return nil, err
 		}
@@ -477,14 +464,13 @@ func commonAugmentedLabelPrefix(left, right *augmentedCombineNode) uint {
 	if right.visibleLabelLen() < limit {
 		limit = right.visibleLabelLen()
 	}
-
-	for i := uint(0); i < limit; i++ {
-		if left.visibleLabelBit(i) != right.visibleLabelBit(i) {
-			return i
-		}
+	leftLabel := left.visibleLabelValue(0, limit)
+	rightLabel := right.visibleLabelValue(0, limit)
+	matched, err := commonSlicePrefix(&leftLabel, &rightLabel, limit)
+	if err != nil {
+		panic(err)
 	}
-
-	return limit
+	return matched
 }
 
 func (n *augmentedCombineNode) remainingKeyBits() uint {
@@ -496,11 +482,21 @@ func (n *augmentedCombineNode) visibleLabelLen() uint {
 }
 
 func (n *augmentedCombineNode) visibleLabelBit(bit uint) uint64 {
-	return n.label.bit(n.view.skip + bit)
+	value, _ := n.label.BitAt(n.view.skip + bit)
+	return uint64(value)
 }
 
 func (n *augmentedCombineNode) visibleLabelSlice(start, length uint) *Slice {
-	return n.label.slice(n.view.skip+start, length)
+	label := n.visibleLabelValue(start, length)
+	return &label
+}
+
+func (n *augmentedCombineNode) visibleLabelValue(start, length uint) Slice {
+	label := n.label
+	label.bitStart += uint16(n.view.skip + start)
+	label.bitEnd = label.bitStart + uint16(length)
+	label.refEnd = label.refStart
+	return label
 }
 
 func (n *augmentedCombineNode) consumeVisibleLabelBits(bits uint) augmentedRootView {
@@ -517,40 +513,4 @@ func (n *augmentedCombineNode) leftChildView(keySz uint) augmentedRootView {
 
 func (n *augmentedCombineNode) rightChildView(keySz uint) augmentedRootView {
 	return augmentedRootView{cell: n.right, keySz: keySz}
-}
-
-func augmentedLabelFromBuilder(label *Builder, bitLen uint) (augmentedLabel, error) {
-	if bitLen == 0 {
-		return augmentedLabel{}, nil
-	}
-
-	bits, err := label.ToSlice().LoadSlice(bitLen)
-	if err != nil {
-		return augmentedLabel{}, fmt.Errorf("failed to load augmented dictionary label bits: %w", err)
-	}
-
-	return augmentedLabel{
-		bits:   append([]byte(nil), bits...),
-		bitLen: bitLen,
-	}, nil
-}
-
-func (l augmentedLabel) bit(bit uint) uint64 {
-	if l.bits[bit/8]&(1<<(7-bit%8)) != 0 {
-		return 1
-	}
-	return 0
-}
-
-func (l augmentedLabel) slice(start, length uint) *Slice {
-	if length == 0 {
-		return BeginCell().ToSlice()
-	}
-
-	b := BeginCell()
-	for i := uint(0); i < length; i++ {
-		b.MustStoreUInt(l.bit(start+i), 1)
-	}
-
-	return b.ToSlice()
 }

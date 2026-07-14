@@ -49,12 +49,15 @@ func encodeBeginsConstPayload(value *cell.Slice, totalBits uint) *cell.Builder {
 	return b
 }
 
+// constant prefix, computed once instead of on every use
+var sdBeginsConstPrefix = helpers.UIntPrefix(0xD728>>3, 13)
+
 func (op *OpSDBEGINSCONST) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(helpers.UIntPrefix(0xD728>>3, 13))
+	return helpers.PrefixSlices(sdBeginsConstPrefix)
 }
 
 func (op *OpSDBEGINSCONST) Deserialize(code *cell.Slice) error {
-	if _, err := code.LoadSlice(13); err != nil {
+	if err := code.SkipBits(13); err != nil {
 		return err
 	}
 	arg, err := code.LoadUInt(8)

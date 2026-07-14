@@ -12,6 +12,9 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUXC(0, 0) })
 }
 
+// constant prefix, computed once instead of on every decode
+var puxcPrefix = helpers.BytesPrefix(0x52)
+
 func PUXC(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
@@ -36,7 +39,7 @@ func PUXC(i, j uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d PUXC", i, j)
 		},
-		BitPrefix: helpers.BytesPrefix(0x52),
+		BitPrefix: puxcPrefix,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
 		},

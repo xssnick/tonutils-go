@@ -27,6 +27,29 @@ func TestFirstDialAddressIPv6(t *testing.T) {
 	}
 }
 
+func TestFirstDialAddressSkipsQUIC(t *testing.T) {
+	addr, dial, err := firstDialAddress([]address.Address{
+		&address.QUIC{
+			IP:   net.IPv4(127, 0, 0, 1).To4(),
+			Port: 4433,
+		},
+		&address.UDP{
+			IP:   net.IPv4(127, 0, 0, 2).To4(),
+			Port: 30303,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if dial != "127.0.0.2:30303" {
+		t.Fatalf("unexpected dial string %q", dial)
+	}
+	if _, ok := addr.(*address.UDP); !ok {
+		t.Fatalf("expected udp address, got %T", addr)
+	}
+}
+
 func TestNodesFromConfigUDP6(t *testing.T) {
 	nodes, err := nodesFromConfig(&liteclient.GlobalConfig{
 		DHT: liteclient.DHTConfig{

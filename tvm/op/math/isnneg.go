@@ -12,7 +12,7 @@ func init() {
 func ISNNEG() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopInt()
+			i0, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}

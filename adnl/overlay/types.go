@@ -15,6 +15,8 @@ func init() {
 	tl.Register(NodeToSign{}, "overlay.node.toSign id:adnl.id.short overlay:int256 version:int = overlay.node.ToSign")
 	tl.Register(NodesList{}, "overlay.nodes nodes:(vector overlay.node) = overlay.Nodes")
 	tl.Register(GetRandomPeers{}, "overlay.getRandomPeers peers:overlay.nodes = overlay.Nodes")
+	tl.Register(Pong{}, "overlay.pong = overlay.Pong")
+	tl.Register(Ping{}, "overlay.ping = overlay.Pong")
 	tl.Register(Query{}, "overlay.query overlay:int256 = True")
 	tl.Register(Message{}, "overlay.message overlay:int256 = overlay.Message")
 	tl.Register(Certificate{}, "overlay.certificate issued_by:PublicKey expire_at:int max_size:int signature:bytes = overlay.Certificate")
@@ -25,18 +27,26 @@ func init() {
 	tl.Register(Broadcast{}, "overlay.broadcast src:PublicKey certificate:overlay.Certificate flags:int data:bytes date:int signature:bytes = overlay.Broadcast")
 	tl.Register(BroadcastFEC{}, "overlay.broadcastFec src:PublicKey certificate:overlay.Certificate data_hash:int256 data_size:int flags:int data:bytes seqno:int fec:fec.Type date:int signature:bytes = overlay.Broadcast")
 	tl.Register(BroadcastFECShort{}, "overlay.broadcastFecShort src:PublicKey certificate:overlay.Certificate broadcast_hash:int256 part_data_hash:int256 seqno:int signature:bytes = overlay.Broadcast")
+	tl.Register(BroadcastID{}, "overlay.broadcast.id src:int256 data_hash:int256 flags:int = overlay.broadcast.Id")
 	tl.Register(BroadcastFECID{}, "overlay.broadcastFec.id src:int256 type:int256 data_hash:int256 size:int flags:int = overlay.broadcastFec.Id")
 	tl.Register(BroadcastFECPartID{}, "overlay.broadcastFec.partId broadcast_hash:int256 data_hash:int256 seqno:int = overlay.broadcastFec.PartId")
 	tl.Register(BroadcastToSign{}, "overlay.broadcast.toSign hash:int256 date:int = overlay.broadcast.ToSign")
 	tl.Register(FECReceived{}, "overlay.fec.received hash:int256 = overlay.Broadcast")
 	tl.Register(FECCompleted{}, "overlay.fec.completed hash:int256 = overlay.Broadcast")
+	tl.Register(BroadcastTwoStepSimple{}, "overlay.broadcastTwostepSimple flags:int date:int src:PublicKey src_adnl_id:int256 certificate:overlay.Certificate data:bytes extra:bytes signature:bytes = overlay.Broadcast")
+	tl.Register(BroadcastTwoStepFEC{}, "overlay.broadcastTwostepFec flags:int date:int src:PublicKey src_adnl_id:int256 certificate:overlay.Certificate data_hash:int256 data_size:int seqno:int part:bytes extra:bytes signature:bytes = overlay.Broadcast")
+	tl.Register(BroadcastTwoStepID{}, "overlay.broadcastTwostep.id flags:int date:int src:int256 src_adnl_id:int256 data_hash:int256 data_size:int part_size:int extra:bytes = overlay.broadcastTwostep.Id")
+	tl.Register(BroadcastTwoStepSimpleToSign{}, "overlay.broadcastTwostepSimple.toSign id:int256 data:bytes = overlay.broadcastTwostepSimple.ToSign")
+	tl.Register(BroadcastTwoStepFECToSign{}, "overlay.broadcastTwostepFec.toSign id:int256 seqno:int part:bytes = overlay.broadcastTwostepFec.ToSign")
 }
 
 // BroadcastFlagAnySender matches TON overlay any-sender broadcast flag.
 // When set, broadcast identity is not tied to a specific source key.
 const BroadcastFlagAnySender int32 = 1
 
-const _BroadcastFlagAnySender = BroadcastFlagAnySender
+// BroadcastFlagNoTwoStep matches TON overlay no-twostep broadcast flag.
+// It is stripped from two-step wire messages by cppnode before signing.
+const BroadcastFlagNoTwoStep int32 = 256
 
 type CheckableCert interface {
 	Check(issuedToId []byte, overlayId []byte, dataSize uint32, isFEC bool) (CertCheckResult, error)
@@ -74,7 +84,7 @@ func (c Certificate) Check(issuedToId []byte, overlayId []byte, dataSize uint32,
 		return CertCheckResultForbidden, fmt.Errorf("unsupported issuer key format")
 	}
 
-	if !ed25519.Verify(issuer.Key, toSign, c.Signature) {
+	if !verifyCertSignatureCached(issuer.Key, toSign, c.Signature) {
 		return CertCheckResultForbidden, fmt.Errorf("incorrect cert signature")
 	}
 	return CertCheckResultTrusted, nil
@@ -130,7 +140,7 @@ func (c CertificateV2) Check(issuedToId []byte, overlayId []byte, dataSize uint3
 		return CertCheckResultForbidden, fmt.Errorf("unsupported issuer key format")
 	}
 
-	if !ed25519.Verify(issuer.Key, toSign, c.Signature) {
+	if !verifyCertSignatureCached(issuer.Key, toSign, c.Signature) {
 		return CertCheckResultForbidden, fmt.Errorf("incorrect cert signature")
 	}
 	if (c.Flags & _CertFlagTrusted) == 0 {
@@ -146,6 +156,12 @@ type Broadcast struct {
 	Data        []byte `tl:"bytes"`
 	Date        int32  `tl:"int"`
 	Signature   []byte `tl:"bytes"`
+}
+
+type BroadcastID struct {
+	Source   []byte `tl:"int256"`
+	DataHash []byte `tl:"int256"`
+	Flags    int32  `tl:"int"`
 }
 
 type BroadcastFEC struct {
@@ -193,6 +209,53 @@ type BroadcastToSign struct {
 	Date uint32 `tl:"int"`
 }
 
+type BroadcastTwoStepSimple struct {
+	Flags       int32  `tl:"int"`
+	Date        uint32 `tl:"int"`
+	Source      any    `tl:"struct boxed [pub.ed25519]"`
+	SourceADNL  []byte `tl:"int256"`
+	Certificate any    `tl:"struct boxed [overlay.emptyCertificate,overlay.certificate,overlay.certificateV2]"`
+	Data        []byte `tl:"bytes"`
+	Extra       []byte `tl:"bytes"`
+	Signature   []byte `tl:"bytes"`
+}
+
+type BroadcastTwoStepFEC struct {
+	Flags       int32  `tl:"int"`
+	Date        uint32 `tl:"int"`
+	Source      any    `tl:"struct boxed [pub.ed25519]"`
+	SourceADNL  []byte `tl:"int256"`
+	Certificate any    `tl:"struct boxed [overlay.emptyCertificate,overlay.certificate,overlay.certificateV2]"`
+	DataHash    []byte `tl:"int256"`
+	DataSize    uint32 `tl:"int"`
+	Seqno       uint32 `tl:"int"`
+	Part        []byte `tl:"bytes"`
+	Extra       []byte `tl:"bytes"`
+	Signature   []byte `tl:"bytes"`
+}
+
+type BroadcastTwoStepID struct {
+	Flags      int32  `tl:"int"`
+	Date       uint32 `tl:"int"`
+	Source     []byte `tl:"int256"`
+	SourceADNL []byte `tl:"int256"`
+	DataHash   []byte `tl:"int256"`
+	DataSize   uint32 `tl:"int"`
+	PartSize   uint32 `tl:"int"`
+	Extra      []byte `tl:"bytes"`
+}
+
+type BroadcastTwoStepSimpleToSign struct {
+	ID   []byte `tl:"int256"`
+	Data []byte `tl:"bytes"`
+}
+
+type BroadcastTwoStepFECToSign struct {
+	ID    []byte `tl:"int256"`
+	Seqno uint32 `tl:"int"`
+	Part  []byte `tl:"bytes"`
+}
+
 type Node struct {
 	ID        any    `tl:"struct boxed [pub.ed25519,pub.aes]"`
 	Overlay   []byte `tl:"int256"`
@@ -213,6 +276,9 @@ type NodesList struct {
 type GetRandomPeers struct {
 	List NodesList `tl:"struct"`
 }
+
+type Pong struct{}
+type Ping struct{}
 
 type Query struct {
 	Overlay []byte `tl:"int256"`

@@ -8,7 +8,11 @@ import (
 func DICTIGETJMPZ() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntRange(0, 1023)
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
+			i0, err := state.Stack.PopIntRangeInt64(0, 1023)
 			if err != nil {
 				return err
 			}
@@ -24,7 +28,7 @@ func DICTIGETJMPZ() *helpers.SimpleOP {
 			}
 
 			if c1 != nil {
-				if v, err := c1.AsDict(uint(i0.Uint64())).SetTrace(state.Cells.Trace()).LoadValueByIntKey(i2); err == nil &&
+				if v, err := c1.AsDict(uint(i0)).SetTrace(state.Cells.Trace()).LoadValueByIntKey(i2); err == nil &&
 					v != nil {
 					cnt := &vm.OrdinaryContinuation{
 						Data: vm.ControlData{
@@ -39,7 +43,7 @@ func DICTIGETJMPZ() *helpers.SimpleOP {
 				}
 			}
 
-			return state.Stack.PushInt(i2)
+			return state.Stack.PushOwnedInt(i2)
 		},
 		Name:      "DICTIGETJMPZ",
 		BitPrefix: helpers.BytesPrefix(0xF4, 0xBC),

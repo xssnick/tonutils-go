@@ -45,9 +45,9 @@ func UIntPrefix(value uint64, bits uint) BitPrefix {
 }
 
 func PrefixSlices(prefixes ...BitPrefix) []*cell.Slice {
-	res := make([]*cell.Slice, 0, len(prefixes))
-	for _, prefix := range prefixes {
-		res = append(res, prefix.ToSlice())
+	res := make([]*cell.Slice, len(prefixes))
+	for i, prefix := range prefixes {
+		res[i] = prefix.ToSlice()
 	}
 	return res
 }

@@ -151,3 +151,156 @@ func TestTransactionDirectSmallCellsMatchTLB(t *testing.T) {
 		t.Fatalf("hash update mismatch: got %x want %x", hashUpdate.Hash(), wantHashUpdate.Hash())
 	}
 }
+
+func TestTransactionDirectAccountStorageRejectsInvalidInputs(t *testing.T) {
+	if _, err := buildTransactionAccountStorageBuilder(tlb.AccountStatusNonExist, 1, big.NewInt(0), nil, nil, nil); err == nil {
+		t.Fatal("expected non-existing account storage error")
+	}
+	if _, err := buildTransactionAccountStorageBuilder(tlb.AccountStatus("UNKNOWN"), 1, big.NewInt(0), nil, nil, nil); err == nil {
+		t.Fatal("expected unknown account status error")
+	}
+	if _, err := buildTransactionAccountStorageCell(tlb.AccountStatusActive, 1, big.NewInt(-1), nil, &tlb.StateInit{}, nil); err == nil {
+		t.Fatal("expected account storage cell balance error")
+	}
+	if _, err := buildTransactionAccountStorageBuilder(tlb.AccountStatusActive, 1, big.NewInt(-1), nil, &tlb.StateInit{}, nil); err == nil {
+		t.Fatal("expected negative account balance error")
+	}
+
+	depth := uint64(32)
+	if _, err := buildTransactionAccountStorageBuilder(tlb.AccountStatusActive, 1, big.NewInt(0), nil, &tlb.StateInit{Depth: &depth}, nil); err == nil {
+		t.Fatal("expected oversized state init depth error")
+	}
+}
+
+func TestTransactionDirectStateAndStatusSerializationRejectsInvalidInputs(t *testing.T) {
+	if err := storeTransactionAccountStatus(cell.BeginCell(), tlb.AccountStatus("UNKNOWN")); err == nil {
+		t.Fatal("expected unknown account status error")
+	}
+
+	depth := uint64(32)
+	if _, err := buildTransactionStateInitCell(&tlb.StateInit{Depth: &depth}); err == nil {
+		t.Fatal("expected oversized state init depth error")
+	}
+}
+
+func TestTransactionDirectCurrencyAndStorageSerializationRejectsInvalidInputs(t *testing.T) {
+	if err := storeTransactionCurrencyCollection(cell.BeginCell(), big.NewInt(-1), nil); err == nil {
+		t.Fatal("expected negative currency error")
+	}
+	tooBigCoins := new(big.Int).Lsh(big.NewInt(1), 16*8)
+	if err := storeTransactionCurrencyCollection(cell.BeginCell(), tooBigCoins, nil); err == nil {
+		t.Fatal("expected oversized currency error")
+	}
+
+	if err := storeTransactionStorageUsed(cell.BeginCell(), tlb.StorageUsed{
+		CellsUsed: big.NewInt(-1),
+		BitsUsed:  big.NewInt(0),
+	}); err == nil {
+		t.Fatal("expected negative storage cells error")
+	}
+	if err := storeTransactionStorageUsed(cell.BeginCell(), tlb.StorageUsed{
+		CellsUsed: big.NewInt(0),
+		BitsUsed:  big.NewInt(-1),
+	}); err == nil {
+		t.Fatal("expected negative storage bits error")
+	}
+}
+
+func TestTransactionDirectAccountStateRejectsInvalidInputs(t *testing.T) {
+	if _, err := buildTransactionAccountStateCell(tonopsTestAddr, tlb.StorageUsed{
+		CellsUsed: big.NewInt(-1),
+		BitsUsed:  big.NewInt(0),
+	}, nil, 0, nil, cell.BeginCell()); err == nil {
+		t.Fatal("expected invalid storage info error")
+	}
+
+	largeStorage := cell.BeginCell().MustStoreSlice(make([]byte, 100), 800)
+	if _, err := buildTransactionAccountStateCell(tonopsTestAddr, tlb.StorageUsed{
+		CellsUsed: big.NewInt(0),
+		BitsUsed:  big.NewInt(0),
+	}, nil, 0, nil, largeStorage); err == nil {
+		t.Fatal("expected oversized account storage builder error")
+	}
+}
+
+func TestTransactionBuildCellRejectsInvalidEnvelopeInputs(t *testing.T) {
+	t.Run("account address", func(t *testing.T) {
+		params := transactionSerializeTestBuildParams()
+		params.accountAddr = nil
+		if _, err := buildTransactionCell(params); err == nil {
+			t.Fatal("expected invalid account address error")
+		}
+	})
+
+	t.Run("description", func(t *testing.T) {
+		params := transactionSerializeTestBuildParams()
+		params.description.skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonType("UNKNOWN")}
+		if _, err := buildTransactionCell(params); err == nil {
+			t.Fatal("expected description serialization error")
+		}
+	})
+
+	t.Run("original status", func(t *testing.T) {
+		params := transactionSerializeTestBuildParams()
+		params.origStatus = tlb.AccountStatus("UNKNOWN")
+		if _, err := buildTransactionCell(params); err == nil {
+			t.Fatal("expected original status serialization error")
+		}
+	})
+
+	t.Run("end status", func(t *testing.T) {
+		params := transactionSerializeTestBuildParams()
+		params.endStatus = tlb.AccountStatus("UNKNOWN")
+		if _, err := buildTransactionCell(params); err == nil {
+			t.Fatal("expected end status serialization error")
+		}
+	})
+
+	t.Run("total fees", func(t *testing.T) {
+		params := transactionSerializeTestBuildParams()
+		params.totalFees = big.NewInt(-1)
+		if _, err := buildTransactionCell(params); err == nil {
+			t.Fatal("expected total fees serialization error")
+		}
+	})
+}
+
+func TestTransactionBuildComputeSkippedPhase(t *testing.T) {
+	phase := buildTransactionComputePhase(transactionBuildDescriptionParams{
+		skipReason: &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas},
+	})
+
+	skipped, ok := phase.Phase.(tlb.ComputePhaseSkipped)
+	if !ok {
+		t.Fatalf("compute phase = %T, want skipped", phase.Phase)
+	}
+	if skipped.Reason.Type != tlb.ComputeSkipReasonNoGas {
+		t.Fatalf("skip reason = %s, want %s", skipped.Reason.Type, tlb.ComputeSkipReasonNoGas)
+	}
+}
+
+func TestParseTransactionRejectsMalformedTransactionCell(t *testing.T) {
+	malformed := cell.BeginCell().MustStoreUInt(0, 1).EndCell()
+	res := &TransactionExecutionResult{TransactionCell: malformed}
+	if _, err := res.ParseTransaction(); err == nil {
+		t.Fatal("expected malformed transaction cell error")
+	}
+	var empty *TransactionExecutionResult
+	if _, err := empty.ParseTransaction(); err == nil {
+		t.Fatal("expected error for missing transaction cell")
+	}
+}
+
+func transactionSerializeTestBuildParams() transactionBuildParams {
+	return transactionBuildParams{
+		accountAddr: tonopsTestAddr,
+		startLT:     1,
+		now:         uint32(tonopsTestTime.Unix()),
+		origStatus:  tlb.AccountStatusActive,
+		endStatus:   tlb.AccountStatusActive,
+		totalFees:   big.NewInt(0),
+		description: transactionBuildDescriptionParams{
+			skipReason: &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoState},
+		},
+	}
+}

@@ -24,9 +24,12 @@ func RSHIFTFLOOR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
 				return err
+			}
+			if x == nil {
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, y.Uint64(), true), false)
 			}
 
 			return state.Stack.PushInt(x.Rsh(x, uint(y.Uint64())))
@@ -41,9 +44,12 @@ func RSHIFTCODEFLOOR(value int8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
 				return err
+			}
+			if x == nil {
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), true), false)
 			}
 
 			return state.Stack.PushInt(x.Rsh(x, uint(imm())))

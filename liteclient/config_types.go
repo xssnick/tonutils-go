@@ -76,7 +76,7 @@ func (a *DHTAddress) UnmarshalJSON(data []byte) error {
 	a.IPv6 = nil
 
 	switch raw.Type {
-	case "adnl.address.udp", "":
+	case "adnl.address.udp", "adnl.address.quic", "":
 		if len(raw.IP) == 0 {
 			return nil
 		}
@@ -152,6 +152,13 @@ func (a DHTAddress) ToADNLAddress() (address.Address, error) {
 			return nil, fmt.Errorf("missing ipv6 address")
 		}
 		return address.NewAddress(a.IPv6, int32(a.Port))
+	case "adnl.address.quic":
+		b := make(net.IP, net.IPv4len)
+		binary.BigEndian.PutUint32(b, uint32(int32(a.IP)))
+		return &address.QUIC{
+			IP:   b,
+			Port: int32(a.Port),
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported address type %q", a.Type)
 	}

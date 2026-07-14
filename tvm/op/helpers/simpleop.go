@@ -10,6 +10,7 @@ type SimpleOP struct {
 	BitPrefix    BitPrefix
 	Name         string
 	BaseGasPrice int64
+	MinVersion   int
 }
 
 func (op *SimpleOP) GetPrefixes() []*cell.Slice {
@@ -21,8 +22,7 @@ func (op *SimpleOP) Deserialize(code *cell.Slice) error {
 }
 
 func (op *SimpleOP) DeserializeMatched(code *cell.Slice) error {
-	_, err := code.LoadSlice(op.BitPrefix.Bits)
-	return err
+	return code.SkipBits(op.BitPrefix.Bits)
 }
 
 func (op *SimpleOP) Serialize() *cell.Builder {
@@ -35,6 +35,10 @@ func (op *SimpleOP) SerializeText() string {
 
 func (op *SimpleOP) InstructionBits() int64 {
 	return int64(op.BitPrefix.Bits)
+}
+
+func (op *SimpleOP) MinGlobalVersion() int {
+	return op.MinVersion
 }
 
 func (op *SimpleOP) Reusable() bool {

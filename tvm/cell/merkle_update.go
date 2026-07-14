@@ -134,7 +134,9 @@ func MayApplyMerkleUpdate(from, update *Cell) error {
 		return err
 	}
 
-	if from.HashKey(0) != updateFrom.HashKey(0) {
+	fromHash := from.HashKey(0)
+	updateFromHash := updateFrom.HashKey(0)
+	if fromHash != updateFromHash {
 		return fmt.Errorf("hash mismatch")
 	}
 	return nil
@@ -155,8 +157,10 @@ func ApplyMerkleUpdate(from, update *Cell) (*Cell, MerkleUpdateReuse, error) {
 		return nil, MerkleUpdateReuse{}, err
 	}
 
-	if from.HashKey(0) != updateFrom.HashKey(0) {
-		return nil, MerkleUpdateReuse{}, fmt.Errorf("invalid Merkle update: expected old value hash = %x, applied to value with hash = %x", updateFrom.HashKey(0), from.HashKey(0))
+	fromHash := from.HashKey(0)
+	updateFromHash := updateFrom.HashKey(0)
+	if fromHash != updateFromHash {
+		return nil, MerkleUpdateReuse{}, fmt.Errorf("invalid Merkle update: expected old value hash = %x, applied to value with hash = %x", updateFromHash, fromHash)
 	}
 
 	return applyMerkleUpdateWithSourceIndex(from, updateFrom, updateTo)
@@ -179,22 +183,18 @@ func (t *CellUsageTree) CreateMerkleUpdate(from, to *Cell) (*Cell, error) {
 
 func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, error) {
 	prevUseMark := t.useMark
-	prevMarks := make([]bool, len(t.nodes))
-	for i := range t.nodes {
-		prevMarks[i] = t.nodes[i].marked
-	}
+	prevMarks := t.marksSnapshot()
 	defer func() {
 		t.useMark = prevUseMark
-		for i := range t.nodes {
-			t.nodes[i].marked = i < len(prevMarks) && prevMarks[i]
-		}
+		t.restoreMarks(prevMarks)
 	}()
 
 	updateTo, err := buildMerkleProofBodyByPruneFunc(to, func(c *Cell) (bool, error) {
 		loaded := c
-		if cached, ok := t.loadedCellByHash(c.HashKey()); ok {
+		hash := c.HashKey()
+		if cached, ok := t.loadedCellByHash(hash); ok {
 			cached = loadedForBoundary(c, cached)
-			if cached.HashKey() == c.HashKey() {
+			if cached.HashKey() == hash {
 				loaded = cached
 			}
 		}
@@ -219,7 +219,7 @@ func (t *CellUsageTree) createMerkleUpdateRaw(from, to *Cell) (*Cell, *Cell, err
 	}
 
 	t.SetUseMarkForIsLoaded(true)
-	state := newUsageProofBuildState()
+	state := newUsageProofBuildState(t.NodeCount())
 	if err = collectUsageProofHashes(from, t, t.RootNode(), state); err != nil {
 		return nil, nil, fmt.Errorf("failed to collect merkle update source proof: %w", err)
 	}
@@ -262,6 +262,8 @@ func collectMerkleUpdateRoot(updateTo *Cell, known map[Hash]*Cell, reuseCap int)
 		ready:      make(map[merkleUpdateVisitKey]*Cell, len(known)),
 		reused:     make(map[Hash]struct{}, reuseCap),
 		reusedRefs: make(map[merkleUpdateReusedRefKey]struct{}, reuseCap),
+		reusedList: make([]MerkleUpdateReusedCell, 0, reuseCap),
+		refList:    make([]MerkleUpdateReusedRef, 0, reuseCap),
 	}
 	root, _, err := collectMerkleUpdateReuse(updateTo, 0, known, &applier)
 	if err != nil {
@@ -389,7 +391,8 @@ func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpd
 
 	sourceRefs := newCellRefView(source)
 	childDepth := merkleChildDepth(source, merkleDepth)
-	for i := 0; i < source.refsCount(); i++ {
+	refsCount := source.refsCount()
+	for i := 0; i < refsCount; i++ {
 		sourceRef, err := sourceRefs.boundaryRef(i)
 		if err != nil {
 			return fmt.Errorf("failed to peek source ref %d: %w", i, err)
@@ -425,8 +428,9 @@ func (s *merkleUpdateSourceIndex) walkProof(original, source *Cell, merkleDepth 
 	}
 
 	refsCount := source.refsCount()
-	if original.refsCount() != refsCount {
-		return fmt.Errorf("merkle update source refs mismatch: got=%d want=%d", original.refsCount(), refsCount)
+	originalRefsCount := original.refsCount()
+	if originalRefsCount != refsCount {
+		return fmt.Errorf("merkle update source refs mismatch: got=%d want=%d", originalRefsCount, refsCount)
 	}
 
 	sourceRefs := newCellRefView(source)
@@ -576,7 +580,8 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 
 	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
-	for i := 0; i < cell.refsCount(); i++ {
+	refsNum := cell.refsCount()
+	for i := 0; i < refsNum; i++ {
 		ref, err := refView.boundaryRef(i)
 		if err != nil {
 			return fmt.Errorf("failed to peek destination ref %d: %w", i, err)
@@ -708,7 +713,8 @@ func (c *merkleUpdateCombiner) loadCells(cell *Cell, merkleDepth int) error {
 	info.cell = cell
 	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
-	for i := 0; i < cell.refsCount(); i++ {
+	refsCount := cell.refsCount()
+	for i := 0; i < refsCount; i++ {
 		ref, err := refView.boundaryRef(i)
 		if err != nil {
 			return fmt.Errorf("failed to peek combine ref %d: %w", i, err)
@@ -733,9 +739,10 @@ func (c *merkleUpdateCombiner) markA(cell *Cell, merkleDepth int, node merkleCom
 	}
 
 	merkleDepth = normalizeMerkleDepth(cell, merkleDepth)
-	info := c.cells[cell.HashKey(merkleDepth)]
+	hash := cell.HashKey(merkleDepth)
+	info := c.cells[hash]
 	if info == nil {
-		return fmt.Errorf("missing cached A subtree %x", cell.HashKey(merkleDepth))
+		return fmt.Errorf("missing cached A subtree %x", hash)
 	}
 	if info.aNode != 0 {
 		return nil
@@ -747,7 +754,8 @@ func (c *merkleUpdateCombiner) markA(cell *Cell, merkleDepth int, node merkleCom
 
 	refView := newCellRefView(info.cell)
 	childDepth := merkleChildDepth(info.cell, merkleDepth)
-	for i := 0; i < info.cell.refsCount(); i++ {
+	refsCount := info.cell.refsCount()
+	for i := 0; i < refsCount; i++ {
 		ref, err := refView.boundaryRef(i)
 		if err != nil {
 			return fmt.Errorf("failed to peek source ref %d: %w", i, err)
@@ -794,12 +802,13 @@ func (c *merkleUpdateCombiner) createD(cell *Cell, merkleDepth, dMerkleDepth int
 	}
 
 	merkleDepth = normalizeMerkleDepth(cell, merkleDepth)
-	key := merkleUpdateVisitKey{hash: cell.HashKey(merkleDepth), merkleDepth: dMerkleDepth}
+	hash := cell.HashKey(merkleDepth)
+	key := merkleUpdateVisitKey{hash: hash, merkleDepth: dMerkleDepth}
 	if ready, ok := c.createDReady[key]; ok {
 		return ready, nil
 	}
 
-	rebuilt, err := c.doCreateD(cell, merkleDepth, dMerkleDepth)
+	rebuilt, err := c.doCreateD(merkleDepth, dMerkleDepth, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -807,10 +816,10 @@ func (c *merkleUpdateCombiner) createD(cell *Cell, merkleDepth, dMerkleDepth int
 	return rebuilt, nil
 }
 
-func (c *merkleUpdateCombiner) doCreateD(cell *Cell, merkleDepth, dMerkleDepth int) (*Cell, error) {
-	info := c.cells[cell.HashKey(merkleDepth)]
+func (c *merkleUpdateCombiner) doCreateD(merkleDepth, dMerkleDepth int, hash Hash) (*Cell, error) {
+	info := c.cells[hash]
 	if info == nil {
-		return nil, fmt.Errorf("missing cached combine subtree %x", cell.HashKey(merkleDepth))
+		return nil, fmt.Errorf("missing cached combine subtree %x", hash)
 	}
 	if info.aNode != 0 {
 		c.usage.markPath(info.aNode)
@@ -821,7 +830,7 @@ func (c *merkleUpdateCombiner) doCreateD(cell *Cell, merkleDepth, dMerkleDepth i
 		return createPrunedBranchForCombine(info.getAnyCell(), dMerkleDepth+1, merkleDepth)
 	}
 	if info.cell == nil {
-		return nil, fmt.Errorf("missing concrete destination subtree %x", cell.HashKey(merkleDepth))
+		return nil, fmt.Errorf("missing concrete destination subtree %x", hash)
 	}
 	if info.cell.refsCount() == 0 {
 		return info.cell, nil
@@ -835,12 +844,13 @@ func (c *merkleUpdateCombiner) createA(cell *Cell, merkleDepth, aMerkleDepth int
 	}
 
 	merkleDepth = normalizeMerkleDepth(cell, merkleDepth)
-	key := merkleUpdateVisitKey{hash: cell.HashKey(merkleDepth), merkleDepth: aMerkleDepth}
+	hash := cell.HashKey(merkleDepth)
+	key := merkleUpdateVisitKey{hash: hash, merkleDepth: aMerkleDepth}
 	if ready, ok := c.createAReady[key]; ok {
 		return ready, nil
 	}
 
-	rebuilt, err := c.doCreateA(cell, merkleDepth, aMerkleDepth)
+	rebuilt, err := c.doCreateA(merkleDepth, aMerkleDepth, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -848,13 +858,13 @@ func (c *merkleUpdateCombiner) createA(cell *Cell, merkleDepth, aMerkleDepth int
 	return rebuilt, nil
 }
 
-func (c *merkleUpdateCombiner) doCreateA(cell *Cell, merkleDepth, aMerkleDepth int) (*Cell, error) {
-	info := c.cells[cell.HashKey(merkleDepth)]
+func (c *merkleUpdateCombiner) doCreateA(merkleDepth, aMerkleDepth int, hash Hash) (*Cell, error) {
+	info := c.cells[hash]
 	if info == nil {
-		return nil, fmt.Errorf("missing cached combine subtree %x", cell.HashKey(merkleDepth))
+		return nil, fmt.Errorf("missing cached combine subtree %x", hash)
 	}
 	if info.aNode == 0 {
-		return nil, fmt.Errorf("missing A usage node for subtree %x", cell.HashKey(merkleDepth))
+		return nil, fmt.Errorf("missing A usage node for subtree %x", hash)
 	}
 	if !c.usage.hasMark(info.aNode) {
 		if pruned := info.getPruned(aMerkleDepth); pruned != nil {
@@ -863,7 +873,7 @@ func (c *merkleUpdateCombiner) doCreateA(cell *Cell, merkleDepth, aMerkleDepth i
 		return createPrunedBranchForCombine(info.getAnyCell(), aMerkleDepth+1, merkleDepth)
 	}
 	if info.cell == nil {
-		return nil, fmt.Errorf("missing concrete source subtree %x", cell.HashKey(merkleDepth))
+		return nil, fmt.Errorf("missing concrete source subtree %x", hash)
 	}
 	if info.cell.refsCount() == 0 {
 		return info.cell, nil

@@ -30,7 +30,7 @@ func SUM() *helpers.SimpleOP {
 				return x.Add(x, y)
 			})
 		},
-		Name:      "SUM",
+		Name:      "ADD",
 		BitPrefix: helpers.BytesPrefix(0xA0),
 	}
 }

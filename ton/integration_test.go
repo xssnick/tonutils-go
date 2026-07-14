@@ -30,7 +30,7 @@ var apiTestNet = func() APIClientWrapped {
 	ctx, cancel := context.WithTimeout(context.Background(), integrationSetupTimeout)
 	defer cancel()
 
-	err := client.AddConnection(ctx, "109.236.80.69:49913", "AxFZRHVD1qIO9Fyva52P4vC3tRvk8ac1KKOG0c6IVio=")
+	err := client.AddConnectionsFromConfigUrl(ctx, "https://ton-blockchain.github.io/testnet-global.config.json")
 	if err != nil {
 		panic(err)
 	}

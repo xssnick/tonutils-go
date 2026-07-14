@@ -322,20 +322,21 @@ type SizeLimitsConfigV1 struct {
 }
 
 type SizeLimitsConfigV2 struct {
-	_                           Magic  `tlb:"#02"`
-	MaxMsgBits                  uint32 `tlb:"## 32"`
-	MaxMsgCells                 uint32 `tlb:"## 32"`
-	MaxLibraryCells             uint32 `tlb:"## 32"`
-	MaxVMDataDepth              uint16 `tlb:"## 16"`
-	MaxExtMsgSize               uint32 `tlb:"## 32"`
-	MaxExtMsgDepth              uint16 `tlb:"## 16"`
-	MaxAccStateCells            uint32 `tlb:"## 32"`
-	MaxMCAccStateCells          uint32 `tlb:"## 32"`
-	MaxAccPublicLibraries       uint32 `tlb:"## 32"`
-	DeferOutQueueSizeLimit      uint32 `tlb:"## 32"`
-	MaxMsgExtraCurrencies       uint32 `tlb:"## 32"`
-	MaxAccFixedPrefixLength     uint8  `tlb:"## 8"`
-	AccStateCellsForStorageDict uint32 `tlb:"## 32"`
+	_                           Magic   `tlb:"#02"`
+	MaxMsgBits                  uint32  `tlb:"## 32"`
+	MaxMsgCells                 uint32  `tlb:"## 32"`
+	MaxLibraryCells             uint32  `tlb:"## 32"`
+	MaxVMDataDepth              uint16  `tlb:"## 16"`
+	MaxExtMsgSize               uint32  `tlb:"## 32"`
+	MaxExtMsgDepth              uint16  `tlb:"## 16"`
+	MaxAccStateCells            uint32  `tlb:"## 32"`
+	MaxMCAccStateCells          uint32  `tlb:"## 32"`
+	MaxAccPublicLibraries       uint32  `tlb:"## 32"`
+	DeferOutQueueSizeLimit      uint32  `tlb:"## 32"`
+	MaxMsgExtraCurrencies       uint32  `tlb:"## 32"`
+	MaxAccFixedPrefixLength     uint8   `tlb:"## 8"`
+	AccStateCellsForStorageDict uint32  `tlb:"## 32"`
+	MaxTransactionLibraryLoads  *uint32 `tlb:"maybe ## 32"`
 }
 
 type SuspendedAddressList struct {

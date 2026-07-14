@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"log"
 	"math/big"
 	"strings"
@@ -159,18 +158,21 @@ func TestRunGetMethodReturnsErrorWhenNativeEmulatorRejectsRequest(t *testing.T) 
 	}
 }
 
-func TestMainPanicsWhenGoExecutionFailsAfterNativeSuccess(t *testing.T) {
+func TestMainKeepsParityWhenRunMethodExitsWithStackUnderflow(t *testing.T) {
 	code := rawCodeCellFromHex(t, "90787FDB3B")
 
 	recovered, logs := runMainWithCodeAndLogs(t, code)
+	if recovered != nil {
+		t.Fatalf("main panicked: %v", recovered)
+	}
 	if !strings.Contains(logs, "C CALL COMPLETED") {
 		t.Fatalf("expected native execution to complete, got logs: %q", logs)
 	}
-	if strings.Contains(logs, "GO CALL COMPLETED") {
-		t.Fatalf("expected Go execution to fail before GO completion log, got logs: %q", logs)
+	if !strings.Contains(logs, "GO CALL COMPLETED") {
+		t.Fatalf("expected Go execution to complete, got logs: %q", logs)
 	}
-	if !strings.Contains(fmt.Sprint(recovered), "Code: 2 Text:stack underflow") {
-		t.Fatalf("unexpected main panic: %v", recovered)
+	if !strings.Contains(logs, "OK, SAME") {
+		t.Fatalf("expected Go and native results to match, got logs: %q", logs)
 	}
 }
 

@@ -12,7 +12,7 @@ func init() {
 func ISZERO() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopInt()
+			i0, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -22,7 +22,7 @@ func ISZERO() *helpers.SimpleOP {
 
 			return state.Stack.PushBool(i0.Sign() == 0)
 		},
-		Name:      "ABS",
+		Name:      "ISZERO",
 		BitPrefix: helpers.BytesPrefix(0xC0, 0x00),
 	}
 }

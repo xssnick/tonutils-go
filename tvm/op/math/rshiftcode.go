@@ -16,9 +16,12 @@ func RSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popIntFinite(state)
+			x, err := popInt(state)
 			if err != nil {
 				return err
+			}
+			if x == nil {
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), true), false)
 			}
 
 			return state.Stack.PushInt(x.Rsh(x, uint(imm())))

@@ -11,10 +11,10 @@ import (
 
 const accountNotInitializedExitCode = -256
 
-func (tvm *TVM) ExecuteDetailedWithAccountProof(accountRoot *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, libraries ...*cell.Cell) (*ExecutionResult, error) {
-	proof, acc, err := prepareAccountExecutionProof(accountRoot)
+func prepareAccountExecution(code, data *cell.Cell, gas vm.Gas, stack *vm.Stack, cfg ExecutionConfig) (*cell.Cell, *cell.Cell, []*cell.Cell, *cell.MerkleProofBuilder, *ExecutionResult, error) {
+	proof, acc, err := prepareAccountExecutionProof(cfg.AccountRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if !accountCanExecute(acc) {
 		res := &ExecutionResult{
@@ -23,21 +23,27 @@ func (tvm *TVM) ExecuteDetailedWithAccountProof(accountRoot *cell.Cell, c7 tuple
 			Stack:    stack,
 		}
 		if err = attachExecutionProof(res, nil, proof); err != nil {
-			return res, err
+			return nil, nil, nil, nil, res, err
 		}
-		return res, nil
+		return nil, nil, nil, nil, res, nil
 	}
 
-	code := acc.StateInit.Code
-	data := acc.StateInit.Data
+	if code != nil && !sameCellHash(code, acc.StateInit.Code) {
+		return nil, nil, nil, nil, nil, fmt.Errorf("account root code differs from execution code")
+	}
+	if data != nil && !sameCellHash(data, acc.StateInit.Data) {
+		return nil, nil, nil, nil, nil, fmt.Errorf("account root data differs from execution data")
+	}
+
+	libraries := cfg.Libraries
 	if acc.StateInit.Lib != nil && acc.StateInit.Lib.AsCell() != nil {
-		libraries = append(append([]*cell.Cell(nil), libraries...), acc.StateInit.Lib.AsCell())
+		nextLibraries := make([]*cell.Cell, len(libraries)+1)
+		copy(nextLibraries, libraries)
+		nextLibraries[len(libraries)] = acc.StateInit.Lib.AsCell()
+		libraries = nextLibraries
 	}
 
-	return tvm.executeDetailedWithLibrariesRawOptions(code, data, c7, gas, stack, executeOptions{
-		proof:           proof,
-		skipFinalCommit: true,
-	}, libraries...)
+	return acc.StateInit.Code, acc.StateInit.Data, libraries, proof, nil, nil
 }
 
 func prepareAccountExecutionProof(accountRoot *cell.Cell) (*cell.MerkleProofBuilder, *tlb.AccountState, error) {
@@ -109,11 +115,15 @@ func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[ce
 	case *cell.Cell:
 		return markExecutionProofCell(v, usageTree, seen)
 	case *cell.Slice:
+		if v == nil {
+			return nil
+		}
 		return markExecutionProofCell(v.BaseCell(), usageTree, seen)
 	case *cell.Builder:
 		return markExecutionProofCell(v.EndCell(), usageTree, seen)
 	case tuple.Tuple:
-		for i := 0; i < v.Len(); i++ {
+		ln := v.Len()
+		for i := 0; i < ln; i++ {
 			next, err := v.RawIndex(i)
 			if err != nil {
 				return err
@@ -133,7 +143,8 @@ func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen ma
 		if err != nil {
 			return err
 		}
-		for i := 0; i < loader.RefsNum(); i++ {
+		refsNum := loader.RefsNum()
+		for i := 0; i < refsNum; i++ {
 			ref, err := loader.PeekRefCellAt(i)
 			if err != nil {
 				return err
@@ -150,12 +161,14 @@ func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen ma
 		return err
 	}
 	base := loader.BaseCell()
-	if _, ok = seen[base.HashKey()]; ok {
+	key := base.HashKey()
+	if _, ok = seen[key]; ok {
 		return nil
 	}
-	seen[base.HashKey()] = struct{}{}
+	seen[key] = struct{}{}
 
-	for i := 0; i < loader.RefsNum(); i++ {
+	refsNum := loader.RefsNum()
+	for i := 0; i < refsNum; i++ {
 		ref, err := loader.PeekRefCellAt(i)
 		if err != nil {
 			return err

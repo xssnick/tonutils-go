@@ -34,20 +34,20 @@ func runChildVMWithMode(state *vm.State, mode int) error {
 
 	gasMax := vm.GasInfinite
 	if mode&64 != 0 {
-		maxVal, err := state.Stack.PopIntRange(0, vm.GasInfinite)
+		maxVal, err := state.Stack.PopIntRangeInt64(0, vm.GasInfinite)
 		if err != nil {
 			return err
 		}
-		gasMax = maxVal.Int64()
+		gasMax = maxVal
 	}
 
 	gasLimit := vm.GasInfinite
 	if mode&8 != 0 {
-		limitVal, err := state.Stack.PopIntRange(0, vm.GasInfinite)
+		limitVal, err := state.Stack.PopIntRangeInt64(0, vm.GasInfinite)
 		if err != nil {
 			return err
 		}
-		gasLimit = limitVal.Int64()
+		gasLimit = limitVal
 	}
 
 	if mode&64 == 0 {
@@ -76,11 +76,11 @@ func runChildVMWithMode(state *vm.State, mode int) error {
 
 	retVals := -1
 	if mode&256 != 0 {
-		val, err := state.Stack.PopIntRange(0, 1<<30)
+		val, err := state.Stack.PopIntRangeInt64(0, 1<<30)
 		if err != nil {
 			return err
 		}
-		retVals = int(val.Int64())
+		retVals = int(val)
 	}
 
 	code, err := state.Stack.PopSlice()
@@ -93,11 +93,11 @@ func runChildVMWithMode(state *vm.State, mode int) error {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	stackSizeVal, err := state.Stack.PopIntRange(0, int64(maxStackSize))
+	stackSizeVal, err := state.Stack.PopIntRangeInt64(0, int64(maxStackSize))
 	if err != nil {
 		return err
 	}
-	stackSize := int(stackSizeVal.Int64())
+	stackSize := int(stackSizeVal)
 
 	childStack := vm.NewStack()
 	if stackSize > 0 {
@@ -141,6 +141,7 @@ func RUNVM(mode int) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.SlicePrefix(12, []byte{0xDB, 0x40}),
 		FixedSizeBits: 12,
+		MinVersion:    4,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(mode), 12)
 		},
@@ -160,14 +161,15 @@ func RUNVM(mode int) *helpers.AdvancedOP {
 
 func RUNVMX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
-		Name:      "RUNVMX",
-		BitPrefix: helpers.BytesPrefix(0xDB, 0x50),
+		Name:       "RUNVMX",
+		BitPrefix:  helpers.BytesPrefix(0xDB, 0x50),
+		MinVersion: 4,
 		Action: func(state *vm.State) error {
-			val, err := state.Stack.PopIntRange(0, 4095)
+			val, err := state.Stack.PopIntRangeInt64(0, 4095)
 			if err != nil {
 				return err
 			}
-			return runChildVMWithMode(state, int(val.Int64()))
+			return runChildVMWithMode(state, int(val))
 		},
 	}
 }

@@ -162,6 +162,22 @@ func BenchmarkSerializePrecompiled(b *testing.B) {
 	_ = dt
 }
 
+func BenchmarkAppendPrecompiled(b *testing.B) {
+	tst, _ := parse()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	var dt []byte
+	for i := 0; i < b.N; i++ {
+		var err error
+		dt, err = Append(make([]byte, 0, DefaultSerializeBufferSize), &tst, true)
+		if err != nil {
+			panic(err)
+		}
+	}
+	_ = dt
+}
+
 func BenchmarkParse(b *testing.B) {
 	data := testData
 
@@ -170,6 +186,21 @@ func BenchmarkParse(b *testing.B) {
 	var tst TestTL
 	for i := 0; i < b.N; i++ {
 		_, err := Parse(&tst, data, true)
+		if err != nil {
+			panic(err)
+		}
+	}
+	_ = tst
+}
+
+func BenchmarkParseNoCopy(b *testing.B) {
+	data := testData
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	var tst TestTL
+	for i := 0; i < b.N; i++ {
+		_, err := ParseNoCopy(&tst, data, true)
 		if err != nil {
 			panic(err)
 		}

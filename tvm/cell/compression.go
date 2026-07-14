@@ -69,7 +69,9 @@ func (s bitSpan) Bytes() []byte {
 	if s.bitOffset%8 == 0 && s.bitLen%8 == 0 {
 		start := s.bitOffset / 8
 		end := start + s.bitLen/8
-		return append([]byte{}, s.data[start:end]...)
+		out := make([]byte, end-start)
+		copy(out, s.data[start:end])
+		return out
 	}
 
 	out := make([]byte, (s.bitLen+7)/8)
@@ -119,6 +121,22 @@ func (w *bitWriter) WriteBit(bit byte) {
 }
 
 func (w *bitWriter) WriteUint(value uint64, bits int) {
+	if bits == 0 {
+		return
+	}
+	if w.bitLen%8 == 0 && bits%8 == 0 {
+		w.ensure(bits)
+
+		byteLen := bits / 8
+		dst := w.data[w.bitLen/8 : w.bitLen/8+byteLen]
+		for i := byteLen - 1; i >= 0; i-- {
+			dst[i] = byte(value)
+			value >>= 8
+		}
+		w.bitLen += bits
+		return
+	}
+
 	for i := bits - 1; i >= 0; i-- {
 		w.WriteBit(byte((value >> uint(i)) & 1))
 	}
@@ -198,6 +216,20 @@ func (r *bitReader) ReadUint(bits int) (uint64, error) {
 	if r.BitsLeft() < bits {
 		return 0, fmt.Errorf("not enough bits to read")
 	}
+	if bits == 0 {
+		return 0, nil
+	}
+	if r.pos%8 == 0 && bits%8 == 0 {
+		byteLen := bits / 8
+		data := r.data[r.pos/8 : r.pos/8+byteLen]
+		var v uint64
+		for _, b := range data {
+			v = (v << 8) | uint64(b)
+		}
+		r.pos += bits
+		return v, nil
+	}
+
 	var v uint64
 	for i := 0; i < bits; i++ {
 		v <<= 1
@@ -256,7 +288,10 @@ func CompressBOC(roots []*Cell, algo CompressionAlgorithm, state *Cell) ([]byte,
 		return nil, err
 	}
 
-	return append([]byte{byte(algo)}, payload...), nil
+	out := make([]byte, 1+len(payload))
+	out[0] = byte(algo)
+	copy(out[1:], payload)
+	return out, nil
 }
 
 func DecompressBOC(data []byte, maxSize int, state *Cell) ([]*Cell, error) {
@@ -398,8 +433,18 @@ func oneLevelMask(level int) byte {
 }
 
 func extractBalanceFromDepthBalanceCell(c *Cell) *big.Int {
-	s, err := c.BeginParse()
-	if err != nil {
+	var s Slice
+	return extractBalanceFromDepthBalanceCellInto(c, &s)
+}
+
+func extractBalanceFromDepthBalanceCellInto(c *Cell, s *Slice) *big.Int {
+	// depth_balance_info starts with a zero 2-bit label and a zero 5-bit
+	// split depth; reject everything else before slice setup
+	if c.bitsSz < 12 || c.data[0]&0xFE != 0 {
+		return nil
+	}
+
+	if err := c.BeginParseInto(s); err != nil {
 		return nil
 	}
 	label, err := s.LoadUInt(2)
@@ -424,10 +469,13 @@ func extractBalanceFromDepthBalanceCell(c *Cell) *big.Int {
 	return grams
 }
 
-func processShardAccountsVertex(left, right *Cell) *big.Int {
-	leftBalance := extractBalanceFromDepthBalanceCell(left)
-	rightBalance := extractBalanceFromDepthBalanceCell(right)
-	if leftBalance == nil || rightBalance == nil {
+func processShardAccountsVertex(left, right *Cell, s *Slice) *big.Int {
+	leftBalance := extractBalanceFromDepthBalanceCellInto(left, s)
+	if leftBalance == nil {
+		return nil
+	}
+	rightBalance := extractBalanceFromDepthBalanceCellInto(right, s)
+	if rightBalance == nil {
 		return nil
 	}
 	return new(big.Int).Sub(rightBalance, leftBalance)
@@ -520,10 +568,14 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 	var cellData []bitSpan
 	var cellType []Type
 	var pbLevelMask []byte
-	var rootIndexes []int
+	rootIndexes := make([]int, len(roots))
 
-	var buildGraph func(cell *Cell, mainMUCell *Cell, underMULeft, underMURight bool, leftCell *Cell, sumDiffOut *big.Int) (int, error)
-	buildGraph = func(cell *Cell, mainMUCell *Cell, underMULeft, underMURight bool, leftCell *Cell, sumDiffOut *big.Int) (int, error) {
+	var mainMUHash Hash
+	hasMainMUCell := false
+	var balanceScratch Slice
+
+	var buildGraph func(cell *Cell, underMULeft, underMURight bool, leftCell *Cell, sumDiffOut *big.Int) (int, error)
+	buildGraph = func(cell *Cell, underMULeft, underMURight bool, leftCell *Cell, sumDiffOut *big.Int) (int, error) {
 		if cell == nil {
 			return 0, fmt.Errorf("error while importing a cell during serialization: cell is nil")
 		}
@@ -545,13 +597,14 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 			return 0, fmt.Errorf("invalid loaded cell data: unknown special cell, bits=%d refs=%d mask=%d head=%d", cell.bitsSz, cell.refsCount(), cell.getLevelMask().Mask, head)
 		}
 
+		refCnt := cell.refsCount()
 		bitsView := cellBits(cell)
 		bocGraph = append(bocGraph, [4]int{})
-		refsCnt = append(refsCnt, cell.refsCount())
+		refsCnt = append(refsCnt, refCnt)
 		cellType = append(cellType, typ)
 		pbLevelMask = append(pbLevelMask, 0)
 
-		if cell.refsCount() > 4 {
+		if refCnt > 4 {
 			return 0, fmt.Errorf("invalid loaded cell data: too many refs")
 		}
 
@@ -569,14 +622,14 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 			cellData[len(cellData)-1] = bitSpan{}
 		}
 
-		if muRemoveSubtreeSums && typ == MerkleUpdateCellType && mainMUCell != nil && cellHash == mainMUCell.HashKey() {
-			childLeftID, err := buildGraph(cell.ref(0), mainMUCell, true, false, nil, nil)
+		if muRemoveSubtreeSums && typ == MerkleUpdateCellType && hasMainMUCell && cellHash == mainMUHash {
+			childLeftID, err := buildGraph(cell.ref(0), true, false, nil, nil)
 			if err != nil {
 				return 0, err
 			}
 			bocGraph[currentCellID][0] = childLeftID
 
-			childRightID, err := buildGraph(cell.ref(1), mainMUCell, false, true, cell.ref(0), nil)
+			childRightID, err := buildGraph(cell.ref(1), false, true, cell.ref(0), nil)
 			if err != nil {
 				return 0, err
 			}
@@ -586,19 +639,20 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 
 		if underMURight && leftCell != nil {
 			sumChildDiff := big.NewInt(0)
-			for i := 0; i < cell.refsCount(); i++ {
+			leftRefCnt := leftCell.refsCount()
+			for i := 0; i < refCnt; i++ {
 				var pairedLeftChild *Cell
-				if i < leftCell.refsCount() {
+				if i < leftRefCnt {
 					pairedLeftChild = leftCell.ref(i)
 				}
-				childID, err := buildGraph(cell.ref(i), mainMUCell, false, true, pairedLeftChild, sumChildDiff)
+				childID, err := buildGraph(cell.ref(i), false, true, pairedLeftChild, sumChildDiff)
 				if err != nil {
 					return 0, err
 				}
 				bocGraph[currentCellID][i] = childID
 			}
 
-			vertexDiff := processShardAccountsVertex(leftCell, cell)
+			vertexDiff := processShardAccountsVertex(leftCell, cell, &balanceScratch)
 			if !cell.IsSpecial() && vertexDiff != nil && sumChildDiff.Cmp(vertexDiff) == 0 {
 				cellData[currentCellID] = bitSpan{}
 				pbLevelMask[currentCellID] = 9
@@ -609,8 +663,8 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 			return currentCellID, nil
 		}
 
-		for i := 0; i < cell.refsCount(); i++ {
-			childID, err := buildGraph(cell.ref(i), mainMUCell, underMULeft, underMURight, nil, nil)
+		for i := 0; i < refCnt; i++ {
+			childID, err := buildGraph(cell.ref(i), underMULeft, underMURight, nil, nil)
 			if err != nil {
 				return 0, err
 			}
@@ -619,26 +673,37 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 		return currentCellID, nil
 	}
 
-	for _, root := range roots {
-		var mainMUCell *Cell
+	for i, root := range roots {
+		hasMainMUCell = false
 		if root.refsCount() > kMUCellOrderInRoot {
-			mainMUCell = root.ref(kMUCellOrderInRoot)
+			mainMUHash = root.ref(kMUCellOrderInRoot).HashKey()
+			hasMainMUCell = true
 		}
 
-		rootID, err := buildGraph(root, mainMUCell, false, false, nil, nil)
+		rootID, err := buildGraph(root, false, false, nil, nil)
 		if err != nil {
 			return nil, err
 		}
-		rootIndexes = append(rootIndexes, rootID)
+		rootIndexes[i] = rootID
 	}
 
 	nodeCount := len(bocGraph)
-	reverseGraph := make([][]int, nodeCount)
-	edgeCount := 0
+	reverseCounts := make([]int, nodeCount)
 	for i := 0; i < nodeCount; i++ {
 		for childIdx := 0; childIdx < refsCnt[i]; childIdx++ {
 			child := bocGraph[i][childIdx]
-			edgeCount++
+			reverseCounts[child]++
+		}
+	}
+	reverseGraph := make([][]int, nodeCount)
+	for i, count := range reverseCounts {
+		if count > 0 {
+			reverseGraph[i] = make([]int, 0, count)
+		}
+	}
+	for i := 0; i < nodeCount; i++ {
+		for childIdx := 0; childIdx < refsCnt[i]; childIdx++ {
+			child := bocGraph[i][childIdx]
 			reverseGraph[child] = append(reverseGraph[child], i)
 		}
 	}
@@ -819,6 +884,14 @@ func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *C
 }
 
 func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMerkleUpdate bool, state *Cell) ([]*Cell, error) {
+	graph, err := decompressImprovedStructureLZ4Graph(compressed, maxSize, decompressMerkleUpdate, state)
+	if err != nil {
+		return nil, err
+	}
+	return graph.roots(), nil
+}
+
+func decompressImprovedStructureLZ4Graph(compressed []byte, maxSize int, decompressMerkleUpdate bool, state *Cell) (*decompressedBOCGraph, error) {
 	const (
 		maxCellDataLengthBits = 1024
 		noNode                = -1
@@ -1119,6 +1192,9 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 	}
 
 	nodes := make([]*Cell, nodeCount)
+	var hasher decompressDeferredHasher
+	hasher.cells = make([]*Cell, 0, nodeCount)
+	hasher.presetLevel = make([]bool, 0, nodeCount)
 
 	finalizeNodeFromBuilder := func(idx int, builder *Builder) error {
 		for j := 0; j < cellRefsCnt[idx]; j++ {
@@ -1126,7 +1202,7 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 				return fmt.Errorf("boc decompression failed: failed to finalize node: %w", err)
 			}
 		}
-		node, err := finalizeCellFromBuilder(builder, isSpecial[idx])
+		node, err := hasher.finalizeFromBuilder(builder, isSpecial[idx])
 		if err != nil {
 			return fmt.Errorf("boc decompression failed: failed to finalize node: %w", err)
 		}
@@ -1184,7 +1260,15 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		}
 
 		if pbLevelMask[leftIdx] != 0 {
+			// pruned boundaries only need hashes/depths, which lazy state
+			// cells carry without loading the payload
 			return buildPrunedBranchFromState(leftIdx, stateCell)
+		}
+
+		// interior cells need data and refs; lazy state cells load on demand
+		stateCell, err := stateCell.load()
+		if err != nil {
+			return fmt.Errorf("boc decompression failed: failed to load state subtree cell: %w", err)
 		}
 		if stateCell.refsCount() != cellRefsCnt[leftIdx] {
 			return fmt.Errorf("boc decompression failed: state subtree refs mismatch while restoring MerkleUpdate left subtree")
@@ -1199,6 +1283,20 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 			}
 		}
 
+		var refsBuf [4]*Cell
+		refs := refsBuf[:cellRefsCnt[leftIdx]]
+		for j := range refs {
+			refs[j] = nodes[bocGraph[leftIdx][j]]
+		}
+		reused, err := reuseStateCellForMULeft(stateCell, refs, &hasher)
+		if err != nil {
+			return fmt.Errorf("boc decompression failed: %w", err)
+		}
+		if reused != nil {
+			nodes[leftIdx] = reused
+			return nil
+		}
+
 		builder := BeginCell()
 		if err := storeBitSpan(builder, cellBits(stateCell)); err != nil {
 			return fmt.Errorf("boc decompression failed: %w", err)
@@ -1206,6 +1304,7 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		return finalizeNodeFromBuilder(leftIdx, builder)
 	}
 
+	var balanceScratch Slice
 	var buildRightUnderMU func(rightIdx int, leftIdx int, sumDiffOut *big.Int) error
 	buildRightUnderMU = func(rightIdx int, leftIdx int, sumDiffOut *big.Int) error {
 		if leftIdx != noNode && nodes[leftIdx] == nil {
@@ -1213,7 +1312,7 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		}
 		if nodes[rightIdx] != nil {
 			if leftIdx != noNode && sumDiffOut != nil {
-				vertexDiff := processShardAccountsVertex(nodes[leftIdx], nodes[rightIdx])
+				vertexDiff := processShardAccountsVertex(nodes[leftIdx], nodes[rightIdx], &balanceScratch)
 				if vertexDiff != nil {
 					sumDiffOut.Add(sumDiffOut, vertexDiff)
 				}
@@ -1238,7 +1337,7 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 			if leftIdx == noNode {
 				return fmt.Errorf("boc decompression failed: depth-balance left vertex has no grams")
 			}
-			leftGrams := extractBalanceFromDepthBalanceCell(nodes[leftIdx])
+			leftGrams := extractBalanceFromDepthBalanceCellInto(nodes[leftIdx], &balanceScratch)
 			if leftGrams == nil {
 				return fmt.Errorf("boc decompression failed: depth-balance left vertex has no grams")
 			}
@@ -1259,7 +1358,7 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		}
 
 		if curRightLeftDiff == nil && leftIdx != noNode {
-			curRightLeftDiff = processShardAccountsVertex(nodes[leftIdx], nodes[rightIdx])
+			curRightLeftDiff = processShardAccountsVertex(nodes[leftIdx], nodes[rightIdx], &balanceScratch)
 		}
 		if sumDiffOut != nil && curRightLeftDiff != nil {
 			sumDiffOut.Add(sumDiffOut, curRightLeftDiff)
@@ -1314,9 +1413,14 @@ func decompressImprovedStructureLZ4(compressed []byte, maxSize int, decompressMe
 		}
 	}
 
-	roots := make([]*Cell, 0, rootCount)
-	for _, idx := range rootIndexes {
-		roots = append(roots, nodes[idx])
+	if err := hasher.flush(); err != nil {
+		return nil, fmt.Errorf("boc decompression failed: %w", err)
 	}
-	return roots, nil
+
+	return &decompressedBOCGraph{
+		nodes:       nodes,
+		graph:       bocGraph,
+		refsCnt:     cellRefsCnt,
+		rootIndexes: rootIndexes,
+	}, nil
 }

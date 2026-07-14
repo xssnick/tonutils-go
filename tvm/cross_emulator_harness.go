@@ -17,6 +17,8 @@ type crossRunResult struct {
 	stack    *cell.Cell
 }
 
+const referenceRawRunGlobalVersion = 13
+
 func buildCrossStack(values ...any) (*vm.Stack, error) {
 	stack := vm.NewStack()
 	for _, value := range values {
@@ -35,7 +37,7 @@ func runGoCrossCode(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack) (*cr
 }
 
 func runGoCrossCodeWithGas(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack, gasLimit int64) (*crossRunResult, error) {
-	return runGoCrossCodeWithVersionGasAndLibs(code, data, c7, nil, stack, vm.DefaultGlobalVersion, gasLimit)
+	return runGoCrossCodeWithVersionGasAndLibs(code, data, c7, nil, stack, referenceRawRunGlobalVersion, gasLimit)
 }
 
 func runGoCrossCodeWithVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.Stack, globalVersion int) (*crossRunResult, error) {
@@ -43,7 +45,7 @@ func runGoCrossCodeWithVersion(code, data *cell.Cell, c7 tuple.Tuple, stack *vm.
 }
 
 func runGoCrossCodeWithLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack) (*crossRunResult, error) {
-	return runGoCrossCodeWithVersionAndLibs(code, data, c7, libs, stack, vm.DefaultGlobalVersion)
+	return runGoCrossCodeWithVersionAndLibs(code, data, c7, libs, stack, referenceRawRunGlobalVersion)
 }
 
 func runGoCrossCodeWithVersionAndLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack, globalVersion int) (*crossRunResult, error) {
@@ -52,13 +54,19 @@ func runGoCrossCodeWithVersionAndLibs(code, data *cell.Cell, c7 tuple.Tuple, lib
 
 func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, libs []*cell.Cell, stack *vm.Stack, globalVersion int, gasLimit int64) (*crossRunResult, error) {
 	execStack := stack.Copy()
-	if err := execStack.PushInt(big.NewInt(0)); err != nil {
+	if err := execStack.PushSmallInt(0); err != nil {
 		return nil, err
 	}
 
 	machine := NewTVM()
-	machine.globalVersion = globalVersion
-	res, err := machine.ExecuteDetailedWithLibraries(code, data, c7, vm.GasWithLimit(gasLimit), execStack, libs...)
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
+	if err != nil {
+		return nil, err
+	}
+	res, err := machine.Execute(code, data, c7, vm.GasWithLimit(gasLimit), execStack, ExecutionConfig{
+		Libraries: libs,
+		Config:    cfg,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +85,20 @@ func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, 
 		gasUsed:  res.GasUsed,
 		stack:    stackCell,
 	}, nil
+}
+
+func crossRunPreparedBlockchainConfig(globalVersion int) (*PreparedBlockchainConfig, error) {
+	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: uint32(globalVersion)})
+	if err != nil {
+		return nil, err
+	}
+
+	dict := cell.NewDict(32)
+	value := cell.BeginCell().MustStoreRef(versionCell).EndCell()
+	if err = dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
+		return nil, err
+	}
+	return PrepareBlockchainConfig(dict.AsCell())
 }
 
 func tupleToStackCell(v tuple.Tuple) (*cell.Cell, error) {
