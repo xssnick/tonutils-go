@@ -22,7 +22,7 @@ func RSHIFTCCODEMOD(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			divider := new(big.Int).Lsh(big.NewInt(1), uint(imm()))
+			divider := new(big.Int).Lsh(bigIntOne, uint(imm()))
 			q := helpers.DivCeil(x, divider)
 			r := x.Sub(x, new(big.Int).Mul(q, divider))
 

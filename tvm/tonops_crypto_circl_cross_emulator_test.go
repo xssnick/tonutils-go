@@ -4,16 +4,58 @@ package tvm
 
 import (
 	"bytes"
+	"fmt"
 	"math/big"
 	"os"
 	"testing"
 
-	circlbls "github.com/cloudflare/circl/ecc/bls12381"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
+
+func tonOpsCryptoCirclVersionCrossEmulatorVersions(t *testing.T) []int {
+	t.Helper()
+
+	return crossEmulatorVersionAuditVersions(t, "TVM_TONOPS_CRYPTO_CIRCL_VERSION_AUDIT")
+}
+
+type tonOpsCryptoCirclVersionedRuntimeCase struct {
+	name  string
+	code  *cell.Cell
+	stack func() []any
+	exit  int32
+}
+
+func TestTVMCrossEmulatorTonOpsCryptoCirclVersionAuditShardSelection(t *testing.T) {
+	t.Setenv("TVM_TONOPS_CRYPTO_CIRCL_VERSION_AUDIT_SHARDS", "")
+	t.Setenv("TVM_TONOPS_CRYPTO_CIRCL_VERSION_AUDIT_SHARD", "")
+
+	all := tonOpsCryptoCirclVersionCrossEmulatorVersions(t)
+	wantLen := vm.MaxSupportedGlobalVersion - 0 + 1
+	if len(all) != wantLen {
+		t.Fatalf("default version selection len = %d, want %d", len(all), wantLen)
+	}
+	if all[0] != 0 || all[len(all)-1] != vm.MaxSupportedGlobalVersion {
+		t.Fatalf("default version selection = %v, want range %d..%d", all, 0, vm.MaxSupportedGlobalVersion)
+	}
+
+	t.Setenv("TVM_TONOPS_CRYPTO_CIRCL_VERSION_AUDIT_SHARDS", "4")
+	t.Setenv("TVM_TONOPS_CRYPTO_CIRCL_VERSION_AUDIT_SHARD", "1")
+	got := tonOpsCryptoCirclVersionCrossEmulatorVersions(t)
+	want := []int{1, 5, 9, 13}
+	if len(got) != len(want) {
+		t.Fatalf("sharded version selection = %v, want %v", got, want)
+	}
+	for i, version := range want {
+		if got[i] != version {
+			t.Fatalf("sharded version selection = %v, want %v", got, want)
+		}
+	}
+}
 
 func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
@@ -51,6 +93,8 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 		stack         []any
 		exit          int32
 		globalVersion int
+		skipReference string
+		goStack       []any
 	}
 
 	tests := []testCase{
@@ -173,6 +217,68 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			},
 			exit:          0,
 			globalVersion: 13,
+		},
+		{
+			name: "rist255_mulbase_zero_v13_identity",
+			code: codeFromBuilders(t, funcsop.RIST255_MULBASE().Serialize()),
+			stack: []any{
+				int64(0),
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "rist255_mulbase_zero_v14_identity",
+			code: codeFromBuilders(t, funcsop.RIST255_MULBASE().Serialize()),
+			stack: []any{
+				int64(0),
+			},
+			exit:          0,
+			globalVersion: 14,
+		},
+		{
+			name: "rist255_mul_identity_v13_range",
+			code: codeFromBuilders(t, funcsop.RIST255_MUL().Serialize()),
+			stack: []any{
+				int64(0),
+				int64(1),
+			},
+			exit:          int32(vmerr.CodeRangeCheck),
+			globalVersion: 13,
+		},
+		{
+			name: "rist255_mul_identity_v14_succeeds",
+			code: codeFromBuilders(t, funcsop.RIST255_MUL().Serialize()),
+			stack: []any{
+				int64(0),
+				int64(1),
+			},
+			exit:          0,
+			globalVersion: 14,
+			skipReference: "bundled reference emulator predates upstream RIST255 v14 identity support",
+			goStack:       []any{int64(0)},
+		},
+		{
+			name: "rist255_qmul_invalid_zero_v13_succeeds",
+			code: codeFromBuilders(t, funcsop.RIST255_QMUL().Serialize()),
+			stack: []any{
+				invalidRist,
+				int64(0),
+			},
+			exit:          0,
+			globalVersion: 13,
+		},
+		{
+			name: "rist255_qmul_invalid_zero_v14_fails_quietly",
+			code: codeFromBuilders(t, funcsop.RIST255_QMUL().Serialize()),
+			stack: []any{
+				invalidRist,
+				int64(0),
+			},
+			exit:          0,
+			globalVersion: 14,
+			skipReference: "bundled reference emulator predates upstream RIST255 v14 zero-scalar validation",
+			goStack:       []any{int64(0)},
 		},
 		{
 			name:          "bls_pushr",
@@ -825,7 +931,15 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
-			refRes, err := runReferenceCrossCode(code, testEmptyCell(), tuple.Tuple{}, refStack)
+			if tt.skipReference != "" {
+				if goRes.exitCode != tt.exit {
+					t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, tt.exit)
+				}
+				assertCrossSkippedGoStack(t, goRes.stack, tt.goStack)
+				t.Skip(tt.skipReference)
+			}
+			refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(tt.globalVersion)))
+			refRes, err := runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, *refCfg)
 			if err != nil {
 				t.Fatalf("reference tvm execution failed: %v", err)
 			}
@@ -852,6 +966,754 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 				t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
 			}
 		})
+	}
+}
+
+func TestTVMCrossEmulatorTonOpsCryptoCirclVersionedRuntimeEdges(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	msg := []byte("ton-circl-versioned")
+	msg2 := []byte("ton-circl-versioned-2")
+	pub := testBLSPubBytes(3)
+	pub2 := testBLSPubBytes(5)
+	sig := testBLSSigBytes(3, msg)
+	sig2 := testBLSSigBytes(5, msg)
+	sig2Msg2 := testBLSSigBytes(5, msg2)
+	aggSig := testBLSAggregateSigBytes(t, sig, sig2)
+	aggDistinctSig := testBLSAggregateSigBytes(t, sig, sig2Msg2)
+	invalidRist := testInvalidRistrettoInt(t)
+	invalidG1 := testInvalidBLSG1Bytes(t)
+	invalidG2 := testInvalidBLSG2Bytes(t)
+	g1 := testBLSG1BytesForScalar(2)
+	g2 := testBLSG2BytesForScalar(3)
+	g2b := testBLSG2BytesForScalar(5)
+	fp := testBLSFPBytes(7)
+	fp2 := testBLSFP2Bytes(11)
+	blsOrderInt := new(big.Int).SetBytes(circlbls.Order())
+
+	type versionedCryptoCase struct {
+		name  string
+		code  *cell.Cell
+		stack func() []any
+		exit  int32
+	}
+
+	tests := []versionedCryptoCase{
+		{
+			name: "rist255_pushl",
+			code: codeFromBuilders(t, funcsop.RIST255_PUSHL().Serialize()),
+			exit: 0,
+		},
+		{
+			name: "rist255_validate_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_VALIDATE().Serialize()),
+			stack: func() []any {
+				return []any{new(big.Int).Set(invalidRist)}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "rist255_qvalidate_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QVALIDATE().Serialize()),
+			stack: func() []any {
+				return []any{new(big.Int).Set(invalidRist)}
+			},
+			exit: 0,
+		},
+		{
+			name: "rist255_qadd_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					testRistrettoMulBaseInt(t, 1),
+					new(big.Int).Set(invalidRist),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "rist255_add_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_ADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					new(big.Int).Set(invalidRist),
+					testRistrettoMulBaseInt(t, 1),
+				}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "rist255_qsub_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QSUB().Serialize()),
+			stack: func() []any {
+				return []any{
+					testRistrettoMulBaseInt(t, 1),
+					new(big.Int).Set(invalidRist),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "rist255_qmul_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QMUL().Serialize()),
+			stack: func() []any {
+				return []any{
+					new(big.Int).Set(invalidRist),
+					int64(3),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_pushr",
+			code: codeFromBuilders(t, funcsop.BLS_PUSHR().Serialize()),
+			exit: 0,
+		},
+		{
+			name: "bls_verify_true",
+			code: codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(sig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_verify_invalid_pub_false",
+			code: codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(invalidG1),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(sig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_aggregate",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATE().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(sig),
+					testSliceFromBytes(sig2),
+					int64(2),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_aggregate_short_sig_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATE().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(sig[:95]),
+					int64(1),
+				}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_fastaggregateverify_true",
+			code: codeFromBuilders(t, funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub),
+					testSliceFromBytes(pub2),
+					int64(2),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(aggSig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_fastaggregateverify_short_pub_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub[:47]),
+					int64(1),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(aggSig),
+				}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_aggregateverify_distinct_msgs_true",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATEVERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(pub2),
+					testSliceFromBytes(msg2),
+					int64(2),
+					testSliceFromBytes(aggDistinctSig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_map_to_g1_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_MAP_TO_G1().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(fp[:47])}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_g1_multiexp_count_too_large",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g1),
+					int64(5),
+					int64(2),
+				}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "bls_g1_add_invalid",
+			code: codeFromBuilders(t, funcsop.BLS_G1_ADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(invalidG1),
+					testSliceFromBytes(g1),
+				}
+			},
+			exit: int32(vmerr.CodeUnknown),
+		},
+		{
+			name: "bls_g1_ingroup_invalid_false",
+			code: codeFromBuilders(t, funcsop.BLS_G1_INGROUP().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(invalidG1)}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_add",
+			code: codeFromBuilders(t, funcsop.BLS_G2_ADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					testSliceFromBytes(g2b),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_mul_order_zero",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MUL().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					blsOrderInt,
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_multiexp_two_terms",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					int64(5),
+					testSliceFromBytes(g2b),
+					int64(7),
+					int64(2),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_multiexp_count_too_large",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					int64(5),
+					int64(2),
+				}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "bls_map_to_g2",
+			code: codeFromBuilders(t, funcsop.BLS_MAP_TO_G2().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(fp2)}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_map_to_g2_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_MAP_TO_G2().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(fp2[:95])}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_g2_ingroup_invalid_false",
+			code: codeFromBuilders(t, funcsop.BLS_G2_INGROUP().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(invalidG2)}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_pairing_false",
+			code: codeFromBuilders(t, funcsop.BLS_PAIRING().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g1),
+					testSliceFromBytes(g2),
+					int64(1),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_pairing_invalid",
+			code: codeFromBuilders(t, funcsop.BLS_PAIRING().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(invalidG1),
+					testSliceFromBytes(g2),
+					int64(1),
+				}
+			},
+			exit: int32(vmerr.CodeUnknown),
+		},
+	}
+
+	versions := tonOpsCryptoCirclVersionCrossEmulatorVersions(t)
+	for _, tt := range tests {
+		for _, version := range versions {
+			t.Run(fmt.Sprintf("%s/v%d", tt.name, version), func(t *testing.T) {
+				wantExit := tt.exit
+				if version < 4 {
+					wantExit = int32(vmerr.CodeInvalidOpcode)
+				}
+				runTonOpsCryptoCirclVersionedParityCase(t, tt.code, tt.stack, version, wantExit)
+			})
+		}
+	}
+}
+
+func FuzzTVMCrossEmulatorTonOpsCryptoCirclVersionedRuntimeEdges(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(version%tonOpsCryptoCirclVersionedRuntimeCaseCount))
+	}
+	for i := 0; i < tonOpsCryptoCirclVersionedRuntimeCaseCount; i++ {
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		tests := tonOpsCryptoCirclVersionedRuntimeCases(t)
+		if len(tests) != tonOpsCryptoCirclVersionedRuntimeCaseCount {
+			t.Fatalf("tonops crypto circl versioned runtime case count = %d, want %d", len(tests), tonOpsCryptoCirclVersionedRuntimeCaseCount)
+		}
+		tt := tests[int(rawCase)%len(tests)]
+		runTonOpsCryptoCirclVersionedRuntimeCase(t, tt, version)
+	})
+}
+
+const tonOpsCryptoCirclVersionedRuntimeCaseCount = 28
+
+func runTonOpsCryptoCirclVersionedRuntimeCase(t *testing.T, tt tonOpsCryptoCirclVersionedRuntimeCase, version int) {
+	t.Helper()
+
+	wantExit := tt.exit
+	if version < 4 {
+		wantExit = int32(vmerr.CodeInvalidOpcode)
+	}
+	runTonOpsCryptoCirclVersionedParityCase(t, tt.code, tt.stack, version, wantExit)
+}
+
+func tonOpsCryptoCirclVersionedRuntimeCases(t *testing.T) []tonOpsCryptoCirclVersionedRuntimeCase {
+	t.Helper()
+
+	msg := []byte("ton-circl-versioned")
+	msg2 := []byte("ton-circl-versioned-2")
+	pub := testBLSPubBytes(3)
+	pub2 := testBLSPubBytes(5)
+	sig := testBLSSigBytes(3, msg)
+	sig2 := testBLSSigBytes(5, msg)
+	sig2Msg2 := testBLSSigBytes(5, msg2)
+	aggSig := testBLSAggregateSigBytes(t, sig, sig2)
+	aggDistinctSig := testBLSAggregateSigBytes(t, sig, sig2Msg2)
+	invalidRist := testInvalidRistrettoInt(t)
+	invalidG1 := testInvalidBLSG1Bytes(t)
+	invalidG2 := testInvalidBLSG2Bytes(t)
+	g1 := testBLSG1BytesForScalar(2)
+	g2 := testBLSG2BytesForScalar(3)
+	g2b := testBLSG2BytesForScalar(5)
+	fp := testBLSFPBytes(7)
+	fp2 := testBLSFP2Bytes(11)
+	blsOrderInt := new(big.Int).SetBytes(circlbls.Order())
+
+	return []tonOpsCryptoCirclVersionedRuntimeCase{
+		{
+			name: "rist255_pushl",
+			code: codeFromBuilders(t, funcsop.RIST255_PUSHL().Serialize()),
+			exit: 0,
+		},
+		{
+			name: "rist255_validate_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_VALIDATE().Serialize()),
+			stack: func() []any {
+				return []any{new(big.Int).Set(invalidRist)}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "rist255_qvalidate_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QVALIDATE().Serialize()),
+			stack: func() []any {
+				return []any{new(big.Int).Set(invalidRist)}
+			},
+			exit: 0,
+		},
+		{
+			name: "rist255_qadd_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					testRistrettoMulBaseInt(t, 1),
+					new(big.Int).Set(invalidRist),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "rist255_add_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_ADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					new(big.Int).Set(invalidRist),
+					testRistrettoMulBaseInt(t, 1),
+				}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "rist255_qsub_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QSUB().Serialize()),
+			stack: func() []any {
+				return []any{
+					testRistrettoMulBaseInt(t, 1),
+					new(big.Int).Set(invalidRist),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "rist255_qmul_invalid",
+			code: codeFromBuilders(t, funcsop.RIST255_QMUL().Serialize()),
+			stack: func() []any {
+				return []any{
+					new(big.Int).Set(invalidRist),
+					int64(3),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_pushr",
+			code: codeFromBuilders(t, funcsop.BLS_PUSHR().Serialize()),
+			exit: 0,
+		},
+		{
+			name: "bls_verify_true",
+			code: codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(sig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_verify_invalid_pub_false",
+			code: codeFromBuilders(t, funcsop.BLS_VERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(invalidG1),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(sig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_aggregate",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATE().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(sig),
+					testSliceFromBytes(sig2),
+					int64(2),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_aggregate_short_sig_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATE().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(sig[:95]),
+					int64(1),
+				}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_fastaggregateverify_true",
+			code: codeFromBuilders(t, funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub),
+					testSliceFromBytes(pub2),
+					int64(2),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(aggSig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_fastaggregateverify_short_pub_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_FASTAGGREGATEVERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub[:47]),
+					int64(1),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(aggSig),
+				}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_aggregateverify_distinct_msgs_true",
+			code: codeFromBuilders(t, funcsop.BLS_AGGREGATEVERIFY().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(pub),
+					testSliceFromBytes(msg),
+					testSliceFromBytes(pub2),
+					testSliceFromBytes(msg2),
+					int64(2),
+					testSliceFromBytes(aggDistinctSig),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_map_to_g1_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_MAP_TO_G1().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(fp[:47])}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_g1_multiexp_count_too_large",
+			code: codeFromBuilders(t, funcsop.BLS_G1_MULTIEXP().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g1),
+					int64(5),
+					int64(2),
+				}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "bls_g1_add_invalid",
+			code: codeFromBuilders(t, funcsop.BLS_G1_ADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(invalidG1),
+					testSliceFromBytes(g1),
+				}
+			},
+			exit: int32(vmerr.CodeUnknown),
+		},
+		{
+			name: "bls_g1_ingroup_invalid_false",
+			code: codeFromBuilders(t, funcsop.BLS_G1_INGROUP().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(invalidG1)}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_add",
+			code: codeFromBuilders(t, funcsop.BLS_G2_ADD().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					testSliceFromBytes(g2b),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_mul_order_zero",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MUL().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					blsOrderInt,
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_multiexp_two_terms",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					int64(5),
+					testSliceFromBytes(g2b),
+					int64(7),
+					int64(2),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_g2_multiexp_count_too_large",
+			code: codeFromBuilders(t, funcsop.BLS_G2_MULTIEXP().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g2),
+					int64(5),
+					int64(2),
+				}
+			},
+			exit: int32(vmerr.CodeRangeCheck),
+		},
+		{
+			name: "bls_map_to_g2",
+			code: codeFromBuilders(t, funcsop.BLS_MAP_TO_G2().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(fp2)}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_map_to_g2_underflow",
+			code: codeFromBuilders(t, funcsop.BLS_MAP_TO_G2().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(fp2[:95])}
+			},
+			exit: int32(vmerr.CodeCellUnderflow),
+		},
+		{
+			name: "bls_g2_ingroup_invalid_false",
+			code: codeFromBuilders(t, funcsop.BLS_G2_INGROUP().Serialize()),
+			stack: func() []any {
+				return []any{testSliceFromBytes(invalidG2)}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_pairing_false",
+			code: codeFromBuilders(t, funcsop.BLS_PAIRING().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(g1),
+					testSliceFromBytes(g2),
+					int64(1),
+				}
+			},
+			exit: 0,
+		},
+		{
+			name: "bls_pairing_invalid",
+			code: codeFromBuilders(t, funcsop.BLS_PAIRING().Serialize()),
+			stack: func() []any {
+				return []any{
+					testSliceFromBytes(invalidG1),
+					testSliceFromBytes(g2),
+					int64(1),
+				}
+			},
+			exit: int32(vmerr.CodeUnknown),
+		},
+	}
+}
+
+func runTonOpsCryptoCirclVersionedParityCase(t *testing.T, code *cell.Cell, stack func() []any, version int, wantExit int32) {
+	t.Helper()
+
+	var stackValues []any
+	if stack != nil {
+		stackValues = stack()
+	}
+	code = prependRawMethodDrop(code)
+	goStack, err := buildCrossStack(stackValues...)
+	if err != nil {
+		t.Fatalf("failed to build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack(stackValues...)
+	if err != nil {
+		t.Fatalf("failed to build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithVersion(code, testEmptyCell(), tuple.Tuple{}, goStack, version)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
+	refRes, err := runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != wantExit || refRes.exitCode != wantExit {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, wantExit)
+	}
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit code mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
 	}
 }
 

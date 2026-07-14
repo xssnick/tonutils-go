@@ -484,7 +484,7 @@ func TestNonQuietNaNOperandsUseCppPopTimingUnderTry(t *testing.T) {
 			}
 
 			state := vm.NewExecutionState(
-				vm.DefaultGlobalVersion,
+				vm.MaxSupportedGlobalVersion,
 				vm.GasWithLimit(1_000_000),
 				cell.BeginCell().EndCell(),
 				tuple.Tuple{},

@@ -1,0 +1,7 @@
+go test fuzz v1
+byte('\x04')
+byte('C')
+uint64(12)
+uint64(11)
+uint64(12)
+uint16(40968)

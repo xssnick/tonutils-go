@@ -24,7 +24,7 @@ func LDI(sz uint) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			err = state.Stack.PushInt(i)
+			err = state.Stack.PushOwnedInt(i)
 			if err != nil {
 				return err
 			}

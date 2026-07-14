@@ -2,6 +2,7 @@ package dict
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -16,6 +17,72 @@ func assertDictVMErrorCode(t *testing.T, err error, code int64) {
 	got, ok := vmerr.ErrorCode(err)
 	if !ok || got != code {
 		t.Fatalf("expected VM error code %d, got %d (%v)", code, got, err)
+	}
+}
+
+func TestPrefixDictUnderflowDepthByVersion(t *testing.T) {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		t.Run(fmt.Sprintf("pfxdictdel_v%d", version), func(t *testing.T) {
+			state := &vm.State{
+				GlobalVersion: version,
+
+				Stack: vm.NewStack(),
+			}
+			if err := state.Stack.PushInt(big.NewInt(4)); err != nil {
+				t.Fatalf("PushInt failed: %v", err)
+			}
+
+			assertDictVMErrorCode(t, execPfxDictDelete(state), vmerr.CodeStackUnderflow)
+			if state.Stack.Len() != 1 {
+				t.Fatalf("PFXDICTDEL stack len = %d, want 1", state.Stack.Len())
+			}
+		})
+
+		t.Run(fmt.Sprintf("pfxdictset_below_legacy_min_v%d", version), func(t *testing.T) {
+			state := &vm.State{
+				GlobalVersion: version,
+
+				Stack: vm.NewStack(),
+			}
+			if err := state.Stack.PushAny(nil); err != nil {
+				t.Fatalf("push PFXDICTSET root: %v", err)
+			}
+			if err := state.Stack.PushInt(big.NewInt(4)); err != nil {
+				t.Fatalf("push PFXDICTSET key bits: %v", err)
+			}
+
+			assertDictVMErrorCode(t, execPfxDictSet(cell.DictSetModeSet)(state), vmerr.CodeStackUnderflow)
+			if state.Stack.Len() != 2 {
+				t.Fatalf("short PFXDICTSET stack len = %d, want 2", state.Stack.Len())
+			}
+		})
+
+		t.Run(fmt.Sprintf("pfxdictset_v%d", version), func(t *testing.T) {
+			state := &vm.State{
+				GlobalVersion: version,
+
+				Stack: vm.NewStack(),
+			}
+			key := cell.BeginCell().MustStoreUInt(0b10, 2).ToSlice()
+			if err := state.Stack.PushSlice(key); err != nil {
+				t.Fatalf("push PFXDICTSET key: %v", err)
+			}
+			if err := state.Stack.PushAny(nil); err != nil {
+				t.Fatalf("push PFXDICTSET root: %v", err)
+			}
+			if err := state.Stack.PushInt(big.NewInt(4)); err != nil {
+				t.Fatalf("push PFXDICTSET key bits: %v", err)
+			}
+
+			assertDictVMErrorCode(t, execPfxDictSet(cell.DictSetModeSet)(state), vmerr.CodeStackUnderflow)
+			wantLen := 0
+			if version >= 9 {
+				wantLen = 3
+			}
+			if state.Stack.Len() != wantLen {
+				t.Fatalf("PFXDICTSET stack len = %d, want %d", state.Stack.Len(), wantLen)
+			}
+		})
 	}
 }
 
@@ -426,6 +493,26 @@ func TestDictDeleteGetAdditionalBranches(t *testing.T) {
 		t.Fatalf("expected missing key to keep original root")
 	}
 
+	malformedRefRoot := mustPlainDictRoot(t, 8, map[uint64]uint64{0x12: 0x34}, 8)
+	state = newDictTestState()
+	if err := state.Stack.PushInt(big.NewInt(0x12)); err != nil {
+		t.Fatalf("push delget-ref malformed key: %v", err)
+	}
+	if err := state.Stack.PushCell(malformedRefRoot); err != nil {
+		t.Fatalf("push delget-ref malformed root: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+		t.Fatalf("push delget-ref malformed bits: %v", err)
+	}
+	if err := execDictDeleteGet(dictValueVariant{kind: dictKeyUnsignedInt, byRef: true})(state); err == nil {
+		t.Fatal("dict delget ref should reject non-ref values")
+	} else {
+		assertDictVMErrorCode(t, err, vmerr.CodeDict)
+	}
+	if state.Stack.Len() != 0 {
+		t.Fatalf("delget ref malformed value left %d stack values", state.Stack.Len())
+	}
+
 	root := mustPlainDictRoot(t, 8, map[uint64]uint64{0x12: 0x34}, 8)
 	state = newDictTestState()
 	if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
@@ -516,6 +603,42 @@ func TestDictMinMaxAdditionalBranches(t *testing.T) {
 	}
 	if !ok || minKey.Uint64() != 0x11 || string(gotRef.Hash()) != string(ref1.Hash()) {
 		t.Fatalf("unexpected minref result")
+	}
+
+	malformedRefRoot := mustPlainDictRoot(t, 8, map[uint64]uint64{
+		0x11: 0xA1,
+		0x22: 0xB2,
+	}, 8)
+	state = newDictTestState()
+	if err := state.Stack.PushCell(malformedRefRoot); err != nil {
+		t.Fatalf("push minref malformed root: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+		t.Fatalf("push minref malformed bits: %v", err)
+	}
+	if err := execDictMinMax(false, false)(dictValueVariant{kind: dictKeyUnsignedInt, byRef: true})(state); err == nil {
+		t.Fatal("dict min ref should reject non-ref values")
+	} else {
+		assertDictVMErrorCode(t, err, vmerr.CodeDict)
+	}
+	if state.Stack.Len() != 0 {
+		t.Fatalf("min ref malformed value left %d stack values", state.Stack.Len())
+	}
+
+	state = newDictTestState()
+	if err := state.Stack.PushCell(malformedRefRoot); err != nil {
+		t.Fatalf("push remmaxref malformed root: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+		t.Fatalf("push remmaxref malformed bits: %v", err)
+	}
+	if err := execDictMinMax(true, true)(dictValueVariant{kind: dictKeyUnsignedInt, byRef: true})(state); err == nil {
+		t.Fatal("dict remmax ref should reject non-ref values")
+	} else {
+		assertDictVMErrorCode(t, err, vmerr.CodeDict)
+	}
+	if state.Stack.Len() != 0 {
+		t.Fatalf("remmax ref malformed value left %d stack values", state.Stack.Len())
 	}
 
 	signedRoot := mustSignedDictRoot(t, 8, map[int64]uint64{
@@ -882,6 +1005,119 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	}
 	if string(oldRef.Hash()) != string(refValue.Hash()) || newRoot != nil {
 		t.Fatalf("unexpected setgetoptref delete result")
+	}
+
+	state = newDictTestState()
+	if err := state.Stack.PushCell(newRef); err != nil {
+		t.Fatalf("push setgetoptref insert value: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(0x22)); err != nil {
+		t.Fatalf("push setgetoptref insert key: %v", err)
+	}
+	if err := state.Stack.PushCell(nil); err != nil {
+		t.Fatalf("push setgetoptref insert root: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+		t.Fatalf("push setgetoptref insert bits: %v", err)
+	}
+	if err := execDictSetGetOptRef(dictScalarVariant{kind: dictKeyUnsignedInt})(state); err != nil {
+		t.Fatalf("dict setgetoptref insert failed: %v", err)
+	}
+	oldRef, err = state.Stack.PopMaybeCell()
+	if err != nil {
+		t.Fatalf("pop setgetoptref insert old ref: %v", err)
+	}
+	newRoot, err = state.Stack.PopMaybeCell()
+	if err != nil {
+		t.Fatalf("pop setgetoptref insert root: %v", err)
+	}
+	gotRefValue, err = newRoot.AsDict(8).LoadValueByIntKey(big.NewInt(0x22))
+	if err != nil {
+		t.Fatalf("unexpected setgetoptref insert result")
+	}
+	gotRef, err = gotRefValue.LoadRefCell()
+	if oldRef != nil || err != nil || string(gotRef.Hash()) != string(newRef.Hash()) {
+		t.Fatalf("unexpected setgetoptref insert result: old=%v ref=%v err=%v", oldRef, gotRef, err)
+	}
+
+	state = newDictTestState()
+	if err := state.Stack.PushCell(nil); err != nil {
+		t.Fatalf("push setgetoptref delete-miss value: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(0x22)); err != nil {
+		t.Fatalf("push setgetoptref delete-miss key: %v", err)
+	}
+	if err := state.Stack.PushCell(nil); err != nil {
+		t.Fatalf("push setgetoptref delete-miss root: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+		t.Fatalf("push setgetoptref delete-miss bits: %v", err)
+	}
+	if err := execDictSetGetOptRef(dictScalarVariant{kind: dictKeyUnsignedInt})(state); err != nil {
+		t.Fatalf("dict setgetoptref delete miss failed: %v", err)
+	}
+	oldRef, err = state.Stack.PopMaybeCell()
+	if err != nil {
+		t.Fatalf("pop setgetoptref delete-miss old ref: %v", err)
+	}
+	newRoot, err = state.Stack.PopMaybeCell()
+	if err != nil {
+		t.Fatalf("pop setgetoptref delete-miss root: %v", err)
+	}
+	if oldRef != nil || newRoot != nil || state.Stack.Len() != 0 {
+		t.Fatalf("unexpected setgetoptref delete miss result: old=%v root=%v stack=%d", oldRef, newRoot, state.Stack.Len())
+	}
+
+	state = newDictTestState()
+	if err := state.Stack.PushCell(newRef); err != nil {
+		t.Fatalf("push setgetoptref invalid-key value: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
+		t.Fatalf("push setgetoptref invalid-key key: %v", err)
+	}
+	if err := state.Stack.PushCell(nil); err != nil {
+		t.Fatalf("push setgetoptref invalid-key root: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+		t.Fatalf("push setgetoptref invalid-key bits: %v", err)
+	}
+	if err := execDictSetGetOptRef(dictScalarVariant{kind: dictKeyUnsignedInt})(state); err == nil {
+		t.Fatal("dict setgetoptref invalid unsigned key should range-check")
+	} else {
+		assertDictVMErrorCode(t, err, vmerr.CodeRangeCheck)
+	}
+	if state.Stack.Len() != 1 {
+		t.Fatalf("setgetoptref invalid key left %d stack values, want only value", state.Stack.Len())
+	}
+	leftValue, err := state.Stack.PopCell()
+	if err != nil {
+		t.Fatalf("pop setgetoptref invalid-key preserved value: %v", err)
+	}
+	if string(leftValue.Hash()) != string(newRef.Hash()) {
+		t.Fatal("setgetoptref invalid key did not preserve the original value cell")
+	}
+
+	malformedOldRoot := mustPlainDictRoot(t, 8, map[uint64]uint64{0x33: 0x44}, 8)
+	state = newDictTestState()
+	if err := state.Stack.PushCell(newRef); err != nil {
+		t.Fatalf("push setgetoptref malformed-old value: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(0x33)); err != nil {
+		t.Fatalf("push setgetoptref malformed-old key: %v", err)
+	}
+	if err := state.Stack.PushCell(malformedOldRoot); err != nil {
+		t.Fatalf("push setgetoptref malformed-old root: %v", err)
+	}
+	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+		t.Fatalf("push setgetoptref malformed-old bits: %v", err)
+	}
+	if err := execDictSetGetOptRef(dictScalarVariant{kind: dictKeyUnsignedInt})(state); err == nil {
+		t.Fatal("dict setgetoptref malformed old value should fail")
+	} else {
+		assertDictVMErrorCode(t, err, vmerr.CodeDict)
+	}
+	if state.Stack.Len() != 0 {
+		t.Fatalf("setgetoptref malformed old value left %d stack values", state.Stack.Len())
 	}
 
 	root := mustPlainDictRoot(t, 8, map[uint64]uint64{0x12: 0x34}, 8)
@@ -1344,4 +1580,302 @@ func TestDictSetGetAndDeleteGetTailBranches(t *testing.T) {
 	if err != nil || ok || gotValue.MustLoadUInt(8) != 0x34 || state.Stack.Len() != 0 {
 		t.Fatalf("expected deleteget miss to keep original dict and return false")
 	}
+}
+
+func TestDictSetKeyErrorPopOrder(t *testing.T) {
+	t.Run("slice set pops value before deferred key underflow", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xAA, 8).ToSlice()); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
+			t.Fatalf("push short key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeySlice})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("slice SET should pop value before returning deferred key error, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("slice setref pops value before deferred key underflow", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushCell(cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()); err != nil {
+			t.Fatalf("push ref value: %v", err)
+		}
+		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
+			t.Fatalf("push short key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeySlice, byRef: true})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("slice SETREF should pop value before returning deferred key error, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("slice setb pops value before deferred key underflow", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushBuilder(cell.BeginCell().MustStoreUInt(0xCC, 8)); err != nil {
+			t.Fatalf("push builder value: %v", err)
+		}
+		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
+			t.Fatalf("push short key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSetBuilder(cell.DictSetModeSet)(dictScalarVariant{kind: dictKeySlice})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("slice SETB should pop value before returning deferred key error, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("slice setget pops value before deferred key underflow", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0x11, 8).ToSlice()); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
+			t.Fatalf("push short key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSetGet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeySlice})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("slice SETGET should pop value before returning deferred key error, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("slice setgetref pops value before deferred key underflow", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushCell(cell.BeginCell().MustStoreUInt(0x22, 8).EndCell()); err != nil {
+			t.Fatalf("push ref value: %v", err)
+		}
+		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
+			t.Fatalf("push short key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSetGet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeySlice, byRef: true})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("slice SETGETREF should pop value before returning deferred key error, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("slice setgetb pops value before deferred key underflow", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushBuilder(cell.BeginCell().MustStoreUInt(0x33, 8)); err != nil {
+			t.Fatalf("push builder value: %v", err)
+		}
+		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
+			t.Fatalf("push short key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSetGetBuilder(cell.DictSetModeSet)(dictScalarVariant{kind: dictKeySlice})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeCellUnderflow)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("slice SETGETB should pop value before returning deferred key error, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("unsigned set range error keeps value on stack", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xDD, 8).ToSlice()); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push invalid key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeyUnsignedInt})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeRangeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("unsigned SET should keep value on early key range error, stack len=%d", state.Stack.Len())
+		}
+		value, err := state.Stack.PopSlice()
+		if err != nil {
+			t.Fatalf("pop preserved value: %v", err)
+		}
+		if value.MustLoadUInt(8) != 0xDD {
+			t.Fatalf("unexpected preserved value")
+		}
+	})
+}
+
+func TestDictSetIntegerKeyErrorPopOrder(t *testing.T) {
+	t.Run("signed set range error keeps value on stack", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xEE, 8).ToSlice()); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(128)); err != nil {
+			t.Fatalf("push invalid signed key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeySignedInt})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeRangeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("signed SET should keep value on early key range error, stack len=%d", state.Stack.Len())
+		}
+		value, err := state.Stack.PopSlice()
+		if err != nil {
+			t.Fatalf("pop preserved value: %v", err)
+		}
+		if value.MustLoadUInt(8) != 0xEE {
+			t.Fatalf("unexpected preserved value")
+		}
+	})
+
+	t.Run("unsigned set bad key type keeps value on stack", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushSlice(cell.BeginCell().MustStoreUInt(0xEF, 8).ToSlice()); err != nil {
+			t.Fatalf("push value: %v", err)
+		}
+		if err := state.Stack.PushAny(nil); err != nil {
+			t.Fatalf("push invalid key: %v", err)
+		}
+		if err := pushMaybeCell(state.Stack, nil); err != nil {
+			t.Fatalf("push root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictSet(cell.DictSetModeSet)(dictValueVariant{kind: dictKeyUnsignedInt})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("unsigned SET should keep value on early key type error, stack len=%d", state.Stack.Len())
+		}
+		value, err := state.Stack.PopSlice()
+		if err != nil {
+			t.Fatalf("pop preserved value: %v", err)
+		}
+		if value.MustLoadUInt(8) != 0xEF {
+			t.Fatalf("unexpected preserved value")
+		}
+	})
+
+	t.Run("signed pop set key encodes negative", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
+			t.Fatalf("push signed key: %v", err)
+		}
+
+		key, keyErr, err := popDictSetKey(state, 8, dictKeySignedInt)
+		if err != nil || keyErr != nil {
+			t.Fatalf("pop signed set key failed: keyErr=%v err=%v", keyErr, err)
+		}
+		if got := key.MustBeginParse().MustLoadUInt(8); got != 0xFF {
+			t.Fatalf("encoded signed key = %#x, want 0xff", got)
+		}
+	})
+}
+
+func TestDictGetIntegerKeyRangeSemantics(t *testing.T) {
+	t.Run("signed get overflow key is miss", func(t *testing.T) {
+		state := newDictTestState()
+		root := mustSignedDictRoot(t, 8, map[int64]uint64{-1: 0xAA}, 8)
+		if err := state.Stack.PushInt(big.NewInt(128)); err != nil {
+			t.Fatalf("push signed key: %v", err)
+		}
+		if err := state.Stack.PushCell(root); err != nil {
+			t.Fatalf("push signed root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		if err := execDictGet(dictValueVariant{kind: dictKeySignedInt})(state); err != nil {
+			t.Fatalf("signed GET overflow should be a miss, got %v", err)
+		}
+		ok, err := state.Stack.PopBool()
+		if err != nil {
+			t.Fatalf("pop miss flag: %v", err)
+		}
+		if ok || state.Stack.Len() != 0 {
+			t.Fatalf("signed GET overflow should return only false, ok=%v len=%d", ok, state.Stack.Len())
+		}
+	})
+
+	t.Run("signed delete overflow key is range error", func(t *testing.T) {
+		state := newDictTestState()
+		root := mustSignedDictRoot(t, 8, map[int64]uint64{-1: 0xAA}, 8)
+		if err := state.Stack.PushInt(big.NewInt(128)); err != nil {
+			t.Fatalf("push signed key: %v", err)
+		}
+		if err := state.Stack.PushCell(root); err != nil {
+			t.Fatalf("push signed root: %v", err)
+		}
+		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
+			t.Fatalf("push key bits: %v", err)
+		}
+
+		err := execDictDelete(dictScalarVariant{kind: dictKeySignedInt})(state)
+		assertDictVMErrorCode(t, err, vmerr.CodeRangeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("signed DEL overflow should consume operands, stack len=%d", state.Stack.Len())
+		}
+	})
+
+	t.Run("signed pop key type error", func(t *testing.T) {
+		state := newDictTestState()
+		if err := state.Stack.PushAny(nil); err != nil {
+			t.Fatalf("push invalid key: %v", err)
+		}
+
+		_, _, err := popDictKey(state, 8, dictKeySignedInt, false)
+		assertDictVMErrorCode(t, err, vmerr.CodeTypeCheck)
+		if state.Stack.Len() != 0 {
+			t.Fatalf("signed pop key type error should consume key, stack len=%d", state.Stack.Len())
+		}
+	})
 }

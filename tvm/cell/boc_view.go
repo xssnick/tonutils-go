@@ -85,6 +85,17 @@ type BOCView struct {
 	window      []byte
 }
 
+// BOCViewReader reads cells from a BOCView with a private read window and
+// scratch buffer. Separate readers can be used concurrently after the view is
+// opened. Body returned by ReadCell remains valid until the reader's next call.
+type BOCViewReader struct {
+	view *BOCView
+
+	windowStart uint64
+	window      []byte
+	scratch     []byte
+}
+
 type bocViewMetaStore struct {
 	offsets    []uint32
 	hashes     []Hash
@@ -219,53 +230,85 @@ func (v *BOCView) Cell(idx uint32) (BOCCellView, error) {
 	return cell, err
 }
 
+// NewReader creates a cell reader with an independent read window and scratch
+// buffer. Use one reader per goroutine when reading a view concurrently.
+func (v *BOCView) NewReader() *BOCViewReader {
+	return &BOCViewReader{view: v}
+}
+
 // ReadCell loads one BoC cell. The returned scratch slice owns cell.Body and
 // can be reused by the caller on the next ReadCell call.
 func (v *BOCView) ReadCell(idx uint32, scratch []byte) (BOCCellView, []byte, error) {
-	var out BOCCellView
+	start, scratch, err := v.cellReadBuffer(idx, scratch)
+	if err != nil {
+		return BOCCellView{}, scratch, err
+	}
+	if err = v.readPayloadAt(scratch, start); err != nil {
+		return BOCCellView{}, scratch, err
+	}
+
+	out, err := v.parseCell(idx, scratch)
+	return out, scratch, err
+}
+
+// ReadCell loads one cell. Body in the returned view remains valid until the
+// next ReadCell call on this reader.
+func (r *BOCViewReader) ReadCell(idx uint32) (BOCCellView, error) {
+	start, scratch, err := r.view.cellReadBuffer(idx, r.scratch)
+	r.scratch = scratch
+	if err != nil {
+		return BOCCellView{}, err
+	}
+	if err = r.readPayloadAt(r.scratch, start); err != nil {
+		return BOCCellView{}, err
+	}
+
+	return r.view.parseCell(idx, r.scratch)
+}
+
+func (v *BOCView) cellReadBuffer(idx uint32, scratch []byte) (uint64, []byte, error) {
 	if v == nil {
-		return out, scratch, errors.New("boc view is nil")
+		return 0, scratch, errors.New("boc view is nil")
 	}
 	if idx >= v.cells {
-		return out, scratch, errors.New("invalid cell index")
+		return 0, scratch, errors.New("invalid cell index")
 	}
 
 	start := v.cellStart(idx)
 	end := v.cellEnd(idx)
 	if end < start || end > v.payloadSize {
-		return out, scratch, errors.New("invalid cell index")
+		return 0, scratch, errors.New("invalid cell index")
 	}
 	cellSize := end - start
 	if cellSize > maxSerializedBOCCellBytes {
-		return out, scratch, fmt.Errorf("cell #%d is too large: %d", idx, cellSize)
+		return 0, scratch, fmt.Errorf("cell #%d is too large: %d", idx, cellSize)
 	}
 
 	if cap(scratch) < int(cellSize) {
 		scratch = make([]byte, int(cellSize))
 	}
 	scratch = scratch[:int(cellSize)]
-	if err := v.readPayloadAt(scratch, start); err != nil {
-		return out, scratch, err
-	}
+	return start, scratch, nil
+}
 
-	info, next, err := parseBOCPayloadCellInfo(scratch, 0, len(scratch), int(v.refSize), true)
+func (v *BOCView) parseCell(idx uint32, data []byte) (BOCCellView, error) {
+	info, next, err := parseBOCPayloadCellInfo(data, 0, len(data), int(v.refSize), true)
 	if err != nil {
-		return out, scratch, fmt.Errorf("invalid cell #%d: %w", idx, err)
+		return BOCCellView{}, fmt.Errorf("invalid cell #%d: %w", idx, err)
 	}
-	if next != len(scratch) {
-		return out, scratch, fmt.Errorf("invalid indexed cell boundary for cell #%d", idx)
+	if next != len(data) {
+		return BOCCellView{}, fmt.Errorf("invalid indexed cell boundary for cell #%d", idx)
 	}
 
-	out = BOCCellView{
+	return BOCCellView{
 		Index: idx,
 		D1:    info.dsc1 &^ 0b00010000,
 		D2:    info.dsc2,
 		Bits:  info.bitsSz,
-		Body:  info.body(scratch),
-		Refs:  bocCellRefsFromInfo(info, scratch, int(v.refSize)),
+		Body:  info.body(data),
+		Refs:  bocCellRefsFromInfo(info, data, int(v.refSize)),
 		Meta:  v.cellMeta(idx),
-	}
-	return out, scratch, nil
+	}, nil
 }
 
 func readBOCViewHeader(r io.ReaderAt, size int64) (bocViewHeader, error) {
@@ -438,7 +481,11 @@ func (r *bocViewReader) readFull(buf []byte) error {
 	if r.offset < 0 || int64(len(buf)) > r.size-r.offset {
 		return io.ErrUnexpectedEOF
 	}
-	if _, err := r.r.ReadAt(buf, r.offset); err != nil {
+	n, err := r.r.ReadAt(buf, r.offset)
+	if n != len(buf) {
+		if err == nil {
+			return io.ErrUnexpectedEOF
+		}
 		return err
 	}
 	r.offset += int64(len(buf))
@@ -454,11 +501,14 @@ func (v *BOCView) loadIndex(indexOffset uint64) error {
 
 	const indexReadChunkSize = 4 << 20
 	entrySize := int(v.offsetSize)
-	entriesPerChunk := indexReadChunkSize / entrySize
+	indexBytes := uint64(v.cells) * uint64(entrySize)
+	bufferSize := bocAdaptiveBufferSize(indexBytes, indexReadChunkSize)
+	entriesPerChunk := bufferSize / entrySize
 	if entriesPerChunk == 0 {
 		entriesPerChunk = 1
 	}
-	data := make([]byte, entriesPerChunk*entrySize)
+	data := v.prepareScratch(entriesPerChunk * entrySize)
+	defer v.releaseScratch()
 
 	for first := uint32(0); first < v.cells; {
 		count := uint32(entriesPerChunk)
@@ -467,7 +517,7 @@ func (v *BOCView) loadIndex(indexOffset uint64) error {
 		}
 		chunkBytes := int(count) * entrySize
 		offset := indexOffset + uint64(first)*uint64(v.offsetSize)
-		if err := v.readAt(data[:chunkBytes], offset); err != nil {
+		if err := v.readDirectAt(data[:chunkBytes], offset); err != nil {
 			return fmt.Errorf("failed to read custom index, err: %w", err)
 		}
 
@@ -514,25 +564,34 @@ func (v *BOCView) buildIndex() error {
 	}
 
 	offset := uint64(0)
+	var infoBuf [3]byte
+	var refsBuf [4 * 4]byte
 	for i := uint32(0); i < v.cells; i++ {
 		end := v.payloadSize
-		info, cellSize, err := v.readCellInfoAt(offset, end)
+		info, cellSize, err := v.readCellInfoAt(offset, end, &infoBuf)
 		if err != nil {
 			return fmt.Errorf("invalid cell #%d: %w", i, err)
 		}
-		for ref := 0; ref < info.refsCount(); ref++ {
-			refIdx, err := v.readRefIndexAt(offset+uint64(info.refsOffset), ref)
-			if err != nil {
+
+		refsSize := info.refsCount() * int(v.refSize)
+		if refsSize > 0 {
+			refs := refsBuf[:refsSize]
+			if err = v.readPayloadAt(refs, offset+uint64(info.refsOffset)); err != nil {
 				return fmt.Errorf("invalid cell #%d: %w", i, err)
 			}
-			if refIdx == i {
-				return errors.New("recursive reference of cells")
-			}
-			if refIdx < i {
-				return errors.New("reference to index which is behind parent cell")
-			}
-			if refIdx >= v.cells {
-				return errors.New("invalid index, out of scope")
+
+			for ref := 0; ref < info.refsCount(); ref++ {
+				refOffset := ref * int(v.refSize)
+				refIdx := uint32(dynIntFromPayloadSize(int(v.refSize), refs[refOffset:refOffset+int(v.refSize)]))
+				if refIdx == i {
+					return errors.New("recursive reference of cells")
+				}
+				if refIdx < i {
+					return errors.New("reference to index which is behind parent cell")
+				}
+				if refIdx >= v.cells {
+					return errors.New("invalid index, out of scope")
+				}
 			}
 		}
 		offset += cellSize
@@ -545,10 +604,19 @@ func (v *BOCView) buildIndex() error {
 }
 
 func (v *BOCView) buildMeta() error {
-	hashesCount := uint64(0)
-	levelMasks := make([]byte, v.cells)
+	v.meta = &bocViewMetaStore{
+		offsets:    make([]uint32, v.cells),
+		hashes:     make([]Hash, 0, v.cells),
+		depths:     make([]uint16, 0, v.cells),
+		levelMasks: make([]byte, v.cells),
+	}
+	if v.trustedHashes {
+		v.meta.stored = make([]byte, (v.cells+7)/8)
+	}
+
 	scratch := []byte(nil)
-	for i := uint32(0); i < v.cells; i++ {
+	for idx := v.cells; idx > 0; idx-- {
+		i := idx - 1
 		cell, nextScratch, err := v.readCellNoMeta(i, scratch)
 		scratch = nextScratch
 		if err != nil {
@@ -557,37 +625,19 @@ func (v *BOCView) buildMeta() error {
 		if err = v.validateCellRefs(i, cell.info, cell.data); err != nil {
 			return fmt.Errorf("invalid cell #%d: %w", i, err)
 		}
+
 		levelMask := cell.info.levelMask()
-		levelMasks[i] = levelMask.Mask
-		hashesCount += uint64(levelMask.getHashesCount())
-		if hashesCount > uint64(^uint32(0)) {
+		hashesCount := levelMask.getHashesCount()
+		if uint64(len(v.meta.hashes))+uint64(hashesCount) > uint64(^uint32(0)) {
 			return errors.New("too many cell hashes")
 		}
-	}
+		v.meta.offsets[i] = uint32(len(v.meta.hashes))
+		v.meta.levelMasks[i] = levelMask.Mask
+		var emptyHashes [4]Hash
+		var emptyDepths [4]uint16
+		v.meta.hashes = append(v.meta.hashes, emptyHashes[:hashesCount]...)
+		v.meta.depths = append(v.meta.depths, emptyDepths[:hashesCount]...)
 
-	v.meta = &bocViewMetaStore{
-		offsets:    make([]uint32, v.cells),
-		hashes:     make([]Hash, hashesCount),
-		depths:     make([]uint16, hashesCount),
-		levelMasks: levelMasks,
-	}
-	if v.trustedHashes {
-		v.meta.stored = make([]byte, (v.cells+7)/8)
-	}
-
-	var offset uint32
-	for i := uint32(0); i < v.cells; i++ {
-		v.meta.offsets[i] = offset
-		offset += uint32(LevelMask{Mask: levelMasks[i]}.getHashesCount())
-	}
-
-	for idx := v.cells; idx > 0; idx-- {
-		i := idx - 1
-		cell, nextScratch, err := v.readCellNoMeta(i, scratch)
-		scratch = nextScratch
-		if err != nil {
-			return err
-		}
 		if v.trustStoredMeta(cell.info) {
 			v.setStoredMeta(i)
 			v.storeTrustedCellMeta(i, cell.info, cell.data)
@@ -661,7 +711,7 @@ func (v *BOCView) readCellNoMeta(idx uint32, scratch []byte) (bocViewCellData, [
 	return out, scratch, nil
 }
 
-func (v *BOCView) readCellInfoAt(offset, end uint64) (bocPayloadCellInfo, uint64, error) {
+func (v *BOCView) readCellInfoAt(offset, end uint64, scratch *[3]byte) (bocPayloadCellInfo, uint64, error) {
 	if end < offset || end > v.payloadSize {
 		return bocPayloadCellInfo{}, 0, errors.New("invalid cell index")
 	}
@@ -669,8 +719,8 @@ func (v *BOCView) readCellInfoAt(offset, end uint64) (bocPayloadCellInfo, uint64
 		return bocPayloadCellInfo{}, 0, errors.New("failed to parse cell header, corrupted data")
 	}
 
-	var header [2]byte
-	if err := v.readPayloadAt(header[:], offset); err != nil {
+	header := scratch[:2]
+	if err := v.readPayloadAt(header, offset); err != nil {
 		return bocPayloadCellInfo{}, 0, err
 	}
 
@@ -686,22 +736,26 @@ func (v *BOCView) readCellInfoAt(offset, end uint64) (bocPayloadCellInfo, uint64
 	pos := offset + 2
 	if info.withHashes() {
 		hashesCount := info.levelMask().getHashesCount()
-		pos += uint64(hashesCount * (hashSize + depthSize))
+		hashesDepthsSize := uint64(hashesCount * (hashSize + depthSize))
+		if end-pos < hashesDepthsSize {
+			return bocPayloadCellInfo{}, 0, errors.New("failed to parse cell hashes, corrupted data")
+		}
+		pos += hashesDepthsSize
 	}
 
 	bodyBytes := uint64(cellBodyBytesSize(info.dsc2))
 	if end-pos < bodyBytes {
 		return bocPayloadCellInfo{}, 0, errors.New("failed to read cell payload, corrupted data")
 	}
-	body := make([]byte, bodyBytes)
-	if err := v.readPayloadAt(body, pos); err != nil {
-		return bocPayloadCellInfo{}, 0, err
-	}
 	bitsSz := uint16(bodyBytes * 8)
 	if info.dsc2%2 != 0 {
-		var err error
-		if bitsSz, err = cellBodyBitsSize(info.dsc2, body); err != nil {
+		last := scratch[2:3]
+		if err := v.readPayloadAt(last, pos+bodyBytes-1); err != nil {
 			return bocPayloadCellInfo{}, 0, err
+		}
+		var ok bool
+		if bitsSz, ok = cellBodyBitsSizeFromLast(int(bodyBytes), last[0]); !ok {
+			return bocPayloadCellInfo{}, 0, errors.New("invalid cell payload")
 		}
 	}
 	info.bodyOffset = int(pos - offset)
@@ -761,6 +815,11 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 	level := levelMask.GetLevel()
 	isMerkle := typ == MerkleProofCellType || typ == MerkleUpdateCellType
 
+	var refIndexes [4]uint32
+	for ref := 0; ref < refCnt; ref++ {
+		refIndexes[ref] = uint32(info.refIndex(data, ref, int(v.refSize)))
+	}
+
 	hashIndex := 0
 	var hashBuf [2 + maxCellDataBytes + (4 * depthSize) + (4 * hashSize)]byte
 	for levelIndex := 0; levelIndex <= level; levelIndex++ {
@@ -786,8 +845,7 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 
 		var depth uint16
 		for ref := 0; ref < refCnt; ref++ {
-			refIdx := info.refIndex(data, ref, int(v.refSize))
-			childDepth := v.cellMetaDepth(uint32(refIdx), childLevelIndex)
+			childDepth := v.cellMetaDepth(refIndexes[ref], childLevelIndex)
 			binary.BigEndian.PutUint16(hashBuf[bufPos:bufPos+depthSize], childDepth)
 			bufPos += depthSize
 
@@ -803,8 +861,7 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 		}
 
 		for ref := 0; ref < refCnt; ref++ {
-			refIdx := info.refIndex(data, ref, int(v.refSize))
-			hash := v.cellMetaHash(uint32(refIdx), childLevelIndex)
+			hash := v.cellMetaHash(refIndexes[ref], childLevelIndex)
 			bufPos += copy(hashBuf[bufPos:], hash[:])
 		}
 
@@ -1009,15 +1066,6 @@ func bocCellRefsFromInfo(info bocPayloadCellInfo, data []byte, refSize int) BOCC
 	return refs
 }
 
-func (v *BOCView) readRefIndexAt(refsOffset uint64, ref int) (uint32, error) {
-	var buf [4]byte
-	offset := refsOffset + uint64(ref*int(v.refSize))
-	if err := v.readPayloadAt(buf[:v.refSize], offset); err != nil {
-		return 0, err
-	}
-	return uint32(dynIntFromPayloadSize(int(v.refSize), buf[:v.refSize])), nil
-}
-
 func (v *BOCView) cellStart(idx uint32) uint64 {
 	if idx == 0 {
 		return 0
@@ -1051,7 +1099,63 @@ func (v *BOCView) readPayloadAt(dst []byte, offset uint64) error {
 	return v.readAt(dst, v.payloadOffset+offset)
 }
 
+func (r *BOCViewReader) readPayloadAt(dst []byte, offset uint64) error {
+	return r.readAt(dst, r.view.payloadOffset+offset)
+}
+
+func (v *BOCView) prepareScratch(size int) []byte {
+	if cap(v.window) < size {
+		v.window = make([]byte, size)
+	}
+	v.windowStart = 0
+	return v.window[:size]
+}
+
+func (v *BOCView) releaseScratch() {
+	v.window = v.window[:0]
+	v.windowStart = 0
+}
+
+func (v *BOCView) readDirectAt(dst []byte, offset uint64) error {
+	if len(dst) == 0 {
+		return nil
+	}
+	if offset > uint64(v.size) || uint64(len(dst)) > uint64(v.size)-offset {
+		return io.ErrUnexpectedEOF
+	}
+
+	n, err := v.r.ReadAt(dst, int64(offset))
+	if n == len(dst) {
+		return nil
+	}
+	if err == nil {
+		return io.ErrUnexpectedEOF
+	}
+	return err
+}
+
 func (v *BOCView) readAt(dst []byte, offset uint64) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	return v.readAtWithWindow(
+		dst,
+		offset,
+		&v.windowStart,
+		&v.window,
+	)
+}
+
+func (r *BOCViewReader) readAt(dst []byte, offset uint64) error {
+	return r.view.readAtWithWindow(
+		dst,
+		offset,
+		&r.windowStart,
+		&r.window,
+	)
+}
+
+func (v *BOCView) readAtWithWindow(dst []byte, offset uint64, windowStart *uint64, window *[]byte) error {
 	if len(dst) == 0 {
 		return nil
 	}
@@ -1059,37 +1163,33 @@ func (v *BOCView) readAt(dst []byte, offset uint64) error {
 		return io.ErrUnexpectedEOF
 	}
 	if len(dst) > bocViewReadWindowSize/2 {
-		_, err := v.r.ReadAt(dst, int64(offset))
-		return err
+		return v.readDirectAt(dst, offset)
 	}
 
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	windowEnd := v.windowStart + uint64(len(v.window))
-	if offset >= v.windowStart && offset+uint64(len(dst)) <= windowEnd {
-		copy(dst, v.window[offset-v.windowStart:])
+	windowEnd := *windowStart + uint64(len(*window))
+	if offset >= *windowStart && offset+uint64(len(dst)) <= windowEnd {
+		copy(dst, (*window)[offset-*windowStart:])
 		return nil
 	}
 
-	windowStart := offset / bocViewReadWindowSize * bocViewReadWindowSize
+	nextWindowStart := offset / bocViewReadWindowSize * bocViewReadWindowSize
 	windowSize := bocViewReadWindowSize
-	if remain := uint64(v.size) - windowStart; remain < uint64(windowSize) {
+	if remain := uint64(v.size) - nextWindowStart; remain < uint64(windowSize) {
 		windowSize = int(remain)
 	}
-	if offset+uint64(len(dst)) > windowStart+uint64(windowSize) {
-		_, err := v.r.ReadAt(dst, int64(offset))
+	if offset+uint64(len(dst)) > nextWindowStart+uint64(windowSize) {
+		return v.readDirectAt(dst, offset)
+	}
+	if cap(*window) < windowSize {
+		*window = make([]byte, windowSize)
+	}
+	*window = (*window)[:windowSize]
+	if err := v.readDirectAt(*window, nextWindowStart); err != nil {
+		*window = (*window)[:0]
 		return err
 	}
-	if cap(v.window) < windowSize {
-		v.window = make([]byte, windowSize)
-	}
-	v.window = v.window[:windowSize]
-	if _, err := v.r.ReadAt(v.window, int64(windowStart)); err != nil {
-		return err
-	}
-	v.windowStart = windowStart
-	copy(dst, v.window[offset-windowStart:])
+	*windowStart = nextWindowStart
+	copy(dst, (*window)[offset-nextWindowStart:])
 	return nil
 }
 
@@ -1099,18 +1199,19 @@ func (v *BOCView) validateCRC() error {
 	}
 
 	var stored [4]byte
-	if err := v.readAt(stored[:], v.crcOffset); err != nil {
+	if err := v.readDirectAt(stored[:], v.crcOffset); err != nil {
 		return fmt.Errorf("failed to read crc32c trailer: %w", err)
 	}
 
 	crc := uint32(0)
-	buf := make([]byte, bocViewReadWindowSize)
+	buf := v.prepareScratch(bocAdaptiveBufferSize(v.crcOffset, bocViewReadWindowSize))
+	defer v.releaseScratch()
 	for offset := uint64(0); offset < v.crcOffset; {
 		n := len(buf)
 		if remain := v.crcOffset - offset; remain < uint64(n) {
 			n = int(remain)
 		}
-		if _, err := v.r.ReadAt(buf[:n], int64(offset)); err != nil {
+		if err := v.readDirectAt(buf[:n], offset); err != nil {
 			return err
 		}
 		crc = crc32.Update(crc, castTable, buf[:n])

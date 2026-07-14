@@ -21,11 +21,10 @@ func REPEAT() *helpers.SimpleOP {
 				return err
 			}
 
-			i1, err := state.Stack.PopIntRange(repeatCountMin, repeatCountMax)
+			count, err := state.Stack.PopIntRangeInt64(repeatCountMin, repeatCountMax)
 			if err != nil {
 				return err
 			}
-			count := i1.Int64()
 
 			if count < 0 {
 				return nil

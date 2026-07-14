@@ -39,13 +39,15 @@ type referenceTickTockJSON struct {
 }
 
 type referenceTickTockResult struct {
-	exitCode int64
-	gasUsed  int64
-	accepted bool
-	code     *cell.Cell
-	data     *cell.Cell
-	actions  *cell.Cell
-	vmLog    string
+	exitCode  int64
+	gasUsed   int64
+	accepted  bool
+	txCell    *cell.Cell
+	shardCell *cell.Cell
+	code      *cell.Cell
+	data      *cell.Cell
+	actions   *cell.Cell
+	vmLog     string
 }
 
 var (
@@ -59,7 +61,28 @@ func runReferenceTickTock(code, data *cell.Cell, addr *address.Address, isTock b
 	if err != nil {
 		return nil, err
 	}
+	return runReferenceTickTockWithConfigB64(code, data, addr, isTock, now, balance, randSeed, configB64)
+}
 
+func runReferenceTickTockWithConfigRoot(code, data *cell.Cell, addr *address.Address, isTock bool, now uint32, balance uint64, randSeed []byte, configRoot *cell.Cell) (*referenceTickTockResult, error) {
+	if configRoot == nil {
+		return nil, fmt.Errorf("reference tick/tock config root is nil")
+	}
+	return runReferenceTickTockWithConfigB64(code, data, addr, isTock, now, balance, randSeed, base64.StdEncoding.EncodeToString(configRoot.ToBOC()))
+}
+
+func runReferenceTickTockWithConfigRootAndLibraries(code, data *cell.Cell, addr *address.Address, isTock bool, now uint32, balance uint64, randSeed []byte, configRoot, libs *cell.Cell) (*referenceTickTockResult, error) {
+	if configRoot == nil {
+		return nil, fmt.Errorf("reference tick/tock config root is nil")
+	}
+	return runReferenceTickTockWithConfigB64AndLibraries(code, data, addr, isTock, now, balance, randSeed, base64.StdEncoding.EncodeToString(configRoot.ToBOC()), libs)
+}
+
+func runReferenceTickTockWithConfigB64(code, data *cell.Cell, addr *address.Address, isTock bool, now uint32, balance uint64, randSeed []byte, configB64 string) (*referenceTickTockResult, error) {
+	return runReferenceTickTockWithConfigB64AndLibraries(code, data, addr, isTock, now, balance, randSeed, configB64, nil)
+}
+
+func runReferenceTickTockWithConfigB64AndLibraries(code, data *cell.Cell, addr *address.Address, isTock bool, now uint32, balance uint64, randSeed []byte, configB64 string, libs *cell.Cell) (*referenceTickTockResult, error) {
 	shardAccount, err := buildReferenceTickTockShardAccount(addr, code, data, balance)
 	if err != nil {
 		return nil, err
@@ -81,6 +104,13 @@ func runReferenceTickTock(code, data *cell.Cell, addr *address.Address, isTock b
 		defer C.free(unsafe.Pointer(seedHex))
 		if !bool(C.transaction_emulator_set_rand_seed(emulator, seedHex)) {
 			return nil, fmt.Errorf("failed to set reference transaction emulator rand seed")
+		}
+	}
+	if libs != nil {
+		cLibs := C.CString(base64.StdEncoding.EncodeToString(libs.ToBOC()))
+		defer C.free(unsafe.Pointer(cLibs))
+		if !bool(C.transaction_emulator_set_libs(emulator, cLibs)) {
+			return nil, fmt.Errorf("failed to initialize reference tick/tock libraries")
 		}
 	}
 
@@ -127,13 +157,15 @@ func runReferenceTickTock(code, data *cell.Cell, addr *address.Address, isTock b
 	}
 
 	return &referenceTickTockResult{
-		exitCode: exitCode,
-		gasUsed:  gasUsed,
-		accepted: true,
-		code:     codeCell,
-		data:     dataCell,
-		actions:  actionsCell,
-		vmLog:    referenceVMLog(raw.VMLog),
+		exitCode:  exitCode,
+		gasUsed:   gasUsed,
+		accepted:  true,
+		txCell:    txCell,
+		shardCell: shardCell,
+		code:      codeCell,
+		data:      dataCell,
+		actions:   actionsCell,
+		vmLog:     referenceVMLog(raw.VMLog),
 	}, nil
 }
 

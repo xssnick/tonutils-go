@@ -7,14 +7,19 @@ import (
 	"encoding/hex"
 	"math/big"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
+	mathop "github.com/xssnick/tonutils-go/tvm/op/math"
+	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 var (
@@ -172,7 +177,44 @@ func TestTVMCrossEmulatorReference(t *testing.T) {
 	}
 }
 
+func TestTVMCrossEmulatorMethodHarnessAllGlobalVersions(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_METHOD_HARNESS_VERSION_AUDIT")
+	for _, version := range versions {
+		for _, rawCase := range []uint8{0, 1} {
+			t.Run("global_v"+strconv.Itoa(version)+"_"+crossMethodHarnessCaseName(rawCase), func(t *testing.T) {
+				assertCrossMethodHarnessVersionParity(t, version, rawCase)
+			})
+		}
+	}
+}
+
+func FuzzTVMCrossEmulatorMethodHarnessGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint8(0))
+		f.Add(uint8(version), uint8(1))
+	}
+	f.Add(uint8(255), uint8(255))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+
+		assertCrossMethodHarnessVersionParity(t, version, rawCase)
+	})
+}
+
 func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args ...int64) (*crossRunResult, error) {
+	return runGoCrossMethodWithVersion(code, data, c7, vm.MaxSupportedGlobalVersion, method, args...)
+}
+
+func runGoCrossMethodWithVersion(code, data *cell.Cell, c7 tuple.Tuple, globalVersion int, method string, args ...int64) (*crossRunResult, error) {
 	stack := vm.NewStack()
 	for _, arg := range args {
 		if err := stack.PushInt(big.NewInt(arg)); err != nil {
@@ -184,7 +226,13 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 		return nil, err
 	}
 
-	res, err := NewTVM().ExecuteDetailed(code, data, c7, vm.GasWithLimit(crossTestMaxGas), stack)
+	machine := NewTVM()
+	cfg, err := crossRunPreparedBlockchainConfig(globalVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := machine.Execute(code, data, c7, vm.GasWithLimit(crossTestMaxGas), stack, ExecutionConfig{Config: cfg})
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +254,13 @@ func runGoCrossMethod(code, data *cell.Cell, c7 tuple.Tuple, method string, args
 }
 
 func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
+	if cfg != nil {
+		return prepareCrossTestC7WithConfigRoot(cfg.AsCell(), code)
+	}
+	return prepareCrossTestC7WithConfigRoot(nil, code)
+}
+
+func prepareCrossTestC7WithConfigRoot(configRoot *cell.Cell, code *cell.Cell) tuple.Tuple {
 	inner := tuple.NewTupleValue(
 		new(big.Int).SetUint64(0x076ef1ea),
 		big.NewInt(0),
@@ -218,8 +273,8 @@ func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
 		cell.BeginCell().MustStoreAddr(crossTestAddr).ToSlice(),
 	)
 
-	if cfg != nil {
-		inner.Append(cfg.AsCell())
+	if configRoot != nil {
+		inner.Append(configRoot)
 		inner.Append(code)
 		inner.Append(tuple.NewTupleValue(big.NewInt(0), nil))
 		inner.Append(big.NewInt(0))
@@ -229,6 +284,69 @@ func prepareCrossTestC7(cfg *cell.Dictionary, code *cell.Cell) tuple.Tuple {
 	}
 
 	return tuple.NewTupleValue(inner)
+}
+
+func assertCrossMethodHarnessVersionParity(t *testing.T, version int, rawCase uint8) {
+	t.Helper()
+
+	code, wantExit := crossMethodHarnessCase(t, rawCase, version)
+	data := cell.BeginCell().EndCell()
+	c7 := prepareCrossTestC7WithConfigRoot(tonopsCrossConfigWithGlobalVersion(t, uint32(version)), code)
+	method := "method_harness_" + crossMethodHarnessCaseName(rawCase)
+
+	goRes, err := runGoCrossMethodWithVersion(code, data, c7, version, method)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refRes, err := runReferenceCrossMethod(code, data, c7, method)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != wantExit || refRes.exitCode != wantExit {
+		t.Fatalf("unexpected exit code: go=%d reference=%d expected=%d", goRes.exitCode, refRes.exitCode, wantExit)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("failed to normalize reference stack: %v", err)
+	}
+	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+}
+
+func crossMethodHarnessCase(t *testing.T, rawCase uint8, version int) (*cell.Cell, int32) {
+	t.Helper()
+
+	switch rawCase % 2 {
+	case 0:
+		return prependRawMethodDrop(codeFromBuilders(t,
+			stackop.PUSHINT(big.NewInt(7)).Serialize(),
+			stackop.PUSHINT(big.NewInt(35)).Serialize(),
+			mathop.SUM().Serialize(),
+		)), 0
+	default:
+		wantExit := int32(0)
+		if version < funcsop.GASCONSUMED().MinGlobalVersion() {
+			wantExit = int32(vmerr.CodeInvalidOpcode)
+		}
+		return prependRawMethodDrop(codeFromBuilders(t, funcsop.GASCONSUMED().Serialize())), wantExit
+	}
+}
+
+func crossMethodHarnessCaseName(rawCase uint8) string {
+	if rawCase%2 == 0 {
+		return "pushint_add"
+	}
+	return "gas_consumed_min_v4"
 }
 
 func mustCellFromHex(src string) *cell.Cell {

@@ -48,7 +48,8 @@ func ADDDIVMODR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "ADDDIVMODR",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0x01),
+		Name:       "ADDDIVMODR",
+		BitPrefix:  helpers.BytesPrefix(0xA9, 0x01),
+		MinVersion: 4,
 	}
 }

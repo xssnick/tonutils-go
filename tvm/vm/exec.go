@@ -26,7 +26,7 @@ func (s *State) ReturnAlt(args ...int) error {
 }
 
 func (s *State) returnTo(regIdx int, exitCode int64, args ...int) error {
-	cont := Continuation(&QuitContinuation{ExitCode: exitCode})
+	cont := Continuation(quitContinuation(exitCode))
 	s.Reg.C[regIdx], cont = cont, s.Reg.C[regIdx]
 	if len(args) == 1 {
 		return s.JumpArgs(cont, args[0])
@@ -206,6 +206,8 @@ func (s *State) Call(c Continuation) error {
 	}
 	ret.Data.Save.C[0] = copyContinuation(s.Reg.C[0])
 	s.Reg.C[0] = ret
+	// ret captured the CurrentCode pointer, the next jump must not overwrite it
+	s.currentCodeOwned = false
 
 	return s.JumpTo(c)
 }
@@ -238,6 +240,8 @@ func (s *State) CallArgs(c Continuation, passArgs, retArgs int) error {
 		Code: s.CurrentCode,
 	}
 	ret.Data.Save.C[0] = copyContinuation(s.Reg.C[0])
+	// ret captured the CurrentCode pointer, the next jump must not overwrite it
+	s.currentCodeOwned = false
 
 	s.Stack = newStack
 	s.Reg.C[0] = ret
@@ -261,7 +265,7 @@ func (s *State) JumpArgs(c Continuation, passArgs int) error {
 }
 
 func (s *State) JumpTo(c Continuation) (err error) {
-	traceStack("[JUMP]", s.Stack)
+	s.TraceStack("[JUMP]", s.Stack)
 
 	var iter int
 	for c != nil {
@@ -271,13 +275,13 @@ func (s *State) JumpTo(c Continuation) (err error) {
 		}
 		iter++
 
-		if iter > FreeNestedContJump {
+		if s.GlobalVersion >= 9 && iter > FreeNestedContJump {
 			if err = s.ConsumeGas(1); err != nil {
 				return err
 			}
 		}
 
-		if c != nil {
+		if c != nil && s.GlobalVersion >= 9 {
 			if data := c.GetControlData(); data != nil && (data.Stack != nil || data.NumArgs >= 0) {
 				// if cont has non-empty stack or expects fixed number of arguments, jump is not simple
 				c, err = s.adjustJumpCont(c, -1)
@@ -292,7 +296,9 @@ func (s *State) JumpTo(c Continuation) (err error) {
 }
 
 func (s *State) adjustJumpCont(c Continuation, passArgs int) (Continuation, error) {
-	tracef("ADJUST JUMP CONT: %d", passArgs)
+	if s.TraceEnabled() {
+		s.Tracef("ADJUST JUMP CONT: %d", passArgs)
+	}
 
 	plan, err := planContinuationStack(s.Stack, c.GetControlData(), passArgs, continuationActionJump)
 	if err != nil {
@@ -310,8 +316,8 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 	var newStack *Stack
 	var capturedStack *Stack
 	if stackCopy < 0 || stackCopy == s.Stack.Len() {
+		// the whole stack moves along as the current stack; cc captures nothing
 		newStack = s.Stack
-		s.Stack = NewStack()
 	} else if stackCopy > 0 {
 		ns, err := s.Stack.SplitTop(stackCopy, 0)
 		if err != nil {
@@ -336,17 +342,19 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 		},
 		Code: s.CurrentCode,
 	}
+	// cc captured the CurrentCode pointer, the next jump must not overwrite it
+	s.currentCodeOwned = false
 	s.Stack = newStack
 
 	if saveCR&7 != 0 {
 		cData := cc.GetControlData()
 		if saveCR&1 != 0 {
 			cData.Save.C[0] = copyContinuation(s.Reg.C[0])
-			s.Reg.C[0] = &QuitContinuation{ExitCode: 0}
+			s.Reg.C[0] = quitCont0
 		}
 		if saveCR&2 != 0 {
 			cData.Save.C[1] = copyContinuation(s.Reg.C[1])
-			s.Reg.C[1] = &QuitContinuation{ExitCode: 1}
+			s.Reg.C[1] = quitCont1
 		}
 		if saveCR&4 != 0 {
 			cData.Save.C[2] = copyContinuation(s.Reg.C[2])
@@ -355,9 +363,14 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 	return cc, nil
 }
 
+// copyContinuation is used when the current control registers are captured
+// into a continuation's Save area. Continuations are shared here instead of
+// deep-copied: every mutation site in the codebase clones the continuation
+// first (cloneContinuation / control-register reads go through
+// cloneControlRegisterValue, stack pushes go through shareStackValue), so a
+// continuation reachable from a register or a Save slot is never mutated in
+// place. Deep-copying here used to duplicate the whole return chain on every
+// call.
 func copyContinuation(cont Continuation) Continuation {
-	if cont == nil {
-		return nil
-	}
-	return cont.Copy()
+	return cont
 }

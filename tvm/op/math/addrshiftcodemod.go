@@ -20,15 +20,16 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int8, round
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
+		MinVersion:    4,
 		Action: func(state *vm.State) error {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			w, err := popInt(state)
+			w, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
-			x, err := popInt(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
@@ -37,7 +38,7 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int8, round
 			}
 
 			dividend := new(big.Int).Add(x, w)
-			divider := new(big.Int).Lsh(big.NewInt(1), uint(imm()))
+			divider := new(big.Int).Lsh(bigIntOne, uint(imm()))
 			q, r := round(dividend, divider)
 
 			if err = state.Stack.PushInt(q); err != nil {

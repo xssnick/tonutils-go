@@ -102,7 +102,15 @@ func cachedMagic(tag string) magicInfo {
 // ## N - means integer with N bits, if size <= 64 it loads to uint of any size, if > 64 it loads to *big.Int
 // ^ - loads ref and calls recursively, if field type is *cell.Cell, it loads without parsing
 // . - calls recursively to continue load from current loader (inner struct)
-// dict [inline] N - loads dictionary with key size N, example: 'dict 256', inline option can be used if dict is Hashmap and not HashmapE
+// dict [inline] N - loads dictionary with key size N, example: 'dict 256', inline option can be used if dict is Hashmap and not HashmapE.
+//
+//	NOTE: TLB Hashmap (non-E, the 'inline' form) cannot be empty by definition
+//	(hm_edge always carries a node, only HashmapE has the hme_empty variant),
+//	so serializing an empty dict with 'dict inline N' is refused with an error.
+//	Use plain 'dict N' (HashmapE) for dictionaries that can be empty. This
+//	commonly surfaces when serializing config-like structures whose TLB says
+//	Hashmap: an empty dict simply has no valid representation there.
+//
 // bits N - loads bit slice N len to []byte
 // bool - loads 1 bit boolean
 // addr [std|ext] [required] - loads ton address
@@ -131,7 +139,15 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 // ## N - means integer with N bits, if size <= 64 it loads to uint of any size, if > 64 it loads to *big.Int
 // ^ - loads ref and calls recursively, if field type is *cell.Cell, it loads without parsing
 // . - calls recursively to continue load from current loader (inner struct)
-// dict [inline] N - loads dictionary with key size N, example: 'dict 256', inline option can be used if dict is Hashmap and not HashmapE
+// dict [inline] N - loads dictionary with key size N, example: 'dict 256', inline option can be used if dict is Hashmap and not HashmapE.
+//
+//	NOTE: TLB Hashmap (non-E, the 'inline' form) cannot be empty by definition
+//	(hm_edge always carries a node, only HashmapE has the hme_empty variant),
+//	so serializing an empty dict with 'dict inline N' is refused with an error.
+//	Use plain 'dict N' (HashmapE) for dictionaries that can be empty. This
+//	commonly surfaces when serializing config-like structures whose TLB says
+//	Hashmap: an empty dict simply has no valid representation there.
+//
 // bits N - loads bit slice N len to []byte
 // bool - loads 1 bit boolean
 // addr [std|ext] [required] - loads ton address
@@ -859,7 +875,10 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 			}
 
 			if dCell == nil {
-				return fmt.Errorf("inline dict in field %s cannot be empty", structField.Name)
+				// TLB Hashmap (non-E) has no empty representation: hm_edge always
+				// carries a node, only HashmapE has hme_empty. An empty dict simply
+				// cannot be serialized inline.
+				return fmt.Errorf("inline dict in field %s cannot be empty: TLB Hashmap (non-E) has no empty representation, use non-inline 'dict N' (HashmapE) if the dict can be empty", structField.Name)
 			}
 
 			if err = builder.StoreBuilder(dCell.ToBuilder()); err != nil {

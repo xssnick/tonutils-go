@@ -48,6 +48,19 @@ func makeFeeHashMoreState(t *testing.T) *vm.State {
 			24: msgCellMC,
 			25: msgCellWC,
 		}),
+		paramIdxUnpackedConfig: func() tuple.Tuple {
+			cfg := tuple.NewTupleSized(6)
+			if err := cfg.Set(0, storageCell.MustBeginParse()); err != nil {
+				t.Fatalf("failed to set unpacked storage config: %v", err)
+			}
+			if err := cfg.Set(4, msgCellMC.MustBeginParse()); err != nil {
+				t.Fatalf("failed to set unpacked masterchain msg config: %v", err)
+			}
+			if err := cfg.Set(5, msgCellWC.MustBeginParse()); err != nil {
+				t.Fatalf("failed to set unpacked workchain msg config: %v", err)
+			}
+			return cfg
+		}(),
 		7: tuple.NewTupleValue(big.NewInt(0), makeExtraBalanceDict(t, map[uint32]uint64{1: 9})),
 	})
 	st.InitForExecution()
@@ -286,7 +299,7 @@ func TestFeeHashMoreBranches(t *testing.T) {
 			_, err := child.Stack.PopIntFinite()
 			return 0, err
 		})
-		child := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
+		child := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
 		exitCode, err := parent.RunChild(child)
 		if err != nil || exitCode != 0 {
 			t.Fatalf("child GETEXTRABALANCE run = (%d, %v)", exitCode, err)

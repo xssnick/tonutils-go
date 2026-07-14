@@ -2,19 +2,25 @@ package funcs
 
 import (
 	"bytes"
+	"errors"
 	"math/big"
 
 	ristretto "github.com/bwesterb/go-ristretto"
-	circlbls "github.com/cloudflare/circl/ecc/bls12381"
 	circlgroup "github.com/cloudflare/circl/group"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/internal/blsmap"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 const tonBLSSignatureDST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_"
+
+// errBLSPointNotInGroup mirrors blst's BLST_POINT_NOT_IN_GROUP: the raw opcodes
+// that call blst's aggregate() (ADD's top operand, SUB's bottom operand, and
+// every non-first element of AGGREGATE/FASTAGGREGATEVERIFY) reject operands
+// outside the r-torsion subgroup even though they only on-curve-decode the rest.
+var errBLSPointNotInGroup = errors.New("bls point is not in the r-torsion subgroup")
 
 var (
 	ristretto255L = func() *big.Int {
@@ -41,43 +47,48 @@ var (
 
 func init() {
 	vm.List = append(vm.List,
-		func() vm.OP { return RIST255_FROMHASH() },
-		func() vm.OP { return RIST255_VALIDATE() },
-		func() vm.OP { return RIST255_ADD() },
-		func() vm.OP { return RIST255_SUB() },
-		func() vm.OP { return RIST255_MUL() },
-		func() vm.OP { return RIST255_MULBASE() },
-		func() vm.OP { return RIST255_PUSHL() },
-		func() vm.OP { return RIST255_QVALIDATE() },
-		func() vm.OP { return RIST255_QADD() },
-		func() vm.OP { return RIST255_QSUB() },
-		func() vm.OP { return RIST255_QMUL() },
-		func() vm.OP { return RIST255_QMULBASE() },
-		func() vm.OP { return BLS_VERIFY() },
-		func() vm.OP { return BLS_AGGREGATE() },
-		func() vm.OP { return BLS_FASTAGGREGATEVERIFY() },
-		func() vm.OP { return BLS_AGGREGATEVERIFY() },
-		func() vm.OP { return BLS_G1_ADD() },
-		func() vm.OP { return BLS_G1_SUB() },
-		func() vm.OP { return BLS_G1_NEG() },
-		func() vm.OP { return BLS_G1_MUL() },
-		func() vm.OP { return BLS_G1_MULTIEXP() },
-		func() vm.OP { return BLS_G1_ZERO() },
-		func() vm.OP { return BLS_MAP_TO_G1() },
-		func() vm.OP { return BLS_G1_INGROUP() },
-		func() vm.OP { return BLS_G1_ISZERO() },
-		func() vm.OP { return BLS_G2_ADD() },
-		func() vm.OP { return BLS_G2_SUB() },
-		func() vm.OP { return BLS_G2_NEG() },
-		func() vm.OP { return BLS_G2_MUL() },
-		func() vm.OP { return BLS_G2_MULTIEXP() },
-		func() vm.OP { return BLS_G2_ZERO() },
-		func() vm.OP { return BLS_MAP_TO_G2() },
-		func() vm.OP { return BLS_G2_INGROUP() },
-		func() vm.OP { return BLS_G2_ISZERO() },
-		func() vm.OP { return BLS_PAIRING() },
-		func() vm.OP { return BLS_PUSHR() },
+		func() vm.OP { return tonCryptoV4(RIST255_FROMHASH()) },
+		func() vm.OP { return tonCryptoV4(RIST255_VALIDATE()) },
+		func() vm.OP { return tonCryptoV4(RIST255_ADD()) },
+		func() vm.OP { return tonCryptoV4(RIST255_SUB()) },
+		func() vm.OP { return tonCryptoV4(RIST255_MUL()) },
+		func() vm.OP { return tonCryptoV4(RIST255_MULBASE()) },
+		func() vm.OP { return tonCryptoV4(RIST255_PUSHL()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QVALIDATE()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QADD()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QSUB()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QMUL()) },
+		func() vm.OP { return tonCryptoV4(RIST255_QMULBASE()) },
+		func() vm.OP { return tonCryptoV4(BLS_VERIFY()) },
+		func() vm.OP { return tonCryptoV4(BLS_AGGREGATE()) },
+		func() vm.OP { return tonCryptoV4(BLS_FASTAGGREGATEVERIFY()) },
+		func() vm.OP { return tonCryptoV4(BLS_AGGREGATEVERIFY()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_ADD()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_SUB()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_NEG()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_MUL()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_MULTIEXP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_ZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_MAP_TO_G1()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_INGROUP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G1_ISZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_ADD()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_SUB()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_NEG()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_MUL()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_MULTIEXP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_ZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_MAP_TO_G2()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_INGROUP()) },
+		func() vm.OP { return tonCryptoV4(BLS_G2_ISZERO()) },
+		func() vm.OP { return tonCryptoV4(BLS_PAIRING()) },
+		func() vm.OP { return tonCryptoV4(BLS_PUSHR()) },
 	)
+}
+
+func tonCryptoV4(op *helpers.SimpleOP) *helpers.SimpleOP {
+	op.MinVersion = 4
+	return op
 }
 
 func pushSliceBytes(state *vm.State, data []byte) error {
@@ -110,11 +121,7 @@ func blsCalculateMultiexpGas(n int, base, coef1, coef2 int64) int64 {
 	return base + int64(n)*coef1 + int64(n)*coef2/int64(l)
 }
 
-func popBLSMsg(state *vm.State) ([]byte, error) {
-	msgSlice, err := state.Stack.PopSlice()
-	if err != nil {
-		return nil, err
-	}
+func preloadBLSMsg(msgSlice *cell.Slice) ([]byte, error) {
 	if msgSlice.BitsLeft()%8 != 0 {
 		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "message does not consist of an integer number of bytes")
 	}
@@ -125,6 +132,14 @@ func popBLSMsg(state *vm.State) ([]byte, error) {
 	return msg, nil
 }
 
+func popBLSMsg(state *vm.State) ([]byte, error) {
+	msgSlice, err := state.Stack.PopSlice()
+	if err != nil {
+		return nil, err
+	}
+	return preloadBLSMsg(msgSlice)
+}
+
 func preloadBLSPoint(sl *cell.Slice, bits uint, msg string) ([]byte, error) {
 	data, err := sl.PreloadSlice(bits)
 	if err != nil {
@@ -133,6 +148,10 @@ func preloadBLSPoint(sl *cell.Slice, bits uint, msg string) ([]byte, error) {
 	return data, nil
 }
 
+// parseBLSG1/parseBLSG2 fully validate the point, including r-torsion subgroup
+// membership. Use these ONLY where the reference node also enforces subgroup
+// membership: BLS_VERIFY and BLS_AGGREGATEVERIFY (blst core_verify / explicit
+// in_group), and BLS_G1_INGROUP/BLS_G2_INGROUP (the check itself).
 func parseBLSG1(data []byte) (*circlbls.G1, error) {
 	var p circlbls.G1
 	if err := p.SetBytes(data); err != nil {
@@ -144,6 +163,29 @@ func parseBLSG1(data []byte) (*circlbls.G1, error) {
 func parseBLSG2(data []byte) (*circlbls.G2, error) {
 	var p circlbls.G2
 	if err := p.SetBytes(data); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// parseBLSG1OnCurve/parseBLSG2OnCurve validate that the point is on the curve
+// but deliberately do NOT check r-torsion subgroup membership. This mirrors the
+// reference node's low-level BLS opcodes (crypto/vm/bls.cpp), which decode with
+// raw blst_p*_deserialize (on-curve only). Use these for the raw arithmetic and
+// pairing opcodes (BLS_AGGREGATE, BLS_G1/G2_ADD/SUB/NEG/MUL/MULTIEXP, BLS_PAIRING)
+// and for the per-signature parse inside BLS_FASTAGGREGATEVERIFY. See PROVENANCE
+// in tvm/internal/bls12381.
+func parseBLSG1OnCurve(data []byte) (*circlbls.G1, error) {
+	var p circlbls.G1
+	if err := p.SetBytesOnCurve(data); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func parseBLSG2OnCurve(data []byte) (*circlbls.G2, error) {
+	var p circlbls.G2
+	if err := p.SetBytesOnCurve(data); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -180,8 +222,16 @@ func blsFastAggregateVerify(pubBytes [][]byte, msg, sigBytes []byte) bool {
 
 	var agg circlbls.G1
 	for i, pubData := range pubBytes {
-		pub, err := parseBLSG1(pubData)
+		// Mirror bls::fast_aggregate_verify: each pubkey is on-curve decoded and
+		// is_inf-checked; pubs[0] (the bottom operand) is added via to_jacobian
+		// with no subgroup check, while pubs[1..] go through blst's aggregate()
+		// and are rejected (→ false) if outside the subgroup. The subgroup of the
+		// resulting aggregate is then checked by blsVerify's full parse.
+		pub, err := parseBLSG1OnCurve(pubData)
 		if err != nil || pub.IsIdentity() {
+			return false
+		}
+		if i != 0 && !pub.InSubgroup() {
 			return false
 		}
 		if i == 0 {
@@ -198,18 +248,19 @@ func blsAggregateVerify(pubs [][]byte, msgs [][]byte, sigBytes []byte) bool {
 		return false
 	}
 
-	listG1 := make([]*circlbls.G1, 0, len(pubs)+1)
-	listG2 := make([]*circlbls.G2, 0, len(pubs)+1)
-	signs := make([]int, 0, len(pubs)+1)
+	total := len(pubs) + 1
+	listG1 := make([]*circlbls.G1, total)
+	listG2 := make([]*circlbls.G2, total)
+	signs := make([]int, total)
 
 	for i := range pubs {
 		pub, err := parseBLSG1(pubs[i])
 		if err != nil || pub.IsIdentity() {
 			return false
 		}
-		listG1 = append(listG1, pub)
-		listG2 = append(listG2, blsHashToG2(msgs[i]))
-		signs = append(signs, 1)
+		listG1[i] = pub
+		listG2[i] = blsHashToG2(msgs[i])
+		signs[i] = 1
 	}
 
 	sig, err := parseBLSG2(sigBytes)
@@ -217,15 +268,16 @@ func blsAggregateVerify(pubs [][]byte, msgs [][]byte, sigBytes []byte) bool {
 		return false
 	}
 
-	listG1 = append(listG1, circlbls.G1Generator())
-	listG2 = append(listG2, sig)
-	signs = append(signs, -1)
+	last := len(pubs)
+	listG1[last] = circlbls.G1Generator()
+	listG2[last] = sig
+	signs[last] = -1
 
 	return circlbls.ProdPairFrac(listG1, listG2, signs).IsIdentity()
 }
 
 func parseRistrettoPoint(x *big.Int) (circlgroup.Element, error) {
-	buf, err := exportUnsignedBytes(x, 32, "x must fit in an unsigned 256-bit integer")
+	buf, err := exportUnsignedBytes(x, 32, "x is not a valid encoded element")
 	if err != nil {
 		return nil, err
 	}
@@ -241,17 +293,21 @@ func pushRistrettoPoint(state *vm.State, point circlgroup.Element) error {
 	if err != nil {
 		return blsUnknown("failed to encode ristretto255 element", err)
 	}
-	return state.Stack.PushInt(new(big.Int).SetBytes(data))
+	return state.Stack.PushOwnedInt(new(big.Int).SetBytes(data))
 }
 
 func RIST255_FROMHASH() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x2, err := state.Stack.PopIntFinite()
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
+			x2, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			x1, err := state.Stack.PopIntFinite()
+			x1, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -276,7 +332,7 @@ func RIST255_FROMHASH() *helpers.SimpleOP {
 			p1.SetElligator(&u1)
 			p2.SetElligator(&u2)
 			out.Add(&p1, &p2)
-			return state.Stack.PushInt(new(big.Int).SetBytes(out.Bytes()))
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(out.Bytes()))
 		},
 		Name:      "RIST255_FROMHASH",
 		BitPrefix: helpers.BytesPrefix(0xF9, 0x20),
@@ -286,7 +342,7 @@ func RIST255_FROMHASH() *helpers.SimpleOP {
 func pushConstIntOp(name string, prefix helpers.BitPrefix, value *big.Int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			return state.Stack.PushInt(new(big.Int).Set(value))
+			return state.Stack.PushOwnedInt(new(big.Int).Set(value))
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -300,7 +356,7 @@ func RIST255_PUSHL() *helpers.SimpleOP {
 func rist255ValidateOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopIntFinite()
+			x, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -327,11 +383,15 @@ func rist255ValidateOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 func rist255BinaryOp(name string, prefix helpers.BitPrefix, quiet bool, op func(circlgroup.Element, circlgroup.Element) circlgroup.Element) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			y, err := state.Stack.PopIntFinite()
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
+			y, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopIntFinite()
+			x, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -339,19 +399,20 @@ func rist255BinaryOp(name string, prefix helpers.BitPrefix, quiet bool, op func(
 				return err
 			}
 
-			px, err := parseRistrettoPoint(x)
-			if err != nil {
+			fail := func() error {
 				if quiet {
 					return state.Stack.PushBool(false)
 				}
-				return err
+				return vmerr.Error(vmerr.CodeRangeCheck, "x and/or y are not valid encoded elements")
+			}
+
+			px, err := parseRistrettoPoint(x)
+			if err != nil {
+				return fail()
 			}
 			py, err := parseRistrettoPoint(y)
 			if err != nil {
-				if quiet {
-					return state.Stack.PushBool(false)
-				}
-				return err
+				return fail()
 			}
 
 			if err = pushRistrettoPoint(state, op(px, py)); err != nil {
@@ -370,9 +431,23 @@ func rist255BinaryOp(name string, prefix helpers.BitPrefix, quiet bool, op func(
 func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntFinite()
+			if !base {
+				if err := checkStackDepth(state, 2); err != nil {
+					return err
+				}
+			}
+
+			n, err := state.Stack.PopInt()
 			if err != nil {
 				return err
+			}
+
+			var x *big.Int
+			if !base {
+				x, err = state.Stack.PopInt()
+				if err != nil {
+					return err
+				}
 			}
 
 			if err = state.ConsumeGas(func() int64 {
@@ -384,23 +459,13 @@ func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) 
 				return err
 			}
 
-			var point circlgroup.Element
-			if !base {
-				x, popErr := state.Stack.PopIntFinite()
-				if popErr != nil {
-					return popErr
+			fail := func(msg string) error {
+				if quiet {
+					return state.Stack.PushBool(false)
 				}
-				point, err = parseRistrettoPoint(x)
-				if err != nil {
-					if quiet {
-						return state.Stack.PushBool(false)
-					}
-					return err
-				}
+				return vmerr.Error(vmerr.CodeRangeCheck, msg)
 			}
-
-			scalar := circlgroup.Ristretto255.NewScalar().SetBigInt(new(big.Int).Mod(new(big.Int).Set(n), ristretto255L))
-			if scalar.IsZero() {
+			pushZero := func() error {
 				if err = pushSmallInt(state, 0); err != nil {
 					return err
 				}
@@ -410,10 +475,51 @@ func rist255MulOp(name string, prefix helpers.BitPrefix, quiet bool, base bool) 
 				return nil
 			}
 
+			var scalar circlgroup.Scalar
+			scalarZero := false
+			if n != nil {
+				scalar = circlgroup.Ristretto255.NewScalar().SetBigInt(new(big.Int).Mod(new(big.Int).Set(n), ristretto255L))
+				scalarZero = scalar.IsZero()
+			}
+			if n == nil {
+				if base {
+					return fail("invalid n")
+				}
+				return fail("invalid x or n")
+			}
+
 			result := circlgroup.Ristretto255.NewElement()
 			if base {
+				if scalarZero {
+					return pushZero()
+				}
 				result.MulGen(scalar)
 			} else {
+				if state.GlobalVersion < 14 && scalarZero {
+					return pushZero()
+				}
+				if x == nil {
+					return fail("invalid x or n")
+				}
+				if state.GlobalVersion >= 14 {
+					if x.Sign() == 0 {
+						return pushZero()
+					}
+					if scalarZero {
+						if _, parseErr := parseRistrettoPoint(x); parseErr != nil {
+							return fail("invalid x or n")
+						}
+						return pushZero()
+					}
+				}
+
+				point, parseErr := parseRistrettoPoint(x)
+				if parseErr != nil {
+					return fail("invalid x or n")
+				}
+				if x.Sign() == 0 {
+					return fail("invalid x or n")
+				}
 				result.Mul(point, scalar)
 			}
 			if err = pushRistrettoPoint(state, result); err != nil {
@@ -482,11 +588,19 @@ func RIST255_QMULBASE() *helpers.SimpleOP {
 func BLS_VERIFY() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			if err := state.ConsumeGas(vm.BlsVerifyGasPrice); err != nil {
 				return err
 			}
 
 			sigSlice, err := state.Stack.PopSlice()
+			if err != nil {
+				return err
+			}
+			sigBytes, err := preloadBLSPoint(sigSlice, 96*8, "slice must contain at least 96 bytes")
 			if err != nil {
 				return err
 			}
@@ -499,10 +613,6 @@ func BLS_VERIFY() *helpers.SimpleOP {
 				return err
 			}
 
-			sigBytes, err := preloadBLSPoint(sigSlice, 96*8, "slice must contain at least 96 bytes")
-			if err != nil {
-				return err
-			}
 			pubBytes, err := preloadBLSPoint(pubSlice, 48*8, "slice must contain at least 48 bytes")
 			if err != nil {
 				return err
@@ -517,32 +627,43 @@ func BLS_VERIFY() *helpers.SimpleOP {
 func BLS_AGGREGATE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(1, int64(state.Stack.Len()))
+			n, err := state.Stack.PopIntRangeInt64(1, int64(state.Stack.Len()-1))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsAggregateBaseGasPrice + int64(count)*vm.BlsAggregateElementGasPrice); err != nil {
 				return err
 			}
 
-			var agg circlbls.G2
-			for i := 0; i < count; i++ {
+			// The reference pops sigs[n-1..0] (top first) and aggregates them in
+			// index order via blst: sigs[0] (the bottom operand) is only
+			// on-curve-decoded (to_jacobian), while sigs[1..] go through
+			// aggregate() and must be in the subgroup.
+			sigs := make([][]byte, count)
+			for i := count - 1; i >= 0; i-- {
 				sl, popErr := state.Stack.PopSlice()
 				if popErr != nil {
 					return popErr
 				}
-				data, preErr := preloadBLSPoint(sl, 96*8, "slice must contain at least 96 bytes")
-				if preErr != nil {
-					return preErr
+				sigs[i], err = preloadBLSPoint(sl, 96*8, "slice must contain at least 96 bytes")
+				if err != nil {
+					return err
 				}
-				p, parseErr := parseBLSG2(data)
+			}
+
+			var agg circlbls.G2
+			for i := 0; i < count; i++ {
+				p, parseErr := parseBLSG2OnCurve(sigs[i])
 				if parseErr != nil {
 					return blsUnknown("invalid bls signature", parseErr)
 				}
 				if i == 0 {
 					agg = *p
 				} else {
+					if !p.InSubgroup() {
+						return blsUnknown("invalid bls signature", errBLSPointNotInGroup)
+					}
 					agg.Add(&agg, p)
 				}
 			}
@@ -556,25 +677,24 @@ func BLS_AGGREGATE() *helpers.SimpleOP {
 func BLS_FASTAGGREGATEVERIFY() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			sigSlice, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
 			}
-			msg, err := popBLSMsg(state)
+			msgSlice, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
 			}
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()))
+			n, err := state.Stack.PopIntRangeInt64(0, int64(state.Stack.Len()-1))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsFastAggregateVerifyBaseGasPrice + int64(count)*vm.BlsFastAggregateVerifyElementGasPrice); err != nil {
-				return err
-			}
-
-			sigBytes, err := preloadBLSPoint(sigSlice, 96*8, "slice must contain at least 96 bytes")
-			if err != nil {
 				return err
 			}
 
@@ -589,6 +709,14 @@ func BLS_FASTAGGREGATEVERIFY() *helpers.SimpleOP {
 					return err
 				}
 			}
+			msg, err := preloadBLSMsg(msgSlice)
+			if err != nil {
+				return err
+			}
+			sigBytes, err := preloadBLSPoint(sigSlice, 96*8, "slice must contain at least 96 bytes")
+			if err != nil {
+				return err
+			}
 
 			return state.Stack.PushBool(blsFastAggregateVerify(pubs, msg, sigBytes))
 		},
@@ -600,21 +728,20 @@ func BLS_FASTAGGREGATEVERIFY() *helpers.SimpleOP {
 func BLS_AGGREGATEVERIFY() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			sigSlice, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
 			}
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64((state.Stack.Len()-1)/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsAggregateVerifyBaseGasPrice + int64(count)*vm.BlsAggregateVerifyElementGasPrice); err != nil {
-				return err
-			}
-
-			sigBytes, err := preloadBLSPoint(sigSlice, 96*8, "slice must contain at least 96 bytes")
-			if err != nil {
 				return err
 			}
 
@@ -634,6 +761,10 @@ func BLS_AGGREGATEVERIFY() *helpers.SimpleOP {
 					return err
 				}
 			}
+			sigBytes, err := preloadBLSPoint(sigSlice, 96*8, "slice must contain at least 96 bytes")
+			if err != nil {
+				return err
+			}
 
 			return state.Stack.PushBool(blsAggregateVerify(pubs, msgs, sigBytes))
 		},
@@ -642,9 +773,18 @@ func BLS_AGGREGATEVERIFY() *helpers.SimpleOP {
 	}
 }
 
-func blsG1BinaryOp(name string, prefix helpers.BitPrefix, op func(a, b *circlbls.G1) []byte) *helpers.SimpleOP {
+// blsG1BinaryOp pops b (top) then a (bottom), size-checks them (b then a, as the
+// reference pops them), and delegates the on-curve/subgroup decode + arithmetic
+// to compute, which mirrors the corresponding bls.cpp generic_add/generic_sub
+// step by step (including which operand blst's aggregate() subjects to the
+// in-group check).
+func blsG1BinaryOp(name string, prefix helpers.BitPrefix, compute func(aData, bData []byte) ([]byte, error)) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			if err := state.ConsumeGas(vm.BlsG1AddSubGasPrice); err != nil {
 				return err
 			}
@@ -652,11 +792,11 @@ func blsG1BinaryOp(name string, prefix helpers.BitPrefix, op func(a, b *circlbls
 			if err != nil {
 				return err
 			}
-			aSlice, err := state.Stack.PopSlice()
+			bData, err := preloadBLSPoint(bSlice, 48*8, "slice must contain at least 48 bytes")
 			if err != nil {
 				return err
 			}
-			bData, err := preloadBLSPoint(bSlice, 48*8, "slice must contain at least 48 bytes")
+			aSlice, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
 			}
@@ -664,38 +804,65 @@ func blsG1BinaryOp(name string, prefix helpers.BitPrefix, op func(a, b *circlbls
 			if err != nil {
 				return err
 			}
-			a, err := parseBLSG1(aData)
+			out, err := compute(aData, bData)
 			if err != nil {
 				return blsUnknown("invalid bls g1 point", err)
 			}
-			b, err := parseBLSG1(bData)
-			if err != nil {
-				return blsUnknown("invalid bls g1 point", err)
-			}
-			return pushSliceBytes(state, op(a, b))
+			return pushSliceBytes(state, out)
 		},
 		Name:      name,
 		BitPrefix: prefix,
 	}
 }
 
+// blsG1Add mirrors bls::g1_add / generic_add: it loads a on-curve (as the base
+// point), then loads b on-curve and aggregates it — blst's aggregate() rejects
+// b if it is outside the subgroup, so a may be off-subgroup but b may not.
+func blsG1Add(aData, bData []byte) ([]byte, error) {
+	a, err := parseBLSG1OnCurve(aData)
+	if err != nil {
+		return nil, err
+	}
+	b, err := parseBLSG1OnCurve(bData)
+	if err != nil {
+		return nil, err
+	}
+	if !b.InSubgroup() {
+		return nil, errBLSPointNotInGroup
+	}
+	var out circlbls.G1
+	out.Add(a, b)
+	return out.BytesCompressed(), nil
+}
+
+// blsG1Sub mirrors bls::g1_sub / generic_sub: it loads b on-curve and negates it
+// (the base point), then loads a on-curve and aggregates it — so b may be
+// off-subgroup but a may not.
+func blsG1Sub(aData, bData []byte) ([]byte, error) {
+	b, err := parseBLSG1OnCurve(bData)
+	if err != nil {
+		return nil, err
+	}
+	a, err := parseBLSG1OnCurve(aData)
+	if err != nil {
+		return nil, err
+	}
+	if !a.InSubgroup() {
+		return nil, errBLSPointNotInGroup
+	}
+	negB := *b
+	negB.Neg()
+	var out circlbls.G1
+	out.Add(a, &negB)
+	return out.BytesCompressed(), nil
+}
+
 func BLS_G1_ADD() *helpers.SimpleOP {
-	return blsG1BinaryOp("BLS_G1_ADD", helpers.BytesPrefix(0xF9, 0x30, 0x10), func(a, b *circlbls.G1) []byte {
-		var out circlbls.G1
-		out.Add(a, b)
-		return out.BytesCompressed()
-	})
+	return blsG1BinaryOp("BLS_G1_ADD", helpers.BytesPrefix(0xF9, 0x30, 0x10), blsG1Add)
 }
 
 func BLS_G1_SUB() *helpers.SimpleOP {
-	return blsG1BinaryOp("BLS_G1_SUB", helpers.BytesPrefix(0xF9, 0x30, 0x11), func(a, b *circlbls.G1) []byte {
-		var negB circlbls.G1
-		negB = *b
-		negB.Neg()
-		var out circlbls.G1
-		out.Add(a, &negB)
-		return out.BytesCompressed()
-	})
+	return blsG1BinaryOp("BLS_G1_SUB", helpers.BytesPrefix(0xF9, 0x30, 0x11), blsG1Sub)
 }
 
 func BLS_G1_NEG() *helpers.SimpleOP {
@@ -712,7 +879,7 @@ func BLS_G1_NEG() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			a, err := parseBLSG1(aData)
+			a, err := parseBLSG1OnCurve(aData)
 			if err != nil {
 				return blsUnknown("invalid bls g1 point", err)
 			}
@@ -727,11 +894,15 @@ func BLS_G1_NEG() *helpers.SimpleOP {
 func BLS_G1_MUL() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopIntFinite()
-			if err != nil {
+			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			if err = state.ConsumeGas(vm.BlsG1MulGasPrice); err != nil {
+
+			if err := state.ConsumeGas(vm.BlsG1MulGasPrice); err != nil {
+				return err
+			}
+			x, err := state.Stack.PopIntFinite()
+			if err != nil {
 				return err
 			}
 
@@ -748,7 +919,7 @@ func BLS_G1_MUL() *helpers.SimpleOP {
 				return pushSliceBytes(state, blsG1ZeroCompressed)
 			}
 
-			p, err := parseBLSG1(pData)
+			p, err := parseBLSG1OnCurve(pData)
 			if err != nil {
 				return blsUnknown("invalid bls g1 point", err)
 			}
@@ -780,11 +951,11 @@ func BLS_G1_ZERO() *helpers.SimpleOP {
 func BLS_G1_MULTIEXP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64((state.Stack.Len()-1)/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(blsCalculateMultiexpGas(
 				count,
 				vm.BlsG1MultiexpBaseGasPrice,
@@ -814,7 +985,7 @@ func BLS_G1_MULTIEXP() *helpers.SimpleOP {
 				if x.Sign() == 0 {
 					return pushSliceBytes(state, blsG1ZeroCompressed)
 				}
-				p, err := parseBLSG1(pData)
+				p, err := parseBLSG1OnCurve(pData)
 				if err != nil {
 					return blsUnknown("invalid bls g1 point", err)
 				}
@@ -827,10 +998,10 @@ func BLS_G1_MULTIEXP() *helpers.SimpleOP {
 				return pushSliceBytes(state, out.BytesCompressed())
 			}
 
-			var acc circlbls.G1
-			acc.SetIdentity()
+			points := make([][]byte, count)
+			scalars := make([]*big.Int, count)
 			for i := count - 1; i >= 0; i-- {
-				x, err := state.Stack.PopIntFinite()
+				scalars[i], err = state.Stack.PopIntFinite()
 				if err != nil {
 					return err
 				}
@@ -838,15 +1009,20 @@ func BLS_G1_MULTIEXP() *helpers.SimpleOP {
 				if err != nil {
 					return err
 				}
-				pData, err := preloadBLSPoint(pSlice, 48*8, "slice must contain at least 48 bytes")
+				points[i], err = preloadBLSPoint(pSlice, 48*8, "slice must contain at least 48 bytes")
 				if err != nil {
 					return err
 				}
-				p, err := parseBLSG1(pData)
+			}
+
+			var acc circlbls.G1
+			acc.SetIdentity()
+			for i := 0; i < count; i++ {
+				p, err := parseBLSG1OnCurve(points[i])
 				if err != nil {
 					return blsUnknown("invalid bls g1 point", err)
 				}
-				scalar := blsScalarMod(x)
+				scalar := blsScalarMod(scalars[i])
 				if scalar.Sign() == 0 {
 					continue
 				}
@@ -875,7 +1051,7 @@ func BLS_MAP_TO_G1() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			out, err := blsmap.MapToG1(data)
+			out, err := circlbls.MapToG1(data)
 			if err != nil {
 				return blsUnknown("failed to map raw bls fp to g1", err)
 			}
@@ -926,9 +1102,14 @@ func BLS_G1_ISZERO() *helpers.SimpleOP {
 	}
 }
 
-func blsG2BinaryOp(name string, prefix helpers.BitPrefix, op func(a, b *circlbls.G2) []byte) *helpers.SimpleOP {
+// blsG2BinaryOp is the G2 counterpart of blsG1BinaryOp; see its doc comment.
+func blsG2BinaryOp(name string, prefix helpers.BitPrefix, compute func(aData, bData []byte) ([]byte, error)) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			if err := state.ConsumeGas(vm.BlsG2AddSubGasPrice); err != nil {
 				return err
 			}
@@ -936,11 +1117,11 @@ func blsG2BinaryOp(name string, prefix helpers.BitPrefix, op func(a, b *circlbls
 			if err != nil {
 				return err
 			}
-			aSlice, err := state.Stack.PopSlice()
+			bData, err := preloadBLSPoint(bSlice, 96*8, "slice must contain at least 96 bytes")
 			if err != nil {
 				return err
 			}
-			bData, err := preloadBLSPoint(bSlice, 96*8, "slice must contain at least 96 bytes")
+			aSlice, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
 			}
@@ -948,38 +1129,62 @@ func blsG2BinaryOp(name string, prefix helpers.BitPrefix, op func(a, b *circlbls
 			if err != nil {
 				return err
 			}
-			a, err := parseBLSG2(aData)
+			out, err := compute(aData, bData)
 			if err != nil {
 				return blsUnknown("invalid bls g2 point", err)
 			}
-			b, err := parseBLSG2(bData)
-			if err != nil {
-				return blsUnknown("invalid bls g2 point", err)
-			}
-			return pushSliceBytes(state, op(a, b))
+			return pushSliceBytes(state, out)
 		},
 		Name:      name,
 		BitPrefix: prefix,
 	}
 }
 
+// blsG2Add / blsG2Sub mirror bls::g2_add / g2_sub exactly as blsG1Add/blsG1Sub
+// do for G1: ADD requires the top operand (b) in-subgroup, SUB requires the
+// bottom operand (a) in-subgroup; the other operand only needs to be on-curve.
+func blsG2Add(aData, bData []byte) ([]byte, error) {
+	a, err := parseBLSG2OnCurve(aData)
+	if err != nil {
+		return nil, err
+	}
+	b, err := parseBLSG2OnCurve(bData)
+	if err != nil {
+		return nil, err
+	}
+	if !b.InSubgroup() {
+		return nil, errBLSPointNotInGroup
+	}
+	var out circlbls.G2
+	out.Add(a, b)
+	return out.BytesCompressed(), nil
+}
+
+func blsG2Sub(aData, bData []byte) ([]byte, error) {
+	b, err := parseBLSG2OnCurve(bData)
+	if err != nil {
+		return nil, err
+	}
+	a, err := parseBLSG2OnCurve(aData)
+	if err != nil {
+		return nil, err
+	}
+	if !a.InSubgroup() {
+		return nil, errBLSPointNotInGroup
+	}
+	negB := *b
+	negB.Neg()
+	var out circlbls.G2
+	out.Add(a, &negB)
+	return out.BytesCompressed(), nil
+}
+
 func BLS_G2_ADD() *helpers.SimpleOP {
-	return blsG2BinaryOp("BLS_G2_ADD", helpers.BytesPrefix(0xF9, 0x30, 0x20), func(a, b *circlbls.G2) []byte {
-		var out circlbls.G2
-		out.Add(a, b)
-		return out.BytesCompressed()
-	})
+	return blsG2BinaryOp("BLS_G2_ADD", helpers.BytesPrefix(0xF9, 0x30, 0x20), blsG2Add)
 }
 
 func BLS_G2_SUB() *helpers.SimpleOP {
-	return blsG2BinaryOp("BLS_G2_SUB", helpers.BytesPrefix(0xF9, 0x30, 0x21), func(a, b *circlbls.G2) []byte {
-		var negB circlbls.G2
-		negB = *b
-		negB.Neg()
-		var out circlbls.G2
-		out.Add(a, &negB)
-		return out.BytesCompressed()
-	})
+	return blsG2BinaryOp("BLS_G2_SUB", helpers.BytesPrefix(0xF9, 0x30, 0x21), blsG2Sub)
 }
 
 func BLS_G2_NEG() *helpers.SimpleOP {
@@ -996,7 +1201,7 @@ func BLS_G2_NEG() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			a, err := parseBLSG2(aData)
+			a, err := parseBLSG2OnCurve(aData)
 			if err != nil {
 				return blsUnknown("invalid bls g2 point", err)
 			}
@@ -1011,11 +1216,15 @@ func BLS_G2_NEG() *helpers.SimpleOP {
 func BLS_G2_MUL() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopIntFinite()
-			if err != nil {
+			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			if err = state.ConsumeGas(vm.BlsG2MulGasPrice); err != nil {
+
+			if err := state.ConsumeGas(vm.BlsG2MulGasPrice); err != nil {
+				return err
+			}
+			x, err := state.Stack.PopIntFinite()
+			if err != nil {
 				return err
 			}
 
@@ -1032,7 +1241,7 @@ func BLS_G2_MUL() *helpers.SimpleOP {
 				return pushSliceBytes(state, blsG2ZeroCompressed)
 			}
 
-			p, err := parseBLSG2(pData)
+			p, err := parseBLSG2OnCurve(pData)
 			if err != nil {
 				return blsUnknown("invalid bls g2 point", err)
 			}
@@ -1064,11 +1273,11 @@ func BLS_G2_ZERO() *helpers.SimpleOP {
 func BLS_G2_MULTIEXP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64((state.Stack.Len()-1)/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(blsCalculateMultiexpGas(
 				count,
 				vm.BlsG2MultiexpBaseGasPrice,
@@ -1098,7 +1307,7 @@ func BLS_G2_MULTIEXP() *helpers.SimpleOP {
 				if x.Sign() == 0 {
 					return pushSliceBytes(state, blsG2ZeroCompressed)
 				}
-				p, err := parseBLSG2(pData)
+				p, err := parseBLSG2OnCurve(pData)
 				if err != nil {
 					return blsUnknown("invalid bls g2 point", err)
 				}
@@ -1111,10 +1320,10 @@ func BLS_G2_MULTIEXP() *helpers.SimpleOP {
 				return pushSliceBytes(state, out.BytesCompressed())
 			}
 
-			var acc circlbls.G2
-			acc.SetIdentity()
+			points := make([][]byte, count)
+			scalars := make([]*big.Int, count)
 			for i := count - 1; i >= 0; i-- {
-				x, err := state.Stack.PopIntFinite()
+				scalars[i], err = state.Stack.PopIntFinite()
 				if err != nil {
 					return err
 				}
@@ -1122,15 +1331,20 @@ func BLS_G2_MULTIEXP() *helpers.SimpleOP {
 				if err != nil {
 					return err
 				}
-				pData, err := preloadBLSPoint(pSlice, 96*8, "slice must contain at least 96 bytes")
+				points[i], err = preloadBLSPoint(pSlice, 96*8, "slice must contain at least 96 bytes")
 				if err != nil {
 					return err
 				}
-				p, err := parseBLSG2(pData)
+			}
+
+			var acc circlbls.G2
+			acc.SetIdentity()
+			for i := 0; i < count; i++ {
+				p, err := parseBLSG2OnCurve(points[i])
 				if err != nil {
 					return blsUnknown("invalid bls g2 point", err)
 				}
-				scalar := blsScalarMod(x)
+				scalar := blsScalarMod(scalars[i])
 				if scalar.Sign() == 0 {
 					continue
 				}
@@ -1159,7 +1373,7 @@ func BLS_MAP_TO_G2() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			out, err := blsmap.MapToG2(data)
+			out, err := circlbls.MapToG2(data)
 			if err != nil {
 				return blsUnknown("failed to map raw bls fp2 to g2", err)
 			}
@@ -1213,39 +1427,44 @@ func BLS_G2_ISZERO() *helpers.SimpleOP {
 func BLS_PAIRING() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			n, err := state.Stack.PopIntRange(0, int64(state.Stack.Len()/2))
+			n, err := state.Stack.PopIntRangeInt64(0, int64((state.Stack.Len()-1)/2))
 			if err != nil {
 				return err
 			}
-			count := int(n.Int64())
+			count := int(n)
 			if err = state.ConsumeGas(vm.BlsPairingBaseGasPrice + int64(count)*vm.BlsPairingElementGasPrice); err != nil {
 				return err
 			}
 
-			var acc circlbls.Gt
-			acc.SetIdentity()
-			for i := 0; i < count; i++ {
+			p1Data := make([][]byte, count)
+			p2Data := make([][]byte, count)
+			for i := count - 1; i >= 0; i-- {
 				p2Slice, popErr := state.Stack.PopSlice()
 				if popErr != nil {
 					return popErr
+				}
+				p2Data[i], err = preloadBLSPoint(p2Slice, 96*8, "slice must contain at least 96 bytes")
+				if err != nil {
+					return err
 				}
 				p1Slice, popErr := state.Stack.PopSlice()
 				if popErr != nil {
 					return popErr
 				}
-				p2Data, err := preloadBLSPoint(p2Slice, 96*8, "slice must contain at least 96 bytes")
+				p1Data[i], err = preloadBLSPoint(p1Slice, 48*8, "slice must contain at least 48 bytes")
 				if err != nil {
 					return err
 				}
-				p1Data, err := preloadBLSPoint(p1Slice, 48*8, "slice must contain at least 48 bytes")
-				if err != nil {
-					return err
-				}
-				p1, err := parseBLSG1(p1Data)
+			}
+
+			var acc circlbls.Gt
+			acc.SetIdentity()
+			for i := 0; i < count; i++ {
+				p1, err := parseBLSG1OnCurve(p1Data[i])
 				if err != nil {
 					return blsUnknown("invalid bls pairing input", err)
 				}
-				p2, err := parseBLSG2(p2Data)
+				p2, err := parseBLSG2OnCurve(p2Data[i])
 				if err != nil {
 					return blsUnknown("invalid bls pairing input", err)
 				}

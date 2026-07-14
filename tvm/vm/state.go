@@ -151,21 +151,34 @@ type CommittedState struct {
 }
 
 type State struct {
-	GlobalVersion          int
-	CP                     int
-	CurrentCode            *cell.Slice
-	Reg                    Register
-	Gas                    Gas
-	Cells                  CellManager
-	Libraries              []*cell.Cell
-	libraryCache           map[cell.Hash]*cell.Cell
-	Stack                  *Stack
-	Steps                  uint32
-	StopOnAccept           bool
-	ChksgnCounter          uint32
-	GetExtraBalanceCounter uint32
-	Committed              CommittedState
-	childRunner            ChildRunner
+	GlobalVersion               int
+	CP                          int
+	CurrentCode                 *cell.Slice
+	Reg                         Register
+	Gas                         Gas
+	Cells                       CellManager
+	Libraries                   []*cell.Cell
+	libraryCache                map[cell.Hash]*cell.Cell
+	maxLibraryLoads             uint32
+	hasMaxLibraryLoads          bool
+	loadedLibraries             map[cell.Hash]struct{}
+	maxDataDepth                uint16
+	Stack                       *Stack
+	Steps                       uint32
+	StopOnAccept                bool
+	TraceHook                   TraceHook
+	SignatureCheckAlwaysSucceed bool
+	SignatureCheckCounter       uint32
+	GetExtraBalanceCounter      uint32
+	Committed                   CommittedState
+	childRunner                 ChildRunner
+
+	// currentCodeOwned reports that CurrentCode points at a slice owned
+	// exclusively by this State: a scratch reused across continuation jumps.
+	// It must be false whenever the pointer escaped into a continuation
+	// (Call/CallArgs/ExtractCurrentContinuation) or came from a caller, so
+	// the next jump allocates a fresh slice instead of overwriting in place.
+	currentCodeOwned bool
 }
 
 var ErrStopOnAccept = errors.New("stop on accept")
@@ -191,12 +204,13 @@ func NewExecutionState(globalVersion int, gas Gas, data *cell.Cell, c7 tuple.Tup
 	return &State{
 		GlobalVersion: globalVersion,
 		Gas:           gas,
+		maxDataDepth:  MaxDataDepth,
 		Reg: Register{
 			C: [4]Continuation{
-				&QuitContinuation{ExitCode: 0},
-				&QuitContinuation{ExitCode: 1},
+				quitCont0,
+				quitCont1,
 				&ExcQuitContinuation{},
-				&QuitContinuation{ExitCode: vmerr.CodeUnknown},
+				quitContUnknown,
 			},
 			D: [2]*cell.Cell{
 				data,
@@ -213,6 +227,9 @@ type OPGetter func() OP
 type GasPricedOp interface {
 	InstructionBits() int64
 }
+type VersionedOp interface {
+	MinGlobalVersion() int
+}
 type OP interface {
 	GetPrefixes() []*cell.Slice
 	Deserialize(code *cell.Slice) error
@@ -227,10 +244,16 @@ var ErrCorruptedOpcode = errors.New("corrupted opcode")
 
 const MaxDataDepth = 512
 
+func (s *State) SetMaxLibraryLoads(limit uint32) {
+	s.maxLibraryLoads = limit
+	s.hasMaxLibraryLoads = true
+}
+
+func (s *State) SetMaxDataDepth(depth uint16) {
+	s.maxDataDepth = depth
+}
+
 func (s *State) InitForExecution() {
-	if s.GlobalVersion == 0 {
-		s.GlobalVersion = DefaultGlobalVersion
-	}
 	s.Cells.Init(s)
 	if s.Stack != nil {
 		s.Stack.SetTrace(s.Cells.Trace())
@@ -238,10 +261,16 @@ func (s *State) InitForExecution() {
 	s.Reg.C7 = bindTupleTrace(s.Reg.C7, s.Cells.Trace())
 }
 
+func (s *State) effectiveGlobalVersion() int {
+	return s.GlobalVersion
+}
+
 func (s *State) PrepareExecution(code *cell.Slice) {
 	s.InitForExecution()
 	if code != nil {
 		s.CurrentCode = code.SetTrace(cell.CombineTraces(code.Trace(), s.Cells.Trace()))
+		// the caller may keep a reference to code, it is not ours to overwrite
+		s.currentCodeOwned = false
 	}
 }
 
@@ -258,12 +287,21 @@ func (s *State) prepareChildForRun(child *State) error {
 	if s.childRunner == nil {
 		return vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
 	}
-	if child.GlobalVersion == 0 {
-		child.GlobalVersion = s.GlobalVersion
-	}
+	child.GlobalVersion = s.GlobalVersion
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
+	child.TraceHook = s.TraceHook
+	child.SignatureCheckAlwaysSucceed = s.SignatureCheckAlwaysSucceed
 	if len(child.Libraries) == 0 && len(s.Libraries) > 0 {
 		child.Libraries = append([]*cell.Cell{}, s.Libraries...)
+	}
+	child.maxLibraryLoads = s.maxLibraryLoads
+	child.hasMaxLibraryLoads = s.hasMaxLibraryLoads
+	child.maxDataDepth = s.maxDataDepth
+	if s.hasMaxLibraryLoads {
+		if s.loadedLibraries == nil {
+			s.loadedLibraries = make(map[cell.Hash]struct{})
+		}
+		child.loadedLibraries = s.loadedLibraries
 	}
 	child.childRunner = s.childRunner
 	child.PrepareExecution(child.CurrentCode)
@@ -295,7 +333,19 @@ func (s *State) RunChild(child *State) (int64, error) {
 }
 
 func (s *State) ConsumeGas(amount int64) error {
+	if !s.checkGasOnConsume() {
+		s.Gas.Remaining -= amount
+		return nil
+	}
 	return s.Gas.Consume(amount)
+}
+
+func (s *State) consumeGasChecked(amount int64) error {
+	return s.Gas.Consume(amount)
+}
+
+func (s *State) checkGasOnConsume() bool {
+	return s.GlobalVersion >= 4
 }
 
 func (s *State) CheckGas() error {
@@ -313,12 +363,16 @@ func (s *State) FlushFreeGas() error {
 	return s.Gas.FlushFree()
 }
 
-func (s *State) RegisterChksgnCall() error {
-	s.ChksgnCounter++
-	if s.ChksgnCounter > ChksgnFreeCount {
-		return s.ConsumeGas(ChksgnGasPrice)
+func (s *State) RegisterSignatureCheckCall() error {
+	if !s.checkGasOnConsume() {
+		return nil
 	}
-	s.ConsumeFreeGas(ChksgnGasPrice)
+
+	s.SignatureCheckCounter++
+	if s.SignatureCheckCounter > SignatureCheckFreeCount {
+		return s.ConsumeGas(SignatureCheckGasPrice)
+	}
+	s.ConsumeFreeGas(SignatureCheckGasPrice)
 	return nil
 }
 
@@ -457,14 +511,14 @@ func (s *State) SetGasLimit(limit int64) error {
 
 func (s *State) HandleOutOfGas() error {
 	s.Stack.Clear()
-	return s.Stack.PushInt(big.NewInt(s.Gas.Used()))
+	return s.Stack.PushSmallInt(s.Gas.Used())
 }
 
 func (s *State) TryCommitCurrent() bool {
 	if s.Reg.D[0] == nil || s.Reg.D[1] == nil {
 		return false
 	}
-	if s.Reg.D[0].Depth() > MaxDataDepth || s.Reg.D[1].Depth() > MaxDataDepth {
+	if s.Reg.D[0].Depth() > s.maxDataDepth || s.Reg.D[1].Depth() > s.maxDataDepth {
 		return false
 	}
 	if s.Reg.D[0].Level() != 0 || s.Reg.D[1].Level() != 0 {
@@ -492,7 +546,7 @@ func (s *State) ThrowException(code *big.Int, arg ...any) error {
 			return err
 		}
 	} else if len(arg) == 0 {
-		if err := s.Stack.PushAny(big.NewInt(0)); err != nil {
+		if err := s.Stack.PushSmallInt(0); err != nil {
 			return err
 		}
 	} else {
@@ -504,7 +558,7 @@ func (s *State) ThrowException(code *big.Int, arg ...any) error {
 	}
 
 	s.CurrentCode = cell.BeginCell().ToSlice()
-	if err := s.ConsumeGas(ExceptionGasPrice); err != nil {
+	if err := s.consumeGasChecked(ExceptionGasPrice); err != nil {
 		return err
 	}
 

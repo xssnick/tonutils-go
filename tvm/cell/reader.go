@@ -8,8 +8,44 @@ type cellBytesReader struct {
 	data []byte
 }
 
+// NotEnoughDataError is returned when a read needs more bits/bytes than left.
+// The message is formatted lazily: cell underflow is a regular control-flow
+// path for TVM programs, so constructing it must stay cheap.
+type NotEnoughDataError struct {
+	Has  int
+	Need int
+}
+
+func (e NotEnoughDataError) Error() string {
+	return fmt.Sprintf("not enough data in reader, need %d, has %d", e.Need, e.Has)
+}
+
+// IsNotEnoughDataError reports whether err wraps a NotEnoughDataError.
+// It walks the unwrap chain manually to avoid errors.As target boxing.
+func IsNotEnoughDataError(err error) bool {
+	for err != nil {
+		if _, ok := err.(NotEnoughDataError); ok {
+			return true
+		}
+		switch x := err.(type) {
+		case interface{ Unwrap() error }:
+			err = x.Unwrap()
+		case interface{ Unwrap() []error }:
+			for _, sub := range x.Unwrap() {
+				if IsNotEnoughDataError(sub) {
+					return true
+				}
+			}
+			return false
+		default:
+			return false
+		}
+	}
+	return false
+}
+
 var ErrNotEnoughData = func(has, need int) error {
-	return fmt.Errorf("not enough data in reader, need %d, has %d", need, has)
+	return NotEnoughDataError{Has: has, Need: need}
 }
 
 func newReader(data []byte) *cellBytesReader {

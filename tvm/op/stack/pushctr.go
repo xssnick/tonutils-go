@@ -19,10 +19,12 @@ func init() {
 
 var pushCtrPrefixed = helpers.NewPrefixed(pushCtrPrefixes()...)
 
+var pushCtrPrefixIndexes = [...]uint64{0, 1, 2, 3, 4, 5, 7}
+
 func pushCtrPrefixes() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 7)
-	for _, idx := range []uint64{0, 1, 2, 3, 4, 5, 7} {
-		prefixes = append(prefixes, helpers.UIntPrefix(0xED40|idx, 16))
+	prefixes := make([]helpers.BitPrefix, len(pushCtrPrefixIndexes))
+	for i, idx := range pushCtrPrefixIndexes {
+		prefixes[i] = helpers.UIntPrefix(0xED40|idx, 16)
 	}
 	return prefixes
 }
@@ -59,7 +61,11 @@ func (op *OpPUSHCTR) InstructionBits() int64 {
 }
 
 func (op *OpPUSHCTR) Interpret(state *vm.State) error {
-	return state.Stack.PushAny(cloneLegacyControlRegisterValue(state.Reg.Get(int(op.ctrIndex))))
+	val := state.Reg.Get(int(op.ctrIndex))
+	if op.ctrIndex == 4 || op.ctrIndex == 5 {
+		return state.Stack.PushOwnedValue(val)
+	}
+	return state.Stack.PushAny(cloneLegacyControlRegisterValue(val))
 }
 
 func cloneLegacyControlRegisterValue(v any) any {

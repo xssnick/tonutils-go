@@ -12,6 +12,9 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return XCHG2(0, 0) })
 }
 
+// constant prefix, computed once instead of on every decode
+var xchg2Prefix = helpers.BytesPrefix(0x50)
+
 func XCHG2(i, j uint8) (op *helpers.AdvancedOP) {
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
@@ -29,7 +32,7 @@ func XCHG2(i, j uint8) (op *helpers.AdvancedOP) {
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d,%d XCHG2", i, j)
 		},
-		BitPrefix: helpers.BytesPrefix(0x50),
+		BitPrefix: xchg2Prefix,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
 		},

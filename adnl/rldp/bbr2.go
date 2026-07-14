@@ -113,7 +113,8 @@ type BBRv2Controller struct {
 	lastAckTs atomic.Int64 // unix ms marking the start of the ACK window
 
 	// Current pacing rate (bytes/sec)
-	pacingRate atomic.Int64
+	pacingRate   atomic.Int64
+	deliveryRate atomic.Int64
 
 	appLimited atomic.Bool
 
@@ -252,6 +253,10 @@ func (c *BBRv2Controller) ObserveDelta(total, recv int64) {
 }
 
 func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
+	if rttMs <= 0 {
+		return
+	}
+
 	now := nowMs()
 	c.markActive()
 	old := c.minRTT.Load()
@@ -315,12 +320,16 @@ func (c *BBRv2Controller) maybeUpdate() {
 		c.lossLost.Add(lost)
 	}
 
+	var ackRate int64
 	const minAckForRateUpdate = 128 * 1024
 	if acked > 0 {
+		ackRate = int64(float64(acked) * 1000.0 / float64(elapsedMs))
+		c.deliveryRate.Store(ackRate)
 		if acked >= minAckForRateUpdate || elapsedMs >= 250 {
-			ackRate := int64(float64(acked) * 1000.0 / float64(elapsedMs))
 			c.updateBtlBw(ackRate, now)
 		}
+	} else {
+		c.deliveryRate.Store(0)
 	}
 
 	c.checkProbeRTT(now, acked)
@@ -329,15 +338,11 @@ func (c *BBRv2Controller) maybeUpdate() {
 	if BBRLogger != nil && now-c.dbgLast.Load() >= 1000 {
 		c.dbgLast.Store(now)
 
-		var ackRateBps int64
-		if elapsedMs > 0 {
-			ackRateBps = int64(float64(acked) * 1000.0 / float64(elapsedMs))
-		}
 		lossPct := fmt.Sprintf("%.2f%%", lossRate*100.0)
 
 		BBRLogger("[BBR] ",
 			c.opts.Name, " win elapsed=", elapsedMs, "ms acked="+humanBytes(acked)+" total="+humanBytes(total)+" loss=", lossPct,
-			"state=", c.state.Load(), "appLimited=", c.appLimited.Load(), "ackRate="+humanBps(ackRateBps)+" pacing="+humanBps(c.pacingRate.Load())+
+			"state=", c.state.Load(), "appLimited=", c.appLimited.Load(), "ackRate="+humanBps(ackRate)+" pacing="+humanBps(c.pacingRate.Load())+
 				" btlbw="+humanBps(c.btlbw.Load())+" minRTT=", c.minRTT.Load(), "ms",
 		)
 	}

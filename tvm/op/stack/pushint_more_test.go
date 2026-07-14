@@ -7,6 +7,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestPUSHINTAdditionalForms(t *testing.T) {
@@ -59,6 +60,8 @@ func TestPUSHINTAdditionalForms(t *testing.T) {
 
 	t.Run("SerializeBranchesRoundTripAndInterpret", func(t *testing.T) {
 		roundedLong := new(big.Int).Lsh(big.NewInt(1), 254)
+		negativeLong := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
+		minTVMInt := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 		tests := []struct {
 			name string
 			val  *big.Int
@@ -66,8 +69,12 @@ func TestPUSHINTAdditionalForms(t *testing.T) {
 		}{
 			{name: "SmallImmediate", val: big.NewInt(-5), bits: 8},
 			{name: "Int8", val: big.NewInt(100), bits: 16},
+			{name: "NegativeInt8Boundary", val: big.NewInt(-128), bits: 16},
 			{name: "Int16", val: big.NewInt(300), bits: 24},
+			{name: "NegativeInt16Boundary", val: big.NewInt(-129), bits: 24},
 			{name: "RoundedLong", val: roundedLong, bits: 13},
+			{name: "NegativeLong", val: negativeLong, bits: 13},
+			{name: "MinTVMInt", val: minTVMInt, bits: 13},
 		}
 
 		for _, tt := range tests {
@@ -101,6 +108,27 @@ func TestPUSHINTAdditionalForms(t *testing.T) {
 		}
 		if got.Int64() != 70000 {
 			t.Fatalf("unexpected interpreted value: %d", got.Int64())
+		}
+	})
+
+	t.Run("LongOverflowRemainsRuntimeOverflow", func(t *testing.T) {
+		code := cell.BeginCell().
+			MustStoreUInt(0x82, 8).
+			MustStoreUInt(30, 5).
+			MustStoreUInt(1, 2).
+			MustStoreSlice(make([]byte, 33), 257).
+			EndCell().MustBeginParse()
+
+		op := PUSHINT(nil)
+		if err := op.Deserialize(code); err != nil {
+			t.Fatalf("deserialize failed: %v", err)
+		}
+
+		state := &vm.State{Stack: vm.NewStack(), Gas: vm.NewGas()}
+		err := op.Interpret(state)
+		var vmErr vmerr.VMError
+		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeIntOverflow {
+			t.Fatalf("expected integer overflow, got %v", err)
 		}
 	})
 }

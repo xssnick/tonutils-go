@@ -30,8 +30,10 @@ func BLKSWX() *helpers.SimpleOP {
 			if x == 0 || y == 0 {
 				return nil
 			}
-			if err := consumeLargeStackMoveGas(state, x+y); err != nil {
-				return err
+			if state.GlobalVersion >= 4 {
+				if err := consumeLargeStackMoveGas(state, x+y); err != nil {
+					return err
+				}
 			}
 			if err := state.Stack.Reverse(x+y, y); err != nil {
 				return err

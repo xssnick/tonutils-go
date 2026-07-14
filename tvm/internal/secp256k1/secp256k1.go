@@ -32,16 +32,10 @@ func mustBigHex(s string) *big.Int {
 	return v
 }
 
-func mod(v, m *big.Int) *big.Int {
-	out := new(big.Int).Mod(new(big.Int).Set(v), m)
-	if out.Sign() < 0 {
-		out.Add(out, m)
-	}
-	return out
-}
-
 func scalarFromBytes(b []byte) *big.Int {
-	return mod(new(big.Int).SetBytes(b), curveN)
+	out := new(big.Int).SetBytes(b)
+	out.Mod(out, curveN)
+	return out
 }
 
 func inverse(v, m *big.Int) *big.Int {
@@ -52,16 +46,20 @@ func isOnCurve(p point) bool {
 	if p.inf {
 		return true
 	}
-	left := mod(new(big.Int).Mul(p.y, p.y), curveP)
-	right := mod(new(big.Int).Add(new(big.Int).Mul(new(big.Int).Mul(p.x, p.x), p.x), seven), curveP)
-	return left.Cmp(right) == 0
+
+	left := new(big.Int).Mul(p.y, p.y)
+	left.Mod(left, curveP)
+	return left.Cmp(curveY2(p.x)) == 0
 }
 
 func negate(p point) point {
 	if p.inf {
 		return p
 	}
-	return point{x: new(big.Int).Set(p.x), y: mod(new(big.Int).Neg(p.y), curveP)}
+
+	y := new(big.Int).Neg(p.y)
+	y.Mod(y, curveP)
+	return point{x: new(big.Int).Set(p.x), y: y}
 }
 
 func add(p, q point) point {
@@ -73,23 +71,35 @@ func add(p, q point) point {
 	}
 
 	if p.x.Cmp(q.x) == 0 {
-		ySum := mod(new(big.Int).Add(p.y, q.y), curveP)
+		ySum := new(big.Int).Add(p.y, q.y)
+		ySum.Mod(ySum, curveP)
 		if ySum.Sign() == 0 {
 			return point{inf: true}
 		}
 		return double(p)
 	}
 
-	num := mod(new(big.Int).Sub(q.y, p.y), curveP)
-	den := mod(new(big.Int).Sub(q.x, p.x), curveP)
+	num := new(big.Int).Sub(q.y, p.y)
+	num.Mod(num, curveP)
+	den := new(big.Int).Sub(q.x, p.x)
+	den.Mod(den, curveP)
 	denInv := inverse(den, curveP)
 	if denInv == nil {
 		return point{inf: true}
 	}
-	lambda := mod(new(big.Int).Mul(num, denInv), curveP)
 
-	xr := mod(new(big.Int).Sub(new(big.Int).Sub(new(big.Int).Mul(lambda, lambda), p.x), q.x), curveP)
-	yr := mod(new(big.Int).Sub(new(big.Int).Mul(lambda, new(big.Int).Sub(p.x, xr)), p.y), curveP)
+	lambda := new(big.Int).Mul(num, denInv)
+	lambda.Mod(lambda, curveP)
+
+	xr := new(big.Int).Mul(lambda, lambda)
+	xr.Sub(xr, p.x)
+	xr.Sub(xr, q.x)
+	xr.Mod(xr, curveP)
+
+	yr := new(big.Int).Sub(p.x, xr)
+	yr.Mul(lambda, yr)
+	yr.Sub(yr, p.y)
+	yr.Mod(yr, curveP)
 	return point{x: xr, y: yr}
 }
 
@@ -98,16 +108,28 @@ func double(p point) point {
 		return point{inf: true}
 	}
 
-	num := mod(new(big.Int).Mul(three, new(big.Int).Mul(p.x, p.x)), curveP)
-	den := mod(new(big.Int).Mul(big.NewInt(2), p.y), curveP)
+	num := new(big.Int).Mul(p.x, p.x)
+	num.Mul(num, three)
+	num.Mod(num, curveP)
+	den := new(big.Int).Lsh(p.y, 1)
+	den.Mod(den, curveP)
 	denInv := inverse(den, curveP)
 	if denInv == nil {
 		return point{inf: true}
 	}
-	lambda := mod(new(big.Int).Mul(num, denInv), curveP)
 
-	xr := mod(new(big.Int).Sub(new(big.Int).Mul(lambda, lambda), new(big.Int).Mul(big.NewInt(2), p.x)), curveP)
-	yr := mod(new(big.Int).Sub(new(big.Int).Mul(lambda, new(big.Int).Sub(p.x, xr)), p.y), curveP)
+	lambda := new(big.Int).Mul(num, denInv)
+	lambda.Mod(lambda, curveP)
+
+	xr := new(big.Int).Mul(lambda, lambda)
+	twoX := new(big.Int).Lsh(p.x, 1)
+	xr.Sub(xr, twoX)
+	xr.Mod(xr, curveP)
+
+	yr := new(big.Int).Sub(p.x, xr)
+	yr.Mul(lambda, yr)
+	yr.Sub(yr, p.y)
+	yr.Mod(yr, curveP)
 	return point{x: xr, y: yr}
 }
 
@@ -118,7 +140,8 @@ func scalarMult(base point, k *big.Int) point {
 
 	res := point{inf: true}
 	addend := copyPoint(base)
-	for i := 0; i < k.BitLen(); i++ {
+	bitLen := k.BitLen()
+	for i := 0; i < bitLen; i++ {
 		if k.Bit(i) != 0 {
 			res = add(res, addend)
 		}
@@ -136,10 +159,21 @@ func copyPoint(p point) point {
 
 func modSqrt(v *big.Int) *big.Int {
 	root := new(big.Int).Exp(v, curveSqrtExp, curveP)
-	if mod(new(big.Int).Mul(root, root), curveP).Cmp(mod(v, curveP)) != 0 {
+	check := new(big.Int).Mul(root, root)
+	check.Mod(check, curveP)
+	vMod := new(big.Int).Mod(v, curveP)
+	if check.Cmp(vMod) != 0 {
 		return nil
 	}
 	return root
+}
+
+func curveY2(x *big.Int) *big.Int {
+	out := new(big.Int).Mul(x, x)
+	out.Mul(out, x)
+	out.Add(out, seven)
+	out.Mod(out, curveP)
+	return out
 }
 
 func serializeUncompressed(p point) []byte {
@@ -148,10 +182,8 @@ func serializeUncompressed(p point) []byte {
 	}
 	out := make([]byte, 65)
 	out[0] = 0x04
-	xb := p.x.Bytes()
-	yb := p.y.Bytes()
-	copy(out[33-len(xb):33], xb)
-	copy(out[65-len(yb):65], yb)
+	p.x.FillBytes(out[1:33])
+	p.y.FillBytes(out[33:65])
 	return out
 }
 
@@ -165,13 +197,14 @@ func parseXOnlyEven(xonlyBytes []byte) (point, bool) {
 		return point{}, false
 	}
 
-	alpha := mod(new(big.Int).Add(new(big.Int).Mul(new(big.Int).Mul(x, x), x), seven), curveP)
+	alpha := curveY2(x)
 	y := modSqrt(alpha)
 	if y == nil {
 		return point{}, false
 	}
 	if y.Bit(0) != 0 {
-		y = mod(new(big.Int).Neg(y), curveP)
+		y.Neg(y)
+		y.Mod(y, curveP)
 	}
 
 	p := point{x: x, y: y}
@@ -218,13 +251,14 @@ func RecoverUncompressed(hash []byte, r, s *big.Int, v byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	alpha := mod(new(big.Int).Add(new(big.Int).Mul(new(big.Int).Mul(x, x), x), seven), curveP)
+	alpha := curveY2(x)
 	y := modSqrt(alpha)
 	if y == nil {
 		return nil, false
 	}
 	if y.Bit(0) != uint(v&1) {
-		y = mod(new(big.Int).Neg(y), curveP)
+		y.Neg(y)
+		y.Mod(y, curveP)
 	}
 
 	rPoint := point{x: x, y: y}
@@ -260,13 +294,15 @@ func verify(hash []byte, r, s *big.Int, pub point) bool {
 	if w == nil {
 		return false
 	}
-	u1 := mod(new(big.Int).Mul(e, w), curveN)
-	u2 := mod(new(big.Int).Mul(r, w), curveN)
+	u1 := new(big.Int).Mul(e, w)
+	u1.Mod(u1, curveN)
+	u2 := new(big.Int).Mul(r, w)
+	u2.Mod(u2, curveN)
 	sum := add(scalarMult(curveG, u1), scalarMult(pub, u2))
 	if sum.inf {
 		return false
 	}
-	x := mod(sum.x, curveN)
+	x := new(big.Int).Mod(sum.x, curveN)
 	return x.Cmp(r) == 0
 }
 
@@ -281,7 +317,7 @@ func SignRecoverable(privBytes, nonceBytes, hash []byte) (byte, *big.Int, *big.I
 	if rPoint.inf {
 		return 0, nil, nil, nil, false
 	}
-	r := mod(rPoint.x, curveN)
+	r := new(big.Int).Mod(rPoint.x, curveN)
 	if r.Sign() == 0 {
 		return 0, nil, nil, nil, false
 	}
@@ -291,7 +327,10 @@ func SignRecoverable(privBytes, nonceBytes, hash []byte) (byte, *big.Int, *big.I
 		return 0, nil, nil, nil, false
 	}
 	e := scalarFromBytes(hash)
-	s := mod(new(big.Int).Mul(kInv, new(big.Int).Add(e, new(big.Int).Mul(r, d))), curveN)
+	s := new(big.Int).Mul(r, d)
+	s.Add(s, e)
+	s.Mul(s, kInv)
+	s.Mod(s, curveN)
 	if s.Sign() == 0 {
 		return 0, nil, nil, nil, false
 	}

@@ -18,7 +18,7 @@ func INDEXVAR() *helpers.SimpleOP {
 			if state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			idx, err := state.Stack.PopIntRange(0, 254)
+			idx, err := state.Stack.PopIntRangeInt64(0, 254)
 			if err != nil {
 				return err
 			}
@@ -26,7 +26,7 @@ func INDEXVAR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			v, err := tup.Index(int(idx.Int64()))
+			v, err := tup.Index(int(idx))
 			if err != nil {
 				return err
 			}

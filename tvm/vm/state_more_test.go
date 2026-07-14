@@ -22,13 +22,38 @@ func makeStateWithParams(t *testing.T, params ...any) *State {
 			t.Fatalf("set param %d: %v", i, err)
 		}
 	}
-	return NewExecutionState(0, NewGas(GasConfig{Max: 1_000, Limit: 1_000}), cell.BeginCell().EndCell(), makeStateC7WithParams(inner), NewStack())
+	return NewExecutionState(MaxSupportedGlobalVersion, NewGas(GasConfig{Max: 1_000, Limit: 1_000}), cell.BeginCell().EndCell(), makeStateC7WithParams(inner), NewStack())
+}
+
+func TestNewExecutionStateKeepsExplicitZero(t *testing.T) {
+	explicitZero := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
+	explicitZero.InitForExecution()
+	if explicitZero.GlobalVersion != 0 {
+		t.Fatalf("explicit zero global version = %d, want 0", explicitZero.GlobalVersion)
+	}
+}
+
+func TestRunChildInheritsExplicitZeroGlobalVersion(t *testing.T) {
+	parent := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
+	parent.SetChildRunner(func(child *State) (int64, error) {
+		if child.GlobalVersion != 0 {
+			t.Fatalf("child global version = %d, want explicit 0", child.GlobalVersion)
+		}
+		return 0, nil
+	})
+
+	child := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
+	child.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
+	if _, err := parent.RunChild(child); err != nil {
+		t.Fatalf("run child: %v", err)
+	}
 }
 
 func TestStateRunChildAndParamHelpers(t *testing.T) {
 	t.Run("RunChildValidationAndInheritance", func(t *testing.T) {
 		parent := makeStateWithParams(t)
 		parent.Libraries = []*cell.Cell{cell.BeginCell().MustStoreUInt(1, 1).EndCell()}
+		parent.SignatureCheckAlwaysSucceed = true
 
 		if _, err := parent.RunChild(nil); err == nil {
 			t.Fatal("expected nil child to fail")
@@ -43,11 +68,14 @@ func TestStateRunChildAndParamHelpers(t *testing.T) {
 		called := false
 		parent.SetChildRunner(func(ch *State) (int64, error) {
 			called = true
-			if ch.GlobalVersion != DefaultGlobalVersion {
-				t.Fatalf("child global version = %d, want %d", ch.GlobalVersion, DefaultGlobalVersion)
+			if ch.GlobalVersion != MaxSupportedGlobalVersion {
+				t.Fatalf("child global version = %d, want %d", ch.GlobalVersion, MaxSupportedGlobalVersion)
 			}
 			if len(ch.Libraries) != 1 {
 				t.Fatalf("child libraries len = %d, want 1", len(ch.Libraries))
+			}
+			if !ch.SignatureCheckAlwaysSucceed {
+				t.Fatal("child should inherit signature-check-always-succeed flag")
 			}
 			if ch.CurrentCode == nil {
 				t.Fatal("child code should be prepared before runner")
@@ -160,17 +188,25 @@ func TestStateGasCommitAndThrowHelpers(t *testing.T) {
 		}
 
 		state.Gas.SetLimits(100_000, 100_000)
-		for i := 0; i < ChksgnFreeCount; i++ {
-			if err := state.RegisterChksgnCall(); err != nil {
-				t.Fatalf("free chksgn call %d failed: %v", i, err)
+		for i := 0; i < SignatureCheckFreeCount; i++ {
+			if err := state.RegisterSignatureCheckCall(); err != nil {
+				t.Fatalf("free signature check call %d failed: %v", i, err)
 			}
 		}
 		before = state.Gas.Remaining
-		if err := state.RegisterChksgnCall(); err != nil {
+		if err := state.RegisterSignatureCheckCall(); err != nil {
 			t.Fatal(err)
 		}
-		if state.Gas.Remaining != before-ChksgnGasPrice {
-			t.Fatalf("paid chksgn should consume gas: before=%d after=%d", before, state.Gas.Remaining)
+		if state.Gas.Remaining != before-SignatureCheckGasPrice {
+			t.Fatalf("paid signature check should consume gas: before=%d after=%d", before, state.Gas.Remaining)
+		}
+
+		legacySignatureCheck := NewExecutionState(3, GasWithLimit(1000), nil, tuple.Tuple{}, NewStack())
+		if err := legacySignatureCheck.RegisterSignatureCheckCall(); err != nil {
+			t.Fatalf("pre-v4 signature check call should be free: %v", err)
+		}
+		if legacySignatureCheck.SignatureCheckCounter != 0 || legacySignatureCheck.Gas.FreeConsumed != 0 || legacySignatureCheck.Gas.Used() != 0 {
+			t.Fatalf("pre-v4 signature check mutated state: counter=%d free=%d used=%d", legacySignatureCheck.SignatureCheckCounter, legacySignatureCheck.Gas.FreeConsumed, legacySignatureCheck.Gas.Used())
 		}
 
 		state.Gas.SetLimits(100, 100)
@@ -203,6 +239,18 @@ func TestStateGasCommitAndThrowHelpers(t *testing.T) {
 		if used.Int64() != state.Gas.Used() {
 			t.Fatalf("unexpected used gas on stack: got=%d want=%d", used.Int64(), state.Gas.Used())
 		}
+
+		legacyGas := NewExecutionState(3, GasWithLimit(5), nil, tuple.Tuple{}, NewStack())
+		if err := legacyGas.ConsumeGas(10); err != nil {
+			t.Fatalf("pre-v4 consume gas should defer out-of-gas: %v", err)
+		}
+		assertVMErrorCode(t, legacyGas.CheckGas(), vmerr.CodeOutOfGas)
+
+		legacyCheckedGas := NewExecutionState(3, GasWithLimit(5), nil, tuple.Tuple{}, NewStack())
+		assertVMErrorCode(t, legacyCheckedGas.consumeGasChecked(10), vmerr.CodeOutOfGas)
+
+		modernGas := NewExecutionState(4, GasWithLimit(5), nil, tuple.Tuple{}, NewStack())
+		assertVMErrorCode(t, modernGas.ConsumeGas(10), vmerr.CodeOutOfGas)
 	})
 
 	t.Run("CommitHelpers", func(t *testing.T) {
@@ -261,6 +309,76 @@ func TestStateGasCommitAndThrowHelpers(t *testing.T) {
 			t.Fatalf("unexpected exception payload: %v", got)
 		}
 	})
+}
+
+func FuzzStateVersionedGasConsumptionBoundary(f *testing.F) {
+	for version := uint8(0); version <= uint8(MaxSupportedGlobalVersion); version++ {
+		for entrypoint := uint8(0); entrypoint < 4; entrypoint++ {
+			f.Add(version, false, entrypoint, uint16(5), uint16(10))
+			f.Add(version, false, entrypoint, uint16(10), uint16(5))
+			f.Add(version, false, entrypoint, uint16(32), uint16(33))
+			f.Add(version, false, entrypoint, uint16(33), uint16(32))
+		}
+	}
+	for entrypoint := uint8(0); entrypoint < 4; entrypoint++ {
+		f.Add(uint8(0), true, entrypoint, uint16(5), uint16(10))
+		f.Add(uint8(0), true, entrypoint, uint16(10), uint16(5))
+	}
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, unconfiguredZero bool, rawEntrypoint uint8, rawLimit, rawAmount uint16) {
+		version := int(rawVersion % uint8(MaxSupportedGlobalVersion+1))
+		limit := int64(rawLimit%64) + 1
+		amount := int64(rawAmount % 96)
+		entrypoint := rawEntrypoint % 4
+
+		var state *State
+		if unconfiguredZero {
+			state = NewExecutionState(0, GasWithLimit(limit), nil, tuple.Tuple{}, NewStack())
+		} else {
+			state = NewExecutionState(version, GasWithLimit(limit), nil, tuple.Tuple{}, NewStack())
+		}
+
+		cost, err := consumeVersionedGasFuzzEntry(state, entrypoint, amount)
+		checkNow := (!unconfiguredZero && version >= 4) || entrypoint == 3
+		wantErr := checkNow && cost > limit
+
+		if wantErr {
+			assertVMErrorCode(t, err, vmerr.CodeOutOfGas)
+		} else if err != nil {
+			t.Fatalf("version=%d unconfigured=%v entry=%d limit=%d amount=%d unexpected consume error: %v", version, unconfiguredZero, entrypoint, limit, amount, err)
+		}
+
+		if got := state.Gas.Used(); got != cost {
+			t.Fatalf("version=%d unconfigured=%v entry=%d used gas = %d, want %d", version, unconfiguredZero, entrypoint, got, cost)
+		}
+
+		checkErr := state.CheckGas()
+		if cost > limit {
+			assertVMErrorCode(t, checkErr, vmerr.CodeOutOfGas)
+			return
+		}
+		if checkErr != nil {
+			t.Fatalf("version=%d unconfigured=%v entry=%d CheckGas unexpected error: %v", version, unconfiguredZero, entrypoint, checkErr)
+		}
+	})
+}
+
+func consumeVersionedGasFuzzEntry(state *State, entrypoint uint8, amount int64) (int64, error) {
+	switch entrypoint {
+	case 0:
+		return amount, state.ConsumeGas(amount)
+	case 1:
+		depth := int(amount)
+		cost := int64(0)
+		if depth > FreeStackDepth {
+			cost = int64(depth-FreeStackDepth) * StackEntryGasPrice
+		}
+		return cost, state.ConsumeStackGasLen(depth)
+	case 2:
+		return amount * TupleEntryGasPrice, state.ConsumeTupleGasLen(int(amount))
+	default:
+		return amount, state.consumeGasChecked(amount)
+	}
 }
 
 func TestChildVMHelpersAndForceControlData(t *testing.T) {

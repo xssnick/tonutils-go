@@ -14,7 +14,11 @@ func init() {
 func SENDRAWMSG() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopIntRange(0, 255)
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
+			i0, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
@@ -27,7 +31,7 @@ func SENDRAWMSG() *helpers.SimpleOP {
 			list := tlb.OutList{
 				Prev: state.Reg.D[1],
 				Out: tlb.ActionSendMsg{
-					Mode: uint8(i0.Uint64()),
+					Mode: uint8(i0),
 					Msg:  c1,
 				},
 			}

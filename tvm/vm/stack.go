@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strings"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -44,16 +45,44 @@ func (s *Stack) RestoreCheckpoint(cp StackCheckpoint) {
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
-var stackIntMinusOne = big.NewInt(-1)
-var stackIntZero = big.NewInt(0)
-var stackIntOne = big.NewInt(1)
+const (
+	defaultStackCapacity = 16
+	stackStaticIntMin    = -5
+	stackStaticIntMax    = 10
+	stackStaticIntCount  = stackStaticIntMax - stackStaticIntMin + 1
+)
+
+var stackStaticInts = makeStackStaticInts()
+
+var stackIntMinusOne = stackStaticInt(-1)
+var stackIntZero = stackStaticInt(0)
+var stackIntOne = stackStaticInt(1)
 
 const maxStackDepth = 1 << 16
 
 func NewStack() *Stack {
+	return newStackWithCap(defaultStackCapacity)
+}
+
+func newStackWithCap(capacity int) *Stack {
 	return &Stack{
-		elems: make([]any, 0, 256),
+		elems: make([]any, 0, capacity),
 	}
+}
+
+func makeStackStaticInts() [stackStaticIntCount]*big.Int {
+	var vals [stackStaticIntCount]*big.Int
+	for i := range vals {
+		vals[i] = big.NewInt(int64(stackStaticIntMin + i))
+	}
+	return vals
+}
+
+func stackStaticInt(val int64) *big.Int {
+	if val < stackStaticIntMin || val > stackStaticIntMax {
+		return nil
+	}
+	return stackStaticInts[val-stackStaticIntMin]
 }
 
 func (s *Stack) SetTrace(trace *cell.Trace) {
@@ -62,7 +91,7 @@ func (s *Stack) SetTrace(trace *cell.Trace) {
 		return
 	}
 	for i, val := range s.elems {
-		s.elems[i] = bindValueTrace(val, trace)
+		s.elems[i] = BindValueTrace(val, trace)
 	}
 }
 
@@ -80,7 +109,7 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		if err != nil {
 			panic(err)
 		}
-		bound := bindValueTrace(val, trace)
+		bound := BindValueTrace(val, trace)
 		if vals == nil && sameStackValue(bound, val) {
 			continue
 		}
@@ -93,8 +122,7 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 	if vals == nil {
 		return t.WithBindingID(trace)
 	}
-	bound := tuple.NewTupleOwned(vals)
-	return bound.WithBindingID(trace)
+	return tuple.NewTupleOwnedBound(vals, trace)
 }
 
 func sameStackValue(a, b any) bool {
@@ -118,19 +146,42 @@ func copyTuplePrefix(dst []any, src tuple.Tuple, end int) {
 	}
 }
 
-func bindValueTrace(val any, trace *cell.Trace) any {
+// BindValueTrace returns val ready to live on a stack or in c7 bound to the
+// given cell trace: slices and builders are copied with the trace attached
+// (snapshotting their cursor), tuples are rebound recursively and typed nil
+// pointers collapse to plain nil, except a null slice reference whose slice
+// tag is observable in legacy TVM behavior. Values that already carry the
+// trace are returned as-is. A nil trace returns val unchanged.
+func BindValueTrace(val any, trace *cell.Trace) any {
 	if trace == nil {
 		return val
 	}
 
 	switch x := val.(type) {
+	case *big.Int:
+		// normalize typed nils coming from user-built tuples
+		if x == nil {
+			return nil
+		}
+		return x
+	case *cell.Cell:
+		if x == nil {
+			return nil
+		}
+		return x
 	case *cell.Slice:
+		if x == nil {
+			return x
+		}
 		combined := cell.CombineTraces(x.Trace(), trace)
 		if combined == x.Trace() {
 			return x
 		}
 		return x.Copy().SetTrace(combined)
 	case *cell.Builder:
+		if x == nil {
+			return nil
+		}
 		combined := cell.CombineTraces(x.Trace(), trace)
 		if combined == x.Trace() {
 			return x
@@ -177,14 +228,23 @@ func unbindValueTrace(val any, trace *cell.Trace) any {
 
 	switch x := val.(type) {
 	case *cell.Cell:
+		if x == nil {
+			return nil
+		}
 		return x.WithTrace(x.Trace().WithoutTrace(trace))
 	case *cell.Slice:
+		if x == nil {
+			return x
+		}
 		next := x.Trace().WithoutTrace(trace)
 		if next == x.Trace() {
 			return x
 		}
 		return x.Copy().SetTrace(next)
 	case *cell.Builder:
+		if x == nil {
+			return nil
+		}
 		next := x.Trace().WithoutTrace(trace)
 		if next == x.Trace() {
 			return x
@@ -236,7 +296,7 @@ func shareStackValue(val any, trace *cell.Trace) (any, error) {
 		return cp, nil
 	case *cell.Slice:
 		if t == nil {
-			return nil, nil
+			return t, nil
 		}
 		cp := t.Copy()
 		if trace != nil {
@@ -287,8 +347,30 @@ func canonicalStackInt(val *big.Int) *big.Int {
 	return new(big.Int).Set(val)
 }
 
+func canonicalOwnedStackInt(val *big.Int) *big.Int {
+	switch {
+	case val.Sign() == 0:
+		return stackIntZero
+	case val.IsInt64():
+		switch val.Int64() {
+		case -1:
+			return stackIntMinusOne
+		case 1:
+			return stackIntOne
+		}
+	}
+	return val
+}
+
 func isStaticStackInt(val *big.Int) bool {
-	return val == stackIntMinusOne || val == stackIntZero || val == stackIntOne
+	if val == stackIntMinusOne || val == stackIntZero || val == stackIntOne {
+		return true
+	}
+	if val == nil || !val.IsInt64() {
+		return false
+	}
+	static := stackStaticInt(val.Int64())
+	return static != nil && val == static
 }
 
 // PushHostValue accepts values already encoded with TVM stack types.
@@ -335,7 +417,7 @@ func (s *Stack) PushOwnedSlice(val *cell.Slice) error {
 		return vmerr.Error(vmerr.CodeStackOverflow)
 	}
 	if val == nil {
-		s.elems = append(s.elems, nil)
+		s.elems = append(s.elems, val)
 		return nil
 	}
 	if s.trace != nil {
@@ -364,11 +446,35 @@ func (s *Stack) PushInt(val *big.Int) error {
 	return s.pushStaticInt(canonicalStackInt(val))
 }
 
+// PushOwnedInt pushes an integer the caller no longer shares elsewhere.
+// Unlike PushInt, it keeps non-static values in-place and skips a defensive copy.
+func (s *Stack) PushOwnedInt(val *big.Int) error {
+	if !fitsTVMInt(val) {
+		return vmerr.Error(vmerr.CodeIntOverflow)
+	}
+	return s.pushStaticInt(canonicalOwnedStackInt(val))
+}
+
 func (s *Stack) PushIntQuiet(val *big.Int) error {
 	if !fitsTVMInt(val) {
 		return s.PushAny(NaN{})
 	}
 	return s.pushStaticInt(canonicalStackInt(val))
+}
+
+// PushOwnedIntQuiet is the quiet variant of PushOwnedInt.
+func (s *Stack) PushOwnedIntQuiet(val *big.Int) error {
+	if !fitsTVMInt(val) {
+		return s.PushAny(NaN{})
+	}
+	return s.pushStaticInt(canonicalOwnedStackInt(val))
+}
+
+func (s *Stack) PushSmallInt(val int64) error {
+	if static := stackStaticInt(val); static != nil {
+		return s.pushStaticInt(static)
+	}
+	return s.PushOwnedInt(big.NewInt(val))
 }
 
 func (s *Stack) PushAny(val any) error {
@@ -386,13 +492,22 @@ func (s *Stack) PushAny(val any) error {
 	return nil
 }
 
+// PushOwnedValue pushes a value that was already removed from this VM stack.
+func (s *Stack) PushOwnedValue(val any) error {
+	if len(s.elems) >= maxStackDepth {
+		return vmerr.Error(vmerr.CodeStackOverflow)
+	}
+	s.elems = append(s.elems, val)
+	return nil
+}
+
 func (s *Stack) SplitTop(top, drop int) (*Stack, error) {
 	n := s.Len()
 	if top < 0 || drop < 0 || top > n || drop > n-top {
 		return nil, vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	newStack := NewStack()
+	newStack := newStackWithCap(top)
 	if top != 0 {
 		if err := newStack.MoveFrom(s, top); err != nil {
 			return nil, err
@@ -517,6 +632,38 @@ func (s *Stack) PopIntFinite() (*big.Int, error) {
 	return e, nil
 }
 
+// PopIntRead pops an integer for read-only use: shared static instances are
+// returned as-is instead of a defensive copy, so the caller must not mutate
+// the result. nil result means NaN.
+func (s *Stack) PopIntRead() (*big.Int, error) {
+	e, err := s.PopAny()
+	if err != nil {
+		return nil, err
+	}
+
+	switch v := e.(type) {
+	case NaN:
+		return nil, nil
+	case *big.Int:
+		return v, nil
+	default:
+		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not an integer")
+	}
+}
+
+// PopIntFiniteRead is the finite variant of PopIntRead: the caller must not
+// mutate the result.
+func (s *Stack) PopIntFiniteRead() (*big.Int, error) {
+	e, err := s.PopIntRead()
+	if err != nil {
+		return nil, err
+	}
+	if e == nil { // nil = non valid (NaN)
+		return nil, vmerr.Error(vmerr.CodeIntOverflow)
+	}
+	return e, nil
+}
+
 func (s *Stack) PopBool() (bool, error) {
 	e, err := s.PopAny()
 	if err != nil {
@@ -588,7 +735,7 @@ func (s *Stack) PopSlice() (*cell.Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v, ok := e.(*cell.Slice); !ok {
+	if v, ok := e.(*cell.Slice); !ok || v == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
@@ -677,6 +824,29 @@ func (s *Stack) PopIntRange(min, max int64) (*big.Int, error) {
 	return e, nil
 }
 
+func (s *Stack) PopIntRangeInt64(min, max int64) (int64, error) {
+	e, err := s.PopAny()
+	if err != nil {
+		return 0, err
+	}
+
+	switch v := e.(type) {
+	case NaN:
+		return 0, vmerr.Error(vmerr.CodeRangeCheck)
+	case *big.Int:
+		if !v.IsInt64() {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		val := v.Int64()
+		if val < min || val > max {
+			return 0, vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		return val, nil
+	default:
+		return 0, vmerr.Error(vmerr.CodeTypeCheck, "not an integer")
+	}
+}
+
 func (s *Stack) Get(at int) (any, error) {
 	if at < 0 || at >= len(s.elems) {
 		return nil, vmerr.Error(vmerr.CodeStackUnderflow)
@@ -702,7 +872,7 @@ func (s *Stack) String() string {
 		return "[empty stack]"
 	}
 
-	var res string
+	var res strings.Builder
 	for i := len(s.elems) - 1; i >= 0; i-- {
 		typ := "???"
 		val := "???"
@@ -718,7 +888,11 @@ func (s *Stack) String() string {
 			val = x.String()
 		case *cell.Slice:
 			typ = "slice"
-			val = x.WithoutTrace().MustToCell().Dump()
+			if x == nil {
+				val = "null"
+			} else {
+				val = x.WithoutTrace().MustToCell().Dump()
+			}
 		case *cell.Builder:
 			typ = "builder"
 			val = x.WithoutTrace().EndCell().Dump()
@@ -727,9 +901,9 @@ func (s *Stack) String() string {
 			val = x.WithoutTrace().Dump()
 		}
 
-		res += fmt.Sprintf("s%d = %s [%s]\n", i, val, typ)
+		fmt.Fprintf(&res, "s%d = %s [%s]\n", i, val, typ)
 	}
-	return res
+	return res.String()
 }
 
 func (s *Stack) Copy() *Stack {

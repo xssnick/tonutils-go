@@ -4,6 +4,7 @@ package tvm
 
 import (
 	"bytes"
+	"fmt"
 	"math/big"
 	"os"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	dictop "github.com/xssnick/tonutils-go/tvm/op/dict"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -27,17 +29,7 @@ func TestTVMCrossEmulatorDictOpsMatrix(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	tests := append(dictMatrixLoadCases(),
-		dictMatrixValueCases()...,
-	)
-	tests = append(tests, dictMatrixBuilderCases()...)
-	tests = append(tests, dictMatrixDeleteAndOptRefCases()...)
-	tests = append(tests, dictMatrixMinMaxCases()...)
-	tests = append(tests, dictMatrixNearCases()...)
-	tests = append(tests, dictMatrixPrefixCases()...)
-	tests = append(tests, dictMatrixSubdictCases()...)
-	tests = append(tests, dictMatrixJumpExecCases()...)
-
+	tests := dictMatrixAllCases()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			code := tt.code
@@ -48,6 +40,73 @@ func TestTVMCrossEmulatorDictOpsMatrix(t *testing.T) {
 			runDictMatrixCrossCase(t, prependRawMethodDrop(code(t)), tt.stack(t), tt.exit)
 		})
 	}
+}
+
+func TestTVMCrossEmulatorDictOpsMatrixAllGlobalVersionsSmoke(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	tests := dictMatrixAllCases()
+
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_DICTOPS_MATRIX_VERSION_AUDIT")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			code := tt.code
+			if code == nil {
+				code = dictMatrixOpcode(tt.op)
+			}
+
+			for _, version := range versions {
+				version := version
+				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+					runDictVersionedParityCase(t, code(t), tt.stack(t), version, tt.exit)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorDictOpsMatrixGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := dictMatrixAllCases()
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint16(version%len(cases)))
+	}
+	for i := range cases {
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint16(i))
+	}
+	f.Add(uint8(255), uint16(0xffff))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint16) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		tests := dictMatrixAllCases()
+		tt := tests[int(rawCase)%len(tests)]
+		code := tt.code
+		if code == nil {
+			code = dictMatrixOpcode(tt.op)
+		}
+
+		runDictVersionedParityCase(t, code(t), tt.stack(t), version, tt.exit)
+	})
+}
+
+func dictMatrixAllCases() []dictMatrixCrossCase {
+	tests := append(dictMatrixLoadCases(),
+		dictMatrixValueCases()...,
+	)
+	tests = append(tests, dictMatrixBuilderCases()...)
+	tests = append(tests, dictMatrixDeleteAndOptRefCases()...)
+	tests = append(tests, dictMatrixMinMaxCases()...)
+	tests = append(tests, dictMatrixNearCases()...)
+	tests = append(tests, dictMatrixPrefixCases()...)
+	tests = append(tests, dictMatrixSubdictCases()...)
+	tests = append(tests, dictMatrixJumpExecCases()...)
+	return tests
 }
 
 func dictMatrixLoadCases() []dictMatrixCrossCase {
@@ -150,10 +209,42 @@ func dictMatrixValueCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "value/iget_overflow_key_miss",
+			op:   0xF40C,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(128), dictMatrixSignedPlainRoot(t), int64(8)}
+			},
+			exit: 0,
+		},
+		{
+			name: "value/iget_below_key_miss",
+			op:   0xF40C,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(-129), dictMatrixSignedPlainRoot(t), int64(8)}
+			},
+			exit: 0,
+		},
+		{
 			name: "value/igetref_negative_hit",
 			op:   0xF40D,
 			stack: func(t *testing.T) []any {
 				return []any{big.NewInt(-2), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: 0,
+		},
+		{
+			name: "value/igetref_overflow_key_miss",
+			op:   0xF40D,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(128), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: 0,
+		},
+		{
+			name: "value/igetref_below_key_miss",
+			op:   0xF40D,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(-129), dictMatrixRefRoot(t), int64(8)}
 			},
 			exit: 0,
 		},
@@ -206,6 +297,14 @@ func dictMatrixValueCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "value/set_slice_short_key_deferred_value_pop",
+			op:   0xF412,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xAA, 8), mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
 			name: "value/set_ref_update_existing",
 			op:   0xF413,
 			stack: func(t *testing.T) []any {
@@ -228,6 +327,14 @@ func dictMatrixValueCases() []dictMatrixCrossCase {
 				return []any{dictMatrixSlice(0xAD, 8), big.NewInt(-1), dictMatrixSignedPlainRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "value/iset_positive_overflow_range",
+			op:   0xF414,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xAD, 8), big.NewInt(128), dictMatrixSignedPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
 		},
 		{
 			name: "value/isetref_insert_nil_root",
@@ -254,6 +361,14 @@ func dictMatrixValueCases() []dictMatrixCrossCase {
 			exit: vmerr.CodeRangeCheck,
 		},
 		{
+			name: "value/uset_bad_key_type_preserves_value",
+			op:   0xF416,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xAA, 8), nil, nil, int64(8)}
+			},
+			exit: vmerr.CodeTypeCheck,
+		},
+		{
 			name: "value/usetref_update_existing",
 			op:   0xF417,
 			stack: func(t *testing.T) []any {
@@ -276,6 +391,22 @@ func dictMatrixValueCases() []dictMatrixCrossCase {
 				return []any{dictMatrixSlice(0xCD, 8), mustSliceKey(t, 0x44, 8), dictMatrixPlainRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "value/setget_slice_short_key_deferred_value_pop",
+			op:   0xF41A,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xEE, 8), mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "value/setget_ref_short_key_deferred_value_pop",
+			op:   0xF41B,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixRefValue(0xEEEE, 16), mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
 		},
 		{
 			name: "value/setget_ref_insert_nil_root",
@@ -611,6 +742,14 @@ func dictMatrixBuilderCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "builder/setb_slice_short_key_deferred_value_pop",
+			op:   0xF441,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixBuilder(0xA1, 8), mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
 			name: "builder/isetb_insert_nil_root",
 			op:   0xF442,
 			stack: func(t *testing.T) []any {
@@ -633,6 +772,14 @@ func dictMatrixBuilderCases() []dictMatrixCrossCase {
 				return []any{dictMatrixBuilder(0xAA, 8), mustSliceKey(t, 0x77, 8), dictMatrixPlainRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "builder/setgetb_slice_short_key_deferred_value_pop",
+			op:   0xF445,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixBuilder(0xAB, 8), mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
 		},
 		{
 			name: "builder/isetgetb_update_existing",
@@ -776,6 +923,22 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "delete/idel_overflow_key_range",
+			op:   0xF45A,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(128), dictMatrixSignedPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "delete/idel_below_key_range",
+			op:   0xF45A,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(-129), dictMatrixSignedPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
 			name: "delete/udel_miss",
 			op:   0xF45B,
 			stack: func(t *testing.T) []any {
@@ -840,6 +1003,14 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "delete/delget_ref_bad_value",
+			op:   0xF463,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0x10, 8), dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
+		},
+		{
 			name: "delete/idelget_hit",
 			op:   0xF464,
 			stack: func(t *testing.T) []any {
@@ -854,6 +1025,38 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 				return []any{big.NewInt(-2), dictMatrixRefRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "delete/idelget_overflow_key_range",
+			op:   0xF464,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(128), dictMatrixSignedPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "delete/idelgetref_overflow_key_range",
+			op:   0xF465,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(128), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "delete/idelget_below_key_range",
+			op:   0xF464,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(-129), dictMatrixSignedPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "delete/idelgetref_below_key_range",
+			op:   0xF465,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(-129), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
 		},
 		{
 			name: "delete/udelget_miss",
@@ -928,6 +1131,22 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "optref/igetoptref_overflow_key_null",
+			op:   0xF46A,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(128), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: 0,
+		},
+		{
+			name: "optref/igetoptref_below_key_null",
+			op:   0xF46A,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(-129), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: 0,
+		},
+		{
 			name: "optref/ugetoptref_out_of_range",
 			op:   0xF46B,
 			stack: func(t *testing.T) []any {
@@ -968,6 +1187,14 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 			exit: vmerr.CodeDict,
 		},
 		{
+			name: "optref/setgetoptref_delete_bad_old_value",
+			op:   0xF46D,
+			stack: func(t *testing.T) []any {
+				return []any{nil, mustSliceKey(t, 0x10, 8), dictMatrixPlainRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
+		},
+		{
 			name: "optref/setgetoptref_delete_existing",
 			op:   0xF46D,
 			stack: func(t *testing.T) []any {
@@ -982,6 +1209,22 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 				return []any{nil, mustSliceKey(t, 0x44, 8), nil, int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "optref/setgetoptref_short_key_deferred_value_pop",
+			op:   0xF46D,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixRefValue(0x0A0A, 16), mustSliceKey(t, 0x1, 4), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "optref/setgetoptref_delete_short_key_deferred_value_pop",
+			op:   0xF46D,
+			stack: func(t *testing.T) []any {
+				return []any{nil, mustSliceKey(t, 0x1, 4), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
 		},
 		{
 			name: "optref/isetgetoptref_insert_nil_root",
@@ -1000,10 +1243,42 @@ func dictMatrixDeleteAndOptRefCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "optref/isetgetoptref_overflow_key_range",
+			op:   0xF46E,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixRefValue(0x0707, 16), big.NewInt(128), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "optref/isetgetoptref_below_key_range",
+			op:   0xF46E,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixRefValue(0x0808, 16), big.NewInt(-129), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
 			name: "optref/usetgetoptref_negative_key_range",
 			op:   0xF46F,
 			stack: func(t *testing.T) []any {
 				return []any{dictMatrixRefValue(0x0303, 16), big.NewInt(-1), nil, int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "optref/usetgetoptref_overflow_key_range",
+			op:   0xF46F,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixRefValue(0x0909, 16), big.NewInt(256), dictMatrixRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "optref/usetgetoptref_delete_overflow_key_range",
+			op:   0xF46F,
+			stack: func(t *testing.T) []any {
+				return []any{nil, big.NewInt(256), dictMatrixRefRoot(t), int64(8)}
 			},
 			exit: vmerr.CodeRangeCheck,
 		},
@@ -1045,6 +1320,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "minmax/min_ref_bad_value",
+			op:   0xF483,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
+		},
+		{
 			name: "minmax/imin_signed_edge",
 			op:   0xF484,
 			stack: func(t *testing.T) []any {
@@ -1059,6 +1342,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 				return []any{dictMatrixSignedRefRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "minmax/iminref_bad_value",
+			op:   0xF485,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
 		},
 		{
 			name: "minmax/umin_unsigned_edge",
@@ -1093,6 +1384,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "minmax/max_ref_bad_value",
+			op:   0xF48B,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
+		},
+		{
 			name: "minmax/imax_signed_edge",
 			op:   0xF48C,
 			stack: func(t *testing.T) []any {
@@ -1107,6 +1406,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 				return []any{dictMatrixSignedRefRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "minmax/imaxref_bad_value",
+			op:   0xF48D,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
 		},
 		{
 			name: "minmax/umax_unsigned_edge",
@@ -1141,6 +1448,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "minmax/remmin_ref_bad_value",
+			op:   0xF493,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
+		},
+		{
 			name: "minmax/iremmin_signed_single_to_empty",
 			op:   0xF494,
 			stack: func(t *testing.T) []any {
@@ -1155,6 +1470,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 				return []any{dictMatrixSignedRefRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "minmax/iremminref_bad_value",
+			op:   0xF495,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
 		},
 		{
 			name: "minmax/uremmin_unsigned_single_to_empty",
@@ -1189,6 +1512,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "minmax/remmax_ref_bad_value",
+			op:   0xF49B,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
+		},
+		{
 			name: "minmax/iremmax_signed_non_empty",
 			op:   0xF49C,
 			stack: func(t *testing.T) []any {
@@ -1203,6 +1534,14 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 				return []any{dictMatrixSignedRefRoot(t), int64(8)}
 			},
 			exit: 0,
+		},
+		{
+			name: "minmax/iremmaxref_bad_value",
+			op:   0xF49D,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixMalformedRefRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeDict,
 		},
 		{
 			name: "minmax/uremmax_unsigned_non_empty",
@@ -1297,6 +1636,22 @@ func dictMatrixMinMaxCases() []dictMatrixCrossCase {
 			op:   0xF48E,
 			stack: func(t *testing.T) []any {
 				return []any{dictMatrixPlainRoot(t), int64(257)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "minmax/uremminref_key_len_range",
+			op:   0xF497,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixUnsignedRefEdgeRoot(t), int64(257)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "minmax/iremmaxref_key_len_range",
+			op:   0xF49D,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSignedRefRoot(t), int64(258)}
 			},
 			exit: vmerr.CodeRangeCheck,
 		},
@@ -1490,6 +1845,30 @@ func dictMatrixNearCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "near/getnext_short_key_underflow",
+			op:   0xF474,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "near/getnexteq_short_key_underflow",
+			op:   0xF475,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "near/getprev_short_key_underflow",
+			op:   0xF476,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0x1, 4), nil, int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
 			name: "near/getpreveq_short_key_underflow",
 			op:   0xF477,
 			stack: func(t *testing.T) []any {
@@ -1530,6 +1909,22 @@ func dictMatrixNearCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "near/getnext_key_len_range",
+			op:   0xF474,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0x10, 8), dictMatrixPlainRoot(t), int64(1024)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "near/getprev_key_len_range",
+			op:   0xF476,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0x80, 8), dictMatrixPlainRoot(t), int64(1024)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
 			name: "near/igetnext_key_len_range",
 			op:   0xF478,
 			stack: func(t *testing.T) []any {
@@ -1538,8 +1933,24 @@ func dictMatrixNearCases() []dictMatrixCrossCase {
 			exit: vmerr.CodeRangeCheck,
 		},
 		{
+			name: "near/igetprev_key_len_range",
+			op:   0xF47A,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(1), nil, int64(258)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
 			name: "near/ugetnext_key_len_range",
 			op:   0xF47C,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(1), nil, int64(257)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "near/ugetprev_key_len_range",
+			op:   0xF47E,
 			stack: func(t *testing.T) []any {
 				return []any{big.NewInt(1), nil, int64(257)}
 			},
@@ -1563,6 +1974,22 @@ func dictMatrixPrefixCases() []dictMatrixCrossCase {
 			op:   0xF470,
 			stack: func(t *testing.T) []any {
 				return []any{dictMatrixSlice(0xF, 4), mustSliceKey(t, 0b10, 2), dictMatrixPrefixRoot(t), int64(4)}
+			},
+			exit: 0,
+		},
+		{
+			name: "prefix/pfxdictset_oversized_key_false",
+			op:   0xF470,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xE, 4), mustSliceKey(t, 0b11, 2), dictMatrixPrefixRoot(t), int64(1)}
+			},
+			exit: 0,
+		},
+		{
+			name: "prefix/pfxdictset_oversized_key_nil_root_false",
+			op:   0xF470,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xE, 4), mustSliceKey(t, 0b11, 2), nil, int64(1)}
 			},
 			exit: 0,
 		},
@@ -1591,6 +2018,22 @@ func dictMatrixPrefixCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "prefix/pfxdictreplace_oversized_key_false",
+			op:   0xF471,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xE, 4), mustSliceKey(t, 0b11, 2), dictMatrixPrefixRoot(t), int64(1)}
+			},
+			exit: 0,
+		},
+		{
+			name: "prefix/pfxdictreplace_oversized_key_nil_root_false",
+			op:   0xF471,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xE, 4), mustSliceKey(t, 0b11, 2), nil, int64(1)}
+			},
+			exit: 0,
+		},
+		{
 			name: "prefix/pfxdictadd_missing",
 			op:   0xF472,
 			stack: func(t *testing.T) []any {
@@ -1615,6 +2058,22 @@ func dictMatrixPrefixCases() []dictMatrixCrossCase {
 			exit: 0,
 		},
 		{
+			name: "prefix/pfxdictadd_oversized_key_false",
+			op:   0xF472,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xE, 4), mustSliceKey(t, 0b11, 2), dictMatrixPrefixRoot(t), int64(1)}
+			},
+			exit: 0,
+		},
+		{
+			name: "prefix/pfxdictadd_oversized_key_nil_root_false",
+			op:   0xF472,
+			stack: func(t *testing.T) []any {
+				return []any{dictMatrixSlice(0xE, 4), mustSliceKey(t, 0b11, 2), nil, int64(1)}
+			},
+			exit: 0,
+		},
+		{
 			name: "prefix/pfxdictdel_hit",
 			op:   0xF473,
 			stack: func(t *testing.T) []any {
@@ -1635,6 +2094,22 @@ func dictMatrixPrefixCases() []dictMatrixCrossCase {
 			op:   0xF473,
 			stack: func(t *testing.T) []any {
 				return []any{mustSliceKey(t, 0b10, 2), nil, int64(4)}
+			},
+			exit: 0,
+		},
+		{
+			name: "prefix/pfxdictdel_oversized_key_false",
+			op:   0xF473,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0b11, 2), dictMatrixPrefixRoot(t), int64(1)}
+			},
+			exit: 0,
+		},
+		{
+			name: "prefix/pfxdictdel_oversized_key_nil_root_false",
+			op:   0xF473,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0b11, 2), nil, int64(1)}
 			},
 			exit: 0,
 		},
@@ -1679,6 +2154,14 @@ func dictMatrixPrefixCases() []dictMatrixCrossCase {
 			exit: vmerr.CodeCellUnderflow,
 		},
 		{
+			name: "prefix/pfxdictget_nil_root_underflow",
+			op:   0xF4A9,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0b1011, 4), nil, int64(4)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
 			name: "prefix/pfxdictgetjmp_hit",
 			op:   0xF4AA,
 			stack: func(t *testing.T) []any {
@@ -1715,6 +2198,14 @@ func dictMatrixPrefixCases() []dictMatrixCrossCase {
 			op:   0xF4AB,
 			stack: func(t *testing.T) []any {
 				return []any{mustSliceKey(t, 0b0111, 4), dictMatrixPrefixContRoot(t, 7), int64(4)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "prefix/pfxdictgetexec_nil_root_underflow",
+			op:   0xF4AB,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0b1011, 4), nil, int64(4)}
 			},
 			exit: vmerr.CodeCellUnderflow,
 		},
@@ -1929,8 +2420,24 @@ func dictMatrixSubdictCases() []dictMatrixCrossCase {
 			exit: vmerr.CodeRangeCheck,
 		},
 		{
+			name: "subdict/slice_remove_prefix_bits_range",
+			op:   0xF4B5,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0, 8), int64(9), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
 			name: "subdict/slice_prefix_underflow",
 			op:   0xF4B1,
+			stack: func(t *testing.T) []any {
+				return []any{mustSliceKey(t, 0b10, 2), int64(4), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "subdict/slice_remove_prefix_underflow",
+			op:   0xF4B5,
 			stack: func(t *testing.T) []any {
 				return []any{mustSliceKey(t, 0b10, 2), int64(4), dictMatrixSubdictRoot(t), int64(8)}
 			},
@@ -1945,10 +2452,58 @@ func dictMatrixSubdictCases() []dictMatrixCrossCase {
 			exit: vmerr.CodeRangeCheck,
 		},
 		{
+			name: "subdict/unsigned_remove_prefix_bits_range",
+			op:   0xF4B7,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(0), int64(9), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
 			name: "subdict/unsigned_prefix_value_underflow",
 			op:   0xF4B3,
 			stack: func(t *testing.T) []any {
 				return []any{big.NewInt(0x10), int64(4), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "subdict/unsigned_remove_prefix_value_underflow",
+			op:   0xF4B7,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(0x10), int64(4), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "subdict/signed_prefix_bits_range",
+			op:   0xF4B2,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(0), int64(9), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "subdict/signed_remove_prefix_bits_range",
+			op:   0xF4B6,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(0), int64(9), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeRangeCheck,
+		},
+		{
+			name: "subdict/signed_prefix_value_underflow",
+			op:   0xF4B2,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(2), int64(1), dictMatrixSubdictRoot(t), int64(8)}
+			},
+			exit: vmerr.CodeCellUnderflow,
+		},
+		{
+			name: "subdict/signed_remove_prefix_value_underflow",
+			op:   0xF4B6,
+			stack: func(t *testing.T) []any {
+				return []any{big.NewInt(2), int64(1), dictMatrixSubdictRoot(t), int64(8)}
 			},
 			exit: vmerr.CodeCellUnderflow,
 		},
@@ -2179,6 +2734,14 @@ func dictMatrixRefRoot(t *testing.T) *cell.Cell {
 		0x10: dictMatrixRefValue(0x1111, 16),
 		0xFE: dictMatrixRefValue(0x2222, 16),
 	})
+}
+
+func dictMatrixMalformedRefRoot(t *testing.T) *cell.Cell {
+	t.Helper()
+	return mustPlainDictCell(t, 8, map[uint64]uint64{
+		0x10: 0xA1,
+		0xFE: 0xB2,
+	}, 8)
 }
 
 func dictMatrixRefDict(t *testing.T, items map[uint64]*cell.Cell) *cell.Cell {

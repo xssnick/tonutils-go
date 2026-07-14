@@ -2,12 +2,14 @@ package funcs
 
 import (
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
+	"crypto/sha512"
 	"errors"
 	"fmt"
 	"math/big"
+
+	"filippo.io/edwards25519"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	localec "github.com/xssnick/tonutils-go/tvm/internal/secp256k1"
@@ -51,20 +53,28 @@ func init() {
 }
 
 func pushSmallInt(state *vm.State, v int64) error {
-	return state.Stack.PushInt(big.NewInt(v))
+	return state.Stack.PushSmallInt(v)
 }
+
+func checkStackDepth(state *vm.State, depth int) error {
+	if state.Stack.Len() < depth {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+	return nil
+}
+
+var funcsBigIntOne = big.NewInt(1)
 
 func pushHostValue(state *vm.State, v any) error {
 	return state.Stack.PushHostValue(v)
 }
 
 func exportUnsignedBytes(x *big.Int, size int, msg string) ([]byte, error) {
-	if x.Sign() < 0 || x.BitLen() > size*8 {
+	if x == nil || x.Sign() < 0 || x.BitLen() > size*8 {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck, msg)
 	}
 	buf := make([]byte, size)
-	raw := x.Bytes()
-	copy(buf[len(buf)-len(raw):], raw)
+	x.FillBytes(buf)
 	return buf, nil
 }
 
@@ -120,8 +130,9 @@ func GASCONSUMED() *helpers.SimpleOP {
 		Action: func(state *vm.State) error {
 			return pushSmallInt(state, state.Gas.Used())
 		},
-		Name:      "GASCONSUMED",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x07),
+		Name:       "GASCONSUMED",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x07),
+		MinVersion: 4,
 	}
 }
 
@@ -164,12 +175,14 @@ func GETPARAM(idx uint8) *helpers.AdvancedOP {
 }
 
 var getParamLongPrefixes = func() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, 0, 254)
+	prefixes := make([]helpers.BitPrefix, 254)
+	idx := 0
 	for i := uint64(0); i < 255; i++ {
 		if i == 17 {
 			continue
 		}
-		prefixes = append(prefixes, helpers.UIntPrefix(0xF88100|i, 24))
+		prefixes[idx] = helpers.UIntPrefix(0xF88100|i, 24)
+		idx++
 	}
 	return prefixes
 }()
@@ -182,6 +195,7 @@ func GETPARAMLONG(idx uint8) *helpers.AdvancedOP {
 		BitPrefix:     helpers.BytesPrefix(0xF8, 0x81),
 		Prefixes:      getParamLongPrefixes,
 		FixedSizeBits: 8,
+		MinVersion:    11,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(idx), 8)
 		},
@@ -249,24 +263,27 @@ func configRootFromC7(state *vm.State) (*cell.Cell, error) {
 }
 
 func fitsSignedBits(x *big.Int, bits uint) bool {
-	min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), bits-1))
-	max := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bits-1), big.NewInt(1))
-	return x.Cmp(min) >= 0 && x.Cmp(max) <= 0
+	if x.Sign() >= 0 {
+		return x.BitLen() <= int(bits-1)
+	}
+
+	absMinusOne := new(big.Int).Neg(x)
+	absMinusOne.Sub(absMinusOne, funcsBigIntOne)
+	return absMinusOne.BitLen() <= int(bits-1)
 }
 
 func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
-	if idx == nil || !fitsSignedBits(idx, 32) {
-		return nil, nil
-	}
-
 	root, err := configRootFromC7(state)
 	if err != nil {
 		return nil, err
 	}
-	if root == nil {
+	if root == nil || idx == nil || !fitsSignedBits(idx, 32) {
 		return nil, nil
 	}
+	return loadConfigValueFromRoot(state, root, idx)
+}
 
+func loadConfigValueFromRoot(state *vm.State, root *cell.Cell, idx *big.Int) (*cell.Cell, error) {
 	key := cell.BeginCell().MustStoreBigInt(idx, 32).EndCell()
 	val, err := root.AsDict(32).SetTrace(state.Cells.Trace()).LoadValue(key)
 	if err != nil {
@@ -288,7 +305,7 @@ func loadConfigValue(state *vm.State, idx *big.Int) (*cell.Cell, error) {
 func CONFIGPARAM() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			idx, err := state.Stack.PopIntFinite()
+			idx, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -312,7 +329,7 @@ func CONFIGPARAM() *helpers.SimpleOP {
 func CONFIGOPTPARAM() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			idx, err := state.Stack.PopIntFinite()
+			idx, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -330,6 +347,32 @@ func CONFIGOPTPARAM() *helpers.SimpleOP {
 func GLOBALID() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.GlobalVersion < 6 {
+				rootAny, err := state.GetParam(19)
+				if err != nil {
+					return err
+				}
+				root, ok := rootAny.(*cell.Cell)
+				if !ok || root == nil {
+					return vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a cell")
+				}
+				cl, err := loadConfigValueFromRoot(state, root, big.NewInt(19))
+				if err != nil {
+					return err
+				}
+				if cl == nil {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid global-id config")
+				}
+				cs, err := cl.BeginParse()
+				if err != nil {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid global-id config")
+				}
+				if cs.BitsLeft() < 32 {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid global-id config")
+				}
+				return pushSmallInt(state, int64(int32(cs.MustLoadUInt(32))))
+			}
+
 			cfg, err := state.GetUnpackedConfigTuple()
 			if err != nil {
 				return err
@@ -339,7 +382,7 @@ func GLOBALID() *helpers.SimpleOP {
 				return err
 			}
 			cs, ok := v.(*cell.Slice)
-			if !ok {
+			if !ok || cs == nil {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 			if cs.BitsLeft() < 32 {
@@ -347,15 +390,20 @@ func GLOBALID() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(int32(cs.MustPreloadUInt(32))))
 		},
-		Name:      "GLOBALID",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x35),
+		Name:       "GLOBALID",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x35),
+		MinVersion: 4,
 	}
 }
 
-func chksignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.SimpleOP {
+func signatureCheckOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			keyInt, err := state.Stack.PopIntFinite()
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
+			keyInt, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -378,7 +426,7 @@ func chksignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.S
 					return vmerr.Error(vmerr.CodeCellUnderflow, "failed to preload signature data")
 				}
 			} else {
-				hashInt, popErr := state.Stack.PopIntFinite()
+				hashInt, popErr := state.Stack.PopInt()
 				if popErr != nil {
 					return popErr
 				}
@@ -397,23 +445,74 @@ func chksignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.S
 				return err
 			}
 
-			if err = state.RegisterChksgnCall(); err != nil {
+			if err = state.RegisterSignatureCheckCall(); err != nil {
 				return err
 			}
+			if state.GlobalVersion >= 14 && tvmEd25519RejectedPublicKeyV14(keyBytes) {
+				return state.Stack.PushBool(state.SignatureCheckAlwaysSucceed)
+			}
 
-			return state.Stack.PushBool(ed25519.Verify(ed25519.PublicKey(keyBytes), data, sigBytes))
+			return state.Stack.PushBool(tvmEd25519Verify(keyBytes, data, sigBytes) || state.SignatureCheckAlwaysSucceed)
 		},
 		Name:      name,
 		BitPrefix: prefix,
 	}
 }
 
+func tvmEd25519RejectedPublicKeyV14(key []byte) bool {
+	if len(key) != 32 || (key[0] != 0 && key[0] != 1) {
+		return false
+	}
+	for i := 1; i < len(key); i++ {
+		if key[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func tvmEd25519Verify(key, data, sig []byte) bool {
+	if len(key) != 32 || len(sig) != 64 {
+		return false
+	}
+
+	publicKey, err := new(edwards25519.Point).SetBytes(key)
+	if err != nil {
+		return false
+	}
+	signatureR, err := new(edwards25519.Point).SetBytes(sig[:32])
+	if err != nil {
+		return false
+	}
+	signatureS, err := new(edwards25519.Scalar).SetCanonicalBytes(sig[32:])
+	if err != nil {
+		return false
+	}
+
+	hash := sha512.New()
+	_, _ = hash.Write(sig[:32])
+	_, _ = hash.Write(key)
+	_, _ = hash.Write(data)
+	challenge, err := new(edwards25519.Scalar).SetUniformBytes(hash.Sum(nil))
+	if err != nil {
+		return false
+	}
+
+	// s*B == R + k*A  <=>  s*B - k*A == R; a single vartime double-scalar
+	// multiplication is much cheaper than two constant-time ones, and inputs
+	// are public. Point-level Equal keeps non-canonical R encodings behaving
+	// exactly like the previous Add+Equal check.
+	minusA := new(edwards25519.Point).Negate(publicKey)
+	rCheck := new(edwards25519.Point).VarTimeDoubleScalarBaseMult(challenge, minusA, signatureS)
+	return rCheck.Equal(signatureR) == 1
+}
+
 func CHKSIGNU() *helpers.SimpleOP {
-	return chksignOp("CHKSIGNU", helpers.BytesPrefix(0xF9, 0x10), false)
+	return signatureCheckOp("CHKSIGNU", helpers.BytesPrefix(0xF9, 0x10), false)
 }
 
 func CHKSIGNS() *helpers.SimpleOP {
-	return chksignOp("CHKSIGNS", helpers.BytesPrefix(0xF9, 0x11), true)
+	return signatureCheckOp("CHKSIGNS", helpers.BytesPrefix(0xF9, 0x11), true)
 }
 
 func preloadFixedBytes(sl *cell.Slice, bits uint, msg string) ([]byte, error) {
@@ -427,19 +526,23 @@ func preloadFixedBytes(sl *cell.Slice, bits uint, msg string) ([]byte, error) {
 func ECRECOVER() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			sInt, err := state.Stack.PopIntFinite()
+			if err := checkStackDepth(state, 4); err != nil {
+				return err
+			}
+
+			sInt, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			rInt, err := state.Stack.PopIntFinite()
+			rInt, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			vInt, err := state.Stack.PopIntRange(0, 255)
+			v, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			hashInt, err := state.Stack.PopIntFinite()
+			hashInt, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -461,7 +564,9 @@ func ECRECOVER() *helpers.SimpleOP {
 				return err
 			}
 
-			v := vInt.Int64()
+			if state.GlobalVersion >= 14 && (v == 27 || v == 28) {
+				v -= 27
+			}
 			if v > 3 {
 				return state.Stack.PushBool(false)
 			}
@@ -485,19 +590,24 @@ func ECRECOVER() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBool(true)
 		},
-		Name:      "ECRECOVER",
-		BitPrefix: helpers.BytesPrefix(0xF9, 0x12),
+		Name:       "ECRECOVER",
+		BitPrefix:  helpers.BytesPrefix(0xF9, 0x12),
+		MinVersion: 4,
 	}
 }
 
 func SECP256K1_XONLY_PUBKEY_TWEAK_ADD() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			tweakInt, err := state.Stack.PopIntFinite()
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
+			tweakInt, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			keyInt, err := state.Stack.PopIntFinite()
+			keyInt, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
@@ -534,14 +644,19 @@ func SECP256K1_XONLY_PUBKEY_TWEAK_ADD() *helpers.SimpleOP {
 			}
 			return state.Stack.PushBool(true)
 		},
-		Name:      "SECP256K1_XONLY_PUBKEY_TWEAK_ADD",
-		BitPrefix: helpers.BytesPrefix(0xF9, 0x13),
+		Name:       "SECP256K1_XONLY_PUBKEY_TWEAK_ADD",
+		BitPrefix:  helpers.BytesPrefix(0xF9, 0x13),
+		MinVersion: 9,
 	}
 }
 
 func p256CheckSignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 3); err != nil {
+				return err
+			}
+
 			keySlice, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
@@ -565,7 +680,7 @@ func p256CheckSignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *hel
 					return vmerr.Error(vmerr.CodeCellUnderflow, "slice does not consist of an integer number of bytes")
 				}
 			} else {
-				hashInt, popErr := state.Stack.PopIntFinite()
+				hashInt, popErr := state.Stack.PopInt()
 				if popErr != nil {
 					return popErr
 				}
@@ -584,8 +699,11 @@ func p256CheckSignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *hel
 				return err
 			}
 
-			if err = state.ConsumeGas(vm.P256ChksgnGasPrice); err != nil {
+			if err = state.ConsumeGas(vm.P256SignatureCheckGasPrice); err != nil {
 				return err
+			}
+			if state.SignatureCheckAlwaysSucceed {
+				return state.Stack.PushBool(true)
 			}
 
 			x, y := elliptic.UnmarshalCompressed(elliptic.P256(), keyBytes)
@@ -604,8 +722,9 @@ func p256CheckSignOp(name string, prefix helpers.BitPrefix, fromSlice bool) *hel
 
 			return state.Stack.PushBool(ok)
 		},
-		Name:      name,
-		BitPrefix: prefix,
+		Name:       name,
+		BitPrefix:  prefix,
+		MinVersion: 4,
 	}
 }
 
@@ -620,11 +739,11 @@ func P256_CHKSIGNS() *helpers.SimpleOP {
 func GETGLOBVAR() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			idx, err := state.Stack.PopIntRange(0, 254)
+			idx, err := state.Stack.PopIntRangeInt64(0, 254)
 			if err != nil {
 				return err
 			}
-			v, err := state.GetGlobal(int(idx.Int64()))
+			v, err := state.GetGlobal(int(idx))
 			if err != nil {
 				return err
 			}
@@ -635,32 +754,59 @@ func GETGLOBVAR() *helpers.SimpleOP {
 	}
 }
 
-func GETGLOB(idx uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("GETGLOB %d", idx&31)
-		},
-		BitPrefix:     helpers.UIntPrefix(0x7C2, 11),
-		FixedSizeBits: 5,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx&31), 5)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(5)
-			if err != nil {
-				return err
-			}
-			idx = uint8(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			v, err := state.GetGlobal(int(idx))
-			if err != nil {
-				return err
-			}
-			return pushHostValue(state, v)
-		},
+// constant GETGLOB/SETGLOB prefixes, computed once instead of on every decode
+var (
+	getGlobPrefix = helpers.UIntPrefix(0x7C2, 11)
+	setGlobPrefix = helpers.UIntPrefix(0x7C3, 11)
+)
+
+// OpGETGLOB is a struct-based opcode: one allocation per executed instruction
+// instead of an AdvancedOP carrying per-instance closures.
+type OpGETGLOB struct {
+	idx uint8
+}
+
+func GETGLOB(idx uint8) *OpGETGLOB {
+	return &OpGETGLOB{idx: idx}
+}
+
+func (op *OpGETGLOB) GetPrefixes() []*cell.Slice {
+	return helpers.PrefixSlices(getGlobPrefix)
+}
+
+func (op *OpGETGLOB) Deserialize(code *cell.Slice) error {
+	if err := code.SkipBits(getGlobPrefix.Bits); err != nil {
+		return err
 	}
+
+	v, err := code.LoadUInt(5)
+	if err != nil {
+		return err
+	}
+	op.idx = uint8(v)
+	return nil
+}
+
+func (op *OpGETGLOB) Serialize() *cell.Builder {
+	return cell.BeginCell().
+		MustStoreSlice(getGlobPrefix.Data, getGlobPrefix.Bits).
+		MustStoreUInt(uint64(op.idx&31), 5)
+}
+
+func (op *OpGETGLOB) SerializeText() string {
+	return fmt.Sprintf("GETGLOB %d", op.idx&31)
+}
+
+func (op *OpGETGLOB) InstructionBits() int64 {
+	return int64(getGlobPrefix.Bits) + 5
+}
+
+func (op *OpGETGLOB) Interpret(state *vm.State) error {
+	v, err := state.GetGlobal(int(op.idx & 31))
+	if err != nil {
+		return err
+	}
+	return pushHostValue(state, v)
 }
 
 func SETGLOBVAR() *helpers.SimpleOP {
@@ -669,45 +815,66 @@ func SETGLOBVAR() *helpers.SimpleOP {
 			if state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			idx, err := state.Stack.PopIntRange(0, 254)
+			idx, err := state.Stack.PopIntRangeInt64(0, 254)
 			if err != nil {
 				return err
 			}
-			val, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-			return state.SetGlobal(int(idx.Int64()), val)
-		},
-		Name:      "SETGLOBVAR",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x60),
-	}
-}
-
-func SETGLOB(idx uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("SETGLOB %d", idx&31)
-		},
-		BitPrefix:     helpers.UIntPrefix(0x7C3, 11),
-		FixedSizeBits: 5,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx&31), 5)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(5)
-			if err != nil {
-				return err
-			}
-			idx = uint8(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
 			val, err := state.Stack.PopAny()
 			if err != nil {
 				return err
 			}
 			return state.SetGlobal(int(idx), val)
 		},
+		Name:      "SETGLOBVAR",
+		BitPrefix: helpers.BytesPrefix(0xF8, 0x60),
 	}
+}
+
+// OpSETGLOB is a struct-based opcode: one allocation per executed instruction
+// instead of an AdvancedOP carrying per-instance closures.
+type OpSETGLOB struct {
+	idx uint8
+}
+
+func SETGLOB(idx uint8) *OpSETGLOB {
+	return &OpSETGLOB{idx: idx}
+}
+
+func (op *OpSETGLOB) GetPrefixes() []*cell.Slice {
+	return helpers.PrefixSlices(setGlobPrefix)
+}
+
+func (op *OpSETGLOB) Deserialize(code *cell.Slice) error {
+	if err := code.SkipBits(setGlobPrefix.Bits); err != nil {
+		return err
+	}
+
+	v, err := code.LoadUInt(5)
+	if err != nil {
+		return err
+	}
+	op.idx = uint8(v)
+	return nil
+}
+
+func (op *OpSETGLOB) Serialize() *cell.Builder {
+	return cell.BeginCell().
+		MustStoreSlice(setGlobPrefix.Data, setGlobPrefix.Bits).
+		MustStoreUInt(uint64(op.idx&31), 5)
+}
+
+func (op *OpSETGLOB) SerializeText() string {
+	return fmt.Sprintf("SETGLOB %d", op.idx&31)
+}
+
+func (op *OpSETGLOB) InstructionBits() int64 {
+	return int64(setGlobPrefix.Bits) + 5
+}
+
+func (op *OpSETGLOB) Interpret(state *vm.State) error {
+	val, err := state.Stack.PopAny()
+	if err != nil {
+		return err
+	}
+	return state.SetGlobal(int(op.idx&31), val)
 }

@@ -139,6 +139,112 @@ func (g *AccountStatus) LoadFromCell(loader *cell.Slice) error {
 	return nil
 }
 
+func (s *StorageUsed) LoadFromCell(loader *cell.Slice) error {
+	cellsUsed, err := loadVarUInt(loader, 7)
+	if err != nil {
+		return fmt.Errorf("failed to load cells used: %w", err)
+	}
+	bitsUsed, err := loadVarUInt(loader, 7)
+	if err != nil {
+		return fmt.Errorf("failed to load bits used: %w", err)
+	}
+
+	s.CellsUsed = cellsUsed
+	s.BitsUsed = bitsUsed
+	return nil
+}
+
+func (s StorageUsed) ToCell() (*cell.Cell, error) {
+	builder := cell.BeginCell()
+	if err := storeStorageUsed(builder, s); err != nil {
+		return nil, err
+	}
+	return builder.EndCell(), nil
+}
+
+func storeStorageUsed(builder *cell.Builder, s StorageUsed) error {
+	if err := storeVarUInt(builder, s.CellsUsed, 7); err != nil {
+		return fmt.Errorf("failed to store cells used: %w", err)
+	}
+	if err := storeVarUInt(builder, s.BitsUsed, 7); err != nil {
+		return fmt.Errorf("failed to store bits used: %w", err)
+	}
+	return nil
+}
+
+func (s *StorageInfo) LoadFromCell(loader *cell.Slice) error {
+	if err := s.StorageUsed.LoadFromCell(loader); err != nil {
+		return fmt.Errorf("failed to load storage used: %w", err)
+	}
+
+	extraMagic, err := loader.LoadUInt(3)
+	if err != nil {
+		return fmt.Errorf("failed to load storage extra magic: %w", err)
+	}
+	switch extraMagic {
+	case 0b000:
+		s.StorageExtra = StorageExtraNone{}
+	case 0b001:
+		dictHash, err := loader.LoadSlice(256)
+		if err != nil {
+			return fmt.Errorf("failed to load storage extra dict hash: %w", err)
+		}
+		s.StorageExtra = StorageExtraInfo{DictHash: dictHash}
+	default:
+		return fmt.Errorf("unknown storage extra magic %b", extraMagic)
+	}
+
+	lastPaid, err := loader.LoadUInt(32)
+	if err != nil {
+		return fmt.Errorf("failed to load last paid: %w", err)
+	}
+	s.LastPaid = uint32(lastPaid)
+
+	s.DuePayment, err = loadMaybeCoins(loader)
+	if err != nil {
+		return fmt.Errorf("failed to load due payment: %w", err)
+	}
+	return nil
+}
+
+func (s StorageInfo) ToCell() (*cell.Cell, error) {
+	builder := cell.BeginCell()
+	if err := storeStorageInfo(builder, s); err != nil {
+		return nil, err
+	}
+	return builder.EndCell(), nil
+}
+
+func storeStorageInfo(builder *cell.Builder, s StorageInfo) error {
+	if err := storeStorageUsed(builder, s.StorageUsed); err != nil {
+		return err
+	}
+
+	switch extra := s.StorageExtra.(type) {
+	case StorageExtraNone:
+		if err := builder.StoreUInt(0b000, 3); err != nil {
+			return fmt.Errorf("failed to store storage extra magic: %w", err)
+		}
+	case StorageExtraInfo:
+		if err := builder.StoreUInt(0b001, 3); err != nil {
+			return fmt.Errorf("failed to store storage extra magic: %w", err)
+		}
+		if err := builder.StoreSlice(extra.DictHash, 256); err != nil {
+			return fmt.Errorf("failed to store storage extra dict hash: %w", err)
+		}
+	default:
+		return fmt.Errorf("unknown storage extra type %T", s.StorageExtra)
+	}
+
+	if err := builder.StoreUInt(uint64(s.LastPaid), 32); err != nil {
+		return fmt.Errorf("failed to store last paid: %w", err)
+	}
+	if err := storeMaybeCoins(builder, s.DuePayment); err != nil {
+		return fmt.Errorf("failed to store due payment: %w", err)
+	}
+	return nil
+}
+
 func (a *AccountState) LoadFromCell(loader *cell.Slice) error {
 	isAccount, err := loader.LoadBoolBit()
 	if err != nil {
@@ -155,15 +261,15 @@ func (a *AccountState) LoadFromCell(loader *cell.Slice) error {
 	}
 
 	var info StorageInfo
-	err = LoadFromCell(&info, loader)
+	err = info.LoadFromCell(loader)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load storage info: %w", err)
 	}
 
 	var store AccountStorage
-	err = LoadFromCell(&store, loader)
+	err = store.LoadFromCell(loader)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to load account storage: %w", err)
 	}
 
 	*a = AccountState{
@@ -187,20 +293,20 @@ func (a AccountState) ToCell() (*cell.Cell, error) {
 		return nil, fmt.Errorf("account address is nil")
 	}
 
-	storageInfoCell, err := ToCell(&a.StorageInfo)
-	if err != nil {
+	builder := cell.BeginCell().
+		MustStoreBoolBit(true).
+		MustStoreAddr(a.Address)
+
+	if err := storeStorageInfo(builder, a.StorageInfo); err != nil {
 		return nil, fmt.Errorf("failed to serialize storage info: %w", err)
 	}
 
-	storageCell, err := ToCell(&a.AccountStorage)
+	storageCell, err := a.AccountStorage.ToCell()
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize account storage: %w", err)
 	}
 
-	return cell.BeginCell().
-		MustStoreBoolBit(true).
-		MustStoreAddr(a.Address).
-		MustStoreBuilder(storageInfoCell.ToBuilder()).
+	return builder.
 		MustStoreBuilder(storageCell.ToBuilder()).
 		EndCell(), nil
 }
@@ -229,7 +335,7 @@ func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 	if isStatusActive {
 		s.Status = AccountStatusActive
 		var stInit StateInit
-		err = LoadFromCell(&stInit, loader)
+		err = stInit.LoadFromCell(loader)
 		if err != nil {
 			return fmt.Errorf("failed to load state init: %w", err)
 		}
@@ -270,7 +376,7 @@ func (s AccountStorage) ToCell() (*cell.Cell, error) {
 			return nil, fmt.Errorf("active account state init is nil")
 		}
 
-		stateInitCell, err := ToCell(s.StateInit)
+		stateInitCell, err := s.StateInit.ToCell()
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize state init: %w", err)
 		}

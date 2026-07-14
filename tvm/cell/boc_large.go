@@ -253,7 +253,8 @@ func largeBOCEmptyRefs() [4]uint32 {
 }
 
 func (s *largeBOCSerializer) importCells(rootHashes []Hash) error {
-	frontier := make([]uint32, 0, len(rootHashes))
+	frontier := make([]uint32, len(rootHashes))
+	frontierNum := 0
 	for i, hash := range rootHashes {
 		idx, fresh, err := s.addHash(hash)
 		if err != nil {
@@ -262,9 +263,11 @@ func (s *largeBOCSerializer) importCells(rootHashes []Hash) error {
 
 		s.roots[i] = idx
 		if fresh {
-			frontier = append(frontier, idx)
+			frontier[frontierNum] = idx
+			frontierNum++
 		}
 	}
+	frontier = frontier[:frontierNum]
 
 	for depth := 0; len(frontier) > 0; depth++ {
 		if depth > s.maxDepth {
@@ -368,9 +371,14 @@ func (s *largeBOCSerializer) prepareMetaBatch(frontier []uint32, start int, hash
 		end = len(frontier)
 	}
 
-	hashes = hashes[:0]
-	for _, idx := range frontier[start:end] {
-		hashes = append(hashes, s.cellList[idx].hash)
+	batchSize := end - start
+	if cap(hashes) < batchSize {
+		hashes = make([]Hash, batchSize)
+	} else {
+		hashes = hashes[:batchSize]
+	}
+	for i, idx := range frontier[start:end] {
+		hashes[i] = s.cellList[idx].hash
 	}
 
 	return largeBOCMetaBatch{
@@ -760,9 +768,14 @@ func (s *largeBOCSerializer) loadPayloadBatch(start int, hashes []Hash, payloads
 		end = s.cellCount
 	}
 
-	hashes = hashes[:0]
+	batchSize := end - start
+	if cap(hashes) < batchSize {
+		hashes = make([]Hash, batchSize)
+	} else {
+		hashes = hashes[:batchSize]
+	}
 	for i := start; i < end; i++ {
-		hashes = append(hashes, s.cellList[s.cellCount-1-i].hash)
+		hashes[i-start] = s.cellList[s.cellCount-1-i].hash
 	}
 
 	records, err := s.batchLoad.LoadPayload(hashes, payloads[:0])
@@ -877,7 +890,7 @@ func (s *largeBOCSerializer) writeTo(dst io.Writer, mode int) error {
 		return fmt.Errorf("failed to serialize boc")
 	}
 
-	w := newBOCStreamWriter(dst, info.hasCRC32C, largeBOCStreamBufferSize)
+	w := newBOCStreamWriter(dst, info.hasCRC32C, bocAdaptiveBufferSize(info.totalSize, largeBOCStreamBufferSize))
 
 	w.write(bocMagic)
 
@@ -1102,7 +1115,7 @@ func (m *largeBOCHashIndex) get(hash Hash, s *largeBOCSerializer) (uint32, bool)
 		return 0, false
 	}
 
-	fp := bocHashFingerprint(hash[:])
+	fp := binary.LittleEndian.Uint64(hash[:8])
 	mask := uint64(len(m.indexes) - 1)
 	pos := fp & mask
 	for {
@@ -1159,7 +1172,7 @@ func (m *largeBOCHashIndex) grow(s *largeBOCSerializer) {
 }
 
 func (m *largeBOCHashIndex) insert(hash Hash, idx uint32) {
-	fp := bocHashFingerprint(hash[:])
+	fp := binary.LittleEndian.Uint64(hash[:8])
 	mask := uint64(len(m.indexes) - 1)
 	pos := fp & mask
 	for m.indexes[pos] != 0 {

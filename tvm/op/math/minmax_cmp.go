@@ -40,11 +40,11 @@ func minMaxOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *help
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			x, err := popIntOperand(state, quiet)
+			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
-			y, err := popIntOperand(state, quiet)
+			y, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -98,11 +98,11 @@ func compareOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *hel
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			y, err := popIntOperand(state, quiet)
+			y, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
-			x, err := popIntOperand(state, quiet)
+			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -120,7 +120,7 @@ func compareIntOp(name string, prefix helpers.BitPrefix, mode int, value int8, q
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
-			x, err := popIntOperand(state, quiet)
+			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -150,7 +150,7 @@ func compareIntOp(name string, prefix helpers.BitPrefix, mode int, value int8, q
 func signOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := popIntOperand(state, quiet)
+			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
 			}
@@ -195,7 +195,7 @@ func CMP() *helpers.SimpleOP {
 func ISNAN() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -209,7 +209,7 @@ func ISNAN() *helpers.SimpleOP {
 func CHKNAN() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}

@@ -15,6 +15,7 @@ func init() {
 }
 
 func ADDCONST(value int8) (op *helpers.AdvancedOP) {
+	arg := big.NewInt(int64(value))
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,
 		Action: func(state *vm.State) error {
@@ -24,7 +25,7 @@ func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 			}
 
 			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
-				return x.Add(x, big.NewInt(int64(value)))
+				return x.Add(x, arg)
 			})
 		},
 		BitPrefix: helpers.BytesPrefix(0xA6),
@@ -40,6 +41,7 @@ func ADDCONST(value int8) (op *helpers.AdvancedOP) {
 				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 			value = int8(val)
+			arg.SetInt64(int64(value))
 			return nil
 		},
 	}

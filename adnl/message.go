@@ -45,6 +45,22 @@ type MessageCustom struct {
 	Data any `tl:"bytes struct boxed"`
 }
 
+func (m *MessageCustom) Parse(data []byte) ([]byte, error) {
+	var err error
+	m.Data, data, err = parseBoxedPayload(data, false)
+	return data, err
+}
+
+func (m *MessageCustom) ParseNoCopy(data []byte) ([]byte, error) {
+	var err error
+	m.Data, data, err = parseBoxedPayloadOwned(data)
+	return data, err
+}
+
+func (m MessageCustom) Serialize(buf *bytes.Buffer) error {
+	return serializeBoxedPayload(buf, m.Data)
+}
+
 type MessageReinit struct {
 	Date int32 `tl:"int"`
 }
@@ -56,9 +72,85 @@ type MessageQuery struct {
 	Data any    `tl:"bytes struct boxed"`
 }
 
+func (m *MessageQuery) Parse(data []byte) ([]byte, error) {
+	if len(data) < 32 {
+		return nil, fmt.Errorf("message query is too short")
+	}
+
+	m.ID = make([]byte, 32)
+	copy(m.ID, data[:32])
+
+	var err error
+	m.Data, data, err = parseBoxedPayload(data[32:], false)
+	return data, err
+}
+
+func (m *MessageQuery) ParseNoCopy(data []byte) ([]byte, error) {
+	if len(data) < 32 {
+		return nil, fmt.Errorf("message query is too short")
+	}
+
+	m.ID = append([]byte(nil), data[:32]...)
+
+	var err error
+	m.Data, data, err = parseBoxedPayloadOwned(data[32:])
+	return data, err
+}
+
+func (m MessageQuery) Serialize(buf *bytes.Buffer) error {
+	if len(m.ID) == 32 {
+		buf.Write(m.ID)
+	} else if len(m.ID) == 0 {
+		var zero [32]byte
+		buf.Write(zero[:])
+	} else {
+		return fmt.Errorf("invalid query id size %d", len(m.ID))
+	}
+
+	return serializeBoxedPayload(buf, m.Data)
+}
+
 type MessageAnswer struct {
 	ID   []byte `tl:"int256"`
 	Data any    `tl:"bytes struct boxed"`
+}
+
+func (m *MessageAnswer) Parse(data []byte) ([]byte, error) {
+	if len(data) < 32 {
+		return nil, fmt.Errorf("message answer is too short")
+	}
+
+	m.ID = make([]byte, 32)
+	copy(m.ID, data[:32])
+
+	var err error
+	m.Data, data, err = parseBoxedPayload(data[32:], false)
+	return data, err
+}
+
+func (m *MessageAnswer) ParseNoCopy(data []byte) ([]byte, error) {
+	if len(data) < 32 {
+		return nil, fmt.Errorf("message answer is too short")
+	}
+
+	m.ID = append([]byte(nil), data[:32]...)
+
+	var err error
+	m.Data, data, err = parseBoxedPayloadOwned(data[32:])
+	return data, err
+}
+
+func (m MessageAnswer) Serialize(buf *bytes.Buffer) error {
+	if len(m.ID) == 32 {
+		buf.Write(m.ID)
+	} else if len(m.ID) == 0 {
+		var zero [32]byte
+		buf.Write(zero[:])
+	} else {
+		return fmt.Errorf("invalid answer id size %d", len(m.ID))
+	}
+
+	return serializeBoxedPayload(buf, m.Data)
 }
 
 type MessagePart struct {
@@ -66,6 +158,75 @@ type MessagePart struct {
 	TotalSize int32  `tl:"int"`
 	Offset    int32  `tl:"int"`
 	Data      []byte `tl:"bytes"`
+}
+
+func serializeBoxedPayload(buf *bytes.Buffer, v tl.Serializable) error {
+	from := buf.Len()
+	var zero [4]byte
+	buf.Write(zero[:])
+
+	if _, err := tl.Serialize(v, true, buf); err != nil {
+		return err
+	}
+
+	tl.RemapBufferAsSlice(buf, from)
+	return nil
+}
+
+func parseBoxedPayload(data []byte, noCopy bool) (tl.Serializable, []byte, error) {
+	source, rest, err := tl.FromBytesNoCopy(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return parseBoxedPayloadSource(source, rest, noCopy)
+}
+
+func parseBoxedPayloadOwned(data []byte) (tl.Serializable, []byte, error) {
+	source, rest, err := tl.FromBytesNoCopy(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	source = append([]byte(nil), source...)
+	return parseBoxedPayloadSource(source, rest, true)
+}
+
+func parseBoxedPayloadSource(source []byte, rest []byte, noCopy bool) (tl.Serializable, []byte, error) {
+	if len(source) == 0 {
+		return nil, nil, fmt.Errorf("empty bytes slice cannot be parsed as boxed payload")
+	}
+
+	var first any
+	var err error
+	if noCopy {
+		source, err = tl.ParseNoCopy(&first, source, true)
+	} else {
+		source, err = tl.Parse(&first, source, true)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(source) == 0 {
+		return first, rest, nil
+	}
+
+	list := make([]tl.Serializable, 0, 2)
+	list = append(list, first)
+	for len(source) > 0 {
+		var obj any
+		if noCopy {
+			source, err = tl.ParseNoCopy(&obj, source, true)
+		} else {
+			source, err = tl.Parse(&obj, source, true)
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		list = append(list, obj)
+	}
+
+	return list, rest, nil
 }
 
 type partitionedMessage struct {

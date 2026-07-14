@@ -1,10 +1,6 @@
 package math
 
 import (
-	"fmt"
-
-	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
@@ -12,35 +8,11 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return EQINT(0) })
 }
 
-func EQINT(value int8) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopInt()
-			if err != nil {
-				return err
-			}
-			if i0 == nil {
-				return pushNaNOrOverflow(state, false)
-			}
-
-			return state.Stack.PushBool(compareBigIntInt64(i0, int64(value)) == 0)
-		},
-		BitPrefix: helpers.BytesPrefix(0xC0),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreInt(int64(value), 8)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d EQINT", value)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadInt(8)
-			if err != nil {
-				return err
-			}
-			value = int8(val)
-			return nil
-		},
+func EQINT(value int8) *OpIntCmp {
+	return &OpIntCmp{
+		name:   "EQINT",
+		prefix: 0xC0,
+		mask:   intCmpMaskEqual,
+		value:  value,
 	}
-	return op
 }

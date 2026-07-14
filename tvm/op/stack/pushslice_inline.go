@@ -27,19 +27,21 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return PUSHSLICEINLINE(cell.BeginCell().ToSlice()) })
 }
 
+var pushSliceInlinePrefixed = helpers.NewPrefixed(
+	helpers.UIntPrefix(0x8B, 8),
+	helpers.UIntPrefix(0x8C, 8),
+	helpers.UIntPrefix((0x8D<<3)|0, 11),
+	helpers.UIntPrefix((0x8D<<3)|1, 11),
+	helpers.UIntPrefix((0x8D<<3)|2, 11),
+	helpers.UIntPrefix((0x8D<<3)|3, 11),
+	helpers.UIntPrefix((0x8D<<3)|4, 11),
+)
+
 func PUSHSLICEINLINE(value *cell.Slice) *OpPUSHSLICEINLINE {
 	op := &OpPUSHSLICEINLINE{
-		Prefixed: helpers.NewPrefixed(
-			helpers.UIntPrefix(0x8B, 8),
-			helpers.UIntPrefix(0x8C, 8),
-			helpers.UIntPrefix((0x8D<<3)|0, 11),
-			helpers.UIntPrefix((0x8D<<3)|1, 11),
-			helpers.UIntPrefix((0x8D<<3)|2, 11),
-			helpers.UIntPrefix((0x8D<<3)|3, 11),
-			helpers.UIntPrefix((0x8D<<3)|4, 11),
-		),
-		value: value.Copy(),
-		form:  "LONG",
+		Prefixed: pushSliceInlinePrefixed,
+		value:    value.Copy(),
+		form:     "LONG",
 	}
 	op.selectForm()
 	return op

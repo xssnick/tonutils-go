@@ -70,6 +70,56 @@ type MessagePart struct {
 	Data       []byte // `tl:"bytes"`
 }
 
+type parsedMessagePart struct {
+	transferID []byte
+	fecType    FEC
+	part       uint32
+	totalSize  uint64
+	seqno      uint32
+	data       []byte
+}
+
+func parseMessagePartNoCopy(data []byte) (parsedMessagePart, []byte, error) {
+	if len(data) < 56 {
+		return parsedMessagePart{}, nil, errors.New("message part is too short")
+	}
+
+	transferID := data[:32:32]
+
+	var fecAny any
+	data, err := tl.ParseNoCopy(&fecAny, data[32:], true)
+	if err != nil {
+		return parsedMessagePart{}, nil, err
+	}
+
+	fec, ok := fecAny.(FEC)
+	if !ok {
+		return parsedMessagePart{}, nil, errors.New("invalid fec type")
+	}
+
+	if len(data) < 20 {
+		return parsedMessagePart{}, nil, errors.New("message part is too short")
+	}
+
+	part := binary.LittleEndian.Uint32(data)
+	size := binary.LittleEndian.Uint64(data[4:])
+	seq := binary.LittleEndian.Uint32(data[12:])
+
+	payload, data, err := tl.FromBytesNoCopy(data[16:])
+	if err != nil {
+		return parsedMessagePart{}, nil, fmt.Errorf("tl.FromBytesNoCopy: %w", err)
+	}
+
+	return parsedMessagePart{
+		transferID: transferID,
+		fecType:    fec,
+		part:       part,
+		totalSize:  size,
+		seqno:      seq,
+		data:       payload,
+	}, data, nil
+}
+
 func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 	if len(data) < 56 {
 		return nil, errors.New("message part is too short")
@@ -79,7 +129,7 @@ func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 	copy(transfer, data)
 
 	var fecAny any
-	data, err := tl.Parse(&fecAny, data[32:], true)
+	data, err := tl.ParseNoCopy(&fecAny, data[32:], true)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +158,22 @@ func (m *MessagePart) Parse(data []byte) ([]byte, error) {
 	m.TotalSize = size
 	m.Seqno = seq
 	m.Data = slc
+
+	return data, nil
+}
+
+func (m *MessagePart) ParseNoCopy(data []byte) ([]byte, error) {
+	parsed, data, err := parseMessagePartNoCopy(data)
+	if err != nil {
+		return nil, err
+	}
+
+	m.TransferID = parsed.transferID
+	m.FecType = parsed.fecType
+	m.Part = parsed.part
+	m.TotalSize = parsed.totalSize
+	m.Seqno = parsed.seqno
+	m.Data = parsed.data
 
 	return data, nil
 }
@@ -160,7 +226,7 @@ func (m *MessagePartV2) Parse(data []byte) ([]byte, error) {
 	copy(transfer, data)
 
 	var fecAny any
-	data, err := tl.Parse(&fecAny, data[32:], true)
+	data, err := tl.ParseNoCopy(&fecAny, data[32:], true)
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +255,22 @@ func (m *MessagePartV2) Parse(data []byte) ([]byte, error) {
 	m.TotalSize = size
 	m.Seqno = seq
 	m.Data = slc
+
+	return data, nil
+}
+
+func (m *MessagePartV2) ParseNoCopy(data []byte) ([]byte, error) {
+	parsed, data, err := parseMessagePartNoCopy(data)
+	if err != nil {
+		return nil, err
+	}
+
+	m.TransferID = parsed.transferID
+	m.FecType = parsed.fecType
+	m.Part = parsed.part
+	m.TotalSize = parsed.totalSize
+	m.Seqno = parsed.seqno
+	m.Data = parsed.data
 
 	return data, nil
 }

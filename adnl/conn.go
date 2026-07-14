@@ -63,7 +63,6 @@ type syncPacket struct {
 type SyncConn struct {
 	conn      net.PacketConn
 	chWrite   chan syncPacket
-	chRead    chan syncPacket
 	closerCtx context.Context
 	closer    context.CancelFunc
 }
@@ -91,7 +90,9 @@ func (s *SyncConn) writer() {
 					return
 				}
 				// should not happen, but if will we want to see
-				Logger("[CONN] Write error:", err.Error())
+				if Logger != nil {
+					Logger("[CONN] Write error:", err.Error())
+				}
 			}
 		case <-s.closerCtx.Done():
 			return

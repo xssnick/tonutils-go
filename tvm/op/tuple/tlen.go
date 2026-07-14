@@ -1,8 +1,6 @@
 package tuple
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -20,7 +18,7 @@ func TLEN() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(big.NewInt(int64(tup.Len())))
+			return state.Stack.PushSmallInt(int64(tup.Len()))
 		},
 	}
 }

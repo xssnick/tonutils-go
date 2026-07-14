@@ -5,11 +5,12 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl"
-	"github.com/xssnick/tonutils-go/tl"
+	"net"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 func init() {
@@ -142,39 +143,30 @@ func Test_ServerProxy(t *testing.T) {
 
 	pub, key, _ := ed25519.GenerateKey(nil)
 	s := NewServer([]ed25519.PrivateKey{key})
-	s.SetMessageHandler(func(ctx context.Context, sc *ServerClient, msg tl.Serializable) error {
-		switch m := msg.(type) {
-		case adnl.MessageQuery:
-			switch q := m.Data.(type) {
-			case LiteServerQuery:
-				println("PROXYING QUERY:", reflect.TypeOf(q.Data).String())
+	s.SetQueryHandler(func(ctx context.Context, sc *ServerClient, queryID []byte, query tl.Serializable) {
+		println("PROXYING QUERY:", reflect.TypeOf(query).String())
 
-				var resp tl.Serializable
-				if err = client.QueryLiteserver(context.Background(), q.Data, &resp); err != nil {
-					return err
-				}
-
-				return sc.Send(adnl.MessageAnswer{ID: m.ID, Data: resp})
+		go func() {
+			var resp tl.Serializable
+			if err := client.QueryLiteserver(context.Background(), query, &resp); err != nil {
+				println("PROXY QUERY ERR:", err.Error())
+				return
 			}
-		case TCPAuthenticate:
-			return sc.Send(TCPAuthenticationNonce{make([]byte, 32)})
-		case TCPAuthenticationComplete:
-			return nil
-		case TCPPing:
-			return sc.Send(TCPPong{RandomID: m.RandomID})
-		}
-
-		return fmt.Errorf("something unknown: %s", reflect.TypeOf(msg).String())
+			sc.Answer(queryID, resp)
+		}()
 	})
 	defer s.Close()
 
-	addr := "127.0.0.1:7657"
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal("listen err:", err.Error())
+	}
+	addr := ln.Addr().String()
 	go func() {
-		if err := s.Listen(addr); err != nil {
-			t.Fatal("listen err:", err.Error())
+		if err := s.listen(ln); err != nil {
+			t.Error("listen err:", err.Error())
 		}
 	}()
-	time.Sleep(300 * time.Millisecond)
 
 	clientProxy := NewConnectionPool()
 	if err := clientProxy.AddConnection(context.Background(), addr, base64.StdEncoding.EncodeToString(pub)); err != nil {

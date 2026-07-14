@@ -4,24 +4,36 @@ import (
 	"context"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"encoding/binary"
 	"fmt"
-	"github.com/xssnick/tonutils-go/adnl/keys"
-	"github.com/xssnick/tonutils-go/tl"
 	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xssnick/tonutils-go/adnl"
+	"github.com/xssnick/tonutils-go/adnl/keys"
+	"github.com/xssnick/tonutils-go/tl"
 )
 
 var Logger = func(v ...any) {}
 
+const serverWriteDrainMax = 16
+
+// ServerClientSendQueueSize is a per-client write queue size for new server connections.
+// Set it before starting the server to override the default.
+var ServerClientSendQueueSize = 100
+
 type Server struct {
-	keys     map[string]ed25519.PrivateKey
+	keys map[string]ed25519.PrivateKey
+
+	mx       sync.Mutex
 	listener net.Listener
 
-	messageHandler func(ctx context.Context, client *ServerClient, msg tl.Serializable) error
+	queryHandler   func(ctx context.Context, client *ServerClient, queryID []byte, query tl.Serializable)
+	queryPrecheck  func(ctx context.Context, client *ServerClient) (tl.Serializable, bool)
 	disconnectHook func(client *ServerClient)
 	connectHook    func(client *ServerClient) error
 }
@@ -32,10 +44,15 @@ type ServerClient struct {
 	rCrypt    cipher.Stream
 	serverKey ed25519.PublicKey
 
+	sendQueue chan packetBuffer
+	ctx       context.Context
+	cancel    context.CancelFunc
+
 	port uint16
 	ip   string
-	mx   sync.Mutex
 }
+
+var adnlMessageQueryID = tl.CRC("adnl.message.query query_id:int256 query:bytes = adnl.Message")
 
 func NewServer(keysList []ed25519.PrivateKey) *Server {
 	list := map[string]ed25519.PrivateKey{}
@@ -53,8 +70,17 @@ func NewServer(keysList []ed25519.PrivateKey) *Server {
 	}
 }
 
-func (s *Server) SetMessageHandler(handler func(ctx context.Context, client *ServerClient, msg tl.Serializable) error) {
-	s.messageHandler = handler
+// SetQueryHandler sets the query handler. It is called synchronously from the
+// connection read loop, so it must not block: hand slow work to a goroutine or
+// a pool owned by the application. Respond with client.Answer(queryID, resp),
+// either inline or later from another goroutine; concurrency and its limits
+// are fully owned by the application.
+func (s *Server) SetQueryHandler(handler func(ctx context.Context, client *ServerClient, queryID []byte, query tl.Serializable)) {
+	s.queryHandler = handler
+}
+
+func (s *Server) SetQueryPrecheck(handler func(ctx context.Context, client *ServerClient) (tl.Serializable, bool)) {
+	s.queryPrecheck = handler
 }
 
 func (s *Server) SetDisconnectHook(hook func(client *ServerClient)) {
@@ -66,16 +92,22 @@ func (s *Server) SetConnectionHook(hook func(client *ServerClient) error) {
 }
 
 func (s *Server) Close() error {
-	if s.listener != nil {
-		lis := s.listener
-		s.listener = nil
+	s.mx.Lock()
+	lis := s.listener
+	s.listener = nil
+	s.mx.Unlock()
+
+	if lis != nil {
 		return lis.Close()
 	}
 	return nil
 }
 
 func (s *Server) Listen(addr string) error {
-	if s.listener != nil {
+	s.mx.Lock()
+	started := s.listener != nil
+	s.mx.Unlock()
+	if started {
 		return fmt.Errorf("already started")
 	}
 
@@ -83,12 +115,22 @@ func (s *Server) Listen(addr string) error {
 	if err != nil {
 		return err
 	}
+
+	return s.listen(listener)
+}
+
+func (s *Server) listen(listener net.Listener) error {
+	s.mx.Lock()
 	s.listener = listener
+	s.mx.Unlock()
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if listener != s.listener {
+			s.mx.Lock()
+			closed := listener != s.listener
+			s.mx.Unlock()
+			if closed {
 				return nil
 			}
 
@@ -105,15 +147,19 @@ func (s *Server) Listen(addr string) error {
 			port, _ = strconv.ParseUint(ip[ipSplit+1:], 10, 16)
 		}
 
+		clientCtx, cancelClient := context.WithCancel(context.Background())
 		sc := &ServerClient{
-			conn: conn,
-			ip:   ip[:ipSplit],
-			port: uint16(port),
+			conn:      conn,
+			sendQueue: make(chan packetBuffer, ServerClientSendQueueSize),
+			ctx:       clientCtx,
+			cancel:    cancelClient,
+			ip:        ip[:ipSplit],
+			port:      uint16(port),
 		}
 
 		if s.connectHook != nil {
 			if err = s.connectHook(sc); err != nil {
-				_ = conn.Close()
+				sc.Close()
 				continue
 			}
 		}
@@ -123,10 +169,8 @@ func (s *Server) Listen(addr string) error {
 }
 
 func (s *Server) serve(client *ServerClient) {
-	clientCtx, stopClient := context.WithCancel(context.Background())
 	defer func() {
-		stopClient()
-		_ = client.conn.Close()
+		client.Close()
 		if s.disconnectHook != nil {
 			s.disconnectHook(client)
 		}
@@ -159,13 +203,17 @@ func (s *Server) serve(client *ServerClient) {
 				return
 			}
 
-			if err = writeEncrypt(client.conn, client.wCrypt, buf); err != nil {
+			if err = writeEncrypt(client.conn, client.wCrypt, buf.data); err != nil {
+				buf.release()
 				Logger("["+client.conn.RemoteAddr().String()+"]", "cannot write handshake response packet:", err.Error())
 				return
 			}
+			buf.release()
 
 			// remove timeout
 			_ = client.conn.SetReadDeadline(time.Time{})
+
+			go client.writeLoop(client.ctx)
 
 			continue
 		}
@@ -178,37 +226,77 @@ func (s *Server) serve(client *ServerClient) {
 			return
 		}
 
-		data, err := readData(client.conn, client.rCrypt, sz)
+		packet, err := readData(client.conn, client.rCrypt, sz)
 		if err != nil {
 			return
 		}
+		data := packet
 
 		checksum := data[len(data)-32:]
 		data = data[:len(data)-32]
 
 		if err = validatePacket(data, checksum); err != nil {
+			releasePacketBuffer(packet)
 			return
 		}
 
 		// skip nonce
 		data = data[32:]
 
+		if s.queryPrecheck != nil {
+			if queryID, ok := rawADNLMessageQueryID(data); ok {
+				if resp, stop := s.queryPrecheck(client.ctx, client); stop {
+					if resp != nil {
+						client.enqueue(adnl.MessageAnswer{ID: append([]byte(nil), queryID...), Data: resp})
+					}
+					releasePacketBuffer(packet)
+					continue
+				}
+			}
+		}
+
 		var msg tl.Serializable
 		if _, err = tl.Parse(&msg, data, true); err != nil {
+			releasePacketBuffer(packet)
 			Logger("failed to parse incoming message:", err.Error())
 			return
 		}
+		releasePacketBuffer(packet)
 
-		if s.messageHandler == nil {
-			Logger("failed to handle message: no handler set")
-			return
-		}
+		switch m := msg.(type) {
+		case adnl.MessageQuery:
+			if s.queryHandler == nil {
+				Logger("failed to handle query: no handler set")
+				return
+			}
 
-		if err = s.messageHandler(clientCtx, client, msg); err != nil {
-			Logger("failed to handle message:", err.Error())
+			query := m.Data
+			if q, ok := m.Data.(LiteServerQuery); ok {
+				query = q.Data
+			}
+
+			s.queryHandler(client.ctx, client, m.ID, query)
+		case TCPAuthenticate:
+			client.enqueue(TCPAuthenticationNonce{Nonce: make([]byte, 32)})
+		case TCPAuthenticationComplete:
+		case TCPPing:
+			client.enqueue(TCPPong{RandomID: m.RandomID})
+		default:
+			Logger("failed to handle message: unsupported type")
 			return
 		}
 	}
+}
+
+func rawADNLMessageQueryID(data []byte) ([]byte, bool) {
+	if len(data) < 4+32 {
+		return nil, false
+	}
+	if binary.LittleEndian.Uint32(data[:4]) != adnlMessageQueryID {
+		return nil, false
+	}
+
+	return data[4 : 4+32], true
 }
 
 func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stream, cipher.Stream, error) {
@@ -262,24 +350,117 @@ func (s *Server) processHandshake(packet []byte) (ed25519.PublicKey, cipher.Stre
 	return serverKey.Public().(ed25519.PublicKey), w, r, nil
 }
 
-func (s *ServerClient) Send(msg tl.Serializable) error {
-	data, err := tl.Serialize(msg, true)
-	if err != nil {
-		return err
+// Answer sends a response to a query received by the query handler. It can be
+// called from any goroutine and never blocks: when the client send queue is
+// full or the connection is closed, the answer is dropped and false is returned.
+func (s *ServerClient) Answer(queryID []byte, resp tl.Serializable) bool {
+	select {
+	case <-s.ctx.Done():
+		return false
+	default:
+	}
+	return s.enqueue(adnl.MessageAnswer{ID: queryID, Data: resp})
+}
+
+func (s *ServerClient) enqueue(msg tl.Serializable) bool {
+	if len(s.sendQueue) >= cap(s.sendQueue) {
+		return false
 	}
 
-	buf, err := buildPacket(data)
+	packet, err := buildPacketSerialized(msg)
 	if err != nil {
-		return err
+		Logger("failed to build response packet:", err.Error())
+		return false
 	}
 
-	s.mx.Lock()
-	defer s.mx.Unlock()
+	select {
+	case s.sendQueue <- packet:
+		return true
+	default:
+		packet.release()
+		return false
+	}
+}
 
-	return writeEncrypt(s.conn, s.wCrypt, buf)
+func (s *ServerClient) writeLoop(ctx context.Context) {
+	defer s.releaseQueuedPackets()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case packet := <-s.sendQueue:
+			var batch [serverWriteDrainMax]packetBuffer
+			batch[0] = packet
+			batchSize := 1
+
+		drain:
+			for batchSize < serverWriteDrainMax {
+				select {
+				case batch[batchSize] = <-s.sendQueue:
+					batchSize++
+				default:
+					break drain
+				}
+			}
+
+			if err := s.writeBatch(batch[:batchSize]); err != nil {
+				Logger("failed to write message:", err.Error())
+				s.Close()
+				return
+			}
+		}
+	}
+}
+
+func (s *ServerClient) writeBatch(packets []packetBuffer) error {
+	defer releasePacketBatch(packets)
+
+	var buffersRaw [serverWriteDrainMax][]byte
+	var total int64
+	for i, packet := range packets {
+		s.wCrypt.XORKeyStream(packet.data, packet.data)
+		buffersRaw[i] = packet.data
+		total += int64(len(packet.data))
+	}
+
+	_ = s.conn.SetWriteDeadline(time.Now().Add(7 * time.Second))
+
+	buffers := net.Buffers(buffersRaw[:len(packets)])
+	written, err := buffers.WriteTo(s.conn)
+	if err != nil {
+		_ = s.conn.Close()
+		return NetworkErr{err}
+	}
+	if written != total {
+		_ = s.conn.Close()
+		return NetworkErr{io.ErrShortWrite}
+	}
+
+	return nil
+}
+
+func releasePacketBatch(packets []packetBuffer) {
+	for _, packet := range packets {
+		packet.release()
+	}
+}
+
+func (s *ServerClient) releaseQueuedPackets() {
+	for {
+		select {
+		case packet := <-s.sendQueue:
+			packet.release()
+		default:
+			return
+		}
+	}
 }
 
 func (s *ServerClient) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	_ = s.conn.Close()
 }
 

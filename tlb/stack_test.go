@@ -133,6 +133,243 @@ func TestParseStackValue(t *testing.T) {
 	}
 }
 
+func TestParseStackValueBigInt257RoundTrip(t *testing.T) {
+	values := []*big.Int{
+		new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63)),
+		new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 200)),
+		new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256)),
+		new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)),
+	}
+
+	for _, value := range values {
+		t.Run(value.String(), func(t *testing.T) {
+			checkStackBigIntRoundTrip(t, value)
+		})
+	}
+}
+
+func FuzzParseStackValueBigInt257RoundTrip(f *testing.F) {
+	f.Add(uint16(64), false, false)
+	f.Add(uint16(64), true, true)
+	f.Add(uint16(200), false, false)
+	f.Add(uint16(200), true, true)
+	f.Add(uint16(256), false, false)
+	f.Add(uint16(256), true, false)
+
+	f.Fuzz(func(t *testing.T, rawBit uint16, negative bool, belowPowerOfTwo bool) {
+		value := stackBigInt257FuzzValue(rawBit, negative, belowPowerOfTwo)
+		checkStackBigIntRoundTrip(t, value)
+	})
+}
+
+func FuzzStackBigInt257CellRoundTrip(f *testing.F) {
+	f.Add(uint16(64), false, false, uint8(0))
+	f.Add(uint16(64), true, true, uint8(1))
+	f.Add(uint16(200), false, false, uint8(2))
+	f.Add(uint16(200), true, true, uint8(3))
+	f.Add(uint16(256), false, false, uint8(4))
+	f.Add(uint16(256), true, false, uint8(5))
+
+	f.Fuzz(func(t *testing.T, rawBit uint16, negative bool, belowPowerOfTwo bool, rawShape uint8) {
+		value := stackBigInt257FuzzValue(rawBit, negative, belowPowerOfTwo)
+
+		stack := NewStack()
+		switch rawShape % 6 {
+		case 0:
+			stack.Push(value)
+		case 1:
+			stack.Push([]any{value})
+		case 2:
+			stack.Push([]any{StackNaN{}, value})
+		case 3:
+			stack.Push([]any{[]any{value}, StackNaN{}})
+		case 4:
+			stack.Push(StackNaN{})
+			stack.Push(value)
+		case 5:
+			stack.Push(value)
+			stack.Push([]any{value, []any{StackNaN{}, value}})
+		}
+
+		raw, err := stack.ToCell()
+		if err != nil {
+			t.Fatalf("serialize stack: %v", err)
+		}
+		var parsed Stack
+		if err = parsed.LoadFromCell(raw.MustBeginParse()); err != nil {
+			t.Fatalf("parse stack: %v", err)
+		}
+		rebuilt, err := parsed.ToCell()
+		if err != nil {
+			t.Fatalf("serialize parsed stack: %v", err)
+		}
+		if !bytes.Equal(rebuilt.Hash(), raw.Hash()) {
+			t.Fatal("stack should round-trip byte-identically")
+		}
+	})
+}
+
+func FuzzParseStackValueRejectsMalformedBigInt257Prefix(f *testing.F) {
+	f.Add(uint8(1), false)
+	f.Add(uint8(0x7f), false)
+	f.Add(uint8(0x7e), true)
+
+	f.Fuzz(func(t *testing.T, rawPrefix uint8, negative bool) {
+		prefix := rawPrefix & 0x7f
+		if prefix == 0 {
+			prefix = 1
+		}
+
+		value := big.NewInt(0)
+		if negative && prefix != 0x7f {
+			value.Neg(big.NewInt(1))
+		}
+		raw := cell.BeginCell().
+			MustStoreUInt(0x02, 8).
+			MustStoreUInt(uint64(prefix), 7).
+			MustStoreBigInt(value, 257).
+			EndCell()
+
+		if _, err := ParseStackValue(raw.MustBeginParse()); err == nil {
+			t.Fatalf("malformed int257 prefix %#x parsed successfully", prefix)
+		}
+	})
+}
+
+func TestParseStackValueRejectsMalformedTupleRefs(t *testing.T) {
+	validValue := cell.BeginCell().MustStoreUInt(0x00, 8).EndCell()
+	validPairChain := cell.BeginCell().
+		MustStoreRef(validValue).
+		MustStoreRef(validValue).
+		EndCell()
+
+	tests := []struct {
+		name string
+		raw  *cell.Cell
+	}{
+		{
+			name: "single_missing_value",
+			raw: cell.BeginCell().
+				MustStoreUInt(0x07, 8).
+				MustStoreUInt(1, 16).
+				EndCell(),
+		},
+		{
+			name: "single_empty_value",
+			raw: cell.BeginCell().
+				MustStoreUInt(0x07, 8).
+				MustStoreUInt(1, 16).
+				MustStoreRef(cell.BeginCell().EndCell()).
+				EndCell(),
+		},
+		{
+			name: "pair_missing_tail",
+			raw: cell.BeginCell().
+				MustStoreUInt(0x07, 8).
+				MustStoreUInt(2, 16).
+				MustStoreRef(validValue).
+				EndCell(),
+		},
+		{
+			name: "triple_missing_chain",
+			raw: cell.BeginCell().
+				MustStoreUInt(0x07, 8).
+				MustStoreUInt(3, 16).
+				EndCell(),
+		},
+		{
+			name: "triple_missing_tail",
+			raw: cell.BeginCell().
+				MustStoreUInt(0x07, 8).
+				MustStoreUInt(3, 16).
+				MustStoreRef(validPairChain).
+				EndCell(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := ParseStackValue(tt.raw.MustBeginParse()); err == nil {
+				t.Fatal("malformed tuple parsed successfully")
+			}
+		})
+	}
+}
+
+func FuzzParseStackValueRejectsMalformedTupleRefs(f *testing.F) {
+	f.Add(uint16(2), uint8(0))
+	f.Add(uint16(2), uint8(1))
+	f.Add(uint16(3), uint8(2))
+	f.Add(uint16(8), uint8(3))
+
+	f.Fuzz(func(t *testing.T, rawLen uint16, rawShape uint8) {
+		ln := uint64(rawLen%8) + 2
+		validValue := cell.BeginCell().MustStoreUInt(0x00, 8).EndCell()
+
+		raw := cell.BeginCell().
+			MustStoreUInt(0x07, 8).
+			MustStoreUInt(ln, 16)
+
+		switch rawShape % 4 {
+		case 0:
+		case 1:
+			raw.MustStoreRef(cell.BeginCell().EndCell())
+		case 2:
+			raw.MustStoreRef(validValue)
+		case 3:
+			raw.MustStoreRef(cell.BeginCell().MustStoreRef(validValue).EndCell())
+		}
+
+		if _, err := ParseStackValue(raw.EndCell().MustBeginParse()); err == nil {
+			t.Fatalf("malformed tuple len %d shape %d parsed successfully", ln, rawShape%4)
+		}
+	})
+}
+
+func stackBigInt257FuzzValue(rawBit uint16, negative bool, belowPowerOfTwo bool) *big.Int {
+	bit := uint(rawBit%193) + 64
+	value := new(big.Int).Lsh(big.NewInt(1), bit)
+	if !negative && bit == 256 {
+		value.Sub(value, big.NewInt(1))
+	} else if belowPowerOfTwo {
+		value.Sub(value, big.NewInt(1))
+	}
+	if negative {
+		value.Neg(value)
+	}
+	return value
+}
+
+func checkStackBigIntRoundTrip(t *testing.T, value *big.Int) {
+	t.Helper()
+
+	encoded := cell.BeginCell()
+	if err := SerializeStackValue(encoded, value); err != nil {
+		t.Fatalf("serialize stack value: %v", err)
+	}
+	raw := encoded.EndCell()
+
+	parsed, err := ParseStackValue(raw.MustBeginParse())
+	if err != nil {
+		t.Fatalf("parse stack value: %v", err)
+	}
+	got, ok := parsed.(*big.Int)
+	if !ok {
+		t.Fatalf("parsed value type = %T, want *big.Int", parsed)
+	}
+	if got.Cmp(value) != 0 {
+		t.Fatalf("parsed value = %s, want %s", got.String(), value.String())
+	}
+
+	rebuilt := cell.BeginCell()
+	if err = SerializeStackValue(rebuilt, parsed); err != nil {
+		t.Fatalf("serialize parsed stack value: %v", err)
+	}
+	if !bytes.Equal(rebuilt.EndCell().Hash(), raw.Hash()) {
+		t.Fatal("stack value should round-trip byte-identically")
+	}
+}
+
 func TestStackSliceValueUsesBaseCellOffsets(t *testing.T) {
 	refA := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 	refB := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()

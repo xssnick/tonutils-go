@@ -4,6 +4,7 @@ package tvm
 
 import (
 	"bytes"
+	"fmt"
 	"math/big"
 	"os"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	dictop "github.com/xssnick/tonutils-go/tvm/op/dict"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -26,6 +28,58 @@ func TestTVMCrossEmulatorDictOpsEdgeCandidates(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
+	tests := dictEdgeAllCases()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDictEdgeCrossCase(t, prependRawMethodDrop(tt.code(t)), tt.stack(t), tt.exit)
+		})
+	}
+}
+
+func TestTVMCrossEmulatorDictOpsEdgeAllGlobalVersionsSmoke(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	tests := dictEdgeAllCases()
+
+	versions := crossEmulatorVersionAuditVersions(t, "TVM_DICTOPS_EDGE_VERSION_AUDIT")
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			for _, version := range versions {
+				version := version
+				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+					runDictVersionedParityCase(t, tt.code(t), tt.stack(t), version, tt.exit)
+				})
+			}
+		})
+	}
+}
+
+func FuzzTVMCrossEmulatorDictOpsEdgeGlobalVersion(f *testing.F) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		f.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	cases := dictEdgeAllCases()
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		f.Add(uint8(version), uint16(version%len(cases)))
+	}
+	for i := range cases {
+		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint16(i))
+	}
+	f.Add(uint8(255), uint16(0xffff))
+
+	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint16) {
+		version := tvmFuzzGlobalVersionByte(rawVersion)
+		tests := dictEdgeAllCases()
+		tt := tests[int(rawCase)%len(tests)]
+		runDictVersionedParityCase(t, tt.code(t), tt.stack(t), version, tt.exit)
+	})
+}
+
+func dictEdgeAllCases() []dictEdgeCrossCase {
 	tests := []dictEdgeCrossCase{}
 	tests = append(tests, dictEdgeWidthCases()...)
 	tests = append(tests, dictEdgeBoundaryCases()...)
@@ -34,12 +88,7 @@ func TestTVMCrossEmulatorDictOpsEdgeCandidates(t *testing.T) {
 	tests = append(tests, dictEdgeSubdictCases()...)
 	tests = append(tests, dictEdgeNearCases()...)
 	tests = append(tests, dictEdgeBuilderAndRefCases()...)
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runDictEdgeCrossCase(t, prependRawMethodDrop(tt.code(t)), tt.stack(t), tt.exit)
-		})
-	}
+	return tests
 }
 
 func dictEdgeWidthCases() []dictEdgeCrossCase {

@@ -2,33 +2,6 @@ package cell
 
 import "fmt"
 
-func cloneDictItems(items []DictItem) []DictItem {
-	out := make([]DictItem, len(items))
-	for i, item := range items {
-		out[i] = DictItem{
-			Key:   item.Key,
-			Value: cloneSlice(item.Value),
-		}
-	}
-	return out
-}
-
-func rebuildPlainDict(keySz uint, items []DictItem) (*Cell, error) {
-	tmp := NewDict(keySz)
-	for _, item := range items {
-		if item.Key == nil || item.Key.BitsSize() != keySz {
-			return nil, fmt.Errorf("invalid key size")
-		}
-		if item.Value == nil {
-			return nil, fmt.Errorf("dict item value is nil")
-		}
-		if _, err := tmp.SetBuilderWithMode(item.Key, item.Value.ToBuilder(), DictSetModeSet); err != nil {
-			return nil, err
-		}
-	}
-	return tmp.root, nil
-}
-
 func (d *Dictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if d == nil {
 		return []DictItem{}, nil
@@ -37,15 +10,27 @@ func (d *Dictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cloneDictItems(items), nil
+	return items, nil
 }
 
+// Iterator creates a lazy depth-first iterator. If a lazy or malformed child
+// fails after construction, Next returns false and Err reports that failure.
 func (d *Dictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
-	items, err := d.Range(rev, sgnd)
-	if err != nil {
-		return nil, err
+	if d == nil {
+		return newDictIterator(nil, 0, rev, sgnd, nil)
 	}
-	return newDictIterator(items), nil
+	return newDictIterator(d.root, d.keySz, rev, sgnd, d.trace)
+}
+
+// IteratorAt creates a lazy iterator positioned at the nearest key to `key`
+// in iteration order: for rev=false the first item is the smallest key >= key
+// (> key when allowEq is false), for rev=true the largest key <= key (< key).
+// Reset rewinds to the full range, not to the seek position.
+func (d *Dictionary) IteratorAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*DictIterator, error) {
+	if d == nil {
+		return newDictIterator(nil, 0, rev, sgnd, nil)
+	}
+	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, d.trace)
 }
 
 func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
@@ -116,6 +101,26 @@ func (d *Dictionary) CheckForEach(fn DictForeachFunc, invertFirst bool, shuffle 
 	if d == nil {
 		return true, nil
 	}
+	if fn == nil {
+		return true, nil
+	}
+	if !shuffle {
+		it, err := d.Iterator(false, invertFirst)
+		if err != nil {
+			return false, err
+		}
+		for it.Next() {
+			item := it.Item()
+			ok, err := fn(item.Value, item.Key)
+			if err != nil || !ok {
+				return ok, err
+			}
+		}
+		if err = it.Err(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	items, err := fixedDictRange(d.root, d.keySz, false, invertFirst)
 	if err != nil {
 		return false, err
@@ -144,20 +149,12 @@ func (d *Dictionary) Filter(fn DictFilterFunc) (int, error) {
 	if d == nil || d.root == nil {
 		return 0, nil
 	}
-	items, err := fixedDictRange(d.root, d.keySz, false, false)
-	if err != nil {
-		return 0, err
-	}
-	filtered, changes, err := fixedDictFilterItems(items, fn)
+	root, changes, err := fixedDictFilter(d.root, d.keySz, fn, d.trace)
 	if err != nil {
 		return 0, err
 	}
 	if changes == 0 {
 		return 0, nil
-	}
-	root, err := rebuildPlainDict(d.keySz, filtered)
-	if err != nil {
-		return 0, err
 	}
 	d.setRoot(root)
 	return changes, nil

@@ -77,12 +77,13 @@ func INMSGPARAMS() *helpers.SimpleOP {
 			}
 			return pushHostValue(state, v)
 		},
-		Name:      "INMSGPARAMS",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x81, 0x11),
+		Name:       "INMSGPARAMS",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x81, 0x11),
+		MinVersion: 11,
 	}
 }
 
-func prevBlocksInfoAlias(name string, opcode byte, idx int) *helpers.SimpleOP {
+func prevBlocksInfoAlias(name string, opcode byte, idx int, minVersion int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			tup, err := getPrevBlocksTuple(state)
@@ -95,22 +96,24 @@ func prevBlocksInfoAlias(name string, opcode byte, idx int) *helpers.SimpleOP {
 			}
 			return pushHostValue(state, v)
 		},
-		Name:      name,
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x34, opcode),
+		Name:       name,
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x34, opcode),
+		MinVersion: minVersion,
 	}
 }
 
-func PREVMCBLOCKS() *helpers.SimpleOP     { return prevBlocksInfoAlias("PREVMCBLOCKS", 0x00, 0) }
-func PREVKEYBLOCK() *helpers.SimpleOP     { return prevBlocksInfoAlias("PREVKEYBLOCK", 0x01, 1) }
-func PREVMCBLOCKS_100() *helpers.SimpleOP { return prevBlocksInfoAlias("PREVMCBLOCKS_100", 0x02, 2) }
+func PREVMCBLOCKS() *helpers.SimpleOP     { return prevBlocksInfoAlias("PREVMCBLOCKS", 0x00, 0, 4) }
+func PREVKEYBLOCK() *helpers.SimpleOP     { return prevBlocksInfoAlias("PREVKEYBLOCK", 0x01, 1, 4) }
+func PREVMCBLOCKS_100() *helpers.SimpleOP { return prevBlocksInfoAlias("PREVMCBLOCKS_100", 0x02, 2, 9) }
 
 func inMsgParamAlias(name string, opcode byte, idx int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			return pushInMsgParam(state, idx)
 		},
-		Name:      name,
-		BitPrefix: helpers.BytesPrefix(0xF8, opcode),
+		Name:       name,
+		BitPrefix:  helpers.BytesPrefix(0xF8, opcode),
+		MinVersion: 11,
 	}
 }
 
@@ -140,6 +143,7 @@ func INMSGPARAM(idx uint8) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.UIntPrefix(0xF89, 12),
 		FixedSizeBits: 4,
+		MinVersion:    11,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(idx&15), 4)
 		},
@@ -152,7 +156,7 @@ func INMSGPARAM(idx uint8) *helpers.AdvancedOP {
 			return nil
 		},
 		Action: func(state *vm.State) error {
-			return pushInMsgParam(state, int(idx))
+			return pushInMsgParam(state, int(idx&15))
 		},
 	}
 }
@@ -166,8 +170,9 @@ func GETPRECOMPILEDGAS() *helpers.SimpleOP {
 			}
 			return pushHostValue(state, v)
 		},
-		Name:      "GETPRECOMPILEDGAS",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x39),
+		Name:       "GETPRECOMPILEDGAS",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x39),
+		MinVersion: 6,
 	}
 }
 
@@ -177,7 +182,7 @@ func getPrevBlocksTuple(state *vm.State) (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	tup, ok := v.(tuple.Tuple)
-	if !ok {
+	if !ok || tup.Len() > 255 {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return tup, nil
@@ -212,6 +217,9 @@ func getRandSeed(state *vm.State) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, ok := v.(vm.NaN); ok {
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "random seed out of range")
+	}
 	seed, ok := v.(*big.Int)
 	if !ok {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
@@ -219,7 +227,7 @@ func getRandSeed(state *vm.State) (*big.Int, error) {
 	if seed.Sign() < 0 || seed.BitLen() > 256 {
 		return nil, vmerr.Error(vmerr.CodeRangeCheck, "random seed out of range")
 	}
-	return new(big.Int).Set(seed), nil
+	return seed, nil
 }
 
 func setRandSeed(state *vm.State, seed *big.Int) error {
@@ -292,7 +300,7 @@ func RANDU256() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(val)
+			return state.Stack.PushOwnedInt(val)
 		},
 		Name:      "RANDU256",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x10),
@@ -312,7 +320,7 @@ func RAND() *helpers.SimpleOP {
 			}
 			res := new(big.Int).Mul(x, y)
 			res.Rsh(res, 256)
-			return state.Stack.PushInt(res)
+			return state.Stack.PushOwnedInt(res)
 		},
 		Name:      "RAND",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x11),
@@ -329,7 +337,7 @@ func setRandOp(name string, opcode byte, mix bool) *helpers.SimpleOP {
 			if x.Sign() < 0 || x.BitLen() > 256 {
 				return vmerr.Error(vmerr.CodeRangeCheck, "new random seed out of range")
 			}
-			next := new(big.Int).Set(x)
+			next := x
 			if mix {
 				seed, seedErr := randSeedBytes(state)
 				if seedErr != nil {
@@ -339,10 +347,10 @@ func setRandOp(name string, opcode byte, mix bool) *helpers.SimpleOP {
 				if exportErr != nil {
 					return exportErr
 				}
-				buf := make([]byte, 64)
-				copy(buf, seed)
+				var buf [64]byte
+				copy(buf[:32], seed)
 				copy(buf[32:], mixBytes)
-				sum := sha256.Sum256(buf)
+				sum := sha256.Sum256(buf[:])
 				next = new(big.Int).SetBytes(sum[:])
 			}
 			return setRandSeed(state, next)

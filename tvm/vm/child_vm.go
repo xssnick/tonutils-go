@@ -1,9 +1,6 @@
 package vm
 
 import (
-	"errors"
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -36,14 +33,13 @@ func copyTopValuesToParent(parent, child *Stack, count int) error {
 		return nil
 	}
 
-	cp := child.Copy()
-	if cp.Len() > count {
-		if err := cp.DropAfter(count); err != nil {
-			return err
-		}
+	start := child.Len() - count
+	if start < 0 {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	for _, val := range cp.elems {
+	for _, val := range child.elems[start:] {
+		val = unbindValueTrace(val, child.trace)
 		if err := parent.PushAny(val); err != nil {
 			return err
 		}
@@ -51,11 +47,28 @@ func copyTopValuesToParent(parent, child *Stack, count int) error {
 	return nil
 }
 
+func unbindCellTrace(cl *cell.Cell, trace *cell.Trace) *cell.Cell {
+	if cl == nil || trace == nil {
+		return cl
+	}
+	return cl.WithTrace(cl.Trace().WithoutTrace(trace))
+}
+
 func pushCommittedResultCell(parent *Stack, committed bool, value *cell.Cell) error {
 	if !committed {
 		return parent.PushAny(nil)
 	}
 	return pushMaybeCell(parent, value)
+}
+
+func childResultRegisterValue(child *State, committedValue, currentValue *cell.Cell) *cell.Cell {
+	if child.Committed.Committed {
+		return committedValue
+	}
+	if child.effectiveGlobalVersion() < 11 {
+		return currentValue
+	}
+	return nil
 }
 
 func (s *State) RunChildVM(cfg ChildVMConfig) error {
@@ -74,39 +87,41 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	childC7 := unbindTupleTrace(cfg.C7, parentTrace)
 	childCode := cfg.Code.Copy().SetTrace(cfg.Code.Trace().WithoutTrace(parentTrace))
 
-	child := NewExecutionState(s.GlobalVersion, cfg.Gas, cfg.Data, childC7, childStack)
+	child := NewExecutionState(s.effectiveGlobalVersion(), cfg.Gas, cfg.Data, childC7, childStack)
 	child.CurrentCode = childCode
 
 	if cfg.IsolateGas {
 		if err := s.FlushFreeGas(); err != nil {
 			return err
 		}
-		s.ChksgnCounter = 0
+		s.SignatureCheckCounter = 0
 		s.GetExtraBalanceCounter = 0
 		s.Gas.FreeConsumed = 0
 	} else {
 		child.Cells.loaded = s.Cells.loaded
 	}
 
-	child.ChksgnCounter = s.ChksgnCounter
+	child.SignatureCheckCounter = s.SignatureCheckCounter
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.Gas.FreeConsumed = s.Gas.FreeConsumed
 
-	remaining := s.Gas.Remaining
-	if child.Gas.Limit > remaining {
-		child.Gas.Limit = remaining
+	if s.effectiveGlobalVersion() >= 10 {
+		remaining := s.Gas.Remaining
+		if child.Gas.Limit > remaining {
+			child.Gas.Limit = remaining
+		}
+		if child.Gas.Max > remaining {
+			child.Gas.Max = remaining
+		}
+		if child.Gas.Limit < 0 {
+			child.Gas.Limit = 0
+		}
+		if child.Gas.Max < child.Gas.Limit {
+			child.Gas.Max = child.Gas.Limit
+		}
+		child.Gas.Base = child.Gas.Limit
+		child.Gas.Remaining = child.Gas.Base
 	}
-	if child.Gas.Max > remaining {
-		child.Gas.Max = remaining
-	}
-	if child.Gas.Limit < 0 {
-		child.Gas.Limit = 0
-	}
-	if child.Gas.Max < child.Gas.Limit {
-		child.Gas.Max = child.Gas.Limit
-	}
-	child.Gas.Base = child.Gas.Limit
-	child.Gas.Remaining = child.Gas.Base
 
 	if cfg.SameC3 {
 		child.Reg.C[3] = &OrdinaryContinuation{
@@ -117,7 +132,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 			Code: child.CurrentCode.Copy(),
 		}
 		if cfg.PushZero {
-			if err := child.Stack.PushInt(big.NewInt(0)); err != nil {
+			if err := child.Stack.PushSmallInt(0); err != nil {
 				return err
 			}
 		}
@@ -129,27 +144,27 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if !cfg.IsolateGas {
 		s.Cells.loaded = child.Cells.loaded
 	}
-	s.ChksgnCounter = child.ChksgnCounter
+	s.SignatureCheckCounter = child.SignatureCheckCounter
 	s.GetExtraBalanceCounter = child.GetExtraBalanceCounter
 	s.Gas.FreeConsumed = child.Gas.FreeConsumed
 
 	if childErr != nil {
-		var vmErr vmerr.VMError
-		var handled HandledException
-		if !errors.As(childErr, &vmErr) && !errors.As(childErr, &handled) {
+		vmErr, vmErrOk := vmerr.AsVMError(childErr)
+		if !vmErrOk && !IsHandledException(childErr) {
 			return childErr
 		}
-		if errors.As(childErr, &vmErr) && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {
+		if vmErrOk && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {
 			exitCode = ^exitCode
 		}
 	}
 
-	used := child.Gas.Used()
+	childGasUsed := child.Gas.Used()
+	chargeGas := childGasUsed
 	maxCharge := child.Gas.Limit + 1
-	if used > maxCharge {
-		used = maxCharge
+	if chargeGas > maxCharge {
+		chargeGas = maxCharge
 	}
-	if err := s.ConsumeGas(used); err != nil {
+	if err := s.ConsumeGas(chargeGas); err != nil {
 		return err
 	}
 
@@ -160,7 +175,7 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 				retCnt = cfg.ReturnValues
 			} else {
 				exitCode = ^int64(vmerr.CodeStackUnderflow)
-				if err := s.Stack.PushInt(big.NewInt(0)); err != nil {
+				if err := s.Stack.PushSmallInt(0); err != nil {
 					return err
 				}
 			}
@@ -177,24 +192,29 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if err := copyTopValuesToParent(s.Stack, child.Stack, retCnt); err != nil {
 		return err
 	}
-	if err := s.Stack.PushInt(big.NewInt(exitCode)); err != nil {
+	if err := s.Stack.PushSmallInt(exitCode); err != nil {
 		return err
 	}
 
+	childTrace := child.Cells.Trace()
 	if cfg.ReturnData {
-		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, child.Committed.Data); err != nil {
+		data := childResultRegisterValue(child, child.Committed.Data, child.Reg.D[0])
+		data = unbindCellTrace(data, childTrace)
+		if err := pushMaybeCell(s.Stack, data); err != nil {
 			return err
 		}
 	}
 
 	if cfg.ReturnActions {
-		if err := pushCommittedResultCell(s.Stack, child.Committed.Committed, child.Committed.Actions); err != nil {
+		actions := childResultRegisterValue(child, child.Committed.Actions, child.Reg.D[1])
+		actions = unbindCellTrace(actions, childTrace)
+		if err := pushMaybeCell(s.Stack, actions); err != nil {
 			return err
 		}
 	}
 
 	if cfg.ReturnGas {
-		if err := s.Stack.PushInt(big.NewInt(child.Gas.Used())); err != nil {
+		if err := s.Stack.PushSmallInt(childGasUsed); err != nil {
 			return err
 		}
 	}

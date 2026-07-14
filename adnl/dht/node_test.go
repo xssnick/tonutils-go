@@ -144,7 +144,7 @@ func TestNode_findNodes(t *testing.T) {
 		}
 	})
 
-	t.Run("untrusted nodes list response", func(t *testing.T) {
+	t.Run("untrusted nodes list response is filtered", func(t *testing.T) {
 		badNode := *tNode
 		badNode.Signature = []byte("bad-signature")
 
@@ -165,7 +165,7 @@ func TestNode_findNodes(t *testing.T) {
 						}
 
 						if bytes.Equal(kId, _req.Key) {
-							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{&badNode}}))
+							reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{[]*Node{&badNode, tNode}}))
 						} else {
 							t.Fatal("bad request received")
 						}
@@ -178,14 +178,108 @@ func TestNode_findNodes(t *testing.T) {
 		}
 
 		tDhtNode.client = client
-		_, err := tDhtNode.findNodes(context.Background(), kId, 10)
-		if err == nil {
-			t.Fatal("got error nil, want error not nil")
+		nodes, err := tDhtNode.findNodes(context.Background(), kId, 10)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(err.Error(), "untrusted nodes list response") {
-			t.Fatalf("got unexpected error %q", err.Error())
+		if len(nodes) != 1 {
+			t.Fatalf("expected 1 valid node, got %d", len(nodes))
+		}
+		if !reflect.DeepEqual(nodes[0], tNode) {
+			t.Fatal("bad node was not filtered from response")
 		}
 	})
+}
+
+type signedAddressListCallResult struct {
+	node *Node
+	err  error
+}
+
+func TestNode_getSignedAddressListUsesQueriedSnapshot(t *testing.T) {
+	oldKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := newCorrectNodeWithVersion(1, 2, 3, 4, 12345, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queryStarted := make(chan struct{})
+	releaseQuery := make(chan struct{})
+	gateway := &MockGateway{}
+	node := &dhtNode{
+		addr:      "old-address",
+		serverKey: oldKey,
+		version:   1,
+		client: &Client{
+			gateway:   gateway,
+			networkID: _UnknownNetworkID,
+		},
+	}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		if addr != "old-address" {
+			return nil, fmt.Errorf("queried address %q, want old-address", addr)
+		}
+		if !bytes.Equal(peerKey, oldKey) {
+			return nil, fmt.Errorf("queried unexpected server key")
+		}
+
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				close(queryStarted)
+				select {
+				case <-releaseQuery:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(*response))
+				return nil
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan signedAddressListCallResult, 1)
+	go func() {
+		res, queryErr := node.getSignedAddressList(ctx)
+		result <- signedAddressListCallResult{node: res, err: queryErr}
+	}()
+
+	select {
+	case <-queryStarted:
+	case res := <-result:
+		t.Fatalf("query finished before starting: %v", res.err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	node.absorb(&dhtNode{
+		addr:      "new-address",
+		serverKey: newKey,
+		version:   response.Version,
+		node:      response,
+	})
+	close(releaseQuery)
+
+	select {
+	case res := <-result:
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if !reflect.DeepEqual(res.node, response) {
+			t.Fatal("unexpected signed address list response")
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
 }
 
 func TestNode_CheckSignatureExtendedNetworkID(t *testing.T) {
@@ -434,6 +528,66 @@ func TestNode_findValue(t *testing.T) {
 	}
 }
 
+func TestNode_findValueFiltersBadNodesListResponse(t *testing.T) {
+	tDhtNode, err := newCorrectDhtNode(1, 2, 3, 4, "12356")
+	if err != nil {
+		t.Fatal("failed to prepare test dht node, err: ", err)
+	}
+
+	keyID := make([]byte, 32)
+	goodNode, err := newCorrectNode(8, 8, 8, 8, 12345)
+	if err != nil {
+		t.Fatal("failed creating test node, err: ", err.Error())
+	}
+	badNode := *goodNode
+	badNode.Signature = []byte("bad-signature")
+
+	gateway := &MockGateway{}
+	client := &Client{
+		gateway:   gateway,
+		networkID: _UnknownNetworkID,
+	}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				switch request := req.(type) {
+				case tl.Raw:
+					var findValue FindValue
+					if _, err := tl.Parse(&findValue, request, true); err != nil {
+						t.Fatal("failed to prepare test data, err", err)
+					}
+					if !bytes.Equal(keyID, findValue.Key) {
+						t.Fatal("bad request received")
+					}
+					reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{
+						Nodes: NodesList{List: []*Node{&badNode, goodNode}},
+					}))
+				default:
+					return fmt.Errorf("mock err: unsupported request type '%s'", reflect.TypeOf(request).String())
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	tDhtNode.client = client
+	res, err := tDhtNode.findValue(context.Background(), keyID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodes, ok := res.([]*Node)
+	if !ok {
+		t.Fatalf("expected nodes list result, got %T", res)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 valid node, got %d", len(nodes))
+	}
+	if !reflect.DeepEqual(nodes[0], goodNode) {
+		t.Fatal("bad node was not filtered from value response")
+	}
+}
+
 func TestNode_checkValue(t *testing.T) {
 	hexAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
 	siteAddr, err := hex.DecodeString(hexAddr)
@@ -506,10 +660,7 @@ func TestNode_checkValue(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		testVal, testKeyID, err := buildStoreValue(keys.PublicKeyED25519{Key: pub}, []byte("test"), 0, []byte("value"), UpdateRuleAnybody{}, time.Minute, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testVal, testKeyID := newUnsignedTestValue(t, keys.PublicKeyED25519{Key: pub}, UpdateRuleAnybody{})
 		err = checkValue(testKeyID, &testVal)
 		if err == nil {
 			t.Fatal("got error nil, want error not nil")
@@ -520,10 +671,7 @@ func TestNode_checkValue(t *testing.T) {
 	})
 
 	t.Run("anybody rule rejects overlay key", func(t *testing.T) {
-		testVal, testKeyID, err := buildStoreValue(keys.PublicKeyOverlay{Key: []byte("overlay")}, []byte("test"), 0, []byte("value"), UpdateRuleAnybody{}, time.Minute, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testVal, testKeyID := newUnsignedTestValue(t, keys.PublicKeyOverlay{Key: []byte("overlay")}, UpdateRuleAnybody{})
 		err = checkValue(testKeyID, &testVal)
 		if err == nil {
 			t.Fatal("got error nil, want error not nil")
@@ -587,6 +735,64 @@ func TestNode_checkValue(t *testing.T) {
 		}
 	})
 
+	t.Run("nil key description id", func(t *testing.T) {
+		testVal := &Value{
+			KeyDescription: KeyDescription{
+				Key: Key{
+					ID:    bytes.Repeat([]byte{1}, 32),
+					Name:  []byte("test"),
+					Index: 0,
+				},
+				UpdateRule: UpdateRuleAnybody{},
+			},
+			TTL: int32(time.Now().Add(time.Minute).Unix()),
+		}
+		testKeyID, err := tl.Hash(testVal.KeyDescription.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = checkValue(testKeyID, testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "unsupported value key type") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
+	t.Run("nil update rule", func(t *testing.T) {
+		id := keys.PublicKeyUnEnc{Key: []byte("test")}
+		idKey, err := tl.Hash(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testVal := &Value{
+			KeyDescription: KeyDescription{
+				Key: Key{
+					ID:    idKey,
+					Name:  []byte("test"),
+					Index: 0,
+				},
+				ID: id,
+			},
+			TTL: int32(time.Now().Add(time.Minute).Unix()),
+		}
+		testKeyID, err := tl.Hash(testVal.KeyDescription.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = checkValue(testKeyID, testVal)
+		if err == nil {
+			t.Fatal("got error nil, want error not nil")
+		}
+		if !strings.Contains(err.Error(), "update rule type") {
+			t.Fatalf("got unexpected error %q", err.Error())
+		}
+	})
+
 	//t.Run("corrupted value: bad value description sign", func(t *testing.T) {
 	//	val.KeyDescription.ID = []byte("qewrgheau;igqn41463[8u9y1436h1[iu1gh[8935]988hg]q5")
 	//	err = checkValue(kId, &val)
@@ -646,6 +852,75 @@ func TestNode_isValueAcceptableOverlayNodesAge(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildStoreValueRejectsMalformedInput(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		id   any
+		rule any
+		key  ed25519.PrivateKey
+	}{
+		{
+			name: "nil id",
+			rule: UpdateRuleAnybody{},
+		},
+		{
+			name: "nil rule",
+			id:   keys.PublicKeyUnEnc{Key: []byte("test")},
+		},
+		{
+			name: "invalid ed25519 public key",
+			id:   keys.PublicKeyED25519{Key: ed25519.PublicKey{1}},
+			rule: UpdateRuleSignature{},
+		},
+		{
+			name: "signature rule without private key",
+			id:   keys.PublicKeyED25519{Key: pub},
+			rule: UpdateRuleSignature{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := buildStoreValue(tt.id, []byte("test"), 0, []byte("value"), tt.rule, time.Minute, tt.key)
+			if err == nil {
+				t.Fatal("got error nil, want error not nil")
+			}
+		})
+	}
+}
+
+func newUnsignedTestValue(t *testing.T, id any, rule any) (Value, []byte) {
+	t.Helper()
+
+	idKey, err := tl.Hash(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := Value{
+		KeyDescription: KeyDescription{
+			Key: Key{
+				ID:    idKey,
+				Name:  []byte("test"),
+				Index: 0,
+			},
+			ID:         id,
+			UpdateRule: rule,
+		},
+		Data: []byte("value"),
+		TTL:  int32(time.Now().Add(time.Minute).Unix()),
+	}
+	keyID, err := tl.Hash(value.KeyDescription.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value, keyID
 }
 
 func newCorrectOverlayValue(t *testing.T, wrongOverlayID bool) (*Value, []byte) {

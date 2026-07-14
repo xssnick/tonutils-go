@@ -8,6 +8,22 @@ import (
 )
 
 const bitSizeInvalid = 0x7fffffff
+const cppBigIntWordBits = 64
+const cppBigIntMaxLeftShiftWords = 5
+const cppBigIntWordShift = 52
+
+const (
+	cppRoundFloor   = -1
+	cppRoundNearest = 0
+	cppRoundCeil    = 1
+)
+
+var (
+	bigIntOne              = big.NewInt(1)
+	bigIntMinusOne         = big.NewInt(-1)
+	bigIntMaxShift         = big.NewInt(1023)
+	bigIntMaxCompoundShift = big.NewInt(256)
+)
 
 func pushNaNOrOverflow(state *vm.State, quiet bool) error {
 	if quiet {
@@ -21,13 +37,71 @@ func pushMaybeInt(state *vm.State, val *big.Int, quiet bool) error {
 		return pushNaNOrOverflow(state, quiet)
 	}
 	if quiet {
-		return state.Stack.PushIntQuiet(val)
+		return state.Stack.PushOwnedIntQuiet(val)
 	}
-	return state.Stack.PushInt(val)
+	return state.Stack.PushOwnedInt(val)
+}
+
+func leftShiftResult(x *big.Int, shift uint64) *big.Int {
+	if x == nil {
+		return nil
+	}
+	if x.Sign() == 0 && shift >= cppBigIntMaxLeftShiftWords*cppBigIntWordShift {
+		return nil
+	}
+	return new(big.Int).Lsh(x, uint(shift))
+}
+
+func legacyShiftNaNResult(globalVersion int, shift uint64, right bool) *big.Int {
+	return legacyShiftNaNResultThreshold(globalVersion, 13, shift, right)
+}
+
+// legacyShiftNaNResultThreshold generalizes legacyShiftNaNResult for opcode
+// families whose modern (NaN-preserving) behavior starts at a global version
+// other than 13, such as the immediate RSHIFT#/LSHIFT# opcodes (0xAA/0xAB
+// and their quiet 0xB7AA/0xB7AB forms), which only gained NaN preservation at
+// global version 14.
+func legacyShiftNaNResultThreshold(globalVersion int, threshold int, shift uint64, right bool) *big.Int {
+	if globalVersion >= threshold || shift == 0 {
+		return nil
+	}
+	if right {
+		return legacyRShiftNaNResultThreshold(globalVersion, threshold, shift, cppRoundFloor)
+	}
+	q := shift / cppBigIntWordShift
+	if q == 0 || q > cppBigIntMaxLeftShiftWords {
+		return nil
+	}
+	return new(big.Int)
+}
+
+func legacyRShiftNaNResult(globalVersion int, shift uint64, roundMode int) *big.Int {
+	return legacyRShiftNaNResultThreshold(globalVersion, 13, shift, roundMode)
+}
+
+// Before the version gate, cppnode feeds invalid BigInts into rshift_any.
+// A non-zero shift resurrects them as a finite value determined by rounding.
+func legacyRShiftNaNResultThreshold(globalVersion int, threshold int, shift uint64, roundMode int) *big.Int {
+	if globalVersion >= threshold || shift == 0 {
+		return nil
+	}
+	if roundMode == cppRoundFloor && shift > cppBigIntWordBits-cppBigIntWordShift {
+		return new(big.Int).Set(bigIntMinusOne)
+	}
+	return new(big.Int)
+}
+
+// The legacy SHLDIV path shifts before validating its operands, so a large
+// enough left shift can turn an invalid dividend into a finite zero.
+func legacyLeftShiftOperand(globalVersion int, value *big.Int, shift uint64) *big.Int {
+	if value != nil {
+		return value
+	}
+	return legacyShiftNaNResult(globalVersion, shift, false)
 }
 
 func pushSmallInt(state *vm.State, val int64) error {
-	return state.Stack.PushInt(big.NewInt(val))
+	return state.Stack.PushSmallInt(val)
 }
 
 func checkStackDepth(state *vm.State, depth int) error {
@@ -49,6 +123,12 @@ func popInt(state *vm.State) (*big.Int, error) {
 	return state.Stack.PopInt()
 }
 
+// popIntRead pops an integer for read-only use; the result may be a shared
+// static instance and must not be mutated or pushed back as an owned value.
+func popIntRead(state *vm.State) (*big.Int, error) {
+	return state.Stack.PopIntRead()
+}
+
 func requireFiniteInts(values ...*big.Int) error {
 	for _, value := range values {
 		if value == nil {
@@ -60,6 +140,12 @@ func requireFiniteInts(values ...*big.Int) error {
 
 func popIntOperand(state *vm.State, quiet bool) (*big.Int, error) {
 	return state.Stack.PopInt()
+}
+
+// popIntOperandRead pops an operand for read-only use; the result may be a
+// shared instance and must not be mutated.
+func popIntOperandRead(state *vm.State, quiet bool) (*big.Int, error) {
+	return state.Stack.PopIntRead()
 }
 
 func unaryIntResult(x *big.Int, fn func(*big.Int) *big.Int) *big.Int {
@@ -74,6 +160,26 @@ func binaryIntResult(x, y *big.Int, fn func(*big.Int, *big.Int) *big.Int) *big.I
 		return nil
 	}
 	return fn(x, y)
+}
+
+func versionedAndResult(globalVersion int, x, y *big.Int) *big.Int {
+	if x == nil || y == nil {
+		if globalVersion < 13 && ((x != nil && x.Sign() == 0) || (y != nil && y.Sign() == 0)) {
+			return new(big.Int)
+		}
+		return nil
+	}
+	return new(big.Int).And(x, y)
+}
+
+func versionedOrResult(globalVersion int, x, y *big.Int) *big.Int {
+	if x == nil || y == nil {
+		if globalVersion < 13 && ((x != nil && x.Cmp(bigIntMinusOne) == 0) || (y != nil && y.Cmp(bigIntMinusOne) == 0)) {
+			return new(big.Int).Set(bigIntMinusOne)
+		}
+		return nil
+	}
+	return new(big.Int).Or(x, y)
 }
 
 func pushUnaryIntResult(state *vm.State, x *big.Int, fn func(*big.Int) *big.Int) error {
@@ -120,10 +226,13 @@ func signedFitsBits(x *big.Int, bits int) bool {
 		return false
 	}
 
-	limit := new(big.Int).Lsh(big.NewInt(1), uint(bits-1))
-	min := new(big.Int).Neg(new(big.Int).Set(limit))
-	max := new(big.Int).Sub(limit, big.NewInt(1))
-	return x.Cmp(min) >= 0 && x.Cmp(max) <= 0
+	if x.Sign() > 0 {
+		return x.BitLen() < bits
+	}
+
+	t := new(big.Int).Neg(x)
+	t.Sub(t, bigIntOne)
+	return t.BitLen() < bits
 }
 
 func unsignedFitsBits(x *big.Int, bits int) bool {
@@ -137,8 +246,7 @@ func unsignedFitsBits(x *big.Int, bits int) bool {
 		return false
 	}
 
-	limit := new(big.Int).Lsh(big.NewInt(1), uint(bits))
-	return x.Cmp(limit) < 0
+	return x.BitLen() <= bits
 }
 
 func signedBitSize(x *big.Int) int {
@@ -155,7 +263,7 @@ func signedBitSize(x *big.Int) int {
 	// For negative values, TVM uses the minimal signed width such that
 	// x fits in the range [-2^(n-1), 2^(n-1)-1].
 	t := new(big.Int).Neg(x)
-	t.Sub(t, big.NewInt(1))
+	t.Sub(t, bigIntOne)
 	return t.BitLen() + 1
 }
 

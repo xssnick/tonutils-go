@@ -6,6 +6,7 @@ import (
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
@@ -21,55 +22,38 @@ func init() {
 	)
 }
 
-func quietBinaryLogicOp(name string, prefix helpers.BitPrefix, fn func(x, y *big.Int) *big.Int) *helpers.SimpleOP {
-	return &helpers.SimpleOP{
-		Action: func(state *vm.State) error {
-			if err := checkStackDepth(state, 2); err != nil {
-				return err
-			}
-			y, err := state.Stack.PopInt()
-			if err != nil {
-				return err
-			}
-			x, err := state.Stack.PopInt()
-			if err != nil {
-				return err
-			}
-			if x == nil || y == nil {
-				return pushNaNOrOverflow(state, true)
-			}
-			return state.Stack.PushIntQuiet(fn(x, y))
-		},
-		Name:      name,
-		BitPrefix: prefix,
-	}
-}
-
 func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopInt()
+			shiftValid := y != nil && y.Sign() >= 0 && y.Cmp(bigIntMaxShift) <= 0
+			if !shiftValid && state.GlobalVersion < 13 {
+				return vmerr.Error(vmerr.CodeRangeCheck)
+			}
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
-			if x == nil || y == nil || y.Sign() < 0 || y.Cmp(big.NewInt(1023)) > 0 {
+			if !shiftValid {
 				return pushNaNOrOverflow(state, true)
 			}
-
-			res := new(big.Int).Set(x)
-			if right {
-				res.Rsh(res, uint(y.Uint64()))
-			} else {
-				res.Lsh(res, uint(y.Uint64()))
+			if x == nil {
+				return pushMaybeInt(state, legacyShiftNaNResult(state.GlobalVersion, y.Uint64(), right), true)
 			}
-			return state.Stack.PushIntQuiet(res)
+
+			var res *big.Int
+			if right {
+				res = new(big.Int).Rsh(x, uint(y.Uint64()))
+			} else {
+				res = leftShiftResult(x, y.Uint64())
+			}
+			return pushMaybeInt(state, res, true)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -84,21 +68,21 @@ func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int8, right b
 			if err := checkStackDepth(state, 1); err != nil {
 				return err
 			}
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
 			if x == nil {
-				return pushNaNOrOverflow(state, true)
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), right), true)
 			}
 
-			res := new(big.Int).Set(x)
+			var res *big.Int
 			if right {
-				res.Rsh(res, uint(imm()))
+				res = new(big.Int).Rsh(x, uint(imm()))
 			} else {
-				res.Lsh(res, uint(imm()))
+				res = leftShiftResult(x, uint64(imm()))
 			}
-			return state.Stack.PushIntQuiet(res)
+			return pushMaybeInt(state, res, true)
 		},
 		BitPrefix:       prefix,
 		SerializeSuffix: serializeImmediate,
@@ -110,21 +94,77 @@ func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int8, right b
 }
 
 func QAND() *helpers.SimpleOP {
-	return quietBinaryLogicOp("QAND", helpers.BytesPrefix(0xB7, 0xB0), func(x, y *big.Int) *big.Int {
-		return x.And(x, y)
-	})
+	return &helpers.SimpleOP{
+		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+			y, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			x, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			return pushMaybeInt(state, versionedAndResult(state.GlobalVersion, x, y), true)
+		},
+		Name:      "QAND",
+		BitPrefix: helpers.BytesPrefix(0xB7, 0xB0),
+	}
 }
 
 func QOR() *helpers.SimpleOP {
-	return quietBinaryLogicOp("QOR", helpers.BytesPrefix(0xB7, 0xB1), func(x, y *big.Int) *big.Int {
-		return x.Or(x, y)
-	})
+	return &helpers.SimpleOP{
+		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+			y, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			x, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			return pushMaybeInt(state, versionedOrResult(state.GlobalVersion, x, y), true)
+		},
+		Name:      "QOR",
+		BitPrefix: helpers.BytesPrefix(0xB7, 0xB1),
+	}
 }
 
 func QXOR() *helpers.SimpleOP {
-	return quietBinaryLogicOp("QXOR", helpers.BytesPrefix(0xB7, 0xB2), func(x, y *big.Int) *big.Int {
-		return x.Xor(x, y)
-	})
+	return &helpers.SimpleOP{
+		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+			y, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			x, err := state.Stack.PopIntRead()
+			if err != nil {
+				return err
+			}
+			if x == nil || y == nil {
+				return pushNaNOrOverflow(state, true)
+			}
+
+			// int64 fast path: XOR of two int64 values stays within int64,
+			// operands (possibly shared statics) are never mutated.
+			if x.IsInt64() && y.IsInt64() {
+				return state.Stack.PushSmallInt(x.Int64() ^ y.Int64())
+			}
+
+			// XOR never leaves the 257-bit range, so the quiet push cannot NaN.
+			return state.Stack.PushOwnedIntQuiet(new(big.Int).Xor(x, y))
+		},
+		Name:      "QXOR",
+		BitPrefix: helpers.BytesPrefix(0xB7, 0xB2),
+	}
 }
 
 func QLSHIFT() *helpers.SimpleOP {
@@ -149,14 +189,17 @@ func QPOW2() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 1); err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
-			if y == nil || y.Sign() < 0 || y.Cmp(big.NewInt(1023)) > 0 {
+			if y == nil || y.Sign() < 0 || y.Cmp(bigIntMaxShift) > 0 {
+				if state.GlobalVersion < 13 {
+					return vmerr.Error(vmerr.CodeRangeCheck)
+				}
 				return pushNaNOrOverflow(state, true)
 			}
-			return state.Stack.PushIntQuiet(new(big.Int).Lsh(big.NewInt(1), uint(y.Uint64())))
+			return state.Stack.PushIntQuiet(new(big.Int).Lsh(bigIntOne, uint(y.Uint64())))
 		},
 		Name:      "QPOW2",
 		BitPrefix: helpers.BytesPrefix(0xB7, 0xAE),

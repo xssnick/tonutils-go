@@ -255,27 +255,30 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 		}
 		return val, nil
 	case 0x02:
-		subTyp, err := slice.LoadUInt(8)
+		subTyp, err := slice.PreloadUInt(8)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load stack value sub type, err: %w", err)
 		}
-
-		switch subTyp {
-		case 0xFF:
+		if subTyp == 0xFF {
+			if _, err = slice.LoadUInt(8); err != nil {
+				return nil, fmt.Errorf("failed to load stack value sub type, err: %w", err)
+			}
 			return StackNaN{}, nil
-		default:
-			bInt, err := slice.LoadBigUInt(256)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load stack value big int, err: %w", err)
-			}
-
-			// 1st bit of int257 indicates sign, it is loaded in type
-			if subTyp > 0 {
-				bInt.Mul(bInt, big.NewInt(-1))
-			}
-
-			return bInt, nil
 		}
+
+		prefix, err := slice.LoadUInt(7)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load stack value int prefix, err: %w", err)
+		}
+		if prefix != 0 {
+			return nil, fmt.Errorf("unknown stack value int prefix")
+		}
+
+		bInt, err := slice.LoadBigInt(257)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load stack value big int, err: %w", err)
+		}
+		return bInt, nil
 	case 0x03:
 		val, err := slice.LoadRef()
 		if err != nil {
@@ -337,35 +340,11 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 
 		var tuple []any
 
-		last2index := int(ln) - 2
-		if last2index < 0 {
-			last2index = 0
+		if ln == 0 {
+			return tuple, nil
 		}
 
-		var dive func(i int, root *cell.Slice) error
-		dive = func(i int, root *cell.Slice) error {
-			if i == last2index {
-				// load first one
-				err = dive(i+1, root)
-				if err != nil {
-					return err
-				}
-			} else if i < last2index {
-				next, err := root.LoadRef()
-				if err != nil {
-					return fmt.Errorf("failed to load tuple's %d next element, err: %w", i, err)
-				}
-
-				err = dive(i+1, next)
-				if err != nil {
-					return err
-				}
-			}
-
-			if root.RefsNum() == 0 {
-				return nil
-			}
-
+		loadValue := func(i int, root *cell.Slice) error {
 			ref, err := root.LoadRef()
 			if err != nil {
 				return fmt.Errorf("failed to load tuple's %d ref, err: %w", i, err)
@@ -380,7 +359,31 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 			return nil
 		}
 
-		if err = dive(0, slice); err != nil {
+		var dive func(i int, root *cell.Slice) error
+		dive = func(i int, root *cell.Slice) error {
+			if i < 0 {
+				return nil
+			}
+
+			if i > 1 {
+				next, err := root.LoadRef()
+				if err != nil {
+					return fmt.Errorf("failed to load tuple's %d next element, err: %w", i, err)
+				}
+
+				if err = dive(i-1, next); err != nil {
+					return err
+				}
+			} else if i == 1 {
+				if err := loadValue(0, root); err != nil {
+					return err
+				}
+			}
+
+			return loadValue(i, root)
+		}
+
+		if err = dive(int(ln)-1, slice); err != nil {
 			return nil, fmt.Errorf("failed to load tuple, err: %w", err)
 		}
 

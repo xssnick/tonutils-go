@@ -1,6 +1,10 @@
 package cell
 
-import "fmt"
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+)
 
 type MerkleProofBuilder struct {
 	usageTree *CellUsageTree
@@ -64,7 +68,7 @@ func (c *Cell) CreateUsageProof(usageTree *CellUsageTree) (*Cell, error) {
 		return nil, fmt.Errorf("failed to build usage proof: usage tree is nil")
 	}
 
-	state := newUsageProofBuildState()
+	state := newUsageProofBuildState(usageTree.NodeCount())
 	if err := collectUsageProofHashes(c, usageTree, usageTree.RootNode(), state); err != nil {
 		return nil, err
 	}
@@ -130,66 +134,54 @@ type usageProofBuildKey struct {
 	merkleDepth int
 }
 
+// usageProofBuildState tracks the cells a usage proof must include. Presence
+// of a hash in cells marks it visited (to be included rather than pruned); a
+// non-nil value additionally caches its loaded form, merging the historical
+// visited-set and loaded-cache maps into one lookup on the hot build path.
 type usageProofBuildState struct {
-	visited map[Hash]struct{}
-	loaded  map[Hash]*Cell
-	built   map[usageProofBuildKey]*Cell
+	cells map[Hash]*Cell
+	built map[usageProofBuildKey]*Cell
 }
 
-func newUsageProofBuildState() *usageProofBuildState {
+func newUsageProofBuildState(sizeHint int) *usageProofBuildState {
 	return &usageProofBuildState{
-		visited: map[Hash]struct{}{},
-		loaded:  map[Hash]*Cell{},
-		built:   map[usageProofBuildKey]*Cell{},
+		cells: make(map[Hash]*Cell, sizeHint),
+		built: make(map[usageProofBuildKey]*Cell, sizeHint),
 	}
 }
 
 func (s *usageProofBuildState) markVisited(c *Cell) {
 	hash := c.HashKey()
-	s.visited[hash] = struct{}{}
 	if !c.IsLazy() {
-		s.loaded[hash] = c
-	}
-}
-
-func (s *usageProofBuildState) rememberLoaded(boundary, loaded *Cell) {
-	if boundary == nil || loaded == nil {
+		s.cells[hash] = c
 		return
 	}
-	s.loaded[boundary.HashKey()] = loaded
-	s.loaded[loaded.HashKey()] = loaded
-}
-
-func (s *usageProofBuildState) isVisited(c *Cell) bool {
-	_, ok := s.visited[c.HashKey()]
-	return ok
-}
-
-func (s *usageProofBuildState) loadedCell(c *Cell) (*Cell, bool) {
-	loaded, ok := s.loaded[c.HashKey()]
-	return loaded, ok
+	if _, ok := s.cells[hash]; !ok {
+		s.cells[hash] = nil
+	}
 }
 
 func (s *usageProofBuildState) loadForUsage(c *Cell, usageTree *CellUsageTree, node TraceNode) (*Cell, error) {
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	if loaded, ok := s.loadedCell(c); ok {
+	hash := c.HashKey()
+	if loaded := s.cells[hash]; loaded != nil {
 		return loaded, nil
 	}
 	if loaded, ok := usageTree.loadedCell(node); ok {
 		loaded = loadedForBoundary(c, loaded)
-		if loaded.HashKey() == c.HashKey() {
-			s.rememberLoaded(c, loaded)
+		if loaded.HashKey() == hash {
+			s.cells[hash] = loaded
 			return loaded, nil
 		}
 	}
-	if loaded, ok := usageTree.loadedCellByHash(c.HashKey()); ok {
-		s.rememberLoaded(c, loaded)
+	if loaded, ok := usageTree.loadedCellByHash(hash); ok {
+		s.cells[hash] = loaded
 		return loaded, nil
 	}
 	if !c.IsLazy() {
-		s.rememberLoaded(c, c)
+		s.cells[hash] = c
 		return c, nil
 	}
 
@@ -197,7 +189,7 @@ func (s *usageProofBuildState) loadForUsage(c *Cell, usageTree *CellUsageTree, n
 	if err != nil {
 		return nil, err
 	}
-	s.rememberLoaded(c, loaded)
+	s.cells[hash] = loaded
 	return loaded, nil
 }
 
@@ -258,12 +250,14 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	key := usageProofBuildKey{hash: c.HashKey(), merkleDepth: merkleDepth}
+	hash := c.HashKey()
+	key := usageProofBuildKey{hash: hash, merkleDepth: merkleDepth}
 	if built := state.built[key]; built != nil {
 		return built, nil
 	}
 
-	if !state.isVisited(c) {
+	cached, visited := state.cells[hash]
+	if !visited {
 		pruned, err := createPrunedBranchFromCell(c, merkleDepth+1)
 		if err != nil {
 			return nil, err
@@ -273,14 +267,15 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	}
 
 	loaded := c
-	if cached, ok := state.loadedCell(c); ok {
+	if cached != nil {
 		loaded = cached
 	}
 
 	refCnt := loaded.refsCount()
 	if refCnt == 0 {
-		state.built[key] = loaded
-		return loaded, nil
+		built := loaded.WithoutTrace()
+		state.built[key] = built
+		return built, nil
 	}
 
 	var refsBuf [4]*Cell
@@ -293,15 +288,15 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 			return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
 		}
 
-		next := ref
-		if state.isVisited(ref) {
-			loadedRef, ok := state.loadedCell(ref)
-			if !ok {
+		var next *Cell
+		refHash := ref.HashKey()
+		if loadedRef, refVisited := state.cells[refHash]; refVisited {
+			if loadedRef == nil {
 				loadedRef, err = ref.load()
 				if err != nil {
 					return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
 				}
-				state.rememberLoaded(ref, loadedRef)
+				state.cells[refHash] = loadedRef
 			}
 			next, err = buildUsageProofBody(loadedRef, state, childDepth)
 			if err != nil {
@@ -316,12 +311,135 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 		refs[i] = next
 	}
 
-	rebuilt, _, err := refView.cloneWithRefs(refs, nil)
+	rebuilt, err := cloneProofCellWithRefs(loaded, refView, refs)
 	if err != nil {
 		return nil, err
 	}
 	state.built[key] = rebuilt
 	return rebuilt, nil
+}
+
+// cloneProofCellWithRefs rebuilds a proof-body cell in a single copy: same
+// bits, replaced refs, no trace carried over from the traced traversal
+// wrapper — where the historical path made one WithoutTrace copy and a second
+// inside cloneWithRefs. When nothing changed the source is returned as is.
+func cloneProofCellWithRefs(src *Cell, view cellRefView, refs []*Cell) (*Cell, error) {
+	if src.Trace() == nil && !view.virtual {
+		unchanged := true
+		for i, ref := range refs {
+			if ref != src.refs[i] {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			return src, nil
+		}
+	}
+
+	if !src.IsSpecial() {
+		// an ordinary rebuilt cell needs nothing from the source meta: the
+		// trace and lazy loader must not carry over, virtualization is
+		// resolved by the explicit refs, and hashes are reseeded below
+		cloned := new(Cell)
+		*cloned = *src
+		cloned.meta = nil
+		for i, ref := range refs {
+			cloned.setRef(i, ref)
+		}
+		if err := cloned.refreshLevelMaskForRefs(); err != nil {
+			return nil, err
+		}
+		if err := calculateSeededProofHashes(cloned, src); err != nil {
+			return nil, err
+		}
+		return cloned, nil
+	}
+
+	cloned := src.copy()
+	cloned.clearVirtualization()
+	if cloned.meta != nil {
+		cloned.meta.trace = nil
+		cloned.clearMetaIfEmpty()
+	}
+	for i, ref := range refs {
+		cloned.setRef(i, ref)
+	}
+	if err := cloned.refreshLevelMaskForRefs(); err != nil {
+		return nil, err
+	}
+	if err := cloned.calculateHashes(); err != nil {
+		return nil, err
+	}
+	return cloned, nil
+}
+
+// calculateSeededProofHashes finalizes a rebuilt ordinary proof-body cell
+// reusing the Merkle invariant that its level-0 hash and depth equal the
+// source cell's: the body bits are identical and every child is the source
+// subtree either included (same level-0 hash by induction) or replaced by a
+// pruned branch that preserves it. Only the higher significant levels
+// introduced by pruned children are hashed, mirroring the corresponding
+// levels of calculateHashes.
+func calculateSeededProofHashes(cloned, src *Cell) error {
+	levelMask := cloned.getLevelMask()
+	if levelMask.getHashIndex() == 0 {
+		cloned.clearExtraHashes()
+		cloned.setHashAt(0, src.getHash(0))
+		cloned.setDepthAt(0, src.getDepth(0))
+		return nil
+	}
+
+	meta := cloned.ensureMeta()
+	if meta.extraHashes == nil {
+		meta.extraHashes = new([3]Hash)
+	}
+	meta.extraDepths = [3]uint16{}
+
+	cloned.setHashAt(0, src.getHash(0))
+	cloned.setDepthAt(0, src.getDepth(0))
+
+	refCnt := cloned.refsCount()
+	level := levelMask.GetLevel()
+	var hashBuf [2 + maxCellDataBytes + (4 * depthSize) + (4 * hashSize)]byte
+	hashIndex := 1
+	for levelIndex := 1; levelIndex <= level; levelIndex++ {
+		if !levelMask.IsSignificant(levelIndex) {
+			continue
+		}
+
+		dsc1, dsc2 := cloned.descriptors(levelMask.Apply(levelIndex))
+		hashBuf[0], hashBuf[1] = dsc1, dsc2
+		bufPos := 2
+		bufPos += copy(hashBuf[bufPos:], cloned.hashAt(hashIndex-1))
+
+		var depth uint16
+		for i := 0; i < refCnt; i++ {
+			childDepth := cloned.refs[i].getDepth(levelIndex)
+			binary.BigEndian.PutUint16(hashBuf[bufPos:bufPos+depthSize], childDepth)
+			bufPos += depthSize
+
+			if childDepth > depth {
+				depth = childDepth
+			}
+		}
+		if refCnt > 0 {
+			depth++
+			if depth > maxDepth {
+				return ErrCellDepthLimit
+			}
+		}
+
+		for i := 0; i < refCnt; i++ {
+			bufPos += copy(hashBuf[bufPos:], cloned.refs[i].getHash(levelIndex))
+		}
+
+		cloned.setDepthAt(hashIndex, depth)
+		sum := sha256.Sum256(hashBuf[:bufPos])
+		cloned.setHashAt(hashIndex, sum[:])
+		hashIndex++
+	}
+	return nil
 }
 
 func merkleProofRef(parent *Cell, refView cellRefView, i int) (*Cell, error) {

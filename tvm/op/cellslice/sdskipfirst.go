@@ -17,7 +17,7 @@ func SDSKIPFIRST() *helpers.SimpleOP {
 				return err
 			}
 
-			i0, err := state.Stack.PopIntRange(0, 1023)
+			i0, err := state.Stack.PopIntRangeInt64(0, 1023)
 			if err != nil {
 				return err
 			}
@@ -27,7 +27,7 @@ func SDSKIPFIRST() *helpers.SimpleOP {
 				return err
 			}
 
-			if err = s1.SkipBits(uint(i0.Uint64())); err != nil {
+			if err = s1.SkipBits(uint(i0)); err != nil {
 				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 

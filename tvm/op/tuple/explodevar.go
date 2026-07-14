@@ -18,11 +18,11 @@ func EXPLODEVAR() *helpers.SimpleOP {
 			if state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			max, err := state.Stack.PopIntRange(0, 255)
+			max, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return execExplode(state, int(max.Int64()))
+			return execExplode(state, int(max))
 		},
 	}
 }

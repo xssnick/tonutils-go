@@ -2,6 +2,7 @@ package stack
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -256,8 +257,9 @@ func TestLargeDynamicStackOpsChargeParityGas(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &vm.State{
-				Stack: tt.st,
-				Gas:   vm.GasWithLimit(10_000),
+				GlobalVersion: vm.MaxSupportedGlobalVersion,
+				Stack:         tt.st,
+				Gas:           vm.GasWithLimit(10_000),
 			}
 			before := state.Gas.Used()
 			if err := tt.op.Interpret(state); err != nil {
@@ -311,7 +313,8 @@ func TestLargeDynamicStackOpsOutOfGasBeforeMutation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &vm.State{
-				Stack: tt.st,
+				GlobalVersion: vm.MaxSupportedGlobalVersion,
+				Stack:         tt.st,
 				Gas: vm.Gas{
 					Limit:     tt.remaining,
 					Base:      tt.remaining,
@@ -332,6 +335,55 @@ func TestLargeDynamicStackOpsOutOfGasBeforeMutation(t *testing.T) {
 			}
 			if got.Int64() != tt.wantTop {
 				t.Fatalf("%s mutated stack before gas failure: top=%d want=%d", tt.name, got.Int64(), tt.wantTop)
+			}
+		})
+	}
+}
+
+func TestDynamicStackOpsPreV4IndexLimit(t *testing.T) {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			state := &vm.State{
+				GlobalVersion: version,
+
+				Stack: newStackWithIndex(300, 256),
+				Gas:   vm.GasWithLimit(10_000),
+			}
+
+			err := PICK().Interpret(state)
+			if version < 4 {
+				var vmErr vmerr.VMError
+				if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeRangeCheck {
+					t.Fatalf("PICK index 256 error = %v, want range check", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PICK index 256 failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestBLKSWXPreV4SkipsLargeMoveGas(t *testing.T) {
+	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			state := &vm.State{
+				GlobalVersion: version,
+
+				Stack: newStackWithCounts(300, 200, 60),
+				Gas:   vm.GasWithLimit(10_000),
+			}
+			if err := BLKSWX().Interpret(state); err != nil {
+				t.Fatalf("BLKSWX failed: %v", err)
+			}
+
+			wantGas := int64(0)
+			if version >= 4 {
+				wantGas = 5
+			}
+			if got := state.Gas.Used(); got != wantGas {
+				t.Fatalf("BLKSWX extra gas = %d, want %d", got, wantGas)
 			}
 		})
 	}

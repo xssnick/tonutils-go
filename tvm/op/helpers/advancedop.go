@@ -14,6 +14,24 @@ type AdvancedOP struct {
 	DeserializeSuffix func(code *cell.Slice) error
 	BaseGasPrice      int64
 	FixedSizeBits     int64
+	MinVersion        int
+}
+
+type ReusableAdvancedOP struct {
+	*AdvancedOP
+}
+
+func FullOpcodeVariant(op *AdvancedOP, prefix BitPrefix) vm.OP {
+	op.BitPrefix = prefix
+	op.Prefixes = nil
+	op.SerializeSuffix = nil
+	op.DeserializeSuffix = nil
+	op.FixedSizeBits = 0
+	return &ReusableAdvancedOP{AdvancedOP: op}
+}
+
+func (op *ReusableAdvancedOP) Reusable() bool {
+	return true
 }
 
 func (op *AdvancedOP) GetPrefixes() []*cell.Slice {
@@ -28,7 +46,7 @@ func (op *AdvancedOP) Deserialize(code *cell.Slice) error {
 }
 
 func (op *AdvancedOP) DeserializeMatched(code *cell.Slice) error {
-	if _, err := code.LoadSlice(op.BitPrefix.Bits); err != nil {
+	if err := code.SkipBits(op.BitPrefix.Bits); err != nil {
 		return err
 	}
 	if op.DeserializeSuffix != nil {
@@ -51,6 +69,10 @@ func (op *AdvancedOP) SerializeText() string {
 
 func (op *AdvancedOP) InstructionBits() int64 {
 	return int64(op.BitPrefix.Bits) + op.FixedSizeBits
+}
+
+func (op *AdvancedOP) MinGlobalVersion() int {
+	return op.MinVersion
 }
 
 func (op *AdvancedOP) Interpret(state *vm.State) error {

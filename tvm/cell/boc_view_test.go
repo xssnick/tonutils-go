@@ -3,6 +3,8 @@ package cell
 import (
 	"bytes"
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -74,6 +76,68 @@ func TestBOCViewCrossMatchesParser(t *testing.T) {
 
 			assertBOCViewMatchesParsed(t, view, roots, parsed)
 		})
+	}
+}
+
+func TestBOCViewReadersReadConcurrently(t *testing.T) {
+	const readers = 4
+
+	root := testBOCViewCellTree()
+	boc := root.ToBOCWithOptions(BOCSerializeOptions{WithIndex: true})
+	source := &parallelReaderAt{
+		data:   boc,
+		target: readers,
+		gate:   make(chan struct{}),
+	}
+	view, err := OpenBOCView(bytes.NewReader(boc), int64(len(boc)), BOCViewOptions{RequireIndex: true})
+	if err != nil {
+		t.Fatalf("open expected boc view: %v", err)
+	}
+	expected := make([]BOCCellView, readers)
+	for i := range expected {
+		expected[i], err = view.Cell(uint32(i))
+		if err != nil {
+			t.Fatalf("load expected cell %d: %v", i, err)
+		}
+		expected[i].Body = bytes.Clone(expected[i].Body)
+	}
+
+	view, err = OpenBOCView(source, int64(len(boc)), BOCViewOptions{RequireIndex: true})
+	if err != nil {
+		t.Fatalf("open concurrent boc view: %v", err)
+	}
+	source.parallel.Store(true)
+
+	actual := make([]BOCCellView, readers)
+	errs := make([]error, readers)
+	var wg sync.WaitGroup
+	for i := range readers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+
+			actual[i], errs[i] = view.NewReader().ReadCell(uint32(i))
+			actual[i].Body = bytes.Clone(actual[i].Body)
+		}(i)
+	}
+	wg.Wait()
+
+	for i := range readers {
+		if errs[i] != nil {
+			t.Fatalf("reader %d: %v", i, errs[i])
+		}
+		if actual[i].Index != expected[i].Index ||
+			actual[i].D1 != expected[i].D1 ||
+			actual[i].D2 != expected[i].D2 ||
+			actual[i].Bits != expected[i].Bits ||
+			actual[i].Refs != expected[i].Refs ||
+			actual[i].Meta != expected[i].Meta ||
+			!bytes.Equal(actual[i].Body, expected[i].Body) {
+			t.Fatalf("reader %d cell mismatch", i)
+		}
+	}
+	if got := source.maxActive.Load(); got < readers {
+		t.Fatalf("concurrent reads = %d, want at least %d", got, readers)
 	}
 }
 
@@ -240,4 +304,41 @@ func testBOCViewModeName(opts BOCSerializeOptions) string {
 		name += "_int"
 	}
 	return name
+}
+
+type parallelReaderAt struct {
+	data   []byte
+	target int32
+	gate   chan struct{}
+	once   sync.Once
+
+	parallel  atomic.Bool
+	active    atomic.Int32
+	maxActive atomic.Int32
+}
+
+func (r *parallelReaderAt) ReadAt(dst []byte, offset int64) (int, error) {
+	if r.parallel.Load() {
+		active := r.active.Add(1)
+		defer r.active.Add(-1)
+
+		for maxActive := r.maxActive.Load(); active > maxActive; maxActive = r.maxActive.Load() {
+			if r.maxActive.CompareAndSwap(maxActive, active) {
+				break
+			}
+		}
+		if active >= r.target {
+			r.once.Do(func() { close(r.gate) })
+		}
+		<-r.gate
+	}
+
+	if offset < 0 || offset >= int64(len(r.data)) {
+		return 0, io.EOF
+	}
+	n := copy(dst, r.data[offset:])
+	if n != len(dst) {
+		return n, io.EOF
+	}
+	return n, nil
 }

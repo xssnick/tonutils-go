@@ -258,6 +258,8 @@ func (t *TransactionIO) LoadFromCell(loader *cell.Slice) error {
 		}
 
 		t.In = &msg
+	} else {
+		t.In = nil
 	}
 
 	dict, err := loader.LoadDict(15)
@@ -267,6 +269,8 @@ func (t *TransactionIO) LoadFromCell(loader *cell.Slice) error {
 
 	if dict != nil {
 		t.Out = &MessagesList{List: dict}
+	} else {
+		t.Out = nil
 	}
 
 	return nil
@@ -311,46 +315,40 @@ func (t *Transaction) ToCell() (*cell.Cell, error) {
 		return nil, err
 	}
 
-	origStatusCell, err := t.OrigStatus.ToCell()
+	stateUpdateCell, err := t.StateUpdate.ToCell()
 	if err != nil {
 		return nil, err
 	}
 
-	endStatusCell, err := t.EndStatus.ToCell()
-	if err != nil {
-		return nil, err
-	}
-
-	totalFeesCell, err := ToCell(&t.TotalFees)
-	if err != nil {
-		return nil, err
-	}
-
-	stateUpdateCell, err := ToCell(&t.StateUpdate)
-	if err != nil {
-		return nil, err
-	}
-
-	descriptionCell, err := ToCell(t.Description)
-	if err != nil {
-		return nil, err
-	}
-
-	return cell.BeginCell().
+	builder := cell.BeginCell().
 		MustStoreUInt(0b0111, 4).
 		MustStoreSlice(t.AccountAddr, 256).
 		MustStoreUInt(t.LT, 64).
 		MustStoreSlice(normalizeTransactionBits256(t.PrevTxHash), 256).
 		MustStoreUInt(t.PrevTxLT, 64).
 		MustStoreUInt(uint64(t.Now), 32).
-		MustStoreUInt(uint64(t.OutMsgCount), 15).
-		MustStoreBuilder(origStatusCell.ToBuilder()).
-		MustStoreBuilder(endStatusCell.ToBuilder()).
-		MustStoreRef(ioCell).
-		MustStoreBuilder(totalFeesCell.ToBuilder()).
-		MustStoreRef(stateUpdateCell).
-		MustStoreRef(descriptionCell).
-		EndCell(), nil
+		MustStoreUInt(uint64(t.OutMsgCount), 15)
+
+	if err = storeAccountStatus(builder, t.OrigStatus); err != nil {
+		return nil, err
+	}
+	if err = storeAccountStatus(builder, t.EndStatus); err != nil {
+		return nil, err
+	}
+	if err = builder.StoreRef(ioCell); err != nil {
+		return nil, err
+	}
+	if err = storeCurrencyCollection(builder, t.TotalFees); err != nil {
+		return nil, err
+	}
+	if err = builder.StoreRef(stateUpdateCell); err != nil {
+		return nil, err
+	}
+	if err = storeTransactionDescription(builder, t.Description); err != nil {
+		return nil, err
+	}
+
+	return builder.EndCell(), nil
 }
 
 func normalizeTransactionBits256(src []byte) []byte {
@@ -519,15 +517,9 @@ func (c *ComputeSkipReason) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (c ComputeSkipReason) ToCell() (*cell.Cell, error) {
-	switch c.Type {
-	case ComputeSkipReasonNoState:
-		return cell.BeginCell().MustStoreUInt(0b00, 2).EndCell(), nil
-	case ComputeSkipReasonBadState:
-		return cell.BeginCell().MustStoreUInt(0b01, 2).EndCell(), nil
-	case ComputeSkipReasonNoGas:
-		return cell.BeginCell().MustStoreUInt(0b10, 2).EndCell(), nil
-	case ComputeSkipReasonSuspended:
-		return cell.BeginCell().MustStoreUInt(0b110, 3).EndCell(), nil
+	builder := cell.BeginCell()
+	if err := storeComputeSkipReason(builder, c); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("unknown compute skip reason %s", c.Type)
+	return builder.EndCell(), nil
 }

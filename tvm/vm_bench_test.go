@@ -74,6 +74,7 @@ func BenchmarkTVMRunGetMethodRealistic(b *testing.B) {
 			for i, arg := range tt.args {
 				args[i] = big.NewInt(arg)
 			}
+			execCfg := testExecutionConfig(b)
 
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -89,7 +90,7 @@ func BenchmarkTVMRunGetMethodRealistic(b *testing.B) {
 					b.Fatal(err)
 				}
 
-				res, err := machine.ExecuteDetailed(tt.code, tt.data, c7, vm.GasWithLimit(1_000_000_000), stack)
+				res, err := machine.Execute(tt.code, tt.data, c7, vm.GasWithLimit(1_000_000_000), stack, execCfg)
 				if err != nil {
 					b.Fatal(err)
 				}

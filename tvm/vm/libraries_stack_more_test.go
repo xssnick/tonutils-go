@@ -52,7 +52,7 @@ func TestLibrariesAndResolveXLoadCell(t *testing.T) {
 	lib := cell.BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(libChild).EndCell()
 	root := makeLibraryRoot(t, lib)
 
-	st := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+	st := NewExecutionState(MaxSupportedGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
 	st.InitForExecution()
 	st.SetLibraries(root)
 	if len(st.Libraries) != 1 || st.Libraries[0] != root {
@@ -112,7 +112,7 @@ func TestStackStringDoesNotConsumeCellTraceGas(t *testing.T) {
 	root := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 	lazy := makeLazyLibraryRoot(t, root)
 
-	st := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+	st := NewExecutionState(MaxSupportedGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
 	st.InitForExecution()
 	traced := lazy.WithTrace(st.Cells.Trace())
 
@@ -187,8 +187,9 @@ func TestCellManagerHelpers(t *testing.T) {
 	}
 
 	lowGas := &State{
-		Gas:   GasWithLimit(50),
-		Stack: NewStack(),
+		Gas:           GasWithLimit(50),
+		Stack:         NewStack(),
+		GlobalVersion: MaxSupportedGlobalVersion,
 	}
 	lowGas.InitForExecution()
 	_ = lowGas.Cells.Trace().NotifyCreate()
@@ -205,7 +206,7 @@ func TestCellManagerHelpers(t *testing.T) {
 }
 
 func TestCellManagerVirtualizationSemantics(t *testing.T) {
-	st := NewExecutionState(DefaultGlobalVersion, GasWithLimit(10_000), nil, tuple.Tuple{}, NewStack())
+	st := NewExecutionState(MaxSupportedGlobalVersion, GasWithLimit(10_000), nil, tuple.Tuple{}, NewStack())
 	st.InitForExecution()
 
 	pruned := mustPrunedCell(t)
@@ -418,7 +419,7 @@ func TestStackWrappersAndHelpers(t *testing.T) {
 
 func TestLoadLibraryByHashReturnsNilForMissingEntry(t *testing.T) {
 	lib := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
-	st := NewExecutionState(DefaultGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+	st := NewExecutionState(MaxSupportedGlobalVersion, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
 	got, err := st.LoadLibraryByHash(bytes.Repeat([]byte{0x11}, 32))
 	if err != nil || got != nil {
 		t.Fatalf("load missing library = (%v, %v), want (nil, nil)", got, err)
@@ -430,4 +431,76 @@ func TestLoadLibraryByHashReturnsNilForMissingEntry(t *testing.T) {
 	if err != nil || got != nil {
 		t.Fatalf("load other missing library = (%v, %v), want (nil, nil)", got, err)
 	}
+}
+
+func FuzzLoadLibraryByHashVersionedLookupGas(f *testing.F) {
+	for version := uint8(0); version <= uint8(MaxSupportedGlobalVersion); version++ {
+		f.Add(version, uint8(0), uint8(1), uint16(version))
+		f.Add(version, uint8(1), uint8(2), uint16(version)<<8|1)
+		f.Add(version, uint8(2), uint8(3), uint16(version)<<8|2)
+		f.Add(version, uint8(3), uint8(2), uint16(version)<<8|3)
+	}
+
+	f.Fuzz(func(t *testing.T, rawVersion, rawCase, rawLookups uint8, rawSeed uint16) {
+		version := int(rawVersion % uint8(MaxSupportedGlobalVersion+1))
+		lookups := int(rawLookups%3) + 1
+		lib := cell.BeginCell().
+			MustStoreUInt(uint64(rawSeed), 16).
+			MustStoreUInt(uint64(rawCase), 8).
+			EndCell()
+
+		var hash []byte
+		var roots []*cell.Cell
+		found := false
+		switch rawCase % 4 {
+		case 0:
+			hash = []byte{byte(rawSeed), byte(rawSeed >> 8)}
+		case 1:
+			hash = bytes.Repeat([]byte{byte(rawSeed)}, 32)
+			roots = []*cell.Cell{nil, makeLibraryRoot(t, lib)}
+		case 2:
+			hash = lib.Hash()
+			roots = []*cell.Cell{makeLibraryRoot(t, lib)}
+			found = true
+		default:
+			hash = lib.Hash()
+			roots = []*cell.Cell{nil, makeLibraryRoot(t, lib), nil}
+			found = true
+		}
+
+		st := NewExecutionState(version, GasWithLimit(100_000), nil, tuple.Tuple{}, NewStack())
+		st.InitForExecution()
+		st.SetLibraries(roots...)
+
+		var got *cell.Cell
+		var err error
+		for i := 0; i < lookups; i++ {
+			got, err = st.LoadLibraryByHash(hash)
+			if err != nil {
+				t.Fatalf("v%d case=%d lookup=%d load library: %v", version, rawCase%4, i, err)
+			}
+			if found && (got == nil || got.HashKey() != lib.HashKey()) {
+				t.Fatalf("v%d case=%d lookup=%d got library %v, want %x", version, rawCase%4, i, got, lib.Hash())
+			}
+			if !found && got != nil {
+				t.Fatalf("v%d case=%d lookup=%d got library %x, want nil", version, rawCase%4, i, got.Hash())
+			}
+		}
+
+		wantGas := expectedVersionedLibraryLookupGas(version, found, lookups)
+		if gotGas := st.Gas.Used(); gotGas != wantGas {
+			t.Fatalf("v%d case=%d found=%v lookups=%d gas = %d, want %d", version, rawCase%4, found, lookups, gotGas, wantGas)
+		}
+	})
+}
+
+func expectedVersionedLibraryLookupGas(version int, found bool, lookups int) int64 {
+	if !found || version >= 5 {
+		return 0
+	}
+
+	if version >= 4 {
+		return CellLoadGasPrice + int64(lookups-1)*CellReloadGasPrice
+	}
+	return 2*CellLoadGasPrice + int64(lookups-1)*2*CellReloadGasPrice
 }

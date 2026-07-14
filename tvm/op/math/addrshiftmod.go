@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -34,7 +32,7 @@ func ADDRSHIFTMOD() *helpers.SimpleOP {
 			}
 
 			dividend := x.Add(x, w)
-			q, _ := helpers.DivFloor(dividend, z.Lsh(big.NewInt(1), uint(z.Uint64())))
+			q, _ := helpers.DivFloor(dividend, z.Lsh(bigIntOne, uint(z.Uint64())))
 			r := w.Sub(dividend, z.Mul(q, z))
 
 			err = state.Stack.PushInt(q)
@@ -44,7 +42,8 @@ func ADDRSHIFTMOD() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "ADDRSHIFTMOD",
-		BitPrefix: helpers.BytesPrefix(0xA9, 0x20),
+		Name:       "ADDRSHIFTMOD",
+		BitPrefix:  helpers.BytesPrefix(0xA9, 0x20),
+		MinVersion: 4,
 	}
 }

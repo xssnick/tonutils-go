@@ -18,15 +18,15 @@ func MULMOD() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 3); err != nil {
 				return err
 			}
-			z, err := popInt(state)
+			z, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
-			y, err := popInt(state)
+			y, err := popIntRead(state)
 			if err != nil {
 				return err
 			}
-			x, err := popInt(state)
+			x, err := popIntRead(state)
 			if err != nil {
 				return err
 			}

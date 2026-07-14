@@ -2,6 +2,8 @@ package tlb
 
 import (
 	"encoding/binary"
+	"fmt"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -63,8 +65,133 @@ type McStateExtraBlockInfo struct {
 	Flags            uint16                  `tlb:"## 16"`
 	ValidatorInfo    ValidatorInfo           `tlb:"."`
 	PrevBlocks       *OldMcBlocksInfoAugDict `tlb:"."`
+	AfterKeyBlock    bool                    `tlb:"bool"`
 	LastKeyBlock     *ExtBlkRef              `tlb:"maybe ."`
-	BlockCreateStats *cell.Cell              `tlb:"."`
+	BlockCreateStats *cell.Cell              `tlb:"-"`
+}
+
+func (e *McStateExtraBlockInfo) LoadFromCell(loader *cell.Slice) error {
+	return e.loadFromCell(loader, false)
+}
+
+func (e *McStateExtraBlockInfo) LoadFromCellAsProof(loader *cell.Slice) error {
+	return e.loadFromCell(loader, true)
+}
+
+func (e *McStateExtraBlockInfo) loadFromCell(loader *cell.Slice, asProof bool) error {
+	flags, err := loader.LoadUInt(16)
+	if err != nil {
+		return err
+	}
+	e.Flags = uint16(flags)
+	if e.Flags&^1 != 0 {
+		return fmt.Errorf("unsupported masterchain state extra flags: %d", e.Flags)
+	}
+
+	if err = LoadFromCell(&e.ValidatorInfo, loader); err != nil {
+		return err
+	}
+
+	var prevBlocks OldMcBlocksInfoAugDict
+	if asProof {
+		err = prevBlocks.LoadFromCellAsProof(loader)
+	} else {
+		err = prevBlocks.LoadFromCell(loader)
+	}
+	if err != nil {
+		return err
+	}
+	e.PrevBlocks = &prevBlocks
+
+	e.AfterKeyBlock, err = loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+
+	hasLastKeyBlock, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+	if hasLastKeyBlock {
+		var lastKeyBlock ExtBlkRef
+		if err = LoadFromCell(&lastKeyBlock, loader); err != nil {
+			return err
+		}
+		e.LastKeyBlock = &lastKeyBlock
+	} else {
+		e.LastKeyBlock = nil
+	}
+
+	if e.Flags&1 == 0 {
+		e.BlockCreateStats = nil
+		return nil
+	}
+
+	e.BlockCreateStats, err = loader.ToCell()
+	return err
+}
+
+func (e McStateExtraBlockInfo) ToCell() (*cell.Cell, error) {
+	flags := e.Flags
+	if flags&^1 != 0 {
+		return nil, fmt.Errorf("unsupported masterchain state extra flags: %d", flags)
+	}
+	if e.BlockCreateStats == nil {
+		flags &^= 1
+	} else {
+		flags |= 1
+	}
+
+	b := cell.BeginCell()
+	if err := b.StoreUInt(uint64(flags), 16); err != nil {
+		return nil, err
+	}
+
+	validatorInfo, err := ToCell(e.ValidatorInfo)
+	if err != nil {
+		return nil, err
+	}
+	if err = b.StoreBuilder(validatorInfo.ToBuilder()); err != nil {
+		return nil, err
+	}
+
+	prevBlocks, err := ToCell(e.PrevBlocks)
+	if err != nil {
+		return nil, err
+	}
+	if err = b.StoreBuilder(prevBlocks.ToBuilder()); err != nil {
+		return nil, err
+	}
+
+	if err = b.StoreBoolBit(e.AfterKeyBlock); err != nil {
+		return nil, err
+	}
+
+	if e.LastKeyBlock == nil {
+		if err = b.StoreBoolBit(false); err != nil {
+			return nil, err
+		}
+	} else {
+		if err = b.StoreBoolBit(true); err != nil {
+			return nil, err
+		}
+
+		lastKeyBlock, err := ToCell(e.LastKeyBlock)
+		if err != nil {
+			return nil, err
+		}
+		if err = b.StoreBuilder(lastKeyBlock.ToBuilder()); err != nil {
+			return nil, err
+		}
+	}
+
+	if e.BlockCreateStats != nil {
+		if err = b.StoreBuilder(e.BlockCreateStats.ToBuilder()); err != nil {
+			return nil, err
+		}
+	}
+
+	return b.EndCell(), nil
 }
 
 type ConfigParams struct {

@@ -217,6 +217,11 @@ func (c *ConnectionPool) QueryADNL(ctx context.Context, request tl.Serializable,
 	select {
 	case resp := <-ch:
 		took := time.Since(tm)
+		if busy, ok := resp.Data.(ServerBusy); ok {
+			node.requestFinished()
+			return busy
+		}
+
 		node.requestSucceeded(took)
 
 		if inf, ok := ctx.Value(CtxLSInfoKey).(*LSInfo); ok && inf != nil {

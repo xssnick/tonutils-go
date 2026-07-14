@@ -59,14 +59,16 @@ func metadataForRef(ref *Cell) RefMetadata {
 }
 
 func collectMetadataHashesDepths(c *Cell, levelMask LevelMask) ([]Hash, []uint16) {
-	hashes := make([]Hash, 0, levelMask.getHashesCount())
-	depths := make([]uint16, 0, levelMask.getHashesCount())
+	hashes := make([]Hash, levelMask.getHashesCount())
+	depths := make([]uint16, len(hashes))
+	idx := 0
 	for level := 0; level <= levelMask.GetLevel(); level++ {
 		if !levelMask.IsSignificant(level) {
 			continue
 		}
-		hashes = append(hashes, c.HashKey(level))
-		depths = append(depths, c.Depth(level))
+		hashes[idx] = c.HashKey(level)
+		depths[idx] = c.Depth(level)
+		idx++
 	}
 	return hashes, depths
 }

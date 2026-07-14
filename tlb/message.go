@@ -231,20 +231,18 @@ func (m *Message) ToCell() (*cell.Cell, error) {
 
 	switch msg := m.Msg.(type) {
 	case *InternalMessage:
-		return ToCell(msg)
+		return msg.ToCell()
 	case *ExternalMessage:
-		return ToCell(msg)
+		return msg.ToCell()
 	case *ExternalMessageOut:
-		return ToCell(msg)
+		return msg.ToCell()
 	default:
 		return nil, fmt.Errorf("unsupported message type %T", m.Msg)
 	}
 }
 
 func (m *Message) LoadFromCell(loader *cell.Slice) error {
-	dup := loader.Copy()
-
-	isExternal, err := dup.LoadBoolBit()
+	isExternal, err := loader.LoadBoolBit()
 	if err != nil {
 		return fmt.Errorf("failed to load external flag: %w", err)
 	}
@@ -252,7 +250,7 @@ func (m *Message) LoadFromCell(loader *cell.Slice) error {
 	switch isExternal {
 	case false:
 		var intMsg InternalMessage
-		err = LoadFromCell(&intMsg, loader)
+		err = intMsg.loadFromCellAfterMagic(loader)
 		if err != nil {
 			return fmt.Errorf("failed to parse internal message: %w", err)
 		}
@@ -261,7 +259,7 @@ func (m *Message) LoadFromCell(loader *cell.Slice) error {
 		m.MsgType = MsgTypeInternal
 		return nil
 	case true:
-		isOut, err := dup.LoadBoolBit()
+		isOut, err := loader.LoadBoolBit()
 		if err != nil {
 			return fmt.Errorf("failed to load external in/out flag: %w", err)
 		}
@@ -269,7 +267,7 @@ func (m *Message) LoadFromCell(loader *cell.Slice) error {
 		switch isOut {
 		case true:
 			var extMsg ExternalMessageOut
-			err = LoadFromCell(&extMsg, loader)
+			err = extMsg.loadFromCellAfterMagic(loader)
 			if err != nil {
 				return fmt.Errorf("failed to parse external out message: %w", err)
 			}
@@ -279,7 +277,7 @@ func (m *Message) LoadFromCell(loader *cell.Slice) error {
 			return nil
 		case false:
 			var extMsg ExternalMessage
-			err = LoadFromCell(&extMsg, loader)
+			err = extMsg.loadFromCellAfterMagic(loader)
 			if err != nil {
 				return fmt.Errorf("failed to parse external in message: %w", err)
 			}

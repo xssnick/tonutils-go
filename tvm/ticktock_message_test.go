@@ -2,6 +2,7 @@ package tvm
 
 import (
 	"bytes"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	stackop "github.com/xssnick/tonutils-go/tvm/op/stack"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 var tickTockTestAddr = address.MustParseRawAddr("-1:0000000000000000000000000000000000000000000000000000000000000001")
@@ -55,24 +57,32 @@ func makeTickTockFailureCode(t *testing.T) *cell.Cell {
 	)
 }
 
-func makeTickTockStateOnlyCode(t *testing.T, tickData, tockData *cell.Cell) *cell.Cell {
+func makeTickTockSignatureCheckAlwaysVariantCode(t *testing.T, tt executionConfigSignatureCase, signature []byte) *cell.Cell {
 	t.Helper()
 
-	tockRef := codeFromBuilders(t,
+	builders := []*cell.Builder{
 		stackop.DROP().Serialize(),
 		stackop.DROP().Serialize(),
-		stackop.PUSHREF(tockData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
+		stackop.DROP().Serialize(),
+		stackop.DROP().Serialize(),
+	}
+	if tt.fromSlice {
+		builders = append(builders, stackop.PUSHSLICE(cell.BeginCell().MustStoreSlice([]byte{0x10, 0x20, 0x30, 0x40}, 32).ToSlice()).Serialize())
+	} else {
+		builders = append(builders, stackop.PUSHINT(big.NewInt(0)).Serialize())
+	}
 
-	return codeFromBuilders(t,
-		stackop.DROP().Serialize(),
-		execop.IFJMPREF(tockRef).Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.DROP().Serialize(),
-		stackop.PUSHREF(tickData).Serialize(),
-		execop.POPCTR(4).Serialize(),
-	)
+	builders = append(builders, stackop.PUSHSLICE(cell.BeginCell().MustStoreSlice(signature, 512).ToSlice()).Serialize())
+	if tt.p256 {
+		key := make([]byte, 33)
+		key[0] = 0x05
+		builders = append(builders, stackop.PUSHSLICE(cell.BeginCell().MustStoreSlice(key, 264).ToSlice()).Serialize())
+	} else {
+		builders = append(builders, stackop.PUSHINT(big.NewInt(2)).Serialize())
+	}
+
+	builders = append(builders, signatureCheckAlwaysVariantOpcode(t, tt))
+	return codeFromBuilders(t, builders...)
 }
 
 func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*TransactionExecutionResult, *cell.Cell, *cell.Cell, error) {
@@ -94,17 +104,17 @@ func emulateTickTockForTest(t *testing.T, code, data *cell.Cell, isTock bool) (*
 		return nil, nil, nil, err
 	}
 
-	cfg := TransactionEmulationConfig{
+	cfg := testTxParams{
 		Now:      uint32(tonopsTestTime.Unix()),
-		Balance:  new(big.Int).SetUint64(tickTockTestBalance),
 		RandSeed: append([]byte(nil), tonopsTestSeed...),
+		Config:   transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultTickTockTransactionGasMax,
 			Limit: DefaultTickTockTransactionGasMax,
 		}),
 	}
 
-	res, err := NewTVM().EmulateTickTockTransaction(shard, isTock, cfg)
+	res, err := testEmulateTickTockTransaction(NewTVM(), shard, isTock, cfg)
 	return res, tickMsg, tockMsg, err
 }
 
@@ -143,6 +153,90 @@ func buildTickTockShardAccountForTest(t *testing.T, addr *address.Address, code,
 		LastTransHash: make([]byte, 32),
 		LastTransLT:   0,
 	}, nil
+}
+
+func TestEmulateTickTockTransactionSignatureCheckAlwaysSucceedPerRun(t *testing.T) {
+	data := cell.BeginCell().EndCell()
+	signature := make([]byte, 64)
+	signature[0] = 0xC3
+	signature[63] = 0x3C
+
+	for _, tt := range executionConfigSignatureCases {
+		t.Run(tt.name, func(t *testing.T) {
+			code := makeTickTockSignatureCheckAlwaysVariantCode(t, tt, signature)
+
+			for _, isTock := range []bool{false, true} {
+				name := "tick"
+				if isTock {
+					name = "tock"
+				}
+
+				t.Run(name, func(t *testing.T) {
+					for version := uint32(0); version <= uint32(vmcore.MaxSupportedGlobalVersion); version++ {
+						t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+							shard, err := buildTickTockShardAccountForTest(t, tickTockTestAddr, code, data, tickTockTestBalance)
+							if err != nil {
+								t.Fatalf("failed to build tick/tock shard: %v", err)
+							}
+							cfg := testTxParams{
+								Now:      uint32(tonopsTestTime.Unix()),
+								RandSeed: append([]byte(nil), tonopsTestSeed...),
+								Config:   transactionTestConfigWithGlobalVersion(t, version),
+								Gas: vmcore.NewGas(vmcore.GasConfig{
+									Max:   DefaultTickTockTransactionGasMax,
+									Limit: DefaultTickTockTransactionGasMax,
+								}),
+							}
+
+							if tt.minVersion > 0 && version < uint32(tt.minVersion) {
+								for _, run := range []struct {
+									name   string
+									always bool
+								}{
+									{name: "default", always: false},
+									{name: "configured", always: true},
+									{name: "next_default", always: false},
+								} {
+									res := runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, run.always)
+									if res.exit != vmerr.CodeInvalidOpcode {
+										t.Fatalf("%s %s v%d %s exit=%d, want invalid opcode", tt.name, name, version, run.name, res.exit)
+									}
+								}
+								return
+							}
+
+							assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, false), false)
+							assertMessageSignatureCheckAlwaysVariant(t, tt, version, true, runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, true), true)
+							assertMessageSignatureCheckAlwaysVariant(t, tt, version, false, runTickTockSignatureCheckAlwaysVariant(t, NewTVM(), shard, isTock, cfg, tt, false), false)
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func runTickTockSignatureCheckAlwaysVariant(t *testing.T, machine *TVM, shard *tlb.ShardAccount, isTock bool, cfg testTxParams, tt executionConfigSignatureCase, always bool) messageSignatureCheckAlwaysVariantResult {
+	t.Helper()
+
+	cfg.SignatureCheckAlwaysSucceed = always
+	res, err := testEmulateTickTockTransaction(machine, shard, isTock, cfg)
+	var execRes *ExecutionResult
+	if res != nil {
+		execRes = &res.ExecutionResult
+	}
+	exit := exitCodeFromResult(execRes, err)
+	if exit == -1 {
+		t.Fatalf("EmulateTickTockTransaction %s always=%v failed: %v", tt.name, always, err)
+	}
+	if !vmcore.IsSuccessExitCode(exit) {
+		return messageSignatureCheckAlwaysVariantResult{exit: exit}
+	}
+	got, err := res.Stack.PopBool()
+	if err != nil {
+		t.Fatalf("pop tick/tock %s result always=%v: %v", tt.name, always, err)
+	}
+	return messageSignatureCheckAlwaysVariantResult{exit: exit, ok: got}
 }
 
 func TestEmulateTickTockTransaction(t *testing.T) {
@@ -246,7 +340,7 @@ func TestEmulateTickTockTransaction(t *testing.T) {
 	})
 
 	t.Run("RequiresShardAccount", func(t *testing.T) {
-		_, err := NewTVM().EmulateTickTockTransaction(nil, false, TransactionEmulationConfig{})
+		_, err := testEmulateTickTockTransaction(NewTVM(), nil, false, testTxParams{})
 		if err == nil {
 			t.Fatal("expected missing shard account to fail")
 		}

@@ -50,12 +50,14 @@ func init() {
 }
 
 type storageStat struct {
-	limit uint64
-	cells uint64
-	bits  uint64
-	refs  uint64
-	seen  map[cell.Hash]struct{}
-	state *vm.State
+	limit           uint64
+	cells           uint64
+	bits            uint64
+	refs            uint64
+	seen            map[cell.Hash]struct{}
+	state           *vm.State
+	deferLoadGasErr bool
+	loadGasErr      error
 }
 
 func newStorageStat(limit uint64, state *vm.State) *storageStat {
@@ -66,20 +68,29 @@ func newStorageStat(limit uint64, state *vm.State) *storageStat {
 	}
 }
 
-func (s *storageStat) addCell(cl *cell.Cell) bool {
+func (s *storageStat) addCell(cl *cell.Cell) (bool, error) {
 	if cl == nil {
-		return true
+		return true, nil
 	}
 	key := cl.HashKey()
 	if _, ok := s.seen[key]; ok {
-		return true
+		return true, nil
 	}
 	if s.cells >= s.limit {
-		return false
+		return false, nil
 	}
 	if s.state != nil {
 		if err := s.state.Cells.RegisterCellLoadKey(key); err != nil {
-			return false
+			if !s.deferLoadGasErr {
+				return false, err
+			}
+			code, ok := vmerr.ErrorCode(err)
+			if !ok || code != vmerr.CodeOutOfGas {
+				return false, err
+			}
+			if s.loadGasErr == nil {
+				s.loadGasErr = err
+			}
 		}
 	}
 	s.seen[key] = struct{}{}
@@ -90,13 +101,13 @@ func (s *storageStat) addCell(cl *cell.Cell) bool {
 		var err error
 		sl, err = s.state.Cells.BeginParseAlreadyLoadedNoCreate(cl)
 		if err != nil {
-			return false
+			return false, err
 		}
 	} else {
 		var err error
 		sl, err = cl.BeginParse()
 		if err != nil {
-			return false
+			return false, err
 		}
 	}
 	s.bits += uint64(sl.BitsLeft())
@@ -104,41 +115,64 @@ func (s *storageStat) addCell(cl *cell.Cell) bool {
 	for i := 0; i < sl.RefsNum(); i++ {
 		ref, err := sl.PeekRefCellAt(i)
 		if err != nil {
-			return false
+			return false, err
 		}
-		if !s.addCell(ref) {
-			return false
+		ok, err := s.addCell(ref)
+		if err != nil || !ok {
+			return ok, err
 		}
 	}
-	return true
+	return true, nil
 }
 
-func (s *storageStat) addSlice(sl *cell.Slice) bool {
+func (s *storageStat) addSlice(sl *cell.Slice) (bool, error) {
 	if sl == nil {
-		return true
+		return true, nil
 	}
 	s.bits += uint64(sl.BitsLeft())
 	s.refs += uint64(sl.RefsNum())
 	for i := 0; i < sl.RefsNum(); i++ {
 		ref, err := sl.PeekRefCellAt(i)
 		if err != nil {
-			return false
+			return false, err
 		}
-		if !s.addCell(ref) {
-			return false
+		ok, err := s.addCell(ref)
+		if err != nil || !ok {
+			return ok, err
 		}
 	}
-	return true
+	return true, nil
 }
 
 func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			bound, err := state.Stack.PopIntFinite()
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
+			bound, err := state.Stack.PopInt()
 			if err != nil {
 				return err
 			}
-			if bound.Sign() < 0 {
+
+			var cellArg *cell.Cell
+			var sliceArg *cell.Slice
+			if mode&2 != 0 {
+				sl, popErr := state.Stack.PopSlice()
+				if popErr != nil {
+					return popErr
+				}
+				sliceArg = sl
+			} else {
+				cl, popErr := state.Stack.PopMaybeCell()
+				if popErr != nil {
+					return popErr
+				}
+				cellArg = cl
+			}
+
+			if bound == nil || bound.Sign() < 0 {
 				return vmerr.Error(vmerr.CodeRangeCheck, "finite non-negative integer expected")
 			}
 			limit := uint64((1 << 63) - 1)
@@ -147,21 +181,23 @@ func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.Simple
 			}
 
 			stat := newStorageStat(limit, state)
-			ok := true
+			stat.deferLoadGasErr = state.GlobalVersion <= 3
+			var ok bool
 			if mode&2 != 0 {
-				sl, popErr := state.Stack.PopSlice()
-				if popErr != nil {
-					return popErr
-				}
-				ok = stat.addSlice(sl)
+				ok, err = stat.addSlice(sliceArg)
 			} else {
-				cl, popErr := state.Stack.PopMaybeCell()
-				if popErr != nil {
-					return popErr
-				}
-				ok = stat.addCell(cl)
+				ok, err = stat.addCell(cellArg)
+			}
+			if err != nil {
+				return err
 			}
 
+			if !ok && mode&1 == 0 {
+				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
+			}
+			if stat.loadGasErr != nil {
+				return stat.loadGasErr
+			}
 			if ok {
 				if err = pushSmallInt(state, int64(stat.cells)); err != nil {
 					return err
@@ -172,8 +208,6 @@ func dataSizeOp(name string, prefix helpers.BitPrefix, mode int) *helpers.Simple
 				if err = pushSmallInt(state, int64(stat.refs)); err != nil {
 					return err
 				}
-			} else if mode&1 == 0 {
-				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
 			}
 			if mode&1 != 0 {
 				return state.Stack.PushBool(ok)
@@ -221,7 +255,7 @@ func loadVarIntegerFromSlice(src *cell.Slice, lenBits uint, signed bool) (*big.I
 
 func storeVarInteger(dst *cell.Builder, x *big.Int, lenBits uint, signed, quiet bool) (bool, error) {
 	if x == nil {
-		return false, vmerr.Error(vmerr.CodeTypeCheck)
+		return false, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	maxLen := 1 << lenBits
 	var ln int
@@ -230,22 +264,14 @@ func storeVarInteger(dst *cell.Builder, x *big.Int, lenBits uint, signed, quiet 
 			return false, vmerr.Error(vmerr.CodeRangeCheck)
 		}
 		ln = (x.BitLen() + 7) >> 3
-	} else {
-		ln = 0
-		for ; ln < maxLen; ln++ {
-			if ln == 0 {
-				if x.Sign() == 0 {
-					break
-				}
-				continue
-			}
-			bits := uint(ln * 8)
-			min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), bits-1))
-			max := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bits-1), big.NewInt(1))
-			if x.Cmp(min) >= 0 && x.Cmp(max) <= 0 {
-				break
-			}
+	} else if x.Sign() != 0 {
+		bitLen := x.BitLen() + 1
+		if x.Sign() < 0 {
+			absMinusOne := new(big.Int).Neg(x)
+			absMinusOne.Sub(absMinusOne, funcsBigIntOne)
+			bitLen = absMinusOne.BitLen() + 1
 		}
+		ln = (bitLen + 7) >> 3
 	}
 	if ln >= maxLen {
 		return false, vmerr.Error(vmerr.CodeRangeCheck)
@@ -280,7 +306,7 @@ func loadVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed bo
 			}
 			val, rest, ok := loadVarIntegerFromSlice(src, lenBits, signed)
 			if !ok {
-				return vmerr.Error(vmerr.CodeCellUnderflow)
+				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot deserialize a variable-length integer")
 			}
 			if err = state.Stack.PushInt(val); err != nil {
 				return err
@@ -295,7 +321,11 @@ func loadVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed bo
 func storeVarIntOp(name string, prefix helpers.BitPrefix, lenBits uint, signed bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			x, err := state.Stack.PopInt()
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
@@ -351,7 +381,7 @@ func loadSliceBits(sl *cell.Slice, bits uint) (*cell.Slice, error) {
 	return cell.BeginCell().MustStoreSlice(data, bits).ToSlice(), nil
 }
 
-func parseMaybeAnycast(sl *cell.Slice) (*cell.Slice, bool) {
+func parseMaybeAnycast(sl *cell.Slice, globalVersion int) (*cell.Slice, bool) {
 	has, err := sl.LoadBoolBit()
 	if err != nil {
 		return nil, false
@@ -359,10 +389,21 @@ func parseMaybeAnycast(sl *cell.Slice) (*cell.Slice, bool) {
 	if !has {
 		return nil, true
 	}
-	return nil, false
+	if globalVersion >= 10 {
+		return nil, false
+	}
+	depth, err := sl.LoadUInt(5)
+	if err != nil || depth < 1 || depth > 30 {
+		return nil, false
+	}
+	pfx, err := loadSliceBits(sl, uint(depth))
+	if err != nil {
+		return nil, false
+	}
+	return pfx, true
 }
 
-func parseMessageAddress(src *cell.Slice) (*parsedMsgAddress, *cell.Slice, bool) {
+func parseMessageAddress(src *cell.Slice, globalVersion int) (*parsedMsgAddress, *cell.Slice, bool) {
 	work := src.Copy()
 	typ, err := work.LoadUInt(2)
 	if err != nil {
@@ -382,7 +423,7 @@ func parseMessageAddress(src *cell.Slice) (*parsedMsgAddress, *cell.Slice, bool)
 		}
 		return &parsedMsgAddress{Kind: 1, Addr: addrBits}, work, true
 	case 2:
-		pfx, ok := parseMaybeAnycast(work)
+		pfx, ok := parseMaybeAnycast(work, globalVersion)
 		if !ok {
 			return nil, src, false
 		}
@@ -396,7 +437,26 @@ func parseMessageAddress(src *cell.Slice) (*parsedMsgAddress, *cell.Slice, bool)
 		}
 		return &parsedMsgAddress{Kind: 2, Anycast: pfx, Workchain: int32(wc), Addr: addrBits}, work, true
 	case 3:
-		return nil, src, false
+		if globalVersion >= 10 {
+			return nil, src, false
+		}
+		pfx, ok := parseMaybeAnycast(work, globalVersion)
+		if !ok {
+			return nil, src, false
+		}
+		ln, err := work.LoadUInt(9)
+		if err != nil {
+			return nil, src, false
+		}
+		wc, err := work.LoadInt(32)
+		if err != nil {
+			return nil, src, false
+		}
+		addrBits, err := loadSliceBits(work, uint(ln))
+		if err != nil {
+			return nil, src, false
+		}
+		return &parsedMsgAddress{Kind: 3, Anycast: pfx, Workchain: int32(wc), Addr: addrBits}, work, true
 	default:
 		return nil, src, false
 	}
@@ -495,7 +555,7 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 					return nil
 				}
 			}
-			addr, rest, ok := parseMessageAddress(src)
+			addr, rest, ok := parseMessageAddress(src, state.GlobalVersion)
 			if ok && stdOnly && addr.Kind != 2 {
 				ok = false
 			}
@@ -506,7 +566,11 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 					}
 					return state.Stack.PushBool(false)
 				}
-				return vmerr.Error(vmerr.CodeCellUnderflow)
+				msg := "cannot load a MsgAddress"
+				if stdOnly {
+					msg = "cannot load a MsgAddressInt"
+				}
+				return vmerr.Error(vmerr.CodeCellUnderflow, msg)
 			}
 			addrSlice, err := consumedPrefixSlice(src, rest)
 			if err != nil {
@@ -528,6 +592,11 @@ func loadMessageAddrOp(name string, prefix helpers.BitPrefix, stdOnly, quiet, op
 	}
 }
 
+func stdAddrV12(op *helpers.SimpleOP) *helpers.SimpleOP {
+	op.MinVersion = 12
+	return op
+}
+
 func LDMSGADDR() *helpers.SimpleOP {
 	return loadMessageAddrOp("LDMSGADDR", helpers.BytesPrefix(0xFA, 0x40), false, false, false)
 }
@@ -535,16 +604,16 @@ func LDMSGADDRQ() *helpers.SimpleOP {
 	return loadMessageAddrOp("LDMSGADDRQ", helpers.BytesPrefix(0xFA, 0x41), false, true, false)
 }
 func LDSTDADDR() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDSTDADDR", helpers.BytesPrefix(0xFA, 0x48), true, false, false)
+	return stdAddrV12(loadMessageAddrOp("LDSTDADDR", helpers.BytesPrefix(0xFA, 0x48), true, false, false))
 }
 func LDSTDADDRQ() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDSTDADDRQ", helpers.BytesPrefix(0xFA, 0x49), true, true, false)
+	return stdAddrV12(loadMessageAddrOp("LDSTDADDRQ", helpers.BytesPrefix(0xFA, 0x49), true, true, false))
 }
 func LDOPTSTDADDR() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x50), true, false, true)
+	return stdAddrV12(loadMessageAddrOp("LDOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x50), true, false, true))
 }
 func LDOPTSTDADDRQ() *helpers.SimpleOP {
-	return loadMessageAddrOp("LDOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x51), true, true, true)
+	return stdAddrV12(loadMessageAddrOp("LDOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x51), true, true, true))
 }
 
 func parseMsgAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
@@ -554,7 +623,7 @@ func parseMsgAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 			if err != nil {
 				return err
 			}
-			addr, rest, ok := parseMessageAddress(src)
+			addr, rest, ok := parseMessageAddress(src, state.GlobalVersion)
 			if !ok || rest.BitsLeft() != 0 || rest.RefsNum() != 0 {
 				if quiet {
 					return state.Stack.PushBool(false)
@@ -588,8 +657,14 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 			if err != nil {
 				return err
 			}
-			addr, rest, ok := parseMessageAddress(src)
-			if !ok || rest.BitsLeft() != 0 || rest.RefsNum() != 0 || (addr.Kind != 2 && addr.Kind != 3) {
+			addr, rest, ok := parseMessageAddress(src, state.GlobalVersion)
+			if !ok || rest.BitsLeft() != 0 || rest.RefsNum() != 0 {
+				if quiet {
+					return state.Stack.PushBool(false)
+				}
+				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse a MsgAddress")
+			}
+			if addr.Kind != 2 && addr.Kind != 3 {
 				if quiet {
 					return state.Stack.PushBool(false)
 				}
@@ -602,6 +677,11 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 				}
 				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot rewrite address in a MsgAddressInt")
 			}
+			if allowVar && addr.Anycast != nil && addr.Anycast.BitsLeft() > 0 && addr.Anycast.BitsLeft() < addr.Addr.BitsLeft() {
+				if err = state.ConsumeGas(vm.CellCreateGasPrice + vm.CellLoadGasPrice); err != nil {
+					return err
+				}
+			}
 			if !allowVar {
 				if rewritten.BitsLeft() != 256 {
 					if quiet {
@@ -613,14 +693,14 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 				if err != nil {
 					return err
 				}
-				if err = state.Stack.PushInt(big.NewInt(int64(addr.Workchain))); err != nil {
+				if err = state.Stack.PushSmallInt(int64(addr.Workchain)); err != nil {
 					return err
 				}
-				if err = state.Stack.PushInt(new(big.Int).SetBytes(data)); err != nil {
+				if err = state.Stack.PushOwnedInt(new(big.Int).SetBytes(data)); err != nil {
 					return err
 				}
 			} else {
-				if err = state.Stack.PushInt(big.NewInt(int64(addr.Workchain))); err != nil {
+				if err = state.Stack.PushSmallInt(int64(addr.Workchain)); err != nil {
 					return err
 				}
 				if err = state.Stack.PushOwnedSlice(rewritten); err != nil {
@@ -650,14 +730,18 @@ func REWRITEVARADDRQ() *helpers.SimpleOP {
 	return rewriteMsgAddrOp("REWRITEVARADDRQ", helpers.BytesPrefix(0xFA, 0x47), true, true)
 }
 
-func isValidStdMsgAddr(sl *cell.Slice) bool {
-	addr, rest, ok := parseMessageAddress(sl)
+func isValidStdMsgAddr(sl *cell.Slice, globalVersion int) bool {
+	addr, rest, ok := parseMessageAddress(sl, globalVersion)
 	return ok && addr.Kind == 2 && rest.BitsLeft() == 0 && rest.RefsNum() == 0 && addr.Addr.BitsLeft() == 256
 }
 
 func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			builder, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -666,7 +750,7 @@ func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 			if err != nil {
 				return err
 			}
-			isStd := isValidStdMsgAddr(addrSlice)
+			isStd := isValidStdMsgAddr(addrSlice, state.GlobalVersion)
 			if !builder.CanExtendBy(uint(addrSlice.BitsLeft()), uint(addrSlice.RefsNum())) || !isStd {
 				if !quiet {
 					if !isStd {
@@ -703,15 +787,19 @@ func storeStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.
 }
 
 func STSTDADDR() *helpers.SimpleOP {
-	return storeStdAddrOp("STSTDADDR", helpers.BytesPrefix(0xFA, 0x52), false)
+	return stdAddrV12(storeStdAddrOp("STSTDADDR", helpers.BytesPrefix(0xFA, 0x52), false))
 }
 func STSTDADDRQ() *helpers.SimpleOP {
-	return storeStdAddrOp("STSTDADDRQ", helpers.BytesPrefix(0xFA, 0x53), true)
+	return stdAddrV12(storeStdAddrOp("STSTDADDRQ", helpers.BytesPrefix(0xFA, 0x53), true))
 }
 
 func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			builder, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
@@ -745,12 +833,18 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 				return state.Stack.PushOwnedBuilder(builder)
 			}
 			addrSlice, ok := raw.(*cell.Slice)
-			if !ok {
+			if !ok || addrSlice == nil {
 				if !quiet {
 					return vmerr.Error(vmerr.CodeTypeCheck, "not a cell slice")
 				}
-				// Reference TVM restores a null slice here, not the original raw stack entry.
-				if err = state.Stack.PushAny(nil); err != nil {
+
+				if state.GlobalVersion >= 14 {
+					err = state.Stack.PushOwnedValue(raw)
+				} else {
+					// Legacy TVM stored a slice-typed null reference rather than the original value.
+					err = state.Stack.PushOwnedValue((*cell.Slice)(nil))
+				}
+				if err != nil {
 					return err
 				}
 				if err = state.Stack.PushOwnedBuilder(builder); err != nil {
@@ -758,7 +852,7 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 				}
 				return state.Stack.PushBool(true)
 			}
-			isStd := isValidStdMsgAddr(addrSlice)
+			isStd := isValidStdMsgAddr(addrSlice, state.GlobalVersion)
 			if !builder.CanExtendBy(uint(addrSlice.BitsLeft()), uint(addrSlice.RefsNum())) || !isStd {
 				if !quiet {
 					if !isStd {
@@ -795,10 +889,10 @@ func storeOptStdAddrOp(name string, prefix helpers.BitPrefix, quiet bool) *helpe
 }
 
 func STOPTSTDADDR() *helpers.SimpleOP {
-	return storeOptStdAddrOp("STOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x54), false)
+	return stdAddrV12(storeOptStdAddrOp("STOPTSTDADDR", helpers.BytesPrefix(0xFA, 0x54), false))
 }
 func STOPTSTDADDRQ() *helpers.SimpleOP {
-	return storeOptStdAddrOp("STOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x55), true)
+	return stdAddrV12(storeOptStdAddrOp("STOPTSTDADDRQ", helpers.BytesPrefix(0xFA, 0x55), true))
 }
 
 func installAction(state *vm.State, build func(*cell.Builder) error) error {
@@ -823,7 +917,15 @@ func installAction(state *vm.State, build func(*cell.Builder) error) error {
 func RAWRESERVE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			f, err := state.Stack.PopIntRange(0, 31)
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
+			maxMode := int64(31)
+			if state.GlobalVersion < 4 {
+				maxMode = 15
+			}
+			f, err := state.Stack.PopIntRangeInt64(0, maxMode)
 			if err != nil {
 				return err
 			}
@@ -838,7 +940,7 @@ func RAWRESERVE() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x36e6b809, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(f.Uint64(), 8); err != nil {
+				if err = b.StoreUInt(uint64(f), 8); err != nil {
 					return err
 				}
 				if err = b.StoreBigCoins(x); err != nil {
@@ -855,7 +957,15 @@ func RAWRESERVE() *helpers.SimpleOP {
 func RAWRESERVEX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			f, err := state.Stack.PopIntRange(0, 31)
+			if state.Stack.Len() < 3 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
+			maxMode := int64(31)
+			if state.GlobalVersion < 4 {
+				maxMode = 15
+			}
+			f, err := state.Stack.PopIntRangeInt64(0, maxMode)
 			if err != nil {
 				return err
 			}
@@ -874,7 +984,7 @@ func RAWRESERVEX() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x36e6b809, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(f.Uint64(), 8); err != nil {
+				if err = b.StoreUInt(uint64(f), 8); err != nil {
 					return err
 				}
 				if err = b.StoreBigCoins(x); err != nil {
@@ -907,13 +1017,17 @@ func SETCODE() *helpers.SimpleOP {
 	}
 }
 
-func popLibMode(state *vm.State) (*big.Int, error) {
-	mode, err := state.Stack.PopIntRange(0, 31)
-	if err != nil {
-		return nil, err
+func popLibMode(state *vm.State) (int64, error) {
+	maxMode := int64(31)
+	if state.GlobalVersion < 4 {
+		maxMode = 2
 	}
-	if (mode.Int64() &^ 16) > 2 {
-		return nil, vmerr.Error(vmerr.CodeRangeCheck)
+	mode, err := state.Stack.PopIntRangeInt64(0, maxMode)
+	if err != nil {
+		return 0, err
+	}
+	if state.GlobalVersion >= 4 && (mode&^16) > 2 {
+		return 0, vmerr.Error(vmerr.CodeRangeCheck)
 	}
 	return mode, nil
 }
@@ -921,6 +1035,10 @@ func popLibMode(state *vm.State) (*big.Int, error) {
 func SETLIBCODE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			mode, err := popLibMode(state)
 			if err != nil {
 				return err
@@ -933,7 +1051,7 @@ func SETLIBCODE() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x26FA1DD4, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(uint64(mode.Int64()*2+1), 8); err != nil {
+				if err = b.StoreUInt(uint64(mode*2+1), 8); err != nil {
 					return err
 				}
 				return b.StoreRefUncheckedDepth(code)
@@ -947,6 +1065,10 @@ func SETLIBCODE() *helpers.SimpleOP {
 func CHANGELIB() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
 			mode, err := popLibMode(state)
 			if err != nil {
 				return err
@@ -962,7 +1084,7 @@ func CHANGELIB() *helpers.SimpleOP {
 				if err = b.StoreUInt(0x26FA1DD4, 32); err != nil {
 					return err
 				}
-				if err = b.StoreUInt(uint64(mode.Int64()*2), 8); err != nil {
+				if err = b.StoreUInt(uint64(mode*2), 8); err != nil {
 					return err
 				}
 				return b.StoreBigUInt(hash, 256)
@@ -986,13 +1108,24 @@ func getMyAddr(state *vm.State) (*address.Address, error) {
 		return nil, err
 	}
 	sl, ok := v.(*cell.Slice)
-	if !ok {
+	if !ok || sl == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "invalid param MYADDR")
 	}
-	return addressFromSlice(sl)
+	addr, err := addressFromSlice(sl)
+	if err != nil {
+		return nil, err
+	}
+	if addr.Type() != address.StdAddress && addr.Type() != address.VarAddress {
+		return nil, vmerr.Error(vmerr.CodeRangeCheck, "not an internal MsgAddress")
+	}
+	return addr, nil
 }
 
 func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
+	if state.GlobalVersion < 6 {
+		return 1 << 13, nil
+	}
+
 	sl, err := unpackedConfigSlice(state, 6)
 	if err != nil {
 		return 0, err
@@ -1030,30 +1163,53 @@ func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
 	}
 }
 
-func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) bool {
+func getSendMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
+	if state.GlobalVersion >= 6 {
+		return getTonMsgPrices(state, isMasterchain)
+	}
+
+	param := tlb.ConfigParamMsgForwardPricesBasechain
+	if isMasterchain {
+		param = tlb.ConfigParamMsgForwardPricesMasterchain
+	}
+	pricesCell, err := loadConfigValue(state, new(big.Int).SetUint64(uint64(param)))
+	if err != nil {
+		return nil, err
+	}
+	if pricesCell == nil {
+		return nil, vmerr.Error(vmerr.CodeUnknown, "invalid prices config")
+	}
+	pricesSlice, err := pricesCell.BeginParse()
+	if err != nil {
+		return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
+	}
+	return parseTonMsgPrices(pricesSlice)
+}
+
+func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) (bool, error) {
 	var root *cell.Slice
 	if stat.state != nil {
 		if err := stat.state.Cells.RegisterCellLoad(msgCell); err != nil {
-			return false
+			return false, err
 		}
 		var err error
 		root, err = stat.state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
 		if err != nil {
-			return false
+			return false, err
 		}
 	} else {
 		var err error
 		root, err = msgCell.BeginParse()
 		if err != nil {
-			return false
+			return false, err
 		}
 	}
 	if err := root.SkipBits(root.BitsLeft()); err != nil {
-		return false
+		return false, err
 	}
 	if skipFirstRefs > 0 {
 		if err := root.SkipBitsAndRefs(0, skipFirstRefs); err != nil {
-			return false
+			return false, err
 		}
 	}
 	return stat.addSlice(root)
@@ -1187,7 +1343,14 @@ func loadSendMsgInitBodyLayout(root *cell.Slice, layout sendMsgLayout) (sendMsgL
 	return layout, nil
 }
 
-func sendMsgStoredCoinsBits(value *big.Int) uint {
+const sendMsgInvalidStoredCoinsBits uint = 0x80000004
+
+func sendMsgStoredCoinsBits(value *big.Int, nan bool) uint {
+	if nan || value != nil && value.Sign() < 0 {
+		// BigInt256::bit_size(false) returns INT_MAX for an invalid or negative
+		// integer. SENDMSG then performs this unsigned byte rounding.
+		return sendMsgInvalidStoredCoinsBits
+	}
 	if value == nil {
 		return 4
 	}
@@ -1196,7 +1359,7 @@ func sendMsgStoredCoinsBits(value *big.Int) uint {
 
 func sendMsgBigOrZero(value *big.Int) *big.Int {
 	if value == nil {
-		return big.NewInt(0)
+		return new(big.Int)
 	}
 	return new(big.Int).Set(value)
 }
@@ -1209,44 +1372,55 @@ func sendMsgAddressBits(addr *address.Address) (uint, error) {
 	return builder.BitsUsed(), nil
 }
 
-func sendMsgTupleAmount(state *vm.State, idx int, name string) (*big.Int, bool, error) {
+func sendMsgTupleAmount(state *vm.State, idx int, name string) (*big.Int, bool, bool, error) {
 	v, err := state.GetParam(idx)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	balance, ok := v.(tuple.Tuple)
 	if !ok {
-		return nil, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
+		return nil, false, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
 	}
 	amountAny, err := balance.Index(0)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	amount, ok := amountAny.(*big.Int)
-	if !ok {
-		return nil, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
+	var amount *big.Int
+	amountNaN := false
+	switch x := amountAny.(type) {
+	case *big.Int:
+		amount = x
+	case vm.NaN:
+		amountNaN = true
+	default:
+		return nil, false, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
 	}
 
 	hasExtra := false
 	if state.GlobalVersion < 10 {
 		extraAny, err := balance.Index(1)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
-		hasExtra = extraAny != nil
+		extra, ok := extraAny.(*cell.Cell)
+		hasExtra = ok && extra != nil
 	}
-	return amount, hasExtra, nil
+	return amount, amountNaN, hasExtra, nil
 }
 
 func SENDMSG() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			modeVal, err := state.Stack.PopIntRange(0, 2047)
+			if state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
+			}
+
+			modeVal, err := state.Stack.PopIntRangeInt64(0, 2047)
 			if err != nil {
 				return err
 			}
-			send := modeVal.Int64()&1024 == 0
-			mode := modeVal.Int64() &^ 1024
+			send := modeVal&1024 == 0
+			mode := modeVal &^ 1024
 			if mode >= 256 {
 				return vmerr.Error(vmerr.CodeRangeCheck)
 			}
@@ -1279,7 +1453,7 @@ func SENDMSG() *helpers.SimpleOP {
 			if msg.MsgType == tlb.MsgTypeInternal && msg.Info.DstAddr != nil && msg.Info.DstAddr.Workchain() == -1 {
 				isMasterchain = true
 			}
-			prices, err := getTonMsgPrices(state, isMasterchain)
+			prices, err := getSendMsgPrices(state, isMasterchain)
 			if err != nil {
 				return err
 			}
@@ -1292,41 +1466,50 @@ func SENDMSG() *helpers.SimpleOP {
 			if state.GlobalVersion >= 10 && msg.Info.HasExtraCurrencies() {
 				skipRefs = 1
 			}
-			if !addMessageTailStorage(stat, msgCell, skipRefs) {
-				return vmerr.Error(vmerr.CodeCellOverflow, "scanned too many cells")
+			_, err = addMessageTailStorage(stat, msgCell, skipRefs)
+			if err != nil {
+				return err
 			}
+			// A false result means the configured cell limit was reached. TVM still
+			// computes the fee from the statistics collected up to that limit.
 
 			value := sendMsgBigOrZero(msg.Info.Amount)
+			valueNaN := false
 			haveExtraCurrencies := msg.Info.HasExtraCurrencies()
 			if msg.MsgType == tlb.MsgTypeInternal {
 				if mode&128 != 0 {
-					value, haveExtraCurrencies, err = sendMsgTupleAmount(state, 7, "BALANCE")
+					value, valueNaN, haveExtraCurrencies, err = sendMsgTupleAmount(state, 7, "BALANCE")
 					if err != nil {
 						return err
 					}
 				} else if mode&64 != 0 {
-					incomingValue, incomingHasExtra, err := sendMsgTupleAmount(state, 11, "INCOMINGVALUE")
+					incomingValue, incomingNaN, incomingHasExtra, err := sendMsgTupleAmount(state, 11, "INCOMINGVALUE")
 					if err != nil {
 						return err
 					}
-					value = new(big.Int).Add(value, incomingValue)
+					if valueNaN || incomingNaN {
+						value = nil
+						valueNaN = true
+					} else {
+						value = new(big.Int).Add(value, incomingValue)
+					}
 					haveExtraCurrencies = haveExtraCurrencies || incomingHasExtra
 				}
 			}
 
-			ihr := big.NewInt(0)
-			fwd := big.NewInt(0)
+			ihr := new(big.Int)
+			fwd := new(big.Int)
 			ihrDisabled := msg.MsgType != tlb.MsgTypeInternal || msg.Info.IHRDisabled || state.GlobalVersion >= 11
 			computeFees := func() {
 				computedFwd := prices.ComputeForwardFee(stat.cells, stat.bits)
-				computedIHR := big.NewInt(0)
+				computedIHR := new(big.Int)
 				if !ihrDisabled {
-					computedIHR = ceilShiftRight(new(big.Int).Mul(computedFwd, new(big.Int).SetUint64(uint64(prices.IHRFactor))), 16)
+					computedIHR = ceilShiftRight(mulBigUint64(computedFwd, uint64(prices.IHRFactor)), 16)
 				}
 
 				fwd = computedFwd
 				ihr = computedIHR
-				if msg.MsgType == tlb.MsgTypeInternal {
+				if msg.MsgType == tlb.MsgTypeInternal && state.GlobalVersion < 14 {
 					fwd = maxBig(fwd, msg.Info.FwdFee)
 					if !ihrDisabled && state.GlobalVersion < 12 {
 						ihr = maxBig(ihr, msg.Info.ExtraFlags)
@@ -1348,14 +1531,14 @@ func SENDMSG() *helpers.SimpleOP {
 				if msg.MsgType == tlb.MsgTypeExternalOut {
 					bits = 2 + myAddrBits + destAddrBits + 32 + 64
 				} else {
-					fwdFeeFirst := new(big.Int).Rsh(new(big.Int).Mul(fwd, new(big.Int).SetUint64(uint64(prices.FirstFrac))), 16)
+					fwdFeeFirst := new(big.Int).Rsh(mulBigUint64(fwd, uint64(prices.FirstFrac)), 16)
 					remainingFwdFee := new(big.Int).Sub(fwd, fwdFeeFirst)
-					bits = 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(value) + 1 + 32 + 64
-					bits += sendMsgStoredCoinsBits(remainingFwdFee)
+					bits = 4 + myAddrBits + destAddrBits + sendMsgStoredCoinsBits(value, valueNaN) + 1 + 32 + 64
+					bits += sendMsgStoredCoinsBits(remainingFwdFee, false)
 					if state.GlobalVersion >= 12 {
 						bits += layout.extraFlagsBits
 					} else {
-						bits += sendMsgStoredCoinsBits(ihr)
+						bits += sendMsgStoredCoinsBits(ihr, false)
 					}
 				}
 				bits++
@@ -1420,7 +1603,8 @@ func SENDMSG() *helpers.SimpleOP {
 				return b.StoreRefUncheckedDepth(msgCell)
 			})
 		},
-		Name:      "SENDMSG",
-		BitPrefix: helpers.BytesPrefix(0xFB, 0x08),
+		Name:       "SENDMSG",
+		BitPrefix:  helpers.BytesPrefix(0xFB, 0x08),
+		MinVersion: 4,
 	}
 }

@@ -31,6 +31,10 @@ func sdbeginsXOp(quiet bool) *helpers.SimpleOP {
 
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if err := checkStackDepth(state, 2); err != nil {
+				return err
+			}
+
 			needle, err := state.Stack.PopSlice()
 			if err != nil {
 				return err
@@ -74,6 +78,7 @@ func CHASHI(i int) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.UIntPrefix(0xD768>>2, 14),
 		FixedSizeBits: 2,
+		MinVersion:    6,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 2)
 		},
@@ -90,7 +95,8 @@ func CHASHI(i int) *helpers.AdvancedOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash(i)))
+			hash := cl.HashKey(i)
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},
 	}
 }
@@ -102,6 +108,7 @@ func CDEPTHI(i int) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.UIntPrefix(0xD76C>>2, 14),
 		FixedSizeBits: 2,
+		MinVersion:    6,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(i), 2)
 		},
@@ -134,10 +141,11 @@ func CHASHIX() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash(int(idx))))
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(cl.Hash(int(idx))))
 		},
-		Name:      "CHASHIX",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x70),
+		Name:       "CHASHIX",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x70),
+		MinVersion: 6,
 	}
 }
 
@@ -154,7 +162,8 @@ func CDEPTHIX() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(cl.Depth(int(idx))))
 		},
-		Name:      "CDEPTHIX",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x71),
+		Name:       "CDEPTHIX",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x71),
+		MinVersion: 6,
 	}
 }

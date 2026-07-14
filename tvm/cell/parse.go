@@ -33,13 +33,17 @@ var MaxBOCCells = 1 << 20
 const maxSerializedBOCCellBytes = 2 + maxCellDataBytes + 4*4 + (hashSize+depthSize)*4
 
 func maxBOCPayloadBytes() int {
-	if MaxBOCCells <= 0 {
+	return maxBOCPayloadBytesForCells(MaxBOCCells)
+}
+
+func maxBOCPayloadBytesForCells(maxCells int) int {
+	if maxCells <= 0 {
 		return 0
 	}
-	if MaxBOCCells > math.MaxInt/maxSerializedBOCCellBytes {
+	if maxCells > math.MaxInt/maxSerializedBOCCellBytes {
 		return math.MaxInt
 	}
-	return MaxBOCCells * maxSerializedBOCCellBytes
+	return maxCells * maxSerializedBOCCellBytes
 }
 
 // BOCParseOptions configures BoC parsing.
@@ -57,6 +61,22 @@ type BOCParseOptions struct {
 	// DisableLazyCache disables lazy BoC materialized-cell caching, even when
 	// the BoC carries cache bits for shared cells.
 	DisableLazyCache bool
+	// MaxCells limits how many cells may be decoded from this BoC payload.
+	// Zero or a negative value uses the package-level MaxBOCCells limit.
+	MaxCells int
+
+	// refGraphSink, when set, captures the raw cell reference graph (indices
+	// into the flat parsed cell array) so a re-serialization can reuse it
+	// without rediscovering cell identity. Internal, incompatible with Lazy.
+	refGraphSink *bocRefGraphSink
+}
+
+// bocRefGraphSink collects the parsed BoC reference graph: graph[i] holds the
+// flat-array indices of cell i's references (edges always point forward), and
+// rootIndexes are the root positions in the same array.
+type bocRefGraphSink struct {
+	graph       [][4]int
+	rootIndexes []int
 }
 
 const (
@@ -259,7 +279,11 @@ func (r *BOCNoCopyReader) leftLen() (int, bool) {
 }
 
 func FromBOC(data []byte) (*Cell, error) {
-	cells, err := FromBOCMultiRoot(data)
+	return FromBOCWithOptions(data, BOCParseOptions{})
+}
+
+func FromBOCWithOptions(data []byte, options BOCParseOptions) (*Cell, error) {
+	cells, err := FromBOCMultiRootWithOptions(data, options)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +295,11 @@ func FromBOC(data []byte) (*Cell, error) {
 }
 
 func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
-	cells, _, err := parseBOCMultiRoot(NewBOCNoCopyReader(data), BOCParseOptions{})
+	return FromBOCMultiRootWithOptions(data, BOCParseOptions{})
+}
+
+func FromBOCMultiRootWithOptions(data []byte, options BOCParseOptions) ([]*Cell, error) {
+	cells, _, err := parseBOCMultiRoot(NewBOCNoCopyReader(data), options)
 	return cells, err
 }
 
@@ -350,8 +378,12 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 	if legacyIndexed && rootsNum != 1 {
 		return nil, nil, errors.New("invalid boc counters")
 	}
-	if MaxBOCCells > 0 && cellsNum > MaxBOCCells {
-		return nil, nil, fmt.Errorf("too many cells in boc: %d > %d", cellsNum, MaxBOCCells)
+	maxCells := options.MaxCells
+	if maxCells <= 0 {
+		maxCells = MaxBOCCells
+	}
+	if maxCells > 0 && cellsNum > maxCells {
+		return nil, nil, fmt.Errorf("too many cells in boc: %d > %d", cellsNum, maxCells)
 	}
 	if MaxBOCRoots > 0 && rootsNum > MaxBOCRoots {
 		return nil, nil, fmt.Errorf("too many roots in boc: %d > %d", rootsNum, MaxBOCRoots)
@@ -373,7 +405,7 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 	if dataLen < cellsNum*2 {
 		return nil, nil, errors.New("invalid boc cells data size")
 	}
-	maxPayloadBytes := maxBOCPayloadBytes()
+	maxPayloadBytes := maxBOCPayloadBytesForCells(maxCells)
 	if maxPayloadBytes > 0 && dataLen > maxPayloadBytes {
 		return nil, nil, fmt.Errorf("boc cells data size is too big: %d > %d", dataLen, maxPayloadBytes)
 	}
@@ -429,6 +461,14 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 		}
 
 		return cll, nil, nil
+	}
+
+	if sink := options.refGraphSink; sink != nil {
+		sink.graph = make([][4]int, cellsNum)
+		sink.rootIndexes = make([]int, len(rootsIndex))
+		for i, idx := range rootsIndex {
+			sink.rootIndexes[i] = int(idx)
+		}
 	}
 
 	cll, unique, err := parseCells(rootsIndex, cellsNum, cellNumSizeBytes, dataLen, r, cellIndex, options)
@@ -499,8 +539,39 @@ func (idx bocCellIndex) cellEnd(i int) int {
 	return end
 }
 
+func (idx bocCellIndex) cellEndAndCacheBit(i int) (int, bool) {
+	end := idx.rawEnd(i)
+	if !idx.hasCacheBits {
+		return end, false
+	}
+	return end / 2, end&1 == 1
+}
+
 func (idx bocCellIndex) cacheBit(i int) bool {
 	return idx.rawEnd(i)%2 == 1
+}
+
+const (
+	bocCacheRefCountMask = 0x7F
+	bocCacheRefIndexBit  = 0x80
+)
+
+func incBOCCacheRef(cacheRefs []uint8, idx int) {
+	if cacheRefs[idx]&bocCacheRefCountMask < 2 {
+		cacheRefs[idx]++
+	}
+}
+
+func setBOCIndexCacheBit(cacheRefs []uint8, i int) {
+	cacheRefs[i] |= bocCacheRefIndexBit
+}
+
+func bocShouldCache(cacheRefs []uint8, i int) bool {
+	return cacheRefs[i]&bocCacheRefCountMask > 1
+}
+
+func bocIndexCacheBit(cacheRefs []uint8, i int) bool {
+	return cacheRefs[i]&bocCacheRefIndexBit != 0
 }
 
 type bocPayloadArena struct {
@@ -571,9 +642,7 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 	if index.hasCacheBits {
 		cacheRefs = make([]uint8, cellsNum)
 		for _, idx := range rootsIndex {
-			if cacheRefs[idx] < 2 {
-				cacheRefs[idx]++
-			}
+			incBOCCacheRef(cacheRefs, int(idx))
 		}
 	}
 
@@ -592,10 +661,21 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 	payloadArena := newBOCPayloadArena(dataLen)
 	storedArena := newBOCPayloadArena(dataLen)
 	indexEnabled := index.enabled()
+	// declared outside the loop so they escape to the heap at most once
+	var header [2]byte
+	var refBuf [4 * 4]byte
 	for i := 0; i < cellsNum; i++ {
 		cellEnd := dataLen
 		if indexEnabled {
-			cellEnd = index.cellEnd(i)
+			if cacheRefs != nil {
+				var cacheBit bool
+				cellEnd, cacheBit = index.cellEndAndCacheBit(i)
+				if cacheBit {
+					setBOCIndexCacheBit(cacheRefs, i)
+				}
+			} else {
+				cellEnd = index.cellEnd(i)
+			}
 			if cellEnd < offset || cellEnd > dataLen {
 				return nil, nil, errors.New("invalid cell index")
 			}
@@ -606,7 +686,6 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 			return nil, nil, errors.New("failed to parse cell header, corrupted data")
 		}
 
-		var header [2]byte
 		if err := readFull(header[:]); err != nil {
 			return nil, nil, fmt.Errorf("failed to read cell header: %w", err)
 		}
@@ -660,7 +739,6 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 		}
 		refsSize := refsNum * refSzBytes
 		if refsSize > 0 {
-			var refBuf [4 * 4]byte
 			if err := readFull(refBuf[:refsSize]); err != nil {
 				return nil, nil, fmt.Errorf("failed to read cell refs: %w", err)
 			}
@@ -702,26 +780,22 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 				}
 
 				cells[i].refs[y] = &cells[id]
-				if cacheRefs != nil && cacheRefs[id] < 2 {
-					cacheRefs[id]++
+				if options.refGraphSink != nil {
+					options.refGraphSink.graph[i][y] = id
+				}
+				if cacheRefs != nil {
+					incBOCCacheRef(cacheRefs, id)
 				}
 			}
 		}
 
 		bitsSz := sz * 8
 		if int(ln)%2 != 0 {
-			last := payload[len(payload)-1]
-			terminatorBit := -1
-			for y := 0; y < 7; y++ {
-				if (last>>y)&1 == 1 {
-					terminatorBit = y
-					break
-				}
-			}
-			if terminatorBit < 0 {
+			decodedBits, ok := cellBodyBitsSizeFromLast(sz, payload[len(payload)-1])
+			if !ok {
 				return nil, nil, errors.New("overlong cell bits encoding")
 			}
-			bitsSz = (sz-1)*8 + 7 - terminatorBit
+			bitsSz = int(decodedBits)
 		}
 		bodyBytes := (bitsSz + 7) / 8
 
@@ -747,7 +821,7 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 	}
 	if cacheRefs != nil {
 		for i := 0; i < cellsNum; i++ {
-			if shouldCache := cacheRefs[i] > 1; shouldCache != index.cacheBit(i) {
+			if shouldCache := bocShouldCache(cacheRefs, i); shouldCache != bocIndexCacheBit(cacheRefs, i) {
 				return nil, nil, fmt.Errorf("invalid cache flag for cell #%d", i)
 			}
 		}
@@ -769,9 +843,7 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 	if index.hasCacheBits {
 		cacheRefs = make([]uint8, cellsNum)
 		for _, idx := range rootsIndex {
-			if cacheRefs[idx] < 2 {
-				cacheRefs[idx]++
-			}
+			incBOCCacheRef(cacheRefs, int(idx))
 		}
 	}
 
@@ -780,7 +852,15 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 	for i := range cells {
 		cellEnd := dataLen
 		if indexEnabled {
-			cellEnd = index.cellEnd(i)
+			if cacheRefs != nil {
+				var cacheBit bool
+				cellEnd, cacheBit = index.cellEndAndCacheBit(i)
+				if cacheBit {
+					setBOCIndexCacheBit(cacheRefs, i)
+				}
+			} else {
+				cellEnd = index.cellEnd(i)
+			}
 			if cellEnd < offset || cellEnd > dataLen {
 				return nil, nil, errors.New("invalid cell index")
 			}
@@ -831,8 +911,11 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 			}
 
 			cells[i].refs[ref] = &cells[id]
-			if cacheRefs != nil && cacheRefs[id] < 2 {
-				cacheRefs[id]++
+			if options.refGraphSink != nil {
+				options.refGraphSink.graph[i][ref] = id
+			}
+			if cacheRefs != nil {
+				incBOCCacheRef(cacheRefs, id)
 			}
 		}
 
@@ -847,54 +930,13 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 	}
 	if cacheRefs != nil {
 		for i := range cells {
-			if shouldCache := cacheRefs[i] > 1; shouldCache != index.cacheBit(i) {
+			if shouldCache := bocShouldCache(cacheRefs, i); shouldCache != bocIndexCacheBit(cacheRefs, i) {
 				return nil, nil, fmt.Errorf("invalid cache flag for cell #%d", i)
 			}
 		}
 	}
 
 	return finalizeParsedCells(cells, rootsIndex, stored, options)
-}
-
-func finalizeParsedCells(cells []Cell, rootsIndex []uint32, stored []storedHashesDepths, options BOCParseOptions) ([]*Cell, []Cell, error) {
-	roots := make([]*Cell, len(rootsIndex))
-
-	storedIdx := len(stored) - 1
-	for idx := len(cells) - 1; idx >= 0; idx-- {
-		var storedMeta storedHashesDepths
-		hasStoredHashes := false
-		if storedIdx >= 0 && stored[storedIdx].cellIndex == idx {
-			storedMeta = stored[storedIdx]
-			hasStoredHashes = true
-			storedIdx--
-		}
-
-		if options.TrustedHashes && hasStoredHashes {
-			if err := applyTrustedStoredHashesDepths(&cells[idx], storedMeta); err != nil {
-				return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-			}
-		} else {
-			if err := cells[idx].calculateHashes(); err != nil {
-				return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-			}
-			if hasStoredHashes {
-				if err := validateStoredHashesDepths(&cells[idx], storedMeta); err != nil {
-					return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-				}
-			}
-		}
-		if cells[idx].IsSpecial() {
-			if err := validateLoadedCell(&cells[idx]); err != nil {
-				return nil, nil, fmt.Errorf("invalid cell #%d: %w", idx, err)
-			}
-		}
-	}
-
-	for i, idx := range rootsIndex {
-		roots[i] = &cells[idx]
-	}
-
-	return roots, cells, nil
 }
 
 func applyTrustedStoredHashesDepths(c *Cell, stored storedHashesDepths) error {
@@ -907,7 +949,7 @@ func applyTrustedStoredHashesDepths(c *Cell, stored storedHashesDepths) error {
 		return errors.New("invalid serialized hashes/depth metadata")
 	}
 
-	if c.GetType() == PrunedCellType {
+	if c.resolveType() == PrunedCellType {
 		hashOff := (expected - 1) * hashSize
 		depthOff := (expected - 1) * depthSize
 		c.setHashAt(0, stored.hashes[hashOff:hashOff+hashSize])

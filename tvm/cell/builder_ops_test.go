@@ -132,3 +132,43 @@ func TestBuilderOpsAndCellMeta(t *testing.T) {
 		}
 	})
 }
+
+func TestBuilderTruncateBitsClearsRolledBackRange(t *testing.T) {
+	b := BeginCell()
+	b.MustStoreUInt(0b10110, 5)
+	saved := b.BitsUsed()
+
+	// dirty a long tail across byte boundaries, then roll back
+	b.MustStoreSlice([]byte{0xFF, 0xFF, 0xFF, 0xFF}, 32)
+	b.truncateBits(saved)
+
+	// bit stores extend partial bytes with OR, so stale bits would leak
+	b.MustStoreBoolBit(false)
+	b.MustStoreBoolBit(true)
+	b.MustStoreUInt(0, 16)
+
+	sl := b.ToSlice()
+	if got := sl.MustLoadUInt(5); got != 0b10110 {
+		t.Fatalf("prefix = %b, want 10110", got)
+	}
+	if got := sl.MustLoadUInt(2); got != 0b01 {
+		t.Fatalf("bits after rollback = %b, want 01", got)
+	}
+	if got := sl.MustLoadUInt(16); got != 0 {
+		t.Fatalf("zeros after rollback = %x, want 0", got)
+	}
+
+	// aligned rollback boundary must fully clear the next byte
+	b2 := BeginCell()
+	b2.MustStoreUInt(0xAB, 8)
+	saved2 := b2.BitsUsed()
+	b2.MustStoreSlice([]byte{0xFF, 0xFF}, 16)
+	b2.truncateBits(saved2)
+	b2.MustStoreBoolBit(true)
+	b2.MustStoreUInt(0, 7)
+
+	sl2 := b2.ToSlice()
+	if got := sl2.MustLoadUInt(16); got != 0xAB80 {
+		t.Fatalf("aligned rollback result = %x, want ab80", got)
+	}
+}

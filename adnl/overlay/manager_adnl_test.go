@@ -27,6 +27,16 @@ func TestCreateExtendedADNLInitializesHandlers(t *testing.T) {
 	}
 }
 
+func TestADNLWrapperExposesPeerStats(t *testing.T) {
+	m := newMockADNL()
+	m.stats.Inbound.Packets = 7
+
+	w := CreateExtendedADNL(m)
+	if got := w.Stats().Inbound.Packets; got != 7 {
+		t.Fatalf("inbound packets=%d want=7", got)
+	}
+}
+
 func TestADNLManagerQueryRouting(t *testing.T) {
 	m := newMockADNL()
 	w := CreateExtendedADNL(m)
@@ -96,18 +106,49 @@ func TestADNLManagerQueryRouting(t *testing.T) {
 	}
 }
 
+func TestADNLManagerAnswersOverlayPing(t *testing.T) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	overlayID := bytes.Repeat([]byte{0x63}, 32)
+	queryID := bytes.Repeat([]byte{0xA2}, 32)
+
+	ov := w.WithOverlay(overlayID)
+	ov.SetQueryHandler(func(msg *adnl.MessageQuery) error {
+		t.Fatal("overlay ping must not reach the user query handler")
+		return nil
+	})
+
+	if err := w.queryHandler(&adnl.MessageQuery{ID: queryID, Data: WrapQuery(overlayID, Ping{})}); err != nil {
+		t.Fatalf("overlay ping failed: %v", err)
+	}
+	if len(m.answerCalls) != 1 {
+		t.Fatalf("answer calls = %d, want 1", len(m.answerCalls))
+	}
+	if _, ok := m.answerCalls[0].(Pong); !ok {
+		t.Fatalf("unexpected overlay ping answer %T", m.answerCalls[0])
+	}
+
+	missingID := bytes.Repeat([]byte{0x64}, 32)
+	if err := w.queryHandler(&adnl.MessageQuery{ID: queryID, Data: WrapQuery(missingID, Ping{})}); err == nil {
+		t.Fatal("expected unregistered overlay ping to fail")
+	}
+	if len(m.answerCalls) != 1 {
+		t.Fatalf("unregistered overlay ping was answered")
+	}
+}
+
 func TestADNLManagerCustomRouting(t *testing.T) {
 	m := newMockADNL()
 	w := CreateExtendedADNL(m)
 	overlayID := bytes.Repeat([]byte{0x71}, 32)
-	payload := Broadcast{}
+	payload := tl.Raw([]byte{0x01})
 
 	ov := w.WithOverlay(overlayID)
 	called := false
 	ov.SetCustomMessageHandler(func(msg *adnl.MessageCustom) error {
 		called = true
-		if _, ok := msg.Data.(Broadcast); !ok {
-			t.Fatalf("expected broadcast payload")
+		if _, ok := msg.Data.(tl.Raw); !ok {
+			t.Fatalf("expected raw payload")
 		}
 		return nil
 	})

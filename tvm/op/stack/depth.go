@@ -1,8 +1,6 @@
 package stack
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -14,7 +12,7 @@ func init() {
 func DEPTH() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			return state.Stack.PushInt(big.NewInt(int64(state.Stack.Len())))
+			return state.Stack.PushSmallInt(int64(state.Stack.Len()))
 		},
 		Name:      "DEPTH",
 		BitPrefix: helpers.BytesPrefix(0x68),

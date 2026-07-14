@@ -204,6 +204,62 @@ func TestProofDictKey(t *testing.T) {
 	}
 }
 
+func TestMerkleProofBuilderCreateProofDropsUsageTrace(t *testing.T) {
+	d := NewDict(64)
+	for i := 0; i < 1000; i++ {
+		value := BeginCell().MustStoreUInt(uint64(i), 64).EndCell()
+		if err := d.SetIntKey(big.NewInt(int64(i)), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	root := d.AsCell()
+	builder := NewMerkleProofBuilder(root)
+	value, err := builder.Root().AsDict(64).LoadValueByIntKey(big.NewInt(777))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := value.MustLoadUInt(64); got != 777 {
+		t.Fatalf("value = %d, want 777", got)
+	}
+
+	proof, err := builder.CreateProof()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traces := proofTraceCount(t, proof); traces != 0 {
+		t.Fatalf("proof traces = %d, want 0", traces)
+	}
+	if _, err = UnwrapProof(proof, root.Hash(0)); err != nil {
+		t.Fatalf("proof is invalid: %v", err)
+	}
+}
+
+func proofTraceCount(t *testing.T, root *Cell) int {
+	t.Helper()
+	if root == nil {
+		return 0
+	}
+
+	traces := 0
+	if root.Trace() != nil {
+		traces++
+	}
+
+	loader, err := root.BeginParseWithoutTrace()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < loader.RefsNum(); i++ {
+		ref, err := loader.PeekRefCellAt(i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		traces += proofTraceCount(t, ref)
+	}
+	return traces
+}
+
 func TestMerkleProofBuilderKeepsRefTraceThroughSliceCopy(t *testing.T) {
 	child := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 	root := BeginCell().MustStoreUInt(0xCD, 8).MustStoreRef(child).EndCell()

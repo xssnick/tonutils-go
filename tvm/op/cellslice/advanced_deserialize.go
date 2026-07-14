@@ -2,7 +2,6 @@ package cellslice
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -49,11 +48,11 @@ func init() {
 }
 
 func popRange(state *vm.State, max int64) (uint64, error) {
-	v, err := state.Stack.PopIntRange(0, max)
+	v, err := state.Stack.PopIntRangeInt64(0, max)
 	if err != nil {
 		return 0, err
 	}
-	return v.Uint64(), nil
+	return uint64(v), nil
 }
 
 func checkStackDepth(state *vm.State, depth int) error {
@@ -64,7 +63,7 @@ func checkStackDepth(state *vm.State, depth int) error {
 }
 
 func pushSmallInt(state *vm.State, v int64) error {
-	return state.Stack.PushInt(big.NewInt(v))
+	return state.Stack.PushSmallInt(v)
 }
 
 func parseLoadedCellSlice(state *vm.State, cl *cell.Cell) (*cell.Slice, error) {
@@ -454,6 +453,16 @@ func xloadOp(quiet bool) *helpers.SimpleOP {
 				return err
 			}
 
+			if state.GlobalVersion < 5 {
+				if err = state.Stack.PushCell(cl); err != nil {
+					return err
+				}
+				if quiet {
+					return state.Stack.PushBool(true)
+				}
+				return nil
+			}
+
 			resolved, err := state.ResolveLibraryCell(cl)
 			if err != nil {
 				if quiet {
@@ -808,8 +817,9 @@ func CLEVEL() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(cl.Level()))
 		},
-		Name:      "CLEVEL",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x66),
+		Name:       "CLEVEL",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x66),
+		MinVersion: 6,
 	}
 }
 
@@ -822,7 +832,8 @@ func CLEVELMASK() *helpers.SimpleOP {
 			}
 			return pushSmallInt(state, int64(cl.LevelMask().Mask))
 		},
-		Name:      "CLEVELMASK",
-		BitPrefix: helpers.BytesPrefix(0xD7, 0x67),
+		Name:       "CLEVELMASK",
+		BitPrefix:  helpers.BytesPrefix(0xD7, 0x67),
+		MinVersion: 6,
 	}
 }

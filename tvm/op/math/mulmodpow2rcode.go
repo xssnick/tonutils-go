@@ -2,7 +2,6 @@ package math
 
 import (
 	"fmt"
-	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -32,7 +31,7 @@ func MULMODPOW2RCODE(value int8) (op *helpers.AdvancedOP) {
 				return err
 			}
 
-			q := helpers.DivRound(x.Mul(x, y), y.Lsh(big.NewInt(1), uint(imm())))
+			q := helpers.DivRound(x.Mul(x, y), y.Lsh(bigIntOne, uint(imm())))
 			r := y.Sub(x, y.Mul(y, q))
 
 			return state.Stack.PushInt(r)

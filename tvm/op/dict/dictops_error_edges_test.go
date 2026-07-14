@@ -21,8 +21,9 @@ func TestExecStoreDictAndSkipDictErrorBranches(t *testing.T) {
 		if err := state.Stack.PushBuilder(cell.BeginCell()); err != nil {
 			t.Fatalf("push builder without dict root: %v", err)
 		}
-		if err := execStoreDict(state); err == nil {
-			t.Fatal("expected execStoreDict to fail on missing dict root")
+		assertDictVMErrorCode(t, execStoreDict(state), vmerr.CodeStackUnderflow)
+		if state.Stack.Len() != 1 {
+			t.Fatalf("short STDICT consumed builder, stack len=%d", state.Stack.Len())
 		}
 	})
 

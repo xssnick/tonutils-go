@@ -229,18 +229,6 @@ func TestAugmentedDictionary_WrappersIteratorsAndInlineLoaders(t *testing.T) {
 		t.Fatal("nil augmented iterator item should stay empty")
 	}
 
-	items, err := dict.RangeExtra(false, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cloned := cloneAugDictItems(items)
-	if _, err = items[0].Value.LoadUInt(1); err != nil {
-		t.Fatal(err)
-	}
-	if cloned[0].Value.BitsLeft() != 8 {
-		t.Fatalf("cloned augmented items should preserve slice snapshots, got %d bits", cloned[0].Value.BitsLeft())
-	}
-
 	ok, err := dict.HasCommonPrefix(BeginCell().MustStoreUInt(0, 5).EndCell())
 	if err != nil {
 		t.Fatal(err)

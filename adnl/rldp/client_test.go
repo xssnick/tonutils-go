@@ -18,6 +18,8 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -71,6 +73,34 @@ func (m MockADNL) SendCustomMessage(ctx context.Context, req tl.Serializable) er
 func (m MockADNL) Close() {
 }
 
+func waitRLDPStateEmpty(t *testing.T, cli *RLDP) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		cli.mx.RLock()
+		requests := len(cli.activeRequests)
+		transfers := len(cli.activeTransfers)
+		expected := len(cli.expectedTransfers)
+		streams := len(cli.recvStreams)
+		cli.mx.RUnlock()
+
+		if requests == 0 && transfers == 0 && expected == 0 && streams == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"RLDP retained state: requests=%d transfers=%d expected=%d streams=%d",
+				requests,
+				transfers,
+				expected,
+				streams,
+			)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 type benchRequest struct {
 	WantLen uint32 `tl:"int"`
 }
@@ -99,6 +129,138 @@ type testResponse struct {
 type testHeader struct {
 	Name  string `tl:"string"`
 	Value string `tl:"string"`
+}
+
+func TestRLDPPrepareNextPartUsesCppCompatiblePartSize(t *testing.T) {
+	if PartSize != 2_000_000 {
+		t.Fatalf("unexpected default part size %d", PartSize)
+	}
+
+	oldMultiFEC := MultiFECMode
+	MultiFECMode = false
+	defer func() {
+		MultiFECMode = oldMultiFEC
+	}()
+
+	payload := bytes.Repeat([]byte{0x5a}, int(PartSize)+123)
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x01}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	ok, err := transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected first part")
+	}
+
+	first := transfer.getCurrentPart()
+	if first.fec.GetDataSize() != PartSize {
+		t.Fatalf("unexpected first part size %d", first.fec.GetDataSize())
+	}
+
+	ok, err = transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected second part")
+	}
+
+	second := transfer.getCurrentPart()
+	if second.fec.GetDataSize() != 123 {
+		t.Fatalf("unexpected second part size %d", second.fec.GetDataSize())
+	}
+}
+
+func TestRLDPPrepareNextPartSymbolsCountIsCeil(t *testing.T) {
+	oldMultiFEC := MultiFECMode
+	MultiFECMode = false
+	defer func() {
+		MultiFECMode = oldMultiFEC
+	}()
+
+	// exact multiple of the symbol size, reference C++ nodes require ceil here, not ceil+1
+	payload := bytes.Repeat([]byte{0x5a}, int(DefaultSymbolSize)*3)
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x03}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	ok, err := transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected part")
+	}
+
+	if cnt := transfer.getCurrentPart().fec.GetSymbolsCount(); cnt != 3 {
+		t.Fatalf("got symbols count %d, want 3", cnt)
+	}
+}
+
+func TestRLDPSendFastSymbolsCapsInitialBurst(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x5a}, int(PartSize))
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x02}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	ok, err := transfer.prepareNextPart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected first part")
+	}
+
+	var sent atomic.Int64
+	rl := &RLDP{
+		adnl: MockADNL{
+			sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+				sent.Add(1)
+				return nil
+			},
+		},
+		rateLimit:              NewTokenBucket(1<<30, "peer"),
+		activateRecoverySender: make(chan bool, 1),
+		stats:                  &clientStats{},
+	}
+	rl.rateCtrl = NewBBRv2Controller(rl.rateLimit, BBRv2Options{
+		MinRate:      MinRateBytesSec,
+		InitialRate:  InitialRateBytesSec,
+		MaxRate:      MaxRateBytesSec,
+		DefaultRTTMs: 50,
+	})
+	rl.rateLimit.SetCapacityBytes(1 << 30)
+	rl.rateLimit.AddTokens(1 << 30)
+
+	if err := rl.sendFastSymbols(context.Background(), transfer); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sent.Load(); got != maxInitialFastSymbols {
+		t.Fatalf("sent initial symbols=%d want %d", got, maxInitialFastSymbols)
+	}
+	stats := rl.Stats()
+	if stats.Outbound.SymbolsSent != maxInitialFastSymbols {
+		t.Fatalf("stats symbols sent=%d want=%d", stats.Outbound.SymbolsSent, maxInitialFastSymbols)
+	}
+	if stats.Outbound.SymbolBytesSent != uint64(maxInitialFastSymbols)*uint64(DefaultSymbolSize) {
+		t.Fatalf("stats symbol bytes=%d", stats.Outbound.SymbolBytesSent)
+	}
+	if stats.Outbound.LastSymbolAt.IsZero() {
+		t.Fatal("last outbound symbol time was not recorded")
+	}
 }
 
 func TestRLDP_handleMessage(t *testing.T) {
@@ -256,10 +418,17 @@ func TestRLDP_handleMessage(t *testing.T) {
 			} else if test.tstSubName == "answer case" {
 				queryId := string(tQuery.ID)
 				tChan := make(chan AsyncQueryResult, 2)
-				cli.activeRequests[queryId] = &activeRequest{
-					deadline: time.Now().Add(time.Second * 10).Unix(),
-					result:   tChan,
+				request := &activeRequest{
+					id:                 queryId,
+					transferID:         []byte("outgoing-query"),
+					expectedTransferID: [32]byte(tId),
+					deadline:           time.Now().Add(time.Second * 10).UnixMilli(),
+					maxAnswerSize:      uint64(_RLDPMaxAnswerSize),
+					result:             tChan,
 				}
+				cli.activeRequests[queryId] = request
+				cli.activeTransfers["outgoing-query"] = &activeTransfer{}
+				cli.expectedTransfers[[32]byte(tId)] = request
 			}
 
 			err = cli.handleMessage(test.msg)
@@ -270,6 +439,17 @@ func TestRLDP_handleMessage(t *testing.T) {
 			if test.tstSubName == "answer case" {
 				if len(cli.activeRequests) != 0 {
 					t.Errorf("got '%d' actiive requests after handeling, want '0'", len(cli.activeRequests))
+				}
+				if len(cli.activeTransfers) != 0 || len(cli.expectedTransfers) != 0 {
+					t.Errorf(
+						"answer retained query transfers: active=%d expected=%d",
+						len(cli.activeTransfers),
+						len(cli.expectedTransfers),
+					)
+				}
+				stats := cli.Stats()
+				if stats.Outbound.TransfersCompleted != 1 || stats.Outbound.TransfersCanceled != 0 {
+					t.Fatalf("answer produced wrong outbound outcome: %+v", stats.Outbound)
 				}
 			}
 		})
@@ -309,7 +489,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to execute handleMessage func, err: ", err)
 			}
-			if cli.recvStreams[string(tId)].currentPart.lastCompleteAt.IsZero() {
+			if cli.recvStreams[[32]byte(tId)].lastCompleteAt.IsZero() {
 				t.Error("got lastCompleteAt == nil, want != nil")
 			}
 		})
@@ -344,6 +524,180 @@ func TestRLDP_handleMessage(t *testing.T) {
 				t.Errorf("got '%d' active transfers after handeling, want '0'", len(cli.activeTransfers))
 			}
 		})
+	}
+}
+
+func TestRLDP_handleMessageRoutesMessage(t *testing.T) {
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+	messageID := make([]byte, 32)
+	if _, err := rand.Read(messageID); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := []byte{1, 2, 3, 4}
+	message := Message{ID: messageID, Data: payload}
+	data, err := tl.Serialize(message, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	symbolSize := uint32(len(data))
+	enc, err := roundrobin.NewEncoder(data, symbolSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	part := MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   symbolSize,
+			SymbolsCount: 1,
+		},
+		Part:      0,
+		TotalSize: uint64(len(data)),
+		Seqno:     0,
+		Data:      enc.GenSymbol(0),
+	}
+
+	called := false
+	cli := NewClient(MockADNL{
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+	cli.SetOnMessage(func(id []byte, data []byte) error {
+		called = true
+		if !bytes.Equal(id, messageID) {
+			t.Fatalf("unexpected message id")
+		}
+		if !bytes.Equal(data, payload) {
+			t.Fatalf("unexpected message payload")
+		}
+		return nil
+	})
+
+	if err = cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("expected message handler call")
+	}
+}
+
+func TestRLDP_handleMessageSendsV2ConfirmWithOneBasedMaxSeqno(t *testing.T) {
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	data := bytes.Repeat([]byte{0x42}, 1024)
+	enc, err := roundrobin.NewEncoder(data, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	part := MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   512,
+			SymbolsCount: 2,
+		},
+		Part:      0,
+		TotalSize: uint64(len(data)),
+		Seqno:     0,
+		Data:      enc.GenSymbol(0),
+	}
+
+	var sent tl.Serializable
+	cli := NewClient(MockADNL{
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			sent = req
+			return nil
+		},
+	})
+
+	if err = cli.handleMessage(&adnl.MessageCustom{Data: MessagePartV2(part)}); err != nil {
+		t.Fatal(err)
+	}
+
+	confirm, ok := sent.(ConfirmV2)
+	if !ok {
+		t.Fatalf("got confirm type %T, want ConfirmV2", sent)
+	}
+	if confirm.MaxSeqno != 1 {
+		t.Fatalf("got max seqno %d, want 1", confirm.MaxSeqno)
+	}
+	if confirm.ReceivedMask != 1 {
+		t.Fatalf("got received mask %d, want 1", confirm.ReceivedMask)
+	}
+	if confirm.ReceivedCount != 1 {
+		t.Fatalf("got received count %d, want 1", confirm.ReceivedCount)
+	}
+}
+
+func TestRLDP_handleMessageUsesClientUnexpectedTransferLimit(t *testing.T) {
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := Message{ID: bytes.Repeat([]byte{0x44}, 32), Data: bytes.Repeat([]byte{0x55}, int(MaxUnexpectedTransferSize)+1)}
+	data, err := tl.Serialize(payload, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	symbolSize := uint32(1024)
+	symbolsCount := uint32((len(data) + int(symbolSize) - 1) / int(symbolSize))
+	enc, err := roundrobin.NewEncoder(data, symbolSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	cli := NewClient(MockADNL{
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+	cli.SetMaxUnexpectedTransferSize(uint64(len(data)))
+	cli.SetOnMessage(func(id []byte, data []byte) error {
+		called = true
+		if !bytes.Equal(id, payload.ID) {
+			t.Fatalf("unexpected message id")
+		}
+		if !bytes.Equal(data, payload.Data) {
+			t.Fatalf("unexpected message payload")
+		}
+		return nil
+	})
+
+	for seqno := uint32(0); seqno < symbolsCount; seqno++ {
+		part := MessagePart{
+			TransferID: transferID,
+			FecType: FECRoundRobin{
+				DataSize:     uint32(len(data)),
+				SymbolSize:   symbolSize,
+				SymbolsCount: symbolsCount,
+			},
+			Part:      0,
+			TotalSize: uint64(len(data)),
+			Seqno:     seqno,
+			Data:      enc.GenSymbol(seqno),
+		}
+
+		if err = cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if !called {
+		t.Fatal("expected message handler call")
 	}
 }
 
@@ -783,13 +1137,352 @@ func TestRLDP_DoQueryAsyncRollsBackOnStartTransferError(t *testing.T) {
 	}
 }
 
-func TestRLDP_RecvStreamsCleanupWithoutCompletedTransfer(t *testing.T) {
-	oldCleanupInterval := recvStreamCleanupInterval
-	recvStreamCleanupInterval = 10 * time.Millisecond
-	defer func() {
-		recvStreamCleanupInterval = oldCleanupInterval
+func TestRLDP_DoQueryAsyncRejectsCanceledContext(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+
+	var sends atomic.Int32
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			sends.Add(1)
+			return nil
+		},
+	})
+
+	queryCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := cli.DoQueryAsync(queryCtx, 1024, make([]byte, 32), testRequest{}, make(chan AsyncQueryResult, 1))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("query error = %v, want context.Canceled", err)
+	}
+	if sends.Load() != 0 {
+		t.Fatalf("sent messages = %d, want 0", sends.Load())
+	}
+
+	cli.mx.RLock()
+	defer cli.mx.RUnlock()
+	if len(cli.activeRequests) != 0 || len(cli.activeTransfers) != 0 || len(cli.expectedTransfers) != 0 {
+		t.Fatalf(
+			"canceled query retained state: requests=%d transfers=%d expected=%d",
+			len(cli.activeRequests),
+			len(cli.activeTransfers),
+			len(cli.expectedTransfers),
+		)
+	}
+}
+
+func TestRLDP_DoQueryAsyncCancellationCleansState(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+
+	queryCtx, cancel := context.WithCancel(context.Background())
+	queryID := bytes.Repeat([]byte{0x42}, 32)
+	if err := cli.DoQueryAsync(queryCtx, 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1)); err != nil {
+		t.Fatalf("start async query: %v", err)
+	}
+
+	cli.mx.Lock()
+	request := cli.activeRequests[string(queryID)]
+	if request == nil {
+		cli.mx.Unlock()
+		t.Fatal("active query was not registered")
+	}
+	cli.recvStreams[request.expectedTransferID] = &decoderStream{}
+	cli.mx.Unlock()
+
+	cancel()
+	waitRLDPStateEmpty(t, cli)
+}
+
+func TestRLDP_DoQueryAsyncCancellationDuringSend(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var firstSend atomic.Bool
+	var releaseOnce sync.Once
+
+	queryCtx, cancel := context.WithCancel(context.Background())
+	releaseSend := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	t.Cleanup(func() {
+		cancel()
+		releaseSend()
+		stopClient()
+	})
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			if firstSend.CompareAndSwap(false, true) {
+				close(started)
+				<-release
+			}
+			return nil
+		},
+	})
+
+	queryID := bytes.Repeat([]byte{0x43}, 32)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- cli.DoQueryAsync(queryCtx, 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1))
 	}()
 
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("query send did not start")
+	}
+
+	cancel()
+	waitRLDPStateEmpty(t, cli)
+
+	releaseSend()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("query error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("query did not return after send was released")
+	}
+	waitRLDPStateEmpty(t, cli)
+}
+
+func TestRLDP_DoQueryAsyncCancellationDuringRecoverySend(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var blockRecovery atomic.Bool
+	var blocked atomic.Bool
+	var releaseOnce sync.Once
+
+	queryCtx, cancel := context.WithCancel(context.Background())
+	releaseSend := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	t.Cleanup(func() {
+		cancel()
+		releaseSend()
+		stopClient()
+	})
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			if blockRecovery.Load() && blocked.CompareAndSwap(false, true) {
+				close(started)
+				<-release
+			}
+			return nil
+		},
+	})
+
+	queryID := bytes.Repeat([]byte{0x48}, 32)
+	if err := cli.DoQueryAsync(queryCtx, 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1)); err != nil {
+		t.Fatalf("start async query: %v", err)
+	}
+	blockRecovery.Store(true)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("recovery send did not start")
+	}
+
+	cancel()
+	waitRLDPStateEmpty(t, cli)
+	releaseSend()
+	waitRLDPStateEmpty(t, cli)
+}
+
+func TestRLDP_DoQueryAsyncSharedCancellationCleansAll(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+
+	queryCtx, cancel := context.WithCancel(context.Background())
+	for i := byte(1); i <= 64; i++ {
+		queryID := bytes.Repeat([]byte{i}, 32)
+		if err := cli.DoQueryAsync(queryCtx, 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1)); err != nil {
+			t.Fatalf("start async query %d: %v", i, err)
+		}
+	}
+
+	cancel()
+	waitRLDPStateEmpty(t, cli)
+}
+
+func TestRLDP_DoQueryAsyncAnswerWinsSendError(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+
+	queryID := bytes.Repeat([]byte{0x47}, 32)
+	sendErr := errors.New("send failed after answer")
+	result := make(chan AsyncQueryResult, 1)
+	var cli *RLDP
+	cli = NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			cli.mx.Lock()
+			request := cli.activeRequests[string(queryID)]
+			if request == nil {
+				cli.mx.Unlock()
+				t.Fatal("active query was not registered")
+			}
+			request.answered = true
+			delete(cli.activeRequests, request.id)
+			delete(cli.activeTransfers, string(request.transferID))
+			delete(cli.expectedTransfers, request.expectedTransferID)
+			cli.mx.Unlock()
+
+			result <- AsyncQueryResult{QueryID: queryID}
+			return sendErr
+		},
+	})
+
+	if err := cli.DoQueryAsync(context.Background(), 1024, queryID, testRequest{}, result); err != nil {
+		t.Fatalf("query error = %v, want answered query to win", err)
+	}
+	waitRLDPStateEmpty(t, cli)
+}
+
+func TestRLDP_DoQueryAsyncRejectsDuplicateID(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+
+	queryCtx, cancel := context.WithCancel(context.Background())
+	queryID := bytes.Repeat([]byte{0x44}, 32)
+	if err := cli.DoQueryAsync(queryCtx, 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1)); err != nil {
+		t.Fatalf("start async query: %v", err)
+	}
+
+	err := cli.DoQueryAsync(context.Background(), 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1))
+	if err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("duplicate query error = %v, want already active", err)
+	}
+
+	cancel()
+	waitRLDPStateEmpty(t, cli)
+}
+
+func TestRLDP_ShutdownCleansQueryState(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+
+	queryID := bytes.Repeat([]byte{0x45}, 32)
+	if err := cli.DoQueryAsync(context.Background(), 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1)); err != nil {
+		t.Fatalf("start async query: %v", err)
+	}
+
+	cli.mx.Lock()
+	request := cli.activeRequests[string(queryID)]
+	if request == nil {
+		cli.mx.Unlock()
+		t.Fatal("active query was not registered")
+	}
+	cli.recvStreams[request.expectedTransferID] = &decoderStream{}
+	cli.mx.Unlock()
+
+	stopClient()
+	waitRLDPStateEmpty(t, cli)
+
+	err := cli.DoQueryAsync(context.Background(), 1024, bytes.Repeat([]byte{0x46}, 32), testRequest{}, make(chan AsyncQueryResult, 1))
+	if !errors.Is(err, adnl.ErrPeerConnClosed) {
+		t.Fatalf("query after shutdown error = %v, want ErrPeerConnClosed", err)
+	}
+	waitRLDPStateEmpty(t, cli)
+}
+
+func TestRLDPCloseCleansQueryState(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+
+	queryID := bytes.Repeat([]byte{0x49}, 32)
+	if err := cli.DoQueryAsync(context.Background(), 1024, queryID, testRequest{}, make(chan AsyncQueryResult, 1)); err != nil {
+		t.Fatalf("start async query: %v", err)
+	}
+
+	cli.Close()
+	waitRLDPStateEmpty(t, cli)
+
+	err := cli.DoQueryAsync(context.Background(), 1024, bytes.Repeat([]byte{0x4a}, 32), testRequest{}, make(chan AsyncQueryResult, 1))
+	if !errors.Is(err, adnl.ErrPeerConnClosed) {
+		t.Fatalf("query after close error = %v, want ErrPeerConnClosed", err)
+	}
+}
+
+func TestRLDP_WaitQueryResultStopsOnCancellation(t *testing.T) {
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+
+	cli := NewClient(MockADNL{
+		closerCtx: clientCtx,
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+
+	queryCtx, cancel := context.WithCancel(context.Background())
+	request := &activeRequest{
+		deadline: time.Now().Add(time.Second).UnixMilli(),
+		result:   make(chan AsyncQueryResult),
+		done:     queryCtx.Done(),
+	}
+	returned := make(chan struct{})
+	go func() {
+		cli.waitQueryResult(request, AsyncQueryResult{})
+		close(returned)
+	}()
+
+	cancel()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("result delivery remained blocked after cancellation")
+	}
+}
+
+func TestRLDP_CleanupRecvStreamsWithoutCompletedTransfer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -803,23 +1496,96 @@ func TestRLDP_RecvStreamsCleanupWithoutCompletedTransfer(t *testing.T) {
 	staleAt := time.Now().Add(-_recvStreamIdleTimeout - time.Second)
 
 	cli.mx.Lock()
-	cli.recvStreams["stale"] = &decoderStream{
+	cli.recvStreams[testTransferID("stale")] = &decoderStream{
 		lastMessageAt: staleAt,
 		startedAt:     staleAt,
 		msgBuf:        NewQueue(1),
-		currentPart: decoderStreamPart{
-			index:     0,
-			startedAt: staleAt,
+		activeParts: map[uint32]*decoderStreamPart{
+			0: {
+				fecSymbolSize:     10,
+				receivedNum:       3,
+				receivedFastNum:   2,
+				receivedRepairNum: 1,
+				receivedBytes:     30,
+			},
 		},
 		totalSize: 64,
 	}
 	cli.mx.Unlock()
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
-		cli.mx.RLock()
-		defer cli.mx.RUnlock()
-		return len(cli.recvStreams) == 0
-	}, "stale recv stream should be cleaned up")
+	cli.cleanupRecvStreams(time.Now())
+
+	cli.mx.RLock()
+	streams := len(cli.recvStreams)
+	cli.mx.RUnlock()
+	if streams != 0 {
+		t.Fatal("stale receive stream was not removed")
+	}
+	stats := cli.Stats()
+	if stats.Inbound.TransfersExpired != 1 || stats.Inbound.SymbolsReceived != 3 ||
+		stats.Inbound.SymbolBytesReceived != 30 || stats.Inbound.RepairSymbolsReceived != 1 {
+		t.Fatalf("unexpected expired stream stats: %+v", stats.Inbound)
+	}
+}
+
+func TestRLDP_CleanupKeepsPendingRecvStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cli := NewClient(MockADNL{
+		closerCtx: ctx,
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+
+	staleAt := time.Now().Add(-_recvStreamIdleTimeout - time.Second)
+	stream := &decoderStream{
+		lastMessageAt: staleAt,
+		startedAt:     staleAt,
+		msgBuf:        NewQueue(1),
+		activeParts:   map[uint32]*decoderStreamPart{},
+		totalSize:     64,
+	}
+	stream.pending.Store(true)
+
+	cli.mx.Lock()
+	pendingID := testTransferID("pending")
+	cli.recvStreams[pendingID] = stream
+	cli.mx.Unlock()
+
+	cli.cleanupRecvStreams(time.Now())
+	cli.mx.RLock()
+	kept := cli.recvStreams[pendingID] == stream
+	cli.mx.RUnlock()
+	if !kept {
+		t.Fatal("cleanup removed a stream with queued work")
+	}
+	if stats := cli.Stats(); stats.Inbound.TransfersExpired != 0 {
+		t.Fatalf("pending stream was accounted as expired: %+v", stats.Inbound)
+	}
+
+	stream.pending.Store(false)
+	stream.processing.Store(true)
+	cli.cleanupRecvStreams(time.Now())
+	cli.mx.RLock()
+	kept = cli.recvStreams[pendingID] == stream
+	cli.mx.RUnlock()
+	if !kept {
+		t.Fatal("cleanup removed a stream being processed")
+	}
+
+	stream.processing.Store(false)
+	cli.cleanupRecvStreams(time.Now())
+	cli.mx.RLock()
+	_, kept = cli.recvStreams[pendingID]
+	cli.mx.RUnlock()
+	if kept {
+		t.Fatal("idle stream was not removed after pending work cleared")
+	}
+	if stats := cli.Stats(); stats.Inbound.TransfersExpired != 1 {
+		t.Fatalf("unexpected expired count: %+v", stats.Inbound)
+	}
 }
 
 func TestRLDP_SendAnswer(t *testing.T) {

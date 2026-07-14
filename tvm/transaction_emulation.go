@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -15,18 +14,127 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-type TransactionEmulationConfig = MessageEmulationConfig
+// TransactionOptions carries the genuinely per-transaction execution inputs.
+// Everything else lives in BlockContext (per block) and PreparedBlockchainConfig (per
+// config epoch).
+type TransactionOptions struct {
+	// LogicalTime is the minimal logical time of the transaction. The
+	// effective start LT also respects the account's last transaction LT and
+	// the inbound message LT. Zero derives it from the account state.
+	LogicalTime int64
+	// RandSeed is the per-account random seed (c7[6]) as raw bytes. When
+	// empty, it is derived from the block rand seed and the account address
+	// (see BlockContext.AccountRandSeed).
+	RandSeed []byte
+	// Gas overrides the config-derived gas limits when non-zero.
+	Gas vm.Gas
+	// AccountStorageStat is the account storage-stat dictionary carried in
+	// from the previous transaction result of the same account.
+	AccountStorageStat *cell.Cell
+	// BuildProof builds a Merkle usage proof over the account state covering
+	// the compute-phase reads (returned in ExecutionResult.Proof).
+	BuildProof bool
+	// SignatureCheckAlwaysSucceed makes signature checks succeed unconditionally
+	// (fee estimation flows).
+	SignatureCheckAlwaysSucceed bool
+	// TraceHook observes VM execution.
+	TraceHook vm.TraceHook
+}
+
+// OutMessage is an outbound message emitted by a transaction, in creation
+// order. Msg is the parsed form of Cell built during the action phase.
+type OutMessage struct {
+	Cell *cell.Cell
+	Msg  *tlb.Message
+}
 
 type TransactionExecutionResult struct {
 	ExecutionResult
-	Accepted           bool
-	Transaction        *tlb.Transaction
-	TransactionCell    *cell.Cell
-	AccountState       *tlb.AccountState
-	AccountCell        *cell.Cell
-	ShardAccount       *tlb.ShardAccount
-	ShardAccountCell   *cell.Cell
+	Accepted        bool
+	TransactionCell *cell.Cell
+	// NextAccount is the resulting account state, prepared to feed the next
+	// transaction of the same account without any re-parsing.
+	NextAccount *PreparedAccount
+	// OutMessages are the emitted outbound messages in creation order,
+	// including the bounce message when one was produced.
+	OutMessages []OutMessage
+	// EndLT is the logical time after the transaction (start LT + 1 + number
+	// of emitted messages).
+	EndLT uint64
+	// AccountStorageStat is the account storage-stat dictionary to pass to the
+	// next transaction of the same account.
 	AccountStorageStat *cell.Cell
+}
+
+// ParseTransaction parses the built transaction cell into its tlb form. The
+// executor itself never needs the parsed transaction, so the parse is done on
+// demand only.
+func (r *TransactionExecutionResult) ParseTransaction() (*tlb.Transaction, error) {
+	if r == nil || r.TransactionCell == nil {
+		return nil, errors.New("transaction result has no transaction cell")
+	}
+	var tx tlb.Transaction
+	if err := tlb.Parse(&tx, r.TransactionCell); err != nil {
+		return nil, fmt.Errorf("failed to decode built transaction: %w", err)
+	}
+	tx.Hash = r.TransactionCell.Hash()
+	return &tx, nil
+}
+
+// PreparedMessage is an inbound message parsed once and reused by the
+// executor without re-parsing.
+type PreparedMessage struct {
+	cell *cell.Cell
+	msg  tlb.Message
+}
+
+// PrepareMessage parses an inbound message cell once and validates that it can
+// be used as a transaction input.
+func PrepareMessage(msgCell *cell.Cell) (*PreparedMessage, error) {
+	if msgCell == nil {
+		return nil, errors.New("input message is required")
+	}
+	var msg tlb.Message
+	if err := tlb.Parse(&msg, msgCell); err != nil {
+		return nil, fmt.Errorf("failed to decode input message: %w", err)
+	}
+	return prepareParsedMessage(msgCell, msg)
+}
+
+// PrepareParsedMessage wraps an already-parsed inbound message together with
+// its cell; msg must be the parsed form of msgCell.
+func PrepareParsedMessage(msgCell *cell.Cell, msg *tlb.Message) (*PreparedMessage, error) {
+	if msgCell == nil {
+		return nil, errors.New("input message is required")
+	}
+	if msg == nil {
+		return nil, errors.New("parsed input message is required")
+	}
+	return prepareParsedMessage(msgCell, *msg)
+}
+
+func prepareParsedMessage(msgCell *cell.Cell, msg tlb.Message) (*PreparedMessage, error) {
+	switch msg.MsgType {
+	case tlb.MsgTypeInternal, tlb.MsgTypeExternalIn:
+	case tlb.MsgTypeExternalOut:
+		return nil, errors.New("external outbound messages cannot be used as transaction input")
+	default:
+		return nil, fmt.Errorf("unsupported input message type %s", msg.MsgType)
+	}
+	if err := transactionValidateMessageStateInitLibs(&msg); err != nil {
+		return nil, err
+	}
+	return &PreparedMessage{cell: msgCell, msg: msg}, nil
+}
+
+// Cell returns the raw message cell.
+func (m *PreparedMessage) Cell() *cell.Cell {
+	return m.cell
+}
+
+// Message returns the parsed message.
+func (m *PreparedMessage) Message() *tlb.Message {
+	return &m.msg
 }
 
 type transactionRuntimeAccount struct {
@@ -44,10 +152,14 @@ type transactionRuntimeAccount struct {
 	stateHash       []byte
 	storageLT       uint64
 	storageCell     *cell.Cell
-	prevTxHash      []byte
-	prevTxLT        uint64
-	originalCell    *cell.Cell
-	isSpecial       bool
+	// storageCellForStat is storageCell without the extra-currency dict (the
+	// extra-currency v2 stat form), threaded from the previous transaction of
+	// the account so it is not re-derived per transaction; nil when unknown.
+	storageCellForStat *cell.Cell
+	prevTxHash         []byte
+	prevTxLT           uint64
+	originalCell       *cell.Cell
+	isSpecial          bool
 }
 
 type transactionUsage struct {
@@ -69,6 +181,7 @@ type transactionPreparedPhases struct {
 	storagePhase    *tlb.StoragePhase
 	status          tlb.AccountStatus
 	deleted         bool
+	destroyed       bool
 	duePayment      *tlb.Coins
 	lastPaid        uint32
 }
@@ -82,58 +195,183 @@ type transactionSizeLimits struct {
 	maxMsgBits                  uint64
 	maxMsgCells                 uint64
 	maxLibraryCells             uint64
+	maxExtMsgDepth              uint16
 	maxAccStateCells            uint64
 	maxMCAccStateCells          uint64
 	maxAccPublicLibraries       uint64
 	maxMsgExtraCurrencies       uint64
 	maxAccFixedPrefixLength     uint64
 	accStateCellsForStorageDict uint64
+	maxTransactionLibraryLoads  *uint32
+	maxVMDataDepth              uint16
 }
 
-func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, cfg TransactionEmulationConfig) (*TransactionExecutionResult, error) {
-	if shard == nil {
-		return nil, errors.New("shard account is required")
+// transactionExecEnv is the assembled per-transaction execution environment:
+// block context plus derived phase values feeding the c7 tuple.
+type transactionExecEnv struct {
+	block *BlockContext
+	cfg   *PreparedBlockchainConfig
+	opts  *TransactionOptions
+
+	acc     *transactionRuntimeAccount
+	msg     *tlb.Message
+	msgCell *cell.Cell
+
+	startLT uint64
+	blockLT int64
+	balance *big.Int
+
+	incomingValue       tuple.Tuple
+	storageFees         int64
+	duePayment          *big.Int
+	inMsgParams         tuple.Tuple
+	precompiledGasUsage *big.Int
+
+	proof        *cell.MerkleProofBuilder
+	stopOnAccept bool
+}
+
+func newTransactionExecEnv(block *BlockContext, opts *TransactionOptions, acc *transactionRuntimeAccount, msg *tlb.Message, msgCell *cell.Cell, prepared *transactionPreparedPhases, startLT uint64) *transactionExecEnv {
+	env := &transactionExecEnv{
+		block:   block,
+		cfg:     block.cfg,
+		opts:    opts,
+		acc:     acc,
+		msg:     msg,
+		msgCell: msgCell,
+		startLT: startLT,
+		blockLT: block.blockLT,
+		balance: new(big.Int).Set(prepared.balance),
 	}
-	if msgCell == nil {
-		return nil, errors.New("input message is required")
+	if env.blockLT == 0 {
+		env.blockLT = transactionBlockLogicalTime(startLT)
+	}
+	env.incomingValue = prepared.msgBalance.asTuple()
+	env.storageFees = transactionInt64OrZero(prepared.storagePhase.StorageFeesCollected.Nano())
+	env.duePayment = transactionBigOrZero(transactionCoinsNano(prepared.duePayment))
+	env.inMsgParams = transactionBuildInMsgParams(msg, prepared.msgBalance)
+	return env
+}
+
+func (env *transactionExecEnv) c7Input(code *cell.Cell, balance *big.Int) (emulationC7Input, error) {
+	seed, err := transactionSeed(env.block, env.opts, env.acc.addr)
+	if err != nil {
+		return emulationC7Input{}, err
+	}
+	return emulationC7Input{
+		addr:                env.acc.addr,
+		code:                code,
+		now:                 env.block.now,
+		blockLT:             env.blockLT,
+		logicalTime:         int64(env.startLT),
+		balance:             balance,
+		seed:                seed,
+		configRoot:          env.cfg.root,
+		incomingValue:       env.incomingValue,
+		storageFees:         env.storageFees,
+		prevBlocks:          env.block.prevBlocksValue(),
+		unpackedConfig:      env.block.unpackedConfig,
+		duePayment:          transactionMaybeBigValue(env.duePayment),
+		precompiledGasUsage: env.precompiledGasUsage,
+		inMsgParams:         env.inMsgParams,
+		globalVersion:       env.cfg.version,
+	}, nil
+}
+
+// transactionSeed resolves the c7 rand seed: the explicit per-account seed
+// when provided, otherwise derived from the block seed and account address.
+func transactionSeed(block *BlockContext, opts *TransactionOptions, addr *address.Address) (*big.Int, error) {
+	if len(opts.RandSeed) > 0 {
+		return new(big.Int).SetBytes(opts.RandSeed), nil
+	}
+	seed, err := accountRandSeedBytes(block.randSeed, addr, block.cfg.version)
+	if err != nil {
+		return nil, err
+	}
+	if len(seed) == 0 {
+		return big.NewInt(0), nil
+	}
+	return new(big.Int).SetBytes(seed), nil
+}
+
+func transactionMaybeBigValue(v *big.Int) any {
+	if v == nil {
+		return nil
+	}
+	return v
+}
+
+// transactionExecutionLibraries combines the compute-phase library collections
+// the reference implementation uses. Since global version 15, account-private
+// and inbound StateInit libraries are excluded from the VM context.
+func transactionExecutionLibraries(acc *transactionRuntimeAccount, blockLibraries []*cell.Cell, globalVersion uint32) []*cell.Cell {
+	if globalVersion >= 15 {
+		return blockLibraries
 	}
 
-	var msg tlb.Message
-	if err := tlb.Parse(&msg, msgCell); err != nil {
-		return nil, fmt.Errorf("failed to decode input message: %w", err)
+	var inMsgLibrary, accountLibrary *cell.Cell
+	if acc.inMsgLibraries != nil {
+		inMsgLibrary = acc.inMsgLibraries.AsCell()
 	}
-	if msg.MsgType == tlb.MsgTypeExternalOut {
-		return nil, errors.New("external outbound messages cannot be used as transaction input")
+	if acc.libraries != nil {
+		accountLibrary = acc.libraries.AsCell()
 	}
-
-	var proof *cell.MerkleProofBuilder
-	if cfg.BuildProof {
-		if shard.Account == nil {
-			return nil, errors.New("shard account root is nil")
-		}
-		proof = cell.NewMerkleProofBuilder(shard.Account)
+	if inMsgLibrary == nil && accountLibrary == nil {
+		return blockLibraries
 	}
 
-	runtimeAcc, err := loadTransactionRuntimeAccount(shard, msg.Msg.DestAddr(), proof)
+	librariesNum := len(blockLibraries)
+	if inMsgLibrary != nil {
+		librariesNum++
+	}
+	if accountLibrary != nil {
+		librariesNum++
+	}
+
+	libraries := make([]*cell.Cell, librariesNum)
+	idx := 0
+	if inMsgLibrary != nil {
+		libraries[idx] = inMsgLibrary
+		idx++
+	}
+	if accountLibrary != nil {
+		libraries[idx] = accountLibrary
+		idx++
+	}
+	copy(libraries[idx:], blockLibraries)
+	return libraries
+}
+
+// EmulateTransaction executes an ordinary transaction of acc with the inbound
+// message msg. The result feeds the next transaction of the same account
+// through NextAccount and AccountStorageStat.
+func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, msg *PreparedMessage, opts TransactionOptions) (*TransactionExecutionResult, error) {
+	if block == nil {
+		return nil, errors.New("block context is required")
+	}
+	if acc == nil {
+		return nil, errors.New("prepared account is required")
+	}
+	if msg == nil {
+		return nil, errors.New("prepared message is required")
+	}
+	blockchainCfg := block.cfg
+
+	runtimeAcc, proof, err := acc.runtimeForExecution(opts.BuildProof)
 	if err != nil {
 		return nil, err
 	}
 
-	now := cfg.Now
-	if now == 0 {
-		now = uint32(time.Now().Unix())
+	now := block.now
+	if err = transactionValidateInboundExternalMessage(msg.cell, &msg.msg, blockchainCfg); err != nil {
+		return nil, err
 	}
-
-	blockchainCfg := tlb.BlockchainConfig{
-		Root: cfg.ConfigRoot,
-	}
-	isSpecial := transactionIsSpecialAccount(blockchainCfg, runtimeAcc.addr)
+	isSpecial := blockchainCfg.isSpecialAccount(runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 
-	storageDueLimits := transactionGetStorageDueLimits(blockchainCfg, runtimeAcc.addr)
+	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
 
-	storageFee := big.NewInt(0)
-	storageFee, err = transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
+	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
 	if err != nil {
 		return nil, err
 	}
@@ -142,12 +380,12 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	}
 	importFee := big.NewInt(0)
 	if !isSpecial {
-		importFee, err = transactionComputeImportFee(blockchainCfg, runtimeAcc.addr, &msg, msgCell)
+		importFee, err = transactionComputeImportFee(blockchainCfg, runtimeAcc.addr, &msg.msg, msg.cell)
 		if err != nil {
 			return nil, err
 		}
 	}
-	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg, storageFee, importFee, now, storageDueLimits)
+	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg.msg, storageFee, importFee, now, blockchainCfg, storageDueLimits)
 	if err != nil {
 		return nil, err
 	}
@@ -155,12 +393,9 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 		prepared.lastPaid = 0
 	}
 
-	execCfg := cfg
-	execCfg.Address = runtimeAcc.addr
-	execCfg.Now = now
-	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, execCfg.LogicalTime), &msg)
-	transactionPrepareExecutionConfig(&execCfg, runtimeAcc, &msg, prepared, startLT)
-	execCfg.Balance = new(big.Int).Set(prepared.balance)
+	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, opts.LogicalTime), &msg.msg)
+	env := newTransactionExecEnv(block, &opts, runtimeAcc, &msg.msg, msg.cell, prepared, startLT)
+	env.proof = proof
 
 	computeAcc := runtimeAcc
 	msgStateUsed := false
@@ -169,34 +404,24 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	if prepared.balance.Sign() <= 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	} else {
-		gas = transactionMessageGas(execCfg, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.MsgType, isSpecial)
+		gas = transactionMessageGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.msg.MsgType, isSpecial)
 		if gas.Limit == 0 && gas.Credit == 0 {
 			skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 		} else {
 			addressSuspended := false
-			if !prepared.deleted && (prepared.status == tlb.AccountStatusUninit || prepared.status == tlb.AccountStatusNonExist) && transactionMessageStateInit(&msg) != nil {
-				addressSuspended, err = transactionIsAddressSuspended(blockchainCfg, now, runtimeAcc.addr)
-				if err != nil {
-					return nil, fmt.Errorf("check suspended address: %w", err)
-				}
+			if !prepared.deleted && (prepared.status == tlb.AccountStatusUninit || prepared.status == tlb.AccountStatusNonExist) && transactionMessageStateInit(&msg.msg) != nil {
+				addressSuspended = blockchainCfg.isAddressSuspended(now, runtimeAcc.addr)
 			}
 
-			computeAcc, msgStateUsed, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, &msg, addressSuspended, blockchainCfg)
+			computeAcc, msgStateUsed, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, &msg.msg, addressSuspended, blockchainCfg)
 			if err != nil {
 				return nil, err
 			}
-			if cfg.BuildProof && msgStateUsed && skipReason == nil {
+			if opts.BuildProof && msgStateUsed && skipReason == nil {
 				return nil, errors.New("account execution proof cannot be built for code loaded from message state init")
 			}
 			if skipReason == nil {
-				var precompiledUsage *big.Int
-				gas, precompiledUsage, skipReason, err = transactionApplyPrecompiledGasConfig(execCfg, blockchainCfg, computeAcc.code, gas)
-				if err != nil {
-					return nil, err
-				}
-				if precompiledUsage != nil {
-					execCfg.PrecompiledGasUsage = precompiledUsage
-				}
+				gas, skipReason = transactionApplyPrecompiledGasConfig(blockchainCfg, computeAcc.code, gas, env)
 			}
 		}
 	}
@@ -204,18 +429,19 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	var msgRes *MessageExecutionResult
 	accountActivated := false
 	if skipReason == nil {
-		msgRes, err = tvm.executeTransactionMessage(computeAcc, msgCell, &msg, execCfg, gas, prepared.msgBalance.grams, proof)
+		msgRes, err = tvm.executeTransactionMessage(computeAcc, env, gas, prepared.msgBalance.grams)
 		if err != nil {
 			return nil, err
 		}
 		transactionNormalizeGasUsage(msgRes)
-		if err = transactionApplyPrecompiledGasUsage(msgRes, execCfg.PrecompiledGasUsage); err != nil {
+		if err = transactionApplyPrecompiledGasUsage(msgRes, env.precompiledGasUsage); err != nil {
 			return nil, err
 		}
 		if msgStateUsed && msgRes.Accepted {
 			accountActivated = true
 			prepared.status = tlb.AccountStatusActive
 			prepared.deleted = false
+			prepared.destroyed = false
 		}
 	}
 
@@ -224,7 +450,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 		out.ExecutionResult = msgRes.ExecutionResult
 		out.Accepted = msgRes.Accepted
 	}
-	if msg.MsgType == tlb.MsgTypeExternalIn && (msgRes == nil || !msgRes.Accepted) {
+	if msg.msg.MsgType == tlb.MsgTypeExternalIn && (msgRes == nil || !msgRes.Accepted) {
 		return out, nil
 	}
 
@@ -234,7 +460,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	nextLibraries := computeAcc.libraries
 	nextExtraCurrencies := prepared.extraCurrencies
 	msgBalanceRemaining := prepared.msgBalance
-	var outMessages []*cell.Cell
+	var outMessages []OutMessage
 	var actionPhase *tlb.ActionPhase
 	var actionBounce bool
 	var actionDeleted bool
@@ -277,8 +503,8 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 	actionSuccess := actionPhase != nil && actionPhase.Success
 	aborted := skipReason != nil || !(computeSuccess && actionSuccess)
 	var bouncePhase *tlb.BouncePhase
-	if aborted && transactionShouldBounce(&msg, skipReason, computeSuccess, actionBounce) {
-		bounceRes, bounceErr := transactionPrepareBouncePhase(&msg, finalBalance, nextExtraCurrencies, msgBalanceRemaining, gasFees, actionFine, startLT, now, len(outMessages), blockchainCfg, skipReason, msgRes, actionPhase)
+	if aborted && transactionShouldBounce(&msg.msg, skipReason, computeSuccess, actionBounce) {
+		bounceRes, bounceErr := transactionPrepareBouncePhase(&msg.msg, finalBalance, nextExtraCurrencies, msgBalanceRemaining, gasFees, actionFine, startLT, now, len(outMessages), blockchainCfg, skipReason, msgRes, actionPhase)
 		if bounceErr != nil {
 			return nil, bounceErr
 		}
@@ -288,7 +514,7 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 			nextExtraCurrencies = bounceRes.extraCurrencies
 			totalFees.Add(totalFees, bounceRes.msgFees)
 			if bounceRes.outMsg != nil {
-				outMessages = append(outMessages, bounceRes.outMsg)
+				outMessages = append(outMessages, OutMessage{Cell: bounceRes.outMsg, Msg: bounceRes.outMsgParsed})
 				endLT++
 			}
 		}
@@ -306,36 +532,42 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 
 	if actionDeleted {
 		prepared.deleted = true
+		prepared.destroyed = true
 	}
 	finalStatus := transactionFinalizeAccountStatus(prepared.status, prepared.deleted, finalBalance, nextExtraCurrencies, accountActivated)
 	nextStateHash := runtimeAcc.stateHash
 	if finalStatus == tlb.AccountStatusFrozen && (runtimeAcc.status == tlb.AccountStatusActive || accountActivated) {
 		nextStateHash = nil
 	}
-	finalStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(computeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash)
+	accountStatus := finalStatus
+	finalStatus, accountStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(computeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg)
 	if err != nil {
 		return nil, err
 	}
-	nextAccountCell, nextAccountState, nextAccountStorageStat, err := buildTransactionAccountCell(computeAcc, finalStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, cfg.AccountStorageStat)
+	nextAccount, err := buildTransactionAccountCell(computeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, opts.AccountStorageStat)
 	if err != nil {
 		return nil, err
 	}
 
+	txAccountAddr, err := transactionAccountIDAddr(runtimeAcc.addr)
+	if err != nil {
+		return nil, err
+	}
 	txCell, err := buildTransactionCell(transactionBuildParams{
-		accountAddr: runtimeAcc.addr,
+		accountAddr: txAccountAddr,
 		startLT:     startLT,
 		prevTxHash:  runtimeAcc.prevTxHash,
 		prevTxLT:    runtimeAcc.prevTxLT,
 		now:         now,
 		origStatus:  runtimeAcc.status,
 		endStatus:   finalStatus,
-		inMsg:       msgCell,
+		inMsg:       msg.cell,
 		outMsgs:     outMessages,
 		totalFees:   totalFees,
 		oldHash:     runtimeAcc.originalCell.Hash(),
-		newHash:     nextAccountCell.Hash(),
+		newHash:     nextAccount.cell.Hash(),
 		description: transactionBuildDescriptionParams{
-			msg:           &msg,
+			msg:           &msg.msg,
 			creditFirst:   prepared.creditFirst,
 			storagePhase:  prepared.storagePhase,
 			creditPhase:   prepared.creditPhase,
@@ -347,30 +579,28 @@ func (tvm *TVM) EmulateTransaction(shard *tlb.ShardAccount, msgCell *cell.Cell, 
 			skipReason:    skipReason,
 			msgStateUsed:  msgStateUsed && runtimeAcc.status != tlb.AccountStatusActive,
 			activated:     accountActivated && runtimeAcc.status != tlb.AccountStatusActive,
-			destroyed:     prepared.deleted,
+			destroyed:     prepared.destroyed,
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return out, fillTransactionExecutionResult(out, txCell, nextAccountCell, nextAccountState, nextAccountStorageStat, startLT)
+	return out, fillTransactionExecutionResult(out, txCell, acc, nextAccount, outMessages, startLT, endLT)
 }
 
-func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool, cfg TransactionEmulationConfig) (*TransactionExecutionResult, error) {
-	if shard == nil {
-		return nil, errors.New("shard account is required")
+// EmulateTickTockTransaction executes a tick or tock system transaction of a
+// masterchain special account.
+func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAccount, isTock bool, opts TransactionOptions) (*TransactionExecutionResult, error) {
+	if block == nil {
+		return nil, errors.New("block context is required")
 	}
-
-	var proof *cell.MerkleProofBuilder
-	if cfg.BuildProof {
-		if shard.Account == nil {
-			return nil, errors.New("shard account root is nil")
-		}
-		proof = cell.NewMerkleProofBuilder(shard.Account)
+	if acc == nil {
+		return nil, errors.New("prepared account is required")
 	}
+	blockchainCfg := block.cfg
 
-	runtimeAcc, err := loadTransactionRuntimeAccount(shard, nil, proof)
+	runtimeAcc, proof, err := acc.runtimeForExecution(opts.BuildProof)
 	if err != nil {
 		return nil, err
 	}
@@ -387,17 +617,10 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 		return nil, errors.New("account does not allow tick transactions")
 	}
 
-	now := cfg.Now
-	if now == 0 {
-		now = uint32(time.Now().Unix())
-	}
-
-	blockchainCfg := tlb.BlockchainConfig{
-		Root: cfg.ConfigRoot,
-	}
-	isSpecial := transactionIsSpecialAccount(blockchainCfg, runtimeAcc.addr)
+	now := block.now
+	isSpecial := blockchainCfg.isSpecialAccount(runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
-	storageDueLimits := transactionGetStorageDueLimits(blockchainCfg, runtimeAcc.addr)
+	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
 	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
 	if err != nil {
 		return nil, err
@@ -418,20 +641,17 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 		duePayment:      transactionCoinsPtr(transactionCoinsNano(runtimeAcc.storageInfo.DuePayment)),
 		lastPaid:        runtimeAcc.storageInfo.LastPaid,
 	}
-	prepared.applyStoragePhase(runtimeAcc, storageFee, now, storageDueLimits, false)
+	prepared.applyStoragePhase(runtimeAcc, storageFee, now, blockchainCfg.globalVersion(), storageDueLimits, false)
 	if isSpecial {
 		prepared.lastPaid = 0
 	}
 
-	execCfg := cfg
-	execCfg.Address = runtimeAcc.addr
-	execCfg.Now = now
-	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, execCfg.LogicalTime), nil)
-	transactionPrepareExecutionConfig(&execCfg, runtimeAcc, nil, prepared, startLT)
-	execCfg.Balance = new(big.Int).Set(prepared.balance)
+	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, opts.LogicalTime), nil)
+	env := newTransactionExecEnv(block, &opts, runtimeAcc, nil, nil, prepared, startLT)
+	env.proof = proof
 
 	var skipReason *tlb.ComputeSkipReason
-	gas := transactionTickTockGas(execCfg, blockchainCfg, runtimeAcc.addr)
+	gas := transactionTickTockGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, isSpecial)
 	if prepared.balance.Sign() <= 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	} else if prepared.status != tlb.AccountStatusActive || prepared.deleted || runtimeAcc.code == nil {
@@ -442,12 +662,12 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 
 	var msgRes *MessageExecutionResult
 	if skipReason == nil {
-		msgRes, err = tvm.executeTickTockTransaction(runtimeAcc, isTock, execCfg, gas, proof)
+		msgRes, err = tvm.executeTickTockTransaction(runtimeAcc, isTock, env, gas)
 		if err != nil {
 			return nil, err
 		}
 		transactionNormalizeGasUsage(msgRes)
-		if err = transactionApplyPrecompiledGasUsage(msgRes, execCfg.PrecompiledGasUsage); err != nil {
+		if err = transactionApplyPrecompiledGasUsage(msgRes, env.precompiledGasUsage); err != nil {
 			return nil, err
 		}
 	}
@@ -463,7 +683,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 	nextData := runtimeAcc.data
 	nextLibraries := runtimeAcc.libraries
 	nextExtraCurrencies := prepared.extraCurrencies
-	var outMessages []*cell.Cell
+	var outMessages []OutMessage
 	var actionPhase *tlb.ActionPhase
 	var actionDeleted bool
 	gasFees := big.NewInt(0)
@@ -510,23 +730,29 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 
 	if actionDeleted {
 		prepared.deleted = true
+		prepared.destroyed = true
 	}
 	finalStatus := transactionFinalizeAccountStatus(prepared.status, prepared.deleted, finalBalance, nextExtraCurrencies, false)
 	nextStateHash := runtimeAcc.stateHash
 	if finalStatus == tlb.AccountStatusFrozen && runtimeAcc.status == tlb.AccountStatusActive {
 		nextStateHash = nil
 	}
-	finalStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(runtimeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash)
+	accountStatus := finalStatus
+	finalStatus, accountStatus, nextStateHash, err = transactionNormalizeFrozenFinalState(runtimeAcc, finalStatus, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg)
 	if err != nil {
 		return nil, err
 	}
-	nextAccountCell, nextAccountState, nextAccountStorageStat, err := buildTransactionAccountCell(runtimeAcc, finalStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, cfg.AccountStorageStat)
+	nextAccount, err := buildTransactionAccountCell(runtimeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, opts.AccountStorageStat)
 	if err != nil {
 		return nil, err
 	}
 
+	txAccountAddr, err := transactionAccountIDAddr(runtimeAcc.addr)
+	if err != nil {
+		return nil, err
+	}
 	txCell, err := buildTransactionCell(transactionBuildParams{
-		accountAddr: runtimeAcc.addr,
+		accountAddr: txAccountAddr,
 		startLT:     startLT,
 		prevTxHash:  runtimeAcc.prevTxHash,
 		prevTxLT:    runtimeAcc.prevTxLT,
@@ -536,7 +762,7 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 		outMsgs:     outMessages,
 		totalFees:   totalFees,
 		oldHash:     runtimeAcc.originalCell.Hash(),
-		newHash:     nextAccountCell.Hash(),
+		newHash:     nextAccount.cell.Hash(),
 		description: transactionBuildDescriptionParams{
 			tickTock:      true,
 			isTock:        isTock,
@@ -546,19 +772,31 @@ func (tvm *TVM) EmulateTickTockTransaction(shard *tlb.ShardAccount, isTock bool,
 			gasFees:       gasFees,
 			actionPhase:   actionPhase,
 			skipReason:    skipReason,
-			destroyed:     prepared.deleted,
+			destroyed:     prepared.destroyed,
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return out, fillTransactionExecutionResult(out, txCell, nextAccountCell, nextAccountState, nextAccountStorageStat, startLT)
+	return out, fillTransactionExecutionResult(out, txCell, acc, nextAccount, outMessages, startLT, endLT)
 }
 
 func transactionNormalizeGasUsage(res *MessageExecutionResult) {
 	if res.GasUsed > res.Gas.Base {
 		res.GasUsed = res.Gas.Base
+	}
+}
+
+func transactionNoCodeExecutionResult(code, data *cell.Cell, gas vm.Gas) *MessageExecutionResult {
+	return &MessageExecutionResult{
+		ExecutionResult: ExecutionResult{
+			ExitCode: -vmerr.CodeOutOfGas,
+			Gas:      gas,
+			Code:     code,
+			Data:     data,
+		},
+		Accepted: gas.Credit == 0,
 	}
 }
 
@@ -576,119 +814,97 @@ func transactionApplyPrecompiledGasUsage(res *MessageExecutionResult, value *big
 	return nil
 }
 
-func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, msgCell *cell.Cell, msg *tlb.Message, cfg TransactionEmulationConfig, gas vm.Gas, msgBalance *big.Int, proof *cell.MerkleProofBuilder) (*MessageExecutionResult, error) {
+func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, env *transactionExecEnv, gas vm.Gas, msgBalance *big.Int) (*MessageExecutionResult, error) {
+	msg := env.msg
 	body := messageBodyCell(msg.Msg.Payload())
 	stack := vm.NewStack()
-	balance := new(big.Int).Set(cfg.Balance)
+	balance := new(big.Int).Set(env.balance)
 
 	switch msg.MsgType {
 	case tlb.MsgTypeExternalIn:
-		if err := stack.PushInt(balance); err != nil {
+		if err := stack.PushOwnedInt(balance); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(big.NewInt(0)); err != nil {
+		if err := stack.PushSmallInt(0); err != nil {
 			return nil, err
 		}
-		if err := stack.PushCell(msgCell); err != nil {
+		if err := stack.PushCell(env.msgCell); err != nil {
 			return nil, err
 		}
 		bodySlice, err := body.BeginParse()
 		if err != nil {
 			return nil, err
 		}
-		if err := stack.PushSlice(bodySlice); err != nil {
+		if err := stack.PushOwnedSlice(bodySlice); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(big.NewInt(-1)); err != nil {
+		if err := stack.PushSmallInt(-1); err != nil {
 			return nil, err
 		}
 	case tlb.MsgTypeInternal:
-		if err := stack.PushInt(balance); err != nil {
+		if err := stack.PushOwnedInt(balance); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(transactionBigOrZero(msgBalance)); err != nil {
+		if err := stack.PushOwnedInt(transactionBigOrZero(msgBalance)); err != nil {
 			return nil, err
 		}
-		if err := stack.PushCell(msgCell); err != nil {
+		if err := stack.PushCell(env.msgCell); err != nil {
 			return nil, err
 		}
 		bodySlice, err := body.BeginParse()
 		if err != nil {
 			return nil, err
 		}
-		if err := stack.PushSlice(bodySlice); err != nil {
+		if err := stack.PushOwnedSlice(bodySlice); err != nil {
 			return nil, err
 		}
-		if err := stack.PushInt(big.NewInt(0)); err != nil {
+		if err := stack.PushSmallInt(0); err != nil {
 			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unsupported input message type %s", msg.MsgType)
 	}
 
-	c7, err := buildTransactionEmulationC7(acc.addr, acc.code, cfg, balance)
+	if acc.code == nil {
+		return transactionNoCodeExecutionResult(acc.code, acc.data, gas), nil
+	}
+	c7In, err := env.c7Input(acc.code, balance)
 	if err != nil {
 		return nil, err
 	}
 
-	libraries := transactionExecutionLibraries(acc, cfg)
-
-	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, libraries...)
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
+	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
 }
 
-func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, cfg TransactionEmulationConfig, gas vm.Gas, proof *cell.MerkleProofBuilder) (*MessageExecutionResult, error) {
+func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, env *transactionExecEnv, gas vm.Gas) (*MessageExecutionResult, error) {
 	accAddr, err := messageEmulationAccountAddr(acc.addr)
 	if err != nil {
 		return nil, err
 	}
 
 	stack := vm.NewStack()
-	balance := new(big.Int).Set(cfg.Balance)
-	if err = stack.PushInt(balance); err != nil {
+	balance := new(big.Int).Set(env.balance)
+	if err = stack.PushOwnedInt(balance); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(accAddr); err != nil {
+	if err = stack.PushOwnedInt(accAddr); err != nil {
 		return nil, err
 	}
 	if err = stack.PushBool(isTock); err != nil {
 		return nil, err
 	}
-	if err = stack.PushInt(big.NewInt(-2)); err != nil {
+	if err = stack.PushSmallInt(-2); err != nil {
 		return nil, err
 	}
 
-	c7, err := buildTransactionEmulationC7(acc.addr, acc.code, cfg, balance)
+	c7In, err := env.c7Input(acc.code, balance)
 	if err != nil {
 		return nil, err
 	}
 
-	libraries := transactionExecutionLibraries(acc, cfg)
-
-	res, err := tvm.executeMessageEmulation(acc.code, acc.data, c7, gas, stack, cfg.StopOnAccept, proof, libraries...)
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
-func transactionExecutionLibraries(acc *transactionRuntimeAccount, cfg TransactionEmulationConfig) []*cell.Cell {
-	if transactionHasExplicitC7Context(cfg) {
-		return append([]*cell.Cell(nil), cfg.Libraries...)
-	}
-
-	libraries := make([]*cell.Cell, 0, len(cfg.Libraries)+2)
-	if acc.inMsgLibraries != nil && acc.inMsgLibraries.AsCell() != nil {
-		libraries = append(libraries, acc.inMsgLibraries.AsCell())
-	}
-	if acc.libraries != nil && acc.libraries.AsCell() != nil {
-		libraries = append(libraries, acc.libraries.AsCell())
-	}
-	libraries = append(libraries, cfg.Libraries...)
-	return libraries
+	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, false, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.cfg, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
 }
 
 const transactionLTAlignment = uint64(1_000_000)
@@ -706,31 +922,6 @@ func transactionExecutionLogicalTime(prevTxLT uint64, configured int64) int64 {
 
 func transactionBlockLogicalTime(startLT uint64) int64 {
 	return int64(startLT - startLT%transactionLTAlignment)
-}
-
-func transactionPrepareExecutionConfig(cfg *TransactionEmulationConfig, acc *transactionRuntimeAccount, msg *tlb.Message, prepared *transactionPreparedPhases, startLT uint64) {
-	cfg.LogicalTime = int64(startLT)
-	if cfg.BlockLT == 0 {
-		cfg.BlockLT = transactionBlockLogicalTime(startLT)
-	}
-	if prepared == nil {
-		return
-	}
-	if transactionHasExplicitC7Context(*cfg) {
-		return
-	}
-	if cfg.IncomingValue.Len() == 0 {
-		cfg.IncomingValue = prepared.msgBalance.asTuple()
-	}
-	if cfg.StorageFees == 0 {
-		cfg.StorageFees = transactionInt64OrZero(prepared.storagePhase.StorageFeesCollected.Nano())
-	}
-	if cfg.DuePayment == nil {
-		cfg.DuePayment = transactionBigOrZero(transactionCoinsNano(prepared.duePayment))
-	}
-	if cfg.InMsgParams.Len() == 0 {
-		cfg.InMsgParams = transactionBuildInMsgParams(msg, prepared.msgBalance)
-	}
 }
 
 func transactionInt64OrZero(v *big.Int) int64 {
@@ -751,93 +942,9 @@ func (c *transactionCurrencyBalance) asTuple() tuple.Tuple {
 	return tuple.NewTupleValue(transactionBigOrZero(c.grams), extra.AsCell())
 }
 
-func buildTransactionEmulationC7(addr *address.Address, code *cell.Cell, cfg MessageEmulationConfig, balance *big.Int) (tuple.Tuple, error) {
-	seed, err := transactionEmulationSeedForConfig(cfg, addr)
-	if err != nil {
-		return tuple.Tuple{}, err
-	}
-
-	now := cfg.Now
-	if now == 0 {
-		now = uint32(time.Now().Unix())
-	}
-
-	myAddr := cell.BeginCell().MustStoreAddr(addr).ToSlice()
-	values := []any{
-		messageTupleUint(0x076ef1ea),
-		messageTupleInt(0),
-		messageTupleInt(0),
-		messageTupleUint(uint64(now)),
-		messageTupleInt(cfg.BlockLT),
-		messageTupleInt(cfg.LogicalTime),
-		seed,
-		tuple.NewTupleValue(new(big.Int).Set(balance), nil),
-		myAddr,
-		cfg.ConfigRoot,
-		code,
-		messageIncomingValue(cfg.IncomingValue),
-		messageTupleInt(cfg.StorageFees),
-		cfg.PrevBlocks,
-		messageUnpackedConfig(cfg),
-		cfg.DuePayment,
-		messageTupleMaybeInt(cfg.PrecompiledGasUsage),
-		messageInMsgParams(cfg.InMsgParams),
-	}
-
-	for i, val := range values {
-		values[i] = normalizeMessageTupleValue(val)
-	}
-
-	inner := tuple.NewTupleOwned(values)
-	topLen := 1
-	for idx := range cfg.Globals {
-		if idx <= 0 {
-			return tuple.Tuple{}, errors.New("c7 global index 0 is reserved")
-		}
-		if idx+1 > topLen {
-			topLen = idx + 1
-		}
-	}
-
-	top := make([]any, topLen)
-	top[0] = inner
-	for idx, val := range cfg.Globals {
-		top[idx] = normalizeMessageTupleValue(val)
-	}
-	return tuple.NewTupleOwned(top), nil
-}
-
-func transactionEmulationSeedForConfig(cfg MessageEmulationConfig, addr *address.Address) (*big.Int, error) {
-	if transactionHasExplicitC7Context(cfg) {
-		return messageEmulationSeed(cfg.RandSeed)
-	}
-	return transactionEmulationSeed(cfg.RandSeed, addr)
-}
-
-func transactionHasExplicitC7Context(cfg MessageEmulationConfig) bool {
-	return cfg.IncomingValue.Len() > 0 ||
-		cfg.InMsgParams.Len() > 0 ||
-		cfg.UnpackedConfig.Len() > 0 ||
-		cfg.PrevBlocks != nil
-}
-
-func transactionEmulationSeed(blockSeed []byte, addr *address.Address) (*big.Int, error) {
-	if len(blockSeed) == 0 {
-		return big.NewInt(0), nil
-	}
-	if addr == nil || addr.Type() != address.StdAddress || len(addr.Data()) != 32 {
-		return nil, errors.New("transaction rand seed requires std 256-bit account address")
-	}
-
-	h := sha256.New()
-	h.Write(transactionBits256(blockSeed))
-	h.Write(addr.Data())
-	return new(big.Int).SetBytes(h.Sum(nil)), nil
-}
-
 func transactionBuildInMsgParams(msg *tlb.Message, msgBalance *transactionCurrencyBalance) tuple.Tuple {
 	if msg == nil {
-		return messageInMsgParams(tuple.Tuple{})
+		return messageInMsgParams(tuple.Tuple{}, nil)
 	}
 
 	stateInitCell := transactionMaybeStateInitCell(transactionMessageStateInit(msg))
@@ -850,10 +957,10 @@ func transactionBuildInMsgParams(msg *tlb.Message, msgBalance *transactionCurren
 			messageTupleBool(in.Bounce),
 			messageTupleBool(in.Bounced),
 			cell.BeginCell().MustStoreAddr(in.SrcAddr).ToSlice(),
-			transactionBigOrZero(in.FwdFee.Nano()),
+			in.FwdFee.Nano(),
 			messageTupleUint(in.CreatedLT),
 			messageTupleUint(uint64(in.CreatedAt)),
-			transactionBigOrZero(in.Amount.Nano()),
+			in.Amount.Nano(),
 			value,
 			valueExtra,
 			stateInitCell,
@@ -873,7 +980,7 @@ func transactionBuildInMsgParams(msg *tlb.Message, msgBalance *transactionCurren
 			stateInitCell,
 		)
 	default:
-		return messageInMsgParams(tuple.Tuple{})
+		return messageInMsgParams(tuple.Tuple{}, nil)
 	}
 }
 
@@ -905,6 +1012,57 @@ func transactionMaybeStateInitCell(stateInit *tlb.StateInit) *cell.Cell {
 	}
 	return stateCell
 }
+
+// accountRandSeedBytes derives the per-account c7 rand seed from the block
+// seed, using the pre-v8 layout quirk of the reference implementation when
+// needed.
+func accountRandSeedBytes(blockSeed []byte, addr *address.Address, globalVersion uint32) ([]byte, error) {
+	if len(blockSeed) == 0 {
+		return nil, nil
+	}
+	addrData, err := transactionRewrittenAccountAddressData(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	h := sha256.New()
+	h.Write(transactionBits256(blockSeed))
+	if globalVersion < 8 {
+		h.Write(addrData[:4])
+		h.Write(addrData[:28])
+	} else {
+		h.Write(addrData)
+	}
+	return h.Sum(nil), nil
+}
+
+func transactionRewrittenAccountAddressData(addr *address.Address) ([]byte, error) {
+	if addr == nil || addr.Type() != address.StdAddress || len(addr.Data()) != 32 {
+		return nil, errors.New("transaction rand seed requires std 256-bit account address")
+	}
+
+	data := append([]byte(nil), addr.Data()...)
+	anycast := addr.Anycast()
+	if anycast == nil {
+		return data, nil
+	}
+
+	depth := anycast.Depth()
+	prefix := anycast.Prefix()
+	if depth == 0 || depth > 30 || uint(len(prefix)*8) < depth {
+		return nil, errors.New("transaction rand seed requires valid account anycast")
+	}
+	for i := uint(0); i < depth; i++ {
+		mask := byte(1 << (7 - i%8))
+		if transactionBit(prefix, int(i)) == 1 {
+			data[i/8] |= mask
+		} else {
+			data[i/8] &^= mask
+		}
+	}
+	return data, nil
+}
+
 func transactionStartLT(storageLT uint64, logicalTime int64, msg *tlb.Message) uint64 {
 	var start uint64
 	if logicalTime > 0 {

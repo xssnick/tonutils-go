@@ -30,9 +30,9 @@ func CONDSEL() *helpers.SimpleOP {
 			}
 
 			if !f2 {
-				return state.Stack.PushAny(y0)
+				return state.Stack.PushOwnedValue(y0)
 			}
-			return state.Stack.PushAny(x1)
+			return state.Stack.PushOwnedValue(x1)
 		},
 		Name:      "CONDSEL",
 		BitPrefix: helpers.BytesPrefix(0xE3, 0x04),

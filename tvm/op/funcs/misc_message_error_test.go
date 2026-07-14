@@ -8,6 +8,9 @@ import (
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
+	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func TestMiscMessageAdditionalPaths(t *testing.T) {
@@ -134,10 +137,10 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 			t.Fatal("LDSTDADDR should reject non-standard addresses")
 		}
 
-		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b11, 2).ToSlice()); ok || parsed != nil {
+		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b11, 2).ToSlice(), vm.MaxSupportedGlobalVersion); ok || parsed != nil {
 			t.Fatalf("parseMessageAddress(type=3) = (%v, %v), want failure", parsed, ok)
 		}
-		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b10, 2).MustStoreUInt(1, 1).ToSlice()); ok || parsed != nil {
+		if parsed, _, ok := parseMessageAddress(cell.BeginCell().MustStoreUInt(0b10, 2).MustStoreUInt(1, 1).ToSlice(), vm.MaxSupportedGlobalVersion); ok || parsed != nil {
 			t.Fatalf("parseMessageAddress(anycast) = (%v, %v), want failure", parsed, ok)
 		}
 
@@ -192,7 +195,7 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PopSlice failed: %v", err)
 		}
-		if !isValidStdMsgAddr(restored) {
+		if !isValidStdMsgAddr(restored, vm.MaxSupportedGlobalVersion) {
 			t.Fatalf("STSTDADDRQ should restore the source address, got %x", mustSliceData(t, restored))
 		}
 
@@ -335,7 +338,7 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 		}
 
 		stat := newStorageStat(10, nil)
-		if addMessageTailStorage(stat, cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(), 1) {
+		if ok, err := addMessageTailStorage(stat, cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(), 1); err == nil && ok {
 			t.Fatal("addMessageTailStorage should fail when skipping too many refs")
 		}
 
@@ -393,4 +396,54 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 		}
 
 	})
+}
+
+func TestDataSizeLegacyLowGasRefAccounting(t *testing.T) {
+	first := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
+	second := cell.BeginCell().MustStoreUInt(2, 2).EndCell()
+	root := cell.BeginCell().MustStoreRef(first).MustStoreRef(second).EndCell()
+
+	tests := []struct {
+		name          string
+		version       int
+		bound         int64
+		wantGas       int64
+		wantErr       int64
+		wantCheckErr  int64
+		wantErrDuring bool
+	}{
+		{"legacy_v3_walks_refs_after_out_of_gas", 3, 10, 300, 0, vmerr.CodeOutOfGas, false},
+		{"legacy_v3_bound_overflow_beats_deferred_out_of_gas", 3, 1, 100, vmerr.CodeCellOverflow, 0, true},
+		{"v4_stops_on_first_out_of_gas", 4, 10, 100, vmerr.CodeOutOfGas, 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := vm.NewExecutionState(tt.version, vm.GasWithLimit(50), nil, tuple.Tuple{}, vm.NewStack())
+			st.InitForExecution()
+			if err := st.Stack.PushCell(root); err != nil {
+				t.Fatalf("PushCell failed: %v", err)
+			}
+			if err := st.Stack.PushInt(big.NewInt(tt.bound)); err != nil {
+				t.Fatalf("PushInt failed: %v", err)
+			}
+
+			err := CDATASIZE().Interpret(st)
+			if tt.wantErrDuring {
+				if code, ok := vmerr.ErrorCode(err); !ok || code != tt.wantErr {
+					t.Fatalf("CDATASIZE error code = (%d, %v), want %d; err=%v", code, ok, tt.wantErr, err)
+				}
+			} else if err != nil {
+				t.Fatalf("CDATASIZE unexpected error: %v", err)
+			}
+			if got := st.Gas.Used(); got != tt.wantGas {
+				t.Fatalf("gas used = %d, want %d", got, tt.wantGas)
+			}
+			if tt.wantCheckErr != 0 {
+				if code, ok := vmerr.ErrorCode(st.CheckGas()); !ok || code != tt.wantCheckErr {
+					t.Fatalf("CheckGas error code = (%d, %v), want %d", code, ok, tt.wantCheckErr)
+				}
+			}
+		})
+	}
 }

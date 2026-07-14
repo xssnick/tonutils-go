@@ -17,7 +17,7 @@ type dictPrefixEntry struct {
 }
 
 func newDictTestState() *vm.State {
-	st := vm.NewExecutionState(vm.DefaultGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
+	st := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil, tuple.Tuple{}, vm.NewStack())
 	st.CurrentCode = cell.BeginCell().EndCell().MustBeginParse()
 	st.InitForExecution()
 	return st
@@ -138,6 +138,18 @@ func TestDictHelpers(t *testing.T) {
 	if key, ok := encodeDictIntKey(big.NewInt(-1), 4, true); !ok || key == nil {
 		t.Fatal("signed key should encode")
 	}
+	if _, ok := encodeDictIntKey(big.NewInt(-8), 4, true); !ok {
+		t.Fatal("signed min key should encode")
+	}
+	if _, ok := encodeDictIntKey(big.NewInt(7), 4, true); !ok {
+		t.Fatal("signed max key should encode")
+	}
+	if _, ok := encodeDictIntKey(big.NewInt(-9), 4, true); ok {
+		t.Fatal("below signed min key should fail")
+	}
+	if _, ok := encodeDictIntKey(big.NewInt(8), 4, true); ok {
+		t.Fatal("above signed max key should fail")
+	}
 	if _, ok := encodeDictIntKey(big.NewInt(16), 4, false); ok {
 		t.Fatal("out-of-range unsigned key should fail")
 	}
@@ -168,7 +180,7 @@ func TestDictHelpers(t *testing.T) {
 	if err := mapDictError(cell.ErrTooMuchRefs); !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellOverflow {
 		t.Fatalf("expected cell overflow for too many refs, got %v", err)
 	}
-	if err := mapDictError(errors.New("not enough data in reader")); !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellUnderflow {
+	if err := mapDictError(cell.ErrNotEnoughData(0, 4)); !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeCellUnderflow {
 		t.Fatalf("expected reader underflow mapping, got %v", err)
 	}
 	origErr := vmerr.Error(vmerr.CodeRangeCheck)

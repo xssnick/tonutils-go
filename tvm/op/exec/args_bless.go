@@ -211,11 +211,11 @@ func RETURNARGS(count int) *helpers.AdvancedOP {
 func RETURNVARARGS() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			count, err := state.Stack.PopIntRange(0, 255)
+			count, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return returnArgsCommon(state, int(count.Int64()))
+			return returnArgsCommon(state, int(count))
 		},
 		Name:      "RETURNVARARGS",
 		BitPrefix: helpers.BytesPrefix(0xED, 0x10),
@@ -229,15 +229,15 @@ func SETCONTVARARGS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			more, err := state.Stack.PopIntRange(-1, 255)
+			more, err := state.Stack.PopIntRangeInt64(-1, 255)
 			if err != nil {
 				return err
 			}
-			copyCount, err := state.Stack.PopIntRange(0, 255)
+			copyCount, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return setContinuationArgsCommon(state, int(copyCount.Int64()), int(more.Int64()))
+			return setContinuationArgsCommon(state, int(copyCount), int(more))
 		},
 		Name:      "SETCONTVARARGS",
 		BitPrefix: helpers.BytesPrefix(0xED, 0x11),
@@ -251,11 +251,11 @@ func SETNUMVARARGS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			more, err := state.Stack.PopIntRange(-1, 255)
+			more, err := state.Stack.PopIntRangeInt64(-1, 255)
 			if err != nil {
 				return err
 			}
-			return setContinuationArgsCommon(state, 0, int(more.Int64()))
+			return setContinuationArgsCommon(state, 0, int(more))
 		},
 		Name:      "SETNUMVARARGS",
 		BitPrefix: helpers.BytesPrefix(0xED, 0x12),
@@ -289,15 +289,15 @@ func BLESSVARARGS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 
-			more, err := state.Stack.PopIntRange(-1, 255)
+			more, err := state.Stack.PopIntRangeInt64(-1, 255)
 			if err != nil {
 				return err
 			}
-			copyCount, err := state.Stack.PopIntRange(0, 255)
+			copyCount, err := state.Stack.PopIntRangeInt64(0, 255)
 			if err != nil {
 				return err
 			}
-			return blessArgsCommon(state, int(copyCount.Int64()), int(more.Int64()))
+			return blessArgsCommon(state, int(copyCount), int(more))
 		},
 		Name:      "BLESSVARARGS",
 		BitPrefix: helpers.BytesPrefix(0xED, 0x1F),

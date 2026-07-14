@@ -1,8 +1,6 @@
 package math
 
 import (
-	"math/big"
-
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -30,6 +28,7 @@ func LSHIFTDIVMODR() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
+			x = legacyLeftShiftOperand(state.GlobalVersion, x, z.Uint64())
 			if err = requireFiniteInts(y, x); err != nil {
 				return err
 			}
@@ -42,7 +41,7 @@ func LSHIFTDIVMODR() *helpers.SimpleOP {
 				}
 			}
 
-			q := helpers.DivRound(x.Mul(x, z.Lsh(big.NewInt(1), uint(z.Uint64()))), y)
+			q := helpers.DivRound(x.Mul(x, z.Lsh(bigIntOne, uint(z.Uint64()))), y)
 			r := y.Sub(x, y.Mul(q, y))
 
 			err = state.Stack.PushInt(q)

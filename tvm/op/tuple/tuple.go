@@ -14,9 +14,12 @@ func init() {
 	vm.List = append(vm.List, func() vm.OP { return TUPLE(0) })
 }
 
+// constant prefix, computed once instead of on every decode
+var tuplePrefix = helpers.UIntPrefix(0x6f0, 12)
+
 func TUPLE(n uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6f0, 12),
+		BitPrefix:     tuplePrefix,
 		FixedSizeBits: 4,
 		NameSerializer: func() string {
 			return fmt.Sprintf("%d TUPLE", n)
@@ -48,17 +51,13 @@ func execMakeTuple(state *vm.State, count int) error {
 
 	vals := make([]any, count)
 	for i := 0; i < count; i++ {
-		val, err := state.Stack.Get(count - 1 - i)
+		val, err := state.Stack.PopAny()
 		if err != nil {
 			return err
 		}
-		vals[i] = val
+		vals[count-1-i] = val
 	}
 
-	if err := state.Stack.Drop(count); err != nil {
-		return err
-	}
-
-	newTuple := tuplepkg.NewTupleValue(vals...)
+	newTuple := tuplepkg.NewTupleOwned(vals)
 	return state.PushTupleCharged(newTuple)
 }

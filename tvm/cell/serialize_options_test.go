@@ -202,6 +202,51 @@ func TestWriteBOCWithOptionsMatchesToBOCWithOptions(t *testing.T) {
 	}
 }
 
+func TestAppendBOCWithOptionsMatchesToBOCWithOptions(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
+	left := BeginCell().MustStoreUInt(0x12, 8).MustStoreRef(leaf).EndCell()
+	right := BeginCell().MustStoreUInt(0x34, 8).MustStoreRef(leaf).EndCell()
+	root := BeginCell().
+		MustStoreUInt(0x99, 8).
+		MustStoreRef(left).
+		MustStoreRef(right).
+		MustStoreRef(leaf).
+		EndCell()
+
+	opts := BOCSerializeOptions{
+		WithCRC32C:    true,
+		WithIndex:     true,
+		WithCacheBits: true,
+		WithTopHash:   true,
+		WithIntHashes: true,
+	}
+
+	prefix := []byte{0x01, 0x02}
+	got, err := AppendBOCWithOptions(prefix, []*Cell{root, leaf}, opts)
+	if err != nil {
+		t.Fatalf("failed to append boc: %v", err)
+	}
+
+	if !bytes.Equal(got[:len(prefix)], prefix) {
+		t.Fatal("append boc should preserve prefix")
+	}
+
+	want := ToBOCWithOptions([]*Cell{root, leaf}, opts)
+	if !bytes.Equal(got[len(prefix):], want) {
+		t.Fatal("append boc output diverges from byte-slice serialization")
+	}
+
+	got, err = root.AppendBOCWithOptions(prefix, opts)
+	if err != nil {
+		t.Fatalf("failed to append single-root boc: %v", err)
+	}
+
+	want = root.ToBOCWithOptions(opts)
+	if !bytes.Equal(got[len(prefix):], want) {
+		t.Fatal("append single-root boc output diverges from byte-slice serialization")
+	}
+}
+
 func TestToBOCWithFlags_MatchesToBOCWithOptions(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0xABCD, 16).EndCell()
 	root := BeginCell().

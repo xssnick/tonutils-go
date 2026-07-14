@@ -6,28 +6,129 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"sort"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *address.Address, proof *cell.MerkleProofBuilder) (*transactionRuntimeAccount, error) {
+// PreparedAccount is an account state parsed once into the representation the
+// transaction executor needs. Build it with PrepareAccount at lane start; each
+// TransactionExecutionResult carries the follow-up PreparedAccount so
+// consecutive transactions of one account never re-parse state.
+type PreparedAccount struct {
+	shard   *tlb.ShardAccount
+	state   *tlb.AccountState
+	runtime transactionRuntimeAccount
+}
+
+// PrepareAccount parses the shard account state exactly once. addr is the
+// account address used for non-existing accounts (a lane always knows its
+// account); it may be nil for existing accounts, whose address comes from the
+// parsed state.
+func PrepareAccount(shard *tlb.ShardAccount, addr *address.Address) (*PreparedAccount, error) {
+	if shard == nil {
+		return nil, errors.New("shard account is required")
+	}
 	if shard.Account == nil {
 		return nil, errors.New("shard account root is nil")
 	}
 
-	accountRoot := shard.Account
-	if proof != nil {
-		accountRoot = proof.Root()
-	}
-
-	var acc tlb.AccountState
-	if err := tlb.Parse(&acc, accountRoot); err != nil {
+	var state tlb.AccountState
+	if err := tlb.Parse(&state, shard.Account); err != nil {
 		return nil, fmt.Errorf("failed to decode account state: %w", err)
 	}
+	return prepareAccountFromState(shard, &state, addr, nil, nil)
+}
 
+// PrepareParsedAccount wraps an already-parsed shard account state; state must
+// be the parsed form of shard.Account.
+func PrepareParsedAccount(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address) (*PreparedAccount, error) {
+	if shard == nil {
+		return nil, errors.New("shard account is required")
+	}
+	if state == nil {
+		return nil, errors.New("parsed account state is required")
+	}
+	return prepareAccountFromState(shard, state, addr, nil, nil)
+}
+
+func prepareAccountFromState(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address, storageCell, storageCellForStat *cell.Cell) (*PreparedAccount, error) {
+	runtime, err := loadTransactionRuntimeAccountState(shard, state, addr, storageCell == nil)
+	if err != nil {
+		return nil, err
+	}
+	if storageCell != nil {
+		runtime.storageCell = storageCell
+		runtime.storageCellForStat = storageCellForStat
+	}
+	return &PreparedAccount{
+		shard:   shard,
+		state:   state,
+		runtime: *runtime,
+	}, nil
+}
+
+// ShardAccount returns the shard account this state was prepared from
+// (for results: the post-transaction shard account).
+func (a *PreparedAccount) ShardAccount() *tlb.ShardAccount {
+	if a == nil {
+		return nil
+	}
+	return a.shard
+}
+
+// ShardAccountCell serializes the shard account into a cell.
+func (a *PreparedAccount) ShardAccountCell() *cell.Cell {
+	if a == nil || a.shard == nil {
+		return nil
+	}
+	return buildTransactionShardAccountCell(a.shard.Account, a.shard.LastTransHash, a.shard.LastTransLT)
+}
+
+// State returns the parsed account state.
+func (a *PreparedAccount) State() *tlb.AccountState {
+	if a == nil {
+		return nil
+	}
+	return a.state
+}
+
+// Address returns the resolved account address.
+func (a *PreparedAccount) Address() *address.Address {
+	if a == nil {
+		return nil
+	}
+	return a.runtime.addr
+}
+
+// runtimeForExecution returns the runtime account view for one emulation. The
+// hot path hands out a copy of the pre-parsed representation; the proof path
+// re-reads the account through a fresh usage-traced root so that state loads
+// are recorded in the proof.
+func (a *PreparedAccount) runtimeForExecution(buildProof bool) (*transactionRuntimeAccount, *cell.MerkleProofBuilder, error) {
+	if !buildProof {
+		runtime := a.runtime
+		return &runtime, nil, nil
+	}
+
+	if a.shard.Account == nil {
+		return nil, nil, errors.New("shard account root is nil")
+	}
+	proof := cell.NewMerkleProofBuilder(a.shard.Account)
+
+	var state tlb.AccountState
+	if err := tlb.Parse(&state, proof.Root()); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode account state: %w", err)
+	}
+	runtime, err := loadTransactionRuntimeAccountState(a.shard, &state, a.runtime.addr, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return runtime, proof, nil
+}
+
+func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.AccountState, fallbackAddr *address.Address, buildStorageCell bool) (*transactionRuntimeAccount, error) {
 	out := &transactionRuntimeAccount{
 		addr:            fallbackAddr,
 		status:          tlb.AccountStatusNonExist,
@@ -55,11 +156,13 @@ func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *addres
 	out.extraCurrencies = acc.ExtraCurrencies
 	out.storageLT = acc.LastTransactionLT
 	out.stateHash = append([]byte(nil), acc.StateHash...)
-	storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.Nano(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize original account storage: %w", err)
+	if buildStorageCell {
+		storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.Nano(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize original account storage: %w", err)
+		}
+		out.storageCell = storageCell
 	}
-	out.storageCell = storageCell
 	if acc.StateInit != nil {
 		out.code = acc.StateInit.Code
 		out.data = acc.StateInit.Data
@@ -70,7 +173,8 @@ func loadTransactionRuntimeAccount(shard *tlb.ShardAccount, fallbackAddr *addres
 	return out, nil
 }
 
-func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
+func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedBlockchainConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
+	globalVersion := cfg.globalVersion()
 	extraCurrencies, err := transactionCloneExtraCurrencies(acc.extraCurrencies)
 	if err != nil {
 		return nil, err
@@ -105,17 +209,23 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 	case tlb.MsgTypeInternal:
 		in := msg.AsInternal()
 		prepared.creditFirst = !in.Bounce
-		prepared.msgBalance, err = transactionCurrencyFromParts(in.Amount.Nano(), in.ExtraCurrencies)
+		prepared.msgBalance, err = transactionCurrencyFromOwnedParts(in.Amount.Nano(), in.ExtraCurrencies)
 		if err != nil {
 			return nil, err
+		}
+		if globalVersion < 12 {
+			prepared.msgBalance.grams.Add(prepared.msgBalance.grams, in.IHRFee.Nano())
+		}
+		if cfg.isBlackHoleAccount(acc.addr) {
+			prepared.msgBalance.grams.SetInt64(0)
 		}
 		if prepared.creditFirst {
 			if err = credit(prepared.msgBalance.grams, in.ExtraCurrencies); err != nil {
 				return nil, err
 			}
-			prepared.applyStoragePhase(acc, storageFee, now, limits, true)
+			prepared.applyStoragePhase(acc, storageFee, now, globalVersion, limits, true)
 		} else {
-			prepared.applyStoragePhase(acc, storageFee, now, limits, false)
+			prepared.applyStoragePhase(acc, storageFee, now, globalVersion, limits, false)
 			if err = credit(prepared.msgBalance.grams, in.ExtraCurrencies); err != nil {
 				return nil, err
 			}
@@ -127,7 +237,7 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 			}
 			prepared.balance.Sub(prepared.balance, importFee)
 		}
-		prepared.applyStoragePhase(acc, storageFee, now, limits, false)
+		prepared.applyStoragePhase(acc, storageFee, now, globalVersion, limits, false)
 	default:
 		return nil, fmt.Errorf("unsupported input message type %s", msg.MsgType)
 	}
@@ -135,28 +245,30 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 	return prepared, nil
 }
 
-func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAccount, storageFee *big.Int, now uint32, limits transactionStorageDueLimits, adjustMsgValue bool) {
-	toPay := transactionBigOrZero(storageFee)
+func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAccount, storageFee *big.Int, now uint32, globalVersion uint32, limits transactionStorageDueLimits, adjustMsgValue bool) {
 	collected := big.NewInt(0)
 	due := big.NewInt(0)
 	statusChange := tlb.AccStatusChange{Type: tlb.AccStatusChangeUnchanged}
 
 	p.duePayment = transactionCoinsPtr(transactionCoinsNano(acc.storageInfo.DuePayment))
 	p.lastPaid = now
-	if toPay.Sign() > 0 {
-		if toPay.Cmp(p.balance) <= 0 {
-			collected.Set(toPay)
-			p.balance.Sub(p.balance, toPay)
-			p.duePayment = nil
+	if storageFee != nil && storageFee.Sign() > 0 {
+		if storageFee.Cmp(p.balance) <= 0 {
+			collected.Set(storageFee)
+			p.balance.Sub(p.balance, storageFee)
+			if globalVersion >= 7 {
+				p.duePayment = nil
+			}
 		} else {
 			collected.Set(p.balance)
-			due.Sub(toPay, p.balance)
+			due.Sub(storageFee, p.balance)
 			p.balance.SetInt64(0)
 
 			switch p.status {
 			case tlb.AccountStatusUninit, tlb.AccountStatusFrozen, tlb.AccountStatusNonExist:
-				if due.Cmp(limits.deleteDue) > 0 && transactionExtraDictIsEmpty(acc.extraCurrencies) {
+				if due.Cmp(limits.deleteDue) > 0 && transactionExtraDictIsEmpty(p.extraCurrencies) {
 					p.deleted = true
+					p.destroyed = globalVersion >= 13
 					p.status = tlb.AccountStatusNonExist
 					statusChange.Type = tlb.AccStatusChangeDeleted
 				}
@@ -166,7 +278,9 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 					statusChange.Type = tlb.AccStatusChangeFrozen
 				}
 			}
-			p.duePayment = transactionCoinsPtr(due)
+			if globalVersion >= 4 {
+				p.duePayment = transactionCoinsPtr(due)
+			}
 		}
 	}
 
@@ -180,7 +294,19 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 		StatusChange:         statusChange,
 	}
 }
-func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg tlb.BlockchainConfig, accountStorageStat *cell.Cell) (*cell.Cell, *tlb.AccountState, *cell.Cell, error) {
+
+// builtTransactionAccount is the serialized post-transaction account state
+// along with its parsed form and the pieces needed to prepare the follow-up
+// account without re-parsing.
+type builtTransactionAccount struct {
+	cell               *cell.Cell
+	state              *tlb.AccountState
+	storageStat        *cell.Cell
+	storageCell        *cell.Cell
+	storageCellForStat *cell.Cell
+}
+
+func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
 	if status == tlb.AccountStatusNonExist {
 		accountState := &tlb.AccountState{
 			IsValid: false,
@@ -189,11 +315,20 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 				Balance: tlb.FromNanoTON(big.NewInt(0)),
 			},
 		}
-		return cell.BeginCell().MustStoreBoolBit(false).EndCell(), accountState, nil, nil
+		return &builtTransactionAccount{
+			cell:  cell.BeginCell().MustStoreBoolBit(false).EndCell(),
+			state: accountState,
+		}, nil
+	}
+
+	stateDepth := transactionCloneUint64(acc.stateDepth)
+	if cfg.globalVersion() < 10 && acc.addr != nil && acc.addr.Anycast() != nil {
+		depth := uint64(acc.addr.Anycast().Depth())
+		stateDepth = &depth
 	}
 
 	stateInit := &tlb.StateInit{
-		Depth:    transactionCloneUint64(acc.stateDepth),
+		Depth:    stateDepth,
 		TickTock: acc.tickTock,
 		Code:     code,
 		Data:     data,
@@ -213,33 +348,41 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		if len(stateHash) == 0 {
 			stateInitCell, err := buildTransactionStateInitCell(stateInit)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to serialize frozen state init: %w", err)
+				return nil, fmt.Errorf("failed to serialize frozen state init: %w", err)
 			}
 			stateHash = stateInitCell.Hash()
 		}
 		accountStorage.StateHash = append([]byte(nil), stateHash...)
 	case tlb.AccountStatusUninit:
 	default:
-		return nil, nil, nil, fmt.Errorf("unsupported final account status %s", status)
+		return nil, fmt.Errorf("unsupported final account status %s", status)
 	}
 
+	accountAddr, err := transactionAccountSerializationAddr(acc.addr, cfg)
+	if err != nil {
+		return nil, err
+	}
 	storageBuilder, err := buildTransactionAccountStorageBuilder(status, endLT, balance, extraCurrencies, accountStorage.StateInit, accountStorage.StateHash)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to serialize account storage: %w", err)
+		return nil, fmt.Errorf("failed to serialize account storage: %w", err)
 	}
 	storageCell := storageBuilder.EndCell()
 
 	storageCellForStat := storageCell
-	if transactionGlobalVersion(cfg) >= 10 {
+	extraCurrencyV2 := cfg.globalVersion() >= 10
+	if extraCurrencyV2 && extraCurrencies != nil && extraCurrencies.AsCell() != nil {
+		// The stat form differs from storageCell only when an extra-currency
+		// dict is actually stored: with no dict both serializations store the
+		// same maybe-bit 0, so storageCell is reused as is.
 		storageCellForStat, err = buildTransactionAccountStorageCell(status, endLT, balance, nil, accountStorage.StateInit, accountStorage.StateHash)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 	}
 
 	usage, storageExtra, storageExtraDictHash, nextStorageStat, err := transactionAccountStorageInfo(acc, storageCellForStat, cfg, accountStorageStat)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	storageInfo := tlb.StorageInfo{
@@ -254,21 +397,67 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 
 	accountState := &tlb.AccountState{
 		IsValid:        true,
-		Address:        acc.addr,
+		Address:        accountAddr,
 		StorageInfo:    storageInfo,
 		AccountStorage: accountStorage,
 	}
 
-	accountCell, err := buildTransactionAccountStateCell(acc.addr, storageInfo.StorageUsed, storageExtraDictHash, lastPaid, duePayment, storageBuilder)
+	accountCell, err := buildTransactionAccountStateCell(accountAddr, storageInfo.StorageUsed, storageExtraDictHash, lastPaid, duePayment, storageBuilder)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to serialize account state: %w", err)
+		return nil, fmt.Errorf("failed to serialize account state: %w", err)
 	}
 
-	return accountCell, accountState, nextStorageStat, nil
+	built := &builtTransactionAccount{
+		cell:        accountCell,
+		state:       accountState,
+		storageStat: nextStorageStat,
+		storageCell: storageCell,
+	}
+	if extraCurrencyV2 {
+		// Thread the extra-currency-free storage forward so the next
+		// transaction of this account gets it without another probe/rebuild.
+		built.storageCellForStat = storageCellForStat
+	}
+	return built, nil
 }
 
-func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg tlb.BlockchainConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, error) {
-	version := transactionGlobalVersion(cfg)
+func transactionAccountSerializationAddr(addr *address.Address, cfg *PreparedBlockchainConfig) (*address.Address, error) {
+	if addr == nil || addr.Anycast() == nil {
+		return addr, nil
+	}
+	if cfg.globalVersion() < 10 {
+		return addr, nil
+	}
+
+	data, err := transactionRewrittenAccountAddressData(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	out := addr.Copy()
+	copy(out.Data(), data)
+	out.SetAnycast(nil)
+	return out, nil
+}
+
+func transactionAccountIDAddr(addr *address.Address) (*address.Address, error) {
+	if addr == nil || addr.Anycast() == nil {
+		return addr, nil
+	}
+
+	data, err := transactionRewrittenAccountAddressData(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	out := addr.Copy()
+	copy(out.Data(), data)
+	out.SetAnycast(nil)
+	return out, nil
+}
+
+func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, error) {
+	version := cfg.globalVersion()
 	storeStorageDictHash := version >= 11 && !transactionIsMasterchain(acc.addr)
 
 	oldStorageForStat, err := transactionOldAccountStorageForStat(acc, version >= 10)
@@ -329,6 +518,37 @@ func transactionOldAccountStorageForStat(acc *transactionRuntimeAccount, extraCu
 	if !extraCurrencyV2 {
 		return acc.storageCell, nil
 	}
+	if acc.storageCellForStat != nil {
+		return acc.storageCellForStat, nil
+	}
+
+	// acc.storageCell is always this emulator's own canonical serialization
+	// (loadTransactionRuntimeAccountState or the previous transaction), so
+	// probe the account_storage layout with raw bit reads: last_trans_lt
+	// (64 bits), Grams (4-bit byte length + bytes), then the extra-currency
+	// dict maybe-bit. Bit 0 means the cell already equals its serialization
+	// without extra currencies, no rebuild needed.
+	var sl cell.Slice
+	if err := acc.storageCell.BeginParseIntoWithoutTrace(&sl); err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	if err := sl.SkipBits(64); err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	gramsLen, err := sl.LoadUInt(4)
+	if err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	if err = sl.SkipBits(uint(gramsLen) * 8); err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	hasExtraCurrencies, err := sl.LoadBoolBit()
+	if err != nil {
+		return nil, fmt.Errorf("failed to probe old account storage for stats: %w", err)
+	}
+	if !hasExtraCurrencies {
+		return acc.storageCell, nil
+	}
 
 	var storage tlb.AccountStorage
 	if err := tlb.Parse(&storage, acc.storageCell); err != nil {
@@ -364,7 +584,8 @@ type transactionAccountStorageStatEntry struct {
 
 type transactionAccountStorageStat struct {
 	dict       *cell.Dictionary
-	roots      []*cell.Cell
+	roots      [4]*cell.Cell
+	rootsNum   int
 	entries    map[cell.Hash]*transactionAccountStorageStatEntry
 	totalCells uint64
 	totalBits  uint64
@@ -374,8 +595,11 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 	if dictRoot == nil {
 		return nil, nil
 	}
-	if dictHash != nil && !transactionHashIsZero(dictHash) && !bytes.Equal(dictRoot.Hash(), dictHash) {
-		return nil, errors.New("account storage stat root hash does not match account storage extra")
+	if dictHash != nil && !transactionHashIsZero(dictHash) {
+		rootHash := dictRoot.HashKey()
+		if !bytes.Equal(rootHash[:], dictHash) {
+			return nil, errors.New("account storage stat root hash does not match account storage extra")
+		}
 	}
 
 	totalCells := transactionStorageUsedUint64(storageUsed.CellsUsed)
@@ -383,13 +607,15 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 		totalCells--
 	}
 	totalBits := transactionStorageUsedUint64(storageUsed.BitsUsed)
-	var roots []*cell.Cell
+	var roots [4]*cell.Cell
+	var rootsNum int
 	if storageCell != nil {
-		loadedStorage, storageRoots, err := transactionLoadedCellRefs(storageCell)
+		loadedStorage, storageRoots, storageRootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
 		if err != nil {
 			return nil, err
 		}
 		roots = storageRoots
+		rootsNum = storageRootsNum
 		rootBits := uint64(loadedStorage.BitsSize())
 		if totalBits < rootBits {
 			return nil, errors.New("account storage used bits is smaller than account storage root")
@@ -400,6 +626,7 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 	return &transactionAccountStorageStat{
 		dict:       dictRoot.AsDict(256),
 		roots:      roots,
+		rootsNum:   rootsNum,
 		entries:    map[cell.Hash]*transactionAccountStorageStatEntry{},
 		totalCells: totalCells,
 		totalBits:  totalBits,
@@ -412,12 +639,13 @@ func transactionComputeAccountStorageStat(storageCell *cell.Cell) (transactionUs
 		entries: map[cell.Hash]*transactionAccountStorageStatEntry{},
 	}
 	if storageCell != nil {
-		loadedStorage, roots, err := transactionLoadedCellRefs(storageCell)
+		loadedStorage, roots, rootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
 		if err != nil {
 			return transactionUsage{}, nil, err
 		}
-		for _, root := range roots {
-			if _, err := stat.addCell(root); err != nil {
+
+		for i := 0; i < rootsNum; i++ {
+			if _, err := stat.addCell(roots[i]); err != nil {
 				return transactionUsage{}, nil, err
 			}
 		}
@@ -441,24 +669,25 @@ func transactionComputeAccountStorageStat(storageCell *cell.Cell) (transactionUs
 }
 
 func (s *transactionAccountStorageStat) replaceStorage(storageCell *cell.Cell) (transactionUsage, *cell.Cell, error) {
-	loadedStorage, newRoots, err := transactionLoadedCellRefs(storageCell)
+	loadedStorage, newRoots, newRootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
 	if err != nil {
 		return transactionUsage{}, nil, err
 	}
 	storageCell = loadedStorage
-	toAdd, toDel := transactionAccountStorageRootDiff(s.roots, newRoots)
+	toAdd, toAddNum, toDel, toDelNum := transactionAccountStorageRootDiff(s.roots, s.rootsNum, newRoots, newRootsNum)
 
-	for _, root := range toAdd {
-		if _, err := s.addCell(root); err != nil {
+	for i := 0; i < toAddNum; i++ {
+		if _, err := s.addCell(toAdd[i]); err != nil {
 			return transactionUsage{}, nil, err
 		}
 	}
-	for _, root := range toDel {
-		if err := s.removeCell(root); err != nil {
+	for i := 0; i < toDelNum; i++ {
+		if err := s.removeCell(toDel[i]); err != nil {
 			return transactionUsage{}, nil, err
 		}
 	}
 	s.roots = newRoots
+	s.rootsNum = newRootsNum
 
 	usage := transactionUsage{cells: s.totalCells, bits: s.totalBits}
 	if storageCell != nil {
@@ -478,9 +707,20 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 		return 0, nil
 	}
 
-	loaded, refs, err := transactionLoadedCellRefs(c)
+	var sl cell.Slice
+	err := c.BeginParseIntoWithoutTrace(&sl)
 	if err != nil {
 		return 0, err
+	}
+
+	loaded := sl.BaseCell()
+	var refs [4]*cell.Cell
+	refsNum := sl.RefsNum()
+	for i := 0; i < refsNum; i++ {
+		refs[i], err = sl.LoadRefCell()
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	key := loaded.HashKey()
@@ -498,8 +738,8 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 	}
 
 	var maxDepth uint32
-	for _, ref := range refs {
-		depth, err := s.addCell(ref)
+	for i := 0; i < refsNum; i++ {
+		depth, err := s.addCell(refs[i])
 		if err != nil {
 			return 0, err
 		}
@@ -522,9 +762,20 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 }
 
 func (s *transactionAccountStorageStat) removeCell(c *cell.Cell) error {
-	loaded, refs, err := transactionLoadedCellRefs(c)
+	var sl cell.Slice
+	err := c.BeginParseIntoWithoutTrace(&sl)
 	if err != nil {
 		return err
+	}
+
+	loaded := sl.BaseCell()
+	var refs [4]*cell.Cell
+	refsNum := sl.RefsNum()
+	for i := 0; i < refsNum; i++ {
+		refs[i], err = sl.LoadRefCell()
+		if err != nil {
+			return err
+		}
 	}
 
 	key := loaded.HashKey()
@@ -541,8 +792,8 @@ func (s *transactionAccountStorageStat) removeCell(c *cell.Cell) error {
 		return nil
 	}
 
-	for _, ref := range refs {
-		if err = s.removeCell(ref); err != nil {
+	for i := 0; i < refsNum; i++ {
+		if err = s.removeCell(refs[i]); err != nil {
 			return err
 		}
 	}
@@ -570,7 +821,7 @@ func (s *transactionAccountStorageStat) entry(key cell.Hash) (*transactionAccoun
 		return entry, nil
 	}
 
-	value, err := s.dict.LoadValue(transactionAccountStorageStatKey(key))
+	value, err := s.dict.LoadValueByBytesKey(key[:])
 	if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 		return entry, nil
 	}
@@ -589,16 +840,16 @@ func (s *transactionAccountStorageStat) entry(key cell.Hash) (*transactionAccoun
 }
 
 func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
-	if s.dict == nil {
-		s.dict = cell.NewDict(256)
+	if s.dict == nil || s.dict.IsEmpty() {
+		return s.dictRootFromScratch()
 	}
+
 	for key, entry := range s.entries {
 		if !entry.dirty {
 			continue
 		}
-		keyCell := transactionAccountStorageStatKey(key)
 		if entry.refCount == 0 {
-			if err := s.dict.Delete(keyCell); err != nil {
+			if err := s.dict.DeleteByBytesKey(key[:]); err != nil {
 				return nil, err
 			}
 			entry.dirty = false
@@ -607,7 +858,7 @@ func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
 		value := cell.BeginCell().
 			MustStoreUInt(uint64(entry.refCount), 32).
 			MustStoreUInt(uint64(entry.maxMerkleDepth), 2)
-		if err := s.dict.SetBuilder(keyCell, value); err != nil {
+		if err := s.dict.SetBuilderByBytesKey(key[:], value); err != nil {
 			return nil, err
 		}
 		entry.dirty = false
@@ -615,15 +866,39 @@ func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
 	return s.dict.AsCell(), nil
 }
 
+// dictRootFromScratch serializes all live entries in one bottom-up bulk build:
+// with an empty dict every entry has to be inserted anyway, and the bulk build
+// finalizes (hashes) each tree node exactly once instead of re-hashing the
+// whole insert path per entry.
+func (s *transactionAccountStorageStat) dictRootFromScratch() (*cell.Cell, error) {
+	keys := make([]cell.Hash, 0, len(s.entries))
+	items := make([]cell.DictBulkKV, 0, len(s.entries))
+	for key, entry := range s.entries {
+		entry.dirty = false
+		if entry.refCount == 0 {
+			continue
+		}
+
+		keys = append(keys, key)
+		value := cell.BeginCell().
+			MustStoreUInt(uint64(entry.refCount), 32).
+			MustStoreUInt(uint64(entry.maxMerkleDepth), 2)
+		items = append(items, cell.DictBulkKV{Key: keys[len(keys)-1][:], Value: value})
+	}
+
+	dict, err := cell.NewDictFromItems(256, items)
+	if err != nil {
+		return nil, err
+	}
+	s.dict = dict
+	return s.dict.AsCell(), nil
+}
+
 func transactionAccountStorageStatRootHash(root *cell.Cell) []byte {
 	if root == nil {
 		return make([]byte, 32)
 	}
-	return append([]byte(nil), root.Hash()...)
-}
-
-func transactionAccountStorageStatKey(key cell.Hash) *cell.Cell {
-	return cell.BeginCell().MustStoreSlice(key[:], 256).EndCell()
+	return root.Hash()
 }
 
 func transactionHashIsZero(hash []byte) bool {
@@ -635,60 +910,105 @@ func transactionHashIsZero(hash []byte) bool {
 	return len(hash) > 0
 }
 
-func transactionAccountStorageRootRefs(storage *cell.Cell) ([]*cell.Cell, error) {
-	_, refs, err := transactionLoadedCellRefs(storage)
-	return refs, err
+func transactionLoadAccountStorageRootRefs(storage *cell.Cell) (*cell.Cell, [4]*cell.Cell, int, error) {
+	var refs [4]*cell.Cell
+	if storage == nil {
+		return nil, refs, 0, nil
+	}
+
+	var sl cell.Slice
+	err := storage.BeginParseIntoWithoutTrace(&sl)
+	if err != nil {
+		return nil, refs, 0, err
+	}
+
+	loaded := sl.BaseCell()
+	refsNum := sl.RefsNum()
+	for i := 0; i < refsNum; i++ {
+		refs[i], err = sl.LoadRefCell()
+		if err != nil {
+			return nil, refs, 0, err
+		}
+	}
+	return loaded, refs, refsNum, nil
 }
 
-func transactionAccountStorageRootDiff(oldRoots, newRoots []*cell.Cell) (toAdd, toDel []*cell.Cell) {
-	oldRoots = transactionSortedAccountStorageRoots(oldRoots)
-	newRoots = transactionSortedAccountStorageRoots(newRoots)
+func transactionAccountStorageRootDiff(oldRoots [4]*cell.Cell, oldRootsNum int, newRoots [4]*cell.Cell, newRootsNum int) (toAdd [4]*cell.Cell, toAddNum int, toDel [4]*cell.Cell, toDelNum int) {
+	oldSorted := transactionSortedAccountStorageRoots(oldRoots, oldRootsNum)
+	newSorted := transactionSortedAccountStorageRoots(newRoots, newRootsNum)
 
 	var oldIdx, newIdx int
-	for oldIdx < len(oldRoots) && newIdx < len(newRoots) {
-		cmp := bytes.Compare(oldRoots[oldIdx].Hash(), newRoots[newIdx].Hash())
+	for oldIdx < oldRootsNum && newIdx < newRootsNum {
+		cmp := bytes.Compare(oldSorted[oldIdx].hash[:], newSorted[newIdx].hash[:])
 		switch {
 		case cmp == 0:
 			oldIdx++
 			newIdx++
 		case cmp < 0:
-			toDel = append(toDel, oldRoots[oldIdx])
+			toDel[toDelNum] = oldSorted[oldIdx].root
+			toDelNum++
 			oldIdx++
 		default:
-			toAdd = append(toAdd, newRoots[newIdx])
+			toAdd[toAddNum] = newSorted[newIdx].root
+			toAddNum++
 			newIdx++
 		}
 	}
-	toDel = append(toDel, oldRoots[oldIdx:]...)
-	toAdd = append(toAdd, newRoots[newIdx:]...)
-	return toAdd, toDel
+	for ; oldIdx < oldRootsNum; oldIdx++ {
+		toDel[toDelNum] = oldSorted[oldIdx].root
+		toDelNum++
+	}
+	for ; newIdx < newRootsNum; newIdx++ {
+		toAdd[toAddNum] = newSorted[newIdx].root
+		toAddNum++
+	}
+	return toAdd, toAddNum, toDel, toDelNum
 }
 
-func transactionSortedAccountStorageRoots(roots []*cell.Cell) []*cell.Cell {
-	if len(roots) == 0 {
-		return nil
+type transactionAccountStorageRootHash struct {
+	root *cell.Cell
+	hash cell.Hash
+}
+
+func transactionSortedAccountStorageRoots(roots [4]*cell.Cell, rootsNum int) [4]transactionAccountStorageRootHash {
+	var out [4]transactionAccountStorageRootHash
+	if rootsNum == 0 {
+		return out
 	}
-	out := append([]*cell.Cell(nil), roots...)
-	sort.Slice(out, func(i, j int) bool {
-		return bytes.Compare(out[i].Hash(), out[j].Hash()) < 0
-	})
+
+	for i := 0; i < rootsNum; i++ {
+		root := roots[i]
+		out[i] = transactionAccountStorageRootHash{
+			root: root,
+			hash: root.HashKey(),
+		}
+	}
+
+	for i := 1; i < rootsNum; i++ {
+		next := out[i]
+		j := i - 1
+		for ; j >= 0 && bytes.Compare(out[j].hash[:], next.hash[:]) > 0; j-- {
+			out[j+1] = out[j]
+		}
+		out[j+1] = next
+	}
 	return out
 }
 
 func transactionAccountStorageRefsUnchanged(oldStorage, newStorage *cell.Cell) (bool, error) {
-	oldRefs, err := transactionAccountStorageRootRefs(oldStorage)
+	_, oldRefs, oldRefsNum, err := transactionLoadAccountStorageRootRefs(oldStorage)
 	if err != nil {
 		return false, err
 	}
-	newRefs, err := transactionAccountStorageRootRefs(newStorage)
+	_, newRefs, newRefsNum, err := transactionLoadAccountStorageRootRefs(newStorage)
 	if err != nil {
 		return false, err
 	}
-	if oldStorage == nil || newStorage == nil || len(oldRefs) != len(newRefs) {
+	if oldStorage == nil || newStorage == nil || oldRefsNum != newRefsNum {
 		return false, nil
 	}
-	for i := range oldRefs {
-		if !bytes.Equal(oldRefs[i].Hash(), newRefs[i].Hash()) {
+	for i := 0; i < oldRefsNum; i++ {
+		if oldRefs[i].HashKey() != newRefs[i].HashKey() {
 			return false, nil
 		}
 	}
@@ -761,9 +1081,13 @@ func transactionFinalizeAccountStatus(status tlb.AccountStatus, deleted bool, ba
 	return status
 }
 
-func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte) (tlb.AccountStatus, []byte, error) {
-	if status != tlb.AccountStatusFrozen || acc.addr == nil || len(acc.addr.Data()) != 32 {
-		return status, stateHash, nil
+func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedBlockchainConfig) (tlb.AccountStatus, tlb.AccountStatus, []byte, error) {
+	if status != tlb.AccountStatusFrozen || acc.addr == nil {
+		return status, status, stateHash, nil
+	}
+	addrData := acc.addr.Data()
+	if len(addrData) != 32 {
+		return status, status, stateHash, nil
 	}
 
 	if len(stateHash) == 0 {
@@ -776,17 +1100,20 @@ func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status
 		}
 		stateCell, err := buildTransactionStateInitCell(stateInit)
 		if err != nil {
-			return status, nil, err
+			return status, status, nil, err
 		}
 		stateHash = stateCell.Hash()
 	}
-	if bytes.Equal(stateHash, acc.addr.Data()) {
-		return tlb.AccountStatusUninit, nil, nil
+	if bytes.Equal(stateHash, addrData) {
+		if cfg.globalVersion() >= 13 {
+			return tlb.AccountStatusUninit, tlb.AccountStatusUninit, nil, nil
+		}
+		return status, tlb.AccountStatusUninit, nil, nil
 	}
-	return status, stateHash, nil
+	return status, status, stateHash, nil
 }
 
-func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg tlb.BlockchainConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
+func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg *PreparedBlockchainConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
 	stateInit := transactionMessageStateInit(msg)
 	if deleted {
 		return acc, false, &tlb.ComputeSkipReason{Type: transactionNoStateSkipReason(stateInit)}, nil
@@ -800,7 +1127,8 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 			if err != nil {
 				return nil, false, nil, fmt.Errorf("failed to serialize inbound state init: %w", err)
 			}
-			if !bytes.Equal(stateCell.Hash(), acc.addr.Data()) {
+			stateHash := stateCell.HashKey()
+			if !bytes.Equal(stateHash[:], acc.addr.Data()) {
 				return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 			}
 		}
@@ -824,20 +1152,25 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		if addressSuspended {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonSuspended}, nil
 		}
-		if stateInit.Depth != nil && *stateInit.Depth > transactionGetSizeLimits(cfg).maxAccFixedPrefixLength {
+		if cfg.globalVersion() >= 10 && stateInit.Depth != nil && *stateInit.Depth > transactionGetSizeLimits(cfg).maxAccFixedPrefixLength {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
-		if !transactionStateInitMatchesAddress(stateCell.Hash(), acc.addr, stateInit.Depth) {
+		stateHash := stateCell.HashKey()
+		if !transactionStateInitMatchesAddress(stateHash[:], acc.addr, stateInit.Depth) {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 	case tlb.AccountStatusFrozen:
-		if !bytes.Equal(stateCell.Hash(), acc.stateHash) {
+		stateHash := stateCell.HashKey()
+		if !bytes.Equal(stateHash[:], acc.stateHash) {
+			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
+		}
+		if msg.MsgType == tlb.MsgTypeExternalIn && cfg.globalVersion() < 8 && !bytes.Equal(stateHash[:], acc.addr.Data()) {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 	default:
 		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoState}, nil
 	}
-	if stateInit.Code == nil {
+	if cfg.globalVersion() >= 15 && (status == tlb.AccountStatusUninit || status == tlb.AccountStatusNonExist) && stateInit.Lib != nil && !stateInit.Lib.IsEmpty() {
 		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 	}
 	if status == tlb.AccountStatusUninit && transactionIsMasterchain(acc.addr) && transactionPublicLibrariesCount(stateInit.Lib) > 0 {
@@ -856,45 +1189,21 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 	next.code = stateInit.Code
 	next.data = stateInit.Data
 	next.libraries = stateInit.Lib
-	next.stateDepth = transactionCloneUint64(stateInit.Depth)
+	next.stateDepth = nil
+	if cfg.globalVersion() >= 10 && stateInit.Depth != nil && *stateInit.Depth > 0 {
+		next.stateDepth = transactionCloneUint64(stateInit.Depth)
+	}
 	next.tickTock = stateInit.TickTock
 	next.stateHash = nil
 	return &next, true, nil, nil
 }
 
-func transactionIsAddressSuspended(cfg tlb.BlockchainConfig, now uint32, addr *address.Address) (bool, error) {
-	if addr.Type() != address.StdAddress {
-		return false, nil
-	}
-
-	list, err := cfg.GetSuspendedAddressList()
-	if err != nil {
-		if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) || errors.Is(err, tlb.ErrBlockchainConfigRootNil) {
-			return false, nil
-		}
-		return false, err
-	}
-	if list.SuspendedUntil <= now {
-		return false, nil
-	}
-
-	key := cell.BeginCell().
-		MustStoreInt(int64(addr.Workchain()), 32).
-		MustStoreSlice(addr.Data(), 256).
-		EndCell()
-	_, err = list.Addresses.LoadValue(key)
-	if err != nil {
-		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
-}
-
 func transactionStateInitMatchesAddress(stateHash []byte, addr *address.Address, fixedPrefixLength *uint64) bool {
-	if addr == nil || len(stateHash) != 32 || len(addr.Data()) != 32 {
+	if addr == nil || len(stateHash) != 32 {
+		return false
+	}
+	addrData := addr.Data()
+	if len(addrData) != 32 {
 		return false
 	}
 	depth := 0
@@ -905,7 +1214,7 @@ func transactionStateInitMatchesAddress(stateHash []byte, addr *address.Address,
 		depth = int(*fixedPrefixLength)
 	}
 	for i := depth; i < 256; i++ {
-		if transactionBit(stateHash, i) != transactionBit(addr.Data(), i) {
+		if transactionBit(stateHash, i) != transactionBit(addrData, i) {
 			return false
 		}
 	}
@@ -935,4 +1244,28 @@ func transactionMessageStateInit(msg *tlb.Message) *tlb.StateInit {
 	default:
 		return nil
 	}
+}
+
+func transactionValidateMessageStateInitLibs(msg *tlb.Message) error {
+	state := transactionMessageStateInit(msg)
+	if state == nil || state.Lib == nil || state.Lib.IsEmpty() {
+		return nil
+	}
+
+	items, err := state.Lib.LoadAll()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if _, err = item.Value.LoadBoolBit(); err != nil {
+			return fmt.Errorf("invalid StateInit library entry: %w", err)
+		}
+		if _, err = item.Value.LoadRefCell(); err != nil {
+			return fmt.Errorf("invalid StateInit library entry: %w", err)
+		}
+		if item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+			return errors.New("invalid StateInit library entry")
+		}
+	}
+	return nil
 }

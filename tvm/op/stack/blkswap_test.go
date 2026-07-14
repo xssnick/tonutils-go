@@ -1,9 +1,11 @@
 package stack
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func Test_BLKSWAP(t *testing.T) {
@@ -42,6 +44,18 @@ func Test_BLKSWAP(t *testing.T) {
 					t.Fatalf("BLKSWAP(%d,%d): expected %v, got %v", x, y, want, got)
 				}
 			}
+		}
+	})
+
+	t.Run("underflow leaves stack unchanged", func(t *testing.T) {
+		st := newStack(1, 2, 3)
+		err := BLKSWAP(2, 2).Interpret(newStackStateWithStack(st))
+		var tvmErr vmerr.VMError
+		if !errors.As(err, &tvmErr) || tvmErr.Code != vmerr.CodeStackUnderflow {
+			t.Fatalf("expected stack underflow, got %v", err)
+		}
+		if got := popInts(t, st, 3); !equalInts(got, []int64{3, 2, 1}) {
+			t.Fatalf("unexpected stack after underflow: %v", got)
 		}
 	})
 }

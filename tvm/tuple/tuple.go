@@ -35,6 +35,13 @@ func NewTupleOwned(val []any) Tuple {
 	return Tuple{data: &tupleData{val: val}}
 }
 
+// NewTupleOwnedBound builds a tuple from caller-owned values with the binding
+// ID already set, skipping the intermediate tuple that NewTupleOwned followed
+// by WithBindingID would allocate.
+func NewTupleOwnedBound(val []any, bindingID any) Tuple {
+	return Tuple{data: &tupleData{val: val, bindingID: bindingID}}
+}
+
 // NewTuple keeps the legacy pointer-returning constructor for compatibility.
 func NewTuple(val ...any) *Tuple {
 	t := NewTupleValue(val...)
@@ -102,6 +109,9 @@ func cloneTupleLeaf(val any) any {
 	case *big.Int:
 		return new(big.Int).Set(v)
 	case *cell.Slice:
+		if v == nil {
+			return v
+		}
 		return v.Copy()
 	case *cell.Builder:
 		return v.Copy()

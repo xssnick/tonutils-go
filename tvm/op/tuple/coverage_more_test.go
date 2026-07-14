@@ -256,8 +256,9 @@ func TestSetIndexQuietBranches(t *testing.T) {
 
 	t.Run("NilFillBeyondLengthDoesNotChargeGas", func(t *testing.T) {
 		state := &vm.State{
-			Stack: vm.NewStack(),
-			Gas:   vm.GasWithLimit(100),
+			Stack:         vm.NewStack(),
+			Gas:           vm.GasWithLimit(100),
+			GlobalVersion: vm.MaxSupportedGlobalVersion,
 		}
 		mustPushTupleValue(t, state, big.NewInt(1))
 		if err := state.Stack.PushAny(nil); err != nil {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/liteclient"
-	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -59,6 +58,7 @@ type Client struct {
 // Can be used in case of everything is offline in single DHT node, to check another values.
 type Continuation struct {
 	checkedNodes []*dhtNode
+	checkedLocal bool
 }
 
 type NodeInfo struct {
@@ -66,7 +66,15 @@ type NodeInfo struct {
 	Key     ed25519.PublicKey
 }
 
-var Logger = func(v ...any) {}
+// RoutingTableStats describes current DHT routing bucket occupancy.
+type RoutingTableStats struct {
+	ActiveNodes   int
+	BackupNodes   int
+	FilledBuckets int
+	TotalBuckets  int
+}
+
+var Logger func(v ...any)
 
 func NewClientFromConfigUrl(ctx context.Context, gateway Gateway, cfgUrl string) (*Client, error) {
 	cfg, err := liteclient.GetConfigFromUrl(ctx, cfgUrl)
@@ -88,7 +96,10 @@ func NewClientFromConfig(gateway Gateway, cfg *liteclient.GlobalConfig) (*Client
 		networkID = *cfg.DHT.NetworkID
 	}
 
-	k, a := normalizeKA(cfg.DHT.K, cfg.DHT.A)
+	k, a, err := configKA(cfg.DHT.K, cfg.DHT.A)
+	if err != nil {
+		return nil, err
+	}
 	return newClient(gateway, nodes, networkID, k, a)
 }
 
@@ -123,7 +134,9 @@ func newClient(gateway Gateway, nodes []*Node, networkID int32, k, a int) (*Clie
 			if node != nil {
 				logAddr = describeNodeAddress(node.AddrList)
 			}
-			Logger("failed to add DHT node", logAddr, " from config, err:", err.Error())
+			if Logger != nil {
+				Logger("failed to add DHT node", logAddr, " from config, err:", err.Error())
+			}
 			continue
 		}
 	}
@@ -153,9 +166,50 @@ func normalizeKA(k, a int) (int, int) {
 	return k, a
 }
 
+func configKA(k, a int) (int, int, error) {
+	if k > _maxK {
+		return 0, 0, fmt.Errorf("bad value k=%d", k)
+	}
+	if a > _maxA {
+		return 0, 0, fmt.Errorf("bad value a=%d", a)
+	}
+	k, a = normalizeKA(k, a)
+	return k, a, nil
+}
+
 func (c *Client) Close() {
 	c.globalCtxCancel()
 	_ = c.gateway.Close()
+}
+
+// ActiveNodesCount returns the number of active DHT nodes in routing buckets.
+func (c *Client) ActiveNodesCount() int {
+	return c.RoutingTableStats().ActiveNodes
+}
+
+// RoutingTableStats returns current DHT routing bucket occupancy.
+func (c *Client) RoutingTableStats() RoutingTableStats {
+	stats := RoutingTableStats{
+		TotalBuckets: len(c.buckets),
+	}
+	for i := range c.buckets {
+		active, backup := c.buckets[i].nodeCounts()
+		stats.ActiveNodes += active
+		stats.BackupNodes += backup
+		if active > 0 {
+			stats.FilledBuckets++
+		}
+	}
+	return stats
+}
+
+// RoutingNodes returns a snapshot of active DHT nodes currently known in routing buckets.
+func (c *Client) RoutingNodes() []*Node {
+	nodes := make([]*Node, 0, c.k*len(c.buckets))
+	for i := range c.buckets {
+		nodes = append(nodes, c.buckets[i].routingNodes(c.k)...)
+	}
+	return nodes
 }
 
 func (c *Client) addNode(node *Node) (_ *dhtNode, err error) {
@@ -169,7 +223,10 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 
 	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
-		return nil, fmt.Errorf("unsupported id type %s", reflect.TypeOf(node.ID).String())
+		return nil, fmt.Errorf("unsupported id type %T", node.ID)
+	}
+	if len(pub.Key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("invalid ed25519 public key")
 	}
 
 	kid, err := tl.Hash(pub)
@@ -185,7 +242,7 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 
 	var currentVersion int32
 	if existing := bucket.findNode(kid); existing != nil {
-		currentVersion = existing.version
+		currentVersion = existing.snapshot().version
 	}
 	if err := node.validate(currentVersion, c.networkID); err != nil {
 		return nil, err
@@ -203,7 +260,8 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 	}
 
 	if hf := bucket.findNode(kid); hf != nil {
-		if hf.addr == addr && hf.version == node.Version {
+		snapshot := hf.snapshot()
+		if snapshot.addr == addr && snapshot.version == node.Version {
 			return nil, fmt.Errorf("node already exists")
 		}
 		// updated address otherwise
@@ -213,6 +271,16 @@ func (c *Client) addNodeWithStatus(node *Node, setActive bool) (_ *dhtNode, err 
 	kNode.node = cloneNode(node)
 
 	return bucket.addNode(kNode, setActive), nil
+}
+
+func (c *Client) markNodeReady(node *dhtNode) {
+	affinity := affinity(node.adnlId, c.selfID)
+	if affinity >= uint(len(c.buckets)) {
+		return
+	}
+
+	node.markPingSuccess()
+	c.buckets[affinity].addNode(node, true)
 }
 
 func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, continuation ...*Continuation) (*overlay.NodesList, *Continuation, error) {
@@ -234,7 +302,7 @@ func (c *Client) FindOverlayNodes(ctx context.Context, overlayKey []byte, contin
 	}
 
 	var nodes overlay.NodesList
-	_, err = tl.Parse(&nodes, vv.Data, true)
+	_, err = tl.ParseNoCopy(&nodes, vv.Data, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse dht data for overlay nodes: %w", err)
 	}
@@ -256,14 +324,14 @@ func (c *Client) FindAddresses(ctx context.Context, key []byte) (*address.List, 
 	}
 
 	var list address.List
-	_, err = tl.Parse(&list, val.Data, true)
+	_, err = tl.ParseNoCopy(&list, val.Data, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse address list: %w", err)
 	}
 
 	keyID, ok := val.KeyDescription.ID.(keys.PublicKeyED25519)
 	if !ok {
-		return nil, nil, fmt.Errorf("unsupported key type %s", reflect.TypeOf(val.KeyDescription.ID))
+		return nil, nil, fmt.Errorf("unsupported key type %T", val.KeyDescription.ID)
 	}
 
 	return &list, keyID.Key, nil
@@ -526,6 +594,7 @@ func (c *Client) collectNearestNodes(ctx context.Context, keyId []byte) []*dhtNo
 				}
 			} else {
 				search.Finish(res.node, true)
+				c.markNodeReady(res.node)
 				for _, newN := range res.nodes {
 					if an, err := c.addNode(newN); err == nil {
 						search.Add(an)
@@ -774,6 +843,13 @@ func buildStoreValue(
 	ttl time.Duration,
 	ownerKey ed25519.PrivateKey,
 ) (Value, []byte, error) {
+	if err := checkValuePublicKey(id); err != nil {
+		return Value{}, nil, err
+	}
+	if err := checkValueUpdateRule(rule); err != nil {
+		return Value{}, nil, err
+	}
+
 	idKey, err := tl.Hash(id)
 	if err != nil {
 		return Value{}, nil, err
@@ -795,6 +871,9 @@ func buildStoreValue(
 
 	switch rule.(type) {
 	case UpdateRuleSignature:
+		if len(ownerKey) != ed25519.PrivateKeySize {
+			return Value{}, nil, fmt.Errorf("invalid ed25519 private key")
+		}
 		val.KeyDescription.Signature, err = signTL(val.KeyDescription, ownerKey)
 		if err != nil {
 			return Value{}, nil, fmt.Errorf("failed to sign key description: %w", err)
@@ -807,6 +886,9 @@ func buildStoreValue(
 
 	keyId, err := tl.Hash(val.KeyDescription.Key)
 	if err != nil {
+		return Value{}, nil, err
+	}
+	if err = checkValue(keyId, &val); err != nil {
 		return Value{}, nil, err
 	}
 	return val, keyId, nil
@@ -901,6 +983,7 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 				}
 				continue
 			}
+			c.markNodeReady(node)
 
 			switch v := val.(type) {
 			case *Value:

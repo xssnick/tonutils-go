@@ -36,23 +36,17 @@ func init() {
 func unpackedConfigSlice(state *vm.State, idx int) (*cell.Slice, error) {
 	cfg, err := state.GetUnpackedConfigTuple()
 	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return nil, nil
-		}
 		return nil, err
 	}
 	v, err := cfg.Index(idx)
 	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return nil, nil
-		}
 		return nil, err
 	}
 	if v == nil {
 		return nil, nil
 	}
 	sl, ok := v.(*cell.Slice)
-	if !ok {
+	if !ok || sl == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return sl.Copy(), nil
@@ -94,129 +88,71 @@ func parseTonMsgPrices(sl *cell.Slice) (*tlb.ConfigMsgForwardPrices, error) {
 	return &prices, nil
 }
 
-func blockchainConfigFromC7(state *vm.State) (tlb.BlockchainConfig, error) {
-	root, err := configRootFromC7(state)
-	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return tlb.BlockchainConfig{}, nil
-		}
-		return tlb.BlockchainConfig{}, err
-	}
-	return tlb.BlockchainConfig{Root: root}, nil
-}
-
-func configNowFromC7(state *vm.State) (uint32, error) {
-	v, err := state.GetParam(3)
-	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeRangeCheck {
-			return 0, nil
-		}
-		return 0, err
-	}
-	if v == nil {
-		return 0, err
-	}
-
-	now, ok := v.(*big.Int)
-	if !ok {
-		return 0, vmerr.Error(vmerr.CodeTypeCheck)
-	}
-	if now.Sign() < 0 || now.BitLen() > 32 {
-		return 0, vmerr.Error(vmerr.CodeRangeCheck)
-	}
-	return uint32(now.Uint64()), nil
-}
-
 func getTonGasPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigGasLimitsPrices, error) {
-	cfg, err := blockchainConfigFromC7(state)
+	idx := 3
+	if isMasterchain {
+		idx = 2
+	}
+	sl, err := unpackedConfigSlice(state, idx)
 	if err != nil {
 		return nil, err
 	}
-
-	prices, err := cfg.GetGasPrices(isMasterchain)
-	if err != nil {
-		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
-		}
-
-		idx := 3
-		if isMasterchain {
-			idx = 2
-		}
-		sl, unpackErr := unpackedConfigSlice(state, idx)
-		if unpackErr != nil {
-			return nil, unpackErr
-		}
-		return parseTonGasPrices(sl)
-	}
-	if prices == nil {
-		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
-	}
-	return prices, nil
+	return parseTonGasPrices(sl)
 }
 
 func getTonMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
-	cfg, err := blockchainConfigFromC7(state)
+	idx := 5
+	if isMasterchain {
+		idx = 4
+	}
+	sl, err := unpackedConfigSlice(state, idx)
 	if err != nil {
 		return nil, err
 	}
-
-	prices, err := cfg.GetMsgForwardPrices(isMasterchain)
-	if err != nil {
-		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
-		}
-
-		idx := 5
-		if isMasterchain {
-			idx = 4
-		}
-		sl, unpackErr := unpackedConfigSlice(state, idx)
-		if unpackErr != nil {
-			return nil, unpackErr
-		}
-		return parseTonMsgPrices(sl)
-	}
-	if prices == nil {
-		return nil, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a slice")
-	}
-	return prices, nil
+	return parseTonMsgPrices(sl)
 }
 
 func getTonStoragePrices(state *vm.State) (*tlb.ConfigStoragePrices, error) {
-	cfg, err := blockchainConfigFromC7(state)
+	sl, err := unpackedConfigSlice(state, 0)
 	if err != nil {
 		return nil, err
 	}
-
-	now, err := configNowFromC7(state)
-	if err != nil {
-		return nil, err
-	}
-
-	prices, err := cfg.GetStoragePrices(now)
-	if err != nil {
-		if !errors.Is(err, tlb.ErrBlockchainConfigRootNil) && !errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
-			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
-		}
-
-		sl, unpackErr := unpackedConfigSlice(state, 0)
-		if unpackErr != nil {
-			return nil, unpackErr
-		}
-		return parseTonStoragePrices(sl)
-	}
-	return prices, nil
+	return parseTonStoragePrices(sl)
 }
 
 func ceilShiftRight(x *big.Int, bits uint) *big.Int {
 	if x.Sign() == 0 {
-		return big.NewInt(0)
+		return new(big.Int)
 	}
-	add := new(big.Int).Lsh(big.NewInt(1), bits)
-	add.Sub(add, big.NewInt(1))
-	y := new(big.Int).Add(x, add)
-	return y.Rsh(y, bits)
+	if x.Sign() > 0 {
+		q := new(big.Int).Rsh(x, bits)
+		for i := uint(0); i < bits; i++ {
+			if x.Bit(int(i)) != 0 {
+				q.Add(q, funcsBigIntOne)
+				break
+			}
+		}
+		return q
+	}
+
+	divisor := new(big.Int).Lsh(funcsBigIntOne, bits)
+	return new(big.Int).Quo(x, divisor)
+}
+
+func mulUint64(x, y uint64) *big.Int {
+	if x == 0 || y == 0 {
+		return new(big.Int)
+	}
+	z := new(big.Int).SetUint64(x)
+	return z.Mul(z, new(big.Int).SetUint64(y))
+}
+
+func mulBigUint64(x *big.Int, y uint64) *big.Int {
+	if x.Sign() == 0 || y == 0 {
+		return new(big.Int)
+	}
+	z := new(big.Int).Set(x)
+	return z.Mul(z, new(big.Int).SetUint64(y))
 }
 
 func maxBig(x, y *big.Int) *big.Int {
@@ -299,7 +235,7 @@ func (o *getExtraBalanceCheapTrace) PendingError() error {
 func GETGASFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -316,15 +252,16 @@ func GETGASFEE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(prices.ComputeGasPrice(gas))
 		},
-		Name:      "GETGASFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x36),
+		Name:       "GETGASFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x36),
+		MinVersion: 6,
 	}
 }
 
 func GETSTORAGEFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 4 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 4 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -348,19 +285,20 @@ func GETSTORAGEFEE() *helpers.SimpleOP {
 				return err
 			}
 			if prices == nil {
-				return state.Stack.PushInt(big.NewInt(0))
+				return state.Stack.PushSmallInt(0)
 			}
 			return state.Stack.PushInt(prices.ComputeStorageFee(isMasterchain, delta, bits, cellsCnt))
 		},
-		Name:      "GETSTORAGEFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x37),
+		Name:       "GETSTORAGEFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x37),
+		MinVersion: 6,
 	}
 }
 
 func GETFORWARDFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 3 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 3 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -381,15 +319,16 @@ func GETFORWARDFEE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(prices.ComputeForwardFee(cellsCnt, bits))
 		},
-		Name:      "GETFORWARDFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x38),
+		Name:       "GETFORWARDFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x38),
+		MinVersion: 6,
 	}
 }
 
 func GETORIGINALFWDFEE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -407,19 +346,20 @@ func GETORIGINALFWDFEE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			num := new(big.Int).Mul(fwdFee, big.NewInt(1<<16))
-			den := big.NewInt(int64((1 << 16) - uint64(prices.FirstFrac)))
-			return state.Stack.PushInt(num.Div(num, den))
+			num := new(big.Int).Lsh(fwdFee, 16)
+			den := new(big.Int).SetUint64((1 << 16) - uint64(prices.FirstFrac))
+			return state.Stack.PushOwnedInt(num.Div(num, den))
 		},
-		Name:      "GETORIGINALFWDFEE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x3A),
+		Name:       "GETORIGINALFWDFEE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x3A),
+		MinVersion: 6,
 	}
 }
 
 func GETGASFEESIMPLE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -434,18 +374,19 @@ func GETGASFEESIMPLE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			total := ceilShiftRight(new(big.Int).Mul(new(big.Int).SetUint64(prices.GasPrice), new(big.Int).SetUint64(gas)), 16)
-			return state.Stack.PushInt(total)
+			total := ceilShiftRight(mulUint64(prices.GasPrice, gas), 16)
+			return state.Stack.PushOwnedInt(total)
 		},
-		Name:      "GETGASFEESIMPLE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x3B),
+		Name:       "GETGASFEESIMPLE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x3B),
+		MinVersion: 6,
 	}
 }
 
 func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 3 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 3 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
 			isMasterchain, err := state.Stack.PopBool()
@@ -464,19 +405,20 @@ func GETFORWARDFEESIMPLE() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			part := new(big.Int).Mul(new(big.Int).SetUint64(prices.BitPrice), new(big.Int).SetUint64(bits))
-			part.Add(part, new(big.Int).Mul(new(big.Int).SetUint64(prices.CellPrice), new(big.Int).SetUint64(cellsCnt)))
-			return state.Stack.PushInt(ceilShiftRight(part, 16))
+			part := mulUint64(prices.BitPrice, bits)
+			part.Add(part, mulUint64(prices.CellPrice, cellsCnt))
+			return state.Stack.PushOwnedInt(ceilShiftRight(part, 16))
 		},
-		Name:      "GETFORWARDFEESIMPLE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x3C),
+		Name:       "GETFORWARDFEESIMPLE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x3C),
+		MinVersion: 6,
 	}
 }
 
 func GETEXTRABALANCE() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			id, err := state.Stack.PopIntRange(0, (1<<32)-1)
+			id, err := state.Stack.PopIntRangeInt64(0, (1<<32)-1)
 			if err != nil {
 				return err
 			}
@@ -486,7 +428,7 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 				return err
 			}
 			balance, ok := balanceAny.(tuple.Tuple)
-			if !ok || balance.Len() < 2 {
+			if !ok {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 
@@ -507,7 +449,7 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 				return pushSmallInt(state, 0)
 			}
 
-			key := cell.BeginCell().MustStoreBigUInt(id, 32).EndCell()
+			key := cell.BeginCell().MustStoreUInt(uint64(id), 32).EndCell()
 			trace := state.Cells.Trace()
 			var cheapTrace *getExtraBalanceCheapTrace
 			if cheap {
@@ -537,8 +479,9 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 			}
 			return state.Stack.PushInt(amount)
 		},
-		Name:      "GETEXTRABALANCE",
-		BitPrefix: helpers.BytesPrefix(0xF8, 0x80),
+		Name:       "GETEXTRABALANCE",
+		BitPrefix:  helpers.BytesPrefix(0xF8, 0x80),
+		MinVersion: 10,
 	}
 }
 
@@ -557,7 +500,7 @@ func SHA256U() *helpers.SimpleOP {
 				return err
 			}
 			sum := sha256.Sum256(data)
-			return state.Stack.PushInt(new(big.Int).SetBytes(sum[:]))
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(sum[:]))
 		},
 		Name:      "SHA256U",
 		BitPrefix: helpers.BytesPrefix(0xF9, 0x02),
@@ -626,6 +569,12 @@ func newHashExtHasher(hashID int) (hashExtHasher, error) {
 }
 
 func appendBits(dst []byte, dstBits *int, src []byte, bits int) []byte {
+	if *dstBits%8 == 0 && bits%8 == 0 {
+		dst = append(dst, src[:bits/8]...)
+		*dstBits += bits
+		return dst
+	}
+
 	for i := 0; i < bits; i++ {
 		srcBit := (src[i/8] >> (7 - uint(i%8))) & 1
 		if *dstBits%8 == 0 {
@@ -639,34 +588,12 @@ func appendBits(dst []byte, dstBits *int, src []byte, bits int) []byte {
 	return dst
 }
 
-func collectHashExtItems(state *vm.State, cnt int, rev, appendMode bool) ([]any, *cell.Builder, error) {
-	items := make([]any, cnt)
-	for i := 0; i < cnt; i++ {
-		val, err := state.Stack.PopAny()
-		if err != nil {
-			return nil, nil, err
-		}
-		items[i] = val
-	}
-	var builder *cell.Builder
-	if appendMode {
-		var err error
-		builder, err = state.Stack.PopBuilder()
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	if !rev {
-		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
-			items[i], items[j] = items[j], items[i]
-		}
-	}
-	return items, builder, nil
-}
-
 func valueBitsForHashExt(val any) ([]byte, int, error) {
 	switch x := val.(type) {
 	case *cell.Slice:
+		if x == nil {
+			return nil, 0, vmerr.Error(vmerr.CodeTypeCheck, "expected slice or builder")
+		}
 		data, err := x.PreloadSlice(x.BitsLeft())
 		if err != nil {
 			return nil, 0, err
@@ -705,6 +632,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 		},
 		BitPrefix:     helpers.UIntPrefix(0x3E41, 14),
 		FixedSizeBits: 10,
+		MinVersion:    4,
 		SerializeSuffix: func() *cell.Builder {
 			return cell.BeginCell().MustStoreUInt(uint64(args), 10)
 		},
@@ -721,24 +649,24 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 			appendMode := (args>>9)&1 != 0
 			hashID := int(args & 0xFF)
 			if hashID == 255 {
-				if state.Stack.Len() < 2 {
+				if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
 					return vmerr.Error(vmerr.CodeStackUnderflow)
 				}
-				v, err := state.Stack.PopIntRange(0, 254)
+				v, err := state.Stack.PopIntRangeInt64(0, 254)
 				if err != nil {
 					return err
 				}
-				hashID = int(v.Int64())
+				hashID = int(v)
 			}
 			maxCnt := state.Stack.Len() - 1
-			if appendMode {
+			if state.GlobalVersion >= 9 && appendMode {
 				maxCnt--
 			}
-			cntInt, err := state.Stack.PopIntRange(0, int64(maxCnt))
+			cntInt, err := state.Stack.PopIntRangeInt64(0, int64(maxCnt))
 			if err != nil {
 				return err
 			}
-			cnt := int(cntInt.Int64())
+			cnt := int(cntInt)
 			hasher, err := newHashExtHasher(hashID)
 			if err != nil {
 				return err
@@ -795,7 +723,7 @@ func HASHEXT(args uint16) *helpers.AdvancedOP {
 				return state.Stack.PushOwnedBuilder(builder)
 			}
 			if len(hash) <= 32 {
-				return state.Stack.PushInt(new(big.Int).SetBytes(hash))
+				return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash))
 			}
 			out := tuple.NewTupleSized((len(hash) + 31) / 32)
 			for i := 0; i < out.Len(); i++ {
@@ -821,9 +749,11 @@ func HASHBU() *helpers.SimpleOP {
 				return err
 			}
 			cl := builder.WithoutTrace().EndCell()
-			return state.Stack.PushInt(new(big.Int).SetBytes(cl.Hash()))
+			hash := cl.HashKey()
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},
-		Name:      "HASHBU",
-		BitPrefix: helpers.BytesPrefix(0xF9, 0x16),
+		Name:       "HASHBU",
+		BitPrefix:  helpers.BytesPrefix(0xF9, 0x16),
+		MinVersion: 12,
 	}
 }

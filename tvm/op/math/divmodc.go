@@ -18,11 +18,11 @@ func DIVMODC() *helpers.SimpleOP {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
-			y, err := state.Stack.PopInt()
+			y, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}
-			x, err := state.Stack.PopInt()
+			x, err := state.Stack.PopIntRead()
 			if err != nil {
 				return err
 			}

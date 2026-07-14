@@ -153,6 +153,24 @@ func TestSimpleCellSliceOps(t *testing.T) {
 		}
 
 		state = newCellSliceState()
+		large := new(big.Int).SetUint64(1<<63 + 7)
+		pushCellSliceSlice(t, state, cell.BeginCell().MustStoreBigUInt(large, 64).ToSlice())
+		if err := LDU(64).Interpret(state); err != nil {
+			t.Fatalf("LDU 64 failed: %v", err)
+		}
+		sl = popCellSliceSlice(t, state)
+		if sl.BitsLeft() != 0 {
+			t.Fatalf("expected LDU 64 to consume all bits, got %d", sl.BitsLeft())
+		}
+		gotLarge, err := state.Stack.PopIntFinite()
+		if err != nil {
+			t.Fatalf("failed to pop LDU 64 value: %v", err)
+		}
+		if gotLarge.Cmp(large) != 0 {
+			t.Fatalf("unexpected LDU 64 value: %s", gotLarge.String())
+		}
+
+		state = newCellSliceState()
 		pushCellSliceInt(t, state, -2)
 		pushCellSliceBuilder(t, state, cell.BeginCell())
 		if err := STI(8).Interpret(state); err != nil {
@@ -680,6 +698,35 @@ func TestConstStoreHelpersAndOps(t *testing.T) {
 		}
 	})
 
+	t.Run("RefConstDeserializeShrinksRefs", func(t *testing.T) {
+		ref0 := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+		ref1 := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+		ref2 := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+		decoded := STREFCONST(nil)
+		if err := decoded.Deserialize(STREF2CONST(ref0, ref1).Serialize().EndCell().MustBeginParse()); err != nil {
+			t.Fatalf("STREF2CONST deserialize failed: %v", err)
+		}
+		if err := decoded.Deserialize(STREFCONST(ref2).Serialize().EndCell().MustBeginParse()); err != nil {
+			t.Fatalf("STREFCONST deserialize failed: %v", err)
+		}
+		if decoded.refsNum != 1 || decoded.refs[0].HashKey() != ref2.HashKey() || decoded.refs[1] != nil {
+			t.Fatal("STREFCONST deserialize should replace old refs")
+		}
+		if got := decoded.SerializeText(); got != "STREFCONST" {
+			t.Fatalf("unexpected STREFCONST text after shrink: %q", got)
+		}
+
+		state := newCellSliceState()
+		pushCellSliceBuilder(t, state, cell.BeginCell())
+		if err := decoded.Interpret(state); err != nil {
+			t.Fatalf("STREFCONST failed: %v", err)
+		}
+		builder := popCellSliceBuilder(t, state)
+		if builder.RefsUsed() != 1 {
+			t.Fatal("expected STREFCONST to store one ref")
+		}
+	})
+
 	t.Run("SliceConstRoundTripAndRemainderOps", func(t *testing.T) {
 		value := cell.BeginCell().MustStoreUInt(0xA, 4).ToSlice()
 		op := STSLICECONST(value)
@@ -764,6 +811,15 @@ func TestLittleEndianHelpers(t *testing.T) {
 	}
 	if !fitsSignedBits(big.NewInt(-1), 8) {
 		t.Fatal("expected signed fit")
+	}
+	if !fitsSignedBits(big.NewInt(-128), 8) {
+		t.Fatal("expected signed min fit")
+	}
+	if !fitsSignedBits(big.NewInt(127), 8) {
+		t.Fatal("expected signed max fit")
+	}
+	if fitsSignedBits(big.NewInt(-129), 8) {
+		t.Fatal("did not expect below signed min fit")
 	}
 	if fitsSignedBits(big.NewInt(128), 8) {
 		t.Fatal("did not expect signed fit")
