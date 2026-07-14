@@ -155,7 +155,7 @@ func TestStatsCloseFinalizesActiveTransfersOnce(t *testing.T) {
 	}
 	client.mx.Lock()
 	client.activeTransfers["outbound"] = transfer
-	client.recvStreams["inbound"] = stream
+	client.recvStreams[testTransferID("inbound")] = stream
 	client.stats.outboundTransfersStarted.Add(1)
 	client.stats.inboundTransfersStarted.Add(1)
 	client.mx.Unlock()
@@ -170,7 +170,7 @@ func TestStatsCloseFinalizesActiveTransfersOnce(t *testing.T) {
 	}
 	wg.Wait()
 	if err := client.handleMessage(&adnl.MessageCustom{Data: MessagePart{
-		TransferID: []byte("after-close"),
+		TransferID: make([]byte, 32),
 		FecType: FECRaptorQ{
 			DataSize:     1,
 			SymbolSize:   1,
@@ -211,7 +211,7 @@ func TestStatsCloseDoesNotHoldStateLockWhileStreamIsBusy(t *testing.T) {
 		activeParts:   map[uint32]*decoderStreamPart{},
 	}
 	client.mx.Lock()
-	client.recvStreams["busy"] = stream
+	client.recvStreams[testTransferID("busy")] = stream
 	client.stats.inboundTransfersStarted.Add(1)
 	client.mx.Unlock()
 
@@ -289,7 +289,7 @@ func TestStatsRequestCleanupDistinguishesTimeoutFromCancellation(t *testing.T) {
 			request := &activeRequest{
 				id:                 "request",
 				transferID:         []byte("outbound"),
-				expectedTransferID: "inbound",
+				expectedTransferID: testTransferID("inbound"),
 				deadline:           test.deadline.UnixMilli(),
 			}
 			transfer := &activeTransfer{id: request.transferID}

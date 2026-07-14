@@ -80,7 +80,7 @@ func TestRLDP_handleMessageRejectsBadFECBeforeDecoder(t *testing.T) {
 	}
 
 	cli.mx.RLock()
-	stream := cli.recvStreams[string(transferID)]
+	stream := cli.recvStreams[[32]byte(transferID)]
 	cli.mx.RUnlock()
 	if stream == nil {
 		t.Fatal("expected stream to be created")
@@ -169,7 +169,7 @@ func TestRLDP_handleMessageOutOfOrderParts(t *testing.T) {
 	}
 
 	cli.mx.RLock()
-	stream := cli.recvStreams[string(transferID)]
+	stream := cli.recvStreams[[32]byte(transferID)]
 	cli.mx.RUnlock()
 	if stream == nil {
 		t.Fatal("expected stream to be created")

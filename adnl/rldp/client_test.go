@@ -421,14 +421,14 @@ func TestRLDP_handleMessage(t *testing.T) {
 				request := &activeRequest{
 					id:                 queryId,
 					transferID:         []byte("outgoing-query"),
-					expectedTransferID: string(tId),
+					expectedTransferID: [32]byte(tId),
 					deadline:           time.Now().Add(time.Second * 10).UnixMilli(),
 					maxAnswerSize:      uint64(_RLDPMaxAnswerSize),
 					result:             tChan,
 				}
 				cli.activeRequests[queryId] = request
 				cli.activeTransfers["outgoing-query"] = &activeTransfer{}
-				cli.expectedTransfers[string(tId)] = request
+				cli.expectedTransfers[[32]byte(tId)] = request
 			}
 
 			err = cli.handleMessage(test.msg)
@@ -489,7 +489,7 @@ func TestRLDP_handleMessage(t *testing.T) {
 			if err != nil {
 				t.Fatal("failed to execute handleMessage func, err: ", err)
 			}
-			if cli.recvStreams[string(tId)].lastCompleteAt.IsZero() {
+			if cli.recvStreams[[32]byte(tId)].lastCompleteAt.IsZero() {
 				t.Error("got lastCompleteAt == nil, want != nil")
 			}
 		})
@@ -1496,7 +1496,7 @@ func TestRLDP_CleanupRecvStreamsWithoutCompletedTransfer(t *testing.T) {
 	staleAt := time.Now().Add(-_recvStreamIdleTimeout - time.Second)
 
 	cli.mx.Lock()
-	cli.recvStreams["stale"] = &decoderStream{
+	cli.recvStreams[testTransferID("stale")] = &decoderStream{
 		lastMessageAt: staleAt,
 		startedAt:     staleAt,
 		msgBuf:        NewQueue(1),
@@ -1550,12 +1550,13 @@ func TestRLDP_CleanupKeepsPendingRecvStream(t *testing.T) {
 	stream.pending.Store(true)
 
 	cli.mx.Lock()
-	cli.recvStreams["pending"] = stream
+	pendingID := testTransferID("pending")
+	cli.recvStreams[pendingID] = stream
 	cli.mx.Unlock()
 
 	cli.cleanupRecvStreams(time.Now())
 	cli.mx.RLock()
-	kept := cli.recvStreams["pending"] == stream
+	kept := cli.recvStreams[pendingID] == stream
 	cli.mx.RUnlock()
 	if !kept {
 		t.Fatal("cleanup removed a stream with queued work")
@@ -1568,7 +1569,7 @@ func TestRLDP_CleanupKeepsPendingRecvStream(t *testing.T) {
 	stream.processing.Store(true)
 	cli.cleanupRecvStreams(time.Now())
 	cli.mx.RLock()
-	kept = cli.recvStreams["pending"] == stream
+	kept = cli.recvStreams[pendingID] == stream
 	cli.mx.RUnlock()
 	if !kept {
 		t.Fatal("cleanup removed a stream being processed")
@@ -1577,7 +1578,7 @@ func TestRLDP_CleanupKeepsPendingRecvStream(t *testing.T) {
 	stream.processing.Store(false)
 	cli.cleanupRecvStreams(time.Now())
 	cli.mx.RLock()
-	_, kept = cli.recvStreams["pending"]
+	_, kept = cli.recvStreams[pendingID]
 	cli.mx.RUnlock()
 	if kept {
 		t.Fatal("idle stream was not removed after pending work cleared")

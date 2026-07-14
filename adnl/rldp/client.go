@@ -87,7 +87,7 @@ type activeTransfer struct {
 type activeRequest struct {
 	id                 string
 	transferID         []byte
-	expectedTransferID string
+	expectedTransferID [32]byte
 	deadline           int64
 	maxAnswerSize      uint64
 	result             chan<- AsyncQueryResult
@@ -103,9 +103,9 @@ type RLDP struct {
 	activateRequestCleanup chan struct{}
 	activeRequests         map[string]*activeRequest
 	activeTransfers        map[string]*activeTransfer
-	expectedTransfers      map[string]*activeRequest
+	expectedTransfers      map[[32]byte]*activeRequest
 
-	recvStreams map[string]*decoderStream
+	recvStreams map[[32]byte]*decoderStream
 
 	onQuery   func(transferId []byte, query *Query) error
 	onMessage func(id []byte, data []byte) error
@@ -204,8 +204,8 @@ func NewClient(a ADNL) *RLDP {
 		adnl:                   a,
 		activeRequests:         map[string]*activeRequest{},
 		activeTransfers:        map[string]*activeTransfer{},
-		recvStreams:            map[string]*decoderStream{},
-		expectedTransfers:      map[string]*activeRequest{},
+		recvStreams:            map[[32]byte]*decoderStream{},
+		expectedTransfers:      map[[32]byte]*activeRequest{},
 		activateRecoverySender: make(chan bool, 1),
 		activateRequestCleanup: make(chan struct{}, 1),
 		rateLimit:              NewTokenBucket(InitialRateBytesSec, a.RemoteAddr()),
@@ -420,11 +420,127 @@ func setQueryResult(dst tl.Serializable, src any) error {
 	return nil
 }
 
+func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
+	if len(m.TransferID) != 32 {
+		return errors.New("invalid transfer id")
+	}
+
+	tm := time.Now()
+	id := [32]byte(m.TransferID)
+	r.mx.RLock()
+	stream := r.recvStreams[id]
+	expected := r.expectedTransfers[id]
+	r.mx.RUnlock()
+
+	if stream == nil {
+		if m.TotalSize > _MTU || m.TotalSize <= 0 {
+			return fmt.Errorf("bad rldp packet total size %d", m.TotalSize)
+		}
+
+		// unexpected transfers limited to this size, for protection
+		maxTransferSize := r.unexpectedTransferSizeLimit()
+		if expected != nil {
+			maxTransferSize = expected.maxAnswerSize
+		}
+
+		if m.TotalSize > maxTransferSize {
+			return fmt.Errorf("too big transfer size %d, max allowed %d", m.TotalSize, maxTransferSize)
+		}
+
+		qsz := int(m.FecType.GetSymbolsCount()) + 32
+		if qsz > 1024 {
+			qsz = 1024
+		}
+
+		r.mx.Lock()
+		// check again because of possible concurrency
+		if r.closed {
+			r.mx.Unlock()
+			return nil
+		} else if r.recvStreams[id] != nil {
+			stream = r.recvStreams[id]
+		} else if expected != nil && r.expectedTransfers[id] != expected {
+			r.mx.Unlock()
+			return nil
+		} else {
+			stream = &decoderStream{
+				lastMessageAt: tm,
+				startedAt:     tm,
+				msgBuf:        NewQueue(qsz),
+				activeParts:   map[uint32]*decoderStreamPart{},
+				totalSize:     m.TotalSize,
+			}
+
+			r.recvStreams[id] = stream
+			r.stats.inboundTransfersStarted.Add(1)
+		}
+		r.mx.Unlock()
+	}
+
+	// Keep the stream registered until the message is visible to cleanup.
+	r.mx.RLock()
+	if r.recvStreams[id] != stream {
+		r.mx.RUnlock()
+		return nil
+	}
+	stream.msgBuf.Enqueue(m)
+	stream.pending.Store(true)
+	r.mx.RUnlock()
+
+	if !stream.processing.CompareAndSwap(false, true) {
+		return nil
+	}
+	stream.mx.Lock()
+	defer stream.mx.Unlock()
+	if stream.retired {
+		stream.pending.Store(false)
+		stream.processing.Store(false)
+		return nil
+	}
+
+	for {
+		stream.pending.Store(false)
+
+		for {
+			part, ok := stream.msgBuf.Dequeue()
+			if !ok {
+				break
+			}
+
+			if err := r.processStreamMessagePart(stream, part, tm, isV2); err != nil {
+				r.stats.inboundProcessingErrors.Add(1)
+				Logger("[RLDP] transfer", hex.EncodeToString(part.TransferID), "process msg part:", part.Part, "error:", err.Error())
+			}
+		}
+
+		if hook := streamDrainEmptyHook; hook != nil {
+			hook()
+		}
+
+		if stream.pending.Load() {
+			continue
+		}
+
+		stream.processing.Store(false)
+		if !stream.pending.Load() {
+			return nil
+		}
+		if !stream.processing.CompareAndSwap(false, true) {
+			return nil
+		}
+	}
+}
+
 func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 	isV2 := true
+	var messagePart *MessagePart
 	switch m := msg.Data.(type) {
 	case MessagePartV2:
-		msg.Data = MessagePart(m)
+		// The layouts are identical; keep the conversion typed instead of reboxing msg.Data.
+		messagePart = (*MessagePart)(&m)
+	case MessagePart:
+		messagePart = &m
+		isV2 = false
 	case CompleteV2:
 		msg.Data = Complete(m)
 	case ConfirmV2:
@@ -448,113 +564,11 @@ func (r *RLDP) handleMessage(msg *adnl.MessageCustom) error {
 		r.useV2.Store(false)
 	}
 
+	if messagePart != nil {
+		return r.handleMessagePart(messagePart, isV2)
+	}
+
 	switch m := msg.Data.(type) {
-	case MessagePart:
-		tm := time.Now()
-
-		id := string(m.TransferID)
-		r.mx.RLock()
-		stream := r.recvStreams[id]
-		expected := r.expectedTransfers[id]
-		r.mx.RUnlock()
-
-		if stream == nil {
-			if m.TotalSize > _MTU || m.TotalSize <= 0 {
-				return fmt.Errorf("bad rldp packet total size %d", m.TotalSize)
-			}
-
-			// unexpected transfers limited to this size, for protection
-			maxTransferSize := r.unexpectedTransferSizeLimit()
-			if expected != nil {
-				maxTransferSize = expected.maxAnswerSize
-			}
-
-			if m.TotalSize > maxTransferSize {
-				return fmt.Errorf("too big transfer size %d, max allowed %d", m.TotalSize, maxTransferSize)
-			}
-
-			qsz := int(m.FecType.GetSymbolsCount()) + 32
-			if qsz > 1024 {
-				qsz = 1024
-			}
-
-			r.mx.Lock()
-			// check again because of possible concurrency
-			if r.closed {
-				r.mx.Unlock()
-				return nil
-			} else if r.recvStreams[id] != nil {
-				stream = r.recvStreams[id]
-			} else if expected != nil && r.expectedTransfers[id] != expected {
-				r.mx.Unlock()
-				return nil
-			} else {
-				stream = &decoderStream{
-					lastMessageAt: tm,
-					startedAt:     tm,
-					msgBuf:        NewQueue(qsz),
-					activeParts:   map[uint32]*decoderStreamPart{},
-					totalSize:     m.TotalSize,
-				}
-
-				r.recvStreams[id] = stream
-				r.stats.inboundTransfersStarted.Add(1)
-			}
-			r.mx.Unlock()
-		}
-
-		// Keep the stream registered until the message is visible to cleanup.
-		r.mx.RLock()
-		if r.recvStreams[id] != stream {
-			r.mx.RUnlock()
-			return nil
-		}
-		stream.msgBuf.Enqueue(&m)
-		stream.pending.Store(true)
-		r.mx.RUnlock()
-
-		if !stream.processing.CompareAndSwap(false, true) {
-			return nil
-		}
-		stream.mx.Lock()
-		defer stream.mx.Unlock()
-		if stream.retired {
-			stream.pending.Store(false)
-			stream.processing.Store(false)
-			return nil
-		}
-
-		for {
-			stream.pending.Store(false)
-
-			for {
-				part, ok := stream.msgBuf.Dequeue()
-				if !ok {
-					break
-				}
-
-				if err := r.processStreamMessagePart(stream, part, tm, isV2); err != nil {
-					r.stats.inboundProcessingErrors.Add(1)
-					Logger("[RLDP] transfer", hex.EncodeToString(part.TransferID), "process msg part:", part.Part, "error:", err.Error())
-				}
-			}
-
-			if hook := streamDrainEmptyHook; hook != nil {
-				hook()
-			}
-
-			if stream.pending.Load() {
-				continue
-			}
-
-			stream.processing.Store(false)
-			if !stream.pending.Load() {
-				return nil
-			}
-			if !stream.processing.CompareAndSwap(false, true) {
-				return nil
-			}
-		}
 	case Complete: // receiver has fully received transfer part, send new part or close our stream if done
 		r.mx.RLock()
 		t := r.activeTransfers[string(m.TransferID)]
@@ -769,6 +783,24 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 		Logger("[ID]", hex.EncodeToString(part.TransferID), "[RLDP] created decoder for part:", part.Part, "data size:", cur.fecDataSize, "symbol size:", cur.fecSymbolSize, "symbols:", cur.fecSymbolsCount)
 	}
 
+	processSymbol := true
+	if part.Seqno <= cur.maxSeqno {
+		offset := cur.maxSeqno - part.Seqno
+		if offset < 32 {
+			processSymbol = cur.receivedMask&(uint32(1)<<offset) == 0
+		} else if isV2 {
+			// RLDP2 treats packets older than its receive window as stale.
+			processSymbol = false
+		}
+	}
+
+	if !processSymbol {
+		// Duplicates still refresh activity and may trigger an ACK resend.
+		stream.lastMessageAt = tm
+		r.sendStreamConfirmation(cur, part, tm, isV2)
+		return nil
+	}
+
 	canTryDecode, err := cur.decoder.AddSymbol(part.Seqno, part.Data)
 	if err != nil {
 		return fmt.Errorf("failed to add raptorq symbol %d: %w", part.Seqno, err)
@@ -781,6 +813,20 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 		cur.receivedFastNum++
 	} else {
 		cur.receivedRepairNum++
+	}
+
+	if part.Seqno > cur.maxSeqno {
+		diff := part.Seqno - cur.maxSeqno
+		if diff >= 32 {
+			cur.receivedMask = 0
+		} else {
+			cur.receivedMask <<= diff
+		}
+		cur.maxSeqno = part.Seqno
+	}
+
+	if offset := cur.maxSeqno - part.Seqno; offset < 32 {
+		cur.receivedMask |= uint32(1) << offset
 	}
 
 	if canTryDecode {
@@ -855,7 +901,7 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 				}
 			case Answer:
 				qid := string(rVal.ID)
-				answerTransferID := string(part.TransferID)
+				answerTransferID := [32]byte(part.TransferID)
 
 				var queryTransfer *activeTransfer
 				r.mx.Lock()
@@ -907,21 +953,11 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 		Logger("[RLDP] part ", part.Part, "decode attempt failure on seqno", part.Seqno, "symbols:", cur.fecSymbolsCount, "decode took", time.Since(tmd).String())
 	}
 
-	if part.Seqno > cur.maxSeqno {
-		diff := part.Seqno - cur.maxSeqno
-		if diff >= 32 {
-			cur.receivedMask = 0
-		} else {
-			cur.receivedMask <<= diff
-		}
-		cur.maxSeqno = part.Seqno
-	}
+	r.sendStreamConfirmation(cur, part, tm, isV2)
+	return nil
+}
 
-	if offset := cur.maxSeqno - part.Seqno; offset < 32 {
-		cur.receivedMask |= 1 << offset
-	}
-
-	// send confirm for each 10 packets or after 20 ms
+func (r *RLDP) sendStreamConfirmation(cur *decoderStreamPart, part *MessagePart, tm time.Time, isV2 bool) {
 	if cur.receivedNum-cur.receivedNumConfirmed >= 10 ||
 		cur.lastConfirmAt.Add(20*time.Millisecond).Before(tm) {
 		var confirm tl.Serializable
@@ -942,15 +978,13 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 			}
 		}
 		// we don't care in case of error, not so critical
-		err = r.adnl.SendCustomMessage(context.Background(), confirm)
+		err := r.adnl.SendCustomMessage(context.Background(), confirm)
 		r.stats.noteInboundConfirmation(err, tm)
 		if err == nil {
 			cur.receivedNumConfirmed = cur.receivedNum
 			cur.lastConfirmAt = tm
 		}
 	}
-
-	return nil
 }
 
 // createFECDecoder validates fec parameters of an inbound transfer part the same way
@@ -1653,7 +1687,7 @@ func (r *RLDP) DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []byte
 	request := &activeRequest{
 		id:                 string(q.ID),
 		transferID:         transferId,
-		expectedTransferID: string(reverseId),
+		expectedTransferID: [32]byte(reverseId),
 		deadline:           deadlineMS,
 		maxAnswerSize:      maxAnswerSize,
 		result:             result,
