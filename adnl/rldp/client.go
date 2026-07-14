@@ -787,10 +787,8 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 	if part.Seqno <= cur.maxSeqno {
 		offset := cur.maxSeqno - part.Seqno
 		if offset < 32 {
+			// Only the receive window can prove that an older symbol is a duplicate.
 			processSymbol = cur.receivedMask&(uint32(1)<<offset) == 0
-		} else if isV2 {
-			// RLDP2 treats packets older than its receive window as stale.
-			processSymbol = false
 		}
 	}
 

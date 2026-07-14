@@ -323,14 +323,13 @@ func TestProcessStreamMessagePartTracksReceiveWindowBoundary(t *testing.T) {
 	}
 }
 
-func TestProcessStreamMessagePartStaleReceiveWindow(t *testing.T) {
+func TestProcessStreamMessagePartAcceptsUntrackedOldSymbol(t *testing.T) {
 	tests := []struct {
-		name         string
-		isV2         bool
-		wantAddCalls int
+		name string
+		isV2 bool
 	}{
-		{name: "v1 accepts untracked old symbol", wantAddCalls: 2},
-		{name: "v2 drops stale symbol", isV2: true, wantAddCalls: 1},
+		{name: "v1"},
+		{name: "v2", isV2: true},
 	}
 
 	for _, test := range tests {
@@ -359,11 +358,11 @@ func TestProcessStreamMessagePartStaleReceiveWindow(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if decoder.addCalls != test.wantAddCalls {
-				t.Fatalf("AddSymbol calls=%d want=%d", decoder.addCalls, test.wantAddCalls)
+			if decoder.addCalls != 2 {
+				t.Fatalf("AddSymbol calls=%d want=2", decoder.addCalls)
 			}
-			if current.receivedNum != uint32(test.wantAddCalls) {
-				t.Fatalf("received count=%d want=%d", current.receivedNum, test.wantAddCalls)
+			if current.receivedNum != 2 {
+				t.Fatalf("received count=%d want=2", current.receivedNum)
 			}
 		})
 	}
