@@ -17,7 +17,7 @@ func main() {
 	isSeed := flag.Bool("with-seed", false, "with seed its much slower")
 	threads := flag.Uint64("threads", 8, "parallel threads")
 	suffix := flag.String("suffix", "", "desired contract suffix, required")
-	version := flag.String("wallet", "v3", "v3 or v4")
+	version := flag.String("wallet", "v3", "v3, v4 or v5")
 	flag.Parse()
 
 	if *suffix == "" {
@@ -26,13 +26,21 @@ func main() {
 	}
 
 	var ver wallet.Version
+	var v5Config wallet.ConfigV5R1Final
+
 	switch *version {
 	case "v3":
 		ver = wallet.V3
 	case "v4":
 		ver = wallet.V4R2
+	case "v5":
+		// Конфигурация для v5 (используем mainnet с ID = -239)
+		v5Config = wallet.ConfigV5R1Final{
+			NetworkGlobalID: -239, // Mainnet
+			Workchain:       0,    // Основной workchain
+		}
 	default:
-		log.Println("unknown wallet version, use v3 or v4")
+		log.Println("unknown wallet version, use v3, v4 or v5")
 		os.Exit(1)
 	}
 
@@ -45,7 +53,15 @@ func main() {
 					atomic.AddUint64(&counter, 1)
 
 					_, pk, _ := ed25519.GenerateKey(nil)
-					w, err := wallet.FromPrivateKey(nil, pk, ver)
+					var w *wallet.Wallet
+					var err error
+
+					if *version == "v5" {
+						w, err = wallet.FromPrivateKey(nil, pk, v5Config)
+					} else {
+						w, err = wallet.FromPrivateKey(nil, pk, ver)
+					}
+
 					if err != nil {
 						continue
 					}
@@ -68,7 +84,18 @@ func main() {
 					i++
 
 					seed := wallet.NewSeed()
-					w, _ := wallet.FromSeed(nil, seed, wallet.V4R2)
+					var w *wallet.Wallet
+					var err error
+
+					if *version == "v5" {
+						w, err = wallet.FromSeed(nil, seed, v5Config)
+					} else {
+						w, err = wallet.FromSeed(nil, seed, ver)
+					}
+
+					if err != nil {
+						continue
+					}
 
 					if strings.HasSuffix(w.WalletAddress().String(), *suffix) {
 						log.Println("Address:", w.WalletAddress().String())
