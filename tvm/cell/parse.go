@@ -48,8 +48,9 @@ func maxBOCPayloadBytesForCells(maxCells int) int {
 
 // BOCParseOptions configures BoC parsing.
 type BOCParseOptions struct {
-	// TrustedHashes trusts serialized hashes/depths when a cell stores them in
-	// the BoC payload. Cells without serialized hashes are still hashed normally.
+	// TrustedHashes trusts serialized hashes and depths when a cell stores them
+	// in the BoC payload. Cells without serialized metadata are still hashed
+	// normally.
 	TrustedHashes bool
 	// NoCopyPayload lets parsed cells reference the BoC payload directly.
 	// The caller must keep the source immutable while returned cells are alive.
@@ -64,6 +65,9 @@ type BOCParseOptions struct {
 	// MaxCells limits how many cells may be decoded from this BoC payload.
 	// Zero or a negative value uses the package-level MaxBOCCells limit.
 	MaxCells int
+	// AllowNonZeroLevelRoot permits non-zero-level roots. The zero value matches
+	// the reference std_boc_deserialize default and rejects them.
+	AllowNonZeroLevelRoot bool
 
 	// refGraphSink, when set, captures the raw cell reference graph (indices
 	// into the flat parsed cell array) so a re-serialization can reuse it
@@ -460,6 +464,10 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 			return nil, nil, err
 		}
 
+		if err := validateBOCRootLevels(cll, options); err != nil {
+			return nil, nil, err
+		}
+
 		return cll, nil, nil
 	}
 
@@ -480,7 +488,25 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 		return nil, nil, err
 	}
 
+	if err := validateBOCRootLevels(cll, options); err != nil {
+		return nil, nil, err
+	}
+
 	return cll, unique, nil
+}
+
+// validateBOCRootLevels rejects roots with a non-zero level when the caller
+// opted into the reference std_boc_deserialize root contract.
+func validateBOCRootLevels(roots []*Cell, options BOCParseOptions) error {
+	if options.AllowNonZeroLevelRoot {
+		return nil
+	}
+	for _, root := range roots {
+		if root.Level() != 0 {
+			return errors.New("bag of cells has a root with non-zero level")
+		}
+	}
+	return nil
 }
 
 func finishBOCRead(r *BOCNoCopyReader, hasCRC32C bool) error {

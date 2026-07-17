@@ -500,7 +500,7 @@ func (d *Dictionary) DeleteIntKey(key *big.Int) error {
 // LoadValueByIntKey is the same as LoadValue, but constructs the key cell from int.
 func (d *Dictionary) LoadValueByIntKey(key *big.Int) (*Slice, error) {
 	var builder Builder
-	if err := builder.StoreBigInt(key, d.keySz); err != nil {
+	if err := builder.storeBigIntWrap(key, d.keySz); err != nil {
 		panic(err)
 	}
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}

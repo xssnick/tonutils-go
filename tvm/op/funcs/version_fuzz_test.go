@@ -534,7 +534,7 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 			if got != want {
 				t.Fatalf("CHKSIGNU identity version=%d always=%v got=%v want=%v", version, st.SignatureCheckAlwaysSucceed, got, want)
 			}
-			wantCounter := uint32(0)
+			wantCounter := uint64(0)
 			wantFreeGas := int64(0)
 			if version >= 4 {
 				wantCounter = 1
@@ -564,7 +564,7 @@ func FuzzTVMVersionedCryptoV14Edges(f *testing.F) {
 			if got, err := st.Stack.PopBool(); err != nil || !got {
 				t.Fatalf("CHKSIGNS always version=%d = (%v, %v), want true", version, got, err)
 			}
-			wantCounter := uint32(0)
+			wantCounter := uint64(0)
 			wantFreeGas := int64(0)
 			if version >= 4 {
 				wantCounter = 1

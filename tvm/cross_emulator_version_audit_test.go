@@ -19,19 +19,19 @@ import (
 )
 
 const (
-	expectedCrossEmulatorVersionTestAnchorCount = 131
-	expectedCrossEmulatorVersionTestAnchorHash  = "909bd9427b65ab69e4568d8937128f4f3af146379b331e6e71dd03fdbfea46df"
-	expectedCrossEmulatorVersionFuzzerCount     = 135
-	expectedCrossEmulatorVersionFuzzerHash      = "fbc332b5bf24be75baca10ab84d2eff51a9deca48fa064bf64a00ca0798c22b0"
+	expectedCrossEmulatorVersionTestAnchorCount = 132
+	expectedCrossEmulatorVersionTestAnchorHash  = "08db2ea889ce52248665cc038377abb4fec278bf30fcc656d6923f1dc0840b90"
+	expectedCrossEmulatorVersionFuzzerCount     = 136
+	expectedCrossEmulatorVersionFuzzerHash      = "37618805cde6d3fe4b572d4210a13e25059cf7165e8d52438fb4468666da26c7"
 
-	expectedCrossEmulatorFullRangeVersionFuzzerCount = 129
-	expectedCrossEmulatorFullRangeVersionFuzzerHash  = "625bf3d68e3ab49bf47981e34096d3caeb33fb8af7aa01daf358630aa81f1b2f"
+	expectedCrossEmulatorFullRangeVersionFuzzerCount = 130
+	expectedCrossEmulatorFullRangeVersionFuzzerHash  = "b3eb80a34606257611af0070116dfa8c365ab0ed500de04b400205222c30a338"
 
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 11
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "60768f0f16d4f649c39e5d869b44945ca156d0aef6e9e32bdaaebf315096d8f5"
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 14
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "d7d0e70718f440dc0ec3df430a873336400f31d94a7af98650fa5228a3607e53"
 
-	expectedCrossEmulatorTransactionVersionTestCount = 46
-	expectedCrossEmulatorTransactionVersionTestHash  = "a81aa79410833955c13415a0c9b5c9f82b26b0a1c40f12b2f691e459d6ff3547"
+	expectedCrossEmulatorTransactionVersionTestCount = 50
+	expectedCrossEmulatorTransactionVersionTestHash  = "2be0d2dcf35dba0b40721f9d1f0f025114ec479cd8252cc834158b7f5ce81fd0"
 	expectedCrossEmulatorTransactionVersionFuzzCount = 48
 	expectedCrossEmulatorTransactionVersionFuzzHash  = "2bbcff7f27693d609863afd367a66292d7d07036419640531b3fdc1d9dd4460c"
 
@@ -127,8 +127,8 @@ const (
 
 	expectedCrossEmulatorCoreConfigVersionTestCount = 6
 	expectedCrossEmulatorCoreConfigVersionTestHash  = "cf8f62c0d7ed4573d6cac3dd69803c90fdb2e63ae9cfd9d771595167b8e1dee2"
-	expectedCrossEmulatorCoreConfigVersionFuzzCount = 6
-	expectedCrossEmulatorCoreConfigVersionFuzzHash  = "9abb31b3c1e112daf94ae1126f0ca84bd4997df8a9033a90c4a66ef1a0fd034f"
+	expectedCrossEmulatorCoreConfigVersionFuzzCount = 7
+	expectedCrossEmulatorCoreConfigVersionFuzzHash  = "e7fa33303d41912a131fd3e3eff7733096cd077dcc5ef155920760e7c35cdad7"
 
 	expectedCrossEmulatorDifferentialMatrixVersionTestCount = 10
 	expectedCrossEmulatorDifferentialMatrixVersionTestHash  = "232e63c7cd211af1c8fcaf32eac44f634410d8ed3c99a1c7925e733164d1d845"
@@ -139,7 +139,7 @@ const (
 	expectedCrossEmulatorReferenceMismatchUseHash  = "943cfd6a3532f91841ef012818350e782c30ddb53cf30ed60a9a0a6d065ceada"
 
 	expectedCrossEmulatorDirectKnownReferenceSkipCount = 15
-	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "b1b1aa6c5bb487aae4e5751917c50b91e9de95dba47629bc32c574cc45541fe9"
+	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "f81c698b542bb00fbbf20e071d88b7f8b12f8050d78aef6e35129c874b242add"
 
 	expectedCrossEmulatorSkipReferenceUseCount = 21
 	expectedCrossEmulatorSkipReferenceUseHash  = "358db66918077d580bb131338492c1482c2f886953f3b452db827fdedc992834"
@@ -174,6 +174,24 @@ type crossEmulatorUnclassifiedExplicitVersionUser struct {
 }
 
 var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmulatorUnclassifiedExplicitVersionUser{
+	"transaction_anycast_identity_cross_emulator_test.go:TestTVMCrossEmulatorTransactionAnycastIdentityV7V8V9V10": {
+		reason: "focused account-identity parity enumerates the v7-v10 anycast rewrite transition; the outbound-anycast global-version fuzzer owns broader anycast version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion",
+		},
+	},
+	"transaction_anycast_identity_cross_emulator_test.go:TestTVMCrossEmulatorTransactionAnycastExplicitSourceV7V8V9V10": {
+		reason: "focused action-source parity enumerates the v7-v10 anycast rewrite transition; the outbound-anycast global-version fuzzer owns broader anycast version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion",
+		},
+	},
+	"transaction_version_cross_emulator_test.go:TestTVMCrossEmulatorTransactionOutboundMessageResult39": {
+		reason: "result-39 packing parity pins global version 7 to exercise the legacy silent-ignore (mode&2) semantics against the reference; versioned send-path fuzzers own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion",
+		},
+	},
 	"bls_order_cross_emulator_test.go:TestTVMCrossEmulatorBLSValidationOrder": {
 		reason: "BLS validation-order parity pins global version 13 for a version-independent pop/size/decode order; dedicated crypto global-version fuzzers own version-sensitive coverage",
 		versionAnchors: []string{
@@ -3172,7 +3190,8 @@ func crossEmulatorFunctionBodyUsesExplicitVersion(body string) bool {
 }
 
 func crossEmulatorVersionAuditOnlyTest(name string) bool {
-	return strings.Contains(name, "VersionAudit") ||
+	return strings.Contains(name, "AuditReplayWitness") ||
+		strings.Contains(name, "VersionAudit") ||
 		strings.Contains(name, "VersionMatrixAudit") ||
 		strings.Contains(name, "Anchors") ||
 		strings.Contains(name, "ExplicitConfigHelperAudit") ||
@@ -3203,6 +3222,9 @@ func crossEmulatorVersionFuzzAliases() map[string][]string {
 	return map[string][]string{
 		"AdvancedCellOpsVersionedEdges": {
 			"AdvancedCellOpsGenerated",
+		},
+		"TransactionFailedActionTotalActionFeesV4Boundary": {
+			"TransactionFailedActionMessageBalance",
 		},
 		"OpcodeMinFullAudit": {
 			"OpcodeMinBoundaries",

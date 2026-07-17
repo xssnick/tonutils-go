@@ -971,6 +971,54 @@ func countFixedDictLeaves(root *Cell, remaining uint) (int, error) {
 	return leftCount + rightCount, nil
 }
 
+func forEachPlainDictRefValue(branch *Cell, remaining uint, fn func(value *Cell) error) (int, error) {
+	node, err := parseFixedDictNode(branch, remaining)
+	if err != nil {
+		return 0, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return 0, err
+	}
+	if node.isLeaf(remaining) {
+		if node.loader.BitsLeft() != 0 || node.loader.RefsNum() != 1 {
+			return 0, fmt.Errorf("invalid dict ref value: %d data bits, %d refs", node.loader.BitsLeft(), node.loader.RefsNum())
+		}
+		ref, err := node.ref(0)
+		if err != nil {
+			return 0, err
+		}
+		if fn != nil {
+			if err = fn(ref); err != nil {
+				return 0, err
+			}
+		}
+		return 1, nil
+	}
+
+	if node.loader.BitsLeft() != 0 || node.loader.RefsNum() != 2 {
+		return 0, fmt.Errorf("invalid dict fork node: %d data bits, %d refs", node.loader.BitsLeft(), node.loader.RefsNum())
+	}
+
+	childRemaining := node.nextKeyBits(remaining)
+	left, err := node.ref(0)
+	if err != nil {
+		return 0, err
+	}
+	leftCount, err := forEachPlainDictRefValue(left, childRemaining, fn)
+	if err != nil {
+		return 0, err
+	}
+	right, err := node.ref(1)
+	if err != nil {
+		return 0, err
+	}
+	rightCount, err := forEachPlainDictRefValue(right, childRemaining, fn)
+	if err != nil {
+		return 0, err
+	}
+	return leftCount + rightCount, nil
+}
+
 func mergeFixedDictSurvivor(parent fixedDictNode, edge uint64, survivor *Cell, remaining uint, trace *Trace) (*Cell, error) {
 	childRemaining := parent.nextKeyBits(remaining)
 	child, err := parseFixedDictNode(survivor, childRemaining)

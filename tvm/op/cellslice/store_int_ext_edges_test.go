@@ -249,28 +249,6 @@ func TestStoreIntExtActionEdges(t *testing.T) {
 	})
 }
 
-func TestStoreIntQuietFailStackOverflowBranches(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		reverse bool
-		spare   int
-	}{
-		{name: "ReverseBuilderPushOverflow", reverse: true},
-		{name: "ReverseValuePushOverflow", reverse: true, spare: 1},
-		{name: "NonReverseValuePushOverflow"},
-		{name: "NonReverseBuilderPushOverflow", spare: 1},
-		{name: "StatusPushOverflow", spare: 2},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			st := newCellSliceState()
-			fillStoreIntExtStack(t, st, tt.spare)
-
-			err := storeIntQuietFail(st, 1, cell.BeginCell(), big.NewInt(7), tt.reverse)
-			assertCellSliceVMErrorCode(t, err, vmerr.CodeStackOverflow)
-		})
-	}
-}
-
 func FuzzTVMStoreIntExtRules(f *testing.F) {
 	for _, seed := range []struct {
 		mode, variable, full byte
@@ -370,23 +348,6 @@ func FuzzTVMStoreIntExtRules(f *testing.F) {
 			t.Fatalf("stored bits = %d, want %d", got.BitsUsed(), wantBits)
 		}
 	})
-}
-
-func fillStoreIntExtStack(t *testing.T, st *vm.State, spare int) {
-	t.Helper()
-
-	for {
-		err := st.Stack.PushSmallInt(0)
-		if err != nil {
-			assertCellSliceVMErrorCode(t, err, vmerr.CodeStackOverflow)
-			break
-		}
-	}
-	for i := 0; i < spare; i++ {
-		if _, err := st.Stack.PopAny(); err != nil {
-			t.Fatalf("failed to free stack slot: %v", err)
-		}
-	}
 }
 
 func pushStoreIntExtOperands(t *testing.T, st *vm.State, mode uint8, x *big.Int, builder *cell.Builder, bits int64, variable bool) {

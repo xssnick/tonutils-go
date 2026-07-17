@@ -11,22 +11,22 @@ import (
 
 func init() {
 	vm.List = append(vm.List,
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMOD#", 0xD0, 0, 0, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMODR#", 0xD1, 0, 1, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMODC#", 0xD2, 0, 2, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIV#", 0xD4, 1, 0, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVR#", 0xD5, 1, 1, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVC#", 0xD6, 1, 2, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTMOD#", 0xD8, 2, 0, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTMODR#", 0xD9, 2, 1, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTMODC#", 0xDA, 2, 2, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMOD#", 0xDC, 3, 0, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMODR#", 0xDD, 3, 1, 0) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMODC#", 0xDE, 3, 2, 0) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMOD#", 0xD0, 0, 0, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMODR#", 0xD1, 0, 1, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMODC#", 0xD2, 0, 2, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIV#", 0xD4, 1, 0, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVR#", 0xD5, 1, 1, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVC#", 0xD6, 1, 2, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTMOD#", 0xD8, 2, 0, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTMODR#", 0xD9, 2, 1, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTMODC#", 0xDA, 2, 2, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMOD#", 0xDC, 3, 0, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMODR#", 0xDD, 3, 1, 1) },
+		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMODC#", 0xDE, 3, 2, 1) },
 	)
 }
 
-func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int8) *helpers.AdvancedOP {
+func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int) *helpers.AdvancedOP {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	out := &helpers.AdvancedOP{
 		FixedSizeBits: 8,

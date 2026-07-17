@@ -36,7 +36,7 @@ func TestMulmodpow2rcodeOperation(t *testing.T) {
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
 			codeSlice := codeCell.MustBeginParse()
 
-			op := MULMODPOW2RCODE(0)
+			op := MULMODPOW2RCODE(1)
 			op.Deserialize(codeSlice)
 
 			err := op.Interpret(&vm.State{

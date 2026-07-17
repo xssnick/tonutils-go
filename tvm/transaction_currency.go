@@ -291,12 +291,32 @@ func transactionStoreExtraCurrencies(extra map[uint32]*big.Int) (*cell.Dictionar
 		if amount == nil || amount.Sign() == 0 {
 			continue
 		}
-		value := cell.BeginCell().MustStoreBigVarUInt(amount, 32).EndCell()
+		valueBuilder := cell.BeginCell()
+		if err := valueBuilder.StoreBigVarUInt(amount, 32); err != nil {
+			return nil, fmt.Errorf("failed to store extra currency %d amount: %w", id, err)
+		}
+		value := valueBuilder.EndCell()
 		if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(id)), value); err != nil {
 			return nil, fmt.Errorf("failed to store extra currency: %w", err)
 		}
 	}
 	return dict, nil
+}
+
+func transactionExtraMapsEqual(a, b map[uint32]*big.Int) bool {
+	if transactionExtraCount(a) != transactionExtraCount(b) {
+		return false
+	}
+	for id, amount := range a {
+		if amount == nil || amount.Sign() == 0 {
+			continue
+		}
+		other := b[id]
+		if other == nil || other.Cmp(amount) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func transactionExtraCount(extra map[uint32]*big.Int) uint64 {

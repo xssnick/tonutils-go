@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -29,7 +30,7 @@ func transactionShouldBounce(msg *tlb.Message, skipReason *tlb.ComputeSkipReason
 	return skipReason != nil || !computeSuccess || actionBounce
 }
 
-func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg *PreparedBlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
+func transactionPrepareBouncePhase(msg *tlb.Message, accountAddr *address.Address, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg *PreparedBlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
 	if msg == nil || msg.MsgType != tlb.MsgTypeInternal {
 		return nil, nil
 	}
@@ -38,9 +39,12 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, nil
 	}
 
-	bounceDstAddr, ok := transactionValidateAndNormalizeBounceDestAddr(in.SrcAddr, cfg, in.DstAddr)
-	if !ok {
+	if in.SrcAddr == nil || in.SrcAddr.Type() == address.NoneAddress || in.SrcAddr.Type() == address.ExtAddress {
 		return nil, nil
+	}
+	bounceDstAddr, ok := transactionValidateAndNormalizeBounceDestAddr(in.SrcAddr, cfg, accountAddr)
+	if !ok {
+		return nil, errors.New("invalid destination address in a bounced message")
 	}
 	bounceBody, err := transactionBuildBounceBody(in, cfg, skipReason, computeResult, actionPhase)
 	if err != nil {
@@ -72,7 +76,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	if err != nil {
 		return nil, err
 	}
-	fwdFee := transactionComputeForwardFeeForUsage(cfg, in.DstAddr, bounceDstAddr, msgSize)
+	fwdFee := transactionComputeForwardFeeForUsage(cfg, accountAddr, bounceDstAddr, msgSize)
 	remainingMsgBalance := msgBalance.copy()
 	remainingMsgBalance.grams.Sub(remainingMsgBalance.grams, gasFees)
 	remainingMsgBalance.grams.Sub(remainingMsgBalance.grams, actionFine)
@@ -106,12 +110,19 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, err
 	}
 	msgAmount := new(big.Int).Sub(remainingMsgBalance.grams, fwdFee)
-	collectedFwdFee := transactionFirstPartForwardFee(cfg, in.DstAddr, bounceDstAddr, fwdFee)
+	collectedFwdFee := transactionFirstPartForwardFee(cfg, accountAddr, bounceDstAddr, fwdFee)
 	remainingFwdFee := new(big.Int).Sub(fwdFee, collectedFwdFee)
 	preliminary.Amount = tlb.FromNanoTON(msgAmount)
-	preliminary.ExtraCurrencies, err = remainingMsgBalance.extraDict()
-	if err != nil {
-		return nil, err
+	// The reference keeps the inbound value dictionary cell as is in the
+	// bounced message; rebuild it only when the action phase actually spent
+	// extra currencies from the message balance.
+	if msgExtra, loadErr := transactionLoadExtraCurrencies(in.ExtraCurrencies); loadErr == nil && transactionExtraMapsEqual(msgExtra, remainingMsgBalance.extra) {
+		preliminary.ExtraCurrencies = in.ExtraCurrencies
+	} else {
+		preliminary.ExtraCurrencies, err = remainingMsgBalance.extraDict()
+		if err != nil {
+			return nil, err
+		}
 	}
 	preliminary.FwdFee = tlb.FromNanoTON(remainingFwdFee)
 	preliminary.IHRFee = tlb.FromNanoTON(new(big.Int).SetUint64(extraFlags))
@@ -242,10 +253,11 @@ func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell, cfg
 }
 
 func transactionInboundExtraFlags(in *tlb.InternalMessage) uint64 {
-	if in == nil || in.IHRFee.Nano() == nil || !in.IHRFee.Nano().IsUint64() {
+	if in == nil || in.IHRFee.Nano() == nil {
 		return 0
 	}
-	return in.IHRFee.Nano().Uint64() & 3
+	flags := in.IHRFee.Nano()
+	return uint64(flags.Bit(0)) | uint64(flags.Bit(1))<<1
 }
 
 func transactionBounceOriginalBody(body *cell.Cell, full bool) (*cell.Cell, error) {

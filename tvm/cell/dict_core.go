@@ -6,7 +6,7 @@ import (
 )
 
 func initIntKeyCell(key *big.Int, bits uint, builder *Builder, cell *Cell) {
-	if err := builder.StoreBigInt(key, bits); err != nil {
+	if err := builder.storeBigIntWrap(key, bits); err != nil {
 		panic(err)
 	}
 	*cell = Cell{

@@ -8,10 +8,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return MULRSHIFTRCODE(0) })
+	vm.List = append(vm.List, func() vm.OP { return MULRSHIFTRCODE(1) })
 }
 
-func MULRSHIFTRCODE(value int8) (op *helpers.AdvancedOP) {
+func MULRSHIFTRCODE(value int) (op *helpers.AdvancedOP) {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,

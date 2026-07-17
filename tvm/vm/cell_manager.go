@@ -216,6 +216,15 @@ func (m *CellManager) BeginParseAlreadyLoadedNoCreate(cl *cell.Cell) (*cell.Slic
 func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, currentAlreadyLoaded bool) (*cell.Slice, bool, error) {
 	current := cl
 	libraryLoaded := false
+	// Only since global version 5 the reference load_cell_slice_impl (see the
+	// C++ CellSlice.cpp) marks the first library resolution: the flag both
+	// forbids library->library chains and skips charging the resolved cell's
+	// load. Below v5 the flag stays unset, so chains keep resolving and every
+	// iteration charges the loaded cell as before.
+	restrictNestedLibraries := true
+	if state := m.state; state != nil && state.GlobalVersion < 5 {
+		restrictNestedLibraries = false
+	}
 
 	for {
 		if current == nil {
@@ -276,11 +285,16 @@ func (m *CellManager) beginParseLoadedCell(cl *cell.Cell, allowSpecial bool, cur
 			}
 
 			resolved, err := m.state.LoadLibraryByHash(hash)
-			if err != nil || resolved == nil {
+			if err != nil {
+				return nil, false, err
+			}
+			if resolved == nil {
 				return nil, false, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
 			}
 
-			libraryLoaded = true
+			if restrictNestedLibraries {
+				libraryLoaded = true
+			}
 			current = resolved
 		case cell.PrunedCellType:
 			if loadedSlice == nil {

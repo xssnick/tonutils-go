@@ -7,9 +7,14 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type panicTestOP struct{}
+
+type lateUnderflowTestOP struct {
+	panicTestOP
+}
 
 func (o *panicTestOP) GetPrefixes() []*cell.Slice {
 	return []*cell.Slice{cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell().MustBeginParse()}
@@ -32,19 +37,46 @@ func (o *panicTestOP) Interpret(state *vmcore.State) error {
 	panic("panic test")
 }
 
-func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
-	orig := vmcore.List
-	vmcore.List = append(append([]vmcore.OPGetter(nil), orig...), func() vmcore.OP {
+func (o *lateUnderflowTestOP) Interpret(state *vmcore.State) error {
+	if _, err := state.Stack.PopAny(); err != nil {
+		return err
+	}
+	return vmerr.Err(vmerr.CodeStackUnderflow)
+}
+
+func TestOpcodeRegistryIsFrozenBeforeNewTVM(t *testing.T) {
+	original := vmcore.List
+	vmcore.List = append(append([]vmcore.OPGetter(nil), original...), func() vmcore.OP {
 		return &panicTestOP{}
 	})
-	defer func() {
-		vmcore.List = orig
-	}()
+	t.Cleanup(func() {
+		vmcore.List = original
+	})
 
-	vm := NewTVM()
+	code := cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell().MustBeginParse()
+	getter := NewTVM().matchOpcode(code)
+	if getter != nil {
+		if _, late := getter().(*panicTestOP); late {
+			t.Fatal("NewTVM observed an opcode registered after package initialization")
+		}
+	}
+}
+
+func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
+	getter := func() vmcore.OP {
+		return &panicTestOP{}
+	}
+	dispatch := newOpcodeDispatch()
+	dispatch.addPrefix((&panicTestOP{}).GetPrefixes()[0], getter)
+	dispatch.buildFastTable()
+
+	machine := NewTVM()
+	for i := range machine.dispatches {
+		machine.dispatches[i] = dispatch
+	}
 	code := cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell()
 
-	res, err := vm.Execute(code, nil, tuple.Tuple{}, vmcore.NewGas(), vmcore.NewStack(), testExecutionConfig(t))
+	res, err := machine.Execute(code, nil, tuple.Tuple{}, vmcore.NewGas(), vmcore.NewStack(), testExecutionConfig(t))
 	if err == nil {
 		t.Fatal("expected fatal error")
 	}
@@ -53,5 +85,32 @@ func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "vm panic: panic test") {
 		t.Fatalf("expected panic context in error, got %v", err)
+	}
+}
+
+func TestStepUsesReferencePreflightContractWithoutRollback(t *testing.T) {
+	op := &lateUnderflowTestOP{}
+	dispatch := newOpcodeDispatch()
+	dispatch.addPrefix(op.GetPrefixes()[0], func() vmcore.OP {
+		return &lateUnderflowTestOP{}
+	})
+	dispatch.buildFastTable()
+
+	stack := vmcore.NewStack()
+	if err := stack.PushSmallInt(7); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	state := &vmcore.State{
+		CurrentCode: op.Serialize().EndCell().MustBeginParse(),
+		Stack:       stack,
+		Gas:         vmcore.GasWithLimit(1_000),
+	}
+
+	err := (&TVM{}).stepWithDispatch(dispatch, state)
+	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeStackUnderflow {
+		t.Fatalf("step error = %v, want stack underflow", err)
+	}
+	if stack.Len() != 0 {
+		t.Fatalf("dispatcher rolled a handler mutation back, stack len = %d", stack.Len())
 	}
 }

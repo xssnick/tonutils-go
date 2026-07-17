@@ -119,43 +119,6 @@ func TestLittleEndianLoadStoreStackTypeAndQuietEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("LoadResultStackOverflowBranches", func(t *testing.T) {
-		src := cell.BeginCell().MustStoreSlice([]byte{0x78, 0x56, 0x34, 0x12, 0xA0}, 36).EndCell().MustBeginParse()
-
-		st := newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, src.Copy())
-		assertCellSliceVMErrorCode(t, LDULE4().Interpret(st), vmerr.CodeStackOverflow)
-		if got, err := st.Stack.PopIntFinite(); err != nil {
-			t.Fatalf("pop partial LDULE4 value: %v", err)
-		} else if got.Uint64() != 0x12345678 {
-			t.Fatalf("partial LDULE4 value = %x, want 12345678", got.Uint64())
-		}
-
-		st = newCellSliceState()
-		fillLoadRefGramsStack(t, st, 2)
-		pushCellSliceSlice(t, st, src.Copy())
-		assertCellSliceVMErrorCode(t, LDULE4Q().Interpret(st), vmerr.CodeStackOverflow)
-		if rest := popCellSliceSlice(t, st); rest.BitsLeft() != 4 || rest.MustLoadUInt(4) != 0xA {
-			t.Fatal("partial LDULE4Q rest mismatch")
-		}
-		if got, err := st.Stack.PopIntFinite(); err != nil {
-			t.Fatalf("pop partial LDULE4Q value: %v", err)
-		} else if got.Uint64() != 0x12345678 {
-			t.Fatalf("partial LDULE4Q value = %x, want 12345678", got.Uint64())
-		}
-
-		st = newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, src.Copy())
-		assertCellSliceVMErrorCode(t, PLDULE4Q().Interpret(st), vmerr.CodeStackOverflow)
-		if got, err := st.Stack.PopIntFinite(); err != nil {
-			t.Fatalf("pop partial PLDULE4Q value: %v", err)
-		} else if got.Uint64() != 0x12345678 {
-			t.Fatalf("partial PLDULE4Q value = %x, want 12345678", got.Uint64())
-		}
-	})
-
 	t.Run("StoreStackTypeRangeAndOverflow", func(t *testing.T) {
 		if err := STILE4().Deserialize(cell.BeginCell().MustStoreUInt(0xCF28>>2, 14).EndCell().MustBeginParse()); err == nil {
 			t.Fatal("short STILE suffix unexpectedly decoded")

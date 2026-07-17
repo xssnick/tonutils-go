@@ -42,6 +42,9 @@ type cellMeta struct {
 
 	extraDepths [3]uint16
 	viewLevel   uint8 // effectiveLevel + 1
+	// skipLazyRefValidation is set only for internal trusted BoC loaders whose
+	// materialized cell metadata comes from the same payload as the placeholder.
+	skipLazyRefValidation bool
 }
 
 func cloneCellMeta(meta *cellMeta) *cellMeta {

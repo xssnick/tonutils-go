@@ -1,7 +1,6 @@
 package math
 
 import (
-	"errors"
 	"math/big"
 	"testing"
 
@@ -9,22 +8,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
-
-func fillQuietCompoundStack(t *testing.T, st *vm.State) {
-	t.Helper()
-
-	for {
-		err := st.Stack.PushAny(vm.NaN{})
-		if err == nil {
-			continue
-		}
-		var vmErr vmerr.VMError
-		if !errors.As(err, &vmErr) || vmErr.Code != vmerr.CodeStackOverflow {
-			t.Fatalf("fill stack error = %v, want stack overflow", err)
-		}
-		return
-	}
-}
 
 func TestQuietCompoundLegacyMulShiftNaNResults(t *testing.T) {
 	t.Run("QMULRSHIFT v12 NaN product uses legacy right shift", func(t *testing.T) {
@@ -92,27 +75,6 @@ func TestQuietCompoundHelperEdges(t *testing.T) {
 			t.Fatalf("pop qPushResult nil: %v", err)
 		}
 		requireMathNaN(t, got)
-	})
-
-	t.Run("qPushNaNsStackOverflow", func(t *testing.T) {
-		st := newMathCoverageState()
-		fillQuietCompoundStack(t, st)
-		assertMathCoverageVMError(t, qPushNaNs(st, 1), vmerr.CodeStackOverflow)
-	})
-
-	t.Run("qPushSelectedFirstResultOverflow", func(t *testing.T) {
-		st := newMathCoverageState()
-		fillQuietCompoundStack(t, st)
-		assertMathCoverageVMError(t, qPushSelected(st, 3, big.NewInt(1), big.NewInt(2)), vmerr.CodeStackOverflow)
-	})
-
-	t.Run("qPushSelectedSecondResultOverflow", func(t *testing.T) {
-		st := newMathCoverageState()
-		fillQuietCompoundStack(t, st)
-		if _, err := st.Stack.PopAny(); err != nil {
-			t.Fatalf("pop one stack slot: %v", err)
-		}
-		assertMathCoverageVMError(t, qPushSelected(st, 3, big.NewInt(1), big.NewInt(2)), vmerr.CodeStackOverflow)
 	})
 
 	t.Run("qPushSelectedInvalidSelector", func(t *testing.T) {

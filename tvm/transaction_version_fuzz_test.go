@@ -2492,17 +2492,17 @@ func FuzzTransactionActionGlobalVersionFallbackInvalidSource(f *testing.F) {
 		// PrepareBlockchainConfig; only well-formed configs reach execution.
 		switch rawConfigKind % 4 {
 		case 0:
-			if _, err := PrepareBlockchainConfig(nil); err == nil {
+			if _, err := prepareBlockchainConfigLenient(nil); err == nil {
 				t.Fatal("nil config root should fail to prepare")
 			}
 			return
 		case 1:
-			if _, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+			if _, err := prepareBlockchainConfigLenient(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
 				t.Fatal("config without global version should fail to prepare")
 			}
 			return
 		case 3:
-			if _, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+			if _, err := prepareBlockchainConfigLenient(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 				tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(uint64(payload&1), 1).EndCell(),
 			})); err == nil {
 				t.Fatal("config with malformed global version should fail to prepare")
@@ -3023,7 +3023,7 @@ func FuzzTransactionVersionedPrecompiledGasConfig(f *testing.F) {
 		}
 
 		env := &transactionExecEnv{}
-		nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, gas, env)
+		nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, gas, env)
 		gotUsage := env.precompiledGasUsage
 		if gotUsage == nil || gotUsage.Uint64() != usage {
 			t.Fatalf("v%d precompiled usage = %v, want %d", version, gotUsage, usage)
@@ -3040,13 +3040,7 @@ func FuzzTransactionVersionedPrecompiledGasConfig(f *testing.F) {
 		if skip != nil {
 			t.Fatalf("v%d skip = %v, want nil", version, skip)
 		}
-		if limit == 0 {
-			if nextGas != gas {
-				t.Fatalf("v%d fallback gas with zero limit = %+v, want unchanged %+v", version, nextGas, gas)
-			}
-			return
-		}
-		wantLimit := int64(limit)
+		wantLimit := int64(1_000_000)
 		wantCredit := int64(0)
 		if credit {
 			wantCredit = wantLimit
@@ -3077,6 +3071,7 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 		gas := vmcore.Gas{Max: limit + 50, Limit: limit, Base: limit, Remaining: limit}
 		cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamPrecompiledContracts: buildTransactionV13PrecompiledConfig(t, code, uint64(usage)),
+			tlb.ConfigParamGasPricesBasechain:   buildTransactionGasLimitsCell(t, 100, 500),
 		})
 
 		switch rawCase % 10 {
@@ -3100,29 +3095,29 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 			}
 		case 4:
 			env := &transactionExecEnv{}
-			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, vmcore.Gas{Max: usage + 50, Limit: usage, Base: usage, Remaining: usage}, env)
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, vmcore.Gas{Max: usage + 50, Limit: usage, Base: usage, Remaining: usage}, env)
 			if env.precompiledGasUsage == nil || env.precompiledGasUsage.Int64() != usage || skip != nil {
 				t.Fatalf("config precompiled usage = %v skip %v, want %d nil", env.precompiledGasUsage, skip, usage)
 			}
-			if nextGas.Limit != usage+50 || nextGas.Max != usage+50 {
-				t.Fatalf("config precompiled fallback gas = %+v, want max/limit %d", nextGas, usage+50)
+			if nextGas.Limit != 1_000_000 || nextGas.Max != 1_000_000 {
+				t.Fatalf("config precompiled fallback gas = %+v, want raw config limit 1000000", nextGas)
 			}
 		case 5:
 			env := &transactionExecEnv{}
-			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, nil, gas, env)
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, nil, tonopsTestAddr, false, gas, env)
 			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
 				t.Fatalf("nil-code precompiled config = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
 		case 6:
 			env := &transactionExecEnv{}
-			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, otherCode, gas, env)
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, otherCode, tonopsTestAddr, false, gas, env)
 			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
 				t.Fatalf("missing-code precompiled config = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
 		case 7:
 			env := &transactionExecEnv{}
 			smallGas := vmcore.Gas{Max: usage - 1, Limit: usage - 1, Base: usage - 1, Remaining: usage - 1}
-			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, smallGas, env)
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, smallGas, env)
 			if env.precompiledGasUsage == nil || env.precompiledGasUsage.Int64() != usage {
 				t.Fatalf("config precompiled usage = %v, want %d", env.precompiledGasUsage, usage)
 			}
@@ -3132,7 +3127,7 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 		case 8:
 			env := &transactionExecEnv{}
 			emptyCfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{})
-			nextGas, skip := transactionApplyPrecompiledGasConfig(emptyCfg, code, gas, env)
+			nextGas, skip := transactionApplyPrecompiledGasConfig(emptyCfg, code, tonopsTestAddr, false, gas, env)
 			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
 				t.Fatalf("absent precompiled param = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
@@ -3146,8 +3141,8 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 			}
 
 			outOfGas := &MessageExecutionResult{ExecutionResult: ExecutionResult{ExitCode: ^int64(vmerr.CodeOutOfGas), GasUsed: 5, Steps: 7}}
-			if err := transactionApplyPrecompiledGasUsage(outOfGas, big.NewInt(usage)); err != nil {
-				t.Fatalf("apply out-of-gas precompiled usage failed: %v", err)
+			if err := transactionApplyPrecompiledGasUsage(outOfGas, big.NewInt(usage)); !errors.Is(err, errPrecompiledOutOfGas) {
+				t.Fatalf("apply out-of-gas precompiled usage error = %v, want %v", err, errPrecompiledOutOfGas)
 			}
 			if outOfGas.GasUsed != 5 || outOfGas.Steps != 7 {
 				t.Fatalf("out-of-gas precompiled usage changed gas=%d steps=%d", outOfGas.GasUsed, outOfGas.Steps)
@@ -3199,7 +3194,7 @@ func FuzzTransactionVersionedFailedActionMessageBalance(f *testing.F) {
 					Actions:   actions,
 					Committed: true,
 				},
-			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), nil, msgBalance, big.NewInt(0))
+			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), extra, msgBalance, big.NewInt(0))
 			if err != nil {
 				t.Fatalf("apply actions v%d failed: %v", version, err)
 			}
@@ -3220,7 +3215,9 @@ func FuzzTransactionVersionedFailedActionMessageBalance(f *testing.F) {
 			if got := res.msgBalanceRemaining.grams.Uint64(); got != want {
 				t.Fatalf("v%d mode=%d message balance remaining = %d, want %d", version, mode, got, want)
 			}
-			if hasExtra {
+			// Before extra_currency_v2 (v10) modes 64/128 zero the whole message
+			// balance, extra currencies included; starting from v10 only grams.
+			if hasExtra && (mode&0xc0 == 0 || version >= 10) {
 				got := res.msgBalanceRemaining.extra[7]
 				if got == nil || got.Uint64() != wantExtra {
 					t.Fatalf("v%d mode=%d message balance extra = %v, want 7:%d", version, mode, res.msgBalanceRemaining.extra, wantExtra)
@@ -3286,7 +3283,7 @@ func FuzzTransactionVersionedStateLimitFailureMessageBalance(f *testing.F) {
 		}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, version),
 			tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-		}), big.NewInt(10_000_000), nil, msgBalance, big.NewInt(0))
+		}), big.NewInt(10_000_000), extra, msgBalance, big.NewInt(0))
 		if err != nil {
 			t.Fatalf("apply actions v%d failed: %v", version, err)
 		}
@@ -3301,7 +3298,9 @@ func FuzzTransactionVersionedStateLimitFailureMessageBalance(f *testing.F) {
 		if got := res.msgBalanceRemaining.grams.Uint64(); got != want {
 			t.Fatalf("v%d mode=%d state-limit message balance remaining = %d, want %d", version, mode, got, want)
 		}
-		if hasExtra {
+		// Before extra_currency_v2 (v10) modes 64/128 zero the whole message
+		// balance, extra currencies included; starting from v10 only grams.
+		if hasExtra && version >= 10 {
 			got := res.msgBalanceRemaining.extra[7]
 			if got == nil || got.Uint64() != wantExtra {
 				t.Fatalf("v%d mode=%d state-limit message balance extra = %v, want 7:%d", version, mode, res.msgBalanceRemaining.extra, wantExtra)
@@ -3381,7 +3380,7 @@ func FuzzTransactionApplyActionsMessageBalanceInputIsolation(f *testing.F) {
 			data:    data,
 			balance: big.NewInt(2_000_000),
 		}
-		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), nil, msgBalance, big.NewInt(0))
+		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), extra, msgBalance, big.NewInt(0))
 		if err != nil {
 			t.Fatalf("apply actions v%d %s failed: %v", version, context, err)
 		}
@@ -3410,7 +3409,9 @@ func FuzzTransactionApplyActionsMessageBalanceInputIsolation(f *testing.F) {
 			if out.msgBalanceRemaining.grams.Sign() != 0 {
 				t.Fatalf("v%d %s result message grams = %s, want 0", version, context, out.msgBalanceRemaining.grams)
 			}
-			if hasExtra {
+			// Before extra_currency_v2 (v10) modes 64/128 zero the whole message
+			// balance, extra currencies included; starting from v10 only grams.
+			if hasExtra && version >= 10 {
 				got := out.msgBalanceRemaining.extra[7]
 				if got == nil || got.Uint64() != wantExtra {
 					t.Fatalf("v%d %s result message extra = %v, want 7:%d", version, context, out.msgBalanceRemaining.extra, wantExtra)
@@ -3503,7 +3504,7 @@ func FuzzTransactionVersionedMalformedActionLoading(f *testing.F) {
 				continue
 			}
 
-			wantBounce := isMalformedSend && version >= 4 && rawMode&16 != 0
+			wantBounce := isMalformedSend && version >= 8 && rawMode&16 != 0
 			if loaded.resultCode != 34 || loaded.totalActions != uint16(totalActions) || loaded.skippedActions != 0 || loaded.bounce != wantBounce || len(loaded.actions) != 0 {
 				t.Fatalf("unexpected malformed action v%d mode=%d kind=%d: %+v", version, rawMode, kind, loaded)
 			}
@@ -3537,7 +3538,7 @@ func FuzzTransactionVersionedReserveActionBoundaries(f *testing.F) {
 				remaining := original.copy()
 				reserved := transactionZeroCurrencyBalance()
 
-				res, err := transactionProcessReserveAction(action, original, remaining, reserved, version)
+				res, err := transactionProcessReserveAction(action, false, original, remaining, reserved, version)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -3579,7 +3580,7 @@ func FuzzTransactionVersionedReserveActionBoundaries(f *testing.F) {
 				remaining := original.copy()
 				reserved := transactionZeroCurrencyBalance()
 
-				res, err := transactionProcessReserveAction(action, original, remaining, reserved, version)
+				res, err := transactionProcessReserveAction(action, false, original, remaining, reserved, version)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -4172,6 +4173,7 @@ func FuzzTransactionVersionedBounceExtraFlags(f *testing.F) {
 
 		bounce, err := transactionPrepareBouncePhase(
 			msg,
+			tonopsTestAddr,
 			amount,
 			nil,
 			&transactionCurrencyBalance{grams: new(big.Int).Set(amount), extra: map[uint32]*big.Int{}},
@@ -4719,6 +4721,7 @@ func FuzzTransactionVersionedStateInitDepthPersistence(f *testing.F) {
 func FuzzTransactionVersionedNoStateSkipReasonBoundaries(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), byte(0), byte(0), false, byte(0x11), byte(0x22))
+		f.Add(byte(version), byte(0x80), byte(0), false, byte(0x11), byte(0x22))
 	}
 	f.Add(byte(0), byte(0), byte(0), false, byte(0x11), byte(0x22))
 	f.Add(byte(4), byte(1), byte(1), true, byte(0x33), byte(0x44))
@@ -4805,9 +4808,7 @@ func FuzzTransactionVersionedNoStateSkipReasonBoundaries(f *testing.F) {
 			if err != nil {
 				t.Fatalf("v%d active compute account failed: %v", version, err)
 			}
-			if acc.code == nil {
-				checkTransactionComputeBoundaryResult(t, version, usedState, skip, false, tlb.ComputeSkipReasonNoState)
-			} else if msg != nil && msg.MsgType == tlb.MsgTypeExternalIn && wantExtracted != nil {
+			if msg != nil && msg.MsgType == tlb.MsgTypeExternalIn && wantExtracted != nil {
 				stateCell, err := tlb.ToCell(wantExtracted)
 				if err != nil {
 					t.Fatal(err)
@@ -4818,6 +4819,10 @@ func FuzzTransactionVersionedNoStateSkipReasonBoundaries(f *testing.F) {
 				}
 				if skip != nil || usedState {
 					t.Fatalf("v%d active external state init skip=%+v usedState=%t, want matching active account", version, skip, usedState)
+				}
+			} else if acc.code == nil {
+				if skip != nil || usedState {
+					t.Fatalf("v%d active account without code skip=%+v usedState=%t, want VM entry", version, skip, usedState)
 				}
 			} else if skip != nil || usedState {
 				t.Fatalf("v%d active compute skip=%+v usedState=%t, want ordinary active account", version, skip, usedState)
@@ -4927,7 +4932,7 @@ func FuzzTransactionVersionedStateInitLibraryValidation(f *testing.F) {
 			}
 			return
 		}
-		if res.phase.Success || res.phase.Valid || res.phase.ResultCode != 34 || res.phase.SkippedActions != 0 || res.phase.MessagesCreated != 0 {
+		if res.phase.Success || !res.phase.Valid || res.phase.ResultCode != 34 || res.phase.SkippedActions != 0 || res.phase.MessagesCreated != 0 {
 			t.Fatalf("v%d invalid library action phase = %+v", version, res.phase)
 		}
 	})
@@ -5046,7 +5051,7 @@ func FuzzTransactionVersionedAccountStateLimitBoundaries(f *testing.F) {
 			acc.libraries = libs
 		}
 
-		got, err := transactionAccountStateExceedsLimits(acc, code, data, libs, cfg)
+		got, err := transactionAccountStateExceedsLimits(acc, code, data, libs, cfg, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -5120,7 +5125,7 @@ func FuzzTransactionVersionedAccountStateLimitShortCircuits(f *testing.F) {
 			acc.libraries = libs
 		}
 
-		got, err := transactionAccountStateExceedsLimits(acc, code, data, libs, cfg)
+		got, err := transactionAccountStateExceedsLimits(acc, code, data, libs, cfg, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -5184,11 +5189,11 @@ func transactionFuzzBounceExitCase(rawCase byte, rawExit int32, gasUsed, steps u
 	case 4:
 		return &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonType("UNKNOWN")}, nil, nil, 0, 0, false
 	case 5:
-		return nil, &MessageExecutionResult{Accepted: true, ExecutionResult: ExecutionResult{ExitCode: int64(rawExit), GasUsed: int64(gasUsed), Steps: steps}}, nil, 1, rawExit, true
+		return nil, &MessageExecutionResult{Accepted: true, ExecutionResult: ExecutionResult{ExitCode: int64(rawExit), GasUsed: int64(gasUsed), Steps: uint64(steps)}}, nil, 1, rawExit, true
 	case 6:
-		return nil, &MessageExecutionResult{Accepted: true, ExecutionResult: ExecutionResult{ExitCode: 0, GasUsed: int64(gasUsed), Steps: steps, Committed: true}}, &tlb.ActionPhase{ResultCode: rawExit}, 2, rawExit, true
+		return nil, &MessageExecutionResult{Accepted: true, ExecutionResult: ExecutionResult{ExitCode: 0, GasUsed: int64(gasUsed), Steps: uint64(steps), Committed: true}}, &tlb.ActionPhase{ResultCode: rawExit}, 2, rawExit, true
 	case 7:
-		return nil, &MessageExecutionResult{Accepted: true, ExecutionResult: ExecutionResult{ExitCode: 0, GasUsed: int64(gasUsed), Steps: steps, Committed: true}}, nil, 2, 0, true
+		return nil, &MessageExecutionResult{Accepted: true, ExecutionResult: ExecutionResult{ExitCode: 0, GasUsed: int64(gasUsed), Steps: uint64(steps), Committed: true}}, nil, 2, 0, true
 	default:
 		return nil, nil, &tlb.ActionPhase{ResultCode: rawExit}, 2, rawExit, false
 	}
@@ -5555,7 +5560,7 @@ func transactionFuzzComputeExitArgResult(t *testing.T, rawCase byte, rawExitArg 
 		ExecutionResult: ExecutionResult{
 			ExitCode: int64(rawCase) + 10,
 			GasUsed:  int64(rawCase) + 20,
-			Steps:    uint32(rawCase) + 30,
+			Steps:    uint64(rawCase) + 30,
 		},
 	}
 	stack := vmcore.NewStack()
@@ -5683,7 +5688,7 @@ func checkTransactionFuzzReserveOriginalExtraBoundary(t *testing.T, action tlb.A
 		remaining := transactionFuzzCurrencyBalance(remainingGrams, map[uint32]uint64{7: extraHave})
 		reserved := transactionZeroCurrencyBalance()
 
-		res, err := transactionProcessReserveAction(action, original, remaining, reserved, version)
+		res, err := transactionProcessReserveAction(action, false, original, remaining, reserved, version)
 		if err != nil {
 			t.Fatal(err)
 		}

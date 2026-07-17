@@ -295,7 +295,7 @@ func fatBlockBlockContext(tb testing.TB, fixture fatBlockReplayFixture) *BlockCo
 		}
 	}
 
-	cfg, err := PrepareBlockchainConfig(fatBlockCell(tb, fixture.Config.ConfigRootBOCBase64))
+	cfg, err := prepareBlockchainConfigLenient(fatBlockCell(tb, fixture.Config.ConfigRootBOCBase64))
 	if err != nil {
 		tb.Fatal(err)
 	}

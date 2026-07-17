@@ -437,11 +437,6 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 				assertCellSliceVMErrorCode(t, tt.op.Interpret(state), vmerr.CodeTypeCheck)
 			})
 		}
-
-		state := newCellSliceState()
-		fillAdvancedBuilderStack(t, state, 1)
-		pushCellSliceBuilder(t, state, cell.BeginCell().MustStoreUInt(1, 1))
-		assertCellSliceVMErrorCode(t, BBITREFS().Interpret(state), vmerr.CodeStackOverflow)
 	})
 
 	t.Run("BuilderChecksAndSameBits", func(t *testing.T) {
@@ -574,21 +569,4 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 			t.Fatalf("unexpected STSAME bits: %b", got)
 		}
 	})
-}
-
-func fillAdvancedBuilderStack(t *testing.T, st *vm.State, spare int) {
-	t.Helper()
-
-	for {
-		err := st.Stack.PushSmallInt(0)
-		if err != nil {
-			assertCellSliceVMErrorCode(t, err, vmerr.CodeStackOverflow)
-			break
-		}
-	}
-	for i := 0; i < spare; i++ {
-		if _, err := st.Stack.PopAny(); err != nil {
-			t.Fatalf("failed to free stack slot: %v", err)
-		}
-	}
 }

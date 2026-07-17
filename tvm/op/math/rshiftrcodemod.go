@@ -9,10 +9,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return RSHIFTRCODEMOD(0) })
+	vm.List = append(vm.List, func() vm.OP { return RSHIFTRCODEMOD(1) })
 }
 
-func RSHIFTRCODEMOD(value int8) (op *helpers.AdvancedOP) {
+func RSHIFTRCODEMOD(value int) (op *helpers.AdvancedOP) {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,

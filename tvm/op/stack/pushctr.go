@@ -1,83 +1,11 @@
 package stack
 
-import (
-	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
-	"github.com/xssnick/tonutils-go/tvm/tuple"
-	"github.com/xssnick/tonutils-go/tvm/vm"
-)
+import execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 
-type OpPUSHCTR struct {
-	helpers.Prefixed
-	ctrIndex uint8
-}
+type OpPUSHCTR = execop.OpPUSHCTR
 
-func init() {
-	vm.List = append(vm.List, func() vm.OP { return PUSHCTR(0) })
-}
-
-var pushCtrPrefixed = helpers.NewPrefixed(pushCtrPrefixes()...)
-
-var pushCtrPrefixIndexes = [...]uint64{0, 1, 2, 3, 4, 5, 7}
-
-func pushCtrPrefixes() []helpers.BitPrefix {
-	prefixes := make([]helpers.BitPrefix, len(pushCtrPrefixIndexes))
-	for i, idx := range pushCtrPrefixIndexes {
-		prefixes[i] = helpers.UIntPrefix(0xED40|idx, 16)
-	}
-	return prefixes
-}
-
+// Deprecated: use exec.PUSHCTR. Both constructors return the canonical opcode
+// implementation registered for ED40..ED45 and ED47.
 func PUSHCTR(ctrIndex uint8) *OpPUSHCTR {
-	return &OpPUSHCTR{
-		Prefixed: pushCtrPrefixed,
-		ctrIndex: ctrIndex,
-	}
-}
-
-func (op *OpPUSHCTR) Deserialize(code *cell.Slice) error {
-	data, err := code.LoadUInt(16)
-	if err != nil {
-		return err
-	}
-	op.ctrIndex = uint8(data & 0xF)
-	if op.ctrIndex == 6 || op.ctrIndex > 7 {
-		return vm.ErrCorruptedOpcode
-	}
-	return nil
-}
-
-func (op *OpPUSHCTR) Serialize() *cell.Builder {
-	return helpers.Builder([]byte{0xED, 0x40 | (op.ctrIndex & 0xF)})
-}
-
-func (op *OpPUSHCTR) SerializeText() string {
-	return fmt.Sprintf("c%d PUSH", op.ctrIndex)
-}
-
-func (op *OpPUSHCTR) InstructionBits() int64 {
-	return 16
-}
-
-func (op *OpPUSHCTR) Interpret(state *vm.State) error {
-	val := state.Reg.Get(int(op.ctrIndex))
-	if op.ctrIndex == 4 || op.ctrIndex == 5 {
-		return state.Stack.PushOwnedValue(val)
-	}
-	return state.Stack.PushAny(cloneLegacyControlRegisterValue(val))
-}
-
-func cloneLegacyControlRegisterValue(v any) any {
-	switch val := v.(type) {
-	case vm.Continuation:
-		if val == nil {
-			return nil
-		}
-		return val.Copy()
-	case tuple.Tuple:
-		return val.Copy()
-	default:
-		return v
-	}
+	return execop.PUSHCTR(int(ctrIndex))
 }

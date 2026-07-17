@@ -89,7 +89,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}
-		assertMathCoverageVMError(t, LSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+		assertMathCoverageVMError(t, LSHIFTCODE(1).Interpret(st), vmerr.CodeIntOverflow)
 	})
 
 	t.Run("v13 nonquiet immediate left shift rejects NaN", func(t *testing.T) {
@@ -98,7 +98,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}
-		assertMathCoverageVMError(t, LSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+		assertMathCoverageVMError(t, LSHIFTCODE(1).Interpret(st), vmerr.CodeIntOverflow)
 	})
 
 	t.Run("v14 nonquiet immediate left shift rejects NaN", func(t *testing.T) {
@@ -107,7 +107,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}
-		assertMathCoverageVMError(t, LSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+		assertMathCoverageVMError(t, LSHIFTCODE(1).Interpret(st), vmerr.CodeIntOverflow)
 	})
 
 	t.Run("v13 nonquiet immediate right shift keeps legacy zero", func(t *testing.T) {
@@ -116,7 +116,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}
-		if err := RSHIFTCODE(0).Interpret(st); err != nil {
+		if err := RSHIFTCODE(1).Interpret(st); err != nil {
 			t.Fatalf("RSHIFT# v13 failed: %v", err)
 		}
 		if got := popMathCoverageInt(t, st); got != 0 {
@@ -130,7 +130,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN: %v", err)
 		}
-		assertMathCoverageVMError(t, RSHIFTCODE(0).Interpret(st), vmerr.CodeIntOverflow)
+		assertMathCoverageVMError(t, RSHIFTCODE(1).Interpret(st), vmerr.CodeIntOverflow)
 	})
 
 	t.Run("quiet immediate left shifts keep NaN", func(t *testing.T) {
@@ -139,7 +139,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push v12 NaN: %v", err)
 		}
-		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+		if err := QLSHIFTCODE(1).Interpret(st); err != nil {
 			t.Fatalf("QLSHIFT# v12 failed: %v", err)
 		}
 		got, err := st.Stack.PopAny()
@@ -153,7 +153,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push v13 NaN: %v", err)
 		}
-		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+		if err := QLSHIFTCODE(1).Interpret(st); err != nil {
 			t.Fatalf("QLSHIFT# v13 failed: %v", err)
 		}
 		got, err = st.Stack.PopAny()
@@ -167,7 +167,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push v14 NaN: %v", err)
 		}
-		if err := QLSHIFTCODE(0).Interpret(st); err != nil {
+		if err := QLSHIFTCODE(1).Interpret(st); err != nil {
 			t.Fatalf("QLSHIFT# v14 failed: %v", err)
 		}
 		got, err = st.Stack.PopAny()
@@ -181,7 +181,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push QR v13 NaN: %v", err)
 		}
-		if err := QRSHIFTCODE(0).Interpret(st); err != nil {
+		if err := QRSHIFTCODE(1).Interpret(st); err != nil {
 			t.Fatalf("QRSHIFT# v13 failed: %v", err)
 		}
 		if got := popMathCoverageInt(t, st); got != 0 {
@@ -193,7 +193,7 @@ func TestTVMImmediateShiftNaN(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push QR v14 NaN: %v", err)
 		}
-		if err := QRSHIFTCODE(0).Interpret(st); err != nil {
+		if err := QRSHIFTCODE(1).Interpret(st); err != nil {
 			t.Fatalf("QRSHIFT# v14 failed: %v", err)
 		}
 		got, err = st.Stack.PopAny()
@@ -702,18 +702,18 @@ func TestMathImmediateAndAdvancedAliases(t *testing.T) {
 		}
 	})
 
-	t.Run("BytePlusOneImmediateZeroPlaceholder", func(t *testing.T) {
-		get, serialize, deserialize := newBytePlusOneImmediate(0)
-		if got := get(); got != 1 {
-			t.Fatalf("initial zero placeholder immediate = %d, want 1", got)
+	t.Run("BytePlusOneImmediateBounds", func(t *testing.T) {
+		get, serialize, deserialize := newBytePlusOneImmediate(256)
+		if got := get(); got != 256 {
+			t.Fatalf("initial max immediate = %d, want 256", got)
 		}
 
 		encoded, err := serialize().EndCell().MustBeginParse().LoadUInt(8)
 		if err != nil {
 			t.Fatalf("load encoded immediate: %v", err)
 		}
-		if encoded != 0 {
-			t.Fatalf("encoded zero placeholder immediate = %d, want 0", encoded)
+		if encoded != 255 {
+			t.Fatalf("encoded max immediate = %d, want 255", encoded)
 		}
 
 		if err := deserialize(vmCellWithByte(t, 255)); err != nil {
@@ -721,6 +721,19 @@ func TestMathImmediateAndAdvancedAliases(t *testing.T) {
 		}
 		if got := get(); got != 256 {
 			t.Fatalf("decoded max immediate = %d, want 256", got)
+		}
+	})
+
+	t.Run("BytePlusOneImmediateOutOfRangePanics", func(t *testing.T) {
+		for _, value := range []int{-1, 0, 257} {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Fatalf("newBytePlusOneImmediate(%d) did not panic", value)
+					}
+				}()
+				newBytePlusOneImmediate(value)
+			}()
 		}
 	})
 

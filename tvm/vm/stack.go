@@ -25,23 +25,6 @@ type Stack struct {
 	trace *cell.Trace
 }
 
-type StackCheckpoint struct {
-	elems []any
-	trace *cell.Trace
-}
-
-func (s *Stack) Checkpoint() StackCheckpoint {
-	return StackCheckpoint{
-		elems: s.elems,
-		trace: s.trace,
-	}
-}
-
-func (s *Stack) RestoreCheckpoint(cp StackCheckpoint) {
-	s.elems = cp.elems
-	s.trace = cp.trace
-}
-
 var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
@@ -57,8 +40,6 @@ var stackStaticInts = makeStackStaticInts()
 var stackIntMinusOne = stackStaticInt(-1)
 var stackIntZero = stackStaticInt(0)
 var stackIntOne = stackStaticInt(1)
-
-const maxStackDepth = 1 << 16
 
 func NewStack() *Stack {
 	return newStackWithCap(defaultStackCapacity)
@@ -324,10 +305,6 @@ func (s *Stack) PushBool(val bool) error {
 }
 
 func (s *Stack) pushStaticInt(val *big.Int) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
-
 	s.elems = append(s.elems, val)
 	return nil
 }
@@ -392,9 +369,6 @@ func (s *Stack) PushBuilder(val *cell.Builder) error {
 // PushOwnedBuilder pushes a builder the caller no longer shares elsewhere.
 // Unlike PushBuilder, it binds stack trace in-place and skips a defensive copy.
 func (s *Stack) PushOwnedBuilder(val *cell.Builder) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
 	if val == nil {
 		s.elems = append(s.elems, nil)
 		return nil
@@ -413,9 +387,6 @@ func (s *Stack) PushSlice(val *cell.Slice) error {
 // PushOwnedSlice pushes a slice the caller no longer shares elsewhere.
 // Unlike PushSlice, it binds stack trace in-place and skips a defensive copy.
 func (s *Stack) PushOwnedSlice(val *cell.Slice) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
 	if val == nil {
 		s.elems = append(s.elems, val)
 		return nil
@@ -478,10 +449,6 @@ func (s *Stack) PushSmallInt(val int64) error {
 }
 
 func (s *Stack) PushAny(val any) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
-
 	var err error
 	val, err = shareStackValue(val, s.trace)
 	if err != nil {
@@ -494,9 +461,49 @@ func (s *Stack) PushAny(val any) error {
 
 // PushOwnedValue pushes a value that was already removed from this VM stack.
 func (s *Stack) PushOwnedValue(val any) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
+	if v, ok := val.(*big.Int); ok &&
+		(v == stackIntMinusOne || v == stackIntZero || v == stackIntOne) {
+		s.elems = append(s.elems, v)
+		return nil
 	}
+
+	return s.pushOwnedValueChecked(val)
+}
+
+func (s *Stack) pushOwnedValueChecked(val any) error {
+	switch v := val.(type) {
+	case nil, NaN:
+	case *big.Int:
+		if v == nil {
+			val = nil
+		} else if !fitsTVMInt(v) {
+			return vmerr.Error(vmerr.CodeIntOverflow)
+		} else {
+			val = canonicalOwnedStackInt(v)
+		}
+	case *cell.Cell:
+		if v == nil {
+			val = nil
+		}
+	case *cell.Builder:
+		if v == nil {
+			val = nil
+		}
+	case *cell.Slice:
+		// Keep a typed nil slice: its null-slice tag is observable by TVM.
+	case tuple.Tuple:
+		if v.IsNull() {
+			val = nil
+		}
+	case Continuation:
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Ptr && rv.IsNil() {
+			return vmerr.Error(vmerr.CodeTypeCheck, "nil continuation")
+		}
+	default:
+		return vmerr.Error(vmerr.CodeTypeCheck, "unsupported stack value")
+	}
+
 	s.elems = append(s.elems, val)
 	return nil
 }
@@ -531,10 +538,6 @@ func (s *Stack) MoveFrom(from *Stack, num int) error {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	if len(s.elems)+num > maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
-
 	fromStart := len(from.elems) - num
 	s.elems = append(s.elems, from.elems[fromStart:]...)
 	from.elems = from.elems[:fromStart]
@@ -554,15 +557,16 @@ func (s *Stack) PushAt(at int) error {
 }
 
 func (s *Stack) Drop(num int) error {
-	if len(s.elems) < num {
+	if uint(num) > uint(len(s.elems)) {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
+
 	s.elems = s.elems[:len(s.elems)-num]
 	return nil
 }
 
 func (s *Stack) DropMany(num, offs int) error {
-	if num < 0 || offs < 0 || len(s.elems) < num+offs {
+	if uint(num) > uint(len(s.elems)) || uint(offs) > uint(len(s.elems)-num) {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	if num == 0 {
@@ -576,9 +580,10 @@ func (s *Stack) DropMany(num, offs int) error {
 }
 
 func (s *Stack) DropAfter(num int) error {
-	if len(s.elems) < num {
+	if uint(num) > uint(len(s.elems)) {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
+
 	s.elems = s.elems[len(s.elems)-num:]
 	return nil
 }
@@ -747,7 +752,7 @@ func (s *Stack) PopTuple() (tuple.Tuple, error) {
 	if err != nil {
 		return tuple.Tuple{}, err
 	}
-	if v, ok := e.(tuple.Tuple); ok {
+	if v, ok := e.(tuple.Tuple); ok && !v.IsNull() {
 		return v, nil
 	}
 	return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple")
@@ -759,7 +764,7 @@ func (s *Stack) PopTupleRange(max int, min ...int) (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	t, ok := e.(tuple.Tuple)
-	if !ok {
+	if !ok || t.IsNull() {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
 	}
 
@@ -935,7 +940,7 @@ func (s *Stack) Snapshot() *Stack {
 
 func (s *Stack) FromTop(offset int) (int, error) {
 	stackLen := len(s.elems)
-	if stackLen < offset {
+	if uint(offset) >= uint(stackLen) {
 		return 0, vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	return stackLen - 1 - offset, nil

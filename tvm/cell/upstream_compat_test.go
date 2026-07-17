@@ -167,12 +167,12 @@ func TestBOCUpstreamRejectsTruncatedPrefixes(t *testing.T) {
 	}
 
 	for i := 0; i < len(boc); i++ {
-		if _, err := FromBOC(boc[:i]); err == nil {
+		if _, err := FromBOCWithOptions(boc[:i], BOCParseOptions{AllowNonZeroLevelRoot: true}); err == nil {
 			t.Fatalf("expected prefix of length %d to fail parsing", i)
 		}
 	}
 
-	if _, err := FromBOC(boc); err != nil {
+	if _, err := FromBOCWithOptions(boc, BOCParseOptions{AllowNonZeroLevelRoot: true}); err != nil {
 		t.Fatalf("full boc should parse: %v", err)
 	}
 }
@@ -188,7 +188,7 @@ func TestBOCUpstreamRoundTripAllValidModes(t *testing.T) {
 				t.Fatal("expected non-empty boc")
 			}
 
-			parsedRoots, err := FromBOCMultiRoot(boc)
+			parsedRoots, err := FromBOCMultiRootWithOptions(boc, BOCParseOptions{AllowNonZeroLevelRoot: true})
 			if err != nil {
 				t.Fatalf("failed to parse serialized boc: %v", err)
 			}
@@ -257,7 +257,7 @@ func TestBOCUpstreamDuplicateRootsRoundTrip(t *testing.T) {
 		t.Fatal("expected non-empty boc")
 	}
 
-	parsedRoots, err := FromBOCMultiRoot(boc)
+	parsedRoots, err := FromBOCMultiRootWithOptions(boc, BOCParseOptions{AllowNonZeroLevelRoot: true})
 	if err != nil {
 		t.Fatalf("failed to parse duplicate-roots boc: %v", err)
 	}

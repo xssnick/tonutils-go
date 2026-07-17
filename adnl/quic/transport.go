@@ -29,12 +29,15 @@ const ALPN = "ton"
 // The value follows the C++ node's initial local bidi stream receive window.
 const DefaultMaxObjectSize = 4 << 20
 
+// MaxIncomingStreams limits concurrent incoming bidirectional streams.
+// Set it before constructing clients or servers.
+var MaxIncomingStreams int64 = 2048
+
 const (
 	defaultInitialStreamReceiveWindow     = 4 << 20
 	defaultMaxStreamReceiveWindow         = 6 << 20
 	defaultInitialConnectionReceiveWindow = 4 << 20
 	defaultMaxConnectionReceiveWindow     = 24 << 20
-	defaultMaxIncomingStreams             = 1024
 	defaultMaxConnectionsPerIP            = 1000
 	directWriteObjectThreshold            = 32 << 10
 )
@@ -120,8 +123,7 @@ func remoteIPKey(addr net.Addr) string {
 	return addr.String()
 }
 
-// defaultQUICConfig returns quic-go settings matching the C++ node
-// (QUIC v1, 15s idle, 5s keep-alive, 1024 incoming bidi streams).
+// defaultQUICConfig returns the default quic-go settings for TON connections.
 func defaultQUICConfig() *quicgo.Config {
 	return &quicgo.Config{
 		Versions:                       []quicgo.Version{quicgo.Version1},
@@ -131,7 +133,7 @@ func defaultQUICConfig() *quicgo.Config {
 		MaxStreamReceiveWindow:         defaultMaxStreamReceiveWindow,
 		InitialConnectionReceiveWindow: defaultInitialConnectionReceiveWindow,
 		MaxConnectionReceiveWindow:     defaultMaxConnectionReceiveWindow,
-		MaxIncomingStreams:             defaultMaxIncomingStreams,
+		MaxIncomingStreams:             MaxIncomingStreams,
 		MaxIncomingUniStreams:          -1,
 	}
 }

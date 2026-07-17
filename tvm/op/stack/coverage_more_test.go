@@ -444,13 +444,6 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 		}
 	})
 
-	t.Run("CloneLegacyControlRegisterScalarPassthrough", func(t *testing.T) {
-		scalar := big.NewInt(11)
-		if got := cloneLegacyControlRegisterValue(scalar); got != scalar {
-			t.Fatalf("scalar control register value was unexpectedly copied: %T", got)
-		}
-	})
-
 	t.Run("PushCtrDeserializeRejectsInvalidControlRegisters", func(t *testing.T) {
 		for _, raw := range []uint64{0xED46, 0xED48} {
 			op := PUSHCTR(0)
@@ -1132,76 +1125,6 @@ func TestBLKSWXErrorStackEffects(t *testing.T) {
 			t.Fatalf("unexpected stack after too-large counts: %v", got)
 		}
 	})
-}
-
-func TestCopyOpsStackOverflowEffects(t *testing.T) {
-	full := newFullStack(t)
-	depth := full.Len()
-
-	expectOverflow := func(t *testing.T, err error) {
-		t.Helper()
-		var tvmErr vmerr.VMError
-		if !errors.As(err, &tvmErr) || tvmErr.Code != vmerr.CodeStackOverflow {
-			t.Fatalf("error = %v, want stack overflow", err)
-		}
-	}
-	top := func(st *vm.Stack, count int) []int64 {
-		return popInts(t, st.Copy(), count)
-	}
-
-	tests := []struct {
-		name string
-		op   vm.OP
-		want []int64
-	}{
-		{name: "DUP2", op: DUP2(), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
-		{name: "OVER2", op: OVER2(), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2), int64(depth - 3)}},
-		{name: "TUCK", op: TUCK(), want: []int64{int64(depth - 1), int64(depth), int64(depth - 2)}},
-		{name: "PUXC", op: PUXC(2, 1), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
-		{name: "PUSH2", op: PUSH2(1, 2), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
-		{name: "XC2PU", op: XC2PU(2, 3, 0), want: []int64{int64(depth - 3), int64(depth - 2), int64(depth - 1), int64(depth)}},
-		{name: "XCPUXC", op: XCPUXC(2, 1, 0), want: []int64{int64(depth), int64(depth - 2), int64(depth - 1)}},
-		{name: "XCPU2", op: XCPU2(2, 0, 0), want: []int64{int64(depth - 2), int64(depth - 1), int64(depth)}},
-		{name: "PUXC2", op: PUXC2(2, 1, 3), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
-		{name: "PUXCPU", op: PUXCPU(2, 1, 0), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
-		{name: "PU2XC", op: PU2XC(2, 1, 3), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
-		{name: "PUSH3", op: PUSH3(0, 1, 2), want: []int64{int64(depth), int64(depth - 1), int64(depth - 2)}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			state := &vm.State{
-				Stack: full.Copy(),
-				Gas:   vm.NewGas(),
-			}
-
-			expectOverflow(t, tt.op.Interpret(state))
-			if state.Stack.Len() != depth {
-				t.Fatalf("stack depth changed after overflow: got %d want %d", state.Stack.Len(), depth)
-			}
-			if got := top(state.Stack, len(tt.want)); !equalInts(got, tt.want) {
-				t.Fatalf("unexpected top values after overflow: %v", got)
-			}
-		})
-	}
-}
-
-func newFullStack(t *testing.T) *vm.Stack {
-	t.Helper()
-
-	st := vm.NewStack()
-	for {
-		err := st.PushInt(big.NewInt(int64(st.Len() + 1)))
-		if err == nil {
-			continue
-		}
-
-		var tvmErr vmerr.VMError
-		if errors.As(err, &tvmErr) && tvmErr.Code == vmerr.CodeStackOverflow {
-			return st
-		}
-		t.Fatalf("failed to fill stack: %v", err)
-	}
 }
 
 func equalInts(a, b []int64) bool {

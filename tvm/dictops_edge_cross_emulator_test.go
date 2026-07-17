@@ -662,7 +662,7 @@ func dictEdgeRefRoot(t *testing.T) *cell.Cell {
 
 func dictEdgeKey(t *testing.T, value *big.Int, bits uint) *cell.Cell {
 	t.Helper()
-	return cell.BeginCell().MustStoreBigInt(value, bits).EndCell()
+	return cell.BeginCell().MustStoreBigInt(wrapSignedBits(value, bits), bits).EndCell()
 }
 
 func dictEdgeSliceKey(t *testing.T, value *big.Int, bits uint) *cell.Slice {

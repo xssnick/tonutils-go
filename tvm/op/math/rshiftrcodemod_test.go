@@ -36,7 +36,7 @@ func TestRshiftrcodemodOperation(t *testing.T) {
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
 			codeSlice := codeCell.MustBeginParse()
 
-			op := RSHIFTRCODEMOD(0)
+			op := RSHIFTRCODEMOD(1)
 			op.Deserialize(codeSlice)
 
 			err := op.Interpret(&vm.State{

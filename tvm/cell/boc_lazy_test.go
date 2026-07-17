@@ -360,14 +360,15 @@ func TestFromBOCMultiRootReaderLazyIndexesCPPBocHandsWithoutHashes(t *testing.T)
 	}
 
 	for _, fixture := range fixtures {
-		eager, err := FromBOC(fixture)
+		eager, err := FromBOCWithOptions(fixture, BOCParseOptions{AllowNonZeroLevelRoot: true})
 		if err != nil {
 			t.Fatalf("C++ BocHands fixture should parse eagerly: %v", err)
 		}
 
 		roots, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(fixture), BOCParseOptions{
-			Lazy:          true,
-			TrustedHashes: true,
+			Lazy:                  true,
+			TrustedHashes:         true,
+			AllowNonZeroLevelRoot: true,
 		})
 		if err != nil {
 			t.Fatalf("lazy parse C++ BocHands fixture: %v", err)

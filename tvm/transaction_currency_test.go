@@ -98,6 +98,10 @@ func TestTransactionCurrencyExtraDictRoundTripAndErrors(t *testing.T) {
 	if _, err = transactionStoreExtraCurrencies(map[uint32]*big.Int{1: big.NewInt(-1)}); err == nil {
 		t.Fatal("expected negative extra currency error")
 	}
+	tooLarge := new(big.Int).Lsh(big.NewInt(1), 248)
+	if _, err = transactionStoreExtraCurrencies(map[uint32]*big.Int{1: tooLarge}); err == nil {
+		t.Fatal("expected oversized extra currency error")
+	}
 
 	malformed := cell.NewDict(32)
 	if err = malformed.SetIntKey(big.NewInt(7), cell.BeginCell().MustStoreBigVarUInt(big.NewInt(11), 32).MustStoreUInt(1, 1).EndCell()); err != nil {
@@ -131,6 +135,19 @@ func TestTransactionCurrencyAddExtraCurrenciesAndMinBig(t *testing.T) {
 	}
 	if len(loaded) != 3 || loaded[1].Uint64() != 11 || loaded[7].Uint64() != 11 || loaded[9].Uint64() != 13 {
 		t.Fatalf("sum extra = %v, want ids 1/7/9", loaded)
+	}
+
+	maxHalf := new(big.Int).Lsh(big.NewInt(1), 247)
+	largeLeft, err := transactionStoreExtraCurrencies(map[uint32]*big.Int{1: maxHalf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	largeRight, err := transactionStoreExtraCurrencies(map[uint32]*big.Int{1: maxHalf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = transactionAddExtraCurrencies(largeLeft, largeRight); err == nil {
+		t.Fatal("expected extra currency sum overflow error")
 	}
 
 	cases := []struct {

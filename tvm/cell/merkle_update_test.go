@@ -2,6 +2,7 @@ package cell
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"math/rand"
 	"testing"
@@ -603,6 +604,66 @@ func TestCombineMerkleUpdateArrayLikeChain(t *testing.T) {
 		})
 	}
 	validateCombined()
+}
+
+// prunedBranchWithStoredMeta builds a level-1 pruned branch that claims the
+// given hash/depth pair, without deriving them from a real cell.
+func prunedBranchWithStoredMeta(tb testing.TB, hash []byte, depth uint16) *Cell {
+	tb.Helper()
+
+	data := make([]byte, 2+hashSize+depthSize)
+	data[0] = byte(PrunedCellType)
+	data[1] = 1
+	copy(data[2:], hash)
+	binary.BigEndian.PutUint16(data[2+hashSize:], depth)
+
+	pruned := &Cell{
+		bitsSz: uint16(len(data) * 8),
+		data:   data,
+	}
+	pruned.setSpecial(true)
+	pruned.setLevelMask(LevelMask{Mask: 1})
+	if err := validateBoundaryCell(pruned); err != nil {
+		tb.Fatalf("failed to validate handmade pruned branch: %v", err)
+	}
+	if err := pruned.calculateHashes(); err != nil {
+		tb.Fatalf("failed to finalize handmade pruned branch: %v", err)
+	}
+	return pruned
+}
+
+func TestMerkleUpdateRejectsBoundaryDepthMismatch(t *testing.T) {
+	// RW-13: the destination boundary reuses the source leaf hash but claims
+	// depth 1 instead of the real depth 0. The reference compare_cells checks
+	// hash AND depth on every level, so validation and apply must reject it.
+	leaf := BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	updateFrom := BeginCell().MustStoreUInt(0x01, 8).MustStoreRef(leaf).EndCell()
+
+	badPruned := prunedBranchWithStoredMeta(t, leaf.getHash(0), leaf.getDepth(0)+1)
+	badUpdateTo := BeginCell().MustStoreUInt(0x02, 8).MustStoreRef(badPruned).EndCell()
+	badUpdate := mustMerkleUpdateCell(t, updateFrom, badUpdateTo)
+
+	if err := ValidateMerkleUpdate(badUpdate); err == nil {
+		t.Fatal("expected validate to reject a boundary with mismatched stored depth")
+	}
+	if _, _, err := ApplyMerkleUpdate(updateFrom, badUpdate); err == nil {
+		t.Fatal("expected apply to reject a boundary with mismatched stored depth")
+	}
+
+	// control: the same boundary with the correct stored depth passes
+	goodPruned := prunedBranchWithStoredMeta(t, leaf.getHash(0), leaf.getDepth(0))
+	goodUpdateTo := BeginCell().MustStoreUInt(0x02, 8).MustStoreRef(goodPruned).EndCell()
+	goodUpdate := mustMerkleUpdateCell(t, updateFrom, goodUpdateTo)
+
+	if err := ValidateMerkleUpdate(goodUpdate); err != nil {
+		t.Fatalf("validate failed for correct boundary: %v", err)
+	}
+	expected := BeginCell().MustStoreUInt(0x02, 8).MustStoreRef(leaf).EndCell()
+	got, _, err := ApplyMerkleUpdate(updateFrom, goodUpdate)
+	if err != nil {
+		t.Fatalf("apply failed for correct boundary: %v", err)
+	}
+	assertCellsEqual(t, got, expected)
 }
 
 func TestMerkleUpdateRejectsNonZeroLevelRoot(t *testing.T) {

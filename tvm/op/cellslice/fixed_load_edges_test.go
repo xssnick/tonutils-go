@@ -92,19 +92,6 @@ func TestFixedLoadLDIAndPLDUEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("LDIPushRestStackOverflowLeavesValue", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreUInt(0xAB, 8).ToSlice())
-		assertCellSliceVMErrorCode(t, LDI(8).Interpret(st), vmerr.CodeStackOverflow)
-
-		if got, err := st.Stack.PopIntFinite(); err != nil {
-			t.Fatalf("pop partial LDI value: %v", err)
-		} else if got.Int64() != -85 {
-			t.Fatalf("partial LDI value = %d, want -85", got.Int64())
-		}
-	})
-
 	t.Run("PLDUStackTypeDeserializeAndUnderflow", func(t *testing.T) {
 		if err := PLDU(1).Deserialize(cell.BeginCell().MustStoreUInt(0xD70B, 16).EndCell().MustBeginParse()); err == nil {
 			t.Fatal("short PLDU suffix unexpectedly decoded")

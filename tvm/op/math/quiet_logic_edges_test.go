@@ -14,10 +14,10 @@ func quietShiftCodeFromSuffix(t *testing.T, right bool, suffix uint8) mathInterp
 	t.Helper()
 
 	prefix := uint64(0xB7AA)
-	op := QLSHIFTCODE(0)
+	op := QLSHIFTCODE(1)
 	if right {
 		prefix = 0xB7AB
-		op = QRSHIFTCODE(0)
+		op = QRSHIFTCODE(1)
 	}
 
 	code := cell.BeginCell().
@@ -105,8 +105,8 @@ func TestQuietImmediateShiftCodeErrorEdges(t *testing.T) {
 		op     mathInterpretOp
 		prefix uint64
 	}{
-		{name: "QLSHIFT#ShortSuffix", op: QLSHIFTCODE(0), prefix: 0xB7AA},
-		{name: "QRSHIFT#ShortSuffix", op: QRSHIFTCODE(0), prefix: 0xB7AB},
+		{name: "QLSHIFT#ShortSuffix", op: QLSHIFTCODE(1), prefix: 0xB7AA},
+		{name: "QRSHIFT#ShortSuffix", op: QRSHIFTCODE(1), prefix: 0xB7AB},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			code := cell.BeginCell().MustStoreUInt(tt.prefix, 16).EndCell().MustBeginParse()

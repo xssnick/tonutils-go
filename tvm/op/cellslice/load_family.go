@@ -13,13 +13,6 @@ import (
 func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return LDIX() },
-		func() vm.OP { return LDUX() },
-		func() vm.OP { return PLDIX() },
-		func() vm.OP { return PLDUX() },
-		func() vm.OP { return LDIXQ() },
-		func() vm.OP { return LDUXQ() },
-		func() vm.OP { return PLDIXQ() },
-		func() vm.OP { return PLDUXQ() },
 		func() vm.OP { return LDIFIX(1, false, false, false) },
 		func() vm.OP { return LDUFIX(1, false, false, false) },
 		func() vm.OP { return PLDIFIX(1, false, false, false) },
@@ -29,15 +22,31 @@ func init() {
 		func() vm.OP { return PLDIFIX(1, true, false, false) },
 		func() vm.OP { return PLDUFIX(1, true, false, false) },
 		func() vm.OP { return PLDUZ(32) },
-		func() vm.OP { return PLDSLICEX() },
-		func() vm.OP { return LDSLICEXQ() },
-		func() vm.OP { return PLDSLICEXQ() },
+		func() vm.OP { return loadSliceXOp(0) },
 		func() vm.OP { return LDSLICE(1) },
 		func() vm.OP { return LDSLICEFIX(1, false, false) },
 		func() vm.OP { return PLDSLICEFIX(1, false, false) },
 		func() vm.OP { return LDSLICEFIX(1, true, false) },
 		func() vm.OP { return PLDSLICEFIX(1, true, false) },
 	)
+}
+
+var loadIntXNames = [...]string{
+	"LDIX",
+	"LDUX",
+	"PLDIX",
+	"PLDUX",
+	"LDIXQ",
+	"LDUXQ",
+	"PLDIXQ",
+	"PLDUXQ",
+}
+
+var loadSliceXNames = [...]string{
+	"LDSLICEX",
+	"PLDSLICEX",
+	"LDSLICEXQ",
+	"PLDSLICEXQ",
 }
 
 func loadIntCommon(state *vm.State, bits uint, preload, unsigned, quiet bool) error {
@@ -137,9 +146,9 @@ func loadSliceCommon(state *vm.State, bits uint, preload, quiet bool) error {
 	return nil
 }
 
-func loadIntXOp(name string, mode uint64) *helpers.AdvancedOP {
+func loadIntXOp(mode uint64) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		NameSerializer: func() string { return name },
+		NameSerializer: func() string { return loadIntXNames[mode&7] },
 		BitPrefix:      helpers.UIntPrefix(0xD700>>3, 13),
 		FixedSizeBits:  3,
 		SerializeSuffix: func() *cell.Builder {
@@ -264,9 +273,9 @@ func PLDUZ(bits uint) *helpers.AdvancedOP {
 	}
 }
 
-func loadSliceXOp(name string, mode uint64) *helpers.AdvancedOP {
+func loadSliceXOp(mode uint64) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
-		NameSerializer: func() string { return name },
+		NameSerializer: func() string { return loadSliceXNames[mode&3] },
 		BitPrefix:      helpers.UIntPrefix(0xD718>>2, 14),
 		FixedSizeBits:  2,
 		SerializeSuffix: func() *cell.Builder {
@@ -338,14 +347,14 @@ func fixedLoadSliceOp(name string, prefix uint64, bits uint, quiet, preload bool
 	}
 }
 
-func LDIX() *helpers.AdvancedOP   { return loadIntXOp("LDIX", 0) }
-func LDUX() *helpers.AdvancedOP   { return loadIntXOp("LDUX", 1) }
-func PLDIX() *helpers.AdvancedOP  { return loadIntXOp("PLDIX", 2) }
-func PLDUX() *helpers.AdvancedOP  { return loadIntXOp("PLDUX", 3) }
-func LDIXQ() *helpers.AdvancedOP  { return loadIntXOp("LDIXQ", 4) }
-func LDUXQ() *helpers.AdvancedOP  { return loadIntXOp("LDUXQ", 5) }
-func PLDIXQ() *helpers.AdvancedOP { return loadIntXOp("PLDIXQ", 6) }
-func PLDUXQ() *helpers.AdvancedOP { return loadIntXOp("PLDUXQ", 7) }
+func LDIX() *helpers.AdvancedOP   { return loadIntXOp(0) }
+func LDUX() *helpers.AdvancedOP   { return loadIntXOp(1) }
+func PLDIX() *helpers.AdvancedOP  { return loadIntXOp(2) }
+func PLDUX() *helpers.AdvancedOP  { return loadIntXOp(3) }
+func LDIXQ() *helpers.AdvancedOP  { return loadIntXOp(4) }
+func LDUXQ() *helpers.AdvancedOP  { return loadIntXOp(5) }
+func PLDIXQ() *helpers.AdvancedOP { return loadIntXOp(6) }
+func PLDUXQ() *helpers.AdvancedOP { return loadIntXOp(7) }
 func LDIFIX(bits uint, quiet, preload, unsigned bool) *helpers.AdvancedOP {
 	name := "LDI"
 	if unsigned {
@@ -372,9 +381,9 @@ func PLDUFIX(bits uint, quiet, preload, unsigned bool) *helpers.AdvancedOP {
 	return LDIFIX(bits, quiet, true, true)
 }
 
-func PLDSLICEX() *helpers.AdvancedOP  { return loadSliceXOp("PLDSLICEX", 1) }
-func LDSLICEXQ() *helpers.AdvancedOP  { return loadSliceXOp("LDSLICEXQ", 2) }
-func PLDSLICEXQ() *helpers.AdvancedOP { return loadSliceXOp("PLDSLICEXQ", 3) }
+func PLDSLICEX() *helpers.AdvancedOP  { return loadSliceXOp(1) }
+func LDSLICEXQ() *helpers.AdvancedOP  { return loadSliceXOp(2) }
+func PLDSLICEXQ() *helpers.AdvancedOP { return loadSliceXOp(3) }
 
 func LDSLICE(bits uint) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{

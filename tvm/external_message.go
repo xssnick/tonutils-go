@@ -285,10 +285,11 @@ type emulationC7Input struct {
 	blockLT             int64
 	logicalTime         int64
 	balance             *big.Int
+	balanceExtra        *cell.Cell
 	seed                *big.Int
 	configRoot          *cell.Cell
 	incomingValue       tuple.Tuple
-	storageFees         int64
+	storageFees         *big.Int
 	prevBlocks          any
 	unpackedConfig      any
 	duePayment          any
@@ -318,7 +319,7 @@ func messageEmulationC7Input(addr *address.Address, code *cell.Cell, cfg Message
 		seed:                seed,
 		configRoot:          cfg.Config.Root(),
 		incomingValue:       cfg.IncomingValue,
-		storageFees:         cfg.StorageFees,
+		storageFees:         big.NewInt(cfg.StorageFees),
 		prevBlocks:          cfg.PrevBlocks,
 		unpackedConfig:      messageUnpackedConfig(cfg, now),
 		duePayment:          cfg.DuePayment,
@@ -355,7 +356,11 @@ func buildEmulationC7(in emulationC7Input, trace *cell.Trace) (tuple.Tuple, erro
 	idx++
 	values[idx] = in.seed
 	idx++
-	values[idx] = messageBoundTuple([]any{new(big.Int).Set(in.balance), nil}, trace)
+	var balanceExtra any
+	if in.balanceExtra != nil {
+		balanceExtra = in.balanceExtra
+	}
+	values[idx] = messageBoundTuple([]any{new(big.Int).Set(in.balance), balanceExtra}, trace)
 	idx++
 	values[idx] = myAddr
 	idx++
@@ -366,7 +371,7 @@ func buildEmulationC7(in emulationC7Input, trace *cell.Trace) (tuple.Tuple, erro
 		idx++
 		values[idx] = messageIncomingValue(in.incomingValue, trace)
 		idx++
-		values[idx] = messageTupleInt(in.storageFees)
+		values[idx] = transactionBigOrZero(in.storageFees)
 		idx++
 		values[idx] = in.prevBlocks
 		idx++
@@ -445,11 +450,16 @@ func defaultExternalMessageGas(gas vm.Gas) vm.Gas {
 	if gas != (vm.Gas{}) {
 		return gas
 	}
-	return vm.NewGas(vm.GasConfig{
-		Max:    DefaultExternalMessageGasMax,
-		Limit:  0,
-		Credit: DefaultExternalMessageGasCredit,
-	})
+	// The reference profile is GasLimits(0, max, credit): a literal zero limit
+	// with the credit as the whole starting budget, so an exact struct is built
+	// here instead of going through the zero-means-unset NewGas constructor.
+	return vm.Gas{
+		Max:       DefaultExternalMessageGasMax,
+		Limit:     0,
+		Credit:    DefaultExternalMessageGasCredit,
+		Base:      DefaultExternalMessageGasCredit,
+		Remaining: DefaultExternalMessageGasCredit,
+	}
 }
 
 func defaultInternalMessageGas(gas vm.Gas, amount uint64) vm.Gas {

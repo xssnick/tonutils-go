@@ -42,7 +42,7 @@ func (p testTxParams) blockContext() (*BlockContext, error) {
 	cfg := p.Config
 	if cfg == nil {
 		var err error
-		cfg, err = PrepareBlockchainConfig(p.ConfigRoot)
+		cfg, err = prepareBlockchainConfigLenient(p.ConfigRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -191,17 +191,7 @@ func mustTestPreparedBlockchainConfigWithVersion(version uint32) *PreparedBlockc
 	if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
 		panic(err)
 	}
-	return MustPrepareBlockchainConfig(dict.AsCell())
-}
-
-func testSetAllowHigherVersionExecUsingLatest(t testing.TB, allow bool) {
-	t.Helper()
-
-	prev := AllowHigherVersionExecUsingLatest
-	AllowHigherVersionExecUsingLatest = allow
-	t.Cleanup(func() {
-		AllowHigherVersionExecUsingLatest = prev
-	})
+	return mustPrepareLenientTestConfig(dict.AsCell())
 }
 
 func mustTestExecutionConfig() ExecutionConfig {
@@ -235,7 +225,7 @@ func mustPrepareBlockchainConfigOrNil(root *cell.Cell) *PreparedBlockchainConfig
 	if root == nil {
 		return nil
 	}
-	return MustPrepareBlockchainConfig(root)
+	return mustPrepareLenientTestConfig(root)
 }
 
 // testResultTransaction parses the built transaction of a result, failing the
@@ -247,4 +237,14 @@ func testResultTransaction(t testing.TB, res *TransactionExecutionResult) *tlb.T
 		t.Fatalf("failed to parse result transaction: %v", err)
 	}
 	return tx
+}
+
+// mustPrepareLenientTestConfig prepares a possibly-partial test config with
+// the legacy fail-open loaders; the public PrepareBlockchainConfig is strict.
+func mustPrepareLenientTestConfig(configRoot *cell.Cell) *PreparedBlockchainConfig {
+	out, err := prepareBlockchainConfigLenient(configRoot)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }

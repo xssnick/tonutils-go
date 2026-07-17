@@ -132,3 +132,39 @@ func TestAugmentedDictionary_ForEachValueExtraMatchesIterator(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDictionaryForEachRefValueValidatesExactValues(t *testing.T) {
+	dict := NewDict(8)
+	for i, value := range []uint64{0xaa, 0xbb} {
+		ref := BeginCell().MustStoreUInt(value, 8).EndCell()
+		if err := dict.SetBuilder(
+			mustDictKey(t, uint64(i+1), 8),
+			BeginCell().MustStoreRef(ref),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var values []uint64
+	count, err := dict.ForEachRefValue(func(value *Cell) error {
+		values = append(values, value.MustBeginParse().MustLoadUInt(8))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 || !equalUint64Slices(values, []uint64{0xaa, 0xbb}) {
+		t.Fatalf("count=%d values=%x", count, values)
+	}
+
+	malformed := NewDict(8)
+	if err = malformed.SetBuilder(
+		mustDictKey(t, 1, 8),
+		BeginCell().MustStoreBoolBit(true).MustStoreRef(BeginCell().EndCell()),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = malformed.ForEachRefValue(nil); err == nil {
+		t.Fatal("expected inline data in a one-reference value to be rejected")
+	}
+}

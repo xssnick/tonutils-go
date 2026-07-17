@@ -8,10 +8,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return LSHIFTCODE(0) })
+	vm.List = append(vm.List, func() vm.OP { return LSHIFTCODE(1) })
 }
 
-func LSHIFTCODE(value int8) (op *helpers.AdvancedOP) {
+func LSHIFTCODE(value int) (op *helpers.AdvancedOP) {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,

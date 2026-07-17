@@ -10,13 +10,13 @@ import (
 
 func init() {
 	vm.List = append(vm.List,
-		func() vm.OP { return ADDRSHIFTCODEMOD(0) },
-		func() vm.OP { return ADDRSHIFTRCODEMOD(0) },
-		func() vm.OP { return ADDRSHIFTCCODEMOD(0) },
+		func() vm.OP { return ADDRSHIFTCODEMOD(1) },
+		func() vm.OP { return ADDRSHIFTRCODEMOD(1) },
+		func() vm.OP { return ADDRSHIFTCCODEMOD(1) },
 	)
 }
 
-func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int8, round func(*big.Int, *big.Int) (*big.Int, *big.Int)) *helpers.AdvancedOP {
+func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int, round func(*big.Int, *big.Int) (*big.Int, *big.Int)) *helpers.AdvancedOP {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
@@ -55,18 +55,18 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int8, round
 	}
 }
 
-func ADDRSHIFTCODEMOD(value int8) *helpers.AdvancedOP {
+func ADDRSHIFTCODEMOD(value int) *helpers.AdvancedOP {
 	return addrShiftCodeModOp("ADDRSHIFT#MOD", helpers.BytesPrefix(0xA9, 0x30), value, helpers.DivFloor)
 }
 
-func ADDRSHIFTRCODEMOD(value int8) *helpers.AdvancedOP {
+func ADDRSHIFTRCODEMOD(value int) *helpers.AdvancedOP {
 	return addrShiftCodeModOp("ADDRSHIFTR#MOD", helpers.BytesPrefix(0xA9, 0x31), value, func(x, y *big.Int) (*big.Int, *big.Int) {
 		q := helpers.DivRound(x, y)
 		return q, new(big.Int).Sub(x, new(big.Int).Mul(y, q))
 	})
 }
 
-func ADDRSHIFTCCODEMOD(value int8) *helpers.AdvancedOP {
+func ADDRSHIFTCCODEMOD(value int) *helpers.AdvancedOP {
 	return addrShiftCodeModOp("ADDRSHIFTC#MOD", helpers.BytesPrefix(0xA9, 0x32), value, func(x, y *big.Int) (*big.Int, *big.Int) {
 		q := helpers.DivCeil(x, y)
 		return q, new(big.Int).Sub(x, new(big.Int).Mul(y, q))

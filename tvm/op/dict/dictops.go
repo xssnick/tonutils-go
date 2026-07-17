@@ -125,7 +125,7 @@ func init() {
 	registerSimpleExact(0xF4A1, "DICTUGETJMP", execDictGetExec(true, false, false))
 	registerSimpleExact(0xF4A2, "DICTIGETEXEC", execDictGetExec(false, true, false))
 	registerSimpleExact(0xF4A3, "DICTUGETEXEC", execDictGetExec(true, true, false))
-	registerSimpleExact(0xF4BC, "DICTIGETJMPZ", execDictGetExec(false, false, true))
+	vm.List = append(vm.List, func() vm.OP { return DICTIGETJMPZ() })
 	registerSimpleExact(0xF4BD, "DICTUGETJMPZ", execDictGetExec(true, false, true))
 	registerSimpleExact(0xF4BE, "DICTIGETEXECZ", execDictGetExec(false, true, true))
 	registerSimpleExact(0xF4BF, "DICTUGETEXECZ", execDictGetExec(true, true, true))
@@ -1706,5 +1706,13 @@ func mapDictError(err error) error {
 		return cellUnderflowError(err)
 	default:
 		return vmerr.Error(vmerr.CodeDict, err.Error())
+	}
+}
+
+func DICTIGETJMPZ() *helpers.SimpleOP {
+	return &helpers.SimpleOP{
+		Action:    execDictGetExec(false, false, true),
+		Name:      "DICTIGETJMPZ",
+		BitPrefix: helpers.BytesPrefix(0xF4, 0xBC),
 	}
 }

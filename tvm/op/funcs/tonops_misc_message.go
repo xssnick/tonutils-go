@@ -1504,7 +1504,9 @@ func SENDMSG() *helpers.SimpleOP {
 				computedFwd := prices.ComputeForwardFee(stat.cells, stat.bits)
 				computedIHR := new(big.Int)
 				if !ihrDisabled {
-					computedIHR = ceilShiftRight(mulBigUint64(computedFwd, uint64(prices.IHRFactor)), 16)
+					// The reference floors the IHR component (uint128 shr), unlike
+					// the forward fee, which rounds up.
+					computedIHR = new(big.Int).Rsh(mulBigUint64(computedFwd, uint64(prices.IHRFactor)), 16)
 				}
 
 				fwd = computedFwd

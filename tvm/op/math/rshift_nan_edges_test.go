@@ -242,12 +242,12 @@ func TestFiniteMulImmediateShiftModNaNAndWideRules(t *testing.T) {
 		name string
 		op   mathInterpretOp
 	}{
-		{name: "MULMODPOW2#", op: MULMODPOW2CODE(0)},
-		{name: "MULMODPOW2R#", op: MULMODPOW2RCODE(0)},
-		{name: "MULMODPOW2C#", op: MULMODPOW2CCODE(0)},
-		{name: "MULRSHIFT#MOD", op: MULRSHIFTCODEMOD(0)},
-		{name: "MULRSHIFTR#MOD", op: MULRSHIFTRCODEMOD(0)},
-		{name: "MULRSHIFTC#MOD", op: MULRSHIFTCCODEMOD(0)},
+		{name: "MULMODPOW2#", op: MULMODPOW2CODE(1)},
+		{name: "MULMODPOW2R#", op: MULMODPOW2RCODE(1)},
+		{name: "MULMODPOW2C#", op: MULMODPOW2CCODE(1)},
+		{name: "MULRSHIFT#MOD", op: MULRSHIFTCODEMOD(1)},
+		{name: "MULRSHIFTR#MOD", op: MULRSHIFTRCODEMOD(1)},
+		{name: "MULRSHIFTC#MOD", op: MULRSHIFTCCODEMOD(1)},
 	} {
 		t.Run(op.name, func(t *testing.T) {
 			st := newMathCoverageState()
@@ -271,9 +271,9 @@ func TestFiniteMulImmediateShiftModNaNAndWideRules(t *testing.T) {
 		name string
 		op   mathInterpretOp
 	}{
-		{name: "MULMODPOW2#", op: MULMODPOW2CODE(0)},
-		{name: "MULMODPOW2R#", op: MULMODPOW2RCODE(0)},
-		{name: "MULMODPOW2C#", op: MULMODPOW2CCODE(0)},
+		{name: "MULMODPOW2#", op: MULMODPOW2CODE(1)},
+		{name: "MULMODPOW2R#", op: MULMODPOW2RCODE(1)},
+		{name: "MULMODPOW2C#", op: MULMODPOW2CCODE(1)},
 	} {
 		t.Run(op.name+"_wide_product", func(t *testing.T) {
 			st := newMathCoverageState()
@@ -294,9 +294,9 @@ func TestFiniteMulImmediateShiftModNaNAndWideRules(t *testing.T) {
 		name string
 		op   mathInterpretOp
 	}{
-		{name: "MULRSHIFT#MOD", op: MULRSHIFTCODEMOD(0)},
-		{name: "MULRSHIFTR#MOD", op: MULRSHIFTRCODEMOD(0)},
-		{name: "MULRSHIFTC#MOD", op: MULRSHIFTCCODEMOD(0)},
+		{name: "MULRSHIFT#MOD", op: MULRSHIFTCODEMOD(1)},
+		{name: "MULRSHIFTR#MOD", op: MULRSHIFTRCODEMOD(1)},
+		{name: "MULRSHIFTC#MOD", op: MULRSHIFTCCODEMOD(1)},
 	} {
 		t.Run(op.name+"_wide_product_overflow", func(t *testing.T) {
 			st := newMathCoverageState()

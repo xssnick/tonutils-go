@@ -75,7 +75,7 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		}
 
 		fromRoot := messageUnpackedConfig(MessageEmulationConfig{
-			Config: MustPrepareBlockchainConfig(messageUnpackedConfigRoot(t)),
+			Config: mustPrepareLenientTestConfig(messageUnpackedConfigRoot(t)),
 		}, 150).(tuple.Tuple)
 		if fromRoot.Len() != 7 {
 			t.Fatalf("unexpected root unpacked config len: %d", fromRoot.Len())
@@ -711,7 +711,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	if _, err := messageExecutionGlobalVersion(MessageEmulationConfig{}); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("missing config error = %v, want %v", err, errConfigRootRequired)
 	}
-	if _, err := PrepareBlockchainConfig(nil); !errors.Is(err, errConfigRootRequired) {
+	if _, err := prepareBlockchainConfigLenient(nil); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("missing config root error = %v, want %v", err, errConfigRootRequired)
 	}
 
@@ -720,7 +720,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 		t.Fatalf("build global version cell: %v", err)
 	}
 	got, err := messageExecutionGlobalVersion(MessageEmulationConfig{
-		Config: MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		Config: mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: versionCell,
 		})),
 	})
@@ -732,7 +732,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	}
 
 	got, err = messageExecutionGlobalVersion(MessageEmulationConfig{
-		Config: MustPrepareBlockchainConfig(messageExecutionGlobalVersionConfigRoot(t, 4)),
+		Config: mustPrepareLenientTestConfig(messageExecutionGlobalVersionConfigRoot(t, 4)),
 	})
 	if err != nil {
 		t.Fatalf("config global version failed: %v", err)
@@ -745,7 +745,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	if err != nil {
 		t.Fatalf("build unsupported global version cell: %v", err)
 	}
-	futureConfig, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	futureConfig, err := prepareBlockchainConfigLenient(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: unsupportedVersionCell,
 	}))
 	if err != nil {
@@ -759,14 +759,14 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 		t.Fatalf("future config global version = %d, want %d", got, vmcore.MaxSupportedGlobalVersion)
 	}
 
-	if _, err = PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+	if _, err = prepareBlockchainConfigLenient(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
 		t.Fatal("absent config global version should fail")
 	}
 
 	malformedRoot := buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 8).EndCell(),
 	})
-	if _, err = PrepareBlockchainConfig(malformedRoot); err == nil {
+	if _, err = prepareBlockchainConfigLenient(malformedRoot); err == nil {
 		t.Fatal("malformed config global version should fail")
 	}
 }
@@ -807,7 +807,7 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 			wantErr = true
 		}
 
-		prepared, err := PrepareBlockchainConfig(root)
+		prepared, err := prepareBlockchainConfigLenient(root)
 		if wantErr {
 			if err == nil {
 				t.Fatalf("case=%d config=%d prepared config version %d, want error", caseIdx, rawConfig, prepared.GlobalVersion())

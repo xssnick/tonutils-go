@@ -23,12 +23,6 @@ func TestErrorDefaultMessages(t *testing.T) {
 		{CodeFatal, "fatal error"},
 	}
 
-	prev := TVMTraceEnabled
-	TVMTraceEnabled = false
-	defer func() {
-		TVMTraceEnabled = prev
-	}()
-
 	for _, tt := range tests {
 		err := Error(tt.code)
 		if err.Code != tt.code {
@@ -44,12 +38,6 @@ func TestErrorDefaultMessages(t *testing.T) {
 }
 
 func TestErrorCustomMessageAndFormatting(t *testing.T) {
-	prev := TVMTraceEnabled
-	defer func() {
-		TVMTraceEnabled = prev
-	}()
-
-	TVMTraceEnabled = false
 	custom := Error(CodeFatal, "boom")
 	if custom.Msg != "boom" {
 		t.Fatalf("custom message = %q, want boom", custom.Msg)
@@ -58,14 +46,5 @@ func TestErrorCustomMessageAndFormatting(t *testing.T) {
 	formatted := custom.Error()
 	if !strings.Contains(formatted, "Code: 12") || !strings.Contains(formatted, "Text:boom") {
 		t.Fatalf("formatted error missing expected content: %q", formatted)
-	}
-
-	TVMTraceEnabled = true
-	withTrace := Error(CodeOutOfGas, "no gas")
-	if withTrace.trace == "" {
-		t.Fatal("expected stack trace when TVM trace is enabled")
-	}
-	if !strings.Contains(withTrace.Error(), "no gas") {
-		t.Fatalf("formatted traced error missing message: %q", withTrace.Error())
 	}
 }

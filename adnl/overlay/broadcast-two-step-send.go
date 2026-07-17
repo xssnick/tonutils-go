@@ -151,10 +151,7 @@ func SendBroadcastTwoStepFromTL(ctx context.Context, req BroadcastTwoStepTLSendR
 }
 
 func (a *ADNLOverlayWrapper) SendBroadcastTwoStep(ctx context.Context, req BroadcastTwoStepSendRequest, opts ...BroadcastTwoStepSenderOption) (BroadcastTwoStepSendResult, error) {
-	a.mx.RLock()
-	localID := append([]byte(nil), a.twoStepLocalID...)
-	peerSet := a.twoStepPeerSet
-	a.mx.RUnlock()
+	peerSet, localID := a.twoStepRelayConfig()
 	if len(req.LocalADNLID) == 0 {
 		req.LocalADNLID = localID
 	}

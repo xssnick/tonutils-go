@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	expectedRegisteredOpcodeAvailabilityFuzzSeedCount = 624
-	expectedRegisteredOpcodeAvailabilityFuzzSeedHash  = "490262f557532e51e99799f26c1ba976c5d97aa23b5d4eb3a1d89235f0989092"
+	expectedRegisteredOpcodeAvailabilityFuzzSeedCount = 640
+	expectedRegisteredOpcodeAvailabilityFuzzSeedHash  = "fc495b540d3e0021db2a3b3f226fab705281ce809c8bb342cf6d5b8b93a1b0cf"
 )
 
 func TestTVMCrossEmulatorOpcodeMinGlobalVersionBoundaries(t *testing.T) {

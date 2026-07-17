@@ -33,6 +33,22 @@ func (d *Dictionary) IteratorAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*
 	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, d.trace)
 }
 
+// ForEachRefValue visits every leaf of a dictionary whose values are exactly
+// one reference. It validates the complete dictionary shape and returns the
+// number of visited leaves without materializing keys or value slices.
+func (d *Dictionary) ForEachRefValue(fn func(value *Cell) error) (int, error) {
+	if d == nil {
+		return 0, nil
+	}
+	if err := validateDictKeySize(d.keySz); err != nil {
+		return 0, err
+	}
+	if d.root == nil {
+		return 0, nil
+	}
+	return forEachPlainDictRefValue(d.root.withTraceCombined(d.trace), d.keySz, fn)
+}
+
 func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
 	if d == nil || d.root == nil {
 		return nil, nil, ErrNoSuchKeyInDict

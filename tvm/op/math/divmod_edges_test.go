@@ -664,9 +664,9 @@ func TestImmediateAddrShiftModWideEdges(t *testing.T) {
 		name string
 		op   mathInterpretOp
 	}{
-		{name: "ADDRSHIFT#MOD", op: ADDRSHIFTCODEMOD(0)},
-		{name: "ADDRSHIFTR#MOD", op: ADDRSHIFTRCODEMOD(0)},
-		{name: "ADDRSHIFTC#MOD", op: ADDRSHIFTCCODEMOD(0)},
+		{name: "ADDRSHIFT#MOD", op: ADDRSHIFTCODEMOD(1)},
+		{name: "ADDRSHIFTR#MOD", op: ADDRSHIFTRCODEMOD(1)},
+		{name: "ADDRSHIFTC#MOD", op: ADDRSHIFTCCODEMOD(1)},
 	} {
 		t.Run(op.name+"_wide_valid", func(t *testing.T) {
 			st := newMathCoverageState()
@@ -688,9 +688,9 @@ func TestImmediateAddrShiftModWideEdges(t *testing.T) {
 		name string
 		op   mathInterpretOp
 	}{
-		{name: "MULADDRSHIFT#MOD", op: MULADDRSHIFTCODEMOD(0)},
-		{name: "MULADDRSHIFTR#MOD", op: MULADDRSHIFTRCODEMOD(0)},
-		{name: "MULADDRSHIFTC#MOD", op: MULADDRSHIFTCCODEMOD(0)},
+		{name: "MULADDRSHIFT#MOD", op: MULADDRSHIFTCODEMOD(1)},
+		{name: "MULADDRSHIFTR#MOD", op: MULADDRSHIFTRCODEMOD(1)},
+		{name: "MULADDRSHIFTC#MOD", op: MULADDRSHIFTCCODEMOD(1)},
 	} {
 		t.Run(op.name+"_wide_valid", func(t *testing.T) {
 			st := newMathCoverageState()
@@ -1017,6 +1017,7 @@ func FuzzTVMAddrShiftModBadOperandRules(f *testing.F) {
 			}
 		}
 
+		immShift := int(rawShift%256) + 1
 		var err error
 		switch {
 		case group == 0 && variant == 0:
@@ -1032,17 +1033,17 @@ func FuzzTVMAddrShiftModBadOperandRules(f *testing.F) {
 		case group == 1:
 			err = MULADDRSHIFTCMOD().Interpret(st)
 		case group == 2 && variant == 0:
-			err = ADDRSHIFTCODEMOD(int8(rawShift)).Interpret(st)
+			err = ADDRSHIFTCODEMOD(immShift).Interpret(st)
 		case group == 2 && variant == 1:
-			err = ADDRSHIFTRCODEMOD(int8(rawShift)).Interpret(st)
+			err = ADDRSHIFTRCODEMOD(immShift).Interpret(st)
 		case group == 2:
-			err = ADDRSHIFTCCODEMOD(int8(rawShift)).Interpret(st)
+			err = ADDRSHIFTCCODEMOD(immShift).Interpret(st)
 		case variant == 0:
-			err = MULADDRSHIFTCODEMOD(int8(rawShift)).Interpret(st)
+			err = MULADDRSHIFTCODEMOD(immShift).Interpret(st)
 		case variant == 1:
-			err = MULADDRSHIFTRCODEMOD(int8(rawShift)).Interpret(st)
+			err = MULADDRSHIFTRCODEMOD(immShift).Interpret(st)
 		default:
-			err = MULADDRSHIFTCCODEMOD(int8(rawShift)).Interpret(st)
+			err = MULADDRSHIFTCCODEMOD(immShift).Interpret(st)
 		}
 
 		if group < 2 {

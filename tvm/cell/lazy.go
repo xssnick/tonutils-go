@@ -1,13 +1,16 @@
 package cell
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/bits"
 )
 
 var ErrLazyLoaderNotSet = errors.New("lazy pruned ref loader is not set")
 var ErrLazyRefNotFound = errors.New("lazy pruned ref not found")
+var ErrLazyRefMismatch = errors.New("loaded lazy ref does not match placeholder")
 
 // LazyCellLoader resolves lazy pruned references by the hash of the represented cell.
 type LazyCellLoader func(hash Hash) (*Cell, error)
@@ -172,6 +175,12 @@ func loadLazyPrunedRefWithTrace(c *Cell, trace *Trace) (*Cell, error) {
 	if loaded == nil {
 		return nil, ErrLazyRefNotFound
 	}
+	loaded = loaded.rawCell()
+	if !meta.skipLazyRefValidation {
+		if err := validateLoadedLazyRef(raw, loaded); err != nil {
+			return nil, err
+		}
+	}
 
 	var out *Cell
 	if meta.viewLevel == 0 {
@@ -183,6 +192,26 @@ func loadLazyPrunedRefWithTrace(c *Cell, trace *Trace) (*Cell, error) {
 		out = out.WithTrace(trace)
 	}
 	return out, nil
+}
+
+func validateLoadedLazyRef(placeholder, loaded *Cell) error {
+	placeholderMask := placeholder.getLevelMask()
+	if placeholderMask != loaded.getLevelMask() {
+		return fmt.Errorf("%w: level mask mismatch", ErrLazyRefMismatch)
+	}
+
+	for level := 0; level <= placeholderMask.GetLevel(); level++ {
+		if !placeholderMask.IsSignificant(level) {
+			continue
+		}
+		if !bytes.Equal(placeholder.getHash(level), loaded.getHash(level)) {
+			return fmt.Errorf("%w: hash mismatch at level %d", ErrLazyRefMismatch, level)
+		}
+		if placeholder.getDepth(level) != loaded.getDepth(level) {
+			return fmt.Errorf("%w: depth mismatch at level %d", ErrLazyRefMismatch, level)
+		}
+	}
+	return nil
 }
 
 // PrewarmRecursive returns a new cell tree with lazy references loaded up to depth.
@@ -270,6 +299,7 @@ func materializeLoadedCellWithRefs(c *Cell, refs []*Cell) (*Cell, error) {
 	out.clearVirtualization()
 	if out.meta != nil {
 		out.meta.lazyLoader = nil
+		out.meta.skipLazyRefValidation = false
 		out.clearMetaIfEmpty()
 	}
 	if err := out.refreshLevelMaskForRefs(); err != nil {

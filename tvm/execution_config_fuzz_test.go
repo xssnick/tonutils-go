@@ -86,25 +86,13 @@ func TestExecutionConfigGlobalVersionValidatesRange(t *testing.T) {
 	}
 	root := dict.AsCell()
 
-	if !AllowHigherVersionExecUsingLatest {
-		t.Fatal("AllowHigherVersionExecUsingLatest default = false, want true")
-	}
-
-	cfg, err := PrepareBlockchainConfig(root)
+	cfg, err := prepareBlockchainConfigLenient(root)
 	if err != nil {
 		t.Fatalf("PrepareBlockchainConfig rejected future global version %d by default: %v", futureVersion, err)
 	}
 	if got := cfg.GlobalVersion(); got != uint32(vm.MaxSupportedGlobalVersion) {
 		t.Fatalf("prepared effective global version = %d, want %d", got, vm.MaxSupportedGlobalVersion)
 	}
-
-	t.Run("strict mode rejects future version", func(t *testing.T) {
-		testSetAllowHigherVersionExecUsingLatest(t, false)
-
-		if _, err = PrepareBlockchainConfig(root); err == nil {
-			t.Fatalf("PrepareBlockchainConfig accepted future global version %d in strict mode", futureVersion)
-		}
-	})
 }
 
 func FuzzExecutionConfigSignatureCheckAlwaysSucceedRawEntrypoints(f *testing.F) {

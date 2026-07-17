@@ -2,6 +2,7 @@ package tuple
 
 import (
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -52,6 +53,51 @@ func TestTupleBindingHelpers(t *testing.T) {
 	empty := NewTupleSized(0)
 	if empty.Len() != 0 {
 		t.Fatal("zero-sized tuple should be empty")
+	}
+	if empty.IsNull() {
+		t.Fatal("zero-sized tuple should be non-null")
+	}
+}
+
+func TestNewTupleSizedRejectsNegativeSize(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("negative tuple size did not panic")
+		}
+	}()
+	_ = NewTupleSized(-1)
+}
+
+func TestTupleTypedNilLeavesCloneWithoutPanic(t *testing.T) {
+	var intVal *big.Int
+	var sliceVal *cell.Slice
+	var builderVal *cell.Builder
+
+	tup := NewTupleValue(intVal, sliceVal, builderVal)
+	for _, i := range []int{0, 2} {
+		got, err := tup.Index(i)
+		if err != nil {
+			t.Fatalf("index typed nil %d: %v", i, err)
+		}
+		if got != nil {
+			t.Fatalf("typed nil %d normalized to %T, want nil", i, got)
+		}
+	}
+
+	gotSlice, err := tup.Index(1)
+	if err != nil {
+		t.Fatalf("index typed nil slice: %v", err)
+	}
+	if reflect.TypeOf(gotSlice) != reflect.TypeOf(sliceVal) || !reflect.ValueOf(gotSlice).IsNil() {
+		t.Fatalf("typed nil slice = %#v, want typed nil slice", gotSlice)
+	}
+
+	got, err := tup.PopLast()
+	if err != nil {
+		t.Fatalf("pop typed nil builder: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("popped typed nil builder = %#v, want nil", got)
 	}
 }
 

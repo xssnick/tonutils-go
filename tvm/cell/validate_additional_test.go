@@ -3,10 +3,10 @@ package cell
 import "testing"
 
 func TestValidateLoadedCellSpecialVariants(t *testing.T) {
-	t.Run("OrdinaryLevelMaskMismatchAllowedForGenericBOC", func(t *testing.T) {
+	t.Run("OrdinaryLevelMaskMismatch", func(t *testing.T) {
 		raw := makeManualCellForTest(false, LevelMask{Mask: 7}, 1, []byte{0x80}, nil)
-		if err := validateLoadedCell(raw); err != nil {
-			t.Fatalf("generic BOC parser should accept ordinary level masks without an allow_nonzero_level API split: %v", err)
+		if err := validateLoadedCell(raw); err == nil {
+			t.Fatal("ordinary cell with a structural level mask mismatch should fail")
 		}
 	})
 

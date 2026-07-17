@@ -85,10 +85,7 @@ func finalizeParsedCell(c *Cell, storedMeta *storedHashesDepths, options BOCPars
 			}
 		}
 	}
-	if c.IsSpecial() {
-		return validateLoadedCell(c)
-	}
-	return nil
+	return validateLoadedCell(c)
 }
 
 func finalizeCellsSequential(cells []Cell, stored []storedHashesDepths, options BOCParseOptions) error {

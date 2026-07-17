@@ -53,19 +53,18 @@ type TVM struct {
 var (
 	sharedOpcodeDispatchesOnce sync.Once
 	sharedOpcodeDispatches     [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
-	sharedOpcodeDispatchesLen  int
+	frozenOpcodeRegistry       []vm.OPGetter
 )
 
-func NewTVM() *TVM {
-	return &TVM{dispatches: getOpcodeDispatches()}
+func init() {
+	// All opcode packages have completed their init functions before tvm is
+	// initialized. Keep that registry snapshot immutable, like the finalized
+	// cp0 table in the reference VM.
+	frozenOpcodeRegistry = append([]vm.OPGetter(nil), vm.List...)
 }
 
-func getOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
-	dispatches := getSharedOpcodeDispatches()
-	if len(vm.List) == sharedOpcodeDispatchesLen {
-		return dispatches
-	}
-	return buildOpcodeDispatches()
+func NewTVM() *TVM {
+	return &TVM{dispatches: getSharedOpcodeDispatches()}
 }
 
 func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
@@ -75,7 +74,6 @@ func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispat
 
 func buildSharedOpcodeDispatches() {
 	sharedOpcodeDispatches = buildOpcodeDispatches()
-	sharedOpcodeDispatchesLen = len(vm.List)
 }
 
 func buildOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
@@ -84,7 +82,7 @@ func buildOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 		dispatches[ver] = newOpcodeDispatch()
 	}
 
-	for _, opGetter := range vm.List {
+	for _, opGetter := range frozenOpcodeRegistry {
 		op := opGetter()
 		getter := opGetter
 		if reusable, ok := op.(reusableOP); ok && reusable.Reusable() {
@@ -199,17 +197,9 @@ func (op historicalInvalidOpcodeGas) InstructionBits() int64 {
 	return op.op.(vm.GasPricedOp).InstructionBits()
 }
 
-// AllowHigherVersionExecUsingLatest allows preparing configs with a global
-// version higher than vm.MaxSupportedGlobalVersion. When enabled, execution
-// uses the latest supported version.
-var AllowHigherVersionExecUsingLatest = true
-
 func validateGlobalVersion(version int) error {
 	if version < 0 {
 		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, 0)
-	}
-	if version > vm.MaxSupportedGlobalVersion && !AllowHigherVersionExecUsingLatest {
-		return fmt.Errorf("unsupported global version %d, maximum supported is %d", version, vm.MaxSupportedGlobalVersion)
 	}
 	return nil
 }
@@ -224,7 +214,7 @@ func effectiveGlobalVersion(version uint32) uint32 {
 type ExecutionResult struct {
 	ExitCode  int64
 	GasUsed   int64
-	Steps     uint32
+	Steps     uint64
 	Gas       vm.Gas
 	Stack     *vm.Stack
 	Code      *cell.Cell
@@ -247,12 +237,6 @@ func bitAt(data []byte, bit uint) uint8 {
 
 func newOpcodeDispatch() *opcodeDispatch {
 	return &opcodeDispatch{root: &trieNode{}}
-}
-
-func (tvm *TVM) addTriePrefix(prefix *cell.Slice, op vm.OPGetter) {
-	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
-	dispatch.addPrefix(prefix, op)
-	dispatch.buildFastTable()
 }
 
 func (dispatch *opcodeDispatch) addPrefix(prefix *cell.Slice, op vm.OPGetter) {
@@ -436,6 +420,18 @@ func (tvm *TVM) executeWithConfig(code, data *cell.Cell, c7 tuple.Tuple, gas vm.
 		if err != nil || res != nil {
 			return res, err
 		}
+	}
+
+	if code == nil || stack == nil {
+		// The reference VM refuses to run with null code or stack as a fatal
+		// condition (exit ~fatal) before the normal exception path.
+		return &ExecutionResult{
+			ExitCode: ^int64(vmerr.CodeFatal),
+			Gas:      gas,
+			Stack:    stack,
+			Code:     code,
+			Data:     data,
+		}, nil
 	}
 
 	res, err := tvm.executeWithOptions(code, data, c7, gas, stack, cfg.Config, options, libraries...)
@@ -847,12 +843,8 @@ func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err
 		state.TraceOpcode(op.SerializeText())
 	}
 
-	stackBefore := state.Stack.Checkpoint()
 	err = op.Interpret(state)
 	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow && !vm.IsHandledException(err) {
-			state.Stack.RestoreCheckpoint(stackBefore)
-		}
 		err = normalizeCellError(err)
 		return err
 	}

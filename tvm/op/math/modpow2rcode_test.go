@@ -36,7 +36,7 @@ func TestModpow2rcodeOperation(t *testing.T) {
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
 			codeSlice := codeCell.MustBeginParse()
 
-			op := MODPOW2RCODE(0)
+			op := MODPOW2RCODE(1)
 			op.Deserialize(codeSlice)
 
 			err := op.Interpret(&vm.State{

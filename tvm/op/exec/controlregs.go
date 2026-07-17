@@ -197,6 +197,10 @@ func (op *OpPUSHCTR) InstructionBits() int64 {
 }
 
 func (op *OpPUSHCTR) Interpret(state *vm.State) error {
+	if op.i == 4 || op.i == 5 {
+		return state.Stack.PushCell(state.Reg.D[op.i-4])
+	}
+
 	return state.Stack.PushAny(cloneControlRegisterValue(state.Reg.Get(op.i)))
 }
 

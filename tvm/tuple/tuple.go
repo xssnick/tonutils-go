@@ -49,9 +49,10 @@ func NewTuple(val ...any) *Tuple {
 }
 
 func NewTupleSized(size int) Tuple {
-	if size <= 0 {
-		return Tuple{}
+	if size < 0 {
+		panic("negative tuple size")
 	}
+	// size 0 is a non-null empty tuple, distinct from the null value
 	return Tuple{data: &tupleData{val: make([]any, size)}}
 }
 
@@ -107,6 +108,9 @@ func (t *Tuple) WithBindingID(bindingID any) Tuple {
 func cloneTupleLeaf(val any) any {
 	switch v := val.(type) {
 	case *big.Int:
+		if v == nil {
+			return nil
+		}
 		return new(big.Int).Set(v)
 	case *cell.Slice:
 		if v == nil {
@@ -114,6 +118,9 @@ func cloneTupleLeaf(val any) any {
 		}
 		return v.Copy()
 	case *cell.Builder:
+		if v == nil {
+			return nil
+		}
 		return v.Copy()
 	default:
 		return val

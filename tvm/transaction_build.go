@@ -85,10 +85,14 @@ func buildTransactionCell(params transactionBuildParams) (*cell.Cell, error) {
 	if err = storeTransactionCurrencyCollection(builder, params.totalFees, nil); err != nil {
 		return nil, err
 	}
-	return builder.
+	txCell := builder.
 		MustStoreRef(stateUpdateCell).
 		MustStoreRef(descriptionCell).
-		EndCell(), nil
+		EndCell()
+	if err = validateBuiltTransactionCell(txCell, params.inMsg, params.outMsgs); err != nil {
+		return nil, fmt.Errorf("built transaction failed TL-B validation: %w", err)
+	}
+	return txCell, nil
 }
 
 func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cell.Cell, prev *PreparedAccount, next *builtTransactionAccount, outMessages []OutMessage, startLT, endLT uint64) error {
@@ -200,9 +204,6 @@ func buildTransactionComputePhase(params transactionBuildDescriptionParams) tlb.
 	}
 
 	gasLimit := params.computeGas.Limit
-	if params.msg != nil && params.msg.MsgType == tlb.MsgTypeExternalIn {
-		gasLimit = 0
-	}
 
 	var gasCredit *big.Int
 	if params.computeGas.Credit > 0 {
@@ -224,7 +225,7 @@ func buildTransactionComputePhase(params transactionBuildDescriptionParams) tlb.
 				Mode:             0,
 				ExitCode:         int32(params.computeResult.ExitCode),
 				ExitArg:          transactionComputeExitArg(params.computeResult),
-				VMSteps:          params.computeResult.Steps,
+				VMSteps:          uint32(params.computeResult.Steps),
 				VMInitStateHash:  make([]byte, 32),
 				VMFinalStateHash: make([]byte, 32),
 			},

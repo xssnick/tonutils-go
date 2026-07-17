@@ -20,14 +20,6 @@ func TestLDREFRTOSSDEQAndSCHKREFSEdges(t *testing.T) {
 		if err := LDREFRTOS().Interpret(st); err == nil {
 			t.Fatal("LDREFRTOS without refs unexpectedly succeeded")
 		}
-
-		st = newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreRef(cell.BeginCell().EndCell()).ToSlice())
-		assertCellSliceVMErrorCode(t, LDREFRTOS().Interpret(st), vmerr.CodeStackOverflow)
-		if preserved := popCellSliceSlice(t, st); preserved.RefsNum() != 0 {
-			t.Fatalf("partial LDREFRTOS refs = %d, want 0", preserved.RefsNum())
-		}
 	})
 
 	t.Run("SDEQStackTypeAndFalse", func(t *testing.T) {

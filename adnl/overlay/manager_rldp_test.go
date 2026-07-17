@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/adnl"
@@ -25,6 +26,67 @@ func TestCreateExtendedRLDPInitializesHandlers(t *testing.T) {
 	}
 	if adnlMock.disconnectHandler == nil {
 		t.Fatalf("expected disconnect handler to be installed on ADNL")
+	}
+}
+
+func TestRLDPHandlerPublicationConcurrentDispatch(t *testing.T) {
+	adnlMock := newMockADNL()
+	rMock := newMockRLDP(adnlMock)
+	w := CreateExtendedRLDP(rMock)
+	overlayID := bytes.Repeat([]byte{0x90}, 32)
+	missingID := bytes.Repeat([]byte{0x8F}, 32)
+	o := w.CreateOverlay(overlayID)
+	transferID := bytes.Repeat([]byte{0xAA}, 32)
+	overlayQuery := &rldp.Query{Data: WrapQuery(overlayID, tl.Raw{1})}
+	missingQuery := &rldp.Query{Data: WrapQuery(missingID, tl.Raw{2})}
+	rootQuery := &rldp.Query{Data: tl.Raw{3}}
+
+	queryHandler := func([]byte, *rldp.Query) error { return nil }
+	disconnectHandler := func() {}
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 2000; i++ {
+			if i%2 == 0 {
+				o.SetOnQuery(queryHandler)
+				o.SetOnDisconnect(disconnectHandler)
+				w.SetOnQuery(queryHandler)
+				w.SetOnUnknownOverlayQuery(queryHandler)
+				w.SetOnDisconnect(disconnectHandler)
+				continue
+			}
+			o.SetOnQuery(nil)
+			o.SetOnDisconnect(nil)
+			w.SetOnQuery(nil)
+			w.SetOnUnknownOverlayQuery(nil)
+			w.SetOnDisconnect(nil)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 2000; i++ {
+			if err := w.queryHandler(transferID, overlayQuery); err != nil {
+				errCh <- err
+				return
+			}
+			if err := w.queryHandler(transferID, rootQuery); err != nil {
+				errCh <- err
+				return
+			}
+			_ = w.queryHandler(transferID, missingQuery)
+			w.disconnectHandler("127.0.0.1:1", nil)
+		}
+	}()
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent RLDP handler dispatch failed: %v", err)
 	}
 }
 
@@ -195,5 +257,26 @@ func TestRLDPOverylayDoQueryAndClose(t *testing.T) {
 	o1.Close()
 	if len(w.overlays) != 0 {
 		t.Fatalf("overlay should be removed after close")
+	}
+}
+
+func TestRLDPOverlayStaleCloseDoesNotDetachReplacement(t *testing.T) {
+	adnlMock := newMockADNL()
+	rMock := newMockRLDP(adnlMock)
+	w := CreateExtendedRLDP(rMock)
+	overlayID := bytes.Repeat([]byte{0xB2}, 32)
+
+	old := w.CreateOverlay(overlayID)
+	// Model the interval after Close marks a wrapper closed but before its
+	// pointer-checked detach acquires the manager lock.
+	old.closed.Store(true)
+	replacement := w.CreateOverlay(overlayID)
+	if replacement == old {
+		t.Fatal("closed overlay wrapper was reused")
+	}
+
+	old.Close()
+	if got := w.CreateOverlay(overlayID); got != replacement {
+		t.Fatal("stale close detached the replacement overlay generation")
 	}
 }

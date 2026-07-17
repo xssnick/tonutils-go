@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/adnl"
@@ -34,6 +35,60 @@ func TestADNLWrapperExposesPeerStats(t *testing.T) {
 	w := CreateExtendedADNL(m)
 	if got := w.Stats().Inbound.Packets; got != 7 {
 		t.Fatalf("inbound packets=%d want=7", got)
+	}
+}
+
+func TestADNLOverlayHandlerPublicationConcurrentDispatch(t *testing.T) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	overlayID := bytes.Repeat([]byte{0x60}, 32)
+	o := w.WithOverlay(overlayID)
+	query := &adnl.MessageQuery{ID: bytes.Repeat([]byte{0xA0}, 32), Data: WrapQuery(overlayID, tl.Raw{1})}
+	custom := &adnl.MessageCustom{Data: WrapMessage(overlayID, tl.Raw{2})}
+	pub, _ := keyPairFromSeed(50)
+
+	queryHandler := func(*adnl.MessageQuery) error { return nil }
+	customHandler := func(*adnl.MessageCustom) error { return nil }
+	disconnectHandler := func(string, ed25519.PublicKey) {}
+	start := make(chan struct{})
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 2000; i++ {
+			if i%2 == 0 {
+				o.SetQueryHandler(queryHandler)
+				o.SetCustomMessageHandler(customHandler)
+				o.SetDisconnectHandler(disconnectHandler)
+				continue
+			}
+			o.SetQueryHandler(nil)
+			o.SetCustomMessageHandler(nil)
+			o.SetDisconnectHandler(nil)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 2000; i++ {
+			if err := w.queryHandler(query); err != nil {
+				errCh <- err
+				return
+			}
+			if err := w.customHandler(custom); err != nil {
+				errCh <- err
+				return
+			}
+			w.disconnectHandler("127.0.0.1:1", pub)
+		}
+	}()
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent handler dispatch failed: %v", err)
 	}
 }
 
@@ -246,6 +301,106 @@ func TestADNLManagerRoutesFECControlInternally(t *testing.T) {
 	}
 	if !rootCalled {
 		t.Fatalf("unregistered control should reach root handler")
+	}
+}
+
+func TestADNLManagerFECControlHandlerCanUnregisterItself(t *testing.T) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	hash := bytes.Repeat([]byte{0x93}, 32)
+	control := BroadcastFECControl{Hash: hash, Completed: true}
+
+	var unregister func()
+	unregister = w.registerBroadcastFECControl(hash, func([]byte, BroadcastFECControl) bool {
+		unregister()
+		return true
+	})
+	if !w.trackBroadcastFECControl(control) {
+		t.Fatal("self-unregistering control handler was not called")
+	}
+	if w.trackBroadcastFECControl(control) {
+		t.Fatal("self-unregistered control handler was called again")
+	}
+}
+
+func TestADNLManagerFECControlSnapshotsConcurrentMutation(t *testing.T) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	hash := bytes.Repeat([]byte{0x94}, 32)
+	control := BroadcastFECControl{Hash: hash, Completed: true}
+	receiver := newTestBroadcastReceiver(t, bytes.Repeat([]byte{0x95}, 32))
+
+	start := make(chan struct{})
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 2000 {
+			unregister := w.registerBroadcastFECControl(hash, func([]byte, BroadcastFECControl) bool {
+				return true
+			})
+			unregister()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 2000 {
+			overlay, err := w.AttachOverlay(receiver)
+			if err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+			overlay.Close()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 4000 {
+			w.trackBroadcastFECControl(control)
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent control snapshot mutation failed: %v", err)
+	}
+}
+
+func BenchmarkADNLManagerTrackBroadcastFECControl(b *testing.B) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	hash := bytes.Repeat([]byte{0x96}, 32)
+	control := BroadcastFECControl{Hash: hash, Completed: true}
+
+	for i := byte(0); i < 16; i++ {
+		overlayID := bytes.Repeat([]byte{0xA0 + i}, 32)
+		receiver := newTestBroadcastReceiver(b, overlayID)
+		overlay, err := w.AttachOverlay(receiver)
+		if err != nil {
+			b.Fatalf("attach receiver %d: %v", i, err)
+		}
+		b.Cleanup(overlay.Close)
+	}
+	unregister := w.registerBroadcastFECControl(hash, func([]byte, BroadcastFECControl) bool {
+		return true
+	})
+	b.Cleanup(unregister)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if !w.trackBroadcastFECControl(control) {
+			b.Fatal("control was not handled")
+		}
 	}
 }
 

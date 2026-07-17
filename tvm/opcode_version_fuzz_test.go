@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount = 624
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash  = "490262f557532e51e99799f26c1ba976c5d97aa23b5d4eb3a1d89235f0989092"
+	expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount = 640
+	expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash  = "fc495b540d3e0021db2a3b3f226fab705281ce809c8bb342cf6d5b8b93a1b0cf"
 )
 
 func fuzzOpcodeVersion(raw int64) int {

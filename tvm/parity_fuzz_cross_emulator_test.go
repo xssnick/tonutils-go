@@ -46,11 +46,11 @@ const (
 	parityProgramChunkReserveBits  = 32
 	maxSmallIndexForParityProgram  = (1 << 30) - 1
 
-	expectedParityOpcodeInventoryEntries      = 915
-	expectedParityOpcodeInventoryUniqueNames  = 885
+	expectedParityOpcodeInventoryEntries      = 904
+	expectedParityOpcodeInventoryUniqueNames  = 874
 	expectedParityDictOpcodeWitnessNames      = 143
 	expectedParityMathOpcodeWitnessNames      = 255
-	expectedParityCellSliceOpcodeWitnessNames = 163
+	expectedParityCellSliceOpcodeWitnessNames = 153
 
 	expectedSupportedDifferentialFuzzFamilyCount     = 28
 	expectedSupportedDifferentialFuzzFamilyHash      = "56a8e5085c21d46e27c5280228fa9a19161352abcc9d5b19d3de202bad73e7e0"
@@ -62,13 +62,13 @@ const (
 
 var expectedParityOpcodeCoverageBucketCounts = map[string]int{
 	"dedicated_tuple":           33,
-	"deterministic_exec":        111,
+	"deterministic_exec":        110,
 	"deterministic_ton_crypto":  45,
 	"deterministic_ton_runtime": 66,
-	"random_cell_slice":         166,
+	"random_cell_slice":         157,
 	"random_dict":               143,
 	"random_math":               273,
-	"random_stack":              78,
+	"random_stack":              77,
 }
 
 type parityWitnessManifestExpectation struct {
@@ -334,7 +334,6 @@ var expectedParityStackOpcodeWitnessCases = map[string][]string{
 	"TUCK":             {"tuck"},
 	"s0,s0 XCHG":       {"xchg_1_15"},
 	"0 XCHG0":          {"xchg0_long_255"},
-	"1 XCHG0":          {"xchg0_long_255"},
 	"2 XCHG0":          {"xchg0_long_255"},
 	"3 XCHG0":          {"xchg0_long_255"},
 	"4 XCHG0":          {"xchg0_long_255"},
@@ -5341,38 +5340,38 @@ func TestTVMDifferentialFuzzMathImmediateGapOps(t *testing.T) {
 		{"ufits_immediate", parityProgramCodeCell(mathop.UFITS(7).Serialize()), []any{big.NewInt(255)}},
 		{"qfits_immediate_nan", parityProgramCodeCell(mathop.QFITS(2).Serialize()), []any{big.NewInt(8)}},
 		{"qufits_immediate", parityProgramCodeCell(mathop.QUFITS(7).Serialize()), []any{big.NewInt(255)}},
-		{"lshift_code", parityProgramCodeCell(mathop.LSHIFTCODE(int8(shift)).Serialize()), []any{big.NewInt(-3)}},
-		{"rshift_code_floor", parityProgramCodeCell(mathop.RSHIFTCODE(int8(shift)).Serialize()), oneArg},
-		{"rshiftr_code_round", parityProgramCodeCell(mathop.RSHIFTRCODE(int8(shift)).Serialize()), oneArg},
-		{"rshiftc_code_ceil", parityProgramCodeCell(mathop.RSHIFTCCODE(int8(shift)).Serialize()), oneArg},
-		{"rshift_code_floor_alt", parityProgramCodeCell(mathop.RSHIFTCODEFLOOR(int8(shift)).Serialize()), oneArg},
-		{"lshift_code_nan_current", parityProgramCodeCell(mathop.LSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
-		{"rshift_code_nan_current", parityProgramCodeCell(mathop.RSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
-		{"qlshift_code", parityProgramCodeCell(mathop.QLSHIFTCODE(int8(shift)).Serialize()), []any{big.NewInt(3)}},
-		{"qrshift_code", parityProgramCodeCell(mathop.QRSHIFTCODE(int8(shift)).Serialize()), []any{big.NewInt(48)}},
-		{"qlshift_code_nan_current", parityProgramCodeCell(mathop.QLSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
-		{"qrshift_code_nan_legacy", parityProgramCodeCell(mathop.QRSHIFTCODE(int8(shift)).Serialize()), []any{vm.NaN{}}},
-		{"rshift_code_mod_floor", parityProgramCodeCell(mathop.RSHIFTCODEMOD(int8(shift)).Serialize()), oneArg},
-		{"rshiftr_code_mod_round", parityProgramCodeCell(mathop.RSHIFTRCODEMOD(int8(shift)).Serialize()), oneArg},
-		{"rshiftc_code_mod_ceil", parityProgramCodeCell(mathop.RSHIFTCCODEMOD(int8(shift)).Serialize()), oneArg},
-		{"modpow2_code_floor", parityProgramCodeCell(mathop.MODPOW2CODE(int8(shift)).Serialize()), oneArg},
-		{"modpow2r_code_round", parityProgramCodeCell(mathop.MODPOW2RCODE(int8(shift)).Serialize()), oneArg},
-		{"modpow2c_code_ceil", parityProgramCodeCell(mathop.MODPOW2CCODE(int8(shift)).Serialize()), oneArg},
-		{"mulrshift_code_floor", parityProgramCodeCell(mathop.MULRSHIFTCODE(int8(shift)).Serialize()), twoArgs},
-		{"mulrshiftr_code_round", parityProgramCodeCell(mathop.MULRSHIFTRCODE(int8(shift)).Serialize()), twoArgs},
-		{"mulrshiftc_code_ceil", parityProgramCodeCell(mathop.MULRSHIFTCCODE(int8(shift)).Serialize()), twoArgs},
-		{"mulrshift_code_mod_floor", parityProgramCodeCell(mathop.MULRSHIFTCODEMOD(int8(shift)).Serialize()), twoArgs},
-		{"mulrshiftr_code_mod_round", parityProgramCodeCell(mathop.MULRSHIFTRCODEMOD(int8(shift)).Serialize()), twoArgs},
-		{"mulrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.MULRSHIFTCCODEMOD(int8(shift)).Serialize()), twoArgs},
-		{"mulmodpow2_code_floor", parityProgramCodeCell(mathop.MULMODPOW2CODE(int8(shift)).Serialize()), twoArgs},
-		{"mulmodpow2r_code_round", parityProgramCodeCell(mathop.MULMODPOW2RCODE(int8(shift)).Serialize()), twoArgs},
-		{"mulmodpow2c_code_ceil", parityProgramCodeCell(mathop.MULMODPOW2CCODE(int8(shift)).Serialize()), twoArgs},
-		{"addrshift_code_mod_floor", parityProgramCodeCell(mathop.ADDRSHIFTCODEMOD(int8(shift)).Serialize()), addArgs},
-		{"addrshiftr_code_mod_round", parityProgramCodeCell(mathop.ADDRSHIFTRCODEMOD(int8(shift)).Serialize()), addArgs},
-		{"addrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.ADDRSHIFTCCODEMOD(int8(shift)).Serialize()), addArgs},
-		{"muladdrshift_code_mod_floor", parityProgramCodeCell(mathop.MULADDRSHIFTCODEMOD(int8(shift)).Serialize()), mulAddArgs},
-		{"muladdrshiftr_code_mod_round", parityProgramCodeCell(mathop.MULADDRSHIFTRCODEMOD(int8(shift)).Serialize()), mulAddArgs},
-		{"muladdrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.MULADDRSHIFTCCODEMOD(int8(shift)).Serialize()), mulAddArgs},
+		{"lshift_code", parityProgramCodeCell(mathop.LSHIFTCODE(int(shift)).Serialize()), []any{big.NewInt(-3)}},
+		{"rshift_code_floor", parityProgramCodeCell(mathop.RSHIFTCODE(int(shift)).Serialize()), oneArg},
+		{"rshiftr_code_round", parityProgramCodeCell(mathop.RSHIFTRCODE(int(shift)).Serialize()), oneArg},
+		{"rshiftc_code_ceil", parityProgramCodeCell(mathop.RSHIFTCCODE(int(shift)).Serialize()), oneArg},
+		{"rshift_code_floor_alt", parityProgramCodeCell(mathop.RSHIFTCODEFLOOR(int(shift)).Serialize()), oneArg},
+		{"lshift_code_nan_current", parityProgramCodeCell(mathop.LSHIFTCODE(int(shift)).Serialize()), []any{vm.NaN{}}},
+		{"rshift_code_nan_current", parityProgramCodeCell(mathop.RSHIFTCODE(int(shift)).Serialize()), []any{vm.NaN{}}},
+		{"qlshift_code", parityProgramCodeCell(mathop.QLSHIFTCODE(int(shift)).Serialize()), []any{big.NewInt(3)}},
+		{"qrshift_code", parityProgramCodeCell(mathop.QRSHIFTCODE(int(shift)).Serialize()), []any{big.NewInt(48)}},
+		{"qlshift_code_nan_current", parityProgramCodeCell(mathop.QLSHIFTCODE(int(shift)).Serialize()), []any{vm.NaN{}}},
+		{"qrshift_code_nan_legacy", parityProgramCodeCell(mathop.QRSHIFTCODE(int(shift)).Serialize()), []any{vm.NaN{}}},
+		{"rshift_code_mod_floor", parityProgramCodeCell(mathop.RSHIFTCODEMOD(int(shift)).Serialize()), oneArg},
+		{"rshiftr_code_mod_round", parityProgramCodeCell(mathop.RSHIFTRCODEMOD(int(shift)).Serialize()), oneArg},
+		{"rshiftc_code_mod_ceil", parityProgramCodeCell(mathop.RSHIFTCCODEMOD(int(shift)).Serialize()), oneArg},
+		{"modpow2_code_floor", parityProgramCodeCell(mathop.MODPOW2CODE(int(shift)).Serialize()), oneArg},
+		{"modpow2r_code_round", parityProgramCodeCell(mathop.MODPOW2RCODE(int(shift)).Serialize()), oneArg},
+		{"modpow2c_code_ceil", parityProgramCodeCell(mathop.MODPOW2CCODE(int(shift)).Serialize()), oneArg},
+		{"mulrshift_code_floor", parityProgramCodeCell(mathop.MULRSHIFTCODE(int(shift)).Serialize()), twoArgs},
+		{"mulrshiftr_code_round", parityProgramCodeCell(mathop.MULRSHIFTRCODE(int(shift)).Serialize()), twoArgs},
+		{"mulrshiftc_code_ceil", parityProgramCodeCell(mathop.MULRSHIFTCCODE(int(shift)).Serialize()), twoArgs},
+		{"mulrshift_code_mod_floor", parityProgramCodeCell(mathop.MULRSHIFTCODEMOD(int(shift)).Serialize()), twoArgs},
+		{"mulrshiftr_code_mod_round", parityProgramCodeCell(mathop.MULRSHIFTRCODEMOD(int(shift)).Serialize()), twoArgs},
+		{"mulrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.MULRSHIFTCCODEMOD(int(shift)).Serialize()), twoArgs},
+		{"mulmodpow2_code_floor", parityProgramCodeCell(mathop.MULMODPOW2CODE(int(shift)).Serialize()), twoArgs},
+		{"mulmodpow2r_code_round", parityProgramCodeCell(mathop.MULMODPOW2RCODE(int(shift)).Serialize()), twoArgs},
+		{"mulmodpow2c_code_ceil", parityProgramCodeCell(mathop.MULMODPOW2CCODE(int(shift)).Serialize()), twoArgs},
+		{"addrshift_code_mod_floor", parityProgramCodeCell(mathop.ADDRSHIFTCODEMOD(int(shift)).Serialize()), addArgs},
+		{"addrshiftr_code_mod_round", parityProgramCodeCell(mathop.ADDRSHIFTRCODEMOD(int(shift)).Serialize()), addArgs},
+		{"addrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.ADDRSHIFTCCODEMOD(int(shift)).Serialize()), addArgs},
+		{"muladdrshift_code_mod_floor", parityProgramCodeCell(mathop.MULADDRSHIFTCODEMOD(int(shift)).Serialize()), mulAddArgs},
+		{"muladdrshiftr_code_mod_round", parityProgramCodeCell(mathop.MULADDRSHIFTRCODEMOD(int(shift)).Serialize()), mulAddArgs},
+		{"muladdrshiftc_code_mod_ceil", parityProgramCodeCell(mathop.MULADDRSHIFTCCODEMOD(int(shift)).Serialize()), mulAddArgs},
 		{"lshiftadddivmod_code_floor", parityProgramCodeCell(lshiftCodeOp(0xD0)), lshiftAddDivModCodeArgs},
 		{"lshiftadddivmodr_code_round", parityProgramCodeCell(lshiftCodeOp(0xD1)), lshiftAddDivModCodeArgs},
 		{"lshiftadddivmodc_code_ceil", parityProgramCodeCell(lshiftCodeOp(0xD2)), lshiftAddDivModCodeArgs},
@@ -11735,7 +11734,7 @@ func differentialFuzzC7FromRefConfig(t *testing.T, code *cell.Cell, cfg referenc
 		seed = referenceDefaultTonopsSeed
 	}
 
-	prepared := MustPrepareBlockchainConfig(cfg.ConfigRoot)
+	prepared := mustPrepareLenientTestConfig(cfg.ConfigRoot)
 	c7, err := buildEmulationC7(emulationC7Input{
 		addr:           cfg.Address,
 		code:           code,
@@ -17178,7 +17177,7 @@ func (g *parityProgramGenerator) emitDictKey(name string, kind int, value uint64
 func parityProgramVarIntSlice(value *big.Int, lenBits uint, signed bool) *cell.Slice {
 	b := cell.BeginCell().MustStoreUInt(1, lenBits)
 	if signed {
-		b.MustStoreBigInt(value, 8)
+		b.MustStoreBigInt(wrapSignedBits(value, 8), 8)
 	} else {
 		b.MustStoreBigUInt(value, 8)
 	}
@@ -20458,9 +20457,32 @@ func parityProgramRootAsDict(root *cell.Cell, bits uint) *cell.Dictionary {
 
 func parityProgramDictKeyCellForKind(kind int, value uint64, bits uint) *cell.Cell {
 	if kind == 1 {
-		return cell.BeginCell().MustStoreBigInt(big.NewInt(int64(value)), bits).EndCell()
+		// A dict key cell is a raw bit pattern; the signed-key kind stores the
+		// low `bits` of the value in two's complement, matching how the TVM
+		// dict primitives and cell.Dictionary encode integer keys.
+		return cell.BeginCell().MustStoreBigInt(parityProgramSignedKey(value, bits), bits).EndCell()
 	}
 	return parityProgramKeyCell(value, bits)
+}
+
+func parityProgramSignedKey(value uint64, bits uint) *big.Int {
+	return wrapSignedBits(new(big.Int).SetUint64(value), bits)
+}
+
+// wrapSignedBits reduces value to its low `bits` and reinterprets the top bit
+// as the sign, so the result is the two's-complement value that StoreBigInt's
+// signed range accepts — the raw bit pattern TVM dict keys and signed cell
+// fields carry.
+func wrapSignedBits(value *big.Int, bits uint) *big.Int {
+	if bits == 0 {
+		return big.NewInt(0)
+	}
+	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), bits), big.NewInt(1))
+	v := new(big.Int).And(value, mask)
+	if v.Bit(int(bits-1)) == 1 {
+		v.Sub(v, new(big.Int).Lsh(big.NewInt(1), bits))
+	}
+	return v
 }
 
 func parityProgramDictScalarOpcode(base uint64, kind int) uint64 {

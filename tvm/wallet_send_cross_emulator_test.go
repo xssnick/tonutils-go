@@ -16,7 +16,7 @@ func TestTVMCrossEmulatorWalletV5SendExternal(t *testing.T) {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
-	preparedCfg := MustPrepareBlockchainConfig(mustReferenceTransactionConfigRoot(t))
+	preparedCfg := mustPrepareLenientTestConfig(mustReferenceTransactionConfigRoot(t))
 
 	t.Run("InitialSendMatchesReference", func(t *testing.T) {
 		fx := makeWalletV5SendFixture(t, walletSendInitialSeqno)
@@ -131,7 +131,7 @@ func assertWalletV5SendExternalVersionParity(t *testing.T, version int, stale bo
 	if err != nil {
 		t.Fatalf("reference send_external v%d stale=%t failed: %v", version, stale, err)
 	}
-	goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, MustPrepareBlockchainConfig(configRoot))
+	goRes, err := emulateWalletSendExternal(t, fx.code, fx.data, fx.address, fx.body, fx.now, mustPrepareLenientTestConfig(configRoot))
 	if err != nil {
 		t.Fatalf("go send_external v%d stale=%t failed: %v", version, stale, err)
 	}
@@ -159,7 +159,7 @@ func assertWalletV5SendExternalSequentialVersionParity(t *testing.T, version int
 	t.Helper()
 
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, mustReferenceTransactionConfigRoot(t), uint32(version))
-	preparedCfg := MustPrepareBlockchainConfig(configRoot)
+	preparedCfg := mustPrepareLenientTestConfig(configRoot)
 	fx1 := makeWalletV5SendFixture(t, walletSendInitialSeqno)
 	refFirst, err := runReferenceSendMessageWithConfig(fx1.code, fx1.data, fx1.body, 0, false, referenceSendMessageConfig{
 		address:    fx1.address,

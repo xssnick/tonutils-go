@@ -19,6 +19,7 @@ var ErrTooMuchRefs = errors.New("too much refs")
 var ErrNotFit1023 = errors.New("cell data size should fit into 1023 bits")
 var ErrNoMoreRefs = errors.New("no more refs exists")
 var ErrAddressTypeNotSupported = errors.New("address type is not supported")
+var ErrVirtualizedCell = errors.New("virtualized cell cannot be serialized")
 
 func (c *Cell) ToBOC() []byte {
 	return c.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true})

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -387,14 +388,14 @@ func TestProcessBroadcastTwoStepSimple(t *testing.T) {
 
 	handled := 0
 	var gotInfo BroadcastInfo
-	o.SetBroadcastHandlerWithInfo(func(got tl.Serializable, info BroadcastInfo) error {
+	o.SetBroadcastHandlerWithInfo(func(got tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		handled++
 		gotInfo = info
 		gotMsg, ok := got.(Message)
 		if !ok || !bytes.Equal(gotMsg.Overlay, payload.Overlay) {
 			t.Fatalf("unexpected delivered payload %#v", got)
 		}
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	})
 
 	if err = m.customHandler(&adnl.MessageCustom{Data: WrapMessage(overlayID, *msg)}); err != nil {
@@ -403,7 +404,7 @@ func TestProcessBroadcastTwoStepSimple(t *testing.T) {
 	if handled != 1 {
 		t.Fatalf("expected one delivery, got %d", handled)
 	}
-	if !gotInfo.Trusted || !gotInfo.TwoStep || !bytes.Equal(gotInfo.Extra, []byte("extra")) || len(gotInfo.BroadcastID) != 32 {
+	if !gotInfo.Trusted || gotInfo.Delivery != BroadcastDeliveryTwoStepSimple || !bytes.Equal(gotInfo.Extra, []byte("extra")) || len(gotInfo.BroadcastID) != 32 {
 		t.Fatalf("unexpected delivered info: %#v", gotInfo)
 	}
 	if len(prechecks) != 2 || prechecks[0] || !prechecks[1] {
@@ -451,9 +452,9 @@ func TestProcessBroadcastTwoStepReceiveDisabledByDefault(t *testing.T) {
 	}
 
 	handled := false
-	o.SetBroadcastHandler(func(msg tl.Serializable, trusted bool) error {
+	o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		handled = true
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	})
 
 	if err = m.customHandler(&adnl.MessageCustom{Data: WrapMessage(overlayID, *msg)}); err != nil {
@@ -519,14 +520,14 @@ func TestProcessBroadcastTwoStepFEC(t *testing.T) {
 
 	handled := 0
 	var gotInfo BroadcastInfo
-	o.SetBroadcastHandlerWithInfo(func(got tl.Serializable, info BroadcastInfo) error {
+	o.SetBroadcastHandlerWithInfo(func(got tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		handled++
 		gotInfo = info
 		gotBroadcast, ok := got.(Broadcast)
 		if !ok || !bytes.Equal(gotBroadcast.Data, payload.Data) {
 			t.Fatalf("unexpected decoded payload %#v", got)
 		}
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	})
 
 	first := sourcePeers.peers[0].(*mockBroadcastPeer).sent[0].(*BroadcastTwoStepFEC)
@@ -547,7 +548,7 @@ func TestProcessBroadcastTwoStepFEC(t *testing.T) {
 	if handled != 1 {
 		t.Fatalf("expected decoded delivery, got %d", handled)
 	}
-	if !gotInfo.Trusted || !gotInfo.TwoStep || !bytes.Equal(gotInfo.Extra, []byte("fec-extra")) || !bytes.Equal(gotInfo.BroadcastID, sendRes.BroadcastID) {
+	if !gotInfo.Trusted || gotInfo.Delivery != BroadcastDeliveryTwoStepFEC || !bytes.Equal(gotInfo.Extra, []byte("fec-extra")) || !bytes.Equal(gotInfo.BroadcastID, sendRes.BroadcastID) {
 		t.Fatalf("unexpected fec info: %#v", gotInfo)
 	}
 
@@ -600,9 +601,9 @@ func TestProcessBroadcastTwoStepFECSharedStateAcrossConnections(t *testing.T) {
 	secondOverlay.EnableBroadcastTwoStep(secondADNL.id, nil, shared)
 
 	handled := 0
-	handler := func(got tl.Serializable, info BroadcastInfo) error {
+	handler := func(got tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		handled++
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	}
 	firstOverlay.SetBroadcastHandlerWithInfo(handler)
 	secondOverlay.SetBroadcastHandlerWithInfo(handler)
@@ -679,4 +680,336 @@ func TestBroadcastTwoStepCleanupDoesNotMarkStaleStreamDelivered(t *testing.T) {
 	if stats.DeliveredBroadcasts != 0 {
 		t.Fatalf("stale partial stream must not be marked delivered, got %#v", stats)
 	}
+}
+
+func TestProcessBroadcastTwoStepSimpleRetryThenAccept(t *testing.T) {
+	o, state, msg := newTwoStepSimpleReceiveFixture(t, 91)
+
+	var calls atomic.Int32
+	o.SetBroadcastHandlerWithInfo(func(_ tl.Serializable, info BroadcastInfo) BroadcastDisposition {
+		call := calls.Add(1)
+		if !bytes.Equal(info.Payload, msg.Data) {
+			t.Errorf("unexpected raw payload")
+		}
+		if len(info.Payload) > 0 && &info.Payload[0] != &msg.Data[0] {
+			t.Errorf("two-step simple payload was copied")
+		}
+		if call == 1 {
+			return BroadcastDispositionRetry
+		}
+		return BroadcastDispositionAcceptAndRelay
+	})
+
+	err := o.processBroadcastTwoStepSimple(msg, msg.SourceADNL)
+	if !errors.Is(err, ErrBroadcastRejected) {
+		t.Fatalf("expected retry rejection, got %v", err)
+	}
+	stats := state.Stats()
+	if stats.DeliveredBroadcasts != 0 || stats.CompletedTotal != 0 {
+		t.Fatalf("retry must not commit simple broadcast: %#v", stats)
+	}
+
+	if err = o.processBroadcastTwoStepSimple(msg, msg.SourceADNL); err != nil {
+		t.Fatalf("retry delivery failed: %v", err)
+	}
+	stats = state.Stats()
+	if calls.Load() != 2 || stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("unexpected accepted simple state: calls=%d stats=%#v", calls.Load(), stats)
+	}
+}
+
+func TestProcessBroadcastTwoStepSimpleIgnoreIsCommitted(t *testing.T) {
+	o, state, msg := newTwoStepSimpleReceiveFixture(t, 92)
+
+	var calls atomic.Int32
+	o.SetBroadcastHandlerWithInfo(func(tl.Serializable, BroadcastInfo) BroadcastDisposition {
+		calls.Add(1)
+		return BroadcastDispositionIgnore
+	})
+
+	if err := o.processBroadcastTwoStepSimple(msg, msg.SourceADNL); err != nil {
+		t.Fatalf("ignore delivery failed: %v", err)
+	}
+	if err := o.processBroadcastTwoStepSimple(msg, msg.SourceADNL); err != nil {
+		t.Fatalf("ignored replay failed: %v", err)
+	}
+	stats := state.Stats()
+	if calls.Load() != 1 || stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("ignored simple broadcast was not committed: calls=%d stats=%#v", calls.Load(), stats)
+	}
+}
+
+func TestProcessBroadcastTwoStepSimpleParseFailureIsCommitted(t *testing.T) {
+	o, state, msg := newTwoStepSimpleReceiveFixture(t, 93)
+	msg.Data = []byte{0xFF, 0xFF, 0xFF, 0xFF}
+	_, priv := keyPairFromSeed(93)
+	if err := msg.Sign(priv); err != nil {
+		t.Fatalf("sign invalid payload failed: %v", err)
+	}
+
+	var calls atomic.Int32
+	o.SetBroadcastHandlerWithInfo(func(tl.Serializable, BroadcastInfo) BroadcastDisposition {
+		calls.Add(1)
+		return BroadcastDispositionAcceptAndRelay
+	})
+
+	if err := o.processBroadcastTwoStepSimple(msg, msg.SourceADNL); err == nil {
+		t.Fatalf("expected deterministic parse error")
+	}
+	if err := o.processBroadcastTwoStepSimple(msg, msg.SourceADNL); err != nil {
+		t.Fatalf("committed parse failure replay failed: %v", err)
+	}
+	stats := state.Stats()
+	if calls.Load() != 0 || stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("parse failure was not committed as ignore: calls=%d stats=%#v", calls.Load(), stats)
+	}
+}
+
+func TestProcessBroadcastTwoStepSimpleConcurrentWaiterRecontendsAfterRetry(t *testing.T) {
+	o, state, msg := newTwoStepSimpleReceiveFixture(t, 94)
+
+	firstHandlerStarted := make(chan struct{})
+	releaseFirstHandler := make(chan struct{})
+	var calls atomic.Int32
+	o.SetBroadcastHandlerWithInfo(func(tl.Serializable, BroadcastInfo) BroadcastDisposition {
+		if calls.Add(1) == 1 {
+			close(firstHandlerStarted)
+			<-releaseFirstHandler
+			return BroadcastDispositionRetry
+		}
+		return BroadcastDispositionAcceptAndRelay
+	})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- o.processBroadcastTwoStepSimple(msg, msg.SourceADNL)
+	}()
+	<-firstHandlerStarted
+
+	waiterStarted := make(chan struct{})
+	waiterDone := make(chan error, 1)
+	go func() {
+		close(waiterStarted)
+		waiterDone <- o.processBroadcastTwoStepSimple(msg, msg.SourceADNL)
+	}()
+	<-waiterStarted
+	select {
+	case err := <-waiterDone:
+		t.Fatalf("waiter returned before retry completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseFirstHandler)
+	if err := <-firstDone; !errors.Is(err, ErrBroadcastRejected) {
+		t.Fatalf("expected first retry rejection, got %v", err)
+	}
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("waiter failed to re-contend: %v", err)
+	}
+	stats := state.Stats()
+	if calls.Load() != 2 || stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("unexpected concurrent admission state: calls=%d stats=%#v", calls.Load(), stats)
+	}
+}
+
+func TestProcessBroadcastTwoStepFECRetryThenAccept(t *testing.T) {
+	o, state, parts, sourceADNL := newTwoStepFECReceiveFixture(t, 95)
+
+	var calls atomic.Int32
+	o.SetBroadcastHandlerWithInfo(func(_ tl.Serializable, info BroadcastInfo) BroadcastDisposition {
+		if len(info.Payload) == 0 {
+			t.Errorf("expected raw decoded payload")
+		}
+		if calls.Add(1) == 1 {
+			return BroadcastDispositionRetry
+		}
+		return BroadcastDispositionAcceptAndRelay
+	})
+
+	decodedAt := -1
+	for i, part := range parts {
+		err := o.processBroadcastTwoStepFEC(part, sourceADNL)
+		if errors.Is(err, ErrBroadcastRejected) {
+			decodedAt = i
+			break
+		}
+		if err != nil {
+			t.Fatalf("first fec attempt part %d failed: %v", i, err)
+		}
+	}
+	if decodedAt < 0 {
+		t.Fatalf("first fec attempt did not decode")
+	}
+	stats := state.Stats()
+	if stats.ActiveStreams != 0 || stats.DeliveredBroadcasts != 0 || stats.CompletedTotal != 0 {
+		t.Fatalf("fec retry must remove uncommitted stream: %#v", stats)
+	}
+
+	for i := 0; i <= decodedAt; i++ {
+		if err := o.processBroadcastTwoStepFEC(parts[i], sourceADNL); err != nil {
+			t.Fatalf("second fec attempt part %d failed: %v", i, err)
+		}
+	}
+	stats = state.Stats()
+	if calls.Load() != 2 || stats.ActiveStreams != 0 || stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("unexpected accepted fec state: calls=%d stats=%#v", calls.Load(), stats)
+	}
+}
+
+func TestProcessBroadcastTwoStepFECIgnoreIsCommitted(t *testing.T) {
+	o, state, parts, sourceADNL := newTwoStepFECReceiveFixture(t, 96)
+
+	var calls atomic.Int32
+	o.SetBroadcastHandlerWithInfo(func(tl.Serializable, BroadcastInfo) BroadcastDisposition {
+		calls.Add(1)
+		return BroadcastDispositionIgnore
+	})
+
+	decodedAt := -1
+	for i, part := range parts {
+		if err := o.processBroadcastTwoStepFEC(part, sourceADNL); err != nil {
+			t.Fatalf("fec ignore part %d failed: %v", i, err)
+		}
+		if calls.Load() == 1 {
+			decodedAt = i
+			break
+		}
+	}
+	if decodedAt < 0 {
+		t.Fatalf("fec ignore attempt did not decode")
+	}
+	for i := 0; i <= decodedAt; i++ {
+		if err := o.processBroadcastTwoStepFEC(parts[i], sourceADNL); err != nil {
+			t.Fatalf("ignored fec replay part %d failed: %v", i, err)
+		}
+	}
+	stats := state.Stats()
+	if calls.Load() != 1 || stats.ActiveStreams != 0 || stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("ignored fec broadcast was not committed: calls=%d stats=%#v", calls.Load(), stats)
+	}
+}
+
+func TestProcessBroadcastTwoStepFECConcurrentWaiterRecontendsAfterRetry(t *testing.T) {
+	o, state, parts, sourceADNL := newTwoStepFECReceiveFixture(t, 97)
+	if len(parts) < 2 {
+		t.Fatalf("expected at least two fec parts")
+	}
+
+	firstHandlerStarted := make(chan struct{})
+	releaseFirstHandler := make(chan struct{})
+	var calls atomic.Int32
+	o.SetBroadcastHandlerWithInfo(func(tl.Serializable, BroadcastInfo) BroadcastDisposition {
+		if calls.Add(1) == 1 {
+			close(firstHandlerStarted)
+			<-releaseFirstHandler
+			return BroadcastDispositionRetry
+		}
+		return BroadcastDispositionAcceptAndRelay
+	})
+
+	if err := o.processBroadcastTwoStepFEC(parts[0], sourceADNL); err != nil {
+		t.Fatalf("first fec symbol failed: %v", err)
+	}
+	ownerDone := make(chan error, 1)
+	go func() {
+		ownerDone <- o.processBroadcastTwoStepFEC(parts[1], sourceADNL)
+	}()
+	<-firstHandlerStarted
+
+	waiterDone := make(chan error, 1)
+	go func() {
+		waiterDone <- o.processBroadcastTwoStepFEC(parts[1], sourceADNL)
+	}()
+	select {
+	case err := <-waiterDone:
+		t.Fatalf("fec waiter returned before retry completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(releaseFirstHandler)
+	if err := <-ownerDone; !errors.Is(err, ErrBroadcastRejected) {
+		t.Fatalf("expected fec owner retry rejection, got %v", err)
+	}
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("fec waiter failed to re-contend: %v", err)
+	}
+	if stats := state.Stats(); stats.ActiveStreams != 1 || stats.DeliveredBroadcasts != 0 || stats.CompletedTotal != 0 {
+		t.Fatalf("waiter did not rebuild retryable fec stream: %#v", stats)
+	}
+
+	if err := o.processBroadcastTwoStepFEC(parts[0], sourceADNL); err != nil {
+		t.Fatalf("fec retry completion failed: %v", err)
+	}
+	stats := state.Stats()
+	if calls.Load() != 2 || stats.ActiveStreams != 0 || stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("unexpected concurrent fec admission state: calls=%d stats=%#v", calls.Load(), stats)
+	}
+}
+
+func newTwoStepSimpleReceiveFixture(t *testing.T, seed byte) (*ADNLOverlayWrapper, *BroadcastTwoStepState, *BroadcastTwoStepSimple) {
+	t.Helper()
+
+	_, priv := keyPairFromSeed(seed)
+	sourceADNL := bytes.Repeat([]byte{seed}, 32)
+	overlayID := bytes.Repeat([]byte{seed + 1}, 32)
+	payload, err := tl.Serialize(Message{Overlay: bytes.Repeat([]byte{seed + 2}, 32)}, true)
+	if err != nil {
+		t.Fatalf("serialize simple fixture payload: %v", err)
+	}
+	msg := &BroadcastTwoStepSimple{
+		Date:        uint32(time.Now().Unix()),
+		Source:      ed25519Public(priv),
+		SourceADNL:  sourceADNL,
+		Certificate: CertificateEmpty{},
+		Data:        payload,
+	}
+	if err = msg.Sign(priv); err != nil {
+		t.Fatalf("sign simple fixture: %v", err)
+	}
+
+	state := NewBroadcastTwoStepState()
+	o := CreateExtendedADNL(newMockADNL()).CreateOverlayWithSettings(overlayID, 4096, true, true)
+	o.EnableBroadcastTwoStep(bytes.Repeat([]byte{seed + 3}, 32), nil, state)
+	return o, state, msg
+}
+
+func newTwoStepFECReceiveFixture(t *testing.T, seed byte) (*ADNLOverlayWrapper, *BroadcastTwoStepState, []*BroadcastTwoStepFEC, []byte) {
+	t.Helper()
+
+	_, priv := keyPairFromSeed(seed)
+	sourceADNL := bytes.Repeat([]byte{seed}, 32)
+	overlayID := bytes.Repeat([]byte{seed + 1}, 32)
+	peers := mockBroadcastPeerSet{peers: make([]BroadcastPeer, 5)}
+	for i := range peers.peers {
+		peers.peers[i] = &mockBroadcastPeer{id: bytes.Repeat([]byte{seed + byte(i) + 2}, 32)}
+	}
+	payload := Broadcast{
+		Source:      ed25519Public(priv),
+		Certificate: CertificateEmpty{},
+		Data:        bytes.Repeat([]byte{seed}, 700),
+		Date:        int32(seed),
+	}
+	res, err := SendBroadcastTwoStepFromTL(context.Background(), BroadcastTwoStepTLSendRequest{
+		Key:         priv,
+		Certificate: CertificateEmpty{},
+		LocalADNLID: sourceADNL,
+		Payload:     payload,
+		PeerSet:     peers,
+	}, WithBroadcastTwoStepDate(uint32(time.Now().Unix())))
+	if err != nil {
+		t.Fatalf("send fec fixture: %v", err)
+	}
+	if res.Mode != BroadcastTwoStepModeFEC {
+		t.Fatalf("expected fec fixture mode, got %#v", res)
+	}
+
+	parts := make([]*BroadcastTwoStepFEC, 0, len(peers.peers))
+	for _, peer := range peers.peers {
+		parts = append(parts, peer.(*mockBroadcastPeer).sent[0].(*BroadcastTwoStepFEC))
+	}
+
+	state := NewBroadcastTwoStepState()
+	o := CreateExtendedADNL(newMockADNL()).CreateOverlayWithSettings(overlayID, 4096, true, true)
+	o.EnableBroadcastTwoStep(bytes.Repeat([]byte{seed + 7}, 32), nil, state)
+	return o, state, parts, sourceADNL
 }

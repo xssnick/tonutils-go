@@ -48,9 +48,12 @@ func startServerWithConfig(t *testing.T, h Handler, configure func(*Server), key
 	return pc.LocalAddr().String(), srv
 }
 
-func TestDefaultLimitsMatchCppNode(t *testing.T) {
+func TestDefaultLimits(t *testing.T) {
 	if DefaultMaxObjectSize != 4<<20 {
 		t.Fatalf("DefaultMaxObjectSize = %d, want %d", DefaultMaxObjectSize, 4<<20)
+	}
+	if MaxIncomingStreams != 2048 {
+		t.Fatalf("MaxIncomingStreams = %d, want 2048", MaxIncomingStreams)
 	}
 	if defaultMaxConnectionsPerIP != 1000 {
 		t.Fatalf("defaultMaxConnectionsPerIP = %d, want 1000", defaultMaxConnectionsPerIP)
@@ -69,8 +72,8 @@ func TestDefaultLimitsMatchCppNode(t *testing.T) {
 	if cfg.MaxConnectionReceiveWindow != defaultMaxConnectionReceiveWindow {
 		t.Fatalf("MaxConnectionReceiveWindow = %d, want %d", cfg.MaxConnectionReceiveWindow, defaultMaxConnectionReceiveWindow)
 	}
-	if cfg.MaxIncomingStreams != defaultMaxIncomingStreams {
-		t.Fatalf("MaxIncomingStreams = %d, want %d", cfg.MaxIncomingStreams, defaultMaxIncomingStreams)
+	if cfg.MaxIncomingStreams != MaxIncomingStreams {
+		t.Fatalf("MaxIncomingStreams = %d, want %d", cfg.MaxIncomingStreams, MaxIncomingStreams)
 	}
 	if cfg.MaxIncomingUniStreams != -1 {
 		t.Fatalf("MaxIncomingUniStreams = %d, want -1", cfg.MaxIncomingUniStreams)

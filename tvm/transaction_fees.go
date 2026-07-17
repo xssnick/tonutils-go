@@ -18,9 +18,13 @@ func transactionMessageGas(gasOverride vm.Gas, now uint32, blockchainCfg *Prepar
 		return gasOverride
 	}
 
+	// Only an absent gas prices param (possible on lenient test configs) falls
+	// back to the default profiles; a present param is honored literally, so a
+	// configured zero gas limit computes to zero limits and skips with NO_GAS,
+	// matching the reference compute_gas_limits.
 	prices := blockchainCfg.gasPricesFor(transactionIsMasterchain(addr))
-	if prices != nil && prices.GasLimit > 0 {
-		if isSpecial && prices.SpecialGasLimit > 0 {
+	if prices != nil {
+		if isSpecial {
 			limit := transactionGasInt(prices.SpecialGasLimit)
 			credit := int64(0)
 			if msgType == tlb.MsgTypeExternalIn && prices.GasCredit > 0 {
@@ -243,7 +247,7 @@ func transactionPrecompiledGasUsage(value *big.Int) (int64, bool, error) {
 // usage for code from the prepared config (param 45) and adjusts the compute
 // gas accordingly. The resolved usage is stored in env for the c7 tuple and
 // the final gas accounting.
-func transactionApplyPrecompiledGasConfig(blockchainCfg *PreparedBlockchainConfig, code *cell.Cell, gas vm.Gas, env *transactionExecEnv) (vm.Gas, *tlb.ComputeSkipReason) {
+func transactionApplyPrecompiledGasConfig(blockchainCfg *PreparedBlockchainConfig, code *cell.Cell, addr *address.Address, isSpecial bool, gas vm.Gas, env *transactionExecEnv) (vm.Gas, *tlb.ComputeSkipReason) {
 	usage := blockchainCfg.precompiledGasUsage(code)
 	if usage == nil {
 		return gas, nil
@@ -257,20 +261,24 @@ func transactionApplyPrecompiledGasConfig(blockchainCfg *PreparedBlockchainConfi
 	if precompiledGas > gas.Limit {
 		return gas, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	}
-	return transactionPrecompiledFallbackGas(gas), nil
+	return transactionPrecompiledFallbackGas(gas, transactionPrecompiledFallbackLimit(blockchainCfg, addr, isSpecial)), nil
 }
 
-func transactionPrecompiledFallbackGas(gas vm.Gas) vm.Gas {
-	limit := gas.Max
-	if limit == 0 {
-		limit = gas.Limit
+func transactionPrecompiledFallbackLimit(blockchainCfg *PreparedBlockchainConfig, addr *address.Address, isSpecial bool) uint64 {
+	prices := blockchainCfg.gasPricesFor(transactionIsMasterchain(addr))
+	if prices == nil {
+		return 0
 	}
-	if limit == 0 {
-		return gas
+	if isSpecial {
+		return prices.SpecialGasLimit
 	}
+	return prices.GasLimit
+}
 
+func transactionPrecompiledFallbackGas(gas vm.Gas, rawLimit uint64) vm.Gas {
+	limit := transactionGasInt(rawLimit)
 	credit := int64(0)
-	if gas.Credit > 0 {
+	if gas.Credit != 0 {
 		credit = limit
 	}
 	return vm.Gas{
@@ -361,6 +369,52 @@ func transactionOutboundInternalMessageFeeUsage(cfg *PreparedBlockchainConfig, m
 	}
 
 	return usage, nil
+}
+
+func transactionOutboundExternalMessageFeeUsage(msg *tlb.ExternalMessageOut, layout transactionOutboundLayout) (transactionUsage, error) {
+	collector := newTransactionUsageCollector()
+	usage := transactionUsage{}
+
+	if msg.StateInit != nil {
+		stateCell, err := tlb.ToCell(msg.StateInit)
+		if err != nil {
+			return transactionUsage{}, err
+		}
+		stateUsage, err := collector.addCell(stateCell, !layout.stateInitInRef)
+		if err != nil {
+			return transactionUsage{}, err
+		}
+		usage = transactionAddUsage(usage, stateUsage)
+	}
+	if msg.Body != nil {
+		bodyUsage, err := collector.addCell(msg.Body, !layout.bodyInRef)
+		if err != nil {
+			return transactionUsage{}, err
+		}
+		usage = transactionAddUsage(usage, bodyUsage)
+	}
+
+	return usage, nil
+}
+
+// transactionOutboundMessageFailedLayout mirrors the reference redo rules for a
+// message that failed to pack: StateInit moves into a ref only when it has at
+// least two refs, the body only when its inline form is non-empty.
+func transactionOutboundMessageFailedLayout(state *tlb.StateInit, body *cell.Cell, layout transactionOutboundLayout) (transactionOutboundLayout, error) {
+	next := layout
+	if !next.stateInitInRef {
+		move, err := transactionStateInitRefRetryNeeded(state)
+		if err != nil {
+			return layout, err
+		}
+		if move {
+			next.stateInitInRef = true
+		}
+	}
+	if !next.bodyInRef && transactionMessageBodyRefRetryNeeded(body) {
+		next.bodyInRef = true
+	}
+	return next, nil
 }
 
 func transactionOutboundInternalMessageActionUsage(cfg *PreparedBlockchainConfig, msg *tlb.InternalMessage, msgCell *cell.Cell, layout transactionOutboundLayout) (transactionUsage, error) {
@@ -715,8 +769,8 @@ func transactionComputeSendActionFineForUsage(cfg *PreparedBlockchainConfig, src
 	return fine, maxCells, limitedByFunds
 }
 
-func transactionAccountStateExceedsLimits(acc *transactionRuntimeAccount, code, data *cell.Cell, libs *cell.Dictionary, cfg *PreparedBlockchainConfig) (bool, error) {
-	if acc.isSpecial {
+func transactionAccountStateExceedsLimits(acc *transactionRuntimeAccount, code, data *cell.Cell, libs *cell.Dictionary, cfg *PreparedBlockchainConfig, exemptSpecial bool) (bool, error) {
+	if exemptSpecial && acc.isSpecial {
 		return false, nil
 	}
 	if transactionCellEqual(acc.code, code) && transactionCellEqual(acc.data, data) && transactionDictEqual(acc.libraries, libs) {

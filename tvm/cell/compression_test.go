@@ -3,6 +3,7 @@ package cell
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"math/big"
 	"testing"
 )
@@ -72,6 +73,64 @@ func buildStateAwareCompressionFixture(tb testing.TB) (*Cell, *Cell, []byte) {
 		EndCell()
 
 	return root, left, root.ToBOCWithOptions(mode31Options())
+}
+
+func TestDecompressWithSizeHeaderRequiresExactSize(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xAB, 0xCD, 0xEF, 0x01}, 64)
+	compressed, err := compressWithSizeHeader(payload)
+	if err != nil {
+		t.Fatalf("failed to compress payload: %v", err)
+	}
+
+	out, err := decompressWithSizeHeader(compressed, len(payload)*2)
+	if err != nil {
+		t.Fatalf("exact-size decompression failed: %v", err)
+	}
+	if !bytes.Equal(out, payload) {
+		t.Fatal("decompressed payload mismatch")
+	}
+
+	// A header smaller than the actual block must fail as well: accepting a
+	// truncated destination would diverge from the reference exact-size check.
+	deflated := append([]byte(nil), compressed...)
+	binary.BigEndian.PutUint32(deflated, uint32(len(payload)-1))
+	if _, err = decompressWithSizeHeader(deflated, len(payload)*2); err == nil {
+		t.Fatal("expected declared size smaller than actual to fail")
+	}
+
+	// declared size larger than the actual decompressed size must fail, like
+	// the reference "decompressed size mismatch" check
+	inflated := append([]byte(nil), compressed...)
+	binary.BigEndian.PutUint32(inflated, uint32(len(payload)+1))
+	if _, err = decompressWithSizeHeader(inflated, len(payload)*2); err == nil {
+		t.Fatal("expected declared size larger than actual to fail")
+	}
+
+	// declared size above the allocation limit must fail before decompression
+	if _, err = decompressWithSizeHeader(compressed, len(payload)-1); err == nil {
+		t.Fatal("expected declared size above the limit to fail")
+	}
+}
+
+func TestDecompressBOCRejectsInflatedSizeHeader(t *testing.T) {
+	root := BeginCell().MustStoreUInt(0xAABB, 16).EndCell()
+	compressed, err := CompressBOC([]*Cell{root}, CompressionImprovedStructureLZ4, nil)
+	if err != nil {
+		t.Fatalf("failed to compress boc: %v", err)
+	}
+
+	if _, err = DecompressBOC(compressed, 1<<20, nil); err != nil {
+		t.Fatalf("untampered decompression failed: %v", err)
+	}
+
+	// data[0] is the algorithm byte, the size header follows it
+	tampered := append([]byte(nil), compressed...)
+	declared := binary.BigEndian.Uint32(tampered[1 : 1+kDecompressedSizeBytes])
+	binary.BigEndian.PutUint32(tampered[1:], declared+1)
+
+	if _, err = DecompressBOC(tampered, 1<<20, nil); err == nil {
+		t.Fatal("expected inflated declared size to fail decompression")
+	}
 }
 
 func TestExtractBalanceFromDepthBalanceCellAcceptsEmptyExtraDict(t *testing.T) {

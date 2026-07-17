@@ -107,8 +107,8 @@ type RLDP struct {
 
 	recvStreams map[[32]byte]*decoderStream
 
-	onQuery   func(transferId []byte, query *Query) error
-	onMessage func(id []byte, data []byte) error
+	onQuery   atomic.Pointer[queryHandler]
+	onMessage atomic.Pointer[messageHandler]
 
 	maxUnexpectedTransferSize atomic.Uint64
 
@@ -121,6 +121,9 @@ type RLDP struct {
 	lastReport time.Time
 	stats      *clientStats
 }
+
+type queryHandler func(transferId []byte, query *Query) error
+type messageHandler func(id []byte, data []byte) error
 
 type fecDecoder interface {
 	AddSymbol(id uint32, data []byte) (bool, error)
@@ -245,11 +248,39 @@ func (r *RLDP) GetADNL() ADNL {
 }
 
 func (r *RLDP) SetOnQuery(handler func(transferId []byte, query *Query) error) {
-	r.onQuery = handler
+	if handler == nil {
+		r.onQuery.Store(nil)
+		return
+	}
+
+	h := queryHandler(handler)
+	r.onQuery.Store(&h)
 }
 
 func (r *RLDP) SetOnMessage(handler func(id []byte, data []byte) error) {
-	r.onMessage = handler
+	if handler == nil {
+		r.onMessage.Store(nil)
+		return
+	}
+
+	h := messageHandler(handler)
+	r.onMessage.Store(&h)
+}
+
+func (r *RLDP) queryHandler() func(transferId []byte, query *Query) error {
+	handler := r.onQuery.Load()
+	if handler == nil {
+		return nil
+	}
+	return *handler
+}
+
+func (r *RLDP) messageHandler() func(id []byte, data []byte) error {
+	handler := r.onMessage.Load()
+	if handler == nil {
+		return nil
+	}
+	return *handler
 }
 
 func (r *RLDP) SetMaxUnexpectedTransferSize(size uint64) {
@@ -888,7 +919,7 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 
 			switch rVal := res.(type) {
 			case Query:
-				handler := r.onQuery
+				handler := r.queryHandler()
 				if handler != nil {
 					transferId := make([]byte, 32)
 					copy(transferId, part.TransferID)
@@ -933,7 +964,7 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 					}
 				}
 			case Message:
-				handler := r.onMessage
+				handler := r.messageHandler()
 				if handler != nil {
 					if err = handler(rVal.ID, rVal.Data); err != nil {
 						Logger("failed to handle message: ", err)

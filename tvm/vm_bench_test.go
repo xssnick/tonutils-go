@@ -14,7 +14,17 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-var benchmarkExecutionResult *ExecutionResult
+var (
+	benchmarkExecutionResult *ExecutionResult
+	benchmarkTVMSink         *TVM
+)
+
+func BenchmarkNewTVM(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		benchmarkTVMSink = NewTVM()
+	}
+}
 
 func BenchmarkTVMRunGetMethodRealistic(b *testing.B) {
 	pubKey := benchmarkMustBytesFromHex("f7a26c623ca2429ae80fbb17786b0b523ba71c1dbb13fbcdb8ded762a71cd867")

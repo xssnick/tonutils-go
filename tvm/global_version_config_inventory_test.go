@@ -16,6 +16,7 @@ import (
 var expectedGlobalVersionConfigProductionReaders = map[string]int{
 	"cross_emulator_transaction_reference.go:referenceTransactionConfigRootWithGlobalVersion": 1,
 	"transaction_config.go:PrepareBlockchainConfig":                                           1,
+	"transaction_config.go:prepareBlockchainConfigLenient":                                    1,
 }
 
 func TestTVMGlobalVersionPreparedBlockchainConfigAPIInventory(t *testing.T) {

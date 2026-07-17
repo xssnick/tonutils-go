@@ -16,10 +16,10 @@ import (
 const (
 	expectedPackageLocalVersionFuzzerCount          = 46
 	expectedPackageLocalVersionFuzzerHash           = "17de0266cf8bef94294759a156da1ec80b5529fe6b84ce91e2b0ba6f5907d8bd"
-	expectedSupportedRangeVersionFuzzerCount        = 77
-	expectedSupportedRangeVersionFuzzerHash         = "b78317c241bf59e89458afa7305a7a6287c3f498c610af5b93bea7ed398404fa"
-	expectedSupportedRangeFullRangeVersionFuzzCount = 77
-	expectedSupportedRangeFullRangeVersionFuzzHash  = "b78317c241bf59e89458afa7305a7a6287c3f498c610af5b93bea7ed398404fa"
+	expectedSupportedRangeVersionFuzzerCount        = 78
+	expectedSupportedRangeVersionFuzzerHash         = "b8909d644eec3dd2a8fcab03114ecc154ed6040134e396f3e1a0eb5896d611c1"
+	expectedSupportedRangeFullRangeVersionFuzzCount = 78
+	expectedSupportedRangeFullRangeVersionFuzzHash  = "b8909d644eec3dd2a8fcab03114ecc154ed6040134e396f3e1a0eb5896d611c1"
 	expectedSupportedRangePartialVersionFuzzCount   = 0
 	expectedSupportedRangePartialVersionFuzzHash    = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	expectedNonCrossVersionNamedFuzzerCount         = 87

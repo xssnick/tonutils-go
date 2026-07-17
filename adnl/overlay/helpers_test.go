@@ -11,6 +11,59 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
+// Legacy constructor-shaped helpers keep older behavioral tests concise while
+// production callers use one explicitly owned BroadcastReceiver per overlay.
+func (a *ADNLWrapper) CreateOverlayWithSettings(id []byte, maxUnauthBroadcastSize uint32,
+	allowBroadcastFEC bool, trustUnauthorizedBroadcast bool) *ADNLOverlayWrapper {
+	key, err := newOverlayIDKey(id)
+	if err != nil {
+		panic(err)
+	}
+
+	a.mx.RLock()
+	existing := a.overlays[key]
+	a.mx.RUnlock()
+	if existing != nil {
+		return existing
+	}
+
+	receiver, err := NewBroadcastReceiver(id, maxUnauthBroadcastSize, allowBroadcastFEC, trustUnauthorizedBroadcast)
+	if err != nil {
+		panic(err)
+	}
+	wrapper, err := a.AttachOverlay(receiver)
+	if err != nil {
+		receiver.Close()
+		panic(err)
+	}
+	return wrapper
+}
+
+func (a *ADNLWrapper) WithOverlay(id []byte) *ADNLOverlayWrapper {
+	return a.CreateOverlayWithSettings(id, 0, true, false)
+}
+
+func (a *ADNLOverlayWrapper) EnableBroadcastFECRelay(localID []byte, peerSet BroadcastPeerSet, state *BroadcastFECRelayState) {
+	if state != nil {
+		a.fecState = state
+	}
+	a.BroadcastReceiver.EnableBroadcastFECRelay(localID, peerSet)
+}
+
+func (a *ADNLOverlayWrapper) EnableBroadcastSimpleRelayForTest(localID []byte, peerSet BroadcastPeerSet, state *BroadcastFECRelayState) {
+	if state != nil {
+		a.fecState = state
+	}
+	a.BroadcastReceiver.EnableBroadcastSimpleRelay(localID, peerSet)
+}
+
+func (a *ADNLOverlayWrapper) EnableBroadcastTwoStep(localID []byte, peerSet BroadcastPeerSet, state *BroadcastTwoStepState) {
+	if state != nil {
+		a.twoStepState.Store(state)
+	}
+	a.BroadcastReceiver.EnableBroadcastTwoStep(localID, peerSet)
+}
+
 type mockADNL struct {
 	queryHandler      func(msg *adnl.MessageQuery) error
 	customHandler     func(msg *adnl.MessageCustom) error

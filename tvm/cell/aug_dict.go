@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/big"
@@ -468,7 +469,7 @@ func (d *AugmentedDictionary) LoadValueWithExtraByIntKey(key *big.Int) (*Slice, 
 
 func (d *AugmentedDictionary) loadValueExtraByIntKey(key *big.Int) (*Slice, error) {
 	var builder Builder
-	if err := builder.StoreBigInt(key, d.keySz); err != nil {
+	if err := builder.storeBigIntWrap(key, d.keySz); err != nil {
 		panic(err)
 	}
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
@@ -1367,8 +1368,28 @@ func equalCellContents(a, b *Cell) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if a.BitsSize() != b.BitsSize() || a.RefsNum() != b.RefsNum() {
+	if a == b {
+		return true
+	}
+	if a.bitsSz != b.bitsSz || a.refsCount() != b.refsCount() {
 		return false
 	}
-	return a.HashKey(0) == b.HashKey(0)
+
+	fullBytes := int(a.bitsSz / 8)
+	if !bytes.Equal(a.data[:fullBytes], b.data[:fullBytes]) {
+		return false
+	}
+	if rem := a.bitsSz % 8; rem != 0 {
+		mask := byte(0xFF << (8 - rem))
+		if a.data[fullBytes]&mask != b.data[fullBytes]&mask {
+			return false
+		}
+	}
+
+	for i := 0; i < a.refsCount(); i++ {
+		if a.ref(i).HashKey() != b.ref(i).HashKey() {
+			return false
+		}
+	}
+	return true
 }

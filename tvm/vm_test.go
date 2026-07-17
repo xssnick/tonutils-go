@@ -110,11 +110,7 @@ func TestTVMExecuteFutureConfigWithLatestDefault(t *testing.T) {
 		tlb.ConfigParamGlobalVersion: mustGlobalVersionCell(t, futureVersion),
 	})
 
-	if !AllowHigherVersionExecUsingLatest {
-		t.Fatal("AllowHigherVersionExecUsingLatest default = false, want true")
-	}
-
-	cfg, err := PrepareBlockchainConfig(root)
+	cfg, err := prepareBlockchainConfigLenient(root)
 	if err != nil {
 		t.Fatalf("PrepareBlockchainConfig rejected future global version %d by default: %v", futureVersion, err)
 	}

@@ -148,6 +148,9 @@ func (g *Gas) ChangeLimit(limit int64) {
 }
 
 func (g *Gas) Consume(amount int64) error {
+	if amount < 0 {
+		return vmerr.Error(vmerr.CodeRangeCheck, "negative gas amount")
+	}
 	g.Remaining -= amount
 	if g.Remaining < 0 {
 		return vmerr.Error(vmerr.CodeOutOfGas)

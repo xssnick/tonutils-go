@@ -16,23 +16,24 @@ func CONDSEL() *helpers.SimpleOP {
 			if state.Stack.Len() < 3 {
 				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			y0, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-			x1, err := state.Stack.PopAny()
-			if err != nil {
+
+			if err := state.Stack.Exchange(0, 2); err != nil {
 				return err
 			}
 			f2, err := state.Stack.PopBool()
 			if err != nil {
+				// Match the original pop order: all three operands are consumed
+				// when the condition has the wrong type.
+				if dropErr := state.Stack.Drop(2); dropErr != nil {
+					return dropErr
+				}
 				return err
 			}
 
-			if !f2 {
-				return state.Stack.PushOwnedValue(y0)
+			if f2 {
+				return state.Stack.DropMany(1, 1)
 			}
-			return state.Stack.PushOwnedValue(x1)
+			return state.Stack.Drop(1)
 		},
 		Name:      "CONDSEL",
 		BitPrefix: helpers.BytesPrefix(0xE3, 0x04),

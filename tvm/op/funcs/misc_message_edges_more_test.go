@@ -498,7 +498,7 @@ func FuzzSendMsgVersionedUserFwdFeeLowerBound(f *testing.F) {
 
 func FuzzSendMsgVersionedIHRFeeBoundary(f *testing.F) {
 	for _, version := range []int{4, 10, 11, 12, 14} {
-		f.Add(uint8(version), uint16(100), uint32(1<<16), uint16(0))
+		f.Add(uint8(version), uint16(100), uint32(1), uint16(0))
 		f.Add(uint8(version), uint16(100), uint32(1<<15), uint16(200))
 		f.Add(uint8(version), uint16(100), uint32(0), uint16(300))
 	}
@@ -542,7 +542,7 @@ func FuzzSendMsgVersionedIHRFeeBoundary(f *testing.F) {
 
 		wantIHR := int64(0)
 		if version < 11 {
-			computedIHR := ceilShiftRight(mulBigUint64(big.NewInt(computed), uint64(ihrFactor)), 16).Int64()
+			computedIHR := new(big.Int).Rsh(mulBigUint64(big.NewInt(computed), uint64(ihrFactor)), 16).Int64()
 			wantIHR = computedIHR
 			if version < 12 && userIHR > wantIHR {
 				wantIHR = userIHR

@@ -544,10 +544,12 @@ func decompressWithSizeHeader(compressed []byte, maxSize int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lz4 decompression failed: %w", err)
 	}
-	if n < 0 {
-		return nil, fmt.Errorf("lz4 decompression failed")
+	// reference decompression requires the payload to match the declared size
+	// exactly
+	if n != decompressedSize {
+		return nil, fmt.Errorf("boc decompression failed: decompressed size mismatch")
 	}
-	return dst[:n], nil
+	return dst, nil
 }
 
 func compressImprovedStructureLZ4(roots []*Cell, compressMerkleUpdate bool, _ *Cell) ([]byte, error) {

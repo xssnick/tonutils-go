@@ -404,6 +404,39 @@ func (b *Builder) StoreBigInt(value *big.Int, sz uint) error {
 		return nil
 	}
 	if value.Sign() >= 0 {
+		// signed sz-bit range tops out at 2^(sz-1)-1
+		if value.BitLen() > int(sz-1) {
+			return ErrTooBigValue
+		}
+		return b.storeBig(value, sz)
+	}
+	if !fitsNegativeBigInt(value, sz) {
+		return ErrTooBigValue
+	}
+
+	encoded := new(big.Int).Lsh(bigIntOne, sz)
+	encoded.Add(encoded, value)
+	return b.storeBig(encoded, sz)
+}
+
+// storeBigIntWrap stores the low sz bits of value in two's complement while
+// accepting the full unsigned magnitude range (BitLen up to sz). Dictionary
+// integer keys keep this wider historical contract; StoreBigInt itself
+// enforces the signed range.
+func (b *Builder) storeBigIntWrap(value *big.Int, sz uint) error {
+	if value == nil {
+		return ErrNilBigInt
+	}
+	if sz > 257 {
+		return ErrTooBigSize
+	}
+	if sz == 0 {
+		if value.Sign() != 0 {
+			return ErrTooBigValue
+		}
+		return nil
+	}
+	if value.Sign() >= 0 {
 		if value.BitLen() > int(sz) {
 			return ErrTooBigValue
 		}

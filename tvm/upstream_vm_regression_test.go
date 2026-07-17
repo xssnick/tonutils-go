@@ -11,6 +11,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 type upstreamVMRegressionCase struct {
@@ -158,6 +159,26 @@ func gasFromResult(res *ExecutionResult) int64 {
 		return 0
 	}
 	return res.GasUsed
+}
+
+func TestUpstreamVMInfinityLoopStopsOnFiniteGasMax(t *testing.T) {
+	code := rawCodeCellFromBase64(t, "f3r4AJGQ6rDraIQ=")
+	stack, res, err := runRawCodeWithGas(code, upstreamVMRegressionGasLimit)
+	if err != nil {
+		t.Fatalf("run infinity-loop fixture: %v", err)
+	}
+	if res == nil {
+		t.Fatal("missing execution result")
+	}
+	if res.ExitCode != ^int64(vmerr.CodeOutOfGas) {
+		t.Fatalf("exit code = %d, want unhandled out of gas", res.ExitCode)
+	}
+	if res.Gas.Max != upstreamVMRegressionGasLimit || res.Gas.Limit != upstreamVMRegressionGasLimit {
+		t.Fatalf("gas limits after ACCEPT = max:%d limit:%d, want %d", res.Gas.Max, res.Gas.Limit, upstreamVMRegressionGasLimit)
+	}
+	if stack.Len() != 1 {
+		t.Fatalf("out-of-gas stack length = %d, want consumed-gas value", stack.Len())
+	}
 }
 
 func TestUpstreamVMRegressionsAreDeterministic(t *testing.T) {

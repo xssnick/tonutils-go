@@ -16,8 +16,8 @@ func init() {
 		func() vm.OP { return QXOR() },
 		func() vm.OP { return QLSHIFT() },
 		func() vm.OP { return QRSHIFT() },
-		func() vm.OP { return QLSHIFTCODE(0) },
-		func() vm.OP { return QRSHIFTCODE(0) },
+		func() vm.OP { return QLSHIFTCODE(1) },
+		func() vm.OP { return QRSHIFTCODE(1) },
 		func() vm.OP { return QPOW2() },
 	)
 }
@@ -60,7 +60,7 @@ func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.Si
 	}
 }
 
-func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int8, right bool) *helpers.AdvancedOP {
+func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int, right bool) *helpers.AdvancedOP {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,
@@ -175,11 +175,11 @@ func QRSHIFT() *helpers.SimpleOP {
 	return quietShiftOp("QRSHIFT", helpers.BytesPrefix(0xB7, 0xAD), true)
 }
 
-func QLSHIFTCODE(value int8) *helpers.AdvancedOP {
+func QLSHIFTCODE(value int) *helpers.AdvancedOP {
 	return quietShiftCodeOp("QLSHIFT#", helpers.BytesPrefix(0xB7, 0xAA), value, false)
 }
 
-func QRSHIFTCODE(value int8) *helpers.AdvancedOP {
+func QRSHIFTCODE(value int) *helpers.AdvancedOP {
 	return quietShiftCodeOp("QRSHIFT#", helpers.BytesPrefix(0xB7, 0xAB), value, true)
 }
 

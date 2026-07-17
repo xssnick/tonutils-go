@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -81,18 +80,6 @@ func TestBTOSLDREFLDGRAMSEdges(t *testing.T) {
 			t.Fatalf("LDGRAMS value = %s, want %s", got, want)
 		}
 	})
-
-	t.Run("ResultPushOverflowBranches", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreRef(cell.BeginCell().EndCell()).EndCell().MustBeginParse())
-		assertCellSliceVMErrorCode(t, LDREF().Interpret(st), vmerr.CodeStackOverflow)
-
-		st = newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreCoins(1).EndCell().MustBeginParse())
-		assertCellSliceVMErrorCode(t, LDGRAMS().Interpret(st), vmerr.CodeStackOverflow)
-	})
 }
 
 func FuzzTVMLDREFAndLDGRAMSRules(f *testing.F) {
@@ -150,23 +137,6 @@ func FuzzTVMLDREFAndLDGRAMSRules(f *testing.F) {
 			t.Fatalf("LDGRAMS value = %s, want %s", got, coins)
 		}
 	})
-}
-
-func fillLoadRefGramsStack(t *testing.T, st *vm.State, spare int) {
-	t.Helper()
-
-	for {
-		err := st.Stack.PushSmallInt(0)
-		if err != nil {
-			assertCellSliceVMErrorCode(t, err, vmerr.CodeStackOverflow)
-			break
-		}
-	}
-	for i := 0; i < spare; i++ {
-		if _, err := st.Stack.PopAny(); err != nil {
-			t.Fatalf("failed to free stack slot: %v", err)
-		}
-	}
 }
 
 func loadRefGramsSlice(bits uint, refs int) *cell.Slice {

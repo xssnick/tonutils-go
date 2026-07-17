@@ -151,7 +151,7 @@ func (c *Cell) ToBOCWithOptionsErr(opts BOCSerializeOptions) ([]byte, error) {
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	return ToBOCWithOptionsErr([]*Cell{c.rawCell()}, opts)
+	return ToBOCWithOptionsErr([]*Cell{c}, opts)
 }
 
 // AppendBOCWithOptions serializes c into BoC and appends the result to dst.
@@ -159,7 +159,7 @@ func (c *Cell) AppendBOCWithOptions(dst []byte, opts BOCSerializeOptions) ([]byt
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	return AppendBOCWithOptions(dst, []*Cell{c.rawCell()}, opts)
+	return AppendBOCWithOptions(dst, []*Cell{c}, opts)
 }
 
 func ComputeFileHash(root *Cell) []byte {
@@ -259,7 +259,9 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	if cell == nil {
 		return 0, fmt.Errorf("cell is nil")
 	}
-	cell = cell.rawCell()
+	if cell.IsVirtualized() {
+		return 0, ErrVirtualizedCell
+	}
 	if cell.IsLazy() {
 		if pos, found := s.findImportedCell(cell); found {
 			return pos, nil
@@ -269,7 +271,10 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		cell = loaded.rawCell()
+		if loaded.IsVirtualized() {
+			return 0, ErrVirtualizedCell
+		}
+		cell = loaded
 	}
 
 	hash := cell.getHash(_DataCellMaxLevel)

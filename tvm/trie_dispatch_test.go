@@ -85,7 +85,8 @@ func TestTVMMatchesF88111AsInMsgParams(t *testing.T) {
 
 func TestTVMOpcodeMatcherSlowPathLongestPrefix(t *testing.T) {
 	machine := &TVM{}
-	machine.dispatches[vm.MaxSupportedGlobalVersion] = newOpcodeDispatch()
+	dispatch := newOpcodeDispatch()
+	machine.dispatches[vm.MaxSupportedGlobalVersion] = dispatch
 	shortPrefix := cell.BeginCell().MustStoreUInt(0xa5, 8).EndCell().MustBeginParse()
 	longPrefix := cell.BeginCell().
 		MustStoreUInt(0xa5, 8).
@@ -94,8 +95,9 @@ func TestTVMOpcodeMatcherSlowPathLongestPrefix(t *testing.T) {
 		EndCell().
 		MustBeginParse()
 
-	machine.addTriePrefix(shortPrefix, trieDispatchTestGetter("short"))
-	machine.addTriePrefix(longPrefix, trieDispatchTestGetter("long"))
+	dispatch.addPrefix(shortPrefix, trieDispatchTestGetter("short"))
+	dispatch.addPrefix(longPrefix, trieDispatchTestGetter("long"))
+	dispatch.buildFastTable()
 	if machine.dispatches[vm.MaxSupportedGlobalVersion].maxPrefixLen <= 64 {
 		t.Fatalf("max prefix len = %d, want slow matcher path", machine.dispatches[vm.MaxSupportedGlobalVersion].maxPrefixLen)
 	}
@@ -148,9 +150,9 @@ func TestTVMOpcodeMatcherCompoundInvalidCatchAll(t *testing.T) {
 	}{
 		{name: "valid_adddivmod", code: opmath.ADDDIVMOD().Serialize().EndCell(), text: "ADDDIVMOD"},
 		{name: "invalid_divmod_suffix", code: cell.BeginCell().MustStoreUInt(0xa903, 16).EndCell(), text: "DIV/MOD<invalid>"},
-		{name: "valid_addrshift_code_mod", code: opmath.ADDRSHIFTCODEMOD(0).Serialize().EndCell(), text: "1 ADDRSHIFT#MOD"},
+		{name: "valid_addrshift_code_mod", code: opmath.ADDRSHIFTCODEMOD(1).Serialize().EndCell(), text: "1 ADDRSHIFT#MOD"},
 		{name: "invalid_addrshift_code_mod_suffix", code: cell.BeginCell().MustStoreUInt(0xa93300, 24).EndCell(), text: "SHR#/MOD<invalid>"},
-		{name: "valid_mulrshift_code_mod", code: opmath.MULRSHIFTCODEMOD(0).Serialize().EndCell(), text: "1 MULRSHIFT#MOD"},
+		{name: "valid_mulrshift_code_mod", code: opmath.MULRSHIFTCODEMOD(1).Serialize().EndCell(), text: "1 MULRSHIFT#MOD"},
 		{name: "invalid_mulrshift_code_mod_suffix", code: cell.BeginCell().MustStoreUInt(0xa9b300, 24).EndCell(), text: "MULSHR#/MOD<invalid>"},
 		{name: "valid_lshiftdivmod_code", code: cell.BeginCell().MustStoreUInt(0xa9dc00, 24).EndCell(), text: "1 LSHIFTDIVMOD#"},
 		{name: "invalid_lshiftdivmod_code_suffix", code: cell.BeginCell().MustStoreUInt(0xa9d300, 24).EndCell(), text: "SHLDIV#/MOD<invalid>"},

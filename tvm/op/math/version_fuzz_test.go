@@ -79,13 +79,13 @@ func TestFuzzMathSmallShiftCoversBoundarySeeds(t *testing.T) {
 	}
 }
 
-func fuzzMathSmallImmediate(raw int64) int8 {
-	return int8(fuzzMathNonNegativeModulo(raw, 16) + 1)
+func fuzzMathSmallImmediate(raw int64) int {
+	return int(fuzzMathNonNegativeModulo(raw, 16) + 1)
 }
 
 func TestFuzzMathSmallImmediateNormalizesArbitrarySeeds(t *testing.T) {
 	for raw := int64(0); raw < 16; raw++ {
-		if got := fuzzMathSmallImmediate(raw); got != int8(raw+1) {
+		if got := fuzzMathSmallImmediate(raw); got != int(raw+1) {
 			t.Fatalf("seed immediate %d mapped to %d, want %d", raw, got, raw+1)
 		}
 	}
@@ -310,6 +310,7 @@ func FuzzTVMVersionedImmediateShiftNaNRules(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, rawVersion int64, rawOp, rawShift uint8) {
 		version := fuzzMathVersion(rawVersion)
+		shift := int(rawShift) + 1
 		st := newMathCoverageState()
 		st.GlobalVersion = version
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
@@ -319,28 +320,32 @@ func FuzzTVMVersionedImmediateShiftNaNRules(f *testing.F) {
 		var err error
 		switch rawOp % 4 {
 		case 0:
-			err = LSHIFTCODE(int8(rawShift)).Interpret(st)
-			fuzzMathExpectVMError(t, err, vmerr.CodeIntOverflow)
-			return
+			err = LSHIFTCODE(shift).Interpret(st)
+			if version >= 14 || shift < cppBigIntWordShift {
+				fuzzMathExpectVMError(t, err, vmerr.CodeIntOverflow)
+				return
+			}
 		case 1:
-			err = RSHIFTCODE(int8(rawShift)).Interpret(st)
+			err = RSHIFTCODE(shift).Interpret(st)
 			if version >= 14 {
 				fuzzMathExpectVMError(t, err, vmerr.CodeIntOverflow)
 				return
 			}
 		case 2:
-			err = QLSHIFTCODE(int8(rawShift)).Interpret(st)
+			err = QLSHIFTCODE(shift).Interpret(st)
 			if err != nil {
 				t.Fatalf("QLSHIFT# version=%d failed: %v", version, err)
 			}
-			got, err := st.Stack.PopAny()
-			if err != nil {
-				t.Fatalf("pop QLSHIFT# result: %v", err)
+			if version >= 14 || shift < cppBigIntWordShift {
+				got, err := st.Stack.PopAny()
+				if err != nil {
+					t.Fatalf("pop QLSHIFT# result: %v", err)
+				}
+				requireMathNaN(t, got)
+				return
 			}
-			requireMathNaN(t, got)
-			return
 		default:
-			err = QRSHIFTCODE(int8(rawShift)).Interpret(st)
+			err = QRSHIFTCODE(shift).Interpret(st)
 			if version >= 14 {
 				if err != nil {
 					t.Fatalf("QRSHIFT# version=%d failed: %v", version, err)
@@ -357,8 +362,14 @@ func FuzzTVMVersionedImmediateShiftNaNRules(f *testing.F) {
 		if err != nil {
 			t.Fatalf("immediate shift op version=%d kind=%d failed: %v", version, rawOp%4, err)
 		}
-		if got := popMathCoverageInt(t, st); got != 0 {
-			t.Fatalf("immediate shift op version=%d kind=%d result = %d, want 0", version, rawOp%4, got)
+		want := int64(0)
+		if rawOp%4 == 1 || rawOp%4 == 3 {
+			if shift > cppBigIntWordBits-cppBigIntWordShift {
+				want = -1
+			}
+		}
+		if got := popMathCoverageInt(t, st); got != want {
+			t.Fatalf("immediate shift op version=%d kind=%d shift=%d result = %d, want %d", version, rawOp%4, shift, got, want)
 		}
 	})
 }
@@ -399,12 +410,12 @@ func FuzzTVMVersionedShrModRoundCeilNaNRules(f *testing.F) {
 			if err = st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push NaN: %v", err)
 			}
-			err = RSHIFTRCODE(int8(rawShift)).Interpret(st)
+			err = RSHIFTRCODE(int(rawShift) + 1).Interpret(st)
 		default:
 			if err = st.Stack.PushAny(vm.NaN{}); err != nil {
 				t.Fatalf("push NaN: %v", err)
 			}
-			err = RSHIFTCCODE(int8(rawShift)).Interpret(st)
+			err = RSHIFTCCODE(int(rawShift) + 1).Interpret(st)
 		}
 
 		if version >= 14 {
@@ -445,7 +456,7 @@ func FuzzTVMRShiftFloorRelations(f *testing.F) {
 		var err error
 		if immediate {
 			encoded := uint64(uint8(rawShift))
-			op := RSHIFTCODEFLOOR(0)
+			op := RSHIFTCODEFLOOR(1)
 			if op.DeserializeSuffix == nil {
 				t.Fatal("RSHIFT# floor must have a suffix decoder")
 			}
@@ -516,14 +527,14 @@ func FuzzTVMRoundedRightShiftNaNRules(f *testing.F) {
 			err = RSHIFTC().Interpret(st)
 			expectRoundedDynamicNaNShift(t, err, st, shift)
 		case 2:
-			op := RSHIFTRCODE(0)
+			op := RSHIFTRCODE(1)
 			if err := op.DeserializeSuffix(vmCellWithByte(t, uint64(uint8(rawShift)))); err != nil {
 				t.Fatalf("decode RSHIFTR# suffix: %v", err)
 			}
 			err = op.Interpret(st)
 			expectRoundedImmediateNaNShift(t, err, st)
 		default:
-			op := RSHIFTCCODE(0)
+			op := RSHIFTCCODE(1)
 			if err := op.DeserializeSuffix(vmCellWithByte(t, uint64(uint8(rawShift)))); err != nil {
 				t.Fatalf("decode RSHIFTC# suffix: %v", err)
 			}
@@ -692,7 +703,7 @@ func FuzzTVMMulImmediateShiftModNaNRules(f *testing.F) {
 			pushMathCoverageInts(t, st, 3)
 		}
 
-		shift := int8(rawShift)
+		shift := int(rawShift) + 1
 		var err error
 		switch rawOp % 6 {
 		case 0:

@@ -9,10 +9,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return MODPOW2CCODE(0) })
+	vm.List = append(vm.List, func() vm.OP { return MODPOW2CCODE(1) })
 }
 
-func MODPOW2CCODE(value int8) (op *helpers.AdvancedOP) {
+func MODPOW2CCODE(value int) (op *helpers.AdvancedOP) {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,

@@ -10,7 +10,7 @@ import (
 func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return RSHIFTFLOOR() },
-		func() vm.OP { return RSHIFTCODEFLOOR(0) },
+		func() vm.OP { return RSHIFTCODEFLOOR(1) },
 	)
 }
 
@@ -39,7 +39,7 @@ func RSHIFTFLOOR() *helpers.SimpleOP {
 	}
 }
 
-func RSHIFTCODEFLOOR(value int8) *helpers.AdvancedOP {
+func RSHIFTCODEFLOOR(value int) *helpers.AdvancedOP {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	return &helpers.AdvancedOP{
 		FixedSizeBits: 8,

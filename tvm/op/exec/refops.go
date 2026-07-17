@@ -41,11 +41,11 @@ func JMPREF(code *cell.Cell) vm.OP {
 
 func JMPREFDATA(code *cell.Cell) vm.OP {
 	return bindRefCodeOp(newRefCodeOp("JMPREFDATA", helpers.BytesPrefix(0xDB, 0x3E), 1, func(state *vm.State, refs []*cell.Cell) error {
-		if err := pushCurrentCode(state); err != nil {
-			return err
-		}
 		cont, err := loadContinuationFromCodeCell(state, refs[0])
 		if err != nil {
+			return err
+		}
+		if err = pushCurrentCode(state); err != nil {
 			return err
 		}
 		return state.Jump(cont)

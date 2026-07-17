@@ -27,16 +27,13 @@ type PreparedAccount struct {
 // account); it may be nil for existing accounts, whose address comes from the
 // parsed state.
 func PrepareAccount(shard *tlb.ShardAccount, addr *address.Address) (*PreparedAccount, error) {
-	if shard == nil {
-		return nil, errors.New("shard account is required")
-	}
-	if shard.Account == nil {
-		return nil, errors.New("shard account root is nil")
+	if err := validateTransactionShardAccount(shard); err != nil {
+		return nil, err
 	}
 
 	var state tlb.AccountState
-	if err := tlb.Parse(&state, shard.Account); err != nil {
-		return nil, fmt.Errorf("failed to decode account state: %w", err)
+	if err := parseTransactionAccountStateExact(&state, shard.Account); err != nil {
+		return nil, err
 	}
 	return prepareAccountFromState(shard, &state, addr, nil, nil)
 }
@@ -44,13 +41,254 @@ func PrepareAccount(shard *tlb.ShardAccount, addr *address.Address) (*PreparedAc
 // PrepareParsedAccount wraps an already-parsed shard account state; state must
 // be the parsed form of shard.Account.
 func PrepareParsedAccount(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address) (*PreparedAccount, error) {
-	if shard == nil {
-		return nil, errors.New("shard account is required")
+	if err := validateTransactionShardAccount(shard); err != nil {
+		return nil, err
 	}
 	if state == nil {
 		return nil, errors.New("parsed account state is required")
 	}
+	if err := validateTransactionAccountStructure(shard.Account); err != nil {
+		return nil, fmt.Errorf("invalid account state structure: %w", err)
+	}
+
+	stateCell, err := state.ToCell()
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize parsed account state: %w", err)
+	}
+	if stateCell.HashKey() != shard.Account.HashKey() {
+		return nil, errors.New("parsed account state does not match shard account root")
+	}
+
 	return prepareAccountFromState(shard, state, addr, nil, nil)
+}
+
+func validateTransactionShardAccount(shard *tlb.ShardAccount) error {
+	if shard == nil {
+		return errors.New("shard account is required")
+	}
+	if shard.Account == nil {
+		return errors.New("shard account root is nil")
+	}
+	if len(shard.LastTransHash) != 32 {
+		return fmt.Errorf("shard account last transaction hash must be 32 bytes, got %d", len(shard.LastTransHash))
+	}
+	return nil
+}
+
+func parseTransactionAccountStateExact(state *tlb.AccountState, root *cell.Cell) error {
+	if err := validateTransactionAccountStructure(root); err != nil {
+		return fmt.Errorf("invalid account state structure: %w", err)
+	}
+
+	loader, err := root.BeginParse()
+	if err != nil {
+		return fmt.Errorf("failed to decode account state: %w", err)
+	}
+	if err = tlb.LoadFromCell(state, loader); err != nil {
+		return fmt.Errorf("failed to decode account state: %w", err)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		return fmt.Errorf("account state has trailing data: %d bits, %d refs", loader.BitsLeft(), loader.RefsNum())
+	}
+	return nil
+}
+
+// validateTransactionAccountStructure mirrors t_ShardAccount.validate_csr and
+// the stricter Account::unpack address rule. StateInit.library deliberately
+// remains an opaque reference here; only message StateInitWithLibs uses the
+// HashmapE 256 SimpleLib schema in the reference implementation.
+func validateTransactionAccountStructure(root *cell.Cell) error {
+	var loader cell.Slice
+	if err := root.BeginParseInto(&loader); err != nil {
+		return err
+	}
+
+	exists, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return transactionRequireEmptySlice(&loader)
+	}
+
+	if err = validateTransactionAccountAddress(&loader); err != nil {
+		return err
+	}
+	if err = validateTransactionVarUInteger(&loader, 7, 3, false); err != nil {
+		return fmt.Errorf("invalid storage cells usage: %w", err)
+	}
+	if err = validateTransactionVarUInteger(&loader, 7, 3, false); err != nil {
+		return fmt.Errorf("invalid storage bits usage: %w", err)
+	}
+
+	storageExtra, err := loader.LoadUInt(3)
+	if err != nil {
+		return err
+	}
+	switch storageExtra {
+	case 0:
+	case 1:
+		if err = loader.SkipBits(256); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("invalid storage extra tag %d", storageExtra)
+	}
+	if err = loader.SkipBits(32); err != nil {
+		return err
+	}
+
+	hasDuePayment, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+	if hasDuePayment {
+		if err = validateTransactionVarUInteger(&loader, 16, 4, false); err != nil {
+			return fmt.Errorf("invalid due payment: %w", err)
+		}
+	}
+
+	if err = loader.SkipBits(64); err != nil {
+		return err
+	}
+	if err = validateTransactionVarUInteger(&loader, 16, 4, false); err != nil {
+		return fmt.Errorf("invalid account balance: %w", err)
+	}
+	if err = validateTransactionExtraCurrencies(&loader); err != nil {
+		return err
+	}
+	if err = validateTransactionAccountState(&loader); err != nil {
+		return err
+	}
+	return transactionRequireEmptySlice(&loader)
+}
+
+func validateTransactionAccountAddress(loader *cell.Slice) error {
+	tag, err := loader.LoadUInt(2)
+	if err != nil {
+		return err
+	}
+	if tag != 2 {
+		return fmt.Errorf("existing account address must be addr_std, got tag %d", tag)
+	}
+
+	hasAnycast, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+	if hasAnycast {
+		depth, err := loader.LoadUInt(5)
+		if err != nil {
+			return err
+		}
+		if depth == 0 || depth > 30 {
+			return fmt.Errorf("invalid account anycast depth %d", depth)
+		}
+		if err = loader.SkipBits(uint(depth)); err != nil {
+			return err
+		}
+	}
+	return loader.SkipBits(8 + 256)
+}
+
+func validateTransactionVarUInteger(loader *cell.Slice, limit uint64, lengthBits uint, positive bool) error {
+	length, err := loader.LoadUInt(lengthBits)
+	if err != nil {
+		return err
+	}
+	if length >= limit || (positive && length == 0) {
+		return fmt.Errorf("invalid length %d", length)
+	}
+	if length == 0 {
+		return nil
+	}
+
+	first, err := loader.PreloadUInt(8)
+	if err != nil {
+		return err
+	}
+	if first == 0 {
+		return errors.New("leading zero byte")
+	}
+	return loader.SkipBits(uint(length * 8))
+}
+
+func validateTransactionExtraCurrencies(loader *cell.Slice) error {
+	hasExtra, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+	if !hasExtra {
+		return nil
+	}
+
+	root, err := loader.LoadRefCell()
+	if err != nil {
+		return err
+	}
+	ok, err := root.AsDict(32).ValidateCheck(validateTransactionExtraCurrencyValue, false)
+	if err != nil {
+		return fmt.Errorf("invalid extra currencies dictionary: %w", err)
+	}
+	if !ok {
+		return errors.New("invalid extra currencies dictionary")
+	}
+	return nil
+}
+
+func validateTransactionExtraCurrencyValue(value *cell.Slice, _ *cell.Cell) (bool, error) {
+	if err := validateTransactionVarUInteger(value, 32, 5, true); err != nil {
+		return false, err
+	}
+	if err := transactionRequireEmptySlice(value); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func validateTransactionAccountState(loader *cell.Slice) error {
+	active, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+	if active {
+		return validateTransactionStateInit(loader)
+	}
+
+	frozen, err := loader.LoadBoolBit()
+	if err != nil {
+		return err
+	}
+	if frozen {
+		return loader.SkipBits(256)
+	}
+	return nil
+}
+
+func validateTransactionStateInit(loader *cell.Slice) error {
+	for _, bits := range [...]uint{5, 2} {
+		hasValue, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+		if hasValue {
+			if err = loader.SkipBits(bits); err != nil {
+				return err
+			}
+		}
+	}
+	for range 3 {
+		hasRef, err := loader.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+		if hasRef {
+			if _, err = loader.LoadRefCell(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func prepareAccountFromState(shard *tlb.ShardAccount, state *tlb.AccountState, addr *address.Address, storageCell, storageCellForStat *cell.Cell) (*PreparedAccount, error) {
@@ -118,8 +356,8 @@ func (a *PreparedAccount) runtimeForExecution(buildProof bool) (*transactionRunt
 	proof := cell.NewMerkleProofBuilder(a.shard.Account)
 
 	var state tlb.AccountState
-	if err := tlb.Parse(&state, proof.Root()); err != nil {
-		return nil, nil, fmt.Errorf("failed to decode account state: %w", err)
+	if err := parseTransactionAccountStateExact(&state, proof.Root()); err != nil {
+		return nil, nil, err
 	}
 	runtime, err := loadTransactionRuntimeAccountState(a.shard, &state, a.runtime.addr, true)
 	if err != nil {
@@ -130,7 +368,6 @@ func (a *PreparedAccount) runtimeForExecution(buildProof bool) (*transactionRunt
 
 func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.AccountState, fallbackAddr *address.Address, buildStorageCell bool) (*transactionRuntimeAccount, error) {
 	out := &transactionRuntimeAccount{
-		addr:            fallbackAddr,
 		status:          tlb.AccountStatusNonExist,
 		storageInfo:     tlb.StorageInfo{StorageExtra: tlb.StorageExtraNone{}},
 		balance:         big.NewInt(0),
@@ -139,6 +376,9 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 		originalCell:    shard.Account,
 		extraCurrencies: nil,
 	}
+	if err := out.setAddressIdentity(fallbackAddr); err != nil {
+		return nil, err
+	}
 	if !acc.IsValid {
 		if out.addr == nil {
 			return nil, errors.New("account address is required for non-existing shard account")
@@ -146,7 +386,17 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 		return out, nil
 	}
 
-	out.addr = acc.Address
+	fallbackIdentity := out.addr
+	if err := out.setAddressIdentity(acc.Address); err != nil {
+		return nil, err
+	}
+	if fallbackIdentity != nil {
+		if fallbackIdentity.Type() != address.StdAddress || out.addr.Type() != address.StdAddress ||
+			fallbackIdentity.Workchain() != out.addr.Workchain() || fallbackIdentity.BitsLen() != 256 || out.addr.BitsLen() != 256 ||
+			!bytes.Equal(fallbackIdentity.Data(), out.addr.Data()) {
+			return nil, errors.New("existing account address does not match requested account")
+		}
+	}
 	out.status = acc.Status
 	out.storageInfo = acc.StorageInfo
 	if out.storageInfo.StorageExtra == nil {
@@ -155,6 +405,11 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 	out.balance = new(big.Int).Set(acc.Balance.Nano())
 	out.extraCurrencies = acc.ExtraCurrencies
 	out.storageLT = acc.LastTransactionLT
+	// the reference requires max(storage.last_trans_lt, 1) > shard last_trans_lt
+	// for an existing account
+	if lt := max(out.storageLT, 1); lt <= out.prevTxLT {
+		return nil, fmt.Errorf("account storage last transaction lt %d is not after shard account lt %d", out.storageLT, out.prevTxLT)
+	}
 	out.stateHash = append([]byte(nil), acc.StateHash...)
 	if buildStorageCell {
 		storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.Nano(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
@@ -171,6 +426,31 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 		out.tickTock = acc.StateInit.TickTock
 	}
 	return out, nil
+}
+
+func (a *transactionRuntimeAccount) setAddressIdentity(raw *address.Address) error {
+	a.addrRaw = raw
+	a.addrExact = raw
+	a.addr = raw
+	a.addrRewriteDepth = 0
+	a.addrIdentityDerived = true
+	if raw == nil {
+		return nil
+	}
+
+	anycast := raw.Anycast()
+	if anycast == nil {
+		return nil
+	}
+	a.addrRewriteDepth = uint64(anycast.Depth())
+
+	exact, err := transactionAccountIDAddr(raw)
+	if err != nil {
+		return err
+	}
+	a.addr = exact
+	a.addrExact = exact
+	return nil
 }
 
 func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedBlockchainConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
@@ -264,22 +544,24 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 			due.Sub(storageFee, p.balance)
 			p.balance.SetInt64(0)
 
-			switch p.status {
-			case tlb.AccountStatusUninit, tlb.AccountStatusFrozen, tlb.AccountStatusNonExist:
-				if due.Cmp(limits.deleteDue) > 0 && transactionExtraDictIsEmpty(p.extraCurrencies) {
-					p.deleted = true
-					p.destroyed = globalVersion >= 13
-					p.status = tlb.AccountStatusNonExist
-					statusChange.Type = tlb.AccStatusChangeDeleted
+			if !acc.isSpecial {
+				switch p.status {
+				case tlb.AccountStatusUninit, tlb.AccountStatusFrozen, tlb.AccountStatusNonExist:
+					if due.Cmp(limits.deleteDue) > 0 && transactionExtraDictIsEmpty(p.extraCurrencies) {
+						p.deleted = true
+						p.destroyed = globalVersion >= 13
+						p.status = tlb.AccountStatusNonExist
+						statusChange.Type = tlb.AccStatusChangeDeleted
+					}
+				case tlb.AccountStatusActive:
+					if due.Cmp(limits.freezeDue) > 0 {
+						p.status = tlb.AccountStatusFrozen
+						statusChange.Type = tlb.AccStatusChangeFrozen
+					}
 				}
-			case tlb.AccountStatusActive:
-				if due.Cmp(limits.freezeDue) > 0 {
-					p.status = tlb.AccountStatusFrozen
-					statusChange.Type = tlb.AccStatusChangeFrozen
+				if globalVersion >= 4 {
+					p.duePayment = transactionCoinsPtr(due)
 				}
-			}
-			if globalVersion >= 4 {
-				p.duePayment = transactionCoinsPtr(due)
 			}
 		}
 	}
@@ -322,8 +604,9 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 	}
 
 	stateDepth := transactionCloneUint64(acc.stateDepth)
-	if cfg.globalVersion() < 10 && acc.addr != nil && acc.addr.Anycast() != nil {
-		depth := uint64(acc.addr.Anycast().Depth())
+	rewriteDepth := acc.rewriteDepth()
+	if cfg.globalVersion() < 10 && rewriteDepth != 0 {
+		depth := rewriteDepth
 		stateDepth = &depth
 	}
 
@@ -358,10 +641,7 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		return nil, fmt.Errorf("unsupported final account status %s", status)
 	}
 
-	accountAddr, err := transactionAccountSerializationAddr(acc.addr, cfg)
-	if err != nil {
-		return nil, err
-	}
+	accountAddr := acc.vmAddress(cfg.globalVersion())
 	storageBuilder, err := buildTransactionAccountStorageBuilder(status, endLT, balance, extraCurrencies, accountStorage.StateInit, accountStorage.StateHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize account storage: %w", err)
@@ -595,11 +875,15 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 	if dictRoot == nil {
 		return nil, nil
 	}
-	if dictHash != nil && !transactionHashIsZero(dictHash) {
-		rootHash := dictRoot.HashKey()
-		if !bytes.Equal(rootHash[:], dictHash) {
-			return nil, errors.New("account storage stat root hash does not match account storage extra")
-		}
+	// The reference reuses a carried-in storage stat only when the account
+	// metadata records storage_dict_hash and it matches; without a hash the
+	// hint is ignored and the stat is recomputed from scratch.
+	if dictHash == nil || transactionHashIsZero(dictHash) {
+		return nil, nil
+	}
+	rootHash := dictRoot.HashKey()
+	if !bytes.Equal(rootHash[:], dictHash) {
+		return nil, errors.New("account storage stat root hash does not match account storage extra")
 	}
 
 	totalCells := transactionStorageUsedUint64(storageUsed.CellsUsed)
@@ -1119,9 +1403,6 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		return acc, false, &tlb.ComputeSkipReason{Type: transactionNoStateSkipReason(stateInit)}, nil
 	}
 	if status == tlb.AccountStatusActive {
-		if acc.code == nil {
-			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoState}, nil
-		}
 		if stateInit != nil && msg.MsgType == tlb.MsgTypeExternalIn {
 			stateCell, err := tlb.ToCell(stateInit)
 			if err != nil {
@@ -1159,7 +1440,19 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		if !transactionStateInitMatchesAddress(stateHash[:], acc.addr, stateInit.Depth) {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
+		if msg.MsgType == tlb.MsgTypeExternalIn && cfg.globalVersion() < 8 && !bytes.Equal(stateHash[:], acc.addr.Data()) {
+			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
+		}
 	case tlb.AccountStatusFrozen:
+		var stateDepth uint64
+		if stateInit.Depth != nil {
+			stateDepth = *stateInit.Depth
+		}
+		var accountDepth uint64
+		accountDepth = acc.rewriteDepth()
+		if stateDepth != accountDepth {
+			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
+		}
 		stateHash := stateCell.HashKey()
 		if !bytes.Equal(stateHash[:], acc.stateHash) {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
@@ -1176,7 +1469,7 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 	if status == tlb.AccountStatusUninit && transactionIsMasterchain(acc.addr) && transactionPublicLibrariesCount(stateInit.Lib) > 0 {
 		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 	}
-	exceedsLimits, err := transactionAccountStateExceedsLimits(acc, stateInit.Code, stateInit.Data, stateInit.Lib, cfg)
+	exceedsLimits, err := transactionAccountStateExceedsLimits(acc, stateInit.Code, stateInit.Data, stateInit.Lib, cfg, false)
 	if err != nil {
 		return nil, false, nil, err
 	}

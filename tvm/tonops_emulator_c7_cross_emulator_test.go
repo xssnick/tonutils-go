@@ -217,7 +217,7 @@ func runTonOpsEmulatorC7PathVersionCase(t *testing.T, tt tonOpsEmulatorC7Case, v
 		Now:        uint32(tonopsTestTime.Unix()),
 		Balance:    new(big.Int).Set(tonopsTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
-		Config:     MustPrepareBlockchainConfig(configRoot),
+		Config:     mustPrepareLenientTestConfig(configRoot),
 		GlobalID:   tonopsTestGlobalID,
 		PrevBlocks: tt.prevBlocks,
 	}, new(big.Int).Set(tonopsTestBalance), uint32(version))

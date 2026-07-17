@@ -297,7 +297,7 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 			Now:      now,
 			Balance:  balance,
 			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-			Config:   MustPrepareBlockchainConfig(configRoot),
+			Config:   mustPrepareLenientTestConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
 				Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -312,7 +312,7 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 			Now:      now,
 			Balance:  balance,
 			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-			Config:   MustPrepareBlockchainConfig(configRoot),
+			Config:   mustPrepareLenientTestConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    DefaultExternalMessageGasMax,
 				Credit: DefaultExternalMessageGasCredit,
@@ -433,7 +433,7 @@ func assertDirectMessageGlobalVersionOverrideParity(t *testing.T, version, machi
 		Now:      now,
 		Balance:  balance,
 		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:   MustPrepareBlockchainConfig(refConfigRoot),
+		Config:   mustPrepareLenientTestConfig(refConfigRoot),
 	}
 
 	var goRes *MessageExecutionResult
@@ -506,7 +506,7 @@ func assertDirectMessageBuildProofLibrariesVersionParity(t *testing.T, version i
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(configRoot),
+		Config:      mustPrepareLenientTestConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
@@ -600,7 +600,7 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(refConfigRoot),
+		Config:      mustPrepareLenientTestConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
@@ -801,7 +801,7 @@ func assertDirectMessageBuildProofVersionParity(t *testing.T, version int, inter
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(configRoot),
+		Config:      mustPrepareLenientTestConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
@@ -883,7 +883,7 @@ func assertDirectMessageBuildProofGlobalVersionOverrideParity(t *testing.T, vers
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(refConfigRoot),
+		Config:      mustPrepareLenientTestConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}

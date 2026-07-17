@@ -98,7 +98,7 @@ func crossRunPreparedBlockchainConfig(globalVersion int) (*PreparedBlockchainCon
 	if err = dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
 		return nil, err
 	}
-	return PrepareBlockchainConfig(dict.AsCell())
+	return prepareBlockchainConfigLenient(dict.AsCell())
 }
 
 func tupleToStackCell(v tuple.Tuple) (*cell.Cell, error) {

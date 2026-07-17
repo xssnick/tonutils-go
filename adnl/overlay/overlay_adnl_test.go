@@ -85,10 +85,10 @@ func TestADNLOverlaySetAuthorizedKeysCopiesInput(t *testing.T) {
 	input["a"] = 1
 	input["b"] = 2
 
-	if o.authorizedKeys["a"] != 11 {
+	if maxSize, ok := o.authorizedKey("a"); !ok || maxSize != 11 {
 		t.Fatalf("expected key map copy to preserve original values")
 	}
-	if _, ok := o.authorizedKeys["b"]; ok {
+	if _, ok := o.authorizedKey("b"); ok {
 		t.Fatalf("unexpected copied key from mutated input")
 	}
 }
@@ -134,7 +134,7 @@ func TestProcessBroadcastSimpleDeliversDedupsAndRelays(t *testing.T) {
 	localPeer := &mockBroadcastPeer{id: bytes.Repeat([]byte{0x23}, 32)}
 	relayPeer := &mockBroadcastPeer{id: bytes.Repeat([]byte{0x24}, 32)}
 	state := NewBroadcastFECRelayState()
-	o.EnableBroadcastFECRelay(localPeer.id, mockBroadcastPeerSet{peers: []BroadcastPeer{
+	o.EnableBroadcastSimpleRelayForTest(localPeer.id, mockBroadcastPeerSet{peers: []BroadcastPeer{
 		&mockBroadcastPeer{id: sourcePeerID},
 		localPeer,
 		relayPeer,
@@ -154,7 +154,7 @@ func TestProcessBroadcastSimpleDeliversDedupsAndRelays(t *testing.T) {
 
 	handled := 0
 	var gotInfo BroadcastInfo
-	o.SetBroadcastHandlerWithInfo(func(got tl.Serializable, info BroadcastInfo) error {
+	o.SetBroadcastHandlerWithInfo(func(got tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		handled++
 		gotMsg, ok := got.(Message)
 		if !ok {
@@ -164,7 +164,7 @@ func TestProcessBroadcastSimpleDeliversDedupsAndRelays(t *testing.T) {
 			t.Fatalf("unexpected decoded payload overlay")
 		}
 		gotInfo = info
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	})
 
 	if err = o.processBroadcast(msg, sourcePeerID); err != nil {
@@ -173,7 +173,7 @@ func TestProcessBroadcastSimpleDeliversDedupsAndRelays(t *testing.T) {
 	if handled != 1 {
 		t.Fatalf("expected one delivery, got %d", handled)
 	}
-	if gotInfo.TwoStep || !gotInfo.Trusted || !bytes.Equal(gotInfo.BroadcastID, broadcastID) {
+	if gotInfo.Delivery != BroadcastDeliverySimple || !gotInfo.Trusted || !bytes.Equal(gotInfo.BroadcastID, broadcastID) {
 		t.Fatalf("unexpected broadcast info: %#v", gotInfo)
 	}
 	if len(relayPeer.sent) != 1 {
@@ -291,7 +291,7 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 		}
 	}
 
-	finished := signedBroadcastFEC(t, priv, rldp.FECRaptorQ{DataSize: 4, SymbolSize: 2, SymbolsCount: 2}, []byte{1, 2, 3, 4}, 4, BroadcastFlagAnySender)
+	finished := signedBroadcastFEC(t, priv, rldp.FECRaptorQ{DataSize: 4, SymbolSize: 2, SymbolsCount: 2}, []byte{1, 2}, 4, BroadcastFlagAnySender)
 	id, err := finished.CalcID()
 	if err != nil {
 		t.Fatalf("calc id failed: %v", err)
@@ -359,6 +359,16 @@ func TestProcessFECBroadcastDropsDuplicateBeforeSignature(t *testing.T) {
 	if err = o.processFECBroadcast(&duplicate); err != nil {
 		t.Fatalf("duplicate part should be dropped before signature check: %v", err)
 	}
+
+	conflicting := *part.full
+	conflicting.Data = append([]byte(nil), conflicting.Data...)
+	conflicting.Data[0] ^= 0xFF
+	if err = conflicting.Sign(priv); err != nil {
+		t.Fatalf("sign conflicting part: %v", err)
+	}
+	if err = o.processFECBroadcast(&conflicting); err == nil || !strings.Contains(err.Error(), "conflicting data") {
+		t.Fatalf("expected conflicting duplicate error, got %v", err)
+	}
 }
 
 func TestProcessFECBroadcastDeliveredCacheBeforeSignature(t *testing.T) {
@@ -403,7 +413,7 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 	}
 
 	handled := 0
-	o.SetBroadcastHandler(func(msg tl.Serializable, trusted bool) error {
+	o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		handled++
 		got, ok := msg.(Message)
 		if !ok {
@@ -412,7 +422,7 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 		if !bytes.Equal(got.Overlay, expectedOverlay) {
 			t.Fatalf("unexpected decoded payload")
 		}
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	})
 
 	part0, err := sender.part(0)
@@ -426,11 +436,8 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 	if handled != 1 {
 		t.Fatalf("expected one decoded broadcast, got %d", handled)
 	}
-	if len(m.sendCustomCalls) < 2 {
-		t.Fatalf("expected received/completed acks after decode")
-	}
-	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-2].(FECReceived); !ok {
-		t.Fatalf("expected FECReceived before completion ack, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-2])
+	if len(m.sendCustomCalls) != 1 {
+		t.Fatalf("expected one completion ack after admission, got %d", len(m.sendCustomCalls))
 	}
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
 		t.Fatalf("expected FECCompleted after decode, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
@@ -535,7 +542,7 @@ func TestProcessFECBroadcastDeliversWhenReceivedAckFails(t *testing.T) {
 	}
 
 	handled := 0
-	o.SetBroadcastHandler(func(msg tl.Serializable, trusted bool) error {
+	o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		handled++
 		got, ok := msg.(Message)
 		if !ok {
@@ -544,7 +551,7 @@ func TestProcessFECBroadcastDeliversWhenReceivedAckFails(t *testing.T) {
 		if !bytes.Equal(got.Overlay, expectedOverlay) {
 			t.Fatalf("unexpected decoded payload")
 		}
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	})
 
 	part0, err := sender.part(0)
@@ -625,13 +632,8 @@ func TestProcessFECBroadcastHandlerWithInfo(t *testing.T) {
 		t.Fatalf("source id hash failed: %v", err)
 	}
 
-	oldHandlerCalled := false
 	var gotInfo BroadcastInfo
-	o.SetBroadcastHandler(func(msg tl.Serializable, trusted bool) error {
-		oldHandlerCalled = true
-		return nil
-	})
-	o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) error {
+	o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 		got, ok := msg.(Message)
 		if !ok {
 			t.Fatalf("unexpected decoded payload type %T", msg)
@@ -640,7 +642,7 @@ func TestProcessFECBroadcastHandlerWithInfo(t *testing.T) {
 			t.Fatalf("unexpected decoded payload overlay")
 		}
 		gotInfo = info
-		return nil
+		return BroadcastDispositionAcceptAndRelay
 	})
 
 	part0, err := sender.part(0)
@@ -651,9 +653,6 @@ func TestProcessFECBroadcastHandlerWithInfo(t *testing.T) {
 		t.Fatalf("process full part 0 failed: %v", err)
 	}
 
-	if oldHandlerCalled {
-		t.Fatalf("legacy handler should not be called when handler with info is set")
-	}
 	if !bytes.Equal(gotInfo.SourceID, sourceID) {
 		t.Fatalf("unexpected source id: %x want %x", gotInfo.SourceID, sourceID)
 	}
@@ -949,16 +948,39 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 	if _, ok := fullPeer.sent[len(fullPeer.sent)-1].(*BroadcastFEC); !ok {
 		t.Fatalf("expected post-completion full FEC relay, got %T", fullPeer.sent[len(fullPeer.sent)-1])
 	}
+
+	before = len(fullPeer.sent)
+	duplicateRepair := *repairPart.full
+	duplicateRepair.Signature = []byte("bad signature")
+	if err = o.processFECBroadcast(&duplicateRepair); err != nil {
+		t.Fatalf("post-completion duplicate should be dropped before signature check: %v", err)
+	}
+	if len(fullPeer.sent) != before {
+		t.Fatalf("post-completion duplicate was relayed again")
+	}
+
+	conflictingRepair := *repairPart.full
+	conflictingRepair.Data = append([]byte(nil), conflictingRepair.Data...)
+	conflictingRepair.Data[0] ^= 0xFF
+	if err = conflictingRepair.Sign(priv); err != nil {
+		t.Fatalf("sign conflicting post-completion part: %v", err)
+	}
+	if err = o.processFECBroadcast(&conflictingRepair); err == nil || !strings.Contains(err.Error(), "conflicting data") {
+		t.Fatalf("expected post-completion conflicting duplicate error, got %v", err)
+	}
 }
 
 func TestBroadcastFECRelayWaitsForUntrustedCheck(t *testing.T) {
 	t.Run("reject", func(t *testing.T) {
-		w := CreateExtendedADNL(newMockADNL())
+		m := newMockADNL()
+		w := CreateExtendedADNL(m)
 		o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0xB1}, 32), 4096, true, false)
 		peer := &mockBroadcastPeer{id: bytes.Repeat([]byte{0xB2}, 32)}
 		o.EnableBroadcastFECRelay(bytes.Repeat([]byte{0xB3}, 32), mockBroadcastPeerSet{peers: []BroadcastPeer{peer}}, NewBroadcastFECRelayState())
-		o.SetBroadcastCheckHandler(func(msg tl.Serializable, info BroadcastInfo) error {
-			return errors.New("reject")
+		handled := 0
+		o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) BroadcastDisposition {
+			handled++
+			return BroadcastDispositionIgnore
 		})
 
 		_, priv := keyPairFromSeed(72)
@@ -971,15 +993,26 @@ func TestBroadcastFECRelayWaitsForUntrustedCheck(t *testing.T) {
 			t.Fatalf("part build failed: %v", err)
 		}
 
-		err = o.processFECBroadcast(part.full)
-		if err == nil || !strings.Contains(err.Error(), "reject") {
-			t.Fatalf("expected check error, got %v", err)
+		if err = o.processFECBroadcast(part.full); err != nil {
+			t.Fatalf("ignored broadcast processing failed: %v", err)
 		}
 		if len(peer.sent) != 0 {
 			t.Fatalf("untrusted rejected broadcast must not be relayed, got %d sends", len(peer.sent))
 		}
-		if stats := o.FECBroadcastStats(); stats.ActiveStreams != 0 || stats.ActiveBytes != 0 {
-			t.Fatalf("rejected untrusted broadcast must release FEC state, got %#v", stats)
+		if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECReceived); !ok {
+			t.Fatalf("ignored broadcast must be acknowledged as received")
+		}
+		if stats := o.FECBroadcastStats(); stats.ActiveStreams != 1 || stats.ActiveBytes != broadcastFECTerminalBudgetBytes || stats.CompletedTotal != 0 {
+			t.Fatalf("ignored untrusted broadcast must retain compact dedupe state, got %#v", stats)
+		}
+
+		duplicate := *part.full
+		duplicate.Signature = []byte("bad signature")
+		if err = o.processFECBroadcast(&duplicate); err != nil {
+			t.Fatalf("ignored duplicate should be suppressed before signature verification: %v", err)
+		}
+		if handled != 1 {
+			t.Fatalf("ignored duplicate reran handler: %d calls", handled)
 		}
 	})
 
@@ -989,9 +1022,9 @@ func TestBroadcastFECRelayWaitsForUntrustedCheck(t *testing.T) {
 		peer := &mockBroadcastPeer{id: bytes.Repeat([]byte{0xC2}, 32)}
 		o.EnableBroadcastFECRelay(bytes.Repeat([]byte{0xC3}, 32), mockBroadcastPeerSet{peers: []BroadcastPeer{peer}}, NewBroadcastFECRelayState())
 		checked := false
-		o.SetBroadcastCheckHandler(func(msg tl.Serializable, info BroadcastInfo) error {
+		o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) BroadcastDisposition {
 			checked = true
-			return nil
+			return BroadcastDispositionAcceptAndRelay
 		})
 
 		_, priv := keyPairFromSeed(73)
@@ -1017,4 +1050,60 @@ func TestBroadcastFECRelayWaitsForUntrustedCheck(t *testing.T) {
 			t.Fatalf("expected drained full FEC part, got %T", peer.sent[0])
 		}
 	})
+}
+
+func TestBroadcastFECRetryDoesNotAcknowledgeOrCommit(t *testing.T) {
+	m := newMockADNL()
+	w := CreateExtendedADNL(m)
+	o := w.CreateOverlayWithSettings(bytes.Repeat([]byte{0xD1}, 32), 4096, true, false)
+	handled := 0
+	o.SetBroadcastHandlerWithInfo(func(msg tl.Serializable, info BroadcastInfo) BroadcastDisposition {
+		handled++
+		if handled == 1 {
+			return BroadcastDispositionRetry
+		}
+		return BroadcastDispositionAcceptAndRelay
+	})
+
+	_, priv := keyPairFromSeed(74)
+	sender, err := NewBroadcastFECSenderFromTL(
+		priv,
+		CertificateEmpty{},
+		Message{Overlay: bytes.Repeat([]byte{0xD2}, 32)},
+		BroadcastFlagAnySender,
+		WithBroadcastFECSymbolSize(256),
+	)
+	if err != nil {
+		t.Fatalf("sender init failed: %v", err)
+	}
+	part, err := sender.part(0)
+	if err != nil {
+		t.Fatalf("part build failed: %v", err)
+	}
+
+	if err = o.processFECBroadcast(part.full); err != nil {
+		t.Fatalf("retryable FEC attempt failed: %v", err)
+	}
+	if len(m.sendCustomCalls) != 0 {
+		t.Fatalf("retryable FEC attempt sent %d control messages", len(m.sendCustomCalls))
+	}
+	if stats := o.FECBroadcastStats(); stats.ActiveStreams != 0 || stats.ActiveBytes != 0 || stats.DeliveredBroadcasts != 0 || stats.CompletedTotal != 0 {
+		t.Fatalf("retryable FEC attempt was committed: %#v", stats)
+	}
+
+	if err = o.processFECBroadcast(part.full); err != nil {
+		t.Fatalf("accepted FEC retry failed: %v", err)
+	}
+	if handled != 2 {
+		t.Fatalf("handler calls=%d, want retry plus accepted attempt", handled)
+	}
+	if len(m.sendCustomCalls) != 1 {
+		t.Fatalf("accepted retry control messages=%d, want 1", len(m.sendCustomCalls))
+	}
+	if _, ok := m.sendCustomCalls[0].(FECCompleted); !ok {
+		t.Fatalf("accepted retry control=%T, want FECCompleted", m.sendCustomCalls[0])
+	}
+	if stats := o.FECBroadcastStats(); stats.DeliveredBroadcasts != 1 || stats.CompletedTotal != 1 {
+		t.Fatalf("accepted FEC retry was not committed: %#v", stats)
+	}
 }

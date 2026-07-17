@@ -136,7 +136,11 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 		return nil, fmt.Errorf("reference emulator failed: %s", raw.Error)
 	}
 
-	stackOut, err := cellFromBocBase64(raw.Stack)
+	stackBOC, err := base64.StdEncoding.DecodeString(raw.Stack)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode reference stack: %w", err)
+	}
+	stackOut, err := cell.FromBOCWithOptions(stackBOC, cell.BOCParseOptions{AllowNonZeroLevelRoot: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode reference stack: %w", err)
 	}

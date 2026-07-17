@@ -36,10 +36,10 @@ func (r *Register) AdjustWith(r2 *Register) {
 }
 
 func (r *Register) Get(i int) any {
-	if i < 4 {
+	if uint(i) < 4 {
 		return r.C[i]
 	}
-	if i < 6 {
+	if i >= 4 && i < 6 {
 		return r.D[i-4]
 	}
 	if i == 7 {
@@ -164,12 +164,12 @@ type State struct {
 	loadedLibraries             map[cell.Hash]struct{}
 	maxDataDepth                uint16
 	Stack                       *Stack
-	Steps                       uint32
+	Steps                       uint64
 	StopOnAccept                bool
 	TraceHook                   TraceHook
 	SignatureCheckAlwaysSucceed bool
-	SignatureCheckCounter       uint32
-	GetExtraBalanceCounter      uint32
+	SignatureCheckCounter       uint64
+	GetExtraBalanceCounter      uint64
 	Committed                   CommittedState
 	childRunner                 ChildRunner
 
@@ -334,6 +334,9 @@ func (s *State) RunChild(child *State) (int64, error) {
 
 func (s *State) ConsumeGas(amount int64) error {
 	if !s.checkGasOnConsume() {
+		if amount < 0 {
+			return vmerr.Error(vmerr.CodeRangeCheck, "negative gas amount")
+		}
 		s.Gas.Remaining -= amount
 		return nil
 	}
@@ -410,6 +413,9 @@ func (s *State) ConsumeStackGas(stk *Stack) error {
 }
 
 func (s *State) ConsumeTupleGasLen(length int) error {
+	if length < 0 {
+		return vmerr.Error(vmerr.CodeRangeCheck, "negative tuple length")
+	}
 	return s.ConsumeGas(int64(length) * TupleEntryGasPrice)
 }
 

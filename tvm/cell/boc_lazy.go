@@ -352,7 +352,7 @@ func (l *lazyBOCLoader) deserializeDataCell(idx int) (*Cell, error) {
 		return nil, err
 	}
 
-	if c.IsSpecial() {
+	if c.IsSpecial() || !l.trustedHashes {
 		if err := validateBoundaryCell(c); err != nil {
 			return nil, err
 		}
@@ -378,30 +378,47 @@ func (l *lazyBOCLoader) createLazyCell(idx int) (*Cell, error) {
 		var depths [4]uint16
 		info.fillStoredDepths(l.payload, depths[:])
 
-		return createLazyPrunedRef(LazyRef{
+		c, err := createLazyPrunedRef(LazyRef{
 			LevelMask: levelMask,
 			Hashes:    info.hashes(l.payload),
 			Depths:    depths[:hashesCount],
 		}, func(Hash) (*Cell, error) {
 			return l.loadDataCell(idx)
 		})
+		if err != nil {
+			return nil, err
+		}
+		c.meta.skipLazyRefValidation = true
+		return c, nil
 	}
 
 	metaOffset := int(l.metaOffsets[idx])
 	hashesOffset := metaOffset * hashSize
-	return createLazyPrunedRef(LazyRef{
+	c, err := createLazyPrunedRef(LazyRef{
 		LevelMask: levelMask,
 		Hashes:    l.metaHashes[hashesOffset : hashesOffset+hashesCount*hashSize],
 		Depths:    l.metaDepths[metaOffset : metaOffset+hashesCount],
 	}, func(Hash) (*Cell, error) {
 		return l.loadDataCell(idx)
 	})
+	if err != nil {
+		return nil, err
+	}
+	if l.trustedHashes {
+		c.meta.skipLazyRefValidation = true
+	}
+	return c, nil
 }
 
 func (l *lazyBOCLoader) computeCellMeta(idx int) error {
 	typ, err := l.dataCellType(idx)
 	if err != nil {
 		return err
+	}
+	if l.cells[idx].isSpecial() {
+		if err = l.validateBoundaryCell(idx); err != nil {
+			return err
+		}
 	}
 	if typ == PrunedCellType {
 		if err = l.computePrunedCellMeta(idx); err != nil {
@@ -413,12 +430,7 @@ func (l *lazyBOCLoader) computeCellMeta(idx int) error {
 		}
 	}
 
-	if l.cells[idx].isSpecial() {
-		if err = l.validateBoundaryCell(idx); err != nil {
-			return err
-		}
-	}
-	if l.cells[idx].withHashes() && !l.trustedHashes {
+	if l.cells[idx].withHashes() {
 		if err = l.validateStoredCellMeta(idx); err != nil {
 			return err
 		}
@@ -437,6 +449,15 @@ func (l *lazyBOCLoader) computeRegularCellMeta(idx int, typ Type) error {
 	var refIndexes [4]int
 	for ref := 0; ref < refCnt; ref++ {
 		refIndexes[ref] = info.refIndex(l.payload, ref, l.refSzBytes)
+	}
+	if typ == OrdinaryCellType && !l.trustedHashes {
+		var expectedMask byte
+		for ref := 0; ref < refCnt; ref++ {
+			expectedMask |= l.cells[refIndexes[ref]].levelMask().Mask
+		}
+		if levelMask.Mask != expectedMask {
+			return fmt.Errorf("cell level mask mismatch")
+		}
 	}
 
 	hashIndex := 0

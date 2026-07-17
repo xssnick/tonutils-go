@@ -9,6 +9,155 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
+func TestPrepareAccountRequiresExactAccountCell(t *testing.T) {
+	valid := cell.BeginCell().MustStoreBoolBit(false).EndCell()
+	shard := func(account *cell.Cell) *tlb.ShardAccount {
+		return &tlb.ShardAccount{
+			Account:       account,
+			LastTransHash: make([]byte, 32),
+		}
+	}
+
+	if _, err := PrepareAccount(shard(valid), tonopsTestAddr); err != nil {
+		t.Fatalf("exact account cell was rejected: %v", err)
+	}
+
+	trailingBit := cell.BeginCell().
+		MustStoreBoolBit(false).
+		MustStoreBoolBit(true).
+		EndCell()
+	if _, err := PrepareAccount(shard(trailingBit), tonopsTestAddr); err == nil {
+		t.Fatal("account cell with a trailing bit was accepted")
+	}
+
+	trailingRef := cell.BeginCell().
+		MustStoreBoolBit(false).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		EndCell()
+	if _, err := PrepareAccount(shard(trailingRef), tonopsTestAddr); err == nil {
+		t.Fatal("account cell with a trailing reference was accepted")
+	}
+}
+
+func TestPrepareParsedAccountMatchesBackingCell(t *testing.T) {
+	state := &tlb.AccountState{
+		IsValid: true,
+		Address: tonopsTestAddr,
+		StorageInfo: tlb.StorageInfo{
+			StorageUsed: tlb.StorageUsed{
+				CellsUsed: big.NewInt(0),
+				BitsUsed:  big.NewInt(0),
+			},
+			StorageExtra: tlb.StorageExtraNone{},
+		},
+		AccountStorage: tlb.AccountStorage{
+			LastTransactionLT: 1,
+			Balance:           tlb.FromNanoTONU(1),
+			Status:            tlb.AccountStatusUninit,
+		},
+	}
+	stateCell, err := state.ToCell()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shard := &tlb.ShardAccount{
+		Account:       stateCell,
+		LastTransHash: make([]byte, 32),
+	}
+
+	if _, err = PrepareParsedAccount(shard, state, tonopsTestAddr); err != nil {
+		t.Fatalf("matching parsed account was rejected: %v", err)
+	}
+
+	mismatch := *state
+	addrData := append([]byte(nil), state.Address.Data()...)
+	addrData[len(addrData)-1] ^= 1
+	mismatch.Address = address.NewAddress(0, 0, addrData)
+	if _, err = PrepareParsedAccount(shard, &mismatch, tonopsTestAddr); err == nil {
+		t.Fatal("parsed account with a different identity was accepted")
+	}
+
+	backingWithSuffix := cell.BeginCell().
+		MustStoreBuilder(stateCell.ToBuilder()).
+		MustStoreBoolBit(true).
+		EndCell()
+	shard.Account = backingWithSuffix
+	if _, err = PrepareParsedAccount(shard, state, tonopsTestAddr); err == nil {
+		t.Fatal("parsed account was accepted with a suffixed backing cell")
+	}
+}
+
+func TestTransactionFrozenStateInitDepthMatchesExistingAnycast(t *testing.T) {
+	for _, depth := range []uint64{1, 30} {
+		t.Run(new(big.Int).SetUint64(depth).String(), func(t *testing.T) {
+			stateInit := &tlb.StateInit{
+				Depth: &depth,
+				Code:  cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
+				Data:  cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell(),
+			}
+			stateCell, err := tlb.ToCell(stateInit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			addr := address.NewAddress(0, 0, stateCell.Hash()).WithAnycast(
+				address.NewAnycast(uint(depth), make([]byte, (depth+7)/8)),
+			)
+			msg := &tlb.Message{
+				MsgType: tlb.MsgTypeExternalIn,
+				Msg: &tlb.ExternalMessage{
+					DstAddr:   addr,
+					StateInit: stateInit,
+				},
+			}
+			acc := &transactionRuntimeAccount{
+				addr:      addr,
+				status:    tlb.AccountStatusFrozen,
+				stateHash: stateCell.Hash(),
+			}
+
+			next, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, 14))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if skip != nil || !used || next.status != tlb.AccountStatusActive {
+				t.Fatalf("matching depth was rejected: next=%+v used=%t skip=%+v", next, used, skip)
+			}
+		})
+	}
+
+	accountDepth := uint64(5)
+	stateDepth := uint64(6)
+	stateInit := &tlb.StateInit{
+		Depth: &stateDepth,
+		Code:  cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell(),
+	}
+	stateCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := address.NewAddress(0, 0, stateCell.Hash()).WithAnycast(
+		address.NewAnycast(uint(accountDepth), make([]byte, (accountDepth+7)/8)),
+	)
+	msg := &tlb.Message{
+		MsgType: tlb.MsgTypeExternalIn,
+		Msg: &tlb.ExternalMessage{
+			DstAddr:   addr,
+			StateInit: stateInit,
+		},
+	}
+	_, used, skip, err := transactionPrepareComputeAccount(&transactionRuntimeAccount{
+		addr:      addr,
+		status:    tlb.AccountStatusFrozen,
+		stateHash: stateCell.Hash(),
+	}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, 14))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used || skip == nil || skip.Type != tlb.ComputeSkipReasonBadState {
+		t.Fatalf("mismatching depth result: used=%t skip=%+v, want bad_state", used, skip)
+	}
+}
+
 func TestTransactionAccountStorageStatReplaceSharedRef(t *testing.T) {
 	shared := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	oldStorage := cell.BeginCell().MustStoreUInt(0xA, 4).

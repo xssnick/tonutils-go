@@ -8,10 +8,10 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return MULMODPOW2CCODE(0) })
+	vm.List = append(vm.List, func() vm.OP { return MULMODPOW2CCODE(1) })
 }
 
-func MULMODPOW2CCODE(value int8) (op *helpers.AdvancedOP) {
+func MULMODPOW2CCODE(value int) (op *helpers.AdvancedOP) {
 	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
 	op = &helpers.AdvancedOP{
 		FixedSizeBits: 8,

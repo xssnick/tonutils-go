@@ -96,7 +96,7 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 				return nil, err
 			}
 			if skipReason == nil {
-				gas, skipReason = transactionApplyPrecompiledGasConfig(blockchainCfg, computeAcc.code, gas, env)
+				gas, skipReason = transactionApplyPrecompiledGasConfig(blockchainCfg, computeAcc.code, runtimeAcc.addr, isSpecial, gas, env)
 			}
 		}
 	}

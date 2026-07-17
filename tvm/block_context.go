@@ -1,7 +1,9 @@
 package tvm
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -58,11 +60,20 @@ func (c *PreparedBlockchainConfig) NewBlockContext(opts BlockOptions) (*BlockCon
 		now = uint32(time.Now().Unix())
 	}
 
+	randSeed := append([]byte(nil), opts.RandSeed...)
+	if len(randSeed) == 0 {
+		// the reference generates a fresh 256-bit block seed when none is set;
+		// callers that need reproducible runs must pass RandSeed explicitly
+		randSeed = make([]byte, 32)
+		if _, err := rand.Read(randSeed); err != nil {
+			return nil, fmt.Errorf("failed to generate block rand seed: %w", err)
+		}
+	}
 	out := &BlockContext{
 		cfg:        c,
 		now:        now,
 		blockLT:    opts.BlockLT,
-		randSeed:   append([]byte(nil), opts.RandSeed...),
+		randSeed:   randSeed,
 		prevBlocks: opts.PrevBlocks,
 		libraries:  append([]*cell.Cell(nil), opts.Libraries...),
 	}

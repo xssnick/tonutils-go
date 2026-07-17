@@ -52,7 +52,7 @@ func TestAddrShiftCodeModErrorAndBoundaryEdges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			st := newMathCoverageState()
 			tt.push(t, st)
-			assertMathCoverageVMError(t, ADDRSHIFTCODEMOD(0).Interpret(st), tt.code)
+			assertMathCoverageVMError(t, ADDRSHIFTCODEMOD(1).Interpret(st), tt.code)
 		})
 	}
 

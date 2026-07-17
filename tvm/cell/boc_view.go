@@ -15,8 +15,8 @@ const bocViewReadWindowSize = 4 << 20
 
 // BOCViewOptions configures a random-access BoC view.
 type BOCViewOptions struct {
-	// TrustedHashes trusts serialized hashes/depths when a cell stores them in
-	// the BoC payload. Cells without serialized hashes are still hashed normally.
+	// TrustedHashes trusts serialized hashes and depths when a cell stores them
+	// in the BoC payload. Cells without serialized metadata are hashed normally.
 	TrustedHashes bool
 	// RequireIndex rejects BoCs without an index table.
 	RequireIndex bool
@@ -637,8 +637,8 @@ func (v *BOCView) buildMeta() error {
 		var emptyDepths [4]uint16
 		v.meta.hashes = append(v.meta.hashes, emptyHashes[:hashesCount]...)
 		v.meta.depths = append(v.meta.depths, emptyDepths[:hashesCount]...)
-
-		if v.trustStoredMeta(cell.info) {
+		trustedMeta := v.trustStoredMeta(cell.info)
+		if trustedMeta {
 			v.setStoredMeta(i)
 			v.storeTrustedCellMeta(i, cell.info, cell.data)
 			if cell.info.isSpecial() {
@@ -791,7 +791,7 @@ func (v *BOCView) computeCellMeta(idx uint32, info bocPayloadCellInfo, data []by
 			return err
 		}
 	}
-	if info.withHashes() && !v.trustedHashes {
+	if info.withHashes() {
 		if err := v.validateStoredCellMeta(idx, info, data); err != nil {
 			return err
 		}
@@ -816,8 +816,14 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 	isMerkle := typ == MerkleProofCellType || typ == MerkleUpdateCellType
 
 	var refIndexes [4]uint32
+	var expectedMask byte
 	for ref := 0; ref < refCnt; ref++ {
-		refIndexes[ref] = uint32(info.refIndex(data, ref, int(v.refSize)))
+		refIdx := uint32(info.refIndex(data, ref, int(v.refSize)))
+		refIndexes[ref] = refIdx
+		expectedMask |= v.meta.levelMasks[refIdx]
+	}
+	if typ == OrdinaryCellType && levelMask.Mask != expectedMask {
+		return fmt.Errorf("ordinary cell level mask mismatch")
 	}
 
 	hashIndex := 0
@@ -944,6 +950,11 @@ func (v *BOCView) validateSpecialCell(info bocPayloadCellInfo, data []byte, typ 
 		}
 		if info.bitsSz != 8+256 {
 			return fmt.Errorf("not enough data for a library special cell")
+		}
+		// reference DataCell keeps a zero level mask for library cells, and
+		// BoC deserialization rejects any descriptor that disagrees
+		if info.levelMask().Mask != 0 {
+			return fmt.Errorf("library level mask mismatch")
 		}
 	case MerkleProofCellType:
 		if info.bitsSz != 8+(hashSize+depthSize)*8 {

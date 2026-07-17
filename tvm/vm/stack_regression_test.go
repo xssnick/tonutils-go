@@ -47,6 +47,47 @@ func TestStackMoveFromMovesTopElements(t *testing.T) {
 	assertPopInts(t, from, 2, 1)
 }
 
+func TestStackHasNoSemanticDepthLimit(t *testing.T) {
+	const formerDepthLimit = 1 << 16
+
+	base := NewStack()
+	for i := 0; i < formerDepthLimit; i++ {
+		if err := base.PushSmallInt(0); err != nil {
+			t.Fatalf("push %d: %v", i, err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		push func(*Stack) error
+	}{
+		{name: "small int", push: func(s *Stack) error { return s.PushSmallInt(0) }},
+		{name: "any", push: func(s *Stack) error { return s.PushAny(nil) }},
+		{name: "owned value", push: func(s *Stack) error { return s.PushOwnedValue(big.NewInt(7)) }},
+		{name: "owned builder", push: func(s *Stack) error { return s.PushOwnedBuilder(cell.BeginCell()) }},
+		{name: "owned slice", push: func(s *Stack) error { return s.PushOwnedSlice(cell.BeginCell().ToSlice()) }},
+		{name: "move", push: func(s *Stack) error {
+			from := NewStack()
+			if err := from.PushSmallInt(1); err != nil {
+				return err
+			}
+			return s.MoveFrom(from, 1)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stack := base.Copy()
+			if err := tt.push(stack); err != nil {
+				t.Fatalf("push above former limit: %v", err)
+			}
+			if got := stack.Len(); got != formerDepthLimit+1 {
+				t.Fatalf("stack depth = %d, want %d", got, formerDepthLimit+1)
+			}
+		})
+	}
+}
+
 func TestStackSplitTopAllowsWholeStack(t *testing.T) {
 	s := NewStack()
 	pushInts(t, s, 1, 2, 3)

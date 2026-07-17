@@ -3,6 +3,7 @@ package stack
 import (
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -23,7 +24,11 @@ func init() {
 func DUMPSTK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			state.Tracef("#DEBUG#: stack(%d values)\n%s", state.Stack.Len(), state.Stack.String())
+			if !state.TraceEnabled() {
+				return nil
+			}
+
+			state.Trace(debugStackString(state.Stack))
 			return nil
 		},
 		Name:      "DUMPSTK",
@@ -34,6 +39,10 @@ func DUMPSTK() *helpers.SimpleOP {
 func DUMP(idx uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		Action: func(state *vm.State) error {
+			if !state.TraceEnabled() {
+				return nil
+			}
+
 			if int(idx) >= state.Stack.Len() {
 				state.Tracef("#DEBUG#: s%d is absent", idx)
 				return nil
@@ -69,6 +78,10 @@ func DUMP(idx uint8) *helpers.AdvancedOP {
 func DEBUG(arg uint8) *helpers.AdvancedOP {
 	return &helpers.AdvancedOP{
 		Action: func(state *vm.State) error {
+			if !state.TraceEnabled() {
+				return nil
+			}
+
 			state.Tracef("DEBUG %d", arg)
 			return nil
 		},
@@ -94,6 +107,10 @@ func DEBUG(arg uint8) *helpers.AdvancedOP {
 func STRDUMP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if !state.TraceEnabled() {
+				return nil
+			}
+
 			if state.Stack.Len() == 0 {
 				state.Tracef("#DEBUG#: s0 is absent")
 				return nil
@@ -189,6 +206,10 @@ func (op *debugStrOp) SerializeText() string {
 }
 
 func (op *debugStrOp) Interpret(state *vm.State) error {
+	if !state.TraceEnabled() {
+		return nil
+	}
+
 	state.Tracef("DEBUGSTR %X", op.data)
 	return nil
 }
@@ -217,4 +238,26 @@ func debugValueString(v any) string {
 	default:
 		return fmt.Sprintf("%v [%T]", x, x)
 	}
+}
+
+func debugStackString(stack *vm.Stack) string {
+	depth := stack.Len()
+	dumpDepth := depth
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "#DEBUG#: stack(%d values) : ", depth)
+	if dumpDepth > 255 {
+		b.WriteString("... ")
+		dumpDepth = 255
+	}
+	for i := dumpDepth - 1; i >= 0; i-- {
+		val, err := stack.Get(i)
+		if err != nil {
+			panic(err)
+		}
+		b.WriteString(debugValueString(val))
+		b.WriteByte(' ')
+	}
+
+	return b.String()
 }

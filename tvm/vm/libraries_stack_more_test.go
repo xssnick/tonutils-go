@@ -487,20 +487,32 @@ func FuzzLoadLibraryByHashVersionedLookupGas(f *testing.F) {
 			}
 		}
 
-		wantGas := expectedVersionedLibraryLookupGas(version, found, lookups)
+		// Before v4 the lookup itself is metered per dictionary node actually
+		// loaded (here the single-entry root), found or not; since v4 the
+		// lookup runs without charging and the resolved cell is billed by the
+		// caller instead (see VmState::load_library in the reference C++
+		// vm.cpp).
+		traversed := len(hash) == 32
+		if traversed {
+			traversed = false
+			for _, root := range roots {
+				if root != nil {
+					traversed = true
+					break
+				}
+			}
+		}
+
+		wantGas := expectedVersionedLibraryLookupGas(version, traversed, lookups)
 		if gotGas := st.Gas.Used(); gotGas != wantGas {
 			t.Fatalf("v%d case=%d found=%v lookups=%d gas = %d, want %d", version, rawCase%4, found, lookups, gotGas, wantGas)
 		}
 	})
 }
 
-func expectedVersionedLibraryLookupGas(version int, found bool, lookups int) int64 {
-	if !found || version >= 5 {
+func expectedVersionedLibraryLookupGas(version int, traversed bool, lookups int) int64 {
+	if !traversed || version >= 4 {
 		return 0
 	}
-
-	if version >= 4 {
-		return CellLoadGasPrice + int64(lookups-1)*CellReloadGasPrice
-	}
-	return 2*CellLoadGasPrice + int64(lookups-1)*2*CellReloadGasPrice
+	return CellLoadGasPrice + int64(lookups-1)*CellReloadGasPrice
 }

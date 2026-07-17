@@ -271,7 +271,7 @@ func (c *Slice) RemoveTrailing() int {
 	}
 
 	c.bitEnd -= uint16(trailing + 1)
-	return trailing
+	return trailing + 1
 }
 
 func (c *Slice) Depth() uint16 {

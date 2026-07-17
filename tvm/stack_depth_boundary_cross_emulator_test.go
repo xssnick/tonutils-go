@@ -23,7 +23,7 @@ func TestTVMCrossEmulatorStackDepthBoundary64K(t *testing.T) {
 		runStackOpParityProgram(t, stackDepthBoundaryProgram(t, 0), nil, 0)
 	})
 
-	t.Run("grow_above_65536_caught_and_reduced", func(t *testing.T) {
+	t.Run("grow_to_65537_then_reduce", func(t *testing.T) {
 		runStackOpParityProgram(t, stackDepthBoundaryProgram(t, 1), nil, 0)
 	})
 }
@@ -70,31 +70,23 @@ func stackDepthBoundaryProgram(t *testing.T, rawCase uint8) *cell.Cell {
 	t.Helper()
 
 	dupBody := codeFromBuilders(t, stackop.DUP().Serialize())
-
-	switch rawCase % 2 {
-	case 0:
-		return buildStackProgram(t, []*cell.Builder{
-			stackop.PUSHINT(big.NewInt(1)).Serialize(),
-			stackop.PUSHINT(big.NewInt((1 << 16) - 1)).Serialize(),
-			stackop.PUSHCONT(dupBody).Serialize(),
-			execop.REPEAT().Serialize(),
-			stackRawOp(0x6a, 8),
-		})
-	default:
-		handler := codeFromBuilders(t, stackRawOp(0x6a, 8))
-		return buildStackProgram(t, []*cell.Builder{
-			stackop.PUSHINT(big.NewInt(1)).Serialize(),
-			stackop.PUSHINT(big.NewInt(1 << 16)).Serialize(),
-			stackop.PUSHCONT(dupBody).Serialize(),
-			stackop.PUSHCONT(handler).Serialize(),
-			execop.TRY().Serialize(),
-		})
+	repeatCount := int64((1 << 16) - 1)
+	if rawCase%2 != 0 {
+		repeatCount++
 	}
+
+	return buildStackProgram(t, []*cell.Builder{
+		stackop.PUSHINT(big.NewInt(1)).Serialize(),
+		stackop.PUSHINT(big.NewInt(repeatCount)).Serialize(),
+		stackop.PUSHCONT(dupBody).Serialize(),
+		execop.REPEAT().Serialize(),
+		stackRawOp(0x6a, 8),
+	})
 }
 
 func stackDepthBoundaryCaseName(rawCase uint8) string {
 	if rawCase%2 == 0 {
 		return "grow_to_65536_then_reduce"
 	}
-	return "grow_above_65536_caught_and_reduced"
+	return "grow_to_65537_then_reduce"
 }

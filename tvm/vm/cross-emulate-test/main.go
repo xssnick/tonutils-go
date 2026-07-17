@@ -116,7 +116,11 @@ func prepareBlockchainConfig() *tvm.PreparedBlockchainConfig {
 	if err = dict.SetIntKey(big.NewInt(int64(tlb.ConfigParamGlobalVersion)), cell.BeginCell().MustStoreRef(versionCell).EndCell()); err != nil {
 		panic(err)
 	}
-	return tvm.MustPrepareBlockchainConfig(dict.AsCell())
+	cfg, err := tvm.PrepareBlockchainConfigLenient(dict.AsCell())
+	if err != nil {
+		panic(err)
+	}
+	return cfg
 }
 
 var MainContractCode = func() *cell.Cell {

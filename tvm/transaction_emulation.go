@@ -1,6 +1,7 @@
 package tvm
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
+
+var errPrecompiledOutOfGas = errors.New("precompiled contract got out of gas in TVM")
 
 // TransactionOptions carries the genuinely per-transaction execution inputs.
 // Everything else lives in BlockContext (per block) and PreparedBlockchainConfig (per
@@ -94,21 +97,34 @@ func PrepareMessage(msgCell *cell.Cell) (*PreparedMessage, error) {
 	if msgCell == nil {
 		return nil, errors.New("input message is required")
 	}
-	var msg tlb.Message
-	if err := tlb.Parse(&msg, msgCell); err != nil {
+	loader, err := msgCell.BeginParse()
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode input message: %w", err)
+	}
+	var msg tlb.Message
+	if err = tlb.LoadFromCell(&msg, loader); err != nil {
+		return nil, fmt.Errorf("failed to decode input message: %w", err)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		return nil, fmt.Errorf("input message has trailing data: %d bits, %d refs", loader.BitsLeft(), loader.RefsNum())
 	}
 	return prepareParsedMessage(msgCell, msg)
 }
 
 // PrepareParsedMessage wraps an already-parsed inbound message together with
-// its cell; msg must be the parsed form of msgCell.
+// its cell; msg must be the parsed form of msgCell, which is verified by
+// re-serializing it, so that execution (driven by the parsed form) and
+// accounting (driven by the cell) cannot describe different inputs.
 func PrepareParsedMessage(msgCell *cell.Cell, msg *tlb.Message) (*PreparedMessage, error) {
 	if msgCell == nil {
 		return nil, errors.New("input message is required")
 	}
 	if msg == nil {
 		return nil, errors.New("parsed input message is required")
+	}
+	reserialized, err := tlb.ToCell(msg)
+	if err != nil || !bytes.Equal(reserialized.Hash(), msgCell.Hash()) {
+		return nil, errors.New("parsed message does not match the message cell")
 	}
 	return prepareParsedMessage(msgCell, *msg)
 }
@@ -138,20 +154,30 @@ func (m *PreparedMessage) Message() *tlb.Message {
 }
 
 type transactionRuntimeAccount struct {
-	addr            *address.Address
-	status          tlb.AccountStatus
-	storageInfo     tlb.StorageInfo
-	balance         *big.Int
-	extraCurrencies *cell.Dictionary
-	code            *cell.Cell
-	data            *cell.Cell
-	libraries       *cell.Dictionary
-	inMsgLibraries  *cell.Dictionary
-	stateDepth      *uint64
-	tickTock        *tlb.TickTock
-	stateHash       []byte
-	storageLT       uint64
-	storageCell     *cell.Cell
+	// addr is the effective account identity used as the ShardAccounts key.
+	// For an anycast account it contains the rewritten 256-bit address and no
+	// anycast metadata, matching Account::addr in the reference implementation.
+	addr *address.Address
+	// addrRaw is the MsgAddressInt stored in the account state (addr_orig plus
+	// anycast metadata). addrExact encodes addr without anycast. They are
+	// resolved once while preparing the account and reused by c7 and actions.
+	addrRaw             *address.Address
+	addrExact           *address.Address
+	addrRewriteDepth    uint64
+	addrIdentityDerived bool
+	status              tlb.AccountStatus
+	storageInfo         tlb.StorageInfo
+	balance             *big.Int
+	extraCurrencies     *cell.Dictionary
+	code                *cell.Cell
+	data                *cell.Cell
+	libraries           *cell.Dictionary
+	inMsgLibraries      *cell.Dictionary
+	stateDepth          *uint64
+	tickTock            *tlb.TickTock
+	stateHash           []byte
+	storageLT           uint64
+	storageCell         *cell.Cell
 	// storageCellForStat is storageCell without the extra-currency dict (the
 	// extra-currency v2 stat form), threaded from the previous transaction of
 	// the account so it is not re-derived per transaction; nil when unknown.
@@ -160,6 +186,40 @@ type transactionRuntimeAccount struct {
 	prevTxLT           uint64
 	originalCell       *cell.Cell
 	isSpecial          bool
+}
+
+func (a *transactionRuntimeAccount) rawAddress() *address.Address {
+	if a.addrIdentityDerived {
+		return a.addrRaw
+	}
+	return a.addr
+}
+
+func (a *transactionRuntimeAccount) exactAddress() *address.Address {
+	if a.addrIdentityDerived {
+		return a.addrExact
+	}
+	if exact, err := transactionAccountIDAddr(a.addr); err == nil {
+		return exact
+	}
+	return a.addr
+}
+
+func (a *transactionRuntimeAccount) vmAddress(globalVersion uint32) *address.Address {
+	if globalVersion >= 10 {
+		return a.exactAddress()
+	}
+	return a.rawAddress()
+}
+
+func (a *transactionRuntimeAccount) rewriteDepth() uint64 {
+	if a.addrIdentityDerived {
+		return a.addrRewriteDepth
+	}
+	if anycast := a.addr.Anycast(); anycast != nil {
+		return uint64(anycast.Depth())
+	}
+	return 0
 }
 
 type transactionUsage struct {
@@ -217,12 +277,13 @@ type transactionExecEnv struct {
 	msg     *tlb.Message
 	msgCell *cell.Cell
 
-	startLT uint64
-	blockLT int64
-	balance *big.Int
+	startLT      uint64
+	blockLT      int64
+	balance      *big.Int
+	balanceExtra *cell.Cell
 
 	incomingValue       tuple.Tuple
-	storageFees         int64
+	storageFees         *big.Int
 	duePayment          *big.Int
 	inMsgParams         tuple.Tuple
 	precompiledGasUsage *big.Int
@@ -243,11 +304,14 @@ func newTransactionExecEnv(block *BlockContext, opts *TransactionOptions, acc *t
 		blockLT: block.blockLT,
 		balance: new(big.Int).Set(prepared.balance),
 	}
+	if prepared.extraCurrencies != nil && !prepared.extraCurrencies.IsEmpty() {
+		env.balanceExtra = prepared.extraCurrencies.AsCell()
+	}
 	if env.blockLT == 0 {
 		env.blockLT = transactionBlockLogicalTime(startLT)
 	}
 	env.incomingValue = prepared.msgBalance.asTuple()
-	env.storageFees = transactionInt64OrZero(prepared.storagePhase.StorageFeesCollected.Nano())
+	env.storageFees = transactionBigOrZero(prepared.storagePhase.StorageFeesCollected.Nano())
 	env.duePayment = transactionBigOrZero(transactionCoinsNano(prepared.duePayment))
 	env.inMsgParams = transactionBuildInMsgParams(msg, prepared.msgBalance)
 	return env
@@ -259,12 +323,13 @@ func (env *transactionExecEnv) c7Input(code *cell.Cell, balance *big.Int) (emula
 		return emulationC7Input{}, err
 	}
 	return emulationC7Input{
-		addr:                env.acc.addr,
+		addr:                env.acc.vmAddress(env.cfg.version),
 		code:                code,
 		now:                 env.block.now,
 		blockLT:             env.blockLT,
 		logicalTime:         int64(env.startLT),
 		balance:             balance,
+		balanceExtra:        env.balanceExtra,
 		seed:                seed,
 		configRoot:          env.cfg.root,
 		incomingValue:       env.incomingValue,
@@ -393,8 +458,14 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 		prepared.lastPaid = 0
 	}
 
-	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, opts.LogicalTime), &msg.msg)
+	executionLT := transactionExecutionLogicalTime(runtimeAcc.prevTxLT, opts.LogicalTime)
+	startLT := transactionStartLT(runtimeAcc.storageLT, executionLT, &msg.msg)
 	env := newTransactionExecEnv(block, &opts, runtimeAcc, &msg.msg, msg.cell, prepared, startLT)
+	if block.blockLT == 0 {
+		// The reference emulator derives block_lt from the requested lt (or the
+		// next block boundary after the account) before the created_lt bump.
+		env.blockLT = transactionBlockLogicalTime(transactionStartLT(runtimeAcc.storageLT, executionLT, nil))
+	}
 	env.proof = proof
 
 	computeAcc := runtimeAcc
@@ -421,7 +492,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 				return nil, errors.New("account execution proof cannot be built for code loaded from message state init")
 			}
 			if skipReason == nil {
-				gas, skipReason = transactionApplyPrecompiledGasConfig(blockchainCfg, computeAcc.code, gas, env)
+				gas, skipReason = transactionApplyPrecompiledGasConfig(blockchainCfg, computeAcc.code, runtimeAcc.addr, isSpecial, gas, env)
 			}
 		}
 	}
@@ -504,7 +575,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	aborted := skipReason != nil || !(computeSuccess && actionSuccess)
 	var bouncePhase *tlb.BouncePhase
 	if aborted && transactionShouldBounce(&msg.msg, skipReason, computeSuccess, actionBounce) {
-		bounceRes, bounceErr := transactionPrepareBouncePhase(&msg.msg, finalBalance, nextExtraCurrencies, msgBalanceRemaining, gasFees, actionFine, startLT, now, len(outMessages), blockchainCfg, skipReason, msgRes, actionPhase)
+		bounceRes, bounceErr := transactionPrepareBouncePhase(&msg.msg, runtimeAcc.addr, finalBalance, nextExtraCurrencies, msgBalanceRemaining, gasFees, actionFine, startLT, now, len(outMessages), blockchainCfg, skipReason, msgRes, actionPhase)
 		if bounceErr != nil {
 			return nil, bounceErr
 		}
@@ -549,12 +620,8 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 		return nil, err
 	}
 
-	txAccountAddr, err := transactionAccountIDAddr(runtimeAcc.addr)
-	if err != nil {
-		return nil, err
-	}
 	txCell, err := buildTransactionCell(transactionBuildParams{
-		accountAddr: txAccountAddr,
+		accountAddr: runtimeAcc.addr,
 		startLT:     startLT,
 		prevTxHash:  runtimeAcc.prevTxHash,
 		prevTxLT:    runtimeAcc.prevTxLT,
@@ -654,10 +721,10 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 	gas := transactionTickTockGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, isSpecial)
 	if prepared.balance.Sign() <= 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
-	} else if prepared.status != tlb.AccountStatusActive || prepared.deleted || runtimeAcc.code == nil {
-		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoState}
 	} else if gas.Limit == 0 && gas.Credit == 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
+	} else if prepared.status != tlb.AccountStatusActive || prepared.deleted {
+		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoState}
 	}
 
 	var msgRes *MessageExecutionResult
@@ -747,12 +814,8 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 		return nil, err
 	}
 
-	txAccountAddr, err := transactionAccountIDAddr(runtimeAcc.addr)
-	if err != nil {
-		return nil, err
-	}
 	txCell, err := buildTransactionCell(transactionBuildParams{
-		accountAddr: txAccountAddr,
+		accountAddr: runtimeAcc.addr,
 		startLT:     startLT,
 		prevTxHash:  runtimeAcc.prevTxHash,
 		prevTxLT:    runtimeAcc.prevTxLT,
@@ -806,7 +869,7 @@ func transactionApplyPrecompiledGasUsage(res *MessageExecutionResult, value *big
 		return err
 	}
 	if res.ExitCode == ^int64(vmerr.CodeOutOfGas) {
-		return nil
+		return errPrecompiledOutOfGas
 	}
 
 	res.GasUsed = precompiledGas
@@ -898,6 +961,9 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 		return nil, err
 	}
 
+	if acc.code == nil {
+		return transactionNoCodeExecutionResult(acc.code, acc.data, gas), nil
+	}
 	c7In, err := env.c7Input(acc.code, balance)
 	if err != nil {
 		return nil, err

@@ -230,17 +230,6 @@ func TestAdvancedSliceCountTypeErrors(t *testing.T) {
 			assertCellSliceVMErrorCode(t, tt.op.Interpret(newCellSliceState()), vmerr.CodeStackUnderflow)
 		})
 	}
-
-	t.Run("SBITREFSStackOverflowLeavesBits", func(t *testing.T) {
-		st := newCellSliceState()
-		fillAdvancedBuilderStack(t, st, 1)
-		pushCellSliceSlice(t, st, checkRefEdgeSlice(t, 7, 1))
-		assertCellSliceVMErrorCode(t, SBITREFS().Interpret(st), vmerr.CodeStackOverflow)
-
-		if got := popCellSliceInt(t, st); got != 7 {
-			t.Fatalf("partial SBITREFS bits = %d, want 7", got)
-		}
-	})
 }
 
 func FuzzTVMSliceCheckAndRefRules(f *testing.F) {

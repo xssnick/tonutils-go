@@ -33,7 +33,7 @@ func TestLshiftcodeOperation(t *testing.T) {
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
 			codeSlice := codeCell.MustBeginParse()
 
-			op := LSHIFTCODE(0)
+			op := LSHIFTCODE(1)
 			op.Deserialize(codeSlice)
 
 			err := op.Interpret(&vm.State{

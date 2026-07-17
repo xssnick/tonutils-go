@@ -1,6 +1,9 @@
 package cell
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+)
 
 type merkleUpdateVisitKey struct {
 	hash        Hash
@@ -12,8 +15,16 @@ type merkleUpdateCellKey struct {
 	merkleDepth int
 }
 
+// merkleUpdateKnownCell remembers a source subtree together with the merkle
+// depth it was visited at, so destination boundaries can be compared against
+// it the same way the reference VM does.
+type merkleUpdateKnownCell struct {
+	cell        *Cell
+	merkleDepth int
+}
+
 type merkleUpdateValidator struct {
-	known     map[Hash]struct{}
+	known     map[Hash]merkleUpdateKnownCell
 	visitedTo map[merkleUpdateCellKey]struct{}
 }
 
@@ -105,7 +116,7 @@ func ValidateMerkleUpdate(update *Cell) error {
 	}
 
 	validator := merkleUpdateValidator{
-		known:     map[Hash]struct{}{},
+		known:     map[Hash]merkleUpdateKnownCell{},
 		visitedTo: map[merkleUpdateCellKey]struct{}{},
 	}
 
@@ -335,6 +346,12 @@ func merkleUpdateRootRefs(update *Cell, validate bool) (*Cell, *Cell, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to peek merkle update first ref: %w", err)
 	}
+	if !validate {
+		// may_apply only needs the source boundary metadata. In particular, it
+		// must not materialize the destination subtree just to answer whether
+		// the update can apply to a given source root.
+		return updateFrom, nil, nil
+	}
 	updateFrom, err = updateFrom.load()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load merkle update first ref: %w", err)
@@ -347,16 +364,38 @@ func merkleUpdateRootRefs(update *Cell, validate bool) (*Cell, *Cell, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load merkle update second ref: %w", err)
 	}
-	if validate {
-		if err := validateLoadedCell(update); err != nil {
-			return nil, nil, fmt.Errorf("invalid merkle update cell: %w", err)
-		}
+	if err := validateLoadedCell(update); err != nil {
+		return nil, nil, fmt.Errorf("invalid merkle update cell: %w", err)
 	}
 	return updateFrom, updateTo, nil
 }
 
 func merkleUpdateSeenKey(cell *Cell, merkleDepth int) merkleUpdateVisitKey {
 	return merkleUpdateVisitKey{hash: cell.HashKey(), merkleDepth: merkleDepth}
+}
+
+// compareMerkleBoundaryCells mirrors vm::detail::compare_cells from the
+// reference MerkleUpdate.cpp: two cells observed at (possibly different)
+// merkle depths must agree on the effective level mask and on both hash and
+// depth for every level up to max(merkleDepthA, merkleDepthB), clamping each
+// side to its own depth.
+func compareMerkleBoundaryCells(a *Cell, merkleDepthA int, b *Cell, merkleDepthB int) error {
+	if a == nil || b == nil {
+		return fmt.Errorf("merkle update contains nil reference")
+	}
+	if a.getLevelMask().Apply(merkleDepthA) != b.getLevelMask().Apply(merkleDepthB) {
+		return fmt.Errorf("level mask mismatch")
+	}
+	for i := 0; i <= max(merkleDepthA, merkleDepthB); i++ {
+		levelA, levelB := min(i, merkleDepthA), min(i, merkleDepthB)
+		if !bytes.Equal(a.getHash(levelA), b.getHash(levelB)) {
+			return fmt.Errorf("cell hash mismatch")
+		}
+		if a.getDepth(levelA) != b.getDepth(levelB) {
+			return fmt.Errorf("cell depth mismatch")
+		}
+	}
+	return nil
 }
 
 func merkleChildDepth(cell *Cell, merkleDepth int) int {
@@ -367,7 +406,7 @@ func normalizeMerkleDepth(cell *Cell, merkleDepth int) int {
 	return cell.getLevelMask().Apply(merkleDepth).GetLevel()
 }
 
-func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpdateVisitKey]struct{}, validateSource bool, known map[Hash]struct{}) error {
+func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpdateVisitKey]struct{}, validateSource bool, known map[Hash]merkleUpdateKnownCell) error {
 	if source == nil {
 		return fmt.Errorf("merkle update contains nil reference")
 	}
@@ -384,7 +423,15 @@ func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpd
 		}
 	}
 
-	known[source.HashKey(merkleDepth)] = struct{}{}
+	if existing, ok := known[source.HashKey(merkleDepth)]; ok {
+		// same as the reference validator: a repeated hash must describe the
+		// same cell, so masks and depths have to match too
+		if err := compareMerkleBoundaryCells(source, merkleDepth, existing.cell, existing.merkleDepth); err != nil {
+			return fmt.Errorf("conflicting cells in merkle update source: %w", err)
+		}
+	} else {
+		known[source.HashKey(merkleDepth)] = merkleUpdateKnownCell{cell: source, merkleDepth: merkleDepth}
+	}
 	if source.GetType() == PrunedCellType {
 		return nil
 	}
@@ -413,6 +460,11 @@ func (s *merkleUpdateSourceIndex) walkProof(original, source *Cell, merkleDepth 
 	sourceHash := source.HashKey(merkleDepth)
 	if originalHash != sourceHash {
 		return fmt.Errorf("merkle update source hash mismatch: got=%x want=%x", originalHash[:], sourceHash[:])
+	}
+	// reference dfs_both also requires matching level masks and depths, not
+	// only the hash at the current merkle depth
+	if err := compareMerkleBoundaryCells(original, merkleDepth, source, merkleDepth); err != nil {
+		return fmt.Errorf("merkle update source mismatch: %w", err)
 	}
 
 	s.known[originalHash] = original
@@ -466,6 +518,11 @@ func collectMerkleUpdateReuse(cell *Cell, merkleDepth int, known map[Hash]*Cell,
 		ref := known[hash]
 		if ref == nil {
 			return nil, nil, merkleUpdateUnknownPrunedBranchError{hash: hash}
+		}
+		// reference apply dfs compares the known cell at its own level with
+		// the pruned boundary before reusing it
+		if err := compareMerkleBoundaryCells(ref, ref.Level(), cell, merkleDepth); err != nil {
+			return nil, nil, fmt.Errorf("invalid pruned branch in merkle update: %w", err)
 		}
 		reuse.addReusedCell(hash, ref)
 		return ref, &merkleUpdateReusedChild{hash: hash, raw: ref}, nil
@@ -569,8 +626,12 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 	}
 
 	if hash, ok := merkleUpdatePrunedBoundaryHash(cell, merkleDepth); ok {
-		if _, ok := v.known[hash]; !ok {
+		knownCell, found := v.known[hash]
+		if !found {
 			return fmt.Errorf("unknown pruned cell in merkle update: %x", hash[:])
+		}
+		if err := compareMerkleBoundaryCells(cell, merkleDepth, knownCell.cell, knownCell.merkleDepth); err != nil {
+			return fmt.Errorf("invalid pruned cell in merkle update: %w", err)
 		}
 		return nil
 	}
