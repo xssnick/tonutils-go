@@ -16,11 +16,6 @@ type ShardAccountBlocksAugDict struct {
 
 type AccountTransactionsAugDict struct {
 	*cell.AugmentedDictionary
-
-	// wrapped reports that the underlying dictionary was created in the
-	// HashmapAugE-style wrapped form (constructor) rather than parsed from the
-	// inline HashmapAug 64 representation of an AccountBlock.
-	wrapped bool
 }
 
 type OldMcBlocksInfoAugDict struct {
@@ -86,7 +81,6 @@ func (d *AccountTransactionsAugDict) LoadFromCell(loader *cell.Slice) error {
 		return err
 	}
 	d.AugmentedDictionary = dict
-	d.wrapped = false
 	return nil
 }
 
@@ -105,26 +99,7 @@ func (d *AccountTransactionsAugDict) InlineCell() (*cell.Cell, error) {
 	if d.IsEmpty() {
 		return nil, fmt.Errorf("inline HashmapAug 64 of AccountBlock cannot be empty: TLB Hashmap (non-E) has no empty representation")
 	}
-
-	root, err := d.AugmentedDictionary.ToCell()
-	if err != nil {
-		return nil, err
-	}
-	if !d.wrapped {
-		// parsed inline dictionaries serialize back to the inline root directly
-		return root, nil
-	}
-
-	// constructor-created dictionaries serialize in the HashmapAugE wrapped
-	// form: root flag bit, root ref, root extra
-	s, err := root.BeginParse()
-	if err != nil {
-		return nil, err
-	}
-	if _, err = s.LoadBoolBit(); err != nil {
-		return nil, err
-	}
-	return s.LoadRefCell()
+	return d.RootCell(), nil
 }
 
 func (d *OldMcBlocksInfoAugDict) LoadFromCell(loader *cell.Slice) error {

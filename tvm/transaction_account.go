@@ -93,10 +93,9 @@ func parseTransactionAccountStateExact(state *tlb.AccountState, root *cell.Cell)
 	return nil
 }
 
-// validateTransactionAccountStructure mirrors t_ShardAccount.validate_csr and
-// the stricter Account::unpack address rule. StateInit.library deliberately
-// remains an opaque reference here; only message StateInitWithLibs uses the
-// HashmapE 256 SimpleLib schema in the reference implementation.
+// validateTransactionAccountStructure checks shard-account structure and the
+// stricter stored-account address rule. StateInit.library remains opaque here;
+// only message StateInitWithLibs uses the HashmapE 256 SimpleLib schema.
 func validateTransactionAccountStructure(root *cell.Cell) error {
 	var loader cell.Slice
 	if err := root.BeginParseInto(&loader); err != nil {
@@ -405,8 +404,8 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 	out.balance = new(big.Int).Set(acc.Balance.Nano())
 	out.extraCurrencies = acc.ExtraCurrencies
 	out.storageLT = acc.LastTransactionLT
-	// the reference requires max(storage.last_trans_lt, 1) > shard last_trans_lt
-	// for an existing account
+	// Existing accounts require max(storage.last_trans_lt, 1) to be later than
+	// the logical time stored by the shard account.
 	if lt := max(out.storageLT, 1); lt <= out.prevTxLT {
 		return nil, fmt.Errorf("account storage last transaction lt %d is not after shard account lt %d", out.storageLT, out.prevTxLT)
 	}
@@ -497,6 +496,7 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 			prepared.msgBalance.grams.Add(prepared.msgBalance.grams, in.IHRFee.Nano())
 		}
 		if cfg.isBlackHoleAccount(acc.addr) {
+			prepared.blackholeBurned = new(big.Int).Set(prepared.msgBalance.grams)
 			prepared.msgBalance.grams.SetInt64(0)
 		}
 		if prepared.creditFirst {
@@ -875,9 +875,8 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 	if dictRoot == nil {
 		return nil, nil
 	}
-	// The reference reuses a carried-in storage stat only when the account
-	// metadata records storage_dict_hash and it matches; without a hash the
-	// hint is ignored and the stat is recomputed from scratch.
+	// A carried-in storage stat is usable only when storage_dict_hash is present
+	// and matches. Without it the stat is recomputed from scratch.
 	if dictHash == nil || transactionHashIsZero(dictHash) {
 		return nil, nil
 	}

@@ -162,6 +162,7 @@ func (c *Cell) AppendBOCWithOptions(dst []byte, opts BOCSerializeOptions) ([]byt
 	return AppendBOCWithOptions(dst, []*Cell{c}, opts)
 }
 
+// ComputeFileHash returns the hash of the network block BOC encoding.
 func ComputeFileHash(root *Cell) []byte {
 	if root == nil {
 		return nil
@@ -171,7 +172,6 @@ func ComputeFileHash(root *Cell) []byte {
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,
-		WithTopHash:   true,
 		WithIntHashes: true,
 	}
 

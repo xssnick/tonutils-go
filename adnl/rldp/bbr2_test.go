@@ -25,6 +25,14 @@ func newBBR(t *testing.T, initRate int64, opts BBRv2Options) (*BBRv2Controller, 
 	return NewBBRv2Controller(tb, opts), tb
 }
 
+func observeBBRWindow(bbr *BBRv2Controller, total, acked, elapsedMs int64) {
+	now := time.Now().UnixMilli()
+	bbr.lastProc.Store(now - elapsedMs)
+	bbr.lastAckTs.Store(now - elapsedMs)
+	bbr.rateAckTs.Add(-elapsedMs)
+	bbr.ObserveDelta(total, acked)
+}
+
 func TestBBR_InitialRateCanExceedMinRate(t *testing.T) {
 	opts := BBRv2Options{
 		MinRate:      256 << 10,
@@ -99,6 +107,85 @@ func TestBBR_StartupIncreasesRate(t *testing.T) {
 
 	if tb.GetRate() != bbr.pacingRate.Load() {
 		t.Fatalf("limiter rate mismatch: tb=%d bbr=%d", tb.GetRate(), bbr.pacingRate.Load())
+	}
+}
+
+func TestBBR_SmallAckWindowsUseLongRateSample(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:        256 << 10,
+		InitialRate:    1 << 20,
+		DefaultRTTMs:   10,
+		MinSampleMs:    50,
+		MinRTTExpiryMs: 10_000,
+		HighLoss:       0.2,
+		Beta:           0.85,
+	}
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+
+	const ackedPerWindow = 75 << 10
+	for i := 0; i < 4; i++ {
+		observeBBRWindow(bbr, ackedPerWindow, ackedPerWindow, 50)
+	}
+	if got := bbr.btlbw.Load(); got != opts.InitialRate {
+		t.Fatalf("small ACK windows updated bandwidth before 250 ms: got=%d want=%d", got, opts.InitialRate)
+	}
+
+	observeBBRWindow(bbr, ackedPerWindow, ackedPerWindow, 50)
+	if got := bbr.btlbw.Load(); got <= opts.InitialRate {
+		t.Fatalf("accumulated ACK window did not update bandwidth: got=%d initial=%d", got, opts.InitialRate)
+	}
+
+	for i := 0; i < 15; i++ {
+		observeBBRWindow(bbr, ackedPerWindow, ackedPerWindow, 50)
+	}
+	if state := bbr.state.Load(); state == 0 {
+		t.Fatal("small ACK windows left controller stuck in Startup")
+	}
+}
+
+func TestBBR_LargeAckWindowKeepsFastRateSample(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:        256 << 10,
+		InitialRate:    1 << 20,
+		DefaultRTTMs:   10,
+		MinSampleMs:    50,
+		MinRTTExpiryMs: 10_000,
+		HighLoss:       0.2,
+		Beta:           0.85,
+	}
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+	bbr.rateAcked.Store(64 << 10)
+
+	const acked = 256 << 10
+	observeBBRWindow(bbr, acked, acked, 50)
+
+	if got := bbr.btlbw.Load(); got < 4<<20 {
+		t.Fatalf("large ACK window did not update bandwidth immediately: got=%d", got)
+	}
+	if got := bbr.rateAcked.Load(); got != 0 {
+		t.Fatalf("large ACK window did not clear the long sample: got=%d", got)
+	}
+}
+
+func TestBBR_ResetForNewFlowClearsRateSample(t *testing.T) {
+	bbr, _ := newBBR(t, 1<<20, BBRv2Options{
+		MinRate:      256 << 10,
+		InitialRate:  1 << 20,
+		DefaultRTTMs: 10,
+	})
+	bbr.rateAcked.Store(64 << 10)
+	bbr.rateAckTs.Store(nowMs() - 100)
+
+	now := nowMs()
+	bbr.resetForNewFlow(now)
+
+	if got := bbr.rateAcked.Load(); got != 0 {
+		t.Fatalf("rate sample bytes were not reset: got=%d", got)
+	}
+	if got := bbr.rateAckTs.Load(); got != now {
+		t.Fatalf("rate sample timestamp was not reset: got=%d want=%d", got, now)
 	}
 }
 

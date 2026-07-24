@@ -8,9 +8,8 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-// validateBuiltTransactionCell mirrors the final structural validation done by
-// the reference transaction builder. Message bodies and cells referenced by
-// StateInit are intentionally opaque, as they are in the reference's pass.
+// validateBuiltTransactionCell validates the final transaction structure.
+// Message bodies and cells referenced by StateInit are intentionally opaque.
 func validateBuiltTransactionCell(root, inMsg *cell.Cell, outMsgs []OutMessage) error {
 	var slice cell.Slice
 	if err := root.BeginParseIntoWithoutTrace(&slice); err != nil {
@@ -91,9 +90,8 @@ func validateBuiltTransactionIO(root, inMsg *cell.Cell, outMsgs []OutMessage, ou
 		if stored.HashKey() != inMsg.HashKey() {
 			return errors.New("input message reference mismatch")
 		}
-		if err = validateBuiltTransactionMessage(stored); err != nil {
-			return fmt.Errorf("invalid input message: %w", err)
-		}
+		// The hash match ties stored to the prepared message, which
+		// prepareParsedMessage already validated structurally.
 	}
 
 	hasOut, err := loader.LoadBoolBit()

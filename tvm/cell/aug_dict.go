@@ -365,6 +365,9 @@ func (c *Slice) loadAugDictAsProof(keySz uint, aug Augmentation) (*AugmentedDict
 }
 
 func (d *AugmentedDictionary) GetKeySize() uint {
+	if d == nil {
+		return 0
+	}
 	return d.keySz
 }
 
@@ -394,6 +397,14 @@ func (d *AugmentedDictionary) SetTrace(trace *Trace) *AugmentedDictionary {
 
 func (d *AugmentedDictionary) IsEmpty() bool {
 	return d == nil || d.root == nil
+}
+
+// RootCell returns the trie root without the HashmapAugE wrapper.
+func (d *AugmentedDictionary) RootCell() *Cell {
+	if d == nil {
+		return nil
+	}
+	return d.root
 }
 
 func (d *AugmentedDictionary) GetRootExtra() *Cell {

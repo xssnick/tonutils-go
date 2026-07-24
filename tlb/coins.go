@@ -77,10 +77,15 @@ func (g Coins) NanoTON() *big.Int {
 }
 
 func (g Coins) Nano() *big.Int {
+	return new(big.Int).Set(g.nanoValue())
+}
+
+// nanoValue is read-only; mutating or exposing it would break Coins ownership.
+func (g Coins) nanoValue() *big.Int {
 	if g.val == nil {
-		return big.NewInt(0)
+		return zeroCoinsInt
 	}
-	return new(big.Int).Set(g.val)
+	return g.val
 }
 
 func MustFromDecimal(val string, decimals int) Coins {
@@ -273,7 +278,7 @@ func storeCoins(builder *cell.Builder, coins Coins) error {
 }
 
 func (g Coins) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprintf("%q", g.Nano().String())), nil
+	return []byte(fmt.Sprintf("%q", g.nanoValue().String())), nil
 }
 
 func (g *Coins) UnmarshalJSON(data []byte) error {
@@ -298,7 +303,7 @@ func (g Coins) Compare(coins Coins) int {
 		panic("invalid comparison")
 	}
 
-	return g.Nano().Cmp(coins.Nano())
+	return g.nanoValue().Cmp(coins.nanoValue())
 }
 
 // MustAdd adds the provided coins to the current coins and returns the result.
@@ -322,7 +327,7 @@ func (g Coins) Add(coins Coins) (Coins, error) {
 
 	result := Coins{
 		decimals: g.decimals,
-		val:      new(big.Int).Add(g.Nano(), coins.Nano()),
+		val:      new(big.Int).Add(g.nanoValue(), coins.nanoValue()),
 	}
 	if tooBigForVarUint16(result.val) {
 		return Coins{}, errTooBigForVarUint16
@@ -352,7 +357,7 @@ func (g Coins) Sub(coins Coins) (Coins, error) {
 
 	result := Coins{
 		decimals: g.decimals,
-		val:      new(big.Int).Sub(g.Nano(), coins.Nano()),
+		val:      new(big.Int).Sub(g.nanoValue(), coins.nanoValue()),
 	}
 	if tooBigForVarUint16(result.val) {
 		return Coins{}, errTooBigForVarUint16
@@ -377,7 +382,7 @@ func (g Coins) MustMul(x *big.Int) Coins {
 func (g Coins) Mul(x *big.Int) (Coins, error) {
 	result := Coins{
 		decimals: g.decimals,
-		val:      new(big.Int).Mul(g.val, x),
+		val:      new(big.Int).Mul(g.nanoValue(), x),
 	}
 	if tooBigForVarUint16(result.val) {
 		return Coins{}, errTooBigForVarUint16
@@ -408,9 +413,9 @@ func (g Coins) MulRat(r *big.Rat) (Coins, error) {
 		return Coins{}, errDivisionByZero
 	}
 
-	// Calculate new nano value: (g.val * num) / den
+	// Calculate the new nano value as (value * numerator) / denominator.
 	newVal := new(big.Int).Div(
-		new(big.Int).Mul(g.val, num),
+		new(big.Int).Mul(g.nanoValue(), num),
 		den,
 	)
 	if tooBigForVarUint16(newVal) {
@@ -443,7 +448,7 @@ func (g Coins) Div(x *big.Int) (Coins, error) {
 
 	result := Coins{
 		decimals: g.decimals,
-		val:      new(big.Int).Div(g.Nano(), x),
+		val:      new(big.Int).Div(g.nanoValue(), x),
 	}
 	if tooBigForVarUint16(result.val) {
 		return Coins{}, errTooBigForVarUint16
@@ -475,9 +480,9 @@ func (g Coins) DivRat(r *big.Rat) (Coins, error) {
 		return Coins{}, errDivisionByZero
 	}
 
-	// Calculate new nano value: (g.val * den) / num
+	// Calculate the new nano value as (value * denominator) / numerator.
 	newVal := new(big.Int).Div(
-		new(big.Int).Mul(g.val, den),
+		new(big.Int).Mul(g.nanoValue(), den),
 		num,
 	)
 	if tooBigForVarUint16(newVal) {
@@ -495,7 +500,7 @@ func (g Coins) DivRat(r *big.Rat) (Coins, error) {
 func (g Coins) Neg() Coins {
 	result := Coins{
 		decimals: g.decimals,
-		val:      new(big.Int).Neg(g.Nano()),
+		val:      new(big.Int).Neg(g.nanoValue()),
 	}
 	return result
 }
@@ -505,7 +510,7 @@ func (g Coins) Neg() Coins {
 func (g Coins) Abs() Coins {
 	return Coins{
 		decimals: g.decimals,
-		val:      new(big.Int).Abs(g.Nano()),
+		val:      new(big.Int).Abs(g.nanoValue()),
 	}
 }
 
@@ -541,17 +546,17 @@ func (g Coins) Equals(coins Coins) bool {
 
 // IsZero returns true if the coins amount is zero
 func (g Coins) IsZero() bool {
-	return g.Nano().Sign() == 0
+	return g.nanoValue().Sign() == 0
 }
 
 // IsPositive returns true if the coins amount is greater than zero
 func (g Coins) IsPositive() bool {
-	return g.Nano().Sign() > 0
+	return g.nanoValue().Sign() > 0
 }
 
 // IsNegative returns true if the coins amount is less than zero
 func (g Coins) IsNegative() bool {
-	return g.Nano().Sign() < 0
+	return g.nanoValue().Sign() < 0
 }
 
 func (g Coins) Decimals() int {

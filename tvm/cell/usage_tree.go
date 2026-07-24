@@ -8,11 +8,13 @@ import (
 type TraceNode uint32
 
 const (
-	usageTreeChunkBits = 10
-	usageTreeChunkSize = 1 << usageTreeChunkBits
-	usageTreeChunkMask = usageTreeChunkSize - 1
+	usageTreeInitialChunkSize = 64
+	usageTreeChunkBits        = 8
+	usageTreeChunkSize        = 1 << usageTreeChunkBits
+	usageTreeChunkMask        = usageTreeChunkSize - 1
 )
 
+type usageTreeInitialChunk [usageTreeInitialChunkSize]usageTreeNode
 type usageTreeChunk [usageTreeChunkSize]usageTreeNode
 
 // usageTreeNode is a slot in the tree arena. Nodes are published to other
@@ -43,6 +45,7 @@ type usageTreeNode struct {
 // SetMark/MarkPath/SetUseMarkForIsLoaded) is not synchronized against
 // concurrent loads and must run after all traced readers are done.
 type CellUsageTree struct {
+	initial  usageTreeInitialChunk
 	chunks   atomic.Pointer[[]*usageTreeChunk]
 	nextNode atomic.Uint32
 	growMu   sync.Mutex
@@ -59,7 +62,7 @@ func NewCellUsageTree() *CellUsageTree {
 	t := &CellUsageTree{
 		loadedCells: map[Hash]*Cell{},
 	}
-	chunks := []*usageTreeChunk{new(usageTreeChunk)}
+	var chunks []*usageTreeChunk
 	t.chunks.Store(&chunks)
 	t.nextNode.Store(2)
 	root := t.node(1)
@@ -69,6 +72,10 @@ func NewCellUsageTree() *CellUsageTree {
 }
 
 func (t *CellUsageTree) node(id TraceNode) *usageTreeNode {
+	if id < usageTreeInitialChunkSize {
+		return &t.initial[id]
+	}
+	id -= usageTreeInitialChunkSize
 	chunks := *t.chunks.Load()
 	return &chunks[id>>usageTreeChunkBits][id&usageTreeChunkMask]
 }
@@ -284,7 +291,10 @@ func (t *CellUsageTree) allocNode(parent TraceNode) TraceNode {
 }
 
 func (t *CellUsageTree) ensureChunk(id TraceNode) {
-	chunkIdx := int(id >> usageTreeChunkBits)
+	if id < usageTreeInitialChunkSize {
+		return
+	}
+	chunkIdx := int((id - usageTreeInitialChunkSize) >> usageTreeChunkBits)
 	if chunkIdx < len(*t.chunks.Load()) {
 		return
 	}
@@ -294,10 +304,16 @@ func (t *CellUsageTree) ensureChunk(id TraceNode) {
 	if chunkIdx < len(cur) {
 		return
 	}
-	next := make([]*usageTreeChunk, len(cur), chunkIdx+1)
-	copy(next, cur)
-	for len(next) <= chunkIdx {
-		next = append(next, new(usageTreeChunk))
+	nextLen := chunkIdx + 1
+	var next []*usageTreeChunk
+	if nextLen <= cap(cur) {
+		next = cur[:nextLen]
+	} else {
+		next = make([]*usageTreeChunk, nextLen, max(nextLen, 4, cap(cur)*2))
+		copy(next, cur)
+	}
+	for i := len(cur); i < nextLen; i++ {
+		next[i] = new(usageTreeChunk)
 	}
 	t.chunks.Store(&next)
 }

@@ -20,8 +20,8 @@ func transactionMessageGas(gasOverride vm.Gas, now uint32, blockchainCfg *Prepar
 
 	// Only an absent gas prices param (possible on lenient test configs) falls
 	// back to the default profiles; a present param is honored literally, so a
-	// configured zero gas limit computes to zero limits and skips with NO_GAS,
-	// matching the reference compute_gas_limits.
+	// configured zero gas limit computes to zero limits and skips with NO_GAS
+	// instead of using a default profile.
 	prices := blockchainCfg.gasPricesFor(transactionIsMasterchain(addr))
 	if prices != nil {
 		if isSpecial {
@@ -397,9 +397,9 @@ func transactionOutboundExternalMessageFeeUsage(msg *tlb.ExternalMessageOut, lay
 	return usage, nil
 }
 
-// transactionOutboundMessageFailedLayout mirrors the reference redo rules for a
-// message that failed to pack: StateInit moves into a ref only when it has at
-// least two refs, the body only when its inline form is non-empty.
+// transactionOutboundMessageFailedLayout selects the second packing layout
+// after the inline form fails: StateInit moves into a ref only when it has at
+// least two refs, and the body only when its inline form is non-empty.
 func transactionOutboundMessageFailedLayout(state *tlb.StateInit, body *cell.Cell, layout transactionOutboundLayout) (transactionOutboundLayout, error) {
 	next := layout
 	if !next.stateInitInRef {

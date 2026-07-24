@@ -19,6 +19,8 @@ import (
 //go:embed testdata/block_0_8000000000000000_71398501.boc
 var mainnetBlockBOC []byte
 
+const legacyMsgDescrGlobalVersion = uint32(11)
+
 func loadMainnetBlock(t *testing.T) *Block {
 	t.Helper()
 
@@ -126,31 +128,33 @@ func rebuildAugDictAndCompare(t *testing.T, name string, original, rebuilt *cell
 func TestAugInMsgDescrRebuildFromMainnetBlock(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var original InMsgDescrAugDict
-	if err := LoadFromCell(&original, blk.Extra.InMsgDesc.MustBeginParse()); err != nil {
+	original, err := LoadInMsgDescrAugDict(blk.Extra.InMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load in msg descr: %v", err)
 	}
 
-	rebuilt, err := NewInMsgDescrAugDict()
+	rebuilt, err := NewInMsgDescrAugDict(legacyMsgDescrGlobalVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rebuildAugDictAndCompare(t, "InMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary, AugInMsgDescr{})
+	rebuildAugDictAndCompare(t, "InMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary,
+		AugInMsgDescr{GlobalVersion: legacyMsgDescrGlobalVersion})
 }
 
 func TestAugOutMsgDescrRebuildFromMainnetBlock(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var original OutMsgDescrAugDict
-	if err := LoadFromCell(&original, blk.Extra.OutMsgDesc.MustBeginParse()); err != nil {
+	original, err := LoadOutMsgDescrAugDict(blk.Extra.OutMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load out msg descr: %v", err)
 	}
 
-	rebuilt, err := NewOutMsgDescrAugDict()
+	rebuilt, err := NewOutMsgDescrAugDict(legacyMsgDescrGlobalVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rebuildAugDictAndCompare(t, "OutMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary, AugOutMsgDescr{})
+	rebuildAugDictAndCompare(t, "OutMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary,
+		AugOutMsgDescr{GlobalVersion: legacyMsgDescrGlobalVersion})
 }
 
 func TestAugShardAccountBlocksRebuildFromMainnetBlock(t *testing.T) {
@@ -337,8 +341,8 @@ func TestAugCombineWithOnMainnetShardAccountBlocks(t *testing.T) {
 func TestImportFeesRoundTripAgainstMainnetExtras(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var descr InMsgDescrAugDict
-	if err := LoadFromCell(&descr, blk.Extra.InMsgDesc.MustBeginParse()); err != nil {
+	descr, err := LoadInMsgDescrAugDict(blk.Extra.InMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load in msg descr: %v", err)
 	}
 
@@ -380,11 +384,74 @@ func TestImportFeesRoundTripAgainstMainnetExtras(t *testing.T) {
 	mustCellHashEqual(t, "ImportFees root extra round-trip", serialized, rootExtraCell)
 }
 
+type mutableDescriptorDict interface {
+	ToCell() (*cell.Cell, error)
+	Set(*cell.Cell, *cell.Cell) error
+	Delete(*cell.Cell) error
+}
+
+func TestDecodedMessageDescriptorsRemainWritable(t *testing.T) {
+	key := cell.BeginCell().MustStoreUInt(0, 256).EndCell()
+	dummy := cell.BeginCell().EndCell()
+
+	tests := []struct {
+		name       string
+		descriptor *cell.Cell
+		new        func() (mutableDescriptorDict, error)
+		load       func(*cell.Slice) (mutableDescriptorDict, error)
+	}{
+		{
+			name:       "in",
+			descriptor: cell.BeginCell().MustStoreUInt(0, 3).EndCell(),
+			new: func() (mutableDescriptorDict, error) {
+				return NewInMsgDescrAugDict(legacyMsgDescrGlobalVersion)
+			},
+			load: func(s *cell.Slice) (mutableDescriptorDict, error) {
+				return LoadInMsgDescrAugDict(s, legacyMsgDescrGlobalVersion)
+			},
+		},
+		{
+			name: "out",
+			descriptor: cell.BeginCell().MustStoreUInt(0, 3).
+				MustStoreRef(dummy).MustStoreRef(dummy).EndCell(),
+			new: func() (mutableDescriptorDict, error) {
+				return NewOutMsgDescrAugDict(legacyMsgDescrGlobalVersion)
+			},
+			load: func(s *cell.Slice) (mutableDescriptorDict, error) {
+				return LoadOutMsgDescrAugDict(s, legacyMsgDescrGlobalVersion)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			empty, err := test.new()
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := empty.ToCell()
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := test.load(encoded.MustBeginParse())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = decoded.Set(key, test.descriptor); err != nil {
+				t.Fatalf("set decoded descriptor: %v", err)
+			}
+			if err = decoded.Delete(key); err != nil {
+				t.Fatalf("delete decoded descriptor: %v", err)
+			}
+		})
+	}
+}
+
 func TestMsgEnvelopeRoundTripAgainstMainnetEnvelopes(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var descr OutMsgDescrAugDict
-	if err := LoadFromCell(&descr, blk.Extra.OutMsgDesc.MustBeginParse()); err != nil {
+	descr, err := LoadOutMsgDescrAugDict(blk.Extra.OutMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load out msg descr: %v", err)
 	}
 
@@ -514,9 +581,8 @@ func TestAugShardAccountsSynthetic(t *testing.T) {
 		t.Fatalf("failed to set account none: %v", err)
 	}
 
-	// expected root extra, hand-computed per DepthBalanceInfo::add_values
-	// (split_depth = max = 0, balance = sum) and Aug_ShardAccounts::eval_leaf
-	// (account_none contributes the null DepthBalanceInfo).
+	// The root extra uses the maximum split_depth, sums balances, and treats
+	// account_none as the null DepthBalanceInfo.
 	expected := cell.BeginCell().
 		MustStoreUInt(0, 5).                          // split_depth
 		MustStoreBigCoins(big.NewInt(1_000_000_025)). // grams sum
@@ -618,8 +684,7 @@ func TestAugOutMsgQueueSynthetic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// v1 envelope: extra = created_lt of the enclosed message
-	// (Aug_OutMsgQueue::eval_leaf, block-parse.cpp:2004-2009)
+	// A v1 envelope uses the enclosed message's created_lt as its extra.
 	if err = dict.Set(queueKey(0x01), synthEnqueuedMsgValue(t, 500, nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -627,12 +692,11 @@ func TestAugOutMsgQueueSynthetic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// fork extra = min(left, right) (eval_fork, block-parse.cpp:1994-1998)
+	// A fork extra is the minimum of its child extras.
 	want := cell.BeginCell().MustStoreUInt(300, 64).EndCell()
 	mustCellHashEqual(t, "OutMsgQueue min extra", dict.GetRootExtra(), want)
 
-	// v2 envelope with explicit emitted_lt overrides the message created_lt
-	// (current upstream MsgEnvelope::get_emitted_lt)
+	// An explicit v2 emitted_lt overrides the message created_lt.
 	emitted := uint64(120)
 	if err = dict.Set(queueKey(0x44), synthEnqueuedMsgValue(t, 700, &emitted)); err != nil {
 		t.Fatal(err)
@@ -658,7 +722,7 @@ func TestAugOutMsgQueueSynthetic(t *testing.T) {
 	want = cell.BeginCell().MustStoreUInt(300, 64).EndCell()
 	mustCellHashEqual(t, "OutMsgQueue extra after delete", dict.GetRootExtra(), want)
 
-	// empty dict extra is 0 (eval_empty, block-parse.cpp:2000-2002)
+	// An empty dictionary has a zero extra.
 	empty, err := NewOutMsgQueueAugDict()
 	if err != nil {
 		t.Fatal(err)
@@ -700,7 +764,7 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// leaf extra = value verbatim (Aug_ShardFees::eval_leaf, block-parse.cpp:2289-2291)
+	// A leaf extra is the value copied verbatim.
 	_, leafExtra, err := dict.LoadValueExtra(shardFeeKey(0, 0x2000000000000000))
 	if err != nil {
 		t.Fatal(err)
@@ -711,9 +775,8 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 	}
 	mustCellHashEqual(t, "ShardFees leaf extra", leafCell, valA)
 
-	// fork extra = component-wise CurrencyCollection sums
-	// (ShardFeeCreated::add_values, block-parse.cpp:2282-2284), extra currency
-	// dictionaries merged per key
+	// A fork extra sums both CurrencyCollections component-wise and merges extra
+	// currency dictionaries by key.
 	mergedExtra := mustExtraDict(t, map[uint32]int64{3: 58, 9: 1})
 	want := cell.BeginCell().
 		MustStoreBigCoins(big.NewInt(123)).
@@ -748,8 +811,7 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 	}
 	mustCellHashEqual(t, "ShardFees reload extra", reloaded.GetRootExtra(), want)
 
-	// values that are not exactly a ShardFeeCreated must be rejected
-	// (cs.empty_ext() in eval_leaf)
+	// Values with trailing data are not exact ShardFeeCreated encodings.
 	bad := cell.BeginCell().MustStoreBuilder(valA.ToBuilder()).MustStoreUInt(1, 1).EndCell()
 	if err = dict.Set(shardFeeKey(0, 0x7000000000000000), bad); err == nil {
 		t.Fatal("expected trailing bits in ShardFeeCreated value to be rejected")
@@ -788,7 +850,7 @@ func TestImportFeesSyntheticRoundTrip(t *testing.T) {
 	}
 	mustCellHashEqual(t, "ImportFees synthetic round-trip", back, c)
 
-	// hand-built cell: 9 zero bits == zero ImportFees (ImportFees::null_value)
+	// Zero ImportFees is two zero-length Grams fields plus an empty dictionary bit.
 	var zero ImportFees
 	if err = LoadFromCell(&zero, cell.BeginCell().MustStoreUInt(0, 9).EndCell().MustBeginParse()); err != nil {
 		t.Fatal(err)

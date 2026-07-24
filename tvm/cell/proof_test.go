@@ -402,3 +402,33 @@ func TestMerkleProofCreateNonZeroLevelRoot(t *testing.T) {
 		t.Fatalf("unexpected raw proof body level: got %d want %d", body.Level(), root.Level()+1)
 	}
 }
+
+func TestPrunedProofBuilderDropsTraversalTrace(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xaa, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0xbb, 8).MustStoreRef(leaf).EndCell()
+	traced := root.WithTrace(NewCellUsageTree().RootTrace())
+
+	built, err := buildMerkleProofBodyByPruneFunc(traced, nil, traced.Level())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.HashKey() != root.HashKey() {
+		t.Fatalf("proof body hash = %x, want %x", built.Hash(), root.Hash())
+	}
+
+	var walk func(*Cell)
+	walk = func(current *Cell) {
+		t.Helper()
+		if current.Trace() != nil {
+			t.Fatal("proof body retained a traversal trace")
+		}
+		for i := 0; i < int(current.RefsNum()); i++ {
+			ref, err := current.PeekRef(i)
+			if err != nil {
+				t.Fatal(err)
+			}
+			walk(ref)
+		}
+	}
+	walk(built)
+}

@@ -111,6 +111,8 @@ type BBRv2Controller struct {
 	lossTotal atomic.Int64
 	lossLost  atomic.Int64
 	lastAckTs atomic.Int64 // unix ms marking the start of the ACK window
+	rateAcked atomic.Int64
+	rateAckTs atomic.Int64 // unix ms marking the start of the delivery-rate window
 
 	// Current pacing rate (bytes/sec)
 	pacingRate   atomic.Int64
@@ -140,6 +142,7 @@ func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
 	c.cycleStamp.Store(now)
 	c.lastProc.Store(now)
 	c.lastAckTs.Store(now)
+	c.rateAckTs.Store(now)
 	c.lastBtlBwDecay.Store(now)
 	c.lastActive.Store(now)
 
@@ -321,12 +324,26 @@ func (c *BBRv2Controller) maybeUpdate() {
 	}
 
 	var ackRate int64
-	const minAckForRateUpdate = 128 * 1024
 	if acked > 0 {
 		ackRate = int64(float64(acked) * 1000.0 / float64(elapsedMs))
 		c.deliveryRate.Store(ackRate)
-		if acked >= minAckForRateUpdate || elapsedMs >= 250 {
+
+		const minAckForRateUpdate = 128 * 1024
+		// Fast peers keep the short sampling path. Smaller ACK windows are averaged
+		// long enough to update slower peers without amplifying ACK compression.
+		if acked >= minAckForRateUpdate {
+			c.rateAcked.Store(0)
+			c.rateAckTs.Store(now)
 			c.updateBtlBw(ackRate, now)
+		} else {
+			rateAcked := c.rateAcked.Add(acked)
+			rateElapsedMs := now - c.rateAckTs.Load()
+			if rateElapsedMs >= 250 {
+				rate := int64(float64(rateAcked) * 1000.0 / float64(rateElapsedMs))
+				c.rateAcked.Store(0)
+				c.rateAckTs.Store(now)
+				c.updateBtlBw(rate, now)
+			}
 		}
 	} else {
 		c.deliveryRate.Store(0)
@@ -356,6 +373,8 @@ func (c *BBRv2Controller) resetForNewFlow(now int64) {
 	c.fullBWCount.Store(0)
 	c.lossTotal.Store(0)
 	c.lossLost.Store(0)
+	c.rateAcked.Store(0)
+	c.rateAckTs.Store(now)
 	c.minRTTProvisional.Store(true)
 	model := rateToInflight(max64(c.btlbw.Load(), c.pacingRate.Load()), max64(c.minRTT.Load(), 1))
 	if model <= 0 {

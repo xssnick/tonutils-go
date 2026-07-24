@@ -50,6 +50,34 @@ type AccountBlock struct {
 	StateUpdate  *cell.Cell                  `tlb:"^"`
 }
 
+func (b AccountBlock) ToCell() (*cell.Cell, error) {
+	if len(b.Addr) != 32 {
+		return nil, fmt.Errorf("account block address must be 256 bits")
+	}
+	if b.Transactions == nil || b.Transactions.AugmentedDictionary == nil {
+		return nil, fmt.Errorf("account block transactions dict is nil")
+	}
+	if b.Transactions.GetKeySize() != 64 {
+		return nil, fmt.Errorf("account block transactions have key size %d", b.Transactions.GetKeySize())
+	}
+
+	transactions, err := b.Transactions.InlineCell()
+	if err != nil {
+		return nil, fmt.Errorf("failed to store account block transactions: %w", err)
+	}
+
+	builder := cell.BeginCell().
+		MustStoreUInt(5, 4).
+		MustStoreSlice(b.Addr, 256)
+	if err = builder.StoreBuilder(transactions.ToBuilder()); err != nil {
+		return nil, fmt.Errorf("failed to store account block transactions: %w", err)
+	}
+	if err = builder.StoreRef(b.StateUpdate); err != nil {
+		return nil, fmt.Errorf("failed to store account block state update: %w", err)
+	}
+	return builder.EndCell(), nil
+}
+
 type Block struct {
 	_           Magic       `tlb:"#11ef55aa"`
 	GlobalID    int32       `tlb:"## 32"`
@@ -190,12 +218,8 @@ type BlkPrevInfo struct {
 
 	// Pruned reports that the prev-block references were pruned away in the
 	// Merkle proof this header was parsed from, so Prev1/Prev2 carry NO data.
-	// Block proofs may legally prune the prev cells (C++ never parses pruned
-	// prev refs: block::unpack_block_prev_blk_ext fails with "cannot unpack
-	// previous block reference..." when they are unreadable,
-	// ton/crypto/block/block.cpp:1912-1925, and proof checks like
-	// check_block_header simply never read them). Callers that need parent
-	// block ids MUST check this flag before using Prev1/Prev2.
+	// Block proofs may legally prune these cells. Callers that need parent block
+	// IDs MUST check this flag before using Prev1/Prev2.
 	Pruned bool
 }
 
@@ -312,11 +336,8 @@ func loadBlkPrevInfo(loader *cell.Slice, afterMerge bool) (*BlkPrevInfo, error) 
 
 	if loader.IsSpecial() {
 		// The prev cell was pruned away in a Merkle proof: the references are
-		// unavailable, which is legal for proofs (C++ proof checks never read
-		// them, and non-proof paths fail explicitly instead:
-		// block::unpack_block_prev_blk_ext, ton/crypto/block/block.cpp:1912-1925).
-		// Instead of silently returning zeroed refs, mark the result so callers
-		// cannot mistake it for real data.
+		// unavailable. Mark the result so callers cannot mistake zero values for
+		// decoded references.
 		res.Pruned = true
 		return &res, nil
 	}

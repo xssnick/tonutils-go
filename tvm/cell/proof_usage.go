@@ -103,7 +103,7 @@ func buildMerkleProofBodyByPruneFunc(c *Cell, shouldPrune merkleProofPruneFunc, 
 
 	refCnt := loaded.refsCount()
 	if refCnt == 0 {
-		return loaded, nil
+		return loaded.WithoutTrace(), nil
 	}
 
 	var refsBuf [4]*Cell
@@ -122,11 +122,7 @@ func buildMerkleProofBodyByPruneFunc(c *Cell, shouldPrune merkleProofPruneFunc, 
 		refs[i] = next
 	}
 
-	rebuilt, _, err := refView.cloneWithRefs(refs, nil)
-	if err != nil {
-		return nil, err
-	}
-	return rebuilt, nil
+	return cloneProofCellWithRefs(loaded, refView, refs)
 }
 
 type usageProofBuildKey struct {
@@ -135,9 +131,8 @@ type usageProofBuildKey struct {
 }
 
 // usageProofBuildState tracks the cells a usage proof must include. Presence
-// of a hash in cells marks it visited (to be included rather than pruned); a
-// non-nil value additionally caches its loaded form, merging the historical
-// visited-set and loaded-cache maps into one lookup on the hot build path.
+// of a hash in cells marks it visited; a non-nil value also caches its loaded
+// form for the build path.
 type usageProofBuildState struct {
 	cells map[Hash]*Cell
 	built map[usageProofBuildKey]*Cell
@@ -319,10 +314,9 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	return rebuilt, nil
 }
 
-// cloneProofCellWithRefs rebuilds a proof-body cell in a single copy: same
-// bits, replaced refs, no trace carried over from the traced traversal
-// wrapper — where the historical path made one WithoutTrace copy and a second
-// inside cloneWithRefs. When nothing changed the source is returned as is.
+// cloneProofCellWithRefs rebuilds a proof-body cell in one copy with the same
+// bits, replaced references and no traversal trace. It returns the source when
+// neither its references nor its view changed.
 func cloneProofCellWithRefs(src *Cell, view cellRefView, refs []*Cell) (*Cell, error) {
 	if src.Trace() == nil && !view.virtual {
 		unchanged := true

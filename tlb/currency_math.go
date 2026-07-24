@@ -11,21 +11,11 @@ import (
 // ErrCurrencyCollectionUnderflow is returned by CurrencyCollection.Sub when the
 // subtrahend is greater than the minuend, either in grams or in any extra currency
 // (including extra currency ids that are missing on the minuend side).
-//
-// It mirrors C++ block::CurrencyCollection::sub returning false when
-// td::sgn(c.grams) < 0 or sub_extra_currency fails
-// (ton/crypto/block/block.cpp:1209-1219, :1787-1797).
 var ErrCurrencyCollectionUnderflow = errors.New("currency collection underflow")
 
-// Add returns c + other following C++ block::CurrencyCollection::add
-// (ton/crypto/block/block.cpp:1141-1145):
-//   - grams are added as arbitrary precision integers,
-//   - extra currency dictionaries are merged with add_extra_currency
-//     (ton/crypto/block/block.cpp:1775-1785).
-//
-// Neither receiver nor argument is mutated.
+// Add returns c + other without mutating either operand.
 func (c CurrencyCollection) Add(other CurrencyCollection) (CurrencyCollection, error) {
-	grams := new(big.Int).Add(c.Coins.Nano(), other.Coins.Nano())
+	grams := new(big.Int).Add(c.Coins.nanoValue(), other.Coins.nanoValue())
 
 	extra, err := addExtraCurrencyDicts(c.ExtraCurrencies, other.ExtraCurrencies)
 	if err != nil {
@@ -33,28 +23,18 @@ func (c CurrencyCollection) Add(other CurrencyCollection) (CurrencyCollection, e
 	}
 
 	return CurrencyCollection{
-		Coins:           FromNanoTON(grams),
+		Coins:           Coins{decimals: 9, val: grams},
 		ExtraCurrencies: extra,
 	}, nil
 }
 
-// Sub returns c - other following C++ block::CurrencyCollection::sub
-// (ton/crypto/block/block.cpp:1209-1213):
-//   - a negative grams result is an underflow error (td::sgn(c.grams) >= 0 check),
-//   - extra currency dictionaries are subtracted with sub_extra_currency
-//     (ton/crypto/block/block.cpp:1787-1797): every extra currency entry of other
-//     must be present in c with a value >= the subtracted one; entries that reach
-//     exactly zero are removed from the result dictionary
-//     (HashmapE::sub_values drops entries whose difference is zero,
-//     ton/crypto/block/block-parse.cpp:550-567).
-//
-// Neither receiver nor argument is mutated. On underflow the returned error wraps
-// ErrCurrencyCollectionUnderflow.
+// Sub returns c - other without mutating either operand. Missing currencies,
+// negative results and insufficient balances wrap ErrCurrencyCollectionUnderflow.
 func (c CurrencyCollection) Sub(other CurrencyCollection) (CurrencyCollection, error) {
-	grams := new(big.Int).Sub(c.Coins.Nano(), other.Coins.Nano())
+	grams := new(big.Int).Sub(c.Coins.nanoValue(), other.Coins.nanoValue())
 	if grams.Sign() < 0 {
 		return CurrencyCollection{}, fmt.Errorf("%w: grams %s < %s",
-			ErrCurrencyCollectionUnderflow, c.Coins.Nano().String(), other.Coins.Nano().String())
+			ErrCurrencyCollectionUnderflow, c.Coins.nanoValue().String(), other.Coins.nanoValue().String())
 	}
 
 	extra, ok, err := subExtraCurrencyDicts(c.ExtraCurrencies, other.ExtraCurrencies)
@@ -66,17 +46,15 @@ func (c CurrencyCollection) Sub(other CurrencyCollection) (CurrencyCollection, e
 	}
 
 	return CurrencyCollection{
-		Coins:           FromNanoTON(grams),
+		Coins:           Coins{decimals: 9, val: grams},
 		ExtraCurrencies: extra,
 	}, nil
 }
 
-// Equals follows C++ block::CurrencyCollection::operator==
-// (ton/crypto/block/block.cpp:1277-1281): grams are compared numerically and
-// extra currency dictionaries are compared by root cell hash (an empty dictionary
-// equals a nil one, both correspond to the C++ null root reference).
+// Equals compares grams numerically and extra currencies by dictionary root.
+// Nil and empty extra-currency dictionaries are equivalent.
 func (c CurrencyCollection) Equals(other CurrencyCollection) bool {
-	if c.Coins.Nano().Cmp(other.Coins.Nano()) != 0 {
+	if c.Coins.nanoValue().Cmp(other.Coins.nanoValue()) != 0 {
 		return false
 	}
 
@@ -90,11 +68,9 @@ func (c CurrencyCollection) Equals(other CurrencyCollection) bool {
 	return left.HashKey(0) == right.HashKey(0)
 }
 
-// GreaterOrEqual follows C++ block::CurrencyCollection::operator>=
-// (ton/crypto/block/block.cpp:1283-1287): true when grams of c are >= grams of
-// other and subtracting other's extra currencies from c's would not underflow.
+// GreaterOrEqual reports whether every currency in c covers other.
 func (c CurrencyCollection) GreaterOrEqual(other CurrencyCollection) (bool, error) {
-	if c.Coins.Nano().Cmp(other.Coins.Nano()) < 0 {
+	if c.Coins.nanoValue().Cmp(other.Coins.nanoValue()) < 0 {
 		return false, nil
 	}
 	_, ok, err := subExtraCurrencyDicts(c.ExtraCurrencies, other.ExtraCurrencies)
@@ -118,8 +94,7 @@ type extraCurrencyEntry struct {
 
 // loadExtraCurrencyEntries returns raw dict entries ordered by dictionary walk.
 // Values are kept as raw payload cells so untouched entries can be re-stored
-// bit-exactly, the same way C++ combine_with copies unmatched leaves without
-// re-serializing them (ton/crypto/vm/dict.cpp dict_combine_with).
+// without changing their encoding.
 func loadExtraCurrencyEntries(d *cell.Dictionary) ([]extraCurrencyEntry, error) {
 	if d == nil || d.IsEmpty() {
 		return nil, nil
@@ -145,18 +120,20 @@ func loadExtraCurrencyEntries(d *cell.Dictionary) ([]extraCurrencyEntry, error) 
 	return entries, nil
 }
 
-// loadExtraCurrencyAmount parses a single extra currency leaf payload as
-// VarUIntegerPos 32: the value type of ExtraCurrencyCollection is strictly
-// positive (ton/crypto/block/block-parse.h:332-334 uses t_VarUIntegerPos_32,
-// parsing per ton/crypto/block/block-parse.cpp:349-352 requires a non-zero
-// length with a non-zero leading byte). Zero or padded encodings are rejected,
-// exactly like C++ as_integer_skip.
+// loadExtraCurrencyAmount parses a canonical positive VarUInteger 32 payload.
 func loadExtraCurrencyAmount(payload *cell.Cell) (*big.Int, error) {
 	s, err := payload.BeginParse()
 	if err != nil {
 		return nil, err
 	}
+	return loadExtraCurrencyAmountSlice(s)
+}
 
+// loadExtraCurrencyAmountSlice parses a canonical positive VarUInteger 32
+// prefix of the slice. Trailing data is left in the slice for the caller to
+// judge: arithmetic accepts it like C++ as_integer_skip, while dictionary
+// validation must reject it like C++ validate_skip + empty_ext.
+func loadExtraCurrencyAmountSlice(s *cell.Slice) (*big.Int, error) {
 	ln, err := s.LoadUInt(5) // len:(#< 32)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load extra currency value length: %w", err)
@@ -177,9 +154,7 @@ func loadExtraCurrencyAmount(payload *cell.Cell) (*big.Int, error) {
 
 func storeExtraCurrencyAmount(amount *big.Int) (*cell.Cell, error) {
 	if amount == nil || amount.Sign() <= 0 {
-		// VarUIntegerPos 32 cannot represent zero
-		// (ton/crypto/block/block-parse.cpp:361-365 requires a positive value),
-		// callers must drop zero entries instead of storing them.
+		// Zero entries must be removed instead of stored.
 		return nil, fmt.Errorf("extra currency value must be strictly positive")
 	}
 	b := cell.BeginCell()
@@ -189,20 +164,9 @@ func storeExtraCurrencyAmount(amount *big.Int) (*cell.Cell, error) {
 	return b.EndCell(), nil
 }
 
-// addExtraCurrencyDicts mirrors C++ add_extra_currency
-// (ton/crypto/block/block.cpp:1775-1785):
-//   - if either side is empty, the other side's dictionary is reused as is
-//     (no re-serialization),
-//   - otherwise dictionaries are merged like
-//     ExtraCurrencyCollection add_values / vm::Dictionary::combine_with
-//     (ton/crypto/block/block-parse.cpp:514-527): entries unique to one side are
-//     copied bit-exactly, colliding entries are re-encoded as the canonical
-//     VarUIntegerPos 32 sum of both values.
-//
-// The sum of two strictly positive VarUIntegerPos values cannot be zero, so
-// addition never has to drop entries; zero-valued entries cannot legally exist
-// in the inputs in the first place (and are rejected when they collide, same as
-// C++ as_integer_skip failing on them).
+// addExtraCurrencyDicts reuses an unchanged dictionary when either side is
+// empty. Unique leaves retain their encoding; colliding values are summed and
+// encoded canonically.
 func addExtraCurrencyDicts(a, b *cell.Dictionary) (*cell.Dictionary, error) {
 	if b == nil || b.IsEmpty() {
 		return a, nil
@@ -270,28 +234,13 @@ func addExtraCurrencyDicts(a, b *cell.Dictionary) (*cell.Dictionary, error) {
 	return result, nil
 }
 
-// subExtraCurrencyDicts mirrors C++ sub_extra_currency
-// (ton/crypto/block/block.cpp:1787-1797) combined with
-// ExtraCurrencyCollection sub_values (ton/crypto/block/block-parse.cpp:550-567):
-//   - subtracting an empty dictionary reuses the minuend as is,
-//   - every entry of b must exist in a: a missing key is an underflow
-//     (combine_with in subset mode fails when a subtree of b has no counterpart
-//     in a; the pre-fix mode check in the local ton checkout,
-//     ton/crypto/vm/dict.cpp:1781, is ineffective, current upstream throws
-//     CombineError when dict1 is null and dict2 is not),
-//   - a negative difference is an underflow,
-//   - entries whose difference is exactly zero are dropped from the result
-//     (TLB sub_values returns 0 for them and HashmapE::sub_values removes such
-//     leaves, ton/crypto/tl/tlblib.hpp:222-226).
-//
-// Returns ok=false on underflow.
+// subExtraCurrencyDicts reuses the minuend when b is empty and drops exact-zero
+// results. It returns ok=false when b contains a missing or insufficient value.
 func subExtraCurrencyDicts(a, b *cell.Dictionary) (*cell.Dictionary, bool, error) {
 	if b == nil || b.IsEmpty() {
 		return a, true, nil
 	}
 	if a == nil || a.IsEmpty() {
-		// C++ sub_extra_currency: extra1 null and extra2 not null -> failure
-		// (ton/crypto/block/block.cpp:1790-1792).
 		return nil, false, nil
 	}
 

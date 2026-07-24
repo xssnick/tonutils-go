@@ -209,6 +209,9 @@ func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
 }
 
 func (d *Dictionary) GetKeySize() uint {
+	if d == nil {
+		return 0
+	}
 	return d.keySz
 }
 

@@ -19,6 +19,12 @@ import (
 
 const transactionTestLogicalTime = int64(1_000_000)
 
+type prepareMessageCanonicalAddressTestCase struct {
+	name      string
+	addr      *address.Address
+	wantError bool
+}
+
 func TestPrepareMessageRequiresExactConsumption(t *testing.T) {
 	body := cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell()
 	valid := cell.BeginCell().
@@ -64,6 +70,68 @@ func TestPrepareMessageRequiresExactConsumption(t *testing.T) {
 		EndCell()
 	if _, err = PrepareMessage(trailingRef); err == nil {
 		t.Fatal("input message with a trailing reference was accepted")
+	}
+}
+
+func TestPrepareMessageRequiresCanonicalInternalAddress(t *testing.T) {
+	tests := []prepareMessageCanonicalAddressTestCase{
+		{
+			name:      "basechain variable address",
+			addr:      address.NewAddressVar(0, 0, 255, make([]byte, 32)),
+			wantError: true,
+		},
+		{
+			name:      "masterchain variable address",
+			addr:      address.NewAddressVar(0, -1, 255, make([]byte, 32)),
+			wantError: true,
+		},
+		{
+			name:      "standard-sized variable address with int8 workchain",
+			addr:      address.NewAddressVar(0, 1, 256, make([]byte, 32)),
+			wantError: true,
+		},
+		{
+			name: "non-standard-sized variable address",
+			addr: address.NewAddressVar(0, 1, 255, make([]byte, 32)),
+		},
+		{
+			name: "standard-sized variable address with wide workchain",
+			addr: address.NewAddressVar(0, 128, 256, make([]byte, 32)),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			external := &tlb.ExternalMessage{
+				SrcAddr: address.NewAddressNone(),
+				DstAddr: test.addr,
+				Body:    cell.BeginCell().EndCell(),
+			}
+			msgCell, err := tlb.ToCell(external)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, parsedErr := PrepareMessage(msgCell)
+			assertPrepareMessageCanonicalResult(t, "parsed cell", parsedErr, test.wantError)
+
+			_, wrappedErr := PrepareParsedMessage(msgCell, &tlb.Message{
+				MsgType: tlb.MsgTypeExternalIn,
+				Msg:     external,
+			})
+			assertPrepareMessageCanonicalResult(t, "parsed message", wrappedErr, test.wantError)
+		})
+	}
+}
+
+func assertPrepareMessageCanonicalResult(t *testing.T, path string, err error, wantError bool) {
+	t.Helper()
+
+	if wantError && err == nil {
+		t.Fatalf("%s: non-canonical internal address was accepted", path)
+	}
+	if !wantError && err != nil {
+		t.Fatalf("%s: canonical internal address was rejected: %v", path, err)
 	}
 }
 
@@ -1060,6 +1128,12 @@ func TestEmulateTransactionExternalCommit(t *testing.T) {
 	}
 	if testResultTransaction(t, res).LT != uint64(transactionTestLogicalTime) {
 		t.Fatalf("unexpected transaction lt: %d", testResultTransaction(t, res).LT)
+	}
+	if res.StartLT != testResultTransaction(t, res).LT {
+		t.Fatalf("result start lt: got=%d want=%d", res.StartLT, testResultTransaction(t, res).LT)
+	}
+	if res.Burned.Coins.Nano().Sign() != 0 || !transactionExtraDictIsEmpty(res.Burned.ExtraCurrencies) {
+		t.Fatal("ordinary transaction unexpectedly reported burned value")
 	}
 	if testResultAccountState(res).LastTransactionLT != testResultTransaction(t, res).LT+1 {
 		t.Fatalf("unexpected committed account lt: got=%d want=%d", testResultAccountState(res).LastTransactionLT, testResultTransaction(t, res).LT+1)
@@ -3147,11 +3221,58 @@ func TestTransactionBlackholeBurnsInboundGramsBeforeCreditPhase(t *testing.T) {
 	if prepared.msgBalance.grams.Sign() != 0 {
 		t.Fatalf("message balance grams = %s, want 0", prepared.msgBalance.grams)
 	}
+	if prepared.blackholeBurned.Uint64() != 777 {
+		t.Fatalf("blackhole burned grams = %s, want 777", prepared.blackholeBurned)
+	}
 	if got := prepared.creditPhase.Credit.Coins.Nano(); got.Sign() != 0 {
 		t.Fatalf("credit phase grams = %s, want 0", got)
 	}
 	if prepared.balance.Uint64() != 1000 {
 		t.Fatalf("account balance = %s, want 1000", prepared.balance)
+	}
+
+	data := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	code := makeTransactionInternalSuccessCode(t, data)
+	shard := buildTransactionTestShardAccount(
+		t,
+		blackhole,
+		code,
+		data,
+		1000,
+		uint32(tonopsTestTime.Unix()),
+	)
+	msgCell, err := tlb.ToCell(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     internalEmulationSrcAddr,
+		DstAddr:     blackhole,
+		Amount:      tlb.FromNanoTONU(777),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := testEmulateTransaction(NewTVM(), shard, msgCell, testTxParams{
+		Address:     blackhole,
+		Now:         uint32(tonopsTestTime.Unix()),
+		BlockLT:     transactionTestLogicalTime,
+		LogicalTime: transactionTestLogicalTime,
+		Config:      cfg,
+		Gas: vmcore.NewGas(vmcore.GasConfig{
+			Max:   DefaultInternalMessageGasMax,
+			Limit: DefaultInternalMessageGasMax,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := result.ParseTransaction()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StartLT != transaction.LT {
+		t.Fatalf("result start lt = %d, want %d", result.StartLT, transaction.LT)
+	}
+	if result.Burned.Coins.Nano().Uint64() != 777 || !transactionExtraDictIsEmpty(result.Burned.ExtraCurrencies) {
+		t.Fatalf("result burned value = %s, want 777", result.Burned.Coins.Nano())
 	}
 }
 

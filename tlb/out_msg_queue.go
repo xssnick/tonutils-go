@@ -42,6 +42,15 @@ type MsgMetadata struct {
 	InitiatorLT uint64
 }
 
+// NewDispatchQueueAugDict returns an empty writable DispatchQueue dictionary.
+func NewDispatchQueueAugDict() (*DispatchQueueAugDict, error) {
+	dict, err := cell.NewAugDict(256, AugDispatchQueue{})
+	if err != nil {
+		return nil, err
+	}
+	return &DispatchQueueAugDict{AugmentedDictionary: dict}, nil
+}
+
 // IntermediateAddressType selects the IntermediateAddress variant
 // (crypto/block/block.tlb:161-165).
 type IntermediateAddressType uint8
@@ -55,10 +64,8 @@ const (
 	IntermediateAddressExt
 )
 
-// IntermediateAddress is the IntermediateAddress TLB type
-// (crypto/block/block.tlb:161-165, parsing per IntermediateAddress::get_size,
-// crypto/block/block-parse.cpp:797-808). The zero value is the regular variant
-// with use_dest_bits = 0.
+// IntermediateAddress is the IntermediateAddress TLB type. The zero value is
+// the regular variant with use_dest_bits = 0.
 type IntermediateAddress struct {
 	Type IntermediateAddressType
 
@@ -105,6 +112,9 @@ func (a *IntermediateAddress) LoadFromCell(loader *cell.Slice) error {
 	if err != nil {
 		return fmt.Errorf("failed to load intermediate address workchain: %w", err)
 	}
+	if addrType == IntermediateAddressExt && workchain >= -128 && workchain < 128 {
+		return fmt.Errorf("workchain %d must use interm_addr_simple", workchain)
+	}
 	addrPfx, err := loader.LoadUInt(64)
 	if err != nil {
 		return fmt.Errorf("failed to load intermediate address prefix: %w", err)
@@ -144,6 +154,9 @@ func (a IntermediateAddress) storeTo(b *cell.Builder) error {
 		}
 		return b.StoreUInt(a.AddrPfx, 64)
 	case IntermediateAddressExt:
+		if a.Workchain >= -128 && a.Workchain < 128 {
+			return fmt.Errorf("workchain %d must use interm_addr_simple", a.Workchain)
+		}
 		if err := b.StoreUInt(0b11, 2); err != nil {
 			return err
 		}
@@ -161,12 +174,8 @@ func (a IntermediateAddress) storeTo(b *cell.Builder) error {
 //	msg_envelope#4 cur_addr:IntermediateAddress next_addr:IntermediateAddress
 //	  fwd_fee_remaining:Grams msg:^(Message Any) = MsgEnvelope;
 //
-// per crypto/block/block.tlb:167-169 and MsgEnvelope::unpack
-// (crypto/block/block-parse.cpp:832-839), plus the current upstream
-// msg_envelope_v2#5 with emitted_lt:(Maybe uint64) and
-// metadata:(Maybe MsgMetadata) appended after the msg ref (the v2 layout is
-// not present in the local ton checkout's block.tlb; it matches the format
-// produced by current mainnet nodes and the previous parser of this package).
+// The msg_envelope_v2#5 variant appends emitted_lt:(Maybe uint64) and
+// metadata:(Maybe MsgMetadata) after the message reference.
 type MsgEnvelope struct {
 	CurAddr         IntermediateAddress
 	NextAddr        IntermediateAddress
@@ -177,9 +186,8 @@ type MsgEnvelope struct {
 	EmittedLT *uint64
 	Metadata  *MsgMetadata
 
-	// V2 reports whether the envelope was parsed from (or should be serialized
-	// as) msg_envelope_v2#5. ToCell auto-upgrades to v2 when EmittedLT or
-	// Metadata is set.
+	// V2 preserves an explicitly selected or decoded v2 wire variant when its
+	// optional fields are absent.
 	V2 bool
 }
 
@@ -202,7 +210,7 @@ func (d *OutMsgQueueAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
 }
 
 func (d *DispatchQueueAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipUint64Boundary}, false)
+	dict, err := loader.LoadAugDict(256, AugDispatchQueue{}, false)
 	if err != nil {
 		return err
 	}
@@ -211,7 +219,7 @@ func (d *DispatchQueueAugDict) LoadFromCell(loader *cell.Slice) error {
 }
 
 func (d *DispatchQueueAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, cell.ReadOnlyAugmentation{SkipExtraFn: skipUint64Boundary}, true)
+	dict, err := loader.LoadAugDict(256, AugDispatchQueue{}, true)
 	if err != nil {
 		return err
 	}
@@ -247,6 +255,44 @@ func (q *OutMsgQueueInfo) LoadFromCell(loader *cell.Slice) error {
 
 func (q *OutMsgQueueInfo) LoadFromCellAsProof(loader *cell.Slice) error {
 	return q.load(loader, true)
+}
+
+func (q OutMsgQueueInfo) ToCell() (*cell.Cell, error) {
+	if q.OutQueue == nil || q.OutQueue.AugmentedDictionary == nil {
+		return nil, fmt.Errorf("out message queue is nil")
+	}
+	if q.OutQueue.GetKeySize() != 352 {
+		return nil, fmt.Errorf("out message queue has key size %d", q.OutQueue.GetKeySize())
+	}
+	if q.ProcInfo != nil && q.ProcInfo.GetKeySize() != 96 {
+		return nil, fmt.Errorf("processed info has key size %d", q.ProcInfo.GetKeySize())
+	}
+
+	outQueue, err := q.OutQueue.ToCell()
+	if err != nil {
+		return nil, fmt.Errorf("failed to store out message queue: %w", err)
+	}
+
+	builder := cell.BeginCell()
+	if err = builder.StoreBuilder(outQueue.ToBuilder()); err != nil {
+		return nil, fmt.Errorf("failed to store out message queue: %w", err)
+	}
+	if err = builder.StoreDict(q.ProcInfo); err != nil {
+		return nil, fmt.Errorf("failed to store processed info: %w", err)
+	}
+	if err = builder.StoreBoolBit(q.Extra != nil); err != nil {
+		return nil, fmt.Errorf("failed to store out message queue extra flag: %w", err)
+	}
+	if q.Extra != nil {
+		extra, err := q.Extra.ToCell()
+		if err != nil {
+			return nil, fmt.Errorf("failed to store out message queue extra: %w", err)
+		}
+		if err = builder.StoreBuilder(extra.ToBuilder()); err != nil {
+			return nil, fmt.Errorf("failed to store out message queue extra: %w", err)
+		}
+	}
+	return builder.EndCell(), nil
 }
 
 func (q *OutMsgQueueInfo) load(loader *cell.Slice, asProof bool) error {
@@ -287,6 +333,37 @@ func (q *OutMsgQueueExtra) LoadFromCellAsProof(loader *cell.Slice) error {
 	return q.load(loader, true)
 }
 
+func (q OutMsgQueueExtra) ToCell() (*cell.Cell, error) {
+	if q.DispatchQueue == nil || q.DispatchQueue.AugmentedDictionary == nil {
+		return nil, fmt.Errorf("dispatch queue is nil")
+	}
+	if q.DispatchQueue.GetKeySize() != 256 {
+		return nil, fmt.Errorf("dispatch queue has key size %d", q.DispatchQueue.GetKeySize())
+	}
+	if q.OutQueueSize != nil && *q.OutQueueSize >= 1<<48 {
+		return nil, fmt.Errorf("out queue size %d does not fit uint48", *q.OutQueueSize)
+	}
+
+	dispatchQueue, err := q.DispatchQueue.ToCell()
+	if err != nil {
+		return nil, fmt.Errorf("failed to store dispatch queue: %w", err)
+	}
+
+	builder := cell.BeginCell().MustStoreUInt(0, 4)
+	if err = builder.StoreBuilder(dispatchQueue.ToBuilder()); err != nil {
+		return nil, fmt.Errorf("failed to store dispatch queue: %w", err)
+	}
+	if err = builder.StoreBoolBit(q.OutQueueSize != nil); err != nil {
+		return nil, fmt.Errorf("failed to store out queue size flag: %w", err)
+	}
+	if q.OutQueueSize != nil {
+		if err = builder.StoreUInt(*q.OutQueueSize, 48); err != nil {
+			return nil, fmt.Errorf("failed to store out queue size: %w", err)
+		}
+	}
+	return builder.EndCell(), nil
+}
+
 func (q *OutMsgQueueExtra) load(loader *cell.Slice, asProof bool) error {
 	if !checkMagic("#0", loader) {
 		return fmt.Errorf("out message queue extra magic is not correct")
@@ -325,10 +402,33 @@ func (q *AccountDispatchQueue) LoadFromCell(loader *cell.Slice) error {
 	if err != nil {
 		return fmt.Errorf("failed to load account dispatch messages count: %w", err)
 	}
+	if count == 0 || messages.IsEmpty() {
+		return fmt.Errorf("account dispatch queue must contain messages and a non-zero count")
+	}
 
 	q.Messages = messages
 	q.Count = count
 	return nil
+}
+
+func (q AccountDispatchQueue) ToCell() (*cell.Cell, error) {
+	if q.Messages.IsEmpty() || q.Count == 0 {
+		return nil, fmt.Errorf("account dispatch queue must contain messages and a non-zero count")
+	}
+	if q.Messages.GetKeySize() != 64 {
+		return nil, fmt.Errorf("account dispatch messages have key size %d", q.Messages.GetKeySize())
+	}
+	if q.Count >= 1<<48 {
+		return nil, fmt.Errorf("account dispatch message count %d does not fit uint48", q.Count)
+	}
+
+	builder := cell.BeginCell()
+	if err := builder.StoreDict(q.Messages); err != nil {
+		return nil, fmt.Errorf("failed to store account dispatch messages: %w", err)
+	}
+	// The count fits by the guard above and 49 bits always fit the builder.
+	builder.MustStoreUInt(q.Count, 48)
+	return builder.EndCell(), nil
 }
 
 func (m *EnqueuedMsg) LoadFromCell(loader *cell.Slice) error {
@@ -558,8 +658,7 @@ func skipUint64Boundary(loader *cell.Slice) error {
 	return err
 }
 
-// skipIntermediateAddress skips any IntermediateAddress variant, mirroring
-// IntermediateAddress::get_size (crypto/block/block-parse.cpp:797-808):
+// skipIntermediateAddress skips any IntermediateAddress variant:
 // regular$0 is 1+7 bits, simple$10 is 2+8+64 bits, ext$11 is 2+32+64 bits.
 func skipIntermediateAddress(loader *cell.Slice) error {
 	isNotRegular, err := loader.LoadBoolBit()

@@ -55,6 +55,10 @@ type TransactionExecutionResult struct {
 	ExecutionResult
 	Accepted        bool
 	TransactionCell *cell.Cell
+	// StartLT is the transaction logical time stored in TransactionCell.
+	StartLT uint64
+	// Burned is the inbound value destroyed by a blackhole account transaction.
+	Burned tlb.CurrencyCollection
 	// NextAccount is the resulting account state, prepared to feed the next
 	// transaction of the same account without any re-parsing.
 	NextAccount *PreparedAccount
@@ -137,6 +141,9 @@ func prepareParsedMessage(msgCell *cell.Cell, msg tlb.Message) (*PreparedMessage
 	default:
 		return nil, fmt.Errorf("unsupported input message type %s", msg.MsgType)
 	}
+	if err := validateBuiltTransactionMessage(msgCell); err != nil {
+		return nil, fmt.Errorf("invalid input message: %w", err)
+	}
 	if err := transactionValidateMessageStateInitLibs(&msg); err != nil {
 		return nil, err
 	}
@@ -155,8 +162,8 @@ func (m *PreparedMessage) Message() *tlb.Message {
 
 type transactionRuntimeAccount struct {
 	// addr is the effective account identity used as the ShardAccounts key.
-	// For an anycast account it contains the rewritten 256-bit address and no
-	// anycast metadata, matching Account::addr in the reference implementation.
+	// For an anycast account it contains the rewritten 256-bit address without
+	// anycast metadata.
 	addr *address.Address
 	// addrRaw is the MsgAddressInt stored in the account state (addr_orig plus
 	// anycast metadata). addrExact encodes addr without anycast. They are
@@ -236,6 +243,7 @@ type transactionPreparedPhases struct {
 	balance         *big.Int
 	extraCurrencies *cell.Dictionary
 	msgBalance      *transactionCurrencyBalance
+	blackholeBurned *big.Int
 	creditPhase     *tlb.CreditPhase
 	creditFirst     bool
 	storagePhase    *tlb.StoragePhase
@@ -366,9 +374,9 @@ func transactionMaybeBigValue(v *big.Int) any {
 	return v
 }
 
-// transactionExecutionLibraries combines the compute-phase library collections
-// the reference implementation uses. Since global version 15, account-private
-// and inbound StateInit libraries are excluded from the VM context.
+// transactionExecutionLibraries combines compute-phase library collections.
+// Since global version 15, account-private and inbound StateInit libraries are
+// excluded from the VM context.
 func transactionExecutionLibraries(acc *transactionRuntimeAccount, blockLibraries []*cell.Cell, globalVersion uint32) []*cell.Cell {
 	if globalVersion >= 15 {
 		return blockLibraries
@@ -462,8 +470,8 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	startLT := transactionStartLT(runtimeAcc.storageLT, executionLT, &msg.msg)
 	env := newTransactionExecEnv(block, &opts, runtimeAcc, &msg.msg, msg.cell, prepared, startLT)
 	if block.blockLT == 0 {
-		// The reference emulator derives block_lt from the requested lt (or the
-		// next block boundary after the account) before the created_lt bump.
+		// Derive block_lt before the created_lt bump when the caller did not
+		// provide it.
 		env.blockLT = transactionBlockLogicalTime(transactionStartLT(runtimeAcc.storageLT, executionLT, nil))
 	}
 	env.proof = proof
@@ -516,7 +524,10 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 		}
 	}
 
-	out := &TransactionExecutionResult{}
+	out := &TransactionExecutionResult{StartLT: startLT}
+	if prepared.blackholeBurned != nil {
+		out.Burned.Coins = tlb.FromNanoTON(prepared.blackholeBurned)
+	}
 	if msgRes != nil {
 		out.ExecutionResult = msgRes.ExecutionResult
 		out.Accepted = msgRes.Accepted
@@ -619,7 +630,6 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	if err != nil {
 		return nil, err
 	}
-
 	txCell, err := buildTransactionCell(transactionBuildParams{
 		accountAddr: runtimeAcc.addr,
 		startLT:     startLT,
@@ -739,7 +749,7 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 		}
 	}
 
-	out := &TransactionExecutionResult{}
+	out := &TransactionExecutionResult{StartLT: startLT}
 	if msgRes != nil {
 		out.ExecutionResult = msgRes.ExecutionResult
 		out.Accepted = msgRes.Accepted
@@ -813,7 +823,6 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 	if err != nil {
 		return nil, err
 	}
-
 	txCell, err := buildTransactionCell(transactionBuildParams{
 		accountAddr: runtimeAcc.addr,
 		startLT:     startLT,
@@ -1079,9 +1088,8 @@ func transactionMaybeStateInitCell(stateInit *tlb.StateInit) *cell.Cell {
 	return stateCell
 }
 
-// accountRandSeedBytes derives the per-account c7 rand seed from the block
-// seed, using the pre-v8 layout quirk of the reference implementation when
-// needed.
+// accountRandSeedBytes derives the per-account c7 random seed, including the
+// pre-v8 layout when needed.
 func accountRandSeedBytes(blockSeed []byte, addr *address.Address, globalVersion uint32) ([]byte, error) {
 	if len(blockSeed) == 0 {
 		return nil, nil

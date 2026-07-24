@@ -23,8 +23,7 @@ type preparedSuspendedAddr struct {
 
 type preparedStoragePrice struct {
 	price tlb.ConfigStoragePrices
-	// slice is the raw dict value slice of the entry, matching the reference
-	// implementation's representation in the c7 unpacked config tuple.
+	// slice is the raw dictionary value stored in the c7 unpacked config tuple.
 	slice *cell.Slice
 }
 
@@ -75,15 +74,12 @@ type PreparedBlockchainConfig struct {
 
 // PrepareBlockchainConfig derives the immutable per-epoch execution context from a
 // blockchain config root. The global version (config param 8) must be present.
-// Versions newer than this implementation execute with all known version gates,
-// matching the forward behavior of the pinned reference VM.
+// Versions newer than this implementation execute with all known version gates.
 //
-// Mirroring the reference FetchConfigParams boundary, preparation is strict about
-// the params the transaction executor depends on: storage prices (18), gas prices
-// (20/21) and message forward prices (24/25) must be present and well-formed with
-// no unparsed remainder, size limits (43) may be absent (defaults apply) but must
-// be well-formed when present, and an absent workchain list (12) yields an empty
-// list that rejects every non-masterchain destination instead of disabling checks.
+// Storage prices (18), gas prices (20/21), and message forward prices (24/25)
+// must be present and fully consumed. Size limits (43) may be absent, in which
+// case defaults apply. An absent workchain list (12) remains an empty list that
+// rejects every non-masterchain destination.
 func PrepareBlockchainConfig(configRoot *cell.Cell) (*PreparedBlockchainConfig, error) {
 	if configRoot == nil {
 		return nil, errConfigRootRequired
@@ -100,11 +96,9 @@ func PrepareBlockchainConfig(configRoot *cell.Cell) (*PreparedBlockchainConfig, 
 	return prepareBlockchainConfigParams(bc, globalVersion, true)
 }
 
-// PrepareBlockchainConfigLenient keeps the legacy fail-open preparation for
-// partial configs: absent or malformed non-essential params fall back to
-// defaults instead of failing. It is a non-consensus convenience for tooling
-// and differential harnesses that intentionally feed partial configs; the
-// transaction executor must use the strict PrepareBlockchainConfig.
+// PrepareBlockchainConfigLenient accepts partial configs for tooling and
+// differential harnesses. The transaction executor must use the strict
+// PrepareBlockchainConfig.
 func PrepareBlockchainConfigLenient(configRoot *cell.Cell) (*PreparedBlockchainConfig, error) {
 	return prepareBlockchainConfigLenient(configRoot)
 }
@@ -126,10 +120,8 @@ func prepareBlockchainConfigLenient(configRoot *cell.Cell) (*PreparedBlockchainC
 }
 
 // prepareBlockchainConfigParams derives the execution context from the validated
-// global version and the remaining config params. The strict mode mirrors the
-// reference FetchConfigParams behavior (missing or malformed mandatory params fail
-// preparation); the lenient mode keeps the legacy fail-open behavior for partial
-// emulation configs (used by test helpers via prepareBlockchainConfigLenient).
+// global version and the remaining config params. Strict mode rejects missing
+// or malformed mandatory params; lenient mode accepts partial emulation configs.
 func prepareBlockchainConfigParams(bc tlb.BlockchainConfig, globalVersion tlb.GlobalVersion, strict bool) (*PreparedBlockchainConfig, error) {
 	out := &PreparedBlockchainConfig{
 		root:         bc.Root,
@@ -241,9 +233,8 @@ func (c *PreparedBlockchainConfig) storageDueLimitsFor(masterchain bool) transac
 func (c *PreparedBlockchainConfig) prepareStoragePrices(bc tlb.BlockchainConfig, strict bool) error {
 	param, err := bc.GetParam(tlb.ConfigParamStoragePrices)
 	if err != nil {
-		// The reference get_storage_prices errors when param 18 is absent, so the
-		// strict path treats absence as a preparation failure; the lenient path
-		// keeps the legacy empty price list.
+		// Param 18 is mandatory in strict mode. Lenient tooling may use an empty
+		// price list when it is absent.
 		if !strict && errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
 			return nil
 		}
@@ -399,9 +390,8 @@ func (c *PreparedBlockchainConfig) prepareWorkchains(bc tlb.BlockchainConfig, st
 			if !absent {
 				return fmt.Errorf("failed to load workchains config param: %w", err)
 			}
-			// The reference unpack_workchain_list_ext builds an EMPTY workchain
-			// list when param 12 is absent, so destination checks stay enabled
-			// and reject every non-masterchain workchain.
+			// Keep destination checks enabled with an empty list when param 12 is
+			// absent, rejecting every non-masterchain workchain.
 			c.hasWorkchains = true
 			c.workchains = map[int32]*tlb.WorkchainDescr{}
 		}
@@ -439,8 +429,7 @@ func (c *PreparedBlockchainConfig) prepareWorkchains(bc tlb.BlockchainConfig, st
 
 // workchainDescr resolves a workchain descriptor from config param 12.
 // checksEnabled is false only for lenient (test-helper) configs prepared
-// without the param; strict configs keep checks enabled even when the param
-// is absent, matching the reference empty workchain list.
+// without the param; strict configs keep checks enabled with an empty list.
 func (c *PreparedBlockchainConfig) workchainDescr(workchain int32) (descr *tlb.WorkchainDescr, found, checksEnabled bool) {
 	if !c.hasWorkchains {
 		return nil, false, false
@@ -577,9 +566,8 @@ func transactionLoadGasPrices(blockchainCfg tlb.BlockchainConfig, masterchain bo
 	return prices
 }
 
-// transactionLoadGasPricesStrict loads config param 20/21 with the reference
-// parse_GasLimitsPrices semantics: the param must be present, well-formed, and
-// fully consumed (csr_unpack empty_ext: no bits and no refs left).
+// transactionLoadGasPricesStrict requires config param 20/21 to be present,
+// well-formed, and fully consumed.
 func transactionLoadGasPricesStrict(blockchainCfg tlb.BlockchainConfig, masterchain bool) (*tlb.ConfigGasLimitsPrices, error) {
 	paramID := tlb.ConfigParamGasPricesBasechain
 	if masterchain {
@@ -617,9 +605,8 @@ func transactionLoadMsgForwardPrices(blockchainCfg tlb.BlockchainConfig, masterc
 	return prices
 }
 
-// transactionLoadMsgForwardPricesStrict loads config param 24/25 with the
-// reference unpack_cell semantics: the param must be present, well-formed, and
-// fully consumed.
+// transactionLoadMsgForwardPricesStrict requires config param 24/25 to be
+// present, well-formed, and fully consumed.
 func transactionLoadMsgForwardPricesStrict(blockchainCfg tlb.BlockchainConfig, masterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
 	paramID := tlb.ConfigParamMsgForwardPricesBasechain
 	if masterchain {
@@ -681,9 +668,8 @@ func transactionLoadSizeLimits(blockchainCfg tlb.BlockchainConfig) transactionSi
 	return transactionApplySizeLimits(config)
 }
 
-// transactionLoadSizeLimitsStrict loads config param 43 with the reference
-// get_size_limits_config semantics: an absent param yields the defaults, a
-// present param must be well-formed and fully consumed.
+// transactionLoadSizeLimitsStrict loads config param 43. An absent param uses
+// defaults; a present param must be well-formed and fully consumed.
 func transactionLoadSizeLimitsStrict(blockchainCfg tlb.BlockchainConfig) (transactionSizeLimits, error) {
 	root, err := blockchainCfg.GetParam(tlb.ConfigParamSizeLimits)
 	if err != nil {
