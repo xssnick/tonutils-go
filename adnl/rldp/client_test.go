@@ -943,7 +943,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 			//	v <- true
 			//}
 		}()
-		err = cli.startTransfer(context.Background(), nil, data, int64(3*time.Second))
+		err = cli.startTransfer(context.Background(), nil, data, time.Now().Add(3*time.Second).UnixMilli())
 		if err != nil {
 			t.Fatal("sendMessageParts execution failed, err: ", err)
 		}
@@ -953,7 +953,7 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		err = cli.startTransfer(ctx, nil, data, int64(3*time.Second))
+		err = cli.startTransfer(ctx, nil, data, time.Now().Add(3*time.Second).UnixMilli())
 		if !errors.Is(err, ctx.Err()) {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}

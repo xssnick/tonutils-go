@@ -278,7 +278,8 @@ type NewConsensusConfigSimplex struct {
 
 type NewConsensusConfigSimplexV2 struct {
 	_                    Magic            `tlb:"#22"`
-	Flags                uint8            `tlb:"## 7"`
+	Flags                uint8            `tlb:"## 5"`
+	ProtocolVersion      uint8            `tlb:"## 2"`
 	UseQUIC              bool             `tlb:"bool"`
 	SlotsPerLeaderWindow uint32           `tlb:"## 32"`
 	NoncriticalParams    *cell.Dictionary `tlb:"dict 8"`

@@ -193,6 +193,7 @@ var streamDrainEmptyHook func()
 const (
 	recvStreamCleanupInterval = time.Second
 	requestCleanupInterval    = time.Millisecond
+	defaultMessageTimeout     = 10 * time.Second
 )
 
 const _MTU = 1 << 37
@@ -911,8 +912,12 @@ func (r *RLDP) processStreamMessagePart(stream *decoderStream, part *MessagePart
 			stream.partsSize = 0
 
 			var res any
-			if _, err = tl.ParseNoCopy(&res, buf, true); err != nil {
+			rest, err := tl.ParseNoCopy(&res, buf, true)
+			if err != nil {
 				return fmt.Errorf("failed to parse custom message: %w", err)
+			}
+			if len(rest) != 0 {
+				return fmt.Errorf("failed to parse custom message: %d trailing bytes", len(rest))
 			}
 
 			Logger("[RLDP] stream finished and parsed, processing transfer data", hex.EncodeToString(part.TransferID))
@@ -1432,7 +1437,7 @@ func (r *RLDP) stateCleaner() {
 	}
 }
 
-func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recoverTimeoutAt int64) error {
+func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recoverTimeoutAtMS int64) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1441,10 +1446,13 @@ func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recov
 	if closerCtx.Err() != nil {
 		return adnl.ErrPeerConnClosed
 	}
+	if len(data) == 0 {
+		return nil
+	}
 
 	at := &activeTransfer{
 		id:        transferId,
-		timeoutAt: recoverTimeoutAt * 1000, // ms
+		timeoutAt: recoverTimeoutAtMS,
 		data:      data,
 		totalSize: uint64(len(data)),
 		rldp:      r,
@@ -1456,8 +1464,10 @@ func (r *RLDP) startTransfer(ctx context.Context, transferId, data []byte, recov
 	}
 
 	if !send {
-		// empty transfer, nothing to send
-		return nil
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.DeadlineExceeded
 	}
 
 	r.mx.Lock()
@@ -1629,6 +1639,43 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 	return nil
 }
 
+// SendMessage starts a fire-and-forget RLDP transfer. Without a caller
+// deadline, the transfer uses the 10-second timeout of the reference client.
+func (r *RLDP) SendMessage(ctx context.Context, payload []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	timeout, ok := ctx.Deadline()
+	if !ok {
+		timeout = time.Now().Add(defaultMessageTimeout)
+	}
+
+	messageID := make([]byte, 32)
+	if _, err := rand.Read(messageID); err != nil {
+		return fmt.Errorf("failed to generate message id: %w", err)
+	}
+
+	data, err := tl.Serialize(Message{
+		ID:   messageID,
+		Data: payload,
+	}, true)
+	if err != nil {
+		return fmt.Errorf("failed to serialize message: %w", err)
+	}
+
+	transferID := make([]byte, 32)
+	if _, err = rand.Read(transferID); err != nil {
+		return fmt.Errorf("failed to generate transfer id: %w", err)
+	}
+
+	if err = r.startTransfer(ctx, transferID, data, timeout.UnixMilli()); err != nil {
+		return fmt.Errorf("failed to send message: %w", err)
+	}
+
+	return nil
+}
+
 func (r *RLDP) DoQuery(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error {
 	qid := make([]byte, 32)
 	_, err := rand.Read(qid)
@@ -1740,7 +1787,7 @@ func (r *RLDP) DoQueryAsync(ctx context.Context, maxAnswerSize uint64, id []byte
 		r.activateRequestCleanupLoop()
 	}
 
-	if err = r.startTransfer(ctx, transferId, data, int64(q.Timeout)); err != nil {
+	if err = r.startTransfer(ctx, transferId, data, int64(q.Timeout)*1000); err != nil {
 		if answered := r.cancelActiveRequest(request); answered {
 			return nil
 		}
@@ -1918,7 +1965,7 @@ func (r *RLDP) SendAnswer(ctx context.Context, maxAnswerSize uint64, timeoutAt u
 		tm = minT
 	}
 
-	if err = r.startTransfer(ctx, reverseTransferId(toTransferId), data, tm); err != nil {
+	if err = r.startTransfer(ctx, reverseTransferId(toTransferId), data, tm*1000); err != nil {
 		return fmt.Errorf("failed to send partitioned answer: %w", err)
 	}
 

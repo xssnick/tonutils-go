@@ -179,6 +179,7 @@ type ADNLOverlayWrapper struct {
 	queryHandler      atomic.Pointer[adnlOverlayQueryHandler]
 	disconnectHandler atomic.Pointer[adnlOverlayDisconnectHandler]
 
+	broadcastPeer BroadcastPeer
 	*BroadcastReceiver
 	*ADNLWrapper
 }
@@ -203,6 +204,7 @@ func (a *ADNLWrapper) AttachOverlay(receiver *BroadcastReceiver) (*ADNLOverlayWr
 	w = &ADNLOverlayWrapper{
 		BroadcastReceiver: receiver,
 		ADNLWrapper:       a,
+		broadcastPeer:     adnlBroadcastPeer{transport: a},
 	}
 	a.overlays[receiver.overlayKey] = w
 	a.rebuildBroadcastReceiversLocked()
@@ -521,7 +523,7 @@ func terminalFECBroadcastErrorLocked(state *BroadcastFECRelayState, id string, s
 }
 
 func (a *ADNLOverlayWrapper) sendFECControlMessage(msg tl.Serializable) error {
-	if err := a.ADNL.SendCustomMessage(context.Background(), msg); err != nil {
+	if err := a.broadcastPeer.SendCustomMessage(context.Background(), msg); err != nil {
 		return fmt.Errorf("failed to send overlay fec control message: %w", err)
 	}
 	return nil
@@ -898,7 +900,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	trusted := false
 	relayCfg := a.broadcastFECRelayConfig()
 	relayPeers := []BroadcastPeer(nil)
-	sourcePeerID := a.GetID()
+	sourcePeerID := a.broadcastPeer.ID()
 	if relayCfg.enabled {
 		relayPeers = relayCfg.peerSet.Peers()
 	}
@@ -1183,7 +1185,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 	state := a.activeFECState()
 	seqno := uint32(t.Seqno)
 	relayCfg := a.broadcastFECRelayConfig()
-	sourcePeerID := a.GetID()
+	sourcePeerID := a.broadcastPeer.ID()
 
 	for {
 		now := time.Now()

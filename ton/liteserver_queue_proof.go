@@ -286,7 +286,15 @@ func lookupNextDispatchQueueAccount(dispatchQueue *cell.AugmentedDictionary, add
 	if dispatchQueue == nil || dispatchQueue.IsEmpty() {
 		return nil, nil, cell.ErrNoSuchKeyInDict
 	}
-	return dispatchQueue.LookupNearestKey(cell.BeginCell().MustStoreSlice(addr, 256).EndCell(), true, allowEq, false)
+	// DispatchQueue is HashmapAugE 256 AccountDispatchQueue uint64, so a raw
+	// leaf carries the 64-bit min-lt augmentation ahead of the value and
+	// AccountDispatchQueue would parse it as its messages dictionary.
+	key, value, _, err := dispatchQueue.LookupNearestKeyExtra(
+		cell.BeginCell().MustStoreSlice(addr, 256).EndCell(), true, allowEq, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, value, nil
 }
 
 func lookupNextAccountDispatchMessage(messages *cell.Dictionary, lt uint64) (*cell.Cell, *cell.Slice, error) {

@@ -12,13 +12,25 @@ import (
 	quicgo "github.com/xssnick/quic-go-ton"
 )
 
-// ErrNoQueryHandler is returned when a peer receives quic.query but has no handler.
-var ErrNoQueryHandler = errors.New("quic: peer query handler is not set")
+var (
+	// ErrNoQueryHandler is returned when a peer receives quic.query but has no handler.
+	ErrNoQueryHandler = errors.New("quic: peer query handler is not set")
+	// ErrPeerClosed is returned when a peer has no live QUIC connection.
+	ErrPeerClosed = errors.New("quic: peer is closed")
+	// ErrOutboundPeerNotFound is returned when a path has no live outbound connection.
+	ErrOutboundPeerNotFound = errors.New("quic: outbound peer is not connected")
+	// ErrGatewayClosed is returned after a Gateway has been closed.
+	ErrGatewayClosed = errors.New("quic: gateway is closed")
+	// ErrGatewayMode is returned when Serve follows a client-only Dial or more
+	// than one Serve is attempted.
+	ErrGatewayMode = errors.New("quic: gateway transport mode is already fixed")
+	// ErrPeerPathLimit is returned when a Gateway has reached MaxPeerPaths.
+	ErrPeerPathLimit = errors.New("quic: peer path limit reached")
+)
 
-// ErrPeerClosed is returned when a peer has no live QUIC connection.
-var ErrPeerClosed = errors.New("quic: peer is closed")
-
-// ConnectionHandler is called once when a Gateway sees a new (local, peer) path.
+// ConnectionHandler is called once when a Gateway sees a new (local, peer)
+// path. It runs before incoming streams are accepted and should only install
+// handlers and return without waiting on peer I/O.
 type ConnectionHandler func(peer *Peer) error
 
 // PeerQueryHandler handles inbound quic.query streams for a Peer.
@@ -27,69 +39,137 @@ type PeerQueryHandler func(ctx context.Context, payload []byte) ([]byte, error)
 // PeerMessageHandler handles inbound quic.message streams for a Peer.
 type PeerMessageHandler func(ctx context.Context, payload []byte)
 
-// PeerDisconnectHandler is called after the path loses all live connections or is closed.
+// PeerDisconnectHandler is called after ConnectionHandler has returned and the
+// path loses all live connections or is closed. It must return promptly: the
+// closed path keeps its bounded MaxPeerPaths slot until this callback returns.
 type PeerDisconnectHandler func(peer *Peer)
+
+// AddressResolver resolves a remote QUIC address when an outbound connection
+// must be established.
+type AddressResolver func(ctx context.Context) (string, error)
 
 type pathKey struct {
 	local adnlID
 	peer  adnlID
 }
 
+type gatewayMode uint8
+
+const (
+	gatewayIdle gatewayMode = iota
+	gatewayServer
+	gatewayClientStarting
+	gatewayClient
+	gatewayFailed
+	gatewayClosed
+)
+
 // Gateway manages TON QUIC peers keyed by (local ADNL id, peer ADNL id).
 type Gateway struct {
-	defaultID  Identity
-	ids        []Identity
-	byID       map[adnlID]Identity
-	maxObjSize int64
+	limits     Limits
+	identities *identityRegistry
+	admission  *streamAdmission
 
-	mu     sync.RWMutex
-	peers  map[pathKey]*Peer
-	server *Server
+	mu              sync.RWMutex
+	peers           map[pathKey]*Peer
+	mode            gatewayMode
+	server          *Server
+	clientTransport *clientTransport
+	clientReady     chan struct{}
+	transportErr    error
+	started         chan struct{}
+	startOnce       sync.Once
+	closeDone       chan struct{}
+	closeErr        error
 
 	connHandler atomic.Pointer[ConnectionHandler]
 }
 
 // NewGateway builds a Gateway hosting the given local Ed25519 identities.
 func NewGateway(keys ...ed25519.PrivateKey) (*Gateway, error) {
-	if len(keys) == 0 {
-		return nil, errors.New("quic: at least one identity key is required")
+	return NewGatewayWithLimits(DefaultLimits(), keys...)
+}
+
+// NewGatewayWithLimits builds a Gateway with explicit per-instance resource
+// limits.
+func NewGatewayWithLimits(limits Limits, keys ...ed25519.PrivateKey) (*Gateway, error) {
+	if err := limits.validate(); err != nil {
+		return nil, err
 	}
 
-	g := &Gateway{
-		ids:        make([]Identity, 0, len(keys)),
-		byID:       make(map[adnlID]Identity, len(keys)),
-		maxObjSize: DefaultMaxObjectSize,
-		peers:      make(map[pathKey]*Peer),
+	identities, err := newIdentityRegistry(keys...)
+	if err != nil {
+		return nil, err
 	}
-	for i, key := range keys {
-		id, err := NewIdentity(key)
-		if err != nil {
-			return nil, err
-		}
-		if i == 0 {
-			g.defaultID = id
-		}
-		g.ids = append(g.ids, id)
-		g.byID[id.id] = id
+
+	return &Gateway{
+		limits:     limits,
+		identities: identities,
+		admission: newStreamAdmission(
+			uint64(limits.MaxConcurrentIncomingStreams),
+			uint64(limits.MaxBufferedIncomingBytes),
+		),
+		peers:     make(map[pathKey]*Peer),
+		started:   make(chan struct{}),
+		closeDone: make(chan struct{}),
+	}, nil
+}
+
+func (g *Gateway) signalStarted() {
+	g.startOnce.Do(func() {
+		close(g.started)
+	})
+}
+
+// AddIdentity makes an Ed25519 identity available to new paths and
+// handshakes. Adding the same identity more than once is a no-op.
+func (g *Gateway) AddIdentity(key ed25519.PrivateKey) error {
+	_, err := g.identities.add(key)
+	return err
+}
+
+// RemoveIdentity removes a non-default identity and closes all paths using it.
+func (g *Gateway) RemoveIdentity(publicKey ed25519.PublicKey) error {
+	id, err := idFromPublicKey(publicKey)
+	if err != nil {
+		return err
 	}
-	return g, nil
+	if err = g.identities.remove(id); err != nil {
+		return err
+	}
+
+	g.mu.Lock()
+	peers := make([]*Peer, 0)
+	for key, peer := range g.peers {
+		if key.local == id {
+			delete(g.peers, key)
+			peers = append(peers, peer)
+		}
+	}
+	g.mu.Unlock()
+
+	for _, peer := range peers {
+		peer.closeWithError(ErrIdentityNotFound)
+	}
+	return nil
 }
 
 // ID returns a copy of the default local ADNL id.
 func (g *Gateway) ID() []byte {
-	return g.defaultID.ID()
+	return g.identities.defaultIdentity().ID()
 }
 
 // PublicKey returns a copy of the default local Ed25519 public key.
 func (g *Gateway) PublicKey() ed25519.PublicKey {
-	return g.defaultID.PublicKey()
+	return g.identities.defaultIdentity().PublicKey()
 }
 
 // Identities returns the local Ed25519 public keys hosted by the Gateway.
 func (g *Gateway) Identities() []ed25519.PublicKey {
-	keys := make([]ed25519.PublicKey, len(g.ids))
-	for i, id := range g.ids {
-		keys[i] = id.PublicKey()
+	identities := g.identities.identities()
+	keys := make([]ed25519.PublicKey, len(identities))
+	for i, identity := range identities {
+		keys[i] = identity.PublicKey()
 	}
 	return keys
 }
@@ -105,40 +185,105 @@ func (g *Gateway) SetConnectionHandler(handler ConnectionHandler) {
 
 // Serve listens on pc and accepts inbound TON QUIC connections.
 func (g *Gateway) Serve(pc net.PacketConn) error {
-	keys := make([]ed25519.PrivateKey, len(g.ids))
-	for i, id := range g.ids {
-		keys[i] = id.key
-	}
-
-	srv, err := NewServer(Handler{
+	srv := newServer(Handler{
 		pathHandler: g,
-	}, keys...)
-	if err != nil {
+	}, g.limits, g.identities, g.admission)
+
+	g.mu.Lock()
+	if g.mode != gatewayIdle {
+		err := ErrGatewayMode
+		if g.mode == gatewayClosed {
+			err = ErrGatewayClosed
+		}
+		g.mu.Unlock()
 		return err
 	}
-	srv.maxObjectSize = g.maxObjSize
-
-	g.mu.Lock()
-	if g.server != nil {
-		g.mu.Unlock()
-		return errors.New("quic: gateway server is already running")
-	}
+	g.mode = gatewayServer
 	g.server = srv
+	g.signalStarted()
 	g.mu.Unlock()
 
-	err = srv.Serve(pc)
+	err := srv.Serve(pc)
+	closeErr := srv.Close()
+	if err == nil {
+		err = closeErr
+	}
 
 	g.mu.Lock()
-	if g.server == srv {
-		g.server = nil
+	if g.mode != gatewayClosed && g.server == srv {
+		g.mode = gatewayFailed
+		g.transportErr = err
 	}
 	g.mu.Unlock()
 
 	return err
 }
 
-// Dial establishes or reuses a peer path from local to peer.
+// WaitReady waits until the Gateway has initialized its single UDP transport.
+func (g *Gateway) WaitReady(ctx context.Context) error {
+	select {
+	case <-g.started:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	for {
+		g.mu.RLock()
+		mode := g.mode
+		server := g.server
+		clientReady := g.clientReady
+		err := g.transportErr
+		g.mu.RUnlock()
+
+		switch mode {
+		case gatewayServer:
+			if readyErr := server.WaitReady(ctx); readyErr != nil {
+				return readyErr
+			}
+
+			g.mu.RLock()
+			mode = g.mode
+			err = g.transportErr
+			g.mu.RUnlock()
+			if mode == gatewayFailed {
+				return err
+			}
+			return nil
+		case gatewayClientStarting:
+			select {
+			case <-clientReady:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		case gatewayClient:
+			return nil
+		case gatewayFailed:
+			return err
+		case gatewayClosed:
+			return ErrGatewayClosed
+		default:
+			return ErrGatewayMode
+		}
+	}
+}
+
+// Dial establishes or reuses an outbound connection for the identity path
+// from local to peer. addr is used only when the path has no live outbound.
 func (g *Gateway) Dial(ctx context.Context, local, peer ed25519.PublicKey, addr string) (*Peer, error) {
+	return g.DialResolved(ctx, local, peer, func(context.Context) (string, error) {
+		return addr, nil
+	})
+}
+
+// DialResolved establishes or reuses an outbound connection for the identity
+// path from local to peer. resolve is called only when the path has no live
+// outbound connection.
+func (g *Gateway) DialResolved(
+	ctx context.Context,
+	local ed25519.PublicKey,
+	peer ed25519.PublicKey,
+	resolve AddressResolver,
+) (*Peer, error) {
 	localID, err := idFromPublicKey(local)
 	if err != nil {
 		return nil, err
@@ -148,37 +293,67 @@ func (g *Gateway) Dial(ctx context.Context, local, peer ed25519.PublicKey, addr 
 		return nil, err
 	}
 
-	id, ok := g.byID[localID]
-	if !ok {
-		return nil, fmt.Errorf("quic: unknown local identity %s", localID)
+	identity, err := g.identities.get(localID)
+	if err != nil {
+		return nil, err
 	}
 
-	p, created := g.getOrCreatePeer(pathKey{local: localID, peer: peerID}, peer)
+	return g.dialResolved(ctx, identity, peerID, peer, resolve)
+}
+
+func (g *Gateway) dialResolved(
+	ctx context.Context,
+	identity Identity,
+	peerID adnlID,
+	peerKey ed25519.PublicKey,
+	resolve AddressResolver,
+) (*Peer, error) {
+	p, created, err := g.getOrCreatePeer(pathKey{local: identity.id, peer: peerID}, peerKey)
+	if err != nil {
+		return nil, err
+	}
 	if !created {
 		if err := p.waitReady(ctx); err != nil {
 			return nil, err
 		}
-		if p.client() != nil {
-			return p, nil
-		}
 	}
 
 	p.dialMu.Lock()
-	if p.client() != nil {
+	if p.outboundClient() != nil {
 		p.dialMu.Unlock()
 		if created {
-			g.finishPeerInit(p, nil)
+			if err = g.initPeer(p); err != nil {
+				return nil, err
+			}
 		}
 		return p, nil
 	}
 
-	client, err := dialIdentity(ctx, addr, id, peer)
+	addr, err := resolve(ctx)
 	if err != nil {
 		p.dialMu.Unlock()
 		if created {
-			g.finishPeerInit(p, err)
+			if p.closeIfNoClient(err) {
+				return nil, err
+			}
+			if initErr := g.initPeer(p); initErr != nil {
+				return nil, initErr
+			}
 		}
-		g.removePeer(p)
+		return nil, err
+	}
+
+	client, err := g.dialIdentity(ctx, addr, identity, peerKey)
+	if err != nil {
+		p.dialMu.Unlock()
+		if created {
+			if p.closeIfNoClient(err) {
+				return nil, err
+			}
+			if initErr := g.initPeer(p); initErr != nil {
+				return nil, initErr
+			}
+		}
 		return nil, err
 	}
 	old, changed := p.setOutbound(client)
@@ -186,9 +361,8 @@ func (g *Gateway) Dial(ctx context.Context, local, peer ed25519.PublicKey, addr 
 		p.dialMu.Unlock()
 		_ = client.Close()
 		if created {
-			g.finishPeerInit(p, ErrPeerClosed)
+			p.closeWithError(ErrPeerClosed)
 		}
-		g.removePeer(p)
 		return nil, ErrPeerClosed
 	}
 	p.dialMu.Unlock()
@@ -197,20 +371,121 @@ func (g *Gateway) Dial(ctx context.Context, local, peer ed25519.PublicKey, addr 
 	}
 
 	g.watchClient(p, client, false)
-	go g.serveClientConn(p, client)
-
 	if created {
 		if err = g.initPeer(p); err != nil {
-			p.Close()
 			return nil, err
 		}
 	}
+
+	go g.serveClientConn(p, client)
 	return p, nil
+}
+
+func (g *Gateway) dialIdentity(ctx context.Context, addr string, local Identity, peer ed25519.PublicKey) (*Client, error) {
+	for {
+		g.mu.Lock()
+		switch g.mode {
+		case gatewayIdle:
+			ready := make(chan struct{})
+			g.mode = gatewayClientStarting
+			g.clientReady = ready
+			g.signalStarted()
+			g.mu.Unlock()
+
+			transport, err := newClientTransport(g.limits)
+
+			g.mu.Lock()
+			if g.mode == gatewayClientStarting {
+				if err != nil {
+					g.mode = gatewayFailed
+					g.transportErr = err
+				} else {
+					g.mode = gatewayClient
+					g.clientTransport = transport
+				}
+				close(ready)
+				g.mu.Unlock()
+			} else {
+				g.mu.Unlock()
+				if transport != nil {
+					_ = transport.close()
+				}
+				close(ready)
+			}
+			if err != nil {
+				return nil, err
+			}
+		case gatewayClientStarting:
+			ready := g.clientReady
+			g.mu.Unlock()
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		case gatewayClient:
+			transport := g.clientTransport
+			g.mu.Unlock()
+			return transport.dialIdentity(ctx, addr, local, peer)
+		case gatewayServer:
+			server := g.server
+			g.mu.Unlock()
+			return server.dialIdentity(ctx, addr, local, peer)
+		case gatewayFailed:
+			err := g.transportErr
+			g.mu.Unlock()
+			if err == nil {
+				err = ErrGatewayClosed
+			}
+			return nil, err
+		case gatewayClosed:
+			g.mu.Unlock()
+			return nil, ErrGatewayClosed
+		default:
+			g.mu.Unlock()
+			return nil, ErrGatewayMode
+		}
+	}
 }
 
 // DialDefault establishes or reuses a peer path from the default local identity.
 func (g *Gateway) DialDefault(ctx context.Context, peer ed25519.PublicKey, addr string) (*Peer, error) {
-	return g.Dial(ctx, g.defaultID.PublicKey(), peer, addr)
+	return g.DialDefaultResolved(ctx, peer, func(context.Context) (string, error) {
+		return addr, nil
+	})
+}
+
+// DialDefaultResolved establishes or reuses a peer path from the default local
+// identity, resolving the remote address only when a dial is required.
+func (g *Gateway) DialDefaultResolved(
+	ctx context.Context,
+	peer ed25519.PublicKey,
+	resolve AddressResolver,
+) (*Peer, error) {
+	peerID, err := idFromPublicKey(peer)
+	if err != nil {
+		return nil, err
+	}
+	return g.dialResolved(ctx, g.identities.defaultIdentity(), peerID, peer, resolve)
+}
+
+// DialDefaultResolvedID is DialDefaultResolved for callers that already know
+// the peer's 32-byte ADNL short id, skipping its per-call derivation from
+// peerKey. peerKey is still required: it authenticates the raw-public-key TLS
+// handshake when a dial is needed, and peerID must be its ADNL short id.
+func (g *Gateway) DialDefaultResolvedID(
+	ctx context.Context,
+	peerID []byte,
+	peerKey ed25519.PublicKey,
+	resolve AddressResolver,
+) (*Peer, error) {
+	if len(peerID) != len(adnlID{}) {
+		return nil, fmt.Errorf("quic: invalid ADNL id size %d", len(peerID))
+	}
+	if len(peerKey) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("quic: invalid Ed25519 public key size %d", len(peerKey))
+	}
+	return g.dialResolved(ctx, g.identities.defaultIdentity(), adnlID(peerID), peerKey, resolve)
 }
 
 // Peer returns the currently known peer for a path, if any.
@@ -227,14 +502,72 @@ func (g *Gateway) Peer(local, peer ed25519.PublicKey) *Peer {
 	g.mu.RLock()
 	p := g.peers[pathKey{local: localID, peer: peerID}]
 	g.mu.RUnlock()
+	if p != nil && p.closed.Load() {
+		return nil
+	}
 	return p
+}
+
+// OutboundPeer returns the currently known peer when its path has a live
+// outbound connection.
+func (g *Gateway) OutboundPeer(
+	local ed25519.PublicKey,
+	peer ed25519.PublicKey,
+) (*Peer, error) {
+	localID, err := idFromPublicKey(local)
+	if err != nil {
+		return nil, err
+	}
+	peerID, err := idFromPublicKey(peer)
+	if err != nil {
+		return nil, err
+	}
+
+	g.mu.RLock()
+	p := g.peers[pathKey{local: localID, peer: peerID}]
+	g.mu.RUnlock()
+	if p == nil || p.outboundClient() == nil {
+		return nil, ErrOutboundPeerNotFound
+	}
+	return p, nil
+}
+
+// OutboundPeerDefaultID is OutboundPeer for the default local identity, keyed
+// by the peer's precomputed 32-byte ADNL short id so neither public key is
+// hashed per call.
+func (g *Gateway) OutboundPeerDefaultID(peerID []byte) (*Peer, error) {
+	if len(peerID) != len(adnlID{}) {
+		return nil, fmt.Errorf("quic: invalid ADNL id size %d", len(peerID))
+	}
+	key := pathKey{
+		local: g.identities.defaultIdentity().id,
+		peer:  adnlID(peerID),
+	}
+	g.mu.RLock()
+	p := g.peers[key]
+	g.mu.RUnlock()
+	if p == nil || p.outboundClient() == nil {
+		return nil, ErrOutboundPeerNotFound
+	}
+	return p, nil
 }
 
 // Close closes the Gateway server and all active peers.
 func (g *Gateway) Close() error {
 	g.mu.Lock()
+	if g.mode == gatewayClosed {
+		done := g.closeDone
+		g.mu.Unlock()
+		<-done
+		return g.closeErr
+	}
+
+	clientReady := g.clientReady
 	srv := g.server
-	g.server = nil
+	clientTransport := g.clientTransport
+	g.mode = gatewayClosed
+	g.signalStarted()
+
 	peers := make([]*Peer, 0, len(g.peers))
 	for _, p := range g.peers {
 		peers = append(peers, p)
@@ -242,25 +575,75 @@ func (g *Gateway) Close() error {
 	g.peers = make(map[pathKey]*Peer)
 	g.mu.Unlock()
 
+	deferredPeers := make([]*Peer, 0, len(peers))
 	for _, p := range peers {
-		p.closeOnly()
+		if p.beginCloseWithError(ErrGatewayClosed, true).transitioned {
+			deferredPeers = append(deferredPeers, p)
+		}
 	}
+
+	var errs []error
 	if srv != nil {
-		return srv.Close()
+		if err := srv.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	if clientTransport != nil {
+		if err := clientTransport.close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if clientReady != nil && clientTransport == nil {
+		<-clientReady
+	}
+	err := errors.Join(errs...)
+
+	g.mu.Lock()
+	g.closeErr = err
+	close(g.closeDone)
+	g.mu.Unlock()
+
+	for _, p := range deferredPeers {
+		p.releaseDeferredFinalize()
+	}
+	return err
 }
 
-func (g *Gateway) getOrCreatePeer(key pathKey, peerKey ed25519.PublicKey) (*Peer, bool) {
+func (g *Gateway) getOrCreatePeer(key pathKey, peerKey ed25519.PublicKey) (*Peer, bool, error) {
+	g.mu.RLock()
+	if g.mode != gatewayClosed && g.mode != gatewayFailed {
+		if p := g.peers[key]; p != nil && !p.closed.Load() {
+			g.mu.RUnlock()
+			return p, false, nil
+		}
+	}
+	g.mu.RUnlock()
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if p := g.peers[key]; p != nil {
-		if !p.closed.Load() {
-			return p, false
-		}
-		delete(g.peers, key)
+	if g.mode == gatewayClosed {
+		return nil, false, ErrGatewayClosed
 	}
+	if g.mode == gatewayFailed {
+		if g.transportErr != nil {
+			return nil, false, g.transportErr
+		}
+		return nil, false, ErrGatewayClosed
+	}
+	if p := g.peers[key]; p != nil {
+		if p.closed.Load() {
+			return nil, false, ErrPeerClosed
+		}
+		return p, false, nil
+	}
+	if !g.identities.has(key.local) {
+		return nil, false, fmt.Errorf("%w: %s", ErrIdentityNotFound, key.local)
+	}
+	if len(g.peers) >= g.limits.MaxPeerPaths {
+		return nil, false, ErrPeerPathLimit
+	}
+
 	p := &Peer{
 		gateway: g,
 		key:     key,
@@ -268,27 +651,69 @@ func (g *Gateway) getOrCreatePeer(key pathKey, peerKey ed25519.PublicKey) (*Peer
 		ready:   make(chan struct{}),
 	}
 	g.peers[key] = p
-	return p, true
+	return p, true, nil
 }
 
 func (g *Gateway) initPeer(p *Peer) error {
-	handler := g.connHandler.Load()
+	p.mu.Lock()
+	switch p.initState {
+	case peerInitRunning:
+		ready := p.ready
+		p.mu.Unlock()
+		<-ready
+		return p.initErr
+	case peerInitDone:
+		err := p.initErr
+		p.mu.Unlock()
+		return err
+	}
+	p.initState = peerInitRunning
+	p.mu.Unlock()
+
 	var err error
-	if handler != nil {
+	if !g.identities.has(p.key.local) {
+		err = ErrIdentityNotFound
+	}
+
+	if err == nil {
+		p.mu.Lock()
+		switch {
+		case p.closed.Load():
+			err = p.initAbort
+			if err == nil {
+				err = ErrPeerClosed
+			}
+		case p.inbound == nil && p.outbound == nil:
+			err = ErrPeerClosed
+		}
+		// Passing this locked check is the linearization point for starting
+		// ConnectionHandler. A concurrent close either wins above or records
+		// initAbort and waits for the handler result.
+		p.mu.Unlock()
+	}
+
+	handler := g.connHandler.Load()
+	if err == nil && handler != nil {
 		err = (*handler)(p)
 	}
-	g.finishPeerInit(p, err)
+
+	p.mu.Lock()
+	if p.initAbort != nil {
+		err = p.initAbort
+	}
+	p.initState = peerInitDone
+	p.initErr = err
+	close(p.ready)
+	finalize := p.closed.Load() && !p.deferFinalize
+	p.mu.Unlock()
+
+	if finalize {
+		p.finalizeClose()
+	}
 	if err != nil {
-		g.removePeer(p)
+		p.closeWithError(err)
 	}
 	return err
-}
-
-func (g *Gateway) finishPeerInit(p *Peer, err error) {
-	p.initOnce.Do(func() {
-		p.initErr = err
-		close(p.ready)
-	})
 }
 
 func (g *Gateway) removePeer(p *Peer) {
@@ -300,17 +725,27 @@ func (g *Gateway) removePeer(p *Peer) {
 }
 
 func (g *Gateway) registerInbound(ctx context.Context, local, peer adnlID, peerKey ed25519.PublicKey, conn *quicgo.Conn) (*Peer, error) {
-	p, created := g.getOrCreatePeer(pathKey{local: local, peer: peer}, peerKey)
-	old, client, changed := p.setInboundConn(conn, peerKey, peer, g.maxObjSize)
-	if changed {
-		if old != nil {
-			_ = old.Close()
-		}
-		g.watchClient(p, client, true)
+	p, created, err := g.getOrCreatePeer(pathKey{local: local, peer: peer}, peerKey)
+	if err != nil {
+		return nil, err
+	}
+	if !g.identities.has(local) {
+		p.closeWithError(ErrIdentityNotFound)
+		return nil, ErrIdentityNotFound
+	}
+
+	old, client, err := p.attachInboundConn(conn, peerKey, peer, g.limits.MaxObjectSize)
+	if err != nil {
+		return nil, err
+	}
+	g.watchClient(p, client, true)
+	if old != nil {
+		_ = old.Close()
 	}
 
 	if created {
 		if err := g.initPeer(p); err != nil {
+			p.closeWithError(err)
 			return nil, err
 		}
 	} else if err := p.waitReady(ctx); err != nil {
@@ -322,10 +757,7 @@ func (g *Gateway) registerInbound(ctx context.Context, local, peer adnlID, peerK
 func (g *Gateway) watchClient(p *Peer, client *Client, inbound bool) {
 	go func() {
 		<-client.conn.Context().Done()
-		if p.removeClient(client, inbound) && p.empty() {
-			g.removePeer(p)
-			p.closeByRemote()
-		}
+		p.removeClientAndCloseIfEmpty(client, inbound)
 	}()
 }
 
@@ -334,41 +766,20 @@ func (g *Gateway) handlePath(ctx context.Context, path streamPath) (streamHandle
 }
 
 func (g *Gateway) serveClientConn(p *Peer, client *Client) {
-	ctx := client.conn.Context()
-	for {
-		st, err := client.conn.AcceptStream(ctx)
-		if err != nil {
-			return
-		}
-		go g.serveClientStream(ctx, p, st)
-	}
+	serveConnStreams(client.conn.Context(), client.conn, g.admission, g.limits, p)
 }
 
-func (g *Gateway) serveClientStream(ctx context.Context, p *Peer, st *quicgo.Stream) {
-	id, payload, err := readBoxedObject(st, g.maxObjSize)
-	if err != nil {
-		st.CancelRead(1)
-		st.Close()
-		return
-	}
+type peerInitState uint8
 
-	switch id {
-	case idQuicQuery:
-		answer, herr := p.handleQuery(ctx, payload)
-		if herr != nil {
-			st.CancelWrite(1)
-			return
-		}
-		if err = writeBoxedObject(st, idQuicAnswer, answer); err != nil {
-			st.CancelWrite(1)
-		}
-	case idQuicMessage:
-		p.handleMessage(ctx, payload)
-		_ = st.Close()
-	default:
-		st.CancelRead(1)
-		st.CancelWrite(1)
-	}
+const (
+	peerInitPending peerInitState = iota
+	peerInitRunning
+	peerInitDone
+)
+
+type peerCloseResult struct {
+	transitioned bool
+	finalize     bool
 }
 
 // Peer is a managed TON QUIC path between one local id and one peer id.
@@ -377,17 +788,19 @@ type Peer struct {
 	key     pathKey
 	peerKey ed25519.PublicKey
 
-	ready    chan struct{}
-	initOnce sync.Once
-	initErr  error
+	mu            sync.RWMutex
+	dialMu        sync.Mutex
+	outbound      *Client
+	inbound       *Client
+	remoteAddr    string
+	ready         chan struct{}
+	initState     peerInitState
+	initErr       error
+	initAbort     error
+	deferFinalize bool
 
-	mu         sync.RWMutex
-	dialMu     sync.Mutex
-	outbound   *Client
-	inbound    *Client
-	remoteAddr string
-
-	closed atomic.Bool
+	closed       atomic.Bool
+	finalizeOnce sync.Once
 
 	queryHandler      atomic.Pointer[PeerQueryHandler]
 	messageHandler    atomic.Pointer[PeerMessageHandler]
@@ -456,6 +869,18 @@ func (p *Peer) Query(ctx context.Context, payload []byte, maxAnswer int64) ([]by
 	return client.Query(ctx, payload, maxAnswer)
 }
 
+// QueryOutbound sends a quic.query using only the outbound connection.
+func (p *Peer) QueryOutbound(ctx context.Context, payload []byte, maxAnswer int64) ([]byte, error) {
+	if err := p.waitReady(ctx); err != nil {
+		return nil, err
+	}
+	client := p.outboundClient()
+	if client == nil {
+		return nil, ErrOutboundPeerNotFound
+	}
+	return client.Query(ctx, payload, maxAnswer)
+}
+
 // SendMessage sends a fire-and-forget quic.message on the path.
 func (p *Peer) SendMessage(ctx context.Context, payload []byte) error {
 	if err := p.waitReady(ctx); err != nil {
@@ -468,39 +893,114 @@ func (p *Peer) SendMessage(ctx context.Context, payload []byte) error {
 	return client.SendMessage(ctx, payload)
 }
 
-// Close closes all live connections for this path.
-func (p *Peer) Close() error {
-	p.gateway.removePeer(p)
-	return p.closeOnly()
+// SendOutboundMessage sends a quic.message using only the outbound connection.
+func (p *Peer) SendOutboundMessage(ctx context.Context, payload []byte) error {
+	if err := p.waitReady(ctx); err != nil {
+		return err
+	}
+	client := p.outboundClient()
+	if client == nil {
+		return ErrOutboundPeerNotFound
+	}
+	return client.SendMessage(ctx, payload)
 }
 
-func (p *Peer) closeOnly() error {
-	if !p.closed.CompareAndSwap(false, true) {
-		return nil
-	}
+// Close closes all live connections for this path.
+func (p *Peer) Close() error {
+	p.closeWithError(ErrPeerClosed)
+	return nil
+}
 
-	inbound, outbound := p.detachClients()
+func (p *Peer) closeWithError(initErr error) {
+	if p.beginCloseWithError(initErr, false).finalize {
+		p.finalizeClose()
+	}
+}
+
+func (p *Peer) beginCloseWithError(initErr error, deferFinalize bool) peerCloseResult {
+	p.mu.Lock()
+	if p.closed.Load() {
+		p.mu.Unlock()
+		return peerCloseResult{}
+	}
+	p.closed.Store(true)
+	p.deferFinalize = deferFinalize
+
+	inbound := p.inbound
+	outbound := p.outbound
+	p.inbound = nil
+	p.outbound = nil
+	finalize := p.abortInitLocked(initErr)
+	p.mu.Unlock()
+
 	if inbound != nil {
 		_ = inbound.Close()
 	}
 	if outbound != nil && outbound != inbound {
 		_ = outbound.Close()
 	}
-	p.callDisconnect()
-	return nil
-}
-
-func (p *Peer) closeByRemote() {
-	if p.closed.CompareAndSwap(false, true) {
-		p.callDisconnect()
+	return peerCloseResult{
+		transitioned: true,
+		finalize:     finalize && !deferFinalize,
 	}
 }
 
-func (p *Peer) callDisconnect() {
-	handler := p.disconnectHandler.Load()
-	if handler != nil {
-		go (*handler)(p)
+func (p *Peer) releaseDeferredFinalize() {
+	p.mu.Lock()
+	p.deferFinalize = false
+	finalize := p.closed.Load() && p.initState == peerInitDone
+	p.mu.Unlock()
+
+	if finalize {
+		p.finalizeClose()
 	}
+}
+
+func (p *Peer) closeIfNoClient(initErr error) bool {
+	p.mu.Lock()
+	if p.closed.Load() {
+		p.mu.Unlock()
+		return true
+	}
+	if p.inbound != nil || p.outbound != nil {
+		p.mu.Unlock()
+		return false
+	}
+	p.closed.Store(true)
+	finalize := p.abortInitLocked(initErr)
+	p.mu.Unlock()
+
+	if finalize {
+		p.finalizeClose()
+	}
+	return true
+}
+
+func (p *Peer) abortInitLocked(err error) bool {
+	switch p.initState {
+	case peerInitPending:
+		p.initState = peerInitDone
+		p.initErr = err
+		close(p.ready)
+		return true
+	case peerInitRunning:
+		if p.initAbort == nil {
+			p.initAbort = err
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+func (p *Peer) finalizeClose() {
+	p.finalizeOnce.Do(func() {
+		handler := p.disconnectHandler.Load()
+		if handler != nil {
+			(*handler)(p)
+		}
+		p.gateway.removePeer(p)
+	})
 }
 
 func (p *Peer) waitReady(ctx context.Context) error {
@@ -526,6 +1026,20 @@ func (p *Peer) client() *Client {
 	return client
 }
 
+func (p *Peer) outboundClient() *Client {
+	if p.closed.Load() {
+		return nil
+	}
+
+	p.mu.RLock()
+	client := p.outbound
+	if client != nil && client.conn.Context().Err() != nil {
+		client = nil
+	}
+	p.mu.RUnlock()
+	return client
+}
+
 func (p *Peer) setOutbound(client *Client) (old *Client, changed bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -542,15 +1056,15 @@ func (p *Peer) setOutbound(client *Client) (old *Client, changed bool) {
 	return old, true
 }
 
-func (p *Peer) setInboundConn(conn *quicgo.Conn, peerKey ed25519.PublicKey, peer adnlID, maxObjectSize int64) (old *Client, client *Client, changed bool) {
+func (p *Peer) attachInboundConn(conn *quicgo.Conn, peerKey ed25519.PublicKey, peer adnlID, maxObjectSize int64) (old *Client, client *Client, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.closed.Load() {
-		return nil, nil, false
+		return nil, nil, ErrPeerClosed
 	}
 	if p.inbound != nil && p.inbound.conn == conn {
-		return nil, p.inbound, false
+		return nil, nil, errors.New("quic: inbound connection is already attached")
 	}
 	client = clientFromConn(conn, peerKey, peer, maxObjectSize)
 	old = p.inbound
@@ -558,42 +1072,37 @@ func (p *Peer) setInboundConn(conn *quicgo.Conn, peerKey ed25519.PublicKey, peer
 	if p.remoteAddr == "" {
 		p.remoteAddr = conn.RemoteAddr().String()
 	}
-	return old, client, true
+	return old, client, nil
 }
 
-func (p *Peer) detachClients() (*Client, *Client) {
+func (p *Peer) removeClientAndCloseIfEmpty(client *Client, inbound bool) bool {
 	p.mu.Lock()
-	inbound := p.inbound
-	outbound := p.outbound
-	p.inbound = nil
-	p.outbound = nil
-	p.mu.Unlock()
-	return inbound, outbound
-}
-
-func (p *Peer) removeClient(client *Client, inbound bool) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	if inbound {
 		if p.inbound != client {
+			p.mu.Unlock()
 			return false
 		}
 		p.inbound = nil
-		return true
+	} else {
+		if p.outbound != client {
+			p.mu.Unlock()
+			return false
+		}
+		p.outbound = nil
 	}
-	if p.outbound != client {
+	if p.inbound != nil || p.outbound != nil || p.closed.Load() {
+		p.mu.Unlock()
 		return false
 	}
-	p.outbound = nil
-	return true
-}
 
-func (p *Peer) empty() bool {
-	p.mu.RLock()
-	empty := p.inbound == nil && p.outbound == nil
-	p.mu.RUnlock()
-	return empty
+	p.closed.Store(true)
+	finalize := p.abortInitLocked(ErrPeerClosed)
+	p.mu.Unlock()
+	if finalize {
+		p.finalizeClose()
+	}
+	return true
 }
 
 func (p *Peer) handleQuery(ctx context.Context, payload []byte) ([]byte, error) {

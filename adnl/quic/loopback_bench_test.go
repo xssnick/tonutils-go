@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,25 +18,31 @@ type QuicBenchRequest struct {
 	WantLen uint32 `tl:"int"`
 }
 
-type QuicBenchResponse struct {
-	Data []byte `tl:"bytes"`
-}
-
 func init() {
 	tl.Register(QuicBenchRequest{}, "bench.quic.request want_len:int = bench.quic.Request")
-	tl.Register(QuicBenchResponse{}, "bench.quic.response data:bytes = bench.quic.Response")
 }
 
 type quicBenchQuery func(ctx context.Context, payload []byte, maxAnswer int64) ([]byte, error)
 
 var quicBenchSink []byte
 
-func BenchmarkQUIC_ClientServer(b *testing.B) {
-	sizes := []uint32{16 << 10, 256 << 10, 1 << 20, 4 << 20, 10 << 20}
+type quicBenchCase struct {
+	name      string
+	request   []byte
+	response  []byte
+	maxAnswer int64
+}
+
+type quicBenchFixture struct {
+	responses map[uint32][]byte
+}
+
+func BenchmarkQUICSteadyStateQuery(b *testing.B) {
+	cases := newQUICBenchCases(b)
 
 	scenarios := []struct {
 		name  string
-		setup func(*testing.B) (quicBenchQuery, func())
+		setup func(*testing.B, func([]byte) ([]byte, error)) (quicBenchQuery, func())
 	}{
 		{
 			name:  "transport_loopback",
@@ -48,91 +55,65 @@ func BenchmarkQUIC_ClientServer(b *testing.B) {
 	}
 
 	for _, sc := range scenarios {
-		sc := sc
 		b.Run(sc.name, func(b *testing.B) {
-			query, cleanup := sc.setup(b)
+			fixture := newQUICBenchFixture(cases)
+			query, cleanup := sc.setup(b, fixture.handleQuery)
 			defer cleanup()
 
-			runQUICBenchSizes(b, query, sizes, true)
+			for _, tc := range cases {
+				for _, concurrency := range []int{1, 16, 64} {
+					b.Run(fmt.Sprintf("size=%s/concurrency=%d", tc.name, concurrency), func(b *testing.B) {
+						runQUICSteadyStateQuery(b, query, tc, concurrency)
+					})
+				}
+			}
 		})
 	}
 }
 
-func runQUICBenchSizes(b *testing.B, query quicBenchQuery, sizes []uint32, withParallel bool) {
-	for _, sz := range sizes {
-		b.Run(fmt.Sprintf("resp=%dKB", sz>>10), func(b *testing.B) {
-			ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
-			if err := doQUICBenchQuery(ctx, query, sz); err != nil {
-				cancel()
-				b.Fatalf("warmup query: %v", err)
-			}
-			cancel()
+func newQUICBenchCases(tb testing.TB) []quicBenchCase {
+	tb.Helper()
 
-			b.SetBytes(int64(sz))
-			for b.Loop() {
-				ctx, cancel = context.WithTimeout(context.Background(), 7*time.Second)
-				err := doQUICBenchQuery(ctx, query, sz)
-				cancel()
-				if err != nil {
-					b.Fatalf("query: %v", err)
-				}
-			}
-		})
+	sizes := []struct {
+		name string
+		size int
+	}{
+		{name: "1KiB", size: 1 << 10},
+		{name: "64KiB", size: 64 << 10},
+		{name: "1MiB", size: 1 << 20},
+		{name: "plumtree_max", size: MaxPlumtreePayloadSize},
+		{name: "10MiB", size: 10 << 20},
+	}
 
-		if withParallel {
-			b.Run(fmt.Sprintf("resp=%dKB/parallel", sz>>10), func(b *testing.B) {
-				ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
-				if err := doQUICBenchQuery(ctx, query, sz); err != nil {
-					cancel()
-					b.Fatalf("warmup query: %v", err)
-				}
-				cancel()
-
-				b.SetBytes(int64(sz))
-				b.ResetTimer()
-				b.RunParallel(func(pb *testing.PB) {
-					for pb.Next() {
-						ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
-						err := doQUICBenchQuery(ctx, query, sz)
-						cancel()
-						if err != nil {
-							b.Fatalf("query: %v", err)
-						}
-					}
-				})
-			})
+	cases := make([]quicBenchCase, len(sizes))
+	for i, size := range sizes {
+		request, err := tl.Serialize(QuicBenchRequest{WantLen: uint32(size.size)}, true)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		_, _, _, maxAnswer, err := boxedObjectHeader(idQuicAnswer, size.size)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		cases[i] = quicBenchCase{
+			name:      size.name,
+			request:   request,
+			response:  make([]byte, size.size),
+			maxAnswer: int64(maxAnswer),
 		}
 	}
+	return cases
 }
 
-func doQUICBenchQuery(ctx context.Context, query quicBenchQuery, sz uint32) error {
-	req, err := tl.Serialize(QuicBenchRequest{WantLen: sz}, true)
-	if err != nil {
-		return err
+func newQUICBenchFixture(cases []quicBenchCase) *quicBenchFixture {
+	responses := make(map[uint32][]byte, len(cases))
+	for _, tc := range cases {
+		responses[uint32(len(tc.response))] = tc.response
 	}
-
-	answer, err := query(ctx, req, int64(sz)+4096)
-	if err != nil {
-		return err
-	}
-
-	var resp QuicBenchResponse
-	rest, err := tl.ParseNoCopy(&resp, answer, true)
-	if err != nil {
-		return err
-	}
-	if len(rest) != 0 {
-		return fmt.Errorf("%d trailing bytes after response", len(rest))
-	}
-	if len(resp.Data) != int(sz) {
-		return fmt.Errorf("response length = %d, want %d", len(resp.Data), sz)
-	}
-
-	quicBenchSink = resp.Data
-	return nil
+	return &quicBenchFixture{responses: responses}
 }
 
-func handleQUICBenchQuery(payload []byte) ([]byte, error) {
+func (f *quicBenchFixture) handleQuery(payload []byte) ([]byte, error) {
 	var req QuicBenchRequest
 	rest, err := tl.ParseNoCopy(&req, payload, true)
 	if err != nil {
@@ -142,10 +123,90 @@ func handleQUICBenchQuery(payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%d trailing bytes after request", len(rest))
 	}
 
-	return tl.Serialize(QuicBenchResponse{Data: make([]byte, req.WantLen)}, true)
+	response, ok := f.responses[req.WantLen]
+	if !ok {
+		return nil, fmt.Errorf("unsupported benchmark response length %d", req.WantLen)
+	}
+	return response, nil
 }
 
-func setupTransportLoopbackBenchmark(b *testing.B) (quicBenchQuery, func()) {
+func runQUICSteadyStateQuery(b *testing.B, query quicBenchQuery, tc quicBenchCase, concurrency int) {
+	b.Helper()
+
+	warmupCtx, warmupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	answer, err := query(warmupCtx, tc.request, tc.maxAnswer)
+	warmupCancel()
+	if err != nil {
+		b.Fatalf("warmup query: %v", err)
+	}
+	if len(answer) != len(tc.response) {
+		b.Fatalf("warmup response length = %d, want %d", len(answer), len(tc.response))
+	}
+	quicBenchSink = answer
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(tc.response)))
+	b.StopTimer()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var workers sync.WaitGroup
+	workers.Add(concurrency)
+	queryErrors := make(chan error, concurrency)
+	sinks := make([][]byte, concurrency)
+	start := make(chan struct{})
+
+	baseIterations := b.N / concurrency
+	extraIterations := b.N % concurrency
+	for worker := range concurrency {
+		iterations := baseIterations
+		if worker < extraIterations {
+			iterations++
+		}
+
+		go func() {
+			defer workers.Done()
+			<-start
+
+			var last []byte
+			for range iterations {
+				answer, queryErr := query(ctx, tc.request, tc.maxAnswer)
+				if queryErr != nil {
+					queryErrors <- queryErr
+					cancel()
+					return
+				}
+				if len(answer) != len(tc.response) {
+					queryErrors <- fmt.Errorf("response length = %d, want %d", len(answer), len(tc.response))
+					cancel()
+					return
+				}
+				last = answer
+			}
+			sinks[worker] = last
+		}()
+	}
+
+	b.ResetTimer()
+	b.StartTimer()
+	close(start)
+	workers.Wait()
+	b.StopTimer()
+
+	close(queryErrors)
+	for err = range queryErrors {
+		b.Fatal(err)
+	}
+	for _, sink := range sinks {
+		if sink != nil {
+			quicBenchSink = sink
+			break
+		}
+	}
+}
+
+func setupTransportLoopbackBenchmark(b *testing.B, handleQuery func([]byte) ([]byte, error)) (quicBenchQuery, func()) {
 	b.Helper()
 
 	serverKey := mustBenchKey(b)
@@ -158,7 +219,7 @@ func setupTransportLoopbackBenchmark(b *testing.B) (quicBenchQuery, func()) {
 
 	srv, err := NewServer(Handler{
 		OnQuery: func(ctx context.Context, from ed25519.PublicKey, payload []byte) ([]byte, error) {
-			return handleQUICBenchQuery(payload)
+			return handleQuery(payload)
 		},
 	}, serverKey)
 	if err != nil {
@@ -167,6 +228,15 @@ func setupTransportLoopbackBenchmark(b *testing.B) (quicBenchQuery, func()) {
 	}
 
 	go func() { _ = srv.Serve(pc) }()
+
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = srv.WaitReady(readyCtx)
+	readyCancel()
+	if err != nil {
+		_ = srv.Close()
+		_ = pc.Close()
+		b.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	client, err := Dial(ctx, pc.LocalAddr().String(), clientKey, srv.defaultID.PublicKey())
@@ -185,7 +255,7 @@ func setupTransportLoopbackBenchmark(b *testing.B) (quicBenchQuery, func()) {
 	return client.Query, cleanup
 }
 
-func setupGatewayLoopbackBenchmark(b *testing.B) (quicBenchQuery, func()) {
+func setupGatewayLoopbackBenchmark(b *testing.B, handleQuery func([]byte) ([]byte, error)) (quicBenchQuery, func()) {
 	b.Helper()
 
 	serverKey := mustBenchKey(b)
@@ -197,7 +267,7 @@ func setupGatewayLoopbackBenchmark(b *testing.B) (quicBenchQuery, func()) {
 	}
 	server.SetConnectionHandler(func(peer *Peer) error {
 		peer.SetQueryHandler(func(ctx context.Context, payload []byte) ([]byte, error) {
-			return handleQUICBenchQuery(payload)
+			return handleQuery(payload)
 		})
 		return nil
 	})
@@ -208,6 +278,15 @@ func setupGatewayLoopbackBenchmark(b *testing.B) (quicBenchQuery, func()) {
 		b.Fatal(err)
 	}
 	go func() { _ = server.Serve(pc) }()
+
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = server.WaitReady(readyCtx)
+	readyCancel()
+	if err != nil {
+		_ = server.Close()
+		_ = pc.Close()
+		b.Fatal(err)
+	}
 
 	client, err := NewGateway(clientKey)
 	if err != nil {
@@ -246,20 +325,18 @@ func mustBenchKey(b *testing.B) ed25519.PrivateKey {
 }
 
 func TestQUICBenchRequestRoundTrip(t *testing.T) {
-	wire, err := handleQUICBenchQuery(mustSerializeBenchRequest(t, 128))
-	if err != nil {
-		t.Fatal(err)
-	}
+	cases := []quicBenchCase{{
+		name:     "128B",
+		request:  mustSerializeBenchRequest(t, 128),
+		response: make([]byte, 128),
+	}}
+	fixture := newQUICBenchFixture(cases)
 
-	var resp QuicBenchResponse
-	rest, err := tl.ParseNoCopy(&resp, wire, true)
+	response, err := fixture.handleQuery(cases[0].request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rest) != 0 {
-		t.Fatalf("%d trailing bytes after response", len(rest))
-	}
-	if !bytes.Equal(resp.Data, make([]byte, 128)) {
+	if !bytes.Equal(response, make([]byte, 128)) {
 		t.Fatalf("response payload mismatch")
 	}
 }

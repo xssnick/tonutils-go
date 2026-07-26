@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,23 +44,43 @@ func startServerWithConfig(t *testing.T, h Handler, configure func(*Server), key
 	if configure != nil {
 		configure(srv)
 	}
-	go func() { _ = srv.Serve(pc) }()
-	t.Cleanup(func() { srv.Close() })
+
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- srv.Serve(pc)
+	}()
+
+	readyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err = srv.WaitReady(readyCtx); err != nil {
+		_ = srv.Close()
+		_ = pc.Close()
+		t.Fatalf("wait for QUIC server: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = pc.Close()
+		if err := <-serveErr; err != nil {
+			t.Errorf("serve QUIC: %v", err)
+		}
+	})
 	return pc.LocalAddr().String(), srv
 }
 
 func TestDefaultLimits(t *testing.T) {
-	if DefaultMaxObjectSize != 4<<20 {
-		t.Fatalf("DefaultMaxObjectSize = %d, want %d", DefaultMaxObjectSize, 4<<20)
-	}
-	if MaxIncomingStreams != 2048 {
-		t.Fatalf("MaxIncomingStreams = %d, want 2048", MaxIncomingStreams)
+	if DefaultMaxObjectSize != MaxPlumtreePayloadSize+12 {
+		t.Fatalf(
+			"DefaultMaxObjectSize = %d, want %d",
+			DefaultMaxObjectSize,
+			MaxPlumtreePayloadSize+12,
+		)
 	}
 	if defaultMaxConnectionsPerIP != 1000 {
 		t.Fatalf("defaultMaxConnectionsPerIP = %d, want 1000", defaultMaxConnectionsPerIP)
 	}
 
-	cfg := defaultQUICConfig()
+	cfg := defaultQUICConfig(DefaultLimits())
 	if cfg.InitialStreamReceiveWindow != defaultInitialStreamReceiveWindow {
 		t.Fatalf("InitialStreamReceiveWindow = %d, want %d", cfg.InitialStreamReceiveWindow, defaultInitialStreamReceiveWindow)
 	}
@@ -72,11 +93,35 @@ func TestDefaultLimits(t *testing.T) {
 	if cfg.MaxConnectionReceiveWindow != defaultMaxConnectionReceiveWindow {
 		t.Fatalf("MaxConnectionReceiveWindow = %d, want %d", cfg.MaxConnectionReceiveWindow, defaultMaxConnectionReceiveWindow)
 	}
-	if cfg.MaxIncomingStreams != MaxIncomingStreams {
-		t.Fatalf("MaxIncomingStreams = %d, want %d", cfg.MaxIncomingStreams, MaxIncomingStreams)
+	if cfg.MaxIncomingStreams != defaultMaxIncomingStreams {
+		t.Fatalf("MaxIncomingStreams = %d, want %d", cfg.MaxIncomingStreams, defaultMaxIncomingStreams)
 	}
 	if cfg.MaxIncomingUniStreams != -1 {
 		t.Fatalf("MaxIncomingUniStreams = %d, want -1", cfg.MaxIncomingUniStreams)
+	}
+}
+
+func TestLimitsKeepQuicGoStreamCreditSemantics(t *testing.T) {
+	for _, value := range []int64{0, -1} {
+		limits := DefaultLimits()
+		limits.MaxIncomingStreams = value
+		server, err := NewServerWithLimits(
+			Handler{OnQuery: func(context.Context, ed25519.PublicKey, []byte) ([]byte, error) {
+				return nil, nil
+			}},
+			limits,
+			mustKey(t),
+		)
+		if err != nil {
+			t.Fatalf("MaxIncomingStreams=%d: %v", value, err)
+		}
+		if server.quicConf.MaxIncomingStreams != value {
+			t.Fatalf(
+				"MaxIncomingStreams=%d produced config value %d",
+				value,
+				server.quicConf.MaxIncomingStreams,
+			)
+		}
 	}
 }
 
@@ -87,7 +132,7 @@ func TestConnectionLimiterRejectsPerIPOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv.connLimiter.max = 1
+	srv.connLimiter.maxPerIP = 1
 
 	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1000}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -193,6 +238,7 @@ func TestQueryRejectsRequestOverServerLimit(t *testing.T) {
 
 	addr, srv := startServerWithConfig(t, handler, func(s *Server) {
 		s.maxObjectSize = int64(len(wire) - 1)
+		s.limits.MaxObjectSize = s.maxObjectSize
 	}, serverKey)
 	serverPub := srv.defaultID.PublicKey()
 
@@ -213,10 +259,27 @@ func TestQueryRejectsRequestOverServerLimit(t *testing.T) {
 	}
 }
 
+func TestClientOutboundObjectsUseConfiguredLimit(t *testing.T) {
+	client := &Client{maxObjectSize: 12}
+	payload := []byte("12345678")
+
+	if _, err := client.Query(context.Background(), payload, 0); err == nil {
+		t.Fatal("expected oversized query request to fail")
+	} else if !strings.Contains(err.Error(), "stream object exceeds 12 bytes") {
+		t.Fatalf("query request error = %v", err)
+	}
+
+	if err := client.SendMessage(context.Background(), payload); err == nil {
+		t.Fatal("expected oversized message to fail")
+	} else if !strings.Contains(err.Error(), "stream object exceeds 12 bytes") {
+		t.Fatalf("message error = %v", err)
+	}
+}
+
 func TestQueryMaxAnswerOverridesDefaultLimit(t *testing.T) {
 	serverKey := mustKey(t)
 	clientKey := mustKey(t)
-	answer := bytes.Repeat([]byte{0xBB}, 2048)
+	answer := bytes.Repeat([]byte{0xBB}, MaxPlumtreePayloadSize+(1<<20))
 
 	handler := Handler{
 		OnQuery: func(ctx context.Context, from ed25519.PublicKey, payload []byte) ([]byte, error) {
@@ -232,7 +295,7 @@ func TestQueryMaxAnswerOverridesDefaultLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cli, err := Dial(ctx, addr, clientKey, serverPub)
@@ -240,10 +303,11 @@ func TestQueryMaxAnswerOverridesDefaultLimit(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer cli.Close()
-	cli.maxObjectSize = int64(len(wire) - 1)
 
-	if _, err = cli.Query(ctx, []byte("small"), 0); err == nil {
-		t.Fatal("expected default answer limit to reject oversized answer")
+	if _, err = cli.Query(ctx, []byte("small"), DefaultMaxObjectSize); err == nil {
+		t.Fatal("expected smaller requested answer limit to reject oversized answer")
+	} else if !strings.Contains(err.Error(), "stream object exceeds") {
+		t.Fatalf("smaller requested answer limit error = %v", err)
 	}
 
 	cli2, err := Dial(ctx, addr, clientKey, serverPub)
@@ -251,7 +315,6 @@ func TestQueryMaxAnswerOverridesDefaultLimit(t *testing.T) {
 		t.Fatalf("dial 2: %v", err)
 	}
 	defer cli2.Close()
-	cli2.maxObjectSize = int64(len(wire) - 1)
 
 	got, err := cli2.Query(ctx, []byte("small"), int64(len(wire)))
 	if err != nil {
@@ -259,6 +322,16 @@ func TestQueryMaxAnswerOverridesDefaultLimit(t *testing.T) {
 	}
 	if !bytes.Equal(got, answer) {
 		t.Fatal("answer mismatch")
+	}
+}
+
+func TestDialRejectsMalformedAddressBeforeOpeningTransport(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := Dial(ctx, "missing-port", mustKey(t), mustKey(t).Public().(ed25519.PublicKey))
+	if err == nil || !strings.Contains(err.Error(), `quic: parse numeric endpoint "missing-port":`) {
+		t.Fatalf("dial error = %v, want numeric endpoint parse error", err)
 	}
 }
 
@@ -362,7 +435,7 @@ func dialWithServerName(ctx context.Context, addr string, localKey ed25519.Priva
 			Verify:     func(ed25519.PublicKey) error { return nil },
 		},
 	}
-	return quicgo.DialAddr(ctx, addr, tlsConf, defaultQUICConfig())
+	return quicgo.DialAddr(ctx, addr, tlsConf, defaultQUICConfig(DefaultLimits()))
 }
 
 // TestMultiIdentitySNI verifies a server hosting two identities routes by SNI.

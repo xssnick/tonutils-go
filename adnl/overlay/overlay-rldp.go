@@ -3,6 +3,7 @@ package overlay
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sync/atomic"
 
 	"github.com/xssnick/tonutils-go/adnl/rldp"
@@ -66,6 +67,31 @@ func (r *RLDPOverlayWrapper) overlayDisconnectHandler() func() {
 
 func (r *RLDPOverlayWrapper) DoQuery(ctx context.Context, maxAnswerSize uint64, req, result tl.Serializable) error {
 	return r.RLDPWrapper.DoQuery(ctx, maxAnswerSize, []tl.Serializable{Query{Overlay: r.overlayId}, req}, result)
+}
+
+func (r *RLDPOverlayWrapper) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return r.RLDPWrapper.sendOverlayMessage(ctx, r.overlayId, req)
+}
+
+func (r *RLDPWrapper) sendOverlayMessage(ctx context.Context, overlayID []byte, req tl.Serializable) error {
+	if r.messageSender == nil {
+		return ErrRLDPMessageUnsupported
+	}
+
+	return sendRLDPOverlayMessage(ctx, r.messageSender, overlayID, req)
+}
+
+func sendRLDPOverlayMessage(ctx context.Context, transport RLDPMessageSender, overlayID []byte, req tl.Serializable) error {
+	payload, err := tl.Append(
+		make([]byte, 0, tl.DefaultSerializeBufferSize),
+		[]tl.Serializable{Message{Overlay: overlayID}, req},
+		true,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to serialize overlay message: %w", err)
+	}
+
+	return transport.SendMessage(ctx, payload)
 }
 
 func (r *RLDPOverlayWrapper) Close() {

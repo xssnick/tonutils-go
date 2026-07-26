@@ -7,11 +7,44 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tl"
 )
+
+type boxedHeaderBoundaryCase struct {
+	name       string
+	payloadLen int
+	tlHeader   []byte
+	headerLen  int
+	padding    int
+}
+
+// parseBoxed decodes a boxed `<name> data:bytes` object, returning its
+// constructor id and the payload. It is the whole-buffer oracle for the
+// round-trip tests; the receive path parses streams incrementally.
+func parseBoxed(data []byte) (id uint32, payload []byte, err error) {
+	if len(data) < 4 {
+		return 0, nil, errors.New("quic: boxed object too short")
+	}
+	if len(data)%4 != 0 {
+		return 0, nil, fmt.Errorf("quic: boxed object is not 4-byte aligned: %d bytes", len(data))
+	}
+
+	id = binary.LittleEndian.Uint32(data[:4])
+	payload, rest, err := tl.FromBytesNoCopy(data[4:])
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(rest) != 0 {
+		return 0, nil, fmt.Errorf("quic: %d trailing bytes after boxed object", len(rest))
+	}
+	return id, payload, nil
+}
 
 func TestConstructorIDs(t *testing.T) {
 	cases := map[string]uint32{
@@ -64,6 +97,126 @@ func TestBoxedRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMaxPlumtreePayloadSizeMatchesMTU(t *testing.T) {
+	if MaxPlumtreePayloadSize != (16<<20)+4096 {
+		t.Fatalf(
+			"MaxPlumtreePayloadSize = %d, want %d",
+			MaxPlumtreePayloadSize,
+			(16<<20)+4096,
+		)
+	}
+
+	if _, _, _, _, err := boxedObjectHeader(idQuicQuery, MaxPlumtreePayloadSize); err != nil {
+		t.Fatalf("maximum Plumtree payload rejected: %v", err)
+	}
+	if _, _, _, _, err := boxedObjectHeader(idQuicAnswer, MaxPlumtreePayloadSize+1); err != nil {
+		t.Fatalf("answer above the default Plumtree limit rejected by wire encoder: %v", err)
+	}
+	if _, _, _, _, err := boxedObjectHeader(idQuicQuery, -1); err == nil {
+		t.Fatal("negative payload length accepted")
+	}
+
+	if strconv.IntSize == 64 {
+		maximum := int(maxTLBytesPayloadSize)
+		header, headerLen, pad, total, err := boxedObjectHeader(idQuicAnswer, maximum)
+		if err != nil {
+			t.Fatalf("maximum uint32 payload: %v", err)
+		}
+		if headerLen != 12 || pad != 1 || int64(total) != maxBoxedObjectWireSize {
+			t.Fatalf(
+				"maximum wire shape = (header=%d pad=%d total=%d), want (12, 1, %d)",
+				headerLen,
+				pad,
+				total,
+				maxBoxedObjectWireSize,
+			)
+		}
+		if got := header[4:12]; !bytes.Equal(got, []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0}) {
+			t.Fatalf("maximum uint32 TL header = %x", got)
+		}
+
+		tooLarge := maxTLBytesPayloadSize + 1
+		if _, _, _, _, err = boxedObjectHeader(idQuicAnswer, int(tooLarge)); err == nil {
+			t.Fatal("payload above uint32 was accepted")
+		}
+	}
+}
+
+func TestBoxedObjectHeaderExtendedBoundaryGolden(t *testing.T) {
+	tests := []boxedHeaderBoundaryCase{
+		{
+			name:       "largest_24_bit",
+			payloadLen: (1 << 24) - 1,
+			tlHeader:   []byte{0xFE, 0xFF, 0xFF, 0xFF},
+			headerLen:  8,
+			padding:    1,
+		},
+		{
+			name:       "first_extended",
+			payloadLen: 1 << 24,
+			tlHeader:   []byte{0xFF, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00},
+			headerLen:  12,
+			padding:    0,
+		},
+		{
+			name:       "maximum_plumtree_envelope",
+			payloadLen: MaxPlumtreePayloadSize,
+			tlHeader:   []byte{0xFF, 0x00, 0x10, 0x00, 0x01, 0x00, 0x00, 0x00},
+			headerLen:  12,
+			padding:    0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			header, headerLen, pad, total, err := boxedObjectHeader(idQuicQuery, test.payloadLen)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if headerLen != test.headerLen {
+				t.Fatalf("header length = %d, want %d", headerLen, test.headerLen)
+			}
+			if pad != test.padding {
+				t.Fatalf("padding = %d, want %d", pad, test.padding)
+			}
+			if total != headerLen+test.payloadLen+pad {
+				t.Fatalf("total = %d, want %d", total, headerLen+test.payloadLen+pad)
+			}
+
+			var constructor [4]byte
+			binary.LittleEndian.PutUint32(constructor[:], idQuicQuery)
+			want := append(constructor[:], test.tlHeader...)
+			if !bytes.Equal(header[:headerLen], want) {
+				t.Fatalf("header = %x, want %x", header[:headerLen], want)
+			}
+		})
+	}
+}
+
+func TestBoxedObjectExtendedRoundTrip(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xA7}, 1<<24)
+	wire, err := serializeBoxed(idQuicQuery, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id, parsed, err := parseBoxed(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != idQuicQuery || !bytes.Equal(parsed, payload) {
+		t.Fatalf("parsed object id=0x%08x payload_len=%d", id, len(parsed))
+	}
+
+	id, parsed, err = readBoxedObject(bytes.NewReader(wire), int64(len(wire)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != idQuicQuery || !bytes.Equal(parsed, payload) {
+		t.Fatalf("streamed object id=0x%08x payload_len=%d", id, len(parsed))
+	}
+}
+
 func TestReadBoxedObjectRoundTrip(t *testing.T) {
 	for _, payload := range [][]byte{
 		nil,
@@ -105,6 +258,57 @@ func TestReadBoxedObjectRejectsOversizedHeaderBeforePayload(t *testing.T) {
 	}
 }
 
+func TestReadBoxedObjectRejectsMalformedExtendedHeader(t *testing.T) {
+	header, headerLen, _, _, err := boxedObjectHeader(idQuicQuery, 1<<24)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for size := 5; size < headerLen; size++ {
+		_, payload, readErr := readBoxedObject(
+			bytes.NewReader(header[:size]),
+			DefaultMaxObjectSize,
+		)
+		if readErr == nil {
+			t.Fatalf("truncated %d-byte header was accepted", size)
+		}
+		if payload != nil {
+			t.Fatalf("truncated header allocated %d payload bytes", len(payload))
+		}
+	}
+
+	aboveDefault, aboveDefaultLen, _, _, err := boxedObjectHeader(
+		idQuicAnswer,
+		MaxPlumtreePayloadSize+1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, payload, readErr := readBoxedObject(
+		bytes.NewReader(aboveDefault[:aboveDefaultLen]),
+		DefaultMaxObjectSize,
+	); readErr == nil {
+		t.Fatal("extended payload above the supplied stream limit was accepted")
+	} else if errors.Is(readErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("stream limit must be checked before payload read: %v", readErr)
+	} else if payload != nil {
+		t.Fatalf("over-limit header allocated %d payload bytes", len(payload))
+	}
+
+	var invalid [12]byte
+	binary.LittleEndian.PutUint32(invalid[:4], idQuicQuery)
+	invalid[4] = 0xFF
+	invalid[9] = 1
+	if _, payload, readErr := readBoxedObject(
+		bytes.NewReader(invalid[:]),
+		maxBoxedObjectWireSize,
+	); readErr == nil {
+		t.Fatal("extended length above uint32 was accepted")
+	} else if payload != nil {
+		t.Fatalf("invalid header allocated %d payload bytes", len(payload))
+	}
+}
+
 func TestReadBoxedObjectRejectsTrailingBytes(t *testing.T) {
 	wire, err := serializeBoxed(idQuicQuery, []byte("payload"))
 	if err != nil {
@@ -114,6 +318,33 @@ func TestReadBoxedObjectRejectsTrailingBytes(t *testing.T) {
 
 	if _, _, err = readBoxedObject(bytes.NewReader(wire), int64(len(wire))); err == nil {
 		t.Fatal("expected trailing byte to fail")
+	}
+}
+
+func TestReadBoxedObjectRejectsInvalidPadding(t *testing.T) {
+	wire, err := serializeBoxed(idQuicQuery, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for missing := 1; missing <= 2; missing++ {
+		if _, _, err = readBoxedObject(
+			bytes.NewReader(wire[:len(wire)-missing]),
+			int64(len(wire)),
+		); err == nil {
+			t.Fatalf("boxed object missing %d padding bytes was accepted", missing)
+		}
+	}
+
+	for _, index := range []int{len(wire) - 2, len(wire) - 1} {
+		invalid := append([]byte(nil), wire...)
+		invalid[index] = 1
+		if _, _, err = readBoxedObject(
+			bytes.NewReader(invalid),
+			int64(len(invalid)),
+		); err == nil {
+			t.Fatalf("boxed object with non-zero padding at %d was accepted", index)
+		}
 	}
 }
 
@@ -166,5 +397,11 @@ func TestSNIRoundTrip(t *testing.T) {
 	}
 	if back != id {
 		t.Fatalf("SNI round-trip mismatch: %s != %s", back, id)
+	}
+	if upper, err := parseSNI(strings.ToUpper(sni)); err != nil || upper != id {
+		t.Fatalf("upper-case SNI normalization failed: id=%s err=%v", upper, err)
+	}
+	if _, err := parseSNI(sni + "."); err == nil {
+		t.Fatal("SNI with a trailing dot was accepted")
 	}
 }

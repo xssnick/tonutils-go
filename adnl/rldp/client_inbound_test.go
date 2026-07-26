@@ -96,6 +96,60 @@ func TestRLDP_handleMessageRejectsBadFECBeforeDecoder(t *testing.T) {
 	}
 }
 
+func TestRLDP_handleMessageRejectsTrailingTransferData(t *testing.T) {
+	messageID := make([]byte, 32)
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(messageID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := tl.Serialize(Message{ID: messageID, Data: []byte("payload")}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, 0)
+
+	encoder, err := roundrobin.NewEncoder(data, uint32(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	delivered := false
+	client := NewClient(MockADNL{
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+	defer client.closeState()
+	client.SetOnMessage(func([]byte, []byte) error {
+		delivered = true
+		return nil
+	})
+
+	err = client.handleMessage(&adnl.MessageCustom{Data: MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   uint32(len(data)),
+			SymbolsCount: 1,
+		},
+		TotalSize: uint64(len(data)),
+		Data:      encoder.GenSymbol(0),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered {
+		t.Fatal("message with trailing transfer data was delivered")
+	}
+	if got := client.Stats().Inbound.ProcessingErrors; got != 1 {
+		t.Fatalf("processing errors = %d, want 1", got)
+	}
+}
+
 func TestRLDP_handleMessageOutOfOrderParts(t *testing.T) {
 	transferID := make([]byte, 32)
 	if _, err := rand.Read(transferID); err != nil {

@@ -13,6 +13,65 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 )
 
+type releasedRLDPTransport struct {
+	delegate *mockRLDP
+}
+
+var _ RLDP = (*releasedRLDPTransport)(nil)
+
+func (r *releasedRLDPTransport) GetADNL() rldp.ADNL {
+	return r.delegate.GetADNL()
+}
+
+func (r *releasedRLDPTransport) GetRateInfo() (left int64, total int64) {
+	return r.delegate.GetRateInfo()
+}
+
+func (r *releasedRLDPTransport) Stats() rldp.Stats {
+	return r.delegate.Stats()
+}
+
+func (r *releasedRLDPTransport) Close() {
+	r.delegate.Close()
+}
+
+func (r *releasedRLDPTransport) DoQuery(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error {
+	return r.delegate.DoQuery(ctx, maxAnswerSize, query, result)
+}
+
+func (r *releasedRLDPTransport) DoQueryAsync(
+	ctx context.Context,
+	maxAnswerSize uint64,
+	id []byte,
+	query tl.Serializable,
+	result chan<- rldp.AsyncQueryResult,
+) error {
+	return r.delegate.DoQueryAsync(ctx, maxAnswerSize, id, query, result)
+}
+
+func (r *releasedRLDPTransport) SetOnQuery(handler func(transferId []byte, query *rldp.Query) error) {
+	r.delegate.SetOnQuery(handler)
+}
+
+func (r *releasedRLDPTransport) SetOnMessage(handler func(id []byte, data []byte) error) {
+	r.delegate.SetOnMessage(handler)
+}
+
+func (r *releasedRLDPTransport) SetOnDisconnect(handler func()) {
+	r.delegate.SetOnDisconnect(handler)
+}
+
+func (r *releasedRLDPTransport) SendAnswer(
+	ctx context.Context,
+	maxAnswerSize uint64,
+	timeoutAt uint32,
+	queryId,
+	transferId []byte,
+	answer tl.Serializable,
+) error {
+	return r.delegate.SendAnswer(ctx, maxAnswerSize, timeoutAt, queryId, transferId, answer)
+}
+
 func TestCreateExtendedRLDPInitializesHandlers(t *testing.T) {
 	adnlMock := newMockADNL()
 	rMock := newMockRLDP(adnlMock)
@@ -196,6 +255,210 @@ func TestRLDPManagerRoutesMessagesThroughADNLOverlay(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected overlay custom handler call")
+	}
+}
+
+func TestParseRLDPMessagePayloadRejectsExtraObjects(t *testing.T) {
+	overlayID := bytes.Repeat([]byte{0x9C}, 32)
+	data, err := tl.Serialize([]tl.Serializable{
+		Message{Overlay: overlayID},
+		GetRandomPeers{},
+		Ping{},
+	}, true)
+	if err != nil {
+		t.Fatalf("serialize payload: %v", err)
+	}
+
+	if _, err = parseRLDPMessagePayload(data); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("extra-object parse error = %v, want trailing data rejection", err)
+	}
+}
+
+func TestParseRLDPMessagePayloadRequiresEnvelopeForTwoObjects(t *testing.T) {
+	data, err := tl.Serialize([]tl.Serializable{GetRandomPeers{}, Ping{}}, true)
+	if err != nil {
+		t.Fatalf("serialize payload: %v", err)
+	}
+
+	if _, err = parseRLDPMessagePayload(data); err == nil || !strings.Contains(err.Error(), "require an overlay message envelope") {
+		t.Fatalf("multi-root parse error = %v, want envelope rejection", err)
+	}
+}
+
+func TestRLDPOverlaySendCustomMessageFramesPayload(t *testing.T) {
+	adnlMock := newMockADNL()
+	rMock := newMockRLDP(adnlMock)
+	wrapper := CreateExtendedRLDP(rMock)
+	overlayID := bytes.Repeat([]byte{0x9D}, 32)
+	overlay := wrapper.CreateOverlay(overlayID)
+
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "message")
+	if err := overlay.SendCustomMessage(ctx, GetRandomPeers{}); err != nil {
+		t.Fatalf("send custom message: %v", err)
+	}
+	if len(rMock.sendMessageCalls) != 1 {
+		t.Fatalf("RLDP message calls = %d, want 1", len(rMock.sendMessageCalls))
+	}
+	if rMock.sendMessageCtx.Value(contextKey{}) != "message" {
+		t.Fatal("send custom message did not propagate its context")
+	}
+
+	var envelope any
+	rest, err := tl.ParseNoCopy(&envelope, rMock.sendMessageCalls[0], true)
+	if err != nil {
+		t.Fatalf("parse overlay message envelope: %v", err)
+	}
+	header, ok := envelope.(Message)
+	if !ok {
+		t.Fatalf("envelope type = %T, want Message value", envelope)
+	}
+	if !bytes.Equal(header.Overlay, overlayID) {
+		t.Fatalf("envelope overlay = %x, want %x", header.Overlay, overlayID)
+	}
+
+	var payload any
+	rest, err = tl.ParseNoCopy(&payload, rest, true)
+	if err != nil {
+		t.Fatalf("parse overlay message payload: %v", err)
+	}
+	if _, ok = payload.(GetRandomPeers); !ok {
+		t.Fatalf("payload type = %T, want GetRandomPeers value", payload)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("overlay message has %d trailing bytes", len(rest))
+	}
+}
+
+func TestRLDPOverlaySendCustomMessageRequiresMessageCapability(t *testing.T) {
+	rMock := newMockRLDP(newMockADNL())
+	transport := &releasedRLDPTransport{delegate: rMock}
+	wrapper := CreateExtendedRLDP(transport)
+	overlay := wrapper.CreateOverlay(bytes.Repeat([]byte{0x4C}, 32))
+
+	err := overlay.SendCustomMessage(context.Background(), GetRandomPeers{})
+	if !errors.Is(err, ErrRLDPMessageUnsupported) {
+		t.Fatalf("send custom message error = %v, want %v", err, ErrRLDPMessageUnsupported)
+	}
+	if len(rMock.sendMessageCalls) != 0 {
+		t.Fatalf("underlying message calls = %d, want 0", len(rMock.sendMessageCalls))
+	}
+}
+
+func TestRLDPManagerFECControlUsesRLDPReplyPath(t *testing.T) {
+	overlayID := bytes.Repeat([]byte{0x9E}, 32)
+	peerID := bytes.Repeat([]byte{0x9F}, 32)
+
+	baseADNL := newMockADNL()
+	baseADNL.id = peerID
+	adnlWrapper := CreateExtendedADNL(baseADNL)
+
+	receiver := newTestBroadcastReceiver(t, overlayID)
+	receiver.SetBroadcastHandlerWithInfo(func(tl.Serializable, BroadcastInfo) BroadcastDisposition {
+		return BroadcastDispositionIgnore
+	})
+	attached, err := adnlWrapper.AttachOverlay(receiver)
+	if err != nil {
+		t.Fatalf("attach broadcast receiver: %v", err)
+	}
+	t.Cleanup(attached.Close)
+
+	rMock := newMockRLDP(adnlWrapper)
+	CreateExtendedRLDP(rMock)
+	if rMock.onMessage == nil {
+		t.Fatal("expected RLDP message handler to be set")
+	}
+
+	_, privateKey := keyPairFromSeed(104)
+	sender, err := NewBroadcastFECSenderFromTL(
+		privateKey,
+		CertificateEmpty{},
+		Message{Overlay: overlayID},
+		BroadcastFlagAnySender,
+		WithBroadcastFECSymbolSize(64),
+	)
+	if err != nil {
+		t.Fatalf("new FEC sender: %v", err)
+	}
+
+	for seqno := uint32(0); seqno < sender.fec.SymbolsCount; seqno++ {
+		part, partErr := sender.part(seqno)
+		if partErr != nil {
+			t.Fatalf("build FEC part %d: %v", seqno, partErr)
+		}
+		data, serializeErr := tl.Serialize(WrapMessage(overlayID, *part.full), true)
+		if serializeErr != nil {
+			t.Fatalf("serialize FEC part %d: %v", seqno, serializeErr)
+		}
+		if handleErr := rMock.onMessage(bytes.Repeat([]byte{0xA0}, 32), data); handleErr != nil {
+			t.Fatalf("handle RLDP FEC part %d: %v", seqno, handleErr)
+		}
+	}
+
+	if len(baseADNL.sendCustomCalls) != 0 {
+		t.Fatalf("ADNL custom sends = %d, want 0", len(baseADNL.sendCustomCalls))
+	}
+	if len(rMock.sendMessageCalls) == 0 {
+		t.Fatal("FEC receiver sent no control over RLDP")
+	}
+
+	var envelope any
+	rest, err := tl.ParseNoCopy(&envelope, rMock.sendMessageCalls[len(rMock.sendMessageCalls)-1], true)
+	if err != nil {
+		t.Fatalf("parse RLDP reply envelope: %v", err)
+	}
+	header, ok := envelope.(Message)
+	if !ok {
+		t.Fatalf("RLDP reply envelope type = %T, want Message value", envelope)
+	}
+	if !bytes.Equal(header.Overlay, overlayID) {
+		t.Fatalf("RLDP reply overlay = %x, want %x", header.Overlay, overlayID)
+	}
+
+	var control any
+	rest, err = tl.ParseNoCopy(&control, rest, true)
+	if err != nil {
+		t.Fatalf("parse RLDP FEC control: %v", err)
+	}
+	if _, ok = control.(FECReceived); !ok {
+		t.Fatalf("RLDP control type = %T, want FECReceived value", control)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("RLDP FEC control has %d trailing bytes", len(rest))
+	}
+}
+
+func TestRLDPManagerRoutesFramedFECControlToBroadcastReceiver(t *testing.T) {
+	overlayID := bytes.Repeat([]byte{0xA1}, 32)
+
+	baseADNL := newMockADNL()
+	adnlWrapper := CreateExtendedADNL(baseADNL)
+	receiver := newTestBroadcastReceiver(t, overlayID)
+	attached, err := adnlWrapper.AttachOverlay(receiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(attached.Close)
+
+	customCalled := false
+	attached.SetCustomMessageHandler(func(*adnl.MessageCustom) error {
+		customCalled = true
+		return nil
+	})
+
+	rMock := newMockRLDP(adnlWrapper)
+	CreateExtendedRLDP(rMock)
+	data, err := tl.Serialize(WrapMessage(overlayID, FECReceived{
+		Hash: bytes.Repeat([]byte{0xA2}, 32),
+	}), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = rMock.onMessage(bytes.Repeat([]byte{0xA3}, 32), data); err != nil {
+		t.Fatal(err)
+	}
+	if customCalled {
+		t.Fatal("framed FEC control was routed as an application message")
 	}
 }
 

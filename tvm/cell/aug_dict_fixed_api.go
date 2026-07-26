@@ -101,6 +101,9 @@ func validateAugmentedDictionary(d *AugmentedDictionary) error {
 	return err
 }
 
+// Range returns every leaf in key order with raw `extra ++ value` slices: the
+// augmentation comes first and the caller must skip it. Use RangeExtra to get
+// values and extras decomposed.
 func (d *AugmentedDictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if d == nil {
 		return []DictItem{}, nil
@@ -198,6 +201,10 @@ func (d *AugmentedDictionary) IteratorExtraAt(key *Cell, rev bool, sgnd bool, al
 	return newAugDictIterator(raw, d), nil
 }
 
+// LookupNearestKey returns the raw leaf slice, which for an augmented
+// dictionary is `extra ++ value`: per TL-B `ahmn_leaf#_ {X:Type} {Y:Type}
+// extra:Y value:X` the augmentation comes FIRST and the caller must skip it.
+// Use LookupNearestKeyExtra to get the value and the extra decomposed.
 func (d *AugmentedDictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
 	if d == nil || d.root == nil {
 		return nil, nil, ErrNoSuchKeyInDict
@@ -207,6 +214,20 @@ func (d *AugmentedDictionary) LookupNearestKey(key *Cell, fetchNext bool, allowE
 	}
 
 	return fixedDictLookupNearest(d.root, d.keySz, key, fetchNext, allowEq, invertFirst)
+}
+
+// LookupNearestKeyExtra is LookupNearestKey with the leaf decomposed into the
+// value and its augmentation.
+func (d *AugmentedDictionary) LookupNearestKeyExtra(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, *Slice, error) {
+	foundKey, leaf, err := d.LookupNearestKey(key, fetchNext, allowEq, invertFirst)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	value, extra, err := d.decomposeValueExtra(leaf)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return foundKey, value, extra, nil
 }
 
 func (d *AugmentedDictionary) HasCommonPrefix(prefix *Cell) (bool, error) {
@@ -264,6 +285,9 @@ func (d *AugmentedDictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) 
 	return true, nil
 }
 
+// CheckForEach visits every leaf with a raw `extra ++ value` slice: the
+// augmentation comes first and fn must skip it. Use CheckForEachExtra to
+// receive the value and the extra decomposed.
 func (d *AugmentedDictionary) CheckForEach(fn DictForeachFunc, invertFirst bool, shuffle bool) (bool, error) {
 	if d == nil {
 		return true, nil
@@ -295,6 +319,8 @@ func (d *AugmentedDictionary) CheckForEach(fn DictForeachFunc, invertFirst bool,
 	return fixedDictCheckForEach(items, fn, shuffle)
 }
 
+// ValidateCheck visits every leaf with a raw `extra ++ value` slice, like
+// CheckForEach. Use ValidateCheckExtra for decomposed values.
 func (d *AugmentedDictionary) ValidateCheck(fn DictForeachFunc, invertFirst bool) (bool, error) {
 	if err := validateAugmentedDictionary(d); err != nil {
 		return false, err

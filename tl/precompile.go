@@ -5,13 +5,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/cell"
+	"math"
 	"net"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"unsafe"
+
+	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 const (
@@ -31,6 +33,7 @@ const (
 	_ExecuteTypeBool
 	_ExecuteTypeVector
 	_ExecuteTypeIP6
+	_ExecuteTypeDouble
 )
 
 const (
@@ -94,7 +97,7 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 			switch elem.Kind() {
 			case reflect.Slice, reflect.Interface, reflect.Pointer, reflect.Struct, reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32,
 				reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32,
-				reflect.Uint64, reflect.String:
+				reflect.Uint64, reflect.Float64, reflect.String:
 			default:
 				panic(fmt.Sprintf("unsupported type %s for vector", f.Type.String()))
 			}
@@ -214,6 +217,11 @@ func compileField(parent reflect.Type, f reflect.StructField, tags []string) *fi
 			}
 		case "bool":
 			info.typ = _ExecuteTypeBool
+		case "double":
+			if f.Type.Kind() != reflect.Float64 {
+				panic("for double only float64 is supported")
+			}
+			info.typ = _ExecuteTypeDouble
 		case "int", "long":
 			switch f.Type.Kind() {
 			case reflect.Int64, reflect.Int32, reflect.Int16, reflect.Int8, reflect.Int,
@@ -261,6 +269,7 @@ type structInfo struct {
 	finalized       bool
 	raw             bool
 	tlName          string
+	minimumWireSize uint64
 }
 
 type fieldInfo struct {
@@ -605,14 +614,33 @@ var MaxVectorElements = 1 << 20
 // Set it to 0 or a negative value to disable the limit.
 var MaxVectorAllocationBytes = 256 << 20
 
-func minVectorElementSize(si *structInfo) int {
-	if len(si.fields) != 1 {
+func calculateMinimumWireSize(si *structInfo, visiting map[*structInfo]bool) uint64 {
+	if si == nil || !si.finalized || si.raw || si.manualParse || visiting[si] {
 		return 0
 	}
 
-	field := si.fields[0]
-	if sz := serializedFixedSize(field); sz > 0 {
-		return sz
+	visiting[si] = true
+	defer delete(visiting, si)
+
+	var size uint64
+	for _, field := range si.fields {
+		fieldSize := calculateMinimumFieldWireSize(field, visiting)
+		if ^uint64(0)-size < fieldSize {
+			return ^uint64(0)
+		}
+		size += fieldSize
+	}
+
+	return size
+}
+
+func calculateMinimumFieldWireSize(field *fieldInfo, visiting map[*structInfo]bool) uint64 {
+	if field.hasFlags {
+		return 0
+	}
+
+	if size := serializedFixedSize(field); size > 0 {
+		return uint64(size)
 	}
 
 	switch field.typ {
@@ -620,12 +648,82 @@ func minVectorElementSize(si *structInfo) int {
 		return 4
 	case _ExecuteTypeStruct:
 		flags := field.meta.(uint32)
-		if flags&_StructFlagsBytes != 0 || flags&_StructFlagsBoxed != 0 || flags&_StructFlagsInterface != 0 {
+		if flags&_StructFlagsBytes != 0 {
 			return 4
 		}
+
+		var size uint64
+		if flags&_StructFlagsInterface != 0 {
+			if len(field.allowedTypes) > 0 {
+				size = ^uint64(0)
+				for _, allowed := range field.allowedTypes {
+					if allowedSize := calculateMinimumWireSize(allowed, visiting); allowedSize < size {
+						size = allowedSize
+					}
+				}
+			}
+		} else {
+			size = calculateMinimumWireSize(field.structInfo, visiting)
+		}
+
+		if flags&_StructFlagsBoxed != 0 {
+			if size > ^uint64(0)-4 {
+				return ^uint64(0)
+			}
+			size += 4
+		}
+
+		return size
 	}
 
 	return 0
+}
+
+func collectStructInfos(si *structInfo, seen map[*structInfo]struct{}, infos *[]*structInfo) {
+	if si == nil {
+		return
+	}
+	if _, ok := seen[si]; ok {
+		return
+	}
+
+	seen[si] = struct{}{}
+	*infos = append(*infos, si)
+
+	for _, field := range si.fields {
+		switch field.typ {
+		case _ExecuteTypeVector:
+			collectStructInfos(field.structInfo, seen, infos)
+		case _ExecuteTypeStruct:
+			flags := field.meta.(uint32)
+			if flags&_StructFlagsInterface != 0 {
+				for _, allowed := range field.allowedTypes {
+					collectStructInfos(allowed, seen, infos)
+				}
+			} else {
+				collectStructInfos(field.structInfo, seen, infos)
+			}
+		}
+	}
+}
+
+func precomputeMinimumWireSizes() {
+	// A registration can resolve placeholders referenced by structs that were
+	// finalized earlier, so refresh the compiled graph while initMx is held.
+	known := len(_structInfoTableByType) + len(_structInfoTableTLNames)
+	seen := make(map[*structInfo]struct{}, known)
+	infos := make([]*structInfo, 0, known)
+
+	for _, si := range _structInfoTableByType {
+		collectStructInfos(si, seen, &infos)
+	}
+	for _, si := range _structInfoTableTLNames {
+		collectStructInfos(si, seen, &infos)
+	}
+
+	for _, si := range infos {
+		si.minimumWireSize = calculateMinimumWireSize(si, map[*structInfo]bool{})
+	}
 }
 
 func fixedBytesResult(data []byte, noCopy bool) []byte {
@@ -918,6 +1016,13 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 			}
 			*(*bool)(ptr) = binary.LittleEndian.Uint32(buf) == _BoolTrueID
 			buf = buf[4:]
+		case _ExecuteTypeDouble:
+			if len(buf) < 8 {
+				return nil, fmt.Errorf("not enough bytes to parse double field %s", field.String())
+			}
+
+			*(*float64)(ptr) = math.Float64frombits(binary.LittleEndian.Uint64(buf))
+			buf = buf[8:]
 		case _ExecuteTypeVector:
 			if len(buf) < 4 {
 				return nil, fmt.Errorf("not enough bytes to parse vector field %s", field.String())
@@ -928,12 +1033,17 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				return nil, fmt.Errorf("too many elements in vector field %s: %d > %d", field.String(), lnRaw, MaxVectorElements)
 			}
 
-			minElemSize := minVectorElementSize(field.structInfo)
-			if minElemSize > 0 && uint64(minElemSize)*uint64(lnRaw) > uint64(len(buf)) {
-				return nil, fmt.Errorf("not enough bytes to parse vector field %s with %d elements, need at least %d bytes", field.String(), lnRaw, uint64(minElemSize)*uint64(lnRaw))
+			minElemSize := field.structInfo.minimumWireSize
+			var minPayloadSize uint64
+			if minElemSize > 0 {
+				if uint64(lnRaw) > ^uint64(0)/minElemSize {
+					minPayloadSize = ^uint64(0)
+				} else {
+					minPayloadSize = minElemSize * uint64(lnRaw)
+				}
 			}
-			if minElemSize == 0 && uint64(lnRaw) > uint64(len(buf)) {
-				return nil, fmt.Errorf("not enough bytes to parse vector field %s with %d elements", field.String(), lnRaw)
+			if minPayloadSize > uint64(len(buf)) {
+				return nil, fmt.Errorf("not enough bytes to parse vector field %s with %d elements, need at least %d bytes", field.String(), lnRaw, minPayloadSize)
 			}
 			if uint64(lnRaw) > uint64(1)<<(strconv.IntSize-1)-1 {
 				return nil, fmt.Errorf("too many elements in vector field %s: %d overflows int", field.String(), lnRaw)
@@ -979,7 +1089,7 @@ func serializedFixedSize(field *fieldInfo) int {
 	switch field.typ {
 	case _ExecuteTypeFlags, _ExecuteTypeInt, _ExecuteTypeBool, _ExecuteTypeInt32Bytes, _ExecuteTypeIP4:
 		return 4
-	case _ExecuteTypeLong, _ExecuteTypeInt64Bytes:
+	case _ExecuteTypeLong, _ExecuteTypeInt64Bytes, _ExecuteTypeDouble:
 		return 8
 	case _ExecuteTypeInt128, _ExecuteTypeIP6:
 		return 16
@@ -1345,6 +1455,8 @@ func executeSerialize(buf *bytes.Buffer, base unsafe.Pointer, si *structInfo) er
 			} else {
 				buf.Write(_BoolFalse)
 			}
+		case _ExecuteTypeDouble:
+			writeUint64(buf, math.Float64bits(*(*float64)(ptr)))
 		case _ExecuteTypeVector:
 			hdr := (*sliceHeader)(ptr)
 			ln := hdr.Len
@@ -1594,6 +1706,8 @@ func executeAppend(dst []byte, base unsafe.Pointer, si *structInfo) ([]byte, err
 			} else {
 				dst = append(dst, _BoolFalse...)
 			}
+		case _ExecuteTypeDouble:
+			dst = appendUint64(dst, math.Float64bits(*(*float64)(ptr)))
 		case _ExecuteTypeVector:
 			hdr := (*sliceHeader)(ptr)
 			ln := hdr.Len

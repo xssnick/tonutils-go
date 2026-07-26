@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -26,11 +27,23 @@ type RLDP interface {
 	SendAnswer(ctx context.Context, maxAnswerSize uint64, timeoutAt uint32, queryId, transferId []byte, answer tl.Serializable) error
 }
 
+// RLDPMessageSender is implemented by RLDP transports that support
+// fire-and-forget messages in addition to the released RLDP query API.
+type RLDPMessageSender interface {
+	SendMessage(ctx context.Context, payload []byte) error
+}
+
+// ErrRLDPMessageUnsupported is returned when an RLDP transport implements the
+// released query API but not the optional message-sending capability.
+var ErrRLDPMessageUnsupported = errors.New("overlay: RLDP transport does not support messages")
+
 type RLDPWrapper struct {
 	mx sync.RWMutex
 
 	overlays map[string]*RLDPOverlayWrapper
 
+	messageSender         RLDPMessageSender
+	adnlWrapper           *ADNLWrapper
 	rootQueryHandler      atomic.Pointer[rldpQueryHandler]
 	rootDisconnectHandler atomic.Pointer[rldpDisconnectHandler]
 	unknownOverlayHandler atomic.Pointer[rldpQueryHandler]
@@ -41,14 +54,30 @@ type RLDPWrapper struct {
 type rldpQueryHandler func(transferId []byte, query *rldp.Query) error
 type rldpDisconnectHandler func()
 
+type rldpBroadcastPeer struct {
+	transport *RLDPWrapper
+	overlayID []byte
+}
+
+func (p rldpBroadcastPeer) ID() []byte {
+	return p.transport.GetADNL().GetID()
+}
+
+func (p rldpBroadcastPeer) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return p.transport.sendOverlayMessage(ctx, p.overlayID, req)
+}
+
 func CreateExtendedRLDP(rldp RLDP) *RLDPWrapper {
+	messageSender, _ := rldp.(RLDPMessageSender)
 	w := &RLDPWrapper{
-		RLDP:     rldp,
-		overlays: map[string]*RLDPOverlayWrapper{},
+		RLDP:          rldp,
+		messageSender: messageSender,
+		overlays:      map[string]*RLDPOverlayWrapper{},
 	}
 	w.RLDP.SetOnQuery(w.queryHandler)
 	w.GetADNL().SetDisconnectHandler(w.disconnectHandler)
-	if _, ok := w.GetADNL().(*ADNLWrapper); ok {
+	if adnlWrapper, ok := w.GetADNL().(*ADNLWrapper); ok {
+		w.adnlWrapper = adnlWrapper
 		w.RLDP.SetOnMessage(w.messageHandler)
 	}
 
@@ -104,35 +133,48 @@ func loadRLDPDisconnectHandler(source *atomic.Pointer[rldpDisconnectHandler]) fu
 }
 
 func (r *RLDPWrapper) messageHandler(_ []byte, data []byte) error {
-	adnlWrapper := r.GetADNL().(*ADNLWrapper)
-
 	obj, err := parseRLDPMessagePayload(data)
 	if err != nil {
 		return fmt.Errorf("failed to parse rldp message: %w", err)
 	}
 
-	return adnlWrapper.customHandler(&adnl.MessageCustom{Data: obj})
+	_, overlayID := UnwrapMessage(obj)
+	peer := rldpBroadcastPeer{
+		transport: r,
+		overlayID: overlayID,
+	}
+
+	return r.adnlWrapper.handleCustomMessage(peer, &adnl.MessageCustom{Data: obj})
 }
 
 func parseRLDPMessagePayload(data []byte) (tl.Serializable, error) {
-	list := make([]tl.Serializable, 0, 2)
-	for len(data) > 0 {
-		var obj any
-		rest, err := tl.ParseNoCopy(&obj, data, true)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, obj)
-		data = rest
-	}
-
-	if len(list) == 0 {
+	if len(data) == 0 {
 		return nil, fmt.Errorf("empty payload")
 	}
-	if len(list) == 1 {
-		return list[0], nil
+
+	var envelope any
+	rest, err := tl.ParseNoCopy(&envelope, data, true)
+	if err != nil {
+		return nil, err
 	}
-	return list, nil
+	if len(rest) == 0 {
+		return envelope, nil
+	}
+
+	if _, ok := envelope.(Message); !ok {
+		return nil, fmt.Errorf("multiple objects require an overlay message envelope")
+	}
+
+	var body any
+	rest, err = tl.ParseNoCopy(&body, rest, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 {
+		return nil, fmt.Errorf("unexpected trailing data after overlay message body")
+	}
+
+	return []tl.Serializable{envelope, body}, nil
 }
 
 func (r *RLDPWrapper) queryHandler(transferId []byte, query *rldp.Query) error {

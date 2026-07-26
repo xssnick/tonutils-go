@@ -143,14 +143,17 @@ func (m *mockADNL) Stats() adnl.PeerStats {
 func (m *mockADNL) Close() {}
 
 type mockRLDP struct {
-	adnl          rldp.ADNL
-	onQuery       func(transferId []byte, query *rldp.Query) error
-	onMessage     func(id []byte, data []byte) error
-	onDisconnect  func()
-	doQueryFn     func(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error
-	doQueryAsync  func(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
-	doQueryCalls  []tl.Serializable
-	sendAnswerErr error
+	adnl             rldp.ADNL
+	onQuery          func(transferId []byte, query *rldp.Query) error
+	onMessage        func(id []byte, data []byte) error
+	onDisconnect     func()
+	doQueryFn        func(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error
+	doQueryAsync     func(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
+	doQueryCalls     []tl.Serializable
+	sendMessageCtx   context.Context
+	sendMessageCalls [][]byte
+	sendMessageErr   error
+	sendAnswerErr    error
 }
 
 func newMockRLDP(adnl rldp.ADNL) *mockRLDP {
@@ -170,6 +173,12 @@ func (m *mockRLDP) Stats() rldp.Stats {
 }
 
 func (m *mockRLDP) Close() {}
+
+func (m *mockRLDP) SendMessage(ctx context.Context, payload []byte) error {
+	m.sendMessageCtx = ctx
+	m.sendMessageCalls = append(m.sendMessageCalls, append([]byte(nil), payload...))
+	return m.sendMessageErr
+}
 
 func (m *mockRLDP) DoQuery(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error {
 	m.doQueryCalls = append(m.doQueryCalls, query)

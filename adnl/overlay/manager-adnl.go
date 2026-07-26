@@ -63,6 +63,18 @@ type broadcastFECControlRegistrar interface {
 	registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func()
 }
 
+type adnlBroadcastPeer struct {
+	transport *ADNLWrapper
+}
+
+func (p adnlBroadcastPeer) ID() []byte {
+	return p.transport.GetID()
+}
+
+func (p adnlBroadcastPeer) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return p.transport.ADNL.SendCustomMessage(ctx, req)
+}
+
 func (a *ADNLWrapper) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
 	return a.ADNL.GetDisconnectHandler()
 }
@@ -204,7 +216,7 @@ func (a *ADNLWrapper) queryHandler(msg *adnl.MessageQuery) error {
 		}
 
 		switch obj.(type) {
-		case Ping, *Ping:
+		case Ping:
 			return a.Answer(context.Background(), msg.ID, Pong{})
 		}
 
@@ -247,6 +259,10 @@ func (a *ADNLWrapper) disconnectHandler(addr string, key ed25519.PublicKey) {
 }
 
 func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
+	return a.handleCustomMessage(adnlBroadcastPeer{transport: a}, msg)
+}
+
+func (a *ADNLWrapper) handleCustomMessage(peer BroadcastPeer, msg *adnl.MessageCustom) error {
 	obj, over := UnwrapMessage(msg.Data)
 	if over != nil {
 		id, err := newOverlayIDKey(over)
@@ -281,7 +297,7 @@ func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
 			if receiver.overlayKey != id {
 				return fmt.Errorf("broadcast receiver overlay id mismatch")
 			}
-			if err = receiver.processMessage(a, obj); err != nil {
+			if err = receiver.HandleMessage(peer, obj); err != nil {
 				if errors.Is(err, ErrBroadcastRejected) {
 					return nil
 				}
@@ -322,25 +338,36 @@ func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
 
 func isBroadcastMessage(msg tl.Serializable) bool {
 	switch msg.(type) {
-	case Broadcast, BroadcastTwoStepSimple, BroadcastTwoStepFEC, BroadcastFECShort, BroadcastFEC:
+	case Broadcast, BroadcastTwoStepSimple, BroadcastTwoStepFEC, BroadcastFECShort, BroadcastFEC, FECReceived, FECCompleted:
 		return true
 	default:
 		return false
 	}
 }
 
-func (r *BroadcastReceiver) processMessage(transport *ADNLWrapper, msg tl.Serializable) error {
+// HandleMessage verifies and processes one already-decoded overlay broadcast or
+// control message received from an authenticated transport peer. The peer is
+// also used for FEC control responses; its SendCustomMessage method must apply
+// the transport's overlay framing when that transport requires it.
+func (r *BroadcastReceiver) HandleMessage(peer BroadcastPeer, msg tl.Serializable) error {
 	if !r.IsActive() {
 		return ErrBroadcastRejected
 	}
 
 	w := ADNLOverlayWrapper{
+		broadcastPeer:     peer,
 		BroadcastReceiver: r,
-		ADNLWrapper:       transport,
 	}
-	immediatePeerID := transport.GetID()
+	immediatePeerID := peer.ID()
 
 	switch t := msg.(type) {
+	case FECReceived:
+		r.trackBroadcastFECRelayControl(immediatePeerID, BroadcastFECControl{Hash: t.Hash})
+	case FECCompleted:
+		r.trackBroadcastFECRelayControl(immediatePeerID, BroadcastFECControl{
+			Hash:      t.Hash,
+			Completed: true,
+		})
 	case Broadcast:
 		if err := w.processBroadcast(&t, immediatePeerID); err != nil {
 			return fmt.Errorf("failed to process broadcast: %w", err)

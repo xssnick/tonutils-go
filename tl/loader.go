@@ -86,6 +86,8 @@ var _structInfoTableTLNames = map[string]*structInfo{}
 type unregisteredTL struct{}
 
 func finalizeStructInfoReference(si *structInfo) {
+	si.finalized = true
+
 	if len(si.tlName) > 0 {
 		siCached := _structInfoTableTLNames[si.tlName]
 		if siCached != nil {
@@ -113,7 +115,8 @@ func finalizeStructInfoReference(si *structInfo) {
 	} else if siTypeByType != si {
 		*siTypeByType = *si
 	}
-	si.finalized = true
+
+	precomputeMinimumWireSizes()
 }
 
 func getStructInfoReference(t reflect.Type) *structInfo {
