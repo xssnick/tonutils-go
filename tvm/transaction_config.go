@@ -578,20 +578,15 @@ func transactionLoadGasPricesStrict(blockchainCfg tlb.BlockchainConfig, masterch
 		return nil, fmt.Errorf("failed to load gas prices config param %d: %w", paramID, err)
 	}
 
-	var prices tlb.ConfigGasLimitsPrices
-	if err = tlb.Parse(&prices, root); err != nil {
+	loader, err := root.BeginParse()
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse gas prices config param %d: %w", paramID, err)
 	}
-	// ConfigGasLimitsPrices parses a copy of the slice, so exactness is checked
-	// against the serialized size of the parsed record.
-	expectedBits := uint(392) // 8-bit tag + 3x64 gas fields + 3x64 block/due limits
-	if prices.HasSeparateSpecialLimit {
-		expectedBits += 64
+	var prices tlb.ConfigGasLimitsPrices
+	if err = tlb.LoadFromCell(&prices, loader); err != nil {
+		return nil, fmt.Errorf("failed to parse gas prices config param %d: %w", paramID, err)
 	}
-	if prices.HasFlatPricing {
-		expectedBits += 136 // 8-bit tag + 2x64 flat fields
-	}
-	if root.BitsSize() != expectedBits || root.RefsNum() != 0 {
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
 		return nil, fmt.Errorf("gas prices config param %d has unparsed data", paramID)
 	}
 	return &prices, nil

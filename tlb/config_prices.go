@@ -142,6 +142,13 @@ func (c *ConfigGasLimitsPrices) LoadFromCell(loader *cell.Slice) error {
 		return err
 	}
 
+	// Parsing runs on a copy so a failed record leaves the caller's slice untouched,
+	// but on success the loader must be advanced like every other TLB type, otherwise
+	// callers cannot tell whether the record was fully consumed.
+	if err = loader.SkipBits(loader.BitsLeft() - work.BitsLeft()); err != nil {
+		return err
+	}
+
 	*c = out
 	return nil
 }
