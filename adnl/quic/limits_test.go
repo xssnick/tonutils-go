@@ -15,18 +15,31 @@ func TestDefaultLimitsAreValid(t *testing.T) {
 	if limits.MaxIncomingStreams != defaultMaxIncomingStreams {
 		t.Fatalf("MaxIncomingStreams = %d, want %d", limits.MaxIncomingStreams, defaultMaxIncomingStreams)
 	}
-	if limits.MaxConcurrentIncomingStreams >= int(limits.MaxIncomingStreams) {
+	// The per-connection cap is the gate that actually backpressures a peer, so
+	// it is what must stay below the advertised QUIC credit. The receiver-wide
+	// number is a burst pool layered on top of the per-connection guarantee and
+	// is deliberately sized not to bind before the protocol limit does -- the
+	// reference node has no receiver-wide application cap at all.
+	if limits.MaxConcurrentIncomingStreamsPerConnection >= int(limits.MaxIncomingStreams) {
 		t.Fatalf(
-			"application stream limit %d must be below protocol credit %d",
+			"per-connection stream limit %d must be below protocol credit %d",
+			limits.MaxConcurrentIncomingStreamsPerConnection,
+			limits.MaxIncomingStreams,
+		)
+	}
+	if limits.MaxConcurrentIncomingStreams > int(limits.MaxIncomingStreams) {
+		t.Fatalf(
+			"application stream pool %d must not exceed protocol credit %d",
 			limits.MaxConcurrentIncomingStreams,
 			limits.MaxIncomingStreams,
 		)
 	}
-	if limits.MaxConcurrentIncomingStreamsPerConnection >= limits.MaxConcurrentIncomingStreams {
+	if limits.GuaranteedStreamsPerConnection <= 0 ||
+		limits.GuaranteedStreamsPerConnection > limits.MaxConcurrentIncomingStreamsPerConnection {
 		t.Fatalf(
-			"per-connection stream limit %d must be below global limit %d",
+			"guaranteed streams %d must be within (0, %d]",
+			limits.GuaranteedStreamsPerConnection,
 			limits.MaxConcurrentIncomingStreamsPerConnection,
-			limits.MaxConcurrentIncomingStreams,
 		)
 	}
 	if limits.MaxBufferedIncomingBytes < limits.MaxObjectSize {

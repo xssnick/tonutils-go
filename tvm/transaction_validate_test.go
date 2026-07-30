@@ -137,7 +137,7 @@ func TestBuiltTransactionMessageValidationAcceptsEitherLayouts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = validateBuiltTransactionMessage(root); err != nil {
+		if _, err = validateBuiltTransactionMessage(root); err != nil {
 			t.Fatalf("layout %+v rejected: %v", layout, err)
 		}
 	}
@@ -146,14 +146,14 @@ func TestBuiltTransactionMessageValidationAcceptsEitherLayouts(t *testing.T) {
 func TestBuiltTransactionMessageValidationRequiresExactReferencedStateInit(t *testing.T) {
 	exact := cell.BeginCell().MustStoreUInt(0, 5).EndCell()
 	for _, external := range []bool{false, true} {
-		if err := validateBuiltTransactionMessage(transactionTestMessageWithReferencedStateInit(exact, external)); err != nil {
+		if _, err := validateBuiltTransactionMessage(transactionTestMessageWithReferencedStateInit(exact, external)); err != nil {
 			t.Fatalf("external=%t exact StateInit rejected: %v", external, err)
 		}
 		for _, malformed := range []*cell.Cell{
 			exact.ToBuilder().MustStoreBoolBit(true).EndCell(),
 			exact.ToBuilder().MustStoreRef(cell.BeginCell().EndCell()).EndCell(),
 		} {
-			if err := validateBuiltTransactionMessage(transactionTestMessageWithReferencedStateInit(malformed, external)); err == nil {
+			if _, err := validateBuiltTransactionMessage(transactionTestMessageWithReferencedStateInit(malformed, external)); err == nil {
 				t.Fatalf("external=%t malformed referenced StateInit accepted", external)
 			}
 		}
@@ -202,7 +202,7 @@ func TestReferencedStateInitValidationKeepsPayloadRefsLazy(t *testing.T) {
 	}
 
 	msg := transactionTestMessageWithReferencedStateInit(lazyStateInit, false)
-	if err = validateBuiltTransactionMessage(msg); err != nil {
+	if _, err = validateBuiltTransactionMessage(msg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = transactionValidateRelaxedActionMessageCurrencies(msg); err != nil {
@@ -227,7 +227,7 @@ func TestBuiltTransactionMessageValidationRejectsNonCanonicalVariableAddress(t *
 		{name: "wide workchain", workchain: 128, addrBits: 256},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateBuiltTransactionMessage(transactionTestInternalMessageWithVariableDestination(tc.workchain, tc.addrBits))
+			_, err := validateBuiltTransactionMessage(transactionTestInternalMessageWithVariableDestination(tc.workchain, tc.addrBits))
 			if (err != nil) != tc.wantError {
 				t.Fatalf("validation error = %v, want error %t", err, tc.wantError)
 			}
@@ -257,7 +257,7 @@ func TestBuiltTransactionMessageValidationRejectsNonCanonicalExtraCurrency(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = validateBuiltTransactionMessage(root); err == nil {
+	if _, err = validateBuiltTransactionMessage(root); err == nil {
 		t.Fatal("expected zero-valued extra currency encoding to be rejected")
 	}
 }

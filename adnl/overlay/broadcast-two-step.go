@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/raptorq"
@@ -39,6 +40,21 @@ type broadcastTwoStepStream struct {
 	rebroadcastedPart bool
 	lastMessageAt     time.Time
 	mx                sync.Mutex
+	// removed is set under state.mx before the stream leaves state.streams, so
+	// a lookup can release state.mx before taking stream.mx and still notice an
+	// eviction that happened while it waited.
+	removed atomic.Bool
+}
+
+// lockLiveTwoStepStream takes stream.mx and reports whether the stream is still
+// registered. A false return leaves the mutex unlocked.
+func lockLiveTwoStepStream(stream *broadcastTwoStepStream) bool {
+	stream.mx.Lock()
+	if stream.removed.Load() {
+		stream.mx.Unlock()
+		return false
+	}
+	return true
 }
 
 type broadcastTwoStepIDKey [32]byte
@@ -94,6 +110,11 @@ func (s *BroadcastTwoStepState) beginSimpleAdmission(id broadcastTwoStepIDKey, n
 		return broadcastAdmissionAttempt{status: broadcastAdmissionCommitted}
 	}
 	if admission := s.simpleAdmissions[id]; admission != nil {
+		if admission.standby > 0 {
+			s.mx.Unlock()
+			return broadcastAdmissionAttempt{status: broadcastAdmissionDuplicate}
+		}
+		admission.standby++
 		s.mx.Unlock()
 		return broadcastAdmissionAttempt{admission: admission, status: broadcastAdmissionWait}
 	}
@@ -179,7 +200,12 @@ func (s *BroadcastTwoStepState) cleanupLocked(now time.Time, force bool) {
 	s.nextCleanupAt = now.Add(fecBroadcastCleanupInterval)
 
 	for id, stream := range s.streams {
-		stream.mx.Lock()
+		// TryLock, never Lock: this runs under s.mx and stream.mx is held
+		// across RaptorQ decode. A busy stream is being worked on, so it is not
+		// idle; the next sweep reconsiders it.
+		if !stream.mx.TryLock() {
+			continue
+		}
 		stale := stream.admission == nil && stream.lastMessageAt.Add(broadcastTwoStepStreamTTL).Before(now)
 		stream.mx.Unlock()
 		if !stale {
@@ -214,6 +240,9 @@ func (s *BroadcastTwoStepState) removeStreamLocked(id broadcastTwoStepIDKey, str
 		return
 	}
 
+	// Marked before the delete becomes visible, so a lookup already holding
+	// this pointer and waiting for stream.mx notices the eviction.
+	stream.removed.Store(true)
 	delete(s.streams, id)
 	s.releaseLocked(stream.budgetBytes)
 	if delivered {
@@ -474,7 +503,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimple(t *BroadcastTwoStepSi
 	for {
 		attempt := state.beginSimpleAdmission(id, time.Now())
 		switch attempt.status {
-		case broadcastAdmissionCommitted, broadcastAdmissionOverloaded:
+		case broadcastAdmissionCommitted, broadcastAdmissionOverloaded, broadcastAdmissionDuplicate:
 			return nil
 		case broadcastAdmissionWait:
 			<-attempt.admission.done
@@ -684,11 +713,13 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 		}
 		state.streams[id] = stream
 	}
-	// Pin the registered stream with its lock before releasing the state lock.
-	// Cleanup takes locks in the same order, so it cannot evict this stream
-	// between the registry lookup and processing the current symbol.
-	stream.mx.Lock()
+	// state.mx is released before stream.mx: stream.mx is held across the
+	// RaptorQ decode, so holding both would serialize the whole overlay behind
+	// one decode. stream.removed covers the eviction race instead.
 	state.mx.Unlock()
+	if !lockLiveTwoStepStream(stream) {
+		return twoStepFECPartResult{recontend: true}
+	}
 
 	var (
 		decodedData    []byte
@@ -801,11 +832,15 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 }
 
 func (s *BroadcastTwoStepState) finishFECAdmission(id broadcastTwoStepIDKey, stream *broadcastTwoStepStream, admission *broadcastAdmission, disposition BroadcastDisposition) {
-	s.mx.Lock()
+	// stream.mx first: a concurrent part of the same broadcast may be holding
+	// it across a decode, and waiting for that while holding s.mx would stall
+	// every other broadcast in the overlay. Nothing takes these in the opposite
+	// order blockingly -- cleanupLocked only ever TryLocks a stream.
 	stream.mx.Lock()
+	s.mx.Lock()
 	if s.streams[id] != stream || stream.admission != admission {
-		stream.mx.Unlock()
 		s.mx.Unlock()
+		stream.mx.Unlock()
 		return
 	}
 
@@ -816,6 +851,6 @@ func (s *BroadcastTwoStepState) finishFECAdmission(id broadcastTwoStepIDKey, str
 	}
 	admission.disposition = disposition
 	close(admission.done)
-	stream.mx.Unlock()
 	s.mx.Unlock()
+	stream.mx.Unlock()
 }

@@ -33,7 +33,11 @@ const ALPN = "ton"
 const DefaultMaxObjectSize = defaultMaxBoxedObjectSize
 
 const (
-	defaultInitialStreamReceiveWindow     = 256 << 10
+	// The reference node splits this in two (quic-pimpl.h): 4 MiB for streams it
+	// opens, 256 KiB for streams the peer opens. quic-go has a single knob for
+	// both, so taking the larger keeps neither direction tighter than C++; the
+	// per-connection window stays at C++'s DEFAULT_MAX_WINDOW of 24 MiB.
+	defaultInitialStreamReceiveWindow     = 4 << 20
 	defaultMaxStreamReceiveWindow         = 6 << 20
 	defaultInitialConnectionReceiveWindow = 4 << 20
 	defaultMaxConnectionReceiveWindow     = 24 << 20
@@ -47,24 +51,11 @@ type Handler struct {
 	OnQuery func(ctx context.Context, from ed25519.PublicKey, payload []byte) ([]byte, error)
 	// OnMessage handles a fire-and-forget quic.message. Optional.
 	OnMessage func(ctx context.Context, from ed25519.PublicKey, payload []byte)
-
-	pathHandler serverPathHandler
-}
-
-type streamPath struct {
-	local   adnlID
-	peer    adnlID
-	peerKey ed25519.PublicKey
-	conn    *quicgo.Conn
 }
 
 type streamHandler interface {
 	handleQuery(ctx context.Context, payload []byte) ([]byte, error)
 	handleMessage(ctx context.Context, payload []byte)
-}
-
-type serverPathHandler interface {
-	handlePath(ctx context.Context, path streamPath) (streamHandler, error)
 }
 
 var (
@@ -166,10 +157,12 @@ func defaultQUICConfig(limits Limits) *quicgo.Config {
 // Server accepts TON QUIC connections on a net.PacketConn and dispatches
 // inbound query/message streams to a Handler.
 type Server struct {
-	handler       Handler
-	maxObjectSize int64
-	limits        Limits
-	admission     *streamAdmission
+	handler Handler
+	// paths, when set, hands every new connection to the Gateway that owns it
+	// so the path can be reused for outbound traffic.
+	paths     *Gateway
+	limits    Limits
+	admission *streamAdmission
 
 	defaultID  Identity
 	identities *identityRegistry
@@ -202,7 +195,7 @@ func NewServer(handler Handler, keys ...ed25519.PrivateKey) (*Server, error) {
 // NewServerWithLimits builds a Server with explicit per-instance resource
 // limits.
 func NewServerWithLimits(handler Handler, limits Limits, keys ...ed25519.PrivateKey) (*Server, error) {
-	if handler.OnQuery == nil && handler.pathHandler == nil {
+	if handler.OnQuery == nil {
 		return nil, errors.New("quic: Handler.OnQuery is required")
 	}
 	if err := limits.validate(); err != nil {
@@ -214,20 +207,26 @@ func NewServerWithLimits(handler Handler, limits Limits, keys ...ed25519.Private
 		return nil, err
 	}
 
-	return newServer(handler, limits, identities, nil), nil
+	return newServer(handler, limits, identities, nil, nil), nil
 }
 
-func newServer(handler Handler, limits Limits, identities *identityRegistry, admission *streamAdmission) *Server {
+func newServer(
+	handler Handler,
+	limits Limits,
+	identities *identityRegistry,
+	admission *streamAdmission,
+	paths *Gateway,
+) *Server {
 	if admission == nil {
 		admission = newStreamAdmission(
-			uint64(limits.MaxConcurrentIncomingStreams),
-			uint64(limits.MaxBufferedIncomingBytes),
+			limits.MaxConcurrentIncomingStreams,
+			limits.MaxBufferedIncomingBytes,
 		)
 	}
 
 	s := &Server{
 		handler:         handler,
-		maxObjectSize:   limits.MaxObjectSize,
+		paths:           paths,
 		limits:          limits,
 		admission:       admission,
 		defaultID:       identities.defaultIdentity(),
@@ -399,13 +398,8 @@ func (s *Server) serveConn(conn *quicgo.Conn) {
 	ctx := conn.Context()
 
 	var handler streamHandler
-	if s.handler.pathHandler != nil {
-		handler, err = s.handler.pathHandler.handlePath(ctx, streamPath{
-			local:   local,
-			peer:    peer,
-			peerKey: peerKey,
-			conn:    conn,
-		})
+	if s.paths != nil {
+		handler, err = s.paths.handlePath(ctx, local, peer, peerKey, conn)
 		if err != nil {
 			conn.CloseWithError(1, "path rejected")
 			return
@@ -448,46 +442,64 @@ func (h directStreamHandler) handleMessage(ctx context.Context, payload []byte) 
 	}
 }
 
-// serveConnStreams accepts inbound streams on conn and serves each one under
-// a stream admission lease. When either admission scope is exhausted it stops
-// accepting further streams until a lease is released, so quic-go's stream
-// limits and flow control backpressure the peer.
+// The per-connection slot is taken BEFORE AcceptStream: quic-go returns
+// MAX_STREAMS credit only when an accepted stream completes, so not accepting is
+// QUIC-level backpressure, scoped to the one connection that is over budget.
+//
+// admission is the receiver-wide scope and is nil for connections we dialed:
+// outbound work must never be gated on inbound pressure, the same rule as
+// quic-server.cpp:653.
 func serveConnStreams(ctx context.Context, conn *quicgo.Conn, admission *streamAdmission, limits Limits, handler streamHandler) {
 	connection := newStreamAdmission(
-		uint64(limits.MaxConcurrentIncomingStreamsPerConnection),
-		uint64(limits.MaxBufferedIncomingBytesPerConnection),
+		limits.MaxConcurrentIncomingStreamsPerConnection,
+		limits.MaxBufferedIncomingBytesPerConnection,
 	)
-	stopWake := context.AfterFunc(ctx, func() {
-		admission.wake()
-		connection.wake()
-	})
-	defer stopWake()
+	guaranteed := limits.guaranteedStreamsPerConnection()
 
 	for {
+		if !connection.acquireSlot(ctx.Done()) {
+			return
+		}
+
+		// A connection's first few concurrent streams never consult the shared pool,
+		// so no set of peers can starve another down to zero throughput.
+		lease := &streamAdmissionLease{connection: connection}
+		if admission != nil && connection.activeStreams() > guaranteed {
+			if !admission.acquireSlot(ctx.Done()) {
+				connection.releaseSlot()
+				return
+			}
+			lease.admission = admission
+			lease.globalSlot = true
+		} else if admission != nil {
+			// Still charge bytes globally even when the slot was guaranteed.
+			lease.admission = admission
+		}
+
 		st, err := conn.AcceptStream(ctx)
 		if err != nil {
+			lease.release()
+			connection.releaseSlot()
 			return // connection closed
 		}
 
-		lease, err := admission.acquireStreamWithin(ctx, connection)
-		if err != nil {
-			return
-		}
-		go serveAdmittedStream(ctx, st, lease, handler, limits.MaxObjectSize, limits.StreamReadTimeout)
+		go func() {
+			defer connection.releaseSlot()
+			serveAdmittedStream(ctx, st, lease, handler, limits)
+		}()
 	}
 }
 
 func serveAdmittedStream(
 	ctx context.Context,
 	st *quicgo.Stream,
-	lease streamAdmissionLease,
+	lease *streamAdmissionLease,
 	handler streamHandler,
-	maxObjectSize int64,
-	readTimeout time.Duration,
+	limits Limits,
 ) {
 	defer lease.release()
 
-	id, payload, err := readIncomingBoxedObject(st, maxObjectSize, readTimeout, &lease)
+	id, payload, err := readIncomingBoxedObject(st, limits.MaxObjectSize, limits, lease)
 	if err != nil {
 		st.CancelRead(1)
 		st.Close()
@@ -501,12 +513,7 @@ func serveAdmittedStream(
 			st.CancelWrite(1)
 			return
 		}
-		// The answer write must not outlive the read bound: admission slots are
-		// a backpressure resource now, and a peer withholding stream
-		// flow-control credit while keeping the connection alive would pin this
-		// slot forever otherwise.
-		_ = st.SetWriteDeadline(time.Now().Add(readTimeout))
-		if err = writeBoxedObject(st, idQuicAnswer, answer); err != nil {
+		if err = writeAnswerWithIdleDeadline(st, answer, limits); err != nil {
 			st.CancelWrite(1)
 		}
 	case idQuicMessage:
@@ -517,6 +524,21 @@ func serveAdmittedStream(
 		st.CancelRead(1)
 		st.CancelWrite(1)
 	}
+}
+
+// An idle deadline rather than one absolute budget: a peer that grants no
+// flow-control credit is still cut off, a slow one that keeps draining is not.
+func writeAnswerWithIdleDeadline(st *quicgo.Stream, answer []byte, limits Limits) error {
+	w := &idleDeadlineWriter{
+		st: st,
+		d: newIdleDeadline(
+			st.SetWriteDeadline,
+			limits.StreamWriteTimeout(),
+			limits.StreamTotalTimeout,
+		),
+	}
+	defer func() { _ = st.SetWriteDeadline(time.Time{}) }()
+	return writeBoxedObjectVia(w, st, idQuicAnswer, answer)
 }
 
 // Close stops the server. The PacketConn passed to Serve remains owned by the
@@ -587,9 +609,8 @@ func dialIdentity(ctx context.Context, addr string, local Identity, expectedPeer
 		return nil, err
 	}
 
-	// Parse before DialAddr opens its private UDP socket. Besides avoiding
-	// socket allocation for malformed addresses, passing the numeric endpoint
-	// prevents the fork's resolve-error path from leaking that socket.
+	// Before DialAddr opens its private UDP socket: passing the numeric endpoint
+	// keeps the fork's resolve-error path from leaking it.
 	conn, err := quicgo.DialAddr(ctx, remoteAddr.String(), tlsConf, defaultQUICConfig(limits))
 	if err != nil {
 		return nil, fmt.Errorf("quic: dial %s: %w", addr, err)
@@ -603,6 +624,27 @@ func (s *Server) dialIdentity(ctx context.Context, addr string, local Identity, 
 		return nil, err
 	}
 
+	s.mu.Lock()
+	tr := s.tr
+	s.mu.Unlock()
+	if tr == nil {
+		return nil, ErrServerClosed
+	}
+
+	return dialOn(ctx, tr, s.quicConf, addr, local, expectedPeer, s.limits.MaxObjectSize)
+}
+
+// The handshake shared by the server and client transports, which differ only in
+// which quic-go transport and config they own.
+func dialOn(
+	ctx context.Context,
+	tr *quicgo.Transport,
+	conf *quicgo.Config,
+	addr string,
+	local Identity,
+	expectedPeer ed25519.PublicKey,
+	maxObjectSize int64,
+) (*Client, error) {
 	remoteAddr, err := parseDialEndpoint(addr)
 	if err != nil {
 		return nil, err
@@ -612,19 +654,11 @@ func (s *Server) dialIdentity(ctx context.Context, addr string, local Identity, 
 		return nil, err
 	}
 
-	s.mu.Lock()
-	tr := s.tr
-	s.mu.Unlock()
-	if tr == nil {
-		return nil, ErrServerClosed
-	}
-
-	conn, err := tr.Dial(ctx, remoteAddr, tlsConf, s.quicConf)
+	conn, err := tr.Dial(ctx, remoteAddr, tlsConf, conf)
 	if err != nil {
 		return nil, fmt.Errorf("quic: dial %s: %w", addr, err)
 	}
-
-	return authenticatedClient(conn, expectedPeerID, s.maxObjectSize)
+	return authenticatedClient(conn, expectedPeerID, maxObjectSize)
 }
 
 func clientTLSConfig(local Identity, expectedPeer ed25519.PublicKey) (*forktls.Config, adnlID, error) {
@@ -666,11 +700,7 @@ func authenticatedClient(conn *quicgo.Conn, expectedPeerID adnlID, maxObjectSize
 		return nil, fmt.Errorf("quic: connected peer %s != expected %s", peer, expectedPeerID)
 	}
 
-	return clientFromConn(conn, peerKey, peer, maxObjectSize), nil
-}
-
-func clientFromConn(conn *quicgo.Conn, peerKey ed25519.PublicKey, peer adnlID, maxObjectSize int64) *Client {
-	return &Client{conn: conn, peerKey: peerKey, peer: peer, maxObjectSize: maxObjectSize}
+	return &Client{conn: conn, peerKey: peerKey, peer: peer, maxObjectSize: maxObjectSize}, nil
 }
 
 // PeerID returns a copy of the authenticated ADNL id of the remote endpoint.
@@ -689,7 +719,10 @@ func (c *Client) Query(ctx context.Context, payload []byte, maxAnswer int64) ([]
 		return nil, fmt.Errorf("quic: query: %w", err)
 	}
 
-	st, err := c.conn.OpenStream()
+	// OpenStreamSync, not OpenStream: with the peer's MAX_STREAMS credit
+	// momentarily exhausted OpenStream turns ordinary backpressure into a hard
+	// error. The peer returns credit as it serves streams, and ctx bounds the wait.
+	st, err := c.conn.OpenStreamSync(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("quic: open stream: %w", err)
 	}
@@ -702,10 +735,7 @@ func (c *Client) Query(ctx context.Context, payload []byte, maxAnswer int64) ([]
 
 	if err := writeBoxedObject(st, idQuicQuery, payload); err != nil {
 		st.CancelRead(1)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, fmt.Errorf("quic: write query: %w", err)
+		return nil, ctxErrOr(ctx, "write query", err)
 	}
 
 	limit := maxAnswer
@@ -715,10 +745,7 @@ func (c *Client) Query(ctx context.Context, payload []byte, maxAnswer int64) ([]
 	id, ansPayload, err := readBoxedObject(st, limit)
 	if err != nil {
 		st.CancelRead(1)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, fmt.Errorf("quic: read answer: %w", err)
+		return nil, ctxErrOr(ctx, "read answer", err)
 	}
 	if id != idQuicAnswer {
 		st.CancelRead(1)
@@ -733,7 +760,8 @@ func (c *Client) SendMessage(ctx context.Context, payload []byte) error {
 		return fmt.Errorf("quic: message: %w", err)
 	}
 
-	st, err := c.conn.OpenStream()
+	// See Query: waiting for stream credit under ctx beats failing the send.
+	st, err := c.conn.OpenStreamSync(ctx)
 	if err != nil {
 		return fmt.Errorf("quic: open stream: %w", err)
 	}
@@ -745,10 +773,7 @@ func (c *Client) SendMessage(ctx context.Context, payload []byte) error {
 	}
 	if err := writeBoxedObject(st, idQuicMessage, payload); err != nil {
 		st.CancelRead(1)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		return fmt.Errorf("quic: write message: %w", err)
+		return ctxErrOr(ctx, "write message", err)
 	}
 	// Fire-and-forget: the peer sends back an empty FIN-terminated stream,
 	// which we don't need.
@@ -756,14 +781,20 @@ func (c *Client) SendMessage(ctx context.Context, payload []byte) error {
 	return nil
 }
 
-func cancelStreamOnContext(ctx context.Context, st *quicgo.Stream) func() {
-	stop := context.AfterFunc(ctx, func() {
+// Prefers the context's own error: a cancelled call should report why it was cut
+// short, not the I/O failure that cancelling caused.
+func ctxErrOr(ctx context.Context, what string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return fmt.Errorf("quic: %s: %w", what, err)
+}
+
+func cancelStreamOnContext(ctx context.Context, st *quicgo.Stream) func() bool {
+	return context.AfterFunc(ctx, func() {
 		st.CancelRead(1)
 		st.CancelWrite(1)
 	})
-	return func() {
-		stop()
-	}
 }
 
 // Close tears down the connection.
@@ -775,10 +806,8 @@ func (c *Client) Close() error {
 // Stream helpers
 // ---------------------------------------------------------------------------
 
-// wireBuffers pools frame buffers for sub-threshold writeBoxedObject calls.
-// A buffer is recycled only after a fully successful write: after a write
-// error the fork's SendStream may still reference the slice (dataForWriting,
-// reliable reset), so it must be left to the GC.
+// Recycled only after a fully successful write: after an error the fork's
+// SendStream may still reference the slice, so it must be left to the GC.
 var wireBuffers = sync.Pool{
 	New: func() any {
 		buf := make([]byte, directWriteObjectThreshold+16)
@@ -788,6 +817,12 @@ var wireBuffers = sync.Pool{
 
 // writeBoxedObject writes a boxed <id> data:bytes object and closes the stream's send side (FIN).
 func writeBoxedObject(st *quicgo.Stream, id uint32, payload []byte) error {
+	return writeBoxedObjectVia(st, st, id, payload)
+}
+
+// Split from writeBoxedObject so the answer path can wrap the stream in an
+// idle-deadline writer while small objects keep the pooled single-write path.
+func writeBoxedObjectVia(w io.Writer, st *quicgo.Stream, id uint32, payload []byte) error {
 	if len(payload) < directWriteObjectThreshold {
 		header, headerLen, pad, total, err := boxedObjectHeader(id, len(payload))
 		if err != nil {
@@ -798,14 +833,14 @@ func writeBoxedObject(st *quicgo.Stream, id uint32, payload []byte) error {
 		copy(wire, header[:headerLen])
 		copy(wire[headerLen:], payload)
 		clear(wire[total-pad:])
-		if err = writeFull(st, wire); err != nil {
+		if err = writeFull(w, wire); err != nil {
 			return err
 		}
 		wireBuffers.Put(buf)
 		return st.Close()
 	}
 
-	if err := writeBoxedObjectTo(st, id, payload); err != nil {
+	if err := writeBoxedObjectTo(w, id, payload); err != nil {
 		return err
 	}
 	return st.Close()
@@ -860,9 +895,137 @@ func readBoxedObject(r io.Reader, maxSize int64) (uint32, []byte, error) {
 	return readBoxedObjectAdmitted(r, maxSize, nil)
 }
 
-func readIncomingBoxedObject(st *quicgo.Stream, maxSize int64, timeout time.Duration, lease *streamAdmissionLease) (uint32, []byte, error) {
-	_ = st.SetReadDeadline(time.Now().Add(timeout))
-	id, payload, err := readBoxedObjectAdmitted(st, maxSize, lease)
+// How much payload is charged and read at a time before the stream has proven
+// itself, bounding what a peer gets for free by declaring a huge length.
+const payloadReadChunk = 64 << 10
+
+// Past this a stream is treated as real and the rest is allocated in one go, so a
+// legitimate multi-MiB broadcast does not pay repeated regrow copies.
+const payloadCommitThreshold = 1 << 20
+
+// Charges the admission scopes for bytes that actually arrived rather than for
+// the declared length, so a peer cannot pin MaxObjectSize of budget and heap per
+// stream by sending only the header. Mirrors QuicSender::StreamState::append.
+func readAdmittedPayload(r io.Reader, payloadLen int, lease *streamAdmissionLease) ([]byte, error) {
+	if payloadLen == 0 {
+		return nil, nil
+	}
+
+	// Nothing is allocated before the first chunk is charged.
+	var payload []byte
+	for len(payload) < payloadLen {
+		want := payloadLen - len(payload)
+		if len(payload) < payloadCommitThreshold && want > payloadReadChunk {
+			want = payloadReadChunk
+		}
+		if lease != nil {
+			if err := lease.chargeBytes(int64(want)); err != nil {
+				return nil, err
+			}
+		}
+
+		if cap(payload)-len(payload) < want {
+			// Geometric until the stream proves itself, then one exact resize.
+			capacity := len(payload) + want
+			if doubled := 2 * cap(payload); doubled > capacity {
+				capacity = doubled
+			}
+			if capacity > payloadLen {
+				capacity = payloadLen
+			}
+			grown := make([]byte, len(payload), capacity)
+			copy(grown, payload)
+			payload = grown
+		}
+
+		start := len(payload)
+		payload = payload[:start+want]
+		if _, err := io.ReadFull(r, payload[start:]); err != nil {
+			return nil, err
+		}
+	}
+	return payload, nil
+}
+
+// Bounds a stream by how long it stays silent rather than by one absolute budget,
+// so a slow but progressing peer is never cut off while one that stops entirely
+// still is. total, when set, is the outer bound an idle window may not push past.
+type idleDeadline struct {
+	set  func(time.Time) error
+	idle time.Duration
+
+	deadline time.Time
+	hardStop time.Time
+}
+
+func newIdleDeadline(set func(time.Time) error, idle, total time.Duration) *idleDeadline {
+	d := &idleDeadline{set: set, idle: idle}
+	now := time.Now()
+	if total > 0 {
+		d.hardStop = now.Add(total)
+	}
+	d.arm(now)
+	return d
+}
+
+func (d *idleDeadline) arm(now time.Time) {
+	deadline := now.Add(d.idle)
+	if !d.hardStop.IsZero() && deadline.After(d.hardStop) {
+		deadline = d.hardStop
+	}
+	d.deadline = deadline
+	_ = d.set(deadline)
+}
+
+// Re-arms only once the window is more than half spent, so a large object does
+// not touch the deadline setter on every chunk.
+func (d *idleDeadline) progressed() {
+	if now := time.Now(); d.deadline.Sub(now) < d.idle/2 {
+		d.arm(now)
+	}
+}
+
+type idleDeadlineWriter struct {
+	st *quicgo.Stream
+	d  *idleDeadline
+}
+
+func (w *idleDeadlineWriter) Write(p []byte) (int, error) {
+	n, err := w.st.Write(p)
+	if n > 0 {
+		w.d.progressed()
+	}
+	return n, err
+}
+
+type idleDeadlineReader struct {
+	st *quicgo.Stream
+	d  *idleDeadline
+}
+
+func (r *idleDeadlineReader) Read(p []byte) (int, error) {
+	n, err := r.st.Read(p)
+	if n > 0 {
+		r.d.progressed()
+	}
+	return n, err
+}
+
+// Reads one object under an idle read deadline. An absolute budget would be an
+// implicit minimum bandwidth instead: at StreamReadTimeout=15s a 16 MiB broadcast
+// needed a sustained ~1.1 MB/s or it was killed mid-progress. The reference node
+// puts no timeout on inbound streams at all (quic-server.h), so an idle bound is
+// still stricter than C++.
+func readIncomingBoxedObject(st *quicgo.Stream, maxSize int64, limits Limits, lease *streamAdmissionLease) (uint32, []byte, error) {
+	r := &idleDeadlineReader{
+		st: st,
+		d: newIdleDeadline(
+			st.SetReadDeadline,
+			limits.StreamReadTimeout,
+			limits.StreamTotalTimeout,
+		),
+	}
+	id, payload, err := readBoxedObjectAdmitted(r, maxSize, lease)
 	if err == nil {
 		_ = st.SetReadDeadline(time.Time{})
 	}
@@ -920,25 +1083,16 @@ func readBoxedObjectAdmitted(r io.Reader, maxSize int64, lease *streamAdmissionL
 		return 0, nil, fmt.Errorf("quic: payload size %d overflows int", payloadLen)
 	}
 
-	if lease != nil {
-		if err := lease.reservePayload(payloadLen); err != nil {
-			return 0, nil, err
-		}
-	}
-
-	payload := make([]byte, int(payloadLen))
-	if _, err := io.ReadFull(r, payload); err != nil {
+	payload, err := readAdmittedPayload(r, int(payloadLen), lease)
+	if err != nil {
 		return 0, nil, err
 	}
 	if pad > 0 {
+		// The padding must arrive, but its content is not inspected - matching
+		// tl.fromBytes and td::TlParser::fetch_string.
 		var padding [3]byte
 		if _, err := io.ReadFull(r, padding[:int(pad)]); err != nil {
 			return 0, nil, err
-		}
-		for _, value := range padding[:int(pad)] {
-			if value != 0 {
-				return 0, nil, errors.New("quic: TL bytes alignment padding is not zero")
-			}
 		}
 	}
 

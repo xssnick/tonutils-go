@@ -226,7 +226,10 @@ func TestTLFromBytesTerminalPadding(t *testing.T) {
 	}
 }
 
-func TestTLFromBytesRejectsInvalidPadding(t *testing.T) {
+// A TL bytes field always occupies a multiple of 4 bytes, so the alignment
+// must be present even at the very end of the buffer -- td::TlParser::
+// fetch_string consumes sizeof(int32)+result_aligned_len unconditionally.
+func TestTLFromBytesRejectsMissingPadding(t *testing.T) {
 	tests := []struct {
 		name string
 		data []byte
@@ -243,24 +246,55 @@ func TestTLFromBytesRejectsInvalidPadding(t *testing.T) {
 			name: "truncated_terminal_padding",
 			data: []byte{1, 0xFF, 0},
 		},
-		{
-			name: "non_zero_first_padding_byte",
-			data: []byte{1, 0xFF, 1, 0},
-		},
-		{
-			name: "non_zero_last_padding_byte",
-			data: []byte{1, 0xFF, 0, 1},
-		},
-		{
-			name: "non_zero_padding_before_trailing_data",
-			data: []byte{2, 0xFF, 0xAA, 1, 0xCC},
-		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if _, _, err := FromBytesNoCopy(test.data); err == nil {
-				t.Fatal("invalid TL bytes padding was accepted")
+				t.Fatal("TL bytes without alignment padding was accepted")
+			}
+		})
+	}
+}
+
+// The reference skips the alignment bytes without inspecting them, so a
+// non-canonical writer must not make us drop an otherwise valid frame.
+func TestTLFromBytesAcceptsNonZeroPadding(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		payload []byte
+		rest    []byte
+	}{
+		{
+			name:    "non_zero_first_padding_byte",
+			data:    []byte{1, 0xFF, 1, 0},
+			payload: []byte{0xFF},
+		},
+		{
+			name:    "non_zero_last_padding_byte",
+			data:    []byte{1, 0xFF, 0, 1},
+			payload: []byte{0xFF},
+		},
+		{
+			name:    "non_zero_padding_before_trailing_data",
+			data:    []byte{2, 0xFF, 0xAA, 1, 0xCC},
+			payload: []byte{0xFF, 0xAA},
+			rest:    []byte{0xCC},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			loaded, rest, err := FromBytesNoCopy(test.data)
+			if err != nil {
+				t.Fatalf("valid TL bytes rejected: %v", err)
+			}
+			if !bytes.Equal(loaded, test.payload) {
+				t.Fatalf("payload = %x, want %x", loaded, test.payload)
+			}
+			if !bytes.Equal(rest, test.rest) {
+				t.Fatalf("rest = %x, want %x", rest, test.rest)
 			}
 		})
 	}

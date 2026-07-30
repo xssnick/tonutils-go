@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"bytes"
 	"encoding/binary"
 	"github.com/xssnick/tonutils-go/address"
 	"math/big"
@@ -31,6 +32,58 @@ func (b *Builder) dataSlice() []byte {
 
 func (b *Builder) rawRefs() []*Cell {
 	return b.refs[:b.refsNum:b.refsNum]
+}
+
+// EqualsCell reports whether the builder currently holds exactly c: the same
+// bits and the same references. References are compared by pointer first and by
+// hash only when the pointers differ, so a subtree that was carried over
+// unchanged costs nothing to compare.
+//
+// It exists so a caller can check "does this builder reproduce that cell"
+// without EndCell()+Hash(), which would hash every inlined byte just to throw
+// the result away.
+func (b *Builder) EqualsCell(c *Cell) bool {
+	if c == nil {
+		return false
+	}
+	loaded, err := c.load()
+	if err != nil || loaded == nil {
+		return false
+	}
+	if b.bitsSz != uint(loaded.bitsSz) || int(b.refsNum) != loaded.refsCount() {
+		return false
+	}
+
+	used := b.usedBytes()
+	if len(loaded.data) < used {
+		return false
+	}
+	if used > 0 {
+		last := used - 1
+		if !bytes.Equal(b.data[:last], loaded.data[:last]) {
+			return false
+		}
+		// The trailing byte may carry unused low bits; compare only the
+		// significant ones, exactly as ToBuilder masks them.
+		mask := byte(0xFF)
+		if rem := b.bitsSz % 8; rem != 0 {
+			mask = byte(0xFF << (8 - rem))
+		}
+		if b.data[last]&mask != loaded.data[last]&mask {
+			return false
+		}
+	}
+
+	for i, ref := range b.rawRefs() {
+		other := loaded.refs[i]
+		if ref == other {
+			continue
+		}
+		if ref == nil || other == nil || ref.HashKey() != other.HashKey() {
+			return false
+		}
+	}
+	return true
 }
 
 func validateCellRefDepthLimit(refs []*Cell) error {

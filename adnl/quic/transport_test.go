@@ -237,8 +237,7 @@ func TestQueryRejectsRequestOverServerLimit(t *testing.T) {
 	}
 
 	addr, srv := startServerWithConfig(t, handler, func(s *Server) {
-		s.maxObjectSize = int64(len(wire) - 1)
-		s.limits.MaxObjectSize = s.maxObjectSize
+		s.limits.MaxObjectSize = int64(len(wire) - 1)
 	}, serverKey)
 	serverPub := srv.defaultID.PublicKey()
 

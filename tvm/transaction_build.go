@@ -105,6 +105,19 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cel
 	if err != nil {
 		return fmt.Errorf("failed to prepare next account state: %w", err)
 	}
+	if next.storageStatBound {
+		// Bind the emitted storage-stat dict to the state it describes, so the
+		// next transaction of this account can apply it incrementally instead
+		// of re-walking the whole state. transactionAccountStorageInfo derives
+		// the same cell, preferring the extra-currency-free stat form.
+		statRoot := next.storageCellForStat
+		if statRoot == nil {
+			statRoot = next.storageCell
+		}
+		if statRoot != nil {
+			nextAccount.runtime.statBoundTo = statRoot.HashKey()
+		}
+	}
 
 	out.TransactionCell = txCell
 	out.NextAccount = nextAccount

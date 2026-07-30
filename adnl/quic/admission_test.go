@@ -1,337 +1,216 @@
 package quic
 
 import (
-	"context"
+	"bytes"
 	"errors"
-	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func expiredContext() context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	return ctx
-}
+func TestStreamAdmissionSlots(t *testing.T) {
+	admission := newStreamAdmission(2, 1024)
 
-func TestStreamAdmissionAcquire(t *testing.T) {
-	admission := newStreamAdmission(2, 100)
-	ctx := context.Background()
-
-	first, err := admission.acquireStream(ctx)
-	if err != nil {
-		t.Fatalf("acquire first stream: %v", err)
+	if !admission.tryAcquireSlot() || !admission.tryAcquireSlot() {
+		t.Fatal("slots within the limit were refused")
 	}
-	second, err := admission.acquireStream(ctx)
-	if err != nil {
-		t.Fatalf("acquire second stream: %v", err)
+	if admission.tryAcquireSlot() {
+		t.Fatal("slot beyond the limit was granted")
 	}
-	if admission.activeStreams != 2 {
-		t.Fatalf("active streams = %d, want 2", admission.activeStreams)
-	}
-	if got := admission.reservedPayloadBytes.Load(); got != 0 {
-		t.Fatalf("reserved payload bytes before reserve = %d, want 0", got)
+	if got := admission.activeStreams(); got != 2 {
+		t.Fatalf("activeStreams = %d, want 2", got)
 	}
 
-	if _, err = admission.acquireStream(expiredContext()); !errors.Is(err, context.Canceled) {
-		t.Fatalf("acquire over limit error = %v, want %v", err, context.Canceled)
-	}
-
-	first.release()
-	first.release()
-
-	third, err := admission.acquireStream(ctx)
-	if err != nil {
-		t.Fatalf("acquire after release: %v", err)
-	}
-	if _, err = admission.acquireStream(expiredContext()); !errors.Is(err, context.Canceled) {
-		t.Fatalf("acquire after duplicate release error = %v, want %v", err, context.Canceled)
-	}
-
-	second.release()
-	third.release()
-	if admission.activeStreams != 0 {
-		t.Fatalf("active streams after release = %d, want 0", admission.activeStreams)
+	admission.releaseSlot()
+	if !admission.tryAcquireSlot() {
+		t.Fatal("slot freed by release was not reusable")
 	}
 }
 
-func TestStreamAdmissionReleaseWakesBlockedAcquire(t *testing.T) {
-	admission := newStreamAdmission(1, 0)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	lease, err := admission.acquireStream(ctx)
-	if err != nil {
-		t.Fatal(err)
+// The slot semaphore is a channel so a blocked acceptor is released in arrival
+// order; sync.Cond.Signal would wake an arbitrary one and let a busy peer keep
+// winning the slot.
+func TestStreamAdmissionAcquireSlotBlocksUntilRelease(t *testing.T) {
+	admission := newStreamAdmission(1, 1024)
+	if !admission.tryAcquireSlot() {
+		t.Fatal("first slot was refused")
 	}
 
-	acquired := make(chan error, 1)
-	go func() {
-		next, acquireErr := admission.acquireStream(ctx)
-		if acquireErr == nil {
-			next.release()
-		}
-		acquired <- acquireErr
-	}()
+	done := make(chan struct{})
+	acquired := make(chan bool, 1)
+	go func() { acquired <- admission.acquireSlot(done) }()
 
 	select {
-	case err = <-acquired:
-		t.Fatalf("second acquire returned %v before the slot was released", err)
+	case <-acquired:
+		t.Fatal("acquireSlot returned while the limit was exhausted")
 	case <-time.After(50 * time.Millisecond):
+	}
+
+	admission.releaseSlot()
+	select {
+	case ok := <-acquired:
+		if !ok {
+			t.Fatal("acquireSlot reported failure after a slot was freed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("acquireSlot did not wake after release")
+	}
+}
+
+func TestStreamAdmissionAcquireSlotUnblocksOnDone(t *testing.T) {
+	admission := newStreamAdmission(1, 1024)
+	if !admission.tryAcquireSlot() {
+		t.Fatal("first slot was refused")
+	}
+
+	done := make(chan struct{})
+	acquired := make(chan bool, 1)
+	go func() { acquired <- admission.acquireSlot(done) }()
+
+	close(done)
+	select {
+	case ok := <-acquired:
+		if ok {
+			t.Fatal("acquireSlot granted a slot after done was closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("acquireSlot did not observe done")
+	}
+}
+
+// Bytes are charged as they arrive, so a lease grows its charge across chunks
+// and gives all of it back at once.
+func TestStreamAdmissionChargeBytesAccumulates(t *testing.T) {
+	global := newStreamAdmission(4, 300)
+	connection := newStreamAdmission(4, 200)
+	lease := streamAdmissionLease{admission: global, connection: connection}
+
+	for i := 0; i < 2; i++ {
+		if err := lease.chargeBytes(100); err != nil {
+			t.Fatalf("charge %d rejected: %v", i, err)
+		}
+	}
+	if got := global.reservedPayloadBytes(); got != 200 {
+		t.Fatalf("global charged = %d, want 200", got)
+	}
+	if got := connection.reservedPayloadBytes(); got != 200 {
+		t.Fatalf("connection charged = %d, want 200", got)
+	}
+
+	// The per-connection budget is the tighter one and must reject first,
+	// without leaving a partial charge behind on the global scope.
+	if err := lease.chargeBytes(100); !errors.Is(err, errPayloadAdmissionFull) {
+		t.Fatalf("charge past the per-connection budget = %v, want %v", err, errPayloadAdmissionFull)
+	}
+	if got := global.reservedPayloadBytes(); got != 200 {
+		t.Fatalf("global charged after a rejected chunk = %d, want 200 (no leak)", got)
 	}
 
 	lease.release()
-	select {
-	case err = <-acquired:
-		if err != nil {
-			t.Fatalf("second acquire after release: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("second acquire was not woken by release")
+	if got := global.reservedPayloadBytes(); got != 0 {
+		t.Fatalf("global charged after release = %d, want 0", got)
 	}
-	if admission.activeStreams != 0 {
-		t.Fatalf("active streams = %d, want 0", admission.activeStreams)
+	if got := connection.reservedPayloadBytes(); got != 0 {
+		t.Fatalf("connection charged after release = %d, want 0", got)
 	}
 }
 
-func TestStreamAdmissionWakeUnblocksCancelledAcquire(t *testing.T) {
-	admission := newStreamAdmission(1, 0)
-	lease, err := admission.acquireStream(context.Background())
-	if err != nil {
-		t.Fatal(err)
+func TestStreamAdmissionReleaseIsIdempotent(t *testing.T) {
+	global := newStreamAdmission(2, 1024)
+	if !global.tryAcquireSlot() {
+		t.Fatal("slot was refused")
 	}
-	defer lease.release()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	stopWake := context.AfterFunc(ctx, admission.wake)
-	defer stopWake()
-
-	acquired := make(chan error, 1)
-	go func() {
-		_, acquireErr := admission.acquireStream(ctx)
-		acquired <- acquireErr
-	}()
-
-	select {
-	case err = <-acquired:
-		t.Fatalf("blocked acquire returned %v before cancellation", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	cancel()
-	select {
-	case err = <-acquired:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("cancelled acquire error = %v, want %v", err, context.Canceled)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("blocked acquire was not woken by ctx cancellation")
-	}
-}
-
-func TestStreamAdmissionReservePayload(t *testing.T) {
-	admission := newStreamAdmission(3, 100)
-	ctx := context.Background()
-
-	first, err := admission.acquireStream(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := admission.acquireStream(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	third, err := admission.acquireStream(ctx)
-	if err != nil {
+	lease := streamAdmissionLease{admission: global, globalSlot: true}
+	if err := lease.chargeBytes(64); err != nil {
 		t.Fatal(err)
 	}
 
-	if err = first.reservePayload(60); err != nil {
-		t.Fatalf("reserve first payload: %v", err)
-	}
-	if err = second.reservePayload(40); err != nil {
-		t.Fatalf("reserve second payload: %v", err)
-	}
-	if err = third.reservePayload(1); !errors.Is(err, errPayloadAdmissionFull) {
-		t.Fatalf("reserve over limit error = %v, want %v", err, errPayloadAdmissionFull)
-	}
-	if got := admission.reservedPayloadBytes.Load(); got != 100 {
-		t.Fatalf("reserved payload bytes = %d, want 100", got)
-	}
-
-	first.release()
-	first.release()
-	if got := admission.reservedPayloadBytes.Load(); got != 40 {
-		t.Fatalf("reserved payload bytes after release = %d, want 40", got)
-	}
-	if err = third.reservePayload(60); err != nil {
-		t.Fatalf("reserve after capacity release: %v", err)
-	}
-
-	second.release()
-	third.release()
-	if got := admission.reservedPayloadBytes.Load(); got != 0 {
-		t.Fatalf("reserved payload bytes after all releases = %d, want 0", got)
-	}
-}
-
-func TestStreamAdmissionReservationLifecycle(t *testing.T) {
-	t.Run("zero payload", func(t *testing.T) {
-		admission := newStreamAdmission(1, 0)
-		lease, err := admission.acquireStream(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if err = lease.reservePayload(0); err != nil {
-			t.Fatalf("reserve empty payload: %v", err)
-		}
-		if err = lease.reservePayload(0); !errors.Is(err, errPayloadAlreadyReserved) {
-			t.Fatalf("second reserve error = %v, want %v", err, errPayloadAlreadyReserved)
-		}
-
-		lease.release()
-	})
-
-	t.Run("payload limit zero", func(t *testing.T) {
-		admission := newStreamAdmission(1, 0)
-		lease, err := admission.acquireStream(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer lease.release()
-
-		if err = lease.reservePayload(1); !errors.Is(err, errPayloadAdmissionFull) {
-			t.Fatalf("reserve error = %v, want %v", err, errPayloadAdmissionFull)
-		}
-	})
-
-	t.Run("reserve after release", func(t *testing.T) {
-		admission := newStreamAdmission(1, 1)
-		lease, err := admission.acquireStream(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		lease.release()
-
-		if err = lease.reservePayload(1); !errors.Is(err, errStreamAdmissionReleased) {
-			t.Fatalf("reserve after release error = %v, want %v", err, errStreamAdmissionReleased)
-		}
-	})
-}
-
-func TestStreamAdmissionConcurrentRelease(t *testing.T) {
-	admission := newStreamAdmission(1, 64)
-	lease, err := admission.acquireStream(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = lease.reservePayload(64); err != nil {
-		t.Fatal(err)
-	}
-
-	var releases sync.WaitGroup
-	for range 128 {
-		releases.Add(1)
-		go func() {
-			defer releases.Done()
-			lease.release()
-		}()
-	}
-	releases.Wait()
-
-	if admission.activeStreams != 0 {
-		t.Fatalf("active streams = %d, want 0", admission.activeStreams)
-	}
-	if got := admission.reservedPayloadBytes.Load(); got != 0 {
-		t.Fatalf("reserved payload bytes = %d, want 0", got)
-	}
-
-	next, err := admission.acquireStream(context.Background())
-	if err != nil {
-		t.Fatalf("acquire after concurrent release: %v", err)
-	}
-	if err = next.reservePayload(64); err != nil {
-		t.Fatalf("reserve after concurrent release: %v", err)
-	}
-	next.release()
-}
-
-func TestStreamAdmissionConcurrentLimits(t *testing.T) {
-	const (
-		workers          = 64
-		maxStreams       = 8
-		maxPayloadBytes  = 32
-		payloadBytes     = 8
-		expectedAdmitted = maxPayloadBytes / payloadBytes
-	)
-
-	admission := newStreamAdmission(maxStreams, maxPayloadBytes)
+	var wg sync.WaitGroup
 	start := make(chan struct{})
-	release := make(chan struct{})
-
-	var attempted sync.WaitGroup
-	attempted.Add(workers)
-	var finished sync.WaitGroup
-	finished.Add(workers)
-
-	var admitted atomic.Int64
-	var active atomic.Int64
-	var peak atomic.Int64
-
-	for range workers {
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
 		go func() {
-			defer finished.Done()
+			defer wg.Done()
 			<-start
-
-			lease, err := admission.acquireStream(context.Background())
-			if err != nil {
-				attempted.Done()
-				return
-			}
-			if err = lease.reservePayload(payloadBytes); err != nil {
-				lease.release()
-				attempted.Done()
-				return
-			}
-
-			admitted.Add(1)
-			current := active.Add(1)
-			for {
-				previous := peak.Load()
-				if current <= previous || peak.CompareAndSwap(previous, current) {
-					break
-				}
-			}
-			attempted.Done()
-
-			runtime.Gosched()
-			<-release
-			active.Add(-1)
 			lease.release()
 		}()
 	}
-
 	close(start)
-	attempted.Wait()
+	wg.Wait()
 
-	if got := admitted.Load(); got != expectedAdmitted {
-		t.Fatalf("admitted streams = %d, want %d", got, expectedAdmitted)
+	if got := global.reservedPayloadBytes(); got != 0 {
+		t.Fatalf("charged after concurrent release = %d, want 0", got)
 	}
-	if got := peak.Load(); got > expectedAdmitted {
-		t.Fatalf("peak admitted streams = %d, want at most %d", got, expectedAdmitted)
+	if got := global.activeStreams(); got != 0 {
+		t.Fatalf("activeStreams after concurrent release = %d, want 0", got)
+	}
+	if err := lease.chargeBytes(1); !errors.Is(err, errStreamAdmissionReleased) {
+		t.Fatalf("charge after release = %v, want %v", err, errStreamAdmissionReleased)
+	}
+}
+
+// A peer that declares a huge payload and sends nothing must cost one chunk,
+// not the declared length. This is the property that keeps a few silent peers
+// from holding the whole byte budget and dropping everyone else's broadcasts.
+func TestReadAdmittedPayloadChargesOnlyArrivedBytes(t *testing.T) {
+	global := newStreamAdmission(4, 64<<20)
+	lease := streamAdmissionLease{admission: global}
+
+	declared := 16 << 20
+	if _, err := readAdmittedPayload(bytes.NewReader(make([]byte, 4)), declared, &lease); err == nil {
+		t.Fatal("a truncated payload was accepted")
+	}
+	if got := global.reservedPayloadBytes(); got > payloadReadChunk {
+		t.Fatalf("charged %d bytes for a peer that sent 4, want at most one chunk (%d)", got, payloadReadChunk)
 	}
 
-	close(release)
-	finished.Wait()
-
-	if admission.activeStreams != 0 {
-		t.Fatalf("active streams after stress = %d, want 0", admission.activeStreams)
+	lease.release()
+	if got := global.reservedPayloadBytes(); got != 0 {
+		t.Fatalf("charged after release = %d, want 0", got)
 	}
-	if got := admission.reservedPayloadBytes.Load(); got != 0 {
-		t.Fatalf("reserved payload bytes after stress = %d, want 0", got)
+}
+
+func TestReadAdmittedPayloadReadsWholePayload(t *testing.T) {
+	for _, size := range []int{1, payloadReadChunk - 1, payloadReadChunk, payloadReadChunk + 1, payloadCommitThreshold + 7} {
+		want := make([]byte, size)
+		for i := range want {
+			want[i] = byte(i)
+		}
+
+		global := newStreamAdmission(4, 64<<20)
+		lease := streamAdmissionLease{admission: global}
+		got, err := readAdmittedPayload(bytes.NewReader(want), size, &lease)
+		if err != nil {
+			t.Fatalf("size %d: %v", size, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("size %d: payload mismatch", size)
+		}
+		if charged := global.reservedPayloadBytes(); charged != int64(size) {
+			t.Fatalf("size %d: charged %d, want %d", size, charged, size)
+		}
+	}
+}
+
+// A stream the admission refuses must not allocate a payload buffer at all,
+// otherwise the refusal itself becomes the amplification primitive.
+func TestReadAdmittedPayloadRefusalDoesNotAllocate(t *testing.T) {
+	admission := newStreamAdmission(1, 1)
+	data := make([]byte, 4)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		lease := streamAdmissionLease{admission: admission}
+		payload, err := readAdmittedPayload(bytes.NewReader(data), 16<<20, &lease)
+		if err == nil {
+			t.Fatal("a payload over the byte budget was accepted")
+		}
+		if payload != nil {
+			t.Fatalf("refused payload allocated %d bytes", len(payload))
+		}
+		lease.release()
+	})
+	// Only the bytes.Reader itself; no payload buffer.
+	if allocs > 2 {
+		t.Fatalf("refused stream allocated %v times, want at most 2", allocs)
 	}
 }

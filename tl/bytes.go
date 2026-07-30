@@ -334,13 +334,15 @@ func fromBytes(data []byte, copyPayload bool) (loaded []byte, buffer []byte, err
 		bufSz += 4 - add
 	}
 
+	// The padding must be present -- td::TlParser::fetch_string consumes
+	// sizeof(int32)+result_aligned_len unconditionally, with no "it is the end
+	// of the buffer" escape hatch (tdutils/td/utils/tl_parsers.h:148-182), and
+	// the vector preflight relies on a bytes field never costing less than 4.
+	// Its content is not checked: the reference skips those bytes without
+	// looking at them, so rejecting non-zero padding would drop frames every
+	// other implementation accepts.
 	if len(data) < bufSz {
 		return nil, nil, fmt.Errorf("failed to get payload with len %d and alignment padding, too short data", ln)
-	}
-	for _, value := range data[offset+ln : bufSz] {
-		if value != 0 {
-			return nil, nil, errors.New("failed to get payload, alignment padding is not zero")
-		}
 	}
 
 	loaded = copyBytesResult(data[offset:offset+ln], copyPayload)

@@ -95,15 +95,32 @@ type activeRequest struct {
 	answered           bool
 }
 
+// cancelledTransfer remembers an inbound transfer id whose consumer is gone:
+// the query was answered, cancelled or timed out, so nothing will ever read the
+// remaining parts. The remote sender keeps streaming symbols until its own
+// query timeout, and without this record every such symbol would fail the
+// unexpected-transfer size check and surface as a transport error. Parts of a
+// remembered transfer are dropped silently and answered with rldp.complete
+// (throttled), which stops a live sender within one round trip — mirroring how
+// finished stream parts re-acknowledge stray symbols.
+type cancelledTransfer struct {
+	expireAtMS     int64
+	lastCompleteMS atomic.Int64
+}
+
 type RLDP struct {
 	adnl  ADNL
 	useV2 atomic.Bool
 
 	activateRecoverySender chan bool
 	activateRequestCleanup chan struct{}
+	activateStreamCleanup  chan struct{}
 	activeRequests         map[string]*activeRequest
 	activeTransfers        map[string]*activeTransfer
 	expectedTransfers      map[[32]byte]*activeRequest
+	cancelledTransfers     map[[32]byte]*cancelledTransfer
+	// cancelledSweepAtMS is the earliest time the next expiry sweep may run.
+	cancelledSweepAtMS int64
 
 	recvStreams map[[32]byte]*decoderStream
 
@@ -196,6 +213,25 @@ const (
 	defaultMessageTimeout     = 10 * time.Second
 )
 
+const (
+	// cancelledTransferGrace extends a cancelled transfer record past the
+	// query deadline: the sender stops at that deadline on its own, the grace
+	// only covers clock skew and the in-flight tail.
+	cancelledTransferGrace = 5 * time.Second
+	// cancelledTransferSweepMin delays expiry sweeps until the map is worth
+	// scanning; sweeps run on insert, so the map stays this small on idle.
+	cancelledTransferSweepMin = 64
+	// cancelledTransferSweepInterval rate-limits the O(n) sweep so a busy
+	// client does not rescan the whole map on every completed query.
+	cancelledTransferSweepInterval = time.Second
+	// cancelledTransferHardLimit caps the map even if nothing expires
+	// (defensive; reaching it needs thousands of cancels within the grace).
+	cancelledTransferHardLimit = 8192
+	// cancelledTransferCompleteThrottle limits complete replies per transfer,
+	// same pacing as finished stream parts re-acknowledging stray symbols.
+	cancelledTransferCompleteThrottle = 10 * time.Millisecond
+)
+
 const _MTU = 1 << 37
 
 var MinRateBytesSec = int64(256 << 10)
@@ -210,8 +246,10 @@ func NewClient(a ADNL) *RLDP {
 		activeTransfers:        map[string]*activeTransfer{},
 		recvStreams:            map[[32]byte]*decoderStream{},
 		expectedTransfers:      map[[32]byte]*activeRequest{},
+		cancelledTransfers:     map[[32]byte]*cancelledTransfer{},
 		activateRecoverySender: make(chan bool, 1),
 		activateRequestCleanup: make(chan struct{}, 1),
+		activateStreamCleanup:  make(chan struct{}, 1),
 		rateLimit:              NewTokenBucket(InitialRateBytesSec, a.RemoteAddr()),
 		stats:                  &clientStats{createdAt: now.UnixNano()},
 	}
@@ -311,6 +349,17 @@ func (r *RLDP) Close() {
 func (r *RLDP) activateRecoveryLoop() {
 	select {
 	case r.activateRecoverySender <- true:
+	default:
+	}
+}
+
+// activateStreamCleanupLoop arms the inbound-stream cleanup ticker. Without it
+// the ticker has to run unconditionally on every client, which on a node
+// holding thousands of pooled transports means thousands of wakeups a second
+// spent confirming there is nothing to clean.
+func (r *RLDP) activateStreamCleanupLoop() {
+	select {
+	case r.activateStreamCleanup <- struct{}{}:
 	default:
 	}
 }
@@ -462,7 +511,21 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 	r.mx.RLock()
 	stream := r.recvStreams[id]
 	expected := r.expectedTransfers[id]
+	var cancelled *cancelledTransfer
+	if stream == nil && expected == nil {
+		cancelled = r.cancelledTransfers[id]
+	}
 	r.mx.RUnlock()
+
+	if cancelled != nil {
+		if cancelled.expireAtMS > tm.UnixMilli() {
+			// Late part of a transfer nobody will consume; the size checks
+			// below are irrelevant since nothing is allocated for it.
+			r.replyCancelledTransferComplete(cancelled, m, isV2, tm)
+			return nil
+		}
+		cancelled = nil
+	}
 
 	if stream == nil {
 		if m.TotalSize > _MTU || m.TotalSize <= 0 {
@@ -484,6 +547,7 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 			qsz = 1024
 		}
 
+		startStreamCleaner := false
 		r.mx.Lock()
 		// check again because of possible concurrency
 		if r.closed {
@@ -505,8 +569,13 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 
 			r.recvStreams[id] = stream
 			r.stats.inboundTransfersStarted.Add(1)
+			startStreamCleaner = true
 		}
 		r.mx.Unlock()
+		if startStreamCleaner {
+			// Signalled after the unlock: the cleaner takes the same mutex.
+			r.activateStreamCleanupLoop()
+		}
 	}
 
 	// Keep the stream registered until the message is visible to cleanup.
@@ -1309,8 +1378,21 @@ func (r *RLDP) recoverySender() {
 }
 
 func (r *RLDP) stateCleaner() {
-	streamTicker := time.NewTicker(recvStreamCleanupInterval)
-	defer streamTicker.Stop()
+	// Armed only while inbound streams exist. A client with nothing to clean —
+	// the overwhelming majority on a node that pools thousands of transports —
+	// then costs no timer at all.
+	var streamTicker *time.Ticker
+	var streamTickerC <-chan time.Time
+	stopStreamTicker := func() {
+		if streamTicker == nil {
+			return
+		}
+
+		streamTicker.Stop()
+		streamTicker = nil
+		streamTickerC = nil
+	}
+	defer stopStreamTicker()
 
 	type requestCleanup struct {
 		request  *activeRequest
@@ -1424,11 +1506,20 @@ func (r *RLDP) stateCleaner() {
 			if !hasRequests {
 				stopRequestTicker()
 			}
-		case <-streamTicker.C:
+		case <-r.activateStreamCleanup:
+			if streamTicker == nil {
+				streamTicker = time.NewTicker(recvStreamCleanupInterval)
+				streamTickerC = streamTicker.C
+			}
+		case <-streamTickerC:
 			r.mx.RLock()
 			hasStreams := len(r.recvStreams) > 0
 			r.mx.RUnlock()
 			if !hasStreams {
+				// Disarm until the next inbound stream arrives. A stream created
+				// between this check and the stop re-arms the ticker through the
+				// activation channel, so no cleanup can be stranded.
+				stopStreamTicker()
 				continue
 			}
 
@@ -1837,7 +1928,65 @@ func (r *RLDP) deleteActiveRequestLocked(request *activeRequest) *activeTransfer
 	delete(r.activeRequests, request.id)
 	delete(r.activeTransfers, string(request.transferID))
 	delete(r.expectedTransfers, request.expectedTransferID)
+	r.rememberCancelledTransferLocked(request.expectedTransferID, request.deadline)
 	return transfer
+}
+
+// rememberCancelledTransferLocked records the answer transfer id of a request
+// that no longer has a consumer, so late parts are absorbed instead of failing
+// as oversized unexpected transfers. Called with r.mx held for writing.
+func (r *RLDP) rememberCancelledTransferLocked(id [32]byte, deadlineMS int64) {
+	nowMS := time.Now().UnixMilli()
+
+	// The sweep is O(len(map)) and this runs under the write lock that the
+	// per-symbol receive path also needs, so it must not run on every insert:
+	// deleteActiveRequestLocked is called for every ANSWERED query too, not
+	// only cancelled ones, so at a few hundred queries a second the map holds
+	// thousands of entries for a whole query deadline and a per-insert sweep
+	// would rescan all of them each time. Records expire on a timer, so
+	// sweeping at most once per grace period loses nothing but the memory of
+	// entries that are already being ignored by the expiry check on lookup.
+	if len(r.cancelledTransfers) >= cancelledTransferSweepMin && nowMS >= r.cancelledSweepAtMS {
+		for key, record := range r.cancelledTransfers {
+			if record.expireAtMS <= nowMS {
+				delete(r.cancelledTransfers, key)
+			}
+		}
+		r.cancelledSweepAtMS = nowMS + cancelledTransferSweepInterval.Milliseconds()
+	}
+	if len(r.cancelledTransfers) >= cancelledTransferHardLimit {
+		return
+	}
+
+	expireAtMS := deadlineMS
+	if expireAtMS < nowMS {
+		expireAtMS = nowMS
+	}
+	r.cancelledTransfers[id] = &cancelledTransfer{
+		expireAtMS: expireAtMS + cancelledTransferGrace.Milliseconds(),
+	}
+}
+
+// replyCancelledTransferComplete tells the sender of a consumer-less transfer
+// that the part is complete, so it stops streaming; throttled per transfer.
+func (r *RLDP) replyCancelledTransferComplete(record *cancelledTransfer, part *MessagePart, isV2 bool, tm time.Time) {
+	nowMS := tm.UnixMilli()
+	lastMS := record.lastCompleteMS.Load()
+	if lastMS+cancelledTransferCompleteThrottle.Milliseconds() > nowMS {
+		return
+	}
+	if !record.lastCompleteMS.CompareAndSwap(lastMS, nowMS) {
+		return
+	}
+
+	var complete tl.Serializable = Complete{
+		TransferID: part.TransferID,
+		Part:       part.Part,
+	}
+	if isV2 {
+		complete = CompleteV2(complete.(Complete))
+	}
+	_ = r.adnl.SendCustomMessage(context.Background(), complete)
 }
 
 func (r *RLDP) cancelActiveRequest(request *activeRequest) bool {
@@ -1892,6 +2041,7 @@ func (r *RLDP) closeState() {
 	clear(r.activeRequests)
 	clear(r.activeTransfers)
 	clear(r.expectedTransfers)
+	clear(r.cancelledTransfers)
 	clear(r.recvStreams)
 	r.mx.Unlock()
 

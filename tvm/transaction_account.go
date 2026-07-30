@@ -581,9 +581,13 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 // along with its parsed form and the pieces needed to prepare the follow-up
 // account without re-parsing.
 type builtTransactionAccount struct {
-	cell               *cell.Cell
-	state              *tlb.AccountState
-	storageStat        *cell.Cell
+	cell        *cell.Cell
+	state       *tlb.AccountState
+	storageStat *cell.Cell
+	// storageStatBound says storageStat was computed by this executor for
+	// exactly storageCellForStat, so the next transaction may reuse it even
+	// when the account carries no storage_dict_hash.
+	storageStatBound   bool
 	storageCell        *cell.Cell
 	storageCellForStat *cell.Cell
 }
@@ -660,7 +664,7 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		}
 	}
 
-	usage, storageExtra, storageExtraDictHash, nextStorageStat, err := transactionAccountStorageInfo(acc, storageCellForStat, cfg, accountStorageStat)
+	usage, storageExtra, storageExtraDictHash, nextStorageStat, nextStorageStatBound, err := transactionAccountStorageInfo(acc, storageCellForStat, cfg, accountStorageStat)
 	if err != nil {
 		return nil, err
 	}
@@ -688,10 +692,11 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 	}
 
 	built := &builtTransactionAccount{
-		cell:        accountCell,
-		state:       accountState,
-		storageStat: nextStorageStat,
-		storageCell: storageCell,
+		cell:             accountCell,
+		state:            accountState,
+		storageStat:      nextStorageStat,
+		storageStatBound: nextStorageStatBound,
+		storageCell:      storageCell,
 	}
 	if extraCurrencyV2 {
 		// Thread the extra-currency-free storage forward so the next
@@ -736,26 +741,43 @@ func transactionAccountIDAddr(addr *address.Address) (*address.Address, error) {
 	return out, nil
 }
 
-func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, error) {
+// transactionAccountStorageInfo returns, besides the storage info, whether the
+// storage-stat dict it hands back is bound to the state it describes, i.e.
+// whether the next transaction of this account may reuse it without a
+// storage_dict_hash.
+func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, bool, error) {
 	version := cfg.globalVersion()
 	storeStorageDictHash := version >= 11 && !transactionIsMasterchain(acc.addr)
 
 	oldStorageForStat, err := transactionOldAccountStorageForStat(acc, version >= 10)
 	if err != nil {
-		return transactionUsage{}, nil, nil, nil, err
+		return transactionUsage{}, nil, nil, nil, false, err
 	}
+
+	// The carried binding names the state the dict was computed for; it is
+	// meaningless once the account state has moved on some other way.
+	//
+	// It is also only worth using on a state big enough for the diff to beat a
+	// walk: below the storage-dict threshold the dict load plus per-cell lookups
+	// cost several times a full recompute (measured ~5x on a 5-cell state), and
+	// that threshold is the same one that decides whether a dict is worth
+	// storing at all.
+	var zeroHash cell.Hash
+	statBound := accountStorageStat != nil && acc.statBoundTo != zeroHash &&
+		oldStorageForStat != nil && acc.statBoundTo == oldStorageForStat.HashKey() &&
+		transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed) >= transactionGetSizeLimits(cfg).accStateCellsForStorageDict
 
 	oldDictHash := transactionStorageExtraDictHash(acc.storageInfo.StorageExtra)
 	storageRefsUnchanged, err := transactionAccountStorageRefsUnchanged(oldStorageForStat, storageCellForStat)
 	if err != nil {
-		return transactionUsage{}, nil, nil, nil, err
+		return transactionUsage{}, nil, nil, nil, false, err
 	}
 	storageRefsChanged := !storageRefsUnchanged
 	needMissingDict := storeStorageDictHash && oldDictHash == nil && transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed) > 25
 	if storageRefsChanged || needMissingDict {
-		stat, err := transactionInitAccountStorageStat(accountStorageStat, oldStorageForStat, acc.storageInfo.StorageUsed, oldDictHash)
+		stat, err := transactionInitAccountStorageStat(accountStorageStat, oldStorageForStat, acc.storageInfo.StorageUsed, oldDictHash, statBound)
 		if err != nil {
-			return transactionUsage{}, nil, nil, nil, err
+			return transactionUsage{}, nil, nil, nil, false, err
 		}
 
 		var usage transactionUsage
@@ -766,7 +788,7 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 			usage, nextStorageStat, err = transactionComputeAccountStorageStat(storageCellForStat)
 		}
 		if err != nil {
-			return transactionUsage{}, nil, nil, nil, err
+			return transactionUsage{}, nil, nil, nil, false, err
 		}
 
 		storageExtra := any(tlb.StorageExtraNone{})
@@ -775,12 +797,14 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 			storageExtraDictHash = transactionAccountStorageStatRootHash(nextStorageStat)
 			storageExtra = tlb.StorageExtraInfo{DictHash: storageExtraDictHash}
 		}
-		return usage, storageExtra, storageExtraDictHash, nextStorageStat, nil
+		// Either path above produced the dict from this state, so the result is
+		// bound regardless of how the input got here.
+		return usage, storageExtra, storageExtraDictHash, nextStorageStat, nextStorageStat != nil, nil
 	}
 
 	usage, err := transactionAccountStorageUsageWithSameRefs(acc.storageInfo.StorageUsed, oldStorageForStat, storageCellForStat)
 	if err != nil {
-		return transactionUsage{}, nil, nil, nil, err
+		return transactionUsage{}, nil, nil, nil, false, err
 	}
 	storageExtra := any(tlb.StorageExtraNone{})
 	var storageExtraDictHash []byte
@@ -788,7 +812,9 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 		storageExtraDictHash = append([]byte(nil), oldDictHash...)
 		storageExtra = tlb.StorageExtraInfo{DictHash: storageExtraDictHash}
 	}
-	return usage, storageExtra, storageExtraDictHash, accountStorageStat, nil
+	// The refs are identical, so the dict still describes the new state --
+	// but only re-point the binding when the dict was trusted coming in.
+	return usage, storageExtra, storageExtraDictHash, accountStorageStat, statBound && accountStorageStat != nil, nil
 }
 
 func transactionOldAccountStorageForStat(acc *transactionRuntimeAccount, extraCurrencyV2 bool) (*cell.Cell, error) {
@@ -871,18 +897,35 @@ type transactionAccountStorageStat struct {
 	totalBits  uint64
 }
 
-func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storageUsed tlb.StorageUsed, dictHash []byte) (*transactionAccountStorageStat, error) {
+// transactionInitAccountStorageStat adopts a carried-in storage-stat dict.
+//
+// The dict is only safe to reuse when it provably describes storageCell: a
+// wrong one makes replaceStorage skip or double-count subtrees and silently
+// produces the wrong storage_used, i.e. the wrong storage fee. Two independent
+// proofs are accepted:
+//
+//   - the account records storage_dict_hash (global version >= 11, basechain)
+//     and it matches the dict root, or
+//   - this executor computed the dict itself for exactly this state, which
+//     bound reports. That mirrors block::Account::account_storage_stat, which
+//     the reference carries across transactions without revalidating because it
+//     owns the object (crypto/block/transaction.cpp, Transaction::compute_state).
+//
+// Anything else -- a hand-made dict, or one persisted next to a different state
+// -- falls back to a full recompute.
+func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storageUsed tlb.StorageUsed, dictHash []byte, bound bool) (*transactionAccountStorageStat, error) {
 	if dictRoot == nil {
 		return nil, nil
 	}
-	// A carried-in storage stat is usable only when storage_dict_hash is present
-	// and matches. Without it the stat is recomputed from scratch.
 	if dictHash == nil || transactionHashIsZero(dictHash) {
-		return nil, nil
-	}
-	rootHash := dictRoot.HashKey()
-	if !bytes.Equal(rootHash[:], dictHash) {
-		return nil, errors.New("account storage stat root hash does not match account storage extra")
+		if !bound {
+			return nil, nil
+		}
+	} else {
+		rootHash := dictRoot.HashKey()
+		if !bytes.Equal(rootHash[:], dictHash) {
+			return nil, errors.New("account storage stat root hash does not match account storage extra")
+		}
 	}
 
 	totalCells := transactionStorageUsedUint64(storageUsed.CellsUsed)

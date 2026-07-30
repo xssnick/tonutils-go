@@ -2,7 +2,6 @@ package quic
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"testing"
 )
@@ -33,16 +32,17 @@ func BenchmarkReadBoxedObjectHeaderRejection(b *testing.B) {
 	})
 
 	b.Run("payload_admission", func(b *testing.B) {
+		// Budget below one read chunk, so the very first charge is refused and
+		// no payload buffer is ever handed back.
 		admission := newStreamAdmission(1, 1<<10)
-		ctx := context.Background()
 		b.ReportAllocs()
 
 		var err error
 		for b.Loop() {
-			lease, acquireErr := admission.acquireStream(ctx)
-			if acquireErr != nil {
-				b.Fatal(acquireErr)
+			if !admission.tryAcquireSlot() {
+				b.Fatal("slot was refused")
 			}
+			lease := streamAdmissionLease{admission: admission, globalSlot: true}
 
 			_, payload, readErr := readBoxedObjectAdmitted(
 				bytes.NewReader(header[:headerLen]),

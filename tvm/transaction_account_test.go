@@ -179,7 +179,7 @@ func TestTransactionAccountStorageStatReplaceSharedRef(t *testing.T) {
 	stat, err := transactionInitAccountStorageStat(oldDict, oldStorage, tlb.StorageUsed{
 		CellsUsed: new(big.Int).SetUint64(oldUsage.cells),
 		BitsUsed:  new(big.Int).SetUint64(oldUsage.bits),
-	}, transactionAccountStorageStatRootHash(oldDict))
+	}, transactionAccountStorageStatRootHash(oldDict), false)
 	if err != nil {
 		t.Fatal(err)
 	}

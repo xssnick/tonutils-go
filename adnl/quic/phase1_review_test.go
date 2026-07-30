@@ -15,10 +15,14 @@ import (
 	quicgo "github.com/xssnick/quic-go-ton"
 )
 
+// A peer that writes a header and then goes quiet must be released by the idle
+// read timeout, and must only ever have been charged for the bytes it actually
+// sent -- never for the length it declared.
 func TestInboundPartialStreamTimeoutReleasesAdmission(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxConcurrentIncomingStreams = 1
 	limits.MaxConcurrentIncomingStreamsPerConnection = 1
+	limits.GuaranteedStreamsPerConnection = 1
 	limits.StreamReadTimeout = 100 * time.Millisecond
 
 	handler := Handler{
@@ -37,13 +41,14 @@ func TestInboundPartialStreamTimeoutReleasesAdmission(t *testing.T) {
 	}
 	defer client.Close()
 
-	partial := openPhase1ReviewPartialQuery(t, ctx, client, 32)
+	// Declares a large payload, sends one byte of it.
+	partial := openPhase1ReviewPartialQuery(t, ctx, client, 8<<20)
 	defer partial.CancelRead(0)
 	defer partial.CancelWrite(0)
 
-	waitPhase1ReviewCondition(t, time.Second, "partial stream admission", func() bool {
-		streams, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
-		return streams == 1 && payloadBytes == 32
+	waitPhase1ReviewCondition(t, time.Second, "partial stream charged only for arrived bytes", func() bool {
+		_, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
+		return payloadBytes > 0 && payloadBytes <= uint64(payloadReadChunk)
 	})
 	waitPhase1ReviewCondition(t, 2*time.Second, "timed-out stream admission release", func() bool {
 		streams, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
@@ -59,10 +64,14 @@ func TestInboundPartialStreamTimeoutReleasesAdmission(t *testing.T) {
 	}
 }
 
+// One greedy connection must not be able to stop another connection from being
+// served: its own per-connection cap backpressures it at the QUIC layer, and it
+// never reaches far enough into the shared pool to matter.
 func TestPerConnectionAdmissionDoesNotConsumeGlobalQuota(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxConcurrentIncomingStreams = 2
 	limits.MaxConcurrentIncomingStreamsPerConnection = 1
+	limits.GuaranteedStreamsPerConnection = 1
 	limits.StreamReadTimeout = 5 * time.Second
 
 	handler := Handler{
@@ -86,8 +95,8 @@ func TestPerConnectionAdmissionDoesNotConsumeGlobalQuota(t *testing.T) {
 	defer first.CancelWrite(0)
 
 	waitPhase1ReviewCondition(t, time.Second, "first connection-local admission", func() bool {
-		streams, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
-		return streams == 1 && payloadBytes == 64
+		_, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
+		return payloadBytes > 0
 	})
 
 	backpressured := openPhase1ReviewPartialQuery(t, ctx, attacker, 64)
@@ -108,10 +117,11 @@ func TestPerConnectionAdmissionDoesNotConsumeGlobalQuota(t *testing.T) {
 		t.Fatalf("second stream error = %v, want %v", err, os.ErrDeadlineExceeded)
 	}
 
-	streams, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
-	if streams != 1 || payloadBytes != 64 {
-		t.Fatalf("global admission after connection-local backpressure = (%d streams, %d bytes), want (1, 64)",
-			streams, payloadBytes)
+	// The greedy connection is held by its own per-connection gate, so it never
+	// occupies a shared stream slot: those are guaranteed slots.
+	streams, _ := phase1ReviewAdmissionUsage(server.admission)
+	if streams != 0 {
+		t.Fatalf("global stream slots taken by a guaranteed stream = %d, want 0", streams)
 	}
 
 	legitimate, err := Dial(ctx, addr, mustKey(t), server.defaultID.PublicKey())
@@ -129,8 +139,8 @@ func TestPerConnectionAdmissionDoesNotConsumeGlobalQuota(t *testing.T) {
 	}
 
 	waitPhase1ReviewCondition(t, time.Second, "legitimate lease release", func() bool {
-		streams, payloadBytes = phase1ReviewAdmissionUsage(server.admission)
-		return streams == 1 && payloadBytes == 64
+		streams, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
+		return streams == 0 && payloadBytes > 0
 	})
 }
 
@@ -812,9 +822,7 @@ func openPhase1ReviewPartialQuery(
 }
 
 func phase1ReviewAdmissionUsage(admission *streamAdmission) (uint64, uint64) {
-	admission.mu.Lock()
-	defer admission.mu.Unlock()
-	return admission.activeStreams, admission.reservedPayloadBytes.Load()
+	return uint64(admission.activeStreams()), uint64(admission.reservedPayloadBytes())
 }
 
 func phase1ReviewPeerClosedAndDetached(peer *Peer) bool {

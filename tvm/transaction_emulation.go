@@ -1,7 +1,6 @@
 package tvm
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -112,13 +111,19 @@ func PrepareMessage(msgCell *cell.Cell) (*PreparedMessage, error) {
 	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
 		return nil, fmt.Errorf("input message has trailing data: %d bits, %d refs", loader.BitsLeft(), loader.RefsNum())
 	}
-	return prepareParsedMessage(msgCell, msg)
+	return prepareParsedMessage(msgCell, msg, false)
 }
 
 // PrepareParsedMessage wraps an already-parsed inbound message together with
-// its cell; msg must be the parsed form of msgCell, which is verified by
-// re-serializing it, so that execution (driven by the parsed form) and
-// accounting (driven by the cell) cannot describe different inputs.
+// its cell; msg must be the parsed form of msgCell, which is verified so that
+// execution (driven by the parsed form) and accounting (driven by the cell)
+// cannot describe different inputs.
+//
+// The check reproduces msgCell from msg using the Either layout the cell itself
+// used -- init:(Maybe (Either StateInit ^StateInit)) and body:(Either X ^X) are
+// both valid and the reference node accepts either, so a body kept in a
+// reference (what wallets and the C++ store_msg layout search normally emit)
+// must not be rejected merely because it would also fit inline.
 func PrepareParsedMessage(msgCell *cell.Cell, msg *tlb.Message) (*PreparedMessage, error) {
 	if msgCell == nil {
 		return nil, errors.New("input message is required")
@@ -126,14 +131,10 @@ func PrepareParsedMessage(msgCell *cell.Cell, msg *tlb.Message) (*PreparedMessag
 	if msg == nil {
 		return nil, errors.New("parsed input message is required")
 	}
-	reserialized, err := tlb.ToCell(msg)
-	if err != nil || !bytes.Equal(reserialized.Hash(), msgCell.Hash()) {
-		return nil, errors.New("parsed message does not match the message cell")
-	}
-	return prepareParsedMessage(msgCell, *msg)
+	return prepareParsedMessage(msgCell, *msg, true)
 }
 
-func prepareParsedMessage(msgCell *cell.Cell, msg tlb.Message) (*PreparedMessage, error) {
+func prepareParsedMessage(msgCell *cell.Cell, msg tlb.Message, verify bool) (*PreparedMessage, error) {
 	switch msg.MsgType {
 	case tlb.MsgTypeInternal, tlb.MsgTypeExternalIn:
 	case tlb.MsgTypeExternalOut:
@@ -141,13 +142,39 @@ func prepareParsedMessage(msgCell *cell.Cell, msg tlb.Message) (*PreparedMessage
 	default:
 		return nil, fmt.Errorf("unsupported input message type %s", msg.MsgType)
 	}
-	if err := validateBuiltTransactionMessage(msgCell); err != nil {
+	layout, err := validateBuiltTransactionMessage(msgCell)
+	if err != nil {
 		return nil, fmt.Errorf("invalid input message: %w", err)
 	}
-	if err := transactionValidateMessageStateInitLibs(&msg); err != nil {
+	if verify {
+		if err = transactionMessageMatchesCell(msgCell, &msg, layout); err != nil {
+			return nil, err
+		}
+	}
+	if err = transactionValidateMessageStateInitLibs(&msg); err != nil {
 		return nil, err
 	}
 	return &PreparedMessage{cell: msgCell, msg: msg}, nil
+}
+
+// transactionMessageMatchesCell rebuilds msg with the layout observed in
+// msgCell and compares the result bit-for-bit. It deliberately does not
+// finalize or hash the builder: a mismatch in any consumed field shows up in
+// the raw bits, and hashing an inlined body only to discard the digest would
+// cost more than the parse this API exists to avoid.
+func transactionMessageMatchesCell(msgCell *cell.Cell, msg *tlb.Message, layout transactionMessageLayout) error {
+	builder := cell.BeginCell()
+	err := tlb.StoreMessageWithLayout(builder, msg, tlb.MessageLayout{
+		StateInitInRef: layout.stateInitInRef,
+		BodyInRef:      layout.bodyInRef,
+	})
+	if err != nil {
+		return fmt.Errorf("parsed message does not match the message cell: %w", err)
+	}
+	if !builder.EqualsCell(msgCell) {
+		return errors.New("parsed message does not match the message cell")
+	}
+	return nil
 }
 
 // Cell returns the raw message cell.
@@ -189,7 +216,14 @@ type transactionRuntimeAccount struct {
 	// extra-currency v2 stat form), threaded from the previous transaction of
 	// the account so it is not re-derived per transaction; nil when unknown.
 	storageCellForStat *cell.Cell
-	prevTxHash         []byte
+	// statBoundTo names the storage-for-stat cell that the storage-stat dict
+	// emitted alongside this account describes. It is what lets the next
+	// transaction reuse the dict incrementally without a storage_dict_hash,
+	// which masterchain accounts and pre-v11 configs never have. Only this
+	// executor sets it, so a dict that arrived from anywhere else stays
+	// untrusted. Zero means "no provenance".
+	statBoundTo cell.Hash
+	prevTxHash  []byte
 	prevTxLT           uint64
 	originalCell       *cell.Cell
 	isSpecial          bool

@@ -145,7 +145,47 @@ func loadMaybeStateInitEither(loader *cell.Slice) (*StateInit, error) {
 	return &state, nil
 }
 
+// MessageLayout pins the two encoding choices a Message is free to make:
+// init:(Maybe (Either StateInit ^StateInit)) and body:(Either X ^X). Both TL-B
+// variants are valid and the reference node accepts either, so ToCell's habit
+// of inlining whenever it fits cannot reproduce a message that was written with
+// a reference. Everything else in a Message round-trips bit-for-bit.
+type MessageLayout struct {
+	StateInitInRef bool
+	BodyInRef      bool
+}
+
+// eitherChoice selects between "decide by what fits" and a pinned variant.
+type eitherChoice uint8
+
+const (
+	eitherAuto eitherChoice = iota
+	eitherInline
+	eitherRef
+)
+
+func (c eitherChoice) forRef(inRef bool) eitherChoice {
+	if c != eitherAuto {
+		return c
+	}
+	if inRef {
+		return eitherRef
+	}
+	return eitherInline
+}
+
+func messageLayoutChoices(layout *MessageLayout) (initChoice, bodyChoice eitherChoice) {
+	if layout == nil {
+		return eitherAuto, eitherAuto
+	}
+	return eitherAuto.forRef(layout.StateInitInRef), eitherAuto.forRef(layout.BodyInRef)
+}
+
 func storeMaybeStateInitEither(builder *cell.Builder, state *StateInit) error {
+	return storeMaybeStateInitEitherAs(builder, state, eitherAuto)
+}
+
+func storeMaybeStateInitEitherAs(builder *cell.Builder, state *StateInit, choice eitherChoice) error {
 	if state == nil {
 		return builder.StoreBoolBit(false)
 	}
@@ -158,7 +198,11 @@ func storeMaybeStateInitEither(builder *cell.Builder, state *StateInit) error {
 		return err
 	}
 
-	if canStoreInlineCell(builder, stateCell, 1, 1) {
+	inline := choice == eitherInline
+	if choice == eitherAuto {
+		inline = canStoreInlineCell(builder, stateCell, 1, 1)
+	}
+	if inline {
 		if err = builder.StoreBoolBit(false); err != nil {
 			return err
 		}
@@ -191,11 +235,19 @@ func loadMessageBody(loader *cell.Slice) (*cell.Cell, error) {
 }
 
 func storeMessageBody(builder *cell.Builder, body *cell.Cell) error {
+	return storeMessageBodyAs(builder, body, eitherAuto)
+}
+
+func storeMessageBodyAs(builder *cell.Builder, body *cell.Cell, choice eitherChoice) error {
 	if body == nil {
 		body = cell.BeginCell().EndCell()
 	}
 
-	if canStoreInlineCell(builder, body, 0, 0) {
+	inline := choice == eitherInline
+	if choice == eitherAuto {
+		inline = canStoreInlineCell(builder, body, 0, 0)
+	}
+	if inline {
 		if err := builder.StoreBoolBit(false); err != nil {
 			return err
 		}
@@ -286,49 +338,56 @@ func (m *InternalMessage) loadFromCellAfterMagic(loader *cell.Slice) error {
 
 func (m InternalMessage) ToCell() (*cell.Cell, error) {
 	builder := cell.BeginCell()
-	if err := builder.StoreBoolBit(false); err != nil {
-		return nil, fmt.Errorf("failed to store internal message magic: %w", err)
-	}
-	if err := builder.StoreBoolBit(m.IHRDisabled); err != nil {
-		return nil, fmt.Errorf("failed to store ihr_disabled flag: %w", err)
-	}
-	if err := builder.StoreBoolBit(m.Bounce); err != nil {
-		return nil, fmt.Errorf("failed to store bounce flag: %w", err)
-	}
-	if err := builder.StoreBoolBit(m.Bounced); err != nil {
-		return nil, fmt.Errorf("failed to store bounced flag: %w", err)
-	}
-	if err := builder.StoreAddr(m.SrcAddr); err != nil {
-		return nil, fmt.Errorf("failed to store source address: %w", err)
-	}
-	if err := builder.StoreAddr(m.DstAddr); err != nil {
-		return nil, fmt.Errorf("failed to store destination address: %w", err)
-	}
-	if err := storeCoins(builder, m.Amount); err != nil {
-		return nil, fmt.Errorf("failed to store amount: %w", err)
-	}
-	if err := builder.StoreDict(m.ExtraCurrencies); err != nil {
-		return nil, fmt.Errorf("failed to store extra currencies: %w", err)
-	}
-	if err := storeCoins(builder, m.IHRFee); err != nil {
-		return nil, fmt.Errorf("failed to store ihr fee: %w", err)
-	}
-	if err := storeCoins(builder, m.FwdFee); err != nil {
-		return nil, fmt.Errorf("failed to store fwd fee: %w", err)
-	}
-	if err := builder.StoreUInt(m.CreatedLT, 64); err != nil {
-		return nil, fmt.Errorf("failed to store created lt: %w", err)
-	}
-	if err := builder.StoreUInt(uint64(m.CreatedAt), 32); err != nil {
-		return nil, fmt.Errorf("failed to store created at: %w", err)
-	}
-	if err := storeMaybeStateInitEither(builder, m.StateInit); err != nil {
-		return nil, fmt.Errorf("failed to store state init: %w", err)
-	}
-	if err := storeMessageBody(builder, m.Body); err != nil {
-		return nil, fmt.Errorf("failed to store body: %w", err)
+	if err := m.storeTo(builder, eitherAuto, eitherAuto); err != nil {
+		return nil, err
 	}
 	return builder.EndCell(), nil
+}
+
+func (m InternalMessage) storeTo(builder *cell.Builder, initChoice, bodyChoice eitherChoice) error {
+	if err := builder.StoreBoolBit(false); err != nil {
+		return fmt.Errorf("failed to store internal message magic: %w", err)
+	}
+	if err := builder.StoreBoolBit(m.IHRDisabled); err != nil {
+		return fmt.Errorf("failed to store ihr_disabled flag: %w", err)
+	}
+	if err := builder.StoreBoolBit(m.Bounce); err != nil {
+		return fmt.Errorf("failed to store bounce flag: %w", err)
+	}
+	if err := builder.StoreBoolBit(m.Bounced); err != nil {
+		return fmt.Errorf("failed to store bounced flag: %w", err)
+	}
+	if err := builder.StoreAddr(m.SrcAddr); err != nil {
+		return fmt.Errorf("failed to store source address: %w", err)
+	}
+	if err := builder.StoreAddr(m.DstAddr); err != nil {
+		return fmt.Errorf("failed to store destination address: %w", err)
+	}
+	if err := storeCoins(builder, m.Amount); err != nil {
+		return fmt.Errorf("failed to store amount: %w", err)
+	}
+	if err := builder.StoreDict(m.ExtraCurrencies); err != nil {
+		return fmt.Errorf("failed to store extra currencies: %w", err)
+	}
+	if err := storeCoins(builder, m.IHRFee); err != nil {
+		return fmt.Errorf("failed to store ihr fee: %w", err)
+	}
+	if err := storeCoins(builder, m.FwdFee); err != nil {
+		return fmt.Errorf("failed to store fwd fee: %w", err)
+	}
+	if err := builder.StoreUInt(m.CreatedLT, 64); err != nil {
+		return fmt.Errorf("failed to store created lt: %w", err)
+	}
+	if err := builder.StoreUInt(uint64(m.CreatedAt), 32); err != nil {
+		return fmt.Errorf("failed to store created at: %w", err)
+	}
+	if err := storeMaybeStateInitEitherAs(builder, m.StateInit, initChoice); err != nil {
+		return fmt.Errorf("failed to store state init: %w", err)
+	}
+	if err := storeMessageBodyAs(builder, m.Body, bodyChoice); err != nil {
+		return fmt.Errorf("failed to store body: %w", err)
+	}
+	return nil
 }
 
 func (m *ExternalMessage) LoadFromCell(loader *cell.Slice) error {
@@ -369,25 +428,32 @@ func (m *ExternalMessage) loadFromCellAfterMagic(loader *cell.Slice) error {
 
 func (m ExternalMessage) ToCell() (*cell.Cell, error) {
 	builder := cell.BeginCell()
-	if err := builder.StoreUInt(0b10, 2); err != nil {
-		return nil, fmt.Errorf("failed to store external inbound message magic: %w", err)
-	}
-	if err := builder.StoreAddr(m.SrcAddr); err != nil {
-		return nil, fmt.Errorf("failed to store source address: %w", err)
-	}
-	if err := builder.StoreAddr(m.DstAddr); err != nil {
-		return nil, fmt.Errorf("failed to store destination address: %w", err)
-	}
-	if err := storeCoins(builder, m.ImportFee); err != nil {
-		return nil, fmt.Errorf("failed to store import fee: %w", err)
-	}
-	if err := storeMaybeStateInitEither(builder, m.StateInit); err != nil {
-		return nil, fmt.Errorf("failed to store state init: %w", err)
-	}
-	if err := storeMessageBody(builder, m.Body); err != nil {
-		return nil, fmt.Errorf("failed to store body: %w", err)
+	if err := m.storeTo(builder, eitherAuto, eitherAuto); err != nil {
+		return nil, err
 	}
 	return builder.EndCell(), nil
+}
+
+func (m ExternalMessage) storeTo(builder *cell.Builder, initChoice, bodyChoice eitherChoice) error {
+	if err := builder.StoreUInt(0b10, 2); err != nil {
+		return fmt.Errorf("failed to store external inbound message magic: %w", err)
+	}
+	if err := builder.StoreAddr(m.SrcAddr); err != nil {
+		return fmt.Errorf("failed to store source address: %w", err)
+	}
+	if err := builder.StoreAddr(m.DstAddr); err != nil {
+		return fmt.Errorf("failed to store destination address: %w", err)
+	}
+	if err := storeCoins(builder, m.ImportFee); err != nil {
+		return fmt.Errorf("failed to store import fee: %w", err)
+	}
+	if err := storeMaybeStateInitEitherAs(builder, m.StateInit, initChoice); err != nil {
+		return fmt.Errorf("failed to store state init: %w", err)
+	}
+	if err := storeMessageBodyAs(builder, m.Body, bodyChoice); err != nil {
+		return fmt.Errorf("failed to store body: %w", err)
+	}
+	return nil
 }
 
 func (m *ExternalMessageOut) LoadFromCell(loader *cell.Slice) error {
@@ -434,26 +500,67 @@ func (m *ExternalMessageOut) loadFromCellAfterMagic(loader *cell.Slice) error {
 
 func (m ExternalMessageOut) ToCell() (*cell.Cell, error) {
 	builder := cell.BeginCell()
-	if err := builder.StoreUInt(0b11, 2); err != nil {
-		return nil, fmt.Errorf("failed to store external outbound message magic: %w", err)
-	}
-	if err := builder.StoreAddr(m.SrcAddr); err != nil {
-		return nil, fmt.Errorf("failed to store source address: %w", err)
-	}
-	if err := builder.StoreAddr(m.DstAddr); err != nil {
-		return nil, fmt.Errorf("failed to store destination address: %w", err)
-	}
-	if err := builder.StoreUInt(m.CreatedLT, 64); err != nil {
-		return nil, fmt.Errorf("failed to store created lt: %w", err)
-	}
-	if err := builder.StoreUInt(uint64(m.CreatedAt), 32); err != nil {
-		return nil, fmt.Errorf("failed to store created at: %w", err)
-	}
-	if err := storeMaybeStateInitEither(builder, m.StateInit); err != nil {
-		return nil, fmt.Errorf("failed to store state init: %w", err)
-	}
-	if err := storeMessageBody(builder, m.Body); err != nil {
-		return nil, fmt.Errorf("failed to store body: %w", err)
+	if err := m.storeTo(builder, eitherAuto, eitherAuto); err != nil {
+		return nil, err
 	}
 	return builder.EndCell(), nil
+}
+
+func (m ExternalMessageOut) storeTo(builder *cell.Builder, initChoice, bodyChoice eitherChoice) error {
+	if err := builder.StoreUInt(0b11, 2); err != nil {
+		return fmt.Errorf("failed to store external outbound message magic: %w", err)
+	}
+	if err := builder.StoreAddr(m.SrcAddr); err != nil {
+		return fmt.Errorf("failed to store source address: %w", err)
+	}
+	if err := builder.StoreAddr(m.DstAddr); err != nil {
+		return fmt.Errorf("failed to store destination address: %w", err)
+	}
+	if err := builder.StoreUInt(m.CreatedLT, 64); err != nil {
+		return fmt.Errorf("failed to store created lt: %w", err)
+	}
+	if err := builder.StoreUInt(uint64(m.CreatedAt), 32); err != nil {
+		return fmt.Errorf("failed to store created at: %w", err)
+	}
+	if err := storeMaybeStateInitEitherAs(builder, m.StateInit, initChoice); err != nil {
+		return fmt.Errorf("failed to store state init: %w", err)
+	}
+	if err := storeMessageBodyAs(builder, m.Body, bodyChoice); err != nil {
+		return fmt.Errorf("failed to store body: %w", err)
+	}
+	return nil
+}
+
+// StoreMessageWithLayout writes msg into builder reproducing the given Either
+// layout instead of choosing one by what fits, so a message parsed from a cell
+// can be re-serialized bit-identically. ToCell keeps choosing the layout
+// itself, so senders are unaffected.
+func StoreMessageWithLayout(builder *cell.Builder, msg *Message, layout MessageLayout) error {
+	if msg == nil {
+		return fmt.Errorf("message is required")
+	}
+	initChoice, bodyChoice := messageLayoutChoices(&layout)
+
+	switch msg.MsgType {
+	case MsgTypeInternal:
+		in, ok := msg.Msg.(*InternalMessage)
+		if !ok || in == nil {
+			return fmt.Errorf("message type %s does not carry an internal message", msg.MsgType)
+		}
+		return in.storeTo(builder, initChoice, bodyChoice)
+	case MsgTypeExternalIn:
+		in, ok := msg.Msg.(*ExternalMessage)
+		if !ok || in == nil {
+			return fmt.Errorf("message type %s does not carry an external inbound message", msg.MsgType)
+		}
+		return in.storeTo(builder, initChoice, bodyChoice)
+	case MsgTypeExternalOut:
+		out, ok := msg.Msg.(*ExternalMessageOut)
+		if !ok || out == nil {
+			return fmt.Errorf("message type %s does not carry an external outbound message", msg.MsgType)
+		}
+		return out.storeTo(builder, initChoice, bodyChoice)
+	default:
+		return fmt.Errorf("unknown message type %s", msg.MsgType)
+	}
 }

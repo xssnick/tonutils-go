@@ -69,6 +69,12 @@ type fecBroadcastStream struct {
 	admissionErr   error
 	disposition    BroadcastDisposition
 	mx             sync.Mutex
+	// removed is set under state.mx before the stream leaves state.streams, so
+	// a lookup may release state.mx before taking stream.mx and still notice
+	// that its stream was evicted while it waited. Without it the two locks
+	// would have to be held hand over hand, which puts every RaptorQ decode in
+	// front of the whole overlay's receive path.
+	removed atomic.Bool
 }
 
 type fecBroadcastStreamInit struct {
@@ -157,8 +163,17 @@ type BroadcastInfo struct {
 	Extra           []byte
 	Delivery        BroadcastDelivery
 	DecodeTime      time.Duration
-	// Payload is the immutable serialized TL payload. It remains valid after the
-	// handler returns and may be retained, but must not be modified.
+	// Payload is the serialized TL payload of the broadcast.
+	//
+	// It is only valid for the duration of the handler call and MUST NOT be
+	// retained or modified. For the simple (non-FEC) deliveries it aliases the
+	// pooled UDP receive buffer the datagram was decrypted in, which the ADNL
+	// gateway returns to its pool as soon as the packet is processed; the next
+	// datagram from any peer overwrites it. Copy what you need to keep.
+	//
+	// The zero copy is deliberate -- a broadcast that is merely relayed or
+	// dropped should not pay for one -- so this is a contract on the receiver,
+	// not something the library can enforce.
 	Payload []byte
 }
 
@@ -412,11 +427,31 @@ func estimateRetainedFECBroadcastBudgetBytes(fec rldp.FECRaptorQ) int64 {
 }
 
 // lockOrCreateFECStream returns the currently registered stream with stream.mx
-// held. It always takes state.mx before stream.mx, matching cleanupLocked, so a
-// returned stream cannot be evicted between its registry lookup and processing.
+// held.
+//
+// state.mx and stream.mx are never held at the same time: stream.mx covers the
+// RaptorQ decoder and encoder, so holding state.mx across it would serialize
+// every broadcast in the overlay behind one decode. Safety comes from
+// stream.removed instead, which removeStreamLocked sets under state.mx before
+// the stream leaves the registry -- so a stream evicted while we waited for its
+// mutex is detected and the lookup restarts.
 func (s *BroadcastFECRelayState) lockOrCreateFECStream(id string, now time.Time, init fecBroadcastStreamInit) (*fecBroadcastStream, error) {
 	budgetBytes := estimateFECBroadcastBudgetBytes(init.fec, init.partSize)
 
+	for attempt := 0; ; attempt++ {
+		if attempt >= fecBroadcastStreamLookupAttempts {
+			return nil, fmt.Errorf("fec broadcast stream evicted repeatedly")
+		}
+		stream, err := s.tryLockOrCreateFECStream(id, now, init, budgetBytes)
+		if err != nil || stream != nil {
+			return stream, err
+		}
+	}
+}
+
+// tryLockOrCreateFECStream returns (nil, nil) when the stream it found was
+// evicted while it waited for stream.mx, asking the caller to look again.
+func (s *BroadcastFECRelayState) tryLockOrCreateFECStream(id string, now time.Time, init fecBroadcastStreamInit, budgetBytes int64) (*fecBroadcastStream, error) {
 	s.mx.Lock()
 	s.cleanupLocked(now, false)
 	if s.isDeliveredLocked(id, now) {
@@ -425,9 +460,11 @@ func (s *BroadcastFECRelayState) lockOrCreateFECStream(id string, now time.Time,
 		return nil, errFECBroadcastDelivered
 	}
 	if stream := s.streams[id]; stream != nil {
-		stream.mx.Lock()
 		s.mx.Unlock()
-		return stream, nil
+		if lockLiveFECStream(stream) {
+			return stream, nil
+		}
+		return nil, nil
 	}
 	if !s.reserveLocked(now, budgetBytes) {
 		s.mx.Unlock()
@@ -471,16 +508,36 @@ func (s *BroadcastFECRelayState) lockOrCreateFECStream(id string, now time.Time,
 	}
 	if stream := s.streams[id]; stream != nil {
 		s.cancelReservationLocked(budgetBytes)
-		stream.mx.Lock()
 		s.mx.Unlock()
-		return stream, nil
+		if lockLiveFECStream(stream) {
+			return stream, nil
+		}
+		return nil, nil
 	}
 
 	s.commitReservationLocked()
 	s.streams[id] = candidate
-	candidate.mx.Lock()
 	s.mx.Unlock()
-	return candidate, nil
+	if lockLiveFECStream(candidate) {
+		return candidate, nil
+	}
+	return nil, nil
+}
+
+// fecBroadcastStreamLookupAttempts bounds the registry retry so an eviction
+// storm cannot spin the ADNL listener goroutine.
+const fecBroadcastStreamLookupAttempts = 3
+
+// lockLiveFECStream takes stream.mx and reports whether the stream is still
+// registered. A false return leaves the mutex unlocked and means the caller
+// must look the id up again.
+func lockLiveFECStream(stream *fecBroadcastStream) bool {
+	stream.mx.Lock()
+	if stream.removed.Load() {
+		stream.mx.Unlock()
+		return false
+	}
+	return true
 }
 
 func multiplyFECBroadcastBudgetEstimate(a uint64, b uint64) int64 {
@@ -656,7 +713,7 @@ func (a *ADNLOverlayWrapper) processBroadcast(t *Broadcast, sourcePeerID []byte)
 	for admission == nil {
 		attempt := state.beginSimpleAdmission(id)
 		switch attempt.status {
-		case broadcastAdmissionCommitted, broadcastAdmissionOverloaded:
+		case broadcastAdmissionCommitted, broadcastAdmissionOverloaded, broadcastAdmissionDuplicate:
 			return nil
 		case broadcastAdmissionWait:
 			<-attempt.admission.done
@@ -798,12 +855,13 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			return a.sendFECControlMessage(FECCompleted{Hash: broadcastHash})
 		}
 		stream = state.streams[id]
-		if stream != nil {
-			stream.mx.Lock()
-		}
 		state.mx.Unlock()
 		if stream == nil {
 			break
+		}
+		if !lockLiveFECStream(stream) {
+			// Evicted while we waited for its mutex; look it up again.
+			continue
 		}
 
 		if stream.flags&BroadcastFlagAnySender == 0 && !bytes.Equal(stream.source, sourceKey.Key) {
@@ -1293,13 +1351,12 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 			relayPeers = relayCfg.peerSet.Peers()
 		}
 
-		state.mx.Lock()
-		if state.streams[id] != stream {
-			state.mx.Unlock()
+		// The stream may have been evicted while the peer set was built;
+		// lockLiveFECStream re-checks that after taking stream.mx, which also
+		// covers an eviction that lands while we wait for the mutex.
+		if !lockLiveFECStream(stream) {
 			continue
 		}
-		stream.mx.Lock()
-		state.mx.Unlock()
 		if stream.receivedPart(seqno) {
 			stream.mx.Unlock()
 			return nil

@@ -8,11 +8,11 @@ github.com/pierrec/lz4/v4 v4.1.27 h1:+PhzhWDrjRj89TH2sw43nE3+4+W8lSxIuQadEHZyjUk
 github.com/pierrec/lz4/v4 v4.1.27/go.mod h1:EoQMVJgeeEOMsCqCzqFm2O0cJvljX2nGZjcRIPL34O4=
 github.com/xssnick/quic-go-ton v0.0.0-20260707110703-14f3237f97b9 h1:QsXLhRwVkPH6bJwjvi2NWjqgL++1JdqMKvtk83jxfio=
 github.com/xssnick/quic-go-ton v0.0.0-20260707110703-14f3237f97b9/go.mod h1:e+7c+V0mRRcFrHULuyBFUeTYm6Fu0A7jXfUKi67bMfE=
-github.com/xssnick/raptorq v1.5.0 h1:sNtaD0JTO7rzTOIvITeFAz5Rla/to/gw5MKAy9DD1Mk=
-github.com/xssnick/raptorq v1.5.0/go.mod h1:mo5n6T4yaqZkNVMWonRuMS0tcyD4XQ6PwwTjaY3ZwQY=
+github.com/xssnick/raptorq v1.5.1 h1:EZ6fWBl4ekUnPQSok4HtWLQ+bjv2OhU87qHIQTROnmk=
+github.com/xssnick/raptorq v1.5.1/go.mod h1:mo5n6T4yaqZkNVMWonRuMS0tcyD4XQ6PwwTjaY3ZwQY=
 golang.org/x/crypto v0.54.0 h1:YLIA59K4fiNzHzjnZt2tUJQjQtUWfWbeHBqKtk3eScw=
 golang.org/x/crypto v0.54.0/go.mod h1:KWL8ny2AZdGR2cWmzeHrp2azQPGogOv+HeQaVEXC2dk=
-golang.org/x/net v0.56.0 h1:Rw8j/hFzGvJUZwNBXnAtf5sVDVt+65SK2C7IxCxZt5o=
-golang.org/x/net v0.56.0/go.mod h1:D3Ku6r+V6JROoZK144D2XfMHFcMq/0zSfLelVTCFKec=
+golang.org/x/net v0.57.0 h1:K5+3DljvIuDG9/Jv9rvyMywYNFCQ9RSUY6OOTTkT+tE=
+golang.org/x/net v0.57.0/go.mod h1:KpXc8iv+r3XplLAG/f7Jsf9RPszJzdR0f58q9vGOuEU=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
 golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=

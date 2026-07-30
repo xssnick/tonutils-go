@@ -8,9 +8,11 @@ import (
 	"time"
 )
 
-// serveAdmittedStream (transport.go) sets a write deadline of now+readTimeout
-// before writing a query answer, so a peer that reads the query but withholds
-// answer-write flow-control credit cannot pin its stream admission slot forever.
+// serveAdmittedStream (transport.go) writes a query answer under an idle write
+// deadline, so a peer that reads the query but withholds answer-write
+// flow-control credit cannot pin its stream admission forever. The deadline is
+// idle-based, so it fires here precisely because the write makes no progress at
+// all; a slow peer that keeps draining would not be cut off.
 // The existing phase1 tests exercise only the read side of admission release;
 // this one drives the answer-write side.
 //
@@ -27,6 +29,7 @@ func TestInboundAnswerWriteDeadlineReleasesAdmission(t *testing.T) {
 	limits := DefaultLimits()
 	limits.MaxConcurrentIncomingStreams = 1
 	limits.MaxConcurrentIncomingStreamsPerConnection = 1
+	limits.GuaranteedStreamsPerConnection = 1
 	limits.StreamReadTimeout = 500 * time.Millisecond
 
 	largeAnswer := bytes.Repeat([]byte{0x5A}, answerSize)
@@ -58,13 +61,16 @@ func TestInboundAnswerWriteDeadlineReleasesAdmission(t *testing.T) {
 
 	// The server admits the stream, reads the query, and blocks writing the
 	// answer against the client's unadvanced receive window.
-	waitPhase1ReviewCondition(t, 3*time.Second, "answer write blocked with the admission slot held", func() bool {
-		streams, _ := phase1ReviewAdmissionUsage(server.admission)
-		return streams == 1
+	// The lease still holds its byte charge while the answer write is blocked;
+	// the stream slot itself is one of this connection's guaranteed ones, so it
+	// is not visible in the shared pool.
+	waitPhase1ReviewCondition(t, 3*time.Second, "answer write blocked with the admission held", func() bool {
+		_, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
+		return payloadBytes > 0
 	})
 	blockedAt := time.Now()
 
-	// The write deadline (now+StreamReadTimeout) fires and frees the slot.
+	// The idle write deadline fires and frees the admission.
 	waitPhase1ReviewCondition(t, limits.StreamReadTimeout+3*time.Second, "write-deadline admission release", func() bool {
 		streams, payloadBytes := phase1ReviewAdmissionUsage(server.admission)
 		return streams == 0 && payloadBytes == 0

@@ -1,170 +1,138 @@
 package quic
 
 import (
-	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 )
 
 var (
-	errPayloadAdmissionFull    = errors.New("quic: reserved payload byte admission limit reached")
-	errPayloadAlreadyReserved  = errors.New("quic: payload bytes already reserved")
+	errPayloadAdmissionFull    = errors.New("quic: buffered payload byte admission limit reached")
 	errStreamAdmissionReleased = errors.New("quic: stream admission already released")
 )
 
-// streamAdmission bounds concurrent stream processing and payload memory
-// reserved by those streams. Stream slots are blocking: an exhausted scope
-// backpressures the acceptor until a lease is released. Payload byte
-// reservations stay nonblocking.
+// One accounting scope for inbound stream processing: a stream-slot semaphore and
+// a buffered-payload byte budget.
+//
+//   - Slots are a buffered channel, not a mutex plus sync.Cond: channels hand the
+//     slot to the longest waiter, cond.Signal to an arbitrary one.
+//   - Bytes are charged as they ARRIVE, never reserved from the declared length,
+//     matching QuicSender::StreamState::append. A peer that announces 16 MiB and
+//     sends one byte costs one chunk.
 type streamAdmission struct {
-	mu   sync.Mutex
-	cond sync.Cond
+	slots chan struct{}
 
-	maxStreams    uint64
-	activeStreams uint64
-
-	maxPayloadBytes      uint64
-	reservedPayloadBytes atomic.Uint64
+	maxPayloadBytes int64
+	payloadBytes    atomic.Int64
 }
 
-func newStreamAdmission(maxStreams, maxPayloadBytes uint64) *streamAdmission {
-	a := &streamAdmission{
-		maxStreams:      maxStreams,
+func newStreamAdmission(maxStreams int, maxPayloadBytes int64) *streamAdmission {
+	return &streamAdmission{
+		slots:           make(chan struct{}, maxStreams),
 		maxPayloadBytes: maxPayloadBytes,
 	}
-	a.cond.L = &a.mu
-	return a
 }
 
-// acquireStream blocks until a receiver-wide stream slot is free. The caller
-// must release the returned lease on every exit path.
-func (a *streamAdmission) acquireStream(ctx context.Context) (streamAdmissionLease, error) {
-	return a.acquireStreamWithin(ctx, nil)
+// tryAcquireSlot takes a slot without blocking.
+func (a *streamAdmission) tryAcquireSlot() bool {
+	select {
+	case a.slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
-// acquireStreamWithin blocks until both the receiver-wide admission and a
-// connection-local admission have a free stream slot. Keeping both counters in
-// one lease makes release atomic from the stream owner's point of view.
-func (a *streamAdmission) acquireStreamWithin(ctx context.Context, connection *streamAdmission) (streamAdmissionLease, error) {
-	if connection != nil {
-		if err := connection.acquireSlot(ctx); err != nil {
-			return streamAdmissionLease{}, err
-		}
+// acquireSlot blocks until a slot is free or done is closed. Callers take it
+// BEFORE AcceptStream: quic-go only returns MAX_STREAMS credit to the peer once
+// an accepted stream completes, so not accepting is the backpressure signal.
+func (a *streamAdmission) acquireSlot(done <-chan struct{}) bool {
+	select {
+	case a.slots <- struct{}{}:
+		return true
+	case <-done:
+		return false
 	}
-	if err := a.acquireSlot(ctx); err != nil {
-		if connection != nil {
-			connection.releaseSlot()
-		}
-		return streamAdmissionLease{}, err
-	}
-	return streamAdmissionLease{admission: a, connection: connection}, nil
-}
-
-// acquireSlot blocks until a stream slot is free. Waiters observe ctx
-// cancellation only when woken; the caller must arrange a wake call on ctx
-// cancellation before blocking here.
-func (a *streamAdmission) acquireSlot(ctx context.Context) error {
-	a.mu.Lock()
-	for a.activeStreams >= a.maxStreams {
-		if err := ctx.Err(); err != nil {
-			a.mu.Unlock()
-			return err
-		}
-		a.cond.Wait()
-	}
-	a.activeStreams++
-	a.mu.Unlock()
-	return nil
 }
 
 func (a *streamAdmission) releaseSlot() {
-	a.mu.Lock()
-	a.activeStreams--
-	a.cond.Signal()
-	a.mu.Unlock()
+	select {
+	case <-a.slots:
+	default:
+	}
 }
 
-// wake lets slot waiters observe context cancellation. Broadcasting under the
-// mutex pairs with the waiters' locked pre-Wait ctx check, so a concurrent
-// waiter either sees the cancelled ctx or receives this broadcast.
-func (a *streamAdmission) wake() {
-	a.mu.Lock()
-	a.cond.Broadcast()
-	a.mu.Unlock()
+func (a *streamAdmission) activeStreams() int {
+	return len(a.slots)
 }
 
-func (a *streamAdmission) tryReservePayloadBytes(payloadBytes uint64) bool {
-	if a.reservedPayloadBytes.Add(payloadBytes) > a.maxPayloadBytes {
-		a.reservedPayloadBytes.Add(-payloadBytes)
+func (a *streamAdmission) tryChargeBytes(n int64) bool {
+	if a.payloadBytes.Add(n) > a.maxPayloadBytes {
+		a.payloadBytes.Add(-n)
 		return false
 	}
 	return true
 }
 
-func (a *streamAdmission) releasePayloadBytes(payloadBytes uint64) {
-	a.reservedPayloadBytes.Add(-payloadBytes)
+func (a *streamAdmission) releaseBytes(n int64) {
+	if n != 0 {
+		a.payloadBytes.Add(-n)
+	}
 }
 
-// streamAdmissionLease owns one stream slot per scope and, after
-// reservePayload succeeds, the payload bytes assigned to that stream. The
-// zero lease owns nothing.
+func (a *streamAdmission) reservedPayloadBytes() int64 {
+	return a.payloadBytes.Load()
+}
+
+// Owns the byte charges of one inbound stream, plus the global slot when one was
+// taken; the per-connection slot stays with the accept loop. The zero lease owns
+// nothing - what an outbound-dialed connection's inbound streams get.
 type streamAdmissionLease struct {
 	admission  *streamAdmission
 	connection *streamAdmission
 
-	payloadBytes    uint64
-	payloadReserved bool
-	released        bool
+	globalSlot bool
+	charged    int64
+	// Atomic so a lease shared between the accept loop's error path and the stream
+	// goroutine is released from either exactly once. chargeBytes needs no atomic:
+	// it is only called by the reading goroutine.
+	released atomic.Bool
 }
 
-// reservePayload reserves memory after the payload length has been parsed and
-// before the payload buffer is allocated. A lease may reserve payload once.
-func (l *streamAdmissionLease) reservePayload(payloadBytes uint64) error {
-	if l.released {
+// Called once per read chunk, so a stalled peer stops costing memory the moment
+// it stops sending.
+func (l *streamAdmissionLease) chargeBytes(n int64) error {
+	if l.released.Load() {
 		return errStreamAdmissionReleased
 	}
-	if l.payloadReserved {
-		return errPayloadAlreadyReserved
+	if n <= 0 {
+		return nil
 	}
-	if !l.admission.tryReservePayloadBytes(payloadBytes) {
+	if l.admission != nil && !l.admission.tryChargeBytes(n) {
 		return errPayloadAdmissionFull
 	}
-	if l.connection != nil && !l.connection.tryReservePayloadBytes(payloadBytes) {
-		l.admission.releasePayloadBytes(payloadBytes)
+	if l.connection != nil && !l.connection.tryChargeBytes(n) {
+		if l.admission != nil {
+			l.admission.releaseBytes(n)
+		}
 		return errPayloadAdmissionFull
 	}
-	l.payloadBytes = payloadBytes
-	l.payloadReserved = true
+	l.charged += n
 	return nil
 }
 
-// release returns all resources owned by the lease and wakes blocked
-// acquirers. It is safe to call concurrently and more than once on the same
-// lease; only the first call takes effect.
+// release returns everything the lease owns. Only the first call takes effect.
 func (l *streamAdmissionLease) release() {
-	a := l.admission
-	if a == nil {
+	if !l.released.CompareAndSwap(false, true) {
 		return
 	}
 
-	a.mu.Lock()
-	if l.released {
-		a.mu.Unlock()
-		return
-	}
-	l.released = true
-	a.activeStreams--
-	a.cond.Signal()
-	a.mu.Unlock()
-
-	if l.connection != nil {
-		l.connection.releaseSlot()
-	}
-	if l.payloadReserved {
-		a.releasePayloadBytes(l.payloadBytes)
-		if l.connection != nil {
-			l.connection.releasePayloadBytes(l.payloadBytes)
+	if l.admission != nil {
+		l.admission.releaseBytes(l.charged)
+		if l.globalSlot {
+			l.admission.releaseSlot()
 		}
+	}
+	if l.connection != nil {
+		l.connection.releaseBytes(l.charged)
 	}
 }

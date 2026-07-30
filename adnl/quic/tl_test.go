@@ -321,7 +321,7 @@ func TestReadBoxedObjectRejectsTrailingBytes(t *testing.T) {
 	}
 }
 
-func TestReadBoxedObjectRejectsInvalidPadding(t *testing.T) {
+func TestReadBoxedObjectRejectsMissingPadding(t *testing.T) {
 	wire, err := serializeBoxed(idQuicQuery, []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -335,15 +335,29 @@ func TestReadBoxedObjectRejectsInvalidPadding(t *testing.T) {
 			t.Fatalf("boxed object missing %d padding bytes was accepted", missing)
 		}
 	}
+}
+
+// The alignment bytes must arrive, but their content is not inspected -- same
+// rule as tl.fromBytes, so a frame is accepted or rejected identically over
+// QUIC and over ADNL/RLDP.
+func TestReadBoxedObjectAcceptsNonZeroPadding(t *testing.T) {
+	wire, err := serializeBoxed(idQuicQuery, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, index := range []int{len(wire) - 2, len(wire) - 1} {
-		invalid := append([]byte(nil), wire...)
-		invalid[index] = 1
-		if _, _, err = readBoxedObject(
-			bytes.NewReader(invalid),
-			int64(len(invalid)),
-		); err == nil {
-			t.Fatalf("boxed object with non-zero padding at %d was accepted", index)
+		relaxed := append([]byte(nil), wire...)
+		relaxed[index] = 1
+		id, payload, err := readBoxedObject(bytes.NewReader(relaxed), int64(len(relaxed)))
+		if err != nil {
+			t.Fatalf("boxed object with non-zero padding at %d was rejected: %v", index, err)
+		}
+		if id != idQuicQuery {
+			t.Fatalf("id = %08x, want %08x", id, idQuicQuery)
+		}
+		if !bytes.Equal(payload, []byte("x")) {
+			t.Fatalf("payload = %x, want %x", payload, []byte("x"))
 		}
 	}
 }

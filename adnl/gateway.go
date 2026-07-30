@@ -13,6 +13,7 @@ import (
 	"github.com/xssnick/tonutils-go/tl"
 	"net"
 	"net/netip"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -80,10 +81,9 @@ func (p *peerConn) SendNop(ctx context.Context) error {
 }
 
 type srvProcessor struct {
-	lastPacketAt int64
-	channel      *Channel
-	processor    func(buf []byte) error
-	closer       func()
+	channel   *Channel
+	processor func(buf []byte) error
+	closer    func()
 }
 
 type UDPPacket struct {
@@ -458,7 +458,6 @@ func (g *Gateway) listen(rootId []byte) {
 			continue
 		}
 
-		atomic.StoreInt64(&proc.lastPacketAt, time.Now().Unix())
 		if err := proc.processor(buf); err != nil {
 			if Logger != nil {
 				Logger(
@@ -545,6 +544,19 @@ func closePeers(peers []*peerConn) {
 	}
 }
 
+// MaxIdlePeerPairs bounds how many idle peer pairs the gateway keeps alive,
+// mirroring the C++ reference (MAX_IDLE_PEER_PAIRS). Idle pairs above the
+// bound are closed oldest-first; pairs with recent traffic are never touched.
+var MaxIdlePeerPairs = 2048
+
+// markIdlePeerPairTimeout is how long a pair must stay quiet in BOTH
+// directions before it counts as idle, mirroring the C++ MARK_IDLE_TIMEOUT.
+// The previous behavior closed the whole peer once its channel saw no inbound
+// packets for 10 minutes — even while we kept sending to it — which
+// black-holed everything the remote later pushed into the dead channel until
+// its own reinit noticed the silence (~15s of loss per victim).
+const markIdlePeerPairTimeout = 130 * time.Second
+
 func (g *Gateway) startOldPeersChecker() {
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
@@ -558,29 +570,83 @@ func (g *Gateway) startOldPeersChecker() {
 
 		now := time.Now()
 
-		var prc []*srvProcessor
-		var peers []*peerConn
 		g.mx.Lock()
-		for k, pr := range g.processors {
-			if now.Unix()-atomic.LoadInt64(&pr.lastPacketAt) > 10*60 {
-				prc = append(prc, pr)
-				delete(g.processors, k)
-
-				if g.onChannelClose != nil {
-					g.onChannelClose(k)
-				}
-			}
+		snapshot := make([]*peerConn, 0, len(g.peers))
+		for _, peer := range g.peers {
+			snapshot = append(snapshot, peer)
 		}
-		peers = g.collectIdlePendingPeersLocked(now.UnixNano())
+		pending := g.collectIdlePendingPeersLocked(now.UnixNano())
 		g.mx.Unlock()
 
-		if len(prc) > 0 {
-			for _, pr := range prc {
-				pr.closer()
-			}
-		}
-		closePeers(peers)
+		closePeers(pending)
+		closePeers(g.collectIdlePeerPairs(snapshot, now))
 	}
+}
+
+type idlePeerPair struct {
+	peer       *peerConn
+	lastActive time.Time
+}
+
+// collectIdlePeerPairs removes and returns the pairs to close: pairs quiet in
+// both directions for markIdlePeerPairTimeout, oldest first, and only the
+// excess above MaxIdlePeerPairs. Stats are read outside the gateway lock, so
+// each victim is re-checked for identity before removal.
+func (g *Gateway) collectIdlePeerPairs(snapshot []*peerConn, now time.Time) []*peerConn {
+	limit := MaxIdlePeerPairs
+	if limit <= 0 || len(snapshot) <= limit {
+		return nil
+	}
+
+	cutoff := now.Add(-markIdlePeerPairTimeout)
+	idle := make([]idlePeerPair, 0, len(snapshot)-limit)
+	for _, peer := range snapshot {
+		stats := peer.client.Stats()
+		lastActive := stats.CreatedAt
+		if stats.Inbound.LastPacketAt.After(lastActive) {
+			lastActive = stats.Inbound.LastPacketAt
+		}
+		if stats.Outbound.LastPacketAt.After(lastActive) {
+			lastActive = stats.Outbound.LastPacketAt
+		}
+		if lastActive.After(cutoff) {
+			continue
+		}
+		idle = append(idle, idlePeerPair{peer: peer, lastActive: lastActive})
+	}
+
+	victims := selectIdlePeerPairVictims(idle, limit)
+	if len(victims) == 0 {
+		return nil
+	}
+
+	dropped := victims[:0]
+	g.mx.Lock()
+	for _, victim := range victims {
+		if g.dropPeerLocked(victim) {
+			dropped = append(dropped, victim)
+		}
+	}
+	g.mx.Unlock()
+	return dropped
+}
+
+// selectIdlePeerPairVictims keeps up to limit idle pairs and returns the rest,
+// oldest first.
+func selectIdlePeerPairVictims(idle []idlePeerPair, limit int) []*peerConn {
+	excess := len(idle) - limit
+	if excess <= 0 {
+		return nil
+	}
+
+	sort.Slice(idle, func(i, j int) bool {
+		return idle[i].lastActive.Before(idle[j].lastActive)
+	})
+	victims := make([]*peerConn, 0, excess)
+	for _, candidate := range idle[:excess] {
+		victims = append(victims, candidate.peer)
+	}
+	return victims
 }
 
 func (g *Gateway) GetActivePeers() []Peer {
@@ -676,10 +742,9 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 			}
 		}
 		g.processors[chID] = &srvProcessor{
-			processor:    ch.process,
-			channel:      ch,
-			lastPacketAt: time.Now().Unix(),
-			closer:       ch.adnl.Close,
+			processor: ch.process,
+			channel:   ch,
+			closer:    ch.adnl.Close,
 		}
 		if closedOld && g.onChannelClose != nil {
 			g.onChannelClose(oldId)
@@ -818,7 +883,11 @@ func (p *peerConn) SetDisconnectHandler(handler func(addr string, key ed25519.Pu
 	p.client.SetDisconnectHandler(func(addr string, key ed25519.PublicKey) {
 		p.server.mx.Lock()
 		p.server.removePendingPeerLocked(p)
-		delete(p.server.peers, p.clientId)
+		// A reconnected peer registers a fresh peerConn under the same client
+		// id; a late disconnect of the old one must not remove the live entry.
+		if p.server.peers[p.clientId] == p {
+			delete(p.server.peers, p.clientId)
+		}
 		if p.channelId != "" && p.channel != nil {
 			processor := p.server.processors[p.channelId]
 			ok := processor != nil && processor.channel == p.channel

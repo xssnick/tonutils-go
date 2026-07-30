@@ -71,7 +71,7 @@ func TestNode_findNodes(t *testing.T) {
 		client := &Client{
 			gateway: gateway,
 		}
-		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -93,7 +93,7 @@ func TestNode_findNodes(t *testing.T) {
 					return nil
 				},
 			}, nil
-		}
+		})
 
 		tDhtNode.client = client
 		nodesL, err := tDhtNode.findNodes(context.Background(), kId, 10)
@@ -110,7 +110,7 @@ func TestNode_findNodes(t *testing.T) {
 		client := &Client{
 			gateway: gateway,
 		}
-		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -132,7 +132,7 @@ func TestNode_findNodes(t *testing.T) {
 					return nil
 				},
 			}, nil
-		}
+		})
 		tDhtNode.client = client
 
 		_, err := tDhtNode.findNodes(context.Background(), kId, 10)
@@ -153,7 +153,7 @@ func TestNode_findNodes(t *testing.T) {
 			gateway:   gateway,
 			networkID: _UnknownNetworkID,
 		}
-		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -175,7 +175,7 @@ func TestNode_findNodes(t *testing.T) {
 					return nil
 				},
 			}, nil
-		}
+		})
 
 		tDhtNode.client = client
 		nodes, err := tDhtNode.findNodes(context.Background(), kId, 10)
@@ -222,7 +222,7 @@ func TestNode_getSignedAddressListUsesQueriedSnapshot(t *testing.T) {
 			networkID: _UnknownNetworkID,
 		},
 	}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		if addr != "old-address" {
 			return nil, fmt.Errorf("queried address %q, want old-address", addr)
 		}
@@ -243,7 +243,7 @@ func TestNode_getSignedAddressListUsesQueriedSnapshot(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -331,7 +331,7 @@ func TestNode_storeValue(t *testing.T) {
 		client := &Client{
 			gateway: gateway,
 		}
-		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -353,7 +353,7 @@ func TestNode_storeValue(t *testing.T) {
 					return nil
 				},
 			}, nil
-		}
+		})
 		tDhtNode.client = client
 
 		err := tDhtNode.storeValue(context.Background(), kId, &val)
@@ -367,7 +367,7 @@ func TestNode_storeValue(t *testing.T) {
 		client := &Client{
 			gateway: gateway,
 		}
-		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -389,7 +389,7 @@ func TestNode_storeValue(t *testing.T) {
 					return nil
 				},
 			}, nil
-		}
+		})
 		tDhtNode.client = client
 
 		err := tDhtNode.storeValue(context.Background(), kId, &val)
@@ -436,7 +436,7 @@ func TestNode_findValue(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			gateway := &MockGateway{}
-			gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+			gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 				return MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
@@ -469,7 +469,7 @@ func TestNode_findValue(t *testing.T) {
 						return nil
 					},
 				}, nil
-			}
+			})
 
 			cli, err := NewClientFromConfig(gateway, cnf)
 			if err != nil {
@@ -547,7 +547,7 @@ func TestNode_findValueFiltersBadNodesListResponse(t *testing.T) {
 		gateway:   gateway,
 		networkID: _UnknownNetworkID,
 	}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				switch request := req.(type) {
@@ -568,7 +568,7 @@ func TestNode_findValueFiltersBadNodesListResponse(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	tDhtNode.client = client
 	res, err := tDhtNode.findValue(context.Background(), keyID, 10)

@@ -57,6 +57,12 @@ type broadcastSimpleDeliveredEntry struct {
 type broadcastAdmission struct {
 	done        chan struct{}
 	disposition BroadcastDisposition
+	// standby counts the copies parked on this admission. Exactly one is kept:
+	// it is what takes over if the owner returns Retry. Every further copy of
+	// the same broadcast is dropped in O(1) instead of parking an ADNL listener
+	// goroutine -- plumtree fans the same broadcast out from every neighbour,
+	// so the duplicates outnumber the originals by an order of magnitude.
+	standby int
 }
 
 type broadcastAdmissionStatus uint8
@@ -67,6 +73,9 @@ const (
 	broadcastAdmissionWait
 	broadcastAdmissionCommitted
 	broadcastAdmissionOverloaded
+	// broadcastAdmissionDuplicate means another copy is already being admitted
+	// and a standby is already waiting behind it; drop this one.
+	broadcastAdmissionDuplicate
 )
 
 type broadcastAdmissionAttempt struct {
@@ -132,6 +141,11 @@ func (s *BroadcastFECRelayState) beginSimpleAdmission(id broadcastSimpleIDKey) b
 		return broadcastAdmissionAttempt{status: broadcastAdmissionCommitted}
 	}
 	if admission := s.admitting[id]; admission != nil {
+		if admission.standby > 0 {
+			s.mx.Unlock()
+			return broadcastAdmissionAttempt{status: broadcastAdmissionDuplicate}
+		}
+		admission.standby++
 		s.mx.Unlock()
 		return broadcastAdmissionAttempt{admission: admission, status: broadcastAdmissionWait}
 	}
@@ -244,7 +258,14 @@ func (s *BroadcastFECRelayState) cleanupLocked(now time.Time, force bool) {
 	s.nextCleanupAt = now.Add(fecBroadcastCleanupInterval)
 
 	for id, stream := range s.streams {
-		stream.mx.Lock()
+		// TryLock, never Lock: this runs under s.mx, and stream.mx is held
+		// across RaptorQ decode/encode. Blocking here would park the whole
+		// overlay behind one decode. A stream whose mutex is busy is being
+		// worked on right now, so it is not idle and not a cleanup candidate;
+		// the next sweep reconsiders it.
+		if !stream.mx.TryLock() {
+			continue
+		}
 		completed := stream.completedAt != nil
 		admitting := stream.admissionDone != nil && stream.admissionErr == nil &&
 			stream.disposition == BroadcastDispositionUnknown
@@ -312,6 +333,9 @@ func (s *BroadcastFECRelayState) removeStreamLocked(id string, stream *fecBroadc
 		return
 	}
 
+	// Marked before the delete becomes visible, so a lookup that already holds
+	// this stream pointer and is waiting for stream.mx sees the eviction.
+	stream.removed.Store(true)
 	delete(s.streams, id)
 	s.releaseLocked(stream.budgetBytes)
 	if delivered {
@@ -440,12 +464,15 @@ func (s *BroadcastFECRelayState) trimSimpleDeliveredLocked() {
 func (s *BroadcastFECRelayState) TrackControlMessage(peerID []byte, control BroadcastFECControl) bool {
 	s.mx.RLock()
 	stream := s.streams[string(control.Hash)]
+	s.mx.RUnlock()
 	if stream == nil {
-		s.mx.RUnlock()
 		return false
 	}
-	stream.mx.Lock()
-	s.mx.RUnlock()
+	// Released before taking stream.mx: control messages must not queue behind
+	// a decode holding the stream, and must not hold the overlay while they do.
+	if !lockLiveFECStream(stream) {
+		return false
+	}
 	if stream.completedPeers == nil {
 		stream.completedPeers = map[string]struct{}{}
 	}

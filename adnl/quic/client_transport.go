@@ -33,21 +33,7 @@ func newClientTransport(limits Limits) (*clientTransport, error) {
 }
 
 func (t *clientTransport) dialIdentity(ctx context.Context, addr string, local Identity, expectedPeer ed25519.PublicKey) (*Client, error) {
-	remoteAddr, err := parseDialEndpoint(addr)
-	if err != nil {
-		return nil, err
-	}
-	tlsConf, expectedPeerID, err := clientTLSConfig(local, expectedPeer)
-	if err != nil {
-		return nil, err
-	}
-
-	conn, err := t.tr.Dial(ctx, remoteAddr, tlsConf, t.quicConf)
-	if err != nil {
-		return nil, fmt.Errorf("quic: dial %s: %w", addr, err)
-	}
-
-	return authenticatedClient(conn, expectedPeerID, t.maxObject)
+	return dialOn(ctx, t.tr, t.quicConf, addr, local, expectedPeer, t.maxObject)
 }
 
 func (t *clientTransport) close() error {

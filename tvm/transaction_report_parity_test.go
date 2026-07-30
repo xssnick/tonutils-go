@@ -387,6 +387,9 @@ func TestTransactionLayoutRetryRepeatsAbsoluteSizeChecks(t *testing.T) {
 	}
 }
 
+// An unauthenticated hint -- no storage_dict_hash and no provenance from this
+// executor -- must not be reused; a matching hash, or a hint this executor
+// bound to exactly this state, must be.
 func TestTransactionStorageStatHintRequiresAuthenticatedHash(t *testing.T) {
 	storage := cell.BeginCell().MustStoreUInt(0xA, 4).
 		MustStoreRef(cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()).
@@ -400,21 +403,29 @@ func TestTransactionStorageStatHintRequiresAuthenticatedHash(t *testing.T) {
 		BitsUsed:  new(big.Int).SetUint64(usage.bits),
 	}
 	for _, hash := range [][]byte{nil, make([]byte, 32)} {
-		stat, err := transactionInitAccountStorageStat(dictRoot, storage, storageUsed, hash)
+		stat, err := transactionInitAccountStorageStat(dictRoot, storage, storageUsed, hash, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if stat != nil {
 			t.Fatal("unauthenticated account storage stat hint was reused")
 		}
+
+		bound, err := transactionInitAccountStorageStat(dictRoot, storage, storageUsed, hash, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bound == nil {
+			t.Fatal("executor-bound account storage stat hint was ignored")
+		}
 	}
 	wrong := make([]byte, 32)
 	wrong[0] = 1
-	if _, err = transactionInitAccountStorageStat(dictRoot, storage, storageUsed, wrong); err == nil {
+	if _, err = transactionInitAccountStorageStat(dictRoot, storage, storageUsed, wrong, true); err == nil {
 		t.Fatal("account storage stat hint with a mismatching hash was accepted")
 	}
 	hash := dictRoot.HashKey()
-	stat, err := transactionInitAccountStorageStat(dictRoot, storage, storageUsed, hash[:])
+	stat, err := transactionInitAccountStorageStat(dictRoot, storage, storageUsed, hash[:], false)
 	if err != nil {
 		t.Fatal(err)
 	}

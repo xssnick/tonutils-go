@@ -109,7 +109,7 @@ func validateBuiltTransactionIO(root, inMsg *cell.Cell, outMsgs []OutMessage, ou
 			return err
 		}
 		count, err = root.AsDict(15).ForEachRefValue(func(stored *cell.Cell) error {
-			if err := validateBuiltTransactionMessage(stored); err != nil {
+			if _, err := validateBuiltTransactionMessage(stored); err != nil {
 				return fmt.Errorf("invalid output message %d: %w", seen, err)
 			}
 			if seen >= len(outMsgs) || outMsgs[seen].Cell == nil {
@@ -154,100 +154,112 @@ func validateBuiltTransactionHashUpdate(root *cell.Cell) error {
 	return transactionRequireEmptySlice(loader)
 }
 
-func validateBuiltTransactionMessage(root *cell.Cell) error {
+// transactionMessageLayout records the two Either choices the message cell
+// actually made. Both are valid TL-B, so reproducing a parsed message requires
+// knowing which one was written.
+type transactionMessageLayout struct {
+	stateInitInRef bool
+	bodyInRef      bool
+}
+
+func validateBuiltTransactionMessage(root *cell.Cell) (transactionMessageLayout, error) {
+	var layout transactionMessageLayout
+
 	var slice cell.Slice
 	if err := root.BeginParseIntoWithoutTrace(&slice); err != nil {
-		return err
+		return layout, err
 	}
 	loader := &slice
 
 	external, err := loader.LoadBoolBit()
 	if err != nil {
-		return err
+		return layout, err
 	}
 	if !external {
 		if err = loader.SkipBits(3); err != nil {
-			return err
+			return layout, err
 		}
 		if err = validateBuiltMessageAddress(loader, builtAddressInt, builtAddressCanonical); err != nil {
-			return err
+			return layout, err
 		}
 		if err = validateBuiltMessageAddress(loader, builtAddressInt, builtAddressCanonical); err != nil {
-			return err
+			return layout, err
 		}
 		if err = validateBuiltCurrencyCollection(loader); err != nil {
-			return err
+			return layout, err
 		}
 		if err = validateBuiltVarUInt(loader, 16, false); err != nil {
-			return err
+			return layout, err
 		}
 		if err = validateBuiltVarUInt(loader, 16, false); err != nil {
-			return err
+			return layout, err
 		}
 		if err = loader.SkipBits(64 + 32); err != nil {
-			return err
+			return layout, err
 		}
 	} else {
 		out, err := loader.LoadBoolBit()
 		if err != nil {
-			return err
+			return layout, err
 		}
 		if out {
 			if err = validateBuiltMessageAddress(loader, builtAddressInt, builtAddressCanonical); err != nil {
-				return err
+				return layout, err
 			}
 			if err = validateBuiltMessageAddress(loader, builtAddressExt, builtAddressCanonical); err != nil {
-				return err
+				return layout, err
 			}
 			if err = loader.SkipBits(64 + 32); err != nil {
-				return err
+				return layout, err
 			}
 		} else {
 			if err = validateBuiltMessageAddress(loader, builtAddressExt, builtAddressCanonical); err != nil {
-				return err
+				return layout, err
 			}
 			if err = validateBuiltMessageAddress(loader, builtAddressInt, builtAddressCanonical); err != nil {
-				return err
+				return layout, err
 			}
 			if err = validateBuiltVarUInt(loader, 16, false); err != nil {
-				return err
+				return layout, err
 			}
 		}
 	}
 
 	hasInit, err := loader.LoadBoolBit()
 	if err != nil {
-		return err
+		return layout, err
 	}
 	if hasInit {
 		inRef, err := loader.LoadBoolBit()
 		if err != nil {
-			return err
+			return layout, err
 		}
+		layout.stateInitInRef = inRef
 		if inRef {
 			stateInit, err := loader.LoadRefCell()
 			if err != nil {
-				return err
+				return layout, err
 			}
 			if err = transactionValidateStateInitCell(stateInit); err != nil {
-				return err
+				return layout, err
 			}
 		} else if err = transactionValidateStateInit(loader); err != nil {
-			return err
+			return layout, err
 		}
 	}
 
 	bodyInRef, err := loader.LoadBoolBit()
 	if err != nil {
-		return err
+		return layout, err
 	}
+	layout.bodyInRef = bodyInRef
 	if !bodyInRef {
-		return loader.SkipBitsAndRefs(loader.BitsLeft(), loader.RefsNum())
+		return layout, loader.SkipBitsAndRefs(loader.BitsLeft(), loader.RefsNum())
 	}
 	if _, err = loader.LoadRefCell(); err != nil {
-		return err
+		return layout, err
 	}
-	return transactionRequireEmptySlice(loader)
+	return layout, transactionRequireEmptySlice(loader)
 }
 
 type builtAddressKind uint8
